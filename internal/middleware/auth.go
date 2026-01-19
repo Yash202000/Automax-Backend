@@ -23,17 +23,25 @@ func NewAuthMiddleware(jwtManager *utils.JWTManager, sessionStore *database.Sess
 
 func (m *AuthMiddleware) Authenticate() fiber.Handler {
 	return func(c *fiber.Ctx) error {
+		var token string
+
+		// First check Authorization header
 		authHeader := c.Get("Authorization")
-		if authHeader == "" {
-			return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Missing authorization header")
+		if authHeader != "" {
+			parts := strings.Split(authHeader, " ")
+			if len(parts) == 2 && parts[0] == "Bearer" {
+				token = parts[1]
+			}
 		}
 
-		parts := strings.Split(authHeader, " ")
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Invalid authorization header format")
+		// If no token in header, check query parameter (for file downloads/images)
+		if token == "" {
+			token = c.Query("token")
 		}
 
-		token := parts[1]
+		if token == "" {
+			return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Missing authorization token")
+		}
 
 		isBlacklisted, err := m.sessionStore.IsTokenBlacklisted(context.Background(), token)
 		if err != nil {

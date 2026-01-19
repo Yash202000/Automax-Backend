@@ -18,6 +18,7 @@ import (
 type UserService interface {
 	Register(ctx context.Context, req *models.UserRegisterRequest) (*models.AuthResponse, error)
 	Login(ctx context.Context, req *models.UserLoginRequest) (*models.AuthResponse, error)
+	RefreshToken(ctx context.Context, refreshToken string) (*models.AuthResponse, error)
 	Logout(ctx context.Context, token string) error
 	GetProfile(ctx context.Context, userID uuid.UUID) (*models.UserResponse, error)
 	UpdateProfile(ctx context.Context, userID uuid.UUID, req *models.UserUpdateRequest) (*models.UserResponse, error)
@@ -165,7 +166,7 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 		role = user.Roles[0].Code
 	}
 
-	token, err := s.jwtManager.GenerateToken(user.ID, user.Email, role)
+	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, role)
 	if err != nil {
 		return nil, err
 	}
@@ -179,8 +180,58 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 	}
 
 	return &models.AuthResponse{
-		User:  models.ToUserResponse(user),
-		Token: token,
+		User:         models.ToUserResponse(user),
+		Token:        tokenPair.AccessToken,
+		RefreshToken: tokenPair.RefreshToken,
+		ExpiresIn:    tokenPair.ExpiresIn,
+	}, nil
+}
+
+func (s *userService) RefreshToken(ctx context.Context, refreshToken string) (*models.AuthResponse, error) {
+	// Validate the refresh token
+	claims, err := s.jwtManager.ValidateRefreshToken(refreshToken)
+	if err != nil {
+		return nil, errors.New("invalid or expired refresh token")
+	}
+
+	// Get user from database
+	user, err := s.userRepo.FindByIDWithRelations(ctx, claims.UserID)
+	if err != nil {
+		return nil, errors.New("user not found")
+	}
+
+	if !user.IsActive {
+		return nil, errors.New("account is deactivated")
+	}
+
+	// Determine primary role for JWT
+	role := "user"
+	if user.IsSuperAdmin {
+		role = "admin"
+	} else if len(user.Roles) > 0 {
+		role = user.Roles[0].Code
+	}
+
+	// Generate new token pair
+	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, role)
+	if err != nil {
+		return nil, err
+	}
+
+	// Update session
+	if err := s.sessionStore.SetUserSession(ctx, user.ID.String(), map[string]interface{}{
+		"user_id": user.ID,
+		"email":   user.Email,
+		"role":    role,
+	}, s.jwtManager.GetTokenExpiration()); err != nil {
+		return nil, err
+	}
+
+	return &models.AuthResponse{
+		User:         models.ToUserResponse(user),
+		Token:        tokenPair.AccessToken,
+		RefreshToken: tokenPair.RefreshToken,
+		ExpiresIn:    tokenPair.ExpiresIn,
 	}, nil
 }
 

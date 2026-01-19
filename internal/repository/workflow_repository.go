@@ -43,6 +43,9 @@ type WorkflowRepository interface {
 	// Transition role assignments
 	AssignTransitionRoles(ctx context.Context, transitionID uuid.UUID, roleIDs []uuid.UUID) error
 
+	// State viewable role assignments
+	AssignStateViewableRoles(ctx context.Context, stateID uuid.UUID, roleIDs []uuid.UUID) error
+
 	// TransitionRequirement CRUD
 	SetTransitionRequirements(ctx context.Context, transitionID uuid.UUID, requirements []models.TransitionRequirement) error
 	GetTransitionRequirements(ctx context.Context, transitionID uuid.UUID) ([]models.TransitionRequirement, error)
@@ -82,6 +85,7 @@ func (r *workflowRepository) FindByIDWithRelations(ctx context.Context, id uuid.
 		Preload("States", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order, name")
 		}).
+		Preload("States.ViewableRoles").
 		Preload("Transitions", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order, name")
 		}).
@@ -185,7 +189,9 @@ func (r *workflowRepository) CreateState(ctx context.Context, state *models.Work
 
 func (r *workflowRepository) FindStateByID(ctx context.Context, id uuid.UUID) (*models.WorkflowState, error) {
 	var state models.WorkflowState
-	err := r.db.WithContext(ctx).First(&state, "id = ?", id).Error
+	err := r.db.WithContext(ctx).
+		Preload("ViewableRoles").
+		First(&state, "id = ?", id).Error
 	if err != nil {
 		return nil, err
 	}
@@ -195,6 +201,7 @@ func (r *workflowRepository) FindStateByID(ctx context.Context, id uuid.UUID) (*
 func (r *workflowRepository) ListStatesByWorkflowID(ctx context.Context, workflowID uuid.UUID) ([]models.WorkflowState, error) {
 	var states []models.WorkflowState
 	err := r.db.WithContext(ctx).
+		Preload("ViewableRoles").
 		Where("workflow_id = ?", workflowID).
 		Order("sort_order, name").
 		Find(&states).Error
@@ -314,6 +321,22 @@ func (r *workflowRepository) AssignTransitionRoles(ctx context.Context, transiti
 	}
 
 	return r.db.WithContext(ctx).Model(&transition).Association("AllowedRoles").Replace(roles)
+}
+
+func (r *workflowRepository) AssignStateViewableRoles(ctx context.Context, stateID uuid.UUID, roleIDs []uuid.UUID) error {
+	var state models.WorkflowState
+	if err := r.db.WithContext(ctx).First(&state, "id = ?", stateID).Error; err != nil {
+		return err
+	}
+
+	var roles []models.Role
+	if len(roleIDs) > 0 {
+		if err := r.db.WithContext(ctx).Where("id IN ?", roleIDs).Find(&roles).Error; err != nil {
+			return err
+		}
+	}
+
+	return r.db.WithContext(ctx).Model(&state).Association("ViewableRoles").Replace(roles)
 }
 
 // TransitionRequirement CRUD

@@ -300,10 +300,9 @@ func (r *userRepository) FindMatching(ctx context.Context, roleID, classificatio
 
 	// Filter by department if provided (user must have the department in their assigned departments OR primary department)
 	if departmentID != nil {
-		query = query.Where(
-			r.db.Where("department_id = ?", departmentID).
-				Or(r.db.Joins("JOIN user_departments ud ON ud.user_id = users.id").Where("ud.department_id = ?", departmentID)),
-		)
+		query = query.
+			Joins("LEFT JOIN user_departments ud ON ud.user_id = users.id").
+			Where("users.department_id = ? OR ud.department_id = ?", departmentID, departmentID)
 	}
 
 	err := query.Distinct().Order("first_name, last_name").Find(&users).Error

@@ -62,6 +62,9 @@ type WorkflowState struct {
 	// SLA Configuration (hours allowed in this state)
 	SLAHours *int `gorm:"default:null" json:"sla_hours"`
 
+	// Role-based visibility (many-to-many) - empty = visible to all
+	ViewableRoles []Role `gorm:"many2many:state_viewable_roles;" json:"viewable_roles,omitempty"`
+
 	SortOrder int            `gorm:"default:0" json:"sort_order"`
 	IsActive  bool           `gorm:"default:true" json:"is_active"`
 	CreatedAt time.Time      `json:"created_at"`
@@ -108,7 +111,9 @@ type WorkflowTransition struct {
 	AutoMatchUser    bool       `gorm:"default:false" json:"auto_match_user"`
 	// If auto_match_user=true with assignment_role_id:
 	//   Find users with that role + matching incident's classification/location/department
-	//   If one match: auto-assign. If multiple: show selection in transition modal
+	//   If multiple match: assign to ALL matched users
+	ManualSelectUser bool `gorm:"default:false" json:"manual_select_user"`
+	// If manual_select_user=true: user performing transition manually selects the assignee from dropdown
 
 	// Requirements and Actions
 	Requirements []TransitionRequirement `gorm:"foreignKey:TransitionID" json:"requirements,omitempty"`
@@ -201,28 +206,30 @@ type WorkflowUpdateRequest struct {
 }
 
 type WorkflowStateCreateRequest struct {
-	Name        string `json:"name" validate:"required,min=2,max=100"`
-	Code        string `json:"code" validate:"required,min=2,max=50"`
-	Description string `json:"description" validate:"max=500"`
-	StateType   string `json:"state_type" validate:"omitempty,oneof=initial normal terminal"`
-	Color       string `json:"color" validate:"omitempty,max=20"`
-	PositionX   int    `json:"position_x"`
-	PositionY   int    `json:"position_y"`
-	SLAHours    *int   `json:"sla_hours"`
-	SortOrder   int    `json:"sort_order"`
+	Name            string   `json:"name" validate:"required,min=2,max=100"`
+	Code            string   `json:"code" validate:"required,min=2,max=50"`
+	Description     string   `json:"description" validate:"max=500"`
+	StateType       string   `json:"state_type" validate:"omitempty,oneof=initial normal terminal"`
+	Color           string   `json:"color" validate:"omitempty,max=20"`
+	PositionX       int      `json:"position_x"`
+	PositionY       int      `json:"position_y"`
+	SLAHours        *int     `json:"sla_hours"`
+	SortOrder       int      `json:"sort_order"`
+	ViewableRoleIDs []string `json:"viewable_role_ids"`
 }
 
 type WorkflowStateUpdateRequest struct {
-	Name        string `json:"name" validate:"omitempty,min=2,max=100"`
-	Code        string `json:"code" validate:"omitempty,min=2,max=50"`
-	Description string `json:"description" validate:"max=500"`
-	StateType   string `json:"state_type" validate:"omitempty,oneof=initial normal terminal"`
-	Color       string `json:"color" validate:"omitempty,max=20"`
-	PositionX   *int   `json:"position_x"`
-	PositionY   *int   `json:"position_y"`
-	SLAHours    *int   `json:"sla_hours"`
-	SortOrder   *int   `json:"sort_order"`
-	IsActive    *bool  `json:"is_active"`
+	Name            string   `json:"name" validate:"omitempty,min=2,max=100"`
+	Code            string   `json:"code" validate:"omitempty,min=2,max=50"`
+	Description     string   `json:"description" validate:"max=500"`
+	StateType       string   `json:"state_type" validate:"omitempty,oneof=initial normal terminal"`
+	Color           string   `json:"color" validate:"omitempty,max=20"`
+	PositionX       *int     `json:"position_x"`
+	PositionY       *int     `json:"position_y"`
+	SLAHours        *int     `json:"sla_hours"`
+	SortOrder       *int     `json:"sort_order"`
+	IsActive        *bool    `json:"is_active"`
+	ViewableRoleIDs []string `json:"viewable_role_ids"`
 }
 
 type WorkflowTransitionCreateRequest struct {
@@ -242,6 +249,7 @@ type WorkflowTransitionCreateRequest struct {
 	AssignUserID     *string `json:"assign_user_id" validate:"omitempty,uuid"`
 	AssignmentRoleID *string `json:"assignment_role_id" validate:"omitempty,uuid"`
 	AutoMatchUser    bool    `json:"auto_match_user"`
+	ManualSelectUser bool    `json:"manual_select_user"`
 }
 
 type WorkflowTransitionUpdateRequest struct {
@@ -262,6 +270,7 @@ type WorkflowTransitionUpdateRequest struct {
 	AssignUserID     *string `json:"assign_user_id" validate:"omitempty,uuid"`
 	AssignmentRoleID *string `json:"assignment_role_id" validate:"omitempty,uuid"`
 	AutoMatchUser    *bool   `json:"auto_match_user"`
+	ManualSelectUser *bool   `json:"manual_select_user"`
 }
 
 type TransitionRequirementRequest struct {
@@ -334,19 +343,20 @@ type WorkflowResponse struct {
 }
 
 type WorkflowStateResponse struct {
-	ID          uuid.UUID `json:"id"`
-	WorkflowID  uuid.UUID `json:"workflow_id"`
-	Name        string    `json:"name"`
-	Code        string    `json:"code"`
-	Description string    `json:"description"`
-	StateType   string    `json:"state_type"`
-	Color       string    `json:"color"`
-	PositionX   int       `json:"position_x"`
-	PositionY   int       `json:"position_y"`
-	SLAHours    *int      `json:"sla_hours"`
-	SortOrder   int       `json:"sort_order"`
-	IsActive    bool      `json:"is_active"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID            uuid.UUID      `json:"id"`
+	WorkflowID    uuid.UUID      `json:"workflow_id"`
+	Name          string         `json:"name"`
+	Code          string         `json:"code"`
+	Description   string         `json:"description"`
+	StateType     string         `json:"state_type"`
+	Color         string         `json:"color"`
+	PositionX     int            `json:"position_x"`
+	PositionY     int            `json:"position_y"`
+	SLAHours      *int           `json:"sla_hours"`
+	SortOrder     int            `json:"sort_order"`
+	IsActive      bool           `json:"is_active"`
+	ViewableRoles []RoleResponse `json:"viewable_roles,omitempty"`
+	CreatedAt     time.Time      `json:"created_at"`
 }
 
 type WorkflowTransitionResponse struct {
@@ -372,6 +382,7 @@ type WorkflowTransitionResponse struct {
 	AssignmentRoleID *uuid.UUID    `json:"assignment_role_id,omitempty"`
 	AssignmentRole   *RoleResponse `json:"assignment_role,omitempty"`
 	AutoMatchUser    bool          `json:"auto_match_user"`
+	ManualSelectUser bool          `json:"manual_select_user"`
 
 	Requirements []TransitionRequirementResponse `json:"requirements,omitempty"`
 	Actions      []TransitionActionResponse      `json:"actions,omitempty"`
@@ -460,7 +471,7 @@ func ToWorkflowResponse(w *Workflow) WorkflowResponse {
 }
 
 func ToWorkflowStateResponse(s *WorkflowState) WorkflowStateResponse {
-	return WorkflowStateResponse{
+	resp := WorkflowStateResponse{
 		ID:          s.ID,
 		WorkflowID:  s.WorkflowID,
 		Name:        s.Name,
@@ -475,6 +486,15 @@ func ToWorkflowStateResponse(s *WorkflowState) WorkflowStateResponse {
 		IsActive:    s.IsActive,
 		CreatedAt:   s.CreatedAt,
 	}
+
+	if len(s.ViewableRoles) > 0 {
+		resp.ViewableRoles = make([]RoleResponse, len(s.ViewableRoles))
+		for i, r := range s.ViewableRoles {
+			resp.ViewableRoles[i] = ToRoleResponse(&r)
+		}
+	}
+
+	return resp
 }
 
 func ToWorkflowTransitionResponse(t *WorkflowTransition) WorkflowTransitionResponse {
@@ -491,6 +511,7 @@ func ToWorkflowTransitionResponse(t *WorkflowTransition) WorkflowTransitionRespo
 		AssignUserID:         t.AssignUserID,
 		AssignmentRoleID:     t.AssignmentRoleID,
 		AutoMatchUser:        t.AutoMatchUser,
+		ManualSelectUser:     t.ManualSelectUser,
 		IsActive:             t.IsActive,
 		SortOrder:            t.SortOrder,
 		CreatedAt:            t.CreatedAt,

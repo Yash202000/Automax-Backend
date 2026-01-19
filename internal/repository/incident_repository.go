@@ -45,6 +45,8 @@ type IncidentRepository interface {
 
 	// Assignment
 	AssignIncident(ctx context.Context, incidentID, assigneeID uuid.UUID) error
+	SetAssignees(ctx context.Context, incidentID uuid.UUID, userIDs []uuid.UUID) error
+	ClearAssignees(ctx context.Context, incidentID uuid.UUID) error
 
 	// Stats
 	GetStats(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponse, error)
@@ -95,6 +97,7 @@ func (r *incidentRepository) FindByIDWithRelations(ctx context.Context, id uuid.
 		Preload("Workflow").
 		Preload("CurrentState").
 		Preload("Assignee").
+		Preload("Assignees").
 		Preload("Department").
 		Preload("Location").
 		Preload("Reporter").
@@ -345,6 +348,33 @@ func (r *incidentRepository) AssignIncident(ctx context.Context, incidentID, ass
 		Update("assignee_id", assigneeID).Error
 }
 
+func (r *incidentRepository) SetAssignees(ctx context.Context, incidentID uuid.UUID, userIDs []uuid.UUID) error {
+	// Get the incident
+	var incident models.Incident
+	if err := r.db.WithContext(ctx).First(&incident, "id = ?", incidentID).Error; err != nil {
+		return err
+	}
+
+	// Get users to assign
+	var users []models.User
+	if len(userIDs) > 0 {
+		if err := r.db.WithContext(ctx).Where("id IN ?", userIDs).Find(&users).Error; err != nil {
+			return err
+		}
+	}
+
+	// Replace the assignees (this clears existing and sets new ones)
+	return r.db.WithContext(ctx).Model(&incident).Association("Assignees").Replace(users)
+}
+
+func (r *incidentRepository) ClearAssignees(ctx context.Context, incidentID uuid.UUID) error {
+	var incident models.Incident
+	if err := r.db.WithContext(ctx).First(&incident, "id = ?", incidentID).Error; err != nil {
+		return err
+	}
+	return r.db.WithContext(ctx).Model(&incident).Association("Assignees").Clear()
+}
+
 // Stats
 
 func (r *incidentRepository) GetStats(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponse, error) {
@@ -411,21 +441,37 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 		stats.BySeverity[sc.Severity] = sc.Count
 	}
 
-	// Count by state
+	// Count by state (filtered by viewable roles if provided)
 	type stateCount struct {
-		StateName string
-		Count     int64
+		StateID   uuid.UUID `gorm:"column:state_id"`
+		StateName string    `gorm:"column:state_name"`
+		Count     int64     `gorm:"column:count"`
 	}
 	var stateCounts []stateCount
-	if err := r.db.WithContext(ctx).Model(&models.Incident{}).
-		Select("workflow_states.name as state_name, count(*) as count").
-		Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
-		Group("workflow_states.name").
-		Scan(&stateCounts).Error; err != nil {
+	stateQuery := r.db.WithContext(ctx).Model(&models.Incident{}).
+		Select("workflow_states.id as state_id, workflow_states.name as state_name, count(*) as count").
+		Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
+
+	// Filter by user roles if provided (empty viewable_roles = visible to all)
+	if filter != nil && len(filter.UserRoleIDs) > 0 {
+		stateQuery = stateQuery.Where(`
+			NOT EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = workflow_states.id)
+			OR EXISTS (SELECT 1 FROM state_viewable_roles
+			           WHERE workflow_state_id = workflow_states.id AND role_id IN ?)
+		`, filter.UserRoleIDs)
+	}
+
+	if err := stateQuery.Group("workflow_states.id, workflow_states.name").Scan(&stateCounts).Error; err != nil {
 		return nil, err
 	}
+	stats.ByStateDetails = make([]models.StateStatDetail, 0, len(stateCounts))
 	for _, sc := range stateCounts {
 		stats.ByState[sc.StateName] = sc.Count
+		stats.ByStateDetails = append(stats.ByStateDetails, models.StateStatDetail{
+			ID:    sc.StateID,
+			Name:  sc.StateName,
+			Count: sc.Count,
+		})
 	}
 
 	return stats, nil

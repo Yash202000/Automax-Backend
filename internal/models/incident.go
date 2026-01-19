@@ -1,9 +1,12 @@
 package models
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
+	"github.com/automax/backend/internal/storage"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -60,6 +63,9 @@ type Incident struct {
 
 	// Custom Fields (JSON)
 	CustomFields string `gorm:"type:text" json:"custom_fields"`
+
+	// Multiple Assignees (many-to-many)
+	Assignees []User `gorm:"many2many:incident_assignees;" json:"assignees,omitempty"`
 
 	// Related records
 	Comments          []IncidentComment           `gorm:"foreignKey:IncidentID" json:"comments,omitempty"`
@@ -290,21 +296,22 @@ type IncidentCommentRequest struct {
 }
 
 type IncidentFilter struct {
-	Search           string     `json:"search"`
-	WorkflowID       *uuid.UUID `json:"workflow_id"`
-	CurrentStateID   *uuid.UUID `json:"current_state_id"`
-	ClassificationID *uuid.UUID `json:"classification_id"`
-	Priority         *int       `json:"priority"`
-	Severity         *int       `json:"severity"`
-	AssigneeID       *uuid.UUID `json:"assignee_id"`
-	DepartmentID     *uuid.UUID `json:"department_id"`
-	LocationID       *uuid.UUID `json:"location_id"`
-	ReporterID       *uuid.UUID `json:"reporter_id"`
-	SLABreached      *bool      `json:"sla_breached"`
-	StartDate        *time.Time `json:"start_date"`
-	EndDate          *time.Time `json:"end_date"`
-	Page             int        `json:"page"`
-	Limit            int        `json:"limit"`
+	Search           string      `json:"search"`
+	WorkflowID       *uuid.UUID  `json:"workflow_id"`
+	CurrentStateID   *uuid.UUID  `json:"current_state_id"`
+	ClassificationID *uuid.UUID  `json:"classification_id"`
+	Priority         *int        `json:"priority"`
+	Severity         *int        `json:"severity"`
+	AssigneeID       *uuid.UUID  `json:"assignee_id"`
+	DepartmentID     *uuid.UUID  `json:"department_id"`
+	LocationID       *uuid.UUID  `json:"location_id"`
+	ReporterID       *uuid.UUID  `json:"reporter_id"`
+	SLABreached      *bool       `json:"sla_breached"`
+	StartDate        *time.Time  `json:"start_date"`
+	EndDate          *time.Time  `json:"end_date"`
+	Page             int         `json:"page"`
+	Limit            int         `json:"limit"`
+	UserRoleIDs      []uuid.UUID `json:"-"` // For filtering stats by user's roles
 }
 
 // Response types
@@ -320,6 +327,7 @@ type IncidentResponse struct {
 	Priority         int                     `json:"priority"`
 	Severity         int                     `json:"severity"`
 	Assignee         *UserResponse           `json:"assignee,omitempty"`
+	Assignees        []UserResponse          `json:"assignees,omitempty"`
 	Department       *DepartmentResponse     `json:"department,omitempty"`
 	Location         *LocationResponse       `json:"location,omitempty"`
 	Latitude         *float64                `json:"latitude,omitempty"`
@@ -362,6 +370,7 @@ type IncidentAttachmentResponse struct {
 	FileName            string        `json:"file_name"`
 	FileSize            int64         `json:"file_size"`
 	MimeType            string        `json:"mime_type"`
+	URL                 string        `json:"url,omitempty"`
 	UploadedBy          *UserResponse `json:"uploaded_by,omitempty"`
 	TransitionHistoryID *uuid.UUID    `json:"transition_history_id,omitempty"`
 	CreatedAt           time.Time     `json:"created_at"`
@@ -388,16 +397,23 @@ type AvailableTransitionResponse struct {
 	Reason       string                     `json:"reason,omitempty"`
 }
 
+type StateStatDetail struct {
+	ID    uuid.UUID `json:"id"`
+	Name  string    `json:"name"`
+	Count int64     `json:"count"`
+}
+
 type IncidentStatsResponse struct {
-	Total       int64            `json:"total"`
-	Open        int64            `json:"open"`
-	InProgress  int64            `json:"in_progress"`
-	Resolved    int64            `json:"resolved"`
-	Closed      int64            `json:"closed"`
-	SLABreached int64            `json:"sla_breached"`
-	ByPriority  map[int]int64    `json:"by_priority"`
-	BySeverity  map[int]int64    `json:"by_severity"`
-	ByState     map[string]int64 `json:"by_state"`
+	Total          int64              `json:"total"`
+	Open           int64              `json:"open"`
+	InProgress     int64              `json:"in_progress"`
+	Resolved       int64              `json:"resolved"`
+	Closed         int64              `json:"closed"`
+	SLABreached    int64              `json:"sla_breached"`
+	ByPriority     map[int]int64      `json:"by_priority"`
+	BySeverity     map[int]int64      `json:"by_severity"`
+	ByState        map[string]int64   `json:"by_state"`
+	ByStateDetails []StateStatDetail  `json:"by_state_details,omitempty"`
 }
 
 // Converter functions
@@ -446,6 +462,14 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 		resp.Assignee = &userResp
 	}
 
+	// Convert multiple assignees
+	if len(i.Assignees) > 0 {
+		resp.Assignees = make([]UserResponse, len(i.Assignees))
+		for idx, user := range i.Assignees {
+			resp.Assignees[idx] = ToUserResponse(&user)
+		}
+	}
+
 	if i.Department != nil {
 		deptResp := ToDepartmentResponse(i.Department)
 		resp.Department = &deptResp
@@ -464,7 +488,7 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 	return resp
 }
 
-func ToIncidentDetailResponse(i *Incident) IncidentDetailResponse {
+func ToIncidentDetailResponse(storage *storage.MinIOStorage, i *Incident) IncidentDetailResponse {
 	resp := IncidentDetailResponse{
 		IncidentResponse: ToIncidentResponse(i),
 	}
@@ -479,7 +503,11 @@ func ToIncidentDetailResponse(i *Incident) IncidentDetailResponse {
 	if len(i.Attachments) > 0 {
 		resp.Attachments = make([]IncidentAttachmentResponse, len(i.Attachments))
 		for idx, a := range i.Attachments {
-			resp.Attachments[idx] = ToIncidentAttachmentResponse(&a)
+			url, err := storage.GetFileURL(context.Background(), a.FilePath)
+			if err != nil {
+				fmt.Printf("failed to get file URL: %v", err)
+			}
+			resp.Attachments[idx] = ToIncidentAttachmentResponse(&a, url)
 		}
 	}
 
@@ -511,13 +539,14 @@ func ToIncidentCommentResponse(c *IncidentComment) IncidentCommentResponse {
 	return resp
 }
 
-func ToIncidentAttachmentResponse(a *IncidentAttachment) IncidentAttachmentResponse {
+func ToIncidentAttachmentResponse(a *IncidentAttachment, url string) IncidentAttachmentResponse {
 	resp := IncidentAttachmentResponse{
 		ID:                  a.ID,
 		IncidentID:          a.IncidentID,
 		FileName:            a.FileName,
 		FileSize:            a.FileSize,
 		MimeType:            a.MimeType,
+		URL:                 url,
 		TransitionHistoryID: a.TransitionHistoryID,
 		CreatedAt:           a.CreatedAt,
 	}

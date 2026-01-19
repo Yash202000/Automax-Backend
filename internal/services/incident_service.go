@@ -9,6 +9,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/internal/storage"
 	"github.com/google/uuid"
 )
 
@@ -35,6 +36,7 @@ type IncidentService interface {
 	AddAttachment(ctx context.Context, incidentID uuid.UUID, attachment *models.IncidentAttachment) (*models.IncidentAttachmentResponse, error)
 	ListAttachments(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentAttachmentResponse, error)
 	DeleteAttachment(ctx context.Context, attachmentID uuid.UUID, userID uuid.UUID) error
+	GetAttachment(ctx context.Context, attachmentID uuid.UUID) (*models.IncidentAttachment, error)
 
 	// Assignment
 	AssignIncident(ctx context.Context, incidentID, assigneeID, userID uuid.UUID) (*models.IncidentResponse, error)
@@ -56,12 +58,16 @@ type IncidentService interface {
 type incidentService struct {
 	incidentRepo repository.IncidentRepository
 	workflowRepo repository.WorkflowRepository
+	userRepo     repository.UserRepository
+	storage      *storage.MinIOStorage
 }
 
-func NewIncidentService(incidentRepo repository.IncidentRepository, workflowRepo repository.WorkflowRepository) IncidentService {
+func NewIncidentService(incidentRepo repository.IncidentRepository, workflowRepo repository.WorkflowRepository, userRepo repository.UserRepository, storage *storage.MinIOStorage) IncidentService {
 	return &incidentService{
 		incidentRepo: incidentRepo,
 		workflowRepo: workflowRepo,
+		userRepo:     userRepo,
+		storage:      storage,
 	}
 }
 
@@ -170,7 +176,7 @@ func (s *incidentService) GetIncident(ctx context.Context, id uuid.UUID) (*model
 		return nil, err
 	}
 
-	resp := models.ToIncidentDetailResponse(incident)
+	resp := models.ToIncidentDetailResponse(s.storage, incident)
 	return &resp, nil
 }
 
@@ -499,16 +505,95 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	}
 
 	// Handle user assignment from transition settings
+	var assigneeUserIDs []uuid.UUID
+
+	fmt.Printf("[DEBUG] === USER ASSIGNMENT START ===\n")
+	fmt.Printf("[DEBUG] Transition: %s (ID: %s)\n", transition.Name, transition.ID)
+	fmt.Printf("[DEBUG] AssignUserID: %v\n", transition.AssignUserID)
+	fmt.Printf("[DEBUG] ManualSelectUser: %v\n", transition.ManualSelectUser)
+	fmt.Printf("[DEBUG] AutoMatchUser: %v\n", transition.AutoMatchUser)
+	fmt.Printf("[DEBUG] AssignmentRoleID: %v\n", transition.AssignmentRoleID)
+
 	if transition.AssignUserID != nil {
-		// Static user assignment
+		// Static user assignment - single user
+		fmt.Printf("[DEBUG] Using STATIC user assignment: %s\n", *transition.AssignUserID)
 		updates["assignee_id"] = *transition.AssignUserID
-	} else if transition.AutoMatchUser && transition.AssignmentRoleID != nil && req.UserID != nil && *req.UserID != "" {
-		// Auto-match with user selection
-		userAssignID, err := uuid.Parse(*req.UserID)
-		if err == nil {
-			updates["assignee_id"] = userAssignID
+		assigneeUserIDs = append(assigneeUserIDs, *transition.AssignUserID)
+	} else if transition.ManualSelectUser && transition.AssignmentRoleID != nil {
+		// Manual selection mode - user must select from dropdown
+		fmt.Printf("[DEBUG] Using MANUAL SELECT mode\n")
+		if req.UserID != nil && *req.UserID != "" {
+			fmt.Printf("[DEBUG] User selected: %s\n", *req.UserID)
+			userAssignID, err := uuid.Parse(*req.UserID)
+			if err == nil {
+				updates["assignee_id"] = userAssignID
+				assigneeUserIDs = append(assigneeUserIDs, userAssignID)
+			}
+		} else {
+			fmt.Printf("[DEBUG] No user selected in manual mode\n")
 		}
+		// If no user selected, keep current assignee (don't fail the transition)
+	} else if transition.AutoMatchUser && transition.AssignmentRoleID != nil {
+		// Auto-match mode - find ALL matching users and assign to all of them
+		fmt.Printf("[DEBUG] Using AUTO MATCH mode with role: %s\n", *transition.AssignmentRoleID)
+		var classificationID, locationID, departmentID, excludeUserID *uuid.UUID
+		if incident.ClassificationID != nil {
+			classificationID = incident.ClassificationID
+			fmt.Printf("[DEBUG] ClassificationID: %s\n", *classificationID)
+		}
+		if incident.LocationID != nil {
+			locationID = incident.LocationID
+			fmt.Printf("[DEBUG] LocationID: %s\n", *locationID)
+		}
+		if incident.DepartmentID != nil {
+			departmentID = incident.DepartmentID
+			fmt.Printf("[DEBUG] DepartmentID: %s\n", *departmentID)
+		}
+		if incident.AssigneeID != nil {
+			excludeUserID = incident.AssigneeID
+			fmt.Printf("[DEBUG] ExcludeUserID (current assignee): %s\n", *excludeUserID)
+		}
+
+		// First try matching with all criteria
+		fmt.Printf("[DEBUG] Calling FindMatching with all criteria...\n")
+		matchedUsers, err := s.userRepo.FindMatching(ctx, transition.AssignmentRoleID, classificationID, locationID, departmentID, excludeUserID)
+		fmt.Printf("[DEBUG] FindMatching result: %d users, error: %v\n", len(matchedUsers), err)
+		if err == nil && len(matchedUsers) > 0 {
+			// Assign ALL matched users
+			fmt.Printf("[DEBUG] Found %d matching users with full criteria:\n", len(matchedUsers))
+			for _, user := range matchedUsers {
+				fmt.Printf("[DEBUG]   - %s (%s)\n", user.Username, user.ID)
+				assigneeUserIDs = append(assigneeUserIDs, user.ID)
+			}
+			// Set primary assignee to first matched user
+			updates["assignee_id"] = matchedUsers[0].ID
+			fmt.Printf("[DEBUG] Primary assignee set to: %s\n", matchedUsers[0].Username)
+		} else if err == nil && len(matchedUsers) == 0 {
+			// No exact matches - try matching by role only (more permissive)
+			fmt.Printf("[DEBUG] No exact matches, trying role-only match...\n")
+			roleOnlyUsers, roleErr := s.userRepo.FindMatching(ctx, transition.AssignmentRoleID, nil, nil, nil, excludeUserID)
+			fmt.Printf("[DEBUG] Role-only match result: %d users, error: %v\n", len(roleOnlyUsers), roleErr)
+			if roleErr == nil && len(roleOnlyUsers) > 0 {
+				// Assign ALL users with that role
+				fmt.Printf("[DEBUG] Found %d users with role only:\n", len(roleOnlyUsers))
+				for _, user := range roleOnlyUsers {
+					fmt.Printf("[DEBUG]   - %s (%s)\n", user.Username, user.ID)
+					assigneeUserIDs = append(assigneeUserIDs, user.ID)
+				}
+				// Set primary assignee to first matched user
+				updates["assignee_id"] = roleOnlyUsers[0].ID
+				fmt.Printf("[DEBUG] Primary assignee set to: %s\n", roleOnlyUsers[0].Username)
+			} else {
+				fmt.Printf("[DEBUG] No users found even with role-only match\n")
+			}
+		} else if err != nil {
+			fmt.Printf("[DEBUG] Error in FindMatching: %v\n", err)
+		}
+	} else {
+		fmt.Printf("[DEBUG] No assignment mode matched - skipping user assignment\n")
 	}
+	fmt.Printf("[DEBUG] Final assigneeUserIDs: %v\n", assigneeUserIDs)
+	fmt.Printf("[DEBUG] === USER ASSIGNMENT END ===\n")
 
 	// Update SLA deadline based on new state
 	if newState.SLAHours != nil && *newState.SLAHours > 0 {
@@ -527,8 +612,25 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	}
 
 	// Apply all updates in a single query
+	fmt.Printf("[DEBUG] Applying updates: %+v\n", updates)
 	if err := s.incidentRepo.UpdateFields(ctx, incidentID, updates); err != nil {
+		fmt.Printf("[DEBUG] ERROR in UpdateFields: %v\n", err)
 		return nil, err
+	}
+	fmt.Printf("[DEBUG] UpdateFields successful\n")
+
+	// Set multiple assignees if applicable
+	fmt.Printf("[DEBUG] Setting multiple assignees, count: %d\n", len(assigneeUserIDs))
+	if len(assigneeUserIDs) > 0 {
+		fmt.Printf("[DEBUG] Calling SetAssignees with IDs: %v\n", assigneeUserIDs)
+		if err := s.incidentRepo.SetAssignees(ctx, incidentID, assigneeUserIDs); err != nil {
+			// Log error but don't fail the transition
+			fmt.Printf("[DEBUG] ERROR in SetAssignees: %v\n", err)
+		} else {
+			fmt.Printf("[DEBUG] SetAssignees successful\n")
+		}
+	} else {
+		fmt.Printf("[DEBUG] No assignees to set (assigneeUserIDs is empty)\n")
 	}
 
 	// TODO: Execute transition actions (email, webhook, field updates)
@@ -758,7 +860,13 @@ func (s *incidentService) AddAttachment(ctx context.Context, incidentID uuid.UUI
 	description := fmt.Sprintf("Attachment added - %s", attachment.FileName)
 	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionAttachmentAdded, description, nil, attachment.UploadedByID)
 
-	resp := models.ToIncidentAttachmentResponse(created)
+	url, err := s.storage.GetFileURL(ctx, created.FilePath)
+	if err != nil {
+		// Log the error but don't fail the operation
+		fmt.Printf("Warning: failed to get presigned URL for attachment %s: %v\n", created.ID, err)
+	}
+
+	resp := models.ToIncidentAttachmentResponse(created, url)
 	return &resp, nil
 }
 
@@ -770,7 +878,12 @@ func (s *incidentService) ListAttachments(ctx context.Context, incidentID uuid.U
 
 	responses := make([]models.IncidentAttachmentResponse, len(attachments))
 	for i, a := range attachments {
-		responses[i] = models.ToIncidentAttachmentResponse(&a)
+		url, err := s.storage.GetFileURL(ctx, a.FilePath)
+		if err != nil {
+			// Log the error but don't fail the operation
+			fmt.Printf("Warning: failed to get presigned URL for attachment %s: %v\n", a.ID, err)
+		}
+		responses[i] = models.ToIncidentAttachmentResponse(&a, url)
 	}
 
 	return responses, nil
@@ -801,6 +914,10 @@ func (s *incidentService) DeleteAttachment(ctx context.Context, attachmentID uui
 	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionAttachmentRemoved, description, nil, userID)
 
 	return nil
+}
+
+func (s *incidentService) GetAttachment(ctx context.Context, attachmentID uuid.UUID) (*models.IncidentAttachment, error) {
+	return s.incidentRepo.FindAttachmentByID(ctx, attachmentID)
 }
 
 // Assignment

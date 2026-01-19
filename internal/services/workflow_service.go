@@ -365,7 +365,28 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 		return nil, err
 	}
 
-	resp := models.ToWorkflowStateResponse(state)
+	// Assign viewable roles if provided
+	if len(req.ViewableRoleIDs) > 0 {
+		roleIDs := make([]uuid.UUID, 0, len(req.ViewableRoleIDs))
+		for _, idStr := range req.ViewableRoleIDs {
+			id, err := uuid.Parse(idStr)
+			if err != nil {
+				continue
+			}
+			roleIDs = append(roleIDs, id)
+		}
+		if err := s.repo.AssignStateViewableRoles(ctx, state.ID, roleIDs); err != nil {
+			return nil, err
+		}
+	}
+
+	// Fetch the state with relations
+	created, err := s.repo.FindStateByID(ctx, state.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := models.ToWorkflowStateResponse(created)
 	return &resp, nil
 }
 
@@ -424,7 +445,28 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 		return nil, err
 	}
 
-	resp := models.ToWorkflowStateResponse(state)
+	// Update viewable roles if provided
+	if req.ViewableRoleIDs != nil {
+		roleIDs := make([]uuid.UUID, 0, len(req.ViewableRoleIDs))
+		for _, idStr := range req.ViewableRoleIDs {
+			id, err := uuid.Parse(idStr)
+			if err != nil {
+				continue
+			}
+			roleIDs = append(roleIDs, id)
+		}
+		if err := s.repo.AssignStateViewableRoles(ctx, stateID, roleIDs); err != nil {
+			return nil, err
+		}
+	}
+
+	// Fetch the state with relations
+	updated, err := s.repo.FindStateByID(ctx, stateID)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := models.ToWorkflowStateResponse(updated)
 	return &resp, nil
 }
 
@@ -456,6 +498,7 @@ func (s *workflowService) CreateTransition(ctx context.Context, workflowID uuid.
 		IsActive:             true,
 		AutoDetectDepartment: req.AutoDetectDepartment,
 		AutoMatchUser:        req.AutoMatchUser,
+		ManualSelectUser:     req.ManualSelectUser,
 	}
 
 	// Department Assignment
@@ -575,6 +618,9 @@ func (s *workflowService) UpdateTransition(ctx context.Context, transitionID uui
 	// User Assignment
 	if req.AutoMatchUser != nil {
 		transition.AutoMatchUser = *req.AutoMatchUser
+	}
+	if req.ManualSelectUser != nil {
+		transition.ManualSelectUser = *req.ManualSelectUser
 	}
 	if req.AssignUserID != nil {
 		if *req.AssignUserID == "" {

@@ -75,6 +75,24 @@ func (h *UserHandler) Logout(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "Logout successful", nil)
 }
 
+func (h *UserHandler) RefreshToken(c *fiber.Ctx) error {
+	var req models.RefreshTokenRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if err := h.validator.Struct(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	response, err := h.userService.RefreshToken(c.Context(), req.RefreshToken)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusUnauthorized, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Token refreshed successfully", response)
+}
+
 func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(uuid.UUID)
 

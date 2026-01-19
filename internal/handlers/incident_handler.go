@@ -444,6 +444,28 @@ func (h *IncidentHandler) DeleteAttachment(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "Attachment deleted", nil)
 }
 
+func (h *IncidentHandler) DownloadAttachment(c *fiber.Ctx) error {
+	attachmentIDStr := c.Params("attachment_id")
+	attachmentID, err := uuid.Parse(attachmentIDStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid attachment ID")
+	}
+
+	attachment, err := h.service.GetAttachment(c.Context(), attachmentID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Attachment not found")
+	}
+
+	file, err := h.storage.GetFile(c.Context(), attachment.FilePath)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to retrieve file")
+	}
+
+	c.Set("Content-Type", attachment.MimeType)
+	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", attachment.FileName))
+	return c.SendStream(file)
+}
+
 // Assignment
 
 func (h *IncidentHandler) AssignIncident(c *fiber.Ctx) error {
@@ -491,6 +513,9 @@ func (h *IncidentHandler) GetStats(c *fiber.Ctx) error {
 			filter.DepartmentID = &id
 		}
 	}
+
+	// Add user role IDs for state visibility filtering
+	filter.UserRoleIDs = h.getUserRoleIDs(c)
 
 	stats, err := h.service.GetStats(c.Context(), filter)
 	if err != nil {

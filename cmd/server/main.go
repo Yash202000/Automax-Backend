@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/database"
@@ -70,8 +72,14 @@ func main() {
 	userService := services.NewUserService(userRepo, jwtManager, sessionStore, minioStorage, cfg)
 	actionLogService := services.NewActionLogService(actionLogRepo)
 	workflowService := services.NewWorkflowService(workflowRepo)
-	incidentService := services.NewIncidentService(incidentRepo, workflowRepo)
+	incidentService := services.NewIncidentService(incidentRepo, workflowRepo, userRepo, minioStorage)
 	reportService := services.NewReportService(reportRepo)
+
+	// Initialize and start SLA Monitor (checks every 5 minutes)
+	slaMonitor := services.NewSLAMonitor(incidentRepo, 5*time.Minute)
+	ctx := context.Background()
+	slaMonitor.Start(ctx)
+	defer slaMonitor.Stop()
 
 	// Initialize validator
 	validate := validator.New()
@@ -118,6 +126,7 @@ func main() {
 	auth := v1.Group("/auth")
 	auth.Post("/register", userHandler.Register)
 	auth.Post("/login", userHandler.Login)
+	auth.Post("/refresh", userHandler.RefreshToken)
 	auth.Post("/logout", authMiddleware.Authenticate(), userHandler.Logout)
 
 	// User routes
@@ -151,6 +160,10 @@ func main() {
 	incidents.Delete("/:id/attachments/:attachment_id", incidentHandler.DeleteAttachment)
 	incidents.Put("/:id/assign", incidentHandler.AssignIncident)
 	incidents.Get("/:id/revisions", incidentHandler.ListRevisions)
+
+	// Attachment download route
+	attachments := v1.Group("/attachments", authMiddleware.Authenticate())
+	attachments.Get("/:attachment_id", incidentHandler.DownloadAttachment)
 
 	// Admin routes
 	admin := v1.Group("/admin", authMiddleware.Authenticate())
