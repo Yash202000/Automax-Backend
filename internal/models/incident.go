@@ -139,6 +139,31 @@ func (a *IncidentAttachment) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
+// IncidentFeedback represents feedback collected during a transition
+type IncidentFeedback struct {
+	ID         uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
+	IncidentID uuid.UUID `gorm:"type:uuid;index;not null" json:"incident_id"`
+	Incident   *Incident `gorm:"foreignKey:IncidentID" json:"incident,omitempty"`
+
+	Rating  int    `gorm:"not null" json:"rating"` // 1-5 stars
+	Comment string `gorm:"type:text" json:"comment"`
+
+	CreatedByID uuid.UUID `gorm:"type:uuid;index;not null" json:"created_by_id"`
+	CreatedBy   *User     `gorm:"foreignKey:CreatedByID" json:"created_by,omitempty"`
+
+	// Link to transition if feedback was part of a transition
+	TransitionHistoryID *uuid.UUID `gorm:"type:uuid" json:"transition_history_id"`
+
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (f *IncidentFeedback) BeforeCreate(tx *gorm.DB) error {
+	if f.ID == uuid.Nil {
+		f.ID = uuid.New()
+	}
+	return nil
+}
+
 // IncidentTransitionHistory records all state transitions for an incident
 type IncidentTransitionHistory struct {
 	ID         uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
@@ -282,9 +307,17 @@ type IncidentTransitionRequest struct {
 	Comment      string   `json:"comment"`
 	Attachments  []string `json:"attachments"` // attachment IDs to link to this transition
 
+	// Feedback (collected during transition if required)
+	Feedback *IncidentFeedbackRequest `json:"feedback"`
+
 	// Assignment overrides (used when auto-detect finds multiple matches)
 	DepartmentID *string `json:"department_id" validate:"omitempty,uuid"`
 	UserID       *string `json:"user_id" validate:"omitempty,uuid"`
+}
+
+type IncidentFeedbackRequest struct {
+	Rating  int    `json:"rating" validate:"required,min=1,max=5"`
+	Comment string `json:"comment"`
 }
 
 type IncidentCommentRequest struct {
@@ -366,6 +399,16 @@ type IncidentAttachmentResponse struct {
 	MimeType            string        `json:"mime_type"`
 	URL                 string        `json:"url,omitempty"`
 	UploadedBy          *UserResponse `json:"uploaded_by,omitempty"`
+	TransitionHistoryID *uuid.UUID    `json:"transition_history_id,omitempty"`
+	CreatedAt           time.Time     `json:"created_at"`
+}
+
+type IncidentFeedbackResponse struct {
+	ID                  uuid.UUID     `json:"id"`
+	IncidentID          uuid.UUID     `json:"incident_id"`
+	Rating              int           `json:"rating"`
+	Comment             string        `json:"comment,omitempty"`
+	CreatedBy           *UserResponse `json:"created_by,omitempty"`
 	TransitionHistoryID *uuid.UUID    `json:"transition_history_id,omitempty"`
 	CreatedAt           time.Time     `json:"created_at"`
 }
@@ -553,6 +596,24 @@ func ToIncidentAttachmentResponse(a *IncidentAttachment, url string) IncidentAtt
 	if a.UploadedBy != nil {
 		uploaderResp := ToUserResponse(a.UploadedBy)
 		resp.UploadedBy = &uploaderResp
+	}
+
+	return resp
+}
+
+func ToIncidentFeedbackResponse(f *IncidentFeedback) IncidentFeedbackResponse {
+	resp := IncidentFeedbackResponse{
+		ID:                  f.ID,
+		IncidentID:          f.IncidentID,
+		Rating:              f.Rating,
+		Comment:             f.Comment,
+		TransitionHistoryID: f.TransitionHistoryID,
+		CreatedAt:           f.CreatedAt,
+	}
+
+	if f.CreatedBy != nil {
+		createdByResp := ToUserResponse(f.CreatedBy)
+		resp.CreatedBy = &createdByResp
 	}
 
 	return resp

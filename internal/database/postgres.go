@@ -55,6 +55,7 @@ func Migrate(db *gorm.DB) error {
 		&models.Incident{},
 		&models.IncidentComment{},
 		&models.IncidentAttachment{},
+		&models.IncidentFeedback{},
 		&models.IncidentTransitionHistory{},
 		&models.IncidentRevision{},
 		// Report models

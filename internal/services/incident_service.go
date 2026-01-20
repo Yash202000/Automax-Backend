@@ -436,6 +436,14 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				}
 				return nil, errors.New(errMsg)
 			}
+		case "feedback":
+			if req.Feedback == nil || req.Feedback.Rating == 0 {
+				errMsg := requirement.ErrorMessage
+				if errMsg == "" {
+					errMsg = "Feedback is required for this transition"
+				}
+				return nil, errors.New(errMsg)
+			}
 		}
 	}
 
@@ -478,6 +486,20 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			TransitionHistoryID: &history.ID,
 		}
 		s.incidentRepo.CreateComment(ctx, comment)
+	}
+
+	// If feedback was provided, create a feedback record
+	if req.Feedback != nil && req.Feedback.Rating > 0 {
+		feedback := &models.IncidentFeedback{
+			IncidentID:          incidentID,
+			Rating:              req.Feedback.Rating,
+			Comment:             req.Feedback.Comment,
+			CreatedByID:         userID,
+			TransitionHistoryID: &history.ID,
+		}
+		if err := s.incidentRepo.CreateFeedback(ctx, feedback); err != nil {
+			fmt.Printf("Warning: failed to create feedback: %v\n", err)
+		}
 	}
 
 	// Get new state for SLA calculation

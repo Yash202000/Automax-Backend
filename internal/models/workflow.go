@@ -274,7 +274,7 @@ type WorkflowTransitionUpdateRequest struct {
 }
 
 type TransitionRequirementRequest struct {
-	RequirementType string `json:"requirement_type" validate:"required,oneof=comment attachment field_value"`
+	RequirementType string `json:"requirement_type" validate:"required,oneof=comment attachment feedback field_value"`
 	FieldName       string `json:"field_name"`
 	FieldValue      string `json:"field_value"`
 	IsMandatory     bool   `json:"is_mandatory"`

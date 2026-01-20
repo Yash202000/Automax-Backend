@@ -63,6 +63,12 @@ type IncidentRepository interface {
 	CreateRevision(ctx context.Context, revision *models.IncidentRevision) error
 	ListRevisions(ctx context.Context, filter *models.IncidentRevisionFilter) ([]models.IncidentRevision, int64, error)
 	GetNextRevisionNumber(ctx context.Context, incidentID uuid.UUID) (int, error)
+
+	// Feedback
+	CreateFeedback(ctx context.Context, feedback *models.IncidentFeedback) error
+	FindFeedbackByID(ctx context.Context, id uuid.UUID) (*models.IncidentFeedback, error)
+	ListFeedback(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentFeedback, error)
+	LinkFeedbackToTransition(ctx context.Context, feedbackID uuid.UUID, transitionHistoryID uuid.UUID) error
 }
 
 type incidentRepository struct {
@@ -685,4 +691,38 @@ func (r *incidentRepository) GetNextRevisionNumber(ctx context.Context, incident
 		return 0, err
 	}
 	return maxNum + 1, nil
+}
+
+// Feedback
+
+func (r *incidentRepository) CreateFeedback(ctx context.Context, feedback *models.IncidentFeedback) error {
+	return r.db.WithContext(ctx).Create(feedback).Error
+}
+
+func (r *incidentRepository) FindFeedbackByID(ctx context.Context, id uuid.UUID) (*models.IncidentFeedback, error) {
+	var feedback models.IncidentFeedback
+	err := r.db.WithContext(ctx).
+		Preload("CreatedBy").
+		First(&feedback, "id = ?", id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &feedback, nil
+}
+
+func (r *incidentRepository) ListFeedback(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentFeedback, error) {
+	var feedback []models.IncidentFeedback
+	err := r.db.WithContext(ctx).
+		Preload("CreatedBy").
+		Where("incident_id = ?", incidentID).
+		Order("created_at DESC").
+		Find(&feedback).Error
+	return feedback, err
+}
+
+func (r *incidentRepository) LinkFeedbackToTransition(ctx context.Context, feedbackID uuid.UUID, transitionHistoryID uuid.UUID) error {
+	return r.db.WithContext(ctx).
+		Model(&models.IncidentFeedback{}).
+		Where("id = ?", feedbackID).
+		Update("transition_history_id", transitionHistoryID).Error
 }
