@@ -45,34 +45,34 @@ services:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
 
-  backend:
-    image: yashplg/automax31-backend:v1.0
-    container_name: automax-backend
-    restart: always
-    ports:
-      - "8080:8080"
-    env_file:
-      - .env
-    environment:
-      DB_HOST: db
-      REDIS_HOST: redis
-      MINIO_ENDPOINT: minio:9000
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+  # backend:
+  #   image: yashplg/automax31-backend:v1.0
+  #   container_name: automax-backend
+  #   restart: always
+  #   ports:
+  #     - "8080:8080"
+  #   env_file:
+  #     - .env
+  #   environment:
+  #     DB_HOST: db
+  #     REDIS_HOST: redis
+  #     MINIO_ENDPOINT: minio:9000
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
 
-  frontend:
-    image: yashplg/automax31-frontend:v1.1
-    container_name: automax-frontend
-    restart: always
-    ports:
-      - "3000:3000"
-    environment:
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:8080/api/v1}
-    depends_on:
-      - backend
+  # frontend:
+  #   image: yashplg/automax31-frontend:v1.1
+  #   container_name: automax-frontend
+  #   restart: always
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     VITE_API_URL: ${VITE_API_URL:-http://localhost:8080/api/v1}
+  #   depends_on:
+  #     - backend
 
 volumes:
   automax_db:

@@ -98,20 +98,10 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		Description:    req.Description,
 		WorkflowID:     workflowID,
 		CurrentStateID: initialState.ID,
-		Priority:       req.Priority,
-		Severity:       req.Severity,
 		ReporterID:     &reporterID,
 		ReporterEmail:  req.ReporterEmail,
 		ReporterName:   req.ReporterName,
 		CustomFields:   req.CustomFields,
-	}
-
-	// Set default priority and severity if not provided
-	if incident.Priority == 0 {
-		incident.Priority = 3
-	}
-	if incident.Severity == 0 {
-		incident.Severity = 3
 	}
 
 	// Parse optional UUIDs
@@ -158,6 +148,20 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 
 	if err := s.incidentRepo.Create(ctx, incident); err != nil {
 		return nil, err
+	}
+
+	// Set lookup values using Association API (GORM many-to-many requires this after create)
+	if len(req.LookupValueIDs) > 0 {
+		var lookupValues []models.LookupValue
+		for _, idStr := range req.LookupValueIDs {
+			id, err := uuid.Parse(idStr)
+			if err == nil {
+				lookupValues = append(lookupValues, models.LookupValue{ID: id})
+			}
+		}
+		if err := s.incidentRepo.SetLookupValues(ctx, incident.ID, lookupValues); err != nil {
+			fmt.Printf("Warning: failed to set lookup values: %v\n", err)
+		}
 	}
 
 	// Fetch with relations
@@ -226,30 +230,26 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		descriptions = append(descriptions, "Description changed")
 		incident.Description = req.Description
 	}
-	if req.Priority != nil && *req.Priority != incident.Priority {
-		oldVal := fmt.Sprintf("%d", incident.Priority)
-		newVal := fmt.Sprintf("%d", *req.Priority)
-		changes = append(changes, models.IncidentFieldChange{
-			FieldName:  "priority",
-			FieldLabel: "Priority",
-			OldValue:   &oldVal,
-			NewValue:   &newVal,
-		})
-		descriptions = append(descriptions, fmt.Sprintf("Priority changed from %s to %s", oldVal, newVal))
-		incident.Priority = *req.Priority
+
+	if req.LookupValueIDs != nil {
+		var newValues []models.LookupValue
+		for _, idStr := range req.LookupValueIDs {
+			id, err := uuid.Parse(idStr)
+			if err == nil {
+				newValues = append(newValues, models.LookupValue{ID: id})
+			}
+		}
+		// This will replace existing lookup values
+		if err := s.incidentRepo.SetLookupValues(ctx, incident.ID, newValues); err != nil {
+			// Log or handle error, for now we'll just log
+			fmt.Printf("Error setting lookup values: %v\n", err)
+		} else {
+			descriptions = append(descriptions, "Dynamic attributes updated")
+			// For revision history, we'd need to compare old and new, which is more complex.
+			// For now, we just note that they were updated.
+		}
 	}
-	if req.Severity != nil && *req.Severity != incident.Severity {
-		oldVal := fmt.Sprintf("%d", incident.Severity)
-		newVal := fmt.Sprintf("%d", *req.Severity)
-		changes = append(changes, models.IncidentFieldChange{
-			FieldName:  "severity",
-			FieldLabel: "Severity",
-			OldValue:   &oldVal,
-			NewValue:   &newVal,
-		})
-		descriptions = append(descriptions, fmt.Sprintf("Severity changed from %s to %s", oldVal, newVal))
-		incident.Severity = *req.Severity
-	}
+
 	if req.CustomFields != "" && req.CustomFields != incident.CustomFields {
 		incident.CustomFields = req.CustomFields
 	}

@@ -125,18 +125,6 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 		}
 	}
 
-	if priority := c.Query("priority"); priority != "" {
-		if p, err := strconv.Atoi(priority); err == nil {
-			filter.Priority = &p
-		}
-	}
-
-	if severity := c.Query("severity"); severity != "" {
-		if s, err := strconv.Atoi(severity); err == nil {
-			filter.Severity = &s
-		}
-	}
-
 	if assigneeID := c.Query("assignee_id"); assigneeID != "" {
 		if id, err := uuid.Parse(assigneeID); err == nil {
 			filter.AssigneeID = &id

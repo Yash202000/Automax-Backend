@@ -221,14 +221,6 @@ func (e *actionExecutor) executeFieldUpdate(ctx context.Context, action *models.
 	updates := make(map[string]interface{})
 
 	switch config.Field {
-	case "priority":
-		if v, ok := config.Value.(float64); ok {
-			updates["priority"] = int(v)
-		}
-	case "severity":
-		if v, ok := config.Value.(float64); ok {
-			updates["severity"] = int(v)
-		}
 	case "assignee_id":
 		if v, ok := config.Value.(string); ok {
 			if v == "" || v == "null" {
@@ -341,9 +333,24 @@ func (e *actionExecutor) replacePlaceholders(template string, incident *models.I
 		"{{incident_number}}": incident.IncidentNumber,
 		"{{incident_title}}":  incident.Title,
 		"{{incident_id}}":     incident.ID.String(),
-		"{{priority}}":        fmt.Sprintf("%d", incident.Priority),
-		"{{severity}}":        fmt.Sprintf("%d", incident.Severity),
 	}
+
+	// Dynamic placeholders for lookup values
+	priority := "N/A"
+	severity := "N/A"
+	for _, lv := range incident.LookupValues {
+		if lv.Category == nil {
+			continue
+		}
+		if lv.Category.Code == "PRIORITY" {
+			priority = lv.Name
+		}
+		if lv.Category.Code == "SEVERITY" {
+			severity = lv.Name
+		}
+	}
+	replacements["{{priority}}"] = priority
+	replacements["{{severity}}"] = severity
 
 	if transition != nil {
 		replacements["{{transition_name}}"] = transition.Name

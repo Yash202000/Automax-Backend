@@ -67,6 +67,7 @@ func main() {
 	workflowRepo := repository.NewWorkflowRepository(db)
 	incidentRepo := repository.NewIncidentRepository(db)
 	reportRepo := repository.NewReportRepository(db)
+	lookupRepo := repository.NewLookupRepository(db)
 
 	// Initialize services
 	userService := services.NewUserService(userRepo, jwtManager, sessionStore, minioStorage, cfg)
@@ -95,6 +96,7 @@ func main() {
 	workflowHandler := handlers.NewWorkflowHandler(workflowService)
 	incidentHandler := handlers.NewIncidentHandler(incidentService, userRepo, minioStorage)
 	reportHandler := handlers.NewReportHandler(reportService)
+	lookupHandler := handlers.NewLookupHandler(lookupRepo)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore)
@@ -278,6 +280,22 @@ func main() {
 	reports.Post("/:id/duplicate", reportHandler.DuplicateReport)
 	reports.Post("/:id/execute", reportHandler.ExecuteReport)
 	reports.Get("/:id/executions", reportHandler.GetExecutionHistory)
+
+	// Lookup routes (admin)
+	lookups := admin.Group("/lookups")
+	lookups.Post("/categories", lookupHandler.CreateCategory)
+	lookups.Get("/categories", lookupHandler.ListCategories)
+	lookups.Get("/categories/:id", lookupHandler.GetCategoryByID)
+	lookups.Put("/categories/:id", lookupHandler.UpdateCategory)
+	lookups.Delete("/categories/:id", lookupHandler.DeleteCategory)
+	lookups.Post("/categories/:id/values", lookupHandler.CreateValue)
+	lookups.Get("/categories/:id/values", lookupHandler.ListValuesByCategory)
+	lookups.Get("/values/:id", lookupHandler.GetValueByID)
+	lookups.Put("/values/:id", lookupHandler.UpdateValue)
+	lookups.Delete("/values/:id", lookupHandler.DeleteValue)
+
+	// Public lookup endpoint (by category code) - accessible to authenticated users
+	v1.Get("/lookups/:code", authMiddleware.Authenticate(), lookupHandler.GetValuesByCategoryCode)
 
 	go func() {
 		addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)

@@ -47,6 +47,7 @@ type IncidentRepository interface {
 	AssignIncident(ctx context.Context, incidentID, assigneeID uuid.UUID) error
 	SetAssignees(ctx context.Context, incidentID uuid.UUID, userIDs []uuid.UUID) error
 	ClearAssignees(ctx context.Context, incidentID uuid.UUID) error
+	SetLookupValues(ctx context.Context, incidentID uuid.UUID, lookupValues []models.LookupValue) error
 
 	// Stats
 	GetStats(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponse, error)
@@ -100,6 +101,7 @@ func (r *incidentRepository) FindByIDWithRelations(ctx context.Context, id uuid.
 		Preload("Assignees").
 		Preload("Department").
 		Preload("Location").
+		Preload("LookupValues.Category").
 		Preload("Reporter").
 		Preload("Comments", func(db *gorm.DB) *gorm.DB {
 			return db.Order("created_at DESC")
@@ -150,12 +152,6 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	if filter.ClassificationID != nil {
 		query = query.Where("classification_id = ?", *filter.ClassificationID)
 	}
-	if filter.Priority != nil {
-		query = query.Where("priority = ?", *filter.Priority)
-	}
-	if filter.Severity != nil {
-		query = query.Where("severity = ?", *filter.Severity)
-	}
 	if filter.AssigneeID != nil {
 		query = query.Where("assignee_id = ?", *filter.AssigneeID)
 	}
@@ -203,6 +199,7 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		Preload("Assignee").
 		Preload("Department").
 		Preload("Location").
+		Preload("LookupValues.Category").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(filter.Limit).
@@ -375,106 +372,156 @@ func (r *incidentRepository) ClearAssignees(ctx context.Context, incidentID uuid
 	return r.db.WithContext(ctx).Model(&incident).Association("Assignees").Clear()
 }
 
+func (r *incidentRepository) SetLookupValues(ctx context.Context, incidentID uuid.UUID, lookupValues []models.LookupValue) error {
+	var incident models.Incident
+	if err := r.db.WithContext(ctx).First(&incident, "id = ?", incidentID).Error; err != nil {
+		return err
+	}
+
+	// First fetch the actual LookupValue records from database
+	var actualLookupValues []models.LookupValue
+	lookupIDs := make([]uuid.UUID, len(lookupValues))
+	for i, lv := range lookupValues {
+		lookupIDs[i] = lv.ID
+	}
+
+	if err := r.db.WithContext(ctx).Where("id IN ?", lookupIDs).Find(&actualLookupValues).Error; err != nil {
+		return err
+	}
+
+	return r.db.WithContext(ctx).Model(&incident).Association("LookupValues").Replace(actualLookupValues)
+}
+
 // Stats
 
 func (r *incidentRepository) GetStats(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponse, error) {
+
 	stats := &models.IncidentStatsResponse{
-		ByPriority: make(map[int]int64),
-		BySeverity: make(map[int]int64),
-		ByState:    make(map[string]int64),
+
+		ByState: make(map[string]int64),
+
 	}
+
+
 
 	baseQuery := r.db.WithContext(ctx).Model(&models.Incident{})
 
+
+
 	// Apply filters if provided
+
 	if filter != nil {
+
 		if filter.WorkflowID != nil {
+
 			baseQuery = baseQuery.Where("workflow_id = ?", *filter.WorkflowID)
+
 		}
+
 		if filter.DepartmentID != nil {
+
 			baseQuery = baseQuery.Where("department_id = ?", *filter.DepartmentID)
+
 		}
+
 		if filter.AssigneeID != nil {
+
 			baseQuery = baseQuery.Where("assignee_id = ?", *filter.AssigneeID)
+
 		}
+
 	}
+
+
 
 	// Total count
+
 	if err := baseQuery.Count(&stats.Total).Error; err != nil {
+
 		return nil, err
+
 	}
+
+
 
 	// SLA breached count
+
 	if err := r.db.WithContext(ctx).Model(&models.Incident{}).Where("sla_breached = ?", true).Count(&stats.SLABreached).Error; err != nil {
+
 		return nil, err
+
 	}
 
-	// Count by priority
-	type priorityCount struct {
-		Priority int
-		Count    int64
-	}
-	var priorityCounts []priorityCount
-	if err := r.db.WithContext(ctx).Model(&models.Incident{}).
-		Select("priority, count(*) as count").
-		Group("priority").
-		Scan(&priorityCounts).Error; err != nil {
-		return nil, err
-	}
-	for _, pc := range priorityCounts {
-		stats.ByPriority[pc.Priority] = pc.Count
-	}
 
-	// Count by severity
-	type severityCount struct {
-		Severity int
-		Count    int64
-	}
-	var severityCounts []severityCount
-	if err := r.db.WithContext(ctx).Model(&models.Incident{}).
-		Select("severity, count(*) as count").
-		Group("severity").
-		Scan(&severityCounts).Error; err != nil {
-		return nil, err
-	}
-	for _, sc := range severityCounts {
-		stats.BySeverity[sc.Severity] = sc.Count
-	}
 
 	// Count by state (filtered by viewable roles if provided)
+
 	type stateCount struct {
+
 		StateID   uuid.UUID `gorm:"column:state_id"`
+
 		StateName string    `gorm:"column:state_name"`
+
 		Count     int64     `gorm:"column:count"`
+
 	}
+
 	var stateCounts []stateCount
+
 	stateQuery := r.db.WithContext(ctx).Model(&models.Incident{}).
+
 		Select("workflow_states.id as state_id, workflow_states.name as state_name, count(*) as count").
+
 		Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
 
+
+
 	// Filter by user roles if provided (empty viewable_roles = visible to all)
+
 	if filter != nil && len(filter.UserRoleIDs) > 0 {
+
 		stateQuery = stateQuery.Where(`
+
 			NOT EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = workflow_states.id)
+
 			OR EXISTS (SELECT 1 FROM state_viewable_roles
+
 			           WHERE workflow_state_id = workflow_states.id AND role_id IN ?)
+
 		`, filter.UserRoleIDs)
+
 	}
+
+
 
 	if err := stateQuery.Group("workflow_states.id, workflow_states.name").Scan(&stateCounts).Error; err != nil {
+
 		return nil, err
-	}
-	stats.ByStateDetails = make([]models.StateStatDetail, 0, len(stateCounts))
-	for _, sc := range stateCounts {
-		stats.ByState[sc.StateName] = sc.Count
-		stats.ByStateDetails = append(stats.ByStateDetails, models.StateStatDetail{
-			ID:    sc.StateID,
-			Name:  sc.StateName,
-			Count: sc.Count,
-		})
+
 	}
 
+	stats.ByStateDetails = make([]models.StateStatDetail, 0, len(stateCounts))
+
+	for _, sc := range stateCounts {
+
+		stats.ByState[sc.StateName] = sc.Count
+
+		stats.ByStateDetails = append(stats.ByStateDetails, models.StateStatDetail{
+
+			ID:    sc.StateID,
+
+			Name:  sc.StateName,
+
+			Count: sc.Count,
+
+		})
+
+	}
+
+
+
 	return stats, nil
+
 }
 
 func (r *incidentRepository) GetSLABreachedIncidents(ctx context.Context) ([]models.Incident, error) {

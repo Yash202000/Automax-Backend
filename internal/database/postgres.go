@@ -21,7 +21,7 @@ func Connect(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 	)
 
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info),
+		Logger: logger.Default.LogMode(logger.Warn),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
@@ -42,6 +42,9 @@ func Migrate(db *gorm.DB) error {
 		&models.Department{},
 		&models.User{},
 		&models.ActionLog{},
+		// Lookup models
+		&models.LookupCategory{},
+		&models.LookupValue{},
 		// Workflow models
 		&models.Workflow{},
 		&models.WorkflowState{},
@@ -208,8 +211,75 @@ func Seed(db *gorm.DB) error {
 		db.Model(&adminUser).Association("Roles").Append(&adminRole)
 	}
 
+	// Seed default lookup categories
+	seedLookupCategories(db)
+
 	log.Println("Database seeding completed")
 	return nil
+}
+
+func seedLookupCategories(db *gorm.DB) {
+	// Priority category
+	var priorityCategory models.LookupCategory
+	result := db.Where("code = ?", "PRIORITY").First(&priorityCategory)
+	if result.Error == gorm.ErrRecordNotFound {
+		priorityCategory = models.LookupCategory{
+			Code:        "PRIORITY",
+			Name:        "Priority",
+			NameAr:      "الأولوية",
+			Description: "Incident priority levels",
+			IsSystem:    true,
+			IsActive:    true,
+		}
+		if err := db.Create(&priorityCategory).Error; err != nil {
+			log.Printf("Failed to create priority category: %v", err)
+		} else {
+			// Create priority values
+			priorityValues := []models.LookupValue{
+				{CategoryID: priorityCategory.ID, Code: "CRITICAL", Name: "Critical", NameAr: "حرج", SortOrder: 1, Color: "#EF4444", IsDefault: false, IsActive: true},
+				{CategoryID: priorityCategory.ID, Code: "HIGH", Name: "High", NameAr: "عالي", SortOrder: 2, Color: "#F97316", IsDefault: false, IsActive: true},
+				{CategoryID: priorityCategory.ID, Code: "MEDIUM", Name: "Medium", NameAr: "متوسط", SortOrder: 3, Color: "#EAB308", IsDefault: true, IsActive: true},
+				{CategoryID: priorityCategory.ID, Code: "LOW", Name: "Low", NameAr: "منخفض", SortOrder: 4, Color: "#3B82F6", IsDefault: false, IsActive: true},
+				{CategoryID: priorityCategory.ID, Code: "VERY_LOW", Name: "Very Low", NameAr: "منخفض جداً", SortOrder: 5, Color: "#6B7280", IsDefault: false, IsActive: true},
+			}
+			for _, v := range priorityValues {
+				if err := db.Create(&v).Error; err != nil {
+					log.Printf("Failed to create priority value %s: %v", v.Code, err)
+				}
+			}
+		}
+	}
+
+	// Severity category
+	var severityCategory models.LookupCategory
+	result = db.Where("code = ?", "SEVERITY").First(&severityCategory)
+	if result.Error == gorm.ErrRecordNotFound {
+		severityCategory = models.LookupCategory{
+			Code:        "SEVERITY",
+			Name:        "Severity",
+			NameAr:      "الخطورة",
+			Description: "Incident severity levels",
+			IsSystem:    true,
+			IsActive:    true,
+		}
+		if err := db.Create(&severityCategory).Error; err != nil {
+			log.Printf("Failed to create severity category: %v", err)
+		} else {
+			// Create severity values
+			severityValues := []models.LookupValue{
+				{CategoryID: severityCategory.ID, Code: "CRITICAL", Name: "Critical", NameAr: "حرج", SortOrder: 1, Color: "#EF4444", IsDefault: false, IsActive: true},
+				{CategoryID: severityCategory.ID, Code: "MAJOR", Name: "Major", NameAr: "رئيسي", SortOrder: 2, Color: "#F97316", IsDefault: false, IsActive: true},
+				{CategoryID: severityCategory.ID, Code: "MODERATE", Name: "Moderate", NameAr: "معتدل", SortOrder: 3, Color: "#EAB308", IsDefault: true, IsActive: true},
+				{CategoryID: severityCategory.ID, Code: "MINOR", Name: "Minor", NameAr: "ثانوي", SortOrder: 4, Color: "#3B82F6", IsDefault: false, IsActive: true},
+				{CategoryID: severityCategory.ID, Code: "COSMETIC", Name: "Cosmetic", NameAr: "تجميلي", SortOrder: 5, Color: "#6B7280", IsDefault: false, IsActive: true},
+			}
+			for _, v := range severityValues {
+				if err := db.Create(&v).Error; err != nil {
+					log.Printf("Failed to create severity value %s: %v", v.Code, err)
+				}
+			}
+		}
+	}
 }
 
 func Close(db *gorm.DB) error {

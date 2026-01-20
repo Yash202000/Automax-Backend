@@ -28,9 +28,8 @@ type Incident struct {
 	CurrentStateID uuid.UUID      `gorm:"type:uuid;index;not null" json:"current_state_id"`
 	CurrentState   *WorkflowState `gorm:"foreignKey:CurrentStateID" json:"current_state,omitempty"`
 
-	// Priority & Severity (1-5 scale, 1=lowest, 5=critical)
-	Priority int `gorm:"default:3;index" json:"priority"`
-	Severity int `gorm:"default:3;index" json:"severity"`
+	// Dynamic Attributes from Lookup
+	LookupValues []LookupValue `gorm:"many2many:incident_lookup_values;" json:"lookup_values,omitempty"`
 
 	// Assignment
 	AssigneeID   *uuid.UUID  `gorm:"type:uuid;index" json:"assignee_id"`
@@ -252,8 +251,6 @@ type IncidentCreateRequest struct {
 	Description      string   `json:"description"`
 	ClassificationID *string  `json:"classification_id" validate:"omitempty,uuid"`
 	WorkflowID       string   `json:"workflow_id" validate:"required,uuid"`
-	Priority         int      `json:"priority" validate:"omitempty,min=1,max=5"`
-	Severity         int      `json:"severity" validate:"omitempty,min=1,max=5"`
 	AssigneeID       *string  `json:"assignee_id" validate:"omitempty,uuid"`
 	DepartmentID     *string  `json:"department_id" validate:"omitempty,uuid"`
 	LocationID       *string  `json:"location_id" validate:"omitempty,uuid"`
@@ -263,14 +260,13 @@ type IncidentCreateRequest struct {
 	ReporterEmail    string   `json:"reporter_email" validate:"omitempty,email"`
 	ReporterName     string   `json:"reporter_name" validate:"omitempty,max=200"`
 	CustomFields     string   `json:"custom_fields"`
+	LookupValueIDs   []string `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
 }
 
 type IncidentUpdateRequest struct {
 	Title            string   `json:"title" validate:"omitempty,min=5,max=200"`
 	Description      string   `json:"description"`
 	ClassificationID *string  `json:"classification_id" validate:"omitempty,uuid"`
-	Priority         *int     `json:"priority" validate:"omitempty,min=1,max=5"`
-	Severity         *int     `json:"severity" validate:"omitempty,min=1,max=5"`
 	AssigneeID       *string  `json:"assignee_id" validate:"omitempty,uuid"`
 	DepartmentID     *string  `json:"department_id" validate:"omitempty,uuid"`
 	LocationID       *string  `json:"location_id" validate:"omitempty,uuid"`
@@ -278,6 +274,7 @@ type IncidentUpdateRequest struct {
 	Longitude        *float64 `json:"longitude" validate:"omitempty,min=-180,max=180"`
 	DueDate          *string  `json:"due_date"`
 	CustomFields     string   `json:"custom_fields"`
+	LookupValueIDs   []string `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
 }
 
 type IncidentTransitionRequest struct {
@@ -300,8 +297,6 @@ type IncidentFilter struct {
 	WorkflowID       *uuid.UUID  `json:"workflow_id"`
 	CurrentStateID   *uuid.UUID  `json:"current_state_id"`
 	ClassificationID *uuid.UUID  `json:"classification_id"`
-	Priority         *int        `json:"priority"`
-	Severity         *int        `json:"severity"`
 	AssigneeID       *uuid.UUID  `json:"assignee_id"`
 	DepartmentID     *uuid.UUID  `json:"department_id"`
 	LocationID       *uuid.UUID  `json:"location_id"`
@@ -324,8 +319,6 @@ type IncidentResponse struct {
 	Classification   *ClassificationResponse `json:"classification,omitempty"`
 	Workflow         *WorkflowResponse       `json:"workflow,omitempty"`
 	CurrentState     *WorkflowStateResponse  `json:"current_state,omitempty"`
-	Priority         int                     `json:"priority"`
-	Severity         int                     `json:"severity"`
 	Assignee         *UserResponse           `json:"assignee,omitempty"`
 	Assignees        []UserResponse          `json:"assignees,omitempty"`
 	Department       *DepartmentResponse     `json:"department,omitempty"`
@@ -345,6 +338,7 @@ type IncidentResponse struct {
 	AttachmentsCount int                     `json:"attachments_count"`
 	CreatedAt        time.Time               `json:"created_at"`
 	UpdatedAt        time.Time               `json:"updated_at"`
+	LookupValues     []LookupValueResponse   `json:"lookup_values,omitempty"`
 }
 
 type IncidentDetailResponse struct {
@@ -424,8 +418,6 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 		IncidentNumber:   i.IncidentNumber,
 		Title:            i.Title,
 		Description:      i.Description,
-		Priority:         i.Priority,
-		Severity:         i.Severity,
 		Latitude:         i.Latitude,
 		Longitude:        i.Longitude,
 		DueDate:          i.DueDate,
@@ -467,6 +459,13 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 		resp.Assignees = make([]UserResponse, len(i.Assignees))
 		for idx, user := range i.Assignees {
 			resp.Assignees[idx] = ToUserResponse(&user)
+		}
+	}
+
+	if len(i.LookupValues) > 0 {
+		resp.LookupValues = make([]LookupValueResponse, len(i.LookupValues))
+		for idx, val := range i.LookupValues {
+			resp.LookupValues[idx] = ToLookupValueResponse(&val)
 		}
 	}
 
