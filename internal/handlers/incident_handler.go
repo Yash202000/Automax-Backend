@@ -522,6 +522,11 @@ func (h *IncidentHandler) AssignIncident(c *fiber.Ctx) error {
 func (h *IncidentHandler) GetStats(c *fiber.Ctx) error {
 	filter := &models.IncidentFilter{}
 
+	// Filter by record_type (incident, request, complaint)
+	if recordType := c.Query("record_type"); recordType != "" {
+		filter.RecordType = &recordType
+	}
+
 	if workflowID := c.Query("workflow_id"); workflowID != "" {
 		if id, err := uuid.Parse(workflowID); err == nil {
 			filter.WorkflowID = &id

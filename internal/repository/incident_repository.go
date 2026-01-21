@@ -461,6 +461,12 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 
 	if filter != nil {
 
+		if filter.RecordType != nil && *filter.RecordType != "" {
+
+			baseQuery = baseQuery.Where("record_type = ?", *filter.RecordType)
+
+		}
+
 		if filter.WorkflowID != nil {
 
 			baseQuery = baseQuery.Where("workflow_id = ?", *filter.WorkflowID)
@@ -493,9 +499,12 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 
 
 
-	// SLA breached count
-
-	if err := r.db.WithContext(ctx).Model(&models.Incident{}).Where("sla_breached = ?", true).Count(&stats.SLABreached).Error; err != nil {
+	// SLA breached count (also filtered by record_type if provided)
+	slaQuery := r.db.WithContext(ctx).Model(&models.Incident{}).Where("sla_breached = ?", true)
+	if filter != nil && filter.RecordType != nil && *filter.RecordType != "" {
+		slaQuery = slaQuery.Where("record_type = ?", *filter.RecordType)
+	}
+	if err := slaQuery.Count(&stats.SLABreached).Error; err != nil {
 
 		return nil, err
 
@@ -523,7 +532,12 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 
 		Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
 
+	// Apply record_type filter to state counts
+	if filter != nil && filter.RecordType != nil && *filter.RecordType != "" {
 
+		stateQuery = stateQuery.Where("incidents.record_type = ?", *filter.RecordType)
+
+	}
 
 	// Filter by user roles if provided (empty viewable_roles = visible to all)
 
@@ -567,7 +581,35 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 
 	}
 
+	// Count by state_type for category totals
+	type stateTypeCount struct {
+		StateType string `gorm:"column:state_type"`
+		Count     int64  `gorm:"column:count"`
+	}
+	var stateTypeCounts []stateTypeCount
+	stateTypeQuery := r.db.WithContext(ctx).Model(&models.Incident{}).
+		Select("workflow_states.state_type as state_type, count(*) as count").
+		Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
 
+	if filter != nil && filter.RecordType != nil && *filter.RecordType != "" {
+		stateTypeQuery = stateTypeQuery.Where("incidents.record_type = ?", *filter.RecordType)
+	}
+
+	if err := stateTypeQuery.Group("workflow_states.state_type").Scan(&stateTypeCounts).Error; err != nil {
+		return nil, err
+	}
+
+	// Map state_type to convenience fields
+	for _, stc := range stateTypeCounts {
+		switch stc.StateType {
+		case "initial":
+			stats.Open = stc.Count
+		case "normal":
+			stats.InProgress = stc.Count
+		case "terminal":
+			stats.Closed = stc.Count
+		}
+	}
 
 	return stats, nil
 
