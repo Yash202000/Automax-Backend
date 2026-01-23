@@ -51,8 +51,13 @@ type Incident struct {
 	Location   *Location  `gorm:"foreignKey:LocationID" json:"location,omitempty"`
 
 	// Geolocation (independent of Location reference)
-	Latitude  *float64 `gorm:"type:decimal(10,8)" json:"latitude"`
-	Longitude *float64 `gorm:"type:decimal(11,8)" json:"longitude"`
+	Latitude   *float64 `gorm:"type:decimal(10,8)" json:"latitude"`
+	Longitude  *float64 `gorm:"type:decimal(11,8)" json:"longitude"`
+	Address    string   `gorm:"size:500" json:"address"`
+	City       string   `gorm:"size:100" json:"city"`
+	State      string   `gorm:"size:100" json:"state"`
+	Country    string   `gorm:"size:100" json:"country"`
+	PostalCode string   `gorm:"size:20" json:"postal_code"`
 
 	// Dates
 	DueDate    *time.Time `json:"due_date"`
@@ -296,6 +301,11 @@ type IncidentCreateRequest struct {
 	LocationID       *string  `json:"location_id" validate:"omitempty,uuid"`
 	Latitude         *float64 `json:"latitude" validate:"omitempty,min=-90,max=90"`
 	Longitude        *float64 `json:"longitude" validate:"omitempty,min=-180,max=180"`
+	Address          string   `json:"address"`
+	City             string   `json:"city"`
+	State            string   `json:"state"`
+	Country          string   `json:"country"`
+	PostalCode       string   `json:"postal_code"`
 	DueDate          *string  `json:"due_date"`
 	ReporterEmail    string   `json:"reporter_email" validate:"omitempty,email"`
 	ReporterName     string   `json:"reporter_name" validate:"omitempty,max=200"`
@@ -312,6 +322,11 @@ type IncidentUpdateRequest struct {
 	LocationID       *string  `json:"location_id" validate:"omitempty,uuid"`
 	Latitude         *float64 `json:"latitude" validate:"omitempty,min=-90,max=90"`
 	Longitude        *float64 `json:"longitude" validate:"omitempty,min=-180,max=180"`
+	Address          string   `json:"address"`
+	City             string   `json:"city"`
+	State            string   `json:"state"`
+	Country          string   `json:"country"`
+	PostalCode       string   `json:"postal_code"`
 	DueDate          *string  `json:"due_date"`
 	CustomFields     string   `json:"custom_fields"`
 	LookupValueIDs   []string `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
@@ -429,6 +444,11 @@ type IncidentResponse struct {
 	Location         *LocationResponse       `json:"location,omitempty"`
 	Latitude         *float64                `json:"latitude,omitempty"`
 	Longitude        *float64                `json:"longitude,omitempty"`
+	Address          string                  `json:"address,omitempty"`
+	City             string                  `json:"city,omitempty"`
+	State            string                  `json:"state,omitempty"`
+	Country          string                  `json:"country,omitempty"`
+	PostalCode       string                  `json:"postal_code,omitempty"`
 	DueDate          *time.Time              `json:"due_date"`
 	ResolvedAt       *time.Time              `json:"resolved_at"`
 	ClosedAt         *time.Time              `json:"closed_at"`
@@ -540,23 +560,28 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 		SourceIncidentID:   i.SourceIncidentID,
 		ConvertedRequestID: i.ConvertedRequestID,
 		Latitude:           i.Latitude,
-		Longitude:        i.Longitude,
-		DueDate:          i.DueDate,
-		ResolvedAt:       i.ResolvedAt,
-		ClosedAt:         i.ClosedAt,
-		SLABreached:      i.SLABreached,
-		SLADeadline:      i.SLADeadline,
-		ReporterEmail:    i.ReporterEmail,
-		ReporterName:     i.ReporterName,
-		Channel:          i.Channel,
-		CreatedByName:    i.CreatedByName,
-		CreatedByMobile:  i.CreatedByMobile,
-		EvaluationCount:  i.EvaluationCount,
-		CustomFields:     i.CustomFields,
-		CommentsCount:    len(i.Comments),
-		AttachmentsCount: len(i.Attachments),
-		CreatedAt:        i.CreatedAt,
-		UpdatedAt:        i.UpdatedAt,
+		Longitude:          i.Longitude,
+		Address:            i.Address,
+		City:               i.City,
+		State:              i.State,
+		Country:            i.Country,
+		PostalCode:         i.PostalCode,
+		DueDate:            i.DueDate,
+		ResolvedAt:         i.ResolvedAt,
+		ClosedAt:           i.ClosedAt,
+		SLABreached:        i.SLABreached,
+		SLADeadline:        i.SLADeadline,
+		ReporterEmail:      i.ReporterEmail,
+		ReporterName:       i.ReporterName,
+		Channel:            i.Channel,
+		CreatedByName:      i.CreatedByName,
+		CreatedByMobile:    i.CreatedByMobile,
+		EvaluationCount:    i.EvaluationCount,
+		CustomFields:       i.CustomFields,
+		CommentsCount:      len(i.Comments),
+		AttachmentsCount:   len(i.Attachments),
+		CreatedAt:          i.CreatedAt,
+		UpdatedAt:          i.UpdatedAt,
 	}
 
 	if i.SourceIncident != nil {

@@ -112,6 +112,13 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		ReporterEmail:  req.ReporterEmail,
 		ReporterName:   req.ReporterName,
 		CustomFields:   req.CustomFields,
+		Latitude:       req.Latitude,
+		Longitude:      req.Longitude,
+		Address:        req.Address,
+		City:           req.City,
+		State:          req.State,
+		Country:        req.Country,
+		PostalCode:     req.PostalCode,
 	}
 
 	// Parse optional UUIDs
@@ -331,6 +338,29 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 				incident.LocationID = &locID
 			}
 		}
+	}
+
+	// Update geolocation fields
+	if req.Latitude != nil {
+		incident.Latitude = req.Latitude
+	}
+	if req.Longitude != nil {
+		incident.Longitude = req.Longitude
+	}
+	if req.Address != "" {
+		incident.Address = req.Address
+	}
+	if req.City != "" {
+		incident.City = req.City
+	}
+	if req.State != "" {
+		incident.State = req.State
+	}
+	if req.Country != "" {
+		incident.Country = req.Country
+	}
+	if req.PostalCode != "" {
+		incident.PostalCode = req.PostalCode
 	}
 
 	if req.DueDate != nil {
