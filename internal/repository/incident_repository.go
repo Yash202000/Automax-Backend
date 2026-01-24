@@ -171,7 +171,8 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		query = query.Where("classification_id = ?", *filter.ClassificationID)
 	}
 	if filter.AssigneeID != nil {
-		query = query.Where("assignee_id = ?", *filter.AssigneeID)
+		// Check both primary assignee and multiple assignees
+		query = query.Where("assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", *filter.AssigneeID, *filter.AssigneeID)
 	}
 	if filter.DepartmentID != nil {
 		query = query.Where("department_id = ?", *filter.DepartmentID)
@@ -495,9 +496,8 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 		}
 
 		if filter.AssigneeID != nil {
-
-			baseQuery = baseQuery.Where("assignee_id = ?", *filter.AssigneeID)
-
+			// Check both primary assignee and multiple assignees
+			baseQuery = baseQuery.Where("assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", *filter.AssigneeID, *filter.AssigneeID)
 		}
 
 	}
@@ -675,7 +675,9 @@ func (r *incidentRepository) GetAssignedToUser(ctx context.Context, userID uuid.
 	}
 	offset := (page - 1) * limit
 
-	baseQuery := r.db.WithContext(ctx).Model(&models.Incident{}).Where("assignee_id = ?", userID)
+	// Check both primary assignee (assignee_id) AND multiple assignees (incident_assignees table)
+	baseQuery := r.db.WithContext(ctx).Model(&models.Incident{}).
+		Where("assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", userID, userID)
 
 	// Filter by record_type if provided
 	if recordType != "" {
@@ -689,6 +691,7 @@ func (r *incidentRepository) GetAssignedToUser(ctx context.Context, userID uuid.
 	err := baseQuery.
 		Preload("CurrentState").
 		Preload("Workflow").
+		Preload("Assignees").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(limit).
@@ -779,7 +782,7 @@ func (r *incidentRepository) ListRevisions(ctx context.Context, filter *models.I
 	err := query.
 		Preload("PerformedBy").
 		Preload("PerformedBy.Roles").
-		Order("revision_number ASC").
+		Order("revision_number DESC").
 		Offset(offset).
 		Limit(limit).
 		Find(&revisions).Error

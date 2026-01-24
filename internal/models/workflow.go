@@ -31,6 +31,9 @@ type Workflow struct {
 	Transitions     []WorkflowTransition `gorm:"foreignKey:WorkflowID" json:"transitions,omitempty"`
 	Classifications []Classification     `gorm:"many2many:workflow_classifications;" json:"classifications,omitempty"`
 
+	// Role-based convert-to-request permission (many-to-many) - empty = all users can convert
+	ConvertToRequestRoles []Role `gorm:"many2many:workflow_convert_to_request_roles;" json:"convert_to_request_roles,omitempty"`
+
 	CreatedByID *uuid.UUID     `gorm:"type:uuid" json:"created_by_id"`
 	CreatedBy   *User          `gorm:"foreignKey:CreatedByID" json:"created_by,omitempty"`
 	CreatedAt   time.Time      `json:"created_at"`
@@ -197,15 +200,16 @@ type WorkflowCreateRequest struct {
 }
 
 type WorkflowUpdateRequest struct {
-	Name              string   `json:"name" validate:"omitempty,min=2,max=100"`
-	Code              string   `json:"code" validate:"omitempty,min=2,max=50"`
-	Description       string   `json:"description" validate:"max=500"`
-	RecordType        *string  `json:"record_type" validate:"omitempty,oneof=incident request complaint both all"`
-	IsActive          *bool    `json:"is_active"`
-	IsDefault         *bool    `json:"is_default"`
-	CanvasLayout      string   `json:"canvas_layout"`
-	ClassificationIDs []string `json:"classification_ids"`
-	RequiredFields    []string `json:"required_fields"`
+	Name                    string   `json:"name" validate:"omitempty,min=2,max=100"`
+	Code                    string   `json:"code" validate:"omitempty,min=2,max=50"`
+	Description             string   `json:"description" validate:"max=500"`
+	RecordType              *string  `json:"record_type" validate:"omitempty,oneof=incident request complaint both all"`
+	IsActive                *bool    `json:"is_active"`
+	IsDefault               *bool    `json:"is_default"`
+	CanvasLayout            string   `json:"canvas_layout"`
+	ClassificationIDs       []string `json:"classification_ids"`
+	RequiredFields          []string `json:"required_fields"`
+	ConvertToRequestRoleIDs []string `json:"convert_to_request_role_ids"`
 }
 
 type WorkflowStateCreateRequest struct {
@@ -326,24 +330,25 @@ type WorkflowMatchResponse struct {
 // Response types
 
 type WorkflowResponse struct {
-	ID               uuid.UUID                    `json:"id"`
-	Name             string                       `json:"name"`
-	Code             string                       `json:"code"`
-	Description      string                       `json:"description"`
-	Version          int                          `json:"version"`
-	IsActive         bool                         `json:"is_active"`
-	IsDefault        bool                         `json:"is_default"`
-	RecordType       string                       `json:"record_type"`
-	CanvasLayout     string                       `json:"canvas_layout,omitempty"`
-	RequiredFields   []string                     `json:"required_fields"`
-	States           []WorkflowStateResponse      `json:"states,omitempty"`
-	Transitions      []WorkflowTransitionResponse `json:"transitions,omitempty"`
-	Classifications  []ClassificationResponse     `json:"classifications,omitempty"`
-	StatesCount      int                          `json:"states_count"`
-	TransitionsCount int                          `json:"transitions_count"`
-	CreatedBy        *UserResponse                `json:"created_by,omitempty"`
-	CreatedAt        time.Time                    `json:"created_at"`
-	UpdatedAt        time.Time                    `json:"updated_at"`
+	ID                    uuid.UUID                    `json:"id"`
+	Name                  string                       `json:"name"`
+	Code                  string                       `json:"code"`
+	Description           string                       `json:"description"`
+	Version               int                          `json:"version"`
+	IsActive              bool                         `json:"is_active"`
+	IsDefault             bool                         `json:"is_default"`
+	RecordType            string                       `json:"record_type"`
+	CanvasLayout          string                       `json:"canvas_layout,omitempty"`
+	RequiredFields        []string                     `json:"required_fields"`
+	States                []WorkflowStateResponse      `json:"states,omitempty"`
+	Transitions           []WorkflowTransitionResponse `json:"transitions,omitempty"`
+	Classifications       []ClassificationResponse     `json:"classifications,omitempty"`
+	ConvertToRequestRoles []RoleResponse               `json:"convert_to_request_roles,omitempty"`
+	StatesCount           int                          `json:"states_count"`
+	TransitionsCount      int                          `json:"transitions_count"`
+	CreatedBy             *UserResponse                `json:"created_by,omitempty"`
+	CreatedAt             time.Time                    `json:"created_at"`
+	UpdatedAt             time.Time                    `json:"updated_at"`
 }
 
 type WorkflowStateResponse struct {
@@ -469,6 +474,13 @@ func ToWorkflowResponse(w *Workflow) WorkflowResponse {
 		resp.Classifications = make([]ClassificationResponse, len(w.Classifications))
 		for i, c := range w.Classifications {
 			resp.Classifications[i] = ToClassificationResponse(&c)
+		}
+	}
+
+	if len(w.ConvertToRequestRoles) > 0 {
+		resp.ConvertToRequestRoles = make([]RoleResponse, len(w.ConvertToRequestRoles))
+		for i, r := range w.ConvertToRequestRoles {
+			resp.ConvertToRequestRoles[i] = ToRoleResponse(&r)
 		}
 	}
 

@@ -27,6 +27,9 @@ type WorkflowRepository interface {
 	GetByClassificationID(ctx context.Context, classificationID uuid.UUID) (*models.Workflow, error)
 	GetDefaultWorkflow(ctx context.Context) (*models.Workflow, error)
 
+	// Workflow ConvertToRequest role assignments
+	AssignConvertToRequestRoles(ctx context.Context, workflowID uuid.UUID, roleIDs []uuid.UUID) error
+
 	// WorkflowState CRUD
 	CreateState(ctx context.Context, state *models.WorkflowState) error
 	FindStateByID(ctx context.Context, id uuid.UUID) (*models.WorkflowState, error)
@@ -101,6 +104,7 @@ func (r *workflowRepository) FindByIDWithRelations(ctx context.Context, id uuid.
 			return db.Order("execution_order")
 		}).
 		Preload("Classifications").
+		Preload("ConvertToRequestRoles").
 		Preload("CreatedBy").
 		First(&workflow, "id = ?", id).Error
 	if err != nil {
@@ -220,6 +224,11 @@ func (r *workflowRepository) HardDelete(ctx context.Context, id uuid.UUID) error
 
 		// 8. Clear workflow locations (many2many)
 		if err := tx.Exec("DELETE FROM workflow_locations WHERE workflow_id = ?", id).Error; err != nil {
+			return err
+		}
+
+		// 8b. Clear workflow convert-to-request roles (many2many)
+		if err := tx.Exec("DELETE FROM workflow_convert_to_request_roles WHERE workflow_id = ?", id).Error; err != nil {
 			return err
 		}
 
@@ -525,4 +534,21 @@ func (r *workflowRepository) GetTransitionActions(ctx context.Context, transitio
 		Order("execution_order").
 		Find(&actions).Error
 	return actions, err
+}
+
+// AssignConvertToRequestRoles assigns roles that are allowed to convert incidents to requests for this workflow
+func (r *workflowRepository) AssignConvertToRequestRoles(ctx context.Context, workflowID uuid.UUID, roleIDs []uuid.UUID) error {
+	var workflow models.Workflow
+	if err := r.db.WithContext(ctx).First(&workflow, "id = ?", workflowID).Error; err != nil {
+		return err
+	}
+
+	var roles []models.Role
+	if len(roleIDs) > 0 {
+		if err := r.db.WithContext(ctx).Where("id IN ?", roleIDs).Find(&roles).Error; err != nil {
+			return err
+		}
+	}
+
+	return r.db.WithContext(ctx).Model(&workflow).Association("ConvertToRequestRoles").Replace(roles)
 }

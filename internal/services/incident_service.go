@@ -23,6 +23,7 @@ type IncidentService interface {
 
 	// Convert incident to request
 	ConvertToRequest(ctx context.Context, incidentID uuid.UUID, req *models.ConvertToRequestRequest, userID uuid.UUID, userRoleIDs []uuid.UUID) (*models.ConvertToRequestResponse, error)
+	CanConvertToRequest(ctx context.Context, incidentID uuid.UUID, userRoleIDs []uuid.UUID) (bool, string, error)
 
 	// Complaint operations
 	CreateComplaint(ctx context.Context, req *models.CreateComplaintRequest, creatorID uuid.UUID) (*models.IncidentResponse, error)
@@ -416,6 +417,30 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		return nil, errors.New("cannot convert a request to another request")
 	}
 
+	// Check role-based permission for converting to request
+	workflow, err := s.workflowRepo.FindByIDWithRelations(ctx, sourceIncident.WorkflowID)
+	if err != nil {
+		return nil, errors.New("workflow not found")
+	}
+
+	if len(workflow.ConvertToRequestRoles) > 0 {
+		hasPermission := false
+		for _, allowedRole := range workflow.ConvertToRequestRoles {
+			for _, userRoleID := range userRoleIDs {
+				if allowedRole.ID == userRoleID {
+					hasPermission = true
+					break
+				}
+			}
+			if hasPermission {
+				break
+			}
+		}
+		if !hasPermission {
+			return nil, errors.New("you do not have permission to convert this incident to a request")
+		}
+	}
+
 	// Execute transition if provided
 	if req.TransitionID != nil && *req.TransitionID != "" {
 		transitionReq := &models.IncidentTransitionRequest{
@@ -581,6 +606,47 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		OriginalIncident: &originalResp,
 		NewRequest:       &newResp,
 	}, nil
+}
+
+// CanConvertToRequest checks if the user can convert the incident to a request
+func (s *incidentService) CanConvertToRequest(ctx context.Context, incidentID uuid.UUID, userRoleIDs []uuid.UUID) (bool, string, error) {
+	// Get the source incident
+	sourceIncident, err := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
+	if err != nil {
+		return false, "", errors.New("incident not found")
+	}
+
+	// Check if it's already a request
+	if sourceIncident.RecordType == "request" {
+		return false, "This is already a request", nil
+	}
+
+	// Check if it has already been converted
+	if sourceIncident.ConvertedRequestID != nil {
+		return false, "This incident has already been converted to a request", nil
+	}
+
+	// Get the workflow with ConvertToRequestRoles
+	workflow, err := s.workflowRepo.FindByIDWithRelations(ctx, sourceIncident.WorkflowID)
+	if err != nil {
+		return false, "", errors.New("workflow not found")
+	}
+
+	// If no roles specified, all users can convert (backwards compatible)
+	if len(workflow.ConvertToRequestRoles) == 0 {
+		return true, "", nil
+	}
+
+	// Check if user has any of the allowed roles
+	for _, allowedRole := range workflow.ConvertToRequestRoles {
+		for _, userRoleID := range userRoleIDs {
+			if allowedRole.ID == userRoleID {
+				return true, "", nil
+			}
+		}
+	}
+
+	return false, "You do not have permission to convert this incident to a request", nil
 }
 
 // State transitions

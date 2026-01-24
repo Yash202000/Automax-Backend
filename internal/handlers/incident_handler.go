@@ -245,6 +245,27 @@ func (h *IncidentHandler) ConvertToRequest(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusCreated, "Incident converted to request", result)
 }
 
+// CanConvertToRequest checks if the user can convert the incident to a request
+func (h *IncidentHandler) CanConvertToRequest(c *fiber.Ctx) error {
+	idStr := c.Params("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+	}
+
+	roleIDs := h.getUserRoleIDs(c)
+
+	canConvert, reason, err := h.service.CanConvertToRequest(c.Context(), id, roleIDs)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Permission check completed", fiber.Map{
+		"can_convert": canConvert,
+		"reason":      reason,
+	})
+}
+
 // State transitions
 
 func (h *IncidentHandler) ExecuteTransition(c *fiber.Ctx) error {

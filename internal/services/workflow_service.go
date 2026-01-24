@@ -210,6 +210,21 @@ func (s *workflowService) UpdateWorkflow(ctx context.Context, id uuid.UUID, req 
 		}
 	}
 
+	// Update convert-to-request roles if provided
+	if req.ConvertToRequestRoleIDs != nil {
+		roleIDs := make([]uuid.UUID, 0, len(req.ConvertToRequestRoleIDs))
+		for _, idStr := range req.ConvertToRequestRoleIDs {
+			id, err := uuid.Parse(idStr)
+			if err != nil {
+				continue
+			}
+			roleIDs = append(roleIDs, id)
+		}
+		if err := s.repo.AssignConvertToRequestRoles(ctx, workflow.ID, roleIDs); err != nil {
+			return nil, err
+		}
+	}
+
 	updated, err := s.repo.FindByIDWithRelations(ctx, id)
 	if err != nil {
 		return nil, err
