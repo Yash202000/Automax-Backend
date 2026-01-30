@@ -51,11 +51,13 @@ func (h *IncidentHandler) getUserRoleIDs(c *fiber.Ctx) []uuid.UUID {
 func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 	var req models.IncidentCreateRequest
 	if err := c.BodyParser(&req); err != nil {
+		fmt.Printf("CreateIncident: Body parsing error: %v\n", err)
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
 	if err := h.validator.Struct(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+		fmt.Printf("CreateIncident: Validation error: %v, RecordType: %s\n", err, req.RecordType)
+		return utils.FormatValidationError(c, err)
 	}
 
 	userID := c.Locals("user_id").(uuid.UUID)

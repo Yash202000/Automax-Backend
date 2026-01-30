@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/models"
@@ -97,8 +98,24 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		return nil, errors.New("workflow has no initial state configured")
 	}
 
-	// Generate incident number
-	incidentNumber, err := s.incidentRepo.GenerateIncidentNumber(ctx)
+	// Set record type, default to 'incident' if not provided
+	recordType := req.RecordType
+	if recordType == "" {
+		recordType = "incident"
+	}
+
+	// Generate number based on record type
+	var incidentNumber string
+	switch recordType {
+	case "request":
+		incidentNumber, err = s.incidentRepo.GenerateRequestNumber(ctx)
+	case "complaint":
+		incidentNumber, err = s.incidentRepo.GenerateComplaintNumber(ctx)
+	case "query":
+		incidentNumber, err = s.incidentRepo.GenerateQueryNumber(ctx)
+	default:
+		incidentNumber, err = s.incidentRepo.GenerateIncidentNumber(ctx)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -120,6 +137,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		State:          req.State,
 		Country:        req.Country,
 		PostalCode:     req.PostalCode,
+		RecordType:     recordType,
 	}
 
 	// Parse optional UUIDs
@@ -164,8 +182,29 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		incident.SLADeadline = &deadline
 	}
 
-	if err := s.incidentRepo.Create(ctx, incident); err != nil {
-		return nil, err
+	// Retry logic for duplicate key errors (race condition on incident_number)
+	maxRetries := 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if err := s.incidentRepo.Create(ctx, incident); err != nil {
+			// Check if it's a duplicate key error
+			if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "23505") {
+				// Regenerate incident number and retry
+				switch recordType {
+				case "request":
+					incident.IncidentNumber, _ = s.incidentRepo.GenerateRequestNumber(ctx)
+				case "complaint":
+					incident.IncidentNumber, _ = s.incidentRepo.GenerateComplaintNumber(ctx)
+				case "query":
+					incident.IncidentNumber, _ = s.incidentRepo.GenerateQueryNumber(ctx)
+				default:
+					incident.IncidentNumber, _ = s.incidentRepo.GenerateIncidentNumber(ctx)
+				}
+				incident.ID = uuid.New() // Generate new UUID for retry
+				continue
+			}
+			return nil, err
+		}
+		break // Success, exit retry loop
 	}
 
 	// Set lookup values using Association API (GORM many-to-many requires this after create)

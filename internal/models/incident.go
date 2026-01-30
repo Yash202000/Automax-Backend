@@ -311,6 +311,7 @@ type IncidentCreateRequest struct {
 	ReporterName     string   `json:"reporter_name" validate:"omitempty,max=200"`
 	CustomFields     string   `json:"custom_fields"`
 	LookupValueIDs   []string `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
+	RecordType       string   `json:"record_type" validate:"omitempty,oneof=incident request complaint query"`
 }
 
 type IncidentUpdateRequest struct {

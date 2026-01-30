@@ -248,58 +248,87 @@ func (r *incidentRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return r.db.WithContext(ctx).Delete(&models.Incident{}, "id = ?", id).Error
 }
 
-// Incident number generation
+// Incident number generation - uses MAX to get the highest sequence number
 
 func (r *incidentRepository) GenerateIncidentNumber(ctx context.Context) (string, error) {
 	year := time.Now().Year()
-	var count int64
+	prefix := fmt.Sprintf("INC-%d-", year)
+	var maxNumber *string
 	err := r.db.WithContext(ctx).Model(&models.Incident{}).
-		Where("EXTRACT(YEAR FROM created_at) = ?", year).
-		Where("record_type = 'incident' OR record_type = '' OR record_type IS NULL").
-		Count(&count).Error
+		Select("MAX(incident_number)").
+		Where("incident_number LIKE ?", prefix+"%").
+		Scan(&maxNumber).Error
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("INC-%d-%06d", year, count+1), nil
+	nextSeq := 1
+	if maxNumber != nil && *maxNumber != "" {
+		// Extract sequence number from "INC-2026-000021"
+		var seq int
+		fmt.Sscanf(*maxNumber, "INC-%d-%d", &year, &seq)
+		nextSeq = seq + 1
+	}
+	return fmt.Sprintf("INC-%d-%06d", year, nextSeq), nil
 }
 
 func (r *incidentRepository) GenerateRequestNumber(ctx context.Context) (string, error) {
 	year := time.Now().Year()
-	var count int64
+	prefix := fmt.Sprintf("REQ-%d-", year)
+	var maxNumber *string
 	err := r.db.WithContext(ctx).Model(&models.Incident{}).
-		Where("EXTRACT(YEAR FROM created_at) = ?", year).
-		Where("record_type = 'request'").
-		Count(&count).Error
+		Select("MAX(incident_number)").
+		Where("incident_number LIKE ?", prefix+"%").
+		Scan(&maxNumber).Error
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("REQ-%d-%06d", year, count+1), nil
+	nextSeq := 1
+	if maxNumber != nil && *maxNumber != "" {
+		var seq int
+		fmt.Sscanf(*maxNumber, "REQ-%d-%d", &year, &seq)
+		nextSeq = seq + 1
+	}
+	return fmt.Sprintf("REQ-%d-%06d", year, nextSeq), nil
 }
 
 func (r *incidentRepository) GenerateComplaintNumber(ctx context.Context) (string, error) {
 	year := time.Now().Year()
-	var count int64
+	prefix := fmt.Sprintf("COMP-%d-", year)
+	var maxNumber *string
 	err := r.db.WithContext(ctx).Model(&models.Incident{}).
-		Where("EXTRACT(YEAR FROM created_at) = ?", year).
-		Where("record_type = 'complaint'").
-		Count(&count).Error
+		Select("MAX(incident_number)").
+		Where("incident_number LIKE ?", prefix+"%").
+		Scan(&maxNumber).Error
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("COMP-%d-%06d", year, count+1), nil
+	nextSeq := 1
+	if maxNumber != nil && *maxNumber != "" {
+		var seq int
+		fmt.Sscanf(*maxNumber, "COMP-%d-%d", &year, &seq)
+		nextSeq = seq + 1
+	}
+	return fmt.Sprintf("COMP-%d-%06d", year, nextSeq), nil
 }
 
 func (r *incidentRepository) GenerateQueryNumber(ctx context.Context) (string, error) {
 	year := time.Now().Year()
-	var count int64
+	prefix := fmt.Sprintf("QRY-%d-", year)
+	var maxNumber *string
 	err := r.db.WithContext(ctx).Model(&models.Incident{}).
-		Where("EXTRACT(YEAR FROM created_at) = ?", year).
-		Where("record_type = 'query'").
-		Count(&count).Error
+		Select("MAX(incident_number)").
+		Where("incident_number LIKE ?", prefix+"%").
+		Scan(&maxNumber).Error
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("QRY-%d-%06d", year, count+1), nil
+	nextSeq := 1
+	if maxNumber != nil && *maxNumber != "" {
+		var seq int
+		fmt.Sscanf(*maxNumber, "QRY-%d-%d", &year, &seq)
+		nextSeq = seq + 1
+	}
+	return fmt.Sprintf("QRY-%d-%06d", year, nextSeq), nil
 }
 
 // State transitions
