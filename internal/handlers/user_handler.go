@@ -446,6 +446,8 @@ func (h *UserHandler) UpdateUserCallStatus(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "User call status updated successfully", resp)
+}
+
 // Export exports all users as JSON
 func (h *UserHandler) Export(c *fiber.Ctx) error {
 	// Get all users without pagination
