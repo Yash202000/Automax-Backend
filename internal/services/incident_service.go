@@ -1603,6 +1603,22 @@ func (s *incidentService) CreateQuery(ctx context.Context, req *models.CreateQue
 		CurrentStateID:   initialState.ID,
 		Channel:          req.Channel,
 		ReporterID:       &creatorID,
+		// Geolocation fields
+		Latitude:   req.Latitude,
+		Longitude:  req.Longitude,
+		Address:    req.Address,
+		City:       req.City,
+		State:      req.State,
+		Country:    req.Country,
+		PostalCode: req.PostalCode,
+		// Reporter fields
+		ReporterEmail: req.ReporterEmail,
+		ReporterName:  req.ReporterName,
+	}
+
+	// Set Source if provided
+	if req.Source != "" {
+		query.Source = req.Source
 	}
 
 	// Parse optional source incident ID

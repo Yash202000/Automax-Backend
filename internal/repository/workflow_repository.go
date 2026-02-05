@@ -150,7 +150,8 @@ func (r *workflowRepository) ListByRecordType(ctx context.Context, recordType st
 
 	if recordType != "" {
 		// Support 'all' type which matches any type, 'both' matches incident/request
-		query = query.Where("record_type = ? OR record_type = 'both' OR record_type = 'all'", recordType)
+		// Use parentheses to ensure correct SQL precedence with AND conditions
+		query = query.Where("(record_type = ? OR record_type = 'both' OR record_type = 'all')", recordType)
 	}
 
 	if activeOnly {

@@ -74,6 +74,9 @@ type Incident struct {
 	ReporterEmail string     `gorm:"size:100" json:"reporter_email"`
 	ReporterName  string     `gorm:"size:200" json:"reporter_name"`
 
+	// Source (origin of the record)
+	Source string `gorm:"size:100" json:"source"`
+
 	// Complaint-specific fields
 	Channel         string `gorm:"size:100" json:"channel"`
 	CreatedByName   string `gorm:"size:255" json:"created_by_name"`
@@ -296,6 +299,7 @@ type IncidentCreateRequest struct {
 	Description      string   `json:"description"`
 	ClassificationID *string  `json:"classification_id" validate:"omitempty,uuid"`
 	WorkflowID       string   `json:"workflow_id" validate:"required,uuid"`
+	Source           string   `json:"source"`
 	AssigneeID       *string  `json:"assignee_id" validate:"omitempty,uuid"`
 	DepartmentID     *string  `json:"department_id" validate:"omitempty,uuid"`
 	LocationID       *string  `json:"location_id" validate:"omitempty,uuid"`
@@ -363,11 +367,21 @@ type CreateComplaintRequest struct {
 	ClassificationID string   `json:"classification_id" validate:"required,uuid"`
 	WorkflowID       string   `json:"workflow_id" validate:"required,uuid"`
 	SourceIncidentID *string  `json:"source_incident_id" validate:"omitempty,uuid"` // optional reference to source incident
+	Source           string   `json:"source"`
 	Channel          string   `json:"channel"`
 	ReporterID       *string  `json:"reporter_id" validate:"omitempty,uuid"` // link to user who created the complaint
+	ReporterEmail    string   `json:"reporter_email" validate:"omitempty,email"`
+	ReporterName     string   `json:"reporter_name" validate:"omitempty,max=200"`
 	DepartmentID     *string  `json:"department_id" validate:"omitempty,uuid"`
 	AssigneeID       *string  `json:"assignee_id" validate:"omitempty,uuid"`
 	LocationID       *string  `json:"location_id" validate:"omitempty,uuid"`
+	Latitude         *float64 `json:"latitude" validate:"omitempty,min=-90,max=90"`
+	Longitude        *float64 `json:"longitude" validate:"omitempty,min=-180,max=180"`
+	Address          string   `json:"address"`
+	City             string   `json:"city"`
+	State            string   `json:"state"`
+	Country          string   `json:"country"`
+	PostalCode       string   `json:"postal_code"`
 	LookupValueIDs   []string `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
 }
 
@@ -378,10 +392,20 @@ type CreateQueryRequest struct {
 	ClassificationID string   `json:"classification_id" validate:"required,uuid"`
 	WorkflowID       string   `json:"workflow_id" validate:"required,uuid"`
 	SourceIncidentID *string  `json:"source_incident_id" validate:"omitempty,uuid"` // optional reference to source incident
+	Source           string   `json:"source"`
 	Channel          string   `json:"channel"`
 	DepartmentID     *string  `json:"department_id" validate:"omitempty,uuid"`
 	AssigneeID       *string  `json:"assignee_id" validate:"omitempty,uuid"`
 	LocationID       *string  `json:"location_id" validate:"omitempty,uuid"`
+	Latitude         *float64 `json:"latitude" validate:"omitempty,min=-90,max=90"`
+	Longitude        *float64 `json:"longitude" validate:"omitempty,min=-180,max=180"`
+	Address          string   `json:"address"`
+	City             string   `json:"city"`
+	State            string   `json:"state"`
+	Country          string   `json:"country"`
+	PostalCode       string   `json:"postal_code"`
+	ReporterEmail    string   `json:"reporter_email" validate:"omitempty,email"`
+	ReporterName     string   `json:"reporter_name" validate:"omitempty,max=200"`
 	LookupValueIDs   []string `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
 }
 
@@ -455,6 +479,7 @@ type IncidentResponse struct {
 	ClosedAt         *time.Time              `json:"closed_at"`
 	SLABreached      bool                    `json:"sla_breached"`
 	SLADeadline      *time.Time              `json:"sla_deadline"`
+	Source           string                  `json:"source,omitempty"`
 	Reporter         *UserResponse           `json:"reporter,omitempty"`
 	ReporterEmail    string                  `json:"reporter_email"`
 	ReporterName     string                  `json:"reporter_name"`
@@ -572,6 +597,7 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 		ClosedAt:           i.ClosedAt,
 		SLABreached:        i.SLABreached,
 		SLADeadline:        i.SLADeadline,
+		Source:             i.Source,
 		ReporterEmail:      i.ReporterEmail,
 		ReporterName:       i.ReporterName,
 		Channel:            i.Channel,
