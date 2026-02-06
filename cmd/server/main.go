@@ -407,45 +407,15 @@ func main() {
 
 	// ---- TEMPLATE ROUTES ----
 	templates := v1.Group("/templates", authMiddleware.Authenticate())
-
-	templates.Post(
-		"/",
-		authMiddleware.RequirePermission("templates:create"),
-		templateHandler.Create,
-	)
-
-	templates.Get(
-		"/",
-		authMiddleware.RequirePermission("templates:read"),
-		templateHandler.List,
-	)
-
-	templates.Get(
-		"/:id",
-		authMiddleware.RequirePermission("templates:read"),
-		templateHandler.GetByID,
-	)
-
-	templates.Put(
-		"/:id",
-		authMiddleware.RequirePermission("templates:update"),
-		templateHandler.Update,
-	)
-
-	templates.Delete(
-		"/:id",
-		authMiddleware.RequirePermission("templates:delete"),
-		templateHandler.Delete,
-	)
+	templates.Post("/", authMiddleware.RequirePermission("templates:create"), templateHandler.Create)
+	templates.Get("/", authMiddleware.RequirePermission("templates:read"), templateHandler.List)
+	templates.Get("/:id", authMiddleware.RequirePermission("templates:read"), templateHandler.GetByID)
+	templates.Put("/:id", authMiddleware.RequirePermission("templates:update"), templateHandler.Update)
+	templates.Delete("/:id", authMiddleware.RequirePermission("templates:delete"), templateHandler.Delete)
 
 	// ---- NOTIFICATION ROUTES ----
 	notifications := v1.Group("/notifications", authMiddleware.Authenticate())
-
-	notifications.Post(
-		"/send",
-		authMiddleware.RequirePermission("notifications:send"),
-		notificationHandler.Send,
-	)
+	notifications.Post("/send", authMiddleware.RequirePermission("notifications:send"), notificationHandler.Send)
 
 	// Notification routes
 

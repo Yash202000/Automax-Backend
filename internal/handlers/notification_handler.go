@@ -14,11 +14,14 @@ func NewNotificationHandler(service *services.NotificationService) *Notification
 }
 
 type SendNotificationRequest struct {
-	Channel      string            `json:"channel"`
-	TemplateCode string            `json:"templateCode"`
-	Language     string            `json:"language"`
-	To           string            `json:"to"`
-	Variables    map[string]string `json:"variables"`
+	Channel      string  `json:"channel"`
+	TemplateCode *string `json:"templateCode,omitempty"`
+	Language     string  `json:"language"`
+	To           string  `json:"to"`
+
+	Subject   string            `json:"subject,omitempty"`
+	Body      string            `json:"body,omitempty"`
+	Variables map[string]string `json:"variables,omitempty"`
 }
 
 type SendNotificationResponse struct {
@@ -37,9 +40,11 @@ func (h *NotificationHandler) Send(c *fiber.Ctx) error {
 	log, err := h.service.SendNotification(
 		c.Context(),
 		req.Channel,
-		req.TemplateCode,
+		req.TemplateCode, // now *string
 		req.Language,
 		req.To,
+		req.Subject,
+		req.Body,
 		req.Variables,
 	)
 	if err != nil {
@@ -55,59 +60,3 @@ func (h *NotificationHandler) Send(c *fiber.Ctx) error {
 
 	return c.Status(200).JSON(res)
 }
-
-// func (h *NotificationHandler) Send(c *fiber.Ctx) error {
-// 	var req SendNotificationRequest
-// 	if err := c.BodyParser(&req); err != nil {
-// 		return fiber.ErrBadRequest
-// 	}
-
-// 	// default language
-// 	if req.Language == "" {
-// 		req.Language = "en"
-// 	}
-
-// 	if req.TemplateCode == "" || req.Channel == "" || req.To == "" {
-// 		return fiber.NewError(
-// 			fiber.StatusBadRequest,
-// 			"templateCode, channel and to are required",
-// 		)
-// 	}
-
-// 	err := h.service.Send(
-// 		c.Context(),
-// 		req.Channel,
-// 		req.TemplateCode,
-// 		req.Language,
-// 		req.To,
-// 		req.Variables,
-// 	)
-
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	return c.SendStatus(fiber.StatusOK)
-// }
-
-// func (h *NotificationHandler) Send(c *fiber.Ctx) error {
-// 	var req SendNotificationRequest
-// 	if err := c.BodyParser(&req); err != nil {
-// 		return err
-// 	}
-
-// 	err := h.service.Send(
-// 		c.Context(),
-// 		req.Channel,
-// 		req.TemplateCode,
-// 		req.Language,
-// 		req.To,
-// 		req.Variables,
-// 	)
-
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	return c.SendStatus(fiber.StatusOK)
-// }
