@@ -4,16 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"net/smtp"
-	"os"
+	"strings"
 	"text/template"
+	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/internal/utils"
 	"github.com/google/uuid"
-
-	twilio "github.com/twilio/twilio-go"
-	openapi "github.com/twilio/twilio-go/rest/api/v2010"
 )
 
 type NotificationService struct {
@@ -31,21 +29,21 @@ func NewNotificationService(
 	}
 }
 
-// func (s *NotificationService) SendNotification(ctx context.Context, channel, templateCode, language, recipient string, variables map[string]string) (*models.NotificationLog, error) {
+func (s *NotificationService) SendNotification(ctx context.Context, channel string, templateCode *string, language string, to []string, cc []string, bcc []string, subject string, body string, variables map[string]string, attachments []models.AttachmentData, sentBy *uuid.UUID) (*models.NotificationLog, error) {
 
-func (s *NotificationService) SendNotification(
-	ctx context.Context,
-	channel string,
-	templateCode *string,
-	language string,
-	recipient string,
-	subject string,
-	body string,
-	variables map[string]string,
-) (*models.NotificationLog, error) {
+	// REQUIRED: at least one recipient
+	if len(to) == 0 && len(cc) == 0 && len(bcc) == 0 {
+		return nil, fmt.Errorf("at least one recipient (to, cc, or bcc) is required")
+	}
 
-	// CASE 1: templateCode provided → existing behavior
+	// REQUIRED: subject OR body
+	if strings.TrimSpace(subject) == "" && strings.TrimSpace(body) == "" {
+		return nil, fmt.Errorf("either subject or body must be provided")
+	}
+
+	//TEMPLATE LOGIC
 	if templateCode != nil && *templateCode != "" {
+
 		tpl, err := s.templateRepo.FindByCodeChannelLanguage(
 			ctx, *templateCode, channel, language,
 		)
@@ -53,23 +51,22 @@ func (s *NotificationService) SendNotification(
 			return nil, err
 		}
 
-		body, err = RenderTemplate(tpl.Body, variables)
-		if err != nil {
-			return nil, err
+		// Render only if variables exist
+		if len(variables) > 0 {
+			if tpl.Body != "" {
+				body, _ = RenderTemplate(tpl.Body, variables)
+			}
+			if tpl.Subject != "" {
+				subject, _ = RenderTemplate(tpl.Subject, variables)
+			}
 		}
 
-		if tpl.Subject != "" {
-			subject, _ = RenderTemplate(tpl.Subject, variables)
-		}
 	} else {
-		// CASE 2: no template → body must be provided
-		// if body == "" {
-		// 	return nil, fmt.Errorf("body is required when templateCode is not provided")
-		// }
-
-		// subject optional (especially for SMS)
-		if variables != nil {
-			body, _ = RenderTemplate(body, variables)
+		// No template → render provided body/subject if variables exist
+		if len(variables) > 0 {
+			if body != "" {
+				body, _ = RenderTemplate(body, variables)
+			}
 			if subject != "" {
 				subject, _ = RenderTemplate(subject, variables)
 			}
@@ -78,44 +75,81 @@ func (s *NotificationService) SendNotification(
 
 	status := "sent"
 	provider := channel
+	var recipientStatuses models.RecipientArray
+	var attachmentInfo models.AttachmentArray
 
-	if os.Getenv("ENV") != "local" {
-		switch channel {
-		case "email":
-			if err := SendSMTP(recipient, subject, body); err != nil {
-				return nil, err
-			}
-			provider = "smtp"
+	allRecipients := append(append([]string{}, to...), cc...)
+	allRecipients = append(allRecipients, bcc...)
 
-		case "sms":
-			if err := SendSMS(recipient, body); err != nil {
-				return nil, err
-			}
-			provider = "twilio"
-
-		default:
-			return nil, fmt.Errorf("unsupported channel: %s", channel)
-		}
-	} else {
-		status = "mock-sent"
-		provider = "mock"
+	for _, att := range attachments {
+		attachmentInfo = append(attachmentInfo, models.AttachmentInfo{
+			Filename:    att.Filename,
+			ContentType: att.ContentType,
+			Size:        int64(len(att.Data)),
+		})
 	}
 
-	log := &models.NotificationLog{
-		ID:      uuid.New(),
-		Channel: channel,
-		TemplateCode: func() string {
-			if templateCode != nil {
-				return *templateCode
+	switch channel {
+
+	case "email":
+		statuses, err := utils.SendSMTPWithCCBCC(to, cc, bcc, subject, body, attachments)
+		if err != nil {
+			status = "failed"
+			for _, r := range allRecipients {
+				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
+					Email:  r,
+					Type:   utils.GetRecipientType(r, to, cc, bcc),
+					Status: "failed",
+					Error:  err.Error(),
+				})
 			}
-			return ""
-		}(),
-		Language:  language,
-		Recipient: recipient,
-		Subject:   subject,
-		Body:      body,
-		Status:    status,
-		Provider:  provider,
+		} else {
+			recipientStatuses = statuses
+		}
+		provider = "smtp"
+
+	case "sms":
+		for _, phone := range to {
+			err := utils.SendSMS(phone, body)
+			if err != nil {
+				status = "failed"
+				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
+					Email:  phone,
+					Type:   "to",
+					Status: "failed",
+					Error:  err.Error(),
+				})
+			} else {
+				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
+					Email:  phone,
+					Type:   "to",
+					Status: "success",
+				})
+			}
+		}
+		provider = "twilio"
+
+	default:
+		return nil, fmt.Errorf("unsupported channel: %s", channel)
+	}
+
+	now := time.Now()
+	log := &models.NotificationLog{
+		ID:           uuid.New(),
+		Channel:      channel,
+		TemplateCode: deref(templateCode),
+		Language:     language,
+		Recipients:   recipientStatuses,
+		CC:           cc,
+		BCC:          bcc,
+		Subject:      subject,
+		Body:         body,
+		Status:       status,
+		Provider:     provider,
+		Attachments:  attachmentInfo,
+		SentBy:       sentBy,
+		CreatedAt:    now,
+		UpdatedAt:    &now,
 	}
 
 	if err := s.logRepo.Create(ctx, log); err != nil {
@@ -123,6 +157,44 @@ func (s *NotificationService) SendNotification(
 	}
 
 	return log, nil
+}
+
+func deref(s *string) string {
+	if s != nil {
+		return *s
+	}
+	return ""
+}
+
+// ListNotifications retrieves notifications with filtering and search
+func (s *NotificationService) ListNotifications(ctx context.Context, filter *models.NotificationLogFilter) ([]models.NotificationLogResponse, int64, error) {
+	logs, total, err := s.logRepo.List(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	responses := make([]models.NotificationLogResponse, len(logs))
+	for i, log := range logs {
+		responses[i] = models.ToNotificationLogResponse(&log)
+	}
+
+	return responses, total, nil
+}
+
+// GetNotification retrieves a single notification by ID
+func (s *NotificationService) GetNotification(ctx context.Context, id uuid.UUID) (*models.NotificationLogResponse, error) {
+	log, err := s.logRepo.FindByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	response := models.ToNotificationLogResponse(log)
+	return &response, nil
+}
+
+// DeleteNotification soft deletes a notification
+func (s *NotificationService) DeleteNotification(ctx context.Context, id uuid.UUID) error {
+	return s.logRepo.Delete(ctx, id)
 }
 
 func RenderTemplate(tpl string, vars map[string]string) (string, error) {
@@ -133,43 +205,4 @@ func RenderTemplate(tpl string, vars map[string]string) (string, error) {
 	var buf bytes.Buffer
 	err = t.Execute(&buf, vars)
 	return buf.String(), err
-}
-
-func SendSMTP(to, subject, body string) error {
-	host := os.Getenv("SMTP_HOST")
-	port := os.Getenv("SMTP_PORT")
-	user := os.Getenv("SMTP_USER")
-	pass := os.Getenv("SMTP_PASS")
-	from := os.Getenv("SMTP_FROM")
-
-	addr := fmt.Sprintf("%s:%s", host, port)
-	auth := smtp.PlainAuth("", user, pass, host)
-
-	msg := []byte(fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nContent-Type: text/plain; charset=\"UTF-8\"\r\n\r\n%s",
-		from, to, subject, body))
-
-	return smtp.SendMail(addr, auth, from, []string{to}, msg)
-}
-
-func SendSMS(to, message string) error {
-	// Load Twilio credentials
-	accountSID := os.Getenv("TWILIO_ACCOUNT_SID")
-	authToken := os.Getenv("TWILIO_AUTH_TOKEN")
-
-	client := twilio.NewRestClientWithParams(twilio.ClientParams{
-		Username: accountSID,
-		Password: authToken,
-	})
-
-	params := &openapi.CreateMessageParams{}
-	params.SetTo(to)                                 // recipient
-	params.SetFrom(os.Getenv("TWILIO_PHONE_NUMBER")) // Twilio from number
-	params.SetBody(message)                          // SMS body
-
-	_, err := client.Api.CreateMessage(params) // correct method
-	if err != nil {
-		return fmt.Errorf("twilio send sms error: %w", err)
-	}
-
-	return nil
 }

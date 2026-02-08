@@ -416,14 +416,9 @@ func main() {
 	// ---- NOTIFICATION ROUTES ----
 	notifications := v1.Group("/notifications", authMiddleware.Authenticate())
 	notifications.Post("/send", authMiddleware.RequirePermission("notifications:send"), notificationHandler.Send)
-
-	// Notification routes
-
-	// Notification & Template routes
-
-	// notifications := v1.Group("/notifications", authMiddleware.Authenticate())
-	// notifications.Post("/send", authMiddleware.RequirePermission("notifications:send"), notificationHandler.Send)
-	//api.Post("/notifications/send", notificationHandler.Send)
+	notifications.Get("/", authMiddleware.RequirePermission("notifications:read"), notificationHandler.List)
+	notifications.Get("/:id", authMiddleware.RequirePermission("notifications:read"), notificationHandler.Get)
+	notifications.Delete("/:id", authMiddleware.RequirePermission("notifications:delete"), notificationHandler.Delete)
 
 	go func() {
 		addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
