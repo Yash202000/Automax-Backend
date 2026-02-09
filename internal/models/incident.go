@@ -295,46 +295,48 @@ type IncidentRevisionFilter struct {
 // Request types
 
 type IncidentCreateRequest struct {
-	Title            string   `json:"title" validate:"required,min=5,max=200"`
-	Description      string   `json:"description"`
-	ClassificationID *string  `json:"classification_id" validate:"omitempty,uuid"`
-	WorkflowID       string   `json:"workflow_id" validate:"required,uuid"`
-	Source           string   `json:"source"`
-	AssigneeID       *string  `json:"assignee_id" validate:"omitempty,uuid"`
-	DepartmentID     *string  `json:"department_id" validate:"omitempty,uuid"`
-	LocationID       *string  `json:"location_id" validate:"omitempty,uuid"`
-	Latitude         *float64 `json:"latitude" validate:"omitempty,min=-90,max=90"`
-	Longitude        *float64 `json:"longitude" validate:"omitempty,min=-180,max=180"`
-	Address          string   `json:"address"`
-	City             string   `json:"city"`
-	State            string   `json:"state"`
-	Country          string   `json:"country"`
-	PostalCode       string   `json:"postal_code"`
-	DueDate          *string  `json:"due_date"`
-	ReporterEmail    string   `json:"reporter_email" validate:"omitempty,email"`
-	ReporterName     string   `json:"reporter_name" validate:"omitempty,max=200"`
-	CustomFields     string   `json:"custom_fields"`
-	LookupValueIDs   []string `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
-	RecordType       string   `json:"record_type" validate:"omitempty,oneof=incident request complaint query"`
+	Title              string                 `json:"title" validate:"required,min=5,max=200"`
+	Description        string                 `json:"description"`
+	ClassificationID   *string                `json:"classification_id" validate:"omitempty,uuid"`
+	WorkflowID         string                 `json:"workflow_id" validate:"required,uuid"`
+	Source             string                 `json:"source"`
+	AssigneeID         *string                `json:"assignee_id" validate:"omitempty,uuid"`
+	DepartmentID       *string                `json:"department_id" validate:"omitempty,uuid"`
+	LocationID         *string                `json:"location_id" validate:"omitempty,uuid"`
+	Latitude           *float64               `json:"latitude" validate:"omitempty,min=-90,max=90"`
+	Longitude          *float64               `json:"longitude" validate:"omitempty,min=-180,max=180"`
+	Address            string                 `json:"address"`
+	City               string                 `json:"city"`
+	State              string                 `json:"state"`
+	Country            string                 `json:"country"`
+	PostalCode         string                 `json:"postal_code"`
+	DueDate            *string                `json:"due_date"`
+	ReporterEmail      string                 `json:"reporter_email" validate:"omitempty,email"`
+	ReporterName       string                 `json:"reporter_name" validate:"omitempty,max=200"`
+	CustomFields       string                 `json:"custom_fields"`
+	LookupValueIDs     []string               `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
+	CustomLookupFields map[string]interface{} `json:"custom_lookup_fields"`
+	RecordType         string                 `json:"record_type" validate:"omitempty,oneof=incident request complaint query"`
 }
 
 type IncidentUpdateRequest struct {
-	Title            string   `json:"title" validate:"omitempty,min=5,max=200"`
-	Description      string   `json:"description"`
-	ClassificationID *string  `json:"classification_id" validate:"omitempty,uuid"`
-	AssigneeID       *string  `json:"assignee_id" validate:"omitempty,uuid"`
-	DepartmentID     *string  `json:"department_id" validate:"omitempty,uuid"`
-	LocationID       *string  `json:"location_id" validate:"omitempty,uuid"`
-	Latitude         *float64 `json:"latitude" validate:"omitempty,min=-90,max=90"`
-	Longitude        *float64 `json:"longitude" validate:"omitempty,min=-180,max=180"`
-	Address          string   `json:"address"`
-	City             string   `json:"city"`
-	State            string   `json:"state"`
-	Country          string   `json:"country"`
-	PostalCode       string   `json:"postal_code"`
-	DueDate          *string  `json:"due_date"`
-	CustomFields     string   `json:"custom_fields"`
-	LookupValueIDs   []string `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
+	Title              string                 `json:"title" validate:"omitempty,min=5,max=200"`
+	Description        string                 `json:"description"`
+	ClassificationID   *string                `json:"classification_id" validate:"omitempty,uuid"`
+	AssigneeID         *string                `json:"assignee_id" validate:"omitempty,uuid"`
+	DepartmentID       *string                `json:"department_id" validate:"omitempty,uuid"`
+	LocationID         *string                `json:"location_id" validate:"omitempty,uuid"`
+	Latitude           *float64               `json:"latitude" validate:"omitempty,min=-90,max=90"`
+	Longitude          *float64               `json:"longitude" validate:"omitempty,min=-180,max=180"`
+	Address            string                 `json:"address"`
+	City               string                 `json:"city"`
+	State              string                 `json:"state"`
+	Country            string                 `json:"country"`
+	PostalCode         string                 `json:"postal_code"`
+	DueDate            *string                `json:"due_date"`
+	CustomFields       string                 `json:"custom_fields"`
+	LookupValueIDs     []string               `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
+	CustomLookupFields map[string]interface{} `json:"custom_lookup_fields"`
 }
 
 type IncidentTransitionRequest struct {

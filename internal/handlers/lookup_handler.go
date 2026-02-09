@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/automax/backend/internal/models"
@@ -23,6 +24,36 @@ func NewLookupHandler(repo repository.LookupRepository) *LookupHandler {
 	}
 }
 
+// validateFieldTypeAndRules validates field type and validation rules JSON structure
+func validateFieldTypeAndRules(fieldType, validationRules string) error {
+	if fieldType == "" {
+		fieldType = "select"
+	}
+
+	// Validate field type
+	validTypes := []string{"text", "number", "date", "select", "multiselect", "checkbox", "textarea"}
+	isValid := false
+	for _, vt := range validTypes {
+		if fieldType == vt {
+			isValid = true
+			break
+		}
+	}
+	if !isValid {
+		return fiber.NewError(fiber.StatusBadRequest, "Invalid field_type. Must be one of: text, number, date, select, multiselect, checkbox, textarea")
+	}
+
+	// Validate validation_rules JSON if provided
+	if validationRules != "" {
+		var rules map[string]interface{}
+		if err := json.Unmarshal([]byte(validationRules), &rules); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "Invalid validation_rules JSON format")
+		}
+	}
+
+	return nil
+}
+
 // Category handlers
 
 func (h *LookupHandler) CreateCategory(c *fiber.Ctx) error {
@@ -38,6 +69,16 @@ func (h *LookupHandler) CreateCategory(c *fiber.Ctx) error {
 	// Normalize code to uppercase
 	req.Code = strings.ToUpper(req.Code)
 
+	// Set default field type if not provided
+	if req.FieldType == "" {
+		req.FieldType = "select"
+	}
+
+	// Validate field type and validation rules
+	if err := validateFieldTypeAndRules(req.FieldType, req.ValidationRules); err != nil {
+		return err
+	}
+
 	category := &models.LookupCategory{
 		Code:              req.Code,
 		Name:              req.Name,
@@ -46,6 +87,8 @@ func (h *LookupHandler) CreateCategory(c *fiber.Ctx) error {
 		IsSystem:          false,
 		IsActive:          true,
 		AddToIncidentForm: false,
+		FieldType:         req.FieldType,
+		ValidationRules:   req.ValidationRules,
 	}
 
 	if req.IsActive != nil {
@@ -97,9 +140,20 @@ func (h *LookupHandler) UpdateCategory(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Category not found")
 	}
 
-	// System categories can only have limited updates (no code/isActive changes)
+	// Validate field type and validation rules if provided
+	if req.FieldType != "" || req.ValidationRules != "" {
+		fieldType := req.FieldType
+		if fieldType == "" {
+			fieldType = category.FieldType
+		}
+		if err := validateFieldTypeAndRules(fieldType, req.ValidationRules); err != nil {
+			return err
+		}
+	}
+
+	// System categories can only have limited updates (no code/isActive/field_type changes)
 	if category.IsSystem {
-		// Only allow updating name, name_ar, description, add_to_incident_form for system categories
+		// Only allow updating name, name_ar, description, add_to_incident_form, validation_rules for system categories
 		if req.Name != "" {
 			category.Name = req.Name
 		}
@@ -111,6 +165,9 @@ func (h *LookupHandler) UpdateCategory(c *fiber.Ctx) error {
 		}
 		if req.AddToIncidentForm != nil {
 			category.AddToIncidentForm = *req.AddToIncidentForm
+		}
+		if req.ValidationRules != "" {
+			category.ValidationRules = req.ValidationRules
 		}
 	} else {
 		if req.Code != "" {
@@ -130,6 +187,12 @@ func (h *LookupHandler) UpdateCategory(c *fiber.Ctx) error {
 		}
 		if req.AddToIncidentForm != nil {
 			category.AddToIncidentForm = *req.AddToIncidentForm
+		}
+		if req.FieldType != "" {
+			category.FieldType = req.FieldType
+		}
+		if req.ValidationRules != "" {
+			category.ValidationRules = req.ValidationRules
 		}
 	}
 

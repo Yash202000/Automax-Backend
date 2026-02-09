@@ -120,6 +120,31 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		return nil, err
 	}
 
+	// Merge custom lookup fields into CustomFields JSON
+	customFieldsJSON := req.CustomFields
+	if len(req.CustomLookupFields) > 0 {
+		// Parse existing custom fields
+		var customFields map[string]interface{}
+		if customFieldsJSON != "" {
+			if err := json.Unmarshal([]byte(customFieldsJSON), &customFields); err != nil {
+				customFields = make(map[string]interface{})
+			}
+		} else {
+			customFields = make(map[string]interface{})
+		}
+
+		// Merge custom lookup fields
+		for key, value := range req.CustomLookupFields {
+			customFields[key] = value
+		}
+
+		// Convert back to JSON
+		customFieldsBytes, err := json.Marshal(customFields)
+		if err == nil {
+			customFieldsJSON = string(customFieldsBytes)
+		}
+	}
+
 	incident := &models.Incident{
 		IncidentNumber: incidentNumber,
 		Title:          req.Title,
@@ -129,7 +154,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		ReporterID:     &reporterID,
 		ReporterEmail:  req.ReporterEmail,
 		ReporterName:   req.ReporterName,
-		CustomFields:   req.CustomFields,
+		CustomFields:   customFieldsJSON,
 		Latitude:       req.Latitude,
 		Longitude:      req.Longitude,
 		Address:        req.Address,
@@ -307,8 +332,41 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		}
 	}
 
-	if req.CustomFields != "" && req.CustomFields != incident.CustomFields {
-		incident.CustomFields = req.CustomFields
+	// Handle custom fields and custom lookup fields
+	if req.CustomFields != "" || len(req.CustomLookupFields) > 0 {
+		var customFields map[string]interface{}
+
+		// Start with existing custom fields
+		if incident.CustomFields != "" {
+			if err := json.Unmarshal([]byte(incident.CustomFields), &customFields); err != nil {
+				customFields = make(map[string]interface{})
+			}
+		} else {
+			customFields = make(map[string]interface{})
+		}
+
+		// Update with new custom fields if provided
+		if req.CustomFields != "" {
+			var newCustomFields map[string]interface{}
+			if err := json.Unmarshal([]byte(req.CustomFields), &newCustomFields); err == nil {
+				for k, v := range newCustomFields {
+					customFields[k] = v
+				}
+			}
+		}
+
+		// Merge custom lookup fields
+		if len(req.CustomLookupFields) > 0 {
+			for key, value := range req.CustomLookupFields {
+				customFields[key] = value
+			}
+		}
+
+		// Convert back to JSON
+		customFieldsBytes, err := json.Marshal(customFields)
+		if err == nil {
+			incident.CustomFields = string(customFieldsBytes)
+		}
 	}
 
 	// Parse optional UUIDs

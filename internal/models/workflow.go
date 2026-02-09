@@ -30,6 +30,7 @@ type Workflow struct {
 	States          []WorkflowState      `gorm:"foreignKey:WorkflowID" json:"states,omitempty"`
 	Transitions     []WorkflowTransition `gorm:"foreignKey:WorkflowID" json:"transitions,omitempty"`
 	Classifications []Classification     `gorm:"many2many:workflow_classifications;" json:"classifications,omitempty"`
+	Locations       []Location           `gorm:"many2many:workflow_locations;" json:"locations,omitempty"`
 
 	// Role-based convert-to-request permission (many-to-many) - empty = all users can convert
 	ConvertToRequestRoles []Role `gorm:"many2many:workflow_convert_to_request_roles;" json:"convert_to_request_roles,omitempty"`
@@ -196,6 +197,7 @@ type WorkflowCreateRequest struct {
 	Description       string   `json:"description" validate:"max=500"`
 	RecordType        string   `json:"record_type" validate:"omitempty,oneof=incident request complaint query both all"`
 	ClassificationIDs []string `json:"classification_ids"`
+	LocationIDs       []string `json:"location_ids"`
 	RequiredFields    []string `json:"required_fields"`
 }
 
@@ -208,6 +210,7 @@ type WorkflowUpdateRequest struct {
 	IsDefault               *bool    `json:"is_default"`
 	CanvasLayout            string   `json:"canvas_layout"`
 	ClassificationIDs       []string `json:"classification_ids"`
+	LocationIDs             []string `json:"location_ids"`
 	RequiredFields          []string `json:"required_fields"`
 	ConvertToRequestRoleIDs []string `json:"convert_to_request_role_ids"`
 }
@@ -343,6 +346,7 @@ type WorkflowResponse struct {
 	States                []WorkflowStateResponse      `json:"states,omitempty"`
 	Transitions           []WorkflowTransitionResponse `json:"transitions,omitempty"`
 	Classifications       []ClassificationResponse     `json:"classifications,omitempty"`
+	Locations             []LocationResponse           `json:"locations,omitempty"`
 	ConvertToRequestRoles []RoleResponse               `json:"convert_to_request_roles,omitempty"`
 	StatesCount           int                          `json:"states_count"`
 	TransitionsCount      int                          `json:"transitions_count"`
@@ -474,6 +478,13 @@ func ToWorkflowResponse(w *Workflow) WorkflowResponse {
 		resp.Classifications = make([]ClassificationResponse, len(w.Classifications))
 		for i, c := range w.Classifications {
 			resp.Classifications[i] = ToClassificationResponse(&c)
+		}
+	}
+
+	if len(w.Locations) > 0 {
+		resp.Locations = make([]LocationResponse, len(w.Locations))
+		for i, loc := range w.Locations {
+			resp.Locations[i] = ToLocationResponse(&loc)
 		}
 	}
 
