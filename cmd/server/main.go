@@ -139,6 +139,10 @@ func main() {
 	v1.Get("/health", healthHandler.Health)
 	v1.Get("/ready", healthHandler.Ready)
 
+	// Webhook routes (no authentication required - external services)
+	webhooks := v1.Group("/webhooks")
+	webhooks.Post("/sendgrid/inbound", notificationHandler.SendGridInboundWebhook)
+
 	// Auth routes
 	auth := v1.Group("/auth")
 	auth.Post("/register", userHandler.Register)
@@ -415,10 +419,31 @@ func main() {
 
 	// ---- NOTIFICATION ROUTES ----
 	notifications := v1.Group("/notifications", authMiddleware.Authenticate())
+
+	// Send notifications
 	notifications.Post("/send", authMiddleware.RequirePermission("notifications:send"), notificationHandler.Send)
+
+	// List and view notifications (inbox-like functionality)
 	notifications.Get("/", authMiddleware.RequirePermission("notifications:read"), notificationHandler.List)
 	notifications.Get("/:id", authMiddleware.RequirePermission("notifications:read"), notificationHandler.Get)
+
+	// Draft management
+	notifications.Post("/drafts", authMiddleware.RequirePermission("notifications:create"), notificationHandler.CreateDraft)
+	notifications.Put("/drafts/:id", authMiddleware.RequirePermission("notifications:update"), notificationHandler.UpdateDraft)
+	notifications.Post("/drafts/:id/send", authMiddleware.RequirePermission("notifications:send"), notificationHandler.SendDraft)
+
+	// Email actions (mark as read, star, move to folder)
+	notifications.Patch("/:id/read", authMiddleware.RequirePermission("notifications:update"), notificationHandler.MarkAsRead)
+	notifications.Patch("/:id/star", authMiddleware.RequirePermission("notifications:update"), notificationHandler.ToggleStar)
+	notifications.Patch("/:id/move", authMiddleware.RequirePermission("notifications:update"), notificationHandler.MoveToCategory)
+
+	// Bulk actions
+	notifications.Post("/bulk/move", authMiddleware.RequirePermission("notifications:update"), notificationHandler.BulkMoveToCategory)
+	notifications.Post("/bulk/delete", authMiddleware.RequirePermission("notifications:delete"), notificationHandler.BulkDelete)
+
+	// Delete (move to trash)
 	notifications.Delete("/:id", authMiddleware.RequirePermission("notifications:delete"), notificationHandler.Delete)
+	notifications.Delete("/:id/permanent", authMiddleware.RequirePermission("notifications:delete"), notificationHandler.PermanentDelete)
 
 	go func() {
 		addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
