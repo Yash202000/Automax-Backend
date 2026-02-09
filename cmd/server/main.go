@@ -110,6 +110,7 @@ func main() {
 	app := fiber.New(fiber.Config{
 		AppName:      "Automax Backend",
 		ErrorHandler: customErrorHandler,
+		BodyLimit:    100 * 1024 * 1024, // 100MB max body size
 	})
 
 	app.Use(recover.New())
@@ -233,6 +234,7 @@ func main() {
 	classifications.Post("/", authMiddleware.RequirePermission("classifications:create"), classificationHandler.Create)
 	classifications.Get("/", authMiddleware.RequirePermission("classifications:view"), classificationHandler.List)
 	classifications.Get("/tree", authMiddleware.RequirePermission("classifications:view"), classificationHandler.GetTree)
+	classifications.Get("/tree/stats", authMiddleware.RequirePermission("classifications:view"), classificationHandler.GetTreeWithStats)
 	classifications.Get("/children", authMiddleware.RequirePermission("classifications:view"), classificationHandler.GetChildren)
 	classifications.Get("/export", authMiddleware.RequirePermission("classifications:view"), classificationHandler.Export)
 	classifications.Post("/import", authMiddleware.RequirePermission("classifications:create"), classificationHandler.Import)
@@ -245,6 +247,7 @@ func main() {
 	locations.Post("/", authMiddleware.RequirePermission("locations:create"), locationHandler.Create)
 	locations.Get("/", authMiddleware.RequirePermission("locations:view"), locationHandler.List)
 	locations.Get("/tree", authMiddleware.RequirePermission("locations:view"), locationHandler.GetTree)
+	locations.Get("/tree/stats", authMiddleware.RequirePermission("locations:view"), locationHandler.GetTreeWithStats)
 	locations.Get("/children", authMiddleware.RequirePermission("locations:view"), locationHandler.GetChildren)
 	locations.Get("/by-type", authMiddleware.RequirePermission("locations:view"), locationHandler.GetByType)
 	locations.Get("/export", authMiddleware.RequirePermission("locations:view"), locationHandler.Export)

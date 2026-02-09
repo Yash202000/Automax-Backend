@@ -20,6 +20,7 @@ type LocationRepository interface {
 	GetChildren(ctx context.Context, parentID uuid.UUID) ([]models.Location, error)
 	GetByParentID(ctx context.Context, parentID *uuid.UUID) ([]models.Location, error)
 	GetByType(ctx context.Context, locationType string) ([]models.Location, error)
+	GetTreeWithStats(ctx context.Context, recordType string) ([]models.LocationWithStats, error)
 }
 
 type locationRepository struct {
@@ -128,4 +129,91 @@ func (r *locationRepository) GetByType(ctx context.Context, locationType string)
 		Order("sort_order, name").
 		Find(&locations).Error
 	return locations, err
+}
+
+func (r *locationRepository) GetTreeWithStats(ctx context.Context, recordType string) ([]models.LocationWithStats, error) {
+	// Get all locations
+	var locations []models.Location
+	if err := r.db.WithContext(ctx).Order("sort_order, name").Find(&locations).Error; err != nil {
+		return nil, err
+	}
+
+	// Get counts for each location
+	type CountResult struct {
+		LocationID uuid.UUID
+		Count      int64
+	}
+
+	var counts []CountResult
+	countQuery := r.db.WithContext(ctx).
+		Table("incidents").
+		Select("location_id, COUNT(*) as count").
+		Where("location_id IS NOT NULL AND deleted_at IS NULL")
+
+	if recordType != "" && recordType != "all" {
+		countQuery = countQuery.Where("record_type = ?", recordType)
+	}
+
+	if err := countQuery.Group("location_id").Scan(&counts).Error; err != nil {
+		return nil, err
+	}
+
+	// Build count map
+	countMap := make(map[uuid.UUID]int64)
+	for _, c := range counts {
+		countMap[c.LocationID] = c.Count
+	}
+
+	// Build tree structure with stats
+	statsMap := make(map[uuid.UUID]*models.LocationWithStats)
+	var roots []models.LocationWithStats
+
+	// First pass: create all nodes
+	for _, loc := range locations {
+		stats := models.LocationWithStats{
+			ID:          loc.ID,
+			Name:        loc.Name,
+			Code:        loc.Code,
+			Description: loc.Description,
+			Type:        loc.Type,
+			ParentID:    loc.ParentID,
+			Level:       loc.Level,
+			Path:        loc.Path,
+			Address:     loc.Address,
+			Latitude:    loc.Latitude,
+			Longitude:   loc.Longitude,
+			IsActive:    loc.IsActive,
+			SortOrder:   loc.SortOrder,
+			Count:       countMap[loc.ID],
+			Children:    []models.LocationWithStats{},
+			CreatedAt:   loc.CreatedAt,
+		}
+		statsMap[loc.ID] = &stats
+	}
+
+	// Second pass: build tree
+	for _, loc := range locations {
+		if loc.ParentID == nil {
+			roots = append(roots, *statsMap[loc.ID])
+		} else if parent, exists := statsMap[*loc.ParentID]; exists {
+			parent.Children = append(parent.Children, *statsMap[loc.ID])
+		}
+	}
+
+	// Third pass: calculate total counts (including children)
+	var calculateTotalCount func(*models.LocationWithStats) int64
+	calculateTotalCount = func(node *models.LocationWithStats) int64 {
+		total := node.Count
+		for i := range node.Children {
+			total += calculateTotalCount(&node.Children[i])
+		}
+		return total
+	}
+
+	// Update roots with total counts
+	for i := range roots {
+		roots[i].Count = calculateTotalCount(&roots[i])
+	}
+
+	return roots, nil
 }

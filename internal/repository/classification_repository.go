@@ -21,6 +21,7 @@ type ClassificationRepository interface {
 	GetTreeByType(ctx context.Context, classType string) ([]models.Classification, error)
 	GetChildren(ctx context.Context, parentID uuid.UUID) ([]models.Classification, error)
 	GetByParentID(ctx context.Context, parentID *uuid.UUID) ([]models.Classification, error)
+	GetTreeWithStats(ctx context.Context, recordType string) ([]models.ClassificationWithStats, error)
 }
 
 type classificationRepository struct {
@@ -146,4 +147,93 @@ func (r *classificationRepository) GetByParentID(ctx context.Context, parentID *
 	}
 	err := query.Order("sort_order, name").Find(&classifications).Error
 	return classifications, err
+}
+
+func (r *classificationRepository) GetTreeWithStats(ctx context.Context, recordType string) ([]models.ClassificationWithStats, error) {
+	// Get all classifications
+	var classifications []models.Classification
+	query := r.db.WithContext(ctx)
+
+	if recordType != "" && recordType != "all" {
+		query = query.Where("type = ? OR type = 'both' OR type = 'all'", recordType)
+	}
+
+	if err := query.Order("sort_order, name").Find(&classifications).Error; err != nil {
+		return nil, err
+	}
+
+	// Get counts for each classification
+	type CountResult struct {
+		ClassificationID uuid.UUID
+		Count            int64
+	}
+
+	var counts []CountResult
+	countQuery := r.db.WithContext(ctx).
+		Table("incidents").
+		Select("classification_id, COUNT(*) as count").
+		Where("classification_id IS NOT NULL AND deleted_at IS NULL")
+
+	if recordType != "" && recordType != "all" {
+		countQuery = countQuery.Where("record_type = ?", recordType)
+	}
+
+	if err := countQuery.Group("classification_id").Scan(&counts).Error; err != nil {
+		return nil, err
+	}
+
+	// Build count map
+	countMap := make(map[uuid.UUID]int64)
+	for _, c := range counts {
+		countMap[c.ClassificationID] = c.Count
+	}
+
+	// Build tree structure with stats
+	statsMap := make(map[uuid.UUID]*models.ClassificationWithStats)
+	var roots []models.ClassificationWithStats
+
+	// First pass: create all nodes
+	for _, cls := range classifications {
+		stats := models.ClassificationWithStats{
+			ID:          cls.ID,
+			Name:        cls.Name,
+			Description: cls.Description,
+			Type:        cls.Type,
+			ParentID:    cls.ParentID,
+			Level:       cls.Level,
+			Path:        cls.Path,
+			IsActive:    cls.IsActive,
+			SortOrder:   cls.SortOrder,
+			Count:       countMap[cls.ID],
+			Children:    []models.ClassificationWithStats{},
+			CreatedAt:   cls.CreatedAt,
+		}
+		statsMap[cls.ID] = &stats
+	}
+
+	// Second pass: build tree and propagate counts upward
+	for _, cls := range classifications {
+		if cls.ParentID == nil {
+			roots = append(roots, *statsMap[cls.ID])
+		} else if parent, exists := statsMap[*cls.ParentID]; exists {
+			parent.Children = append(parent.Children, *statsMap[cls.ID])
+		}
+	}
+
+	// Third pass: calculate total counts (including children)
+	var calculateTotalCount func(*models.ClassificationWithStats) int64
+	calculateTotalCount = func(node *models.ClassificationWithStats) int64 {
+		total := node.Count
+		for i := range node.Children {
+			total += calculateTotalCount(&node.Children[i])
+		}
+		return total
+	}
+
+	// Update roots with total counts
+	for i := range roots {
+		roots[i].Count = calculateTotalCount(&roots[i])
+	}
+
+	return roots, nil
 }

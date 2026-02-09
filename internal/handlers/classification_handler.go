@@ -327,3 +327,15 @@ func (h *ClassificationHandler) Import(c *fiber.Ctx) error {
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Import completed", result)
 }
+
+// GetTreeWithStats returns classification tree with incident counts
+func (h *ClassificationHandler) GetTreeWithStats(c *fiber.Ctx) error {
+	recordType := c.Query("type", "")
+
+	tree, err := h.repo.GetTreeWithStats(c.Context(), recordType)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Classification tree with stats retrieved", tree)
+}

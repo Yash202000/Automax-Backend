@@ -88,3 +88,19 @@ func ToClassificationResponse(c *Classification) ClassificationResponse {
 
 	return resp
 }
+
+// ClassificationWithStats includes classification data with incident count
+type ClassificationWithStats struct {
+	ID          uuid.UUID                 `json:"id"`
+	Name        string                    `json:"name"`
+	Description string                    `json:"description"`
+	Type        string                    `json:"type"`
+	ParentID    *uuid.UUID                `json:"parent_id"`
+	Level       int                       `json:"level"`
+	Path        string                    `json:"path"`
+	IsActive    bool                      `json:"is_active"`
+	SortOrder   int                       `json:"sort_order"`
+	Count       int64                     `json:"count"`
+	Children    []ClassificationWithStats `json:"children,omitempty"`
+	CreatedAt   time.Time                 `json:"created_at"`
+}
