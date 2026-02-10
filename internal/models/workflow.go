@@ -23,7 +23,7 @@ type Workflow struct {
 	CanvasLayout string `gorm:"type:text" json:"canvas_layout"`
 
 	// Form configuration - stores which fields are required (JSON array of field names)
-	// e.g., ["description", "classification_id", "priority", "severity", "assignee_id", "department_id", "location_id", "due_date", "reporter_name", "reporter_email", "source"]
+	// e.g., ["description", "classification_id", "priority", "assignee_id", "department_id", "location_id", "due_date", "reporter_name", "reporter_email", "source"]
 	RequiredFields string `gorm:"type:text" json:"required_fields"`
 
 	// Relationships
@@ -306,7 +306,6 @@ type WorkflowMatchRequest struct {
 	ClassificationID string `json:"classification_id"`
 	LocationID       string `json:"location_id"`
 	Source           string `json:"source"`
-	Severity         int    `json:"severity"`
 	Priority         int    `json:"priority"`
 }
 

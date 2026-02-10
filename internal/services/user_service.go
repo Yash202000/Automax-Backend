@@ -40,6 +40,7 @@ type UserService interface {
 
 type userService struct {
 	userRepo     repository.UserRepository
+	departmentRepo repository.DepartmentRepository
 	jwtManager   *utils.JWTManager
 	sessionStore *database.SessionStore
 	storage      *storage.MinIOStorage
@@ -48,6 +49,7 @@ type userService struct {
 
 func NewUserService(
 	userRepo repository.UserRepository,
+	departmentRepo repository.DepartmentRepository,
 	jwtManager *utils.JWTManager,
 	sessionStore *database.SessionStore,
 	storage *storage.MinIOStorage,
@@ -55,6 +57,7 @@ func NewUserService(
 ) UserService {
 	return &userService{
 		userRepo:     userRepo,
+		departmentRepo: departmentRepo,
 		jwtManager:   jwtManager,
 		sessionStore: sessionStore,
 		storage:      storage,
@@ -118,6 +121,11 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 	// Assign classifications if provided
 	if len(req.ClassificationIDs) > 0 {
 		s.userRepo.AssignClassifications(ctx, user.ID, req.ClassificationIDs)
+	}
+
+	// Sync classifications and locations from departments
+	if req.DepartmentID != nil || len(req.DepartmentIDs) > 0 {
+		_ = s.syncDepartmentAttributesToUser(ctx, user.ID)
 	}
 
 	// Get user's primary role for JWT (use "user" as default)
@@ -320,6 +328,11 @@ func (s *userService) UpdateProfile(ctx context.Context, userID uuid.UUID, req *
 		s.userRepo.AssignClassifications(ctx, user.ID, req.ClassificationIDs)
 	}
 
+	// Sync classifications and locations from departments if departments were updated
+	if req.DepartmentID != nil || len(req.DepartmentIDs) > 0 {
+		_ = s.syncDepartmentAttributesToUser(ctx, user.ID)
+	}
+
 	// Reload with relations
 	user, _ = s.userRepo.FindByIDWithRelations(ctx, user.ID)
 
@@ -497,4 +510,71 @@ func (s *userService) GetUserByEmail(ctx context.Context, email string) (*models
 
 func (s *userService) GetUserByUsername(ctx context.Context, username string) (*models.User, error) {
 	return s.userRepo.FindByUsername(ctx, username)
+}
+
+// syncDepartmentAttributesToUser automatically inherits classifications and locations from user's departments
+func (s *userService) syncDepartmentAttributesToUser(ctx context.Context, userID uuid.UUID) error {
+	// Get user with all department relationships
+	user, err := s.userRepo.FindByIDWithRelations(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	// Collect all unique classification and location IDs from all departments
+	classificationIDMap := make(map[uuid.UUID]bool)
+	locationIDMap := make(map[uuid.UUID]bool)
+
+	// Collect from primary department if set
+	if user.DepartmentID != nil {
+		dept, err := s.departmentRepo.FindByID(ctx, *user.DepartmentID)
+		if err == nil {
+			for _, classification := range dept.Classifications {
+				classificationIDMap[classification.ID] = true
+			}
+			for _, location := range dept.Locations {
+				locationIDMap[location.ID] = true
+			}
+		}
+	}
+
+	// Collect from many-to-many departments
+	for _, dept := range user.Departments {
+		// Load department with relations
+		fullDept, err := s.departmentRepo.FindByID(ctx, dept.ID)
+		if err != nil {
+			continue
+		}
+		for _, classification := range fullDept.Classifications {
+			classificationIDMap[classification.ID] = true
+		}
+		for _, location := range fullDept.Locations {
+			locationIDMap[location.ID] = true
+		}
+	}
+
+	// Convert maps to slices
+	var classificationIDs []uuid.UUID
+	for id := range classificationIDMap {
+		classificationIDs = append(classificationIDs, id)
+	}
+
+	var locationIDs []uuid.UUID
+	for id := range locationIDMap {
+		locationIDs = append(locationIDs, id)
+	}
+
+	// Assign to user
+	if len(classificationIDs) > 0 {
+		if err := s.userRepo.AssignClassifications(ctx, userID, classificationIDs); err != nil {
+			fmt.Printf("Warning: failed to sync classifications from departments: %v\n", err)
+		}
+	}
+
+	if len(locationIDs) > 0 {
+		if err := s.userRepo.AssignLocations(ctx, userID, locationIDs); err != nil {
+			fmt.Printf("Warning: failed to sync locations from departments: %v\n", err)
+		}
+	}
+
+	return nil
 }

@@ -1,12 +1,10 @@
 package models
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"time"
 
-	"github.com/automax/backend/internal/storage"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -571,7 +569,6 @@ type IncidentStatsResponse struct {
 	Closed         int64              `json:"closed"`
 	SLABreached    int64              `json:"sla_breached"`
 	ByPriority     map[int]int64      `json:"by_priority"`
-	BySeverity     map[int]int64      `json:"by_severity"`
 	ByState        map[string]int64   `json:"by_state"`
 	ByStateDetails []StateStatDetail  `json:"by_state_details,omitempty"`
 }
@@ -676,7 +673,7 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 	return resp
 }
 
-func ToIncidentDetailResponse(storage *storage.MinIOStorage, i *Incident) IncidentDetailResponse {
+func ToIncidentDetailResponse(i *Incident) IncidentDetailResponse {
 	resp := IncidentDetailResponse{
 		IncidentResponse: ToIncidentResponse(i),
 	}
@@ -691,10 +688,9 @@ func ToIncidentDetailResponse(storage *storage.MinIOStorage, i *Incident) Incide
 	if len(i.Attachments) > 0 {
 		resp.Attachments = make([]IncidentAttachmentResponse, len(i.Attachments))
 		for idx, a := range i.Attachments {
-			url, err := storage.GetFileURL(context.Background(), a.FilePath)
-			if err != nil {
-				fmt.Printf("failed to get file URL: %v", err)
-			}
+			// Return backend proxy URL instead of internal MinIO URL
+			// Frontend will add ?token=... when needed for <img>/<video> tags
+			url := fmt.Sprintf("/api/v1/attachments/%s", a.ID)
 			resp.Attachments[idx] = ToIncidentAttachmentResponse(&a, url)
 		}
 	}

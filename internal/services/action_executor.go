@@ -337,7 +337,6 @@ func (e *actionExecutor) replacePlaceholders(template string, incident *models.I
 
 	// Dynamic placeholders for lookup values
 	priority := "N/A"
-	severity := "N/A"
 	for _, lv := range incident.LookupValues {
 		if lv.Category == nil {
 			continue
@@ -345,12 +344,8 @@ func (e *actionExecutor) replacePlaceholders(template string, incident *models.I
 		if lv.Category.Code == "PRIORITY" {
 			priority = lv.Name
 		}
-		if lv.Category.Code == "SEVERITY" {
-			severity = lv.Name
-		}
 	}
 	replacements["{{priority}}"] = priority
-	replacements["{{severity}}"] = severity
 
 	if transition != nil {
 		replacements["{{transition_name}}"] = transition.Name

@@ -163,6 +163,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		Country:        req.Country,
 		PostalCode:     req.PostalCode,
 		RecordType:     recordType,
+		Source:         req.Source,
 	}
 
 	// Parse optional UUIDs
@@ -262,7 +263,7 @@ func (s *incidentService) GetIncident(ctx context.Context, id uuid.UUID) (*model
 		return nil, err
 	}
 
-	resp := models.ToIncidentDetailResponse(s.storage, incident)
+	resp := models.ToIncidentDetailResponse(incident)
 	return &resp, nil
 }
 

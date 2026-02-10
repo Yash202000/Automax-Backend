@@ -76,6 +76,10 @@ func Migrate(db *gorm.DB) error {
 		&models.Report{},
 		&models.ReportExecution{},
 		&models.ReportTemplate{},
+		// Application Links
+		&models.ApplicationLink{},
+		// Settings
+		&models.Settings{},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
@@ -196,6 +200,12 @@ func Seed(db *gorm.DB) error {
 		{Name: "Create Lookups", Code: "lookups:create", Module: "lookups", Action: "create", Description: "Create lookup categories and values"},
 		{Name: "Update Lookups", Code: "lookups:update", Module: "lookups", Action: "update", Description: "Update lookup categories and values"},
 		{Name: "Delete Lookups", Code: "lookups:delete", Module: "lookups", Action: "delete", Description: "Delete lookup categories and values"},
+
+		// Application Links permissions
+		{Name: "View Application Links", Code: "application-links:view", Module: "application-links", Action: "view", Description: "View application links"},
+		{Name: "Create Application Links", Code: "application-links:create", Module: "application-links", Action: "create", Description: "Create application links"},
+		{Name: "Update Application Links", Code: "application-links:update", Module: "application-links", Action: "update", Description: "Update application links"},
+		{Name: "Delete Application Links", Code: "application-links:delete", Module: "application-links", Action: "delete", Description: "Delete application links"},
 
 		// Dashboard permissions
 		{Name: "Admin Dashboard", Code: "dashboard:admin", Module: "dashboard", Action: "admin", Description: "Access admin section cards on dashboard"},
@@ -321,37 +331,6 @@ func seedLookupCategories(db *gorm.DB) {
 			for _, v := range priorityValues {
 				if err := db.Create(&v).Error; err != nil {
 					log.Printf("Failed to create priority value %s: %v", v.Code, err)
-				}
-			}
-		}
-	}
-
-	// Severity category
-	var severityCategory models.LookupCategory
-	result = db.Where("code = ?", "SEVERITY").First(&severityCategory)
-	if result.Error == gorm.ErrRecordNotFound {
-		severityCategory = models.LookupCategory{
-			Code:        "SEVERITY",
-			Name:        "Severity",
-			NameAr:      "الخطورة",
-			Description: "Incident severity levels",
-			IsSystem:    true,
-			IsActive:    true,
-		}
-		if err := db.Create(&severityCategory).Error; err != nil {
-			log.Printf("Failed to create severity category: %v", err)
-		} else {
-			// Create severity values
-			severityValues := []models.LookupValue{
-				{CategoryID: severityCategory.ID, Code: "CRITICAL", Name: "Critical", NameAr: "حرج", SortOrder: 1, Color: "#EF4444", IsDefault: false, IsActive: true},
-				{CategoryID: severityCategory.ID, Code: "MAJOR", Name: "Major", NameAr: "رئيسي", SortOrder: 2, Color: "#F97316", IsDefault: false, IsActive: true},
-				{CategoryID: severityCategory.ID, Code: "MODERATE", Name: "Moderate", NameAr: "معتدل", SortOrder: 3, Color: "#EAB308", IsDefault: true, IsActive: true},
-				{CategoryID: severityCategory.ID, Code: "MINOR", Name: "Minor", NameAr: "ثانوي", SortOrder: 4, Color: "#3B82F6", IsDefault: false, IsActive: true},
-				{CategoryID: severityCategory.ID, Code: "COSMETIC", Name: "Cosmetic", NameAr: "تجميلي", SortOrder: 5, Color: "#6B7280", IsDefault: false, IsActive: true},
-			}
-			for _, v := range severityValues {
-				if err := db.Create(&v).Error; err != nil {
-					log.Printf("Failed to create severity value %s: %v", v.Code, err)
 				}
 			}
 		}

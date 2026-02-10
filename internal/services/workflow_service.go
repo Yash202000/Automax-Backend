@@ -1026,7 +1026,6 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 		{Field: "description", Label: "Description", Description: "Detailed incident description", IsRequired: false},
 		{Field: "classification_id", Label: "Classification", Description: "Incident category/type", IsRequired: false},
 		{Field: "priority", Label: "Priority", Description: "Urgency level", IsRequired: false},
-		{Field: "severity", Label: "Severity", Description: "Impact level", IsRequired: false},
 		{Field: "source", Label: "Source", Description: "Where the incident originated", IsRequired: false},
 		{Field: "assignee_id", Label: "Assignee", Description: "User assigned to handle", IsRequired: false},
 		{Field: "department_id", Label: "Department", Description: "Responsible department", IsRequired: false},

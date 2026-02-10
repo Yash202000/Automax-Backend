@@ -70,15 +70,19 @@ func main() {
 	reportTemplateRepo := repository.NewReportTemplateRepository(db)
 	lookupRepo := repository.NewLookupRepository(db)
 	callLogRepo := repository.NewCallLogRepository(db)
+	applicationLinkRepo := repository.NewApplicationLinkRepository(db)
+	settingsRepo := repository.NewSettingsRepository(db)
 
 	// Initialize services
-	userService := services.NewUserService(userRepo, jwtManager, sessionStore, minioStorage, cfg)
+	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg)
 	actionLogService := services.NewActionLogService(actionLogRepo)
 	callLogService := services.NewCallLogService(callLogRepo)
 	workflowService := services.NewWorkflowService(workflowRepo, roleRepo, departmentRepo, classificationRepo, db)
 	incidentService := services.NewIncidentService(incidentRepo, workflowRepo, userRepo, minioStorage)
 	reportService := services.NewReportService(reportRepo)
 	reportTemplateService := services.NewReportTemplateService(reportTemplateRepo, reportRepo)
+	applicationLinkService := services.NewApplicationLinkService(applicationLinkRepo)
+	settingsService := services.NewSettingsService(settingsRepo)
 
 	// Initialize and start SLA Monitor (checks every 5 minutes)
 	slaMonitor := services.NewSLAMonitor(incidentRepo, 5*time.Minute)
@@ -103,6 +107,8 @@ func main() {
 	reportHandler := handlers.NewReportHandler(reportService)
 	reportTemplateHandler := handlers.NewReportTemplateHandler(reportTemplateService)
 	lookupHandler := handlers.NewLookupHandler(lookupRepo)
+	applicationLinkHandler := handlers.NewApplicationLinkHandler(applicationLinkService)
+	settingsHandler := handlers.NewSettingsHandler(settingsService)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore, userRepo)
@@ -387,6 +393,23 @@ func main() {
 
 	// Public lookup endpoint (by category code) - accessible to authenticated users
 	v1.Get("/lookups/:code", authMiddleware.Authenticate(), lookupHandler.GetValuesByCategoryCode)
+
+	// Application Links routes (admin)
+	appLinks := admin.Group("/application-links")
+	appLinks.Post("/", authMiddleware.RequirePermission("application-links:create"), applicationLinkHandler.CreateLink)
+	appLinks.Get("/", authMiddleware.RequirePermission("application-links:view"), applicationLinkHandler.ListLinks)
+	appLinks.Get("/:id", authMiddleware.RequirePermission("application-links:view"), applicationLinkHandler.GetLink)
+	appLinks.Put("/:id", authMiddleware.RequirePermission("application-links:update"), applicationLinkHandler.UpdateLink)
+	appLinks.Delete("/:id", authMiddleware.RequirePermission("application-links:delete"), applicationLinkHandler.DeleteLink)
+
+	// Public application links endpoint (active links only) - accessible to authenticated users
+	v1.Get("/application-links", authMiddleware.Authenticate(), applicationLinkHandler.ListActiveLinks)
+
+	// Settings routes
+	// Public settings endpoint (accessible to everyone for branding)
+	v1.Get("/settings", settingsHandler.GetSettings)
+	// Admin settings endpoint (requires settings:update permission)
+	admin.Put("/settings", authMiddleware.RequirePermission("settings:update"), settingsHandler.UpdateSettings)
 
 	// Call routes (authenticated users)
 	calls := v1.Group("/calls", authMiddleware.Authenticate())
