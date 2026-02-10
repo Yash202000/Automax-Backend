@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
+	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -16,10 +18,14 @@ import (
 
 type NotificationHandler struct {
 	service *services.NotificationService
+	storage *storage.MinIOStorage
 }
 
-func NewNotificationHandler(service *services.NotificationService) *NotificationHandler {
-	return &NotificationHandler{service: service}
+func NewNotificationHandler(service *services.NotificationService, storage *storage.MinIOStorage) *NotificationHandler {
+	return &NotificationHandler{
+		service: service,
+		storage: storage,
+	}
 }
 
 // SendGridInboundWebhook handles incoming emails from SendGrid Inbound Parse
@@ -56,12 +62,14 @@ func (h *NotificationHandler) SendGridInboundWebhook(c *fiber.Ctx) error {
 		for _, fileHeader := range files {
 			file, err := fileHeader.Open()
 			if err != nil {
+				log.Printf("Failed to open attachment %s: %v", fileHeader.Filename, err)
 				continue // Skip failed attachments
 			}
 			defer file.Close()
 
 			data, err := io.ReadAll(file)
 			if err != nil {
+				log.Printf("Failed to read attachment %s: %v", fileHeader.Filename, err)
 				continue
 			}
 
@@ -89,13 +97,36 @@ func (h *NotificationHandler) SendGridInboundWebhook(c *fiber.Ctx) error {
 		})
 	}
 
-	// Convert attachments to attachment info
+	// Save attachments to MinIO and create attachment info
 	var attachmentInfo models.AttachmentArray
 	for _, att := range attachments {
+		// Save attachment to MinIO storage
+		objectName := ""
+		if h.storage != nil && len(att.Data) > 0 {
+			// Create a unique folder for this notification's attachments
+			folder := fmt.Sprintf("notifications/%s", uuid.New().String())
+
+			// Upload to MinIO
+			uploadedPath, err := h.storage.UploadBytes(
+				c.Context(),
+				att.Data,
+				att.Filename,
+				att.ContentType,
+				folder,
+			)
+			if err != nil {
+				log.Printf("Failed to upload attachment %s to MinIO: %v", att.Filename, err)
+				// Continue without URL if upload fails
+			} else {
+				objectName = uploadedPath
+			}
+		}
+
 		attachmentInfo = append(attachmentInfo, models.AttachmentInfo{
 			Filename:    att.Filename,
 			ContentType: att.ContentType,
 			Size:        int64(len(att.Data)),
+			URL:         objectName, // Store object path for later retrieval
 		})
 	}
 
@@ -229,7 +260,11 @@ func (h *NotificationHandler) Send(c *fiber.Ctx) error {
 
 	// Handle attachments
 	var attachments []models.AttachmentData
+	var attachmentURLs []models.AttachmentInfo // Track uploaded attachments with URLs
 	if files, ok := form.File["attachments"]; ok {
+		// Create a unique folder for this notification's attachments
+		folder := fmt.Sprintf("notifications/%s", uuid.New().String())
+
 		for _, fileHeader := range files {
 			file, err := fileHeader.Open()
 			if err != nil {
@@ -242,10 +277,39 @@ func (h *NotificationHandler) Send(c *fiber.Ctx) error {
 				return utils.ErrorResponse(c, fiber.StatusBadRequest, "Failed to read attachment data: "+fileHeader.Filename)
 			}
 
+			contentType := fileHeader.Header.Get("Content-Type")
+			if contentType == "" {
+				contentType = "application/octet-stream"
+			}
+
+			// Upload to MinIO
+			objectName := ""
+			if h.storage != nil {
+				uploadedPath, err := h.storage.UploadBytes(
+					c.Context(),
+					data,
+					fileHeader.Filename,
+					contentType,
+					folder,
+				)
+				if err != nil {
+					log.Printf("Failed to upload attachment %s to MinIO: %v", fileHeader.Filename, err)
+				} else {
+					objectName = uploadedPath
+				}
+			}
+
 			attachments = append(attachments, models.AttachmentData{
 				Filename:    fileHeader.Filename,
-				ContentType: fileHeader.Header.Get("Content-Type"),
+				ContentType: contentType,
 				Data:        data,
+			})
+
+			attachmentURLs = append(attachmentURLs, models.AttachmentInfo{
+				Filename:    fileHeader.Filename,
+				ContentType: contentType,
+				Size:        int64(len(data)),
+				URL:         objectName,
 			})
 		}
 	}
@@ -256,15 +320,23 @@ func (h *NotificationHandler) Send(c *fiber.Ctx) error {
 	}
 
 	// Send notification with attachments
-	log, err := h.service.SendNotification(c.Context(), channel, templateCodePtr, language, to, cc, bcc, subject, body, variables, attachments, sentBy)
+	notificationLog, err := h.service.SendNotification(c.Context(), channel, templateCodePtr, language, to, cc, bcc, subject, body, variables, attachments, sentBy)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
+	// Update attachment URLs if attachments were uploaded
+	if len(attachmentURLs) > 0 {
+		if err := h.service.UpdateAttachmentURLs(c.Context(), notificationLog.ID, attachmentURLs); err != nil {
+			log.Printf("Warning: Failed to update attachment URLs for notification %s: %v", notificationLog.ID, err)
+			// Don't fail the request, just log the warning
+		}
+	}
+
 	res := SendNotificationResponse{
-		ID:       log.ID.String(),
-		Status:   log.Status,
-		Provider: log.Provider,
+		ID:       notificationLog.ID.String(),
+		Status:   notificationLog.Status,
+		Provider: notificationLog.Provider,
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
@@ -647,12 +719,12 @@ func (h *NotificationHandler) Reply(c *fiber.Ctx) error {
 	}
 
 	type ReplyRequest struct {
-		To      []string `json:"to"`
-		CC      []string `json:"cc,omitempty"`
-		BCC     []string `json:"bcc,omitempty"`
-		Subject string   `json:"subject"`
-		Body    string   `json:"body"`
-		BodyHTML string  `json:"body_html,omitempty"`
+		To       []string `json:"to"`
+		CC       []string `json:"cc,omitempty"`
+		BCC      []string `json:"bcc,omitempty"`
+		Subject  string   `json:"subject"`
+		Body     string   `json:"body"`
+		BodyHTML string   `json:"body_html,omitempty"`
 	}
 
 	var req ReplyRequest
@@ -698,5 +770,121 @@ func (h *NotificationHandler) GetThread(c *fiber.Ctx) error {
 		"data":        notifications,
 		"total_items": total,
 		"thread_id":   threadID,
+	})
+}
+
+// DownloadAttachment handles GET /api/v1/notifications/:id/attachments/:filename
+// Downloads a specific attachment from a notification
+func (h *NotificationHandler) DownloadAttachment(c *fiber.Ctx) error {
+	// Get notification ID
+	notificationIDStr := c.Params("id")
+	notificationID, err := uuid.Parse(notificationIDStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid notification ID")
+	}
+
+	// Get filename from URL
+	filename := c.Params("filename")
+	if filename == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Filename is required")
+	}
+
+	// Fetch the notification to verify it exists and get attachment info
+	notification, err := h.service.GetNotification(c.Context(), notificationID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Notification not found")
+	}
+
+	// Find the attachment with matching filename
+	var attachmentURL string
+	var contentType string
+	for _, att := range notification.Attachments {
+		if att.Filename == filename {
+			attachmentURL = att.URL
+			contentType = att.ContentType
+			break
+		}
+	}
+
+	if attachmentURL == "" {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Attachment not found")
+	}
+
+	// Download from MinIO
+	if h.storage == nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Storage not configured")
+	}
+
+	fileReader, err := h.storage.GetFile(c.Context(), attachmentURL)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Failed to retrieve attachment: "+err.Error())
+	}
+	defer fileReader.Close()
+
+	// Read the file content
+	fileData, err := io.ReadAll(fileReader)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read attachment")
+	}
+
+	// Set appropriate headers
+	c.Set("Content-Type", contentType)
+	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+	c.Set("Content-Length", fmt.Sprintf("%d", len(fileData)))
+
+	return c.Send(fileData)
+}
+
+// GetAttachmentURL handles GET /api/v1/notifications/:id/attachments/:filename/url
+// Returns a presigned URL for downloading the attachment
+func (h *NotificationHandler) GetAttachmentURL(c *fiber.Ctx) error {
+	// Get notification ID
+	notificationIDStr := c.Params("id")
+	notificationID, err := uuid.Parse(notificationIDStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid notification ID")
+	}
+
+	// Get filename from URL
+	filename := c.Params("filename")
+	if filename == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Filename is required")
+	}
+
+	// Fetch the notification to verify it exists and get attachment info
+	notification, err := h.service.GetNotification(c.Context(), notificationID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Notification not found")
+	}
+
+	// Find the attachment with matching filename
+	var attachmentURL string
+	for _, att := range notification.Attachments {
+		if att.Filename == filename {
+			attachmentURL = att.URL
+			break
+		}
+	}
+
+	if attachmentURL == "" {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Attachment not found")
+	}
+
+	// Generate presigned URL from MinIO
+	if h.storage == nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Storage not configured")
+	}
+
+	presignedURL, err := h.storage.GetFileURL(c.Context(), attachmentURL)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to generate download URL: "+err.Error())
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data": fiber.Map{
+			"url":      presignedURL,
+			"filename": filename,
+		},
 	})
 }

@@ -491,6 +491,20 @@ func (s *NotificationService) ReplyToNotification(ctx context.Context, originalI
 	return &response, nil
 }
 
+// UpdateAttachmentURLs updates the attachment URLs in an existing notification
+func (s *NotificationService) UpdateAttachmentURLs(ctx context.Context, id uuid.UUID, attachments models.AttachmentArray) error {
+	log, err := s.logRepo.FindByID(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	log.Attachments = attachments
+	now := time.Now()
+	log.UpdatedAt = &now
+
+	return s.logRepo.Update(ctx, log)
+}
+
 func RenderTemplate(tpl string, vars map[string]string) (string, error) {
 	t, err := template.New("tpl").Option("missingkey=zero").Parse(tpl)
 	if err != nil {

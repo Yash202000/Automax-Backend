@@ -108,9 +108,7 @@ func main() {
 	reportHandler := handlers.NewReportHandler(reportService)
 	reportTemplateHandler := handlers.NewReportTemplateHandler(reportTemplateService)
 	lookupHandler := handlers.NewLookupHandler(lookupRepo)
-	// notificationHandler := handlers.NewNotificationHandler(notificationService)
-	// templateHandler := handlers.NewMessageTemplateHandler(messageTemplateRepo)
-	notificationHandler := handlers.NewNotificationHandler(notificationService)
+	notificationHandler := handlers.NewNotificationHandler(notificationService, minioStorage)
 	templateHandler := handlers.NewNotificationTemplateHandler(notificationTemplateRepo)
 
 	// Initialize middleware
@@ -444,6 +442,10 @@ func main() {
 	// Bulk actions
 	notifications.Post("/bulk/move", authMiddleware.RequirePermission("notifications:update"), notificationHandler.BulkMoveToCategory)
 	notifications.Post("/bulk/delete", authMiddleware.RequirePermission("notifications:delete"), notificationHandler.BulkDelete)
+
+	// Attachment operations
+	notifications.Get("/:id/attachments/:filename", authMiddleware.RequirePermission("notifications:read"), notificationHandler.DownloadAttachment)
+	notifications.Get("/:id/attachments/:filename/url", authMiddleware.RequirePermission("notifications:read"), notificationHandler.GetAttachmentURL)
 
 	// Delete (move to trash)
 	notifications.Delete("/:id", authMiddleware.RequirePermission("notifications:delete"), notificationHandler.Delete)
