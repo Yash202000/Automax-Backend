@@ -270,6 +270,28 @@ func (s *userService) UpdateProfile(ctx context.Context, userID uuid.UUID, req *
 		return nil, err
 	}
 
+	// Track if departments changed to decide whether to sync
+	departmentsChanged := false
+
+	// Check if department_ids changed (for multi-department users)
+	if req.DepartmentIDs != nil {
+		oldDeptIDs := make(map[uuid.UUID]bool)
+		for _, dept := range user.Departments {
+			oldDeptIDs[dept.ID] = true
+		}
+
+		if len(oldDeptIDs) != len(req.DepartmentIDs) {
+			departmentsChanged = true
+		} else {
+			for _, newDeptID := range req.DepartmentIDs {
+				if !oldDeptIDs[newDeptID] {
+					departmentsChanged = true
+					break
+				}
+			}
+		}
+	}
+
 	if req.Username != "" && req.Username != user.Username {
 		exists, err := s.userRepo.ExistsByUsername(ctx, req.Username)
 		if err != nil {
@@ -308,28 +330,19 @@ func (s *userService) UpdateProfile(ctx context.Context, userID uuid.UUID, req *
 		return nil, err
 	}
 
-	// Update roles if provided
-	if len(req.RoleIDs) > 0 {
-		s.userRepo.AssignRoles(ctx, user.ID, req.RoleIDs)
-	}
+	// Always update associations (even if empty arrays) to allow removal
+	s.userRepo.AssignRoles(ctx, user.ID, req.RoleIDs)
+	s.userRepo.AssignDepartments(ctx, user.ID, req.DepartmentIDs)
 
-	// Update departments if provided
-	if len(req.DepartmentIDs) > 0 {
-		s.userRepo.AssignDepartments(ctx, user.ID, req.DepartmentIDs)
-	}
-
-	// Update locations if provided
-	if len(req.LocationIDs) > 0 {
+	// Only update locations and classifications if departments did NOT change
+	// If departments changed, we'll sync from departments instead
+	if !departmentsChanged {
 		s.userRepo.AssignLocations(ctx, user.ID, req.LocationIDs)
-	}
-
-	// Update classifications if provided
-	if len(req.ClassificationIDs) > 0 {
 		s.userRepo.AssignClassifications(ctx, user.ID, req.ClassificationIDs)
 	}
 
-	// Sync classifications and locations from departments if departments were updated
-	if req.DepartmentID != nil || len(req.DepartmentIDs) > 0 {
+	// Sync classifications and locations from departments ONLY if departments changed
+	if departmentsChanged {
 		_ = s.syncDepartmentAttributesToUser(ctx, user.ID)
 	}
 

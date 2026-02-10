@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"context"
-	"log"
 	"strings"
 
 	"github.com/automax/backend/internal/database"
@@ -29,9 +28,9 @@ func NewAuthMiddleware(jwtManager *utils.JWTManager, sessionStore *database.Sess
 func (m *AuthMiddleware) Authenticate() fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		var token string
-		c.Request().Header.VisitAll(func(key, value []byte) {
-			log.Printf("Header: %s = %s", string(key), string(value))
-		})
+		// c.Request().Header.VisitAll(func(key, value []byte) {
+		// 	log.Printf("Header: %s = %s", string(key), string(value))
+		// })
 		// First check Authorization header
 		authHeader := c.Get("Authorization")
 		if authHeader != "" {
