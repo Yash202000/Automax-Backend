@@ -630,3 +630,73 @@ func (h *NotificationHandler) BulkDelete(c *fiber.Ctx) error {
 		"message": "Notifications deleted successfully",
 	})
 }
+
+// Reply handles POST /api/v1/notifications/:id/reply
+func (h *NotificationHandler) Reply(c *fiber.Ctx) error {
+	// Get the original email ID
+	idStr := c.Params("id")
+	originalID, err := uuid.Parse(idStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid notification ID")
+	}
+
+	// Get user ID from context
+	var sentBy *uuid.UUID
+	if userID, ok := c.Locals("user_id").(uuid.UUID); ok {
+		sentBy = &userID
+	}
+
+	type ReplyRequest struct {
+		To      []string `json:"to"`
+		CC      []string `json:"cc,omitempty"`
+		BCC     []string `json:"bcc,omitempty"`
+		Subject string   `json:"subject"`
+		Body    string   `json:"body"`
+		BodyHTML string  `json:"body_html,omitempty"`
+	}
+
+	var req ReplyRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	// Send reply with threading
+	reply, err := h.service.ReplyToNotification(c.Context(), originalID, req.To, req.CC, req.BCC, req.Subject, req.Body, req.BodyHTML, sentBy)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"success": true,
+		"data":    reply,
+		"message": "Reply sent successfully",
+	})
+}
+
+// GetThread handles GET /api/v1/notifications/threads/:thread_id
+func (h *NotificationHandler) GetThread(c *fiber.Ctx) error {
+	threadIDStr := c.Params("thread_id")
+	threadID, err := uuid.Parse(threadIDStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid thread ID")
+	}
+
+	// Get all emails in this thread
+	filter := &models.NotificationLogFilter{
+		ThreadID: &threadID,
+		Page:     1,
+		Limit:    100, // Get all messages in thread
+	}
+
+	notifications, total, err := h.service.ListNotifications(c.Context(), filter)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(fiber.Map{
+		"success":     true,
+		"data":        notifications,
+		"total_items": total,
+		"thread_id":   threadID,
+	})
+}

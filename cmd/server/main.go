@@ -427,6 +427,10 @@ func main() {
 	notifications.Get("/", authMiddleware.RequirePermission("notifications:read"), notificationHandler.List)
 	notifications.Get("/:id", authMiddleware.RequirePermission("notifications:read"), notificationHandler.Get)
 
+	// Thread operations
+	notifications.Post("/:id/reply", authMiddleware.RequirePermission("notifications:send"), notificationHandler.Reply)
+	notifications.Get("/threads/:thread_id", authMiddleware.RequirePermission("notifications:read"), notificationHandler.GetThread)
+
 	// Draft management
 	notifications.Post("/drafts", authMiddleware.RequirePermission("notifications:create"), notificationHandler.CreateDraft)
 	notifications.Put("/drafts/:id", authMiddleware.RequirePermission("notifications:update"), notificationHandler.UpdateDraft)

@@ -433,6 +433,64 @@ func (s *NotificationService) SaveInboundNotification(ctx context.Context, log *
 	return s.logRepo.Create(ctx, log)
 }
 
+// ReplyToNotification sends a reply to an existing email and maintains threading
+func (s *NotificationService) ReplyToNotification(ctx context.Context, originalID uuid.UUID, to []string, cc []string, bcc []string, subject string, body string, bodyHTML string, sentBy *uuid.UUID) (*models.NotificationLogResponse, error) {
+	// Get the original email
+	original, err := s.logRepo.FindByID(ctx, originalID)
+	if err != nil {
+		return nil, fmt.Errorf("original email not found: %w", err)
+	}
+
+	// Determine thread ID
+	threadID := original.ThreadID
+	if threadID == nil {
+		// If original email has no thread, use its ID as the thread ID
+		threadID = &original.ID
+	}
+
+	// Auto-prefix subject with "Re:" if not already present
+	if subject != "" && !strings.HasPrefix(subject, "Re:") {
+		subject = "Re: " + subject
+	} else if subject == "" && original.Subject != "" {
+		subject = "Re: " + original.Subject
+	}
+
+	// Send the reply
+	sentLog, err := s.SendNotification(
+		ctx,
+		original.Channel,
+		nil,
+		original.Language,
+		to,
+		cc,
+		bcc,
+		subject,
+		body,
+		nil,
+		nil,
+		sentBy,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Update the sent email with threading info
+	sentLog.ThreadID = threadID
+	sentLog.InReplyTo = &originalID
+	if err := s.logRepo.Update(ctx, sentLog); err != nil {
+		return nil, err
+	}
+
+	// Also update original email's thread_id if it didn't have one
+	if original.ThreadID == nil {
+		original.ThreadID = threadID
+		_ = s.logRepo.Update(ctx, original)
+	}
+
+	response := models.ToNotificationLogResponse(sentLog)
+	return &response, nil
+}
+
 func RenderTemplate(tpl string, vars map[string]string) (string, error) {
 	t, err := template.New("tpl").Option("missingkey=zero").Parse(tpl)
 	if err != nil {
