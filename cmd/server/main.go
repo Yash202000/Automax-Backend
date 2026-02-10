@@ -73,16 +73,22 @@ func main() {
 	applicationLinkRepo := repository.NewApplicationLinkRepository(db)
 	settingsRepo := repository.NewSettingsRepository(db)
 
+	// Initialize WebSocket hub and start it
+	wsHub := services.NewWSHub()
+	go wsHub.Run()
+	log.Println("WebSocket hub started")
+
 	// Initialize services
 	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg)
 	actionLogService := services.NewActionLogService(actionLogRepo)
 	callLogService := services.NewCallLogService(callLogRepo)
 	workflowService := services.NewWorkflowService(workflowRepo, roleRepo, departmentRepo, classificationRepo, db)
-	incidentService := services.NewIncidentService(incidentRepo, workflowRepo, userRepo, minioStorage)
+	incidentService := services.NewIncidentService(incidentRepo, workflowRepo, userRepo, minioStorage, db, wsHub)
 	reportService := services.NewReportService(reportRepo)
 	reportTemplateService := services.NewReportTemplateService(reportTemplateRepo, reportRepo)
 	applicationLinkService := services.NewApplicationLinkService(applicationLinkRepo)
 	settingsService := services.NewSettingsService(settingsRepo)
+	presenceService := services.NewPresenceService(redisClient)
 
 	// Initialize and start SLA Monitor (checks every 5 minutes)
 	slaMonitor := services.NewSLAMonitor(incidentRepo, 5*time.Minute)
@@ -103,7 +109,8 @@ func main() {
 	actionLogHandler := handlers.NewActionLogHandler(actionLogService, validate)
 	callLogHandler := handlers.NewCallLogHandler(callLogService, validate, userService)
 	workflowHandler := handlers.NewWorkflowHandler(workflowService)
-	incidentHandler := handlers.NewIncidentHandler(incidentService, userRepo, incidentRepo, minioStorage)
+	incidentHandler := handlers.NewIncidentHandler(incidentService, userRepo, incidentRepo, minioStorage, presenceService)
+	websocketHandler := handlers.NewWebSocketHandler(wsHub)
 	reportHandler := handlers.NewReportHandler(reportService)
 	reportTemplateHandler := handlers.NewReportTemplateHandler(reportTemplateService)
 	lookupHandler := handlers.NewLookupHandler(lookupRepo)
@@ -136,6 +143,17 @@ func main() {
 	// Health routes
 	v1.Get("/health", healthHandler.Health)
 	v1.Get("/ready", healthHandler.Ready)
+
+	// WebSocket route for real-time updates
+	// Query params: incident_id, user_id, token (for auth)
+	v1.Get("/ws", websocketHandler.WebSocketUpgrader())
+
+	// Broadcast WebSocket route for incident list viewer count updates
+	// Query params: token (for auth)
+	v1.Get("/ws/broadcast", websocketHandler.BroadcastWebSocketUpgrader())
+
+	// WebSocket connection statistics endpoint
+	v1.Get("/ws/stats", authMiddleware.RequirePermission("incidents:view"), websocketHandler.GetConnectionStats)
 
 	// Auth routes
 	auth := v1.Group("/auth")
@@ -179,6 +197,11 @@ func main() {
 	incidents.Delete("/:id/attachments/:attachment_id", authMiddleware.RequirePermission("incidents:update"), incidentHandler.DeleteAttachment)
 	incidents.Put("/:id/assign", authMiddleware.RequirePermission("incidents:assign"), incidentHandler.AssignIncident)
 	incidents.Get("/:id/revisions", authMiddleware.RequirePermission("incidents:view"), incidentHandler.ListRevisions)
+
+	// Presence tracking routes
+	incidents.Post("/:id/presence", authMiddleware.RequirePermission("incidents:view"), incidentHandler.MarkPresence)
+	incidents.Get("/:id/presence", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetPresence)
+	incidents.Delete("/:id/presence", authMiddleware.RequirePermission("incidents:view"), incidentHandler.RemovePresence)
 
 	// Attachment download route
 	attachments := v1.Group("/attachments", authMiddleware.Authenticate())

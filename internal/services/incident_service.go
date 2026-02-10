@@ -12,6 +12,7 @@ import (
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/storage"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type IncidentService interface {
@@ -72,14 +73,18 @@ type incidentService struct {
 	workflowRepo repository.WorkflowRepository
 	userRepo     repository.UserRepository
 	storage      *storage.MinIOStorage
+	db           *gorm.DB
+	wsHub        *WSHub
 }
 
-func NewIncidentService(incidentRepo repository.IncidentRepository, workflowRepo repository.WorkflowRepository, userRepo repository.UserRepository, storage *storage.MinIOStorage) IncidentService {
+func NewIncidentService(incidentRepo repository.IncidentRepository, workflowRepo repository.WorkflowRepository, userRepo repository.UserRepository, storage *storage.MinIOStorage, db *gorm.DB, wsHub *WSHub) IncidentService {
 	return &incidentService{
 		incidentRepo: incidentRepo,
 		workflowRepo: workflowRepo,
 		userRepo:     userRepo,
 		storage:      storage,
+		db:           db,
+		wsHub:        wsHub,
 	}
 }
 
@@ -254,6 +259,14 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 	}
 
 	resp := models.ToIncidentResponse(created)
+
+	// Broadcast incident creation to all broadcast clients
+	if s.wsHub != nil {
+		s.wsHub.BroadcastToAll("incident_created", map[string]interface{}{
+			"incident": resp,
+		})
+	}
+
 	return &resp, nil
 }
 
@@ -276,14 +289,30 @@ func (s *incidentService) ListIncidents(ctx context.Context, filter *models.Inci
 	responses := make([]models.IncidentResponse, len(incidents))
 	for i, inc := range incidents {
 		responses[i] = models.ToIncidentResponse(&inc)
+
+		// Add active viewers count from WebSocket hub
+		if s.wsHub != nil {
+			responses[i].ActiveViewers = s.wsHub.GetSubscriberCount(inc.ID)
+		}
 	}
 
 	return responses, total, nil
 }
 
 func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req *models.IncidentUpdateRequest, userID uuid.UUID) (*models.IncidentResponse, error) {
-	incident, err := s.incidentRepo.FindByIDWithRelations(ctx, id)
+	// Begin transaction
+	tx := s.db.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	txRepo := s.incidentRepo.WithTx(tx)
+
+	incident, err := txRepo.FindByIDWithRelations(ctx, id)
 	if err != nil {
+		tx.Rollback()
 		return nil, err
 	}
 
@@ -473,7 +502,70 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		}
 	}
 
-	if err := s.incidentRepo.Update(ctx, incident); err != nil {
+	// Build updates map for optimistic locking
+	updates := make(map[string]interface{})
+	if req.Title != "" {
+		updates["title"] = incident.Title
+	}
+	if req.Description != "" {
+		updates["description"] = incident.Description
+	}
+	if incident.ClassificationID != nil {
+		updates["classification_id"] = *incident.ClassificationID
+	} else if req.ClassificationID != nil && *req.ClassificationID == "" {
+		updates["classification_id"] = nil
+	}
+	if incident.AssigneeID != nil {
+		updates["assignee_id"] = *incident.AssigneeID
+	} else if req.AssigneeID != nil && *req.AssigneeID == "" {
+		updates["assignee_id"] = nil
+	}
+	if incident.DepartmentID != nil {
+		updates["department_id"] = *incident.DepartmentID
+	} else if req.DepartmentID != nil && *req.DepartmentID == "" {
+		updates["department_id"] = nil
+	}
+	if incident.LocationID != nil {
+		updates["location_id"] = *incident.LocationID
+	} else if req.LocationID != nil && *req.LocationID == "" {
+		updates["location_id"] = nil
+	}
+	if req.Latitude != nil {
+		updates["latitude"] = *req.Latitude
+	}
+	if req.Longitude != nil {
+		updates["longitude"] = *req.Longitude
+	}
+	if req.Address != "" {
+		updates["address"] = incident.Address
+	}
+	if req.City != "" {
+		updates["city"] = incident.City
+	}
+	if req.State != "" {
+		updates["state"] = incident.State
+	}
+	if req.Country != "" {
+		updates["country"] = incident.Country
+	}
+	if req.PostalCode != "" {
+		updates["postal_code"] = incident.PostalCode
+	}
+	if incident.DueDate != nil {
+		updates["due_date"] = *incident.DueDate
+	} else if req.DueDate != nil && *req.DueDate == "" {
+		updates["due_date"] = nil
+	}
+	if incident.CustomFields != "" {
+		updates["custom_fields"] = incident.CustomFields
+	}
+
+	// Execute optimistic lock update
+	if err := txRepo.UpdateFieldsWithVersion(ctx, id, updates, req.Version); err != nil {
+		tx.Rollback()
+		if err == repository.ErrVersionMismatch {
+			return nil, fmt.Errorf("conflict: incident was modified by another user")
+		}
 		return nil, err
 	}
 
@@ -489,12 +581,49 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		_ = s.CreateRevision(ctx, id, models.RevisionActionFieldChange, description, changes, userID)
 	}
 
+	// Commit transaction
+	if err := tx.Commit().Error; err != nil {
+		return nil, err
+	}
+
+	// Fetch updated incident first to get full data
 	updated, err := s.incidentRepo.FindByIDWithRelations(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
 	resp := models.ToIncidentResponse(updated)
+
+	// Broadcast update to WebSocket subscribers
+	if s.wsHub != nil {
+		// Broadcast to incident-specific subscribers
+		s.wsHub.BroadcastToIncident(id, "incident_updated", map[string]interface{}{
+			"incident_id": id,
+			"changes":     changes,
+			"description": descriptions,
+		}, userID)
+
+		// Check if assignee changed
+		assigneeChanged := false
+		for _, change := range changes {
+			if change.FieldName == "assignee_id" {
+				assigneeChanged = true
+				break
+			}
+		}
+
+		// Broadcast to all broadcast clients (incident list pages)
+		messageType := "incident_updated"
+		if assigneeChanged {
+			messageType = "assignee_changed"
+		}
+
+		s.wsHub.BroadcastToAll(messageType, map[string]interface{}{
+			"incident":         resp,
+			"assignee_changed": assigneeChanged,
+		})
+	}
+
 	return &resp, nil
 }
 
@@ -750,15 +879,33 @@ func (s *incidentService) CanConvertToRequest(ctx context.Context, incidentID uu
 // State transitions
 
 func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid.UUID, req *models.IncidentTransitionRequest, userID uuid.UUID, userRoleIDs []uuid.UUID) (*models.IncidentResponse, error) {
-	// Get the incident
-	incident, err := s.incidentRepo.FindByID(ctx, incidentID)
+	// Begin transaction
+	tx := s.db.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	txRepo := s.incidentRepo.WithTx(tx)
+
+	// PESSIMISTIC LOCK: Acquire lock on the incident to prevent concurrent state transitions
+	incident, err := txRepo.LockForUpdate(ctx, tx, incidentID)
 	if err != nil {
+		tx.Rollback()
 		return nil, errors.New("incident not found")
+	}
+
+	// Verify version still matches (double-check optimistic lock)
+	if incident.Version != req.Version {
+		tx.Rollback()
+		return nil, fmt.Errorf("conflict: incident was modified by another user")
 	}
 
 	// Parse transition ID
 	transitionID, err := uuid.Parse(req.TransitionID)
 	if err != nil {
+		tx.Rollback()
 		return nil, errors.New("invalid transition_id")
 	}
 
@@ -770,11 +917,13 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 
 	// Verify the transition belongs to this workflow
 	if transition.WorkflowID != incident.WorkflowID {
+		tx.Rollback()
 		return nil, errors.New("transition does not belong to this workflow")
 	}
 
 	// Verify the transition starts from the current state
 	if transition.FromStateID != incident.CurrentStateID {
+		tx.Rollback()
 		return nil, errors.New("transition cannot be executed from current state")
 	}
 
@@ -793,6 +942,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			}
 		}
 		if !hasPermission {
+			tx.Rollback()
 			return nil, errors.New("you do not have permission to execute this transition")
 		}
 	}
@@ -810,6 +960,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				if errMsg == "" {
 					errMsg = "Comment is required for this transition"
 				}
+				tx.Rollback()
 				return nil, errors.New(errMsg)
 			}
 		case "attachment":
@@ -818,6 +969,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				if errMsg == "" {
 					errMsg = "Attachment is required for this transition"
 				}
+				tx.Rollback()
 				return nil, errors.New(errMsg)
 			}
 		case "feedback":
@@ -826,6 +978,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				if errMsg == "" {
 					errMsg = "Feedback is required for this transition"
 				}
+				tx.Rollback()
 				return nil, errors.New(errMsg)
 			}
 		}
@@ -842,7 +995,8 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		TransitionedAt: time.Now(),
 	}
 
-	if err := s.incidentRepo.CreateTransitionHistory(ctx, history); err != nil {
+	if err := txRepo.CreateTransitionHistory(ctx, history); err != nil {
+		tx.Rollback()
 		return nil, err
 	}
 
@@ -856,7 +1010,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			}
 		}
 		if len(attachmentIDs) > 0 {
-			s.incidentRepo.LinkAttachmentsToTransition(ctx, attachmentIDs, history.ID)
+			txRepo.LinkAttachmentsToTransition(ctx, attachmentIDs, history.ID)
 		}
 	}
 
@@ -869,7 +1023,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			IsInternal:          true,
 			TransitionHistoryID: &history.ID,
 		}
-		s.incidentRepo.CreateComment(ctx, comment)
+		txRepo.CreateComment(ctx, comment)
 	}
 
 	// If feedback was provided, create a feedback record
@@ -881,7 +1035,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			CreatedByID:         userID,
 			TransitionHistoryID: &history.ID,
 		}
-		if err := s.incidentRepo.CreateFeedback(ctx, feedback); err != nil {
+		if err := txRepo.CreateFeedback(ctx, feedback); err != nil {
 			fmt.Printf("Warning: failed to create feedback: %v\n", err)
 		}
 	}
@@ -889,6 +1043,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	// Get new state for SLA calculation
 	newState, err := s.workflowRepo.FindStateByID(ctx, transition.ToStateID)
 	if err != nil {
+		tx.Rollback()
 		return nil, errors.New("target state not found")
 	}
 
@@ -1017,19 +1172,23 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		updates["closed_at"] = now
 	}
 
-	// Apply all updates in a single query
+	// Apply all updates using optimistic locking with version
 	fmt.Printf("[DEBUG] Applying updates: %+v\n", updates)
-	if err := s.incidentRepo.UpdateFields(ctx, incidentID, updates); err != nil {
-		fmt.Printf("[DEBUG] ERROR in UpdateFields: %v\n", err)
+	if err := txRepo.UpdateFieldsWithVersion(ctx, incidentID, updates, req.Version); err != nil {
+		tx.Rollback()
+		fmt.Printf("[DEBUG] ERROR in UpdateFieldsWithVersion: %v\n", err)
+		if err == repository.ErrVersionMismatch {
+			return nil, fmt.Errorf("conflict: incident was modified by another user")
+		}
 		return nil, err
 	}
-	fmt.Printf("[DEBUG] UpdateFields successful\n")
+	fmt.Printf("[DEBUG] UpdateFieldsWithVersion successful\n")
 
 	// Set multiple assignees if applicable
 	fmt.Printf("[DEBUG] Setting multiple assignees, count: %d\n", len(assigneeUserIDs))
 	if len(assigneeUserIDs) > 0 {
 		fmt.Printf("[DEBUG] Calling SetAssignees with IDs: %v\n", assigneeUserIDs)
-		if err := s.incidentRepo.SetAssignees(ctx, incidentID, assigneeUserIDs); err != nil {
+		if err := txRepo.SetAssignees(ctx, incidentID, assigneeUserIDs); err != nil {
 			// Log error but don't fail the transition
 			fmt.Printf("[DEBUG] ERROR in SetAssignees: %v\n", err)
 		} else {
@@ -1037,15 +1196,6 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		}
 	} else {
 		fmt.Printf("[DEBUG] No assignees to set (assigneeUserIDs is empty)\n")
-	}
-
-	// TODO: Execute transition actions (email, webhook, field updates)
-	// This would be implemented in a separate action executor service
-
-	// Fetch updated incident
-	updated, err := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
-	if err != nil {
-		return nil, err
 	}
 
 	// Create revision for state change
@@ -1061,6 +1211,32 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	}
 	description := fmt.Sprintf("Status changed from %s to %s", oldStateName, newStateName)
 	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionStatusChanged, description, changes, userID)
+
+	// Commit transaction
+	if err := tx.Commit().Error; err != nil {
+		return nil, err
+	}
+
+	// Broadcast state change to WebSocket subscribers
+	if s.wsHub != nil {
+		s.wsHub.BroadcastToIncident(incidentID, "state_changed", map[string]interface{}{
+			"incident_id":    incidentID,
+			"from_state":     oldStateName,
+			"to_state":       newStateName,
+			"transition_id":  transitionID,
+			"comment":        req.Comment,
+			"performed_by":   userID,
+		}, userID)
+	}
+
+	// TODO: Execute transition actions (email, webhook, field updates)
+	// This would be implemented in a separate action executor service
+
+	// Fetch updated incident (outside transaction)
+	updated, err := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
+	if err != nil {
+		return nil, err
+	}
 
 	resp := models.ToIncidentResponse(updated)
 	return &resp, nil

@@ -243,6 +243,9 @@ func Seed(db *gorm.DB) error {
 			Permissions: allPerms,
 		}
 		db.Create(&adminRole)
+	} else {
+		// Update existing admin role to have all permissions
+		db.Model(&adminRole).Association("Permissions").Replace(allPerms)
 	}
 
 	// User role with basic permissions
@@ -260,6 +263,11 @@ func Seed(db *gorm.DB) error {
 			Permissions: viewPerms,
 		}
 		db.Create(&userRole)
+	} else {
+		// Update existing user role to have all view permissions
+		var viewPerms []models.Permission
+		db.Where("action = ?", "view").Find(&viewPerms)
+		db.Model(&userRole).Association("Permissions").Replace(viewPerms)
 	}
 
 	// Manager role with broader permissions
@@ -277,6 +285,11 @@ func Seed(db *gorm.DB) error {
 			Permissions: managerPerms,
 		}
 		db.Create(&managerRole)
+	} else {
+		// Update existing manager role to have view, create, update permissions
+		var managerPerms []models.Permission
+		db.Where("action IN ?", []string{"view", "create", "update"}).Find(&managerPerms)
+		db.Model(&managerRole).Association("Permissions").Replace(managerPerms)
 	}
 
 	// Create default super admin user

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"log"
 	"strings"
 
 	"github.com/automax/backend/internal/database"
@@ -112,6 +113,8 @@ func (m *AuthMiddleware) RequirePermission(permissions ...string) fiber.Handler 
 			}
 		}
 
+		// Log permission denial for security monitoring
+		log.Printf("[Auth] Permission denied for user %s: required %v", user.Email, permissions)
 		return utils.ErrorResponse(c, fiber.StatusForbidden, "Insufficient permissions")
 	}
 }

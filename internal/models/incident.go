@@ -96,6 +96,7 @@ type Incident struct {
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	Version   int            `gorm:"default:1" json:"version"` // Optimistic lock field
 }
 
 func (i *Incident) BeforeCreate(tx *gorm.DB) error {
@@ -335,6 +336,7 @@ type IncidentUpdateRequest struct {
 	CustomFields       string                 `json:"custom_fields"`
 	LookupValueIDs     []string               `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
 	CustomLookupFields map[string]interface{} `json:"custom_lookup_fields"`
+	Version            int                    `json:"version" validate:"required,min=1"`
 }
 
 type IncidentTransitionRequest struct {
@@ -348,6 +350,7 @@ type IncidentTransitionRequest struct {
 	// Assignment overrides (used when auto-detect finds multiple matches)
 	DepartmentID *string `json:"department_id" validate:"omitempty,uuid"`
 	UserID       *string `json:"user_id" validate:"omitempty,uuid"`
+	Version      int     `json:"version" validate:"required,min=1"`
 }
 
 type IncidentFeedbackRequest struct {
@@ -493,6 +496,8 @@ type IncidentResponse struct {
 	CreatedAt        time.Time               `json:"created_at"`
 	UpdatedAt        time.Time               `json:"updated_at"`
 	LookupValues     []LookupValueResponse   `json:"lookup_values,omitempty"`
+	Version          int                     `json:"version"`
+	ActiveViewers    int                     `json:"active_viewers,omitempty"` // Number of users currently viewing this incident
 }
 
 type IncidentDetailResponse struct {
@@ -608,6 +613,7 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 		AttachmentsCount:   len(i.Attachments),
 		CreatedAt:          i.CreatedAt,
 		UpdatedAt:          i.UpdatedAt,
+		Version:            i.Version,
 	}
 
 	if i.SourceIncident != nil {
