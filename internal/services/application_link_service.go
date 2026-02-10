@@ -33,6 +33,7 @@ func (s *applicationLinkService) CreateLink(ctx context.Context, req *models.App
 		Description: req.Description,
 		URL:         req.URL,
 		Icon:        req.Icon,
+		ImageURL:    req.ImageURL,
 		Color:       req.Color,
 		SortOrder:   req.SortOrder,
 		IsActive:    req.IsActive,
@@ -110,6 +111,9 @@ func (s *applicationLinkService) UpdateLink(ctx context.Context, id uuid.UUID, r
 	}
 	if req.Icon != "" {
 		link.Icon = req.Icon
+	}
+	if req.ImageURL != "" {
+		link.ImageURL = req.ImageURL
 	}
 	if req.Color != "" {
 		link.Color = req.Color

@@ -107,7 +107,7 @@ func main() {
 	reportHandler := handlers.NewReportHandler(reportService)
 	reportTemplateHandler := handlers.NewReportTemplateHandler(reportTemplateService)
 	lookupHandler := handlers.NewLookupHandler(lookupRepo)
-	applicationLinkHandler := handlers.NewApplicationLinkHandler(applicationLinkService)
+	applicationLinkHandler := handlers.NewApplicationLinkHandler(applicationLinkService, minioStorage)
 	settingsHandler := handlers.NewSettingsHandler(settingsService)
 
 	// Initialize middleware
@@ -401,6 +401,7 @@ func main() {
 	appLinks.Get("/:id", authMiddleware.RequirePermission("application-links:view"), applicationLinkHandler.GetLink)
 	appLinks.Put("/:id", authMiddleware.RequirePermission("application-links:update"), applicationLinkHandler.UpdateLink)
 	appLinks.Delete("/:id", authMiddleware.RequirePermission("application-links:delete"), applicationLinkHandler.DeleteLink)
+	appLinks.Post("/:id/upload-image", authMiddleware.RequirePermission("application-links:update"), applicationLinkHandler.UploadImage)
 
 	// Public application links endpoint (active links only) - accessible to authenticated users
 	v1.Get("/application-links", authMiddleware.Authenticate(), applicationLinkHandler.ListActiveLinks)
