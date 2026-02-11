@@ -123,10 +123,11 @@ func (h *NotificationHandler) SendGridInboundWebhook(c *fiber.Ctx) error {
 		}
 
 		attachmentInfo = append(attachmentInfo, models.AttachmentInfo{
+			ID:          uuid.New().String(),
 			Filename:    att.Filename,
 			ContentType: att.ContentType,
 			Size:        int64(len(att.Data)),
-			URL:         objectName, // Store object path for later retrieval
+			StoragePath: objectName, // Store MinIO object path
 		})
 	}
 
@@ -306,10 +307,11 @@ func (h *NotificationHandler) Send(c *fiber.Ctx) error {
 			})
 
 			attachmentURLs = append(attachmentURLs, models.AttachmentInfo{
+				ID:          uuid.New().String(),
 				Filename:    fileHeader.Filename,
 				ContentType: contentType,
 				Size:        int64(len(data)),
-				URL:         objectName,
+				StoragePath: objectName,
 			})
 		}
 	}
@@ -796,17 +798,17 @@ func (h *NotificationHandler) DownloadAttachment(c *fiber.Ctx) error {
 	}
 
 	// Find the attachment with matching filename
-	var attachmentURL string
+	var storagePath string
 	var contentType string
 	for _, att := range notification.Attachments {
 		if att.Filename == filename {
-			attachmentURL = att.URL
+			storagePath = att.StoragePath
 			contentType = att.ContentType
 			break
 		}
 	}
 
-	if attachmentURL == "" {
+	if storagePath == "" {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Attachment not found")
 	}
 
@@ -815,7 +817,7 @@ func (h *NotificationHandler) DownloadAttachment(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Storage not configured")
 	}
 
-	fileReader, err := h.storage.GetFile(c.Context(), attachmentURL)
+	fileReader, err := h.storage.GetFile(c.Context(), storagePath)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Failed to retrieve attachment: "+err.Error())
 	}
@@ -858,15 +860,15 @@ func (h *NotificationHandler) GetAttachmentURL(c *fiber.Ctx) error {
 	}
 
 	// Find the attachment with matching filename
-	var attachmentURL string
+	var storagePath string
 	for _, att := range notification.Attachments {
 		if att.Filename == filename {
-			attachmentURL = att.URL
+			storagePath = att.StoragePath
 			break
 		}
 	}
 
-	if attachmentURL == "" {
+	if storagePath == "" {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Attachment not found")
 	}
 
@@ -875,7 +877,7 @@ func (h *NotificationHandler) GetAttachmentURL(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Storage not configured")
 	}
 
-	presignedURL, err := h.storage.GetFileURL(c.Context(), attachmentURL)
+	presignedURL, err := h.storage.GetFileURL(c.Context(), storagePath)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to generate download URL: "+err.Error())
 	}
@@ -887,4 +889,90 @@ func (h *NotificationHandler) GetAttachmentURL(c *fiber.Ctx) error {
 			"filename": filename,
 		},
 	})
+}
+
+// DownloadNotificationAttachmentByID handles GET /api/v1/attachments/:attachment_id
+// Downloads a notification attachment by its ID
+func (h *NotificationHandler) DownloadNotificationAttachmentByID(c *fiber.Ctx) error {
+	attachmentID := c.Params("attachment_id")
+	if attachmentID == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Attachment ID is required")
+	}
+
+	// Find the notification containing this attachment
+	_, attachment, err := h.service.FindNotificationByAttachmentID(c.Context(), attachmentID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Attachment not found")
+	}
+
+	if attachment.StoragePath == "" {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Attachment storage path not found")
+	}
+
+	// Download from MinIO
+	if h.storage == nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Storage not configured")
+	}
+
+	fileReader, err := h.storage.GetFile(c.Context(), attachment.StoragePath)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Failed to retrieve attachment: "+err.Error())
+	}
+	defer fileReader.Close()
+
+	// Read the file content
+	fileData, err := io.ReadAll(fileReader)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read attachment")
+	}
+
+	// Set appropriate headers for download
+	c.Set("Content-Type", attachment.ContentType)
+	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", attachment.Filename))
+	c.Set("Content-Length", fmt.Sprintf("%d", len(fileData)))
+
+	return c.Send(fileData)
+}
+
+// PreviewNotificationAttachmentByID handles GET /api/v1/attachments/:attachment_id/preview
+// Previews a notification attachment by its ID (inline display)
+func (h *NotificationHandler) PreviewNotificationAttachmentByID(c *fiber.Ctx) error {
+	attachmentID := c.Params("attachment_id")
+	if attachmentID == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Attachment ID is required")
+	}
+
+	// Find the notification containing this attachment
+	_, attachment, err := h.service.FindNotificationByAttachmentID(c.Context(), attachmentID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Attachment not found")
+	}
+
+	if attachment.StoragePath == "" {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Attachment storage path not found")
+	}
+
+	// Download from MinIO
+	if h.storage == nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Storage not configured")
+	}
+
+	fileReader, err := h.storage.GetFile(c.Context(), attachment.StoragePath)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Failed to retrieve attachment: "+err.Error())
+	}
+	defer fileReader.Close()
+
+	// Read the file content
+	fileData, err := io.ReadAll(fileReader)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read attachment")
+	}
+
+	// Set appropriate headers for inline preview
+	c.Set("Content-Type", attachment.ContentType)
+	c.Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", attachment.Filename))
+	c.Set("Content-Length", fmt.Sprintf("%d", len(fileData)))
+
+	return c.Send(fileData)
 }

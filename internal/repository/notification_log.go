@@ -11,6 +11,7 @@ import (
 type NotificationLogRepository interface {
 	Create(ctx context.Context, log *models.NotificationLog) error
 	FindByID(ctx context.Context, id uuid.UUID) (*models.NotificationLog, error)
+	FindByAttachmentID(ctx context.Context, attachmentID string) ([]*models.NotificationLog, error)
 	List(ctx context.Context, filter *models.NotificationLogFilter) ([]models.NotificationLog, int64, error)
 	Update(ctx context.Context, log *models.NotificationLog) error
 	Delete(ctx context.Context, id uuid.UUID) error
@@ -43,6 +44,18 @@ func (r *notificationLogRepository) FindByID(ctx context.Context, id uuid.UUID) 
 		return nil, err
 	}
 	return &log, nil
+}
+
+func (r *notificationLogRepository) FindByAttachmentID(ctx context.Context, attachmentID string) ([]*models.NotificationLog, error) {
+	var logs []*models.NotificationLog
+	// Query JSONB field for attachment with matching ID
+	err := r.db.WithContext(ctx).
+		Where("attachments @> ?", `[{"id":"`+attachmentID+`"}]`).
+		Find(&logs).Error
+	if err != nil {
+		return nil, err
+	}
+	return logs, nil
 }
 
 func (r *notificationLogRepository) List(ctx context.Context, filter *models.NotificationLogFilter) ([]models.NotificationLog, int64, error) {

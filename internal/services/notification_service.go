@@ -195,6 +195,27 @@ func (s *NotificationService) GetNotification(ctx context.Context, id uuid.UUID)
 	return &response, nil
 }
 
+// FindNotificationByAttachmentID finds a notification and attachment by attachment ID
+func (s *NotificationService) FindNotificationByAttachmentID(ctx context.Context, attachmentID string) (*models.NotificationLog, *models.AttachmentInfo, error) {
+	// Get all notifications that have attachments (this is a simple implementation)
+	// For better performance, consider adding an index on attachments JSONB field
+	notifications, err := s.logRepo.FindByAttachmentID(ctx, attachmentID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("attachment not found: %v", err)
+	}
+
+	// Find the specific attachment within the notification
+	for _, notification := range notifications {
+		for _, att := range notification.Attachments {
+			if att.ID == attachmentID {
+				return notification, &att, nil
+			}
+		}
+	}
+
+	return nil, nil, fmt.Errorf("attachment not found")
+}
+
 // DeleteNotification soft deletes a notification (moves to trash)
 func (s *NotificationService) DeleteNotification(ctx context.Context, id uuid.UUID) error {
 	// Move to trash instead of hard delete

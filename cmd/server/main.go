@@ -110,6 +110,7 @@ func main() {
 	lookupHandler := handlers.NewLookupHandler(lookupRepo)
 	notificationHandler := handlers.NewNotificationHandler(notificationService, minioStorage)
 	templateHandler := handlers.NewNotificationTemplateHandler(notificationTemplateRepo)
+	attachmentHandler := handlers.NewAttachmentHandler(incidentService, notificationService, minioStorage)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore, userRepo)
@@ -184,9 +185,10 @@ func main() {
 	incidents.Put("/:id/assign", authMiddleware.RequirePermission("incidents:assign"), incidentHandler.AssignIncident)
 	incidents.Get("/:id/revisions", authMiddleware.RequirePermission("incidents:view"), incidentHandler.ListRevisions)
 
-	// Attachment download route
+	// Attachment download route (unified for incidents and notifications)
 	attachments := v1.Group("/attachments", authMiddleware.Authenticate())
-	attachments.Get("/:attachment_id", incidentHandler.DownloadAttachment)
+	attachments.Get("/:attachment_id", attachmentHandler.DownloadAttachment)
+	attachments.Get("/:attachment_id/preview", attachmentHandler.PreviewAttachment)
 
 	// Complaint routes (authenticated users)
 	complaints := v1.Group("/complaints", authMiddleware.Authenticate())

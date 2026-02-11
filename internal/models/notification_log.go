@@ -75,10 +75,13 @@ func (r *RecipientArray) Scan(value interface{}) error {
 
 // AttachmentInfo stores attachment metadata
 type AttachmentInfo struct {
+	ID          string `json:"id,omitempty"`      // UUID for attachment
 	Filename    string `json:"filename"`
 	ContentType string `json:"content_type"`
 	Size        int64  `json:"size"`
-	URL         string `json:"url,omitempty"` // If stored externally
+	URL         string `json:"url,omitempty"`         // API URL for download
+	PreviewURL  string `json:"preview_url,omitempty"` // API URL for preview
+	StoragePath string `json:"storage_path,omitempty"` // Internal MinIO path (not exposed in response)
 }
 
 // AttachmentArray is a custom type for storing attachments as JSONB
@@ -227,6 +230,20 @@ type NotificationLogFilter struct {
 
 // ToNotificationLogResponse converts NotificationLog to response
 func ToNotificationLogResponse(log *NotificationLog) NotificationLogResponse {
+	// Transform attachments to include API URLs
+	responseAttachments := make([]AttachmentInfo, len(log.Attachments))
+	for i, att := range log.Attachments {
+		responseAttachments[i] = AttachmentInfo{
+			ID:          att.ID,
+			Filename:    att.Filename,
+			ContentType: att.ContentType,
+			Size:        att.Size,
+			URL:         fmt.Sprintf("/api/v1/attachments/%s", att.ID),
+			PreviewURL:  fmt.Sprintf("/api/v1/attachments/%s/preview", att.ID),
+			// Don't expose StoragePath in response
+		}
+	}
+
 	return NotificationLogResponse{
 		ID:           log.ID,
 		Channel:      log.Channel,
@@ -244,7 +261,7 @@ func ToNotificationLogResponse(log *NotificationLog) NotificationLogResponse {
 		Status:       log.Status,
 		Provider:     log.Provider,
 		ErrorMessage: log.ErrorMessage,
-		Attachments:  log.Attachments,
+		Attachments:  responseAttachments,
 		IsRead:       log.IsRead,
 		IsStarred:    log.IsStarred,
 		ThreadID:     log.ThreadID,
