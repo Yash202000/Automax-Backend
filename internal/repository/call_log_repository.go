@@ -157,6 +157,7 @@ func (r *callLogRepository) FindByUserID(ctx context.Context, userID uuid.UUID, 
 	// Apply pagination
 	offset := (page - 1) * limit
 	err := query.
+		Preload("Creator").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(limit).
