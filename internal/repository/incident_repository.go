@@ -918,6 +918,11 @@ func (r *incidentRepository) WithTx(tx *gorm.DB) IncidentRepository {
 func (r *incidentRepository) LockForUpdate(ctx context.Context, tx *gorm.DB, id uuid.UUID) (*models.Incident, error) {
 	var incident models.Incident
 
+	// Set lock timeout to 10 seconds to prevent indefinite waiting
+	if err := tx.Exec("SET LOCAL lock_timeout = '10s'").Error; err != nil {
+		return nil, err
+	}
+
 	err := tx.WithContext(ctx).
 		Clauses(clause.Locking{Strength: "UPDATE"}).
 		Preload("Classification").

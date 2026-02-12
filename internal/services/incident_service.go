@@ -893,7 +893,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	incident, err := txRepo.LockForUpdate(ctx, tx, incidentID)
 	if err != nil {
 		tx.Rollback()
-		return nil, errors.New("incident not found")
+		return nil, errors.New("incident not found or locked by another transaction")
 	}
 
 	// Verify version still matches (double-check optimistic lock)
@@ -1068,93 +1068,58 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	// Handle user assignment from transition settings
 	var assigneeUserIDs []uuid.UUID
 
-	fmt.Printf("[DEBUG] === USER ASSIGNMENT START ===\n")
-	fmt.Printf("[DEBUG] Transition: %s (ID: %s)\n", transition.Name, transition.ID)
-	fmt.Printf("[DEBUG] AssignUserID: %v\n", transition.AssignUserID)
-	fmt.Printf("[DEBUG] ManualSelectUser: %v\n", transition.ManualSelectUser)
-	fmt.Printf("[DEBUG] AutoMatchUser: %v\n", transition.AutoMatchUser)
-	fmt.Printf("[DEBUG] AssignmentRoleID: %v\n", transition.AssignmentRoleID)
-
 	if transition.AssignUserID != nil {
 		// Static user assignment - single user
-		fmt.Printf("[DEBUG] Using STATIC user assignment: %s\n", *transition.AssignUserID)
 		updates["assignee_id"] = *transition.AssignUserID
 		assigneeUserIDs = append(assigneeUserIDs, *transition.AssignUserID)
 	} else if transition.ManualSelectUser && transition.AssignmentRoleID != nil {
 		// Manual selection mode - user must select from dropdown
-		fmt.Printf("[DEBUG] Using MANUAL SELECT mode\n")
 		if req.UserID != nil && *req.UserID != "" {
-			fmt.Printf("[DEBUG] User selected: %s\n", *req.UserID)
 			userAssignID, err := uuid.Parse(*req.UserID)
 			if err == nil {
 				updates["assignee_id"] = userAssignID
 				assigneeUserIDs = append(assigneeUserIDs, userAssignID)
 			}
-		} else {
-			fmt.Printf("[DEBUG] No user selected in manual mode\n")
 		}
 		// If no user selected, keep current assignee (don't fail the transition)
 	} else if transition.AutoMatchUser && transition.AssignmentRoleID != nil {
 		// Auto-match mode - find ALL matching users and assign to all of them
-		fmt.Printf("[DEBUG] Using AUTO MATCH mode with role: %s\n", *transition.AssignmentRoleID)
 		var classificationID, locationID, departmentID, excludeUserID *uuid.UUID
 		if incident.ClassificationID != nil {
 			classificationID = incident.ClassificationID
-			fmt.Printf("[DEBUG] ClassificationID: %s\n", *classificationID)
 		}
 		if incident.LocationID != nil {
 			locationID = incident.LocationID
-			fmt.Printf("[DEBUG] LocationID: %s\n", *locationID)
 		}
 		if incident.DepartmentID != nil {
 			departmentID = incident.DepartmentID
-			fmt.Printf("[DEBUG] DepartmentID: %s\n", *departmentID)
 		}
 		if incident.AssigneeID != nil {
 			excludeUserID = incident.AssigneeID
-			fmt.Printf("[DEBUG] ExcludeUserID (current assignee): %s\n", *excludeUserID)
 		}
 
 		// First try matching with all criteria
-		fmt.Printf("[DEBUG] Calling FindMatching with all criteria...\n")
 		matchedUsers, err := s.userRepo.FindMatching(ctx, transition.AssignmentRoleID, classificationID, locationID, departmentID, excludeUserID)
-		fmt.Printf("[DEBUG] FindMatching result: %d users, error: %v\n", len(matchedUsers), err)
 		if err == nil && len(matchedUsers) > 0 {
 			// Assign ALL matched users
-			fmt.Printf("[DEBUG] Found %d matching users with full criteria:\n", len(matchedUsers))
 			for _, user := range matchedUsers {
-				fmt.Printf("[DEBUG]   - %s (%s)\n", user.Username, user.ID)
 				assigneeUserIDs = append(assigneeUserIDs, user.ID)
 			}
 			// Set primary assignee to first matched user
 			updates["assignee_id"] = matchedUsers[0].ID
-			fmt.Printf("[DEBUG] Primary assignee set to: %s\n", matchedUsers[0].Username)
 		} else if err == nil && len(matchedUsers) == 0 {
 			// No exact matches - try matching by role only (more permissive)
-			fmt.Printf("[DEBUG] No exact matches, trying role-only match...\n")
 			roleOnlyUsers, roleErr := s.userRepo.FindMatching(ctx, transition.AssignmentRoleID, nil, nil, nil, excludeUserID)
-			fmt.Printf("[DEBUG] Role-only match result: %d users, error: %v\n", len(roleOnlyUsers), roleErr)
 			if roleErr == nil && len(roleOnlyUsers) > 0 {
 				// Assign ALL users with that role
-				fmt.Printf("[DEBUG] Found %d users with role only:\n", len(roleOnlyUsers))
 				for _, user := range roleOnlyUsers {
-					fmt.Printf("[DEBUG]   - %s (%s)\n", user.Username, user.ID)
 					assigneeUserIDs = append(assigneeUserIDs, user.ID)
 				}
 				// Set primary assignee to first matched user
 				updates["assignee_id"] = roleOnlyUsers[0].ID
-				fmt.Printf("[DEBUG] Primary assignee set to: %s\n", roleOnlyUsers[0].Username)
-			} else {
-				fmt.Printf("[DEBUG] No users found even with role-only match\n")
 			}
-		} else if err != nil {
-			fmt.Printf("[DEBUG] Error in FindMatching: %v\n", err)
 		}
-	} else {
-		fmt.Printf("[DEBUG] No assignment mode matched - skipping user assignment\n")
 	}
-	fmt.Printf("[DEBUG] Final assigneeUserIDs: %v\n", assigneeUserIDs)
-	fmt.Printf("[DEBUG] === USER ASSIGNMENT END ===\n")
 
 	// Update SLA deadline based on new state
 	if newState.SLAHours != nil && *newState.SLAHours > 0 {
@@ -1173,32 +1138,23 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	}
 
 	// Apply all updates using optimistic locking with version
-	fmt.Printf("[DEBUG] Applying updates: %+v\n", updates)
 	if err := txRepo.UpdateFieldsWithVersion(ctx, incidentID, updates, req.Version); err != nil {
 		tx.Rollback()
-		fmt.Printf("[DEBUG] ERROR in UpdateFieldsWithVersion: %v\n", err)
 		if err == repository.ErrVersionMismatch {
 			return nil, fmt.Errorf("conflict: incident was modified by another user")
 		}
 		return nil, err
 	}
-	fmt.Printf("[DEBUG] UpdateFieldsWithVersion successful\n")
 
 	// Set multiple assignees if applicable
-	fmt.Printf("[DEBUG] Setting multiple assignees, count: %d\n", len(assigneeUserIDs))
 	if len(assigneeUserIDs) > 0 {
-		fmt.Printf("[DEBUG] Calling SetAssignees with IDs: %v\n", assigneeUserIDs)
 		if err := txRepo.SetAssignees(ctx, incidentID, assigneeUserIDs); err != nil {
 			// Log error but don't fail the transition
-			fmt.Printf("[DEBUG] ERROR in SetAssignees: %v\n", err)
-		} else {
-			fmt.Printf("[DEBUG] SetAssignees successful\n")
+			fmt.Printf("Warning: failed to set assignees: %v\n", err)
 		}
-	} else {
-		fmt.Printf("[DEBUG] No assignees to set (assigneeUserIDs is empty)\n")
 	}
 
-	// Create revision for state change
+	// Prepare revision data (but don't create yet - wait until after commit)
 	oldStateName := transition.FromState.Name
 	newStateName := newState.Name
 	changes := []models.IncidentFieldChange{
@@ -1209,12 +1165,17 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			NewValue:   &newStateName,
 		},
 	}
-	description := fmt.Sprintf("Status changed from %s to %s", oldStateName, newStateName)
-	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionStatusChanged, description, changes, userID)
+	revisionDescription := fmt.Sprintf("Status changed from %s to %s", oldStateName, newStateName)
 
-	// Commit transaction
+	// Commit transaction FIRST before creating revision
 	if err := tx.Commit().Error; err != nil {
 		return nil, err
+	}
+
+	// Create revision AFTER transaction commits (to avoid deadlock)
+	if err := s.CreateRevision(ctx, incidentID, models.RevisionActionStatusChanged, revisionDescription, changes, userID); err != nil {
+		// Don't fail the transition if revision creation fails
+		fmt.Printf("Warning: failed to create revision: %v\n", err)
 	}
 
 	// Broadcast state change to WebSocket subscribers
