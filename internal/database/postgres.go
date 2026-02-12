@@ -56,6 +56,8 @@ func Migrate(db *gorm.DB) error {
 		&models.User{},
 		&models.ActionLog{},
 		&models.CallLog{},
+		&models.NotificationTemplate{},
+		&models.NotificationLog{},
 		// Lookup models
 		&models.LookupCategory{},
 		&models.LookupValue{},
@@ -206,6 +208,17 @@ func Seed(db *gorm.DB) error {
 		{Name: "Create Application Links", Code: "application-links:create", Module: "application-links", Action: "create", Description: "Create application links"},
 		{Name: "Update Application Links", Code: "application-links:update", Module: "application-links", Action: "update", Description: "Update application links"},
 		{Name: "Delete Application Links", Code: "application-links:delete", Module: "application-links", Action: "delete", Description: "Delete application links"},
+
+		// Notification permissions
+		{Name: "View Notifications", Code: "notifications:read", Module: "notifications", Action: "read", Description: "View notification logs"},
+		{Name: "Send Notifications", Code: "notifications:send", Module: "notifications", Action: "send", Description: "Send email/SMS notifications"},
+		{Name: "Delete Notifications", Code: "notifications:delete", Module: "notifications", Action: "delete", Description: "Delete notification logs"},
+
+		// Template permissions
+		{Name: "View Templates", Code: "templates:read", Module: "templates", Action: "read", Description: "View notification templates"},
+		{Name: "Create Templates", Code: "templates:create", Module: "templates", Action: "create", Description: "Create notification templates"},
+		{Name: "Update Templates", Code: "templates:update", Module: "templates", Action: "update", Description: "Update notification templates"},
+		{Name: "Delete Templates", Code: "templates:delete", Module: "templates", Action: "delete", Description: "Delete notification templates"},
 
 		// Dashboard permissions
 		{Name: "Admin Dashboard", Code: "dashboard:admin", Module: "dashboard", Action: "admin", Description: "Access admin section cards on dashboard"},
