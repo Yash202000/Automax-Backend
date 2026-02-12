@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/models"
@@ -77,6 +78,90 @@ func NewWorkflowService(repo repository.WorkflowRepository, roleRepo repository.
 	}
 }
 
+// checkForDuplicateRules checks if another workflow already has the same matching rules
+// Returns (isConflict bool, conflictingWorkflowName string, error)
+func (s *workflowService) checkForDuplicateRules(
+	ctx context.Context,
+	recordType string,
+	classificationIDs []uuid.UUID,
+	locationIDs []uuid.UUID,
+	isDefault bool,
+	excludeWorkflowID *uuid.UUID,
+) (bool, string, error) {
+	// Get all workflows that could potentially conflict
+	existingWorkflows, err := s.repo.FindWorkflowsByRecordTypeAndClassifications(
+		ctx,
+		recordType,
+		classificationIDs,
+		locationIDs,
+		excludeWorkflowID,
+	)
+	if err != nil {
+		return false, "", err
+	}
+
+	// Build sets for classification and location IDs for comparison
+	newClassIDSet := make(map[uuid.UUID]bool)
+	for _, id := range classificationIDs {
+		newClassIDSet[id] = true
+	}
+
+	newLocIDSet := make(map[uuid.UUID]bool)
+	for _, id := range locationIDs {
+		newLocIDSet[id] = true
+	}
+
+	for _, existingWf := range existingWorkflows {
+		// Case 1: Both workflows are default with no classifications and no locations (generic fallback conflict)
+		if isDefault && existingWf.IsDefault &&
+			len(classificationIDs) == 0 && len(existingWf.Classifications) == 0 &&
+			len(locationIDs) == 0 && len(existingWf.Locations) == 0 {
+			return true, existingWf.Name, nil
+		}
+
+		// Case 2: Exact classification AND location match
+		classificationsMatch := len(classificationIDs) == len(existingWf.Classifications)
+		locationsMatch := len(locationIDs) == len(existingWf.Locations)
+
+		if classificationsMatch && locationsMatch {
+			// Check classifications
+			existingClassIDSet := make(map[uuid.UUID]bool)
+			for _, c := range existingWf.Classifications {
+				existingClassIDSet[c.ID] = true
+			}
+
+			allClassMatch := true
+			for id := range newClassIDSet {
+				if !existingClassIDSet[id] {
+					allClassMatch = false
+					break
+				}
+			}
+
+			// Check locations
+			existingLocIDSet := make(map[uuid.UUID]bool)
+			for _, loc := range existingWf.Locations {
+				existingLocIDSet[loc.ID] = true
+			}
+
+			allLocMatch := true
+			for id := range newLocIDSet {
+				if !existingLocIDSet[id] {
+					allLocMatch = false
+					break
+				}
+			}
+
+			// Both must match for a conflict
+			if allClassMatch && allLocMatch {
+				return true, existingWf.Name, nil
+			}
+		}
+	}
+
+	return false, "", nil
+}
+
 // Workflow CRUD
 
 func (s *workflowService) CreateWorkflow(ctx context.Context, req *models.WorkflowCreateRequest, createdByID uuid.UUID) (*models.WorkflowResponse, error) {
@@ -94,6 +179,43 @@ func (s *workflowService) CreateWorkflow(ctx context.Context, req *models.Workfl
 		recordType = req.RecordType
 	}
 
+	// Parse classification IDs (if provided - usually configured later in designer)
+	var classificationIDs []uuid.UUID
+	for _, idStr := range req.ClassificationIDs {
+		id, err := uuid.Parse(idStr)
+		if err == nil {
+			classificationIDs = append(classificationIDs, id)
+		}
+	}
+
+	// Parse location IDs (if provided - usually configured later in designer)
+	var locationIDs []uuid.UUID
+	for _, idStr := range req.LocationIDs {
+		id, err := uuid.Parse(idStr)
+		if err == nil {
+			locationIDs = append(locationIDs, id)
+		}
+	}
+
+	// Only check for duplicate rules if classifications or locations are provided
+	// Typically, workflows are created empty and configured later in the designer
+	if len(classificationIDs) > 0 || len(locationIDs) > 0 {
+		isConflict, conflictingName, err := s.checkForDuplicateRules(
+			ctx,
+			recordType,
+			classificationIDs,
+			locationIDs,
+			false, // New workflows aren't default by default
+			nil,   // No exclusion needed for new workflows
+		)
+		if err != nil {
+			return nil, err
+		}
+		if isConflict {
+			return nil, fmt.Errorf("workflow rules conflict: these rules are already in use by workflow '%s'", conflictingName)
+		}
+	}
+
 	workflow := &models.Workflow{
 		Name:           req.Name,
 		Code:           req.Code,
@@ -106,28 +228,40 @@ func (s *workflowService) CreateWorkflow(ctx context.Context, req *models.Workfl
 	}
 
 	if err := s.repo.Create(ctx, workflow); err != nil {
+		// Check for unique constraint violations
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
+			if strings.Contains(err.Error(), "idx_workflows_name") {
+				return nil, fmt.Errorf("a workflow with this name already exists")
+			}
+			if strings.Contains(err.Error(), "idx_workflows_code") {
+				return nil, fmt.Errorf("a workflow with this code already exists")
+			}
+		}
 		return nil, err
 	}
 
-	// Assign classifications if provided
-	if len(req.ClassificationIDs) > 0 {
-		classIDs := make([]uuid.UUID, len(req.ClassificationIDs))
-		for i, idStr := range req.ClassificationIDs {
-			id, err := uuid.Parse(idStr)
-			if err != nil {
-				continue
-			}
-			classIDs[i] = id
-		}
-		if err := s.repo.AssignClassifications(ctx, workflow.ID, classIDs); err != nil {
+	// Assign classifications if provided (optional at creation time)
+	if len(classificationIDs) > 0 {
+		if err := s.repo.AssignClassifications(ctx, workflow.ID, classificationIDs); err != nil {
 			// Log error but don't fail the workflow creation
 		}
 	}
 
-	// Fetch with relations
+	// Assign locations if provided (optional at creation time)
+	if len(locationIDs) > 0 {
+		if err := s.repo.AssignLocations(ctx, workflow.ID, locationIDs); err != nil {
+			// Log error but don't fail the workflow creation
+		}
+	}
+
+	// Fetch with relations (if FindByIDWithRelations fails due to missing table, use FindByID temporarily)
 	created, err := s.repo.FindByIDWithRelations(ctx, workflow.ID)
 	if err != nil {
-		return nil, err
+		// Fallback: try without relations if migration hasn't run yet
+		created, err = s.repo.FindByID(ctx, workflow.ID)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	resp := models.ToWorkflowResponse(created)
@@ -173,11 +307,72 @@ func (s *workflowService) ListWorkflowsByRecordType(ctx context.Context, recordT
 }
 
 func (s *workflowService) UpdateWorkflow(ctx context.Context, id uuid.UUID, req *models.WorkflowUpdateRequest) (*models.WorkflowResponse, error) {
-	workflow, err := s.repo.FindByID(ctx, id)
+	// Fetch existing workflow with relations
+	workflow, err := s.repo.FindByIDWithRelations(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
+	// Determine the final state after updates
+	finalRecordType := workflow.RecordType
+	if req.RecordType != nil && *req.RecordType != "" {
+		finalRecordType = *req.RecordType
+	}
+
+	finalIsDefault := workflow.IsDefault
+	if req.IsDefault != nil {
+		finalIsDefault = *req.IsDefault
+	}
+
+	// Parse classification IDs from request or use existing
+	var finalClassificationIDs []uuid.UUID
+	if req.ClassificationIDs != nil {
+		for _, idStr := range req.ClassificationIDs {
+			id, err := uuid.Parse(idStr)
+			if err == nil {
+				finalClassificationIDs = append(finalClassificationIDs, id)
+			}
+		}
+	} else {
+		// Use existing classifications
+		for _, c := range workflow.Classifications {
+			finalClassificationIDs = append(finalClassificationIDs, c.ID)
+		}
+	}
+
+	// Parse location IDs from request or use existing
+	var finalLocationIDs []uuid.UUID
+	if req.LocationIDs != nil {
+		for _, idStr := range req.LocationIDs {
+			id, err := uuid.Parse(idStr)
+			if err == nil {
+				finalLocationIDs = append(finalLocationIDs, id)
+			}
+		}
+	} else {
+		// Use existing locations
+		for _, loc := range workflow.Locations {
+			finalLocationIDs = append(finalLocationIDs, loc.ID)
+		}
+	}
+
+	// Check for duplicate rules with the final state, excluding this workflow
+	isConflict, conflictingName, err := s.checkForDuplicateRules(
+		ctx,
+		finalRecordType,
+		finalClassificationIDs,
+		finalLocationIDs,
+		finalIsDefault,
+		&id, // Exclude this workflow from conflict check
+	)
+	if err != nil {
+		return nil, err
+	}
+	if isConflict {
+		return nil, fmt.Errorf("workflow rules conflict: these rules are already in use by workflow '%s'", conflictingName)
+	}
+
+	// Apply updates
 	if req.Name != "" {
 		workflow.Name = req.Name
 	}
@@ -213,15 +408,14 @@ func (s *workflowService) UpdateWorkflow(ctx context.Context, id uuid.UUID, req 
 
 	// Update classifications if provided
 	if req.ClassificationIDs != nil {
-		classIDs := make([]uuid.UUID, 0, len(req.ClassificationIDs))
-		for _, idStr := range req.ClassificationIDs {
-			id, err := uuid.Parse(idStr)
-			if err != nil {
-				continue
-			}
-			classIDs = append(classIDs, id)
+		if err := s.repo.AssignClassifications(ctx, workflow.ID, finalClassificationIDs); err != nil {
+			return nil, err
 		}
-		if err := s.repo.AssignClassifications(ctx, workflow.ID, classIDs); err != nil {
+	}
+
+	// Update locations if provided
+	if req.LocationIDs != nil {
+		if err := s.repo.AssignLocations(ctx, workflow.ID, finalLocationIDs); err != nil {
 			return nil, err
 		}
 	}
@@ -832,7 +1026,6 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 		{Field: "description", Label: "Description", Description: "Detailed incident description", IsRequired: false},
 		{Field: "classification_id", Label: "Classification", Description: "Incident category/type", IsRequired: false},
 		{Field: "priority", Label: "Priority", Description: "Urgency level", IsRequired: false},
-		{Field: "severity", Label: "Severity", Description: "Impact level", IsRequired: false},
 		{Field: "source", Label: "Source", Description: "Where the incident originated", IsRequired: false},
 		{Field: "assignee_id", Label: "Assignee", Description: "User assigned to handle", IsRequired: false},
 		{Field: "department_id", Label: "Department", Description: "Responsible department", IsRequired: false},

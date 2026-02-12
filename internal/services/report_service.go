@@ -575,7 +575,7 @@ func formatValue(v interface{}) string {
 	}
 }
 
-// formatExportValue formats a value for export, handling enums like priority/severity
+// formatExportValue formats a value for export, handling enums like priority
 func formatExportValue(col string, v interface{}) string {
 	if v == nil {
 		return ""
@@ -590,18 +590,6 @@ func formatExportValue(col string, v interface{}) string {
 			return getPriorityLabel(val)
 		case int64:
 			return getPriorityLabel(int(val))
-		}
-	}
-
-	// Handle severity enum
-	if col == "severity" {
-		switch val := v.(type) {
-		case float64:
-			return getSeverityLabel(int(val))
-		case int:
-			return getSeverityLabel(val)
-		case int64:
-			return getSeverityLabel(int(val))
 		}
 	}
 
@@ -636,23 +624,6 @@ func getPriorityLabel(priority int) string {
 	}
 }
 
-func getSeverityLabel(severity int) string {
-	switch severity {
-	case 1:
-		return "Critical"
-	case 2:
-		return "Major"
-	case 3:
-		return "Moderate"
-	case 4:
-		return "Minor"
-	case 5:
-		return "Trivial"
-	default:
-		return strconv.Itoa(severity)
-	}
-}
-
 func (s *reportService) GetExecutionHistory(ctx context.Context, reportID uuid.UUID, page, limit int) ([]models.ReportExecutionResponse, int64, error) {
 	executions, total, err := s.reportRepo.ListExecutions(ctx, reportID, page, limit)
 	if err != nil {
@@ -679,7 +650,6 @@ func (s *reportService) GetDataSources(ctx context.Context) []models.DataSourceI
 				{Field: "title", Label: "Title", Type: "string", Filterable: true, Sortable: true},
 				{Field: "description", Label: "Description", Type: "string", Filterable: true, Sortable: false},
 				{Field: "priority", Label: "Priority", Type: "number", Filterable: true, Sortable: true},
-				{Field: "severity", Label: "Severity", Type: "number", Filterable: true, Sortable: true},
 				{Field: "current_state_name", Label: "Status", Type: "string", Filterable: true, Sortable: true},
 				{Field: "classification_name", Label: "Classification", Type: "string", Filterable: true, Sortable: true},
 				{Field: "department_name", Label: "Department", Type: "string", Filterable: true, Sortable: true},

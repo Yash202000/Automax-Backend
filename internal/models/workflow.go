@@ -17,19 +17,20 @@ type Workflow struct {
 	Version     int                `gorm:"default:1" json:"version"`
 	IsActive    bool               `gorm:"default:true" json:"is_active"`
 	IsDefault   bool               `gorm:"default:false" json:"is_default"`
-	RecordType  string             `gorm:"size:20;default:'incident'" json:"record_type"` // 'incident', 'request', 'complaint', 'both', 'all'
+	RecordType  string             `gorm:"size:20;default:'incident'" json:"record_type"` // 'incident', 'request', 'complaint', 'query', 'both', 'all'
 
 	// Visual designer metadata (stores canvas layout as JSON)
 	CanvasLayout string `gorm:"type:text" json:"canvas_layout"`
 
 	// Form configuration - stores which fields are required (JSON array of field names)
-	// e.g., ["description", "classification_id", "priority", "severity", "assignee_id", "department_id", "location_id", "due_date", "reporter_name", "reporter_email", "source"]
+	// e.g., ["description", "classification_id", "priority", "assignee_id", "department_id", "location_id", "due_date", "reporter_name", "reporter_email", "source"]
 	RequiredFields string `gorm:"type:text" json:"required_fields"`
 
 	// Relationships
 	States          []WorkflowState      `gorm:"foreignKey:WorkflowID" json:"states,omitempty"`
 	Transitions     []WorkflowTransition `gorm:"foreignKey:WorkflowID" json:"transitions,omitempty"`
 	Classifications []Classification     `gorm:"many2many:workflow_classifications;" json:"classifications,omitempty"`
+	Locations       []Location           `gorm:"many2many:workflow_locations;" json:"locations,omitempty"`
 
 	// Role-based convert-to-request permission (many-to-many) - empty = all users can convert
 	ConvertToRequestRoles []Role `gorm:"many2many:workflow_convert_to_request_roles;" json:"convert_to_request_roles,omitempty"`
@@ -194,8 +195,9 @@ type WorkflowCreateRequest struct {
 	Name              string   `json:"name" validate:"required,min=2,max=100"`
 	Code              string   `json:"code" validate:"required,min=2,max=50"`
 	Description       string   `json:"description" validate:"max=500"`
-	RecordType        string   `json:"record_type" validate:"omitempty,oneof=incident request complaint both all"`
+	RecordType        string   `json:"record_type" validate:"omitempty,oneof=incident request complaint query both all"`
 	ClassificationIDs []string `json:"classification_ids"`
+	LocationIDs       []string `json:"location_ids"`
 	RequiredFields    []string `json:"required_fields"`
 }
 
@@ -203,11 +205,12 @@ type WorkflowUpdateRequest struct {
 	Name                    string   `json:"name" validate:"omitempty,min=2,max=100"`
 	Code                    string   `json:"code" validate:"omitempty,min=2,max=50"`
 	Description             string   `json:"description" validate:"max=500"`
-	RecordType              *string  `json:"record_type" validate:"omitempty,oneof=incident request complaint both all"`
+	RecordType              *string  `json:"record_type" validate:"omitempty,oneof=incident request complaint query both all"`
 	IsActive                *bool    `json:"is_active"`
 	IsDefault               *bool    `json:"is_default"`
 	CanvasLayout            string   `json:"canvas_layout"`
 	ClassificationIDs       []string `json:"classification_ids"`
+	LocationIDs             []string `json:"location_ids"`
 	RequiredFields          []string `json:"required_fields"`
 	ConvertToRequestRoleIDs []string `json:"convert_to_request_role_ids"`
 }
@@ -303,7 +306,6 @@ type WorkflowMatchRequest struct {
 	ClassificationID string `json:"classification_id"`
 	LocationID       string `json:"location_id"`
 	Source           string `json:"source"`
-	Severity         int    `json:"severity"`
 	Priority         int    `json:"priority"`
 }
 
@@ -343,6 +345,7 @@ type WorkflowResponse struct {
 	States                []WorkflowStateResponse      `json:"states,omitempty"`
 	Transitions           []WorkflowTransitionResponse `json:"transitions,omitempty"`
 	Classifications       []ClassificationResponse     `json:"classifications,omitempty"`
+	Locations             []LocationResponse           `json:"locations,omitempty"`
 	ConvertToRequestRoles []RoleResponse               `json:"convert_to_request_roles,omitempty"`
 	StatesCount           int                          `json:"states_count"`
 	TransitionsCount      int                          `json:"transitions_count"`
@@ -474,6 +477,13 @@ func ToWorkflowResponse(w *Workflow) WorkflowResponse {
 		resp.Classifications = make([]ClassificationResponse, len(w.Classifications))
 		for i, c := range w.Classifications {
 			resp.Classifications[i] = ToClassificationResponse(&c)
+		}
+	}
+
+	if len(w.Locations) > 0 {
+		resp.Locations = make([]LocationResponse, len(w.Locations))
+		for i, loc := range w.Locations {
+			resp.Locations[i] = ToLocationResponse(&loc)
 		}
 	}
 

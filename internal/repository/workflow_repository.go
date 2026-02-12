@@ -27,6 +27,12 @@ type WorkflowRepository interface {
 	GetByClassificationID(ctx context.Context, classificationID uuid.UUID) (*models.Workflow, error)
 	GetDefaultWorkflow(ctx context.Context) (*models.Workflow, error)
 
+	// Workflow-Location assignments
+	AssignLocations(ctx context.Context, workflowID uuid.UUID, locationIDs []uuid.UUID) error
+
+	// Duplicate rule detection
+	FindWorkflowsByRecordTypeAndClassifications(ctx context.Context, recordType string, classificationIDs []uuid.UUID, locationIDs []uuid.UUID, excludeWorkflowID *uuid.UUID) ([]models.Workflow, error)
+
 	// Workflow ConvertToRequest role assignments
 	AssignConvertToRequestRoles(ctx context.Context, workflowID uuid.UUID, roleIDs []uuid.UUID) error
 
@@ -104,6 +110,7 @@ func (r *workflowRepository) FindByIDWithRelations(ctx context.Context, id uuid.
 			return db.Order("execution_order")
 		}).
 		Preload("Classifications").
+		Preload("Locations").
 		Preload("ConvertToRequestRoles").
 		Preload("CreatedBy").
 		First(&workflow, "id = ?", id).Error
@@ -130,6 +137,7 @@ func (r *workflowRepository) List(ctx context.Context, activeOnly bool) ([]model
 		Preload("States").
 		Preload("Transitions").
 		Preload("Classifications").
+		Preload("Locations").
 		Preload("CreatedBy")
 
 	if activeOnly {
@@ -146,11 +154,13 @@ func (r *workflowRepository) ListByRecordType(ctx context.Context, recordType st
 		Preload("States").
 		Preload("Transitions").
 		Preload("Classifications").
+		Preload("Locations").
 		Preload("CreatedBy")
 
 	if recordType != "" {
 		// Support 'all' type which matches any type, 'both' matches incident/request
-		query = query.Where("record_type = ? OR record_type = 'both' OR record_type = 'all'", recordType)
+		// Use parentheses to ensure correct SQL precedence with AND conditions
+		query = query.Where("(record_type = ? OR record_type = 'both' OR record_type = 'all')", recordType)
 	}
 
 	if activeOnly {
@@ -551,4 +561,57 @@ func (r *workflowRepository) AssignConvertToRequestRoles(ctx context.Context, wo
 	}
 
 	return r.db.WithContext(ctx).Model(&workflow).Association("ConvertToRequestRoles").Replace(roles)
+}
+
+// AssignLocations assigns locations to a workflow
+func (r *workflowRepository) AssignLocations(ctx context.Context, workflowID uuid.UUID, locationIDs []uuid.UUID) error {
+	var workflow models.Workflow
+	if err := r.db.WithContext(ctx).First(&workflow, "id = ?", workflowID).Error; err != nil {
+		return err
+	}
+
+	var locations []models.Location
+	if len(locationIDs) > 0 {
+		if err := r.db.WithContext(ctx).Where("id IN ?", locationIDs).Find(&locations).Error; err != nil {
+			return err
+		}
+	}
+
+	return r.db.WithContext(ctx).Model(&workflow).Association("Locations").Replace(locations)
+}
+
+// FindWorkflowsByRecordTypeAndClassifications finds workflows matching record type for duplicate rule detection
+func (r *workflowRepository) FindWorkflowsByRecordTypeAndClassifications(
+	ctx context.Context,
+	recordType string,
+	classificationIDs []uuid.UUID,
+	locationIDs []uuid.UUID,
+	excludeWorkflowID *uuid.UUID,
+) ([]models.Workflow, error) {
+	var workflows []models.Workflow
+
+	query := r.db.WithContext(ctx).
+		Preload("Classifications").
+		Preload("Locations").
+		Where("is_active = ?", true)
+
+	// Match record type including 'both' and 'all'
+	if recordType == "incident" || recordType == "request" {
+		query = query.Where("record_type IN ?", []string{recordType, "both", "all"})
+	} else if recordType == "complaint" || recordType == "query" {
+		query = query.Where("record_type IN ?", []string{recordType, "all"})
+	} else {
+		query = query.Where("record_type = ?", recordType)
+	}
+
+	// Exclude current workflow if updating
+	if excludeWorkflowID != nil {
+		query = query.Where("id != ?", *excludeWorkflowID)
+	}
+
+	if err := query.Find(&workflows).Error; err != nil {
+		return nil, err
+	}
+
+	return workflows, nil
 }

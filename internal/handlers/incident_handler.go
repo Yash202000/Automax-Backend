@@ -16,20 +16,22 @@ import (
 )
 
 type IncidentHandler struct {
-	service      services.IncidentService
-	userRepo     repository.UserRepository
-	incidentRepo repository.IncidentRepository
-	storage      *storage.MinIOStorage
-	validator    *validator.Validate
+	service         services.IncidentService
+	userRepo        repository.UserRepository
+	incidentRepo    repository.IncidentRepository
+	storage         *storage.MinIOStorage
+	presenceService services.PresenceService
+	validator       *validator.Validate
 }
 
-func NewIncidentHandler(service services.IncidentService, userRepo repository.UserRepository, incidentRepo repository.IncidentRepository, storage *storage.MinIOStorage) *IncidentHandler {
+func NewIncidentHandler(service services.IncidentService, userRepo repository.UserRepository, incidentRepo repository.IncidentRepository, storage *storage.MinIOStorage, presenceService services.PresenceService) *IncidentHandler {
 	return &IncidentHandler{
-		service:      service,
-		userRepo:     userRepo,
-		incidentRepo: incidentRepo,
-		storage:      storage,
-		validator:    validator.New(),
+		service:         service,
+		userRepo:        userRepo,
+		incidentRepo:    incidentRepo,
+		storage:         storage,
+		presenceService: presenceService,
+		validator:       validator.New(),
 	}
 }
 
@@ -980,4 +982,72 @@ func (h *IncidentHandler) GetQuery(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Query retrieved", query)
+}
+
+// Presence Management
+
+// MarkPresence marks a user as actively viewing an incident
+// POST /incidents/:id/presence
+func (h *IncidentHandler) MarkPresence(c *fiber.Ctx) error {
+	incidentID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
+	}
+
+	// Get user info from context (set by auth middleware)
+	userID, ok := c.Locals("user_id").(uuid.UUID)
+	if !ok {
+		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
+	}
+
+	userName, _ := c.Locals("user_name").(string)
+	userEmail, _ := c.Locals("user_email").(string)
+
+	user := services.PresenceInfo{
+		UserID:    userID,
+		UserName:  userName,
+		UserEmail: userEmail,
+	}
+
+	if err := h.presenceService.MarkPresence(c.Context(), incidentID, user); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to mark presence")
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Presence marked", nil)
+}
+
+// GetPresence retrieves all users currently viewing an incident
+// GET /incidents/:id/presence
+func (h *IncidentHandler) GetPresence(c *fiber.Ctx) error {
+	incidentID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
+	}
+
+	activeUsers, err := h.presenceService.GetActiveUsers(c.Context(), incidentID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to get presence data")
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Active users retrieved", activeUsers)
+}
+
+// RemovePresence removes a user's presence from an incident
+// DELETE /incidents/:id/presence
+func (h *IncidentHandler) RemovePresence(c *fiber.Ctx) error {
+	incidentID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
+	}
+
+	userID, ok := c.Locals("user_id").(uuid.UUID)
+	if !ok {
+		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
+	}
+
+	if err := h.presenceService.RemovePresence(c.Context(), incidentID, userID); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to remove presence")
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Presence removed", nil)
 }

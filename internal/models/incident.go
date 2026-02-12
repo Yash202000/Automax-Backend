@@ -1,12 +1,10 @@
 package models
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"time"
 
-	"github.com/automax/backend/internal/storage"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -74,6 +72,9 @@ type Incident struct {
 	ReporterEmail string     `gorm:"size:100" json:"reporter_email"`
 	ReporterName  string     `gorm:"size:200" json:"reporter_name"`
 
+	// Source (origin of the record)
+	Source string `gorm:"size:100" json:"source"`
+
 	// Complaint-specific fields
 	Channel         string `gorm:"size:100" json:"channel"`
 	CreatedByName   string `gorm:"size:255" json:"created_by_name"`
@@ -95,6 +96,7 @@ type Incident struct {
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	Version   int            `gorm:"default:1" json:"version"` // Optimistic lock field
 }
 
 func (i *Incident) BeforeCreate(tx *gorm.DB) error {
@@ -292,45 +294,49 @@ type IncidentRevisionFilter struct {
 // Request types
 
 type IncidentCreateRequest struct {
-	Title            string   `json:"title" validate:"required,min=5,max=200"`
-	Description      string   `json:"description"`
-	ClassificationID *string  `json:"classification_id" validate:"omitempty,uuid"`
-	WorkflowID       string   `json:"workflow_id" validate:"required,uuid"`
-	AssigneeID       *string  `json:"assignee_id" validate:"omitempty,uuid"`
-	DepartmentID     *string  `json:"department_id" validate:"omitempty,uuid"`
-	LocationID       *string  `json:"location_id" validate:"omitempty,uuid"`
-	Latitude         *float64 `json:"latitude" validate:"omitempty,min=-90,max=90"`
-	Longitude        *float64 `json:"longitude" validate:"omitempty,min=-180,max=180"`
-	Address          string   `json:"address"`
-	City             string   `json:"city"`
-	State            string   `json:"state"`
-	Country          string   `json:"country"`
-	PostalCode       string   `json:"postal_code"`
-	DueDate          *string  `json:"due_date"`
-	ReporterEmail    string   `json:"reporter_email" validate:"omitempty,email"`
-	ReporterName     string   `json:"reporter_name" validate:"omitempty,max=200"`
-	CustomFields     string   `json:"custom_fields"`
-	LookupValueIDs   []string `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
-	RecordType       string   `json:"record_type" validate:"omitempty,oneof=incident request complaint query"`
+	Title              string                 `json:"title" validate:"required,min=5,max=200"`
+	Description        string                 `json:"description"`
+	ClassificationID   *string                `json:"classification_id" validate:"omitempty,uuid"`
+	WorkflowID         string                 `json:"workflow_id" validate:"required,uuid"`
+	Source             string                 `json:"source"`
+	AssigneeID         *string                `json:"assignee_id" validate:"omitempty,uuid"`
+	DepartmentID       *string                `json:"department_id" validate:"omitempty,uuid"`
+	LocationID         *string                `json:"location_id" validate:"omitempty,uuid"`
+	Latitude           *float64               `json:"latitude" validate:"omitempty,min=-90,max=90"`
+	Longitude          *float64               `json:"longitude" validate:"omitempty,min=-180,max=180"`
+	Address            string                 `json:"address"`
+	City               string                 `json:"city"`
+	State              string                 `json:"state"`
+	Country            string                 `json:"country"`
+	PostalCode         string                 `json:"postal_code"`
+	DueDate            *string                `json:"due_date"`
+	ReporterEmail      string                 `json:"reporter_email" validate:"omitempty,email"`
+	ReporterName       string                 `json:"reporter_name" validate:"omitempty,max=200"`
+	CustomFields       string                 `json:"custom_fields"`
+	LookupValueIDs     []string               `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
+	CustomLookupFields map[string]interface{} `json:"custom_lookup_fields"`
+	RecordType         string                 `json:"record_type" validate:"omitempty,oneof=incident request complaint query"`
 }
 
 type IncidentUpdateRequest struct {
-	Title            string   `json:"title" validate:"omitempty,min=5,max=200"`
-	Description      string   `json:"description"`
-	ClassificationID *string  `json:"classification_id" validate:"omitempty,uuid"`
-	AssigneeID       *string  `json:"assignee_id" validate:"omitempty,uuid"`
-	DepartmentID     *string  `json:"department_id" validate:"omitempty,uuid"`
-	LocationID       *string  `json:"location_id" validate:"omitempty,uuid"`
-	Latitude         *float64 `json:"latitude" validate:"omitempty,min=-90,max=90"`
-	Longitude        *float64 `json:"longitude" validate:"omitempty,min=-180,max=180"`
-	Address          string   `json:"address"`
-	City             string   `json:"city"`
-	State            string   `json:"state"`
-	Country          string   `json:"country"`
-	PostalCode       string   `json:"postal_code"`
-	DueDate          *string  `json:"due_date"`
-	CustomFields     string   `json:"custom_fields"`
-	LookupValueIDs   []string `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
+	Title              string                 `json:"title" validate:"omitempty,min=5,max=200"`
+	Description        string                 `json:"description"`
+	ClassificationID   *string                `json:"classification_id" validate:"omitempty,uuid"`
+	AssigneeID         *string                `json:"assignee_id" validate:"omitempty,uuid"`
+	DepartmentID       *string                `json:"department_id" validate:"omitempty,uuid"`
+	LocationID         *string                `json:"location_id" validate:"omitempty,uuid"`
+	Latitude           *float64               `json:"latitude" validate:"omitempty,min=-90,max=90"`
+	Longitude          *float64               `json:"longitude" validate:"omitempty,min=-180,max=180"`
+	Address            string                 `json:"address"`
+	City               string                 `json:"city"`
+	State              string                 `json:"state"`
+	Country            string                 `json:"country"`
+	PostalCode         string                 `json:"postal_code"`
+	DueDate            *string                `json:"due_date"`
+	CustomFields       string                 `json:"custom_fields"`
+	LookupValueIDs     []string               `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
+	CustomLookupFields map[string]interface{} `json:"custom_lookup_fields"`
+	Version            int                    `json:"version" validate:"required,min=1"`
 }
 
 type IncidentTransitionRequest struct {
@@ -344,6 +350,7 @@ type IncidentTransitionRequest struct {
 	// Assignment overrides (used when auto-detect finds multiple matches)
 	DepartmentID *string `json:"department_id" validate:"omitempty,uuid"`
 	UserID       *string `json:"user_id" validate:"omitempty,uuid"`
+	Version      int     `json:"version" validate:"required,min=1"`
 }
 
 type IncidentFeedbackRequest struct {
@@ -363,11 +370,21 @@ type CreateComplaintRequest struct {
 	ClassificationID string   `json:"classification_id" validate:"required,uuid"`
 	WorkflowID       string   `json:"workflow_id" validate:"required,uuid"`
 	SourceIncidentID *string  `json:"source_incident_id" validate:"omitempty,uuid"` // optional reference to source incident
+	Source           string   `json:"source"`
 	Channel          string   `json:"channel"`
 	ReporterID       *string  `json:"reporter_id" validate:"omitempty,uuid"` // link to user who created the complaint
+	ReporterEmail    string   `json:"reporter_email" validate:"omitempty,email"`
+	ReporterName     string   `json:"reporter_name" validate:"omitempty,max=200"`
 	DepartmentID     *string  `json:"department_id" validate:"omitempty,uuid"`
 	AssigneeID       *string  `json:"assignee_id" validate:"omitempty,uuid"`
 	LocationID       *string  `json:"location_id" validate:"omitempty,uuid"`
+	Latitude         *float64 `json:"latitude" validate:"omitempty,min=-90,max=90"`
+	Longitude        *float64 `json:"longitude" validate:"omitempty,min=-180,max=180"`
+	Address          string   `json:"address"`
+	City             string   `json:"city"`
+	State            string   `json:"state"`
+	Country          string   `json:"country"`
+	PostalCode       string   `json:"postal_code"`
 	LookupValueIDs   []string `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
 }
 
@@ -378,10 +395,20 @@ type CreateQueryRequest struct {
 	ClassificationID string   `json:"classification_id" validate:"required,uuid"`
 	WorkflowID       string   `json:"workflow_id" validate:"required,uuid"`
 	SourceIncidentID *string  `json:"source_incident_id" validate:"omitempty,uuid"` // optional reference to source incident
+	Source           string   `json:"source"`
 	Channel          string   `json:"channel"`
 	DepartmentID     *string  `json:"department_id" validate:"omitempty,uuid"`
 	AssigneeID       *string  `json:"assignee_id" validate:"omitempty,uuid"`
 	LocationID       *string  `json:"location_id" validate:"omitempty,uuid"`
+	Latitude         *float64 `json:"latitude" validate:"omitempty,min=-90,max=90"`
+	Longitude        *float64 `json:"longitude" validate:"omitempty,min=-180,max=180"`
+	Address          string   `json:"address"`
+	City             string   `json:"city"`
+	State            string   `json:"state"`
+	Country          string   `json:"country"`
+	PostalCode       string   `json:"postal_code"`
+	ReporterEmail    string   `json:"reporter_email" validate:"omitempty,email"`
+	ReporterName     string   `json:"reporter_name" validate:"omitempty,max=200"`
 	LookupValueIDs   []string `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
 }
 
@@ -455,6 +482,7 @@ type IncidentResponse struct {
 	ClosedAt         *time.Time              `json:"closed_at"`
 	SLABreached      bool                    `json:"sla_breached"`
 	SLADeadline      *time.Time              `json:"sla_deadline"`
+	Source           string                  `json:"source,omitempty"`
 	Reporter         *UserResponse           `json:"reporter,omitempty"`
 	ReporterEmail    string                  `json:"reporter_email"`
 	ReporterName     string                  `json:"reporter_name"`
@@ -468,6 +496,8 @@ type IncidentResponse struct {
 	CreatedAt        time.Time               `json:"created_at"`
 	UpdatedAt        time.Time               `json:"updated_at"`
 	LookupValues     []LookupValueResponse   `json:"lookup_values,omitempty"`
+	Version          int                     `json:"version"`
+	ActiveViewers    int                     `json:"active_viewers,omitempty"` // Number of users currently viewing this incident
 }
 
 type IncidentDetailResponse struct {
@@ -544,7 +574,6 @@ type IncidentStatsResponse struct {
 	Closed         int64              `json:"closed"`
 	SLABreached    int64              `json:"sla_breached"`
 	ByPriority     map[int]int64      `json:"by_priority"`
-	BySeverity     map[int]int64      `json:"by_severity"`
 	ByState        map[string]int64   `json:"by_state"`
 	ByStateDetails []StateStatDetail  `json:"by_state_details,omitempty"`
 }
@@ -572,6 +601,7 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 		ClosedAt:           i.ClosedAt,
 		SLABreached:        i.SLABreached,
 		SLADeadline:        i.SLADeadline,
+		Source:             i.Source,
 		ReporterEmail:      i.ReporterEmail,
 		ReporterName:       i.ReporterName,
 		Channel:            i.Channel,
@@ -583,6 +613,7 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 		AttachmentsCount:   len(i.Attachments),
 		CreatedAt:          i.CreatedAt,
 		UpdatedAt:          i.UpdatedAt,
+		Version:            i.Version,
 	}
 
 	if i.SourceIncident != nil {
@@ -648,7 +679,7 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 	return resp
 }
 
-func ToIncidentDetailResponse(storage *storage.MinIOStorage, i *Incident) IncidentDetailResponse {
+func ToIncidentDetailResponse(i *Incident) IncidentDetailResponse {
 	resp := IncidentDetailResponse{
 		IncidentResponse: ToIncidentResponse(i),
 	}
@@ -663,10 +694,9 @@ func ToIncidentDetailResponse(storage *storage.MinIOStorage, i *Incident) Incide
 	if len(i.Attachments) > 0 {
 		resp.Attachments = make([]IncidentAttachmentResponse, len(i.Attachments))
 		for idx, a := range i.Attachments {
-			url, err := storage.GetFileURL(context.Background(), a.FilePath)
-			if err != nil {
-				fmt.Printf("failed to get file URL: %v", err)
-			}
+			// Return backend proxy URL instead of internal MinIO URL
+			// Frontend will add ?token=... when needed for <img>/<video> tags
+			url := fmt.Sprintf("/api/v1/attachments/%s", a.ID)
 			resp.Attachments[idx] = ToIncidentAttachmentResponse(&a, url)
 		}
 	}

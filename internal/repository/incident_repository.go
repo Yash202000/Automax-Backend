@@ -2,13 +2,17 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
+
+var ErrVersionMismatch = errors.New("incident was modified by another user")
 
 type IncidentRepository interface {
 	// Incident CRUD
@@ -19,7 +23,10 @@ type IncidentRepository interface {
 	List(ctx context.Context, filter *models.IncidentFilter) ([]models.Incident, int64, error)
 	Update(ctx context.Context, incident *models.Incident) error
 	UpdateFields(ctx context.Context, id uuid.UUID, updates map[string]interface{}) error
+	UpdateFieldsWithVersion(ctx context.Context, id uuid.UUID, updates map[string]interface{}, expectedVersion int) error
 	Delete(ctx context.Context, id uuid.UUID) error
+	WithTx(tx *gorm.DB) IncidentRepository
+	LockForUpdate(ctx context.Context, tx *gorm.DB, id uuid.UUID) (*models.Incident, error)
 
 	// Incident number generation
 	GenerateIncidentNumber(ctx context.Context) (string, error)
@@ -877,4 +884,51 @@ func (r *incidentRepository) IncrementEvaluationCount(ctx context.Context, id uu
 		Where("id = ?", id).
 		Where("record_type = 'complaint'").
 		Update("evaluation_count", gorm.Expr("evaluation_count + 1")).Error
+}
+
+// Concurrency Control
+
+// UpdateFieldsWithVersion performs optimistic lock field update
+func (r *incidentRepository) UpdateFieldsWithVersion(ctx context.Context, id uuid.UUID, updates map[string]interface{}, expectedVersion int) error {
+	updates["version"] = expectedVersion + 1
+	updates["updated_at"] = time.Now()
+
+	result := r.db.WithContext(ctx).
+		Model(&models.Incident{}).
+		Where("id = ? AND version = ?", id, expectedVersion).
+		Updates(updates)
+
+	if result.Error != nil {
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		return ErrVersionMismatch
+	}
+
+	return nil
+}
+
+// WithTx returns repository instance using the provided transaction
+func (r *incidentRepository) WithTx(tx *gorm.DB) IncidentRepository {
+	return &incidentRepository{db: tx}
+}
+
+// LockForUpdate acquires a pessimistic lock (SELECT FOR UPDATE)
+func (r *incidentRepository) LockForUpdate(ctx context.Context, tx *gorm.DB, id uuid.UUID) (*models.Incident, error) {
+	var incident models.Incident
+
+	err := tx.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Preload("Classification").
+		Preload("Workflow").
+		Preload("CurrentState").
+		Where("id = ?", id).
+		First(&incident).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &incident, nil
 }

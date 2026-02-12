@@ -108,3 +108,23 @@ func ToLocationResponse(l *Location) LocationResponse {
 
 	return resp
 }
+
+// LocationWithStats includes location data with incident count
+type LocationWithStats struct {
+	ID          uuid.UUID           `json:"id"`
+	Name        string              `json:"name"`
+	Code        string              `json:"code"`
+	Description string              `json:"description"`
+	Type        string              `json:"type"`
+	ParentID    *uuid.UUID          `json:"parent_id"`
+	Level       int                 `json:"level"`
+	Path        string              `json:"path"`
+	Address     string              `json:"address"`
+	Latitude    *float64            `json:"latitude,omitempty"`
+	Longitude   *float64            `json:"longitude,omitempty"`
+	IsActive    bool                `json:"is_active"`
+	SortOrder   int                 `json:"sort_order"`
+	Count       int64               `json:"count"`
+	Children    []LocationWithStats `json:"children,omitempty"`
+	CreatedAt   time.Time           `json:"created_at"`
+}

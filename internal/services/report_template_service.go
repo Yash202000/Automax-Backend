@@ -1252,10 +1252,6 @@ func formatCellValue(field, format string, v interface{}) string {
 		if num, ok := toInt(v); ok {
 			return getPriorityLabel(num)
 		}
-	case "severity":
-		if num, ok := toInt(v); ok {
-			return getSeverityLabel(num)
-		}
 	}
 
 	// Handle format specifiers

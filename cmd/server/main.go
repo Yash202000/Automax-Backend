@@ -72,17 +72,27 @@ func main() {
 	reportTemplateRepo := repository.NewReportTemplateRepository(db)
 	lookupRepo := repository.NewLookupRepository(db)
 	callLogRepo := repository.NewCallLogRepository(db)
+	applicationLinkRepo := repository.NewApplicationLinkRepository(db)
+	settingsRepo := repository.NewSettingsRepository(db)
+
+	// Initialize WebSocket hub and start it
+	wsHub := services.NewWSHub()
+	go wsHub.Run()
+	log.Println("WebSocket hub started")
 	notificationTemplateRepo := repository.NewNotificationTemplateRepository(db)
 	notificationLogRepo := repository.NewNotificationLogRepository(db)
 
 	// Initialize services
-	userService := services.NewUserService(userRepo, jwtManager, sessionStore, minioStorage, cfg)
+	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg)
 	actionLogService := services.NewActionLogService(actionLogRepo)
-	callLogService := services.NewCallLogService(callLogRepo)
+	callLogService := services.NewCallLogService(callLogRepo, userRepo)
 	workflowService := services.NewWorkflowService(workflowRepo, roleRepo, departmentRepo, classificationRepo, db)
-	incidentService := services.NewIncidentService(incidentRepo, workflowRepo, userRepo, minioStorage)
+	incidentService := services.NewIncidentService(incidentRepo, workflowRepo, userRepo, minioStorage, db, wsHub)
 	reportService := services.NewReportService(reportRepo)
 	reportTemplateService := services.NewReportTemplateService(reportTemplateRepo, reportRepo)
+	applicationLinkService := services.NewApplicationLinkService(applicationLinkRepo)
+	settingsService := services.NewSettingsService(settingsRepo)
+	presenceService := services.NewPresenceService(redisClient)
 	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo)
 
 	// Initialize and start SLA Monitor (checks every 5 minutes)
@@ -104,10 +114,13 @@ func main() {
 	actionLogHandler := handlers.NewActionLogHandler(actionLogService, validate)
 	callLogHandler := handlers.NewCallLogHandler(callLogService, validate, userService)
 	workflowHandler := handlers.NewWorkflowHandler(workflowService)
-	incidentHandler := handlers.NewIncidentHandler(incidentService, userRepo, incidentRepo, minioStorage)
+	incidentHandler := handlers.NewIncidentHandler(incidentService, userRepo, incidentRepo, minioStorage, presenceService)
+	websocketHandler := handlers.NewWebSocketHandler(wsHub)
 	reportHandler := handlers.NewReportHandler(reportService)
 	reportTemplateHandler := handlers.NewReportTemplateHandler(reportTemplateService)
 	lookupHandler := handlers.NewLookupHandler(lookupRepo)
+	applicationLinkHandler := handlers.NewApplicationLinkHandler(applicationLinkService, minioStorage)
+	settingsHandler := handlers.NewSettingsHandler(settingsService)
 	notificationHandler := handlers.NewNotificationHandler(notificationService, minioStorage)
 	templateHandler := handlers.NewNotificationTemplateHandler(notificationTemplateRepo)
 	attachmentHandler := handlers.NewAttachmentHandler(incidentService, notificationService, minioStorage)
@@ -118,6 +131,7 @@ func main() {
 	app := fiber.New(fiber.Config{
 		AppName:      "Automax Backend",
 		ErrorHandler: customErrorHandler,
+		BodyLimit:    100 * 1024 * 1024, // 100MB max body size
 	})
 
 	app.Use(recover.New())
@@ -137,6 +151,17 @@ func main() {
 	// Health routes
 	v1.Get("/health", healthHandler.Health)
 	v1.Get("/ready", healthHandler.Ready)
+
+	// WebSocket route for real-time updates
+	// Query params: incident_id, user_id, token (for auth)
+	v1.Get("/ws", websocketHandler.WebSocketUpgrader())
+
+	// Broadcast WebSocket route for incident list viewer count updates
+	// Query params: token (for auth)
+	v1.Get("/ws/broadcast", websocketHandler.BroadcastWebSocketUpgrader())
+
+	// WebSocket connection statistics endpoint
+	v1.Get("/ws/stats", authMiddleware.RequirePermission("incidents:view"), websocketHandler.GetConnectionStats)
 
 	// Webhook routes (no authentication required - external services)
 	webhooks := v1.Group("/webhooks")
@@ -184,6 +209,16 @@ func main() {
 	incidents.Delete("/:id/attachments/:attachment_id", authMiddleware.RequirePermission("incidents:update"), incidentHandler.DeleteAttachment)
 	incidents.Put("/:id/assign", authMiddleware.RequirePermission("incidents:assign"), incidentHandler.AssignIncident)
 	incidents.Get("/:id/revisions", authMiddleware.RequirePermission("incidents:view"), incidentHandler.ListRevisions)
+
+	// Presence tracking routes
+	incidents.Post("/:id/presence", authMiddleware.RequirePermission("incidents:view"), incidentHandler.MarkPresence)
+	incidents.Get("/:id/presence", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetPresence)
+	incidents.Delete("/:id/presence", authMiddleware.RequirePermission("incidents:view"), incidentHandler.RemovePresence)
+
+	// Presence tracking routes
+	incidents.Post("/:id/presence", authMiddleware.RequirePermission("incidents:view"), incidentHandler.MarkPresence)
+	incidents.Get("/:id/presence", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetPresence)
+	incidents.Delete("/:id/presence", authMiddleware.RequirePermission("incidents:view"), incidentHandler.RemovePresence)
 
 	// Attachment download route (unified for incidents and notifications)
 	attachments := v1.Group("/attachments", authMiddleware.Authenticate())
@@ -246,6 +281,7 @@ func main() {
 	classifications.Post("/", authMiddleware.RequirePermission("classifications:create"), classificationHandler.Create)
 	classifications.Get("/", authMiddleware.RequirePermission("classifications:view"), classificationHandler.List)
 	classifications.Get("/tree", authMiddleware.RequirePermission("classifications:view"), classificationHandler.GetTree)
+	classifications.Get("/tree/stats", authMiddleware.RequirePermission("classifications:view"), classificationHandler.GetTreeWithStats)
 	classifications.Get("/children", authMiddleware.RequirePermission("classifications:view"), classificationHandler.GetChildren)
 	classifications.Get("/export", authMiddleware.RequirePermission("classifications:view"), classificationHandler.Export)
 	classifications.Post("/import", authMiddleware.RequirePermission("classifications:create"), classificationHandler.Import)
@@ -258,6 +294,7 @@ func main() {
 	locations.Post("/", authMiddleware.RequirePermission("locations:create"), locationHandler.Create)
 	locations.Get("/", authMiddleware.RequirePermission("locations:view"), locationHandler.List)
 	locations.Get("/tree", authMiddleware.RequirePermission("locations:view"), locationHandler.GetTree)
+	locations.Get("/tree/stats", authMiddleware.RequirePermission("locations:view"), locationHandler.GetTreeWithStats)
 	locations.Get("/children", authMiddleware.RequirePermission("locations:view"), locationHandler.GetChildren)
 	locations.Get("/by-type", authMiddleware.RequirePermission("locations:view"), locationHandler.GetByType)
 	locations.Get("/export", authMiddleware.RequirePermission("locations:view"), locationHandler.Export)
@@ -397,6 +434,24 @@ func main() {
 
 	// Public lookup endpoint (by category code) - accessible to authenticated users
 	v1.Get("/lookups/:code", authMiddleware.Authenticate(), lookupHandler.GetValuesByCategoryCode)
+
+	// Application Links routes (admin)
+	appLinks := admin.Group("/application-links")
+	appLinks.Post("/", authMiddleware.RequirePermission("application-links:create"), applicationLinkHandler.CreateLink)
+	appLinks.Get("/", authMiddleware.RequirePermission("application-links:view"), applicationLinkHandler.ListLinks)
+	appLinks.Get("/:id", authMiddleware.RequirePermission("application-links:view"), applicationLinkHandler.GetLink)
+	appLinks.Put("/:id", authMiddleware.RequirePermission("application-links:update"), applicationLinkHandler.UpdateLink)
+	appLinks.Delete("/:id", authMiddleware.RequirePermission("application-links:delete"), applicationLinkHandler.DeleteLink)
+	appLinks.Post("/:id/upload-image", authMiddleware.RequirePermission("application-links:update"), applicationLinkHandler.UploadImage)
+
+	// Public application links endpoint (active links only) - accessible to authenticated users
+	v1.Get("/application-links", authMiddleware.Authenticate(), applicationLinkHandler.ListActiveLinks)
+
+	// Settings routes
+	// Public settings endpoint (accessible to everyone for branding)
+	v1.Get("/settings", settingsHandler.GetSettings)
+	// Admin settings endpoint (requires settings:update permission)
+	admin.Put("/settings", authMiddleware.RequirePermission("settings:update"), settingsHandler.UpdateSettings)
 
 	// Call routes (authenticated users)
 	calls := v1.Group("/calls", authMiddleware.Authenticate())

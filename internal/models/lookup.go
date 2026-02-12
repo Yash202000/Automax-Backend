@@ -16,7 +16,9 @@ type LookupCategory struct {
 	Description       string         `gorm:"size:500" json:"description"`
 	IsSystem          bool           `gorm:"default:false" json:"is_system"`
 	IsActive          bool           `gorm:"default:true" json:"is_active"`
-	AddToIncidentForm bool           `gorm:"default:false" json:"add_to_incident_form"` // New field
+	AddToIncidentForm bool           `gorm:"default:false" json:"add_to_incident_form"`
+	FieldType         string         `gorm:"size:20;default:'select'" json:"field_type"`
+	ValidationRules   string         `gorm:"type:text" json:"validation_rules"`
 	Values            []LookupValue  `gorm:"foreignKey:CategoryID" json:"values,omitempty"`
 	CreatedAt         time.Time      `json:"created_at"`
 	UpdatedAt         time.Time      `json:"updated_at"`
@@ -65,6 +67,8 @@ type LookupCategoryCreateRequest struct {
 	Description       string `json:"description" validate:"max=500"`
 	IsActive          *bool  `json:"is_active"`
 	AddToIncidentForm *bool  `json:"add_to_incident_form"`
+	FieldType         string `json:"field_type" validate:"omitempty,oneof=text number date select multiselect checkbox textarea"`
+	ValidationRules   string `json:"validation_rules"`
 }
 
 // LookupCategoryUpdateRequest for updating a lookup category
@@ -75,6 +79,8 @@ type LookupCategoryUpdateRequest struct {
 	Description       string `json:"description" validate:"max=500"`
 	IsActive          *bool  `json:"is_active"`
 	AddToIncidentForm *bool  `json:"add_to_incident_form"`
+	FieldType         string `json:"field_type" validate:"omitempty,oneof=text number date select multiselect checkbox textarea"`
+	ValidationRules   string `json:"validation_rules"`
 }
 
 // LookupValueCreateRequest for creating a new lookup value
@@ -113,6 +119,8 @@ type LookupCategoryResponse struct {
 	IsSystem          bool                  `json:"is_system"`
 	IsActive          bool                  `json:"is_active"`
 	AddToIncidentForm bool                  `json:"add_to_incident_form"`
+	FieldType         string                `json:"field_type"`
+	ValidationRules   string                `json:"validation_rules"`
 	ValuesCount       int                   `json:"values_count"`
 	Values            []LookupValueResponse `json:"values,omitempty"`
 	CreatedAt         time.Time             `json:"created_at"`
@@ -147,6 +155,8 @@ func ToLookupCategoryResponse(c *LookupCategory) LookupCategoryResponse {
 		IsSystem:          c.IsSystem,
 		IsActive:          c.IsActive,
 		AddToIncidentForm: c.AddToIncidentForm,
+		FieldType:         c.FieldType,
+		ValidationRules:   c.ValidationRules,
 		ValuesCount:       len(c.Values),
 		CreatedAt:         c.CreatedAt,
 		UpdatedAt:         c.UpdatedAt,
