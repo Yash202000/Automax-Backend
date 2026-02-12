@@ -22,10 +22,12 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
+	"github.com/joho/godotenv"
 )
 
 func main() {
 	cfg := config.Load()
+	godotenv.Load()
 
 	db, err := database.Connect(&cfg.Database)
 	if err != nil {
@@ -77,6 +79,8 @@ func main() {
 	wsHub := services.NewWSHub()
 	go wsHub.Run()
 	log.Println("WebSocket hub started")
+	notificationTemplateRepo := repository.NewNotificationTemplateRepository(db)
+	notificationLogRepo := repository.NewNotificationLogRepository(db)
 
 	// Initialize services
 	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg)
@@ -89,6 +93,7 @@ func main() {
 	applicationLinkService := services.NewApplicationLinkService(applicationLinkRepo)
 	settingsService := services.NewSettingsService(settingsRepo)
 	presenceService := services.NewPresenceService(redisClient)
+	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo)
 
 	// Initialize and start SLA Monitor (checks every 5 minutes)
 	slaMonitor := services.NewSLAMonitor(incidentRepo, 5*time.Minute)
@@ -116,6 +121,9 @@ func main() {
 	lookupHandler := handlers.NewLookupHandler(lookupRepo)
 	applicationLinkHandler := handlers.NewApplicationLinkHandler(applicationLinkService, minioStorage)
 	settingsHandler := handlers.NewSettingsHandler(settingsService)
+	notificationHandler := handlers.NewNotificationHandler(notificationService, minioStorage)
+	templateHandler := handlers.NewNotificationTemplateHandler(notificationTemplateRepo)
+	attachmentHandler := handlers.NewAttachmentHandler(incidentService, notificationService, minioStorage)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore, userRepo)
@@ -154,6 +162,10 @@ func main() {
 
 	// WebSocket connection statistics endpoint
 	v1.Get("/ws/stats", authMiddleware.RequirePermission("incidents:view"), websocketHandler.GetConnectionStats)
+
+	// Webhook routes (no authentication required - external services)
+	webhooks := v1.Group("/webhooks")
+	webhooks.Post("/sendgrid/inbound", notificationHandler.SendGridInboundWebhook)
 
 	// Auth routes
 	auth := v1.Group("/auth")
@@ -203,9 +215,15 @@ func main() {
 	incidents.Get("/:id/presence", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetPresence)
 	incidents.Delete("/:id/presence", authMiddleware.RequirePermission("incidents:view"), incidentHandler.RemovePresence)
 
-	// Attachment download route
+	// Presence tracking routes
+	incidents.Post("/:id/presence", authMiddleware.RequirePermission("incidents:view"), incidentHandler.MarkPresence)
+	incidents.Get("/:id/presence", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetPresence)
+	incidents.Delete("/:id/presence", authMiddleware.RequirePermission("incidents:view"), incidentHandler.RemovePresence)
+
+	// Attachment download route (unified for incidents and notifications)
 	attachments := v1.Group("/attachments", authMiddleware.Authenticate())
-	attachments.Get("/:attachment_id", incidentHandler.DownloadAttachment)
+	attachments.Get("/:attachment_id", attachmentHandler.DownloadAttachment)
+	attachments.Get("/:attachment_id/preview", attachmentHandler.PreviewAttachment)
 
 	// Complaint routes (authenticated users)
 	complaints := v1.Group("/complaints", authMiddleware.Authenticate())
@@ -445,6 +463,50 @@ func main() {
 	callLogsPublic := v1.Group("/call-logs", authMiddleware.Authenticate())
 	callLogsPublic.Get("/sip-info", callLogHandler.GetSipInfo)
 	callLogsPublic.Get("/extension/:extension", callLogHandler.GetCallLogsByExtension)
+
+	// ---- TEMPLATE ROUTES ----
+	templates := v1.Group("/templates", authMiddleware.Authenticate())
+	templates.Post("/", authMiddleware.RequirePermission("templates:create"), templateHandler.Create)
+	templates.Get("/", authMiddleware.RequirePermission("templates:read"), templateHandler.List)
+	templates.Get("/:id", authMiddleware.RequirePermission("templates:read"), templateHandler.GetByID)
+	templates.Put("/:id", authMiddleware.RequirePermission("templates:update"), templateHandler.Update)
+	templates.Delete("/:id", authMiddleware.RequirePermission("templates:delete"), templateHandler.Delete)
+
+	// ---- NOTIFICATION ROUTES ----
+	notifications := v1.Group("/notifications", authMiddleware.Authenticate())
+
+	// Send notifications
+	notifications.Post("/send", authMiddleware.RequirePermission("notifications:send"), notificationHandler.Send)
+
+	// List and view notifications (inbox-like functionality)
+	notifications.Get("/", authMiddleware.RequirePermission("notifications:read"), notificationHandler.List)
+	notifications.Get("/:id", authMiddleware.RequirePermission("notifications:read"), notificationHandler.Get)
+
+	// Thread operations
+	notifications.Post("/:id/reply", authMiddleware.RequirePermission("notifications:send"), notificationHandler.Reply)
+	notifications.Get("/threads/:thread_id", authMiddleware.RequirePermission("notifications:read"), notificationHandler.GetThread)
+
+	// Draft management
+	notifications.Post("/drafts", authMiddleware.RequirePermission("notifications:create"), notificationHandler.CreateDraft)
+	notifications.Put("/drafts/:id", authMiddleware.RequirePermission("notifications:update"), notificationHandler.UpdateDraft)
+	notifications.Post("/drafts/:id/send", authMiddleware.RequirePermission("notifications:send"), notificationHandler.SendDraft)
+
+	// Email actions (mark as read, star, move to folder)
+	notifications.Patch("/:id/read", authMiddleware.RequirePermission("notifications:update"), notificationHandler.MarkAsRead)
+	notifications.Patch("/:id/star", authMiddleware.RequirePermission("notifications:update"), notificationHandler.ToggleStar)
+	notifications.Patch("/:id/move", authMiddleware.RequirePermission("notifications:update"), notificationHandler.MoveToCategory)
+
+	// Bulk actions
+	notifications.Post("/bulk/move", authMiddleware.RequirePermission("notifications:update"), notificationHandler.BulkMoveToCategory)
+	notifications.Post("/bulk/delete", authMiddleware.RequirePermission("notifications:delete"), notificationHandler.BulkDelete)
+
+	// Attachment operations
+	notifications.Get("/:id/attachments/:filename", authMiddleware.RequirePermission("notifications:read"), notificationHandler.DownloadAttachment)
+	notifications.Get("/:id/attachments/:filename/url", authMiddleware.RequirePermission("notifications:read"), notificationHandler.GetAttachmentURL)
+
+	// Delete (move to trash)
+	notifications.Delete("/:id", authMiddleware.RequirePermission("notifications:delete"), notificationHandler.Delete)
+	notifications.Delete("/:id/permanent", authMiddleware.RequirePermission("notifications:delete"), notificationHandler.PermanentDelete)
 
 	go func() {
 		addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)

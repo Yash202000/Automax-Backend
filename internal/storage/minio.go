@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -87,6 +88,26 @@ func (s *MinIOStorage) UploadFile(ctx context.Context, file multipart.File, head
 	}
 
 	return filename, nil
+}
+
+// UploadBytes uploads file content from bytes
+func (s *MinIOStorage) UploadBytes(ctx context.Context, data []byte, filename, contentType, folder string) (string, error) {
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	// Create unique object name
+	objectName := fmt.Sprintf("%s/%s", folder, filename)
+
+	reader := bytes.NewReader(data)
+	_, err := s.client.PutObject(ctx, s.bucketName, objectName, reader, int64(len(data)), minio.PutObjectOptions{
+		ContentType: contentType,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to upload file: %w", err)
+	}
+
+	return objectName, nil
 }
 
 func (s *MinIOStorage) UploadAvatar(ctx context.Context, file multipart.File, header *multipart.FileHeader, userID string) (string, error) {
