@@ -17,15 +17,17 @@ import (
 type NotificationService struct {
 	templateRepo repository.NotificationTemplateRepository
 	logRepo      repository.NotificationLogRepository
+	userRepo     repository.UserRepository
 }
 
 func NewNotificationService(
 	templateRepo repository.NotificationTemplateRepository,
-	logRepo repository.NotificationLogRepository,
+	logRepo repository.NotificationLogRepository, userRepo repository.UserRepository,
 ) *NotificationService {
 	return &NotificationService{
 		templateRepo: templateRepo,
 		logRepo:      logRepo,
+		userRepo:     userRepo,
 	}
 }
 
@@ -157,6 +159,37 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 
 	if err := s.logRepo.Create(ctx, log); err != nil {
 		return nil, err
+	}
+	// Create inbox copy for each internal recipient
+
+	for _, recipientEmail := range to {
+
+		// Check if this email belongs to the system
+		user, err := s.userRepo.FindByEmail(ctx, recipientEmail)
+		if err != nil || user == nil {
+			continue // Skip external emails
+		}
+
+		inboxLog := &models.NotificationLog{
+			ID:           uuid.New(),
+			Channel:      channel,
+			Direction:    models.DirectionInbound,
+			Category:     models.CategoryInbox,
+			TemplateCode: deref(templateCode),
+			Language:     language,
+			Recipients:   recipientStatuses,
+			Subject:      subject,
+			Body:         body,
+			Status:       status,
+			Provider:     provider,
+			Attachments:  attachmentInfo,
+			SentBy:       sentBy,
+			ReceivedBy:   &user.ID, //this makes it appear in inbox
+			CreatedAt:    now,
+			UpdatedAt:    &now,
+		}
+
+		_ = s.logRepo.Create(ctx, inboxLog)
 	}
 
 	return log, nil

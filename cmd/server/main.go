@@ -93,7 +93,7 @@ func main() {
 	applicationLinkService := services.NewApplicationLinkService(applicationLinkRepo)
 	settingsService := services.NewSettingsService(settingsRepo)
 	presenceService := services.NewPresenceService(redisClient)
-	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo)
+	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo, userRepo)
 
 	// Initialize and start SLA Monitor (checks every 5 minutes)
 	slaMonitor := services.NewSLAMonitor(incidentRepo, 5*time.Minute)

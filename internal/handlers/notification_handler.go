@@ -349,9 +349,16 @@ func (h *NotificationHandler) Send(c *fiber.Ctx) error {
 
 // List handles GET /api/v1/notifications with search and filters
 func (h *NotificationHandler) List(c *fiber.Ctx) error {
+	userID, ok := c.Locals("user_id").(uuid.UUID)
+	if !ok {
+		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
+	}
+	log.Printf("[Notifications List] User %s requesting notifications", userID.String())
+
 	filter := &models.NotificationLogFilter{
-		Page:  1,
-		Limit: 20,
+		Page:   1,
+		Limit:  20,
+		UserID: &userID, // Automatically filter by logged-in user
 	}
 
 	// Parse query parameters

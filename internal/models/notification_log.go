@@ -163,7 +163,9 @@ type NotificationLog struct {
 	ThreadID     *uuid.UUID      `gorm:"type:uuid;index" json:"thread_id,omitempty"` // For email threading
 	InReplyTo    *uuid.UUID      `gorm:"type:uuid;index" json:"in_reply_to,omitempty"` // Reply to which email
 	SentBy       *uuid.UUID      `gorm:"type:uuid;index" json:"sent_by,omitempty"` // User who sent it (outbound)
+	SentByUser   *User           `gorm:"foreignKey:SentBy;references:ID" json:"sent_by_user,omitempty"` // User details who sent it
 	ReceivedBy   *uuid.UUID      `gorm:"type:uuid;index" json:"received_by,omitempty"` // User who received it (inbound)
+	ReceivedByUser *User         `gorm:"foreignKey:ReceivedBy;references:ID" json:"received_by_user,omitempty"` // User details who received it
 	ScheduledAt  *time.Time      `json:"scheduled_at,omitempty"` // For scheduled sending (outbox)
 	SentAt       *time.Time      `gorm:"index" json:"sent_at,omitempty"` // Actual sent time
 	CreatedAt    time.Time       `gorm:"index" json:"created_at"`
@@ -176,6 +178,15 @@ func (l *NotificationLog) BeforeCreate(tx *gorm.DB) error {
 		l.ID = uuid.New()
 	}
 	return nil
+}
+
+// UserBasicInfo contains basic user information for notification responses
+type UserBasicInfo struct {
+	ID        uuid.UUID `json:"id"`
+	Email     string    `json:"email"`
+	FirstName string    `json:"first_name"`
+	LastName  string    `json:"last_name"`
+	Avatar    string    `json:"avatar,omitempty"`
 }
 
 // NotificationLogResponse for API responses
@@ -202,7 +213,9 @@ type NotificationLogResponse struct {
 	ThreadID     *uuid.UUID       `json:"thread_id,omitempty"`
 	InReplyTo    *uuid.UUID       `json:"in_reply_to,omitempty"`
 	SentBy       *uuid.UUID       `json:"sent_by,omitempty"`
+	SentByUser   *UserBasicInfo   `json:"sent_by_user,omitempty"`
 	ReceivedBy   *uuid.UUID       `json:"received_by,omitempty"`
+	ReceivedByUser *UserBasicInfo `json:"received_by_user,omitempty"`
 	ScheduledAt  *time.Time       `json:"scheduled_at,omitempty"`
 	SentAt       *time.Time       `json:"sent_at,omitempty"`
 	CreatedAt    time.Time        `json:"created_at"`
@@ -218,6 +231,7 @@ type NotificationLogFilter struct {
 	IsRead       *bool      `json:"is_read"`     // Filter by read/unread
 	IsStarred    *bool      `json:"is_starred"`  // Filter by starred
 	Search       string     `json:"search"`      // Search across subject, body, from, recipients
+	UserID       *uuid.UUID `json:"user_id"`     // Filter by current user (sent_by OR received_by)
 	SentBy       *uuid.UUID `json:"sent_by"`     // Filter by sender (outbound)
 	ReceivedBy   *uuid.UUID `json:"received_by"` // Filter by receiver (inbound)
 	StartDate    *time.Time `json:"start_date"`
@@ -244,6 +258,29 @@ func ToNotificationLogResponse(log *NotificationLog) NotificationLogResponse {
 		}
 	}
 
+	// Transform user data
+	var sentByUser *UserBasicInfo
+	if log.SentByUser != nil {
+		sentByUser = &UserBasicInfo{
+			ID:        log.SentByUser.ID,
+			Email:     log.SentByUser.Email,
+			FirstName: log.SentByUser.FirstName,
+			LastName:  log.SentByUser.LastName,
+			Avatar:    log.SentByUser.Avatar,
+		}
+	}
+
+	var receivedByUser *UserBasicInfo
+	if log.ReceivedByUser != nil {
+		receivedByUser = &UserBasicInfo{
+			ID:        log.ReceivedByUser.ID,
+			Email:     log.ReceivedByUser.Email,
+			FirstName: log.ReceivedByUser.FirstName,
+			LastName:  log.ReceivedByUser.LastName,
+			Avatar:    log.ReceivedByUser.Avatar,
+		}
+	}
+
 	return NotificationLogResponse{
 		ID:           log.ID,
 		Channel:      log.Channel,
@@ -267,7 +304,9 @@ func ToNotificationLogResponse(log *NotificationLog) NotificationLogResponse {
 		ThreadID:     log.ThreadID,
 		InReplyTo:    log.InReplyTo,
 		SentBy:       log.SentBy,
+		SentByUser:   sentByUser,
 		ReceivedBy:   log.ReceivedBy,
+		ReceivedByUser: receivedByUser,
 		ScheduledAt:  log.ScheduledAt,
 		SentAt:       log.SentAt,
 		CreatedAt:    log.CreatedAt,
