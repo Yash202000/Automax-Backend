@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -68,7 +69,30 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 
 	incident, err := h.service.CreateIncident(c.Context(), &req, userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		fmt.Println("error:", err)
+
+		switch {
+		case errors.Is(err, services.ErrDuplicateIncident):
+			return utils.ErrorResponse(
+				c,
+				fiber.StatusConflict,
+				"You have already reported an open incident near this location. Please wait until it is resolved or choose a different location & classification.",
+			)
+
+		case errors.Is(err, services.ErrInvalidLocation):
+			return utils.ErrorResponse(
+				c,
+				fiber.StatusBadRequest,
+				"Invalid location or classification",
+			)
+
+		default:
+			return utils.ErrorResponse(
+				c,
+				fiber.StatusInternalServerError,
+				"Internal server error",
+			)
+		}
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, "Incident created", incident)

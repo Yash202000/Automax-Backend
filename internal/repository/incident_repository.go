@@ -27,6 +27,7 @@ type IncidentRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 	WithTx(tx *gorm.DB) IncidentRepository
 	LockForUpdate(ctx context.Context, tx *gorm.DB, id uuid.UUID) (*models.Incident, error)
+	FindUserOpenIncidentsByParent(ctx context.Context, reporterID uuid.UUID, locationID uuid.UUID, classificationID uuid.UUID) ([]models.Incident, error)
 
 	// Incident number generation
 	GenerateIncidentNumber(ctx context.Context) (string, error)
@@ -500,14 +501,9 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 	stats := &models.IncidentStatsResponse{
 
 		ByState: make(map[string]int64),
-
 	}
 
-
-
 	baseQuery := r.db.WithContext(ctx).Model(&models.Incident{})
-
-
 
 	// Apply filters if provided
 
@@ -538,8 +534,6 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 
 	}
 
-
-
 	// Total count
 
 	if err := baseQuery.Count(&stats.Total).Error; err != nil {
@@ -547,8 +541,6 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 		return nil, err
 
 	}
-
-
 
 	// SLA breached count (also filtered by record_type if provided)
 	slaQuery := r.db.WithContext(ctx).Model(&models.Incident{}).Where("sla_breached = ?", true)
@@ -561,26 +553,20 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 
 	}
 
-
-
 	// Count by state (filtered by viewable roles if provided)
 
 	type stateCount struct {
+		StateID uuid.UUID `gorm:"column:state_id"`
 
-		StateID   uuid.UUID `gorm:"column:state_id"`
+		StateName string `gorm:"column:state_name"`
 
-		StateName string    `gorm:"column:state_name"`
-
-		Count     int64     `gorm:"column:count"`
-
+		Count int64 `gorm:"column:count"`
 	}
 
 	var stateCounts []stateCount
 
 	stateQuery := r.db.WithContext(ctx).Model(&models.Incident{}).
-
 		Select("workflow_states.id as state_id, workflow_states.name as state_name, count(*) as count").
-
 		Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
 
 	// Apply record_type filter to state counts
@@ -606,8 +592,6 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 
 	}
 
-
-
 	if err := stateQuery.Group("workflow_states.id, workflow_states.name").Scan(&stateCounts).Error; err != nil {
 
 		return nil, err
@@ -622,12 +606,11 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 
 		stats.ByStateDetails = append(stats.ByStateDetails, models.StateStatDetail{
 
-			ID:    sc.StateID,
+			ID: sc.StateID,
 
-			Name:  sc.StateName,
+			Name: sc.StateName,
 
 			Count: sc.Count,
-
 		})
 
 	}
@@ -931,4 +914,18 @@ func (r *incidentRepository) LockForUpdate(ctx context.Context, tx *gorm.DB, id 
 	}
 
 	return &incident, nil
+}
+
+func (r *incidentRepository) FindUserOpenIncidentsByParent(ctx context.Context, reporterID uuid.UUID, locationID uuid.UUID, classificationID uuid.UUID) ([]models.Incident, error) {
+
+	var incidents []models.Incident
+
+	err := r.db.WithContext(ctx).
+		Where("reporter_id = ?", reporterID).
+		Where("location_id = ?", locationID).
+		Where("classification_id = ?", classificationID).
+		Where("closed_at IS NULL").
+		Find(&incidents).Error
+
+	return incidents, err
 }
