@@ -39,12 +39,13 @@ type UserService interface {
 }
 
 type userService struct {
-	userRepo     repository.UserRepository
+	userRepo       repository.UserRepository
 	departmentRepo repository.DepartmentRepository
-	jwtManager   *utils.JWTManager
-	sessionStore *database.SessionStore
-	storage      *storage.MinIOStorage
-	config       *config.Config
+	jwtManager     *utils.JWTManager
+	sessionStore   *database.SessionStore
+	storage        *storage.MinIOStorage
+	config         *config.Config
+	actionLogService ActionLogService
 }
 
 func NewUserService(
@@ -54,14 +55,16 @@ func NewUserService(
 	sessionStore *database.SessionStore,
 	storage *storage.MinIOStorage,
 	cfg *config.Config,
+	actionLogService ActionLogService,
 ) UserService {
 	return &userService{
-		userRepo:     userRepo,
+		userRepo:       userRepo,
 		departmentRepo: departmentRepo,
-		jwtManager:   jwtManager,
-		sessionStore: sessionStore,
-		storage:      storage,
-		config:       cfg,
+		jwtManager:     jwtManager,
+		sessionStore:   sessionStore,
+		storage:        storage,
+		config:         cfg,
+		actionLogService: actionLogService,
 	}
 }
 
@@ -150,6 +153,31 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 	// Reload user with relations
 	user, _ = s.userRepo.FindByIDWithRelations(ctx, user.ID)
 
+	// Log user creation
+	go func() {
+		// For registration, we'll use the created user's ID as the actor for now
+		// In admin-created scenarios, the actual admin user ID would be passed via context
+		actorID := user.ID
+		if ctx.Value("actor_id") != nil {
+			if id, ok := ctx.Value("actor_id").(uuid.UUID); ok {
+				actorID = id
+			}
+		}
+		
+		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+			UserID:      actorID,
+			Action:      "create",
+			Module:      "users",
+			ResourceID:  user.ID.String(),
+			Description: fmt.Sprintf("User %s (%s) created", user.Username, user.Email),
+			OldValue:    nil,
+			NewValue:    req,
+			IPAddress:   getStringFromContext(ctx, "ip_address"),
+			UserAgent:   getStringFromContext(ctx, "user_agent"),
+			Status:      "success",
+		})
+	}()
+
 	return &models.AuthResponse{
 		User:  models.ToUserResponse(user),
 		Token: token,
@@ -160,16 +188,61 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 	user, err := s.userRepo.FindByEmailWithRelations(ctx, req.Email)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// Log failed login attempt
+			go func() {
+				_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+					UserID:      uuid.Nil, // Unknown user at this point
+					Action:      "login_failed",
+					Module:      "users",
+					ResourceID:  "",
+					Description: fmt.Sprintf("Failed login attempt for email: %s", req.Email),
+					OldValue:    nil,
+					NewValue:    nil,
+					IPAddress:   getStringFromContext(ctx, "ip_address"),
+					UserAgent:   getStringFromContext(ctx, "user_agent"),
+					Status:      "failed",
+				})
+			}()
 			return nil, errors.New("invalid credentials")
 		}
 		return nil, err
 	}
 
 	if !utils.CheckPassword(req.Password, user.Password) {
+		// Log failed login attempt
+		go func() {
+			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+				UserID:      user.ID,
+				Action:      "login_failed",
+				Module:      "users",
+				ResourceID:  user.ID.String(),
+				Description: fmt.Sprintf("Failed login attempt for user: %s (%s)", user.Username, user.Email),
+				OldValue:    nil,
+				NewValue:    nil,
+				IPAddress:   getStringFromContext(ctx, "ip_address"),
+				UserAgent:   getStringFromContext(ctx, "user_agent"),
+				Status:      "failed",
+			})
+		}()
 		return nil, errors.New("invalid credentials")
 	}
 
 	if !user.IsActive {
+		// Log failed login attempt due to deactivation
+		go func() {
+			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+				UserID:      user.ID,
+				Action:      "login_failed",
+				Module:      "users",
+				ResourceID:  user.ID.String(),
+				Description: fmt.Sprintf("Login attempt failed for deactivated user: %s (%s)", user.Username, user.Email),
+				OldValue:    nil,
+				NewValue:    nil,
+				IPAddress:   getStringFromContext(ctx, "ip_address"),
+				UserAgent:   getStringFromContext(ctx, "user_agent"),
+				Status:      "failed",
+			})
+		}()
 		return nil, errors.New("account is deactivated")
 	}
 
@@ -193,6 +266,39 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 	}, s.jwtManager.GetTokenExpiration()); err != nil {
 		return nil, err
 	}
+
+	// Log successful login
+	go func() {
+		ipAddress := ""
+		if ipVal := ctx.Value("ip_address"); ipVal != nil {
+			if ipStr, ok := ipVal.(string); ok {
+				ipAddress = ipStr
+			}
+		}
+		
+		userAgent := ""
+		if uaVal := ctx.Value("user_agent"); uaVal != nil {
+			if uaStr, ok := uaVal.(string); ok {
+				userAgent = uaStr
+			}
+		}
+		
+		if err := s.actionLogService.LogAction(context.Background(), &LogActionParams{
+			UserID:      user.ID,
+			Action:      "login",
+			Module:      "users",
+			ResourceID:  user.ID.String(),
+			Description: fmt.Sprintf("Successful login for user: %s (%s)", user.Username, user.Email),
+			OldValue:    nil,
+			NewValue:    nil,
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		}); err != nil {
+			// Log the error for debugging
+			fmt.Printf("Error logging login action: %v\n", err)
+		}
+	}()
 
 	return &models.AuthResponse{
 		User:         models.ToUserResponse(user),
@@ -251,6 +357,46 @@ func (s *userService) RefreshToken(ctx context.Context, refreshToken string) (*m
 }
 
 func (s *userService) Logout(ctx context.Context, token string) error {
+	// Get user ID from context to log the logout event
+	userIDInterface := ctx.Value("user_id")
+	if userIDInterface != nil {
+		if userID, ok := userIDInterface.(uuid.UUID); ok {
+			// Safely get IP address and user agent from context
+			ipAddress := ""
+			if ipVal := ctx.Value("ip_address"); ipVal != nil {
+				if ipStr, ok := ipVal.(string); ok {
+					ipAddress = ipStr
+				}
+			}
+			
+			userAgent := ""
+			if uaVal := ctx.Value("user_agent"); uaVal != nil {
+				if uaStr, ok := uaVal.(string); ok {
+					userAgent = uaStr
+				}
+			}
+
+			// Log logout event
+			go func() {
+				if err := s.actionLogService.LogAction(context.Background(), &LogActionParams{
+					UserID:      userID,
+					Action:      "logout",
+					Module:      "users",
+					ResourceID:  userID.String(),
+					Description: fmt.Sprintf("User logged out"),
+					OldValue:    nil,
+					NewValue:    nil,
+					IPAddress:   ipAddress,
+					UserAgent:   userAgent,
+					Status:      "success",
+				}); err != nil {
+					// Log the error for debugging
+					fmt.Printf("Error logging logout action: %v\n", err)
+				}
+			}()
+		}
+	}
+
 	return s.sessionStore.BlacklistToken(ctx, token, s.jwtManager.GetTokenExpiration())
 }
 
@@ -268,6 +414,35 @@ func (s *userService) UpdateProfile(ctx context.Context, userID uuid.UUID, req *
 	user, err := s.userRepo.FindByIDWithRelations(ctx, userID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Store old values for audit logging
+	oldUser := &models.UserUpdateRequest{
+		FirstName:         user.FirstName,
+		LastName:          user.LastName,
+		Username:          user.Username,
+		Phone:             user.Phone,
+		Extension:         user.Extension,
+		DepartmentID:      user.DepartmentID,
+		LocationID:        user.LocationID,
+		IsActive:          &user.IsActive,
+		DepartmentIDs:     make([]uuid.UUID, len(user.Departments)),
+		LocationIDs:       make([]uuid.UUID, len(user.Locations)),
+		ClassificationIDs: make([]uuid.UUID, len(user.Classifications)),
+		RoleIDs:           make([]uuid.UUID, len(user.Roles)),
+	}
+
+	for i, dept := range user.Departments {
+		oldUser.DepartmentIDs[i] = dept.ID
+	}
+	for i, loc := range user.Locations {
+		oldUser.LocationIDs[i] = loc.ID
+	}
+	for i, cls := range user.Classifications {
+		oldUser.ClassificationIDs[i] = cls.ID
+	}
+	for i, role := range user.Roles {
+		oldUser.RoleIDs[i] = role.ID
 	}
 
 	// Track if departments changed to decide whether to sync
@@ -331,14 +506,128 @@ func (s *userService) UpdateProfile(ctx context.Context, userID uuid.UUID, req *
 	}
 
 	// Always update associations (even if empty arrays) to allow removal
+	// Log role assignments
+	oldRoleIDs := make([]uuid.UUID, len(oldUser.RoleIDs))
+	copy(oldRoleIDs, oldUser.RoleIDs)
 	s.userRepo.AssignRoles(ctx, user.ID, req.RoleIDs)
+	
+	// Log role assignment changes
+	if !equalUUIDSlices(oldRoleIDs, req.RoleIDs) {
+		go func() {
+			actorID := userID
+			if ctx.Value("actor_id") != nil {
+				if id, ok := ctx.Value("actor_id").(uuid.UUID); ok {
+					actorID = id
+				}
+			}
+			
+			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+				UserID:      actorID,
+				Action:      "role_assignment",
+				Module:      "users",
+				ResourceID:  user.ID.String(),
+				Description: fmt.Sprintf("Roles assigned to user: %s (%s)", user.Username, user.Email),
+				OldValue:    map[string]interface{}{"role_ids": oldRoleIDs},
+				NewValue:    map[string]interface{}{"role_ids": req.RoleIDs},
+				IPAddress:   getStringFromContext(ctx, "ip_address"),
+				UserAgent:   getStringFromContext(ctx, "user_agent"),
+				Status:      "success",
+			})
+		}()
+	}
+
+	// Log department assignments
+	oldDepartmentIDs := make([]uuid.UUID, len(oldUser.DepartmentIDs))
+	copy(oldDepartmentIDs, oldUser.DepartmentIDs)
 	s.userRepo.AssignDepartments(ctx, user.ID, req.DepartmentIDs)
+	
+	// Log department assignment changes
+	if !equalUUIDSlices(oldDepartmentIDs, req.DepartmentIDs) {
+		go func() {
+			actorID := userID
+			if ctx.Value("actor_id") != nil {
+				if id, ok := ctx.Value("actor_id").(uuid.UUID); ok {
+					actorID = id
+				}
+			}
+			
+			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+				UserID:      actorID,
+				Action:      "department_assignment",
+				Module:      "users",
+				ResourceID:  user.ID.String(),
+				Description: fmt.Sprintf("Departments assigned to user: %s (%s)", user.Username, user.Email),
+				OldValue:    map[string]interface{}{"department_ids": oldDepartmentIDs},
+				NewValue:    map[string]interface{}{"department_ids": req.DepartmentIDs},
+				IPAddress:   getStringFromContext(ctx, "ip_address"),
+				UserAgent:   getStringFromContext(ctx, "user_agent"),
+				Status:      "success",
+			})
+		}()
+	}
 
 	// Only update locations and classifications if departments did NOT change
 	// If departments changed, we'll sync from departments instead
 	if !departmentsChanged {
+		// Log location assignments
+		oldLocationIDs := make([]uuid.UUID, len(oldUser.LocationIDs))
+		copy(oldLocationIDs, oldUser.LocationIDs)
 		s.userRepo.AssignLocations(ctx, user.ID, req.LocationIDs)
+		
+		// Log location assignment changes
+		if !equalUUIDSlices(oldLocationIDs, req.LocationIDs) {
+			go func() {
+				actorID := userID
+				if ctx.Value("actor_id") != nil {
+					if id, ok := ctx.Value("actor_id").(uuid.UUID); ok {
+						actorID = id
+					}
+				}
+				
+				_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+					UserID:      actorID,
+					Action:      "location_assignment",
+					Module:      "users",
+					ResourceID:  user.ID.String(),
+					Description: fmt.Sprintf("Locations assigned to user: %s (%s)", user.Username, user.Email),
+					OldValue:    map[string]interface{}{"location_ids": oldLocationIDs},
+					NewValue:    map[string]interface{}{"location_ids": req.LocationIDs},
+					IPAddress:   getStringFromContext(ctx, "ip_address"),
+					UserAgent:   getStringFromContext(ctx, "user_agent"),
+					Status:      "success",
+				})
+			}()
+		}
+
+		// Log classification assignments
+		oldClassificationIDs := make([]uuid.UUID, len(oldUser.ClassificationIDs))
+		copy(oldClassificationIDs, oldUser.ClassificationIDs)
 		s.userRepo.AssignClassifications(ctx, user.ID, req.ClassificationIDs)
+		
+		// Log classification assignment changes
+		if !equalUUIDSlices(oldClassificationIDs, req.ClassificationIDs) {
+			go func() {
+				actorID := userID
+				if ctx.Value("actor_id") != nil {
+					if id, ok := ctx.Value("actor_id").(uuid.UUID); ok {
+						actorID = id
+					}
+				}
+				
+				_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+					UserID:      actorID,
+					Action:      "classification_assignment",
+					Module:      "users",
+					ResourceID:  user.ID.String(),
+					Description: fmt.Sprintf("Classifications assigned to user: %s (%s)", user.Username, user.Email),
+					OldValue:    map[string]interface{}{"classification_ids": oldClassificationIDs},
+					NewValue:    map[string]interface{}{"classification_ids": req.ClassificationIDs},
+					IPAddress:   getStringFromContext(ctx, "ip_address"),
+					UserAgent:   getStringFromContext(ctx, "user_agent"),
+					Status:      "success",
+				})
+			}()
+		}
 	}
 
 	// Sync classifications and locations from departments ONLY if departments changed
@@ -350,6 +639,23 @@ func (s *userService) UpdateProfile(ctx context.Context, userID uuid.UUID, req *
 	user, _ = s.userRepo.FindByIDWithRelations(ctx, user.ID)
 
 	response := models.ToUserResponse(user)
+
+	// Log user update
+	go func() {
+		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+			UserID:      userID,
+			Action:      "update",
+			Module:      "users",
+			ResourceID:  user.ID.String(),
+			Description: fmt.Sprintf("User profile updated for user: %s (%s)", user.Username, user.Email),
+			OldValue:    oldUser,
+			NewValue:    req,
+			IPAddress:   getStringFromContext(ctx, "ip_address"),
+			UserAgent:   getStringFromContext(ctx, "user_agent"),
+			Status:      "success",
+		})
+	}()
+
 	return &response, nil
 }
 
@@ -360,6 +666,21 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 	}
 
 	if !utils.CheckPassword(req.OldPassword, user.Password) {
+		// Log failed password change attempt
+		go func() {
+			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+				UserID:      userID,
+				Action:      "password_change_failed",
+				Module:      "users",
+				ResourceID:  user.ID.String(),
+				Description: fmt.Sprintf("Failed password change attempt for user: %s (%s)", user.Username, user.Email),
+				OldValue:    nil,
+				NewValue:    nil,
+				IPAddress:   getStringFromContext(ctx, "ip_address"),
+				UserAgent:   getStringFromContext(ctx, "user_agent"),
+				Status:      "failed",
+			})
+		}()
 		return errors.New("current password is incorrect")
 	}
 
@@ -369,7 +690,27 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 	}
 
 	user.Password = hashedPassword
-	return s.userRepo.Update(ctx, user)
+	err = s.userRepo.Update(ctx, user)
+	
+	if err == nil {
+		// Log successful password change
+		go func() {
+			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+				UserID:      userID,
+				Action:      "password_change",
+				Module:      "users",
+				ResourceID:  user.ID.String(),
+				Description: fmt.Sprintf("Password changed for user: %s (%s)", user.Username, user.Email),
+				OldValue:    map[string]interface{}{"has_password": true},
+				NewValue:    map[string]interface{}{"has_password": true},
+				IPAddress:   getStringFromContext(ctx, "ip_address"),
+				UserAgent:   getStringFromContext(ctx, "user_agent"),
+				Status:      "success",
+			})
+		}()
+	}
+	
+	return err
 }
 
 func (s *userService) UploadAvatar(ctx context.Context, userID uuid.UUID, file multipart.File, header *multipart.FileHeader) (*models.UserResponse, error) {
@@ -377,6 +718,8 @@ func (s *userService) UploadAvatar(ctx context.Context, userID uuid.UUID, file m
 	if err != nil {
 		return nil, err
 	}
+
+	oldAvatar := user.Avatar
 
 	if user.Avatar != "" {
 		_ = s.storage.DeleteFile(ctx, user.Avatar)
@@ -393,6 +736,30 @@ func (s *userService) UploadAvatar(ctx context.Context, userID uuid.UUID, file m
 	}
 
 	response := models.ToUserResponse(user)
+	
+	// Log avatar upload
+	go func() {
+		actorID := userID
+		if ctx.Value("actor_id") != nil {
+			if id, ok := ctx.Value("actor_id").(uuid.UUID); ok {
+				actorID = id
+			}
+		}
+		
+		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+			UserID:      actorID,
+			Action:      "avatar_upload",
+			Module:      "users",
+			ResourceID:  userID.String(),
+			Description: fmt.Sprintf("Avatar uploaded for user: %s (%s)", user.Username, user.Email),
+			OldValue:    map[string]string{"avatar": oldAvatar},
+			NewValue:    map[string]string{"avatar": user.Avatar},
+			IPAddress:   getStringFromContext(ctx, "ip_address"),
+			UserAgent:   getStringFromContext(ctx, "user_agent"),
+			Status:      "success",
+		})
+	}()
+
 	return &response, nil
 }
 
@@ -402,13 +769,58 @@ func (s *userService) UpdateAvatar(ctx context.Context, userID uuid.UUID, avatar
 		return err
 	}
 
-	user.Avatar = s.storage.GetPublicURL(avatarURL, s.config.MinIO.Endpoint)
-	return s.userRepo.Update(ctx, user)
+	oldAvatar := user.Avatar
+	newAvatar := s.storage.GetPublicURL(avatarURL, s.config.MinIO.Endpoint)
+	user.Avatar = newAvatar
+	
+	err = s.userRepo.Update(ctx, user)
+	
+	if err == nil {
+		// Log avatar update
+		go func() {
+			actorID := userID
+			if ctx.Value("actor_id") != nil {
+				if id, ok := ctx.Value("actor_id").(uuid.UUID); ok {
+					actorID = id
+				}
+			}
+			
+			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+				UserID:      actorID,
+				Action:      "avatar_update",
+				Module:      "users",
+				ResourceID:  userID.String(),
+				Description: fmt.Sprintf("Avatar updated for user: %s (%s)", user.Username, user.Email),
+				OldValue:    map[string]string{"avatar": oldAvatar},
+				NewValue:    map[string]string{"avatar": newAvatar},
+				IPAddress:   getStringFromContext(ctx, "ip_address"),
+				UserAgent:   getStringFromContext(ctx, "user_agent"),
+				Status:      "success",
+			})
+		}()
+	}
+	
+	return err
 }
 
 func (s *userService) DeleteUser(ctx context.Context, userID uuid.UUID) error {
 	user, err := s.userRepo.FindByID(ctx, userID)
 	if err != nil {
+		// Log failed deletion attempt
+		go func() {
+			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+				UserID:      userID,
+				Action:      "delete_failed",
+				Module:      "users",
+				ResourceID:  userID.String(),
+				Description: fmt.Sprintf("Failed user deletion attempt for user ID: %s", userID.String()),
+				OldValue:    nil,
+				NewValue:    nil,
+				IPAddress:   getStringFromContext(ctx, "ip_address"),
+				UserAgent:   getStringFromContext(ctx, "user_agent"),
+				Status:      "failed",
+			})
+		}()
 		return err
 	}
 
@@ -418,7 +830,43 @@ func (s *userService) DeleteUser(ctx context.Context, userID uuid.UUID) error {
 
 	_ = s.sessionStore.DeleteUserSession(ctx, userID.String())
 
-	return s.userRepo.Delete(ctx, userID)
+	err = s.userRepo.Delete(ctx, userID)
+	
+	if err == nil {
+		// Log successful user deletion
+		go func() {
+			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+				UserID:      userID,
+				Action:      "delete",
+				Module:      "users",
+				ResourceID:  userID.String(),
+				Description: fmt.Sprintf("User deleted: %s (%s)", user.Username, user.Email),
+				OldValue:    user,
+				NewValue:    nil,
+				IPAddress:   getStringFromContext(ctx, "ip_address"),
+				UserAgent:   getStringFromContext(ctx, "user_agent"),
+				Status:      "success",
+			})
+		}()
+	} else {
+		// Log failed deletion
+		go func() {
+			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+				UserID:      userID,
+				Action:      "delete_failed",
+				Module:      "users",
+				ResourceID:  userID.String(),
+				Description: fmt.Sprintf("Failed to delete user: %s (%s)", user.Username, user.Email),
+				OldValue:    nil,
+				NewValue:    nil,
+				IPAddress:   getStringFromContext(ctx, "ip_address"),
+				UserAgent:   getStringFromContext(ctx, "user_agent"),
+				Status:      "failed",
+			})
+		}()
+	}
+	
+	return err
 }
 
 func (s *userService) ListUsers(ctx context.Context, page, limit int) ([]models.UserResponse, int64, error) {
@@ -590,4 +1038,45 @@ func (s *userService) syncDepartmentAttributesToUser(ctx context.Context, userID
 	}
 
 	return nil
+}
+
+// Helper function to compare UUID slices
+func equalUUIDSlices(a, b []uuid.UUID) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	
+	// Create maps to count occurrences
+	countA := make(map[uuid.UUID]int)
+	countB := make(map[uuid.UUID]int)
+	
+	for _, id := range a {
+		countA[id]++
+	}
+	for _, id := range b {
+		countB[id]++
+	}
+	
+	// Compare counts
+	if len(countA) != len(countB) {
+		return false
+	}
+	
+	for id, count := range countA {
+		if countB[id] != count {
+			return false
+		}
+	}
+	
+	return true
+}
+
+// Helper function to safely extract string values from context
+func getStringFromContext(ctx context.Context, key string) string {
+	if val := ctx.Value(key); val != nil {
+		if str, ok := val.(string); ok {
+			return str
+		}
+	}
+	return ""
 }
