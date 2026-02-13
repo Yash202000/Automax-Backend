@@ -19,6 +19,12 @@ type Workflow struct {
 	IsDefault   bool               `gorm:"default:false" json:"is_default"`
 	RecordType  string             `gorm:"size:20;default:'incident'" json:"record_type"` // 'incident', 'request', 'complaint', 'query', 'both', 'all'
 
+	// Matching criteria - stored as JSON arrays, empty/null means matches any value
+	// Sources: ["email", "phone", "web", "mobile", "emergency_hotline", etc.]
+	Sources string `gorm:"type:text" json:"sources"` // JSON array of source strings
+	// Priorities: [1, 2, 3, 4, 5] where 1=Low, 2=Medium, 3=High, 4=Urgent, 5=Critical
+	Priorities string `gorm:"type:text" json:"priorities"` // JSON array of priority integers
+
 	// Visual designer metadata (stores canvas layout as JSON)
 	CanvasLayout string `gorm:"type:text" json:"canvas_layout"`
 
@@ -196,6 +202,8 @@ type WorkflowCreateRequest struct {
 	Code              string   `json:"code" validate:"required,min=2,max=50"`
 	Description       string   `json:"description" validate:"max=500"`
 	RecordType        string   `json:"record_type" validate:"omitempty,oneof=incident request complaint query both all"`
+	Sources           []string `json:"sources"`     // Array of source strings
+	Priorities        []int    `json:"priorities"`  // Array of priority integers
 	ClassificationIDs []string `json:"classification_ids"`
 	LocationIDs       []string `json:"location_ids"`
 	RequiredFields    []string `json:"required_fields"`
@@ -206,6 +214,8 @@ type WorkflowUpdateRequest struct {
 	Code                    string   `json:"code" validate:"omitempty,min=2,max=50"`
 	Description             string   `json:"description" validate:"max=500"`
 	RecordType              *string  `json:"record_type" validate:"omitempty,oneof=incident request complaint query both all"`
+	Sources                 []string `json:"sources"`     // Array of source strings (nil means not updating)
+	Priorities              []int    `json:"priorities"`  // Array of priority integers (nil means not updating)
 	IsActive                *bool    `json:"is_active"`
 	IsDefault               *bool    `json:"is_default"`
 	CanvasLayout            string   `json:"canvas_layout"`
@@ -340,6 +350,8 @@ type WorkflowResponse struct {
 	IsActive              bool                         `json:"is_active"`
 	IsDefault             bool                         `json:"is_default"`
 	RecordType            string                       `json:"record_type"`
+	Sources               []string                     `json:"sources"`     // Array of sources
+	Priorities            []int                        `json:"priorities"`  // Array of priorities
 	CanvasLayout          string                       `json:"canvas_layout,omitempty"`
 	RequiredFields        []string                     `json:"required_fields"`
 	States                []WorkflowStateResponse      `json:"states,omitempty"`
@@ -437,6 +449,24 @@ func ToWorkflowResponse(w *Workflow) WorkflowResponse {
 		requiredFields = []string{}
 	}
 
+	// Parse Sources JSON string to array
+	var sources []string
+	if w.Sources != "" {
+		json.Unmarshal([]byte(w.Sources), &sources)
+	}
+	if sources == nil {
+		sources = []string{}
+	}
+
+	// Parse Priorities JSON string to array
+	var priorities []int
+	if w.Priorities != "" {
+		json.Unmarshal([]byte(w.Priorities), &priorities)
+	}
+	if priorities == nil {
+		priorities = []int{}
+	}
+
 	resp := WorkflowResponse{
 		ID:               w.ID,
 		Name:             w.Name,
@@ -446,6 +476,8 @@ func ToWorkflowResponse(w *Workflow) WorkflowResponse {
 		IsActive:         w.IsActive,
 		IsDefault:        w.IsDefault,
 		RecordType:       w.RecordType,
+		Sources:          sources,
+		Priorities:       priorities,
 		CanvasLayout:     w.CanvasLayout,
 		RequiredFields:   requiredFields,
 		StatesCount:      len(w.States),
@@ -642,6 +674,8 @@ type WorkflowExportContent struct {
 	Code                  string                      `json:"code"`
 	Description           string                      `json:"description"`
 	RecordType            string                      `json:"record_type"`
+	Sources               []string                    `json:"sources,omitempty"`
+	Priorities            []int                       `json:"priorities,omitempty"`
 	RequiredFields        []string                    `json:"required_fields"`
 	States                []WorkflowStateExport       `json:"states"`
 	Transitions           []WorkflowTransitionExport  `json:"transitions"`

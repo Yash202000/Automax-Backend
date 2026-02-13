@@ -79,15 +79,17 @@ func NewWorkflowService(repo repository.WorkflowRepository, roleRepo repository.
 }
 
 // checkForDuplicateRules checks if another workflow already has the same matching rules
-// Returns (isConflict bool, conflictingWorkflowName string, error)
+// Returns (isConflict bool, conflictingWorkflowName string, conflictDetails string, error)
 func (s *workflowService) checkForDuplicateRules(
 	ctx context.Context,
 	recordType string,
+	sources []string,
+	priorities []int,
 	classificationIDs []uuid.UUID,
 	locationIDs []uuid.UUID,
 	isDefault bool,
 	excludeWorkflowID *uuid.UUID,
-) (bool, string, error) {
+) (bool, string, string, error) {
 	// Get all workflows that could potentially conflict
 	existingWorkflows, err := s.repo.FindWorkflowsByRecordTypeAndClassifications(
 		ctx,
@@ -97,7 +99,7 @@ func (s *workflowService) checkForDuplicateRules(
 		excludeWorkflowID,
 	)
 	if err != nil {
-		return false, "", err
+		return false, "", "", err
 	}
 
 	// Build sets for classification and location IDs for comparison
@@ -111,12 +113,66 @@ func (s *workflowService) checkForDuplicateRules(
 		newLocIDSet[id] = true
 	}
 
+	// Build sets for sources and priorities
+	newSourceSet := make(map[string]bool)
+	for _, s := range sources {
+		newSourceSet[s] = true
+	}
+
+	newPrioritySet := make(map[int]bool)
+	for _, p := range priorities {
+		newPrioritySet[p] = true
+	}
+
 	for _, existingWf := range existingWorkflows {
+		// Parse existing workflow's sources and priorities
+		var existingSources []string
+		if existingWf.Sources != "" {
+			json.Unmarshal([]byte(existingWf.Sources), &existingSources)
+		}
+
+		var existingPriorities []int
+		if existingWf.Priorities != "" {
+			json.Unmarshal([]byte(existingWf.Priorities), &existingPriorities)
+		}
+
+		// Check if sources overlap (both empty OR have common elements)
+		sourcesOverlap := (len(sources) == 0 && len(existingSources) == 0) ||
+			(len(sources) == 0 || len(existingSources) == 0) || // One is generic (empty) - overlaps with everything
+			hasOverlap(newSourceSet, existingSources)
+
+		// Check if priorities overlap (both empty OR have common elements)
+		prioritiesOverlap := (len(priorities) == 0 && len(existingPriorities) == 0) ||
+			(len(priorities) == 0 || len(existingPriorities) == 0) || // One is generic (empty) - overlaps with everything
+			hasOverlapInt(newPrioritySet, existingPriorities)
+
+		// If sources or priorities don't overlap, no conflict
+		if !sourcesOverlap || !prioritiesOverlap {
+			continue
+		}
+
 		// Case 1: Both workflows are default with no classifications and no locations (generic fallback conflict)
 		if isDefault && existingWf.IsDefault &&
 			len(classificationIDs) == 0 && len(existingWf.Classifications) == 0 &&
 			len(locationIDs) == 0 && len(existingWf.Locations) == 0 {
-			return true, existingWf.Name, nil
+			var conflictParts []string
+			if len(sources) > 0 {
+				conflictParts = append(conflictParts, fmt.Sprintf("sources: %s", strings.Join(sources, ", ")))
+			}
+			if len(priorities) > 0 {
+				priorityStrs := make([]string, len(priorities))
+				for i, p := range priorities {
+					priorityStrs[i] = fmt.Sprintf("%d", p)
+				}
+				conflictParts = append(conflictParts, fmt.Sprintf("priorities: %s", strings.Join(priorityStrs, ", ")))
+			}
+			conflictDetails := "default workflow"
+			if len(conflictParts) > 0 {
+				conflictDetails = fmt.Sprintf("default workflow with %s", strings.Join(conflictParts, " and "))
+			} else {
+				conflictDetails = "default workflow with no sources, priorities, classifications or locations"
+			}
+			return true, existingWf.Name, conflictDetails, nil
 		}
 
 		// Case 2: Exact classification AND location match
@@ -154,12 +210,48 @@ func (s *workflowService) checkForDuplicateRules(
 
 			// Both must match for a conflict
 			if allClassMatch && allLocMatch {
-				return true, existingWf.Name, nil
+				// Build details about what conflicted
+				var conflictParts []string
+
+				if len(sources) > 0 {
+					conflictParts = append(conflictParts, fmt.Sprintf("sources: %s", strings.Join(sources, ", ")))
+				}
+
+				if len(priorities) > 0 {
+					priorityStrs := make([]string, len(priorities))
+					for i, p := range priorities {
+						priorityStrs[i] = fmt.Sprintf("%d", p)
+					}
+					conflictParts = append(conflictParts, fmt.Sprintf("priorities: %s", strings.Join(priorityStrs, ", ")))
+				}
+
+				if len(classificationIDs) > 0 {
+					classNames := make([]string, 0, len(existingWf.Classifications))
+					for _, c := range existingWf.Classifications {
+						classNames = append(classNames, c.Name)
+					}
+					conflictParts = append(conflictParts, fmt.Sprintf("classifications: %s", strings.Join(classNames, ", ")))
+				}
+
+				if len(locationIDs) > 0 {
+					locNames := make([]string, 0, len(existingWf.Locations))
+					for _, loc := range existingWf.Locations {
+						locNames = append(locNames, loc.Name)
+					}
+					conflictParts = append(conflictParts, fmt.Sprintf("locations: %s", strings.Join(locNames, ", ")))
+				}
+
+				conflictDetails := strings.Join(conflictParts, " and ")
+				if conflictDetails == "" {
+					conflictDetails = "same record type with no sources, priorities, classifications or locations"
+				}
+
+				return true, existingWf.Name, conflictDetails, nil
 			}
 		}
 	}
 
-	return false, "", nil
+	return false, "", "", nil
 }
 
 // Workflow CRUD
@@ -197,12 +289,31 @@ func (s *workflowService) CreateWorkflow(ctx context.Context, req *models.Workfl
 		}
 	}
 
-	// Only check for duplicate rules if classifications or locations are provided
+	// Marshal sources and priorities to JSON
+	sourcesJSON := "[]"
+	if len(req.Sources) > 0 {
+		jsonBytes, err := json.Marshal(req.Sources)
+		if err == nil {
+			sourcesJSON = string(jsonBytes)
+		}
+	}
+
+	prioritiesJSON := "[]"
+	if len(req.Priorities) > 0 {
+		jsonBytes, err := json.Marshal(req.Priorities)
+		if err == nil {
+			prioritiesJSON = string(jsonBytes)
+		}
+	}
+
+	// Only check for duplicate rules if classifications, locations, sources, or priorities are provided
 	// Typically, workflows are created empty and configured later in the designer
-	if len(classificationIDs) > 0 || len(locationIDs) > 0 {
-		isConflict, conflictingName, err := s.checkForDuplicateRules(
+	if len(classificationIDs) > 0 || len(locationIDs) > 0 || len(req.Sources) > 0 || len(req.Priorities) > 0 {
+		isConflict, conflictingName, conflictDetails, err := s.checkForDuplicateRules(
 			ctx,
 			recordType,
+			req.Sources,
+			req.Priorities,
 			classificationIDs,
 			locationIDs,
 			false, // New workflows aren't default by default
@@ -212,7 +323,7 @@ func (s *workflowService) CreateWorkflow(ctx context.Context, req *models.Workfl
 			return nil, err
 		}
 		if isConflict {
-			return nil, fmt.Errorf("workflow rules conflict: these rules are already in use by workflow '%s'", conflictingName)
+			return nil, fmt.Errorf("workflow rules conflict: these rules (%s) are already in use by workflow '%s'", conflictDetails, conflictingName)
 		}
 	}
 
@@ -221,6 +332,8 @@ func (s *workflowService) CreateWorkflow(ctx context.Context, req *models.Workfl
 		Code:           req.Code,
 		Description:    req.Description,
 		RecordType:     recordType,
+		Sources:        sourcesJSON,
+		Priorities:     prioritiesJSON,
 		RequiredFields: requiredFieldsJSON,
 		CreatedByID:    &createdByID,
 		IsActive:       true,
@@ -324,6 +437,28 @@ func (s *workflowService) UpdateWorkflow(ctx context.Context, id uuid.UUID, req 
 		finalIsDefault = *req.IsDefault
 	}
 
+	// Parse sources from request or use existing
+	var finalSources []string
+	if req.Sources != nil {
+		finalSources = req.Sources
+	} else {
+		// Use existing sources
+		if workflow.Sources != "" {
+			json.Unmarshal([]byte(workflow.Sources), &finalSources)
+		}
+	}
+
+	// Parse priorities from request or use existing
+	var finalPriorities []int
+	if req.Priorities != nil {
+		finalPriorities = req.Priorities
+	} else {
+		// Use existing priorities
+		if workflow.Priorities != "" {
+			json.Unmarshal([]byte(workflow.Priorities), &finalPriorities)
+		}
+	}
+
 	// Parse classification IDs from request or use existing
 	var finalClassificationIDs []uuid.UUID
 	if req.ClassificationIDs != nil {
@@ -357,9 +492,11 @@ func (s *workflowService) UpdateWorkflow(ctx context.Context, id uuid.UUID, req 
 	}
 
 	// Check for duplicate rules with the final state, excluding this workflow
-	isConflict, conflictingName, err := s.checkForDuplicateRules(
+	isConflict, conflictingName, conflictDetails, err := s.checkForDuplicateRules(
 		ctx,
 		finalRecordType,
+		finalSources,
+		finalPriorities,
 		finalClassificationIDs,
 		finalLocationIDs,
 		finalIsDefault,
@@ -369,7 +506,7 @@ func (s *workflowService) UpdateWorkflow(ctx context.Context, id uuid.UUID, req 
 		return nil, err
 	}
 	if isConflict {
-		return nil, fmt.Errorf("workflow rules conflict: these rules are already in use by workflow '%s'", conflictingName)
+		return nil, fmt.Errorf("workflow rules conflict: these rules (%s) are already in use by workflow '%s'", conflictDetails, conflictingName)
 	}
 
 	// Apply updates
@@ -390,6 +527,20 @@ func (s *workflowService) UpdateWorkflow(ctx context.Context, id uuid.UUID, req 
 	}
 	if req.RecordType != nil {
 		workflow.RecordType = *req.RecordType
+	}
+	// Update Sources if provided (nil means not updating, empty array means clear)
+	if req.Sources != nil {
+		jsonBytes, err := json.Marshal(req.Sources)
+		if err == nil {
+			workflow.Sources = string(jsonBytes)
+		}
+	}
+	// Update Priorities if provided (nil means not updating, empty array means clear)
+	if req.Priorities != nil {
+		jsonBytes, err := json.Marshal(req.Priorities)
+		if err == nil {
+			workflow.Priorities = string(jsonBytes)
+		}
 	}
 	if req.CanvasLayout != "" {
 		workflow.CanvasLayout = req.CanvasLayout
@@ -1064,6 +1215,49 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 
 		score := 0
 
+		// Parse workflow's sources and priorities
+		var wfSources []string
+		if w.Sources != "" {
+			json.Unmarshal([]byte(w.Sources), &wfSources)
+		}
+
+		var wfPriorities []int
+		if w.Priorities != "" {
+			json.Unmarshal([]byte(w.Priorities), &wfPriorities)
+		}
+
+		// Check source match - if workflow specifies sources, request source MUST be in the list
+		if len(wfSources) > 0 {
+			sourceMatched := false
+			for _, wfSource := range wfSources {
+				if wfSource == req.Source {
+					sourceMatched = true
+					score += 20 // Source match is highest priority
+					break
+				}
+			}
+			// If workflow has sources but none matched, skip this workflow
+			if !sourceMatched {
+				continue
+			}
+		}
+
+		// Check priority match - if workflow specifies priorities, request priority MUST be in the list
+		if len(wfPriorities) > 0 {
+			priorityMatched := false
+			for _, wfPriority := range wfPriorities {
+				if wfPriority == req.Priority {
+					priorityMatched = true
+					score += 15 // Priority match is high priority
+					break
+				}
+			}
+			// If workflow has priorities but none matched, skip this workflow
+			if !priorityMatched {
+				continue
+			}
+		}
+
 		// Check classification match
 		if classificationID != uuid.Nil && len(w.Classifications) > 0 {
 			for _, c := range w.Classifications {
@@ -1314,6 +1508,17 @@ func (s *workflowService) ExportWorkflow(ctx context.Context, id uuid.UUID) ([]b
 		}
 	}
 
+	// Parse sources and priorities
+	var sources []string
+	if workflow.Sources != "" {
+		json.Unmarshal([]byte(workflow.Sources), &sources)
+	}
+
+	var priorities []int
+	if workflow.Priorities != "" {
+		json.Unmarshal([]byte(workflow.Priorities), &priorities)
+	}
+
 	// Build export structure
 	exportData := models.WorkflowExportData{
 		ExportVersion: "1.0",
@@ -1323,6 +1528,8 @@ func (s *workflowService) ExportWorkflow(ctx context.Context, id uuid.UUID) ([]b
 			Code:                  workflow.Code,
 			Description:           workflow.Description,
 			RecordType:            workflow.RecordType,
+			Sources:               sources,
+			Priorities:            priorities,
 			RequiredFields:        requiredFields,
 			States:                exportStates,
 			Transitions:           exportTransitions,
@@ -1424,12 +1631,17 @@ func (s *workflowService) ImportWorkflow(ctx context.Context, data *models.Workf
 
 	// Create workflow
 	requiredFieldsJSON, _ := json.Marshal(data.Workflow.RequiredFields)
+	sourcesJSON, _ := json.Marshal(data.Workflow.Sources)
+	prioritiesJSON, _ := json.Marshal(data.Workflow.Priorities)
+
 	workflow := &models.Workflow{
 		ID:             uuid.New(),
 		Name:           data.Workflow.Name,
 		Code:           workflowCode,
 		Description:    data.Workflow.Description,
 		RecordType:     data.Workflow.RecordType,
+		Sources:        string(sourcesJSON),
+		Priorities:     string(prioritiesJSON),
 		RequiredFields: string(requiredFieldsJSON),
 		CreatedByID:    &createdByID,
 		IsActive:       false, // Start as inactive
@@ -1656,4 +1868,24 @@ func buildBulkInsertValues(workflowID uuid.UUID, ids []uuid.UUID) string {
 		values += fmt.Sprintf("('%s', '%s')", workflowID.String(), id.String())
 	}
 	return values
+}
+
+// Helper function to check if a set of strings overlaps with an array
+func hasOverlap(set map[string]bool, arr []string) bool {
+	for _, item := range arr {
+		if set[item] {
+			return true
+		}
+	}
+	return false
+}
+
+// Helper function to check if a set of ints overlaps with an array
+func hasOverlapInt(set map[int]bool, arr []int) bool {
+	for _, item := range arr {
+		if set[item] {
+			return true
+		}
+	}
+	return false
 }
