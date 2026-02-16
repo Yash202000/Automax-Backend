@@ -56,6 +56,7 @@ type IncidentService interface {
 
 	// Stats and user queries
 	GetStats(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponse, error)
+	GetPriorityCounts(ctx context.Context, filter *models.IncidentFilter) (map[string]int64, error)
 	GetMyAssigned(ctx context.Context, userID uuid.UUID, recordType string, page, limit int) ([]models.IncidentResponse, int64, error)
 	GetMyReported(ctx context.Context, userID uuid.UUID, recordType string, page, limit int) ([]models.IncidentResponse, int64, error)
 	GetSLABreached(ctx context.Context) ([]models.IncidentResponse, error)
@@ -1512,6 +1513,10 @@ func (s *incidentService) AssignIncident(ctx context.Context, incidentID, assign
 
 func (s *incidentService) GetStats(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponse, error) {
 	return s.incidentRepo.GetStats(ctx, filter)
+}
+
+func (s *incidentService) GetPriorityCounts(ctx context.Context, filter *models.IncidentFilter) (map[string]int64, error) {
+	return s.incidentRepo.GetPriorityCounts(ctx, filter)
 }
 
 func (s *incidentService) GetMyAssigned(ctx context.Context, userID uuid.UUID, recordType string, page, limit int) ([]models.IncidentResponse, int64, error) {

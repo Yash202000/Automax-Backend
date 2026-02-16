@@ -577,6 +577,46 @@ func (h *IncidentHandler) GetStats(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "Stats retrieved", stats)
 }
 
+func (h *IncidentHandler) GetPriorityCounts(c *fiber.Ctx) error {
+	filter := &models.IncidentFilter{}
+
+	// Filter by record_type (incident, request, complaint)
+	if recordType := c.Query("record_type"); recordType != "" {
+		filter.RecordType = &recordType
+	}
+
+	// Filter by workflow_id
+	if workflowID := c.Query("workflow_id"); workflowID != "" {
+		if id, err := uuid.Parse(workflowID); err == nil {
+			filter.WorkflowID = &id
+		}
+	}
+
+	// Filter by department_id
+	if deptID := c.Query("department_id"); deptID != "" {
+		if id, err := uuid.Parse(deptID); err == nil {
+			filter.DepartmentID = &id
+		}
+	}
+
+	// Filter by assignee_id
+	if assigneeID := c.Query("assignee_id"); assigneeID != "" {
+		if id, err := uuid.Parse(assigneeID); err == nil {
+			filter.AssigneeID = &id
+		}
+	}
+
+	// Add user role IDs for state visibility filtering
+	filter.UserRoleIDs = h.getUserRoleIDs(c)
+
+	counts, err := h.service.GetPriorityCounts(c.Context(), filter)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Priority counts retrieved", counts)
+}
+
 // User queries
 
 func (h *IncidentHandler) GetMyAssigned(c *fiber.Ctx) error {

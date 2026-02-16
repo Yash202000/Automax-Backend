@@ -61,6 +61,7 @@ type IncidentRepository interface {
 
 	// Stats
 	GetStats(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponse, error)
+	GetPriorityCounts(ctx context.Context, filter *models.IncidentFilter) (map[string]int64, error)
 	GetSLABreachedIncidents(ctx context.Context) ([]models.Incident, error)
 	UpdateSLABreached(ctx context.Context, incidentID uuid.UUID, breached bool) error
 	MarkSLABreached(ctx context.Context) (int64, error)
@@ -664,6 +665,66 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 
 	return stats, nil
 
+}
+
+func (r *incidentRepository) GetPriorityCounts(ctx context.Context, filter *models.IncidentFilter) (map[string]int64, error) {
+	// Query to count incidents grouped by priority
+	type priorityCount struct {
+		PriorityName  string `gorm:"column:priority_name"`
+		SortOrder     int    `gorm:"column:sort_order"`
+		Count         int64  `gorm:"column:count"`
+	}
+
+	query := r.db.WithContext(ctx).Model(&models.Incident{}).
+		Select("lookup_values.name as priority_name, lookup_values.sort_order as sort_order, count(*) as count").
+		Joins("INNER JOIN incident_lookup_values ON incident_lookup_values.incident_id = incidents.id").
+		Joins("INNER JOIN lookup_values ON lookup_values.id = incident_lookup_values.lookup_value_id").
+		Joins("INNER JOIN lookup_categories ON lookup_categories.id = lookup_values.category_id").
+		Where("lookup_categories.code = ?", "PRIORITY")
+
+	// Apply filters if provided
+	if filter != nil {
+		if filter.RecordType != nil && *filter.RecordType != "" {
+			query = query.Where("incidents.record_type = ?", *filter.RecordType)
+		}
+
+		if filter.WorkflowID != nil {
+			query = query.Where("incidents.workflow_id = ?", *filter.WorkflowID)
+		}
+
+		if filter.DepartmentID != nil {
+			query = query.Where("incidents.department_id = ?", *filter.DepartmentID)
+		}
+
+		if filter.AssigneeID != nil {
+			query = query.Where("incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", *filter.AssigneeID, *filter.AssigneeID)
+		}
+
+		// Filter by state visibility based on user roles
+		if filter.UserRoleIDs != nil && len(filter.UserRoleIDs) > 0 {
+			query = query.Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
+				Where(`
+					NOT EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = workflow_states.id)
+					OR EXISTS (SELECT 1 FROM state_viewable_roles
+					           WHERE workflow_state_id = workflow_states.id AND role_id IN ?)
+				`, filter.UserRoleIDs)
+		}
+	}
+
+	var counts []priorityCount
+	if err := query.Group("lookup_values.id, lookup_values.name, lookup_values.sort_order").
+		Order("lookup_values.sort_order ASC").
+		Scan(&counts).Error; err != nil {
+		return nil, err
+	}
+
+	// Build result map with priority names as keys
+	result := make(map[string]int64)
+	for _, pc := range counts {
+		result[pc.PriorityName] = pc.Count
+	}
+
+	return result, nil
 }
 
 func (r *incidentRepository) GetSLABreachedIncidents(ctx context.Context) ([]models.Incident, error) {
