@@ -131,6 +131,12 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 		}
 	}
 
+	if priorityStr := c.Query("priority"); priorityStr != "" {
+		if p, err := strconv.Atoi(priorityStr); err == nil && p >= 1 && p <= 5 {
+			filter.Priority = &p
+		}
+	}
+
 	if assigneeID := c.Query("assignee_id"); assigneeID != "" {
 		if id, err := uuid.Parse(assigneeID); err == nil {
 			filter.AssigneeID = &id
@@ -806,6 +812,12 @@ func (h *IncidentHandler) ListComplaints(c *fiber.Ctx) error {
 		}
 	}
 
+	if priorityStr := c.Query("priority"); priorityStr != "" {
+		if p, err := strconv.Atoi(priorityStr); err == nil && p >= 1 && p <= 5 {
+			filter.Priority = &p
+		}
+	}
+
 	if assigneeID := c.Query("assignee_id"); assigneeID != "" {
 		if id, err := uuid.Parse(assigneeID); err == nil {
 			filter.AssigneeID = &id
@@ -956,6 +968,12 @@ func (h *IncidentHandler) ListQueries(c *fiber.Ctx) error {
 	if classID := c.Query("classification_id"); classID != "" {
 		if id, err := uuid.Parse(classID); err == nil {
 			filter.ClassificationID = &id
+		}
+	}
+
+	if priorityStr := c.Query("priority"); priorityStr != "" {
+		if p, err := strconv.Atoi(priorityStr); err == nil && p >= 1 && p <= 5 {
+			filter.Priority = &p
 		}
 	}
 

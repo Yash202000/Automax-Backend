@@ -443,6 +443,7 @@ type IncidentFilter struct {
 	WorkflowID       *uuid.UUID  `json:"workflow_id"`
 	CurrentStateID   *uuid.UUID  `json:"current_state_id"`
 	ClassificationID *uuid.UUID  `json:"classification_id"`
+	Priority         *int        `json:"priority"`
 	AssigneeID       *uuid.UUID  `json:"assignee_id"`
 	DepartmentID     *uuid.UUID  `json:"department_id"`
 	LocationID       *uuid.UUID  `json:"location_id"`

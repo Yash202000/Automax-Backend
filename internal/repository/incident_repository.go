@@ -178,6 +178,9 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	if filter.ClassificationID != nil {
 		query = query.Where("classification_id = ?", *filter.ClassificationID)
 	}
+	if filter.Priority != nil {
+		query = query.Where("priority = ?", *filter.Priority)
+	}
 	if filter.AssigneeID != nil {
 		// Check both primary assignee and multiple assignees
 		query = query.Where("assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", *filter.AssigneeID, *filter.AssigneeID)
