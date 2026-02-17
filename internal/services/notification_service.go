@@ -88,7 +88,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 			Size:        int64(len(att.Data)),
 		})
 	}
-
+	fmt.Println("channel", channel)
 	switch channel {
 
 	case "email":
@@ -128,6 +128,29 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 			}
 		}
 		provider = "twilio"
+
+	case "whatsapp":
+
+		for _, phone := range to {
+			fmt.Println("channel111", channel, phone, body)
+			err := utils.SendWhatsApp(phone, body)
+			if err != nil {
+				status = "failed"
+				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
+					Email:  phone,
+					Type:   "to",
+					Status: "failed",
+					Error:  err.Error(),
+				})
+			} else {
+				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
+					Email:  phone,
+					Type:   "to",
+					Status: "success",
+				})
+			}
+		}
+		provider = "meta"
 
 	default:
 		return nil, fmt.Errorf("unsupported channel: %s", channel)

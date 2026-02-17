@@ -225,6 +225,7 @@ func (h *NotificationHandler) Send(c *fiber.Ctx) error {
 		}
 
 		// Send without attachments
+		fmt.Println("hnalder")
 		log, err := h.service.SendNotification(c.Context(), req.Channel, req.TemplateCode, req.Language, req.To, req.CC, req.BCC, req.Subject, req.Body, req.Variables, nil, sentBy)
 		if err != nil {
 			return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())

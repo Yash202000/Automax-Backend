@@ -3,7 +3,10 @@ package utils
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/smtp"
 	"os"
 	"strings"
@@ -12,6 +15,48 @@ import (
 	"github.com/twilio/twilio-go"
 	openapi "github.com/twilio/twilio-go/rest/api/v2010"
 )
+
+// WhatsApp Service
+func SendWhatsApp(phone string, message string) error {
+
+	// url := "https://graph.facebook.com/v24.0/YOUR_PHONE_NUMBER_ID/messages"
+	url := "https://graph.facebook.com/v24.0/779437325263607/messages"
+
+	payload := map[string]interface{}{
+		"messaging_product": "whatsapp",
+		"recipient_type":    "individual",
+		"to":                phone,
+		"type":              "text",
+		"text": map[string]interface{}{
+			"preview_url": false,
+			"body":        message,
+		},
+	}
+
+	jsonData, _ := json.Marshal(payload)
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+os.Getenv("META_ACCESS_TOKEN"))
+	fmt.Println("Authorization", "Bearer "+os.Getenv("META_ACCESS_TOKEN"))
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("whatsapp send failed: %s", string(bodyBytes))
+	}
+
+	return nil
+}
 
 // SendSMTPWithCCBCC sends email with TO, CC, BCC, and attachments support
 func SendSMTPWithCCBCC(to []string, cc []string, bcc []string, subject, body string, attachments []models.AttachmentData) (models.RecipientArray, error) {
