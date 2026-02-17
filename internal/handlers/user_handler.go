@@ -184,9 +184,30 @@ func (h *UserHandler) DeleteAccount(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "Account deleted successfully", nil)
 }
 
+func parseUUIDList(raw string) []uuid.UUID {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	result := make([]uuid.UUID, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if id, err := uuid.Parse(p); err == nil {
+			result = append(result, id)
+		}
+	}
+	return result
+}
+
 func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit, _ := strconv.Atoi(c.Query("limit", "10"))
+	search := c.Query("search", "")
+
+	roleIDs := parseUUIDList(c.Query("role_ids", ""))
+	departmentIDs := parseUUIDList(c.Query("department_ids", ""))
+	locationIDs := parseUUIDList(c.Query("location_ids", ""))
+	classificationIDs := parseUUIDList(c.Query("classification_ids", ""))
 
 	if page < 1 {
 		page = 1
@@ -195,7 +216,7 @@ func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 		limit = 10
 	}
 
-	users, total, err := h.userService.ListUsers(c.Context(), page, limit)
+	users, total, err := h.userService.ListUsers(c.Context(), page, limit, search, roleIDs, departmentIDs, locationIDs, classificationIDs)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch users")
 	}
@@ -451,7 +472,7 @@ func (h *UserHandler) UpdateUserCallStatus(c *fiber.Ctx) error {
 // Export exports all users as JSON
 func (h *UserHandler) Export(c *fiber.Ctx) error {
 	// Get all users without pagination
-	users, _, err := h.userService.ListUsers(c.Context(), 1, 10000)
+	users, _, err := h.userService.ListUsers(c.Context(), 1, 10000, "", nil, nil, nil, nil)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}

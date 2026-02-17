@@ -29,7 +29,7 @@ type UserService interface {
 	UploadAvatar(ctx context.Context, userID uuid.UUID, file multipart.File, header *multipart.FileHeader) (*models.UserResponse, error)
 	UpdateAvatar(ctx context.Context, userID uuid.UUID, avatarURL string) error
 	DeleteUser(ctx context.Context, userID uuid.UUID) error
-	ListUsers(ctx context.Context, page, limit int) ([]models.UserResponse, int64, error)
+	ListUsers(ctx context.Context, page, limit int, search string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.UserResponse, int64, error)
 	GetUserByID(ctx context.Context, userID uuid.UUID) (*models.UserResponse, error)
 	GetUserByEmail(ctx context.Context, email string) (*models.User, error)
 	GetUserByUsername(ctx context.Context, username string) (*models.User, error)
@@ -421,8 +421,8 @@ func (s *userService) DeleteUser(ctx context.Context, userID uuid.UUID) error {
 	return s.userRepo.Delete(ctx, userID)
 }
 
-func (s *userService) ListUsers(ctx context.Context, page, limit int) ([]models.UserResponse, int64, error) {
-	users, total, err := s.userRepo.List(ctx, page, limit)
+func (s *userService) ListUsers(ctx context.Context, page, limit int, search string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.UserResponse, int64, error) {
+	users, total, err := s.userRepo.List(ctx, page, limit, search, roleIDs, departmentIDs, locationIDs, classificationIDs)
 	if err != nil {
 		return nil, 0, err
 	}
