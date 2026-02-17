@@ -76,7 +76,7 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 			return utils.ErrorResponse(
 				c,
 				fiber.StatusConflict,
-				"You have already reported an open incident near this location. Please wait until it is resolved or choose a different location & classification.",
+				"You reported the same incident earlier; we are on it. Please wait for it to be resolved. Feel free to raise a new incident if the classification or location is different.",
 			)
 
 		case errors.Is(err, services.ErrInvalidLocation):
