@@ -47,6 +47,7 @@ type WorkflowService interface {
 	SetTransitionRoles(ctx context.Context, transitionID uuid.UUID, roleIDs []uuid.UUID) error
 	SetTransitionRequirements(ctx context.Context, transitionID uuid.UUID, requirements []models.TransitionRequirementRequest) error
 	SetTransitionActions(ctx context.Context, transitionID uuid.UUID, actions []models.TransitionActionRequest) error
+	SetTransitionFieldChanges(ctx context.Context, transitionID uuid.UUID, fieldChanges []models.TransitionFieldChangeRequest) error
 
 	// Get transitions from a state (for incident transition UI)
 	GetTransitionsFromState(ctx context.Context, stateID uuid.UUID) ([]models.WorkflowTransitionResponse, error)
@@ -1135,6 +1136,19 @@ func (s *workflowService) SetTransitionActions(ctx context.Context, transitionID
 		}
 	}
 	return s.repo.SetTransitionActions(ctx, transitionID, actions)
+}
+
+func (s *workflowService) SetTransitionFieldChanges(ctx context.Context, transitionID uuid.UUID, data []models.TransitionFieldChangeRequest) error {
+	fieldChanges := make([]models.TransitionFieldChange, len(data))
+	for i, fc := range data {
+		fieldChanges[i] = models.TransitionFieldChange{
+			FieldName:  fc.FieldName,
+			Label:      fc.Label,
+			IsRequired: fc.IsRequired,
+			SortOrder:  fc.SortOrder,
+		}
+	}
+	return s.repo.SetTransitionFieldChanges(ctx, transitionID, fieldChanges)
 }
 
 // Get transitions from a state (for incident transition UI)

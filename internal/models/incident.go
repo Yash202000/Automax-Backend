@@ -350,7 +350,13 @@ type IncidentTransitionRequest struct {
 	// Assignment overrides (used when auto-detect finds multiple matches)
 	DepartmentID *string `json:"department_id" validate:"omitempty,uuid"`
 	UserID       *string `json:"user_id" validate:"omitempty,uuid"`
-	Version      int     `json:"version" validate:"required,min=1"`
+
+	// Field changes configured on the transition (user-editable fields during transition)
+	// Keys: "priority", "department_id", "location_id", "classification_id", "title", "description"
+	// Values: string representation (UUIDs for ID fields, "1"-"5" for priority, plain text otherwise)
+	FieldChanges map[string]string `json:"field_changes"`
+
+	Version int `json:"version" validate:"required,min=1"`
 }
 
 type IncidentFeedbackRequest struct {

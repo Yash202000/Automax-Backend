@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1136,6 +1137,37 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			updates["resolved_at"] = now
 		}
 		updates["closed_at"] = now
+	}
+
+	// Apply user-provided field changes configured on the transition
+	if len(req.FieldChanges) > 0 {
+		for fieldName, fieldValue := range req.FieldChanges {
+			if fieldValue == "" {
+				continue
+			}
+			switch fieldName {
+			case "priority":
+				if p, err := strconv.Atoi(fieldValue); err == nil && p >= 1 && p <= 5 {
+					updates["priority"] = p
+				}
+			case "department_id":
+				if id, err := uuid.Parse(fieldValue); err == nil {
+					updates["department_id"] = id
+				}
+			case "location_id":
+				if id, err := uuid.Parse(fieldValue); err == nil {
+					updates["location_id"] = id
+				}
+			case "classification_id":
+				if id, err := uuid.Parse(fieldValue); err == nil {
+					updates["classification_id"] = id
+				}
+			case "title":
+				updates["title"] = fieldValue
+			case "description":
+				updates["description"] = fieldValue
+			}
+		}
 	}
 
 	// Apply all updates using optimistic locking with version

@@ -446,6 +446,27 @@ func (h *WorkflowHandler) SetTransitionActions(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "Transition actions updated", nil)
 }
 
+func (h *WorkflowHandler) SetTransitionFieldChanges(c *fiber.Ctx) error {
+	transitionIDStr := c.Params("id")
+	transitionID, err := uuid.Parse(transitionIDStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid transition ID")
+	}
+
+	var req struct {
+		FieldChanges []models.TransitionFieldChangeRequest `json:"field_changes"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if err := h.service.SetTransitionFieldChanges(c.Context(), transitionID, req.FieldChanges); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Transition field changes updated", nil)
+}
+
 // Helper endpoints
 
 func (h *WorkflowHandler) GetTransitionsFromState(c *fiber.Ctx) error {

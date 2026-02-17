@@ -126,9 +126,10 @@ type WorkflowTransition struct {
 	ManualSelectUser bool `gorm:"default:false" json:"manual_select_user"`
 	// If manual_select_user=true: user performing transition manually selects the assignee from dropdown
 
-	// Requirements and Actions
-	Requirements []TransitionRequirement `gorm:"foreignKey:TransitionID" json:"requirements,omitempty"`
-	Actions      []TransitionAction      `gorm:"foreignKey:TransitionID" json:"actions,omitempty"`
+	// Requirements, Actions and Field Changes
+	Requirements []TransitionRequirement  `gorm:"foreignKey:TransitionID" json:"requirements,omitempty"`
+	Actions      []TransitionAction       `gorm:"foreignKey:TransitionID" json:"actions,omitempty"`
+	FieldChanges []TransitionFieldChange  `gorm:"foreignKey:TransitionID" json:"field_changes,omitempty"`
 
 	IsActive  bool           `gorm:"default:true" json:"is_active"`
 	SortOrder int            `gorm:"default:0" json:"sort_order"`
@@ -191,6 +192,30 @@ type TransitionAction struct {
 func (a *TransitionAction) BeforeCreate(tx *gorm.DB) error {
 	if a.ID == uuid.Nil {
 		a.ID = uuid.New()
+	}
+	return nil
+}
+
+// TransitionFieldChange defines which incident fields the user can modify during a transition
+type TransitionFieldChange struct {
+	ID           uuid.UUID           `gorm:"type:uuid;primary_key" json:"id"`
+	TransitionID uuid.UUID           `gorm:"type:uuid;index;not null" json:"transition_id"`
+	Transition   *WorkflowTransition `gorm:"foreignKey:TransitionID" json:"transition,omitempty"`
+
+	// FieldName is the incident field key, e.g. "priority", "department_id", "location_id",
+	// "classification_id", "title", "description"
+	FieldName  string `gorm:"size:100;not null" json:"field_name"`
+	Label      string `gorm:"size:100" json:"label"`       // Display label shown in the transition modal
+	IsRequired bool   `gorm:"default:false" json:"is_required"` // Whether the field must be filled
+	SortOrder  int    `gorm:"default:0" json:"sort_order"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (f *TransitionFieldChange) BeforeCreate(tx *gorm.DB) error {
+	if f.ID == uuid.Nil {
+		f.ID = uuid.New()
 	}
 	return nil
 }
@@ -311,6 +336,13 @@ type TransitionActionRequest struct {
 	IsActive       bool   `json:"is_active"`
 }
 
+type TransitionFieldChangeRequest struct {
+	FieldName  string `json:"field_name" validate:"required"`
+	Label      string `json:"label"`
+	IsRequired bool   `json:"is_required"`
+	SortOrder  int    `json:"sort_order"`
+}
+
 // Workflow matching request - used by mobile apps and other clients
 type WorkflowMatchRequest struct {
 	ClassificationID string `json:"classification_id"`
@@ -408,11 +440,12 @@ type WorkflowTransitionResponse struct {
 	AutoMatchUser    bool          `json:"auto_match_user"`
 	ManualSelectUser bool          `json:"manual_select_user"`
 
-	Requirements []TransitionRequirementResponse `json:"requirements,omitempty"`
-	Actions      []TransitionActionResponse      `json:"actions,omitempty"`
-	IsActive     bool                            `json:"is_active"`
-	SortOrder    int                             `json:"sort_order"`
-	CreatedAt    time.Time                       `json:"created_at"`
+	Requirements []TransitionRequirementResponse  `json:"requirements,omitempty"`
+	Actions      []TransitionActionResponse       `json:"actions,omitempty"`
+	FieldChanges []TransitionFieldChangeResponse  `json:"field_changes,omitempty"`
+	IsActive     bool                             `json:"is_active"`
+	SortOrder    int                              `json:"sort_order"`
+	CreatedAt    time.Time                        `json:"created_at"`
 }
 
 type TransitionRequirementResponse struct {
@@ -435,6 +468,15 @@ type TransitionActionResponse struct {
 	ExecutionOrder int       `json:"execution_order"`
 	IsAsync        bool      `json:"is_async"`
 	IsActive       bool      `json:"is_active"`
+}
+
+type TransitionFieldChangeResponse struct {
+	ID           uuid.UUID `json:"id"`
+	TransitionID uuid.UUID `json:"transition_id"`
+	FieldName    string    `json:"field_name"`
+	Label        string    `json:"label"`
+	IsRequired   bool      `json:"is_required"`
+	SortOrder    int       `json:"sort_order"`
 }
 
 // Converter functions
@@ -624,6 +666,13 @@ func ToWorkflowTransitionResponse(t *WorkflowTransition) WorkflowTransitionRespo
 		}
 	}
 
+	if len(t.FieldChanges) > 0 {
+		resp.FieldChanges = make([]TransitionFieldChangeResponse, len(t.FieldChanges))
+		for i, f := range t.FieldChanges {
+			resp.FieldChanges[i] = ToTransitionFieldChangeResponse(&f)
+		}
+	}
+
 	return resp
 }
 
@@ -650,6 +699,17 @@ func ToTransitionActionResponse(a *TransitionAction) TransitionActionResponse {
 		ExecutionOrder: a.ExecutionOrder,
 		IsAsync:        a.IsAsync,
 		IsActive:       a.IsActive,
+	}
+}
+
+func ToTransitionFieldChangeResponse(f *TransitionFieldChange) TransitionFieldChangeResponse {
+	return TransitionFieldChangeResponse{
+		ID:           f.ID,
+		TransitionID: f.TransitionID,
+		FieldName:    f.FieldName,
+		Label:        f.Label,
+		IsRequired:   f.IsRequired,
+		SortOrder:    f.SortOrder,
 	}
 }
 

@@ -67,6 +67,7 @@ func Migrate(db *gorm.DB) error {
 		&models.WorkflowTransition{},
 		&models.TransitionRequirement{},
 		&models.TransitionAction{},
+		&models.TransitionFieldChange{},
 		// Incident models
 		&models.Incident{},
 		&models.IncidentComment{},
