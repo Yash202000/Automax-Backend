@@ -225,15 +225,15 @@ func (h *NotificationHandler) Send(c *fiber.Ctx) error {
 		}
 
 		// Send without attachments
-		log, err := h.service.SendNotification(c.Context(), req.Channel, req.TemplateCode, req.Language, req.To, req.CC, req.BCC, req.Subject, req.Body, req.Variables, nil, sentBy)
+		result, err := h.service.SendNotification(c.Context(), req.Channel, req.TemplateCode, req.Language, req.To, req.CC, req.BCC, req.Subject, req.Body, req.Variables, nil, sentBy)
 		if err != nil {
 			return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 		}
 
 		res := SendNotificationResponse{
-			ID:       log.ID.String(),
-			Status:   log.Status,
-			Provider: log.Provider,
+			ID:       result.SentLog.ID.String(),
+			Status:   result.SentLog.Status,
+			Provider: result.SentLog.Provider,
 		}
 
 		return c.Status(fiber.StatusOK).JSON(fiber.Map{
@@ -322,23 +322,31 @@ func (h *NotificationHandler) Send(c *fiber.Ctx) error {
 	}
 
 	// Send notification with attachments
-	notificationLog, err := h.service.SendNotification(c.Context(), channel, templateCodePtr, language, to, cc, bcc, subject, body, variables, attachments, sentBy)
+	result, err := h.service.SendNotification(c.Context(), channel, templateCodePtr, language, to, cc, bcc, subject, body, variables, attachments, sentBy)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Update attachment URLs if attachments were uploaded
+	// Update both sent record and all inbox records
 	if len(attachmentURLs) > 0 {
-		if err := h.service.UpdateAttachmentURLs(c.Context(), notificationLog.ID, attachmentURLs); err != nil {
-			log.Printf("Warning: Failed to update attachment URLs for notification %s: %v", notificationLog.ID, err)
-			// Don't fail the request, just log the warning
+		// Update sent record
+		if err := h.service.UpdateAttachmentURLs(c.Context(), result.SentLog.ID, attachmentURLs); err != nil {
+			log.Printf("Warning: Failed to update attachment URLs for sent notification %s: %v", result.SentLog.ID, err)
+		}
+
+		// Update all inbox records
+		for _, inboxID := range result.InboxLogIDs {
+			if err := h.service.UpdateAttachmentURLs(c.Context(), inboxID, attachmentURLs); err != nil {
+				log.Printf("Warning: Failed to update attachment URLs for inbox notification %s: %v", inboxID, err)
+			}
 		}
 	}
 
 	res := SendNotificationResponse{
-		ID:       notificationLog.ID.String(),
-		Status:   notificationLog.Status,
-		Provider: notificationLog.Provider,
+		ID:       result.SentLog.ID.String(),
+		Status:   result.SentLog.Status,
+		Provider: result.SentLog.Provider,
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
