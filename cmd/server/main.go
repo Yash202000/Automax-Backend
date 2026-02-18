@@ -85,8 +85,8 @@ func main() {
 	notificationLogRepo := repository.NewNotificationLogRepository(db)
 
 	// Initialize services
-	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg)
 	actionLogService := services.NewActionLogService(actionLogRepo)
+	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg, actionLogService)
 	callLogService := services.NewCallLogService(callLogRepo, userRepo)
 	workflowService := services.NewWorkflowService(workflowRepo, roleRepo, departmentRepo, classificationRepo, db)
 	incidentService := services.NewIncidentService(incidentRepo, workflowRepo, userRepo, minioStorage, db, wsHub, locationRepo)
@@ -347,6 +347,7 @@ func main() {
 	actionLogs.Get("/filter-options", authMiddleware.RequirePermission("action-logs:view"), actionLogHandler.GetFilterOptions)
 	actionLogs.Get("/user/:id", authMiddleware.RequirePermission("action-logs:view"), actionLogHandler.GetUserActions)
 	actionLogs.Get("/:id", authMiddleware.RequirePermission("action-logs:view"), actionLogHandler.GetActionLog)
+	actionLogs.Get("/export", authMiddleware.RequirePermission("action-logs:export"), actionLogHandler.ExportActionLogs)
 	actionLogs.Delete("/cleanup", authMiddleware.RequirePermission("action-logs:delete"), actionLogHandler.CleanupOldLogs)
 
 	// Call Log routes
