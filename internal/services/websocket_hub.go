@@ -376,11 +376,11 @@ func (h *WSHub) GetConnectionStats() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"total_clients":             len(h.clients),
-		"broadcast_clients":         len(h.broadcastClients),
-		"incident_clients":          totalIncidentClients,
-		"unique_incidents_watched":  len(h.incidents),
-		"incidents_detail":          incidentStats,
+		"total_clients":            len(h.clients),
+		"broadcast_clients":        len(h.broadcastClients),
+		"incident_clients":         totalIncidentClients,
+		"unique_incidents_watched": len(h.incidents),
+		"incidents_detail":         incidentStats,
 	}
 }
 

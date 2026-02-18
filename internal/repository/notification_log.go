@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"log"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/google/uuid"
@@ -39,7 +40,10 @@ func (r *notificationLogRepository) Create(
 
 func (r *notificationLogRepository) FindByID(ctx context.Context, id uuid.UUID) (*models.NotificationLog, error) {
 	var log models.NotificationLog
-	err := r.db.WithContext(ctx).First(&log, "id = ?", id).Error
+	err := r.db.WithContext(ctx).
+		Preload("SentByUser").
+		Preload("ReceivedByUser").
+		First(&log, "id = ?", id).Error
 	if err != nil {
 		return nil, err
 	}
@@ -63,6 +67,12 @@ func (r *notificationLogRepository) List(ctx context.Context, filter *models.Not
 	var total int64
 
 	query := r.db.WithContext(ctx).Model(&models.NotificationLog{})
+
+	// Apply user filtering - show emails where user is either sender OR receiver
+	if filter.UserID != nil {
+		log.Printf("[Notifications Repository] Filtering by user_id: %s (sent_by OR received_by)", filter.UserID.String())
+		query = query.Where("sent_by = ? OR received_by = ?", *filter.UserID, *filter.UserID)
+	}
 
 	// Apply filters
 	if filter.Channel != "" {
@@ -130,6 +140,8 @@ func (r *notificationLogRepository) List(ctx context.Context, filter *models.Not
 	// Apply pagination
 	offset := (filter.Page - 1) * filter.Limit
 	err := query.
+		Preload("SentByUser").
+		Preload("ReceivedByUser").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(filter.Limit).
@@ -137,6 +149,8 @@ func (r *notificationLogRepository) List(ctx context.Context, filter *models.Not
 	if err != nil {
 		return nil, 0, err
 	}
+
+	log.Printf("[Notifications Repository] Found %d notifications (total: %d) for user filter", len(logs), total)
 
 	return logs, total, nil
 }
