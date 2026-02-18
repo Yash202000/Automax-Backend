@@ -65,8 +65,20 @@ func (m *AuthMiddleware) Authenticate() fiber.Handler {
 
 		c.Locals("user_id", claims.UserID)
 		c.Locals("email", claims.Email)
+		c.Locals("user_email", claims.Email) // For compatibility with presence tracking
 		c.Locals("role", claims.Role)
 		c.Locals("token", token)
+
+		// Fetch user details to get the name for presence tracking
+		user, err := m.userRepo.FindByID(c.Context(), claims.UserID)
+		if err == nil && user != nil {
+			// Construct full name from first and last name
+			userName := strings.TrimSpace(user.FirstName + " " + user.LastName)
+			if userName == "" {
+				userName = user.Username
+			}
+			c.Locals("user_name", userName)
+		}
 
 		return c.Next()
 	}
@@ -145,8 +157,20 @@ func (m *AuthMiddleware) OptionalAuth() fiber.Handler {
 
 		c.Locals("user_id", claims.UserID)
 		c.Locals("email", claims.Email)
+		c.Locals("user_email", claims.Email) // For compatibility with presence tracking
 		c.Locals("role", claims.Role)
 		c.Locals("token", token)
+
+		// Fetch user details to get the name for presence tracking
+		user, err := m.userRepo.FindByID(c.Context(), claims.UserID)
+		if err == nil && user != nil {
+			// Construct full name from first and last name
+			userName := strings.TrimSpace(user.FirstName + " " + user.LastName)
+			if userName == "" {
+				userName = user.Username
+			}
+			c.Locals("user_name", userName)
+		}
 
 		return c.Next()
 	}

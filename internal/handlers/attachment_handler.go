@@ -12,9 +12,9 @@ import (
 )
 
 type AttachmentHandler struct {
-	incidentService      services.IncidentService
-	notificationService  *services.NotificationService
-	storage              *storage.MinIOStorage
+	incidentService     services.IncidentService
+	notificationService *services.NotificationService
+	storage             *storage.MinIOStorage
 }
 
 func NewAttachmentHandler(
@@ -46,9 +46,15 @@ func (h *AttachmentHandler) DownloadAttachment(c *fiber.Ctx) error {
 			}
 			defer file.Close()
 
+			fileData, err := io.ReadAll(file)
+			if err != nil {
+				return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read file")
+			}
+
 			c.Set("Content-Type", attachment.MimeType)
 			c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", attachment.FileName))
-			return c.SendStream(file)
+			c.Set("Content-Length", fmt.Sprintf("%d", len(fileData)))
+			return c.Send(fileData)
 		}
 	}
 

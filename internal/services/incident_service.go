@@ -5,15 +5,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/storage"
+	"github.com/automax/backend/internal/utils"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+var ErrDuplicateIncident = errors.New("duplicate_incident")
+var ErrInvalidLocation = errors.New("invalid_location")
 
 type IncidentService interface {
 	// Incident CRUD
@@ -56,6 +62,7 @@ type IncidentService interface {
 
 	// Stats and user queries
 	GetStats(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponse, error)
+	GetPriorityCounts(ctx context.Context, filter *models.IncidentFilter) (map[string]int64, error)
 	GetMyAssigned(ctx context.Context, userID uuid.UUID, recordType string, page, limit int) ([]models.IncidentResponse, int64, error)
 	GetMyReported(ctx context.Context, userID uuid.UUID, recordType string, page, limit int) ([]models.IncidentResponse, int64, error)
 	GetSLABreached(ctx context.Context) ([]models.IncidentResponse, error)
@@ -101,6 +108,68 @@ func NewIncidentService(
 // Incident CRUD
 
 func (s *incidentService) CreateIncident(ctx context.Context, req *models.IncidentCreateRequest, reporterID uuid.UUID) (*models.IncidentResponse, error) {
+	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+
+	if strings.EqualFold(clientCode, "EPM940") {
+		if req.LocationID != nil && req.ClassificationID != nil {
+
+			locationID, err1 := uuid.Parse(*req.LocationID)
+			classificationID, err2 := uuid.Parse(*req.ClassificationID)
+
+			if err1 != nil || err2 != nil {
+				return nil, ErrInvalidLocation
+			}
+
+			// Find user's open incidents with same location and classification
+			openIncidents, err := s.incidentRepo.
+				FindUserOpenIncidentsByParent(
+					ctx,
+					reporterID,
+					locationID,
+					classificationID,
+				)
+			if err != nil {
+				return nil, err
+			}
+
+			if len(openIncidents) > 0 {
+				// Check if distance-based validation is possible
+				location, locErr := s.locationRepo.FindByID(ctx, locationID)
+				useDistanceCheck := locErr == nil && location.Latitude != nil && location.Longitude != nil
+
+				if !useDistanceCheck {
+					// No coordinates available — exact location_id + classification_id match is enough
+					return nil, ErrDuplicateIncident
+				}
+
+				// Distance-based check: block if any existing open incident is within range
+				maxDistanceStr := os.Getenv("MAX_INCIDENT_DISTANCE")
+				incidentDistance, err := strconv.ParseFloat(maxDistanceStr, 64)
+				if err != nil || incidentDistance <= 0 {
+					incidentDistance = 500
+				}
+
+				for _, existing := range openIncidents {
+					if existing.Latitude == nil || existing.Longitude == nil {
+						// Existing incident has no coordinates — same location_id is enough
+						return nil, ErrDuplicateIncident
+					}
+
+					distance := utils.CalculateDistance(
+						*location.Latitude,
+						*location.Longitude,
+						*existing.Latitude,
+						*existing.Longitude,
+					)
+
+					if distance <= incidentDistance {
+						return nil, ErrDuplicateIncident
+					}
+				}
+			}
+		}
+	}
+
 	// Parse workflow ID
 	workflowID, err := uuid.Parse(req.WorkflowID)
 	if err != nil {
@@ -903,7 +972,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	incident, err := txRepo.LockForUpdate(ctx, tx, incidentID)
 	if err != nil {
 		tx.Rollback()
-		return nil, errors.New("incident not found")
+		return nil, errors.New("incident not found or locked by another transaction")
 	}
 
 	// Verify version still matches (double-check optimistic lock)
@@ -1143,6 +1212,37 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		updates["closed_at"] = now
 	}
 
+	// Apply user-provided field changes configured on the transition
+	if len(req.FieldChanges) > 0 {
+		for fieldName, fieldValue := range req.FieldChanges {
+			if fieldValue == "" {
+				continue
+			}
+			switch fieldName {
+			case "priority":
+				if p, err := strconv.Atoi(fieldValue); err == nil && p >= 1 && p <= 5 {
+					updates["priority"] = p
+				}
+			case "department_id":
+				if id, err := uuid.Parse(fieldValue); err == nil {
+					updates["department_id"] = id
+				}
+			case "location_id":
+				if id, err := uuid.Parse(fieldValue); err == nil {
+					updates["location_id"] = id
+				}
+			case "classification_id":
+				if id, err := uuid.Parse(fieldValue); err == nil {
+					updates["classification_id"] = id
+				}
+			case "title":
+				updates["title"] = fieldValue
+			case "description":
+				updates["description"] = fieldValue
+			}
+		}
+	}
+
 	// Apply all updates using optimistic locking with version
 	if err := txRepo.UpdateFieldsWithVersion(ctx, incidentID, updates, req.Version); err != nil {
 		tx.Rollback()
@@ -1218,12 +1318,12 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	// Broadcast state change to WebSocket subscribers
 	if s.wsHub != nil {
 		s.wsHub.BroadcastToIncident(incidentID, "state_changed", map[string]interface{}{
-			"incident_id":    incidentID,
-			"from_state":     oldStateName,
-			"to_state":       newStateName,
-			"transition_id":  transitionID,
-			"comment":        req.Comment,
-			"performed_by":   userID,
+			"incident_id":   incidentID,
+			"from_state":    oldStateName,
+			"to_state":      newStateName,
+			"transition_id": transitionID,
+			"comment":       req.Comment,
+			"performed_by":  userID,
 		}, userID)
 	}
 
@@ -1546,6 +1646,10 @@ func (s *incidentService) AssignIncident(ctx context.Context, incidentID, assign
 
 func (s *incidentService) GetStats(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponse, error) {
 	return s.incidentRepo.GetStats(ctx, filter)
+}
+
+func (s *incidentService) GetPriorityCounts(ctx context.Context, filter *models.IncidentFilter) (map[string]int64, error) {
+	return s.incidentRepo.GetPriorityCounts(ctx, filter)
 }
 
 func (s *incidentService) GetMyAssigned(ctx context.Context, userID uuid.UUID, recordType string, page, limit int) ([]models.IncidentResponse, int64, error) {

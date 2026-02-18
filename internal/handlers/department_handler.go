@@ -9,6 +9,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/pkg/utils"
+	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -32,8 +33,11 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if err := h.validator.Struct(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	department := &models.Department{
@@ -272,7 +276,7 @@ func (h *DepartmentHandler) Export(c *fiber.Ctx) error {
 	for _, dept := range departments {
 		// Skip records with invalid paths or IDs
 		if dept.ID.String() == invalidUUID ||
-		   strings.Contains(dept.Path, invalidUUID) {
+			strings.Contains(dept.Path, invalidUUID) {
 			continue
 		}
 		validDepartments = append(validDepartments, dept)

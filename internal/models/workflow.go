@@ -19,6 +19,12 @@ type Workflow struct {
 	IsDefault   bool               `gorm:"default:false" json:"is_default"`
 	RecordType  string             `gorm:"size:20;default:'incident'" json:"record_type"` // 'incident', 'request', 'complaint', 'query', 'both', 'all'
 
+	// Matching criteria - stored as JSON arrays, empty/null means matches any value
+	// Sources: ["email", "phone", "web", "mobile", "emergency_hotline", etc.]
+	Sources string `gorm:"type:text" json:"sources"` // JSON array of source strings
+	// Priorities: [1, 2, 3, 4, 5] where 1=Low, 2=Medium, 3=High, 4=Urgent, 5=Critical
+	Priorities string `gorm:"type:text" json:"priorities"` // JSON array of priority integers
+
 	// Visual designer metadata (stores canvas layout as JSON)
 	CanvasLayout string `gorm:"type:text" json:"canvas_layout"`
 
@@ -123,9 +129,10 @@ type WorkflowTransition struct {
 	ManualSelectUser bool `gorm:"default:false" json:"manual_select_user"`
 	// If manual_select_user=true: user performing transition manually selects the assignee from dropdown
 
-	// Requirements and Actions
-	Requirements []TransitionRequirement `gorm:"foreignKey:TransitionID" json:"requirements,omitempty"`
-	Actions      []TransitionAction      `gorm:"foreignKey:TransitionID" json:"actions,omitempty"`
+	// Requirements, Actions and Field Changes
+	Requirements []TransitionRequirement  `gorm:"foreignKey:TransitionID" json:"requirements,omitempty"`
+	Actions      []TransitionAction       `gorm:"foreignKey:TransitionID" json:"actions,omitempty"`
+	FieldChanges []TransitionFieldChange  `gorm:"foreignKey:TransitionID" json:"field_changes,omitempty"`
 
 	IsActive  bool           `gorm:"default:true" json:"is_active"`
 	SortOrder int            `gorm:"default:0" json:"sort_order"`
@@ -192,6 +199,30 @@ func (a *TransitionAction) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
+// TransitionFieldChange defines which incident fields the user can modify during a transition
+type TransitionFieldChange struct {
+	ID           uuid.UUID           `gorm:"type:uuid;primary_key" json:"id"`
+	TransitionID uuid.UUID           `gorm:"type:uuid;index;not null" json:"transition_id"`
+	Transition   *WorkflowTransition `gorm:"foreignKey:TransitionID" json:"transition,omitempty"`
+
+	// FieldName is the incident field key, e.g. "priority", "department_id", "location_id",
+	// "classification_id", "title", "description"
+	FieldName  string `gorm:"size:100;not null" json:"field_name"`
+	Label      string `gorm:"size:100" json:"label"`       // Display label shown in the transition modal
+	IsRequired bool   `gorm:"default:false" json:"is_required"` // Whether the field must be filled
+	SortOrder  int    `gorm:"default:0" json:"sort_order"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (f *TransitionFieldChange) BeforeCreate(tx *gorm.DB) error {
+	if f.ID == uuid.Nil {
+		f.ID = uuid.New()
+	}
+	return nil
+}
+
 // Request/Response types
 
 type WorkflowCreateRequest struct {
@@ -199,6 +230,8 @@ type WorkflowCreateRequest struct {
 	Code              string   `json:"code" validate:"required,min=2,max=50"`
 	Description       string   `json:"description" validate:"max=500"`
 	RecordType        string   `json:"record_type" validate:"omitempty,oneof=incident request complaint query both all"`
+	Sources           []string `json:"sources"`     // Array of source strings
+	Priorities        []int    `json:"priorities"`  // Array of priority integers
 	ClassificationIDs []string `json:"classification_ids"`
 	LocationIDs       []string `json:"location_ids"`
 	RequiredFields    []string `json:"required_fields"`
@@ -209,6 +242,8 @@ type WorkflowUpdateRequest struct {
 	Code                    string   `json:"code" validate:"omitempty,min=2,max=50"`
 	Description             string   `json:"description" validate:"max=500"`
 	RecordType              *string  `json:"record_type" validate:"omitempty,oneof=incident request complaint query both all"`
+	Sources                 []string `json:"sources"`     // Array of source strings (nil means not updating)
+	Priorities              []int    `json:"priorities"`  // Array of priority integers (nil means not updating)
 	IsActive                *bool    `json:"is_active"`
 	IsDefault               *bool    `json:"is_default"`
 	CanvasLayout            string   `json:"canvas_layout"`
@@ -306,6 +341,13 @@ type TransitionActionRequest struct {
 	IsActive       bool   `json:"is_active"`
 }
 
+type TransitionFieldChangeRequest struct {
+	FieldName  string `json:"field_name" validate:"required"`
+	Label      string `json:"label"`
+	IsRequired bool   `json:"is_required"`
+	SortOrder  int    `json:"sort_order"`
+}
+
 // Workflow matching request - used by mobile apps and other clients
 type WorkflowMatchRequest struct {
 	ClassificationID string `json:"classification_id"`
@@ -328,6 +370,7 @@ type WorkflowMatchResponse struct {
 	WorkflowID     *string                   `json:"workflow_id,omitempty"`
 	WorkflowName   *string                   `json:"workflow_name,omitempty"`
 	WorkflowCode   *string                   `json:"workflow_code,omitempty"`
+	RecordType     *string                   `json:"record_type,omitempty"`
 	RequiredFields []string                  `json:"required_fields"`
 	FormFields     []IncidentFormFieldConfig `json:"form_fields"`
 	InitialStateID *string                   `json:"initial_state_id,omitempty"`
@@ -345,6 +388,8 @@ type WorkflowResponse struct {
 	IsActive              bool                         `json:"is_active"`
 	IsDefault             bool                         `json:"is_default"`
 	RecordType            string                       `json:"record_type"`
+	Sources               []string                     `json:"sources"`     // Array of sources
+	Priorities            []int                        `json:"priorities"`  // Array of priorities
 	CanvasLayout          string                       `json:"canvas_layout,omitempty"`
 	RequiredFields        []string                     `json:"required_fields"`
 	States                []WorkflowStateResponse      `json:"states,omitempty"`
@@ -402,11 +447,12 @@ type WorkflowTransitionResponse struct {
 	AutoMatchUser    bool          `json:"auto_match_user"`
 	ManualSelectUser bool          `json:"manual_select_user"`
 
-	Requirements []TransitionRequirementResponse `json:"requirements,omitempty"`
-	Actions      []TransitionActionResponse      `json:"actions,omitempty"`
-	IsActive     bool                            `json:"is_active"`
-	SortOrder    int                             `json:"sort_order"`
-	CreatedAt    time.Time                       `json:"created_at"`
+	Requirements []TransitionRequirementResponse  `json:"requirements,omitempty"`
+	Actions      []TransitionActionResponse       `json:"actions,omitempty"`
+	FieldChanges []TransitionFieldChangeResponse  `json:"field_changes,omitempty"`
+	IsActive     bool                             `json:"is_active"`
+	SortOrder    int                              `json:"sort_order"`
+	CreatedAt    time.Time                        `json:"created_at"`
 }
 
 type TransitionRequirementResponse struct {
@@ -431,6 +477,15 @@ type TransitionActionResponse struct {
 	IsActive       bool      `json:"is_active"`
 }
 
+type TransitionFieldChangeResponse struct {
+	ID           uuid.UUID `json:"id"`
+	TransitionID uuid.UUID `json:"transition_id"`
+	FieldName    string    `json:"field_name"`
+	Label        string    `json:"label"`
+	IsRequired   bool      `json:"is_required"`
+	SortOrder    int       `json:"sort_order"`
+}
+
 // Converter functions
 
 func ToWorkflowResponse(w *Workflow) WorkflowResponse {
@@ -443,6 +498,24 @@ func ToWorkflowResponse(w *Workflow) WorkflowResponse {
 		requiredFields = []string{}
 	}
 
+	// Parse Sources JSON string to array
+	var sources []string
+	if w.Sources != "" {
+		json.Unmarshal([]byte(w.Sources), &sources)
+	}
+	if sources == nil {
+		sources = []string{}
+	}
+
+	// Parse Priorities JSON string to array
+	var priorities []int
+	if w.Priorities != "" {
+		json.Unmarshal([]byte(w.Priorities), &priorities)
+	}
+	if priorities == nil {
+		priorities = []int{}
+	}
+
 	resp := WorkflowResponse{
 		ID:               w.ID,
 		Name:             w.Name,
@@ -452,6 +525,8 @@ func ToWorkflowResponse(w *Workflow) WorkflowResponse {
 		IsActive:         w.IsActive,
 		IsDefault:        w.IsDefault,
 		RecordType:       w.RecordType,
+		Sources:          sources,
+		Priorities:       priorities,
 		CanvasLayout:     w.CanvasLayout,
 		RequiredFields:   requiredFields,
 		StatesCount:      len(w.States),
@@ -599,6 +674,13 @@ func ToWorkflowTransitionResponse(t *WorkflowTransition) WorkflowTransitionRespo
 		}
 	}
 
+	if len(t.FieldChanges) > 0 {
+		resp.FieldChanges = make([]TransitionFieldChangeResponse, len(t.FieldChanges))
+		for i, f := range t.FieldChanges {
+			resp.FieldChanges[i] = ToTransitionFieldChangeResponse(&f)
+		}
+	}
+
 	return resp
 }
 
@@ -628,6 +710,17 @@ func ToTransitionActionResponse(a *TransitionAction) TransitionActionResponse {
 	}
 }
 
+func ToTransitionFieldChangeResponse(f *TransitionFieldChange) TransitionFieldChangeResponse {
+	return TransitionFieldChangeResponse{
+		ID:           f.ID,
+		TransitionID: f.TransitionID,
+		FieldName:    f.FieldName,
+		Label:        f.Label,
+		IsRequired:   f.IsRequired,
+		SortOrder:    f.SortOrder,
+	}
+}
+
 // Export/Import structures
 
 // CodeNamePair represents a portable reference using code and name
@@ -649,6 +742,8 @@ type WorkflowExportContent struct {
 	Code                  string                      `json:"code"`
 	Description           string                      `json:"description"`
 	RecordType            string                      `json:"record_type"`
+	Sources               []string                    `json:"sources,omitempty"`
+	Priorities            []int                       `json:"priorities,omitempty"`
 	RequiredFields        []string                    `json:"required_fields"`
 	States                []WorkflowStateExport       `json:"states"`
 	Transitions           []WorkflowTransitionExport  `json:"transitions"`
