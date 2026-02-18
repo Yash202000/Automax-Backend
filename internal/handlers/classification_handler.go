@@ -9,6 +9,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/pkg/utils"
+	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -32,8 +33,11 @@ func (h *ClassificationHandler) Create(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if err := h.validator.Struct(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	classType := "both"
@@ -212,7 +216,7 @@ func (h *ClassificationHandler) Export(c *fiber.Ctx) error {
 	for _, cls := range classifications {
 		// Skip records with invalid paths or IDs
 		if cls.ID.String() == invalidUUID ||
-		   strings.Contains(cls.Path, invalidUUID) {
+			strings.Contains(cls.Path, invalidUUID) {
 			continue
 		}
 		validClassifications = append(validClassifications, cls)

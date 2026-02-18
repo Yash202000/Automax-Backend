@@ -169,30 +169,37 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	query := r.db.WithContext(ctx).Model(&models.Incident{})
 
 	// Apply filters
-	if filter.WorkflowID != nil {
-		query = query.Where("workflow_id = ?", *filter.WorkflowID)
+	if len(filter.WorkflowID) != 0 {
+		query = query.Where("workflow_id IN ?", filter.WorkflowID)
 	}
-	if filter.CurrentStateID != nil {
-		query = query.Where("current_state_id = ?", *filter.CurrentStateID)
+	if len(filter.CurrentStateID) != 0 {
+		query = query.Where("current_state_id IN ?", filter.CurrentStateID)
 	}
-	if filter.ClassificationID != nil {
-		query = query.Where("classification_id = ?", *filter.ClassificationID)
+	if len(filter.ClassificationID) != 0 {
+		query = query.Where("classification_id IN ?", filter.ClassificationID)
 	}
 	if filter.Priority != nil {
 		query = query.Where("priority = ?", *filter.Priority)
 	}
-	if filter.AssigneeID != nil {
-		// Check both primary assignee and multiple assignees
-		query = query.Where("assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", *filter.AssigneeID, *filter.AssigneeID)
+	if len(filter.AssigneeID) != 0 {
+		if len(filter.AssigneeID) == 1 {
+			// Check both primary assignee and multiple assignees
+			query = query.Where("assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", filter.AssigneeID[0], filter.AssigneeID[0])
+		} else {
+			// Multiple assignees
+			query = query.Where("assignee_id IN ? ", filter.AssigneeID)
+		}
 	}
-	if filter.DepartmentID != nil {
-		query = query.Where("department_id = ?", *filter.DepartmentID)
+	if len(filter.DepartmentID) != 0 {
+		query = query.Where("department_id IN ?", filter.DepartmentID)
 	}
-	if filter.LocationID != nil {
-		query = query.Where("location_id = ?", *filter.LocationID)
+	// fix bleow filter for location and reporter to handle multiple values
+
+	if len(filter.LocationID) != 0 {
+		query = query.Where("location_id IN ?", filter.LocationID)
 	}
-	if filter.ReporterID != nil {
-		query = query.Where("reporter_id = ?", *filter.ReporterID)
+	if len(filter.ReporterID) != 0 {
+		query = query.Where("reporter_id IN ?", filter.ReporterID)
 	}
 	if filter.SLABreached != nil {
 		query = query.Where("sla_breached = ?", *filter.SLABreached)
@@ -504,14 +511,9 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 	stats := &models.IncidentStatsResponse{
 
 		ByState: make(map[string]int64),
-
 	}
 
-
-
 	baseQuery := r.db.WithContext(ctx).Model(&models.Incident{})
-
-
 
 	// Apply filters if provided
 
@@ -523,26 +525,23 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 
 		}
 
-		if filter.WorkflowID != nil {
+		if len(filter.WorkflowID) != 0 {
 
-			baseQuery = baseQuery.Where("workflow_id = ?", *filter.WorkflowID)
-
-		}
-
-		if filter.DepartmentID != nil {
-
-			baseQuery = baseQuery.Where("department_id = ?", *filter.DepartmentID)
+			baseQuery = baseQuery.Where("workflow_id IN ?", filter.WorkflowID)
 
 		}
 
-		if filter.AssigneeID != nil {
+		if len(filter.DepartmentID) != 0 {
+			baseQuery = baseQuery.Where("department_id IN ?", filter.DepartmentID)
+
+		}
+
+		if len(filter.AssigneeID) != 0 {
 			// Check both primary assignee and multiple assignees
-			baseQuery = baseQuery.Where("assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", *filter.AssigneeID, *filter.AssigneeID)
+			baseQuery = baseQuery.Where("assignee_id IN ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id IN ?)", filter.AssigneeID, filter.AssigneeID)
 		}
 
 	}
-
-
 
 	// Total count
 
@@ -551,8 +550,6 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 		return nil, err
 
 	}
-
-
 
 	// SLA breached count (also filtered by record_type if provided)
 	slaQuery := r.db.WithContext(ctx).Model(&models.Incident{}).Where("sla_breached = ?", true)
@@ -565,26 +562,20 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 
 	}
 
-
-
 	// Count by state (filtered by viewable roles if provided)
 
 	type stateCount struct {
+		StateID uuid.UUID `gorm:"column:state_id"`
 
-		StateID   uuid.UUID `gorm:"column:state_id"`
+		StateName string `gorm:"column:state_name"`
 
-		StateName string    `gorm:"column:state_name"`
-
-		Count     int64     `gorm:"column:count"`
-
+		Count int64 `gorm:"column:count"`
 	}
 
 	var stateCounts []stateCount
 
 	stateQuery := r.db.WithContext(ctx).Model(&models.Incident{}).
-
 		Select("workflow_states.id as state_id, workflow_states.name as state_name, count(*) as count").
-
 		Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
 
 	// Apply record_type filter to state counts
@@ -610,8 +601,6 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 
 	}
 
-
-
 	if err := stateQuery.Group("workflow_states.id, workflow_states.name").Scan(&stateCounts).Error; err != nil {
 
 		return nil, err
@@ -626,12 +615,11 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 
 		stats.ByStateDetails = append(stats.ByStateDetails, models.StateStatDetail{
 
-			ID:    sc.StateID,
+			ID: sc.StateID,
 
-			Name:  sc.StateName,
+			Name: sc.StateName,
 
 			Count: sc.Count,
-
 		})
 
 	}
@@ -673,9 +661,9 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 func (r *incidentRepository) GetPriorityCounts(ctx context.Context, filter *models.IncidentFilter) (map[string]int64, error) {
 	// Query to count incidents grouped by priority
 	type priorityCount struct {
-		PriorityName  string `gorm:"column:priority_name"`
-		SortOrder     int    `gorm:"column:sort_order"`
-		Count         int64  `gorm:"column:count"`
+		PriorityName string `gorm:"column:priority_name"`
+		SortOrder    int    `gorm:"column:sort_order"`
+		Count        int64  `gorm:"column:count"`
 	}
 
 	query := r.db.WithContext(ctx).Model(&models.Incident{}).
@@ -691,16 +679,22 @@ func (r *incidentRepository) GetPriorityCounts(ctx context.Context, filter *mode
 			query = query.Where("incidents.record_type = ?", *filter.RecordType)
 		}
 
-		if filter.WorkflowID != nil {
-			query = query.Where("incidents.workflow_id = ?", *filter.WorkflowID)
+		if len(filter.WorkflowID) != 0 {
+			query = query.Where("incidents.workflow_id IN ?", filter.WorkflowID)
 		}
 
-		if filter.DepartmentID != nil {
-			query = query.Where("incidents.department_id = ?", *filter.DepartmentID)
+		if len(filter.DepartmentID) != 0 {
+			query = query.Where("incidents.department_id IN ?", filter.DepartmentID)
 		}
 
-		if filter.AssigneeID != nil {
-			query = query.Where("incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", *filter.AssigneeID, *filter.AssigneeID)
+		if len(filter.AssigneeID) != 0 {
+			if len(filter.AssigneeID) == 1 {
+				// Check both primary assignee and multiple assignees
+				query = query.Where("incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", filter.AssigneeID[0], filter.AssigneeID[0])
+			} else {
+				// Multiple assignees
+				query = query.Where("incidents.assignee_id IN ?", filter.AssigneeID)
+			}
 		}
 
 		// Filter by state visibility based on user roles

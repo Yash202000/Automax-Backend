@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/pkg/utils"
+	"github.com/automax/backend/pkg/validation"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 )
@@ -349,70 +349,28 @@ func (h *NotificationHandler) Send(c *fiber.Ctx) error {
 
 // List handles GET /api/v1/notifications with search and filters
 func (h *NotificationHandler) List(c *fiber.Ctx) error {
-	filter := &models.NotificationLogFilter{
-		Page:  1,
-		Limit: 20,
-	}
+	filter := &models.NotificationLogFilter{}
 
 	// Parse query parameters
-	if page := c.Query("page"); page != "" {
-		if p, err := strconv.Atoi(page); err == nil {
-			filter.Page = p
-		}
+	if err := c.QueryParser(filter); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
 	}
-	if limit := c.Query("limit"); limit != "" {
-		if l, err := strconv.Atoi(limit); err == nil {
-			filter.Limit = l
-		}
+
+	if err := validation.ValidateStruct(c.UserContext(), filter); len(err) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  err,
+		})
 	}
-	if channel := c.Query("channel"); channel != "" {
-		filter.Channel = channel
+
+	if filter.Page < 1 {
+		filter.Page = 1
 	}
-	if direction := c.Query("direction"); direction != "" {
-		filter.Direction = direction
+
+	if filter.Limit < 1 || filter.Limit > 100 {
+		filter.Limit = 20
 	}
-	if category := c.Query("category"); category != "" {
-		filter.Category = category
-	}
-	if status := c.Query("status"); status != "" {
-		filter.Status = status
-	}
-	if search := c.Query("search"); search != "" {
-		filter.Search = search
-	}
-	if sentBy := c.Query("sent_by"); sentBy != "" {
-		if id, err := uuid.Parse(sentBy); err == nil {
-			filter.SentBy = &id
-		}
-	}
-	if receivedBy := c.Query("received_by"); receivedBy != "" {
-		if id, err := uuid.Parse(receivedBy); err == nil {
-			filter.ReceivedBy = &id
-		}
-	}
-	if isRead := c.Query("is_read"); isRead != "" {
-		if b, err := strconv.ParseBool(isRead); err == nil {
-			filter.IsRead = &b
-		}
-	}
-	if isStarred := c.Query("is_starred"); isStarred != "" {
-		if b, err := strconv.ParseBool(isStarred); err == nil {
-			filter.IsStarred = &b
-		}
-	}
-	if threadID := c.Query("thread_id"); threadID != "" {
-		if id, err := uuid.Parse(threadID); err == nil {
-			filter.ThreadID = &id
-		}
-	}
-	if templateCode := c.Query("template_code"); templateCode != "" {
-		filter.TemplateCode = templateCode
-	}
-	if startDate := c.Query("start_date"); startDate != "" {
-		if t, err := time.Parse("2006-01-02", startDate); err == nil {
-			filter.StartDate = &t
-		}
-	}
+
 	if endDate := c.Query("end_date"); endDate != "" {
 		if t, err := time.Parse("2006-01-02", endDate); err == nil {
 			// Set to end of day

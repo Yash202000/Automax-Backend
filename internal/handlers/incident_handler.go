@@ -10,6 +10,7 @@ import (
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/pkg/utils"
+	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -59,9 +60,12 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if err := h.validator.Struct(&req); err != nil {
-		fmt.Printf("CreateIncident: Validation error: %v, RecordType: %s\n", err, req.RecordType)
-		return utils.FormatValidationError(c, err)
+	// Parse query parameters
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	userID := c.Locals("user_id").(uuid.UUID)
@@ -93,87 +97,23 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 	filter := &models.IncidentFilter{}
 
 	// Parse query parameters
-	if page := c.Query("page"); page != "" {
-		if p, err := strconv.Atoi(page); err == nil {
-			filter.Page = p
-		}
+	if err := c.QueryParser(filter); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
 	}
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
 	if filter.Page < 1 {
 		filter.Page = 1
 	}
 
-	if limit := c.Query("limit"); limit != "" {
-		if l, err := strconv.Atoi(limit); err == nil {
-			filter.Limit = l
-		}
-	}
 	if filter.Limit < 1 || filter.Limit > 100 {
 		filter.Limit = 20
-	}
-
-	filter.Search = c.Query("search")
-
-	if workflowID := c.Query("workflow_id"); workflowID != "" {
-		if id, err := uuid.Parse(workflowID); err == nil {
-			filter.WorkflowID = &id
-		}
-	}
-
-	if stateID := c.Query("current_state_id"); stateID != "" {
-		if id, err := uuid.Parse(stateID); err == nil {
-			filter.CurrentStateID = &id
-		}
-	}
-
-	if classID := c.Query("classification_id"); classID != "" {
-		if id, err := uuid.Parse(classID); err == nil {
-			filter.ClassificationID = &id
-		}
-	}
-
-	if priorityStr := c.Query("priority"); priorityStr != "" {
-		if p, err := strconv.Atoi(priorityStr); err == nil && p >= 1 && p <= 5 {
-			filter.Priority = &p
-		}
-	}
-
-	if assigneeID := c.Query("assignee_id"); assigneeID != "" {
-		if id, err := uuid.Parse(assigneeID); err == nil {
-			filter.AssigneeID = &id
-		}
-	}
-
-	if deptID := c.Query("department_id"); deptID != "" {
-		if id, err := uuid.Parse(deptID); err == nil {
-			filter.DepartmentID = &id
-		}
-	}
-
-	if locID := c.Query("location_id"); locID != "" {
-		if id, err := uuid.Parse(locID); err == nil {
-			filter.LocationID = &id
-		}
-	}
-
-	if slaBreached := c.Query("sla_breached"); slaBreached != "" {
-		breached := slaBreached == "true"
-		filter.SLABreached = &breached
-	}
-
-	if recordType := c.Query("record_type"); recordType != "" {
-		filter.RecordType = &recordType
-	}
-
-	if startDate := c.Query("start_date"); startDate != "" {
-		if t, err := time.Parse(time.RFC3339, startDate); err == nil {
-			filter.StartDate = &t
-		}
-	}
-
-	if endDate := c.Query("end_date"); endDate != "" {
-		if t, err := time.Parse(time.RFC3339, endDate); err == nil {
-			filter.EndDate = &t
-		}
 	}
 
 	incidents, total, err := h.service.ListIncidents(c.Context(), filter)
@@ -241,9 +181,11 @@ func (h *IncidentHandler) ConvertToRequest(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
-
-	if err := h.validator.Struct(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	userID := c.Locals("user_id").(uuid.UUID)
@@ -291,9 +233,11 @@ func (h *IncidentHandler) ExecuteTransition(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
-
-	if err := h.validator.Struct(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	userID := c.Locals("user_id").(uuid.UUID)
@@ -352,9 +296,11 @@ func (h *IncidentHandler) AddComment(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
-
-	if err := h.validator.Struct(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	userID := c.Locals("user_id").(uuid.UUID)
@@ -555,21 +501,25 @@ func (h *IncidentHandler) AssignIncident(c *fiber.Ctx) error {
 func (h *IncidentHandler) GetStats(c *fiber.Ctx) error {
 	filter := &models.IncidentFilter{}
 
+	// Parse query parameters
+	if err := c.QueryParser(filter); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
+	}
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
 	// Filter by record_type (incident, request, complaint)
-	if recordType := c.Query("record_type"); recordType != "" {
-		filter.RecordType = &recordType
+	if filter.Page < 1 {
+		filter.Page = 1
 	}
 
-	if workflowID := c.Query("workflow_id"); workflowID != "" {
-		if id, err := uuid.Parse(workflowID); err == nil {
-			filter.WorkflowID = &id
-		}
-	}
-
-	if deptID := c.Query("department_id"); deptID != "" {
-		if id, err := uuid.Parse(deptID); err == nil {
-			filter.DepartmentID = &id
-		}
+	if filter.Limit < 1 || filter.Limit > 100 {
+		filter.Limit = 20
 	}
 
 	// Add user role IDs for state visibility filtering
@@ -587,29 +537,26 @@ func (h *IncidentHandler) GetPriorityCounts(c *fiber.Ctx) error {
 	filter := &models.IncidentFilter{}
 
 	// Filter by record_type (incident, request, complaint)
-	if recordType := c.Query("record_type"); recordType != "" {
-		filter.RecordType = &recordType
+
+	// Parse query parameters
+	if err := c.QueryParser(filter); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
 	}
 
-	// Filter by workflow_id
-	if workflowID := c.Query("workflow_id"); workflowID != "" {
-		if id, err := uuid.Parse(workflowID); err == nil {
-			filter.WorkflowID = &id
-		}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
-	// Filter by department_id
-	if deptID := c.Query("department_id"); deptID != "" {
-		if id, err := uuid.Parse(deptID); err == nil {
-			filter.DepartmentID = &id
-		}
+	// Filter by record_type (incident, request, complaint)
+	if filter.Page < 1 {
+		filter.Page = 1
 	}
 
-	// Filter by assignee_id
-	if assigneeID := c.Query("assignee_id"); assigneeID != "" {
-		if id, err := uuid.Parse(assigneeID); err == nil {
-			filter.AssigneeID = &id
-		}
+	if filter.Limit < 1 || filter.Limit > 100 {
+		filter.Limit = 20
 	}
 
 	// Add user role IDs for state visibility filtering
@@ -751,9 +698,11 @@ func (h *IncidentHandler) CreateComplaint(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
-
-	if err := h.validator.Struct(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	userID := c.Locals("user_id").(uuid.UUID)
@@ -771,81 +720,29 @@ func (h *IncidentHandler) ListComplaints(c *fiber.Ctx) error {
 
 	// Force record_type to complaint
 	recordType := "complaint"
-	filter.RecordType = &recordType
 
 	// Parse query parameters
-	if page := c.Query("page"); page != "" {
-		if p, err := strconv.Atoi(page); err == nil {
-			filter.Page = p
-		}
+	if err := c.QueryParser(filter); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
 	}
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	// Filter by record_type (incident, request, complaint)
 	if filter.Page < 1 {
 		filter.Page = 1
 	}
 
-	if limit := c.Query("limit"); limit != "" {
-		if l, err := strconv.Atoi(limit); err == nil {
-			filter.Limit = l
-		}
-	}
 	if filter.Limit < 1 || filter.Limit > 100 {
 		filter.Limit = 20
 	}
 
-	filter.Search = c.Query("search")
-
-	if workflowID := c.Query("workflow_id"); workflowID != "" {
-		if id, err := uuid.Parse(workflowID); err == nil {
-			filter.WorkflowID = &id
-		}
-	}
-
-	if stateID := c.Query("current_state_id"); stateID != "" {
-		if id, err := uuid.Parse(stateID); err == nil {
-			filter.CurrentStateID = &id
-		}
-	}
-
-	if classID := c.Query("classification_id"); classID != "" {
-		if id, err := uuid.Parse(classID); err == nil {
-			filter.ClassificationID = &id
-		}
-	}
-
-	if priorityStr := c.Query("priority"); priorityStr != "" {
-		if p, err := strconv.Atoi(priorityStr); err == nil && p >= 1 && p <= 5 {
-			filter.Priority = &p
-		}
-	}
-
-	if assigneeID := c.Query("assignee_id"); assigneeID != "" {
-		if id, err := uuid.Parse(assigneeID); err == nil {
-			filter.AssigneeID = &id
-		}
-	}
-
-	if deptID := c.Query("department_id"); deptID != "" {
-		if id, err := uuid.Parse(deptID); err == nil {
-			filter.DepartmentID = &id
-		}
-	}
-
-	if channel := c.Query("channel"); channel != "" {
-		filter.Channel = &channel
-	}
-
-	if startDate := c.Query("start_date"); startDate != "" {
-		if t, err := time.Parse(time.RFC3339, startDate); err == nil {
-			filter.StartDate = &t
-		}
-	}
-
-	if endDate := c.Query("end_date"); endDate != "" {
-		if t, err := time.Parse(time.RFC3339, endDate); err == nil {
-			filter.EndDate = &t
-		}
-	}
-
+	filter.RecordType = &recordType
 	complaints, total, err := h.service.ListIncidents(c.Context(), filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
@@ -910,9 +807,11 @@ func (h *IncidentHandler) CreateQuery(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
-
-	if err := h.validator.Struct(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	userID := c.Locals("user_id").(uuid.UUID)
@@ -930,80 +829,28 @@ func (h *IncidentHandler) ListQueries(c *fiber.Ctx) error {
 
 	// Force record_type to query
 	recordType := "query"
-	filter.RecordType = &recordType
 
 	// Parse query parameters
-	if page := c.Query("page"); page != "" {
-		if p, err := strconv.Atoi(page); err == nil {
-			filter.Page = p
-		}
+	if err := c.QueryParser(filter); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
 	}
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	// Filter by record_type (incident, request, complaint)
 	if filter.Page < 1 {
 		filter.Page = 1
 	}
 
-	if limit := c.Query("limit"); limit != "" {
-		if l, err := strconv.Atoi(limit); err == nil {
-			filter.Limit = l
-		}
-	}
 	if filter.Limit < 1 || filter.Limit > 100 {
 		filter.Limit = 20
 	}
-
-	filter.Search = c.Query("search")
-
-	if workflowID := c.Query("workflow_id"); workflowID != "" {
-		if id, err := uuid.Parse(workflowID); err == nil {
-			filter.WorkflowID = &id
-		}
-	}
-
-	if stateID := c.Query("current_state_id"); stateID != "" {
-		if id, err := uuid.Parse(stateID); err == nil {
-			filter.CurrentStateID = &id
-		}
-	}
-
-	if classID := c.Query("classification_id"); classID != "" {
-		if id, err := uuid.Parse(classID); err == nil {
-			filter.ClassificationID = &id
-		}
-	}
-
-	if priorityStr := c.Query("priority"); priorityStr != "" {
-		if p, err := strconv.Atoi(priorityStr); err == nil && p >= 1 && p <= 5 {
-			filter.Priority = &p
-		}
-	}
-
-	if assigneeID := c.Query("assignee_id"); assigneeID != "" {
-		if id, err := uuid.Parse(assigneeID); err == nil {
-			filter.AssigneeID = &id
-		}
-	}
-
-	if deptID := c.Query("department_id"); deptID != "" {
-		if id, err := uuid.Parse(deptID); err == nil {
-			filter.DepartmentID = &id
-		}
-	}
-
-	if channel := c.Query("channel"); channel != "" {
-		filter.Channel = &channel
-	}
-
-	if startDate := c.Query("start_date"); startDate != "" {
-		if t, err := time.Parse(time.RFC3339, startDate); err == nil {
-			filter.StartDate = &t
-		}
-	}
-
-	if endDate := c.Query("end_date"); endDate != "" {
-		if t, err := time.Parse(time.RFC3339, endDate); err == nil {
-			filter.EndDate = &t
-		}
-	}
+	filter.RecordType = &recordType
 
 	queries, total, err := h.service.ListIncidents(c.Context(), filter)
 	if err != nil {

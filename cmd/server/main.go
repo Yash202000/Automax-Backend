@@ -17,6 +17,7 @@ import (
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/pkg/utils"
+	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -29,6 +30,7 @@ func main() {
 	cfg := config.Load()
 	godotenv.Load()
 
+	validation.InitValidatorRegistry()
 	db, err := database.Connect(&cfg.Database)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
@@ -145,6 +147,7 @@ func main() {
 		AllowCredentials: true,
 	}))
 
+	app.Use(middleware.ValidationMiddleware())
 	api := app.Group("/api")
 	v1 := api.Group("/v1")
 
