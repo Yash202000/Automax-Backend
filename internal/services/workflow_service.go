@@ -1217,6 +1217,12 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 		classificationID, _ = uuid.Parse(req.ClassificationID)
 	}
 
+	// Parse location ID if provided
+	var locationID uuid.UUID
+	if req.LocationID != "" {
+		locationID, _ = uuid.Parse(req.LocationID)
+	}
+
 	// Find matching workflow
 	var matchedWorkflow *models.Workflow
 	var highestScore int
@@ -1277,6 +1283,16 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 			for _, c := range w.Classifications {
 				if c.ID == classificationID {
 					score += 10 // Classification is a strong match
+					break
+				}
+			}
+		}
+
+		// Check location match
+		if locationID != uuid.Nil && len(w.Locations) > 0 {
+			for _, loc := range w.Locations {
+				if loc.ID == locationID {
+					score += 10 // Location is a strong match
 					break
 				}
 			}
@@ -1350,11 +1366,13 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 
 	// Build response
 	workflowIDStr := fullWorkflow.ID.String()
+	recordType := fullWorkflow.RecordType
 	response := &models.WorkflowMatchResponse{
 		Matched:        true,
 		WorkflowID:     &workflowIDStr,
 		WorkflowName:   &fullWorkflow.Name,
 		WorkflowCode:   &fullWorkflow.Code,
+		RecordType:     &recordType,
 		RequiredFields: requiredFields,
 		FormFields:     formFields,
 		InitialStateID: initialStateID,

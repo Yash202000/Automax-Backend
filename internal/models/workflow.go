@@ -365,6 +365,7 @@ type WorkflowMatchResponse struct {
 	WorkflowID     *string                   `json:"workflow_id,omitempty"`
 	WorkflowName   *string                   `json:"workflow_name,omitempty"`
 	WorkflowCode   *string                   `json:"workflow_code,omitempty"`
+	RecordType     *string                   `json:"record_type,omitempty"`
 	RequiredFields []string                  `json:"required_fields"`
 	FormFields     []IncidentFormFieldConfig `json:"form_fields"`
 	InitialStateID *string                   `json:"initial_state_id,omitempty"`
