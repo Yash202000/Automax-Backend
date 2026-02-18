@@ -32,8 +32,8 @@ func NewNotificationService(
 }
 
 type SendNotificationResult struct {
-	SentLog      *models.NotificationLog
-	InboxLogIDs  []uuid.UUID // IDs of inbox copies created for internal recipients
+	SentLog     *models.NotificationLog
+	InboxLogIDs []uuid.UUID // IDs of inbox copies created for internal recipients
 }
 
 func (s *NotificationService) SendNotification(ctx context.Context, channel string, templateCode *string, language string, to []string, cc []string, bcc []string, subject string, body string, variables map[string]string, attachments []models.AttachmentData, sentBy *uuid.UUID) (*SendNotificationResult, error) {
@@ -165,7 +165,6 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 	if err := s.logRepo.Create(ctx, log); err != nil {
 		return nil, err
 	}
-	// Create inbox copy for each internal recipient
 	var inboxLogIDs []uuid.UUID
 
 	for _, recipientEmail := range to {

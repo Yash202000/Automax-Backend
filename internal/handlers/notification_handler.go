@@ -116,7 +116,7 @@ func (h *NotificationHandler) SendGridInboundWebhook(c *fiber.Ctx) error {
 			)
 			if err != nil {
 				log.Printf("Failed to upload attachment %s to MinIO: %v", att.Filename, err)
-				// Continue without URL if upload fails
+
 			} else {
 				objectName = uploadedPath
 			}
