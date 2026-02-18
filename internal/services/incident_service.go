@@ -69,22 +69,32 @@ type IncidentService interface {
 }
 
 type incidentService struct {
-	incidentRepo repository.IncidentRepository
-	workflowRepo repository.WorkflowRepository
-	userRepo     repository.UserRepository
-	storage      *storage.MinIOStorage
-	db           *gorm.DB
-	wsHub        *WSHub
+	incidentRepo    repository.IncidentRepository
+	incidentMergeRepo repository.IncidentMergeRepository
+	workflowRepo    repository.WorkflowRepository
+	userRepo        repository.UserRepository
+	storage         *storage.MinIOStorage
+	db              *gorm.DB
+	wsHub           *WSHub
 }
 
-func NewIncidentService(incidentRepo repository.IncidentRepository, workflowRepo repository.WorkflowRepository, userRepo repository.UserRepository, storage *storage.MinIOStorage, db *gorm.DB, wsHub *WSHub) IncidentService {
+func NewIncidentService(
+	incidentRepo repository.IncidentRepository,
+	incidentMergeRepo repository.IncidentMergeRepository,
+	workflowRepo repository.WorkflowRepository,
+	userRepo repository.UserRepository,
+	storage *storage.MinIOStorage,
+	db *gorm.DB,
+	wsHub *WSHub,
+) IncidentService {
 	return &incidentService{
-		incidentRepo: incidentRepo,
-		workflowRepo: workflowRepo,
-		userRepo:     userRepo,
-		storage:      storage,
-		db:           db,
-		wsHub:        wsHub,
+		incidentRepo:    incidentRepo,
+		incidentMergeRepo: incidentMergeRepo,
+		workflowRepo:    workflowRepo,
+		userRepo:        userRepo,
+		storage:         storage,
+		db:              db,
+		wsHub:           wsHub,
 	}
 }
 
@@ -1068,93 +1078,54 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	// Handle user assignment from transition settings
 	var assigneeUserIDs []uuid.UUID
 
-	fmt.Printf("[DEBUG] === USER ASSIGNMENT START ===\n")
-	fmt.Printf("[DEBUG] Transition: %s (ID: %s)\n", transition.Name, transition.ID)
-	fmt.Printf("[DEBUG] AssignUserID: %v\n", transition.AssignUserID)
-	fmt.Printf("[DEBUG] ManualSelectUser: %v\n", transition.ManualSelectUser)
-	fmt.Printf("[DEBUG] AutoMatchUser: %v\n", transition.AutoMatchUser)
-	fmt.Printf("[DEBUG] AssignmentRoleID: %v\n", transition.AssignmentRoleID)
-
 	if transition.AssignUserID != nil {
 		// Static user assignment - single user
-		fmt.Printf("[DEBUG] Using STATIC user assignment: %s\n", *transition.AssignUserID)
 		updates["assignee_id"] = *transition.AssignUserID
 		assigneeUserIDs = append(assigneeUserIDs, *transition.AssignUserID)
 	} else if transition.ManualSelectUser && transition.AssignmentRoleID != nil {
 		// Manual selection mode - user must select from dropdown
-		fmt.Printf("[DEBUG] Using MANUAL SELECT mode\n")
 		if req.UserID != nil && *req.UserID != "" {
-			fmt.Printf("[DEBUG] User selected: %s\n", *req.UserID)
 			userAssignID, err := uuid.Parse(*req.UserID)
 			if err == nil {
 				updates["assignee_id"] = userAssignID
 				assigneeUserIDs = append(assigneeUserIDs, userAssignID)
 			}
-		} else {
-			fmt.Printf("[DEBUG] No user selected in manual mode\n")
 		}
 		// If no user selected, keep current assignee (don't fail the transition)
 	} else if transition.AutoMatchUser && transition.AssignmentRoleID != nil {
 		// Auto-match mode - find ALL matching users and assign to all of them
-		fmt.Printf("[DEBUG] Using AUTO MATCH mode with role: %s\n", *transition.AssignmentRoleID)
 		var classificationID, locationID, departmentID, excludeUserID *uuid.UUID
 		if incident.ClassificationID != nil {
 			classificationID = incident.ClassificationID
-			fmt.Printf("[DEBUG] ClassificationID: %s\n", *classificationID)
 		}
 		if incident.LocationID != nil {
 			locationID = incident.LocationID
-			fmt.Printf("[DEBUG] LocationID: %s\n", *locationID)
 		}
 		if incident.DepartmentID != nil {
 			departmentID = incident.DepartmentID
-			fmt.Printf("[DEBUG] DepartmentID: %s\n", *departmentID)
 		}
 		if incident.AssigneeID != nil {
 			excludeUserID = incident.AssigneeID
-			fmt.Printf("[DEBUG] ExcludeUserID (current assignee): %s\n", *excludeUserID)
 		}
 
 		// First try matching with all criteria
-		fmt.Printf("[DEBUG] Calling FindMatching with all criteria...\n")
 		matchedUsers, err := s.userRepo.FindMatching(ctx, transition.AssignmentRoleID, classificationID, locationID, departmentID, excludeUserID)
-		fmt.Printf("[DEBUG] FindMatching result: %d users, error: %v\n", len(matchedUsers), err)
 		if err == nil && len(matchedUsers) > 0 {
-			// Assign ALL matched users
-			fmt.Printf("[DEBUG] Found %d matching users with full criteria:\n", len(matchedUsers))
 			for _, user := range matchedUsers {
-				fmt.Printf("[DEBUG]   - %s (%s)\n", user.Username, user.ID)
 				assigneeUserIDs = append(assigneeUserIDs, user.ID)
 			}
-			// Set primary assignee to first matched user
 			updates["assignee_id"] = matchedUsers[0].ID
-			fmt.Printf("[DEBUG] Primary assignee set to: %s\n", matchedUsers[0].Username)
 		} else if err == nil && len(matchedUsers) == 0 {
 			// No exact matches - try matching by role only (more permissive)
-			fmt.Printf("[DEBUG] No exact matches, trying role-only match...\n")
 			roleOnlyUsers, roleErr := s.userRepo.FindMatching(ctx, transition.AssignmentRoleID, nil, nil, nil, excludeUserID)
-			fmt.Printf("[DEBUG] Role-only match result: %d users, error: %v\n", len(roleOnlyUsers), roleErr)
 			if roleErr == nil && len(roleOnlyUsers) > 0 {
-				// Assign ALL users with that role
-				fmt.Printf("[DEBUG] Found %d users with role only:\n", len(roleOnlyUsers))
 				for _, user := range roleOnlyUsers {
-					fmt.Printf("[DEBUG]   - %s (%s)\n", user.Username, user.ID)
 					assigneeUserIDs = append(assigneeUserIDs, user.ID)
 				}
-				// Set primary assignee to first matched user
 				updates["assignee_id"] = roleOnlyUsers[0].ID
-				fmt.Printf("[DEBUG] Primary assignee set to: %s\n", roleOnlyUsers[0].Username)
-			} else {
-				fmt.Printf("[DEBUG] No users found even with role-only match\n")
 			}
-		} else if err != nil {
-			fmt.Printf("[DEBUG] Error in FindMatching: %v\n", err)
 		}
-	} else {
-		fmt.Printf("[DEBUG] No assignment mode matched - skipping user assignment\n")
 	}
-	fmt.Printf("[DEBUG] Final assigneeUserIDs: %v\n", assigneeUserIDs)
-	fmt.Printf("[DEBUG] === USER ASSIGNMENT END ===\n")
 
 	// Update SLA deadline based on new state
 	if newState.SLAHours != nil && *newState.SLAHours > 0 {
@@ -1173,32 +1144,23 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	}
 
 	// Apply all updates using optimistic locking with version
-	fmt.Printf("[DEBUG] Applying updates: %+v\n", updates)
 	if err := txRepo.UpdateFieldsWithVersion(ctx, incidentID, updates, req.Version); err != nil {
 		tx.Rollback()
-		fmt.Printf("[DEBUG] ERROR in UpdateFieldsWithVersion: %v\n", err)
 		if err == repository.ErrVersionMismatch {
 			return nil, fmt.Errorf("conflict: incident was modified by another user")
 		}
 		return nil, err
 	}
-	fmt.Printf("[DEBUG] UpdateFieldsWithVersion successful\n")
 
 	// Set multiple assignees if applicable
-	fmt.Printf("[DEBUG] Setting multiple assignees, count: %d\n", len(assigneeUserIDs))
 	if len(assigneeUserIDs) > 0 {
-		fmt.Printf("[DEBUG] Calling SetAssignees with IDs: %v\n", assigneeUserIDs)
 		if err := txRepo.SetAssignees(ctx, incidentID, assigneeUserIDs); err != nil {
 			// Log error but don't fail the transition
-			fmt.Printf("[DEBUG] ERROR in SetAssignees: %v\n", err)
-		} else {
-			fmt.Printf("[DEBUG] SetAssignees successful\n")
+			fmt.Printf("Warning: SetAssignees failed: %v\n", err)
 		}
-	} else {
-		fmt.Printf("[DEBUG] No assignees to set (assigneeUserIDs is empty)\n")
 	}
 
-	// Create revision for state change
+	// Create revision for state change (using txRepo to stay within the transaction)
 	oldStateName := transition.FromState.Name
 	newStateName := newState.Name
 	changes := []models.IncidentFieldChange{
@@ -1209,12 +1171,48 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			NewValue:   &newStateName,
 		},
 	}
-	description := fmt.Sprintf("Status changed from %s to %s", oldStateName, newStateName)
-	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionStatusChanged, description, changes, userID)
+	revDescription := fmt.Sprintf("Status changed from %s to %s", oldStateName, newStateName)
+	revNum, _ := txRepo.GetNextRevisionNumber(ctx, incidentID)
+	changesBytes, _ := json.Marshal(changes)
+	txRepo.CreateRevision(ctx, &models.IncidentRevision{
+		IncidentID:        incidentID,
+		RevisionNumber:    revNum,
+		ActionType:        models.RevisionActionStatusChanged,
+		ActionDescription: revDescription,
+		Changes:           string(changesBytes),
+		PerformedByID:     userID,
+		CreatedAt:         time.Now(),
+	})
 
-	// Commit transaction
+	// Commit transaction first so all master incident changes are visible
 	if err := tx.Commit().Error; err != nil {
 		return nil, err
+	}
+
+	// Handle merge-related operations AFTER commit so they can see committed data
+	if s.incidentMergeRepo != nil {
+		// Check if this is a reopen (transitioning FROM a terminal state to a non-terminal state)
+		if transition.FromState != nil && transition.FromState.StateType == "terminal" && newState.StateType != "terminal" {
+			_ = s.incidentMergeRepo.AutoUnmergeOnReopen(ctx, incidentID)
+		} else {
+			// Check if this incident has merged incidents and sync their status
+			hasMerged, mergeErr := s.incidentMergeRepo.HasMergedIncidents(ctx, incidentID)
+			if mergeErr == nil && hasMerged {
+				if newState.StateType == "terminal" {
+					// Terminal state: close all merged incidents
+					_ = s.incidentMergeRepo.CloseMergedIncidents(ctx, incidentID)
+
+					// Run feedback/attachment copy and SMS in background
+					bgCtx := context.Background()
+					go func() {
+						_ = s.autoCloseMergedIncidents(bgCtx, incidentID, req, userID)
+					}()
+				} else {
+					// Non-terminal state: just sync the status
+					_ = s.incidentMergeRepo.SyncStatusToMergedIncidents(ctx, incidentID, transition.ToStateID)
+				}
+			}
+		}
 	}
 
 	// Broadcast state change to WebSocket subscribers
@@ -1228,9 +1226,6 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			"performed_by":   userID,
 		}, userID)
 	}
-
-	// TODO: Execute transition actions (email, webhook, field updates)
-	// This would be implemented in a separate action executor service
 
 	// Fetch updated incident (outside transaction)
 	updated, err := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
@@ -1631,6 +1626,109 @@ func (s *incidentService) ListRevisions(ctx context.Context, incidentID uuid.UUI
 	}
 
 	return responses, total, nil
+}
+
+// autoCloseMergedIncidents handles closing merged incidents when master is closed
+// Copies feedback and attachments, and sends SMS notifications
+func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIncidentID uuid.UUID, transitionReq *models.IncidentTransitionRequest, userID uuid.UUID) error {
+	// Get merged incidents
+	mergedIncidents, err := s.incidentMergeRepo.GetMergedIncidents(ctx, masterIncidentID)
+	if err != nil || len(mergedIncidents) == 0 {
+		return err
+	}
+
+	// Get master incident for feedback and attachments
+	masterIncident, err := s.incidentRepo.FindByIDWithRelations(ctx, masterIncidentID)
+	if err != nil {
+		return err
+	}
+
+	// Get current user for SMS (optional, just for audit)
+	_, _ = s.userRepo.FindByID(ctx, userID)
+
+	now := time.Now()
+
+	// Process each merged incident
+	for _, merged := range mergedIncidents {
+		// Copy feedback from master to merged incident
+		if transitionReq.Feedback != nil {
+			feedback := &models.IncidentFeedback{
+				IncidentID:          merged.ID,
+				Rating:              transitionReq.Feedback.Rating,
+				Comment:             transitionReq.Feedback.Comment,
+				CreatedByID:         userID,
+				TransitionHistoryID: nil,
+			}
+			_ = s.incidentRepo.CreateFeedback(ctx, feedback)
+		}
+
+		// Copy attachments from master to merged incident
+		for _, attachment := range masterIncident.Attachments {
+			newAttachment := &models.IncidentAttachment{
+				IncidentID:          merged.ID,
+				FileName:            attachment.FileName,
+				FileSize:            attachment.FileSize,
+				MimeType:            attachment.MimeType,
+				FilePath:            attachment.FilePath,
+				UploadedByID:        attachment.UploadedByID,
+				TransitionHistoryID: nil,
+			}
+			_ = s.incidentRepo.CreateAttachment(ctx, newAttachment)
+		}
+
+		// Send SMS notification to incident owner (reporter)
+		if merged.Reporter != nil && merged.Reporter.Phone != "" {
+			smsMessage := fmt.Sprintf(
+				"Your incident %s has been automatically closed as it was merged with master incident %s. The master incident has been resolved.",
+				merged.IncidentNumber,
+				masterIncident.IncidentNumber,
+			)
+
+			notification := &models.NotificationLog{
+				Channel:    "sms",
+				Direction:  "outbound",
+				Category:   "sent",
+				Language:   "en",
+				Recipients: models.RecipientArray{{Email: merged.Reporter.Phone, Type: "to", Status: "sent"}},
+				Subject:    "Incident Closed",
+				Body:       smsMessage,
+				Status:     "sent",
+				Provider:   "mock",
+				IsRead:     false,
+				SentBy:     &userID,
+				SentAt:     &now,
+			}
+			_ = s.incidentRepo.CreateNotification(ctx, notification)
+		}
+
+		// Create revision for auto-close
+		changes := []models.IncidentFieldChange{
+			{
+				FieldName:  "current_state_id",
+				FieldLabel: "Status",
+				OldValue:   strPtr(merged.CurrentState.Name),
+				NewValue:   strPtr(masterIncident.CurrentState.Name),
+			},
+			{
+				FieldName:  "closed_at",
+				FieldLabel: "Closed At",
+				OldValue:   nil,
+				NewValue:   strPtr(time.Now().Format(time.RFC3339)),
+			},
+		}
+		
+		description := fmt.Sprintf(
+			"Automatically closed due to master incident %s being closed",
+			masterIncident.IncidentNumber,
+		)
+		
+		_ = s.CreateRevision(ctx, merged.ID, models.RevisionActionStatusChanged, description, changes, userID)
+	}
+
+	// Auto-unmerge after closing
+	_ = s.incidentMergeRepo.AutoUnmergeOnClose(ctx, masterIncidentID)
+
+	return nil
 }
 
 func (s *incidentService) CreateRevision(ctx context.Context, incidentID uuid.UUID, actionType models.IncidentRevisionActionType, description string, changes []models.IncidentFieldChange, userID uuid.UUID) error {

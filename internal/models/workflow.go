@@ -67,6 +67,9 @@ type WorkflowState struct {
 	// SLA Configuration (hours allowed in this state)
 	SLAHours *int `gorm:"default:null" json:"sla_hours"`
 
+	// Merge Configuration - whether incidents in this state can be merged
+	IsMergable bool `gorm:"default:false" json:"is_mergable"`
+
 	// Role-based visibility (many-to-many) - empty = visible to all
 	ViewableRoles []Role `gorm:"many2many:state_viewable_roles;" json:"viewable_roles,omitempty"`
 
@@ -224,6 +227,7 @@ type WorkflowStateCreateRequest struct {
 	PositionX       int      `json:"position_x"`
 	PositionY       int      `json:"position_y"`
 	SLAHours        *int     `json:"sla_hours"`
+	IsMergable      bool     `json:"is_mergable"`
 	SortOrder       int      `json:"sort_order"`
 	ViewableRoleIDs []string `json:"viewable_role_ids"`
 }
@@ -237,6 +241,7 @@ type WorkflowStateUpdateRequest struct {
 	PositionX       *int     `json:"position_x"`
 	PositionY       *int     `json:"position_y"`
 	SLAHours        *int     `json:"sla_hours"`
+	IsMergable      *bool    `json:"is_mergable"`
 	SortOrder       *int     `json:"sort_order"`
 	IsActive        *bool    `json:"is_active"`
 	ViewableRoleIDs []string `json:"viewable_role_ids"`
@@ -365,6 +370,7 @@ type WorkflowStateResponse struct {
 	PositionX     int            `json:"position_x"`
 	PositionY     int            `json:"position_y"`
 	SLAHours      *int           `json:"sla_hours"`
+	IsMergable    bool           `json:"is_mergable"`
 	SortOrder     int            `json:"sort_order"`
 	IsActive      bool           `json:"is_active"`
 	ViewableRoles []RoleResponse `json:"viewable_roles,omitempty"`
@@ -499,19 +505,20 @@ func ToWorkflowResponse(w *Workflow) WorkflowResponse {
 
 func ToWorkflowStateResponse(s *WorkflowState) WorkflowStateResponse {
 	resp := WorkflowStateResponse{
-		ID:          s.ID,
-		WorkflowID:  s.WorkflowID,
-		Name:        s.Name,
-		Code:        s.Code,
+		ID:         s.ID,
+		WorkflowID: s.WorkflowID,
+		Name:       s.Name,
+		Code:       s.Code,
 		Description: s.Description,
-		StateType:   s.StateType,
-		Color:       s.Color,
-		PositionX:   s.PositionX,
-		PositionY:   s.PositionY,
-		SLAHours:    s.SLAHours,
-		SortOrder:   s.SortOrder,
-		IsActive:    s.IsActive,
-		CreatedAt:   s.CreatedAt,
+		StateType:  s.StateType,
+		Color:      s.Color,
+		PositionX:  s.PositionX,
+		PositionY:  s.PositionY,
+		SLAHours:   s.SLAHours,
+		IsMergable: s.IsMergable,
+		SortOrder:  s.SortOrder,
+		IsActive:   s.IsActive,
+		CreatedAt:  s.CreatedAt,
 	}
 
 	if len(s.ViewableRoles) > 0 {
