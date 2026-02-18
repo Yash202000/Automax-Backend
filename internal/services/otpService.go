@@ -80,6 +80,7 @@ func (s *OTPService) SendLoginOTP(ctx context.Context, phone string) error {
 
 	//  Generate secure OTP
 	otp, err := GenerateOTP()
+	fmt.Println("OTP", otp)
 	if err != nil {
 		return fmt.Errorf("failed to generate otp: %w", err)
 	}
@@ -89,13 +90,15 @@ func (s *OTPService) SendLoginOTP(ctx context.Context, phone string) error {
 		"hash":     HashOTP(otp),
 		"attempts": 0,
 	}
-
+	fmt.Println("data", data)
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("failed to marshal otp data: %w", err)
 	}
 
 	key := "otp:login:" + phone
+
+	fmt.Println("key", key)
 
 	// Store OTP in Redis with TTL
 	if err := s.redis.Set(ctx, key, jsonData, 5*time.Minute).Err(); err != nil {
@@ -127,27 +130,51 @@ func (s *OTPService) SendLoginOTP(ctx context.Context, phone string) error {
 
 func (s *OTPService) sendOTPNotification(ctx context.Context, channel, phone, otp string) error {
 
-	template := "OTP_TEMPLATE"
+	body := fmt.Sprintf("Your OTP is %s", otp)
+
+	fmt.Println("body", body)
 
 	_, err := s.notificationService.SendNotification(
 		ctx,
 		channel,
-		&template,
+		nil, // no template
 		"en",
 		[]string{phone},
 		nil,
 		nil,
 		"",
-		"",
-		map[string]string{
-			"otp": otp,
-		},
+		body,
+		nil,
 		nil,
 		nil,
 	)
 
 	return err
 }
+
+// func (s *OTPService) sendOTPNotification(ctx context.Context, channel, phone, otp string) error {
+
+// 	template := "OTP_TEMPLATE"
+
+// 	_, err := s.notificationService.SendNotification(
+// 		ctx,
+// 		channel,
+// 		&template,
+// 		"en",
+// 		[]string{phone},
+// 		nil,
+// 		nil,
+// 		"",
+// 		"",
+// 		map[string]string{
+// 			"otp": otp,
+// 		},
+// 		nil,
+// 		nil,
+// 	)
+
+// 	return err
+// }
 
 func (s *OTPService) VerifyLoginOTP(ctx context.Context, phone, input string) error {
 

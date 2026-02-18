@@ -130,7 +130,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		provider = "twilio"
 
 	case "whatsapp":
-
+		fmt.Println("channel111", channel, body)
 		for _, phone := range to {
 			fmt.Println("channel111", channel, phone, body)
 			err := utils.SendWhatsApp(phone, body)
