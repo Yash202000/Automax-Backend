@@ -75,12 +75,12 @@ func (r *RecipientArray) Scan(value interface{}) error {
 
 // AttachmentInfo stores attachment metadata
 type AttachmentInfo struct {
-	ID          string `json:"id,omitempty"`      // UUID for attachment
+	ID          string `json:"id,omitempty"` // UUID for attachment
 	Filename    string `json:"filename"`
 	ContentType string `json:"content_type"`
 	Size        int64  `json:"size"`
-	URL         string `json:"url,omitempty"`         // API URL for download
-	PreviewURL  string `json:"preview_url,omitempty"` // API URL for preview
+	URL         string `json:"url,omitempty"`          // API URL for download
+	PreviewURL  string `json:"preview_url,omitempty"`  // API URL for preview
 	StoragePath string `json:"storage_path,omitempty"` // Internal MinIO path (not exposed in response)
 }
 
@@ -142,9 +142,9 @@ func (s *StringArray) Scan(value interface{}) error {
 
 type NotificationLog struct {
 	ID           uuid.UUID       `gorm:"type:uuid;primaryKey" json:"id"`
-	Channel      string          `gorm:"size:20;not null;index" json:"channel"` // email | sms
+	Channel      string          `gorm:"size:20;not null;index" json:"channel"`                      // email | sms
 	Direction    string          `gorm:"size:10;not null;index;default:'outbound'" json:"direction"` // inbound | outbound
-	Category     string          `gorm:"size:20;not null;index;default:'sent'" json:"category"` // inbox | sent | draft | outbox | trash | spam
+	Category     string          `gorm:"size:20;not null;index;default:'sent'" json:"category"`      // inbox | sent | draft | outbox | trash | spam
 	TemplateCode string          `gorm:"size:100;index" json:"template_code"`
 	Language     string          `gorm:"size:10" json:"language"`
 	Recipients   RecipientArray  `gorm:"type:jsonb;not null" json:"recipients"` // All recipients with status (TO, CC, BCC)
@@ -155,17 +155,17 @@ type NotificationLog struct {
 	Body         string          `gorm:"type:text;not null" json:"body"`
 	BodyHTML     string          `gorm:"type:text" json:"body_html,omitempty"` // HTML version of body
 	Status       string          `gorm:"size:20;not null;index" json:"status"` // sent | failed | mock-sent | partial | draft | pending
-	Provider     string          `gorm:"size:50" json:"provider"` // smtp | twilio | mock | imap
+	Provider     string          `gorm:"size:50" json:"provider"`              // smtp | twilio | mock | imap
 	ErrorMessage string          `gorm:"type:text" json:"error_message,omitempty"`
 	Attachments  AttachmentArray `gorm:"type:jsonb" json:"attachments,omitempty"`
-	IsRead       bool            `gorm:"default:false;index" json:"is_read"` // For inbox emails
-	IsStarred    bool            `gorm:"default:false;index" json:"is_starred"` // Star/flag important emails
-	ThreadID     *uuid.UUID      `gorm:"type:uuid;index" json:"thread_id,omitempty"` // For email threading
+	IsRead       bool            `gorm:"default:false;index" json:"is_read"`           // For inbox emails
+	IsStarred    bool            `gorm:"default:false;index" json:"is_starred"`        // Star/flag important emails
+	ThreadID     *uuid.UUID      `gorm:"type:uuid;index" json:"thread_id,omitempty"`   // For email threading
 	InReplyTo    *uuid.UUID      `gorm:"type:uuid;index" json:"in_reply_to,omitempty"` // Reply to which email
-	SentBy       *uuid.UUID      `gorm:"type:uuid;index" json:"sent_by,omitempty"` // User who sent it (outbound)
+	SentBy       *uuid.UUID      `gorm:"type:uuid;index" json:"sent_by,omitempty"`     // User who sent it (outbound)
 	ReceivedBy   *uuid.UUID      `gorm:"type:uuid;index" json:"received_by,omitempty"` // User who received it (inbound)
-	ScheduledAt  *time.Time      `json:"scheduled_at,omitempty"` // For scheduled sending (outbox)
-	SentAt       *time.Time      `gorm:"index" json:"sent_at,omitempty"` // Actual sent time
+	ScheduledAt  *time.Time      `json:"scheduled_at,omitempty"`                       // For scheduled sending (outbox)
+	SentAt       *time.Time      `gorm:"index" json:"sent_at,omitempty"`               // Actual sent time
 	CreatedAt    time.Time       `gorm:"index" json:"created_at"`
 	UpdatedAt    *time.Time      `json:"updated_at,omitempty"`
 	DeletedAt    gorm.DeletedAt  `gorm:"index" json:"-"`
@@ -211,21 +211,21 @@ type NotificationLogResponse struct {
 
 // NotificationLogFilter for filtering and searching notifications
 type NotificationLogFilter struct {
-	Channel      string     `json:"channel"`
-	Direction    string     `json:"direction"` // inbound | outbound
-	Category     string     `json:"category"`  // inbox | sent | draft | outbox | trash | spam
-	Status       string     `json:"status"`
-	IsRead       *bool      `json:"is_read"`     // Filter by read/unread
-	IsStarred    *bool      `json:"is_starred"`  // Filter by starred
-	Search       string     `json:"search"`      // Search across subject, body, from, recipients
-	SentBy       *uuid.UUID `json:"sent_by"`     // Filter by sender (outbound)
-	ReceivedBy   *uuid.UUID `json:"received_by"` // Filter by receiver (inbound)
-	StartDate    *time.Time `json:"start_date"`
-	EndDate      *time.Time `json:"end_date"`
-	TemplateCode string     `json:"template_code"`
-	ThreadID     *uuid.UUID `json:"thread_id"` // Get all emails in a thread
-	Page         int        `json:"page"`
-	Limit        int        `json:"limit"`
+	Channel      string     `query:"channel" json:"channel" validate:"omitempty,oneof=email sms"`                                           // email | sms
+	Direction    string     `query:"direction" json:"direction" validate:"omitempty,oneof=inbound outbound"`                                // inbound | outbound
+	Category     string     `query:"category" json:"category" validate:"omitempty,oneof=inbox sent draft outbox trash spam"`                // inbox | sent | draft | outbox | trash | spam
+	Status       string     `query:"status" json:"status" validate:"omitempty,oneof=sent failed mock-sent partial draft pending scheduled"` // sent | failed | mock-sent | partial | draft | pending | scheduled
+	IsRead       *bool      `query:"is_read" json:"is_read" validate:"omitempty"`                                                           // Filter by read/unread
+	IsStarred    *bool      `query:"is_starred" json:"is_starred" validate:"omitempty"`                                                     // Filter by starred
+	Search       string     `query:"search" json:"search" validate:"omitempty,max=255"`                                                     // Search across subject, body, from, recipients
+	SentBy       *uuid.UUID `query:"sent_by" json:"sent_by" validate:"omitempty"`                                                           // Filter by sender (outbound)
+	ReceivedBy   *uuid.UUID `query:"received_by" json:"received_by" validate:"omitempty"`                                                   // Filter by receiver (inbound)
+	StartDate    *time.Time `query:"start_date" json:"start_date" validate:"omitempty"`                                                     // Filter by sent_at >= start_date
+	EndDate      *time.Time `query:"end_date" json:"end_date" validate:"omitempty"`
+	TemplateCode string     `query:"template_code" json:"template_code" validate:"omitempty,max=100"` // Filter by template code
+	ThreadID     *uuid.UUID `query:"thread_id" json:"thread_id" validate:"omitempty"`                 // Get all emails in a thread
+	Page         int        `query:"page" json:"page" validate:"omitempty,min=1"`                     // Pagination page number
+	Limit        int        `query:"limit" json:"limit" validate:"omitempty,min=1,max=100"`           // Pagination page size
 }
 
 // ToNotificationLogResponse converts NotificationLog to response
@@ -277,27 +277,27 @@ func ToNotificationLogResponse(log *NotificationLog) NotificationLogResponse {
 
 // CreateDraftRequest for creating draft emails
 type CreateDraftRequest struct {
-	Channel      string            `json:"channel" validate:"required"`
-	To           []string          `json:"to"`
-	CC           []string          `json:"cc,omitempty"`
-	BCC          []string          `json:"bcc,omitempty"`
-	Subject      string            `json:"subject"`
-	Body         string            `json:"body"`
-	BodyHTML     string            `json:"body_html,omitempty"`
-	Attachments  []AttachmentData  `json:"attachments,omitempty"`
-	ScheduledAt  *time.Time        `json:"scheduled_at,omitempty"`
+	Channel     string           `json:"channel" validate:"required"`
+	To          []string         `json:"to"`
+	CC          []string         `json:"cc,omitempty"`
+	BCC         []string         `json:"bcc,omitempty"`
+	Subject     string           `json:"subject"`
+	Body        string           `json:"body"`
+	BodyHTML    string           `json:"body_html,omitempty"`
+	Attachments []AttachmentData `json:"attachments,omitempty"`
+	ScheduledAt *time.Time       `json:"scheduled_at,omitempty"`
 }
 
 // UpdateDraftRequest for updating draft emails
 type UpdateDraftRequest struct {
-	To           []string          `json:"to,omitempty"`
-	CC           []string          `json:"cc,omitempty"`
-	BCC          []string          `json:"bcc,omitempty"`
-	Subject      string            `json:"subject,omitempty"`
-	Body         string            `json:"body,omitempty"`
-	BodyHTML     string            `json:"body_html,omitempty"`
-	Attachments  []AttachmentData  `json:"attachments,omitempty"`
-	ScheduledAt  *time.Time        `json:"scheduled_at,omitempty"`
+	To          []string         `json:"to,omitempty"`
+	CC          []string         `json:"cc,omitempty"`
+	BCC         []string         `json:"bcc,omitempty"`
+	Subject     string           `json:"subject,omitempty"`
+	Body        string           `json:"body,omitempty"`
+	BodyHTML    string           `json:"body_html,omitempty"`
+	Attachments []AttachmentData `json:"attachments,omitempty"`
+	ScheduledAt *time.Time       `json:"scheduled_at,omitempty"`
 }
 
 type AttachmentData struct {

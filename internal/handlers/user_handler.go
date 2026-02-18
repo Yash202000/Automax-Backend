@@ -10,6 +10,7 @@ import (
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/pkg/utils"
+	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -35,8 +36,11 @@ func (h *UserHandler) Register(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if err := h.validator.Struct(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	response, err := h.userService.Register(c.Context(), &req)
@@ -53,8 +57,11 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if err := h.validator.Struct(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	response, err := h.userService.Login(c.Context(), &req)
@@ -81,8 +88,11 @@ func (h *UserHandler) RefreshToken(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if err := h.validator.Struct(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	response, err := h.userService.RefreshToken(c.Context(), req.RefreshToken)
@@ -112,8 +122,11 @@ func (h *UserHandler) UpdateProfile(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if err := h.validator.Struct(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	response, err := h.userService.UpdateProfile(c.Context(), userID, &req)
@@ -132,8 +145,11 @@ func (h *UserHandler) ChangePassword(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if err := h.validator.Struct(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	if err := h.userService.ChangePassword(c.Context(), userID, &req); err != nil {
@@ -315,8 +331,11 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 		}
 	}
 
-	if err := h.validator.Struct(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	response, err := h.userService.Register(c.Context(), &req)
@@ -362,8 +381,11 @@ func (h *UserHandler) AdminUpdateUser(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if err := h.validator.Struct(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	response, err := h.userService.UpdateProfile(c.Context(), userID, &req)
