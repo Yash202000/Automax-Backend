@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/google/uuid"
@@ -20,6 +22,7 @@ type NotificationLogRepository interface {
 	MoveToCategory(ctx context.Context, id uuid.UUID, category string) error
 	BulkMoveToCategory(ctx context.Context, ids []uuid.UUID, category string) error
 	BulkDelete(ctx context.Context, ids []uuid.UUID) error
+	MarkOTPVerified(ctx context.Context, sessionID string, verifiedAt time.Time) error
 }
 
 type notificationLogRepository struct {
@@ -175,4 +178,27 @@ func (r *notificationLogRepository) BulkMoveToCategory(ctx context.Context, ids 
 
 func (r *notificationLogRepository) BulkDelete(ctx context.Context, ids []uuid.UUID) error {
 	return r.db.WithContext(ctx).Delete(&models.NotificationLog{}, "id IN ?", ids).Error
+}
+
+//OTP Verification store inside NotificationLog
+
+func (r *notificationLogRepository) MarkOTPVerified(
+	ctx context.Context,
+	sessionID string,
+	now time.Time,
+) error {
+
+	result := r.db.WithContext(ctx).
+		Model(&models.NotificationLog{}).
+		Where("otp_session_id = ? AND otp_verified = false", sessionID).
+		Updates(map[string]interface{}{
+			"otp_verified":    true,
+			"otp_verified_at": now,
+		})
+
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("already verified or not found")
+	}
+
+	return result.Error
 }

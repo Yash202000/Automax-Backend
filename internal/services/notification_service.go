@@ -29,7 +29,7 @@ func NewNotificationService(
 	}
 }
 
-func (s *NotificationService) SendNotification(ctx context.Context, channel string, templateCode *string, language string, to []string, cc []string, bcc []string, subject string, body string, variables map[string]string, attachments []models.AttachmentData, sentBy *uuid.UUID) (*models.NotificationLog, error) {
+func (s *NotificationService) SendNotification(ctx context.Context, channel string, templateCode *string, language string, to []string, cc []string, bcc []string, subject string, body string, variables map[string]string, attachments []models.AttachmentData, sentBy *uuid.UUID, sessionID *uuid.UUID) (*models.NotificationLog, error) {
 
 	// REQUIRED: at least one recipient
 	if len(to) == 0 && len(cc) == 0 && len(bcc) == 0 {
@@ -88,7 +88,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 			Size:        int64(len(att.Data)),
 		})
 	}
-	fmt.Println("channel", channel)
+
 	switch channel {
 
 	case "email":
@@ -129,20 +129,106 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		}
 		provider = "twilio"
 
+		// case "whatsapp":
+		// 	for _, phone := range to {
+
+		// 		err := utils.SendWhatsApp(phone, body)
+		// 		fmt.Println("cherrannel", err)
+
+		// 		if err != nil {
+
+		// 			// SMS fallback
+		// 			smsErr := utils.SendSMS(phone, body)
+
+		// 			if smsErr != nil {
+
+		// 				// Both failed
+		// 				status = "failed"
+
+		// 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
+		// 					Email:        phone,
+		// 					Type:         "to",
+		// 					Status:       "failed",
+		// 					Error:        fmt.Sprintf("whatsapp error: %v | sms error: %v", err, smsErr),
+		// 					ErrorMessage: err.Error(),
+		// 				})
+
+		// 			} else {
+
+		// 				// WhatsApp failed but SMS worked
+		// 				status = "fallback_sms"
+
+		// 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
+		// 					Email:        phone,
+		// 					Type:         "to",
+		// 					Status:       "success",
+		// 					Error:        "whatsapp failed, delivered via sms",
+		// 					ErrorMessage: err.Error(),
+		// 				})
+
+		// 				provider = "twilio"
+		// 			}
+
+		// 		} else {
+
+		// 			// WhatsApp success
+		// 			recipientStatuses = append(recipientStatuses, models.RecipientInfo{
+		// 				Email:  phone,
+		// 				Type:   "to",
+		// 				Status: "success",
+		// 			})
+
+		// 			provider = "meta"
+		// 		}
+		// 	}
+
+		// case "whatsapp":
+		// 	for _, phone := range to {
+		// 		err := utils.SendWhatsApp(phone, body)
+		// 		fmt.Println("EETRR", err)
+		// 		if err != nil {
+		// 			//status = "failed"
+
+		// 			recipientStatuses = append(recipientStatuses, models.RecipientInfo{
+		// 				Email:        phone,
+		// 				Type:         "to",
+		// 				Status:       "failed",
+		// 				Error:        err.Error(),
+		// 				ErrorMessage: err.Error(),
+		// 			})
+		// 			fmt.Println("EETRR11", err.Error())
+		// 		} else {
+		// 			recipientStatuses = append(recipientStatuses, models.RecipientInfo{
+		// 				Email:  phone,
+		// 				Type:   "to",
+		// 				Status: "success",
+		// 			})
+		// 		}
+		// 	}
+		// 	provider = "meta"
+
 	case "whatsapp":
-		fmt.Println("channel111", channel, body)
+
+		status = "sent"
+
 		for _, phone := range to {
-			fmt.Println("channel111", channel, phone, body)
+
 			err := utils.SendWhatsApp(phone, body)
+
 			if err != nil {
+
 				status = "failed"
+
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-					Email:  phone,
-					Type:   "to",
-					Status: "failed",
-					Error:  err.Error(),
+					Email:        phone,
+					Type:         "to",
+					Status:       "failed",
+					Error:        err.Error(),
+					ErrorMessage: err.Error(),
 				})
+
 			} else {
+
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
 					Email:  phone,
 					Type:   "to",
@@ -150,6 +236,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 				})
 			}
 		}
+
 		provider = "meta"
 
 	default:
@@ -169,6 +256,8 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		BCC:          bcc,
 		Subject:      subject,
 		Body:         body,
+		OTPSessionID: sessionID,
+		OTPVerified:  false,
 		Status:       status,
 		Provider:     provider,
 		Attachments:  attachmentInfo,
@@ -180,6 +269,9 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 
 	if err := s.logRepo.Create(ctx, log); err != nil {
 		return nil, err
+	}
+	if status == "failed" {
+		return log, fmt.Errorf("notification delivery failed")
 	}
 
 	return log, nil
@@ -412,6 +504,7 @@ func (s *NotificationService) SendDraft(ctx context.Context, id uuid.UUID) (*mod
 		nil,
 		attachments,
 		draft.SentBy,
+		nil,
 	)
 	if err != nil {
 		return nil, err
@@ -513,6 +606,7 @@ func (s *NotificationService) ReplyToNotification(ctx context.Context, originalI
 		nil,
 		nil,
 		sentBy,
+		nil,
 	)
 	if err != nil {
 		return nil, err

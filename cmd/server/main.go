@@ -94,7 +94,7 @@ func main() {
 	settingsService := services.NewSettingsService(settingsRepo)
 	presenceService := services.NewPresenceService(redisClient)
 	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo)
-	otpService := services.NewOTPService(redisClient, notificationService)
+	otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo)
 
 	// Initialize and start SLA Monitor (checks every 5 minutes)
 	slaMonitor := services.NewSLAMonitor(incidentRepo, 5*time.Minute)
@@ -510,17 +510,11 @@ func main() {
 	notifications.Delete("/:id", authMiddleware.RequirePermission("notifications:delete"), notificationHandler.Delete)
 	notifications.Delete("/:id/permanent", authMiddleware.RequirePermission("notifications:delete"), notificationHandler.PermanentDelete)
 
-	// OTP Services
-
-	// otp := v1.Group("/otp")
-	// otp.Post("/login/send", otpHandler.SendLoginOTP)
-	// otp.Post("/login/verify", otpHandler.VerifyLoginOTP)
+	// OTP Routes
 
 	otp := v1.Group("/otp", authMiddleware.Authenticate())
-	// Send notifications
-	// notifications.Post("/send", authMiddleware.RequirePermission("notifications:send"), notificationHandler.Send)
-
-	otp.Post("/send", authMiddleware.RequirePermission("otp:send"), otpHandler.SendLoginOTP)
+	otp.Post("/send", authMiddleware.RequirePermission("otp:send"), otpHandler.SendOTP)
+	otp.Post("/verify", authMiddleware.RequirePermission("otp:verify"), otpHandler.VerifyOTP)
 
 	go func() {
 		addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
