@@ -221,10 +221,10 @@ func SendSMTPWithCCBCC(to []string, cc []string, bcc []string, subject, body str
 		for _, email := range allRecipients {
 			recipientType := GetRecipientType(email, to, cc, bcc)
 			recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-				Email:  email,
-				Type:   recipientType,
-				Status: "failed",
-				Error:  err.Error(),
+				Channel: email,
+				Type:    recipientType,
+				Status:  "failed",
+				Error:   err.Error(),
 			})
 		}
 		return recipientStatuses, err
@@ -234,9 +234,9 @@ func SendSMTPWithCCBCC(to []string, cc []string, bcc []string, subject, body str
 	for _, email := range allRecipients {
 		recipientType := GetRecipientType(email, to, cc, bcc)
 		recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-			Email:  email,
-			Type:   recipientType,
-			Status: "success",
+			Channel: email,
+			Type:    recipientType,
+			Status:  "success",
 		})
 	}
 

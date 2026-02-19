@@ -39,7 +39,7 @@ const (
 
 // RecipientInfo stores individual recipient delivery status
 type RecipientInfo struct {
-	Email        string `json:"email,omitempty"`
+	Channel      string `json:"channel"`
 	Type         string `json:"type"`   // "to" | "cc" | "bcc"
 	Status       string `json:"status"` // "success" | "failed"
 	Error        string `json:"error,omitempty"`

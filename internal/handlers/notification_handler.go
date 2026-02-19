@@ -91,9 +91,9 @@ func (h *NotificationHandler) SendGridInboundWebhook(c *fiber.Ctx) error {
 	var recipients models.RecipientArray
 	for _, email := range toRecipients {
 		recipients = append(recipients, models.RecipientInfo{
-			Email:  email,
-			Type:   "to",
-			Status: "received",
+			Channel: email,
+			Type:    "to",
+			Status:  "received",
 		})
 	}
 

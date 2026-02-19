@@ -97,10 +97,10 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 			status = "failed"
 			for _, r := range allRecipients {
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-					Email:  r,
-					Type:   utils.GetRecipientType(r, to, cc, bcc),
-					Status: "failed",
-					Error:  err.Error(),
+					Channel: r,
+					Type:    utils.GetRecipientType(r, to, cc, bcc),
+					Status:  "failed",
+					Error:   err.Error(),
 				})
 			}
 		} else {
@@ -114,16 +114,16 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 			if err != nil {
 				status = "failed"
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-					Email:  phone,
-					Type:   "to",
-					Status: "failed",
-					Error:  err.Error(),
+					Channel: phone,
+					Type:    "to",
+					Status:  "failed",
+					Error:   err.Error(),
 				})
 			} else {
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-					Email:  phone,
-					Type:   "to",
-					Status: "success",
+					Channel: phone,
+					Type:    "to",
+					Status:  "success",
 				})
 			}
 		}
@@ -182,31 +182,6 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		// 		}
 		// 	}
 
-		// case "whatsapp":
-		// 	for _, phone := range to {
-		// 		err := utils.SendWhatsApp(phone, body)
-		// 		fmt.Println("EETRR", err)
-		// 		if err != nil {
-		// 			//status = "failed"
-
-		// 			recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-		// 				Email:        phone,
-		// 				Type:         "to",
-		// 				Status:       "failed",
-		// 				Error:        err.Error(),
-		// 				ErrorMessage: err.Error(),
-		// 			})
-		// 			fmt.Println("EETRR11", err.Error())
-		// 		} else {
-		// 			recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-		// 				Email:  phone,
-		// 				Type:   "to",
-		// 				Status: "success",
-		// 			})
-		// 		}
-		// 	}
-		// 	provider = "meta"
-
 	case "whatsapp":
 
 		status = "sent"
@@ -220,7 +195,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 				status = "failed"
 
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-					Email:        phone,
+					Channel:      phone,
 					Type:         "to",
 					Status:       "failed",
 					Error:        err.Error(),
@@ -230,9 +205,9 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 			} else {
 
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-					Email:  phone,
-					Type:   "to",
-					Status: "success",
+					Channel: phone,
+					Type:    "to",
+					Status:  "success",
 				})
 			}
 		}
@@ -348,9 +323,9 @@ func (s *NotificationService) CreateDraft(ctx context.Context, req *models.Creat
 	var recipients models.RecipientArray
 	for _, email := range req.To {
 		recipients = append(recipients, models.RecipientInfo{
-			Email:  email,
-			Type:   "to",
-			Status: "draft",
+			Channel: email,
+			Type:    "to",
+			Status:  "draft",
 		})
 	}
 
@@ -408,9 +383,9 @@ func (s *NotificationService) UpdateDraft(ctx context.Context, id uuid.UUID, req
 		var recipients models.RecipientArray
 		for _, email := range req.To {
 			recipients = append(recipients, models.RecipientInfo{
-				Email:  email,
-				Type:   "to",
-				Status: "draft",
+				Channel: email,
+				Type:    "to",
+				Status:  "draft",
 			})
 		}
 		draft.Recipients = recipients
@@ -474,7 +449,7 @@ func (s *NotificationService) SendDraft(ctx context.Context, id uuid.UUID) (*mod
 	var to []string
 	for _, r := range draft.Recipients {
 		if r.Type == "to" {
-			to = append(to, r.Email)
+			to = append(to, r.Channel)
 		}
 	}
 
