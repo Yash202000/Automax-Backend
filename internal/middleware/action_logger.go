@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"time"
 
 	"github.com/automax/backend/internal/services"
@@ -51,7 +52,7 @@ func ActionLogger(config ActionLoggerConfig) fiber.Handler {
 		duration := time.Since(start).Milliseconds()
 
 		// Get user ID from context (set by auth middleware)
-		userIDInterface := c.Locals("userID")
+		userIDInterface := c.Locals("user_id")
 		if userIDInterface == nil {
 			return err
 		}
@@ -78,16 +79,25 @@ func ActionLogger(config ActionLoggerConfig) fiber.Handler {
 		// Get resource ID from params if available
 		resourceID := c.Params("id")
 
-		// Log the action asynchronously
+		// Capture IP and User-Agent before async goroutine (context may be released)
+		ipAddress := c.IP()
+		userAgent := c.Get("User-Agent")
+
+		// Log the action asynchronously using background context
+		// We use context.Background() instead of c.Context() because the request
+		// context may be cancelled when the HTTP response is sent
 		go func() {
-			logErr := config.LogService.LogAction(c.Context(), &services.LogActionParams{
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			logErr := config.LogService.LogAction(ctx, &services.LogActionParams{
 				UserID:      userID,
 				Action:      action,
 				Module:      module,
 				ResourceID:  resourceID,
 				Description: generateDescription(action, module, resourceID),
-				IPAddress:   c.IP(),
-				UserAgent:   c.Get("User-Agent"),
+				IPAddress:   ipAddress,
+				UserAgent:   userAgent,
 				Status:      status,
 				ErrorMsg:    errorMsg,
 				Duration:    duration,
@@ -120,7 +130,19 @@ func getActionFromMethod(method string) string {
 func getModuleFromPath(path string) string {
 	// Extract module from path like /api/admin/users -> users
 	// or /api/v1/departments -> departments
+	// or /api/admin/workflows/:id/states -> workflow_states
 	segments := splitPath(path)
+
+	// Check for workflow sub-resources (states, transitions)
+	// Path pattern: /api/admin/workflows/:id/states or /api/admin/workflows/:id/transitions
+	for i, seg := range segments {
+		if seg == "workflows" && i+2 < len(segments) {
+			subResource := segments[i+2]
+			if subResource == "states" || subResource == "transitions" {
+				return "workflow_" + subResource
+			}
+		}
+	}
 
 	// Find the relevant segment (skip api, admin, v1, etc.)
 	for i := len(segments) - 1; i >= 0; i-- {
@@ -158,6 +180,39 @@ func isUUID(s string) bool {
 }
 
 func generateDescription(action, module, resourceID string) string {
+	// Special handling for workflow-related modules
+	if module == "workflows" {
+		switch action {
+		case "create":
+			return "Created new workflow" + withResourceID(resourceID)
+		case "update":
+			return "Updated workflow" + withResourceID(resourceID)
+		case "delete":
+			return "Deleted workflow" + withResourceID(resourceID)
+		}
+	}
+	if module == "workflow_states" {
+		switch action {
+		case "create":
+			return "Created new workflow state" + withResourceID(resourceID)
+		case "update":
+			return "Updated workflow state" + withResourceID(resourceID)
+		case "delete":
+			return "Deleted workflow state" + withResourceID(resourceID)
+		}
+	}
+	if module == "workflow_transitions" {
+		switch action {
+		case "create":
+			return "Created new workflow transition" + withResourceID(resourceID)
+		case "update":
+			return "Updated workflow transition" + withResourceID(resourceID)
+		case "delete":
+			return "Deleted workflow transition" + withResourceID(resourceID)
+		}
+	}
+
+	// Default description
 	desc := action + " " + module
 	if resourceID != "" {
 		desc += " (ID: " + resourceID + ")"
@@ -165,10 +220,17 @@ func generateDescription(action, module, resourceID string) string {
 	return desc
 }
 
+func withResourceID(resourceID string) string {
+	if resourceID != "" {
+		return " (ID: " + resourceID + ")"
+	}
+	return ""
+}
+
 // LogAction is a helper function to manually log actions
 func LogAction(c *fiber.Ctx, logService services.ActionLogService, params *services.LogActionParams) {
 	// Get user ID from context
-	userIDInterface := c.Locals("userID")
+	userIDInterface := c.Locals("user_id")
 	if userIDInterface == nil {
 		return
 	}

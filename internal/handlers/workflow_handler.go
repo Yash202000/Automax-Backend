@@ -1,8 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"strings"
+	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
@@ -14,14 +18,16 @@ import (
 )
 
 type WorkflowHandler struct {
-	service   services.WorkflowService
-	validator *validator.Validate
+	service          services.WorkflowService
+	actionLogService services.ActionLogService
+	validator        *validator.Validate
 }
 
-func NewWorkflowHandler(service services.WorkflowService) *WorkflowHandler {
+func NewWorkflowHandler(service services.WorkflowService, actionLogService services.ActionLogService) *WorkflowHandler {
 	return &WorkflowHandler{
-		service:   service,
-		validator: validator.New(),
+		service:          service,
+		actionLogService: actionLogService,
+		validator:        validator.New(),
 	}
 }
 
@@ -47,6 +53,35 @@ func (h *WorkflowHandler) CreateWorkflow(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
+
+	// Log the creation with workflow details
+	go func() {
+		ipAddress := c.IP()
+		userAgent := c.Get("User-Agent")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		newValue := map[string]interface{}{
+			"name":        workflow.Name,
+			"code":        workflow.Code,
+			"description": workflow.Description,
+			"record_type": workflow.RecordType,
+			"is_active":   workflow.IsActive,
+			"is_default":  workflow.IsDefault,
+		}
+
+		_ = h.actionLogService.LogAction(ctx, &services.LogActionParams{
+			UserID:      userID,
+			Action:      "create",
+			Module:      "workflows",
+			ResourceID:  workflow.ID.String(),
+			Description: fmt.Sprintf("Created new workflow '%s'", workflow.Name),
+			NewValue:    newValue,
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		})
+	}()
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, "Workflow created", workflow)
 }
@@ -97,10 +132,97 @@ func (h *WorkflowHandler) UpdateWorkflow(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
+	// Get old workflow for action logging
+	oldWorkflow, err := h.service.GetWorkflow(c.Context(), id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
 	workflow, err := h.service.UpdateWorkflow(c.Context(), id, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
+
+	// Capture values before async logging
+	userID := c.Locals("user_id").(uuid.UUID)
+	ipAddress := c.IP()
+	userAgent := c.Get("User-Agent")
+
+	// Build comprehensive old and new values
+	oldValue := map[string]interface{}{
+		"name":                      oldWorkflow.Name,
+		"code":                      oldWorkflow.Code,
+		"description":               oldWorkflow.Description,
+		"record_type":               oldWorkflow.RecordType,
+		"is_active":                 oldWorkflow.IsActive,
+		"is_default":                oldWorkflow.IsDefault,
+		"sources":                   oldWorkflow.Sources,
+		"priorities":                oldWorkflow.Priorities,
+		"canvas_layout":             oldWorkflow.CanvasLayout,
+		"required_fields":           oldWorkflow.RequiredFields,
+		"classifications":           oldWorkflow.Classifications,
+		"locations":                 oldWorkflow.Locations,
+		"convert_to_request_roles":  oldWorkflow.ConvertToRequestRoles,
+	}
+	newValue := map[string]interface{}{
+		"name":                      workflow.Name,
+		"code":                      workflow.Code,
+		"description":               workflow.Description,
+		"record_type":               workflow.RecordType,
+		"is_active":                 workflow.IsActive,
+		"is_default":                workflow.IsDefault,
+		"sources":                   workflow.Sources,
+		"priorities":                workflow.Priorities,
+		"canvas_layout":             workflow.CanvasLayout,
+		"required_fields":           workflow.RequiredFields,
+		"classifications":           workflow.Classifications,
+		"locations":                 workflow.Locations,
+		"convert_to_request_roles":  workflow.ConvertToRequestRoles,
+	}
+
+	// Build detailed change description
+	var changeDetails []string
+
+	// Check each field for changes
+	fieldLabels := map[string]string{
+		"name": "Name", "code": "Code", "description": "Description",
+		"record_type": "Record Type", "is_active": "Is Active", "is_default": "Is Default",
+		"sources": "Sources", "priorities": "Priorities", "canvas_layout": "Canvas Layout",
+		"required_fields": "Required Fields", "classifications": "Classifications",
+		"locations": "Locations", "convert_to_request_roles": "Convert to Request Roles",
+	}
+
+	for key, label := range fieldLabels {
+		oldVal := oldValue[key]
+		newVal := newValue[key]
+		if fmt.Sprintf("%v", oldVal) != fmt.Sprintf("%v", newVal) {
+			changeDetails = append(changeDetails, label)
+		}
+	}
+
+	description := fmt.Sprintf("Updated workflow '%s'", workflow.Name)
+	if len(changeDetails) > 0 {
+		description += fmt.Sprintf(" - changed: %s", strings.Join(changeDetails, ", "))
+	}
+
+	// Log the update with old and new values
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_ = h.actionLogService.LogAction(ctx, &services.LogActionParams{
+			UserID:      userID,
+			Action:      "update",
+			Module:      "workflows",
+			ResourceID:  id.String(),
+			Description: description,
+			OldValue:    oldValue,
+			NewValue:    newValue,
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		})
+	}()
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Workflow updated", workflow)
 }
@@ -112,9 +234,42 @@ func (h *WorkflowHandler) DeleteWorkflow(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
+	// Get workflow details for action logging
+	oldWorkflow, err := h.service.GetWorkflow(c.Context(), id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
 	if err := h.service.DeleteWorkflow(c.Context(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
+
+	// Log the deletion
+	go func() {
+		userID := c.Locals("user_id").(uuid.UUID)
+		ipAddress := c.IP()
+		userAgent := c.Get("User-Agent")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		oldValue := map[string]interface{}{
+			"name":        oldWorkflow.Name,
+			"code":        oldWorkflow.Code,
+			"description": oldWorkflow.Description,
+		}
+
+		_ = h.actionLogService.LogAction(ctx, &services.LogActionParams{
+			UserID:      userID,
+			Action:      "delete",
+			Module:      "workflows",
+			ResourceID:  id.String(),
+			Description: fmt.Sprintf("Deleted workflow '%s'", oldWorkflow.Name),
+			OldValue:    oldValue,
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		})
+	}()
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Workflow deleted", nil)
 }
@@ -208,6 +363,37 @@ func (h *WorkflowHandler) AssignClassifications(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
+	// Log the classification assignment
+	go func() {
+		userID := c.Locals("user_id").(uuid.UUID)
+		ipAddress := c.IP()
+		userAgent := c.Get("User-Agent")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		// Extract classification IDs from classifications
+		var classIDs []string
+		for _, c := range workflow.Classifications {
+			classIDs = append(classIDs, c.ID.String())
+		}
+
+		newValue := map[string]interface{}{
+			"classifications": classIDs,
+		}
+
+		_ = h.actionLogService.LogAction(ctx, &services.LogActionParams{
+			UserID:      userID,
+			Action:      "update",
+			Module:      "workflows",
+			ResourceID:  id.String(),
+			Description: fmt.Sprintf("Updated classifications for workflow '%s'", workflow.Name),
+			NewValue:    newValue,
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		})
+	}()
+
 	return utils.SuccessResponse(c, fiber.StatusOK, "Classifications assigned", workflow)
 }
 
@@ -252,6 +438,47 @@ func (h *WorkflowHandler) CreateState(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
+	// Log the creation
+	go func() {
+		userID := c.Locals("user_id").(uuid.UUID)
+		ipAddress := c.IP()
+		userAgent := c.Get("User-Agent")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		// Extract viewable role IDs
+		var viewableRoleIDs []string
+		for _, r := range state.ViewableRoles {
+			viewableRoleIDs = append(viewableRoleIDs, r.ID.String())
+		}
+
+		newValue := map[string]interface{}{
+			"name":              state.Name,
+			"code":              state.Code,
+			"description":       state.Description,
+			"state_type":        state.StateType,
+			"color":             state.Color,
+			"sla_hours":         state.SLAHours,
+			"sort_order":        state.SortOrder,
+			"position_x":        state.PositionX,
+			"position_y":        state.PositionY,
+			"is_active":         state.IsActive,
+			"viewable_roles":    viewableRoleIDs,
+		}
+
+		_ = h.actionLogService.LogAction(ctx, &services.LogActionParams{
+			UserID:      userID,
+			Action:      "create",
+			Module:      "workflow_states",
+			ResourceID:  state.ID.String(),
+			Description: fmt.Sprintf("Created workflow state '%s' in workflow", state.Name),
+			NewValue:    newValue,
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		})
+	}()
+
 	return utils.SuccessResponse(c, fiber.StatusCreated, "State created", state)
 }
 
@@ -282,10 +509,97 @@ func (h *WorkflowHandler) UpdateState(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
+	// Get old state for action logging
+	oldState, err := h.service.GetState(c.Context(), stateID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
 	state, err := h.service.UpdateState(c.Context(), stateID, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
+
+	// Capture values before async logging
+	userID := c.Locals("user_id").(uuid.UUID)
+	ipAddress := c.IP()
+	userAgent := c.Get("User-Agent")
+
+	// Log the update with old and new values
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		// Extract viewable role IDs
+		var oldViewableRoleIDs, newViewableRoleIDs []string
+		for _, r := range oldState.ViewableRoles {
+			oldViewableRoleIDs = append(oldViewableRoleIDs, r.ID.String())
+		}
+		for _, r := range state.ViewableRoles {
+			newViewableRoleIDs = append(newViewableRoleIDs, r.ID.String())
+		}
+
+		oldValue := map[string]interface{}{
+			"name":              oldState.Name,
+			"code":              oldState.Code,
+			"description":       oldState.Description,
+			"state_type":        oldState.StateType,
+			"color":             oldState.Color,
+			"sla_hours":         oldState.SLAHours,
+			"sort_order":        oldState.SortOrder,
+			"is_active":         oldState.IsActive,
+			"position_x":        oldState.PositionX,
+			"position_y":        oldState.PositionY,
+			"viewable_roles":    oldViewableRoleIDs,
+		}
+		newValue := map[string]interface{}{
+			"name":              state.Name,
+			"code":              state.Code,
+			"description":       state.Description,
+			"state_type":        state.StateType,
+			"color":             state.Color,
+			"sla_hours":         state.SLAHours,
+			"sort_order":        state.SortOrder,
+			"is_active":         state.IsActive,
+			"position_x":        state.PositionX,
+			"position_y":        state.PositionY,
+			"viewable_roles":    newViewableRoleIDs,
+		}
+
+		// Build detailed change description
+		var changeDetails []string
+		fieldLabels := map[string]string{
+			"name": "Name", "code": "Code", "description": "Description",
+			"state_type": "State Type", "color": "Color", "sla_hours": "SLA Hours",
+			"sort_order": "Sort Order", "is_active": "Is Active",
+			"position_x": "Position X", "position_y": "Position Y",
+			"viewable_roles": "Viewable Roles",
+		}
+
+		for key, label := range fieldLabels {
+			if fmt.Sprintf("%v", oldValue[key]) != fmt.Sprintf("%v", newValue[key]) {
+				changeDetails = append(changeDetails, label)
+			}
+		}
+
+		desc := fmt.Sprintf("Updated workflow state '%s'", state.Name)
+		if len(changeDetails) > 0 {
+			desc += fmt.Sprintf(" - changed: %s", strings.Join(changeDetails, ", "))
+		}
+
+		_ = h.actionLogService.LogAction(ctx, &services.LogActionParams{
+			UserID:      userID,
+			Action:      "update",
+			Module:      "workflow_states",
+			ResourceID:  stateID.String(),
+			Description: desc,
+			OldValue:    oldValue,
+			NewValue:    newValue,
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		})
+	}()
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "State updated", state)
 }
@@ -297,9 +611,56 @@ func (h *WorkflowHandler) DeleteState(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid state ID")
 	}
 
+	// Get state details for action logging
+	oldState, err := h.service.GetState(c.Context(), stateID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
 	if err := h.service.DeleteState(c.Context(), stateID); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
+
+	// Log the deletion
+	go func() {
+		userID := c.Locals("user_id").(uuid.UUID)
+		ipAddress := c.IP()
+		userAgent := c.Get("User-Agent")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		// Extract viewable role IDs
+		var viewableRoleIDs []string
+		for _, r := range oldState.ViewableRoles {
+			viewableRoleIDs = append(viewableRoleIDs, r.ID.String())
+		}
+
+		oldValue := map[string]interface{}{
+			"name":              oldState.Name,
+			"code":              oldState.Code,
+			"description":       oldState.Description,
+			"state_type":        oldState.StateType,
+			"color":             oldState.Color,
+			"sla_hours":         oldState.SLAHours,
+			"sort_order":        oldState.SortOrder,
+			"position_x":        oldState.PositionX,
+			"position_y":        oldState.PositionY,
+			"is_active":         oldState.IsActive,
+			"viewable_roles":    viewableRoleIDs,
+		}
+
+		_ = h.actionLogService.LogAction(ctx, &services.LogActionParams{
+			UserID:      userID,
+			Action:      "delete",
+			Module:      "workflow_states",
+			ResourceID:  stateID.String(),
+			Description: fmt.Sprintf("Deleted workflow state '%s'", oldState.Name),
+			OldValue:    oldValue,
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		})
+	}()
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "State deleted", nil)
 }
@@ -329,6 +690,50 @@ func (h *WorkflowHandler) CreateTransition(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
+
+	// Log the creation
+	go func() {
+		userID := c.Locals("user_id").(uuid.UUID)
+		ipAddress := c.IP()
+		userAgent := c.Get("User-Agent")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		// Extract allowed role IDs
+		var allowedRoleIDs []string
+		for _, r := range transition.AllowedRoles {
+			allowedRoleIDs = append(allowedRoleIDs, r.ID.String())
+		}
+
+		newValue := map[string]interface{}{
+			"name":                   transition.Name,
+			"code":                   transition.Code,
+			"description":            transition.Description,
+			"from_state_id":          transition.FromStateID.String(),
+			"to_state_id":            transition.ToStateID.String(),
+			"sort_order":             transition.SortOrder,
+			"is_active":              transition.IsActive,
+			"allowed_roles":          allowedRoleIDs,
+			"assign_department_id":   transition.AssignDepartmentID,
+			"auto_detect_department": transition.AutoDetectDepartment,
+			"assign_user_id":         transition.AssignUserID,
+			"assignment_role_id":     transition.AssignmentRoleID,
+			"auto_match_user":        transition.AutoMatchUser,
+			"manual_select_user":     transition.ManualSelectUser,
+		}
+
+		_ = h.actionLogService.LogAction(ctx, &services.LogActionParams{
+			UserID:      userID,
+			Action:      "create",
+			Module:      "workflow_transitions",
+			ResourceID:  transition.ID.String(),
+			Description: fmt.Sprintf("Created workflow transition '%s' (from state to state)", transition.Name),
+			NewValue:    newValue,
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		})
+	}()
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, "Transition created", transition)
 }
@@ -360,10 +765,104 @@ func (h *WorkflowHandler) UpdateTransition(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
+	// Get old transition for action logging
+	oldTransition, err := h.service.GetTransition(c.Context(), transitionID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
 	transition, err := h.service.UpdateTransition(c.Context(), transitionID, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
+
+	// Capture values before async logging
+	userID := c.Locals("user_id").(uuid.UUID)
+	ipAddress := c.IP()
+	userAgent := c.Get("User-Agent")
+
+	// Log the update with old and new values
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		// Extract allowed role IDs
+		var oldAllowedRoleIDs, newAllowedRoleIDs []string
+		for _, r := range oldTransition.AllowedRoles {
+			oldAllowedRoleIDs = append(oldAllowedRoleIDs, r.ID.String())
+		}
+		for _, r := range transition.AllowedRoles {
+			newAllowedRoleIDs = append(newAllowedRoleIDs, r.ID.String())
+		}
+
+		oldValue := map[string]interface{}{
+			"name":                   oldTransition.Name,
+			"code":                   oldTransition.Code,
+			"description":            oldTransition.Description,
+			"from_state_id":          oldTransition.FromStateID.String(),
+			"to_state_id":            oldTransition.ToStateID.String(),
+			"sort_order":             oldTransition.SortOrder,
+			"is_active":              oldTransition.IsActive,
+			"allowed_roles":          oldAllowedRoleIDs,
+			"assign_department_id":   oldTransition.AssignDepartmentID,
+			"auto_detect_department": oldTransition.AutoDetectDepartment,
+			"assign_user_id":         oldTransition.AssignUserID,
+			"assignment_role_id":     oldTransition.AssignmentRoleID,
+			"auto_match_user":        oldTransition.AutoMatchUser,
+			"manual_select_user":     oldTransition.ManualSelectUser,
+		}
+		newValue := map[string]interface{}{
+			"name":                   transition.Name,
+			"code":                   transition.Code,
+			"description":            transition.Description,
+			"from_state_id":          transition.FromStateID.String(),
+			"to_state_id":            transition.ToStateID.String(),
+			"sort_order":             transition.SortOrder,
+			"is_active":              transition.IsActive,
+			"allowed_roles":          newAllowedRoleIDs,
+			"assign_department_id":   transition.AssignDepartmentID,
+			"auto_detect_department": transition.AutoDetectDepartment,
+			"assign_user_id":         transition.AssignUserID,
+			"assignment_role_id":     transition.AssignmentRoleID,
+			"auto_match_user":        transition.AutoMatchUser,
+			"manual_select_user":     transition.ManualSelectUser,
+		}
+
+		// Build detailed change description
+		var changeDetails []string
+		fieldLabels := map[string]string{
+			"name": "Name", "code": "Code", "description": "Description",
+			"from_state_id": "From State", "to_state_id": "To State",
+			"sort_order": "Sort Order", "is_active": "Is Active", "allowed_roles": "Roles",
+			"assign_department_id": "Assign Department", "auto_detect_department": "Auto Detect Dept",
+			"assign_user_id": "Assign User", "assignment_role_id": "Assignment Role",
+			"auto_match_user": "Auto Match User", "manual_select_user": "Manual Select User",
+		}
+
+		for key, label := range fieldLabels {
+			if fmt.Sprintf("%v", oldValue[key]) != fmt.Sprintf("%v", newValue[key]) {
+				changeDetails = append(changeDetails, label)
+			}
+		}
+
+		desc := fmt.Sprintf("Updated workflow transition '%s'", transition.Name)
+		if len(changeDetails) > 0 {
+			desc += fmt.Sprintf(" - changed: %s", strings.Join(changeDetails, ", "))
+		}
+
+		_ = h.actionLogService.LogAction(ctx, &services.LogActionParams{
+			UserID:      userID,
+			Action:      "update",
+			Module:      "workflow_transitions",
+			ResourceID:  transitionID.String(),
+			Description: desc,
+			OldValue:    oldValue,
+			NewValue:    newValue,
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		})
+	}()
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Transition updated", transition)
 }
@@ -375,9 +874,59 @@ func (h *WorkflowHandler) DeleteTransition(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid transition ID")
 	}
 
+	// Get transition details for action logging
+	oldTransition, err := h.service.GetTransition(c.Context(), transitionID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
 	if err := h.service.DeleteTransition(c.Context(), transitionID); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
+
+	// Log the deletion
+	go func() {
+		userID := c.Locals("user_id").(uuid.UUID)
+		ipAddress := c.IP()
+		userAgent := c.Get("User-Agent")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		// Extract allowed role IDs
+		var allowedRoleIDs []string
+		for _, r := range oldTransition.AllowedRoles {
+			allowedRoleIDs = append(allowedRoleIDs, r.ID.String())
+		}
+
+		oldValue := map[string]interface{}{
+			"name":                   oldTransition.Name,
+			"code":                   oldTransition.Code,
+			"description":            oldTransition.Description,
+			"from_state_id":          oldTransition.FromStateID.String(),
+			"to_state_id":            oldTransition.ToStateID.String(),
+			"sort_order":             oldTransition.SortOrder,
+			"is_active":              oldTransition.IsActive,
+			"allowed_roles":          allowedRoleIDs,
+			"assign_department_id":   oldTransition.AssignDepartmentID,
+			"auto_detect_department": oldTransition.AutoDetectDepartment,
+			"assign_user_id":         oldTransition.AssignUserID,
+			"assignment_role_id":     oldTransition.AssignmentRoleID,
+			"auto_match_user":        oldTransition.AutoMatchUser,
+			"manual_select_user":     oldTransition.ManualSelectUser,
+		}
+
+		_ = h.actionLogService.LogAction(ctx, &services.LogActionParams{
+			UserID:      userID,
+			Action:      "delete",
+			Module:      "workflow_transitions",
+			ResourceID:  transitionID.String(),
+			Description: fmt.Sprintf("Deleted workflow transition '%s'", oldTransition.Name),
+			OldValue:    oldValue,
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		})
+	}()
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Transition deleted", nil)
 }
@@ -411,6 +960,27 @@ func (h *WorkflowHandler) SetTransitionRoles(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
+	// Log the role assignment
+	go func() {
+		userID := c.Locals("user_id").(uuid.UUID)
+		ipAddress := c.IP()
+		userAgent := c.Get("User-Agent")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_ = h.actionLogService.LogAction(ctx, &services.LogActionParams{
+			UserID:      userID,
+			Action:      "update",
+			Module:      "workflow_transitions",
+			ResourceID:  transitionID.String(),
+			Description: fmt.Sprintf("Updated roles for transition (ID: %s)", transitionID.String()),
+			NewValue:    map[string]interface{}{"role_ids": req.RoleIDs},
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		})
+	}()
+
 	return utils.SuccessResponse(c, fiber.StatusOK, "Transition roles updated", nil)
 }
 
@@ -431,6 +1001,27 @@ func (h *WorkflowHandler) SetTransitionRequirements(c *fiber.Ctx) error {
 	if err := h.service.SetTransitionRequirements(c.Context(), transitionID, req.Requirements); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
+
+	// Log the requirements update
+	go func() {
+		userID := c.Locals("user_id").(uuid.UUID)
+		ipAddress := c.IP()
+		userAgent := c.Get("User-Agent")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_ = h.actionLogService.LogAction(ctx, &services.LogActionParams{
+			UserID:      userID,
+			Action:      "update",
+			Module:      "workflow_transitions",
+			ResourceID:  transitionID.String(),
+			Description: fmt.Sprintf("Updated requirements for transition (ID: %s)", transitionID.String()),
+			NewValue:    map[string]interface{}{"requirements": req.Requirements},
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		})
+	}()
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Transition requirements updated", nil)
 }
@@ -453,6 +1044,27 @@ func (h *WorkflowHandler) SetTransitionActions(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
+	// Log the actions update
+	go func() {
+		userID := c.Locals("user_id").(uuid.UUID)
+		ipAddress := c.IP()
+		userAgent := c.Get("User-Agent")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_ = h.actionLogService.LogAction(ctx, &services.LogActionParams{
+			UserID:      userID,
+			Action:      "update",
+			Module:      "workflow_transitions",
+			ResourceID:  transitionID.String(),
+			Description: fmt.Sprintf("Updated actions for transition (ID: %s)", transitionID.String()),
+			NewValue:    map[string]interface{}{"actions": req.Actions},
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		})
+	}()
+
 	return utils.SuccessResponse(c, fiber.StatusOK, "Transition actions updated", nil)
 }
 
@@ -473,6 +1085,27 @@ func (h *WorkflowHandler) SetTransitionFieldChanges(c *fiber.Ctx) error {
 	if err := h.service.SetTransitionFieldChanges(c.Context(), transitionID, req.FieldChanges); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
+
+	// Log the field changes update
+	go func() {
+		userID := c.Locals("user_id").(uuid.UUID)
+		ipAddress := c.IP()
+		userAgent := c.Get("User-Agent")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_ = h.actionLogService.LogAction(ctx, &services.LogActionParams{
+			UserID:      userID,
+			Action:      "update",
+			Module:      "workflow_transitions",
+			ResourceID:  transitionID.String(),
+			Description: fmt.Sprintf("Updated field changes for transition (ID: %s)", transitionID.String()),
+			NewValue:    map[string]interface{}{"field_changes": req.FieldChanges},
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		})
+	}()
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Transition field changes updated", nil)
 }
@@ -599,3 +1232,16 @@ func (h *WorkflowHandler) ImportWorkflow(c *fiber.Ctx) error {
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, "Workflow imported successfully", response)
 }
+
+// getChangedFields returns a comma-separated list of field names that changed
+func getChangedFields(changes map[string]interface{}) string {
+	var fields []string
+	for key := range changes {
+		fields = append(fields, strings.ReplaceAll(key, "_", " "))
+	}
+	if len(fields) == 0 {
+		return "none"
+	}
+	return strings.Join(fields, ", ")
+}
+

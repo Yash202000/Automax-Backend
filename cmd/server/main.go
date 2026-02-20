@@ -118,7 +118,7 @@ func main() {
 	roleHandler := handlers.NewRoleHandler(roleRepo, permissionRepo)
 	actionLogHandler := handlers.NewActionLogHandler(actionLogService, validate)
 	callLogHandler := handlers.NewCallLogHandler(callLogService, validate, userService)
-	workflowHandler := handlers.NewWorkflowHandler(workflowService)
+	workflowHandler := handlers.NewWorkflowHandler(workflowService, actionLogService)
 	incidentHandler := handlers.NewIncidentHandler(incidentService, userRepo, incidentRepo, minioStorage, presenceService)
 	incidentMergeHandler := handlers.NewIncidentMergeHandler(incidentMergeService, userRepo)
 	websocketHandler := handlers.NewWebSocketHandler(wsHub)
@@ -367,8 +367,12 @@ func main() {
 	callLogs.Put("/:id", authMiddleware.RequirePermission("call-logs:update"), callLogHandler.UpdateCallLog)
 	callLogs.Delete("/:id", authMiddleware.RequirePermission("call-logs:delete"), callLogHandler.DeleteCallLog)
 
-	// Workflow routes
-	workflows := admin.Group("/workflows")
+	// Workflow routes (with action logging)
+	workflows := admin.Group("/workflows", middleware.ActionLogger(middleware.ActionLoggerConfig{
+		Enabled:     true,
+		LogService:  actionLogService,
+		SkipMethods: []string{"GET"}, // Skip read-only operations from logging
+	}))
 	workflows.Post("/", authMiddleware.RequirePermission("workflows:create"), workflowHandler.CreateWorkflow)
 	workflows.Get("/", authMiddleware.RequirePermission("workflows:view"), workflowHandler.ListWorkflows)
 	workflows.Get("/deleted", authMiddleware.RequirePermission("workflows:view"), workflowHandler.ListDeletedWorkflows) // List soft-deleted workflows
@@ -385,21 +389,25 @@ func main() {
 	workflows.Get("/:id/export", authMiddleware.RequirePermission("workflows:view"), workflowHandler.ExportWorkflow)
 	workflows.Post("/import", authMiddleware.RequirePermission("workflows:create"), workflowHandler.ImportWorkflow)
 
-	// Workflow state routes
+	// Workflow state routes (with action logging)
 	workflows.Post("/:id/states", authMiddleware.RequirePermission("workflows:update"), workflowHandler.CreateState)
 	workflows.Get("/:id/states", authMiddleware.RequirePermission("workflows:view"), workflowHandler.ListStates)
 	workflows.Put("/:id/states/:state_id", authMiddleware.RequirePermission("workflows:update"), workflowHandler.UpdateState)
 	workflows.Delete("/:id/states/:state_id", authMiddleware.RequirePermission("workflows:update"), workflowHandler.DeleteState)
 	workflows.Get("/states/:state_id/transitions", authMiddleware.RequirePermission("workflows:view"), workflowHandler.GetTransitionsFromState)
 
-	// Workflow transition routes
+	// Workflow transition routes (with action logging)
 	workflows.Post("/:id/transitions", authMiddleware.RequirePermission("workflows:update"), workflowHandler.CreateTransition)
 	workflows.Get("/:id/transitions", authMiddleware.RequirePermission("workflows:view"), workflowHandler.ListTransitions)
 	workflows.Put("/:id/transitions/:transition_id", authMiddleware.RequirePermission("workflows:update"), workflowHandler.UpdateTransition)
 	workflows.Delete("/:id/transitions/:transition_id", authMiddleware.RequirePermission("workflows:update"), workflowHandler.DeleteTransition)
 
-	// Transition configuration routes
-	transitions := admin.Group("/transitions")
+	// Transition configuration routes (with action logging)
+	transitions := admin.Group("/transitions", middleware.ActionLogger(middleware.ActionLoggerConfig{
+		Enabled:     true,
+		LogService:  actionLogService,
+		SkipMethods: []string{"GET"}, // Skip read-only operations from logging
+	}))
 	transitions.Put("/:id/roles", authMiddleware.RequirePermission("workflows:update"), workflowHandler.SetTransitionRoles)
 	transitions.Put("/:id/requirements", authMiddleware.RequirePermission("workflows:update"), workflowHandler.SetTransitionRequirements)
 	transitions.Put("/:id/actions", authMiddleware.RequirePermission("workflows:update"), workflowHandler.SetTransitionActions)
