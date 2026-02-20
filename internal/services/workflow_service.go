@@ -33,12 +33,14 @@ type WorkflowService interface {
 
 	// State management
 	CreateState(ctx context.Context, workflowID uuid.UUID, req *models.WorkflowStateCreateRequest) (*models.WorkflowStateResponse, error)
+	GetState(ctx context.Context, stateID uuid.UUID) (*models.WorkflowStateResponse, error)
 	ListStates(ctx context.Context, workflowID uuid.UUID) ([]models.WorkflowStateResponse, error)
 	UpdateState(ctx context.Context, stateID uuid.UUID, req *models.WorkflowStateUpdateRequest) (*models.WorkflowStateResponse, error)
 	DeleteState(ctx context.Context, stateID uuid.UUID) error
 
 	// Transition management
 	CreateTransition(ctx context.Context, workflowID uuid.UUID, req *models.WorkflowTransitionCreateRequest) (*models.WorkflowTransitionResponse, error)
+	GetTransition(ctx context.Context, transitionID uuid.UUID) (*models.WorkflowTransitionResponse, error)
 	ListTransitions(ctx context.Context, workflowID uuid.UUID) ([]models.WorkflowTransitionResponse, error)
 	UpdateTransition(ctx context.Context, transitionID uuid.UUID, req *models.WorkflowTransitionUpdateRequest) (*models.WorkflowTransitionResponse, error)
 	DeleteTransition(ctx context.Context, transitionID uuid.UUID) error
@@ -831,6 +833,16 @@ func (s *workflowService) ListStates(ctx context.Context, workflowID uuid.UUID) 
 	return responses, nil
 }
 
+func (s *workflowService) GetState(ctx context.Context, stateID uuid.UUID) (*models.WorkflowStateResponse, error) {
+	state, err := s.repo.FindStateByID(ctx, stateID)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := models.ToWorkflowStateResponse(state)
+	return &resp, nil
+}
+
 func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, req *models.WorkflowStateUpdateRequest) (*models.WorkflowStateResponse, error) {
 	state, err := s.repo.FindStateByID(ctx, stateID)
 	if err != nil {
@@ -991,6 +1003,16 @@ func (s *workflowService) ListTransitions(ctx context.Context, workflowID uuid.U
 	}
 
 	return responses, nil
+}
+
+func (s *workflowService) GetTransition(ctx context.Context, transitionID uuid.UUID) (*models.WorkflowTransitionResponse, error) {
+	transition, err := s.repo.FindTransitionByIDWithRelations(ctx, transitionID)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := models.ToWorkflowTransitionResponse(transition)
+	return &resp, nil
 }
 
 func (s *workflowService) UpdateTransition(ctx context.Context, transitionID uuid.UUID, req *models.WorkflowTransitionUpdateRequest) (*models.WorkflowTransitionResponse, error) {
