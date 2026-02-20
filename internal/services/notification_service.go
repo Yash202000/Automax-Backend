@@ -31,12 +31,7 @@ func NewNotificationService(
 	}
 }
 
-type SendNotificationResult struct {
-	SentLog     *models.NotificationLog
-	InboxLogIDs []uuid.UUID // IDs of inbox copies created for internal recipients
-}
-
-func (s *NotificationService) SendNotification(ctx context.Context, channel string, templateCode *string, language string, to []string, cc []string, bcc []string, subject string, body string, variables map[string]string, attachments []models.AttachmentData, sentBy *uuid.UUID) (*SendNotificationResult, error) {
+func (s *NotificationService) SendNotification(ctx context.Context, channel string, templateCode *string, language string, to []string, cc []string, bcc []string, subject string, body string, variables map[string]string, attachments []models.AttachmentData, sentBy *uuid.UUID, sessionID *uuid.UUID) (*models.NotificationLog, error) {
 
 	// REQUIRED: at least one recipient
 	if len(to) == 0 && len(cc) == 0 && len(bcc) == 0 {
@@ -104,10 +99,10 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 			status = "failed"
 			for _, r := range allRecipients {
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-					Email:  r,
-					Type:   utils.GetRecipientType(r, to, cc, bcc),
-					Status: "failed",
-					Error:  err.Error(),
+					Channel: r,
+					Type:    utils.GetRecipientType(r, to, cc, bcc),
+					Status:  "failed",
+					Error:   err.Error(),
 				})
 			}
 		} else {
@@ -121,20 +116,105 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 			if err != nil {
 				status = "failed"
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-					Email:  phone,
-					Type:   "to",
-					Status: "failed",
-					Error:  err.Error(),
+					Channel: phone,
+					Type:    "to",
+					Status:  "failed",
+					Error:   err.Error(),
 				})
 			} else {
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-					Email:  phone,
-					Type:   "to",
-					Status: "success",
+					Channel: phone,
+					Type:    "to",
+					Status:  "success",
 				})
 			}
 		}
 		provider = "twilio"
+
+		// case "whatsapp":
+		// 	for _, phone := range to {
+
+		// 		err := utils.SendWhatsApp(phone, body)
+		// 		fmt.Println("cherrannel", err)
+
+		// 		if err != nil {
+
+		// 			// SMS fallback
+		// 			smsErr := utils.SendSMS(phone, body)
+
+		// 			if smsErr != nil {
+
+		// 				// Both failed
+		// 				status = "failed"
+
+		// 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
+		// 					Email:        phone,
+		// 					Type:         "to",
+		// 					Status:       "failed",
+		// 					Error:        fmt.Sprintf("whatsapp error: %v | sms error: %v", err, smsErr),
+		// 					ErrorMessage: err.Error(),
+		// 				})
+
+		// 			} else {
+
+		// 				// WhatsApp failed but SMS worked
+		// 				status = "fallback_sms"
+
+		// 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
+		// 					Email:        phone,
+		// 					Type:         "to",
+		// 					Status:       "success",
+		// 					Error:        "whatsapp failed, delivered via sms",
+		// 					ErrorMessage: err.Error(),
+		// 				})
+
+		// 				provider = "twilio"
+		// 			}
+
+		// 		} else {
+
+		// 			// WhatsApp success
+		// 			recipientStatuses = append(recipientStatuses, models.RecipientInfo{
+		// 				Email:  phone,
+		// 				Type:   "to",
+		// 				Status: "success",
+		// 			})
+
+		// 			provider = "meta"
+		// 		}
+		// 	}
+
+	case "whatsapp":
+
+		status = "sent"
+
+		for _, phone := range to {
+
+			err := utils.SendWhatsApp(phone, body)
+
+			if err != nil {
+
+				status = "failed"
+
+				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
+					Channel:      phone,
+					Type:         "to",
+					Status:       "failed",
+					Error:        err.Error(),
+					ErrorMessage: err.Error(),
+				})
+
+			} else {
+
+				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
+					Channel: phone,
+					Type:    "to",
+					Status:  "success",
+				})
+			}
+		}
+
+		provider = "meta"
 
 	default:
 		return nil, fmt.Errorf("unsupported channel: %s", channel)
@@ -153,6 +233,8 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		BCC:          bcc,
 		Subject:      subject,
 		Body:         body,
+		OTPSessionID: sessionID,
+		OTPVerified:  false,
 		Status:       status,
 		Provider:     provider,
 		Attachments:  attachmentInfo,
@@ -165,6 +247,8 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 	if err := s.logRepo.Create(ctx, log); err != nil {
 		return nil, err
 	}
+	if status == "failed" {
+		return log, fmt.Errorf("notification delivery failed")
 	var inboxLogIDs []uuid.UUID
 
 	for _, recipientEmail := range to {
@@ -276,9 +360,9 @@ func (s *NotificationService) CreateDraft(ctx context.Context, req *models.Creat
 	var recipients models.RecipientArray
 	for _, email := range req.To {
 		recipients = append(recipients, models.RecipientInfo{
-			Email:  email,
-			Type:   "to",
-			Status: "draft",
+			Channel: email,
+			Type:    "to",
+			Status:  "draft",
 		})
 	}
 
@@ -336,9 +420,9 @@ func (s *NotificationService) UpdateDraft(ctx context.Context, id uuid.UUID, req
 		var recipients models.RecipientArray
 		for _, email := range req.To {
 			recipients = append(recipients, models.RecipientInfo{
-				Email:  email,
-				Type:   "to",
-				Status: "draft",
+				Channel: email,
+				Type:    "to",
+				Status:  "draft",
 			})
 		}
 		draft.Recipients = recipients
@@ -402,7 +486,7 @@ func (s *NotificationService) SendDraft(ctx context.Context, id uuid.UUID) (*mod
 	var to []string
 	for _, r := range draft.Recipients {
 		if r.Type == "to" {
-			to = append(to, r.Email)
+			to = append(to, r.Channel)
 		}
 	}
 
@@ -432,6 +516,7 @@ func (s *NotificationService) SendDraft(ctx context.Context, id uuid.UUID) (*mod
 		nil,
 		attachments,
 		draft.SentBy,
+		nil,
 	)
 	if err != nil {
 		return nil, err
@@ -533,6 +618,7 @@ func (s *NotificationService) ReplyToNotification(ctx context.Context, originalI
 		nil,
 		nil,
 		sentBy,
+		nil,
 	)
 	if err != nil {
 		return nil, err
