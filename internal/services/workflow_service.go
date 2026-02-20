@@ -924,6 +924,7 @@ func (s *workflowService) CreateTransition(ctx context.Context, workflowID uuid.
 		SortOrder:            req.SortOrder,
 		IsActive:             true,
 		AutoDetectDepartment: req.AutoDetectDepartment,
+		DepartmentTypeFilter: req.DepartmentTypeFilter,
 		AutoMatchUser:        req.AutoMatchUser,
 		ManualSelectUser:     req.ManualSelectUser,
 	}
@@ -1030,6 +1031,9 @@ func (s *workflowService) UpdateTransition(ctx context.Context, transitionID uui
 	// Department Assignment
 	if req.AutoDetectDepartment != nil {
 		transition.AutoDetectDepartment = *req.AutoDetectDepartment
+	}
+	if req.DepartmentTypeFilter != nil {
+		transition.DepartmentTypeFilter = *req.DepartmentTypeFilter
 	}
 	if req.AssignDepartmentID != nil {
 		if *req.AssignDepartmentID == "" {
@@ -1142,10 +1146,11 @@ func (s *workflowService) SetTransitionFieldChanges(ctx context.Context, transit
 	fieldChanges := make([]models.TransitionFieldChange, len(data))
 	for i, fc := range data {
 		fieldChanges[i] = models.TransitionFieldChange{
-			FieldName:  fc.FieldName,
-			Label:      fc.Label,
-			IsRequired: fc.IsRequired,
-			SortOrder:  fc.SortOrder,
+			FieldName:            fc.FieldName,
+			Label:                fc.Label,
+			IsRequired:           fc.IsRequired,
+			DepartmentTypeFilter: fc.DepartmentTypeFilter,
+			SortOrder:            fc.SortOrder,
 		}
 	}
 	return s.repo.SetTransitionFieldChanges(ctx, transitionID, fieldChanges)

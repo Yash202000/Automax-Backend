@@ -111,7 +111,9 @@ type WorkflowTransition struct {
 	AssignDepartmentID   *uuid.UUID  `gorm:"type:uuid" json:"assign_department_id"`
 	AssignDepartment     *Department `gorm:"foreignKey:AssignDepartmentID" json:"assign_department,omitempty"`
 	AutoDetectDepartment bool        `gorm:"default:false" json:"auto_detect_department"`
+	DepartmentTypeFilter string      `gorm:"size:20" json:"department_type_filter"` // "", "internal", or "external"
 	// If auto_detect_department=true: find departments matching incident's classification+location
+	// department_type_filter restricts which type of departments are shown
 	// If one match: auto-assign. If multiple: show selection in transition modal
 
 	// User Assignment
@@ -204,10 +206,11 @@ type TransitionFieldChange struct {
 
 	// FieldName is the incident field key, e.g. "priority", "department_id", "location_id",
 	// "classification_id", "title", "description"
-	FieldName  string `gorm:"size:100;not null" json:"field_name"`
-	Label      string `gorm:"size:100" json:"label"`       // Display label shown in the transition modal
-	IsRequired bool   `gorm:"default:false" json:"is_required"` // Whether the field must be filled
-	SortOrder  int    `gorm:"default:0" json:"sort_order"`
+	FieldName            string `gorm:"size:100;not null" json:"field_name"`
+	Label                string `gorm:"size:100" json:"label"`                 // Display label shown in the transition modal
+	IsRequired           bool   `gorm:"default:false" json:"is_required"`      // Whether the field must be filled
+	DepartmentTypeFilter string `gorm:"size:20" json:"department_type_filter"` // For department_id fields: "internal" | "external" | ""
+	SortOrder            int    `gorm:"default:0" json:"sort_order"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -289,6 +292,7 @@ type WorkflowTransitionCreateRequest struct {
 	// Department Assignment
 	AssignDepartmentID   *string `json:"assign_department_id" validate:"omitempty,uuid"`
 	AutoDetectDepartment bool    `json:"auto_detect_department"`
+	DepartmentTypeFilter string  `json:"department_type_filter" validate:"omitempty,oneof=internal external"`
 
 	// User Assignment
 	AssignUserID     *string `json:"assign_user_id" validate:"omitempty,uuid"`
@@ -310,6 +314,7 @@ type WorkflowTransitionUpdateRequest struct {
 	// Department Assignment
 	AssignDepartmentID   *string `json:"assign_department_id" validate:"omitempty,uuid"`
 	AutoDetectDepartment *bool   `json:"auto_detect_department"`
+	DepartmentTypeFilter *string `json:"department_type_filter" validate:"omitempty,oneof=internal external"`
 
 	// User Assignment
 	AssignUserID     *string `json:"assign_user_id" validate:"omitempty,uuid"`
@@ -337,10 +342,11 @@ type TransitionActionRequest struct {
 }
 
 type TransitionFieldChangeRequest struct {
-	FieldName  string `json:"field_name" validate:"required"`
-	Label      string `json:"label"`
-	IsRequired bool   `json:"is_required"`
-	SortOrder  int    `json:"sort_order"`
+	FieldName            string `json:"field_name" validate:"required"`
+	Label                string `json:"label"`
+	IsRequired           bool   `json:"is_required"`
+	DepartmentTypeFilter string `json:"department_type_filter" validate:"omitempty,oneof=internal external"`
+	SortOrder            int    `json:"sort_order"`
 }
 
 // Workflow matching request - used by mobile apps and other clients
@@ -472,12 +478,13 @@ type TransitionActionResponse struct {
 }
 
 type TransitionFieldChangeResponse struct {
-	ID           uuid.UUID `json:"id"`
-	TransitionID uuid.UUID `json:"transition_id"`
-	FieldName    string    `json:"field_name"`
-	Label        string    `json:"label"`
-	IsRequired   bool      `json:"is_required"`
-	SortOrder    int       `json:"sort_order"`
+	ID                   uuid.UUID `json:"id"`
+	TransitionID         uuid.UUID `json:"transition_id"`
+	FieldName            string    `json:"field_name"`
+	Label                string    `json:"label"`
+	IsRequired           bool      `json:"is_required"`
+	DepartmentTypeFilter string    `json:"department_type_filter"`
+	SortOrder            int       `json:"sort_order"`
 }
 
 // Converter functions
@@ -705,12 +712,13 @@ func ToTransitionActionResponse(a *TransitionAction) TransitionActionResponse {
 
 func ToTransitionFieldChangeResponse(f *TransitionFieldChange) TransitionFieldChangeResponse {
 	return TransitionFieldChangeResponse{
-		ID:           f.ID,
-		TransitionID: f.TransitionID,
-		FieldName:    f.FieldName,
-		Label:        f.Label,
-		IsRequired:   f.IsRequired,
-		SortOrder:    f.SortOrder,
+		ID:                   f.ID,
+		TransitionID:         f.TransitionID,
+		FieldName:            f.FieldName,
+		Label:                f.Label,
+		IsRequired:           f.IsRequired,
+		DepartmentTypeFilter: f.DepartmentTypeFilter,
+		SortOrder:            f.SortOrder,
 	}
 }
 

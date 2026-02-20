@@ -21,8 +21,16 @@ FROM alpine:latest
 
 WORKDIR /app
 
-# Install ca-certificates for HTTPS
-RUN apk --no-cache add ca-certificates
+# Install ca-certificates, Chromium and its dependencies for PDF generation
+RUN apk --no-cache add \
+    ca-certificates \
+    chromium \
+    nss \
+    freetype \
+    harfbuzz \
+    ttf-freefont \
+    font-noto \
+    dbus
 
 # Copy binary from builder
 COPY --from=builder /app/main .

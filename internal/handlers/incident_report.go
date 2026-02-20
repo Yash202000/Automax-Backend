@@ -245,9 +245,14 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 		tmpPDF.Close()
 		defer os.Remove(pdfPath)
 
+		chromeBin := "chromium-browser"
+		if bin := os.Getenv("CHROME_BIN"); bin != "" {
+			chromeBin = bin
+		}
+
 		var stderr bytes.Buffer
 		cmd := exec.CommandContext(c.Context(),
-			"google-chrome",
+			chromeBin,
 			"--headless", "--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage",
 			"--no-margins", "--print-to-pdf-no-header",
 			fmt.Sprintf("--print-to-pdf=%s", pdfPath),
@@ -256,7 +261,7 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 		cmd.Stderr = &stderr
 		if terr = cmd.Run(); terr != nil {
 			return utils.ErrorResponse(c, fiber.StatusInternalServerError,
-				fmt.Sprintf("PDF generation failed: %s", stderr.String()))
+				fmt.Sprintf("PDF generation failed: exec_error=%s stderr=%s", terr.Error(), stderr.String()))
 		}
 
 		pdfData, terr := os.ReadFile(pdfPath)

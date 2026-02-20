@@ -40,10 +40,15 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 		})
 	}
 
+	deptType := req.Type
+	if deptType == "" {
+		deptType = "internal"
+	}
 	department := &models.Department{
 		Name:        req.Name,
 		Code:        req.Code,
 		Description: req.Description,
+		Type:        deptType,
 		ParentID:    req.ParentID,
 		ManagerID:   req.ManagerID,
 		SortOrder:   req.SortOrder,
@@ -111,6 +116,9 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 	}
 	if req.Description != "" {
 		department.Description = req.Description
+	}
+	if req.Type != "" {
+		department.Type = req.Type
 	}
 	if req.ManagerID != nil {
 		department.ManagerID = req.ManagerID
@@ -238,7 +246,7 @@ func (h *DepartmentHandler) MatchDepartment(c *fiber.Ctx) error {
 		locationID = &id
 	}
 
-	departments, err := h.repo.FindMatching(c.Context(), classificationID, locationID)
+	departments, err := h.repo.FindMatching(c.Context(), classificationID, locationID, req.DepartmentType)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}

@@ -23,7 +23,7 @@ type DepartmentRepository interface {
 	AssignLocations(ctx context.Context, departmentID uuid.UUID, locationIDs []uuid.UUID) error
 	AssignClassifications(ctx context.Context, departmentID uuid.UUID, classificationIDs []uuid.UUID) error
 	AssignRoles(ctx context.Context, departmentID uuid.UUID, roleIDs []uuid.UUID) error
-	FindMatching(ctx context.Context, classificationID, locationID *uuid.UUID) ([]models.Department, error)
+	FindMatching(ctx context.Context, classificationID, locationID *uuid.UUID, departmentType *string) ([]models.Department, error)
 }
 
 type departmentRepository struct {
@@ -195,18 +195,21 @@ func (r *departmentRepository) AssignRoles(ctx context.Context, departmentID uui
 }
 
 // FindMatching returns departments that match the given classification and/or location criteria
-func (r *departmentRepository) FindMatching(ctx context.Context, classificationID, locationID *uuid.UUID) ([]models.Department, error) {
+func (r *departmentRepository) FindMatching(ctx context.Context, classificationID, locationID *uuid.UUID, departmentType *string) ([]models.Department, error) {
 	var departments []models.Department
 
 	query := r.db.WithContext(ctx).
 		Preload("Locations").
 		Preload("Classifications").
 		Preload("Roles").
-		Where("is_active = ?", true)
+		Where("departments.is_active = ?", true)
+
+	if departmentType != nil && *departmentType != "" {
+		query = query.Where("departments.type = ?", *departmentType)
+	}
 
 	// If both classification and location are provided, find departments that have both
 	if classificationID != nil && locationID != nil {
-		// Find departments that have both the classification AND the location
 		query = query.
 			Joins("JOIN department_classifications dc ON dc.department_id = departments.id").
 			Joins("JOIN department_locations dl ON dl.department_id = departments.id").
@@ -214,19 +217,17 @@ func (r *departmentRepository) FindMatching(ctx context.Context, classificationI
 			Where("dl.location_id = ?", locationID).
 			Distinct()
 	} else if classificationID != nil {
-		// Only classification provided
 		query = query.
 			Joins("JOIN department_classifications dc ON dc.department_id = departments.id").
 			Where("dc.classification_id = ?", classificationID).
 			Distinct()
 	} else if locationID != nil {
-		// Only location provided
 		query = query.
 			Joins("JOIN department_locations dl ON dl.department_id = departments.id").
 			Where("dl.location_id = ?", locationID).
 			Distinct()
 	}
 
-	err := query.Order("name").Find(&departments).Error
+	err := query.Order("departments.name").Find(&departments).Error
 	return departments, err
 }

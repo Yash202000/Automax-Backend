@@ -13,6 +13,7 @@ type Department struct {
 	Name            string           `gorm:"not null;size:100" json:"name"`
 	Code            string           `gorm:"size:50;uniqueIndex" json:"code"`
 	Description     string           `gorm:"size:500" json:"description"`
+	Type            string           `gorm:"size:20;default:internal" json:"type"` // internal | external
 	ParentID        *uuid.UUID       `gorm:"type:uuid;index" json:"parent_id"`
 	Parent          *Department      `gorm:"foreignKey:ParentID" json:"parent,omitempty"`
 	Children        []Department     `gorm:"foreignKey:ParentID" json:"children,omitempty"`
@@ -44,6 +45,7 @@ type DepartmentCreateRequest struct {
 	Name              string      `json:"name" validate:"required,min=1,max=100"`
 	Code              string      `json:"code" validate:"required,min=1,max=50"`
 	Description       string      `json:"description" validate:"max=500"`
+	Type              string      `json:"type" validate:"omitempty,oneof=internal external"`
 	ParentID          *uuid.UUID  `json:"parent_id"`
 	ManagerID         *uuid.UUID  `json:"manager_id"`
 	LocationIDs       []uuid.UUID `json:"location_ids"`
@@ -57,6 +59,7 @@ type DepartmentUpdateRequest struct {
 	Name              string      `json:"name" validate:"min=1,max=100"`
 	Code              string      `json:"code" validate:"min=1,max=50"`
 	Description       string      `json:"description" validate:"max=500"`
+	Type              string      `json:"type" validate:"omitempty,oneof=internal external"`
 	ManagerID         *uuid.UUID  `json:"manager_id"`
 	LocationIDs       []uuid.UUID `json:"location_ids"`
 	ClassificationIDs []uuid.UUID `json:"classification_ids"`
@@ -71,6 +74,7 @@ type DepartmentResponse struct {
 	Name            string                   `json:"name"`
 	Code            string                   `json:"code"`
 	Description     string                   `json:"description"`
+	Type            string                   `json:"type"`
 	ParentID        *uuid.UUID               `json:"parent_id"`
 	Level           int                      `json:"level"`
 	Path            string                   `json:"path"`
@@ -88,6 +92,7 @@ type DepartmentResponse struct {
 type DepartmentMatchRequest struct {
 	ClassificationID *string `json:"classification_id" validate:"omitempty,uuid"`
 	LocationID       *string `json:"location_id" validate:"omitempty,uuid"`
+	DepartmentType   *string `json:"department_type" validate:"omitempty,oneof=internal external"`
 }
 
 // DepartmentMatchResponse for returning matched departments
@@ -98,11 +103,16 @@ type DepartmentMatchResponse struct {
 }
 
 func ToDepartmentResponse(d *Department) DepartmentResponse {
+	dType := d.Type
+	if dType == "" {
+		dType = "internal"
+	}
 	resp := DepartmentResponse{
 		ID:          d.ID,
 		Name:        d.Name,
 		Code:        d.Code,
 		Description: d.Description,
+		Type:        dType,
 		ParentID:    d.ParentID,
 		Level:       d.Level,
 		Path:        d.Path,

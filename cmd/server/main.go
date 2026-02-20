@@ -141,7 +141,7 @@ func main() {
 		Format: "[${time}] ${status} - ${latency} ${method} ${path}\n",
 	}))
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "http://localhost:3000,http://localhost:5173",
+		AllowOrigins:     "http://localhost:3000,http://localhost:5173,http://localhost:5174",
 		AllowMethods:     "GET,POST,PUT,DELETE,PATCH,OPTIONS",
 		AllowHeaders:     "Origin,Content-Type,Accept,Authorization",
 		AllowCredentials: true,
