@@ -97,6 +97,7 @@ func main() {
 	applicationLinkService := services.NewApplicationLinkService(applicationLinkRepo)
 	settingsService := services.NewSettingsService(settingsRepo)
 	presenceService := services.NewPresenceService(redisClient)
+	otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo)
 	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo, userRepo)
 
 	// Initialize and start SLA Monitor (checks every 5 minutes)
@@ -129,6 +130,7 @@ func main() {
 	notificationHandler := handlers.NewNotificationHandler(notificationService, minioStorage)
 	templateHandler := handlers.NewNotificationTemplateHandler(notificationTemplateRepo)
 	attachmentHandler := handlers.NewAttachmentHandler(incidentService, notificationService, minioStorage)
+	otpHandler := handlers.NewOTPHandler(otpService)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore, userRepo)
@@ -519,6 +521,12 @@ func main() {
 	// Delete (move to trash)
 	notifications.Delete("/:id", authMiddleware.RequirePermission("notifications:delete"), notificationHandler.Delete)
 	notifications.Delete("/:id/permanent", authMiddleware.RequirePermission("notifications:delete"), notificationHandler.PermanentDelete)
+
+	// OTP Routes
+
+	otp := v1.Group("/otp", authMiddleware.Authenticate())
+	otp.Post("/send", authMiddleware.RequirePermission("otp:send"), otpHandler.SendOTP)
+	otp.Post("/verify", authMiddleware.RequirePermission("otp:verify"), otpHandler.VerifyOTP)
 
 	go func() {
 		addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)

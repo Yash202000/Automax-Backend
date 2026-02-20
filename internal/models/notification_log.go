@@ -39,10 +39,20 @@ const (
 
 // RecipientInfo stores individual recipient delivery status
 type RecipientInfo struct {
-	Email  string `json:"email"`
-	Type   string `json:"type"`   // "to" | "cc" | "bcc"
-	Status string `json:"status"` // "success" | "failed"
-	Error  string `json:"error,omitempty"`
+	Channel      string `json:"channel"`
+	Type         string `json:"type"`   // "to" | "cc" | "bcc"
+	Status       string `json:"status"` // "success" | "failed"
+	Error        string `json:"error,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+}
+
+type MetaErrorResponse struct {
+	Error struct {
+		Message   string `json:"message"`
+		Type      string `json:"type"`
+		Code      int    `json:"code"`
+		FBTraceID string `json:"fbtrace_id"`
+	} `json:"error"`
 }
 
 // RecipientArray is a custom type for storing recipient info as JSONB
@@ -141,6 +151,39 @@ func (s *StringArray) Scan(value interface{}) error {
 }
 
 type NotificationLog struct {
+	ID           uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
+	Channel      string         `gorm:"size:20;not null;index" json:"channel"`                      // email | sms
+	Direction    string         `gorm:"size:10;not null;index;default:'outbound'" json:"direction"` // inbound | outbound
+	Category     string         `gorm:"size:20;not null;index;default:'sent'" json:"category"`      // inbox | sent | draft | outbox | trash | spam
+	TemplateCode string         `gorm:"size:100;index" json:"template_code"`
+	Language     string         `gorm:"size:10" json:"language"`
+	Recipients   RecipientArray `gorm:"type:jsonb;not null" json:"recipients"` // All recipients with status (TO, CC, BCC)
+
+	Subject  string `gorm:"type:text;index" json:"subject,omitempty"`
+	Body     string `gorm:"type:text;not null" json:"body"`
+	BodyHTML string `gorm:"type:text" json:"body_html,omitempty"` // HTML version of body
+	Status   string `gorm:"size:20;not null;index" json:"status"` // sent | failed | mock-sent | partial | draft | pending
+
+	Provider      string          `gorm:"size:50" json:"provider"`
+	OTPSessionID  *uuid.UUID      `gorm:"type:uuid;index" json:"otp_session_id,omitempty"`
+	OTPVerified   bool            `gorm:"default:false;index" json:"otp_verified"`
+	OTPVerifiedAt *time.Time      `gorm:"index" json:"otp_verified_at,omitempty"`
+	CC            StringArray     `gorm:"type:jsonb" json:"cc,omitempty"`
+	BCC           StringArray     `gorm:"type:jsonb" json:"bcc,omitempty"`
+	From          string          `gorm:"size:255;index" json:"from,omitempty"` // Sender email (for inbound)
+	ErrorMessage  string          `gorm:"type:text" json:"error_message,omitempty"`
+	Attachments   AttachmentArray `gorm:"type:jsonb" json:"attachments,omitempty"`
+	IsRead        bool            `gorm:"default:false;index" json:"is_read"`           // For inbox emails
+	IsStarred     bool            `gorm:"default:false;index" json:"is_starred"`        // Star/flag important emails
+	ThreadID      *uuid.UUID      `gorm:"type:uuid;index" json:"thread_id,omitempty"`   // For email threading
+	InReplyTo     *uuid.UUID      `gorm:"type:uuid;index" json:"in_reply_to,omitempty"` // Reply to which email
+	SentBy        *uuid.UUID      `gorm:"type:uuid;index" json:"sent_by,omitempty"`     // User who sent it (outbound)
+	ReceivedBy    *uuid.UUID      `gorm:"type:uuid;index" json:"received_by,omitempty"` // User who received it (inbound)
+	ScheduledAt   *time.Time      `json:"scheduled_at,omitempty"`                       // For scheduled sending (outbox)
+	SentAt        *time.Time      `gorm:"index" json:"sent_at,omitempty"`               // Actual sent time
+	CreatedAt     time.Time       `gorm:"index" json:"created_at"`
+	UpdatedAt     *time.Time      `json:"updated_at,omitempty"`
+	DeletedAt     gorm.DeletedAt  `gorm:"index" json:"-"`
 	ID             uuid.UUID       `gorm:"type:uuid;primaryKey" json:"id"`
 	Channel        string          `gorm:"size:20;not null;index" json:"channel"`                      // email | sms
 	Direction      string          `gorm:"size:10;not null;index;default:'outbound'" json:"direction"` // inbound | outbound
