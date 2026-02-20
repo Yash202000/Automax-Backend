@@ -103,57 +103,46 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
 
 	if strings.EqualFold(clientCode, "EPM940") {
-		if req.LocationID != nil && req.ClassificationID != nil {
-
-			locationID, err1 := uuid.Parse(*req.LocationID)
-			classificationID, err2 := uuid.Parse(*req.ClassificationID)
-
-			if err1 != nil || err2 != nil {
+		// Check if the incoming request has latitude, longitude, and classification
+		if req.Latitude != nil && req.Longitude != nil && req.ClassificationID != nil {
+			classificationID, err := uuid.Parse(*req.ClassificationID)
+			if err != nil {
 				return nil, ErrInvalidLocation
 			}
 
-			// Find user's open incidents with same location and classification
-			openIncidents, err := s.incidentRepo.
-				FindUserOpenIncidentsByParent(
-					ctx,
-					reporterID,
-					locationID,
-					classificationID,
-				)
+			// Find user's open incidents that have location coordinates
+			openIncidents, err := s.incidentRepo.FindUserOpenIncidentsForDuplicateCheck(ctx, reporterID)
 			if err != nil {
 				return nil, err
 			}
 
 			if len(openIncidents) > 0 {
-				// Check if distance-based validation is possible
-				location, locErr := s.locationRepo.FindByID(ctx, locationID)
-				useDistanceCheck := locErr == nil && location.Latitude != nil && location.Longitude != nil
-
-				if !useDistanceCheck {
-					// No coordinates available — exact location_id + classification_id match is enough
-					return nil, ErrDuplicateIncident
-				}
-
-				// Distance-based check: block if any existing open incident is within range
+				// Distance threshold: block only if same classification AND within 500 meters
 				maxDistanceStr := os.Getenv("MAX_INCIDENT_DISTANCE")
 				incidentDistance, err := strconv.ParseFloat(maxDistanceStr, 64)
 				if err != nil || incidentDistance <= 0 {
-					incidentDistance = 500
+					incidentDistance = 500 // Default to 500 meters
 				}
 
 				for _, existing := range openIncidents {
-					if existing.Latitude == nil || existing.Longitude == nil {
-						// Existing incident has no coordinates — same location_id is enough
-						return nil, ErrDuplicateIncident
+					if existing.Latitude == nil || existing.Longitude == nil || existing.ClassificationID == nil {
+						continue // Skip incidents without coordinates or classification
 					}
 
+					// Check if classification matches
+					if *existing.ClassificationID != classificationID {
+						continue // Different classification - allow creation
+					}
+
+					// Calculate distance between new incident and existing incident
 					distance := utils.CalculateDistance(
-						*location.Latitude,
-						*location.Longitude,
+						*req.Latitude,
+						*req.Longitude,
 						*existing.Latitude,
 						*existing.Longitude,
 					)
 
+					// Block only if BOTH: same classification AND within distance threshold
 					if distance <= incidentDistance {
 						return nil, ErrDuplicateIncident
 					}
