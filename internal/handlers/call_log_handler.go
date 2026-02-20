@@ -7,6 +7,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/utils"
+	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -33,8 +34,11 @@ func (h *CallLogHandler) CreateCallLog(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if err := h.validator.Struct(&req); err != nil {
-		return utils.FormatValidationError(c, err)
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	// Get user from context (assuming middleware sets it)
@@ -86,8 +90,11 @@ func (h *CallLogHandler) UpdateCallLog(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if err := h.validator.Struct(&req); err != nil {
-		return utils.FormatValidationError(c, err)
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	callLog, err := h.service.UpdateCallLog(c.Context(), id, &req)
@@ -202,8 +209,11 @@ func (h *CallLogHandler) StartCall(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if err := h.validator.Struct(&req); err != nil {
-		return utils.FormatValidationError(c, err)
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	userID, ok := c.Locals("user_id").(uuid.UUID)

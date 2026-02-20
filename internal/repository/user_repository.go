@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"strings"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/google/uuid"
@@ -18,7 +19,7 @@ type UserRepository interface {
 	FindByUsername(ctx context.Context, username string) (*models.User, error)
 	Update(ctx context.Context, user *models.User) error
 	Delete(ctx context.Context, id uuid.UUID) error
-	List(ctx context.Context, page, limit int) ([]models.User, int64, error)
+	List(ctx context.Context, page, limit int, search string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.User, int64, error)
 	ListByDepartment(ctx context.Context, departmentID uuid.UUID, page, limit int) ([]models.User, int64, error)
 	ExistsByEmail(ctx context.Context, email string) (bool, error)
 	ExistsByUsername(ctx context.Context, username string) (bool, error)
@@ -128,29 +129,92 @@ func (r *userRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return r.db.WithContext(ctx).Delete(&models.User{}, "id = ?", id).Error
 }
 
-func (r *userRepository) List(ctx context.Context, page, limit int) ([]models.User, int64, error) {
+func (r *userRepository) List(ctx context.Context, page, limit int, search string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.User, int64, error) {
 	var users []models.User
 	var total int64
 
 	offset := (page - 1) * limit
+	hasFilters := len(roleIDs) > 0 || len(departmentIDs) > 0 || len(locationIDs) > 0 || len(classificationIDs) > 0
 
-	err := r.db.WithContext(ctx).Model(&models.User{}).Count(&total).Error
-	if err != nil {
+	// Build base query with search + join filters
+	base := r.db.WithContext(ctx).Model(&models.User{})
+
+	if search != "" {
+		like := "%" + strings.ToLower(search) + "%"
+		base = base.Where(
+			"LOWER(users.username) LIKE ? OR LOWER(users.email) LIKE ? OR LOWER(users.first_name) LIKE ? OR LOWER(users.last_name) LIKE ?",
+			like, like, like, like,
+		)
+	}
+
+	if len(roleIDs) > 0 {
+		base = base.Joins("JOIN user_roles ur ON ur.user_id = users.id").
+			Where("ur.role_id IN ?", roleIDs)
+	}
+	if len(departmentIDs) > 0 {
+		base = base.Joins("LEFT JOIN user_departments ud ON ud.user_id = users.id").
+			Where("users.department_id IN ? OR ud.department_id IN ?", departmentIDs, departmentIDs)
+	}
+	if len(locationIDs) > 0 {
+		base = base.Joins("LEFT JOIN user_locations ul ON ul.user_id = users.id").
+			Where("users.location_id IN ? OR ul.location_id IN ?", locationIDs, locationIDs)
+	}
+	if len(classificationIDs) > 0 {
+		base = base.Joins("JOIN user_classifications uc ON uc.user_id = users.id").
+			Where("uc.classification_id IN ?", classificationIDs)
+	}
+
+	if !hasFilters {
+		// Simple path — no joins, no duplicates possible
+		if err := base.Count(&total).Error; err != nil {
+			return nil, 0, err
+		}
+		err := base.
+			Preload("Department").
+			Preload("Location").
+			Preload("Departments").
+			Preload("Locations").
+			Preload("Classifications").
+			Preload("Roles").
+			Offset(offset).Limit(limit).
+			Order("users.created_at DESC").
+			Find(&users).Error
+		return users, total, err
+	}
+
+	// Filtered path — joins can produce duplicate rows; deduplicate via GROUP BY.
+	// COUNT: wrap a GROUP BY subquery so COUNT(*) counts distinct matched users.
+	idSubQuery := base.Select("users.id").Group("users.id")
+	if err := r.db.WithContext(ctx).Table("(?) AS sub", idSubQuery).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	err = r.db.WithContext(ctx).
+	// Fetch the page of distinct user IDs.
+	// GROUP BY users.id deduplicates; no DISTINCT means ORDER BY created_at is allowed.
+	var userIDs []uuid.UUID
+	if err := base.
+		Group("users.id").
+		Order("users.created_at DESC").
+		Offset(offset).Limit(limit).
+		Pluck("users.id", &userIDs).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if len(userIDs) == 0 {
+		return []models.User{}, total, nil
+	}
+
+	// Load full user records with all relations, preserving page order.
+	if err := r.db.WithContext(ctx).
 		Preload("Department").
 		Preload("Location").
 		Preload("Departments").
 		Preload("Locations").
 		Preload("Classifications").
 		Preload("Roles").
-		Offset(offset).
-		Limit(limit).
+		Where("id IN ?", userIDs).
 		Order("created_at DESC").
-		Find(&users).Error
-	if err != nil {
+		Find(&users).Error; err != nil {
 		return nil, 0, err
 	}
 

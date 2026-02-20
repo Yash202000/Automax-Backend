@@ -87,6 +87,14 @@ type Incident struct {
 	// Multiple Assignees (many-to-many)
 	Assignees []User `gorm:"many2many:incident_assignees;" json:"assignees,omitempty"`
 
+	// Merge Relationships - tracked via incident_merges table (no FK constraint)
+	MasterIncidentID *uuid.UUID `gorm:"type:uuid;index;column:master_incident_id" json:"master_incident_id,omitempty"`
+	MasterIncident   *Incident  `gorm:"-" json:"master_incident,omitempty"`
+	MergedIncidents  []Incident `gorm:"-" json:"merged_incidents,omitempty"`
+	IsMerged         bool       `gorm:"default:false;index" json:"is_merged"`
+	MergedAt         *time.Time `json:"merged_at,omitempty"`
+	MergedByUserID   *uuid.UUID `gorm:"type:uuid" json:"merged_by_user_id,omitempty"`
+
 	// Related records
 	Comments          []IncidentComment           `gorm:"foreignKey:IncidentID" json:"comments,omitempty"`
 	Attachments       []IncidentAttachment        `gorm:"foreignKey:IncidentID" json:"attachments,omitempty"`
@@ -295,21 +303,21 @@ type IncidentRevisionFilter struct {
 
 type IncidentCreateRequest struct {
 	Title              string                 `json:"title" validate:"required,min=5,max=200"`
-	Description        string                 `json:"description"`
+	Description        string                 `json:"description" validate:"omitempty,max=1000"`
 	ClassificationID   *string                `json:"classification_id" validate:"omitempty,uuid"`
 	WorkflowID         string                 `json:"workflow_id" validate:"required,uuid"`
-	Source             string                 `json:"source"`
+	Source             string                 `json:"source" validate:"omitempty,max=100"`
 	AssigneeID         *string                `json:"assignee_id" validate:"omitempty,uuid"`
 	DepartmentID       *string                `json:"department_id" validate:"omitempty,uuid"`
 	LocationID         *string                `json:"location_id" validate:"omitempty,uuid"`
 	Latitude           *float64               `json:"latitude" validate:"omitempty,min=-90,max=90"`
 	Longitude          *float64               `json:"longitude" validate:"omitempty,min=-180,max=180"`
-	Address            string                 `json:"address"`
-	City               string                 `json:"city"`
-	State              string                 `json:"state"`
-	Country            string                 `json:"country"`
-	PostalCode         string                 `json:"postal_code"`
-	DueDate            *string                `json:"due_date"`
+	Address            string                 `json:"address" validate:"omitempty,max=500"`
+	City               string                 `json:"city" validate:"omitempty,max=100"`
+	State              string                 `json:"state" validate:"omitempty,max=100"`
+	Country            string                 `json:"country" validate:"omitempty,max=100"`
+	PostalCode         string                 `json:"postal_code" validate:"omitempty,max=20"`
+	DueDate            *string                `json:"due_date" validate:"omitempty,datetime=2006-01-02T15:04:05Z07:00"`
 	ReporterEmail      string                 `json:"reporter_email" validate:"omitempty,email"`
 	ReporterName       string                 `json:"reporter_name" validate:"omitempty,max=200"`
 	CustomFields       string                 `json:"custom_fields"`
@@ -350,7 +358,13 @@ type IncidentTransitionRequest struct {
 	// Assignment overrides (used when auto-detect finds multiple matches)
 	DepartmentID *string `json:"department_id" validate:"omitempty,uuid"`
 	UserID       *string `json:"user_id" validate:"omitempty,uuid"`
-	Version      int     `json:"version" validate:"required,min=1"`
+
+	// Field changes configured on the transition (user-editable fields during transition)
+	// Keys: "priority", "department_id", "location_id", "classification_id", "title", "description"
+	// Values: string representation (UUIDs for ID fields, "1"-"5" for priority, plain text otherwise)
+	FieldChanges map[string]string `json:"field_changes"`
+
+	Version int `json:"version" validate:"required,min=1"`
 }
 
 type IncidentFeedbackRequest struct {
@@ -366,7 +380,7 @@ type IncidentCommentRequest struct {
 // CreateComplaintRequest for creating a new complaint
 type CreateComplaintRequest struct {
 	Title            string   `json:"title" validate:"required,min=5,max=200"`
-	Description      string   `json:"description"`
+	Description      string   `json:"description" validate:"omitempty,max=1000"`
 	ClassificationID string   `json:"classification_id" validate:"required,uuid"`
 	WorkflowID       string   `json:"workflow_id" validate:"required,uuid"`
 	SourceIncidentID *string  `json:"source_incident_id" validate:"omitempty,uuid"` // optional reference to source incident
@@ -433,30 +447,95 @@ type ConvertToRequestResponse struct {
 }
 
 type IncidentFilter struct {
-	Search           string      `json:"search"`
-	WorkflowID       *uuid.UUID  `json:"workflow_id"`
-	CurrentStateID   *uuid.UUID  `json:"current_state_id"`
-	ClassificationID *uuid.UUID  `json:"classification_id"`
-	AssigneeID       *uuid.UUID  `json:"assignee_id"`
-	DepartmentID     *uuid.UUID  `json:"department_id"`
-	LocationID       *uuid.UUID  `json:"location_id"`
-	ReporterID       *uuid.UUID  `json:"reporter_id"`
-	SLABreached      *bool       `json:"sla_breached"`
-	RecordType       *string     `json:"record_type"` // 'incident', 'request', 'complaint', or 'query'
-	Channel          *string     `json:"channel"`     // for complaints
-	StartDate        *time.Time  `json:"start_date"`
-	EndDate          *time.Time  `json:"end_date"`
-	Page             int         `json:"page"`
-	Limit            int         `json:"limit"`
+	Search           string      `query:"search" json:"search" validate:"omitempty,min=3"`
+	WorkflowID       []string    `query:"workflow_id" json:"workflow_id" validate:"omitempty,dive,uuid"`
+	CurrentStateID   []string    `query:"current_state_id" json:"current_state_id" validate:"omitempty,dive,uuid"`
+	ClassificationID []string    `query:"classification_id" json:"classification_id" validate:"omitempty,dive,uuid"`
+	Priority         *int        `query:"priority" json:"priority" validate:"omitempty,min=1,max=5"`
+	AssigneeID       []string    `query:"assignee_id" json:"assignee_id" validate:"omitempty,dive,uuid"`
+	DepartmentID     []string    `query:"department_id" json:"department_id" validate:"omitempty,dive,uuid"`
+	LocationID       []string    `query:"location_id" json:"location_id" validate:"omitempty,dive,uuid"`
+	ReporterID       []string    `query:"reporter_id" json:"reporter_id" validate:"omitempty,dive,uuid"`
+	SLABreached      *bool       `query:"sla_breached" json:"sla_breached" validate:"omitempty"`
+	RecordType       *string     `query:"record_type" json:"record_type" validate:"omitempty,oneof=incident request complaint query"` // 'incident', 'request', 'complaint', or 'query'
+	Channel          *string     `query:"channel" json:"channel" validate:"omitempty"`                                                // for complaints
+	StartDate        *time.Time  `query:"start_date" json:"start_date" validate:"omitempty"`                                          // filter by created_at >= start_date
+	EndDate          *time.Time  `query:"end_date" json:"end_date" validate:"omitempty"`                                              // filter by created_at <= end_date
+	Page             int         `query:"page" json:"page" validate:"omitempty,min=1"`
+	Limit            int         `query:"limit" json:"limit" validate:"omitempty,min=1,max=100"`
 	UserRoleIDs      []uuid.UUID `json:"-"` // For filtering stats by user's roles
+}
+
+// Merge Incident Types
+
+// IncidentMergeRequest for merging multiple incidents
+type IncidentMergeRequest struct {
+	IncidentIDs      []string `json:"incident_ids" validate:"required,min=2,dive,uuid"`  // IDs of incidents to merge
+	MasterIncidentID string   `json:"master_incident_id" validate:"required,uuid"`       // ID of the master incident (must be one of the selected incidents)
+	Comment          string   `json:"comment"`                                           // Optional comment for the merge
+}
+
+// IncidentUnmergeRequest for unmerging a single incident
+type IncidentUnmergeRequest struct {
+	IncidentID string `json:"incident_id" validate:"required,uuid"` // ID of incident to unmerge
+	Comment    string `json:"comment"`                              // Optional comment for the unmerge
+}
+
+// IncidentBulkUnmergeRequest for unmerging multiple incidents at once
+type IncidentBulkUnmergeRequest struct {
+	IncidentIDs []string `json:"incident_ids" validate:"required,min=1,dive,uuid"`
+	Comment     string   `json:"comment"`
+}
+
+// IncidentBulkUnmergeResponse for bulk unmerge operation result
+type IncidentBulkUnmergeResponse struct {
+	UnmergedCount int      `json:"unmerged_count"`
+	Failures      []string `json:"failures,omitempty"`
+	Message       string   `json:"message"`
+}
+
+// IncidentMergeValidationRequest for validating if incidents can be merged
+type IncidentMergeValidationRequest struct {
+	IncidentIDs []string `json:"incident_ids" validate:"required,min=2,dive,uuid"`
+}
+
+// IncidentMergeValidationResponse for merge validation result
+type IncidentMergeValidationResponse struct {
+	CanMerge    bool     `json:"can_merge"`
+	Errors      []string `json:"errors,omitempty"`
+	Warning     string   `json:"warning,omitempty"`
+	MasterOptions []IncidentMergeOption `json:"master_options,omitempty"` // Valid master incident options
+}
+
+// IncidentMergeOption represents a valid option for master incident
+type IncidentMergeOption struct {
+	ID             uuid.UUID `json:"id"`
+	IncidentNumber string    `json:"incident_number"`
+	Title          string    `json:"title"`
+	CurrentStateID uuid.UUID `json:"current_state_id"`
+	CurrentState   string    `json:"current_state"`
+}
+
+// IncidentMergeResponse for merge operation result
+type IncidentMergeResponse struct {
+	MasterIncident   *IncidentResponse `json:"master_incident"`
+	MergedIncidents  []IncidentResponse `json:"merged_incidents"` // List of incidents that were merged
+	MergedCount      int               `json:"merged_count"`
+	Message          string            `json:"message"`
+}
+
+// IncidentUnmergeResponse for unmerge operation result
+type IncidentUnmergeResponse struct {
+	UnmergedIncident *IncidentResponse `json:"unmerged_incident"`
+	Message          string            `json:"message"`
 }
 
 // Response types
 
 type IncidentResponse struct {
-	ID               uuid.UUID               `json:"id"`
-	IncidentNumber   string                  `json:"incident_number"`
-	Title            string                  `json:"title"`
+	ID                 uuid.UUID               `json:"id"`
+	IncidentNumber     string                  `json:"incident_number"`
+	Title              string                  `json:"title"`
 	Description        string                  `json:"description"`
 	RecordType         string                  `json:"record_type"`
 	SourceIncidentID   *uuid.UUID              `json:"source_incident_id,omitempty"`
@@ -498,6 +577,13 @@ type IncidentResponse struct {
 	LookupValues     []LookupValueResponse   `json:"lookup_values,omitempty"`
 	Version          int                     `json:"version"`
 	ActiveViewers    int                     `json:"active_viewers,omitempty"` // Number of users currently viewing this incident
+
+	// Merge-related fields
+	MasterIncidentID   *uuid.UUID          `json:"master_incident_id,omitempty"`
+	MasterIncident     *IncidentResponse   `json:"master_incident,omitempty"`
+	IsMerged           bool                `json:"is_merged"`
+	MergedAt           *time.Time          `json:"merged_at,omitempty"`
+	MergedIncidentsCount int               `json:"merged_incidents_count,omitempty"` // Number of incidents merged into this one
 }
 
 type IncidentDetailResponse struct {
@@ -540,24 +626,24 @@ type IncidentFeedbackResponse struct {
 }
 
 type TransitionHistoryResponse struct {
-	ID            uuid.UUID                   `json:"id"`
-	IncidentID    uuid.UUID                   `json:"incident_id"`
-	Transition    *WorkflowTransitionResponse `json:"transition,omitempty"`
-	FromState     *WorkflowStateResponse      `json:"from_state,omitempty"`
-	ToState       *WorkflowStateResponse      `json:"to_state,omitempty"`
-	PerformedBy   *UserResponse               `json:"performed_by,omitempty"`
-	Comment       string                      `json:"comment,omitempty"`
-	OldValues     string                      `json:"old_values,omitempty"`
-	NewValues     string                      `json:"new_values,omitempty"`
-	ActionResults string                      `json:"action_results,omitempty"`
-	TransitionedAt time.Time                  `json:"transitioned_at"`
+	ID             uuid.UUID                   `json:"id"`
+	IncidentID     uuid.UUID                   `json:"incident_id"`
+	Transition     *WorkflowTransitionResponse `json:"transition,omitempty"`
+	FromState      *WorkflowStateResponse      `json:"from_state,omitempty"`
+	ToState        *WorkflowStateResponse      `json:"to_state,omitempty"`
+	PerformedBy    *UserResponse               `json:"performed_by,omitempty"`
+	Comment        string                      `json:"comment,omitempty"`
+	OldValues      string                      `json:"old_values,omitempty"`
+	NewValues      string                      `json:"new_values,omitempty"`
+	ActionResults  string                      `json:"action_results,omitempty"`
+	TransitionedAt time.Time                   `json:"transitioned_at"`
 }
 
 type AvailableTransitionResponse struct {
-	Transition   WorkflowTransitionResponse `json:"transition"`
-	CanExecute   bool                       `json:"can_execute"`
+	Transition   WorkflowTransitionResponse      `json:"transition"`
+	CanExecute   bool                            `json:"can_execute"`
 	Requirements []TransitionRequirementResponse `json:"requirements,omitempty"`
-	Reason       string                     `json:"reason,omitempty"`
+	Reason       string                          `json:"reason,omitempty"`
 }
 
 type StateStatDetail struct {
@@ -567,15 +653,15 @@ type StateStatDetail struct {
 }
 
 type IncidentStatsResponse struct {
-	Total          int64              `json:"total"`
-	Open           int64              `json:"open"`
-	InProgress     int64              `json:"in_progress"`
-	Resolved       int64              `json:"resolved"`
-	Closed         int64              `json:"closed"`
-	SLABreached    int64              `json:"sla_breached"`
-	ByPriority     map[int]int64      `json:"by_priority"`
-	ByState        map[string]int64   `json:"by_state"`
-	ByStateDetails []StateStatDetail  `json:"by_state_details,omitempty"`
+	Total          int64             `json:"total"`
+	Open           int64             `json:"open"`
+	InProgress     int64             `json:"in_progress"`
+	Resolved       int64             `json:"resolved"`
+	Closed         int64             `json:"closed"`
+	SLABreached    int64             `json:"sla_breached"`
+	ByPriority     map[int]int64     `json:"by_priority"`
+	ByState        map[string]int64  `json:"by_state"`
+	ByStateDetails []StateStatDetail `json:"by_state_details,omitempty"`
 }
 
 // Converter functions
@@ -674,6 +760,17 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 	if i.Reporter != nil {
 		reporterResp := ToUserResponse(i.Reporter)
 		resp.Reporter = &reporterResp
+	}
+
+	// Merge-related fields
+	resp.MasterIncidentID = i.MasterIncidentID
+	resp.IsMerged = i.IsMerged
+	resp.MergedAt = i.MergedAt
+	resp.MergedIncidentsCount = len(i.MergedIncidents)
+
+	if i.MasterIncident != nil {
+		masterResp := ToIncidentResponse(i.MasterIncident)
+		resp.MasterIncident = &masterResp
 	}
 
 	return resp

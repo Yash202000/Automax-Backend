@@ -17,15 +17,17 @@ import (
 type NotificationService struct {
 	templateRepo repository.NotificationTemplateRepository
 	logRepo      repository.NotificationLogRepository
+	userRepo     repository.UserRepository
 }
 
 func NewNotificationService(
 	templateRepo repository.NotificationTemplateRepository,
-	logRepo repository.NotificationLogRepository,
+	logRepo repository.NotificationLogRepository, userRepo repository.UserRepository,
 ) *NotificationService {
 	return &NotificationService{
 		templateRepo: templateRepo,
 		logRepo:      logRepo,
+		userRepo:     userRepo,
 	}
 }
 
@@ -247,9 +249,44 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 	}
 	if status == "failed" {
 		return log, fmt.Errorf("notification delivery failed")
+	var inboxLogIDs []uuid.UUID
+
+	for _, recipientEmail := range to {
+
+		// Check if this email belongs to the system
+		user, err := s.userRepo.FindByEmail(ctx, recipientEmail)
+		if err != nil || user == nil {
+			continue // Skip external emails
+		}
+
+		inboxLog := &models.NotificationLog{
+			ID:           uuid.New(),
+			Channel:      channel,
+			Direction:    models.DirectionInbound,
+			Category:     models.CategoryInbox,
+			TemplateCode: deref(templateCode),
+			Language:     language,
+			Recipients:   recipientStatuses,
+			Subject:      subject,
+			Body:         body,
+			Status:       status,
+			Provider:     provider,
+			Attachments:  attachmentInfo,
+			SentBy:       sentBy,
+			ReceivedBy:   &user.ID, //this makes it appear in inbox
+			CreatedAt:    now,
+			UpdatedAt:    &now,
+		}
+
+		if err := s.logRepo.Create(ctx, inboxLog); err == nil {
+			inboxLogIDs = append(inboxLogIDs, inboxLog.ID)
+		}
 	}
 
-	return log, nil
+	return &SendNotificationResult{
+		SentLog:     log,
+		InboxLogIDs: inboxLogIDs,
+	}, nil
 }
 
 func deref(s *string) string {
@@ -466,7 +503,7 @@ func (s *NotificationService) SendDraft(ctx context.Context, id uuid.UUID) (*mod
 	}
 
 	// Send the email using SendNotification
-	sentLog, err := s.SendNotification(
+	result, err := s.SendNotification(
 		ctx,
 		draft.Channel,
 		nil,
@@ -489,7 +526,7 @@ func (s *NotificationService) SendDraft(ctx context.Context, id uuid.UUID) (*mod
 	_ = s.logRepo.Delete(ctx, id)
 
 	// Convert NotificationLog to NotificationLogResponse
-	response := models.ToNotificationLogResponse(sentLog)
+	response := models.ToNotificationLogResponse(result.SentLog)
 	return &response, nil
 }
 
@@ -568,7 +605,7 @@ func (s *NotificationService) ReplyToNotification(ctx context.Context, originalI
 	}
 
 	// Send the reply
-	sentLog, err := s.SendNotification(
+	result, err := s.SendNotification(
 		ctx,
 		original.Channel,
 		nil,
@@ -588,9 +625,9 @@ func (s *NotificationService) ReplyToNotification(ctx context.Context, originalI
 	}
 
 	// Update the sent email with threading info
-	sentLog.ThreadID = threadID
-	sentLog.InReplyTo = &originalID
-	if err := s.logRepo.Update(ctx, sentLog); err != nil {
+	result.SentLog.ThreadID = threadID
+	result.SentLog.InReplyTo = &originalID
+	if err := s.logRepo.Update(ctx, result.SentLog); err != nil {
 		return nil, err
 	}
 
@@ -600,7 +637,7 @@ func (s *NotificationService) ReplyToNotification(ctx context.Context, originalI
 		_ = s.logRepo.Update(ctx, original)
 	}
 
-	response := models.ToNotificationLogResponse(sentLog)
+	response := models.ToNotificationLogResponse(result.SentLog)
 	return &response, nil
 }
 

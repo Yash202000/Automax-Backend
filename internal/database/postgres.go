@@ -36,18 +36,22 @@ func Migrate(db *gorm.DB) error {
 	log.Println("Running database migrations...")
 	// Manually create the ENUM type for call_status if it doesn't exist
 	createEnumQuery := `
-        DO $$ 
-        BEGIN 
-            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_call_status') THEN 
-                CREATE TYPE user_call_status AS ENUM ('offline', 'online', 'busy', 'in_call', 'available'); 
-            END IF; 
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_call_status') THEN
+                CREATE TYPE user_call_status AS ENUM ('offline', 'online', 'busy', 'in_call', 'available');
+            END IF;
         END $$;`
 
 	if err := db.Exec(createEnumQuery).Error; err != nil {
 		return fmt.Errorf("failed to create enum type: %w", err)
 	}
 
-	err := db.AutoMigrate(
+	// Use session that disables FK constraints during migration to prevent auto-FK issues
+	migrationDB := db.Session(&gorm.Session{})
+	migrationDB.Config.DisableForeignKeyConstraintWhenMigrating = true
+
+	err := migrationDB.AutoMigrate(
 		&models.Permission{},
 		&models.Role{},
 		&models.Classification{},
@@ -58,6 +62,8 @@ func Migrate(db *gorm.DB) error {
 		&models.CallLog{},
 		&models.NotificationTemplate{},
 		&models.NotificationLog{},
+		// IncidentMerge MUST come before Incident (foreign key dependency)
+		&models.IncidentMerge{},
 		// Lookup models
 		&models.LookupCategory{},
 		&models.LookupValue{},
@@ -67,6 +73,7 @@ func Migrate(db *gorm.DB) error {
 		&models.WorkflowTransition{},
 		&models.TransitionRequirement{},
 		&models.TransitionAction{},
+		&models.TransitionFieldChange{},
 		// Incident models
 		&models.Incident{},
 		&models.IncidentComment{},
@@ -86,6 +93,14 @@ func Migrate(db *gorm.DB) error {
 	if err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
+
+	// Drop problematic foreign key constraints on incidents table
+	// Merge relationships are tracked via incident_merges table, not direct FK
+	log.Println("Cleaning up auto-generated foreign key constraints...")
+	db.Exec("ALTER TABLE incidents DROP CONSTRAINT IF EXISTS fk_incident_merges_master_incident")
+	db.Exec("ALTER TABLE incidents DROP CONSTRAINT IF EXISTS incident_merges_master_incident_id_fkey")
+	db.Exec("ALTER TABLE incidents DROP CONSTRAINT IF EXISTS fk_incidents_master_incident")
+
 	log.Println("Database migrations completed")
 	return nil
 }
@@ -150,6 +165,7 @@ func Seed(db *gorm.DB) error {
 		{Name: "Comment on Incidents", Code: "incidents:comment", Module: "incidents", Action: "comment", Description: "Add comments to incidents"},
 		{Name: "View All Incidents", Code: "incidents:view_all", Module: "incidents", Action: "view_all", Description: "View all incidents regardless of assignment"},
 		{Name: "Manage SLA", Code: "incidents:manage_sla", Module: "incidents", Action: "manage_sla", Description: "Override SLA settings"},
+		{Name: "Merge Incidents", Code: "incidents:merge", Module: "incidents", Action: "merge", Description: "Merge multiple incidents into one"},
 
 		// Request permissions
 		{Name: "View Requests", Code: "requests:view", Module: "requests", Action: "view", Description: "View requests"},

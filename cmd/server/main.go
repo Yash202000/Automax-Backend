@@ -17,6 +17,7 @@ import (
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/pkg/utils"
+	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -29,6 +30,7 @@ func main() {
 	cfg := config.Load()
 	godotenv.Load()
 
+	validation.InitValidatorRegistry()
 	db, err := database.Connect(&cfg.Database)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
@@ -68,6 +70,7 @@ func main() {
 	actionLogRepo := repository.NewActionLogRepository(db)
 	workflowRepo := repository.NewWorkflowRepository(db)
 	incidentRepo := repository.NewIncidentRepository(db)
+	incidentMergeRepo := repository.NewIncidentMergeRepository(db)
 	reportRepo := repository.NewReportRepository(db)
 	reportTemplateRepo := repository.NewReportTemplateRepository(db)
 	lookupRepo := repository.NewLookupRepository(db)
@@ -83,18 +86,19 @@ func main() {
 	notificationLogRepo := repository.NewNotificationLogRepository(db)
 
 	// Initialize services
-	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg)
 	actionLogService := services.NewActionLogService(actionLogRepo)
+	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg, actionLogService)
 	callLogService := services.NewCallLogService(callLogRepo, userRepo)
 	workflowService := services.NewWorkflowService(workflowRepo, roleRepo, departmentRepo, classificationRepo, db)
-	incidentService := services.NewIncidentService(incidentRepo, workflowRepo, userRepo, minioStorage, db, wsHub)
+	incidentService := services.NewIncidentService(incidentRepo, incidentMergeRepo, workflowRepo, userRepo, minioStorage, db, wsHub)
+	incidentMergeService := services.NewIncidentMergeService(incidentMergeRepo, incidentRepo, workflowRepo, roleRepo, locationRepo, classificationRepo, db, wsHub)
 	reportService := services.NewReportService(reportRepo)
 	reportTemplateService := services.NewReportTemplateService(reportTemplateRepo, reportRepo)
 	applicationLinkService := services.NewApplicationLinkService(applicationLinkRepo)
 	settingsService := services.NewSettingsService(settingsRepo)
 	presenceService := services.NewPresenceService(redisClient)
-	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo)
 	otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo)
+	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo, userRepo)
 
 	// Initialize and start SLA Monitor (checks every 5 minutes)
 	slaMonitor := services.NewSLAMonitor(incidentRepo, 5*time.Minute)
@@ -116,6 +120,7 @@ func main() {
 	callLogHandler := handlers.NewCallLogHandler(callLogService, validate, userService)
 	workflowHandler := handlers.NewWorkflowHandler(workflowService)
 	incidentHandler := handlers.NewIncidentHandler(incidentService, userRepo, incidentRepo, minioStorage, presenceService)
+	incidentMergeHandler := handlers.NewIncidentMergeHandler(incidentMergeService, userRepo)
 	websocketHandler := handlers.NewWebSocketHandler(wsHub)
 	reportHandler := handlers.NewReportHandler(reportService)
 	reportTemplateHandler := handlers.NewReportTemplateHandler(reportTemplateService)
@@ -147,6 +152,7 @@ func main() {
 		AllowCredentials: true,
 	}))
 
+	app.Use(middleware.ValidationMiddleware())
 	api := app.Group("/api")
 	v1 := api.Group("/v1")
 
@@ -190,6 +196,7 @@ func main() {
 	incidents.Post("/", authMiddleware.RequirePermission("incidents:create"), incidentHandler.CreateIncident)
 	incidents.Get("/", authMiddleware.RequirePermission("incidents:view"), incidentHandler.ListIncidents)
 	incidents.Get("/stats", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetStats)
+	incidents.Get("/priority-counts", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetPriorityCounts)
 	incidents.Get("/my-assigned", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetMyAssigned)
 	incidents.Get("/my-reported", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetMyReported)
 	incidents.Get("/sla-breached", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetSLABreached)
@@ -217,10 +224,13 @@ func main() {
 	incidents.Get("/:id/presence", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetPresence)
 	incidents.Delete("/:id/presence", authMiddleware.RequirePermission("incidents:view"), incidentHandler.RemovePresence)
 
-	// Presence tracking routes
-	incidents.Post("/:id/presence", authMiddleware.RequirePermission("incidents:view"), incidentHandler.MarkPresence)
-	incidents.Get("/:id/presence", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetPresence)
-	incidents.Delete("/:id/presence", authMiddleware.RequirePermission("incidents:view"), incidentHandler.RemovePresence)
+	// Incident Merge routes
+	incidents.Post("/merge/validate", authMiddleware.RequirePermission("incidents:merge"), incidentMergeHandler.ValidateMerge)
+	incidents.Post("/merge", authMiddleware.RequirePermission("incidents:merge"), incidentMergeHandler.MergeIncidents)
+	incidents.Post("/merge/unmerge", authMiddleware.RequirePermission("incidents:merge"), incidentMergeHandler.UnmergeIncident)
+	incidents.Post("/merge/bulk-unmerge", authMiddleware.RequirePermission("incidents:merge"), incidentMergeHandler.BulkUnmergeIncidents)
+	incidents.Get("/merge/:id/merged", authMiddleware.RequirePermission("incidents:view"), incidentMergeHandler.GetMergedIncidents)
+	incidents.Get("/merge/can-merge", authMiddleware.RequirePermission("incidents:view"), incidentMergeHandler.CanMerge)
 
 	// Attachment download route (unified for incidents and notifications)
 	attachments := v1.Group("/attachments", authMiddleware.Authenticate())
@@ -345,6 +355,7 @@ func main() {
 	actionLogs.Get("/filter-options", authMiddleware.RequirePermission("action-logs:view"), actionLogHandler.GetFilterOptions)
 	actionLogs.Get("/user/:id", authMiddleware.RequirePermission("action-logs:view"), actionLogHandler.GetUserActions)
 	actionLogs.Get("/:id", authMiddleware.RequirePermission("action-logs:view"), actionLogHandler.GetActionLog)
+	actionLogs.Get("/export", authMiddleware.RequirePermission("action-logs:export"), actionLogHandler.ExportActionLogs)
 	actionLogs.Delete("/cleanup", authMiddleware.RequirePermission("action-logs:delete"), actionLogHandler.CleanupOldLogs)
 
 	// Call Log routes
@@ -392,6 +403,7 @@ func main() {
 	transitions.Put("/:id/roles", authMiddleware.RequirePermission("workflows:update"), workflowHandler.SetTransitionRoles)
 	transitions.Put("/:id/requirements", authMiddleware.RequirePermission("workflows:update"), workflowHandler.SetTransitionRequirements)
 	transitions.Put("/:id/actions", authMiddleware.RequirePermission("workflows:update"), workflowHandler.SetTransitionActions)
+	transitions.Put("/:id/field-changes", authMiddleware.RequirePermission("workflows:update"), workflowHandler.SetTransitionFieldChanges)
 
 	// Report routes
 	reports := admin.Group("/reports")

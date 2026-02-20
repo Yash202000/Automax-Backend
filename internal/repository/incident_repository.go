@@ -27,6 +27,7 @@ type IncidentRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 	WithTx(tx *gorm.DB) IncidentRepository
 	LockForUpdate(ctx context.Context, tx *gorm.DB, id uuid.UUID) (*models.Incident, error)
+	FindUserOpenIncidentsForDuplicateCheck(ctx context.Context, reporterID uuid.UUID) ([]models.Incident, error)
 
 	// Incident number generation
 	GenerateIncidentNumber(ctx context.Context) (string, error)
@@ -61,6 +62,7 @@ type IncidentRepository interface {
 
 	// Stats
 	GetStats(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponse, error)
+	GetPriorityCounts(ctx context.Context, filter *models.IncidentFilter) (map[string]int64, error)
 	GetSLABreachedIncidents(ctx context.Context) ([]models.Incident, error)
 	UpdateSLABreached(ctx context.Context, incidentID uuid.UUID, breached bool) error
 	MarkSLABreached(ctx context.Context) (int64, error)
@@ -79,6 +81,9 @@ type IncidentRepository interface {
 	FindFeedbackByID(ctx context.Context, id uuid.UUID) (*models.IncidentFeedback, error)
 	ListFeedback(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentFeedback, error)
 	LinkFeedbackToTransition(ctx context.Context, feedbackID uuid.UUID, transitionHistoryID uuid.UUID) error
+
+	// Notifications
+	CreateNotification(ctx context.Context, notification *models.NotificationLog) error
 
 	// Complaint-specific
 	IncrementEvaluationCount(ctx context.Context, id uuid.UUID) error
@@ -168,27 +173,37 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	query := r.db.WithContext(ctx).Model(&models.Incident{})
 
 	// Apply filters
-	if filter.WorkflowID != nil {
-		query = query.Where("workflow_id = ?", *filter.WorkflowID)
+	if len(filter.WorkflowID) != 0 {
+		query = query.Where("workflow_id IN ?", filter.WorkflowID)
 	}
-	if filter.CurrentStateID != nil {
-		query = query.Where("current_state_id = ?", *filter.CurrentStateID)
+	if len(filter.CurrentStateID) != 0 {
+		query = query.Where("current_state_id IN ?", filter.CurrentStateID)
 	}
-	if filter.ClassificationID != nil {
-		query = query.Where("classification_id = ?", *filter.ClassificationID)
+	if len(filter.ClassificationID) != 0 {
+		query = query.Where("classification_id IN ?", filter.ClassificationID)
 	}
-	if filter.AssigneeID != nil {
-		// Check both primary assignee and multiple assignees
-		query = query.Where("assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", *filter.AssigneeID, *filter.AssigneeID)
+	if filter.Priority != nil {
+		query = query.Where("priority = ?", *filter.Priority)
 	}
-	if filter.DepartmentID != nil {
-		query = query.Where("department_id = ?", *filter.DepartmentID)
+	if len(filter.AssigneeID) != 0 {
+		if len(filter.AssigneeID) == 1 {
+			// Check both primary assignee and multiple assignees
+			query = query.Where("assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", filter.AssigneeID[0], filter.AssigneeID[0])
+		} else {
+			// Multiple assignees
+			query = query.Where("assignee_id IN ? ", filter.AssigneeID)
+		}
 	}
-	if filter.LocationID != nil {
-		query = query.Where("location_id = ?", *filter.LocationID)
+	if len(filter.DepartmentID) != 0 {
+		query = query.Where("department_id IN ?", filter.DepartmentID)
 	}
-	if filter.ReporterID != nil {
-		query = query.Where("reporter_id = ?", *filter.ReporterID)
+	// fix bleow filter for location and reporter to handle multiple values
+
+	if len(filter.LocationID) != 0 {
+		query = query.Where("location_id IN ?", filter.LocationID)
+	}
+	if len(filter.ReporterID) != 0 {
+		query = query.Where("reporter_id IN ?", filter.ReporterID)
 	}
 	if filter.SLABreached != nil {
 		query = query.Where("sla_breached = ?", *filter.SLABreached)
@@ -500,14 +515,9 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 	stats := &models.IncidentStatsResponse{
 
 		ByState: make(map[string]int64),
-
 	}
 
-
-
 	baseQuery := r.db.WithContext(ctx).Model(&models.Incident{})
-
-
 
 	// Apply filters if provided
 
@@ -519,26 +529,23 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 
 		}
 
-		if filter.WorkflowID != nil {
+		if len(filter.WorkflowID) != 0 {
 
-			baseQuery = baseQuery.Where("workflow_id = ?", *filter.WorkflowID)
-
-		}
-
-		if filter.DepartmentID != nil {
-
-			baseQuery = baseQuery.Where("department_id = ?", *filter.DepartmentID)
+			baseQuery = baseQuery.Where("workflow_id IN ?", filter.WorkflowID)
 
 		}
 
-		if filter.AssigneeID != nil {
+		if len(filter.DepartmentID) != 0 {
+			baseQuery = baseQuery.Where("department_id IN ?", filter.DepartmentID)
+
+		}
+
+		if len(filter.AssigneeID) != 0 {
 			// Check both primary assignee and multiple assignees
-			baseQuery = baseQuery.Where("assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", *filter.AssigneeID, *filter.AssigneeID)
+			baseQuery = baseQuery.Where("assignee_id IN ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id IN ?)", filter.AssigneeID, filter.AssigneeID)
 		}
 
 	}
-
-
 
 	// Total count
 
@@ -547,8 +554,6 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 		return nil, err
 
 	}
-
-
 
 	// SLA breached count (also filtered by record_type if provided)
 	slaQuery := r.db.WithContext(ctx).Model(&models.Incident{}).Where("sla_breached = ?", true)
@@ -561,26 +566,20 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 
 	}
 
-
-
 	// Count by state (filtered by viewable roles if provided)
 
 	type stateCount struct {
+		StateID uuid.UUID `gorm:"column:state_id"`
 
-		StateID   uuid.UUID `gorm:"column:state_id"`
+		StateName string `gorm:"column:state_name"`
 
-		StateName string    `gorm:"column:state_name"`
-
-		Count     int64     `gorm:"column:count"`
-
+		Count int64 `gorm:"column:count"`
 	}
 
 	var stateCounts []stateCount
 
 	stateQuery := r.db.WithContext(ctx).Model(&models.Incident{}).
-
 		Select("workflow_states.id as state_id, workflow_states.name as state_name, count(*) as count").
-
 		Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
 
 	// Apply record_type filter to state counts
@@ -606,8 +605,6 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 
 	}
 
-
-
 	if err := stateQuery.Group("workflow_states.id, workflow_states.name").Scan(&stateCounts).Error; err != nil {
 
 		return nil, err
@@ -622,12 +619,11 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 
 		stats.ByStateDetails = append(stats.ByStateDetails, models.StateStatDetail{
 
-			ID:    sc.StateID,
+			ID: sc.StateID,
 
-			Name:  sc.StateName,
+			Name: sc.StateName,
 
 			Count: sc.Count,
-
 		})
 
 	}
@@ -664,6 +660,72 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 
 	return stats, nil
 
+}
+
+func (r *incidentRepository) GetPriorityCounts(ctx context.Context, filter *models.IncidentFilter) (map[string]int64, error) {
+	// Query to count incidents grouped by priority
+	type priorityCount struct {
+		PriorityName string `gorm:"column:priority_name"`
+		SortOrder    int    `gorm:"column:sort_order"`
+		Count        int64  `gorm:"column:count"`
+	}
+
+	query := r.db.WithContext(ctx).Model(&models.Incident{}).
+		Select("lookup_values.name as priority_name, lookup_values.sort_order as sort_order, count(*) as count").
+		Joins("INNER JOIN incident_lookup_values ON incident_lookup_values.incident_id = incidents.id").
+		Joins("INNER JOIN lookup_values ON lookup_values.id = incident_lookup_values.lookup_value_id").
+		Joins("INNER JOIN lookup_categories ON lookup_categories.id = lookup_values.category_id").
+		Where("lookup_categories.code = ?", "PRIORITY")
+
+	// Apply filters if provided
+	if filter != nil {
+		if filter.RecordType != nil && *filter.RecordType != "" {
+			query = query.Where("incidents.record_type = ?", *filter.RecordType)
+		}
+
+		if len(filter.WorkflowID) != 0 {
+			query = query.Where("incidents.workflow_id IN ?", filter.WorkflowID)
+		}
+
+		if len(filter.DepartmentID) != 0 {
+			query = query.Where("incidents.department_id IN ?", filter.DepartmentID)
+		}
+
+		if len(filter.AssigneeID) != 0 {
+			if len(filter.AssigneeID) == 1 {
+				// Check both primary assignee and multiple assignees
+				query = query.Where("incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", filter.AssigneeID[0], filter.AssigneeID[0])
+			} else {
+				// Multiple assignees
+				query = query.Where("incidents.assignee_id IN ?", filter.AssigneeID)
+			}
+		}
+
+		// Filter by state visibility based on user roles
+		if filter.UserRoleIDs != nil && len(filter.UserRoleIDs) > 0 {
+			query = query.Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
+				Where(`
+					NOT EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = workflow_states.id)
+					OR EXISTS (SELECT 1 FROM state_viewable_roles
+					           WHERE workflow_state_id = workflow_states.id AND role_id IN ?)
+				`, filter.UserRoleIDs)
+		}
+	}
+
+	var counts []priorityCount
+	if err := query.Group("lookup_values.id, lookup_values.name, lookup_values.sort_order").
+		Order("lookup_values.sort_order ASC").
+		Scan(&counts).Error; err != nil {
+		return nil, err
+	}
+
+	// Build result map with priority names as keys
+	result := make(map[string]int64)
+	for _, pc := range counts {
+		result[pc.PriorityName] = pc.Count
+	}
+
+	return result, nil
 }
 
 func (r *incidentRepository) GetSLABreachedIncidents(ctx context.Context) ([]models.Incident, error) {
@@ -848,6 +910,10 @@ func (r *incidentRepository) CreateFeedback(ctx context.Context, feedback *model
 	return r.db.WithContext(ctx).Create(feedback).Error
 }
 
+func (r *incidentRepository) CreateNotification(ctx context.Context, notification *models.NotificationLog) error {
+	return r.db.WithContext(ctx).Create(notification).Error
+}
+
 func (r *incidentRepository) FindFeedbackByID(ctx context.Context, id uuid.UUID) (*models.IncidentFeedback, error) {
 	var feedback models.IncidentFeedback
 	err := r.db.WithContext(ctx).
@@ -918,6 +984,11 @@ func (r *incidentRepository) WithTx(tx *gorm.DB) IncidentRepository {
 func (r *incidentRepository) LockForUpdate(ctx context.Context, tx *gorm.DB, id uuid.UUID) (*models.Incident, error) {
 	var incident models.Incident
 
+	// Set lock timeout to 10 seconds to prevent indefinite waiting
+	if err := tx.Exec("SET LOCAL lock_timeout = '10s'").Error; err != nil {
+		return nil, err
+	}
+
 	err := tx.WithContext(ctx).
 		Clauses(clause.Locking{Strength: "UPDATE"}).
 		Preload("Classification").
@@ -931,4 +1002,18 @@ func (r *incidentRepository) LockForUpdate(ctx context.Context, tx *gorm.DB, id 
 	}
 
 	return &incident, nil
+}
+
+func (r *incidentRepository) FindUserOpenIncidentsForDuplicateCheck(ctx context.Context, reporterID uuid.UUID) ([]models.Incident, error) {
+
+	var incidents []models.Incident
+
+	err := r.db.WithContext(ctx).
+		Where("reporter_id = ?", reporterID).
+		Where("closed_at IS NULL").
+		Where("latitude IS NOT NULL").
+		Where("longitude IS NOT NULL").
+		Find(&incidents).Error
+
+	return incidents, err
 }

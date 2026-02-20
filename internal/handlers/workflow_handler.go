@@ -7,6 +7,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/utils"
+	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -32,8 +33,11 @@ func (h *WorkflowHandler) CreateWorkflow(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if err := h.validator.Struct(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	// Get user ID from context
@@ -236,8 +240,11 @@ func (h *WorkflowHandler) CreateState(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if err := h.validator.Struct(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	state, err := h.service.CreateState(c.Context(), workflowID, &req)
@@ -311,8 +318,11 @@ func (h *WorkflowHandler) CreateTransition(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if err := h.validator.Struct(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	transition, err := h.service.CreateTransition(c.Context(), workflowID, &req)
@@ -444,6 +454,27 @@ func (h *WorkflowHandler) SetTransitionActions(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Transition actions updated", nil)
+}
+
+func (h *WorkflowHandler) SetTransitionFieldChanges(c *fiber.Ctx) error {
+	transitionIDStr := c.Params("id")
+	transitionID, err := uuid.Parse(transitionIDStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid transition ID")
+	}
+
+	var req struct {
+		FieldChanges []models.TransitionFieldChangeRequest `json:"field_changes"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if err := h.service.SetTransitionFieldChanges(c.Context(), transitionID, req.FieldChanges); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Transition field changes updated", nil)
 }
 
 // Helper endpoints

@@ -66,6 +66,10 @@ type WorkflowRepository interface {
 	// TransitionAction CRUD
 	SetTransitionActions(ctx context.Context, transitionID uuid.UUID, actions []models.TransitionAction) error
 	GetTransitionActions(ctx context.Context, transitionID uuid.UUID) ([]models.TransitionAction, error)
+
+	// TransitionFieldChange CRUD
+	SetTransitionFieldChanges(ctx context.Context, transitionID uuid.UUID, fieldChanges []models.TransitionFieldChange) error
+	GetTransitionFieldChanges(ctx context.Context, transitionID uuid.UUID) ([]models.TransitionFieldChange, error)
 }
 
 type workflowRepository struct {
@@ -407,6 +411,9 @@ func (r *workflowRepository) FindTransitionByIDWithRelations(ctx context.Context
 		Preload("Actions", func(db *gorm.DB) *gorm.DB {
 			return db.Order("execution_order")
 		}).
+		Preload("FieldChanges", func(db *gorm.DB) *gorm.DB {
+			return db.Order("sort_order")
+		}).
 		First(&transition, "id = ?", id).Error
 	if err != nil {
 		return nil, err
@@ -424,6 +431,9 @@ func (r *workflowRepository) ListTransitionsByWorkflowID(ctx context.Context, wo
 		Preload("AssignUser").
 		Preload("AssignmentRole").
 		Preload("Requirements").
+		Preload("FieldChanges", func(db *gorm.DB) *gorm.DB {
+			return db.Order("sort_order")
+		}).
 		Where("workflow_id = ?", workflowID).
 		Order("sort_order, name").
 		Find(&transitions).Error
@@ -442,6 +452,9 @@ func (r *workflowRepository) ListTransitionsFromState(ctx context.Context, state
 		Preload("Requirements").
 		Preload("Actions", func(db *gorm.DB) *gorm.DB {
 			return db.Order("execution_order")
+		}).
+		Preload("FieldChanges", func(db *gorm.DB) *gorm.DB {
+			return db.Order("sort_order")
 		}).
 		Where("from_state_id = ? AND is_active = ?", stateID, true).
 		Order("sort_order, name").
@@ -544,6 +557,30 @@ func (r *workflowRepository) GetTransitionActions(ctx context.Context, transitio
 		Order("execution_order").
 		Find(&actions).Error
 	return actions, err
+}
+
+// TransitionFieldChange CRUD
+
+func (r *workflowRepository) SetTransitionFieldChanges(ctx context.Context, transitionID uuid.UUID, fieldChanges []models.TransitionFieldChange) error {
+	if err := r.db.WithContext(ctx).Where("transition_id = ?", transitionID).Delete(&models.TransitionFieldChange{}).Error; err != nil {
+		return err
+	}
+	for i := range fieldChanges {
+		fieldChanges[i].TransitionID = transitionID
+		if err := r.db.WithContext(ctx).Create(&fieldChanges[i]).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *workflowRepository) GetTransitionFieldChanges(ctx context.Context, transitionID uuid.UUID) ([]models.TransitionFieldChange, error) {
+	var fieldChanges []models.TransitionFieldChange
+	err := r.db.WithContext(ctx).
+		Where("transition_id = ?", transitionID).
+		Order("sort_order").
+		Find(&fieldChanges).Error
+	return fieldChanges, err
 }
 
 // AssignConvertToRequestRoles assigns roles that are allowed to convert incidents to requests for this workflow
