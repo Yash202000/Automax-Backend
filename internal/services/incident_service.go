@@ -76,24 +76,32 @@ type IncidentService interface {
 }
 
 type incidentService struct {
-	incidentRepo repository.IncidentRepository
-	workflowRepo repository.WorkflowRepository
-	userRepo     repository.UserRepository
-	storage      *storage.MinIOStorage
-	db           *gorm.DB
-	wsHub        *WSHub
-	locationRepo repository.LocationRepository
+	incidentRepo    repository.IncidentRepository
+	incidentMergeRepo repository.IncidentMergeRepository
+	workflowRepo    repository.WorkflowRepository
+	userRepo        repository.UserRepository
+	storage         *storage.MinIOStorage
+	db              *gorm.DB
+	wsHub           *WSHub
 }
 
-func NewIncidentService(incidentRepo repository.IncidentRepository, workflowRepo repository.WorkflowRepository, userRepo repository.UserRepository, storage *storage.MinIOStorage, db *gorm.DB, wsHub *WSHub, locationRepo repository.LocationRepository) IncidentService {
+func NewIncidentService(
+	incidentRepo repository.IncidentRepository,
+	incidentMergeRepo repository.IncidentMergeRepository,
+	workflowRepo repository.WorkflowRepository,
+	userRepo repository.UserRepository,
+	storage *storage.MinIOStorage,
+	db *gorm.DB,
+	wsHub *WSHub,
+) IncidentService {
 	return &incidentService{
-		incidentRepo: incidentRepo,
-		workflowRepo: workflowRepo,
-		userRepo:     userRepo,
-		storage:      storage,
-		db:           db,
-		wsHub:        wsHub,
-		locationRepo: locationRepo,
+		incidentRepo:    incidentRepo,
+		incidentMergeRepo: incidentMergeRepo,
+		workflowRepo:    workflowRepo,
+		userRepo:        userRepo,
+		storage:         storage,
+		db:              db,
+		wsHub:           wsHub,
 	}
 }
 
@@ -103,57 +111,46 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
 
 	if strings.EqualFold(clientCode, "EPM940") {
-		if req.LocationID != nil && req.ClassificationID != nil {
-
-			locationID, err1 := uuid.Parse(*req.LocationID)
-			classificationID, err2 := uuid.Parse(*req.ClassificationID)
-
-			if err1 != nil || err2 != nil {
+		// Check if the incoming request has latitude, longitude, and classification
+		if req.Latitude != nil && req.Longitude != nil && req.ClassificationID != nil {
+			classificationID, err := uuid.Parse(*req.ClassificationID)
+			if err != nil {
 				return nil, ErrInvalidLocation
 			}
 
-			// Find user's open incidents with same location and classification
-			openIncidents, err := s.incidentRepo.
-				FindUserOpenIncidentsByParent(
-					ctx,
-					reporterID,
-					locationID,
-					classificationID,
-				)
+			// Find user's open incidents that have location coordinates
+			openIncidents, err := s.incidentRepo.FindUserOpenIncidentsForDuplicateCheck(ctx, reporterID)
 			if err != nil {
 				return nil, err
 			}
 
 			if len(openIncidents) > 0 {
-				// Check if distance-based validation is possible
-				location, locErr := s.locationRepo.FindByID(ctx, locationID)
-				useDistanceCheck := locErr == nil && location.Latitude != nil && location.Longitude != nil
-
-				if !useDistanceCheck {
-					// No coordinates available — exact location_id + classification_id match is enough
-					return nil, ErrDuplicateIncident
-				}
-
-				// Distance-based check: block if any existing open incident is within range
+				// Distance threshold: block only if same classification AND within 500 meters
 				maxDistanceStr := os.Getenv("MAX_INCIDENT_DISTANCE")
 				incidentDistance, err := strconv.ParseFloat(maxDistanceStr, 64)
 				if err != nil || incidentDistance <= 0 {
-					incidentDistance = 500
+					incidentDistance = 500 // Default to 500 meters
 				}
 
 				for _, existing := range openIncidents {
-					if existing.Latitude == nil || existing.Longitude == nil {
-						// Existing incident has no coordinates — same location_id is enough
-						return nil, ErrDuplicateIncident
+					if existing.Latitude == nil || existing.Longitude == nil || existing.ClassificationID == nil {
+						continue // Skip incidents without coordinates or classification
 					}
 
+					// Check if classification matches
+					if *existing.ClassificationID != classificationID {
+						continue // Different classification - allow creation
+					}
+
+					// Calculate distance between new incident and existing incident
 					distance := utils.CalculateDistance(
-						*location.Latitude,
-						*location.Longitude,
+						*req.Latitude,
+						*req.Longitude,
 						*existing.Latitude,
 						*existing.Longitude,
 					)
 
+					// Block only if BOTH: same classification AND within distance threshold
 					if distance <= incidentDistance {
 						return nil, ErrDuplicateIncident
 					}
@@ -1172,21 +1169,17 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		// First try matching with all criteria
 		matchedUsers, err := s.userRepo.FindMatching(ctx, transition.AssignmentRoleID, classificationID, locationID, departmentID, excludeUserID)
 		if err == nil && len(matchedUsers) > 0 {
-			// Assign ALL matched users
 			for _, user := range matchedUsers {
 				assigneeUserIDs = append(assigneeUserIDs, user.ID)
 			}
-			// Set primary assignee to first matched user
 			updates["assignee_id"] = matchedUsers[0].ID
 		} else if err == nil && len(matchedUsers) == 0 {
 			// No exact matches - try matching by role only (more permissive)
 			roleOnlyUsers, roleErr := s.userRepo.FindMatching(ctx, transition.AssignmentRoleID, nil, nil, nil, excludeUserID)
 			if roleErr == nil && len(roleOnlyUsers) > 0 {
-				// Assign ALL users with that role
 				for _, user := range roleOnlyUsers {
 					assigneeUserIDs = append(assigneeUserIDs, user.ID)
 				}
-				// Set primary assignee to first matched user
 				updates["assignee_id"] = roleOnlyUsers[0].ID
 			}
 		}
@@ -1252,11 +1245,11 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	if len(assigneeUserIDs) > 0 {
 		if err := txRepo.SetAssignees(ctx, incidentID, assigneeUserIDs); err != nil {
 			// Log error but don't fail the transition
-			fmt.Printf("Warning: failed to set assignees: %v\n", err)
+			fmt.Printf("Warning: SetAssignees failed: %v\n", err)
 		}
 	}
 
-	// Prepare revision data (but don't create yet - wait until after commit)
+	// Create revision for state change (using txRepo to stay within the transaction)
 	oldStateName := transition.FromState.Name
 	newStateName := newState.Name
 	changes := []models.IncidentFieldChange{
@@ -1267,17 +1260,48 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			NewValue:   &newStateName,
 		},
 	}
-	revisionDescription := fmt.Sprintf("Status changed from %s to %s", oldStateName, newStateName)
+	revDescription := fmt.Sprintf("Status changed from %s to %s", oldStateName, newStateName)
+	revNum, _ := txRepo.GetNextRevisionNumber(ctx, incidentID)
+	changesBytes, _ := json.Marshal(changes)
+	txRepo.CreateRevision(ctx, &models.IncidentRevision{
+		IncidentID:        incidentID,
+		RevisionNumber:    revNum,
+		ActionType:        models.RevisionActionStatusChanged,
+		ActionDescription: revDescription,
+		Changes:           string(changesBytes),
+		PerformedByID:     userID,
+		CreatedAt:         time.Now(),
+	})
 
-	// Commit transaction FIRST before creating revision
+	// Commit transaction first so all master incident changes are visible
 	if err := tx.Commit().Error; err != nil {
 		return nil, err
 	}
 
-	// Create revision AFTER transaction commits (to avoid deadlock)
-	if err := s.CreateRevision(ctx, incidentID, models.RevisionActionStatusChanged, revisionDescription, changes, userID); err != nil {
-		// Don't fail the transition if revision creation fails
-		fmt.Printf("Warning: failed to create revision: %v\n", err)
+	// Handle merge-related operations AFTER commit so they can see committed data
+	if s.incidentMergeRepo != nil {
+		// Check if this is a reopen (transitioning FROM a terminal state to a non-terminal state)
+		if transition.FromState != nil && transition.FromState.StateType == "terminal" && newState.StateType != "terminal" {
+			_ = s.incidentMergeRepo.AutoUnmergeOnReopen(ctx, incidentID)
+		} else {
+			// Check if this incident has merged incidents and sync their status
+			hasMerged, mergeErr := s.incidentMergeRepo.HasMergedIncidents(ctx, incidentID)
+			if mergeErr == nil && hasMerged {
+				if newState.StateType == "terminal" {
+					// Terminal state: close all merged incidents
+					_ = s.incidentMergeRepo.CloseMergedIncidents(ctx, incidentID)
+
+					// Run feedback/attachment copy and SMS in background
+					bgCtx := context.Background()
+					go func() {
+						_ = s.autoCloseMergedIncidents(bgCtx, incidentID, req, userID)
+					}()
+				} else {
+					// Non-terminal state: just sync the status
+					_ = s.incidentMergeRepo.SyncStatusToMergedIncidents(ctx, incidentID, transition.ToStateID)
+				}
+			}
+		}
 	}
 
 	// Broadcast state change to WebSocket subscribers
@@ -1291,9 +1315,6 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			"performed_by":  userID,
 		}, userID)
 	}
-
-	// TODO: Execute transition actions (email, webhook, field updates)
-	// This would be implemented in a separate action executor service
 
 	// Fetch updated incident (outside transaction)
 	updated, err := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
@@ -1698,6 +1719,109 @@ func (s *incidentService) ListRevisions(ctx context.Context, incidentID uuid.UUI
 	}
 
 	return responses, total, nil
+}
+
+// autoCloseMergedIncidents handles closing merged incidents when master is closed
+// Copies feedback and attachments, and sends SMS notifications
+func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIncidentID uuid.UUID, transitionReq *models.IncidentTransitionRequest, userID uuid.UUID) error {
+	// Get merged incidents
+	mergedIncidents, err := s.incidentMergeRepo.GetMergedIncidents(ctx, masterIncidentID)
+	if err != nil || len(mergedIncidents) == 0 {
+		return err
+	}
+
+	// Get master incident for feedback and attachments
+	masterIncident, err := s.incidentRepo.FindByIDWithRelations(ctx, masterIncidentID)
+	if err != nil {
+		return err
+	}
+
+	// Get current user for SMS (optional, just for audit)
+	_, _ = s.userRepo.FindByID(ctx, userID)
+
+	now := time.Now()
+
+	// Process each merged incident
+	for _, merged := range mergedIncidents {
+		// Copy feedback from master to merged incident
+		if transitionReq.Feedback != nil {
+			feedback := &models.IncidentFeedback{
+				IncidentID:          merged.ID,
+				Rating:              transitionReq.Feedback.Rating,
+				Comment:             transitionReq.Feedback.Comment,
+				CreatedByID:         userID,
+				TransitionHistoryID: nil,
+			}
+			_ = s.incidentRepo.CreateFeedback(ctx, feedback)
+		}
+
+		// Copy attachments from master to merged incident
+		for _, attachment := range masterIncident.Attachments {
+			newAttachment := &models.IncidentAttachment{
+				IncidentID:          merged.ID,
+				FileName:            attachment.FileName,
+				FileSize:            attachment.FileSize,
+				MimeType:            attachment.MimeType,
+				FilePath:            attachment.FilePath,
+				UploadedByID:        attachment.UploadedByID,
+				TransitionHistoryID: nil,
+			}
+			_ = s.incidentRepo.CreateAttachment(ctx, newAttachment)
+		}
+
+		// Send SMS notification to incident owner (reporter)
+		if merged.Reporter != nil && merged.Reporter.Phone != "" {
+			smsMessage := fmt.Sprintf(
+				"Your incident %s has been automatically closed as it was merged with master incident %s. The master incident has been resolved.",
+				merged.IncidentNumber,
+				masterIncident.IncidentNumber,
+			)
+
+			notification := &models.NotificationLog{
+				Channel:    "sms",
+				Direction:  "outbound",
+				Category:   "sent",
+				Language:   "en",
+				Recipients: models.RecipientArray{{Email: merged.Reporter.Phone, Type: "to", Status: "sent"}},
+				Subject:    "Incident Closed",
+				Body:       smsMessage,
+				Status:     "sent",
+				Provider:   "mock",
+				IsRead:     false,
+				SentBy:     &userID,
+				SentAt:     &now,
+			}
+			_ = s.incidentRepo.CreateNotification(ctx, notification)
+		}
+
+		// Create revision for auto-close
+		changes := []models.IncidentFieldChange{
+			{
+				FieldName:  "current_state_id",
+				FieldLabel: "Status",
+				OldValue:   strPtr(merged.CurrentState.Name),
+				NewValue:   strPtr(masterIncident.CurrentState.Name),
+			},
+			{
+				FieldName:  "closed_at",
+				FieldLabel: "Closed At",
+				OldValue:   nil,
+				NewValue:   strPtr(time.Now().Format(time.RFC3339)),
+			},
+		}
+		
+		description := fmt.Sprintf(
+			"Automatically closed due to master incident %s being closed",
+			masterIncident.IncidentNumber,
+		)
+		
+		_ = s.CreateRevision(ctx, merged.ID, models.RevisionActionStatusChanged, description, changes, userID)
+	}
+
+	// Auto-unmerge after closing
+	_ = s.incidentMergeRepo.AutoUnmergeOnClose(ctx, masterIncidentID)
+
+	return nil
 }
 
 func (s *incidentService) CreateRevision(ctx context.Context, incidentID uuid.UUID, actionType models.IncidentRevisionActionType, description string, changes []models.IncidentFieldChange, userID uuid.UUID) error {

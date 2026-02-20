@@ -27,7 +27,7 @@ type IncidentRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 	WithTx(tx *gorm.DB) IncidentRepository
 	LockForUpdate(ctx context.Context, tx *gorm.DB, id uuid.UUID) (*models.Incident, error)
-	FindUserOpenIncidentsByParent(ctx context.Context, reporterID uuid.UUID, locationID uuid.UUID, classificationID uuid.UUID) ([]models.Incident, error)
+	FindUserOpenIncidentsForDuplicateCheck(ctx context.Context, reporterID uuid.UUID) ([]models.Incident, error)
 
 	// Incident number generation
 	GenerateIncidentNumber(ctx context.Context) (string, error)
@@ -81,6 +81,9 @@ type IncidentRepository interface {
 	FindFeedbackByID(ctx context.Context, id uuid.UUID) (*models.IncidentFeedback, error)
 	ListFeedback(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentFeedback, error)
 	LinkFeedbackToTransition(ctx context.Context, feedbackID uuid.UUID, transitionHistoryID uuid.UUID) error
+
+	// Notifications
+	CreateNotification(ctx context.Context, notification *models.NotificationLog) error
 
 	// Complaint-specific
 	IncrementEvaluationCount(ctx context.Context, id uuid.UUID) error
@@ -907,6 +910,10 @@ func (r *incidentRepository) CreateFeedback(ctx context.Context, feedback *model
 	return r.db.WithContext(ctx).Create(feedback).Error
 }
 
+func (r *incidentRepository) CreateNotification(ctx context.Context, notification *models.NotificationLog) error {
+	return r.db.WithContext(ctx).Create(notification).Error
+}
+
 func (r *incidentRepository) FindFeedbackByID(ctx context.Context, id uuid.UUID) (*models.IncidentFeedback, error) {
 	var feedback models.IncidentFeedback
 	err := r.db.WithContext(ctx).
@@ -997,15 +1004,15 @@ func (r *incidentRepository) LockForUpdate(ctx context.Context, tx *gorm.DB, id 
 	return &incident, nil
 }
 
-func (r *incidentRepository) FindUserOpenIncidentsByParent(ctx context.Context, reporterID uuid.UUID, locationID uuid.UUID, classificationID uuid.UUID) ([]models.Incident, error) {
+func (r *incidentRepository) FindUserOpenIncidentsForDuplicateCheck(ctx context.Context, reporterID uuid.UUID) ([]models.Incident, error) {
 
 	var incidents []models.Incident
 
 	err := r.db.WithContext(ctx).
 		Where("reporter_id = ?", reporterID).
-		Where("location_id = ?", locationID).
-		Where("classification_id = ?", classificationID).
 		Where("closed_at IS NULL").
+		Where("latitude IS NOT NULL").
+		Where("longitude IS NOT NULL").
 		Find(&incidents).Error
 
 	return incidents, err
