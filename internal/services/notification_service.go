@@ -20,6 +20,11 @@ type NotificationService struct {
 	userRepo     repository.UserRepository
 }
 
+type SendNotificationResult struct {
+	SentLog     *models.NotificationLog
+	InboxLogIDs []uuid.UUID // IDs of inbox copies created for internal recipients
+}
+
 func NewNotificationService(
 	templateRepo repository.NotificationTemplateRepository,
 	logRepo repository.NotificationLogRepository, userRepo repository.UserRepository,
@@ -31,7 +36,7 @@ func NewNotificationService(
 	}
 }
 
-func (s *NotificationService) SendNotification(ctx context.Context, channel string, templateCode *string, language string, to []string, cc []string, bcc []string, subject string, body string, variables map[string]string, attachments []models.AttachmentData, sentBy *uuid.UUID, sessionID *uuid.UUID) (*models.NotificationLog, error) {
+func (s *NotificationService) SendNotification(ctx context.Context, channel string, templateCode *string, language string, to []string, cc []string, bcc []string, subject string, body string, variables map[string]string, attachments []models.AttachmentData, sentBy *uuid.UUID, sessionID *uuid.UUID) (*SendNotificationResult, error) {
 
 	// REQUIRED: at least one recipient
 	if len(to) == 0 && len(cc) == 0 && len(bcc) == 0 {
@@ -248,7 +253,8 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		return nil, err
 	}
 	if status == "failed" {
-		return log, fmt.Errorf("notification delivery failed")
+		return nil, fmt.Errorf("notification delivery failed")
+	}
 	var inboxLogIDs []uuid.UUID
 
 	for _, recipientEmail := range to {
