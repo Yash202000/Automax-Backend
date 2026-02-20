@@ -777,6 +777,7 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 		PositionX:   req.PositionX,
 		PositionY:   req.PositionY,
 		SLAHours:    req.SLAHours,
+		IsMergable:  req.IsMergable,
 		SortOrder:   req.SortOrder,
 		IsActive:    true,
 	}
@@ -860,6 +861,9 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 	}
 	if req.SLAHours != nil {
 		state.SLAHours = req.SLAHours
+	}
+	if req.IsMergable != nil {
+		state.IsMergable = *req.IsMergable
 	}
 	if req.SortOrder != nil {
 		state.SortOrder = *req.SortOrder

@@ -82,6 +82,9 @@ type IncidentRepository interface {
 	ListFeedback(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentFeedback, error)
 	LinkFeedbackToTransition(ctx context.Context, feedbackID uuid.UUID, transitionHistoryID uuid.UUID) error
 
+	// Notifications
+	CreateNotification(ctx context.Context, notification *models.NotificationLog) error
+
 	// Complaint-specific
 	IncrementEvaluationCount(ctx context.Context, id uuid.UUID) error
 }
@@ -905,6 +908,10 @@ func (r *incidentRepository) GetNextRevisionNumber(ctx context.Context, incident
 
 func (r *incidentRepository) CreateFeedback(ctx context.Context, feedback *models.IncidentFeedback) error {
 	return r.db.WithContext(ctx).Create(feedback).Error
+}
+
+func (r *incidentRepository) CreateNotification(ctx context.Context, notification *models.NotificationLog) error {
+	return r.db.WithContext(ctx).Create(notification).Error
 }
 
 func (r *incidentRepository) FindFeedbackByID(ctx context.Context, id uuid.UUID) (*models.IncidentFeedback, error) {

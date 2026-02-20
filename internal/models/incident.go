@@ -87,6 +87,14 @@ type Incident struct {
 	// Multiple Assignees (many-to-many)
 	Assignees []User `gorm:"many2many:incident_assignees;" json:"assignees,omitempty"`
 
+	// Merge Relationships - tracked via incident_merges table (no FK constraint)
+	MasterIncidentID *uuid.UUID `gorm:"type:uuid;index;column:master_incident_id" json:"master_incident_id,omitempty"`
+	MasterIncident   *Incident  `gorm:"-" json:"master_incident,omitempty"`
+	MergedIncidents  []Incident `gorm:"-" json:"merged_incidents,omitempty"`
+	IsMerged         bool       `gorm:"default:false;index" json:"is_merged"`
+	MergedAt         *time.Time `json:"merged_at,omitempty"`
+	MergedByUserID   *uuid.UUID `gorm:"type:uuid" json:"merged_by_user_id,omitempty"`
+
 	// Related records
 	Comments          []IncidentComment           `gorm:"foreignKey:IncidentID" json:"comments,omitempty"`
 	Attachments       []IncidentAttachment        `gorm:"foreignKey:IncidentID" json:"attachments,omitempty"`
@@ -458,6 +466,70 @@ type IncidentFilter struct {
 	UserRoleIDs      []uuid.UUID `json:"-"` // For filtering stats by user's roles
 }
 
+// Merge Incident Types
+
+// IncidentMergeRequest for merging multiple incidents
+type IncidentMergeRequest struct {
+	IncidentIDs      []string `json:"incident_ids" validate:"required,min=2,dive,uuid"`  // IDs of incidents to merge
+	MasterIncidentID string   `json:"master_incident_id" validate:"required,uuid"`       // ID of the master incident (must be one of the selected incidents)
+	Comment          string   `json:"comment"`                                           // Optional comment for the merge
+}
+
+// IncidentUnmergeRequest for unmerging a single incident
+type IncidentUnmergeRequest struct {
+	IncidentID string `json:"incident_id" validate:"required,uuid"` // ID of incident to unmerge
+	Comment    string `json:"comment"`                              // Optional comment for the unmerge
+}
+
+// IncidentBulkUnmergeRequest for unmerging multiple incidents at once
+type IncidentBulkUnmergeRequest struct {
+	IncidentIDs []string `json:"incident_ids" validate:"required,min=1,dive,uuid"`
+	Comment     string   `json:"comment"`
+}
+
+// IncidentBulkUnmergeResponse for bulk unmerge operation result
+type IncidentBulkUnmergeResponse struct {
+	UnmergedCount int      `json:"unmerged_count"`
+	Failures      []string `json:"failures,omitempty"`
+	Message       string   `json:"message"`
+}
+
+// IncidentMergeValidationRequest for validating if incidents can be merged
+type IncidentMergeValidationRequest struct {
+	IncidentIDs []string `json:"incident_ids" validate:"required,min=2,dive,uuid"`
+}
+
+// IncidentMergeValidationResponse for merge validation result
+type IncidentMergeValidationResponse struct {
+	CanMerge    bool     `json:"can_merge"`
+	Errors      []string `json:"errors,omitempty"`
+	Warning     string   `json:"warning,omitempty"`
+	MasterOptions []IncidentMergeOption `json:"master_options,omitempty"` // Valid master incident options
+}
+
+// IncidentMergeOption represents a valid option for master incident
+type IncidentMergeOption struct {
+	ID             uuid.UUID `json:"id"`
+	IncidentNumber string    `json:"incident_number"`
+	Title          string    `json:"title"`
+	CurrentStateID uuid.UUID `json:"current_state_id"`
+	CurrentState   string    `json:"current_state"`
+}
+
+// IncidentMergeResponse for merge operation result
+type IncidentMergeResponse struct {
+	MasterIncident   *IncidentResponse `json:"master_incident"`
+	MergedIncidents  []IncidentResponse `json:"merged_incidents"` // List of incidents that were merged
+	MergedCount      int               `json:"merged_count"`
+	Message          string            `json:"message"`
+}
+
+// IncidentUnmergeResponse for unmerge operation result
+type IncidentUnmergeResponse struct {
+	UnmergedIncident *IncidentResponse `json:"unmerged_incident"`
+	Message          string            `json:"message"`
+}
+
 // Response types
 
 type IncidentResponse struct {
@@ -471,40 +543,47 @@ type IncidentResponse struct {
 	ConvertedRequestID *uuid.UUID              `json:"converted_request_id,omitempty"`
 	ConvertedRequest   *IncidentResponse       `json:"converted_request,omitempty"`
 	Classification     *ClassificationResponse `json:"classification,omitempty"`
-	Workflow           *WorkflowResponse       `json:"workflow,omitempty"`
-	CurrentState       *WorkflowStateResponse  `json:"current_state,omitempty"`
-	Assignee           *UserResponse           `json:"assignee,omitempty"`
-	Assignees          []UserResponse          `json:"assignees,omitempty"`
-	Department         *DepartmentResponse     `json:"department,omitempty"`
-	Location           *LocationResponse       `json:"location,omitempty"`
-	Latitude           *float64                `json:"latitude,omitempty"`
-	Longitude          *float64                `json:"longitude,omitempty"`
-	Address            string                  `json:"address,omitempty"`
-	City               string                  `json:"city,omitempty"`
-	State              string                  `json:"state,omitempty"`
-	Country            string                  `json:"country,omitempty"`
-	PostalCode         string                  `json:"postal_code,omitempty"`
-	DueDate            *time.Time              `json:"due_date"`
-	ResolvedAt         *time.Time              `json:"resolved_at"`
-	ClosedAt           *time.Time              `json:"closed_at"`
-	SLABreached        bool                    `json:"sla_breached"`
-	SLADeadline        *time.Time              `json:"sla_deadline"`
-	Source             string                  `json:"source,omitempty"`
-	Reporter           *UserResponse           `json:"reporter,omitempty"`
-	ReporterEmail      string                  `json:"reporter_email"`
-	ReporterName       string                  `json:"reporter_name"`
-	Channel            string                  `json:"channel,omitempty"`
-	CreatedByName      string                  `json:"created_by_name,omitempty"`
-	CreatedByMobile    string                  `json:"created_by_mobile,omitempty"`
-	EvaluationCount    int                     `json:"evaluation_count,omitempty"`
-	CustomFields       string                  `json:"custom_fields,omitempty"`
-	CommentsCount      int                     `json:"comments_count"`
-	AttachmentsCount   int                     `json:"attachments_count"`
-	CreatedAt          time.Time               `json:"created_at"`
-	UpdatedAt          time.Time               `json:"updated_at"`
-	LookupValues       []LookupValueResponse   `json:"lookup_values,omitempty"`
-	Version            int                     `json:"version"`
-	ActiveViewers      int                     `json:"active_viewers,omitempty"` // Number of users currently viewing this incident
+	Workflow         *WorkflowResponse       `json:"workflow,omitempty"`
+	CurrentState     *WorkflowStateResponse  `json:"current_state,omitempty"`
+	Assignee         *UserResponse           `json:"assignee,omitempty"`
+	Assignees        []UserResponse          `json:"assignees,omitempty"`
+	Department       *DepartmentResponse     `json:"department,omitempty"`
+	Location         *LocationResponse       `json:"location,omitempty"`
+	Latitude         *float64                `json:"latitude,omitempty"`
+	Longitude        *float64                `json:"longitude,omitempty"`
+	Address          string                  `json:"address,omitempty"`
+	City             string                  `json:"city,omitempty"`
+	State            string                  `json:"state,omitempty"`
+	Country          string                  `json:"country,omitempty"`
+	PostalCode       string                  `json:"postal_code,omitempty"`
+	DueDate          *time.Time              `json:"due_date"`
+	ResolvedAt       *time.Time              `json:"resolved_at"`
+	ClosedAt         *time.Time              `json:"closed_at"`
+	SLABreached      bool                    `json:"sla_breached"`
+	SLADeadline      *time.Time              `json:"sla_deadline"`
+	Source           string                  `json:"source,omitempty"`
+	Reporter         *UserResponse           `json:"reporter,omitempty"`
+	ReporterEmail    string                  `json:"reporter_email"`
+	ReporterName     string                  `json:"reporter_name"`
+	Channel          string                  `json:"channel,omitempty"`
+	CreatedByName    string                  `json:"created_by_name,omitempty"`
+	CreatedByMobile  string                  `json:"created_by_mobile,omitempty"`
+	EvaluationCount  int                     `json:"evaluation_count,omitempty"`
+	CustomFields     string                  `json:"custom_fields,omitempty"`
+	CommentsCount    int                     `json:"comments_count"`
+	AttachmentsCount int                     `json:"attachments_count"`
+	CreatedAt        time.Time               `json:"created_at"`
+	UpdatedAt        time.Time               `json:"updated_at"`
+	LookupValues     []LookupValueResponse   `json:"lookup_values,omitempty"`
+	Version          int                     `json:"version"`
+	ActiveViewers    int                     `json:"active_viewers,omitempty"` // Number of users currently viewing this incident
+
+	// Merge-related fields
+	MasterIncidentID   *uuid.UUID          `json:"master_incident_id,omitempty"`
+	MasterIncident     *IncidentResponse   `json:"master_incident,omitempty"`
+	IsMerged           bool                `json:"is_merged"`
+	MergedAt           *time.Time          `json:"merged_at,omitempty"`
+	MergedIncidentsCount int               `json:"merged_incidents_count,omitempty"` // Number of incidents merged into this one
 }
 
 type IncidentDetailResponse struct {
@@ -681,6 +760,17 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 	if i.Reporter != nil {
 		reporterResp := ToUserResponse(i.Reporter)
 		resp.Reporter = &reporterResp
+	}
+
+	// Merge-related fields
+	resp.MasterIncidentID = i.MasterIncidentID
+	resp.IsMerged = i.IsMerged
+	resp.MergedAt = i.MergedAt
+	resp.MergedIncidentsCount = len(i.MergedIncidents)
+
+	if i.MasterIncident != nil {
+		masterResp := ToIncidentResponse(i.MasterIncident)
+		resp.MasterIncident = &masterResp
 	}
 
 	return resp
