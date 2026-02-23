@@ -48,3 +48,4 @@ temp/
 # Debug
 debug
 __debug_bin
+.env

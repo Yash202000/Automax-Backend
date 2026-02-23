@@ -6,11 +6,14 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig
-	Database DatabaseConfig
-	Redis    RedisConfig
-	MinIO    MinIOConfig
-	JWT      JWTConfig
+	Server        ServerConfig
+	Database      DatabaseConfig
+	Redis         RedisConfig
+	MinIO         MinIOConfig
+	JWT           JWTConfig
+	SSOPrivateKey  string // env: SSO_RSA_PRIVATE_KEY (PEM, optional — auto-gen if empty)
+	SSOIssuerURL   string // env: SSO_ISSUER_URL (e.g. https://automax.example.com — embedded in iss claim)
+	SSOFrontendURL string // env: SSO_FRONTEND_URL (e.g. https://automax.example.com — where /sso-complete lives)
 }
 
 type ServerConfig struct {
@@ -78,6 +81,9 @@ func Load() *Config {
 			Secret:     getEnv("JWT_SECRET", "your-super-secret-jwt-key-change-in-production"),
 			ExpireHour: getEnvAsInt("JWT_EXPIRE_HOUR", 24),
 		},
+		SSOPrivateKey:  getEnv("SSO_RSA_PRIVATE_KEY", ""),
+		SSOIssuerURL:   getEnv("SSO_ISSUER_URL", ""),
+		SSOFrontendURL: getEnv("SSO_FRONTEND_URL", ""),
 	}
 }
 

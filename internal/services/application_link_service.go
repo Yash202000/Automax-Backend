@@ -29,14 +29,16 @@ func NewApplicationLinkService(linkRepo repository.ApplicationLinkRepository) Ap
 
 func (s *applicationLinkService) CreateLink(ctx context.Context, req *models.ApplicationLinkCreateRequest) (*models.ApplicationLinkResponse, error) {
 	link := &models.ApplicationLink{
-		Name:        req.Name,
-		Description: req.Description,
-		URL:         req.URL,
-		Icon:        req.Icon,
-		ImageURL:    req.ImageURL,
-		Color:       req.Color,
-		SortOrder:   req.SortOrder,
-		IsActive:    req.IsActive,
+		Name:           req.Name,
+		Description:    req.Description,
+		URL:            req.URL,
+		Icon:           req.Icon,
+		ImageURL:       req.ImageURL,
+		Color:          req.Color,
+		SortOrder:      req.SortOrder,
+		IsActive:       req.IsActive,
+		SSOEnabled:     req.SSOEnabled,
+		SSOCallbackURL: req.SSOCallbackURL,
 	}
 
 	// Set defaults if not provided
@@ -123,6 +125,12 @@ func (s *applicationLinkService) UpdateLink(ctx context.Context, id uuid.UUID, r
 	}
 	if req.IsActive != nil {
 		link.IsActive = *req.IsActive
+	}
+	if req.SSOEnabled != nil {
+		link.SSOEnabled = *req.SSOEnabled
+	}
+	if req.SSOCallbackURL != nil {
+		link.SSOCallbackURL = *req.SSOCallbackURL
 	}
 
 	if err := s.linkRepo.Update(ctx, link); err != nil {

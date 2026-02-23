@@ -97,3 +97,45 @@ func (s *SessionStore) IsTokenBlacklisted(ctx context.Context, token string) (bo
 	key := fmt.Sprintf("blacklist:%s", token)
 	return s.Exists(ctx, key)
 }
+
+// SetSSONonce stores a single-use SSO nonce (jti) with the given TTL.
+// Key pattern: sso:nonce:{jti}
+func (s *SessionStore) SetSSONonce(ctx context.Context, jti string, ttl time.Duration) error {
+	key := fmt.Sprintf("sso:nonce:%s", jti)
+	return s.client.Set(ctx, key, "1", ttl).Err()
+}
+
+// ConsumeSSONonce atomically checks for and deletes an SSO nonce.
+// Returns true if the nonce existed (first use), false if already consumed or expired.
+// Use this for same-deployment SSO where provider and receiver share the same Redis.
+func (s *SessionStore) ConsumeSSONonce(ctx context.Context, jti string) (bool, error) {
+	key := fmt.Sprintf("sso:nonce:%s", jti)
+	pipe := s.client.Pipeline()
+	getCmd := pipe.Get(ctx, key)
+	pipe.Del(ctx, key)
+	_, err := pipe.Exec(ctx)
+	if err != nil && err != redis.Nil {
+		return false, err
+	}
+	val, err := getCmd.Result()
+	if err == redis.Nil || val == "" {
+		return false, nil
+	}
+	return true, nil
+}
+
+// ClaimSSONonce atomically claims a JTI on first use via SET NX.
+// Returns true if this is the first time this JTI has been seen (valid).
+// Returns false if the JTI was already claimed (replay attack).
+//
+// Use this in the SSO callback receiver — works for both same-deployment and
+// cross-deployment SSO because it tracks consumed JTIs independently in the
+// receiver's own Redis, without relying on the provider having pre-stored the nonce.
+func (s *SessionStore) ClaimSSONonce(ctx context.Context, jti string, ttl time.Duration) (bool, error) {
+	key := fmt.Sprintf("sso:nonce:claimed:%s", jti)
+	ok, err := s.client.SetNX(ctx, key, "1", ttl).Result()
+	if err != nil {
+		return false, err
+	}
+	return ok, nil
+}
