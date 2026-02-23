@@ -22,6 +22,14 @@ type ClassificationRepository interface {
 	GetChildren(ctx context.Context, parentID uuid.UUID) ([]models.Classification, error)
 	GetByParentID(ctx context.Context, parentID *uuid.UUID) ([]models.Classification, error)
 	GetTreeWithStats(ctx context.Context, recordType string) ([]models.ClassificationWithStats, error)
+	// Classification Criticality methods
+	CreateCriticality(ctx context.Context, criticality *models.ClassificationCriticality) error
+	UpdateCriticality(ctx context.Context, criticality *models.ClassificationCriticality) error
+	DeleteCriticality(ctx context.Context, id uuid.UUID) error
+	GetCriticalitiesByClassificationID(ctx context.Context, classificationID uuid.UUID) ([]models.ClassificationCriticality, error)
+	GetCriticalityByID(ctx context.Context, id uuid.UUID) (*models.ClassificationCriticality, error)
+	GetCriticalityByClassificationAndCriticalityID(ctx context.Context, classificationID, criticalityID uuid.UUID) (*models.ClassificationCriticality, error)
+	GetCriticalityByClassificationAndPriorityCode(ctx context.Context, classificationID uuid.UUID, priorityCode string) (*models.ClassificationCriticality, error)
 }
 
 type classificationRepository struct {
@@ -49,7 +57,10 @@ func (r *classificationRepository) Create(ctx context.Context, classification *m
 
 func (r *classificationRepository) FindByID(ctx context.Context, id uuid.UUID) (*models.Classification, error) {
 	var classification models.Classification
-	err := r.db.WithContext(ctx).Preload("Children").First(&classification, "id = ?", id).Error
+	err := r.db.WithContext(ctx).
+		Preload("Children").
+		Preload("Criticalities.Criticality").
+		First(&classification, "id = ?", id).Error
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +92,10 @@ func (r *classificationRepository) Delete(ctx context.Context, id uuid.UUID) err
 
 func (r *classificationRepository) List(ctx context.Context) ([]models.Classification, error) {
 	var classifications []models.Classification
-	err := r.db.WithContext(ctx).Order("sort_order, name").Find(&classifications).Error
+	err := r.db.WithContext(ctx).
+		Preload("Criticalities.Criticality").
+		Order("sort_order, name").
+		Find(&classifications).Error
 	return classifications, err
 }
 
@@ -100,6 +114,9 @@ func (r *classificationRepository) GetTree(ctx context.Context) ([]models.Classi
 	var roots []models.Classification
 	err := r.db.WithContext(ctx).
 		Where("parent_id IS NULL").
+		Preload("Criticalities.Criticality").
+		Preload("Children.Criticalities.Criticality").
+		Preload("Children.Children.Criticalities.Criticality").
 		Preload("Children", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order, name")
 		}).
@@ -120,6 +137,9 @@ func (r *classificationRepository) GetTreeByType(ctx context.Context, classType 
 	err := r.db.WithContext(ctx).
 		Where("parent_id IS NULL").
 		Where("type = ? OR type = 'both' OR type = 'all'", classType).
+		Preload("Criticalities.Criticality").
+		Preload("Children.Criticalities.Criticality").
+		Preload("Children.Children.Criticalities.Criticality").
 		Preload("Children", typeFilter).
 		Preload("Children.Children", typeFilter).
 		Preload("Children.Children.Children", typeFilter).
@@ -236,4 +256,65 @@ func (r *classificationRepository) GetTreeWithStats(ctx context.Context, recordT
 	}
 
 	return roots, nil
+}
+
+// Classification Criticality methods
+
+func (r *classificationRepository) CreateCriticality(ctx context.Context, criticality *models.ClassificationCriticality) error {
+	return r.db.WithContext(ctx).Create(criticality).Error
+}
+
+func (r *classificationRepository) UpdateCriticality(ctx context.Context, criticality *models.ClassificationCriticality) error {
+	return r.db.WithContext(ctx).Save(criticality).Error
+}
+
+func (r *classificationRepository) DeleteCriticality(ctx context.Context, id uuid.UUID) error {
+	return r.db.WithContext(ctx).Delete(&models.ClassificationCriticality{}, "id = ?", id).Error
+}
+
+func (r *classificationRepository) GetCriticalitiesByClassificationID(ctx context.Context, classificationID uuid.UUID) ([]models.ClassificationCriticality, error) {
+	var criticalities []models.ClassificationCriticality
+	err := r.db.WithContext(ctx).
+		Preload("Criticality").
+		Where("classification_id = ?", classificationID).
+		Find(&criticalities).Error
+	return criticalities, err
+}
+
+func (r *classificationRepository) GetCriticalityByID(ctx context.Context, id uuid.UUID) (*models.ClassificationCriticality, error) {
+	var criticality models.ClassificationCriticality
+	err := r.db.WithContext(ctx).
+		Preload("Criticality").
+		First(&criticality, "id = ?", id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &criticality, nil
+}
+
+func (r *classificationRepository) GetCriticalityByClassificationAndCriticalityID(ctx context.Context, classificationID, criticalityID uuid.UUID) (*models.ClassificationCriticality, error) {
+	var criticality models.ClassificationCriticality
+	err := r.db.WithContext(ctx).
+		Preload("Criticality").
+		Where("classification_id = ? AND criticality_id = ?", classificationID, criticalityID).
+		First(&criticality).Error
+	if err != nil {
+		return nil, err
+	}
+	return &criticality, nil
+}
+
+// GetCriticalityByClassificationAndPriorityCode gets the classification criticality by classification ID and priority code (e.g., "CRITICAL", "HIGH")
+func (r *classificationRepository) GetCriticalityByClassificationAndPriorityCode(ctx context.Context, classificationID uuid.UUID, priorityCode string) (*models.ClassificationCriticality, error) {
+	var criticality models.ClassificationCriticality
+	err := r.db.WithContext(ctx).
+		Joins("JOIN lookup_values ON lookup_values.id = classification_criticalities.criticality_id").
+		Joins("JOIN lookup_categories ON lookup_categories.id = lookup_values.category_id").
+		Where("classification_criticalities.classification_id = ? AND lookup_categories.code = ? AND lookup_values.code = ?", classificationID, "PRIORITY", priorityCode).
+		Preload("Criticality").
+		First(&criticality).Error
+	if err != nil {
+		return nil, err
+	}
+	return &criticality, nil
 }
