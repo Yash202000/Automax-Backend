@@ -55,6 +55,7 @@ func Migrate(db *gorm.DB) error {
 		&models.Permission{},
 		&models.Role{},
 		&models.Classification{},
+		&models.ClassificationCriticality{},
 		&models.Location{},
 		&models.Department{},
 		&models.User{},

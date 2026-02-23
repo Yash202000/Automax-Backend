@@ -33,6 +33,7 @@ type UserRepository interface {
 
 	FindByExtension(ctx context.Context, extension string) (*models.User, error)
 	FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.User, error)
+	FindByRoleAndContext(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID *uuid.UUID) ([]models.User, error)
 }
 
 type userRepository struct {
@@ -403,5 +404,44 @@ func (r *userRepository) FindByIDs(ctx context.Context, ids []uuid.UUID) ([]mode
 
 	var users []models.User
 	err := r.db.WithContext(ctx).Where("id IN ?", ids).Find(&users).Error
+	return users, err
+}
+
+// FindByRoleAndContext finds users with specified roles who match the incident context (classification, location, department)
+func (r *userRepository) FindByRoleAndContext(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID *uuid.UUID) ([]models.User, error) {
+	if len(roleIDs) == 0 {
+		return []models.User{}, nil
+	}
+
+	var users []models.User
+	query := r.db.WithContext(ctx).
+		Preload("Roles").
+		Preload("Departments").
+		Preload("Locations").
+		Preload("Classifications").
+		Joins("JOIN user_roles ON user_roles.user_id = users.id").
+		Where("user_roles.role_id IN ?", roleIDs).
+		Where("users.is_active = ?", true).
+		Distinct("users.*")
+
+	// Filter by department if provided
+	if departmentID != nil {
+		query = query.Joins("JOIN user_departments ON user_departments.user_id = users.id").
+			Where("user_departments.department_id = ?", departmentID)
+	}
+
+	// Filter by classification if provided
+	if classificationID != nil {
+		query = query.Joins("JOIN user_classifications ON user_classifications.user_id = users.id").
+			Where("user_classifications.classification_id = ?", classificationID)
+	}
+
+	// Filter by location if provided
+	if locationID != nil {
+		query = query.Joins("JOIN user_locations ON user_locations.user_id = users.id").
+			Where("user_locations.location_id = ?", locationID)
+	}
+
+	err := query.Find(&users).Error
 	return users, err
 }

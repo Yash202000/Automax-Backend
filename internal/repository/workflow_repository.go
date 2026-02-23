@@ -70,6 +70,7 @@ type WorkflowRepository interface {
 	// TransitionFieldChange CRUD
 	SetTransitionFieldChanges(ctx context.Context, transitionID uuid.UUID, fieldChanges []models.TransitionFieldChange) error
 	GetTransitionFieldChanges(ctx context.Context, transitionID uuid.UUID) ([]models.TransitionFieldChange, error)
+	GetTransitionsByFromState(ctx context.Context, workflowID, fromStateID uuid.UUID) ([]models.WorkflowTransition, error)
 }
 
 type workflowRepository struct {
@@ -651,4 +652,17 @@ func (r *workflowRepository) FindWorkflowsByRecordTypeAndClassifications(
 	}
 
 	return workflows, nil
+}
+
+// GetTransitionsByFromState gets all transitions from a specific state
+func (r *workflowRepository) GetTransitionsByFromState(ctx context.Context, workflowID, fromStateID uuid.UUID) ([]models.WorkflowTransition, error) {
+	var transitions []models.WorkflowTransition
+	err := r.db.WithContext(ctx).
+		Preload("AllowedRoles").
+		Preload("FromState").
+		Preload("ToState").
+		Where("workflow_id = ? AND from_state_id = ? AND is_active = ?", workflowID, fromStateID, true).
+		Order("sort_order").
+		Find(&transitions).Error
+	return transitions, err
 }

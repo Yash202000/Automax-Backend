@@ -9,25 +9,48 @@ import (
 
 // Classification represents a hierarchical classification (e.g., Incident > Hardware > Laptop)
 type Classification struct {
-	ID          uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
-	Name        string         `gorm:"not null;size:100" json:"name"`
-	Description string         `gorm:"size:500" json:"description"`
-	Type        string         `gorm:"size:20;default:'both'" json:"type"` // 'incident', 'request', 'complaint', 'query', 'both', 'all'
-	ParentID    *uuid.UUID     `gorm:"type:uuid;index" json:"parent_id"`
-	Parent      *Classification `gorm:"foreignKey:ParentID" json:"parent,omitempty"`
-	Children    []Classification `gorm:"foreignKey:ParentID" json:"children,omitempty"`
-	Level       int            `gorm:"default:0" json:"level"`
-	Path        string         `gorm:"size:1000" json:"path"` // Materialized path for efficient queries
-	IsActive    bool           `gorm:"default:true" json:"is_active"`
-	SortOrder   int            `gorm:"default:0" json:"sort_order"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+	ID             uuid.UUID              `gorm:"type:uuid;primary_key" json:"id"`
+	Name           string                 `gorm:"not null;size:100" json:"name"`
+	Description    string                 `gorm:"size:500" json:"description"`
+	Type           string                 `gorm:"size:20;default:'both'" json:"type"` // 'incident', 'request', 'complaint', 'query', 'both', 'all'
+	ParentID       *uuid.UUID             `gorm:"type:uuid;index" json:"parent_id"`
+	Parent         *Classification        `gorm:"foreignKey:ParentID" json:"parent,omitempty"`
+	Children       []Classification       `gorm:"foreignKey:ParentID" json:"children,omitempty"`
+	Level          int                    `gorm:"default:0" json:"level"`
+	Path           string                 `gorm:"size:1000" json:"path"` // Materialized path for efficient queries
+	IsActive       bool                   `gorm:"default:true" json:"is_active"`
+	SortOrder      int                    `gorm:"default:0" json:"sort_order"`
+	Criticalities  []ClassificationCriticality `gorm:"foreignKey:ClassificationID" json:"criticalities,omitempty"`
+	CreatedAt      time.Time              `json:"created_at"`
+	UpdatedAt      time.Time              `json:"updated_at"`
+	DeletedAt      gorm.DeletedAt         `gorm:"index" json:"-"`
+}
+
+// ClassificationCriticality represents the max closing time for a classification based on criticality
+type ClassificationCriticality struct {
+	ID               uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	ClassificationID uuid.UUID      `gorm:"type:uuid;index;not null" json:"classification_id"`
+	Classification   *Classification `gorm:"foreignKey:ClassificationID" json:"classification,omitempty"`
+	CriticalityID    uuid.UUID      `gorm:"type:uuid;index;not null" json:"criticality_id"` // References LookupValue ID for criticality
+	Criticality      *LookupValue   `gorm:"foreignKey:CriticalityID" json:"criticality,omitempty"`
+	MaxClosingHours  int            `gorm:"not null;default:0" json:"max_closing_hours"`   // Hours component
+	MaxClosingMinutes int           `gorm:"not null;default:0" json:"max_closing_minutes"` // Minutes component (0-59)
+	IsActive         bool           `gorm:"default:true" json:"is_active"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
+	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (c *Classification) BeforeCreate(tx *gorm.DB) error {
 	if c.ID == uuid.Nil {
 		c.ID = uuid.New()
+	}
+	return nil
+}
+
+func (cc *ClassificationCriticality) BeforeCreate(tx *gorm.DB) error {
+	if cc.ID == uuid.Nil {
+		cc.ID = uuid.New()
 	}
 	return nil
 }
@@ -52,17 +75,18 @@ type ClassificationUpdateRequest struct {
 
 // ClassificationResponse for API responses
 type ClassificationResponse struct {
-	ID          uuid.UUID                `json:"id"`
-	Name        string                   `json:"name"`
-	Description string                   `json:"description"`
-	Type        string                   `json:"type"`
-	ParentID    *uuid.UUID               `json:"parent_id"`
-	Level       int                      `json:"level"`
-	Path        string                   `json:"path"`
-	IsActive    bool                     `json:"is_active"`
-	SortOrder   int                      `json:"sort_order"`
-	Children    []ClassificationResponse `json:"children,omitempty"`
-	CreatedAt   time.Time                `json:"created_at"`
+	ID            uuid.UUID                      `json:"id"`
+	Name          string                         `json:"name"`
+	Description   string                         `json:"description"`
+	Type          string                         `json:"type"`
+	ParentID      *uuid.UUID                     `json:"parent_id"`
+	Level         int                            `json:"level"`
+	Path          string                         `json:"path"`
+	IsActive      bool                           `json:"is_active"`
+	SortOrder     int                            `json:"sort_order"`
+	Criticalities []ClassificationCriticalityResponse `json:"criticalities,omitempty"`
+	Children      []ClassificationResponse       `json:"children,omitempty"`
+	CreatedAt     time.Time                      `json:"created_at"`
 }
 
 func ToClassificationResponse(c *Classification) ClassificationResponse {
@@ -77,6 +101,13 @@ func ToClassificationResponse(c *Classification) ClassificationResponse {
 		IsActive:    c.IsActive,
 		SortOrder:   c.SortOrder,
 		CreatedAt:   c.CreatedAt,
+	}
+
+	if len(c.Criticalities) > 0 {
+		resp.Criticalities = make([]ClassificationCriticalityResponse, len(c.Criticalities))
+		for i, crit := range c.Criticalities {
+			resp.Criticalities[i] = ToClassificationCriticalityResponse(&crit)
+		}
 	}
 
 	if len(c.Children) > 0 {
@@ -103,4 +134,72 @@ type ClassificationWithStats struct {
 	Count       int64                     `json:"count"`
 	Children    []ClassificationWithStats `json:"children,omitempty"`
 	CreatedAt   time.Time                 `json:"created_at"`
+}
+
+// ClassificationCriticalityCreateRequest for creating classification criticality settings
+type ClassificationCriticalityCreateRequest struct {
+	CriticalityID     string `json:"criticality_id" validate:"required,uuid"`
+	MaxClosingHours   int    `json:"max_closing_hours" validate:"required,min=0"`
+	MaxClosingMinutes int    `json:"max_closing_minutes" validate:"required,min=0,max=59"`
+}
+
+// ClassificationCriticalityUpdateRequest for updating classification criticality settings
+type ClassificationCriticalityUpdateRequest struct {
+	MaxClosingHours   *int `json:"max_closing_hours" validate:"omitempty,min=0"`
+	MaxClosingMinutes *int `json:"max_closing_minutes" validate:"omitempty,min=0,max=59"`
+	IsActive          *bool `json:"is_active"`
+}
+
+// ClassificationCriticalityResponse for API responses
+type ClassificationCriticalityResponse struct {
+	ID                uuid.UUID         `json:"id"`
+	ClassificationID  uuid.UUID         `json:"classification_id"`
+	CriticalityID     uuid.UUID         `json:"criticality_id"`
+	Criticality       *LookupValueResponse `json:"criticality,omitempty"`
+	MaxClosingHours   int               `json:"max_closing_hours"`
+	MaxClosingMinutes int               `json:"max_closing_minutes"`
+	IsActive          bool              `json:"is_active"`
+	CreatedAt         time.Time         `json:"created_at"`
+	UpdatedAt         time.Time         `json:"updated_at"`
+}
+
+// ToClassificationCriticalityResponse converts ClassificationCriticality to response
+func ToClassificationCriticalityResponse(cc *ClassificationCriticality) ClassificationCriticalityResponse {
+	resp := ClassificationCriticalityResponse{
+		ID:                cc.ID,
+		ClassificationID:  cc.ClassificationID,
+		CriticalityID:     cc.CriticalityID,
+		MaxClosingHours:   cc.MaxClosingHours,
+		MaxClosingMinutes: cc.MaxClosingMinutes,
+		IsActive:          cc.IsActive,
+		CreatedAt:         cc.CreatedAt,
+		UpdatedAt:         cc.UpdatedAt,
+	}
+	if cc.Criticality != nil {
+		resp.Criticality = &LookupValueResponse{
+			ID:          cc.Criticality.ID,
+			CategoryID:  cc.Criticality.CategoryID,
+			Code:        cc.Criticality.Code,
+			Name:        cc.Criticality.Name,
+			NameAr:      cc.Criticality.NameAr,
+			Description: cc.Criticality.Description,
+			SortOrder:   cc.Criticality.SortOrder,
+			Color:       cc.Criticality.Color,
+			IsDefault:   cc.Criticality.IsDefault,
+			IsActive:    cc.Criticality.IsActive,
+			CreatedAt:   cc.Criticality.CreatedAt,
+			UpdatedAt:   cc.Criticality.UpdatedAt,
+		}
+	}
+	return resp
+}
+
+// ClassificationCreateRequestWithCriticalities extends ClassificationCreateRequest with criticalities
+type ClassificationCreateRequestWithCriticalities struct {
+	Name          string                              `json:"name" validate:"required,min=1,max=100"`
+	Description   string                              `json:"description" validate:"max=500"`
+	Type          string                              `json:"type" validate:"omitempty,oneof=incident request complaint query both all"`
+	ParentID      *uuid.UUID                          `json:"parent_id"`
+	SortOrder     int                                 `json:"sort_order"`
+	Criticalities []ClassificationCriticalityCreateRequest `json:"criticalities,omitempty"`
 }

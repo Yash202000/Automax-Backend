@@ -91,7 +91,7 @@ func main() {
 	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg, actionLogService)
 	callLogService := services.NewCallLogService(callLogRepo, userRepo)
 	workflowService := services.NewWorkflowService(workflowRepo, roleRepo, departmentRepo, classificationRepo, db)
-	incidentService := services.NewIncidentService(incidentRepo, incidentMergeRepo, workflowRepo, userRepo, minioStorage, db, wsHub)
+	incidentService := services.NewIncidentService(incidentRepo, incidentMergeRepo, workflowRepo, userRepo, classificationRepo, minioStorage, db, wsHub)
 	incidentMergeService := services.NewIncidentMergeService(incidentMergeRepo, incidentRepo, workflowRepo, roleRepo, locationRepo, classificationRepo, db, wsHub)
 	reportService := services.NewReportService(reportRepo)
 	reportTemplateService := services.NewReportTemplateService(reportTemplateRepo, reportRepo)
@@ -304,6 +304,12 @@ func main() {
 	classifications.Get("/:id", authMiddleware.RequirePermission("classifications:view"), classificationHandler.GetByID)
 	classifications.Put("/:id", authMiddleware.RequirePermission("classifications:update"), classificationHandler.Update)
 	classifications.Delete("/:id", authMiddleware.RequirePermission("classifications:delete"), classificationHandler.Delete)
+	// Classification Criticality routes
+	classifications.Get("/:classification_id/criticalities", authMiddleware.RequirePermission("classifications:view"), classificationHandler.GetCriticalities)
+	classifications.Post("/:classification_id/criticalities", authMiddleware.RequirePermission("classifications:create"), classificationHandler.CreateCriticality)
+	classifications.Get("/criticalities/:id", authMiddleware.RequirePermission("classifications:view"), classificationHandler.GetCriticalityByID)
+	classifications.Put("/criticalities/:id", authMiddleware.RequirePermission("classifications:update"), classificationHandler.UpdateCriticality)
+	classifications.Delete("/criticalities/:id", authMiddleware.RequirePermission("classifications:delete"), classificationHandler.DeleteCriticality)
 
 	// Location routes
 	locations := admin.Group("/locations")

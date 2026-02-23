@@ -76,13 +76,14 @@ type IncidentService interface {
 }
 
 type incidentService struct {
-	incidentRepo    repository.IncidentRepository
-	incidentMergeRepo repository.IncidentMergeRepository
-	workflowRepo    repository.WorkflowRepository
-	userRepo        repository.UserRepository
-	storage         *storage.MinIOStorage
-	db              *gorm.DB
-	wsHub           *WSHub
+	incidentRepo       repository.IncidentRepository
+	incidentMergeRepo  repository.IncidentMergeRepository
+	workflowRepo       repository.WorkflowRepository
+	userRepo           repository.UserRepository
+	classificationRepo repository.ClassificationRepository
+	storage            *storage.MinIOStorage
+	db                 *gorm.DB
+	wsHub              *WSHub
 }
 
 func NewIncidentService(
@@ -90,19 +91,75 @@ func NewIncidentService(
 	incidentMergeRepo repository.IncidentMergeRepository,
 	workflowRepo repository.WorkflowRepository,
 	userRepo repository.UserRepository,
+	classificationRepo repository.ClassificationRepository,
 	storage *storage.MinIOStorage,
 	db *gorm.DB,
 	wsHub *WSHub,
 ) IncidentService {
 	return &incidentService{
-		incidentRepo:    incidentRepo,
-		incidentMergeRepo: incidentMergeRepo,
-		workflowRepo:    workflowRepo,
-		userRepo:        userRepo,
-		storage:         storage,
-		db:              db,
-		wsHub:           wsHub,
+		incidentRepo:       incidentRepo,
+		incidentMergeRepo:  incidentMergeRepo,
+		workflowRepo:       workflowRepo,
+		userRepo:           userRepo,
+		classificationRepo: classificationRepo,
+		storage:            storage,
+		db:                 db,
+		wsHub:              wsHub,
 	}
+}
+
+// calculateSLADeadline calculates the SLA deadline based on classification criticality
+// Falls back to workflow state SLA hours if no criticality-based setting exists
+func (s *incidentService) calculateSLADeadline(ctx context.Context, classificationID *uuid.UUID, lookupValueIDs []string, workflowSLAHours *int) (*time.Time, error) {
+	var deadline *time.Time
+
+	// Try to get classification-based criticality SLA first
+	if classificationID != nil && len(lookupValueIDs) > 0 {
+		// Get priority code from lookup values
+		for _, lookupIDStr := range lookupValueIDs {
+			lookupID, err := uuid.Parse(lookupIDStr)
+			if err != nil {
+				continue
+			}
+
+			// Get the lookup value to check if it's a priority
+			var lookupValue models.LookupValue
+			err = s.db.WithContext(ctx).
+				Preload("Category").
+				First(&lookupValue, "id = ?", lookupID).Error
+			if err != nil {
+				continue
+			}
+
+			// Check if this lookup value belongs to PRIORITY category
+			if lookupValue.Category == nil || lookupValue.Category.Code != "PRIORITY" {
+				continue
+			}
+
+			// Found priority - get classification criticality setting
+			criticality, err := s.classificationRepo.GetCriticalityByClassificationAndPriorityCode(ctx, *classificationID, lookupValue.Code)
+			if err != nil {
+				// No criticality setting found for this priority, continue to fallback
+				break
+			}
+
+			// Calculate deadline from hours and minutes
+			if criticality.MaxClosingHours > 0 || criticality.MaxClosingMinutes > 0 {
+				totalDuration := time.Duration(criticality.MaxClosingHours)*time.Hour + time.Duration(criticality.MaxClosingMinutes)*time.Minute
+				deadlineTime := time.Now().Add(totalDuration)
+				deadline = &deadlineTime
+				return deadline, nil
+			}
+		}
+	}
+
+	// Fallback to workflow state SLA hours
+	if workflowSLAHours != nil && *workflowSLAHours > 0 {
+		deadlineTime := time.Now().Add(time.Duration(*workflowSLAHours) * time.Hour)
+		deadline = &deadlineTime
+	}
+
+	return deadline, nil
 }
 
 // Incident CRUD
@@ -275,10 +332,17 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		}
 	}
 
-	// Calculate SLA deadline based on initial state
-	if initialState.SLAHours != nil && *initialState.SLAHours > 0 {
-		deadline := time.Now().Add(time.Duration(*initialState.SLAHours) * time.Hour)
-		incident.SLADeadline = &deadline
+	// Calculate SLA deadline based on classification criticality (with fallback to workflow state SLA)
+	var classificationID *uuid.UUID
+	if req.ClassificationID != nil {
+		id, err := uuid.Parse(*req.ClassificationID)
+		if err == nil {
+			classificationID = &id
+		}
+	}
+	deadline, err := s.calculateSLADeadline(ctx, classificationID, req.LookupValueIDs, initialState.SLAHours)
+	if err == nil && deadline != nil {
+		incident.SLADeadline = deadline
 	}
 
 	// Retry logic for duplicate key errors (race condition on incident_number)
@@ -837,10 +901,21 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		}
 	}
 
-	// Calculate SLA deadline based on initial state
-	if initialState.SLAHours != nil && *initialState.SLAHours > 0 {
-		deadline := time.Now().Add(time.Duration(*initialState.SLAHours) * time.Hour)
-		newRequest.SLADeadline = &deadline
+	// Calculate SLA deadline based on classification criticality (with fallback to workflow state SLA)
+	var slaClassificationID uuid.UUID
+	if req.ClassificationID != "" {
+		slaClassificationID, err = uuid.Parse(req.ClassificationID)
+		if err != nil {
+			slaClassificationID = uuid.Nil
+		}
+	} else {
+		slaClassificationID = uuid.Nil
+	}
+	// For convert to request, we don't have lookup values at this point, so pass empty array
+	var slaDeadline *time.Time
+	slaDeadline, err = s.calculateSLADeadline(ctx, &slaClassificationID, []string{}, initialState.SLAHours)
+	if err == nil && slaDeadline != nil {
+		newRequest.SLADeadline = slaDeadline
 	}
 
 	// Create the request
@@ -1937,10 +2012,17 @@ func (s *incidentService) CreateComplaint(ctx context.Context, req *models.Creat
 		}
 	}
 
-	// Calculate SLA deadline based on initial state
-	if initialState.SLAHours != nil && *initialState.SLAHours > 0 {
-		deadline := time.Now().Add(time.Duration(*initialState.SLAHours) * time.Hour)
-		complaint.SLADeadline = &deadline
+	// Calculate SLA deadline based on classification criticality (with fallback to workflow state SLA)
+	var slaClassificationID uuid.UUID
+	var slaErr error
+	slaClassificationID, slaErr = uuid.Parse(req.ClassificationID)
+	if slaErr != nil {
+		slaClassificationID = uuid.Nil
+	}
+	var slaDeadline *time.Time
+	slaDeadline, slaErr = s.calculateSLADeadline(ctx, &slaClassificationID, req.LookupValueIDs, initialState.SLAHours)
+	if slaErr == nil && slaDeadline != nil {
+		complaint.SLADeadline = slaDeadline
 	}
 
 	if err := s.incidentRepo.Create(ctx, complaint); err != nil {
@@ -2082,10 +2164,17 @@ func (s *incidentService) CreateQuery(ctx context.Context, req *models.CreateQue
 		}
 	}
 
-	// Calculate SLA deadline based on initial state
-	if initialState.SLAHours != nil && *initialState.SLAHours > 0 {
-		deadline := time.Now().Add(time.Duration(*initialState.SLAHours) * time.Hour)
-		query.SLADeadline = &deadline
+	// Calculate SLA deadline based on classification criticality (with fallback to workflow state SLA)
+	var slaClassificationID uuid.UUID
+	var slaErr error
+	slaClassificationID, slaErr = uuid.Parse(req.ClassificationID)
+	if slaErr != nil {
+		slaClassificationID = uuid.Nil
+	}
+	var slaDeadline *time.Time
+	slaDeadline, slaErr = s.calculateSLADeadline(ctx, &slaClassificationID, req.LookupValueIDs, initialState.SLAHours)
+	if slaErr == nil && slaDeadline != nil {
+		query.SLADeadline = slaDeadline
 	}
 
 	if err := s.incidentRepo.Create(ctx, query); err != nil {
