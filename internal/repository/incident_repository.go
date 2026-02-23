@@ -66,6 +66,7 @@ type IncidentRepository interface {
 	GetSLABreachedIncidents(ctx context.Context) ([]models.Incident, error)
 	UpdateSLABreached(ctx context.Context, incidentID uuid.UUID, breached bool) error
 	MarkSLABreached(ctx context.Context) (int64, error)
+	GetBreachedByFilter(ctx context.Context, locationID uuid.UUID, classificationID uuid.UUID) ([]models.Incident, error)
 
 	// User-specific queries
 	GetAssignedToUser(ctx context.Context, userID uuid.UUID, recordType string, page, limit int) ([]models.Incident, int64, error)
@@ -738,6 +739,23 @@ func (r *incidentRepository) GetSLABreachedIncidents(ctx context.Context) ([]mod
 	return incidents, err
 }
 
+func (r *incidentRepository) GetBreachedByFilter(
+	ctx context.Context,
+	locationID uuid.UUID,
+	classificationID uuid.UUID,
+) ([]models.Incident, error) {
+
+	var incidents []models.Incident
+
+	err := r.db.WithContext(ctx).
+		Where("sla_breached = ?", true).
+		Where("location_id = ?", locationID).
+		Where("classification_id = ?", classificationID).
+		Where("current_state_id NOT IN (SELECT id FROM workflow_states WHERE state_type = 'terminal')").
+		Find(&incidents).Error
+
+	return incidents, err
+}
 func (r *incidentRepository) UpdateSLABreached(ctx context.Context, incidentID uuid.UUID, breached bool) error {
 	return r.db.WithContext(ctx).
 		Model(&models.Incident{}).

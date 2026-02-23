@@ -16,14 +16,15 @@ type SLAMonitor interface {
 }
 
 type slaMonitor struct {
-	incidentRepo repository.IncidentRepository
-	interval     time.Duration
-	stopChan     chan struct{}
-	running      bool
+	incidentRepo      repository.IncidentRepository
+	escalationService *EscalationService
+	interval          time.Duration
+	stopChan          chan struct{}
+	running           bool
 }
 
 // NewSLAMonitor creates a new SLA monitor
-func NewSLAMonitor(incidentRepo repository.IncidentRepository, checkInterval time.Duration) SLAMonitor {
+func NewSLAMonitor(incidentRepo repository.IncidentRepository, escalationService *EscalationService, checkInterval time.Duration) SLAMonitor {
 	if checkInterval == 0 {
 		checkInterval = 5 * time.Minute // Default to 5 minutes
 	}

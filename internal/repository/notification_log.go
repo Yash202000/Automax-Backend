@@ -3,8 +3,8 @@ package repository
 import (
 	"context"
 	"fmt"
-	"time"
 	"log"
+	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/google/uuid"
@@ -201,7 +201,7 @@ func (r *notificationLogRepository) MarkOTPVerified(
 	sessionID string,
 	now time.Time,
 ) error {
-
+	fmt.Println("Marking OTP as verified", sessionID)
 	result := r.db.WithContext(ctx).
 		Model(&models.NotificationLog{}).
 		Where("otp_session_id = ? AND otp_verified = false", sessionID).
