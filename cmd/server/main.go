@@ -77,6 +77,7 @@ func main() {
 	callLogRepo := repository.NewCallLogRepository(db)
 	applicationLinkRepo := repository.NewApplicationLinkRepository(db)
 	settingsRepo := repository.NewSettingsRepository(db)
+	escalationRepo := repository.NewEscalationRepository(db)
 
 	// Initialize WebSocket hub and start it
 	wsHub := services.NewWSHub()
@@ -99,9 +100,11 @@ func main() {
 	presenceService := services.NewPresenceService(redisClient)
 	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo, userRepo)
 	otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo)
+	escalationService := services.NewEscalationService(escalationRepo, incidentRepo, userRepo, notificationService)
 
 	// Initialize and start SLA Monitor (checks every 5 minutes)
-	slaMonitor := services.NewSLAMonitor(incidentRepo, 5*time.Minute)
+	// slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, 5*time.Minute)
+	slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, 5*time.Minute)
 	ctx := context.Background()
 	slaMonitor.Start(ctx)
 	defer slaMonitor.Stop()
@@ -131,6 +134,7 @@ func main() {
 	templateHandler := handlers.NewNotificationTemplateHandler(notificationTemplateRepo)
 	attachmentHandler := handlers.NewAttachmentHandler(incidentService, notificationService, minioStorage)
 	otpHandler := handlers.NewOTPHandler(otpService)
+	escalationHandler := handlers.NewEscalationHandler(escalationService)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore, userRepo)
@@ -535,6 +539,11 @@ func main() {
 	otp := v1.Group("/otp", authMiddleware.Authenticate())
 	otp.Post("/send", authMiddleware.RequirePermission("otp:send"), otpHandler.SendOTP)
 	otp.Post("/verify", authMiddleware.RequirePermission("otp:verify"), otpHandler.VerifyOTP)
+
+	escalation := v1.Group("/escalation", authMiddleware.Authenticate())
+
+	escalation.Post("/", escalationHandler.Create)
+	escalation.Get("/", escalationHandler.List)
 
 	go func() {
 		addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)

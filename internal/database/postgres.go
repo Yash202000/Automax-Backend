@@ -62,6 +62,7 @@ func Migrate(db *gorm.DB) error {
 		&models.CallLog{},
 		&models.NotificationTemplate{},
 		&models.NotificationLog{},
+		&models.EscalationSLA{},
 		// IncidentMerge MUST come before Incident (foreign key dependency)
 		&models.IncidentMerge{},
 		// Lookup models
