@@ -244,6 +244,30 @@ func (h *IncidentHandler) CanConvertToRequest(c *fiber.Ctx) error {
 	})
 }
 
+// BulkConvertToRequest converts multiple incidents to requests in bulk
+func (h *IncidentHandler) BulkConvertToRequest(c *fiber.Ctx) error {
+	var req models.BulkConvertToRequestRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	userID := c.Locals("user_id").(uuid.UUID)
+	roleIDs := h.getUserRoleIDs(c)
+
+	result, err := h.service.BulkConvertToRequest(c.Context(), &req, userID, roleIDs)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusCreated, "Bulk conversion completed", result)
+}
+
 // State transitions
 
 func (h *IncidentHandler) ExecuteTransition(c *fiber.Ctx) error {

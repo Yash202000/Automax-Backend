@@ -32,6 +32,7 @@ type IncidentService interface {
 	// Convert incident to request
 	ConvertToRequest(ctx context.Context, incidentID uuid.UUID, req *models.ConvertToRequestRequest, userID uuid.UUID, userRoleIDs []uuid.UUID) (*models.ConvertToRequestResponse, error)
 	CanConvertToRequest(ctx context.Context, incidentID uuid.UUID, userRoleIDs []uuid.UUID) (bool, string, error)
+	BulkConvertToRequest(ctx context.Context, req *models.BulkConvertToRequestRequest, userID uuid.UUID, userRoleIDs []uuid.UUID) (*models.BulkConvertToRequestResponse, error)
 
 	// Complaint operations
 	CreateComplaint(ctx context.Context, req *models.CreateComplaintRequest, creatorID uuid.UUID) (*models.IncidentResponse, error)
@@ -712,6 +713,11 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		return nil, errors.New("cannot convert a request to another request")
 	}
 
+	// Check if already converted
+	if sourceIncident.ConvertedRequestID != nil {
+		return nil, errors.New("this incident has already been converted to a request")
+	}
+
 	// Check role-based permission for converting to request
 	workflow, err := s.workflowRepo.FindByIDWithRelations(ctx, sourceIncident.WorkflowID)
 	if err != nil {
@@ -855,11 +861,22 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		}
 	}
 
-	// Update source incident with reference to the converted request
-	if err := s.incidentRepo.UpdateFields(ctx, incidentID, map[string]interface{}{
+	// Find a terminal state from the source incident's workflow to close it
+	terminalState, err := s.getTerminalStateForWorkflow(ctx, sourceIncident.WorkflowID)
+	if err != nil {
+		fmt.Printf("Warning: failed to find terminal state for workflow: %v\n", err)
+	}
+
+	// Update source incident with reference to the converted request and close it
+	updateFields := map[string]interface{}{
 		"converted_request_id": newRequest.ID,
-	}); err != nil {
-		fmt.Printf("Warning: failed to update converted_request_id on source incident: %v\n", err)
+	}
+	if terminalState != nil {
+		updateFields["current_state_id"] = terminalState.ID
+		updateFields["closed_at"] = time.Now()
+	}
+	if err := s.incidentRepo.UpdateFields(ctx, incidentID, updateFields); err != nil {
+		fmt.Printf("Warning: failed to update source incident after conversion: %v\n", err)
 	}
 
 	// Fetch the created request with relations
@@ -942,6 +959,370 @@ func (s *incidentService) CanConvertToRequest(ctx context.Context, incidentID uu
 	}
 
 	return false, "You do not have permission to convert this incident to a request", nil
+}
+
+// getTerminalStateForWorkflow finds a terminal state for the given workflow
+func (s *incidentService) getTerminalStateForWorkflow(ctx context.Context, workflowID uuid.UUID) (*models.WorkflowState, error) {
+	var state models.WorkflowState
+	err := s.db.WithContext(ctx).
+		Where("workflow_id = ? AND state_type = ? AND is_active = ?", workflowID, "terminal", true).
+		Order("sort_order, id").
+		First(&state).Error
+	if err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+// BulkConvertToRequest converts multiple incidents to requests in bulk
+func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.BulkConvertToRequestRequest, userID uuid.UUID, userRoleIDs []uuid.UUID) (*models.BulkConvertToRequestResponse, error) {
+	response := &models.BulkConvertToRequestResponse{
+		Total:   len(req.IncidentIDs),
+		Results: make([]models.BulkConvertToRequestResult, 0, len(req.IncidentIDs)),
+	}
+
+	// Build a map of item-specific transitions
+	transitionMap := make(map[string]*models.BulkConvertToRequestItem)
+	for _, item := range req.Items {
+		transitionMap[item.IncidentID] = &item
+	}
+
+	// Parse common fields
+	workflowID, err := uuid.Parse(req.WorkflowID)
+	if err != nil {
+		return nil, errors.New("invalid workflow_id")
+	}
+
+	classificationID, err := uuid.Parse(req.ClassificationID)
+	if err != nil {
+		return nil, errors.New("invalid classification_id")
+	}
+
+	// Parse optional fields
+	var assigneeID *uuid.UUID
+	if req.AssigneeID != nil && *req.AssigneeID != "" {
+		id, err := uuid.Parse(*req.AssigneeID)
+		if err == nil {
+			assigneeID = &id
+		}
+	}
+
+	var departmentID *uuid.UUID
+	if req.DepartmentID != nil && *req.DepartmentID != "" {
+		id, err := uuid.Parse(*req.DepartmentID)
+		if err == nil {
+			departmentID = &id
+		}
+	}
+
+	var dueDate *time.Time
+	if req.DueDate != nil && *req.DueDate != "" {
+		parsed, err := time.Parse(time.RFC3339, *req.DueDate)
+		if err == nil {
+			dueDate = &parsed
+		}
+	}
+
+	// Get the initial state of the request workflow
+	initialState, err := s.workflowRepo.GetInitialState(ctx, workflowID)
+	if err != nil {
+		return nil, errors.New("workflow has no initial state configured")
+	}
+
+	// Validate all incidents have the same classification and location
+	if len(req.IncidentIDs) > 1 {
+		var firstIncident *models.Incident
+		for i, incidentIDStr := range req.IncidentIDs {
+			incidentID, err := uuid.Parse(incidentIDStr)
+			if err != nil {
+				continue
+			}
+			sourceIncident, err := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
+			if err != nil {
+				continue
+			}
+
+			if i == 0 {
+				firstIncident = sourceIncident
+				continue
+			}
+
+			// Check classification matches
+			if firstIncident.ClassificationID != nil && sourceIncident.ClassificationID != nil {
+				if *firstIncident.ClassificationID != *sourceIncident.ClassificationID {
+					return nil, errors.New("all incidents must have the same classification for bulk conversion")
+				}
+			} else if firstIncident.ClassificationID != sourceIncident.ClassificationID {
+				return nil, errors.New("all incidents must have the same classification for bulk conversion")
+			}
+
+			// Check location matches
+			if firstIncident.LocationID != nil && sourceIncident.LocationID != nil {
+				if *firstIncident.LocationID != *sourceIncident.LocationID {
+					return nil, errors.New("all incidents must have the same location for bulk conversion")
+				}
+			} else if firstIncident.LocationID != sourceIncident.LocationID {
+				return nil, errors.New("all incidents must have the same location for bulk conversion")
+			}
+		}
+	}
+
+	// Process each incident
+	for _, incidentIDStr := range req.IncidentIDs {
+		result := models.BulkConvertToRequestResult{}
+
+		incidentID, err := uuid.Parse(incidentIDStr)
+		if err != nil {
+			result.IncidentID = uuid.Nil
+			result.Success = false
+			errMsg := "invalid incident_id: " + incidentIDStr
+			result.Error = &errMsg
+			response.Results = append(response.Results, result)
+			response.Failed++
+			continue
+		}
+		result.IncidentID = incidentID
+
+		// Get the source incident
+		sourceIncident, err := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
+		if err != nil {
+			result.Success = false
+			errMsg := "incident not found"
+			result.Error = &errMsg
+			response.Results = append(response.Results, result)
+			response.Failed++
+			continue
+		}
+
+		// Validate it's not already a request
+		if sourceIncident.RecordType == "request" {
+			result.Success = false
+			errMsg := "cannot convert a request to another request"
+			result.Error = &errMsg
+			response.Results = append(response.Results, result)
+			response.Failed++
+			continue
+		}
+
+		// Check if already converted
+		if sourceIncident.ConvertedRequestID != nil {
+			result.Success = false
+			errMsg := "this incident has already been converted to a request"
+			result.Error = &errMsg
+			response.Results = append(response.Results, result)
+			response.Failed++
+			continue
+		}
+
+		// Check role-based permission for converting to request
+		workflow, err := s.workflowRepo.FindByIDWithRelations(ctx, sourceIncident.WorkflowID)
+		if err != nil {
+			result.Success = false
+			errMsg := "workflow not found"
+			result.Error = &errMsg
+			response.Results = append(response.Results, result)
+			response.Failed++
+			continue
+		}
+
+		if len(workflow.ConvertToRequestRoles) > 0 {
+			hasPermission := false
+			for _, allowedRole := range workflow.ConvertToRequestRoles {
+				for _, userRoleID := range userRoleIDs {
+					if allowedRole.ID == userRoleID {
+						hasPermission = true
+						break
+					}
+				}
+				if hasPermission {
+					break
+				}
+			}
+			if !hasPermission {
+				result.Success = false
+				errMsg := "you do not have permission to convert this incident to a request"
+				result.Error = &errMsg
+				response.Results = append(response.Results, result)
+				response.Failed++
+				continue
+			}
+		}
+
+		// Execute transition if provided for this specific incident
+		if item, ok := transitionMap[incidentIDStr]; ok && item.TransitionID != "" {
+			_, err := uuid.Parse(item.TransitionID)
+			if err == nil {
+				transitionReq := &models.IncidentTransitionRequest{
+					TransitionID: item.TransitionID,
+					Comment:      item.TransitionComment,
+				}
+
+				_, err := s.ExecuteTransition(ctx, incidentID, transitionReq, userID, userRoleIDs)
+				if err != nil {
+					result.Success = false
+					errMsg := fmt.Sprintf("failed to execute transition: %v", err)
+					result.Error = &errMsg
+					response.Results = append(response.Results, result)
+					response.Failed++
+					continue
+				}
+
+				// Reload the incident after transition
+				sourceIncident, err = s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
+				if err != nil {
+					result.Success = false
+					errMsg := "failed to reload incident after transition"
+					result.Error = &errMsg
+					response.Results = append(response.Results, result)
+					response.Failed++
+					continue
+				}
+			}
+		}
+
+		// Generate request number
+		requestNumber, err := s.incidentRepo.GenerateRequestNumber(ctx)
+		if err != nil {
+			result.Success = false
+			errMsg := fmt.Sprintf("failed to generate request number: %v", err)
+			result.Error = &errMsg
+			response.Results = append(response.Results, result)
+			response.Failed++
+			continue
+		}
+
+		// Create the new request
+		title := sourceIncident.Title
+		description := sourceIncident.Description
+
+		newRequest := &models.Incident{
+			IncidentNumber:   requestNumber,
+			Title:            title,
+			Description:      description,
+			RecordType:       "request",
+			SourceIncidentID: &incidentID,
+			ClassificationID: &classificationID,
+			WorkflowID:       workflowID,
+			CurrentStateID:   initialState.ID,
+			ReporterID:       sourceIncident.ReporterID,
+			ReporterEmail:    sourceIncident.ReporterEmail,
+			ReporterName:     sourceIncident.ReporterName,
+			LocationID:       sourceIncident.LocationID,
+			Latitude:         sourceIncident.Latitude,
+			Longitude:        sourceIncident.Longitude,
+			CustomFields:     sourceIncident.CustomFields,
+		}
+
+		// Handle assignee
+		if assigneeID != nil {
+			newRequest.AssigneeID = assigneeID
+		} else {
+			newRequest.AssigneeID = sourceIncident.AssigneeID
+		}
+
+		// Handle department
+		if departmentID != nil {
+			newRequest.DepartmentID = departmentID
+		} else {
+			newRequest.DepartmentID = sourceIncident.DepartmentID
+		}
+
+		// Handle due date
+		if dueDate != nil {
+			newRequest.DueDate = dueDate
+		}
+
+		// Calculate SLA deadline
+		if initialState.SLAHours != nil && *initialState.SLAHours > 0 {
+			deadline := time.Now().Add(time.Duration(*initialState.SLAHours) * time.Hour)
+			newRequest.SLADeadline = &deadline
+		}
+
+		// Create the request
+		if err := s.incidentRepo.Create(ctx, newRequest); err != nil {
+			result.Success = false
+			errMsg := fmt.Sprintf("failed to create request: %v", err)
+			result.Error = &errMsg
+			response.Results = append(response.Results, result)
+			response.Failed++
+			continue
+		}
+
+		// Copy lookup values from source incident
+		if len(sourceIncident.LookupValues) > 0 {
+			if err := s.incidentRepo.SetLookupValues(ctx, newRequest.ID, sourceIncident.LookupValues); err != nil {
+				fmt.Printf("Warning: failed to copy lookup values: %v\n", err)
+			}
+		}
+
+		// Find a terminal state from the source incident's workflow to close it
+		terminalState, err := s.getTerminalStateForWorkflow(ctx, sourceIncident.WorkflowID)
+		if err != nil {
+			fmt.Printf("Warning: failed to find terminal state for workflow: %v\n", err)
+		}
+
+		// Update source incident with reference to the converted request and close it
+		updateFields := map[string]interface{}{
+			"converted_request_id": newRequest.ID,
+		}
+		if terminalState != nil {
+			updateFields["current_state_id"] = terminalState.ID
+			updateFields["closed_at"] = time.Now()
+		}
+		if err := s.incidentRepo.UpdateFields(ctx, incidentID, updateFields); err != nil {
+			fmt.Printf("Warning: failed to update source incident after conversion: %v\n", err)
+		}
+
+		// Fetch the created request with relations
+		createdRequest, err := s.incidentRepo.FindByIDWithRelations(ctx, newRequest.ID)
+		if err != nil {
+			result.Success = false
+			errMsg := fmt.Sprintf("failed to fetch created request: %v", err)
+			result.Error = &errMsg
+			response.Results = append(response.Results, result)
+			response.Failed++
+			continue
+		}
+
+		// Create revision for source incident
+		sourceIncidentNumber := sourceIncident.IncidentNumber
+		changes := []models.IncidentFieldChange{
+			{
+				FieldName:  "converted_to_request",
+				FieldLabel: "Converted to Request",
+				OldValue:   nil,
+				NewValue:   &requestNumber,
+			},
+		}
+		desc := fmt.Sprintf("Incident converted to request %s", requestNumber)
+		_ = s.CreateRevision(ctx, incidentID, models.RevisionActionFieldChange, desc, changes, userID)
+
+		// Create revision for new request
+		changes = []models.IncidentFieldChange{
+			{
+				FieldName:  "source_incident",
+				FieldLabel: "Created from Incident",
+				OldValue:   nil,
+				NewValue:   &sourceIncidentNumber,
+			},
+		}
+		desc = fmt.Sprintf("Request created from incident %s", sourceIncidentNumber)
+		_ = s.CreateRevision(ctx, newRequest.ID, models.RevisionActionCreated, desc, changes, userID)
+
+		// Build successful result
+		originalResp := models.ToIncidentResponse(sourceIncident)
+		newResp := models.ToIncidentResponse(createdRequest)
+
+		result.Success = true
+		result.RequestID = &newRequest.ID
+		result.RequestNumber = &requestNumber
+		result.OriginalIncident = &originalResp
+		result.NewRequest = &newResp
+		response.Results = append(response.Results, result)
+		response.Success++
+	}
+
+	return response, nil
 }
 
 // State transitions
