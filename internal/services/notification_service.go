@@ -10,6 +10,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/internal/utils"
 	"github.com/google/uuid"
 )
@@ -18,6 +19,8 @@ type NotificationService struct {
 	templateRepo repository.NotificationTemplateRepository
 	logRepo      repository.NotificationLogRepository
 	userRepo     repository.UserRepository
+
+	storage *storage.MinIOStorage
 }
 
 type SendNotificationResult struct {
@@ -27,12 +30,13 @@ type SendNotificationResult struct {
 
 func NewNotificationService(
 	templateRepo repository.NotificationTemplateRepository,
-	logRepo repository.NotificationLogRepository, userRepo repository.UserRepository,
+	logRepo repository.NotificationLogRepository, userRepo repository.UserRepository, storage *storage.MinIOStorage,
 ) *NotificationService {
 	return &NotificationService{
 		templateRepo: templateRepo,
 		logRepo:      logRepo,
 		userRepo:     userRepo,
+		storage:      storage,
 	}
 }
 
@@ -89,10 +93,27 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 	allRecipients = append(allRecipients, bcc...)
 
 	for _, att := range attachments {
+
+		// Upload to MinIO using bytes
+		objectName, err := storage.Storage.UploadBytes(
+			ctx,
+			att.Data,
+			att.Filename,
+			att.ContentType,
+			"sla_breach-notifications",
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to upload attachment: %w", err)
+		}
+
 		attachmentInfo = append(attachmentInfo, models.AttachmentInfo{
+			ID:          att.AttachmentID.String(),
 			Filename:    att.Filename,
 			ContentType: att.ContentType,
 			Size:        int64(len(att.Data)),
+			URL:         "/api/v1/attachments/" + att.AttachmentID.String(),
+			PreviewURL:  "/api/v1/attachments/" + att.AttachmentID.String() + "/preview",
+			StoragePath: objectName,
 		})
 	}
 

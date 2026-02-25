@@ -407,41 +407,48 @@ func (r *userRepository) FindByIDs(ctx context.Context, ids []uuid.UUID) ([]mode
 	return users, err
 }
 
-// FindByRoleAndContext finds users with specified roles who match the incident context (classification, location, department)
+// FindByRoleAndContext finds active users that hold at least one of the given roles and
+
 func (r *userRepository) FindByRoleAndContext(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID *uuid.UUID) ([]models.User, error) {
 	if len(roleIDs) == 0 {
 		return []models.User{}, nil
 	}
 
-	var users []models.User
-	query := r.db.WithContext(ctx).
-		Preload("Roles").
-		Preload("Departments").
-		Preload("Locations").
-		Preload("Classifications").
+	idQuery := r.db.WithContext(ctx).
+		Model(&models.User{}).
 		Joins("JOIN user_roles ON user_roles.user_id = users.id").
 		Where("user_roles.role_id IN ?", roleIDs).
-		Where("users.is_active = ?", true).
-		Distinct("users.*")
+		Where("users.is_active = ?", true)
 
-	// Filter by department if provided
 	if departmentID != nil {
-		query = query.Joins("JOIN user_departments ON user_departments.user_id = users.id").
-			Where("user_departments.department_id = ?", departmentID)
+		idQuery = idQuery.
+			Joins("JOIN user_departments ON user_departments.user_id = users.id").
+			Where("user_departments.department_id = ?", *departmentID)
 	}
-
-	// Filter by classification if provided
 	if classificationID != nil {
-		query = query.Joins("JOIN user_classifications ON user_classifications.user_id = users.id").
-			Where("user_classifications.classification_id = ?", classificationID)
+		idQuery = idQuery.
+			Joins("JOIN user_classifications ON user_classifications.user_id = users.id").
+			Where("user_classifications.classification_id = ?", *classificationID)
 	}
-
-	// Filter by location if provided
 	if locationID != nil {
-		query = query.Joins("JOIN user_locations ON user_locations.user_id = users.id").
-			Where("user_locations.location_id = ?", locationID)
+		idQuery = idQuery.
+			Joins("JOIN user_locations ON user_locations.user_id = users.id").
+			Where("user_locations.location_id = ?", *locationID)
 	}
 
-	err := query.Find(&users).Error
+	// GROUP BY deduplicates users that match through multiple joined rows.
+	var userIDs []uuid.UUID
+	if err := idQuery.Group("users.id").Pluck("users.id", &userIDs).Error; err != nil {
+		return nil, err
+	}
+	if len(userIDs) == 0 {
+		return []models.User{}, nil
+	}
+
+	// fetch full user records (email, phone, name, etc.)
+	var users []models.User
+	err := r.db.WithContext(ctx).
+		Where("id IN ?", userIDs).
+		Find(&users).Error
 	return users, err
 }

@@ -5,8 +5,10 @@ import (
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 )
 
+// EscalationHandler exposes HTTP endpoints for SLA breach notification logs.
 type EscalationHandler struct {
 	service *services.EscalationService
 }
@@ -15,27 +17,42 @@ func NewEscalationHandler(service *services.EscalationService) *EscalationHandle
 	return &EscalationHandler{service: service}
 }
 
-func (h *EscalationHandler) Create(c *fiber.Ctx) error {
-	var req models.EscalationSLA
-
-	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
-
-	}
-
-	if err := h.service.CreateConfig(c.Context(), &req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
-	}
-
-	return utils.SuccessResponse(c, fiber.StatusOK, "Escalation config created", nil)
-}
-
+// List returns all SLA breach notification records (most recent first).
+//
+// GET /api/v1/escalation
 func (h *EscalationHandler) List(c *fiber.Ctx) error {
-
-	configs, err := h.service.GetConfigs(c.Context())
+	records, err := h.service.GetBreachLogs(c.Context())
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Escalation configs fetched", configs)
+	resp := make([]models.EscalationSLAResponse, len(records))
+	for i, r := range records {
+		resp[i] = models.ToEscalationSLAResponse(&r)
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "SLA breach logs fetched", resp)
+}
+
+// ListByIncident returns all SLA breach notifications for a specific incident.
+//
+// GET /api/v1/escalation/incident/:incident_id
+func (h *EscalationHandler) ListByIncident(c *fiber.Ctx) error {
+	idStr := c.Params("incident_id")
+	incidentID, err := uuid.Parse(idStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "invalid incident_id")
+	}
+
+	records, err := h.service.GetBreachLogsByIncident(c.Context(), incidentID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	resp := make([]models.EscalationSLAResponse, len(records))
+	for i, r := range records {
+		resp[i] = models.ToEscalationSLAResponse(&r)
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Incident SLA breach logs fetched", resp)
 }

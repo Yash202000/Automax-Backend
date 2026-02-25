@@ -356,7 +356,8 @@ type UpdateDraftRequest struct {
 }
 
 type AttachmentData struct {
-	Filename    string
-	ContentType string
-	Data        []byte
+	AttachmentID uuid.UUID
+	Filename     string
+	ContentType  string
+	Data         []byte
 }

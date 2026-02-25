@@ -6,11 +6,19 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig
-	Database DatabaseConfig
-	Redis    RedisConfig
-	MinIO    MinIOConfig
-	JWT      JWTConfig
+	Server     ServerConfig
+	Database   DatabaseConfig
+	Redis      RedisConfig
+	MinIO      MinIOConfig
+	JWT        JWTConfig
+	Escalation EscalationConfig
+}
+
+type EscalationConfig struct {
+	DailyHour    int
+	DailyMinute  int
+	WeeklyHour   int
+	WeeklyMinute int
 }
 
 type ServerConfig struct {
@@ -52,6 +60,7 @@ func Load() *Config {
 		Server: ServerConfig{
 			Port: getEnv("SERVER_PORT", "8080"),
 			Host: getEnv("SERVER_HOST", "0.0.0.0"),
+			// FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
 		},
 		Database: DatabaseConfig{
 			Host:     getEnv("DB_HOST", "localhost"),
@@ -77,6 +86,12 @@ func Load() *Config {
 		JWT: JWTConfig{
 			Secret:     getEnv("JWT_SECRET", "your-super-secret-jwt-key-change-in-production"),
 			ExpireHour: getEnvAsInt("JWT_EXPIRE_HOUR", 24),
+		},
+		Escalation: EscalationConfig{
+			DailyHour:    getEnvAsInt("ESCALATION_DAILY_HOUR", 18),
+			DailyMinute:  getEnvAsInt("ESCALATION_DAILY_MINUTE", 0),
+			WeeklyHour:   getEnvAsInt("ESCALATION_WEEKLY_HOUR", 9),
+			WeeklyMinute: getEnvAsInt("ESCALATION_WEEKLY_MINUTE", 0),
 		},
 	}
 }

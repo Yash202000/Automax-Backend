@@ -91,6 +91,8 @@ func Migrate(db *gorm.DB) error {
 		&models.ApplicationLink{},
 		// Settings
 		&models.Settings{},
+		// Custom Escalation Groups
+		&models.EscalationGroup{},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)

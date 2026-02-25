@@ -1,228 +1,507 @@
 package services
 
 import (
-	"bytes"
 	"context"
-	"encoding/csv"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
-// type EscalationService struct {
-// 	repo repository.EscalationRepository
-// }
-
+// EscalationService handles SLA breach detection and notification dispatch.
 type EscalationService struct {
-	repo         repository.EscalationRepository
-	incidentRepo repository.IncidentRepository
-	// smsService   repository.NotificationLogRepository
-	// emailService repository.NotificationLogRepository
+	repo                repository.EscalationRepository
+	incidentRepo        repository.IncidentRepository
+	workflowRepo        repository.WorkflowRepository
 	userRepo            repository.UserRepository
 	notificationService *NotificationService
+	frontendURL         string
 }
 
 func NewEscalationService(
 	repo repository.EscalationRepository,
 	incidentRepo repository.IncidentRepository,
+	workflowRepo repository.WorkflowRepository,
 	userRepo repository.UserRepository,
 	notificationService *NotificationService,
+
 ) *EscalationService {
 	return &EscalationService{
 		repo:                repo,
 		incidentRepo:        incidentRepo,
+		workflowRepo:        workflowRepo,
 		userRepo:            userRepo,
 		notificationService: notificationService,
 	}
 }
 
-func (s *EscalationService) CreateConfig(ctx context.Context, e *models.EscalationSLA) error {
-	return s.repo.Create(ctx, e)
-}
-
-func (s *EscalationService) GetConfigs(ctx context.Context) ([]models.EscalationSLA, error) {
+// GetBreachLogs returns all SLA breach notification records.
+func (s *EscalationService) GetBreachLogs(ctx context.Context) ([]models.EscalationSLA, error) {
 	return s.repo.GetAll(ctx)
 }
 
-func (s *EscalationService) ProcessSLAEscalations(ctx context.Context) error {
-	fmt.Println("Escalation job running at:", time.Now())
-	// Step 1: Mark breached
-	_, err := s.incidentRepo.MarkSLABreached(ctx)
+// GetBreachLogsByIncident returns all SLA breach notifications for a specific incident.
+func (s *EscalationService) GetBreachLogsByIncident(ctx context.Context, incidentID uuid.UUID) ([]models.EscalationSLA, error) {
+	return s.repo.GetByIncidentID(ctx, incidentID)
+}
+
+// ProcessTransitionSLAAlerts is the main SLA breach notification engine.
+func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) error {
+	log.Println("[EscalationService] Running transition SLA alert check ...")
+
+	//Collect incidents that have exceeded their current state's SLA ---
+	incidents, err := s.incidentRepo.
+		GetIncidentsExceedingStateSLA(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("GetIncidentsExceedingStateSLA: %w", err)
 	}
 
-	// Step 2: Get all escalation configs
-	configs, err := s.repo.GetAll(ctx)
-	if err != nil {
-		return err
+	if len(incidents) == 0 {
+		log.Println("[EscalationService] No incidents exceeding state SLA — nothing to do.")
+		return nil
 	}
 
-	for _, config := range configs {
+	log.Printf("[EscalationService] %d incident(s) have exceeded their current state SLA.", len(incidents))
 
-		// Frequency Check
-		if config.ReportFrequency == "WEEKLY" {
-			if time.Now().Weekday() != time.Sunday {
+	for _, incident := range incidents {
+		if incident.CurrentState == nil {
+			log.Printf("[EscalationService] Incident %s has no CurrentState loaded — skipping", incident.IncidentNumber)
+			continue
+		}
+		state := incident.CurrentState
+		if state.SLAHours == nil {
+			log.Printf("[EscalationService] Incident %s / state '%s' has no SLAHours — skipping", incident.IncidentNumber, state.Name)
+			continue
+		}
+
+		// Calculate actual hours spent in the current state
+		hoursInState := s.hoursInCurrentState(ctx, incident)
+		log.Printf("[EscalationService] Incident %s has been in state '%s' for %.2fh (SLA: %dh)",
+			incident.IncidentNumber, state.Name, hoursInState, *state.SLAHours)
+
+		// -Get all active outgoing transitions from the current state ---
+		transitions, err := s.workflowRepo.ListTransitionsFromState(ctx, state.ID)
+		if err != nil {
+			log.Printf("[EscalationService] Failed to list transitions from state '%s': %v", state.Name, err)
+			continue
+		}
+
+		if len(transitions) == 0 {
+			log.Printf("[EscalationService] No outgoing transitions from state '%s' — nothing to notify", state.Name)
+			continue
+		}
+		log.Printf("[EscalationService] Found %d outgoing transition(s) from state '%s'", len(transitions), state.Name)
+
+		// -Collect unique users responsible for those transitions ---
+
+		notifiedUsers := make(map[uuid.UUID]bool) // prevent double-sending to the same user
+
+		for _, transition := range transitions {
+			if len(transition.AllowedRoles) == 0 {
+				log.Printf("[EscalationService] Transition '%s' has no AllowedRoles — skipping targeted notify", transition.Name)
 				continue
 			}
-		}
 
-		// Fetch breached incidents
-		incidents, err := s.incidentRepo.GetBreachedByFilter(
-			ctx,
-			config.LocationID,
-			config.ClassificationID,
-		)
-		if err != nil {
-			continue
-		}
+			// Gather role IDs for this transition
+			roleIDs := make([]uuid.UUID, 0, len(transition.AllowedRoles))
+			for _, role := range transition.AllowedRoles {
+				roleIDs = append(roleIDs, role.ID)
+			}
 
-		if len(incidents) == 0 {
-			continue
-		}
+			// Find users with those roles.
 
-		// Get user email & phone
-		user, err := s.userRepo.FindByID(ctx, config.UserID)
-		if err != nil {
-			continue
-		}
+			users, err := s.userRepo.FindByRoleAndContext(
+				ctx,
+				roleIDs,
+				incident.ClassificationID,
+				incident.LocationID,
+				incident.DepartmentID,
+			)
+			if err != nil {
+				log.Printf("[EscalationService] FindByRoleAndContext error for transition '%s': %v", transition.Name, err)
+				continue
+			}
 
-		count := len(incidents)
+			if len(users) == 0 {
+				// Fallback: match by role only (no classification/location/department filter)
+				users, err = s.userRepo.FindByRoleAndContext(ctx, roleIDs, nil, nil, nil)
+				if err != nil {
+					log.Printf("[EscalationService] FindByRoleAndContext (role-only) error for transition '%s': %v", transition.Name, err)
+					continue
+				}
+				log.Printf("[EscalationService] Transition '%s': context match empty, role-only fallback found %d user(s)", transition.Name, len(users))
+			} else {
+				log.Printf("[EscalationService] Transition '%s': found %d user(s) with allowed roles (context match)", transition.Name, len(users))
+			}
 
-		url, err := s.generateSignedURL(config.UserID)
-		if err != nil {
-			continue
-		}
+			if len(users) == 0 {
+				log.Printf("[EscalationService] Transition '%s': no users found even with role-only fallback", transition.Name)
+				continue
+			}
 
-		report, err := s.generateCSVReport(incidents)
-		if err != nil {
-			continue
-		}
+			transitionID := transition.ID
 
-		err = s.sendEscalation(ctx, config, user, count, url, report)
-		if err != nil {
-			continue
+			for _, user := range users {
+				if notifiedUsers[user.ID] {
+					continue // already processed this user in a previous transition loop
+				}
+
+				// Deduplication: skip if we already have a record for this incident+state+user
+				alreadyNotified, err := s.repo.HasBeenNotified(ctx, incident.ID, state.ID, user.ID)
+				if err != nil {
+					log.Printf("[EscalationService] HasBeenNotified check failed for user %s: %v", user.Email, err)
+					continue
+				}
+				if alreadyNotified {
+					log.Printf("[EscalationService] Already notified user %s for incident %s / state '%s' — skipping",
+						user.Email, incident.IncidentNumber, state.Name)
+					notifiedUsers[user.ID] = true
+					continue
+				}
+
+				// Send notifications (best-effort; failure does NOT prevent DB log) ---
+				sentChannels := s.sendNotifications(ctx, incident, state, transition.Name, user, hoursInState)
+
+				actions := pq.StringArray(sentChannels)
+				if actions == nil {
+					actions = pq.StringArray{}
+				}
+
+				now := time.Now()
+				breach := &models.EscalationSLA{
+					IncidentID:      &incident.ID,
+					StateID:         &state.ID,
+					TransitionID:    &transitionID,
+					NotifiedUserID:  &user.ID,
+					Email:           user.Email,
+					Phone:           user.Phone,
+					Actions:         actions,
+					SLAHoursAllowed: *state.SLAHours,
+					HoursInState:    hoursInState,
+					NotifiedAt:      &now,
+				}
+				if err := s.repo.Create(ctx, breach); err != nil {
+					log.Printf("[EscalationService] Failed to persist breach log for user %s / incident %s: %v",
+						user.Email, incident.IncidentNumber, err)
+				} else {
+					log.Printf("[EscalationService] Breach log stored — incident %s, state '%s', user %s, channels %v, id %s",
+						incident.IncidentNumber, state.Name, user.Email, sentChannels, breach.ID)
+				}
+
+				notifiedUsers[user.ID] = true
+			}
 		}
 	}
 
 	return nil
 }
 
-func (s *EscalationService) generateCSVReport(
-	incidents []models.Incident,
-) ([]byte, error) {
+// sendNotifications dispatches EMAIL and SMS for one SLA breach and returns the list of
 
-	var buffer bytes.Buffer
-	writer := csv.NewWriter(&buffer)
-
-	writer.Write([]string{
-		"Incident Number",
-		"Location",
-		"Classification",
-		"SLA Deadline",
-	})
-
-	for _, inc := range incidents {
-		writer.Write([]string{
-			inc.IncidentNumber,
-			inc.Location.Name,
-			inc.Classification.Name,
-			inc.SLADeadline.Format(time.RFC3339),
-		})
-	}
-
-	writer.Flush()
-	return buffer.Bytes(), nil
-}
-
-func (s *EscalationService) generateSignedURL(userID uuid.UUID) (string, error) {
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"user_id": userID.String(),
-		"exp":     time.Now().Add(24 * time.Hour).Unix(),
-	})
-
-	tokenString, err := token.SignedString([]byte("your-secret"))
-	if err != nil {
-		return "", err
-	}
-
-	return fmt.Sprintf("https://yourdomain.com/api/sla-report?token=%s", tokenString), nil
-}
-
-func (s *EscalationService) sendEscalation(
+func (s *EscalationService) sendNotifications(
 	ctx context.Context,
-	config models.EscalationSLA,
-	user *models.User,
-	count int,
-	url string,
-	report []byte,
-) error {
+	incident models.Incident,
+	state *models.WorkflowState,
+	transitionName string,
+	user models.User,
+	hoursInState float64,
+) []string {
+	sent := make([]string, 0) // use make so the slice is never nil
 
-	body := fmt.Sprintf(
-		"You have %d incidents that have exceeded the SLA. For more details, please click on this link: %s",
-		count,
-		url,
+	incidentURL := fmt.Sprintf("%s/incidents/%s", s.frontendURL, incident.ID)
+
+	subject := fmt.Sprintf(
+		"SLA Alert: Incident %s has exceeded SLA in state '%s'",
+		incident.IncidentNumber,
+		state.Name,
 	)
 
-	var attachments []models.AttachmentData
+	emailBody := fmt.Sprintf(
+		"Dear %s %s,\n\n"+
+			"This is an automated SLA breach notification.\n\n"+
+			"Incident %s - \"%s\" has been in the state \"%s\" for %.1f hours, "+
+			"which exceeds the allowed SLA limit of %d hours.\n\n"+
+			"You are listed as responsible for the transition \"%s\" from this state. "+
+			"Please take action as soon as possible.\n\n"+
+			"Incident Details:\n"+
+			"  Number  : %s\n"+
+			"  Title   : %s\n"+
+			"  State   : %s\n"+
+			"  Elapsed : %.1f hours (SLA limit: %d hours)\n\n"+
+			"View Incident: %s\n\n"+
+			"Please log in to the system and resolve this incident.",
+		user.FirstName, user.LastName,
+		incident.IncidentNumber, incident.Title,
+		state.Name, hoursInState, *state.SLAHours,
+		transitionName,
+		incident.IncidentNumber,
+		incident.Title,
+		state.Name,
+		hoursInState, *state.SLAHours,
+		incidentURL,
+	)
 
-	// Only attach for email
-	attachments = append(attachments, models.AttachmentData{
-		Filename:    "sla_breached_report.csv",
-		ContentType: "text/csv",
-		Data:        report,
-	})
+	smsBody := fmt.Sprintf(
+		"SLA ALERT: Incident %s has been in '%s' for %.1fh (SLA: %dh). Action required for '%s'. View: %s",
+		incident.IncidentNumber,
+		state.Name,
+		hoursInState,
+		*state.SLAHours,
+		transitionName,
+		incidentURL,
+	)
 
-	for _, action := range config.Actions {
+	// Send EMAIL if the user has an email address
+	if user.Email != "" {
+		_, err := s.notificationService.SendNotification(
+			ctx,
+			"email",
+			nil,
+			"en",
+			[]string{user.Email},
+			nil,
+			nil,
+			subject,
+			emailBody,
+			nil,
+			nil,
+			nil,
+			nil,
+		)
+		if err != nil {
+			log.Printf("[EscalationService] EMAIL failed for %s: %v", user.Email, err)
+		} else {
+			sent = append(sent, "EMAIL")
+		}
+	}
 
-		switch action {
+	// Send SMS if the user has a phone number
+	if user.Phone != "" {
+		_, err := s.notificationService.SendNotification(
+			ctx,
+			"sms",
+			nil,
+			"en",
+			[]string{user.Phone},
+			nil,
+			nil,
+			"",
+			smsBody,
+			nil,
+			nil,
+			nil,
+			nil,
+		)
+		if err != nil {
+			log.Printf("[EscalationService] SMS failed for %s: %v", user.Phone, err)
+		} else {
+			sent = append(sent, "SMS")
+		}
+	}
 
-		case "EMAIL":
-			_, err := s.notificationService.SendNotification(
-				ctx,
-				"email",
-				nil,
-				"en",
-				[]string{user.Email},
-				nil,
-				nil,
-				"SLA Escalation Alert",
-				body,
-				nil,
-				attachments,
-				nil,
-				nil,
-			)
+	return sent
+}
+
+// ProcessGlobalSLABreaches fires once per incident when its global SLA deadline is crossed
+// (sla_breached = true).  It notifies the primary assignee and reporter (if different) via
+// EMAIL and/or SMS, then stores an escalation_sla record with state_id = NULL so the same
+// incident is never notified twice.
+func (s *EscalationService) ProcessGlobalSLABreaches(ctx context.Context) error {
+	log.Println("[EscalationService] Running global SLA breach notification check ...")
+
+	incidents, err := s.incidentRepo.GetNewlyBreachedIncidents(ctx)
+	if err != nil {
+		return fmt.Errorf("GetNewlyBreachedIncidents: %w", err)
+	}
+
+	if len(incidents) == 0 {
+		log.Println("[EscalationService] No newly globally-breached incidents — nothing to do.")
+		return nil
+	}
+
+	log.Printf("[EscalationService] %d incident(s) newly globally SLA breached.", len(incidents))
+
+	for _, incident := range incidents {
+		// Build a deduplicated set of system users to notify (assignee + reporter)
+		uniqueUsers := make(map[uuid.UUID]models.User)
+		if incident.Assignee != nil {
+			uniqueUsers[incident.Assignee.ID] = *incident.Assignee
+		}
+		if incident.Reporter != nil {
+			if _, exists := uniqueUsers[incident.Reporter.ID]; !exists {
+				uniqueUsers[incident.Reporter.ID] = *incident.Reporter
+			}
+		}
+
+		if len(uniqueUsers) == 0 {
+			log.Printf("[EscalationService] Incident %s: no system users (assignee/reporter) for global SLA breach notification", incident.IncidentNumber)
+			continue
+		}
+
+		// Calculate SLA context values for the breach record
+		totalHoursOpen := time.Since(incident.CreatedAt).Hours()
+		slaHoursAllowed := 0
+		if incident.SLADeadline != nil && !incident.SLADeadline.IsZero() {
+			slaHoursAllowed = int(incident.SLADeadline.Sub(incident.CreatedAt).Hours())
+		}
+
+		for _, user := range uniqueUsers {
+			// Deduplication — skip if already notified for the global breach of this incident
+			already, err := s.repo.HasGlobalBreachNotification(ctx, incident.ID, user.ID)
 			if err != nil {
-				return err
+				log.Printf("[EscalationService] HasGlobalBreachNotification error for user %s: %v", user.Email, err)
+				continue
+			}
+			if already {
+				log.Printf("[EscalationService] Global breach already notified for user %s / incident %s — skipping", user.Email, incident.IncidentNumber)
+				continue
 			}
 
-		case "SMS":
-			_, err := s.notificationService.SendNotification(
-				ctx,
-				"sms",
-				nil,
-				"en",
-				[]string{user.Phone},
-				nil,
-				nil,
-				"",
-				body,
-				nil,
-				nil,
-				nil,
-				nil,
-			)
-			if err != nil {
-				return err
+			// Send EMAIL / SMS (best-effort; failures are logged, not fatal)
+			sentChannels := s.sendGlobalBreachNotification(ctx, incident, user, totalHoursOpen, slaHoursAllowed)
+
+			// Persist breach log regardless of delivery outcome.
+			// state_id = nil distinguishes a global-deadline breach from a per-state breach.
+			actions := pq.StringArray(sentChannels)
+			if actions == nil {
+				actions = pq.StringArray{}
+			}
+			now := time.Now()
+			breach := &models.EscalationSLA{
+				IncidentID:      &incident.ID,
+				StateID:         nil,
+				TransitionID:    nil,
+				NotifiedUserID:  &user.ID,
+				Email:           user.Email,
+				Phone:           user.Phone,
+				Actions:         actions,
+				SLAHoursAllowed: slaHoursAllowed,
+				HoursInState:    totalHoursOpen,
+				NotifiedAt:      &now,
+			}
+			if err := s.repo.Create(ctx, breach); err != nil {
+				log.Printf("[EscalationService] Failed to store global breach log for user %s / incident %s: %v",
+					user.Email, incident.IncidentNumber, err)
+			} else {
+				log.Printf("[EscalationService] Global breach log stored — incident %s, user %s, channels %v, id %s",
+					incident.IncidentNumber, user.Email, sentChannels, breach.ID)
 			}
 		}
 	}
 
 	return nil
+}
+
+// sendGlobalBreachNotification dispatches EMAIL and/or SMS for a global SLA deadline breach.
+func (s *EscalationService) sendGlobalBreachNotification(
+	ctx context.Context,
+	incident models.Incident,
+	user models.User,
+	totalHoursOpen float64,
+	slaHoursAllowed int,
+) []string {
+	sent := make([]string, 0)
+
+	incidentURL := fmt.Sprintf("%s/incidents/%s", s.frontendURL, incident.ID)
+
+	stateName := "Unknown"
+	if incident.CurrentState != nil {
+		stateName = incident.CurrentState.Name
+	}
+
+	subject := fmt.Sprintf(
+		"SLA Deadline Breached: Incident %s has exceeded its SLA deadline",
+		incident.IncidentNumber,
+	)
+
+	emailBody := fmt.Sprintf(
+		"Dear %s %s,\n\n"+
+			"This is an automated SLA deadline breach notification.\n\n"+
+			"Incident %s - \"%s\" has exceeded its SLA deadline. "+
+			"The incident has been open for %.1f hours against an allowed SLA of %d hours.\n\n"+
+			"Incident Details:\n"+
+			"  Number       : %s\n"+
+			"  Title        : %s\n"+
+			"  Current State: %s\n"+
+			"View Incident: %s\n\n"+
+			"Please log in to the system and take immediate action to resolve this incident.",
+		user.FirstName, user.LastName,
+		incident.IncidentNumber, incident.Title,
+		totalHoursOpen, slaHoursAllowed,
+		incident.IncidentNumber,
+		incident.Title,
+		stateName,
+		totalHoursOpen,
+		slaHoursAllowed,
+		incidentURL,
+	)
+
+	smsBody := fmt.Sprintf(
+		"SLA BREACHED: Incident %s (\"%s\") has been open %.1fh (SLA: %dh). Immediate action required. View: %s",
+		incident.IncidentNumber,
+		incident.Title,
+		totalHoursOpen,
+		slaHoursAllowed,
+		incidentURL,
+	)
+
+	if user.Email != "" {
+		_, err := s.notificationService.SendNotification(
+			ctx, "email", nil, "en",
+			[]string{user.Email}, nil, nil,
+			subject, emailBody,
+			nil, nil, nil, nil,
+		)
+		if err != nil {
+			log.Printf("[EscalationService] Global breach EMAIL failed for %s: %v", user.Email, err)
+		} else {
+			sent = append(sent, "EMAIL")
+		}
+	}
+
+	if user.Phone != "" {
+		_, err := s.notificationService.SendNotification(
+			ctx, "sms", nil, "en",
+			[]string{user.Phone}, nil, nil,
+			"", smsBody,
+			nil, nil, nil, nil,
+		)
+		if err != nil {
+			log.Printf("[EscalationService] Global breach SMS failed for %s: %v", user.Phone, err)
+		} else {
+			sent = append(sent, "SMS")
+		}
+	}
+
+	return sent
+}
+
+// hoursInCurrentState calculates how many hours the incident has been in its current state.
+// It queries the transition history; if no history exists, it falls back to created_at.
+func (s *EscalationService) hoursInCurrentState(ctx context.Context, incident models.Incident) float64 {
+	history, err := s.incidentRepo.GetTransitionHistory(ctx, incident.ID)
+	if err != nil || len(history) == 0 {
+		return time.Since(incident.CreatedAt).Hours()
+	}
+
+	// Find the most recent entry whose ToState matches the current state
+	var latestEntry *time.Time
+	for i := range history {
+		h := &history[i]
+		if h.ToStateID == incident.CurrentStateID {
+			if latestEntry == nil || h.TransitionedAt.After(*latestEntry) {
+				latestEntry = &h.TransitionedAt
+			}
+		}
+	}
+
+	if latestEntry == nil {
+		return time.Since(incident.CreatedAt).Hours()
+	}
+
+	return time.Since(*latestEntry).Hours()
 }

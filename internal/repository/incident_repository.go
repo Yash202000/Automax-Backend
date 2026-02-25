@@ -67,6 +67,8 @@ type IncidentRepository interface {
 	UpdateSLABreached(ctx context.Context, incidentID uuid.UUID, breached bool) error
 	MarkSLABreached(ctx context.Context) (int64, error)
 	GetBreachedByFilter(ctx context.Context, locationID uuid.UUID, classificationID uuid.UUID) ([]models.Incident, error)
+	GetIncidentsExceedingStateSLA(ctx context.Context) ([]models.Incident, error)
+	GetNewlyBreachedIncidents(ctx context.Context) ([]models.Incident, error)
 
 	// User-specific queries
 	GetAssignedToUser(ctx context.Context, userID uuid.UUID, recordType string, page, limit int) ([]models.Incident, int64, error)
@@ -739,23 +741,28 @@ func (r *incidentRepository) GetSLABreachedIncidents(ctx context.Context) ([]mod
 	return incidents, err
 }
 
-func (r *incidentRepository) GetBreachedByFilter(
-	ctx context.Context,
-	locationID uuid.UUID,
-	classificationID uuid.UUID,
-) ([]models.Incident, error) {
+func (r *incidentRepository) GetBreachedByFilter(ctx context.Context, locationID uuid.UUID, classificationID uuid.UUID) ([]models.Incident, error) {
 
 	var incidents []models.Incident
 
-	err := r.db.WithContext(ctx).
+	query := r.db.WithContext(ctx).
 		Where("sla_breached = ?", true).
-		Where("location_id = ?", locationID).
-		Where("classification_id = ?", classificationID).
-		Where("current_state_id NOT IN (SELECT id FROM workflow_states WHERE state_type = 'terminal')").
-		Find(&incidents).Error
+		Where("current_state_id NOT IN (SELECT id FROM workflow_states WHERE state_type = 'terminal')")
 
+	// Only filter by location if a non-zero UUID is provided
+	if locationID != (uuid.UUID{}) {
+		query = query.Where("location_id = ?", locationID)
+	}
+
+	// Only filter by classification if a non-zero UUID is provided
+	if classificationID != (uuid.UUID{}) {
+		query = query.Where("classification_id = ?", classificationID)
+	}
+
+	err := query.Preload("Location").Preload("Classification").Preload("CurrentState").Preload("Assignee").Find(&incidents).Error
 	return incidents, err
 }
+
 func (r *incidentRepository) UpdateSLABreached(ctx context.Context, incidentID uuid.UUID, breached bool) error {
 	return r.db.WithContext(ctx).
 		Model(&models.Incident{}).
@@ -1033,5 +1040,56 @@ func (r *incidentRepository) FindUserOpenIncidentsForDuplicateCheck(ctx context.
 		Where("longitude IS NOT NULL").
 		Find(&incidents).Error
 
+	return incidents, err
+}
+
+// GetIncidentsExceedingStateSLA returns incidents where the time spent in the current state
+
+func (r *incidentRepository) GetIncidentsExceedingStateSLA(ctx context.Context) ([]models.Incident, error) {
+	var incidents []models.Incident
+
+	err := r.db.WithContext(ctx).
+		Select("incidents.*").
+		Joins("JOIN workflow_states ws ON incidents.current_state_id = ws.id").
+		Where("ws.sla_hours IS NOT NULL").
+		Where("ws.state_type != 'terminal'").
+		Where("ws.deleted_at IS NULL").
+		Where(`(
+			EXTRACT(EPOCH FROM (NOW() - COALESCE(
+				(SELECT MAX(ith.transitioned_at)
+				 FROM incident_transition_histories ith
+				 WHERE ith.incident_id = incidents.id
+				   AND ith.to_state_id = incidents.current_state_id),
+				incidents.created_at
+			))) / 3600
+		) > ws.sla_hours`).
+		Preload("CurrentState").
+		Preload("Workflow").
+		Preload("Location").
+		Preload("Classification").
+		Preload("Assignee").
+		Find(&incidents).Error
+
+	return incidents, err
+}
+
+// GetNewlyBreachedIncidents returns incidents with sla_breached = true that have no
+
+func (r *incidentRepository) GetNewlyBreachedIncidents(ctx context.Context) ([]models.Incident, error) {
+	var incidents []models.Incident
+	err := r.db.WithContext(ctx).
+		Where("sla_breached = ?", true).
+		Where(`current_state_id NOT IN (
+			SELECT id FROM workflow_states WHERE state_type = 'terminal'
+		)`).
+		Where(`NOT EXISTS (
+			SELECT 1 FROM escalation_slas es
+			WHERE es.incident_id = incidents.id
+			  AND es.state_id IS NULL
+		)`).
+		Preload("Assignee").
+		Preload("Reporter").
+		Preload("CurrentState").
+		Find(&incidents).Error
 	return incidents, err
 }

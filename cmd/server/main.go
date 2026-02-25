@@ -78,6 +78,7 @@ func main() {
 	applicationLinkRepo := repository.NewApplicationLinkRepository(db)
 	settingsRepo := repository.NewSettingsRepository(db)
 	escalationRepo := repository.NewEscalationRepository(db)
+	escalationGroupRepo := repository.NewEscalationGroupRepository(db)
 
 	// Initialize WebSocket hub and start it
 	wsHub := services.NewWSHub()
@@ -98,13 +99,14 @@ func main() {
 	applicationLinkService := services.NewApplicationLinkService(applicationLinkRepo)
 	settingsService := services.NewSettingsService(settingsRepo)
 	presenceService := services.NewPresenceService(redisClient)
-	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo, userRepo)
+	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo, userRepo, minioStorage)
 	otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo)
-	escalationService := services.NewEscalationService(escalationRepo, incidentRepo, userRepo, notificationService)
+	escalationService := services.NewEscalationService(escalationRepo, incidentRepo, workflowRepo, userRepo, notificationService)
+	escalationGroupService := services.NewEscalationGroupService(escalationGroupRepo, incidentRepo, notificationService, cfg.Escalation)
 
 	// Initialize and start SLA Monitor (checks every 5 minutes)
-	// slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, 5*time.Minute)
-	slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, 5*time.Minute)
+	// slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, escalationGroupService, 5*time.Minute)
+	slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, escalationGroupService, 5*time.Minute)
 	ctx := context.Background()
 	slaMonitor.Start(ctx)
 	defer slaMonitor.Stop()
@@ -135,6 +137,7 @@ func main() {
 	attachmentHandler := handlers.NewAttachmentHandler(incidentService, notificationService, minioStorage)
 	otpHandler := handlers.NewOTPHandler(otpService)
 	escalationHandler := handlers.NewEscalationHandler(escalationService)
+	escalationGroupHandler := handlers.NewEscalationGroupHandler(escalationGroupService)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore, userRepo)
@@ -548,8 +551,18 @@ func main() {
 
 	escalation := v1.Group("/escalation", authMiddleware.Authenticate())
 
-	escalation.Post("/", escalationHandler.Create)
+	// GET /api/v1/escalation— list all SLA breach notification records
 	escalation.Get("/", escalationHandler.List)
+	// GET /api/v1/escalation/incident/:incident_id — breach records for one incident
+	escalation.Get("/incident/:incident_id", escalationHandler.ListByIncident)
+
+	// Custom Escalation Groups (admin)
+	escalationGroups := admin.Group("/escalation-groups", authMiddleware.Authenticate())
+	escalationGroups.Post("/", escalationGroupHandler.Create)
+	escalationGroups.Get("/", escalationGroupHandler.List)
+	escalationGroups.Get("/:id", escalationGroupHandler.GetByID)
+	escalationGroups.Put("/:id", escalationGroupHandler.Update)
+	escalationGroups.Delete("/:id", escalationGroupHandler.Delete)
 
 	go func() {
 		addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
