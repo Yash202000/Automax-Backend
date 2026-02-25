@@ -446,6 +446,43 @@ type ConvertToRequestResponse struct {
 	NewRequest       *IncidentResponse `json:"new_request"`
 }
 
+// BulkConvertToRequestItem represents a single item in bulk conversion
+type BulkConvertToRequestItem struct {
+	IncidentID      string `json:"incident_id" validate:"required,uuid"`
+	TransitionID    string `json:"transition_id" validate:"omitempty,uuid"`
+	TransitionComment string `json:"transition_comment"`
+}
+
+// BulkConvertToRequestRequest for bulk conversion of incidents to requests
+type BulkConvertToRequestRequest struct {
+	IncidentIDs     []string `json:"incident_ids" validate:"required,min=1,dive,uuid"`
+	ClassificationID string  `json:"classification_id" validate:"required,uuid"`
+	WorkflowID      string   `json:"workflow_id" validate:"required,uuid"`
+	AssigneeID      *string  `json:"assignee_id" validate:"omitempty,uuid"`
+	DepartmentID    *string  `json:"department_id" validate:"omitempty,uuid"`
+	DueDate         *string  `json:"due_date"`
+	Items           []BulkConvertToRequestItem `json:"items" validate:"omitempty,dive"`
+}
+
+// BulkConvertToRequestResult represents the result of a single conversion in bulk operation
+type BulkConvertToRequestResult struct {
+	IncidentID      uuid.UUID         `json:"incident_id"`
+	Success         bool              `json:"success"`
+	RequestID       *uuid.UUID        `json:"request_id,omitempty"`
+	RequestNumber   *string           `json:"request_number,omitempty"`
+	Error           *string           `json:"error,omitempty"`
+	OriginalIncident *IncidentResponse `json:"original_incident,omitempty"`
+	NewRequest      *IncidentResponse `json:"new_request,omitempty"`
+}
+
+// BulkConvertToRequestResponse for bulk conversion response
+type BulkConvertToRequestResponse struct {
+	Total     int                          `json:"total"`
+	Success   int                          `json:"success"`
+	Failed    int                          `json:"failed"`
+	Results   []BulkConvertToRequestResult `json:"results"`
+}
+
 type IncidentFilter struct {
 	Search           string      `query:"search" json:"search" validate:"omitempty,min=3"`
 	WorkflowID       []string    `query:"workflow_id" json:"workflow_id" validate:"omitempty,dive,uuid"`

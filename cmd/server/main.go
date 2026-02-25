@@ -27,8 +27,8 @@ import (
 )
 
 func main() {
+	godotenv.Load() // must be before config.Load() so .env values are in the environment
 	cfg := config.Load()
-	godotenv.Load()
 
 	validation.InitValidatorRegistry()
 	db, err := database.Connect(&cfg.Database)
@@ -58,6 +58,7 @@ func main() {
 	}
 
 	jwtManager := utils.NewJWTManager(cfg.JWT.Secret, cfg.JWT.ExpireHour)
+	ssoJWTManager := utils.NewSSOJWTManager(cfg.SSOPrivateKey, cfg.SSOIssuerURL)
 	sessionStore := database.NewSessionStore(redisClient)
 
 	// Initialize repositories
@@ -132,6 +133,8 @@ func main() {
 	lookupHandler := handlers.NewLookupHandler(lookupRepo)
 	applicationLinkHandler := handlers.NewApplicationLinkHandler(applicationLinkService, minioStorage)
 	settingsHandler := handlers.NewSettingsHandler(settingsService)
+	jwksHandler := handlers.NewJWKSHandler(ssoJWTManager)
+	ssoHandler := handlers.NewSSOHandler(ssoJWTManager, jwtManager, sessionStore, userRepo, applicationLinkRepo, cfg.SSOFrontendURL)
 	notificationHandler := handlers.NewNotificationHandler(notificationService, minioStorage)
 	templateHandler := handlers.NewNotificationTemplateHandler(notificationTemplateRepo)
 	attachmentHandler := handlers.NewAttachmentHandler(incidentService, notificationService, minioStorage)
@@ -160,6 +163,11 @@ func main() {
 	}))
 
 	app.Use(middleware.ValidationMiddleware())
+
+	// Public SSO routes (no auth required — browser redirect landing points)
+	app.Get("/.well-known/jwks.json", jwksHandler.GetJWKS)
+	app.Get("/sso/callback", ssoHandler.Callback)
+
 	api := app.Group("/api")
 	v1 := api.Group("/v1")
 
@@ -189,6 +197,10 @@ func main() {
 	auth.Post("/refresh", userHandler.RefreshToken)
 	auth.Post("/logout", authMiddleware.Authenticate(), userHandler.Logout)
 
+	// SSO routes
+	sso := v1.Group("/sso", authMiddleware.Authenticate())
+	sso.Post("/launch", ssoHandler.Launch)
+
 	// User routes
 	users := v1.Group("/users")
 	users.Get("/me", authMiddleware.Authenticate(), userHandler.GetProfile)
@@ -207,6 +219,7 @@ func main() {
 	incidents.Get("/my-assigned", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetMyAssigned)
 	incidents.Get("/my-reported", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetMyReported)
 	incidents.Get("/sla-breached", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetSLABreached)
+	incidents.Post("/bulk/convert-to-request", authMiddleware.RequirePermission("incidents:update"), incidentHandler.BulkConvertToRequest)
 	incidents.Get("/:id", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetIncident)
 	incidents.Get("/:id/report", authMiddleware.RequirePermission("reports:view"), incidentHandler.GenerateReport)
 	incidents.Put("/:id", authMiddleware.RequirePermission("incidents:update"), incidentHandler.UpdateIncident)
