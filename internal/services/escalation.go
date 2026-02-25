@@ -9,7 +9,6 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 )
 
 // EscalationService handles SLA breach detection and notification dispatch.
@@ -165,10 +164,9 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 
 				// Send notifications (best-effort; failure does NOT prevent DB log) ---
 				sentChannels := s.sendNotifications(ctx, incident, state, transition.Name, user, hoursInState)
-
-				actions := pq.StringArray(sentChannels)
+				actions := sentChannels
 				if actions == nil {
-					actions = pq.StringArray{}
+					actions = []string{}
 				}
 
 				now := time.Now()
@@ -363,12 +361,9 @@ func (s *EscalationService) ProcessGlobalSLABreaches(ctx context.Context) error 
 
 			// Send EMAIL / SMS (best-effort; failures are logged, not fatal)
 			sentChannels := s.sendGlobalBreachNotification(ctx, incident, user, totalHoursOpen, slaHoursAllowed)
-
-			// Persist breach log regardless of delivery outcome.
-			// state_id = nil distinguishes a global-deadline breach from a per-state breach.
-			actions := pq.StringArray(sentChannels)
+			actions := sentChannels
 			if actions == nil {
-				actions = pq.StringArray{}
+				actions = []string{}
 			}
 			now := time.Now()
 			breach := &models.EscalationSLA{

@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 	"gorm.io/gorm"
 )
 
@@ -31,8 +30,8 @@ type EscalationSLA struct {
 	Email string `gorm:"size:255" json:"email"`
 	Phone string `gorm:"size:50"  json:"phone"`
 
-	// Which channels were used: ["EMAIL"] | ["SMS"] | ["EMAIL","SMS"]
-	Actions pq.StringArray `gorm:"type:text[]" json:"actions"`
+	// Actions taken during the escalation
+	Actions []string `gorm:"type:text[]" json:"actions"`
 
 	// SLA context
 	SLAHoursAllowed int     `gorm:"default:0" json:"sla_hours_allowed"` // configured SLA hours for the state
