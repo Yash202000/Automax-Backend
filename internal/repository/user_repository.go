@@ -33,6 +33,7 @@ type UserRepository interface {
 
 	FindByExtension(ctx context.Context, extension string) (*models.User, error)
 	FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.User, error)
+	FindByRoleAndContext(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID *uuid.UUID) ([]models.User, error)
 }
 
 type userRepository struct {
@@ -403,5 +404,51 @@ func (r *userRepository) FindByIDs(ctx context.Context, ids []uuid.UUID) ([]mode
 
 	var users []models.User
 	err := r.db.WithContext(ctx).Where("id IN ?", ids).Find(&users).Error
+	return users, err
+}
+
+// FindByRoleAndContext finds active users that hold at least one of the given roles and
+
+func (r *userRepository) FindByRoleAndContext(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID *uuid.UUID) ([]models.User, error) {
+	if len(roleIDs) == 0 {
+		return []models.User{}, nil
+	}
+
+	idQuery := r.db.WithContext(ctx).
+		Model(&models.User{}).
+		Joins("JOIN user_roles ON user_roles.user_id = users.id").
+		Where("user_roles.role_id IN ?", roleIDs).
+		Where("users.is_active = ?", true)
+
+	if departmentID != nil {
+		idQuery = idQuery.
+			Joins("JOIN user_departments ON user_departments.user_id = users.id").
+			Where("user_departments.department_id = ?", *departmentID)
+	}
+	if classificationID != nil {
+		idQuery = idQuery.
+			Joins("JOIN user_classifications ON user_classifications.user_id = users.id").
+			Where("user_classifications.classification_id = ?", *classificationID)
+	}
+	if locationID != nil {
+		idQuery = idQuery.
+			Joins("JOIN user_locations ON user_locations.user_id = users.id").
+			Where("user_locations.location_id = ?", *locationID)
+	}
+
+	// GROUP BY deduplicates users that match through multiple joined rows.
+	var userIDs []uuid.UUID
+	if err := idQuery.Group("users.id").Pluck("users.id", &userIDs).Error; err != nil {
+		return nil, err
+	}
+	if len(userIDs) == 0 {
+		return []models.User{}, nil
+	}
+
+	// fetch full user records (email, phone, name, etc.)
+	var users []models.User
+	err := r.db.WithContext(ctx).
+		Where("id IN ?", userIDs).
+		Find(&users).Error
 	return users, err
 }

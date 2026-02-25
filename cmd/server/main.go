@@ -78,6 +78,8 @@ func main() {
 	callLogRepo := repository.NewCallLogRepository(db)
 	applicationLinkRepo := repository.NewApplicationLinkRepository(db)
 	settingsRepo := repository.NewSettingsRepository(db)
+	escalationRepo := repository.NewEscalationRepository(db)
+	escalationGroupRepo := repository.NewEscalationGroupRepository(db)
 
 	// Initialize WebSocket hub and start it
 	wsHub := services.NewWSHub()
@@ -91,18 +93,21 @@ func main() {
 	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg, actionLogService)
 	callLogService := services.NewCallLogService(callLogRepo, userRepo)
 	workflowService := services.NewWorkflowService(workflowRepo, roleRepo, departmentRepo, classificationRepo, db)
-	incidentService := services.NewIncidentService(incidentRepo, incidentMergeRepo, workflowRepo, userRepo, minioStorage, db, wsHub)
+	incidentService := services.NewIncidentService(incidentRepo, incidentMergeRepo, workflowRepo, userRepo, classificationRepo, minioStorage, db, wsHub)
 	incidentMergeService := services.NewIncidentMergeService(incidentMergeRepo, incidentRepo, workflowRepo, roleRepo, locationRepo, classificationRepo, db, wsHub)
 	reportService := services.NewReportService(reportRepo)
 	reportTemplateService := services.NewReportTemplateService(reportTemplateRepo, reportRepo)
 	applicationLinkService := services.NewApplicationLinkService(applicationLinkRepo)
 	settingsService := services.NewSettingsService(settingsRepo)
 	presenceService := services.NewPresenceService(redisClient)
-	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo, userRepo)
+	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo, userRepo, minioStorage)
 	otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo)
+	escalationService := services.NewEscalationService(escalationRepo, incidentRepo, workflowRepo, userRepo, notificationService)
+	escalationGroupService := services.NewEscalationGroupService(escalationGroupRepo, incidentRepo, notificationService, cfg.Escalation)
 
 	// Initialize and start SLA Monitor (checks every 5 minutes)
-	slaMonitor := services.NewSLAMonitor(incidentRepo, 5*time.Minute)
+	// slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, escalationGroupService, 5*time.Minute)
+	slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, escalationGroupService, 5*time.Minute)
 	ctx := context.Background()
 	slaMonitor.Start(ctx)
 	defer slaMonitor.Stop()
@@ -134,6 +139,8 @@ func main() {
 	templateHandler := handlers.NewNotificationTemplateHandler(notificationTemplateRepo)
 	attachmentHandler := handlers.NewAttachmentHandler(incidentService, notificationService, minioStorage)
 	otpHandler := handlers.NewOTPHandler(otpService)
+	escalationHandler := handlers.NewEscalationHandler(escalationService)
+	escalationGroupHandler := handlers.NewEscalationGroupHandler(escalationGroupService)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore, userRepo)
@@ -313,6 +320,12 @@ func main() {
 	classifications.Get("/:id", authMiddleware.RequirePermission("classifications:view"), classificationHandler.GetByID)
 	classifications.Put("/:id", authMiddleware.RequirePermission("classifications:update"), classificationHandler.Update)
 	classifications.Delete("/:id", authMiddleware.RequirePermission("classifications:delete"), classificationHandler.Delete)
+	// Classification Criticality routes
+	classifications.Get("/:classification_id/criticalities", authMiddleware.RequirePermission("classifications:view"), classificationHandler.GetCriticalities)
+	classifications.Post("/:classification_id/criticalities", authMiddleware.RequirePermission("classifications:create"), classificationHandler.CreateCriticality)
+	classifications.Get("/criticalities/:id", authMiddleware.RequirePermission("classifications:view"), classificationHandler.GetCriticalityByID)
+	classifications.Put("/criticalities/:id", authMiddleware.RequirePermission("classifications:update"), classificationHandler.UpdateCriticality)
+	classifications.Delete("/criticalities/:id", authMiddleware.RequirePermission("classifications:delete"), classificationHandler.DeleteCriticality)
 
 	// Location routes
 	locations := admin.Group("/locations")
@@ -548,6 +561,21 @@ func main() {
 	otp := v1.Group("/otp", authMiddleware.Authenticate())
 	otp.Post("/send", authMiddleware.RequirePermission("otp:send"), otpHandler.SendOTP)
 	otp.Post("/verify", authMiddleware.RequirePermission("otp:verify"), otpHandler.VerifyOTP)
+
+	escalation := v1.Group("/escalation", authMiddleware.Authenticate())
+
+	// GET /api/v1/escalation— list all SLA breach notification records
+	escalation.Get("/", escalationHandler.List)
+	// GET /api/v1/escalation/incident/:incident_id — breach records for one incident
+	escalation.Get("/incident/:incident_id", escalationHandler.ListByIncident)
+
+	// Custom Escalation Groups (admin)
+	escalationGroups := admin.Group("/escalation-groups", authMiddleware.Authenticate())
+	escalationGroups.Post("/", escalationGroupHandler.Create)
+	escalationGroups.Get("/", escalationGroupHandler.List)
+	escalationGroups.Get("/:id", escalationGroupHandler.GetByID)
+	escalationGroups.Put("/:id", escalationGroupHandler.Update)
+	escalationGroups.Delete("/:id", escalationGroupHandler.Delete)
 
 	go func() {
 		addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)

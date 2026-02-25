@@ -28,7 +28,7 @@ func NewClassificationHandler(repo repository.ClassificationRepository) *Classif
 }
 
 func (h *ClassificationHandler) Create(c *fiber.Ctx) error {
-	var req models.ClassificationCreateRequest
+	var req models.ClassificationCreateRequestWithCriticalities
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
@@ -58,6 +58,32 @@ func (h *ClassificationHandler) Create(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
+	// Create criticalities if provided
+	if len(req.Criticalities) > 0 {
+		for _, critReq := range req.Criticalities {
+			criticalityID, err := uuid.Parse(critReq.CriticalityID)
+			if err != nil {
+				// Rollback: delete the classification if criticality creation fails
+				h.repo.Delete(c.Context(), classification.ID)
+				return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid criticality ID: "+critReq.CriticalityID)
+			}
+
+			criticality := &models.ClassificationCriticality{
+				ClassificationID:  classification.ID,
+				CriticalityID:     criticalityID,
+				MaxClosingHours:   critReq.MaxClosingHours,
+				MaxClosingMinutes: critReq.MaxClosingMinutes,
+				IsActive:          true,
+			}
+
+			if err := h.repo.CreateCriticality(c.Context(), criticality); err != nil {
+				// Rollback: delete the classification if criticality creation fails
+				h.repo.Delete(c.Context(), classification.ID)
+				return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create criticality: "+err.Error())
+			}
+		}
+	}
+
 	return utils.SuccessResponse(c, fiber.StatusCreated, "Classification created", models.ToClassificationResponse(classification))
 }
 
@@ -83,7 +109,7 @@ func (h *ClassificationHandler) Update(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	var req models.ClassificationUpdateRequest
+	var req models.ClassificationCreateRequestWithCriticalities
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
@@ -99,21 +125,74 @@ func (h *ClassificationHandler) Update(c *fiber.Ctx) error {
 	if req.Description != "" {
 		classification.Description = req.Description
 	}
-	if req.Type != nil {
-		classification.Type = *req.Type
+	if req.Type != "" {
+		classification.Type = req.Type
 	}
-	if req.IsActive != nil {
-		classification.IsActive = *req.IsActive
-	}
-	if req.SortOrder != nil {
-		classification.SortOrder = *req.SortOrder
+	classification.IsActive = true // Keep active on update
+	if req.SortOrder >= 0 {
+		classification.SortOrder = req.SortOrder
 	}
 
+	// Update classification
 	if err := h.repo.Update(c.Context(), classification); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Classification updated", models.ToClassificationResponse(classification))
+	// Update criticalities if provided
+	if len(req.Criticalities) > 0 {
+		// Get existing criticalities
+		existingCriticalities, err := h.repo.GetCriticalitiesByClassificationID(c.Context(), id)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to get existing criticalities")
+		}
+
+		// Build map of existing criticalities by criticality_id
+		existingMap := make(map[uuid.UUID]*models.ClassificationCriticality)
+		for i := range existingCriticalities {
+			existingMap[existingCriticalities[i].CriticalityID] = &existingCriticalities[i]
+		}
+
+		// Process incoming criticalities
+		for _, critReq := range req.Criticalities {
+			criticalityID, err := uuid.Parse(critReq.CriticalityID)
+			if err != nil {
+				return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid criticality ID: "+critReq.CriticalityID)
+			}
+
+			if existing, ok := existingMap[criticalityID]; ok {
+				// Update existing criticality
+				existing.MaxClosingHours = critReq.MaxClosingHours
+				existing.MaxClosingMinutes = critReq.MaxClosingMinutes
+				if err := h.repo.UpdateCriticality(c.Context(), existing); err != nil {
+					return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to update criticality: "+err.Error())
+				}
+				delete(existingMap, criticalityID)
+			} else {
+				// Create new criticality
+				criticality := &models.ClassificationCriticality{
+					ClassificationID:  id,
+					CriticalityID:     criticalityID,
+					MaxClosingHours:   critReq.MaxClosingHours,
+					MaxClosingMinutes: critReq.MaxClosingMinutes,
+					IsActive:          true,
+				}
+				if err := h.repo.CreateCriticality(c.Context(), criticality); err != nil {
+					return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create criticality: "+err.Error())
+				}
+			}
+		}
+
+		// Delete criticalities that are no longer in the request (optional - keep existing if not sent)
+		// For now, we'll keep them - can be changed based on requirements
+	}
+
+	// Reload classification with criticalities
+	updatedClassification, err := h.repo.FindByID(c.Context(), id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to reload classification")
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Classification updated", models.ToClassificationResponse(updatedClassification))
 }
 
 func (h *ClassificationHandler) Delete(c *fiber.Ctx) error {
@@ -342,4 +421,149 @@ func (h *ClassificationHandler) GetTreeWithStats(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Classification tree with stats retrieved", tree)
+}
+
+// GetCriticalities returns all criticalities for a classification
+func (h *ClassificationHandler) GetCriticalities(c *fiber.Ctx) error {
+	classificationIDStr := c.Params("classification_id")
+	classificationID, err := uuid.Parse(classificationIDStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid classification ID")
+	}
+
+	criticalities, err := h.repo.GetCriticalitiesByClassificationID(c.Context(), classificationID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	responses := make([]models.ClassificationCriticalityResponse, len(criticalities))
+	for i, crit := range criticalities {
+		responses[i] = models.ToClassificationCriticalityResponse(&crit)
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Classification criticalities retrieved", responses)
+}
+
+// CreateCriticality creates a new criticality setting for a classification
+func (h *ClassificationHandler) CreateCriticality(c *fiber.Ctx) error {
+	classificationIDStr := c.Params("classification_id")
+	classificationID, err := uuid.Parse(classificationIDStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid classification ID")
+	}
+
+	var req models.ClassificationCriticalityCreateRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	// Check if classification exists
+	_, err = h.repo.FindByID(c.Context(), classificationID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Classification not found")
+	}
+
+	criticalityID, err := uuid.Parse(req.CriticalityID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid criticality ID")
+	}
+
+	// Check if criticality already exists for this classification
+	_, err = h.repo.GetCriticalityByClassificationAndCriticalityID(c.Context(), classificationID, criticalityID)
+	if err == nil {
+		return utils.ErrorResponse(c, fiber.StatusConflict, "Criticality already exists for this classification")
+	}
+
+	criticality := &models.ClassificationCriticality{
+		ClassificationID:  classificationID,
+		CriticalityID:     criticalityID,
+		MaxClosingHours:   req.MaxClosingHours,
+		MaxClosingMinutes: req.MaxClosingMinutes,
+		IsActive:          true,
+	}
+
+	if err := h.repo.CreateCriticality(c.Context(), criticality); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create criticality: "+err.Error())
+	}
+
+	// Reload with criticality details
+	created, err := h.repo.GetCriticalityByID(c.Context(), criticality.ID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to retrieve created criticality")
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusCreated, "Classification criticality created", models.ToClassificationCriticalityResponse(created))
+}
+
+// UpdateCriticality updates a criticality setting for a classification
+func (h *ClassificationHandler) UpdateCriticality(c *fiber.Ctx) error {
+	idStr := c.Params("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+	}
+
+	var req models.ClassificationCriticalityUpdateRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	criticality, err := h.repo.GetCriticalityByID(c.Context(), id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Classification criticality not found")
+	}
+
+	if req.MaxClosingHours != nil {
+		criticality.MaxClosingHours = *req.MaxClosingHours
+	}
+	if req.MaxClosingMinutes != nil {
+		criticality.MaxClosingMinutes = *req.MaxClosingMinutes
+	}
+	if req.IsActive != nil {
+		criticality.IsActive = *req.IsActive
+	}
+
+	if err := h.repo.UpdateCriticality(c.Context(), criticality); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Classification criticality updated", models.ToClassificationCriticalityResponse(criticality))
+}
+
+// DeleteCriticality deletes a criticality setting for a classification
+func (h *ClassificationHandler) DeleteCriticality(c *fiber.Ctx) error {
+	idStr := c.Params("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+	}
+
+	if err := h.repo.DeleteCriticality(c.Context(), id); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Classification criticality deleted", nil)
+}
+
+// GetCriticalityByID returns a single criticality setting by ID
+func (h *ClassificationHandler) GetCriticalityByID(c *fiber.Ctx) error {
+	idStr := c.Params("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+	}
+
+	criticality, err := h.repo.GetCriticalityByID(c.Context(), id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Classification criticality not found")
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Classification criticality retrieved", models.ToClassificationCriticalityResponse(criticality))
 }

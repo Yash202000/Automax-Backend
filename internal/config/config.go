@@ -6,14 +6,22 @@ import (
 )
 
 type Config struct {
-	Server        ServerConfig
-	Database      DatabaseConfig
-	Redis         RedisConfig
-	MinIO         MinIOConfig
-	JWT           JWTConfig
+	Server         ServerConfig
+	Database       DatabaseConfig
+	Redis          RedisConfig
+	MinIO          MinIOConfig
+	JWT            JWTConfig
 	SSOPrivateKey  string // env: SSO_RSA_PRIVATE_KEY (PEM, optional — auto-gen if empty)
 	SSOIssuerURL   string // env: SSO_ISSUER_URL (e.g. https://automax.example.com — embedded in iss claim)
 	SSOFrontendURL string // env: SSO_FRONTEND_URL (e.g. https://automax.example.com — where /sso-complete lives)
+	Escalation     EscalationConfig
+}
+
+type EscalationConfig struct {
+	DailyHour    int
+	DailyMinute  int
+	WeeklyHour   int
+	WeeklyMinute int
 }
 
 type ServerConfig struct {
@@ -55,6 +63,7 @@ func Load() *Config {
 		Server: ServerConfig{
 			Port: getEnv("SERVER_PORT", "8080"),
 			Host: getEnv("SERVER_HOST", "0.0.0.0"),
+			// FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
 		},
 		Database: DatabaseConfig{
 			Host:     getEnv("DB_HOST", "localhost"),
@@ -84,6 +93,12 @@ func Load() *Config {
 		SSOPrivateKey:  getEnv("SSO_RSA_PRIVATE_KEY", ""),
 		SSOIssuerURL:   getEnv("SSO_ISSUER_URL", ""),
 		SSOFrontendURL: getEnv("SSO_FRONTEND_URL", ""),
+		Escalation: EscalationConfig{
+			DailyHour:    getEnvAsInt("ESCALATION_DAILY_HOUR", 18),
+			DailyMinute:  getEnvAsInt("ESCALATION_DAILY_MINUTE", 0),
+			WeeklyHour:   getEnvAsInt("ESCALATION_WEEKLY_HOUR", 9),
+			WeeklyMinute: getEnvAsInt("ESCALATION_WEEKLY_MINUTE", 0),
+		},
 	}
 }
 

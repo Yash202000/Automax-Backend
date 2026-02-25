@@ -55,6 +55,7 @@ func Migrate(db *gorm.DB) error {
 		&models.Permission{},
 		&models.Role{},
 		&models.Classification{},
+		&models.ClassificationCriticality{},
 		&models.Location{},
 		&models.Department{},
 		&models.User{},
@@ -62,6 +63,7 @@ func Migrate(db *gorm.DB) error {
 		&models.CallLog{},
 		&models.NotificationTemplate{},
 		&models.NotificationLog{},
+		&models.EscalationSLA{},
 		// IncidentMerge MUST come before Incident (foreign key dependency)
 		&models.IncidentMerge{},
 		// Lookup models
@@ -89,6 +91,8 @@ func Migrate(db *gorm.DB) error {
 		&models.ApplicationLink{},
 		// Settings
 		&models.Settings{},
+		// Custom Escalation Groups
+		&models.EscalationGroup{},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
