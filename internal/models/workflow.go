@@ -10,14 +10,14 @@ import (
 
 // Workflow represents a reusable workflow template
 type Workflow struct {
-	ID          uuid.UUID          `gorm:"type:uuid;primary_key" json:"id"`
-	Name        string             `gorm:"not null;size:100;uniqueIndex" json:"name"`
-	Code        string             `gorm:"not null;size:50;uniqueIndex" json:"code"`
-	Description string             `gorm:"size:500" json:"description"`
-	Version     int                `gorm:"default:1" json:"version"`
-	IsActive    bool               `gorm:"default:true" json:"is_active"`
-	IsDefault   bool               `gorm:"default:false" json:"is_default"`
-	RecordType  string             `gorm:"size:20;default:'incident'" json:"record_type"` // 'incident', 'request', 'complaint', 'query', 'both', 'all'
+	ID          uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
+	Name        string    `gorm:"not null;size:100;uniqueIndex" json:"name"`
+	Code        string    `gorm:"not null;size:50;uniqueIndex" json:"code"`
+	Description string    `gorm:"size:500" json:"description"`
+	Version     int       `gorm:"default:1" json:"version"`
+	IsActive    bool      `gorm:"default:true" json:"is_active"`
+	IsDefault   bool      `gorm:"default:false" json:"is_default"`
+	RecordType  string    `gorm:"size:20;default:'incident'" json:"record_type"` // 'incident', 'request', 'complaint', 'query', 'both', 'all'
 
 	// Matching criteria - stored as JSON arrays, empty/null means matches any value
 	// Sources: ["email", "phone", "web", "mobile", "emergency_hotline", etc.]
@@ -76,12 +76,9 @@ type WorkflowState struct {
 	// Merge Configuration - whether incidents in this state can be merged
 	IsMergable bool `gorm:"default:false" json:"is_mergable"`
 
-	// Ready-to-Close Configuration
 	// IsReadyToClose marks this state as a "Ready to Close" state that requires a
-	// duration selection and triggers automatic reversion if the incident is not closed in time.
 	IsReadyToClose bool `gorm:"default:false" json:"is_ready_to_close"`
-	// DurationOptions is a JSON array of duration label strings (e.g. ["1 Day","1 Week"]).
-	// When non-empty it overrides the global READY_TO_CLOSE_DURATION_OPTIONS env variable.
+	// DurationOptions is a JSON array of duration label strings (e.g. ["1 Day","1 Week"]).When non-empty it overrides the global READY_TO_CLOSE_DURATION_OPTIONS env variable.
 	DurationOptions string `gorm:"type:text" json:"duration_options"`
 
 	// Role-based visibility (many-to-many) - empty = visible to all
@@ -103,12 +100,12 @@ func (s *WorkflowState) BeforeCreate(tx *gorm.DB) error {
 
 // WorkflowTransition represents a transition between states
 type WorkflowTransition struct {
-	ID          uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
-	WorkflowID  uuid.UUID      `gorm:"type:uuid;index;not null" json:"workflow_id"`
-	Workflow    *Workflow      `gorm:"foreignKey:WorkflowID" json:"workflow,omitempty"`
-	Name        string         `gorm:"not null;size:100" json:"name"`
-	Code        string         `gorm:"not null;size:50" json:"code"`
-	Description string         `gorm:"size:500" json:"description"`
+	ID          uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
+	WorkflowID  uuid.UUID `gorm:"type:uuid;index;not null" json:"workflow_id"`
+	Workflow    *Workflow `gorm:"foreignKey:WorkflowID" json:"workflow,omitempty"`
+	Name        string    `gorm:"not null;size:100" json:"name"`
+	Code        string    `gorm:"not null;size:50" json:"code"`
+	Description string    `gorm:"size:500" json:"description"`
 
 	FromStateID uuid.UUID      `gorm:"type:uuid;index;not null" json:"from_state_id"`
 	FromState   *WorkflowState `gorm:"foreignKey:FromStateID" json:"from_state,omitempty"`
@@ -140,9 +137,9 @@ type WorkflowTransition struct {
 	// If manual_select_user=true: user performing transition manually selects the assignee from dropdown
 
 	// Requirements, Actions and Field Changes
-	Requirements []TransitionRequirement  `gorm:"foreignKey:TransitionID" json:"requirements,omitempty"`
-	Actions      []TransitionAction       `gorm:"foreignKey:TransitionID" json:"actions,omitempty"`
-	FieldChanges []TransitionFieldChange  `gorm:"foreignKey:TransitionID" json:"field_changes,omitempty"`
+	Requirements []TransitionRequirement `gorm:"foreignKey:TransitionID" json:"requirements,omitempty"`
+	Actions      []TransitionAction      `gorm:"foreignKey:TransitionID" json:"actions,omitempty"`
+	FieldChanges []TransitionFieldChange `gorm:"foreignKey:TransitionID" json:"field_changes,omitempty"`
 
 	IsActive  bool           `gorm:"default:true" json:"is_active"`
 	SortOrder int            `gorm:"default:0" json:"sort_order"`
@@ -241,8 +238,8 @@ type WorkflowCreateRequest struct {
 	Code              string   `json:"code" validate:"required,min=2,max=50"`
 	Description       string   `json:"description" validate:"max=500"`
 	RecordType        string   `json:"record_type" validate:"omitempty,oneof=incident request complaint query both all"`
-	Sources           []string `json:"sources"`     // Array of source strings
-	Priorities        []int    `json:"priorities"`  // Array of priority integers
+	Sources           []string `json:"sources"`    // Array of source strings
+	Priorities        []int    `json:"priorities"` // Array of priority integers
 	ClassificationIDs []string `json:"classification_ids"`
 	LocationIDs       []string `json:"location_ids"`
 	RequiredFields    []string `json:"required_fields"`
@@ -253,8 +250,8 @@ type WorkflowUpdateRequest struct {
 	Code                    string   `json:"code" validate:"omitempty,min=2,max=50"`
 	Description             string   `json:"description" validate:"max=500"`
 	RecordType              *string  `json:"record_type" validate:"omitempty,oneof=incident request complaint query both all"`
-	Sources                 []string `json:"sources"`     // Array of source strings (nil means not updating)
-	Priorities              []int    `json:"priorities"`  // Array of priority integers (nil means not updating)
+	Sources                 []string `json:"sources"`    // Array of source strings (nil means not updating)
+	Priorities              []int    `json:"priorities"` // Array of priority integers (nil means not updating)
 	IsActive                *bool    `json:"is_active"`
 	IsDefault               *bool    `json:"is_default"`
 	CanvasLayout            string   `json:"canvas_layout"`
@@ -406,8 +403,8 @@ type WorkflowResponse struct {
 	IsActive              bool                         `json:"is_active"`
 	IsDefault             bool                         `json:"is_default"`
 	RecordType            string                       `json:"record_type"`
-	Sources               []string                     `json:"sources"`     // Array of sources
-	Priorities            []int                        `json:"priorities"`  // Array of priorities
+	Sources               []string                     `json:"sources"`    // Array of sources
+	Priorities            []int                        `json:"priorities"` // Array of priorities
 	CanvasLayout          string                       `json:"canvas_layout,omitempty"`
 	RequiredFields        []string                     `json:"required_fields"`
 	States                []WorkflowStateResponse      `json:"states,omitempty"`
@@ -443,16 +440,16 @@ type WorkflowStateResponse struct {
 }
 
 type WorkflowTransitionResponse struct {
-	ID           uuid.UUID                       `json:"id"`
-	WorkflowID   uuid.UUID                       `json:"workflow_id"`
-	Name         string                          `json:"name"`
-	Code         string                          `json:"code"`
-	Description  string                          `json:"description"`
-	FromStateID  uuid.UUID                       `json:"from_state_id"`
-	FromState    *WorkflowStateResponse          `json:"from_state,omitempty"`
-	ToStateID    uuid.UUID                       `json:"to_state_id"`
-	ToState      *WorkflowStateResponse          `json:"to_state,omitempty"`
-	AllowedRoles []RoleResponse                  `json:"allowed_roles,omitempty"`
+	ID           uuid.UUID              `json:"id"`
+	WorkflowID   uuid.UUID              `json:"workflow_id"`
+	Name         string                 `json:"name"`
+	Code         string                 `json:"code"`
+	Description  string                 `json:"description"`
+	FromStateID  uuid.UUID              `json:"from_state_id"`
+	FromState    *WorkflowStateResponse `json:"from_state,omitempty"`
+	ToStateID    uuid.UUID              `json:"to_state_id"`
+	ToState      *WorkflowStateResponse `json:"to_state,omitempty"`
+	AllowedRoles []RoleResponse         `json:"allowed_roles,omitempty"`
 
 	// Department Assignment
 	AssignDepartmentID   *uuid.UUID          `json:"assign_department_id,omitempty"`
@@ -467,12 +464,12 @@ type WorkflowTransitionResponse struct {
 	AutoMatchUser    bool          `json:"auto_match_user"`
 	ManualSelectUser bool          `json:"manual_select_user"`
 
-	Requirements []TransitionRequirementResponse  `json:"requirements,omitempty"`
-	Actions      []TransitionActionResponse       `json:"actions,omitempty"`
-	FieldChanges []TransitionFieldChangeResponse  `json:"field_changes,omitempty"`
-	IsActive     bool                             `json:"is_active"`
-	SortOrder    int                              `json:"sort_order"`
-	CreatedAt    time.Time                        `json:"created_at"`
+	Requirements []TransitionRequirementResponse `json:"requirements,omitempty"`
+	Actions      []TransitionActionResponse      `json:"actions,omitempty"`
+	FieldChanges []TransitionFieldChangeResponse `json:"field_changes,omitempty"`
+	IsActive     bool                            `json:"is_active"`
+	SortOrder    int                             `json:"sort_order"`
+	CreatedAt    time.Time                       `json:"created_at"`
 }
 
 type TransitionRequirementResponse struct {
@@ -762,24 +759,24 @@ type CodeNamePair struct {
 
 // WorkflowExportData is the top-level export structure
 type WorkflowExportData struct {
-	ExportVersion string                 `json:"export_version"`
-	ExportedAt    string                 `json:"exported_at"`
-	Workflow      WorkflowExportContent  `json:"workflow"`
+	ExportVersion string                `json:"export_version"`
+	ExportedAt    string                `json:"exported_at"`
+	Workflow      WorkflowExportContent `json:"workflow"`
 }
 
 // WorkflowExportContent contains workflow data with codes instead of IDs
 type WorkflowExportContent struct {
-	Name                  string                      `json:"name"`
-	Code                  string                      `json:"code"`
-	Description           string                      `json:"description"`
-	RecordType            string                      `json:"record_type"`
-	Sources               []string                    `json:"sources,omitempty"`
-	Priorities            []int                       `json:"priorities,omitempty"`
-	RequiredFields        []string                    `json:"required_fields"`
-	States                []WorkflowStateExport       `json:"states"`
-	Transitions           []WorkflowTransitionExport  `json:"transitions"`
-	Classifications       []CodeNamePair              `json:"classifications"`
-	ConvertToRequestRoles []CodeNamePair              `json:"convert_to_request_roles"`
+	Name                  string                     `json:"name"`
+	Code                  string                     `json:"code"`
+	Description           string                     `json:"description"`
+	RecordType            string                     `json:"record_type"`
+	Sources               []string                   `json:"sources,omitempty"`
+	Priorities            []int                      `json:"priorities,omitempty"`
+	RequiredFields        []string                   `json:"required_fields"`
+	States                []WorkflowStateExport      `json:"states"`
+	Transitions           []WorkflowTransitionExport `json:"transitions"`
+	Classifications       []CodeNamePair             `json:"classifications"`
+	ConvertToRequestRoles []CodeNamePair             `json:"convert_to_request_roles"`
 }
 
 // WorkflowStateExport represents a state with viewable role codes
@@ -798,21 +795,21 @@ type WorkflowStateExport struct {
 
 // WorkflowTransitionExport represents a transition with codes and nested requirements/actions
 type WorkflowTransitionExport struct {
-	Name                 string                              `json:"name"`
-	Code                 string                              `json:"code"`
-	Description          string                              `json:"description"`
-	FromStateCode        string                              `json:"from_state_code"`
-	ToStateCode          string                              `json:"to_state_code"`
-	AllowedRoles         []CodeNamePair                      `json:"allowed_roles,omitempty"`
-	AssignDepartment     *CodeNamePair                       `json:"assign_department,omitempty"`
-	AutoDetectDepartment bool                                `json:"auto_detect_department"`
-	AssignUser           *CodeNamePair                       `json:"assign_user,omitempty"`
-	AssignmentRole       *CodeNamePair                       `json:"assignment_role,omitempty"`
-	AutoMatchUser        bool                                `json:"auto_match_user"`
-	ManualSelectUser     bool                                `json:"manual_select_user"`
-	Requirements         []TransitionRequirementExport       `json:"requirements,omitempty"`
-	Actions              []TransitionActionExport            `json:"actions,omitempty"`
-	SortOrder            int                                 `json:"sort_order"`
+	Name                 string                        `json:"name"`
+	Code                 string                        `json:"code"`
+	Description          string                        `json:"description"`
+	FromStateCode        string                        `json:"from_state_code"`
+	ToStateCode          string                        `json:"to_state_code"`
+	AllowedRoles         []CodeNamePair                `json:"allowed_roles,omitempty"`
+	AssignDepartment     *CodeNamePair                 `json:"assign_department,omitempty"`
+	AutoDetectDepartment bool                          `json:"auto_detect_department"`
+	AssignUser           *CodeNamePair                 `json:"assign_user,omitempty"`
+	AssignmentRole       *CodeNamePair                 `json:"assignment_role,omitempty"`
+	AutoMatchUser        bool                          `json:"auto_match_user"`
+	ManualSelectUser     bool                          `json:"manual_select_user"`
+	Requirements         []TransitionRequirementExport `json:"requirements,omitempty"`
+	Actions              []TransitionActionExport      `json:"actions,omitempty"`
+	SortOrder            int                           `json:"sort_order"`
 }
 
 // TransitionRequirementExport represents a requirement without IDs
