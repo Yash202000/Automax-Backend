@@ -631,6 +631,7 @@ type IncidentDetailResponse struct {
 	Comments          []IncidentCommentResponse    `json:"comments,omitempty"`
 	Attachments       []IncidentAttachmentResponse `json:"attachments,omitempty"`
 	TransitionHistory []TransitionHistoryResponse  `json:"transition_history,omitempty"`
+	SourceIncidents   []IncidentResponse           `json:"source_incidents,omitempty"` // For bulk-converted requests
 }
 
 type IncidentCommentResponse struct {
