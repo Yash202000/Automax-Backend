@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -15,6 +16,7 @@ type Config struct {
 	SSOIssuerURL   string // env: SSO_ISSUER_URL (e.g. https://automax.example.com — embedded in iss claim)
 	SSOFrontendURL string // env: SSO_FRONTEND_URL (e.g. https://automax.example.com — where /sso-complete lives)
 	Escalation     EscalationConfig
+	ReadyToClose   ReadyToCloseConfig
 }
 
 type EscalationConfig struct {
@@ -22,6 +24,24 @@ type EscalationConfig struct {
 	DailyMinute  int
 	WeeklyHour   int
 	WeeklyMinute int
+}
+
+// ReadyToCloseConfig holds configuration for the Ready to Close workflow feature.
+// All values are read from environment variables with sensible defaults.
+type ReadyToCloseConfig struct {
+	// DefaultDurationOptions is a comma-separated list of duration labels.
+	// env: READY_TO_CLOSE_DURATION_OPTIONS
+	// default: "1 Day,2 Days,1 Week,2 Weeks,1 Month,3 Months"
+	DefaultDurationOptions []string
+	// PreExpiryNotificationHours controls how many hours before expiry
+	// the warning notification is sent. env: READY_TO_CLOSE_PRE_EXPIRY_HOURS (default: 24)
+	PreExpiryNotificationHours int
+	// RevertStateCode is the workflow state code incidents are moved back to
+	// when they expire in Ready to Close. env: READY_TO_CLOSE_REVERT_STATE_CODE (default: "under_resolution")
+	RevertStateCode string
+	// StateCode is the workflow state code that activates this feature.
+	// env: READY_TO_CLOSE_STATE_CODE (default: "ready_to_close")
+	StateCode string
 }
 
 type ServerConfig struct {
@@ -99,6 +119,12 @@ func Load() *Config {
 			WeeklyHour:   getEnvAsInt("ESCALATION_WEEKLY_HOUR", 9),
 			WeeklyMinute: getEnvAsInt("ESCALATION_WEEKLY_MINUTE", 0),
 		},
+		ReadyToClose: ReadyToCloseConfig{
+			DefaultDurationOptions:     getEnvAsStringSlice("READY_TO_CLOSE_DURATION_OPTIONS", []string{"1 Day", "2 Days", "1 Week", "2 Weeks", "1 Month", "3 Months"}),
+			PreExpiryNotificationHours: getEnvAsInt("READY_TO_CLOSE_PRE_EXPIRY_HOURS", 24),
+			RevertStateCode:            getEnv("READY_TO_CLOSE_REVERT_STATE_CODE", "under_resolution"),
+			StateCode:                  getEnv("READY_TO_CLOSE_STATE_CODE", "ready_to_close"),
+		},
 	}
 }
 
@@ -122,6 +148,22 @@ func getEnvAsBool(key string, defaultValue bool) bool {
 	if value, exists := os.LookupEnv(key); exists {
 		if boolValue, err := strconv.ParseBool(value); err == nil {
 			return boolValue
+		}
+	}
+	return defaultValue
+}
+
+func getEnvAsStringSlice(key string, defaultValue []string) []string {
+	if value, exists := os.LookupEnv(key); exists && value != "" {
+		parts := strings.Split(value, ",")
+		result := make([]string, 0, len(parts))
+		for _, p := range parts {
+			if trimmed := strings.TrimSpace(p); trimmed != "" {
+				result = append(result, trimmed)
+			}
+		}
+		if len(result) > 0 {
+			return result
 		}
 	}
 	return defaultValue

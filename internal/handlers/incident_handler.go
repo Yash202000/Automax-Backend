@@ -18,12 +18,13 @@ import (
 )
 
 type IncidentHandler struct {
-	service         services.IncidentService
-	userRepo        repository.UserRepository
-	incidentRepo    repository.IncidentRepository
-	storage         *storage.MinIOStorage
-	presenceService services.PresenceService
-	validator       *validator.Validate
+	service             services.IncidentService
+	userRepo            repository.UserRepository
+	incidentRepo        repository.IncidentRepository
+	storage             *storage.MinIOStorage
+	presenceService     services.PresenceService
+	readyToCloseService services.ReadyToCloseService
+	validator           *validator.Validate
 }
 
 func NewIncidentHandler(service services.IncidentService, userRepo repository.UserRepository, incidentRepo repository.IncidentRepository, storage *storage.MinIOStorage, presenceService services.PresenceService) *IncidentHandler {
@@ -35,6 +36,28 @@ func NewIncidentHandler(service services.IncidentService, userRepo repository.Us
 		presenceService: presenceService,
 		validator:       validator.New(),
 	}
+}
+
+// SetReadyToCloseService wires in the ReadyToCloseService for duration-options endpoint.
+func (h *IncidentHandler) SetReadyToCloseService(svc services.ReadyToCloseService) {
+	h.readyToCloseService = svc
+}
+
+// GetReadyToCloseDurationOptions returns the global default duration options.
+// State-specific options are embedded in WorkflowStateResponse.duration_options.
+// GET /api/v1/incidents/ready-to-close/duration-options
+func (h *IncidentHandler) GetReadyToCloseDurationOptions(c *fiber.Ctx) error {
+	if h.readyToCloseService == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"success": false,
+			"error":   "ReadyToClose service not available",
+		})
+	}
+	options := h.readyToCloseService.GetDurationOptionsForState(nil)
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data":    options,
+	})
 }
 
 // Helper to get user's role IDs

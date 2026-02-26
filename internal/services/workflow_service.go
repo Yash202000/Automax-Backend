@@ -769,19 +769,29 @@ func (s *workflowService) GetWorkflowByClassification(ctx context.Context, class
 // State management
 
 func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID, req *models.WorkflowStateCreateRequest) (*models.WorkflowStateResponse, error) {
+	// Serialise DurationOptions to JSON if provided
+	var durationOptionsJSON string
+	if len(req.DurationOptions) > 0 {
+		if b, err := json.Marshal(req.DurationOptions); err == nil {
+			durationOptionsJSON = string(b)
+		}
+	}
+
 	state := &models.WorkflowState{
-		WorkflowID:  workflowID,
-		Name:        req.Name,
-		Code:        req.Code,
-		Description: req.Description,
-		StateType:   req.StateType,
-		Color:       req.Color,
-		PositionX:   req.PositionX,
-		PositionY:   req.PositionY,
-		SLAHours:    req.SLAHours,
-		IsMergable:  req.IsMergable,
-		SortOrder:   req.SortOrder,
-		IsActive:    true,
+		WorkflowID:      workflowID,
+		Name:            req.Name,
+		Code:            req.Code,
+		Description:     req.Description,
+		StateType:       req.StateType,
+		Color:           req.Color,
+		PositionX:       req.PositionX,
+		PositionY:       req.PositionY,
+		SLAHours:        req.SLAHours,
+		IsMergable:      req.IsMergable,
+		IsReadyToClose:  req.IsReadyToClose,
+		DurationOptions: durationOptionsJSON,
+		SortOrder:       req.SortOrder,
+		IsActive:        true,
 	}
 
 	if state.StateType == "" {
@@ -876,6 +886,18 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 	}
 	if req.IsMergable != nil {
 		state.IsMergable = *req.IsMergable
+	}
+	if req.IsReadyToClose != nil {
+		state.IsReadyToClose = *req.IsReadyToClose
+	}
+	if req.DurationOptions != nil {
+		if len(req.DurationOptions) > 0 {
+			if b, err := json.Marshal(req.DurationOptions); err == nil {
+				state.DurationOptions = string(b)
+			}
+		} else {
+			state.DurationOptions = ""
+		}
 	}
 	if req.SortOrder != nil {
 		state.SortOrder = *req.SortOrder

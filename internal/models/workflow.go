@@ -76,6 +76,14 @@ type WorkflowState struct {
 	// Merge Configuration - whether incidents in this state can be merged
 	IsMergable bool `gorm:"default:false" json:"is_mergable"`
 
+	// Ready-to-Close Configuration
+	// IsReadyToClose marks this state as a "Ready to Close" state that requires a
+	// duration selection and triggers automatic reversion if the incident is not closed in time.
+	IsReadyToClose bool `gorm:"default:false" json:"is_ready_to_close"`
+	// DurationOptions is a JSON array of duration label strings (e.g. ["1 Day","1 Week"]).
+	// When non-empty it overrides the global READY_TO_CLOSE_DURATION_OPTIONS env variable.
+	DurationOptions string `gorm:"type:text" json:"duration_options"`
+
 	// Role-based visibility (many-to-many) - empty = visible to all
 	ViewableRoles []Role `gorm:"many2many:state_viewable_roles;" json:"viewable_roles,omitempty"`
 
@@ -266,6 +274,8 @@ type WorkflowStateCreateRequest struct {
 	PositionY       int      `json:"position_y"`
 	SLAHours        *int     `json:"sla_hours"`
 	IsMergable      bool     `json:"is_mergable"`
+	IsReadyToClose  bool     `json:"is_ready_to_close"`
+	DurationOptions []string `json:"duration_options"`
 	SortOrder       int      `json:"sort_order"`
 	ViewableRoleIDs []string `json:"viewable_role_ids"`
 }
@@ -280,6 +290,8 @@ type WorkflowStateUpdateRequest struct {
 	PositionY       *int     `json:"position_y"`
 	SLAHours        *int     `json:"sla_hours"`
 	IsMergable      *bool    `json:"is_mergable"`
+	IsReadyToClose  *bool    `json:"is_ready_to_close"`
+	DurationOptions []string `json:"duration_options"`
 	SortOrder       *int     `json:"sort_order"`
 	IsActive        *bool    `json:"is_active"`
 	ViewableRoleIDs []string `json:"viewable_role_ids"`
@@ -411,21 +423,23 @@ type WorkflowResponse struct {
 }
 
 type WorkflowStateResponse struct {
-	ID            uuid.UUID      `json:"id"`
-	WorkflowID    uuid.UUID      `json:"workflow_id"`
-	Name          string         `json:"name"`
-	Code          string         `json:"code"`
-	Description   string         `json:"description"`
-	StateType     string         `json:"state_type"`
-	Color         string         `json:"color"`
-	PositionX     int            `json:"position_x"`
-	PositionY     int            `json:"position_y"`
-	SLAHours      *int           `json:"sla_hours"`
-	IsMergable    bool           `json:"is_mergable"`
-	SortOrder     int            `json:"sort_order"`
-	IsActive      bool           `json:"is_active"`
-	ViewableRoles []RoleResponse `json:"viewable_roles,omitempty"`
-	CreatedAt     time.Time      `json:"created_at"`
+	ID              uuid.UUID      `json:"id"`
+	WorkflowID      uuid.UUID      `json:"workflow_id"`
+	Name            string         `json:"name"`
+	Code            string         `json:"code"`
+	Description     string         `json:"description"`
+	StateType       string         `json:"state_type"`
+	Color           string         `json:"color"`
+	PositionX       int            `json:"position_x"`
+	PositionY       int            `json:"position_y"`
+	SLAHours        *int           `json:"sla_hours"`
+	IsMergable      bool           `json:"is_mergable"`
+	IsReadyToClose  bool           `json:"is_ready_to_close"`
+	DurationOptions []string       `json:"duration_options,omitempty"`
+	SortOrder       int            `json:"sort_order"`
+	IsActive        bool           `json:"is_active"`
+	ViewableRoles   []RoleResponse `json:"viewable_roles,omitempty"`
+	CreatedAt       time.Time      `json:"created_at"`
 }
 
 type WorkflowTransitionResponse struct {
@@ -587,20 +601,29 @@ func ToWorkflowResponse(w *Workflow) WorkflowResponse {
 
 func ToWorkflowStateResponse(s *WorkflowState) WorkflowStateResponse {
 	resp := WorkflowStateResponse{
-		ID:         s.ID,
-		WorkflowID: s.WorkflowID,
-		Name:       s.Name,
-		Code:       s.Code,
-		Description: s.Description,
-		StateType:  s.StateType,
-		Color:      s.Color,
-		PositionX:  s.PositionX,
-		PositionY:  s.PositionY,
-		SLAHours:   s.SLAHours,
-		IsMergable: s.IsMergable,
-		SortOrder:  s.SortOrder,
-		IsActive:   s.IsActive,
-		CreatedAt:  s.CreatedAt,
+		ID:             s.ID,
+		WorkflowID:     s.WorkflowID,
+		Name:           s.Name,
+		Code:           s.Code,
+		Description:    s.Description,
+		StateType:      s.StateType,
+		Color:          s.Color,
+		PositionX:      s.PositionX,
+		PositionY:      s.PositionY,
+		SLAHours:       s.SLAHours,
+		IsMergable:     s.IsMergable,
+		IsReadyToClose: s.IsReadyToClose,
+		SortOrder:      s.SortOrder,
+		IsActive:       s.IsActive,
+		CreatedAt:      s.CreatedAt,
+	}
+
+	// Parse DurationOptions from JSON string
+	if s.DurationOptions != "" {
+		var opts []string
+		if err := json.Unmarshal([]byte(s.DurationOptions), &opts); err == nil {
+			resp.DurationOptions = opts
+		}
 	}
 
 	if len(s.ViewableRoles) > 0 {

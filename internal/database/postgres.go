@@ -93,6 +93,8 @@ func Migrate(db *gorm.DB) error {
 		&models.Settings{},
 		// Custom Escalation Groups
 		&models.EscalationGroup{},
+		// Ready-to-Close expiry tracking
+		&models.IncidentReadyToCloseEntry{},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
@@ -104,6 +106,13 @@ func Migrate(db *gorm.DB) error {
 	db.Exec("ALTER TABLE incidents DROP CONSTRAINT IF EXISTS fk_incident_merges_master_incident")
 	db.Exec("ALTER TABLE incidents DROP CONSTRAINT IF EXISTS incident_merges_master_incident_id_fkey")
 	db.Exec("ALTER TABLE incidents DROP CONSTRAINT IF EXISTS fk_incidents_master_incident")
+
+	// Drop FK constraints on performed_by_id so system-triggered actions (uuid.Nil) are allowed.
+	// System actions (e.g. Ready-to-Close auto-revert) do not have a real user performer.
+	db.Exec("ALTER TABLE incident_transition_histories DROP CONSTRAINT IF EXISTS fk_incident_transition_histories_performed_by")
+	db.Exec("ALTER TABLE incident_transition_histories DROP CONSTRAINT IF EXISTS incident_transition_histories_performed_by_id_fkey")
+	db.Exec("ALTER TABLE incident_revisions DROP CONSTRAINT IF EXISTS fk_incident_revisions_performed_by")
+	db.Exec("ALTER TABLE incident_revisions DROP CONSTRAINT IF EXISTS incident_revisions_performed_by_id_fkey")
 
 	log.Println("Database migrations completed")
 	return nil

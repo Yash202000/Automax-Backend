@@ -69,6 +69,11 @@ type Incident struct {
 	SLABreached bool       `gorm:"default:false" json:"sla_breached"`
 	SLADeadline *time.Time `json:"sla_deadline"`
 
+	// Ready-to-Close tracking (set when incident enters a ready_to_close state)
+	ReadyToCloseExpiresAt *time.Time `gorm:"index" json:"ready_to_close_expires_at"`
+	ReadyToCloseDuration  string     `gorm:"size:100" json:"ready_to_close_duration"`
+	ReadyToCloseNotified  bool       `gorm:"default:false" json:"ready_to_close_notified"`
+
 	// Reporter
 	ReporterID    *uuid.UUID `gorm:"type:uuid;index" json:"reporter_id"`
 	Reporter      *User      `gorm:"foreignKey:ReporterID" json:"reporter,omitempty"`
@@ -203,7 +208,9 @@ type IncidentTransitionHistory struct {
 	IncidentID uuid.UUID `gorm:"type:uuid;index;not null" json:"incident_id"`
 	Incident   *Incident `gorm:"foreignKey:IncidentID" json:"incident,omitempty"`
 
-	TransitionID uuid.UUID           `gorm:"type:uuid;index;not null" json:"transition_id"`
+	// TransitionID is nullable to support system-triggered transitions (e.g. automatic reversion)
+	// that may not correspond to a configured workflow transition.
+	TransitionID *uuid.UUID          `gorm:"type:uuid;index" json:"transition_id"`
 	Transition   *WorkflowTransition `gorm:"foreignKey:TransitionID" json:"transition,omitempty"`
 
 	FromStateID uuid.UUID      `gorm:"type:uuid;index;not null" json:"from_state_id"`
@@ -211,10 +218,15 @@ type IncidentTransitionHistory struct {
 	ToStateID   uuid.UUID      `gorm:"type:uuid;index;not null" json:"to_state_id"`
 	ToState     *WorkflowState `gorm:"foreignKey:ToStateID" json:"to_state,omitempty"`
 
+	// PerformedByID is the user who triggered the transition.
+	// For system-triggered transitions it may be uuid.Nil (all-zero UUID).
 	PerformedByID uuid.UUID `gorm:"type:uuid;index;not null" json:"performed_by_id"`
 	PerformedBy   *User     `gorm:"foreignKey:PerformedByID" json:"performed_by,omitempty"`
 
 	Comment string `gorm:"type:text" json:"comment"`
+
+	// IsSystemAction is true for automatically triggered transitions (e.g. expiry reversion).
+	IsSystemAction bool `gorm:"default:false" json:"is_system_action"`
 
 	// Snapshot of field changes (JSON)
 	OldValues string `gorm:"type:text" json:"old_values"`
@@ -366,6 +378,10 @@ type IncidentTransitionRequest struct {
 	// Keys: "priority", "department_id", "location_id", "classification_id", "title", "description"
 	// Values: string representation (UUIDs for ID fields, "1"-"5" for priority, plain text otherwise)
 	FieldChanges map[string]string `json:"field_changes"`
+
+	// ReadyToCloseDuration is required when transitioning to a state where IsReadyToClose=true.
+	// e.g. "1 Day", "2 Days", "1 Week", "2 Weeks", "1 Month", "3 Months"
+	ReadyToCloseDuration string `json:"ready_to_close_duration"`
 
 	Version int `json:"version" validate:"required,min=1"`
 }
@@ -599,9 +615,11 @@ type IncidentResponse struct {
 	DueDate          *time.Time              `json:"due_date"`
 	ResolvedAt       *time.Time              `json:"resolved_at"`
 	ClosedAt         *time.Time              `json:"closed_at"`
-	SLABreached      bool                    `json:"sla_breached"`
-	SLADeadline      *time.Time              `json:"sla_deadline"`
-	Source           string                  `json:"source,omitempty"`
+	SLABreached             bool                    `json:"sla_breached"`
+	SLADeadline             *time.Time              `json:"sla_deadline"`
+	ReadyToCloseExpiresAt   *time.Time              `json:"ready_to_close_expires_at,omitempty"`
+	ReadyToCloseDuration    string                  `json:"ready_to_close_duration,omitempty"`
+	Source                  string                  `json:"source,omitempty"`
 	Reporter         *UserResponse           `json:"reporter,omitempty"`
 	ReporterEmail    string                  `json:"reporter_email"`
 	ReporterName     string                  `json:"reporter_name"`
@@ -725,9 +743,11 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 		DueDate:            i.DueDate,
 		ResolvedAt:         i.ResolvedAt,
 		ClosedAt:           i.ClosedAt,
-		SLABreached:        i.SLABreached,
-		SLADeadline:        i.SLADeadline,
-		Source:             i.Source,
+		SLABreached:           i.SLABreached,
+		SLADeadline:           i.SLADeadline,
+		ReadyToCloseExpiresAt: i.ReadyToCloseExpiresAt,
+		ReadyToCloseDuration:  i.ReadyToCloseDuration,
+		Source:                i.Source,
 		ReporterEmail:      i.ReporterEmail,
 		ReporterName:       i.ReporterName,
 		Channel:            i.Channel,
