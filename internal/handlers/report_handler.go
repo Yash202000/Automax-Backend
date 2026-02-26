@@ -5,6 +5,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
+	cstmContext "github.com/automax/backend/pkg/context"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
@@ -240,7 +241,8 @@ func (h *ReportHandler) QueryReport(c *fiber.Ctx) error {
 		req.Limit = 50
 	}
 
-	result, err := h.service.QueryReport(c.Context(), &req)
+	ctx := cstmContext.WithReportColumns(c.Context(), req.Columns)
+	result, err := h.service.QueryReport(ctx, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -254,19 +256,15 @@ func (h *ReportHandler) ExportReport(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if req.DataSource == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "data_source is required")
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); validationErrors != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
-	if len(req.Columns) == 0 {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "columns are required")
-	}
-
-	if req.Format != "xlsx" && req.Format != "pdf" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "format must be xlsx or pdf")
-	}
-
-	data, filename, contentType, err := h.service.ExportReport(c.Context(), &req)
+	ctx := cstmContext.WithReportColumns(c.Context(), req.Columns)
+	data, filename, contentType, err := h.service.ExportReport(ctx, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}

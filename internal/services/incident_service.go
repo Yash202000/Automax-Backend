@@ -693,6 +693,10 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		updates["custom_fields"] = incident.CustomFields
 	}
 
+	if len(updates) == 0 || len(changes) == 0 {
+		tx.Rollback()
+		return nil, errors.New("no changes detected")
+	}
 	// Execute optimistic lock update
 	if err := txRepo.UpdateFieldsWithVersion(ctx, id, updates, req.Version); err != nil {
 		tx.Rollback()
@@ -941,11 +945,11 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 	if err == nil && len(attachments) > 0 {
 		for _, attachment := range attachments {
 			newAttachment := &models.IncidentAttachment{
-				IncidentID: newRequest.ID,
-				FileName:   attachment.FileName,
-				FileSize:   attachment.FileSize,
-				MimeType:   attachment.MimeType,
-				FilePath:   attachment.FilePath,
+				IncidentID:   newRequest.ID,
+				FileName:     attachment.FileName,
+				FileSize:     attachment.FileSize,
+				MimeType:     attachment.MimeType,
+				FilePath:     attachment.FilePath,
 				UploadedByID: attachment.UploadedByID,
 			}
 			if err := s.incidentRepo.CreateAttachment(ctx, newAttachment); err != nil {
@@ -1475,12 +1479,12 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 	for _, sourceIncident := range validIncidents {
 		originalResp := models.ToIncidentResponse(sourceIncident)
 		result := models.BulkConvertToRequestResult{
-			IncidentID:     sourceIncident.ID,
-			Success:        true,
-			RequestID:      &newRequest.ID,
-			RequestNumber:  &requestNumber,
+			IncidentID:       sourceIncident.ID,
+			Success:          true,
+			RequestID:        &newRequest.ID,
+			RequestNumber:    &requestNumber,
 			OriginalIncident: &originalResp,
-			NewRequest:     &newResp,
+			NewRequest:       &newResp,
 		}
 		response.Results = append(response.Results, result)
 		response.Success++
@@ -2359,12 +2363,12 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 				NewValue:   strPtr(time.Now().Format(time.RFC3339)),
 			},
 		}
-		
+
 		description := fmt.Sprintf(
 			"Automatically closed due to master incident %s being closed",
 			masterIncident.IncidentNumber,
 		)
-		
+
 		_ = s.CreateRevision(ctx, merged.ID, models.RevisionActionStatusChanged, description, changes, userID)
 	}
 
