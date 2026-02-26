@@ -25,6 +25,9 @@ type Incident struct {
 	ConvertedRequestID *uuid.UUID `gorm:"type:uuid;index" json:"converted_request_id"`
 	ConvertedRequest   *Incident  `gorm:"foreignKey:ConvertedRequestID" json:"converted_request,omitempty"`
 
+	// For bulk conversions: stores multiple source incident IDs (JSON array)
+	SourceIncidentIDs []string `gorm:"type:json;serializer:json" json:"source_incident_ids,omitempty"`
+
 	// Classification
 	ClassificationID *uuid.UUID      `gorm:"type:uuid;index" json:"classification_id"`
 	Classification   *Classification `gorm:"foreignKey:ClassificationID" json:"classification,omitempty"`
