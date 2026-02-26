@@ -861,6 +861,24 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		}
 	}
 
+	// Copy attachments from source incident
+	attachments, err := s.incidentRepo.ListAttachments(ctx, incidentID)
+	if err == nil && len(attachments) > 0 {
+		for _, attachment := range attachments {
+			newAttachment := &models.IncidentAttachment{
+				IncidentID: newRequest.ID,
+				FileName:   attachment.FileName,
+				FileSize:   attachment.FileSize,
+				MimeType:   attachment.MimeType,
+				FilePath:   attachment.FilePath,
+				UploadedByID: attachment.UploadedByID,
+			}
+			if err := s.incidentRepo.CreateAttachment(ctx, newAttachment); err != nil {
+				fmt.Printf("Warning: failed to copy attachment %s: %v\n", attachment.FileName, err)
+			}
+		}
+	}
+
 	// Find a terminal state from the source incident's workflow to close it
 	terminalState, err := s.getTerminalStateForWorkflow(ctx, sourceIncident.WorkflowID)
 	if err != nil {
@@ -974,7 +992,7 @@ func (s *incidentService) getTerminalStateForWorkflow(ctx context.Context, workf
 	return &state, nil
 }
 
-// BulkConvertToRequest converts multiple incidents to requests in bulk
+// BulkConvertToRequest converts multiple incidents to a single request in bulk
 func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.BulkConvertToRequestRequest, userID uuid.UUID, userRoleIDs []uuid.UUID) (*models.BulkConvertToRequestResponse, error) {
 	response := &models.BulkConvertToRequestResponse{
 		Total:   len(req.IncidentIDs),
@@ -1029,48 +1047,13 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 		return nil, errors.New("workflow has no initial state configured")
 	}
 
-	// Validate all incidents have the same classification and location
-	if len(req.IncidentIDs) > 1 {
-		var firstIncident *models.Incident
-		for i, incidentIDStr := range req.IncidentIDs {
-			incidentID, err := uuid.Parse(incidentIDStr)
-			if err != nil {
-				continue
-			}
-			sourceIncident, err := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
-			if err != nil {
-				continue
-			}
+	// First pass: Validate all incidents and collect data
+	validIncidents := make([]*models.Incident, 0, len(req.IncidentIDs))
+	validIncidentIDs := make([]uuid.UUID, 0, len(req.IncidentIDs))
+	var firstIncident *models.Incident
 
-			if i == 0 {
-				firstIncident = sourceIncident
-				continue
-			}
-
-			// Check classification matches
-			if firstIncident.ClassificationID != nil && sourceIncident.ClassificationID != nil {
-				if *firstIncident.ClassificationID != *sourceIncident.ClassificationID {
-					return nil, errors.New("all incidents must have the same classification for bulk conversion")
-				}
-			} else if firstIncident.ClassificationID != sourceIncident.ClassificationID {
-				return nil, errors.New("all incidents must have the same classification for bulk conversion")
-			}
-
-			// Check location matches
-			if firstIncident.LocationID != nil && sourceIncident.LocationID != nil {
-				if *firstIncident.LocationID != *sourceIncident.LocationID {
-					return nil, errors.New("all incidents must have the same location for bulk conversion")
-				}
-			} else if firstIncident.LocationID != sourceIncident.LocationID {
-				return nil, errors.New("all incidents must have the same location for bulk conversion")
-			}
-		}
-	}
-
-	// Process each incident
-	for _, incidentIDStr := range req.IncidentIDs {
+	for i, incidentIDStr := range req.IncidentIDs {
 		result := models.BulkConvertToRequestResult{}
-
 		incidentID, err := uuid.Parse(incidentIDStr)
 		if err != nil {
 			result.IncidentID = uuid.Nil
@@ -1180,88 +1163,190 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 			}
 		}
 
-		// Generate request number
-		requestNumber, err := s.incidentRepo.GenerateRequestNumber(ctx)
-		if err != nil {
-			result.Success = false
-			errMsg := fmt.Sprintf("failed to generate request number: %v", err)
-			result.Error = &errMsg
-			response.Results = append(response.Results, result)
-			response.Failed++
-			continue
-		}
-
-		// Create the new request
-		title := sourceIncident.Title
-		description := sourceIncident.Description
-
-		newRequest := &models.Incident{
-			IncidentNumber:   requestNumber,
-			Title:            title,
-			Description:      description,
-			RecordType:       "request",
-			SourceIncidentID: &incidentID,
-			ClassificationID: &classificationID,
-			WorkflowID:       workflowID,
-			CurrentStateID:   initialState.ID,
-			ReporterID:       sourceIncident.ReporterID,
-			ReporterEmail:    sourceIncident.ReporterEmail,
-			ReporterName:     sourceIncident.ReporterName,
-			LocationID:       sourceIncident.LocationID,
-			Latitude:         sourceIncident.Latitude,
-			Longitude:        sourceIncident.Longitude,
-			CustomFields:     sourceIncident.CustomFields,
-		}
-
-		// Handle assignee
-		if assigneeID != nil {
-			newRequest.AssigneeID = assigneeID
+		// Validate classification and location match across incidents
+		if i == 0 {
+			firstIncident = sourceIncident
 		} else {
-			newRequest.AssigneeID = sourceIncident.AssigneeID
-		}
+			// Check classification matches
+			if firstIncident.ClassificationID != nil && sourceIncident.ClassificationID != nil {
+				if *firstIncident.ClassificationID != *sourceIncident.ClassificationID {
+					result.Success = false
+					errMsg := "all incidents must have the same classification for bulk conversion"
+					result.Error = &errMsg
+					response.Results = append(response.Results, result)
+					response.Failed++
+					continue
+				}
+			} else if firstIncident.ClassificationID != sourceIncident.ClassificationID {
+				result.Success = false
+				errMsg := "all incidents must have the same classification for bulk conversion"
+				result.Error = &errMsg
+				response.Results = append(response.Results, result)
+				response.Failed++
+				continue
+			}
 
-		// Handle department
-		if departmentID != nil {
-			newRequest.DepartmentID = departmentID
-		} else {
-			newRequest.DepartmentID = sourceIncident.DepartmentID
-		}
-
-		// Handle due date
-		if dueDate != nil {
-			newRequest.DueDate = dueDate
-		}
-
-		// Calculate SLA deadline
-		if initialState.SLAHours != nil && *initialState.SLAHours > 0 {
-			deadline := time.Now().Add(time.Duration(*initialState.SLAHours) * time.Hour)
-			newRequest.SLADeadline = &deadline
-		}
-
-		// Create the request
-		if err := s.incidentRepo.Create(ctx, newRequest); err != nil {
-			result.Success = false
-			errMsg := fmt.Sprintf("failed to create request: %v", err)
-			result.Error = &errMsg
-			response.Results = append(response.Results, result)
-			response.Failed++
-			continue
-		}
-
-		// Copy lookup values from source incident
-		if len(sourceIncident.LookupValues) > 0 {
-			if err := s.incidentRepo.SetLookupValues(ctx, newRequest.ID, sourceIncident.LookupValues); err != nil {
-				fmt.Printf("Warning: failed to copy lookup values: %v\n", err)
+			// Check location matches
+			if firstIncident.LocationID != nil && sourceIncident.LocationID != nil {
+				if *firstIncident.LocationID != *sourceIncident.LocationID {
+					result.Success = false
+					errMsg := "all incidents must have the same location for bulk conversion"
+					result.Error = &errMsg
+					response.Results = append(response.Results, result)
+					response.Failed++
+					continue
+				}
+			} else if firstIncident.LocationID != sourceIncident.LocationID {
+				result.Success = false
+				errMsg := "all incidents must have the same location for bulk conversion"
+				result.Error = &errMsg
+				response.Results = append(response.Results, result)
+				response.Failed++
+				continue
 			}
 		}
 
-		// Find a terminal state from the source incident's workflow to close it
-		terminalState, err := s.getTerminalStateForWorkflow(ctx, sourceIncident.WorkflowID)
-		if err != nil {
-			fmt.Printf("Warning: failed to find terminal state for workflow: %v\n", err)
-		}
+		// Add to valid incidents list
+		validIncidents = append(validIncidents, sourceIncident)
+		validIncidentIDs = append(validIncidentIDs, incidentID)
+	}
 
-		// Update source incident with reference to the converted request and close it
+	// Check if we have any valid incidents to process
+	if len(validIncidents) == 0 {
+		return response, nil
+	}
+
+	// Generate single request number for all incidents
+	requestNumber, err := s.incidentRepo.GenerateRequestNumber(ctx)
+	if err != nil {
+		// Mark all remaining as failed
+		for _, incidentID := range validIncidentIDs {
+			result := models.BulkConvertToRequestResult{
+				IncidentID: incidentID,
+				Success:    false,
+				Error:      stringPtr(fmt.Sprintf("failed to generate request number: %v", err)),
+			}
+			response.Results = append(response.Results, result)
+			response.Failed++
+		}
+		return response, nil
+	}
+
+	// Build source incident IDs list for the new request
+	sourceIncidentIDStrs := make([]string, len(validIncidentIDs))
+	for i, id := range validIncidentIDs {
+		sourceIncidentIDStrs[i] = id.String()
+	}
+
+	// Create the single new request using the first incident as primary
+	title := firstIncident.Title
+	description := firstIncident.Description
+
+	newRequest := &models.Incident{
+		IncidentNumber:    requestNumber,
+		Title:             title,
+		Description:       description,
+		RecordType:        "request",
+		SourceIncidentID:  &validIncidentIDs[0],
+		SourceIncidentIDs: sourceIncidentIDStrs,
+		ClassificationID:  &classificationID,
+		WorkflowID:        workflowID,
+		CurrentStateID:    initialState.ID,
+		ReporterID:        firstIncident.ReporterID,
+		ReporterEmail:     firstIncident.ReporterEmail,
+		ReporterName:      firstIncident.ReporterName,
+		LocationID:        firstIncident.LocationID,
+		Latitude:          firstIncident.Latitude,
+		Longitude:         firstIncident.Longitude,
+		CustomFields:      firstIncident.CustomFields,
+	}
+
+	// Handle assignee
+	if assigneeID != nil {
+		newRequest.AssigneeID = assigneeID
+	} else {
+		newRequest.AssigneeID = firstIncident.AssigneeID
+	}
+
+	// Handle department
+	if departmentID != nil {
+		newRequest.DepartmentID = departmentID
+	} else {
+		newRequest.DepartmentID = firstIncident.DepartmentID
+	}
+
+	// Handle due date
+	if dueDate != nil {
+		newRequest.DueDate = dueDate
+	}
+
+	// Calculate SLA deadline
+	if initialState.SLAHours != nil && *initialState.SLAHours > 0 {
+		deadline := time.Now().Add(time.Duration(*initialState.SLAHours) * time.Hour)
+		newRequest.SLADeadline = &deadline
+	}
+
+	// Create the single request
+	if err := s.incidentRepo.Create(ctx, newRequest); err != nil {
+		// Mark all as failed
+		for _, incidentID := range validIncidentIDs {
+			result := models.BulkConvertToRequestResult{
+				IncidentID: incidentID,
+				Success:    false,
+				Error:      stringPtr(fmt.Sprintf("failed to create request: %v", err)),
+			}
+			response.Results = append(response.Results, result)
+			response.Failed++
+		}
+		return response, nil
+	}
+
+	// Copy lookup values from all valid incidents
+	// Use a map to avoid duplicates based on ID
+	lookupValueMap := make(map[uuid.UUID]models.LookupValue)
+	for _, sourceIncident := range validIncidents {
+		for _, lv := range sourceIncident.LookupValues {
+			lookupValueMap[lv.ID] = lv
+		}
+	}
+	if len(lookupValueMap) > 0 {
+		lookupValues := make([]models.LookupValue, 0, len(lookupValueMap))
+		for _, lv := range lookupValueMap {
+			lookupValues = append(lookupValues, lv)
+		}
+		if err := s.incidentRepo.SetLookupValues(ctx, newRequest.ID, lookupValues); err != nil {
+			fmt.Printf("Warning: failed to copy lookup values: %v\n", err)
+		}
+	}
+
+	// Copy attachments from ALL valid incidents to the single request
+	for _, sourceIncident := range validIncidents {
+		attachments, err := s.incidentRepo.ListAttachments(ctx, sourceIncident.ID)
+		if err == nil && len(attachments) > 0 {
+			for _, attachment := range attachments {
+				newAttachment := &models.IncidentAttachment{
+					IncidentID:   newRequest.ID,
+					FileName:     attachment.FileName,
+					FileSize:     attachment.FileSize,
+					MimeType:     attachment.MimeType,
+					FilePath:     attachment.FilePath,
+					UploadedByID: attachment.UploadedByID,
+				}
+				if err := s.incidentRepo.CreateAttachment(ctx, newAttachment); err != nil {
+					fmt.Printf("Warning: failed to copy attachment %s from incident %s: %v\n", attachment.FileName, sourceIncident.IncidentNumber, err)
+				}
+			}
+		}
+	}
+
+	// Find a terminal state to close source incidents
+	terminalState, err := s.getTerminalStateForWorkflow(ctx, firstIncident.WorkflowID)
+	if err != nil {
+		fmt.Printf("Warning: failed to find terminal state for workflow: %v\n", err)
+	}
+
+	// Update ALL source incidents to reference the same request and close them
+	for _, sourceIncident := range validIncidents {
 		updateFields := map[string]interface{}{
 			"converted_request_id": newRequest.ID,
 		}
@@ -1269,23 +1354,11 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 			updateFields["current_state_id"] = terminalState.ID
 			updateFields["closed_at"] = time.Now()
 		}
-		if err := s.incidentRepo.UpdateFields(ctx, incidentID, updateFields); err != nil {
-			fmt.Printf("Warning: failed to update source incident after conversion: %v\n", err)
-		}
-
-		// Fetch the created request with relations
-		createdRequest, err := s.incidentRepo.FindByIDWithRelations(ctx, newRequest.ID)
-		if err != nil {
-			result.Success = false
-			errMsg := fmt.Sprintf("failed to fetch created request: %v", err)
-			result.Error = &errMsg
-			response.Results = append(response.Results, result)
-			response.Failed++
-			continue
+		if err := s.incidentRepo.UpdateFields(ctx, sourceIncident.ID, updateFields); err != nil {
+			fmt.Printf("Warning: failed to update source incident %s after conversion: %v\n", sourceIncident.IncidentNumber, err)
 		}
 
 		// Create revision for source incident
-		sourceIncidentNumber := sourceIncident.IncidentNumber
 		changes := []models.IncidentFieldChange{
 			{
 				FieldName:  "converted_to_request",
@@ -1294,35 +1367,56 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 				NewValue:   &requestNumber,
 			},
 		}
-		desc := fmt.Sprintf("Incident converted to request %s", requestNumber)
-		_ = s.CreateRevision(ctx, incidentID, models.RevisionActionFieldChange, desc, changes, userID)
+		desc := fmt.Sprintf("Incident converted to request %s (bulk conversion)", requestNumber)
+		_ = s.CreateRevision(ctx, sourceIncident.ID, models.RevisionActionFieldChange, desc, changes, userID)
+	}
 
-		// Create revision for new request
-		changes = []models.IncidentFieldChange{
-			{
-				FieldName:  "source_incident",
-				FieldLabel: "Created from Incident",
-				OldValue:   nil,
-				NewValue:   &sourceIncidentNumber,
-			},
-		}
-		desc = fmt.Sprintf("Request created from incident %s", sourceIncidentNumber)
-		_ = s.CreateRevision(ctx, newRequest.ID, models.RevisionActionCreated, desc, changes, userID)
+	// Create revision for new request
+	allIncidentNumbers := make([]string, len(validIncidents))
+	for i, inc := range validIncidents {
+		allIncidentNumbers[i] = inc.IncidentNumber
+	}
+	sourceIncidentsList := fmt.Sprintf("Created from incidents: %s", fmt.Sprint(allIncidentNumbers))
+	changes := []models.IncidentFieldChange{
+		{
+			FieldName:  "source_incidents",
+			FieldLabel: "Created from Incidents",
+			OldValue:   nil,
+			NewValue:   &sourceIncidentsList,
+		},
+	}
+	desc := fmt.Sprintf("Request created from %d incidents via bulk conversion", len(validIncidents))
+	_ = s.CreateRevision(ctx, newRequest.ID, models.RevisionActionCreated, desc, changes, userID)
 
-		// Build successful result
+	// Fetch the created request with relations
+	createdRequest, err := s.incidentRepo.FindByIDWithRelations(ctx, newRequest.ID)
+	if err != nil {
+		// Still return success but note the fetch error
+		fmt.Printf("Warning: failed to fetch created request: %v\n", err)
+	}
+
+	// Build successful results for all valid incidents
+	newResp := models.ToIncidentResponse(createdRequest)
+	for _, sourceIncident := range validIncidents {
 		originalResp := models.ToIncidentResponse(sourceIncident)
-		newResp := models.ToIncidentResponse(createdRequest)
-
-		result.Success = true
-		result.RequestID = &newRequest.ID
-		result.RequestNumber = &requestNumber
-		result.OriginalIncident = &originalResp
-		result.NewRequest = &newResp
+		result := models.BulkConvertToRequestResult{
+			IncidentID:     sourceIncident.ID,
+			Success:        true,
+			RequestID:      &newRequest.ID,
+			RequestNumber:  &requestNumber,
+			OriginalIncident: &originalResp,
+			NewRequest:     &newResp,
+		}
 		response.Results = append(response.Results, result)
 		response.Success++
 	}
 
 	return response, nil
+}
+
+// Helper function to create string pointer
+func stringPtr(s string) *string {
+	return &s
 }
 
 // State transitions
