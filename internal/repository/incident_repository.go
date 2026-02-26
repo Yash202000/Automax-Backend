@@ -20,6 +20,7 @@ type IncidentRepository interface {
 	FindByID(ctx context.Context, id uuid.UUID) (*models.Incident, error)
 	FindByIDWithRelations(ctx context.Context, id uuid.UUID) (*models.Incident, error)
 	FindByIncidentNumber(ctx context.Context, number string) (*models.Incident, error)
+	FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.Incident, error)
 	List(ctx context.Context, filter *models.IncidentFilter) ([]models.Incident, int64, error)
 	Update(ctx context.Context, incident *models.Incident) error
 	UpdateFields(ctx context.Context, id uuid.UUID, updates map[string]interface{}) error
@@ -167,6 +168,21 @@ func (r *incidentRepository) FindByIncidentNumber(ctx context.Context, number st
 		return nil, err
 	}
 	return &incident, nil
+}
+
+func (r *incidentRepository) FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.Incident, error) {
+	var incidents []models.Incident
+	err := r.db.WithContext(ctx).
+		Preload("CurrentState").
+		Preload("Workflow").
+		Preload("Classification").
+		Preload("Assignee").
+		Preload("Department").
+		Preload("Location").
+		Preload("Reporter").
+		Where("id IN ?", ids).
+		Find(&incidents).Error
+	return incidents, err
 }
 
 func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFilter) ([]models.Incident, int64, error) {

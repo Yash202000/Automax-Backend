@@ -410,6 +410,29 @@ func (s *incidentService) GetIncident(ctx context.Context, id uuid.UUID) (*model
 	}
 
 	resp := models.ToIncidentDetailResponse(incident)
+
+	// For requests created from bulk conversion, fetch all source incidents
+	if incident.RecordType == "request" && len(incident.SourceIncidentIDs) > 0 {
+		sourceIDs := make([]uuid.UUID, 0, len(incident.SourceIncidentIDs))
+		for _, idStr := range incident.SourceIncidentIDs {
+			if sourceID, err := uuid.Parse(idStr); err == nil {
+				sourceIDs = append(sourceIDs, sourceID)
+			}
+		}
+
+		if len(sourceIDs) > 0 {
+			sourceIncidents, err := s.incidentRepo.FindByIDs(ctx, sourceIDs)
+			if err == nil {
+				resp.SourceIncidents = make([]models.IncidentResponse, len(sourceIncidents))
+				for i, src := range sourceIncidents {
+					resp.SourceIncidents[i] = models.ToIncidentResponse(&src)
+				}
+			} else {
+				fmt.Printf("Warning: failed to fetch source incidents for request %s: %v\n", incident.IncidentNumber, err)
+			}
+		}
+	}
+
 	return &resp, nil
 }
 
