@@ -183,7 +183,7 @@ type IncidentFeedback struct {
 	IncidentID uuid.UUID `gorm:"type:uuid;index;not null" json:"incident_id"`
 	Incident   *Incident `gorm:"foreignKey:IncidentID" json:"incident,omitempty"`
 
-	Rating  int    `gorm:"not null" json:"rating"` // 1-5 stars
+	// Rating  int    `gorm:"not null" json:"rating"` // 1-5 stars
 	Comment string `gorm:"type:text" json:"comment"`
 
 	CreatedByID uuid.UUID `gorm:"type:uuid;index;not null" json:"created_by_id"`
@@ -398,7 +398,7 @@ type IncidentTransitionRequest struct {
 }
 
 type IncidentFeedbackRequest struct {
-	Rating  int    `json:"rating" validate:"required,min=1,max=5"`
+	// Rating  int    `json:"rating" validate:"required,min=1,max=5"`
 	Comment string `json:"comment"`
 }
 
@@ -920,9 +920,9 @@ func ToIncidentAttachmentResponse(a *IncidentAttachment, url string) IncidentAtt
 
 func ToIncidentFeedbackResponse(f *IncidentFeedback) IncidentFeedbackResponse {
 	resp := IncidentFeedbackResponse{
-		ID:                  f.ID,
-		IncidentID:          f.IncidentID,
-		Rating:              f.Rating,
+		ID:         f.ID,
+		IncidentID: f.IncidentID,
+		// Rating:              f.Rating,
 		Comment:             f.Comment,
 		TransitionHistoryID: f.TransitionHistoryID,
 		CreatedAt:           f.CreatedAt,

@@ -831,6 +831,8 @@ func (r *incidentRepository) GetAssignedToUser(ctx context.Context, userID uuid.
 		Preload("CurrentState").
 		Preload("Workflow").
 		Preload("Assignees").
+		Preload("Classification").
+		Preload("Location").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(limit).
