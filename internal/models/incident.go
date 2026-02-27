@@ -69,6 +69,11 @@ type Incident struct {
 	SLABreached bool       `gorm:"default:false" json:"sla_breached"`
 	SLADeadline *time.Time `json:"sla_deadline"`
 
+	// Ready-to-Close tracking (set when incident enters a ready_to_close state)
+	ReadyToCloseExpiresAt *time.Time `gorm:"index" json:"ready_to_close_expires_at"`
+	ReadyToCloseDuration  string     `gorm:"size:100" json:"ready_to_close_duration"`
+	ReadyToCloseNotified  bool       `gorm:"default:false" json:"ready_to_close_notified"`
+
 	// Reporter
 	ReporterID    *uuid.UUID `gorm:"type:uuid;index" json:"reporter_id"`
 	Reporter      *User      `gorm:"foreignKey:ReporterID" json:"reporter,omitempty"`
@@ -203,7 +208,9 @@ type IncidentTransitionHistory struct {
 	IncidentID uuid.UUID `gorm:"type:uuid;index;not null" json:"incident_id"`
 	Incident   *Incident `gorm:"foreignKey:IncidentID" json:"incident,omitempty"`
 
-	TransitionID uuid.UUID           `gorm:"type:uuid;index;not null" json:"transition_id"`
+	// TransitionID is nullable to support system-triggered transitions (e.g. automatic reversion)
+	// that may not correspond to a configured workflow transition.
+	TransitionID *uuid.UUID          `gorm:"type:uuid;index" json:"transition_id"`
 	Transition   *WorkflowTransition `gorm:"foreignKey:TransitionID" json:"transition,omitempty"`
 
 	FromStateID uuid.UUID      `gorm:"type:uuid;index;not null" json:"from_state_id"`
@@ -211,10 +218,15 @@ type IncidentTransitionHistory struct {
 	ToStateID   uuid.UUID      `gorm:"type:uuid;index;not null" json:"to_state_id"`
 	ToState     *WorkflowState `gorm:"foreignKey:ToStateID" json:"to_state,omitempty"`
 
+	// PerformedByID is the user who triggered the transition.
+	// For system-triggered transitions it may be uuid.Nil (all-zero UUID).
 	PerformedByID uuid.UUID `gorm:"type:uuid;index;not null" json:"performed_by_id"`
 	PerformedBy   *User     `gorm:"foreignKey:PerformedByID" json:"performed_by,omitempty"`
 
 	Comment string `gorm:"type:text" json:"comment"`
+
+	// IsSystemAction is true for automatically triggered transitions (e.g. expiry reversion).
+	IsSystemAction bool `gorm:"default:false" json:"is_system_action"`
 
 	// Snapshot of field changes (JSON)
 	OldValues string `gorm:"type:text" json:"old_values"`
@@ -377,6 +389,10 @@ type IncidentTransitionRequest struct {
 	// Keys: "priority", "department_id", "location_id", "classification_id", "title", "description"
 	// Values: string representation (UUIDs for ID fields, "1"-"5" for priority, plain text otherwise)
 	FieldChanges map[string]string `json:"field_changes"`
+
+	// ReadyToCloseDuration is required when transitioning to a state where IsReadyToClose=true.
+	// e.g. "1 Day", "2 Days", "1 Week", "2 Weeks", "1 Month", "3 Months"
+	ReadyToCloseDuration string `json:"ready_to_close_duration"`
 
 	Version int `json:"version" validate:"required,min=1"`
 }
@@ -584,50 +600,52 @@ type IncidentUnmergeResponse struct {
 // Response types
 
 type IncidentResponse struct {
-	ID                 uuid.UUID               `json:"id"`
-	IncidentNumber     string                  `json:"incident_number"`
-	Title              string                  `json:"title"`
-	Description        string                  `json:"description"`
-	RecordType         string                  `json:"record_type"`
-	SourceIncidentID   *uuid.UUID              `json:"source_incident_id,omitempty"`
-	SourceIncident     *IncidentResponse       `json:"source_incident,omitempty"`
-	ConvertedRequestID *uuid.UUID              `json:"converted_request_id,omitempty"`
-	ConvertedRequest   *IncidentResponse       `json:"converted_request,omitempty"`
-	Classification     *ClassificationResponse `json:"classification,omitempty"`
-	Workflow           *WorkflowResponse       `json:"workflow,omitempty"`
-	CurrentState       *WorkflowStateResponse  `json:"current_state,omitempty"`
-	Assignee           *UserResponse           `json:"assignee,omitempty"`
-	Assignees          []UserResponse          `json:"assignees,omitempty"`
-	Department         *DepartmentResponse     `json:"department,omitempty"`
-	Location           *LocationResponse       `json:"location,omitempty"`
-	Latitude           *float64                `json:"latitude,omitempty"`
-	Longitude          *float64                `json:"longitude,omitempty"`
-	Address            string                  `json:"address,omitempty"`
-	City               string                  `json:"city,omitempty"`
-	State              string                  `json:"state,omitempty"`
-	Country            string                  `json:"country,omitempty"`
-	PostalCode         string                  `json:"postal_code,omitempty"`
-	DueDate            *time.Time              `json:"due_date"`
-	ResolvedAt         *time.Time              `json:"resolved_at"`
-	ClosedAt           *time.Time              `json:"closed_at"`
-	SLABreached        bool                    `json:"sla_breached"`
-	SLADeadline        *time.Time              `json:"sla_deadline"`
-	Source             string                  `json:"source,omitempty"`
-	Reporter           *UserResponse           `json:"reporter,omitempty"`
-	ReporterEmail      string                  `json:"reporter_email"`
-	ReporterName       string                  `json:"reporter_name"`
-	Channel            string                  `json:"channel,omitempty"`
-	CreatedByName      string                  `json:"created_by_name,omitempty"`
-	CreatedByMobile    string                  `json:"created_by_mobile,omitempty"`
-	EvaluationCount    int                     `json:"evaluation_count,omitempty"`
-	CustomFields       string                  `json:"custom_fields,omitempty"`
-	CommentsCount      int                     `json:"comments_count"`
-	AttachmentsCount   int                     `json:"attachments_count"`
-	CreatedAt          time.Time               `json:"created_at"`
-	UpdatedAt          time.Time               `json:"updated_at"`
-	LookupValues       []LookupValueResponse   `json:"lookup_values,omitempty"`
-	Version            int                     `json:"version"`
-	ActiveViewers      int                     `json:"active_viewers,omitempty"` // Number of users currently viewing this incident
+	ID                    uuid.UUID               `json:"id"`
+	IncidentNumber        string                  `json:"incident_number"`
+	Title                 string                  `json:"title"`
+	Description           string                  `json:"description"`
+	RecordType            string                  `json:"record_type"`
+	SourceIncidentID      *uuid.UUID              `json:"source_incident_id,omitempty"`
+	SourceIncident        *IncidentResponse       `json:"source_incident,omitempty"`
+	ConvertedRequestID    *uuid.UUID              `json:"converted_request_id,omitempty"`
+	ConvertedRequest      *IncidentResponse       `json:"converted_request,omitempty"`
+	Classification        *ClassificationResponse `json:"classification,omitempty"`
+	Workflow              *WorkflowResponse       `json:"workflow,omitempty"`
+	CurrentState          *WorkflowStateResponse  `json:"current_state,omitempty"`
+	Assignee              *UserResponse           `json:"assignee,omitempty"`
+	Assignees             []UserResponse          `json:"assignees,omitempty"`
+	Department            *DepartmentResponse     `json:"department,omitempty"`
+	Location              *LocationResponse       `json:"location,omitempty"`
+	Latitude              *float64                `json:"latitude,omitempty"`
+	Longitude             *float64                `json:"longitude,omitempty"`
+	Address               string                  `json:"address,omitempty"`
+	City                  string                  `json:"city,omitempty"`
+	State                 string                  `json:"state,omitempty"`
+	Country               string                  `json:"country,omitempty"`
+	PostalCode            string                  `json:"postal_code,omitempty"`
+	DueDate               *time.Time              `json:"due_date"`
+	ResolvedAt            *time.Time              `json:"resolved_at"`
+	ClosedAt              *time.Time              `json:"closed_at"`
+	SLABreached           bool                    `json:"sla_breached"`
+	SLADeadline           *time.Time              `json:"sla_deadline"`
+	ReadyToCloseExpiresAt *time.Time              `json:"ready_to_close_expires_at,omitempty"`
+	ReadyToCloseDuration  string                  `json:"ready_to_close_duration,omitempty"`
+	Source                string                  `json:"source,omitempty"`
+	Reporter              *UserResponse           `json:"reporter,omitempty"`
+	ReporterEmail         string                  `json:"reporter_email"`
+	ReporterName          string                  `json:"reporter_name"`
+	Channel               string                  `json:"channel,omitempty"`
+	CreatedByName         string                  `json:"created_by_name,omitempty"`
+	CreatedByMobile       string                  `json:"created_by_mobile,omitempty"`
+	EvaluationCount       int                     `json:"evaluation_count,omitempty"`
+	CustomFields          string                  `json:"custom_fields,omitempty"`
+	CommentsCount         int                     `json:"comments_count"`
+	AttachmentsCount      int                     `json:"attachments_count"`
+	CreatedAt             time.Time               `json:"created_at"`
+	UpdatedAt             time.Time               `json:"updated_at"`
+	LookupValues          []LookupValueResponse   `json:"lookup_values,omitempty"`
+	Version               int                     `json:"version"`
+	ActiveViewers         int                     `json:"active_viewers,omitempty"` // Number of users currently viewing this incident
 
 	// Merge-related fields
 	MasterIncidentID     *uuid.UUID        `json:"master_incident_id,omitempty"`
@@ -720,38 +738,40 @@ type IncidentStatsResponse struct {
 
 func ToIncidentResponse(i *Incident) IncidentResponse {
 	resp := IncidentResponse{
-		ID:                 i.ID,
-		IncidentNumber:     i.IncidentNumber,
-		Title:              i.Title,
-		Description:        i.Description,
-		RecordType:         i.RecordType,
-		SourceIncidentID:   i.SourceIncidentID,
-		ConvertedRequestID: i.ConvertedRequestID,
-		Latitude:           i.Latitude,
-		Longitude:          i.Longitude,
-		Address:            i.Address,
-		City:               i.City,
-		State:              i.State,
-		Country:            i.Country,
-		PostalCode:         i.PostalCode,
-		DueDate:            i.DueDate,
-		ResolvedAt:         i.ResolvedAt,
-		ClosedAt:           i.ClosedAt,
-		SLABreached:        i.SLABreached,
-		SLADeadline:        i.SLADeadline,
-		Source:             i.Source,
-		ReporterEmail:      i.ReporterEmail,
-		ReporterName:       i.ReporterName,
-		Channel:            i.Channel,
-		CreatedByName:      i.CreatedByName,
-		CreatedByMobile:    i.CreatedByMobile,
-		EvaluationCount:    i.EvaluationCount,
-		CustomFields:       i.CustomFields,
-		CommentsCount:      len(i.Comments),
-		AttachmentsCount:   len(i.Attachments),
-		CreatedAt:          i.CreatedAt,
-		UpdatedAt:          i.UpdatedAt,
-		Version:            i.Version,
+		ID:                    i.ID,
+		IncidentNumber:        i.IncidentNumber,
+		Title:                 i.Title,
+		Description:           i.Description,
+		RecordType:            i.RecordType,
+		SourceIncidentID:      i.SourceIncidentID,
+		ConvertedRequestID:    i.ConvertedRequestID,
+		Latitude:              i.Latitude,
+		Longitude:             i.Longitude,
+		Address:               i.Address,
+		City:                  i.City,
+		State:                 i.State,
+		Country:               i.Country,
+		PostalCode:            i.PostalCode,
+		DueDate:               i.DueDate,
+		ResolvedAt:            i.ResolvedAt,
+		ClosedAt:              i.ClosedAt,
+		SLABreached:           i.SLABreached,
+		SLADeadline:           i.SLADeadline,
+		ReadyToCloseExpiresAt: i.ReadyToCloseExpiresAt,
+		ReadyToCloseDuration:  i.ReadyToCloseDuration,
+		Source:                i.Source,
+		ReporterEmail:         i.ReporterEmail,
+		ReporterName:          i.ReporterName,
+		Channel:               i.Channel,
+		CreatedByName:         i.CreatedByName,
+		CreatedByMobile:       i.CreatedByMobile,
+		EvaluationCount:       i.EvaluationCount,
+		CustomFields:          i.CustomFields,
+		CommentsCount:         len(i.Comments),
+		AttachmentsCount:      len(i.Attachments),
+		CreatedAt:             i.CreatedAt,
+		UpdatedAt:             i.UpdatedAt,
+		Version:               i.Version,
 	}
 
 	if i.SourceIncident != nil {

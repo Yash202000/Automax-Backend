@@ -242,6 +242,19 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 
 		provider = "meta"
 
+	case "notification":
+		// In-app only — no external delivery. Recipients must be internal user emails.
+		// The inbox copies are created in the loop below (ReceivedBy lookup by email).
+		status = "sent"
+		provider = "in-app"
+		for _, recipient := range to {
+			recipientStatuses = append(recipientStatuses, models.RecipientInfo{
+				Channel: recipient,
+				Type:    "to",
+				Status:  "success",
+			})
+		}
+
 	default:
 		return nil, fmt.Errorf("unsupported channel: %s", channel)
 	}

@@ -19,13 +19,14 @@ type slaMonitor struct {
 	incidentRepo           repository.IncidentRepository
 	escalationService      *EscalationService
 	escalationGroupService *EscalationGroupService
+	readyToCloseService    ReadyToCloseService
 	interval               time.Duration
 	stopChan               chan struct{}
 	running                bool
 }
 
 // NewSLAMonitor creates a new SLA monitor
-func NewSLAMonitor(incidentRepo repository.IncidentRepository, escalationService *EscalationService, escalationGroupService *EscalationGroupService, checkInterval time.Duration) SLAMonitor {
+func NewSLAMonitor(incidentRepo repository.IncidentRepository, escalationService *EscalationService, escalationGroupService *EscalationGroupService, readyToCloseService ReadyToCloseService, checkInterval time.Duration) SLAMonitor {
 	if checkInterval == 0 {
 		checkInterval = 5 * time.Minute // Default to 5 minutes
 	}
@@ -33,6 +34,7 @@ func NewSLAMonitor(incidentRepo repository.IncidentRepository, escalationService
 		incidentRepo:           incidentRepo,
 		escalationService:      escalationService,
 		escalationGroupService: escalationGroupService,
+		readyToCloseService:    readyToCloseService,
 		interval:               checkInterval,
 		stopChan:               make(chan struct{}),
 	}
@@ -125,6 +127,18 @@ func (m *slaMonitor) CheckSLABreaches(ctx context.Context) error {
 	// Send custom escalation-group grouped summaries (daily/weekly, per classification)
 	if err := m.escalationGroupService.ProcessGroupEscalations(ctx); err != nil {
 		log.Printf("Escalation group notifications failed: %v", err)
+	}
+
+	// Send pre-expiry notifications for incidents approaching their Ready-to-Close deadline
+	if m.readyToCloseService != nil {
+		if err := m.readyToCloseService.ProcessPreExpiryNotifications(ctx); err != nil {
+			log.Printf("Ready-to-Close pre-expiry notifications failed: %v", err)
+		}
+
+		// Auto-revert incidents that have exceeded their Ready-to-Close window
+		if err := m.readyToCloseService.ProcessExpiries(ctx); err != nil {
+			log.Printf("Ready-to-Close expiry processing failed: %v", err)
+		}
 	}
 
 	return nil

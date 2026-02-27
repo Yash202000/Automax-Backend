@@ -39,6 +39,7 @@ type WorkflowRepository interface {
 	// WorkflowState CRUD
 	CreateState(ctx context.Context, state *models.WorkflowState) error
 	FindStateByID(ctx context.Context, id uuid.UUID) (*models.WorkflowState, error)
+	FindStateByCode(ctx context.Context, workflowID uuid.UUID, code string) (*models.WorkflowState, error)
 	ListStatesByWorkflowID(ctx context.Context, workflowID uuid.UUID) ([]models.WorkflowState, error)
 	UpdateState(ctx context.Context, state *models.WorkflowState) error
 	DeleteState(ctx context.Context, id uuid.UUID) error
@@ -350,6 +351,21 @@ func (r *workflowRepository) FindStateByID(ctx context.Context, id uuid.UUID) (*
 		Preload("ViewableRoles").
 		First(&state, "id = ?", id).Error
 	if err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+func (r *workflowRepository) FindStateByCode(ctx context.Context, workflowID uuid.UUID, code string) (*models.WorkflowState, error) {
+	var state models.WorkflowState
+	err := r.db.WithContext(ctx).
+		Preload("ViewableRoles").
+		Where("workflow_id = ? AND code = ?", workflowID, code).
+		First(&state).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
 		return nil, err
 	}
 	return &state, nil

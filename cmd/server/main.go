@@ -105,9 +105,15 @@ func main() {
 	escalationService := services.NewEscalationService(escalationRepo, incidentRepo, workflowRepo, userRepo, notificationService)
 	escalationGroupService := services.NewEscalationGroupService(escalationGroupRepo, incidentRepo, notificationService, cfg.Escalation)
 
+	// Ready-to-Close service
+	readyToCloseRepo := repository.NewReadyToCloseRepository(db)
+	readyToCloseService := services.NewReadyToCloseService(readyToCloseRepo, incidentRepo, workflowRepo, notificationService, cfg.ReadyToClose, db)
+
+	// Wire ReadyToCloseService into IncidentService (post-construction to avoid circular deps)
+	incidentService.SetReadyToCloseService(readyToCloseService)
+
 	// Initialize and start SLA Monitor (checks every 5 minutes)
-	// slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, escalationGroupService, 5*time.Minute)
-	slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, escalationGroupService, 5*time.Minute)
+	slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, escalationGroupService, readyToCloseService, 5*time.Minute)
 	ctx := context.Background()
 	slaMonitor.Start(ctx)
 	defer slaMonitor.Stop()
@@ -126,6 +132,7 @@ func main() {
 	callLogHandler := handlers.NewCallLogHandler(callLogService, validate, userService)
 	workflowHandler := handlers.NewWorkflowHandler(workflowService, actionLogService)
 	incidentHandler := handlers.NewIncidentHandler(incidentService, userRepo, incidentRepo, minioStorage, presenceService)
+	incidentHandler.SetReadyToCloseService(readyToCloseService)
 	incidentMergeHandler := handlers.NewIncidentMergeHandler(incidentMergeService, userRepo)
 	websocketHandler := handlers.NewWebSocketHandler(wsHub)
 	reportHandler := handlers.NewReportHandler(reportService)
@@ -219,6 +226,7 @@ func main() {
 	incidents.Get("/my-assigned", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetMyAssigned)
 	incidents.Get("/my-reported", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetMyReported)
 	incidents.Get("/sla-breached", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetSLABreached)
+	incidents.Get("/ready-to-close/duration-options", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetReadyToCloseDurationOptions)
 	incidents.Post("/bulk/convert-to-request", authMiddleware.RequirePermission("incidents:update"), incidentHandler.BulkConvertToRequest)
 	incidents.Get("/:id", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetIncident)
 	incidents.Get("/:id/report", authMiddleware.RequirePermission("reports:view"), incidentHandler.GenerateReport)

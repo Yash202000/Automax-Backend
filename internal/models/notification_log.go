@@ -240,7 +240,7 @@ type NotificationLogResponse struct {
 
 // NotificationLogFilter for filtering and searching notifications
 type NotificationLogFilter struct {
-	Channel      string     `query:"channel" json:"channel" validate:"omitempty,oneof=email sms"`                                           // email | sms
+	Channel      string     `query:"channel" json:"channel" validate:"omitempty,oneof=email sms notification"`                              // email | sms | notification
 	Direction    string     `query:"direction" json:"direction" validate:"omitempty,oneof=inbound outbound"`                                // inbound | outbound
 	Category     string     `query:"category" json:"category" validate:"omitempty,oneof=inbox sent draft outbox trash spam"`                // inbox | sent | draft | outbox | trash | spam
 	Status       string     `query:"status" json:"status" validate:"omitempty,oneof=sent failed mock-sent partial draft pending scheduled"` // sent | failed | mock-sent | partial | draft | pending | scheduled
