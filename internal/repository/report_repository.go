@@ -2,8 +2,14 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/automax/backend/internal/models"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -25,6 +31,10 @@ type ReportRepository interface {
 
 	// Data queries for report execution
 	ExecuteIncidentQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
+	// GetTransitionUserNames returns a map of incident_id → full name of the user
+	// who performed the most-recent status transition TO newStateName for each
+	// incident in incidentIDs. Queries incident_revisions joined with users.
+	GetTransitionUserNames(ctx context.Context, newStateName string, incidentIDs []string) (map[string]string, error)
 	ExecuteUserQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 	ExecuteWorkflowQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 	ExecuteDepartmentQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
@@ -192,34 +202,30 @@ func (r *reportRepository) applySorting(query *gorm.DB, sorting *models.ReportSo
 }
 
 // Data queries for report execution
-
 func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
 	var total int64
 	var results []map[string]interface{}
-
 	query := r.db.WithContext(ctx).Model(&models.Incident{})
 	query = r.applyFilters(query, filters)
-
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-
 	query = r.applySorting(query, sorting)
 	if sorting == nil {
 		query = query.Order("incidents.created_at DESC")
 	}
-
 	offset := (page - 1) * limit
 	rows, err := query.
-		Select("incidents.*, "+
-			"reporters.email as reporter_email, reporters.first_name as reporter_first_name, reporters.last_name as reporter_last_name, "+
-			"reporters.username as reporter_username, "+
-			"assignees.email as assignee_email, assignees.first_name as assignee_first_name, assignees.last_name as assignee_last_name, "+
-			"assignees.username as assignee_username, "+
-			"workflow_states.name as current_state_name, workflow_states.state_type as current_state_state_type, "+
-			"classifications.name as classification_name, "+
-			"departments.name as department_name, "+
-			"locations.name as location_name, "+
+		Select("incidents.*, " +
+			"reporters.email as reporter_email, reporters.first_name as reporter_first_name, reporters.last_name as reporter_last_name, " +
+			"reporters.username as reporter_username, " +
+			"assignees.email as assignee_email, assignees.first_name as assignee_first_name, assignees.last_name as assignee_last_name, " +
+			"assignees.username as assignee_username, " +
+			"workflow_states.name as current_state_name, workflow_states.state_type as current_state_state_type, " +
+			"classifications.name as classification_name, " +
+			"departments.name as department_name, " +
+			"locations.name as location_name, " +
+			"incident_attachments.id as attachment_id, " +
 			"workflows.name as workflow_name").
 		Joins("LEFT JOIN users as reporters ON incidents.reporter_id = reporters.id").
 		Joins("LEFT JOIN users as assignees ON incidents.assignee_id = assignees.id").
@@ -228,14 +234,19 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 		Joins("LEFT JOIN departments ON incidents.department_id = departments.id").
 		Joins("LEFT JOIN locations ON incidents.location_id = locations.id").
 		Joins("LEFT JOIN workflows ON incidents.workflow_id = workflows.id").
+		Joins("LEFT JOIN incident_attachments ON incidents.id = incident_attachments.incident_id").
 		Offset(offset).
 		Limit(limit).
 		Rows()
-
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
+
+	// Extract URL-construction context values once, before iterating rows.
+	hostname, _ := ctx.Value("hostname").(string)
+	protocol, _ := ctx.Value("protocol").(string)
+	token, _ := ctx.Value("token").(string)
 
 	cols, _ := rows.Columns()
 	for rows.Next() {
@@ -244,11 +255,9 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 		for i := range columns {
 			columnPointers[i] = &columns[i]
 		}
-
 		if err := rows.Scan(columnPointers...); err != nil {
 			continue
 		}
-
 		// Build raw row data
 		rawRow := make(map[string]interface{})
 		for i, colName := range cols {
@@ -259,81 +268,805 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 				rawRow[colName] = val
 			}
 		}
-
 		// Transform to nested structure matching frontend field names
 		row := make(map[string]interface{})
-
 		// Copy base incident fields
 		for k, v := range rawRow {
 			row[k] = v
 		}
 
-		// Map to nested dot-notation keys for frontend compatibility
-		// current_state.name and current_state.state_type
+		// ── Nested dot-notation keys ──────────────────────────────────────────
+
+		// current_state.name / current_state.state_type
 		if v, ok := rawRow["current_state_name"]; ok {
-			row["current_state.name"] = v
+			row["Current State Name"] = v
 		}
 		if v, ok := rawRow["current_state_state_type"]; ok {
-			row["current_state.state_type"] = v
+			row["Current State Type"] = v
 		}
 
-		// assignee.username, assignee.full_name
+		// assignee.username / assignee.email / assignee.full_name
 		if v, ok := rawRow["assignee_username"]; ok {
-			row["assignee.username"] = v
+			row["Assignee Username"] = v
 		}
-		firstName, _ := rawRow["assignee_first_name"].(string)
-		lastName, _ := rawRow["assignee_last_name"].(string)
-		fullName := ""
-		if firstName != "" || lastName != "" {
-			fullName = firstName
-			if lastName != "" {
-				if fullName != "" {
-					fullName += " "
-				}
-				fullName += lastName
-			}
+		if v, ok := rawRow["assignee_email"]; ok {
+			row["Assignee Email"] = v
 		}
-		row["assignee.full_name"] = fullName
+		assigneeFirst, _ := rawRow["assignee_first_name"].(string)
+		assigneeLast, _ := rawRow["assignee_last_name"].(string)
+		fullName := strings.TrimSpace(assigneeFirst + " " + assigneeLast)
+		row["Assignee Full Name"] = fullName
+
+		// reporter.username / reporter.email / reporter_name (combined)
+		if v, ok := rawRow["reporter_username"]; ok {
+			row["Reporter Username"] = v
+		}
+		if v, ok := rawRow["reporter_email"]; ok {
+			row["Reporter Email"] = v
+		}
+		reporterFirst, _ := rawRow["reporter_first_name"].(string)
+		reporterLast, _ := rawRow["reporter_last_name"].(string)
+		reporterName := strings.TrimSpace(reporterFirst + " " + reporterLast)
+		row["Reporter Full Name"] = reporterName
 
 		// department.name
 		if v, ok := rawRow["department_name"]; ok {
-			row["department.name"] = v
+			row["Department Name"] = v
 		}
 
 		// location.name
 		if v, ok := rawRow["location_name"]; ok {
-			row["location.name"] = v
+			row["Location Name"] = v
 		}
 
 		// classification.name
 		if v, ok := rawRow["classification_name"]; ok {
-			row["classification.name"] = v
+			row["Classification Name"] = v
 		}
 
 		// workflow.name
 		if v, ok := rawRow["workflow_name"]; ok {
-			row["workflow.name"] = v
+			row["Workflow Name"] = v
 		}
 
-		// reporter_name (combined)
-		reporterFirst, _ := rawRow["reporter_first_name"].(string)
-		reporterLast, _ := rawRow["reporter_last_name"].(string)
-		reporterName := ""
-		if reporterFirst != "" || reporterLast != "" {
-			reporterName = reporterFirst
-			if reporterLast != "" {
-				if reporterName != "" {
-					reporterName += " "
-				}
-				reporterName += reporterLast
+		// ── Friendly / display-name aliases (used by ClientReportConfigs) ─────
+
+		// "Ticket ID" / "Ticket Number" / "Incident Number" / "Request Number"
+		row["Ticket ID"] = rawRow["incident_number"]
+		row["Ticket Number"] = rawRow["incident_number"]
+		row["Incident Number"] = rawRow["incident_number"]
+		row["Request Number"] = rawRow["incident_number"]
+
+		// "Channel" / "Incident Channel"
+		row["Channel"] = rawRow["channel"]
+		row["Incident Channel"] = rawRow["channel"]
+
+		// "Status" / "IncidentStatus"
+		row["Status"] = rawRow["current_state_name"]
+		row["IncidentStatus"] = rawRow["current_state_name"]
+
+		// "Criticality" → severity
+		row["Criticality"] = rawRow["severity"]
+
+		// "Priority Area" → priority
+		row["Priority Area"] = rawRow["priority"]
+
+		// "Caller Name" / "Creator" / "Observer" → reporter full name
+		row["Caller Name"] = reporterName
+		row["Creator"] = reporterName
+		row["Observer"] = reporterName
+
+		// "Caller #" / "Mobile Number" / "Creator Mobile Number" / "Creator Mobile No"
+		// → created_by_mobile (the mobile captured at creation time)
+		row["Caller #"] = rawRow["created_by_mobile"]
+		row["Caller Number"] = rawRow["created_by_mobile"]
+		row["Mobile Number"] = rawRow["created_by_mobile"]
+		row["Creator Mobile Number"] = rawRow["created_by_mobile"]
+		row["Creator Mobile No"] = rawRow["created_by_mobile"]
+
+		// "National ID" → custom_fields (raw JSON; consumer should extract as needed)
+		row["National ID"] = rawRow["custom_fields"]
+
+		// "Classification" / "Request Classification"
+		row["Classification"] = rawRow["classification_name"]
+		row["Request Classification"] = rawRow["classification_name"]
+
+		// "Location"
+		row["Location"] = rawRow["location_name"]
+
+		// "District" → state (closest geographic field available)
+		row["District"] = rawRow["state"]
+
+		// "Street" → address
+		row["Street"] = rawRow["address"]
+
+		// "Full Location" → composite of address fields
+		fullLocation := strings.TrimSpace(strings.Join(filterEmpty([]string{
+			strOrEmpty(rawRow["address"]),
+			strOrEmpty(rawRow["city"]),
+			strOrEmpty(rawRow["state"]),
+			strOrEmpty(rawRow["country"]),
+		}), ", "))
+		row["Full Location"] = fullLocation
+
+		// "Map" → lat/lon composite (e.g. "24.7136,46.6753")
+		lat := strOrEmpty(rawRow["latitude"])
+		lon := strOrEmpty(rawRow["longitude"])
+		mapValue := ""
+		if lat != "" && lon != "" {
+			mapValue = lat + "," + lon
+		}
+		row["Map"] = mapValue
+
+		// "Assigned To" → assignee full name
+		row["Assigned To"] = fullName
+
+		// "Contractor" / "Contractor User" → assignee (closest field; extend if a dedicated column exists)
+		row["Contractor"] = fullName
+		row["Contractor User"] = fullName
+
+		// "Department"
+		row["Department"] = rawRow["department_name"]
+
+		// "Zone" → custom_fields["zone"]
+		row["Zone"] = extractCF(rawRow["custom_fields"], "zone")
+
+		// "Summary" → title
+		row["Summary"] = rawRow["title"]
+
+		// "Source" → source
+		row["Source"] = rawRow["source"]
+
+		// Date/time aliases
+		row["Created At"] = rawRow["created_at"]
+		row["Created Time"] = rawRow["created_at"]
+		row["Created Date Time"] = rawRow["created_at"]
+		row["Creation Date"] = rawRow["created_at"]
+		row["Created Date"] = rawRow["created_at"]
+
+		row["Approved At"] = ""
+		row["Approved Time"] = ""
+
+		row["Closure Date"] = rawRow["closed_at"]
+		row["Incident Closed Time"] = rawRow["closed_at"]
+		row["Close Date"] = rawRow["closed_at"]
+
+		// Reopen fields – parsed from custom_fields; Reopened By is overwritten
+		// after the loop with data from incident_transition_histories.
+		// row["Reopen Date"] = extractCF(rawRow["custom_fields"], "reopen_at")
+		// row["Reopen Feedback"] = extractCF(rawRow["custom_fields"], "reopen_feedback")
+		// row["Reopened By"] = extractCF(rawRow["custom_fields"], "reopen_by")
+
+		// Escalation Date – overwritten after the loop from escalation_slas.
+		// row["Escalation Date"] = extractCF(rawRow["custom_fields"], "escalated_at")
+
+		// Notes
+		row["Notes"] = extractCF(rawRow["custom_fields"], "notes")
+
+		// "Duration" → derived from created_at → closed_at
+		duration := ""
+		if ca, ok := rawRow["created_at"].(time.Time); ok {
+			if cla, ok2 := rawRow["closed_at"].(time.Time); ok2 {
+				duration = strconv.FormatFloat(cla.Sub(ca).Seconds(), 'f', 0, 64)
 			}
 		}
-		row["reporter_name"] = reporterName
+		row["Duration"] = duration
+
+		// "Created By" → created_by_name
+		row["Created By"] = rawRow["created_by_name"]
+		row["Call Agent"] = rawRow["created_by_name"]
+
+		// These fields are populated in the bulk-enrichment step below.
+		// Before = attachments uploaded at creation (no transition link, by creator/agent).
+		// After  = attachments uploaded during a contractor transition.
+		row["Attachments"] = ""
+		row["Reopen Date"] = ""
+		row["Reopen By"] = ""
+		row["Escalation Date"] = ""
+		row["Before Attachments"] = ""
+		row["After Attachments"] = ""
+		row["Before Attachment Array"] = []string{}
+		row["After Attachment Array"] = []string{}
+		row["Comments"] = ""
+		row["Comments Array"] = []map[string]interface{}{}
+		row["Contractor Comment"] = ""
+		// Gardening Department Comment has no dedicated table; read from custom_fields.
+		row["Gardening Department Comment"] = extractCF(rawRow["custom_fields"], "gardening_comment")
+
+		// "Solved Date" → resolved_at
+		row["Solved Date"] = rawRow["resolved_at"]
+
+		// Status-transition By / Date fields – populated in bulk enrichment below.
+		row["Rejected By"] = ""
+		row["Rejected Date"] = ""
+		row["Under Resolution By"] = ""
+		row["Under Resolution Date"] = ""
+		row["In Progress By"] = ""
+		row["In Progress Date"] = ""
+		row["Ready To Close By"] = ""
+		row["Ready To Close Date"] = ""
+		row["Closed By"] = ""
+		row["Closed Date"] = ""
+		row["Solved By"] = ""
 
 		results = append(results, row)
 	}
 
+	// ── Bulk enrichment from related tables ──────────────────────────────────
+	if len(results) > 0 {
+		incidentIDs := make([]string, 0, len(results))
+		for _, row := range results {
+			if id := incidentIDStr(row["id"]); id != "" {
+				incidentIDs = append(incidentIDs, id)
+			}
+		}
+
+		// hasCol returns true when at least one of the given column names was
+		// requested by the caller (present in the REPORT_COLUMNS context set).
+		// If no set was injected (e.g. direct service calls), all fetches run.
+		colSet, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).(map[string]bool)
+		hasCol := func(names ...string) bool {
+			if len(colSet) == 0 {
+				return true // no filter → fetch everything
+			}
+			for _, n := range names {
+				if colSet[n] {
+					return true
+				}
+			}
+			return false
+		}
+
+		// 1. Per-status transition data – only fetched when the matching
+		//    By/Date column is actually requested.
+		var rejectedNames, rejectedDates map[string]string
+		if hasCol("Rejected By", "Rejected Date") {
+			rejectedNames, rejectedDates, _ = r.fetchRejectedData(ctx, incidentIDs)
+		}
+
+		var underResNames, underResDates map[string]string
+		if hasCol("Under Resolution By", "Under Resolution Date") {
+			underResNames, underResDates, _ = r.fetchUnderResolutionData(ctx, incidentIDs)
+		}
+
+		var inProgressNames, inProgressDates map[string]string
+		if hasCol("In Progress By", "In Progress Date") {
+			inProgressNames, inProgressDates, _ = r.fetchInProgressData(ctx, incidentIDs)
+		}
+
+		var readyToCloseNames, readyToCloseDates map[string]string
+		if hasCol("Ready To Close By", "Ready To Close Date") {
+			readyToCloseNames, readyToCloseDates, _ = r.fetchReadyToCloseData(ctx, incidentIDs)
+		}
+
+		var closedNames, closedDates map[string]string
+		if hasCol("Closed By", "Closed Date", "Contractor", "Contractor User", "Solved By") {
+			closedNames, closedDates, _ = r.fetchClosedData(ctx, incidentIDs)
+		}
+
+		// 2. Reopened By + Reopen Date
+		var reopenedByNames, reopenDates map[string]string
+		if hasCol("Reopened By", "Reopen Date") {
+			reopenedByNames, reopenDates, _ = r.fetchReopenData(ctx, incidentIDs)
+		}
+
+		// 3. Escalation Date
+		var escalationDates map[string]string
+		if hasCol("Escalation Date") {
+			escalationDates, _ = r.fetchEscalationDates(ctx, incidentIDs)
+		}
+
+		// 4. General comments
+		var commentsMap map[string][]map[string]interface{}
+		if hasCol("Comments", "Comments Array") {
+			commentsMap, _ = r.fetchGeneralComments(ctx, incidentIDs)
+		}
+
+		// 5. Contractor comment
+		var contractorCommentsMap map[string]string
+		if hasCol("Contractor Comment") {
+			contractorCommentsMap, _ = r.fetchContractorComments(ctx, incidentIDs)
+		}
+
+		// 6. Before attachments
+		var beforeAttachMap map[string][]string
+		if hasCol("Before Attachments", "Before Attachment Array") {
+			beforeAttachMap, _ = r.fetchBeforeAttachments(ctx, incidentIDs, protocol, hostname, token)
+		}
+
+		// 7. After attachments
+		var afterAttachMap map[string][]string
+		if hasCol("After Attachments", "After Attachment Array") {
+			afterAttachMap, _ = r.fetchAfterAttachments(ctx, incidentIDs, protocol, hostname, token)
+		}
+
+		// 8. All attachments
+		var allAttachMap map[string][]string
+		if hasCol("Attachments") {
+			allAttachMap, _ = r.fetchAllAttachments(ctx, incidentIDs, protocol, hostname, token)
+		}
+
+		for i, row := range results {
+			incidentID := incidentIDStr(row["id"])
+			if incidentID == "" {
+				continue
+			}
+
+			// ── Per-status By / Date ─────────────────────────────────────────────
+
+			// Closed
+			if name := closedNames[incidentID]; name != "" {
+				results[i]["Closed By"] = name
+				results[i]["Contractor"] = name
+				results[i]["Contractor User"] = name
+				results[i]["Solved By"] = name
+			}
+			if date := closedDates[incidentID]; date != "" {
+				results[i]["Closed Date"] = date
+			}
+
+			// Rejected
+			if name := rejectedNames[incidentID]; name != "" {
+				results[i]["Rejected By"] = name
+			}
+			if date := rejectedDates[incidentID]; date != "" {
+				results[i]["Rejected Date"] = date
+			}
+
+			// Under Resolution
+			if name := underResNames[incidentID]; name != "" {
+				results[i]["Under Resolution By"] = name
+				results[i]["Approved By"] = name
+			}
+			if date := underResDates[incidentID]; date != "" {
+				results[i]["Under Resolution Date"] = date
+				results[i]["Approved Time"] = date
+				results[i]["Approved At"] = date
+			}
+
+			// In Progress
+			if name := inProgressNames[incidentID]; name != "" {
+				results[i]["In Progress By"] = name
+			}
+			if date := inProgressDates[incidentID]; date != "" {
+				results[i]["In Progress Date"] = date
+			}
+
+			// Ready To Close
+			if name := readyToCloseNames[incidentID]; name != "" {
+				results[i]["Ready To Close By"] = name
+			}
+			if date := readyToCloseDates[incidentID]; date != "" {
+				results[i]["Ready To Close Date"] = date
+			}
+
+			// Reopened By + Reopen Date from incident_revisions
+			if rn := reopenedByNames[incidentID]; rn != "" {
+				results[i]["Reopened By"] = rn
+			}
+			if rd := reopenDates[incidentID]; rd != "" {
+				results[i]["Reopen Date"] = rd
+			}
+
+			// Escalation Date
+			if ed := escalationDates[incidentID]; ed != "" {
+				results[i]["Escalation Date"] = ed
+			}
+
+			// General comments
+			if comments, ok := commentsMap[incidentID]; ok {
+				parts := make([]string, 0, len(comments))
+				for _, c := range comments {
+					parts = append(parts, fmt.Sprintf("%s", c["content"]))
+				}
+				results[i]["Comments"] = strings.Join(parts, " | ")
+				results[i]["Comments Array"] = comments
+			}
+
+			// Contractor comment (first/latest comment from a transition)
+			if cc := contractorCommentsMap[incidentID]; cc != "" {
+				results[i]["Contractor Comment"] = cc
+			}
+
+			// Before attachments (creator/agent uploads)
+			if urls := beforeAttachMap[incidentID]; len(urls) > 0 {
+				results[i]["Before Attachments"] = strings.Join(urls, " | ")
+				results[i]["Before Attachment Array"] = urls
+			}
+
+			// After attachments (contractor uploads during transitions)
+			if urls := afterAttachMap[incidentID]; len(urls) > 0 {
+				results[i]["After Attachments"] = strings.Join(urls, " | ")
+				results[i]["After Attachment Array"] = urls
+			}
+
+			// All attachments
+			if urls := allAttachMap[incidentID]; len(urls) > 0 {
+				results[i]["Attachments"] = strings.Join(urls, " | ")
+			}
+
+			_ = row
+		}
+	}
+
 	return results, total, nil
+}
+
+// GetTransitionUserNames returns incident_id → performer full name for the
+// most-recent status_changed revision where new_value = newStateName.
+// Delegates to fetchStatusTransitionData (names only).
+func (r *reportRepository) GetTransitionUserNames(ctx context.Context, newStateName string, incidentIDs []string) (map[string]string, error) {
+	names, _, err := r.fetchStatusTransitionData(ctx, models.IncidentRevisionStatus(newStateName), incidentIDs)
+	return names, err
+}
+
+// fetchStatusTransitionData is the single generic query behind all per-status
+// enrichment helpers. It returns the most-recent performer (full name) and the
+// transition timestamp for each incident where the status changed TO `status`.
+//
+// The query reads incident_revisions, unnests the changes JSONB array, and
+// filters on:
+//
+//	action_type   = 'status_changed'
+//	field_name    = 'current_state_id'   (set by incident_service.ExecuteTransition)
+//	new_value     = string(status)
+func (r *reportRepository) fetchStatusTransitionData(
+	ctx context.Context,
+	status models.IncidentRevisionStatus,
+	incidentIDs []string,
+) (names map[string]string, dates map[string]string, err error) {
+	names = map[string]string{}
+	dates = map[string]string{}
+	if len(incidentIDs) == 0 {
+		return
+	}
+
+	query := `
+		SELECT DISTINCT ON (ir.incident_id)
+			ir.incident_id::text,
+			TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS full_name,
+			ir.created_at::text AS transition_date
+		FROM incident_revisions ir
+		CROSS JOIN jsonb_array_elements(ir.changes::jsonb) AS chg
+		LEFT JOIN users u ON ir.performed_by_id = u.id
+		WHERE ir.action_type = 'status_changed'
+		  AND chg->>'field_name' = 'current_state_id'
+		  AND chg->>'new_value' = ?
+		  AND ir.incident_id IN (?)
+		ORDER BY ir.incident_id, ir.created_at DESC`
+
+	rows, qerr := r.db.WithContext(ctx).Raw(query, string(status), incidentIDs).Rows()
+	if qerr != nil {
+		err = fmt.Errorf("fetchStatusTransitionData(%s) query failed: %w", status, qerr)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var incidentID, fullName, transDate string
+		if serr := rows.Scan(&incidentID, &fullName, &transDate); serr != nil {
+			continue
+		}
+		names[incidentID] = fullName
+		dates[incidentID] = transDate
+	}
+	return
+}
+
+// ── Per-status wrappers (use IncidentRevisionStatus constants) ────────────────
+
+func (r *reportRepository) fetchRejectedData(ctx context.Context, incidentIDs []string) (map[string]string, map[string]string, error) {
+	return r.fetchStatusTransitionData(ctx, models.RevisionStatusRejected, incidentIDs)
+}
+
+func (r *reportRepository) fetchUnderResolutionData(ctx context.Context, incidentIDs []string) (map[string]string, map[string]string, error) {
+	return r.fetchStatusTransitionData(ctx, models.RevisionStatusUnderResolution, incidentIDs)
+}
+
+func (r *reportRepository) fetchInProgressData(ctx context.Context, incidentIDs []string) (map[string]string, map[string]string, error) {
+	return r.fetchStatusTransitionData(ctx, models.RevisionStatusInProgress, incidentIDs)
+}
+
+func (r *reportRepository) fetchReadyToCloseData(ctx context.Context, incidentIDs []string) (map[string]string, map[string]string, error) {
+	return r.fetchStatusTransitionData(ctx, models.RevisionStatusReadyToClose, incidentIDs)
+}
+
+func (r *reportRepository) fetchClosedData(ctx context.Context, incidentIDs []string) (map[string]string, map[string]string, error) {
+	return r.fetchStatusTransitionData(ctx, models.RevisionStatusClosed, incidentIDs)
+}
+
+// ── Bulk enrichment queries ───────────────────────────────────────────────────
+
+// fetchGeneralComments returns non-internal (is_internal = false) comments
+// grouped by incident ID, ordered oldest-first.
+func (r *reportRepository) fetchGeneralComments(ctx context.Context, incidentIDs []string) (map[string][]map[string]interface{}, error) {
+	if len(incidentIDs) == 0 {
+		return map[string][]map[string]interface{}{}, nil
+	}
+
+	query := `
+		SELECT ic.incident_id::text,
+			ic.content,
+			TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS author_name,
+			COALESCE(ic.created_at::text, '') AS created_at
+		FROM incident_comments ic
+		LEFT JOIN users u ON ic.author_id = u.id
+		WHERE ic.incident_id IN (?)
+		  AND ic.deleted_at IS NULL
+		  AND ic.is_internal = false
+		ORDER BY ic.incident_id, ic.created_at ASC`
+
+	rows, err := r.db.WithContext(ctx).Raw(query, incidentIDs).Rows()
+	if err != nil {
+		return nil, fmt.Errorf("fetchGeneralComments query failed: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string][]map[string]interface{})
+	for rows.Next() {
+		var incidentID, content, authorName, createdAt string
+		if err := rows.Scan(&incidentID, &content, &authorName, &createdAt); err != nil {
+			continue
+		}
+		result[incidentID] = append(result[incidentID], map[string]interface{}{
+			"content":    content,
+			"author":     authorName,
+			"created_at": createdAt,
+		})
+	}
+	return result, nil
+}
+
+// fetchContractorComments returns the latest contractor comment per incident.
+// Contractor comments are those submitted during a state transition
+// (transition_history_id IS NOT NULL), joined with the author's name.
+func (r *reportRepository) fetchContractorComments(ctx context.Context, incidentIDs []string) (map[string]string, error) {
+	if len(incidentIDs) == 0 {
+		return map[string]string{}, nil
+	}
+
+	query := `
+		SELECT DISTINCT ON (ic.incident_id)
+			ic.incident_id::text,
+			ic.content
+		FROM incident_comments ic
+		WHERE ic.incident_id IN (?)
+		  AND ic.deleted_at IS NULL
+		  AND ic.transition_history_id IS NOT NULL
+		ORDER BY ic.incident_id, ic.created_at DESC`
+
+	rows, err := r.db.WithContext(ctx).Raw(query, incidentIDs).Rows()
+	if err != nil {
+		return nil, fmt.Errorf("fetchContractorComments query failed: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string]string)
+	for rows.Next() {
+		var incidentID, content string
+		if err := rows.Scan(&incidentID, &content); err != nil {
+			continue
+		}
+		result[incidentID] = content
+	}
+	return result, nil
+}
+
+// fetchBeforeAttachments returns preview URLs for attachments uploaded at
+// incident creation (transition_history_id IS NULL = no transition link),
+// grouped by incident ID. These are typically creator/agent uploads.
+func (r *reportRepository) fetchBeforeAttachments(ctx context.Context, incidentIDs []string, protocol, hostname, token string) (map[string][]string, error) {
+	if len(incidentIDs) == 0 || hostname == "" {
+		return map[string][]string{}, nil
+	}
+
+	query := `
+		SELECT ia.incident_id::text, ia.id::text
+		FROM incident_attachments ia
+		WHERE ia.incident_id IN (?)
+		  AND ia.deleted_at IS NULL
+		  AND ia.transition_history_id IS NULL
+		ORDER BY ia.incident_id, ia.created_at ASC`
+
+	return r.scanAttachmentURLs(ctx, query, incidentIDs, protocol, hostname, token)
+}
+
+// fetchAfterAttachments returns preview URLs for attachments uploaded during
+// a contractor transition (transition_history_id IS NOT NULL),
+// grouped by incident ID.
+func (r *reportRepository) fetchAfterAttachments(ctx context.Context, incidentIDs []string, protocol, hostname, token string) (map[string][]string, error) {
+	if len(incidentIDs) == 0 || hostname == "" {
+		return map[string][]string{}, nil
+	}
+
+	query := `
+		SELECT ia.incident_id::text, ia.id::text
+		FROM incident_attachments ia
+		WHERE ia.incident_id IN (?)
+		  AND ia.deleted_at IS NULL
+		  AND ia.transition_history_id IS NOT NULL
+		ORDER BY ia.incident_id, ia.created_at ASC`
+
+	return r.scanAttachmentURLs(ctx, query, incidentIDs, protocol, hostname, token)
+}
+
+// fetchAllAttachments returns preview URLs for ALL non-deleted attachments,
+// grouped by incident ID.
+func (r *reportRepository) fetchAllAttachments(ctx context.Context, incidentIDs []string, protocol, hostname, token string) (map[string][]string, error) {
+	if len(incidentIDs) == 0 || hostname == "" {
+		return map[string][]string{}, nil
+	}
+
+	query := `
+		SELECT ia.incident_id::text, ia.id::text
+		FROM incident_attachments ia
+		WHERE ia.incident_id IN (?)
+		  AND ia.deleted_at IS NULL
+		ORDER BY ia.incident_id, ia.created_at ASC`
+
+	return r.scanAttachmentURLs(ctx, query, incidentIDs, protocol, hostname, token)
+}
+
+// scanAttachmentURLs is a shared scanner used by the three attachment fetchers.
+func (r *reportRepository) scanAttachmentURLs(ctx context.Context, query string, incidentIDs []string, protocol, hostname, token string) (map[string][]string, error) {
+	rows, err := r.db.WithContext(ctx).Raw(query, incidentIDs).Rows()
+	if err != nil {
+		return nil, fmt.Errorf("scanAttachmentURLs query failed: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string][]string)
+	for rows.Next() {
+		var incidentID, attachID string
+		if err := rows.Scan(&incidentID, &attachID); err != nil {
+			continue
+		}
+		url := protocol + "://" + hostname + "/api/v1/attachments/" + attachID + "/preview?token=" + token
+		result[incidentID] = append(result[incidentID], url)
+	}
+	return result, nil
+}
+
+// fetchReopenData returns (names, dates) maps for the most-recent reopen per
+// incident. A reopen is detected in incident_revisions when action_type =
+// 'status_changed' and the old state is terminal while the new state is not.
+// Uses the same JSONB changes pattern as GetTransitionUserNames.
+func (r *reportRepository) fetchReopenData(ctx context.Context, incidentIDs []string) (names map[string]string, dates map[string]string, err error) {
+	names = map[string]string{}
+	dates = map[string]string{}
+	if len(incidentIDs) == 0 {
+		return
+	}
+
+	// Join workflow_states on the old/new state names stored in the changes JSON
+	// to detect terminal → non-terminal transitions (= reopen).
+	query := `
+		SELECT DISTINCT ON (ir.incident_id)
+			ir.incident_id::text,
+			TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS full_name,
+			ir.created_at::text AS reopen_date
+		FROM incident_revisions ir
+		CROSS JOIN jsonb_array_elements(ir.changes::jsonb) AS chg
+		JOIN workflow_states ws_old
+			ON ws_old.name = chg->>'old_value' AND ws_old.state_type = 'terminal'
+		JOIN workflow_states ws_new
+			ON ws_new.name = chg->>'new_value' AND ws_new.state_type != 'terminal'
+		LEFT JOIN users u ON ir.performed_by_id = u.id
+		WHERE ir.action_type = 'status_changed'
+		  AND chg->>'field_name' = 'current_state_id'
+		  AND ir.incident_id IN (?)
+		ORDER BY ir.incident_id, ir.created_at DESC`
+
+	rows, qerr := r.db.WithContext(ctx).Raw(query, incidentIDs).Rows()
+	if qerr != nil {
+		err = fmt.Errorf("fetchReopenData query failed: %w", qerr)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var incidentID, fullName, reopenDate string
+		if serr := rows.Scan(&incidentID, &fullName, &reopenDate); serr != nil {
+			continue
+		}
+		names[incidentID] = fullName
+		dates[incidentID] = reopenDate
+	}
+	return
+}
+
+// fetchEscalationDates returns the earliest escalation (notified_at) per incident
+// from the escalation_slas table.
+func (r *reportRepository) fetchEscalationDates(ctx context.Context, incidentIDs []string) (map[string]string, error) {
+	if len(incidentIDs) == 0 {
+		return map[string]string{}, nil
+	}
+
+	query := `
+		SELECT DISTINCT ON (es.incident_id)
+			es.incident_id::text,
+			es.notified_at::text
+		FROM escalation_slas es
+		WHERE es.incident_id IN (?)
+		  AND es.notified_at IS NOT NULL
+		ORDER BY es.incident_id, es.notified_at ASC`
+
+	rows, err := r.db.WithContext(ctx).Raw(query, incidentIDs).Rows()
+	if err != nil {
+		return nil, fmt.Errorf("fetchEscalationDates query failed: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string]string)
+	for rows.Next() {
+		var incidentID, date string
+		if err := rows.Scan(&incidentID, &date); err != nil {
+			continue
+		}
+		result[incidentID] = date
+	}
+	return result, nil
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+// extractCF parses a custom_fields JSON blob (string or map) and returns the
+// value for key, or "" if absent/unparseable.
+func extractCF(raw interface{}, key string) interface{} {
+	if raw == nil {
+		return ""
+	}
+	var data map[string]interface{}
+	switch v := raw.(type) {
+	case string:
+		if err := json.Unmarshal([]byte(v), &data); err != nil {
+			return ""
+		}
+	case map[string]interface{}:
+		data = v
+	default:
+		return ""
+	}
+	if val, ok := data[key]; ok {
+		return val
+	}
+	return ""
+}
+
+// incidentIDStr extracts an incident UUID as a lowercase hyphenated string from
+// whatever type the pgx/GORM driver returns (string, []byte, or [16]byte).
+func incidentIDStr(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	switch id := v.(type) {
+	case string:
+		return id
+	case []byte:
+		return string(id)
+	case [16]byte:
+		return uuid.UUID(id).String()
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+func strOrEmpty(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	s, _ := v.(string)
+	return s
+}
+
+func filterEmpty(ss []string) []string {
+	out := ss[:0]
+	for _, s := range ss {
+		if strings.TrimSpace(s) != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func (r *reportRepository) ExecuteUserQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
@@ -354,7 +1087,7 @@ func (r *reportRepository) ExecuteUserQuery(ctx context.Context, filters []model
 
 	offset := (page - 1) * limit
 	rows, err := query.
-		Select("users.id, users.email, users.username, users.first_name, users.last_name, users.phone, users.avatar, users.is_active, users.is_super_admin, users.created_at, users.updated_at, users.last_login_at, "+
+		Select("users.id, users.email, users.username, users.first_name, users.last_name, users.phone, users.avatar, users.is_active, users.is_super_admin, users.created_at, users.updated_at, users.last_login_at, " +
 			"departments.name as department_name, locations.name as location_name").
 		Joins("LEFT JOIN departments ON users.department_id = departments.id").
 		Joins("LEFT JOIN locations ON users.location_id = locations.id").
@@ -397,10 +1130,10 @@ func (r *reportRepository) ExecuteUserQuery(ctx context.Context, filters []model
 
 		// Map to dot-notation for frontend
 		if v, ok := rawRow["department_name"]; ok {
-			row["department.name"] = v
+			row["Department Name"] = v
 		}
 		if v, ok := rawRow["location_name"]; ok {
-			row["location.name"] = v
+			row["Location Name"] = v
 		}
 
 		results = append(results, row)
@@ -468,7 +1201,7 @@ func (r *reportRepository) ExecuteWorkflowQuery(ctx context.Context, filters []m
 
 		// Map to dot-notation for frontend
 		if v, ok := rawRow["created_by_username"]; ok {
-			row["created_by.username"] = v
+			row["Created By Username"] = v
 		}
 
 		results = append(results, row)
@@ -495,7 +1228,7 @@ func (r *reportRepository) ExecuteDepartmentQuery(ctx context.Context, filters [
 
 	offset := (page - 1) * limit
 	rows, err := query.
-		Select("departments.*, parents.name as parent_name, "+
+		Select("departments.*, parents.name as parent_name, " +
 			"managers.username as manager_username, managers.first_name as manager_first_name, managers.last_name as manager_last_name").
 		Joins("LEFT JOIN departments as parents ON departments.parent_id = parents.id").
 		Joins("LEFT JOIN users as managers ON departments.manager_id = managers.id").

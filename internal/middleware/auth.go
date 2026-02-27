@@ -68,6 +68,8 @@ func (m *AuthMiddleware) Authenticate() fiber.Handler {
 		c.Locals("user_email", claims.Email) // For compatibility with presence tracking
 		c.Locals("role", claims.Role)
 		c.Locals("token", token)
+		c.Locals("hostname", c.Hostname())
+		c.Locals("protocol", c.Protocol())
 
 		// Fetch user details to get the name for presence tracking
 		user, err := m.userRepo.FindByID(c.Context(), claims.UserID)
