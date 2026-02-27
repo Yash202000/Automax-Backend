@@ -26,21 +26,15 @@ type EscalationConfig struct {
 	WeeklyMinute int
 }
 
-// ReadyToCloseConfig holds configuration for the Ready to Close workflow feature.
-// All values are read from environment variables with sensible defaults.
 type ReadyToCloseConfig struct {
-	// DefaultDurationOptions is a comma-separated list of duration labels.
-	// env: READY_TO_CLOSE_DURATION_OPTIONS
-	// default: "1 Day,2 Days,1 Week,2 Weeks,1 Month,3 Months"
+
+	// env: READY_TO_CLOSE_DURATION_OPTIONS default: "1 Day,2 Days,1 Week,2 Weeks,1 Month,3 Months"
 	DefaultDurationOptions []string
-	// PreExpiryNotificationHours controls how many hours before expiry
-	// the warning notification is sent. env: READY_TO_CLOSE_PRE_EXPIRY_HOURS (default: 24)
+	// PreExpiryNotificationHours controls how many hours before expiry the warning notification is sent. env: READY_TO_CLOSE_PRE_EXPIRY_HOURS (default: 24)
 	PreExpiryNotificationHours int
-	// RevertStateCode is the workflow state code incidents are moved back to
-	// when they expire in Ready to Close. env: READY_TO_CLOSE_REVERT_STATE_CODE (default: "under_resolution")
+	// RevertStateCode is the workflow state code incidents are moved back to when they expire in Ready to Close. env: READY_TO_CLOSE_REVERT_STATE_CODE (default: "under_resolution")
 	RevertStateCode string
-	// StateCode is the workflow state code that activates this feature.
-	// env: READY_TO_CLOSE_STATE_CODE (default: "ready_to_close")
+	// StateCode is the workflow state code that activates this feature. env: READY_TO_CLOSE_STATE_CODE (default: "ready_to_close")
 	StateCode string
 }
 

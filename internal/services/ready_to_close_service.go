@@ -17,24 +17,19 @@ import (
 
 // ReadyToCloseService handles all logic for the "Ready to Close" expiry feature.
 type ReadyToCloseService interface {
-	// CreateEntry records a new Ready-to-Close expiry entry when an incident enters
-	// the ready_to_close state. It also updates the incident's ReadyToCloseExpiresAt field.
+	// CreateEntry records a new Ready-to-Close expiry entry when an incident enters the ready_to_close state. It also updates the incident's ReadyToCloseExpiresAt field.
 	CreateEntry(ctx context.Context, incidentID uuid.UUID, duration string, comment string, enteredBy uuid.UUID) error
 
-	// DeactivateForIncident deactivates any active Ready-to-Close entry for an incident
-	// (called when the incident transitions away from the ready_to_close state).
+	// DeactivateForIncident deactivates any active Ready-to-Close entry for an incident(called when the incident transitions away from the ready_to_close state).
 	DeactivateForIncident(ctx context.Context, incidentID uuid.UUID) error
 
-	// ProcessExpiries checks for incidents whose Ready-to-Close window has expired
-	// and automatically reverts them to the configured revert state (e.g. Under Resolution).
+	// ProcessExpiries checks for incidents whose Ready-to-Close window has expired and automatically reverts them to the configured revert state (e.g. Under Resolution).
 	ProcessExpiries(ctx context.Context) error
 
-	// ProcessPreExpiryNotifications sends a single in-app notification to the assignee
-	// when an incident is within PreExpiryNotificationHours of its expiry.
+	// ProcessPreExpiryNotifications sends a single in-app notification to the assignee when an incident is within PreExpiryNotificationHours of its expiry.
 	ProcessPreExpiryNotifications(ctx context.Context) error
 
-	// GetDurationOptionsForState returns the duration options for a given workflow state.
-	// It uses the state's DurationOptions if set, otherwise falls back to the global config.
+	// GetDurationOptionsForState returns the duration options for a given workflow state.It uses the state's DurationOptions if set, otherwise falls back to the global config.
 	GetDurationOptionsForState(state *models.WorkflowStateResponse) []string
 
 	// ParseDuration converts a human-readable duration label (e.g. "1 Week") to a time.Duration.
@@ -298,8 +293,8 @@ func (s *readyToCloseService) sendPreExpiryNotification(ctx context.Context, ent
 
 	if _, err := s.notifService.SendNotification(
 		ctx,
-		"notification",           // in-app channel — delivers to user's inbox
-		nil,                      // no template
+		"notification", // in-app channel — delivers to user's inbox
+		nil,            // no template
 		"en",
 		[]string{incident.Assignee.Email}, // email used as lookup key for inbox creation
 		nil, nil,
