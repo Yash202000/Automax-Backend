@@ -23,7 +23,7 @@ func ValidateStruct(ctx context.Context, s interface{}) map[string]string {
 	}
 
 	// Get validator from context with safe type assertion
-	lang, ok := ctx.Value(constants.ContextKeys.VALIDATION_LANGUAGE).(string)
+	lang, ok := ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE).(string)
 	if lang == "" || !ok {
 		log.Warn("Language not found in context, defaulting to 'en'")
 		lang = "en"

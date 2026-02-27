@@ -194,6 +194,13 @@ func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
 	incident, err := h.service.UpdateIncident(c.Context(), id, &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())

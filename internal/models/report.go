@@ -84,11 +84,11 @@ type ReportGroupConfig struct {
 }
 
 type ReportScheduleConfig struct {
-	Enabled   bool     `json:"enabled"`
-	Frequency string   `json:"frequency"` // daily, weekly, monthly
-	Time      string   `json:"time"`      // HH:MM format
-	DayOfWeek *int     `json:"day_of_week,omitempty"`
-	DayOfMonth *int    `json:"day_of_month,omitempty"`
+	Enabled    bool     `json:"enabled"`
+	Frequency  string   `json:"frequency"` // daily, weekly, monthly
+	Time       string   `json:"time"`      // HH:MM format
+	DayOfWeek  *int     `json:"day_of_week,omitempty"`
+	DayOfMonth *int     `json:"day_of_month,omitempty"`
 	Recipients []string `json:"recipients"` // Email addresses
 }
 
@@ -116,7 +116,7 @@ type ReportUpdateRequest struct {
 }
 
 type ReportExecuteRequest struct {
-	Filters      []ReportFilterConfig `json:"filters"`      // Override filters
+	Filters      []ReportFilterConfig `json:"filters"`       // Override filters
 	ExportFormat string               `json:"export_format"` // csv, xlsx, pdf, or empty for preview
 	Limit        int                  `json:"limit"`
 	Page         int                  `json:"page"`
@@ -124,11 +124,11 @@ type ReportExecuteRequest struct {
 
 // ReportExportRequest is used for exporting reports
 type ReportExportRequest struct {
-	DataSource string               `json:"data_source" validate:"required"`
+	DataSource string               `json:"data_source" validate:"required,oneof=incidents action_logs users workflows departments locations classifications"`
 	Columns    []string             `json:"columns" validate:"required,min=1"`
 	Filters    []ReportFilterConfig `json:"filters"`
 	Sorting    []ReportSortConfig   `json:"sorting"`
-	Format     string               `json:"format" validate:"required,oneof=xlsx pdf"`
+	Format     string               `json:"format" validate:"required,oneof=xlsx pdf json"`
 	Options    *ReportExportOptions `json:"options"`
 }
 
@@ -155,12 +155,12 @@ type ReportQueryOptions struct {
 }
 
 type ReportFilter struct {
-	DataSource  *string `json:"data_source"`
+	DataSource  *string    `json:"data_source"`
 	CreatedByID *uuid.UUID `json:"created_by_id"`
-	IsPublic    *bool   `json:"is_public"`
-	Search      string  `json:"search"`
-	Page        int     `json:"page"`
-	Limit       int     `json:"limit"`
+	IsPublic    *bool      `json:"is_public"`
+	Search      string     `json:"search"`
+	Page        int        `json:"page"`
+	Limit       int        `json:"limit"`
 }
 
 // Response types
@@ -180,18 +180,18 @@ type ReportConfigOptions struct {
 }
 
 type ReportResponse struct {
-	ID          string                `json:"id"`
-	Name        string                `json:"name"`
-	Description string                `json:"description"`
-	DataSource  string                `json:"data_source"`
-	Config      ReportTemplateConfig  `json:"config"`
-	IsPublic    bool                  `json:"is_public"`
-	IsSystem    bool                  `json:"is_system"`
-	CreatedBy   *UserBasicResponse    `json:"created_by,omitempty"`
-	SharedWith  []SharedUserResponse  `json:"shared_with,omitempty"`
-	CanEdit     bool                  `json:"can_edit"`
-	CreatedAt   string                `json:"created_at"`
-	UpdatedAt   string                `json:"updated_at"`
+	ID          string               `json:"id"`
+	Name        string               `json:"name"`
+	Description string               `json:"description"`
+	DataSource  string               `json:"data_source"`
+	Config      ReportTemplateConfig `json:"config"`
+	IsPublic    bool                 `json:"is_public"`
+	IsSystem    bool                 `json:"is_system"`
+	CreatedBy   *UserBasicResponse   `json:"created_by,omitempty"`
+	SharedWith  []SharedUserResponse `json:"shared_with,omitempty"`
+	CanEdit     bool                 `json:"can_edit"`
+	CreatedAt   string               `json:"created_at"`
+	UpdatedAt   string               `json:"updated_at"`
 }
 
 type SharedUserResponse struct {
@@ -214,11 +214,11 @@ type ReportExecutionResponse struct {
 }
 
 type ReportResultResponse struct {
-	Columns []ReportColumnConfig `json:"columns"`
+	Columns []ReportColumnConfig     `json:"columns"`
 	Data    []map[string]interface{} `json:"data"`
-	Total   int64                `json:"total"`
-	Page    int                  `json:"page"`
-	Limit   int                  `json:"limit"`
+	Total   int64                    `json:"total"`
+	Page    int                      `json:"page"`
+	Limit   int                      `json:"limit"`
 }
 
 // ReportQueryResponse is the response for ad-hoc report queries
@@ -243,11 +243,11 @@ type UserBasicResponse struct {
 
 // DataSource metadata for frontend
 type DataSourceField struct {
-	Field    string `json:"field"`
-	Label    string `json:"label"`
-	Type     string `json:"type"` // string, number, date, boolean, uuid
-	Filterable bool `json:"filterable"`
-	Sortable   bool `json:"sortable"`
+	Field      string `json:"field"`
+	Label      string `json:"label"`
+	Type       string `json:"type"` // string, number, date, boolean, uuid
+	Filterable bool   `json:"filterable"`
+	Sortable   bool   `json:"sortable"`
 }
 
 type DataSourceInfo struct {
