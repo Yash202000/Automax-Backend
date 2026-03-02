@@ -828,9 +828,13 @@ func (r *incidentRepository) GetAssignedToUser(ctx context.Context, userID uuid.
 	}
 
 	err := baseQuery.
-		Preload("CurrentState").
+		Preload("Classification").
 		Preload("Workflow").
-		Preload("Assignees").
+		Preload("CurrentState").
+		Preload("Assignee").
+		Preload("Department").
+		Preload("Location").
+		Preload("LookupValues.Category").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(limit).
