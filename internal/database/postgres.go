@@ -83,6 +83,7 @@ func Migrate(db *gorm.DB) error {
 		&models.IncidentFeedback{},
 		&models.IncidentTransitionHistory{},
 		&models.IncidentRevision{},
+		&models.IncidentRejectionLog{},
 		// Report models
 		&models.Report{},
 		&models.ReportExecution{},

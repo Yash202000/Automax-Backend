@@ -961,6 +961,7 @@ func (s *workflowService) CreateTransition(ctx context.Context, workflowID uuid.
 		ToStateID:            toStateID,
 		SortOrder:            req.SortOrder,
 		IsActive:             true,
+		IsRejection:          req.IsRejection,
 		AutoDetectDepartment: req.AutoDetectDepartment,
 		DepartmentTypeFilter: req.DepartmentTypeFilter,
 		AutoMatchUser:        req.AutoMatchUser,
@@ -1074,6 +1075,9 @@ func (s *workflowService) UpdateTransition(ctx context.Context, transitionID uui
 	}
 	if req.IsActive != nil {
 		transition.IsActive = *req.IsActive
+	}
+	if req.IsRejection != nil {
+		transition.IsRejection = *req.IsRejection
 	}
 
 	// Department Assignment
