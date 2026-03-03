@@ -34,6 +34,7 @@ type UserRepository interface {
 	FindByExtension(ctx context.Context, extension string) (*models.User, error)
 	FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.User, error)
 	FindByRoleAndContext(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID *uuid.UUID) ([]models.User, error)
+	UpdateProfile(ctx context.Context, user map[string]interface{}) error
 }
 
 type userRepository struct {
@@ -124,6 +125,11 @@ func (r *userRepository) FindByUsername(ctx context.Context, username string) (*
 
 func (r *userRepository) Update(ctx context.Context, user *models.User) error {
 	return r.db.WithContext(ctx).Save(user).Error
+}
+
+// update only selected fields not whole user record fro profile updates (e.g., not touching password hash, roles, etc.)
+func (r *userRepository) UpdateProfile(ctx context.Context, user map[string]interface{}) error {
+	return r.db.WithContext(ctx).Model(&models.User{}).Where("id = ?", user["id"]).Updates(user).Error
 }
 
 func (r *userRepository) Delete(ctx context.Context, id uuid.UUID) error {

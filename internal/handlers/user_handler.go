@@ -65,11 +65,7 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 		})
 	}
 
-	// Create a new context with IP address and user agent for audit logging
-	ctx := context.WithValue(c.Context(), "ip_address", c.IP())
-	ctx = context.WithValue(ctx, "user_agent", c.Get("User-Agent"))
-
-	response, err := h.userService.Login(ctx, &req)
+	response, err := h.userService.Login(c.Context(), &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusUnauthorized, err.Error())
 	}
@@ -78,15 +74,7 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 }
 
 func (h *UserHandler) Logout(c *fiber.Ctx) error {
-	token := c.Locals("token").(string)
-	userID := c.Locals("user_id").(uuid.UUID)
-
-	// Create a new context with user ID, IP address and user agent for audit logging
-	ctx := context.WithValue(c.Context(), "user_id", userID)
-	ctx = context.WithValue(ctx, "ip_address", c.IP())
-	ctx = context.WithValue(ctx, "user_agent", c.Get("User-Agent"))
-
-	if err := h.userService.Logout(ctx, token); err != nil {
+	if err := h.userService.Logout(c.Context()); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to logout")
 	}
 
@@ -126,8 +114,6 @@ func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
 }
 
 func (h *UserHandler) UpdateProfile(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(uuid.UUID)
-
 	var req models.UserUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
@@ -140,11 +126,7 @@ func (h *UserHandler) UpdateProfile(c *fiber.Ctx) error {
 		})
 	}
 
-	// Create a new context with IP address and user agent for audit logging
-	ctx := context.WithValue(c.Context(), "ip_address", c.IP())
-	ctx = context.WithValue(ctx, "user_agent", c.Get("User-Agent"))
-
-	response, err := h.userService.UpdateProfile(ctx, userID, &req)
+	response, err := h.userService.UpdateProfile(c.Context(), &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -167,11 +149,7 @@ func (h *UserHandler) ChangePassword(c *fiber.Ctx) error {
 		})
 	}
 
-	// Create a new context with IP address and user agent for audit logging
-	ctx := context.WithValue(c.Context(), "ip_address", c.IP())
-	ctx = context.WithValue(ctx, "user_agent", c.Get("User-Agent"))
-
-	if err := h.userService.ChangePassword(ctx, userID, &req); err != nil {
+	if err := h.userService.ChangePassword(c.Context(), userID, &req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
@@ -201,11 +179,7 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 	}
 	defer src.Close()
 
-	// Create a new context with IP address and user agent for audit logging
-	ctx := context.WithValue(c.Context(), "ip_address", c.IP())
-	ctx = context.WithValue(ctx, "user_agent", c.Get("User-Agent"))
-
-	response, err := h.userService.UploadAvatar(ctx, userID, src, file)
+	response, err := h.userService.UploadAvatar(c.Context(), userID, src, file)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to upload avatar")
 	}
@@ -214,13 +188,7 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 }
 
 func (h *UserHandler) DeleteAccount(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(uuid.UUID)
-
-	// Create a new context with IP address and user agent for audit logging
-	ctx := context.WithValue(c.Context(), "ip_address", c.IP())
-	ctx = context.WithValue(ctx, "user_agent", c.Get("User-Agent"))
-
-	if err := h.userService.DeleteUser(ctx, userID); err != nil {
+	if err := h.userService.DeleteUser(c.Context()); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to delete account")
 	}
 
@@ -370,9 +338,6 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 
 	// Create a new context with actor ID, IP address, and user agent for audit logging
 	ctx := context.WithValue(c.Context(), "actor_id", actorID)
-	ctx = context.WithValue(ctx, "ip_address", c.IP())
-	ctx = context.WithValue(ctx, "user_agent", c.Get("User-Agent"))
-
 	response, err := h.userService.Register(ctx, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
@@ -428,10 +393,7 @@ func (h *UserHandler) AdminUpdateUser(c *fiber.Ctx) error {
 
 	// Create a new context with actor ID, IP address, and user agent for audit logging
 	ctx := context.WithValue(c.Context(), "actor_id", actorID)
-	ctx = context.WithValue(ctx, "ip_address", c.IP())
-	ctx = context.WithValue(ctx, "user_agent", c.Get("User-Agent"))
-
-	response, err := h.userService.UpdateProfile(ctx, userID, &req)
+	response, err := h.userService.UpdateAdminProfile(ctx, userID, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}

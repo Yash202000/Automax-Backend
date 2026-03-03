@@ -105,6 +105,7 @@ func main() {
 	otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo)
 	escalationService := services.NewEscalationService(escalationRepo, incidentRepo, workflowRepo, userRepo, notificationService)
 	escalationGroupService := services.NewEscalationGroupService(escalationGroupRepo, incidentRepo, notificationService, cfg.Escalation)
+	fcmService := services.NewFCMService(repository.NewDeviceTokenRepository(db), notificationLogRepo)
 
 	// Ready-to-Close service
 	readyToCloseRepo := repository.NewReadyToCloseRepository(db)
@@ -150,6 +151,7 @@ func main() {
 	escalationHandler := handlers.NewEscalationHandler(escalationService)
 	escalationGroupHandler := handlers.NewEscalationGroupHandler(escalationGroupService)
 	rejectionLogHandler := handlers.NewRejectionLogHandler(rejectionLogRepo)
+	fcmHandler := handlers.NewFCMHandler(fcmService)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore, userRepo)
@@ -581,7 +583,6 @@ func main() {
 
 	// GET /api/v1/escalation— list all SLA breach notification records
 	escalation.Get("/", escalationHandler.List)
-	// GET /api/v1/escalation/incident/:incident_id — breach records for one incident
 	escalation.Get("/incident/:incident_id", escalationHandler.ListByIncident)
 
 	// Custom Escalation Groups (admin)
@@ -591,6 +592,13 @@ func main() {
 	escalationGroups.Get("/:id", escalationGroupHandler.GetByID)
 	escalationGroups.Put("/:id", escalationGroupHandler.Update)
 	escalationGroups.Delete("/:id", escalationGroupHandler.Delete)
+
+	//FCM
+	fcm := v1.Group("/fcm", authMiddleware.Authenticate())
+	fcm.Post("/register", fcmHandler.RegisterToken)
+	fcm.Post("/push", fcmHandler.PushNotification)
+	fcm.Get("/device-tokens", fcmHandler.GetUserDeviceTokens)
+	fcm.Delete("/remove-device", fcmHandler.RemoveDevice)
 
 	go func() {
 		addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)

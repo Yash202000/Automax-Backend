@@ -22,13 +22,13 @@ type UserService interface {
 	Register(ctx context.Context, req *models.UserRegisterRequest) (*models.AuthResponse, error)
 	Login(ctx context.Context, req *models.UserLoginRequest) (*models.AuthResponse, error)
 	RefreshToken(ctx context.Context, refreshToken string) (*models.AuthResponse, error)
-	Logout(ctx context.Context, token string) error
+	Logout(ctx context.Context) error
 	GetProfile(ctx context.Context, userID uuid.UUID) (*models.UserResponse, error)
-	UpdateProfile(ctx context.Context, userID uuid.UUID, req *models.UserUpdateRequest) (*models.UserResponse, error)
+	UpdateAdminProfile(ctx context.Context, userID uuid.UUID, req *models.UserUpdateRequest) (*models.UserResponse, error)
 	ChangePassword(ctx context.Context, userID uuid.UUID, req *models.ChangePasswordRequest) error
 	UploadAvatar(ctx context.Context, userID uuid.UUID, file multipart.File, header *multipart.FileHeader) (*models.UserResponse, error)
 	UpdateAvatar(ctx context.Context, userID uuid.UUID, avatarURL string) error
-	DeleteUser(ctx context.Context, userID uuid.UUID) error
+	DeleteUser(ctx context.Context) error
 	ListUsers(ctx context.Context, page, limit int, search string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.UserResponse, int64, error)
 	GetUserByID(ctx context.Context, userID uuid.UUID) (*models.UserResponse, error)
 	GetUserByEmail(ctx context.Context, email string) (*models.User, error)
@@ -36,15 +36,16 @@ type UserService interface {
 	FindMatchingUsers(ctx context.Context, roleID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.UserResponse, error)
 	UpdateUserCallStatus(ctx context.Context, extension string, status string) (interface{}, error)
 	FindByExtension(ctx context.Context, extension string) (*models.User, error)
+	UpdateProfile(ctx context.Context, req *models.UserUpdateRequest) (*models.UserResponse, error)
 }
 
 type userService struct {
-	userRepo       repository.UserRepository
-	departmentRepo repository.DepartmentRepository
-	jwtManager     *utils.JWTManager
-	sessionStore   *database.SessionStore
-	storage        *storage.MinIOStorage
-	config         *config.Config
+	userRepo         repository.UserRepository
+	departmentRepo   repository.DepartmentRepository
+	jwtManager       *utils.JWTManager
+	sessionStore     *database.SessionStore
+	storage          *storage.MinIOStorage
+	config           *config.Config
 	actionLogService ActionLogService
 }
 
@@ -58,12 +59,12 @@ func NewUserService(
 	actionLogService ActionLogService,
 ) UserService {
 	return &userService{
-		userRepo:       userRepo,
-		departmentRepo: departmentRepo,
-		jwtManager:     jwtManager,
-		sessionStore:   sessionStore,
-		storage:        storage,
-		config:         cfg,
+		userRepo:         userRepo,
+		departmentRepo:   departmentRepo,
+		jwtManager:       jwtManager,
+		sessionStore:     sessionStore,
+		storage:          storage,
+		config:           cfg,
 		actionLogService: actionLogService,
 	}
 }
@@ -163,7 +164,7 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 				actorID = id
 			}
 		}
-		
+
 		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
 			UserID:      actorID,
 			Action:      "create",
@@ -275,14 +276,14 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 				ipAddress = ipStr
 			}
 		}
-		
+
 		userAgent := ""
 		if uaVal := ctx.Value("user_agent"); uaVal != nil {
 			if uaStr, ok := uaVal.(string); ok {
 				userAgent = uaStr
 			}
 		}
-		
+
 		if err := s.actionLogService.LogAction(context.Background(), &LogActionParams{
 			UserID:      user.ID,
 			Action:      "login",
@@ -356,7 +357,7 @@ func (s *userService) RefreshToken(ctx context.Context, refreshToken string) (*m
 	}, nil
 }
 
-func (s *userService) Logout(ctx context.Context, token string) error {
+func (s *userService) Logout(ctx context.Context) error {
 	// Get user ID from context to log the logout event
 	userIDInterface := ctx.Value("user_id")
 	if userIDInterface != nil {
@@ -368,7 +369,7 @@ func (s *userService) Logout(ctx context.Context, token string) error {
 					ipAddress = ipStr
 				}
 			}
-			
+
 			userAgent := ""
 			if uaVal := ctx.Value("user_agent"); uaVal != nil {
 				if uaStr, ok := uaVal.(string); ok {
@@ -397,6 +398,7 @@ func (s *userService) Logout(ctx context.Context, token string) error {
 		}
 	}
 
+	token, _ := ctx.Value("token").(string)
 	return s.sessionStore.BlacklistToken(ctx, token, s.jwtManager.GetTokenExpiration())
 }
 
@@ -410,7 +412,7 @@ func (s *userService) GetProfile(ctx context.Context, userID uuid.UUID) (*models
 	return &response, nil
 }
 
-func (s *userService) UpdateProfile(ctx context.Context, userID uuid.UUID, req *models.UserUpdateRequest) (*models.UserResponse, error) {
+func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, req *models.UserUpdateRequest) (*models.UserResponse, error) {
 	user, err := s.userRepo.FindByIDWithRelations(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -510,7 +512,7 @@ func (s *userService) UpdateProfile(ctx context.Context, userID uuid.UUID, req *
 	oldRoleIDs := make([]uuid.UUID, len(oldUser.RoleIDs))
 	copy(oldRoleIDs, oldUser.RoleIDs)
 	s.userRepo.AssignRoles(ctx, user.ID, req.RoleIDs)
-	
+
 	// Log role assignment changes
 	if !equalUUIDSlices(oldRoleIDs, req.RoleIDs) {
 		go func() {
@@ -520,7 +522,7 @@ func (s *userService) UpdateProfile(ctx context.Context, userID uuid.UUID, req *
 					actorID = id
 				}
 			}
-			
+
 			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
 				UserID:      actorID,
 				Action:      "role_assignment",
@@ -540,7 +542,7 @@ func (s *userService) UpdateProfile(ctx context.Context, userID uuid.UUID, req *
 	oldDepartmentIDs := make([]uuid.UUID, len(oldUser.DepartmentIDs))
 	copy(oldDepartmentIDs, oldUser.DepartmentIDs)
 	s.userRepo.AssignDepartments(ctx, user.ID, req.DepartmentIDs)
-	
+
 	// Log department assignment changes
 	if !equalUUIDSlices(oldDepartmentIDs, req.DepartmentIDs) {
 		go func() {
@@ -550,7 +552,7 @@ func (s *userService) UpdateProfile(ctx context.Context, userID uuid.UUID, req *
 					actorID = id
 				}
 			}
-			
+
 			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
 				UserID:      actorID,
 				Action:      "department_assignment",
@@ -573,7 +575,7 @@ func (s *userService) UpdateProfile(ctx context.Context, userID uuid.UUID, req *
 		oldLocationIDs := make([]uuid.UUID, len(oldUser.LocationIDs))
 		copy(oldLocationIDs, oldUser.LocationIDs)
 		s.userRepo.AssignLocations(ctx, user.ID, req.LocationIDs)
-		
+
 		// Log location assignment changes
 		if !equalUUIDSlices(oldLocationIDs, req.LocationIDs) {
 			go func() {
@@ -583,7 +585,7 @@ func (s *userService) UpdateProfile(ctx context.Context, userID uuid.UUID, req *
 						actorID = id
 					}
 				}
-				
+
 				_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
 					UserID:      actorID,
 					Action:      "location_assignment",
@@ -603,7 +605,7 @@ func (s *userService) UpdateProfile(ctx context.Context, userID uuid.UUID, req *
 		oldClassificationIDs := make([]uuid.UUID, len(oldUser.ClassificationIDs))
 		copy(oldClassificationIDs, oldUser.ClassificationIDs)
 		s.userRepo.AssignClassifications(ctx, user.ID, req.ClassificationIDs)
-		
+
 		// Log classification assignment changes
 		if !equalUUIDSlices(oldClassificationIDs, req.ClassificationIDs) {
 			go func() {
@@ -613,7 +615,7 @@ func (s *userService) UpdateProfile(ctx context.Context, userID uuid.UUID, req *
 						actorID = id
 					}
 				}
-				
+
 				_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
 					UserID:      actorID,
 					Action:      "classification_assignment",
@@ -645,6 +647,91 @@ func (s *userService) UpdateProfile(ctx context.Context, userID uuid.UUID, req *
 		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
 			UserID:      userID,
 			Action:      "update",
+			Module:      "users",
+			ResourceID:  user.ID.String(),
+			Description: fmt.Sprintf("User profile updated for user: %s (%s)", user.Username, user.Email),
+			OldValue:    oldUser,
+			NewValue:    req,
+			IPAddress:   getStringFromContext(ctx, "ip_address"),
+			UserAgent:   getStringFromContext(ctx, "user_agent"),
+			Status:      "success",
+		})
+	}()
+
+	return &response, nil
+}
+
+// for non-admin user profile update
+func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateRequest) (*models.UserResponse, error) {
+	// For regular users, we only allow updating certain fields like FirstName, LastName, Phone, and Avatar
+	userID := ctx.Value("user_id").(uuid.UUID)
+	user, err := s.userRepo.FindByIDWithRelations(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	oldUser := &models.UserUpdateRequest{
+		FirstName: user.FirstName,
+		LastName:  user.LastName,
+		Phone:     user.Phone,
+	}
+
+	update := map[string]interface{}{}
+
+	if req.FirstName != "" && req.FirstName != user.FirstName {
+		user.FirstName = req.FirstName
+		update["first_name"] = req.FirstName
+	}
+	if req.LastName != "" && req.LastName != user.LastName {
+		user.LastName = req.LastName
+		update["last_name"] = req.LastName
+	}
+	if req.Phone != "" && req.Phone != user.Phone {
+		user.Phone = req.Phone
+		update["phone"] = req.Phone
+	}
+
+	if req.Extension != "" && req.Extension != user.Extension {
+		user.Extension = req.Extension
+		update["extension"] = req.Extension
+	}
+
+	if req.Username != "" && req.Username != user.Username {
+		exists, err := s.userRepo.ExistsByUsername(ctx, req.Username)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			return nil, errors.New("username already exists")
+		}
+		user.Username = req.Username
+		update["username"] = req.Username
+	}
+
+	if len(update) == 0 {
+		return &models.UserResponse{
+			ID:        user.ID,
+			Username:  user.Username,
+			Email:     user.Email,
+			FirstName: user.FirstName,
+			LastName:  user.LastName,
+			Phone:     user.Phone,
+			Avatar:    user.Avatar,
+		}, nil
+	}
+
+	update["id"] = userID
+	if err := s.userRepo.UpdateProfile(ctx, update); err != nil {
+		return nil, err
+	}
+
+	response := models.ToUserResponse(user)
+
+	// Log profile update
+	go func() {
+		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+			UserID:      userID,
+			Action:      "profile_update",
 			Module:      "users",
 			ResourceID:  user.ID.String(),
 			Description: fmt.Sprintf("User profile updated for user: %s (%s)", user.Username, user.Email),
@@ -691,7 +778,7 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 
 	user.Password = hashedPassword
 	err = s.userRepo.Update(ctx, user)
-	
+
 	if err == nil {
 		// Log successful password change
 		go func() {
@@ -709,7 +796,7 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 			})
 		}()
 	}
-	
+
 	return err
 }
 
@@ -736,7 +823,7 @@ func (s *userService) UploadAvatar(ctx context.Context, userID uuid.UUID, file m
 	}
 
 	response := models.ToUserResponse(user)
-	
+
 	// Log avatar upload
 	go func() {
 		actorID := userID
@@ -745,7 +832,7 @@ func (s *userService) UploadAvatar(ctx context.Context, userID uuid.UUID, file m
 				actorID = id
 			}
 		}
-		
+
 		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
 			UserID:      actorID,
 			Action:      "avatar_upload",
@@ -772,9 +859,9 @@ func (s *userService) UpdateAvatar(ctx context.Context, userID uuid.UUID, avatar
 	oldAvatar := user.Avatar
 	newAvatar := s.storage.GetPublicURL(avatarURL, s.config.MinIO.Endpoint)
 	user.Avatar = newAvatar
-	
+
 	err = s.userRepo.Update(ctx, user)
-	
+
 	if err == nil {
 		// Log avatar update
 		go func() {
@@ -784,7 +871,7 @@ func (s *userService) UpdateAvatar(ctx context.Context, userID uuid.UUID, avatar
 					actorID = id
 				}
 			}
-			
+
 			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
 				UserID:      actorID,
 				Action:      "avatar_update",
@@ -799,11 +886,12 @@ func (s *userService) UpdateAvatar(ctx context.Context, userID uuid.UUID, avatar
 			})
 		}()
 	}
-	
+
 	return err
 }
 
-func (s *userService) DeleteUser(ctx context.Context, userID uuid.UUID) error {
+func (s *userService) DeleteUser(ctx context.Context) error {
+	userID := ctx.Value("user_id").(uuid.UUID)
 	user, err := s.userRepo.FindByID(ctx, userID)
 	if err != nil {
 		// Log failed deletion attempt
@@ -831,7 +919,7 @@ func (s *userService) DeleteUser(ctx context.Context, userID uuid.UUID) error {
 	_ = s.sessionStore.DeleteUserSession(ctx, userID.String())
 
 	err = s.userRepo.Delete(ctx, userID)
-	
+
 	if err == nil {
 		// Log successful user deletion
 		go func() {
@@ -865,7 +953,7 @@ func (s *userService) DeleteUser(ctx context.Context, userID uuid.UUID) error {
 			})
 		}()
 	}
-	
+
 	return err
 }
 
@@ -1045,29 +1133,29 @@ func equalUUIDSlices(a, b []uuid.UUID) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	
+
 	// Create maps to count occurrences
 	countA := make(map[uuid.UUID]int)
 	countB := make(map[uuid.UUID]int)
-	
+
 	for _, id := range a {
 		countA[id]++
 	}
 	for _, id := range b {
 		countB[id]++
 	}
-	
+
 	// Compare counts
 	if len(countA) != len(countB) {
 		return false
 	}
-	
+
 	for id, count := range countA {
 		if countB[id] != count {
 			return false
 		}
 	}
-	
+
 	return true
 }
 

@@ -153,7 +153,7 @@ func (s *StringArray) Scan(value interface{}) error {
 
 type NotificationLog struct {
 	ID           uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
-	Channel      string         `gorm:"size:20;not null;index" json:"channel"`                      // email | sms
+	Channel      string         `gorm:"size:20;not null;index" json:"channel"`                      // email | sms |push-notification
 	Direction    string         `gorm:"size:10;not null;index;default:'outbound'" json:"direction"` // inbound | outbound
 	Category     string         `gorm:"size:20;not null;index;default:'sent'" json:"category"`      // inbox | sent | draft | outbox | trash | spam
 	TemplateCode string         `gorm:"size:100;index" json:"template_code"`
@@ -240,7 +240,7 @@ type NotificationLogResponse struct {
 
 // NotificationLogFilter for filtering and searching notifications
 type NotificationLogFilter struct {
-	Channel      string     `query:"channel" json:"channel" validate:"omitempty,oneof=email sms notification"`                              // email | sms | notification
+	Channel      string     `query:"channel" json:"channel" validate:"omitempty,oneof=email sms notification push-notification"`            // email | sms | notification | push-notification
 	Direction    string     `query:"direction" json:"direction" validate:"omitempty,oneof=inbound outbound"`                                // inbound | outbound
 	Category     string     `query:"category" json:"category" validate:"omitempty,oneof=inbox sent draft outbox trash spam"`                // inbox | sent | draft | outbox | trash | spam
 	Status       string     `query:"status" json:"status" validate:"omitempty,oneof=sent failed mock-sent partial draft pending scheduled"` // sent | failed | mock-sent | partial | draft | pending | scheduled
