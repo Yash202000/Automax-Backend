@@ -36,12 +36,14 @@ type ReportService interface {
 }
 
 type reportService struct {
-	reportRepo repository.ReportRepository
+	reportRepo       repository.ReportRepository
+	rejectionLogRepo repository.RejectionLogRepository
 }
 
-func NewReportService(reportRepo repository.ReportRepository) ReportService {
+func NewReportService(reportRepo repository.ReportRepository, rejectionLogRepo repository.RejectionLogRepository) ReportService {
 	return &reportService{
-		reportRepo: reportRepo,
+		reportRepo:       reportRepo,
+		rejectionLogRepo: rejectionLogRepo,
 	}
 }
 
@@ -237,6 +239,8 @@ func (s *reportService) ExecuteReport(ctx context.Context, id uuid.UUID, req *mo
 		data, total, queryErr = s.reportRepo.ExecuteLocationQuery(ctx, filters, sorting, page, limit)
 	case "classifications":
 		data, total, queryErr = s.reportRepo.ExecuteClassificationQuery(ctx, filters, sorting, page, limit)
+	case "rejection_logs":
+		data, total, queryErr = s.rejectionLogRepo.ExecuteRejectionLogQuery(ctx, filters, sorting, page, limit)
 	default:
 		queryErr = errors.New("unsupported data source")
 	}
@@ -293,6 +297,8 @@ func (s *reportService) PreviewReport(ctx context.Context, req *models.ReportCre
 		data, total, err = s.reportRepo.ExecuteLocationQuery(ctx, req.Config.Filters, sorting, page, limit)
 	case "classifications":
 		data, total, err = s.reportRepo.ExecuteClassificationQuery(ctx, req.Config.Filters, sorting, page, limit)
+	case "rejection_logs":
+		data, total, err = s.rejectionLogRepo.ExecuteRejectionLogQuery(ctx, req.Config.Filters, sorting, page, limit)
 	default:
 		return nil, errors.New("unsupported data source")
 	}
@@ -334,6 +340,8 @@ func (s *reportService) QueryReport(ctx context.Context, req *models.ReportQuery
 		data, total, err = s.reportRepo.ExecuteLocationQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
 	case "classifications":
 		data, total, err = s.reportRepo.ExecuteClassificationQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
+	case "rejection_logs":
+		data, total, err = s.rejectionLogRepo.ExecuteRejectionLogQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
 	default:
 		return nil, errors.New("unsupported data source")
 	}
@@ -385,6 +393,8 @@ func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExpo
 		data, _, err = s.reportRepo.ExecuteLocationQuery(ctx, req.Filters, sorting, 1, limit)
 	case "classifications":
 		data, _, err = s.reportRepo.ExecuteClassificationQuery(ctx, req.Filters, sorting, 1, limit)
+	case "rejection_logs":
+		data, _, err = s.rejectionLogRepo.ExecuteRejectionLogQuery(ctx, req.Filters, sorting, 1, limit)
 	default:
 		return nil, "", "", errors.New("unsupported data source")
 	}
@@ -726,6 +736,32 @@ func (s *reportService) GetDataSources(ctx context.Context) []models.DataSourceI
 				{Field: "parent_name", Label: "Parent Classification", Type: "string", Filterable: true, Sortable: true},
 				{Field: "is_active", Label: "Active", Type: "boolean", Filterable: true, Sortable: true},
 				{Field: "created_at", Label: "Created At", Type: "date", Filterable: true, Sortable: true},
+			},
+		},
+		{
+			Name:  "rejection_logs",
+			Label: "Rejected Incidents",
+			Fields: []models.DataSourceField{
+				{Field: "incident_number", Label: "Incident Number", Type: "string", Filterable: true, Sortable: true},
+				{Field: "incident_title", Label: "Incident Title", Type: "string", Filterable: true, Sortable: true},
+				{Field: "record_type", Label: "Record Type", Type: "string", Filterable: true, Sortable: true},
+				{Field: "rejection_sequence", Label: "Rejection Sequence", Type: "number", Filterable: true, Sortable: true},
+				{Field: "total_rejection_count", Label: "Total Rejection Count", Type: "number", Filterable: true, Sortable: true},
+				{Field: "received_at", Label: "Received At", Type: "date", Filterable: true, Sortable: true},
+				{Field: "rejected_at", Label: "Rejected At", Type: "date", Filterable: true, Sortable: true},
+				{Field: "reaction_time_minutes", Label: "Reaction Time (Minutes)", Type: "number", Filterable: true, Sortable: true},
+				{Field: "rejection_reason", Label: "Rejection Reason", Type: "string", Filterable: true, Sortable: false},
+				{Field: "rejected_by_username", Label: "Rejected By (Username)", Type: "string", Filterable: true, Sortable: true},
+				{Field: "rejected_by.full_name", Label: "Rejected By (Full Name)", Type: "string", Filterable: false, Sortable: false},
+				{Field: "sla_threshold_hours", Label: "SLA Threshold (Hours)", Type: "number", Filterable: true, Sortable: true},
+				{Field: "sla_threshold_minutes", Label: "SLA Threshold (Minutes)", Type: "number", Filterable: true, Sortable: true},
+				{Field: "sla_status", Label: "SLA Status", Type: "string", Filterable: true, Sortable: true},
+				{Field: "sla_breached_at_rejection", Label: "SLA Breached at Rejection", Type: "boolean", Filterable: true, Sortable: true},
+				{Field: "from_state.name", Label: "From State", Type: "string", Filterable: false, Sortable: false},
+				{Field: "to_state.name", Label: "To State (Rejected State)", Type: "string", Filterable: false, Sortable: false},
+				{Field: "department.name", Label: "Department", Type: "string", Filterable: false, Sortable: false},
+				{Field: "classification.name", Label: "Classification", Type: "string", Filterable: false, Sortable: false},
+				{Field: "created_at", Label: "Log Created At", Type: "date", Filterable: true, Sortable: true},
 			},
 		},
 	}

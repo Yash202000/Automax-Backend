@@ -80,14 +80,15 @@ type IncidentService interface {
 }
 
 type incidentService struct {
-	incidentRepo        repository.IncidentRepository
+	incidentRepo            repository.IncidentRepository
 	incidentMergeRepo   repository.IncidentMergeRepository
-	workflowRepo        repository.WorkflowRepository
-	userRepo            repository.UserRepository
+	workflowRepo            repository.WorkflowRepository
+	userRepo                repository.UserRepository
+	rejectionLogRepo  repository.RejectionLogRepository
 	classificationRepo  repository.ClassificationRepository
-	storage             *storage.MinIOStorage
-	db                  *gorm.DB
-	wsHub               *WSHub
+	storage                 *storage.MinIOStorage
+	db                      *gorm.DB
+	wsHub                   *WSHub
 	readyToCloseService ReadyToCloseService
 }
 
@@ -97,19 +98,21 @@ func NewIncidentService(
 	workflowRepo repository.WorkflowRepository,
 	userRepo repository.UserRepository,
 	classificationRepo repository.ClassificationRepository,
+	rejectionLogRepo repository.RejectionLogRepository,
 	storage *storage.MinIOStorage,
 	db *gorm.DB,
 	wsHub *WSHub,
 ) IncidentService {
 	return &incidentService{
-		incidentRepo:       incidentRepo,
+		incidentRepo:           incidentRepo,
 		incidentMergeRepo:  incidentMergeRepo,
-		workflowRepo:       workflowRepo,
-		userRepo:           userRepo,
+		workflowRepo:           workflowRepo,
+		userRepo:               userRepo,
+		rejectionLogRepo:  rejectionLogRepo,
 		classificationRepo: classificationRepo,
-		storage:            storage,
-		db:                 db,
-		wsHub:              wsHub,
+		storage:                storage,
+		db:                     db,
+		wsHub:                  wsHub,
 	}
 }
 
@@ -523,8 +526,25 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 			fmt.Printf("Error setting lookup values: %v\n", err)
 		} else {
 			descriptions = append(descriptions, "Dynamic attributes updated")
-			// For revision history, we'd need to compare old and new, which is more complex.
-			// For now, we just note that they were updated.
+			changes = append(changes, models.IncidentFieldChange{
+				FieldName:  "lookup_values",
+				FieldLabel: "Dynamic Attributes",
+			})
+
+			// Recalculate SLA deadline when priority (or any lookup value) changes.
+			// Uses the incident's effective classification at time of edit.
+			effectiveClassID := incident.ClassificationID
+			if req.ClassificationID != nil && *req.ClassificationID != "" {
+				if parsedID, err := uuid.Parse(*req.ClassificationID); err == nil {
+					effectiveClassID = &parsedID
+				}
+			}
+			if effectiveClassID != nil {
+				if newDeadline, err := s.calculateSLADeadline(ctx, effectiveClassID, req.LookupValueIDs, nil); err == nil && newDeadline != nil {
+					incident.SLADeadline = newDeadline
+					incident.SLABreached = false
+				}
+			}
 		}
 	}
 
@@ -724,6 +744,11 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	}
 	if incident.CustomFields != "" {
 		updates["custom_fields"] = incident.CustomFields
+	}
+	// Persist recalculated SLA deadline when lookup values were updated
+	if req.LookupValueIDs != nil && incident.SLADeadline != nil {
+		updates["sla_deadline"] = *incident.SLADeadline
+		updates["sla_breached"] = incident.SLABreached
 	}
 
 	if len(updates) == 0 || len(changes) == 0 {
@@ -1958,6 +1983,13 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		}, userID)
 	}
 
+	// Create rejection log asynchronously if this is a rejection transition.
+	// Run in background so a log creation failure never blocks the response.
+	if transition.IsRejection && s.rejectionLogRepo != nil {
+		bgCtx := context.Background()
+		go s.createRejectionLog(bgCtx, incidentID, incident, transition, history, userID, userRoleIDs)
+	}
+
 	// Fetch updated incident (outside transaction)
 	updated, err := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
 	if err != nil {
@@ -1966,6 +1998,97 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 
 	resp := models.ToIncidentResponse(updated)
 	return &resp, nil
+}
+
+// createRejectionLog builds and persists an IncidentRejectionLog record.
+// Called in a goroutine after a rejection transition commits — failures are non-fatal.
+func (s *incidentService) createRejectionLog(
+	ctx context.Context,
+	incidentID uuid.UUID,
+	incident *models.Incident,
+	transition *models.WorkflowTransition,
+	history *models.IncidentTransitionHistory,
+	rejectedByID uuid.UUID,
+	rejectedByRoleIDs []uuid.UUID,
+) {
+	// 1. Determine ReceivedAt: when the incident entered the from-state.
+	//    Look for the most recent transition that moved the incident INTO from-state.
+	//    Fall back to incident.CreatedAt if no prior transition exists.
+	receivedAt := incident.CreatedAt
+	if prevHistory, err := s.rejectionLogRepo.GetLastTransitionIntoState(ctx, incidentID, transition.FromStateID); err == nil {
+		receivedAt = prevHistory.TransitionedAt
+	}
+
+	rejectedAt := history.TransitionedAt
+	reactionMinutes := int64(rejectedAt.Sub(receivedAt).Minutes())
+	if reactionMinutes < 0 {
+		reactionMinutes = 0
+	}
+
+	// 2. Count existing rejections for this incident (to determine sequence).
+	existingCount, _ := s.rejectionLogRepo.CountByIncident(ctx, incidentID)
+	sequence := existingCount + 1
+
+	// 3. Get the from-state to snapshot SLA threshold.
+	var slaThresholdHours *int
+	var slaThresholdMinutes *int64
+	if transition.FromState != nil && transition.FromState.SLAHours != nil && *transition.FromState.SLAHours > 0 {
+		slaThresholdHours = transition.FromState.SLAHours
+		mins := int64(*transition.FromState.SLAHours) * 60
+		slaThresholdMinutes = &mins
+	}
+
+	// 4. Determine SLA status.
+	slaStatus := "within_sla"
+	if incident.SLABreached {
+		slaStatus = "breached"
+	} else if slaThresholdMinutes != nil && reactionMinutes > *slaThresholdMinutes {
+		slaStatus = "breached"
+	}
+
+	// 5. Snapshot the rejecting user's role names.
+	roles, _ := s.userRepo.GetUserRoles(ctx, rejectedByID)
+	roleNames := make([]string, 0, len(roles))
+	for _, r := range roles {
+		roleNames = append(roleNames, r.Name)
+	}
+	rolesJSON, _ := json.Marshal(roleNames)
+
+	// 6. Get username for denormalized snapshot.
+	username := ""
+	if user, err := s.userRepo.FindByID(ctx, rejectedByID); err == nil {
+		username = user.Username
+	}
+
+	logEntry := &models.IncidentRejectionLog{
+		IncidentID:              incidentID,
+		RejectionSequence:       sequence,
+		TotalRejectionCount:     sequence,
+		ReceivedAt:              receivedAt,
+		RejectedAt:              rejectedAt,
+		ReactionTimeMinutes:     reactionMinutes,
+		TransitionID:            transition.ID,
+		FromStateID:             transition.FromStateID,
+		ToStateID:               transition.ToStateID,
+		RejectionReason:         history.Comment,
+		RejectedByID:            rejectedByID,
+		RejectedByUsername:      username,
+		RejectedByRolesSnapshot: string(rolesJSON),
+		SLAThresholdHours:       slaThresholdHours,
+		SLAThresholdMinutes:     slaThresholdMinutes,
+		SLABreachedAtRejection:  incident.SLABreached,
+		SLAStatus:               slaStatus,
+		IncidentNumber:          incident.IncidentNumber,
+		IncidentTitle:           incident.Title,
+		RecordType:              incident.RecordType,
+		DepartmentID:            incident.DepartmentID,
+		ClassificationID:        incident.ClassificationID,
+		TransitionHistoryID:     history.ID,
+	}
+
+	if err := s.rejectionLogRepo.Create(ctx, logEntry); err != nil {
+		fmt.Printf("Warning: failed to create rejection log for incident %s: %v\n", incidentID, err)
+	}
 }
 
 func (s *incidentService) GetAvailableTransitions(ctx context.Context, incidentID uuid.UUID, userRoleIDs []uuid.UUID) ([]models.AvailableTransitionResponse, error) {

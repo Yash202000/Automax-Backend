@@ -141,6 +141,10 @@ type WorkflowTransition struct {
 	Actions      []TransitionAction      `gorm:"foreignKey:TransitionID" json:"actions,omitempty"`
 	FieldChanges []TransitionFieldChange `gorm:"foreignKey:TransitionID" json:"field_changes,omitempty"`
 
+	// IsRejection marks this transition as a rejection action.
+	// When true, executing this transition will create an IncidentRejectionLog record.
+	IsRejection bool `gorm:"default:false" json:"is_rejection"`
+
 	IsActive  bool           `gorm:"default:true" json:"is_active"`
 	SortOrder int            `gorm:"default:0" json:"sort_order"`
 	CreatedAt time.Time      `json:"created_at"`
@@ -302,6 +306,7 @@ type WorkflowTransitionCreateRequest struct {
 	ToStateID   string   `json:"to_state_id" validate:"required,uuid"`
 	RoleIDs     []string `json:"role_ids"`
 	SortOrder   int      `json:"sort_order"`
+	IsRejection bool     `json:"is_rejection"`
 
 	// Department Assignment
 	AssignDepartmentID   *string `json:"assign_department_id" validate:"omitempty,uuid"`
@@ -324,6 +329,7 @@ type WorkflowTransitionUpdateRequest struct {
 	RoleIDs     []string `json:"role_ids"`
 	SortOrder   *int     `json:"sort_order"`
 	IsActive    *bool    `json:"is_active"`
+	IsRejection *bool    `json:"is_rejection"`
 
 	// Department Assignment
 	AssignDepartmentID   *string `json:"assign_department_id" validate:"omitempty,uuid"`
@@ -464,12 +470,13 @@ type WorkflowTransitionResponse struct {
 	AutoMatchUser    bool          `json:"auto_match_user"`
 	ManualSelectUser bool          `json:"manual_select_user"`
 
-	Requirements []TransitionRequirementResponse `json:"requirements,omitempty"`
-	Actions      []TransitionActionResponse      `json:"actions,omitempty"`
-	FieldChanges []TransitionFieldChangeResponse `json:"field_changes,omitempty"`
-	IsActive     bool                            `json:"is_active"`
-	SortOrder    int                             `json:"sort_order"`
-	CreatedAt    time.Time                       `json:"created_at"`
+	Requirements []TransitionRequirementResponse  `json:"requirements,omitempty"`
+	Actions      []TransitionActionResponse       `json:"actions,omitempty"`
+	FieldChanges []TransitionFieldChangeResponse  `json:"field_changes,omitempty"`
+	IsRejection  bool                             `json:"is_rejection"`
+	IsActive     bool                             `json:"is_active"`
+	SortOrder    int                              `json:"sort_order"`
+	CreatedAt    time.Time                        `json:"created_at"`
 }
 
 type TransitionRequirementResponse struct {
@@ -648,6 +655,7 @@ func ToWorkflowTransitionResponse(t *WorkflowTransition) WorkflowTransitionRespo
 		AssignmentRoleID:     t.AssignmentRoleID,
 		AutoMatchUser:        t.AutoMatchUser,
 		ManualSelectUser:     t.ManualSelectUser,
+		IsRejection:          t.IsRejection,
 		IsActive:             t.IsActive,
 		SortOrder:            t.SortOrder,
 		CreatedAt:            t.CreatedAt,
