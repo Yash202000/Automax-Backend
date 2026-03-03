@@ -589,6 +589,21 @@ func (s *workflowService) UpdateWorkflow(ctx context.Context, id uuid.UUID, req 
 		}
 	}
 
+	// Update merge-allowed roles if provided
+	if req.MergeAllowedRoleIDs != nil {
+		roleIDs := make([]uuid.UUID, 0, len(req.MergeAllowedRoleIDs))
+		for _, idStr := range req.MergeAllowedRoleIDs {
+			id, err := uuid.Parse(idStr)
+			if err != nil {
+				continue
+			}
+			roleIDs = append(roleIDs, id)
+		}
+		if err := s.repo.AssignMergeAllowedRoles(ctx, workflow.ID, roleIDs); err != nil {
+			return nil, err
+		}
+	}
+
 	updated, err := s.repo.FindByIDWithRelations(ctx, id)
 	if err != nil {
 		return nil, err

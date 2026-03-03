@@ -41,6 +41,9 @@ type Workflow struct {
 	// Role-based convert-to-request permission (many-to-many) - empty = all users can convert
 	ConvertToRequestRoles []Role `gorm:"many2many:workflow_convert_to_request_roles;" json:"convert_to_request_roles,omitempty"`
 
+	// Role-based merge permission (many-to-many) - empty = all users can merge
+	MergeAllowedRoles []Role `gorm:"many2many:workflow_merge_allowed_roles;" json:"merge_allowed_roles,omitempty"`
+
 	CreatedByID *uuid.UUID     `gorm:"type:uuid" json:"created_by_id"`
 	CreatedBy   *User          `gorm:"foreignKey:CreatedByID" json:"created_by,omitempty"`
 	CreatedAt   time.Time      `json:"created_at"`
@@ -259,6 +262,7 @@ type WorkflowUpdateRequest struct {
 	LocationIDs             []string `json:"location_ids"`
 	RequiredFields          []string `json:"required_fields"`
 	ConvertToRequestRoleIDs []string `json:"convert_to_request_role_ids"`
+	MergeAllowedRoleIDs     []string `json:"merge_allowed_role_ids"`
 }
 
 type WorkflowStateCreateRequest struct {
@@ -412,6 +416,7 @@ type WorkflowResponse struct {
 	Classifications       []ClassificationResponse     `json:"classifications,omitempty"`
 	Locations             []LocationResponse           `json:"locations,omitempty"`
 	ConvertToRequestRoles []RoleResponse               `json:"convert_to_request_roles,omitempty"`
+	MergeAllowedRoles     []RoleResponse               `json:"merge_allowed_roles,omitempty"`
 	StatesCount           int                          `json:"states_count"`
 	TransitionsCount      int                          `json:"transitions_count"`
 	CreatedBy             *UserResponse                `json:"created_by,omitempty"`
@@ -590,6 +595,13 @@ func ToWorkflowResponse(w *Workflow) WorkflowResponse {
 		resp.ConvertToRequestRoles = make([]RoleResponse, len(w.ConvertToRequestRoles))
 		for i, r := range w.ConvertToRequestRoles {
 			resp.ConvertToRequestRoles[i] = ToRoleResponse(&r)
+		}
+	}
+
+	if len(w.MergeAllowedRoles) > 0 {
+		resp.MergeAllowedRoles = make([]RoleResponse, len(w.MergeAllowedRoles))
+		for i, r := range w.MergeAllowedRoles {
+			resp.MergeAllowedRoles[i] = ToRoleResponse(&r)
 		}
 	}
 

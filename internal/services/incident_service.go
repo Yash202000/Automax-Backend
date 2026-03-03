@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -480,6 +481,12 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	if err != nil {
 		tx.Rollback()
 		return nil, err
+	}
+
+	// BLOCK: Prevent editing child incidents (merged into another)
+	if incident.IsMerged && incident.MasterIncidentID != nil {
+		tx.Rollback()
+		return nil, errors.New("child incidents cannot be edited - they are locked after merging")
 	}
 
 	// Track changes for revision
@@ -1551,6 +1558,12 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		return nil, errors.New("incident not found or locked by another transaction")
 	}
 
+	// BLOCK: Prevent manual transitions on child incidents (merged into another)
+	if incident.IsMerged && incident.MasterIncidentID != nil {
+		tx.Rollback()
+		return nil, errors.New("child incidents cannot be transitioned manually - they follow the master incident's status")
+	}
+
 	// Verify version still matches (double-check optimistic lock)
 	if incident.Version != req.Version {
 		tx.Rollback()
@@ -2075,9 +2088,43 @@ func (s *incidentService) AddComment(ctx context.Context, incidentID uuid.UUID, 
 }
 
 func (s *incidentService) ListComments(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentCommentResponse, error) {
-	comments, err := s.incidentRepo.ListComments(ctx, incidentID)
+	// Get the incident to check if it's a master
+	incident, err := s.incidentRepo.FindByID(ctx, incidentID)
 	if err != nil {
 		return nil, err
+	}
+
+	var comments []models.IncidentComment
+	
+	// If this is a master incident, include comments from all merged (child) incidents
+	if incident.MasterIncidentID == nil {
+		// This is either a standalone incident or a master incident
+		// Get comments from this incident
+		comments, err = s.incidentRepo.ListComments(ctx, incidentID)
+		if err != nil {
+			return nil, err
+		}
+		
+		// If it's a master, also get comments from merged children
+		mergedIncidents, err := s.incidentMergeRepo.GetMergedIncidents(ctx, incidentID)
+		if err == nil && len(mergedIncidents) > 0 {
+			for _, child := range mergedIncidents {
+				childComments, err := s.incidentRepo.ListComments(ctx, child.ID)
+				if err == nil {
+					comments = append(comments, childComments...)
+				}
+			}
+			// Sort by created_at DESC
+			sort.Slice(comments, func(i, j int) bool {
+				return comments[i].CreatedAt.After(comments[j].CreatedAt)
+			})
+		}
+	} else {
+		// This is a child incident - just return its own comments
+		comments, err = s.incidentRepo.ListComments(ctx, incidentID)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	responses := make([]models.IncidentCommentResponse, len(comments))
@@ -2179,9 +2226,43 @@ func (s *incidentService) AddAttachment(ctx context.Context, incidentID uuid.UUI
 }
 
 func (s *incidentService) ListAttachments(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentAttachmentResponse, error) {
-	attachments, err := s.incidentRepo.ListAttachments(ctx, incidentID)
+	// Get the incident to check if it's a master
+	incident, err := s.incidentRepo.FindByID(ctx, incidentID)
 	if err != nil {
 		return nil, err
+	}
+
+	var attachments []models.IncidentAttachment
+	
+	// If this is a master incident, include attachments from all merged (child) incidents
+	if incident.MasterIncidentID == nil {
+		// This is either a standalone incident or a master incident
+		// Get attachments from this incident
+		attachments, err = s.incidentRepo.ListAttachments(ctx, incidentID)
+		if err != nil {
+			return nil, err
+		}
+		
+		// If it's a master, also get attachments from merged children
+		mergedIncidents, err := s.incidentMergeRepo.GetMergedIncidents(ctx, incidentID)
+		if err == nil && len(mergedIncidents) > 0 {
+			for _, child := range mergedIncidents {
+				childAttachments, err := s.incidentRepo.ListAttachments(ctx, child.ID)
+				if err == nil {
+					attachments = append(attachments, childAttachments...)
+				}
+			}
+			// Sort by created_at DESC
+			sort.Slice(attachments, func(i, j int) bool {
+				return attachments[i].CreatedAt.After(attachments[j].CreatedAt)
+			})
+		}
+	} else {
+		// This is a child incident - just return its own attachments
+		attachments, err = s.incidentRepo.ListAttachments(ctx, incidentID)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	responses := make([]models.IncidentAttachmentResponse, len(attachments))

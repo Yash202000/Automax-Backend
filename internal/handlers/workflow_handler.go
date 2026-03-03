@@ -163,6 +163,7 @@ func (h *WorkflowHandler) UpdateWorkflow(c *fiber.Ctx) error {
 		"classifications":           oldWorkflow.Classifications,
 		"locations":                 oldWorkflow.Locations,
 		"convert_to_request_roles":  oldWorkflow.ConvertToRequestRoles,
+		"merge_allowed_roles":       oldWorkflow.MergeAllowedRoles,
 	}
 	newValue := map[string]interface{}{
 		"name":                      workflow.Name,
@@ -178,6 +179,7 @@ func (h *WorkflowHandler) UpdateWorkflow(c *fiber.Ctx) error {
 		"classifications":           workflow.Classifications,
 		"locations":                 workflow.Locations,
 		"convert_to_request_roles":  workflow.ConvertToRequestRoles,
+		"merge_allowed_roles":       workflow.MergeAllowedRoles,
 	}
 
 	// Build detailed change description
@@ -190,6 +192,7 @@ func (h *WorkflowHandler) UpdateWorkflow(c *fiber.Ctx) error {
 		"sources": "Sources", "priorities": "Priorities", "canvas_layout": "Canvas Layout",
 		"required_fields": "Required Fields", "classifications": "Classifications",
 		"locations": "Locations", "convert_to_request_roles": "Convert to Request Roles",
+		"merge_allowed_roles": "Merge Allowed Roles",
 	}
 
 	for key, label := range fieldLabels {

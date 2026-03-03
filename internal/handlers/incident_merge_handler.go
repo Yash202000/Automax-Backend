@@ -60,6 +60,11 @@ func (h *IncidentMergeHandler) ValidateMerge(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
+	// If validation found errors, return 400 with proper message
+	if !response.CanMerge && len(response.Errors) > 0 {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, response.Errors[0])
+	}
+
 	return utils.SuccessResponse(c, fiber.StatusOK, "Merge validation completed", response)
 }
 
@@ -149,10 +154,23 @@ func (h *IncidentMergeHandler) GetMergedIncidents(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "Merged incidents retrieved", incidents)
 }
 
-// CanMerge checks if the current user has permission to merge incidents
+// CanMerge checks if the current user has permission to merge incidents for a specific workflow
 func (h *IncidentMergeHandler) CanMerge(c *fiber.Ctx) error {
+	workflowIDStr := c.Query("workflow_id")
+	if workflowIDStr == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "workflow_id is required")
+	}
+
+	workflowID, err := uuid.Parse(workflowIDStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "invalid workflow_id")
+	}
+
 	roleIDs := h.getUserRoleIDs(c)
-	canMerge := h.service.CanUserMerge(c.Context(), roleIDs)
+	canMerge, err := h.service.CanUserMerge(c.Context(), workflowID, roleIDs)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Permission check completed", fiber.Map{
 		"can_merge": canMerge,
