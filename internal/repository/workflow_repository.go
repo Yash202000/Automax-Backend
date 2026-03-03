@@ -36,6 +36,10 @@ type WorkflowRepository interface {
 	// Workflow ConvertToRequest role assignments
 	AssignConvertToRequestRoles(ctx context.Context, workflowID uuid.UUID, roleIDs []uuid.UUID) error
 
+	// Workflow MergeAllowedRoles assignments
+	AssignMergeAllowedRoles(ctx context.Context, workflowID uuid.UUID, roleIDs []uuid.UUID) error
+	GetMergeAllowedRoles(ctx context.Context, workflowID uuid.UUID) ([]models.Role, error)
+
 	// WorkflowState CRUD
 	CreateState(ctx context.Context, state *models.WorkflowState) error
 	FindStateByID(ctx context.Context, id uuid.UUID) (*models.WorkflowState, error)
@@ -118,6 +122,7 @@ func (r *workflowRepository) FindByIDWithRelations(ctx context.Context, id uuid.
 		Preload("Classifications").
 		Preload("Locations").
 		Preload("ConvertToRequestRoles").
+		Preload("MergeAllowedRoles").
 		Preload("CreatedBy").
 		First(&workflow, "id = ?", id).Error
 	if err != nil {
@@ -615,6 +620,34 @@ func (r *workflowRepository) AssignConvertToRequestRoles(ctx context.Context, wo
 	}
 
 	return r.db.WithContext(ctx).Model(&workflow).Association("ConvertToRequestRoles").Replace(roles)
+}
+
+// AssignMergeAllowedRoles assigns roles that are allowed to merge incidents for this workflow
+func (r *workflowRepository) AssignMergeAllowedRoles(ctx context.Context, workflowID uuid.UUID, roleIDs []uuid.UUID) error {
+	var workflow models.Workflow
+	if err := r.db.WithContext(ctx).First(&workflow, "id = ?", workflowID).Error; err != nil {
+		return err
+	}
+
+	var roles []models.Role
+	if len(roleIDs) > 0 {
+		if err := r.db.WithContext(ctx).Where("id IN ?", roleIDs).Find(&roles).Error; err != nil {
+			return err
+		}
+	}
+
+	return r.db.WithContext(ctx).Model(&workflow).Association("MergeAllowedRoles").Replace(roles)
+}
+
+// GetMergeAllowedRoles returns roles that are allowed to merge incidents for this workflow
+func (r *workflowRepository) GetMergeAllowedRoles(ctx context.Context, workflowID uuid.UUID) ([]models.Role, error) {
+	var roles []models.Role
+	err := r.db.WithContext(ctx).
+		Table("roles").
+		Joins("JOIN workflow_merge_allowed_roles ON roles.id = workflow_merge_allowed_roles.role_id").
+		Where("workflow_merge_allowed_roles.workflow_id = ?", workflowID).
+		Find(&roles).Error
+	return roles, err
 }
 
 // AssignLocations assigns locations to a workflow

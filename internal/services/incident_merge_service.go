@@ -29,7 +29,7 @@ type IncidentMergeService interface {
 
 	// Query operations
 	GetMergedIncidents(ctx context.Context, masterIncidentID string) ([]models.IncidentResponse, error)
-	CanUserMerge(ctx context.Context, userRoleIDs []uuid.UUID) bool
+	CanUserMerge(ctx context.Context, workflowID uuid.UUID, userRoleIDs []uuid.UUID) (bool, error)
 }
 
 type incidentMergeService struct {
@@ -65,22 +65,31 @@ func NewIncidentMergeService(
 	}
 }
 
-// CanUserMerge checks if the user has permission to merge incidents
-func (s *incidentMergeService) CanUserMerge(ctx context.Context, userRoleIDs []uuid.UUID) bool {
-	allowedRoleCodes := []string{"agent", "supervisor", "admin"}
+// CanUserMerge checks if the user has permission to merge incidents for a specific workflow
+// If workflow has merge roles configured, only those roles can merge
+// If workflow has NO merge roles configured, all users can merge (backward compatible)
+func (s *incidentMergeService) CanUserMerge(ctx context.Context, workflowID uuid.UUID, userRoleIDs []uuid.UUID) (bool, error) {
+	// Get merge allowed roles for this workflow
+	mergeRoles, err := s.workflowRepo.GetMergeAllowedRoles(ctx, workflowID)
+	if err != nil {
+		return false, fmt.Errorf("error fetching workflow merge roles: %v", err)
+	}
 
-	for _, roleID := range userRoleIDs {
-		role, err := s.roleRepo.FindByID(ctx, roleID)
-		if err != nil {
-			continue
-		}
-		for _, allowedCode := range allowedRoleCodes {
-			if role.Code == allowedCode {
-				return true
+	// If no roles configured, allow all users (backward compatible)
+	if len(mergeRoles) == 0 {
+		return true, nil
+	}
+
+	// Check if user has any of the allowed roles
+	for _, userRoleID := range userRoleIDs {
+		for _, allowedRole := range mergeRoles {
+			if userRoleID == allowedRole.ID {
+				return true, nil
 			}
 		}
 	}
-	return false
+
+	return false, nil
 }
 
 // ValidateMerge validates if the selected incidents can be merged
@@ -126,10 +135,20 @@ func (s *incidentMergeService) ValidateMerge(ctx context.Context, incidentIDStrs
 	for _, incident := range incidents {
 		// Check if incident is already merged into another
 		if incident.IsMerged && incident.MasterIncidentID != nil {
-			response.Errors = append(response.Errors, fmt.Sprintf("Incident %s is already merged into %s", incident.IncidentNumber, incident.MasterIncident.IncidentNumber))
+			// Fetch master incident to get its number (MasterIncident is not preloaded)
+			masterIncidentNumber := "unknown"
+			if incident.MasterIncident != nil {
+				masterIncidentNumber = incident.MasterIncident.IncidentNumber
+			} else {
+				masterInc, err := s.incidentRepo.FindByID(ctx, *incident.MasterIncidentID)
+				if err == nil && masterInc != nil {
+					masterIncidentNumber = masterInc.IncidentNumber
+				}
+			}
+			response.Errors = append(response.Errors, fmt.Sprintf("Incident %s is already merged into %s", incident.IncidentNumber, masterIncidentNumber))
 			return response, nil
 		}
-		
+
 		// Check if incident has merged children
 		hasChildren, _ := s.mergeRepo.HasMergedIncidents(ctx, incident.ID)
 		if hasChildren {
@@ -169,10 +188,8 @@ func (s *incidentMergeService) ValidateMerge(ctx context.Context, incidentIDStrs
 		if err != nil {
 			return locationID // fallback to exact match
 		}
-		if loc.ParentID != nil {
-			return loc.ParentID
-		}
-		return locationID // top-level location is its own parent
+		// Return parent ID if exists, otherwise return self (top-level)
+		return loc.ParentID
 	}
 
 	firstParentLocationID := getParentLocationID(firstIncident.LocationID)
@@ -191,6 +208,7 @@ func (s *incidentMergeService) ValidateMerge(ctx context.Context, incidentIDStrs
 				response.Errors = append(response.Errors, "All incidents must have the same parent location")
 				return response, nil
 			}
+			// Both nil is OK - both incidents have no location
 		}
 	}
 
@@ -204,10 +222,8 @@ func (s *incidentMergeService) ValidateMerge(ctx context.Context, incidentIDStrs
 		if err != nil {
 			return classificationID // fallback to exact match
 		}
-		if cls.ParentID != nil {
-			return cls.ParentID
-		}
-		return classificationID // top-level classification is its own parent
+		// Return parent ID if exists, otherwise return nil (top-level)
+		return cls.ParentID
 	}
 
 	firstParentClassificationID := getParentClassificationID(firstIncident.ClassificationID)
@@ -226,6 +242,7 @@ func (s *incidentMergeService) ValidateMerge(ctx context.Context, incidentIDStrs
 				response.Errors = append(response.Errors, "All incidents must have the same parent classification")
 				return response, nil
 			}
+			// Both nil is OK - both incidents have same top-level classification
 		}
 	}
 
@@ -247,9 +264,29 @@ func (s *incidentMergeService) ValidateMerge(ctx context.Context, incidentIDStrs
 
 // MergeIncidents merges selected incidents into a master incident chosen from the selected list
 func (s *incidentMergeService) MergeIncidents(ctx context.Context, req *models.IncidentMergeRequest, userID uuid.UUID, userRoleIDs []uuid.UUID) (*models.IncidentMergeResponse, error) {
-	// Check user permission
-	if !s.CanUserMerge(ctx, userRoleIDs) {
-		return nil, errors.New("you do not have permission to merge incidents")
+	// Parse incident IDs to get workflow ID
+	if len(req.IncidentIDs) == 0 {
+		return nil, errors.New("at least one incident ID is required")
+	}
+
+	firstIncidentID, err := uuid.Parse(req.IncidentIDs[0])
+	if err != nil {
+		return nil, fmt.Errorf("invalid incident ID: %s", req.IncidentIDs[0])
+	}
+
+	// Get the incident to determine its workflow
+	firstIncident, err := s.incidentRepo.FindByID(ctx, firstIncidentID)
+	if err != nil {
+		return nil, fmt.Errorf("error fetching incident: %v", err)
+	}
+
+	// Check user permission for this workflow
+	canMerge, err := s.CanUserMerge(ctx, firstIncident.WorkflowID, userRoleIDs)
+	if err != nil {
+		return nil, err
+	}
+	if !canMerge {
+		return nil, errors.New("you do not have permission to merge incidents for this workflow")
 	}
 
 	// Master incident ID is required - must be one of the selected incidents
@@ -379,13 +416,24 @@ func (s *incidentMergeService) MergeIncidents(ctx context.Context, req *models.I
 
 // UnmergeIncident detaches an incident from its master
 func (s *incidentMergeService) UnmergeIncident(ctx context.Context, req *models.IncidentUnmergeRequest, userID uuid.UUID, userRoleIDs []uuid.UUID) (*models.IncidentUnmergeResponse, error) {
-	if !s.CanUserMerge(ctx, userRoleIDs) {
-		return nil, errors.New("you do not have permission to unmerge incidents")
-	}
-
 	incidentID, err := uuid.Parse(req.IncidentID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid incident ID: %s", req.IncidentID)
+	}
+
+	// Get incident to determine workflow
+	incident, err := s.incidentRepo.FindByID(ctx, incidentID)
+	if err != nil {
+		return nil, fmt.Errorf("error fetching incident: %v", err)
+	}
+
+	// Check user permission for this workflow
+	canMerge, err := s.CanUserMerge(ctx, incident.WorkflowID, userRoleIDs)
+	if err != nil {
+		return nil, err
+	}
+	if !canMerge {
+		return nil, errors.New("you do not have permission to unmerge incidents")
 	}
 
 	isMerged, err := s.mergeRepo.IsIncidentMerged(ctx, incidentID)
@@ -407,7 +455,7 @@ func (s *incidentMergeService) UnmergeIncident(ctx context.Context, req *models.
 	txIncidentRepo := s.incidentRepo.WithTx(tx)
 
 	// Get master incident number for the revision (safe nil check)
-	incident, _ := txIncidentRepo.FindByID(ctx, incidentID)
+	// Use existing 'incident' variable fetched earlier
 	var masterIncidentNumber string
 	if incident != nil && incident.MasterIncidentID != nil {
 		masterInc, mErr := txIncidentRepo.FindByID(ctx, *incident.MasterIncidentID)
@@ -467,10 +515,6 @@ func (s *incidentMergeService) UnmergeIncident(ctx context.Context, req *models.
 
 // BulkUnmergeIncidents detaches multiple incidents from their masters in a single transaction
 func (s *incidentMergeService) BulkUnmergeIncidents(ctx context.Context, req *models.IncidentBulkUnmergeRequest, userID uuid.UUID, userRoleIDs []uuid.UUID) (*models.IncidentBulkUnmergeResponse, error) {
-	if !s.CanUserMerge(ctx, userRoleIDs) {
-		return nil, errors.New("you do not have permission to unmerge incidents")
-	}
-
 	// Parse and validate all IDs upfront
 	incidentIDs := make([]uuid.UUID, 0, len(req.IncidentIDs))
 	for _, idStr := range req.IncidentIDs {
@@ -479,6 +523,27 @@ func (s *incidentMergeService) BulkUnmergeIncidents(ctx context.Context, req *mo
 			return nil, fmt.Errorf("invalid incident ID: %s", idStr)
 		}
 		incidentIDs = append(incidentIDs, id)
+	}
+
+	// Fetch all incidents to check workflow permissions
+	incidents := make([]*models.Incident, 0, len(incidentIDs))
+	for _, id := range incidentIDs {
+		incident, err := s.incidentRepo.FindByID(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("error fetching incident %s: %v", id, err)
+		}
+		incidents = append(incidents, incident)
+	}
+
+	// Check permission for each incident's workflow
+	for _, incident := range incidents {
+		canMerge, err := s.CanUserMerge(ctx, incident.WorkflowID, userRoleIDs)
+		if err != nil {
+			return nil, err
+		}
+		if !canMerge {
+			return nil, fmt.Errorf("you do not have permission to unmerge incident %s", incident.IncidentNumber)
+		}
 	}
 
 	tx := s.db.Begin()
