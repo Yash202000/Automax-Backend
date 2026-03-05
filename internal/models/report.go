@@ -124,7 +124,7 @@ type ReportExecuteRequest struct {
 
 // ReportExportRequest is used for exporting reports
 type ReportExportRequest struct {
-	DataSource string               `json:"data_source" validate:"required,oneof=incidents action_logs users workflows departments locations classifications"`
+	DataSource string               `json:"data_source" validate:"required,oneof=incidents action_logs users workflows departments locations classifications request"`
 	Columns    []string             `json:"columns" validate:"required,min=1"`
 	Filters    []ReportFilterConfig `json:"filters"`
 	Sorting    []ReportSortConfig   `json:"sorting"`
