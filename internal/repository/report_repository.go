@@ -31,6 +31,7 @@ type ReportRepository interface {
 
 	// Data queries for report execution
 	ExecuteIncidentQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
+	ExecuteRequestQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 	// GetTransitionUserNames returns a map of incident_id → full name of the user
 	// who performed the most-recent status transition TO newStateName for each
 	// incident in incidentIDs. Queries incident_revisions joined with users.
@@ -199,6 +200,86 @@ func (r *reportRepository) applySorting(query *gorm.DB, sorting *models.ReportSo
 		query = query.Order(sorting.Field + " " + direction)
 	}
 	return query
+}
+
+// Data queries for report execution
+func (r *reportRepository) ExecuteRequestQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
+	var total int64
+	var results []map[string]interface{}
+
+	query := r.db.WithContext(ctx).Model(&models.Incident{}).
+		Where("incidents.record_type = ?", "request")
+	query = r.applyFilters(query, filters)
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	query = r.applySorting(query, sorting)
+	if sorting == nil {
+		query = query.Order("incidents.created_at DESC")
+	}
+
+	offset := (page - 1) * limit
+	rows, err := query.
+		Select(
+			"incidents.incident_number, " +
+				"incidents.created_by_mobile, " +
+				"reporters.first_name as reporter_first_name, reporters.last_name as reporter_last_name, " +
+				"classifications.name as classification_name, " +
+				"locations.name as location_name, " +
+				"incidents.title, " +
+				"incidents.created_at").
+		Joins("LEFT JOIN users as reporters ON incidents.reporter_id = reporters.id").
+		Joins("LEFT JOIN classifications ON incidents.classification_id = classifications.id").
+		Joins("LEFT JOIN locations ON incidents.location_id = locations.id").
+		Offset(offset).
+		Limit(limit).
+		Rows()
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	cols, _ := rows.Columns()
+	for rows.Next() {
+		columns := make([]interface{}, len(cols))
+		columnPointers := make([]interface{}, len(cols))
+		for i := range columns {
+			columnPointers[i] = &columns[i]
+		}
+		if err := rows.Scan(columnPointers...); err != nil {
+			continue
+		}
+
+		rawRow := make(map[string]interface{})
+		for i, colName := range cols {
+			val := columns[i]
+			if b, ok := val.([]byte); ok {
+				rawRow[colName] = string(b)
+			} else {
+				rawRow[colName] = val
+			}
+		}
+
+		reporterFirst, _ := rawRow["reporter_first_name"].(string)
+		reporterLast, _ := rawRow["reporter_last_name"].(string)
+
+		row := map[string]interface{}{
+			"Incident Number":        rawRow["incident_number"],
+			"Caller Number":          rawRow["created_by_mobile"],
+			"Caller Name":            strings.TrimSpace(reporterFirst + " " + reporterLast),
+			"Classification":         rawRow["classification_name"],
+			"Request Classification": rawRow["classification_name"],
+			"Location":               rawRow["location_name"],
+			"Summary":                rawRow["title"],
+			"Created Date Time":      rawRow["created_at"],
+		}
+
+		results = append(results, row)
+	}
+
+	return results, total, nil
 }
 
 // Data queries for report execution

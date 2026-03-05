@@ -383,6 +383,8 @@ func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExpo
 	switch req.DataSource {
 	case "incidents":
 		data, _, err = s.reportRepo.ExecuteIncidentQuery(ctx, req.Filters, sorting, 1, limit)
+	case "request":
+		data, _, err = s.reportRepo.ExecuteRequestQuery(ctx, req.Filters, sorting, 1, limit)
 	case "users":
 		data, _, err = s.reportRepo.ExecuteUserQuery(ctx, req.Filters, sorting, 1, limit)
 	case "workflows":
