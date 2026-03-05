@@ -128,47 +128,28 @@ func (h *CallLogHandler) DeleteCallLog(c *fiber.Ctx) error {
 
 // ListCallLogs handles GET /admin/call-logs
 func (h *CallLogHandler) ListCallLogs(c *fiber.Ctx) error {
-	filter := &models.CallLogFilter{
-		Page:  1,
-		Limit: 20,
+	var filter models.CallLogFilter
+
+	if err := c.QueryParser(&filter); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
 	}
 
-	// Parse query parameters
-	if page := c.Query("page"); page != "" {
-		if p, err := strconv.Atoi(page); err == nil {
-			filter.Page = p
-		}
-	}
-	if limit := c.Query("limit"); limit != "" {
-		if l, err := strconv.Atoi(limit); err == nil {
-			filter.Limit = l
-		}
-	}
-	if createdBy := c.Query("created_by"); createdBy != "" {
-		if id, err := uuid.Parse(createdBy); err == nil {
-			filter.CreatedBy = &id
-		}
-	}
-	if status := c.Query("status"); status != "" {
-		filter.Status = status
-	}
-	if search := c.Query("search"); search != "" {
-		filter.Search = search
-	}
-	if startDate := c.Query("start_date"); startDate != "" {
-		if t, err := time.Parse("2006-01-02", startDate); err == nil {
-			filter.StartDate = &t
-		}
-	}
-	if endDate := c.Query("end_date"); endDate != "" {
-		if t, err := time.Parse("2006-01-02", endDate); err == nil {
-			// Set to end of day
-			t = t.Add(24*time.Hour - time.Second)
-			filter.EndDate = &t
-		}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &filter); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
-	callLogs, total, err := h.service.ListCallLogs(c.Context(), filter)
+	if filter.Limit == 0 {
+		filter.Limit = 10
+	}
+
+	if filter.Page == 0 {
+		filter.Page = 1
+	}
+
+	callLogs, total, err := h.service.ListCallLogs(c.Context(), &filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}

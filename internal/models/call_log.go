@@ -119,31 +119,31 @@ type UserMinimalResponse struct {
 
 // CallLogResponse for API responses
 type CallLogResponse struct {
-	ID           uuid.UUID              `json:"id"`
-	CallUuid     string                 `json:"call_uuid,omitempty"`
-	CreatedBy    uuid.UUID              `json:"created_by"`
-	Creator      *UserResponse          `json:"creator,omitempty"`
-	StartAt      *time.Time             `json:"start_at,omitempty"`
-	EndAt        *time.Time             `json:"end_at,omitempty"`
-	Status       string                 `json:"status"`
-	Participants []UserMinimalResponse  `json:"participants,omitempty"`
-	JoinedUsers  []UserMinimalResponse  `json:"joined_users,omitempty"`
-	InvitedUsers []UserMinimalResponse  `json:"invited_users,omitempty"`
-	RecordingUrl string                 `json:"recording_url,omitempty"`
-	Meta         string                 `json:"meta,omitempty"`
-	CreatedAt    time.Time              `json:"created_at"`
-	UpdatedAt    *time.Time             `json:"updated_at,omitempty"`
+	ID           uuid.UUID             `json:"id"`
+	CallUuid     string                `json:"call_uuid,omitempty"`
+	CreatedBy    uuid.UUID             `json:"created_by"`
+	Creator      *UserResponse         `json:"creator,omitempty"`
+	StartAt      *time.Time            `json:"start_at,omitempty"`
+	EndAt        *time.Time            `json:"end_at,omitempty"`
+	Status       string                `json:"status"`
+	Participants []UserMinimalResponse `json:"participants,omitempty"`
+	JoinedUsers  []UserMinimalResponse `json:"joined_users,omitempty"`
+	InvitedUsers []UserMinimalResponse `json:"invited_users,omitempty"`
+	RecordingUrl string                `json:"recording_url,omitempty"`
+	Meta         string                `json:"meta,omitempty"`
+	CreatedAt    time.Time             `json:"created_at"`
+	UpdatedAt    *time.Time            `json:"updated_at,omitempty"`
 }
 
 // CallLogFilter for filtering call logs
 type CallLogFilter struct {
-	CreatedBy *uuid.UUID `json:"created_by"`
-	Status    string     `json:"status"`
-	StartDate *time.Time `json:"start_date"`
-	EndDate   *time.Time `json:"end_date"`
-	Search    string     `json:"search"`
-	Page      int        `json:"page"`
-	Limit     int        `json:"limit"`
+	CreatedBy *uuid.UUID `json:"created_by" validate:"omitempty,uuid4"`
+	Status    string     `json:"status" validate:"omitempty,oneof=ongoing completed failed"`
+	StartDate *time.Time `json:"start_date" validate:"omitempty"`
+	EndDate   *time.Time `json:"end_date" validate:"omitempty"`
+	Search    string     `json:"search" validate:"omitempty,max=255"`
+	Page      int        `json:"page" validate:"omitempty,gte=1,lte=1000"`
+	Limit     int        `json:"limit" validate:"omitempty,gte=10,lte=100"`
 }
 
 // CallLogStats represents statistics for call logs
