@@ -2,13 +2,14 @@ package handlers
 
 import (
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/utils"
+	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -28,53 +29,25 @@ func NewActionLogHandler(service services.ActionLogService, validator *validator
 
 // ListActionLogs handles GET /admin/action-logs
 func (h *ActionLogHandler) ListActionLogs(c *fiber.Ctx) error {
-	filter := &models.ActionLogFilter{
-		Page:  1,
-		Limit: 20,
+	filter := &models.ActionLogFilter{}
+	if err := c.QueryParser(filter); err != nil {
+		log.Printf("Error parsing query parameters: %v", err)
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
 	}
 
-	// Parse query parameters
-	if page := c.Query("page"); page != "" {
-		if p, err := strconv.Atoi(page); err == nil {
-			filter.Page = p
-		}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &filter); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
-	if limit := c.Query("limit"); limit != "" {
-		if l, err := strconv.Atoi(limit); err == nil {
-			filter.Limit = l
-		}
+
+	if filter.Page == 0 {
+		filter.Page = 1
 	}
-	if userID := c.Query("user_id"); userID != "" {
-		if id, err := uuid.Parse(userID); err == nil {
-			filter.UserID = &id
-		}
-	}
-	if action := c.Query("action"); action != "" {
-		filter.Action = action
-	}
-	if module := c.Query("module"); module != "" {
-		filter.Module = module
-	}
-	if status := c.Query("status"); status != "" {
-		filter.Status = status
-	}
-	if resourceID := c.Query("resource_id"); resourceID != "" {
-		filter.ResourceID = resourceID
-	}
-	if search := c.Query("search"); search != "" {
-		filter.Search = search
-	}
-	if startDate := c.Query("start_date"); startDate != "" {
-		if t, err := time.Parse("2006-01-02", startDate); err == nil {
-			filter.StartDate = &t
-		}
-	}
-	if endDate := c.Query("end_date"); endDate != "" {
-		if t, err := time.Parse("2006-01-02", endDate); err == nil {
-			// Set to end of day
-			t = t.Add(24*time.Hour - time.Second)
-			filter.EndDate = &t
-		}
+
+	if filter.Limit == 0 {
+		filter.Limit = 20
 	}
 
 	logs, total, err := h.service.ListActionLogs(c.Context(), filter)
@@ -178,46 +151,20 @@ func (h *ActionLogHandler) CleanupOldLogs(c *fiber.Ctx) error {
 
 // ExportActionLogs handles GET /admin/action-logs/export
 func (h *ActionLogHandler) ExportActionLogs(c *fiber.Ctx) error {
-	filter := &models.ActionLogFilter{
-		Page:  1,
-		Limit: 10000, // Export up to 10,000 records
+	var filter models.ActionLogFilter
+	if err := c.QueryParser(&filter); err != nil {
+		log.Printf("Error parsing query parameters: %v", err)
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
 	}
 
-	// Parse query parameters for filtering
-	if userID := c.Query("user_id"); userID != "" {
-		if id, err := uuid.Parse(userID); err == nil {
-			filter.UserID = &id
-		}
-	}
-	if action := c.Query("action"); action != "" {
-		filter.Action = action
-	}
-	if module := c.Query("module"); module != "" {
-		filter.Module = module
-	}
-	if status := c.Query("status"); status != "" {
-		filter.Status = status
-	}
-	if resourceID := c.Query("resource_id"); resourceID != "" {
-		filter.ResourceID = resourceID
-	}
-	if search := c.Query("search"); search != "" {
-		filter.Search = search
-	}
-	if startDate := c.Query("start_date"); startDate != "" {
-		if t, err := time.Parse("2006-01-02", startDate); err == nil {
-			filter.StartDate = &t
-		}
-	}
-	if endDate := c.Query("end_date"); endDate != "" {
-		if t, err := time.Parse("2006-01-02", endDate); err == nil {
-			// Set to end of day
-			t = t.Add(24*time.Hour - time.Second)
-			filter.EndDate = &t
-		}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &filter); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
-	logs, _, err := h.service.ListActionLogs(c.Context(), filter)
+	logs, _, err := h.service.ListActionLogs(c.Context(), &filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -250,7 +197,7 @@ func (h *ActionLogHandler) exportToCSV(c *fiber.Ctx, logs []models.ActionLogResp
 		if log.User != nil {
 			username = log.User.Username
 		}
-		
+
 		row := fmt.Sprintf(`"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s"`+"\n",
 			log.ID,
 			log.UserID,
@@ -285,7 +232,7 @@ func (h *ActionLogHandler) exportToExcel(c *fiber.Ctx, logs []models.ActionLogRe
 		if log.User != nil {
 			username = log.User.Username
 		}
-		
+
 		row := fmt.Sprintf(`"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s"`+"\n",
 			log.ID,
 			log.UserID,
