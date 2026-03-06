@@ -269,9 +269,9 @@ func (s *readyToCloseService) sendPreExpiryNotification(ctx context.Context, ent
 		return fmt.Errorf("incident not found: %w", err)
 	}
 
-	// Determine recipient — prefer the assignee
-	if incident.AssigneeID == nil || incident.Assignee == nil || incident.Assignee.Email == "" {
-		log.Printf("[ReadyToClose] Incident %s has no assignee; skipping pre-expiry notification", entry.IncidentID)
+	// Determine recipient — the user who performed the ready-to-close transition
+	if entry.EnteredBy == nil || entry.EnteredBy.Email == "" {
+		log.Printf("[ReadyToClose] Incident %s has no entered-by user loaded; skipping pre-expiry notification", entry.IncidentID)
 		// Mark as notified to avoid repeated attempts
 		return s.repo.MarkExpiryNotified(ctx, entry.ID)
 	}
@@ -296,7 +296,7 @@ func (s *readyToCloseService) sendPreExpiryNotification(ctx context.Context, ent
 		"notification", // in-app channel — delivers to user's inbox
 		nil,            // no template
 		"en",
-		[]string{incident.Assignee.Email}, // email used as lookup key for inbox creation
+		[]string{entry.EnteredBy.Email}, // notify the user who performed the ready-to-close transition
 		nil, nil,
 		subject, body,
 		map[string]string{

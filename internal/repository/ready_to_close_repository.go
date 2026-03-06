@@ -73,6 +73,7 @@ func (r *readyToCloseRepository) GetPreExpiryEntries(ctx context.Context, hours 
 	var entries []models.IncidentReadyToCloseEntry
 	threshold := time.Now().Add(time.Duration(hours) * time.Hour)
 	err := r.db.WithContext(ctx).
+		Preload("EnteredBy").
 		Where("is_active = true AND expires_at > ? AND expires_at <= ? AND expiry_notification_sent_at IS NULL",
 			time.Now(), threshold).
 		Find(&entries).Error
