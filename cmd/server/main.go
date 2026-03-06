@@ -557,12 +557,12 @@ func main() {
 	notifications.Post("/drafts/:id/send", authMiddleware.RequirePermission("notifications:send"), notificationHandler.SendDraft)
 
 	// Email actions (mark as read, star, move to folder)
-	notifications.Patch("/:id/read", authMiddleware.RequirePermission("notifications:update"), notificationHandler.MarkAsRead)
-	notifications.Patch("/:id/star", authMiddleware.RequirePermission("notifications:update"), notificationHandler.ToggleStar)
-	notifications.Patch("/:id/move", authMiddleware.RequirePermission("notifications:update"), notificationHandler.MoveToCategory)
+	notifications.Patch("/:id/read", authMiddleware.RequirePermission("notifications:read"), notificationHandler.MarkAsRead)
+	notifications.Patch("/:id/star", authMiddleware.RequirePermission("notifications:read"), notificationHandler.ToggleStar)
+	notifications.Patch("/:id/move", authMiddleware.RequirePermission("notifications:read"), notificationHandler.MoveToCategory)
 
 	// Bulk actions
-	notifications.Post("/bulk/move", authMiddleware.RequirePermission("notifications:update"), notificationHandler.BulkMoveToCategory)
+	notifications.Post("/bulk/move", authMiddleware.RequirePermission("notifications:read"), notificationHandler.BulkMoveToCategory)
 	notifications.Post("/bulk/delete", authMiddleware.RequirePermission("notifications:delete"), notificationHandler.BulkDelete)
 
 	// Attachment operations
