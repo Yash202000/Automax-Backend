@@ -532,102 +532,136 @@ func (r *incidentRepository) SetLookupValues(ctx context.Context, incidentID uui
 func (r *incidentRepository) GetStats(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponse, error) {
 
 	stats := &models.IncidentStatsResponse{
-
 		ByState: make(map[string]int64),
 	}
 
 	baseQuery := r.db.WithContext(ctx).Model(&models.Incident{})
 
 	// Apply filters if provided
-
 	if filter != nil {
 
 		if filter.RecordType != nil && *filter.RecordType != "" {
-
 			baseQuery = baseQuery.Where("record_type = ?", *filter.RecordType)
-
 		}
 
 		if len(filter.WorkflowID) != 0 {
-
 			baseQuery = baseQuery.Where("workflow_id IN ?", filter.WorkflowID)
-
 		}
 
 		if len(filter.DepartmentID) != 0 {
 			baseQuery = baseQuery.Where("department_id IN ?", filter.DepartmentID)
-
 		}
 
 		if len(filter.AssigneeID) != 0 {
-			// Check both primary assignee and multiple assignees
-			baseQuery = baseQuery.Where("assignee_id IN ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id IN ?)", filter.AssigneeID, filter.AssigneeID)
+			baseQuery = baseQuery.Where(
+				"assignee_id IN ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id IN ?)",
+				filter.AssigneeID,
+				filter.AssigneeID,
+			)
 		}
 
+		// Created by Me filter
+		if filter.FilterType == "created" {
+			baseQuery = baseQuery.Where("reporter_id = ?", filter.UserID)
+		}
+
+		// Assigned to Me filter
+		if filter.FilterType == "assigned" {
+			baseQuery = baseQuery.Where(`
+				assignee_id = ? OR id IN (
+					SELECT incident_id FROM incident_assignees WHERE user_id = ?
+				)
+			`, filter.UserID, filter.UserID)
+		}
 	}
 
 	// Total count
-
 	if err := baseQuery.Count(&stats.Total).Error; err != nil {
-
 		return nil, err
-
 	}
 
-	// SLA breached count (also filtered by record_type if provided)
-	slaQuery := r.db.WithContext(ctx).Model(&models.Incident{}).Where("sla_breached = ?", true)
-	if filter != nil && filter.RecordType != nil && *filter.RecordType != "" {
-		slaQuery = slaQuery.Where("record_type = ?", *filter.RecordType)
+	// SLA breached count
+	slaQuery := r.db.WithContext(ctx).
+		Model(&models.Incident{}).
+		Where("sla_breached = ?", true)
+
+	if filter != nil {
+
+		if filter.RecordType != nil && *filter.RecordType != "" {
+			slaQuery = slaQuery.Where("record_type = ?", *filter.RecordType)
+		}
+
+		// Created by Me filter
+		if filter.FilterType == "created" {
+			slaQuery = slaQuery.Where("reporter_id = ?", filter.UserID)
+		}
+		// Assigned to Me filter
+		if filter.FilterType == "assigned" {
+			slaQuery = slaQuery.Where(`
+				assignee_id = ? OR id IN (
+					SELECT incident_id FROM incident_assignees WHERE user_id = ?
+				)
+			`, filter.UserID, filter.UserID)
+		}
 	}
+
 	if err := slaQuery.Count(&stats.SLABreached).Error; err != nil {
-
 		return nil, err
-
 	}
 
-	// Count by state (filtered by viewable roles if provided)
-
+	// Count by state
 	type stateCount struct {
-		StateID uuid.UUID `gorm:"column:state_id"`
-
-		StateName string `gorm:"column:state_name"`
-
-		Count int64 `gorm:"column:count"`
+		StateID   uuid.UUID `gorm:"column:state_id"`
+		StateName string    `gorm:"column:state_name"`
+		Count     int64     `gorm:"column:count"`
 	}
 
 	var stateCounts []stateCount
 
-	stateQuery := r.db.WithContext(ctx).Model(&models.Incident{}).
+	stateQuery := r.db.WithContext(ctx).
+		Model(&models.Incident{}).
 		Select("workflow_states.id as state_id, workflow_states.name as state_name, count(*) as count").
 		Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
 
-	// Apply record_type filter to state counts
-	if filter != nil && filter.RecordType != nil && *filter.RecordType != "" {
+	if filter != nil {
 
-		stateQuery = stateQuery.Where("incidents.record_type = ?", *filter.RecordType)
+		if filter.RecordType != nil && *filter.RecordType != "" {
+			stateQuery = stateQuery.Where("incidents.record_type = ?", *filter.RecordType)
+		}
 
+		// Created by Me filter
+		if filter.FilterType == "created" {
+			stateQuery = stateQuery.Where("incidents.reporter_id = ?", filter.UserID)
+		}
+		// Assigned to Me filter
+		if filter.FilterType == "assigned" {
+			stateQuery = stateQuery.Where(`
+				incidents.assignee_id = ? OR incidents.id IN (
+					SELECT incident_id FROM incident_assignees WHERE user_id = ?
+				)
+			`, filter.UserID, filter.UserID)
+		}
+
+		// Filter by role visibility
+		if len(filter.UserRoleIDs) > 0 {
+			stateQuery = stateQuery.Where(`
+				NOT EXISTS (
+					SELECT 1 FROM state_viewable_roles 
+					WHERE workflow_state_id = workflow_states.id
+				)
+				OR EXISTS (
+					SELECT 1 FROM state_viewable_roles
+					WHERE workflow_state_id = workflow_states.id 
+					AND role_id IN ?
+				)
+			`, filter.UserRoleIDs)
+		}
 	}
 
-	// Filter by user roles if provided (empty viewable_roles = visible to all)
-
-	if filter != nil && len(filter.UserRoleIDs) > 0 {
-
-		stateQuery = stateQuery.Where(`
-
-			NOT EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = workflow_states.id)
-
-			OR EXISTS (SELECT 1 FROM state_viewable_roles
-
-			           WHERE workflow_state_id = workflow_states.id AND role_id IN ?)
-
-		`, filter.UserRoleIDs)
-
-	}
-
-	if err := stateQuery.Group("workflow_states.id, workflow_states.name").Scan(&stateCounts).Error; err != nil {
-
+	if err := stateQuery.
+		Group("workflow_states.id, workflow_states.name").
+		Scan(&stateCounts).Error; err != nil {
 		return nil, err
-
 	}
 
 	stats.ByStateDetails = make([]models.StateStatDetail, 0, len(stateCounts))
@@ -637,35 +671,51 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 		stats.ByState[sc.StateName] = sc.Count
 
 		stats.ByStateDetails = append(stats.ByStateDetails, models.StateStatDetail{
-
-			ID: sc.StateID,
-
-			Name: sc.StateName,
-
+			ID:    sc.StateID,
+			Name:  sc.StateName,
 			Count: sc.Count,
 		})
-
 	}
 
-	// Count by state_type for category totals
+	// Count by state_type
 	type stateTypeCount struct {
 		StateType string `gorm:"column:state_type"`
 		Count     int64  `gorm:"column:count"`
 	}
+
 	var stateTypeCounts []stateTypeCount
-	stateTypeQuery := r.db.WithContext(ctx).Model(&models.Incident{}).
+
+	stateTypeQuery := r.db.WithContext(ctx).
+		Model(&models.Incident{}).
 		Select("workflow_states.state_type as state_type, count(*) as count").
 		Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
 
-	if filter != nil && filter.RecordType != nil && *filter.RecordType != "" {
-		stateTypeQuery = stateTypeQuery.Where("incidents.record_type = ?", *filter.RecordType)
+	if filter != nil {
+
+		if filter.RecordType != nil && *filter.RecordType != "" {
+			stateTypeQuery = stateTypeQuery.Where("incidents.record_type = ?", *filter.RecordType)
+		}
+
+		// Created by Me filter
+		if filter.FilterType == "created" {
+			stateTypeQuery = stateTypeQuery.Where("incidents.reporter_id = ?", filter.UserID)
+		}
+		// Assigned to Me Filter
+		if filter.FilterType == "assigned" {
+			stateTypeQuery = stateTypeQuery.Where(`
+				incidents.assignee_id = ? OR incidents.id IN (
+					SELECT incident_id FROM incident_assignees WHERE user_id = ?
+				)
+			`, filter.UserID, filter.UserID)
+		}
 	}
 
-	if err := stateTypeQuery.Group("workflow_states.state_type").Scan(&stateTypeCounts).Error; err != nil {
+	if err := stateTypeQuery.
+		Group("workflow_states.state_type").
+		Scan(&stateTypeCounts).Error; err != nil {
 		return nil, err
 	}
 
-	// Map state_type to convenience fields
 	for _, stc := range stateTypeCounts {
 		switch stc.StateType {
 		case "initial":
@@ -678,7 +728,6 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 	}
 
 	return stats, nil
-
 }
 
 func (r *incidentRepository) GetPriorityCounts(ctx context.Context, filter *models.IncidentFilter) (map[string]int64, error) {

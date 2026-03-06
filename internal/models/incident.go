@@ -530,7 +530,9 @@ type IncidentFilter struct {
 	EndDate          *time.Time  `query:"end_date" json:"end_date" validate:"omitempty"`                                              // filter by created_at <= end_date
 	Page             int         `query:"page" json:"page" validate:"omitempty,min=1"`
 	Limit            int         `query:"limit" json:"limit" validate:"omitempty,min=1,max=100"`
-	UserRoleIDs      []uuid.UUID `json:"-"` // For filtering stats by user's roles
+	UserRoleIDs      []uuid.UUID `json:"-"`     // For filtering stats by user's roles
+	FilterType       string      `query:"type"` // created | assigned
+	UserID           uuid.UUID   `json:"-"`
 }
 
 // Merge Incident Types
