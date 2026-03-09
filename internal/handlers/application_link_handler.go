@@ -30,7 +30,7 @@ func (h *ApplicationLinkHandler) CreateLink(c *fiber.Ctx) error {
 		})
 	}
 
-	link, err := h.linkService.CreateLink(c.Context(), &req)
+	link, err := h.linkService.CreateLink(c.UserContext(), &req)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"success": false,
@@ -55,7 +55,7 @@ func (h *ApplicationLinkHandler) GetLink(c *fiber.Ctx) error {
 		})
 	}
 
-	link, err := h.linkService.GetLink(c.Context(), id)
+	link, err := h.linkService.GetLink(c.UserContext(), id)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 			"success": false,
@@ -71,7 +71,7 @@ func (h *ApplicationLinkHandler) GetLink(c *fiber.Ctx) error {
 
 // ListLinks lists all application links
 func (h *ApplicationLinkHandler) ListLinks(c *fiber.Ctx) error {
-	links, err := h.linkService.ListLinks(c.Context())
+	links, err := h.linkService.ListLinks(c.UserContext())
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"success": false,
@@ -87,7 +87,7 @@ func (h *ApplicationLinkHandler) ListLinks(c *fiber.Ctx) error {
 
 // ListActiveLinks lists only active application links (for dashboard display)
 func (h *ApplicationLinkHandler) ListActiveLinks(c *fiber.Ctx) error {
-	links, err := h.linkService.ListActiveLinks(c.Context())
+	links, err := h.linkService.ListActiveLinks(c.UserContext())
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"success": false,
@@ -120,7 +120,7 @@ func (h *ApplicationLinkHandler) UpdateLink(c *fiber.Ctx) error {
 		})
 	}
 
-	link, err := h.linkService.UpdateLink(c.Context(), id, &req)
+	link, err := h.linkService.UpdateLink(c.UserContext(), id, &req)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"success": false,
@@ -145,7 +145,7 @@ func (h *ApplicationLinkHandler) DeleteLink(c *fiber.Ctx) error {
 		})
 	}
 
-	if err := h.linkService.DeleteLink(c.Context(), id); err != nil {
+	if err := h.linkService.DeleteLink(c.UserContext(), id); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"success": false,
 			"error":   err.Error(),
@@ -170,7 +170,7 @@ func (h *ApplicationLinkHandler) UploadImage(c *fiber.Ctx) error {
 	}
 
 	// Verify the link exists
-	_, err = h.linkService.GetLink(c.Context(), id)
+	_, err = h.linkService.GetLink(c.UserContext(), id)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 			"success": false,
@@ -215,7 +215,7 @@ func (h *ApplicationLinkHandler) UploadImage(c *fiber.Ctx) error {
 	defer src.Close()
 
 	// Upload to storage
-	url, err := h.storage.UploadFile(c.Context(), src, file, "application-links")
+	url, err := h.storage.UploadFile(c.UserContext(), src, file, "application-links")
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"success": false,
@@ -228,7 +228,7 @@ func (h *ApplicationLinkHandler) UploadImage(c *fiber.Ctx) error {
 		ImageURL: url,
 	}
 
-	link, err := h.linkService.UpdateLink(c.Context(), id, updateReq)
+	link, err := h.linkService.UpdateLink(c.UserContext(), id, updateReq)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"success": false,

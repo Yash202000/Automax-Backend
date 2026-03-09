@@ -430,7 +430,7 @@ func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExpo
 	return pdfData, filename + ".pdf", "application/pdf", nil
 }
 
-func (s *reportService) generateExcel(data []map[string]interface{}, columns []string, title string, options *models.ReportExportOptions) ([]byte, error) {
+func (s *reportService) generateExcel(data []map[string]interface{}, columns []models.ColumnField, title string, options *models.ReportExportOptions) ([]byte, error) {
 	// This is a simple CSV-like implementation
 	// For a proper Excel file, you would use a library like excelize
 	var buf bytes.Buffer
@@ -443,7 +443,7 @@ func (s *reportService) generateExcel(data []map[string]interface{}, columns []s
 		if i > 0 {
 			buf.WriteString("\t")
 		}
-		buf.WriteString(col)
+		buf.WriteString(col.Label)
 	}
 	buf.WriteString("\n")
 
@@ -453,8 +453,8 @@ func (s *reportService) generateExcel(data []map[string]interface{}, columns []s
 			if i > 0 {
 				buf.WriteString("\t")
 			}
-			if val, ok := row[col]; ok && val != nil {
-				buf.WriteString(formatExportValue(col, val))
+			if val, ok := row[col.Label]; ok && val != nil {
+				buf.WriteString(formatExportValue(col.Label, val))
 			}
 		}
 		buf.WriteString("\n")
@@ -463,7 +463,7 @@ func (s *reportService) generateExcel(data []map[string]interface{}, columns []s
 	return buf.Bytes(), nil
 }
 
-func (s *reportService) generatePDF(data []map[string]interface{}, columns []string, title string, options *models.ReportExportOptions) ([]byte, error) {
+func (s *reportService) generatePDF(data []map[string]interface{}, columns []models.ColumnField, title string, options *models.ReportExportOptions) ([]byte, error) {
 	pdf := gofpdf.New("L", "mm", "A4", "") // Landscape for tables
 	pdf.SetMargins(10, 15, 10)
 	pdf.SetAutoPageBreak(true, 15)
@@ -496,8 +496,8 @@ func (s *reportService) generatePDF(data []map[string]interface{}, columns []str
 	pdf.SetFillColor(59, 130, 246) // Blue background
 	pdf.SetTextColor(255, 255, 255)
 	for _, col := range columns {
-		// Truncate column name if too long
-		displayCol := col
+		// Truncate column label if too long
+		displayCol := col.Label
 		if len(displayCol) > 15 {
 			displayCol = displayCol[:12] + "..."
 		}
@@ -520,7 +520,7 @@ func (s *reportService) generatePDF(data []map[string]interface{}, columns []str
 			pdf.SetFillColor(59, 130, 246)
 			pdf.SetTextColor(255, 255, 255)
 			for _, col := range columns {
-				displayCol := col
+				displayCol := col.Label
 				if len(displayCol) > 15 {
 					displayCol = displayCol[:12] + "..."
 				}
@@ -534,8 +534,8 @@ func (s *reportService) generatePDF(data []map[string]interface{}, columns []str
 
 		for _, col := range columns {
 			val := ""
-			if v, ok := row[col]; ok && v != nil {
-				val = formatExportValue(col, v)
+			if v, ok := row[col.Label]; ok && v != nil {
+				val = formatExportValue(col.Label, v)
 			}
 			// Truncate value if too long
 			if len(val) > 20 {

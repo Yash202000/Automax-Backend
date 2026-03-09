@@ -5,15 +5,16 @@ import (
 	"time"
 
 	"github.com/automax/backend/internal/services"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 )
 
 type ActionLoggerConfig struct {
-	Enabled      bool
-	SkipPaths    []string
-	SkipMethods  []string
-	LogService   services.ActionLogService
+	Enabled     bool
+	SkipPaths   []string
+	SkipMethods []string
+	LogService  services.ActionLogService
 }
 
 func ActionLogger(config ActionLoggerConfig) fiber.Handler {
@@ -52,7 +53,7 @@ func ActionLogger(config ActionLoggerConfig) fiber.Handler {
 		duration := time.Since(start).Milliseconds()
 
 		// Get user ID from context (set by auth middleware)
-		userIDInterface := c.Locals("user_id")
+		userIDInterface := c.Locals(constants.ContextKeys.UserID)
 		if userIDInterface == nil {
 			return err
 		}
@@ -80,11 +81,11 @@ func ActionLogger(config ActionLoggerConfig) fiber.Handler {
 		resourceID := c.Params("id")
 
 		// Capture IP and User-Agent before async goroutine (context may be released)
-		ipAddress := c.IP()
-		userAgent := c.Get("User-Agent")
+		ipAddress, _ := c.Locals(constants.ContextKeys.IP_ADDRESS).(string)
+		userAgent, _ := c.Locals(constants.ContextKeys.USER_AGENT).(string)
 
 		// Log the action asynchronously using background context
-		// We use context.Background() instead of c.Context() because the request
+		// We use context.Background() instead of c.UserContext() because the request
 		// context may be cancelled when the HTTP response is sent
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -230,7 +231,7 @@ func withResourceID(resourceID string) string {
 // LogAction is a helper function to manually log actions
 func LogAction(c *fiber.Ctx, logService services.ActionLogService, params *services.LogActionParams) {
 	// Get user ID from context
-	userIDInterface := c.Locals("user_id")
+	userIDInterface := c.Locals(constants.ContextKeys.UserID)
 	if userIDInterface == nil {
 		return
 	}
@@ -240,11 +241,14 @@ func LogAction(c *fiber.Ctx, logService services.ActionLogService, params *servi
 		return
 	}
 
+	// Capture all context values before the goroutine — Fiber recycles *Ctx after the handler returns
 	params.UserID = userID
-	params.IPAddress = c.IP()
-	params.UserAgent = c.Get("User-Agent")
+	params.IPAddress, _ = c.Locals(constants.ContextKeys.IP_ADDRESS).(string)
+	params.UserAgent, _ = c.Locals(constants.ContextKeys.USER_AGENT).(string)
 
 	go func() {
-		_ = logService.LogAction(c.Context(), params)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = logService.LogAction(ctx, params)
 	}()
 }

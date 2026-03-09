@@ -202,12 +202,12 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	incident, err := h.service.GetIncident(c.Context(), id)
+	incident, err := h.service.GetIncident(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not found")
 	}
 
-	rawIncident, err := h.incidentRepo.FindByIDWithRelations(c.Context(), id)
+	rawIncident, err := h.incidentRepo.FindByIDWithRelations(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not found")
 	}
@@ -251,7 +251,7 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 		}
 
 		var stderr bytes.Buffer
-		cmd := exec.CommandContext(c.Context(),
+		cmd := exec.CommandContext(c.UserContext(),
 			chromeBin,
 			"--headless", "--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage",
 			"--no-margins", "--print-to-pdf-no-header",
@@ -555,7 +555,7 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 
 			// embed image as base64 data URI
 			if strings.HasPrefix(att.MimeType, "image/") && att.FilePath != "" {
-				if fr, ferr := h.storage.GetFile(c.Context(), att.FilePath); ferr == nil {
+				if fr, ferr := h.storage.GetFile(c.UserContext(), att.FilePath); ferr == nil {
 					if imgData, rerr := io.ReadAll(fr); rerr == nil && len(imgData) > 0 {
 						encoded := base64.StdEncoding.EncodeToString(imgData)
 						fmt.Fprintf(&b, `<img class="att-img" src="data:%s;base64,%s" alt="%s">`,

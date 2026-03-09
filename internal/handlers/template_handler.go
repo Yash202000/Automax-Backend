@@ -27,7 +27,7 @@ func NewNotificationTemplateHandler(
 // 		return fiber.ErrBadRequest
 // 	}
 
-// 	if err := h.repo.Create(c.Context(), req); err != nil {
+// 	if err := h.repo.Create(c.UserContext(), req); err != nil {
 // 		return err
 // 	}
 
@@ -49,7 +49,7 @@ func (h *NotificationTemplateHandler) Create(c *fiber.Ctx) error {
 	}
 	tpl.IsActive = true
 
-	if err := h.repo.Create(c.Context(), &tpl); err != nil {
+	if err := h.repo.Create(c.UserContext(), &tpl); err != nil {
 		return err
 	}
 
@@ -61,7 +61,7 @@ func (h *NotificationTemplateHandler) Create(c *fiber.Ctx) error {
 
 // GET /api/v1/templates
 func (h *NotificationTemplateHandler) List(c *fiber.Ctx) error {
-	templates, err := h.repo.List(c.Context())
+	templates, err := h.repo.List(c.UserContext())
 	if err != nil {
 		return err
 	}
@@ -79,7 +79,7 @@ func (h *NotificationTemplateHandler) GetByID(c *fiber.Ctx) error {
 		return fiber.ErrBadRequest
 	}
 
-	template, err := h.repo.FindByID(c.Context(), id)
+	template, err := h.repo.FindByID(c.UserContext(), id)
 	if err != nil {
 		return err
 	}
@@ -99,7 +99,7 @@ func (h *NotificationTemplateHandler) Update(c *fiber.Ctx) error {
 	}
 
 	// fetch existing template
-	tpl, err := h.repo.FindByID(c.Context(), id)
+	tpl, err := h.repo.FindByID(c.UserContext(), id)
 	if err != nil {
 		return err
 	}
@@ -109,7 +109,7 @@ func (h *NotificationTemplateHandler) Update(c *fiber.Ctx) error {
 		return fiber.ErrBadRequest
 	}
 
-	if err := h.repo.Update(c.Context(), tpl); err != nil {
+	if err := h.repo.Update(c.UserContext(), tpl); err != nil {
 		return err
 	}
 
@@ -130,7 +130,7 @@ func (h *NotificationTemplateHandler) Update(c *fiber.Ctx) error {
 // 		return fiber.ErrBadRequest
 // 	}
 
-// 	if err := h.repo.Update(c.Context(), id, req); err != nil {
+// 	if err := h.repo.Update(c.UserContext(), id, req); err != nil {
 // 		return err
 // 	}
 
@@ -146,7 +146,7 @@ func (h *NotificationTemplateHandler) Delete(c *fiber.Ctx) error {
 		return fiber.ErrBadRequest
 	}
 
-	if err := h.repo.Delete(c.Context(), id); err != nil {
+	if err := h.repo.Delete(c.UserContext(), id); err != nil {
 		return err
 	}
 

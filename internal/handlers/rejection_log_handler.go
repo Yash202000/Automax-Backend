@@ -27,7 +27,7 @@ func (h *RejectionLogHandler) GetByIncident(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "invalid incident id")
 	}
 
-	logs, err := h.repo.GetByIncident(c.Context(), incidentID)
+	logs, err := h.repo.GetByIncident(c.UserContext(), incidentID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "failed to fetch rejection logs")
 	}
@@ -95,7 +95,7 @@ func (h *RejectionLogHandler) List(c *fiber.Ctx) error {
 		}
 	}
 
-	logs, total, err := h.repo.List(c.Context(), filter)
+	logs, total, err := h.repo.List(c.UserContext(), filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "failed to fetch rejection logs")
 	}

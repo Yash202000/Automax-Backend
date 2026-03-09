@@ -10,6 +10,7 @@ import (
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
@@ -62,8 +63,8 @@ func (h *IncidentHandler) GetReadyToCloseDurationOptions(c *fiber.Ctx) error {
 
 // Helper to get user's role IDs
 func (h *IncidentHandler) getUserRoleIDs(c *fiber.Ctx) []uuid.UUID {
-	userID := c.Locals("user_id").(uuid.UUID)
-	roles, err := h.userRepo.GetUserRoles(c.Context(), userID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	roles, err := h.userRepo.GetUserRoles(c.UserContext(), userID)
 	if err != nil {
 		return []uuid.UUID{}
 	}
@@ -92,9 +93,9 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 		})
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	incident, err := h.service.CreateIncident(c.Context(), &req, userID)
+	incident, err := h.service.CreateIncident(c.UserContext(), &req, userID)
 	if err != nil {
 		fmt.Println("error:", err)
 
@@ -132,7 +133,7 @@ func (h *IncidentHandler) GetIncident(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	incident, err := h.service.GetIncident(c.Context(), id)
+	incident, err := h.service.GetIncident(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not found")
 	}
@@ -163,7 +164,7 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 		filter.Limit = 20
 	}
 
-	incidents, total, err := h.service.ListIncidents(c.Context(), filter)
+	incidents, total, err := h.service.ListIncidents(c.UserContext(), filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -187,7 +188,7 @@ func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
 	var req models.IncidentUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -201,7 +202,7 @@ func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 		})
 	}
 
-	incident, err := h.service.UpdateIncident(c.Context(), id, &req, userID)
+	incident, err := h.service.UpdateIncident(c.UserContext(), id, &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -216,7 +217,7 @@ func (h *IncidentHandler) DeleteIncident(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	if err := h.service.DeleteIncident(c.Context(), id); err != nil {
+	if err := h.service.DeleteIncident(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -242,10 +243,10 @@ func (h *IncidentHandler) ConvertToRequest(c *fiber.Ctx) error {
 		})
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	roleIDs := h.getUserRoleIDs(c)
 
-	result, err := h.service.ConvertToRequest(c.Context(), id, &req, userID, roleIDs)
+	result, err := h.service.ConvertToRequest(c.UserContext(), id, &req, userID, roleIDs)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -263,7 +264,7 @@ func (h *IncidentHandler) CanConvertToRequest(c *fiber.Ctx) error {
 
 	roleIDs := h.getUserRoleIDs(c)
 
-	canConvert, reason, err := h.service.CanConvertToRequest(c.Context(), id, roleIDs)
+	canConvert, reason, err := h.service.CanConvertToRequest(c.UserContext(), id, roleIDs)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -287,10 +288,10 @@ func (h *IncidentHandler) BulkConvertToRequest(c *fiber.Ctx) error {
 		})
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	roleIDs := h.getUserRoleIDs(c)
 
-	result, err := h.service.BulkConvertToRequest(c.Context(), &req, userID, roleIDs)
+	result, err := h.service.BulkConvertToRequest(c.UserContext(), &req, userID, roleIDs)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -318,10 +319,10 @@ func (h *IncidentHandler) ExecuteTransition(c *fiber.Ctx) error {
 		})
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	roleIDs := h.getUserRoleIDs(c)
 
-	incident, err := h.service.ExecuteTransition(c.Context(), id, &req, userID, roleIDs)
+	incident, err := h.service.ExecuteTransition(c.UserContext(), id, &req, userID, roleIDs)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -338,7 +339,7 @@ func (h *IncidentHandler) GetAvailableTransitions(c *fiber.Ctx) error {
 
 	roleIDs := h.getUserRoleIDs(c)
 
-	transitions, err := h.service.GetAvailableTransitions(c.Context(), id, roleIDs)
+	transitions, err := h.service.GetAvailableTransitions(c.UserContext(), id, roleIDs)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -353,7 +354,7 @@ func (h *IncidentHandler) GetTransitionHistory(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	history, err := h.service.GetTransitionHistory(c.Context(), id)
+	history, err := h.service.GetTransitionHistory(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -381,9 +382,9 @@ func (h *IncidentHandler) AddComment(c *fiber.Ctx) error {
 		})
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	comment, err := h.service.AddComment(c.Context(), incidentID, &req, userID)
+	comment, err := h.service.AddComment(c.UserContext(), incidentID, &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -398,7 +399,7 @@ func (h *IncidentHandler) ListComments(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
 	}
 
-	comments, err := h.service.ListComments(c.Context(), incidentID)
+	comments, err := h.service.ListComments(c.UserContext(), incidentID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -418,9 +419,9 @@ func (h *IncidentHandler) UpdateComment(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	comment, err := h.service.UpdateComment(c.Context(), commentID, &req, userID)
+	comment, err := h.service.UpdateComment(c.UserContext(), commentID, &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -435,9 +436,9 @@ func (h *IncidentHandler) DeleteComment(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid comment ID")
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	if err := h.service.DeleteComment(c.Context(), commentID, userID); err != nil {
+	if err := h.service.DeleteComment(c.UserContext(), commentID, userID); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
@@ -467,12 +468,12 @@ func (h *IncidentHandler) UploadAttachment(c *fiber.Ctx) error {
 
 	// Upload to storage
 	folder := fmt.Sprintf("incidents/%s", incidentID.String())
-	filePath, err := h.storage.UploadFile(c.Context(), src, file, folder)
+	filePath, err := h.storage.UploadFile(c.UserContext(), src, file, folder)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to upload file")
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
 	attachment := &models.IncidentAttachment{
 		FileName:     file.Filename,
@@ -482,7 +483,7 @@ func (h *IncidentHandler) UploadAttachment(c *fiber.Ctx) error {
 		UploadedByID: userID,
 	}
 
-	result, err := h.service.AddAttachment(c.Context(), incidentID, attachment)
+	result, err := h.service.AddAttachment(c.UserContext(), incidentID, attachment)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -497,7 +498,7 @@ func (h *IncidentHandler) ListAttachments(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
 	}
 
-	attachments, err := h.service.ListAttachments(c.Context(), incidentID)
+	attachments, err := h.service.ListAttachments(c.UserContext(), incidentID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -512,9 +513,9 @@ func (h *IncidentHandler) DeleteAttachment(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid attachment ID")
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	if err := h.service.DeleteAttachment(c.Context(), attachmentID, userID); err != nil {
+	if err := h.service.DeleteAttachment(c.UserContext(), attachmentID, userID); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
@@ -528,12 +529,12 @@ func (h *IncidentHandler) DownloadAttachment(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid attachment ID")
 	}
 
-	attachment, err := h.service.GetAttachment(c.Context(), attachmentID)
+	attachment, err := h.service.GetAttachment(c.UserContext(), attachmentID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Attachment not found")
 	}
 
-	file, err := h.storage.GetFile(c.Context(), attachment.FilePath)
+	file, err := h.storage.GetFile(c.UserContext(), attachment.FilePath)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to retrieve file")
 	}
@@ -564,9 +565,9 @@ func (h *IncidentHandler) AssignIncident(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid assignee ID")
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	incident, err := h.service.AssignIncident(c.Context(), incidentID, assigneeID, userID)
+	incident, err := h.service.AssignIncident(c.UserContext(), incidentID, assigneeID, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -584,7 +585,7 @@ func (h *IncidentHandler) GetStats(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
 	}
 
-	filter.UserID = c.Locals("user_id").(uuid.UUID)
+	filter.UserID = c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -605,7 +606,7 @@ func (h *IncidentHandler) GetStats(c *fiber.Ctx) error {
 	// Add user role IDs for state visibility filtering
 	filter.UserRoleIDs = h.getUserRoleIDs(c)
 
-	stats, err := h.service.GetStats(c.Context(), filter)
+	stats, err := h.service.GetStats(c.UserContext(), filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -642,7 +643,7 @@ func (h *IncidentHandler) GetPriorityCounts(c *fiber.Ctx) error {
 	// Add user role IDs for state visibility filtering
 	filter.UserRoleIDs = h.getUserRoleIDs(c)
 
-	counts, err := h.service.GetPriorityCounts(c.Context(), filter)
+	counts, err := h.service.GetPriorityCounts(c.UserContext(), filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -653,13 +654,13 @@ func (h *IncidentHandler) GetPriorityCounts(c *fiber.Ctx) error {
 // User queries
 
 func (h *IncidentHandler) GetMyAssigned(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit, _ := strconv.Atoi(c.Query("limit", "20"))
 	recordType := c.Query("record_type", "") // Optional filter: incident, request, complaint
 
-	incidents, total, err := h.service.GetMyAssigned(c.Context(), userID, recordType, page, limit)
+	incidents, total, err := h.service.GetMyAssigned(c.UserContext(), userID, recordType, page, limit)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -677,13 +678,13 @@ func (h *IncidentHandler) GetMyAssigned(c *fiber.Ctx) error {
 }
 
 func (h *IncidentHandler) GetMyReported(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit, _ := strconv.Atoi(c.Query("limit", "20"))
 	recordType := c.Query("record_type", "") // Optional filter: incident, request, complaint
 
-	incidents, total, err := h.service.GetMyReported(c.Context(), userID, recordType, page, limit)
+	incidents, total, err := h.service.GetMyReported(c.UserContext(), userID, recordType, page, limit)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -701,7 +702,7 @@ func (h *IncidentHandler) GetMyReported(c *fiber.Ctx) error {
 }
 
 func (h *IncidentHandler) GetSLABreached(c *fiber.Ctx) error {
-	incidents, err := h.service.GetSLABreached(c.Context())
+	incidents, err := h.service.GetSLABreached(c.UserContext())
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -754,7 +755,7 @@ func (h *IncidentHandler) ListRevisions(c *fiber.Ctx) error {
 		}
 	}
 
-	revisions, total, err := h.service.ListRevisions(c.Context(), incidentID, filter)
+	revisions, total, err := h.service.ListRevisions(c.UserContext(), incidentID, filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -785,9 +786,9 @@ func (h *IncidentHandler) CreateComplaint(c *fiber.Ctx) error {
 		})
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	complaint, err := h.service.CreateComplaint(c.Context(), &req, userID)
+	complaint, err := h.service.CreateComplaint(c.UserContext(), &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -823,7 +824,7 @@ func (h *IncidentHandler) ListComplaints(c *fiber.Ctx) error {
 	}
 
 	filter.RecordType = &recordType
-	complaints, total, err := h.service.ListIncidents(c.Context(), filter)
+	complaints, total, err := h.service.ListIncidents(c.UserContext(), filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -847,7 +848,7 @@ func (h *IncidentHandler) GetComplaint(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	complaint, err := h.service.GetIncident(c.Context(), id)
+	complaint, err := h.service.GetIncident(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Complaint not found")
 	}
@@ -867,12 +868,12 @@ func (h *IncidentHandler) IncrementEvaluation(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	if err := h.service.IncrementEvaluationCount(c.Context(), id); err != nil {
+	if err := h.service.IncrementEvaluationCount(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
 	// Return updated complaint
-	complaint, err := h.service.GetIncident(c.Context(), id)
+	complaint, err := h.service.GetIncident(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -894,9 +895,9 @@ func (h *IncidentHandler) CreateQuery(c *fiber.Ctx) error {
 		})
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	query, err := h.service.CreateQuery(c.Context(), &req, userID)
+	query, err := h.service.CreateQuery(c.UserContext(), &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -932,7 +933,7 @@ func (h *IncidentHandler) ListQueries(c *fiber.Ctx) error {
 	}
 	filter.RecordType = &recordType
 
-	queries, total, err := h.service.ListIncidents(c.Context(), filter)
+	queries, total, err := h.service.ListIncidents(c.UserContext(), filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -956,7 +957,7 @@ func (h *IncidentHandler) GetQuery(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	query, err := h.service.GetIncident(c.Context(), id)
+	query, err := h.service.GetIncident(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Query not found")
 	}
@@ -980,13 +981,13 @@ func (h *IncidentHandler) MarkPresence(c *fiber.Ctx) error {
 	}
 
 	// Get user info from context (set by auth middleware)
-	userID, ok := c.Locals("user_id").(uuid.UUID)
+	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if !ok {
 		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
 	}
 
-	userName, _ := c.Locals("user_name").(string)
-	userEmail, _ := c.Locals("user_email").(string)
+	userName, _ := c.Locals(constants.ContextKeys.UserName).(string)
+	userEmail, _ := c.Locals(constants.ContextKeys.UserEmail).(string)
 
 	user := services.PresenceInfo{
 		UserID:    userID,
@@ -994,7 +995,7 @@ func (h *IncidentHandler) MarkPresence(c *fiber.Ctx) error {
 		UserEmail: userEmail,
 	}
 
-	if err := h.presenceService.MarkPresence(c.Context(), incidentID, user); err != nil {
+	if err := h.presenceService.MarkPresence(c.UserContext(), incidentID, user); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to mark presence")
 	}
 
@@ -1009,7 +1010,7 @@ func (h *IncidentHandler) GetPresence(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
 	}
 
-	activeUsers, err := h.presenceService.GetActiveUsers(c.Context(), incidentID)
+	activeUsers, err := h.presenceService.GetActiveUsers(c.UserContext(), incidentID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to get presence data")
 	}
@@ -1025,12 +1026,12 @@ func (h *IncidentHandler) RemovePresence(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
 	}
 
-	userID, ok := c.Locals("user_id").(uuid.UUID)
+	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if !ok {
 		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
 	}
 
-	if err := h.presenceService.RemovePresence(c.Context(), incidentID, userID); err != nil {
+	if err := h.presenceService.RemovePresence(c.UserContext(), incidentID, userID); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to remove presence")
 	}
 

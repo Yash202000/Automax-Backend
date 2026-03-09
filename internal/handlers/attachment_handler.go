@@ -38,9 +38,9 @@ func (h *AttachmentHandler) DownloadAttachment(c *fiber.Ctx) error {
 	attachmentID, err := uuid.Parse(attachmentIDStr)
 	if err == nil {
 		// Try incident attachment
-		attachment, err := h.incidentService.GetAttachment(c.Context(), attachmentID)
+		attachment, err := h.incidentService.GetAttachment(c.UserContext(), attachmentID)
 		if err == nil {
-			file, err := h.storage.GetFile(c.Context(), attachment.FilePath)
+			file, err := h.storage.GetFile(c.UserContext(), attachment.FilePath)
 			if err != nil {
 				return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to retrieve file")
 			}
@@ -59,7 +59,7 @@ func (h *AttachmentHandler) DownloadAttachment(c *fiber.Ctx) error {
 	}
 
 	// If not found as incident attachment, try notification attachment
-	notification, attachment, err := h.notificationService.FindNotificationByAttachmentID(c.Context(), attachmentIDStr)
+	notification, attachment, err := h.notificationService.FindNotificationByAttachmentID(c.UserContext(), attachmentIDStr)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Attachment not found")
 	}
@@ -69,7 +69,7 @@ func (h *AttachmentHandler) DownloadAttachment(c *fiber.Ctx) error {
 	}
 
 	// Download from MinIO
-	fileReader, err := h.storage.GetFile(c.Context(), attachment.StoragePath)
+	fileReader, err := h.storage.GetFile(c.UserContext(), attachment.StoragePath)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Failed to retrieve attachment: "+err.Error())
 	}
@@ -100,9 +100,9 @@ func (h *AttachmentHandler) PreviewAttachment(c *fiber.Ctx) error {
 	attachmentID, err := uuid.Parse(attachmentIDStr)
 	if err == nil {
 		// Try incident attachment
-		attachment, err := h.incidentService.GetAttachment(c.Context(), attachmentID)
+		attachment, err := h.incidentService.GetAttachment(c.UserContext(), attachmentID)
 		if err == nil {
-			file, err := h.storage.GetFile(c.Context(), attachment.FilePath)
+			file, err := h.storage.GetFile(c.UserContext(), attachment.FilePath)
 			if err != nil {
 				return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to retrieve file")
 			}
@@ -121,7 +121,7 @@ func (h *AttachmentHandler) PreviewAttachment(c *fiber.Ctx) error {
 	}
 
 	// If not found as incident attachment, try notification attachment
-	notification, attachment, err := h.notificationService.FindNotificationByAttachmentID(c.Context(), attachmentIDStr)
+	notification, attachment, err := h.notificationService.FindNotificationByAttachmentID(c.UserContext(), attachmentIDStr)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Attachment not found")
 	}
@@ -131,7 +131,7 @@ func (h *AttachmentHandler) PreviewAttachment(c *fiber.Ctx) error {
 	}
 
 	// Download from MinIO
-	fileReader, err := h.storage.GetFile(c.Context(), attachment.StoragePath)
+	fileReader, err := h.storage.GetFile(c.UserContext(), attachment.StoragePath)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Failed to retrieve attachment: "+err.Error())
 	}

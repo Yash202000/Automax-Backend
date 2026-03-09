@@ -51,7 +51,7 @@ func (h *LocationHandler) Create(c *fiber.Ctx) error {
 		IsActive:    true,
 	}
 
-	if err := h.repo.Create(c.Context(), location); err != nil {
+	if err := h.repo.Create(c.UserContext(), location); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -65,7 +65,7 @@ func (h *LocationHandler) GetByID(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	location, err := h.repo.FindByID(c.Context(), id)
+	location, err := h.repo.FindByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Location not found")
 	}
@@ -85,7 +85,7 @@ func (h *LocationHandler) Update(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	location, err := h.repo.FindByID(c.Context(), id)
+	location, err := h.repo.FindByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Location not found")
 	}
@@ -118,7 +118,7 @@ func (h *LocationHandler) Update(c *fiber.Ctx) error {
 		location.SortOrder = *req.SortOrder
 	}
 
-	if err := h.repo.Update(c.Context(), location); err != nil {
+	if err := h.repo.Update(c.UserContext(), location); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -132,7 +132,7 @@ func (h *LocationHandler) Delete(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	if err := h.repo.Delete(c.Context(), id); err != nil {
+	if err := h.repo.Delete(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -140,7 +140,7 @@ func (h *LocationHandler) Delete(c *fiber.Ctx) error {
 }
 
 func (h *LocationHandler) List(c *fiber.Ctx) error {
-	locations, err := h.repo.List(c.Context())
+	locations, err := h.repo.List(c.UserContext())
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -154,7 +154,7 @@ func (h *LocationHandler) List(c *fiber.Ctx) error {
 }
 
 func (h *LocationHandler) GetTree(c *fiber.Ctx) error {
-	tree, err := h.repo.GetTree(c.Context())
+	tree, err := h.repo.GetTree(c.UserContext())
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -174,13 +174,13 @@ func (h *LocationHandler) GetChildren(c *fiber.Ctx) error {
 	var err error
 
 	if parentIDStr == "" {
-		children, err = h.repo.GetByParentID(c.Context(), nil)
+		children, err = h.repo.GetByParentID(c.UserContext(), nil)
 	} else {
 		parentID, parseErr := uuid.Parse(parentIDStr)
 		if parseErr != nil {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid parent ID")
 		}
-		children, err = h.repo.GetByParentID(c.Context(), &parentID)
+		children, err = h.repo.GetByParentID(c.UserContext(), &parentID)
 	}
 
 	if err != nil {
@@ -201,7 +201,7 @@ func (h *LocationHandler) GetByType(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Type is required")
 	}
 
-	locations, err := h.repo.GetByType(c.Context(), locationType)
+	locations, err := h.repo.GetByType(c.UserContext(), locationType)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -216,7 +216,7 @@ func (h *LocationHandler) GetByType(c *fiber.Ctx) error {
 
 // Export exports all locations as JSON
 func (h *LocationHandler) Export(c *fiber.Ctx) error {
-	locations, err := h.repo.List(c.Context())
+	locations, err := h.repo.List(c.UserContext())
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -325,7 +325,7 @@ func (h *LocationHandler) Import(c *fiber.Ctx) error {
 			SortOrder:   data.SortOrder,
 		}
 
-		if err := h.repo.Create(c.Context(), location); err != nil {
+		if err := h.repo.Create(c.UserContext(), location); err != nil {
 			skipped++
 			errors = append(errors, data.Name+" (Level "+fmt.Sprintf("%d", data.Level)+") - "+err.Error())
 		} else {
@@ -347,7 +347,7 @@ func (h *LocationHandler) Import(c *fiber.Ctx) error {
 func (h *LocationHandler) GetTreeWithStats(c *fiber.Ctx) error {
 	recordType := c.Query("type", "")
 
-	tree, err := h.repo.GetTreeWithStats(c.Context(), recordType)
+	tree, err := h.repo.GetTreeWithStats(c.UserContext(), recordType)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}

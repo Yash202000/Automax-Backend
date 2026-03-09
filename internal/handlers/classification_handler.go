@@ -54,7 +54,7 @@ func (h *ClassificationHandler) Create(c *fiber.Ctx) error {
 		IsActive:    true,
 	}
 
-	if err := h.repo.Create(c.Context(), classification); err != nil {
+	if err := h.repo.Create(c.UserContext(), classification); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -64,7 +64,7 @@ func (h *ClassificationHandler) Create(c *fiber.Ctx) error {
 			criticalityID, err := uuid.Parse(critReq.CriticalityID)
 			if err != nil {
 				// Rollback: delete the classification if criticality creation fails
-				h.repo.Delete(c.Context(), classification.ID)
+				h.repo.Delete(c.UserContext(), classification.ID)
 				return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid criticality ID: "+critReq.CriticalityID)
 			}
 
@@ -76,9 +76,9 @@ func (h *ClassificationHandler) Create(c *fiber.Ctx) error {
 				IsActive:          true,
 			}
 
-			if err := h.repo.CreateCriticality(c.Context(), criticality); err != nil {
+			if err := h.repo.CreateCriticality(c.UserContext(), criticality); err != nil {
 				// Rollback: delete the classification if criticality creation fails
-				h.repo.Delete(c.Context(), classification.ID)
+				h.repo.Delete(c.UserContext(), classification.ID)
 				return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create criticality: "+err.Error())
 			}
 		}
@@ -94,7 +94,7 @@ func (h *ClassificationHandler) GetByID(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	classification, err := h.repo.FindByID(c.Context(), id)
+	classification, err := h.repo.FindByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Classification not found")
 	}
@@ -114,7 +114,7 @@ func (h *ClassificationHandler) Update(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	classification, err := h.repo.FindByID(c.Context(), id)
+	classification, err := h.repo.FindByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Classification not found")
 	}
@@ -134,14 +134,14 @@ func (h *ClassificationHandler) Update(c *fiber.Ctx) error {
 	}
 
 	// Update classification
-	if err := h.repo.Update(c.Context(), classification); err != nil {
+	if err := h.repo.Update(c.UserContext(), classification); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Update criticalities if provided
 	if len(req.Criticalities) > 0 {
 		// Get existing criticalities
-		existingCriticalities, err := h.repo.GetCriticalitiesByClassificationID(c.Context(), id)
+		existingCriticalities, err := h.repo.GetCriticalitiesByClassificationID(c.UserContext(), id)
 		if err != nil {
 			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to get existing criticalities")
 		}
@@ -163,7 +163,7 @@ func (h *ClassificationHandler) Update(c *fiber.Ctx) error {
 				// Update existing criticality
 				existing.MaxClosingHours = critReq.MaxClosingHours
 				existing.MaxClosingMinutes = critReq.MaxClosingMinutes
-				if err := h.repo.UpdateCriticality(c.Context(), existing); err != nil {
+				if err := h.repo.UpdateCriticality(c.UserContext(), existing); err != nil {
 					return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to update criticality: "+err.Error())
 				}
 				delete(existingMap, criticalityID)
@@ -176,7 +176,7 @@ func (h *ClassificationHandler) Update(c *fiber.Ctx) error {
 					MaxClosingMinutes: critReq.MaxClosingMinutes,
 					IsActive:          true,
 				}
-				if err := h.repo.CreateCriticality(c.Context(), criticality); err != nil {
+				if err := h.repo.CreateCriticality(c.UserContext(), criticality); err != nil {
 					return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create criticality: "+err.Error())
 				}
 			}
@@ -187,7 +187,7 @@ func (h *ClassificationHandler) Update(c *fiber.Ctx) error {
 	}
 
 	// Reload classification with criticalities
-	updatedClassification, err := h.repo.FindByID(c.Context(), id)
+	updatedClassification, err := h.repo.FindByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to reload classification")
 	}
@@ -202,7 +202,7 @@ func (h *ClassificationHandler) Delete(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	if err := h.repo.Delete(c.Context(), id); err != nil {
+	if err := h.repo.Delete(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -215,9 +215,9 @@ func (h *ClassificationHandler) List(c *fiber.Ctx) error {
 
 	classType := c.Query("type")
 	if classType != "" {
-		classifications, err = h.repo.ListByType(c.Context(), classType)
+		classifications, err = h.repo.ListByType(c.UserContext(), classType)
 	} else {
-		classifications, err = h.repo.List(c.Context())
+		classifications, err = h.repo.List(c.UserContext())
 	}
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
@@ -237,9 +237,9 @@ func (h *ClassificationHandler) GetTree(c *fiber.Ctx) error {
 
 	classType := c.Query("type")
 	if classType != "" {
-		tree, err = h.repo.GetTreeByType(c.Context(), classType)
+		tree, err = h.repo.GetTreeByType(c.UserContext(), classType)
 	} else {
-		tree, err = h.repo.GetTree(c.Context())
+		tree, err = h.repo.GetTree(c.UserContext())
 	}
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
@@ -260,13 +260,13 @@ func (h *ClassificationHandler) GetChildren(c *fiber.Ctx) error {
 	var err error
 
 	if parentIDStr == "" {
-		children, err = h.repo.GetByParentID(c.Context(), nil)
+		children, err = h.repo.GetByParentID(c.UserContext(), nil)
 	} else {
 		parentID, parseErr := uuid.Parse(parentIDStr)
 		if parseErr != nil {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid parent ID")
 		}
-		children, err = h.repo.GetByParentID(c.Context(), &parentID)
+		children, err = h.repo.GetByParentID(c.UserContext(), &parentID)
 	}
 
 	if err != nil {
@@ -283,7 +283,7 @@ func (h *ClassificationHandler) GetChildren(c *fiber.Ctx) error {
 
 // Export exports all classifications as JSON
 func (h *ClassificationHandler) Export(c *fiber.Ctx) error {
-	classifications, err := h.repo.List(c.Context())
+	classifications, err := h.repo.List(c.UserContext())
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -393,7 +393,7 @@ func (h *ClassificationHandler) Import(c *fiber.Ctx) error {
 			SortOrder:   data.SortOrder,
 		}
 
-		if err := h.repo.Create(c.Context(), classification); err != nil {
+		if err := h.repo.Create(c.UserContext(), classification); err != nil {
 			skipped++
 			errors = append(errors, data.Name+" (Level "+fmt.Sprintf("%d", data.Level)+") - "+err.Error())
 		} else {
@@ -415,7 +415,7 @@ func (h *ClassificationHandler) Import(c *fiber.Ctx) error {
 func (h *ClassificationHandler) GetTreeWithStats(c *fiber.Ctx) error {
 	recordType := c.Query("type", "")
 
-	tree, err := h.repo.GetTreeWithStats(c.Context(), recordType)
+	tree, err := h.repo.GetTreeWithStats(c.UserContext(), recordType)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -431,7 +431,7 @@ func (h *ClassificationHandler) GetCriticalities(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid classification ID")
 	}
 
-	criticalities, err := h.repo.GetCriticalitiesByClassificationID(c.Context(), classificationID)
+	criticalities, err := h.repo.GetCriticalitiesByClassificationID(c.UserContext(), classificationID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -465,7 +465,7 @@ func (h *ClassificationHandler) CreateCriticality(c *fiber.Ctx) error {
 	}
 
 	// Check if classification exists
-	_, err = h.repo.FindByID(c.Context(), classificationID)
+	_, err = h.repo.FindByID(c.UserContext(), classificationID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Classification not found")
 	}
@@ -476,7 +476,7 @@ func (h *ClassificationHandler) CreateCriticality(c *fiber.Ctx) error {
 	}
 
 	// Check if criticality already exists for this classification
-	_, err = h.repo.GetCriticalityByClassificationAndCriticalityID(c.Context(), classificationID, criticalityID)
+	_, err = h.repo.GetCriticalityByClassificationAndCriticalityID(c.UserContext(), classificationID, criticalityID)
 	if err == nil {
 		return utils.ErrorResponse(c, fiber.StatusConflict, "Criticality already exists for this classification")
 	}
@@ -489,12 +489,12 @@ func (h *ClassificationHandler) CreateCriticality(c *fiber.Ctx) error {
 		IsActive:          true,
 	}
 
-	if err := h.repo.CreateCriticality(c.Context(), criticality); err != nil {
+	if err := h.repo.CreateCriticality(c.UserContext(), criticality); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create criticality: "+err.Error())
 	}
 
 	// Reload with criticality details
-	created, err := h.repo.GetCriticalityByID(c.Context(), criticality.ID)
+	created, err := h.repo.GetCriticalityByID(c.UserContext(), criticality.ID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to retrieve created criticality")
 	}
@@ -515,7 +515,14 @@ func (h *ClassificationHandler) UpdateCriticality(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	criticality, err := h.repo.GetCriticalityByID(c.Context(), id)
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	criticality, err := h.repo.GetCriticalityByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Classification criticality not found")
 	}
@@ -530,7 +537,7 @@ func (h *ClassificationHandler) UpdateCriticality(c *fiber.Ctx) error {
 		criticality.IsActive = *req.IsActive
 	}
 
-	if err := h.repo.UpdateCriticality(c.Context(), criticality); err != nil {
+	if err := h.repo.UpdateCriticality(c.UserContext(), criticality); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -545,7 +552,7 @@ func (h *ClassificationHandler) DeleteCriticality(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	if err := h.repo.DeleteCriticality(c.Context(), id); err != nil {
+	if err := h.repo.DeleteCriticality(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -560,7 +567,7 @@ func (h *ClassificationHandler) GetCriticalityByID(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	criticality, err := h.repo.GetCriticalityByID(c.Context(), id)
+	criticality, err := h.repo.GetCriticalityByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Classification criticality not found")
 	}

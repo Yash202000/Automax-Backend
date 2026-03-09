@@ -4,6 +4,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
@@ -11,8 +12,8 @@ import (
 )
 
 type IncidentMergeHandler struct {
-	service  services.IncidentMergeService
-	userRepo repository.UserRepository
+	service   services.IncidentMergeService
+	userRepo  repository.UserRepository
 	validator *validator.Validate
 }
 
@@ -26,13 +27,13 @@ func NewIncidentMergeHandler(service services.IncidentMergeService, userRepo rep
 
 // getUserRoleIDs extracts role IDs from the Fiber context
 func (h *IncidentMergeHandler) getUserRoleIDs(c *fiber.Ctx) []uuid.UUID {
-	userID, ok := c.Locals("user_id").(uuid.UUID)
+	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if !ok {
 		return []uuid.UUID{}
 	}
 
 	// Get user roles from repository
-	roles, err := h.userRepo.GetUserRoles(c.Context(), userID)
+	roles, err := h.userRepo.GetUserRoles(c.UserContext(), userID)
 	if err != nil {
 		return []uuid.UUID{}
 	}
@@ -55,7 +56,7 @@ func (h *IncidentMergeHandler) ValidateMerge(c *fiber.Ctx) error {
 		return utils.FormatValidationError(c, err)
 	}
 
-	response, err := h.service.ValidateMerge(c.Context(), req.IncidentIDs)
+	response, err := h.service.ValidateMerge(c.UserContext(), req.IncidentIDs)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -79,10 +80,10 @@ func (h *IncidentMergeHandler) MergeIncidents(c *fiber.Ctx) error {
 		return utils.FormatValidationError(c, err)
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	roleIDs := h.getUserRoleIDs(c)
 
-	response, err := h.service.MergeIncidents(c.Context(), &req, userID, roleIDs)
+	response, err := h.service.MergeIncidents(c.UserContext(), &req, userID, roleIDs)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -101,10 +102,10 @@ func (h *IncidentMergeHandler) UnmergeIncident(c *fiber.Ctx) error {
 		return utils.FormatValidationError(c, err)
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	roleIDs := h.getUserRoleIDs(c)
 
-	response, err := h.service.UnmergeIncident(c.Context(), &req, userID, roleIDs)
+	response, err := h.service.UnmergeIncident(c.UserContext(), &req, userID, roleIDs)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -123,10 +124,10 @@ func (h *IncidentMergeHandler) BulkUnmergeIncidents(c *fiber.Ctx) error {
 		return utils.FormatValidationError(c, err)
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	roleIDs := h.getUserRoleIDs(c)
 
-	response, err := h.service.BulkUnmergeIncidents(c.Context(), &req, userID, roleIDs)
+	response, err := h.service.BulkUnmergeIncidents(c.UserContext(), &req, userID, roleIDs)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -146,7 +147,7 @@ func (h *IncidentMergeHandler) GetMergedIncidents(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid master incident ID")
 	}
 
-	incidents, err := h.service.GetMergedIncidents(c.Context(), masterIncidentID)
+	incidents, err := h.service.GetMergedIncidents(c.UserContext(), masterIncidentID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -167,7 +168,7 @@ func (h *IncidentMergeHandler) CanMerge(c *fiber.Ctx) error {
 	}
 
 	roleIDs := h.getUserRoleIDs(c)
-	canMerge, err := h.service.CanUserMerge(c.Context(), workflowID, roleIDs)
+	canMerge, err := h.service.CanUserMerge(c.UserContext(), workflowID, roleIDs)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}

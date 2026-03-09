@@ -9,6 +9,18 @@ var ContextKeys = struct {
 	ACCEPT_LANGUAGE       contextKey
 	DB                    contextKey
 	REPORT_COLUMNS        contextKey
+	HOSTNAME              contextKey
+	PROTOCOL              contextKey
+	IP_ADDRESS            contextKey
+	USER_AGENT            contextKey
+	UserID                contextKey
+	ActorID               contextKey
+	Email                 contextKey
+	UserEmail             contextKey
+	Role                  contextKey
+	Token                 contextKey
+	UserName              contextKey
+	User                  contextKey
 }{
 	AUTH_DATA:             "AuthData",
 	VALIDATOR:             "Validator",
@@ -18,4 +30,17 @@ var ContextKeys = struct {
 	// REPORT_COLUMNS holds a map[string]bool of requested column names.
 	// The repository uses it to skip enrichment queries for unused columns.
 	REPORT_COLUMNS: "ReportColumns",
+	HOSTNAME:       "hostname",
+	PROTOCOL:       "protocol",
+	IP_ADDRESS:     "ip_address",
+	USER_AGENT:     "user_agent",
+	UserID:         "user_id",
+	ActorID:        "actor_id",
+
+	Email:     "email",
+	UserEmail: "user_email",
+	Role:      "role",
+	Token:     "token",
+	UserName:  "user_name",
+	User:      "user",
 }

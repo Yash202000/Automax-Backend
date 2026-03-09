@@ -7,6 +7,7 @@ import (
 
 	"github.com/automax/backend/internal/database"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -63,26 +64,27 @@ func (m *AuthMiddleware) Authenticate() fiber.Handler {
 			return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Invalid or expired token")
 		}
 
-		c.Locals("user_id", claims.UserID)
-		c.Locals("email", claims.Email)
-		c.Locals("user_email", claims.Email) // For compatibility with presence tracking
-		c.Locals("role", claims.Role)
-		c.Locals("token", token)
-		c.Locals("hostname", c.Hostname())
-		c.Locals("protocol", c.Protocol())
-		c.Locals("ip_addr", c.IP())
-		c.Locals("ip_address", c.IP())
-		c.Locals("user_agent", c.Get("User-Agent"))
+		c.Locals(constants.ContextKeys.UserID, claims.UserID)
+		c.Locals(constants.ContextKeys.Email, claims.Email)
+		c.Locals(constants.ContextKeys.UserEmail, claims.Email) // For compatibility with presence tracking
+		c.Locals(constants.ContextKeys.Role, claims.Role)
+		c.Locals(constants.ContextKeys.Token, token)
 
+		ctx := c.UserContext()
+		ctx = context.WithValue(ctx, constants.ContextKeys.UserID, claims.UserID)
+		ctx = context.WithValue(ctx, constants.ContextKeys.Email, claims.Email)
+		ctx = context.WithValue(ctx, constants.ContextKeys.Role, claims.Role)
+		ctx = context.WithValue(ctx, constants.ContextKeys.Token, token)
+		c.SetUserContext(ctx)
 		// Fetch user details to get the name for presence tracking
-		user, err := m.userRepo.FindByID(c.Context(), claims.UserID)
+		user, err := m.userRepo.FindByID(ctx, claims.UserID)
 		if err == nil && user != nil {
 			// Construct full name from first and last name
 			userName := strings.TrimSpace(user.FirstName + " " + user.LastName)
 			if userName == "" {
 				userName = user.Username
 			}
-			c.Locals("user_name", userName)
+			c.Locals(constants.ContextKeys.UserName, userName)
 		}
 
 		return c.Next()
@@ -91,7 +93,7 @@ func (m *AuthMiddleware) Authenticate() fiber.Handler {
 
 func (m *AuthMiddleware) RequireRole(roles ...string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		userRole := c.Locals("role").(string)
+		userRole := c.Locals(constants.ContextKeys.Role).(string)
 
 		for _, role := range roles {
 			if userRole == role {
@@ -106,26 +108,28 @@ func (m *AuthMiddleware) RequireRole(roles ...string) fiber.Handler {
 // RequirePermission checks if the authenticated user has any of the specified permissions
 func (m *AuthMiddleware) RequirePermission(permissions ...string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		userID, ok := c.Locals("user_id").(uuid.UUID)
+		userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 		if !ok {
 			return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
 		}
 
-		user, err := m.userRepo.FindByIDWithPermissions(c.Context(), userID)
+		ctx := c.UserContext()
+		ctx = context.WithValue(ctx, constants.ContextKeys.UserID, userID)
+		user, err := m.userRepo.FindByIDWithPermissions(ctx, userID)
 		if err != nil {
 			return utils.ErrorResponse(c, fiber.StatusForbidden, "User not found")
 		}
 
 		// Super admin has all permissions
 		if user.IsSuperAdmin {
-			c.Locals("user", user)
+			c.Locals(constants.ContextKeys.User, user)
 			return c.Next()
 		}
 
 		// Check if user has any of the required permissions
 		for _, perm := range permissions {
 			if user.HasPermission(perm) {
-				c.Locals("user", user)
+				c.Locals(constants.ContextKeys.User, user)
 				return c.Next()
 			}
 		}
@@ -160,21 +164,27 @@ func (m *AuthMiddleware) OptionalAuth() fiber.Handler {
 			return c.Next()
 		}
 
-		c.Locals("user_id", claims.UserID)
-		c.Locals("email", claims.Email)
-		c.Locals("user_email", claims.Email) // For compatibility with presence tracking
-		c.Locals("role", claims.Role)
-		c.Locals("token", token)
+		c.Locals(constants.ContextKeys.UserID, claims.UserID)
+		c.Locals(constants.ContextKeys.Email, claims.Email)
+		c.Locals(constants.ContextKeys.UserEmail, claims.Email) // For compatibility with presence tracking
+		c.Locals(constants.ContextKeys.Role, claims.Role)
+		c.Locals(constants.ContextKeys.Token, token)
 
+		ctx := c.UserContext()
+		ctx = context.WithValue(ctx, constants.ContextKeys.UserID, claims.UserID)
+		ctx = context.WithValue(ctx, constants.ContextKeys.Email, claims.Email)
+		ctx = context.WithValue(ctx, constants.ContextKeys.Role, claims.Role)
+		ctx = context.WithValue(ctx, constants.ContextKeys.Token, token)
+		c.SetUserContext(ctx)
 		// Fetch user details to get the name for presence tracking
-		user, err := m.userRepo.FindByID(c.Context(), claims.UserID)
+		user, err := m.userRepo.FindByID(ctx, claims.UserID)
 		if err == nil && user != nil {
 			// Construct full name from first and last name
 			userName := strings.TrimSpace(user.FirstName + " " + user.LastName)
 			if userName == "" {
 				userName = user.Username
 			}
-			c.Locals("user_name", userName)
+			c.Locals(constants.ContextKeys.UserName, userName)
 		}
 
 		return c.Next()

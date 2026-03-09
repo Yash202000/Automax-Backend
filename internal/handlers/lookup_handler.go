@@ -102,7 +102,7 @@ func (h *LookupHandler) CreateCategory(c *fiber.Ctx) error {
 		category.AddToIncidentForm = *req.AddToIncidentForm
 	}
 
-	if err := h.repo.CreateCategory(c.Context(), category); err != nil {
+	if err := h.repo.CreateCategory(c.UserContext(), category); err != nil {
 		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "unique") {
 			return utils.ErrorResponse(c, fiber.StatusConflict, "Category with this code already exists")
 		}
@@ -119,7 +119,7 @@ func (h *LookupHandler) GetCategoryByID(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	category, err := h.repo.FindCategoryByID(c.Context(), id)
+	category, err := h.repo.FindCategoryByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Category not found")
 	}
@@ -139,7 +139,7 @@ func (h *LookupHandler) UpdateCategory(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	category, err := h.repo.FindCategoryByID(c.Context(), id)
+	category, err := h.repo.FindCategoryByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Category not found")
 	}
@@ -200,7 +200,7 @@ func (h *LookupHandler) UpdateCategory(c *fiber.Ctx) error {
 		}
 	}
 
-	if err := h.repo.UpdateCategory(c.Context(), category); err != nil {
+	if err := h.repo.UpdateCategory(c.UserContext(), category); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -214,7 +214,7 @@ func (h *LookupHandler) DeleteCategory(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	category, err := h.repo.FindCategoryByID(c.Context(), id)
+	category, err := h.repo.FindCategoryByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Category not found")
 	}
@@ -224,7 +224,7 @@ func (h *LookupHandler) DeleteCategory(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusForbidden, "System categories cannot be deleted")
 	}
 
-	if err := h.repo.DeleteCategory(c.Context(), id); err != nil {
+	if err := h.repo.DeleteCategory(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -232,7 +232,7 @@ func (h *LookupHandler) DeleteCategory(c *fiber.Ctx) error {
 }
 
 func (h *LookupHandler) ListCategories(c *fiber.Ctx) error {
-	categories, err := h.repo.ListCategories(c.Context())
+	categories, err := h.repo.ListCategories(c.UserContext())
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -255,7 +255,7 @@ func (h *LookupHandler) CreateValue(c *fiber.Ctx) error {
 	}
 
 	// Verify category exists
-	category, err := h.repo.FindCategoryByID(c.Context(), categoryID)
+	category, err := h.repo.FindCategoryByID(c.UserContext(), categoryID)
 	if err != nil && category == nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Category not found")
 	}
@@ -293,17 +293,17 @@ func (h *LookupHandler) CreateValue(c *fiber.Ctx) error {
 
 	// If this is set as default, clear other defaults for this category
 	if value.IsDefault {
-		if err := h.repo.ClearDefaultForCategory(c.Context(), categoryID); err != nil {
+		if err := h.repo.ClearDefaultForCategory(c.UserContext(), categoryID); err != nil {
 			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to clear existing defaults")
 		}
 	}
 
-	if err := h.repo.CreateValue(c.Context(), value); err != nil {
+	if err := h.repo.CreateValue(c.UserContext(), value); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Reload to get the updated category values count
-	category, _ = h.repo.FindCategoryByID(c.Context(), categoryID)
+	category, _ = h.repo.FindCategoryByID(c.UserContext(), categoryID)
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, "Value created", models.ToLookupValueResponse(value))
 }
@@ -315,7 +315,7 @@ func (h *LookupHandler) GetValueByID(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	value, err := h.repo.FindValueByID(c.Context(), id)
+	value, err := h.repo.FindValueByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Value not found")
 	}
@@ -335,7 +335,7 @@ func (h *LookupHandler) UpdateValue(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	value, err := h.repo.FindValueByID(c.Context(), id)
+	value, err := h.repo.FindValueByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Value not found")
 	}
@@ -361,7 +361,7 @@ func (h *LookupHandler) UpdateValue(c *fiber.Ctx) error {
 	if req.IsDefault != nil {
 		// If setting as default, clear other defaults first
 		if *req.IsDefault && !value.IsDefault {
-			if err := h.repo.ClearDefaultForCategory(c.Context(), value.CategoryID); err != nil {
+			if err := h.repo.ClearDefaultForCategory(c.UserContext(), value.CategoryID); err != nil {
 				return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to clear existing defaults")
 			}
 		}
@@ -371,7 +371,7 @@ func (h *LookupHandler) UpdateValue(c *fiber.Ctx) error {
 		value.IsActive = *req.IsActive
 	}
 
-	if err := h.repo.UpdateValue(c.Context(), value); err != nil {
+	if err := h.repo.UpdateValue(c.UserContext(), value); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -385,12 +385,12 @@ func (h *LookupHandler) DeleteValue(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	_, err = h.repo.FindValueByID(c.Context(), id)
+	_, err = h.repo.FindValueByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Value not found")
 	}
 
-	if err := h.repo.DeleteValue(c.Context(), id); err != nil {
+	if err := h.repo.DeleteValue(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -404,7 +404,7 @@ func (h *LookupHandler) ListValuesByCategory(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid category ID")
 	}
 
-	values, err := h.repo.ListValuesByCategory(c.Context(), categoryID)
+	values, err := h.repo.ListValuesByCategory(c.UserContext(), categoryID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -421,7 +421,7 @@ func (h *LookupHandler) ListValuesByCategory(c *fiber.Ctx) error {
 func (h *LookupHandler) GetValuesByCategoryCode(c *fiber.Ctx) error {
 	code := strings.ToUpper(c.Params("code"))
 
-	values, err := h.repo.ListValuesByCategoryCode(c.Context(), code)
+	values, err := h.repo.ListValuesByCategoryCode(c.UserContext(), code)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}

@@ -5,6 +5,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
+	"github.com/automax/backend/pkg/constants"
 	cstmContext "github.com/automax/backend/pkg/context"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
@@ -40,9 +41,9 @@ func (h *ReportHandler) CreateReport(c *fiber.Ctx) error {
 		})
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	report, err := h.service.CreateReport(c.Context(), &req, userID)
+	report, err := h.service.CreateReport(c.UserContext(), &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -57,7 +58,7 @@ func (h *ReportHandler) GetReport(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid report ID")
 	}
 
-	report, err := h.service.GetReport(c.Context(), id)
+	report, err := h.service.GetReport(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Report not found")
 	}
@@ -100,11 +101,11 @@ func (h *ReportHandler) ListReports(c *fiber.Ctx) error {
 
 	// Get own reports or all if admin
 	if mine := c.Query("mine"); mine == "true" {
-		userID := c.Locals("user_id").(uuid.UUID)
+		userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 		filter.CreatedByID = &userID
 	}
 
-	reports, total, err := h.service.ListReports(c.Context(), filter)
+	reports, total, err := h.service.ListReports(c.UserContext(), filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -133,9 +134,9 @@ func (h *ReportHandler) UpdateReport(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	report, err := h.service.UpdateReport(c.Context(), id, &req, userID)
+	report, err := h.service.UpdateReport(c.UserContext(), id, &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -150,9 +151,9 @@ func (h *ReportHandler) DeleteReport(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid report ID")
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	if err := h.service.DeleteReport(c.Context(), id, userID); err != nil {
+	if err := h.service.DeleteReport(c.UserContext(), id, userID); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
@@ -166,9 +167,9 @@ func (h *ReportHandler) DuplicateReport(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid report ID")
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	report, err := h.service.DuplicateReport(c.Context(), id, userID)
+	report, err := h.service.DuplicateReport(c.UserContext(), id, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -191,9 +192,9 @@ func (h *ReportHandler) ExecuteReport(c *fiber.Ctx) error {
 		req = models.ReportExecuteRequest{}
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	result, err := h.service.ExecuteReport(c.Context(), id, &req, userID)
+	result, err := h.service.ExecuteReport(c.UserContext(), id, &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -211,7 +212,7 @@ func (h *ReportHandler) PreviewReport(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "data_source is required")
 	}
 
-	result, err := h.service.PreviewReport(c.Context(), &req)
+	result, err := h.service.PreviewReport(c.UserContext(), &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -241,7 +242,7 @@ func (h *ReportHandler) QueryReport(c *fiber.Ctx) error {
 		req.Limit = 50
 	}
 
-	ctx := cstmContext.WithReportColumns(c.Context(), req.Columns)
+	ctx := cstmContext.WithReportColumns(c.UserContext(), req.Columns)
 	result, err := h.service.QueryReport(ctx, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
@@ -263,7 +264,7 @@ func (h *ReportHandler) ExportReport(c *fiber.Ctx) error {
 		})
 	}
 
-	ctx := cstmContext.WithReportColumns(c.Context(), req.Columns)
+	ctx := cstmContext.WithReportColumns(c.UserContext(), req.Columns)
 	data, filename, contentType, err := h.service.ExportReport(ctx, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
@@ -291,7 +292,7 @@ func (h *ReportHandler) GetExecutionHistory(c *fiber.Ctx) error {
 		limit = 20
 	}
 
-	executions, total, err := h.service.GetExecutionHistory(c.Context(), id, page, limit)
+	executions, total, err := h.service.GetExecutionHistory(c.UserContext(), id, page, limit)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -311,6 +312,6 @@ func (h *ReportHandler) GetExecutionHistory(c *fiber.Ctx) error {
 // Metadata
 
 func (h *ReportHandler) GetDataSources(c *fiber.Ctx) error {
-	dataSources := h.service.GetDataSources(c.Context())
+	dataSources := h.service.GetDataSources(c.UserContext())
 	return utils.SuccessResponse(c, fiber.StatusOK, "Data sources retrieved successfully", dataSources)
 }

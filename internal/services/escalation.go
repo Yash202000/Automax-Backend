@@ -417,7 +417,7 @@ func (s *EscalationService) sendGlobalBreachNotification(
 		"Dear %s %s,\n\n"+
 			"This is an automated SLA deadline breach notification.\n\n"+
 			"Incident %s - \"%s\" has exceeded its SLA deadline. "+
-			"The incident has been open for %.1f hours against an allowed SLA of %d hours.\n\n"+
+			"The incident has been open for %f hours against an allowed SLA of %d hours.\n\n"+
 			"Incident Details:\n"+
 			"  Number       : %s\n"+
 			"  Title        : %s\n"+
@@ -430,8 +430,8 @@ func (s *EscalationService) sendGlobalBreachNotification(
 		incident.IncidentNumber,
 		incident.Title,
 		stateName,
-		totalHoursOpen,
-		slaHoursAllowed,
+		// // totalHoursOpen,
+		// slaHoursAllowed,
 		incidentURL,
 	)
 

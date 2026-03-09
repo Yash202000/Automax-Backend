@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"github.com/automax/backend/internal/services"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -30,12 +31,12 @@ func (h *OTPHandler) SendOTP(c *fiber.Ctx) error {
 
 	// Get userID from token
 	var sentBy *uuid.UUID
-	if userID, ok := c.Locals("user_id").(uuid.UUID); ok {
+	if userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID); ok {
 		sentBy = &userID
 	}
 
 	sessionID, err := h.otpService.SendOTP(
-		c.Context(),
+		c.UserContext(),
 		req.Phone,
 		req.Channel,
 		sentBy,
@@ -69,7 +70,7 @@ func (h *OTPHandler) VerifyOTP(c *fiber.Ctx) error {
 	}
 
 	err := h.otpService.VerifyOTP(
-		c.Context(),
+		c.UserContext(),
 		req.Phone,
 		req.SessionID,
 		req.OTP,

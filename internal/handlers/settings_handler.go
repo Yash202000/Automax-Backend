@@ -27,7 +27,7 @@ func NewSettingsHandler(settingsService services.SettingsService) *SettingsHandl
 // @Failure 500 {object} fiber.Map
 // @Router /api/v1/settings [get]
 func (h *SettingsHandler) GetSettings(c *fiber.Ctx) error {
-	settings, err := h.settingsService.GetSettings(c.Context())
+	settings, err := h.settingsService.GetSettings(c.UserContext())
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Failed to retrieve settings",
@@ -61,7 +61,7 @@ func (h *SettingsHandler) UpdateSettings(c *fiber.Ctx) error {
 		})
 	}
 
-	settings, err := h.settingsService.UpdateSettings(c.Context(), &req)
+	settings, err := h.settingsService.UpdateSettings(c.UserContext(), &req)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Failed to update settings",
