@@ -788,6 +788,21 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		return nil, err
 	}
 
+	// Keep incident_assignees junction table in sync when assignee changed via edit
+	if req.AssigneeID != nil {
+		if *req.AssigneeID == "" {
+			// Assignee cleared
+			if err := s.incidentRepo.ClearAssignees(ctx, id); err != nil {
+				fmt.Printf("Warning: ClearAssignees failed during update: %v\n", err)
+			}
+		} else if incident.AssigneeID != nil {
+			// Assignee set to a specific user
+			if err := s.incidentRepo.SetAssignees(ctx, id, []uuid.UUID{*incident.AssigneeID}); err != nil {
+				fmt.Printf("Warning: SetAssignees failed during update: %v\n", err)
+			}
+		}
+	}
+
 	// Fetch updated incident first to get full data
 	updated, err := s.incidentRepo.FindByIDWithRelations(ctx, id)
 	if err != nil {
@@ -2448,6 +2463,12 @@ func (s *incidentService) AssignIncident(ctx context.Context, incidentID, assign
 
 	if err := s.incidentRepo.AssignIncident(ctx, incidentID, assigneeID); err != nil {
 		return nil, err
+	}
+
+	// Keep the incident_assignees junction table in sync so the frontend
+	// "assignees" array reflects the new assignee (not a stale previous one).
+	if err := s.incidentRepo.SetAssignees(ctx, incidentID, []uuid.UUID{assigneeID}); err != nil {
+		fmt.Printf("Warning: SetAssignees failed during direct assignment: %v\n", err)
 	}
 
 	// Fetch updated incident to get new assignee name
