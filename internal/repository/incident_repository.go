@@ -619,6 +619,7 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 	type stateCount struct {
 		StateID   uuid.UUID `gorm:"column:state_id"`
 		StateName string    `gorm:"column:state_name"`
+		StateCode string    `gorm:"column:state_code"`
 		Count     int64     `gorm:"column:count"`
 	}
 
@@ -626,7 +627,7 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 
 	stateQuery := r.db.WithContext(ctx).
 		Model(&models.Incident{}).
-		Select("workflow_states.id as state_id, workflow_states.name as state_name, count(*) as count").
+		Select("workflow_states.id as state_id, workflow_states.name as state_name, workflow_states.code as state_code, count(*) as count").
 		Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
 
 	if filter != nil {
@@ -681,6 +682,10 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 			Name:  sc.StateName,
 			Count: sc.Count,
 		})
+
+		if sc.StateCode == "resolved" {
+			stats.Resolved += sc.Count
+		}
 	}
 
 	// Count by state_type
