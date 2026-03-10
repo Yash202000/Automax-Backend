@@ -48,17 +48,17 @@ func (h *RoleHandler) CreateRole(c *fiber.Ctx) error {
 		IsSystem:    false,
 	}
 
-	if err := h.roleRepo.Create(c.Context(), role); err != nil {
+	if err := h.roleRepo.Create(c.UserContext(), role); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Assign permissions if provided
 	if len(req.PermissionIDs) > 0 {
-		h.roleRepo.AssignPermissions(c.Context(), role.ID, req.PermissionIDs)
+		h.roleRepo.AssignPermissions(c.UserContext(), role.ID, req.PermissionIDs)
 	}
 
 	// Reload with permissions
-	role, _ = h.roleRepo.FindByID(c.Context(), role.ID)
+	role, _ = h.roleRepo.FindByID(c.UserContext(), role.ID)
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, "Role created", models.ToRoleResponse(role))
 }
@@ -70,7 +70,7 @@ func (h *RoleHandler) GetRole(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	role, err := h.roleRepo.FindByID(c.Context(), id)
+	role, err := h.roleRepo.FindByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Role not found")
 	}
@@ -90,7 +90,7 @@ func (h *RoleHandler) UpdateRole(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	role, err := h.roleRepo.FindByID(c.Context(), id)
+	role, err := h.roleRepo.FindByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Role not found")
 	}
@@ -105,17 +105,17 @@ func (h *RoleHandler) UpdateRole(c *fiber.Ctx) error {
 		role.IsActive = *req.IsActive
 	}
 
-	if err := h.roleRepo.Update(c.Context(), role); err != nil {
+	if err := h.roleRepo.Update(c.UserContext(), role); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Update permissions if provided
 	if req.PermissionIDs != nil {
-		h.roleRepo.AssignPermissions(c.Context(), role.ID, req.PermissionIDs)
+		h.roleRepo.AssignPermissions(c.UserContext(), role.ID, req.PermissionIDs)
 	}
 
 	// Reload with permissions
-	role, _ = h.roleRepo.FindByID(c.Context(), role.ID)
+	role, _ = h.roleRepo.FindByID(c.UserContext(), role.ID)
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Role updated", models.ToRoleResponse(role))
 }
@@ -127,7 +127,7 @@ func (h *RoleHandler) DeleteRole(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	role, err := h.roleRepo.FindByID(c.Context(), id)
+	role, err := h.roleRepo.FindByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Role not found")
 	}
@@ -136,7 +136,7 @@ func (h *RoleHandler) DeleteRole(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusForbidden, "Cannot delete system role")
 	}
 
-	if err := h.roleRepo.Delete(c.Context(), id); err != nil {
+	if err := h.roleRepo.Delete(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -144,7 +144,7 @@ func (h *RoleHandler) DeleteRole(c *fiber.Ctx) error {
 }
 
 func (h *RoleHandler) ListRoles(c *fiber.Ctx) error {
-	roles, err := h.roleRepo.List(c.Context())
+	roles, err := h.roleRepo.List(c.UserContext())
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -171,11 +171,11 @@ func (h *RoleHandler) AssignPermissions(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if err := h.roleRepo.AssignPermissions(c.Context(), id, req.PermissionIDs); err != nil {
+	if err := h.roleRepo.AssignPermissions(c.UserContext(), id, req.PermissionIDs); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	role, _ := h.roleRepo.FindByID(c.Context(), id)
+	role, _ := h.roleRepo.FindByID(c.UserContext(), id)
 	return utils.SuccessResponse(c, fiber.StatusOK, "Permissions assigned", models.ToRoleResponse(role))
 }
 
@@ -202,7 +202,7 @@ func (h *RoleHandler) CreatePermission(c *fiber.Ctx) error {
 		IsActive:    true,
 	}
 
-	if err := h.permissionRepo.Create(c.Context(), permission); err != nil {
+	if err := h.permissionRepo.Create(c.UserContext(), permission); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -216,7 +216,7 @@ func (h *RoleHandler) GetPermission(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	permission, err := h.permissionRepo.FindByID(c.Context(), id)
+	permission, err := h.permissionRepo.FindByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Permission not found")
 	}
@@ -236,7 +236,7 @@ func (h *RoleHandler) UpdatePermission(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	permission, err := h.permissionRepo.FindByID(c.Context(), id)
+	permission, err := h.permissionRepo.FindByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Permission not found")
 	}
@@ -251,7 +251,7 @@ func (h *RoleHandler) UpdatePermission(c *fiber.Ctx) error {
 		permission.IsActive = *req.IsActive
 	}
 
-	if err := h.permissionRepo.Update(c.Context(), permission); err != nil {
+	if err := h.permissionRepo.Update(c.UserContext(), permission); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -265,7 +265,7 @@ func (h *RoleHandler) DeletePermission(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	if err := h.permissionRepo.Delete(c.Context(), id); err != nil {
+	if err := h.permissionRepo.Delete(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -279,9 +279,9 @@ func (h *RoleHandler) ListPermissions(c *fiber.Ctx) error {
 	var err error
 
 	if module != "" {
-		permissions, err = h.permissionRepo.ListByModule(c.Context(), module)
+		permissions, err = h.permissionRepo.ListByModule(c.UserContext(), module)
 	} else {
-		permissions, err = h.permissionRepo.List(c.Context())
+		permissions, err = h.permissionRepo.List(c.UserContext())
 	}
 
 	if err != nil {
@@ -297,7 +297,7 @@ func (h *RoleHandler) ListPermissions(c *fiber.Ctx) error {
 }
 
 func (h *RoleHandler) GetModules(c *fiber.Ctx) error {
-	modules, err := h.permissionRepo.GetModules(c.Context())
+	modules, err := h.permissionRepo.GetModules(c.UserContext())
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -307,7 +307,7 @@ func (h *RoleHandler) GetModules(c *fiber.Ctx) error {
 
 // Export roles to JSON
 func (h *RoleHandler) Export(c *fiber.Ctx) error {
-	roles, err := h.roleRepo.List(c.Context())
+	roles, err := h.roleRepo.List(c.UserContext())
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -384,7 +384,7 @@ func (h *RoleHandler) Import(c *fiber.Ctx) error {
 
 	for _, data := range importData {
 		// Check if role with same code already exists
-		existingRole, err := h.roleRepo.FindByCode(c.Context(), data.Code)
+		existingRole, err := h.roleRepo.FindByCode(c.UserContext(), data.Code)
 		if err == nil && existingRole != nil {
 			skipped++
 			errors = append(errors, data.Name+" - Role with code "+data.Code+" already exists, skipped")
@@ -400,14 +400,14 @@ func (h *RoleHandler) Import(c *fiber.Ctx) error {
 			IsSystem:    false, // Always set imported roles as non-system
 		}
 
-		if err := h.roleRepo.Create(c.Context(), role); err != nil {
+		if err := h.roleRepo.Create(c.UserContext(), role); err != nil {
 			errors = append(errors, data.Name+" - Failed to create: "+err.Error())
 			continue
 		}
 
 		// Assign permissions if provided
 		if len(data.PermissionIDs) > 0 {
-			if err := h.roleRepo.AssignPermissions(c.Context(), role.ID, data.PermissionIDs); err != nil {
+			if err := h.roleRepo.AssignPermissions(c.UserContext(), role.ID, data.PermissionIDs); err != nil {
 				errors = append(errors, data.Name+" - Role created but failed to assign permissions: "+err.Error())
 			}
 		}

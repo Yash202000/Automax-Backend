@@ -6,6 +6,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
@@ -42,12 +43,12 @@ func (h *CallLogHandler) CreateCallLog(c *fiber.Ctx) error {
 	}
 
 	// Get user from context (assuming middleware sets it)
-	userID, ok := c.Locals("user_id").(uuid.UUID)
+	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if !ok {
 		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
 	}
 
-	callLog, err := h.service.CreateCallLog(c.Context(), &req, userID)
+	callLog, err := h.service.CreateCallLog(c.UserContext(), &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -66,7 +67,7 @@ func (h *CallLogHandler) GetCallLog(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid call log ID")
 	}
 
-	callLog, err := h.service.GetCallLog(c.Context(), id)
+	callLog, err := h.service.GetCallLog(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Call log not found")
 	}
@@ -97,7 +98,7 @@ func (h *CallLogHandler) UpdateCallLog(c *fiber.Ctx) error {
 		})
 	}
 
-	callLog, err := h.service.UpdateCallLog(c.Context(), id, &req)
+	callLog, err := h.service.UpdateCallLog(c.UserContext(), id, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -116,7 +117,7 @@ func (h *CallLogHandler) DeleteCallLog(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid call log ID")
 	}
 
-	if err := h.service.DeleteCallLog(c.Context(), id); err != nil {
+	if err := h.service.DeleteCallLog(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -149,7 +150,7 @@ func (h *CallLogHandler) ListCallLogs(c *fiber.Ctx) error {
 		filter.Page = 1
 	}
 
-	callLogs, total, err := h.service.ListCallLogs(c.Context(), &filter)
+	callLogs, total, err := h.service.ListCallLogs(c.UserContext(), &filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -168,7 +169,7 @@ func (h *CallLogHandler) ListCallLogs(c *fiber.Ctx) error {
 
 // GetStats handles GET /admin/call-logs/stats
 func (h *CallLogHandler) GetStats(c *fiber.Ctx) error {
-	stats, err := h.service.GetStats(c.Context())
+	stats, err := h.service.GetStats(c.UserContext())
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -197,7 +198,7 @@ func (h *CallLogHandler) StartCall(c *fiber.Ctx) error {
 		})
 	}
 
-	userID, ok := c.Locals("user_id").(uuid.UUID)
+	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if !ok {
 		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
 	}
@@ -213,7 +214,7 @@ func (h *CallLogHandler) StartCall(c *fiber.Ctx) error {
 			id, err = uuid.Parse(v)
 			if err != nil {
 				// Try to resolve by extension ID
-				usr, err := h.userSvc.FindByExtension(c.Context(), v)
+				usr, err := h.userSvc.FindByExtension(c.UserContext(), v)
 				if err != nil {
 					return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid participant: "+v)
 				}
@@ -226,7 +227,7 @@ func (h *CallLogHandler) StartCall(c *fiber.Ctx) error {
 		participantIDs = append(participantIDs, id)
 	}
 
-	callLog, err := h.service.StartCall(c.Context(), req.CallUUID, userID, participantIDs)
+	callLog, err := h.service.StartCall(c.UserContext(), req.CallUUID, userID, participantIDs)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -252,7 +253,7 @@ func (h *CallLogHandler) EndCall(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	callLog, err := h.service.EndCall(c.Context(), callUUID, req.EndAt)
+	callLog, err := h.service.EndCall(c.UserContext(), callUUID, req.EndAt)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -270,12 +271,12 @@ func (h *CallLogHandler) JoinCall(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Call UUID is required")
 	}
 
-	userID, ok := c.Locals("user_id").(uuid.UUID)
+	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if !ok {
 		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
 	}
 
-	if err := h.service.JoinCall(c.Context(), callUUID, userID); err != nil {
+	if err := h.service.JoinCall(c.UserContext(), callUUID, userID); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -295,13 +296,13 @@ func (h *CallLogHandler) GetCallLogsByExtension(c *fiber.Ctx) error {
 	limit, _ := strconv.Atoi(c.Query("limit", "10"))
 
 	// Find the user
-	user, err := h.userSvc.FindByExtension(c.Context(), extension)
+	user, err := h.userSvc.FindByExtension(c.UserContext(), extension)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "User with extension not found")
 	}
 
 	// Get call logs (Note: these are already models.CallLogResponse)
-	callLogs, total, err := h.service.GetCallLogsByUserID(c.Context(), user.ID, page, limit)
+	callLogs, total, err := h.service.GetCallLogsByUserID(c.UserContext(), user.ID, page, limit)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -334,7 +335,7 @@ func (h *CallLogHandler) GetCallLogsByExtension(c *fiber.Ctx) error {
 }
 
 func (h *CallLogHandler) GetSipInfo(c *fiber.Ctx) error {
-	sipInfo, err := h.service.GetSipInfo(c.Context())
+	sipInfo, err := h.service.GetSipInfo(c.UserContext())
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}

@@ -55,23 +55,23 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 		IsActive:    true,
 	}
 
-	if err := h.repo.Create(c.Context(), department); err != nil {
+	if err := h.repo.Create(c.UserContext(), department); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Assign locations, classifications, and roles if provided
 	if len(req.LocationIDs) > 0 {
-		h.repo.AssignLocations(c.Context(), department.ID, req.LocationIDs)
+		h.repo.AssignLocations(c.UserContext(), department.ID, req.LocationIDs)
 	}
 	if len(req.ClassificationIDs) > 0 {
-		h.repo.AssignClassifications(c.Context(), department.ID, req.ClassificationIDs)
+		h.repo.AssignClassifications(c.UserContext(), department.ID, req.ClassificationIDs)
 	}
 	if len(req.RoleIDs) > 0 {
-		h.repo.AssignRoles(c.Context(), department.ID, req.RoleIDs)
+		h.repo.AssignRoles(c.UserContext(), department.ID, req.RoleIDs)
 	}
 
 	// Reload with associations
-	department, _ = h.repo.FindByID(c.Context(), department.ID)
+	department, _ = h.repo.FindByID(c.UserContext(), department.ID)
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, "Department created", models.ToDepartmentResponse(department))
 }
@@ -83,7 +83,7 @@ func (h *DepartmentHandler) GetByID(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	department, err := h.repo.FindByID(c.Context(), id)
+	department, err := h.repo.FindByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Department not found")
 	}
@@ -103,7 +103,7 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	department, err := h.repo.FindByID(c.Context(), id)
+	department, err := h.repo.FindByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Department not found")
 	}
@@ -130,23 +130,23 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 		department.SortOrder = *req.SortOrder
 	}
 
-	if err := h.repo.Update(c.Context(), department); err != nil {
+	if err := h.repo.Update(c.UserContext(), department); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Update associations if provided
 	if req.LocationIDs != nil {
-		h.repo.AssignLocations(c.Context(), department.ID, req.LocationIDs)
+		h.repo.AssignLocations(c.UserContext(), department.ID, req.LocationIDs)
 	}
 	if req.ClassificationIDs != nil {
-		h.repo.AssignClassifications(c.Context(), department.ID, req.ClassificationIDs)
+		h.repo.AssignClassifications(c.UserContext(), department.ID, req.ClassificationIDs)
 	}
 	if req.RoleIDs != nil {
-		h.repo.AssignRoles(c.Context(), department.ID, req.RoleIDs)
+		h.repo.AssignRoles(c.UserContext(), department.ID, req.RoleIDs)
 	}
 
 	// Reload with associations
-	department, _ = h.repo.FindByID(c.Context(), department.ID)
+	department, _ = h.repo.FindByID(c.UserContext(), department.ID)
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Department updated", models.ToDepartmentResponse(department))
 }
@@ -158,7 +158,7 @@ func (h *DepartmentHandler) Delete(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	if err := h.repo.Delete(c.Context(), id); err != nil {
+	if err := h.repo.Delete(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -166,7 +166,7 @@ func (h *DepartmentHandler) Delete(c *fiber.Ctx) error {
 }
 
 func (h *DepartmentHandler) List(c *fiber.Ctx) error {
-	departments, err := h.repo.List(c.Context())
+	departments, err := h.repo.List(c.UserContext())
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -180,7 +180,7 @@ func (h *DepartmentHandler) List(c *fiber.Ctx) error {
 }
 
 func (h *DepartmentHandler) GetTree(c *fiber.Ctx) error {
-	tree, err := h.repo.GetTree(c.Context())
+	tree, err := h.repo.GetTree(c.UserContext())
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -200,13 +200,13 @@ func (h *DepartmentHandler) GetChildren(c *fiber.Ctx) error {
 	var err error
 
 	if parentIDStr == "" {
-		children, err = h.repo.GetByParentID(c.Context(), nil)
+		children, err = h.repo.GetByParentID(c.UserContext(), nil)
 	} else {
 		parentID, parseErr := uuid.Parse(parentIDStr)
 		if parseErr != nil {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid parent ID")
 		}
-		children, err = h.repo.GetByParentID(c.Context(), &parentID)
+		children, err = h.repo.GetByParentID(c.UserContext(), &parentID)
 	}
 
 	if err != nil {
@@ -246,7 +246,7 @@ func (h *DepartmentHandler) MatchDepartment(c *fiber.Ctx) error {
 		locationID = &id
 	}
 
-	departments, err := h.repo.FindMatching(c.Context(), classificationID, locationID, req.DepartmentType)
+	departments, err := h.repo.FindMatching(c.UserContext(), classificationID, locationID, req.DepartmentType)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -272,7 +272,7 @@ func (h *DepartmentHandler) MatchDepartment(c *fiber.Ctx) error {
 
 // Export exports all departments as JSON
 func (h *DepartmentHandler) Export(c *fiber.Ctx) error {
-	departments, err := h.repo.List(c.Context())
+	departments, err := h.repo.List(c.UserContext())
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -373,7 +373,7 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 		}
 
 		// Check if department already exists with same name and parent
-		existingDepartment, err := h.repo.FindByNameAndParent(c.Context(), data.Name, newParentID)
+		existingDepartment, err := h.repo.FindByNameAndParent(c.UserContext(), data.Name, newParentID)
 		if err == nil && existingDepartment != nil {
 			// Department already exists, use existing ID
 			skipped++
@@ -395,7 +395,7 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 			SortOrder:   data.SortOrder,
 		}
 
-		if err := h.repo.Create(c.Context(), department); err != nil {
+		if err := h.repo.Create(c.UserContext(), department); err != nil {
 			skipped++
 			errors = append(errors, data.Name+" (Level "+fmt.Sprintf("%d", data.Level)+") - "+err.Error())
 		} else {

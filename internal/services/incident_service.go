@@ -81,15 +81,15 @@ type IncidentService interface {
 }
 
 type incidentService struct {
-	incidentRepo            repository.IncidentRepository
+	incidentRepo        repository.IncidentRepository
 	incidentMergeRepo   repository.IncidentMergeRepository
-	workflowRepo            repository.WorkflowRepository
-	userRepo                repository.UserRepository
-	rejectionLogRepo  repository.RejectionLogRepository
+	workflowRepo        repository.WorkflowRepository
+	userRepo            repository.UserRepository
+	rejectionLogRepo    repository.RejectionLogRepository
 	classificationRepo  repository.ClassificationRepository
-	storage                 *storage.MinIOStorage
-	db                      *gorm.DB
-	wsHub                   *WSHub
+	storage             *storage.MinIOStorage
+	db                  *gorm.DB
+	wsHub               *WSHub
 	readyToCloseService ReadyToCloseService
 }
 
@@ -105,15 +105,15 @@ func NewIncidentService(
 	wsHub *WSHub,
 ) IncidentService {
 	return &incidentService{
-		incidentRepo:           incidentRepo,
+		incidentRepo:       incidentRepo,
 		incidentMergeRepo:  incidentMergeRepo,
-		workflowRepo:           workflowRepo,
-		userRepo:               userRepo,
-		rejectionLogRepo:  rejectionLogRepo,
+		workflowRepo:       workflowRepo,
+		userRepo:           userRepo,
+		rejectionLogRepo:   rejectionLogRepo,
 		classificationRepo: classificationRepo,
-		storage:                storage,
-		db:                     db,
-		wsHub:                  wsHub,
+		storage:            storage,
+		db:                 db,
+		wsHub:              wsHub,
 	}
 }
 
@@ -2222,7 +2222,7 @@ func (s *incidentService) ListComments(ctx context.Context, incidentID uuid.UUID
 	}
 
 	var comments []models.IncidentComment
-	
+
 	// If this is a master incident, include comments from all merged (child) incidents
 	if incident.MasterIncidentID == nil {
 		// This is either a standalone incident or a master incident
@@ -2231,7 +2231,7 @@ func (s *incidentService) ListComments(ctx context.Context, incidentID uuid.UUID
 		if err != nil {
 			return nil, err
 		}
-		
+
 		// If it's a master, also get comments from merged children
 		mergedIncidents, err := s.incidentMergeRepo.GetMergedIncidents(ctx, incidentID)
 		if err == nil && len(mergedIncidents) > 0 {
@@ -2360,7 +2360,7 @@ func (s *incidentService) ListAttachments(ctx context.Context, incidentID uuid.U
 	}
 
 	var attachments []models.IncidentAttachment
-	
+
 	// If this is a master incident, include attachments from all merged (child) incidents
 	if incident.MasterIncidentID == nil {
 		// This is either a standalone incident or a master incident
@@ -2369,7 +2369,7 @@ func (s *incidentService) ListAttachments(ctx context.Context, incidentID uuid.U
 		if err != nil {
 			return nil, err
 		}
-		
+
 		// If it's a master, also get attachments from merged children
 		mergedIncidents, err := s.incidentMergeRepo.GetMergedIncidents(ctx, incidentID)
 		if err == nil && len(mergedIncidents) > 0 {

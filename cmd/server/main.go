@@ -173,6 +173,7 @@ func main() {
 		AllowCredentials: true,
 	}))
 
+	app.Use(middleware.RequestContext())
 	app.Use(middleware.ValidationMiddleware())
 
 	// Public SSO routes (no auth required — browser redirect landing points)

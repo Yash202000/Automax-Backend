@@ -13,6 +13,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/storage"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -155,16 +156,13 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 	user, _ = s.userRepo.FindByIDWithRelations(ctx, user.ID)
 
 	// Log user creation
+	actorID := user.ID
+	if id, ok := ctx.Value(constants.ContextKeys.ActorID).(uuid.UUID); ok {
+		actorID = id
+	}
+	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
 	go func() {
-		// For registration, we'll use the created user's ID as the actor for now
-		// In admin-created scenarios, the actual admin user ID would be passed via context
-		actorID := user.ID
-		if ctx.Value("actor_id") != nil {
-			if id, ok := ctx.Value("actor_id").(uuid.UUID); ok {
-				actorID = id
-			}
-		}
-
 		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
 			UserID:      actorID,
 			Action:      "create",
@@ -173,8 +171,8 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 			Description: fmt.Sprintf("User %s (%s) created", user.Username, user.Email),
 			OldValue:    nil,
 			NewValue:    req,
-			IPAddress:   getStringFromContext(ctx, "ip_address"),
-			UserAgent:   getStringFromContext(ctx, "user_agent"),
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
 			Status:      "success",
 		})
 	}()
@@ -186,6 +184,8 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 }
 
 func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (*models.AuthResponse, error) {
+	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
 	user, err := s.userRepo.FindByEmailWithRelations(ctx, req.Email)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -199,8 +199,8 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 					Description: fmt.Sprintf("Failed login attempt for email: %s", req.Email),
 					OldValue:    nil,
 					NewValue:    nil,
-					IPAddress:   getStringFromContext(ctx, "ip_address"),
-					UserAgent:   getStringFromContext(ctx, "user_agent"),
+					IPAddress:   ipAddress,
+					UserAgent:   userAgent,
 					Status:      "failed",
 				})
 			}()
@@ -220,8 +220,8 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 				Description: fmt.Sprintf("Failed login attempt for user: %s (%s)", user.Username, user.Email),
 				OldValue:    nil,
 				NewValue:    nil,
-				IPAddress:   getStringFromContext(ctx, "ip_address"),
-				UserAgent:   getStringFromContext(ctx, "user_agent"),
+				IPAddress:   ipAddress,
+				UserAgent:   userAgent,
 				Status:      "failed",
 			})
 		}()
@@ -239,8 +239,8 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 				Description: fmt.Sprintf("Login attempt failed for deactivated user: %s (%s)", user.Username, user.Email),
 				OldValue:    nil,
 				NewValue:    nil,
-				IPAddress:   getStringFromContext(ctx, "ip_address"),
-				UserAgent:   getStringFromContext(ctx, "user_agent"),
+				IPAddress:   ipAddress,
+				UserAgent:   userAgent,
 				Status:      "failed",
 			})
 		}()
@@ -270,20 +270,6 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 
 	// Log successful login
 	go func() {
-		ipAddress := ""
-		if ipVal := ctx.Value("ip_address"); ipVal != nil {
-			if ipStr, ok := ipVal.(string); ok {
-				ipAddress = ipStr
-			}
-		}
-
-		userAgent := ""
-		if uaVal := ctx.Value("user_agent"); uaVal != nil {
-			if uaStr, ok := uaVal.(string); ok {
-				userAgent = uaStr
-			}
-		}
-
 		if err := s.actionLogService.LogAction(context.Background(), &LogActionParams{
 			UserID:      user.ID,
 			Action:      "login",
@@ -359,19 +345,19 @@ func (s *userService) RefreshToken(ctx context.Context, refreshToken string) (*m
 
 func (s *userService) Logout(ctx context.Context) error {
 	// Get user ID from context to log the logout event
-	userIDInterface := ctx.Value("user_id")
+	userIDInterface := ctx.Value(constants.ContextKeys.UserID)
 	if userIDInterface != nil {
 		if userID, ok := userIDInterface.(uuid.UUID); ok {
 			// Safely get IP address and user agent from context
 			ipAddress := ""
-			if ipVal := ctx.Value("ip_address"); ipVal != nil {
+			if ipVal := ctx.Value(constants.ContextKeys.IP_ADDRESS); ipVal != nil {
 				if ipStr, ok := ipVal.(string); ok {
 					ipAddress = ipStr
 				}
 			}
 
 			userAgent := ""
-			if uaVal := ctx.Value("user_agent"); uaVal != nil {
+			if uaVal := ctx.Value(constants.ContextKeys.USER_AGENT); uaVal != nil {
 				if uaStr, ok := uaVal.(string); ok {
 					userAgent = uaStr
 				}
@@ -398,7 +384,7 @@ func (s *userService) Logout(ctx context.Context) error {
 		}
 	}
 
-	token, _ := ctx.Value("token").(string)
+	token, _ := ctx.Value(constants.ContextKeys.Token).(string)
 	return s.sessionStore.BlacklistToken(ctx, token, s.jwtManager.GetTokenExpiration())
 }
 
@@ -413,6 +399,12 @@ func (s *userService) GetProfile(ctx context.Context, userID uuid.UUID) (*models
 }
 
 func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, req *models.UserUpdateRequest) (*models.UserResponse, error) {
+	actorID := userID
+	if id, ok := ctx.Value(constants.ContextKeys.ActorID).(uuid.UUID); ok {
+		actorID = id
+	}
+	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
 	user, err := s.userRepo.FindByIDWithRelations(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -516,13 +508,6 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 	// Log role assignment changes
 	if !equalUUIDSlices(oldRoleIDs, req.RoleIDs) {
 		go func() {
-			actorID := userID
-			if ctx.Value("actor_id") != nil {
-				if id, ok := ctx.Value("actor_id").(uuid.UUID); ok {
-					actorID = id
-				}
-			}
-
 			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
 				UserID:      actorID,
 				Action:      "role_assignment",
@@ -531,8 +516,8 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 				Description: fmt.Sprintf("Roles assigned to user: %s (%s)", user.Username, user.Email),
 				OldValue:    map[string]interface{}{"role_ids": oldRoleIDs},
 				NewValue:    map[string]interface{}{"role_ids": req.RoleIDs},
-				IPAddress:   getStringFromContext(ctx, "ip_address"),
-				UserAgent:   getStringFromContext(ctx, "user_agent"),
+				IPAddress:   ipAddress,
+				UserAgent:   userAgent,
 				Status:      "success",
 			})
 		}()
@@ -546,13 +531,6 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 	// Log department assignment changes
 	if !equalUUIDSlices(oldDepartmentIDs, req.DepartmentIDs) {
 		go func() {
-			actorID := userID
-			if ctx.Value("actor_id") != nil {
-				if id, ok := ctx.Value("actor_id").(uuid.UUID); ok {
-					actorID = id
-				}
-			}
-
 			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
 				UserID:      actorID,
 				Action:      "department_assignment",
@@ -561,8 +539,8 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 				Description: fmt.Sprintf("Departments assigned to user: %s (%s)", user.Username, user.Email),
 				OldValue:    map[string]interface{}{"department_ids": oldDepartmentIDs},
 				NewValue:    map[string]interface{}{"department_ids": req.DepartmentIDs},
-				IPAddress:   getStringFromContext(ctx, "ip_address"),
-				UserAgent:   getStringFromContext(ctx, "user_agent"),
+				IPAddress:   ipAddress,
+				UserAgent:   userAgent,
 				Status:      "success",
 			})
 		}()
@@ -579,13 +557,6 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		// Log location assignment changes
 		if !equalUUIDSlices(oldLocationIDs, req.LocationIDs) {
 			go func() {
-				actorID := userID
-				if ctx.Value("actor_id") != nil {
-					if id, ok := ctx.Value("actor_id").(uuid.UUID); ok {
-						actorID = id
-					}
-				}
-
 				_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
 					UserID:      actorID,
 					Action:      "location_assignment",
@@ -594,8 +565,8 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 					Description: fmt.Sprintf("Locations assigned to user: %s (%s)", user.Username, user.Email),
 					OldValue:    map[string]interface{}{"location_ids": oldLocationIDs},
 					NewValue:    map[string]interface{}{"location_ids": req.LocationIDs},
-					IPAddress:   getStringFromContext(ctx, "ip_address"),
-					UserAgent:   getStringFromContext(ctx, "user_agent"),
+					IPAddress:   ipAddress,
+					UserAgent:   userAgent,
 					Status:      "success",
 				})
 			}()
@@ -609,13 +580,6 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		// Log classification assignment changes
 		if !equalUUIDSlices(oldClassificationIDs, req.ClassificationIDs) {
 			go func() {
-				actorID := userID
-				if ctx.Value("actor_id") != nil {
-					if id, ok := ctx.Value("actor_id").(uuid.UUID); ok {
-						actorID = id
-					}
-				}
-
 				_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
 					UserID:      actorID,
 					Action:      "classification_assignment",
@@ -624,8 +588,8 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 					Description: fmt.Sprintf("Classifications assigned to user: %s (%s)", user.Username, user.Email),
 					OldValue:    map[string]interface{}{"classification_ids": oldClassificationIDs},
 					NewValue:    map[string]interface{}{"classification_ids": req.ClassificationIDs},
-					IPAddress:   getStringFromContext(ctx, "ip_address"),
-					UserAgent:   getStringFromContext(ctx, "user_agent"),
+					IPAddress:   ipAddress,
+					UserAgent:   userAgent,
 					Status:      "success",
 				})
 			}()
@@ -652,8 +616,8 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 			Description: fmt.Sprintf("User profile updated for user: %s (%s)", user.Username, user.Email),
 			OldValue:    oldUser,
 			NewValue:    req,
-			IPAddress:   getStringFromContext(ctx, "ip_address"),
-			UserAgent:   getStringFromContext(ctx, "user_agent"),
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
 			Status:      "success",
 		})
 	}()
@@ -664,7 +628,7 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 // for non-admin user profile update
 func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateRequest) (*models.UserResponse, error) {
 	// For regular users, we only allow updating certain fields like FirstName, LastName, Phone, and Avatar
-	userID := ctx.Value("user_id").(uuid.UUID)
+	userID := ctx.Value(constants.ContextKeys.UserID).(uuid.UUID)
 	user, err := s.userRepo.FindByIDWithRelations(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -728,6 +692,8 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 	response := models.ToUserResponse(user)
 
 	// Log profile update
+	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
 	go func() {
 		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
 			UserID:      userID,
@@ -737,8 +703,8 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 			Description: fmt.Sprintf("User profile updated for user: %s (%s)", user.Username, user.Email),
 			OldValue:    oldUser,
 			NewValue:    req,
-			IPAddress:   getStringFromContext(ctx, "ip_address"),
-			UserAgent:   getStringFromContext(ctx, "user_agent"),
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
 			Status:      "success",
 		})
 	}()
@@ -747,6 +713,8 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 }
 
 func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req *models.ChangePasswordRequest) error {
+	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
 	user, err := s.userRepo.FindByID(ctx, userID)
 	if err != nil {
 		return err
@@ -763,8 +731,8 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 				Description: fmt.Sprintf("Failed password change attempt for user: %s (%s)", user.Username, user.Email),
 				OldValue:    nil,
 				NewValue:    nil,
-				IPAddress:   getStringFromContext(ctx, "ip_address"),
-				UserAgent:   getStringFromContext(ctx, "user_agent"),
+				IPAddress:   ipAddress,
+				UserAgent:   userAgent,
 				Status:      "failed",
 			})
 		}()
@@ -790,8 +758,8 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 				Description: fmt.Sprintf("Password changed for user: %s (%s)", user.Username, user.Email),
 				OldValue:    map[string]interface{}{"has_password": true},
 				NewValue:    map[string]interface{}{"has_password": true},
-				IPAddress:   getStringFromContext(ctx, "ip_address"),
-				UserAgent:   getStringFromContext(ctx, "user_agent"),
+				IPAddress:   ipAddress,
+				UserAgent:   userAgent,
 				Status:      "success",
 			})
 		}()
@@ -825,24 +793,23 @@ func (s *userService) UploadAvatar(ctx context.Context, userID uuid.UUID, file m
 	response := models.ToUserResponse(user)
 
 	// Log avatar upload
+	uploadActorID := userID
+	if id, ok := ctx.Value(constants.ContextKeys.ActorID).(uuid.UUID); ok {
+		uploadActorID = id
+	}
+	uploadIP, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
+	uploadUA, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
 	go func() {
-		actorID := userID
-		if ctx.Value("actor_id") != nil {
-			if id, ok := ctx.Value("actor_id").(uuid.UUID); ok {
-				actorID = id
-			}
-		}
-
 		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
-			UserID:      actorID,
+			UserID:      uploadActorID,
 			Action:      "avatar_upload",
 			Module:      "users",
 			ResourceID:  userID.String(),
 			Description: fmt.Sprintf("Avatar uploaded for user: %s (%s)", user.Username, user.Email),
 			OldValue:    map[string]string{"avatar": oldAvatar},
 			NewValue:    map[string]string{"avatar": user.Avatar},
-			IPAddress:   getStringFromContext(ctx, "ip_address"),
-			UserAgent:   getStringFromContext(ctx, "user_agent"),
+			IPAddress:   uploadIP,
+			UserAgent:   uploadUA,
 			Status:      "success",
 		})
 	}()
@@ -862,26 +829,25 @@ func (s *userService) UpdateAvatar(ctx context.Context, userID uuid.UUID, avatar
 
 	err = s.userRepo.Update(ctx, user)
 
+	updateActorID := userID
+	if id, ok := ctx.Value(constants.ContextKeys.ActorID).(uuid.UUID); ok {
+		updateActorID = id
+	}
+	updateIP, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
+	updateUA, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
 	if err == nil {
 		// Log avatar update
 		go func() {
-			actorID := userID
-			if ctx.Value("actor_id") != nil {
-				if id, ok := ctx.Value("actor_id").(uuid.UUID); ok {
-					actorID = id
-				}
-			}
-
 			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
-				UserID:      actorID,
+				UserID:      updateActorID,
 				Action:      "avatar_update",
 				Module:      "users",
 				ResourceID:  userID.String(),
 				Description: fmt.Sprintf("Avatar updated for user: %s (%s)", user.Username, user.Email),
 				OldValue:    map[string]string{"avatar": oldAvatar},
 				NewValue:    map[string]string{"avatar": newAvatar},
-				IPAddress:   getStringFromContext(ctx, "ip_address"),
-				UserAgent:   getStringFromContext(ctx, "user_agent"),
+				IPAddress:   updateIP,
+				UserAgent:   updateUA,
 				Status:      "success",
 			})
 		}()
@@ -891,7 +857,9 @@ func (s *userService) UpdateAvatar(ctx context.Context, userID uuid.UUID, avatar
 }
 
 func (s *userService) DeleteUser(ctx context.Context) error {
-	userID := ctx.Value("user_id").(uuid.UUID)
+	userID := ctx.Value(constants.ContextKeys.UserID).(uuid.UUID)
+	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
 	user, err := s.userRepo.FindByID(ctx, userID)
 	if err != nil {
 		// Log failed deletion attempt
@@ -904,8 +872,8 @@ func (s *userService) DeleteUser(ctx context.Context) error {
 				Description: fmt.Sprintf("Failed user deletion attempt for user ID: %s", userID.String()),
 				OldValue:    nil,
 				NewValue:    nil,
-				IPAddress:   getStringFromContext(ctx, "ip_address"),
-				UserAgent:   getStringFromContext(ctx, "user_agent"),
+				IPAddress:   ipAddress,
+				UserAgent:   userAgent,
 				Status:      "failed",
 			})
 		}()
@@ -931,8 +899,8 @@ func (s *userService) DeleteUser(ctx context.Context) error {
 				Description: fmt.Sprintf("User deleted: %s (%s)", user.Username, user.Email),
 				OldValue:    user,
 				NewValue:    nil,
-				IPAddress:   getStringFromContext(ctx, "ip_address"),
-				UserAgent:   getStringFromContext(ctx, "user_agent"),
+				IPAddress:   ipAddress,
+				UserAgent:   userAgent,
 				Status:      "success",
 			})
 		}()
@@ -947,8 +915,8 @@ func (s *userService) DeleteUser(ctx context.Context) error {
 				Description: fmt.Sprintf("Failed to delete user: %s (%s)", user.Username, user.Email),
 				OldValue:    nil,
 				NewValue:    nil,
-				IPAddress:   getStringFromContext(ctx, "ip_address"),
-				UserAgent:   getStringFromContext(ctx, "user_agent"),
+				IPAddress:   ipAddress,
+				UserAgent:   userAgent,
 				Status:      "failed",
 			})
 		}()
@@ -1157,14 +1125,4 @@ func equalUUIDSlices(a, b []uuid.UUID) bool {
 	}
 
 	return true
-}
-
-// Helper function to safely extract string values from context
-func getStringFromContext(ctx context.Context, key string) string {
-	if val := ctx.Value(key); val != nil {
-		if str, ok := val.(string); ok {
-			return str
-		}
-	}
-	return ""
 }

@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/pkg/constants"
@@ -207,6 +205,9 @@ func (r *reportRepository) ExecuteRequestQuery(ctx context.Context, filters []mo
 	var total int64
 	var results []map[string]interface{}
 
+	// Extract requested columns from context for dynamic row construction.
+	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
+
 	query := r.db.WithContext(ctx).Model(&models.Incident{}).
 		Where("incidents.record_type = ?", "request")
 	query = r.applyFilters(query, filters)
@@ -262,18 +263,15 @@ func (r *reportRepository) ExecuteRequestQuery(ctx context.Context, filters []mo
 			}
 		}
 
-		reporterFirst, _ := rawRow["reporter_first_name"].(string)
-		reporterLast, _ := rawRow["reporter_last_name"].(string)
-
-		row := map[string]interface{}{
-			"Incident Number":        rawRow["incident_number"],
-			"Caller Number":          rawRow["created_by_mobile"],
-			"Caller Name":            strings.TrimSpace(reporterFirst + " " + reporterLast),
-			"Classification":         rawRow["classification_name"],
-			"Request Classification": rawRow["classification_name"],
-			"Location":               rawRow["location_name"],
-			"Summary":                rawRow["title"],
-			"Created Date Time":      rawRow["created_at"],
+		row := make(map[string]interface{})
+		if len(reqColumns) > 0 {
+			for _, col := range reqColumns {
+				row[col.Label] = rawRow[col.Field]
+			}
+		} else {
+			for k, v := range rawRow {
+				row[k] = v
+			}
 		}
 
 		results = append(results, row)
@@ -325,9 +323,21 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 	defer rows.Close()
 
 	// Extract URL-construction context values once, before iterating rows.
-	hostname, _ := ctx.Value("hostname").(string)
-	protocol, _ := ctx.Value("protocol").(string)
-	token, _ := ctx.Value("token").(string)
+	hostname, _ := ctx.Value(constants.ContextKeys.HOSTNAME).(string)
+	protocol, _ := ctx.Value(constants.ContextKeys.PROTOCOL).(string)
+	token, _ := ctx.Value(constants.ContextKeys.Token).(string)
+
+	// Extract requested columns for dynamic row construction and enrichment filtering.
+	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
+	// colFieldSet: keyed by col.Field — used by hasCol to detect which enrichments to run.
+	// fieldToLabel: maps col.Field → col.Label — used to write enriched values under the
+	// caller-supplied label rather than a hardcoded display name.
+	colFieldSet := make(map[string]bool, len(reqColumns))
+	fieldToLabel := make(map[string]string, len(reqColumns))
+	for _, col := range reqColumns {
+		colFieldSet[col.Field] = true
+		fieldToLabel[col.Field] = col.Label
+	}
 
 	cols, _ := rows.Columns()
 	for rows.Next() {
@@ -349,226 +359,22 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 				rawRow[colName] = val
 			}
 		}
-		// Transform to nested structure matching frontend field names
+		// Build row dynamically from the requested columns.
+		// col.Field is the SQL alias present in rawRow; col.Label is the output key.
 		row := make(map[string]interface{})
-		// Copy base incident fields
-		for k, v := range rawRow {
-			row[k] = v
-		}
-
-		// ── Nested dot-notation keys ──────────────────────────────────────────
-
-		// current_state.name / current_state.state_type
-		if v, ok := rawRow["current_state_name"]; ok {
-			row["Current State Name"] = v
-		}
-		if v, ok := rawRow["current_state_state_type"]; ok {
-			row["Current State Type"] = v
-		}
-
-		// assignee.username / assignee.email / assignee.full_name
-		if v, ok := rawRow["assignee_username"]; ok {
-			row["Assignee Username"] = v
-		}
-		if v, ok := rawRow["assignee_email"]; ok {
-			row["Assignee Email"] = v
-		}
-		assigneeFirst, _ := rawRow["assignee_first_name"].(string)
-		assigneeLast, _ := rawRow["assignee_last_name"].(string)
-		fullName := strings.TrimSpace(assigneeFirst + " " + assigneeLast)
-		row["Assignee Full Name"] = fullName
-
-		// reporter.username / reporter.email / reporter_name (combined)
-		if v, ok := rawRow["reporter_username"]; ok {
-			row["Reporter Username"] = v
-		}
-		if v, ok := rawRow["reporter_email"]; ok {
-			row["Reporter Email"] = v
-		}
-		reporterFirst, _ := rawRow["reporter_first_name"].(string)
-		reporterLast, _ := rawRow["reporter_last_name"].(string)
-		reporterName := strings.TrimSpace(reporterFirst + " " + reporterLast)
-		row["Reporter Full Name"] = reporterName
-
-		// department.name
-		if v, ok := rawRow["department_name"]; ok {
-			row["Department Name"] = v
-		}
-
-		// location.name
-		if v, ok := rawRow["location_name"]; ok {
-			row["Location Name"] = v
-		}
-
-		// classification.name
-		if v, ok := rawRow["classification_name"]; ok {
-			row["Classification Name"] = v
-		}
-
-		// workflow.name
-		if v, ok := rawRow["workflow_name"]; ok {
-			row["Workflow Name"] = v
-		}
-
-		// ── Friendly / display-name aliases (used by ClientReportConfigs) ─────
-
-		// "Ticket ID" / "Ticket Number" / "Incident Number" / "Request Number"
-		row["Ticket ID"] = rawRow["incident_number"]
-		row["Ticket Number"] = rawRow["incident_number"]
-		row["Incident Number"] = rawRow["incident_number"]
-		row["Request Number"] = rawRow["incident_number"]
-
-		// "Channel" / "Incident Channel"
-		row["Channel"] = rawRow["channel"]
-		row["Incident Channel"] = rawRow["channel"]
-
-		// "Status" / "IncidentStatus"
-		row["Status"] = rawRow["current_state_name"]
-		row["IncidentStatus"] = rawRow["current_state_name"]
-
-		// "Criticality" → severity
-		row["Criticality"] = rawRow["severity"]
-
-		// "Priority Area" → priority
-		row["Priority Area"] = rawRow["priority"]
-
-		// "Caller Name" / "Creator" / "Observer" → reporter full name
-		row["Caller Name"] = reporterName
-		row["Creator"] = reporterName
-		row["Observer"] = reporterName
-
-		// "Caller #" / "Mobile Number" / "Creator Mobile Number" / "Creator Mobile No"
-		// → created_by_mobile (the mobile captured at creation time)
-		row["Caller #"] = rawRow["created_by_mobile"]
-		row["Caller Number"] = rawRow["created_by_mobile"]
-		row["Mobile Number"] = rawRow["created_by_mobile"]
-		row["Creator Mobile Number"] = rawRow["created_by_mobile"]
-		row["Creator Mobile No"] = rawRow["created_by_mobile"]
-
-		// "National ID" → custom_fields (raw JSON; consumer should extract as needed)
-		row["National ID"] = rawRow["custom_fields"]
-
-		// "Classification" / "Request Classification"
-		row["Classification"] = rawRow["classification_name"]
-		row["Request Classification"] = rawRow["classification_name"]
-
-		// "Location"
-		row["Location"] = rawRow["location_name"]
-
-		// "District" → state (closest geographic field available)
-		row["District"] = rawRow["state"]
-
-		// "Street" → address
-		row["Street"] = rawRow["address"]
-
-		// "Full Location" → composite of address fields
-		fullLocation := strings.TrimSpace(strings.Join(filterEmpty([]string{
-			strOrEmpty(rawRow["address"]),
-			strOrEmpty(rawRow["city"]),
-			strOrEmpty(rawRow["state"]),
-			strOrEmpty(rawRow["country"]),
-		}), ", "))
-		row["Full Location"] = fullLocation
-
-		// "Map" → lat/lon composite (e.g. "24.7136,46.6753")
-		lat := strOrEmpty(rawRow["latitude"])
-		lon := strOrEmpty(rawRow["longitude"])
-		mapValue := ""
-		if lat != "" && lon != "" {
-			mapValue = lat + "," + lon
-		}
-		row["Map"] = mapValue
-
-		// "Assigned To" → assignee full name
-		row["Assigned To"] = fullName
-
-		// "Contractor" / "Contractor User" → assignee (closest field; extend if a dedicated column exists)
-		row["Contractor"] = fullName
-		row["Contractor User"] = fullName
-
-		// "Department"
-		row["Department"] = rawRow["department_name"]
-
-		// "Zone" → custom_fields["zone"]
-		row["Zone"] = extractCF(rawRow["custom_fields"], "zone")
-
-		// "Summary" → title
-		row["Summary"] = rawRow["title"]
-
-		// "Source" → source
-		row["Source"] = rawRow["source"]
-
-		// Date/time aliases
-		row["Created At"] = rawRow["created_at"]
-		row["Created Time"] = rawRow["created_at"]
-		row["Created Date Time"] = rawRow["created_at"]
-		row["Creation Date"] = rawRow["created_at"]
-		row["Created Date"] = rawRow["created_at"]
-
-		row["Approved At"] = ""
-		row["Approved Time"] = ""
-
-		row["Closure Date"] = rawRow["closed_at"]
-		row["Incident Closed Time"] = rawRow["closed_at"]
-		row["Close Date"] = rawRow["closed_at"]
-
-		// Reopen fields – parsed from custom_fields; Reopened By is overwritten
-		// after the loop with data from incident_transition_histories.
-		// row["Reopen Date"] = extractCF(rawRow["custom_fields"], "reopen_at")
-		// row["Reopen Feedback"] = extractCF(rawRow["custom_fields"], "reopen_feedback")
-		// row["Reopened By"] = extractCF(rawRow["custom_fields"], "reopen_by")
-
-		// Escalation Date – overwritten after the loop from escalation_slas.
-		// row["Escalation Date"] = extractCF(rawRow["custom_fields"], "escalated_at")
-
-		// Notes
-		row["Notes"] = extractCF(rawRow["custom_fields"], "notes")
-
-		// "Duration" → derived from created_at → closed_at
-		duration := ""
-		if ca, ok := rawRow["created_at"].(time.Time); ok {
-			if cla, ok2 := rawRow["closed_at"].(time.Time); ok2 {
-				duration = strconv.FormatFloat(cla.Sub(ca).Seconds(), 'f', 0, 64)
+		if len(reqColumns) > 0 {
+			for _, col := range reqColumns {
+				row[col.Label] = rawRow[col.Field]
+			}
+			// Always carry the internal "id" field so enrichment can key results.
+			if _, ok := row["id"]; !ok {
+				row["id"] = rawRow["id"]
+			}
+		} else {
+			for k, v := range rawRow {
+				row[k] = v
 			}
 		}
-		row["Duration"] = duration
-
-		// "Created By" → created_by_name
-		row["Created By"] = rawRow["created_by_name"]
-		row["Call Agent"] = rawRow["created_by_name"]
-
-		// These fields are populated in the bulk-enrichment step below.
-		// Before = attachments uploaded at creation (no transition link, by creator/agent).
-		// After  = attachments uploaded during a contractor transition.
-		row["Attachments"] = ""
-		row["Reopen Date"] = ""
-		row["Reopen By"] = ""
-		row["Escalation Date"] = ""
-		row["Before Attachments"] = ""
-		row["After Attachments"] = ""
-		row["Before Attachment Array"] = []string{}
-		row["After Attachment Array"] = []string{}
-		row["Comments"] = ""
-		row["Comments Array"] = []map[string]interface{}{}
-		row["Contractor Comment"] = ""
-		// Gardening Department Comment has no dedicated table; read from custom_fields.
-		row["Gardening Department Comment"] = extractCF(rawRow["custom_fields"], "gardening_comment")
-
-		// "Solved Date" → resolved_at
-		row["Solved Date"] = rawRow["resolved_at"]
-
-		// Status-transition By / Date fields – populated in bulk enrichment below.
-		row["Rejected By"] = ""
-		row["Rejected Date"] = ""
-		row["Under Resolution By"] = ""
-		row["Under Resolution Date"] = ""
-		row["In Progress By"] = ""
-		row["In Progress Date"] = ""
-		row["Ready To Close By"] = ""
-		row["Ready To Close Date"] = ""
-		row["Closed By"] = ""
-		row["Closed Date"] = ""
-		row["Solved By"] = ""
 
 		results = append(results, row)
 	}
@@ -582,20 +388,26 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			}
 		}
 
-		// hasCol returns true when at least one of the given column names was
-		// requested by the caller (present in the REPORT_COLUMNS context set).
-		// If no set was injected (e.g. direct service calls), all fetches run.
-		colSet, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).(map[string]bool)
-		hasCol := func(names ...string) bool {
-			if len(colSet) == 0 {
+		// hasCol returns true when at least one of the given field names was
+		// requested by the caller. If no columns were injected via context
+		// (e.g. direct service calls), all enrichment fetches run.
+		hasCol := func(fields ...string) bool {
+			if len(colFieldSet) == 0 {
 				return true // no filter → fetch everything
 			}
-			for _, n := range names {
-				if colSet[n] {
+			for _, f := range fields {
+				if colFieldSet[f] {
 					return true
 				}
 			}
 			return false
+		}
+		// setField writes value into row under the label the caller assigned to fieldName.
+		// If fieldName was not requested, the write is a no-op.
+		setField := func(row map[string]interface{}, fieldName string, value interface{}) {
+			if label, ok := fieldToLabel[fieldName]; ok {
+				row[label] = value
+			}
 		}
 
 		// 1. Per-status transition data – only fetched when the matching
@@ -677,61 +489,61 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 
 			// Closed
 			if name := closedNames[incidentID]; name != "" {
-				results[i]["Closed By"] = name
-				results[i]["Contractor"] = name
-				results[i]["Contractor User"] = name
-				results[i]["Solved By"] = name
+				setField(results[i], "Closed By", name)
+				setField(results[i], "Contractor", name)
+				setField(results[i], "Contractor User", name)
+				setField(results[i], "Solved By", name)
 			}
 			if date := closedDates[incidentID]; date != "" {
-				results[i]["Closed Date"] = date
+				setField(results[i], "Closed Date", date)
 			}
 
 			// Rejected
 			if name := rejectedNames[incidentID]; name != "" {
-				results[i]["Rejected By"] = name
+				setField(results[i], "Rejected By", name)
 			}
 			if date := rejectedDates[incidentID]; date != "" {
-				results[i]["Rejected Date"] = date
+				setField(results[i], "Rejected Date", date)
 			}
 
 			// Under Resolution
 			if name := underResNames[incidentID]; name != "" {
-				results[i]["Under Resolution By"] = name
-				results[i]["Approved By"] = name
+				setField(results[i], "Under Resolution By", name)
+				setField(results[i], "Approved By", name)
 			}
 			if date := underResDates[incidentID]; date != "" {
-				results[i]["Under Resolution Date"] = date
-				results[i]["Approved Time"] = date
-				results[i]["Approved At"] = date
+				setField(results[i], "Under Resolution Date", date)
+				setField(results[i], "Approved Time", date)
+				setField(results[i], "Approved At", date)
 			}
 
 			// In Progress
 			if name := inProgressNames[incidentID]; name != "" {
-				results[i]["In Progress By"] = name
+				setField(results[i], "In Progress By", name)
 			}
 			if date := inProgressDates[incidentID]; date != "" {
-				results[i]["In Progress Date"] = date
+				setField(results[i], "In Progress Date", date)
 			}
 
 			// Ready To Close
 			if name := readyToCloseNames[incidentID]; name != "" {
-				results[i]["Ready To Close By"] = name
+				setField(results[i], "Ready To Close By", name)
 			}
 			if date := readyToCloseDates[incidentID]; date != "" {
-				results[i]["Ready To Close Date"] = date
+				setField(results[i], "Ready To Close Date", date)
 			}
 
 			// Reopened By + Reopen Date from incident_revisions
 			if rn := reopenedByNames[incidentID]; rn != "" {
-				results[i]["Reopened By"] = rn
+				setField(results[i], "Reopened By", rn)
 			}
 			if rd := reopenDates[incidentID]; rd != "" {
-				results[i]["Reopen Date"] = rd
+				setField(results[i], "Reopen Date", rd)
 			}
 
 			// Escalation Date
 			if ed := escalationDates[incidentID]; ed != "" {
-				results[i]["Escalation Date"] = ed
+				setField(results[i], "Escalation Date", ed)
 			}
 
 			// General comments
@@ -740,30 +552,30 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 				for _, c := range comments {
 					parts = append(parts, fmt.Sprintf("%s", c["content"]))
 				}
-				results[i]["Comments"] = strings.Join(parts, " | ")
-				results[i]["Comments Array"] = comments
+				setField(results[i], "Comments", strings.Join(parts, " | "))
+				setField(results[i], "Comments Array", comments)
 			}
 
 			// Contractor comment (first/latest comment from a transition)
 			if cc := contractorCommentsMap[incidentID]; cc != "" {
-				results[i]["Contractor Comment"] = cc
+				setField(results[i], "Contractor Comment", cc)
 			}
 
 			// Before attachments (creator/agent uploads)
 			if urls := beforeAttachMap[incidentID]; len(urls) > 0 {
-				results[i]["Before Attachments"] = strings.Join(urls, " | ")
-				results[i]["Before Attachment Array"] = urls
+				setField(results[i], "Before Attachments", strings.Join(urls, " | "))
+				setField(results[i], "Before Attachment Array", urls)
 			}
 
 			// After attachments (contractor uploads during transitions)
 			if urls := afterAttachMap[incidentID]; len(urls) > 0 {
-				results[i]["After Attachments"] = strings.Join(urls, " | ")
-				results[i]["After Attachment Array"] = urls
+				setField(results[i], "After Attachments", strings.Join(urls, " | "))
+				setField(results[i], "After Attachment Array", urls)
 			}
 
 			// All attachments
 			if urls := allAttachMap[incidentID]; len(urls) > 0 {
-				results[i]["Attachments"] = strings.Join(urls, " | ")
+				setField(results[i], "Attachments", strings.Join(urls, " | "))
 			}
 
 			_ = row
@@ -1154,6 +966,8 @@ func (r *reportRepository) ExecuteUserQuery(ctx context.Context, filters []model
 	var total int64
 	var results []map[string]interface{}
 
+	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
+
 	query := r.db.WithContext(ctx).Model(&models.User{})
 	query = r.applyFilters(query, filters)
 
@@ -1203,18 +1017,21 @@ func (r *reportRepository) ExecuteUserQuery(ctx context.Context, filters []model
 			}
 		}
 
-		// Transform to nested structure
 		row := make(map[string]interface{})
-		for k, v := range rawRow {
-			row[k] = v
-		}
-
-		// Map to dot-notation for frontend
-		if v, ok := rawRow["department_name"]; ok {
-			row["Department Name"] = v
-		}
-		if v, ok := rawRow["location_name"]; ok {
-			row["Location Name"] = v
+		if len(reqColumns) > 0 {
+			for _, col := range reqColumns {
+				row[col.Label] = rawRow[col.Field]
+			}
+		} else {
+			for k, v := range rawRow {
+				row[k] = v
+			}
+			if v, ok := rawRow["department_name"]; ok {
+				row["Department Name"] = v
+			}
+			if v, ok := rawRow["location_name"]; ok {
+				row["Location Name"] = v
+			}
 		}
 
 		results = append(results, row)
@@ -1226,6 +1043,8 @@ func (r *reportRepository) ExecuteUserQuery(ctx context.Context, filters []model
 func (r *reportRepository) ExecuteWorkflowQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
 	var total int64
 	var results []map[string]interface{}
+
+	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
 
 	query := r.db.WithContext(ctx).Model(&models.Workflow{})
 	query = r.applyFilters(query, filters)
@@ -1274,15 +1093,18 @@ func (r *reportRepository) ExecuteWorkflowQuery(ctx context.Context, filters []m
 			}
 		}
 
-		// Transform to nested structure
 		row := make(map[string]interface{})
-		for k, v := range rawRow {
-			row[k] = v
-		}
-
-		// Map to dot-notation for frontend
-		if v, ok := rawRow["created_by_username"]; ok {
-			row["Created By Username"] = v
+		if len(reqColumns) > 0 {
+			for _, col := range reqColumns {
+				row[col.Label] = rawRow[col.Field]
+			}
+		} else {
+			for k, v := range rawRow {
+				row[k] = v
+			}
+			if v, ok := rawRow["created_by_username"]; ok {
+				row["Created By Username"] = v
+			}
 		}
 
 		results = append(results, row)
@@ -1294,6 +1116,8 @@ func (r *reportRepository) ExecuteWorkflowQuery(ctx context.Context, filters []m
 func (r *reportRepository) ExecuteDepartmentQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
 	var total int64
 	var results []map[string]interface{}
+
+	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
 
 	query := r.db.WithContext(ctx).Model(&models.Department{})
 	query = r.applyFilters(query, filters)
@@ -1344,33 +1168,35 @@ func (r *reportRepository) ExecuteDepartmentQuery(ctx context.Context, filters [
 			}
 		}
 
-		// Transform to nested structure
 		row := make(map[string]interface{})
-		for k, v := range rawRow {
-			row[k] = v
-		}
-
-		// Map to dot-notation for frontend
-		if v, ok := rawRow["parent_name"]; ok {
-			row["parent.name"] = v
-		}
-		if v, ok := rawRow["manager_username"]; ok {
-			row["manager.username"] = v
-		}
-		// manager.full_name
-		mgrFirst, _ := rawRow["manager_first_name"].(string)
-		mgrLast, _ := rawRow["manager_last_name"].(string)
-		mgrFullName := ""
-		if mgrFirst != "" || mgrLast != "" {
-			mgrFullName = mgrFirst
-			if mgrLast != "" {
-				if mgrFullName != "" {
-					mgrFullName += " "
-				}
-				mgrFullName += mgrLast
+		if len(reqColumns) > 0 {
+			for _, col := range reqColumns {
+				row[col.Label] = rawRow[col.Field]
 			}
+		} else {
+			for k, v := range rawRow {
+				row[k] = v
+			}
+			if v, ok := rawRow["parent_name"]; ok {
+				row["parent.name"] = v
+			}
+			if v, ok := rawRow["manager_username"]; ok {
+				row["manager.username"] = v
+			}
+			mgrFirst, _ := rawRow["manager_first_name"].(string)
+			mgrLast, _ := rawRow["manager_last_name"].(string)
+			mgrFullName := ""
+			if mgrFirst != "" || mgrLast != "" {
+				mgrFullName = mgrFirst
+				if mgrLast != "" {
+					if mgrFullName != "" {
+						mgrFullName += " "
+					}
+					mgrFullName += mgrLast
+				}
+			}
+			row["manager.full_name"] = mgrFullName
 		}
-		row["manager.full_name"] = mgrFullName
 
 		results = append(results, row)
 	}
@@ -1381,6 +1207,8 @@ func (r *reportRepository) ExecuteDepartmentQuery(ctx context.Context, filters [
 func (r *reportRepository) ExecuteLocationQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
 	var total int64
 	var results []map[string]interface{}
+
+	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
 
 	query := r.db.WithContext(ctx).Model(&models.Location{})
 	query = r.applyFilters(query, filters)
@@ -1429,15 +1257,18 @@ func (r *reportRepository) ExecuteLocationQuery(ctx context.Context, filters []m
 			}
 		}
 
-		// Transform to nested structure
 		row := make(map[string]interface{})
-		for k, v := range rawRow {
-			row[k] = v
-		}
-
-		// Map to dot-notation for frontend
-		if v, ok := rawRow["parent_name"]; ok {
-			row["parent.name"] = v
+		if len(reqColumns) > 0 {
+			for _, col := range reqColumns {
+				row[col.Label] = rawRow[col.Field]
+			}
+		} else {
+			for k, v := range rawRow {
+				row[k] = v
+			}
+			if v, ok := rawRow["parent_name"]; ok {
+				row["parent.name"] = v
+			}
 		}
 
 		results = append(results, row)
@@ -1449,6 +1280,8 @@ func (r *reportRepository) ExecuteLocationQuery(ctx context.Context, filters []m
 func (r *reportRepository) ExecuteClassificationQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
 	var total int64
 	var results []map[string]interface{}
+
+	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
 
 	query := r.db.WithContext(ctx).Model(&models.Classification{})
 	query = r.applyFilters(query, filters)
@@ -1497,15 +1330,18 @@ func (r *reportRepository) ExecuteClassificationQuery(ctx context.Context, filte
 			}
 		}
 
-		// Transform to nested structure
 		row := make(map[string]interface{})
-		for k, v := range rawRow {
-			row[k] = v
-		}
-
-		// Map to dot-notation for frontend
-		if v, ok := rawRow["parent_name"]; ok {
-			row["parent.name"] = v
+		if len(reqColumns) > 0 {
+			for _, col := range reqColumns {
+				row[col.Label] = rawRow[col.Field]
+			}
+		} else {
+			for k, v := range rawRow {
+				row[k] = v
+			}
+			if v, ok := rawRow["parent_name"]; ok {
+				row["parent.name"] = v
+			}
 		}
 
 		results = append(results, row)

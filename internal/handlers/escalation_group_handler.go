@@ -29,7 +29,7 @@ func (h *EscalationGroupHandler) Create(c *fiber.Ctx) error {
 	if errs := validation.ValidateStruct(c.UserContext(), &req); len(errs) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": errs})
 	}
-	resp, err := h.service.Create(c.Context(), &req)
+	resp, err := h.service.Create(c.UserContext(), &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -40,7 +40,7 @@ func (h *EscalationGroupHandler) Create(c *fiber.Ctx) error {
 //
 // GET /api/v1/admin/escalation-groups
 func (h *EscalationGroupHandler) List(c *fiber.Ctx) error {
-	resp, err := h.service.List(c.Context())
+	resp, err := h.service.List(c.UserContext())
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -55,7 +55,7 @@ func (h *EscalationGroupHandler) GetByID(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "invalid id")
 	}
-	resp, err := h.service.GetByID(c.Context(), id)
+	resp, err := h.service.GetByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, err.Error())
 	}
@@ -76,7 +76,7 @@ func (h *EscalationGroupHandler) Update(c *fiber.Ctx) error {
 	if errs := validation.ValidateStruct(c.UserContext(), &req); len(errs) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": errs})
 	}
-	resp, err := h.service.Update(c.Context(), id, &req)
+	resp, err := h.service.Update(c.UserContext(), id, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -90,7 +90,7 @@ func (h *EscalationGroupHandler) Delete(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "invalid id")
 	}
-	if err := h.service.Delete(c.Context(), id); err != nil {
+	if err := h.service.Delete(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, err.Error())
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, "Escalation group deleted", nil)

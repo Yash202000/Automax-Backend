@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -10,6 +9,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
@@ -44,7 +44,7 @@ func (h *UserHandler) Register(c *fiber.Ctx) error {
 		})
 	}
 
-	response, err := h.userService.Register(c.Context(), &req)
+	response, err := h.userService.Register(c.UserContext(), &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -65,7 +65,7 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 		})
 	}
 
-	response, err := h.userService.Login(c.Context(), &req)
+	response, err := h.userService.Login(c.UserContext(), &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusUnauthorized, err.Error())
 	}
@@ -74,7 +74,7 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 }
 
 func (h *UserHandler) Logout(c *fiber.Ctx) error {
-	if err := h.userService.Logout(c.Context()); err != nil {
+	if err := h.userService.Logout(c.UserContext()); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to logout")
 	}
 
@@ -94,7 +94,7 @@ func (h *UserHandler) RefreshToken(c *fiber.Ctx) error {
 		})
 	}
 
-	response, err := h.userService.RefreshToken(c.Context(), req.RefreshToken)
+	response, err := h.userService.RefreshToken(c.UserContext(), req.RefreshToken)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusUnauthorized, err.Error())
 	}
@@ -103,9 +103,9 @@ func (h *UserHandler) RefreshToken(c *fiber.Ctx) error {
 }
 
 func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	response, err := h.userService.GetProfile(c.Context(), userID)
+	response, err := h.userService.GetProfile(c.UserContext(), userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "User not found")
 	}
@@ -126,7 +126,7 @@ func (h *UserHandler) UpdateProfile(c *fiber.Ctx) error {
 		})
 	}
 
-	response, err := h.userService.UpdateProfile(c.Context(), &req)
+	response, err := h.userService.UpdateProfile(c.UserContext(), &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -135,7 +135,7 @@ func (h *UserHandler) UpdateProfile(c *fiber.Ctx) error {
 }
 
 func (h *UserHandler) ChangePassword(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
 	var req models.ChangePasswordRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -149,7 +149,7 @@ func (h *UserHandler) ChangePassword(c *fiber.Ctx) error {
 		})
 	}
 
-	if err := h.userService.ChangePassword(c.Context(), userID, &req); err != nil {
+	if err := h.userService.ChangePassword(c.UserContext(), userID, &req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
@@ -157,7 +157,7 @@ func (h *UserHandler) ChangePassword(c *fiber.Ctx) error {
 }
 
 func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
 	file, err := c.FormFile("avatar")
 	if err != nil {
@@ -179,7 +179,7 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 	}
 	defer src.Close()
 
-	response, err := h.userService.UploadAvatar(c.Context(), userID, src, file)
+	response, err := h.userService.UploadAvatar(c.UserContext(), userID, src, file)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to upload avatar")
 	}
@@ -188,7 +188,7 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 }
 
 func (h *UserHandler) DeleteAccount(c *fiber.Ctx) error {
-	if err := h.userService.DeleteUser(c.Context()); err != nil {
+	if err := h.userService.DeleteUser(c.UserContext()); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to delete account")
 	}
 
@@ -227,7 +227,7 @@ func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 		limit = 10
 	}
 
-	users, total, err := h.userService.ListUsers(c.Context(), page, limit, search, roleIDs, departmentIDs, locationIDs, classificationIDs)
+	users, total, err := h.userService.ListUsers(c.UserContext(), page, limit, search, roleIDs, departmentIDs, locationIDs, classificationIDs)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch users")
 	}
@@ -242,7 +242,7 @@ func (h *UserHandler) GetUser(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid user ID")
 	}
 
-	response, err := h.userService.GetUserByID(c.Context(), userID)
+	response, err := h.userService.GetUserByID(c.UserContext(), userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "User not found")
 	}
@@ -333,12 +333,7 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 		})
 	}
 
-	// Get actor ID from context (the admin performing the action)
-	actorID := c.Locals("user_id").(uuid.UUID)
-
-	// Create a new context with actor ID, IP address, and user agent for audit logging
-	ctx := context.WithValue(c.Context(), "actor_id", actorID)
-	response, err := h.userService.Register(ctx, &req)
+	response, err := h.userService.Register(c.UserContext(), &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -354,11 +349,11 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 
 				// Upload to storage
 				folder := fmt.Sprintf("avatars/%s", response.User.ID)
-				filePath, err := h.storage.UploadFile(ctx, src, file, folder)
+				filePath, err := h.storage.UploadFile(c.UserContext(), src, file, folder)
 				if err == nil {
 					// Update user's avatar URL
 					avatarURL := filePath
-					if updateErr := h.userService.UpdateAvatar(ctx, response.User.ID, avatarURL); updateErr == nil {
+					if updateErr := h.userService.UpdateAvatar(c.UserContext(), response.User.ID, avatarURL); updateErr == nil {
 						response.User.Avatar = avatarURL
 					}
 				}
@@ -388,12 +383,7 @@ func (h *UserHandler) AdminUpdateUser(c *fiber.Ctx) error {
 		})
 	}
 
-	// Get actor ID from context (the admin performing the action)
-	actorID := c.Locals("user_id").(uuid.UUID)
-
-	// Create a new context with actor ID, IP address, and user agent for audit logging
-	ctx := context.WithValue(c.Context(), "actor_id", actorID)
-	response, err := h.userService.UpdateAdminProfile(ctx, userID, &req)
+	response, err := h.userService.UpdateAdminProfile(c.UserContext(), userID, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -450,7 +440,7 @@ func (h *UserHandler) MatchUsers(c *fiber.Ctx) error {
 		excludeUserID = &id
 	}
 
-	users, err := h.userService.FindMatchingUsers(c.Context(), roleID, classificationID, locationID, departmentID, excludeUserID)
+	users, err := h.userService.FindMatchingUsers(c.UserContext(), roleID, classificationID, locationID, departmentID, excludeUserID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -488,7 +478,7 @@ func (h *UserHandler) UpdateUserCallStatus(c *fiber.Ctx) error {
 	}
 
 	// Call Service
-	resp, err := h.userService.UpdateUserCallStatus(c.Context(), userExt, req.Status)
+	resp, err := h.userService.UpdateUserCallStatus(c.UserContext(), userExt, req.Status)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -499,7 +489,7 @@ func (h *UserHandler) UpdateUserCallStatus(c *fiber.Ctx) error {
 // Export exports all users as JSON
 func (h *UserHandler) Export(c *fiber.Ctx) error {
 	// Get all users without pagination
-	users, _, err := h.userService.ListUsers(c.Context(), 1, 10000, "", nil, nil, nil, nil)
+	users, _, err := h.userService.ListUsers(c.UserContext(), 1, 10000, "", nil, nil, nil, nil)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -599,14 +589,14 @@ func (h *UserHandler) Import(c *fiber.Ctx) error {
 	// Import all users
 	for _, data := range importData {
 		// Check if user already exists by email or username
-		existingUser, _ := h.userService.GetUserByEmail(c.Context(), data.Email)
+		existingUser, _ := h.userService.GetUserByEmail(c.UserContext(), data.Email)
 		if existingUser != nil {
 			skipped++
 			errors = append(errors, data.Email+" - User already exists with this email, skipped")
 			continue
 		}
 
-		existingUser, _ = h.userService.GetUserByUsername(c.Context(), data.Username)
+		existingUser, _ = h.userService.GetUserByUsername(c.UserContext(), data.Username)
 		if existingUser != nil {
 			skipped++
 			errors = append(errors, data.Username+" - User already exists with this username, skipped")
@@ -662,7 +652,7 @@ func (h *UserHandler) Import(c *fiber.Ctx) error {
 		}
 
 		// Register user
-		_, err := h.userService.Register(c.Context(), req)
+		_, err := h.userService.Register(c.UserContext(), req)
 		if err != nil {
 			skipped++
 			errors = append(errors, data.Email+" - "+err.Error())

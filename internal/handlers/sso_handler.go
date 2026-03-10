@@ -8,6 +8,7 @@ import (
 	"github.com/automax/backend/internal/database"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -50,11 +51,11 @@ type launchRequest struct {
 // Launch handles POST /api/v1/sso/launch (requires auth middleware)
 func (h *SSOHandler) Launch(c *fiber.Ctx) error {
 	// Extract authenticated user context set by auth middleware
-	userID, ok := c.Locals("user_id").(uuid.UUID)
+	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if !ok {
 		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
 	}
-	email, _ := c.Locals("email").(string)
+	email, _ := c.Locals(constants.ContextKeys.Email).(string)
 
 	var req launchRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -71,7 +72,7 @@ func (h *SSOHandler) Launch(c *fiber.Ctx) error {
 	}
 
 	// Look up the application link
-	appLink, err := h.appLinkRepo.FindByID(c.Context(), appLinkUUID)
+	appLink, err := h.appLinkRepo.FindByID(c.UserContext(), appLinkUUID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Application link not found")
 	}
@@ -85,7 +86,7 @@ func (h *SSOHandler) Launch(c *fiber.Ctx) error {
 	}
 
 	// Fetch user details for name and role
-	user, err := h.userRepo.FindByIDWithRelations(c.Context(), userID)
+	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch user details")
 	}
@@ -102,7 +103,7 @@ func (h *SSOHandler) Launch(c *fiber.Ctx) error {
 
 	// Generate a unique token ID (jti) and store as nonce before signing the token
 	jti := uuid.New()
-	if err := h.sessionStore.SetSSONonce(c.Context(), jti.String(), 65*time.Second); err != nil {
+	if err := h.sessionStore.SetSSONonce(c.UserContext(), jti.String(), 65*time.Second); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to store SSO nonce")
 	}
 
@@ -142,7 +143,7 @@ func (h *SSOHandler) Callback(c *fiber.Ctx) error {
 	// ValidateSSOTokenAuto resolves the signing key automatically:
 	//   - iss is a URL  → fetches public key from {iss}/.well-known/jwks.json (cross-deployment)
 	//   - iss is "automax" → uses the local key (same-deployment)
-	claims, err := h.ssoJWT.ValidateSSOTokenAuto(c.Context(), tokenStr)
+	claims, err := h.ssoJWT.ValidateSSOTokenAuto(c.UserContext(), tokenStr)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Invalid or expired SSO token")
 	}
@@ -150,7 +151,7 @@ func (h *SSOHandler) Callback(c *fiber.Ctx) error {
 	// Claim the JTI nonce — prevents replay attacks.
 	// ClaimSSONonce uses SET NX so it works regardless of whether the provider and
 	// receiver share the same Redis instance (cross-deployment safe).
-	claimed, err := h.sessionStore.ClaimSSONonce(c.Context(), claims.JTI, 65*time.Second)
+	claimed, err := h.sessionStore.ClaimSSONonce(c.UserContext(), claims.JTI, 65*time.Second)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to validate SSO nonce")
 	}
@@ -159,7 +160,7 @@ func (h *SSOHandler) Callback(c *fiber.Ctx) error {
 	}
 
 	// Look up or auto-create user
-	user, err := h.userRepo.FindByEmail(c.Context(), claims.Email)
+	user, err := h.userRepo.FindByEmail(c.UserContext(), claims.Email)
 	if err != nil {
 		// User not found — auto-create
 		parts := strings.SplitN(claims.Name, " ", 2)
@@ -189,7 +190,7 @@ func (h *SSOHandler) Callback(c *fiber.Ctx) error {
 			IsActive:  true,
 		}
 
-		if createErr := h.userRepo.Create(c.Context(), user); createErr != nil {
+		if createErr := h.userRepo.Create(c.UserContext(), user); createErr != nil {
 			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create SSO user")
 		}
 	}
@@ -207,7 +208,7 @@ func (h *SSOHandler) Callback(c *fiber.Ctx) error {
 	}
 
 	// Store local session
-	if err := h.sessionStore.SetUserSession(c.Context(), user.ID.String(), map[string]interface{}{
+	if err := h.sessionStore.SetUserSession(c.UserContext(), user.ID.String(), map[string]interface{}{
 		"user_id": user.ID,
 		"email":   user.Email,
 		"role":    role,

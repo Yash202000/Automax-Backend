@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"github.com/automax/backend/internal/services"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/google/uuid"
 
 	"github.com/gofiber/fiber/v2"
@@ -38,7 +39,7 @@ func (h *FCMHandler) RegisterToken(c *fiber.Ctx) error {
 
 	// Get UUID string from JWT middleware
 	var userId *uuid.UUID
-	if userID, ok := c.Locals("user_id").(uuid.UUID); ok {
+	if userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID); ok {
 		userId = &userID
 	}
 
@@ -57,7 +58,7 @@ func (h *FCMHandler) RegisterToken(c *fiber.Ctx) error {
 
 func (h *FCMHandler) GetUserDeviceTokens(c *fiber.Ctx) error {
 
-	userIDValue := c.Locals("user_id")
+	userIDValue := c.Locals(constants.ContextKeys.UserID)
 	if userIDValue == nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 			"success": false,
@@ -83,7 +84,7 @@ func (h *FCMHandler) GetUserDeviceTokens(c *fiber.Ctx) error {
 
 func (h *FCMHandler) RemoveDevice(c *fiber.Ctx) error {
 
-	userIDValue := c.Locals("user_id")
+	userIDValue := c.Locals(constants.ContextKeys.UserID)
 	if userIDValue == nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 			"success": false,
@@ -135,7 +136,7 @@ func (h *FCMHandler) PushNotification(c *fiber.Ctx) error {
 	}
 
 	var sentBy *uuid.UUID
-	if userID, ok := c.Locals("user_id").(uuid.UUID); ok {
+	if userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID); ok {
 		sentBy = &userID
 	}
 	if err := c.BodyParser(&req); err != nil {
@@ -145,7 +146,7 @@ func (h *FCMHandler) PushNotification(c *fiber.Ctx) error {
 		})
 	}
 
-	err := h.service.Push(c.Context(), req.UserID, req.Title, req.Body, req.UserType, sentBy)
+	err := h.service.Push(c.UserContext(), req.UserID, req.Title, req.Body, req.UserType, sentBy)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"success": false,

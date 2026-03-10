@@ -10,6 +10,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
@@ -47,17 +48,17 @@ func (h *WorkflowHandler) CreateWorkflow(c *fiber.Ctx) error {
 	}
 
 	// Get user ID from context
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	workflow, err := h.service.CreateWorkflow(c.Context(), &req, userID)
+	workflow, err := h.service.CreateWorkflow(c.UserContext(), &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Log the creation with workflow details
+	ipAddress, _ := c.Locals(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := c.Locals(constants.ContextKeys.USER_AGENT).(string)
 	go func() {
-		ipAddress := c.IP()
-		userAgent := c.Get("User-Agent")
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
@@ -93,7 +94,7 @@ func (h *WorkflowHandler) GetWorkflow(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	workflow, err := h.service.GetWorkflow(c.Context(), id)
+	workflow, err := h.service.GetWorkflow(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Workflow not found")
 	}
@@ -109,9 +110,9 @@ func (h *WorkflowHandler) ListWorkflows(c *fiber.Ctx) error {
 	var err error
 
 	if recordType != "" {
-		workflows, err = h.service.ListWorkflowsByRecordType(c.Context(), recordType, activeOnly)
+		workflows, err = h.service.ListWorkflowsByRecordType(c.UserContext(), recordType, activeOnly)
 	} else {
-		workflows, err = h.service.ListWorkflows(c.Context(), activeOnly)
+		workflows, err = h.service.ListWorkflows(c.UserContext(), activeOnly)
 	}
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
@@ -133,53 +134,53 @@ func (h *WorkflowHandler) UpdateWorkflow(c *fiber.Ctx) error {
 	}
 
 	// Get old workflow for action logging
-	oldWorkflow, err := h.service.GetWorkflow(c.Context(), id)
+	oldWorkflow, err := h.service.GetWorkflow(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	workflow, err := h.service.UpdateWorkflow(c.Context(), id, &req)
+	workflow, err := h.service.UpdateWorkflow(c.UserContext(), id, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Capture values before async logging
-	userID := c.Locals("user_id").(uuid.UUID)
-	ipAddress := c.IP()
-	userAgent := c.Get("User-Agent")
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ipAddress, _ := c.Locals(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := c.Locals(constants.ContextKeys.USER_AGENT).(string)
 
 	// Build comprehensive old and new values
 	oldValue := map[string]interface{}{
-		"name":                      oldWorkflow.Name,
-		"code":                      oldWorkflow.Code,
-		"description":               oldWorkflow.Description,
-		"record_type":               oldWorkflow.RecordType,
-		"is_active":                 oldWorkflow.IsActive,
-		"is_default":                oldWorkflow.IsDefault,
-		"sources":                   oldWorkflow.Sources,
-		"priorities":                oldWorkflow.Priorities,
-		"canvas_layout":             oldWorkflow.CanvasLayout,
-		"required_fields":           oldWorkflow.RequiredFields,
-		"classifications":           oldWorkflow.Classifications,
-		"locations":                 oldWorkflow.Locations,
-		"convert_to_request_roles":  oldWorkflow.ConvertToRequestRoles,
-		"merge_allowed_roles":       oldWorkflow.MergeAllowedRoles,
+		"name":                     oldWorkflow.Name,
+		"code":                     oldWorkflow.Code,
+		"description":              oldWorkflow.Description,
+		"record_type":              oldWorkflow.RecordType,
+		"is_active":                oldWorkflow.IsActive,
+		"is_default":               oldWorkflow.IsDefault,
+		"sources":                  oldWorkflow.Sources,
+		"priorities":               oldWorkflow.Priorities,
+		"canvas_layout":            oldWorkflow.CanvasLayout,
+		"required_fields":          oldWorkflow.RequiredFields,
+		"classifications":          oldWorkflow.Classifications,
+		"locations":                oldWorkflow.Locations,
+		"convert_to_request_roles": oldWorkflow.ConvertToRequestRoles,
+		"merge_allowed_roles":      oldWorkflow.MergeAllowedRoles,
 	}
 	newValue := map[string]interface{}{
-		"name":                      workflow.Name,
-		"code":                      workflow.Code,
-		"description":               workflow.Description,
-		"record_type":               workflow.RecordType,
-		"is_active":                 workflow.IsActive,
-		"is_default":                workflow.IsDefault,
-		"sources":                   workflow.Sources,
-		"priorities":                workflow.Priorities,
-		"canvas_layout":             workflow.CanvasLayout,
-		"required_fields":           workflow.RequiredFields,
-		"classifications":           workflow.Classifications,
-		"locations":                 workflow.Locations,
-		"convert_to_request_roles":  workflow.ConvertToRequestRoles,
-		"merge_allowed_roles":       workflow.MergeAllowedRoles,
+		"name":                     workflow.Name,
+		"code":                     workflow.Code,
+		"description":              workflow.Description,
+		"record_type":              workflow.RecordType,
+		"is_active":                workflow.IsActive,
+		"is_default":               workflow.IsDefault,
+		"sources":                  workflow.Sources,
+		"priorities":               workflow.Priorities,
+		"canvas_layout":            workflow.CanvasLayout,
+		"required_fields":          workflow.RequiredFields,
+		"classifications":          workflow.Classifications,
+		"locations":                workflow.Locations,
+		"convert_to_request_roles": workflow.ConvertToRequestRoles,
+		"merge_allowed_roles":      workflow.MergeAllowedRoles,
 	}
 
 	// Build detailed change description
@@ -238,20 +239,20 @@ func (h *WorkflowHandler) DeleteWorkflow(c *fiber.Ctx) error {
 	}
 
 	// Get workflow details for action logging
-	oldWorkflow, err := h.service.GetWorkflow(c.Context(), id)
+	oldWorkflow, err := h.service.GetWorkflow(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	if err := h.service.DeleteWorkflow(c.Context(), id); err != nil {
+	if err := h.service.DeleteWorkflow(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Log the deletion
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ipAddress, _ := c.Locals(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := c.Locals(constants.ContextKeys.USER_AGENT).(string)
 	go func() {
-		userID := c.Locals("user_id").(uuid.UUID)
-		ipAddress := c.IP()
-		userAgent := c.Get("User-Agent")
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
@@ -278,7 +279,7 @@ func (h *WorkflowHandler) DeleteWorkflow(c *fiber.Ctx) error {
 }
 
 func (h *WorkflowHandler) ListDeletedWorkflows(c *fiber.Ctx) error {
-	workflows, err := h.service.ListDeletedWorkflows(c.Context())
+	workflows, err := h.service.ListDeletedWorkflows(c.UserContext())
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -293,7 +294,7 @@ func (h *WorkflowHandler) PermanentDeleteWorkflow(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	if err := h.service.PermanentDeleteWorkflow(c.Context(), id); err != nil {
+	if err := h.service.PermanentDeleteWorkflow(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -307,7 +308,7 @@ func (h *WorkflowHandler) RestoreWorkflow(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	if err := h.service.RestoreWorkflow(c.Context(), id); err != nil {
+	if err := h.service.RestoreWorkflow(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -321,9 +322,9 @@ func (h *WorkflowHandler) DuplicateWorkflow(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	workflow, err := h.service.DuplicateWorkflow(c.Context(), id, userID)
+	workflow, err := h.service.DuplicateWorkflow(c.UserContext(), id, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -356,21 +357,21 @@ func (h *WorkflowHandler) AssignClassifications(c *fiber.Ctx) error {
 		classIDs = append(classIDs, classID)
 	}
 
-	if err := h.service.AssignClassifications(c.Context(), id, classIDs); err != nil {
+	if err := h.service.AssignClassifications(c.UserContext(), id, classIDs); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Fetch updated workflow
-	workflow, err := h.service.GetWorkflow(c.Context(), id)
+	workflow, err := h.service.GetWorkflow(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Log the classification assignment
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ipAddress, _ := c.Locals(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := c.Locals(constants.ContextKeys.USER_AGENT).(string)
 	go func() {
-		userID := c.Locals("user_id").(uuid.UUID)
-		ipAddress := c.IP()
-		userAgent := c.Get("User-Agent")
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
@@ -407,7 +408,7 @@ func (h *WorkflowHandler) GetWorkflowByClassification(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid classification ID")
 	}
 
-	workflow, err := h.service.GetWorkflowByClassification(c.Context(), id)
+	workflow, err := h.service.GetWorkflowByClassification(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, err.Error())
 	}
@@ -436,16 +437,16 @@ func (h *WorkflowHandler) CreateState(c *fiber.Ctx) error {
 		})
 	}
 
-	state, err := h.service.CreateState(c.Context(), workflowID, &req)
+	state, err := h.service.CreateState(c.UserContext(), workflowID, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Log the creation
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ipAddress, _ := c.Locals(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := c.Locals(constants.ContextKeys.USER_AGENT).(string)
 	go func() {
-		userID := c.Locals("user_id").(uuid.UUID)
-		ipAddress := c.IP()
-		userAgent := c.Get("User-Agent")
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
@@ -456,17 +457,17 @@ func (h *WorkflowHandler) CreateState(c *fiber.Ctx) error {
 		}
 
 		newValue := map[string]interface{}{
-			"name":              state.Name,
-			"code":              state.Code,
-			"description":       state.Description,
-			"state_type":        state.StateType,
-			"color":             state.Color,
-			"sla_hours":         state.SLAHours,
-			"sort_order":        state.SortOrder,
-			"position_x":        state.PositionX,
-			"position_y":        state.PositionY,
-			"is_active":         state.IsActive,
-			"viewable_roles":    viewableRoleIDs,
+			"name":           state.Name,
+			"code":           state.Code,
+			"description":    state.Description,
+			"state_type":     state.StateType,
+			"color":          state.Color,
+			"sla_hours":      state.SLAHours,
+			"sort_order":     state.SortOrder,
+			"position_x":     state.PositionX,
+			"position_y":     state.PositionY,
+			"is_active":      state.IsActive,
+			"viewable_roles": viewableRoleIDs,
 		}
 
 		_ = h.actionLogService.LogAction(ctx, &services.LogActionParams{
@@ -492,7 +493,7 @@ func (h *WorkflowHandler) ListStates(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid workflow ID")
 	}
 
-	states, err := h.service.ListStates(c.Context(), workflowID)
+	states, err := h.service.ListStates(c.UserContext(), workflowID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -513,20 +514,20 @@ func (h *WorkflowHandler) UpdateState(c *fiber.Ctx) error {
 	}
 
 	// Get old state for action logging
-	oldState, err := h.service.GetState(c.Context(), stateID)
+	oldState, err := h.service.GetState(c.UserContext(), stateID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	state, err := h.service.UpdateState(c.Context(), stateID, &req)
+	state, err := h.service.UpdateState(c.UserContext(), stateID, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Capture values before async logging
-	userID := c.Locals("user_id").(uuid.UUID)
-	ipAddress := c.IP()
-	userAgent := c.Get("User-Agent")
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ipAddress, _ := c.Locals(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := c.Locals(constants.ContextKeys.USER_AGENT).(string)
 
 	// Log the update with old and new values
 	go func() {
@@ -543,30 +544,30 @@ func (h *WorkflowHandler) UpdateState(c *fiber.Ctx) error {
 		}
 
 		oldValue := map[string]interface{}{
-			"name":              oldState.Name,
-			"code":              oldState.Code,
-			"description":       oldState.Description,
-			"state_type":        oldState.StateType,
-			"color":             oldState.Color,
-			"sla_hours":         oldState.SLAHours,
-			"sort_order":        oldState.SortOrder,
-			"is_active":         oldState.IsActive,
-			"position_x":        oldState.PositionX,
-			"position_y":        oldState.PositionY,
-			"viewable_roles":    oldViewableRoleIDs,
+			"name":           oldState.Name,
+			"code":           oldState.Code,
+			"description":    oldState.Description,
+			"state_type":     oldState.StateType,
+			"color":          oldState.Color,
+			"sla_hours":      oldState.SLAHours,
+			"sort_order":     oldState.SortOrder,
+			"is_active":      oldState.IsActive,
+			"position_x":     oldState.PositionX,
+			"position_y":     oldState.PositionY,
+			"viewable_roles": oldViewableRoleIDs,
 		}
 		newValue := map[string]interface{}{
-			"name":              state.Name,
-			"code":              state.Code,
-			"description":       state.Description,
-			"state_type":        state.StateType,
-			"color":             state.Color,
-			"sla_hours":         state.SLAHours,
-			"sort_order":        state.SortOrder,
-			"is_active":         state.IsActive,
-			"position_x":        state.PositionX,
-			"position_y":        state.PositionY,
-			"viewable_roles":    newViewableRoleIDs,
+			"name":           state.Name,
+			"code":           state.Code,
+			"description":    state.Description,
+			"state_type":     state.StateType,
+			"color":          state.Color,
+			"sla_hours":      state.SLAHours,
+			"sort_order":     state.SortOrder,
+			"is_active":      state.IsActive,
+			"position_x":     state.PositionX,
+			"position_y":     state.PositionY,
+			"viewable_roles": newViewableRoleIDs,
 		}
 
 		// Build detailed change description
@@ -615,20 +616,20 @@ func (h *WorkflowHandler) DeleteState(c *fiber.Ctx) error {
 	}
 
 	// Get state details for action logging
-	oldState, err := h.service.GetState(c.Context(), stateID)
+	oldState, err := h.service.GetState(c.UserContext(), stateID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	if err := h.service.DeleteState(c.Context(), stateID); err != nil {
+	if err := h.service.DeleteState(c.UserContext(), stateID); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Log the deletion
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ipAddress, _ := c.Locals(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := c.Locals(constants.ContextKeys.USER_AGENT).(string)
 	go func() {
-		userID := c.Locals("user_id").(uuid.UUID)
-		ipAddress := c.IP()
-		userAgent := c.Get("User-Agent")
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
@@ -639,17 +640,17 @@ func (h *WorkflowHandler) DeleteState(c *fiber.Ctx) error {
 		}
 
 		oldValue := map[string]interface{}{
-			"name":              oldState.Name,
-			"code":              oldState.Code,
-			"description":       oldState.Description,
-			"state_type":        oldState.StateType,
-			"color":             oldState.Color,
-			"sla_hours":         oldState.SLAHours,
-			"sort_order":        oldState.SortOrder,
-			"position_x":        oldState.PositionX,
-			"position_y":        oldState.PositionY,
-			"is_active":         oldState.IsActive,
-			"viewable_roles":    viewableRoleIDs,
+			"name":           oldState.Name,
+			"code":           oldState.Code,
+			"description":    oldState.Description,
+			"state_type":     oldState.StateType,
+			"color":          oldState.Color,
+			"sla_hours":      oldState.SLAHours,
+			"sort_order":     oldState.SortOrder,
+			"position_x":     oldState.PositionX,
+			"position_y":     oldState.PositionY,
+			"is_active":      oldState.IsActive,
+			"viewable_roles": viewableRoleIDs,
 		}
 
 		_ = h.actionLogService.LogAction(ctx, &services.LogActionParams{
@@ -689,16 +690,16 @@ func (h *WorkflowHandler) CreateTransition(c *fiber.Ctx) error {
 		})
 	}
 
-	transition, err := h.service.CreateTransition(c.Context(), workflowID, &req)
+	transition, err := h.service.CreateTransition(c.UserContext(), workflowID, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Log the creation
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ipAddress, _ := c.Locals(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := c.Locals(constants.ContextKeys.USER_AGENT).(string)
 	go func() {
-		userID := c.Locals("user_id").(uuid.UUID)
-		ipAddress := c.IP()
-		userAgent := c.Get("User-Agent")
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
@@ -748,7 +749,7 @@ func (h *WorkflowHandler) ListTransitions(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid workflow ID")
 	}
 
-	transitions, err := h.service.ListTransitions(c.Context(), workflowID)
+	transitions, err := h.service.ListTransitions(c.UserContext(), workflowID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -769,20 +770,20 @@ func (h *WorkflowHandler) UpdateTransition(c *fiber.Ctx) error {
 	}
 
 	// Get old transition for action logging
-	oldTransition, err := h.service.GetTransition(c.Context(), transitionID)
+	oldTransition, err := h.service.GetTransition(c.UserContext(), transitionID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	transition, err := h.service.UpdateTransition(c.Context(), transitionID, &req)
+	transition, err := h.service.UpdateTransition(c.UserContext(), transitionID, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Capture values before async logging
-	userID := c.Locals("user_id").(uuid.UUID)
-	ipAddress := c.IP()
-	userAgent := c.Get("User-Agent")
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ipAddress, _ := c.Locals(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := c.Locals(constants.ContextKeys.USER_AGENT).(string)
 
 	// Log the update with old and new values
 	go func() {
@@ -878,20 +879,20 @@ func (h *WorkflowHandler) DeleteTransition(c *fiber.Ctx) error {
 	}
 
 	// Get transition details for action logging
-	oldTransition, err := h.service.GetTransition(c.Context(), transitionID)
+	oldTransition, err := h.service.GetTransition(c.UserContext(), transitionID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	if err := h.service.DeleteTransition(c.Context(), transitionID); err != nil {
+	if err := h.service.DeleteTransition(c.UserContext(), transitionID); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Log the deletion
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ipAddress, _ := c.Locals(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := c.Locals(constants.ContextKeys.USER_AGENT).(string)
 	go func() {
-		userID := c.Locals("user_id").(uuid.UUID)
-		ipAddress := c.IP()
-		userAgent := c.Get("User-Agent")
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
@@ -959,15 +960,15 @@ func (h *WorkflowHandler) SetTransitionRoles(c *fiber.Ctx) error {
 		roleIDs = append(roleIDs, roleID)
 	}
 
-	if err := h.service.SetTransitionRoles(c.Context(), transitionID, roleIDs); err != nil {
+	if err := h.service.SetTransitionRoles(c.UserContext(), transitionID, roleIDs); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Log the role assignment
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ipAddress, _ := c.Locals(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := c.Locals(constants.ContextKeys.USER_AGENT).(string)
 	go func() {
-		userID := c.Locals("user_id").(uuid.UUID)
-		ipAddress := c.IP()
-		userAgent := c.Get("User-Agent")
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
@@ -1001,15 +1002,15 @@ func (h *WorkflowHandler) SetTransitionRequirements(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if err := h.service.SetTransitionRequirements(c.Context(), transitionID, req.Requirements); err != nil {
+	if err := h.service.SetTransitionRequirements(c.UserContext(), transitionID, req.Requirements); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Log the requirements update
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ipAddress, _ := c.Locals(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := c.Locals(constants.ContextKeys.USER_AGENT).(string)
 	go func() {
-		userID := c.Locals("user_id").(uuid.UUID)
-		ipAddress := c.IP()
-		userAgent := c.Get("User-Agent")
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
@@ -1043,15 +1044,15 @@ func (h *WorkflowHandler) SetTransitionActions(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if err := h.service.SetTransitionActions(c.Context(), transitionID, req.Actions); err != nil {
+	if err := h.service.SetTransitionActions(c.UserContext(), transitionID, req.Actions); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Log the actions update
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ipAddress, _ := c.Locals(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := c.Locals(constants.ContextKeys.USER_AGENT).(string)
 	go func() {
-		userID := c.Locals("user_id").(uuid.UUID)
-		ipAddress := c.IP()
-		userAgent := c.Get("User-Agent")
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
@@ -1085,15 +1086,15 @@ func (h *WorkflowHandler) SetTransitionFieldChanges(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if err := h.service.SetTransitionFieldChanges(c.Context(), transitionID, req.FieldChanges); err != nil {
+	if err := h.service.SetTransitionFieldChanges(c.UserContext(), transitionID, req.FieldChanges); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
 	// Log the field changes update
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ipAddress, _ := c.Locals(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := c.Locals(constants.ContextKeys.USER_AGENT).(string)
 	go func() {
-		userID := c.Locals("user_id").(uuid.UUID)
-		ipAddress := c.IP()
-		userAgent := c.Get("User-Agent")
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
@@ -1122,7 +1123,7 @@ func (h *WorkflowHandler) GetTransitionsFromState(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid state ID")
 	}
 
-	transitions, err := h.service.GetTransitionsFromState(c.Context(), stateID)
+	transitions, err := h.service.GetTransitionsFromState(c.UserContext(), stateID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -1137,7 +1138,7 @@ func (h *WorkflowHandler) GetInitialState(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid workflow ID")
 	}
 
-	state, err := h.service.GetInitialState(c.Context(), workflowID)
+	state, err := h.service.GetInitialState(c.UserContext(), workflowID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Initial state not found")
 	}
@@ -1157,7 +1158,7 @@ func (h *WorkflowHandler) MatchWorkflow(c *fiber.Ctx) error {
 		req = models.WorkflowMatchRequest{}
 	}
 
-	result, err := h.service.MatchWorkflow(c.Context(), &req)
+	result, err := h.service.MatchWorkflow(c.UserContext(), &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -1173,7 +1174,7 @@ func (h *WorkflowHandler) ExportWorkflow(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	jsonBytes, filename, err := h.service.ExportWorkflow(c.Context(), id)
+	jsonBytes, filename, err := h.service.ExportWorkflow(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -1219,10 +1220,10 @@ func (h *WorkflowHandler) ImportWorkflow(c *fiber.Ctx) error {
 	}
 
 	// Get user ID from context
-	userID := c.Locals("user_id").(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
 	// Import workflow
-	workflow, warnings, err := h.service.ImportWorkflow(c.Context(), &importData, userID)
+	workflow, warnings, err := h.service.ImportWorkflow(c.UserContext(), &importData, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -1247,4 +1248,3 @@ func getChangedFields(changes map[string]interface{}) string {
 	}
 	return strings.Join(fields, ", ")
 }
-

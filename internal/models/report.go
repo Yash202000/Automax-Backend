@@ -125,7 +125,7 @@ type ReportExecuteRequest struct {
 // ReportExportRequest is used for exporting reports
 type ReportExportRequest struct {
 	DataSource string               `json:"data_source" validate:"required,oneof=incidents action_logs users workflows departments locations classifications request"`
-	Columns    []string             `json:"columns" validate:"required,min=1"`
+	Columns    []ColumnField        `json:"columns" validate:"required,min=1"`
 	Filters    []ReportFilterConfig `json:"filters"`
 	Sorting    []ReportSortConfig   `json:"sorting"`
 	Format     string               `json:"format" validate:"required,oneof=xlsx pdf json"`
@@ -141,7 +141,7 @@ type ReportExportOptions struct {
 // ReportQueryRequest is used for ad-hoc report queries without saving
 type ReportQueryRequest struct {
 	DataSource string               `json:"data_source" validate:"required"`
-	Columns    []string             `json:"columns" validate:"required,min=1"`
+	Columns    []ColumnField        `json:"columns" validate:"required,min=1"`
 	Filters    []ReportFilterConfig `json:"filters"`
 	Sorting    []ReportSortConfig   `json:"sorting"`
 	Page       int                  `json:"page"`
@@ -225,7 +225,7 @@ type ReportResultResponse struct {
 type ReportQueryResponse struct {
 	Success    bool                     `json:"success"`
 	Data       []map[string]interface{} `json:"data"`
-	Columns    []string                 `json:"columns"`
+	Columns    []ColumnField            `json:"columns"`
 	TotalItems int64                    `json:"total_items"`
 	TotalPages int                      `json:"total_pages"`
 	Page       int                      `json:"page"`
@@ -239,6 +239,10 @@ type UserBasicResponse struct {
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
 	Avatar    string `json:"avatar,omitempty"`
+}
+type ColumnField struct {
+	Label string `json:"label"`
+	Field string `json:"field"`
 }
 
 // DataSource metadata for frontend

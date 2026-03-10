@@ -50,7 +50,7 @@ func (h *ActionLogHandler) ListActionLogs(c *fiber.Ctx) error {
 		filter.Limit = 20
 	}
 
-	logs, total, err := h.service.ListActionLogs(c.Context(), filter)
+	logs, total, err := h.service.ListActionLogs(c.UserContext(), filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -75,7 +75,7 @@ func (h *ActionLogHandler) GetActionLog(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid action log ID")
 	}
 
-	log, err := h.service.GetActionLog(c.Context(), id)
+	log, err := h.service.GetActionLog(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Action log not found")
 	}
@@ -85,7 +85,7 @@ func (h *ActionLogHandler) GetActionLog(c *fiber.Ctx) error {
 
 // GetStats handles GET /admin/action-logs/stats
 func (h *ActionLogHandler) GetStats(c *fiber.Ctx) error {
-	stats, err := h.service.GetStats(c.Context())
+	stats, err := h.service.GetStats(c.UserContext())
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -95,7 +95,7 @@ func (h *ActionLogHandler) GetStats(c *fiber.Ctx) error {
 
 // GetFilterOptions handles GET /admin/action-logs/filter-options
 func (h *ActionLogHandler) GetFilterOptions(c *fiber.Ctx) error {
-	options, err := h.service.GetFilterOptions(c.Context())
+	options, err := h.service.GetFilterOptions(c.UserContext())
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -114,7 +114,7 @@ func (h *ActionLogHandler) GetUserActions(c *fiber.Ctx) error {
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit, _ := strconv.Atoi(c.Query("limit", "20"))
 
-	logs, total, err := h.service.GetUserActions(c.Context(), userID, page, limit)
+	logs, total, err := h.service.GetUserActions(c.UserContext(), userID, page, limit)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -138,7 +138,7 @@ func (h *ActionLogHandler) CleanupOldLogs(c *fiber.Ctx) error {
 		retentionDays = 7 // Minimum 7 days retention
 	}
 
-	deleted, err := h.service.CleanupOldLogs(c.Context(), retentionDays)
+	deleted, err := h.service.CleanupOldLogs(c.UserContext(), retentionDays)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -164,7 +164,7 @@ func (h *ActionLogHandler) ExportActionLogs(c *fiber.Ctx) error {
 		})
 	}
 
-	logs, _, err := h.service.ListActionLogs(c.Context(), &filter)
+	logs, _, err := h.service.ListActionLogs(c.UserContext(), &filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
