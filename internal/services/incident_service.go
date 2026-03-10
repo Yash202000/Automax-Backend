@@ -180,11 +180,6 @@ func (s *incidentService) calculateSLADeadline(ctx context.Context, classificati
 // Incident CRUD
 
 func (s *incidentService) CreateIncident(ctx context.Context, req *models.IncidentCreateRequest, reporterID uuid.UUID) (*models.IncidentResponse, error) {
-	// Comment is mandatory on incident creation
-	if strings.TrimSpace(req.Comment) == "" {
-		return nil, errors.New("comment is required")
-	}
-
 	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
 
 	if strings.EqualFold(clientCode, "EPM940") {
