@@ -215,13 +215,9 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		status = "sent"
 
 		for _, phone := range to {
-
-			err := utils.SendWhatsApp(phone, body)
-
+			err := utils.SendOTPWithMetaTemplate(phone, body)
 			if err != nil {
-
 				status = "failed"
-
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
 					Channel:      phone,
 					Type:         "to",
@@ -244,7 +240,6 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 
 	case "notification":
 		// In-app only — no external delivery. Recipients must be internal user emails.
-		// The inbox copies are created in the loop below (ReceivedBy lookup by email).
 		status = "sent"
 		provider = "in-app"
 		for _, recipient := range to {
