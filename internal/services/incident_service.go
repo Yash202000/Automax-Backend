@@ -385,6 +385,19 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		break // Success, exit retry loop
 	}
 
+	// Save creation comment
+	if strings.TrimSpace(req.Comment) != "" {
+		comment := &models.IncidentComment{
+			IncidentID: incident.ID,
+			AuthorID:   reporterID,
+			Content:    strings.TrimSpace(req.Comment),
+			IsInternal: false,
+		}
+		if err := s.incidentRepo.CreateComment(ctx, comment); err != nil {
+			fmt.Printf("Warning: failed to save creation comment: %v\n", err)
+		}
+	}
+
 	// Set lookup values using Association API (GORM many-to-many requires this after create)
 	if len(req.LookupValueIDs) > 0 {
 		var lookupValues []models.LookupValue
