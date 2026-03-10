@@ -330,6 +330,7 @@ type IncidentRevisionFilter struct {
 type IncidentCreateRequest struct {
 	Title              string                 `json:"title" validate:"required,min=5,max=200"`
 	Description        string                 `json:"description" validate:"omitempty,max=1000"`
+	Comment            string                 `json:"comment" validate:"omitempty,max=2000"`
 	ClassificationID   *string                `json:"classification_id" validate:"omitempty,uuid"`
 	WorkflowID         string                 `json:"workflow_id" validate:"required,uuid"`
 	Source             string                 `json:"source" validate:"omitempty,max=100"`
