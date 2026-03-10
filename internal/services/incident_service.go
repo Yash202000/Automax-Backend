@@ -182,7 +182,7 @@ func (s *incidentService) calculateSLADeadline(ctx context.Context, classificati
 func (s *incidentService) CreateIncident(ctx context.Context, req *models.IncidentCreateRequest, reporterID uuid.UUID) (*models.IncidentResponse, error) {
 	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
 
-	if strings.EqualFold(clientCode, "EPM940") {
+	if strings.EqualFold(clientCode, "EPM940") && !strings.EqualFold(req.Source, "viusional") {
 		// Check if the incoming request has latitude, longitude, and classification
 		if req.Latitude != nil && req.Longitude != nil && req.ClassificationID != nil {
 			classificationID, err := uuid.Parse(*req.ClassificationID)
@@ -1815,6 +1815,31 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		if req.UserID != nil && *req.UserID != "" {
 			userAssignID, err := uuid.Parse(*req.UserID)
 			if err == nil {
+				// Validate selected user matches incident's location, classification, and department
+				var classificationID, locationID, departmentID *uuid.UUID
+				if incident.ClassificationID != nil {
+					classificationID = incident.ClassificationID
+				}
+				if incident.LocationID != nil {
+					locationID = incident.LocationID
+				}
+				if incident.DepartmentID != nil {
+					departmentID = incident.DepartmentID
+				}
+				matchedUsers, matchErr := s.userRepo.FindMatching(ctx, transition.AssignmentRoleID, classificationID, locationID, departmentID, nil)
+				if matchErr == nil {
+					found := false
+					for _, mu := range matchedUsers {
+						if mu.ID == userAssignID {
+							found = true
+							break
+						}
+					}
+					if !found {
+						tx.Rollback()
+						return nil, errors.New("selected user does not belong to the incident's assigned location, classification, or department")
+					}
+				}
 				updates["assignee_id"] = userAssignID
 				assigneeUserIDs = append(assigneeUserIDs, userAssignID)
 			}
