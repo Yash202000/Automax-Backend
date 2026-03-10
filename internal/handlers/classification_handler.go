@@ -515,6 +515,14 @@ func (h *ClassificationHandler) UpdateCriticality(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
+	// Validate request
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
 	criticality, err := h.repo.GetCriticalityByID(c.Context(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Classification criticality not found")
