@@ -405,6 +405,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		return nil, err
 	}
 
+	// Create initial revision to log incident creation
 	description := fmt.Sprintf("%s %s created", recordType, incidentNumber)
 	_ = s.CreateRevision(ctx, incident.ID, models.RevisionActionCreated, description, nil, reporterID)
 

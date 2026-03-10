@@ -137,6 +137,7 @@ type ClassificationWithStats struct {
 }
 
 // ClassificationCriticalityCreateRequest for creating classification criticality settings
+// MaxClosingHours: 5 weeks = 840 hours maximum
 type ClassificationCriticalityCreateRequest struct {
 	CriticalityID     string `json:"criticality_id" validate:"required,uuid"`
 	MaxClosingHours   int    `json:"max_closing_hours" validate:"required,min=0,max=840"` // Max 35 days
@@ -144,6 +145,7 @@ type ClassificationCriticalityCreateRequest struct {
 }
 
 // ClassificationCriticalityUpdateRequest for updating classification criticality settings
+// MaxClosingHours: 5 weeks = 840 hours maximum
 type ClassificationCriticalityUpdateRequest struct {
 	MaxClosingHours   *int  `json:"max_closing_hours" validate:"omitempty,min=0,max=840"`
 	MaxClosingMinutes *int  `json:"max_closing_minutes" validate:"omitempty,min=0,max=59"`
