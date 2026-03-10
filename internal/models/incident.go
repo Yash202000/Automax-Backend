@@ -481,6 +481,7 @@ type BulkConvertToRequestItem struct {
 	IncidentID        string `json:"incident_id" validate:"required,uuid"`
 	TransitionID      string `json:"transition_id" validate:"omitempty,uuid"`
 	TransitionComment string `json:"transition_comment"`
+	Feedback          *IncidentFeedbackRequest `json:"feedback"`
 }
 
 // BulkConvertToRequestRequest for bulk conversion of incidents to requests
@@ -492,6 +493,10 @@ type BulkConvertToRequestRequest struct {
 	DepartmentID     *string                    `json:"department_id" validate:"omitempty,uuid"`
 	DueDate          *string                    `json:"due_date"`
 	Items            []BulkConvertToRequestItem `json:"items" validate:"omitempty,dive"`
+	// Optional: convert to an existing request instead of creating a new one
+	ExistingRequestID  *string                  `json:"existing_request_id" validate:"omitempty,uuid"`
+	// Required feedback for the conversion
+	Feedback           *IncidentFeedbackRequest `json:"feedback" validate:"required_without=ExistingRequestID"`
 }
 
 // BulkConvertToRequestResult represents the result of a single conversion in bulk operation
