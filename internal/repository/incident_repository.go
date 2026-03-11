@@ -615,7 +615,7 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 		return nil, err
 	}
 
-	// Count by state
+	// Counts by state
 	type stateCount struct {
 		StateID   uuid.UUID `gorm:"column:state_id"`
 		StateName string    `gorm:"column:state_name"`
