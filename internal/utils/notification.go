@@ -17,6 +17,90 @@ import (
 	openapi "github.com/twilio/twilio-go/rest/api/v2010"
 )
 
+func SendOTPWithMetaTemplate(phone string, otp string) error {
+	metaURL := os.Getenv("OTP_TEMPLATE_URL")
+	accessToken := os.Getenv("OTP_TEMPLATE_ACCESS_TOKEN")
+
+	if metaURL == "" {
+		return fmt.Errorf("whatsapp config error: OTP_TEMPLATE_URL not set")
+	}
+
+	if accessToken == "" {
+		return fmt.Errorf("whatsapp config error: OTP_TEMPLATE_ACCESS_TOKEN not set")
+	}
+
+	// Template payload
+	payload := map[string]interface{}{
+		"messaging_product": "whatsapp",
+		"recipient_type":    "individual",
+		"to":                phone,
+		"type":              "template",
+		"template": map[string]interface{}{
+			"name": "otp_code",
+			"language": map[string]interface{}{
+				"code": "en_US",
+			},
+			"components": []map[string]interface{}{
+				{
+					"type": "body",
+					"parameters": []map[string]interface{}{
+						{
+							"type": "text",
+							"text": otp,
+						},
+					},
+				},
+				{
+					"type":     "button",
+					"sub_type": "url",
+					"index":    "0",
+					"parameters": []map[string]interface{}{
+						{
+							"type": "text",
+							"text": "123456",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("whatsapp payload marshal failed: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", metaURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("whatsapp request creation failed: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("whatsapp network error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"whatsapp http error (%d): %s",
+		resp.StatusCode,
+		string(bodyBytes),
+	)
+}
+
 func SendWhatsApp(phone string, message string) error {
 
 	metaURL := os.Getenv("METAURL")
@@ -108,43 +192,6 @@ func SendWhatsApp(phone string, message string) error {
 		string(bodyBytes),
 	)
 }
-
-// // WhatsApp Service
-// func SendWhatsApp(phone string, message string) error {
-
-// 	payload := map[string]interface{}{
-// 		"messaging_product": "whatsapp",
-// 		"recipient_type":    "individual",
-// 		"to":                phone,
-// 		"type":              "text",
-// 		"text": map[string]interface{}{
-// 			"preview_url": false,
-// 			"body":        message,
-// 		},
-// 	}
-
-// 	jsonData, _ := json.Marshal(payload)
-
-// 	req, err := http.NewRequest("POST", os.Getenv("METAURL"), bytes.NewBuffer(jsonData))
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	req.Header.Set("Content-Type", "application/json")
-// 	req.Header.Set("Authorization", "Bearer "+os.Getenv("META_ACCESS_TOKEN"))
-// 	client := &http.Client{}
-// 	resp, err := client.Do(req)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	defer resp.Body.Close()
-// 	if resp.StatusCode >= 300 {
-// 		bodyBytes, _ := io.ReadAll(resp.Body)
-// 		return fmt.Errorf("whatsapp send failed: %s", string(bodyBytes))
-// 	}
-
-// 	return nil
-// }
 
 // SendSMTPWithCCBCC sends email with TO, CC, BCC, and attachments support
 func SendSMTPWithCCBCC(to []string, cc []string, bcc []string, subject, body string, attachments []models.AttachmentData) (models.RecipientArray, error) {

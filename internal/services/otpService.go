@@ -178,37 +178,16 @@ func (s *OTPService) SendOTP(
 
 func (s *OTPService) sendOTPNotification(ctx context.Context, channel, phone, otp string, sessionID *uuid.UUID) error {
 
-	body := fmt.Sprintf("Your OTP is %s", otp)
-
-	_, err := s.notificationService.SendNotification(
-		ctx,
-		channel,
-		nil, // no template
-		"en",
-		[]string{phone},
-		nil,
-		nil,
-		"",
-		body,
-		nil,
-		nil,
-		nil,
-		sessionID,
-	)
-	fmt.Println("ERR INTO SERVICE11", err)
-
+	body := (otp)
+	_, err := s.notificationService.SendNotification(ctx, channel, nil, "en", []string{phone}, nil, nil, "", body, nil, nil, nil, sessionID)
+	if err != nil {
+		return fmt.Errorf("ERR INTO WHATSAPP SERVICE: %w", err)
+	}
 	return err
 }
 
-func (s *OTPService) VerifyOTP(
-	ctx context.Context,
-	phone string,
-	sessionID string,
-	inputOTP string,
-) error {
-
+func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID string, inputOTP string) error {
 	key := "otp:" + phone + "--" + sessionID
-
 	val, err := s.redis.Get(ctx, key).Result()
 	if err != nil {
 		return fmt.Errorf("otp expired or invalid session")
@@ -241,11 +220,8 @@ func (s *OTPService) VerifyOTP(
 
 	// Check OTP match
 	if data.Hash != HashOTP(inputOTP) {
-
 		data.Attempts++
-
 		updatedData, _ := json.Marshal(data)
-
 		ttl, _ := s.redis.TTL(ctx, key).Result()
 
 		// Update attempts but keep original TTL
@@ -253,7 +229,6 @@ func (s *OTPService) VerifyOTP(
 
 		return fmt.Errorf("invalid otp")
 	}
-
 	// UPDATE DB
 	err = s.notificationLogRepo.MarkOTPVerified(ctx, sessionID, time.Now())
 	if err != nil {
