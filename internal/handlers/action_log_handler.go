@@ -34,8 +34,7 @@ func (h *ActionLogHandler) ListActionLogs(c *fiber.Ctx) error {
 		log.Printf("Error parsing query parameters: %v", err)
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
 	}
-
-	if validationErrors := validation.ValidateStruct(c.UserContext(), &filter); len(validationErrors) != 0 {
+	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
 			"errors":  validationErrors,
