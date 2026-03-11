@@ -202,7 +202,12 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		query = query.Where("classification_id IN ?", filter.ClassificationID)
 	}
 	if filter.Priority != nil {
-		query = query.Where("priority = ?", *filter.Priority)
+		query = query.Where(`incidents.id IN (
+			SELECT ilv.incident_id FROM incident_lookup_values ilv
+			INNER JOIN lookup_values lv ON lv.id = ilv.lookup_value_id
+			INNER JOIN lookup_categories lc ON lc.id = lv.category_id
+			WHERE lc.code = 'PRIORITY' AND lv.sort_order = ?
+		)`, *filter.Priority)
 	}
 	if len(filter.AssigneeID) != 0 {
 		if len(filter.AssigneeID) == 1 {
