@@ -708,6 +708,10 @@ func (h *WorkflowHandler) CreateTransition(c *fiber.Ctx) error {
 		for _, r := range transition.AllowedRoles {
 			allowedRoleIDs = append(allowedRoleIDs, r.ID.String())
 		}
+		var assignmentRoleIDs []string
+		for _, r := range transition.AssignmentRoles {
+			assignmentRoleIDs = append(assignmentRoleIDs, r.ID.String())
+		}
 
 		newValue := map[string]interface{}{
 			"name":                   transition.Name,
@@ -721,7 +725,7 @@ func (h *WorkflowHandler) CreateTransition(c *fiber.Ctx) error {
 			"assign_department_id":   transition.AssignDepartmentID,
 			"auto_detect_department": transition.AutoDetectDepartment,
 			"assign_user_id":         transition.AssignUserID,
-			"assignment_role_id":     transition.AssignmentRoleID,
+			"assignment_role_ids":    assignmentRoleIDs,
 			"auto_match_user":        transition.AutoMatchUser,
 			"manual_select_user":     transition.ManualSelectUser,
 		}
@@ -798,6 +802,13 @@ func (h *WorkflowHandler) UpdateTransition(c *fiber.Ctx) error {
 		for _, r := range transition.AllowedRoles {
 			newAllowedRoleIDs = append(newAllowedRoleIDs, r.ID.String())
 		}
+		var oldAssignmentRoleIDs, newAssignmentRoleIDs []string
+		for _, r := range oldTransition.AssignmentRoles {
+			oldAssignmentRoleIDs = append(oldAssignmentRoleIDs, r.ID.String())
+		}
+		for _, r := range transition.AssignmentRoles {
+			newAssignmentRoleIDs = append(newAssignmentRoleIDs, r.ID.String())
+		}
 
 		oldValue := map[string]interface{}{
 			"name":                   oldTransition.Name,
@@ -811,7 +822,7 @@ func (h *WorkflowHandler) UpdateTransition(c *fiber.Ctx) error {
 			"assign_department_id":   oldTransition.AssignDepartmentID,
 			"auto_detect_department": oldTransition.AutoDetectDepartment,
 			"assign_user_id":         oldTransition.AssignUserID,
-			"assignment_role_id":     oldTransition.AssignmentRoleID,
+			"assignment_role_ids":    oldAssignmentRoleIDs,
 			"auto_match_user":        oldTransition.AutoMatchUser,
 			"manual_select_user":     oldTransition.ManualSelectUser,
 		}
@@ -827,7 +838,7 @@ func (h *WorkflowHandler) UpdateTransition(c *fiber.Ctx) error {
 			"assign_department_id":   transition.AssignDepartmentID,
 			"auto_detect_department": transition.AutoDetectDepartment,
 			"assign_user_id":         transition.AssignUserID,
-			"assignment_role_id":     transition.AssignmentRoleID,
+			"assignment_role_ids":    newAssignmentRoleIDs,
 			"auto_match_user":        transition.AutoMatchUser,
 			"manual_select_user":     transition.ManualSelectUser,
 		}
@@ -839,7 +850,7 @@ func (h *WorkflowHandler) UpdateTransition(c *fiber.Ctx) error {
 			"from_state_id": "From State", "to_state_id": "To State",
 			"sort_order": "Sort Order", "is_active": "Is Active", "allowed_roles": "Roles",
 			"assign_department_id": "Assign Department", "auto_detect_department": "Auto Detect Dept",
-			"assign_user_id": "Assign User", "assignment_role_id": "Assignment Role",
+			"assign_user_id": "Assign User", "assignment_role_ids": "Assignment Roles",
 			"auto_match_user": "Auto Match User", "manual_select_user": "Manual Select User",
 		}
 
@@ -901,6 +912,10 @@ func (h *WorkflowHandler) DeleteTransition(c *fiber.Ctx) error {
 		for _, r := range oldTransition.AllowedRoles {
 			allowedRoleIDs = append(allowedRoleIDs, r.ID.String())
 		}
+		var assignmentRoleIDs []string
+		for _, r := range oldTransition.AssignmentRoles {
+			assignmentRoleIDs = append(assignmentRoleIDs, r.ID.String())
+		}
 
 		oldValue := map[string]interface{}{
 			"name":                   oldTransition.Name,
@@ -914,7 +929,7 @@ func (h *WorkflowHandler) DeleteTransition(c *fiber.Ctx) error {
 			"assign_department_id":   oldTransition.AssignDepartmentID,
 			"auto_detect_department": oldTransition.AutoDetectDepartment,
 			"assign_user_id":         oldTransition.AssignUserID,
-			"assignment_role_id":     oldTransition.AssignmentRoleID,
+			"assignment_role_ids":    assignmentRoleIDs,
 			"auto_match_user":        oldTransition.AutoMatchUser,
 			"manual_select_user":     oldTransition.ManualSelectUser,
 		}

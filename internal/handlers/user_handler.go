@@ -398,14 +398,18 @@ func (h *UserHandler) MatchUsers(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	var roleID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID
+	var classificationID, locationID, departmentID, excludeUserID *uuid.UUID
+	var roleIDs []uuid.UUID
 
-	if req.RoleID != nil && *req.RoleID != "" {
-		id, err := uuid.Parse(*req.RoleID)
-		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid role_id")
+	for _, idStr := range req.RoleIDs {
+		if idStr == "" {
+			continue
 		}
-		roleID = &id
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid role_id: "+idStr)
+		}
+		roleIDs = append(roleIDs, id)
 	}
 
 	if req.ClassificationID != nil && *req.ClassificationID != "" {
@@ -440,7 +444,7 @@ func (h *UserHandler) MatchUsers(c *fiber.Ctx) error {
 		excludeUserID = &id
 	}
 
-	users, err := h.userService.FindMatchingUsers(c.UserContext(), roleID, classificationID, locationID, departmentID, excludeUserID)
+	users, err := h.userService.FindMatchingUsers(c.UserContext(), roleIDs, classificationID, locationID, departmentID, excludeUserID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}

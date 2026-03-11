@@ -180,11 +180,11 @@ type ChangePasswordRequest struct {
 
 // UserMatchRequest for finding users that match given criteria
 type UserMatchRequest struct {
-	RoleID           *string `json:"role_id" validate:"omitempty,uuid"`
-	ClassificationID *string `json:"classification_id" validate:"omitempty,uuid"`
-	LocationID       *string `json:"location_id" validate:"omitempty,uuid"`
-	DepartmentID     *string `json:"department_id" validate:"omitempty,uuid"`
-	ExcludeUserID    *string `json:"exclude_user_id" validate:"omitempty,uuid"` // Exclude current assignee
+	RoleIDs          []string `json:"role_ids"`
+	ClassificationID *string  `json:"classification_id" validate:"omitempty,uuid"`
+	LocationID       *string  `json:"location_id" validate:"omitempty,uuid"`
+	DepartmentID     *string  `json:"department_id" validate:"omitempty,uuid"`
+	ExcludeUserID    *string  `json:"exclude_user_id" validate:"omitempty,uuid"` // Exclude current assignee
 }
 
 // UserMatchResponse for returning matched users

@@ -85,6 +85,7 @@ type incidentService struct {
 	incidentMergeRepo   repository.IncidentMergeRepository
 	workflowRepo        repository.WorkflowRepository
 	userRepo            repository.UserRepository
+	deptRepo            repository.DepartmentRepository
 	rejectionLogRepo    repository.RejectionLogRepository
 	classificationRepo  repository.ClassificationRepository
 	storage             *storage.MinIOStorage
@@ -98,6 +99,7 @@ func NewIncidentService(
 	incidentMergeRepo repository.IncidentMergeRepository,
 	workflowRepo repository.WorkflowRepository,
 	userRepo repository.UserRepository,
+	deptRepo repository.DepartmentRepository,
 	classificationRepo repository.ClassificationRepository,
 	rejectionLogRepo repository.RejectionLogRepository,
 	storage *storage.MinIOStorage,
@@ -109,6 +111,7 @@ func NewIncidentService(
 		incidentMergeRepo:  incidentMergeRepo,
 		workflowRepo:       workflowRepo,
 		userRepo:           userRepo,
+		deptRepo:           deptRepo,
 		rejectionLogRepo:   rejectionLogRepo,
 		classificationRepo: classificationRepo,
 		storage:            storage,
@@ -1795,57 +1798,94 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	if transition.AssignDepartmentID != nil {
 		// Static department assignment
 		updates["department_id"] = *transition.AssignDepartmentID
-	} else if transition.AutoDetectDepartment && req.DepartmentID != nil && *req.DepartmentID != "" {
-		// Auto-detect with user selection
-		deptID, err := uuid.Parse(*req.DepartmentID)
-		if err == nil {
+	} else if transition.AutoDetectDepartment {
+		// Auto-detect: check how many departments match
+		var classID, locID *uuid.UUID
+		if incident.ClassificationID != nil {
+			classID = incident.ClassificationID
+		}
+		if incident.LocationID != nil {
+			locID = incident.LocationID
+		}
+		var deptTypeFilter *string
+		if transition.DepartmentTypeFilter != "" {
+			deptTypeFilter = &transition.DepartmentTypeFilter
+		}
+		matchedDepts, _ := s.deptRepo.FindMatching(ctx, classID, locID, deptTypeFilter)
+
+		if len(matchedDepts) == 1 {
+			// Single match — auto-assign
+			updates["department_id"] = matchedDepts[0].ID
+		} else if len(matchedDepts) > 1 {
+			// Multiple matches — user must have selected one
+			if req.DepartmentID == nil || *req.DepartmentID == "" {
+				tx.Rollback()
+				return nil, errors.New("department selection is required for this transition")
+			}
+			deptID, err := uuid.Parse(*req.DepartmentID)
+			if err != nil {
+				tx.Rollback()
+				return nil, errors.New("invalid department_id")
+			}
 			updates["department_id"] = deptID
 		}
+		// If no departments match, keep current department (graceful fallback)
 	}
 
 	// Handle user assignment from transition settings
 	var assigneeUserIDs []uuid.UUID
 
+	// Build assignment role IDs slice from the many-to-many relation
+	var assignmentRoleIDs []uuid.UUID
+	for _, r := range transition.AssignmentRoles {
+		assignmentRoleIDs = append(assignmentRoleIDs, r.ID)
+	}
+
 	if transition.AssignUserID != nil {
 		// Static user assignment - single user
 		updates["assignee_id"] = *transition.AssignUserID
 		assigneeUserIDs = append(assigneeUserIDs, *transition.AssignUserID)
-	} else if transition.ManualSelectUser && transition.AssignmentRoleID != nil {
-		// Manual selection mode - user must select from dropdown
-		if req.UserID != nil && *req.UserID != "" {
-			userAssignID, err := uuid.Parse(*req.UserID)
-			if err == nil {
-				// Validate selected user matches incident's location, classification, and department
-				var classificationID, locationID, departmentID *uuid.UUID
-				if incident.ClassificationID != nil {
-					classificationID = incident.ClassificationID
+	} else if transition.ManualSelectUser && len(assignmentRoleIDs) > 0 {
+		// Manual selection mode - operator selects one or more users from the list
+		var classificationID, locationID, departmentID *uuid.UUID
+		if incident.ClassificationID != nil {
+			classificationID = incident.ClassificationID
+		}
+		if incident.LocationID != nil {
+			locationID = incident.LocationID
+		}
+		if incident.DepartmentID != nil {
+			departmentID = incident.DepartmentID
+		}
+		availableUsers, _ := s.userRepo.FindMatching(ctx, assignmentRoleIDs, classificationID, locationID, departmentID, nil)
+
+		if len(availableUsers) > 0 {
+			if len(req.UserIDs) == 0 {
+				tx.Rollback()
+				return nil, errors.New("user selection is required for this transition")
+			}
+			// Build a lookup set of valid user IDs
+			validUserIDs := make(map[uuid.UUID]bool, len(availableUsers))
+			for _, u := range availableUsers {
+				validUserIDs[u.ID] = true
+			}
+			for _, rawID := range req.UserIDs {
+				userAssignID, err := uuid.Parse(rawID)
+				if err != nil {
+					tx.Rollback()
+					return nil, errors.New("invalid user_id: " + rawID)
 				}
-				if incident.LocationID != nil {
-					locationID = incident.LocationID
+				if !validUserIDs[userAssignID] {
+					tx.Rollback()
+					return nil, errors.New("selected user does not belong to the incident's assigned location, classification, or department")
 				}
-				if incident.DepartmentID != nil {
-					departmentID = incident.DepartmentID
-				}
-				matchedUsers, matchErr := s.userRepo.FindMatching(ctx, transition.AssignmentRoleID, classificationID, locationID, departmentID, nil)
-				if matchErr == nil {
-					found := false
-					for _, mu := range matchedUsers {
-						if mu.ID == userAssignID {
-							found = true
-							break
-						}
-					}
-					if !found {
-						tx.Rollback()
-						return nil, errors.New("selected user does not belong to the incident's assigned location, classification, or department")
-					}
-				}
-				updates["assignee_id"] = userAssignID
 				assigneeUserIDs = append(assigneeUserIDs, userAssignID)
 			}
+			// Primary assignee is the first selected user
+			updates["assignee_id"] = assigneeUserIDs[0]
 		}
-		// If no user selected, keep current assignee (don't fail the transition)
-	} else if transition.AutoMatchUser && transition.AssignmentRoleID != nil {
+		// If no users match the criteria, keep current assignee (graceful fallback)
+	} else if transition.AutoMatchUser && len(assignmentRoleIDs) > 0 {
 		// Auto-match mode - find ALL matching users and assign to all of them
 		var classificationID, locationID, departmentID, excludeUserID *uuid.UUID
 		if incident.ClassificationID != nil {
@@ -1862,7 +1902,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		}
 
 		// First try matching with all criteria
-		matchedUsers, err := s.userRepo.FindMatching(ctx, transition.AssignmentRoleID, classificationID, locationID, departmentID, excludeUserID)
+		matchedUsers, err := s.userRepo.FindMatching(ctx, assignmentRoleIDs, classificationID, locationID, departmentID, excludeUserID)
 		if err == nil && len(matchedUsers) > 0 {
 			for _, user := range matchedUsers {
 				assigneeUserIDs = append(assigneeUserIDs, user.ID)
@@ -1870,7 +1910,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			updates["assignee_id"] = matchedUsers[0].ID
 		} else if err == nil && len(matchedUsers) == 0 {
 			// No exact matches - try matching by role only (more permissive)
-			roleOnlyUsers, roleErr := s.userRepo.FindMatching(ctx, transition.AssignmentRoleID, nil, nil, nil, excludeUserID)
+			roleOnlyUsers, roleErr := s.userRepo.FindMatching(ctx, assignmentRoleIDs, nil, nil, nil, excludeUserID)
 			if roleErr == nil && len(roleOnlyUsers) > 0 {
 				for _, user := range roleOnlyUsers {
 					assigneeUserIDs = append(assigneeUserIDs, user.ID)

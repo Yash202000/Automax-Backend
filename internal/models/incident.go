@@ -383,8 +383,8 @@ type IncidentTransitionRequest struct {
 	Feedback *IncidentFeedbackRequest `json:"feedback"`
 
 	// Assignment overrides (used when auto-detect finds multiple matches)
-	DepartmentID *string `json:"department_id" validate:"omitempty,uuid"`
-	UserID       *string `json:"user_id" validate:"omitempty,uuid"`
+	DepartmentID *string  `json:"department_id" validate:"omitempty,uuid"`
+	UserIDs      []string `json:"user_ids"`
 
 	// Field changes configured on the transition (user-editable fields during transition)
 	// Keys: "priority", "department_id", "location_id", "classification_id", "title", "description"

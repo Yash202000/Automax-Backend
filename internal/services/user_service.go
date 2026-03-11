@@ -34,7 +34,7 @@ type UserService interface {
 	GetUserByID(ctx context.Context, userID uuid.UUID) (*models.UserResponse, error)
 	GetUserByEmail(ctx context.Context, email string) (*models.User, error)
 	GetUserByUsername(ctx context.Context, username string) (*models.User, error)
-	FindMatchingUsers(ctx context.Context, roleID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.UserResponse, error)
+	FindMatchingUsers(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.UserResponse, error)
 	UpdateUserCallStatus(ctx context.Context, extension string, status string) (interface{}, error)
 	FindByExtension(ctx context.Context, extension string) (*models.User, error)
 	UpdateProfile(ctx context.Context, req *models.UserUpdateRequest) (*models.UserResponse, error)
@@ -949,8 +949,8 @@ func (s *userService) GetUserByID(ctx context.Context, userID uuid.UUID) (*model
 	return &response, nil
 }
 
-func (s *userService) FindMatchingUsers(ctx context.Context, roleID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.UserResponse, error) {
-	users, err := s.userRepo.FindMatching(ctx, roleID, classificationID, locationID, departmentID, excludeUserID)
+func (s *userService) FindMatchingUsers(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.UserResponse, error) {
+	users, err := s.userRepo.FindMatching(ctx, roleIDs, classificationID, locationID, departmentID, excludeUserID)
 	if err != nil {
 		return nil, err
 	}

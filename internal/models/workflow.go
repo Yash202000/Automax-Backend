@@ -130,11 +130,10 @@ type WorkflowTransition struct {
 	// User Assignment
 	AssignUserID     *uuid.UUID `gorm:"type:uuid" json:"assign_user_id"`
 	AssignUser       *User      `gorm:"foreignKey:AssignUserID" json:"assign_user,omitempty"`
-	AssignmentRoleID *uuid.UUID `gorm:"type:uuid" json:"assignment_role_id"`
-	AssignmentRole   *Role      `gorm:"foreignKey:AssignmentRoleID" json:"assignment_role,omitempty"`
+	AssignmentRoles  []Role     `gorm:"many2many:transition_assignment_roles;" json:"assignment_roles,omitempty"`
 	AutoMatchUser    bool       `gorm:"default:false" json:"auto_match_user"`
-	// If auto_match_user=true with assignment_role_id:
-	//   Find users with that role + matching incident's classification/location/department
+	// If auto_match_user=true with assignment_roles:
+	//   Find users with any of those roles + matching incident's classification/location/department
 	//   If multiple match: assign to ALL matched users
 	ManualSelectUser bool `gorm:"default:false" json:"manual_select_user"`
 	// If manual_select_user=true: user performing transition manually selects the assignee from dropdown
@@ -318,10 +317,10 @@ type WorkflowTransitionCreateRequest struct {
 	DepartmentTypeFilter string  `json:"department_type_filter" validate:"omitempty,oneof=internal external"`
 
 	// User Assignment
-	AssignUserID     *string `json:"assign_user_id" validate:"omitempty,uuid"`
-	AssignmentRoleID *string `json:"assignment_role_id" validate:"omitempty,uuid"`
-	AutoMatchUser    bool    `json:"auto_match_user"`
-	ManualSelectUser bool    `json:"manual_select_user"`
+	AssignUserID      *string  `json:"assign_user_id" validate:"omitempty,uuid"`
+	AssignmentRoleIDs []string `json:"assignment_role_ids"`
+	AutoMatchUser     bool     `json:"auto_match_user"`
+	ManualSelectUser  bool     `json:"manual_select_user"`
 }
 
 type WorkflowTransitionUpdateRequest struct {
@@ -341,10 +340,10 @@ type WorkflowTransitionUpdateRequest struct {
 	DepartmentTypeFilter *string `json:"department_type_filter" validate:"omitempty,oneof=internal external"`
 
 	// User Assignment
-	AssignUserID     *string `json:"assign_user_id" validate:"omitempty,uuid"`
-	AssignmentRoleID *string `json:"assignment_role_id" validate:"omitempty,uuid"`
-	AutoMatchUser    *bool   `json:"auto_match_user"`
-	ManualSelectUser *bool   `json:"manual_select_user"`
+	AssignUserID      *string  `json:"assign_user_id" validate:"omitempty,uuid"`
+	AssignmentRoleIDs []string `json:"assignment_role_ids"`
+	AutoMatchUser     *bool    `json:"auto_match_user"`
+	ManualSelectUser  *bool    `json:"manual_select_user"`
 }
 
 type TransitionRequirementRequest struct {
@@ -468,12 +467,11 @@ type WorkflowTransitionResponse struct {
 	AutoDetectDepartment bool                `json:"auto_detect_department"`
 
 	// User Assignment
-	AssignUserID     *uuid.UUID    `json:"assign_user_id,omitempty"`
-	AssignUser       *UserResponse `json:"assign_user,omitempty"`
-	AssignmentRoleID *uuid.UUID    `json:"assignment_role_id,omitempty"`
-	AssignmentRole   *RoleResponse `json:"assignment_role,omitempty"`
-	AutoMatchUser    bool          `json:"auto_match_user"`
-	ManualSelectUser bool          `json:"manual_select_user"`
+	AssignUserID     *uuid.UUID     `json:"assign_user_id,omitempty"`
+	AssignUser       *UserResponse  `json:"assign_user,omitempty"`
+	AssignmentRoles  []RoleResponse `json:"assignment_roles,omitempty"`
+	AutoMatchUser    bool           `json:"auto_match_user"`
+	ManualSelectUser bool           `json:"manual_select_user"`
 
 	Requirements []TransitionRequirementResponse  `json:"requirements,omitempty"`
 	Actions      []TransitionActionResponse       `json:"actions,omitempty"`
@@ -664,7 +662,6 @@ func ToWorkflowTransitionResponse(t *WorkflowTransition) WorkflowTransitionRespo
 		AssignDepartmentID:   t.AssignDepartmentID,
 		AutoDetectDepartment: t.AutoDetectDepartment,
 		AssignUserID:         t.AssignUserID,
-		AssignmentRoleID:     t.AssignmentRoleID,
 		AutoMatchUser:        t.AutoMatchUser,
 		ManualSelectUser:     t.ManualSelectUser,
 		IsRejection:          t.IsRejection,
@@ -702,9 +699,11 @@ func ToWorkflowTransitionResponse(t *WorkflowTransition) WorkflowTransitionRespo
 		resp.AssignUser = &userResp
 	}
 
-	if t.AssignmentRole != nil {
-		roleResp := ToRoleResponse(t.AssignmentRole)
-		resp.AssignmentRole = &roleResp
+	if len(t.AssignmentRoles) > 0 {
+		resp.AssignmentRoles = make([]RoleResponse, len(t.AssignmentRoles))
+		for i, r := range t.AssignmentRoles {
+			resp.AssignmentRoles[i] = ToRoleResponse(&r)
+		}
 	}
 
 	if len(t.Requirements) > 0 {
@@ -824,7 +823,7 @@ type WorkflowTransitionExport struct {
 	AssignDepartment     *CodeNamePair                 `json:"assign_department,omitempty"`
 	AutoDetectDepartment bool                          `json:"auto_detect_department"`
 	AssignUser           *CodeNamePair                 `json:"assign_user,omitempty"`
-	AssignmentRole       *CodeNamePair                 `json:"assignment_role,omitempty"`
+	AssignmentRoles      []CodeNamePair                `json:"assignment_roles,omitempty"`
 	AutoMatchUser        bool                          `json:"auto_match_user"`
 	ManualSelectUser     bool                          `json:"manual_select_user"`
 	Requirements         []TransitionRequirementExport `json:"requirements,omitempty"`

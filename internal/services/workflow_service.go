@@ -999,18 +999,26 @@ func (s *workflowService) CreateTransition(ctx context.Context, workflowID uuid.
 		}
 	}
 
-	if req.AssignmentRoleID != nil && *req.AssignmentRoleID != "" {
-		roleID, err := uuid.Parse(*req.AssignmentRoleID)
-		if err == nil {
-			transition.AssignmentRoleID = &roleID
-		}
-	}
-
 	if err := s.repo.CreateTransition(ctx, transition); err != nil {
 		return nil, err
 	}
 
-	// Assign roles if provided
+	// Assign assignment roles if provided
+	if len(req.AssignmentRoleIDs) > 0 {
+		assignRoleIDs := make([]uuid.UUID, 0, len(req.AssignmentRoleIDs))
+		for _, idStr := range req.AssignmentRoleIDs {
+			id, err := uuid.Parse(idStr)
+			if err != nil {
+				continue
+			}
+			assignRoleIDs = append(assignRoleIDs, id)
+		}
+		if err := s.repo.AssignTransitionAssignmentRoles(ctx, transition.ID, assignRoleIDs); err != nil {
+			return nil, err
+		}
+	}
+
+	// Assign allowed roles if provided
 	if len(req.RoleIDs) > 0 {
 		roleIDs := make([]uuid.UUID, 0, len(req.RoleIDs))
 		for _, idStr := range req.RoleIDs {
@@ -1130,22 +1138,26 @@ func (s *workflowService) UpdateTransition(ctx context.Context, transitionID uui
 			}
 		}
 	}
-	if req.AssignmentRoleID != nil {
-		if *req.AssignmentRoleID == "" {
-			transition.AssignmentRoleID = nil
-		} else {
-			roleID, err := uuid.Parse(*req.AssignmentRoleID)
-			if err == nil {
-				transition.AssignmentRoleID = &roleID
-			}
-		}
-	}
-
 	if err := s.repo.UpdateTransition(ctx, transition); err != nil {
 		return nil, err
 	}
 
-	// Update roles if provided
+	// Update assignment roles if provided (nil slice = no change, empty slice = clear)
+	if req.AssignmentRoleIDs != nil {
+		assignRoleIDs := make([]uuid.UUID, 0, len(req.AssignmentRoleIDs))
+		for _, idStr := range req.AssignmentRoleIDs {
+			id, err := uuid.Parse(idStr)
+			if err != nil {
+				continue
+			}
+			assignRoleIDs = append(assignRoleIDs, id)
+		}
+		if err := s.repo.AssignTransitionAssignmentRoles(ctx, transitionID, assignRoleIDs); err != nil {
+			return nil, err
+		}
+	}
+
+	// Update allowed roles if provided
 	if req.RoleIDs != nil {
 		roleIDs := make([]uuid.UUID, 0, len(req.RoleIDs))
 		for _, idStr := range req.RoleIDs {
@@ -1540,13 +1552,13 @@ func (s *workflowService) ExportWorkflow(ctx context.Context, id uuid.UUID) ([]b
 			}
 		}
 
-		// Convert assignment role to code/name pair
-		var assignmentRole *models.CodeNamePair
-		if trans.AssignmentRole != nil {
-			assignmentRole = &models.CodeNamePair{
-				Code: trans.AssignmentRole.Code,
-				Name: trans.AssignmentRole.Name,
-			}
+		// Convert assignment roles to code/name pairs
+		var assignmentRoles []models.CodeNamePair
+		for _, r := range trans.AssignmentRoles {
+			assignmentRoles = append(assignmentRoles, models.CodeNamePair{
+				Code: r.Code,
+				Name: r.Name,
+			})
 		}
 
 		// Convert requirements
@@ -1585,7 +1597,7 @@ func (s *workflowService) ExportWorkflow(ctx context.Context, id uuid.UUID) ([]b
 			AssignDepartment:     assignDepartment,
 			AutoDetectDepartment: trans.AutoDetectDepartment,
 			AssignUser:           assignUser,
-			AssignmentRole:       assignmentRole,
+			AssignmentRoles:      assignmentRoles,
 			AutoMatchUser:        trans.AutoMatchUser,
 			ManualSelectUser:     trans.ManualSelectUser,
 			Requirements:         requirements,
@@ -1872,19 +1884,29 @@ func (s *workflowService) ImportWorkflow(ctx context.Context, data *models.Workf
 			}
 		}
 
-		// Resolve assignment role
-		if transData.AssignmentRole != nil {
-			role, err := s.roleRepo.FindByCode(ctx, transData.AssignmentRole.Code)
-			if err != nil {
-				warnings = append(warnings, fmt.Sprintf("Assignment role '%s' not found for transition '%s'", transData.AssignmentRole.Name, transData.Name))
-			} else {
-				transition.AssignmentRoleID = &role.ID
-			}
-		}
-
 		if err := tx.Create(transition).Error; err != nil {
 			tx.Rollback()
 			return nil, nil, err
+		}
+
+		// Resolve and assign assignment roles
+		if len(transData.AssignmentRoles) > 0 {
+			assignRoleIDs := []uuid.UUID{}
+			for _, roleRef := range transData.AssignmentRoles {
+				role, err := s.roleRepo.FindByCode(ctx, roleRef.Code)
+				if err != nil {
+					warnings = append(warnings, fmt.Sprintf("Assignment role '%s' not found for transition '%s'", roleRef.Name, transData.Name))
+					continue
+				}
+				assignRoleIDs = append(assignRoleIDs, role.ID)
+			}
+			if len(assignRoleIDs) > 0 {
+				if err := tx.Exec("INSERT INTO transition_assignment_roles (workflow_transition_id, role_id) VALUES "+
+					buildBulkInsertValues(transition.ID, assignRoleIDs)).Error; err != nil {
+					tx.Rollback()
+					return nil, nil, err
+				}
+			}
 		}
 
 		// Assign allowed roles

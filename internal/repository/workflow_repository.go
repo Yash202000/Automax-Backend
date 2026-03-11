@@ -60,6 +60,7 @@ type WorkflowRepository interface {
 
 	// Transition role assignments
 	AssignTransitionRoles(ctx context.Context, transitionID uuid.UUID, roleIDs []uuid.UUID) error
+	AssignTransitionAssignmentRoles(ctx context.Context, transitionID uuid.UUID, roleIDs []uuid.UUID) error
 
 	// State viewable role assignments
 	AssignStateViewableRoles(ctx context.Context, stateID uuid.UUID, roleIDs []uuid.UUID) error
@@ -428,7 +429,7 @@ func (r *workflowRepository) FindTransitionByIDWithRelations(ctx context.Context
 		Preload("AllowedRoles").
 		Preload("AssignDepartment").
 		Preload("AssignUser").
-		Preload("AssignmentRole").
+		Preload("AssignmentRoles").
 		Preload("Requirements").
 		Preload("Actions", func(db *gorm.DB) *gorm.DB {
 			return db.Order("execution_order")
@@ -451,7 +452,7 @@ func (r *workflowRepository) ListTransitionsByWorkflowID(ctx context.Context, wo
 		Preload("AllowedRoles").
 		Preload("AssignDepartment").
 		Preload("AssignUser").
-		Preload("AssignmentRole").
+		Preload("AssignmentRoles").
 		Preload("Requirements").
 		Preload("FieldChanges", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order")
@@ -470,7 +471,7 @@ func (r *workflowRepository) ListTransitionsFromState(ctx context.Context, state
 		Preload("AllowedRoles").
 		Preload("AssignDepartment").
 		Preload("AssignUser").
-		Preload("AssignmentRole").
+		Preload("AssignmentRoles").
 		Preload("Requirements").
 		Preload("Actions", func(db *gorm.DB) *gorm.DB {
 			return db.Order("execution_order")
@@ -508,6 +509,22 @@ func (r *workflowRepository) AssignTransitionRoles(ctx context.Context, transiti
 	}
 
 	return r.db.WithContext(ctx).Model(&transition).Association("AllowedRoles").Replace(roles)
+}
+
+func (r *workflowRepository) AssignTransitionAssignmentRoles(ctx context.Context, transitionID uuid.UUID, roleIDs []uuid.UUID) error {
+	var transition models.WorkflowTransition
+	if err := r.db.WithContext(ctx).First(&transition, "id = ?", transitionID).Error; err != nil {
+		return err
+	}
+
+	var roles []models.Role
+	if len(roleIDs) > 0 {
+		if err := r.db.WithContext(ctx).Where("id IN ?", roleIDs).Find(&roles).Error; err != nil {
+			return err
+		}
+	}
+
+	return r.db.WithContext(ctx).Model(&transition).Association("AssignmentRoles").Replace(roles)
 }
 
 func (r *workflowRepository) AssignStateViewableRoles(ctx context.Context, stateID uuid.UUID, roleIDs []uuid.UUID) error {

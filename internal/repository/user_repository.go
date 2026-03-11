@@ -29,7 +29,7 @@ type UserRepository interface {
 	AssignClassifications(ctx context.Context, userID uuid.UUID, classificationIDs []uuid.UUID) error
 	GetUserRoles(ctx context.Context, userID uuid.UUID) ([]models.Role, error)
 	GetUserPermissions(ctx context.Context, userID uuid.UUID) ([]string, error)
-	FindMatching(ctx context.Context, roleID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.User, error)
+	FindMatching(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.User, error)
 
 	FindByExtension(ctx context.Context, extension string) (*models.User, error)
 	FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.User, error)
@@ -348,7 +348,7 @@ func (r *userRepository) GetUserPermissions(ctx context.Context, userID uuid.UUI
 }
 
 // FindMatching returns users that match the given criteria
-func (r *userRepository) FindMatching(ctx context.Context, roleID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.User, error) {
+func (r *userRepository) FindMatching(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.User, error) {
 	var users []models.User
 
 	query := r.db.WithContext(ctx).
@@ -365,11 +365,11 @@ func (r *userRepository) FindMatching(ctx context.Context, roleID, classificatio
 		query = query.Where("id != ?", excludeUserID)
 	}
 
-	// Filter by role if provided
-	if roleID != nil {
+	// Filter by roles if provided (user must have at least one of the given roles)
+	if len(roleIDs) > 0 {
 		query = query.
 			Joins("JOIN user_roles ur ON ur.user_id = users.id").
-			Where("ur.role_id = ?", roleID)
+			Where("ur.role_id IN ?", roleIDs)
 	}
 
 	// Filter by classification if provided (user must have the classification in their assigned classifications)

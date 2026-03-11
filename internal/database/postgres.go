@@ -5,6 +5,7 @@ import (
 	"log"
 
 	"github.com/automax/backend/internal/config"
+	"github.com/automax/backend/internal/database/migrations"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/pkg/utils"
 	"gorm.io/driver/postgres"
@@ -115,6 +116,11 @@ func Migrate(db *gorm.DB) error {
 	db.Exec("ALTER TABLE incident_transition_histories DROP CONSTRAINT IF EXISTS incident_transition_histories_performed_by_id_fkey")
 	db.Exec("ALTER TABLE incident_revisions DROP CONSTRAINT IF EXISTS fk_incident_revisions_performed_by")
 	db.Exec("ALTER TABLE incident_revisions DROP CONSTRAINT IF EXISTS incident_revisions_performed_by_id_fkey")
+
+	// Migrate transition assignment roles (single → many-to-many)
+	if err := migrations.MigrateTransitionAssignmentRoles(db); err != nil {
+		log.Printf("Warning: transition assignment roles migration failed: %v", err)
+	}
 
 	log.Println("Database migrations completed")
 	return nil
