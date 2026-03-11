@@ -1415,9 +1415,24 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 			sourceIncidentIDStrs = append(existingSourceIDs, sourceIncidentIDStrs...)
 		}
 
+		// Marshal to JSON explicitly for GORM Updates() to handle JSON column correctly
+		sourceIncidentIDsJSON, err := json.Marshal(sourceIncidentIDStrs)
+		if err != nil {
+			for _, incidentID := range validIncidentIDs {
+				result := models.BulkConvertToRequestResult{
+					IncidentID: incidentID,
+					Success:    false,
+					Error:      stringPtr(fmt.Sprintf("failed to marshal source incident IDs: %v", err)),
+				}
+				response.Results = append(response.Results, result)
+				response.Failed++
+			}
+			return response, nil
+		}
+
 		// Update the request with additional source incidents
 		updateFields := map[string]interface{}{
-			"source_incident_ids": sourceIncidentIDStrs,
+			"source_incident_ids": sourceIncidentIDsJSON,
 		}
 		// If no primary source incident, set it
 		if existingRequest.SourceIncidentID == nil {
