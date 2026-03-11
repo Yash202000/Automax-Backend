@@ -18,15 +18,15 @@ import (
 )
 
 func SendOTPWithMetaTemplate(phone string, otp string) error {
-	metaURL := os.Getenv("METAURL")
-	accessToken := os.Getenv("META_ACCESS_TOKEN")
+	metaURL := os.Getenv("OTP_TEMPLATE_URL")
+	accessToken := os.Getenv("OTP_TEMPLATE_ACCESS_TOKEN")
 
 	if metaURL == "" {
-		return fmt.Errorf("whatsapp config error: METAURL not set")
+		return fmt.Errorf("whatsapp config error: OTP_TEMPLATE_URL not set")
 	}
 
 	if accessToken == "" {
-		return fmt.Errorf("whatsapp config error: META_ACCESS_TOKEN not set")
+		return fmt.Errorf("whatsapp config error: OTP_TEMPLATE_ACCESS_TOKEN not set")
 	}
 
 	// Template payload
