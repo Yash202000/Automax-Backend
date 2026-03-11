@@ -413,69 +413,69 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 		// 1. Per-status transition data – only fetched when the matching
 		//    By/Date column is actually requested.
 		var rejectedNames, rejectedDates map[string]string
-		if hasCol("Rejected By", "Rejected Date") {
+		if hasCol("rejected_by", "rejected_date") {
 			rejectedNames, rejectedDates, _ = r.fetchRejectedData(ctx, incidentIDs)
 		}
 
 		var underResNames, underResDates map[string]string
-		if hasCol("Under Resolution By", "Under Resolution Date") {
+		if hasCol("under_resolution_by", "under_resolution_date") {
 			underResNames, underResDates, _ = r.fetchUnderResolutionData(ctx, incidentIDs)
 		}
 
 		var inProgressNames, inProgressDates map[string]string
-		if hasCol("In Progress By", "In Progress Date") {
+		if hasCol("in_progress_by", "in_progress_date") {
 			inProgressNames, inProgressDates, _ = r.fetchInProgressData(ctx, incidentIDs)
 		}
 
 		var readyToCloseNames, readyToCloseDates map[string]string
-		if hasCol("Ready To Close By", "Ready To Close Date") {
+		if hasCol("ready_to_close_by", "ready_to_close_date") {
 			readyToCloseNames, readyToCloseDates, _ = r.fetchReadyToCloseData(ctx, incidentIDs)
 		}
 
 		var closedNames, closedDates map[string]string
-		if hasCol("Closed By", "Closed Date", "Contractor", "Contractor User", "Solved By") {
+		if hasCol("closed_by", "closed_date", "contractor", "contractor_user", "solved_by") {
 			closedNames, closedDates, _ = r.fetchClosedData(ctx, incidentIDs)
 		}
 
 		// 2. Reopened By + Reopen Date
 		var reopenedByNames, reopenDates map[string]string
-		if hasCol("Reopened By", "Reopen Date") {
+		if hasCol("reopened_by", "reopen_date") {
 			reopenedByNames, reopenDates, _ = r.fetchReopenData(ctx, incidentIDs)
 		}
 
 		// 3. Escalation Date
 		var escalationDates map[string]string
-		if hasCol("Escalation Date") {
+		if hasCol("escalation_date") {
 			escalationDates, _ = r.fetchEscalationDates(ctx, incidentIDs)
 		}
 
 		// 4. General comments
 		var commentsMap map[string][]map[string]interface{}
-		if hasCol("Comments", "Comments Array") {
+		if hasCol("comments", "comments_array") {
 			commentsMap, _ = r.fetchGeneralComments(ctx, incidentIDs)
 		}
 
 		// 5. Contractor comment
 		var contractorCommentsMap map[string]string
-		if hasCol("Contractor Comment") {
+		if hasCol("contractor_comment") {
 			contractorCommentsMap, _ = r.fetchContractorComments(ctx, incidentIDs)
 		}
 
 		// 6. Before attachments
 		var beforeAttachMap map[string][]string
-		if hasCol("Before Attachments", "Before Attachment Array") {
+		if hasCol("before_attachments", "before_attachment_array") {
 			beforeAttachMap, _ = r.fetchBeforeAttachments(ctx, incidentIDs, protocol, hostname, token)
 		}
 
 		// 7. After attachments
 		var afterAttachMap map[string][]string
-		if hasCol("After Attachments", "After Attachment Array") {
+		if hasCol("after_attachments", "after_attachment_array") {
 			afterAttachMap, _ = r.fetchAfterAttachments(ctx, incidentIDs, protocol, hostname, token)
 		}
 
 		// 8. All attachments
 		var allAttachMap map[string][]string
-		if hasCol("Attachments") {
+		if hasCol("attachments") {
 			allAttachMap, _ = r.fetchAllAttachments(ctx, incidentIDs, protocol, hostname, token)
 		}
 
@@ -489,61 +489,61 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 
 			// Closed
 			if name := closedNames[incidentID]; name != "" {
-				setField(results[i], "Closed By", name)
-				setField(results[i], "Contractor", name)
-				setField(results[i], "Contractor User", name)
-				setField(results[i], "Solved By", name)
+				setField(results[i], "closed_by", name)
+				setField(results[i], "contractor", name)
+				setField(results[i], "contractor_user", name)
+				setField(results[i], "solved_by", name)
 			}
 			if date := closedDates[incidentID]; date != "" {
-				setField(results[i], "Closed Date", date)
+				setField(results[i], "closed_date", date)
 			}
 
 			// Rejected
 			if name := rejectedNames[incidentID]; name != "" {
-				setField(results[i], "Rejected By", name)
+				setField(results[i], "rejected_by", name)
 			}
 			if date := rejectedDates[incidentID]; date != "" {
-				setField(results[i], "Rejected Date", date)
+				setField(results[i], "rejected_date", date)
 			}
 
 			// Under Resolution
 			if name := underResNames[incidentID]; name != "" {
-				setField(results[i], "Under Resolution By", name)
-				setField(results[i], "Approved By", name)
+				setField(results[i], "under_resolution_by", name)
+				setField(results[i], "approved_by", name)
 			}
 			if date := underResDates[incidentID]; date != "" {
-				setField(results[i], "Under Resolution Date", date)
-				setField(results[i], "Approved Time", date)
-				setField(results[i], "Approved At", date)
+				setField(results[i], "under_resolution_date", date)
+				setField(results[i], "approved_time", date)
+				setField(results[i], "approved_at", date)
 			}
 
 			// In Progress
 			if name := inProgressNames[incidentID]; name != "" {
-				setField(results[i], "In Progress By", name)
+				setField(results[i], "in_progress_by", name)
 			}
 			if date := inProgressDates[incidentID]; date != "" {
-				setField(results[i], "In Progress Date", date)
+				setField(results[i], "in_progress_date", date)
 			}
 
 			// Ready To Close
 			if name := readyToCloseNames[incidentID]; name != "" {
-				setField(results[i], "Ready To Close By", name)
+				setField(results[i], "ready_to_close_by", name)
 			}
 			if date := readyToCloseDates[incidentID]; date != "" {
-				setField(results[i], "Ready To Close Date", date)
+				setField(results[i], "ready_to_close_date", date)
 			}
 
 			// Reopened By + Reopen Date from incident_revisions
 			if rn := reopenedByNames[incidentID]; rn != "" {
-				setField(results[i], "Reopened By", rn)
+				setField(results[i], "reopened_by", rn)
 			}
 			if rd := reopenDates[incidentID]; rd != "" {
-				setField(results[i], "Reopen Date", rd)
+				setField(results[i], "reopen_date", rd)
 			}
 
 			// Escalation Date
 			if ed := escalationDates[incidentID]; ed != "" {
-				setField(results[i], "Escalation Date", ed)
+				setField(results[i], "escalation_date", ed)
 			}
 
 			// General comments
@@ -552,30 +552,30 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 				for _, c := range comments {
 					parts = append(parts, fmt.Sprintf("%s", c["content"]))
 				}
-				setField(results[i], "Comments", strings.Join(parts, " | "))
-				setField(results[i], "Comments Array", comments)
+				setField(results[i], "comments", strings.Join(parts, " | "))
+				setField(results[i], "comments_array", comments)
 			}
 
 			// Contractor comment (first/latest comment from a transition)
 			if cc := contractorCommentsMap[incidentID]; cc != "" {
-				setField(results[i], "Contractor Comment", cc)
+				setField(results[i], "contractor_comment", cc)
 			}
 
 			// Before attachments (creator/agent uploads)
 			if urls := beforeAttachMap[incidentID]; len(urls) > 0 {
-				setField(results[i], "Before Attachments", strings.Join(urls, " | "))
-				setField(results[i], "Before Attachment Array", urls)
+				setField(results[i], "before_attachments", strings.Join(urls, " | "))
+				setField(results[i], "before_attachment_array", urls)
 			}
 
 			// After attachments (contractor uploads during transitions)
 			if urls := afterAttachMap[incidentID]; len(urls) > 0 {
-				setField(results[i], "After Attachments", strings.Join(urls, " | "))
-				setField(results[i], "After Attachment Array", urls)
+				setField(results[i], "after_attachments", strings.Join(urls, " | "))
+				setField(results[i], "after_attachment_array", urls)
 			}
 
 			// All attachments
 			if urls := allAttachMap[incidentID]; len(urls) > 0 {
-				setField(results[i], "Attachments", strings.Join(urls, " | "))
+				setField(results[i], "attachments", strings.Join(urls, " | "))
 			}
 
 			_ = row
