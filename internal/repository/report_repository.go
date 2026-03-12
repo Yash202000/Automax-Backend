@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
+	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/pkg/constants"
@@ -39,6 +41,7 @@ type ReportRepository interface {
 	ExecuteDepartmentQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 	ExecuteLocationQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 	ExecuteClassificationQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
+	ExecuteActionLogQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 }
 
 type reportRepository struct {
@@ -153,36 +156,199 @@ func (r *reportRepository) UpdateExecution(ctx context.Context, execution *model
 
 // Data query helpers
 
-func (r *reportRepository) applyFilters(query *gorm.DB, filters []models.ReportFilterConfig) *gorm.DB {
+// filterFieldMap is a map of logical field name → qualified SQL column name.
+// Presence in the map (with a non-empty value) is the sole allowed-field check.
+
+var incidentFilterFields = map[string]string{
+	"id":                        "incidents.id",
+	"incident_number":           "incidents.incident_number",
+	"title":                     "incidents.title",
+	"description":               "incidents.description",
+	"classification_id":         "incidents.classification_id",
+	"workflow_id":               "incidents.workflow_id",
+	"current_state_id":          "incidents.current_state_id",
+	"priority":                  "incidents.priority",
+	"severity":                  "incidents.severity",
+	"assignee_id":               "incidents.assignee_id",
+	"department_id":             "incidents.department_id",
+	"location_id":               "incidents.location_id",
+	"latitude":                  "incidents.latitude",
+	"longitude":                 "incidents.longitude",
+	"due_date":                  "incidents.due_date",
+	"resolved_at":               "incidents.resolved_at",
+	"closed_at":                 "incidents.closed_at",
+	"sla_breached":              "incidents.sla_breached",
+	"sla_deadline":              "incidents.sla_deadline",
+	"reporter_id":               "incidents.reporter_id",
+	"custom_fields":             "incidents.custom_fields",
+	"created_at":                "incidents.created_at",
+	"updated_at":                "incidents.updated_at",
+	"deleted_at":                "incidents.deleted_at",
+	"record_type":               "incidents.record_type",
+	"source_incident_id":        "incidents.source_incident_id",
+	"converted_request_id":      "incidents.converted_request_id",
+	"channel":                   "incidents.channel",
+	"created_by_name":           "incidents.created_by_name",
+	"created_by_mobile":         "incidents.created_by_mobile",
+	"evaluation_count":          "incidents.evaluation_count",
+	"address":                   "incidents.address",
+	"city":                      "incidents.city",
+	"state":                     "incidents.state",
+	"country":                   "incidents.country",
+	"postal_code":               "incidents.postal_code",
+	"source":                    "incidents.source",
+	"version":                   "incidents.version",
+	"master_incident_id":        "incidents.master_incident_id",
+	"is_merged":                 "incidents.is_merged",
+	"merged_at":                 "incidents.merged_at",
+	"merged_by_user_id":         "incidents.merged_by_user_id",
+	"source_incident_ids":       "incidents.source_incident_ids",
+	"ready_to_close_expires_at": "incidents.ready_to_close_expires_at",
+	"ready_to_close_duration":   "incidents.ready_to_close_duration",
+	"ready_to_close_notified":   "incidents.ready_to_close_notified",
+}
+
+// requestFilterFields reuses the incident columns (same table, filtered by record_type).
+var requestFilterFields = incidentFilterFields
+
+var userFilterFields = map[string]string{
+	"id":             "users.id",
+	"email":          "users.email",
+	"username":       "users.username",
+	"first_name":     "users.first_name",
+	"last_name":      "users.last_name",
+	"phone":          "users.phone",
+	"is_active":      "users.is_active",
+	"is_super_admin": "users.is_super_admin",
+	"department_id":  "users.department_id",
+	"location_id":    "users.location_id",
+	"created_at":     "users.created_at",
+	"updated_at":     "users.updated_at",
+}
+
+var workflowFilterFields = map[string]string{
+	"id":          "workflows.id",
+	"name":        "workflows.name",
+	"description": "workflows.description",
+	"is_active":   "workflows.is_active",
+	"created_at":  "workflows.created_at",
+	"updated_at":  "workflows.updated_at",
+}
+
+var departmentFilterFields = map[string]string{
+	"id":          "departments.id",
+	"name":        "departments.name",
+	"description": "departments.description",
+	"parent_id":   "departments.parent_id",
+	"manager_id":  "departments.manager_id",
+	"created_at":  "departments.created_at",
+	"updated_at":  "departments.updated_at",
+}
+
+var locationFilterFields = map[string]string{
+	"id":          "locations.id",
+	"name":        "locations.name",
+	"description": "locations.description",
+	"parent_id":   "locations.parent_id",
+	"created_at":  "locations.created_at",
+	"updated_at":  "locations.updated_at",
+}
+
+var classificationFilterFields = map[string]string{
+	"id":          "classifications.id",
+	"name":        "classifications.name",
+	"description": "classifications.description",
+	"parent_id":   "classifications.parent_id",
+	"created_at":  "classifications.created_at",
+	"updated_at":  "classifications.updated_at",
+}
+
+var actionLogFilterFields = map[string]string{
+	"id":          "action_logs.id",
+	"user_id":     "action_logs.user_id",
+	"action":      "action_logs.action",
+	"module":      "action_logs.module",
+	"resource_id": "action_logs.resource_id",
+	"description": "action_logs.description",
+	"status":      "action_logs.status",
+	"ip_address":  "action_logs.ip_address",
+	"duration":    "action_logs.duration",
+	"created_at":  "action_logs.created_at",
+}
+
+// dataSourceFilterFields maps a data source name to its allowed filter fields.
+var dataSourceFilterFields = map[string]map[string]string{
+	"incidents":       incidentFilterFields,
+	"request":         requestFilterFields,
+	"users":           userFilterFields,
+	"workflows":       workflowFilterFields,
+	"departments":     departmentFilterFields,
+	"locations":       locationFilterFields,
+	"classifications": classificationFilterFields,
+	"action_logs":     actionLogFilterFields,
+}
+
+// applyFilters applies ReportFilterConfig entries to the query. It reads the
+// active data source from ctx (set by WithReportDataSource) to select the
+// correct allowed-fields map. Each logical field name is mapped to a qualified
+// SQL column in a single lookup; unknown fields are silently skipped.
+func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, filters []models.ReportFilterConfig) *gorm.DB {
+	if len(filters) == 0 {
+		return query
+	}
+
+	dataSource, _ := ctx.Value(constants.ContextKeys.REPORT_DATA_SOURCE).(string)
+	fieldMap := dataSourceFilterFields[dataSource]
+	if fieldMap == nil {
+		// Fallback to incident fields for backwards compatibility.
+		fieldMap = incidentFilterFields
+	}
+
 	for _, f := range filters {
+		col, ok := fieldMap[f.Field]
+		if !ok || col == "" {
+			log.Println("skipping unknown filter field:", f.Field, "for data source:", dataSource)
+			continue
+		}
+		if f.Value == nil {
+			log.Println("skipping filter with nil value for field:", f.Field)
+			continue
+		}
+
 		switch f.Operator {
 		case "equals":
-			query = query.Where(f.Field+" = ?", f.Value)
+			query = query.Where(col+" = ?", f.Value)
 		case "not_equals":
-			query = query.Where(f.Field+" != ?", f.Value)
+			query = query.Where(col+" != ?", f.Value)
 		case "contains":
-			query = query.Where(f.Field+" ILIKE ?", "%"+f.Value.(string)+"%")
+			query = query.Where(col+" ILIKE ?", "%"+f.Value.(string)+"%")
 		case "starts_with":
-			query = query.Where(f.Field+" ILIKE ?", f.Value.(string)+"%")
+			query = query.Where(col+" ILIKE ?", f.Value.(string)+"%")
 		case "ends_with":
-			query = query.Where(f.Field+" ILIKE ?", "%"+f.Value.(string))
+			query = query.Where(col+" ILIKE ?", "%"+f.Value.(string))
 		case "gt":
-			query = query.Where(f.Field+" > ?", f.Value)
+			query = query.Where(col+" > ?", f.Value)
 		case "lt":
-			query = query.Where(f.Field+" < ?", f.Value)
+			query = query.Where(col+" < ?", f.Value)
 		case "gte":
-			query = query.Where(f.Field+" >= ?", f.Value)
+			query = query.Where(col+" >= ?", f.Value)
 		case "lte":
-			query = query.Where(f.Field+" <= ?", f.Value)
+			query = query.Where(col+" <= ?", f.Value)
 		case "in":
-			query = query.Where(f.Field+" IN ?", f.Value)
+			query = query.Where(col+" IN ?", f.Value)
 		case "is_null":
-			query = query.Where(f.Field + " IS NULL")
+			query = query.Where(col + " IS NULL")
 		case "is_not_null":
-			query = query.Where(f.Field + " IS NOT NULL")
+			query = query.Where(col + " IS NOT NULL")
 		case "between":
-			if arr, ok := f.Value.([]interface{}); ok && len(arr) == 2 {
-				query = query.Where(f.Field+" BETWEEN ? AND ?", arr[0], arr[1])
+			if m, ok := f.Value.(map[string]interface{}); ok {
+				fromStr, _ := m["from"].(string)
+				toStr, _ := m["to"].(string)
+				from, err1 := time.Parse(time.RFC3339, fromStr)
+				to, err2 := time.Parse(time.RFC3339, toStr)
+				if err1 == nil && err2 == nil {
+					query = query.Where(col+" BETWEEN ? AND ?", from, to)
+				}
 			}
 		}
 	}
@@ -208,9 +374,9 @@ func (r *reportRepository) ExecuteRequestQuery(ctx context.Context, filters []mo
 	// Extract requested columns from context for dynamic row construction.
 	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
 
-	query := r.db.WithContext(ctx).Model(&models.Incident{}).
+	query := r.db.WithContext(ctx).Debug().Model(&models.Incident{}).
 		Where("incidents.record_type = ?", "request")
-	query = r.applyFilters(query, filters)
+	query = r.applyFilters(ctx, query, filters)
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -284,17 +450,18 @@ func (r *reportRepository) ExecuteRequestQuery(ctx context.Context, filters []mo
 func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
 	var total int64
 	var results []map[string]interface{}
-	query := r.db.WithContext(ctx).Model(&models.Incident{})
-	query = r.applyFilters(query, filters)
-	if err := query.Count(&total).Error; err != nil {
+	query := r.db.WithContext(ctx).Debug().Model(&models.Incident{})
+	query = r.applyFilters(ctx, query, filters)
+	if err := query.Debug().Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
+	log.Println(filters)
 	query = r.applySorting(query, sorting)
 	if sorting == nil {
 		query = query.Order("incidents.created_at DESC")
 	}
 	offset := (page - 1) * limit
-	rows, err := query.
+	rows, err := query.Debug().
 		Select("incidents.*, " +
 			"reporters.email as reporter_email, reporters.first_name as reporter_first_name, reporters.last_name as reporter_last_name, " +
 			"reporters.username as reporter_username, " +
@@ -969,7 +1136,7 @@ func (r *reportRepository) ExecuteUserQuery(ctx context.Context, filters []model
 	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
 
 	query := r.db.WithContext(ctx).Model(&models.User{})
-	query = r.applyFilters(query, filters)
+	query = r.applyFilters(ctx, query, filters)
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -1047,7 +1214,7 @@ func (r *reportRepository) ExecuteWorkflowQuery(ctx context.Context, filters []m
 	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
 
 	query := r.db.WithContext(ctx).Model(&models.Workflow{})
-	query = r.applyFilters(query, filters)
+	query = r.applyFilters(ctx, query, filters)
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -1120,7 +1287,7 @@ func (r *reportRepository) ExecuteDepartmentQuery(ctx context.Context, filters [
 	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
 
 	query := r.db.WithContext(ctx).Model(&models.Department{})
-	query = r.applyFilters(query, filters)
+	query = r.applyFilters(ctx, query, filters)
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -1211,7 +1378,7 @@ func (r *reportRepository) ExecuteLocationQuery(ctx context.Context, filters []m
 	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
 
 	query := r.db.WithContext(ctx).Model(&models.Location{})
-	query = r.applyFilters(query, filters)
+	query = r.applyFilters(ctx, query, filters)
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -1223,7 +1390,7 @@ func (r *reportRepository) ExecuteLocationQuery(ctx context.Context, filters []m
 	}
 
 	offset := (page - 1) * limit
-	rows, err := query.
+	rows, err := query.Debug().
 		Select("locations.*, parents.name as parent_name").
 		Joins("LEFT JOIN locations as parents ON locations.parent_id = parents.id").
 		Offset(offset).
@@ -1284,7 +1451,7 @@ func (r *reportRepository) ExecuteClassificationQuery(ctx context.Context, filte
 	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
 
 	query := r.db.WithContext(ctx).Model(&models.Classification{})
-	query = r.applyFilters(query, filters)
+	query = r.applyFilters(ctx, query, filters)
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -1296,7 +1463,7 @@ func (r *reportRepository) ExecuteClassificationQuery(ctx context.Context, filte
 	}
 
 	offset := (page - 1) * limit
-	rows, err := query.
+	rows, err := query.Debug().
 		Select("classifications.*, parents.name as parent_name").
 		Joins("LEFT JOIN classifications as parents ON classifications.parent_id = parents.id").
 		Offset(offset).
@@ -1341,6 +1508,90 @@ func (r *reportRepository) ExecuteClassificationQuery(ctx context.Context, filte
 			}
 			if v, ok := rawRow["parent_name"]; ok {
 				row["parent.name"] = v
+			}
+		}
+
+		results = append(results, row)
+	}
+
+	return results, total, nil
+}
+
+func (r *reportRepository) ExecuteActionLogQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
+	var total int64
+	var results []map[string]interface{}
+
+	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
+
+	query := r.db.WithContext(ctx).Model(&models.ActionLog{})
+	query = r.applyFilters(ctx, query, filters)
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	query = r.applySorting(query, sorting)
+	if sorting == nil {
+		query = query.Order("action_logs.created_at DESC")
+	}
+
+	offset := (page - 1) * limit
+	rows, err := query.Debug().
+		Select("action_logs.id, action_logs.action, action_logs.module, action_logs.resource_id, " +
+			"action_logs.description, action_logs.ip_address, action_logs.user_agent, " +
+			"action_logs.status, action_logs.error_msg, action_logs.duration, action_logs.created_at, " +
+			"users.email as user_email, users.username as user_username, " +
+			"users.first_name as user_first_name, users.last_name as user_last_name").
+		Joins("LEFT JOIN users ON action_logs.user_id = users.id").
+		Offset(offset).
+		Limit(limit).
+		Rows()
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	cols, _ := rows.Columns()
+	for rows.Next() {
+		columns := make([]interface{}, len(cols))
+		columnPointers := make([]interface{}, len(cols))
+		for i := range columns {
+			columnPointers[i] = &columns[i]
+		}
+		if err := rows.Scan(columnPointers...); err != nil {
+			continue
+		}
+
+		rawRow := make(map[string]interface{})
+		for i, colName := range cols {
+			val := columns[i]
+			if b, ok := val.([]byte); ok {
+				rawRow[colName] = string(b)
+			} else {
+				rawRow[colName] = val
+			}
+		}
+
+		// Synthesise user_full_name from the joined first/last name columns.
+		firstName, _ := rawRow["user_first_name"].(string)
+		lastName, _ := rawRow["user_last_name"].(string)
+		switch {
+		case firstName != "" && lastName != "":
+			rawRow["user_full_name"] = firstName + " " + lastName
+		case firstName != "":
+			rawRow["user_full_name"] = firstName
+		default:
+			rawRow["user_full_name"] = lastName
+		}
+
+		row := make(map[string]interface{})
+		if len(reqColumns) > 0 {
+			for _, col := range reqColumns {
+				row[col.Label] = rawRow[col.Field]
+			}
+		} else {
+			for k, v := range rawRow {
+				row[k] = v
 			}
 		}
 
