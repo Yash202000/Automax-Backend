@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/models"
@@ -191,13 +192,13 @@ func (s *EscalationGroupService) ProcessGroupEscalations(ctx context.Context) er
 
 	for _, group := range groups {
 		if !s.shouldSendNow(&group) {
-			log.Printf("[EscalationGroupService] Group '%s' (%s) — not yet time, skipping.",
+			log.Printf("[EscalationGroupService] Group Name:'%s' & Frequency: (%s) — not yet time, skipping.",
 				group.Name, group.Frequency)
 			continue
 		}
 
 		if len(group.Users) == 0 {
-			log.Printf("[EscalationGroupService] Group '%s' — no users configured, skipping.", group.Name)
+			log.Printf("[EscalationGroupService] Group Name: '%s' & Frequency: (%s) — no users configured, skipping.", group.Name, group.Frequency)
 			continue
 		}
 
@@ -223,9 +224,9 @@ func (s *EscalationGroupService) ProcessGroupEscalations(ctx context.Context) er
 			group.Name, len(incidents), len(group.Users), group.Channel)
 
 		// URL linking to the SLA-breached incidents page on the frontend
-		frontendURL := os.Getenv("FRONTEND_URL")
+		frontendURL := os.Getenv("FRONTEND_BASE_URL")
 		if frontendURL == "" {
-			log.Printf("[EscalationGroupService] FRONTEND_URL is not set — skipping group '%s'", group.Name)
+			log.Printf("[EscalationGroupService] FRONTEND_BASE_URL is not set — skipping group '%s'", group.Name)
 			continue
 		}
 		slaPageURL := fmt.Sprintf("%s/incidents?sla_breached=true", frontendURL)
@@ -289,13 +290,11 @@ func (s *EscalationGroupService) sendGroupNotification(ctx context.Context, grou
 	if sendEmail && user.Email != "" {
 		attachments := []models.AttachmentData{
 			{AttachmentID: uuid.New(),
-				Filename: fmt.Sprintf("sla_breach_report_%s.csv", time.Now().Format("2006-01-02")),
-				//ContentType: "text/csv",
+				Filename:    fmt.Sprintf("sla_breach_report_%s.csv", time.Now().Format("2006-01-02")),
 				ContentType: "text/csv; charset=UTF-8",
 				Data:        csvData,
 			},
 		}
-		log.Println("CSV SIZE:", len(csvData))
 		_, err := s.notificationService.SendNotification(
 			ctx, "email", nil, "en",
 			[]string{user.Email}, nil, nil,
@@ -303,9 +302,9 @@ func (s *EscalationGroupService) sendGroupNotification(ctx context.Context, grou
 			nil, attachments, nil, nil,
 		)
 		if err != nil {
-			log.Printf("[EscalationGroupService] Email failed for user %s (group '%s'): %v", user.Email, group.Name, err)
+			log.Printf("[EscalationGroupService] Email failed for user %s (group '%s'): %v", group.Name, err)
 		} else {
-			log.Printf("[EscalationGroupService] Email sent to %s (group '%s')", user.Email, group.Name)
+			log.Printf("[EscalationGroupService] Email sent to %s (group '%s')", group.Name)
 		}
 	}
 }
