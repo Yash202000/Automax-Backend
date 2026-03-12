@@ -2194,24 +2194,38 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	if s.incidentMergeRepo != nil {
 		// Check if this is a reopen (transitioning FROM a terminal state to a non-terminal state)
 		if transition.FromState != nil && transition.FromState.StateType == "terminal" && newState.StateType != "terminal" {
+			fmt.Println("[DEBUG] Reopen detected - calling AutoUnmergeOnReopen")
 			_ = s.incidentMergeRepo.AutoUnmergeOnReopen(ctx, incidentID)
 		} else {
 			// Check if this incident has merged incidents and sync their status
 			hasMerged, mergeErr := s.incidentMergeRepo.HasMergedIncidents(ctx, incidentID)
+			fmt.Printf("[DEBUG] HasMergedIncidents check: hasMerged=%v, err=%v\n", hasMerged, mergeErr)
 			if mergeErr == nil && hasMerged {
 				if newState.StateType == "terminal" {
+					fmt.Println("[DEBUG] Terminal state - closing merged incidents")
 					// Terminal state: close all merged incidents
 					_ = s.incidentMergeRepo.CloseMergedIncidents(ctx, incidentID)
 
 					// Run feedback/attachment copy and SMS in background
 					bgCtx := context.Background()
+					fmt.Println("[DEBUG] Starting goroutine: autoCloseMergedIncidents")
 					go func() {
 						_ = s.autoCloseMergedIncidents(bgCtx, incidentID, req, userID)
 					}()
 				} else {
-					// Non-terminal state: just sync the status
+					fmt.Println("[DEBUG] Non-terminal state - syncing status and sending SMS")
+					// Non-terminal state: sync the status and send SMS notifications
 					_ = s.incidentMergeRepo.SyncStatusToMergedIncidents(ctx, incidentID, transition.ToStateID)
+
+					// Send SMS notifications in background
+					bgCtx := context.Background()
+					fmt.Println("[DEBUG] Starting goroutine: notifyStatusChangeToMergedIncidents")
+					go func() {
+						_ = s.notifyStatusChangeToMergedIncidents(bgCtx, incidentID, newStateName, req.Comment, userID)
+					}()
 				}
+			} else {
+				fmt.Println("[DEBUG] No merged incidents found or error checking")
 			}
 		}
 	}
@@ -2808,27 +2822,40 @@ func (s *incidentService) ListRevisions(ctx context.Context, incidentID uuid.UUI
 // autoCloseMergedIncidents handles closing merged incidents when master is closed
 // Copies feedback and attachments, and sends SMS notifications
 func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIncidentID uuid.UUID, transitionReq *models.IncidentTransitionRequest, userID uuid.UUID) error {
+	fmt.Println("=== [DEBUG] autoCloseMergedIncidents START ===")
+	
 	// Get merged incidents
 	mergedIncidents, err := s.incidentMergeRepo.GetMergedIncidents(ctx, masterIncidentID)
-	if err != nil || len(mergedIncidents) == 0 {
+	if err != nil {
+		fmt.Printf("[DEBUG] Error getting merged incidents: %v\n", err)
 		return err
 	}
+	if len(mergedIncidents) == 0 {
+		fmt.Println("[DEBUG] No merged incidents found")
+		return nil
+	}
+	fmt.Printf("[DEBUG] Found %d merged incidents\n", len(mergedIncidents))
 
 	// Get master incident for feedback and attachments
 	masterIncident, err := s.incidentRepo.FindByIDWithRelations(ctx, masterIncidentID)
 	if err != nil {
+		fmt.Printf("[DEBUG] Error getting master incident: %v\n", err)
 		return err
 	}
+	fmt.Printf("[DEBUG] Master incident: %s\n", masterIncident.IncidentNumber)
 
-	// Get current user for SMS (optional, just for audit)
+	// Get current user who performed the closure (for audit purposes)
 	_, _ = s.userRepo.FindByID(ctx, userID)
 
 	now := time.Now()
 
 	// Process each merged incident
-	for _, merged := range mergedIncidents {
+	for i, merged := range mergedIncidents {
+		fmt.Printf("\n[DEBUG] === Processing merged incident %d/%d: %s ===\n", i+1, len(mergedIncidents), merged.IncidentNumber)
+		
 		// Copy feedback from master to merged incident
 		if transitionReq.Feedback != nil {
+			fmt.Println("[DEBUG] Copying feedback...")
 			feedback := &models.IncidentFeedback{
 				IncidentID:          merged.ID,
 				Rating:              transitionReq.Feedback.Rating,
@@ -2836,10 +2863,15 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 				CreatedByID:         userID,
 				TransitionHistoryID: nil,
 			}
-			_ = s.incidentRepo.CreateFeedback(ctx, feedback)
+			if fbErr := s.incidentRepo.CreateFeedback(ctx, feedback); fbErr != nil {
+				fmt.Printf("[DEBUG] Failed to create feedback: %v\n", fbErr)
+			} else {
+				fmt.Println("[DEBUG] Feedback copied successfully")
+			}
 		}
 
 		// Copy attachments from master to merged incident
+		fmt.Printf("[DEBUG] Copying %d attachments...\n", len(masterIncident.Attachments))
 		for _, attachment := range masterIncident.Attachments {
 			newAttachment := &models.IncidentAttachment{
 				IncidentID:          merged.ID,
@@ -2850,17 +2882,35 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 				UploadedByID:        attachment.UploadedByID,
 				TransitionHistoryID: nil,
 			}
-			_ = s.incidentRepo.CreateAttachment(ctx, newAttachment)
+			if attErr := s.incidentRepo.CreateAttachment(ctx, newAttachment); attErr != nil {
+				fmt.Printf("[DEBUG] Failed to create attachment: %v\n", attErr)
+			} else {
+				fmt.Printf("[DEBUG] Attachment copied: %s\n", attachment.FileName)
+			}
 		}
 
 		// Send SMS notification to incident owner (reporter)
+		fmt.Printf("[DEBUG] Checking reporter for SMS - Reporter: %+v\n", merged.Reporter)
 		if merged.Reporter != nil && merged.Reporter.Phone != "" {
+			fmt.Printf("[DEBUG] Sending SMS to: %s\n", merged.Reporter.Phone)
+			
 			smsMessage := fmt.Sprintf(
 				"Your incident %s has been automatically closed as it was merged with master incident %s. The master incident has been resolved.",
 				merged.IncidentNumber,
 				masterIncident.IncidentNumber,
 			)
+			fmt.Printf("[DEBUG] SMS Message: %s\n", smsMessage)
 
+			// Send actual SMS via Twilio
+			fmt.Println("[DEBUG] Calling utils.SendSMS...")
+			smsErr := utils.SendSMS(merged.Reporter.Phone, smsMessage)
+			if smsErr != nil {
+				fmt.Printf("[DEBUG] SMS send failed: %v\n", smsErr)
+			} else {
+				fmt.Println("[DEBUG] SMS sent successfully!")
+			}
+
+			// Log notification regardless of SMS success
 			notification := &models.NotificationLog{
 				Channel:    "sms",
 				Direction:  "outbound",
@@ -2870,12 +2920,24 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 				Subject:    "Incident Closed",
 				Body:       smsMessage,
 				Status:     "sent",
-				Provider:   "mock",
+				Provider:   "twilio",
 				IsRead:     false,
 				SentBy:     &userID,
 				SentAt:     &now,
 			}
-			_ = s.incidentRepo.CreateNotification(ctx, notification)
+			if smsErr != nil {
+				notification.Status = "failed"
+				notification.ErrorMessage = smsErr.Error()
+			}
+			
+			fmt.Println("[DEBUG] Creating notification log...")
+			if notifErr := s.incidentRepo.CreateNotification(ctx, notification); notifErr != nil {
+				fmt.Printf("[DEBUG] Failed to create notification log: %v\n", notifErr)
+			} else {
+				fmt.Printf("[DEBUG] Notification logged (status: %s)\n", notification.Status)
+			}
+		} else {
+			fmt.Println("[DEBUG] SKIP SMS: No reporter or phone number")
 		}
 
 		// Create revision for auto-close
@@ -2899,12 +2961,108 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 			masterIncident.IncidentNumber,
 		)
 
-		_ = s.CreateRevision(ctx, merged.ID, models.RevisionActionStatusChanged, description, changes, userID)
+		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionStatusChanged, description, changes, userID); revErr != nil {
+			fmt.Printf("[DEBUG] Failed to create revision: %v\n", revErr)
+		}
 	}
 
 	// Auto-unmerge after closing
-	_ = s.incidentMergeRepo.AutoUnmergeOnClose(ctx, masterIncidentID)
+	fmt.Println("[DEBUG] Calling AutoUnmergeOnClose...")
+	if unmergeErr := s.incidentMergeRepo.AutoUnmergeOnClose(ctx, masterIncidentID); unmergeErr != nil {
+		fmt.Printf("[DEBUG] Auto-unmerge failed: %v\n", unmergeErr)
+	} else {
+		fmt.Println("[DEBUG] Auto-unmerge completed")
+	}
 
+	fmt.Println("=== [DEBUG] autoCloseMergedIncidents END ===")
+	return nil
+}
+
+// notifyStatusChangeToMergedIncidents sends SMS notifications to merged incident owners when master status changes
+func (s *incidentService) notifyStatusChangeToMergedIncidents(ctx context.Context, masterIncidentID uuid.UUID, newStateName string, comment string, userID uuid.UUID) error {
+	fmt.Println("=== [DEBUG] notifyStatusChangeToMergedIncidents START ===")
+	
+	// Get merged incidents with reporter details (already preloaded)
+	mergedIncidents, err := s.incidentMergeRepo.GetMergedIncidents(ctx, masterIncidentID)
+	if err != nil {
+		fmt.Printf("[DEBUG] Error getting merged incidents: %v\n", err)
+		return err
+	}
+	if len(mergedIncidents) == 0 {
+		fmt.Println("[DEBUG] No merged incidents found")
+		return nil
+	}
+	fmt.Printf("[DEBUG] Found %d merged incidents\n", len(mergedIncidents))
+
+	// Get master incident number
+	masterIncident, err := s.incidentRepo.FindByID(ctx, masterIncidentID)
+	if err != nil {
+		fmt.Printf("[DEBUG] Error getting master incident: %v\n", err)
+		return err
+	}
+	fmt.Printf("[DEBUG] Master incident: %s, New state: %s\n", masterIncident.IncidentNumber, newStateName)
+
+	now := time.Now()
+
+	// Process each merged incident
+	for i, merged := range mergedIncidents {
+		fmt.Printf("\n[DEBUG] === Processing incident %d/%d: %s ===\n", i+1, len(mergedIncidents), merged.IncidentNumber)
+		fmt.Printf("[DEBUG] Reporter: %+v\n", merged.Reporter)
+		fmt.Println("under in loop")
+		
+		if merged.Reporter != nil && merged.Reporter.Phone != "" {
+			fmt.Printf("[DEBUG] Sending SMS to: %s\n", merged.Reporter.Phone)
+			
+			smsMessage := fmt.Sprintf(
+				"Your incident %s status has been updated to '%s' (master incident: %s). Comment: %s",
+				merged.IncidentNumber,
+				newStateName,
+				masterIncident.IncidentNumber,
+				comment,
+			)
+			fmt.Printf("[DEBUG] SMS Message: %s\n", smsMessage)
+
+			// Send actual SMS via Twilio
+			fmt.Println("[DEBUG] Calling utils.SendSMS...")
+			smsErr := utils.SendSMS(merged.Reporter.Phone, smsMessage)
+			if smsErr != nil {
+				fmt.Printf("[DEBUG] SMS send failed: %v\n", smsErr)
+			} else {
+				fmt.Println("[DEBUG] SMS sent successfully!")
+			}
+
+			// Log notification regardless of SMS success
+			notification := &models.NotificationLog{
+				Channel:    "sms",
+				Direction:  "outbound",
+				Category:   "sent",
+				Language:   "en",
+				Recipients: models.RecipientArray{{Email: merged.Reporter.Phone, Type: "to", Status: "sent"}},
+				Subject:    "Incident Status Updated",
+				Body:       smsMessage,
+				Status:     "sent",
+				Provider:   "twilio",
+				IsRead:     false,
+				SentBy:     &userID,
+				SentAt:     &now,
+			}
+			if smsErr != nil {
+				notification.Status = "failed"
+				notification.ErrorMessage = smsErr.Error()
+			}
+
+			fmt.Println("[DEBUG] Creating notification log...")
+			if notifErr := s.incidentRepo.CreateNotification(ctx, notification); notifErr != nil {
+				fmt.Printf("[DEBUG] Failed to create notification log: %v\n", notifErr)
+			} else {
+				fmt.Printf("[DEBUG] Notification logged (status: %s)\n", notification.Status)
+			}
+		} else {
+			fmt.Println("[DEBUG] SKIP SMS: No reporter or phone number")
+		}
+	}
+
+	fmt.Println("=== [DEBUG] notifyStatusChangeToMergedIncidents END ===")
 	return nil
 }
 
