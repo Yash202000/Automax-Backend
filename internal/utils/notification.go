@@ -244,14 +244,22 @@ func SendSMTPWithCCBCC(to []string, cc []string, bcc []string, subject, body str
 }
 
 func SendSMS(to, message string) error {
+	fmt.Printf("[DEBUG-SMS] Attempting to send SMS to: %s\n", to)
+	
 	accountSID := os.Getenv("TWILIO_ACCOUNT_SID")
 	authToken := os.Getenv("TWILIO_AUTH_TOKEN")
 	from := os.Getenv("TWILIO_PHONE_NUMBER")
 
+	fmt.Printf("[DEBUG-SMS] TWILIO_ACCOUNT_SID: %s\n", maskString(accountSID))
+	fmt.Printf("[DEBUG-SMS] TWILIO_PHONE_NUMBER: %s\n", from)
+	fmt.Printf("[DEBUG-SMS] Message: %s\n", message)
+
 	if accountSID == "" || authToken == "" || from == "" {
+		fmt.Println("[DEBUG-SMS] ERROR: Twilio env vars missing")
 		return fmt.Errorf("twilio env vars missing: TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_PHONE_NUMBER")
 	}
 
+	fmt.Println("[DEBUG-SMS] Creating Twilio client...")
 	client := twilio.NewRestClientWithParams(twilio.ClientParams{
 		Username: accountSID,
 		Password: authToken,
@@ -262,12 +270,27 @@ func SendSMS(to, message string) error {
 	params.SetFrom(from)
 	params.SetBody(message)
 
-	_, err := client.Api.CreateMessage(params)
+	fmt.Println("[DEBUG-SMS] Sending SMS via Twilio API...")
+	resp, err := client.Api.CreateMessage(params)
 	if err != nil {
+		fmt.Printf("[DEBUG-SMS] Twilio API error: %v\n", err)
 		return fmt.Errorf("twilio send sms error: %w", err)
 	}
 
+	if resp != nil && resp.Sid != nil {
+		fmt.Printf("[DEBUG-SMS] SMS sent successfully! Message SID: %s\n", *resp.Sid)
+	} else {
+		fmt.Println("[DEBUG-SMS] SMS sent successfully! (No SID in response)")
+	}
 	return nil
+}
+
+// maskString masks a string for safe logging (shows first 4 chars)
+func maskString(s string) string {
+	if len(s) <= 4 {
+		return "****"
+	}
+	return s[:4] + "..."
 }
 
 // GetRecipientType determines if an email is in TO, CC, or BCC list
