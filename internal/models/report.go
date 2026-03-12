@@ -103,7 +103,7 @@ type ReportCreateRequestConfig struct {
 type ReportCreateRequest struct {
 	Name        string                    `json:"name" validate:"required,max=255"`
 	Description string                    `json:"description"`
-	DataSource  string                    `json:"data_source" validate:"required,oneof=incidents action_logs users workflows departments locations classifications"`
+	DataSource  string                    `json:"data_source" validate:"required,oneof=incidents action_logs users workflows departments locations classifications request"`
 	Config      ReportCreateRequestConfig `json:"config" validate:"required"`
 	IsPublic    bool                      `json:"is_public"`
 }

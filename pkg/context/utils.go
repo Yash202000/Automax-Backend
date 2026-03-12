@@ -13,3 +13,10 @@ import (
 func WithReportColumns(ctx context.Context, columns []models.ColumnField) context.Context {
 	return context.WithValue(ctx, constants.ContextKeys.REPORT_COLUMNS, columns)
 }
+
+// WithReportDataSource returns a derived context that carries the active
+// data source name (e.g. "incidents", "users") so applyFilters in the
+// repository can select the correct allowed-fields map.
+func WithReportDataSource(ctx context.Context, dataSource string) context.Context {
+	return context.WithValue(ctx, constants.ContextKeys.REPORT_DATA_SOURCE, dataSource)
+}

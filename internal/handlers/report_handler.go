@@ -242,7 +242,8 @@ func (h *ReportHandler) QueryReport(c *fiber.Ctx) error {
 		req.Limit = 50
 	}
 
-	ctx := cstmContext.WithReportColumns(c.UserContext(), req.Columns)
+	ctx := cstmContext.WithReportDataSource(c.UserContext(), req.DataSource)
+	ctx = cstmContext.WithReportColumns(ctx, req.Columns)
 	result, err := h.service.QueryReport(ctx, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
@@ -264,7 +265,8 @@ func (h *ReportHandler) ExportReport(c *fiber.Ctx) error {
 		})
 	}
 
-	ctx := cstmContext.WithReportColumns(c.UserContext(), req.Columns)
+	ctx := cstmContext.WithReportDataSource(c.UserContext(), req.DataSource)
+	ctx = cstmContext.WithReportColumns(ctx, req.Columns)
 	data, filename, contentType, err := h.service.ExportReport(ctx, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())

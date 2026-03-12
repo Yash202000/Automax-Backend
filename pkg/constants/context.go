@@ -9,6 +9,7 @@ var ContextKeys = struct {
 	ACCEPT_LANGUAGE       contextKey
 	DB                    contextKey
 	REPORT_COLUMNS        contextKey
+	REPORT_DATA_SOURCE    contextKey
 	HOSTNAME              contextKey
 	PROTOCOL              contextKey
 	IP_ADDRESS            contextKey
@@ -27,15 +28,18 @@ var ContextKeys = struct {
 	VALIDATION_TRANSLATOR: "ValidationTranslator",
 	ACCEPT_LANGUAGE:       "AcceptLanguage",
 	DB:                    "DB",
-	// REPORT_COLUMNS holds a map[string]bool of requested column names.
+	// REPORT_COLUMNS holds a []models.ColumnField of requested columns.
 	// The repository uses it to skip enrichment queries for unused columns.
 	REPORT_COLUMNS: "ReportColumns",
-	HOSTNAME:       "hostname",
-	PROTOCOL:       "protocol",
-	IP_ADDRESS:     "ip_address",
-	USER_AGENT:     "user_agent",
-	UserID:         "user_id",
-	ActorID:        "actor_id",
+	// REPORT_DATA_SOURCE holds the active data source string (e.g. "incidents",
+	// "users") so applyFilters can select the correct allowed-fields map.
+	REPORT_DATA_SOURCE: "ReportDataSource",
+	HOSTNAME:           "hostname",
+	PROTOCOL:           "protocol",
+	IP_ADDRESS:         "ip_address",
+	USER_AGENT:         "user_agent",
+	UserID:             "user_id",
+	ActorID:            "actor_id",
 
 	Email:     "email",
 	UserEmail: "user_email",

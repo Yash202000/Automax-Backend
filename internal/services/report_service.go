@@ -241,6 +241,8 @@ func (s *reportService) ExecuteReport(ctx context.Context, id uuid.UUID, req *mo
 		data, total, queryErr = s.reportRepo.ExecuteClassificationQuery(ctx, filters, sorting, page, limit)
 	case "rejection_logs":
 		data, total, queryErr = s.rejectionLogRepo.ExecuteRejectionLogQuery(ctx, filters, sorting, page, limit)
+	case "action_logs":
+		data, total, queryErr = s.reportRepo.ExecuteActionLogQuery(ctx, filters, sorting, page, limit)
 	default:
 		queryErr = errors.New("unsupported data source")
 	}
@@ -299,6 +301,8 @@ func (s *reportService) PreviewReport(ctx context.Context, req *models.ReportCre
 		data, total, err = s.reportRepo.ExecuteClassificationQuery(ctx, req.Config.Filters, sorting, page, limit)
 	case "rejection_logs":
 		data, total, err = s.rejectionLogRepo.ExecuteRejectionLogQuery(ctx, req.Config.Filters, sorting, page, limit)
+	case "action_logs":
+		data, total, err = s.reportRepo.ExecuteActionLogQuery(ctx, req.Config.Filters, sorting, page, limit)
 	default:
 		return nil, errors.New("unsupported data source")
 	}
@@ -342,6 +346,8 @@ func (s *reportService) QueryReport(ctx context.Context, req *models.ReportQuery
 		data, total, err = s.reportRepo.ExecuteClassificationQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
 	case "rejection_logs":
 		data, total, err = s.rejectionLogRepo.ExecuteRejectionLogQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
+	case "action_logs":
+		data, total, err = s.reportRepo.ExecuteActionLogQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
 	default:
 		return nil, errors.New("unsupported data source")
 	}
@@ -397,6 +403,8 @@ func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExpo
 		data, _, err = s.reportRepo.ExecuteClassificationQuery(ctx, req.Filters, sorting, 1, limit)
 	case "rejection_logs":
 		data, _, err = s.rejectionLogRepo.ExecuteRejectionLogQuery(ctx, req.Filters, sorting, 1, limit)
+	case "action_logs":
+		data, _, err = s.reportRepo.ExecuteActionLogQuery(ctx, req.Filters, sorting, 1, limit)
 	default:
 		return nil, "", "", errors.New("unsupported data source")
 	}
@@ -737,6 +745,24 @@ func (s *reportService) GetDataSources(ctx context.Context) []models.DataSourceI
 				{Field: "description", Label: "Description", Type: "string", Filterable: true, Sortable: false},
 				{Field: "parent_name", Label: "Parent Classification", Type: "string", Filterable: true, Sortable: true},
 				{Field: "is_active", Label: "Active", Type: "boolean", Filterable: true, Sortable: true},
+				{Field: "created_at", Label: "Created At", Type: "date", Filterable: true, Sortable: true},
+			},
+		},
+		{
+			Name:  "action_logs",
+			Label: "Action Logs",
+			Fields: []models.DataSourceField{
+				{Field: "action", Label: "Action", Type: "string", Filterable: true, Sortable: true},
+				{Field: "module", Label: "Module", Type: "string", Filterable: true, Sortable: true},
+				{Field: "resource_id", Label: "Resource ID", Type: "string", Filterable: true, Sortable: false},
+				{Field: "description", Label: "Description", Type: "string", Filterable: true, Sortable: false},
+				{Field: "status", Label: "Status", Type: "string", Filterable: true, Sortable: true},
+				{Field: "ip_address", Label: "IP Address", Type: "string", Filterable: true, Sortable: false},
+				{Field: "user_agent", Label: "User Agent", Type: "string", Filterable: false, Sortable: false},
+				{Field: "duration", Label: "Duration (ms)", Type: "number", Filterable: true, Sortable: true},
+				{Field: "user_email", Label: "User Email", Type: "string", Filterable: false, Sortable: true},
+				{Field: "user_username", Label: "Username", Type: "string", Filterable: false, Sortable: true},
+				{Field: "user_full_name", Label: "User Full Name", Type: "string", Filterable: false, Sortable: false},
 				{Field: "created_at", Label: "Created At", Type: "date", Filterable: true, Sortable: true},
 			},
 		},
