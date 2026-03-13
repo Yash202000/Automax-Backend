@@ -374,7 +374,7 @@ func (r *reportRepository) ExecuteRequestQuery(ctx context.Context, filters []mo
 	// Extract requested columns from context for dynamic row construction.
 	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
 
-	query := r.db.WithContext(ctx).Debug().Model(&models.Incident{}).
+	query := r.db.WithContext(ctx).Model(&models.Incident{}).
 		Where("incidents.record_type = ?", "request")
 	query = r.applyFilters(ctx, query, filters)
 
@@ -390,13 +390,13 @@ func (r *reportRepository) ExecuteRequestQuery(ctx context.Context, filters []mo
 	offset := (page - 1) * limit
 	rows, err := query.
 		Select(
-			"incidents.incident_number, " +
-				"incidents.created_by_mobile, " +
+			"incidents.incident_number as request_number, " +
+				"incidents.created_by_mobile as created_by_mobile, " +
 				"reporters.first_name as reporter_first_name, reporters.last_name as reporter_last_name, " +
 				"classifications.name as classification_name, " +
 				"locations.name as location_name, " +
-				"incidents.title, " +
-				"incidents.created_at").
+				"incidents.title as title, " +
+				"incidents.created_at as created_at").
 		Joins("LEFT JOIN users as reporters ON incidents.reporter_id = reporters.id").
 		Joins("LEFT JOIN classifications ON incidents.classification_id = classifications.id").
 		Joins("LEFT JOIN locations ON incidents.location_id = locations.id").
@@ -450,9 +450,9 @@ func (r *reportRepository) ExecuteRequestQuery(ctx context.Context, filters []mo
 func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
 	var total int64
 	var results []map[string]interface{}
-	query := r.db.WithContext(ctx).Debug().Model(&models.Incident{})
+	query := r.db.WithContext(ctx).Model(&models.Incident{})
 	query = r.applyFilters(ctx, query, filters)
-	if err := query.Debug().Count(&total).Error; err != nil {
+	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	log.Println(filters)
@@ -461,7 +461,7 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 		query = query.Order("incidents.created_at DESC")
 	}
 	offset := (page - 1) * limit
-	rows, err := query.Debug().
+	rows, err := query.
 		Select("incidents.*, " +
 			"reporters.email as reporter_email, reporters.first_name as reporter_first_name, reporters.last_name as reporter_last_name, " +
 			"reporters.username as reporter_username, " +
@@ -1390,7 +1390,7 @@ func (r *reportRepository) ExecuteLocationQuery(ctx context.Context, filters []m
 	}
 
 	offset := (page - 1) * limit
-	rows, err := query.Debug().
+	rows, err := query.
 		Select("locations.*, parents.name as parent_name").
 		Joins("LEFT JOIN locations as parents ON locations.parent_id = parents.id").
 		Offset(offset).
@@ -1463,7 +1463,7 @@ func (r *reportRepository) ExecuteClassificationQuery(ctx context.Context, filte
 	}
 
 	offset := (page - 1) * limit
-	rows, err := query.Debug().
+	rows, err := query.
 		Select("classifications.*, parents.name as parent_name").
 		Joins("LEFT JOIN classifications as parents ON classifications.parent_id = parents.id").
 		Offset(offset).
@@ -1536,7 +1536,7 @@ func (r *reportRepository) ExecuteActionLogQuery(ctx context.Context, filters []
 	}
 
 	offset := (page - 1) * limit
-	rows, err := query.Debug().
+	rows, err := query.
 		Select("action_logs.id, action_logs.action, action_logs.module, action_logs.resource_id, " +
 			"action_logs.description, action_logs.ip_address, action_logs.user_agent, " +
 			"action_logs.status, action_logs.error_msg, action_logs.duration, action_logs.created_at, " +

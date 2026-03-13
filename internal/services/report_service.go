@@ -229,6 +229,8 @@ func (s *reportService) ExecuteReport(ctx context.Context, id uuid.UUID, req *mo
 	switch report.DataSource {
 	case "incidents":
 		data, total, queryErr = s.reportRepo.ExecuteIncidentQuery(ctx, filters, sorting, page, limit)
+	case "requests":
+		data, _, err = s.reportRepo.ExecuteRequestQuery(ctx, req.Filters, sorting, 1, limit)
 	case "users":
 		data, total, queryErr = s.reportRepo.ExecuteUserQuery(ctx, filters, sorting, page, limit)
 	case "workflows":
@@ -289,6 +291,8 @@ func (s *reportService) PreviewReport(ctx context.Context, req *models.ReportCre
 	switch req.DataSource {
 	case "incidents":
 		data, total, err = s.reportRepo.ExecuteIncidentQuery(ctx, req.Config.Filters, sorting, page, limit)
+	case "requests":
+		data, _, err = s.reportRepo.ExecuteRequestQuery(ctx, req.Config.Filters, sorting, page, limit)
 	case "users":
 		data, total, err = s.reportRepo.ExecuteUserQuery(ctx, req.Config.Filters, sorting, page, limit)
 	case "workflows":
@@ -334,6 +338,8 @@ func (s *reportService) QueryReport(ctx context.Context, req *models.ReportQuery
 	switch req.DataSource {
 	case "incidents":
 		data, total, err = s.reportRepo.ExecuteIncidentQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
+	case "requests":
+		data, _, err = s.reportRepo.ExecuteRequestQuery(ctx, req.Filters, sorting, 1, req.Limit)
 	case "users":
 		data, total, err = s.reportRepo.ExecuteUserQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
 	case "workflows":
@@ -389,7 +395,7 @@ func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExpo
 	switch req.DataSource {
 	case "incidents":
 		data, _, err = s.reportRepo.ExecuteIncidentQuery(ctx, req.Filters, sorting, 1, limit)
-	case "request":
+	case "requests":
 		data, _, err = s.reportRepo.ExecuteRequestQuery(ctx, req.Filters, sorting, 1, limit)
 	case "users":
 		data, _, err = s.reportRepo.ExecuteUserQuery(ctx, req.Filters, sorting, 1, limit)
