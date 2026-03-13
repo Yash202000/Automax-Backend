@@ -92,6 +92,14 @@ func main() {
 	// Initialize services
 	actionLogService := services.NewActionLogService(actionLogRepo)
 	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg, actionLogService)
+	
+	// Initialize LDAP service
+	ldapService, err := services.NewLDAPService(cfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize LDAP service: %v", err)
+	}
+	defer ldapService.Close()
+	
 	callLogService := services.NewCallLogService(callLogRepo, userRepo)
 	workflowService := services.NewWorkflowService(workflowRepo, roleRepo, departmentRepo, classificationRepo, db)
 	incidentService := services.NewIncidentService(incidentRepo, incidentMergeRepo, workflowRepo, userRepo, departmentRepo, classificationRepo, rejectionLogRepo, minioStorage, db, wsHub)
@@ -126,6 +134,10 @@ func main() {
 	// Initialize handlers
 	userHandler := handlers.NewUserHandler(userService, minioStorage)
 	healthHandler := handlers.NewHealthHandler()
+	
+	// Initialize LDAP handler
+	ldapHandler := handlers.NewLDAPHandler(ldapService, userService, userRepo, jwtManager, sessionStore, cfg)
+	
 	classificationHandler := handlers.NewClassificationHandler(classificationRepo)
 	locationHandler := handlers.NewLocationHandler(locationRepo)
 	departmentHandler := handlers.NewDepartmentHandler(departmentRepo)
@@ -208,6 +220,14 @@ func main() {
 	auth.Post("/login", userHandler.Login)
 	auth.Post("/refresh", userHandler.RefreshToken)
 	auth.Post("/logout", authMiddleware.Authenticate(), userHandler.Logout)
+
+	// LDAP routes (public - for LDAP authentication)
+	ldap := v1.Group("/ldap")
+	ldap.Post("/login", ldapHandler.Login)
+	ldap.Post("/test", authMiddleware.Authenticate(), authMiddleware.RequirePermission("admin:ldap"), ldapHandler.TestConnection)
+	ldap.Post("/search", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:view"), ldapHandler.SearchUser)
+	ldap.Post("/sync", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:update"), ldapHandler.SyncUser)
+	ldap.Get("/status", authMiddleware.Authenticate(), authMiddleware.RequirePermission("admin:ldap"), ldapHandler.GetLDAPStatus)
 
 	// SSO routes
 	sso := v1.Group("/sso", authMiddleware.Authenticate())
