@@ -930,8 +930,13 @@ func (r *incidentRepository) GetReportedByUser(ctx context.Context, userID uuid.
 	}
 
 	err := baseQuery.
-		Preload("CurrentState").
+		Preload("Classification").
 		Preload("Workflow").
+		Preload("CurrentState").
+		Preload("Assignee").
+		Preload("Department").
+		Preload("Location").
+		Preload("LookupValues.Category").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(limit).
