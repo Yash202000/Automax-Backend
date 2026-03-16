@@ -985,6 +985,10 @@ func (r *incidentRepository) ListRevisions(ctx context.Context, filter *models.I
 	err := query.
 		Preload("PerformedBy").
 		Preload("PerformedBy.Roles").
+		Preload("TransitionHistory").
+		Preload("TransitionHistory.Transition").
+		Preload("TransitionHistory.FromState").
+		Preload("TransitionHistory.ToState").
 		Order("revision_number DESC").
 		Offset(offset).
 		Limit(limit).

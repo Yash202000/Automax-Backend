@@ -292,9 +292,10 @@ type IncidentRevision struct {
 	PerformedByPhone string    `gorm:"size:50" json:"performed_by_phone"`
 
 	// Optional links to related entities
-	CommentID           *uuid.UUID `gorm:"type:uuid" json:"comment_id"`
-	AttachmentID        *uuid.UUID `gorm:"type:uuid" json:"attachment_id"`
-	TransitionHistoryID *uuid.UUID `gorm:"type:uuid" json:"transition_history_id"`
+	CommentID           *uuid.UUID                  `gorm:"type:uuid" json:"comment_id"`
+	AttachmentID        *uuid.UUID                  `gorm:"type:uuid" json:"attachment_id"`
+	TransitionHistoryID *uuid.UUID                  `gorm:"type:uuid" json:"transition_history_id"`
+	TransitionHistory   *IncidentTransitionHistory  `gorm:"foreignKey:TransitionHistoryID" json:"transition_history,omitempty"`
 
 	CreatedAt time.Time `gorm:"index" json:"created_at"`
 }
@@ -990,10 +991,11 @@ type IncidentRevisionResponse struct {
 	PerformedBy         *UserResponse              `json:"performed_by,omitempty"`
 	PerformedByRoles    []string                   `json:"performed_by_roles"`
 	PerformedByPhone    string                     `json:"performed_by_phone"`
-	CommentID           *uuid.UUID                 `json:"comment_id,omitempty"`
-	AttachmentID        *uuid.UUID                 `json:"attachment_id,omitempty"`
-	TransitionHistoryID *uuid.UUID                 `json:"transition_history_id,omitempty"`
-	CreatedAt           time.Time                  `json:"created_at"`
+	CommentID           *uuid.UUID                  `json:"comment_id,omitempty"`
+	AttachmentID        *uuid.UUID                  `json:"attachment_id,omitempty"`
+	TransitionHistoryID *uuid.UUID                  `json:"transition_history_id,omitempty"`
+	Transition          *WorkflowTransitionResponse `json:"transition,omitempty"`
+	CreatedAt           time.Time                   `json:"created_at"`
 }
 
 // ToIncidentRevisionResponse converts an IncidentRevision to IncidentRevisionResponse
@@ -1029,5 +1031,11 @@ func ToIncidentRevisionResponse(r *IncidentRevision) IncidentRevisionResponse {
 		resp.PerformedBy = &perfResp
 	}
 
+	if r.TransitionHistory != nil && r.TransitionHistory.Transition != nil {
+		transResp := ToWorkflowTransitionResponse(r.TransitionHistory.Transition)
+		resp.Transition = &transResp
+	}
+
 	return resp
+
 }
