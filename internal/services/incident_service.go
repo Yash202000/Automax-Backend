@@ -74,6 +74,8 @@ type IncidentService interface {
 
 	// SetReadyToCloseService wires in the ReadyToCloseService (called post-construction).
 	SetReadyToCloseService(rtcService ReadyToCloseService)
+	// SetNotificationService wires in the NotificationService (called post-construction).
+	SetNotificationService(ns *NotificationService)
 
 	// Revisions
 	ListRevisions(ctx context.Context, incidentID uuid.UUID, filter *models.IncidentRevisionFilter) ([]models.IncidentRevisionResponse, int64, error)
@@ -92,6 +94,7 @@ type incidentService struct {
 	db                  *gorm.DB
 	wsHub               *WSHub
 	readyToCloseService ReadyToCloseService
+	notificationService *NotificationService
 }
 
 func NewIncidentService(
@@ -124,6 +127,11 @@ func NewIncidentService(
 // Called after both services are constructed to avoid circular dependency.
 func (s *incidentService) SetReadyToCloseService(rtcService ReadyToCloseService) {
 	s.readyToCloseService = rtcService
+}
+
+// SetNotificationService wires the NotificationService into the incident service.
+func (s *incidentService) SetNotificationService(ns *NotificationService) {
+	s.notificationService = ns
 }
 
 // calculateSLADeadline calculates the SLA deadline based on classification criticality
@@ -2233,6 +2241,29 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			}
 		} else {
 			fmt.Println("[DEBUG] No merged incidents found or error checking")
+		}
+	}
+
+	// Send in-app notifications to next assignee(s)
+	if s.notificationService != nil && len(assigneeUserIDs) > 0 {
+		var assigneeEmails []string
+		for _, assigneeID := range assigneeUserIDs {
+			if u, err := s.userRepo.FindByID(ctx, assigneeID); err == nil && u.Email != "" {
+				assigneeEmails = append(assigneeEmails, u.Email)
+			}
+		}
+		if len(assigneeEmails) > 0 {
+			subject := fmt.Sprintf("Incident %s assigned to you", incident.IncidentNumber)
+			body := fmt.Sprintf(
+				"Incident \"%s\" has been assigned to you. Status changed to: %s.",
+				incident.Title, newStateName,
+			)
+			_, _ = s.notificationService.SendNotification(
+				ctx, "notification", nil, "en",
+				assigneeEmails, nil, nil,
+				subject, body,
+				nil, nil, &userID, nil,
+			)
 		}
 	}
 

@@ -121,6 +121,7 @@ func main() {
 
 	// Wire ReadyToCloseService into IncidentService (post-construction to avoid circular deps)
 	incidentService.SetReadyToCloseService(readyToCloseService)
+	incidentService.SetNotificationService(notificationService)
 
 	// Initialize and start SLA Monitor (checks every 5 minutes)
 	slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, escalationGroupService, readyToCloseService, 5*time.Minute)
