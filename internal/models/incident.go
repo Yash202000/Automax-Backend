@@ -536,6 +536,7 @@ type IncidentFilter struct {
 	EndDate          *time.Time  `query:"end_date" json:"end_date" validate:"omitempty"`                                              // filter by created_at <= end_date
 	CustomFieldKey   string      `query:"custom_field_key" json:"custom_field_key" validate:"omitempty"`                              // e.g. "lookup:TASK ID"
 	CustomFieldValue string      `query:"custom_field_value" json:"custom_field_value" validate:"omitempty"`                          // e.g. "TASK-1235"
+	TaskID           string      `query:"task_id" json:"task_id" validate:"omitempty"`                                                // filter by task ID in custom_fields
 	Page             int         `query:"page" json:"page" validate:"omitempty,min=1"`
 	Limit            int         `query:"limit" json:"limit" validate:"omitempty,min=1,max=100"`
 	UserRoleIDs      []uuid.UUID `json:"-"`     // For filtering stats by user's roles
