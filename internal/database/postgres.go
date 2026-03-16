@@ -245,6 +245,7 @@ func Seed(db *gorm.DB) error {
 		{Name: "Create Application Links", Code: "application-links:create", Module: "application-links", Action: "create", Description: "Create application links"},
 		{Name: "Update Application Links", Code: "application-links:update", Module: "application-links", Action: "update", Description: "Update application links"},
 		{Name: "Delete Application Links", Code: "application-links:delete", Module: "application-links", Action: "delete", Description: "Delete application links"},
+		{Name: "Access Application Links on Dashboard", Code: "application-links:dashboard", Module: "application-links", Action: "dashboard", Description: "See and launch application links from the dashboard"},
 
 		// Notification permissions
 		{Name: "View Notifications", Code: "notifications:read", Module: "notifications", Action: "read", Description: "View notification logs"},

@@ -530,8 +530,8 @@ func main() {
 	appLinks.Delete("/:id", authMiddleware.RequirePermission("application-links:delete"), applicationLinkHandler.DeleteLink)
 	appLinks.Post("/:id/upload-image", authMiddleware.RequirePermission("application-links:update"), applicationLinkHandler.UploadImage)
 
-	// Public application links endpoint (active links only) - accessible to authenticated users
-	v1.Get("/application-links", authMiddleware.Authenticate(), applicationLinkHandler.ListActiveLinks)
+	// Dashboard application links - requires explicit permission
+	v1.Get("/application-links", authMiddleware.RequirePermission("application-links:dashboard"), applicationLinkHandler.ListActiveLinks)
 
 	// Settings routes
 	// Public settings endpoint (accessible to everyone for branding)
