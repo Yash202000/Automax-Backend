@@ -257,6 +257,14 @@ func Seed(db *gorm.DB) error {
 		{Name: "Update Templates", Code: "templates:update", Module: "templates", Action: "update", Description: "Update notification templates"},
 		{Name: "Delete Templates", Code: "templates:delete", Module: "templates", Action: "delete", Description: "Delete notification templates"},
 
+		// Escalation Group permissions
+		{Name: "View Escalation Groups", Code: "escalation-groups:view", Module: "escalation-groups", Action: "view", Description: "View escalation groups list and details"},
+		{Name: "Create Escalation Group", Code: "escalation-groups:create", Module: "escalation-groups", Action: "create", Description: "Create new escalation groups"},
+		{Name: "Update Escalation Group", Code: "escalation-groups:update", Module: "escalation-groups", Action: "update", Description: "Update escalation group settings"},
+		{Name: "Delete Escalation Group", Code: "escalation-groups:delete", Module: "escalation-groups", Action: "delete", Description: "Delete escalation groups"},
+		{Name: "Assign Users to Escalation Group", Code: "escalation-groups:assign_users", Module: "escalation-groups", Action: "assign_users", Description: "Add or remove users from escalation groups"},
+		{Name: "Manage Escalation Rules", Code: "escalation-groups:manage_rules", Module: "escalation-groups", Action: "manage_rules", Description: "Configure escalation frequency, channel, and classification rules"},
+
 		// Dashboard permissions
 		{Name: "Admin Dashboard", Code: "dashboard:admin", Module: "dashboard", Action: "admin", Description: "Access admin section cards on dashboard"},
 		{Name: "Incidents Dashboard", Code: "dashboard:incidents", Module: "dashboard", Action: "incidents", Description: "Access incident cards on dashboard"},
