@@ -248,6 +248,9 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		searchPattern := "%" + filter.Search + "%"
 		query = query.Where("incident_number ILIKE ? OR title ILIKE ? OR description ILIKE ?", searchPattern, searchPattern, searchPattern)
 	}
+	if filter.CustomFieldKey != "" && filter.CustomFieldValue != "" {
+		query = query.Where("custom_fields::jsonb -> ? ->> 'value' ILIKE ?", filter.CustomFieldKey, "%"+filter.CustomFieldValue+"%")
+	}
 
 	// Count total
 	if err := query.Count(&total).Error; err != nil {

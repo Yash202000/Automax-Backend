@@ -534,6 +534,8 @@ type IncidentFilter struct {
 	Channel          *string     `query:"channel" json:"channel" validate:"omitempty"`                                                // for complaints
 	StartDate        *time.Time  `query:"start_date" json:"start_date" validate:"omitempty"`                                          // filter by created_at >= start_date
 	EndDate          *time.Time  `query:"end_date" json:"end_date" validate:"omitempty"`                                              // filter by created_at <= end_date
+	CustomFieldKey   string      `query:"custom_field_key" json:"custom_field_key" validate:"omitempty"`                              // e.g. "lookup:TASK ID"
+	CustomFieldValue string      `query:"custom_field_value" json:"custom_field_value" validate:"omitempty"`                          // e.g. "TASK-1235"
 	Page             int         `query:"page" json:"page" validate:"omitempty,min=1"`
 	Limit            int         `query:"limit" json:"limit" validate:"omitempty,min=1,max=100"`
 	UserRoleIDs      []uuid.UUID `json:"-"`     // For filtering stats by user's roles
