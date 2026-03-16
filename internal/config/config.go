@@ -12,6 +12,7 @@ type Config struct {
 	Redis          RedisConfig
 	MinIO          MinIOConfig
 	JWT            JWTConfig
+	LDAP           LDAPConfig
 	SSOPrivateKey  string // env: SSO_RSA_PRIVATE_KEY (PEM, optional — auto-gen if empty)
 	SSOIssuerURL   string // env: SSO_ISSUER_URL (e.g. https://automax.example.com — embedded in iss claim)
 	SSOFrontendURL string // env: SSO_FRONTEND_URL (e.g. https://automax.example.com — where /sso-complete lives)
@@ -72,6 +73,19 @@ type JWTConfig struct {
 	ExpireHour int
 }
 
+type LDAPConfig struct {
+	Enabled            bool
+	URL                string
+	BaseDN             string
+	BindDN             string
+	BindPassword       string
+	UserSearchBase     string
+	UserSearchFilter   string
+	GroupSearchBase    string
+	GroupSearchFilter  string
+	InsecureSkipVerify bool
+}
+
 func Load() *Config {
 	return &Config{
 		Server: ServerConfig{
@@ -103,6 +117,18 @@ func Load() *Config {
 		JWT: JWTConfig{
 			Secret:     getEnv("JWT_SECRET", "your-super-secret-jwt-key-change-in-production"),
 			ExpireHour: getEnvAsInt("JWT_EXPIRE_HOUR", 24),
+		},
+		LDAP: LDAPConfig{
+			Enabled:            getEnvAsBool("LDAP_ENABLED", false),
+			URL:                getEnv("LDAP_URL", "ldap://localhost:389"),
+			BaseDN:             getEnv("LDAP_BASE_DN", "dc=example,dc=com"),
+			BindDN:             getEnv("LDAP_BIND_DN", ""),
+			BindPassword:       getEnv("LDAP_BIND_PASSWORD", ""),
+			UserSearchBase:     getEnv("LDAP_USER_SEARCH_BASE", "ou=users,dc=example,dc=com"),
+			UserSearchFilter:   getEnv("LDAP_USER_SEARCH_FILTER", "(sAMAccountName={{username}})"),
+			GroupSearchBase:    getEnv("LDAP_GROUP_SEARCH_BASE", "ou=groups,dc=example,dc=com"),
+			GroupSearchFilter:  getEnv("LDAP_GROUP_SEARCH_FILTER", "(member={{userDN}})"),
+			InsecureSkipVerify: getEnvAsBool("LDAP_INSECURE_SKIP_VERIFY", true),
 		},
 		SSOPrivateKey:  getEnv("SSO_RSA_PRIVATE_KEY", ""),
 		SSOIssuerURL:   getEnv("SSO_ISSUER_URL", ""),
