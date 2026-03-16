@@ -2134,13 +2134,14 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	revNum, _ := txRepo.GetNextRevisionNumber(ctx, incidentID)
 	changesBytes, _ := json.Marshal(changes)
 	txRepo.CreateRevision(ctx, &models.IncidentRevision{
-		IncidentID:        incidentID,
-		RevisionNumber:    revNum,
-		ActionType:        models.RevisionActionStatusChanged,
-		ActionDescription: revDescription,
-		Changes:           string(changesBytes),
-		PerformedByID:     userID,
-		CreatedAt:         time.Now(),
+		IncidentID:          incidentID,
+		RevisionNumber:      revNum,
+		ActionType:          models.RevisionActionStatusChanged,
+		ActionDescription:   revDescription,
+		Changes:             string(changesBytes),
+		PerformedByID:       userID,
+		TransitionHistoryID: &history.ID,
+		CreatedAt:           time.Now(),
 	})
 
 	// Create revision entry that includes duration/comment info for ready_to_close
