@@ -2192,19 +2192,22 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 
 	// Handle merge-related operations AFTER commit so they can see committed data
 	if s.incidentMergeRepo != nil {
-		// Check if this is a reopen (transitioning FROM a terminal state to a non-terminal state)
-		if transition.FromState != nil && transition.FromState.StateType == "terminal" && newState.StateType != "terminal" {
-			fmt.Println("[DEBUG] Reopen detected - calling AutoUnmergeOnReopen")
-			_ = s.incidentMergeRepo.AutoUnmergeOnReopen(ctx, incidentID)
-		} else {
-			// Check if this incident has merged incidents and sync their status
-			hasMerged, mergeErr := s.incidentMergeRepo.HasMergedIncidents(ctx, incidentID)
-			fmt.Printf("[DEBUG] HasMergedIncidents check: hasMerged=%v, err=%v\n", hasMerged, mergeErr)
-			if mergeErr == nil && hasMerged {
+		// Check if this incident has merged incidents
+		hasMerged, mergeErr := s.incidentMergeRepo.HasMergedIncidents(ctx, incidentID)
+		fmt.Printf("[DEBUG] HasMergedIncidents check: hasMerged=%v, err=%v\n", hasMerged, mergeErr)
+		if mergeErr == nil && hasMerged {
+			// Check if this is a reopen (transitioning FROM a terminal state to a non-terminal state)
+			if transition.FromState != nil && transition.FromState.StateType == "terminal" && newState.StateType != "terminal" {
+				fmt.Println("[DEBUG] Reopen detected - calling AutoUnmergeOnReopen")
+				_ = s.incidentMergeRepo.AutoUnmergeOnReopen(ctx, incidentID)
+			} else {
 				if newState.StateType == "terminal" {
 					fmt.Println("[DEBUG] Terminal state - closing merged incidents")
 					// Terminal state: close all merged incidents
 					_ = s.incidentMergeRepo.CloseMergedIncidents(ctx, incidentID)
+
+					// Sync transition data (revision, history, comment) to children
+					_ = s.syncTransitionToMergedIncidents(ctx, incidentID, transition, history, userID)
 
 					// Run feedback/attachment copy and SMS in background
 					bgCtx := context.Background()
@@ -2217,6 +2220,9 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 					// Non-terminal state: sync the status and send SMS notifications
 					_ = s.incidentMergeRepo.SyncStatusToMergedIncidents(ctx, incidentID, transition.ToStateID)
 
+					// Sync transition data (revision, history, comment) to children
+					_ = s.syncTransitionToMergedIncidents(ctx, incidentID, transition, history, userID)
+
 					// Send SMS notifications in background
 					bgCtx := context.Background()
 					fmt.Println("[DEBUG] Starting goroutine: notifyStatusChangeToMergedIncidents")
@@ -2224,9 +2230,9 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 						_ = s.notifyStatusChangeToMergedIncidents(bgCtx, incidentID, newStateName, req.Comment, userID)
 					}()
 				}
-			} else {
-				fmt.Println("[DEBUG] No merged incidents found or error checking")
 			}
+		} else {
+			fmt.Println("[DEBUG] No merged incidents found or error checking")
 		}
 	}
 
@@ -2457,7 +2463,7 @@ func (s *incidentService) AddComment(ctx context.Context, incidentID uuid.UUID, 
 }
 
 func (s *incidentService) ListComments(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentCommentResponse, error) {
-	// Get the incident to check if it's a master
+	// Get the incident to check if it's a master or child
 	incident, err := s.incidentRepo.FindByID(ctx, incidentID)
 	if err != nil {
 		return nil, err
@@ -2489,10 +2495,20 @@ func (s *incidentService) ListComments(ctx context.Context, incidentID uuid.UUID
 			})
 		}
 	} else {
-		// This is a child incident - just return its own comments
+		// This is a child incident - get its own comments AND master's comments
 		comments, err = s.incidentRepo.ListComments(ctx, incidentID)
 		if err != nil {
 			return nil, err
+		}
+
+		// Also get comments from master incident
+		masterComments, err := s.incidentRepo.ListComments(ctx, *incident.MasterIncidentID)
+		if err == nil && len(masterComments) > 0 {
+			comments = append(comments, masterComments...)
+			// Sort by created_at DESC
+			sort.Slice(comments, func(i, j int) bool {
+				return comments[i].CreatedAt.After(comments[j].CreatedAt)
+			})
 		}
 	}
 
@@ -2584,6 +2600,14 @@ func (s *incidentService) AddAttachment(ctx context.Context, incidentID uuid.UUI
 	description := fmt.Sprintf("Attachment added - %s", attachment.FileName)
 	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionAttachmentAdded, description, nil, attachment.UploadedByID)
 
+	// Sync attachment to merged child incidents if this is a master incident
+	if s.incidentMergeRepo != nil {
+		hasMerged, _ := s.incidentMergeRepo.HasMergedIncidents(ctx, incidentID)
+		if hasMerged {
+			_ = s.syncAttachmentToMergedIncidents(ctx, incidentID, created, attachment.UploadedByID)
+		}
+	}
+
 	url, err := s.storage.GetFileURL(ctx, created.FilePath)
 	if err != nil {
 		// Log the error but don't fail the operation
@@ -2594,8 +2618,58 @@ func (s *incidentService) AddAttachment(ctx context.Context, incidentID uuid.UUI
 	return &resp, nil
 }
 
+// syncAttachmentToMergedIncidents syncs attachment to all merged child incidents
+func (s *incidentService) syncAttachmentToMergedIncidents(ctx context.Context, masterIncidentID uuid.UUID, masterAttachment *models.IncidentAttachment, uploadedBy uuid.UUID) error {
+	// Get merged incidents
+	mergedIncidents, err := s.incidentMergeRepo.GetMergedIncidents(ctx, masterIncidentID)
+	if err != nil {
+		return err
+	}
+	if len(mergedIncidents) == 0 {
+		return nil
+	}
+
+	// Get master incident for revision description
+	masterIncident, err := s.incidentRepo.FindByID(ctx, masterIncidentID)
+	if err != nil {
+		return err
+	}
+
+	// Process each merged incident
+	for _, merged := range mergedIncidents {
+		// Create attachment record for child (same file path, different incident ID)
+		childAttachment := &models.IncidentAttachment{
+			IncidentID:          merged.ID,
+			FileName:            masterAttachment.FileName,
+			FileSize:            masterAttachment.FileSize,
+			MimeType:            masterAttachment.MimeType,
+			FilePath:            masterAttachment.FilePath,
+			UploadedByID:        uploadedBy,
+			TransitionHistoryID: masterAttachment.TransitionHistoryID,
+		}
+
+		if attErr := s.incidentRepo.CreateAttachment(ctx, childAttachment); attErr != nil {
+			fmt.Printf("[DEBUG] Failed to create attachment for child %s: %v\n", merged.IncidentNumber, attErr)
+			continue
+		}
+
+		// Create revision for child
+		description := fmt.Sprintf(
+			"Attachment added to parent incident %s - %s",
+			masterIncident.IncidentNumber,
+			masterAttachment.FileName,
+		)
+
+		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionAttachmentAdded, description, nil, uploadedBy); revErr != nil {
+			fmt.Printf("[DEBUG] Failed to create revision for child %s: %v\n", merged.IncidentNumber, revErr)
+		}
+	}
+
+	return nil
+}
+
 func (s *incidentService) ListAttachments(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentAttachmentResponse, error) {
-	// Get the incident to check if it's a master
+	// Get the incident to check if it's a master or child
 	incident, err := s.incidentRepo.FindByID(ctx, incidentID)
 	if err != nil {
 		return nil, err
@@ -2627,10 +2701,20 @@ func (s *incidentService) ListAttachments(ctx context.Context, incidentID uuid.U
 			})
 		}
 	} else {
-		// This is a child incident - just return its own attachments
+		// This is a child incident - get its own attachments AND master's attachments
 		attachments, err = s.incidentRepo.ListAttachments(ctx, incidentID)
 		if err != nil {
 			return nil, err
+		}
+
+		// Also get attachments from master incident
+		masterAttachments, err := s.incidentRepo.ListAttachments(ctx, *incident.MasterIncidentID)
+		if err == nil && len(masterAttachments) > 0 {
+			attachments = append(attachments, masterAttachments...)
+			// Sort by created_at DESC
+			sort.Slice(attachments, func(i, j int) bool {
+				return attachments[i].CreatedAt.After(attachments[j].CreatedAt)
+			})
 		}
 	}
 
@@ -2725,8 +2809,76 @@ func (s *incidentService) AssignIncident(ctx context.Context, incidentID, assign
 	description := fmt.Sprintf("AssignedTo changed from %s to %s", oldAssigneeName, newAssigneeName)
 	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionAssigneeChanged, description, changes, userID)
 
+	// Sync assignee change to merged child incidents
+	if s.incidentMergeRepo != nil {
+		hasMerged, _ := s.incidentMergeRepo.HasMergedIncidents(ctx, incidentID)
+		if hasMerged {
+			_ = s.syncAssigneeToMergedIncidents(ctx, incidentID, assigneeID, userID)
+		}
+	}
+
 	resp := models.ToIncidentResponse(updated)
 	return &resp, nil
+}
+
+// syncAssigneeToMergedIncidents syncs assignee change to all merged child incidents
+func (s *incidentService) syncAssigneeToMergedIncidents(ctx context.Context, masterIncidentID uuid.UUID, assigneeID uuid.UUID, userID uuid.UUID) error {
+	// Get merged incidents
+	mergedIncidents, err := s.incidentMergeRepo.GetMergedIncidents(ctx, masterIncidentID)
+	if err != nil {
+		return err
+	}
+	if len(mergedIncidents) == 0 {
+		return nil
+	}
+
+	// Get master incident for revision description
+	masterIncident, err := s.incidentRepo.FindByID(ctx, masterIncidentID)
+	if err != nil {
+		return err
+	}
+
+	// Get assignee name for revision
+	assignee, err := s.userRepo.FindByID(ctx, assigneeID)
+	if err != nil {
+		return err
+	}
+	newAssigneeName := assignee.FirstName + " " + assignee.LastName
+
+	// Process each merged incident
+	for _, merged := range mergedIncidents {
+		// Update assignee
+		if assignErr := s.incidentRepo.AssignIncident(ctx, merged.ID, assigneeID); assignErr != nil {
+			fmt.Printf("[DEBUG] Failed to update assignee for child %s: %v\n", merged.IncidentNumber, assignErr)
+			continue
+		}
+
+		// Keep assignees junction table in sync
+		if setErr := s.incidentRepo.SetAssignees(ctx, merged.ID, []uuid.UUID{assigneeID}); setErr != nil {
+			fmt.Printf("[DEBUG] SetAssignees failed for child %s: %v\n", merged.IncidentNumber, setErr)
+		}
+
+		// Create revision for child
+		changes := []models.IncidentFieldChange{
+			{
+				FieldName:  "assignee_id",
+				FieldLabel: "Assigned To",
+				OldValue:   strPtr("Unassigned"),
+				NewValue:   &newAssigneeName,
+			},
+		}
+		description := fmt.Sprintf(
+			"Parent incident %s assignee changed to %s",
+			masterIncident.IncidentNumber,
+			newAssigneeName,
+		)
+
+		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionAssigneeChanged, description, changes, userID); revErr != nil {
+			fmt.Printf("[DEBUG] Failed to create revision for child %s: %v\n", merged.IncidentNumber, revErr)
+		}
+	}
+
+	return nil
 }
 
 // Stats and user queries
@@ -2805,10 +2957,60 @@ func (s *incidentService) CheckAndUpdateSLABreaches(ctx context.Context) error {
 // Revisions
 
 func (s *incidentService) ListRevisions(ctx context.Context, incidentID uuid.UUID, filter *models.IncidentRevisionFilter) ([]models.IncidentRevisionResponse, int64, error) {
-	filter.IncidentID = incidentID
-	revisions, total, err := s.incidentRepo.ListRevisions(ctx, filter)
+	// Get the incident to check if it's a master or child
+	incident, err := s.incidentRepo.FindByID(ctx, incidentID)
 	if err != nil {
 		return nil, 0, err
+	}
+
+	var revisions []models.IncidentRevision
+	var total int64
+
+	// If this is a master incident, include revisions from all merged (child) incidents
+	if incident.MasterIncidentID == nil {
+		// This is either a standalone incident or a master incident
+		// Get revisions from this incident
+		filter.IncidentID = incidentID
+		revisions, total, err = s.incidentRepo.ListRevisions(ctx, filter)
+		if err != nil {
+			return nil, 0, err
+		}
+
+		// If it's a master, also get revisions from merged children
+		mergedIncidents, err := s.incidentMergeRepo.GetMergedIncidents(ctx, incidentID)
+		if err == nil && len(mergedIncidents) > 0 {
+			for _, child := range mergedIncidents {
+				filter.IncidentID = child.ID
+				childRevisions, _, err := s.incidentRepo.ListRevisions(ctx, filter)
+				if err == nil {
+					revisions = append(revisions, childRevisions...)
+				}
+			}
+			// Sort by created_at DESC
+			sort.Slice(revisions, func(i, j int) bool {
+				return revisions[i].CreatedAt.After(revisions[j].CreatedAt)
+			})
+			total = int64(len(revisions))
+		}
+	} else {
+		// This is a child incident - get its own revisions AND master's revisions
+		filter.IncidentID = incidentID
+		revisions, total, err = s.incidentRepo.ListRevisions(ctx, filter)
+		if err != nil {
+			return nil, 0, err
+		}
+
+		// Also get revisions from master incident
+		filter.IncidentID = *incident.MasterIncidentID
+		masterRevisions, _, err := s.incidentRepo.ListRevisions(ctx, filter)
+		if err == nil && len(masterRevisions) > 0 {
+			revisions = append(revisions, masterRevisions...)
+			// Sort by created_at DESC
+			sort.Slice(revisions, func(i, j int) bool {
+				return revisions[i].CreatedAt.After(revisions[j].CreatedAt)
+			})
+			total = int64(len(revisions))
+		}
 	}
 
 	responses := make([]models.IncidentRevisionResponse, len(revisions))
@@ -3063,6 +3265,80 @@ func (s *incidentService) notifyStatusChangeToMergedIncidents(ctx context.Contex
 	}
 
 	fmt.Println("=== [DEBUG] notifyStatusChangeToMergedIncidents END ===")
+	return nil
+}
+
+// syncTransitionToMergedIncidents syncs transition data (revision, history, comment) to all merged child incidents
+func (s *incidentService) syncTransitionToMergedIncidents(ctx context.Context, masterIncidentID uuid.UUID, transition *models.WorkflowTransition, history *models.IncidentTransitionHistory, userID uuid.UUID) error {
+	// Get merged incidents
+	mergedIncidents, err := s.incidentMergeRepo.GetMergedIncidents(ctx, masterIncidentID)
+	if err != nil {
+		return err
+	}
+	if len(mergedIncidents) == 0 {
+		return nil
+	}
+
+	now := time.Now()
+	masterIncident, err := s.incidentRepo.FindByID(ctx, masterIncidentID)
+	if err != nil {
+		return err
+	}
+
+	oldStateName := transition.FromState.Name
+	newStateName := transition.ToState.Name
+
+	// Process each merged incident
+	for _, merged := range mergedIncidents {
+		// 1. Create transition history record for child
+		childHistory := &models.IncidentTransitionHistory{
+			IncidentID:     merged.ID,
+			TransitionID:   &transition.ID,
+			FromStateID:    transition.FromStateID,
+			ToStateID:      transition.ToStateID,
+			PerformedByID:  userID,
+			Comment:        history.Comment,
+			TransitionedAt: now,
+		}
+		if histErr := s.incidentRepo.CreateTransitionHistory(ctx, childHistory); histErr != nil {
+			fmt.Printf("[DEBUG] Failed to create transition history for child %s: %v\n", merged.IncidentNumber, histErr)
+		}
+
+		// 2. Create revision record for child
+		changes := []models.IncidentFieldChange{
+			{
+				FieldName:  "current_state_id",
+				FieldLabel: "Status",
+				OldValue:   &oldStateName,
+				NewValue:   &newStateName,
+			},
+		}
+		description := fmt.Sprintf(
+			"Parent incident %s transitioned from %s to %s",
+			masterIncident.IncidentNumber,
+			oldStateName,
+			newStateName,
+		)
+
+		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionStatusChanged, description, changes, userID); revErr != nil {
+			fmt.Printf("[DEBUG] Failed to create revision for child %s: %v\n", merged.IncidentNumber, revErr)
+		}
+
+		// 3. If master had a comment, create a comment record for child too
+		if history.Comment != "" {
+			childComment := &models.IncidentComment{
+				IncidentID:          merged.ID,
+				AuthorID:            userID,
+				Content:             history.Comment,
+				IsInternal:          true,
+				TransitionHistoryID: &childHistory.ID,
+			}
+			if commentErr := s.incidentRepo.CreateComment(ctx, childComment); commentErr != nil {
+				fmt.Printf("[DEBUG] Failed to create comment for child %s: %v\n", merged.IncidentNumber, commentErr)
+			}
+		}
+	}
+
 	return nil
 }
 
