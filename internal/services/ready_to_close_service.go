@@ -269,11 +269,25 @@ func (s *readyToCloseService) sendPreExpiryNotification(ctx context.Context, ent
 		return fmt.Errorf("incident not found: %w", err)
 	}
 
-	// Determine recipient — the user who performed the ready-to-close transition
-	if entry.EnteredBy == nil || entry.EnteredBy.Email == "" {
-		log.Printf("[ReadyToClose] Incident %s has no entered-by user loaded; skipping pre-expiry notification", entry.IncidentID)
-		// Mark as notified to avoid repeated attempts
+	// Collect recipient emails from the incident's current assignees (first many-to-many, then single).
+	emailSet := make(map[string]struct{})
+	for _, u := range incident.Assignees {
+		if u.Email != "" {
+			emailSet[u.Email] = struct{}{}
+		}
+	}
+	if incident.Assignee != nil && incident.Assignee.Email != "" {
+		emailSet[incident.Assignee.Email] = struct{}{}
+	}
+
+	if len(emailSet) == 0 {
+		log.Printf("[ReadyToClose] Incident %s has no assignees; skipping pre-expiry notification", entry.IncidentID)
 		return s.repo.MarkExpiryNotified(ctx, entry.ID)
+	}
+
+	recipients := make([]string, 0, len(emailSet))
+	for email := range emailSet {
+		recipients = append(recipients, email)
 	}
 
 	remaining := time.Until(entry.ExpiresAt)
@@ -293,10 +307,10 @@ func (s *readyToCloseService) sendPreExpiryNotification(ctx context.Context, ent
 
 	if _, err := s.notifService.SendNotification(
 		ctx,
-		"notification", // in-app channel — delivers to user's inbox
+		"notification", // in-app
 		nil,            // no template
 		"en",
-		[]string{entry.EnteredBy.Email}, // notify the user who performed the ready-to-close transition
+		recipients, // notify all current assignees of the incident
 		nil, nil,
 		subject, body,
 		map[string]string{
@@ -345,7 +359,7 @@ func (s *readyToCloseService) sendPreExpiryNotification(ctx context.Context, ent
 	}
 	s.db.WithContext(ctx).Create(revision)
 
-	log.Printf("[ReadyToClose] Pre-expiry notification sent for incident %s (expires %s)", entry.IncidentID, entry.ExpiresAt.Format(time.RFC3339))
+	log.Printf("ReadyToClose Pre-expiry notification sent for incident %s (expires %s)", entry.IncidentID, entry.ExpiresAt.Format(time.RFC3339))
 	return nil
 }
 
