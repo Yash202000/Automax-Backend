@@ -292,10 +292,10 @@ type IncidentRevision struct {
 	PerformedByPhone string    `gorm:"size:50" json:"performed_by_phone"`
 
 	// Optional links to related entities
-	CommentID           *uuid.UUID                  `gorm:"type:uuid" json:"comment_id"`
-	AttachmentID        *uuid.UUID                  `gorm:"type:uuid" json:"attachment_id"`
-	TransitionHistoryID *uuid.UUID                  `gorm:"type:uuid" json:"transition_history_id"`
-	TransitionHistory   *IncidentTransitionHistory  `gorm:"foreignKey:TransitionHistoryID" json:"transition_history,omitempty"`
+	CommentID           *uuid.UUID                 `gorm:"type:uuid" json:"comment_id"`
+	AttachmentID        *uuid.UUID                 `gorm:"type:uuid" json:"attachment_id"`
+	TransitionHistoryID *uuid.UUID                 `gorm:"type:uuid" json:"transition_history_id"`
+	TransitionHistory   *IncidentTransitionHistory `gorm:"foreignKey:TransitionHistoryID" json:"transition_history,omitempty"`
 
 	CreatedAt time.Time `gorm:"index" json:"created_at"`
 }
@@ -480,9 +480,9 @@ type ConvertToRequestResponse struct {
 
 // BulkConvertToRequestItem represents a single item in bulk conversion
 type BulkConvertToRequestItem struct {
-	IncidentID        string `json:"incident_id" validate:"required,uuid"`
-	TransitionID      string `json:"transition_id" validate:"omitempty,uuid"`
-	TransitionComment string `json:"transition_comment"`
+	IncidentID        string                   `json:"incident_id" validate:"required,uuid"`
+	TransitionID      string                   `json:"transition_id" validate:"omitempty,uuid"`
+	TransitionComment string                   `json:"transition_comment"`
 	Feedback          *IncidentFeedbackRequest `json:"feedback"`
 }
 
@@ -496,9 +496,9 @@ type BulkConvertToRequestRequest struct {
 	DueDate          *string                    `json:"due_date"`
 	Items            []BulkConvertToRequestItem `json:"items" validate:"omitempty,dive"`
 	// Optional: convert to an existing request instead of creating a new one
-	ExistingRequestID  *string                  `json:"existing_request_id" validate:"omitempty,uuid"`
+	ExistingRequestID *string `json:"existing_request_id" validate:"omitempty,uuid"`
 	// Required feedback for the conversion
-	Feedback           *IncidentFeedbackRequest `json:"feedback" validate:"required_without=ExistingRequestID"`
+	Feedback *IncidentFeedbackRequest `json:"feedback" validate:"required_without=ExistingRequestID"`
 }
 
 // BulkConvertToRequestResult represents the result of a single conversion in bulk operation
@@ -521,7 +521,7 @@ type BulkConvertToRequestResponse struct {
 }
 
 type IncidentFilter struct {
-	Search           string      `query:"search" json:"search" validate:"omitempty,min=3"`
+	Search           string      `query:"search" json:"search" validate:"omitempty"`
 	WorkflowID       []string    `query:"workflow_id" json:"workflow_id" validate:"omitempty,dive,uuid"`
 	CurrentStateID   []string    `query:"current_state_id" json:"current_state_id" validate:"omitempty,dive,uuid"`
 	ClassificationID []string    `query:"classification_id" json:"classification_id" validate:"omitempty,dive,uuid"`
@@ -984,16 +984,16 @@ func ToTransitionHistoryResponse(h *IncidentTransitionHistory) TransitionHistory
 
 // IncidentRevisionResponse is the API response for an incident revision
 type IncidentRevisionResponse struct {
-	ID                  uuid.UUID                  `json:"id"`
-	IncidentID          uuid.UUID                  `json:"incident_id"`
-	RevisionNumber      int                        `json:"revision_number"`
-	ActionType          IncidentRevisionActionType `json:"action_type"`
-	ActionDescription   string                     `json:"action_description"`
-	Changes             []IncidentFieldChange      `json:"changes"`
-	PerformedByID       uuid.UUID                  `json:"performed_by_id"`
-	PerformedBy         *UserResponse              `json:"performed_by,omitempty"`
-	PerformedByRoles    []string                   `json:"performed_by_roles"`
-	PerformedByPhone    string                     `json:"performed_by_phone"`
+	ID                  uuid.UUID                   `json:"id"`
+	IncidentID          uuid.UUID                   `json:"incident_id"`
+	RevisionNumber      int                         `json:"revision_number"`
+	ActionType          IncidentRevisionActionType  `json:"action_type"`
+	ActionDescription   string                      `json:"action_description"`
+	Changes             []IncidentFieldChange       `json:"changes"`
+	PerformedByID       uuid.UUID                   `json:"performed_by_id"`
+	PerformedBy         *UserResponse               `json:"performed_by,omitempty"`
+	PerformedByRoles    []string                    `json:"performed_by_roles"`
+	PerformedByPhone    string                      `json:"performed_by_phone"`
 	CommentID           *uuid.UUID                  `json:"comment_id,omitempty"`
 	AttachmentID        *uuid.UUID                  `json:"attachment_id,omitempty"`
 	TransitionHistoryID *uuid.UUID                  `json:"transition_history_id,omitempty"`
