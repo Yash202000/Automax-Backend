@@ -532,7 +532,7 @@ func main() {
 	appLinks.Post("/:id/upload-image", authMiddleware.RequirePermission("application-links:update"), applicationLinkHandler.UploadImage)
 
 	// Dashboard application links - requires explicit permission
-	v1.Get("/application-links", authMiddleware.RequirePermission("application-links:dashboard"), applicationLinkHandler.ListActiveLinks)
+	v1.Get("/application-links", authMiddleware.Authenticate(), authMiddleware.RequirePermission("application-links:dashboard"), applicationLinkHandler.ListActiveLinks)
 
 	// Settings routes
 	// Public settings endpoint (accessible to everyone for branding)
