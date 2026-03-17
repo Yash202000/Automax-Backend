@@ -886,7 +886,6 @@ func (r *incidentRepository) GetAssignedToUser(ctx context.Context, userID uuid.
 	if err := baseQuery.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-
 	err := baseQuery.
 		Preload("Classification").
 		Preload("Workflow").
@@ -930,8 +929,13 @@ func (r *incidentRepository) GetReportedByUser(ctx context.Context, userID uuid.
 	}
 
 	err := baseQuery.
+		Preload("Classification").
 		Preload("CurrentState").
 		Preload("Workflow").
+		Preload("Assignee").
+		Preload("Department").
+		Preload("Location").
+		Preload("LookupValues.Category").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(limit).
