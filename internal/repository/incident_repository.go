@@ -128,6 +128,7 @@ func (r *incidentRepository) FindByIDWithRelations(ctx context.Context, id uuid.
 			return db.Order("sort_order ASC")
 		}).
 		Preload("Workflow.Transitions").
+		Preload("Workflow.Transitions.AllowedRoles").
 		Preload("CurrentState").
 		Preload("CurrentState.EditableRoles").
 		Preload("Assignee").
@@ -238,6 +239,9 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	}
 	if filter.Channel != nil && *filter.Channel != "" {
 		query = query.Where("channel = ?", *filter.Channel)
+	}
+	if filter.Source != nil && *filter.Source != "" {
+		query = query.Where("source = ?", *filter.Source)
 	}
 	if filter.StartDate != nil {
 		query = query.Where("created_at >= ?", *filter.StartDate)

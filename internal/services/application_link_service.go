@@ -14,6 +14,7 @@ type ApplicationLinkService interface {
 	ListLinks(ctx context.Context) ([]models.ApplicationLinkResponse, error)
 	ListActiveLinks(ctx context.Context) ([]models.ApplicationLinkResponse, error)
 	UpdateLink(ctx context.Context, id uuid.UUID, req *models.ApplicationLinkUpdateRequest) (*models.ApplicationLinkResponse, error)
+	RemoveImage(ctx context.Context, id uuid.UUID) (*models.ApplicationLinkResponse, error)
 	DeleteLink(ctx context.Context, id uuid.UUID) error
 }
 
@@ -133,6 +134,21 @@ func (s *applicationLinkService) UpdateLink(ctx context.Context, id uuid.UUID, r
 		link.SSOCallbackURL = *req.SSOCallbackURL
 	}
 
+	if err := s.linkRepo.Update(ctx, link); err != nil {
+		return nil, err
+	}
+
+	response := models.ToApplicationLinkResponse(link)
+	return &response, nil
+}
+
+func (s *applicationLinkService) RemoveImage(ctx context.Context, id uuid.UUID) (*models.ApplicationLinkResponse, error) {
+	link, err := s.linkRepo.FindByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	link.ImageURL = ""
 	if err := s.linkRepo.Update(ctx, link); err != nil {
 		return nil, err
 	}

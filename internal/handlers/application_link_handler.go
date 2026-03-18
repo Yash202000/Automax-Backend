@@ -245,3 +245,43 @@ func (h *ApplicationLinkHandler) UploadImage(c *fiber.Ctx) error {
 		},
 	})
 }
+
+// RemoveImage removes the logo image from an application link
+func (h *ApplicationLinkHandler) RemoveImage(c *fiber.Ctx) error {
+	idParam := c.Params("id")
+	id, err := uuid.Parse(idParam)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"error":   "Invalid ID format",
+		})
+	}
+
+	// Get the link to retrieve the current image path for storage cleanup
+	existing, err := h.linkService.GetLink(c.UserContext(), id)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"success": false,
+			"error":   "Application link not found",
+		})
+	}
+
+	// Best-effort delete from MinIO; don't fail the request if it errors
+	if existing.ImageURL != "" {
+		_ = h.storage.DeleteFile(c.UserContext(), existing.ImageURL)
+	}
+
+	link, err := h.linkService.RemoveImage(c.UserContext(), id)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"success": false,
+			"error":   "Failed to remove image",
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"message": "Logo removed successfully",
+		"data":    link,
+	})
+}

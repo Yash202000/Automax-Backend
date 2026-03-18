@@ -194,7 +194,27 @@ func (s *incidentService) calculateSLADeadline(ctx context.Context, classificati
 func (s *incidentService) CreateIncident(ctx context.Context, req *models.IncidentCreateRequest, reporterID uuid.UUID) (*models.IncidentResponse, error) {
 	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
 
-	if strings.EqualFold(clientCode, "EPM940") && !strings.EqualFold(req.Source, "viusional") {
+	// Sources that bypass the 500m duplicate check, configurable via SKIP_DUPLICATE_CHECK_SOURCES (comma-separated)
+	skipSourcesEnv := os.Getenv("SKIP_DUPLICATE_CHECK_SOURCES")
+	skipSources := []string{"viusional"} // default
+	if skipSourcesEnv != "" {
+		parts := strings.Split(skipSourcesEnv, ",")
+		skipSources = make([]string, 0, len(parts))
+		for _, p := range parts {
+			if trimmed := strings.TrimSpace(p); trimmed != "" {
+				skipSources = append(skipSources, trimmed)
+			}
+		}
+	}
+	sourceSkipped := false
+	for _, skip := range skipSources {
+		if strings.EqualFold(req.Source, skip) {
+			sourceSkipped = true
+			break
+		}
+	}
+
+	if strings.EqualFold(clientCode, "EPM940") && !sourceSkipped {
 		// Check if the incoming request has latitude, longitude, and classification
 		if req.Latitude != nil && req.Longitude != nil && req.ClassificationID != nil {
 			classificationID, err := uuid.Parse(*req.ClassificationID)
@@ -438,8 +458,37 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 
 	// Broadcast incident creation to all broadcast clients
 	if s.wsHub != nil {
+		// Collect role IDs that can transition from the initial state — used by the
+		// frontend to show the toast only to users who can actually act on the incident.
+		var transitionRoleIDs []string
+		if created.Workflow != nil {
+			// Find the initial state
+			var initialStateID *uuid.UUID
+			for _, state := range created.Workflow.States {
+				if state.StateType == "initial" {
+					id := state.ID
+					initialStateID = &id
+					break
+				}
+			}
+			// Collect AllowedRoles from transitions originating at the initial state
+			if initialStateID != nil {
+				seen := make(map[uuid.UUID]bool)
+				for _, t := range created.Workflow.Transitions {
+					if t.FromStateID == *initialStateID {
+						for _, role := range t.AllowedRoles {
+							if !seen[role.ID] {
+								transitionRoleIDs = append(transitionRoleIDs, role.ID.String())
+								seen[role.ID] = true
+							}
+						}
+					}
+				}
+			}
+		}
 		s.wsHub.BroadcastToAll("incident_created", map[string]interface{}{
-			"incident": resp,
+			"incident":            resp,
+			"transition_role_ids": transitionRoleIDs, // empty slice = all users can see it
 		})
 	}
 
