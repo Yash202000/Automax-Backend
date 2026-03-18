@@ -65,6 +65,9 @@ type WorkflowRepository interface {
 	// State viewable role assignments
 	AssignStateViewableRoles(ctx context.Context, stateID uuid.UUID, roleIDs []uuid.UUID) error
 
+	// State editable role assignments
+	AssignStateEditableRoles(ctx context.Context, stateID uuid.UUID, roleIDs []uuid.UUID) error
+
 	// TransitionRequirement CRUD
 	SetTransitionRequirements(ctx context.Context, transitionID uuid.UUID, requirements []models.TransitionRequirement) error
 	GetTransitionRequirements(ctx context.Context, transitionID uuid.UUID) ([]models.TransitionRequirement, error)
@@ -110,6 +113,7 @@ func (r *workflowRepository) FindByIDWithRelations(ctx context.Context, id uuid.
 			return db.Order("sort_order, name")
 		}).
 		Preload("States.ViewableRoles").
+		Preload("States.EditableRoles").
 		Preload("Transitions", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order, name")
 		}).
@@ -227,9 +231,12 @@ func (r *workflowRepository) HardDelete(ctx context.Context, id uuid.UUID) error
 			return err
 		}
 
-		// 5. Clear state viewable roles (many2many) for each state
+		// 5. Clear state viewable and editable roles (many2many) for each state
 		for _, s := range states {
 			if err := tx.Exec("DELETE FROM state_viewable_roles WHERE workflow_state_id = ?", s.ID).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec("DELETE FROM state_editable_roles WHERE workflow_state_id = ?", s.ID).Error; err != nil {
 				return err
 			}
 		}
@@ -355,6 +362,7 @@ func (r *workflowRepository) FindStateByID(ctx context.Context, id uuid.UUID) (*
 	var state models.WorkflowState
 	err := r.db.WithContext(ctx).
 		Preload("ViewableRoles").
+		Preload("EditableRoles").
 		First(&state, "id = ?", id).Error
 	if err != nil {
 		return nil, err
@@ -366,6 +374,7 @@ func (r *workflowRepository) FindStateByCode(ctx context.Context, workflowID uui
 	var state models.WorkflowState
 	err := r.db.WithContext(ctx).
 		Preload("ViewableRoles").
+		Preload("EditableRoles").
 		Where("workflow_id = ? AND code = ?", workflowID, code).
 		First(&state).Error
 	if err != nil {
@@ -381,6 +390,7 @@ func (r *workflowRepository) ListStatesByWorkflowID(ctx context.Context, workflo
 	var states []models.WorkflowState
 	err := r.db.WithContext(ctx).
 		Preload("ViewableRoles").
+		Preload("EditableRoles").
 		Where("workflow_id = ?", workflowID).
 		Order("sort_order, name").
 		Find(&states).Error
@@ -541,6 +551,22 @@ func (r *workflowRepository) AssignStateViewableRoles(ctx context.Context, state
 	}
 
 	return r.db.WithContext(ctx).Model(&state).Association("ViewableRoles").Replace(roles)
+}
+
+func (r *workflowRepository) AssignStateEditableRoles(ctx context.Context, stateID uuid.UUID, roleIDs []uuid.UUID) error {
+	var state models.WorkflowState
+	if err := r.db.WithContext(ctx).First(&state, "id = ?", stateID).Error; err != nil {
+		return err
+	}
+
+	var roles []models.Role
+	if len(roleIDs) > 0 {
+		if err := r.db.WithContext(ctx).Where("id IN ?", roleIDs).Find(&roles).Error; err != nil {
+			return err
+		}
+	}
+
+	return r.db.WithContext(ctx).Model(&state).Association("EditableRoles").Replace(roles)
 }
 
 // TransitionRequirement CRUD

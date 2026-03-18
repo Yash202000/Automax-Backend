@@ -87,6 +87,9 @@ type WorkflowState struct {
 	// Role-based visibility (many-to-many) - empty = visible to all
 	ViewableRoles []Role `gorm:"many2many:state_viewable_roles;" json:"viewable_roles,omitempty"`
 
+	// Role-based editability (many-to-many) - empty = no state-level restriction (falls back to incidents:update permission)
+	EditableRoles []Role `gorm:"many2many:state_editable_roles;" json:"editable_roles,omitempty"`
+
 	SortOrder int            `gorm:"default:0" json:"sort_order"`
 	IsActive  bool           `gorm:"default:true" json:"is_active"`
 	CreatedAt time.Time      `json:"created_at"`
@@ -282,6 +285,7 @@ type WorkflowStateCreateRequest struct {
 	DurationOptions []string `json:"duration_options"`
 	SortOrder       int      `json:"sort_order"`
 	ViewableRoleIDs []string `json:"viewable_role_ids"`
+	EditableRoleIDs []string `json:"editable_role_ids"`
 }
 
 type WorkflowStateUpdateRequest struct {
@@ -299,6 +303,7 @@ type WorkflowStateUpdateRequest struct {
 	SortOrder       *int     `json:"sort_order"`
 	IsActive        *bool    `json:"is_active"`
 	ViewableRoleIDs []string `json:"viewable_role_ids"`
+	EditableRoleIDs []string `json:"editable_role_ids"`
 }
 
 type WorkflowTransitionCreateRequest struct {
@@ -446,6 +451,7 @@ type WorkflowStateResponse struct {
 	SortOrder       int            `json:"sort_order"`
 	IsActive        bool           `json:"is_active"`
 	ViewableRoles   []RoleResponse `json:"viewable_roles,omitempty"`
+	EditableRoles   []RoleResponse `json:"editable_roles,omitempty"`
 	CreatedAt       time.Time      `json:"created_at"`
 }
 
@@ -647,6 +653,13 @@ func ToWorkflowStateResponse(s *WorkflowState) WorkflowStateResponse {
 		}
 	}
 
+	if len(s.EditableRoles) > 0 {
+		resp.EditableRoles = make([]RoleResponse, len(s.EditableRoles))
+		for i, r := range s.EditableRoles {
+			resp.EditableRoles[i] = ToRoleResponse(&r)
+		}
+	}
+
 	return resp
 }
 
@@ -810,6 +823,7 @@ type WorkflowStateExport struct {
 	SLAHours      *int           `json:"sla_hours,omitempty"`
 	SortOrder     int            `json:"sort_order"`
 	ViewableRoles []CodeNamePair `json:"viewable_roles,omitempty"`
+	EditableRoles []CodeNamePair `json:"editable_roles,omitempty"`
 }
 
 // WorkflowTransitionExport represents a transition with codes and nested requirements/actions

@@ -450,10 +450,14 @@ func (h *WorkflowHandler) CreateState(c *fiber.Ctx) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		// Extract viewable role IDs
+		// Extract viewable and editable role IDs
 		var viewableRoleIDs []string
 		for _, r := range state.ViewableRoles {
 			viewableRoleIDs = append(viewableRoleIDs, r.ID.String())
+		}
+		var editableRoleIDs []string
+		for _, r := range state.EditableRoles {
+			editableRoleIDs = append(editableRoleIDs, r.ID.String())
 		}
 
 		newValue := map[string]interface{}{
@@ -468,6 +472,7 @@ func (h *WorkflowHandler) CreateState(c *fiber.Ctx) error {
 			"position_y":     state.PositionY,
 			"is_active":      state.IsActive,
 			"viewable_roles": viewableRoleIDs,
+			"editable_roles": editableRoleIDs,
 		}
 
 		_ = h.actionLogService.LogAction(ctx, &services.LogActionParams{
@@ -534,13 +539,20 @@ func (h *WorkflowHandler) UpdateState(c *fiber.Ctx) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		// Extract viewable role IDs
+		// Extract viewable and editable role IDs
 		var oldViewableRoleIDs, newViewableRoleIDs []string
 		for _, r := range oldState.ViewableRoles {
 			oldViewableRoleIDs = append(oldViewableRoleIDs, r.ID.String())
 		}
 		for _, r := range state.ViewableRoles {
 			newViewableRoleIDs = append(newViewableRoleIDs, r.ID.String())
+		}
+		var oldEditableRoleIDs, newEditableRoleIDs []string
+		for _, r := range oldState.EditableRoles {
+			oldEditableRoleIDs = append(oldEditableRoleIDs, r.ID.String())
+		}
+		for _, r := range state.EditableRoles {
+			newEditableRoleIDs = append(newEditableRoleIDs, r.ID.String())
 		}
 
 		oldValue := map[string]interface{}{
@@ -555,6 +567,7 @@ func (h *WorkflowHandler) UpdateState(c *fiber.Ctx) error {
 			"position_x":     oldState.PositionX,
 			"position_y":     oldState.PositionY,
 			"viewable_roles": oldViewableRoleIDs,
+			"editable_roles": oldEditableRoleIDs,
 		}
 		newValue := map[string]interface{}{
 			"name":           state.Name,
@@ -568,6 +581,7 @@ func (h *WorkflowHandler) UpdateState(c *fiber.Ctx) error {
 			"position_x":     state.PositionX,
 			"position_y":     state.PositionY,
 			"viewable_roles": newViewableRoleIDs,
+			"editable_roles": newEditableRoleIDs,
 		}
 
 		// Build detailed change description
@@ -577,7 +591,7 @@ func (h *WorkflowHandler) UpdateState(c *fiber.Ctx) error {
 			"state_type": "State Type", "color": "Color", "sla_hours": "SLA Hours",
 			"sort_order": "Sort Order", "is_active": "Is Active",
 			"position_x": "Position X", "position_y": "Position Y",
-			"viewable_roles": "Viewable Roles",
+			"viewable_roles": "Viewable Roles", "editable_roles": "Editable Roles",
 		}
 
 		for key, label := range fieldLabels {
@@ -633,10 +647,14 @@ func (h *WorkflowHandler) DeleteState(c *fiber.Ctx) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		// Extract viewable role IDs
+		// Extract viewable and editable role IDs
 		var viewableRoleIDs []string
 		for _, r := range oldState.ViewableRoles {
 			viewableRoleIDs = append(viewableRoleIDs, r.ID.String())
+		}
+		var editableRoleIDsDel []string
+		for _, r := range oldState.EditableRoles {
+			editableRoleIDsDel = append(editableRoleIDsDel, r.ID.String())
 		}
 
 		oldValue := map[string]interface{}{
@@ -651,6 +669,7 @@ func (h *WorkflowHandler) DeleteState(c *fiber.Ctx) error {
 			"position_y":     oldState.PositionY,
 			"is_active":      oldState.IsActive,
 			"viewable_roles": viewableRoleIDs,
+			"editable_roles": editableRoleIDsDel,
 		}
 
 		_ = h.actionLogService.LogAction(ctx, &services.LogActionParams{

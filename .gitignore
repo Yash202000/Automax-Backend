@@ -49,3 +49,7 @@ temp/
 debug
 __debug_bin
 .env
+
+# Postman collection
+automax-backend.postman_collection.json
+CLAUDE.md

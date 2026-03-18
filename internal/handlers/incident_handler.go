@@ -189,6 +189,7 @@ func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	roleIDs := h.getUserRoleIDs(c)
 
 	var req models.IncidentUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -202,8 +203,11 @@ func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 		})
 	}
 
-	incident, err := h.service.UpdateIncident(c.UserContext(), id, &req, userID)
+	incident, err := h.service.UpdateIncident(c.UserContext(), id, &req, userID, roleIDs)
 	if err != nil {
+		if errors.Is(err, services.ErrEditNotAllowed) {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, "Your role does not have edit access for this incident at its current stage")
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
