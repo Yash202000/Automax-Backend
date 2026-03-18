@@ -81,6 +81,7 @@ func main() {
 	settingsRepo := repository.NewSettingsRepository(db)
 	escalationRepo := repository.NewEscalationRepository(db)
 	escalationGroupRepo := repository.NewEscalationGroupRepository(db)
+	callerSentimentRepo := repository.NewCallerSentimentRepo(db)
 
 	// Initialize WebSocket hub and start it
 	wsHub := services.NewWSHub()
@@ -92,14 +93,14 @@ func main() {
 	// Initialize services
 	actionLogService := services.NewActionLogService(actionLogRepo)
 	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg, actionLogService)
-	
+
 	// Initialize LDAP service
 	ldapService, err := services.NewLDAPService(cfg)
 	if err != nil {
 		log.Fatalf("Failed to initialize LDAP service: %v", err)
 	}
 	defer ldapService.Close()
-	
+
 	callLogService := services.NewCallLogService(callLogRepo, userRepo)
 	workflowService := services.NewWorkflowService(workflowRepo, roleRepo, departmentRepo, classificationRepo, db)
 	incidentService := services.NewIncidentService(incidentRepo, incidentMergeRepo, workflowRepo, userRepo, departmentRepo, classificationRepo, rejectionLogRepo, minioStorage, db, wsHub)
@@ -114,6 +115,7 @@ func main() {
 	escalationService := services.NewEscalationService(escalationRepo, incidentRepo, workflowRepo, userRepo, notificationService)
 	escalationGroupService := services.NewEscalationGroupService(escalationGroupRepo, incidentRepo, notificationService, cfg.Escalation)
 	fcmService := services.NewFCMService(repository.NewDeviceTokenRepository(db), notificationLogRepo)
+	callerSentimentService := services.NewCallerSentimentService(callerSentimentRepo)
 
 	// Ready-to-Close service
 	readyToCloseRepo := repository.NewReadyToCloseRepository(db)
@@ -135,10 +137,10 @@ func main() {
 	// Initialize handlers
 	userHandler := handlers.NewUserHandler(userService, minioStorage)
 	healthHandler := handlers.NewHealthHandler()
-	
+
 	// Initialize LDAP handler
 	ldapHandler := handlers.NewLDAPHandler(ldapService, userService, userRepo, jwtManager, sessionStore, cfg)
-	
+
 	classificationHandler := handlers.NewClassificationHandler(classificationRepo)
 	locationHandler := handlers.NewLocationHandler(locationRepo)
 	departmentHandler := handlers.NewDepartmentHandler(departmentRepo)
@@ -165,6 +167,7 @@ func main() {
 	escalationGroupHandler := handlers.NewEscalationGroupHandler(escalationGroupService)
 	rejectionLogHandler := handlers.NewRejectionLogHandler(rejectionLogRepo)
 	fcmHandler := handlers.NewFCMHandler(fcmService)
+	sentimentHandler := handlers.NewCallerSentimentHandler(callerSentimentService)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore, userRepo)
@@ -621,6 +624,12 @@ func main() {
 	fcm.Post("/push", fcmHandler.PushNotification)
 	fcm.Get("/device-tokens", fcmHandler.GetUserDeviceTokens)
 	fcm.Delete("/remove-device", fcmHandler.RemoveDevice)
+
+	//Caller sentiments
+	callerSentiments := v1.Group("/caller-sentiments", authMiddleware.Authenticate())
+	callerSentiments.Post("/", sentimentHandler.Create)
+	callerSentiments.Get("/", sentimentHandler.GetAllCallerSentiments)
+	callerSentiments.Get("/:caller_id", sentimentHandler.GetCallerSentiments)
 
 	go func() {
 		addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)

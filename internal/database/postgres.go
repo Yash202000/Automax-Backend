@@ -98,6 +98,7 @@ func Migrate(db *gorm.DB) error {
 		// Ready-to-Close expiry tracking
 		&models.IncidentReadyToCloseEntry{},
 		&models.DeviceToken{},
+		&models.CallerSentiment{},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
