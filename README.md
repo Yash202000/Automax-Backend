@@ -129,6 +129,10 @@ FRONTEND_BASE_URL=
 
 # notify when < 24 hour left
  READY_TO_CLOSE_PRE_EXPIRY_HOURS=24
+
+ # fcm json for E940
+ FIREBASE_CREDENTIAL_PATH=ax.json
+ 
 ```
 
 

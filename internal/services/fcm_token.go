@@ -31,7 +31,7 @@ func NewFCMService(deviceTokenRepo *repository.DeviceTokenRepository, notificati
 	}
 }
 
-func (s *FCMService) RegisterDeviceToken(userID *uuid.UUID, token, deviceType string) error {
+func (s *FCMService) RegisterDeviceToken(userID, token, deviceType string) error {
 	existing, err := s.deviceTokenRepo.GetByToken(token)
 	if err != nil {
 		return err

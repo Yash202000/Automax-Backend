@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/google/uuid"
@@ -16,14 +17,9 @@ func NewFCMHandler(service *services.FCMService) *FCMHandler {
 	return &FCMHandler{service: service}
 }
 
-type RegisterTokenRequest struct {
-	DeviceToken string `json:"device_token"`
-	DeviceType  string `json:"device_type"`
-}
-
 func (h *FCMHandler) RegisterToken(c *fiber.Ctx) error {
 
-	var req RegisterTokenRequest
+	var req models.RegisterTokenRequest
 
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -31,20 +27,14 @@ func (h *FCMHandler) RegisterToken(c *fiber.Ctx) error {
 		})
 	}
 
-	if req.DeviceToken == "" {
+	if req.DeviceToken == "" || req.UserID == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "device_token is required",
+			"error": "Invalid Payload",
 		})
 	}
 
-	// Get UUID string from JWT middleware
-	var userId *uuid.UUID
-	if userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID); ok {
-		userId = &userID
-	}
-
 	// Call service
-	err := h.service.RegisterDeviceToken(userId, req.DeviceToken, req.DeviceType)
+	err := h.service.RegisterDeviceToken(req.UserID, req.DeviceToken, req.DeviceType)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Failed to register device token",
