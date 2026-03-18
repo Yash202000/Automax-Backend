@@ -238,6 +238,12 @@ func (s *reportTemplateService) GenerateReport(ctx context.Context, req *models.
 		applyTemplateOverrides(&templateConfig, req.Overrides)
 	}
 
+	// Apply columns from request directly (takes precedence over overrides.columns)
+	if len(req.Columns) > 0 {
+		fmt.Printf("[GenerateReport] Applying %d columns from request\n", len(req.Columns))
+		applyRequestColumnsToTable(&templateConfig, req.Columns)
+	}
+
 	// Debug: Print template elements
 	fmt.Printf("[GenerateReport] Template has %d elements\n", len(templateConfig.Elements))
 	for i, el := range templateConfig.Elements {
@@ -261,6 +267,8 @@ func (s *reportTemplateService) GenerateReport(ctx context.Context, req *models.
 	switch req.DataSource {
 	case "incidents":
 		data, _, err = s.reportRepo.ExecuteIncidentQuery(ctx, req.Filters, sorting, 1, limit)
+	case "requests":
+		data, _, err = s.reportRepo.ExecuteRequestQuery(ctx, req.Filters, sorting, 1, limit)
 	case "users":
 		data, _, err = s.reportRepo.ExecuteUserQuery(ctx, req.Filters, sorting, 1, limit)
 	case "workflows":
@@ -613,6 +621,10 @@ func (s *reportTemplateService) renderTableElement(pdf *gofpdf.Fpdf, element *mo
 	}
 	if len(data) > 0 {
 		fmt.Printf("  - First row keys: %v\n", getMapKeys(data[0]))
+		fmt.Printf("  - Second row keys: %v\n", getMapKeys(data[1]))
+		fmt.Printf("  - Third row keys: %v\n", getMapKeys(data[2]))
+		fmt.Printf("  - Fourth row keys: %v\n", getMapKeys(data[3]))
+		fmt.Printf("  - Fifth row keys: %v\n", getMapKeys(data[4]))
 	}
 
 	if len(content.Columns) == 0 {
@@ -794,6 +806,9 @@ func (s *reportTemplateService) renderTableElement(pdf *gofpdf.Fpdf, element *mo
 			val := ""
 			// Use getNestedValue to handle nested fields like "current_state.name"
 			v := getNestedValue(row, col.Field)
+			if v == nil {
+				v = getNestedValue(row, col.Label)
+			}
 			if v != nil {
 				val = formatCellValue(col.Field, col.Format, v)
 			}
@@ -1029,7 +1044,11 @@ func (s *reportTemplateService) generateExcelFromTemplate(template *models.Templ
 			if i > 0 {
 				buf.WriteString("\t")
 			}
-			if val, ok := row[col.Field]; ok && val != nil {
+			val, ok := row[col.Field]
+			if !ok || val == nil {
+				val, ok = row[col.Label]
+			}
+			if ok && val != nil {
 				buf.WriteString(formatCellValue(col.Field, col.Format, val))
 			}
 		}
@@ -1040,6 +1059,33 @@ func (s *reportTemplateService) generateExcelFromTemplate(template *models.Templ
 }
 
 // Helper functions
+
+// applyRequestColumnsToTable applies columns from the request body directly to the first table element.
+// Width is auto-distributed equally when not specified (width=0).
+func applyRequestColumnsToTable(template *models.TemplateConfig, columns []models.ColumnField) {
+	newColumns := make([]models.TableColumn, len(columns))
+	for i, col := range columns {
+		newColumns[i] = models.TableColumn{
+			Field:     col.Field,
+			Label:     col.Label,
+			Width:     0, // auto: distributed equally across available width
+			WidthUnit: "percent",
+			Alignment: "left",
+		}
+	}
+	for i, element := range template.Elements {
+		if element.Type == "table" {
+			contentJSON, _ := json.Marshal(element.Content)
+			var content models.TableContent
+			json.Unmarshal(contentJSON, &content)
+			content.Columns = newColumns
+			template.Elements[i].Content = content
+			fmt.Printf("[applyRequestColumnsToTable] Applied %d columns to table element '%s'\n", len(newColumns), element.ID)
+			return
+		}
+	}
+	fmt.Printf("[applyRequestColumnsToTable] No table element found in template\n")
+}
 
 func applyTemplateOverrides(template *models.TemplateConfig, overrides *models.TemplateOverrides) {
 	if template.Header == nil {

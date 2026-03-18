@@ -89,6 +89,7 @@ func Migrate(db *gorm.DB) error {
 		&models.Report{},
 		&models.ReportExecution{},
 		&models.ReportTemplate{},
+		&models.ReportPdfTemplate{},
 		// Application Links
 		&models.ApplicationLink{},
 		// Settings

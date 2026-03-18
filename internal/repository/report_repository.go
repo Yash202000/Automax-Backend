@@ -42,6 +42,16 @@ type ReportRepository interface {
 	ExecuteLocationQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 	ExecuteClassificationQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 	ExecuteActionLogQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
+
+	// Grouped incident analytics — Shape 1 (fixed columns, count)
+	ExecuteIncidentsByLocationQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
+	ExecuteIncidentsByClassificationQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
+	ExecuteIncidentsByDepartmentQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
+
+	// Grouped incident analytics — Shape 2 (dynamic status-pivot columns)
+	ExecuteIncidentsByStatusLocationQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, []models.ColumnField, int64, error)
+	ExecuteIncidentsByStatusClassificationQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, []models.ColumnField, int64, error)
+	ExecuteIncidentsByStatusDepartmentQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, []models.ColumnField, int64, error)
 }
 
 type reportRepository struct {
@@ -278,14 +288,20 @@ var actionLogFilterFields = map[string]string{
 
 // dataSourceFilterFields maps a data source name to its allowed filter fields.
 var dataSourceFilterFields = map[string]map[string]string{
-	"incidents":       incidentFilterFields,
-	"request":         requestFilterFields,
-	"users":           userFilterFields,
-	"workflows":       workflowFilterFields,
-	"departments":     departmentFilterFields,
-	"locations":       locationFilterFields,
-	"classifications": classificationFilterFields,
-	"action_logs":     actionLogFilterFields,
+	"incidents":                          incidentFilterFields,
+	"request":                            requestFilterFields,
+	"users":                              userFilterFields,
+	"workflows":                          workflowFilterFields,
+	"departments":                        departmentFilterFields,
+	"locations":                          locationFilterFields,
+	"classifications":                    classificationFilterFields,
+	"action_logs":                        actionLogFilterFields,
+	"incidents_by_location":              incidentFilterFields,
+	"incidents_by_classification":        incidentFilterFields,
+	"incidents_by_department":            incidentFilterFields,
+	"incidents_by_status_location":       incidentFilterFields,
+	"incidents_by_status_classification": incidentFilterFields,
+	"incidents_by_status_department":     incidentFilterFields,
 }
 
 // applyFilters applies ReportFilterConfig entries to the query. It reads the
@@ -298,6 +314,10 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 	}
 
 	dataSource, _ := ctx.Value(constants.ContextKeys.REPORT_DATA_SOURCE).(string)
+	if dataSource == "" {
+		log.Println("ReportRepository: no data source in context for applying filters")
+		return query
+	}
 	fieldMap := dataSourceFilterFields[dataSource]
 	if fieldMap == nil {
 		// Fallback to incident fields for backwards compatibility.
@@ -1138,7 +1158,7 @@ func (r *reportRepository) ExecuteUserQuery(ctx context.Context, filters []model
 	query := r.db.WithContext(ctx).Model(&models.User{})
 	query = r.applyFilters(ctx, query, filters)
 
-	if err := query.Count(&total).Error; err != nil {
+	if err := query.Debug().Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
@@ -1599,4 +1619,322 @@ func (r *reportRepository) ExecuteActionLogQuery(ctx context.Context, filters []
 	}
 
 	return results, total, nil
+}
+
+// ── Grouped incident analytics ────────────────────────────────────────────────
+
+// statusPivotRow is an intermediate row from the Shape-2 SQL query before pivoting.
+type statusPivotRow struct {
+	DimID      string
+	DimName    string
+	ParentID   string
+	ParentName string
+	StatusName string
+	Count      int64
+}
+
+// pivotStatusRows pivots status-grouped rows into one row per dimension.
+// Returns the pivoted data, a dynamic ColumnField list (base cols + one per status), and the total group count.
+func pivotStatusRows(rows []statusPivotRow, dimIDKey, dimNameKey, parentIDKey, parentNameKey string) ([]map[string]interface{}, []models.ColumnField, int64) {
+	var order []string
+	pivoted := make(map[string]map[string]interface{})
+	var statusOrder []string
+	seenStatus := make(map[string]bool)
+
+	for _, row := range rows {
+		key := row.DimID
+		if _, exists := pivoted[key]; !exists {
+			pivoted[key] = map[string]interface{}{
+				dimIDKey:      row.DimID,
+				dimNameKey:    row.DimName,
+				parentIDKey:   row.ParentID,
+				parentNameKey: row.ParentName,
+			}
+			order = append(order, key)
+		}
+		if !seenStatus[row.StatusName] {
+			seenStatus[row.StatusName] = true
+			statusOrder = append(statusOrder, row.StatusName)
+		}
+		pivoted[key][row.StatusName] = row.Count
+	}
+
+	columns := []models.ColumnField{
+		{Field: dimIDKey, Label: dimIDKey},
+		{Field: dimNameKey, Label: dimNameKey},
+		{Field: parentIDKey, Label: parentIDKey},
+		{Field: parentNameKey, Label: parentNameKey},
+	}
+	for _, s := range statusOrder {
+		columns = append(columns, models.ColumnField{Field: s, Label: s})
+	}
+
+	result := make([]map[string]interface{}, 0, len(order))
+	for _, key := range order {
+		result = append(result, pivoted[key])
+	}
+	return result, columns, int64(len(result))
+}
+
+// scanGroupedRows scans database rows into []map[string]interface{}.
+func scanGroupedRows(rows interface {
+	Next() bool
+	Columns() ([]string, error)
+	Scan(...interface{}) error
+	Close() error
+}) ([]map[string]interface{}, error) {
+	defer rows.Close()
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+	var results []map[string]interface{}
+	for rows.Next() {
+		colVals := make([]interface{}, len(cols))
+		colPtrs := make([]interface{}, len(cols))
+		for i := range colVals {
+			colPtrs[i] = &colVals[i]
+		}
+		if err := rows.Scan(colPtrs...); err != nil {
+			continue
+		}
+		row := make(map[string]interface{})
+		for i, colName := range cols {
+			val := colVals[i]
+			if b, ok := val.([]byte); ok {
+				row[colName] = string(b)
+			} else {
+				row[colName] = val
+			}
+		}
+		results = append(results, row)
+	}
+	return results, nil
+}
+
+// extractInt64 converts numeric scan results to int64.
+func extractInt64(v interface{}) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case float64:
+		return int64(n)
+	case []byte:
+		var i int64
+		fmt.Sscanf(string(n), "%d", &i)
+		return i
+	}
+	return 0
+}
+
+// paginateSlice returns the sub-slice for the given 1-based page/limit.
+func paginateSlice(data []map[string]interface{}, page, limit int) []map[string]interface{} {
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 100
+	}
+	start := (page - 1) * limit
+	if start >= len(data) {
+		return []map[string]interface{}{}
+	}
+	end := start + limit
+	if end > len(data) {
+		end = len(data)
+	}
+	return data[start:end]
+}
+
+// ── Shape 1: incidents grouped by dimension (fixed columns) ──────────────────
+
+func (r *reportRepository) ExecuteIncidentsByLocationQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
+	var total int64
+	countSubq := r.db.WithContext(ctx).
+		Table("incidents").
+		Select("l.id").
+		Joins("JOIN locations l ON incidents.location_id = l.id").
+		Where("incidents.deleted_at IS NULL").
+		Group("l.id")
+	countSubq = r.applyFilters(ctx, countSubq, filters)
+	if err := r.db.WithContext(ctx).Table("(?) AS sub", countSubq).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	dataQuery := r.db.WithContext(ctx).
+		Table("incidents").
+		Select("l.id AS location_id, l.name AS location_name, l.parent_id AS parent_location_id, COALESCE(pl.name, '') AS parent_location_name, COUNT(incidents.id) AS count").
+		Joins("JOIN locations l ON incidents.location_id = l.id").
+		Joins("LEFT JOIN locations pl ON l.parent_id = pl.id").
+		Where("incidents.deleted_at IS NULL").
+		Group("l.id, l.name, l.parent_id, pl.name").
+		Order("count DESC")
+	dataQuery = r.applyFilters(ctx, dataQuery, filters)
+
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 100
+	}
+	offset := (page - 1) * limit
+	rows, err := dataQuery.Offset(offset).Limit(limit).Rows()
+	if err != nil {
+		return nil, 0, err
+	}
+	results, err := scanGroupedRows(rows)
+	return results, total, err
+}
+
+func (r *reportRepository) ExecuteIncidentsByClassificationQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
+	var total int64
+	countSubq := r.db.WithContext(ctx).
+		Table("incidents").
+		Select("c.id").
+		Joins("JOIN classifications c ON incidents.classification_id = c.id").
+		Where("incidents.deleted_at IS NULL").
+		Group("c.id")
+	countSubq = r.applyFilters(ctx, countSubq, filters)
+	if err := r.db.WithContext(ctx).Table("(?) AS sub", countSubq).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	dataQuery := r.db.WithContext(ctx).
+		Table("incidents").
+		Select("c.id AS classification_id, c.name AS classification_name, c.parent_id AS parent_classification_id, COALESCE(pc.name, '') AS parent_classification_name, COUNT(incidents.id) AS count").
+		Joins("JOIN classifications c ON incidents.classification_id = c.id").
+		Joins("LEFT JOIN classifications pc ON c.parent_id = pc.id").
+		Where("incidents.deleted_at IS NULL").
+		Group("c.id, c.name, c.parent_id, pc.name").
+		Order("count DESC")
+	dataQuery = r.applyFilters(ctx, dataQuery, filters)
+
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 100
+	}
+	offset := (page - 1) * limit
+	rows, err := dataQuery.Offset(offset).Limit(limit).Rows()
+	if err != nil {
+		return nil, 0, err
+	}
+	results, err := scanGroupedRows(rows)
+	return results, total, err
+}
+
+func (r *reportRepository) ExecuteIncidentsByDepartmentQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
+	var total int64
+	countSubq := r.db.WithContext(ctx).
+		Table("incidents").
+		Select("d.id").
+		Joins("JOIN departments d ON incidents.department_id = d.id").
+		Where("incidents.deleted_at IS NULL").
+		Group("d.id")
+	countSubq = r.applyFilters(ctx, countSubq, filters)
+	if err := r.db.WithContext(ctx).Table("(?) AS sub", countSubq).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	dataQuery := r.db.WithContext(ctx).
+		Table("incidents").
+		Select("d.id AS department_id, d.name AS department_name, d.parent_id AS parent_department_id, COALESCE(pd.name, '') AS parent_department_name, COUNT(incidents.id) AS count").
+		Joins("JOIN departments d ON incidents.department_id = d.id").
+		Joins("LEFT JOIN departments pd ON d.parent_id = pd.id").
+		Where("incidents.deleted_at IS NULL").
+		Group("d.id, d.name, d.parent_id, pd.name").
+		Order("count DESC")
+	dataQuery = r.applyFilters(ctx, dataQuery, filters)
+
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 100
+	}
+	offset := (page - 1) * limit
+	rows, err := dataQuery.Offset(offset).Limit(limit).Rows()
+	if err != nil {
+		return nil, 0, err
+	}
+	results, err := scanGroupedRows(rows)
+	return results, total, err
+}
+
+// ── Shape 2: incidents grouped by dimension + status (dynamic pivot) ──────────
+
+// executeStatusPivotQuery is the shared implementation for all 3 Shape-2 methods.
+func (r *reportRepository) executeStatusPivotQuery(
+	ctx context.Context,
+	filters []models.ReportFilterConfig,
+	dimTable, dimAlias, parentTable, parentAlias string,
+	incidentDimCol string,
+	dimIDKey, dimNameKey, parentIDKey, parentNameKey string,
+	page, limit int,
+) ([]map[string]interface{}, []models.ColumnField, int64, error) {
+	dataQuery := r.db.WithContext(ctx).
+		Table("incidents").
+		Select(fmt.Sprintf(
+			"%s.id AS dim_id, %s.name AS dim_name, %s.parent_id AS parent_id, COALESCE(%s.name, '') AS parent_name, ws.name AS status_name, COUNT(incidents.id) AS count",
+			dimAlias, dimAlias, dimAlias, parentAlias,
+		)).
+		Joins(fmt.Sprintf("JOIN %s %s ON %s = %s.id", dimTable, dimAlias, incidentDimCol, dimAlias)).
+		Joins(fmt.Sprintf("LEFT JOIN %s %s ON %s.parent_id = %s.id", parentTable, parentAlias, dimAlias, parentAlias)).
+		Joins("JOIN workflow_states ws ON incidents.current_state_id = ws.id").
+		Where("incidents.deleted_at IS NULL").
+		Group(fmt.Sprintf("%s.id, %s.name, %s.parent_id, %s.name, ws.name", dimAlias, dimAlias, dimAlias, parentAlias)).
+		Order(fmt.Sprintf("%s.name, ws.name", dimAlias))
+	dataQuery = r.applyFilters(ctx, dataQuery, filters)
+
+	rows, err := dataQuery.Rows()
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	rawRows, err := scanGroupedRows(rows)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+
+	pivotRows := make([]statusPivotRow, 0, len(rawRows))
+	for _, raw := range rawRows {
+		pivotRows = append(pivotRows, statusPivotRow{
+			DimID:      incidentIDStr(raw["dim_id"]),
+			DimName:    strOrEmpty(raw["dim_name"]),
+			ParentID:   incidentIDStr(raw["parent_id"]),
+			ParentName: strOrEmpty(raw["parent_name"]),
+			StatusName: strOrEmpty(raw["status_name"]),
+			Count:      extractInt64(raw["count"]),
+		})
+	}
+
+	data, columns, total := pivotStatusRows(pivotRows, dimIDKey, dimNameKey, parentIDKey, parentNameKey)
+	return paginateSlice(data, page, limit), columns, total, nil
+}
+
+func (r *reportRepository) ExecuteIncidentsByStatusLocationQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, []models.ColumnField, int64, error) {
+	return r.executeStatusPivotQuery(ctx, filters,
+		"locations", "l", "locations", "pl",
+		"incidents.location_id",
+		"location_id", "location_name", "parent_location_id", "parent_location_name",
+		page, limit,
+	)
+}
+
+func (r *reportRepository) ExecuteIncidentsByStatusClassificationQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, []models.ColumnField, int64, error) {
+	return r.executeStatusPivotQuery(ctx, filters,
+		"classifications", "c", "classifications", "pc",
+		"incidents.classification_id",
+		"classification_id", "classification_name", "parent_classification_id", "parent_classification_name",
+		page, limit,
+	)
+}
+
+func (r *reportRepository) ExecuteIncidentsByStatusDepartmentQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, []models.ColumnField, int64, error) {
+	return r.executeStatusPivotQuery(ctx, filters,
+		"departments", "d", "departments", "pd",
+		"incidents.department_id",
+		"department_id", "department_name", "parent_department_id", "parent_department_name",
+		page, limit,
+	)
 }

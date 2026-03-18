@@ -5,13 +5,17 @@ import (
 	"encoding/base64"
 	"fmt"
 	"html"
+	"html/template"
 	"io"
+	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/models"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -218,9 +222,46 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 		lbl = labelsEN
 	}
 
+	format := c.Query("format", "pdf")
+
+	if os.Getenv("INCIDENT_REPORT_USE_TEMPLATE") == "true" && h.pdfTemplateRepo != nil {
+		log.Printf("[GenerateReport] using PDF template for incident %s", id)
+		log.Println("Attachment", incident.Attachments)
+		log.Println("Raw Inc Attachment", rawIncident.Attachments)
+		pdfTmpl, tmplErr := h.pdfTemplateRepo.GetDefault(c.UserContext())
+		if tmplErr != nil {
+			log.Printf("[GenerateReport] no default pdf template, falling back to buildReportHTML: %v", tmplErr)
+		} else {
+			tmplData := buildIncidentTmplData(c, h, incident, rawIncident, lbl)
+			t, parseErr := template.New("incident_report").Parse(pdfTmpl.HTMLBody)
+			if parseErr != nil {
+				return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Invalid report template")
+			}
+			var buf bytes.Buffer
+			if execErr := t.Execute(&buf, tmplData); execErr != nil {
+				return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to render report template")
+			}
+			switch format {
+			case "html":
+				c.Set("Content-Type", "text/html; charset=utf-8")
+				return c.Send(buf.Bytes())
+			case "pdf":
+				pdfData, pdfErr := renderIncidentHTMLToPDF(buf.Bytes())
+				if pdfErr != nil {
+					log.Printf("[GenerateReport] chromium failed: %v", pdfErr)
+					return utils.ErrorResponse(c, fiber.StatusInternalServerError, "PDF generation failed")
+				}
+				c.Set("Content-Type", "application/pdf")
+				c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="incident_%s_%s.pdf"`,
+					incident.IncidentNumber, time.Now().Format("20060102")))
+				return c.Send(pdfData)
+			}
+			// json falls through to existing handler below
+		}
+	}
+
 	htmlBytes := buildReportHTML(c, h, incident, rawIncident, lbl)
 
-	format := c.Query("format", "pdf")
 	switch format {
 	case "html":
 		c.Set("Content-Type", "text/html; charset=utf-8")
@@ -608,4 +649,248 @@ func row1(b *bytes.Buffer, label, value string) {
 func row2(b *bytes.Buffer, label1, value1, label2, value2 string) {
 	fmt.Fprintf(b, `<tr><td class="lbl">%s</td><td class="val">%s</td><td class="lbl">%s</td><td class="val">%s</td></tr>`,
 		label1, value1, label2, value2)
+}
+
+// ── template-based PDF helpers ─────────────────────────────────────────────
+
+func renderIncidentHTMLToPDF(htmlData []byte) ([]byte, error) {
+	tmpHTML, err := os.CreateTemp("", "inc-report-*.html")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(tmpHTML.Name())
+	if _, err = tmpHTML.Write(htmlData); err != nil {
+		return nil, err
+	}
+	tmpHTML.Close()
+
+	tmpPDF, err := os.CreateTemp("", "inc-report-*.pdf")
+	if err != nil {
+		return nil, err
+	}
+	pdfPath := tmpPDF.Name()
+	tmpPDF.Close()
+	os.Remove(pdfPath) // let Chromium write fresh
+	defer os.Remove(pdfPath)
+
+	chromeBin := "google-chrome"
+	if bin := os.Getenv("CHROME_BIN"); bin != "" {
+		chromeBin = bin
+	}
+
+	var stderr bytes.Buffer
+	cmd := exec.Command(
+		chromeBin,
+		"--headless", "--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage",
+		"--no-margins", "--print-to-pdf-no-header",
+		fmt.Sprintf("--print-to-pdf=%s", pdfPath),
+		fmt.Sprintf("file://%s", tmpHTML.Name()),
+	)
+	cmd.Stderr = &stderr
+	if err = cmd.Run(); err != nil {
+		return nil, fmt.Errorf("exec_error=%s stderr=%s", err.Error(), stderr.String())
+	}
+
+	data, err := os.ReadFile(pdfPath)
+	if err != nil || len(data) == 0 {
+		return nil, fmt.Errorf("failed to read PDF output")
+	}
+	return data, nil
+}
+
+func buildIncidentTmplData(
+	c *fiber.Ctx,
+	h *IncidentHandler,
+	inc *models.IncidentDetailResponse,
+	raw *models.Incident,
+	l reportLabels,
+) map[string]interface{} {
+	ts := func(t time.Time) string { return t.Format("02/01/2006 03:04 PM") }
+	tsp := func(t *time.Time) string {
+		if t == nil {
+			return ""
+		}
+		return ts(*t)
+	}
+
+	lang := "en"
+	if l.Dir == "rtl" {
+		lang = "ar"
+	}
+
+	statusName := ""
+	if inc.CurrentState != nil {
+		statusName = inc.CurrentState.Name
+	}
+	classPath := ""
+	if inc.Classification != nil {
+		classPath = inc.Classification.Name
+	}
+	locationName := ""
+	if inc.Location != nil {
+		locationName = inc.Location.Name
+	}
+	workflowName := ""
+	if inc.Workflow != nil {
+		workflowName = inc.Workflow.Name
+	}
+
+	slaStatus := l.No
+	slaClass := "badge-ok"
+	if inc.SLABreached {
+		slaStatus = l.Yes
+		slaClass = "badge-breached"
+	}
+
+	reporterName := ""
+	if inc.Reporter != nil {
+		reporterName = strings.TrimSpace(inc.Reporter.FirstName + " " + inc.Reporter.LastName)
+	}
+	if inc.ReporterName != "" && reporterName == "" {
+		reporterName = inc.ReporterName
+	}
+	assigneeName := ""
+	if inc.Assignee != nil {
+		assigneeName = strings.TrimSpace(inc.Assignee.FirstName + " " + inc.Assignee.LastName)
+	}
+	deptName := ""
+	if inc.Department != nil {
+		deptName = inc.Department.Name
+	}
+
+	hasLocation := inc.Latitude != nil || inc.Longitude != nil || inc.Address != "" ||
+		inc.City != "" || inc.State != "" || inc.Country != "" || inc.PostalCode != ""
+	lat, lon := "", ""
+	if inc.Latitude != nil {
+		lat = fmt.Sprintf("%.8f", *inc.Latitude)
+	}
+	if inc.Longitude != nil {
+		lon = fmt.Sprintf("%.8f", *inc.Longitude)
+	}
+
+	var history []map[string]interface{}
+	for _, th := range inc.TransitionHistory {
+		byName := ""
+		if th.PerformedBy != nil {
+			byName = strings.TrimSpace(th.PerformedBy.FirstName + " " + th.PerformedBy.LastName)
+		}
+		action := ""
+		if th.ToState != nil {
+			action = th.ToState.Name
+		}
+		history = append(history, map[string]interface{}{
+			"Date":    ts(th.TransitionedAt),
+			"ByName":  byName,
+			"Action":  action,
+			"Comment": th.Comment,
+		})
+	}
+
+	var comments []map[string]interface{}
+	for _, cm := range inc.Comments {
+		byName := ""
+		if cm.Author != nil {
+			byName = strings.TrimSpace(cm.Author.FirstName + " " + cm.Author.LastName)
+		}
+		comments = append(comments, map[string]interface{}{
+			"ByName":     byName,
+			"Date":       ts(cm.CreatedAt),
+			"Content":    cm.Content,
+			"IsInternal": cm.IsInternal,
+		})
+	}
+
+	var attachments []map[string]interface{}
+	for _, att := range raw.Attachments {
+		uploadedBy := ""
+		if att.UploadedBy != nil {
+			uploadedBy = strings.TrimSpace(att.UploadedBy.FirstName + " " + att.UploadedBy.LastName)
+		}
+		sizeStr := fmt.Sprintf("%.1f KB", float64(att.FileSize)/1024)
+		if att.FileSize < 1024 {
+			sizeStr = fmt.Sprintf("%d bytes", att.FileSize)
+		}
+		isImage := strings.HasPrefix(att.MimeType, "image/")
+		imageData := template.URL("") // empty by default, set to data URI if we can fetch and encode the image
+		ctx := c.UserContext()
+		hostname, _ := ctx.Value(constants.ContextKeys.HOSTNAME).(string)
+		protocol, _ := ctx.Value(constants.ContextKeys.PROTOCOL).(string)
+		token, _ := ctx.Value(constants.ContextKeys.Token).(string)
+		filePath := utils.GenerateAttachmentURL(protocol, hostname, fmt.Sprintf("%s", att.ID), token)
+		log.Println("Attachment URL ", filePath)
+		if isImage && filePath != "" {
+			// fr, ferr := h.storage.GetFile(c.UserContext(), filePath)
+			// if ferr != nil {
+			// 	log.Fatalf("Failed to get file for attachment %s: %v", att.FileName, ferr)
+			// }
+			attURL := utils.GenerateAttachmentURL(protocol, hostname, fmt.Sprintf("%s", att.ID), token)
+			log.Printf("Fetching attachment from URL: %s", attURL)
+			resp, err := http.Get(attURL) // fetch via HTTP, not raw storage SDK
+			if err == nil {
+				log.Printf("Successfully fetched attachment %s, status: %s", att.FileName, resp.Status)
+				defer resp.Body.Close()
+				data, err := io.ReadAll(resp.Body)
+				if err == nil {
+					log.Printf("Read %d bytes for attachment %s", len(data), att.FileName)
+					encoded := base64.StdEncoding.EncodeToString(data)
+					imageData = template.URL("data:" + att.MimeType + ";base64," + encoded)
+				}
+			}
+		}
+		attachments = append(attachments, map[string]interface{}{
+			"Name":       att.FileName,
+			"MimeType":   att.MimeType,
+			"SizeStr":    sizeStr,
+			"UploadedBy": uploadedBy,
+			"UploadedAt": ts(att.CreatedAt),
+			"IsImage":    isImage,
+			"ImageData":  imageData,
+		})
+	}
+
+	hasDates := tsp(inc.DueDate) != "" || tsp(inc.ResolvedAt) != "" || tsp(inc.ClosedAt) != ""
+
+	return map[string]interface{}{
+		"Dir":            l.Dir,
+		"Lang":           lang,
+		"IncidentNo":     inc.IncidentNumber,
+		"CreatedAt":      ts(inc.CreatedAt),
+		"Status":         statusName,
+		"Channel":        inc.Channel,
+		"Source":         inc.Source,
+		"RecordType":     inc.RecordType,
+		"WorkflowName":   workflowName,
+		"Priority":       "",
+		"Title":          inc.Title,
+		"Classification": classPath,
+		"Location":       locationName,
+		"Description":    inc.Description,
+		"SLABreached":    inc.SLABreached,
+		"SLABadgeClass":  slaClass,
+		"SLABadgeText":   slaStatus,
+		"SLADeadline":    tsp(inc.SLADeadline),
+		"DueDate":        tsp(inc.DueDate),
+		"ResolvedAt":     tsp(inc.ResolvedAt),
+		"ClosedAt":       tsp(inc.ClosedAt),
+		"HasDates":       hasDates,
+		"UpdatedAt":      ts(inc.UpdatedAt),
+		"Reporter":       reporterName,
+		"Assignee":       assigneeName,
+		"ReporterEmail":  inc.ReporterEmail,
+		"ReporterMobile": inc.CreatedByMobile,
+		"Department":     deptName,
+		"ReporterName":   inc.CreatedByName,
+		"HasLocation":    hasLocation,
+		"Latitude":       lat,
+		"Longitude":      lon,
+		"Address":        inc.Address,
+		"City":           inc.City,
+		"State":          inc.State,
+		"Country":        inc.Country,
+		"PostalCode":     inc.PostalCode,
+		"History":        history,
+		"Comments":       comments,
+		"Attachments":    attachments,
+		"PrintDate":      ts(time.Now()),
+	}
 }

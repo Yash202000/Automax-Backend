@@ -25,6 +25,7 @@ type IncidentHandler struct {
 	storage             *storage.MinIOStorage
 	presenceService     services.PresenceService
 	readyToCloseService services.ReadyToCloseService
+	pdfTemplateRepo     repository.ReportPdfTemplateRepository
 	validator           *validator.Validate
 }
 
@@ -42,6 +43,11 @@ func NewIncidentHandler(service services.IncidentService, userRepo repository.Us
 // SetReadyToCloseService wires in the ReadyToCloseService for duration-options endpoint.
 func (h *IncidentHandler) SetReadyToCloseService(svc services.ReadyToCloseService) {
 	h.readyToCloseService = svc
+}
+
+// SetPdfTemplateRepo wires in the ReportPdfTemplateRepository for template-based report generation.
+func (h *IncidentHandler) SetPdfTemplateRepo(repo repository.ReportPdfTemplateRepository) {
+	h.pdfTemplateRepo = repo
 }
 
 // GetReadyToCloseDurationOptions returns the global default duration options.

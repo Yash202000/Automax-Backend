@@ -302,9 +302,9 @@ func (s *EscalationGroupService) sendGroupNotification(ctx context.Context, grou
 			nil, attachments, nil, nil,
 		)
 		if err != nil {
-			log.Printf("[EscalationGroupService] Email failed for user %s (group '%s'): %v", group.Name, err)
+			log.Printf("[EscalationGroupService] Email failed for user %s (group '%s'): %v", user.Email, group.Name, err)
 		} else {
-			log.Printf("[EscalationGroupService] Email sent to %s (group '%s')", group.Name)
+			log.Printf("[EscalationGroupService] Email sent to %s (group '%s')", user.Email, group.Name)
 		}
 	}
 }

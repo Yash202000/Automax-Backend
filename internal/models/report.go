@@ -103,7 +103,7 @@ type ReportCreateRequestConfig struct {
 type ReportCreateRequest struct {
 	Name        string                    `json:"name" validate:"required,max=255"`
 	Description string                    `json:"description"`
-	DataSource  string                    `json:"data_source" validate:"required,oneof=incidents action_logs users workflows departments locations classifications request"`
+	DataSource  string                    `json:"data_source" validate:"required,oneof=incidents action_logs users workflows departments locations classifications requests incidents_by_location incidents_by_classification incidents_by_department incidents_by_status_location incidents_by_status_classification incidents_by_status_department"`
 	Config      ReportCreateRequestConfig `json:"config" validate:"required"`
 	IsPublic    bool                      `json:"is_public"`
 }
@@ -124,12 +124,13 @@ type ReportExecuteRequest struct {
 
 // ReportExportRequest is used for exporting reports
 type ReportExportRequest struct {
-	DataSource string               `json:"data_source" validate:"required,oneof=incidents action_logs users workflows departments locations classifications request"`
+	DataSource string               `json:"data_source" validate:"required,oneof=incidents action_logs users workflows departments locations classifications request incidents_by_location incidents_by_classification incidents_by_department incidents_by_status_location incidents_by_status_classification incidents_by_status_department"`
 	Columns    []ColumnField        `json:"columns" validate:"required,min=1"`
 	Filters    []ReportFilterConfig `json:"filters"`
 	Sorting    []ReportSortConfig   `json:"sorting"`
 	Format     string               `json:"format" validate:"required,oneof=xlsx pdf json"`
 	Options    *ReportExportOptions `json:"options"`
+	TemplateID *string              `json:"template_id,omitempty"` // uuid string; if set → html/template + Chromium PDF
 }
 
 type ReportExportOptions struct {
@@ -258,4 +259,71 @@ type DataSourceInfo struct {
 	Name   string            `json:"name"`
 	Label  string            `json:"label"`
 	Fields []DataSourceField `json:"fields"`
+}
+
+// ReportPdfTemplate stores custom HTML/template layouts for PDF export
+type ReportPdfTemplate struct {
+	ID          uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	Name        string         `gorm:"size:255;not null" json:"name"`
+	Description string         `gorm:"type:text" json:"description"`
+	HTMLBody    string         `gorm:"type:text;not null" json:"html_body"`
+	IsDefault   bool           `gorm:"default:false" json:"is_default"`
+	IsPublic    bool           `gorm:"default:false" json:"is_public"`
+	CreatedByID uuid.UUID      `gorm:"type:uuid;index" json:"created_by_id"`
+	CreatedBy   *User          `gorm:"foreignKey:CreatedByID" json:"created_by,omitempty"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (r *ReportPdfTemplate) BeforeCreate(tx *gorm.DB) error {
+	if r.ID == uuid.Nil {
+		r.ID = uuid.New()
+	}
+	return nil
+}
+
+type ReportPdfTemplateCreateRequest struct {
+	Name        string `json:"name"        validate:"required,max=255"`
+	Description string `json:"description"`
+	HTMLBody    string `json:"html_body"   validate:"required"`
+	IsPublic    bool   `json:"is_public"`
+}
+
+type ReportPdfTemplateUpdateRequest struct {
+	Name        string  `json:"name"        validate:"omitempty,max=255"`
+	Description string  `json:"description"`
+	HTMLBody    *string `json:"html_body"`
+	IsPublic    *bool   `json:"is_public"`
+	IsDefault   *bool   `json:"is_default"`
+}
+
+type ReportPdfTemplateResponse struct {
+	ID          string             `json:"id"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	HTMLBody    string             `json:"html_body"`
+	IsDefault   bool               `json:"is_default"`
+	IsPublic    bool               `json:"is_public"`
+	CreatedBy   *UserBasicResponse `json:"created_by,omitempty"`
+	CreatedAt   string             `json:"created_at"`
+	UpdatedAt   string             `json:"updated_at"`
+}
+
+type ReportPdfTemplateFilter struct {
+	Search string `json:"search"`
+	Page   int    `json:"page"`
+	Limit  int    `json:"limit"`
+}
+
+// ReportPdfTemplateData is passed to html/template.Execute() when rendering a PDF template
+type ReportPdfTemplateData struct {
+	Title       string
+	DataSource  string
+	Direction   string // "ltr" or "rtl"
+	Columns     []ColumnField
+	Data        []map[string]interface{}
+	Total       int64
+	GeneratedAt string
+	Options     *ReportExportOptions
 }

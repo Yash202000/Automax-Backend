@@ -6,11 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
+	"log"
+	"os"
+	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/google/uuid"
 	"github.com/jung-kurt/gofpdf"
 )
@@ -38,12 +44,18 @@ type ReportService interface {
 type reportService struct {
 	reportRepo       repository.ReportRepository
 	rejectionLogRepo repository.RejectionLogRepository
+	pdfTemplateRepo  repository.ReportPdfTemplateRepository
 }
 
-func NewReportService(reportRepo repository.ReportRepository, rejectionLogRepo repository.RejectionLogRepository) ReportService {
+func NewReportService(
+	reportRepo repository.ReportRepository,
+	rejectionLogRepo repository.RejectionLogRepository,
+	pdfTemplateRepo repository.ReportPdfTemplateRepository,
+) ReportService {
 	return &reportService{
 		reportRepo:       reportRepo,
 		rejectionLogRepo: rejectionLogRepo,
+		pdfTemplateRepo:  pdfTemplateRepo,
 	}
 }
 
@@ -243,6 +255,18 @@ func (s *reportService) ExecuteReport(ctx context.Context, id uuid.UUID, req *mo
 		data, total, queryErr = s.rejectionLogRepo.ExecuteRejectionLogQuery(ctx, filters, sorting, page, limit)
 	case "action_logs":
 		data, total, queryErr = s.reportRepo.ExecuteActionLogQuery(ctx, filters, sorting, page, limit)
+	case "incidents_by_location":
+		data, total, queryErr = s.reportRepo.ExecuteIncidentsByLocationQuery(ctx, filters, sorting, page, limit)
+	case "incidents_by_classification":
+		data, total, queryErr = s.reportRepo.ExecuteIncidentsByClassificationQuery(ctx, filters, sorting, page, limit)
+	case "incidents_by_department":
+		data, total, queryErr = s.reportRepo.ExecuteIncidentsByDepartmentQuery(ctx, filters, sorting, page, limit)
+	case "incidents_by_status_location":
+		data, _, total, queryErr = s.reportRepo.ExecuteIncidentsByStatusLocationQuery(ctx, filters, sorting, page, limit)
+	case "incidents_by_status_classification":
+		data, _, total, queryErr = s.reportRepo.ExecuteIncidentsByStatusClassificationQuery(ctx, filters, sorting, page, limit)
+	case "incidents_by_status_department":
+		data, _, total, queryErr = s.reportRepo.ExecuteIncidentsByStatusDepartmentQuery(ctx, filters, sorting, page, limit)
 	default:
 		queryErr = errors.New("unsupported data source")
 	}
@@ -279,6 +303,7 @@ func (s *reportService) PreviewReport(ctx context.Context, req *models.ReportCre
 	var data []map[string]interface{}
 	var total int64
 	var err error
+	var dynamicColumns []models.ColumnField
 
 	// Get sorting from config
 	var sorting *models.ReportSortConfig
@@ -303,6 +328,18 @@ func (s *reportService) PreviewReport(ctx context.Context, req *models.ReportCre
 		data, total, err = s.rejectionLogRepo.ExecuteRejectionLogQuery(ctx, req.Config.Filters, sorting, page, limit)
 	case "action_logs":
 		data, total, err = s.reportRepo.ExecuteActionLogQuery(ctx, req.Config.Filters, sorting, page, limit)
+	case "incidents_by_location":
+		data, total, err = s.reportRepo.ExecuteIncidentsByLocationQuery(ctx, req.Config.Filters, sorting, page, limit)
+	case "incidents_by_classification":
+		data, total, err = s.reportRepo.ExecuteIncidentsByClassificationQuery(ctx, req.Config.Filters, sorting, page, limit)
+	case "incidents_by_department":
+		data, total, err = s.reportRepo.ExecuteIncidentsByDepartmentQuery(ctx, req.Config.Filters, sorting, page, limit)
+	case "incidents_by_status_location":
+		data, dynamicColumns, total, err = s.reportRepo.ExecuteIncidentsByStatusLocationQuery(ctx, req.Config.Filters, sorting, page, limit)
+	case "incidents_by_status_classification":
+		data, dynamicColumns, total, err = s.reportRepo.ExecuteIncidentsByStatusClassificationQuery(ctx, req.Config.Filters, sorting, page, limit)
+	case "incidents_by_status_department":
+		data, dynamicColumns, total, err = s.reportRepo.ExecuteIncidentsByStatusDepartmentQuery(ctx, req.Config.Filters, sorting, page, limit)
 	default:
 		return nil, errors.New("unsupported data source")
 	}
@@ -311,8 +348,16 @@ func (s *reportService) PreviewReport(ctx context.Context, req *models.ReportCre
 		return nil, err
 	}
 
+	columns := req.Config.Columns
+	if dynamicColumns != nil {
+		columns = make([]models.ReportColumnConfig, len(dynamicColumns))
+		for i, f := range dynamicColumns {
+			columns[i] = models.ReportColumnConfig{Field: f.Field, Label: f.Label, Visible: true}
+		}
+	}
+
 	return &models.ReportResultResponse{
-		Columns: req.Config.Columns,
+		Columns: columns,
 		Data:    data,
 		Total:   total,
 		Page:    page,
@@ -324,6 +369,7 @@ func (s *reportService) QueryReport(ctx context.Context, req *models.ReportQuery
 	var data []map[string]interface{}
 	var total int64
 	var err error
+	var dynamicColumns []models.ColumnField
 
 	// Convert sorting to the format expected by repository
 	var sorting *models.ReportSortConfig
@@ -348,12 +394,29 @@ func (s *reportService) QueryReport(ctx context.Context, req *models.ReportQuery
 		data, total, err = s.rejectionLogRepo.ExecuteRejectionLogQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
 	case "action_logs":
 		data, total, err = s.reportRepo.ExecuteActionLogQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
+	case "incidents_by_location":
+		data, total, err = s.reportRepo.ExecuteIncidentsByLocationQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
+	case "incidents_by_classification":
+		data, total, err = s.reportRepo.ExecuteIncidentsByClassificationQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
+	case "incidents_by_department":
+		data, total, err = s.reportRepo.ExecuteIncidentsByDepartmentQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
+	case "incidents_by_status_location":
+		data, dynamicColumns, total, err = s.reportRepo.ExecuteIncidentsByStatusLocationQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
+	case "incidents_by_status_classification":
+		data, dynamicColumns, total, err = s.reportRepo.ExecuteIncidentsByStatusClassificationQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
+	case "incidents_by_status_department":
+		data, dynamicColumns, total, err = s.reportRepo.ExecuteIncidentsByStatusDepartmentQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
 	default:
 		return nil, errors.New("unsupported data source")
 	}
 
 	if err != nil {
 		return nil, err
+	}
+
+	columns := req.Columns
+	if dynamicColumns != nil {
+		columns = dynamicColumns
 	}
 
 	// Calculate total pages
@@ -365,7 +428,7 @@ func (s *reportService) QueryReport(ctx context.Context, req *models.ReportQuery
 	return &models.ReportQueryResponse{
 		Success:    true,
 		Data:       data,
-		Columns:    req.Columns,
+		Columns:    columns,
 		TotalItems: total,
 		TotalPages: totalPages,
 		Page:       req.Page,
@@ -376,6 +439,7 @@ func (s *reportService) QueryReport(ctx context.Context, req *models.ReportQuery
 func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExportRequest) ([]byte, string, string, error) {
 	var data []map[string]interface{}
 	var err error
+	var dynamicColumns []models.ColumnField
 
 	// Get sorting from request
 	var sorting *models.ReportSortConfig
@@ -405,8 +469,24 @@ func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExpo
 		data, _, err = s.rejectionLogRepo.ExecuteRejectionLogQuery(ctx, req.Filters, sorting, 1, limit)
 	case "action_logs":
 		data, _, err = s.reportRepo.ExecuteActionLogQuery(ctx, req.Filters, sorting, 1, limit)
+	case "incidents_by_location":
+		data, _, err = s.reportRepo.ExecuteIncidentsByLocationQuery(ctx, req.Filters, sorting, 1, limit)
+	case "incidents_by_classification":
+		data, _, err = s.reportRepo.ExecuteIncidentsByClassificationQuery(ctx, req.Filters, sorting, 1, limit)
+	case "incidents_by_department":
+		data, _, err = s.reportRepo.ExecuteIncidentsByDepartmentQuery(ctx, req.Filters, sorting, 1, limit)
+	case "incidents_by_status_location":
+		data, dynamicColumns, _, err = s.reportRepo.ExecuteIncidentsByStatusLocationQuery(ctx, req.Filters, sorting, 1, limit)
+	case "incidents_by_status_classification":
+		data, dynamicColumns, _, err = s.reportRepo.ExecuteIncidentsByStatusClassificationQuery(ctx, req.Filters, sorting, 1, limit)
+	case "incidents_by_status_department":
+		data, dynamicColumns, _, err = s.reportRepo.ExecuteIncidentsByStatusDepartmentQuery(ctx, req.Filters, sorting, 1, limit)
 	default:
 		return nil, "", "", errors.New("unsupported data source")
+	}
+
+	if dynamicColumns != nil {
+		req.Columns = dynamicColumns
 	}
 
 	if err != nil {
@@ -420,6 +500,54 @@ func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExpo
 
 	timestamp := time.Now().Format("2006-01-02_150405")
 	filename := title + "_" + timestamp
+
+	// ── PDF via HTML template (Chromium) ──────────────────────────────────────
+	if req.Format == "pdf" && req.TemplateID != nil && *req.TemplateID != "" {
+		tmplID, parseErr := uuid.Parse(*req.TemplateID)
+		if parseErr != nil {
+			return nil, "", "", fmt.Errorf("invalid template_id: %w", parseErr)
+		}
+		pdfTmpl, fetchErr := s.pdfTemplateRepo.FindByID(ctx, tmplID)
+		if fetchErr != nil {
+			log.Printf("[ExportReport] failed to fetch pdf template %s: %v", tmplID, fetchErr)
+			return nil, "", "", errors.New("pdf template not found")
+		}
+
+		lang, _ := ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE).(string)
+		dir := "ltr"
+		if strings.ToLower(lang) == "ar" {
+			dir = "rtl"
+		}
+
+		t, tmplErr := template.New("report").Parse(pdfTmpl.HTMLBody)
+		if tmplErr != nil {
+			log.Printf("[ExportReport] failed to parse html template: %v", tmplErr)
+			return nil, "", "", errors.New("invalid pdf template")
+		}
+		var buf bytes.Buffer
+		execErr := t.Execute(&buf, map[string]interface{}{
+			"Title":       title,
+			"DataSource":  req.DataSource,
+			"Direction":   dir,
+			"Columns":     req.Columns,
+			"Data":        data,
+			"Total":       int64(len(data)),
+			"GeneratedAt": time.Now().Format("2006-01-02 15:04:05"),
+			"Options":     req.Options,
+		})
+		if execErr != nil {
+			log.Printf("[ExportReport] failed to execute html template: %v", execErr)
+			return nil, "", "", errors.New("failed to render pdf template")
+		}
+
+		pdfBytes, pdfErr := renderHTMLToPDF(buf.Bytes())
+		if pdfErr != nil {
+			log.Printf("[ExportReport] chromium pdf conversion failed: %v", pdfErr)
+			return nil, "", "", errors.New("pdf generation failed")
+		}
+		return pdfBytes, filename + ".pdf", "application/pdf", nil
+	}
+	// ── fallback: existing xlsx / gofpdf paths ─────────────────────────────
 
 	if req.Format == "xlsx" {
 		// Generate Excel file
@@ -436,6 +564,48 @@ func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExpo
 		return nil, "", "", err
 	}
 	return pdfData, filename + ".pdf", "application/pdf", nil
+}
+
+func renderHTMLToPDF(htmlBytes []byte) ([]byte, error) {
+	tmpHTML, err := os.CreateTemp("", "rpt-*.html")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp html file: %w", err)
+	}
+	defer os.Remove(tmpHTML.Name())
+	tmpHTML.Write(htmlBytes)
+	tmpHTML.Close()
+
+	tmpPDF, err := os.CreateTemp("", "rpt-*.pdf")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp pdf file: %w", err)
+	}
+	pdfPath := tmpPDF.Name()
+	tmpPDF.Close()
+	// Remove the empty file so Chromium can create it fresh;
+	// --print-to-pdf does not overwrite an existing file.
+	os.Remove(pdfPath)
+	defer os.Remove(pdfPath)
+
+	chromeBin := "google-chrome"
+	if bin := os.Getenv("CHROME_BIN"); bin != "" {
+		chromeBin = bin
+	}
+	var stderr bytes.Buffer
+	cmd := exec.Command(chromeBin,
+		"--headless", "--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage",
+		"--no-margins", "--print-to-pdf-no-header",
+		fmt.Sprintf("--print-to-pdf=%s", pdfPath),
+		fmt.Sprintf("file://%s", tmpHTML.Name()),
+	)
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("exec_error=%w stderr=%s", err, stderr.String())
+	}
+	data, err := os.ReadFile(pdfPath)
+	if err != nil || len(data) == 0 {
+		return nil, fmt.Errorf("empty pdf output")
+	}
+	return data, nil
 }
 
 func (s *reportService) generateExcel(data []map[string]interface{}, columns []models.ColumnField, title string, options *models.ReportExportOptions) ([]byte, error) {
@@ -764,6 +934,69 @@ func (s *reportService) GetDataSources(ctx context.Context) []models.DataSourceI
 				{Field: "user_username", Label: "Username", Type: "string", Filterable: false, Sortable: true},
 				{Field: "user_full_name", Label: "User Full Name", Type: "string", Filterable: false, Sortable: false},
 				{Field: "created_at", Label: "Created At", Type: "date", Filterable: true, Sortable: true},
+			},
+		},
+		{
+			Name:  "incidents_by_location",
+			Label: "Incidents by Location",
+			Fields: []models.DataSourceField{
+				{Field: "location_id", Label: "Location ID", Type: "uuid", Filterable: false, Sortable: false},
+				{Field: "location_name", Label: "Location Name", Type: "string", Filterable: false, Sortable: false},
+				{Field: "parent_location_id", Label: "Parent Location ID", Type: "uuid", Filterable: false, Sortable: false},
+				{Field: "parent_location_name", Label: "Parent Location Name", Type: "string", Filterable: false, Sortable: false},
+				{Field: "count", Label: "Count", Type: "number", Filterable: false, Sortable: false},
+			},
+		},
+		{
+			Name:  "incidents_by_classification",
+			Label: "Incidents by Classification",
+			Fields: []models.DataSourceField{
+				{Field: "classification_id", Label: "Classification ID", Type: "uuid", Filterable: false, Sortable: false},
+				{Field: "classification_name", Label: "Classification Name", Type: "string", Filterable: false, Sortable: false},
+				{Field: "parent_classification_id", Label: "Parent Classification ID", Type: "uuid", Filterable: false, Sortable: false},
+				{Field: "parent_classification_name", Label: "Parent Classification Name", Type: "string", Filterable: false, Sortable: false},
+				{Field: "count", Label: "Count", Type: "number", Filterable: false, Sortable: false},
+			},
+		},
+		{
+			Name:  "incidents_by_department",
+			Label: "Incidents by Department",
+			Fields: []models.DataSourceField{
+				{Field: "department_id", Label: "Department ID", Type: "uuid", Filterable: false, Sortable: false},
+				{Field: "department_name", Label: "Department Name", Type: "string", Filterable: false, Sortable: false},
+				{Field: "parent_department_id", Label: "Parent Department ID", Type: "uuid", Filterable: false, Sortable: false},
+				{Field: "parent_department_name", Label: "Parent Department Name", Type: "string", Filterable: false, Sortable: false},
+				{Field: "count", Label: "Count", Type: "number", Filterable: false, Sortable: false},
+			},
+		},
+		{
+			Name:  "incidents_by_status_location",
+			Label: "Incidents by Status × Location",
+			Fields: []models.DataSourceField{
+				{Field: "location_id", Label: "Location ID", Type: "uuid", Filterable: false, Sortable: false},
+				{Field: "location_name", Label: "Location Name", Type: "string", Filterable: false, Sortable: false},
+				{Field: "parent_location_id", Label: "Parent Location ID", Type: "uuid", Filterable: false, Sortable: false},
+				{Field: "parent_location_name", Label: "Parent Location Name", Type: "string", Filterable: false, Sortable: false},
+			},
+		},
+		{
+			Name:  "incidents_by_status_classification",
+			Label: "Incidents by Status × Classification",
+			Fields: []models.DataSourceField{
+				{Field: "classification_id", Label: "Classification ID", Type: "uuid", Filterable: false, Sortable: false},
+				{Field: "classification_name", Label: "Classification Name", Type: "string", Filterable: false, Sortable: false},
+				{Field: "parent_classification_id", Label: "Parent Classification ID", Type: "uuid", Filterable: false, Sortable: false},
+				{Field: "parent_classification_name", Label: "Parent Classification Name", Type: "string", Filterable: false, Sortable: false},
+			},
+		},
+		{
+			Name:  "incidents_by_status_department",
+			Label: "Incidents by Status × Department",
+			Fields: []models.DataSourceField{
+				{Field: "department_id", Label: "Department ID", Type: "uuid", Filterable: false, Sortable: false},
+				{Field: "department_name", Label: "Department Name", Type: "string", Filterable: false, Sortable: false},
+				{Field: "parent_department_id", Label: "Parent Department ID", Type: "uuid", Filterable: false, Sortable: false},
+				{Field: "parent_department_name", Label: "Parent Department Name", Type: "string", Filterable: false, Sortable: false},
 			},
 		},
 		{

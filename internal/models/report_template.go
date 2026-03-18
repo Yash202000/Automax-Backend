@@ -11,9 +11,12 @@ import (
 type ReportTemplate struct {
 	ID          uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
 	Name        string         `gorm:"size:255;not null" json:"name"`
+	Code        string         `gorm:"size:255" json:"code"`
 	Description string         `gorm:"type:text" json:"description"`
-	Template    string         `gorm:"type:text" json:"template"` // JSON serialized TemplateConfig
+	Template    string         `gorm:"type:text" json:"template"`  // JSON serialized TemplateConfig
+	HTMLBody    string         `gorm:"type:text" json:"html_body"` // For PDF templates
 	IsDefault   bool           `gorm:"default:false" json:"is_default"`
+	IsHtml      bool           `gorm:"default:false" json:"is_html"`
 	IsPublic    bool           `gorm:"default:false" json:"is_public"`
 	CreatedByID uuid.UUID      `gorm:"type:uuid;index" json:"created_by_id"`
 	CreatedBy   *User          `gorm:"foreignKey:CreatedByID" json:"created_by,omitempty"`
@@ -31,77 +34,77 @@ func (r *ReportTemplate) BeforeCreate(tx *gorm.DB) error {
 
 // TemplateConfig is the main configuration structure for report templates
 type TemplateConfig struct {
-	PageSettings PageSettings     `json:"page_settings"`
-	Header       *HeaderConfig    `json:"header,omitempty"`
-	Footer       *FooterConfig    `json:"footer,omitempty"`
+	PageSettings PageSettings      `json:"page_settings"`
+	Header       *HeaderConfig     `json:"header,omitempty"`
+	Footer       *FooterConfig     `json:"footer,omitempty"`
 	Elements     []TemplateElement `json:"elements"`
-	Styles       *GlobalStyles    `json:"styles,omitempty"`
+	Styles       *GlobalStyles     `json:"styles,omitempty"`
 }
 
 // PageSettings defines the page layout
 type PageSettings struct {
-	Size        string  `json:"size"`        // A4, Letter, Legal, A3
-	Orientation string  `json:"orientation"` // portrait, landscape
-	MarginTop   float64 `json:"margin_top"`
-	MarginRight float64 `json:"margin_right"`
+	Size         string  `json:"size"`        // A4, Letter, Legal, A3
+	Orientation  string  `json:"orientation"` // portrait, landscape
+	MarginTop    float64 `json:"margin_top"`
+	MarginRight  float64 `json:"margin_right"`
 	MarginBottom float64 `json:"margin_bottom"`
-	MarginLeft  float64 `json:"margin_left"`
-	Width       float64 `json:"width"`  // calculated or custom (mm)
-	Height      float64 `json:"height"` // calculated or custom (mm)
+	MarginLeft   float64 `json:"margin_left"`
+	Width        float64 `json:"width"`  // calculated or custom (mm)
+	Height       float64 `json:"height"` // calculated or custom (mm)
 }
 
 // HeaderConfig defines the report header
 type HeaderConfig struct {
-	Enabled    bool              `json:"enabled"`
-	Height     float64           `json:"height"` // mm
-	Background string            `json:"background,omitempty"` // hex color
-	Elements   []TemplateElement `json:"elements"`
-	ShowOnAllPages bool          `json:"show_on_all_pages"`
+	Enabled        bool              `json:"enabled"`
+	Height         float64           `json:"height"`               // mm
+	Background     string            `json:"background,omitempty"` // hex color
+	Elements       []TemplateElement `json:"elements"`
+	ShowOnAllPages bool              `json:"show_on_all_pages"`
 }
 
 // FooterConfig defines the report footer
 type FooterConfig struct {
-	Enabled        bool              `json:"enabled"`
-	Height         float64           `json:"height"` // mm
-	Background     string            `json:"background,omitempty"`
-	Elements       []TemplateElement `json:"elements"`
-	ShowPageNumber bool              `json:"show_page_number"`
-	PageNumberFormat string          `json:"page_number_format"` // "Page {page} of {total}", "{page}/{total}"
-	ShowOnAllPages bool              `json:"show_on_all_pages"`
+	Enabled          bool              `json:"enabled"`
+	Height           float64           `json:"height"` // mm
+	Background       string            `json:"background,omitempty"`
+	Elements         []TemplateElement `json:"elements"`
+	ShowPageNumber   bool              `json:"show_page_number"`
+	PageNumberFormat string            `json:"page_number_format"` // "Page {page} of {total}", "{page}/{total}"
+	ShowOnAllPages   bool              `json:"show_on_all_pages"`
 }
 
 // TemplateElement represents any element in the template
 type TemplateElement struct {
-	ID         string          `json:"id"`
-	Type       string          `json:"type"` // text, image, table, shape, line, spacer, dynamic_field, chart
-	Position   ElementPosition `json:"position"`
-	Size       ElementSize     `json:"size"`
-	Style      ElementStyle    `json:"style"`
-	Content    interface{}     `json:"content"` // Type-specific content
-	Locked     bool            `json:"locked"`
-	Visible    bool            `json:"visible"`
-	ZIndex     int             `json:"z_index"`
+	ID       string          `json:"id"`
+	Type     string          `json:"type"` // text, image, table, shape, line, spacer, dynamic_field, chart
+	Position ElementPosition `json:"position"`
+	Size     ElementSize     `json:"size"`
+	Style    ElementStyle    `json:"style"`
+	Content  interface{}     `json:"content"` // Type-specific content
+	Locked   bool            `json:"locked"`
+	Visible  bool            `json:"visible"`
+	ZIndex   int             `json:"z_index"`
 }
 
 // ElementPosition defines where an element is placed
 type ElementPosition struct {
-	X         float64 `json:"x"`         // mm from left
-	Y         float64 `json:"y"`         // mm from top
-	Anchor    string  `json:"anchor"`    // top-left, top-center, top-right, center, etc.
-	Relative  bool    `json:"relative"`  // relative to parent or absolute
-	ParentID  string  `json:"parent_id,omitempty"` // for nested elements
+	X        float64 `json:"x"`                   // mm from left
+	Y        float64 `json:"y"`                   // mm from top
+	Anchor   string  `json:"anchor"`              // top-left, top-center, top-right, center, etc.
+	Relative bool    `json:"relative"`            // relative to parent or absolute
+	ParentID string  `json:"parent_id,omitempty"` // for nested elements
 }
 
 // ElementSize defines element dimensions
 type ElementSize struct {
-	Width     float64 `json:"width"`      // mm or percentage
-	Height    float64 `json:"height"`     // mm or percentage
-	MinWidth  float64 `json:"min_width"`
-	MinHeight float64 `json:"min_height"`
-	MaxWidth  float64 `json:"max_width"`
-	MaxHeight float64 `json:"max_height"`
-	Unit      string  `json:"unit"`       // mm, px, percent
-	AutoHeight bool   `json:"auto_height"` // for tables/text
+	Width      float64 `json:"width"`  // mm or percentage
+	Height     float64 `json:"height"` // mm or percentage
+	MinWidth   float64 `json:"min_width"`
+	MinHeight  float64 `json:"min_height"`
+	MaxWidth   float64 `json:"max_width"`
+	MaxHeight  float64 `json:"max_height"`
+	Unit       string  `json:"unit"`        // mm, px, percent
+	AutoHeight bool    `json:"auto_height"` // for tables/text
 }
 
 // ElementStyle defines visual styling
@@ -117,9 +120,9 @@ type ElementStyle struct {
 	BorderRadius float64 `json:"border_radius"`
 
 	// Shadow
-	Shadow       bool    `json:"shadow"`
-	ShadowColor  string  `json:"shadow_color,omitempty"`
-	ShadowBlur   float64 `json:"shadow_blur"`
+	Shadow        bool    `json:"shadow"`
+	ShadowColor   string  `json:"shadow_color,omitempty"`
+	ShadowBlur    float64 `json:"shadow_blur"`
 	ShadowOffsetX float64 `json:"shadow_offset_x"`
 	ShadowOffsetY float64 `json:"shadow_offset_y"`
 
@@ -144,60 +147,60 @@ type GlobalStyles struct {
 
 // FontConfig defines font settings
 type FontConfig struct {
-	Family    string  `json:"family"`     // Arial, Helvetica, Times, etc.
-	Size      float64 `json:"size"`       // pt
-	Weight    string  `json:"weight"`     // normal, bold
-	Style     string  `json:"style"`      // normal, italic
-	Color     string  `json:"color"`
+	Family     string  `json:"family"` // Arial, Helvetica, Times, etc.
+	Size       float64 `json:"size"`   // pt
+	Weight     string  `json:"weight"` // normal, bold
+	Style      string  `json:"style"`  // normal, italic
+	Color      string  `json:"color"`
 	LineHeight float64 `json:"line_height"`
 }
 
 // TextContent for text elements
 type TextContent struct {
-	Text        string     `json:"text"`
-	Font        FontConfig `json:"font"`
-	Alignment   string     `json:"alignment"`   // left, center, right, justify
-	VAlignment  string     `json:"v_alignment"` // top, middle, bottom
-	WordWrap    bool       `json:"word_wrap"`
-	Truncate    bool       `json:"truncate"`
-	MaxLines    int        `json:"max_lines"`
+	Text       string     `json:"text"`
+	Font       FontConfig `json:"font"`
+	Alignment  string     `json:"alignment"`   // left, center, right, justify
+	VAlignment string     `json:"v_alignment"` // top, middle, bottom
+	WordWrap   bool       `json:"word_wrap"`
+	Truncate   bool       `json:"truncate"`
+	MaxLines   int        `json:"max_lines"`
 }
 
 // ImageContent for image elements
 type ImageContent struct {
-	Source     string  `json:"source"`      // URL or base64
-	SourceType string  `json:"source_type"` // url, base64, file
-	Alt        string  `json:"alt"`
-	Fit        string  `json:"fit"`         // contain, cover, fill, none
-	Position   string  `json:"position"`    // center, top, bottom, left, right
+	Source     string `json:"source"`      // URL or base64
+	SourceType string `json:"source_type"` // url, base64, file
+	Alt        string `json:"alt"`
+	Fit        string `json:"fit"`      // contain, cover, fill, none
+	Position   string `json:"position"` // center, top, bottom, left, right
 }
 
 // TableContent for table elements
 type TableContent struct {
-	DataSource    string         `json:"data_source"`    // incidents, users, etc.
-	Columns       []TableColumn  `json:"columns"`
-	Filters       []ReportFilterConfig `json:"filters"`
-	Sorting       []ReportSortConfig   `json:"sorting"`
-	ShowHeader    bool           `json:"show_header"`
-	ShowRowNumbers bool          `json:"show_row_numbers"`
-	AlternateRows bool           `json:"alternate_rows"`
-	HeaderStyle   TableCellStyle `json:"header_style"`
-	RowStyle      TableCellStyle `json:"row_style"`
-	AltRowStyle   TableCellStyle `json:"alt_row_style"`
-	MaxRows       int            `json:"max_rows"`
-	Pagination    bool           `json:"pagination"`
-	RowsPerPage   int            `json:"rows_per_page"`
+	DataSource     string               `json:"data_source"` // incidents, users, etc.
+	Columns        []TableColumn        `json:"columns"`
+	Filters        []ReportFilterConfig `json:"filters"`
+	Sorting        []ReportSortConfig   `json:"sorting"`
+	ShowHeader     bool                 `json:"show_header"`
+	ShowRowNumbers bool                 `json:"show_row_numbers"`
+	AlternateRows  bool                 `json:"alternate_rows"`
+	HeaderStyle    TableCellStyle       `json:"header_style"`
+	RowStyle       TableCellStyle       `json:"row_style"`
+	AltRowStyle    TableCellStyle       `json:"alt_row_style"`
+	MaxRows        int                  `json:"max_rows"`
+	Pagination     bool                 `json:"pagination"`
+	RowsPerPage    int                  `json:"rows_per_page"`
 }
 
 // TableColumn defines a table column
 type TableColumn struct {
-	Field      string         `json:"field"`
-	Label      string         `json:"label"`
-	Width      float64        `json:"width"`      // mm or percentage
-	WidthUnit  string         `json:"width_unit"` // mm, percent
-	Alignment  string         `json:"alignment"`
-	Format     string         `json:"format,omitempty"` // date, currency, number, etc.
-	Style      TableCellStyle `json:"style"`
+	Field     string         `json:"field"`
+	Label     string         `json:"label"`
+	Width     float64        `json:"width"`      // mm or percentage
+	WidthUnit string         `json:"width_unit"` // mm, percent
+	Alignment string         `json:"alignment"`
+	Format    string         `json:"format,omitempty"` // date, currency, number, etc.
+	Style     TableCellStyle `json:"style"`
 }
 
 // TableCellStyle defines cell styling
@@ -232,8 +235,8 @@ type LineContent struct {
 
 // DynamicFieldContent for dynamic data fields
 type DynamicFieldContent struct {
-	Field       string     `json:"field"`       // date, page_number, total_pages, user_name, report_name, custom
-	Format      string     `json:"format"`      // for dates: "2006-01-02", etc.
+	Field       string     `json:"field"`  // date, page_number, total_pages, user_name, report_name, custom
+	Format      string     `json:"format"` // for dates: "2006-01-02", etc.
 	Prefix      string     `json:"prefix"`
 	Suffix      string     `json:"suffix"`
 	Font        FontConfig `json:"font"`
@@ -243,16 +246,16 @@ type DynamicFieldContent struct {
 
 // ChartContent for chart elements
 type ChartContent struct {
-	ChartType   string            `json:"chart_type"` // bar, line, pie, doughnut
-	DataSource  string            `json:"data_source"`
-	XField      string            `json:"x_field"`
-	YField      string            `json:"y_field"`
-	GroupField  string            `json:"group_field,omitempty"`
-	Aggregation string            `json:"aggregation"` // count, sum, avg
-	Colors      []string          `json:"colors"`
-	ShowLegend  bool              `json:"show_legend"`
-	ShowLabels  bool              `json:"show_labels"`
-	Title       string            `json:"title,omitempty"`
+	ChartType   string               `json:"chart_type"` // bar, line, pie, doughnut
+	DataSource  string               `json:"data_source"`
+	XField      string               `json:"x_field"`
+	YField      string               `json:"y_field"`
+	GroupField  string               `json:"group_field,omitempty"`
+	Aggregation string               `json:"aggregation"` // count, sum, avg
+	Colors      []string             `json:"colors"`
+	ShowLegend  bool                 `json:"show_legend"`
+	ShowLabels  bool                 `json:"show_labels"`
+	Title       string               `json:"title,omitempty"`
 	Filters     []ReportFilterConfig `json:"filters"`
 }
 
@@ -274,15 +277,15 @@ type ReportTemplateUpdateRequest struct {
 }
 
 type ReportTemplateResponse struct {
-	ID          string              `json:"id"`
-	Name        string              `json:"name"`
-	Description string              `json:"description"`
-	Template    TemplateConfig      `json:"template"`
-	IsDefault   bool                `json:"is_default"`
-	IsPublic    bool                `json:"is_public"`
-	CreatedBy   *UserBasicResponse  `json:"created_by,omitempty"`
-	CreatedAt   string              `json:"created_at"`
-	UpdatedAt   string              `json:"updated_at"`
+	ID          string             `json:"id"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Template    TemplateConfig     `json:"template"`
+	IsDefault   bool               `json:"is_default"`
+	IsPublic    bool               `json:"is_public"`
+	CreatedBy   *UserBasicResponse `json:"created_by,omitempty"`
+	CreatedAt   string             `json:"created_at"`
+	UpdatedAt   string             `json:"updated_at"`
 }
 
 type ReportTemplateFilter struct {
@@ -295,23 +298,24 @@ type ReportTemplateFilter struct {
 
 // GenerateReportRequest for generating a report from template
 type GenerateReportRequest struct {
-	TemplateID   string               `json:"template_id" validate:"required,uuid"`
-	DataSource   string               `json:"data_source" validate:"required"`
-	Filters      []ReportFilterConfig `json:"filters"`
-	Sorting      []ReportSortConfig   `json:"sorting"`
-	Format       string               `json:"format" validate:"required,oneof=pdf xlsx"`
-	FileName     string               `json:"file_name"`
+	TemplateID string               `json:"template_id" validate:"required,uuid"`
+	DataSource string               `json:"data_source" validate:"required"`
+	Columns    []ColumnField        `json:"columns,omitempty"` // for overriding table columns
+	Filters    []ReportFilterConfig `json:"filters"`
+	Sorting    []ReportSortConfig   `json:"sorting"`
+	Format     string               `json:"format" validate:"required,oneof=pdf xlsx"`
+	FileName   string               `json:"file_name"`
 	// Override template values
-	Overrides    *TemplateOverrides   `json:"overrides,omitempty"`
+	Overrides *TemplateOverrides `json:"overrides,omitempty"`
 }
 
 type TemplateOverrides struct {
 	Title       string            `json:"title,omitempty"`
 	Subtitle    string            `json:"subtitle,omitempty"`
-	HeaderLogo  string            `json:"header_logo,omitempty"` // base64 or URL
+	HeaderLogo  string            `json:"header_logo,omitempty"`  // base64 or URL
 	CustomTexts map[string]string `json:"custom_texts,omitempty"` // element_id -> text
 	// Column overrides from old report config
-	Columns     []ColumnOverride  `json:"columns,omitempty"`
+	Columns []ColumnOverride `json:"columns,omitempty"`
 }
 
 // ColumnOverride represents a column configuration from old report templates
