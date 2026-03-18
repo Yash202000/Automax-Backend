@@ -129,6 +129,7 @@ func (r *incidentRepository) FindByIDWithRelations(ctx context.Context, id uuid.
 		}).
 		Preload("Workflow.Transitions").
 		Preload("CurrentState").
+		Preload("CurrentState.EditableRoles").
 		Preload("Assignee").
 		Preload("Assignees").
 		Preload("Department").
