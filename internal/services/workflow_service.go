@@ -835,6 +835,21 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 		}
 	}
 
+	// Assign editable roles if provided
+	if len(req.EditableRoleIDs) > 0 {
+		roleIDs := make([]uuid.UUID, 0, len(req.EditableRoleIDs))
+		for _, idStr := range req.EditableRoleIDs {
+			id, err := uuid.Parse(idStr)
+			if err != nil {
+				continue
+			}
+			roleIDs = append(roleIDs, id)
+		}
+		if err := s.repo.AssignStateEditableRoles(ctx, state.ID, roleIDs); err != nil {
+			return nil, err
+		}
+	}
+
 	// Fetch the state with relations
 	created, err := s.repo.FindStateByID(ctx, state.ID)
 	if err != nil {
@@ -936,6 +951,21 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 			roleIDs = append(roleIDs, id)
 		}
 		if err := s.repo.AssignStateViewableRoles(ctx, stateID, roleIDs); err != nil {
+			return nil, err
+		}
+	}
+
+	// Update editable roles if provided
+	if req.EditableRoleIDs != nil {
+		roleIDs := make([]uuid.UUID, 0, len(req.EditableRoleIDs))
+		for _, idStr := range req.EditableRoleIDs {
+			id, err := uuid.Parse(idStr)
+			if err != nil {
+				continue
+			}
+			roleIDs = append(roleIDs, id)
+		}
+		if err := s.repo.AssignStateEditableRoles(ctx, stateID, roleIDs); err != nil {
 			return nil, err
 		}
 	}
@@ -1498,6 +1528,15 @@ func (s *workflowService) ExportWorkflow(ctx context.Context, id uuid.UUID) ([]b
 			}
 		}
 
+		// Convert editable roles to code/name pairs
+		editableRoles := make([]models.CodeNamePair, len(state.EditableRoles))
+		for j, role := range state.EditableRoles {
+			editableRoles[j] = models.CodeNamePair{
+				Code: role.Code,
+				Name: role.Name,
+			}
+		}
+
 		exportStates[i] = models.WorkflowStateExport{
 			Name:          state.Name,
 			Code:          state.Code,
@@ -1509,6 +1548,7 @@ func (s *workflowService) ExportWorkflow(ctx context.Context, id uuid.UUID) ([]b
 			SLAHours:      state.SLAHours,
 			SortOrder:     state.SortOrder,
 			ViewableRoles: viewableRoles,
+			EditableRoles: editableRoles,
 		}
 	}
 
@@ -1826,6 +1866,27 @@ func (s *workflowService) ImportWorkflow(ctx context.Context, data *models.Workf
 
 			if len(roleIDs) > 0 {
 				if err := tx.Exec("INSERT INTO state_viewable_roles (workflow_state_id, role_id) VALUES "+
+					buildBulkInsertValues(state.ID, roleIDs)).Error; err != nil {
+					tx.Rollback()
+					return nil, nil, err
+				}
+			}
+		}
+
+		// Resolve and assign editable roles
+		if len(stateData.EditableRoles) > 0 {
+			roleIDs := []uuid.UUID{}
+			for _, roleRef := range stateData.EditableRoles {
+				role, err := s.roleRepo.FindByCode(ctx, roleRef.Code)
+				if err != nil {
+					warnings = append(warnings, fmt.Sprintf("Role '%s' not found for editable_roles in state '%s'", roleRef.Name, stateData.Name))
+					continue
+				}
+				roleIDs = append(roleIDs, role.ID)
+			}
+
+			if len(roleIDs) > 0 {
+				if err := tx.Exec("INSERT INTO state_editable_roles (workflow_state_id, role_id) VALUES "+
 					buildBulkInsertValues(state.ID, roleIDs)).Error; err != nil {
 					tx.Rollback()
 					return nil, nil, err

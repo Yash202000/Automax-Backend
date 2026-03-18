@@ -21,13 +21,14 @@ import (
 
 var ErrDuplicateIncident = errors.New("duplicate_incident")
 var ErrInvalidLocation = errors.New("invalid_location")
+var ErrEditNotAllowed = errors.New("edit_not_allowed_in_current_state")
 
 type IncidentService interface {
 	// Incident CRUD
 	CreateIncident(ctx context.Context, req *models.IncidentCreateRequest, reporterID uuid.UUID) (*models.IncidentResponse, error)
 	GetIncident(ctx context.Context, id uuid.UUID) (*models.IncidentDetailResponse, error)
 	ListIncidents(ctx context.Context, filter *models.IncidentFilter) ([]models.IncidentResponse, int64, error)
-	UpdateIncident(ctx context.Context, id uuid.UUID, req *models.IncidentUpdateRequest, userID uuid.UUID) (*models.IncidentResponse, error)
+	UpdateIncident(ctx context.Context, id uuid.UUID, req *models.IncidentUpdateRequest, userID uuid.UUID, userRoleIDs []uuid.UUID) (*models.IncidentResponse, error)
 	DeleteIncident(ctx context.Context, id uuid.UUID) error
 
 	// Convert incident to request
@@ -497,7 +498,7 @@ func (s *incidentService) ListIncidents(ctx context.Context, filter *models.Inci
 	return responses, total, nil
 }
 
-func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req *models.IncidentUpdateRequest, userID uuid.UUID) (*models.IncidentResponse, error) {
+func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req *models.IncidentUpdateRequest, userID uuid.UUID, userRoleIDs []uuid.UUID) (*models.IncidentResponse, error) {
 	// Begin transaction
 	tx := s.db.Begin()
 	defer func() {
@@ -512,6 +513,28 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	if err != nil {
 		tx.Rollback()
 		return nil, err
+	}
+
+	// Enforce state-level edit restriction: if the current state has editable_roles configured,
+	// the calling user must have one of those roles.
+	currentState, err := s.workflowRepo.FindStateByID(ctx, incident.CurrentStateID)
+	if err == nil && len(currentState.EditableRoles) > 0 {
+		allowed := false
+		for _, editableRole := range currentState.EditableRoles {
+			for _, userRoleID := range userRoleIDs {
+				if editableRole.ID == userRoleID {
+					allowed = true
+					break
+				}
+			}
+			if allowed {
+				break
+			}
+		}
+		if !allowed {
+			tx.Rollback()
+			return nil, ErrEditNotAllowed
+		}
 	}
 
 	// BLOCK: Prevent editing child incidents (merged into another)
