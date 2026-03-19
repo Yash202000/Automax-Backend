@@ -12,7 +12,7 @@ type Classification struct {
 	ID            uuid.UUID                   `gorm:"type:uuid;primary_key" json:"id"`
 	Name          string                      `gorm:"not null;size:100" json:"name"`
 	Description   string                      `gorm:"size:500" json:"description"`
-	Type          string                      `gorm:"size:20;default:'both'" json:"type"` // 'incident', 'request', 'complaint', 'query', 'both', 'all'
+	Type          string                      `gorm:"size:20;default:'both'" json:"type"` // 'incident', 'request', 'complaint', 'query', 'mobile', 'ivr', 'both', 'all'
 	ParentID      *uuid.UUID                  `gorm:"type:uuid;index" json:"parent_id"`
 	Parent        *Classification             `gorm:"foreignKey:ParentID" json:"parent,omitempty"`
 	Children      []Classification            `gorm:"foreignKey:ParentID" json:"children,omitempty"`
@@ -59,7 +59,7 @@ func (cc *ClassificationCriticality) BeforeCreate(tx *gorm.DB) error {
 type ClassificationCreateRequest struct {
 	Name        string     `json:"name" validate:"required,min=1,max=100"`
 	Description string     `json:"description" validate:"max=500"`
-	Type        string     `json:"type" validate:"omitempty,oneof=incident request complaint query both all"`
+	Type        string     `json:"type" validate:"omitempty,oneof=incident request complaint query mobile ivr both all"`
 	ParentID    *uuid.UUID `json:"parent_id"`
 	SortOrder   int        `json:"sort_order"`
 }
@@ -68,7 +68,7 @@ type ClassificationCreateRequest struct {
 type ClassificationUpdateRequest struct {
 	Name        string  `json:"name" validate:"min=1,max=100"`
 	Description string  `json:"description" validate:"max=500"`
-	Type        *string `json:"type" validate:"omitempty,oneof=incident request complaint query both all"`
+	Type        *string `json:"type" validate:"omitempty,oneof=incident request complaint query mobile ivr both all"`
 	IsActive    *bool   `json:"is_active"`
 	SortOrder   *int    `json:"sort_order"`
 }
@@ -200,7 +200,7 @@ func ToClassificationCriticalityResponse(cc *ClassificationCriticality) Classifi
 type ClassificationCreateRequestWithCriticalities struct {
 	Name          string                                   `json:"name" validate:"required,min=1,max=100"`
 	Description   string                                   `json:"description" validate:"max=500"`
-	Type          string                                   `json:"type" validate:"omitempty,oneof=incident request complaint query both all"`
+	Type          string                                   `json:"type" validate:"omitempty,oneof=incident request complaint query mobile ivr both all"`
 	ParentID      *uuid.UUID                               `json:"parent_id"`
 	SortOrder     int                                      `json:"sort_order"`
 	Criticalities []ClassificationCriticalityCreateRequest `json:"criticalities,omitempty"`
