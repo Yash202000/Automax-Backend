@@ -646,11 +646,11 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 		user.FirstName = req.FirstName
 		update["first_name"] = req.FirstName
 	}
-	if req.LastName != "" && req.LastName != user.LastName {
+	if req.LastName != user.LastName {
 		user.LastName = req.LastName
 		update["last_name"] = req.LastName
 	}
-	if req.Phone != "" && req.Phone != user.Phone {
+	if req.Phone != user.Phone {
 		user.Phone = req.Phone
 		update["phone"] = req.Phone
 	}
@@ -715,6 +715,15 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req *models.ChangePasswordRequest) error {
 	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
 	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
+
+	// Block LDAP-authenticated users from changing their password via the app
+	var sessionData map[string]interface{}
+	if getErr := s.sessionStore.GetUserSession(ctx, userID.String(), &sessionData); getErr == nil {
+		if authSource, ok := sessionData["auth_source"].(string); ok && authSource == "ldap" {
+			return errors.New("password cannot be changed for LDAP-authenticated accounts")
+		}
+	}
+
 	user, err := s.userRepo.FindByID(ctx, userID)
 	if err != nil {
 		return err
@@ -748,6 +757,12 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 	err = s.userRepo.Update(ctx, user)
 
 	if err == nil {
+		// Invalidate the current session and token so the user must re-authenticate
+		_ = s.sessionStore.DeleteUserSession(ctx, userID.String())
+		if token, ok := ctx.Value(constants.ContextKeys.Token).(string); ok && token != "" {
+			_ = s.sessionStore.BlacklistToken(ctx, token, s.jwtManager.GetTokenExpiration())
+		}
+
 		// Log successful password change
 		go func() {
 			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
