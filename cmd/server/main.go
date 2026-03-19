@@ -345,6 +345,7 @@ func main() {
 	admin.Post("/users/import", authMiddleware.RequirePermission("users:create"), userHandler.Import)
 	admin.Get("/users/:id", authMiddleware.RequirePermission("users:view"), userHandler.GetUser)
 	admin.Put("/users/:id", authMiddleware.RequirePermission("users:update"), userHandler.AdminUpdateUser)
+	admin.Delete("/users/:id", authMiddleware.RequirePermission("users:delete"), userHandler.AdminDeleteUser)
 
 	// Classification routes
 	classifications := admin.Group("/classifications")

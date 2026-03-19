@@ -30,6 +30,7 @@ type UserService interface {
 	UploadAvatar(ctx context.Context, userID uuid.UUID, file multipart.File, header *multipart.FileHeader) (*models.UserResponse, error)
 	UpdateAvatar(ctx context.Context, userID uuid.UUID, avatarURL string) error
 	DeleteUser(ctx context.Context) error
+	AdminDeleteUser(ctx context.Context, userID uuid.UUID) error
 	ListUsers(ctx context.Context, page, limit int, search string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.UserResponse, int64, error)
 	GetUserByID(ctx context.Context, userID uuid.UUID) (*models.UserResponse, error)
 	GetUserByEmail(ctx context.Context, email string) (*models.User, error)
@@ -411,6 +412,8 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 	}
 
 	// Store old values for audit logging
+	// IMPORTANT: Capture boolean values BEFORE they're modified
+	oldIsActive := user.IsActive
 	oldUser := &models.UserUpdateRequest{
 		FirstName:         user.FirstName,
 		LastName:          user.LastName,
@@ -419,7 +422,7 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		Extension:         user.Extension,
 		DepartmentID:      user.DepartmentID,
 		LocationID:        user.LocationID,
-		IsActive:          &user.IsActive,
+		IsActive:          &oldIsActive, // Capture value, not pointer reference
 		DepartmentIDs:     make([]uuid.UUID, len(user.Departments)),
 		LocationIDs:       make([]uuid.UUID, len(user.Locations)),
 		ClassificationIDs: make([]uuid.UUID, len(user.Classifications)),
@@ -606,21 +609,61 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 
 	response := models.ToUserResponse(user)
 
-	// Log user update
-	go func() {
-		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
-			UserID:      userID,
-			Action:      "update",
-			Module:      "users",
-			ResourceID:  user.ID.String(),
-			Description: fmt.Sprintf("User profile updated for user: %s (%s)", user.Username, user.Email),
-			OldValue:    oldUser,
-			NewValue:    req,
-			IPAddress:   ipAddress,
-			UserAgent:   userAgent,
-			Status:      "success",
-		})
-	}()
+	// Track if only is_active changed (no other fields)
+	onlyStatusChanged := oldUser.IsActive != nil && req.IsActive != nil && *oldUser.IsActive != *req.IsActive
+
+	// Check if any other fields besides is_active changed
+	otherFieldsChanged := oldUser.FirstName != req.FirstName ||
+		oldUser.LastName != req.LastName ||
+		oldUser.Username != req.Username ||
+		oldUser.Phone != req.Phone ||
+		oldUser.Extension != req.Extension ||
+		oldUser.DepartmentID != req.DepartmentID ||
+		oldUser.LocationID != req.LocationID ||
+		!equalUUIDSlices(oldUser.DepartmentIDs, req.DepartmentIDs) ||
+		!equalUUIDSlices(oldUser.LocationIDs, req.LocationIDs) ||
+		!equalUUIDSlices(oldUser.ClassificationIDs, req.ClassificationIDs) ||
+		!equalUUIDSlices(oldUser.RoleIDs, req.RoleIDs)
+
+	// Log status change (Active/Inactive) separately for better audit trail
+	if onlyStatusChanged {
+		go func() {
+			status := "activated"
+			if !*req.IsActive {
+				status = "deactivated"
+			}
+			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+				UserID:      actorID,
+				Action:      "status_change",
+				Module:      "users",
+				ResourceID:  user.ID.String(),
+				Description: fmt.Sprintf("User %s %s by admin", user.Username, status),
+				OldValue:    map[string]interface{}{"is_active": *oldUser.IsActive},
+				NewValue:    map[string]interface{}{"is_active": *req.IsActive},
+				IPAddress:   ipAddress,
+				UserAgent:   userAgent,
+				Status:      "success",
+			})
+		}()
+	}
+
+	// Log general user update (skip if ONLY is_active changed to avoid duplicate)
+	if otherFieldsChanged {
+		go func() {
+			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+				UserID:      actorID,
+				Action:      "update",
+				Module:      "users",
+				ResourceID:  user.ID.String(),
+				Description: fmt.Sprintf("User profile updated for user: %s (%s)", user.Username, user.Email),
+				OldValue:    oldUser,
+				NewValue:    req,
+				IPAddress:   ipAddress,
+				UserAgent:   userAgent,
+				Status:      "success",
+			})
+		}()
+	}
 
 	return &response, nil
 }
@@ -913,6 +956,84 @@ func (s *userService) DeleteUser(ctx context.Context) error {
 				Module:      "users",
 				ResourceID:  userID.String(),
 				Description: fmt.Sprintf("Failed to delete user: %s (%s)", user.Username, user.Email),
+				OldValue:    nil,
+				NewValue:    nil,
+				IPAddress:   ipAddress,
+				UserAgent:   userAgent,
+				Status:      "failed",
+			})
+		}()
+	}
+
+	return err
+}
+
+func (s *userService) AdminDeleteUser(ctx context.Context, userID uuid.UUID) error {
+	actorID := userID
+	if id, ok := ctx.Value(constants.ContextKeys.ActorID).(uuid.UUID); ok {
+		actorID = id
+	}
+	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
+
+	user, err := s.userRepo.FindByID(ctx, userID)
+	if err != nil {
+		// Log failed deletion attempt
+		go func() {
+			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+				UserID:      actorID,
+				Action:      "delete_failed",
+				Module:      "users",
+				ResourceID:  userID.String(),
+				Description: fmt.Sprintf("Failed admin user deletion attempt for user ID: %s", userID.String()),
+				OldValue:    nil,
+				NewValue:    nil,
+				IPAddress:   ipAddress,
+				UserAgent:   userAgent,
+				Status:      "failed",
+			})
+		}()
+		return err
+	}
+
+	// Store user info for logging before deletion
+	username := user.Username
+	email := user.Email
+	avatar := user.Avatar
+
+	if avatar != "" {
+		_ = s.storage.DeleteFile(ctx, avatar)
+	}
+
+	_ = s.sessionStore.DeleteUserSession(ctx, userID.String())
+
+	err = s.userRepo.Delete(ctx, userID)
+
+	if err == nil {
+		// Log successful admin user deletion
+		go func() {
+			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+				UserID:      actorID,
+				Action:      "delete",
+				Module:      "users",
+				ResourceID:  userID.String(),
+				Description: fmt.Sprintf("Admin deleted user: %s (%s)", username, email),
+				OldValue:    map[string]interface{}{"username": username, "email": email},
+				NewValue:    nil,
+				IPAddress:   ipAddress,
+				UserAgent:   userAgent,
+				Status:      "success",
+			})
+		}()
+	} else {
+		// Log failed deletion
+		go func() {
+			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+				UserID:      actorID,
+				Action:      "delete_failed",
+				Module:      "users",
+				ResourceID:  userID.String(),
+				Description: fmt.Sprintf("Admin failed to delete user: %s (%s)", username, email),
 				OldValue:    nil,
 				NewValue:    nil,
 				IPAddress:   ipAddress,
