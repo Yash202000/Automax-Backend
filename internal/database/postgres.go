@@ -99,6 +99,13 @@ func Migrate(db *gorm.DB) error {
 		&models.IncidentReadyToCloseEntry{},
 		&models.DeviceToken{},
 		&models.CallerSentiment{},
+		// Goal Management models
+		&models.Goal{},
+		&models.GoalMetric{},
+		&models.MetricHistory{},
+		&models.GoalCollaborator{},
+		&models.Evidence{},
+		&models.EvidenceTransitionHistory{},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
@@ -117,6 +124,8 @@ func Migrate(db *gorm.DB) error {
 	db.Exec("ALTER TABLE incident_transition_histories DROP CONSTRAINT IF EXISTS incident_transition_histories_performed_by_id_fkey")
 	db.Exec("ALTER TABLE incident_revisions DROP CONSTRAINT IF EXISTS fk_incident_revisions_performed_by")
 	db.Exec("ALTER TABLE incident_revisions DROP CONSTRAINT IF EXISTS incident_revisions_performed_by_id_fkey")
+	db.Exec("ALTER TABLE evidence_transition_histories DROP CONSTRAINT IF EXISTS fk_evidence_transition_histories_performed_by")
+	db.Exec("ALTER TABLE evidence_transition_histories DROP CONSTRAINT IF EXISTS evidence_transition_histories_performed_by_id_fkey")
 
 	// Migrate transition assignment roles (single → many-to-many)
 	if err := migrations.MigrateTransitionAssignmentRoles(db); err != nil {
@@ -267,7 +276,16 @@ func Seed(db *gorm.DB) error {
 		{Name: "Assign Users to Escalation Group", Code: "escalation-groups:assign_users", Module: "escalation-groups", Action: "assign_users", Description: "Add or remove users from escalation groups"},
 		{Name: "Manage Escalation Rules", Code: "escalation-groups:manage_rules", Module: "escalation-groups", Action: "manage_rules", Description: "Configure escalation frequency, channel, and classification rules"},
 
+		// Goal permissions
+		{Name: "View Goals", Code: "goals:view", Module: "goals", Action: "view", Description: "View goals"},
+		{Name: "Create Goals", Code: "goals:create", Module: "goals", Action: "create", Description: "Create new goals"},
+		{Name: "Update Goals", Code: "goals:update", Module: "goals", Action: "update", Description: "Update goals"},
+		{Name: "Delete Goals", Code: "goals:delete", Module: "goals", Action: "delete", Description: "Delete goals"},
+		{Name: "Assign Goals", Code: "goals:assign", Module: "goals", Action: "assign", Description: "Assign goal collaborators"},
+		{Name: "Approve Goals", Code: "goals:approve", Module: "goals", Action: "approve", Description: "Approve/reject goal evidence"},
+
 		// Dashboard permissions
+		{Name: "Goals Dashboard", Code: "dashboard:goals", Module: "dashboard", Action: "goals", Description: "Access goal cards on dashboard"},
 		{Name: "Admin Dashboard", Code: "dashboard:admin", Module: "dashboard", Action: "admin", Description: "Access admin section cards on dashboard"},
 		{Name: "Incidents Dashboard", Code: "dashboard:incidents", Module: "dashboard", Action: "incidents", Description: "Access incident cards on dashboard"},
 		{Name: "Requests Dashboard", Code: "dashboard:requests", Module: "dashboard", Action: "requests", Description: "Access request cards on dashboard"},
@@ -335,7 +353,7 @@ func Seed(db *gorm.DB) error {
 	result = db.Where("code = ?", "manager").First(&managerRole)
 	if result.Error == gorm.ErrRecordNotFound {
 		var managerPerms []models.Permission
-		db.Where("action IN ?", []string{"view", "create", "update"}).Find(&managerPerms)
+		db.Where("action IN ?", []string{"view", "create", "update", "delete", "assign", "approve"}).Find(&managerPerms)
 		managerRole = models.Role{
 			Name:        "Manager",
 			Code:        "manager",
@@ -346,9 +364,9 @@ func Seed(db *gorm.DB) error {
 		}
 		db.Create(&managerRole)
 	} else {
-		// Update existing manager role to have view, create, update permissions
+		// Update existing manager role to have full management permissions
 		var managerPerms []models.Permission
-		db.Where("action IN ?", []string{"view", "create", "update"}).Find(&managerPerms)
+		db.Where("action IN ?", []string{"view", "create", "update", "delete", "assign", "approve"}).Find(&managerPerms)
 		db.Model(&managerRole).Association("Permissions").Replace(managerPerms)
 	}
 
@@ -372,6 +390,9 @@ func Seed(db *gorm.DB) error {
 
 	// Seed default lookup categories
 	seedLookupCategories(db)
+
+	// Seed default evidence approval workflow
+	seedEvidenceApprovalWorkflow(db)
 
 	log.Println("Database seeding completed")
 	return nil
@@ -408,6 +429,132 @@ func seedLookupCategories(db *gorm.DB) {
 			}
 		}
 	}
+}
+
+func seedEvidenceApprovalWorkflow(db *gorm.DB) {
+	// Check if workflow already exists
+	var existing models.Workflow
+	result := db.Where("code = ?", "evidence_approval").First(&existing)
+	if result.Error == nil {
+		return // Already seeded
+	}
+
+	log.Println("Seeding default evidence approval workflow...")
+
+	workflow := models.Workflow{
+		Name:        "Goal Evidence Approval",
+		Code:        "evidence_approval",
+		Description: "Default approval workflow for goal evidence. Supports L1 and optional L2 review.",
+		RecordType:  "evidence",
+		IsActive:    true,
+		IsDefault:   true,
+	}
+	if err := db.Create(&workflow).Error; err != nil {
+		log.Printf("Failed to create evidence approval workflow: %v", err)
+		return
+	}
+
+	// Create states
+	type stateSpec struct {
+		Name      string
+		Code      string
+		StateType string
+		Color     string
+		SortOrder int
+		PosX      int
+		PosY      int
+	}
+
+	stateSpecs := []stateSpec{
+		{"Draft", "draft", "initial", "#94a3b8", 1, 100, 200},
+		{"Submitted", "submitted", "normal", "#3b82f6", 2, 300, 200},
+		{"L1 Review", "l1_review", "normal", "#f59e0b", 3, 500, 200},
+		{"L2 Review", "l2_review", "normal", "#f97316", 4, 700, 200},
+		{"Approved", "approved", "terminal", "#22c55e", 5, 700, 400},
+		{"Rejected", "rejected", "terminal", "#ef4444", 6, 500, 400},
+		{"Changes Requested", "changes_requested", "normal", "#f97316", 7, 300, 400},
+	}
+
+	stateMap := make(map[string]models.WorkflowState)
+	for _, spec := range stateSpecs {
+		state := models.WorkflowState{
+			WorkflowID: workflow.ID,
+			Name:       spec.Name,
+			Code:       spec.Code,
+			StateType:  spec.StateType,
+			Color:      spec.Color,
+			SortOrder:  spec.SortOrder,
+			PositionX:  spec.PosX,
+			PositionY:  spec.PosY,
+			IsActive:   true,
+		}
+		if err := db.Create(&state).Error; err != nil {
+			log.Printf("Failed to create state %s: %v", spec.Code, err)
+			return
+		}
+		stateMap[spec.Code] = state
+	}
+
+	// Create transitions
+	type transSpec struct {
+		Name        string
+		Code        string
+		From        string
+		To          string
+		IsRejection bool
+		CommentReq  bool // whether comment is mandatory
+		SortOrder   int
+	}
+
+	transSpecs := []transSpec{
+		{"Submit for Review", "submit", "draft", "submitted", false, false, 1},
+		{"Assign L1 Reviewer", "assign_l1", "submitted", "l1_review", false, false, 2},
+		{"Approve (L1)", "approve_l1", "l1_review", "l2_review", false, false, 3},
+		{"Approve (Final)", "approve_l1_final", "l1_review", "approved", false, false, 4},
+		{"Request Changes", "request_changes_l1", "l1_review", "changes_requested", false, true, 5},
+		{"Reject", "reject_l1", "l1_review", "rejected", true, true, 6},
+		{"Approve (L2)", "approve_l2", "l2_review", "approved", false, false, 7},
+		{"Request Changes", "request_changes_l2", "l2_review", "changes_requested", false, true, 8},
+		{"Reject", "reject_l2", "l2_review", "rejected", true, true, 9},
+		{"Resubmit", "resubmit", "changes_requested", "submitted", false, false, 10},
+	}
+
+	boolTrue := true
+	for _, spec := range transSpecs {
+		fromState := stateMap[spec.From]
+		toState := stateMap[spec.To]
+
+		transition := models.WorkflowTransition{
+			WorkflowID:  workflow.ID,
+			Name:        spec.Name,
+			Code:        spec.Code,
+			FromStateID: fromState.ID,
+			ToStateID:   toState.ID,
+			IsRejection: spec.IsRejection,
+			IsActive:    true,
+			SortOrder:   spec.SortOrder,
+		}
+
+		if err := db.Create(&transition).Error; err != nil {
+			log.Printf("Failed to create transition %s: %v", spec.Code, err)
+			return
+		}
+
+		// Add comment requirement for reject/request_changes transitions
+		if spec.CommentReq {
+			requirement := models.TransitionRequirement{
+				TransitionID:    transition.ID,
+				RequirementType: "comment",
+				IsMandatory:     &boolTrue,
+				ErrorMessage:    "Comment is required for this action",
+			}
+			if err := db.Create(&requirement).Error; err != nil {
+				log.Printf("Failed to create requirement for %s: %v", spec.Code, err)
+			}
+		}
+	}
+
+	log.Println("Evidence approval workflow seeded successfully")
 }
 
 func Close(db *gorm.DB) error {

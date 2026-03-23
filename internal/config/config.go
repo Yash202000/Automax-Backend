@@ -18,6 +18,14 @@ type Config struct {
 	SSOFrontendURL string // env: SSO_FRONTEND_URL (e.g. https://automax.example.com — where /sso-complete lives)
 	Escalation     EscalationConfig
 	ReadyToClose   ReadyToCloseConfig
+	Documenta      DocumentaConfig
+}
+
+type DocumentaConfig struct {
+	BaseURL       string
+	APIKey        string
+	WorkspaceName string
+	Enabled       bool
 }
 
 type EscalationConfig struct {
@@ -138,6 +146,12 @@ func Load() *Config {
 			DailyMinute:  getEnvAsInt("ESCALATION_DAILY_MINUTE", 0),
 			WeeklyHour:   getEnvAsInt("ESCALATION_WEEKLY_HOUR", 9),
 			WeeklyMinute: getEnvAsInt("ESCALATION_WEEKLY_MINUTE", 0),
+		},
+		Documenta: DocumentaConfig{
+			BaseURL:       getEnv("DOCUMENTA_BASE_URL", "http://localhost:9090"),
+			APIKey:        getEnv("DOCUMENTA_API_KEY", ""),
+			WorkspaceName: getEnv("DOCUMENTA_WORKSPACE_NAME", "Automax"),
+			Enabled:       getEnvAsBool("DOCUMENTA_ENABLED", false),
 		},
 		ReadyToClose: ReadyToCloseConfig{
 			DefaultDurationOptions:     getEnvAsStringSlice("READY_TO_CLOSE_DURATION_OPTIONS", []string{"1 Day", "2 Days", "1 Week", "2 Weeks", "1 Month", "3 Months"}),
