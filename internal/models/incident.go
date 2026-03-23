@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -102,6 +103,10 @@ type Incident struct {
 	IsMerged         bool       `gorm:"default:false;index" json:"is_merged"`
 	MergedAt         *time.Time `json:"merged_at,omitempty"`
 	MergedByUserID   *uuid.UUID `gorm:"type:uuid" json:"merged_by_user_id,omitempty"`
+
+	// Closed Incident Edit Tracking
+	ClosedBy           *uuid.UUID      `gorm:"type:uuid;index" json:"closed_by,omitempty"`
+	PostClosureEdits   datatypes.JSON  `gorm:"type:jsonb;default:'[]'::jsonb" json:"post_closure_edits,omitempty"`
 
 	// Related records
 	Comments          []IncidentComment           `gorm:"foreignKey:IncidentID" json:"comments,omitempty"`

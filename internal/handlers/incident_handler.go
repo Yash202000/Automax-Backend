@@ -1041,3 +1041,66 @@ func (h *IncidentHandler) RemovePresence(c *fiber.Ctx) error {
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Presence removed", nil)
 }
+
+// UpdateClosedIncidentSummary handles PATCH /incidents/:id/closed-summary
+// Allows users with 'incidents:edit-closed' permission to edit closed incident descriptions
+func (h *IncidentHandler) UpdateClosedIncidentSummary(c *fiber.Ctx) error {
+	incidentIDStr := c.Params("id")
+	incidentID, err := uuid.Parse(incidentIDStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
+	}
+
+	// Get current user
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not found")
+	}
+
+	// Get incident
+	incident, err := h.service.GetIncident(c.UserContext(), incidentID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not found")
+	}
+
+	// Check if incident is closed (terminal state)
+	if incident.CurrentState != nil && incident.CurrentState.StateType != "terminal" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Incident is not closed")
+	}
+
+	// Check permission
+	if !user.HasPermission("incidents:edit-closed") {
+		return utils.ErrorResponse(c, fiber.StatusForbidden, "You don't have permission to edit closed incidents")
+	}
+
+	// Parse request
+	var req struct {
+		Description string `json:"description" validate:"required"`
+		Reason      string `json:"reason"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	// Call service
+	updatedIncident, err := h.service.UpdateClosedIncidentSummary(
+		c.UserContext(),
+		incidentID,
+		userID,
+		req.Description,
+		req.Reason,
+	)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Closed incident summary updated", updatedIncident)
+}
