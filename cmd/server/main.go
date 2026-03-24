@@ -340,17 +340,23 @@ func main() {
 	// Admin routes
 	admin := v1.Group("/admin", authMiddleware.Authenticate())
 
-	// User management
-	admin.Get("/users", authMiddleware.RequirePermission("users:view"), userHandler.ListUsers)
-	admin.Post("/users", authMiddleware.RequirePermission("users:create"), userHandler.AdminCreateUser)
-	admin.Post("/users/match", authMiddleware.RequirePermission("users:view"), userHandler.MatchUsers)
-	admin.Get("/users/export", authMiddleware.RequirePermission("users:view"), userHandler.Export)
-	admin.Post("/users/import", authMiddleware.RequirePermission("users:create"), userHandler.Import)
-	admin.Get("/users/:id", authMiddleware.RequirePermission("users:view"), userHandler.GetUser)
-	admin.Put("/users/:id", authMiddleware.RequirePermission("users:update"), userHandler.AdminUpdateUser)
+	// User management (action logging handled by service layer for detailed old/new values)
+	usersGroup := admin.Group("/users")
+	usersGroup.Get("/", authMiddleware.RequirePermission("users:view"), userHandler.ListUsers)
+	usersGroup.Post("/", authMiddleware.RequirePermission("users:create"), userHandler.AdminCreateUser)
+	usersGroup.Post("/match", authMiddleware.RequirePermission("users:view"), userHandler.MatchUsers)
+	usersGroup.Get("/export", authMiddleware.RequirePermission("users:view"), userHandler.Export)
+	usersGroup.Post("/import", authMiddleware.RequirePermission("users:create"), userHandler.Import)
+	usersGroup.Get("/:id", authMiddleware.RequirePermission("users:view"), userHandler.GetUser)
+	usersGroup.Put("/:id", authMiddleware.RequirePermission("users:update"), userHandler.AdminUpdateUser)
+	usersGroup.Delete("/:id", authMiddleware.RequirePermission("users:delete"), userHandler.AdminDeleteUser)
 
-	// Classification routes
-	classifications := admin.Group("/classifications")
+	// Classification routes (with action logging)
+	classifications := admin.Group("/classifications", middleware.ActionLogger(middleware.ActionLoggerConfig{
+		Enabled:     true,
+		LogService:  actionLogService,
+		SkipMethods: []string{"GET"},
+	}))
 	classifications.Post("/", authMiddleware.RequirePermission("classifications:create"), classificationHandler.Create)
 	classifications.Get("/", authMiddleware.RequirePermission("classifications:view"), classificationHandler.List)
 	classifications.Get("/tree", authMiddleware.RequirePermission("classifications:view"), classificationHandler.GetTree)
@@ -368,8 +374,12 @@ func main() {
 	classifications.Put("/criticalities/:id", authMiddleware.RequirePermission("classifications:update"), classificationHandler.UpdateCriticality)
 	classifications.Delete("/criticalities/:id", authMiddleware.RequirePermission("classifications:delete"), classificationHandler.DeleteCriticality)
 
-	// Location routes
-	locations := admin.Group("/locations")
+	// Location routes (with action logging)
+	locations := admin.Group("/locations", middleware.ActionLogger(middleware.ActionLoggerConfig{
+		Enabled:     true,
+		LogService:  actionLogService,
+		SkipMethods: []string{"GET"},
+	}))
 	locations.Post("/", authMiddleware.RequirePermission("locations:create"), locationHandler.Create)
 	locations.Get("/", authMiddleware.RequirePermission("locations:view"), locationHandler.List)
 	locations.Get("/tree", authMiddleware.RequirePermission("locations:view"), locationHandler.GetTree)
@@ -382,8 +392,12 @@ func main() {
 	locations.Put("/:id", authMiddleware.RequirePermission("locations:update"), locationHandler.Update)
 	locations.Delete("/:id", authMiddleware.RequirePermission("locations:delete"), locationHandler.Delete)
 
-	// Department routes
-	departments := admin.Group("/departments")
+	// Department routes (with action logging)
+	departments := admin.Group("/departments", middleware.ActionLogger(middleware.ActionLoggerConfig{
+		Enabled:     true,
+		LogService:  actionLogService,
+		SkipMethods: []string{"GET"},
+	}))
 	departments.Post("/", authMiddleware.RequirePermission("departments:create"), departmentHandler.Create)
 	departments.Get("/", authMiddleware.RequirePermission("departments:view"), departmentHandler.List)
 	departments.Get("/tree", authMiddleware.RequirePermission("departments:view"), departmentHandler.GetTree)
@@ -395,8 +409,12 @@ func main() {
 	departments.Put("/:id", authMiddleware.RequirePermission("departments:update"), departmentHandler.Update)
 	departments.Delete("/:id", authMiddleware.RequirePermission("departments:delete"), departmentHandler.Delete)
 
-	// Role routes
-	roles := admin.Group("/roles")
+	// Role routes (with action logging)
+	roles := admin.Group("/roles", middleware.ActionLogger(middleware.ActionLoggerConfig{
+		Enabled:     true,
+		LogService:  actionLogService,
+		SkipMethods: []string{"GET"},
+	}))
 	roles.Post("/", authMiddleware.RequirePermission("roles:create"), roleHandler.CreateRole)
 	roles.Get("/", authMiddleware.RequirePermission("roles:view"), roleHandler.ListRoles)
 	roles.Get("/export", authMiddleware.RequirePermission("roles:view"), roleHandler.Export)
@@ -406,8 +424,12 @@ func main() {
 	roles.Delete("/:id", authMiddleware.RequirePermission("roles:delete"), roleHandler.DeleteRole)
 	roles.Post("/:id/permissions", authMiddleware.RequirePermission("roles:update"), roleHandler.AssignPermissions)
 
-	// Permission routes
-	permissions := admin.Group("/permissions")
+	// Permission routes (with action logging)
+	permissions := admin.Group("/permissions", middleware.ActionLogger(middleware.ActionLoggerConfig{
+		Enabled:     true,
+		LogService:  actionLogService,
+		SkipMethods: []string{"GET"},
+	}))
 	permissions.Post("/", authMiddleware.RequirePermission("permissions:create"), roleHandler.CreatePermission)
 	permissions.Get("/", authMiddleware.RequirePermission("permissions:view"), roleHandler.ListPermissions)
 	permissions.Get("/modules", authMiddleware.RequirePermission("permissions:view"), roleHandler.GetModules)

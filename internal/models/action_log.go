@@ -35,7 +35,7 @@ func (a *ActionLog) BeforeCreate(tx *gorm.DB) error {
 // ActionLogFilter holds filter parameters for querying action logs
 type ActionLogFilter struct {
 	UserID     *uuid.UUID `json:"user_id" validate:"omitempty,uuid4"`
-	Action     string     `json:"action" validate:"omitempty,oneof=create update delete login logout view"`
+	Action     string     `json:"action"` // create, update, delete, login, logout, view, status_change, etc.
 	Module     string     `json:"module" validate:"omitempty"`
 	Status     string     `json:"status" validate:"omitempty,oneof=success failed"`
 	ResourceID string     `json:"resource_id" validate:"omitempty"`

@@ -175,6 +175,7 @@ func (r *actionLogRepository) GetUserActions(ctx context.Context, userID uuid.UU
 
 	err := r.db.WithContext(ctx).
 		Where("user_id = ?", userID).
+		Preload("User").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(limit).

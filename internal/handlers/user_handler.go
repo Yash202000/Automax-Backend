@@ -195,6 +195,21 @@ func (h *UserHandler) DeleteAccount(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "Account deleted successfully", nil)
 }
 
+// AdminDeleteUser handles DELETE /admin/users/:id (admin deletes another user)
+func (h *UserHandler) AdminDeleteUser(c *fiber.Ctx) error {
+	userIDStr := c.Params("id")
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid user ID")
+	}
+
+	if err := h.userService.AdminDeleteUser(c.UserContext(), userID); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to delete user")
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "User deleted successfully", nil)
+}
+
 func parseUUIDList(raw string) []uuid.UUID {
 	if raw == "" {
 		return nil
