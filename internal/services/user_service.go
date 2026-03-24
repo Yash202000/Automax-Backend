@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"mime/multipart"
 	"time"
 
@@ -34,11 +35,13 @@ type UserService interface {
 	ListUsers(ctx context.Context, page, limit int, search string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.UserResponse, int64, error)
 	GetUserByID(ctx context.Context, userID uuid.UUID) (*models.UserResponse, error)
 	GetUserByEmail(ctx context.Context, email string) (*models.User, error)
+	GetUserByMobile(ctx context.Context, phone string) (*models.User, error)
 	GetUserByUsername(ctx context.Context, username string) (*models.User, error)
 	FindMatchingUsers(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.UserResponse, error)
 	UpdateUserCallStatus(ctx context.Context, extension string, status string) (interface{}, error)
 	FindByExtension(ctx context.Context, extension string) (*models.User, error)
 	UpdateProfile(ctx context.Context, req *models.UserUpdateRequest) (*models.UserResponse, error)
+	GenerateTokenViaUserID(ctx context.Context, mobile uuid.UUID) (*models.AuthResponse, error)
 }
 
 type userService struct {
@@ -398,6 +401,73 @@ func (s *userService) GetProfile(ctx context.Context, userID uuid.UUID) (*models
 	return &response, nil
 }
 
+func (s *userService) GenerateTokenViaUserID(ctx context.Context, userID uuid.UUID) (*models.AuthResponse, error) {
+	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
+	log.Println("Attempting to find user by last 6 digits of phone number for IVR login")
+	// user, err := s.userRepo.FindByLast6Digits(ctx, last6Digits)
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	user, err := s.userRepo.FindByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	log.Println("user fetched for last 6 digits login")
+	// Continue with the rest of the login logic...
+	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, constants.USER_ROLE.CITIZEN)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.sessionStore.SetUserSession(ctx, user.ID.String(), map[string]interface{}{
+		"user_id": user.ID,
+		"email":   user.Email,
+		"role":    constants.USER_ROLE.CITIZEN,
+	}, s.jwtManager.GetTokenExpiration()); err != nil {
+		return nil, err
+	}
+
+	// Log successful login
+	go func() {
+		if err := s.actionLogService.LogAction(context.Background(), &LogActionParams{
+			UserID:      user.ID,
+			Action:      "login",
+			Module:      "users",
+			ResourceID:  user.ID.String(),
+			Description: fmt.Sprintf("Successful login for user: %s (%s)", user.Username, user.Email),
+			OldValue:    nil,
+			NewValue:    nil,
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		}); err != nil {
+			// Log the error for debugging
+			fmt.Printf("Error logging login action: %v\n", err)
+		}
+	}()
+
+	userResp := models.UserResponse{
+		ID:           user.ID,
+		Email:        user.Email,
+		Username:     user.Username,
+		FirstName:    user.FirstName,
+		LastName:     user.LastName,
+		Phone:        user.Phone,
+		Extension:    user.Extension,
+		DepartmentID: user.DepartmentID,
+		LocationID:   user.LocationID,
+		IsActive:     user.IsActive,
+	}
+	return &models.AuthResponse{
+		User:         userResp,
+		Token:        tokenPair.AccessToken,
+		RefreshToken: tokenPair.RefreshToken,
+		ExpiresIn:    tokenPair.ExpiresIn,
+	}, nil
+
+}
 func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, req *models.UserUpdateRequest) (*models.UserResponse, error) {
 	// Get the authenticated user (who is performing this action) from context
 	actorID, ok := ctx.Value(constants.ContextKeys.UserID).(uuid.UUID)
@@ -1119,6 +1189,9 @@ func (s *userService) GetUserByEmail(ctx context.Context, email string) (*models
 	return s.userRepo.FindByEmail(ctx, email)
 }
 
+func (s *userService) GetUserByMobile(ctx context.Context, phone string) (*models.User, error) {
+	return s.userRepo.FindByMobile(ctx, phone)
+}
 func (s *userService) GetUserByUsername(ctx context.Context, username string) (*models.User, error) {
 	return s.userRepo.FindByUsername(ctx, username)
 }

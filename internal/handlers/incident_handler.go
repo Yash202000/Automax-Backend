@@ -3,7 +3,10 @@ package handlers
 import (
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/models"
@@ -20,6 +23,7 @@ import (
 
 type IncidentHandler struct {
 	service             services.IncidentService
+	userService         services.UserService
 	userRepo            repository.UserRepository
 	incidentRepo        repository.IncidentRepository
 	storage             *storage.MinIOStorage
@@ -28,9 +32,10 @@ type IncidentHandler struct {
 	validator           *validator.Validate
 }
 
-func NewIncidentHandler(service services.IncidentService, userRepo repository.UserRepository, incidentRepo repository.IncidentRepository, storage *storage.MinIOStorage, presenceService services.PresenceService) *IncidentHandler {
+func NewIncidentHandler(service services.IncidentService, userService services.UserService, userRepo repository.UserRepository, incidentRepo repository.IncidentRepository, storage *storage.MinIOStorage, presenceService services.PresenceService) *IncidentHandler {
 	return &IncidentHandler{
 		service:         service,
+		userService:     userService,
 		userRepo:        userRepo,
 		incidentRepo:    incidentRepo,
 		storage:         storage,
@@ -133,6 +138,7 @@ func (h *IncidentHandler) GetIncident(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
+	log.Printf("Generate Signed url: %s", utils.GenerateIncidentToken(idStr, 24*time.Hour))
 	incident, err := h.service.GetIncident(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not found")
@@ -179,6 +185,67 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 		"total_items": total,
 		"total_pages": totalPages,
 	})
+}
+func (h *IncidentHandler) FindByIDWithLast6DigitValidation(c *fiber.Ctx) error {
+	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+	if !strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "this service is not available for current client")
+	}
+
+	idStr := c.Params("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+	}
+
+	last6Digits := c.Query("last6digits")
+	if last6Digits == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Last 6 digits of phone number are required")
+	}
+
+	// Validate signed token
+	token := c.Query("signed_token")
+	if token == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Token is required")
+	}
+	log.Printf("Signed token recieved %s", token)
+	if err := utils.ValidateIncidentToken(token, idStr); err != nil {
+		switch err {
+		case utils.ErrExpired:
+			return utils.ErrorResponse(c, fiber.StatusGone, "Link has expired")
+		case utils.ErrInvalid, utils.ErrIDMismatch:
+			return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Invalid or tampered token")
+		default:
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Malformed token")
+		}
+	}
+
+	log.Println("incident last6 digit op start")
+	incident, err := h.service.FindByIDWithLast6DigitValidation(c.UserContext(), id, last6Digits)
+	if err != nil {
+		log.Printf("Err fetching Incident via last 6 digit and id %v ", err)
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not exist or already updated")
+	}
+
+	authResponse, err := h.userService.GenerateTokenViaUserID(c.UserContext(), incident.ReporterID)
+	if err != nil {
+		log.Printf("Err creating auth response via last 6 digit and id %v ", err)
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not exist or already updated")
+	}
+
+	log.Printf("Incident fetched successfully, proceeding to authenticate user via last 6 digits")
+	// Create Session and store in session and in response for short life of 15 minutes, to be used for subsequent requests without requiring last 6 digit validation again
+	// Generate a 15-minute IVR session token for subsequent IVR SMS requests
+
+	// sessionToken := utils.GenerateIvrSessionToken(idStr, 10*time.Minute)
+	log.Println("incident last6 digit op end, successful authentication")
+
+	data := fiber.Map{
+		"incident": incident,
+		// "session_token": sessionToken,
+		"auth_data": authResponse,
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "Incident retrieved", data)
 }
 
 func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
@@ -485,6 +552,60 @@ func (h *IncidentHandler) UploadAttachment(c *fiber.Ctx) error {
 		MimeType:     file.Header.Get("Content-Type"),
 		FilePath:     filePath,
 		UploadedByID: userID,
+	}
+
+	result, err := h.service.AddAttachment(c.UserContext(), incidentID, attachment)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusCreated, "Attachment uploaded", result)
+}
+
+func (h *IncidentHandler) UploadAttachmentIvrSms(c *fiber.Ctx) error {
+	incidentIDStr := c.Params("id")
+	incidentID, err := uuid.Parse(incidentIDStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
+	}
+
+	incident, err := h.service.GetIncident(c.UserContext(), incidentID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Error while fetching Incident")
+	}
+
+	if incident == nil || incident.ID == uuid.Nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident Not found")
+	}
+	// to add state check
+
+	file, err := c.FormFile("file")
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "No file uploaded")
+	}
+
+	// Open the file
+	src, err := file.Open()
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read file")
+	}
+	defer src.Close()
+
+	// Upload to storage
+	folder := fmt.Sprintf("incidents/%s", incidentID.String())
+	filePath, err := h.storage.UploadFile(c.UserContext(), src, file, folder)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to upload file")
+	}
+
+	// userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+
+	attachment := &models.IncidentAttachment{
+		FileName: file.Filename,
+		FileSize: file.Size,
+		MimeType: file.Header.Get("Content-Type"),
+		FilePath: filePath,
+		// UploadedByID: userID,
 	}
 
 	result, err := h.service.AddAttachment(c.UserContext(), incidentID, attachment)

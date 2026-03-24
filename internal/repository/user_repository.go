@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"log"
 	"strings"
 
 	"github.com/automax/backend/internal/models"
@@ -17,6 +18,7 @@ type UserRepository interface {
 	FindByEmail(ctx context.Context, email string) (*models.User, error)
 	FindByEmailWithRelations(ctx context.Context, email string) (*models.User, error)
 	FindByUsername(ctx context.Context, username string) (*models.User, error)
+	FindByLast6Digits(ctx context.Context, last6Digits string) (*models.User, error)
 	Update(ctx context.Context, user *models.User) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, page, limit int, search string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.User, int64, error)
@@ -32,6 +34,7 @@ type UserRepository interface {
 	FindMatching(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.User, error)
 
 	FindByExtension(ctx context.Context, extension string) (*models.User, error)
+	FindByMobile(ctx context.Context, phone string) (*models.User, error)
 	FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.User, error)
 	FindByRoleAndContext(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID *uuid.UUID) ([]models.User, error)
 	UpdateProfile(ctx context.Context, user map[string]interface{}) error
@@ -117,6 +120,27 @@ func (r *userRepository) FindByEmailWithRelations(ctx context.Context, email str
 func (r *userRepository) FindByUsername(ctx context.Context, username string) (*models.User, error) {
 	var user models.User
 	err := r.db.WithContext(ctx).First(&user, "username = ?", username).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+// find by mobile
+
+func (r *userRepository) FindByMobile(ctx context.Context, phone string) (*models.User, error) {
+	var user models.User
+	err := r.db.WithContext(ctx).First(&user, "phone = ?", phone).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *userRepository) FindByLast6Digits(ctx context.Context, last6Digits string) (*models.User, error) {
+	var user models.User
+	log.Printf("Query start: %s", last6Digits)
+	err := r.db.WithContext(ctx).Debug().Where("RIGHT(phone, 6) = ? AND is_active = ?", last6Digits, true).First(&user).Error
 	if err != nil {
 		return nil, err
 	}

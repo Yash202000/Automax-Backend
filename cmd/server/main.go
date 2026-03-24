@@ -103,7 +103,7 @@ func main() {
 
 	callLogService := services.NewCallLogService(callLogRepo, userRepo)
 	workflowService := services.NewWorkflowService(workflowRepo, roleRepo, departmentRepo, classificationRepo, db)
-	incidentService := services.NewIncidentService(incidentRepo, incidentMergeRepo, workflowRepo, userRepo, departmentRepo, classificationRepo, rejectionLogRepo, minioStorage, db, wsHub)
+	incidentService := services.NewIncidentService(incidentRepo, incidentMergeRepo, workflowRepo, userRepo, departmentRepo, classificationRepo, rejectionLogRepo, roleRepo, minioStorage, db, wsHub)
 	incidentMergeService := services.NewIncidentMergeService(incidentMergeRepo, incidentRepo, workflowRepo, roleRepo, locationRepo, classificationRepo, db, wsHub)
 	reportService := services.NewReportService(reportRepo, rejectionLogRepo)
 	reportTemplateService := services.NewReportTemplateService(reportTemplateRepo, reportRepo)
@@ -124,6 +124,7 @@ func main() {
 	// Wire ReadyToCloseService into IncidentService (post-construction to avoid circular deps)
 	incidentService.SetReadyToCloseService(readyToCloseService)
 	incidentService.SetNotificationService(notificationService)
+	incidentService.SetUserService(userService)
 
 	// Initialize and start SLA Monitor (checks every 5 minutes)
 	slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, escalationGroupService, readyToCloseService, 5*time.Minute)
@@ -148,7 +149,7 @@ func main() {
 	actionLogHandler := handlers.NewActionLogHandler(actionLogService, validate)
 	callLogHandler := handlers.NewCallLogHandler(callLogService, validate, userService)
 	workflowHandler := handlers.NewWorkflowHandler(workflowService, actionLogService)
-	incidentHandler := handlers.NewIncidentHandler(incidentService, userRepo, incidentRepo, minioStorage, presenceService)
+	incidentHandler := handlers.NewIncidentHandler(incidentService, userService, userRepo, incidentRepo, minioStorage, presenceService)
 	incidentHandler.SetReadyToCloseService(readyToCloseService)
 	incidentMergeHandler := handlers.NewIncidentMergeHandler(incidentMergeService, userRepo)
 	websocketHandler := handlers.NewWebSocketHandler(wsHub)
@@ -217,6 +218,13 @@ func main() {
 	// Webhook routes (no authentication required - external services)
 	webhooks := v1.Group("/webhooks")
 	webhooks.Post("/sendgrid/inbound", notificationHandler.SendGridInboundWebhook)
+
+	ivr := v1.Group("/ivr/incident")
+	// Public: validates signed URL + last 6 digits, returns incident + session token
+	ivr.Get("/sms-link/:id", incidentHandler.FindByIDWithLast6DigitValidation)
+	// Protected: require valid IVR session token issued by the GET route above
+	// ivr.Put("/sms-link/update/:id", authMiddleware.ValidateIvrSmsToken(), incidentHandler.UpdateIncidentViaIvrSms)
+	// ivr.Post("/sms-link/attachment/:id", authMiddleware.ValidateIvrSmsToken(), incidentHandler.UploadAttachmentIvrSms)
 
 	// Auth routes
 	auth := v1.Group("/auth")
