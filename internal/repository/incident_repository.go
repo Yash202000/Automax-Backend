@@ -311,9 +311,9 @@ func (r *incidentRepository) GenerateIncidentNumber(ctx context.Context) (string
 	year := time.Now().Year()
 	prefix := fmt.Sprintf("INC-%d-", year)
 	var maxNumber *string
-	err := r.db.WithContext(ctx).Model(&models.Incident{}).
+	err := r.db.WithContext(ctx).Debug().Model(&models.Incident{}).
 		Select("MAX(incident_number)").
-		Where("incident_number LIKE ?", prefix+"%").
+		Where("incident_number LIKE ?  OR deleted_at IS NOT NULL", prefix+"%").
 		Scan(&maxNumber).Error
 	if err != nil {
 		return "", err
@@ -325,6 +325,7 @@ func (r *incidentRepository) GenerateIncidentNumber(ctx context.Context) (string
 		fmt.Sscanf(*maxNumber, "INC-%d-%d", &year, &seq)
 		nextSeq = seq + 1
 	}
+	fmt.Printf("Generated incidentNumber: %s\n", fmt.Sprintf("INC-%d-%06d", year, nextSeq))
 	return fmt.Sprintf("INC-%d-%06d", year, nextSeq), nil
 }
 
@@ -332,9 +333,9 @@ func (r *incidentRepository) GenerateRequestNumber(ctx context.Context) (string,
 	year := time.Now().Year()
 	prefix := fmt.Sprintf("REQ-%d-", year)
 	var maxNumber *string
-	err := r.db.WithContext(ctx).Model(&models.Incident{}).
-		Select("MAX(incident_number)").
-		Where("incident_number LIKE ?", prefix+"%").
+	// Unscoped() to include soft-deleted rows in the MAX calculation
+	err := r.db.WithContext(ctx).Unscoped().Model(&models.Incident{}).
+		Select("MAX(incident_number)").Where("incident_number LIKE ?", prefix+"%").
 		Scan(&maxNumber).Error
 	if err != nil {
 		return "", err
@@ -352,7 +353,7 @@ func (r *incidentRepository) GenerateComplaintNumber(ctx context.Context) (strin
 	year := time.Now().Year()
 	prefix := fmt.Sprintf("COMP-%d-", year)
 	var maxNumber *string
-	err := r.db.WithContext(ctx).Model(&models.Incident{}).
+	err := r.db.WithContext(ctx).Unscoped().Model(&models.Incident{}).
 		Select("MAX(incident_number)").
 		Where("incident_number LIKE ?", prefix+"%").
 		Scan(&maxNumber).Error
@@ -372,7 +373,7 @@ func (r *incidentRepository) GenerateQueryNumber(ctx context.Context) (string, e
 	year := time.Now().Year()
 	prefix := fmt.Sprintf("QRY-%d-", year)
 	var maxNumber *string
-	err := r.db.WithContext(ctx).Model(&models.Incident{}).
+	err := r.db.WithContext(ctx).Unscoped().Model(&models.Incident{}).
 		Select("MAX(incident_number)").
 		Where("incident_number LIKE ?", prefix+"%").
 		Scan(&maxNumber).Error
