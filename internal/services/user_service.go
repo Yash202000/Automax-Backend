@@ -72,6 +72,11 @@ func NewUserService(
 }
 
 func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequest) (*models.AuthResponse, error) {
+	// Get the authenticated user (admin creating this user) from context
+	actorID, _ := ctx.Value(constants.ContextKeys.UserID).(uuid.UUID)
+	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
+
 	exists, err := s.userRepo.ExistsByEmail(ctx, req.Email)
 	if err != nil {
 		return nil, err
@@ -156,20 +161,14 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 	// Reload user with relations
 	user, _ = s.userRepo.FindByIDWithRelations(ctx, user.ID)
 
-	// Log user creation
-	actorID := user.ID
-	if id, ok := ctx.Value(constants.ContextKeys.ActorID).(uuid.UUID); ok {
-		actorID = id
-	}
-	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
-	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
+	// Log user creation with complete details
 	go func() {
 		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
 			UserID:      actorID,
 			Action:      "create",
 			Module:      "users",
 			ResourceID:  user.ID.String(),
-			Description: fmt.Sprintf("User %s (%s) created", user.Username, user.Email),
+			Description: fmt.Sprintf("User %s (%s) created by admin", user.Username, user.Email),
 			OldValue:    nil,
 			NewValue:    req,
 			IPAddress:   ipAddress,
@@ -400,9 +399,10 @@ func (s *userService) GetProfile(ctx context.Context, userID uuid.UUID) (*models
 }
 
 func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, req *models.UserUpdateRequest) (*models.UserResponse, error) {
-	actorID := userID
-	if id, ok := ctx.Value(constants.ContextKeys.ActorID).(uuid.UUID); ok {
-		actorID = id
+	// Get the authenticated user (who is performing this action) from context
+	actorID, ok := ctx.Value(constants.ContextKeys.UserID).(uuid.UUID)
+	if !ok {
+		return nil, errors.New("unauthorized: user not authenticated")
 	}
 	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
 	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
@@ -612,20 +612,9 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 	// Track if only is_active changed (no other fields)
 	onlyStatusChanged := oldUser.IsActive != nil && req.IsActive != nil && *oldUser.IsActive != *req.IsActive
 
-	// Check if any other fields besides is_active changed
-	otherFieldsChanged := oldUser.FirstName != req.FirstName ||
-		oldUser.LastName != req.LastName ||
-		oldUser.Username != req.Username ||
-		oldUser.Phone != req.Phone ||
-		oldUser.Extension != req.Extension ||
-		oldUser.DepartmentID != req.DepartmentID ||
-		oldUser.LocationID != req.LocationID ||
-		!equalUUIDSlices(oldUser.DepartmentIDs, req.DepartmentIDs) ||
-		!equalUUIDSlices(oldUser.LocationIDs, req.LocationIDs) ||
-		!equalUUIDSlices(oldUser.ClassificationIDs, req.ClassificationIDs) ||
-		!equalUUIDSlices(oldUser.RoleIDs, req.RoleIDs)
-
 	// Log status change (Active/Inactive) separately for better audit trail
+	// This is kept because the middleware logs the general "update" action, but we want
+	// a specific "status_change" log when ONLY the active status is changed
 	if onlyStatusChanged {
 		go func() {
 			status := "activated"
@@ -647,23 +636,22 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		}()
 	}
 
-	// Log general user update (skip if ONLY is_active changed to avoid duplicate)
-	if otherFieldsChanged {
-		go func() {
-			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
-				UserID:      actorID,
-				Action:      "update",
-				Module:      "users",
-				ResourceID:  user.ID.String(),
-				Description: fmt.Sprintf("User profile updated for user: %s (%s)", user.Username, user.Email),
-				OldValue:    oldUser,
-				NewValue:    req,
-				IPAddress:   ipAddress,
-				UserAgent:   userAgent,
-				Status:      "success",
-			})
-		}()
-	}
+	// Log general user update with complete old/new values for audit trail
+	// This provides detailed field-level changes in the action log
+	go func() {
+		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+			UserID:      actorID,
+			Action:      "update",
+			Module:      "users",
+			ResourceID:  user.ID.String(),
+			Description: fmt.Sprintf("User profile updated for user: %s (%s)", user.Username, user.Email),
+			OldValue:    oldUser,
+			NewValue:    req,
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		})
+	}()
 
 	return &response, nil
 }
@@ -969,30 +957,16 @@ func (s *userService) DeleteUser(ctx context.Context) error {
 }
 
 func (s *userService) AdminDeleteUser(ctx context.Context, userID uuid.UUID) error {
-	actorID := userID
-	if id, ok := ctx.Value(constants.ContextKeys.ActorID).(uuid.UUID); ok {
-		actorID = id
+	// Get the authenticated user (who is performing this action) from context
+	actorID, ok := ctx.Value(constants.ContextKeys.UserID).(uuid.UUID)
+	if !ok {
+		return errors.New("unauthorized: user not authenticated")
 	}
 	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
 	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
 
 	user, err := s.userRepo.FindByID(ctx, userID)
 	if err != nil {
-		// Log failed deletion attempt
-		go func() {
-			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
-				UserID:      actorID,
-				Action:      "delete_failed",
-				Module:      "users",
-				ResourceID:  userID.String(),
-				Description: fmt.Sprintf("Failed admin user deletion attempt for user ID: %s", userID.String()),
-				OldValue:    nil,
-				NewValue:    nil,
-				IPAddress:   ipAddress,
-				UserAgent:   userAgent,
-				Status:      "failed",
-			})
-		}()
 		return err
 	}
 
@@ -1010,7 +984,7 @@ func (s *userService) AdminDeleteUser(ctx context.Context, userID uuid.UUID) err
 	err = s.userRepo.Delete(ctx, userID)
 
 	if err == nil {
-		// Log successful admin user deletion
+		// Log successful admin user deletion with complete details
 		go func() {
 			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
 				UserID:      actorID,
@@ -1018,27 +992,11 @@ func (s *userService) AdminDeleteUser(ctx context.Context, userID uuid.UUID) err
 				Module:      "users",
 				ResourceID:  userID.String(),
 				Description: fmt.Sprintf("Admin deleted user: %s (%s)", username, email),
-				OldValue:    map[string]interface{}{"username": username, "email": email},
+				OldValue:    map[string]interface{}{"username": username, "email": email, "id": userID.String()},
 				NewValue:    nil,
 				IPAddress:   ipAddress,
 				UserAgent:   userAgent,
 				Status:      "success",
-			})
-		}()
-	} else {
-		// Log failed deletion
-		go func() {
-			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
-				UserID:      actorID,
-				Action:      "delete_failed",
-				Module:      "users",
-				ResourceID:  userID.String(),
-				Description: fmt.Sprintf("Admin failed to delete user: %s (%s)", username, email),
-				OldValue:    nil,
-				NewValue:    nil,
-				IPAddress:   ipAddress,
-				UserAgent:   userAgent,
-				Status:      "failed",
 			})
 		}()
 	}
