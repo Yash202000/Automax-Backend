@@ -81,6 +81,9 @@ type IncidentService interface {
 	// Revisions
 	ListRevisions(ctx context.Context, incidentID uuid.UUID, filter *models.IncidentRevisionFilter) ([]models.IncidentRevisionResponse, int64, error)
 	CreateRevision(ctx context.Context, incidentID uuid.UUID, actionType models.IncidentRevisionActionType, description string, changes []models.IncidentFieldChange, userID uuid.UUID) error
+
+	// Closed incident editing
+	UpdateClosedIncidentSummary(ctx context.Context, incidentID uuid.UUID, userID uuid.UUID, newDescription string, reason string) (*models.IncidentResponse, error)
 }
 
 type incidentService struct {
@@ -3762,4 +3765,71 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// UpdateClosedIncidentSummary allows editing the description of a closed incident
+func (s *incidentService) UpdateClosedIncidentSummary(
+	ctx context.Context,
+	incidentID uuid.UUID,
+	userID uuid.UUID,
+	newDescription string,
+	reason string,
+) (*models.IncidentResponse, error) {
+	// Get incident with relations
+	incident, err := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
+	if err != nil {
+		return nil, fmt.Errorf("incident not found: %w", err)
+	}
+
+	// Verify incident is in terminal (closed) state
+	if incident.CurrentState == nil || incident.CurrentState.StateType != "terminal" {
+		return nil, fmt.Errorf("incident is not closed")
+	}
+
+	// Store old description
+	oldDescription := incident.Description
+
+	// Create edit record
+	editRecord := map[string]interface{}{
+		"edited_by":       userID.String(),
+		"edited_at":       time.Now().Format(time.RFC3339),
+		"old_description": oldDescription,
+		"new_description": newDescription,
+		"reason":          reason,
+	}
+
+	// Get existing edits
+	var existingEdits []map[string]interface{}
+	if incident.PostClosureEdits != nil && len(incident.PostClosureEdits) > 0 {
+		if err := json.Unmarshal(incident.PostClosureEdits, &existingEdits); err != nil {
+			existingEdits = []map[string]interface{}{}
+		}
+	}
+
+	// Append new edit
+	existingEdits = append(existingEdits, editRecord)
+
+	// Marshal back to JSON
+	editsJSON, err := json.Marshal(existingEdits)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal edit history: %w", err)
+	}
+
+	// Update incident
+	incident.Description = newDescription
+	incident.PostClosureEdits = editsJSON
+	incident.ClosedBy = &userID
+
+	if err := s.incidentRepo.Update(ctx, incident); err != nil {
+		return nil, fmt.Errorf("failed to update incident: %w", err)
+	}
+
+	// Fetch updated incident with relations
+	updated, err := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := models.ToIncidentResponse(updated)
+	return &resp, nil
 }
