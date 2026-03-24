@@ -6,16 +6,6 @@ import (
 	"github.com/google/uuid"
 )
 
-type CallerSentiment1 struct {
-	ID        uint64    `db:"id" json:"id"`
-	CallerID  string    `db:"caller_id" json:"caller_id"`
-	CalleeID  string    `db:"callee_id" json:"callee_id"`
-	Sentiment int       `db:"sentiment" json:"sentiment"`
-	Feedback  string    `db:"feedback" json:"feedback,omitempty"`
-	CallUUID  string    `db:"call_uuid" json:"call_uuid"` // unique per call
-	CreatedAt time.Time `db:"created_at" json:"createdAt"`
-}
-
 type CallerSentiment struct {
 	ID        uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey"`
 	CallerID  string    `gorm:"type:uuid;not null" json:"caller_id"`        // agent
