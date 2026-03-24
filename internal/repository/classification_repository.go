@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/google/uuid"
@@ -106,7 +107,9 @@ func (r *classificationRepository) ListByType(ctx context.Context, classType str
 		// Support 'all' type which matches any type, 'both' matches incident/request
 		query = query.Where("type = ? OR type = 'both' OR type = 'all'", classType)
 	}
-	err := query.Order("sort_order, name").Find(&classifications).Error
+	types := []string{strings.ToLower(classType)}
+
+	err := query.Where("LOWER(type) IN ?", types).Order("sort_order, name").Find(&classifications).Error
 	return classifications, err
 }
 
