@@ -108,6 +108,7 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 		FirstName:    req.FirstName,
 		LastName:     req.LastName,
 		Phone:        req.Phone,
+		Extension:    req.Extension,
 		DepartmentID: req.DepartmentID,
 		LocationID:   req.LocationID,
 		IsActive:     true,

@@ -109,6 +109,7 @@ type UserRegisterRequest struct {
 	FirstName         string      `json:"first_name" validate:"max=100"`
 	LastName          string      `json:"last_name" validate:"max=100"`
 	Phone             string      `json:"phone" validate:"max=20"`
+	Extension         string      `json:"extension" validate:"max=20"`
 	DepartmentID      *uuid.UUID  `json:"department_id"`
 	LocationID        *uuid.UUID  `json:"location_id"`
 	DepartmentIDs     []uuid.UUID `json:"department_ids"`
