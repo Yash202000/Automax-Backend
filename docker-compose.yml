@@ -4,8 +4,8 @@ x-minio-common: &minio-common
   image: quay.io/minio/minio:latest
   command: server --console-address ":9090" /mnt/data
   ports:
-    - "9002:9000"
-    - "9091:9090"
+    - "9000:9000"
+    - "9090:9090"
   healthcheck:
     test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
     interval: 30s
@@ -20,7 +20,7 @@ services:
     volumes:
       - automax_db:/var/lib/postgresql/data
     ports:
-      - "5434:5432"
+      - "5432:5432"
     environment:
       POSTGRES_USER: ${DB_USER:-automax}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-automax123}
@@ -33,7 +33,7 @@ services:
     volumes:
       - automax_redis:/data
     ports:
-      - "6380:6379"
+      - "6379:6379"
 
   minio:
     <<: *minio-common
