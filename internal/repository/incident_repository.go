@@ -766,34 +766,19 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 	if filter != nil {
 
 		if filter.RecordType != nil && *filter.RecordType != "" {
-			baseQuery = baseQuery.Where(
-				"record_type = ?",
-				*filter.RecordType,
-			)
+			baseQuery = baseQuery.Where("record_type = ?", *filter.RecordType)
 		}
 
 		if len(filter.WorkflowID) > 0 {
-			baseQuery = baseQuery.Where(
-				"workflow_id IN ?",
-				filter.WorkflowID,
-			)
+			baseQuery = baseQuery.Where("workflow_id IN ?", filter.WorkflowID)
 		}
 
 		if len(filter.DepartmentID) > 0 {
-			baseQuery = baseQuery.Where(
-				"department_id IN ?",
-				filter.DepartmentID,
-			)
+			baseQuery = baseQuery.Where("department_id IN ?", filter.DepartmentID)
 		}
 
 		if len(filter.AssigneeID) > 0 {
-			baseQuery = baseQuery.Where(`
-				assignee_id IN ?
-				OR id IN (
-					SELECT incident_id
-					FROM incident_assignees
-					WHERE user_id IN ?
-				)
+			baseQuery = baseQuery.Where(`assignee_id IN ?OR id IN (	SELECT incident_id	FROM incident_assignees	WHERE user_id IN ?)
 			`,
 				filter.AssigneeID,
 				filter.AssigneeID,
@@ -801,39 +786,69 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 		}
 
 		if filter.FilterType == "created" {
-			baseQuery = baseQuery.Where(
-				"reporter_id = ?",
-				filter.UserID,
-			)
+			baseQuery = baseQuery.Where("reporter_id = ?", filter.UserID)
 		}
 
 		if filter.FilterType == "assigned" {
-			baseQuery = baseQuery.Where(`
-				assignee_id = ?
-				OR id IN (
-					SELECT incident_id
-					FROM incident_assignees
-					WHERE user_id = ?
-				)
-			`,
+			baseQuery = baseQuery.Where(`assignee_id = ? OR id IN (	SELECT incident_id	FROM incident_assignees WHERE user_id = ?
+			)`,
 				filter.UserID,
 				filter.UserID,
 			)
 		}
 	}
 
-	// ---------------------------
 	// Total Count
-	// ---------------------------
+
 	if err := baseQuery.Count(&stats.Total).Error; err != nil {
 		return nil, err
 	}
 
-	// ---------------------------
-	// SLA Breached
-	// ---------------------------
-	slaQuery := baseQuery.Session(&gorm.Session{}).
-		Where("sla_breached = ?", true)
+	//  SLA Breached
+
+	slaQuery := r.db.WithContext(ctx).
+		Model(&models.Incident{}).Where("sla_breached = ?", true)
+
+	if filter != nil {
+
+		if filter.RecordType != nil && *filter.RecordType != "" {
+			slaQuery = slaQuery.Where("record_type = ?", *filter.RecordType)
+		}
+
+		if len(filter.WorkflowID) != 0 {
+			slaQuery = slaQuery.Where("workflow_id IN ?", filter.WorkflowID)
+		}
+
+		if len(filter.DepartmentID) != 0 {
+			slaQuery = slaQuery.Where("department_id IN ?", filter.DepartmentID)
+		}
+
+		if len(filter.AssigneeID) != 0 {
+			slaQuery = slaQuery.Where(`assignee_id IN ? OR id IN (
+				SELECT incident_id FROM incident_assignees WHERE user_id IN ?
+			)
+		`,
+				filter.AssigneeID,
+				filter.AssigneeID,
+			)
+		}
+
+		// Created by Me
+		if filter.FilterType == "created" {
+			slaQuery = slaQuery.Where("reporter_id = ?", filter.UserID)
+		}
+
+		// Assigned to Me
+		if filter.FilterType == "assigned" {
+			slaQuery = slaQuery.Where(`assignee_id = ? OR id IN (
+				SELECT incident_id FROM incident_assignees WHERE user_id = ?
+			)
+		`,
+				filter.UserID,
+				filter.UserID,
+			)
+		}
+	}
 
 	if err := slaQuery.Count(&stats.SLABreached).Error; err != nil {
 		return nil, err
@@ -864,13 +879,9 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 			workflow_states.state_type as state_type,
 			count(*) as count
 		`).
-		Joins(`
-			JOIN workflow_states
-			ON workflow_states.id = incidents.current_state_id
+		Joins(` JOIN workflow_states ON workflow_states.id = incidents.current_state_id
 		`).
-		Joins(`
-			JOIN workflows
-			ON workflows.id = incidents.workflow_id
+		Joins(` JOIN workflows ON workflows.id = incidents.workflow_id
 		`)
 
 	// Apply same filters again
