@@ -84,6 +84,7 @@ type IncidentRepository interface {
 	CreateFeedback(ctx context.Context, feedback *models.IncidentFeedback) error
 	FindFeedbackByID(ctx context.Context, id uuid.UUID) (*models.IncidentFeedback, error)
 	ListFeedback(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentFeedback, error)
+	ListAllFeedback(ctx context.Context) ([]models.IncidentFeedback, error)
 	LinkFeedbackToTransition(ctx context.Context, feedbackID uuid.UUID, transitionHistoryID uuid.UUID) error
 
 	// Notifications
@@ -1055,6 +1056,16 @@ func (r *incidentRepository) ListFeedback(ctx context.Context, incidentID uuid.U
 	err := r.db.WithContext(ctx).
 		Preload("CreatedBy").
 		Where("incident_id = ?", incidentID).
+		Order("created_at DESC").
+		Find(&feedback).Error
+	return feedback, err
+}
+
+func (r *incidentRepository) ListAllFeedback(ctx context.Context) ([]models.IncidentFeedback, error) {
+	var feedback []models.IncidentFeedback
+	err := r.db.WithContext(ctx).Debug().
+		Preload("CreatedBy").
+		Preload("Incident").
 		Order("created_at DESC").
 		Find(&feedback).Error
 	return feedback, err
