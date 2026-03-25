@@ -69,6 +69,7 @@ type IncidentService interface {
 
 	// Stats and user queries
 	GetStats(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponse, error)
+	GetStatsV2(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponseV2, error)
 	GetPriorityCounts(ctx context.Context, filter *models.IncidentFilter) (map[string]int64, error)
 	GetMyAssigned(ctx context.Context, userID uuid.UUID, recordType string, page, limit int) ([]models.IncidentResponse, int64, error)
 	GetMyReported(ctx context.Context, userID uuid.UUID, recordType string, page, limit int) ([]models.IncidentResponse, int64, error)
@@ -3167,6 +3168,9 @@ func (s *incidentService) syncAssigneeToMergedIncidents(ctx context.Context, mas
 
 func (s *incidentService) GetStats(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponse, error) {
 	return s.incidentRepo.GetStats(ctx, filter)
+}
+func (s *incidentService) GetStatsV2(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponseV2, error) {
+	return s.incidentRepo.GetStatsV2(ctx, filter)
 }
 
 func (s *incidentService) GetPriorityCounts(ctx context.Context, filter *models.IncidentFilter) (map[string]int64, error) {

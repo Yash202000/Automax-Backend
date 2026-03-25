@@ -63,6 +63,7 @@ type IncidentRepository interface {
 
 	// Stats
 	GetStats(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponse, error)
+	GetStatsV2(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponseV2, error)
 	GetPriorityCounts(ctx context.Context, filter *models.IncidentFilter) (map[string]int64, error)
 	GetSLABreachedIncidents(ctx context.Context) ([]models.Incident, error)
 	UpdateSLABreached(ctx context.Context, incidentID uuid.UUID, breached bool) error
@@ -770,6 +771,295 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 		case "terminal":
 			stats.Closed = stc.Count
 		}
+	}
+
+	return stats, nil
+}
+
+//stats api v2 (After all fixes  will deprecated Old api)
+
+func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponseV2, error) {
+
+	stats := &models.IncidentStatsResponseV2{}
+
+	baseQuery := r.db.WithContext(ctx).
+		Model(&models.Incident{})
+
+	// Apply Filters
+
+	if filter != nil {
+
+		if filter.RecordType != nil && *filter.RecordType != "" {
+			baseQuery = baseQuery.Where("record_type = ?", *filter.RecordType)
+		}
+
+		if len(filter.WorkflowID) > 0 {
+			baseQuery = baseQuery.Where("workflow_id IN ?", filter.WorkflowID)
+		}
+
+		if len(filter.DepartmentID) > 0 {
+			baseQuery = baseQuery.Where("department_id IN ?", filter.DepartmentID)
+		}
+
+		if len(filter.AssigneeID) > 0 {
+			baseQuery = baseQuery.Where(`assignee_id IN ?OR id IN (	SELECT incident_id	FROM incident_assignees	WHERE user_id IN ?)
+			`,
+				filter.AssigneeID,
+				filter.AssigneeID,
+			)
+		}
+
+		if filter.FilterType == "created" {
+			baseQuery = baseQuery.Where("reporter_id = ?", filter.UserID)
+		}
+
+		if filter.FilterType == "assigned" {
+			baseQuery = baseQuery.Where(`assignee_id = ? OR id IN (	SELECT incident_id	FROM incident_assignees WHERE user_id = ?
+			)`,
+				filter.UserID,
+				filter.UserID,
+			)
+		}
+
+		if len(filter.UserRoleIDs) > 0 {
+			baseQuery = baseQuery.Where(`
+				NOT EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = incidents.current_state_id)
+				OR EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = incidents.current_state_id AND role_id IN ?)
+			`, filter.UserRoleIDs)
+		}
+	}
+
+	// Total Count
+
+	if err := baseQuery.Count(&stats.Total).Error; err != nil {
+		return nil, err
+	}
+
+	//  SLA Breached
+
+	slaQuery := r.db.WithContext(ctx).
+		Model(&models.Incident{}).Where("sla_breached = ?", true)
+
+	if filter != nil {
+
+		if filter.RecordType != nil && *filter.RecordType != "" {
+			slaQuery = slaQuery.Where("record_type = ?", *filter.RecordType)
+		}
+
+		if len(filter.WorkflowID) != 0 {
+			slaQuery = slaQuery.Where("workflow_id IN ?", filter.WorkflowID)
+		}
+
+		if len(filter.DepartmentID) != 0 {
+			slaQuery = slaQuery.Where("department_id IN ?", filter.DepartmentID)
+		}
+
+		if len(filter.AssigneeID) != 0 {
+			slaQuery = slaQuery.Where(`assignee_id IN ? OR id IN (
+				SELECT incident_id FROM incident_assignees WHERE user_id IN ?
+			)
+		`,
+				filter.AssigneeID,
+				filter.AssigneeID,
+			)
+		}
+
+		// Created by Me
+		if filter.FilterType == "created" {
+			slaQuery = slaQuery.Where("reporter_id = ?", filter.UserID)
+		}
+
+		// Assigned to Me
+		if filter.FilterType == "assigned" {
+			slaQuery = slaQuery.Where(`assignee_id = ? OR id IN (
+				SELECT incident_id FROM incident_assignees WHERE user_id = ?
+			)
+		`,
+				filter.UserID,
+				filter.UserID,
+			)
+		}
+
+		if len(filter.UserRoleIDs) > 0 {
+			slaQuery = slaQuery.Where(`
+				NOT EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = incidents.current_state_id)
+				OR EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = incidents.current_state_id AND role_id IN ?)
+			`, filter.UserRoleIDs)
+		}
+	}
+
+	if err := slaQuery.Count(&stats.SLABreached).Error; err != nil {
+		return nil, err
+	}
+
+	// Workflow State Stats
+
+	type stateCount struct {
+		WorkflowID   uuid.UUID `gorm:"column:workflow_id"`
+		WorkflowName string    `gorm:"column:workflow_name"`
+		StateID      uuid.UUID `gorm:"column:state_id"`
+		StateName    string    `gorm:"column:state_name"`
+		StateCode    string    `gorm:"column:state_code"`
+		StateType    string    `gorm:"column:state_type"`
+		Count        int64     `gorm:"column:count"`
+	}
+
+	var stateCounts []stateCount
+
+	stateQuery := r.db.WithContext(ctx).
+		Model(&models.Workflow{}).
+		Select(`
+		workflows.id as workflow_id,
+		workflows.name as workflow_name,
+		workflow_states.id as state_id,
+		workflow_states.name as state_name,
+		workflow_states.code as state_code,
+		workflow_states.state_type as state_type,
+		COUNT(incidents.id) as count
+	`).
+		Joins(`
+		JOIN workflow_states
+		ON workflow_states.workflow_id = workflows.id
+	`).
+		Joins(`
+		LEFT JOIN incidents
+		ON incidents.current_state_id = workflow_states.id
+		AND incidents.deleted_at IS NULL
+	`)
+
+	// Apply Filters
+	if filter != nil {
+
+		if filter.RecordType != nil && *filter.RecordType != "" {
+			stateQuery = stateQuery.Where(
+				"workflows.record_type = ?",
+				*filter.RecordType,
+			)
+		}
+
+		if len(filter.WorkflowID) > 0 {
+			stateQuery = stateQuery.Where(
+				"workflows.id IN ?",
+				filter.WorkflowID,
+			)
+		}
+
+		// department filter
+		if len(filter.DepartmentID) > 0 {
+			stateQuery = stateQuery.Where(
+				"incidents.department_id IN ?",
+				filter.DepartmentID,
+			)
+		}
+
+		// assignee filter
+		if len(filter.AssigneeID) > 0 {
+			stateQuery = stateQuery.Where(`
+			incidents.assignee_id IN ?
+			OR incidents.id IN (
+				SELECT incident_id
+				FROM incident_assignees
+				WHERE user_id IN ?
+			)
+		`,
+				filter.AssigneeID,
+				filter.AssigneeID,
+			)
+		}
+
+		// created by me
+		if filter.FilterType == "created" {
+			stateQuery = stateQuery.Where(
+				"incidents.reporter_id = ?",
+				filter.UserID,
+			)
+		}
+
+		// assigned to me
+		if filter.FilterType == "assigned" {
+			stateQuery = stateQuery.Where(`
+			incidents.assignee_id = ?
+			OR incidents.id IN (
+				SELECT incident_id
+				FROM incident_assignees
+				WHERE user_id = ?
+			)
+		`,
+				filter.UserID,
+				filter.UserID,
+			)
+		}
+
+		if len(filter.UserRoleIDs) > 0 {
+			stateQuery = stateQuery.Where(`
+				NOT EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = workflow_states.id)
+				OR EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = workflow_states.id AND role_id IN ?)
+			`, filter.UserRoleIDs)
+		}
+	}
+
+	if err := stateQuery.
+		Group(`
+			workflows.id,
+			workflows.name,
+			workflow_states.id,
+			workflow_states.name,
+			workflow_states.code,
+			workflow_states.state_type
+		`).
+		Scan(&stateCounts).Error; err != nil {
+		return nil, err
+	}
+
+	// Workflow Map
+	workflowMap := make(map[uuid.UUID]*models.WorkflowStats)
+
+	for _, sc := range stateCounts {
+
+		if _, exists := workflowMap[sc.WorkflowID]; !exists {
+
+			workflowMap[sc.WorkflowID] = &models.WorkflowStats{
+				WorkflowID:     sc.WorkflowID,
+				WorkflowName:   sc.WorkflowName,
+				ByState:        make(map[string]int64),
+				ByStateDetails: []models.StateStatDetail{},
+			}
+		}
+
+		wf := workflowMap[sc.WorkflowID]
+
+		wf.ByState[sc.StateName] += sc.Count
+
+		wf.ByStateDetails = append(
+			wf.ByStateDetails,
+			models.StateStatDetail{
+				ID:    sc.StateID,
+				Name:  sc.StateName,
+				Count: sc.Count,
+			},
+		)
+		switch sc.StateType {
+
+		case "initial":
+			stats.Open += sc.Count
+
+		case "normal":
+			stats.InProgress += sc.Count
+
+		case "terminal":
+			stats.Closed += sc.Count
+		}
+
+		if sc.StateCode == "resolved" {
+			stats.Resolved += sc.Count
+		}
+	}
+
+	for _, wf := range workflowMap {
+		stats.WorkflowStats = append(
+			stats.WorkflowStats,
+			*wf,
+		)
 	}
 
 	return stats, nil

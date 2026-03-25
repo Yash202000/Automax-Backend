@@ -758,6 +758,24 @@ type IncidentStatsResponse struct {
 	ByStateDetails []StateStatDetail `json:"by_state_details,omitempty"`
 }
 
+type WorkflowStats struct {
+	WorkflowID     uuid.UUID         `json:"workflow_id"`
+	WorkflowName   string            `json:"workflow_name"`
+	ByState        map[string]int64  `json:"by_state"`
+	ByStateDetails []StateStatDetail `json:"by_state_details"`
+}
+
+type IncidentStatsResponseV2 struct {
+	Total         int64           `json:"total"`
+	Open          int64           `json:"open"`
+	InProgress    int64           `json:"in_progress"`
+	Resolved      int64           `json:"resolved"`
+	Closed        int64           `json:"closed"`
+	SLABreached   int64           `json:"sla_breached"`
+	ByPriority    any             `json:"by_priority"`
+	WorkflowStats []WorkflowStats `json:"workflow_stats"`
+}
+
 // Converter functions
 
 func ToIncidentResponse(i *Incident) IncidentResponse {

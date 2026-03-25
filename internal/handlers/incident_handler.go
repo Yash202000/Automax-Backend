@@ -739,6 +739,43 @@ func (h *IncidentHandler) GetStats(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "Stats retrieved", stats)
 }
 
+func (h *IncidentHandler) GetStatsV2(c *fiber.Ctx) error {
+	filter := &models.IncidentFilter{}
+
+	// Parse query parameters
+	if err := c.QueryParser(filter); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
+	}
+
+	filter.UserID = c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	// Filter by record_type (incident, request, complaint)
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+
+	if filter.Limit < 1 || filter.Limit > 100 {
+		filter.Limit = 20
+	}
+
+	// Add user role IDs for state visibility filtering
+	filter.UserRoleIDs = h.getUserRoleIDs(c)
+
+	stats, err := h.service.GetStatsV2(c.UserContext(), filter)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Stats retrieved", stats)
+}
+
 func (h *IncidentHandler) GetPriorityCounts(c *fiber.Ctx) error {
 	filter := &models.IncidentFilter{}
 
