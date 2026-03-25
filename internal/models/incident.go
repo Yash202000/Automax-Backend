@@ -105,8 +105,8 @@ type Incident struct {
 	MergedByUserID   *uuid.UUID `gorm:"type:uuid" json:"merged_by_user_id,omitempty"`
 
 	// Closed Incident Edit Tracking
-	ClosedBy           *uuid.UUID      `gorm:"type:uuid;index" json:"closed_by,omitempty"`
-	PostClosureEdits   datatypes.JSON  `gorm:"type:jsonb;default:'[]'::jsonb" json:"post_closure_edits,omitempty"`
+	ClosedBy         *uuid.UUID     `gorm:"type:uuid;index" json:"closed_by,omitempty"`
+	PostClosureEdits datatypes.JSON `gorm:"type:jsonb;default:'[]'::jsonb" json:"post_closure_edits,omitempty"`
 
 	// Related records
 	Comments          []IncidentComment           `gorm:"foreignKey:IncidentID" json:"comments,omitempty"`
@@ -539,11 +539,11 @@ type IncidentFilter struct {
 	RecordType       *string     `query:"record_type" json:"record_type" validate:"omitempty,oneof=incident request complaint query"` // 'incident', 'request', 'complaint', or 'query'
 	Channel          *string     `query:"channel" json:"channel" validate:"omitempty"`                                                // for complaints
 	Source           *string     `query:"source" json:"source" validate:"omitempty"`
-	StartDate        *time.Time  `query:"start_date" json:"start_date" validate:"omitempty"`                                          // filter by created_at >= start_date
-	EndDate          *time.Time  `query:"end_date" json:"end_date" validate:"omitempty"`                                              // filter by created_at <= end_date
-	CustomFieldKey   string      `query:"custom_field_key" json:"custom_field_key" validate:"omitempty"`                              // e.g. "lookup:TASK ID"
-	CustomFieldValue string      `query:"custom_field_value" json:"custom_field_value" validate:"omitempty"`                          // e.g. "TASK-1235"
-	TaskID           string      `query:"task_id" json:"task_id" validate:"omitempty"`                                                // filter by task ID in custom_fields
+	StartDate        *time.Time  `query:"start_date" json:"start_date" validate:"omitempty"`                 // filter by created_at >= start_date
+	EndDate          *time.Time  `query:"end_date" json:"end_date" validate:"omitempty"`                     // filter by created_at <= end_date
+	CustomFieldKey   string      `query:"custom_field_key" json:"custom_field_key" validate:"omitempty"`     // e.g. "lookup:TASK ID"
+	CustomFieldValue string      `query:"custom_field_value" json:"custom_field_value" validate:"omitempty"` // e.g. "TASK-1235"
+	TaskID           string      `query:"task_id" json:"task_id" validate:"omitempty"`                       // filter by task ID in custom_fields
 	Page             int         `query:"page" json:"page" validate:"omitempty,min=1"`
 	Limit            int         `query:"limit" json:"limit" validate:"omitempty,min=1,max=100"`
 	UserRoleIDs      []uuid.UUID `json:"-"`     // For filtering stats by user's roles
@@ -750,6 +750,24 @@ type IncidentStatsResponse struct {
 	ByPriority     map[int]int64     `json:"by_priority"`
 	ByState        map[string]int64  `json:"by_state"`
 	ByStateDetails []StateStatDetail `json:"by_state_details,omitempty"`
+}
+
+type WorkflowStats struct {
+	WorkflowID     uuid.UUID         `json:"workflow_id"`
+	WorkflowName   string            `json:"workflow_name"`
+	ByState        map[string]int64  `json:"by_state"`
+	ByStateDetails []StateStatDetail `json:"by_state_details"`
+}
+
+type IncidentStatsResponseV2 struct {
+	Total         int64           `json:"total"`
+	Open          int64           `json:"open"`
+	InProgress    int64           `json:"in_progress"`
+	Resolved      int64           `json:"resolved"`
+	Closed        int64           `json:"closed"`
+	SLABreached   int64           `json:"sla_breached"`
+	ByPriority    any             `json:"by_priority"`
+	WorkflowStats []WorkflowStats `json:"workflow_stats"`
 }
 
 // Converter functions

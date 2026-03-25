@@ -65,6 +65,7 @@ type IncidentService interface {
 
 	// Stats and user queries
 	GetStats(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponse, error)
+	GetStatsV2(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponseV2, error)
 	GetPriorityCounts(ctx context.Context, filter *models.IncidentFilter) (map[string]int64, error)
 	GetMyAssigned(ctx context.Context, userID uuid.UUID, recordType string, page, limit int) ([]models.IncidentResponse, int64, error)
 	GetMyReported(ctx context.Context, userID uuid.UUID, recordType string, page, limit int) ([]models.IncidentResponse, int64, error)
@@ -2993,6 +2994,9 @@ func (s *incidentService) syncAssigneeToMergedIncidents(ctx context.Context, mas
 func (s *incidentService) GetStats(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponse, error) {
 	return s.incidentRepo.GetStats(ctx, filter)
 }
+func (s *incidentService) GetStatsV2(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponseV2, error) {
+	return s.incidentRepo.GetStatsV2(ctx, filter)
+}
 
 func (s *incidentService) GetPriorityCounts(ctx context.Context, filter *models.IncidentFilter) (map[string]int64, error) {
 	return s.incidentRepo.GetPriorityCounts(ctx, filter)
@@ -3132,7 +3136,7 @@ func (s *incidentService) ListRevisions(ctx context.Context, incidentID uuid.UUI
 // Copies feedback and attachments, and sends SMS notifications
 func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIncidentID uuid.UUID, transitionReq *models.IncidentTransitionRequest, userID uuid.UUID) error {
 	fmt.Println("=== [DEBUG] autoCloseMergedIncidents START ===")
-	
+
 	// Get merged incidents
 	mergedIncidents, err := s.incidentMergeRepo.GetMergedIncidents(ctx, masterIncidentID)
 	if err != nil {
@@ -3161,7 +3165,7 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 	// Process each merged incident
 	for i, merged := range mergedIncidents {
 		fmt.Printf("\n[DEBUG] === Processing merged incident %d/%d: %s ===\n", i+1, len(mergedIncidents), merged.IncidentNumber)
-		
+
 		// Copy feedback from master to merged incident
 		if transitionReq.Feedback != nil {
 			fmt.Println("[DEBUG] Copying feedback...")
@@ -3202,7 +3206,7 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 		fmt.Printf("[DEBUG] Checking reporter for SMS - Reporter: %+v\n", merged.Reporter)
 		if merged.Reporter != nil && merged.Reporter.Phone != "" {
 			fmt.Printf("[DEBUG] Sending SMS to: %s\n", merged.Reporter.Phone)
-			
+
 			smsMessage := fmt.Sprintf(
 				"Your incident %s has been automatically closed as it was merged with master incident %s. The master incident has been resolved.",
 				merged.IncidentNumber,
@@ -3238,7 +3242,7 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 				notification.Status = "failed"
 				notification.ErrorMessage = smsErr.Error()
 			}
-			
+
 			fmt.Println("[DEBUG] Creating notification log...")
 			if notifErr := s.incidentRepo.CreateNotification(ctx, notification); notifErr != nil {
 				fmt.Printf("[DEBUG] Failed to create notification log: %v\n", notifErr)
@@ -3290,7 +3294,7 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 // notifyStatusChangeToMergedIncidents sends SMS notifications to merged incident owners when master status changes
 func (s *incidentService) notifyStatusChangeToMergedIncidents(ctx context.Context, masterIncidentID uuid.UUID, newStateName string, comment string, userID uuid.UUID) error {
 	fmt.Println("=== [DEBUG] notifyStatusChangeToMergedIncidents START ===")
-	
+
 	// Get merged incidents with reporter details (already preloaded)
 	mergedIncidents, err := s.incidentMergeRepo.GetMergedIncidents(ctx, masterIncidentID)
 	if err != nil {
@@ -3318,10 +3322,10 @@ func (s *incidentService) notifyStatusChangeToMergedIncidents(ctx context.Contex
 		fmt.Printf("\n[DEBUG] === Processing incident %d/%d: %s ===\n", i+1, len(mergedIncidents), merged.IncidentNumber)
 		fmt.Printf("[DEBUG] Reporter: %+v\n", merged.Reporter)
 		fmt.Println("under in loop")
-		
+
 		if merged.Reporter != nil && merged.Reporter.Phone != "" {
 			fmt.Printf("[DEBUG] Sending SMS to: %s\n", merged.Reporter.Phone)
-			
+
 			smsMessage := fmt.Sprintf(
 				"Your incident %s status has been updated to '%s' (master incident: %s). Comment: %s",
 				merged.IncidentNumber,
