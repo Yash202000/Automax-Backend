@@ -2578,22 +2578,40 @@ func (s *incidentService) ListComments(ctx context.Context, incidentID uuid.UUID
 
 	var comments []models.IncidentComment
 
-	// If this is a master incident, include comments from all merged (child) incidents
+	// If this is a master incident, show master's own comments + unique child comments
+	// If this is a child incident, show child's own comments + master's comments (not other children's)
 	if incident.MasterIncidentID == nil {
 		// This is either a standalone incident or a master incident
-		// Get comments from this incident
+		// Get comments from this incident first
 		comments, err = s.incidentRepo.ListComments(ctx, incidentID)
 		if err != nil {
 			return nil, err
 		}
 
 		// If it's a master, also get comments from merged children
+		// But exclude comments that are synced copies from master (same content + author)
 		mergedIncidents, err := s.incidentMergeRepo.GetMergedIncidents(ctx, incidentID)
 		if err == nil && len(mergedIncidents) > 0 {
+			// Build a set of master comment signatures for deduplication
+			// Use content + author (synced comments have same content and author)
+			masterCommentSignatures := make(map[string]bool)
+			for _, c := range comments {
+				// Signature: content + author (synced comments have same content and author)
+				sig := fmt.Sprintf("%s|%s", c.Content, c.AuthorID)
+				masterCommentSignatures[sig] = true
+			}
+
 			for _, child := range mergedIncidents {
 				childComments, err := s.incidentRepo.ListComments(ctx, child.ID)
 				if err == nil {
-					comments = append(comments, childComments...)
+					for _, cc := range childComments {
+						// Check if this child comment is a synced copy from master
+						sig := fmt.Sprintf("%s|%s", cc.Content, cc.AuthorID)
+						if !masterCommentSignatures[sig] {
+							// This is a unique child comment, not a synced copy
+							comments = append(comments, cc)
+						}
+					}
 				}
 			}
 			// Sort by created_at DESC
@@ -2611,7 +2629,20 @@ func (s *incidentService) ListComments(ctx context.Context, incidentID uuid.UUID
 		// Also get comments from master incident
 		masterComments, err := s.incidentRepo.ListComments(ctx, *incident.MasterIncidentID)
 		if err == nil && len(masterComments) > 0 {
-			comments = append(comments, masterComments...)
+			// Build signature set for child's own comments to avoid duplicates
+			childCommentSignatures := make(map[string]bool)
+			for _, c := range comments {
+				sig := fmt.Sprintf("%s|%s", c.Content, c.AuthorID)
+				childCommentSignatures[sig] = true
+			}
+
+			// Only add master comments that don't already exist in child
+			for _, mc := range masterComments {
+				sig := fmt.Sprintf("%s|%s", mc.Content, mc.AuthorID)
+				if !childCommentSignatures[sig] {
+					comments = append(comments, mc)
+				}
+			}
 			// Sort by created_at DESC
 			sort.Slice(comments, func(i, j int) bool {
 				return comments[i].CreatedAt.After(comments[j].CreatedAt)
@@ -2784,22 +2815,39 @@ func (s *incidentService) ListAttachments(ctx context.Context, incidentID uuid.U
 
 	var attachments []models.IncidentAttachment
 
-	// If this is a master incident, include attachments from all merged (child) incidents
+	// If this is a master incident, show master's own attachments + unique child attachments
+	// If this is a child incident, show child's own attachments + master's attachments (not other children's)
 	if incident.MasterIncidentID == nil {
 		// This is either a standalone incident or a master incident
-		// Get attachments from this incident
+		// Get attachments from this incident first
 		attachments, err = s.incidentRepo.ListAttachments(ctx, incidentID)
 		if err != nil {
 			return nil, err
 		}
 
 		// If it's a master, also get attachments from merged children
+		// But exclude attachments that are synced copies from master (same file name + uploader)
 		mergedIncidents, err := s.incidentMergeRepo.GetMergedIncidents(ctx, incidentID)
 		if err == nil && len(mergedIncidents) > 0 {
+			// Build a set of master attachment signatures for deduplication
+			masterAttachmentSignatures := make(map[string]bool)
+			for _, a := range attachments {
+				// Signature: file_name + uploaded_by (synced attachments have same file name and uploader)
+				sig := fmt.Sprintf("%s|%s", a.FileName, a.UploadedByID)
+				masterAttachmentSignatures[sig] = true
+			}
+
 			for _, child := range mergedIncidents {
 				childAttachments, err := s.incidentRepo.ListAttachments(ctx, child.ID)
 				if err == nil {
-					attachments = append(attachments, childAttachments...)
+					for _, ca := range childAttachments {
+						// Check if this child attachment is a synced copy from master
+						sig := fmt.Sprintf("%s|%s", ca.FileName, ca.UploadedByID)
+						if !masterAttachmentSignatures[sig] {
+							// This is a unique child attachment, not a synced copy
+							attachments = append(attachments, ca)
+						}
+					}
 				}
 			}
 			// Sort by created_at DESC
@@ -2817,7 +2865,20 @@ func (s *incidentService) ListAttachments(ctx context.Context, incidentID uuid.U
 		// Also get attachments from master incident
 		masterAttachments, err := s.incidentRepo.ListAttachments(ctx, *incident.MasterIncidentID)
 		if err == nil && len(masterAttachments) > 0 {
-			attachments = append(attachments, masterAttachments...)
+			// Build signature set for child's own attachments to avoid duplicates
+			childAttachmentSignatures := make(map[string]bool)
+			for _, a := range attachments {
+				sig := fmt.Sprintf("%s|%s", a.FileName, a.UploadedByID)
+				childAttachmentSignatures[sig] = true
+			}
+
+			// Only add master attachments that don't already exist in child
+			for _, ma := range masterAttachments {
+				sig := fmt.Sprintf("%s|%s", ma.FileName, ma.UploadedByID)
+				if !childAttachmentSignatures[sig] {
+					attachments = append(attachments, ma)
+				}
+			}
 			// Sort by created_at DESC
 			sort.Slice(attachments, func(i, j int) bool {
 				return attachments[i].CreatedAt.After(attachments[j].CreatedAt)
