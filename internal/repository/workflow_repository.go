@@ -154,7 +154,9 @@ func (r *workflowRepository) List(ctx context.Context, activeOnly bool) ([]model
 		Preload("Transitions").
 		Preload("Classifications").
 		Preload("Locations").
-		Preload("CreatedBy")
+		Preload("CreatedBy").
+		Preload("ConvertToRequestRoles").
+		Preload("MergeAllowedRoles")
 
 	if activeOnly {
 		query = query.Where("is_active = ?", true)
@@ -171,7 +173,9 @@ func (r *workflowRepository) ListByRecordType(ctx context.Context, recordType st
 		Preload("Transitions").
 		Preload("Classifications").
 		Preload("Locations").
-		Preload("CreatedBy")
+		Preload("CreatedBy").
+		Preload("ConvertToRequestRoles").
+		Preload("MergeAllowedRoles")
 
 	if recordType != "" {
 		// Support 'all' type which matches any type, 'both' matches incident/request

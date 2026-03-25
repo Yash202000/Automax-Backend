@@ -279,6 +279,7 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 		req.FirstName = c.FormValue("first_name")
 		req.LastName = c.FormValue("last_name")
 		req.Phone = c.FormValue("phone")
+		req.Extension = c.FormValue("extension")
 
 		// Parse optional UUID fields
 		if deptID := c.FormValue("department_id"); deptID != "" {
