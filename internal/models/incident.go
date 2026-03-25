@@ -105,8 +105,8 @@ type Incident struct {
 	MergedByUserID   *uuid.UUID `gorm:"type:uuid" json:"merged_by_user_id,omitempty"`
 
 	// Closed Incident Edit Tracking
-	ClosedBy           *uuid.UUID      `gorm:"type:uuid;index" json:"closed_by,omitempty"`
-	PostClosureEdits   datatypes.JSON  `gorm:"type:jsonb;default:'[]'::jsonb" json:"post_closure_edits,omitempty"`
+	ClosedBy         *uuid.UUID     `gorm:"type:uuid;index" json:"closed_by,omitempty"`
+	PostClosureEdits datatypes.JSON `gorm:"type:jsonb;default:'[]'::jsonb" json:"post_closure_edits,omitempty"`
 
 	// Related records
 	Comments          []IncidentComment           `gorm:"foreignKey:IncidentID" json:"comments,omitempty"`
@@ -353,6 +353,7 @@ type IncidentCreateRequest struct {
 	DueDate            *string                `json:"due_date" validate:"omitempty,datetime=2006-01-02T15:04:05Z07:00"`
 	ReporterEmail      string                 `json:"reporter_email" validate:"omitempty,email"`
 	ReporterName       string                 `json:"reporter_name" validate:"omitempty,max=200"`
+	ReporterPhone      string                 `json:"reporter_phone" validate:"omitempty,max=200"`
 	CustomFields       string                 `json:"custom_fields"`
 	LookupValueIDs     []string               `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
 	CustomLookupFields map[string]interface{} `json:"custom_lookup_fields"`
@@ -539,11 +540,11 @@ type IncidentFilter struct {
 	RecordType       *string     `query:"record_type" json:"record_type" validate:"omitempty,oneof=incident request complaint query"` // 'incident', 'request', 'complaint', or 'query'
 	Channel          *string     `query:"channel" json:"channel" validate:"omitempty"`                                                // for complaints
 	Source           *string     `query:"source" json:"source" validate:"omitempty"`
-	StartDate        *time.Time  `query:"start_date" json:"start_date" validate:"omitempty"`                                          // filter by created_at >= start_date
-	EndDate          *time.Time  `query:"end_date" json:"end_date" validate:"omitempty"`                                              // filter by created_at <= end_date
-	CustomFieldKey   string      `query:"custom_field_key" json:"custom_field_key" validate:"omitempty"`                              // e.g. "lookup:TASK ID"
-	CustomFieldValue string      `query:"custom_field_value" json:"custom_field_value" validate:"omitempty"`                          // e.g. "TASK-1235"
-	TaskID           string      `query:"task_id" json:"task_id" validate:"omitempty"`                                                // filter by task ID in custom_fields
+	StartDate        *time.Time  `query:"start_date" json:"start_date" validate:"omitempty"`                 // filter by created_at >= start_date
+	EndDate          *time.Time  `query:"end_date" json:"end_date" validate:"omitempty"`                     // filter by created_at <= end_date
+	CustomFieldKey   string      `query:"custom_field_key" json:"custom_field_key" validate:"omitempty"`     // e.g. "lookup:TASK ID"
+	CustomFieldValue string      `query:"custom_field_value" json:"custom_field_value" validate:"omitempty"` // e.g. "TASK-1235"
+	TaskID           string      `query:"task_id" json:"task_id" validate:"omitempty"`                       // filter by task ID in custom_fields
 	Page             int         `query:"page" json:"page" validate:"omitempty,min=1"`
 	Limit            int         `query:"limit" json:"limit" validate:"omitempty,min=1,max=100"`
 	UserRoleIDs      []uuid.UUID `json:"-"`     // For filtering stats by user's roles
@@ -577,6 +578,10 @@ type IncidentBulkUnmergeResponse struct {
 	UnmergedCount int      `json:"unmerged_count"`
 	Failures      []string `json:"failures,omitempty"`
 	Message       string   `json:"message"`
+}
+type IncidentUpdateIVRRequest struct {
+	IncidentID      uuid.UUID
+	LastPhoneDigits string
 }
 
 // IncidentMergeValidationRequest for validating if incidents can be merged
@@ -650,6 +655,7 @@ type IncidentResponse struct {
 	ReadyToCloseDuration  string                  `json:"ready_to_close_duration,omitempty"`
 	Source                string                  `json:"source,omitempty"`
 	Reporter              *UserResponse           `json:"reporter,omitempty"`
+	ReporterID            uuid.UUID               `json:"reporter_id"`
 	ReporterEmail         string                  `json:"reporter_email"`
 	ReporterName          string                  `json:"reporter_name"`
 	Channel               string                  `json:"channel,omitempty"`

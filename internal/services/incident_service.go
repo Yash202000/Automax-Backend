@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"sort"
 	"strconv"
@@ -15,6 +16,8 @@ import (
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/internal/utils"
+	"github.com/automax/backend/pkg/constants"
+	pkgutils "github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -30,6 +33,7 @@ type IncidentService interface {
 	ListIncidents(ctx context.Context, filter *models.IncidentFilter) ([]models.IncidentResponse, int64, error)
 	UpdateIncident(ctx context.Context, id uuid.UUID, req *models.IncidentUpdateRequest, userID uuid.UUID, userRoleIDs []uuid.UUID) (*models.IncidentResponse, error)
 	DeleteIncident(ctx context.Context, id uuid.UUID) error
+	FindByIDWithLast6DigitValidation(ctx context.Context, id uuid.UUID, last6Digits string) (*models.IncidentResponse, error)
 
 	// Convert incident to request
 	ConvertToRequest(ctx context.Context, incidentID uuid.UUID, req *models.ConvertToRequestRequest, userID uuid.UUID, userRoleIDs []uuid.UUID) (*models.ConvertToRequestResponse, error)
@@ -81,6 +85,8 @@ type IncidentService interface {
 	// Revisions
 	ListRevisions(ctx context.Context, incidentID uuid.UUID, filter *models.IncidentRevisionFilter) ([]models.IncidentRevisionResponse, int64, error)
 	CreateRevision(ctx context.Context, incidentID uuid.UUID, actionType models.IncidentRevisionActionType, description string, changes []models.IncidentFieldChange, userID uuid.UUID) error
+	// SetUserService wires in the UserService (called post-construction to avoid circular deps).
+	SetUserService(us UserService)
 
 	// Closed incident editing
 	UpdateClosedIncidentSummary(ctx context.Context, incidentID uuid.UUID, userID uuid.UUID, newDescription string, reason string) (*models.IncidentResponse, error)
@@ -94,11 +100,13 @@ type incidentService struct {
 	deptRepo            repository.DepartmentRepository
 	rejectionLogRepo    repository.RejectionLogRepository
 	classificationRepo  repository.ClassificationRepository
+	roleRepo            repository.RoleRepository
 	storage             *storage.MinIOStorage
 	db                  *gorm.DB
 	wsHub               *WSHub
 	readyToCloseService ReadyToCloseService
 	notificationService *NotificationService
+	userService         UserService
 }
 
 func NewIncidentService(
@@ -109,6 +117,7 @@ func NewIncidentService(
 	deptRepo repository.DepartmentRepository,
 	classificationRepo repository.ClassificationRepository,
 	rejectionLogRepo repository.RejectionLogRepository,
+	roleRepo repository.RoleRepository,
 	storage *storage.MinIOStorage,
 	db *gorm.DB,
 	wsHub *WSHub,
@@ -121,6 +130,7 @@ func NewIncidentService(
 		deptRepo:           deptRepo,
 		rejectionLogRepo:   rejectionLogRepo,
 		classificationRepo: classificationRepo,
+		roleRepo:           roleRepo,
 		storage:            storage,
 		db:                 db,
 		wsHub:              wsHub,
@@ -136,6 +146,11 @@ func (s *incidentService) SetReadyToCloseService(rtcService ReadyToCloseService)
 // SetNotificationService wires the NotificationService into the incident service.
 func (s *incidentService) SetNotificationService(ns *NotificationService) {
 	s.notificationService = ns
+}
+
+// SetUserService wires the UserService into the incident service.
+func (s *incidentService) SetUserService(us UserService) {
+	s.userService = us
 }
 
 // calculateSLADeadline calculates the SLA deadline based on classification criticality
@@ -196,7 +211,45 @@ func (s *incidentService) calculateSLADeadline(ctx context.Context, classificati
 
 func (s *incidentService) CreateIncident(ctx context.Context, req *models.IncidentCreateRequest, reporterID uuid.UUID) (*models.IncidentResponse, error) {
 	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.IVR) && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
+		// For EPM940, if source is IVR, then fetch user based on mobile no. of citizen
+		user, err := s.userRepo.FindByMobile(ctx, req.ReporterPhone)
+		if err != nil {
+			fmt.Printf("CreateIncident: Errro fetching user by mobile: %v\n", err)
+			return nil, err
+		}
 
+		if user == nil || user.ID == uuid.Nil {
+			role, err := s.roleRepo.FindByCode(ctx, constants.ROLES.CITIZEN)
+			if err != nil {
+				return nil, err
+			}
+
+			registerReq := &models.UserRegisterRequest{
+				Phone:     req.ReporterPhone,
+				Email:     fmt.Sprintf("%s_%s@%s", constants.PREFIX.IVR_EMAIL, req.ReporterPhone, constants.APP.DOMAIN),
+				FirstName: constants.ROLES.CITIZEN,
+				LastName:  req.ReporterName,
+				Username:  fmt.Sprintf("%s_%s", constants.ROLES.CITIZEN, req.ReporterPhone),
+				Password:  pkgutils.GenerateRandomPassword(12),
+			}
+
+			if role != nil && role.ID != uuid.Nil {
+				registerReq.RoleIDs = []uuid.UUID{role.ID}
+			}
+
+			authResp, err := s.userService.Register(ctx, registerReq)
+			if err != nil {
+				fmt.Printf("CreateIncident: Error registering IVR citizen user: %v\n", err)
+				return nil, err
+			}
+
+			reporterID = authResp.User.ID
+		} else {
+			reporterID = user.ID
+		}
+
+	}
 	// Sources that bypass the 500m duplicate check, configurable via SKIP_DUPLICATE_CHECK_SOURCES (comma-separated)
 	skipSourcesEnv := os.Getenv("SKIP_DUPLICATE_CHECK_SOURCES")
 	skipSources := []string{"viusional"} // default
@@ -531,6 +584,46 @@ func (s *incidentService) GetIncident(ctx context.Context, id uuid.UUID) (*model
 	return &resp, nil
 }
 
+func (s *incidentService) FindByIDWithLast6DigitValidation(ctx context.Context, id uuid.UUID, last6Digits string) (*models.IncidentResponse, error) {
+	ivrIncidentReq := &models.IncidentUpdateIVRRequest{
+		IncidentID:      id,
+		LastPhoneDigits: last6Digits,
+	}
+	incident, err := s.incidentRepo.FindByIDWithLast6DigitValidation(ctx, ivrIncidentReq)
+	if err != nil {
+		return nil, err
+	}
+
+	if incident == nil || incident.ID == uuid.Nil {
+		return nil, errors.New("invalid incident")
+	}
+	log.Println("incident fetch via last 6 digit  ")
+
+	if incident.Latitude != nil || incident.Longitude != nil || incident.Version > 1 || incident.ReporterID == nil {
+		return nil, errors.New("incident has already updated location or has been updated since creation, cannot validate with last 6 digits")
+	}
+
+	resp := &models.IncidentResponse{
+		ID:             incident.ID,
+		IncidentNumber: incident.IncidentNumber,
+		Title:          incident.Title,
+		Description:    incident.Description,
+		ReporterEmail:  incident.ReporterEmail,
+		ReporterName:   incident.ReporterName,
+		ReporterID:     *incident.ReporterID,
+		CustomFields:   incident.CustomFields,
+		Latitude:       incident.Latitude,
+		Longitude:      incident.Longitude,
+		Address:        incident.Address,
+		City:           incident.City,
+		State:          incident.State,
+		Country:        incident.Country,
+		PostalCode:     incident.PostalCode,
+		SLADeadline:    incident.SLADeadline,
+	}
+
+	return resp, nil
+}
 func (s *incidentService) ListIncidents(ctx context.Context, filter *models.IncidentFilter) ([]models.IncidentResponse, int64, error) {
 	incidents, total, err := s.incidentRepo.List(ctx, filter)
 	if err != nil {
@@ -765,12 +858,28 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	}
 
 	// Update geolocation fields
-	if req.Latitude != nil {
+	if req.Latitude != nil && req.Latitude != incident.Latitude {
+		latitude := fmt.Sprintf("%f", *req.Latitude)
+		changes = append(changes, models.IncidentFieldChange{
+			FieldName:  "latitude",
+			FieldLabel: "Latitude",
+			OldValue:   &latitude,
+			NewValue:   nil,
+		})
 		incident.Latitude = req.Latitude
 	}
-	if req.Longitude != nil {
+
+	if req.Longitude != nil && req.Longitude != incident.Longitude {
+		longitude := fmt.Sprintf("%f", *req.Longitude)
+		changes = append(changes, models.IncidentFieldChange{
+			FieldName:  "longitude",
+			FieldLabel: "Longitude",
+			OldValue:   &longitude,
+			NewValue:   nil,
+		})
 		incident.Longitude = req.Longitude
 	}
+
 	if req.Address != "" {
 		incident.Address = req.Address
 	}
@@ -826,6 +935,10 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	} else if req.LocationID != nil && *req.LocationID == "" {
 		updates["location_id"] = nil
 	}
+
+	log.Println("req", req.Latitude, req.Longitude)
+	log.Println(req)
+
 	if req.Latitude != nil {
 		updates["latitude"] = *req.Latitude
 	}
@@ -861,6 +974,7 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		updates["sla_breached"] = incident.SLABreached
 	}
 
+	log.Println(len(updates), len(changes))
 	if len(updates) == 0 || len(changes) == 0 {
 		tx.Rollback()
 		return nil, errors.New("no changes detected")
@@ -3132,7 +3246,7 @@ func (s *incidentService) ListRevisions(ctx context.Context, incidentID uuid.UUI
 // Copies feedback and attachments, and sends SMS notifications
 func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIncidentID uuid.UUID, transitionReq *models.IncidentTransitionRequest, userID uuid.UUID) error {
 	fmt.Println("=== [DEBUG] autoCloseMergedIncidents START ===")
-	
+
 	// Get merged incidents
 	mergedIncidents, err := s.incidentMergeRepo.GetMergedIncidents(ctx, masterIncidentID)
 	if err != nil {
@@ -3161,7 +3275,7 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 	// Process each merged incident
 	for i, merged := range mergedIncidents {
 		fmt.Printf("\n[DEBUG] === Processing merged incident %d/%d: %s ===\n", i+1, len(mergedIncidents), merged.IncidentNumber)
-		
+
 		// Copy feedback from master to merged incident
 		if transitionReq.Feedback != nil {
 			fmt.Println("[DEBUG] Copying feedback...")
@@ -3202,7 +3316,7 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 		fmt.Printf("[DEBUG] Checking reporter for SMS - Reporter: %+v\n", merged.Reporter)
 		if merged.Reporter != nil && merged.Reporter.Phone != "" {
 			fmt.Printf("[DEBUG] Sending SMS to: %s\n", merged.Reporter.Phone)
-			
+
 			smsMessage := fmt.Sprintf(
 				"Your incident %s has been automatically closed as it was merged with master incident %s. The master incident has been resolved.",
 				merged.IncidentNumber,
@@ -3238,7 +3352,7 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 				notification.Status = "failed"
 				notification.ErrorMessage = smsErr.Error()
 			}
-			
+
 			fmt.Println("[DEBUG] Creating notification log...")
 			if notifErr := s.incidentRepo.CreateNotification(ctx, notification); notifErr != nil {
 				fmt.Printf("[DEBUG] Failed to create notification log: %v\n", notifErr)
@@ -3290,7 +3404,7 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 // notifyStatusChangeToMergedIncidents sends SMS notifications to merged incident owners when master status changes
 func (s *incidentService) notifyStatusChangeToMergedIncidents(ctx context.Context, masterIncidentID uuid.UUID, newStateName string, comment string, userID uuid.UUID) error {
 	fmt.Println("=== [DEBUG] notifyStatusChangeToMergedIncidents START ===")
-	
+
 	// Get merged incidents with reporter details (already preloaded)
 	mergedIncidents, err := s.incidentMergeRepo.GetMergedIncidents(ctx, masterIncidentID)
 	if err != nil {
@@ -3318,10 +3432,10 @@ func (s *incidentService) notifyStatusChangeToMergedIncidents(ctx context.Contex
 		fmt.Printf("\n[DEBUG] === Processing incident %d/%d: %s ===\n", i+1, len(mergedIncidents), merged.IncidentNumber)
 		fmt.Printf("[DEBUG] Reporter: %+v\n", merged.Reporter)
 		fmt.Println("under in loop")
-		
+
 		if merged.Reporter != nil && merged.Reporter.Phone != "" {
 			fmt.Printf("[DEBUG] Sending SMS to: %s\n", merged.Reporter.Phone)
-			
+
 			smsMessage := fmt.Sprintf(
 				"Your incident %s status has been updated to '%s' (master incident: %s). Comment: %s",
 				merged.IncidentNumber,

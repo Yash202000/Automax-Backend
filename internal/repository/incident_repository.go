@@ -29,7 +29,7 @@ type IncidentRepository interface {
 	WithTx(tx *gorm.DB) IncidentRepository
 	LockForUpdate(ctx context.Context, tx *gorm.DB, id uuid.UUID) (*models.Incident, error)
 	FindUserOpenIncidentsForDuplicateCheck(ctx context.Context, reporterID uuid.UUID) ([]models.Incident, error)
-
+	FindByIDWithLast6DigitValidation(ctx context.Context, req *models.IncidentUpdateIVRRequest) (*models.Incident, error)
 	// Incident number generation
 	GenerateIncidentNumber(ctx context.Context) (string, error)
 	GenerateRequestNumber(ctx context.Context) (string, error)
@@ -293,6 +293,27 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	return incidents, total, nil
 }
 
+func (r *incidentRepository) FindByIDWithLast6DigitValidation(
+	ctx context.Context,
+	req *models.IncidentUpdateIVRRequest,
+) (*models.Incident, error) {
+
+	var incident models.Incident
+
+	err := r.db.WithContext(ctx).Debug().
+		Preload("CurrentState").
+		Preload("Workflow").
+		Joins("JOIN users ON users.id = incidents.reporter_id").
+		Where("incidents.id = ?", req.IncidentID).
+		Where("RIGHT(users.phone, 6) = ?", req.LastPhoneDigits).
+		First(&incident).Error
+
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+
+	return &incident, nil
+}
 func (r *incidentRepository) Update(ctx context.Context, incident *models.Incident) error {
 	return r.db.WithContext(ctx).Save(incident).Error
 }
