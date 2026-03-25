@@ -3354,24 +3354,8 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 			}
 		}
 
-		// Copy attachments from master to merged incident
-		fmt.Printf("[DEBUG] Copying %d attachments...\n", len(masterIncident.Attachments))
-		for _, attachment := range masterIncident.Attachments {
-			newAttachment := &models.IncidentAttachment{
-				IncidentID:          merged.ID,
-				FileName:            attachment.FileName,
-				FileSize:            attachment.FileSize,
-				MimeType:            attachment.MimeType,
-				FilePath:            attachment.FilePath,
-				UploadedByID:        attachment.UploadedByID,
-				TransitionHistoryID: nil,
-			}
-			if attErr := s.incidentRepo.CreateAttachment(ctx, newAttachment); attErr != nil {
-				fmt.Printf("[DEBUG] Failed to create attachment: %v\n", attErr)
-			} else {
-				fmt.Printf("[DEBUG] Attachment copied: %s\n", attachment.FileName)
-			}
-		}
+		// Note: Attachments are NOT copied here because they are already synced in real-time
+		// when uploaded via syncAttachmentToMergedIncidents(). Copying them again would cause duplicates.
 
 		// Send SMS notification to incident owner (reporter)
 		fmt.Printf("[DEBUG] Checking reporter for SMS - Reporter: %+v\n", merged.Reporter)
