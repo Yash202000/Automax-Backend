@@ -167,6 +167,7 @@ func main() {
 	escalationHandler := handlers.NewEscalationHandler(escalationService)
 	escalationGroupHandler := handlers.NewEscalationGroupHandler(escalationGroupService)
 	rejectionLogHandler := handlers.NewRejectionLogHandler(rejectionLogRepo)
+	incidentFeedbackHandler := handlers.NewIncidentFeedbackHandler(incidentRepo)
 	fcmHandler := handlers.NewFCMHandler(fcmService)
 	sentimentHandler := handlers.NewCallerSentimentHandler(callerSentimentService)
 
@@ -284,6 +285,11 @@ func main() {
 	incidents.Put("/:id/assign", authMiddleware.RequirePermission("incidents:assign"), incidentHandler.AssignIncident)
 	incidents.Get("/:id/revisions", authMiddleware.RequirePermission("incidents:view"), incidentHandler.ListRevisions)
 	incidents.Get("/:id/rejection-logs", authMiddleware.RequirePermission("incidents:view"), rejectionLogHandler.GetByIncident)
+
+	feedback := v1.Group("/feedback", authMiddleware.Authenticate())
+	feedback.Get("/", authMiddleware.RequirePermission("incidents:view"), incidentFeedbackHandler.ListAllFeedback)
+	feedback.Post("/:id", authMiddleware.RequirePermission("incidents:update"), incidentFeedbackHandler.CreateFeedback)
+	feedback.Get("/:id", authMiddleware.RequirePermission("incidents:view"), incidentFeedbackHandler.ListFeedback)
 
 	// Closed incident editing (requires special permission)
 	incidents.Patch("/:id/closed-summary", authMiddleware.RequirePermission("incidents:edit-closed"), incidentHandler.UpdateClosedIncidentSummary)
