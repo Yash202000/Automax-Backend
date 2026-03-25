@@ -82,6 +82,7 @@ func main() {
 	escalationRepo := repository.NewEscalationRepository(db)
 	escalationGroupRepo := repository.NewEscalationGroupRepository(db)
 	callerSentimentRepo := repository.NewCallerSentimentRepo(db)
+	goalRepo := repository.NewGoalRepository(db)
 
 	// Initialize WebSocket hub and start it
 	wsHub := services.NewWSHub()
@@ -116,6 +117,10 @@ func main() {
 	escalationGroupService := services.NewEscalationGroupService(escalationGroupRepo, incidentRepo, notificationService, cfg.Escalation)
 	fcmService := services.NewFCMService(repository.NewDeviceTokenRepository(db), notificationLogRepo)
 	callerSentimentService := services.NewCallerSentimentService(callerSentimentRepo)
+
+	// Goal management services
+	documentaClient := storage.NewStubDocumentaClient()
+	goalService := services.NewGoalService(goalRepo, workflowRepo, userRepo, documentaClient, notificationService, actionLogService, cfg)
 
 	// Ready-to-Close service
 	readyToCloseRepo := repository.NewReadyToCloseRepository(db)
@@ -170,6 +175,7 @@ func main() {
 	incidentFeedbackHandler := handlers.NewIncidentFeedbackHandler(incidentRepo)
 	fcmHandler := handlers.NewFCMHandler(fcmService)
 	sentimentHandler := handlers.NewCallerSentimentHandler(callerSentimentService)
+	goalHandler := handlers.NewGoalHandler(goalService)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore, userRepo)
@@ -671,6 +677,36 @@ func main() {
 	callerSentiments.Post("/", sentimentHandler.Create)
 	callerSentiments.Get("/", sentimentHandler.GetAllCallerSentiments)
 	callerSentiments.Get("/:caller_id", sentimentHandler.GetCallerSentiments)
+
+	// ---- GOAL MANAGEMENT ROUTES ----
+	goals := v1.Group("/goals", authMiddleware.Authenticate())
+	goals.Post("/", authMiddleware.RequirePermission("goals:create"), goalHandler.CreateGoal)
+	goals.Get("/", authMiddleware.RequirePermission("goals:view"), goalHandler.ListGoals)
+	goals.Get("/:id", authMiddleware.RequirePermission("goals:view"), goalHandler.GetGoal)
+	goals.Put("/:id", authMiddleware.RequirePermission("goals:update"), goalHandler.UpdateGoal)
+	goals.Delete("/:id", authMiddleware.RequirePermission("goals:delete"), goalHandler.DeleteGoal)
+	goals.Post("/:id/transition", authMiddleware.RequirePermission("goals:update"), goalHandler.TransitionStatus)
+	goals.Post("/:id/collaborators", authMiddleware.RequirePermission("goals:assign"), goalHandler.AddCollaborator)
+	goals.Delete("/:id/collaborators/:user_id", authMiddleware.RequirePermission("goals:assign"), goalHandler.RemoveCollaborator)
+	goals.Post("/:gid/metrics", authMiddleware.RequirePermission("goals:update"), goalHandler.CreateMetric)
+	goals.Put("/metrics/:id", authMiddleware.RequirePermission("goals:update"), goalHandler.UpdateMetric)
+	goals.Delete("/metrics/:id", authMiddleware.RequirePermission("goals:update"), goalHandler.DeleteMetric)
+	goals.Put("/metrics/:id/value", authMiddleware.RequirePermission("goals:update"), goalHandler.UpdateMetricValue)
+	goals.Get("/metrics/:id/history", authMiddleware.RequirePermission("goals:view"), goalHandler.GetMetricHistory)
+	goals.Post("/:gid/evidences", authMiddleware.RequirePermission("goals:update"), goalHandler.UploadEvidence)
+	goals.Get("/:gid/evidences", authMiddleware.RequirePermission("goals:view"), goalHandler.ListEvidences)
+	goals.Get("/evidences/:id", authMiddleware.RequirePermission("goals:view"), goalHandler.GetEvidence)
+	goals.Get("/evidences/:id/preview", authMiddleware.RequirePermission("goals:view"), goalHandler.GetEvidencePreview)
+	goals.Get("/evidences/:id/download", authMiddleware.RequirePermission("goals:view"), goalHandler.DownloadEvidence)
+	goals.Delete("/evidences/:id", authMiddleware.RequirePermission("goals:update"), goalHandler.DeleteEvidence)
+	goals.Get("/evidences/:id/available-transitions", authMiddleware.RequirePermission("goals:view"), goalHandler.GetAvailableEvidenceTransitions)
+	goals.Post("/evidences/:id/transition", authMiddleware.RequirePermission("goals:update"), goalHandler.ExecuteEvidenceTransition)
+	goals.Get("/evidences/:id/transition-history", authMiddleware.RequirePermission("goals:view"), goalHandler.GetEvidenceTransitionHistory)
+
+	// ---- APPROVAL ROUTES ----
+	approvals := v1.Group("/approvals", authMiddleware.Authenticate())
+	approvals.Get("/pending", authMiddleware.RequirePermission("goals:approve"), goalHandler.ListPendingApprovals)
+	approvals.Get("/completed", authMiddleware.RequirePermission("goals:approve"), goalHandler.ListCompletedApprovals)
 
 	go func() {
 		addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
