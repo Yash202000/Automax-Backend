@@ -68,6 +68,7 @@ func (h *IncidentHandler) GetReadyToCloseDurationOptions(c *fiber.Ctx) error {
 
 // Helper to get user's role IDs
 func (h *IncidentHandler) getUserRoleIDs(c *fiber.Ctx) []uuid.UUID {
+
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	roles, err := h.userRepo.GetUserRoles(c.UserContext(), userID)
 	if err != nil {
@@ -765,8 +766,12 @@ func (h *IncidentHandler) GetStatsV2(c *fiber.Ctx) error {
 		filter.Limit = 20
 	}
 
-	// Add user role IDs for state visibility filtering
-	filter.UserRoleIDs = h.getUserRoleIDs(c)
+	// Super admins: IsAdmin=true (no role-visibility restriction on WorkflowStats),
+	if user, ok := c.Locals(constants.ContextKeys.User).(*models.User); ok && user != nil && user.IsSuperAdmin {
+		filter.IsAdmin = true
+	} else {
+		filter.UserRoleIDs = h.getUserRoleIDs(c)
+	}
 
 	stats, err := h.service.GetStatsV2(c.UserContext(), filter)
 	if err != nil {

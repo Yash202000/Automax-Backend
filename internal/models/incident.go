@@ -550,6 +550,7 @@ type IncidentFilter struct {
 	UserRoleIDs      []uuid.UUID `json:"-"`     // For filtering stats by user's roles
 	FilterType       string      `query:"type"` // created | assigned
 	UserID           uuid.UUID   `json:"-"`
+	IsAdmin          bool        `json:"-"` // Super admin bypasses user-scoped assigned filter
 }
 
 // Merge Incident Types
@@ -772,8 +773,7 @@ type IncidentStatsResponseV2 struct {
 	Resolved      int64           `json:"resolved"`
 	Closed        int64           `json:"closed"`
 	SLABreached   int64           `json:"sla_breached"`
-	ByPriority    any             `json:"by_priority"`
-	WorkflowStats []WorkflowStats `json:"workflow_stats"`
+	WorkflowStats []WorkflowStats `json:"workflow_stats,omitempty"`
 }
 
 // Converter functions
