@@ -1280,6 +1280,23 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		return nil, fmt.Errorf("failed to fetch created request: %w", err)
 	}
 
+	// Create transition history entry for convert-to-request action
+	now := time.Now()
+	convertHistory := &models.IncidentTransitionHistory{
+		IncidentID:     incidentID,
+		TransitionID:   nil, // No specific transition for convert action
+		FromStateID:    sourceIncident.CurrentStateID,
+		ToStateID:      terminalState.ID,
+		PerformedByID:  userID,
+		Comment:        fmt.Sprintf("Converted to request %s", requestNumber),
+		TransitionedAt: now,
+		OldValues:      fmt.Sprintf(`{"record_type": "incident", "incident_number": "%s"}`, sourceIncident.IncidentNumber),
+		NewValues:      fmt.Sprintf(`{"record_type": "request", "request_number": "%s"}`, requestNumber),
+	}
+	if histErr := s.incidentRepo.CreateTransitionHistory(ctx, convertHistory); histErr != nil {
+		fmt.Printf("Warning: failed to create transition history for convert-to-request: %v\n", histErr)
+	}
+
 	// Create revision for source incident
 	sourceIncidentNumber := sourceIncident.IncidentNumber
 	changes := []models.IncidentFieldChange{
@@ -1836,6 +1853,23 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 		}
 		if err := s.incidentRepo.UpdateFields(ctx, sourceIncident.ID, updateFields); err != nil {
 			fmt.Printf("Warning: failed to update source incident %s after conversion: %v\n", sourceIncident.IncidentNumber, err)
+		}
+
+		// Create transition history entry for convert-to-request action (bulk)
+		now := time.Now()
+		convertHistory := &models.IncidentTransitionHistory{
+			IncidentID:     sourceIncident.ID,
+			TransitionID:   nil,
+			FromStateID:    sourceIncident.CurrentStateID,
+			ToStateID:      terminalState.ID,
+			PerformedByID:  userID,
+			Comment:        fmt.Sprintf("Converted to request %s (bulk)", requestNumber),
+			TransitionedAt: now,
+			OldValues:      fmt.Sprintf(`{"record_type": "incident", "incident_number": "%s"}`, sourceIncident.IncidentNumber),
+			NewValues:      fmt.Sprintf(`{"record_type": "request", "request_number": "%s"}`, requestNumber),
+		}
+		if histErr := s.incidentRepo.CreateTransitionHistory(ctx, convertHistory); histErr != nil {
+			fmt.Printf("Warning: failed to create transition history for bulk convert-to-request: %v\n", histErr)
 		}
 
 		// Create revision for source incident
