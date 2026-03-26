@@ -757,6 +757,11 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 		update["phone"] = req.Phone
 	}
 
+	if req.MobileVerified != nil && *req.MobileVerified != user.MobileVerified {
+		user.MobileVerified = *req.MobileVerified
+		update["mobile_verified"] = req.MobileVerified
+	}
+
 	if req.Extension != "" && req.Extension != user.Extension {
 		user.Extension = req.Extension
 		update["extension"] = req.Extension
