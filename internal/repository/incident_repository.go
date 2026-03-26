@@ -192,11 +192,7 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	var incidents []models.Incident
 	var total int64
 
-	//query := r.db.WithContext(ctx).Model(&models.Incident{})
-
-	//add the soft-deleted workflow filter to List so  exclude the unused Incident
-	query := r.db.WithContext(ctx).Model(&models.Incident{}).
-		Where("workflow_id IN (SELECT id FROM workflows WHERE deleted_at IS NULL)")
+	query := r.db.WithContext(ctx).Model(&models.Incident{})
 
 	// Apply filters
 	if len(filter.WorkflowID) != 0 {
