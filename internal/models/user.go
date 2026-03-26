@@ -120,8 +120,29 @@ type UserRegisterRequest struct {
 }
 
 type UserLoginRequest struct {
-	Email    string `json:"email" validate:"required,email"`
-	Password string `json:"password" validate:"required"`
+	// Email/Password login
+	Email    string `json:"email" validate:"omitempty,email"`
+	Password string `json:"password" validate:"omitempty"`
+
+	// Mobile/OTP login
+	Phone     string `json:"phone" validate:"omitempty"`
+	SessionID string `json:"session_id" validate:"omitempty"`
+	OTP       string `json:"otp" validate:"omitempty"`
+}
+
+// LoginType returns the type of login request
+func (r *UserLoginRequest) LoginType() string {
+	if r.Email != "" && r.Password != "" {
+		return "email_password"
+	}
+	if r.Phone != "" {
+		if r.SessionID != "" && r.OTP != "" {
+			return "mobile_otp"
+		}
+		// Only phone provided - pre-validation step
+		return "mobile_validation"
+	}
+	return "unknown"
 }
 
 type UserUpdateRequest struct {

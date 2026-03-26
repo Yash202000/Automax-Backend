@@ -58,11 +58,20 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"success": false,
-			"errors":  validationErrors,
-		})
+	// Validate login request - must have either email+password OR phone (with or without OTP)
+	loginType := req.LoginType()
+	if loginType == "unknown" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Provide either email+password OR phone number")
+	}
+
+	// For mobile login, first check if only phone is provided (pre-validation step)
+	if loginType == "mobile_validation" {
+		// Pre-validation: Check if mobile exists and is verified
+		response, err := h.userService.ValidateMobileForLogin(c.UserContext(), req.Phone)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+		}
+		return utils.SuccessResponse(c, fiber.StatusOK, "Mobile verified. Please send OTP.", response)
 	}
 
 	response, err := h.userService.Login(c.UserContext(), &req)

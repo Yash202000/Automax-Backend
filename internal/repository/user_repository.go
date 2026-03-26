@@ -35,6 +35,7 @@ type UserRepository interface {
 
 	FindByExtension(ctx context.Context, extension string) (*models.User, error)
 	FindByMobile(ctx context.Context, phone string) (*models.User, error)
+	FindByPhoneWithRelations(ctx context.Context, phone string) (*models.User, error)
 	FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.User, error)
 	FindByRoleAndContext(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID *uuid.UUID) ([]models.User, error)
 	UpdateProfile(ctx context.Context, user map[string]interface{}) error
@@ -131,6 +132,23 @@ func (r *userRepository) FindByUsername(ctx context.Context, username string) (*
 func (r *userRepository) FindByMobile(ctx context.Context, phone string) (*models.User, error) {
 	var user models.User
 	err := r.db.WithContext(ctx).First(&user, "phone = ?", phone).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *userRepository) FindByPhoneWithRelations(ctx context.Context, phone string) (*models.User, error) {
+	var user models.User
+	err := r.db.WithContext(ctx).
+		Preload("Department").
+		Preload("Location").
+		Preload("Departments").
+		Preload("Locations").
+		Preload("Classifications").
+		Preload("Roles").
+		Preload("Roles.Permissions").
+		First(&user, "phone = ?", phone).Error
 	if err != nil {
 		return nil, err
 	}
