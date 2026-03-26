@@ -490,7 +490,7 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		LastName:          user.LastName,
 		Username:          user.Username,
 		Phone:             user.Phone,
-		Extension:         user.Extension,
+		Extension:         &user.Extension,
 		DepartmentID:      user.DepartmentID,
 		LocationID:        user.LocationID,
 		IsActive:          &oldIsActive, // Capture value, not pointer reference
@@ -565,8 +565,8 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		user.IsActive = *req.IsActive
 	}
 
-	if req.Extension != "" {
-		user.Extension = req.Extension
+	if req.Extension != nil {
+		user.Extension = *req.Extension
 	}
 
 	if err := s.userRepo.Update(ctx, user); err != nil {
@@ -757,8 +757,8 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 		update["phone"] = req.Phone
 	}
 
-	if req.Extension != "" && req.Extension != user.Extension {
-		user.Extension = req.Extension
+	if req.Extension != nil && *req.Extension != user.Extension {
+		user.Extension = *req.Extension
 		update["extension"] = req.Extension
 	}
 
