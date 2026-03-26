@@ -70,11 +70,17 @@ func (m *AuthMiddleware) Authenticate() fiber.Handler {
 		c.Locals(constants.ContextKeys.Role, claims.Role)
 		c.Locals(constants.ContextKeys.Token, token)
 
+		// Preserve IP_ADDRESS and USER_AGENT from RequestContext middleware
+		ipAddress, _ := c.Locals(constants.ContextKeys.IP_ADDRESS).(string)
+		userAgent, _ := c.Locals(constants.ContextKeys.USER_AGENT).(string)
+
 		ctx := c.UserContext()
 		ctx = context.WithValue(ctx, constants.ContextKeys.UserID, claims.UserID)
 		ctx = context.WithValue(ctx, constants.ContextKeys.Email, claims.Email)
 		ctx = context.WithValue(ctx, constants.ContextKeys.Role, claims.Role)
 		ctx = context.WithValue(ctx, constants.ContextKeys.Token, token)
+		ctx = context.WithValue(ctx, constants.ContextKeys.IP_ADDRESS, ipAddress)
+		ctx = context.WithValue(ctx, constants.ContextKeys.USER_AGENT, userAgent)
 		c.SetUserContext(ctx)
 		// Fetch user details to get the name for presence tracking
 		user, err := m.userRepo.FindByID(ctx, claims.UserID)
@@ -113,8 +119,14 @@ func (m *AuthMiddleware) RequirePermission(permissions ...string) fiber.Handler 
 			return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
 		}
 
+		// Preserve IP_ADDRESS and USER_AGENT from RequestContext middleware
+		ipAddress, _ := c.Locals(constants.ContextKeys.IP_ADDRESS).(string)
+		userAgent, _ := c.Locals(constants.ContextKeys.USER_AGENT).(string)
+
 		ctx := c.UserContext()
 		ctx = context.WithValue(ctx, constants.ContextKeys.UserID, userID)
+		ctx = context.WithValue(ctx, constants.ContextKeys.IP_ADDRESS, ipAddress)
+		ctx = context.WithValue(ctx, constants.ContextKeys.USER_AGENT, userAgent)
 		user, err := m.userRepo.FindByIDWithPermissions(ctx, userID)
 		if err != nil {
 			return utils.ErrorResponse(c, fiber.StatusForbidden, "User not found")
@@ -170,11 +182,17 @@ func (m *AuthMiddleware) OptionalAuth() fiber.Handler {
 		c.Locals(constants.ContextKeys.Role, claims.Role)
 		c.Locals(constants.ContextKeys.Token, token)
 
+		// Preserve IP_ADDRESS and USER_AGENT from RequestContext middleware
+		ipAddress, _ := c.Locals(constants.ContextKeys.IP_ADDRESS).(string)
+		userAgent, _ := c.Locals(constants.ContextKeys.USER_AGENT).(string)
+
 		ctx := c.UserContext()
 		ctx = context.WithValue(ctx, constants.ContextKeys.UserID, claims.UserID)
 		ctx = context.WithValue(ctx, constants.ContextKeys.Email, claims.Email)
 		ctx = context.WithValue(ctx, constants.ContextKeys.Role, claims.Role)
 		ctx = context.WithValue(ctx, constants.ContextKeys.Token, token)
+		ctx = context.WithValue(ctx, constants.ContextKeys.IP_ADDRESS, ipAddress)
+		ctx = context.WithValue(ctx, constants.ContextKeys.USER_AGENT, userAgent)
 		c.SetUserContext(ctx)
 		// Fetch user details to get the name for presence tracking
 		user, err := m.userRepo.FindByID(ctx, claims.UserID)
