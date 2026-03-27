@@ -272,6 +272,11 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 		return nil, err
 	}
 
+	// Update last login timestamp
+	go func() {
+		_ = s.userRepo.UpdateLastLogin(context.Background(), user.ID)
+	}()
+
 	// Log successful login
 	go func() {
 		if err := s.actionLogService.LogAction(context.Background(), &LogActionParams{
