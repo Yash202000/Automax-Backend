@@ -118,17 +118,8 @@ func (h *FCMHandler) RemoveDevice(c *fiber.Ctx) error {
 
 func (h *FCMHandler) PushNotification(c *fiber.Ctx) error {
 
-	var req struct {
-		UserID   uuid.UUID `json:"user_id"`
-		Title    string    `json:"title"`
-		Body     string    `json:"body"`
-		UserType string    `json:"user_type"`
-	}
+	var req models.PushRequest
 
-	var sentBy *uuid.UUID
-	if userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID); ok {
-		sentBy = &userID
-	}
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
@@ -136,7 +127,27 @@ func (h *FCMHandler) PushNotification(c *fiber.Ctx) error {
 		})
 	}
 
-	err := h.service.Push(c.UserContext(), req.UserID, req.Title, req.Body, req.UserType, sentBy)
+	// Validate required fields
+	if req.UserID == uuid.Nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"error":   "user_id is required",
+		})
+	}
+
+	if req.Title == "" || req.Body == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"error":   "title and body are required",
+		})
+	}
+
+	// get sentBy from context
+	if userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID); ok {
+		req.SentBy = &userID
+	}
+
+	err := h.service.Push(c.UserContext(), &req)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"success": false,
@@ -146,6 +157,6 @@ func (h *FCMHandler) PushNotification(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{
 		"success": true,
-		"message": "Push notification sent",
+		"message": "Push notification sent successfully",
 	})
 }
