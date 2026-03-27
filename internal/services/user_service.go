@@ -42,6 +42,7 @@ type UserService interface {
 	FindByExtension(ctx context.Context, extension string) (*models.User, error)
 	UpdateProfile(ctx context.Context, req *models.UserUpdateRequest) (*models.UserResponse, error)
 	GenerateTokenViaUserID(ctx context.Context, mobile uuid.UUID) (*models.AuthResponse, error)
+	ValidateMobileForLogin(ctx context.Context, phone string) (*models.UserResponse, error)
 }
 
 type userService struct {
@@ -52,6 +53,7 @@ type userService struct {
 	storage          *storage.MinIOStorage
 	config           *config.Config
 	actionLogService ActionLogService
+	otpService       *OTPService
 }
 
 func NewUserService(
@@ -62,6 +64,7 @@ func NewUserService(
 	storage *storage.MinIOStorage,
 	cfg *config.Config,
 	actionLogService ActionLogService,
+	otpService *OTPService,
 ) UserService {
 	return &userService{
 		userRepo:         userRepo,
@@ -71,6 +74,7 @@ func NewUserService(
 		storage:          storage,
 		config:           cfg,
 		actionLogService: actionLogService,
+		otpService:       otpService,
 	}
 }
 
@@ -190,17 +194,45 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (*models.AuthResponse, error) {
 	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
 	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
-	user, err := s.userRepo.FindByEmailWithRelations(ctx, req.Email)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			// Log failed login attempt
+
+	loginType := req.LoginType()
+
+	var user *models.User
+	var err error
+
+	switch loginType {
+	case "email_password":
+		// Email/Password login
+		user, err = s.userRepo.FindByEmailWithRelations(ctx, req.Email)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				go func() {
+					_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+						UserID:      uuid.Nil,
+						Action:      "login_failed",
+						Module:      "users",
+						ResourceID:  "",
+						Description: fmt.Sprintf("Failed login attempt for email: %s", req.Email),
+						OldValue:    nil,
+						NewValue:    nil,
+						IPAddress:   ipAddress,
+						UserAgent:   userAgent,
+						Status:      "failed",
+					})
+				}()
+				return nil, errors.New("invalid credentials")
+			}
+			return nil, err
+		}
+
+		if !utils.CheckPassword(req.Password, user.Password) {
 			go func() {
 				_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
-					UserID:      uuid.Nil, // Unknown user at this point
+					UserID:      user.ID,
 					Action:      "login_failed",
 					Module:      "users",
-					ResourceID:  "",
-					Description: fmt.Sprintf("Failed login attempt for email: %s", req.Email),
+					ResourceID:  user.ID.String(),
+					Description: fmt.Sprintf("Failed login attempt for user: %s (%s)", user.Username, user.Email),
 					OldValue:    nil,
 					NewValue:    nil,
 					IPAddress:   ipAddress,
@@ -210,30 +242,81 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 			}()
 			return nil, errors.New("invalid credentials")
 		}
-		return nil, err
+
+	case "mobile_otp":
+		// Mobile/OTP login
+		if s.otpService == nil {
+			return nil, errors.New("OTP service not available")
+		}
+
+		// First check if user exists with this phone number
+		user, err = s.userRepo.FindByPhoneWithRelations(ctx, req.Phone)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				go func() {
+					_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+						UserID:      uuid.Nil,
+						Action:      "login_failed",
+						Module:      "users",
+						ResourceID:  "",
+						Description: fmt.Sprintf("No user found for phone: %s", req.Phone),
+						OldValue:    nil,
+						NewValue:    nil,
+						IPAddress:   ipAddress,
+						UserAgent:   userAgent,
+						Status:      "failed",
+					})
+				}()
+				return nil, errors.New("no user found for this mobile number")
+			}
+			return nil, err
+		}
+
+		// Check if mobile number is verified
+		if !user.MobileVerified {
+			go func() {
+				_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+					UserID:      user.ID,
+					Action:      "login_failed",
+					Module:      "users",
+					ResourceID:  user.ID.String(),
+					Description: fmt.Sprintf("Login attempt with unverified mobile: %s (%s)", user.Username, user.Phone),
+					OldValue:    nil,
+					NewValue:    nil,
+					IPAddress:   ipAddress,
+					UserAgent:   userAgent,
+					Status:      "failed",
+				})
+			}()
+			return nil, errors.New("mobile number is not verified. Please contact administrator to verify your mobile number")
+		}
+
+		// Verify OTP
+		err = s.otpService.VerifyOTP(ctx, req.Phone, req.SessionID, req.OTP)
+		if err != nil {
+			go func() {
+				_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+					UserID:      uuid.Nil,
+					Action:      "login_failed_otp",
+					Module:      "users",
+					ResourceID:  "",
+					Description: fmt.Sprintf("Failed OTP login attempt for phone: %s - %v", req.Phone, err),
+					OldValue:    nil,
+					NewValue:    nil,
+					IPAddress:   ipAddress,
+					UserAgent:   userAgent,
+					Status:      "failed",
+				})
+			}()
+			return nil, errors.New("invalid or expired OTP")
+		}
+
+	default:
+		return nil, errors.New("invalid login credentials")
 	}
 
-	if !utils.CheckPassword(req.Password, user.Password) {
-		// Log failed login attempt
-		go func() {
-			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
-				UserID:      user.ID,
-				Action:      "login_failed",
-				Module:      "users",
-				ResourceID:  user.ID.String(),
-				Description: fmt.Sprintf("Failed login attempt for user: %s (%s)", user.Username, user.Email),
-				OldValue:    nil,
-				NewValue:    nil,
-				IPAddress:   ipAddress,
-				UserAgent:   userAgent,
-				Status:      "failed",
-			})
-		}()
-		return nil, errors.New("invalid credentials")
-	}
-
+	// Check if user is active
 	if !user.IsActive {
-		// Log failed login attempt due to deactivation
 		go func() {
 			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
 				UserID:      user.ID,
@@ -272,6 +355,11 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 		return nil, err
 	}
 
+	// Update last login timestamp
+	go func() {
+		_ = s.userRepo.UpdateLastLogin(context.Background(), user.ID)
+	}()
+
 	// Log successful login
 	go func() {
 		if err := s.actionLogService.LogAction(context.Background(), &LogActionParams{
@@ -286,7 +374,6 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 			UserAgent:   userAgent,
 			Status:      "success",
 		}); err != nil {
-			// Log the error for debugging
 			fmt.Printf("Error logging login action: %v\n", err)
 		}
 	}()
@@ -297,6 +384,31 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 		RefreshToken: tokenPair.RefreshToken,
 		ExpiresIn:    tokenPair.ExpiresIn,
 	}, nil
+}
+
+func (s *userService) ValidateMobileForLogin(ctx context.Context, phone string) (*models.UserResponse, error) {
+	// Check if user exists with this phone number
+	user, err := s.userRepo.FindByPhoneWithRelations(ctx, phone)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("no user found for this mobile number")
+		}
+		return nil, err
+	}
+
+	// Check if mobile number is verified
+	if !user.MobileVerified {
+		return nil, errors.New("mobile number is not verified. Please contact administrator to verify your mobile number")
+	}
+
+	// Check if user is active
+	if !user.IsActive {
+		return nil, errors.New("account is deactivated")
+	}
+
+	// Mobile is verified and user is active - return user info
+	resp := models.ToUserResponse(user)
+	return &resp, nil
 }
 
 func (s *userService) RefreshToken(ctx context.Context, refreshToken string) (*models.AuthResponse, error) {
@@ -757,8 +869,13 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 		update["phone"] = req.Phone
 	}
 
-	if req.Extension != nil && *req.Extension != user.Extension {
-		user.Extension = *req.Extension
+	if req.MobileVerified != nil && *req.MobileVerified != user.MobileVerified {
+		user.MobileVerified = *req.MobileVerified
+		update["mobile_verified"] = req.MobileVerified
+	}
+
+	if req.Extension != "" && req.Extension != user.Extension {
+		user.Extension = req.Extension
 		update["extension"] = req.Extension
 	}
 
@@ -875,6 +992,19 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 				Description: fmt.Sprintf("Password changed for user: %s (%s)", user.Username, user.Email),
 				OldValue:    map[string]interface{}{"has_password": true},
 				NewValue:    map[string]interface{}{"has_password": true},
+				IPAddress:   ipAddress,
+				UserAgent:   userAgent,
+				Status:      "success",
+			})
+			// Log logout action since password change forces logout
+			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+				UserID:      userID,
+				Action:      "logout",
+				Module:      "users",
+				ResourceID:  userID.String(),
+				Description: fmt.Sprintf("User logged out after password change"),
+				OldValue:    nil,
+				NewValue:    nil,
 				IPAddress:   ipAddress,
 				UserAgent:   userAgent,
 				Status:      "success",

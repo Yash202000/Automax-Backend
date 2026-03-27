@@ -181,6 +181,11 @@ func (h *LDAPHandler) Login(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to store session")
 	}
 
+	// Update last login timestamp
+	go func() {
+		_ = h.userRepo.UpdateLastLogin(context.Background(), user.ID)
+	}()
+
 	userResponse := models.ToUserResponse(user)
 
 	return c.JSON(fiber.Map{

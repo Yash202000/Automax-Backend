@@ -20,6 +20,7 @@ type UserRepository interface {
 	FindByUsername(ctx context.Context, username string) (*models.User, error)
 	FindByLast6Digits(ctx context.Context, last6Digits string) (*models.User, error)
 	Update(ctx context.Context, user *models.User) error
+	UpdateLastLogin(ctx context.Context, id uuid.UUID) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, page, limit int, search string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.User, int64, error)
 	ListByDepartment(ctx context.Context, departmentID uuid.UUID, page, limit int) ([]models.User, int64, error)
@@ -35,6 +36,7 @@ type UserRepository interface {
 
 	FindByExtension(ctx context.Context, extension string) (*models.User, error)
 	FindByMobile(ctx context.Context, phone string) (*models.User, error)
+	FindByPhoneWithRelations(ctx context.Context, phone string) (*models.User, error)
 	FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.User, error)
 	FindByRoleAndContext(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID *uuid.UUID) ([]models.User, error)
 	UpdateProfile(ctx context.Context, user map[string]interface{}) error
@@ -137,6 +139,23 @@ func (r *userRepository) FindByMobile(ctx context.Context, phone string) (*model
 	return &user, nil
 }
 
+func (r *userRepository) FindByPhoneWithRelations(ctx context.Context, phone string) (*models.User, error) {
+	var user models.User
+	err := r.db.WithContext(ctx).
+		Preload("Department").
+		Preload("Location").
+		Preload("Departments").
+		Preload("Locations").
+		Preload("Classifications").
+		Preload("Roles").
+		Preload("Roles.Permissions").
+		First(&user, "phone = ?", phone).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
 func (r *userRepository) FindByLast6Digits(ctx context.Context, last6Digits string) (*models.User, error) {
 	var user models.User
 	log.Printf("Query start: %s", last6Digits)
@@ -149,6 +168,10 @@ func (r *userRepository) FindByLast6Digits(ctx context.Context, last6Digits stri
 
 func (r *userRepository) Update(ctx context.Context, user *models.User) error {
 	return r.db.WithContext(ctx).Save(user).Error
+}
+
+func (r *userRepository) UpdateLastLogin(ctx context.Context, id uuid.UUID) error {
+	return r.db.WithContext(ctx).Model(&models.User{}).Where("id = ?", id).Update("last_login_at", gorm.Expr("NOW()")).Error
 }
 
 // update only selected fields not whole user record fro profile updates (e.g., not touching password hash, roles, etc.)

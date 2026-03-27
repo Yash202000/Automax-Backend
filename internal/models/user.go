@@ -23,6 +23,7 @@ type User struct {
 	FirstName       string           `gorm:"size:100" json:"first_name"`
 	LastName        string           `gorm:"size:100" json:"last_name"`
 	Phone           string           `gorm:"size:20" json:"phone"`
+	MobileVerified  bool             `gorm:"default:false" json:"mobile_verified"`
 	Avatar          string           `gorm:"size:500" json:"avatar"`
 	DepartmentID    *uuid.UUID       `gorm:"type:uuid;index" json:"department_id"`
 	Department      *Department      `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
@@ -119,8 +120,29 @@ type UserRegisterRequest struct {
 }
 
 type UserLoginRequest struct {
-	Email    string `json:"email" validate:"required,email"`
-	Password string `json:"password" validate:"required"`
+	// Email/Password login
+	Email    string `json:"email" validate:"omitempty,email"`
+	Password string `json:"password" validate:"omitempty"`
+
+	// Mobile/OTP login
+	Phone     string `json:"phone" validate:"omitempty"`
+	SessionID string `json:"session_id" validate:"omitempty"`
+	OTP       string `json:"otp" validate:"omitempty"`
+}
+
+// LoginType returns the type of login request
+func (r *UserLoginRequest) LoginType() string {
+	if r.Email != "" && r.Password != "" {
+		return "email_password"
+	}
+	if r.Phone != "" {
+		if r.SessionID != "" && r.OTP != "" {
+			return "mobile_otp"
+		}
+		// Only phone provided - pre-validation step
+		return "mobile_validation"
+	}
+	return "unknown"
 }
 
 type UserUpdateRequest struct {
@@ -128,7 +150,8 @@ type UserUpdateRequest struct {
 	LastName          string      `json:"last_name" validate:"max=100"`
 	Username          string      `json:"username" validate:"omitempty,min=3,max=50"`
 	Phone             string      `json:"phone" validate:"max=20"`
-	Extension         *string     `json:"extension" validate:"max=20"`
+	MobileVerified    *bool       `json:"mobile_verified"`
+	Extension         string      `json:"extension" validate:"max=20"`
 	DepartmentID      *uuid.UUID  `json:"department_id"`
 	LocationID        *uuid.UUID  `json:"location_id"`
 	DepartmentIDs     []uuid.UUID `json:"department_ids"`
@@ -145,6 +168,7 @@ type UserResponse struct {
 	FirstName       string                   `json:"first_name"`
 	LastName        string                   `json:"last_name"`
 	Phone           string                   `json:"phone"`
+	MobileVerified  bool                     `json:"mobile_verified"`
 	Avatar          string                   `json:"avatar"`
 	DepartmentID    *uuid.UUID               `json:"department_id"`
 	Department      *DepartmentResponse      `json:"department,omitempty"`
@@ -197,22 +221,23 @@ type UserMatchResponse struct {
 
 func ToUserResponse(user *User) UserResponse {
 	resp := UserResponse{
-		ID:           user.ID,
-		Email:        user.Email,
-		Username:     user.Username,
-		FirstName:    user.FirstName,
-		LastName:     user.LastName,
-		Phone:        user.Phone,
-		Avatar:       user.Avatar,
-		DepartmentID: user.DepartmentID,
-		LocationID:   user.LocationID,
-		IsActive:     user.IsActive,
-		IsSuperAdmin: user.IsSuperAdmin,
-		Extension:    user.Extension,
-		CallStatus:   string(user.CallStatus),
-		LastLoginAt:  user.LastLoginAt,
-		CreatedAt:    user.CreatedAt,
-		Permissions:  user.GetPermissions(),
+		ID:             user.ID,
+		Email:          user.Email,
+		Username:       user.Username,
+		FirstName:      user.FirstName,
+		LastName:       user.LastName,
+		Phone:          user.Phone,
+		MobileVerified: user.MobileVerified,
+		Avatar:         user.Avatar,
+		DepartmentID:   user.DepartmentID,
+		LocationID:     user.LocationID,
+		IsActive:       user.IsActive,
+		IsSuperAdmin:   user.IsSuperAdmin,
+		Extension:      user.Extension,
+		CallStatus:     string(user.CallStatus),
+		LastLoginAt:    user.LastLoginAt,
+		CreatedAt:      user.CreatedAt,
+		Permissions:    user.GetPermissions(),
 	}
 
 	if user.Department != nil {

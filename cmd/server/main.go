@@ -93,7 +93,9 @@ func main() {
 
 	// Initialize services
 	actionLogService := services.NewActionLogService(actionLogRepo)
-	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg, actionLogService)
+	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo, userRepo, minioStorage)
+	otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo)
+	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg, actionLogService, otpService)
 
 	// Initialize LDAP service
 	ldapService, err := services.NewLDAPService(cfg)
@@ -111,8 +113,6 @@ func main() {
 	applicationLinkService := services.NewApplicationLinkService(applicationLinkRepo)
 	settingsService := services.NewSettingsService(settingsRepo)
 	presenceService := services.NewPresenceService(redisClient)
-	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo, userRepo, minioStorage)
-	otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo)
 	escalationService := services.NewEscalationService(escalationRepo, incidentRepo, workflowRepo, userRepo, notificationService)
 	escalationGroupService := services.NewEscalationGroupService(escalationGroupRepo, incidentRepo, notificationService, cfg.Escalation)
 	fcmService := services.NewFCMService(repository.NewDeviceTokenRepository(db), notificationLogRepo)
@@ -646,7 +646,12 @@ func main() {
 	notifications.Delete("/:id/permanent", authMiddleware.RequirePermission("notifications:delete"), notificationHandler.PermanentDelete)
 
 	// OTP Routes
+	// Public OTP routes for mobile login (no auth required)
+	otpPublic := v1.Group("/otp")
+	otpPublic.Post("/send", otpHandler.SendOTP)
+	otpPublic.Post("/verify", otpHandler.VerifyOTP)
 
+	// Authenticated OTP routes (for admin users to send OTP to others)
 	otp := v1.Group("/otp", authMiddleware.Authenticate())
 	otp.Post("/send", authMiddleware.RequirePermission("otp:send"), otpHandler.SendOTP)
 	otp.Post("/verify", authMiddleware.RequirePermission("otp:verify"), otpHandler.VerifyOTP)

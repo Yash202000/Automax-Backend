@@ -137,6 +137,11 @@ func Migrate(db *gorm.DB) error {
 		log.Printf("Warning: closed incident edit tracking migration failed: %v", err)
 	}
 
+	// Migrate user mobile verified
+	if err := migrations.MigrateUserMobileVerified(db); err != nil {
+		log.Printf("Warning: user mobile verified migration failed: %v", err)
+	}
+
 	log.Println("Database migrations completed")
 	return nil
 }
