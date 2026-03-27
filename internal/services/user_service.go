@@ -292,7 +292,7 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 		}
 
 		// Verify OTP
-		err = s.otpService.VerifyOTP(ctx, req.Phone, req.SessionID, req.OTP)
+		_, err = s.otpService.VerifyOTP(ctx, req.Phone, req.SessionID, req.OTP)
 		if err != nil {
 			go func() {
 				_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
@@ -602,7 +602,7 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		LastName:          user.LastName,
 		Username:          user.Username,
 		Phone:             user.Phone,
-		Extension:         &user.Extension,
+		Extension:         user.Extension,
 		DepartmentID:      user.DepartmentID,
 		LocationID:        user.LocationID,
 		IsActive:          &oldIsActive, // Capture value, not pointer reference
@@ -677,8 +677,8 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		user.IsActive = *req.IsActive
 	}
 
-	if req.Extension != nil {
-		user.Extension = *req.Extension
+	if req.Extension != "" {
+		user.Extension = req.Extension
 	}
 
 	if err := s.userRepo.Update(ctx, user); err != nil {
