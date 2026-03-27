@@ -355,6 +355,11 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 		return nil, err
 	}
 
+	// Update last login timestamp
+	go func() {
+		_ = s.userRepo.UpdateLastLogin(context.Background(), user.ID)
+	}()
+
 	// Log successful login
 	go func() {
 		if err := s.actionLogService.LogAction(context.Background(), &LogActionParams{
@@ -987,6 +992,19 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 				Description: fmt.Sprintf("Password changed for user: %s (%s)", user.Username, user.Email),
 				OldValue:    map[string]interface{}{"has_password": true},
 				NewValue:    map[string]interface{}{"has_password": true},
+				IPAddress:   ipAddress,
+				UserAgent:   userAgent,
+				Status:      "success",
+			})
+			// Log logout action since password change forces logout
+			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+				UserID:      userID,
+				Action:      "logout",
+				Module:      "users",
+				ResourceID:  userID.String(),
+				Description: fmt.Sprintf("User logged out after password change"),
+				OldValue:    nil,
+				NewValue:    nil,
 				IPAddress:   ipAddress,
 				UserAgent:   userAgent,
 				Status:      "success",
