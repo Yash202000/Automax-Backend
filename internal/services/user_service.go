@@ -879,6 +879,19 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 				UserAgent:   userAgent,
 				Status:      "success",
 			})
+			// Log logout action since password change forces logout
+			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+				UserID:      userID,
+				Action:      "logout",
+				Module:      "users",
+				ResourceID:  userID.String(),
+				Description: fmt.Sprintf("User logged out after password change"),
+				OldValue:    nil,
+				NewValue:    nil,
+				IPAddress:   ipAddress,
+				UserAgent:   userAgent,
+				Status:      "success",
+			})
 		}()
 	}
 
