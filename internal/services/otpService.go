@@ -6,13 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math/big"
 	"os"
 	"strconv"
 	"time"
 
+	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -22,17 +22,23 @@ type OTPService struct {
 	redis               *redis.Client
 	notificationService *NotificationService
 	notificationLogRepo repository.NotificationLogRepository
+	userRepo            repository.UserRepository
+	userService         UserService
 }
 
 func NewOTPService(
 	redisClient *redis.Client,
 	notificationService *NotificationService,
 	notificationLogRepo repository.NotificationLogRepository,
+	userRepo repository.UserRepository,
+	userService UserService,
 ) *OTPService {
 	return &OTPService{
 		redis:               redisClient,
 		notificationService: notificationService,
 		notificationLogRepo: notificationLogRepo,
+		userRepo:            userRepo,
+		userService:         userService,
 	}
 }
 
@@ -141,8 +147,6 @@ func (s *OTPService) SendOTP(
 	}
 
 	err = s.sendOTPNotification(ctx, senderMode, phone, otp, &sessionID)
-
-	fmt.Println("ERR INTO SERVICE", err)
 	if err != nil {
 		s.redis.Del(ctx, key)
 		return "", fmt.Errorf("failed to send otp: %w", err)
@@ -181,62 +185,128 @@ func (s *OTPService) sendOTPNotification(ctx context.Context, channel, phone, ot
 	body := (otp)
 	_, err := s.notificationService.SendNotification(ctx, channel, nil, "en", []string{phone}, nil, nil, "", body, nil, nil, nil, sessionID)
 	if err != nil {
-		return fmt.Errorf("ERR INTO WHATSAPP SERVICE: %w", err)
+		return fmt.Errorf("Err Into Send Notification Service: %w", err)
 	}
 	return err
 }
 
-func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID string, inputOTP string) error {
+func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID string, inputOTP string) (*models.LoginResponse, error) {
+
 	key := "otp:" + phone + "--" + sessionID
+
 	val, err := s.redis.Get(ctx, key).Result()
 	if err != nil {
-		return fmt.Errorf("otp expired or invalid session")
+		return nil, fmt.Errorf("otp expired or invalid session")
 	}
 
-	var data struct {
-		Phone      string `json:"phone"`
-		Hash       string `json:"hash"`
-		SenderMode string `json:"senderMode"`
-		Attempts   int    `json:"attempts"`
-	}
-
+	var data models.OTPData
 	err = json.Unmarshal([]byte(val), &data)
 	if err != nil {
-		return fmt.Errorf("invalid stored otp data")
+		return nil, fmt.Errorf("invalid stored otp data")
 	}
 
-	// Load verify max attempt
 	maxVerifyStr := os.Getenv("VERIFY_OTP_MAX_ATTEMPT")
 	maxVerify, _ := strconv.Atoi(maxVerifyStr)
 	if maxVerify == 0 {
 		maxVerify = 3
 	}
 
-	// Check max verify attempts
 	if data.Attempts >= maxVerify {
 		s.redis.Del(ctx, key)
-		return fmt.Errorf("max verify attempts exceeded")
+		return nil, fmt.Errorf("max verify attempts exceeded")
 	}
 
-	// Check OTP match
 	if data.Hash != HashOTP(inputOTP) {
+
 		data.Attempts++
 		updatedData, _ := json.Marshal(data)
 		ttl, _ := s.redis.TTL(ctx, key).Result()
 
-		// Update attempts but keep original TTL
 		s.redis.Set(ctx, key, updatedData, ttl)
 
-		return fmt.Errorf("invalid otp")
-	}
-	// UPDATE DB
-	err = s.notificationLogRepo.MarkOTPVerified(ctx, sessionID, time.Now())
-	if err != nil {
-		return errors.New("failed to update otp status")
+		return nil, fmt.Errorf("invalid otp")
 	}
 
+	// Fetch user by phone
+	user, err := s.userRepo.FindByMobile(ctx, phone)
+	if err != nil {
+		return nil, fmt.Errorf("user not found")
+	}
+
+	authResp, err := s.userService.GenerateTokenViaUserID(ctx, user.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate token: %w", err)
+	}
+	// Response
+	resp := &models.LoginResponse{
+		Token:        authResp.Token,
+		RefreshToken: authResp.RefreshToken,
+		ExpiresIn:    authResp.ExpiresIn,
+		User:         user,
+	}
+
+	// update notification log
+	err = s.notificationLogRepo.MarkOTPVerified(ctx, sessionID, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("failed to update otp status")
+	}
 	//SUCCESS  then DELETE OTP FROM REDIS
 	s.redis.Del(ctx, key)
 
-	return nil
+	return resp, nil
 }
+
+// func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID string, inputOTP string) error {
+// 	key := "otp:" + phone + "--" + sessionID
+// 	val, err := s.redis.Get(ctx, key).Result()
+// 	if err != nil {
+// 		return fmt.Errorf("otp expired or invalid session")
+// 	}
+
+// 	var data struct {
+// 		Phone      string `json:"phone"`
+// 		Hash       string `json:"hash"`
+// 		SenderMode string `json:"senderMode"`
+// 		Attempts   int    `json:"attempts"`
+// 	}
+
+// 	err = json.Unmarshal([]byte(val), &data)
+// 	if err != nil {
+// 		return fmt.Errorf("invalid stored otp data")
+// 	}
+
+// 	// Load verify max attempt
+// 	maxVerifyStr := os.Getenv("VERIFY_OTP_MAX_ATTEMPT")
+// 	maxVerify, _ := strconv.Atoi(maxVerifyStr)
+// 	if maxVerify == 0 {
+// 		maxVerify = 3
+// 	}
+
+// 	// Check max verify attempts
+// 	if data.Attempts >= maxVerify {
+// 		s.redis.Del(ctx, key)
+// 		return fmt.Errorf("max verify attempts exceeded")
+// 	}
+
+// 	// Check OTP match
+// 	if data.Hash != HashOTP(inputOTP) {
+// 		data.Attempts++
+// 		updatedData, _ := json.Marshal(data)
+// 		ttl, _ := s.redis.TTL(ctx, key).Result()
+
+// 		// Update attempts but keep original TTL
+// 		s.redis.Set(ctx, key, updatedData, ttl)
+
+// 		return fmt.Errorf("invalid otp")
+// 	}
+// 	// UPDATE DB
+// 	err = s.notificationLogRepo.MarkOTPVerified(ctx, sessionID, time.Now())
+// 	if err != nil {
+// 		return errors.New("failed to update otp status")
+// 	}
+
+// 	//SUCCESS  then DELETE OTP FROM REDIS
+// 	s.redis.Del(ctx, key)
+
+// 	return nil
+// }

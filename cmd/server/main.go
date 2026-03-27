@@ -113,6 +113,8 @@ func main() {
 	applicationLinkService := services.NewApplicationLinkService(applicationLinkRepo)
 	settingsService := services.NewSettingsService(settingsRepo)
 	presenceService := services.NewPresenceService(redisClient)
+	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo, userRepo, minioStorage)
+	otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo, userRepo, userService)
 	escalationService := services.NewEscalationService(escalationRepo, incidentRepo, workflowRepo, userRepo, notificationService)
 	escalationGroupService := services.NewEscalationGroupService(escalationGroupRepo, incidentRepo, notificationService, cfg.Escalation)
 	fcmService := services.NewFCMService(repository.NewDeviceTokenRepository(db), notificationLogRepo)

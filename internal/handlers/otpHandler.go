@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
@@ -55,11 +56,7 @@ func (h *OTPHandler) SendOTP(c *fiber.Ctx) error {
 
 func (h *OTPHandler) VerifyOTP(c *fiber.Ctx) error {
 
-	var req struct {
-		Phone     string `json:"phone"`
-		SessionID string `json:"session_id"`
-		OTP       string `json:"otp"`
-	}
+	var req models.OTPReq
 
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid request")
@@ -69,18 +66,12 @@ func (h *OTPHandler) VerifyOTP(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "phone, session_id and otp required")
 	}
 
-	err := h.otpService.VerifyOTP(
-		c.UserContext(),
-		req.Phone,
-		req.SessionID,
-		req.OTP,
-	)
+	resp, err := h.otpService.VerifyOTP(c.UserContext(), req.Phone, req.SessionID, req.OTP)
 
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
 
-	return c.JSON(fiber.Map{
-		"message": "OTP verified successfully",
-	})
+	return utils.SuccessResponse(c, fiber.StatusOK, "OTP verified successfully", resp)
+
 }
