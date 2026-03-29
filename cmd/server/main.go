@@ -114,7 +114,7 @@ func main() {
 	settingsService := services.NewSettingsService(settingsRepo)
 	presenceService := services.NewPresenceService(redisClient)
 	escalationService := services.NewEscalationService(escalationRepo, incidentRepo, workflowRepo, userRepo, notificationService)
-	escalationGroupService := services.NewEscalationGroupService(escalationGroupRepo, incidentRepo, notificationService, cfg.Escalation)
+	escalationGroupService := services.NewEscalationGroupService(escalationGroupRepo, incidentRepo, userRepo, notificationService, cfg.Escalation)
 	fcmService := services.NewFCMService(repository.NewDeviceTokenRepository(db), notificationLogRepo)
 	callerSentimentService := services.NewCallerSentimentService(callerSentimentRepo)
 
@@ -663,7 +663,7 @@ func main() {
 	escalation.Get("/incident/:incident_id", escalationHandler.ListByIncident)
 
 	// Custom Escalation Groups (admin)
-	escalationGroups := admin.Group("/escalation-groups", authMiddleware.Authenticate())
+	escalationGroups := admin.Group("/escalation-groups", authMiddleware.Authenticate(), authMiddleware.RequirePermission("escalation-groups:manage_rules"))
 	escalationGroups.Post("/", escalationGroupHandler.Create)
 	escalationGroups.Get("/", escalationGroupHandler.List)
 	escalationGroups.Get("/:id", escalationGroupHandler.GetByID)

@@ -23,6 +23,7 @@ import (
 type EscalationGroupService struct {
 	groupRepo           repository.EscalationGroupRepository
 	incidentRepo        repository.IncidentRepository
+	userRepo            repository.UserRepository
 	notificationService *NotificationService
 	frontendURL         string
 	dailyHour           int
@@ -31,7 +32,7 @@ type EscalationGroupService struct {
 	weeklyMinute        int
 }
 
-func NewEscalationGroupService(groupRepo repository.EscalationGroupRepository, incidentRepo repository.IncidentRepository, notificationService *NotificationService, cfg config.EscalationConfig) *EscalationGroupService {
+func NewEscalationGroupService(groupRepo repository.EscalationGroupRepository, incidentRepo repository.IncidentRepository, userRepo repository.UserRepository, notificationService *NotificationService, cfg config.EscalationConfig) *EscalationGroupService {
 	dailyHour, _ := strconv.Atoi(os.Getenv("ESCALATION_DAILY_HOUR"))
 	dailyMinute, _ := strconv.Atoi(os.Getenv("ESCALATION_DAILY_MINUTE"))
 	weeklyHour, _ := strconv.Atoi(os.Getenv("ESCALATION_WEEKLY_HOUR"))
@@ -39,6 +40,7 @@ func NewEscalationGroupService(groupRepo repository.EscalationGroupRepository, i
 	return &EscalationGroupService{
 		groupRepo:           groupRepo,
 		incidentRepo:        incidentRepo,
+		userRepo:            userRepo,
 		notificationService: notificationService,
 		dailyHour:           dailyHour,
 		dailyMinute:         dailyMinute,
@@ -202,7 +204,7 @@ func (s *EscalationGroupService) ProcessGroupEscalations(ctx context.Context) er
 			continue
 		}
 
-		// Fetch open SLA-breached incidents for this group's classification.
+		// Fetch open SLA-breached incidents for sla this group's classification.
 		// Pass zero UUID for locationID to skip that filter.
 		incidents, err := s.incidentRepo.GetBreachedByFilter(ctx, uuid.UUID{}, group.ClassificationID)
 		if err != nil {
@@ -224,9 +226,9 @@ func (s *EscalationGroupService) ProcessGroupEscalations(ctx context.Context) er
 			group.Name, len(incidents), len(group.Users), group.Channel)
 
 		// URL linking to the SLA-breached incidents page on the frontend
-		frontendURL := os.Getenv("FRONTEND_BASE_URL")
+		frontendURL := os.Getenv("FRONTEND_URL")
 		if frontendURL == "" {
-			log.Printf("[EscalationGroupService] FRONTEND_BASE_URL is not set — skipping group '%s'", group.Name)
+			log.Printf("[EscalationGroupService] FRONTEND_URL is not set — skipping group '%s'", group.Name)
 			continue
 		}
 		slaPageURL := fmt.Sprintf("%s/incidents?sla_breached=true", frontendURL)
@@ -257,6 +259,16 @@ func (s *EscalationGroupService) sendGroupNotification(ctx context.Context, grou
 ) {
 
 	smsBody := templates.BuildSLABreachSMS(
+		user.FirstName,
+		user.LastName,
+		incidentCount,
+		classificationName,
+		slaPageURL,
+	)
+
+	smsHTML := templates.BuildSLABreachSMSHTML(
+		user.FirstName,
+		user.LastName,
 		incidentCount,
 		classificationName,
 		slaPageURL,
@@ -270,6 +282,14 @@ func (s *EscalationGroupService) sendGroupNotification(ctx context.Context, grou
 		slaPageURL,
 	)
 
+	// sentBy: use the first user with escalation-groups:manage permission; fall back to the notified user
+	var sentBy *uuid.UUID
+	if managers, err := s.userRepo.FindByPermissionCode(ctx, "escalation-groups:manage_rules"); err == nil && len(managers) > 0 {
+		sentBy = &managers[0].ID
+	} else {
+		sentBy = &user.ID
+	}
+
 	sendSMS := group.Channel == "sms" || group.Channel == "both"
 	sendEmail := group.Channel == "email" || group.Channel == "both"
 
@@ -277,8 +297,7 @@ func (s *EscalationGroupService) sendGroupNotification(ctx context.Context, grou
 		_, err := s.notificationService.SendNotification(
 			ctx, "sms", nil, "en",
 			[]string{user.Phone}, nil, nil,
-			"", smsBody,
-			nil, nil, nil, nil,
+			"", smsBody, map[string]string{"body_html": smsHTML}, nil, sentBy, nil,
 		)
 		if err != nil {
 			log.Printf("[EscalationGroupService] SMS failed for user %s (group '%s'): %v", user.Email, group.Name, err)
@@ -299,7 +318,7 @@ func (s *EscalationGroupService) sendGroupNotification(ctx context.Context, grou
 			ctx, "email", nil, "en",
 			[]string{user.Email}, nil, nil,
 			emailSubject, emailBody,
-			nil, attachments, nil, nil,
+			nil, attachments, sentBy, nil,
 		)
 		if err != nil {
 			log.Printf("[EscalationGroupService] Email failed for user (group '%s'): %v", group.Name, err)

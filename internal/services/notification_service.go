@@ -118,31 +118,44 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 	}
 
 	switch channel {
-
 	case "email":
-		statuses, err := utils.SendSMTPWithCCBCC(to, cc, bcc, subject, body, attachments)
+		_, err := utils.SendSMTPWithCCBCC(to, cc, bcc, subject, body, attachments)
 		if err != nil {
+
 			status = "failed"
+
 			for _, r := range allRecipients {
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
+					Email:   r,
 					Channel: r,
 					Type:    utils.GetRecipientType(r, to, cc, bcc),
 					Status:  "failed",
 					Error:   err.Error(),
 				})
 			}
-		} else {
-			recipientStatuses = statuses
-		}
-		provider = "smtp"
 
+		} else {
+
+			// Success case
+			for _, r := range allRecipients {
+				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
+					Email:   r,
+					Channel: r,
+					Type:    utils.GetRecipientType(r, to, cc, bcc),
+					Status:  "success",
+				})
+			}
+
+		}
+
+		provider = "smtp"
 	case "sms":
-		smsbody := fmt.Sprintf("Your OTP is %s", body)
 		for _, phone := range to {
-			err := utils.SendSMS(phone, smsbody)
+			err := utils.SendSMS(phone, body)
 			if err != nil {
 				status = "failed"
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
+					Email:   phone,
 					Channel: phone,
 					Type:    "to",
 					Status:  "failed",
@@ -150,6 +163,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 				})
 			} else {
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
+					Email:   phone,
 					Channel: phone,
 					Type:    "to",
 					Status:  "success",
@@ -282,17 +296,21 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 	if err := s.logRepo.Create(ctx, log); err != nil {
 		return nil, err
 	}
-	if status == "failed" {
-		return nil, fmt.Errorf("notification delivery failed")
-	}
+
+	// Always create inbox logs for internal recipients, even if delivery failed. This ensures escalation and system notifications always appear in the recipient's inbox.
 	var inboxLogIDs []uuid.UUID
+	for _, recipient := range to {
 
-	for _, recipientEmail := range to {
-
-		// Check if this email belongs to the system
-		user, err := s.userRepo.FindByEmail(ctx, recipientEmail)
-		if err != nil || user == nil {
-			continue // Skip external emails
+		// Look up the system user by email (email channel) or phone (sms channel)
+		var user *models.User
+		var userErr error
+		if channel == "sms" {
+			user, userErr = s.userRepo.FindByMobile(ctx, recipient)
+		} else {
+			user, userErr = s.userRepo.FindByEmail(ctx, recipient)
+		}
+		if userErr != nil || user == nil {
+			continue // Skip external/unknown recipients
 		}
 
 		inboxLog := &models.NotificationLog{
@@ -309,7 +327,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 			Provider:     provider,
 			Attachments:  attachmentInfo,
 			SentBy:       sentBy,
-			ReceivedBy:   &user.ID, //this makes it appear in inbox
+			ReceivedBy:   &user.ID, // this makes it appear in inbox
 			CreatedAt:    now,
 			UpdatedAt:    &now,
 		}
@@ -317,6 +335,10 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		if err := s.logRepo.Create(ctx, inboxLog); err == nil {
 			inboxLogIDs = append(inboxLogIDs, inboxLog.ID)
 		}
+	}
+
+	if status == "failed" {
+		return nil, fmt.Errorf("notification delivery failed")
 	}
 
 	return &SendNotificationResult{

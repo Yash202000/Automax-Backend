@@ -182,7 +182,8 @@ func (s *OTPService) SendOTP(
 
 func (s *OTPService) sendOTPNotification(ctx context.Context, channel, phone, otp string, sessionID *uuid.UUID) error {
 
-	body := (otp)
+	body := fmt.Sprintf("Your OTP is %s", otp)
+	//body := (otp)
 	_, err := s.notificationService.SendNotification(ctx, channel, nil, "en", []string{phone}, nil, nil, "", body, nil, nil, nil, sessionID)
 	if err != nil {
 		return fmt.Errorf("Err Into Send Notification Service: %w", err)
