@@ -69,7 +69,8 @@ func (r *notificationLogRepository) List(ctx context.Context, filter *models.Not
 	var logs []models.NotificationLog
 	var total int64
 
-	query := r.db.WithContext(ctx).Model(&models.NotificationLog{})
+	query := r.db.WithContext(ctx).Model(&models.NotificationLog{}).
+		Where("NOT (channel IN ('sms', 'email') AND status = 'failed')")
 
 	// Apply user filtering - show emails where user is either sender OR receiver
 	if filter.UserID != nil {

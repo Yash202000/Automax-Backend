@@ -40,6 +40,7 @@ type UserRepository interface {
 	FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.User, error)
 	FindByRoleAndContext(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID *uuid.UUID) ([]models.User, error)
 	UpdateProfile(ctx context.Context, user map[string]interface{}) error
+	FindByPermissionCode(ctx context.Context, permissionCode string) ([]models.User, error)
 }
 
 type userRepository struct {
@@ -457,6 +458,28 @@ func (r *userRepository) FindByIDs(ctx context.Context, ids []uuid.UUID) ([]mode
 
 	var users []models.User
 	err := r.db.WithContext(ctx).Where("id IN ?", ids).Find(&users).Error
+	return users, err
+}
+
+// FindByPermissionCode returns active users who hold at least one role that has the given permission code.
+func (r *userRepository) FindByPermissionCode(ctx context.Context, permissionCode string) ([]models.User, error) {
+	var userIDs []uuid.UUID
+	err := r.db.WithContext(ctx).
+		Model(&models.User{}).
+		Joins("JOIN user_roles ON user_roles.user_id = users.id").
+		Joins("JOIN role_permissions ON role_permissions.role_id = user_roles.role_id").
+		Joins("JOIN permissions ON permissions.id = role_permissions.permission_id").
+		Where("permissions.code = ? AND permissions.is_active = ? AND users.is_active = ?", permissionCode, true, true).
+		Group("users.id").
+		Pluck("users.id", &userIDs).Error
+	if err != nil {
+		return nil, err
+	}
+	if len(userIDs) == 0 {
+		return []models.User{}, nil
+	}
+	var users []models.User
+	err = r.db.WithContext(ctx).Where("id IN ?", userIDs).Find(&users).Error
 	return users, err
 }
 
