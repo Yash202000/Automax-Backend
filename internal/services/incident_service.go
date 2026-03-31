@@ -2874,6 +2874,11 @@ func (s *incidentService) DeleteComment(ctx context.Context, commentID uuid.UUID
 func (s *incidentService) AddAttachment(ctx context.Context, incidentID uuid.UUID, attachment *models.IncidentAttachment) (*models.IncidentAttachmentResponse, error) {
 	attachment.IncidentID = incidentID
 
+	// Record the current state of the incident when the attachment is added
+	if incident, err := s.incidentRepo.FindByID(ctx, incidentID); err == nil {
+		attachment.StateID = &incident.CurrentStateID
+	}
+
 	if err := s.incidentRepo.CreateAttachment(ctx, attachment); err != nil {
 		return nil, err
 	}

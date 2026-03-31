@@ -483,6 +483,7 @@ func (r *incidentRepository) FindAttachmentByID(ctx context.Context, id uuid.UUI
 	var attachment models.IncidentAttachment
 	err := r.db.WithContext(ctx).
 		Preload("UploadedBy").
+		Preload("State").
 		First(&attachment, "id = ?", id).Error
 	if err != nil {
 		return nil, err
@@ -495,6 +496,7 @@ func (r *incidentRepository) ListAttachments(ctx context.Context, incidentID uui
 	err := r.db.WithContext(ctx).
 		Preload("UploadedBy").
 		Preload("UploadedBy.Roles").
+		Preload("State").
 		Where("incident_id = ?", incidentID).
 		Order("created_at DESC").
 		Find(&attachments).Error

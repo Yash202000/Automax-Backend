@@ -171,6 +171,10 @@ type IncidentAttachment struct {
 	// Link to transition if attachment was part of a transition
 	TransitionHistoryID *uuid.UUID `gorm:"type:uuid" json:"transition_history_id"`
 
+	// State of the incident when the attachment was added
+	StateID *uuid.UUID     `gorm:"type:uuid" json:"state_id"`
+	State   *WorkflowState `gorm:"foreignKey:StateID" json:"state,omitempty"`
+
 	CreatedAt time.Time      `json:"created_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
@@ -707,6 +711,7 @@ type IncidentAttachmentResponse struct {
 	URL                 string        `json:"url,omitempty"`
 	UploadedBy          *UserResponse `json:"uploaded_by,omitempty"`
 	TransitionHistoryID *uuid.UUID    `json:"transition_history_id,omitempty"`
+	StateName           string        `json:"state_name,omitempty"`
 	CreatedAt           time.Time     `json:"created_at"`
 }
 
@@ -955,6 +960,10 @@ func ToIncidentAttachmentResponse(a *IncidentAttachment, url string) IncidentAtt
 	if a.UploadedBy != nil {
 		uploaderResp := ToUserResponse(a.UploadedBy)
 		resp.UploadedBy = &uploaderResp
+	}
+
+	if a.State != nil {
+		resp.StateName = a.State.Name
 	}
 
 	return resp
