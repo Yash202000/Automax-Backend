@@ -79,6 +79,11 @@ type WorkflowState struct {
 	// Merge Configuration - whether incidents in this state can be merged
 	IsMergable bool `gorm:"default:false" json:"is_mergable"`
 
+	// IsAIQA marks this state as requiring AI Quality Assurance.
+	// When an incident with is_ai_verified=true reaches a state where is_ai_qa=true,
+	// the AI quality monitor will process it.
+	IsAIQA bool `gorm:"default:false" json:"is_ai_qa"`
+
 	// IsReadyToClose marks this state as a "Ready to Close" state that requires a
 	IsReadyToClose bool `gorm:"default:false" json:"is_ready_to_close"`
 	// DurationOptions is a JSON array of duration label strings (e.g. ["1 Day","1 Week"]).When non-empty it overrides the global READY_TO_CLOSE_DURATION_OPTIONS env variable.
@@ -131,10 +136,10 @@ type WorkflowTransition struct {
 	// If one match: auto-assign. If multiple: show selection in transition modal
 
 	// User Assignment
-	AssignUserID     *uuid.UUID `gorm:"type:uuid" json:"assign_user_id"`
-	AssignUser       *User      `gorm:"foreignKey:AssignUserID" json:"assign_user,omitempty"`
-	AssignmentRoles  []Role     `gorm:"many2many:transition_assignment_roles;" json:"assignment_roles,omitempty"`
-	AutoMatchUser    bool       `gorm:"default:false" json:"auto_match_user"`
+	AssignUserID    *uuid.UUID `gorm:"type:uuid" json:"assign_user_id"`
+	AssignUser      *User      `gorm:"foreignKey:AssignUserID" json:"assign_user,omitempty"`
+	AssignmentRoles []Role     `gorm:"many2many:transition_assignment_roles;" json:"assignment_roles,omitempty"`
+	AutoMatchUser   bool       `gorm:"default:false" json:"auto_match_user"`
 	// If auto_match_user=true with assignment_roles:
 	//   Find users with any of those roles + matching incident's classification/location/department
 	//   If multiple match: assign to ALL matched users
@@ -479,13 +484,13 @@ type WorkflowTransitionResponse struct {
 	AutoMatchUser    bool           `json:"auto_match_user"`
 	ManualSelectUser bool           `json:"manual_select_user"`
 
-	Requirements []TransitionRequirementResponse  `json:"requirements,omitempty"`
-	Actions      []TransitionActionResponse       `json:"actions,omitempty"`
-	FieldChanges []TransitionFieldChangeResponse  `json:"field_changes,omitempty"`
-	IsRejection  bool                             `json:"is_rejection"`
-	IsActive     bool                             `json:"is_active"`
-	SortOrder    int                              `json:"sort_order"`
-	CreatedAt    time.Time                        `json:"created_at"`
+	Requirements []TransitionRequirementResponse `json:"requirements,omitempty"`
+	Actions      []TransitionActionResponse      `json:"actions,omitempty"`
+	FieldChanges []TransitionFieldChangeResponse `json:"field_changes,omitempty"`
+	IsRejection  bool                            `json:"is_rejection"`
+	IsActive     bool                            `json:"is_active"`
+	SortOrder    int                             `json:"sort_order"`
+	CreatedAt    time.Time                       `json:"created_at"`
 }
 
 type TransitionRequirementResponse struct {

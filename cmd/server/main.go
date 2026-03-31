@@ -83,6 +83,7 @@ func main() {
 	escalationGroupRepo := repository.NewEscalationGroupRepository(db)
 	callerSentimentRepo := repository.NewCallerSentimentRepo(db)
 	goalRepo := repository.NewGoalRepository(db)
+	aiQualityFeedbackRepo := repository.NewAIQualityFeedbackRepository(db)
 
 	// Initialize WebSocket hub and start it
 	wsHub := services.NewWSHub()
@@ -136,6 +137,11 @@ func main() {
 	ctx := context.Background()
 	slaMonitor.Start(ctx)
 	defer slaMonitor.Stop()
+
+	// Initialize and start AI Quality Monitor
+	aiQualityMonitor := services.NewAIQualityMonitor(aiQualityFeedbackRepo, incidentRepo, minioStorage, cfg.AIQuality)
+	aiQualityMonitor.Start(ctx)
+	defer aiQualityMonitor.Stop()
 
 	// Initialize validator
 	validate := validator.New()

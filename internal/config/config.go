@@ -19,6 +19,17 @@ type Config struct {
 	Escalation     EscalationConfig
 	ReadyToClose   ReadyToCloseConfig
 	Documenta      DocumentaConfig
+	AIQuality      AIQualityConfig
+}
+
+// AIQualityConfig holds settings for the AI Quality Monitor.
+type AIQualityConfig struct {
+	// APIEndpoint is the URL of the external AI quality API. env: AI_QUALITY_API_ENDPOINT
+	APIEndpoint string
+	// APIKey is the bearer token used when calling the AI quality API. env: AI_QUALITY_API_KEY
+	APIKey string
+	// CheckIntervalMinutes controls how often the monitor polls (default 10). env: AI_QUALITY_CHECK_INTERVAL_MINUTES
+	CheckIntervalMinutes int
 }
 
 type DocumentaConfig struct {
@@ -158,6 +169,11 @@ func Load() *Config {
 			PreExpiryNotificationHours: getEnvAsInt("READY_TO_CLOSE_PRE_EXPIRY_HOURS", 24),
 			RevertStateCode:            getEnv("READY_TO_CLOSE_REVERT_STATE_CODE", "under_resolution"),
 			StateCode:                  getEnv("READY_TO_CLOSE_STATE_CODE", "ready_to_close"),
+		},
+		AIQuality: AIQualityConfig{
+			APIEndpoint:          getEnv("AI_QUALITY_API_ENDPOINT", ""),
+			APIKey:               getEnv("AI_QUALITY_API_KEY", ""),
+			CheckIntervalMinutes: getEnvAsInt("AI_QUALITY_CHECK_INTERVAL_MINUTES", 10),
 		},
 	}
 }

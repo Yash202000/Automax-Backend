@@ -106,6 +106,8 @@ func Migrate(db *gorm.DB) error {
 		&models.GoalCollaborator{},
 		&models.Evidence{},
 		&models.EvidenceTransitionHistory{},
+		// AI Quality Feedback
+		&models.AIQualityFeedback{},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
@@ -140,6 +142,11 @@ func Migrate(db *gorm.DB) error {
 	// Migrate user mobile verified
 	if err := migrations.MigrateUserMobileVerified(db); err != nil {
 		log.Printf("Warning: user mobile verified migration failed: %v", err)
+	}
+
+	// Migrate AI quality columns
+	if err := migrations.MigrateAIQuality(db); err != nil {
+		log.Printf("Warning: AI quality migration failed: %v", err)
 	}
 
 	log.Println("Database migrations completed")
