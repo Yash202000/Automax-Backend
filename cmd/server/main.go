@@ -682,6 +682,7 @@ func main() {
 	callerSentiments.Post("/", sentimentHandler.Create)
 	callerSentiments.Get("/", sentimentHandler.GetAllCallerSentiments)
 	callerSentiments.Get("/:caller_id", sentimentHandler.GetCallerSentiments)
+	callerSentiments.Get("/:caller_id/:callee_id", sentimentHandler.GetCallerSentimentsByCallerAndCallee)
 
 	// ---- GOAL MANAGEMENT ROUTES ----
 	goals := v1.Group("/goals", authMiddleware.Authenticate())
