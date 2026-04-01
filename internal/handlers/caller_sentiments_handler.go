@@ -72,6 +72,22 @@ func (h *CallerSentimentHandler) GetCallerSentiments(c *fiber.Ctx) error {
 	return c.JSON(res)
 }
 
+func (h *CallerSentimentHandler) GetCallerSentimentsByCallerAndCallee(c *fiber.Ctx) error {
+	callerID := c.Params("caller_id")
+	if callerID == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "caller_id is required")
+	}
+	calleeID := c.Params("callee_id")
+	if calleeID == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "callee_id is required")
+	}
+	res, err := h.service.GetCallerSentimentsByCallerAndCallee(c.UserContext(), callerID, calleeID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(res)
+}
 func (h *CallerSentimentHandler) GetAllCallerSentiments(c *fiber.Ctx) error {
 	res, err := h.service.GetAllCallerSentiments(c.UserContext())
 	if err != nil {
