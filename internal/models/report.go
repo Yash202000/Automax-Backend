@@ -103,7 +103,7 @@ type ReportCreateRequestConfig struct {
 type ReportCreateRequest struct {
 	Name        string                    `json:"name" validate:"required,max=255"`
 	Description string                    `json:"description"`
-	DataSource  string                    `json:"data_source" validate:"required,oneof=incidents action_logs users workflows departments locations classifications requests"`
+	DataSource  string                    `json:"data_source" validate:"required,oneof=incidents action_logs users users_performance workflows departments locations classifications requests"`
 	Config      ReportCreateRequestConfig `json:"config" validate:"required"`
 	IsPublic    bool                      `json:"is_public"`
 }
@@ -124,7 +124,7 @@ type ReportExecuteRequest struct {
 
 // ReportExportRequest is used for exporting reports
 type ReportExportRequest struct {
-	DataSource string               `json:"data_source" validate:"required,oneof=incidents action_logs users workflows departments locations classifications request"`
+	DataSource string               `json:"data_source" validate:"required,oneof=incidents action_logs users users_performance workflows departments locations classifications request"`
 	Columns    []ColumnField        `json:"columns" validate:"required,min=1"`
 	Filters    []ReportFilterConfig `json:"filters"`
 	Sorting    []ReportSortConfig   `json:"sorting"`
