@@ -11,6 +11,7 @@ import (
 type CallerSentimentRepository interface {
 	Create(ctx context.Context, s *models.CallerSentiment) error
 	GetSummaryByCaller(ctx context.Context, callerID string) ([]models.SentimentAgg, error)
+	GetSummaryByCallerAndCallee(ctx context.Context, callerID, calleeID string) ([]models.SentimentAgg, error)
 	GetAllCallerIDs(ctx context.Context) ([]string, error)
 	GetCallHistoryByCaller(ctx context.Context, callerID string) ([]models.CallHistory, error)
 }
@@ -43,6 +44,19 @@ func (r *callerSentimentRepo) GetSummaryByCaller(ctx context.Context, callerID s
 
 	return result, err
 }
+func (r *callerSentimentRepo) GetSummaryByCallerAndCallee(ctx context.Context, callerID, calleeID string) ([]models.SentimentAgg, error) {
+	var result []models.SentimentAgg
+
+	err := r.db.WithContext(ctx).
+		Table("caller_sentiments").
+		Select("sentiment,callee_id, COUNT(*) as count").
+		Where("caller_id = ? AND callee_id = ?", callerID, calleeID).
+		Group("sentiment,callee_id").
+		Scan(&result).Error
+
+	return result, err
+}
+
 func (r *callerSentimentRepo) GetAllCallerIDs(ctx context.Context) ([]string, error) {
 	var callers []string
 

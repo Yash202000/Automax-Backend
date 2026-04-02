@@ -37,6 +37,7 @@ type ReportRepository interface {
 	// incident in incidentIDs. Queries incident_revisions joined with users.
 	GetTransitionUserNames(ctx context.Context, newStateName string, incidentIDs []string) (map[string]string, error)
 	ExecuteUserQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
+	ExecuteUserPerformanceQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 	ExecuteWorkflowQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 	ExecuteDepartmentQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 	ExecuteLocationQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
@@ -276,16 +277,39 @@ var actionLogFilterFields = map[string]string{
 	"created_at":  "action_logs.created_at",
 }
 
+// userPerformanceFilterFields covers the joined tables used by ExecuteUserPerformanceQuery.
+var userPerformanceFilterFields = map[string]string{
+	// incident_revisions
+	"performed_by_id":     "incident_revisions.performed_by_id",
+	"revision_created_at": "incident_revisions.created_at",
+	// incidents
+	"incident_id":       "incidents.id",
+	"incident_number":   "incidents.incident_number",
+	"classification_id": "incidents.classification_id",
+	"current_state_id":  "incidents.current_state_id",
+	"department_id":     "incidents.department_id",
+	"location_id":       "incidents.location_id",
+	"record_type":       "incidents.record_type",
+	"created_at":        "incidents.created_at",
+	// joined tables
+	"classification_name": "classifications.name",
+	"state_name":          "workflow_states.name",
+	"user_email":          "perf_users.email",
+	"user_first_name":     "perf_users.first_name",
+	"user_last_name":      "perf_users.last_name",
+}
+
 // dataSourceFilterFields maps a data source name to its allowed filter fields.
 var dataSourceFilterFields = map[string]map[string]string{
-	"incidents":       incidentFilterFields,
-	"request":         requestFilterFields,
-	"users":           userFilterFields,
-	"workflows":       workflowFilterFields,
-	"departments":     departmentFilterFields,
-	"locations":       locationFilterFields,
-	"classifications": classificationFilterFields,
-	"action_logs":     actionLogFilterFields,
+	"incidents":         incidentFilterFields,
+	"request":           requestFilterFields,
+	"users":             userFilterFields,
+	"workflows":         workflowFilterFields,
+	"departments":       departmentFilterFields,
+	"locations":         locationFilterFields,
+	"classifications":   classificationFilterFields,
+	"action_logs":       actionLogFilterFields,
+	"users_performance": userPerformanceFilterFields,
 }
 
 // applyFilters applies ReportFilterConfig entries to the query. It reads the
@@ -297,6 +321,8 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 		return query
 	}
 
+	log.Printf("all the filters")
+	log.Print(filters[0])
 	dataSource, _ := ctx.Value(constants.ContextKeys.REPORT_DATA_SOURCE).(string)
 	fieldMap := dataSourceFilterFields[dataSource]
 	if fieldMap == nil {
@@ -1199,6 +1225,184 @@ func (r *reportRepository) ExecuteUserQuery(ctx context.Context, filters []model
 			if v, ok := rawRow["location_name"]; ok {
 				row["Location Name"] = v
 			}
+		}
+
+		results = append(results, row)
+	}
+
+	return results, total, nil
+}
+
+// ExecuteUserPerformanceQuery builds the User Performance report.
+//
+// A single query groups incident_revisions by incident and joins incidents,
+// classifications, workflow_states, and users so applyFilters can attach WHERE
+// clauses across all tables. Comments and attachments are bulk-fetched after.
+//
+// Filterable fields (use as filter.Field in payload):
+//
+//	performed_by_id | revision_created_at | incident_id | incident_number |
+//	classification_id | current_state_id | department_id | location_id |
+//	record_type | created_at | classification_name | state_name |
+//	user_email | user_first_name | user_last_name
+//
+// Output col.Field names:
+//
+//	timestamp | user | resource_id | classification | status | comments | attachments
+func (r *reportRepository) ExecuteUserPerformanceQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
+	hostname, _ := ctx.Value(constants.ContextKeys.HOSTNAME).(string)
+	protocol, _ := ctx.Value(constants.ContextKeys.PROTOCOL).(string)
+	token, _ := ctx.Value(constants.ContextKeys.Token).(string)
+	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
+
+	// buildBase returns a fresh *gorm.DB each time so GORM's statement does not
+	// accumulate across terminal calls (COUNT then Rows), which would duplicate JOINs.
+	buildBase := func() *gorm.DB {
+		q := r.db.WithContext(ctx).
+			Table("incident_revisions").
+			Joins("JOIN incidents ON incidents.id = incident_revisions.incident_id").
+			Joins("LEFT JOIN classifications ON classifications.id = incidents.classification_id").
+			Joins("LEFT JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
+			Joins("LEFT JOIN users perf_users ON perf_users.id = incident_revisions.performed_by_id")
+		return r.applyFilters(ctx, q, filters)
+	}
+
+	// ── COUNT distinct incidents (respects all filters) ───────────────────────
+	var total int64
+	if err := buildBase().
+		Select("COUNT(DISTINCT incident_revisions.incident_id)").
+		Scan(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// ── Paginated data query ──────────────────────────────────────────────────
+	offset := (page - 1) * limit
+
+	// Determine sort order. Default: latest revision first.
+	orderClause := "MAX(incident_revisions.created_at) DESC"
+	if sorting != nil && sorting.Field != "" {
+		dir := "ASC"
+		if strings.EqualFold(sorting.Direction, "desc") {
+			dir = "DESC"
+		}
+		if col, ok := userPerformanceFilterFields[sorting.Field]; ok {
+			orderClause = col + " " + dir
+		}
+	}
+
+	dataRows, err := buildBase().
+		Select(
+			"incidents.id::text AS incident_id, " +
+				"MAX(incident_revisions.created_at) AS latest_rev_at, " +
+				"incidents.incident_number, " +
+				"COALESCE(classifications.name, '') AS classification_name, " +
+				"COALESCE(workflow_states.name, '') AS current_state_name, " +
+				"COALESCE(perf_users.first_name, '') AS user_first_name, " +
+				"COALESCE(perf_users.last_name, '') AS user_last_name, " +
+				"COALESCE(perf_users.email, '') AS user_email",
+		).
+		Group(
+			"incidents.id, incidents.incident_number, " +
+				"classifications.name, workflow_states.name, " +
+				"perf_users.first_name, perf_users.last_name, perf_users.email",
+		).
+		Order(orderClause).
+		Offset(offset).
+		Limit(limit).
+		Rows()
+	if err != nil {
+		return nil, 0, err
+	}
+	defer dataRows.Close()
+
+	type perfEntry struct {
+		incidentID         string
+		latestAt           time.Time
+		incidentNumber     string
+		classificationName string
+		currentStateName   string
+		userFullName       string
+	}
+	var entries []perfEntry
+	incidentIDs := make([]string, 0)
+
+	for dataRows.Next() {
+		var (
+			incID, incNumber, classificationName, stateName string
+			firstName, lastName, email                      string
+			latestAt                                        time.Time
+		)
+		if err := dataRows.Scan(&incID, &latestAt, &incNumber, &classificationName, &stateName, &firstName, &lastName, &email); err != nil {
+			continue
+		}
+		fullName := strings.TrimSpace(firstName + " " + lastName)
+		if fullName == "" {
+			fullName = email
+		}
+		entries = append(entries, perfEntry{
+			incidentID:         incID,
+			latestAt:           latestAt,
+			incidentNumber:     incNumber,
+			classificationName: classificationName,
+			currentStateName:   stateName,
+			userFullName:       fullName,
+		})
+		incidentIDs = append(incidentIDs, incID)
+	}
+
+	if len(entries) == 0 {
+		return []map[string]interface{}{}, total, nil
+	}
+
+	// ── Bulk-fetch comments and attachments ───────────────────────────────────
+	commentsMap, _ := r.fetchGeneralComments(ctx, incidentIDs)
+	allAttachMap, _ := r.fetchAllAttachments(ctx, incidentIDs, protocol, hostname, token)
+
+	// ── Build result rows ─────────────────────────────────────────────────────
+	results := make([]map[string]interface{}, 0, len(entries))
+	for _, e := range entries {
+		var commentsStr string
+		if comments, ok := commentsMap[e.incidentID]; ok {
+			parts := make([]string, 0, len(comments))
+			for _, c := range comments {
+				if s, _ := c["content"].(string); s != "" {
+					parts = append(parts, s)
+				}
+			}
+			commentsStr = strings.Join(parts, " | ")
+		}
+
+		var attachmentsStr string
+		if urls := allAttachMap[e.incidentID]; len(urls) > 0 {
+			attachmentsStr = strings.Join(urls, " | ")
+		}
+
+		// Internal field → value (col.Field names)
+		rawRow := map[string]interface{}{
+			"timestamp":      e.latestAt,
+			"user":           e.userFullName,
+			"resource_id":    e.incidentNumber,
+			"classification": e.classificationName,
+			"status":         e.currentStateName,
+			"comments":       commentsStr,
+			"attachments":    attachmentsStr,
+			"id":             e.incidentID,
+		}
+
+		row := make(map[string]interface{})
+		if len(reqColumns) > 0 {
+			for _, col := range reqColumns {
+				row[col.Label] = rawRow[col.Field]
+			}
+		} else {
+			row["Timestamp"] = rawRow["timestamp"]
+			row["User"] = rawRow["user"]
+			row["Resource ID"] = rawRow["resource_id"]
+			row["Classification"] = rawRow["classification"]
+			row["Status"] = rawRow["status"]
+			row["Comments"] = rawRow["comments"]
+			row["Attachments"] = rawRow["attachments"]
+			row["Incident ID"] = e.incidentID // include incident ID for reference, even if not requested
 		}
 
 		results = append(results, row)

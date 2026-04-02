@@ -233,6 +233,8 @@ func (s *reportService) ExecuteReport(ctx context.Context, id uuid.UUID, req *mo
 		data, _, err = s.reportRepo.ExecuteRequestQuery(ctx, req.Filters, sorting, 1, limit)
 	case "users":
 		data, total, queryErr = s.reportRepo.ExecuteUserQuery(ctx, filters, sorting, page, limit)
+	case "users_performance":
+		data, total, queryErr = s.reportRepo.ExecuteUserPerformanceQuery(ctx, filters, sorting, page, limit)
 	case "workflows":
 		data, total, queryErr = s.reportRepo.ExecuteWorkflowQuery(ctx, filters, sorting, page, limit)
 	case "departments":
@@ -342,6 +344,8 @@ func (s *reportService) QueryReport(ctx context.Context, req *models.ReportQuery
 		data, _, err = s.reportRepo.ExecuteRequestQuery(ctx, req.Filters, sorting, 1, req.Limit)
 	case "users":
 		data, total, err = s.reportRepo.ExecuteUserQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
+	case "users_performance":
+		data, total, err = s.reportRepo.ExecuteUserPerformanceQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
 	case "workflows":
 		data, total, err = s.reportRepo.ExecuteWorkflowQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
 	case "departments":
@@ -399,6 +403,8 @@ func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExpo
 		data, _, err = s.reportRepo.ExecuteRequestQuery(ctx, req.Filters, sorting, 1, limit)
 	case "users":
 		data, _, err = s.reportRepo.ExecuteUserQuery(ctx, req.Filters, sorting, 1, limit)
+	case "users_performance":
+		data, _, err = s.reportRepo.ExecuteUserPerformanceQuery(ctx, req.Filters, sorting, 1, limit)
 	case "workflows":
 		data, _, err = s.reportRepo.ExecuteWorkflowQuery(ctx, req.Filters, sorting, 1, limit)
 	case "departments":
