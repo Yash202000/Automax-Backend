@@ -3,7 +3,9 @@ package services
 import (
 	"bytes"
 	"context"
+	"encoding/csv"
 	"fmt"
+	"log"
 	"math"
 	"strings"
 	"time"
@@ -55,6 +57,13 @@ type GoalService interface {
 	GetEvidenceTransitionHistory(ctx context.Context, evidenceID uuid.UUID) ([]models.EvidenceTransitionHistoryResponse, error)
 	ListPendingApprovals(ctx context.Context, userID uuid.UUID, page int, limit int) ([]models.ApprovalListResponse, int64, error)
 	ListCompletedApprovals(ctx context.Context, userID uuid.UUID, page int, limit int) ([]models.ApprovalListResponse, int64, error)
+
+	// Export
+	ExportGoalsCSV(ctx context.Context, filter *models.GoalFilter) ([]byte, error)
+	ExportGoalsJSON(ctx context.Context, filter *models.GoalFilter) ([]models.GoalResponse, error)
+
+	// Clone
+	CloneGoal(ctx context.Context, id uuid.UUID, req *models.GoalCloneRequest, userID uuid.UUID) (*models.GoalResponse, error)
 
 	// Progress
 	RecalculateProgress(ctx context.Context, goalID uuid.UUID) error
@@ -1377,4 +1386,221 @@ func (s *goalService) GetEvidenceDownloadURL(ctx context.Context, evidenceID uui
 	}
 
 	return downloadURL, nil
+}
+
+// ──────────────────────────────────────────────────
+// Export Goals
+// ──────────────────────────────────────────────────
+
+func (s *goalService) ExportGoalsCSV(ctx context.Context, filter *models.GoalFilter) ([]byte, error) {
+	goals, err := s.goalRepo.ListForExport(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list goals for export: %w", err)
+	}
+
+	var buf bytes.Buffer
+	writer := csv.NewWriter(&buf)
+
+	// Header row
+	header := []string{
+		"ID", "Title", "Description", "Category", "Priority", "Status",
+		"Owner", "Department", "Start Date", "Target Date", "Review Date",
+		"Progress", "Metric Name", "Metric Type", "Metric Unit",
+		"Baseline Value", "Current Value", "Target Value", "Weight",
+	}
+	if err := writer.Write(header); err != nil {
+		return nil, fmt.Errorf("failed to write CSV header: %w", err)
+	}
+
+	for _, g := range goals {
+		if len(g.Metrics) == 0 {
+			row := goalToCSVRow(&g, nil)
+			if err := writer.Write(row); err != nil {
+				return nil, fmt.Errorf("failed to write CSV row: %w", err)
+			}
+		} else {
+			for _, m := range g.Metrics {
+				row := goalToCSVRow(&g, &m)
+				if err := writer.Write(row); err != nil {
+					return nil, fmt.Errorf("failed to write CSV row: %w", err)
+				}
+			}
+		}
+	}
+
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return nil, fmt.Errorf("CSV writer error: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+func goalToCSVRow(g *models.Goal, m *models.GoalMetric) []string {
+	ownerName := ""
+	if g.Owner != nil {
+		ownerName = g.Owner.FirstName + " " + g.Owner.LastName
+	}
+	deptName := ""
+	if g.Department != nil {
+		deptName = g.Department.Name
+	}
+	startDate := ""
+	if g.StartDate != nil {
+		startDate = g.StartDate.Format("2006-01-02")
+	}
+	targetDate := ""
+	if g.TargetDate != nil {
+		targetDate = g.TargetDate.Format("2006-01-02")
+	}
+	reviewDate := ""
+	if g.ReviewDate != nil {
+		reviewDate = g.ReviewDate.Format("2006-01-02")
+	}
+
+	row := []string{
+		g.ID.String(), g.Title, g.Description, g.Category, g.Priority, g.Status,
+		ownerName, deptName, startDate, targetDate, reviewDate,
+		fmt.Sprintf("%.1f", g.Progress),
+	}
+
+	if m != nil {
+		row = append(row,
+			m.Name, m.MetricType, m.Unit,
+			fmt.Sprintf("%.2f", m.BaselineValue),
+			fmt.Sprintf("%.2f", m.CurrentValue),
+			fmt.Sprintf("%.2f", m.TargetValue),
+			fmt.Sprintf("%.2f", m.Weight),
+		)
+	} else {
+		row = append(row, "", "", "", "", "", "", "")
+	}
+
+	return row
+}
+
+func (s *goalService) ExportGoalsJSON(ctx context.Context, filter *models.GoalFilter) ([]models.GoalResponse, error) {
+	goals, err := s.goalRepo.ListForExport(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list goals for export: %w", err)
+	}
+
+	responses := make([]models.GoalResponse, len(goals))
+	for i, g := range goals {
+		responses[i] = g.ToResponse()
+	}
+
+	return responses, nil
+}
+
+// ──────────────────────────────────────────────────
+// Clone Goal
+// ──────────────────────────────────────────────────
+
+func (s *goalService) CloneGoal(ctx context.Context, id uuid.UUID, req *models.GoalCloneRequest, userID uuid.UUID) (*models.GoalResponse, error) {
+	source, err := s.goalRepo.FindByIDWithRelations(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("source goal not found: %w", err)
+	}
+
+	// Determine title
+	title := "Copy of " + source.Title
+	if req.Title != "" {
+		title = req.Title
+	}
+
+	// Determine owner
+	ownerID := source.OwnerID
+	if req.OwnerID != nil {
+		ownerID = *req.OwnerID
+	}
+
+	// Determine dates
+	startDate := source.StartDate
+	if req.StartDate != nil {
+		startDate = req.StartDate
+	}
+	targetDate := source.TargetDate
+	if req.TargetDate != nil {
+		targetDate = req.TargetDate
+	}
+	reviewDate := source.ReviewDate
+	if req.ReviewDate != nil {
+		reviewDate = req.ReviewDate
+	}
+
+	// Create Documenta folder
+	folderID, err := s.documentaClient.CreateFolder(ctx, s.cfg.Documenta.WorkspaceName, title)
+	if err != nil {
+		log.Printf("[GoalService] CloneGoal: failed to create Documenta folder, continuing without it: %v", err)
+		folderID = ""
+	}
+
+	clone := &models.Goal{
+		Title:             title,
+		Description:       source.Description,
+		Category:          source.Category,
+		Priority:          source.Priority,
+		Status:            models.GoalStatusDraft,
+		OwnerID:           ownerID,
+		DepartmentID:      source.DepartmentID,
+		StartDate:         startDate,
+		TargetDate:        targetDate,
+		ReviewDate:        reviewDate,
+		Progress:          0,
+		DocumentaFolderID: folderID,
+		Metadata:          source.Metadata,
+		CreatedByID:       userID,
+	}
+
+	if err := s.goalRepo.Create(ctx, clone); err != nil {
+		return nil, fmt.Errorf("failed to create cloned goal: %w", err)
+	}
+
+	// Clone metrics (reset current value to baseline)
+	for _, m := range source.Metrics {
+		clonedMetric := &models.GoalMetric{
+			GoalID:        clone.ID,
+			Name:          m.Name,
+			MetricType:    m.MetricType,
+			Unit:          m.Unit,
+			BaselineValue: m.BaselineValue,
+			CurrentValue:  m.BaselineValue,
+			TargetValue:   m.TargetValue,
+			Weight:        m.Weight,
+		}
+		if err := s.goalRepo.CreateMetric(ctx, clonedMetric); err != nil {
+			log.Printf("[GoalService] CloneGoal: failed to clone metric %s: %v", m.Name, err)
+		}
+	}
+
+	// Clone collaborators
+	for _, c := range source.Collaborators {
+		clonedCollab := &models.GoalCollaborator{
+			GoalID: clone.ID,
+			UserID: c.UserID,
+			Role:   c.Role,
+		}
+		if err := s.goalRepo.AddCollaborator(ctx, clonedCollab); err != nil {
+			log.Printf("[GoalService] CloneGoal: failed to clone collaborator %s: %v", c.UserID, err)
+		}
+	}
+
+	// Audit log
+	s.actionLogService.LogAction(ctx, &LogActionParams{
+		UserID:      userID,
+		Action:      "clone",
+		Module:      "goals",
+		ResourceID:  clone.ID.String(),
+		Description: fmt.Sprintf("Cloned goal from %s: %s", source.ID.String(), title),
+		Status:      "success",
+	})
+
+	cloneWithRelations, err := s.goalRepo.FindByIDWithRelations(ctx, clone.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch cloned goal: %w", err)
+	}
+
+	resp := cloneWithRelations.ToResponse()
+	return &resp, nil
 }

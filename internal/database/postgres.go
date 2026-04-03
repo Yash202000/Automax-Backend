@@ -106,6 +106,8 @@ func Migrate(db *gorm.DB) error {
 		&models.GoalCollaborator{},
 		&models.Evidence{},
 		&models.EvidenceTransitionHistory{},
+		// Goal Templates
+		&models.GoalTemplate{},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)

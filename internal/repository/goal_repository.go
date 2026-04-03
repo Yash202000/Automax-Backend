@@ -15,6 +15,7 @@ type GoalRepository interface {
 	FindByID(ctx context.Context, id uuid.UUID) (*models.Goal, error)
 	FindByIDWithRelations(ctx context.Context, id uuid.UUID) (*models.Goal, error)
 	List(ctx context.Context, filter *models.GoalFilter) ([]models.Goal, int64, error)
+	ListForExport(ctx context.Context, filter *models.GoalFilter) ([]models.Goal, error)
 	Update(ctx context.Context, goal *models.Goal) error
 	Delete(ctx context.Context, id uuid.UUID) error
 
@@ -175,6 +176,46 @@ func (r *goalRepository) List(ctx context.Context, filter *models.GoalFilter) ([
 	}
 
 	return goals, total, nil
+}
+
+func (r *goalRepository) ListForExport(ctx context.Context, filter *models.GoalFilter) ([]models.Goal, error) {
+	var goals []models.Goal
+
+	query := r.db.WithContext(ctx).Model(&models.Goal{})
+
+	if filter.Status != "" {
+		query = query.Where("status = ?", filter.Status)
+	}
+	if filter.Priority != "" {
+		query = query.Where("priority = ?", filter.Priority)
+	}
+	if filter.OwnerID != nil {
+		query = query.Where("owner_id = ?", *filter.OwnerID)
+	}
+	if filter.DepartmentID != nil {
+		query = query.Where("department_id = ?", *filter.DepartmentID)
+	}
+	if filter.Category != "" {
+		query = query.Where("category = ?", filter.Category)
+	}
+	if filter.Search != "" {
+		searchPattern := "%" + filter.Search + "%"
+		query = query.Where("title ILIKE ? OR description ILIKE ?", searchPattern, searchPattern)
+	}
+
+	err := query.
+		Preload("Owner").
+		Preload("Department").
+		Preload("Metrics").
+		Preload("Collaborators.User").
+		Order("created_at DESC").
+		Limit(10000).
+		Find(&goals).Error
+	if err != nil {
+		return nil, err
+	}
+
+	return goals, nil
 }
 
 func (r *goalRepository) Update(ctx context.Context, goal *models.Goal) error {

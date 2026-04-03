@@ -175,6 +175,11 @@ func main() {
 	sentimentHandler := handlers.NewCallerSentimentHandler(callerSentimentService)
 	goalHandler := handlers.NewGoalHandler(goalService)
 
+	// Goal Templates
+	goalTemplateRepo := repository.NewGoalTemplateRepository(db)
+	goalTemplateService := services.NewGoalTemplateService(goalTemplateRepo)
+	goalTemplateHandler := handlers.NewGoalTemplateHandler(goalTemplateService)
+
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore, userRepo)
 
@@ -638,14 +643,25 @@ func main() {
 	callerSentiments.Get("/", sentimentHandler.GetAllCallerSentiments)
 	callerSentiments.Get("/:caller_id", sentimentHandler.GetCallerSentiments)
 
+	// ---- GOAL TEMPLATE ROUTES ----
+	goalTemplates := v1.Group("/goal-templates", authMiddleware.Authenticate())
+	goalTemplates.Post("/", authMiddleware.RequirePermission("goals:create"), goalTemplateHandler.Create)
+	goalTemplates.Get("/", authMiddleware.RequirePermission("goals:view"), goalTemplateHandler.List)
+	goalTemplates.Get("/active", authMiddleware.RequirePermission("goals:view"), goalTemplateHandler.ListActive)
+	goalTemplates.Get("/:id", authMiddleware.RequirePermission("goals:view"), goalTemplateHandler.GetByID)
+	goalTemplates.Put("/:id", authMiddleware.RequirePermission("goals:update"), goalTemplateHandler.Update)
+	goalTemplates.Delete("/:id", authMiddleware.RequirePermission("goals:delete"), goalTemplateHandler.Delete)
+
 	// ---- GOAL MANAGEMENT ROUTES ----
 	goals := v1.Group("/goals", authMiddleware.Authenticate())
+	goals.Get("/export", authMiddleware.RequirePermission("goals:view"), goalHandler.ExportGoals)
 	goals.Post("/", authMiddleware.RequirePermission("goals:create"), goalHandler.CreateGoal)
 	goals.Get("/", authMiddleware.RequirePermission("goals:view"), goalHandler.ListGoals)
 	goals.Get("/:id", authMiddleware.RequirePermission("goals:view"), goalHandler.GetGoal)
 	goals.Put("/:id", authMiddleware.RequirePermission("goals:update"), goalHandler.UpdateGoal)
 	goals.Delete("/:id", authMiddleware.RequirePermission("goals:delete"), goalHandler.DeleteGoal)
 	goals.Post("/:id/transition", authMiddleware.RequirePermission("goals:update"), goalHandler.TransitionStatus)
+	goals.Post("/:id/clone", authMiddleware.RequirePermission("goals:create"), goalHandler.CloneGoal)
 	goals.Post("/:id/collaborators", authMiddleware.RequirePermission("goals:assign"), goalHandler.AddCollaborator)
 	goals.Delete("/:id/collaborators/:user_id", authMiddleware.RequirePermission("goals:assign"), goalHandler.RemoveCollaborator)
 	goals.Post("/:gid/metrics", authMiddleware.RequirePermission("goals:update"), goalHandler.CreateMetric)

@@ -23,6 +23,65 @@ func NewGoalHandler(service services.GoalService) *GoalHandler {
 }
 
 // ──────────────────────────────────────────────────
+// Export & Clone
+// ──────────────────────────────────────────────────
+
+func (h *GoalHandler) ExportGoals(c *fiber.Ctx) error {
+	var filter models.GoalFilter
+	if err := c.QueryParser(&filter); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
+	}
+
+	format := c.Query("format", "csv")
+
+	switch format {
+	case "csv":
+		data, err := h.service.ExportGoalsCSV(c.UserContext(), &filter)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to export goals")
+		}
+		c.Set("Content-Type", "text/csv")
+		c.Set("Content-Disposition", "attachment; filename=goals_export.csv")
+		return c.Send(data)
+
+	case "json":
+		goals, err := h.service.ExportGoalsJSON(c.UserContext(), &filter)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to export goals")
+		}
+		return c.JSON(fiber.Map{
+			"success": true,
+			"data":    goals,
+			"total":   len(goals),
+		})
+
+	default:
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid format. Use 'csv' or 'json'")
+	}
+}
+
+func (h *GoalHandler) CloneGoal(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+	}
+
+	var req models.GoalCloneRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+
+	goal, err := h.service.CloneGoal(c.UserContext(), id, &req, userID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to clone goal: "+err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusCreated, "Goal cloned", goal)
+}
+
+// ──────────────────────────────────────────────────
 // Goal CRUD
 // ──────────────────────────────────────────────────
 

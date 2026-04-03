@@ -319,6 +319,14 @@ type GoalTransitionRequest struct {
 	Status string `json:"status" validate:"required"`
 }
 
+type GoalCloneRequest struct {
+	Title      string     `json:"title"`
+	StartDate  *time.Time `json:"start_date"`
+	TargetDate *time.Time `json:"target_date"`
+	ReviewDate *time.Time `json:"review_date"`
+	OwnerID    *uuid.UUID `json:"owner_id"`
+}
+
 type GoalFilter struct {
 	Page         int        `query:"page"`
 	Limit        int        `query:"limit"`
