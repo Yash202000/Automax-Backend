@@ -3,10 +3,11 @@ package handlers
 import (
 	"io"
 	"log"
+	"path/filepath"
 	"strings"
 
-	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/models"
+	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
@@ -79,6 +80,63 @@ func (h *GoalHandler) CloneGoal(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, "Goal cloned", goal)
+}
+
+// ──────────────────────────────────────────────────
+// Import & Bulk
+// ──────────────────────────────────────────────────
+
+func (h *GoalHandler) ImportGoals(c *fiber.Ctx) error {
+	file, err := c.FormFile("file")
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "File is required")
+	}
+
+	ext := strings.ToLower(filepath.Ext(file.Filename))
+	if ext != ".csv" && ext != ".xlsx" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Only CSV and XLSX files are supported")
+	}
+
+	f, err := file.Open()
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to open file")
+	}
+	defer f.Close()
+
+	fileData, err := io.ReadAll(f)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read file")
+	}
+
+	dryRun := c.FormValue("dry_run", "true") == "true"
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+
+	result, err := h.service.ImportGoals(c.UserContext(), fileData, file.Filename, dryRun, userID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Import failed: "+err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Import processed", result)
+}
+
+func (h *GoalHandler) BulkAction(c *fiber.Ctx) error {
+	var req models.BulkActionRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if len(req.GoalIDs) == 0 {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "At least one goal ID is required")
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+
+	result, err := h.service.BulkAction(c.UserContext(), &req, userID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Bulk operation failed: "+err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Bulk operation completed", result)
 }
 
 // ──────────────────────────────────────────────────

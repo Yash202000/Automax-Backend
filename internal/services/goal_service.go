@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/storage"
 	"github.com/google/uuid"
+	"github.com/xuri/excelize/v2"
 )
 
 // ════════════════════════════════════════════════════
@@ -65,6 +67,12 @@ type GoalService interface {
 	// Clone
 	CloneGoal(ctx context.Context, id uuid.UUID, req *models.GoalCloneRequest, userID uuid.UUID) (*models.GoalResponse, error)
 
+	// Import
+	ImportGoals(ctx context.Context, fileData []byte, fileName string, dryRun bool, userID uuid.UUID) (*models.GoalImportResponse, error)
+
+	// Bulk Operations
+	BulkAction(ctx context.Context, req *models.BulkActionRequest, userID uuid.UUID) (*models.BulkActionResponse, error)
+
 	// Progress
 	RecalculateProgress(ctx context.Context, goalID uuid.UUID) error
 }
@@ -77,6 +85,7 @@ type goalService struct {
 	goalRepo            repository.GoalRepository
 	workflowRepo        repository.WorkflowRepository
 	userRepo            repository.UserRepository
+	departmentRepo      repository.DepartmentRepository
 	documentaClient     storage.DocumentaClient
 	notificationService *NotificationService
 	actionLogService    ActionLogService
@@ -87,6 +96,7 @@ func NewGoalService(
 	goalRepo repository.GoalRepository,
 	workflowRepo repository.WorkflowRepository,
 	userRepo repository.UserRepository,
+	departmentRepo repository.DepartmentRepository,
 	documentaClient storage.DocumentaClient,
 	notificationService *NotificationService,
 	actionLogService ActionLogService,
@@ -96,6 +106,7 @@ func NewGoalService(
 		goalRepo:            goalRepo,
 		workflowRepo:        workflowRepo,
 		userRepo:            userRepo,
+		departmentRepo:      departmentRepo,
 		documentaClient:     documentaClient,
 		notificationService: notificationService,
 		actionLogService:    actionLogService,
@@ -1439,7 +1450,7 @@ func (s *goalService) ExportGoalsCSV(ctx context.Context, filter *models.GoalFil
 func goalToCSVRow(g *models.Goal, m *models.GoalMetric) []string {
 	ownerName := ""
 	if g.Owner != nil {
-		ownerName = g.Owner.FirstName + " " + g.Owner.LastName
+		ownerName = g.Owner.Email
 	}
 	deptName := ""
 	if g.Department != nil {
@@ -1603,4 +1614,480 @@ func (s *goalService) CloneGoal(ctx context.Context, id uuid.UUID, req *models.G
 
 	resp := cloneWithRelations.ToResponse()
 	return &resp, nil
+}
+
+// ──────────────────────────────────────────────────
+// ImportGoals
+// ──────────────────────────────────────────────────
+
+func (s *goalService) ImportGoals(ctx context.Context, fileData []byte, fileName string, dryRun bool, userID uuid.UUID) (*models.GoalImportResponse, error) {
+	ext := strings.ToLower(fileName[strings.LastIndex(fileName, "."):])
+
+	var rows [][]string
+	var err error
+	switch ext {
+	case ".csv":
+		rows, err = s.parseCSV(fileData)
+	case ".xlsx":
+		rows, err = s.parseXLSX(fileData)
+	default:
+		return nil, fmt.Errorf("unsupported file type: %s", ext)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse file: %w", err)
+	}
+
+	if len(rows) < 2 {
+		return nil, fmt.Errorf("file must contain a header row and at least one data row")
+	}
+
+	// Skip header row
+	dataRows := rows[1:]
+
+	// Group rows by title for multi-metric goals
+	type parsedMetric struct {
+		name      string
+		mtype     string
+		unit      string
+		baseline  string
+		current   string
+		target    string
+		weight    string
+		rowNumber int
+	}
+	type parsedGoal struct {
+		title       string
+		description string
+		category    string
+		priority    string
+		ownerStr    string
+		deptStr     string
+		startDate   string
+		targetDate  string
+		reviewDate  string
+		metrics     []parsedMetric
+		firstRow    int
+	}
+
+	goalMap := make(map[string]*parsedGoal)
+	var goalOrder []string
+	rowResults := make([]models.ImportRowResult, 0, len(dataRows))
+
+	for i, row := range dataRows {
+		rowNum := i + 2 // 1-indexed, skip header
+		result := models.ImportRowResult{
+			RowNumber: rowNum,
+			Status:    "valid",
+		}
+
+		// Pad row to expected column count (19 columns matching export format)
+		for len(row) < 19 {
+			row = append(row, "")
+		}
+
+		// Columns: 0=ID, 1=Title, 2=Description, 3=Category, 4=Priority, 5=Status,
+		// 6=Owner, 7=Department, 8=Start Date, 9=Target Date, 10=Review Date, 11=Progress,
+		// 12=Metric Name, 13=Metric Type, 14=Metric Unit, 15=Baseline Value,
+		// 16=Current Value, 17=Target Value, 18=Weight
+		title := strings.TrimSpace(row[1])
+		if title == "" {
+			result.Status = "error"
+			result.Errors = append(result.Errors, "Title is required")
+			result.GoalTitle = "(empty)"
+			rowResults = append(rowResults, result)
+			continue
+		}
+		result.GoalTitle = title
+
+		// Validate priority
+		priority := strings.TrimSpace(row[4])
+		if priority == "" {
+			priority = models.GoalPriorityMedium
+			result.Warnings = append(result.Warnings, "Priority defaulted to Medium")
+		} else if !models.IsValidGoalPriority(priority) {
+			result.Status = "error"
+			result.Errors = append(result.Errors, fmt.Sprintf("Invalid priority: %s (must be Critical, High, Medium, or Low)", priority))
+		}
+
+		// Validate owner
+		ownerStr := strings.TrimSpace(row[6])
+		if ownerStr != "" {
+			if _, uErr := uuid.Parse(ownerStr); uErr != nil {
+				// Try as email
+				if !strings.Contains(ownerStr, "@") {
+					result.Status = "error"
+					result.Errors = append(result.Errors, fmt.Sprintf("Owner must be a valid UUID or email address: %s", ownerStr))
+				} else {
+					user, uErr := s.userRepo.FindByEmail(ctx, ownerStr)
+					if uErr != nil || user == nil {
+						result.Status = "error"
+						result.Errors = append(result.Errors, fmt.Sprintf("Owner not found: %s", ownerStr))
+					}
+				}
+			} else {
+				uid, _ := uuid.Parse(ownerStr)
+				user, uErr := s.userRepo.FindByID(ctx, uid)
+				if uErr != nil || user == nil {
+					result.Status = "error"
+					result.Errors = append(result.Errors, fmt.Sprintf("Owner not found: %s", ownerStr))
+				}
+			}
+		} else {
+			result.Status = "error"
+			result.Errors = append(result.Errors, "Owner is required")
+		}
+
+		// Validate department
+		deptStr := strings.TrimSpace(row[7])
+		if deptStr != "" {
+			if _, dErr := uuid.Parse(deptStr); dErr != nil {
+				// Try as department name
+				dept, dErr := s.departmentRepo.FindByNameAndParent(ctx, deptStr, nil)
+				if dErr != nil || dept == nil {
+					result.Warnings = append(result.Warnings, fmt.Sprintf("Department not found: %s", deptStr))
+				}
+			} else {
+				did, _ := uuid.Parse(deptStr)
+				dept, dErr := s.departmentRepo.FindByID(ctx, did)
+				if dErr != nil || dept == nil {
+					result.Warnings = append(result.Warnings, fmt.Sprintf("Department not found: %s", deptStr))
+				}
+			}
+		}
+
+		// Validate dates
+		startDate := strings.TrimSpace(row[8])
+		targetDate := strings.TrimSpace(row[9])
+		if startDate != "" {
+			if _, dErr := time.Parse("2006-01-02", startDate); dErr != nil {
+				result.Status = "error"
+				result.Errors = append(result.Errors, fmt.Sprintf("Invalid start date format: %s (use YYYY-MM-DD)", startDate))
+			}
+		}
+		if targetDate != "" {
+			if _, dErr := time.Parse("2006-01-02", targetDate); dErr != nil {
+				result.Status = "error"
+				result.Errors = append(result.Errors, fmt.Sprintf("Invalid target date format: %s (use YYYY-MM-DD)", targetDate))
+			}
+		}
+		reviewDate := strings.TrimSpace(row[10])
+		if reviewDate != "" {
+			if _, dErr := time.Parse("2006-01-02", reviewDate); dErr != nil {
+				result.Status = "error"
+				result.Errors = append(result.Errors, fmt.Sprintf("Invalid review date format: %s (use YYYY-MM-DD)", reviewDate))
+			}
+		}
+
+		// Validate metric fields (if present)
+		metricName := strings.TrimSpace(row[12])
+		metricType := strings.TrimSpace(row[13])
+		if metricName != "" {
+			if metricType == "" {
+				metricType = models.MetricTypeNumeric
+				result.Warnings = append(result.Warnings, "Metric type defaulted to Numeric")
+			} else if !models.IsValidMetricType(metricType) {
+				result.Status = "error"
+				result.Errors = append(result.Errors, fmt.Sprintf("Invalid metric type: %s (must be Numeric, Percentage, Currency, or Boolean)", metricType))
+			}
+			targetVal := strings.TrimSpace(row[17])
+			if targetVal != "" {
+				if _, pErr := strconv.ParseFloat(targetVal, 64); pErr != nil {
+					result.Status = "error"
+					result.Errors = append(result.Errors, fmt.Sprintf("Invalid target value: %s", targetVal))
+				}
+			}
+		}
+
+		if len(result.Warnings) > 0 && result.Status == "valid" {
+			result.Status = "warning"
+		}
+
+		rowResults = append(rowResults, result)
+
+		// Group into goals
+		if _, exists := goalMap[title]; !exists {
+			goalMap[title] = &parsedGoal{
+				title:       title,
+				description: strings.TrimSpace(row[2]),
+				category:    strings.TrimSpace(row[3]),
+				priority:    priority,
+				ownerStr:    ownerStr,
+				deptStr:     deptStr,
+				startDate:   startDate,
+				targetDate:  targetDate,
+				reviewDate:  reviewDate,
+				firstRow:    rowNum,
+			}
+			goalOrder = append(goalOrder, title)
+		}
+
+		if metricName != "" {
+			goalMap[title].metrics = append(goalMap[title].metrics, parsedMetric{
+				name:      metricName,
+				mtype:     metricType,
+				unit:      strings.TrimSpace(row[14]),
+				baseline:  strings.TrimSpace(row[15]),
+				current:   strings.TrimSpace(row[16]),
+				target:    strings.TrimSpace(row[17]),
+				weight:    strings.TrimSpace(row[18]),
+				rowNumber: rowNum,
+			})
+		}
+	}
+
+	// Count results
+	errorCount := 0
+	warningCount := 0
+	validCount := 0
+	metricsCount := 0
+	for _, r := range rowResults {
+		switch r.Status {
+		case "error":
+			errorCount++
+		case "warning":
+			warningCount++
+		default:
+			validCount++
+		}
+	}
+	for _, g := range goalMap {
+		metricsCount += len(g.metrics)
+	}
+
+	mode := "dry_run"
+	var createdGoalIDs []string
+
+	if !dryRun && errorCount == 0 {
+		mode = "committed"
+		tx := s.goalRepo.BeginTx(ctx)
+
+		for _, title := range goalOrder {
+			pg := goalMap[title]
+
+			// Resolve owner
+			var ownerID uuid.UUID
+			if _, uErr := uuid.Parse(pg.ownerStr); uErr == nil {
+				ownerID, _ = uuid.Parse(pg.ownerStr)
+			} else {
+				user, _ := s.userRepo.FindByEmail(ctx, pg.ownerStr)
+				if user != nil {
+					ownerID = user.ID
+				}
+			}
+
+			// Resolve department
+			var departmentID *uuid.UUID
+			if pg.deptStr != "" {
+				if did, dErr := uuid.Parse(pg.deptStr); dErr == nil {
+					departmentID = &did
+				} else {
+					dept, _ := s.departmentRepo.FindByNameAndParent(ctx, pg.deptStr, nil)
+					if dept != nil {
+						departmentID = &dept.ID
+					}
+				}
+			}
+
+			// Parse dates
+			var startDate, targetDate, reviewDate *time.Time
+			if pg.startDate != "" {
+				t, _ := time.Parse("2006-01-02", pg.startDate)
+				startDate = &t
+			}
+			if pg.targetDate != "" {
+				t, _ := time.Parse("2006-01-02", pg.targetDate)
+				targetDate = &t
+			}
+			if pg.reviewDate != "" {
+				t, _ := time.Parse("2006-01-02", pg.reviewDate)
+				reviewDate = &t
+			}
+
+			// Create Documenta folder
+			folderID, fErr := s.documentaClient.CreateFolder(ctx, s.cfg.Documenta.WorkspaceName, pg.title)
+			if fErr != nil {
+				log.Printf("[GoalService] ImportGoals: failed to create Documenta folder for %q: %v", pg.title, fErr)
+				folderID = ""
+			}
+
+			goal := &models.Goal{
+				ID:                uuid.New(),
+				Title:             pg.title,
+				Description:       pg.description,
+				Category:          pg.category,
+				Priority:          pg.priority,
+				Status:            models.GoalStatusDraft,
+				OwnerID:           ownerID,
+				DepartmentID:      departmentID,
+				StartDate:         startDate,
+				TargetDate:        targetDate,
+				ReviewDate:        reviewDate,
+				Progress:          0,
+				DocumentaFolderID: folderID,
+				Metadata:          "{}",
+				CreatedByID:       userID,
+			}
+
+			if err := tx.WithContext(ctx).Create(goal).Error; err != nil {
+				tx.Rollback()
+				return nil, fmt.Errorf("failed to create goal %q: %w", pg.title, err)
+			}
+
+			// Create metrics
+			for _, pm := range pg.metrics {
+				baseline, _ := strconv.ParseFloat(pm.baseline, 64)
+				current, _ := strconv.ParseFloat(pm.current, 64)
+				target, _ := strconv.ParseFloat(pm.target, 64)
+				weight, _ := strconv.ParseFloat(pm.weight, 64)
+				if weight == 0 {
+					weight = 1
+				}
+
+				metric := &models.GoalMetric{
+					ID:            uuid.New(),
+					GoalID:        goal.ID,
+					Name:          pm.name,
+					MetricType:    pm.mtype,
+					Unit:          pm.unit,
+					BaselineValue: baseline,
+					CurrentValue:  current,
+					TargetValue:   target,
+					Weight:        weight,
+				}
+
+				if err := tx.WithContext(ctx).Create(metric).Error; err != nil {
+					tx.Rollback()
+					return nil, fmt.Errorf("failed to create metric %q for goal %q: %w", pm.name, pg.title, err)
+				}
+			}
+
+			createdGoalIDs = append(createdGoalIDs, goal.ID.String())
+		}
+
+		if err := tx.Commit().Error; err != nil {
+			return nil, fmt.Errorf("failed to commit import transaction: %w", err)
+		}
+
+		// Recalculate progress for all created goals
+		for _, idStr := range createdGoalIDs {
+			gid, _ := uuid.Parse(idStr)
+			_ = s.RecalculateProgress(ctx, gid)
+		}
+
+		// Audit log
+		s.actionLogService.LogAction(ctx, &LogActionParams{
+			UserID:      userID,
+			Action:      "import",
+			Module:      "goals",
+			ResourceID:  fmt.Sprintf("%d goals", len(createdGoalIDs)),
+			Description: fmt.Sprintf("Imported %d goals with %d metrics from %s", len(createdGoalIDs), metricsCount, fileName),
+			Status:      "success",
+		})
+	}
+
+	return &models.GoalImportResponse{
+		Mode:           mode,
+		TotalRows:      len(dataRows),
+		GoalsCount:     len(goalOrder),
+		MetricsCount:   metricsCount,
+		ValidCount:     validCount,
+		ErrorCount:     errorCount,
+		WarningCount:   warningCount,
+		Rows:           rowResults,
+		CreatedGoalIDs: createdGoalIDs,
+	}, nil
+}
+
+func (s *goalService) parseCSV(data []byte) ([][]string, error) {
+	reader := csv.NewReader(bytes.NewReader(data))
+	reader.FieldsPerRecord = -1 // Allow variable fields
+	return reader.ReadAll()
+}
+
+func (s *goalService) parseXLSX(data []byte) ([][]string, error) {
+	f, err := excelize.OpenReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	sheetName := f.GetSheetName(0)
+	if sheetName == "" {
+		return nil, fmt.Errorf("no sheets found in XLSX file")
+	}
+
+	xlRows, err := f.GetRows(sheetName)
+	if err != nil {
+		return nil, err
+	}
+
+	return xlRows, nil
+}
+
+// ──────────────────────────────────────────────────
+// BulkAction
+// ──────────────────────────────────────────────────
+
+func (s *goalService) BulkAction(ctx context.Context, req *models.BulkActionRequest, userID uuid.UUID) (*models.BulkActionResponse, error) {
+	results := make([]models.BulkActionItemResult, len(req.GoalIDs))
+	successCount := 0
+	failureCount := 0
+
+	for i, goalID := range req.GoalIDs {
+		var actionErr error
+
+		switch req.Action {
+		case "transition":
+			if req.NewStatus == "" {
+				actionErr = fmt.Errorf("new_status is required for transition action")
+			} else {
+				_, actionErr = s.TransitionGoalStatus(ctx, goalID, req.NewStatus, userID)
+			}
+
+		case "reassign":
+			if req.NewOwnerID == nil {
+				actionErr = fmt.Errorf("new_owner_id is required for reassign action")
+			} else {
+				ownerID := *req.NewOwnerID
+				_, actionErr = s.UpdateGoal(ctx, goalID, &models.GoalUpdateRequest{
+					OwnerID: &ownerID,
+				}, userID)
+			}
+
+		case "close":
+			_, actionErr = s.TransitionGoalStatus(ctx, goalID, models.GoalStatusClosed, userID)
+
+		default:
+			actionErr = fmt.Errorf("unknown action: %s", req.Action)
+		}
+
+		result := models.BulkActionItemResult{
+			GoalID:  goalID,
+			Success: actionErr == nil,
+		}
+		if actionErr != nil {
+			result.Error = actionErr.Error()
+			failureCount++
+		} else {
+			successCount++
+		}
+		results[i] = result
+	}
+
+	// Audit log
+	s.actionLogService.LogAction(ctx, &LogActionParams{
+		UserID:      userID,
+		Action:      "bulk_" + req.Action,
+		Module:      "goals",
+		ResourceID:  fmt.Sprintf("%d goals", len(req.GoalIDs)),
+		Description: fmt.Sprintf("Bulk %s: %d succeeded, %d failed", req.Action, successCount, failureCount),
+		Status:      "success",
+	})
+
+	return &models.BulkActionResponse{
+		TotalRequested: len(req.GoalIDs),
+		SuccessCount:   successCount,
+		FailureCount:   failureCount,
+		Results:        results,
+	}, nil
 }

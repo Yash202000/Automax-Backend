@@ -535,6 +535,56 @@ type ApprovalListResponse struct {
 }
 
 // ════════════════════════════════════════════════════
+// IMPORT REQUEST/RESPONSE TYPES
+// ════════════════════════════════════════════════════
+
+// ImportRowResult represents validation result for a single row
+type ImportRowResult struct {
+	RowNumber int      `json:"row_number"`
+	Status    string   `json:"status"` // "valid", "warning", "error"
+	Errors    []string `json:"errors,omitempty"`
+	Warnings  []string `json:"warnings,omitempty"`
+	GoalTitle string   `json:"goal_title"`
+}
+
+// GoalImportResponse is the response from import (dry-run or commit)
+type GoalImportResponse struct {
+	Mode           string            `json:"mode"` // "dry_run" or "committed"
+	TotalRows      int               `json:"total_rows"`
+	GoalsCount     int               `json:"goals_count"`
+	MetricsCount   int               `json:"metrics_count"`
+	ValidCount     int               `json:"valid_count"`
+	ErrorCount     int               `json:"error_count"`
+	WarningCount   int               `json:"warning_count"`
+	Rows           []ImportRowResult  `json:"rows"`
+	CreatedGoalIDs []string           `json:"created_goal_ids,omitempty"`
+}
+
+// ════════════════════════════════════════════════════
+// BULK OPERATION REQUEST/RESPONSE TYPES
+// ════════════════════════════════════════════════════
+
+type BulkActionRequest struct {
+	GoalIDs    []uuid.UUID `json:"goal_ids" validate:"required,min=1"`
+	Action     string      `json:"action" validate:"required,oneof=transition reassign close"`
+	NewStatus  string      `json:"new_status,omitempty"`
+	NewOwnerID *uuid.UUID  `json:"new_owner_id,omitempty"`
+}
+
+type BulkActionItemResult struct {
+	GoalID  uuid.UUID `json:"goal_id"`
+	Success bool      `json:"success"`
+	Error   string    `json:"error,omitempty"`
+}
+
+type BulkActionResponse struct {
+	TotalRequested int                    `json:"total_requested"`
+	SuccessCount   int                    `json:"success_count"`
+	FailureCount   int                    `json:"failure_count"`
+	Results        []BulkActionItemResult `json:"results"`
+}
+
+// ════════════════════════════════════════════════════
 // CONVERTER FUNCTIONS
 // ════════════════════════════════════════════════════
 

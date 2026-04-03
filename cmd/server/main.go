@@ -120,7 +120,7 @@ func main() {
 
 	// Goal management services
 	documentaClient := storage.NewStubDocumentaClient()
-	goalService := services.NewGoalService(goalRepo, workflowRepo, userRepo, documentaClient, notificationService, actionLogService, cfg)
+	goalService := services.NewGoalService(goalRepo, workflowRepo, userRepo, departmentRepo, documentaClient, notificationService, actionLogService, cfg)
 
 	// Ready-to-Close service
 	readyToCloseRepo := repository.NewReadyToCloseRepository(db)
@@ -655,6 +655,8 @@ func main() {
 	// ---- GOAL MANAGEMENT ROUTES ----
 	goals := v1.Group("/goals", authMiddleware.Authenticate())
 	goals.Get("/export", authMiddleware.RequirePermission("goals:view"), goalHandler.ExportGoals)
+	goals.Post("/import", authMiddleware.RequirePermission("goals:create"), goalHandler.ImportGoals)
+	goals.Post("/bulk", authMiddleware.RequirePermission("goals:update"), goalHandler.BulkAction)
 	goals.Post("/", authMiddleware.RequirePermission("goals:create"), goalHandler.CreateGoal)
 	goals.Get("/", authMiddleware.RequirePermission("goals:view"), goalHandler.ListGoals)
 	goals.Get("/:id", authMiddleware.RequirePermission("goals:view"), goalHandler.GetGoal)
