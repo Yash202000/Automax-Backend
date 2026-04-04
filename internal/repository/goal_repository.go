@@ -51,6 +51,16 @@ type GoalRepository interface {
 	ListPendingApprovals(ctx context.Context, userID uuid.UUID, page int, limit int) ([]models.Evidence, int64, error)
 	ListCompletedApprovals(ctx context.Context, userID uuid.UUID, page int, limit int) ([]models.EvidenceTransitionHistory, int64, error)
 
+	// Hierarchy
+	FindChildren(ctx context.Context, parentID uuid.UUID) ([]models.Goal, error)
+	FindDescendantIDs(ctx context.Context, goalPath string) ([]uuid.UUID, error)
+
+	// Check-ins
+	CreateCheckIn(ctx context.Context, checkIn *models.GoalCheckIn) error
+	ListCheckIns(ctx context.Context, goalID uuid.UUID, page int, limit int) ([]models.GoalCheckIn, int64, error)
+	FindCheckInByID(ctx context.Context, id uuid.UUID) (*models.GoalCheckIn, error)
+	DeleteCheckIn(ctx context.Context, id uuid.UUID) error
+
 	// Transaction support
 	BeginTx(ctx context.Context) *gorm.DB
 }
@@ -87,6 +97,8 @@ func (r *goalRepository) FindByIDWithRelations(ctx context.Context, id uuid.UUID
 		Preload("Owner").
 		Preload("CreatedBy").
 		Preload("Department").
+		Preload("ParentGoal").
+		Preload("Children").
 		Preload("Collaborators").
 		Preload("Collaborators.User").
 		Preload("Metrics").
@@ -119,6 +131,12 @@ func (r *goalRepository) List(ctx context.Context, filter *models.GoalFilter) ([
 	}
 	if filter.DepartmentID != nil {
 		query = query.Where("department_id = ?", *filter.DepartmentID)
+	}
+	if filter.ParentGoalID != nil {
+		query = query.Where("parent_goal_id = ?", *filter.ParentGoalID)
+	}
+	if filter.RootOnly {
+		query = query.Where("parent_goal_id IS NULL")
 	}
 	if filter.Category != "" {
 		query = query.Where("category = ?", filter.Category)
@@ -537,4 +555,81 @@ func (r *goalRepository) ListCompletedApprovals(ctx context.Context, userID uuid
 
 func (r *goalRepository) BeginTx(ctx context.Context) *gorm.DB {
 	return r.db.WithContext(ctx).Begin()
+}
+
+// ──────────────────────────────────────────────────
+// Hierarchy
+// ──────────────────────────────────────────────────
+
+func (r *goalRepository) FindChildren(ctx context.Context, parentID uuid.UUID) ([]models.Goal, error) {
+	var children []models.Goal
+	err := r.db.WithContext(ctx).
+		Preload("Owner").
+		Where("parent_goal_id = ?", parentID).
+		Order("created_at ASC").
+		Find(&children).Error
+	return children, err
+}
+
+func (r *goalRepository) FindDescendantIDs(ctx context.Context, goalPath string) ([]uuid.UUID, error) {
+	var ids []uuid.UUID
+	err := r.db.WithContext(ctx).
+		Model(&models.Goal{}).
+		Where("path LIKE ?", goalPath+".%").
+		Pluck("id", &ids).Error
+	return ids, err
+}
+
+// ──────────────────────────────────────────────────
+// Check-ins
+// ──────────────────────────────────────────────────
+
+func (r *goalRepository) CreateCheckIn(ctx context.Context, checkIn *models.GoalCheckIn) error {
+	return r.db.WithContext(ctx).Create(checkIn).Error
+}
+
+func (r *goalRepository) ListCheckIns(ctx context.Context, goalID uuid.UUID, page int, limit int) ([]models.GoalCheckIn, int64, error) {
+	var checkIns []models.GoalCheckIn
+	var total int64
+
+	query := r.db.WithContext(ctx).Model(&models.GoalCheckIn{}).Where("goal_id = ?", goalID)
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 || limit > 100 {
+		limit = 10
+	}
+	offset := (page - 1) * limit
+
+	err := query.
+		Preload("Author").
+		Order("created_at DESC").
+		Offset(offset).
+		Limit(limit).
+		Find(&checkIns).Error
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return checkIns, total, nil
+}
+
+func (r *goalRepository) FindCheckInByID(ctx context.Context, id uuid.UUID) (*models.GoalCheckIn, error) {
+	var checkIn models.GoalCheckIn
+	err := r.db.WithContext(ctx).
+		Preload("Author").
+		First(&checkIn, "id = ?", id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &checkIn, nil
+}
+
+func (r *goalRepository) DeleteCheckIn(ctx context.Context, id uuid.UUID) error {
+	return r.db.WithContext(ctx).Delete(&models.GoalCheckIn{}, "id = ?", id).Error
 }

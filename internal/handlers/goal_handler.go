@@ -160,6 +160,9 @@ func (h *GoalHandler) CreateGoal(c *fiber.Ctx) error {
 
 	goal, err := h.service.CreateGoal(c.UserContext(), &req, userID)
 	if err != nil {
+		if strings.Contains(err.Error(), "parent goal not found") || strings.Contains(err.Error(), "maximum goal hierarchy depth") {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create goal")
 	}
 
@@ -700,5 +703,120 @@ func (h *GoalHandler) ListCompletedApprovals(c *fiber.Ctx) error {
 		"total":   total,
 		"page":    page,
 		"limit":   limit,
+	})
+}
+
+// ──────────────────────────────────────────────────
+// Hierarchy
+// ──────────────────────────────────────────────────
+
+func (h *GoalHandler) ListChildGoals(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid goal ID")
+	}
+
+	children, err := h.service.ListChildGoals(c.UserContext(), id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to list child goals")
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data":    children,
+	})
+}
+
+func (h *GoalHandler) GetGoalTree(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid goal ID")
+	}
+
+	tree, err := h.service.GetGoalTree(c.UserContext(), id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to get goal tree")
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data":    tree,
+	})
+}
+
+// ──────────────────────────────────────────────────
+// Check-ins
+// ──────────────────────────────────────────────────
+
+func (h *GoalHandler) CreateCheckIn(c *fiber.Ctx) error {
+	goalID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid goal ID")
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+
+	var req models.CheckInCreateRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	checkIn, err := h.service.CreateCheckIn(c.UserContext(), goalID, &req, userID)
+	if err != nil {
+		log.Printf("Failed to create check-in: %v", err)
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"success": true,
+		"data":    checkIn,
+	})
+}
+
+func (h *GoalHandler) ListCheckIns(c *fiber.Ctx) error {
+	goalID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid goal ID")
+	}
+
+	page := c.QueryInt("page", 1)
+	limit := c.QueryInt("limit", 10)
+
+	checkIns, total, err := h.service.ListCheckIns(c.UserContext(), goalID, page, limit)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to list check-ins")
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data":    checkIns,
+		"total":   total,
+		"page":    page,
+		"limit":   limit,
+	})
+}
+
+func (h *GoalHandler) DeleteCheckIn(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid check-in ID")
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+
+	if err := h.service.DeleteCheckIn(c.UserContext(), id, userID); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"message": "Check-in deleted",
 	})
 }

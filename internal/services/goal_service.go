@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math"
@@ -73,6 +74,15 @@ type GoalService interface {
 	// Bulk Operations
 	BulkAction(ctx context.Context, req *models.BulkActionRequest, userID uuid.UUID) (*models.BulkActionResponse, error)
 
+	// Hierarchy
+	GetGoalTree(ctx context.Context, rootID uuid.UUID) (*models.GoalResponse, error)
+	ListChildGoals(ctx context.Context, parentID uuid.UUID) ([]models.GoalResponse, error)
+
+	// Check-ins
+	CreateCheckIn(ctx context.Context, goalID uuid.UUID, req *models.CheckInCreateRequest, userID uuid.UUID) (*models.CheckInResponse, error)
+	ListCheckIns(ctx context.Context, goalID uuid.UUID, page int, limit int) ([]models.CheckInResponse, int64, error)
+	DeleteCheckIn(ctx context.Context, id uuid.UUID, userID uuid.UUID) error
+
 	// Progress
 	RecalculateProgress(ctx context.Context, goalID uuid.UUID) error
 }
@@ -124,6 +134,24 @@ func (s *goalService) CreateGoal(ctx context.Context, req *models.GoalCreateRequ
 		return nil, err
 	}
 
+	// Validate parent goal hierarchy
+	var parentPath string
+	var parentLevel int
+	if req.ParentGoalID != nil {
+		parent, err := s.goalRepo.FindByID(ctx, *req.ParentGoalID)
+		if err != nil {
+			return nil, fmt.Errorf("parent goal not found: %w", err)
+		}
+		if parent.Level >= 2 {
+			return nil, fmt.Errorf("maximum goal hierarchy depth is 3 levels (cannot add child to level %d goal)", parent.Level)
+		}
+		parentPath = parent.Path
+		if parentPath == "" {
+			parentPath = parent.ID.String()
+		}
+		parentLevel = parent.Level
+	}
+
 	// Create Documenta folder for this goal
 	folderID, err := s.documentaClient.CreateFolder(ctx, s.cfg.Documenta.WorkspaceName, req.Title)
 	if err != nil {
@@ -136,6 +164,11 @@ func (s *goalService) CreateGoal(ctx context.Context, req *models.GoalCreateRequ
 		metadata = "{}"
 	}
 
+	goalLevel := 0
+	if req.ParentGoalID != nil {
+		goalLevel = parentLevel + 1
+	}
+
 	goal := &models.Goal{
 		Title:             req.Title,
 		Description:       req.Description,
@@ -144,6 +177,8 @@ func (s *goalService) CreateGoal(ctx context.Context, req *models.GoalCreateRequ
 		Status:            models.GoalStatusDraft,
 		OwnerID:           req.OwnerID,
 		DepartmentID:      req.DepartmentID,
+		ParentGoalID:      req.ParentGoalID,
+		Level:             goalLevel,
 		StartDate:         req.StartDate,
 		TargetDate:        req.TargetDate,
 		ReviewDate:        req.ReviewDate,
@@ -154,6 +189,16 @@ func (s *goalService) CreateGoal(ctx context.Context, req *models.GoalCreateRequ
 
 	if err := s.goalRepo.Create(ctx, goal); err != nil {
 		return nil, fmt.Errorf("failed to create goal: %w", err)
+	}
+
+	// Set materialized path after creation (need the generated ID)
+	if parentPath != "" {
+		goal.Path = parentPath + "." + goal.ID.String()
+	} else {
+		goal.Path = goal.ID.String()
+	}
+	if err := s.goalRepo.Update(ctx, goal); err != nil {
+		return nil, fmt.Errorf("failed to set goal path: %w", err)
 	}
 
 	// Audit log
@@ -1360,7 +1405,51 @@ func (s *goalService) RecalculateProgress(ctx context.Context, goalID uuid.UUID)
 	}
 
 	goal.Progress = progress
-	return s.goalRepo.Update(ctx, goal)
+	if err := s.goalRepo.Update(ctx, goal); err != nil {
+		return err
+	}
+
+	// Cascade progress to parent goal if this goal has a parent
+	return s.cascadeProgressToParent(ctx, goalID)
+}
+
+// cascadeProgressToParent recalculates the parent's progress as the average of its children's progress
+func (s *goalService) cascadeProgressToParent(ctx context.Context, goalID uuid.UUID) error {
+	goal, err := s.goalRepo.FindByID(ctx, goalID)
+	if err != nil {
+		return nil // Goal deleted or not found, skip
+	}
+
+	if goal.ParentGoalID == nil {
+		return nil // No parent, nothing to cascade
+	}
+
+	parent, err := s.goalRepo.FindByID(ctx, *goal.ParentGoalID)
+	if err != nil {
+		return nil // Parent not found, skip
+	}
+
+	children, err := s.goalRepo.FindChildren(ctx, parent.ID)
+	if err != nil {
+		return fmt.Errorf("failed to find children for progress cascade: %w", err)
+	}
+
+	if len(children) == 0 {
+		return nil
+	}
+
+	var totalProgress float64
+	for _, child := range children {
+		totalProgress += child.Progress
+	}
+	parent.Progress = totalProgress / float64(len(children))
+
+	if err := s.goalRepo.Update(ctx, parent); err != nil {
+		return fmt.Errorf("failed to update parent progress: %w", err)
+	}
+
+	// Recursively cascade to grandparent
+	return s.cascadeProgressToParent(ctx, parent.ID)
 }
 
 // ──────────────────────────────────────────────────
@@ -2090,4 +2179,212 @@ func (s *goalService) BulkAction(ctx context.Context, req *models.BulkActionRequ
 		FailureCount:   failureCount,
 		Results:        results,
 	}, nil
+}
+
+// ──────────────────────────────────────────────────
+// Hierarchy: GetGoalTree
+// ──────────────────────────────────────────────────
+
+func (s *goalService) GetGoalTree(ctx context.Context, rootID uuid.UUID) (*models.GoalResponse, error) {
+	goal, err := s.goalRepo.FindByIDWithRelations(ctx, rootID)
+	if err != nil {
+		return nil, fmt.Errorf("goal not found: %w", err)
+	}
+
+	// Recursively load children for each child (depth-first)
+	if err := s.loadChildrenRecursive(ctx, goal, 0); err != nil {
+		return nil, err
+	}
+
+	resp := goal.ToResponse()
+	return &resp, nil
+}
+
+func (s *goalService) loadChildrenRecursive(ctx context.Context, goal *models.Goal, depth int) error {
+	if depth > 3 {
+		return nil // Safety limit
+	}
+
+	children, err := s.goalRepo.FindChildren(ctx, goal.ID)
+	if err != nil {
+		return err
+	}
+
+	goal.Children = children
+	for i := range goal.Children {
+		if err := s.loadChildrenRecursive(ctx, &goal.Children[i], depth+1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ──────────────────────────────────────────────────
+// Hierarchy: ListChildGoals
+// ──────────────────────────────────────────────────
+
+func (s *goalService) ListChildGoals(ctx context.Context, parentID uuid.UUID) ([]models.GoalResponse, error) {
+	children, err := s.goalRepo.FindChildren(ctx, parentID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list child goals: %w", err)
+	}
+
+	responses := make([]models.GoalResponse, len(children))
+	for i, child := range children {
+		responses[i] = child.ToResponse()
+	}
+	return responses, nil
+}
+
+// ──────────────────────────────────────────────────
+// Check-in: CreateCheckIn
+// ──────────────────────────────────────────────────
+
+func (s *goalService) CreateCheckIn(ctx context.Context, goalID uuid.UUID, req *models.CheckInCreateRequest, userID uuid.UUID) (*models.CheckInResponse, error) {
+	// Verify goal exists
+	goal, err := s.goalRepo.FindByID(ctx, goalID)
+	if err != nil {
+		return nil, fmt.Errorf("goal not found: %w", err)
+	}
+
+	// Validate check-in status
+	if !models.IsValidCheckInStatus(req.Status) {
+		return nil, fmt.Errorf("invalid check-in status: %s", req.Status)
+	}
+
+	// Process metric updates if any
+	type metricChange struct {
+		MetricID string  `json:"metric_id"`
+		Name     string  `json:"name"`
+		OldValue float64 `json:"old_value"`
+		NewValue float64 `json:"new_value"`
+	}
+	var changes []metricChange
+
+	for _, mu := range req.MetricUpdates {
+		metric, err := s.goalRepo.FindMetricByID(ctx, mu.MetricID)
+		if err != nil {
+			return nil, fmt.Errorf("metric %s not found: %w", mu.MetricID.String(), err)
+		}
+		if metric.GoalID != goalID {
+			return nil, fmt.Errorf("metric %s does not belong to this goal", mu.MetricID.String())
+		}
+
+		oldValue := metric.CurrentValue
+		changes = append(changes, metricChange{
+			MetricID: mu.MetricID.String(),
+			Name:     metric.Name,
+			OldValue: oldValue,
+			NewValue: mu.Value,
+		})
+
+		// Use UpdateMetricValue to update + create history + recalculate progress
+		_, err = s.UpdateMetricValue(ctx, mu.MetricID, &models.MetricValueUpdateRequest{
+			Value:   mu.Value,
+			Comment: mu.Comment,
+		}, userID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to update metric %s: %w", metric.Name, err)
+		}
+	}
+
+	// Refresh goal to get updated progress
+	goal, err = s.goalRepo.FindByID(ctx, goalID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to refresh goal: %w", err)
+	}
+
+	// Serialize metric changes to JSON
+	metricUpdatesJSON := "[]"
+	if len(changes) > 0 {
+		jsonBytes, err := json.Marshal(changes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize metric updates: %w", err)
+		}
+		metricUpdatesJSON = string(jsonBytes)
+	}
+
+	checkIn := &models.GoalCheckIn{
+		GoalID:        goalID,
+		AuthorID:      userID,
+		Status:        req.Status,
+		Content:       req.Content,
+		ProgressSnap:  goal.Progress,
+		MetricUpdates: metricUpdatesJSON,
+	}
+
+	if err := s.goalRepo.CreateCheckIn(ctx, checkIn); err != nil {
+		return nil, fmt.Errorf("failed to create check-in: %w", err)
+	}
+
+	// Audit log
+	s.actionLogService.LogAction(ctx, &LogActionParams{
+		UserID:      userID,
+		Action:      "check_in",
+		Module:      "goals",
+		ResourceID:  goal.ID.String(),
+		Description: fmt.Sprintf("Check-in on goal '%s': %s", goal.Title, req.Status),
+		Status:      "success",
+	})
+
+	// Fetch back with author
+	created, err := s.goalRepo.FindCheckInByID(ctx, checkIn.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch created check-in: %w", err)
+	}
+
+	resp := created.ToResponse()
+	return &resp, nil
+}
+
+// ──────────────────────────────────────────────────
+// Check-in: ListCheckIns
+// ──────────────────────────────────────────────────
+
+func (s *goalService) ListCheckIns(ctx context.Context, goalID uuid.UUID, page int, limit int) ([]models.CheckInResponse, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 10
+	}
+
+	checkIns, total, err := s.goalRepo.ListCheckIns(ctx, goalID, page, limit)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to list check-ins: %w", err)
+	}
+
+	responses := make([]models.CheckInResponse, len(checkIns))
+	for i, ci := range checkIns {
+		responses[i] = ci.ToResponse()
+	}
+
+	return responses, total, nil
+}
+
+// ──────────────────────────────────────────────────
+// Check-in: DeleteCheckIn
+// ──────────────────────────────────────────────────
+
+func (s *goalService) DeleteCheckIn(ctx context.Context, id uuid.UUID, userID uuid.UUID) error {
+	checkIn, err := s.goalRepo.FindCheckInByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("check-in not found: %w", err)
+	}
+
+	if err := s.goalRepo.DeleteCheckIn(ctx, id); err != nil {
+		return fmt.Errorf("failed to delete check-in: %w", err)
+	}
+
+	// Audit log
+	s.actionLogService.LogAction(ctx, &LogActionParams{
+		UserID:      userID,
+		Action:      "delete_check_in",
+		Module:      "goals",
+		ResourceID:  checkIn.GoalID.String(),
+		Description: fmt.Sprintf("Deleted check-in on goal %s", checkIn.GoalID.String()),
+		Status:      "success",
+	})
+
+	return nil
 }

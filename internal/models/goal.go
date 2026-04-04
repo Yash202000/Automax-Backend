@@ -136,9 +136,15 @@ type Goal struct {
 	Metadata          string             `gorm:"type:jsonb;default:'{}'" json:"metadata"`
 	CreatedByID       uuid.UUID          `gorm:"type:uuid;index" json:"created_by_id"`
 	CreatedBy         *User              `gorm:"foreignKey:CreatedByID" json:"created_by,omitempty"`
+	ParentGoalID      *uuid.UUID         `gorm:"type:uuid;index" json:"parent_goal_id"`
+	ParentGoal        *Goal              `gorm:"foreignKey:ParentGoalID" json:"parent_goal,omitempty"`
+	Children          []Goal             `gorm:"foreignKey:ParentGoalID" json:"children,omitempty"`
+	Level             int                `gorm:"default:0" json:"level"`
+	Path              string             `gorm:"size:1000" json:"path"`
 	Collaborators     []GoalCollaborator `gorm:"foreignKey:GoalID" json:"collaborators,omitempty"`
 	Metrics           []GoalMetric       `gorm:"foreignKey:GoalID" json:"metrics,omitempty"`
 	Evidences         []Evidence         `gorm:"foreignKey:GoalID" json:"evidences,omitempty"`
+	CheckIns          []GoalCheckIn      `gorm:"foreignKey:GoalID" json:"check_ins,omitempty"`
 	CreatedAt         time.Time          `json:"created_at"`
 	UpdatedAt         time.Time          `json:"updated_at"`
 	DeletedAt         gorm.DeletedAt     `gorm:"index" json:"-"`
@@ -209,6 +215,48 @@ type GoalCollaborator struct {
 func (c *GoalCollaborator) BeforeCreate(tx *gorm.DB) error {
 	if c.ID == uuid.Nil {
 		c.ID = uuid.New()
+	}
+	return nil
+}
+
+// ──────────────────────────────────────────────────
+// Check-In Status Constants
+// ──────────────────────────────────────────────────
+
+const (
+	CheckInStatusOnTrack = "on_track"
+	CheckInStatusAtRisk  = "at_risk"
+	CheckInStatusBehind  = "behind"
+	CheckInStatusBlocked = "blocked"
+)
+
+func IsValidCheckInStatus(s string) bool {
+	switch s {
+	case CheckInStatusOnTrack, CheckInStatusAtRisk, CheckInStatusBehind, CheckInStatusBlocked:
+		return true
+	}
+	return false
+}
+
+// GoalCheckIn represents a periodic progress update on a goal
+type GoalCheckIn struct {
+	ID            uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	GoalID        uuid.UUID      `gorm:"type:uuid;index;not null" json:"goal_id"`
+	Goal          *Goal          `gorm:"foreignKey:GoalID" json:"goal,omitempty"`
+	AuthorID      uuid.UUID      `gorm:"type:uuid;index;not null" json:"author_id"`
+	Author        *User          `gorm:"foreignKey:AuthorID" json:"author,omitempty"`
+	Status        string         `gorm:"size:20;not null" json:"status"`
+	Content       string         `gorm:"type:text;not null" json:"content"`
+	ProgressSnap  float64        `json:"progress_snapshot"`
+	MetricUpdates string         `gorm:"type:jsonb;default:'[]'" json:"metric_updates"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (ci *GoalCheckIn) BeforeCreate(tx *gorm.DB) error {
+	if ci.ID == uuid.Nil {
+		ci.ID = uuid.New()
 	}
 	return nil
 }
@@ -287,6 +335,7 @@ type GoalCreateRequest struct {
 	Priority     string     `json:"priority" validate:"required,oneof=Critical High Medium Low"`
 	DepartmentID *uuid.UUID `json:"department_id"`
 	OwnerID      uuid.UUID  `json:"owner_id" validate:"required"`
+	ParentGoalID *uuid.UUID `json:"parent_goal_id"`
 	StartDate    *time.Time `json:"start_date"`
 	TargetDate   *time.Time `json:"target_date"`
 	ReviewDate   *time.Time `json:"review_date"`
@@ -309,6 +358,7 @@ type GoalUpdateRequest struct {
 	Priority     *string    `json:"priority" validate:"omitempty,oneof=Critical High Medium Low"`
 	DepartmentID *uuid.UUID `json:"department_id"`
 	OwnerID      *uuid.UUID `json:"owner_id"`
+	ParentGoalID *uuid.UUID `json:"parent_goal_id"`
 	StartDate    *time.Time `json:"start_date"`
 	TargetDate   *time.Time `json:"target_date"`
 	ReviewDate   *time.Time `json:"review_date"`
@@ -334,6 +384,8 @@ type GoalFilter struct {
 	Priority     string     `query:"priority"`
 	OwnerID      *uuid.UUID `query:"owner_id"`
 	DepartmentID *uuid.UUID `query:"department_id"`
+	ParentGoalID *uuid.UUID `query:"parent_goal_id"`
+	RootOnly     bool       `query:"root_only"`
 	Category     string     `query:"category"`
 	Search       string     `query:"search"`
 	StartFrom    *time.Time `query:"start_from"`
@@ -405,6 +457,11 @@ type GoalResponse struct {
 	Owner             *UserBriefResponse         `json:"owner,omitempty"`
 	DepartmentID      *uuid.UUID                 `json:"department_id"`
 	Department        *DepartmentBriefResponse   `json:"department,omitempty"`
+	ParentGoalID      *uuid.UUID                 `json:"parent_goal_id"`
+	ParentGoal        *GoalBriefResponse         `json:"parent_goal,omitempty"`
+	Children          []GoalBriefResponse        `json:"children,omitempty"`
+	Level             int                        `json:"level"`
+	Path              string                     `json:"path"`
 	StartDate         *time.Time                 `json:"start_date"`
 	TargetDate        *time.Time                 `json:"target_date"`
 	ReviewDate        *time.Time                 `json:"review_date"`
@@ -418,6 +475,15 @@ type GoalResponse struct {
 	EvidenceCount     int                        `json:"evidence_count"`
 	CreatedAt         time.Time                  `json:"created_at"`
 	UpdatedAt         time.Time                  `json:"updated_at"`
+}
+
+type GoalBriefResponse struct {
+	ID       uuid.UUID `json:"id"`
+	Title    string    `json:"title"`
+	Status   string    `json:"status"`
+	Priority string    `json:"priority"`
+	Progress float64   `json:"progress"`
+	Level    int       `json:"level"`
 }
 
 type UserBriefResponse struct {
@@ -585,6 +651,34 @@ type BulkActionResponse struct {
 }
 
 // ════════════════════════════════════════════════════
+// CHECK-IN REQUEST/RESPONSE TYPES
+// ════════════════════════════════════════════════════
+
+type CheckInCreateRequest struct {
+	Status        string                `json:"status" validate:"required,oneof=on_track at_risk behind blocked"`
+	Content       string                `json:"content" validate:"required,min=1"`
+	MetricUpdates []CheckInMetricUpdate `json:"metric_updates,omitempty"`
+}
+
+type CheckInMetricUpdate struct {
+	MetricID uuid.UUID `json:"metric_id" validate:"required"`
+	Value    float64   `json:"value"`
+	Comment  string    `json:"comment"`
+}
+
+type CheckInResponse struct {
+	ID             uuid.UUID          `json:"id"`
+	GoalID         uuid.UUID          `json:"goal_id"`
+	AuthorID       uuid.UUID          `json:"author_id"`
+	Author         *UserBriefResponse `json:"author,omitempty"`
+	Status         string             `json:"status"`
+	Content        string             `json:"content"`
+	ProgressSnap   float64            `json:"progress_snapshot"`
+	MetricUpdates  string             `json:"metric_updates"`
+	CreatedAt      time.Time          `json:"created_at"`
+}
+
+// ════════════════════════════════════════════════════
 // CONVERTER FUNCTIONS
 // ════════════════════════════════════════════════════
 
@@ -625,6 +719,20 @@ func ToWorkflowStateBrief(s *WorkflowState) *WorkflowStateBrief {
 	}
 }
 
+func ToGoalBriefResponse(g *Goal) *GoalBriefResponse {
+	if g == nil {
+		return nil
+	}
+	return &GoalBriefResponse{
+		ID:       g.ID,
+		Title:    g.Title,
+		Status:   g.Status,
+		Priority: g.Priority,
+		Progress: g.Progress,
+		Level:    g.Level,
+	}
+}
+
 func (g *Goal) ToResponse() GoalResponse {
 	resp := GoalResponse{
 		ID:                g.ID,
@@ -637,6 +745,10 @@ func (g *Goal) ToResponse() GoalResponse {
 		Owner:             ToUserBriefResponse(g.Owner),
 		DepartmentID:      g.DepartmentID,
 		Department:        ToDepartmentBriefResponse(g.Department),
+		ParentGoalID:      g.ParentGoalID,
+		ParentGoal:        ToGoalBriefResponse(g.ParentGoal),
+		Level:             g.Level,
+		Path:              g.Path,
 		StartDate:         g.StartDate,
 		TargetDate:        g.TargetDate,
 		ReviewDate:        g.ReviewDate,
@@ -648,6 +760,13 @@ func (g *Goal) ToResponse() GoalResponse {
 		EvidenceCount:     len(g.Evidences),
 		CreatedAt:         g.CreatedAt,
 		UpdatedAt:         g.UpdatedAt,
+	}
+
+	if g.Children != nil {
+		resp.Children = make([]GoalBriefResponse, len(g.Children))
+		for i, child := range g.Children {
+			resp.Children[i] = *ToGoalBriefResponse(&child)
+		}
 	}
 
 	if g.Collaborators != nil {
@@ -665,6 +784,20 @@ func (g *Goal) ToResponse() GoalResponse {
 	}
 
 	return resp
+}
+
+func (ci *GoalCheckIn) ToResponse() CheckInResponse {
+	return CheckInResponse{
+		ID:            ci.ID,
+		GoalID:        ci.GoalID,
+		AuthorID:      ci.AuthorID,
+		Author:        ToUserBriefResponse(ci.Author),
+		Status:        ci.Status,
+		Content:       ci.Content,
+		ProgressSnap:  ci.ProgressSnap,
+		MetricUpdates: ci.MetricUpdates,
+		CreatedAt:     ci.CreatedAt,
+	}
 }
 
 func (c *GoalCollaborator) ToResponse() GoalCollaboratorResponse {

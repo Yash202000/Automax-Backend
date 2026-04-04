@@ -106,6 +106,7 @@ func Migrate(db *gorm.DB) error {
 		&models.GoalCollaborator{},
 		&models.Evidence{},
 		&models.EvidenceTransitionHistory{},
+		&models.GoalCheckIn{},
 		// Goal Templates
 		&models.GoalTemplate{},
 	)
