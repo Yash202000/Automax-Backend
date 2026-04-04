@@ -594,10 +594,58 @@ func (h *GoalHandler) DeleteEvidence(c *fiber.Ctx) error {
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
 	if err := h.service.DeleteEvidence(c.UserContext(), id, userID); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return utils.ErrorResponse(c, fiber.StatusNotFound, err.Error())
+		}
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Evidence deleted", nil)
+}
+
+func (h *GoalHandler) ReplaceEvidenceFile(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid evidence ID")
+	}
+
+	file, err := c.FormFile("file")
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "File is required")
+	}
+
+	f, err := file.Open()
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to open file")
+	}
+	defer f.Close()
+
+	fileData, err := io.ReadAll(f)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read file")
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+
+	mimeType := file.Header.Get("Content-Type")
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	result, err := h.service.ReplaceEvidenceFile(
+		c.UserContext(),
+		id,
+		file.Filename,
+		int64(len(fileData)),
+		mimeType,
+		fileData,
+		userID,
+	)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Evidence file replaced", result)
 }
 
 // ──────────────────────────────────────────────────
@@ -819,4 +867,199 @@ func (h *GoalHandler) DeleteCheckIn(c *fiber.Ctx) error {
 		"success": true,
 		"message": "Check-in deleted",
 	})
+}
+
+// ────��─────────────────────────────────────────────
+// Metric Import/Export
+// ────���─────────────────────────��───────────────────
+
+func (h *GoalHandler) ExportMetricsTemplate(c *fiber.Ctx) error {
+	var filter models.GoalFilter
+	if err := c.QueryParser(&filter); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
+	}
+
+	format := c.Query("format", "csv")
+
+	data, err := h.service.ExportMetricsTemplate(c.UserContext(), &filter, format)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to export metrics template: "+err.Error())
+	}
+
+	switch format {
+	case "xlsx":
+		c.Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+		c.Set("Content-Disposition", "attachment; filename=metrics_template.xlsx")
+	default:
+		c.Set("Content-Type", "text/csv")
+		c.Set("Content-Disposition", "attachment; filename=metrics_template.csv")
+	}
+
+	return c.Send(data)
+}
+
+func (h *GoalHandler) ImportMetrics(c *fiber.Ctx) error {
+	file, err := c.FormFile("file")
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "File is required")
+	}
+
+	ext := strings.ToLower(filepath.Ext(file.Filename))
+	if ext != ".csv" && ext != ".xlsx" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Only CSV and XLSX files are supported")
+	}
+
+	f, err := file.Open()
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to open file")
+	}
+	defer f.Close()
+
+	fileData, err := io.ReadAll(f)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read file")
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	dryRun := c.FormValue("dry_run", "true") == "true"
+
+	if dryRun {
+		result, err := h.service.ImportMetricsDryRun(c.UserContext(), fileData, file.Filename, userID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Validation failed: "+err.Error())
+		}
+		return utils.SuccessResponse(c, fiber.StatusOK, "Dry run completed", result)
+	}
+
+	// Commit mode
+	title := c.FormValue("title", "")
+	if title == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Title is required for import")
+	}
+	comment := c.FormValue("comment", "")
+	primaryGoalIDStr := c.FormValue("primary_goal_id", "")
+	if primaryGoalIDStr == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "primary_goal_id is required for import")
+	}
+	primaryGoalID, err := uuid.Parse(primaryGoalIDStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid primary_goal_id")
+	}
+
+	result, err := h.service.ImportMetricsCommit(c.UserContext(), fileData, file.Filename, title, comment, primaryGoalID, userID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Import failed: "+err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusCreated, "Metric import batch created", result)
+}
+
+func (h *GoalHandler) ListMetricImportBatches(c *fiber.Ctx) error {
+	var filter models.MetricImportBatchFilter
+	if err := c.QueryParser(&filter); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
+	}
+
+	batches, total, err := h.service.ListMetricImportBatches(c.UserContext(), &filter)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to list metric import batches")
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data":    batches,
+		"total":   total,
+		"page":    filter.Page,
+		"limit":   filter.Limit,
+	})
+}
+
+func (h *GoalHandler) GetMetricImportBatch(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+	}
+
+	batch, err := h.service.GetMetricImportBatch(c.UserContext(), id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Metric import batch", batch)
+}
+
+func (h *GoalHandler) DeleteMetricImportBatch(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+
+	if err := h.service.DeleteMetricImportBatch(c.UserContext(), id, userID); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"message": "Metric import batch deleted",
+	})
+}
+
+func (h *GoalHandler) GetAvailableMetricBatchTransitions(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+
+	transitions, err := h.service.GetAvailableMetricBatchTransitions(c.UserContext(), id, userID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Available transitions", transitions)
+}
+
+func (h *GoalHandler) ExecuteMetricBatchTransition(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+	}
+
+	var req models.MetricImportBatchTransitionRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+
+	result, err := h.service.ExecuteMetricBatchTransition(c.UserContext(), id, &req, userID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Transition executed", result)
+}
+
+func (h *GoalHandler) GetMetricBatchTransitionHistory(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+	}
+
+	history, err := h.service.GetMetricBatchTransitionHistory(c.UserContext(), id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to get transition history")
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Transition history", history)
 }

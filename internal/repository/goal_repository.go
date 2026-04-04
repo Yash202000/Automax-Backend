@@ -61,6 +61,20 @@ type GoalRepository interface {
 	FindCheckInByID(ctx context.Context, id uuid.UUID) (*models.GoalCheckIn, error)
 	DeleteCheckIn(ctx context.Context, id uuid.UUID) error
 
+	// Metric Import Batches
+	CreateMetricImportBatch(ctx context.Context, batch *models.MetricImportBatch) error
+	FindMetricImportBatchByID(ctx context.Context, id uuid.UUID) (*models.MetricImportBatch, error)
+	FindMetricImportBatchByIDWithRelations(ctx context.Context, id uuid.UUID) (*models.MetricImportBatch, error)
+	FindMetricImportBatchByIDForUpdate(ctx context.Context, tx *gorm.DB, id uuid.UUID) (*models.MetricImportBatch, error)
+	UpdateMetricImportBatchInTx(ctx context.Context, tx *gorm.DB, batch *models.MetricImportBatch) error
+	ListMetricImportBatches(ctx context.Context, filter *models.MetricImportBatchFilter) ([]models.MetricImportBatch, int64, error)
+	DeleteMetricImportBatch(ctx context.Context, id uuid.UUID) error
+	CreateMetricImportItems(ctx context.Context, tx *gorm.DB, items []models.MetricImportItem) error
+	ListMetricImportItemsByBatchID(ctx context.Context, batchID uuid.UUID) ([]models.MetricImportItem, error)
+	MarkMetricImportItemsApplied(ctx context.Context, tx *gorm.DB, batchID uuid.UUID) error
+	CreateMetricBatchTransitionHistory(ctx context.Context, tx *gorm.DB, h *models.MetricImportBatchTransitionHistory) error
+	ListMetricBatchTransitionHistory(ctx context.Context, batchID uuid.UUID) ([]models.MetricImportBatchTransitionHistory, error)
+
 	// Transaction support
 	BeginTx(ctx context.Context) *gorm.DB
 }
@@ -632,4 +646,131 @@ func (r *goalRepository) FindCheckInByID(ctx context.Context, id uuid.UUID) (*mo
 
 func (r *goalRepository) DeleteCheckIn(ctx context.Context, id uuid.UUID) error {
 	return r.db.WithContext(ctx).Delete(&models.GoalCheckIn{}, "id = ?", id).Error
+}
+
+// ──────────────────────────────────────────────────
+// Metric Import Batches
+// ──────────────────────────────────────────────────
+
+func (r *goalRepository) CreateMetricImportBatch(ctx context.Context, batch *models.MetricImportBatch) error {
+	return r.db.WithContext(ctx).Create(batch).Error
+}
+
+func (r *goalRepository) FindMetricImportBatchByID(ctx context.Context, id uuid.UUID) (*models.MetricImportBatch, error) {
+	var batch models.MetricImportBatch
+	err := r.db.WithContext(ctx).First(&batch, "id = ?", id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &batch, nil
+}
+
+func (r *goalRepository) FindMetricImportBatchByIDWithRelations(ctx context.Context, id uuid.UUID) (*models.MetricImportBatch, error) {
+	var batch models.MetricImportBatch
+	err := r.db.WithContext(ctx).
+		Preload("ImportedBy").
+		Preload("PrimaryGoal").
+		Preload("CurrentState").
+		Preload("AssignedTo").
+		Preload("Items", func(db *gorm.DB) *gorm.DB {
+			return db.Order("created_at")
+		}).
+		Preload("Items.Goal").
+		Preload("Items.Metric").
+		First(&batch, "id = ?", id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &batch, nil
+}
+
+func (r *goalRepository) FindMetricImportBatchByIDForUpdate(ctx context.Context, tx *gorm.DB, id uuid.UUID) (*models.MetricImportBatch, error) {
+	var batch models.MetricImportBatch
+	err := tx.WithContext(ctx).
+		Set("gorm:query_option", "FOR UPDATE").
+		First(&batch, "id = ?", id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &batch, nil
+}
+
+func (r *goalRepository) UpdateMetricImportBatchInTx(ctx context.Context, tx *gorm.DB, batch *models.MetricImportBatch) error {
+	return tx.WithContext(ctx).Save(batch).Error
+}
+
+func (r *goalRepository) ListMetricImportBatches(ctx context.Context, filter *models.MetricImportBatchFilter) ([]models.MetricImportBatch, int64, error) {
+	var batches []models.MetricImportBatch
+	var total int64
+
+	query := r.db.WithContext(ctx).
+		Preload("ImportedBy").
+		Preload("PrimaryGoal").
+		Preload("CurrentState").
+		Preload("AssignedTo")
+
+	if filter.Status != "" {
+		query = query.Where("status = ?", filter.Status)
+	}
+
+	query.Model(&models.MetricImportBatch{}).Count(&total)
+
+	page := filter.Page
+	if page < 1 {
+		page = 1
+	}
+	limit := filter.Limit
+	if limit < 1 || limit > 100 {
+		limit = 20
+	}
+	offset := (page - 1) * limit
+
+	err := query.Offset(offset).Limit(limit).Order("updated_at DESC").Find(&batches).Error
+	return batches, total, err
+}
+
+func (r *goalRepository) DeleteMetricImportBatch(ctx context.Context, id uuid.UUID) error {
+	return r.db.WithContext(ctx).Delete(&models.MetricImportBatch{}, "id = ?", id).Error
+}
+
+func (r *goalRepository) CreateMetricImportItems(ctx context.Context, tx *gorm.DB, items []models.MetricImportItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+	return tx.WithContext(ctx).Create(&items).Error
+}
+
+func (r *goalRepository) ListMetricImportItemsByBatchID(ctx context.Context, batchID uuid.UUID) ([]models.MetricImportItem, error) {
+	var items []models.MetricImportItem
+	err := r.db.WithContext(ctx).
+		Preload("Goal").
+		Preload("Metric").
+		Where("batch_id = ?", batchID).
+		Order("created_at").
+		Find(&items).Error
+	return items, err
+}
+
+func (r *goalRepository) MarkMetricImportItemsApplied(ctx context.Context, tx *gorm.DB, batchID uuid.UUID) error {
+	return tx.WithContext(ctx).
+		Model(&models.MetricImportItem{}).
+		Where("batch_id = ?", batchID).
+		Update("applied", true).Error
+}
+
+func (r *goalRepository) CreateMetricBatchTransitionHistory(ctx context.Context, tx *gorm.DB, h *models.MetricImportBatchTransitionHistory) error {
+	return tx.WithContext(ctx).Create(h).Error
+}
+
+func (r *goalRepository) ListMetricBatchTransitionHistory(ctx context.Context, batchID uuid.UUID) ([]models.MetricImportBatchTransitionHistory, error) {
+	var history []models.MetricImportBatchTransitionHistory
+	err := r.db.WithContext(ctx).
+		Preload("Transition").
+		Preload("FromState").
+		Preload("ToState").
+		Preload("PerformedBy").
+		Where("batch_id = ?", batchID).
+		Order("transitioned_at ASC").
+		Find(&history).Error
+	return history, err
 }

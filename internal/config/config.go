@@ -23,7 +23,8 @@ type Config struct {
 
 type DocumentaConfig struct {
 	BaseURL       string
-	APIKey        string
+	ClientID      string
+	ClientSecret  string
 	WorkspaceName string
 	Enabled       bool
 }
@@ -148,9 +149,10 @@ func Load() *Config {
 			WeeklyMinute: getEnvAsInt("ESCALATION_WEEKLY_MINUTE", 0),
 		},
 		Documenta: DocumentaConfig{
-			BaseURL:       getEnv("DOCUMENTA_BASE_URL", "http://localhost:9090"),
-			APIKey:        getEnv("DOCUMENTA_API_KEY", ""),
-			WorkspaceName: getEnv("DOCUMENTA_WORKSPACE_NAME", "Automax"),
+			BaseURL:       getEnv("DOCUMENTA_BASE_URL", "http://localhost:8090"),
+			ClientID:      getEnv("DOCUMENTA_CLIENT_ID", ""),
+			ClientSecret:  getEnv("DOCUMENTA_CLIENT_SECRET", ""),
+			WorkspaceName: getEnv("DOCUMENTA_WORKSPACE_NAME", "automax"),
 			Enabled:       getEnvAsBool("DOCUMENTA_ENABLED", false),
 		},
 		ReadyToClose: ReadyToCloseConfig{

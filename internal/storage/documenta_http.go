@@ -1,0 +1,623 @@
+package storage
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"mime/multipart"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/automax/backend/internal/config"
+	"github.com/redis/go-redis/v9"
+)
+
+const (
+	redisTokenKey        = "documenta:oauth_token"
+	redisFolderKeyPrefix = "documenta:folder:" // e.g., documenta:folder:automax::Goal Management
+	tokenSafetyMargin    = 60                  // seconds before expiry to refresh
+	defaultOnBehalf      = "system@automax.local"
+)
+
+// ════════════════════════════════════════════════════
+// HTTP Client Implementation
+// ════════════════════════════════════════════════════
+
+type httpDocumentaClient struct {
+	baseURL      string
+	clientID     string
+	clientSecret string
+	httpClient   *http.Client
+	redisClient  *redis.Client
+
+	// In-memory token cache
+	mu            sync.RWMutex
+	cachedToken   string
+	tokenExpiry   time.Time
+	workspaceUUID string // extracted from OAuth JWT on first token fetch
+}
+
+// NewHTTPDocumentaClient creates a real Documenta/MyDocs HTTP client.
+func NewHTTPDocumentaClient(cfg config.DocumentaConfig, redisClient *redis.Client) DocumentaClient {
+	return &httpDocumentaClient{
+		baseURL:      cfg.BaseURL + "/api/v1",
+		clientID:     cfg.ClientID,
+		clientSecret: cfg.ClientSecret,
+		httpClient:   &http.Client{Timeout: 30 * time.Second},
+		redisClient:  redisClient,
+	}
+}
+
+// ──────────────────────────────────────────────────
+// OAuth Token Management (3-tier cache)
+// ──────────────────────────────────────────────────
+
+func (c *httpDocumentaClient) getToken(ctx context.Context) (string, error) {
+	// Tier 1: In-memory
+	c.mu.RLock()
+	if c.cachedToken != "" && time.Now().Before(c.tokenExpiry) {
+		token := c.cachedToken
+		c.mu.RUnlock()
+		c.extractWorkspaceUUID(token)
+		return token, nil
+	}
+	c.mu.RUnlock()
+
+	// Tier 2: Redis
+	if c.redisClient != nil {
+		val, err := c.redisClient.Get(ctx, redisTokenKey).Result()
+		if err == nil && val != "" {
+			ttl, _ := c.redisClient.TTL(ctx, redisTokenKey).Result()
+			c.mu.Lock()
+			c.cachedToken = val
+			c.tokenExpiry = time.Now().Add(ttl)
+			c.mu.Unlock()
+			c.extractWorkspaceUUID(val)
+			return val, nil
+		}
+	}
+
+	// Tier 3: Fresh token
+	return c.fetchNewToken(ctx)
+}
+
+// extractWorkspaceUUID decodes the JWT payload to get workspace_uuid (idempotent, only runs once).
+func (c *httpDocumentaClient) extractWorkspaceUUID(token string) {
+	if c.workspaceUUID != "" {
+		return
+	}
+	parts := strings.SplitN(token, ".", 3)
+	if len(parts) < 2 {
+		return
+	}
+	payload := parts[1]
+	if m := len(payload) % 4; m != 0 {
+		payload += strings.Repeat("=", 4-m)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return
+	}
+	var claims struct {
+		WorkspaceUUID string `json:"workspace_uuid"`
+	}
+	if json.Unmarshal(decoded, &claims) == nil && claims.WorkspaceUUID != "" {
+		c.workspaceUUID = claims.WorkspaceUUID
+		log.Printf("[DOCUMENTA] Resolved workspace UUID: %s", c.workspaceUUID)
+	}
+}
+
+func (c *httpDocumentaClient) fetchNewToken(ctx context.Context) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Double-check after acquiring write lock
+	if c.cachedToken != "" && time.Now().Before(c.tokenExpiry) {
+		return c.cachedToken, nil
+	}
+
+	data := url.Values{
+		"grant_type":    {"client_credentials"},
+		"client_id":     {c.clientID},
+		"client_secret": {c.clientSecret},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/oauth/token", bytes.NewBufferString(data.Encode()))
+	if err != nil {
+		return "", fmt.Errorf("documenta: create token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("documenta: token request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("documenta: token request failed (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int    `json:"expires_in"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("documenta: decode token response: %w", err)
+	}
+
+	if result.AccessToken == "" {
+		return "", fmt.Errorf("documenta: empty access token in response")
+	}
+
+	token := result.AccessToken
+	expiresIn := result.ExpiresIn
+	if expiresIn <= 0 {
+		expiresIn = 3600
+	}
+
+	ttl := time.Duration(expiresIn-tokenSafetyMargin) * time.Second
+	if ttl < 30*time.Second {
+		ttl = 30 * time.Second
+	}
+
+	c.cachedToken = token
+	c.tokenExpiry = time.Now().Add(ttl)
+	c.extractWorkspaceUUID(token)
+
+	// Store in Redis
+	if c.redisClient != nil {
+		c.redisClient.Set(ctx, redisTokenKey, token, ttl)
+	}
+
+	log.Printf("[DOCUMENTA] OAuth token acquired, expires in %ds", expiresIn)
+	return token, nil
+}
+
+// resolveWorkspace returns the workspace UUID if resolved, otherwise falls back to the slug.
+func (c *httpDocumentaClient) resolveWorkspace(slug string) string {
+	if c.workspaceUUID != "" {
+		return c.workspaceUUID
+	}
+	return slug
+}
+
+// ──────────────────────────────────────────────────
+// HTTP Helpers
+// ──────────────────────────────────────────────────
+
+type onBehalfKey struct{}
+
+// ContextWithOnBehalf stores the user email in context for X-On-Behalf-Of.
+func ContextWithOnBehalf(ctx context.Context, email string) context.Context {
+	return context.WithValue(ctx, onBehalfKey{}, email)
+}
+
+func getOnBehalf(ctx context.Context) string {
+	if v, ok := ctx.Value(onBehalfKey{}).(string); ok && v != "" {
+		return v
+	}
+	return defaultOnBehalf
+}
+
+func (c *httpDocumentaClient) doRequest(ctx context.Context, method, path string, body io.Reader, contentType string) (*http.Response, error) {
+	token, err := c.getToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
+	if err != nil {
+		return nil, fmt.Errorf("documenta: create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-On-Behalf-Of", getOnBehalf(ctx))
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+
+	return c.httpClient.Do(req)
+}
+
+func (c *httpDocumentaClient) doJSON(ctx context.Context, method, path string, payload interface{}) (*http.Response, error) {
+	var body io.Reader
+	if payload != nil {
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("documenta: marshal payload: %w", err)
+		}
+		body = bytes.NewReader(data)
+	}
+	return c.doRequest(ctx, method, path, body, "application/json")
+}
+
+// parseResponse decodes the standard MyDocs envelope { success, data }.
+func parseResponse[T any](resp *http.Response) (*T, error) {
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("documenta: request failed (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var envelope struct {
+		Success bool `json:"success"`
+		Data    T    `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		return nil, fmt.Errorf("documenta: decode response: %w", err)
+	}
+	return &envelope.Data, nil
+}
+
+// ──────────────────────────────────────────────────
+// Folder & File Operations
+// ──────────────────────────────────────────────────
+
+func (c *httpDocumentaClient) CreateFolder(ctx context.Context, workspaceName string, parentID string, name string) (string, error) {
+	if _, err := c.getToken(ctx); err != nil {
+		return "", err
+	}
+	payload := map[string]string{
+		"workspace": c.resolveWorkspace(workspaceName),
+		"name":      name,
+	}
+	if parentID != "" {
+		payload["parent"] = parentID
+	}
+
+	resp, err := c.doJSON(ctx, http.MethodPost, "/files/folder", payload)
+	if err != nil {
+		return "", err
+	}
+
+	type folderResp struct {
+		UUID string `json:"uuid"`
+	}
+	result, err := parseResponse[folderResp](resp)
+	if err != nil {
+		return "", err
+	}
+	return result.UUID, nil
+}
+
+func (c *httpDocumentaClient) EnsureFolder(ctx context.Context, workspaceName string, parentID string, name string) (string, error) {
+	cacheKey := redisFolderKeyPrefix + workspaceName + ":" + parentID + ":" + name
+
+	// Tier 1: Check Redis cache
+	if c.redisClient != nil {
+		val, err := c.redisClient.Get(ctx, cacheKey).Result()
+		if err == nil && val != "" {
+			return val, nil
+		}
+	}
+
+	// Tier 2: List parent folder and look for existing folder by name
+	result, err := c.ListFiles(ctx, workspaceName, parentID)
+	if err == nil {
+		for _, f := range result.Files {
+			if f.Type == "folder" && f.Name == name {
+				if c.redisClient != nil {
+					c.redisClient.Set(ctx, cacheKey, f.UUID, 0) // permanent cache
+				}
+				return f.UUID, nil
+			}
+		}
+	}
+
+	// Tier 3: Create folder
+	folderID, createErr := c.CreateFolder(ctx, workspaceName, parentID, name)
+	if createErr != nil {
+		return "", fmt.Errorf("ensure folder %q: %w", name, createErr)
+	}
+
+	if c.redisClient != nil {
+		c.redisClient.Set(ctx, cacheKey, folderID, 0) // permanent cache
+	}
+	log.Printf("[DOCUMENTA] EnsureFolder: created %q under %q → %s", name, parentID, folderID)
+	return folderID, nil
+}
+
+func (c *httpDocumentaClient) UploadFile(ctx context.Context, folderID, fileName string, fileData io.Reader, fileSize int64, metadata map[string]string) (string, error) {
+	token, err := c.getToken(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	if err := writer.WriteField("parent", folderID); err != nil {
+		return "", fmt.Errorf("documenta: write parent field: %w", err)
+	}
+
+	part, err := writer.CreateFormFile("file", fileName)
+	if err != nil {
+		return "", fmt.Errorf("documenta: create form file: %w", err)
+	}
+	if _, err := io.Copy(part, fileData); err != nil {
+		return "", fmt.Errorf("documenta: copy file data: %w", err)
+	}
+
+	// Write metadata as JSON field
+	if len(metadata) > 0 {
+		metaJSON, _ := json.Marshal(metadata)
+		if err := writer.WriteField("metadata", string(metaJSON)); err != nil {
+			return "", fmt.Errorf("documenta: write metadata field: %w", err)
+		}
+	}
+
+	if err := writer.Close(); err != nil {
+		return "", fmt.Errorf("documenta: close multipart: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/files/upload", &buf)
+	if err != nil {
+		return "", fmt.Errorf("documenta: create upload request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-On-Behalf-Of", getOnBehalf(ctx))
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("documenta: upload request: %w", err)
+	}
+
+	type uploadResp struct {
+		UUID string `json:"uuid"`
+	}
+	result, parseErr := parseResponse[uploadResp](resp)
+	if parseErr != nil {
+		return "", parseErr
+	}
+	return result.UUID, nil
+}
+
+func (c *httpDocumentaClient) GetPreviewURL(ctx context.Context, fileID string) (string, error) {
+	// Return the backend proxy URL — frontend calls our backend, which streams from Documenta
+	return fmt.Sprintf("/api/v1/documents/files/%s/preview", fileID), nil
+}
+
+func (c *httpDocumentaClient) GetDownloadURL(ctx context.Context, fileID string) (string, error) {
+	return fmt.Sprintf("/api/v1/documents/files/%s/download", fileID), nil
+}
+
+func (c *httpDocumentaClient) UpdateMetadata(ctx context.Context, fileID string, metadata map[string]string) error {
+	return c.SetTags(ctx, fileID, metadata)
+}
+
+func (c *httpDocumentaClient) DeleteFile(ctx context.Context, fileID string) error {
+	resp, err := c.doRequest(ctx, http.MethodDelete, "/files/"+fileID, nil, "")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("documenta: delete failed (%d): %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// ──────────────────────────────────────────────────
+// Browsing & Search
+// ──────────────────────────────────────────────────
+
+func (c *httpDocumentaClient) ListFiles(ctx context.Context, workspaceSlug string, parentID string) (*DmsListResult, error) {
+	// Ensure token + workspace UUID are resolved before building params
+	if _, err := c.getToken(ctx); err != nil {
+		return nil, err
+	}
+	params := url.Values{"workspace": {c.resolveWorkspace(workspaceSlug)}}
+	if parentID != "" {
+		params.Set("parent", parentID)
+	}
+
+	resp, err := c.doRequest(ctx, http.MethodGet, "/files?"+params.Encode(), nil, "")
+	if err != nil {
+		return nil, err
+	}
+
+	// MyDocs returns { success, data: { files: [...], settings: {...}, workspaceRole: "..." } }
+	type listData struct {
+		Files []DmsFile `json:"files"`
+	}
+	result, parseErr := parseResponse[listData](resp)
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	return &DmsListResult{Files: result.Files}, nil
+}
+
+func (c *httpDocumentaClient) SearchFiles(ctx context.Context, workspaceSlug string, query string) (*DmsSearchResult, error) {
+	if _, err := c.getToken(ctx); err != nil {
+		return nil, err
+	}
+	payload := map[string]string{
+		"workspace": c.resolveWorkspace(workspaceSlug),
+		"query":     query,
+	}
+
+	resp, err := c.doJSON(ctx, http.MethodPost, "/search", payload)
+	if err != nil {
+		return nil, err
+	}
+
+	type searchData struct {
+		Files []DmsFile `json:"files"`
+		Total int       `json:"total"`
+	}
+	result, parseErr := parseResponse[searchData](resp)
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	return &DmsSearchResult{Files: result.Files, Total: result.Total}, nil
+}
+
+func (c *httpDocumentaClient) SearchFilesWithTags(ctx context.Context, workspaceSlug string, query string, tags map[string]string) (*DmsSearchResult, error) {
+	if _, err := c.getToken(ctx); err != nil {
+		return nil, err
+	}
+	payload := map[string]interface{}{
+		"workspace": c.resolveWorkspace(workspaceSlug),
+		"query":     query,
+	}
+	if len(tags) > 0 {
+		payload["tags"] = tags
+	}
+
+	resp, err := c.doJSON(ctx, http.MethodPost, "/search", payload)
+	if err != nil {
+		return nil, err
+	}
+
+	type searchData struct {
+		Files []DmsFile `json:"files"`
+		Total int       `json:"total"`
+	}
+	result, parseErr := parseResponse[searchData](resp)
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	return &DmsSearchResult{Files: result.Files, Total: result.Total}, nil
+}
+
+func (c *httpDocumentaClient) GetFileInfo(ctx context.Context, fileID string) (*DmsFile, error) {
+	resp, err := c.doRequest(ctx, http.MethodGet, "/files/info/"+fileID, nil, "")
+	if err != nil {
+		return nil, err
+	}
+
+	result, parseErr := parseResponse[DmsFile](resp)
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	return result, nil
+}
+
+// ──────────────────────────────────────────────────
+// Comments
+// ──────────────────────────────────────────────────
+
+func (c *httpDocumentaClient) GetComments(ctx context.Context, fileID string) ([]DmsComment, error) {
+	resp, err := c.doRequest(ctx, http.MethodGet, "/comments?node="+fileID, nil, "")
+	if err != nil {
+		return nil, err
+	}
+
+	// MyDocs returns { success, data: [ { uuid, content, ... } ] }
+	type mdComment struct {
+		UUID       string `json:"uuid"`
+		Content    string `json:"content"`
+		CreatedAt  string `json:"createdAt"`
+		AuthorUUID string `json:"authorUuid"`
+		AuthorName string `json:"authorName"`
+	}
+	result, parseErr := parseResponse[[]mdComment](resp)
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	if result == nil {
+		return []DmsComment{}, nil
+	}
+	comments := make([]DmsComment, len(*result))
+	for i, mc := range *result {
+		comments[i] = DmsComment{
+			ID:        mc.UUID,
+			FileID:    fileID,
+			Author:    mc.AuthorName,
+			Content:   mc.Content,
+			CreatedAt: mc.CreatedAt,
+		}
+	}
+	return comments, nil
+}
+
+func (c *httpDocumentaClient) AddComment(ctx context.Context, fileID string, content string) error {
+	payload := map[string]string{
+		"content": content,
+	}
+
+	resp, err := c.doJSON(ctx, http.MethodPost, "/comments?node="+fileID, payload)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("documenta: add comment failed (%d): %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// ──────────────────────────────────────────────────
+// Tags
+// ──────────────────────────────────────────────────
+
+func (c *httpDocumentaClient) GetTags(ctx context.Context, fileID string) (map[string]string, error) {
+	resp, err := c.doRequest(ctx, http.MethodGet, "/metadata?node="+fileID, nil, "")
+	if err != nil {
+		return nil, err
+	}
+
+	// MyDocs returns { success, data: [ { key, value, namespace, ... } ] }
+	type mdEntry struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	}
+	result, parseErr := parseResponse[[]mdEntry](resp)
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	tags := make(map[string]string)
+	if result != nil {
+		for _, entry := range *result {
+			tags[entry.Key] = entry.Value
+		}
+	}
+	return tags, nil
+}
+
+func (c *httpDocumentaClient) SetTags(ctx context.Context, fileID string, tags map[string]string) error {
+	// MyDocs POST /metadata/bulk expects { nodeUuid, entries: [ { namespace, key, value } ] }
+	type metadataEntry struct {
+		Namespace string `json:"namespace"`
+		Key       string `json:"key"`
+		Value     string `json:"value"`
+		ValueType string `json:"valueType"`
+	}
+	entries := make([]metadataEntry, 0, len(tags))
+	for k, v := range tags {
+		entries = append(entries, metadataEntry{
+			Namespace: "user",
+			Key:       k,
+			Value:     v,
+			ValueType: "string",
+		})
+	}
+
+	payload := map[string]interface{}{
+		"nodeUuid": fileID,
+		"entries":  entries,
+	}
+
+	resp, err := c.doJSON(ctx, http.MethodPost, "/metadata/bulk", payload)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("documenta: set tags failed (%d): %s", resp.StatusCode, string(body))
+	}
+	return nil
+}

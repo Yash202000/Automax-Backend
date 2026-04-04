@@ -119,8 +119,16 @@ func main() {
 	callerSentimentService := services.NewCallerSentimentService(callerSentimentRepo)
 
 	// Goal management services
-	documentaClient := storage.NewStubDocumentaClient()
-	goalService := services.NewGoalService(goalRepo, workflowRepo, userRepo, departmentRepo, documentaClient, notificationService, actionLogService, cfg)
+	var documentaClient storage.DocumentaClient
+	if cfg.Documenta.Enabled {
+		documentaClient = storage.NewHTTPDocumentaClient(cfg.Documenta, redisClient)
+		log.Println("Documenta HTTP client enabled")
+	} else {
+		documentaClient = storage.NewStubDocumentaClient()
+		log.Println("Documenta stub client (DOCUMENTA_ENABLED=false)")
+	}
+	goalService := services.NewGoalService(goalRepo, workflowRepo, userRepo, departmentRepo, documentaClient, notificationService, actionLogService, cfg, wsHub)
+	documentService := services.NewDocumentService(documentaClient, cfg.Documenta)
 
 	// Ready-to-Close service
 	readyToCloseRepo := repository.NewReadyToCloseRepository(db)
@@ -174,6 +182,7 @@ func main() {
 	fcmHandler := handlers.NewFCMHandler(fcmService)
 	sentimentHandler := handlers.NewCallerSentimentHandler(callerSentimentService)
 	goalHandler := handlers.NewGoalHandler(goalService)
+	documentHandler := handlers.NewDocumentHandler(documentService)
 
 	// Goal Templates
 	goalTemplateRepo := repository.NewGoalTemplateRepository(db)
@@ -221,6 +230,14 @@ func main() {
 	// Broadcast WebSocket route for incident list viewer count updates
 	// Query params: token (for auth)
 	v1.Get("/ws/broadcast", websocketHandler.BroadcastWebSocketUpgrader())
+
+	// Goal WebSocket route for real-time goal updates
+	// Query params: goal_id, user_id, token (for auth)
+	v1.Get("/ws/goal", websocketHandler.GoalWebSocketUpgrader())
+
+	// Goal broadcast WebSocket route for goal list updates
+	// Query params: token (for auth)
+	v1.Get("/ws/goal/broadcast", websocketHandler.GoalBroadcastWebSocketUpgrader())
 
 	// WebSocket connection statistics endpoint
 	v1.Get("/ws/stats", authMiddleware.RequirePermission("incidents:view"), websocketHandler.GetConnectionStats)
@@ -656,6 +673,14 @@ func main() {
 	goals := v1.Group("/goals", authMiddleware.Authenticate())
 	goals.Get("/export", authMiddleware.RequirePermission("goals:view"), goalHandler.ExportGoals)
 	goals.Post("/import", authMiddleware.RequirePermission("goals:create"), goalHandler.ImportGoals)
+	goals.Get("/metrics/export-template", authMiddleware.RequirePermission("goals:view"), goalHandler.ExportMetricsTemplate)
+	goals.Post("/metrics/import", authMiddleware.RequirePermission("goals:update"), goalHandler.ImportMetrics)
+	goals.Get("/metric-batches", authMiddleware.RequirePermission("goals:view"), goalHandler.ListMetricImportBatches)
+	goals.Get("/metric-batches/:id", authMiddleware.RequirePermission("goals:view"), goalHandler.GetMetricImportBatch)
+	goals.Delete("/metric-batches/:id", authMiddleware.RequirePermission("goals:update"), goalHandler.DeleteMetricImportBatch)
+	goals.Get("/metric-batches/:id/available-transitions", authMiddleware.RequirePermission("goals:view"), goalHandler.GetAvailableMetricBatchTransitions)
+	goals.Post("/metric-batches/:id/transition", authMiddleware.RequirePermission("goals:update"), goalHandler.ExecuteMetricBatchTransition)
+	goals.Get("/metric-batches/:id/transition-history", authMiddleware.RequirePermission("goals:view"), goalHandler.GetMetricBatchTransitionHistory)
 	goals.Post("/bulk", authMiddleware.RequirePermission("goals:update"), goalHandler.BulkAction)
 	goals.Post("/", authMiddleware.RequirePermission("goals:create"), goalHandler.CreateGoal)
 	goals.Get("/", authMiddleware.RequirePermission("goals:view"), goalHandler.ListGoals)
@@ -682,6 +707,7 @@ func main() {
 	goals.Get("/evidences/:id/preview", authMiddleware.RequirePermission("goals:view"), goalHandler.GetEvidencePreview)
 	goals.Get("/evidences/:id/download", authMiddleware.RequirePermission("goals:view"), goalHandler.DownloadEvidence)
 	goals.Delete("/evidences/:id", authMiddleware.RequirePermission("goals:update"), goalHandler.DeleteEvidence)
+	goals.Put("/evidences/:id/file", authMiddleware.RequirePermission("goals:update"), goalHandler.ReplaceEvidenceFile)
 	goals.Get("/evidences/:id/available-transitions", authMiddleware.RequirePermission("goals:view"), goalHandler.GetAvailableEvidenceTransitions)
 	goals.Post("/evidences/:id/transition", authMiddleware.RequirePermission("goals:update"), goalHandler.ExecuteEvidenceTransition)
 	goals.Get("/evidences/:id/transition-history", authMiddleware.RequirePermission("goals:view"), goalHandler.GetEvidenceTransitionHistory)
@@ -690,6 +716,18 @@ func main() {
 	approvals := v1.Group("/approvals", authMiddleware.Authenticate())
 	approvals.Get("/pending", authMiddleware.RequirePermission("goals:approve"), goalHandler.ListPendingApprovals)
 	approvals.Get("/completed", authMiddleware.RequirePermission("goals:approve"), goalHandler.ListCompletedApprovals)
+
+	// ---- DOCUMENT MANAGEMENT ROUTES ----
+	docs := v1.Group("/documents", authMiddleware.Authenticate())
+	docs.Get("/files", authMiddleware.RequirePermission("goals:view"), documentHandler.ListFiles)
+	docs.Post("/search", authMiddleware.RequirePermission("goals:view"), documentHandler.SearchFiles)
+	docs.Get("/files/:id/info", authMiddleware.RequirePermission("goals:view"), documentHandler.GetFileInfo)
+	docs.Get("/files/:id/preview", authMiddleware.RequirePermission("goals:view"), documentHandler.GetPreviewURL)
+	docs.Get("/files/:id/download", authMiddleware.RequirePermission("goals:view"), documentHandler.GetDownloadURL)
+	docs.Get("/files/:id/comments", authMiddleware.RequirePermission("goals:view"), documentHandler.GetComments)
+	docs.Post("/files/:id/comments", authMiddleware.RequirePermission("goals:update"), documentHandler.AddComment)
+	docs.Get("/files/:id/tags", authMiddleware.RequirePermission("goals:view"), documentHandler.GetTags)
+	docs.Put("/files/:id/tags", authMiddleware.RequirePermission("goals:update"), documentHandler.SetTags)
 
 	go func() {
 		addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
