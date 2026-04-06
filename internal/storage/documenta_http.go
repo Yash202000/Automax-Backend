@@ -267,15 +267,17 @@ func (c *httpDocumentaClient) CreateFolder(ctx context.Context, workspaceName st
 		return "", err
 	}
 	payload := map[string]string{
-		"workspace": c.resolveWorkspace(workspaceName),
-		"name":      name,
+		"workspaceUuid": c.resolveWorkspace(workspaceName),
+		"name":          name,
 	}
 	if parentID != "" {
-		payload["parent"] = parentID
+		payload["parentUuid"] = parentID
 	}
 
+	log.Printf("[DOCUMENTA] CreateFolder: workspace=%s parent=%s name=%q", c.resolveWorkspace(workspaceName), parentID, name)
 	resp, err := c.doJSON(ctx, http.MethodPost, "/files/folder", payload)
 	if err != nil {
+		log.Printf("[DOCUMENTA] CreateFolder doJSON error: %v", err)
 		return "", err
 	}
 
@@ -284,6 +286,7 @@ func (c *httpDocumentaClient) CreateFolder(ctx context.Context, workspaceName st
 	}
 	result, err := parseResponse[folderResp](resp)
 	if err != nil {
+		log.Printf("[DOCUMENTA] CreateFolder parseResponse error: %v", err)
 		return "", err
 	}
 	return result.UUID, nil
@@ -335,7 +338,15 @@ func (c *httpDocumentaClient) UploadFile(ctx context.Context, folderID, fileName
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 
-	if err := writer.WriteField("parent", folderID); err != nil {
+	// MyDocs multipart upload uses "workspace" (not "workspaceUuid")
+	wsUUID := c.workspaceUUID
+	if wsUUID != "" {
+		if err := writer.WriteField("workspace", wsUUID); err != nil {
+			return "", fmt.Errorf("documenta: write workspace field: %w", err)
+		}
+	}
+
+	if err := writer.WriteField("parentUuid", folderID); err != nil {
 		return "", fmt.Errorf("documenta: write parent field: %w", err)
 	}
 
