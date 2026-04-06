@@ -86,9 +86,7 @@ func (r *reportTemplateRepository) List(ctx context.Context, filter *models.Repo
 
 	// Apply pagination
 	page := filter.Page
-	if page < 1 {
-		page = 1
-	}
+	page = max(page, 1)
 	limit := filter.Limit
 	if limit < 1 || limit > 100 {
 		limit = 20

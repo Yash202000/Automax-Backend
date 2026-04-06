@@ -244,9 +244,7 @@ func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 	locationIDs := parseUUIDList(c.Query("location_ids", ""))
 	classificationIDs := parseUUIDList(c.Query("classification_ids", ""))
 
-	if page < 1 {
-		page = 1
-	}
+	page = max(page, 1)
 	if limit < 1 || limit > 100 {
 		limit = 10
 	}

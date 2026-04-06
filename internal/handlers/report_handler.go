@@ -287,9 +287,7 @@ func (h *ReportHandler) GetExecutionHistory(c *fiber.Ctx) error {
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit, _ := strconv.Atoi(c.Query("limit", "20"))
 
-	if page < 1 {
-		page = 1
-	}
+	page = max(page, 1)
 	if limit < 1 || limit > 100 {
 		limit = 20
 	}

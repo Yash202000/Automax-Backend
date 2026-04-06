@@ -123,9 +123,7 @@ func (s *actionLogService) GetStats(ctx context.Context) (*models.ActionLogStats
 }
 
 func (s *actionLogService) GetUserActions(ctx context.Context, userID uuid.UUID, page, limit int) ([]models.ActionLogResponse, int64, error) {
-	if page < 1 {
-		page = 1
-	}
+	page = max(page, 1)
 	if limit < 1 || limit > 100 {
 		limit = 20
 	}

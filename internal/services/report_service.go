@@ -35,16 +35,50 @@ type ReportService interface {
 	GetDataSources(ctx context.Context) []models.DataSourceInfo
 }
 
+// queryHandlerFn is the unified signature all data-source handlers must satisfy.
+type queryHandlerFn func(
+	ctx context.Context,
+	filters []models.ReportFilterConfig,
+	sorting *models.ReportSortConfig,
+	page, limit int,
+) ([]map[string]interface{}, int64, error)
+
 type reportService struct {
 	reportRepo       repository.ReportRepository
 	rejectionLogRepo repository.RejectionLogRepository
+	queryHandlers    map[string]queryHandlerFn // ← single registry
 }
 
 func NewReportService(reportRepo repository.ReportRepository, rejectionLogRepo repository.RejectionLogRepository) ReportService {
-	return &reportService{
+	// return &reportService{
+	// 	reportRepo:       reportRepo,
+	// 	rejectionLogRepo: rejectionLogRepo,
+	// }
+	s := &reportService{
 		reportRepo:       reportRepo,
 		rejectionLogRepo: rejectionLogRepo,
 	}
+	// All four switch statements collapse into this one map.
+	// Adding a new data source = one line here, zero changes elsewhere.
+	s.queryHandlers = map[string]queryHandlerFn{
+		"incidents":                 reportRepo.ExecuteIncidentQuery,
+		"requests":                  reportRepo.ExecuteRequestQuery,
+		"users":                     reportRepo.ExecuteUserQuery,
+		"users_performance":         reportRepo.ExecuteUserPerformanceQuery,
+		"workflows":                 reportRepo.ExecuteWorkflowQuery,
+		"departments":               reportRepo.ExecuteDepartmentQuery,
+		"locations":                 reportRepo.ExecuteLocationQuery,
+		"classifications":           reportRepo.ExecuteClassificationQuery,
+		"rejection_logs":            rejectionLogRepo.ExecuteRejectionLogQuery,
+		"action_logs":               reportRepo.ExecuteActionLogQuery,
+		"locations_by_count":        reportRepo.ExecuteLocationCountQuery,
+		"locations_by_status":       reportRepo.ExecuteLocationCountByStatusQuery,
+		"classifications_by_count":  reportRepo.ExecuteClassificationCountQuery,
+		"classifications_by_status": reportRepo.ExecuteClassificationCountByStatusQuery,
+		"departments_by_count":      reportRepo.ExecuteDepartmentCountQuery,
+		"departments_by_status":     reportRepo.ExecuteDepartmentCountByStatusQuery,
+	}
+	return s
 }
 
 // Report CRUD
@@ -180,9 +214,109 @@ func (s *reportService) DuplicateReport(ctx context.Context, id uuid.UUID, userI
 	return s.GetReport(ctx, duplicate.ID)
 }
 
-// Report Execution
+// dispatchQuery resolves the handler for dataSource and runs it.
+// This is the single place that returns "unsupported data source".
+func (s *reportService) dispatchQuery(
+	ctx context.Context,
+	dataSource string,
+	filters []models.ReportFilterConfig,
+	sorting *models.ReportSortConfig,
+	page, limit int,
+) ([]map[string]interface{}, int64, error) {
+	handler, ok := s.queryHandlers[dataSource]
+	if !ok {
+		return nil, 0, fmt.Errorf("unsupported data source: %q", dataSource)
+	}
+	return handler(ctx, filters, sorting, page, limit)
+}
 
-func (s *reportService) ExecuteReport(ctx context.Context, id uuid.UUID, req *models.ReportExecuteRequest, userID uuid.UUID) (*models.ReportResultResponse, error) {
+// firstSorting extracts the first sort config or nil — used by every caller.
+func firstSorting(sorting []models.ReportSortConfig) *models.ReportSortConfig {
+	if len(sorting) > 0 {
+		return &sorting[0]
+	}
+	return nil
+}
+
+// Report Execution
+func (s *reportService) QueryReport(ctx context.Context, req *models.ReportQueryRequest) (*models.ReportQueryResponse, error) {
+	data, total, err := s.dispatchQuery(ctx,
+		req.DataSource, req.Filters, firstSorting(req.Sorting), req.Page, req.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	totalPages := int(total) / req.Limit
+	if int(total)%req.Limit > 0 {
+		totalPages++
+	}
+	return &models.ReportQueryResponse{
+		Success:    true,
+		Data:       data,
+		Columns:    req.Columns,
+		TotalItems: total,
+		TotalPages: totalPages,
+		Page:       req.Page,
+		Limit:      req.Limit,
+	}, nil
+}
+
+func (s *reportService) PreviewReport(ctx context.Context, req *models.ReportCreateRequest) (*models.ReportResultResponse, error) {
+	const previewLimit = 50
+	data, total, err := s.dispatchQuery(ctx,
+		req.DataSource, req.Config.Filters, firstSorting(req.Config.Sorting), 1, previewLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &models.ReportResultResponse{
+		Columns: req.Config.Columns,
+		Data:    data,
+		Total:   total,
+		Page:    1,
+		Limit:   previewLimit,
+	}, nil
+}
+
+func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExportRequest) ([]byte, string, string, error) {
+	const exportLimit = 10000
+	data, _, err := s.dispatchQuery(ctx,
+		req.DataSource, req.Filters, firstSorting(req.Sorting), 1, exportLimit,
+	)
+	if err != nil {
+		return nil, "", "", err
+	}
+
+	title := "Report"
+	if req.Options != nil && req.Options.Title != "" {
+		title = req.Options.Title
+	}
+
+	filename := title + "_" + time.Now().Format("2006-01-02_150405")
+
+	if req.Format == "xlsx" {
+		xlsxData, err := s.generateExcel(data, req.Columns, title, req.Options)
+		if err != nil {
+			return nil, "", "", err
+		}
+		return xlsxData, filename + ".xlsx",
+			"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", nil
+	}
+
+	pdfData, err := s.generatePDF(data, req.Columns, title, req.Options)
+	if err != nil {
+		return nil, "", "", err
+	}
+	return pdfData, filename + ".pdf", "application/pdf", nil
+}
+
+func (s *reportService) ExecuteReport(
+	ctx context.Context,
+	id uuid.UUID,
+	req *models.ReportExecuteRequest,
+	userID uuid.UUID,
+) (*models.ReportResultResponse, error) {
 	report, err := s.reportRepo.FindByID(ctx, id)
 	if err != nil {
 		return nil, err
@@ -191,18 +325,22 @@ func (s *reportService) ExecuteReport(ctx context.Context, id uuid.UUID, req *mo
 	// Parse stored config
 	var columns []models.ReportColumnConfig
 	var filters []models.ReportFilterConfig
-	var sorting *models.ReportSortConfig
-
+	var storedSorting []models.ReportSortConfig
 	json.Unmarshal([]byte(report.Columns), &columns)
 	json.Unmarshal([]byte(report.Filters), &filters)
-	json.Unmarshal([]byte(report.Sorting), &sorting)
+	json.Unmarshal([]byte(report.Sorting), &storedSorting)
 
-	// Override filters if provided
 	if len(req.Filters) > 0 {
 		filters = req.Filters
 	}
 
-	// Create execution record
+	page := max(req.Page, 1)
+	limit := req.Limit
+	if limit < 1 || limit > 1000 {
+		limit = 100
+	}
+
+	// Record execution start
 	now := time.Now()
 	execution := &models.ReportExecution{
 		ReportID:     id,
@@ -212,46 +350,11 @@ func (s *reportService) ExecuteReport(ctx context.Context, id uuid.UUID, req *mo
 	}
 	s.reportRepo.CreateExecution(ctx, execution)
 
-	// Execute query based on data source
-	page := req.Page
-	if page < 1 {
-		page = 1
-	}
-	limit := req.Limit
-	if limit < 1 || limit > 1000 {
-		limit = 100
-	}
+	data, total, queryErr := s.dispatchQuery(ctx,
+		report.DataSource, filters, firstSorting(storedSorting), page, limit,
+	)
 
-	var data []map[string]interface{}
-	var total int64
-	var queryErr error
-
-	switch report.DataSource {
-	case "incidents":
-		data, total, queryErr = s.reportRepo.ExecuteIncidentQuery(ctx, filters, sorting, page, limit)
-	case "requests":
-		data, _, err = s.reportRepo.ExecuteRequestQuery(ctx, req.Filters, sorting, 1, limit)
-	case "users":
-		data, total, queryErr = s.reportRepo.ExecuteUserQuery(ctx, filters, sorting, page, limit)
-	case "users_performance":
-		data, total, queryErr = s.reportRepo.ExecuteUserPerformanceQuery(ctx, filters, sorting, page, limit)
-	case "workflows":
-		data, total, queryErr = s.reportRepo.ExecuteWorkflowQuery(ctx, filters, sorting, page, limit)
-	case "departments":
-		data, total, queryErr = s.reportRepo.ExecuteDepartmentQuery(ctx, filters, sorting, page, limit)
-	case "locations":
-		data, total, queryErr = s.reportRepo.ExecuteLocationQuery(ctx, filters, sorting, page, limit)
-	case "classifications":
-		data, total, queryErr = s.reportRepo.ExecuteClassificationQuery(ctx, filters, sorting, page, limit)
-	case "rejection_logs":
-		data, total, queryErr = s.rejectionLogRepo.ExecuteRejectionLogQuery(ctx, filters, sorting, page, limit)
-	case "action_logs":
-		data, total, queryErr = s.reportRepo.ExecuteActionLogQuery(ctx, filters, sorting, page, limit)
-	default:
-		queryErr = errors.New("unsupported data source")
-	}
-
-	// Update execution record
+	// Record execution result regardless of error
 	completedAt := time.Now()
 	execution.CompletedAt = &completedAt
 	if queryErr != nil {
@@ -266,7 +369,6 @@ func (s *reportService) ExecuteReport(ctx context.Context, id uuid.UUID, req *mo
 	if queryErr != nil {
 		return nil, queryErr
 	}
-
 	return &models.ReportResultResponse{
 		Columns: columns,
 		Data:    data,
@@ -274,180 +376,6 @@ func (s *reportService) ExecuteReport(ctx context.Context, id uuid.UUID, req *mo
 		Page:    page,
 		Limit:   limit,
 	}, nil
-}
-
-func (s *reportService) PreviewReport(ctx context.Context, req *models.ReportCreateRequest) (*models.ReportResultResponse, error) {
-	page := 1
-	limit := 50 // Preview limit
-
-	var data []map[string]interface{}
-	var total int64
-	var err error
-
-	// Get sorting from config
-	var sorting *models.ReportSortConfig
-	if len(req.Config.Sorting) > 0 {
-		sorting = &req.Config.Sorting[0]
-	}
-
-	switch req.DataSource {
-	case "incidents":
-		data, total, err = s.reportRepo.ExecuteIncidentQuery(ctx, req.Config.Filters, sorting, page, limit)
-	case "requests":
-		data, _, err = s.reportRepo.ExecuteRequestQuery(ctx, req.Config.Filters, sorting, page, limit)
-	case "users":
-		data, total, err = s.reportRepo.ExecuteUserQuery(ctx, req.Config.Filters, sorting, page, limit)
-	case "workflows":
-		data, total, err = s.reportRepo.ExecuteWorkflowQuery(ctx, req.Config.Filters, sorting, page, limit)
-	case "departments":
-		data, total, err = s.reportRepo.ExecuteDepartmentQuery(ctx, req.Config.Filters, sorting, page, limit)
-	case "locations":
-		data, total, err = s.reportRepo.ExecuteLocationQuery(ctx, req.Config.Filters, sorting, page, limit)
-	case "classifications":
-		data, total, err = s.reportRepo.ExecuteClassificationQuery(ctx, req.Config.Filters, sorting, page, limit)
-	case "rejection_logs":
-		data, total, err = s.rejectionLogRepo.ExecuteRejectionLogQuery(ctx, req.Config.Filters, sorting, page, limit)
-	case "action_logs":
-		data, total, err = s.reportRepo.ExecuteActionLogQuery(ctx, req.Config.Filters, sorting, page, limit)
-	default:
-		return nil, errors.New("unsupported data source")
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	return &models.ReportResultResponse{
-		Columns: req.Config.Columns,
-		Data:    data,
-		Total:   total,
-		Page:    page,
-		Limit:   limit,
-	}, nil
-}
-
-func (s *reportService) QueryReport(ctx context.Context, req *models.ReportQueryRequest) (*models.ReportQueryResponse, error) {
-	var data []map[string]interface{}
-	var total int64
-	var err error
-
-	// Convert sorting to the format expected by repository
-	var sorting *models.ReportSortConfig
-	if len(req.Sorting) > 0 {
-		sorting = &req.Sorting[0]
-	}
-
-	switch req.DataSource {
-	case "incidents":
-		data, total, err = s.reportRepo.ExecuteIncidentQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
-	case "requests":
-		data, _, err = s.reportRepo.ExecuteRequestQuery(ctx, req.Filters, sorting, 1, req.Limit)
-	case "users":
-		data, total, err = s.reportRepo.ExecuteUserQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
-	case "users_performance":
-		data, total, err = s.reportRepo.ExecuteUserPerformanceQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
-	case "workflows":
-		data, total, err = s.reportRepo.ExecuteWorkflowQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
-	case "departments":
-		data, total, err = s.reportRepo.ExecuteDepartmentQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
-	case "locations":
-		data, total, err = s.reportRepo.ExecuteLocationQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
-	case "classifications":
-		data, total, err = s.reportRepo.ExecuteClassificationQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
-	case "rejection_logs":
-		data, total, err = s.rejectionLogRepo.ExecuteRejectionLogQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
-	case "action_logs":
-		data, total, err = s.reportRepo.ExecuteActionLogQuery(ctx, req.Filters, sorting, req.Page, req.Limit)
-	default:
-		return nil, errors.New("unsupported data source")
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	// Calculate total pages
-	totalPages := int(total) / req.Limit
-	if int(total)%req.Limit > 0 {
-		totalPages++
-	}
-
-	return &models.ReportQueryResponse{
-		Success:    true,
-		Data:       data,
-		Columns:    req.Columns,
-		TotalItems: total,
-		TotalPages: totalPages,
-		Page:       req.Page,
-		Limit:      req.Limit,
-	}, nil
-}
-
-func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExportRequest) ([]byte, string, string, error) {
-	var data []map[string]interface{}
-	var err error
-
-	// Get sorting from request
-	var sorting *models.ReportSortConfig
-	if len(req.Sorting) > 0 {
-		sorting = &req.Sorting[0]
-	}
-
-	// Fetch all data (no pagination limit for export)
-	limit := 10000
-
-	switch req.DataSource {
-	case "incidents":
-		data, _, err = s.reportRepo.ExecuteIncidentQuery(ctx, req.Filters, sorting, 1, limit)
-	case "requests":
-		data, _, err = s.reportRepo.ExecuteRequestQuery(ctx, req.Filters, sorting, 1, limit)
-	case "users":
-		data, _, err = s.reportRepo.ExecuteUserQuery(ctx, req.Filters, sorting, 1, limit)
-	case "users_performance":
-		data, _, err = s.reportRepo.ExecuteUserPerformanceQuery(ctx, req.Filters, sorting, 1, limit)
-	case "workflows":
-		data, _, err = s.reportRepo.ExecuteWorkflowQuery(ctx, req.Filters, sorting, 1, limit)
-	case "departments":
-		data, _, err = s.reportRepo.ExecuteDepartmentQuery(ctx, req.Filters, sorting, 1, limit)
-	case "locations":
-		data, _, err = s.reportRepo.ExecuteLocationQuery(ctx, req.Filters, sorting, 1, limit)
-	case "classifications":
-		data, _, err = s.reportRepo.ExecuteClassificationQuery(ctx, req.Filters, sorting, 1, limit)
-	case "rejection_logs":
-		data, _, err = s.rejectionLogRepo.ExecuteRejectionLogQuery(ctx, req.Filters, sorting, 1, limit)
-	case "action_logs":
-		data, _, err = s.reportRepo.ExecuteActionLogQuery(ctx, req.Filters, sorting, 1, limit)
-	default:
-		return nil, "", "", errors.New("unsupported data source")
-	}
-
-	if err != nil {
-		return nil, "", "", err
-	}
-
-	title := "Report"
-	if req.Options != nil && req.Options.Title != "" {
-		title = req.Options.Title
-	}
-
-	timestamp := time.Now().Format("2006-01-02_150405")
-	filename := title + "_" + timestamp
-
-	if req.Format == "xlsx" {
-		// Generate Excel file
-		xlsxData, err := s.generateExcel(data, req.Columns, title, req.Options)
-		if err != nil {
-			return nil, "", "", err
-		}
-		return xlsxData, filename + ".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", nil
-	}
-
-	// Generate PDF file
-	pdfData, err := s.generatePDF(data, req.Columns, title, req.Options)
-	if err != nil {
-		return nil, "", "", err
-	}
-	return pdfData, filename + ".pdf", "application/pdf", nil
 }
 
 func (s *reportService) generateExcel(data []map[string]interface{}, columns []models.ColumnField, title string, options *models.ReportExportOptions) ([]byte, error) {
@@ -776,6 +704,63 @@ func (s *reportService) GetDataSources(ctx context.Context) []models.DataSourceI
 				{Field: "user_username", Label: "Username", Type: "string", Filterable: false, Sortable: true},
 				{Field: "user_full_name", Label: "User Full Name", Type: "string", Filterable: false, Sortable: false},
 				{Field: "created_at", Label: "Created At", Type: "date", Filterable: true, Sortable: true},
+			},
+		},
+		{
+			Name:  "locations_by_count",
+			Label: "Locations by Incident Count",
+			Fields: []models.DataSourceField{
+				{Field: "location_name", Label: "Location", Type: "string", Filterable: false, Sortable: true},
+				{Field: "parent_location_name", Label: "Parent Location", Type: "string", Filterable: false, Sortable: true},
+				{Field: "incident_count", Label: "No. of Incidents", Type: "number", Filterable: false, Sortable: true},
+			},
+		},
+		{
+			Name:  "locations_by_status",
+			Label: "Locations by Status",
+			Fields: []models.DataSourceField{
+				{Field: "location_name", Label: "Location", Type: "string", Filterable: false, Sortable: true},
+				{Field: "parent_location_name", Label: "Parent Location", Type: "string", Filterable: false, Sortable: true},
+				{Field: "status_name", Label: "Status", Type: "string", Filterable: false, Sortable: true},
+				{Field: "incident_count", Label: "No. of Incidents", Type: "number", Filterable: false, Sortable: true},
+			},
+		},
+		{
+			Name:  "classifications_by_count",
+			Label: "Classifications by Incident Count",
+			Fields: []models.DataSourceField{
+				{Field: "classification_name", Label: "Classification", Type: "string", Filterable: false, Sortable: true},
+				{Field: "parent_classification_name", Label: "Parent Classification", Type: "string", Filterable: false, Sortable: true},
+				{Field: "incident_count", Label: "No. of Incidents", Type: "number", Filterable: false, Sortable: true},
+			},
+		},
+		{
+			Name:  "classifications_by_status",
+			Label: "Classifications by Status",
+			Fields: []models.DataSourceField{
+				{Field: "classification_name", Label: "Classification", Type: "string", Filterable: false, Sortable: true},
+				{Field: "parent_classification_name", Label: "Parent Classification", Type: "string", Filterable: false, Sortable: true},
+				{Field: "status_name", Label: "Status", Type: "string", Filterable: false, Sortable: true},
+				{Field: "incident_count", Label: "No. of Incidents", Type: "number", Filterable: false, Sortable: true},
+			},
+		},
+		{
+			Name:  "departments_by_count",
+			Label: "Departments by Incident Count",
+			Fields: []models.DataSourceField{
+				{Field: "department_name", Label: "Department", Type: "string", Filterable: false, Sortable: true},
+				{Field: "parent_department_name", Label: "Parent Department", Type: "string", Filterable: false, Sortable: true},
+				{Field: "incident_count", Label: "No. of Incidents", Type: "number", Filterable: false, Sortable: true},
+			},
+		},
+		{
+			Name:  "departments_by_status",
+			Label: "Departments by Status",
+			Fields: []models.DataSourceField{
+				{Field: "department_name", Label: "Department", Type: "string", Filterable: false, Sortable: true},
+				{Field: "parent_department_name", Label: "Parent Department", Type: "string", Filterable: false, Sortable: true},
+				{Field: "status_name", Label: "Status", Type: "string", Filterable: false, Sortable: true},
+				{Field: "incident_count", Label: "No. of Incidents", Type: "number", Filterable: false, Sortable: true},
 			},
 		},
 		{
