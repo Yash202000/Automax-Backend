@@ -508,7 +508,7 @@ func (r *goalRepository) ListPendingApprovals(ctx context.Context, userID uuid.U
 	offset := (page - 1) * limit
 
 	err := r.db.WithContext(ctx).
-		Preload("Goal").
+		Preload("Goal", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
 		Preload("UploadedBy").
 		Preload("CurrentState").
 		Preload("AssignedTo").
@@ -546,7 +546,7 @@ func (r *goalRepository) ListCompletedApprovals(ctx context.Context, userID uuid
 	offset := (page - 1) * limit
 
 	err := query.
-		Preload("Evidence.Goal").
+		Preload("Evidence.Goal", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
 		Preload("Evidence.CurrentState").
 		Preload("FromState").
 		Preload("ToState").
