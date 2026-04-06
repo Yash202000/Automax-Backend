@@ -91,7 +91,7 @@ func (s *callerSentimentService) GetCallerSentimentsByCallerAndCallee(ctx contex
 	}
 
 	// Call History
-	history, err := s.repo.GetCallHistoryByCaller(ctx, callerID)
+	history, err := s.repo.GetCallHistoryByCallerAndCallee(ctx, callerID, calleeID)
 	if err != nil {
 		return nil, err
 	}

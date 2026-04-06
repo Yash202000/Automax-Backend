@@ -14,6 +14,7 @@ type CallerSentimentRepository interface {
 	GetSummaryByCallerAndCallee(ctx context.Context, callerID, calleeID string) ([]models.SentimentAgg, error)
 	GetAllCallerIDs(ctx context.Context) ([]string, error)
 	GetCallHistoryByCaller(ctx context.Context, callerID string) ([]models.CallHistory, error)
+	GetCallHistoryByCallerAndCallee(ctx context.Context, callerID, calleeID string) ([]models.CallHistory, error)
 }
 
 type callerSentimentRepo struct {
@@ -75,6 +76,19 @@ func (r *callerSentimentRepo) GetCallHistoryByCaller(ctx context.Context, caller
 		Table("caller_sentiments").
 		Select("call_uuid, sentiment, callee_id, feedback, created_at").
 		Where("caller_id = ?", callerID).
+		Order("created_at DESC").
+		Scan(&result).Error
+
+	return result, err
+}
+
+func (r *callerSentimentRepo) GetCallHistoryByCallerAndCallee(ctx context.Context, callerID, calleeID string) ([]models.CallHistory, error) {
+	var result []models.CallHistory
+
+	err := r.db.WithContext(ctx).
+		Table("caller_sentiments").
+		Select("call_uuid, sentiment, callee_id, feedback, created_at").
+		Where("caller_id = ? AND callee_id = ?", callerID, calleeID).
 		Order("created_at DESC").
 		Scan(&result).Error
 
