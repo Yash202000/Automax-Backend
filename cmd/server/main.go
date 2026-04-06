@@ -679,9 +679,9 @@ func main() {
 
 	//Caller sentiments
 	callerSentiments := v1.Group("/caller-sentiments", authMiddleware.Authenticate())
-	callerSentiments.Post("/", sentimentHandler.Create)
-	callerSentiments.Get("/", sentimentHandler.GetAllCallerSentiments)
-	callerSentiments.Get("/:caller_id", sentimentHandler.GetCallerSentiments)
+	callerSentiments.Post("/", authMiddleware.RequirePermission("caller-sentiment:create"), sentimentHandler.Create)
+	callerSentiments.Get("/", authMiddleware.RequirePermission("caller-sentiment:view"), sentimentHandler.GetAllCallerSentiments)
+	callerSentiments.Get("/:caller_id", authMiddleware.RequirePermission("caller-sentiment:view"), sentimentHandler.GetCallerSentiments)
 	callerSentiments.Get("/:caller_id/:callee_id", sentimentHandler.GetCallerSentimentsByCallerAndCallee)
 
 	// ---- GOAL MANAGEMENT ROUTES ----
