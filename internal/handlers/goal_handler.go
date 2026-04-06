@@ -163,6 +163,7 @@ func (h *GoalHandler) CreateGoal(c *fiber.Ctx) error {
 		if strings.Contains(err.Error(), "parent goal not found") || strings.Contains(err.Error(), "maximum goal hierarchy depth") {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 		}
+		log.Printf("[GoalHandler] CreateGoal error: %v", err)
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create goal")
 	}
 
@@ -496,6 +497,7 @@ func (h *GoalHandler) UploadEvidence(c *fiber.Ctx) error {
 		userID,
 	)
 	if err != nil {
+		log.Printf("[GoalHandler] UploadEvidence error: %v", err)
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to upload evidence")
 	}
 

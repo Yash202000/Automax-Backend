@@ -38,7 +38,7 @@ func (h *ReviewHandler) CreateCycle(c *fiber.Ctx) error {
 		return utils.FormatValidationError(c, err)
 	}
 
-	userID := c.Locals(string(constants.ContextKeys.UserID)).(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
 	resp, err := h.service.CreateCycle(c.Context(), &req, userID)
 	if err != nil {
@@ -225,7 +225,7 @@ func (h *ReviewHandler) RemoveAssignment(c *fiber.Ctx) error {
 // ──────────────────────────────────────────────────
 
 func (h *ReviewHandler) ListMyReviews(c *fiber.Ctx) error {
-	userID := c.Locals(string(constants.ContextKeys.UserID)).(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit, _ := strconv.Atoi(c.Query("limit", "20"))
 
@@ -238,7 +238,7 @@ func (h *ReviewHandler) ListMyReviews(c *fiber.Ctx) error {
 }
 
 func (h *ReviewHandler) ListMyReviewTasks(c *fiber.Ctx) error {
-	userID := c.Locals(string(constants.ContextKeys.UserID)).(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit, _ := strconv.Atoi(c.Query("limit", "20"))
 
@@ -265,7 +265,7 @@ func (h *ReviewHandler) ScoreGoals(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	userID := c.Locals(string(constants.ContextKeys.UserID)).(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
 	resp, err := h.service.ScoreGoals(c.Context(), assignmentID, scores, userID)
 	if err != nil {
@@ -290,7 +290,7 @@ func (h *ReviewHandler) SubmitReview(c *fiber.Ctx) error {
 		return utils.FormatValidationError(c, err)
 	}
 
-	userID := c.Locals(string(constants.ContextKeys.UserID)).(uuid.UUID)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
 	resp, err := h.service.SubmitReview(c.Context(), assignmentID, &req, userID)
 	if err != nil {
