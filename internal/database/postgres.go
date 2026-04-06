@@ -106,6 +106,17 @@ func Migrate(db *gorm.DB) error {
 		&models.GoalCollaborator{},
 		&models.Evidence{},
 		&models.EvidenceTransitionHistory{},
+		&models.GoalCheckIn{},
+		// Goal Templates
+		&models.GoalTemplate{},
+		// Metric Import Batch models
+		&models.MetricImportBatch{},
+		&models.MetricImportItem{},
+		&models.MetricImportBatchTransitionHistory{},
+		// Performance Review models
+		&models.ReviewCycle{},
+		&models.ReviewAssignment{},
+		&models.GoalScore{},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
@@ -126,6 +137,8 @@ func Migrate(db *gorm.DB) error {
 	db.Exec("ALTER TABLE incident_revisions DROP CONSTRAINT IF EXISTS incident_revisions_performed_by_id_fkey")
 	db.Exec("ALTER TABLE evidence_transition_histories DROP CONSTRAINT IF EXISTS fk_evidence_transition_histories_performed_by")
 	db.Exec("ALTER TABLE evidence_transition_histories DROP CONSTRAINT IF EXISTS evidence_transition_histories_performed_by_id_fkey")
+	db.Exec("ALTER TABLE metric_import_batch_transition_histories DROP CONSTRAINT IF EXISTS fk_metric_import_batch_transition_histories_performed_by")
+	db.Exec("ALTER TABLE metric_import_batch_transition_histories DROP CONSTRAINT IF EXISTS metric_import_batch_transition_histories_performed_by_id_fkey")
 
 	// Migrate transition assignment roles (single → many-to-many)
 	if err := migrations.MigrateTransitionAssignmentRoles(db); err != nil {

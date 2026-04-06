@@ -127,6 +127,104 @@ func (h *WebSocketHandler) BroadcastWebSocketUpgrader() fiber.Handler {
 	return websocket.New(h.HandleBroadcastWebSocket)
 }
 
+// HandleGoalWebSocket handles WebSocket upgrade for goal-specific connections
+// Expected query params: goal_id, user_id
+func (h *WebSocketHandler) HandleGoalWebSocket(c *websocket.Conn) {
+	goalIDStr := c.Query("goal_id")
+	userIDStr := c.Query("user_id")
+
+	if goalIDStr == "" || userIDStr == "" {
+		fmt.Println("[WebSocket] Missing goal_id or user_id")
+		c.WriteMessage(websocket.CloseMessage, []byte("Missing required parameters"))
+		c.Close()
+		return
+	}
+
+	goalID, err := uuid.Parse(goalIDStr)
+	if err != nil {
+		fmt.Printf("[WebSocket] Invalid goal_id: %s\n", goalIDStr)
+		c.WriteMessage(websocket.CloseMessage, []byte("Invalid goal_id"))
+		c.Close()
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		fmt.Printf("[WebSocket] Invalid user_id: %s\n", userIDStr)
+		c.WriteMessage(websocket.CloseMessage, []byte("Invalid user_id"))
+		c.Close()
+		return
+	}
+
+	userName := c.Query("user_name")
+	if userName == "" {
+		userName = "Unknown User"
+	}
+
+	client := &services.WSClient{
+		ID:           uuid.New(),
+		UserID:       userID,
+		UserName:     userName,
+		GoalID:       goalID,
+		IsGoalClient: true,
+		Conn:         c,
+		Send:         make(chan services.WSMessage, 256),
+		Hub:          h.hub,
+	}
+
+	h.hub.Register() <- client
+
+	go client.WritePump()
+	client.ReadPump()
+}
+
+// GoalWebSocketUpgrader middleware for goal-specific WebSocket
+func (h *WebSocketHandler) GoalWebSocketUpgrader() fiber.Handler {
+	return websocket.New(h.HandleGoalWebSocket)
+}
+
+// HandleGoalBroadcastWebSocket handles WebSocket connections for goal list broadcast channel
+// Expected query params: user_id (optional), token
+func (h *WebSocketHandler) HandleGoalBroadcastWebSocket(c *websocket.Conn) {
+	userIDStr := c.Query("user_id")
+	userName := c.Query("user_name")
+
+	var userID uuid.UUID
+	if userIDStr != "" {
+		var err error
+		userID, err = uuid.Parse(userIDStr)
+		if err != nil {
+			userID = uuid.New()
+		}
+	} else {
+		userID = uuid.New()
+	}
+
+	if userName == "" {
+		userName = "Anonymous"
+	}
+
+	client := &services.WSClient{
+		ID:              uuid.New(),
+		UserID:          userID,
+		UserName:        userName,
+		IsGoalBroadcast: true,
+		Conn:            c,
+		Send:            make(chan services.WSMessage, 256),
+		Hub:             h.hub,
+	}
+
+	h.hub.Register() <- client
+
+	go client.WritePump()
+	client.ReadPump()
+}
+
+// GoalBroadcastWebSocketUpgrader middleware for goal broadcast WebSocket
+func (h *WebSocketHandler) GoalBroadcastWebSocketUpgrader() fiber.Handler {
+	return websocket.New(h.HandleGoalBroadcastWebSocket)
+}
+
 // GetConnectionStats returns WebSocket connection statistics
 func (h *WebSocketHandler) GetConnectionStats(c *fiber.Ctx) error {
 	stats := h.hub.GetConnectionStats()

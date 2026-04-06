@@ -18,23 +18,27 @@ const (
 
 // WSMessage represents a WebSocket message sent to clients
 type WSMessage struct {
-	Type       string      `json:"type"`        // "incident_updated", "comment_added", "state_changed", etc.
-	IncidentID uuid.UUID   `json:"incident_id"` // Which incident this message is about
-	Data       interface{} `json:"data"`        // Message payload
-	UserID     uuid.UUID   `json:"user_id"`     // User who triggered the change
-	Timestamp  int64       `json:"timestamp"`   // Unix timestamp
+	Type       string      `json:"type"`                  // "incident_updated", "goal_updated", etc.
+	IncidentID uuid.UUID   `json:"incident_id,omitempty"` // Which incident this message is about
+	GoalID     uuid.UUID   `json:"goal_id,omitempty"`     // Which goal this message is about
+	Data       interface{} `json:"data"`                  // Message payload
+	UserID     uuid.UUID   `json:"user_id"`               // User who triggered the change
+	Timestamp  int64       `json:"timestamp"`             // Unix timestamp
 }
 
 // WSClient represents a WebSocket client connection
 type WSClient struct {
-	ID          uuid.UUID
-	UserID      uuid.UUID
-	UserName    string
-	IncidentID  uuid.UUID // Which incident this client is subscribed to (empty for broadcast clients)
-	IsBroadcast bool      // True if this is a broadcast client (incident list page)
-	Conn        *websocket.Conn
-	Send        chan WSMessage
-	Hub         *WSHub
+	ID              uuid.UUID
+	UserID          uuid.UUID
+	UserName        string
+	IncidentID      uuid.UUID // Which incident this client is subscribed to (empty for broadcast clients)
+	IsBroadcast     bool      // True if this is a broadcast client (incident list page)
+	GoalID          uuid.UUID // Which goal this client is subscribed to (empty for non-goal clients)
+	IsGoalClient    bool      // True if this is a goal-specific client
+	IsGoalBroadcast bool      // True if this is a goal broadcast client (goal list page)
+	Conn            *websocket.Conn
+	Send            chan WSMessage
+	Hub             *WSHub
 }
 
 // WSHub manages all WebSocket connections
@@ -47,6 +51,12 @@ type WSHub struct {
 
 	// Broadcast clients (subscribed to all incident updates)
 	broadcastClients map[uuid.UUID]*WSClient
+
+	// Map of goal ID to set of clients subscribed to it
+	goals map[uuid.UUID]map[uuid.UUID]*WSClient
+
+	// Goal broadcast clients (subscribed to all goal updates)
+	goalBroadcastClients map[uuid.UUID]*WSClient
 
 	// Register requests from clients
 	register chan *WSClient
@@ -64,12 +74,14 @@ type WSHub struct {
 // NewWSHub creates a new WebSocket hub
 func NewWSHub() *WSHub {
 	return &WSHub{
-		clients:          make(map[uuid.UUID]*WSClient),
-		incidents:        make(map[uuid.UUID]map[uuid.UUID]*WSClient),
-		broadcastClients: make(map[uuid.UUID]*WSClient),
-		register:         make(chan *WSClient),
-		unregister:       make(chan *WSClient),
-		broadcast:        make(chan WSMessage, 256),
+		clients:              make(map[uuid.UUID]*WSClient),
+		incidents:            make(map[uuid.UUID]map[uuid.UUID]*WSClient),
+		broadcastClients:     make(map[uuid.UUID]*WSClient),
+		goals:                make(map[uuid.UUID]map[uuid.UUID]*WSClient),
+		goalBroadcastClients: make(map[uuid.UUID]*WSClient),
+		register:             make(chan *WSClient),
+		unregister:           make(chan *WSClient),
+		broadcast:            make(chan WSMessage, 256),
 	}
 }
 
@@ -89,13 +101,24 @@ func (h *WSHub) Run() {
 			h.mu.Lock()
 			h.clients[client.ID] = client
 
-			if client.IsBroadcast {
+			if client.IsGoalBroadcast {
+				// Goal broadcast client (goal list page)
+				h.goalBroadcastClients[client.ID] = client
+				fmt.Printf("[WSHub] Goal broadcast client %s registered (User: %s)\n",
+					client.ID, client.UserName)
+			} else if client.IsGoalClient {
+				// Goal-specific client
+				if _, ok := h.goals[client.GoalID]; !ok {
+					h.goals[client.GoalID] = make(map[uuid.UUID]*WSClient)
+				}
+				h.goals[client.GoalID][client.ID] = client
+				fmt.Printf("[WSHub] Client %s registered for goal %s (User: %s)\n",
+					client.ID, client.GoalID, client.UserName)
+			} else if client.IsBroadcast {
 				// Broadcast client (incident list page)
 				h.broadcastClients[client.ID] = client
 				fmt.Printf("[WSHub] Broadcast client %s registered (User: %s)\n",
 					client.ID, client.UserName)
-				fmt.Printf("[WSHub] Active connections: Total=%d, Broadcast=%d, Incidents=%d\n",
-					len(h.clients), len(h.broadcastClients), len(h.incidents))
 			} else {
 				// Incident-specific client
 				if _, ok := h.incidents[client.IncidentID]; !ok {
@@ -105,14 +128,6 @@ func (h *WSHub) Run() {
 
 				fmt.Printf("[WSHub] Client %s registered for incident %s (User: %s)\n",
 					client.ID, client.IncidentID, client.UserName)
-
-				// Log detailed connection stats
-				incidentCount := 0
-				for _, subs := range h.incidents {
-					incidentCount += len(subs)
-				}
-				fmt.Printf("[WSHub] Active connections: Total=%d, Broadcast=%d, Incident=%d (on %d incidents)\n",
-					len(h.clients), len(h.broadcastClients), incidentCount, len(h.incidents))
 
 				// Broadcast user joined to other viewers of this incident
 				h.mu.Unlock()
@@ -125,6 +140,7 @@ func (h *WSHub) Run() {
 				h.BroadcastViewerCount(client.IncidentID)
 				h.mu.Lock()
 			}
+			h.logStats()
 			h.mu.Unlock()
 
 		case client := <-h.unregister:
@@ -132,12 +148,20 @@ func (h *WSHub) Run() {
 			if _, ok := h.clients[client.ID]; ok {
 				delete(h.clients, client.ID)
 
-				if client.IsBroadcast {
-					// Remove broadcast client
+				if client.IsGoalBroadcast {
+					delete(h.goalBroadcastClients, client.ID)
+					fmt.Printf("[WSHub] Goal broadcast client %s unregistered\n", client.ID)
+				} else if client.IsGoalClient {
+					if subscribers, ok := h.goals[client.GoalID]; ok {
+						delete(subscribers, client.ID)
+						if len(subscribers) == 0 {
+							delete(h.goals, client.GoalID)
+						}
+					}
+					fmt.Printf("[WSHub] Goal client %s unregistered\n", client.ID)
+				} else if client.IsBroadcast {
 					delete(h.broadcastClients, client.ID)
 					fmt.Printf("[WSHub] Broadcast client %s unregistered\n", client.ID)
-					fmt.Printf("[WSHub] Active connections: Total=%d, Broadcast=%d, Incidents=%d\n",
-						len(h.clients), len(h.broadcastClients), len(h.incidents))
 				} else {
 					// Remove incident-specific client
 					if subscribers, ok := h.incidents[client.IncidentID]; ok {
@@ -148,14 +172,6 @@ func (h *WSHub) Run() {
 					}
 
 					fmt.Printf("[WSHub] Client %s unregistered\n", client.ID)
-
-					// Log detailed connection stats
-					incidentCount := 0
-					for _, subs := range h.incidents {
-						incidentCount += len(subs)
-					}
-					fmt.Printf("[WSHub] Active connections: Total=%d, Broadcast=%d, Incident=%d (on %d incidents)\n",
-						len(h.clients), len(h.broadcastClients), incidentCount, len(h.incidents))
 
 					// Broadcast user left to other viewers
 					h.mu.Unlock()
@@ -242,6 +258,83 @@ func (h *WSHub) BroadcastToAll(messageType string, data interface{}) {
 			fmt.Printf("[WSHub] Broadcast client %s send buffer full, skipping message\n", client.ID)
 		}
 	}
+}
+
+// BroadcastToGoal sends a message to all clients subscribed to a goal
+func (h *WSHub) BroadcastToGoal(goalID uuid.UUID, messageType string, data interface{}, userID uuid.UUID) {
+	h.mu.RLock()
+	subscribers := make([]*WSClient, 0)
+	for _, client := range h.goals[goalID] {
+		if client.UserID != userID {
+			subscribers = append(subscribers, client)
+		}
+	}
+	h.mu.RUnlock()
+
+	if len(subscribers) == 0 {
+		return
+	}
+
+	message := WSMessage{
+		Type:      messageType,
+		GoalID:    goalID,
+		Data:      data,
+		UserID:    userID,
+		Timestamp: time.Now().Unix(),
+	}
+
+	for _, client := range subscribers {
+		select {
+		case client.Send <- message:
+		default:
+			fmt.Printf("[WSHub] Goal client %s send buffer full, skipping\n", client.ID)
+		}
+	}
+
+	fmt.Printf("[WSHub] Broadcasting %s to goal %s (%d recipients)\n", messageType, goalID, len(subscribers))
+}
+
+// BroadcastGoalToAll sends a message to all goal broadcast clients (goal list subscribers)
+func (h *WSHub) BroadcastGoalToAll(messageType string, data interface{}) {
+	h.mu.RLock()
+	clients := make([]*WSClient, 0, len(h.goalBroadcastClients))
+	for _, client := range h.goalBroadcastClients {
+		clients = append(clients, client)
+	}
+	h.mu.RUnlock()
+
+	if len(clients) == 0 {
+		return
+	}
+
+	message := WSMessage{
+		Type:      messageType,
+		Data:      data,
+		Timestamp: time.Now().Unix(),
+	}
+
+	for _, client := range clients {
+		select {
+		case client.Send <- message:
+		default:
+			fmt.Printf("[WSHub] Goal broadcast client %s send buffer full, skipping\n", client.ID)
+		}
+	}
+}
+
+// logStats logs a summary of active connections (must be called with h.mu held)
+func (h *WSHub) logStats() {
+	incidentCount := 0
+	for _, subs := range h.incidents {
+		incidentCount += len(subs)
+	}
+	goalCount := 0
+	for _, subs := range h.goals {
+		goalCount += len(subs)
+	}
+	fmt.Printf("[WSHub] Active: Total=%d, IncBcast=%d, Inc=%d(%d), GoalBcast=%d, Goal=%d(%d)\n",
+		len(h.clients), len(h.broadcastClients), incidentCount, len(h.incidents),
+		len(h.goalBroadcastClients), goalCount, len(h.goals))
 }
 
 // ReadPump pumps messages from the websocket connection to the hub
@@ -368,11 +461,18 @@ func (h *WSHub) GetConnectionStats() map[string]interface{} {
 
 	incidentStats := make(map[string]int)
 	totalIncidentClients := 0
-
 	for incidentID, subscribers := range h.incidents {
 		count := len(subscribers)
 		incidentStats[incidentID.String()] = count
 		totalIncidentClients += count
+	}
+
+	goalStats := make(map[string]int)
+	totalGoalClients := 0
+	for goalID, subscribers := range h.goals {
+		count := len(subscribers)
+		goalStats[goalID.String()] = count
+		totalGoalClients += count
 	}
 
 	return map[string]interface{}{
@@ -381,6 +481,10 @@ func (h *WSHub) GetConnectionStats() map[string]interface{} {
 		"incident_clients":         totalIncidentClients,
 		"unique_incidents_watched": len(h.incidents),
 		"incidents_detail":         incidentStats,
+		"goal_broadcast_clients":   len(h.goalBroadcastClients),
+		"goal_clients":             totalGoalClients,
+		"unique_goals_watched":     len(h.goals),
+		"goals_detail":             goalStats,
 	}
 }
 
@@ -389,14 +493,21 @@ func (h *WSHub) LogConnectionStats() {
 	stats := h.GetConnectionStats()
 	fmt.Printf("[WSHub] === Connection Statistics ===\n")
 	fmt.Printf("[WSHub] Total Clients: %d\n", stats["total_clients"])
-	fmt.Printf("[WSHub] Broadcast Clients: %d\n", stats["broadcast_clients"])
-	fmt.Printf("[WSHub] Incident Clients: %d\n", stats["incident_clients"])
-	fmt.Printf("[WSHub] Unique Incidents: %d\n", stats["unique_incidents_watched"])
+	fmt.Printf("[WSHub] Incident Broadcast: %d | Goal Broadcast: %d\n", stats["broadcast_clients"], stats["goal_broadcast_clients"])
+	fmt.Printf("[WSHub] Incident Clients: %d (%d incidents) | Goal Clients: %d (%d goals)\n",
+		stats["incident_clients"], stats["unique_incidents_watched"],
+		stats["goal_clients"], stats["unique_goals_watched"])
 
 	if details, ok := stats["incidents_detail"].(map[string]int); ok && len(details) > 0 {
 		fmt.Printf("[WSHub] Per-Incident Breakdown:\n")
 		for incidentID, count := range details {
 			fmt.Printf("[WSHub]   - Incident %s: %d viewers\n", incidentID, count)
+		}
+	}
+	if details, ok := stats["goals_detail"].(map[string]int); ok && len(details) > 0 {
+		fmt.Printf("[WSHub] Per-Goal Breakdown:\n")
+		for goalID, count := range details {
+			fmt.Printf("[WSHub]   - Goal %s: %d viewers\n", goalID, count)
 		}
 	}
 	fmt.Printf("[WSHub] ==============================\n")

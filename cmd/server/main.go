@@ -119,8 +119,16 @@ func main() {
 	callerSentimentService := services.NewCallerSentimentService(callerSentimentRepo)
 
 	// Goal management services
-	documentaClient := storage.NewStubDocumentaClient()
-	goalService := services.NewGoalService(goalRepo, workflowRepo, userRepo, documentaClient, notificationService, actionLogService, cfg)
+	var documentaClient storage.DocumentaClient
+	if cfg.Documenta.Enabled {
+		documentaClient = storage.NewHTTPDocumentaClient(cfg.Documenta, redisClient)
+		log.Println("Documenta HTTP client enabled")
+	} else {
+		documentaClient = storage.NewStubDocumentaClient()
+		log.Println("Documenta stub client (DOCUMENTA_ENABLED=false)")
+	}
+	goalService := services.NewGoalService(goalRepo, workflowRepo, userRepo, departmentRepo, documentaClient, notificationService, actionLogService, cfg, wsHub)
+	documentService := services.NewDocumentService(documentaClient, cfg.Documenta)
 
 	// Ready-to-Close service
 	readyToCloseRepo := repository.NewReadyToCloseRepository(db)
@@ -176,6 +184,17 @@ func main() {
 	fcmHandler := handlers.NewFCMHandler(fcmService)
 	sentimentHandler := handlers.NewCallerSentimentHandler(callerSentimentService)
 	goalHandler := handlers.NewGoalHandler(goalService)
+	goalAnalyticsService := services.NewGoalAnalyticsService(db)
+	goalAnalyticsHandler := handlers.NewGoalAnalyticsHandler(goalAnalyticsService)
+	reviewRepo := repository.NewReviewRepository(db)
+	reviewService := services.NewReviewService(reviewRepo, goalRepo)
+	reviewHandler := handlers.NewReviewHandler(reviewService)
+	documentHandler := handlers.NewDocumentHandler(documentService)
+
+	// Goal Templates
+	goalTemplateRepo := repository.NewGoalTemplateRepository(db)
+	goalTemplateService := services.NewGoalTemplateService(goalTemplateRepo)
+	goalTemplateHandler := handlers.NewGoalTemplateHandler(goalTemplateService)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore, userRepo)
@@ -218,6 +237,14 @@ func main() {
 	// Broadcast WebSocket route for incident list viewer count updates
 	// Query params: token (for auth)
 	v1.Get("/ws/broadcast", websocketHandler.BroadcastWebSocketUpgrader())
+
+	// Goal WebSocket route for real-time goal updates
+	// Query params: goal_id, user_id, token (for auth)
+	v1.Get("/ws/goal", websocketHandler.GoalWebSocketUpgrader())
+
+	// Goal broadcast WebSocket route for goal list updates
+	// Query params: token (for auth)
+	v1.Get("/ws/goal/broadcast", websocketHandler.GoalBroadcastWebSocketUpgrader())
 
 	// WebSocket connection statistics endpoint
 	v1.Get("/ws/stats", authMiddleware.RequirePermission("incidents:view"), websocketHandler.GetConnectionStats)
@@ -684,14 +711,47 @@ func main() {
 	callerSentiments.Get("/:caller_id", authMiddleware.RequirePermission("caller-sentiment:view"), sentimentHandler.GetCallerSentiments)
 	callerSentiments.Get("/:caller_id/:callee_id", sentimentHandler.GetCallerSentimentsByCallerAndCallee)
 
+	// ---- GOAL TEMPLATE ROUTES ----
+	goalTemplates := v1.Group("/goal-templates", authMiddleware.Authenticate())
+	goalTemplates.Post("/", authMiddleware.RequirePermission("goals:create"), goalTemplateHandler.Create)
+	goalTemplates.Get("/", authMiddleware.RequirePermission("goals:view"), goalTemplateHandler.List)
+	goalTemplates.Get("/active", authMiddleware.RequirePermission("goals:view"), goalTemplateHandler.ListActive)
+	goalTemplates.Get("/:id", authMiddleware.RequirePermission("goals:view"), goalTemplateHandler.GetByID)
+	goalTemplates.Put("/:id", authMiddleware.RequirePermission("goals:update"), goalTemplateHandler.Update)
+	goalTemplates.Delete("/:id", authMiddleware.RequirePermission("goals:delete"), goalTemplateHandler.Delete)
+
 	// ---- GOAL MANAGEMENT ROUTES ----
 	goals := v1.Group("/goals", authMiddleware.Authenticate())
+	goals.Get("/export", authMiddleware.RequirePermission("goals:view"), goalHandler.ExportGoals)
+	goals.Post("/import", authMiddleware.RequirePermission("goals:create"), goalHandler.ImportGoals)
+	goals.Get("/metrics/export-template", authMiddleware.RequirePermission("goals:view"), goalHandler.ExportMetricsTemplate)
+	goals.Post("/metrics/import", authMiddleware.RequirePermission("goals:update"), goalHandler.ImportMetrics)
+	goals.Get("/metric-batches", authMiddleware.RequirePermission("goals:view"), goalHandler.ListMetricImportBatches)
+	goals.Get("/metric-batches/:id", authMiddleware.RequirePermission("goals:view"), goalHandler.GetMetricImportBatch)
+	goals.Delete("/metric-batches/:id", authMiddleware.RequirePermission("goals:update"), goalHandler.DeleteMetricImportBatch)
+	goals.Get("/metric-batches/:id/available-transitions", authMiddleware.RequirePermission("goals:view"), goalHandler.GetAvailableMetricBatchTransitions)
+	goals.Post("/metric-batches/:id/transition", authMiddleware.RequirePermission("goals:update"), goalHandler.ExecuteMetricBatchTransition)
+	goals.Get("/metric-batches/:id/transition-history", authMiddleware.RequirePermission("goals:view"), goalHandler.GetMetricBatchTransitionHistory)
+	goals.Post("/bulk", authMiddleware.RequirePermission("goals:update"), goalHandler.BulkAction)
+	// Analytics routes (must be before /:id catch-all)
+	goals.Get("/analytics/stats", authMiddleware.RequirePermission("goals:view"), goalAnalyticsHandler.GetGoalStats)
+	goals.Get("/analytics/distributions", authMiddleware.RequirePermission("goals:view"), goalAnalyticsHandler.GetDistributions)
+	goals.Get("/analytics/progress", authMiddleware.RequirePermission("goals:view"), goalAnalyticsHandler.GetProgressSummary)
+	goals.Get("/analytics/at-risk", authMiddleware.RequirePermission("goals:view"), goalAnalyticsHandler.GetAtRiskGoals)
+	goals.Get("/analytics/trends", authMiddleware.RequirePermission("goals:view"), goalAnalyticsHandler.GetTrendData)
+	goals.Get("/analytics/okr-tree", authMiddleware.RequirePermission("goals:view"), goalAnalyticsHandler.GetOKRTree)
 	goals.Post("/", authMiddleware.RequirePermission("goals:create"), goalHandler.CreateGoal)
 	goals.Get("/", authMiddleware.RequirePermission("goals:view"), goalHandler.ListGoals)
 	goals.Get("/:id", authMiddleware.RequirePermission("goals:view"), goalHandler.GetGoal)
 	goals.Put("/:id", authMiddleware.RequirePermission("goals:update"), goalHandler.UpdateGoal)
 	goals.Delete("/:id", authMiddleware.RequirePermission("goals:delete"), goalHandler.DeleteGoal)
 	goals.Post("/:id/transition", authMiddleware.RequirePermission("goals:update"), goalHandler.TransitionStatus)
+	goals.Post("/:id/clone", authMiddleware.RequirePermission("goals:create"), goalHandler.CloneGoal)
+	goals.Get("/:id/children", authMiddleware.RequirePermission("goals:view"), goalHandler.ListChildGoals)
+	goals.Get("/:id/tree", authMiddleware.RequirePermission("goals:view"), goalHandler.GetGoalTree)
+	goals.Post("/:id/check-ins", authMiddleware.RequirePermission("goals:update"), goalHandler.CreateCheckIn)
+	goals.Get("/:id/check-ins", authMiddleware.RequirePermission("goals:view"), goalHandler.ListCheckIns)
+	goals.Delete("/check-ins/:id", authMiddleware.RequirePermission("goals:update"), goalHandler.DeleteCheckIn)
 	goals.Post("/:id/collaborators", authMiddleware.RequirePermission("goals:assign"), goalHandler.AddCollaborator)
 	goals.Delete("/:id/collaborators/:user_id", authMiddleware.RequirePermission("goals:assign"), goalHandler.RemoveCollaborator)
 	goals.Post("/:gid/metrics", authMiddleware.RequirePermission("goals:update"), goalHandler.CreateMetric)
@@ -705,6 +765,7 @@ func main() {
 	goals.Get("/evidences/:id/preview", authMiddleware.RequirePermission("goals:view"), goalHandler.GetEvidencePreview)
 	goals.Get("/evidences/:id/download", authMiddleware.RequirePermission("goals:view"), goalHandler.DownloadEvidence)
 	goals.Delete("/evidences/:id", authMiddleware.RequirePermission("goals:update"), goalHandler.DeleteEvidence)
+	goals.Put("/evidences/:id/file", authMiddleware.RequirePermission("goals:update"), goalHandler.ReplaceEvidenceFile)
 	goals.Get("/evidences/:id/available-transitions", authMiddleware.RequirePermission("goals:view"), goalHandler.GetAvailableEvidenceTransitions)
 	goals.Post("/evidences/:id/transition", authMiddleware.RequirePermission("goals:update"), goalHandler.ExecuteEvidenceTransition)
 	goals.Get("/evidences/:id/transition-history", authMiddleware.RequirePermission("goals:view"), goalHandler.GetEvidenceTransitionHistory)
@@ -713,6 +774,36 @@ func main() {
 	approvals := v1.Group("/approvals", authMiddleware.Authenticate())
 	approvals.Get("/pending", authMiddleware.RequirePermission("goals:approve"), goalHandler.ListPendingApprovals)
 	approvals.Get("/completed", authMiddleware.RequirePermission("goals:approve"), goalHandler.ListCompletedApprovals)
+
+	// ---- PERFORMANCE REVIEW ROUTES ----
+	reviews := v1.Group("/reviews", authMiddleware.Authenticate())
+	reviews.Post("/cycles", authMiddleware.RequirePermission("goals:update"), reviewHandler.CreateCycle)
+	reviews.Get("/cycles", authMiddleware.RequirePermission("goals:view"), reviewHandler.ListCycles)
+	reviews.Get("/cycles/:id", authMiddleware.RequirePermission("goals:view"), reviewHandler.GetCycle)
+	reviews.Put("/cycles/:id", authMiddleware.RequirePermission("goals:update"), reviewHandler.UpdateCycle)
+	reviews.Delete("/cycles/:id", authMiddleware.RequirePermission("goals:delete"), reviewHandler.DeleteCycle)
+	reviews.Post("/cycles/:id/activate", authMiddleware.RequirePermission("goals:update"), reviewHandler.ActivateCycle)
+	reviews.Post("/cycles/:id/complete", authMiddleware.RequirePermission("goals:update"), reviewHandler.CompleteCycle)
+	reviews.Post("/cycles/:id/assignments", authMiddleware.RequirePermission("goals:assign"), reviewHandler.AssignReviewees)
+	reviews.Get("/cycles/:id/assignments", authMiddleware.RequirePermission("goals:view"), reviewHandler.ListCycleAssignments)
+	reviews.Delete("/assignments/:id", authMiddleware.RequirePermission("goals:assign"), reviewHandler.RemoveAssignment)
+	reviews.Get("/assignments/:id", authMiddleware.RequirePermission("goals:view"), reviewHandler.GetAssignment)
+	reviews.Post("/assignments/:id/score", authMiddleware.RequirePermission("goals:update"), reviewHandler.ScoreGoals)
+	reviews.Post("/assignments/:id/submit", authMiddleware.RequirePermission("goals:update"), reviewHandler.SubmitReview)
+	reviews.Get("/my-reviews", authMiddleware.RequirePermission("goals:view"), reviewHandler.ListMyReviews)
+	reviews.Get("/my-review-tasks", authMiddleware.RequirePermission("goals:view"), reviewHandler.ListMyReviewTasks)
+
+	// ---- DOCUMENT MANAGEMENT ROUTES ----
+	docs := v1.Group("/documents", authMiddleware.Authenticate())
+	docs.Get("/files", authMiddleware.RequirePermission("goals:view"), documentHandler.ListFiles)
+	docs.Post("/search", authMiddleware.RequirePermission("goals:view"), documentHandler.SearchFiles)
+	docs.Get("/files/:id/info", authMiddleware.RequirePermission("goals:view"), documentHandler.GetFileInfo)
+	docs.Get("/files/:id/preview", authMiddleware.RequirePermission("goals:view"), documentHandler.GetPreviewURL)
+	docs.Get("/files/:id/download", authMiddleware.RequirePermission("goals:view"), documentHandler.GetDownloadURL)
+	docs.Get("/files/:id/comments", authMiddleware.RequirePermission("goals:view"), documentHandler.GetComments)
+	docs.Post("/files/:id/comments", authMiddleware.RequirePermission("goals:update"), documentHandler.AddComment)
+	docs.Get("/files/:id/tags", authMiddleware.RequirePermission("goals:view"), documentHandler.GetTags)
+	docs.Put("/files/:id/tags", authMiddleware.RequirePermission("goals:update"), documentHandler.SetTags)
 
 	go func() {
 		addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)

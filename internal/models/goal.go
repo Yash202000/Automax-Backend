@@ -136,9 +136,15 @@ type Goal struct {
 	Metadata          string             `gorm:"type:jsonb;default:'{}'" json:"metadata"`
 	CreatedByID       uuid.UUID          `gorm:"type:uuid;index" json:"created_by_id"`
 	CreatedBy         *User              `gorm:"foreignKey:CreatedByID" json:"created_by,omitempty"`
+	ParentGoalID      *uuid.UUID         `gorm:"type:uuid;index" json:"parent_goal_id"`
+	ParentGoal        *Goal              `gorm:"foreignKey:ParentGoalID" json:"parent_goal,omitempty"`
+	Children          []Goal             `gorm:"foreignKey:ParentGoalID" json:"children,omitempty"`
+	Level             int                `gorm:"default:0" json:"level"`
+	Path              string             `gorm:"size:1000" json:"path"`
 	Collaborators     []GoalCollaborator `gorm:"foreignKey:GoalID" json:"collaborators,omitempty"`
 	Metrics           []GoalMetric       `gorm:"foreignKey:GoalID" json:"metrics,omitempty"`
 	Evidences         []Evidence         `gorm:"foreignKey:GoalID" json:"evidences,omitempty"`
+	CheckIns          []GoalCheckIn      `gorm:"foreignKey:GoalID" json:"check_ins,omitempty"`
 	CreatedAt         time.Time          `json:"created_at"`
 	UpdatedAt         time.Time          `json:"updated_at"`
 	DeletedAt         gorm.DeletedAt     `gorm:"index" json:"-"`
@@ -213,6 +219,48 @@ func (c *GoalCollaborator) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
+// ──────────────────────────────────────────────────
+// Check-In Status Constants
+// ──────────────────────────────────────────────────
+
+const (
+	CheckInStatusOnTrack = "on_track"
+	CheckInStatusAtRisk  = "at_risk"
+	CheckInStatusBehind  = "behind"
+	CheckInStatusBlocked = "blocked"
+)
+
+func IsValidCheckInStatus(s string) bool {
+	switch s {
+	case CheckInStatusOnTrack, CheckInStatusAtRisk, CheckInStatusBehind, CheckInStatusBlocked:
+		return true
+	}
+	return false
+}
+
+// GoalCheckIn represents a periodic progress update on a goal
+type GoalCheckIn struct {
+	ID            uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	GoalID        uuid.UUID      `gorm:"type:uuid;index;not null" json:"goal_id"`
+	Goal          *Goal          `gorm:"foreignKey:GoalID" json:"goal,omitempty"`
+	AuthorID      uuid.UUID      `gorm:"type:uuid;index;not null" json:"author_id"`
+	Author        *User          `gorm:"foreignKey:AuthorID" json:"author,omitempty"`
+	Status        string         `gorm:"size:20;not null" json:"status"`
+	Content       string         `gorm:"type:text;not null" json:"content"`
+	ProgressSnap  float64        `json:"progress_snapshot"`
+	MetricUpdates string         `gorm:"type:jsonb;default:'[]'" json:"metric_updates"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (ci *GoalCheckIn) BeforeCreate(tx *gorm.DB) error {
+	if ci.ID == uuid.Nil {
+		ci.ID = uuid.New()
+	}
+	return nil
+}
+
 // Evidence is a file/document uploaded as proof of goal progress.
 // Workflow state is tracked via CurrentStateID referencing the shared WorkflowState model.
 type Evidence struct {
@@ -277,6 +325,89 @@ func (h *EvidenceTransitionHistory) BeforeCreate(tx *gorm.DB) error {
 }
 
 // ════════════════════════════════════════════════════
+// METRIC IMPORT BATCH MODELS
+// ════════════════════════════════════════════════════
+
+// MetricImportBatch represents a single bulk import of metric values
+// that must go through the evidence approval workflow before being applied.
+type MetricImportBatch struct {
+	ID             uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	Title          string         `gorm:"size:255;not null" json:"title"`
+	Comment        string         `gorm:"type:text" json:"comment"`
+	Status         string         `gorm:"size:30;not null;default:'Draft'" json:"status"`
+	ItemCount      int            `gorm:"not null;default:0" json:"item_count"`
+	GoalCount      int            `gorm:"not null;default:0" json:"goal_count"`
+	FileName       string         `gorm:"size:255" json:"file_name"`
+	ImportedByID   uuid.UUID      `gorm:"type:uuid;index;not null" json:"imported_by_id"`
+	ImportedBy     *User          `gorm:"foreignKey:ImportedByID" json:"imported_by,omitempty"`
+	PrimaryGoalID  uuid.UUID      `gorm:"type:uuid;index;not null" json:"primary_goal_id"`
+	PrimaryGoal    *Goal          `gorm:"foreignKey:PrimaryGoalID" json:"primary_goal,omitempty"`
+	WorkflowID     *uuid.UUID     `gorm:"type:uuid;index" json:"workflow_id"`
+	CurrentStateID *uuid.UUID     `gorm:"type:uuid;index" json:"current_state_id"`
+	CurrentState   *WorkflowState `gorm:"foreignKey:CurrentStateID" json:"current_state,omitempty"`
+	AssignedToID   *uuid.UUID     `gorm:"type:uuid;index" json:"assigned_to_id"`
+	AssignedTo     *User          `gorm:"foreignKey:AssignedToID" json:"assigned_to,omitempty"`
+	Version        int            `gorm:"default:1" json:"version"`
+	Items          []MetricImportItem `gorm:"foreignKey:BatchID" json:"items,omitempty"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (b *MetricImportBatch) BeforeCreate(tx *gorm.DB) error {
+	if b.ID == uuid.Nil {
+		b.ID = uuid.New()
+	}
+	return nil
+}
+
+// MetricImportItem represents a single metric value change within a batch.
+type MetricImportItem struct {
+	ID        uuid.UUID   `gorm:"type:uuid;primary_key" json:"id"`
+	BatchID   uuid.UUID   `gorm:"type:uuid;index;not null" json:"batch_id"`
+	GoalID    uuid.UUID   `gorm:"type:uuid;index;not null" json:"goal_id"`
+	Goal      *Goal       `gorm:"foreignKey:GoalID" json:"goal,omitempty"`
+	MetricID  uuid.UUID   `gorm:"type:uuid;index;not null" json:"metric_id"`
+	Metric    *GoalMetric `gorm:"foreignKey:MetricID" json:"metric,omitempty"`
+	OldValue  float64     `json:"old_value"`
+	NewValue  float64     `json:"new_value"`
+	Applied   bool        `gorm:"default:false" json:"applied"`
+	CreatedAt time.Time   `json:"created_at"`
+}
+
+func (i *MetricImportItem) BeforeCreate(tx *gorm.DB) error {
+	if i.ID == uuid.Nil {
+		i.ID = uuid.New()
+	}
+	return nil
+}
+
+// MetricImportBatchTransitionHistory records each state change for a metric import batch.
+type MetricImportBatchTransitionHistory struct {
+	ID             uuid.UUID           `gorm:"type:uuid;primary_key" json:"id"`
+	BatchID        uuid.UUID           `gorm:"type:uuid;index;not null" json:"batch_id"`
+	TransitionID   *uuid.UUID          `gorm:"type:uuid;index" json:"transition_id"`
+	Transition     *WorkflowTransition `gorm:"foreignKey:TransitionID" json:"transition,omitempty"`
+	FromStateID    uuid.UUID           `gorm:"type:uuid;not null;index" json:"from_state_id"`
+	FromState      *WorkflowState      `gorm:"foreignKey:FromStateID" json:"from_state,omitempty"`
+	ToStateID      uuid.UUID           `gorm:"type:uuid;not null;index" json:"to_state_id"`
+	ToState        *WorkflowState      `gorm:"foreignKey:ToStateID" json:"to_state,omitempty"`
+	PerformedByID  uuid.UUID           `gorm:"type:uuid;not null;index" json:"performed_by_id"`
+	PerformedBy    *User               `gorm:"foreignKey:PerformedByID" json:"performed_by,omitempty"`
+	Comment        string              `gorm:"type:text" json:"comment"`
+	IsSystemAction bool                `gorm:"default:false" json:"is_system_action"`
+	TransitionedAt time.Time           `gorm:"index" json:"transitioned_at"`
+	CreatedAt      time.Time           `json:"created_at"`
+}
+
+func (h *MetricImportBatchTransitionHistory) BeforeCreate(tx *gorm.DB) error {
+	if h.ID == uuid.Nil {
+		h.ID = uuid.New()
+	}
+	return nil
+}
+
+// ════════════════════════════════════════════════════
 // REQUEST TYPES
 // ════════════════════════════════════════════════════
 
@@ -287,6 +418,7 @@ type GoalCreateRequest struct {
 	Priority     string     `json:"priority" validate:"required,oneof=Critical High Medium Low"`
 	DepartmentID *uuid.UUID `json:"department_id"`
 	OwnerID      uuid.UUID  `json:"owner_id" validate:"required"`
+	ParentGoalID *uuid.UUID `json:"parent_goal_id"`
 	StartDate    *time.Time `json:"start_date"`
 	TargetDate   *time.Time `json:"target_date"`
 	ReviewDate   *time.Time `json:"review_date"`
@@ -309,6 +441,7 @@ type GoalUpdateRequest struct {
 	Priority     *string    `json:"priority" validate:"omitempty,oneof=Critical High Medium Low"`
 	DepartmentID *uuid.UUID `json:"department_id"`
 	OwnerID      *uuid.UUID `json:"owner_id"`
+	ParentGoalID *uuid.UUID `json:"parent_goal_id"`
 	StartDate    *time.Time `json:"start_date"`
 	TargetDate   *time.Time `json:"target_date"`
 	ReviewDate   *time.Time `json:"review_date"`
@@ -319,6 +452,14 @@ type GoalTransitionRequest struct {
 	Status string `json:"status" validate:"required"`
 }
 
+type GoalCloneRequest struct {
+	Title      string     `json:"title"`
+	StartDate  *time.Time `json:"start_date"`
+	TargetDate *time.Time `json:"target_date"`
+	ReviewDate *time.Time `json:"review_date"`
+	OwnerID    *uuid.UUID `json:"owner_id"`
+}
+
 type GoalFilter struct {
 	Page         int        `query:"page"`
 	Limit        int        `query:"limit"`
@@ -326,6 +467,8 @@ type GoalFilter struct {
 	Priority     string     `query:"priority"`
 	OwnerID      *uuid.UUID `query:"owner_id"`
 	DepartmentID *uuid.UUID `query:"department_id"`
+	ParentGoalID *uuid.UUID `query:"parent_goal_id"`
+	RootOnly     bool       `query:"root_only"`
 	Category     string     `query:"category"`
 	Search       string     `query:"search"`
 	StartFrom    *time.Time `query:"start_from"`
@@ -397,6 +540,11 @@ type GoalResponse struct {
 	Owner             *UserBriefResponse         `json:"owner,omitempty"`
 	DepartmentID      *uuid.UUID                 `json:"department_id"`
 	Department        *DepartmentBriefResponse   `json:"department,omitempty"`
+	ParentGoalID      *uuid.UUID                 `json:"parent_goal_id"`
+	ParentGoal        *GoalBriefResponse         `json:"parent_goal,omitempty"`
+	Children          []GoalBriefResponse        `json:"children,omitempty"`
+	Level             int                        `json:"level"`
+	Path              string                     `json:"path"`
 	StartDate         *time.Time                 `json:"start_date"`
 	TargetDate        *time.Time                 `json:"target_date"`
 	ReviewDate        *time.Time                 `json:"review_date"`
@@ -410,6 +558,15 @@ type GoalResponse struct {
 	EvidenceCount     int                        `json:"evidence_count"`
 	CreatedAt         time.Time                  `json:"created_at"`
 	UpdatedAt         time.Time                  `json:"updated_at"`
+}
+
+type GoalBriefResponse struct {
+	ID       uuid.UUID `json:"id"`
+	Title    string    `json:"title"`
+	Status   string    `json:"status"`
+	Priority string    `json:"priority"`
+	Progress float64   `json:"progress"`
+	Level    int       `json:"level"`
 }
 
 type UserBriefResponse struct {
@@ -527,6 +684,175 @@ type ApprovalListResponse struct {
 }
 
 // ════════════════════════════════════════════════════
+// IMPORT REQUEST/RESPONSE TYPES
+// ════════════════════════════════════════════════════
+
+// ImportRowResult represents validation result for a single row
+type ImportRowResult struct {
+	RowNumber int      `json:"row_number"`
+	Status    string   `json:"status"` // "valid", "warning", "error"
+	Errors    []string `json:"errors,omitempty"`
+	Warnings  []string `json:"warnings,omitempty"`
+	GoalTitle string   `json:"goal_title"`
+}
+
+// GoalImportResponse is the response from import (dry-run or commit)
+type GoalImportResponse struct {
+	Mode           string            `json:"mode"` // "dry_run" or "committed"
+	TotalRows      int               `json:"total_rows"`
+	GoalsCount     int               `json:"goals_count"`
+	MetricsCount   int               `json:"metrics_count"`
+	ValidCount     int               `json:"valid_count"`
+	ErrorCount     int               `json:"error_count"`
+	WarningCount   int               `json:"warning_count"`
+	Rows           []ImportRowResult  `json:"rows"`
+	CreatedGoalIDs []string           `json:"created_goal_ids,omitempty"`
+}
+
+// ════════════════════════════════════════════════════
+// METRIC IMPORT REQUEST/RESPONSE TYPES
+// ════════════════════════════════════════════════════
+
+type MetricImportBatchTransitionRequest struct {
+	TransitionID string `json:"transition_id" validate:"required,uuid"`
+	Comment      string `json:"comment"`
+	Version      int    `json:"version" validate:"required,min=1"`
+}
+
+type MetricImportBatchFilter struct {
+	Page   int    `query:"page"`
+	Limit  int    `query:"limit"`
+	Status string `query:"status"`
+}
+
+type MetricImportValidationItem struct {
+	RowNumber    int      `json:"row_number"`
+	GoalID       string   `json:"goal_id"`
+	GoalTitle    string   `json:"goal_title"`
+	MetricID     string   `json:"metric_id"`
+	MetricName   string   `json:"metric_name"`
+	CurrentValue float64  `json:"current_value"`
+	NewValue     float64  `json:"new_value"`
+	Status       string   `json:"status"` // "valid", "warning", "error", "skipped"
+	Errors       []string `json:"errors,omitempty"`
+	Warnings     []string `json:"warnings,omitempty"`
+}
+
+type MetricImportDryRunResponse struct {
+	TotalRows    int                          `json:"total_rows"`
+	ValidCount   int                          `json:"valid_count"`
+	ErrorCount   int                          `json:"error_count"`
+	WarningCount int                          `json:"warning_count"`
+	SkippedCount int                          `json:"skipped_count"`
+	GoalCount    int                          `json:"goal_count"`
+	Items        []MetricImportValidationItem `json:"items"`
+}
+
+type MetricImportBatchResponse struct {
+	ID             uuid.UUID                    `json:"id"`
+	Title          string                       `json:"title"`
+	Comment        string                       `json:"comment"`
+	Status         string                       `json:"status"`
+	ItemCount      int                          `json:"item_count"`
+	GoalCount      int                          `json:"goal_count"`
+	FileName       string                       `json:"file_name"`
+	ImportedByID   uuid.UUID                    `json:"imported_by_id"`
+	ImportedBy     *UserBriefResponse           `json:"imported_by,omitempty"`
+	PrimaryGoalID  uuid.UUID                    `json:"primary_goal_id"`
+	PrimaryGoalTitle string                     `json:"primary_goal_title,omitempty"`
+	WorkflowID     *uuid.UUID                   `json:"workflow_id"`
+	CurrentStateID *uuid.UUID                   `json:"current_state_id"`
+	CurrentState   *WorkflowStateBrief          `json:"current_state,omitempty"`
+	AssignedToID   *uuid.UUID                   `json:"assigned_to_id"`
+	AssignedTo     *UserBriefResponse           `json:"assigned_to,omitempty"`
+	Version        int                          `json:"version"`
+	Items          []MetricImportItemResponse   `json:"items,omitempty"`
+	CreatedAt      time.Time                    `json:"created_at"`
+	UpdatedAt      time.Time                    `json:"updated_at"`
+}
+
+type MetricImportItemResponse struct {
+	ID         uuid.UUID `json:"id"`
+	GoalID     uuid.UUID `json:"goal_id"`
+	GoalTitle  string    `json:"goal_title"`
+	MetricID   uuid.UUID `json:"metric_id"`
+	MetricName string    `json:"metric_name"`
+	MetricType string    `json:"metric_type"`
+	Unit       string    `json:"unit"`
+	OldValue   float64   `json:"old_value"`
+	NewValue   float64   `json:"new_value"`
+	Applied    bool      `json:"applied"`
+}
+
+type MetricImportBatchTransitionHistoryResponse struct {
+	ID             uuid.UUID          `json:"id"`
+	BatchID        uuid.UUID          `json:"batch_id"`
+	TransitionName string             `json:"transition_name"`
+	FromStateName  string             `json:"from_state_name"`
+	ToStateName    string             `json:"to_state_name"`
+	FromStateColor string             `json:"from_state_color"`
+	ToStateColor   string             `json:"to_state_color"`
+	PerformedByID  uuid.UUID          `json:"performed_by_id"`
+	PerformedBy    *UserBriefResponse `json:"performed_by,omitempty"`
+	Comment        string             `json:"comment"`
+	IsSystemAction bool               `json:"is_system_action"`
+	TransitionedAt time.Time          `json:"transitioned_at"`
+	CreatedAt      time.Time          `json:"created_at"`
+}
+
+// ════════════════════════════════════════════════════
+// BULK OPERATION REQUEST/RESPONSE TYPES
+// ════════════════════════════════════════════════════
+
+type BulkActionRequest struct {
+	GoalIDs    []uuid.UUID `json:"goal_ids" validate:"required,min=1"`
+	Action     string      `json:"action" validate:"required,oneof=transition reassign close"`
+	NewStatus  string      `json:"new_status,omitempty"`
+	NewOwnerID *uuid.UUID  `json:"new_owner_id,omitempty"`
+}
+
+type BulkActionItemResult struct {
+	GoalID  uuid.UUID `json:"goal_id"`
+	Success bool      `json:"success"`
+	Error   string    `json:"error,omitempty"`
+}
+
+type BulkActionResponse struct {
+	TotalRequested int                    `json:"total_requested"`
+	SuccessCount   int                    `json:"success_count"`
+	FailureCount   int                    `json:"failure_count"`
+	Results        []BulkActionItemResult `json:"results"`
+}
+
+// ════════════════════════════════════════════════════
+// CHECK-IN REQUEST/RESPONSE TYPES
+// ════════════════════════════════════════════════════
+
+type CheckInCreateRequest struct {
+	Status        string                `json:"status" validate:"required,oneof=on_track at_risk behind blocked"`
+	Content       string                `json:"content" validate:"required,min=1"`
+	MetricUpdates []CheckInMetricUpdate `json:"metric_updates,omitempty"`
+}
+
+type CheckInMetricUpdate struct {
+	MetricID uuid.UUID `json:"metric_id" validate:"required"`
+	Value    float64   `json:"value"`
+	Comment  string    `json:"comment"`
+}
+
+type CheckInResponse struct {
+	ID             uuid.UUID          `json:"id"`
+	GoalID         uuid.UUID          `json:"goal_id"`
+	AuthorID       uuid.UUID          `json:"author_id"`
+	Author         *UserBriefResponse `json:"author,omitempty"`
+	Status         string             `json:"status"`
+	Content        string             `json:"content"`
+	ProgressSnap   float64            `json:"progress_snapshot"`
+	MetricUpdates  string             `json:"metric_updates"`
+	CreatedAt      time.Time          `json:"created_at"`
+}
+
+// ════════════════════════════════════════════════════
 // CONVERTER FUNCTIONS
 // ════════════════════════════════════════════════════
 
@@ -567,6 +893,20 @@ func ToWorkflowStateBrief(s *WorkflowState) *WorkflowStateBrief {
 	}
 }
 
+func ToGoalBriefResponse(g *Goal) *GoalBriefResponse {
+	if g == nil {
+		return nil
+	}
+	return &GoalBriefResponse{
+		ID:       g.ID,
+		Title:    g.Title,
+		Status:   g.Status,
+		Priority: g.Priority,
+		Progress: g.Progress,
+		Level:    g.Level,
+	}
+}
+
 func (g *Goal) ToResponse() GoalResponse {
 	resp := GoalResponse{
 		ID:                g.ID,
@@ -579,6 +919,10 @@ func (g *Goal) ToResponse() GoalResponse {
 		Owner:             ToUserBriefResponse(g.Owner),
 		DepartmentID:      g.DepartmentID,
 		Department:        ToDepartmentBriefResponse(g.Department),
+		ParentGoalID:      g.ParentGoalID,
+		ParentGoal:        ToGoalBriefResponse(g.ParentGoal),
+		Level:             g.Level,
+		Path:              g.Path,
 		StartDate:         g.StartDate,
 		TargetDate:        g.TargetDate,
 		ReviewDate:        g.ReviewDate,
@@ -590,6 +934,13 @@ func (g *Goal) ToResponse() GoalResponse {
 		EvidenceCount:     len(g.Evidences),
 		CreatedAt:         g.CreatedAt,
 		UpdatedAt:         g.UpdatedAt,
+	}
+
+	if g.Children != nil {
+		resp.Children = make([]GoalBriefResponse, len(g.Children))
+		for i, child := range g.Children {
+			resp.Children[i] = *ToGoalBriefResponse(&child)
+		}
 	}
 
 	if g.Collaborators != nil {
@@ -607,6 +958,20 @@ func (g *Goal) ToResponse() GoalResponse {
 	}
 
 	return resp
+}
+
+func (ci *GoalCheckIn) ToResponse() CheckInResponse {
+	return CheckInResponse{
+		ID:            ci.ID,
+		GoalID:        ci.GoalID,
+		AuthorID:      ci.AuthorID,
+		Author:        ToUserBriefResponse(ci.Author),
+		Status:        ci.Status,
+		Content:       ci.Content,
+		ProgressSnap:  ci.ProgressSnap,
+		MetricUpdates: ci.MetricUpdates,
+		CreatedAt:     ci.CreatedAt,
+	}
 }
 
 func (c *GoalCollaborator) ToResponse() GoalCollaboratorResponse {
@@ -697,6 +1062,88 @@ func (h *EvidenceTransitionHistory) ToResponse() EvidenceTransitionHistoryRespon
 	resp := EvidenceTransitionHistoryResponse{
 		ID:             h.ID,
 		EvidenceID:     h.EvidenceID,
+		PerformedByID:  h.PerformedByID,
+		PerformedBy:    ToUserBriefResponse(h.PerformedBy),
+		Comment:        h.Comment,
+		IsSystemAction: h.IsSystemAction,
+		TransitionedAt: h.TransitionedAt,
+		CreatedAt:      h.CreatedAt,
+	}
+	if h.Transition != nil {
+		resp.TransitionName = h.Transition.Name
+	}
+	if h.FromState != nil {
+		resp.FromStateName = h.FromState.Name
+		resp.FromStateColor = h.FromState.Color
+	}
+	if h.ToState != nil {
+		resp.ToStateName = h.ToState.Name
+		resp.ToStateColor = h.ToState.Color
+	}
+	return resp
+}
+
+// ════════════════════════════════════════════════════
+// METRIC IMPORT BATCH CONVERTERS
+// ════════════════════════════════════════════════════
+
+func (b *MetricImportBatch) ToResponse() MetricImportBatchResponse {
+	resp := MetricImportBatchResponse{
+		ID:             b.ID,
+		Title:          b.Title,
+		Comment:        b.Comment,
+		Status:         b.Status,
+		ItemCount:      b.ItemCount,
+		GoalCount:      b.GoalCount,
+		FileName:       b.FileName,
+		ImportedByID:   b.ImportedByID,
+		ImportedBy:     ToUserBriefResponse(b.ImportedBy),
+		PrimaryGoalID:  b.PrimaryGoalID,
+		WorkflowID:     b.WorkflowID,
+		CurrentStateID: b.CurrentStateID,
+		CurrentState:   ToWorkflowStateBrief(b.CurrentState),
+		AssignedToID:   b.AssignedToID,
+		AssignedTo:     ToUserBriefResponse(b.AssignedTo),
+		Version:        b.Version,
+		CreatedAt:      b.CreatedAt,
+		UpdatedAt:      b.UpdatedAt,
+	}
+	if b.PrimaryGoal != nil {
+		resp.PrimaryGoalTitle = b.PrimaryGoal.Title
+	}
+	if b.Items != nil {
+		resp.Items = make([]MetricImportItemResponse, len(b.Items))
+		for i, item := range b.Items {
+			resp.Items[i] = item.ToResponse()
+		}
+	}
+	return resp
+}
+
+func (item *MetricImportItem) ToResponse() MetricImportItemResponse {
+	resp := MetricImportItemResponse{
+		ID:       item.ID,
+		GoalID:   item.GoalID,
+		MetricID: item.MetricID,
+		OldValue: item.OldValue,
+		NewValue: item.NewValue,
+		Applied:  item.Applied,
+	}
+	if item.Goal != nil {
+		resp.GoalTitle = item.Goal.Title
+	}
+	if item.Metric != nil {
+		resp.MetricName = item.Metric.Name
+		resp.MetricType = item.Metric.MetricType
+		resp.Unit = item.Metric.Unit
+	}
+	return resp
+}
+
+func (h *MetricImportBatchTransitionHistory) ToResponse() MetricImportBatchTransitionHistoryResponse {
+	resp := MetricImportBatchTransitionHistoryResponse{
+		ID:             h.ID,
+		BatchID:        h.BatchID,
 		PerformedByID:  h.PerformedByID,
 		PerformedBy:    ToUserBriefResponse(h.PerformedBy),
 		Comment:        h.Comment,
