@@ -401,7 +401,11 @@ func (r *goalRepository) FindEvidenceByIDForUpdate(ctx context.Context, tx *gorm
 }
 
 func (r *goalRepository) UpdateEvidenceInTx(ctx context.Context, tx *gorm.DB, evidence *models.Evidence) error {
-	return tx.WithContext(ctx).Save(evidence).Error
+	// Use Select to update only scalar columns, avoiding GORM re-associating
+	// preloaded relations (e.g., CurrentState) which can overwrite foreign keys.
+	return tx.WithContext(ctx).
+		Select("current_state_id", "status", "assigned_to_id", "version", "updated_at").
+		Save(evidence).Error
 }
 
 func (r *goalRepository) UpdateEvidence(ctx context.Context, evidence *models.Evidence) error {
