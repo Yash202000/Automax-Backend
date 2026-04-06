@@ -41,7 +41,6 @@ func NewNotificationService(
 }
 
 func (s *NotificationService) SendNotification(ctx context.Context, channel string, templateCode *string, language string, to []string, cc []string, bcc []string, subject string, body string, variables map[string]string, attachments []models.AttachmentData, sentBy *uuid.UUID, sessionID *uuid.UUID) (*SendNotificationResult, error) {
-
 	// REQUIRED: at least one recipient
 	if len(to) == 0 && len(cc) == 0 && len(bcc) == 0 {
 		return nil, fmt.Errorf("at least one recipient (to, cc, or bcc) is required")
@@ -151,7 +150,8 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		provider = "smtp"
 	case "sms":
 		for _, phone := range to {
-			err := utils.SendSMS(phone, body)
+			otpbody := fmt.Sprintf("Your OTP is %s", body)
+			err := utils.SendSMS(phone, otpbody)
 			if err != nil {
 				status = "failed"
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
@@ -171,64 +171,8 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 			}
 		}
 		provider = "twilio"
-
-		// case "whatsapp":
-		// 	for _, phone := range to {
-
-		// 		err := utils.SendWhatsApp(phone, body)
-		// 		fmt.Println("cherrannel", err)
-
-		// 		if err != nil {
-
-		// 			// SMS fallback
-		// 			smsErr := utils.SendSMS(phone, body)
-
-		// 			if smsErr != nil {
-
-		// 				// Both failed
-		// 				status = "failed"
-
-		// 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-		// 					Email:        phone,
-		// 					Type:         "to",
-		// 					Status:       "failed",
-		// 					Error:        fmt.Sprintf("whatsapp error: %v | sms error: %v", err, smsErr),
-		// 					ErrorMessage: err.Error(),
-		// 				})
-
-		// 			} else {
-
-		// 				// WhatsApp failed but SMS worked
-		// 				status = "fallback_sms"
-
-		// 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-		// 					Email:        phone,
-		// 					Type:         "to",
-		// 					Status:       "success",
-		// 					Error:        "whatsapp failed, delivered via sms",
-		// 					ErrorMessage: err.Error(),
-		// 				})
-
-		// 				provider = "twilio"
-		// 			}
-
-		// 		} else {
-
-		// 			// WhatsApp success
-		// 			recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-		// 				Email:  phone,
-		// 				Type:   "to",
-		// 				Status: "success",
-		// 			})
-
-		// 			provider = "meta"
-		// 		}
-		// 	}
-
 	case "whatsapp":
-
 		status = "sent"
-
 		for _, phone := range to {
 			err := utils.SendOTPWithMetaTemplate(phone, body)
 			if err != nil {
@@ -242,7 +186,6 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 				})
 
 			} else {
-
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
 					Channel: phone,
 					Type:    "to",
@@ -301,10 +244,10 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 	var inboxLogIDs []uuid.UUID
 	for _, recipient := range to {
 
-		// Look up the system user by email (email channel) or phone (sms channel)
+		// Look up the system user by email (email channel) or phone (sms whatsapp channel)
 		var user *models.User
 		var userErr error
-		if channel == "sms" {
+		if channel == "sms" || channel == "whatsapp" {
 			user, userErr = s.userRepo.FindByMobile(ctx, recipient)
 		} else {
 			user, userErr = s.userRepo.FindByEmail(ctx, recipient)
