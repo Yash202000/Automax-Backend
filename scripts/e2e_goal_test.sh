@@ -170,6 +170,147 @@ fi
 echo -e "${GREEN}OK${NC}"
 
 # ════════════════════════════════════════════════════════════════════════════
+# SETUP: Ensure test users, roles, and departments exist
+# ════════════════════════════════════════════════════════════════════════════
+
+section "Setup: Ensure test data exists"
+
+# ── Step 1: Login as admin (must already exist — the seed admin account) ──
+
+subsection "Logging in as admin..."
+SETUP_TOKEN=$(login "admin@automax.com")
+if [ -z "$SETUP_TOKEN" ]; then
+  echo -e "  ${RED}✗ Cannot login as admin@automax.com — aborting setup.${NC}"
+  echo "  The seed admin account must exist. Run the backend migrations/seed first."
+  exit 1
+fi
+pass "Admin login OK"
+
+# ── Step 2: Fetch or create departments ──────────────────────────────────
+
+subsection "Ensuring departments..."
+
+DEPT_LIST=$(api GET "/admin/departments?limit=50" "$SETUP_TOKEN")
+
+get_or_create_dept() {
+  local code="$1" name="$2"
+  local dept_id
+  dept_id=$(echo "$DEPT_LIST" | jq -r ".data[] | select(.code==\"$code\") | .id" 2>/dev/null | head -1)
+  if [ -n "$dept_id" ] && [ "$dept_id" != "null" ]; then
+    echo "$dept_id"
+    return
+  fi
+  # Create department
+  local resp
+  resp=$(api POST "/admin/departments" "$SETUP_TOKEN" "{\"name\":\"$name\",\"code\":\"$code\",\"type\":\"internal\",\"is_active\":true}")
+  echo "$resp" | jq -r '.data.id // empty' 2>/dev/null
+}
+
+SETUP_CIVIL_ID=$(get_or_create_dept "civil" "Civil")
+if [ -n "$SETUP_CIVIL_ID" ] && [ "$SETUP_CIVIL_ID" != "null" ]; then
+  pass "Department 'Civil': ${SETUP_CIVIL_ID:0:8}..."
+else
+  fail "Department 'Civil' — could not find or create"
+fi
+
+SETUP_ELEC_ID=$(get_or_create_dept "elec" "Electrical")
+if [ -n "$SETUP_ELEC_ID" ] && [ "$SETUP_ELEC_ID" != "null" ]; then
+  pass "Department 'Electrical': ${SETUP_ELEC_ID:0:8}..."
+else
+  fail "Department 'Electrical' — could not find or create"
+fi
+
+# ── Step 3: Fetch or create roles ─────────────────────────────────────────
+
+subsection "Ensuring roles..."
+
+ROLE_LIST=$(api GET "/admin/roles" "$SETUP_TOKEN")
+
+get_role_id() {
+  local code="$1"
+  echo "$ROLE_LIST" | jq -r ".data[] | select(.code==\"$code\") | .id" 2>/dev/null | head -1
+}
+
+ROLE_ADMIN=$(get_role_id "admin")
+ROLE_MANAGER=$(get_role_id "manager")
+ROLE_REVIEWER=$(get_role_id "goal_reviewer")
+ROLE_COLLABORATOR=$(get_role_id "goal_collaborator")
+ROLE_USER=$(get_role_id "user")
+
+for rname in admin manager goal_reviewer goal_collaborator user; do
+  rid=$(get_role_id "$rname")
+  if [ -n "$rid" ] && [ "$rid" != "null" ]; then
+    pass "Role '$rname': ${rid:0:8}..."
+  else
+    fail "Role '$rname' not found — seed roles first"
+  fi
+done
+
+# ── Step 4: Ensure test users exist ───────────────────────────────────────
+
+subsection "Ensuring test users..."
+
+# Check if a user exists by trying to login
+user_exists() {
+  local email="$1"
+  local token
+  token=$(login "$email")
+  [ -n "$token" ]
+}
+
+# Create a user via admin API
+create_test_user() {
+  local email="$1" username="$2" first="$3" last="$4" role_id="$5" dept_id="$6"
+
+  local body="{
+    \"email\": \"$email\",
+    \"username\": \"$username\",
+    \"password\": \"$PASSWORD\",
+    \"first_name\": \"$first\",
+    \"last_name\": \"$last\",
+    \"role_ids\": [\"$role_id\"]"
+
+  if [ -n "$dept_id" ] && [ "$dept_id" != "" ]; then
+    body="$body, \"department_id\": \"$dept_id\""
+  fi
+  body="$body }"
+
+  local resp
+  resp=$(api POST "/admin/users" "$SETUP_TOKEN" "$body")
+  if is_success "$resp"; then
+    return 0
+  else
+    echo "$resp" | jq -r '.error // .errors // empty' 2>/dev/null
+    return 1
+  fi
+}
+
+# Define test users: email|username|first|last|role_code|dept_code
+SETUP_USERS=(
+  "sarah.manager@automax.com|sarah.manager|Sarah|Manager|${ROLE_MANAGER}|${SETUP_CIVIL_ID}"
+  "ahmed.reviewer@automax.com|ahmed.reviewer|Ahmed|Reviewer|${ROLE_REVIEWER}|${SETUP_CIVIL_ID}"
+  "fatima.senior@automax.com|fatima.senior|Fatima|Senior|${ROLE_REVIEWER}|${SETUP_CIVIL_ID}"
+  "omar.worker@automax.com|omar.worker|Omar|Worker|${ROLE_COLLABORATOR}|${SETUP_CIVIL_ID}"
+  "khalid.viewer@automax.com|khalid.viewer|Khalid|Viewer|${ROLE_USER}|${SETUP_ELEC_ID}"
+  "layla.director@automax.com|layla.director|Layla|Director|${ROLE_MANAGER}|${SETUP_ELEC_ID}"
+)
+
+for user_spec in "${SETUP_USERS[@]}"; do
+  IFS='|' read -r u_email u_username u_first u_last u_role u_dept <<< "$user_spec"
+
+  if user_exists "$u_email"; then
+    pass "User $u_email — already exists"
+  else
+    err_msg=$(create_test_user "$u_email" "$u_username" "$u_first" "$u_last" "$u_role" "$u_dept")
+    if [ $? -eq 0 ]; then
+      pass "User $u_email — created"
+    else
+      fail "User $u_email — creation failed: $err_msg"
+    fi
+  fi
+done
+
+# ════════════════════════════════════════════════════════════════════════════
 # PHASE 0: Authentication
 # ════════════════════════════════════════════════════════════════════════════
 
