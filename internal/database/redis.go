@@ -139,3 +139,21 @@ func (s *SessionStore) ClaimSSONonce(ctx context.Context, jti string, ttl time.D
 	}
 	return ok, nil
 }
+
+// ResetLoginAttempts resets the login attempt counters for an identifier
+// This should be called on successful login
+func ResetLoginAttempts(ctx context.Context, client *redis.Client, identifier string) error {
+	// Use pipeline to delete both keys atomically
+	pipe := client.Pipeline()
+	
+	// Remove attempt counter
+	attemptsKey := fmt.Sprintf("login_attempts:%s", identifier)
+	pipe.Del(ctx, attemptsKey)
+	
+	// Remove block if exists
+	blockKey := fmt.Sprintf("login_block:%s", identifier)
+	pipe.Del(ctx, blockKey)
+	
+	_, err := pipe.Exec(ctx)
+	return err
+}

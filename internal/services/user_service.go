@@ -378,6 +378,24 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 		}
 	}()
 
+	// Reset login attempt counters on successful login
+	// Reset by email
+	if req.Email != "" {
+		go func() {
+			_ = database.ResetLoginAttempts(context.Background(), database.RedisClient, "user:"+req.Email)
+		}()
+	}
+	// Reset by phone
+	if req.Phone != "" {
+		go func() {
+			_ = database.ResetLoginAttempts(context.Background(), database.RedisClient, "user:"+req.Phone)
+		}()
+	}
+	// Reset by IP
+	go func() {
+		_ = database.ResetLoginAttempts(context.Background(), database.RedisClient, "ip:"+ipAddress)
+	}()
+
 	return &models.AuthResponse{
 		User:         models.ToUserResponse(user),
 		Token:        tokenPair.AccessToken,

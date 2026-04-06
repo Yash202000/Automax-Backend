@@ -13,6 +13,7 @@ type Config struct {
 	MinIO          MinIOConfig
 	JWT            JWTConfig
 	LDAP           LDAPConfig
+	LoginRateLimit LoginRateLimitConfig
 	SSOPrivateKey  string // env: SSO_RSA_PRIVATE_KEY (PEM, optional — auto-gen if empty)
 	SSOIssuerURL   string // env: SSO_ISSUER_URL (e.g. https://automax.example.com — embedded in iss claim)
 	SSOFrontendURL string // env: SSO_FRONTEND_URL (e.g. https://automax.example.com — where /sso-complete lives)
@@ -95,6 +96,13 @@ type LDAPConfig struct {
 	InsecureSkipVerify bool
 }
 
+type LoginRateLimitConfig struct {
+	Enabled          bool
+	MaxAttempts      int
+	RateLimitWindow  int // in minutes
+	BlockDuration    int // in minutes
+}
+
 func Load() *Config {
 	return &Config{
 		Server: ServerConfig{
@@ -138,6 +146,12 @@ func Load() *Config {
 			GroupSearchBase:    getEnv("LDAP_GROUP_SEARCH_BASE", "ou=groups,dc=example,dc=com"),
 			GroupSearchFilter:  getEnv("LDAP_GROUP_SEARCH_FILTER", "(member={{userDN}})"),
 			InsecureSkipVerify: getEnvAsBool("LDAP_INSECURE_SKIP_VERIFY", true),
+		},
+		LoginRateLimit: LoginRateLimitConfig{
+			Enabled:         getEnvAsBool("LOGIN_RATE_LIMIT_ENABLED", true),
+			MaxAttempts:     getEnvAsInt("MAX_LOGIN_ATTEMPTS", 5),
+			RateLimitWindow: getEnvAsInt("RATE_LIMIT_WINDOW", 5),
+			BlockDuration:   getEnvAsInt("BLOCK_DURATION", 15),
 		},
 		SSOPrivateKey:  getEnv("SSO_RSA_PRIVATE_KEY", ""),
 		SSOIssuerURL:   getEnv("SSO_ISSUER_URL", ""),

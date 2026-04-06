@@ -198,6 +198,7 @@ func main() {
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore, userRepo)
+	loginRateLimitMiddleware := middleware.LoginRateLimitMiddleware(cfg, redisClient)
 
 	app := fiber.New(fiber.Config{
 		AppName:      "Automax Backend",
@@ -263,7 +264,7 @@ func main() {
 	// Auth routes
 	auth := v1.Group("/auth")
 	auth.Post("/register", userHandler.Register)
-	auth.Post("/login", userHandler.Login)
+	auth.Post("/login", loginRateLimitMiddleware, userHandler.Login)
 	auth.Post("/refresh", userHandler.RefreshToken)
 	auth.Post("/logout", authMiddleware.Authenticate(), userHandler.Logout)
 
