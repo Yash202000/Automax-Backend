@@ -113,6 +113,10 @@ func Migrate(db *gorm.DB) error {
 		&models.MetricImportBatch{},
 		&models.MetricImportItem{},
 		&models.MetricImportBatchTransitionHistory{},
+		// Performance Review models
+		&models.ReviewCycle{},
+		&models.ReviewAssignment{},
+		&models.GoalScore{},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
