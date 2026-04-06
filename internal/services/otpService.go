@@ -92,12 +92,7 @@ type OTPData struct {
 	SentBy     *uuid.UUID `json:"sentBy"`
 }
 
-func (s *OTPService) SendOTP(
-	ctx context.Context,
-	phone string,
-	senderMode string,
-	sentBy *uuid.UUID,
-) (string, error) {
+func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode string, sentBy *uuid.UUID) (string, error) {
 
 	// - RATE LIMIT COUNTER
 	counterKey := "otp_counter:" + phone
@@ -182,8 +177,8 @@ func (s *OTPService) SendOTP(
 
 func (s *OTPService) sendOTPNotification(ctx context.Context, channel, phone, otp string, sessionID *uuid.UUID) error {
 
-	body := fmt.Sprintf("Your OTP is %s", otp)
-	//body := (otp)
+	// body := fmt.Sprintf("Your OTP is %s", otp)
+	body := (otp)
 	_, err := s.notificationService.SendNotification(ctx, channel, nil, "en", []string{phone}, nil, nil, "", body, nil, nil, nil, sessionID)
 	if err != nil {
 		return fmt.Errorf("Err Into Send Notification Service: %w", err)
