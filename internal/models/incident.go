@@ -302,6 +302,9 @@ type IncidentRevision struct {
 	TransitionHistoryID *uuid.UUID                 `gorm:"type:uuid" json:"transition_history_id"`
 	TransitionHistory   *IncidentTransitionHistory `gorm:"foreignKey:TransitionHistoryID" json:"transition_history,omitempty"`
 
+	// Track which child incidents were synced during master transition (JSON array of incident numbers)
+	SyncedIncidentNumbers string `gorm:"type:text" json:"synced_incident_numbers"`
+
 	CreatedAt time.Time `gorm:"index" json:"created_at"`
 }
 
@@ -1028,6 +1031,7 @@ type IncidentRevisionResponse struct {
 	AttachmentID        *uuid.UUID                  `json:"attachment_id,omitempty"`
 	TransitionHistoryID *uuid.UUID                  `json:"transition_history_id,omitempty"`
 	Transition          *WorkflowTransitionResponse `json:"transition,omitempty"`
+	SyncedIncidents     []string                    `json:"synced_incidents,omitempty"`
 	CreatedAt           time.Time                   `json:"created_at"`
 }
 
@@ -1057,6 +1061,11 @@ func ToIncidentRevisionResponse(r *IncidentRevision) IncidentRevisionResponse {
 		AttachmentID:        r.AttachmentID,
 		TransitionHistoryID: r.TransitionHistoryID,
 		CreatedAt:           r.CreatedAt,
+	}
+
+	// Parse synced incident numbers
+	if r.SyncedIncidentNumbers != "" {
+		_ = json.Unmarshal([]byte(r.SyncedIncidentNumbers), &resp.SyncedIncidents)
 	}
 
 	if r.PerformedBy != nil {

@@ -2365,6 +2365,20 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	revDescription := fmt.Sprintf("Status changed from %s to %s", oldStateName, newStateName)
 	revNum, _ := txRepo.GetNextRevisionNumber(ctx, incidentID)
 	changesBytes, _ := json.Marshal(changes)
+	
+	// Get merged incident numbers to include in revision (for tracking child tickets)
+	var syncedIncidentNumbers []string
+	mergedIncidents, _ := s.incidentMergeRepo.GetMergedIncidents(ctx, incidentID)
+	for _, merged := range mergedIncidents {
+		syncedIncidentNumbers = append(syncedIncidentNumbers, merged.IncidentNumber)
+	}
+	syncedNumbersJSON := ""
+	if len(syncedIncidentNumbers) > 0 {
+		if numsBytes, err := json.Marshal(syncedIncidentNumbers); err == nil {
+			syncedNumbersJSON = string(numsBytes)
+		}
+	}
+	
 	txRepo.CreateRevision(ctx, &models.IncidentRevision{
 		IncidentID:          incidentID,
 		RevisionNumber:      revNum,
@@ -2373,6 +2387,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		Changes:             string(changesBytes),
 		PerformedByID:       userID,
 		TransitionHistoryID: &history.ID,
+		SyncedIncidentNumbers: syncedNumbersJSON,
 		CreatedAt:           time.Now(),
 	})
 
@@ -2390,13 +2405,14 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			{FieldName: "ready_to_close_duration", FieldLabel: "Close Duration", OldValue: nil, NewValue: &req.ReadyToCloseDuration},
 		})
 		txRepo.CreateRevision(ctx, &models.IncidentRevision{
-			IncidentID:        incidentID,
-			RevisionNumber:    rtcRevNum,
-			ActionType:        models.RevisionActionStatusChanged,
-			ActionDescription: rtcDescription,
-			Changes:           string(rtcChangesBytes),
-			PerformedByID:     userID,
-			CreatedAt:         time.Now(),
+			IncidentID:            incidentID,
+			RevisionNumber:        rtcRevNum,
+			ActionType:            models.RevisionActionStatusChanged,
+			ActionDescription:     rtcDescription,
+			Changes:               string(rtcChangesBytes),
+			PerformedByID:         userID,
+			SyncedIncidentNumbers: syncedNumbersJSON,
+			CreatedAt:             time.Now(),
 		})
 	}
 
@@ -3286,31 +3302,13 @@ func (s *incidentService) ListRevisions(ctx context.Context, incidentID uuid.UUI
 	var revisions []models.IncidentRevision
 	var total int64
 
-	// If this is a master incident, include revisions from all merged (child) incidents
+	// If this is a master incident (standalone or master with children)
+	// Only return its own revisions (don't aggregate child revisions to avoid duplicates)
 	if incident.MasterIncidentID == nil {
-		// This is either a standalone incident or a master incident
-		// Get revisions from this incident
 		filter.IncidentID = incidentID
 		revisions, total, err = s.incidentRepo.ListRevisions(ctx, filter)
 		if err != nil {
 			return nil, 0, err
-		}
-
-		// If it's a master, also get revisions from merged children
-		mergedIncidents, err := s.incidentMergeRepo.GetMergedIncidents(ctx, incidentID)
-		if err == nil && len(mergedIncidents) > 0 {
-			for _, child := range mergedIncidents {
-				filter.IncidentID = child.ID
-				childRevisions, _, err := s.incidentRepo.ListRevisions(ctx, filter)
-				if err == nil {
-					revisions = append(revisions, childRevisions...)
-				}
-			}
-			// Sort by created_at DESC
-			sort.Slice(revisions, func(i, j int) bool {
-				return revisions[i].CreatedAt.After(revisions[j].CreatedAt)
-			})
-			total = int64(len(revisions))
 		}
 	} else {
 		// This is a child incident - get its own revisions AND master's revisions
