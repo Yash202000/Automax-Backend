@@ -639,6 +639,13 @@ func (s *incidentService) ListIncidents(ctx context.Context, filter *models.Inci
 		if s.wsHub != nil {
 			responses[i].ActiveViewers = s.wsHub.GetSubscriberCount(inc.ID)
 		}
+
+		// Populate merged incidents count for master incidents
+		// This is needed because MergedIncidents is not a GORM relation (gorm:"-")
+		if s.incidentMergeRepo != nil {
+			mergedIncidents, _ := s.incidentMergeRepo.GetMergedIncidents(ctx, inc.ID)
+			responses[i].MergedIncidentsCount = len(mergedIncidents)
+		}
 	}
 
 	return responses, total, nil
