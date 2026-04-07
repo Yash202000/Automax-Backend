@@ -1247,7 +1247,7 @@ func (s *goalService) ExecuteEvidenceTransition(ctx context.Context, evidenceID 
 				if errMsg == "" {
 					errMsg = "Comment is required for this transition"
 				}
-				return nil, fmt.Errorf(errMsg)
+				return nil, fmt.Errorf("%s", errMsg)
 			}
 		}
 	}
@@ -3293,7 +3293,7 @@ func (s *goalService) ExecuteMetricBatchTransition(ctx context.Context, batchID 
 				if errMsg == "" {
 					errMsg = "Comment is required for this transition"
 				}
-				return nil, fmt.Errorf(errMsg)
+				return nil, fmt.Errorf("%s", errMsg)
 			}
 		}
 	}

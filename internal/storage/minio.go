@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -20,6 +21,8 @@ type MinIOStorage struct {
 	client     *minio.Client
 	bucketName string
 }
+
+var ErrObjectNotFound = errors.New("object not found in storage")
 
 var Storage *MinIOStorage
 
@@ -154,6 +157,15 @@ func (s *MinIOStorage) GetFile(ctx context.Context, objectName string) (io.ReadC
 	if err != nil {
 		return nil, fmt.Errorf("failed to get file: %w", err)
 	}
+	// Eagerly verify the key exists. MinIO's GetObject is lazy — it only makes
+	// the HTTP request on the first Read(), so a missing key would otherwise
+	// surface as a confusing "copy file data: key does not exist" error in
+	// callers that pipe the reader into io.Copy.
+	if _, err := object.Stat(); err != nil {
+		object.Close()
+		return nil, fmt.Errorf("object not found in storage (key=%q): %w", objectName, err)
+	}
+
 	return object, nil
 }
 
