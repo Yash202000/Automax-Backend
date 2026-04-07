@@ -16,6 +16,8 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/storage"
+	"github.com/automax/backend/pkg/utils"
+	"github.com/google/uuid"
 )
 
 // AIQualityMonitor watches for incidents that have is_ai_verified=true and whose current workflow
@@ -35,6 +37,7 @@ type aiQualityMonitor struct {
 	incidentRepo repository.IncidentRepository
 	storage      *storage.MinIOStorage
 	cfg          config.AIQualityConfig
+	jwtManager   *utils.JWTManager
 	httpClient   *http.Client
 	interval     time.Duration
 	stopChan     chan struct{}
@@ -47,6 +50,7 @@ func NewAIQualityMonitor(
 	incidentRepo repository.IncidentRepository,
 	minioStorage *storage.MinIOStorage,
 	cfg config.AIQualityConfig,
+	// jwtManager *utils.JWTManager,
 ) AIQualityMonitor {
 	interval := time.Duration(cfg.CheckIntervalMinutes) * time.Minute
 	if interval == 0 {
@@ -57,9 +61,10 @@ func NewAIQualityMonitor(
 		incidentRepo: incidentRepo,
 		storage:      minioStorage,
 		cfg:          cfg,
-		httpClient:   &http.Client{Timeout: 120 * time.Second},
-		interval:     interval,
-		stopChan:     make(chan struct{}),
+		// jwtManager:   jwtManager,
+		httpClient: &http.Client{Timeout: 120 * time.Second},
+		interval:   interval,
+		stopChan:   make(chan struct{}),
 	}
 }
 
@@ -138,22 +143,44 @@ func (m *aiQualityMonitor) ProcessAIQualityChecks(ctx context.Context) error {
 // ---- API response types ----------------------------------------------------
 
 // coordinatesCheck is the nested object in the AI API response.
+// BeforeCoordinates and AfterCoordinates are json.RawMessage because the API
+// may return either a plain string or a nested object for these fields.
 type coordinatesCheck struct {
-	BeforeCoordinates string   `json:"before_coordinates"`
-	AfterCoordinates  string   `json:"after_coordinates"`
-	DistanceMeters    *float64 `json:"distance_meters"` // nullable
-	IsMismatch        *bool    `json:"is_mismatch"`     // nullable
-	Note              string   `json:"note"`
+	BeforeCoordinates json.RawMessage `json:"before_coordinates"`
+	AfterCoordinates  json.RawMessage `json:"after_coordinates"`
+	DistanceMeters    *float64        `json:"distance_meters"` // nullable
+	IsMismatch        *bool           `json:"is_mismatch"`     // nullable
+	Note              string          `json:"note"`
 }
 
-// aiQualityAPIResponse mirrors the exact JSON returned by the verify-incident endpoint.
+// sameSceneCheck captures the same-location analysis block returned by the API.
+type sameSceneCheck struct {
+	IsSameLocation bool     `json:"is_same_location"`
+	Confidence     float64  `json:"confidence"`
+	Evidence       []string `json:"evidence"`
+}
+
+// incidentAssessment captures the before/after assessment blocks returned by the API.
+type incidentAssessment struct {
+	IssuePresent bool   `json:"issue_present"`
+	Severity     string `json:"severity"`
+	Summary      string `json:"summary"`
+}
+
+// aiQualityAPIResponse mirrors the JSON returned by the verify-incident endpoint.
 type aiQualityAPIResponse struct {
+	// Legacy / shared fields
 	ChangeSummary    string           `json:"change_summary"`
 	ResolutionStatus string           `json:"resolution_status"`
 	Confidence       float64          `json:"confidence"`
 	ReasoningPoints  []string         `json:"reasoning_points"`
 	RiskFlags        []string         `json:"risk_flags"`
 	CoordinatesCheck coordinatesCheck `json:"coordinates_check"`
+	// Extended fields
+	IncidentType     string             `json:"incident_type"`
+	SameScene        sameSceneCheck     `json:"same_scene"`
+	BeforeAssessment incidentAssessment `json:"before_assessment"`
+	AfterAssessment  incidentAssessment `json:"after_assessment"`
 }
 
 // ---- core processing -------------------------------------------------------
@@ -245,10 +272,21 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 		return fmt.Errorf("AI API call: %w", err)
 	}
 
-	log.Printf("[AIQualityMonitor] incident=%s API response — resolution_status=%q confidence=%.2f distance_meters=%v risk_flags=%v",
-		incident.IncidentNumber, apiResp.ResolutionStatus, apiResp.Confidence,
-		nilableFloat(apiResp.CoordinatesCheck.DistanceMeters), apiResp.RiskFlags)
+	log.Printf("[AIQualityMonitor] incident=%s API response — incident_type=%q resolution_status=%q confidence=%.2f same_location=%v distance_meters=%v risk_flags=%v",
+		incident.IncidentNumber, apiResp.IncidentType, apiResp.ResolutionStatus, apiResp.Confidence,
+		apiResp.SameScene.IsSameLocation, nilableFloat(apiResp.CoordinatesCheck.DistanceMeters), apiResp.RiskFlags)
 
+	if apiResp.BeforeAssessment.Summary != "" {
+		log.Printf("[AIQualityMonitor] incident=%s before_assessment: severity=%q summary=%q",
+			incident.IncidentNumber, apiResp.BeforeAssessment.Severity, apiResp.BeforeAssessment.Summary)
+	}
+	if apiResp.AfterAssessment.Summary != "" {
+		log.Printf("[AIQualityMonitor] incident=%s after_assessment: severity=%q summary=%q",
+			incident.IncidentNumber, apiResp.AfterAssessment.Severity, apiResp.AfterAssessment.Summary)
+	}
+	if len(apiResp.SameScene.Evidence) > 0 {
+		log.Printf("[AIQualityMonitor] incident=%s same_scene_evidence: %v", incident.IncidentNumber, apiResp.SameScene.Evidence)
+	}
 	if len(apiResp.ReasoningPoints) > 0 {
 		log.Printf("[AIQualityMonitor] incident=%s reasoning_points:", incident.IncidentNumber)
 		for i, point := range apiResp.ReasoningPoints {
@@ -278,20 +316,19 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 	}
 	log.Printf("[AIQualityMonitor] incident=%s saved feedback id=%s", incident.IncidentNumber, feedback.ID)
 
-	// Update the incident with the AI-derived change summary.
-	// We only update non-empty values to preserve existing data.
-	updates := map[string]interface{}{}
+	// Update the incident: mark as AI-verified and apply the AI-derived change summary.
+	updates := map[string]interface{}{
+		"is_ai_verified": true,
+	}
 	if apiResp.ChangeSummary != "" {
 		updates["description"] = apiResp.ChangeSummary
 	}
-	if len(updates) > 0 {
-		if err := m.incidentRepo.UpdateFields(ctx, incident.ID, updates); err != nil {
-			// Non-fatal — the feedback record was already persisted.
-			log.Printf("[AIQualityMonitor] incident=%s WARNING: could not update incident fields: %v",
-				incident.IncidentNumber, err)
-		} else {
-			log.Printf("[AIQualityMonitor] incident=%s updated incident fields: %v", incident.IncidentNumber, updates)
-		}
+	if err := m.incidentRepo.UpdateFields(ctx, incident.ID, updates); err != nil {
+		// Non-fatal — the feedback record was already persisted.
+		log.Printf("[AIQualityMonitor] incident=%s WARNING: could not update incident fields: %v",
+			incident.IncidentNumber, err)
+	} else {
+		log.Printf("[AIQualityMonitor] incident=%s updated incident fields: %v", incident.IncidentNumber, updates)
 	}
 
 	log.Printf("[AIQualityMonitor] incident=%s DONE — status=%q distance=%.4fm",
@@ -300,6 +337,7 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 }
 
 // writeFileField downloads the attachment from MinIO and writes it as a multipart file field.
+// If the MinIO object is not found it falls back to downloading via the attachment preview API.
 func (m *aiQualityMonitor) writeFileField(ctx context.Context, writer *multipart.Writer, field string, att models.IncidentAttachment) error {
 	log.Printf("[AIQualityMonitor] writeFileField: field=%s fileName=%s filePath=%s", field, att.FileName, att.FilePath)
 
@@ -308,14 +346,54 @@ func (m *aiQualityMonitor) writeFileField(ctx context.Context, writer *multipart
 		return fmt.Errorf("create form file: %w", err)
 	}
 
-	rc, err := m.storage.GetFile(ctx, att.FilePath)
-	if err != nil {
-		return fmt.Errorf("download from storage: %w", err)
+	rc, storageErr := m.storage.GetFile(ctx, att.FilePath)
+	if storageErr != nil {
+		log.Printf("[AIQualityMonitor] MinIO download failed (%v) — falling back to API URL for attachment %s", storageErr, att.ID)
+		return m.writeFileFieldViaURL(ctx, part, att)
 	}
 	defer rc.Close()
 
 	if _, err := io.Copy(part, rc); err != nil {
 		return fmt.Errorf("copy file data: %w", err)
+	}
+	return nil
+}
+
+// writeFileFieldViaURL downloads the attachment through the internal attachment preview API
+// and copies it into the multipart part. Used as a fallback when MinIO storage is unavailable.
+// It uses APP_TOKEN from config when set; otherwise it self-generates a short-lived system JWT.
+func (m *aiQualityMonitor) writeFileFieldViaURL(ctx context.Context, part io.Writer, att models.IncidentAttachment) error {
+	token := m.cfg.AppToken
+	if token == "" && m.jwtManager != nil {
+		// Self-generate a short-lived system token so no static APP_TOKEN env var is required.
+		var err error
+		token, err = m.jwtManager.GenerateToken(uuid.Nil, "system@internal", "admin")
+		if err != nil {
+			return fmt.Errorf("generate system token for attachment fallback: %w", err)
+		}
+	}
+
+	attachURL := utils.GenerateAttachmentURL(m.cfg.AppProtocol, m.cfg.AppHost, att.ID.String(), token)
+	log.Printf("[AIQualityMonitor] fetching attachment via API: protocol=%s host=%s id=%s", m.cfg.AppProtocol, m.cfg.AppHost, att.ID)
+	log.Println("[AIQualityMonitor] WARNING: using API fallback for attachment download is slower and should be avoided in production — consider setting up APP_TOKEN or ensuring MinIO availability")
+	log.Println("Attachment URL:", attachURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, attachURL, nil)
+	if err != nil {
+		return fmt.Errorf("build fallback request: %w", err)
+	}
+
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("fallback HTTP request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("fallback API returned HTTP %d for attachment %s", resp.StatusCode, att.ID)
+	}
+
+	if _, err := io.Copy(part, resp.Body); err != nil {
+		return fmt.Errorf("copy fallback file data: %w", err)
 	}
 	return nil
 }

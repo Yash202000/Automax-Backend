@@ -30,6 +30,12 @@ type AIQualityConfig struct {
 	APIKey string
 	// CheckIntervalMinutes controls how often the monitor polls (default 10). env: AI_QUALITY_CHECK_INTERVAL_MINUTES
 	CheckIntervalMinutes int
+	// AppProtocol is the protocol used to construct attachment fallback URLs (http/https). env: APP_PROTOCOL
+	AppProtocol string
+	// AppHost is the host:port of this server used to construct attachment fallback URLs. env: APP_HOST
+	AppHost string
+	// AppToken is an internal bearer token used when downloading attachments via the API fallback. env: APP_TOKEN
+	AppToken string
 }
 
 type DocumentaConfig struct {
@@ -174,6 +180,9 @@ func Load() *Config {
 			APIEndpoint:          getEnv("AI_QUALITY_API_ENDPOINT", ""),
 			APIKey:               getEnv("AI_QUALITY_API_KEY", ""),
 			CheckIntervalMinutes: getEnvAsInt("AI_QUALITY_CHECK_INTERVAL_MINUTES", 10),
+			AppProtocol:          getEnv("APP_PROTOCOL", "http"),
+			AppHost:              getEnv("APP_HOST", "localhost:8080"),
+			AppToken:             getEnv("APP_TOKEN", ""),
 		},
 	}
 }
