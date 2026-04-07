@@ -37,6 +37,34 @@ const (
 	StatusScheduled = "scheduled"
 )
 
+// NotificationMeta stores metadata for in-app notifications
+type NotificationMeta struct {
+	ID   string `json:"id,omitempty"`
+	Type string `json:"type,omitempty"` // INCIDENT | REQUEST | COMPLAINT | QUERY
+}
+
+// Value implements the driver.Valuer interface
+func (m NotificationMeta) Value() (driver.Value, error) {
+	return json.Marshal(m)
+}
+
+// Scan implements the sql.Scanner interface
+func (m *NotificationMeta) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	var bytes []byte
+	switch v := value.(type) {
+	case []byte:
+		bytes = v
+	case string:
+		bytes = []byte(v)
+	default:
+		return fmt.Errorf("unsupported type: %T", value)
+	}
+	return json.Unmarshal(bytes, m)
+}
+
 // RecipientInfo stores individual recipient delivery status
 type RecipientInfo struct {
 	Email        string `json:"email"`
@@ -165,28 +193,29 @@ type NotificationLog struct {
 	BodyHTML string `gorm:"type:text" json:"body_html,omitempty"` // HTML version of body
 	Status   string `gorm:"size:20;not null;index" json:"status"` // sent | failed | mock-sent | partial | draft | pending
 
-	Provider       string          `gorm:"size:50" json:"provider"`
-	OTPSessionID   *uuid.UUID      `gorm:"type:uuid;index" json:"otp_session_id,omitempty"`
-	OTPVerified    bool            `gorm:"default:false;index" json:"otp_verified"`
-	OTPVerifiedAt  *time.Time      `gorm:"index" json:"otp_verified_at,omitempty"`
-	CC             StringArray     `gorm:"type:jsonb" json:"cc,omitempty"`
-	BCC            StringArray     `gorm:"type:jsonb" json:"bcc,omitempty"`
-	From           string          `gorm:"size:255;index" json:"from,omitempty"` // Sender email (for inbound)
-	ErrorMessage   string          `gorm:"type:text" json:"error_message,omitempty"`
-	Attachments    AttachmentArray `gorm:"type:jsonb" json:"attachments,omitempty"`
-	IsRead         bool            `gorm:"default:false;index" json:"is_read"`           // For inbox emails
-	IsStarred      bool            `gorm:"default:false;index" json:"is_starred"`        // Star/flag important emails
-	ThreadID       *uuid.UUID      `gorm:"type:uuid;index" json:"thread_id,omitempty"`   // For email threading
-	InReplyTo      *uuid.UUID      `gorm:"type:uuid;index" json:"in_reply_to,omitempty"` // Reply to which email
-	SentBy         *uuid.UUID      `gorm:"type:uuid;index" json:"sent_by,omitempty"`     // User who sent it (outbound)
-	ReceivedBy     *uuid.UUID      `gorm:"type:uuid;index" json:"received_by,omitempty"` // User who received it (inbound)
-	ScheduledAt    *time.Time      `json:"scheduled_at,omitempty"`                       // For scheduled sending (outbox)
-	SentAt         *time.Time      `gorm:"index" json:"sent_at,omitempty"`               // Actual sent time
-	CreatedAt      time.Time       `gorm:"index" json:"created_at"`
-	UpdatedAt      *time.Time      `json:"updated_at,omitempty"`
-	DeletedAt      gorm.DeletedAt  `gorm:"index" json:"-"`
-	SentByUser     *User           `gorm:"foreignKey:SentBy;references:ID" json:"sent_by_user,omitempty"`         // User details who sent it
-	ReceivedByUser *User           `gorm:"foreignKey:ReceivedBy;references:ID" json:"received_by_user,omitempty"` // User details who received it
+	Provider       string            `gorm:"size:50" json:"provider"`
+	OTPSessionID   *uuid.UUID        `gorm:"type:uuid;index" json:"otp_session_id,omitempty"`
+	OTPVerified    bool              `gorm:"default:false;index" json:"otp_verified"`
+	OTPVerifiedAt  *time.Time        `gorm:"index" json:"otp_verified_at,omitempty"`
+	CC             StringArray       `gorm:"type:jsonb" json:"cc,omitempty"`
+	BCC            StringArray       `gorm:"type:jsonb" json:"bcc,omitempty"`
+	From           string            `gorm:"size:255;index" json:"from,omitempty"` // Sender email (for inbound)
+	ErrorMessage   string            `gorm:"type:text" json:"error_message,omitempty"`
+	Attachments    AttachmentArray   `gorm:"type:jsonb" json:"attachments,omitempty"`
+	IsRead         bool              `gorm:"default:false;index" json:"is_read"`           // For inbox emails
+	IsStarred      bool              `gorm:"default:false;index" json:"is_starred"`        // Star/flag important emails
+	ThreadID       *uuid.UUID        `gorm:"type:uuid;index" json:"thread_id,omitempty"`   // For email threading
+	InReplyTo      *uuid.UUID        `gorm:"type:uuid;index" json:"in_reply_to,omitempty"` // Reply to which email
+	Meta           *NotificationMeta `gorm:"type:jsonb" json:"meta,omitempty"`             // Contextual metadata (record id, type)
+	SentBy         *uuid.UUID        `gorm:"type:uuid;index" json:"sent_by,omitempty"`     // User who sent it (outbound)
+	ReceivedBy     *uuid.UUID        `gorm:"type:uuid;index" json:"received_by,omitempty"` // User who received it (inbound)
+	ScheduledAt    *time.Time        `json:"scheduled_at,omitempty"`                       // For scheduled sending (outbox)
+	SentAt         *time.Time        `gorm:"index" json:"sent_at,omitempty"`               // Actual sent time
+	CreatedAt      time.Time         `gorm:"index" json:"created_at"`
+	UpdatedAt      *time.Time        `json:"updated_at,omitempty"`
+	DeletedAt      gorm.DeletedAt    `gorm:"index" json:"-"`
+	SentByUser     *User             `gorm:"foreignKey:SentBy;references:ID" json:"sent_by_user,omitempty"`         // User details who sent it
+	ReceivedByUser *User             `gorm:"foreignKey:ReceivedBy;references:ID" json:"received_by_user,omitempty"` // User details who received it
 }
 
 func (l *NotificationLog) BeforeCreate(tx *gorm.DB) error {
@@ -207,35 +236,36 @@ type UserBasicInfo struct {
 
 // NotificationLogResponse for API responses
 type NotificationLogResponse struct {
-	ID             uuid.UUID        `json:"id"`
-	Channel        string           `json:"channel"`
-	Direction      string           `json:"direction"`
-	Category       string           `json:"category"`
-	TemplateCode   string           `json:"template_code"`
-	Language       string           `json:"language"`
-	Recipients     []RecipientInfo  `json:"recipients"`
-	CC             []string         `json:"cc,omitempty"`
-	BCC            []string         `json:"bcc,omitempty"`
-	From           string           `json:"from,omitempty"`
-	Subject        string           `json:"subject,omitempty"`
-	Body           string           `json:"body"`
-	BodyHTML       string           `json:"body_html,omitempty"`
-	Status         string           `json:"status"`
-	Provider       string           `json:"provider"`
-	ErrorMessage   string           `json:"error_message,omitempty"`
-	Attachments    []AttachmentInfo `json:"attachments,omitempty"`
-	IsRead         bool             `json:"is_read"`
-	IsStarred      bool             `json:"is_starred"`
-	ThreadID       *uuid.UUID       `json:"thread_id,omitempty"`
-	InReplyTo      *uuid.UUID       `json:"in_reply_to,omitempty"`
-	SentBy         *uuid.UUID       `json:"sent_by,omitempty"`
-	SentByUser     *UserBasicInfo   `json:"sent_by_user,omitempty"`
-	ReceivedBy     *uuid.UUID       `json:"received_by,omitempty"`
-	ReceivedByUser *UserBasicInfo   `json:"received_by_user,omitempty"`
-	ScheduledAt    *time.Time       `json:"scheduled_at,omitempty"`
-	SentAt         *time.Time       `json:"sent_at,omitempty"`
-	CreatedAt      time.Time        `json:"created_at"`
-	UpdatedAt      *time.Time       `json:"updated_at,omitempty"`
+	ID             uuid.UUID         `json:"id"`
+	Channel        string            `json:"channel"`
+	Direction      string            `json:"direction"`
+	Category       string            `json:"category"`
+	TemplateCode   string            `json:"template_code"`
+	Language       string            `json:"language"`
+	Recipients     []RecipientInfo   `json:"recipients"`
+	CC             []string          `json:"cc,omitempty"`
+	BCC            []string          `json:"bcc,omitempty"`
+	From           string            `json:"from,omitempty"`
+	Subject        string            `json:"subject,omitempty"`
+	Body           string            `json:"body"`
+	BodyHTML       string            `json:"body_html,omitempty"`
+	Status         string            `json:"status"`
+	Provider       string            `json:"provider"`
+	ErrorMessage   string            `json:"error_message,omitempty"`
+	Attachments    []AttachmentInfo  `json:"attachments,omitempty"`
+	Meta           *NotificationMeta `json:"meta,omitempty"`
+	IsRead         bool              `json:"is_read"`
+	IsStarred      bool              `json:"is_starred"`
+	ThreadID       *uuid.UUID        `json:"thread_id,omitempty"`
+	InReplyTo      *uuid.UUID        `json:"in_reply_to,omitempty"`
+	SentBy         *uuid.UUID        `json:"sent_by,omitempty"`
+	SentByUser     *UserBasicInfo    `json:"sent_by_user,omitempty"`
+	ReceivedBy     *uuid.UUID        `json:"received_by,omitempty"`
+	ReceivedByUser *UserBasicInfo    `json:"received_by_user,omitempty"`
+	ScheduledAt    *time.Time        `json:"scheduled_at,omitempty"`
+	SentAt         *time.Time        `json:"sent_at,omitempty"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      *time.Time        `json:"updated_at,omitempty"`
 }
 
 // NotificationLogFilter for filtering and searching notifications
@@ -315,6 +345,7 @@ func ToNotificationLogResponse(log *NotificationLog) NotificationLogResponse {
 		Provider:       log.Provider,
 		ErrorMessage:   log.ErrorMessage,
 		Attachments:    responseAttachments,
+		Meta:           log.Meta,
 		IsRead:         log.IsRead,
 		IsStarred:      log.IsStarred,
 		ThreadID:       log.ThreadID,

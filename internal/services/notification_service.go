@@ -656,6 +656,10 @@ func (s *NotificationService) UpdateAttachmentURLs(ctx context.Context, id uuid.
 	return s.logRepo.Update(ctx, log)
 }
 
+func (s *NotificationService) SetMetaOnLogs(ctx context.Context, ids []uuid.UUID, meta *models.NotificationMeta) error {
+	return s.logRepo.SetMeta(ctx, ids, meta)
+}
+
 func RenderTemplate(tpl string, vars map[string]string) (string, error) {
 	t, err := template.New("tpl").Option("missingkey=zero").Parse(tpl)
 	if err != nil {
