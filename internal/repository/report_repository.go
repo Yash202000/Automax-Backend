@@ -43,6 +43,13 @@ type ReportRepository interface {
 	ExecuteLocationQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 	ExecuteClassificationQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 	ExecuteActionLogQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
+	// Count-based group queries
+	ExecuteLocationCountQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
+	ExecuteLocationCountByStatusQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
+	ExecuteClassificationCountQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
+	ExecuteClassificationCountByStatusQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
+	ExecuteDepartmentCountQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
+	ExecuteDepartmentCountByStatusQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 }
 
 type reportRepository struct {
@@ -159,8 +166,8 @@ func (r *reportRepository) UpdateExecution(ctx context.Context, execution *model
 
 // filterFieldMap is a map of logical field name → qualified SQL column name.
 // Presence in the map (with a non-empty value) is the sole allowed-field check.
-
 var incidentFilterFields = map[string]string{
+	// ── Direct incidents columns ──────────────────────────────────────────────
 	"id":                        "incidents.id",
 	"incident_number":           "incidents.incident_number",
 	"title":                     "incidents.title",
@@ -181,6 +188,8 @@ var incidentFilterFields = map[string]string{
 	"sla_breached":              "incidents.sla_breached",
 	"sla_deadline":              "incidents.sla_deadline",
 	"reporter_id":               "incidents.reporter_id",
+	"reporter_email":            "incidents.reporter_email",
+	"reporter_name":             "incidents.reporter_name",
 	"custom_fields":             "incidents.custom_fields",
 	"created_at":                "incidents.created_at",
 	"updated_at":                "incidents.updated_at",
@@ -194,7 +203,6 @@ var incidentFilterFields = map[string]string{
 	"evaluation_count":          "incidents.evaluation_count",
 	"address":                   "incidents.address",
 	"city":                      "incidents.city",
-	"state":                     "incidents.state",
 	"country":                   "incidents.country",
 	"postal_code":               "incidents.postal_code",
 	"source":                    "incidents.source",
@@ -207,6 +215,26 @@ var incidentFilterFields = map[string]string{
 	"ready_to_close_expires_at": "incidents.ready_to_close_expires_at",
 	"ready_to_close_duration":   "incidents.ready_to_close_duration",
 	"ready_to_close_notified":   "incidents.ready_to_close_notified",
+	// ── Via JOIN: workflow_states ─────────────────────────────────────────────
+	"current_state_name": "workflow_states.name",
+	"current_state_type": "workflow_states.state_type",
+	// ── Via JOIN: classifications ─────────────────────────────────────────────
+	"classification_name": "classifications.name",
+	// ── Via JOIN: departments ─────────────────────────────────────────────────
+	"department_name": "departments.name",
+	// ── Via JOIN: locations ───────────────────────────────────────────────────
+	"location_name": "locations.name",
+	// ── Via JOIN: workflows ───────────────────────────────────────────────────
+	"workflow_name": "workflows.name",
+	// ── Via JOIN: reporters (users aliased as reporters) ──────────────────────
+	"reporter_username":   "reporters.username",
+	"reporter_first_name": "reporters.first_name",
+	"reporter_last_name":  "reporters.last_name",
+	// ── Via JOIN: assignees (users aliased as assignees) ──────────────────────
+	"assignee_email":      "assignees.email",
+	"assignee_username":   "assignees.username",
+	"assignee_first_name": "assignees.first_name",
+	"assignee_last_name":  "assignees.last_name",
 }
 
 // requestFilterFields reuses the incident columns (same table, filtered by record_type).
@@ -277,6 +305,77 @@ var actionLogFilterFields = map[string]string{
 	"created_at":  "action_logs.created_at",
 }
 
+// mergeFilterFields merges one or more filter field maps into a new map.
+// Later maps override earlier ones on key collision.
+func mergeFilterFields(maps ...map[string]string) map[string]string {
+	out := make(map[string]string)
+	for _, m := range maps {
+		for k, v := range m {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// incidentCountFilterFields contains the common incident-level filters shared across all
+// count-group queries (location/classification/department × with/without status).
+var incidentCountFilterFields = map[string]string{
+	"record_type":         "incidents.record_type",
+	"incident_created_at": "incidents.created_at",
+	"workflow_id":         "incidents.workflow_id",
+	"assignee_id":         "incidents.assignee_id",
+	"sla_breached":        "incidents.sla_breached",
+	"reporter_id":         "incidents.reporter_id",
+}
+
+// The 6 count-group filter maps are populated by init() via mergeFilterFields so that
+// incidentCountFilterFields acts as a true shared base with no duplication.
+var (
+	locationCountFilterFields               map[string]string
+	locationCountByStatusFilterFields       map[string]string
+	classificationCountFilterFields         map[string]string
+	classificationCountByStatusFilterFields map[string]string
+	departmentCountFilterFields             map[string]string
+	departmentCountByStatusFilterFields     map[string]string
+)
+
+func init() {
+	statusFields := map[string]string{
+		"current_state_id": "incidents.current_state_id",
+		"state_name":       "workflow_states.name",
+	}
+
+	locationSpecific := map[string]string{
+		"location_id":       "locations.id",
+		"location_name":     "locations.name",
+		"parent_id":         "locations.parent_id",
+		"classification_id": "incidents.classification_id",
+		"department_id":     "incidents.department_id",
+	}
+	locationCountFilterFields = mergeFilterFields(incidentCountFilterFields, locationSpecific)
+	locationCountByStatusFilterFields = mergeFilterFields(incidentCountFilterFields, locationSpecific, statusFields)
+
+	classificationSpecific := map[string]string{
+		"classification_id":   "classifications.id",
+		"classification_name": "classifications.name",
+		"parent_id":           "classifications.parent_id",
+		"location_id":         "incidents.location_id",
+		"department_id":       "incidents.department_id",
+	}
+	classificationCountFilterFields = mergeFilterFields(incidentCountFilterFields, classificationSpecific)
+	classificationCountByStatusFilterFields = mergeFilterFields(incidentCountFilterFields, classificationSpecific, statusFields)
+
+	departmentSpecific := map[string]string{
+		"department_id":     "departments.id",
+		"department_name":   "departments.name",
+		"parent_id":         "departments.parent_id",
+		"location_id":       "incidents.location_id",
+		"classification_id": "incidents.classification_id",
+	}
+	departmentCountFilterFields = mergeFilterFields(incidentCountFilterFields, departmentSpecific)
+	departmentCountByStatusFilterFields = mergeFilterFields(incidentCountFilterFields, departmentSpecific, statusFields)
+}
+
 // userPerformanceFilterFields covers the joined tables used by ExecuteUserPerformanceQuery.
 var userPerformanceFilterFields = map[string]string{
 	// incident_revisions
@@ -301,15 +400,21 @@ var userPerformanceFilterFields = map[string]string{
 
 // dataSourceFilterFields maps a data source name to its allowed filter fields.
 var dataSourceFilterFields = map[string]map[string]string{
-	"incidents":         incidentFilterFields,
-	"request":           requestFilterFields,
-	"users":             userFilterFields,
-	"workflows":         workflowFilterFields,
-	"departments":       departmentFilterFields,
-	"locations":         locationFilterFields,
-	"classifications":   classificationFilterFields,
-	"action_logs":       actionLogFilterFields,
-	"users_performance": userPerformanceFilterFields,
+	"incidents":                 incidentFilterFields,
+	"request":                   requestFilterFields,
+	"users":                     userFilterFields,
+	"workflows":                 workflowFilterFields,
+	"departments":               departmentFilterFields,
+	"locations":                 locationFilterFields,
+	"classifications":           classificationFilterFields,
+	"action_logs":               actionLogFilterFields,
+	"users_performance":         userPerformanceFilterFields,
+	"locations_by_count":        locationCountFilterFields,
+	"locations_by_status":       locationCountByStatusFilterFields,
+	"classifications_by_count":  classificationCountFilterFields,
+	"classifications_by_status": classificationCountByStatusFilterFields,
+	"departments_by_count":      departmentCountFilterFields,
+	"departments_by_status":     departmentCountByStatusFilterFields,
 }
 
 // applyFilters applies ReportFilterConfig entries to the query. It reads the
@@ -321,8 +426,6 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 		return query
 	}
 
-	log.Printf("all the filters")
-	log.Print(filters[0])
 	dataSource, _ := ctx.Value(constants.ContextKeys.REPORT_DATA_SOURCE).(string)
 	fieldMap := dataSourceFilterFields[dataSource]
 	if fieldMap == nil {
@@ -476,18 +579,34 @@ func (r *reportRepository) ExecuteRequestQuery(ctx context.Context, filters []mo
 func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
 	var total int64
 	var results []map[string]interface{}
-	query := r.db.WithContext(ctx).Model(&models.Incident{})
-	query = r.applyFilters(ctx, query, filters)
-	if err := query.Count(&total).Error; err != nil {
+
+	// buildBase returns a fresh *gorm.DB with all filter-relevant JOINs applied so that:
+	// (a) join-based filter fields (e.g. workflow_states.name) work on the COUNT query, and
+	// (b) GORM statement accumulation does not duplicate JOINs across Count + Rows calls.
+	buildBase := func() *gorm.DB {
+		q := r.db.WithContext(ctx).Model(&models.Incident{}).Debug().
+			Joins("LEFT JOIN users as reporters ON incidents.reporter_id = reporters.id").
+			Joins("LEFT JOIN users as assignees ON incidents.assignee_id = assignees.id").
+			Joins("LEFT JOIN workflow_states ON incidents.current_state_id = workflow_states.id").
+			Joins("LEFT JOIN classifications ON incidents.classification_id = classifications.id").
+			Joins("LEFT JOIN departments ON incidents.department_id = departments.id").
+			Joins("LEFT JOIN locations ON incidents.location_id = locations.id").
+			Joins("LEFT JOIN workflows ON incidents.workflow_id = workflows.id")
+		return r.applyFilters(ctx, q, filters)
+	}
+
+	if err := buildBase().Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	log.Println(filters)
-	query = r.applySorting(query, sorting)
+
+	dataQuery := buildBase()
+	dataQuery = r.applySorting(dataQuery, sorting)
 	if sorting == nil {
-		query = query.Order("incidents.created_at DESC")
+		dataQuery = dataQuery.Order("incidents.created_at DESC")
 	}
 	offset := (page - 1) * limit
-	rows, err := query.
+	rows, err := dataQuery.
 		Select("incidents.*, " +
 			"reporters.email as reporter_email, reporters.first_name as reporter_first_name, reporters.last_name as reporter_last_name, " +
 			"reporters.username as reporter_username, " +
@@ -499,13 +618,6 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			"locations.name as location_name, " +
 			"incident_attachments.id as attachment_id, " +
 			"workflows.name as workflow_name").
-		Joins("LEFT JOIN users as reporters ON incidents.reporter_id = reporters.id").
-		Joins("LEFT JOIN users as assignees ON incidents.assignee_id = assignees.id").
-		Joins("LEFT JOIN workflow_states ON incidents.current_state_id = workflow_states.id").
-		Joins("LEFT JOIN classifications ON incidents.classification_id = classifications.id").
-		Joins("LEFT JOIN departments ON incidents.department_id = departments.id").
-		Joins("LEFT JOIN locations ON incidents.location_id = locations.id").
-		Joins("LEFT JOIN workflows ON incidents.workflow_id = workflows.id").
 		Joins("LEFT JOIN incident_attachments ON incidents.id = incident_attachments.incident_id").
 		Offset(offset).
 		Limit(limit).
@@ -1386,7 +1498,6 @@ func (r *reportRepository) ExecuteUserPerformanceQuery(ctx context.Context, filt
 			"status":         e.currentStateName,
 			"comments":       commentsStr,
 			"attachments":    attachmentsStr,
-			"id":             e.incidentID,
 		}
 
 		row := make(map[string]interface{})
@@ -1402,7 +1513,6 @@ func (r *reportRepository) ExecuteUserPerformanceQuery(ctx context.Context, filt
 			row["Status"] = rawRow["status"]
 			row["Comments"] = rawRow["comments"]
 			row["Attachments"] = rawRow["attachments"]
-			row["Incident ID"] = e.incidentID // include incident ID for reference, even if not requested
 		}
 
 		results = append(results, row)
@@ -1802,5 +1912,309 @@ func (r *reportRepository) ExecuteActionLogQuery(ctx context.Context, filters []
 		results = append(results, row)
 	}
 
+	return results, total, nil
+}
+
+// ── Count-group helpers ───────────────────────────────────────────────────────
+
+// buildCountRow maps a rawRow (field→value) to the output row using reqColumns
+// (col.Field → col.Label). Falls back to the default display-name map when no
+// columns are injected via context.
+func buildCountRow(rawRow map[string]interface{}, reqColumns []models.ColumnField, defaults map[string]string) map[string]interface{} {
+	row := make(map[string]interface{})
+	if len(reqColumns) > 0 {
+		for _, col := range reqColumns {
+			row[col.Label] = rawRow[col.Field]
+		}
+	} else {
+		for field, label := range defaults {
+			row[label] = rawRow[field]
+		}
+	}
+	return row
+}
+
+// ── Location count (without status) ──────────────────────────────────────────
+// Output col.Field names: location_name | parent_location_name | incident_count
+func (r *reportRepository) ExecuteLocationCountQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
+	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
+	buildBase := func() *gorm.DB {
+		q := r.db.WithContext(ctx).Debug().
+			Table("locations").
+			Joins("LEFT JOIN locations parent_loc ON parent_loc.id = locations.parent_id").
+			Joins("LEFT JOIN incidents ON incidents.location_id = locations.id AND incidents.deleted_at IS NULL")
+		return r.applyFilters(ctx, q, filters)
+	}
+	var total int64
+	if err := buildBase().Select("COUNT(DISTINCT locations.id)").Scan(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	orderClause := "COUNT(incidents.id) DESC"
+	if sorting != nil && sorting.Field != "" {
+		if col, ok := locationCountFilterFields[sorting.Field]; ok {
+			dir := "ASC"
+			if strings.EqualFold(sorting.Direction, "desc") {
+				dir = "DESC"
+			}
+			orderClause = col + " " + dir
+		}
+	}
+	offset := (page - 1) * limit
+	rows, err := buildBase().Debug().
+		Select("locations.name AS location_name, COALESCE(parent_loc.name, '') AS parent_location_name, COUNT(incidents.id) AS incident_count").
+		Group("locations.id, locations.name, parent_loc.name").
+		Order(orderClause).Offset(offset).Limit(limit).Rows()
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	defaults := map[string]string{"location_name": "Location", "parent_location_name": "Parent Location", "incident_count": "No. of Incidents"}
+	var results []map[string]interface{}
+	for rows.Next() {
+		var locationName, parentName string
+		var count int64
+		if err := rows.Scan(&locationName, &parentName, &count); err != nil {
+			continue
+		}
+		results = append(results, buildCountRow(map[string]interface{}{"location_name": locationName, "parent_location_name": parentName, "incident_count": count}, reqColumns, defaults))
+	}
+	return results, total, nil
+}
+
+// ── Location count by status ──────────────────────────────────────────────────
+// Output col.Field names: location_name | parent_location_name | status_name | incident_count
+func (r *reportRepository) ExecuteLocationCountByStatusQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
+	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
+	buildBase := func() *gorm.DB {
+		q := r.db.WithContext(ctx).
+			Table("locations").
+			Joins("LEFT JOIN locations parent_loc ON parent_loc.id = locations.parent_id").
+			Joins("LEFT JOIN incidents ON incidents.location_id = locations.id AND incidents.deleted_at IS NULL").
+			Joins("LEFT JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
+		return r.applyFilters(ctx, q, filters)
+	}
+	var total int64
+	if err := buildBase().Select("COUNT(DISTINCT locations.id::text || '|' || COALESCE(workflow_states.name, ''))").Scan(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	orderClause := "locations.name ASC, COUNT(incidents.id) DESC"
+	if sorting != nil && sorting.Field != "" {
+		if col, ok := locationCountByStatusFilterFields[sorting.Field]; ok {
+			dir := "ASC"
+			if strings.EqualFold(sorting.Direction, "desc") {
+				dir = "DESC"
+			}
+			orderClause = col + " " + dir
+		}
+	}
+	offset := (page - 1) * limit
+	rows, err := buildBase().
+		Select("locations.name AS location_name, COALESCE(parent_loc.name, '') AS parent_location_name, COALESCE(workflow_states.name, '') AS status_name, COUNT(incidents.id) AS incident_count").
+		Group("locations.id, locations.name, parent_loc.name, workflow_states.name").
+		Order(orderClause).Offset(offset).Limit(limit).Rows()
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	defaults := map[string]string{"location_name": "Location", "parent_location_name": "Parent Location", "status_name": "Status", "incident_count": "No. of Incidents"}
+	var results []map[string]interface{}
+	for rows.Next() {
+		var locationName, parentName, statusName string
+		var count int64
+		if err := rows.Scan(&locationName, &parentName, &statusName, &count); err != nil {
+			continue
+		}
+		results = append(results, buildCountRow(map[string]interface{}{"location_name": locationName, "parent_location_name": parentName, "status_name": statusName, "incident_count": count}, reqColumns, defaults))
+	}
+	return results, total, nil
+}
+
+// ── Classification count (without status) ────────────────────────────────────
+// Output col.Field names: classification_name | parent_classification_name | incident_count
+func (r *reportRepository) ExecuteClassificationCountQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
+	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
+	buildBase := func() *gorm.DB {
+		q := r.db.WithContext(ctx).
+			Table("classifications").
+			Joins("LEFT JOIN classifications parent_cls ON parent_cls.id = classifications.parent_id").
+			Joins("LEFT JOIN incidents ON incidents.classification_id = classifications.id AND incidents.deleted_at IS NULL")
+		return r.applyFilters(ctx, q, filters)
+	}
+	var total int64
+	if err := buildBase().Select("COUNT(DISTINCT classifications.id)").Scan(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	orderClause := "COUNT(incidents.id) DESC"
+	if sorting != nil && sorting.Field != "" {
+		if col, ok := classificationCountFilterFields[sorting.Field]; ok {
+			dir := "ASC"
+			if strings.EqualFold(sorting.Direction, "desc") {
+				dir = "DESC"
+			}
+			orderClause = col + " " + dir
+		}
+	}
+	offset := (page - 1) * limit
+	rows, err := buildBase().
+		Select("classifications.name AS classification_name, COALESCE(parent_cls.name, '') AS parent_classification_name, COUNT(incidents.id) AS incident_count").
+		Group("classifications.id, classifications.name, parent_cls.name").
+		Order(orderClause).Offset(offset).Limit(limit).Rows()
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	defaults := map[string]string{"classification_name": "Classification", "parent_classification_name": "Parent Classification", "incident_count": "No. of Incidents"}
+	var results []map[string]interface{}
+	for rows.Next() {
+		var classificationName, parentName string
+		var count int64
+		if err := rows.Scan(&classificationName, &parentName, &count); err != nil {
+			continue
+		}
+		results = append(results, buildCountRow(map[string]interface{}{"classification_name": classificationName, "parent_classification_name": parentName, "incident_count": count}, reqColumns, defaults))
+	}
+	return results, total, nil
+}
+
+// ── Classification count by status ───────────────────────────────────────────
+// Output col.Field names: classification_name | parent_classification_name | status_name | incident_count
+func (r *reportRepository) ExecuteClassificationCountByStatusQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
+	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
+	buildBase := func() *gorm.DB {
+		q := r.db.WithContext(ctx).
+			Table("classifications").
+			Joins("LEFT JOIN classifications parent_cls ON parent_cls.id = classifications.parent_id").
+			Joins("LEFT JOIN incidents ON incidents.classification_id = classifications.id AND incidents.deleted_at IS NULL").
+			Joins("LEFT JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
+		return r.applyFilters(ctx, q, filters)
+	}
+	var total int64
+	if err := buildBase().Select("COUNT(DISTINCT classifications.id::text || '|' || COALESCE(workflow_states.name, ''))").Scan(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	orderClause := "classifications.name ASC, COUNT(incidents.id) DESC"
+	if sorting != nil && sorting.Field != "" {
+		if col, ok := classificationCountByStatusFilterFields[sorting.Field]; ok {
+			dir := "ASC"
+			if strings.EqualFold(sorting.Direction, "desc") {
+				dir = "DESC"
+			}
+			orderClause = col + " " + dir
+		}
+	}
+	offset := (page - 1) * limit
+	rows, err := buildBase().
+		Select("classifications.name AS classification_name, COALESCE(parent_cls.name, '') AS parent_classification_name, COALESCE(workflow_states.name, '') AS status_name, COUNT(incidents.id) AS incident_count").
+		Group("classifications.id, classifications.name, parent_cls.name, workflow_states.name").
+		Order(orderClause).Offset(offset).Limit(limit).Rows()
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	defaults := map[string]string{"classification_name": "Classification", "parent_classification_name": "Parent Classification", "status_name": "Status", "incident_count": "No. of Incidents"}
+	var results []map[string]interface{}
+	for rows.Next() {
+		var classificationName, parentName, statusName string
+		var count int64
+		if err := rows.Scan(&classificationName, &parentName, &statusName, &count); err != nil {
+			continue
+		}
+		results = append(results, buildCountRow(map[string]interface{}{"classification_name": classificationName, "parent_classification_name": parentName, "status_name": statusName, "incident_count": count}, reqColumns, defaults))
+	}
+	return results, total, nil
+}
+
+// ── Department count (without status) ────────────────────────────────────────
+// Output col.Field names: department_name | parent_department_name | incident_count
+func (r *reportRepository) ExecuteDepartmentCountQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
+	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
+	buildBase := func() *gorm.DB {
+		q := r.db.WithContext(ctx).
+			Table("departments").
+			Joins("LEFT JOIN departments parent_dept ON parent_dept.id = departments.parent_id").
+			Joins("LEFT JOIN incidents ON incidents.department_id = departments.id AND incidents.deleted_at IS NULL")
+		return r.applyFilters(ctx, q, filters)
+	}
+	var total int64
+	if err := buildBase().Select("COUNT(DISTINCT departments.id)").Scan(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	orderClause := "COUNT(incidents.id) DESC"
+	if sorting != nil && sorting.Field != "" {
+		if col, ok := departmentCountFilterFields[sorting.Field]; ok {
+			dir := "ASC"
+			if strings.EqualFold(sorting.Direction, "desc") {
+				dir = "DESC"
+			}
+			orderClause = col + " " + dir
+		}
+	}
+	offset := (page - 1) * limit
+	rows, err := buildBase().
+		Select("departments.name AS department_name, COALESCE(parent_dept.name, '') AS parent_department_name, COUNT(incidents.id) AS incident_count").
+		Group("departments.id, departments.name, parent_dept.name").
+		Order(orderClause).Offset(offset).Limit(limit).Rows()
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	defaults := map[string]string{"department_name": "Department", "parent_department_name": "Parent Department", "incident_count": "No. of Incidents"}
+	var results []map[string]interface{}
+	for rows.Next() {
+		var departmentName, parentName string
+		var count int64
+		if err := rows.Scan(&departmentName, &parentName, &count); err != nil {
+			continue
+		}
+		results = append(results, buildCountRow(map[string]interface{}{"department_name": departmentName, "parent_department_name": parentName, "incident_count": count}, reqColumns, defaults))
+	}
+	return results, total, nil
+}
+
+// ── Department count by status ────────────────────────────────────────────────
+// Output col.Field names: department_name | parent_department_name | status_name | incident_count
+func (r *reportRepository) ExecuteDepartmentCountByStatusQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
+	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
+	buildBase := func() *gorm.DB {
+		q := r.db.WithContext(ctx).
+			Table("departments").
+			Joins("LEFT JOIN departments parent_dept ON parent_dept.id = departments.parent_id").
+			Joins("LEFT JOIN incidents ON incidents.department_id = departments.id AND incidents.deleted_at IS NULL").
+			Joins("LEFT JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
+		return r.applyFilters(ctx, q, filters)
+	}
+	var total int64
+	if err := buildBase().Select("COUNT(DISTINCT departments.id::text || '|' || COALESCE(workflow_states.name, ''))").Scan(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	orderClause := "departments.name ASC, COUNT(incidents.id) DESC"
+	if sorting != nil && sorting.Field != "" {
+		if col, ok := departmentCountByStatusFilterFields[sorting.Field]; ok {
+			dir := "ASC"
+			if strings.EqualFold(sorting.Direction, "desc") {
+				dir = "DESC"
+			}
+			orderClause = col + " " + dir
+		}
+	}
+	offset := (page - 1) * limit
+	rows, err := buildBase().
+		Select("departments.name AS department_name, COALESCE(parent_dept.name, '') AS parent_department_name, COALESCE(workflow_states.name, '') AS status_name, COUNT(incidents.id) AS incident_count").
+		Group("departments.id, departments.name, parent_dept.name, workflow_states.name").
+		Order(orderClause).Offset(offset).Limit(limit).Rows()
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	defaults := map[string]string{"department_name": "Department", "parent_department_name": "Parent Department", "status_name": "Status", "incident_count": "No. of Incidents"}
+	var results []map[string]interface{}
+	for rows.Next() {
+		var departmentName, parentName, statusName string
+		var count int64
+		if err := rows.Scan(&departmentName, &parentName, &statusName, &count); err != nil {
+			continue
+		}
+		results = append(results, buildCountRow(map[string]interface{}{"department_name": departmentName, "parent_department_name": parentName, "status_name": statusName, "incident_count": count}, reqColumns, defaults))
+	}
 	return results, total, nil
 }

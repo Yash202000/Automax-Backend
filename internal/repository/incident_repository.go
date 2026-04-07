@@ -1098,9 +1098,7 @@ func (r *incidentRepository) GetAssignedToUser(ctx context.Context, userID uuid.
 	var total int64
 
 	const maxLimit = 100
-	if page < 1 {
-		page = 1
-	}
+	page = max(page, 1)
 	if limit < 1 || limit > maxLimit {
 		limit = 20
 	}
@@ -1143,9 +1141,7 @@ func (r *incidentRepository) GetAssignedToUser1(ctx context.Context, userID uuid
 	var incidents []models.Incident
 	var total int64
 
-	if page < 1 {
-		page = 1
-	}
+	page = max(page, 1)
 	if limit < 1 || limit > 100 {
 		limit = 20
 	}
@@ -1186,9 +1182,7 @@ func (r *incidentRepository) GetReportedByUser(ctx context.Context, userID uuid.
 	var incidents []models.Incident
 	var total int64
 
-	if page < 1 {
-		page = 1
-	}
+	page = max(page, 1)
 	if limit < 1 || limit > 100 {
 		limit = 20
 	}
@@ -1236,9 +1230,7 @@ func (r *incidentRepository) ListRevisions(ctx context.Context, filter *models.I
 
 	page := filter.Page
 	limit := filter.Limit
-	if page < 1 {
-		page = 1
-	}
+	page = max(page, 1)
 	if limit < 1 || limit > 100 {
 		limit = 20
 	}
