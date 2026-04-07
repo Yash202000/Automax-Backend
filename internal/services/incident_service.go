@@ -2483,12 +2483,18 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				"Incident \"%s\" has been assigned to you. Status changed to: %s.",
 				incident.Title, newStateName,
 			)
-			_, _ = s.notificationService.SendNotification(
+			if result, err := s.notificationService.SendNotification(
 				ctx, "notification", nil, "en",
 				assigneeEmails, nil, nil,
 				subject, body,
 				nil, nil, &userID, nil,
-			)
+			); err == nil && len(result.InboxLogIDs) > 0 {
+				_ = s.notificationService.SetMetaOnLogs(ctx, result.InboxLogIDs, &models.NotificationMeta{
+					IncidentID:     incidentID.String(),
+					IncidentNumber: incident.IncidentNumber,
+					Type:           strings.ToUpper(incident.RecordType),
+				})
+			}
 		}
 	}
 
@@ -3131,6 +3137,28 @@ func (s *incidentService) AssignIncident(ctx context.Context, incidentID, assign
 		hasMerged, _ := s.incidentMergeRepo.HasMergedIncidents(ctx, incidentID)
 		if hasMerged {
 			_ = s.syncAssigneeToMergedIncidents(ctx, incidentID, assigneeID, userID)
+		}
+	}
+
+	// Send in-app + push notification to the new assignee
+	if assigneeID != uuid.Nil {
+		if s.notificationService != nil {
+			if assigneeUser, err := s.userRepo.FindByID(ctx, assigneeID); err == nil && assigneeUser.Email != "" {
+				subject := fmt.Sprintf("Incident %s assigned to you", updated.IncidentNumber)
+				body := fmt.Sprintf("Incident \"%s\" has been assigned to you.", updated.Title)
+				if result, err := s.notificationService.SendNotification(
+					ctx, "notification", nil, "en",
+					[]string{assigneeUser.Email}, nil, nil,
+					subject, body,
+					nil, nil, &userID, nil,
+				); err == nil && len(result.InboxLogIDs) > 0 {
+					_ = s.notificationService.SetMetaOnLogs(ctx, result.InboxLogIDs, &models.NotificationMeta{
+						IncidentID:     incidentID.String(),
+						IncidentNumber: updated.IncidentNumber,
+						Type:           strings.ToUpper(updated.RecordType),
+					})
+				}
+			}
 		}
 	}
 

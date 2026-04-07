@@ -24,6 +24,7 @@ type NotificationLogRepository interface {
 	BulkMoveToCategory(ctx context.Context, ids []uuid.UUID, category string) error
 	BulkDelete(ctx context.Context, ids []uuid.UUID) error
 	MarkOTPVerified(ctx context.Context, sessionID string, verifiedAt time.Time) error
+	SetMeta(ctx context.Context, ids []uuid.UUID, meta *models.NotificationMeta) error
 }
 
 type notificationLogRepository struct {
@@ -216,4 +217,14 @@ func (r *notificationLogRepository) MarkOTPVerified(
 	}
 
 	return result.Error
+}
+
+func (r *notificationLogRepository) SetMeta(ctx context.Context, ids []uuid.UUID, meta *models.NotificationMeta) error {
+	if len(ids) == 0 || meta == nil {
+		return nil
+	}
+	return r.db.WithContext(ctx).
+		Model(&models.NotificationLog{}).
+		Where("id IN ?", ids).
+		Update("meta", meta).Error
 }
