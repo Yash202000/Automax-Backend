@@ -477,6 +477,7 @@ type GoalFilter struct {
 	TargetTo     *time.Time `query:"target_to"`
 	SortBy       string     `query:"sort_by"`
 	SortOrder    string     `query:"sort_order"`
+	UserID       *uuid.UUID `query:"-"` // Set by handler, not from query params
 }
 
 type GoalMetricCreateRequest struct {

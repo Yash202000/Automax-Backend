@@ -16,6 +16,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/storage"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/google/uuid"
 	"github.com/xuri/excelize/v2"
 	"gorm.io/gorm"
@@ -28,7 +29,7 @@ import (
 type GoalService interface {
 	// Goal CRUD
 	CreateGoal(ctx context.Context, req *models.GoalCreateRequest, userID uuid.UUID) (*models.GoalResponse, error)
-	GetGoal(ctx context.Context, id uuid.UUID) (*models.GoalResponse, error)
+	GetGoal(ctx context.Context, id uuid.UUID, userID uuid.UUID) (*models.GoalResponse, error)
 	ListGoals(ctx context.Context, filter *models.GoalFilter) ([]models.GoalResponse, int64, error)
 	UpdateGoal(ctx context.Context, id uuid.UUID, req *models.GoalUpdateRequest, userID uuid.UUID) (*models.GoalResponse, error)
 	DeleteGoal(ctx context.Context, id uuid.UUID, userID uuid.UUID) error
@@ -50,7 +51,7 @@ type GoalService interface {
 	// Evidence
 	CreateEvidence(ctx context.Context, goalID uuid.UUID, title string, evidenceType string, comment string, metricID *uuid.UUID, fileName string, fileSize int64, mimeType string, fileData []byte, userID uuid.UUID) (*models.EvidenceResponse, error)
 	DeleteEvidence(ctx context.Context, id uuid.UUID, userID uuid.UUID) error
-	ListEvidences(ctx context.Context, goalID uuid.UUID, filter *models.EvidenceFilter) ([]models.EvidenceResponse, int64, error)
+	ListEvidences(ctx context.Context, goalID uuid.UUID, filter *models.EvidenceFilter, userID uuid.UUID) ([]models.EvidenceResponse, int64, error)
 	GetEvidence(ctx context.Context, id uuid.UUID) (*models.EvidenceResponse, error)
 	GetEvidencePreview(ctx context.Context, evidenceID uuid.UUID) (string, error)
 	GetEvidenceDownloadURL(ctx context.Context, evidenceID uuid.UUID) (string, error)
@@ -138,6 +139,101 @@ func NewGoalService(
 		cfg:                 cfg,
 		wsHub:               wsHub,
 	}
+}
+
+// ──────────────────────────────────────────────────
+// Access Control Helpers
+// ──────────────────────────────────────────────────
+
+// canAccessGoal checks if the user can access the given goal.
+// Access is granted if the user is:
+//   - Super admin
+//   - Goal owner
+//   - A collaborator on the goal
+//   - In the same department as the goal
+func (s *goalService) canAccessGoal(ctx context.Context, goalID uuid.UUID, userID uuid.UUID) (bool, error) {
+	// Check if super admin via context
+	if s.isSuperAdmin(ctx) {
+		return true, nil
+	}
+
+	goal, err := s.goalRepo.FindByID(ctx, goalID)
+	if err != nil {
+		return false, err
+	}
+
+	// Owner check
+	if goal.OwnerID == userID {
+		return true, nil
+	}
+
+	// Collaborator check
+	collaborators, _ := s.goalRepo.ListCollaborators(ctx, goalID)
+	for _, c := range collaborators {
+		if c.UserID == userID {
+			return true, nil
+		}
+	}
+
+	// Department check
+	if goal.DepartmentID != nil {
+		user, err := s.userRepo.FindByID(ctx, userID)
+		if err == nil && user != nil {
+			if user.DepartmentID != nil && *user.DepartmentID == *goal.DepartmentID {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
+}
+
+// canModifyGoal checks if the user can modify the goal (owner, reviewer, or super admin)
+func (s *goalService) canModifyGoal(ctx context.Context, goalID uuid.UUID, userID uuid.UUID) (bool, error) {
+	if s.isSuperAdmin(ctx) {
+		return true, nil
+	}
+
+	goal, err := s.goalRepo.FindByID(ctx, goalID)
+	if err != nil {
+		return false, err
+	}
+
+	// Owner can always modify
+	if goal.OwnerID == userID {
+		return true, nil
+	}
+
+	// Collaborators with reviewer_l1 or reviewer_l2 role can modify
+	collaborators, _ := s.goalRepo.ListCollaborators(ctx, goalID)
+	for _, c := range collaborators {
+		if c.UserID == userID && (c.Role == models.CollaboratorRoleReviewerL1 || c.Role == models.CollaboratorRoleReviewerL2) {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// isSuperAdmin checks if the current request is from a super admin
+func (s *goalService) isSuperAdmin(ctx context.Context) bool {
+	if user, ok := ctx.Value(constants.ContextKeys.User).(*models.User); ok {
+		return user.IsSuperAdmin
+	}
+	return false
+}
+
+// getUserDepartmentIDs returns the department IDs the user belongs to
+func (s *goalService) getUserDepartmentIDs(ctx context.Context, userID uuid.UUID) []uuid.UUID {
+	user, err := s.userRepo.FindByID(ctx, userID)
+	if err != nil || user == nil {
+		return nil
+	}
+	var deptIDs []uuid.UUID
+	if user.DepartmentID != nil {
+		deptIDs = append(deptIDs, *user.DepartmentID)
+	}
+	return deptIDs
 }
 
 // ──────────────────────────────────────────────────
@@ -247,7 +343,16 @@ func (s *goalService) CreateGoal(ctx context.Context, req *models.GoalCreateRequ
 // 2. GetGoal
 // ──────────────────────────────────────────────────
 
-func (s *goalService) GetGoal(ctx context.Context, id uuid.UUID) (*models.GoalResponse, error) {
+func (s *goalService) GetGoal(ctx context.Context, id uuid.UUID, userID uuid.UUID) (*models.GoalResponse, error) {
+	// Access check
+	canAccess, err := s.canAccessGoal(ctx, id, userID)
+	if err != nil {
+		return nil, fmt.Errorf("goal not found: %w", err)
+	}
+	if !canAccess {
+		return nil, fmt.Errorf("access denied")
+	}
+
 	goal, err := s.goalRepo.FindByIDWithRelations(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("goal not found: %w", err)
@@ -287,6 +392,12 @@ func (s *goalService) ListGoals(ctx context.Context, filter *models.GoalFilter) 
 // ──────────────────────────────────────────────────
 
 func (s *goalService) UpdateGoal(ctx context.Context, id uuid.UUID, req *models.GoalUpdateRequest, userID uuid.UUID) (*models.GoalResponse, error) {
+	// Access check
+	canModify, _ := s.canModifyGoal(ctx, id, userID)
+	if !canModify {
+		return nil, fmt.Errorf("access denied: you can only modify goals you own or are assigned to review")
+	}
+
 	goal, err := s.goalRepo.FindByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("goal not found: %w", err)
@@ -365,6 +476,12 @@ func (s *goalService) UpdateGoal(ctx context.Context, id uuid.UUID, req *models.
 // ──────────────────────────────────────────────────
 
 func (s *goalService) DeleteGoal(ctx context.Context, id uuid.UUID, userID uuid.UUID) error {
+	// Access check
+	canModify, _ := s.canModifyGoal(ctx, id, userID)
+	if !canModify {
+		return fmt.Errorf("access denied: only the goal owner can delete this goal")
+	}
+
 	goal, err := s.goalRepo.FindByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("goal not found: %w", err)
@@ -439,6 +556,11 @@ func (s *goalService) AddCollaborator(ctx context.Context, goalID uuid.UUID, req
 		return fmt.Errorf("goal not found: %w", err)
 	}
 
+	// Only goal owner or super admin can manage collaborators
+	if goal.OwnerID != userID && !s.isSuperAdmin(ctx) {
+		return fmt.Errorf("access denied: only the goal owner can manage collaborators")
+	}
+
 	// Verify user exists
 	user, err := s.userRepo.FindByID(ctx, req.UserID)
 	if err != nil {
@@ -497,6 +619,15 @@ func (s *goalService) AddCollaborator(ctx context.Context, goalID uuid.UUID, req
 // ──────────────────────────────────────────────────
 
 func (s *goalService) RemoveCollaborator(ctx context.Context, goalID uuid.UUID, collaboratorUserID uuid.UUID, userID uuid.UUID) error {
+	// Only goal owner or super admin can manage collaborators
+	goal, err := s.goalRepo.FindByID(ctx, goalID)
+	if err != nil {
+		return fmt.Errorf("goal not found: %w", err)
+	}
+	if goal.OwnerID != userID && !s.isSuperAdmin(ctx) {
+		return fmt.Errorf("access denied: only the goal owner can manage collaborators")
+	}
+
 	if err := s.goalRepo.RemoveCollaborator(ctx, goalID, collaboratorUserID); err != nil {
 		return fmt.Errorf("failed to remove collaborator: %w", err)
 	}
@@ -526,6 +657,12 @@ func (s *goalService) RemoveCollaborator(ctx context.Context, goalID uuid.UUID, 
 // ──────────────────────────────────────────────────
 
 func (s *goalService) CreateMetric(ctx context.Context, goalID uuid.UUID, req *models.GoalMetricCreateRequest, userID uuid.UUID) (*models.GoalMetricResponse, error) {
+	// Access check
+	canModify, _ := s.canModifyGoal(ctx, goalID, userID)
+	if !canModify {
+		return nil, fmt.Errorf("access denied: you can only modify goals you own or are assigned to review")
+	}
+
 	// Verify goal exists
 	goal, err := s.goalRepo.FindByID(ctx, goalID)
 	if err != nil {
@@ -586,6 +723,12 @@ func (s *goalService) UpdateMetric(ctx context.Context, id uuid.UUID, req *model
 		return nil, fmt.Errorf("metric not found: %w", err)
 	}
 
+	// Access check via parent goal
+	canModify, _ := s.canModifyGoal(ctx, metric.GoalID, userID)
+	if !canModify {
+		return nil, fmt.Errorf("access denied: you can only modify goals you own or are assigned to review")
+	}
+
 	// Apply non-nil fields
 	if req.Name != nil {
 		metric.Name = *req.Name
@@ -640,6 +783,12 @@ func (s *goalService) DeleteMetric(ctx context.Context, id uuid.UUID, userID uui
 		return fmt.Errorf("metric not found: %w", err)
 	}
 
+	// Access check via parent goal
+	canModify, _ := s.canModifyGoal(ctx, metric.GoalID, userID)
+	if !canModify {
+		return fmt.Errorf("access denied: you can only modify goals you own or are assigned to review")
+	}
+
 	goalID := metric.GoalID
 
 	if err := s.goalRepo.DeleteMetric(ctx, id); err != nil {
@@ -672,6 +821,12 @@ func (s *goalService) UpdateMetricValue(ctx context.Context, id uuid.UUID, req *
 	metric, err := s.goalRepo.FindMetricByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("metric not found: %w", err)
+	}
+
+	// Access check via parent goal
+	canModify, _ := s.canModifyGoal(ctx, metric.GoalID, userID)
+	if !canModify {
+		return nil, fmt.Errorf("access denied: you can only modify goals you own or are assigned to review")
 	}
 
 	// Create history entry
@@ -743,6 +898,12 @@ func (s *goalService) GetMetricHistory(ctx context.Context, metricID uuid.UUID, 
 // ──────────────────────────────────────────────────
 
 func (s *goalService) CreateEvidence(ctx context.Context, goalID uuid.UUID, title string, evidenceType string, comment string, metricID *uuid.UUID, fileName string, fileSize int64, mimeType string, fileData []byte, userID uuid.UUID) (*models.EvidenceResponse, error) {
+	// Access check
+	canAccess, _ := s.canAccessGoal(ctx, goalID, userID)
+	if !canAccess {
+		return nil, fmt.Errorf("access denied")
+	}
+
 	// Validate comment is non-empty
 	if strings.TrimSpace(comment) == "" {
 		return nil, fmt.Errorf("comment is mandatory")
@@ -877,7 +1038,13 @@ func (s *goalService) CreateEvidence(ctx context.Context, goalID uuid.UUID, titl
 // 15. ListEvidences
 // ──────────────────────────────────────────────────
 
-func (s *goalService) ListEvidences(ctx context.Context, goalID uuid.UUID, filter *models.EvidenceFilter) ([]models.EvidenceResponse, int64, error) {
+func (s *goalService) ListEvidences(ctx context.Context, goalID uuid.UUID, filter *models.EvidenceFilter, userID uuid.UUID) ([]models.EvidenceResponse, int64, error) {
+	// Access check
+	canAccess, _ := s.canAccessGoal(ctx, goalID, userID)
+	if !canAccess {
+		return nil, 0, fmt.Errorf("access denied")
+	}
+
 	if filter.Page < 1 {
 		filter.Page = 1
 	}
@@ -2481,6 +2648,12 @@ func (s *goalService) ListChildGoals(ctx context.Context, parentID uuid.UUID) ([
 // ──────────────────────────────────────────────────
 
 func (s *goalService) CreateCheckIn(ctx context.Context, goalID uuid.UUID, req *models.CheckInCreateRequest, userID uuid.UUID) (*models.CheckInResponse, error) {
+	// Access check
+	canAccess, _ := s.canAccessGoal(ctx, goalID, userID)
+	if !canAccess {
+		return nil, fmt.Errorf("access denied")
+	}
+
 	// Verify goal exists
 	goal, err := s.goalRepo.FindByID(ctx, goalID)
 	if err != nil {
@@ -2618,6 +2791,12 @@ func (s *goalService) DeleteCheckIn(ctx context.Context, id uuid.UUID, userID uu
 	checkIn, err := s.goalRepo.FindCheckInByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("check-in not found: %w", err)
+	}
+
+	// Access check via parent goal
+	canModify, _ := s.canModifyGoal(ctx, checkIn.GoalID, userID)
+	if !canModify {
+		return fmt.Errorf("access denied: you can only delete check-ins on goals you own or are assigned to review")
 	}
 
 	if err := s.goalRepo.DeleteCheckIn(ctx, id); err != nil {

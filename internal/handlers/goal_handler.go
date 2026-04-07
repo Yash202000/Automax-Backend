@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"io"
 	"log"
 	"path/filepath"
@@ -14,6 +15,13 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 )
+
+// userContext injects the *models.User from Fiber locals into the Go context
+// so that service-layer helpers (e.g. isSuperAdmin) can read it.
+func userContext(c *fiber.Ctx) context.Context {
+	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
+	return context.WithValue(c.UserContext(), constants.ContextKeys.User, user)
+}
 
 type GoalHandler struct {
 	service services.GoalService
@@ -176,8 +184,14 @@ func (h *GoalHandler) GetGoal(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	goal, err := h.service.GetGoal(c.UserContext(), id)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ctx := userContext(c)
+
+	goal, err := h.service.GetGoal(ctx, id, userID)
 	if err != nil {
+		if strings.Contains(err.Error(), "access denied") {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, "Access denied")
+		}
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Goal not found")
 	}
 
@@ -195,6 +209,13 @@ func (h *GoalHandler) ListGoals(c *fiber.Ctx) error {
 	}
 	if filter.Limit < 1 || filter.Limit > 100 {
 		filter.Limit = 20
+	}
+
+	// Apply user-scoped filtering (super admins see all)
+	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
+	if user == nil || !user.IsSuperAdmin {
+		userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+		filter.UserID = &userID
 	}
 
 	goals, total, err := h.service.ListGoals(c.UserContext(), &filter)
@@ -223,9 +244,13 @@ func (h *GoalHandler) UpdateGoal(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ctx := userContext(c)
 
-	goal, err := h.service.UpdateGoal(c.UserContext(), id, &req, userID)
+	goal, err := h.service.UpdateGoal(ctx, id, &req, userID)
 	if err != nil {
+		if strings.Contains(err.Error(), "access denied") {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, err.Error())
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to update goal")
 	}
 
@@ -239,9 +264,13 @@ func (h *GoalHandler) DeleteGoal(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ctx := userContext(c)
 
-	if err := h.service.DeleteGoal(c.UserContext(), id, userID); err != nil {
+	if err := h.service.DeleteGoal(ctx, id, userID); err != nil {
 		log.Printf("[GoalHandler] DeleteGoal error for goal %s by user %s: %v", id, userID, err)
+		if strings.Contains(err.Error(), "access denied") {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, err.Error())
+		}
 		if strings.Contains(err.Error(), "not found") {
 			return utils.ErrorResponse(c, fiber.StatusNotFound, "Goal not found")
 		}
@@ -263,8 +292,9 @@ func (h *GoalHandler) TransitionStatus(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ctx := userContext(c)
 
-	goal, err := h.service.TransitionGoalStatus(c.UserContext(), id, req.Status, userID)
+	goal, err := h.service.TransitionGoalStatus(ctx, id, req.Status, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -295,8 +325,12 @@ func (h *GoalHandler) AddCollaborator(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ctx := userContext(c)
 
-	if err := h.service.AddCollaborator(c.UserContext(), goalID, &req, userID); err != nil {
+	if err := h.service.AddCollaborator(ctx, goalID, &req, userID); err != nil {
+		if strings.Contains(err.Error(), "access denied") {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, err.Error())
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to add collaborator")
 	}
 
@@ -315,8 +349,12 @@ func (h *GoalHandler) RemoveCollaborator(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ctx := userContext(c)
 
-	if err := h.service.RemoveCollaborator(c.UserContext(), goalID, collaboratorUserID, userID); err != nil {
+	if err := h.service.RemoveCollaborator(ctx, goalID, collaboratorUserID, userID); err != nil {
+		if strings.Contains(err.Error(), "access denied") {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, err.Error())
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to remove collaborator")
 	}
 
@@ -346,9 +384,13 @@ func (h *GoalHandler) CreateMetric(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ctx := userContext(c)
 
-	metric, err := h.service.CreateMetric(c.UserContext(), goalID, &req, userID)
+	metric, err := h.service.CreateMetric(ctx, goalID, &req, userID)
 	if err != nil {
+		if strings.Contains(err.Error(), "access denied") {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, err.Error())
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create metric")
 	}
 
@@ -367,9 +409,13 @@ func (h *GoalHandler) UpdateMetric(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ctx := userContext(c)
 
-	metric, err := h.service.UpdateMetric(c.UserContext(), id, &req, userID)
+	metric, err := h.service.UpdateMetric(ctx, id, &req, userID)
 	if err != nil {
+		if strings.Contains(err.Error(), "access denied") {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, err.Error())
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to update metric")
 	}
 
@@ -383,8 +429,12 @@ func (h *GoalHandler) DeleteMetric(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ctx := userContext(c)
 
-	if err := h.service.DeleteMetric(c.UserContext(), id, userID); err != nil {
+	if err := h.service.DeleteMetric(ctx, id, userID); err != nil {
+		if strings.Contains(err.Error(), "access denied") {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, err.Error())
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to delete metric")
 	}
 
@@ -410,9 +460,13 @@ func (h *GoalHandler) UpdateMetricValue(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ctx := userContext(c)
 
-	metric, err := h.service.UpdateMetricValue(c.UserContext(), id, &req, userID)
+	metric, err := h.service.UpdateMetricValue(ctx, id, &req, userID)
 	if err != nil {
+		if strings.Contains(err.Error(), "access denied") {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, err.Error())
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to update metric value")
 	}
 
@@ -482,9 +536,10 @@ func (h *GoalHandler) UploadEvidence(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ctx := userContext(c)
 
 	result, err := h.service.CreateEvidence(
-		c.UserContext(),
+		ctx,
 		goalID,
 		title,
 		evidenceType,
@@ -522,8 +577,14 @@ func (h *GoalHandler) ListEvidences(c *fiber.Ctx) error {
 		filter.Limit = 20
 	}
 
-	evidences, total, err := h.service.ListEvidences(c.UserContext(), goalID, &filter)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ctx := userContext(c)
+
+	evidences, total, err := h.service.ListEvidences(ctx, goalID, &filter, userID)
 	if err != nil {
+		if strings.Contains(err.Error(), "access denied") {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, "Access denied")
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to list evidences")
 	}
 
@@ -594,8 +655,9 @@ func (h *GoalHandler) DeleteEvidence(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ctx := userContext(c)
 
-	if err := h.service.DeleteEvidence(c.UserContext(), id, userID); err != nil {
+	if err := h.service.DeleteEvidence(ctx, id, userID); err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			return utils.ErrorResponse(c, fiber.StatusNotFound, err.Error())
 		}
@@ -805,6 +867,7 @@ func (h *GoalHandler) CreateCheckIn(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ctx := userContext(c)
 
 	var req models.CheckInCreateRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -818,7 +881,7 @@ func (h *GoalHandler) CreateCheckIn(c *fiber.Ctx) error {
 		})
 	}
 
-	checkIn, err := h.service.CreateCheckIn(c.UserContext(), goalID, &req, userID)
+	checkIn, err := h.service.CreateCheckIn(ctx, goalID, &req, userID)
 	if err != nil {
 		log.Printf("Failed to create check-in: %v", err)
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
@@ -860,8 +923,9 @@ func (h *GoalHandler) DeleteCheckIn(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ctx := userContext(c)
 
-	if err := h.service.DeleteCheckIn(c.UserContext(), id, userID); err != nil {
+	if err := h.service.DeleteCheckIn(ctx, id, userID); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 

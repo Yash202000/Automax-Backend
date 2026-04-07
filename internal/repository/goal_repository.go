@@ -171,6 +171,13 @@ func (r *goalRepository) List(ctx context.Context, filter *models.GoalFilter) ([
 	if filter.TargetTo != nil {
 		query = query.Where("target_date <= ?", *filter.TargetTo)
 	}
+	if filter.UserID != nil {
+		// User can see goals they own, collaborate on, or belong to their department
+		query = query.Where(
+			"owner_id = ? OR id IN (SELECT goal_id FROM goal_collaborators WHERE user_id = ?) OR department_id IN (SELECT department_id FROM users WHERE id = ? AND department_id IS NOT NULL)",
+			*filter.UserID, *filter.UserID, *filter.UserID,
+		)
+	}
 
 	// Count total
 	if err := query.Count(&total).Error; err != nil {
