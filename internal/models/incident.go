@@ -108,6 +108,9 @@ type Incident struct {
 	ClosedBy         *uuid.UUID     `gorm:"type:uuid;index" json:"closed_by,omitempty"`
 	PostClosureEdits datatypes.JSON `gorm:"type:jsonb;default:'[]'::jsonb" json:"post_closure_edits,omitempty"`
 
+	// AI Verification flag — set to true when the incident has been verified by AI
+	IsAIVerified bool `gorm:"default:false;index" json:"is_ai_verified"`
+
 	// Related records
 	Comments          []IncidentComment           `gorm:"foreignKey:IncidentID" json:"comments,omitempty"`
 	Attachments       []IncidentAttachment        `gorm:"foreignKey:IncidentID" json:"attachments,omitempty"`
