@@ -39,9 +39,8 @@ const (
 
 // NotificationMeta stores metadata for in-app notifications
 type NotificationMeta struct {
-	IncidentID     string `json:"incident_id,omitempty"`
-	IncidentNumber string `json:"incident_number,omitempty"`
-	Type           string `json:"type,omitempty"` // INCIDENT | REQUEST | COMPLAINT | QUERY
+	ID   string `json:"id,omitempty"`
+	Type string `json:"type,omitempty"` // INCIDENT | REQUEST | COMPLAINT | QUERY
 }
 
 // Value implements the driver.Valuer interface
@@ -207,7 +206,7 @@ type NotificationLog struct {
 	IsStarred      bool              `gorm:"default:false;index" json:"is_starred"`        // Star/flag important emails
 	ThreadID       *uuid.UUID        `gorm:"type:uuid;index" json:"thread_id,omitempty"`   // For email threading
 	InReplyTo      *uuid.UUID        `gorm:"type:uuid;index" json:"in_reply_to,omitempty"` // Reply to which email
-	Meta           *NotificationMeta `gorm:"type:jsonb" json:"meta,omitempty"`             // Contextual metadata (incident number, type)
+	Meta           *NotificationMeta `gorm:"type:jsonb" json:"meta,omitempty"`             // Contextual metadata (record id, type)
 	SentBy         *uuid.UUID        `gorm:"type:uuid;index" json:"sent_by,omitempty"`     // User who sent it (outbound)
 	ReceivedBy     *uuid.UUID        `gorm:"type:uuid;index" json:"received_by,omitempty"` // User who received it (inbound)
 	ScheduledAt    *time.Time        `json:"scheduled_at,omitempty"`                       // For scheduled sending (outbox)

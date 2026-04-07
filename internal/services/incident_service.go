@@ -2490,9 +2490,8 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				nil, nil, &userID, nil,
 			); err == nil && len(result.InboxLogIDs) > 0 {
 				_ = s.notificationService.SetMetaOnLogs(ctx, result.InboxLogIDs, &models.NotificationMeta{
-					IncidentID:     incidentID.String(),
-					IncidentNumber: incident.IncidentNumber,
-					Type:           strings.ToUpper(incident.RecordType),
+					ID:   incidentID.String(),
+					Type: strings.ToUpper(incident.RecordType),
 				})
 			}
 		}
@@ -3153,9 +3152,8 @@ func (s *incidentService) AssignIncident(ctx context.Context, incidentID, assign
 					nil, nil, &userID, nil,
 				); err == nil && len(result.InboxLogIDs) > 0 {
 					_ = s.notificationService.SetMetaOnLogs(ctx, result.InboxLogIDs, &models.NotificationMeta{
-						IncidentID:     incidentID.String(),
-						IncidentNumber: updated.IncidentNumber,
-						Type:           strings.ToUpper(updated.RecordType),
+						ID:   incidentID.String(),
+						Type: strings.ToUpper(updated.RecordType),
 					})
 				}
 			}
