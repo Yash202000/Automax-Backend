@@ -29,7 +29,9 @@ type UserRepository interface {
 	AssignRoles(ctx context.Context, userID uuid.UUID, roleIDs []uuid.UUID) error
 	AssignDepartments(ctx context.Context, userID uuid.UUID, departmentIDs []uuid.UUID) error
 	AssignLocations(ctx context.Context, userID uuid.UUID, locationIDs []uuid.UUID) error
+	AppendLocations(ctx context.Context, userID uuid.UUID, locationIDs []uuid.UUID) error
 	AssignClassifications(ctx context.Context, userID uuid.UUID, classificationIDs []uuid.UUID) error
+	AppendClassifications(ctx context.Context, userID uuid.UUID, classificationIDs []uuid.UUID) error
 	GetUserRoles(ctx context.Context, userID uuid.UUID) ([]models.Role, error)
 	GetUserPermissions(ctx context.Context, userID uuid.UUID) ([]string, error)
 	FindMatching(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.User, error)
@@ -363,6 +365,49 @@ func (r *userRepository) AssignLocations(ctx context.Context, userID uuid.UUID, 
 	return r.db.WithContext(ctx).Model(&user).Association("Locations").Replace(locations)
 }
 
+func (r *userRepository) AppendLocations(ctx context.Context, userID uuid.UUID, locationIDs []uuid.UUID) error {
+	var user models.User
+	if err := r.db.WithContext(ctx).First(&user, "id = ?", userID).Error; err != nil {
+		return err
+	}
+
+	if len(locationIDs) == 0 {
+		return nil
+	}
+
+	// Get existing locations
+	var existingLocations []models.Location
+	if err := r.db.WithContext(ctx).Model(&user).Association("Locations").Find(&existingLocations); err != nil {
+		return err
+	}
+
+	// Get new locations to add
+	var newLocations []models.Location
+	if err := r.db.WithContext(ctx).Where("id IN ?", locationIDs).Find(&newLocations).Error; err != nil {
+		return err
+	}
+
+	// Create a map of existing location IDs to avoid duplicates
+	existingMap := make(map[uuid.UUID]bool)
+	for _, loc := range existingLocations {
+		existingMap[loc.ID] = true
+	}
+
+	// Only add locations that don't already exist
+	var toAppend []models.Location
+	for _, loc := range newLocations {
+		if !existingMap[loc.ID] {
+			toAppend = append(toAppend, loc)
+		}
+	}
+
+	if len(toAppend) > 0 {
+		return r.db.WithContext(ctx).Model(&user).Association("Locations").Append(toAppend)
+	}
+
+	return nil
+}
+
 func (r *userRepository) AssignClassifications(ctx context.Context, userID uuid.UUID, classificationIDs []uuid.UUID) error {
 	var user models.User
 	if err := r.db.WithContext(ctx).First(&user, "id = ?", userID).Error; err != nil {
@@ -377,6 +422,49 @@ func (r *userRepository) AssignClassifications(ctx context.Context, userID uuid.
 	}
 
 	return r.db.WithContext(ctx).Model(&user).Association("Classifications").Replace(classifications)
+}
+
+func (r *userRepository) AppendClassifications(ctx context.Context, userID uuid.UUID, classificationIDs []uuid.UUID) error {
+	var user models.User
+	if err := r.db.WithContext(ctx).First(&user, "id = ?", userID).Error; err != nil {
+		return err
+	}
+
+	if len(classificationIDs) == 0 {
+		return nil
+	}
+
+	// Get existing classifications
+	var existingClassifications []models.Classification
+	if err := r.db.WithContext(ctx).Model(&user).Association("Classifications").Find(&existingClassifications); err != nil {
+		return err
+	}
+
+	// Get new classifications to add
+	var newClassifications []models.Classification
+	if err := r.db.WithContext(ctx).Where("id IN ?", classificationIDs).Find(&newClassifications).Error; err != nil {
+		return err
+	}
+
+	// Create a map of existing classification IDs to avoid duplicates
+	existingMap := make(map[uuid.UUID]bool)
+	for _, cls := range existingClassifications {
+		existingMap[cls.ID] = true
+	}
+
+	// Only add classifications that don't already exist
+	var toAppend []models.Classification
+	for _, cls := range newClassifications {
+		if !existingMap[cls.ID] {
+			toAppend = append(toAppend, cls)
+		}
+	}
+
+	if len(toAppend) > 0 {
+		return r.db.WithContext(ctx).Model(&user).Association("Classifications").Append(toAppend)
+	}
+
+	return nil
 }
 
 func (r *userRepository) GetUserRoles(ctx context.Context, userID uuid.UUID) ([]models.Role, error) {

@@ -132,19 +132,14 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 		s.userRepo.AssignDepartments(ctx, user.ID, req.DepartmentIDs)
 	}
 
-	// Assign locations if provided
+	// Assign manually selected locations/classifications only (don't auto-sync from departments during creation)
+	// This respects the user's explicit selections/deselections from the frontend
 	if len(req.LocationIDs) > 0 {
 		s.userRepo.AssignLocations(ctx, user.ID, req.LocationIDs)
 	}
 
-	// Assign classifications if provided
 	if len(req.ClassificationIDs) > 0 {
 		s.userRepo.AssignClassifications(ctx, user.ID, req.ClassificationIDs)
-	}
-
-	// Sync classifications and locations from departments
-	if req.DepartmentID != nil || len(req.DepartmentIDs) > 0 {
-		_ = s.syncDepartmentAttributesToUser(ctx, user.ID)
 	}
 
 	// Get user's primary role for JWT (use "user" as default)
@@ -732,59 +727,57 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		}()
 	}
 
-	// Only update locations and classifications if departments did NOT change
-	// If departments changed, we'll sync from departments instead
-	if !departmentsChanged {
-		// Log location assignments
-		oldLocationIDs := make([]uuid.UUID, len(oldUser.LocationIDs))
-		copy(oldLocationIDs, oldUser.LocationIDs)
-		s.userRepo.AssignLocations(ctx, user.ID, req.LocationIDs)
-
-		// Log location assignment changes
-		if !equalUUIDSlices(oldLocationIDs, req.LocationIDs) {
-			go func() {
-				_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
-					UserID:      actorID,
-					Action:      "location_assignment",
-					Module:      "users",
-					ResourceID:  user.ID.String(),
-					Description: fmt.Sprintf("Locations assigned to user: %s (%s)", user.Username, user.Email),
-					OldValue:    map[string]interface{}{"location_ids": oldLocationIDs},
-					NewValue:    map[string]interface{}{"location_ids": req.LocationIDs},
-					IPAddress:   ipAddress,
-					UserAgent:   userAgent,
-					Status:      "success",
-				})
-			}()
-		}
-
-		// Log classification assignments
-		oldClassificationIDs := make([]uuid.UUID, len(oldUser.ClassificationIDs))
-		copy(oldClassificationIDs, oldUser.ClassificationIDs)
-		s.userRepo.AssignClassifications(ctx, user.ID, req.ClassificationIDs)
-
-		// Log classification assignment changes
-		if !equalUUIDSlices(oldClassificationIDs, req.ClassificationIDs) {
-			go func() {
-				_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
-					UserID:      actorID,
-					Action:      "classification_assignment",
-					Module:      "users",
-					ResourceID:  user.ID.String(),
-					Description: fmt.Sprintf("Classifications assigned to user: %s (%s)", user.Username, user.Email),
-					OldValue:    map[string]interface{}{"classification_ids": oldClassificationIDs},
-					NewValue:    map[string]interface{}{"classification_ids": req.ClassificationIDs},
-					IPAddress:   ipAddress,
-					UserAgent:   userAgent,
-					Status:      "success",
-				})
-			}()
-		}
-	}
-
-	// Sync classifications and locations from departments ONLY if departments changed
+	// Sync classifications and locations from departments if departments changed
+	// This appends department-mapped items without removing manually selected ones
 	if departmentsChanged {
 		_ = s.syncDepartmentAttributesToUser(ctx, user.ID)
+	}
+
+	// Always update manually selected locations/classifications (append to preserve existing + add new)
+	// Log location assignments
+	oldLocationIDs := make([]uuid.UUID, len(oldUser.LocationIDs))
+	copy(oldLocationIDs, oldUser.LocationIDs)
+	s.userRepo.AppendLocations(ctx, user.ID, req.LocationIDs)
+
+	// Log location assignment changes
+	if !equalUUIDSlices(oldLocationIDs, req.LocationIDs) {
+		go func() {
+			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+				UserID:      actorID,
+				Action:      "location_assignment",
+				Module:      "users",
+				ResourceID:  user.ID.String(),
+				Description: fmt.Sprintf("Locations assigned to user: %s (%s)", user.Username, user.Email),
+				OldValue:    map[string]interface{}{"location_ids": oldLocationIDs},
+				NewValue:    map[string]interface{}{"location_ids": req.LocationIDs},
+				IPAddress:   ipAddress,
+				UserAgent:   userAgent,
+				Status:      "success",
+			})
+		}()
+	}
+
+	// Log classification assignments
+	oldClassificationIDs := make([]uuid.UUID, len(oldUser.ClassificationIDs))
+	copy(oldClassificationIDs, oldUser.ClassificationIDs)
+	s.userRepo.AppendClassifications(ctx, user.ID, req.ClassificationIDs)
+
+	// Log classification assignment changes
+	if !equalUUIDSlices(oldClassificationIDs, req.ClassificationIDs) {
+		go func() {
+			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+				UserID:      actorID,
+				Action:      "classification_assignment",
+				Module:      "users",
+				ResourceID:  user.ID.String(),
+				Description: fmt.Sprintf("Classifications assigned to user: %s (%s)", user.Username, user.Email),
+				OldValue:    map[string]interface{}{"classification_ids": oldClassificationIDs},
+				NewValue:    map[string]interface{}{"classification_ids": req.ClassificationIDs},
+				IPAddress:   ipAddress,
+				UserAgent:   userAgent,
+				Status:      "success",
+			})
+		}()
 	}
 
 	// Reload with relations
@@ -1378,15 +1371,15 @@ func (s *userService) syncDepartmentAttributesToUser(ctx context.Context, userID
 		locationIDs = append(locationIDs, id)
 	}
 
-	// Assign to user
+	// Assign to user (append instead of replace to preserve manually assigned items)
 	if len(classificationIDs) > 0 {
-		if err := s.userRepo.AssignClassifications(ctx, userID, classificationIDs); err != nil {
+		if err := s.userRepo.AppendClassifications(ctx, userID, classificationIDs); err != nil {
 			fmt.Printf("Warning: failed to sync classifications from departments: %v\n", err)
 		}
 	}
 
 	if len(locationIDs) > 0 {
-		if err := s.userRepo.AssignLocations(ctx, userID, locationIDs); err != nil {
+		if err := s.userRepo.AppendLocations(ctx, userID, locationIDs); err != nil {
 			fmt.Printf("Warning: failed to sync locations from departments: %v\n", err)
 		}
 	}
