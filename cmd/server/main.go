@@ -139,6 +139,7 @@ func main() {
 	incidentService.SetReadyToCloseService(readyToCloseService)
 	incidentService.SetNotificationService(notificationService)
 	incidentService.SetUserService(userService)
+	incidentService.SetFCMService(fcmService)
 
 	// Initialize and start SLA Monitor (checks every 5 minutes)
 	slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, escalationGroupService, readyToCloseService, 5*time.Minute)

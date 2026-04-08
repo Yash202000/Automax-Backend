@@ -88,6 +88,8 @@ type IncidentService interface {
 	CreateRevision(ctx context.Context, incidentID uuid.UUID, actionType models.IncidentRevisionActionType, description string, changes []models.IncidentFieldChange, userID uuid.UUID) error
 	// SetUserService wires in the UserService (called post-construction to avoid circular deps).
 	SetUserService(us UserService)
+	// SetFCMService wires in the FCMService (called post-construction).
+	SetFCMService(fcm *FCMService)
 
 	// Closed incident editing
 	UpdateClosedIncidentSummary(ctx context.Context, incidentID uuid.UUID, userID uuid.UUID, newDescription string, reason string) (*models.IncidentResponse, error)
@@ -108,6 +110,7 @@ type incidentService struct {
 	readyToCloseService ReadyToCloseService
 	notificationService *NotificationService
 	userService         UserService
+	fcmService          *FCMService
 }
 
 func NewIncidentService(
@@ -152,6 +155,11 @@ func (s *incidentService) SetNotificationService(ns *NotificationService) {
 // SetUserService wires the UserService into the incident service.
 func (s *incidentService) SetUserService(us UserService) {
 	s.userService = us
+}
+
+// SetFCMService wires the FCMService into the incident service.
+func (s *incidentService) SetFCMService(fcm *FCMService) {
+	s.fcmService = fcm
 }
 
 // calculateSLADeadline calculates the SLA deadline based on classification criticality
@@ -2557,6 +2565,63 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				})
 			}
 		}
+	}
+
+	// Send FCM push notification to the citizen reporter on incident closure
+	if s.fcmService != nil && newState.StateType == "terminal" && incident.ReporterID != nil {
+		bgCtx := context.Background()
+		reporterID := *incident.ReporterID
+		closedAt := time.Now()
+		comment := req.Comment
+		incidentNumber := incident.IncidentNumber
+		incidentTitle := incident.Title
+		recordType := strings.ToUpper(incident.RecordType)
+		capturedID := incidentID
+		go func() {
+			// Only send to citizens — skip internal staff
+			roles, err := s.userRepo.GetUserRoles(bgCtx, reporterID)
+			if err != nil {
+				log.Printf("FCM-CLOSURE: Could not fetch roles for reporter %s: %v", reporterID, err)
+				return
+			}
+			isCitizen := false
+			for _, r := range roles {
+				if r.Code == constants.USER_ROLE.CITIZEN {
+					isCitizen = true
+					break
+				}
+			}
+			if !isCitizen {
+				log.Printf("FCM-CLOSURE: Reporter %s is not a citizen, skipping push", reporterID)
+				return
+			}
+
+			body := fmt.Sprintf(
+				"Your incident \"%s\" (ID: %s) has been resolved and closed on %s.",
+				incidentTitle, incidentNumber, closedAt.Format("02 Jan 2006"),
+			)
+			if comment != "" {
+				body += fmt.Sprintf(" Resolution note: %s", comment)
+			}
+			pushReq := &models.PushRequest{
+				UserID: reporterID,
+				Title:  "Your Incident Has Been Closed",
+				Body:   body,
+				Data: map[string]string{
+					"id":        capturedID.String(),
+					"type":      recordType,
+					"closed_at": closedAt.Format(time.RFC3339),
+					"comment":   comment,
+				},
+			}
+			log.Printf("FCM-CLOSURE: Sending push to citizen %s | title: %q | body: %q | data: %v",
+				reporterID, pushReq.Title, pushReq.Body, pushReq.Data)
+			if err := s.fcmService.Push(bgCtx, pushReq); err != nil {
+				log.Printf("FCM-CLOSURE: Failed for citizen %s: %v", reporterID, err)
+			} else {
+				log.Printf("FCM-CLOSURE: Sent successfully to citizen %s", reporterID)
+			}
+		}()
 	}
 
 	// Broadcast state change to WebSocket subscribers
