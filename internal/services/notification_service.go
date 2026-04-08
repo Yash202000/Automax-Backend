@@ -150,8 +150,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		provider = "smtp"
 	case "sms":
 		for _, phone := range to {
-			otpbody := fmt.Sprintf("Your OTP is %s", body)
-			err := utils.SendSMS(phone, otpbody)
+			err := utils.SendSMS(phone, body)
 			if err != nil {
 				status = "failed"
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
