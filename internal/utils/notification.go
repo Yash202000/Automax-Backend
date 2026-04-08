@@ -325,14 +325,6 @@ func SendSMS(to, message string) error {
 	return nil
 }
 
-// maskString masks a string for safe logging (shows first 4 chars)
-func maskString(s string) string {
-	if len(s) <= 4 {
-		return "****"
-	}
-	return s[:4] + "..."
-}
-
 // GetRecipientType determines if an email is in TO, CC, or BCC list
 func GetRecipientType(email string, to []string, cc []string, bcc []string) string {
 	if contains(to, email) {
