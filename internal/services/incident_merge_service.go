@@ -372,7 +372,7 @@ func (s *incidentMergeService) MergeIncidents(ctx context.Context, req *models.I
 		IncidentID:        masterID,
 		RevisionNumber:    0,
 		ActionType:        models.RevisionActionStatusChanged,
-		ActionDescription: fmt.Sprintf("Merged %d incident(s) into this master: %s", len(incidentIDs)-1, strings.Join(relatedNumbers, ", ")),
+		ActionDescription: fmt.Sprintf("This ticket is merged %d into the master ticket: %s", len(incidentIDs)-1, strings.Join(relatedNumbers, ", ")),
 		Changes:           marshalJSON(changes),
 		PerformedByID:     userID,
 	}
