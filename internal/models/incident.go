@@ -383,6 +383,7 @@ type IncidentUpdateRequest struct {
 	DueDate            *string                `json:"due_date"`
 	CustomFields       string                 `json:"custom_fields"`
 	LookupValueIDs     []string               `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
+	Source             string                 `json:"source" validate:"omitempty,max=100"`
 	CustomLookupFields map[string]interface{} `json:"custom_lookup_fields"`
 	Version            int                    `json:"version" validate:"required,min=1"`
 }

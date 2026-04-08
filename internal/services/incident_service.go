@@ -660,6 +660,7 @@ func (s *incidentService) FindByIDWithLast6DigitValidation(ctx context.Context, 
 		Country:        incident.Country,
 		PostalCode:     incident.PostalCode,
 		SLADeadline:    incident.SLADeadline,
+		Version:        incident.Version,
 	}
 
 	return resp, nil
@@ -1020,7 +1021,11 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		updates["sla_deadline"] = *incident.SLADeadline
 		updates["sla_breached"] = incident.SLABreached
 	}
-
+	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+	if strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
+		// For IVR updates from EPM940, we want to allow location updates without triggering the edit restriction
+		updates["source"] = constants.INCIDENT_SOURCE.SMS_LINK
+	}
 	log.Println(len(updates), len(changes))
 	if len(updates) == 0 || len(changes) == 0 {
 		tx.Rollback()
@@ -2411,7 +2416,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	revDescription := fmt.Sprintf("Status changed from %s to %s", oldStateName, newStateName)
 	revNum, _ := txRepo.GetNextRevisionNumber(ctx, incidentID)
 	changesBytes, _ := json.Marshal(changes)
-	
+
 	// Get merged incident numbers to include in revision (for tracking child tickets)
 	var syncedIncidentNumbers []string
 	mergedIncidents, _ := s.incidentMergeRepo.GetMergedIncidents(ctx, incidentID)
@@ -2424,17 +2429,17 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			syncedNumbersJSON = string(numsBytes)
 		}
 	}
-	
+
 	txRepo.CreateRevision(ctx, &models.IncidentRevision{
-		IncidentID:          incidentID,
-		RevisionNumber:      revNum,
-		ActionType:          models.RevisionActionStatusChanged,
-		ActionDescription:   revDescription,
-		Changes:             string(changesBytes),
-		PerformedByID:       userID,
-		TransitionHistoryID: &history.ID,
+		IncidentID:            incidentID,
+		RevisionNumber:        revNum,
+		ActionType:            models.RevisionActionStatusChanged,
+		ActionDescription:     revDescription,
+		Changes:               string(changesBytes),
+		PerformedByID:         userID,
+		TransitionHistoryID:   &history.ID,
 		SyncedIncidentNumbers: syncedNumbersJSON,
-		CreatedAt:           time.Now(),
+		CreatedAt:             time.Now(),
 	})
 
 	// Create revision entry that includes duration/comment info for ready_to_close
