@@ -88,11 +88,9 @@ func (c *httpDocumentaClient) getToken(ctx context.Context) (string, error) {
 	return c.fetchNewToken(ctx)
 }
 
-// extractWorkspaceUUID decodes the JWT payload to get workspace_uuid (idempotent, only runs once).
+// extractWorkspaceUUID decodes the JWT payload to get workspace_uuid.
+// Called on every token fetch so workspace changes in MyDocs are picked up dynamically.
 func (c *httpDocumentaClient) extractWorkspaceUUID(token string) {
-	if c.workspaceUUID != "" {
-		return
-	}
 	parts := strings.SplitN(token, ".", 3)
 	if len(parts) < 2 {
 		return
@@ -109,8 +107,14 @@ func (c *httpDocumentaClient) extractWorkspaceUUID(token string) {
 		WorkspaceUUID string `json:"workspace_uuid"`
 	}
 	if json.Unmarshal(decoded, &claims) == nil && claims.WorkspaceUUID != "" {
-		c.workspaceUUID = claims.WorkspaceUUID
-		log.Printf("[DOCUMENTA] Resolved workspace UUID: %s", c.workspaceUUID)
+		if c.workspaceUUID != claims.WorkspaceUUID {
+			if c.workspaceUUID != "" {
+				log.Printf("[DOCUMENTA] Workspace UUID changed: %s → %s", c.workspaceUUID, claims.WorkspaceUUID)
+			} else {
+				log.Printf("[DOCUMENTA] Resolved workspace UUID: %s", claims.WorkspaceUUID)
+			}
+			c.workspaceUUID = claims.WorkspaceUUID
+		}
 	}
 }
 
