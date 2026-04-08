@@ -2411,7 +2411,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	revDescription := fmt.Sprintf("Status changed from %s to %s", oldStateName, newStateName)
 	revNum, _ := txRepo.GetNextRevisionNumber(ctx, incidentID)
 	changesBytes, _ := json.Marshal(changes)
-	
+
 	// Get merged incident numbers to include in revision (for tracking child tickets)
 	var syncedIncidentNumbers []string
 	mergedIncidents, _ := s.incidentMergeRepo.GetMergedIncidents(ctx, incidentID)
@@ -2424,17 +2424,17 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			syncedNumbersJSON = string(numsBytes)
 		}
 	}
-	
+
 	txRepo.CreateRevision(ctx, &models.IncidentRevision{
-		IncidentID:          incidentID,
-		RevisionNumber:      revNum,
-		ActionType:          models.RevisionActionStatusChanged,
-		ActionDescription:   revDescription,
-		Changes:             string(changesBytes),
-		PerformedByID:       userID,
-		TransitionHistoryID: &history.ID,
+		IncidentID:            incidentID,
+		RevisionNumber:        revNum,
+		ActionType:            models.RevisionActionStatusChanged,
+		ActionDescription:     revDescription,
+		Changes:               string(changesBytes),
+		PerformedByID:         userID,
+		TransitionHistoryID:   &history.ID,
 		SyncedIncidentNumbers: syncedNumbersJSON,
-		CreatedAt:           time.Now(),
+		CreatedAt:             time.Now(),
 	})
 
 	// Create revision entry that includes duration/comment info for ready_to_close
@@ -3009,7 +3009,7 @@ func (s *incidentService) syncAttachmentToMergedIncidents(ctx context.Context, m
 
 		// Create revision for child
 		description := fmt.Sprintf(
-			"Attachment added to parent incident %s - %s",
+			"Attachment added to master incident %s - %s",
 			masterIncident.IncidentNumber,
 			masterAttachment.FileName,
 		)
@@ -3273,7 +3273,7 @@ func (s *incidentService) syncAssigneeToMergedIncidents(ctx context.Context, mas
 			},
 		}
 		description := fmt.Sprintf(
-			"Parent incident %s assignee changed to %s",
+			"Master incident %s assignee changed to %s",
 			masterIncident.IncidentNumber,
 			newAssigneeName,
 		)
@@ -3688,7 +3688,7 @@ func (s *incidentService) syncTransitionToMergedIncidents(ctx context.Context, m
 			},
 		}
 		description := fmt.Sprintf(
-			"Parent incident %s transitioned from %s to %s",
+			"Master incident %s transitioned from %s to %s",
 			masterIncident.IncidentNumber,
 			oldStateName,
 			newStateName,

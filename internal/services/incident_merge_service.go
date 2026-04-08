@@ -358,6 +358,14 @@ func (s *incidentMergeService) MergeIncidents(ctx context.Context, req *models.I
 		}
 	}
 
+	// Get master incident number for child revisions
+	masterIncident, err := txIncidentRepo.FindByID(ctx, masterID)
+	if err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("failed to fetch master incident: %v", err)
+	}
+	masterIncidentNumber := masterIncident.IncidentNumber
+
 	// Create revision on master incident
 	changes := []models.IncidentFieldChange{
 		{
@@ -372,7 +380,7 @@ func (s *incidentMergeService) MergeIncidents(ctx context.Context, req *models.I
 		IncidentID:        masterID,
 		RevisionNumber:    0,
 		ActionType:        models.RevisionActionStatusChanged,
-		ActionDescription: fmt.Sprintf("Merged %d incident(s) into this master: %s", len(incidentIDs)-1, strings.Join(relatedNumbers, ", ")),
+		ActionDescription: fmt.Sprintf("%d ticket(s) merged into this master ticket: %s", len(incidentIDs)-1, strings.Join(relatedNumbers, ", ")),
 		Changes:           marshalJSON(changes),
 		PerformedByID:     userID,
 	}
@@ -380,6 +388,33 @@ func (s *incidentMergeService) MergeIncidents(ctx context.Context, req *models.I
 	nextRevNum, _ := txIncidentRepo.GetNextRevisionNumber(ctx, masterID)
 	revision.RevisionNumber = nextRevNum
 	txIncidentRepo.CreateRevision(ctx, revision)
+
+	// Create revision on each child incident
+	for _, id := range incidentIDs {
+		if id != masterID {
+			childChanges := []models.IncidentFieldChange{
+				{
+					FieldName:  "master_incident_id",
+					FieldLabel: "Master Incident",
+					OldValue:   nil,
+					NewValue:   strPtr(masterIncidentNumber),
+				},
+			}
+
+			childRevision := &models.IncidentRevision{
+				IncidentID:        id,
+				RevisionNumber:    0,
+				ActionType:        models.RevisionActionStatusChanged,
+				ActionDescription: fmt.Sprintf("This ticket is merged into the Master ticket %s", masterIncidentNumber),
+				Changes:           marshalJSON(childChanges),
+				PerformedByID:     userID,
+			}
+
+			childRevNum, _ := txIncidentRepo.GetNextRevisionNumber(ctx, id)
+			childRevision.RevisionNumber = childRevNum
+			txIncidentRepo.CreateRevision(ctx, childRevision)
+		}
+	}
 
 	// Commit transaction
 	if err := tx.Commit().Error; err != nil {
