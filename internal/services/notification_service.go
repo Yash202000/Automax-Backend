@@ -45,7 +45,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 	if len(to) == 0 && len(cc) == 0 && len(bcc) == 0 {
 		return nil, fmt.Errorf("at least one recipient (to, cc, or bcc) is required")
 	}
-	fmt.Println("Body:", body)
+
 	// REQUIRED: subject OR body
 	if strings.TrimSpace(subject) == "" && strings.TrimSpace(body) == "" {
 		return nil, fmt.Errorf("either subject or body must be provided")
