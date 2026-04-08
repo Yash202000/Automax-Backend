@@ -668,6 +668,7 @@ func (s *incidentService) FindByIDWithLast6DigitValidation(ctx context.Context, 
 		Country:        incident.Country,
 		PostalCode:     incident.PostalCode,
 		SLADeadline:    incident.SLADeadline,
+		Version:        incident.Version,
 	}
 
 	return resp, nil
@@ -1028,7 +1029,11 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		updates["sla_deadline"] = *incident.SLADeadline
 		updates["sla_breached"] = incident.SLABreached
 	}
-
+	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+	if strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
+		// For IVR updates from EPM940, we want to allow location updates without triggering the edit restriction
+		updates["source"] = constants.INCIDENT_SOURCE.SMS_LINK
+	}
 	log.Println(len(updates), len(changes))
 	if len(updates) == 0 || len(changes) == 0 {
 		tx.Rollback()
