@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/storage"
@@ -23,6 +24,10 @@ type DocumentService interface {
 	AddComment(ctx context.Context, fileID string, content string, userEmail string) error
 	GetTags(ctx context.Context, fileID string, userEmail string) (map[string]string, error)
 	SetTags(ctx context.Context, fileID string, tags map[string]string, userEmail string) error
+	ListVersions(ctx context.Context, fileID string, userEmail string) ([]storage.DmsVersion, error)
+	UploadVersion(ctx context.Context, fileID string, fileName string, fileData io.Reader, fileSize int64, description string, userEmail string) (*storage.DmsVersion, error)
+	DownloadVersion(ctx context.Context, versionUUID string, userEmail string) (io.ReadCloser, string, error)
+	RollbackVersion(ctx context.Context, fileID string, versionUUID string, userEmail string) (*storage.DmsVersion, error)
 }
 
 // ════════════════════════════════════════════════════
@@ -121,4 +126,36 @@ func (s *documentService) SetTags(ctx context.Context, fileID string, tags map[s
 		return fmt.Errorf("set tags: %w", err)
 	}
 	return nil
+}
+
+func (s *documentService) ListVersions(ctx context.Context, fileID string, userEmail string) ([]storage.DmsVersion, error) {
+	versions, err := s.client.ListVersions(s.withUser(ctx, userEmail), fileID)
+	if err != nil {
+		return nil, fmt.Errorf("list versions: %w", err)
+	}
+	return versions, nil
+}
+
+func (s *documentService) UploadVersion(ctx context.Context, fileID string, fileName string, fileData io.Reader, fileSize int64, description string, userEmail string) (*storage.DmsVersion, error) {
+	version, err := s.client.UploadVersion(s.withUser(ctx, userEmail), fileID, fileName, fileData, fileSize, description)
+	if err != nil {
+		return nil, fmt.Errorf("upload version: %w", err)
+	}
+	return version, nil
+}
+
+func (s *documentService) DownloadVersion(ctx context.Context, versionUUID string, userEmail string) (io.ReadCloser, string, error) {
+	reader, contentType, err := s.client.DownloadVersion(s.withUser(ctx, userEmail), versionUUID)
+	if err != nil {
+		return nil, "", fmt.Errorf("download version: %w", err)
+	}
+	return reader, contentType, nil
+}
+
+func (s *documentService) RollbackVersion(ctx context.Context, fileID string, versionUUID string, userEmail string) (*storage.DmsVersion, error) {
+	version, err := s.client.RollbackVersion(s.withUser(ctx, userEmail), fileID, versionUUID)
+	if err != nil {
+		return nil, fmt.Errorf("rollback version: %w", err)
+	}
+	return version, nil
 }

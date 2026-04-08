@@ -24,11 +24,12 @@ func userContext(c *fiber.Ctx) context.Context {
 }
 
 type GoalHandler struct {
-	service services.GoalService
+	service          services.GoalService
+	actionLogService services.ActionLogService
 }
 
-func NewGoalHandler(service services.GoalService) *GoalHandler {
-	return &GoalHandler{service: service}
+func NewGoalHandler(service services.GoalService, actionLogService services.ActionLogService) *GoalHandler {
+	return &GoalHandler{service: service, actionLogService: actionLogService}
 }
 
 // ──────────────────────────────────────────────────
@@ -1128,4 +1129,113 @@ func (h *GoalHandler) GetMetricBatchTransitionHistory(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Transition history", history)
+}
+
+// ──────────────────────────────────────────────────
+// Goal Activity
+// ──────────────────────────────────────────────────
+
+func (h *GoalHandler) GetGoalActivity(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+	}
+	page := c.QueryInt("page", 1)
+	limit := c.QueryInt("limit", 20)
+
+	filter := &models.ActionLogFilter{
+		Module:     "goals",
+		ResourceID: id.String(),
+		Page:       page,
+		Limit:      limit,
+	}
+	logs, total, err := h.actionLogService.ListActionLogs(c.UserContext(), filter)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to get goal activity")
+	}
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data":    logs,
+		"total":   total,
+		"page":    page,
+		"limit":   limit,
+	})
+}
+
+// ──────────────────────────────────────────────────
+// Goal Comments
+// ──────────────────────────────────────────────────
+
+func (h *GoalHandler) AddGoalComment(c *fiber.Ctx) error {
+	goalID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+	}
+
+	var req models.GoalCommentRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if strings.TrimSpace(req.Content) == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Content is required")
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ctx := userContext(c)
+
+	comment, err := h.service.AddComment(ctx, goalID, req.Content, userID)
+	if err != nil {
+		if strings.Contains(err.Error(), "access denied") {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, "Access denied")
+		}
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to add comment")
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusCreated, "Comment added", comment)
+}
+
+func (h *GoalHandler) ListGoalComments(c *fiber.Ctx) error {
+	goalID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+	}
+
+	page := c.QueryInt("page", 1)
+	limit := c.QueryInt("limit", 20)
+
+	comments, total, err := h.service.ListComments(c.UserContext(), goalID, page, limit)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to list comments")
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data":    comments,
+		"total":   total,
+		"page":    page,
+		"limit":   limit,
+	})
+}
+
+func (h *GoalHandler) DeleteGoalComment(c *fiber.Ctx) error {
+	commentID, err := uuid.Parse(c.Params("cid"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid comment ID")
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ctx := userContext(c)
+
+	if err := h.service.DeleteComment(ctx, commentID, userID); err != nil {
+		if strings.Contains(err.Error(), "access denied") {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, err.Error())
+		}
+		if strings.Contains(err.Error(), "not found") {
+			return utils.ErrorResponse(c, fiber.StatusNotFound, "Comment not found")
+		}
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to delete comment")
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Comment deleted", nil)
 }

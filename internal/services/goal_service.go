@@ -77,6 +77,11 @@ type GoalService interface {
 	// Bulk Operations
 	BulkAction(ctx context.Context, req *models.BulkActionRequest, userID uuid.UUID) (*models.BulkActionResponse, error)
 
+	// Comments
+	AddComment(ctx context.Context, goalID uuid.UUID, content string, userID uuid.UUID) (*models.GoalCommentResponse, error)
+	ListComments(ctx context.Context, goalID uuid.UUID, page, limit int) ([]models.GoalCommentResponse, int64, error)
+	DeleteComment(ctx context.Context, commentID uuid.UUID, userID uuid.UUID) error
+
 	// Hierarchy
 	GetGoalTree(ctx context.Context, rootID uuid.UUID) (*models.GoalResponse, error)
 	ListChildGoals(ctx context.Context, parentID uuid.UUID) ([]models.GoalResponse, error)
@@ -3752,4 +3757,69 @@ func (s *goalService) GetMetricBatchTransitionHistory(ctx context.Context, batch
 	}
 
 	return responses, nil
+}
+
+// ──────────────────────────────────────────────────
+// Goal Comments
+// ──────────────────────────────────────────────────
+
+func (s *goalService) AddComment(ctx context.Context, goalID uuid.UUID, content string, userID uuid.UUID) (*models.GoalCommentResponse, error) {
+	canAccess, err := s.canAccessGoal(ctx, goalID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check goal access: %w", err)
+	}
+	if !canAccess {
+		return nil, fmt.Errorf("access denied")
+	}
+
+	comment := &models.GoalComment{
+		GoalID:   goalID,
+		AuthorID: userID,
+		Content:  content,
+	}
+
+	if err := s.goalRepo.CreateComment(ctx, comment); err != nil {
+		return nil, fmt.Errorf("failed to create comment: %w", err)
+	}
+
+	// Reload with author preloaded
+	created, err := s.goalRepo.FindCommentByID(ctx, comment.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load comment: %w", err)
+	}
+
+	resp := models.ToGoalCommentResponse(created)
+	return &resp, nil
+}
+
+func (s *goalService) ListComments(ctx context.Context, goalID uuid.UUID, page, limit int) ([]models.GoalCommentResponse, int64, error) {
+	comments, total, err := s.goalRepo.ListComments(ctx, goalID, page, limit)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to list comments: %w", err)
+	}
+
+	responses := make([]models.GoalCommentResponse, len(comments))
+	for i, c := range comments {
+		responses[i] = models.ToGoalCommentResponse(&c)
+	}
+
+	return responses, total, nil
+}
+
+func (s *goalService) DeleteComment(ctx context.Context, commentID uuid.UUID, userID uuid.UUID) error {
+	comment, err := s.goalRepo.FindCommentByID(ctx, commentID)
+	if err != nil {
+		return fmt.Errorf("comment not found: %w", err)
+	}
+
+	// Only the author or a super admin can delete
+	if comment.AuthorID != userID && !s.isSuperAdmin(ctx) {
+		return fmt.Errorf("access denied: only the comment author can delete")
+	}
+
+	if err := s.goalRepo.DeleteComment(ctx, commentID); err != nil {
+		return fmt.Errorf("failed to delete comment: %w", err)
+	}
+
+	return nil
 }

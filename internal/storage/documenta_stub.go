@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -123,4 +124,51 @@ func (s *StubDocumentaClient) GetTags(ctx context.Context, fileID string) (map[s
 func (s *StubDocumentaClient) SetTags(ctx context.Context, fileID string, tags map[string]string) error {
 	log.Printf("[DOCUMENTA STUB] SetTags: fileID=%s, tags=%v", fileID, tags)
 	return nil
+}
+
+// ── Versions ──
+
+func (s *StubDocumentaClient) ListVersions(ctx context.Context, fileID string) ([]DmsVersion, error) {
+	log.Printf("[DOCUMENTA STUB] ListVersions: fileID=%s", fileID)
+	return []DmsVersion{
+		{UUID: "stub-version-1", NodeUUID: fileID, VersionNumber: 1, Size: 1024, Description: "Initial version", Source: "upload", CreatedBy: "admin@example.com", CreatedByName: "Admin", CreatedAt: "2025-01-01T00:00:00Z", IsCurrent: true},
+	}, nil
+}
+
+func (s *StubDocumentaClient) UploadVersion(ctx context.Context, fileID string, fileName string, fileData io.Reader, fileSize int64, description string) (*DmsVersion, error) {
+	id := uuid.New().String()
+	log.Printf("[DOCUMENTA STUB] UploadVersion: fileID=%s, fileName=%s, size=%d → versionID=%s", fileID, fileName, fileSize, id)
+	return &DmsVersion{
+		UUID:          id,
+		NodeUUID:      fileID,
+		VersionNumber: 2,
+		Size:          fileSize,
+		Description:   description,
+		Source:        "upload",
+		CreatedBy:     "admin@example.com",
+		CreatedByName: "Admin",
+		CreatedAt:     "2025-01-01T00:00:00Z",
+		IsCurrent:     true,
+	}, nil
+}
+
+func (s *StubDocumentaClient) DownloadVersion(ctx context.Context, versionUUID string) (io.ReadCloser, string, error) {
+	log.Printf("[DOCUMENTA STUB] DownloadVersion: versionUUID=%s", versionUUID)
+	return io.NopCloser(strings.NewReader("stub version content")), "text/plain", nil
+}
+
+func (s *StubDocumentaClient) RollbackVersion(ctx context.Context, fileID string, versionUUID string) (*DmsVersion, error) {
+	log.Printf("[DOCUMENTA STUB] RollbackVersion: fileID=%s, versionUUID=%s", fileID, versionUUID)
+	return &DmsVersion{
+		UUID:          versionUUID,
+		NodeUUID:      fileID,
+		VersionNumber: 1,
+		Size:          1024,
+		Description:   "Rolled back version",
+		Source:        "rollback",
+		CreatedBy:     "admin@example.com",
+		CreatedByName: "Admin",
+		CreatedAt:     "2025-01-01T00:00:00Z",
+		IsCurrent:     true,
+	}, nil
 }
