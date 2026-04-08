@@ -223,8 +223,8 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.IVR) && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
 		// For EPM940, if source is IVR, then fetch user based on mobile no. of citizen
 		user, err := s.userRepo.FindByMobile(ctx, req.ReporterPhone)
-		if err != nil {
-			fmt.Printf("CreateIncident: Errro fetching user by mobile: %v\n", err)
+		if err != nil && err != gorm.ErrRecordNotFound {
+			fmt.Printf("CreateIncident: Error fetching user by mobile: %v\n", err)
 			return nil, err
 		}
 
