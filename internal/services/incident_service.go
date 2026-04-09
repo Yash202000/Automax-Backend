@@ -2621,9 +2621,9 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 					},
 				}
 				if err := s.fcmService.Push(bgCtx, pushReq); err != nil {
-					log.Printf("FCM-ASSIGN: Failed for user %s: %v", assigneeID, err)
+					log.Printf("FCM-ASSIGN: Failed for user %s: %v | pushReq: %+v", assigneeID, err, pushReq)
 				} else {
-					log.Printf("FCM-ASSIGN: Sent to user %s", assigneeID)
+					log.Printf("FCM-ASSIGN: Sent to user %s | pushReq: %+v", assigneeID, pushReq)
 				}
 			}
 		}()
@@ -3365,9 +3365,9 @@ func (s *incidentService) AssignIncident(ctx context.Context, incidentID, assign
 					},
 				}
 				if err := s.fcmService.Push(bgCtx, pushReq); err != nil {
-					log.Printf("FCM-REASSIGN: Failed for user %s: %v", capturedAssignee, err)
+					log.Printf("FCM-REASSIGN: Failed for user %s: %v | pushReq: %+v", capturedAssignee, err, pushReq)
 				} else {
-					log.Printf("FCM-REASSIGN: Sent to user %s", capturedAssignee)
+					log.Printf("FCM-REASSIGN: Sent to user %s | pushReq: %+v", capturedAssignee, pushReq)
 				}
 			}()
 		}
