@@ -1130,6 +1130,97 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		return nil, errors.New("this incident has already been converted to a request")
 	}
 
+	// Handle existing request linking
+	var existingRequest *models.Incident
+	if req.ExistingRequestID != nil && *req.ExistingRequestID != "" {
+		existingRequestID, err := uuid.Parse(*req.ExistingRequestID)
+		if err != nil {
+			return nil, errors.New("invalid existing_request_id")
+		}
+
+		// Get the existing request
+		existingRequest, err = s.incidentRepo.FindByIDWithRelations(ctx, existingRequestID)
+		if err != nil {
+			return nil, errors.New("existing request not found")
+		}
+
+		// Validate it's a request
+		if existingRequest.RecordType != "request" {
+			return nil, errors.New("the specified ID does not belong to a request")
+		}
+
+		// Link incident to existing request
+		updateFields := map[string]interface{}{
+			"converted_request_id": existingRequest.ID,
+		}
+
+		// Find a terminal state to close the incident
+		terminalState, err := s.getTerminalStateForWorkflow(ctx, sourceIncident.WorkflowID)
+		if err != nil {
+			fmt.Printf("Warning: failed to find terminal state for workflow: %v\n", err)
+		}
+
+		if terminalState != nil {
+			updateFields["current_state_id"] = terminalState.ID
+			updateFields["closed_at"] = time.Now()
+		}
+
+		if err := s.incidentRepo.UpdateFields(ctx, incidentID, updateFields); err != nil {
+			return nil, fmt.Errorf("failed to update source incident: %w", err)
+		}
+
+		// Create transition history
+		now := time.Now()
+		convertHistory := &models.IncidentTransitionHistory{
+			IncidentID:     incidentID,
+			TransitionID:   nil,
+			FromStateID:    sourceIncident.CurrentStateID,
+			ToStateID:      terminalState.ID,
+			PerformedByID:  userID,
+			Comment:        fmt.Sprintf("Linked to existing request %s", existingRequest.IncidentNumber),
+			TransitionedAt: now,
+			OldValues:      fmt.Sprintf(`{"record_type": "incident", "incident_number": "%s"}`, sourceIncident.IncidentNumber),
+			NewValues:      fmt.Sprintf(`{"record_type": "request", "request_number": "%s"}`, existingRequest.IncidentNumber),
+		}
+		if histErr := s.incidentRepo.CreateTransitionHistory(ctx, convertHistory); histErr != nil {
+			fmt.Printf("Warning: failed to create transition history: %v\n", histErr)
+		}
+
+		// Create revision for source incident
+		sourceIncidentNumber := sourceIncident.IncidentNumber
+		changes := []models.IncidentFieldChange{
+			{
+				FieldName:  "linked_to_request",
+				FieldLabel: "Linked to Request",
+				OldValue:   nil,
+				NewValue:   &existingRequest.IncidentNumber,
+			},
+		}
+		description := fmt.Sprintf("Incident linked to existing request %s", existingRequest.IncidentNumber)
+		_ = s.CreateRevision(ctx, incidentID, models.RevisionActionFieldChange, description, changes, userID)
+
+		// Create revision for existing request
+		changes = []models.IncidentFieldChange{
+			{
+				FieldName:  "linked_incident",
+				FieldLabel: "Incident converted and linked",
+				OldValue:   nil,
+				NewValue:   &sourceIncidentNumber,
+			},
+		}
+		description = fmt.Sprintf("Incident %s converted and linked to this request", sourceIncidentNumber)
+		_ = s.CreateRevision(ctx, existingRequest.ID, models.RevisionActionFieldChange, description, changes, userID)
+
+		// Build response
+		originalResp := models.ToIncidentResponse(sourceIncident)
+		existingResp := models.ToIncidentResponse(existingRequest)
+
+		return &models.ConvertToRequestResponse{
+			OriginalIncident: &originalResp,
+			NewRequest:       &existingResp,
+		}, nil
+	}
+
 	// Check role-based permission for converting to request
 	workflow, err := s.workflowRepo.FindByIDWithRelations(ctx, sourceIncident.WorkflowID)
 	if err != nil {

@@ -474,14 +474,16 @@ type CreateQueryRequest struct {
 type ConvertToRequestRequest struct {
 	TransitionID      *string                  `json:"transition_id" validate:"omitempty,uuid"`
 	TransitionComment string                   `json:"transition_comment"`
-	ClassificationID  string                   `json:"classification_id" validate:"required,uuid"`
-	WorkflowID        string                   `json:"workflow_id" validate:"required,uuid"`
+	ClassificationID  string                   `json:"classification_id" validate:"required_without=ExistingRequestID,omitempty,uuid"`
+	WorkflowID        string                   `json:"workflow_id" validate:"required_without=ExistingRequestID,omitempty,uuid"`
 	Title             *string                  `json:"title"`
 	Description       *string                  `json:"description"`
 	AssigneeID        *string                  `json:"assignee_id" validate:"omitempty,uuid"`
 	DepartmentID      *string                  `json:"department_id" validate:"omitempty,uuid"`
 	DueDate           *string                  `json:"due_date"`
 	Feedback          *IncidentFeedbackRequest `json:"feedback"`
+	// Optional: link to an existing request instead of creating a new one
+	ExistingRequestID *string `json:"existing_request_id" validate:"omitempty,uuid"`
 }
 
 // ConvertToRequestResponse for the conversion result
