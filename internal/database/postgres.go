@@ -56,6 +56,7 @@ func Migrate(db *gorm.DB) error {
 		&models.Permission{},
 		&models.Role{},
 		&models.Classification{},
+		&models.ClassificationType{},
 		&models.ClassificationCriticality{},
 		&models.Location{},
 		&models.Department{},
@@ -160,6 +161,11 @@ func Migrate(db *gorm.DB) error {
 	// Migrate AI quality columns
 	if err := migrations.MigrateAIQuality(db); err != nil {
 		log.Printf("Warning: AI quality migration failed: %v", err)
+	}
+
+	// Migrate classification single-type column → classification_types join table
+	if err := migrations.MigrateClassificationTypes(db); err != nil {
+		log.Printf("Warning: classification types migration failed: %v", err)
 	}
 
 	log.Println("Database migrations completed")

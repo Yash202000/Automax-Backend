@@ -40,15 +40,22 @@ func (h *ClassificationHandler) Create(c *fiber.Ctx) error {
 		})
 	}
 
-	classType := "both"
-	if req.Type != "" {
-		classType = req.Type
+	// Default to incident+request when no types provided
+	classTypes := req.Types
+	if len(classTypes) == 0 {
+		classTypes = []string{"incident", "request"}
+	}
+
+	// Build ClassificationType associations so GORM creates them with the classification
+	typeRecords := make([]models.ClassificationType, len(classTypes))
+	for i, t := range classTypes {
+		typeRecords[i] = models.ClassificationType{Type: t}
 	}
 
 	classification := &models.Classification{
 		Name:        req.Name,
 		Description: req.Description,
-		Type:        classType,
+		Types:       typeRecords,
 		ParentID:    req.ParentID,
 		SortOrder:   req.SortOrder,
 		IsActive:    true,
@@ -84,7 +91,13 @@ func (h *ClassificationHandler) Create(c *fiber.Ctx) error {
 		}
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "Classification created", models.ToClassificationResponse(classification))
+	// Reload to get full response with types
+	created, err := h.repo.FindByID(c.UserContext(), classification.ID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to reload classification")
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusCreated, "Classification created", models.ToClassificationResponse(created))
 }
 
 func (h *ClassificationHandler) GetByID(c *fiber.Ctx) error {
@@ -125,34 +138,35 @@ func (h *ClassificationHandler) Update(c *fiber.Ctx) error {
 	if req.Description != "" {
 		classification.Description = req.Description
 	}
-	if req.Type != "" {
-		classification.Type = req.Type
-	}
 	classification.IsActive = true // Keep active on update
 	if req.SortOrder >= 0 {
 		classification.SortOrder = req.SortOrder
 	}
 
-	// Update classification
+	// Update classification fields
 	if err := h.repo.Update(c.UserContext(), classification); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
+	// Update types if provided
+	if len(req.Types) > 0 {
+		if err := h.repo.SetTypes(c.UserContext(), id, req.Types); err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to update types: "+err.Error())
+		}
+	}
+
 	// Update criticalities if provided
 	if len(req.Criticalities) > 0 {
-		// Get existing criticalities
 		existingCriticalities, err := h.repo.GetCriticalitiesByClassificationID(c.UserContext(), id)
 		if err != nil {
 			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to get existing criticalities")
 		}
 
-		// Build map of existing criticalities by criticality_id
 		existingMap := make(map[uuid.UUID]*models.ClassificationCriticality)
 		for i := range existingCriticalities {
 			existingMap[existingCriticalities[i].CriticalityID] = &existingCriticalities[i]
 		}
 
-		// Process incoming criticalities
 		for _, critReq := range req.Criticalities {
 			criticalityID, err := uuid.Parse(critReq.CriticalityID)
 			if err != nil {
@@ -160,7 +174,6 @@ func (h *ClassificationHandler) Update(c *fiber.Ctx) error {
 			}
 
 			if existing, ok := existingMap[criticalityID]; ok {
-				// Update existing criticality
 				existing.MaxClosingHours = critReq.MaxClosingHours
 				existing.MaxClosingMinutes = critReq.MaxClosingMinutes
 				if err := h.repo.UpdateCriticality(c.UserContext(), existing); err != nil {
@@ -168,7 +181,6 @@ func (h *ClassificationHandler) Update(c *fiber.Ctx) error {
 				}
 				delete(existingMap, criticalityID)
 			} else {
-				// Create new criticality
 				criticality := &models.ClassificationCriticality{
 					ClassificationID:  id,
 					CriticalityID:     criticalityID,
@@ -181,12 +193,9 @@ func (h *ClassificationHandler) Update(c *fiber.Ctx) error {
 				}
 			}
 		}
-
-		// Delete criticalities that are no longer in the request (optional - keep existing if not sent)
-		// For now, we'll keep them - can be changed based on requirements
 	}
 
-	// Reload classification with criticalities
+	// Reload classification with types and criticalities
 	updatedClassification, err := h.repo.FindByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to reload classification")
@@ -293,7 +302,6 @@ func (h *ClassificationHandler) Export(c *fiber.Ctx) error {
 	invalidUUID := "00000000-0000-0000-0000-000000000000"
 
 	for _, cls := range classifications {
-		// Skip records with invalid paths or IDs
 		if cls.ID.String() == invalidUUID ||
 			strings.Contains(cls.Path, invalidUUID) {
 			continue
@@ -301,14 +309,17 @@ func (h *ClassificationHandler) Export(c *fiber.Ctx) error {
 		validClassifications = append(validClassifications, cls)
 	}
 
-	// Convert to export format
 	exportData := make([]map[string]interface{}, len(validClassifications))
 	for i, cls := range validClassifications {
+		typeStrings := make([]string, len(cls.Types))
+		for j, t := range cls.Types {
+			typeStrings[j] = t.Type
+		}
 		exportData[i] = map[string]interface{}{
 			"id":          cls.ID,
 			"name":        cls.Name,
 			"description": cls.Description,
-			"type":        cls.Type,
+			"types":       typeStrings,
 			"parent_id":   cls.ParentID,
 			"level":       cls.Level,
 			"path":        cls.Path,
@@ -329,19 +340,17 @@ func (h *ClassificationHandler) Import(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "No file uploaded")
 	}
 
-	// Open and read file
 	fileContent, err := file.Open()
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read file")
 	}
 	defer fileContent.Close()
 
-	// Read file content
 	var importData []struct {
 		ID          uuid.UUID  `json:"id"`
 		Name        string     `json:"name"`
 		Description string     `json:"description"`
-		Type        string     `json:"type"`
+		Types       []string   `json:"types"`
 		ParentID    *uuid.UUID `json:"parent_id"`
 		Level       int        `json:"level"`
 		Path        string     `json:"path"`
@@ -349,7 +358,6 @@ func (h *ClassificationHandler) Import(c *fiber.Ctx) error {
 		SortOrder   int        `json:"sort_order"`
 	}
 
-	// Parse JSON from file
 	decoder := json.NewDecoder(fileContent)
 	if err := decoder.Decode(&importData); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid JSON format: "+err.Error())
@@ -360,34 +368,39 @@ func (h *ClassificationHandler) Import(c *fiber.Ctx) error {
 		return importData[i].Level < importData[j].Level
 	})
 
-	// Create a map from old IDs to new IDs for maintaining parent-child relationships
 	idMapping := make(map[uuid.UUID]uuid.UUID)
 	imported := 0
 	skipped := 0
 	errors := []string{}
 
-	// Import all classifications in level order
 	for _, data := range importData {
 		var newParentID *uuid.UUID
 
-		// If has parent, get the new parent ID from mapping
 		if data.ParentID != nil {
 			mappedParentID, exists := idMapping[*data.ParentID]
 			if exists {
 				newParentID = &mappedParentID
 			} else {
-				// Parent not found in import data, import as root node
 				newParentID = nil
 			}
 		}
 
-		// Create new classification (no duplicate check)
+		// Default types if none provided in import file
+		importTypes := data.Types
+		if len(importTypes) == 0 {
+			importTypes = []string{"incident", "request"}
+		}
+		typeRecords := make([]models.ClassificationType, len(importTypes))
+		for i, t := range importTypes {
+			typeRecords[i] = models.ClassificationType{Type: t}
+		}
+
 		newID := uuid.New()
 		classification := &models.Classification{
 			ID:          newID,
 			Name:        data.Name,
 			Description: data.Description,
-			Type:        data.Type,
+			Types:       typeRecords,
 			ParentID:    newParentID,
 			IsActive:    data.IsActive,
 			SortOrder:   data.SortOrder,
@@ -464,7 +477,6 @@ func (h *ClassificationHandler) CreateCriticality(c *fiber.Ctx) error {
 		})
 	}
 
-	// Check if classification exists
 	_, err = h.repo.FindByID(c.UserContext(), classificationID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Classification not found")
@@ -475,7 +487,6 @@ func (h *ClassificationHandler) CreateCriticality(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid criticality ID")
 	}
 
-	// Check if criticality already exists for this classification
 	_, err = h.repo.GetCriticalityByClassificationAndCriticalityID(c.UserContext(), classificationID, criticalityID)
 	if err == nil {
 		return utils.ErrorResponse(c, fiber.StatusConflict, "Criticality already exists for this classification")
@@ -493,7 +504,6 @@ func (h *ClassificationHandler) CreateCriticality(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create criticality: "+err.Error())
 	}
 
-	// Reload with criticality details
 	created, err := h.repo.GetCriticalityByID(c.UserContext(), criticality.ID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to retrieve created criticality")
@@ -515,7 +525,6 @@ func (h *ClassificationHandler) UpdateCriticality(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	// Validate request
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,

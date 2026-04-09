@@ -3,12 +3,28 @@ package repository
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+// typeExistsWhere returns a GORM WHERE condition and args for filtering classifications
+// by the given type value, using an EXISTS subquery to avoid duplicate rows.
+//
+//   ""  / "all"  → no condition (all classifications)
+//   "both"       → exists with type IN ('incident','request')
+//   other        → exists with type = ?
+func typeExistsWhere(classType string) (condition string, args []interface{}) {
+	switch classType {
+	case "", "all":
+		return "", nil
+	case "both":
+		return "EXISTS (SELECT 1 FROM classification_types WHERE classification_id = classifications.id AND type IN ('incident','request'))", nil
+	default:
+		return "EXISTS (SELECT 1 FROM classification_types WHERE classification_id = classifications.id AND type = ?)", []interface{}{classType}
+	}
+}
 
 type ClassificationRepository interface {
 	Create(ctx context.Context, classification *models.Classification) error
@@ -23,6 +39,8 @@ type ClassificationRepository interface {
 	GetChildren(ctx context.Context, parentID uuid.UUID) ([]models.Classification, error)
 	GetByParentID(ctx context.Context, parentID *uuid.UUID) ([]models.Classification, error)
 	GetTreeWithStats(ctx context.Context, recordType string) ([]models.ClassificationWithStats, error)
+	// Type management
+	SetTypes(ctx context.Context, classificationID uuid.UUID, types []string) error
 	// Classification Criticality methods
 	CreateCriticality(ctx context.Context, criticality *models.ClassificationCriticality) error
 	UpdateCriticality(ctx context.Context, criticality *models.ClassificationCriticality) error
@@ -59,6 +77,7 @@ func (r *classificationRepository) Create(ctx context.Context, classification *m
 func (r *classificationRepository) FindByID(ctx context.Context, id uuid.UUID) (*models.Classification, error) {
 	var classification models.Classification
 	err := r.db.WithContext(ctx).
+		Preload("Types").
 		Preload("Children").
 		Preload("Criticalities.Criticality").
 		First(&classification, "id = ?", id).Error
@@ -94,6 +113,7 @@ func (r *classificationRepository) Delete(ctx context.Context, id uuid.UUID) err
 func (r *classificationRepository) List(ctx context.Context) ([]models.Classification, error) {
 	var classifications []models.Classification
 	err := r.db.WithContext(ctx).
+		Preload("Types").
 		Preload("Criticalities.Criticality").
 		Order("sort_order, name").
 		Find(&classifications).Error
@@ -102,14 +122,16 @@ func (r *classificationRepository) List(ctx context.Context) ([]models.Classific
 
 func (r *classificationRepository) ListByType(ctx context.Context, classType string) ([]models.Classification, error) {
 	var classifications []models.Classification
-	query := r.db.WithContext(ctx)
-	if classType != "" {
-		// Support 'all' type which matches any type, 'both' matches incident/request
-		query = query.Where("type = ? OR type = 'both' OR type = 'all'", classType)
-	}
-	types := []string{strings.ToLower(classType)}
+	query := r.db.WithContext(ctx).
+		Preload("Types").
+		Preload("Criticalities.Criticality").
+		Order("sort_order, name")
 
-	err := query.Where("LOWER(type) IN ?", types).Order("sort_order, name").Find(&classifications).Error
+	if cond, args := typeExistsWhere(classType); cond != "" {
+		query = query.Where(cond, args...)
+	}
+
+	err := query.Find(&classifications).Error
 	return classifications, err
 }
 
@@ -117,8 +139,11 @@ func (r *classificationRepository) GetTree(ctx context.Context) ([]models.Classi
 	var roots []models.Classification
 	err := r.db.WithContext(ctx).
 		Where("parent_id IS NULL").
+		Preload("Types").
 		Preload("Criticalities.Criticality").
+		Preload("Children.Types").
 		Preload("Children.Criticalities.Criticality").
+		Preload("Children.Children.Types").
 		Preload("Children.Children.Criticalities.Criticality").
 		Preload("Children", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order, name")
@@ -127,25 +152,36 @@ func (r *classificationRepository) GetTree(ctx context.Context) ([]models.Classi
 			return db.Order("sort_order, name")
 		}).
 		Preload("Children.Children.Children").
+		Preload("Children.Children.Children.Types").
 		Order("sort_order, name").
 		Find(&roots).Error
 	return roots, err
 }
 
 func (r *classificationRepository) GetTreeByType(ctx context.Context, classType string) ([]models.Classification, error) {
+	// 'all' and empty string mean no type filter — delegate to the unfiltered tree
+	if classType == "" || classType == "all" {
+		return r.GetTree(ctx)
+	}
+
 	var roots []models.Classification
+	cond, args := typeExistsWhere(classType)
 	typeFilter := func(db *gorm.DB) *gorm.DB {
-		return db.Where("type = ? OR type = 'both' OR type = 'all'", classType).Order("sort_order, name")
+		return db.Where(cond, args...).Order("sort_order, name")
 	}
 	err := r.db.WithContext(ctx).
 		Where("parent_id IS NULL").
-		Where("type = ? OR type = 'both' OR type = 'all'", classType).
+		Where(cond, args...).
+		Preload("Types").
 		Preload("Criticalities.Criticality").
+		Preload("Children.Types").
 		Preload("Children.Criticalities.Criticality").
+		Preload("Children.Children.Types").
 		Preload("Children.Children.Criticalities.Criticality").
 		Preload("Children", typeFilter).
 		Preload("Children.Children", typeFilter).
 		Preload("Children.Children.Children", typeFilter).
+		Preload("Children.Children.Children.Types").
 		Order("sort_order, name").
 		Find(&roots).Error
 	return roots, err
@@ -154,6 +190,7 @@ func (r *classificationRepository) GetTreeByType(ctx context.Context, classType 
 func (r *classificationRepository) GetChildren(ctx context.Context, parentID uuid.UUID) ([]models.Classification, error) {
 	var children []models.Classification
 	err := r.db.WithContext(ctx).
+		Preload("Types").
 		Where("parent_id = ?", parentID).
 		Order("sort_order, name").
 		Find(&children).Error
@@ -162,7 +199,7 @@ func (r *classificationRepository) GetChildren(ctx context.Context, parentID uui
 
 func (r *classificationRepository) GetByParentID(ctx context.Context, parentID *uuid.UUID) ([]models.Classification, error) {
 	var classifications []models.Classification
-	query := r.db.WithContext(ctx)
+	query := r.db.WithContext(ctx).Preload("Types")
 	if parentID == nil {
 		query = query.Where("parent_id IS NULL")
 	} else {
@@ -173,12 +210,11 @@ func (r *classificationRepository) GetByParentID(ctx context.Context, parentID *
 }
 
 func (r *classificationRepository) GetTreeWithStats(ctx context.Context, recordType string) ([]models.ClassificationWithStats, error) {
-	// Get all classifications
 	var classifications []models.Classification
-	query := r.db.WithContext(ctx)
+	query := r.db.WithContext(ctx).Preload("Types")
 
-	if recordType != "" && recordType != "all" {
-		query = query.Where("type = ? OR type = 'both' OR type = 'all'", recordType)
+	if cond, args := typeExistsWhere(recordType); cond != "" {
+		query = query.Where(cond, args...)
 	}
 
 	if err := query.Order("sort_order, name").Find(&classifications).Error; err != nil {
@@ -197,7 +233,12 @@ func (r *classificationRepository) GetTreeWithStats(ctx context.Context, recordT
 		Select("classification_id, COUNT(*) as count").
 		Where("classification_id IS NOT NULL AND deleted_at IS NULL")
 
-	if recordType != "" && recordType != "all" {
+	switch recordType {
+	case "", "all":
+		// no record_type filter — count across all types
+	case "both":
+		countQuery = countQuery.Where("record_type IN ('incident','request')")
+	default:
 		countQuery = countQuery.Where("record_type = ?", recordType)
 	}
 
@@ -217,11 +258,15 @@ func (r *classificationRepository) GetTreeWithStats(ctx context.Context, recordT
 
 	// First pass: create all nodes
 	for _, cls := range classifications {
+		typeStrings := make([]string, len(cls.Types))
+		for i, t := range cls.Types {
+			typeStrings[i] = t.Type
+		}
 		stats := models.ClassificationWithStats{
 			ID:          cls.ID,
 			Name:        cls.Name,
 			Description: cls.Description,
-			Type:        cls.Type,
+			Types:       typeStrings,
 			ParentID:    cls.ParentID,
 			Level:       cls.Level,
 			Path:        cls.Path,
@@ -234,7 +279,7 @@ func (r *classificationRepository) GetTreeWithStats(ctx context.Context, recordT
 		statsMap[cls.ID] = &stats
 	}
 
-	// Second pass: build tree and propagate counts upward
+	// Second pass: build tree
 	for _, cls := range classifications {
 		if cls.ParentID == nil {
 			roots = append(roots, *statsMap[cls.ID])
@@ -253,12 +298,32 @@ func (r *classificationRepository) GetTreeWithStats(ctx context.Context, recordT
 		return total
 	}
 
-	// Update roots with total counts
 	for i := range roots {
 		roots[i].Count = calculateTotalCount(&roots[i])
 	}
 
 	return roots, nil
+}
+
+// SetTypes replaces all type entries for a classification atomically
+func (r *classificationRepository) SetTypes(ctx context.Context, classificationID uuid.UUID, types []string) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Delete all existing types for this classification
+		if err := tx.Where("classification_id = ?", classificationID).Delete(&models.ClassificationType{}).Error; err != nil {
+			return err
+		}
+		// Insert new types
+		for _, t := range types {
+			ct := &models.ClassificationType{
+				ClassificationID: classificationID,
+				Type:             t,
+			}
+			if err := tx.Create(ct).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // Classification Criticality methods
