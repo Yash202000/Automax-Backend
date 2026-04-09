@@ -1149,6 +1149,28 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 			return nil, errors.New("the specified ID does not belong to a request")
 		}
 
+		// Append this incident to the existing request's source incidents
+		existingSourceIDs := existingRequest.SourceIncidentIDs
+		sourceIncidentIDStrs := []string{incidentID.String()}
+		if len(existingSourceIDs) > 0 {
+			sourceIncidentIDStrs = append(existingSourceIDs, sourceIncidentIDStrs...)
+		}
+		sourceIncidentIDsJSON, err := json.Marshal(sourceIncidentIDStrs)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal source incident IDs: %w", err)
+		}
+
+		// Update existing request with new source incident
+		updateFieldsReq := map[string]interface{}{
+			"source_incident_ids": sourceIncidentIDsJSON,
+		}
+		if existingRequest.SourceIncidentID == nil {
+			updateFieldsReq["source_incident_id"] = &incidentID
+		}
+		if err := s.incidentRepo.UpdateFields(ctx, existingRequestID, updateFieldsReq); err != nil {
+			fmt.Printf("Warning: failed to update existing request source incidents: %v\n", err)
+		}
+
 		// Link incident to existing request
 		updateFields := map[string]interface{}{
 			"converted_request_id": existingRequest.ID,
