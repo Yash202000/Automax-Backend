@@ -192,6 +192,7 @@ func (h *CallLogHandler) StartCall(c *fiber.Ctx) error {
 	var req struct {
 		CallUUID     string        `json:"call_uuid" validate:"required"`
 		Participants []interface{} `json:"participants,omitempty"`
+		InitiatorID  *uuid.UUID    `json:"initiator_id" validate:"required"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -205,10 +206,15 @@ func (h *CallLogHandler) StartCall(c *fiber.Ctx) error {
 		})
 	}
 
-	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-	if !ok {
-		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
+	// userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	// if !ok {
+	// 	return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
+	// }
+	user, err := h.userSvc.GetUserByID(c.Context(), *req.InitiatorID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "User not found")
 	}
+	userID := user.ID
 
 	// Resolve participant IDs from user IDs or extension IDs
 	var participantIDs []uuid.UUID
@@ -278,10 +284,35 @@ func (h *CallLogHandler) JoinCall(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Call UUID is required")
 	}
 
-	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-	if !ok {
-		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
+	var req struct {
+		Extension string `json:"extension" validate:"required"` // callee extension from PBX
 	}
+
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	// userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	// if !ok {
+	// 	return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
+	// }
+	user, err := h.userSvc.FindByExtension(c.Context(), req.Extension)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "User not found")
+	}
+	userID := user.ID
+
+	// userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	// if !ok {
+	// 	return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
+	// }
 
 	if err := h.service.JoinCall(c.UserContext(), callUUID, userID); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())

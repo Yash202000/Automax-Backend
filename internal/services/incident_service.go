@@ -2843,7 +2843,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				incidentTitle, incidentNumber, closedAt.Format("02 Jan 2006"),
 			)
 			if comment != "" {
-				body += fmt.Sprintf(" Resolution note: %s", comment)
+				body += fmt.Sprintf(" Comment: %s", comment)
 			}
 			pushReq := &models.PushRequest{
 				UserID: reporterID,
