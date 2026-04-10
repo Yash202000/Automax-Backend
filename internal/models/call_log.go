@@ -96,6 +96,7 @@ type CallLogCreateRequest struct {
 	Participants UUIDArray  `json:"participants,omitempty"`
 	InvitedUsers UUIDArray  `json:"invited_users,omitempty"`
 	RecordingUrl string     `json:"recording_url,omitempty" validate:"omitempty,max=500"`
+	InitiatorID  uuid.UUID  `json:"initiator_id" validate:"required,uuid4"`
 	Meta         string     `json:"meta,omitempty"`
 }
 
@@ -137,13 +138,14 @@ type CallLogResponse struct {
 
 // CallLogFilter for filtering call logs
 type CallLogFilter struct {
-	CreatedBy *uuid.UUID `json:"created_by" validate:"omitempty,uuid4"`
-	Status    string     `json:"status" validate:"omitempty,oneof=ongoing completed failed"`
-	StartDate *time.Time `json:"start_date" validate:"omitempty"`
-	EndDate   *time.Time `json:"end_date" validate:"omitempty"`
-	Search    string     `json:"search" validate:"omitempty,max=255"`
-	Page      int        `json:"page" validate:"omitempty,gte=1,lte=1000"`
-	Limit     int        `json:"limit" validate:"omitempty,gte=10,lte=100"`
+	CreatedBy     *uuid.UUID `json:"created_by" validate:"omitempty,uuid4"`
+	Status        string     `json:"status" validate:"omitempty,oneof=ongoing completed failed"`
+	StartDate     *time.Time `json:"start_date" validate:"omitempty"`
+	EndDate       *time.Time `json:"end_date" validate:"omitempty"`
+	Search        string     `json:"search" validate:"omitempty,max=255"`
+	ParticipantID *uuid.UUID `json:"participant_id" validate:"omitempty,uuid4"`
+	Page          int        `json:"page" validate:"omitempty,gte=1,lte=1000"`
+	Limit         int        `json:"limit" validate:"omitempty,gte=10,lte=100"`
 }
 
 // CallLogStats represents statistics for call logs

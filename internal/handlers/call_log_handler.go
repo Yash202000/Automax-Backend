@@ -42,12 +42,12 @@ func (h *CallLogHandler) CreateCallLog(c *fiber.Ctx) error {
 		})
 	}
 
-	// Get user from context (assuming middleware sets it)
-	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-	if !ok {
-		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
+	user, err := h.userSvc.GetUserByID(c.Context(), req.InitiatorID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "User not found")
 	}
 
+	userID := user.ID
 	callLog, err := h.service.CreateCallLog(c.UserContext(), &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
@@ -149,6 +149,13 @@ func (h *CallLogHandler) ListCallLogs(c *fiber.Ctx) error {
 	if filter.Page == 0 {
 		filter.Page = 1
 	}
+
+	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	if !ok {
+		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
+	}
+
+	filter.ParticipantID = &userID
 
 	callLogs, total, err := h.service.ListCallLogs(c.UserContext(), &filter)
 	if err != nil {
