@@ -405,6 +405,41 @@ type NotificationChannelStat struct {
 	Spam    int64  `json:"spam"`
 }
 
-type NotificationStatsResponse struct {
-	Stats []NotificationChannelStat `json:"stats"`
+// NotificationUserStatRow is the raw per-user count returned from the repository.
+type NotificationUserStatRow struct {
+	UserID uuid.UUID `gorm:"column:user_id"`
+	Total  int64     `gorm:"column:total"`
+	Sent   int64     `gorm:"column:sent"`
+	Failed int64     `gorm:"column:failed"`
+	Draft  int64     `gorm:"column:draft"`
+	Trash  int64     `gorm:"column:trash"`
+	Inbox  int64     `gorm:"column:inbox"`
+	Outbox int64     `gorm:"column:outbox"`
+	Spam   int64     `gorm:"column:spam"`
+}
+
+// NotificationUserCounts holds all category and status counts for a single user.
+type NotificationUserCounts struct {
+	Total  int64 `json:"total"`
+	Sent   int64 `json:"sent"`
+	Failed int64 `json:"failed"`
+	Inbox  int64 `json:"inbox"`
+	Draft  int64 `json:"draft"`
+	Outbox int64 `json:"outbox"`
+	Trash  int64 `json:"trash"`
+	Spam   int64 `json:"spam"`
+}
+
+// NotificationUserStatsEntry is one row in the per-user stats response.
+type NotificationUserStatsEntry struct {
+	UserID string                 `json:"user_id"`
+	Name   string                 `json:"name"`
+	Email  string                 `json:"email"`
+	Counts NotificationUserCounts `json:"counts"`
+}
+
+// NotificationStatsData is the top-level stats response body.
+type NotificationStatsData struct {
+	Channel string                       `json:"channel"`
+	Users   []NotificationUserStatsEntry `json:"users"`
 }

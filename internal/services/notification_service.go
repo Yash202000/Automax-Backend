@@ -296,13 +296,99 @@ func deref(s *string) string {
 	return ""
 }
 
-// ListNotifications retrieves notifications with filtering and search
-func (s *NotificationService) GetNotificationStats(ctx context.Context, channel string, sentBy *uuid.UUID, receivedBy *uuid.UUID) (*models.NotificationStatsResponse, error) {
-	stats, err := s.logRepo.GetStats(ctx, channel, sentBy, receivedBy)
+// GetNotificationStats returns per-user message counts merged across sent and received.
+func (s *NotificationService) GetNotificationStats(ctx context.Context, channel string, sentBy *uuid.UUID, receivedBy *uuid.UUID) (*models.NotificationStatsData, error) {
+	sentByRows, err := s.logRepo.GetStatsBySentBy(ctx, channel, sentBy, receivedBy)
 	if err != nil {
 		return nil, err
 	}
-	return &models.NotificationStatsResponse{Stats: stats}, nil
+
+	receivedByRows, err := s.logRepo.GetStatsByReceivedBy(ctx, channel, sentBy, receivedBy)
+	if err != nil {
+		return nil, err
+	}
+
+	// Merge sent and received counts per user.
+	type merged struct {
+		Total  int64
+		Sent   int64
+		Failed int64
+		Inbox  int64
+		Draft  int64
+		Outbox int64
+		Trash  int64
+		Spam   int64
+	}
+	statsMap := make(map[uuid.UUID]*merged)
+
+	for _, r := range sentByRows {
+		m := statsMap[r.UserID]
+		if m == nil {
+			m = &merged{}
+			statsMap[r.UserID] = m
+		}
+		m.Total += r.Total
+		m.Sent += r.Sent
+		m.Failed += r.Failed
+		m.Draft += r.Draft
+		m.Outbox += r.Outbox
+		m.Trash += r.Trash
+		m.Spam += r.Spam
+	}
+
+	for _, r := range receivedByRows {
+		m := statsMap[r.UserID]
+		if m == nil {
+			m = &merged{}
+			statsMap[r.UserID] = m
+		}
+		m.Total += r.Total
+		m.Inbox += r.Inbox
+		m.Trash += r.Trash
+		m.Spam += r.Spam
+	}
+
+	// Bulk-fetch user details.
+	userIDs := make([]uuid.UUID, 0, len(statsMap))
+	for id := range statsMap {
+		userIDs = append(userIDs, id)
+	}
+	userMap := make(map[uuid.UUID]*models.UserResponse)
+	if len(userIDs) > 0 {
+		if users, err := s.userRepo.FindByIDs(ctx, userIDs); err == nil {
+			for i := range users {
+				resp := models.ToUserResponse(&users[i])
+				userMap[users[i].ID] = &resp
+			}
+		}
+	}
+
+	entries := make([]models.NotificationUserStatsEntry, 0, len(statsMap))
+	for userID, m := range statsMap {
+		entry := models.NotificationUserStatsEntry{
+			UserID: userID.String(),
+			Counts: models.NotificationUserCounts{
+				Total:  m.Total,
+				Sent:   m.Sent,
+				Failed: m.Failed,
+				Inbox:  m.Inbox,
+				Draft:  m.Draft,
+				Outbox: m.Outbox,
+				Trash:  m.Trash,
+				Spam:   m.Spam,
+			},
+		}
+		if u := userMap[userID]; u != nil {
+			entry.Name = u.FirstName + " " + u.LastName
+			entry.Email = u.Email
+		}
+		entries = append(entries, entry)
+	}
+
+	return &models.NotificationStatsData{
+		Channel: channel,
+		Users:   entries,
+	}, nil
 }
 
 // ListNotifications retrieves notifications with filtering and search
