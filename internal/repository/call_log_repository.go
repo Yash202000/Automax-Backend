@@ -85,7 +85,12 @@ func (r *callLogRepository) List(ctx context.Context, filter *models.CallLogFilt
 		searchPattern := "%" + filter.Search + "%"
 		query = query.Where("call_uuid ILIKE ? OR recording_url ILIKE ?", searchPattern, searchPattern)
 	}
-
+	if filter.ParticipantID != nil {
+		query = query.Where(
+			"participants IS NOT NULL AND participants::jsonb @> ?::jsonb",
+			`["`+filter.ParticipantID.String()+`"]`,
+		)
+	}
 	// Count total
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
