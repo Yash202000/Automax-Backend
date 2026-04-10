@@ -192,6 +192,7 @@ func main() {
 	escalationPolicyHandler := handlers.NewEscalationPolicyHandler(escalationPolicyService, userRepo, departmentRepo)
 	rejectionLogHandler := handlers.NewRejectionLogHandler(rejectionLogRepo)
 	incidentFeedbackHandler := handlers.NewIncidentFeedbackHandler(incidentRepo)
+	aiQualityFeedbackHandler := handlers.NewAIQualityFeedbackHandler(aiQualityFeedbackRepo)
 	fcmHandler := handlers.NewFCMHandler(fcmService)
 	sentimentHandler := handlers.NewCallerSentimentHandler(callerSentimentService)
 	goalHandler := handlers.NewGoalHandler(goalService)
@@ -331,6 +332,7 @@ func main() {
 	incidents.Put("/:id/assign", authMiddleware.RequirePermission("incidents:assign"), incidentHandler.AssignIncident)
 	incidents.Get("/:id/revisions", authMiddleware.RequirePermission("incidents:view"), incidentHandler.ListRevisions)
 	incidents.Get("/:id/rejection-logs", authMiddleware.RequirePermission("incidents:view"), rejectionLogHandler.GetByIncident)
+	incidents.Get("/:id/ai-quality", authMiddleware.RequirePermission("incidents:view"), aiQualityFeedbackHandler.GetByIncident)
 
 	feedback := v1.Group("/feedback", authMiddleware.Authenticate())
 	feedback.Get("/", authMiddleware.RequirePermission("incidents:view"), incidentFeedbackHandler.ListAllFeedback)

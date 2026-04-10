@@ -15,6 +15,9 @@ type AIQualityFeedbackRepository interface {
 	// ExistsForIncident returns true when a feedback record already exists for the given incident.
 	ExistsForIncident(ctx context.Context, incidentID uuid.UUID) (bool, error)
 
+	// FindByIncidentID retrieves the AIQualityFeedback record for the given incident, if any.
+	FindByIncidentID(ctx context.Context, incidentID uuid.UUID) (*models.AIQualityFeedback, error)
+
 	// FindPendingIncidents returns incidents that are AI-verified and whose current workflow state
 	// is marked as AI QA required, but do not yet have an AIQualityFeedback record.
 	FindPendingIncidents(ctx context.Context) ([]models.Incident, error)
@@ -30,6 +33,17 @@ func NewAIQualityFeedbackRepository(db *gorm.DB) AIQualityFeedbackRepository {
 
 func (r *aiQualityFeedbackRepository) Create(ctx context.Context, feedback *models.AIQualityFeedback) error {
 	return r.db.WithContext(ctx).Create(feedback).Error
+}
+
+func (r *aiQualityFeedbackRepository) FindByIncidentID(ctx context.Context, incidentID uuid.UUID) (*models.AIQualityFeedback, error) {
+	var feedback models.AIQualityFeedback
+	err := r.db.WithContext(ctx).
+		Where("incident_id = ?", incidentID).
+		First(&feedback).Error
+	if err != nil {
+		return nil, err
+	}
+	return &feedback, nil
 }
 
 func (r *aiQualityFeedbackRepository) ExistsForIncident(ctx context.Context, incidentID uuid.UUID) (bool, error) {
