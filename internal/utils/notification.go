@@ -224,15 +224,35 @@ func SendSMTPWithCCBCC(to []string, cc []string, bcc []string, subject, body str
 	}
 	// BCC is not included in headers (that's the point of BCC)
 	msg.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
+	// Use two boundaries: outer for mixed (body + attachments),
+	// inner for alternative (plain text fallback + HTML).
+	altBoundary := "==_alt_boundary_=="
+
 	msg.WriteString("MIME-Version: 1.0\r\n")
 	msg.WriteString(fmt.Sprintf("Content-Type: multipart/mixed; boundary=\"%s\"\r\n", boundary))
 	msg.WriteString("\r\n")
 
-	// Body part
+	// --- body part: multipart/alternative (plain fallback + HTML) ---
 	msg.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+	msg.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=\"%s\"\r\n", altBoundary))
+	msg.WriteString("\r\n")
+
+	// Plain-text fallback (strip HTML tags for clients that don't render HTML)
+	plainBody := stripHTMLTags(body)
+	msg.WriteString(fmt.Sprintf("--%s\r\n", altBoundary))
 	msg.WriteString("Content-Type: text/plain; charset=\"UTF-8\"\r\n")
 	msg.WriteString("\r\n")
+	msg.WriteString(plainBody)
+	msg.WriteString("\r\n")
+
+	// HTML body
+	msg.WriteString(fmt.Sprintf("--%s\r\n", altBoundary))
+	msg.WriteString("Content-Type: text/html; charset=\"UTF-8\"\r\n")
+	msg.WriteString("\r\n")
 	msg.WriteString(body)
+	msg.WriteString("\r\n")
+
+	msg.WriteString(fmt.Sprintf("--%s--\r\n", altBoundary))
 	msg.WriteString("\r\n")
 
 	// Attachment parts
@@ -323,6 +343,23 @@ func SendSMS(to, message string) error {
 		fmt.Println("[DEBUG-SMS] SMS sent successfully! (No SID in response)")
 	}
 	return nil
+}
+
+// stripHTMLTags removes all HTML tags from s, returning plain text.
+func stripHTMLTags(s string) string {
+	var result strings.Builder
+	inTag := false
+	for _, r := range s {
+		switch {
+		case r == '<':
+			inTag = true
+		case r == '>':
+			inTag = false
+		case !inTag:
+			result.WriteRune(r)
+		}
+	}
+	return result.String()
 }
 
 // GetRecipientType determines if an email is in TO, CC, or BCC list

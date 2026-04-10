@@ -1,11 +1,58 @@
 package models
 
 import (
+	"database/sql/driver"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+// TextArray is a []string that reads/writes PostgreSQL text[] columns.
+type TextArray []string
+
+func (a TextArray) Value() (driver.Value, error) {
+	if len(a) == 0 {
+		return "{}", nil
+	}
+	elems := make([]string, len(a))
+	for i, s := range a {
+		s = strings.ReplaceAll(s, `\`, `\\`)
+		s = strings.ReplaceAll(s, `"`, `\"`)
+		elems[i] = `"` + s + `"`
+	}
+	return "{" + strings.Join(elems, ",") + "}", nil
+}
+
+func (a *TextArray) Scan(value interface{}) error {
+	if value == nil {
+		*a = TextArray{}
+		return nil
+	}
+	var str string
+	switch v := value.(type) {
+	case string:
+		str = v
+	case []byte:
+		str = string(v)
+	default:
+		return fmt.Errorf("TextArray.Scan: unsupported type %T", value)
+	}
+	str = strings.TrimPrefix(strings.TrimSuffix(str, "}"), "{")
+	if str == "" {
+		*a = TextArray{}
+		return nil
+	}
+	parts := strings.Split(str, ",")
+	result := make(TextArray, len(parts))
+	for i, p := range parts {
+		result[i] = strings.Trim(p, `"`)
+	}
+	*a = result
+	return nil
+}
 
 // EscalationPolicy is a reusable ordered set of escalation steps that can be
 // attached to a WorkflowState or ClassificationCriticality. When the SLA for
@@ -61,7 +108,7 @@ type EscalationPolicyStepTarget struct {
 	RoleID          *uuid.UUID  `gorm:"type:uuid;index" json:"role_id,omitempty"`
 	Role            *Role       `gorm:"foreignKey:RoleID" json:"role,omitempty"`
 	// ExcludedUserIDs stores UUID strings of users to remove from the resolved set
-	ExcludedUserIDs []string    `gorm:"type:text[]" json:"excluded_user_ids"`
+	ExcludedUserIDs TextArray   `gorm:"type:text[]" json:"excluded_user_ids"`
 	CreatedAt       time.Time   `json:"created_at"`
 }
 
