@@ -307,6 +307,7 @@ func (r *notificationLogRepository) GetStatsBySentBy(ctx context.Context, channe
 			"SUM(CASE WHEN category = 'outbox' THEN 1 ELSE 0 END) AS outbox, " +
 			"SUM(CASE WHEN category = 'spam' THEN 1 ELSE 0 END) AS spam").
 		Where("sent_by IS NOT NULL").
+		Where("category = 'sent'").
 		Group("sent_by")
 
 	if channel != "" {
