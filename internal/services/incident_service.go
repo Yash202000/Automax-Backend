@@ -562,12 +562,13 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		// in phase 4 we can add more details in the sms and also add notification in the app
 		// add columns like NotificationSent bool, NotificationSentAt time.Time in the incident table to track this
 
-		url := pkgutils.GenerateAppURL(ctx)
+		// url := pkgutils.GenerateAppURL(ctx)
 
 		// log.Printf("Generate Signed url: %s", utils.GenerateIncidentToken(incident.ID.String(), 24*time.Hour))
 		signed_token := pkgutils.GenerateIncidentToken(incident.ID.String(), 24*time.Hour)
 		log.Printf("Generated signed token for IVR incident: %s", signed_token)
-		smsLink := fmt.Sprintf("%s/ivr/incident/sms-link/%s?signed_token=%s", url, incident.ID.String(), signed_token)
+		// smsLink := fmt.Sprintf("%s/ivr/incident/sms-link/%s?signed_token=%s", url, incident.ID.String(), signed_token)
+		smsLink := pkgutils.BuildSMSLink(ctx, incident.ID.String(), 24*time.Hour)
 
 		var sent []string
 		if req.ReporterPhone != "" {

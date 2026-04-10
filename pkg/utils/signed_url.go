@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -34,6 +36,14 @@ func GenerateIncidentToken(incidentID string, t time.Duration) string {
 // // ValidateIncidentToken verifies the token signature, expiry, and that
 // // the id inside the token matches the id from the URL param.
 func ValidateIncidentToken(token, expectedID string) error {
+	// Decode URL-encoding if token was passed as a query param
+	decoded, err := url.QueryUnescape(token)
+	if err != nil {
+		log.Println("Error decoding token:", err)
+	} else {
+		token = decoded
+	}
+
 	parts := strings.Split(token, "|")
 	if len(parts) != 3 {
 		return ErrMalformed
@@ -52,7 +62,6 @@ func ValidateIncidentToken(token, expectedID string) error {
 	if err != nil {
 		return ErrMalformed
 	}
-
 	if time.Now().Unix() > expiresAt {
 		return ErrExpired
 	}

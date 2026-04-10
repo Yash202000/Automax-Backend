@@ -211,6 +211,7 @@ func (h *IncidentHandler) FindByIDWithLast6DigitValidation(c *fiber.Ctx) error {
 	}
 	log.Printf("Signed token recieved %s", token)
 	if err := utils.ValidateIncidentToken(token, idStr); err != nil {
+		log.Printf("Token validation failed: %v", err)
 		switch err {
 		case utils.ErrExpired:
 			return utils.ErrorResponse(c, fiber.StatusGone, "Link has expired")
