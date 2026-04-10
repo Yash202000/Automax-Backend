@@ -16,6 +16,7 @@ type NotificationLogRepository interface {
 	FindByID(ctx context.Context, id uuid.UUID) (*models.NotificationLog, error)
 	FindByAttachmentID(ctx context.Context, attachmentID string) ([]*models.NotificationLog, error)
 	List(ctx context.Context, filter *models.NotificationLogFilter) ([]models.NotificationLog, int64, error)
+	GetStats(ctx context.Context, channel string, sentBy *uuid.UUID, receivedBy *uuid.UUID) ([]models.NotificationChannelStat, error)
 	Update(ctx context.Context, log *models.NotificationLog) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	MarkAsRead(ctx context.Context, id uuid.UUID, isRead bool) error
@@ -227,4 +228,67 @@ func (r *notificationLogRepository) SetMeta(ctx context.Context, ids []uuid.UUID
 		Model(&models.NotificationLog{}).
 		Where("id IN ?", ids).
 		Update("meta", meta).Error
+}
+
+func (r *notificationLogRepository) GetStats(ctx context.Context, channel string, sentBy *uuid.UUID, receivedBy *uuid.UUID) ([]models.NotificationChannelStat, error) {
+	type row struct {
+		Channel  string
+		Status   string
+		Category string
+		Count    int64
+	}
+
+	query := r.db.WithContext(ctx).
+		Model(&models.NotificationLog{}).
+		Select("channel, status, category, COUNT(*) as count").
+		Group("channel, status, category")
+
+	if channel != "" {
+		query = query.Where("channel = ?", channel)
+	}
+	if sentBy != nil {
+		query = query.Where("sent_by = ?", *sentBy)
+	}
+	if receivedBy != nil {
+		query = query.Where("received_by = ?", *receivedBy)
+	}
+
+	var rows []row
+	if err := query.Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	statsMap := make(map[string]*models.NotificationChannelStat)
+	for _, row := range rows {
+		s, ok := statsMap[row.Channel]
+		if !ok {
+			s = &models.NotificationChannelStat{Channel: row.Channel}
+			statsMap[row.Channel] = s
+		}
+		s.Total += row.Count
+		switch row.Status {
+		case "sent":
+			s.Sent += row.Count
+		case "failed":
+			s.Failed += row.Count
+		}
+		switch row.Category {
+		case models.CategoryInbox:
+			s.Inbox += row.Count
+		case models.CategoryDraft:
+			s.Draft += row.Count
+		case models.CategoryOutbox:
+			s.Outbox += row.Count
+		case models.CategoryTrash:
+			s.Trash += row.Count
+		case models.CategorySpam:
+			s.Spam += row.Count
+		}
+	}
+
+	result := make([]models.NotificationChannelStat, 0, len(statsMap))
+	for _, s := range statsMap {
+		result = append(result, *s)
+	}
+	return result, nil
 }
