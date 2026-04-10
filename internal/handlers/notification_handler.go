@@ -356,6 +356,39 @@ func (h *NotificationHandler) Send(c *fiber.Ctx) error {
 	})
 }
 
+// GetStats handles GET /api/v1/notifications/stats?channel=<channel>
+func (h *NotificationHandler) GetStats(c *fiber.Ctx) error {
+	channel := strings.TrimSpace(c.Query("channel"))
+
+	var sentBy *uuid.UUID
+	if v := strings.TrimSpace(c.Query("sent_by")); v != "" {
+		id, err := uuid.Parse(v)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid sent_by UUID")
+		}
+		sentBy = &id
+	}
+
+	var receivedBy *uuid.UUID
+	if v := strings.TrimSpace(c.Query("received_by")); v != "" {
+		id, err := uuid.Parse(v)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid received_by UUID")
+		}
+		receivedBy = &id
+	}
+
+	stats, err := h.service.GetNotificationStats(c.Context(), channel, sentBy, receivedBy)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch notification stats")
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"success": true,
+		"data":    stats,
+	})
+}
+
 // List handles GET /api/v1/notifications with search and filters
 func (h *NotificationHandler) List(c *fiber.Ctx) error {
 	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)

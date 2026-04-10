@@ -651,6 +651,9 @@ func main() {
 	// ---- NOTIFICATION ROUTES ----
 	notifications := v1.Group("/notifications", authMiddleware.Authenticate())
 
+	// Stats
+	notifications.Get("/stats", authMiddleware.RequirePermission("notifications:read"), notificationHandler.GetStats)
+
 	// Send notifications
 	notifications.Post("/send", authMiddleware.RequirePermission("notifications:send"), notificationHandler.Send)
 

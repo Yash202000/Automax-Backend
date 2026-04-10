@@ -297,6 +297,15 @@ func deref(s *string) string {
 }
 
 // ListNotifications retrieves notifications with filtering and search
+func (s *NotificationService) GetNotificationStats(ctx context.Context, channel string, sentBy *uuid.UUID, receivedBy *uuid.UUID) (*models.NotificationStatsResponse, error) {
+	stats, err := s.logRepo.GetStats(ctx, channel, sentBy, receivedBy)
+	if err != nil {
+		return nil, err
+	}
+	return &models.NotificationStatsResponse{Stats: stats}, nil
+}
+
+// ListNotifications retrieves notifications with filtering and search
 func (s *NotificationService) ListNotifications(ctx context.Context, filter *models.NotificationLogFilter) ([]models.NotificationLogResponse, int64, error) {
 	logs, total, err := s.logRepo.List(ctx, filter)
 	if err != nil {

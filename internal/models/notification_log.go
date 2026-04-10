@@ -392,3 +392,19 @@ type AttachmentData struct {
 	ContentType  string
 	Data         []byte
 }
+
+type NotificationChannelStat struct {
+	Channel string `json:"channel"`
+	Total   int64  `json:"total"`
+	Sent    int64  `json:"sent"`
+	Failed  int64  `json:"failed"`
+	Inbox   int64  `json:"inbox"`
+	Draft   int64  `json:"draft"`
+	Outbox  int64  `json:"outbox"`
+	Trash   int64  `json:"trash"`
+	Spam    int64  `json:"spam"`
+}
+
+type NotificationStatsResponse struct {
+	Stats []NotificationChannelStat `json:"stats"`
+}
