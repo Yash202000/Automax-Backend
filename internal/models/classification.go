@@ -50,6 +50,9 @@ type ClassificationCriticality struct {
 	MaxClosingHours   int             `gorm:"not null;default:0" json:"max_closing_hours"`   // Hours component
 	MaxClosingMinutes int             `gorm:"not null;default:0" json:"max_closing_minutes"` // Minutes component (0-59)
 	IsActive          bool            `gorm:"default:true" json:"is_active"`
+	// EscalationPolicyID links the escalation policy to fire when this classification+criticality SLA is breached.
+	EscalationPolicyID *uuid.UUID        `gorm:"type:uuid;index" json:"escalation_policy_id,omitempty"`
+	EscalationPolicy   *EscalationPolicy `gorm:"foreignKey:EscalationPolicyID" json:"escalation_policy,omitempty"`
 	CreatedAt         time.Time       `json:"created_at"`
 	UpdatedAt         time.Time       `json:"updated_at"`
 	DeletedAt         gorm.DeletedAt  `gorm:"index" json:"-"`
@@ -162,43 +165,52 @@ type ClassificationWithStats struct {
 // ClassificationCriticalityCreateRequest for creating classification criticality settings
 // MaxClosingHours: 5 weeks = 840 hours maximum
 type ClassificationCriticalityCreateRequest struct {
-	CriticalityID     string `json:"criticality_id" validate:"required,uuid"`
-	MaxClosingHours   int    `json:"max_closing_hours" validate:"required,min=0,max=840"` // Max 35 days
-	MaxClosingMinutes int    `json:"max_closing_minutes" validate:"required,min=0,max=59"`
+	CriticalityID        string  `json:"criticality_id" validate:"required,uuid"`
+	MaxClosingHours      int     `json:"max_closing_hours" validate:"required,min=0,max=840"` // Max 35 days
+	MaxClosingMinutes    int     `json:"max_closing_minutes" validate:"required,min=0,max=59"`
+	EscalationPolicyID   *string `json:"escalation_policy_id" validate:"omitempty,uuid"`
 }
 
 // ClassificationCriticalityUpdateRequest for updating classification criticality settings
 // MaxClosingHours: 5 weeks = 840 hours maximum
 type ClassificationCriticalityUpdateRequest struct {
-	MaxClosingHours   *int  `json:"max_closing_hours" validate:"omitempty,min=0,max=840"`
-	MaxClosingMinutes *int  `json:"max_closing_minutes" validate:"omitempty,min=0,max=59"`
-	IsActive          *bool `json:"is_active"`
+	MaxClosingHours      *int    `json:"max_closing_hours" validate:"omitempty,min=0,max=840"`
+	MaxClosingMinutes    *int    `json:"max_closing_minutes" validate:"omitempty,min=0,max=59"`
+	IsActive             *bool   `json:"is_active"`
+	EscalationPolicyID   *string `json:"escalation_policy_id" validate:"omitempty,uuid"`
 }
 
 // ClassificationCriticalityResponse for API responses
 type ClassificationCriticalityResponse struct {
-	ID                uuid.UUID            `json:"id"`
-	ClassificationID  uuid.UUID            `json:"classification_id"`
-	CriticalityID     uuid.UUID            `json:"criticality_id"`
-	Criticality       *LookupValueResponse `json:"criticality,omitempty"`
-	MaxClosingHours   int                  `json:"max_closing_hours"`
-	MaxClosingMinutes int                  `json:"max_closing_minutes"`
-	IsActive          bool                 `json:"is_active"`
-	CreatedAt         time.Time            `json:"created_at"`
-	UpdatedAt         time.Time            `json:"updated_at"`
+	ID                   uuid.UUID                  `json:"id"`
+	ClassificationID     uuid.UUID                  `json:"classification_id"`
+	CriticalityID        uuid.UUID                  `json:"criticality_id"`
+	Criticality          *LookupValueResponse       `json:"criticality,omitempty"`
+	MaxClosingHours      int                        `json:"max_closing_hours"`
+	MaxClosingMinutes    int                        `json:"max_closing_minutes"`
+	IsActive             bool                       `json:"is_active"`
+	EscalationPolicyID   *uuid.UUID                 `json:"escalation_policy_id,omitempty"`
+	EscalationPolicy     *EscalationPolicyResponse  `json:"escalation_policy,omitempty"`
+	CreatedAt            time.Time                  `json:"created_at"`
+	UpdatedAt            time.Time                  `json:"updated_at"`
 }
 
 // ToClassificationCriticalityResponse converts ClassificationCriticality to response
 func ToClassificationCriticalityResponse(cc *ClassificationCriticality) ClassificationCriticalityResponse {
 	resp := ClassificationCriticalityResponse{
-		ID:                cc.ID,
-		ClassificationID:  cc.ClassificationID,
-		CriticalityID:     cc.CriticalityID,
-		MaxClosingHours:   cc.MaxClosingHours,
-		MaxClosingMinutes: cc.MaxClosingMinutes,
-		IsActive:          cc.IsActive,
-		CreatedAt:         cc.CreatedAt,
-		UpdatedAt:         cc.UpdatedAt,
+		ID:                   cc.ID,
+		ClassificationID:     cc.ClassificationID,
+		CriticalityID:        cc.CriticalityID,
+		MaxClosingHours:      cc.MaxClosingHours,
+		MaxClosingMinutes:    cc.MaxClosingMinutes,
+		IsActive:             cc.IsActive,
+		EscalationPolicyID:   cc.EscalationPolicyID,
+		CreatedAt:            cc.CreatedAt,
+		UpdatedAt:            cc.UpdatedAt,
+	}
+	if cc.EscalationPolicy != nil {
+		r := ToEscalationPolicyResponse(cc.EscalationPolicy)
+		resp.EscalationPolicy = &r
 	}
 	if cc.Criticality != nil {
 		resp.Criticality = &LookupValueResponse{

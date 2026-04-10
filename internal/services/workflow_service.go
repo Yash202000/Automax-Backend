@@ -808,6 +808,11 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 		SortOrder:       req.SortOrder,
 		IsActive:        true,
 	}
+	if req.EscalationPolicyID != nil && *req.EscalationPolicyID != "" {
+		if id, err := uuid.Parse(*req.EscalationPolicyID); err == nil {
+			state.EscalationPolicyID = &id
+		}
+	}
 
 	if state.StateType == "" {
 		state.StateType = "normal"
@@ -913,6 +918,15 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 	}
 	if req.SLAHours != nil {
 		state.SLAHours = req.SLAHours
+	}
+	if req.EscalationPolicyID != nil {
+		if *req.EscalationPolicyID == "" {
+			state.EscalationPolicyID = nil
+		} else {
+			if id, err := uuid.Parse(*req.EscalationPolicyID); err == nil {
+				state.EscalationPolicyID = &id
+			}
+		}
 	}
 	if req.IsMergable != nil {
 		state.IsMergable = *req.IsMergable

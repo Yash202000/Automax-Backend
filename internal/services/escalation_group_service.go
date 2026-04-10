@@ -19,11 +19,13 @@ import (
 )
 
 // EscalationGroupService manages custom escalation group configuration and
+// scheduled batch-notification dispatch.
 
 type EscalationGroupService struct {
 	groupRepo           repository.EscalationGroupRepository
 	incidentRepo        repository.IncidentRepository
 	userRepo            repository.UserRepository
+	policyService       *EscalationPolicyService
 	notificationService *NotificationService
 	frontendURL         string
 	dailyHour           int
@@ -49,32 +51,65 @@ func NewEscalationGroupService(groupRepo repository.EscalationGroupRepository, i
 	}
 }
 
+// SetPolicyService injects the EscalationPolicyService for user resolution.
+// Called after construction to avoid circular deps.
+func (s *EscalationGroupService) SetPolicyService(ps *EscalationPolicyService) {
+	s.policyService = ps
+}
+
 // ─── CRUD Apis
 
 func (s *EscalationGroupService) Create(ctx context.Context, req *models.CreateEscalationGroupRequest) (*models.EscalationGroupResponse, error) {
-	classificationID, err := uuid.Parse(req.ClassificationID)
-	if err != nil {
-		return nil, fmt.Errorf("invalid classification_id: %w", err)
-	}
-
 	isActive := true
 	if req.IsActive != nil {
 		isActive = *req.IsActive
 	}
 
 	group := &models.EscalationGroup{
-		Name:             req.Name,
-		ClassificationID: classificationID,
-		Frequency:        req.Frequency,
-		Channel:          req.Channel,
-		IsActive:         isActive,
+		Name:      req.Name,
+		Frequency: req.Frequency,
+		Channel:   req.Channel,
+		IsActive:  isActive,
+	}
+
+	// Legacy single classification_id
+	if req.ClassificationID != "" {
+		id, err := uuid.Parse(req.ClassificationID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid classification_id: %w", err)
+		}
+		group.ClassificationID = &id
 	}
 
 	if err := s.groupRepo.Create(ctx, group); err != nil {
 		return nil, err
 	}
 
-	if len(req.UserIDs) > 0 {
+	// Multi-classification (preferred)
+	classIDs := req.ClassificationIDs
+	if len(classIDs) == 0 && req.ClassificationID != "" {
+		classIDs = []string{req.ClassificationID}
+	}
+	if len(classIDs) > 0 {
+		ids, err := parseUUIDSlice(classIDs)
+		if err != nil {
+			return nil, fmt.Errorf("invalid classification_id: %w", err)
+		}
+		if err := s.groupRepo.SetClassifications(ctx, group.ID, ids); err != nil {
+			return nil, err
+		}
+	}
+
+	if len(req.Targets) > 0 {
+		targets, err := buildGroupTargets(req.Targets)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.groupRepo.SetTargets(ctx, group.ID, targets); err != nil {
+			return nil, err
+		}
+	} else if len(req.UserIDs) > 0 {
+		// legacy path
 		userIDs, err := parseUUIDSlice(req.UserIDs)
 		if err != nil {
 			return nil, fmt.Errorf("invalid user_id in list: %w", err)
@@ -106,7 +141,7 @@ func (s *EscalationGroupService) Update(ctx context.Context, id uuid.UUID, req *
 		if err != nil {
 			return nil, fmt.Errorf("invalid classification_id: %w", err)
 		}
-		group.ClassificationID = classificationID
+		group.ClassificationID = &classificationID
 	}
 	if req.Frequency != nil {
 		group.Frequency = *req.Frequency
@@ -122,8 +157,36 @@ func (s *EscalationGroupService) Update(ctx context.Context, id uuid.UUID, req *
 		return nil, err
 	}
 
-	// Replace user list when explicitly provided (nil slice = no change)
-	if req.UserIDs != nil {
+	// Multi-classification update (non-nil slice = full replacement)
+	if req.ClassificationIDs != nil {
+		ids, err := parseUUIDSlice(req.ClassificationIDs)
+		if err != nil {
+			return nil, fmt.Errorf("invalid classification_id: %w", err)
+		}
+		if err := s.groupRepo.SetClassifications(ctx, group.ID, ids); err != nil {
+			return nil, err
+		}
+	} else if req.ClassificationID != nil {
+		// Legacy single → also update the many2many
+		id, err := uuid.Parse(*req.ClassificationID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid classification_id: %w", err)
+		}
+		if err := s.groupRepo.SetClassifications(ctx, group.ID, []uuid.UUID{id}); err != nil {
+			return nil, err
+		}
+	}
+
+	// Targets take priority over legacy UserIDs; nil slice = no change
+	if req.Targets != nil {
+		targets, err := buildGroupTargets(req.Targets)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.groupRepo.SetTargets(ctx, group.ID, targets); err != nil {
+			return nil, err
+		}
+	} else if req.UserIDs != nil {
 		userIDs, err := parseUUIDSlice(req.UserIDs)
 		if err != nil {
 			return nil, fmt.Errorf("invalid user_id in list: %w", err)
@@ -199,31 +262,73 @@ func (s *EscalationGroupService) ProcessGroupEscalations(ctx context.Context) er
 			continue
 		}
 
-		if len(group.Users) == 0 {
-			log.Printf("[EscalationGroupService] Group Name: '%s' & Frequency: (%s) — no users configured, skipping.", group.Name, group.Frequency)
+		// Resolve recipients: prefer Targets (dept+role), fall back to legacy Users
+		var recipients []models.User
+		if len(group.Targets) > 0 && s.policyService != nil {
+			resolved, err := s.policyService.ResolveGroupTargetUsers(ctx, group.Targets)
+			if err != nil {
+				log.Printf("[EscalationGroupService] ResolveGroupTargetUsers error for group '%s': %v", group.Name, err)
+				continue
+			}
+			recipients = resolved
+		} else {
+			recipients = group.Users
+		}
+
+		if len(recipients) == 0 {
+			log.Printf("[EscalationGroupService] Group Name: '%s' & Frequency: (%s) — no recipients resolved, skipping.", group.Name, group.Frequency)
 			continue
 		}
 
-		// Fetch open SLA-breached incidents for sla this group's classification.
-		// Pass zero UUID for locationID to skip that filter.
-		incidents, err := s.incidentRepo.GetBreachedByFilter(ctx, uuid.UUID{}, group.ClassificationID)
-		if err != nil {
-			log.Printf("[EscalationGroupService] GetBreachedByFilter error for group '%s': %v", group.Name, err)
-			continue
+		// Collect classification IDs to query (prefer many2many list, fall back to legacy single)
+		var classificationIDs []uuid.UUID
+		for _, c := range group.Classifications {
+			classificationIDs = append(classificationIDs, c.ID)
 		}
+		if len(classificationIDs) == 0 && group.ClassificationID != nil {
+			classificationIDs = []uuid.UUID{*group.ClassificationID}
+		}
+
+		// Fetch open SLA-breached incidents for all of the group's classifications.
+		var incidents []models.Incident
+		for _, classID := range classificationIDs {
+			batch, err := s.incidentRepo.GetBreachedByFilter(ctx, uuid.UUID{}, classID)
+			if err != nil {
+				log.Printf("[EscalationGroupService] GetBreachedByFilter error for group '%s', classification %s: %v", group.Name, classID, err)
+				continue
+			}
+			incidents = append(incidents, batch...)
+		}
+		// Deduplicate by incident ID
+		seen := make(map[uuid.UUID]struct{})
+		deduped := incidents[:0]
+		for _, inc := range incidents {
+			if _, ok := seen[inc.ID]; !ok {
+				seen[inc.ID] = struct{}{}
+				deduped = append(deduped, inc)
+			}
+		}
+		incidents = deduped
 
 		if len(incidents) == 0 {
-			log.Printf("[EscalationGroupService] Group '%s' — no breached incidents for classification, skipping.", group.Name)
+			log.Printf("[EscalationGroupService] Group '%s' — no breached incidents for classifications, skipping.", group.Name)
 			continue
 		}
 
+		// Build a combined classification name label for notifications
 		classificationName := ""
-		if group.Classification != nil {
+		if len(group.Classifications) > 0 {
+			names := make([]string, 0, len(group.Classifications))
+			for _, c := range group.Classifications {
+				names = append(names, c.Name)
+			}
+			classificationName = joinStrings(names, ", ")
+		} else if group.Classification != nil {
 			classificationName = group.Classification.Name
 		}
 
-		log.Printf("[EscalationGroupService] Group '%s' — %d breached incident(s), notifying %d user(s) via %s.",
-			group.Name, len(incidents), len(group.Users), group.Channel)
+		log.Printf("[EscalationGroupService] Group '%s' — %d breached incident(s), notifying %d recipient(s) via %s.",
+			group.Name, len(incidents), len(recipients), group.Channel)
 
 		// URL linking to the SLA-breached incidents page on the frontend
 		frontendURL := os.Getenv("FRONTEND_URL")
@@ -233,10 +338,10 @@ func (s *EscalationGroupService) ProcessGroupEscalations(ctx context.Context) er
 		}
 		slaPageURL := fmt.Sprintf("%s/incidents?sla_breached=true", frontendURL)
 
-		// CSV report built once and shared across every user in this group
+		// CSV report built once and shared across every recipient in this group
 		csvData := buildGroupCSVReport(incidents, classificationName)
 
-		for _, user := range group.Users {
+		for _, user := range recipients {
 			s.sendGroupNotification(ctx, group, user, len(incidents), classificationName, slaPageURL, csvData)
 		}
 
@@ -457,6 +562,47 @@ func (s *EscalationGroupService) shouldSendNow(group *models.EscalationGroup) bo
 	}
 
 	return false
+}
+
+// buildGroupTargets converts API target requests to model structs.
+func buildGroupTargets(reqs []models.EscalationGroupTargetRequest) ([]models.EscalationGroupTarget, error) {
+	targets := make([]models.EscalationGroupTarget, 0, len(reqs))
+	for _, r := range reqs {
+		t := models.EscalationGroupTarget{
+			ExcludedUserIDs: r.ExcludedUserIDs,
+		}
+		if t.ExcludedUserIDs == nil {
+			t.ExcludedUserIDs = []string{}
+		}
+		if r.DepartmentID != nil {
+			id, err := uuid.Parse(*r.DepartmentID)
+			if err != nil {
+				return nil, fmt.Errorf("invalid department_id: %w", err)
+			}
+			t.DepartmentID = &id
+		}
+		if r.RoleID != nil {
+			id, err := uuid.Parse(*r.RoleID)
+			if err != nil {
+				return nil, fmt.Errorf("invalid role_id: %w", err)
+			}
+			t.RoleID = &id
+		}
+		targets = append(targets, t)
+	}
+	return targets, nil
+}
+
+// joinStrings joins a slice of strings with a separator.
+func joinStrings(ss []string, sep string) string {
+	result := ""
+	for i, s := range ss {
+		if i > 0 {
+			result += sep
+		}
+		result += s
+	}
+	return result
 }
 
 // parseUUIDSlice parses a slice of UUID strings into []uuid.UUID.

@@ -10,20 +10,51 @@ import (
 )
 
 // typeExistsWhere returns a GORM WHERE condition and args for filtering classifications
-// by the given type value, using an EXISTS subquery to avoid duplicate rows.
+// by the given types slice, using an EXISTS subquery to avoid duplicate rows.
 //
-//   ""  / "all"  → no condition (all classifications)
-//   "both"       → exists with type IN ('incident','request')
-//   other        → exists with type = ?
-func typeExistsWhere(classType string) (condition string, args []interface{}) {
-	switch classType {
-	case "", "all":
+//   nil / empty / ["all"] → no condition (all classifications)
+//   ["both"]              → exists with type IN ('incident','request')
+//   ["incident","mobile"] → exists with type IN ('incident','mobile')
+//   ["incident"]          → exists with type = 'incident'
+func typeExistsWhere(types []string) (condition string, args []interface{}) {
+	if len(types) == 0 {
 		return "", nil
-	case "both":
-		return "EXISTS (SELECT 1 FROM classification_types WHERE classification_id = classifications.id AND type IN ('incident','request'))", nil
-	default:
-		return "EXISTS (SELECT 1 FROM classification_types WHERE classification_id = classifications.id AND type = ?)", []interface{}{classType}
 	}
+	// single magic values
+	if len(types) == 1 {
+		switch types[0] {
+		case "", "all":
+			return "", nil
+		case "both":
+			return "EXISTS (SELECT 1 FROM classification_types WHERE classification_id = classifications.id AND type IN ('incident','request'))", nil
+		}
+	}
+	// collect resolved types, handling magic values in a multi-value list
+	resolved := make([]string, 0, len(types))
+	for _, t := range types {
+		switch t {
+		case "", "all":
+			// "all" anywhere in the list means no filter
+			return "", nil
+		case "both":
+			resolved = append(resolved, "incident", "request")
+		default:
+			resolved = append(resolved, t)
+		}
+	}
+	// deduplicate
+	seen := make(map[string]struct{}, len(resolved))
+	unique := resolved[:0]
+	for _, t := range resolved {
+		if _, ok := seen[t]; !ok {
+			seen[t] = struct{}{}
+			unique = append(unique, t)
+		}
+	}
+	if len(unique) == 1 {
+		return "EXISTS (SELECT 1 FROM classification_types WHERE classification_id = classifications.id AND type = ?)", []interface{}{unique[0]}
+	}
+	return "EXISTS (SELECT 1 FROM classification_types WHERE classification_id = classifications.id AND type IN ?)", []interface{}{unique}
 }
 
 type ClassificationRepository interface {
@@ -33,12 +64,12 @@ type ClassificationRepository interface {
 	Update(ctx context.Context, classification *models.Classification) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context) ([]models.Classification, error)
-	ListByType(ctx context.Context, classType string) ([]models.Classification, error)
+	ListByType(ctx context.Context, types []string) ([]models.Classification, error)
 	GetTree(ctx context.Context) ([]models.Classification, error)
-	GetTreeByType(ctx context.Context, classType string) ([]models.Classification, error)
+	GetTreeByType(ctx context.Context, types []string) ([]models.Classification, error)
 	GetChildren(ctx context.Context, parentID uuid.UUID) ([]models.Classification, error)
 	GetByParentID(ctx context.Context, parentID *uuid.UUID) ([]models.Classification, error)
-	GetTreeWithStats(ctx context.Context, recordType string) ([]models.ClassificationWithStats, error)
+	GetTreeWithStats(ctx context.Context, types []string) ([]models.ClassificationWithStats, error)
 	// Type management
 	SetTypes(ctx context.Context, classificationID uuid.UUID, types []string) error
 	// Classification Criticality methods
@@ -120,14 +151,14 @@ func (r *classificationRepository) List(ctx context.Context) ([]models.Classific
 	return classifications, err
 }
 
-func (r *classificationRepository) ListByType(ctx context.Context, classType string) ([]models.Classification, error) {
+func (r *classificationRepository) ListByType(ctx context.Context, types []string) ([]models.Classification, error) {
 	var classifications []models.Classification
 	query := r.db.WithContext(ctx).
 		Preload("Types").
 		Preload("Criticalities.Criticality").
 		Order("sort_order, name")
 
-	if cond, args := typeExistsWhere(classType); cond != "" {
+	if cond, args := typeExistsWhere(types); cond != "" {
 		query = query.Where(cond, args...)
 	}
 
@@ -158,14 +189,14 @@ func (r *classificationRepository) GetTree(ctx context.Context) ([]models.Classi
 	return roots, err
 }
 
-func (r *classificationRepository) GetTreeByType(ctx context.Context, classType string) ([]models.Classification, error) {
-	// 'all' and empty string mean no type filter — delegate to the unfiltered tree
-	if classType == "" || classType == "all" {
+func (r *classificationRepository) GetTreeByType(ctx context.Context, types []string) ([]models.Classification, error) {
+	cond, args := typeExistsWhere(types)
+	// no filter means return full tree
+	if cond == "" {
 		return r.GetTree(ctx)
 	}
 
 	var roots []models.Classification
-	cond, args := typeExistsWhere(classType)
 	typeFilter := func(db *gorm.DB) *gorm.DB {
 		return db.Where(cond, args...).Order("sort_order, name")
 	}
@@ -209,11 +240,11 @@ func (r *classificationRepository) GetByParentID(ctx context.Context, parentID *
 	return classifications, err
 }
 
-func (r *classificationRepository) GetTreeWithStats(ctx context.Context, recordType string) ([]models.ClassificationWithStats, error) {
+func (r *classificationRepository) GetTreeWithStats(ctx context.Context, types []string) ([]models.ClassificationWithStats, error) {
 	var classifications []models.Classification
 	query := r.db.WithContext(ctx).Preload("Types")
 
-	if cond, args := typeExistsWhere(recordType); cond != "" {
+	if cond, args := typeExistsWhere(types); cond != "" {
 		query = query.Where(cond, args...)
 	}
 
@@ -233,14 +264,25 @@ func (r *classificationRepository) GetTreeWithStats(ctx context.Context, recordT
 		Select("classification_id, COUNT(*) as count").
 		Where("classification_id IS NOT NULL AND deleted_at IS NULL")
 
-	switch recordType {
-	case "", "all":
-		// no record_type filter — count across all types
-	case "both":
-		countQuery = countQuery.Where("record_type IN ('incident','request')")
-	default:
-		countQuery = countQuery.Where("record_type = ?", recordType)
+	// resolve types for counting — reuse same logic as classification filter
+	resolved := make([]string, 0, len(types))
+	for _, t := range types {
+		switch t {
+		case "", "all":
+			resolved = resolved[:0] // no filter
+			goto countDone
+		case "both":
+			resolved = append(resolved, "incident", "request")
+		default:
+			resolved = append(resolved, t)
+		}
 	}
+	if len(resolved) == 1 {
+		countQuery = countQuery.Where("record_type = ?", resolved[0])
+	} else if len(resolved) > 1 {
+		countQuery = countQuery.Where("record_type IN ?", resolved)
+	}
+countDone:
 
 	if err := countQuery.Group("classification_id").Scan(&counts).Error; err != nil {
 		return nil, err

@@ -94,8 +94,13 @@ func Migrate(db *gorm.DB) error {
 		&models.ApplicationLink{},
 		// Settings
 		&models.Settings{},
+		// Escalation Policies
+		&models.EscalationPolicy{},
+		&models.EscalationPolicyStep{},
+		&models.EscalationPolicyStepTarget{},
 		// Custom Escalation Groups
 		&models.EscalationGroup{},
+		&models.EscalationGroupTarget{},
 		// Ready-to-Close expiry tracking
 		&models.IncidentReadyToCloseEntry{},
 		&models.DeviceToken{},

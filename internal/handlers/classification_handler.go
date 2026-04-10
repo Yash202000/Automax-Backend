@@ -27,6 +27,25 @@ func NewClassificationHandler(repo repository.ClassificationRepository) *Classif
 	}
 }
 
+// parseTypeParam splits a comma-separated ?type= query param into a []string.
+// e.g. "incident,mobile,ivr" → ["incident","mobile","ivr"]
+// Empty string → nil (no filter).
+func parseTypeParam(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func (h *ClassificationHandler) Create(c *fiber.Ctx) error {
 	var req models.ClassificationCreateRequestWithCriticalities
 	if err := c.BodyParser(&req); err != nil {
@@ -222,9 +241,9 @@ func (h *ClassificationHandler) List(c *fiber.Ctx) error {
 	var classifications []models.Classification
 	var err error
 
-	classType := c.Query("type")
-	if classType != "" {
-		classifications, err = h.repo.ListByType(c.UserContext(), classType)
+	types := parseTypeParam(c.Query("type"))
+	if len(types) > 0 {
+		classifications, err = h.repo.ListByType(c.UserContext(), types)
 	} else {
 		classifications, err = h.repo.List(c.UserContext())
 	}
@@ -244,9 +263,9 @@ func (h *ClassificationHandler) GetTree(c *fiber.Ctx) error {
 	var tree []models.Classification
 	var err error
 
-	classType := c.Query("type")
-	if classType != "" {
-		tree, err = h.repo.GetTreeByType(c.UserContext(), classType)
+	types := parseTypeParam(c.Query("type"))
+	if len(types) > 0 {
+		tree, err = h.repo.GetTreeByType(c.UserContext(), types)
 	} else {
 		tree, err = h.repo.GetTree(c.UserContext())
 	}
@@ -426,9 +445,9 @@ func (h *ClassificationHandler) Import(c *fiber.Ctx) error {
 
 // GetTreeWithStats returns classification tree with incident counts
 func (h *ClassificationHandler) GetTreeWithStats(c *fiber.Ctx) error {
-	recordType := c.Query("type", "")
+	types := parseTypeParam(c.Query("type"))
 
-	tree, err := h.repo.GetTreeWithStats(c.UserContext(), recordType)
+	tree, err := h.repo.GetTreeWithStats(c.UserContext(), types)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -499,6 +518,13 @@ func (h *ClassificationHandler) CreateCriticality(c *fiber.Ctx) error {
 		MaxClosingMinutes: req.MaxClosingMinutes,
 		IsActive:          true,
 	}
+	if req.EscalationPolicyID != nil && *req.EscalationPolicyID != "" {
+		policyID, err := uuid.Parse(*req.EscalationPolicyID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid escalation_policy_id")
+		}
+		criticality.EscalationPolicyID = &policyID
+	}
 
 	if err := h.repo.CreateCriticality(c.UserContext(), criticality); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create criticality: "+err.Error())
@@ -545,6 +571,17 @@ func (h *ClassificationHandler) UpdateCriticality(c *fiber.Ctx) error {
 	}
 	if req.IsActive != nil {
 		criticality.IsActive = *req.IsActive
+	}
+	if req.EscalationPolicyID != nil {
+		if *req.EscalationPolicyID == "" {
+			criticality.EscalationPolicyID = nil
+		} else {
+			policyID, err := uuid.Parse(*req.EscalationPolicyID)
+			if err != nil {
+				return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid escalation_policy_id")
+			}
+			criticality.EscalationPolicyID = &policyID
+		}
 	}
 
 	if err := h.repo.UpdateCriticality(c.UserContext(), criticality); err != nil {

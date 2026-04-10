@@ -16,14 +16,20 @@ type EscalationGroupRepository interface {
 	FindByID(ctx context.Context, id uuid.UUID) (*models.EscalationGroup, error)
 	List(ctx context.Context) ([]models.EscalationGroup, error)
 
-	// FindAllActive returns all active groups with users and classification preloaded.
+	// FindAllActive returns all active groups with targets, users, and classifications preloaded.
 	FindAllActive(ctx context.Context) ([]models.EscalationGroup, error)
 
 	// UpdateLastNotifiedAt records when a group last dispatched its notification batch.
 	UpdateLastNotifiedAt(ctx context.Context, id uuid.UUID, t time.Time) error
 
-	// SetUsers replaces the entire user association for the given group.
+	// SetUsers replaces the legacy user association for the given group.
 	SetUsers(ctx context.Context, groupID uuid.UUID, userIDs []uuid.UUID) error
+
+	// SetTargets atomically replaces all EscalationGroupTargets for a group.
+	SetTargets(ctx context.Context, groupID uuid.UUID, targets []models.EscalationGroupTarget) error
+
+	// SetClassifications replaces the many2many classifications for a group.
+	SetClassifications(ctx context.Context, groupID uuid.UUID, classificationIDs []uuid.UUID) error
 }
 
 type escalationGroupRepository struct {
@@ -50,6 +56,10 @@ func (r *escalationGroupRepository) FindByID(ctx context.Context, id uuid.UUID) 
 	var group models.EscalationGroup
 	err := r.db.WithContext(ctx).
 		Preload("Classification").
+		Preload("Classifications").
+		Preload("Targets").
+		Preload("Targets.Department").
+		Preload("Targets.Role").
 		Preload("Users").
 		First(&group, "id = ?", id).Error
 	if err != nil {
@@ -62,6 +72,10 @@ func (r *escalationGroupRepository) List(ctx context.Context) ([]models.Escalati
 	var groups []models.EscalationGroup
 	err := r.db.WithContext(ctx).
 		Preload("Classification").
+		Preload("Classifications").
+		Preload("Targets").
+		Preload("Targets.Department").
+		Preload("Targets.Role").
 		Preload("Users").
 		Order("created_at DESC").
 		Find(&groups).Error
@@ -73,9 +87,23 @@ func (r *escalationGroupRepository) FindAllActive(ctx context.Context) ([]models
 	err := r.db.WithContext(ctx).
 		Where("is_active = ?", true).
 		Preload("Classification").
+		Preload("Classifications").
+		Preload("Targets").
+		Preload("Targets.Department").
+		Preload("Targets.Role").
 		Preload("Users").
 		Find(&groups).Error
 	return groups, err
+}
+
+// SetClassifications replaces the many2many classification associations for a group.
+func (r *escalationGroupRepository) SetClassifications(ctx context.Context, groupID uuid.UUID, classificationIDs []uuid.UUID) error {
+	classifications := make([]models.Classification, len(classificationIDs))
+	for i, id := range classificationIDs {
+		classifications[i] = models.Classification{ID: id}
+	}
+	group := models.EscalationGroup{ID: groupID}
+	return r.db.WithContext(ctx).Model(&group).Association("Classifications").Replace(classifications)
 }
 
 func (r *escalationGroupRepository) UpdateLastNotifiedAt(ctx context.Context, id uuid.UUID, t time.Time) error {
@@ -92,4 +120,20 @@ func (r *escalationGroupRepository) SetUsers(ctx context.Context, groupID uuid.U
 	}
 	group := models.EscalationGroup{ID: groupID}
 	return r.db.WithContext(ctx).Model(&group).Association("Users").Replace(users)
+}
+
+// SetTargets atomically replaces all targets for a group.
+func (r *escalationGroupRepository) SetTargets(ctx context.Context, groupID uuid.UUID, targets []models.EscalationGroupTarget) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("escalation_group_id = ?", groupID).Delete(&models.EscalationGroupTarget{}).Error; err != nil {
+			return err
+		}
+		for i := range targets {
+			targets[i].EscalationGroupID = groupID
+			if err := tx.Create(&targets[i]).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }

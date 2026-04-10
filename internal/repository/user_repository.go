@@ -41,6 +41,9 @@ type UserRepository interface {
 	FindByPhoneWithRelations(ctx context.Context, phone string) (*models.User, error)
 	FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.User, error)
 	FindByRoleAndContext(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID *uuid.UUID) ([]models.User, error)
+	// FindByDepartmentAndRole returns active users belonging to departmentID AND holding roleID.
+	// Either filter can be nil to skip it.
+	FindByDepartmentAndRole(ctx context.Context, departmentID, roleID *uuid.UUID) ([]models.User, error)
 	UpdateProfile(ctx context.Context, user map[string]interface{}) error
 	FindByPermissionCode(ctx context.Context, permissionCode string) ([]models.User, error)
 }
@@ -568,6 +571,36 @@ func (r *userRepository) FindByPermissionCode(ctx context.Context, permissionCod
 	}
 	var users []models.User
 	err = r.db.WithContext(ctx).Where("id IN ?", userIDs).Find(&users).Error
+	return users, err
+}
+
+// FindByDepartmentAndRole returns active users that belong to departmentID AND hold roleID.
+// Either parameter can be nil to skip that filter.
+func (r *userRepository) FindByDepartmentAndRole(ctx context.Context, departmentID, roleID *uuid.UUID) ([]models.User, error) {
+	query := r.db.WithContext(ctx).
+		Model(&models.User{}).
+		Where("users.is_active = ?", true)
+
+	if departmentID != nil {
+		query = query.
+			Joins("JOIN user_departments ON user_departments.user_id = users.id").
+			Where("user_departments.department_id = ?", *departmentID)
+	}
+	if roleID != nil {
+		query = query.
+			Joins("JOIN user_roles ON user_roles.user_id = users.id").
+			Where("user_roles.role_id = ?", *roleID)
+	}
+
+	var userIDs []uuid.UUID
+	if err := query.Group("users.id").Pluck("users.id", &userIDs).Error; err != nil {
+		return nil, err
+	}
+	if len(userIDs) == 0 {
+		return []models.User{}, nil
+	}
+	var users []models.User
+	err := r.db.WithContext(ctx).Where("id IN ?", userIDs).Find(&users).Error
 	return users, err
 }
 

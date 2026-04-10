@@ -14,28 +14,36 @@ import (
 // EscalationService handles SLA breach detection and notification dispatch.
 type EscalationService struct {
 	repo                repository.EscalationRepository
+	policyRepo          repository.EscalationPolicyRepository
 	incidentRepo        repository.IncidentRepository
 	workflowRepo        repository.WorkflowRepository
 	userRepo            repository.UserRepository
+	policyService       *EscalationPolicyService
 	notificationService *NotificationService
 	frontendURL         string
 }
 
 func NewEscalationService(
 	repo repository.EscalationRepository,
+	policyRepo repository.EscalationPolicyRepository,
 	incidentRepo repository.IncidentRepository,
 	workflowRepo repository.WorkflowRepository,
 	userRepo repository.UserRepository,
 	notificationService *NotificationService,
-
 ) *EscalationService {
 	return &EscalationService{
 		repo:                repo,
+		policyRepo:          policyRepo,
 		incidentRepo:        incidentRepo,
 		workflowRepo:        workflowRepo,
 		userRepo:            userRepo,
 		notificationService: notificationService,
 	}
+}
+
+// SetPolicyService injects the shared EscalationPolicyService for user resolution.
+func (s *EscalationService) SetPolicyService(ps *EscalationPolicyService) {
+	s.policyService = ps
 }
 
 // GetBreachLogs returns all SLA breach notification records.
@@ -82,7 +90,13 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 		log.Printf("[EscalationService] Incident %s has been in state '%s' for %.2fh (SLA: %dh)",
 			incident.IncidentNumber, state.Name, hoursInState, *state.SLAHours)
 
-		// -Get all active outgoing transitions from the current state ---
+		// ── Policy-driven path ──────────────────────────────────────────────
+		if state.EscalationPolicyID != nil && s.policyService != nil {
+			s.processPolicySteps(ctx, incident, state, hoursInState)
+			continue
+		}
+
+		// ── Legacy path: notify users allowed on outgoing transitions ───────
 		transitions, err := s.workflowRepo.ListTransitionsFromState(ctx, state.ID)
 		if err != nil {
 			log.Printf("[EscalationService] Failed to list transitions from state '%s': %v", state.Name, err)
@@ -95,9 +109,7 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 		}
 		log.Printf("[EscalationService] Found %d outgoing transition(s) from state '%s'", len(transitions), state.Name)
 
-		// -Collect unique users responsible for those transitions ---
-
-		notifiedUsers := make(map[uuid.UUID]bool) // prevent double-sending to the same user
+		notifiedUsers := make(map[uuid.UUID]bool)
 
 		for _, transition := range transitions {
 			if len(transition.AllowedRoles) == 0 {
@@ -105,68 +117,49 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 				continue
 			}
 
-			// Gather role IDs for this transition
 			roleIDs := make([]uuid.UUID, 0, len(transition.AllowedRoles))
 			for _, role := range transition.AllowedRoles {
 				roleIDs = append(roleIDs, role.ID)
 			}
 
-			// Find users with those roles.
-
 			users, err := s.userRepo.FindByRoleAndContext(
-				ctx,
-				roleIDs,
-				incident.ClassificationID,
-				incident.LocationID,
-				incident.DepartmentID,
+				ctx, roleIDs,
+				incident.ClassificationID, incident.LocationID, incident.DepartmentID,
 			)
 			if err != nil {
 				log.Printf("[EscalationService] FindByRoleAndContext error for transition '%s': %v", transition.Name, err)
 				continue
 			}
-
 			if len(users) == 0 {
-				// Fallback: match by role only (no classification/location/department filter)
 				users, err = s.userRepo.FindByRoleAndContext(ctx, roleIDs, nil, nil, nil)
 				if err != nil {
 					log.Printf("[EscalationService] FindByRoleAndContext (role-only) error for transition '%s': %v", transition.Name, err)
 					continue
 				}
-				log.Printf("[EscalationService] Transition '%s': context match empty, role-only fallback found %d user(s)", transition.Name, len(users))
-			} else {
-				log.Printf("[EscalationService] Transition '%s': found %d user(s) with allowed roles (context match)", transition.Name, len(users))
+				log.Printf("[EscalationService] Transition '%s': role-only fallback found %d user(s)", transition.Name, len(users))
 			}
-
 			if len(users) == 0 {
-				log.Printf("[EscalationService] Transition '%s': no users found even with role-only fallback", transition.Name)
 				continue
 			}
 
 			transitionID := transition.ID
-
 			for _, user := range users {
 				if notifiedUsers[user.ID] {
-					continue // already processed this user in a previous transition loop
+					continue
 				}
-
-				// Deduplication: skip if we already have a record for this incident+state+user
 				alreadyNotified, err := s.repo.HasBeenNotified(ctx, incident.ID, state.ID, user.ID)
 				if err != nil {
 					log.Printf("[EscalationService] HasBeenNotified check failed for user %s: %v", user.Email, err)
 					continue
 				}
 				if alreadyNotified {
-					log.Printf("[EscalationService] Already notified user %s for incident %s / state '%s' — skipping",
-						user.Email, incident.IncidentNumber, state.Name)
 					notifiedUsers[user.ID] = true
 					continue
 				}
 
-				// Send notifications (best-effort; failure does NOT prevent DB log) ---
 				sentChannels := s.sendNotifications(ctx, incident, state, transition.Name, user, hoursInState)
-				actions := sentChannels
-				if actions == nil {
-					actions = []string{}
+				if sentChannels == nil {
+					sentChannels = []string{}
 				}
 
 				now := time.Now()
@@ -177,25 +170,173 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 					NotifiedUserID:  &user.ID,
 					Email:           user.Email,
 					Phone:           user.Phone,
-					Actions:         actions,
+					Actions:         sentChannels,
 					SLAHoursAllowed: *state.SLAHours,
 					HoursInState:    hoursInState,
+					EscalationType:  "state_sla",
 					NotifiedAt:      &now,
 				}
 				if err := s.repo.Create(ctx, breach); err != nil {
 					log.Printf("[EscalationService] Failed to persist breach log for user %s / incident %s: %v",
 						user.Email, incident.IncidentNumber, err)
 				} else {
-					log.Printf("[EscalationService] Breach log stored — incident %s, state '%s', user %s, channels %v, id %s",
-						incident.IncidentNumber, state.Name, user.Email, sentChannels, breach.ID)
+					log.Printf("[EscalationService] Breach log stored — incident %s, state '%s', user %s, channels %v",
+						incident.IncidentNumber, state.Name, user.Email, sentChannels)
 				}
-
 				notifiedUsers[user.ID] = true
 			}
 		}
 	}
 
 	return nil
+}
+
+// processPolicySteps fires the escalation policy steps for a state-SLA breach.
+// Steps with DelayHours <= hoursInBreach that have not yet fired are executed.
+func (s *EscalationService) processPolicySteps(
+	ctx context.Context,
+	incident models.Incident,
+	state *models.WorkflowState,
+	hoursInState float64,
+) {
+	policy, err := s.policyRepo.FindByID(ctx, *state.EscalationPolicyID)
+	if err != nil {
+		log.Printf("[EscalationService] Policy %s not found for state '%s': %v", state.EscalationPolicyID, state.Name, err)
+		return
+	}
+	if !policy.IsActive {
+		return
+	}
+
+	slaHours := 0
+	if state.SLAHours != nil {
+		slaHours = *state.SLAHours
+	}
+	hoursInBreach := hoursInState - float64(slaHours)
+
+	for _, step := range policy.Steps {
+		// Not yet time for this step
+		if float64(step.DelayHours) > hoursInBreach {
+			continue
+		}
+
+		// Deduplication: already fired for this incident+state+step
+		fired, err := s.policyRepo.HasStepBeenFired(ctx, incident.ID, state.ID, step.ID)
+		if err != nil {
+			log.Printf("[EscalationService] HasStepBeenFired error step %s: %v", step.ID, err)
+			continue
+		}
+		if fired {
+			continue
+		}
+
+		// Resolve recipients
+		users, err := s.policyService.ResolveStepTargetUsers(ctx, step.Targets)
+		if err != nil {
+			log.Printf("[EscalationService] ResolveStepTargetUsers error step %s: %v", step.ID, err)
+			continue
+		}
+		if len(users) == 0 {
+			log.Printf("[EscalationService] Policy step %d of '%s': no recipients resolved — skipping", step.StepOrder, policy.Name)
+			continue
+		}
+
+		log.Printf("[EscalationService] Firing policy '%s' step %d for incident %s (breach +%.1fh)",
+			policy.Name, step.StepOrder, incident.IncidentNumber, hoursInBreach)
+
+		for _, user := range users {
+			sentChannels := s.sendPolicyNotification(ctx, incident, state, policy.Name, step, user, hoursInState)
+			if sentChannels == nil {
+				sentChannels = []string{}
+			}
+
+			now := time.Now()
+			stepID := step.ID
+			breach := &models.EscalationSLA{
+				IncidentID:             &incident.ID,
+				StateID:                &state.ID,
+				NotifiedUserID:         &user.ID,
+				Email:                  user.Email,
+				Phone:                  user.Phone,
+				Actions:                sentChannels,
+				SLAHoursAllowed:        slaHours,
+				HoursInState:           hoursInState,
+				EscalationPolicyID:     &policy.ID,
+				EscalationPolicyStepID: &stepID,
+				EscalationType:         "state_sla",
+				NotifiedAt:             &now,
+			}
+			if err := s.repo.Create(ctx, breach); err != nil {
+				log.Printf("[EscalationService] Failed to store policy breach log: %v", err)
+			}
+		}
+	}
+}
+
+// sendPolicyNotification dispatches email/SMS for a policy step breach.
+func (s *EscalationService) sendPolicyNotification(
+	ctx context.Context,
+	incident models.Incident,
+	state *models.WorkflowState,
+	policyName string,
+	step models.EscalationPolicyStep,
+	user models.User,
+	hoursInState float64,
+) []string {
+	sent := make([]string, 0)
+	slaHours := 0
+	if state.SLAHours != nil {
+		slaHours = *state.SLAHours
+	}
+
+	incidentURL := fmt.Sprintf("%s/incidents/%s", s.frontendURL, incident.ID)
+
+	subject := fmt.Sprintf("SLA Alert [Step %d]: Incident %s exceeded SLA in state '%s'",
+		step.StepOrder, incident.IncidentNumber, state.Name)
+
+	emailBody := fmt.Sprintf(
+		"Dear %s %s,\n\n"+
+			"Escalation policy \"%s\" (step %d) has triggered for the following incident.\n\n"+
+			"Incident %s - \"%s\" has been in state \"%s\" for %.1f hours "+
+			"(SLA limit: %d hours, breach +%.1fh).\n\n"+
+			"View Incident: %s\n\nPlease take immediate action.",
+		user.FirstName, user.LastName,
+		policyName, step.StepOrder,
+		incident.IncidentNumber, incident.Title, state.Name,
+		hoursInState, slaHours, hoursInState-float64(slaHours),
+		incidentURL,
+	)
+
+	smsBody := fmt.Sprintf(
+		"SLA ALERT [Step %d] — %s: Incident %s in '%s' for %.1fh (limit %dh). View: %s",
+		step.StepOrder, policyName,
+		incident.IncidentNumber, state.Name, hoursInState, slaHours, incidentURL,
+	)
+
+	sendEmail := step.Channel == "email" || step.Channel == "both"
+	sendSMS := step.Channel == "sms" || step.Channel == "both"
+
+	if sendEmail && user.Email != "" {
+		if _, err := s.notificationService.SendNotification(ctx, "email", nil, "en",
+			[]string{user.Email}, nil, nil, subject, emailBody, nil, nil, nil, nil,
+		); err != nil {
+			log.Printf("[EscalationService] Policy EMAIL failed for %s: %v", user.Email, err)
+		} else {
+			sent = append(sent, "EMAIL")
+		}
+	}
+
+	if sendSMS && user.Phone != "" {
+		if _, err := s.notificationService.SendNotification(ctx, "sms", nil, "en",
+			[]string{user.Phone}, nil, nil, "", smsBody, nil, nil, nil, nil,
+		); err != nil {
+			log.Printf("[EscalationService] Policy SMS failed for %s: %v", user.Phone, err)
+		} else {
+			sent = append(sent, "SMS")
+		}
+	}
+
+	return sent
 }
 
 // sendNotifications dispatches EMAIL and SMS for one SLA breach and returns the list of

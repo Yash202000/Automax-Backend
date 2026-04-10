@@ -76,6 +76,10 @@ type WorkflowState struct {
 	// SLA Configuration (hours allowed in this state)
 	SLAHours *int `gorm:"default:null" json:"sla_hours"`
 
+	// EscalationPolicyID links the escalation policy to fire when this state's SLA is breached.
+	EscalationPolicyID *uuid.UUID          `gorm:"type:uuid;index" json:"escalation_policy_id,omitempty"`
+	EscalationPolicy   *EscalationPolicy   `gorm:"foreignKey:EscalationPolicyID" json:"escalation_policy,omitempty"`
+
 	// Merge Configuration - whether incidents in this state can be merged
 	IsMergable bool `gorm:"default:false" json:"is_mergable"`
 
@@ -277,38 +281,40 @@ type WorkflowUpdateRequest struct {
 }
 
 type WorkflowStateCreateRequest struct {
-	Name            string   `json:"name" validate:"required,min=2,max=100"`
-	Code            string   `json:"code" validate:"required,min=2,max=50"`
-	Description     string   `json:"description" validate:"max=500"`
-	StateType       string   `json:"state_type" validate:"omitempty,oneof=initial normal terminal"`
-	Color           string   `json:"color" validate:"omitempty,max=20"`
-	PositionX       int      `json:"position_x"`
-	PositionY       int      `json:"position_y"`
-	SLAHours        *int     `json:"sla_hours"`
-	IsMergable      bool     `json:"is_mergable"`
-	IsReadyToClose  bool     `json:"is_ready_to_close"`
-	DurationOptions []string `json:"duration_options"`
-	SortOrder       int      `json:"sort_order"`
-	ViewableRoleIDs []string `json:"viewable_role_ids"`
-	EditableRoleIDs []string `json:"editable_role_ids"`
+	Name                 string  `json:"name" validate:"required,min=2,max=100"`
+	Code                 string  `json:"code" validate:"required,min=2,max=50"`
+	Description          string  `json:"description" validate:"max=500"`
+	StateType            string  `json:"state_type" validate:"omitempty,oneof=initial normal terminal"`
+	Color                string  `json:"color" validate:"omitempty,max=20"`
+	PositionX            int     `json:"position_x"`
+	PositionY            int     `json:"position_y"`
+	SLAHours             *int    `json:"sla_hours"`
+	EscalationPolicyID   *string `json:"escalation_policy_id" validate:"omitempty,uuid"`
+	IsMergable           bool    `json:"is_mergable"`
+	IsReadyToClose       bool    `json:"is_ready_to_close"`
+	DurationOptions      []string `json:"duration_options"`
+	SortOrder            int     `json:"sort_order"`
+	ViewableRoleIDs      []string `json:"viewable_role_ids"`
+	EditableRoleIDs      []string `json:"editable_role_ids"`
 }
 
 type WorkflowStateUpdateRequest struct {
-	Name            string   `json:"name" validate:"omitempty,min=2,max=100"`
-	Code            string   `json:"code" validate:"omitempty,min=2,max=50"`
-	Description     string   `json:"description" validate:"max=500"`
-	StateType       string   `json:"state_type" validate:"omitempty,oneof=initial normal terminal"`
-	Color           string   `json:"color" validate:"omitempty,max=20"`
-	PositionX       *int     `json:"position_x"`
-	PositionY       *int     `json:"position_y"`
-	SLAHours        *int     `json:"sla_hours"`
-	IsMergable      *bool    `json:"is_mergable"`
-	IsReadyToClose  *bool    `json:"is_ready_to_close"`
-	DurationOptions []string `json:"duration_options"`
-	SortOrder       *int     `json:"sort_order"`
-	IsActive        *bool    `json:"is_active"`
-	ViewableRoleIDs []string `json:"viewable_role_ids"`
-	EditableRoleIDs []string `json:"editable_role_ids"`
+	Name                 string  `json:"name" validate:"omitempty,min=2,max=100"`
+	Code                 string  `json:"code" validate:"omitempty,min=2,max=50"`
+	Description          string  `json:"description" validate:"max=500"`
+	StateType            string  `json:"state_type" validate:"omitempty,oneof=initial normal terminal"`
+	Color                string  `json:"color" validate:"omitempty,max=20"`
+	PositionX            *int    `json:"position_x"`
+	PositionY            *int    `json:"position_y"`
+	SLAHours             *int    `json:"sla_hours"`
+	EscalationPolicyID   *string `json:"escalation_policy_id" validate:"omitempty,uuid"`
+	IsMergable           *bool   `json:"is_mergable"`
+	IsReadyToClose       *bool   `json:"is_ready_to_close"`
+	DurationOptions      []string `json:"duration_options"`
+	SortOrder            *int    `json:"sort_order"`
+	IsActive             *bool   `json:"is_active"`
+	ViewableRoleIDs      []string `json:"viewable_role_ids"`
+	EditableRoleIDs      []string `json:"editable_role_ids"`
 }
 
 type WorkflowTransitionCreateRequest struct {
@@ -440,24 +446,26 @@ type WorkflowResponse struct {
 }
 
 type WorkflowStateResponse struct {
-	ID              uuid.UUID      `json:"id"`
-	WorkflowID      uuid.UUID      `json:"workflow_id"`
-	Name            string         `json:"name"`
-	Code            string         `json:"code"`
-	Description     string         `json:"description"`
-	StateType       string         `json:"state_type"`
-	Color           string         `json:"color"`
-	PositionX       int            `json:"position_x"`
-	PositionY       int            `json:"position_y"`
-	SLAHours        *int           `json:"sla_hours"`
-	IsMergable      bool           `json:"is_mergable"`
-	IsReadyToClose  bool           `json:"is_ready_to_close"`
-	DurationOptions []string       `json:"duration_options,omitempty"`
-	SortOrder       int            `json:"sort_order"`
-	IsActive        bool           `json:"is_active"`
-	ViewableRoles   []RoleResponse `json:"viewable_roles,omitempty"`
-	EditableRoles   []RoleResponse `json:"editable_roles,omitempty"`
-	CreatedAt       time.Time      `json:"created_at"`
+	ID                   uuid.UUID                  `json:"id"`
+	WorkflowID           uuid.UUID                  `json:"workflow_id"`
+	Name                 string                     `json:"name"`
+	Code                 string                     `json:"code"`
+	Description          string                     `json:"description"`
+	StateType            string                     `json:"state_type"`
+	Color                string                     `json:"color"`
+	PositionX            int                        `json:"position_x"`
+	PositionY            int                        `json:"position_y"`
+	SLAHours             *int                       `json:"sla_hours"`
+	EscalationPolicyID   *uuid.UUID                 `json:"escalation_policy_id,omitempty"`
+	EscalationPolicy     *EscalationPolicyResponse  `json:"escalation_policy,omitempty"`
+	IsMergable           bool                       `json:"is_mergable"`
+	IsReadyToClose       bool                       `json:"is_ready_to_close"`
+	DurationOptions      []string                   `json:"duration_options,omitempty"`
+	SortOrder            int                        `json:"sort_order"`
+	IsActive             bool                       `json:"is_active"`
+	ViewableRoles        []RoleResponse             `json:"viewable_roles,omitempty"`
+	EditableRoles        []RoleResponse             `json:"editable_roles,omitempty"`
+	CreatedAt            time.Time                  `json:"created_at"`
 }
 
 type WorkflowTransitionResponse struct {
@@ -626,21 +634,26 @@ func ToWorkflowResponse(w *Workflow) WorkflowResponse {
 
 func ToWorkflowStateResponse(s *WorkflowState) WorkflowStateResponse {
 	resp := WorkflowStateResponse{
-		ID:             s.ID,
-		WorkflowID:     s.WorkflowID,
-		Name:           s.Name,
-		Code:           s.Code,
-		Description:    s.Description,
-		StateType:      s.StateType,
-		Color:          s.Color,
-		PositionX:      s.PositionX,
-		PositionY:      s.PositionY,
-		SLAHours:       s.SLAHours,
-		IsMergable:     s.IsMergable,
-		IsReadyToClose: s.IsReadyToClose,
-		SortOrder:      s.SortOrder,
-		IsActive:       s.IsActive,
-		CreatedAt:      s.CreatedAt,
+		ID:                 s.ID,
+		WorkflowID:         s.WorkflowID,
+		Name:               s.Name,
+		Code:               s.Code,
+		Description:        s.Description,
+		StateType:          s.StateType,
+		Color:              s.Color,
+		PositionX:          s.PositionX,
+		PositionY:          s.PositionY,
+		SLAHours:           s.SLAHours,
+		EscalationPolicyID: s.EscalationPolicyID,
+		IsMergable:         s.IsMergable,
+		IsReadyToClose:     s.IsReadyToClose,
+		SortOrder:          s.SortOrder,
+		IsActive:           s.IsActive,
+		CreatedAt:          s.CreatedAt,
+	}
+	if s.EscalationPolicy != nil {
+		r := ToEscalationPolicyResponse(s.EscalationPolicy)
+		resp.EscalationPolicy = &r
 	}
 
 	// Parse DurationOptions from JSON string
