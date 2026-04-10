@@ -391,6 +391,42 @@ func (s *NotificationService) GetNotificationStats(ctx context.Context, channel 
 	}, nil
 }
 
+// GetNotificationStatsByUser returns merged sent+received counts for a single user.
+func (s *NotificationService) GetNotificationStatsByUser(ctx context.Context, channel string, userID uuid.UUID) (*models.NotificationStatsResponse, error) {
+	sentByRows, err := s.logRepo.GetStatsBySentBy(ctx, channel, &userID, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	receivedByRows, err := s.logRepo.GetStatsByReceivedBy(ctx, channel, nil, &userID)
+	if err != nil {
+		return nil, err
+	}
+
+	var counts models.NotificationUserCounts
+	// Sent side: user is the sender — owns sent status, failed status, draft/outbox/trash categories
+	for _, r := range sentByRows {
+		counts.Total += r.Total
+		counts.Sent += r.Sent
+		counts.Failed += r.Failed
+		counts.Draft += r.Draft
+		counts.Outbox += r.Outbox
+		counts.Trash += r.Trash
+	}
+	// Received side: user is the receiver — owns inbox, spam, trash categories
+	for _, r := range receivedByRows {
+		counts.Total += r.Total
+		counts.Inbox += r.Inbox
+		counts.Spam += r.Spam
+		counts.Trash += r.Trash
+	}
+
+	return &models.NotificationStatsResponse{
+		Channel: channel,
+		Counts:  counts,
+	}, nil
+}
+
 // ListNotifications retrieves notifications with filtering and search
 func (s *NotificationService) ListNotifications(ctx context.Context, filter *models.NotificationLogFilter) ([]models.NotificationLogResponse, int64, error) {
 	logs, total, err := s.logRepo.List(ctx, filter)

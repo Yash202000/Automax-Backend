@@ -356,29 +356,20 @@ func (h *NotificationHandler) Send(c *fiber.Ctx) error {
 	})
 }
 
-// GetStats handles GET /api/v1/notifications/stats?channel=<channel>
+// GetStats handles GET /api/v1/notifications/stats?user_id=<uuid>&channel=<channel>
 func (h *NotificationHandler) GetStats(c *fiber.Ctx) error {
+	v := strings.TrimSpace(c.Query("user_id"))
+	if v == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "user_id is required")
+	}
+	userID, err := uuid.Parse(v)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid user_id UUID")
+	}
+
 	channel := strings.TrimSpace(c.Query("channel"))
 
-	var sentBy *uuid.UUID
-	if v := strings.TrimSpace(c.Query("sent_by")); v != "" {
-		id, err := uuid.Parse(v)
-		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid sent_by UUID")
-		}
-		sentBy = &id
-	}
-
-	var receivedBy *uuid.UUID
-	if v := strings.TrimSpace(c.Query("received_by")); v != "" {
-		id, err := uuid.Parse(v)
-		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid received_by UUID")
-		}
-		receivedBy = &id
-	}
-
-	stats, err := h.service.GetNotificationStats(c.Context(), channel, sentBy, receivedBy)
+	stats, err := h.service.GetNotificationStatsByUser(c.Context(), channel, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch notification stats")
 	}

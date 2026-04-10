@@ -443,3 +443,9 @@ type NotificationStatsData struct {
 	Channel string                       `json:"channel"`
 	Users   []NotificationUserStatsEntry `json:"users"`
 }
+
+// NotificationStatsResponse is the flat single-user stats response body.
+type NotificationStatsResponse struct {
+	Channel string                 `json:"channel"`
+	Counts  NotificationUserCounts `json:"counts"`
+}
