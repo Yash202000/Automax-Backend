@@ -2737,9 +2737,9 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			}
 		}
 	}
-
-	// Send FCM push notification to assigned employee(s) on transition
-	if s.fcmService != nil && len(assigneeUserIDs) > 0 {
+	// Send FCM push notification to next assignee(s) only on the "approve" transition
+	if s.fcmService != nil && transition.Code == "approve" && len(assigneeUserIDs) > 0 {
+		log.Printf("FCM-ASSIGN: assignee user %s:, transition_code: %s", assigneeUserIDs, transition.Code)
 		bgCtx := context.Background()
 		capturedID := incidentID
 		capturedNumber := incident.IncidentNumber
