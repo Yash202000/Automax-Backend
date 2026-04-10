@@ -1246,6 +1246,18 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		description = fmt.Sprintf("Incident %s converted and linked to this request", sourceIncidentNumber)
 		_ = s.CreateRevision(ctx, existingRequest.ID, models.RevisionActionFieldChange, description, changes, userID)
 
+		// Create comment on existing request with feedback
+		if req.Feedback != nil && req.Feedback.Comment != "" {
+			feedbackComment := &models.IncidentComment{
+				IncidentID: existingRequest.ID,
+				Content:    req.Feedback.Comment,
+				AuthorID:   userID,
+			}
+			if err := s.incidentRepo.CreateComment(ctx, feedbackComment); err != nil {
+				fmt.Printf("Warning: failed to create feedback comment on existing request: %v\n", err)
+			}
+		}
+
 		// Build response
 		originalResp := models.ToIncidentResponse(sourceIncident)
 		existingResp := models.ToIncidentResponse(existingRequest)
@@ -1493,6 +1505,18 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 	}
 	description = fmt.Sprintf("Request created from incident %s", sourceIncidentNumber)
 	_ = s.CreateRevision(ctx, newRequest.ID, models.RevisionActionCreated, description, changes, userID)
+
+	// Create comment on new request with feedback
+	if req.Feedback != nil && req.Feedback.Comment != "" {
+		feedbackComment := &models.IncidentComment{
+			IncidentID: newRequest.ID,
+			Content:    req.Feedback.Comment,
+			AuthorID:   userID,
+		}
+		if err := s.incidentRepo.CreateComment(ctx, feedbackComment); err != nil {
+			fmt.Printf("Warning: failed to create feedback comment on new request: %v\n", err)
+		}
+	}
 
 	// Build response
 	originalResp := models.ToIncidentResponse(sourceIncident)
@@ -3040,6 +3064,31 @@ func (s *incidentService) ListComments(ctx context.Context, incidentID uuid.UUID
 				sig := fmt.Sprintf("%s|%s", mc.Content, mc.AuthorID)
 				if !childCommentSignatures[sig] {
 					comments = append(comments, mc)
+				}
+			}
+			// Sort by created_at DESC
+			sort.Slice(comments, func(i, j int) bool {
+				return comments[i].CreatedAt.After(comments[j].CreatedAt)
+			})
+		}
+	}
+
+	// If this is a request with a source incident, also show comments from the source incident
+	if incident.SourceIncidentID != nil {
+		sourceComments, err := s.incidentRepo.ListComments(ctx, *incident.SourceIncidentID)
+		if err == nil && len(sourceComments) > 0 {
+			// Build signature set for existing comments to avoid duplicates
+			existingSignatures := make(map[string]bool)
+			for _, c := range comments {
+				sig := fmt.Sprintf("%s|%s", c.Content, c.AuthorID)
+				existingSignatures[sig] = true
+			}
+
+			// Only add source incident comments that don't already exist
+			for _, sc := range sourceComments {
+				sig := fmt.Sprintf("%s|%s", sc.Content, sc.AuthorID)
+				if !existingSignatures[sig] {
+					comments = append(comments, sc)
 				}
 			}
 			// Sort by created_at DESC
