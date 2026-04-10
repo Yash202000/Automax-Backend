@@ -17,6 +17,8 @@ type NotificationLogRepository interface {
 	FindByAttachmentID(ctx context.Context, attachmentID string) ([]*models.NotificationLog, error)
 	List(ctx context.Context, filter *models.NotificationLogFilter) ([]models.NotificationLog, int64, error)
 	GetStats(ctx context.Context, channel string, sentBy *uuid.UUID, receivedBy *uuid.UUID) ([]models.NotificationChannelStat, error)
+	GetStatsBySentBy(ctx context.Context, channel string, sentBy *uuid.UUID, receivedBy *uuid.UUID) ([]models.NotificationUserStatRow, error)
+	GetStatsByReceivedBy(ctx context.Context, channel string, sentBy *uuid.UUID, receivedBy *uuid.UUID) ([]models.NotificationUserStatRow, error)
 	Update(ctx context.Context, log *models.NotificationLog) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	MarkAsRead(ctx context.Context, id uuid.UUID, isRead bool) error
@@ -291,4 +293,67 @@ func (r *notificationLogRepository) GetStats(ctx context.Context, channel string
 		result = append(result, *s)
 	}
 	return result, nil
+}
+
+func (r *notificationLogRepository) GetStatsBySentBy(ctx context.Context, channel string, sentBy *uuid.UUID, receivedBy *uuid.UUID) ([]models.NotificationUserStatRow, error) {
+	query := r.db.WithContext(ctx).
+		Model(&models.NotificationLog{}).
+		Select("sent_by AS user_id, COUNT(*) AS total, " +
+			"SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) AS sent, " +
+			"SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed, " +
+			"SUM(CASE WHEN category = 'draft' THEN 1 ELSE 0 END) AS draft, " +
+			"SUM(CASE WHEN category = 'trash' THEN 1 ELSE 0 END) AS trash, " +
+			"SUM(CASE WHEN category = 'inbox' THEN 1 ELSE 0 END) AS inbox, " +
+			"SUM(CASE WHEN category = 'outbox' THEN 1 ELSE 0 END) AS outbox, " +
+			"SUM(CASE WHEN category = 'spam' THEN 1 ELSE 0 END) AS spam").
+		Where("sent_by IS NOT NULL").
+		Where("category = 'sent'").
+		Group("sent_by")
+
+	if channel != "" {
+		query = query.Where("channel = ?", channel)
+	}
+	if sentBy != nil {
+		query = query.Where("sent_by = ?", *sentBy)
+	}
+	if receivedBy != nil {
+		query = query.Where("received_by = ?", *receivedBy)
+	}
+
+	var rows []models.NotificationUserStatRow
+	if err := query.Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func (r *notificationLogRepository) GetStatsByReceivedBy(ctx context.Context, channel string, sentBy *uuid.UUID, receivedBy *uuid.UUID) ([]models.NotificationUserStatRow, error) {
+	query := r.db.WithContext(ctx).
+		Model(&models.NotificationLog{}).
+		Select("received_by AS user_id, COUNT(*) AS total, " +
+			"SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) AS sent, " +
+			"SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed, " +
+			"SUM(CASE WHEN category = 'draft' THEN 1 ELSE 0 END) AS draft, " +
+			"SUM(CASE WHEN category = 'trash' THEN 1 ELSE 0 END) AS trash, " +
+			"SUM(CASE WHEN category = 'inbox' THEN 1 ELSE 0 END) AS inbox, " +
+			"SUM(CASE WHEN category = 'outbox' THEN 1 ELSE 0 END) AS outbox, " +
+			"SUM(CASE WHEN category = 'spam' THEN 1 ELSE 0 END) AS spam").
+		Where("received_by IS NOT NULL").
+		Group("received_by")
+
+	if channel != "" {
+		query = query.Where("channel = ?", channel)
+	}
+	if sentBy != nil {
+		query = query.Where("sent_by = ?", *sentBy)
+	}
+	if receivedBy != nil {
+		query = query.Where("received_by = ?", *receivedBy)
+	}
+
+	var rows []models.NotificationUserStatRow
+	if err := query.Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
