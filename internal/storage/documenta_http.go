@@ -88,11 +88,9 @@ func (c *httpDocumentaClient) getToken(ctx context.Context) (string, error) {
 	return c.fetchNewToken(ctx)
 }
 
-// extractWorkspaceUUID decodes the JWT payload to get workspace_uuid (idempotent, only runs once).
+// extractWorkspaceUUID decodes the JWT payload to get workspace_uuid.
+// Called on every token fetch so workspace changes in MyDocs are picked up dynamically.
 func (c *httpDocumentaClient) extractWorkspaceUUID(token string) {
-	if c.workspaceUUID != "" {
-		return
-	}
 	parts := strings.SplitN(token, ".", 3)
 	if len(parts) < 2 {
 		return
@@ -109,8 +107,14 @@ func (c *httpDocumentaClient) extractWorkspaceUUID(token string) {
 		WorkspaceUUID string `json:"workspace_uuid"`
 	}
 	if json.Unmarshal(decoded, &claims) == nil && claims.WorkspaceUUID != "" {
-		c.workspaceUUID = claims.WorkspaceUUID
-		log.Printf("[DOCUMENTA] Resolved workspace UUID: %s", c.workspaceUUID)
+		if c.workspaceUUID != claims.WorkspaceUUID {
+			if c.workspaceUUID != "" {
+				log.Printf("[DOCUMENTA] Workspace UUID changed: %s → %s", c.workspaceUUID, claims.WorkspaceUUID)
+			} else {
+				log.Printf("[DOCUMENTA] Resolved workspace UUID: %s", claims.WorkspaceUUID)
+			}
+			c.workspaceUUID = claims.WorkspaceUUID
+		}
 	}
 }
 
@@ -631,4 +635,179 @@ func (c *httpDocumentaClient) SetTags(ctx context.Context, fileID string, tags m
 		return fmt.Errorf("documenta: set tags failed (%d): %s", resp.StatusCode, string(body))
 	}
 	return nil
+}
+
+// ──────────────────────────────────────────────────
+// Versions
+// ──────────────────────────────────────────────────
+
+func (c *httpDocumentaClient) ListVersions(ctx context.Context, fileID string) ([]DmsVersion, error) {
+	resp, err := c.doRequest(ctx, http.MethodGet, "/versions?node="+fileID, nil, "")
+	if err != nil {
+		return nil, err
+	}
+
+	// MyDocs returns { success, data: [ { uuid, nodeUuid, versionNumber, ... } ] }
+	type mdVersion struct {
+		UUID          string `json:"uuid"`
+		NodeUUID      string `json:"nodeUuid"`
+		VersionNumber int    `json:"versionNumber"`
+		Size          int64  `json:"size"`
+		Description   string `json:"description"`
+		Source        string `json:"source"`
+		CreatedBy     string `json:"createdBy"`
+		CreatedByName string `json:"createdByName"`
+		CreatedAt     string `json:"createdAt"`
+		IsCurrent     bool   `json:"isCurrent"`
+		StorageKey    string `json:"storageKey"`
+	}
+	result, parseErr := parseResponse[[]mdVersion](resp)
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	if result == nil {
+		return []DmsVersion{}, nil
+	}
+	versions := make([]DmsVersion, len(*result))
+	for i, mv := range *result {
+		versions[i] = DmsVersion{
+			UUID:          mv.UUID,
+			NodeUUID:      mv.NodeUUID,
+			VersionNumber: mv.VersionNumber,
+			Size:          mv.Size,
+			Description:   mv.Description,
+			Source:        mv.Source,
+			CreatedBy:     mv.CreatedBy,
+			CreatedByName: mv.CreatedByName,
+			CreatedAt:     mv.CreatedAt,
+			IsCurrent:     mv.IsCurrent,
+		}
+	}
+	return versions, nil
+}
+
+func (c *httpDocumentaClient) UploadVersion(ctx context.Context, fileID string, fileName string, fileData io.Reader, fileSize int64, description string) (*DmsVersion, error) {
+	token, err := c.getToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	if err := writer.WriteField("node", fileID); err != nil {
+		return nil, fmt.Errorf("documenta: write node field: %w", err)
+	}
+	if description != "" {
+		if err := writer.WriteField("description", description); err != nil {
+			return nil, fmt.Errorf("documenta: write description field: %w", err)
+		}
+	}
+
+	part, err := writer.CreateFormFile("file", fileName)
+	if err != nil {
+		return nil, fmt.Errorf("documenta: create form file: %w", err)
+	}
+	if _, err := io.Copy(part, fileData); err != nil {
+		return nil, fmt.Errorf("documenta: copy file data: %w", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("documenta: close multipart: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/versions/upload", &buf)
+	if err != nil {
+		return nil, fmt.Errorf("documenta: create version upload request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-On-Behalf-Of", getOnBehalf(ctx))
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("documenta: version upload request: %w", err)
+	}
+
+	type mdVersion struct {
+		UUID          string `json:"uuid"`
+		NodeUUID      string `json:"nodeUuid"`
+		VersionNumber int    `json:"versionNumber"`
+		Size          int64  `json:"size"`
+		Description   string `json:"description"`
+		Source        string `json:"source"`
+		CreatedBy     string `json:"createdBy"`
+		CreatedByName string `json:"createdByName"`
+		CreatedAt     string `json:"createdAt"`
+		IsCurrent     bool   `json:"isCurrent"`
+	}
+	result, parseErr := parseResponse[mdVersion](resp)
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	return &DmsVersion{
+		UUID:          result.UUID,
+		NodeUUID:      result.NodeUUID,
+		VersionNumber: result.VersionNumber,
+		Size:          result.Size,
+		Description:   result.Description,
+		Source:        result.Source,
+		CreatedBy:     result.CreatedBy,
+		CreatedByName: result.CreatedByName,
+		CreatedAt:     result.CreatedAt,
+		IsCurrent:     result.IsCurrent,
+	}, nil
+}
+
+func (c *httpDocumentaClient) DownloadVersion(ctx context.Context, versionUUID string) (io.ReadCloser, string, error) {
+	resp, err := c.doRequest(ctx, http.MethodGet, "/versions/"+versionUUID+"/download", nil, "")
+	if err != nil {
+		return nil, "", err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, "", fmt.Errorf("documenta: download version failed (%d): %s", resp.StatusCode, string(body))
+	}
+	contentType := resp.Header.Get("Content-Type")
+	return resp.Body, contentType, nil
+}
+
+func (c *httpDocumentaClient) RollbackVersion(ctx context.Context, fileID string, versionUUID string) (*DmsVersion, error) {
+	resp, err := c.doJSON(ctx, http.MethodPost, "/versions/rollback", map[string]string{
+		"nodeUuid":    fileID,
+		"versionUuid": versionUUID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	type mdVersion struct {
+		UUID          string `json:"uuid"`
+		NodeUUID      string `json:"nodeUuid"`
+		VersionNumber int    `json:"versionNumber"`
+		Size          int64  `json:"size"`
+		Description   string `json:"description"`
+		Source        string `json:"source"`
+		CreatedBy     string `json:"createdBy"`
+		CreatedByName string `json:"createdByName"`
+		CreatedAt     string `json:"createdAt"`
+		IsCurrent     bool   `json:"isCurrent"`
+	}
+	result, parseErr := parseResponse[mdVersion](resp)
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	return &DmsVersion{
+		UUID:          result.UUID,
+		NodeUUID:      result.NodeUUID,
+		VersionNumber: result.VersionNumber,
+		Size:          result.Size,
+		Description:   result.Description,
+		Source:        result.Source,
+		CreatedBy:     result.CreatedBy,
+		CreatedByName: result.CreatedByName,
+		CreatedAt:     result.CreatedAt,
+		IsCurrent:     result.IsCurrent,
+	}, nil
 }

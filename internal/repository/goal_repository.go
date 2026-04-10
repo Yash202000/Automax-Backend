@@ -75,6 +75,12 @@ type GoalRepository interface {
 	CreateMetricBatchTransitionHistory(ctx context.Context, tx *gorm.DB, h *models.MetricImportBatchTransitionHistory) error
 	ListMetricBatchTransitionHistory(ctx context.Context, batchID uuid.UUID) ([]models.MetricImportBatchTransitionHistory, error)
 
+	// Comments
+	CreateComment(ctx context.Context, comment *models.GoalComment) error
+	ListComments(ctx context.Context, goalID uuid.UUID, page, limit int) ([]models.GoalComment, int64, error)
+	DeleteComment(ctx context.Context, id uuid.UUID) error
+	FindCommentByID(ctx context.Context, id uuid.UUID) (*models.GoalComment, error)
+
 	// Transaction support
 	BeginTx(ctx context.Context) *gorm.DB
 }
@@ -170,6 +176,13 @@ func (r *goalRepository) List(ctx context.Context, filter *models.GoalFilter) ([
 	}
 	if filter.TargetTo != nil {
 		query = query.Where("target_date <= ?", *filter.TargetTo)
+	}
+	if filter.UserID != nil {
+		// User can see goals they own, collaborate on, or belong to their department
+		query = query.Where(
+			"owner_id = ? OR id IN (SELECT goal_id FROM goal_collaborators WHERE user_id = ?) OR department_id IN (SELECT department_id FROM users WHERE id = ? AND department_id IS NOT NULL)",
+			*filter.UserID, *filter.UserID, *filter.UserID,
+		)
 	}
 
 	// Count total
@@ -401,7 +414,11 @@ func (r *goalRepository) FindEvidenceByIDForUpdate(ctx context.Context, tx *gorm
 }
 
 func (r *goalRepository) UpdateEvidenceInTx(ctx context.Context, tx *gorm.DB, evidence *models.Evidence) error {
-	return tx.WithContext(ctx).Save(evidence).Error
+	// Use Select to update only scalar columns, avoiding GORM re-associating
+	// preloaded relations (e.g., CurrentState) which can overwrite foreign keys.
+	return tx.WithContext(ctx).
+		Select("current_state_id", "status", "assigned_to_id", "version", "updated_at").
+		Save(evidence).Error
 }
 
 func (r *goalRepository) UpdateEvidence(ctx context.Context, evidence *models.Evidence) error {
@@ -508,7 +525,7 @@ func (r *goalRepository) ListPendingApprovals(ctx context.Context, userID uuid.U
 	offset := (page - 1) * limit
 
 	err := r.db.WithContext(ctx).
-		Preload("Goal").
+		Preload("Goal", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
 		Preload("UploadedBy").
 		Preload("CurrentState").
 		Preload("AssignedTo").
@@ -546,7 +563,7 @@ func (r *goalRepository) ListCompletedApprovals(ctx context.Context, userID uuid
 	offset := (page - 1) * limit
 
 	err := query.
-		Preload("Evidence.Goal").
+		Preload("Evidence.Goal", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
 		Preload("Evidence.CurrentState").
 		Preload("FromState").
 		Preload("ToState").
@@ -756,6 +773,58 @@ func (r *goalRepository) MarkMetricImportItemsApplied(ctx context.Context, tx *g
 		Model(&models.MetricImportItem{}).
 		Where("batch_id = ?", batchID).
 		Update("applied", true).Error
+}
+
+// ──────────────────────────────────────────────────
+// Comments
+// ──────────────────────────────────────────────────
+
+func (r *goalRepository) CreateComment(ctx context.Context, comment *models.GoalComment) error {
+	return r.db.WithContext(ctx).Create(comment).Error
+}
+
+func (r *goalRepository) ListComments(ctx context.Context, goalID uuid.UUID, page, limit int) ([]models.GoalComment, int64, error) {
+	var comments []models.GoalComment
+	var total int64
+
+	query := r.db.WithContext(ctx).Model(&models.GoalComment{}).Where("goal_id = ?", goalID)
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 || limit > 100 {
+		limit = 20
+	}
+	offset := (page - 1) * limit
+
+	err := query.
+		Preload("Author").
+		Order("created_at DESC").
+		Offset(offset).
+		Limit(limit).
+		Find(&comments).Error
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return comments, total, nil
+}
+
+func (r *goalRepository) DeleteComment(ctx context.Context, id uuid.UUID) error {
+	return r.db.WithContext(ctx).Delete(&models.GoalComment{}, "id = ?", id).Error
+}
+
+func (r *goalRepository) FindCommentByID(ctx context.Context, id uuid.UUID) (*models.GoalComment, error) {
+	var comment models.GoalComment
+	err := r.db.WithContext(ctx).Preload("Author").First(&comment, "id = ?", id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &comment, nil
 }
 
 func (r *goalRepository) CreateMetricBatchTransitionHistory(ctx context.Context, tx *gorm.DB, h *models.MetricImportBatchTransitionHistory) error {

@@ -119,6 +119,8 @@ func Migrate(db *gorm.DB) error {
 		&models.MetricImportBatch{},
 		&models.MetricImportItem{},
 		&models.MetricImportBatchTransitionHistory{},
+		// Goal Comments
+		&models.GoalComment{},
 		// Performance Review models
 		&models.ReviewCycle{},
 		&models.ReviewAssignment{},

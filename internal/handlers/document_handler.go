@@ -178,3 +178,84 @@ func (h *DocumentHandler) SetTags(c *fiber.Ctx) error {
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Tags updated", nil)
 }
+
+// ListVersions returns all versions of a file.
+// GET /documents/files/:id/versions
+func (h *DocumentHandler) ListVersions(c *fiber.Ctx) error {
+	fileID := c.Params("id")
+	email := h.getUserEmail(c)
+
+	versions, err := h.service.ListVersions(c.UserContext(), fileID, email)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to list versions: "+err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Versions listed", versions)
+}
+
+// UploadVersion uploads a new version of a file.
+// POST /documents/files/:id/versions (multipart form: file + description)
+func (h *DocumentHandler) UploadVersion(c *fiber.Ctx) error {
+	fileID := c.Params("id")
+	description := c.FormValue("description", "")
+
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "File is required")
+	}
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to open uploaded file")
+	}
+	defer file.Close()
+
+	email := h.getUserEmail(c)
+	version, err := h.service.UploadVersion(c.UserContext(), fileID, fileHeader.Filename, file, fileHeader.Size, description, email)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to upload version: "+err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusCreated, "Version uploaded", version)
+}
+
+// DownloadVersion streams a specific version's content.
+// GET /documents/versions/:vid/download
+func (h *DocumentHandler) DownloadVersion(c *fiber.Ctx) error {
+	versionUUID := c.Params("vid")
+	email := h.getUserEmail(c)
+
+	reader, contentType, err := h.service.DownloadVersion(c.UserContext(), versionUUID, email)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to download version: "+err.Error())
+	}
+	defer reader.Close()
+
+	c.Set("Content-Type", contentType)
+	c.Set("Content-Disposition", "attachment; filename=\"version-"+versionUUID+"\"")
+
+	return c.SendStream(reader)
+}
+
+// RollbackVersion restores a previous version of a file.
+// POST /documents/files/:id/versions/rollback { "version_uuid": "..." }
+func (h *DocumentHandler) RollbackVersion(c *fiber.Ctx) error {
+	fileID := c.Params("id")
+	var body struct {
+		VersionUUID string `json:"version_uuid"`
+	}
+	if err := c.BodyParser(&body); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+	if body.VersionUUID == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "version_uuid is required")
+	}
+
+	email := h.getUserEmail(c)
+	version, err := h.service.RollbackVersion(c.UserContext(), fileID, body.VersionUUID, email)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to rollback version: "+err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Version rolled back", version)
+}

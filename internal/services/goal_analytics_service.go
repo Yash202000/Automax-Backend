@@ -13,11 +13,11 @@ import (
 
 // GoalAnalyticsService provides analytics and reporting for goals
 type GoalAnalyticsService interface {
-	GetStats(ctx context.Context) (*models.GoalStatsResponse, error)
+	GetStats(ctx context.Context, departmentID *uuid.UUID) (*models.GoalStatsResponse, error)
 	GetDistributions(ctx context.Context, departmentID *uuid.UUID) (*models.GoalDistributionsResponse, error)
-	GetProgressSummary(ctx context.Context) (*models.ProgressSummaryResponse, error)
-	GetAtRiskGoals(ctx context.Context, page, limit int) ([]models.AtRiskGoalResponse, int64, error)
-	GetTrendData(ctx context.Context, months int) (*models.TrendDataResponse, error)
+	GetProgressSummary(ctx context.Context, departmentID *uuid.UUID) (*models.ProgressSummaryResponse, error)
+	GetAtRiskGoals(ctx context.Context, departmentID *uuid.UUID, page, limit int) ([]models.AtRiskGoalResponse, int64, error)
+	GetTrendData(ctx context.Context, departmentID *uuid.UUID, months int) (*models.TrendDataResponse, error)
 	GetOKRTree(ctx context.Context, departmentID *uuid.UUID, periodStart *time.Time, periodEnd *time.Time, status string) (*models.OKRTreeResponse, error)
 }
 
@@ -31,7 +31,7 @@ func NewGoalAnalyticsService(db *gorm.DB) GoalAnalyticsService {
 }
 
 // GetStats returns aggregate goal counts by status plus overdue/at-risk counts
-func (s *goalAnalyticsService) GetStats(ctx context.Context) (*models.GoalStatsResponse, error) {
+func (s *goalAnalyticsService) GetStats(ctx context.Context, departmentID *uuid.UUID) (*models.GoalStatsResponse, error) {
 	stats := &models.GoalStatsResponse{}
 
 	// Count by status
@@ -40,10 +40,13 @@ func (s *goalAnalyticsService) GetStats(ctx context.Context) (*models.GoalStatsR
 		Count  int64
 	}
 	var counts []statusCount
-	err := s.db.WithContext(ctx).
+	q := s.db.WithContext(ctx).
 		Model(&models.Goal{}).
-		Select("status, COUNT(*) as count").
-		Group("status").
+		Select("status, COUNT(*) as count")
+	if departmentID != nil {
+		q = q.Where("department_id = ?", *departmentID)
+	}
+	err := q.Group("status").
 		Scan(&counts).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to get goal stats: %w", err)
@@ -68,16 +71,19 @@ func (s *goalAnalyticsService) GetStats(ctx context.Context) (*models.GoalStatsR
 	}
 
 	// Count overdue goals (target_date in the past, status Active or Under_Review)
-	err = s.db.WithContext(ctx).
+	overdueQuery := s.db.WithContext(ctx).
 		Model(&models.Goal{}).
-		Where("target_date < ? AND status IN ? AND deleted_at IS NULL", time.Now(), []string{models.GoalStatusActive, models.GoalStatusUnderReview}).
-		Count(&stats.Overdue).Error
+		Where("target_date < ? AND status IN ? AND deleted_at IS NULL", time.Now(), []string{models.GoalStatusActive, models.GoalStatusUnderReview})
+	if departmentID != nil {
+		overdueQuery = overdueQuery.Where("department_id = ?", *departmentID)
+	}
+	err = overdueQuery.Count(&stats.Overdue).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to count overdue goals: %w", err)
 	}
 
 	// Count at-risk goals (latest check-in status is at_risk, behind, or blocked)
-	err = s.db.WithContext(ctx).Raw(`
+	atRiskSQL := `
 		SELECT COUNT(DISTINCT g.id)
 		FROM goals g
 		INNER JOIN (
@@ -89,7 +95,13 @@ func (s *goalAnalyticsService) GetStats(ctx context.Context) (*models.GoalStatsR
 		WHERE g.deleted_at IS NULL
 		  AND g.status IN (?, ?)
 		  AND latest_ci.status IN ('at_risk', 'behind', 'blocked')
-	`, models.GoalStatusActive, models.GoalStatusUnderReview).Scan(&stats.AtRisk).Error
+	`
+	atRiskArgs := []interface{}{models.GoalStatusActive, models.GoalStatusUnderReview}
+	if departmentID != nil {
+		atRiskSQL += " AND g.department_id = ?"
+		atRiskArgs = append(atRiskArgs, *departmentID)
+	}
+	err = s.db.WithContext(ctx).Raw(atRiskSQL, atRiskArgs...).Scan(&stats.AtRisk).Error
 	if err != nil {
 		// Non-critical: at-risk count may fail if no check-ins exist
 		stats.AtRisk = 0
@@ -192,14 +204,17 @@ func (s *goalAnalyticsService) GetDistributions(ctx context.Context, departmentI
 }
 
 // GetProgressSummary returns average progress and progress range distribution
-func (s *goalAnalyticsService) GetProgressSummary(ctx context.Context) (*models.ProgressSummaryResponse, error) {
+func (s *goalAnalyticsService) GetProgressSummary(ctx context.Context, departmentID *uuid.UUID) (*models.ProgressSummaryResponse, error) {
 	resp := &models.ProgressSummaryResponse{}
 
 	// Average progress (exclude Draft and Closed)
-	err := s.db.WithContext(ctx).
+	avgQuery := s.db.WithContext(ctx).
 		Model(&models.Goal{}).
-		Where("status NOT IN ?", []string{models.GoalStatusDraft, models.GoalStatusClosed}).
-		Select("COALESCE(AVG(progress), 0)").
+		Where("status NOT IN ?", []string{models.GoalStatusDraft, models.GoalStatusClosed})
+	if departmentID != nil {
+		avgQuery = avgQuery.Where("department_id = ?", *departmentID)
+	}
+	err := avgQuery.Select("COALESCE(AVG(progress), 0)").
 		Scan(&resp.Average).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to get average progress: %w", err)
@@ -212,21 +227,26 @@ func (s *goalAnalyticsService) GetProgressSummary(ctx context.Context) (*models.
 		Count      int64  `gorm:"column:count"`
 	}
 	var ranges []rangeCount
-	err = s.db.WithContext(ctx).Raw(`
+	rangeSQL := `
 		SELECT
 			CASE
-				WHEN progress < 25 THEN '0-25%'
-				WHEN progress < 50 THEN '25-50%'
-				WHEN progress < 75 THEN '50-75%'
-				ELSE '75-100%'
+				WHEN progress < 25 THEN '0-25%%'
+				WHEN progress < 50 THEN '25-50%%'
+				WHEN progress < 75 THEN '50-75%%'
+				ELSE '75-100%%'
 			END AS range_label,
 			COUNT(*) AS count
 		FROM goals
 		WHERE deleted_at IS NULL
 		  AND status NOT IN (?, ?)
-		GROUP BY range_label
-		ORDER BY range_label
-	`, models.GoalStatusDraft, models.GoalStatusClosed).Scan(&ranges).Error
+	`
+	rangeArgs := []interface{}{models.GoalStatusDraft, models.GoalStatusClosed}
+	if departmentID != nil {
+		rangeSQL += " AND department_id = ?"
+		rangeArgs = append(rangeArgs, *departmentID)
+	}
+	rangeSQL += " GROUP BY range_label ORDER BY range_label"
+	err = s.db.WithContext(ctx).Raw(rangeSQL, rangeArgs...).Scan(&ranges).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to get progress ranges: %w", err)
 	}
@@ -257,7 +277,7 @@ func (s *goalAnalyticsService) GetProgressSummary(ctx context.Context) (*models.
 }
 
 // GetAtRiskGoals returns goals that are overdue or have at-risk check-in status
-func (s *goalAnalyticsService) GetAtRiskGoals(ctx context.Context, page, limit int) ([]models.AtRiskGoalResponse, int64, error) {
+func (s *goalAnalyticsService) GetAtRiskGoals(ctx context.Context, departmentID *uuid.UUID, page, limit int) ([]models.AtRiskGoalResponse, int64, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -286,7 +306,14 @@ func (s *goalAnalyticsService) GetAtRiskGoals(ctx context.Context, page, limit i
 	}
 
 	// Combined query: overdue OR at-risk check-in
-	query := `
+	deptClause := ""
+	var extraArgs []interface{}
+	if departmentID != nil {
+		deptClause = "AND g.department_id = ?"
+		extraArgs = append(extraArgs, *departmentID)
+	}
+
+	query := fmt.Sprintf(`
 		WITH latest_checkins AS (
 			SELECT DISTINCT ON (goal_id) goal_id, status
 			FROM goal_check_ins
@@ -313,6 +340,7 @@ func (s *goalAnalyticsService) GetAtRiskGoals(ctx context.Context, page, limit i
 		LEFT JOIN latest_checkins lc ON lc.goal_id = g.id
 		WHERE g.deleted_at IS NULL
 		  AND g.status IN (?, ?)
+		  %s
 		  AND (
 			g.target_date < NOW()
 			OR lc.status IN ('at_risk', 'behind', 'blocked')
@@ -320,19 +348,24 @@ func (s *goalAnalyticsService) GetAtRiskGoals(ctx context.Context, page, limit i
 		ORDER BY
 			CASE WHEN g.target_date < NOW() THEN 0 ELSE 1 END,
 			g.target_date ASC NULLS LAST
-	`
+	`, deptClause)
+
+	// Build args: status1, status2, [deptID]
+	baseArgs := []interface{}{models.GoalStatusActive, models.GoalStatusUnderReview}
+	baseArgs = append(baseArgs, extraArgs...)
 
 	// Count total
 	var total int64
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM (%s) sub", query)
-	if err := s.db.WithContext(ctx).Raw(countQuery, models.GoalStatusActive, models.GoalStatusUnderReview).Scan(&total).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(countQuery, baseArgs...).Scan(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("failed to count at-risk goals: %w", err)
 	}
 
 	// Fetch page
 	var rows []atRiskRow
 	pagedQuery := fmt.Sprintf("%s LIMIT ? OFFSET ?", query)
-	if err := s.db.WithContext(ctx).Raw(pagedQuery, models.GoalStatusActive, models.GoalStatusUnderReview, limit, offset).Scan(&rows).Error; err != nil {
+	pagedArgs := append(baseArgs, limit, offset)
+	if err := s.db.WithContext(ctx).Raw(pagedQuery, pagedArgs...).Scan(&rows).Error; err != nil {
 		return nil, 0, fmt.Errorf("failed to get at-risk goals: %w", err)
 	}
 
@@ -387,7 +420,7 @@ func (s *goalAnalyticsService) GetAtRiskGoals(ctx context.Context, page, limit i
 }
 
 // GetTrendData returns monthly goal creation and completion counts
-func (s *goalAnalyticsService) GetTrendData(ctx context.Context, months int) (*models.TrendDataResponse, error) {
+func (s *goalAnalyticsService) GetTrendData(ctx context.Context, departmentID *uuid.UUID, months int) (*models.TrendDataResponse, error) {
 	if months < 1 || months > 24 {
 		months = 12
 	}
@@ -400,29 +433,41 @@ func (s *goalAnalyticsService) GetTrendData(ctx context.Context, months int) (*m
 		Count int64
 	}
 
-	var created []monthCount
-	err := s.db.WithContext(ctx).Raw(`
+	createdSQL := `
 		SELECT TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month, COUNT(*) AS count
 		FROM goals
 		WHERE deleted_at IS NULL AND created_at >= ?
-		GROUP BY DATE_TRUNC('month', created_at)
-		ORDER BY month
-	`, startDate).Scan(&created).Error
+	`
+	createdArgs := []interface{}{startDate}
+	if departmentID != nil {
+		createdSQL += " AND department_id = ?"
+		createdArgs = append(createdArgs, *departmentID)
+	}
+	createdSQL += " GROUP BY DATE_TRUNC('month', created_at) ORDER BY month"
+
+	var created []monthCount
+	err := s.db.WithContext(ctx).Raw(createdSQL, createdArgs...).Scan(&created).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to get created trend: %w", err)
 	}
 
 	// Completed per month (achieved or closed, by updated_at)
-	var completed []monthCount
-	err = s.db.WithContext(ctx).Raw(`
+	completedSQL := `
 		SELECT TO_CHAR(DATE_TRUNC('month', updated_at), 'YYYY-MM') AS month, COUNT(*) AS count
 		FROM goals
 		WHERE deleted_at IS NULL
 		  AND status IN (?, ?)
 		  AND updated_at >= ?
-		GROUP BY DATE_TRUNC('month', updated_at)
-		ORDER BY month
-	`, models.GoalStatusAchieved, models.GoalStatusClosed, startDate).Scan(&completed).Error
+	`
+	completedArgs := []interface{}{models.GoalStatusAchieved, models.GoalStatusClosed, startDate}
+	if departmentID != nil {
+		completedSQL += " AND department_id = ?"
+		completedArgs = append(completedArgs, *departmentID)
+	}
+	completedSQL += " GROUP BY DATE_TRUNC('month', updated_at) ORDER BY month"
+
+	var completed []monthCount
+	err = s.db.WithContext(ctx).Raw(completedSQL, completedArgs...).Scan(&completed).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to get completed trend: %w", err)
 	}

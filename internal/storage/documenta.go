@@ -42,6 +42,20 @@ type DmsSearchResult struct {
 	Total int       `json:"total"`
 }
 
+// DmsVersion represents a version of a file in the Documenta DMS.
+type DmsVersion struct {
+	UUID          string `json:"uuid"`
+	NodeUUID      string `json:"node_uuid"`
+	VersionNumber int    `json:"version_number"`
+	Size          int64  `json:"size"`
+	Description   string `json:"description"`
+	Source        string `json:"source"`
+	CreatedBy     string `json:"created_by"`
+	CreatedByName string `json:"created_by_name"`
+	CreatedAt     string `json:"created_at"`
+	IsCurrent     bool   `json:"is_current"`
+}
+
 // ════════════════════════════════════════════════════
 // DocumentaClient Interface
 // ════════════════════════════════════════════════════
@@ -102,4 +116,18 @@ type DocumentaClient interface {
 
 	// SetTags sets metadata tags on a file (replaces existing).
 	SetTags(ctx context.Context, fileID string, tags map[string]string) error
+
+	// ── Versions ──
+
+	// ListVersions returns all versions of a file.
+	ListVersions(ctx context.Context, fileID string) ([]DmsVersion, error)
+
+	// UploadVersion uploads a new version of a file.
+	UploadVersion(ctx context.Context, fileID string, fileName string, fileData io.Reader, fileSize int64, description string) (*DmsVersion, error)
+
+	// DownloadVersion returns a reader for a specific version's content.
+	DownloadVersion(ctx context.Context, versionUUID string) (io.ReadCloser, string, error)
+
+	// RollbackVersion restores a previous version of a file.
+	RollbackVersion(ctx context.Context, fileID string, versionUUID string) (*DmsVersion, error)
 }

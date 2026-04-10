@@ -477,6 +477,7 @@ type GoalFilter struct {
 	TargetTo     *time.Time `query:"target_to"`
 	SortBy       string     `query:"sort_by"`
 	SortOrder    string     `query:"sort_order"`
+	UserID       *uuid.UUID `query:"-"` // Set by handler, not from query params
 }
 
 type GoalMetricCreateRequest struct {
@@ -1138,6 +1139,54 @@ func (item *MetricImportItem) ToResponse() MetricImportItemResponse {
 		resp.Unit = item.Metric.Unit
 	}
 	return resp
+}
+
+// ──────────────────────────────────────────────────
+// Goal Comments
+// ──────────────────────────────────────────────────
+
+// GoalComment represents a discussion comment on a goal.
+type GoalComment struct {
+	ID        uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	GoalID    uuid.UUID      `gorm:"type:uuid;index;not null" json:"goal_id"`
+	Goal      *Goal          `gorm:"foreignKey:GoalID" json:"-"`
+	AuthorID  uuid.UUID      `gorm:"type:uuid;index;not null" json:"author_id"`
+	Author    *User          `gorm:"foreignKey:AuthorID" json:"author,omitempty"`
+	Content   string         `gorm:"type:text;not null" json:"content"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (gc *GoalComment) BeforeCreate(tx *gorm.DB) error {
+	if gc.ID == uuid.Nil {
+		gc.ID = uuid.New()
+	}
+	return nil
+}
+
+type GoalCommentRequest struct {
+	Content string `json:"content" validate:"required,min=1"`
+}
+
+type GoalCommentResponse struct {
+	ID        uuid.UUID          `json:"id"`
+	GoalID    uuid.UUID          `json:"goal_id"`
+	Author    *UserBriefResponse `json:"author,omitempty"`
+	Content   string             `json:"content"`
+	CreatedAt time.Time          `json:"created_at"`
+	UpdatedAt time.Time          `json:"updated_at"`
+}
+
+func ToGoalCommentResponse(c *GoalComment) GoalCommentResponse {
+	return GoalCommentResponse{
+		ID:        c.ID,
+		GoalID:    c.GoalID,
+		Author:    ToUserBriefResponse(c.Author),
+		Content:   c.Content,
+		CreatedAt: c.CreatedAt,
+		UpdatedAt: c.UpdatedAt,
+	}
 }
 
 func (h *MetricImportBatchTransitionHistory) ToResponse() MetricImportBatchTransitionHistoryResponse {
