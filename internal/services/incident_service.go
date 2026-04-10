@@ -2839,7 +2839,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			}
 
 			body := fmt.Sprintf(
-				"Your incident \"%s\" (ID: %s) has been resolved and closed on %s.",
+				"Your incident \"%s\" (ID: %s) has been closed on %s.",
 				incidentTitle, incidentNumber, closedAt.Format("02 Jan 2006"),
 			)
 			if comment != "" {
