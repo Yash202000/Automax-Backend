@@ -67,8 +67,9 @@ type ReadyToCloseConfig struct {
 }
 
 type ServerConfig struct {
-	Port string
-	Host string
+	Port         string
+	Host         string
+	AllowOrigins string // env: ALLOW_ORIGINS (comma-separated)
 }
 
 type DatabaseConfig struct {
@@ -123,8 +124,9 @@ type LoginRateLimitConfig struct {
 func Load() *Config {
 	return &Config{
 		Server: ServerConfig{
-			Port: getEnv("SERVER_PORT", "8080"),
-			Host: getEnv("SERVER_HOST", "0.0.0.0"),
+			Port:         getEnv("SERVER_PORT", "8080"),
+			Host:         getEnv("SERVER_HOST", "0.0.0.0"),
+			AllowOrigins: getEnv("ALLOW_ORIGINS", "http://localhost:3000,http://localhost:5173,http://localhost:5174"),
 			// FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
 		},
 		Database: DatabaseConfig{

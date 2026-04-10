@@ -192,7 +192,7 @@ func main() {
 	escalationPolicyHandler := handlers.NewEscalationPolicyHandler(escalationPolicyService, userRepo, departmentRepo)
 	rejectionLogHandler := handlers.NewRejectionLogHandler(rejectionLogRepo)
 	incidentFeedbackHandler := handlers.NewIncidentFeedbackHandler(incidentRepo)
-	aiQualityFeedbackHandler := handlers.NewAIQualityFeedbackHandler(aiQualityFeedbackRepo)
+	aiQualityFeedbackHandler := handlers.NewAIQualityFeedbackHandler(aiQualityFeedbackRepo, incidentService, userRepo)
 	fcmHandler := handlers.NewFCMHandler(fcmService)
 	sentimentHandler := handlers.NewCallerSentimentHandler(callerSentimentService)
 	goalHandler := handlers.NewGoalHandler(goalService)
@@ -222,11 +222,14 @@ func main() {
 	app.Use(logger.New(logger.Config{
 		Format: "[${time}] ${status} - ${latency} ${method} ${path}\n",
 	}))
+	// When AllowOrigins is "*", credentials cannot be sent (browser spec).
+	// In that case we allow all origins without the credentials flag.
+	corsAllowCredentials := cfg.Server.AllowOrigins != "*"
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "http://localhost:3000,http://localhost:5173,http://localhost:5174",
+		AllowOrigins:     cfg.Server.AllowOrigins,
 		AllowMethods:     "GET,POST,PUT,DELETE,PATCH,OPTIONS",
 		AllowHeaders:     "Origin,Content-Type,Accept,Authorization",
-		AllowCredentials: true,
+		AllowCredentials: corsAllowCredentials,
 	}))
 
 	app.Use(middleware.RequestContext())
@@ -333,6 +336,10 @@ func main() {
 	incidents.Get("/:id/revisions", authMiddleware.RequirePermission("incidents:view"), incidentHandler.ListRevisions)
 	incidents.Get("/:id/rejection-logs", authMiddleware.RequirePermission("incidents:view"), rejectionLogHandler.GetByIncident)
 	incidents.Get("/:id/ai-quality", authMiddleware.RequirePermission("incidents:view"), aiQualityFeedbackHandler.GetByIncident)
+	incidents.Post("/:id/reopen", authMiddleware.RequirePermission("incidents:transition"), aiQualityFeedbackHandler.ReopenIncident)
+
+	aiQuality := v1.Group("/ai-quality", authMiddleware.Authenticate())
+	aiQuality.Get("/", authMiddleware.RequirePermission("incidents:view"), aiQualityFeedbackHandler.GetAll)
 
 	feedback := v1.Group("/feedback", authMiddleware.Authenticate())
 	feedback.Get("/", authMiddleware.RequirePermission("incidents:view"), incidentFeedbackHandler.ListAllFeedback)

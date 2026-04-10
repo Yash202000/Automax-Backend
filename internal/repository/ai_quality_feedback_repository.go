@@ -18,6 +18,10 @@ type AIQualityFeedbackRepository interface {
 	// FindByIncidentID retrieves the AIQualityFeedback record for the given incident, if any.
 	FindByIncidentID(ctx context.Context, incidentID uuid.UUID) (*models.AIQualityFeedback, error)
 
+	// ListAllWithIncident returns all AI quality feedback records ordered newest-first,
+	// with incident, current state, classification, and department preloaded.
+	ListAllWithIncident(ctx context.Context) ([]models.AIQualityFeedback, error)
+
 	// FindPendingIncidents returns incidents that are AI-verified and whose current workflow state
 	// is marked as AI QA required, but do not yet have an AIQualityFeedback record.
 	FindPendingIncidents(ctx context.Context) ([]models.Incident, error)
@@ -33,6 +37,17 @@ func NewAIQualityFeedbackRepository(db *gorm.DB) AIQualityFeedbackRepository {
 
 func (r *aiQualityFeedbackRepository) Create(ctx context.Context, feedback *models.AIQualityFeedback) error {
 	return r.db.WithContext(ctx).Create(feedback).Error
+}
+
+func (r *aiQualityFeedbackRepository) ListAllWithIncident(ctx context.Context) ([]models.AIQualityFeedback, error) {
+	var feedbacks []models.AIQualityFeedback
+	err := r.db.WithContext(ctx).
+		Preload("Incident.CurrentState").
+		Preload("Incident.Classification").
+		Preload("Incident.Department").
+		Order("ai_quality_feedbacks.created_at DESC").
+		Find(&feedbacks).Error
+	return feedbacks, err
 }
 
 func (r *aiQualityFeedbackRepository) FindByIncidentID(ctx context.Context, incidentID uuid.UUID) (*models.AIQualityFeedback, error) {
