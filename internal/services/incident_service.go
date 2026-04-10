@@ -1285,6 +1285,16 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 			if err := s.incidentRepo.CreateComment(ctx, feedbackComment); err != nil {
 				fmt.Printf("Warning: failed to create feedback comment on existing request: %v\n", err)
 			}
+
+			// Also create comment on source incident
+			sourceFeedbackComment := &models.IncidentComment{
+				IncidentID: incidentID,
+				Content:    req.Feedback.Comment,
+				AuthorID:   userID,
+			}
+			if err := s.incidentRepo.CreateComment(ctx, sourceFeedbackComment); err != nil {
+				fmt.Printf("Warning: failed to create feedback comment on source incident: %v\n", err)
+			}
 		}
 
 		// Build response
@@ -1544,6 +1554,16 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		}
 		if err := s.incidentRepo.CreateComment(ctx, feedbackComment); err != nil {
 			fmt.Printf("Warning: failed to create feedback comment on new request: %v\n", err)
+		}
+
+		// Also create comment on source incident
+		sourceFeedbackComment := &models.IncidentComment{
+			IncidentID: incidentID,
+			Content:    req.Feedback.Comment,
+			AuthorID:   userID,
+		}
+		if err := s.incidentRepo.CreateComment(ctx, sourceFeedbackComment); err != nil {
+			fmt.Printf("Warning: failed to create feedback comment on source incident: %v\n", err)
 		}
 	}
 
@@ -2131,6 +2151,16 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 					OldValue:   nil,
 					NewValue:   &feedback.Comment,
 				})
+
+				// Also create comment on source incident
+				sourceFeedbackComment := &models.IncidentComment{
+					IncidentID: sourceIncident.ID,
+					Content:    feedback.Comment,
+					AuthorID:   userID,
+				}
+				if err := s.incidentRepo.CreateComment(ctx, sourceFeedbackComment); err != nil {
+					fmt.Printf("Warning: failed to create feedback comment on source incident %s: %v\n", sourceIncident.IncidentNumber, err)
+				}
 			}
 			feedbackDesc := fmt.Sprintf("Feedback provided during conversion to request %s", requestNumber)
 			_ = s.CreateRevision(ctx, sourceIncident.ID, models.RevisionActionFieldChange, feedbackDesc, feedbackChanges, userID)
@@ -2158,6 +2188,18 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 		desc = fmt.Sprintf("Request created from %d incidents via bulk conversion", len(validIncidents))
 	}
 	_ = s.CreateRevision(ctx, newRequest.ID, models.RevisionActionCreated, desc, changes, userID)
+
+	// Create comment on request with feedback if provided
+	if req.Feedback != nil && req.Feedback.Comment != "" {
+		feedbackComment := &models.IncidentComment{
+			IncidentID: newRequest.ID,
+			Content:    req.Feedback.Comment,
+			AuthorID:   userID,
+		}
+		if err := s.incidentRepo.CreateComment(ctx, feedbackComment); err != nil {
+			fmt.Printf("Warning: failed to create feedback comment on bulk convert request: %v\n", err)
+		}
+	}
 
 	// Fetch the created request with relations
 	createdRequest, err := s.incidentRepo.FindByIDWithRelations(ctx, newRequest.ID)
