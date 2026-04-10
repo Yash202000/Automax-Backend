@@ -596,6 +596,34 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		log.Printf("IVR incident created with ID %s, SMS sent: %v", incident.ID, sent)
 		log.Println("ivr sms link send: ", smsLink)
 	}
+
+	// Send FCM push notification to the initial assignee (employee)
+	if s.fcmService != nil && incident.AssigneeID != nil {
+		bgCtx := context.Background()
+		capturedAssignee := *incident.AssigneeID
+		capturedID := incident.ID
+		capturedNumber := incident.IncidentNumber
+		capturedTitle := incident.Title
+		capturedDesc := incident.Description
+		capturedType := strings.ToUpper(incident.RecordType)
+		go func() {
+			pushReq := &models.PushRequest{
+				UserID: capturedAssignee,
+				Title:  fmt.Sprintf("New %s Assigned: %s", capturedType, capturedNumber),
+				Body:   fmt.Sprintf("Incident \"%s\" has been assigned to you. %s", capturedTitle, capturedDesc),
+				Data: map[string]string{
+					"id":   capturedID.String(),
+					"type": capturedType,
+				},
+			}
+			if err := s.fcmService.Push(bgCtx, pushReq); err != nil {
+				log.Printf("FCM-NEW-INCIDENT: Failed for assignee %s: %v", capturedAssignee, err)
+			} else {
+				log.Printf("FCM-NEW-INCIDENT: Sent to assignee %s", capturedAssignee)
+			}
+		}()
+	}
+
 	return &resp, nil
 }
 
@@ -2685,6 +2713,35 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		}
 	}
 
+	// Send FCM push notification to assigned employee(s) on transition
+	if s.fcmService != nil && len(assigneeUserIDs) > 0 {
+		bgCtx := context.Background()
+		capturedID := incidentID
+		capturedNumber := incident.IncidentNumber
+		capturedTitle := incident.Title
+		capturedType := strings.ToUpper(incident.RecordType)
+		capturedState := newStateName
+		capturedAssignees := append([]uuid.UUID{}, assigneeUserIDs...)
+		go func() {
+			for _, assigneeID := range capturedAssignees {
+				pushReq := &models.PushRequest{
+					UserID: assigneeID,
+					Title:  fmt.Sprintf("New %s Assigned: %s", capturedType, capturedNumber),
+					Body:   fmt.Sprintf("Incident \"%s\" has been assigned to you. Status: %s.", capturedTitle, capturedState),
+					Data: map[string]string{
+						"id":   capturedID.String(),
+						"type": capturedType,
+					},
+				}
+				if err := s.fcmService.Push(bgCtx, pushReq); err != nil {
+					log.Printf("FCM-ASSIGN: Failed for user %s: %v | pushReq: %+v", assigneeID, err, pushReq)
+				} else {
+					log.Printf("FCM-ASSIGN: Sent to user %s | pushReq: %+v", assigneeID, pushReq)
+				}
+			}
+		}()
+	}
+
 	// Send FCM push notification to the citizen reporter on incident closure
 	if s.fcmService != nil && newState.StateType == "terminal" && incident.ReporterID != nil {
 		bgCtx := context.Background()
@@ -3384,7 +3441,7 @@ func (s *incidentService) AssignIncident(ctx context.Context, incidentID, assign
 		}
 	}
 
-	// Send in-app + push notification to the new assignee
+	// Send in-app + FCM push notification to the new assignee
 	if assigneeID != uuid.Nil {
 		if s.notificationService != nil {
 			if assigneeUser, err := s.userRepo.FindByID(ctx, assigneeID); err == nil && assigneeUser.Email != "" {
@@ -3402,6 +3459,30 @@ func (s *incidentService) AssignIncident(ctx context.Context, incidentID, assign
 					})
 				}
 			}
+		}
+		if s.fcmService != nil {
+			bgCtx := context.Background()
+			capturedAssignee := assigneeID
+			capturedID := incidentID
+			capturedNumber := updated.IncidentNumber
+			capturedTitle := updated.Title
+			capturedType := strings.ToUpper(updated.RecordType)
+			go func() {
+				pushReq := &models.PushRequest{
+					UserID: capturedAssignee,
+					Title:  fmt.Sprintf("New %s Assigned: %s", capturedType, capturedNumber),
+					Body:   fmt.Sprintf("Incident \"%s\" has been assigned to you.", capturedTitle),
+					Data: map[string]string{
+						"id":   capturedID.String(),
+						"type": capturedType,
+					},
+				}
+				if err := s.fcmService.Push(bgCtx, pushReq); err != nil {
+					log.Printf("FCM-REASSIGN: Failed for user %s: %v | pushReq: %+v", capturedAssignee, err, pushReq)
+				} else {
+					log.Printf("FCM-REASSIGN: Sent to user %s | pushReq: %+v", capturedAssignee, pushReq)
+				}
+			}()
 		}
 	}
 

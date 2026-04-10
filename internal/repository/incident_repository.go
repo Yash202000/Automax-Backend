@@ -348,7 +348,6 @@ func (r *incidentRepository) GenerateIncidentNumber(ctx context.Context) (string
 		fmt.Sscanf(*maxNumber, "INC-%d-%d", &year, &seq)
 		nextSeq = seq + 1
 	}
-	fmt.Printf("Generated incidentNumber: %s\n", fmt.Sprintf("INC-%d-%06d", year, nextSeq))
 	return fmt.Sprintf("INC-%d-%06d", year, nextSeq), nil
 }
 
