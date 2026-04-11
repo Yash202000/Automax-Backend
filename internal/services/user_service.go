@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"mime/multipart"
+	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/config"
@@ -608,35 +609,64 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 	}
 
 	// Store old values for audit logging
-	// IMPORTANT: Capture boolean values BEFORE they're modified
+	// IMPORTANT: Create COPIES of values, not pointers to mutable fields
 	oldIsActive := user.IsActive
+	oldMobileVerified := user.MobileVerified
+	oldExtension := user.Extension // Copy the extension value
 	oldUser := &models.UserUpdateRequest{
 		FirstName:         user.FirstName,
 		LastName:          user.LastName,
 		Username:          user.Username,
 		Phone:             user.Phone,
-		Extension:         &user.Extension,
+		Extension:         &oldExtension, // Pointer to the copy, not the original
 		DepartmentID:      user.DepartmentID,
 		LocationID:        user.LocationID,
-		IsActive:          &oldIsActive, // Capture value, not pointer reference
+		IsActive:          &oldIsActive, // Pointer to the copy
+		MobileVerified:    &oldMobileVerified, // Pointer to the copy
 		DepartmentIDs:     make([]uuid.UUID, len(user.Departments)),
 		LocationIDs:       make([]uuid.UUID, len(user.Locations)),
 		ClassificationIDs: make([]uuid.UUID, len(user.Classifications)),
 		RoleIDs:           make([]uuid.UUID, len(user.Roles)),
 	}
 
+	// Build old value with names for better audit trail
+	oldUserForLogging := map[string]interface{}{
+		"first_name":      user.FirstName,
+		"last_name":       user.LastName,
+		"username":        user.Username,
+		"phone":           user.Phone,
+		"extension":       user.Extension,
+		"mobile_verified": user.MobileVerified,
+		"is_active":       oldIsActive,
+	}
+
+	// Add department names
+	oldDeptNames := make([]string, len(user.Departments))
 	for i, dept := range user.Departments {
-		oldUser.DepartmentIDs[i] = dept.ID
+		oldDeptNames[i] = dept.Name
 	}
+	oldUserForLogging["departments"] = oldDeptNames
+
+	// Add location names
+	oldLocNames := make([]string, len(user.Locations))
 	for i, loc := range user.Locations {
-		oldUser.LocationIDs[i] = loc.ID
+		oldLocNames[i] = loc.Name
 	}
+	oldUserForLogging["locations"] = oldLocNames
+
+	// Add classification names
+	oldClassNames := make([]string, len(user.Classifications))
 	for i, cls := range user.Classifications {
-		oldUser.ClassificationIDs[i] = cls.ID
+		oldClassNames[i] = cls.Name
 	}
+	oldUserForLogging["classifications"] = oldClassNames
+
+	// Add role names
+	oldRoleNames := make([]string, len(user.Roles))
 	for i, role := range user.Roles {
-		oldUser.RoleIDs[i] = role.ID
+		oldRoleNames[i] = role.Name
 	}
+	oldUserForLogging["roles"] = oldRoleNames
 
 	// Track if departments changed to decide whether to sync
 	departmentsChanged := false
@@ -699,51 +729,15 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 	}
 
 	// Always update associations (even if empty arrays) to allow removal
-	// Log role assignments
+	// Track old values before updating
 	oldRoleIDs := make([]uuid.UUID, len(oldUser.RoleIDs))
 	copy(oldRoleIDs, oldUser.RoleIDs)
 	s.userRepo.AssignRoles(ctx, user.ID, req.RoleIDs)
 
-	// Log role assignment changes
-	if !equalUUIDSlices(oldRoleIDs, req.RoleIDs) {
-		go func() {
-			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
-				UserID:      actorID,
-				Action:      "role_assignment",
-				Module:      "users",
-				ResourceID:  user.ID.String(),
-				Description: fmt.Sprintf("Roles assigned to user: %s (%s)", user.Username, user.Email),
-				OldValue:    map[string]interface{}{"role_ids": oldRoleIDs},
-				NewValue:    map[string]interface{}{"role_ids": req.RoleIDs},
-				IPAddress:   ipAddress,
-				UserAgent:   userAgent,
-				Status:      "success",
-			})
-		}()
-	}
-
-	// Log department assignments
+	// Track old values before updating
 	oldDepartmentIDs := make([]uuid.UUID, len(oldUser.DepartmentIDs))
 	copy(oldDepartmentIDs, oldUser.DepartmentIDs)
 	s.userRepo.AssignDepartments(ctx, user.ID, req.DepartmentIDs)
-
-	// Log department assignment changes
-	if !equalUUIDSlices(oldDepartmentIDs, req.DepartmentIDs) {
-		go func() {
-			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
-				UserID:      actorID,
-				Action:      "department_assignment",
-				Module:      "users",
-				ResourceID:  user.ID.String(),
-				Description: fmt.Sprintf("Departments assigned to user: %s (%s)", user.Username, user.Email),
-				OldValue:    map[string]interface{}{"department_ids": oldDepartmentIDs},
-				NewValue:    map[string]interface{}{"department_ids": req.DepartmentIDs},
-				IPAddress:   ipAddress,
-				UserAgent:   userAgent,
-				Status:      "success",
-			})
-		}()
-	}
 
 	// Sync classifications and locations from departments if departments changed
 	// This appends department-mapped items without removing manually selected ones
@@ -752,51 +746,15 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 	}
 
 	// Always update manually selected locations/classifications (append to preserve existing + add new)
-	// Log location assignments
+	// Track old values before updating
 	oldLocationIDs := make([]uuid.UUID, len(oldUser.LocationIDs))
 	copy(oldLocationIDs, oldUser.LocationIDs)
 	s.userRepo.AppendLocations(ctx, user.ID, req.LocationIDs)
 
-	// Log location assignment changes
-	if !equalUUIDSlices(oldLocationIDs, req.LocationIDs) {
-		go func() {
-			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
-				UserID:      actorID,
-				Action:      "location_assignment",
-				Module:      "users",
-				ResourceID:  user.ID.String(),
-				Description: fmt.Sprintf("Locations assigned to user: %s (%s)", user.Username, user.Email),
-				OldValue:    map[string]interface{}{"location_ids": oldLocationIDs},
-				NewValue:    map[string]interface{}{"location_ids": req.LocationIDs},
-				IPAddress:   ipAddress,
-				UserAgent:   userAgent,
-				Status:      "success",
-			})
-		}()
-	}
-
-	// Log classification assignments
+	// Track old values before updating
 	oldClassificationIDs := make([]uuid.UUID, len(oldUser.ClassificationIDs))
 	copy(oldClassificationIDs, oldUser.ClassificationIDs)
 	s.userRepo.AppendClassifications(ctx, user.ID, req.ClassificationIDs)
-
-	// Log classification assignment changes
-	if !equalUUIDSlices(oldClassificationIDs, req.ClassificationIDs) {
-		go func() {
-			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
-				UserID:      actorID,
-				Action:      "classification_assignment",
-				Module:      "users",
-				ResourceID:  user.ID.String(),
-				Description: fmt.Sprintf("Classifications assigned to user: %s (%s)", user.Username, user.Email),
-				OldValue:    map[string]interface{}{"classification_ids": oldClassificationIDs},
-				NewValue:    map[string]interface{}{"classification_ids": req.ClassificationIDs},
-				IPAddress:   ipAddress,
-				UserAgent:   userAgent,
-				Status:      "success",
-			})
-		}()
-	}
 
 	// Reload with relations
 	user, _ = s.userRepo.FindByIDWithRelations(ctx, user.ID)
@@ -807,8 +765,6 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 	onlyStatusChanged := oldUser.IsActive != nil && req.IsActive != nil && *oldUser.IsActive != *req.IsActive
 
 	// Log status change (Active/Inactive) separately for better audit trail
-	// This is kept because the middleware logs the general "update" action, but we want
-	// a specific "status_change" log when ONLY the active status is changed
 	if onlyStatusChanged {
 		go func() {
 			status := "activated"
@@ -830,17 +786,125 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		}()
 	}
 
+	// Build new value with names for better audit trail
+	newUserForLogging := map[string]interface{}{
+		"first_name": req.FirstName,
+		"last_name":  req.LastName,
+		"username":   req.Username,
+		"phone":      req.Phone,
+	}
+
+	if req.Extension != nil {
+		newUserForLogging["extension"] = *req.Extension
+	}
+	if req.MobileVerified != nil {
+		newUserForLogging["mobile_verified"] = *req.MobileVerified
+	}
+	if req.IsActive != nil {
+		newUserForLogging["is_active"] = *req.IsActive
+	}
+
+	// Add department names from request
+	if req.DepartmentIDs != nil {
+		newDeptNames := make([]string, 0)
+		for _, deptID := range req.DepartmentIDs {
+			for _, dept := range user.Departments {
+				if dept.ID == deptID {
+					newDeptNames = append(newDeptNames, dept.Name)
+				}
+			}
+		}
+		newUserForLogging["departments"] = newDeptNames
+	}
+
+	// Add location names from request
+	if req.LocationIDs != nil {
+		newLocNames := make([]string, 0)
+		for _, locID := range req.LocationIDs {
+			for _, loc := range user.Locations {
+				if loc.ID == locID {
+					newLocNames = append(newLocNames, loc.Name)
+				}
+			}
+		}
+		newUserForLogging["locations"] = newLocNames
+	}
+
+	// Add classification names from request
+	if req.ClassificationIDs != nil {
+		newClassNames := make([]string, 0)
+		for _, classID := range req.ClassificationIDs {
+			for _, cls := range user.Classifications {
+				if cls.ID == classID {
+					newClassNames = append(newClassNames, cls.Name)
+				}
+			}
+		}
+		newUserForLogging["classifications"] = newClassNames
+	}
+
+	// Add role names from request
+	if req.RoleIDs != nil {
+		newRoleNames := make([]string, 0)
+		for _, roleID := range req.RoleIDs {
+			for _, role := range user.Roles {
+				if role.ID == roleID {
+					newRoleNames = append(newRoleNames, role.Name)
+				}
+			}
+		}
+		newUserForLogging["roles"] = newRoleNames
+	}
+
 	// Log general user update with complete old/new values for audit trail
 	// This provides detailed field-level changes in the action log
 	go func() {
+		// Build a description of what changed
+		changedFields := []string{}
+		if req.FirstName != "" && req.FirstName != user.FirstName {
+			changedFields = append(changedFields, "first name")
+		}
+		if req.LastName != "" && req.LastName != user.LastName {
+			changedFields = append(changedFields, "last name")
+		}
+		if req.Username != "" && req.Username != user.Username {
+			changedFields = append(changedFields, "username")
+		}
+		if req.Phone != "" && req.Phone != user.Phone {
+			changedFields = append(changedFields, "phone")
+		}
+		if req.Extension != nil && *req.Extension != user.Extension {
+			changedFields = append(changedFields, "extension")
+		}
+		if req.MobileVerified != nil && *req.MobileVerified != user.MobileVerified {
+			if *req.MobileVerified {
+				changedFields = append(changedFields, "mobile verified")
+			} else {
+				changedFields = append(changedFields, "mobile unverified")
+			}
+		}
+		if req.IsActive != nil && *req.IsActive != user.IsActive {
+			if *req.IsActive {
+				changedFields = append(changedFields, "activated account")
+			} else {
+				changedFields = append(changedFields, "deactivated account")
+			}
+		}
+
+		description := fmt.Sprintf("User profile updated for user: %s (%s)", user.Username, user.Email)
+		if len(changedFields) > 0 {
+			description = fmt.Sprintf("Updated %s for user: %s (%s)",
+				strings.Join(changedFields, ", "), user.Username, user.Email)
+		}
+
 		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
 			UserID:      actorID,
 			Action:      "update",
 			Module:      "users",
 			ResourceID:  user.ID.String(),
-			Description: fmt.Sprintf("User profile updated for user: %s (%s)", user.Username, user.Email),
-			OldValue:    oldUser,
-			NewValue:    req,
+			Description: description,
+			OldValue:    oldUserForLogging,
+			NewValue:    newUserForLogging,
 			IPAddress:   ipAddress,
 			UserAgent:   userAgent,
 			Status:      "success",
@@ -859,10 +923,16 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 		return nil, err
 	}
 
+	// Create COPIES of values before they get modified
+	oldExtension := user.Extension
+	oldMobileVerified := user.MobileVerified
+	
 	oldUser := &models.UserUpdateRequest{
-		FirstName: user.FirstName,
-		LastName:  user.LastName,
-		Phone:     user.Phone,
+		FirstName:      user.FirstName,
+		LastName:       user.LastName,
+		Phone:          user.Phone,
+		Extension:      &oldExtension, // Pointer to the copy
+		MobileVerified: &oldMobileVerified, // Pointer to the copy
 	}
 
 	update := map[string]interface{}{}
@@ -925,12 +995,43 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
 	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
 	go func() {
+		// Build a description of what changed
+		changedFields := []string{}
+		if req.FirstName != "" && req.FirstName != user.FirstName {
+			changedFields = append(changedFields, "first name")
+		}
+		if req.LastName != "" && req.LastName != user.LastName {
+			changedFields = append(changedFields, "last name")
+		}
+		if req.Phone != "" && req.Phone != user.Phone {
+			changedFields = append(changedFields, "phone")
+		}
+		if req.Extension != nil && *req.Extension != user.Extension {
+			changedFields = append(changedFields, "extension")
+		}
+		if req.MobileVerified != nil && *req.MobileVerified != user.MobileVerified {
+			if *req.MobileVerified {
+				changedFields = append(changedFields, "mobile verified")
+			} else {
+				changedFields = append(changedFields, "mobile unverified")
+			}
+		}
+		if req.Username != "" && req.Username != user.Username {
+			changedFields = append(changedFields, "username")
+		}
+
+		description := fmt.Sprintf("User profile updated for user: %s (%s)", user.Username, user.Email)
+		if len(changedFields) > 0 {
+			description = fmt.Sprintf("Updated %s for user: %s (%s)", 
+				strings.Join(changedFields, ", "), user.Username, user.Email)
+		}
+
 		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
 			UserID:      userID,
 			Action:      "profile_update",
 			Module:      "users",
 			ResourceID:  user.ID.String(),
-			Description: fmt.Sprintf("User profile updated for user: %s (%s)", user.Username, user.Email),
+			Description: description,
 			OldValue:    oldUser,
 			NewValue:    req,
 			IPAddress:   ipAddress,
