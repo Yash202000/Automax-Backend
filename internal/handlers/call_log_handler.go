@@ -157,7 +157,7 @@ func (h *CallLogHandler) ListCallLogs(c *fiber.Ctx) error {
 
 	filter.ParticipantID = &userID
 
-	callLogs, total, err := h.service.ListCallLogs(c.UserContext(), &filter)
+	items, total, err := h.service.ListCallLogsSummary(c.UserContext(), &filter, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -166,7 +166,7 @@ func (h *CallLogHandler) ListCallLogs(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{
 		"success":     true,
-		"data":        callLogs,
+		"data":        items,
 		"total_items": total,
 		"total_pages": totalPages,
 		"page":        filter.Page,

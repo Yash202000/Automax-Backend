@@ -136,6 +136,19 @@ type CallLogResponse struct {
 	UpdatedAt    *time.Time            `json:"updated_at,omitempty"`
 }
 
+// CallLogListItem is the slim response returned by the listing API.
+// It contains only the fields needed for list views.
+type CallLogListItem struct {
+	ID                  uuid.UUID `json:"id"`
+	CallUuid            string    `json:"call_uuid"`
+	Status              string    `json:"status"`
+	Direction           string    `json:"direction"`             // "incoming" or "outgoing"
+	OtherPartyName      string    `json:"other_party_name"`      // full name of the other participant
+	OtherPartyExtension string    `json:"other_party_extension"` // SIP extension of the other participant
+	Duration            int       `json:"duration"`              // seconds; 0 when call is ongoing
+	CreatedAt           time.Time `json:"created_at"`
+}
+
 // CallLogFilter for filtering call logs
 type CallLogFilter struct {
 	CreatedBy     *uuid.UUID `json:"created_by" validate:"omitempty,uuid4"`
