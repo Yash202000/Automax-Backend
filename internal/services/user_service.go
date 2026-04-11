@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"mime/multipart"
+	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/config"
@@ -608,17 +609,20 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 	}
 
 	// Store old values for audit logging
-	// IMPORTANT: Capture boolean values BEFORE they're modified
+	// IMPORTANT: Create COPIES of values, not pointers to mutable fields
 	oldIsActive := user.IsActive
+	oldMobileVerified := user.MobileVerified
+	oldExtension := user.Extension // Copy the extension value
 	oldUser := &models.UserUpdateRequest{
 		FirstName:         user.FirstName,
 		LastName:          user.LastName,
 		Username:          user.Username,
 		Phone:             user.Phone,
-		Extension:         &user.Extension,
+		Extension:         &oldExtension, // Pointer to the copy, not the original
 		DepartmentID:      user.DepartmentID,
 		LocationID:        user.LocationID,
-		IsActive:          &oldIsActive, // Capture value, not pointer reference
+		IsActive:          &oldIsActive, // Pointer to the copy
+		MobileVerified:    &oldMobileVerified, // Pointer to the copy
 		DepartmentIDs:     make([]uuid.UUID, len(user.Departments)),
 		LocationIDs:       make([]uuid.UUID, len(user.Locations)),
 		ClassificationIDs: make([]uuid.UUID, len(user.Classifications)),
@@ -833,12 +837,50 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 	// Log general user update with complete old/new values for audit trail
 	// This provides detailed field-level changes in the action log
 	go func() {
+		// Build a description of what changed
+		changedFields := []string{}
+		if req.FirstName != "" && req.FirstName != user.FirstName {
+			changedFields = append(changedFields, "first name")
+		}
+		if req.LastName != "" && req.LastName != user.LastName {
+			changedFields = append(changedFields, "last name")
+		}
+		if req.Username != "" && req.Username != user.Username {
+			changedFields = append(changedFields, "username")
+		}
+		if req.Phone != "" && req.Phone != user.Phone {
+			changedFields = append(changedFields, "phone")
+		}
+		if req.Extension != nil && *req.Extension != user.Extension {
+			changedFields = append(changedFields, "extension")
+		}
+		if req.MobileVerified != nil && *req.MobileVerified != user.MobileVerified {
+			if *req.MobileVerified {
+				changedFields = append(changedFields, "mobile verified")
+			} else {
+				changedFields = append(changedFields, "mobile unverified")
+			}
+		}
+		if req.IsActive != nil && *req.IsActive != user.IsActive {
+			if *req.IsActive {
+				changedFields = append(changedFields, "activated account")
+			} else {
+				changedFields = append(changedFields, "deactivated account")
+			}
+		}
+
+		description := fmt.Sprintf("User profile updated for user: %s (%s)", user.Username, user.Email)
+		if len(changedFields) > 0 {
+			description = fmt.Sprintf("Updated %s for user: %s (%s)", 
+				strings.Join(changedFields, ", "), user.Username, user.Email)
+		}
+
 		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
 			UserID:      actorID,
 			Action:      "update",
 			Module:      "users",
 			ResourceID:  user.ID.String(),
-			Description: fmt.Sprintf("User profile updated for user: %s (%s)", user.Username, user.Email),
+			Description: description,
 			OldValue:    oldUser,
 			NewValue:    req,
 			IPAddress:   ipAddress,
@@ -859,10 +901,16 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 		return nil, err
 	}
 
+	// Create COPIES of values before they get modified
+	oldExtension := user.Extension
+	oldMobileVerified := user.MobileVerified
+	
 	oldUser := &models.UserUpdateRequest{
-		FirstName: user.FirstName,
-		LastName:  user.LastName,
-		Phone:     user.Phone,
+		FirstName:      user.FirstName,
+		LastName:       user.LastName,
+		Phone:          user.Phone,
+		Extension:      &oldExtension, // Pointer to the copy
+		MobileVerified: &oldMobileVerified, // Pointer to the copy
 	}
 
 	update := map[string]interface{}{}
@@ -925,12 +973,43 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
 	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
 	go func() {
+		// Build a description of what changed
+		changedFields := []string{}
+		if req.FirstName != "" && req.FirstName != user.FirstName {
+			changedFields = append(changedFields, "first name")
+		}
+		if req.LastName != "" && req.LastName != user.LastName {
+			changedFields = append(changedFields, "last name")
+		}
+		if req.Phone != "" && req.Phone != user.Phone {
+			changedFields = append(changedFields, "phone")
+		}
+		if req.Extension != nil && *req.Extension != user.Extension {
+			changedFields = append(changedFields, "extension")
+		}
+		if req.MobileVerified != nil && *req.MobileVerified != user.MobileVerified {
+			if *req.MobileVerified {
+				changedFields = append(changedFields, "mobile verified")
+			} else {
+				changedFields = append(changedFields, "mobile unverified")
+			}
+		}
+		if req.Username != "" && req.Username != user.Username {
+			changedFields = append(changedFields, "username")
+		}
+
+		description := fmt.Sprintf("User profile updated for user: %s (%s)", user.Username, user.Email)
+		if len(changedFields) > 0 {
+			description = fmt.Sprintf("Updated %s for user: %s (%s)", 
+				strings.Join(changedFields, ", "), user.Username, user.Email)
+		}
+
 		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
 			UserID:      userID,
 			Action:      "profile_update",
 			Module:      "users",
 			ResourceID:  user.ID.String(),
-			Description: fmt.Sprintf("User profile updated for user: %s (%s)", user.Username, user.Email),
+			Description: description,
 			OldValue:    oldUser,
 			NewValue:    req,
 			IPAddress:   ipAddress,
