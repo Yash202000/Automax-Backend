@@ -192,7 +192,7 @@ func (h *CallLogHandler) StartCall(c *fiber.Ctx) error {
 	var req struct {
 		CallUUID     string        `json:"call_uuid" validate:"required"`
 		Participants []interface{} `json:"participants,omitempty"`
-		InitiatorID  *uuid.UUID    `json:"initiator_id" validate:"required"`
+		InitiatorID  string        `json:"initiator_id" validate:"required"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -210,10 +210,11 @@ func (h *CallLogHandler) StartCall(c *fiber.Ctx) error {
 	// if !ok {
 	// 	return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
 	// }
-	user, err := h.userSvc.GetUserByID(c.Context(), *req.InitiatorID)
+	user, err := h.userSvc.FindByExtension(c.Context(), req.InitiatorID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "User not found")
 	}
+
 	userID := user.ID
 
 	// Resolve participant IDs from user IDs or extension IDs
