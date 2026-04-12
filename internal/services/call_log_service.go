@@ -2,12 +2,14 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type CallLogService interface {
@@ -16,6 +18,7 @@ type CallLogService interface {
 	UpdateCallLog(ctx context.Context, id uuid.UUID, req *models.CallLogUpdateRequest) (*models.CallLogResponse, error)
 	DeleteCallLog(ctx context.Context, id uuid.UUID) error
 	ListCallLogs(ctx context.Context, filter *models.CallLogFilter) ([]models.CallLogResponse, int64, error)
+	ListCallLogsSummary(ctx context.Context, filter *models.CallLogFilter, currentUserID uuid.UUID) ([]models.CallLogListItem, int64, error)
 	GetStats(ctx context.Context) (*models.CallLogStats, error)
 	StartCall(ctx context.Context, callUUID string, createdBy uuid.UUID, participants []uuid.UUID) (*models.CallLogResponse, error)
 	EndCall(ctx context.Context, callUUID string, endAt *time.Time) (*models.CallLogResponse, error)
@@ -142,11 +145,108 @@ func (s *callLogService) ListCallLogs(ctx context.Context, filter *models.CallLo
 	return responses, total, nil
 }
 
+// ListCallLogsSummary returns the slim list view for call logs.
+// Direction is "outgoing" when the current user created the call, "incoming" otherwise.
+// Other party is the creator (for incoming) or the first non-self participant (for outgoing).
+func (s *callLogService) ListCallLogsSummary(ctx context.Context, filter *models.CallLogFilter, currentUserID uuid.UUID) ([]models.CallLogListItem, int64, error) {
+	if filter.Page <= 0 {
+		filter.Page = 1
+	}
+	if filter.Limit <= 0 || filter.Limit > 100 {
+		filter.Limit = 10
+	}
+
+	callLogs, total, err := s.repo.ListSummary(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Collect other-party user IDs to fetch in bulk.
+	otherPartyIDs := make([]uuid.UUID, 0, len(callLogs))
+	directions := make([]string, len(callLogs))
+
+	for i, cl := range callLogs {
+		if cl.CreatedBy == currentUserID {
+			directions[i] = "outgoing"
+			// Other party = first participant who is not the current user.
+			for _, pid := range cl.Participants {
+				if pid != currentUserID {
+					otherPartyIDs = append(otherPartyIDs, pid)
+					break
+				}
+			}
+			// Fall back to invited users if participants list is empty.
+			if len(otherPartyIDs) == i {
+				for _, pid := range cl.InvitedUsers {
+					if pid != currentUserID {
+						otherPartyIDs = append(otherPartyIDs, pid)
+						break
+					}
+				}
+			}
+		} else {
+			directions[i] = "incoming"
+			// Other party = the creator.
+			otherPartyIDs = append(otherPartyIDs, cl.CreatedBy)
+		}
+	}
+
+	// Bulk-fetch other-party users.
+	userMap := make(map[uuid.UUID]*models.User)
+	if len(otherPartyIDs) > 0 {
+		users, err := s.userRepo.FindByIDs(ctx, otherPartyIDs)
+		if err == nil {
+			for i := range users {
+				userMap[users[i].ID] = &users[i]
+			}
+		}
+	}
+
+	items := make([]models.CallLogListItem, len(callLogs))
+	otherPartyIdx := 0
+	for i, cl := range callLogs {
+		duration := 0
+		if cl.StartAt != nil && cl.EndAt != nil {
+			duration = int(cl.EndAt.Sub(*cl.StartAt).Seconds())
+		}
+
+		item := models.CallLogListItem{
+			ID:        cl.ID,
+			CallUuid:  cl.CallUuid,
+			Status:    cl.Status,
+			Direction: directions[i],
+			Duration:  duration,
+			CreatedAt: cl.CreatedAt,
+		}
+
+		if otherPartyIdx < len(otherPartyIDs) {
+			if u, ok := userMap[otherPartyIDs[otherPartyIdx]]; ok {
+				item.OtherPartyName = u.FirstName + " " + u.LastName
+				item.OtherPartyExtension = u.Extension
+			}
+			otherPartyIdx++
+		}
+
+		items[i] = item
+	}
+
+	return items, total, nil
+}
+
 func (s *callLogService) GetStats(ctx context.Context) (*models.CallLogStats, error) {
 	return s.repo.GetStats(ctx)
 }
 
 func (s *callLogService) StartCall(ctx context.Context, callUUID string, createdBy uuid.UUID, participants []uuid.UUID) (*models.CallLogResponse, error) {
+	callLog, err := s.repo.FindByCallUUID(ctx, callUUID)
+	if err != nil && err != gorm.ErrRecordNotFound {
+		return nil, err
+	}
+
+	if callLog != nil {
+		return nil, fmt.Errorf("call already exists") // Call already exists, do not create a duplicate
+	}
+
 	now := time.Now()
 	req := &models.CallLogCreateRequest{
 		CallUuid:     callUUID,
