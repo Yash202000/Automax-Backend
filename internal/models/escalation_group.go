@@ -21,8 +21,12 @@ type EscalationGroup struct {
 	// Classifications supports multiple classifications per group.
 	Classifications []Classification `gorm:"many2many:escalation_group_classifications;" json:"classifications,omitempty"`
 
-	// How often to send: "daily" or "weekly" (weekly = every Monday)
+	// How often to send: hourly, every_6_hours, every_12_hours, daily, weekly, bi_weekly, monthly
 	Frequency string `gorm:"size:20;not null;default:'daily'" json:"frequency"`
+
+	// ScheduledTime is the HH:MM time at which the group fires (e.g. "09:00").
+	// For sub-daily frequencies (hourly/every_6_hours/every_12_hours) only the minute is used.
+	ScheduledTime string `gorm:"size:5;not null;default:'09:00'" json:"scheduled_time"`
 
 	// Which channels to use: "sms", "email", or "both"
 	Channel string `gorm:"size:20;not null;default:'both'" json:"channel"`
@@ -58,7 +62,8 @@ type CreateEscalationGroupRequest struct {
 	ClassificationIDs []string                       `json:"classification_ids" validate:"omitempty,dive,uuid"`
 	// ClassificationID is kept for backward compatibility (single).
 	ClassificationID  string                         `json:"classification_id" validate:"omitempty,uuid"`
-	Frequency         string                         `json:"frequency" validate:"required,oneof=daily weekly"`
+	Frequency         string                         `json:"frequency" validate:"required,oneof=hourly every_6_hours every_12_hours daily weekly bi_weekly monthly"`
+	ScheduledTime     string                         `json:"scheduled_time" validate:"required,datetime=15:04"`
 	Channel           string                         `json:"channel" validate:"required,oneof=sms email both"`
 	IsActive          *bool                          `json:"is_active"`
 	Targets           []EscalationGroupTargetRequest `json:"targets"`
@@ -72,7 +77,8 @@ type UpdateEscalationGroupRequest struct {
 	ClassificationIDs []string                       `json:"classification_ids" validate:"omitempty,dive,uuid"`
 	// ClassificationID is kept for backward compatibility (single).
 	ClassificationID  *string                        `json:"classification_id" validate:"omitempty,uuid"`
-	Frequency         *string                        `json:"frequency" validate:"omitempty,oneof=daily weekly"`
+	Frequency         *string                        `json:"frequency" validate:"omitempty,oneof=hourly every_6_hours every_12_hours daily weekly bi_weekly monthly"`
+	ScheduledTime     *string                        `json:"scheduled_time" validate:"omitempty,datetime=15:04"`
 	Channel           *string                        `json:"channel" validate:"omitempty,oneof=sms email both"`
 	IsActive          *bool                          `json:"is_active"`
 	Targets           []EscalationGroupTargetRequest `json:"targets"` // nil = no change; non-nil = full replacement
@@ -89,6 +95,7 @@ type EscalationGroupResponse struct {
 	Classification   *ClassificationResponse         `json:"classification,omitempty"`
 	Classifications  []ClassificationResponse        `json:"classifications"`
 	Frequency        string                          `json:"frequency"`
+	ScheduledTime    string                          `json:"scheduled_time"`
 	Channel          string                          `json:"channel"`
 	IsActive         bool                            `json:"is_active"`
 	LastNotifiedAt   *time.Time                      `json:"last_notified_at,omitempty"`
@@ -104,6 +111,7 @@ func ToEscalationGroupResponse(g *EscalationGroup) EscalationGroupResponse {
 		Name:            g.Name,
 		ClassificationID: g.ClassificationID,
 		Frequency:       g.Frequency,
+		ScheduledTime:   g.ScheduledTime,
 		Channel:         g.Channel,
 		IsActive:        g.IsActive,
 		LastNotifiedAt:  g.LastNotifiedAt,
