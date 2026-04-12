@@ -133,7 +133,7 @@ func ToEscalationGroupResponse(g *EscalationGroup) EscalationGroupResponse {
 			ID:              t.ID,
 			DepartmentID:    t.DepartmentID,
 			RoleID:          t.RoleID,
-			ExcludedUserIDs: t.ExcludedUserIDs,
+			ExcludedUserIDs: []string(t.ExcludedUserIDs),
 		}
 		if tr.ExcludedUserIDs == nil {
 			tr.ExcludedUserIDs = []string{}

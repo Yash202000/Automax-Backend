@@ -649,10 +649,10 @@ func buildGroupTargets(reqs []models.EscalationGroupTargetRequest) ([]models.Esc
 	targets := make([]models.EscalationGroupTarget, 0, len(reqs))
 	for _, r := range reqs {
 		t := models.EscalationGroupTarget{
-			ExcludedUserIDs: r.ExcludedUserIDs,
+			ExcludedUserIDs: models.TextArray(r.ExcludedUserIDs),
 		}
 		if t.ExcludedUserIDs == nil {
-			t.ExcludedUserIDs = []string{}
+			t.ExcludedUserIDs = models.TextArray{}
 		}
 		if r.DepartmentID != nil {
 			id, err := uuid.Parse(*r.DepartmentID)
