@@ -19,6 +19,7 @@ type NotificationLogRepository interface {
 	GetStats(ctx context.Context, channel string, sentBy *uuid.UUID, receivedBy *uuid.UUID) ([]models.NotificationChannelStat, error)
 	GetStatsBySentBy(ctx context.Context, channel string, sentBy *uuid.UUID, receivedBy *uuid.UUID) ([]models.NotificationUserStatRow, error)
 	GetStatsByReceivedBy(ctx context.Context, channel string, sentBy *uuid.UUID, receivedBy *uuid.UUID) ([]models.NotificationUserStatRow, error)
+	GetUserNotificationStats(ctx context.Context, channel string, userID uuid.UUID) (*models.NotificationUserStatRow, error)
 	Update(ctx context.Context, log *models.NotificationLog) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	MarkAsRead(ctx context.Context, id uuid.UUID, isRead bool) error
@@ -356,4 +357,33 @@ func (r *notificationLogRepository) GetStatsByReceivedBy(ctx context.Context, ch
 		return nil, err
 	}
 	return rows, nil
+}
+
+// GetUserNotificationStats returns aggregated counts for all notifications .where the user is either the sender or the receiver, in a single query.
+
+func (r *notificationLogRepository) GetUserNotificationStats(ctx context.Context, channel string, userID uuid.UUID) (*models.NotificationUserStatRow, error) {
+	rawSQL := `
+		SELECT
+			COUNT(*)                                                                         AS total,
+			SUM(CASE WHEN category = 'sent'   AND sent_by     = @userID THEN 1 ELSE 0 END) AS sent,
+			SUM(CASE WHEN status  = 'failed'  AND sent_by     = @userID THEN 1 ELSE 0 END) AS failed,
+			SUM(CASE WHEN category = 'inbox'  AND received_by = @userID THEN 1 ELSE 0 END) AS inbox,
+			SUM(CASE WHEN category = 'draft'  AND sent_by     = @userID THEN 1 ELSE 0 END) AS draft,
+			SUM(CASE WHEN category = 'outbox' AND sent_by     = @userID THEN 1 ELSE 0 END) AS outbox,
+			SUM(CASE WHEN category = 'trash'                            THEN 1 ELSE 0 END) AS trash,
+			SUM(CASE WHEN category = 'spam'                             THEN 1 ELSE 0 END) AS spam
+		FROM notification_logs
+		WHERE (sent_by = @userID OR received_by = @userID)
+		AND deleted_at IS NULL
+		AND (@channel = '' OR channel = @channel)
+	`
+
+	var row models.NotificationUserStatRow
+	if err := r.db.WithContext(ctx).Raw(rawSQL, map[string]interface{}{
+		"userID":  userID,
+		"channel": channel,
+	}).Scan(&row).Error; err != nil {
+		return nil, err
+	}
+	return &row, nil
 }

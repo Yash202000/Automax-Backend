@@ -424,7 +424,7 @@ type NotificationUserCounts struct {
 	Sent   int64 `json:"sent"`
 	Failed int64 `json:"failed"`
 	Inbox  int64 `json:"inbox"`
-	Draft  int64 `json:"draft"`
+	Draft  int64 `json:"drafts"`
 	Outbox int64 `json:"outbox"`
 	Trash  int64 `json:"trash"`
 	Spam   int64 `json:"spam"`
