@@ -173,7 +173,19 @@ func (r *userRepository) FindByLast6Digits(ctx context.Context, last6Digits stri
 }
 
 func (r *userRepository) Update(ctx context.Context, user *models.User) error {
-	return r.db.WithContext(ctx).Save(user).Error
+	// Use Updates() with specific fields instead of Save() to avoid saving all loaded relations
+	// This prevents the "extended protocol limited to 65535 parameters" error
+	return r.db.WithContext(ctx).Model(&models.User{}).Where("id = ?", user.ID).Updates(map[string]interface{}{
+		"username":        user.Username,
+		"first_name":      user.FirstName,
+		"last_name":       user.LastName,
+		"phone":           user.Phone,
+		"extension":       user.Extension,
+		"mobile_verified": user.MobileVerified,
+		"is_active":       user.IsActive,
+		"department_id":   user.DepartmentID,
+		"location_id":     user.LocationID,
+	}).Error
 }
 
 func (r *userRepository) UpdateLastLogin(ctx context.Context, id uuid.UUID) error {
