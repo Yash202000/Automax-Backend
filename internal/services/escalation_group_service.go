@@ -387,10 +387,10 @@ func (s *EscalationGroupService) sendGroupNotification(ctx context.Context, grou
 		slaPageURL,
 	)
 
-	// sentBy: use the first user with escalation-groups:manage permission; fall back to the notified user
+	// sentBy: default to admin@automax.com; fall back to the notified user
 	var sentBy *uuid.UUID
-	if managers, err := s.userRepo.FindByPermissionCode(ctx, "escalation-groups:manage_rules"); err == nil && len(managers) > 0 {
-		sentBy = &managers[0].ID
+	if admin, err := s.userRepo.FindByEmail(ctx, "admin@automax.com"); err == nil && admin != nil {
+		sentBy = &admin.ID
 	} else {
 		sentBy = &user.ID
 	}
