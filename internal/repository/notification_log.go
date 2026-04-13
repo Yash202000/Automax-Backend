@@ -364,17 +364,18 @@ func (r *notificationLogRepository) GetStatsByReceivedBy(ctx context.Context, ch
 func (r *notificationLogRepository) GetUserNotificationStats(ctx context.Context, channel string, userID uuid.UUID) (*models.NotificationUserStatRow, error) {
 	rawSQL := `
 		SELECT
-			COUNT(*)                                                                         AS total,
-			SUM(CASE WHEN category = 'sent'   AND sent_by     = @userID THEN 1 ELSE 0 END) AS sent,
-			SUM(CASE WHEN status  = 'failed'  AND sent_by     = @userID THEN 1 ELSE 0 END) AS failed,
-			SUM(CASE WHEN category = 'inbox'  AND received_by = @userID THEN 1 ELSE 0 END) AS inbox,
-			SUM(CASE WHEN category = 'draft'  AND sent_by     = @userID THEN 1 ELSE 0 END) AS draft,
-			SUM(CASE WHEN category = 'outbox' AND sent_by     = @userID THEN 1 ELSE 0 END) AS outbox,
-			SUM(CASE WHEN category = 'trash'                            THEN 1 ELSE 0 END) AS trash,
-			SUM(CASE WHEN category = 'spam'                             THEN 1 ELSE 0 END) AS spam
+			COUNT(*)                                                                                                    AS total,
+			SUM(CASE WHEN category = 'sent'   AND direction = 'outbound' AND sent_by     = @userID THEN 1 ELSE 0 END) AS sent,
+			SUM(CASE WHEN status  = 'failed'                             AND sent_by     = @userID THEN 1 ELSE 0 END) AS failed,
+			SUM(CASE WHEN category = 'inbox'  AND direction = 'inbound'  AND received_by = @userID THEN 1 ELSE 0 END) AS inbox,
+			SUM(CASE WHEN category = 'draft'                             AND sent_by     = @userID THEN 1 ELSE 0 END) AS draft,
+			SUM(CASE WHEN category = 'outbox'                            AND sent_by     = @userID THEN 1 ELSE 0 END) AS outbox,
+			SUM(CASE WHEN category = 'trash'                                                       THEN 1 ELSE 0 END) AS trash,
+			SUM(CASE WHEN category = 'spam'                                                        THEN 1 ELSE 0 END) AS spam
 		FROM notification_logs
 		WHERE (sent_by = @userID OR received_by = @userID)
 		AND deleted_at IS NULL
+		AND NOT (channel IN ('sms', 'email') AND status = 'failed')
 		AND (@channel = '' OR channel = @channel)
 	`
 

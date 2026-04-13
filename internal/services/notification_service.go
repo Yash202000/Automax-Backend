@@ -85,6 +85,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 
 	status := "sent"
 	provider := channel
+	fromPhone := ""
 	var recipientStatuses models.RecipientArray
 	var attachmentInfo models.AttachmentArray
 
@@ -149,6 +150,11 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 
 		provider = "smtp"
 	case "sms":
+		if sentBy != nil {
+			if senderUser, err := s.userRepo.FindByID(ctx, *sentBy); err == nil && senderUser != nil {
+				fromPhone = senderUser.Phone
+			}
+		}
 		for _, phone := range to {
 			err := utils.SendSMS(phone, body)
 			if err != nil {
@@ -222,6 +228,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		Recipients:   recipientStatuses,
 		CC:           cc,
 		BCC:          bcc,
+		From:         fromPhone,
 		Subject:      subject,
 		Body:         body,
 		OTPSessionID: sessionID,
