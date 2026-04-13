@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -21,7 +22,7 @@ type CallLogService interface {
 	ListCallLogsSummary(ctx context.Context, filter *models.CallLogFilter, currentUserID uuid.UUID) ([]models.CallLogListItem, int64, error)
 	GetStats(ctx context.Context) (*models.CallLogStats, error)
 	StartCall(ctx context.Context, callUUID string, createdBy uuid.UUID, participants []uuid.UUID) (*models.CallLogResponse, error)
-	EndCall(ctx context.Context, callUUID string, endAt *time.Time) (*models.CallLogResponse, error)
+	EndCall(ctx context.Context, callUUID string, endAt *time.Time, status string) (*models.CallLogResponse, error)
 	JoinCall(ctx context.Context, callUUID string, userID uuid.UUID) error
 	GetCallLogsByUserID(ctx context.Context, userID uuid.UUID, page, limit int) ([]models.CallLogResponse, int64, error)
 	GetSipInfo(ctx context.Context) (map[string]interface{}, error)
@@ -247,10 +248,10 @@ func (s *callLogService) StartCall(ctx context.Context, callUUID string, created
 		return nil, fmt.Errorf("call already exists") // Call already exists, do not create a duplicate
 	}
 
-	now := time.Now()
+	// now := time.Now()
 	req := &models.CallLogCreateRequest{
-		CallUuid:     callUUID,
-		StartAt:      &now,
+		CallUuid: callUUID,
+		// StartAt:      &now,
 		Status:       "ongoing",
 		Participants: participants,
 		InvitedUsers: participants,
@@ -259,7 +260,7 @@ func (s *callLogService) StartCall(ctx context.Context, callUUID string, created
 	return s.CreateCallLog(ctx, req, createdBy)
 }
 
-func (s *callLogService) EndCall(ctx context.Context, callUUID string, endAt *time.Time) (*models.CallLogResponse, error) {
+func (s *callLogService) EndCall(ctx context.Context, callUUID string, endAt *time.Time, status string) (*models.CallLogResponse, error) {
 	callLog, err := s.repo.FindByCallUUID(ctx, callUUID)
 	if err != nil {
 		return nil, err
@@ -272,7 +273,7 @@ func (s *callLogService) EndCall(ctx context.Context, callUUID string, endAt *ti
 
 	updateReq := &models.CallLogUpdateRequest{
 		EndAt:  endAt,
-		Status: "completed",
+		Status: status,
 	}
 
 	return s.UpdateCallLog(ctx, callLog.ID, updateReq)
@@ -293,7 +294,10 @@ func (s *callLogService) JoinCall(ctx context.Context, callUUID string, userID u
 		}
 	}
 	if !found {
+		log.Println("Found User: ", userID)
+		startAt := time.Now()
 		callLog.JoinedUsers = append(callLog.JoinedUsers, userID)
+		callLog.StartAt = &startAt
 		callLog.UpdatedAt = &time.Time{}
 		*callLog.UpdatedAt = time.Now()
 		return s.repo.Update(ctx, callLog)
