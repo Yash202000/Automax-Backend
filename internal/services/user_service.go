@@ -745,16 +745,16 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		_ = s.syncDepartmentAttributesToUser(ctx, user.ID)
 	}
 
-	// Always update manually selected locations/classifications (append to preserve existing + add new)
+	// Update manually selected locations/classifications (replace to allow removal)
 	// Track old values before updating
 	oldLocationIDs := make([]uuid.UUID, len(oldUser.LocationIDs))
 	copy(oldLocationIDs, oldUser.LocationIDs)
-	s.userRepo.AppendLocations(ctx, user.ID, req.LocationIDs)
+	s.userRepo.AssignLocations(ctx, user.ID, req.LocationIDs)
 
 	// Track old values before updating
 	oldClassificationIDs := make([]uuid.UUID, len(oldUser.ClassificationIDs))
 	copy(oldClassificationIDs, oldUser.ClassificationIDs)
-	s.userRepo.AppendClassifications(ctx, user.ID, req.ClassificationIDs)
+	s.userRepo.AssignClassifications(ctx, user.ID, req.ClassificationIDs)
 
 	// Reload with relations
 	user, _ = s.userRepo.FindByIDWithRelations(ctx, user.ID)
@@ -1490,15 +1490,15 @@ func (s *userService) syncDepartmentAttributesToUser(ctx context.Context, userID
 		locationIDs = append(locationIDs, id)
 	}
 
-	// Assign to user (append instead of replace to preserve manually assigned items)
+	// Assign to user (replace with department-derived values)
 	if len(classificationIDs) > 0 {
-		if err := s.userRepo.AppendClassifications(ctx, userID, classificationIDs); err != nil {
+		if err := s.userRepo.AssignClassifications(ctx, userID, classificationIDs); err != nil {
 			fmt.Printf("Warning: failed to sync classifications from departments: %v\n", err)
 		}
 	}
 
 	if len(locationIDs) > 0 {
-		if err := s.userRepo.AppendLocations(ctx, userID, locationIDs); err != nil {
+		if err := s.userRepo.AssignLocations(ctx, userID, locationIDs); err != nil {
 			fmt.Printf("Warning: failed to sync locations from departments: %v\n", err)
 		}
 	}
