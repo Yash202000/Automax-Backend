@@ -271,7 +271,26 @@ func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 			"errors":  validationErrors,
 		})
 	}
+	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.IVR) && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
+		if req.Source == "" || req.Source != constants.INCIDENT_SOURCE.IVR {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"success": false,
+				"errors": map[string]string{
+					"source": "Source is required and should be 'ivr' for IVR updates",
+				},
+			})
+		}
 
+		if req.Comment == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"success": false,
+				"errors": map[string]string{
+					"comment": "Comment is required for IVR updates",
+				},
+			})
+		}
+	}
 	incident, err := h.service.UpdateIncident(c.UserContext(), id, &req, userID, roleIDs)
 	if err != nil {
 		if errors.Is(err, services.ErrEditNotAllowed) {
