@@ -260,14 +260,22 @@ func (h *CallLogHandler) EndCall(c *fiber.Ctx) error {
 	}
 
 	var req struct {
-		EndAt *time.Time `json:"end_at,omitempty"`
+		EndAt  *time.Time `json:"end_at,omitempty"`
+		Status string     `json:"status,omitempty" validate:"required"` // e.g., "completed", "missed", etc.
 	}
 
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	callLog, err := h.service.EndCall(c.UserContext(), callUUID, req.EndAt)
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	callLog, err := h.service.EndCall(c.UserContext(), callUUID, req.EndAt, req.Status)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
