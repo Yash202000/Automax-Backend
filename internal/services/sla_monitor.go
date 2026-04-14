@@ -119,10 +119,10 @@ func (m *slaMonitor) CheckSLABreaches(ctx context.Context) error {
 	// 	log.Printf("Global SLA breach notifications failed: %v", err)
 	// }
 
-	//Send per-state SLA breach notifications to users responsible for next transitions this features is on hold  (can use into next phase)
-	// if err := m.escalationService.ProcessTransitionSLAAlerts(ctx); err != nil {
-	// 	log.Printf("Transition SLA alert notifications failed: %v", err)
-	// }
+	// Send per-state SLA breach notifications and fire escalation policies
+	if err := m.escalationService.ProcessTransitionSLAAlerts(ctx); err != nil {
+		log.Printf("Transition SLA alert notifications failed: %v", err)
+	}
 
 	// Send custom escalation-group grouped summaries (daily/weekly, per classification)
 	if err := m.escalationGroupService.ProcessGroupEscalations(ctx); err != nil {

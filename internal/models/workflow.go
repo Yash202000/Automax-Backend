@@ -73,8 +73,9 @@ type WorkflowState struct {
 	PositionX int `gorm:"default:0" json:"position_x"`
 	PositionY int `gorm:"default:0" json:"position_y"`
 
-	// SLA Configuration (hours allowed in this state)
-	SLAHours *int `gorm:"default:null" json:"sla_hours"`
+	// SLA Configuration
+	SLAHours *int   `gorm:"default:null" json:"sla_hours"`
+	SLAUnit  string `gorm:"size:10;default:'hours'" json:"sla_unit"` // minutes, hours, days, months
 
 	// EscalationPolicyID links the escalation policy to fire when this state's SLA is breached.
 	EscalationPolicyID *uuid.UUID        `gorm:"type:uuid;index" json:"escalation_policy_id,omitempty"`
@@ -111,6 +112,31 @@ func (s *WorkflowState) BeforeCreate(tx *gorm.DB) error {
 		s.ID = uuid.New()
 	}
 	return nil
+}
+
+// SLADuration converts SLAHours + SLAUnit into a time.Duration.
+// Returns 0 if SLAHours is nil or zero.
+func (s *WorkflowState) SLADuration() time.Duration {
+	if s.SLAHours == nil || *s.SLAHours == 0 {
+		return 0
+	}
+	val := *s.SLAHours
+	switch s.SLAUnit {
+	case "minutes":
+		return time.Duration(val) * time.Minute
+	case "days":
+		return time.Duration(val) * 24 * time.Hour
+	case "months":
+		return time.Duration(val) * 30 * 24 * time.Hour
+	default: // "hours"
+		return time.Duration(val) * time.Hour
+	}
+}
+
+// SLAAsHours returns the SLA duration expressed as hours (float64).
+// Returns 0 if SLAHours is nil or zero.
+func (s *WorkflowState) SLAAsHours() float64 {
+	return s.SLADuration().Hours()
 }
 
 // WorkflowTransition represents a transition between states
@@ -289,6 +315,7 @@ type WorkflowStateCreateRequest struct {
 	PositionX          int      `json:"position_x"`
 	PositionY          int      `json:"position_y"`
 	SLAHours           *int     `json:"sla_hours"`
+	SLAUnit            string   `json:"sla_unit" validate:"omitempty,oneof=minutes hours days months"`
 	EscalationPolicyID *string  `json:"escalation_policy_id" validate:"omitempty,uuid"`
 	IsMergable         bool     `json:"is_mergable"`
 	IsReadyToClose     bool     `json:"is_ready_to_close"`
@@ -307,6 +334,7 @@ type WorkflowStateUpdateRequest struct {
 	PositionX          *int     `json:"position_x"`
 	PositionY          *int     `json:"position_y"`
 	SLAHours           *int     `json:"sla_hours"`
+	SLAUnit            string   `json:"sla_unit" validate:"omitempty,oneof=minutes hours days months"`
 	EscalationPolicyID *string  `json:"escalation_policy_id" validate:"omitempty,uuid"`
 	IsMergable         *bool    `json:"is_mergable"`
 	IsReadyToClose     *bool    `json:"is_ready_to_close"`
@@ -456,6 +484,7 @@ type WorkflowStateResponse struct {
 	PositionX          int                       `json:"position_x"`
 	PositionY          int                       `json:"position_y"`
 	SLAHours           *int                      `json:"sla_hours"`
+	SLAUnit            string                    `json:"sla_unit"`
 	EscalationPolicyID *uuid.UUID                `json:"escalation_policy_id,omitempty"`
 	EscalationPolicy   *EscalationPolicyResponse `json:"escalation_policy,omitempty"`
 	IsMergable         bool                      `json:"is_mergable"`
@@ -644,6 +673,7 @@ func ToWorkflowStateResponse(s *WorkflowState) WorkflowStateResponse {
 		PositionX:          s.PositionX,
 		PositionY:          s.PositionY,
 		SLAHours:           s.SLAHours,
+		SLAUnit:            s.SLAUnit,
 		EscalationPolicyID: s.EscalationPolicyID,
 		IsMergable:         s.IsMergable,
 		IsReadyToClose:     s.IsReadyToClose,
@@ -839,6 +869,7 @@ type WorkflowStateExport struct {
 	PositionX     int            `json:"position_x"`
 	PositionY     int            `json:"position_y"`
 	SLAHours      *int           `json:"sla_hours,omitempty"`
+	SLAUnit       string         `json:"sla_unit,omitempty"`
 	SortOrder     int            `json:"sort_order"`
 	ViewableRoles []CodeNamePair `json:"viewable_roles,omitempty"`
 	EditableRoles []CodeNamePair `json:"editable_roles,omitempty"`

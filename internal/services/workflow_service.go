@@ -676,6 +676,7 @@ func (s *workflowService) DuplicateWorkflow(ctx context.Context, id uuid.UUID, c
 			PositionX:   state.PositionX,
 			PositionY:   state.PositionY,
 			SLAHours:    state.SLAHours,
+			SLAUnit:     state.SLAUnit,
 			SortOrder:   state.SortOrder,
 			IsActive:    state.IsActive,
 		}
@@ -802,6 +803,7 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 		PositionX:       req.PositionX,
 		PositionY:       req.PositionY,
 		SLAHours:        req.SLAHours,
+		SLAUnit:         req.SLAUnit,
 		IsMergable:      req.IsMergable,
 		IsReadyToClose:  req.IsReadyToClose,
 		DurationOptions: durationOptionsJSON,
@@ -918,6 +920,9 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 	}
 	if req.SLAHours != nil {
 		state.SLAHours = req.SLAHours
+	}
+	if req.SLAUnit != "" {
+		state.SLAUnit = req.SLAUnit
 	}
 	if req.EscalationPolicyID != nil {
 		if *req.EscalationPolicyID == "" {
@@ -1560,6 +1565,7 @@ func (s *workflowService) ExportWorkflow(ctx context.Context, id uuid.UUID) ([]b
 			PositionX:     state.PositionX,
 			PositionY:     state.PositionY,
 			SLAHours:      state.SLAHours,
+			SLAUnit:       state.SLAUnit,
 			SortOrder:     state.SortOrder,
 			ViewableRoles: viewableRoles,
 			EditableRoles: editableRoles,
@@ -1855,6 +1861,7 @@ func (s *workflowService) ImportWorkflow(ctx context.Context, data *models.Workf
 			PositionX:   stateData.PositionX,
 			PositionY:   stateData.PositionY,
 			SLAHours:    stateData.SLAHours,
+			SLAUnit:     stateData.SLAUnit,
 			SortOrder:   stateData.SortOrder,
 			IsActive:    true,
 		}

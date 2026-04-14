@@ -87,8 +87,12 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 
 		// Calculate actual hours spent in the current state
 		hoursInState := s.hoursInCurrentState(ctx, incident)
-		log.Printf("[EscalationService] Incident %s has been in state '%s' for %.2fh (SLA: %dh)",
-			incident.IncidentNumber, state.Name, hoursInState, *state.SLAHours)
+		slaUnit := state.SLAUnit
+		if slaUnit == "" {
+			slaUnit = "hours"
+		}
+		log.Printf("[EscalationService] Incident %s has been in state '%s' for %.2fh (SLA: %d %s)",
+			incident.IncidentNumber, state.Name, hoursInState, *state.SLAHours, slaUnit)
 
 		// ── Policy-driven path ──────────────────────────────────────────────
 		if state.EscalationPolicyID != nil && s.policyService != nil {
@@ -171,7 +175,7 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 					Email:           user.Email,
 					Phone:           user.Phone,
 					Actions:         sentChannels,
-					SLAHoursAllowed: *state.SLAHours,
+					SLAHoursAllowed: int(state.SLAAsHours()),
 					HoursInState:    hoursInState,
 					EscalationType:  "state_sla",
 					NotifiedAt:      &now,
@@ -208,11 +212,8 @@ func (s *EscalationService) processPolicySteps(
 		return
 	}
 
-	slaHours := 0
-	if state.SLAHours != nil {
-		slaHours = *state.SLAHours
-	}
-	hoursInBreach := hoursInState - float64(slaHours)
+	slaAsHours := state.SLAAsHours()
+	hoursInBreach := hoursInState - slaAsHours
 
 	for _, step := range policy.Steps {
 		// Not yet time for this step
@@ -259,7 +260,7 @@ func (s *EscalationService) processPolicySteps(
 				Email:                  user.Email,
 				Phone:                  user.Phone,
 				Actions:                sentChannels,
-				SLAHoursAllowed:        slaHours,
+				SLAHoursAllowed:        int(slaAsHours),
 				HoursInState:           hoursInState,
 				EscalationPolicyID:     &policy.ID,
 				EscalationPolicyStepID: &stepID,

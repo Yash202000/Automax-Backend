@@ -162,9 +162,9 @@ func (s *incidentService) SetFCMService(fcm *FCMService) {
 	s.fcmService = fcm
 }
 
-// calculateSLADeadline calculates the SLA deadline based on classification criticality
-// Falls back to workflow state SLA hours if no criticality-based setting exists
-func (s *incidentService) calculateSLADeadline(ctx context.Context, classificationID *uuid.UUID, lookupValueIDs []string, workflowSLAHours *int) (*time.Time, error) {
+// calculateSLADeadline calculates the SLA deadline based on classification criticality.
+// Falls back to slaDuration (from the workflow state) if no criticality-based setting exists.
+func (s *incidentService) calculateSLADeadline(ctx context.Context, classificationID *uuid.UUID, lookupValueIDs []string, slaDuration time.Duration) (*time.Time, error) {
 	var deadline *time.Time
 
 	// Try to get classification-based criticality SLA first
@@ -207,9 +207,9 @@ func (s *incidentService) calculateSLADeadline(ctx context.Context, classificati
 		}
 	}
 
-	// Fallback to workflow state SLA hours
-	if workflowSLAHours != nil && *workflowSLAHours > 0 {
-		deadlineTime := time.Now().Add(time.Duration(*workflowSLAHours) * time.Hour)
+	// Fallback to workflow state SLA duration
+	if slaDuration > 0 {
+		deadlineTime := time.Now().Add(slaDuration)
 		deadline = &deadlineTime
 	}
 
@@ -452,7 +452,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 			classificationID = &id
 		}
 	}
-	deadline, err := s.calculateSLADeadline(ctx, classificationID, req.LookupValueIDs, initialState.SLAHours)
+	deadline, err := s.calculateSLADeadline(ctx, classificationID, req.LookupValueIDs, initialState.SLADuration())
 	if err == nil && deadline != nil {
 		incident.SLADeadline = deadline
 	}
@@ -837,7 +837,7 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 				}
 			}
 			if effectiveClassID != nil {
-				if newDeadline, err := s.calculateSLADeadline(ctx, effectiveClassID, req.LookupValueIDs, nil); err == nil && newDeadline != nil {
+				if newDeadline, err := s.calculateSLADeadline(ctx, effectiveClassID, req.LookupValueIDs, 0); err == nil && newDeadline != nil {
 					incident.SLADeadline = newDeadline
 					incident.SLABreached = false
 				}
@@ -1465,7 +1465,7 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 	}
 	// For convert to request, we don't have lookup values at this point, so pass empty array
 	var slaDeadline *time.Time
-	slaDeadline, err = s.calculateSLADeadline(ctx, &slaClassificationID, []string{}, initialState.SLAHours)
+	slaDeadline, err = s.calculateSLADeadline(ctx, &slaClassificationID, []string{}, initialState.SLADuration())
 	if err == nil && slaDeadline != nil {
 		newRequest.SLADeadline = slaDeadline
 	}
@@ -2043,8 +2043,8 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 		}
 
 		// Calculate SLA deadline
-		if initialState.SLAHours != nil && *initialState.SLAHours > 0 {
-			deadline := time.Now().Add(time.Duration(*initialState.SLAHours) * time.Hour)
+		if slaDur := initialState.SLADuration(); slaDur > 0 {
+			deadline := time.Now().Add(slaDur)
 			newRequest.SLADeadline = &deadline
 		}
 
@@ -2576,8 +2576,8 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	}
 
 	// Update SLA deadline based on new state
-	if newState.SLAHours != nil && *newState.SLAHours > 0 {
-		deadline := time.Now().Add(time.Duration(*newState.SLAHours) * time.Hour)
+	if slaDur := newState.SLADuration(); slaDur > 0 {
+		deadline := time.Now().Add(slaDur)
 		updates["sla_deadline"] = deadline
 		updates["sla_breached"] = false // Reset breach status
 	}
@@ -2950,7 +2950,7 @@ func (s *incidentService) createRejectionLog(
 	var slaThresholdMinutes *int64
 	if transition.FromState != nil && transition.FromState.SLAHours != nil && *transition.FromState.SLAHours > 0 {
 		slaThresholdHours = transition.FromState.SLAHours
-		mins := int64(*transition.FromState.SLAHours) * 60
+		mins := int64(transition.FromState.SLADuration().Minutes())
 		slaThresholdMinutes = &mins
 	}
 
@@ -4214,7 +4214,7 @@ func (s *incidentService) CreateComplaint(ctx context.Context, req *models.Creat
 		slaClassificationID = uuid.Nil
 	}
 	var slaDeadline *time.Time
-	slaDeadline, slaErr = s.calculateSLADeadline(ctx, &slaClassificationID, req.LookupValueIDs, initialState.SLAHours)
+	slaDeadline, slaErr = s.calculateSLADeadline(ctx, &slaClassificationID, req.LookupValueIDs, initialState.SLADuration())
 	if slaErr == nil && slaDeadline != nil {
 		complaint.SLADeadline = slaDeadline
 	}
@@ -4366,7 +4366,7 @@ func (s *incidentService) CreateQuery(ctx context.Context, req *models.CreateQue
 		slaClassificationID = uuid.Nil
 	}
 	var slaDeadline *time.Time
-	slaDeadline, slaErr = s.calculateSLADeadline(ctx, &slaClassificationID, req.LookupValueIDs, initialState.SLAHours)
+	slaDeadline, slaErr = s.calculateSLADeadline(ctx, &slaClassificationID, req.LookupValueIDs, initialState.SLADuration())
 	if slaErr == nil && slaDeadline != nil {
 		query.SLADeadline = slaDeadline
 	}
