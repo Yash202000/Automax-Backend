@@ -773,6 +773,15 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		return nil, errors.New("child incidents cannot be edited - they are locked after merging")
 	}
 
+	// // Source validation: for IVR calls from EPM940, source must be provided.
+	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.IVR) && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
+		if req.Source == "" || req.Source != constants.INCIDENT_SOURCE.IVR || incident.Comments == nil {
+			tx.Rollback()
+			return nil, errors.New("source is required for IVR updates")
+		}
+	}
+
 	// Track changes for revision
 	var changes []models.IncidentFieldChange
 	var descriptions []string
@@ -1058,9 +1067,8 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		updates["sla_deadline"] = *incident.SLADeadline
 		updates["sla_breached"] = incident.SLABreached
 	}
-	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
 	if strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
-		// For IVR updates from EPM940, we want to allow location updates without triggering the edit restriction
+		// For IVR updates from EPM940, mark source as sms-link so downstream logic tracks origin correctly.
 		updates["source"] = constants.INCIDENT_SOURCE.SMS_LINK
 	}
 	log.Println(len(updates), len(changes))
@@ -1092,6 +1100,19 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	// Commit transaction
 	if err := tx.Commit().Error; err != nil {
 		return nil, err
+	}
+
+	// Save optional comment attached to the update.
+	if strings.TrimSpace(req.Comment) != "" {
+		comment := &models.IncidentComment{
+			IncidentID: id,
+			AuthorID:   userID,
+			Content:    strings.TrimSpace(req.Comment),
+			IsInternal: false,
+		}
+		if err := s.incidentRepo.CreateComment(ctx, comment); err != nil {
+			fmt.Printf("Warning: failed to save update comment: %v\n", err)
+		}
 	}
 
 	// Keep incident_assignees junction table in sync when assignee changed via edit

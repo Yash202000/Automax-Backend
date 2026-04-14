@@ -385,6 +385,7 @@ type IncidentUpdateRequest struct {
 	LookupValueIDs     []string               `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
 	Source             string                 `json:"source" validate:"omitempty,max=100"`
 	CustomLookupFields map[string]interface{} `json:"custom_lookup_fields"`
+	Comment            string                 `json:"comment"` // optional comment attached to the update
 	Version            int                    `json:"version" validate:"required,min=1"`
 }
 
