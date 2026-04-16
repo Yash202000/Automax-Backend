@@ -591,7 +591,8 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			Joins("LEFT JOIN classifications ON incidents.classification_id = classifications.id").
 			Joins("LEFT JOIN departments ON incidents.department_id = departments.id").
 			Joins("LEFT JOIN locations ON incidents.location_id = locations.id").
-			Joins("LEFT JOIN workflows ON incidents.workflow_id = workflows.id")
+			Joins("LEFT JOIN workflows ON incidents.workflow_id = workflows.id").
+			Where("incidents.record_type = ?", "incident")
 		return r.applyFilters(ctx, q, filters)
 	}
 
@@ -610,8 +611,10 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 		Select("incidents.*, " +
 			"reporters.email as reporter_email, reporters.first_name as reporter_first_name, reporters.last_name as reporter_last_name, " +
 			"reporters.username as reporter_username, " +
+			"TRIM(COALESCE(reporters.first_name,'') || ' ' || COALESCE(reporters.last_name,'')) as reporter_full_name, " +
 			"assignees.email as assignee_email, assignees.first_name as assignee_first_name, assignees.last_name as assignee_last_name, " +
 			"assignees.username as assignee_username, " +
+			"TRIM(COALESCE(assignees.first_name,'') || ' ' || COALESCE(assignees.last_name,'')) as assignee_full_name, " +
 			"workflow_states.name as current_state_name, workflow_states.state_type as current_state_state_type, " +
 			"classifications.name as classification_name, " +
 			"departments.name as department_name, " +
@@ -666,10 +669,17 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 		}
 		// Build row dynamically from the requested columns.
 		// col.Field is the SQL alias present in rawRow; col.Label is the output key.
+		// Normalize dot-notation field names (e.g. "current_state.name") to the
+		// underscore form used by SQL aliases (e.g. "current_state_name").
 		row := make(map[string]interface{})
 		if len(reqColumns) > 0 {
 			for _, col := range reqColumns {
-				row[col.Label] = rawRow[col.Field]
+				sqlAlias := strings.ReplaceAll(col.Field, ".", "_")
+				if v, ok := rawRow[sqlAlias]; ok {
+					row[col.Label] = v
+				} else {
+					row[col.Label] = rawRow[col.Field]
+				}
 			}
 			// Always carry the internal "id" field so enrichment can key results.
 			if _, ok := row["id"]; !ok {
