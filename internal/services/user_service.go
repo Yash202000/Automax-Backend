@@ -338,7 +338,7 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 		role = user.Roles[0].Code
 	}
 
-	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, role)
+	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, role, req.RememberMe)
 	if err != nil {
 		return nil, err
 	}
