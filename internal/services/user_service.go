@@ -84,6 +84,15 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 	actorID, _ := ctx.Value(constants.ContextKeys.UserID).(uuid.UUID)
 	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
 	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
+	if req.Phone != "" {
+		exists, err := s.userRepo.ExistsByPhone(ctx, req.Phone, uuid.Nil)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			return nil, errors.New("Phone number already in use")
+		}
+	}
 
 	exists, err := s.userRepo.ExistsByEmail(ctx, req.Email)
 	if err != nil {
@@ -621,7 +630,7 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		Extension:         &oldExtension, // Pointer to the copy, not the original
 		DepartmentID:      user.DepartmentID,
 		LocationID:        user.LocationID,
-		IsActive:          &oldIsActive, // Pointer to the copy
+		IsActive:          &oldIsActive,       // Pointer to the copy
 		MobileVerified:    &oldMobileVerified, // Pointer to the copy
 		DepartmentIDs:     make([]uuid.UUID, len(user.Departments)),
 		LocationIDs:       make([]uuid.UUID, len(user.Locations)),
@@ -707,9 +716,24 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 	if req.LastName != "" {
 		user.LastName = req.LastName
 	}
-	if req.Phone != "" {
-		user.Phone = req.Phone
+	if req.Phone != user.Phone {
+		// Case 1: Remove phone number
+		if req.Phone == "" {
+			user.Phone = ""
+		} else {
+			// Case 2: Check unique (excluding current user)
+			exists, err := s.userRepo.ExistsByPhone(ctx, req.Phone, user.ID)
+			if err != nil {
+				return nil, err
+			}
+			if exists {
+				return nil, errors.New("phone number already exists")
+			}
+
+			user.Phone = req.Phone
+		}
 	}
+
 	if req.DepartmentID != nil {
 		user.DepartmentID = req.DepartmentID
 	}
@@ -926,12 +950,12 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 	// Create COPIES of values before they get modified
 	oldExtension := user.Extension
 	oldMobileVerified := user.MobileVerified
-	
+
 	oldUser := &models.UserUpdateRequest{
 		FirstName:      user.FirstName,
 		LastName:       user.LastName,
 		Phone:          user.Phone,
-		Extension:      &oldExtension, // Pointer to the copy
+		Extension:      &oldExtension,      // Pointer to the copy
 		MobileVerified: &oldMobileVerified, // Pointer to the copy
 	}
 
@@ -945,9 +969,23 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 		user.LastName = req.LastName
 		update["last_name"] = req.LastName
 	}
+
 	if req.Phone != user.Phone {
+		if req.Phone != "" {
+			exists, err := s.userRepo.ExistsByPhone(ctx, req.Phone, userID)
+			if err != nil {
+				return nil, err
+			}
+			if exists {
+				return nil, errors.New("phone number already exists")
+			}
+		}
 		user.Phone = req.Phone
-		update["phone"] = req.Phone
+		if req.Phone == "" {
+			update["phone"] = nil // allow remove
+		} else {
+			update["phone"] = req.Phone
+		}
 	}
 
 	if req.MobileVerified != nil && *req.MobileVerified != user.MobileVerified {
@@ -1022,7 +1060,7 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 
 		description := fmt.Sprintf("User profile updated for user: %s (%s)", user.Username, user.Email)
 		if len(changedFields) > 0 {
-			description = fmt.Sprintf("Updated %s for user: %s (%s)", 
+			description = fmt.Sprintf("Updated %s for user: %s (%s)",
 				strings.Join(changedFields, ", "), user.Username, user.Email)
 		}
 

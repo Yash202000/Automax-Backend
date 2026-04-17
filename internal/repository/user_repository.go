@@ -46,6 +46,7 @@ type UserRepository interface {
 	FindByDepartmentAndRole(ctx context.Context, departmentID, roleID *uuid.UUID) ([]models.User, error)
 	UpdateProfile(ctx context.Context, user map[string]interface{}) error
 	FindByPermissionCode(ctx context.Context, permissionCode string) ([]models.User, error)
+	ExistsByPhone(ctx context.Context, phone string, excludeUserID uuid.UUID) (bool, error)
 }
 
 type userRepository struct {
@@ -660,4 +661,14 @@ func (r *userRepository) FindByRoleAndContext(ctx context.Context, roleIDs []uui
 		Where("id IN ?", userIDs).
 		Find(&users).Error
 	return users, err
+}
+
+func (r *userRepository) ExistsByPhone(ctx context.Context, phone string, excludeUserID uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&models.User{}).
+		Where("phone = ? AND id != ?", phone, excludeUserID).
+		Count(&count).Error
+
+	return count > 0, err
 }
