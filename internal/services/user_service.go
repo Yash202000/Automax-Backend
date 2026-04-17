@@ -43,6 +43,7 @@ type UserService interface {
 	UpdateProfile(ctx context.Context, req *models.UserUpdateRequest) (*models.UserResponse, error)
 	GenerateTokenViaUserID(ctx context.Context, mobile uuid.UUID) (*models.AuthResponse, error)
 	ValidateMobileForLogin(ctx context.Context, phone string) (*models.UserResponse, error)
+	SetLicenseService(ls LicenseService, lr repository.LicenseRepository)
 }
 
 type userService struct {
@@ -54,6 +55,14 @@ type userService struct {
 	config           *config.Config
 	actionLogService ActionLogService
 	otpService       *OTPService
+	licenseService   LicenseService
+	licenseRepo      repository.LicenseRepository
+}
+
+// SetLicenseService injects the license service (post-construction to avoid circular deps).
+func (s *userService) SetLicenseService(ls LicenseService, lr repository.LicenseRepository) {
+	s.licenseService = ls
+	s.licenseRepo = lr
 }
 
 func NewUserService(
@@ -116,6 +125,14 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 		DepartmentID: req.DepartmentID,
 		LocationID:   req.LocationID,
 		IsActive:     true,
+	}
+
+	// Check license user limit before creating
+	if s.licenseService != nil && s.licenseService.IsValid() && s.licenseRepo != nil {
+		activeCount, countErr := s.licenseRepo.CountActiveUsers(ctx)
+		if countErr == nil && activeCount >= int64(s.licenseService.GetMaxUsers()) {
+			return nil, fmt.Errorf("%w: %d active users, license limit is %d", ErrUserLimitReached, activeCount, s.licenseService.GetMaxUsers())
+		}
 	}
 
 	if err := s.userRepo.Create(ctx, user); err != nil {

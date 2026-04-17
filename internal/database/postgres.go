@@ -127,6 +127,8 @@ func Migrate(db *gorm.DB) error {
 		&models.GoalScore{},
 		// AI Quality Feedback
 		&models.AIQualityFeedback{},
+		// License Management
+		&models.License{},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
@@ -331,6 +333,10 @@ func Seed(db *gorm.DB) error {
 		// Caller Sentiment permissions
 		{Name: "Create Caller Sentiment", Code: "caller-sentiment:create", Module: "caller-sentiment", Action: "create", Description: "Record a sentiment entry after a call"},
 		{Name: "View Caller Sentiments", Code: "caller-sentiment:view", Module: "caller-sentiment", Action: "view", Description: "View all caller sentiment records and summaries"},
+
+		// License permissions
+		{Name: "View License", Code: "license:view", Module: "license", Action: "view", Description: "View license status and info"},
+		{Name: "Manage License", Code: "license:manage", Module: "license", Action: "manage", Description: "Activate, deactivate, and manage license keys"},
 
 		// Dashboard permissions
 		{Name: "Goals Dashboard", Code: "dashboard:goals", Module: "dashboard", Action: "goals", Description: "Access goal cards on dashboard"},

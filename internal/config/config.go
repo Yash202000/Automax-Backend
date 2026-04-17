@@ -21,6 +21,13 @@ type Config struct {
 	ReadyToClose   ReadyToCloseConfig
 	Documenta      DocumentaConfig
 	AIQuality      AIQualityConfig
+	License        LicenseConfig
+}
+
+type LicenseConfig struct {
+	EncryptionKey   string // env: LICENSE_ENCRYPTION_KEY (64-char hex = 32 bytes for AES-256)
+	GracePeriodDays int    // env: LICENSE_GRACE_PERIOD_DAYS (default: 7)
+	Enabled         bool   // env: LICENSE_ENABLED (default: true, set false for dev bypass)
 }
 
 // AIQualityConfig holds settings for the AI Quality Monitor.
@@ -200,6 +207,11 @@ func Load() *Config {
 			AppProtocol:          getEnv("APP_PROTOCOL", "http"),
 			AppHost:              getEnv("APP_HOST", "localhost:8080"),
 			AppToken:             getEnv("APP_TOKEN", ""),
+		},
+		License: LicenseConfig{
+			EncryptionKey:   getEnv("LICENSE_ENCRYPTION_KEY", ""),
+			GracePeriodDays: getEnvAsInt("LICENSE_GRACE_PERIOD_DAYS", 7),
+			Enabled:         getEnvAsBool("LICENSE_ENABLED", true),
 		},
 	}
 }
