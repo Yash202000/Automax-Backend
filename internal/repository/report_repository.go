@@ -517,11 +517,13 @@ func (r *reportRepository) ExecuteRequestQuery(ctx context.Context, filters []mo
 	}
 
 	offset := (page - 1) * limit
-	rows, err := query.
+	rows, err := query.Debug().
 		Select(
 			"incidents.incident_number as request_number, " +
-				"incidents.created_by_mobile as created_by_mobile, " +
+				// "incidents.created_by_mobile as created_by_mobile, " +
 				"reporters.first_name as reporter_first_name, reporters.last_name as reporter_last_name, " +
+				"TRIM(reporters.first_name || ' ' || reporters.last_name) as reporter_name, " +
+				"reporters.phone as reporter_phone, " +
 				"classifications.name as classification_name, " +
 				"locations.name as location_name, " +
 				"incidents.title as title, " +
