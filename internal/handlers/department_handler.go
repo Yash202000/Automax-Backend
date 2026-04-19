@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
@@ -280,16 +279,12 @@ func (h *DepartmentHandler) Export(c *fiber.Ctx) error {
 	// Filter out invalid records (with corrupted paths or invalid UUIDs)
 	validDepartments := make([]models.Department, 0)
 	invalidUUID := "00000000-0000-0000-0000-000000000000"
-
 	for _, dept := range departments {
-		// Skip records with invalid paths or IDs
-		if dept.ID.String() == invalidUUID ||
-			strings.Contains(dept.Path, invalidUUID) {
+		if dept.ID.String() == invalidUUID {
 			continue
 		}
 		validDepartments = append(validDepartments, dept)
 	}
-
 	// Convert to export format
 	exportData := make([]map[string]interface{}, len(validDepartments))
 	for i, dept := range validDepartments {
