@@ -25,6 +25,9 @@ type goalAnalyticsService struct {
 	db *gorm.DB
 }
 
+// filteredOutKey is used to pass filtered-out parent goal IDs through ctx within GetOKRTree.
+type filteredOutKey struct{}
+
 // NewGoalAnalyticsService creates a new GoalAnalyticsService
 func NewGoalAnalyticsService(db *gorm.DB) GoalAnalyticsService {
 	return &goalAnalyticsService{db: db}
@@ -540,6 +543,61 @@ func (s *goalAnalyticsService) GetOKRTree(ctx context.Context, departmentID *uui
 		return nil, fmt.Errorf("failed to load goals: %w", err)
 	}
 
+	// Load any parent goals that were filtered out but are needed to preserve hierarchy.
+	// These appear as context nodes (IsFilteredOut=true) in the tree.
+	matchedIDs := make(map[uuid.UUID]bool, len(goals))
+	for _, g := range goals {
+		matchedIDs[g.ID] = true
+	}
+	missingParentIDs := make(map[uuid.UUID]bool)
+	for _, g := range goals {
+		if g.ParentGoalID != nil && !matchedIDs[*g.ParentGoalID] {
+			missingParentIDs[*g.ParentGoalID] = true
+		}
+	}
+	// Recursively resolve ancestors so full chain is included
+	for len(missingParentIDs) > 0 {
+		ids := make([]uuid.UUID, 0, len(missingParentIDs))
+		for id := range missingParentIDs {
+			ids = append(ids, id)
+		}
+		var ancestors []models.Goal
+		if err := s.db.WithContext(ctx).
+			Preload("Owner").
+			Preload("Metrics").
+			Where("id IN ?", ids).
+			Find(&ancestors).Error; err != nil {
+			break
+		}
+		filteredOutIDs := make(map[uuid.UUID]bool, len(ancestors))
+		for i := range ancestors {
+			filteredOutIDs[ancestors[i].ID] = true
+			goals = append(goals, ancestors[i])
+			matchedIDs[ancestors[i].ID] = true
+		}
+		// Mark these for post-processing (IsFilteredOut flag)
+		if ctx.Value(filteredOutKey{}) == nil {
+			ctx = context.WithValue(ctx, filteredOutKey{}, filteredOutIDs)
+		} else {
+			existing := ctx.Value(filteredOutKey{}).(map[uuid.UUID]bool)
+			for id := range filteredOutIDs {
+				existing[id] = true
+			}
+		}
+		// Find next level of missing parents
+		missingParentIDs = make(map[uuid.UUID]bool)
+		for _, a := range ancestors {
+			if a.ParentGoalID != nil && !matchedIDs[*a.ParentGoalID] {
+				missingParentIDs[*a.ParentGoalID] = true
+			}
+		}
+	}
+
+	filteredOutIDs, _ := ctx.Value(filteredOutKey{}).(map[uuid.UUID]bool)
+	if filteredOutIDs == nil {
+		filteredOutIDs = map[uuid.UUID]bool{}
+	}
+
 	// Load latest check-in status for each goal
 	type checkInInfo struct {
 		GoalID uuid.UUID
@@ -609,6 +667,7 @@ func (s *goalAnalyticsService) GetOKRTree(ctx context.Context, departmentID *uui
 			Level:         g.Level,
 			MetricSummary: metricSummary,
 			Health:        health,
+			IsFilteredOut: filteredOutIDs[g.ID],
 		}
 		goalNodeMap[g.ID] = &node
 	}
