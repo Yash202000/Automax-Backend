@@ -13,6 +13,7 @@ import (
 	"github.com/automax/backend/internal/database"
 	"github.com/automax/backend/internal/handlers"
 	"github.com/automax/backend/internal/licensing"
+	"github.com/automax/backend/internal/licensing/devseed"
 	"github.com/automax/backend/internal/middleware"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
@@ -214,6 +215,11 @@ func main() {
 	licenseService := services.NewLicenseService(licenseRepo, cfg.License)
 	if err := licenseService.LoadFromDB(ctx); err != nil {
 		log.Printf("Warning: Failed to load license from DB: %v", err)
+	}
+	// Dev-mode auto-seeder: installs a full-scope license when APP_ENV=development
+	// and no license is active. No-op in production.
+	if err := devseed.SeedDevLicenseIfNeeded(ctx, cfg, licenseService); err != nil {
+		log.Printf("Warning: dev license seeder failed: %v", err)
 	}
 	licenseHandler := handlers.NewLicenseHandler(licenseService)
 
