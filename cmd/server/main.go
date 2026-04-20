@@ -12,6 +12,7 @@ import (
 	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/database"
 	"github.com/automax/backend/internal/handlers"
+	"github.com/automax/backend/internal/licensing"
 	"github.com/automax/backend/internal/middleware"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
@@ -304,7 +305,7 @@ func main() {
 	ldap.Get("/status", authMiddleware.Authenticate(), authMiddleware.RequirePermission("admin:ldap"), ldapHandler.GetLDAPStatus)
 
 	// SSO routes
-	sso := v1.Group("/sso", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature("sso"))
+	sso := v1.Group("/sso", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureSSO)))
 	sso.Post("/launch", ssoHandler.Launch)
 
 	// User routes
@@ -317,7 +318,7 @@ func main() {
 	users.Put("/:userExtID/status", userHandler.UpdateUserCallStatus)
 
 	// Incident routes (authenticated users)
-	incidents := v1.Group("/incidents", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature("incidents"))
+	incidents := v1.Group("/incidents", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureIncidents)))
 	incidents.Post("/", authMiddleware.RequirePermission("incidents:create"), incidentHandler.CreateIncident)
 	incidents.Get("/", authMiddleware.RequirePermission("incidents:view"), incidentHandler.ListIncidents)
 	incidents.Get("/stats", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetStats)
@@ -350,7 +351,7 @@ func main() {
 	incidents.Get("/:id/ai-quality", authMiddleware.RequirePermission("incidents:view"), aiQualityFeedbackHandler.GetByIncident)
 	incidents.Post("/:id/reopen", authMiddleware.RequirePermission("incidents:transition"), aiQualityFeedbackHandler.ReopenIncident)
 
-	aiQuality := v1.Group("/ai-quality", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature("ai_quality"))
+	aiQuality := v1.Group("/ai-quality", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureAIQuality)))
 	aiQuality.Get("/", authMiddleware.RequirePermission("incidents:view"), aiQualityFeedbackHandler.GetAll)
 
 	feedback := v1.Group("/feedback", authMiddleware.Authenticate())
@@ -380,7 +381,7 @@ func main() {
 	attachments.Get("/:attachment_id/preview", attachmentHandler.PreviewAttachment)
 
 	// Complaint routes (authenticated users)
-	complaints := v1.Group("/complaints", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature("complaints"))
+	complaints := v1.Group("/complaints", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureComplaints)))
 	complaints.Post("/", authMiddleware.RequirePermission("complaints:create"), incidentHandler.CreateComplaint)
 	complaints.Get("/", authMiddleware.RequirePermission("complaints:view"), incidentHandler.ListComplaints)
 	complaints.Get("/:id", authMiddleware.RequirePermission("complaints:view"), incidentHandler.GetComplaint)
@@ -400,7 +401,7 @@ func main() {
 	complaints.Get("/:id/revisions", authMiddleware.RequirePermission("complaints:view"), incidentHandler.ListRevisions)
 
 	// Query routes (authenticated users)
-	queries := v1.Group("/queries", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature("queries"))
+	queries := v1.Group("/queries", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureQueries)))
 	queries.Post("/", authMiddleware.RequirePermission("queries:create"), incidentHandler.CreateQuery)
 	queries.Get("/", authMiddleware.RequirePermission("queries:view"), incidentHandler.ListQueries)
 	queries.Get("/:id", authMiddleware.RequirePermission("queries:view"), incidentHandler.GetQuery)
@@ -529,7 +530,7 @@ func main() {
 	actionLogs.Delete("/cleanup", authMiddleware.RequirePermission("action-logs:delete"), actionLogHandler.CleanupOldLogs)
 
 	// Call Log routes
-	callLogs := admin.Group("/call-logs", licenseMiddleware.RequireLicensedFeature("call_centre"))
+	callLogs := admin.Group("/call-logs", licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureCallCentre)))
 	callLogs.Post("/", authMiddleware.RequirePermission("call-logs:create"), callLogHandler.CreateCallLog)
 	callLogs.Get("/", authMiddleware.RequirePermission("call-logs:view"), callLogHandler.ListCallLogs)
 	callLogs.Get("/stats", authMiddleware.RequirePermission("call-logs:view"), callLogHandler.GetStats)
@@ -538,7 +539,7 @@ func main() {
 	callLogs.Delete("/:id", authMiddleware.RequirePermission("call-logs:delete"), callLogHandler.DeleteCallLog)
 
 	// Workflow routes (with action logging)
-	workflows := admin.Group("/workflows", licenseMiddleware.RequireLicensedFeature("workflows"), middleware.ActionLogger(middleware.ActionLoggerConfig{
+	workflows := admin.Group("/workflows", licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureWorkflows)), middleware.ActionLogger(middleware.ActionLoggerConfig{
 		Enabled:     true,
 		LogService:  actionLogService,
 		SkipMethods: []string{"GET"}, // Skip read-only operations from logging
@@ -588,7 +589,7 @@ func main() {
 	rejectionLogs.Get("/", authMiddleware.RequirePermission("reports:view"), rejectionLogHandler.List)
 
 	// Report routes
-	reports := admin.Group("/reports", licenseMiddleware.RequireLicensedFeature("reports"))
+	reports := admin.Group("/reports", licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureReports)))
 	reports.Post("/", authMiddleware.RequirePermission("reports:create"), reportHandler.CreateReport)
 	reports.Get("/", authMiddleware.RequirePermission("reports:view"), reportHandler.ListReports)
 	reports.Get("/data-sources", authMiddleware.RequirePermission("reports:view"), reportHandler.GetDataSources)
@@ -603,7 +604,7 @@ func main() {
 	reports.Get("/:id/executions", authMiddleware.RequirePermission("reports:view"), reportHandler.GetExecutionHistory)
 
 	// Report Template routes
-	reportTemplates := admin.Group("/report-templates", licenseMiddleware.RequireLicensedFeature("reports"))
+	reportTemplates := admin.Group("/report-templates", licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureReports)))
 	reportTemplates.Post("/", authMiddleware.RequirePermission("reports:create"), reportTemplateHandler.CreateTemplate)
 	reportTemplates.Get("/", authMiddleware.RequirePermission("reports:view"), reportTemplateHandler.ListTemplates)
 	reportTemplates.Get("/default", authMiddleware.RequirePermission("reports:view"), reportTemplateHandler.GetDefaultTemplate)
@@ -670,7 +671,7 @@ func main() {
 	callLogsPublic.Get("/extension/:extension", callLogHandler.GetCallLogsByExtension)
 
 	// ---- TEMPLATE ROUTES ----
-	templates := v1.Group("/templates", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature("communication"))
+	templates := v1.Group("/templates", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureCommunication)))
 	templates.Post("/", authMiddleware.RequirePermission("templates:create"), templateHandler.Create)
 	templates.Get("/", authMiddleware.RequirePermission("templates:read"), templateHandler.List)
 	templates.Get("/:id", authMiddleware.RequirePermission("templates:read"), templateHandler.GetByID)
@@ -678,7 +679,7 @@ func main() {
 	templates.Delete("/:id", authMiddleware.RequirePermission("templates:delete"), templateHandler.Delete)
 
 	// ---- NOTIFICATION ROUTES ----
-	notifications := v1.Group("/notifications", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature("communication"))
+	notifications := v1.Group("/notifications", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureCommunication)))
 
 	// Stats
 	notifications.Get("/stats", authMiddleware.RequirePermission("notifications:read"), notificationHandler.GetStats)
@@ -734,7 +735,7 @@ func main() {
 	escalation.Get("/incident/:incident_id", escalationHandler.ListByIncident)
 
 	// Custom Escalation Groups (admin)
-	escalationGroups := admin.Group("/escalation-groups", authMiddleware.Authenticate(), authMiddleware.RequirePermission("escalation-groups:manage_rules"), licenseMiddleware.RequireLicensedFeature("escalation"))
+	escalationGroups := admin.Group("/escalation-groups", authMiddleware.Authenticate(), authMiddleware.RequirePermission("escalation-groups:manage_rules"), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureEscalation)))
 	escalationGroups.Post("/", escalationGroupHandler.Create)
 	escalationGroups.Get("/", escalationGroupHandler.List)
 	escalationGroups.Get("/:id", escalationGroupHandler.GetByID)
@@ -742,7 +743,7 @@ func main() {
 	escalationGroups.Delete("/:id", escalationGroupHandler.Delete)
 
 	// Escalation Policies (admin)
-	escalationPolicies := admin.Group("/escalation-policies", authMiddleware.Authenticate(), authMiddleware.RequirePermission("escalation-groups:manage_rules"), licenseMiddleware.RequireLicensedFeature("escalation"))
+	escalationPolicies := admin.Group("/escalation-policies", authMiddleware.Authenticate(), authMiddleware.RequirePermission("escalation-groups:manage_rules"), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureEscalation)))
 	escalationPolicies.Post("/resolve-users", escalationPolicyHandler.ResolveTargetUsers)
 	escalationPolicies.Get("/", escalationPolicyHandler.List)
 	escalationPolicies.Post("/", escalationPolicyHandler.Create)
@@ -758,14 +759,14 @@ func main() {
 	fcm.Delete("/remove-device", fcmHandler.RemoveDevice)
 
 	//Caller sentiments
-	callerSentiments := v1.Group("/caller-sentiments", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature("call_centre"))
+	callerSentiments := v1.Group("/caller-sentiments", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureCallCentre)))
 	callerSentiments.Post("/", authMiddleware.RequirePermission("caller-sentiment:create"), sentimentHandler.Create)
 	callerSentiments.Get("/", authMiddleware.RequirePermission("caller-sentiment:view"), sentimentHandler.GetAllCallerSentiments)
 	callerSentiments.Get("/:caller_id", authMiddleware.RequirePermission("caller-sentiment:view"), sentimentHandler.GetCallerSentiments)
 	callerSentiments.Get("/:caller_id/:callee_id", sentimentHandler.GetCallerSentimentsByCallerAndCallee)
 
 	// ---- GOAL TEMPLATE ROUTES ----
-	goalTemplates := v1.Group("/goal-templates", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature("goals"))
+	goalTemplates := v1.Group("/goal-templates", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureGoals)))
 	goalTemplates.Post("/", authMiddleware.RequirePermission("goals:create"), goalTemplateHandler.Create)
 	goalTemplates.Get("/", authMiddleware.RequirePermission("goals:view"), goalTemplateHandler.List)
 	goalTemplates.Get("/active", authMiddleware.RequirePermission("goals:view"), goalTemplateHandler.ListActive)
@@ -774,7 +775,7 @@ func main() {
 	goalTemplates.Delete("/:id", authMiddleware.RequirePermission("goals:delete"), goalTemplateHandler.Delete)
 
 	// ---- GOAL MANAGEMENT ROUTES ----
-	goals := v1.Group("/goals", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature("goals"))
+	goals := v1.Group("/goals", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureGoals)))
 	goals.Get("/export", authMiddleware.RequirePermission("goals:view"), goalHandler.ExportGoals)
 	goals.Post("/import", authMiddleware.RequirePermission("goals:create"), goalHandler.ImportGoals)
 	goals.Get("/metrics/export-template", authMiddleware.RequirePermission("goals:view"), goalHandler.ExportMetricsTemplate)
@@ -828,12 +829,12 @@ func main() {
 	goals.Get("/evidences/:id/transition-history", authMiddleware.RequirePermission("goals:view"), goalHandler.GetEvidenceTransitionHistory)
 
 	// ---- APPROVAL ROUTES ----
-	approvals := v1.Group("/approvals", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature("goals"))
+	approvals := v1.Group("/approvals", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureGoals)))
 	approvals.Get("/pending", authMiddleware.RequirePermission("goals:approve"), goalHandler.ListPendingApprovals)
 	approvals.Get("/completed", authMiddleware.RequirePermission("goals:approve"), goalHandler.ListCompletedApprovals)
 
 	// ---- PERFORMANCE REVIEW ROUTES ----
-	reviews := v1.Group("/reviews", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature("goals"))
+	reviews := v1.Group("/reviews", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureGoals)))
 	reviews.Post("/cycles", authMiddleware.RequirePermission("goals:update"), reviewHandler.CreateCycle)
 	reviews.Get("/cycles", authMiddleware.RequirePermission("goals:view"), reviewHandler.ListCycles)
 	reviews.Get("/cycles/:id", authMiddleware.RequirePermission("goals:view"), reviewHandler.GetCycle)
@@ -851,7 +852,7 @@ func main() {
 	reviews.Get("/my-review-tasks", authMiddleware.RequirePermission("goals:view"), reviewHandler.ListMyReviewTasks)
 
 	// ---- DOCUMENT MANAGEMENT ROUTES ----
-	docs := v1.Group("/documents", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature("documents"))
+	docs := v1.Group("/documents", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureDocuments)))
 	docs.Get("/files", authMiddleware.RequirePermission("goals:view"), documentHandler.ListFiles)
 	docs.Post("/search", authMiddleware.RequirePermission("goals:view"), documentHandler.SearchFiles)
 	docs.Get("/files/:id/info", authMiddleware.RequirePermission("goals:view"), documentHandler.GetFileInfo)
