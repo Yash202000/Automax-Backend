@@ -978,6 +978,11 @@ func (s *goalService) CreateEvidence(ctx context.Context, goalID uuid.UUID, titl
 		return nil, fmt.Errorf("failed to upload file to documenta: %w", err)
 	}
 
+	// Persist metadata as searchable tags (upload-time metadata may not index)
+	if tagErr := s.documentaClient.SetTags(ctx, documentaFileID, metadata); tagErr != nil {
+		log.Printf("[goal_service] CreateEvidence: SetTags failed for file %s: %v", documentaFileID, tagErr)
+	}
+
 	// Resolve the evidence approval workflow and its initial state
 	workflows, wfErr := s.workflowRepo.ListByRecordType(ctx, "evidence", true)
 	if wfErr != nil || len(workflows) == 0 {
@@ -1206,6 +1211,11 @@ func (s *goalService) ReplaceEvidenceFile(ctx context.Context, evidenceID uuid.U
 	newFileID, err := s.documentaClient.UploadFile(ctx, uploadFolderID, fileName, fileReader, fileSize, metadata)
 	if err != nil {
 		return nil, fmt.Errorf("failed to upload replacement file: %w", err)
+	}
+
+	// Persist metadata as searchable tags (upload-time metadata may not index)
+	if tagErr := s.documentaClient.SetTags(ctx, newFileID, metadata); tagErr != nil {
+		log.Printf("[goal_service] ReplaceEvidenceFile: SetTags failed for file %s: %v", newFileID, tagErr)
 	}
 
 	// Update evidence record
