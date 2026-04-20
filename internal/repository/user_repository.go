@@ -181,6 +181,7 @@ func (r *userRepository) Update(ctx context.Context, user *models.User) error {
 		"last_name":       user.LastName,
 		"phone":           user.Phone,
 		"extension":       user.Extension,
+		"password":        user.Password,
 		"mobile_verified": user.MobileVerified,
 		"is_active":       user.IsActive,
 		"department_id":   user.DepartmentID,
