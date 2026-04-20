@@ -664,6 +664,8 @@ func main() {
 	licenseGroup.Delete("/", authMiddleware.RequirePermission("license:manage"), licenseHandler.Deactivate)
 	// Public license info (all authenticated users)
 	v1.Get("/license/info", authMiddleware.Authenticate(), licenseHandler.GetPublicInfo)
+	// Public feature catalog — no auth; describes product shape, not tenant state.
+	v1.Get("/license/catalog", licenseHandler.GetCatalog)
 
 	// Call routes (authenticated users)
 	calls := v1.Group("/calls", authMiddleware.Authenticate())

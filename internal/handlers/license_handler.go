@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/automax/backend/internal/licensing"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
@@ -149,5 +150,18 @@ func (h *LicenseHandler) GetPublicInfo(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"success": true,
 		"data":    info,
+	})
+}
+
+// GetCatalog returns the canonical list of licensable features and their metadata.
+// It is public (no auth) because it describes product shape, not tenant state.
+// Frontend uses this to render the license page and to gate navigation.
+// GET /api/v1/license/catalog
+func (h *LicenseHandler) GetCatalog(c *fiber.Ctx) error {
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"success": true,
+		"data": fiber.Map{
+			"features": licensing.Catalog,
+		},
 	})
 }

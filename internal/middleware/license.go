@@ -92,6 +92,7 @@ func isLicenseExemptPath(path string) bool {
 		"/api/v1/ldap/",
 		"/api/v1/admin/license",
 		"/api/v1/license/info",
+		"/api/v1/license/catalog",
 		"/api/v1/settings",
 		"/api/v1/users/me",
 		"/api/v1/ws",
