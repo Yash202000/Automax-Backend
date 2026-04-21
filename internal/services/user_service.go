@@ -348,19 +348,6 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 		role = user.Roles[0].Code
 	}
 
-	// tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, role, "", req.RememberMe)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// if err := s.sessionStore.SetUserSession(ctx, user.ID.String(), map[string]interface{}{
-	// 	"user_id": user.ID,
-	// 	"email":   user.Email,
-	// 	"role":    role,
-	// }, s.jwtManager.GetTokenExpiration()); err != nil {
-	// 	return nil, err
-	// }
-
 	sessionID, err := s.sessionStore.SetUserSessionMultiDevices(ctx, user.ID.String(), map[string]interface{}{
 		"user_id": user.ID,
 		"email":   user.Email,
@@ -1150,12 +1137,6 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 
 		// Reset login attempts + unblock user
 		_ = s.sessionStore.ResetBlockedUserState(ctx, user.Email, user.Phone)
-
-		// Invalidate the current session and token so the user must re-authenticate
-		// _ = s.sessionStore.DeleteUserSession(ctx, userID.String())
-		// if token, ok := ctx.Value(constants.ContextKeys.Token).(string); ok && token != "" {
-		// 	_ = s.sessionStore.BlacklistToken(ctx, token, s.jwtManager.GetTokenExpiration())
-		// }
 
 		// Log successful password change
 		go func() {

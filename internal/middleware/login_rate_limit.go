@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -24,13 +25,17 @@ func LoginRateLimitMiddleware(cfg *config.Config, redisClient *redis.Client, use
 
 		var reqBody map[string]interface{}
 		if err := c.BodyParser(&reqBody); err != nil {
+			log.Printf("[RATE_LIMIT] Failed to parse body: %v", err)
 			return c.Next()
 		}
 
 		userIdentifier := extractUserIdentifier(reqBody)
 		if userIdentifier == "" {
+			log.Println("[RATE_LIMIT] No identifier found")
 			return c.Next()
 		}
+
+		log.Printf("[RATE_LIMIT] Incoming login for: %s", userIdentifier)
 
 		var key string
 		if strings.Contains(userIdentifier, "@") {
@@ -39,6 +44,7 @@ func LoginRateLimitMiddleware(cfg *config.Config, redisClient *redis.Client, use
 			key = "phone:" + userIdentifier
 		}
 		redisKey := "user:" + key
+		log.Printf("[RATE_LIMIT] Normalized key: %s", redisKey)
 		// Fetch user (email / phone)
 		var user *models.User
 		var err error
@@ -52,6 +58,7 @@ func LoginRateLimitMiddleware(cfg *config.Config, redisClient *redis.Client, use
 		// ADMIN BYPASS
 		if err == nil && user != nil {
 			if cfg.LoginRateLimit.BypassForAdmin && user.IsSuperAdmin {
+				log.Printf("[RATE_LIMIT] Admin bypass for user: %s", userIdentifier)
 				return c.Next()
 			}
 		}
@@ -59,6 +66,7 @@ func LoginRateLimitMiddleware(cfg *config.Config, redisClient *redis.Client, use
 		// check block
 		blocked, _ := checkIfBlocked(ctx, redisClient, redisKey)
 		if blocked {
+			log.Printf("[RATE_LIMIT] BLOCKED user: %s", redisKey)
 			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
 				"error": "Too many login attempts. Please try again later.",
 			})
@@ -66,7 +74,10 @@ func LoginRateLimitMiddleware(cfg *config.Config, redisClient *redis.Client, use
 
 		// Attempts
 		attempts, _ := getAttemptCount(ctx, redisClient, redisKey)
+		log.Printf("[RATE_LIMIT] Attempts for %s: %d", redisKey, attempts)
 		if attempts >= cfg.LoginRateLimit.MaxAttempts {
+			log.Printf("[RATE_LIMIT] Blocking user: %s", redisKey)
+
 			blockIdentifier(ctx, redisClient, redisKey, cfg)
 
 			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
