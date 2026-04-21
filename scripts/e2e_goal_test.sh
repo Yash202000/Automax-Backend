@@ -350,6 +350,44 @@ done
 
 # Shortcuts
 ADMIN_TOKEN="${TOKENS[admin@automax.com]:-}"
+
+# ── License bootstrap ─────────────────────────────────────────────────────
+# Ensure a valid license is active before running any gated flow. On a fresh DB,
+# the backend should have auto-seeded one if APP_ENV=development — but if we're
+# hitting a staging-style deployment or the backend was started without the
+# dev seeder, issue a short-lived dev license ourselves and activate it.
+#
+# This keeps the suite self-contained: any CI runner, docker-compose bringup,
+# or local restart against an empty licenses table can run the full script.
+if [ -n "$ADMIN_TOKEN" ]; then
+  LICENSE_RESP=$(curl -s -w '\n%{http_code}' \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
+    "${BASE_URL}/license/info" 2>/dev/null)
+  LICENSE_HTTP=$(echo "$LICENSE_RESP" | tail -1)
+
+  if [ "$LICENSE_HTTP" != "200" ]; then
+    echo -n "  License not active — issuing dev license... "
+    # Determine repo root for `go run`. Script lives in backend/scripts/.
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    BACKEND_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+    DEV_LICENSE_JSON=$(cd "$BACKEND_DIR" && go run ./cmd/devlicense 2>/dev/null)
+    if [ -z "$DEV_LICENSE_JSON" ]; then
+      echo -e "${RED}FAILED to issue dev license${NC}"
+    else
+      ACTIVATE_HTTP=$(curl -s -o /dev/null -w '%{http_code}' \
+        -X POST "${BASE_URL}/admin/license/activate" \
+        -H "Authorization: Bearer $ADMIN_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "$DEV_LICENSE_JSON")
+      if [ "$ACTIVATE_HTTP" = "200" ] || [ "$ACTIVATE_HTTP" = "201" ]; then
+        echo -e "${GREEN}activated${NC}"
+      else
+        echo -e "${RED}activation failed (HTTP $ACTIVATE_HTTP)${NC}"
+      fi
+    fi
+  fi
+fi
+
 SARAH_TOKEN="${TOKENS[sarah.manager@automax.com]:-}"
 AHMED_TOKEN="${TOKENS[ahmed.reviewer@automax.com]:-}"
 FATIMA_TOKEN="${TOKENS[fatima.senior@automax.com]:-}"

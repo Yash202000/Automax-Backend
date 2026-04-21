@@ -5,29 +5,19 @@ package devseed
 
 import (
 	"context"
-	"embed"
 	"fmt"
 	"log"
-	"time"
 
 	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/licensing"
+	"github.com/automax/backend/internal/licensing/devlicense"
 	"github.com/automax/backend/internal/services"
-	"github.com/automax/backend/pkg/utils"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
 
-//go:embed license_keys/dev_private.pem license_keys/dev_public.pem
-var devLicenseKeys embed.FS
-
-const (
-	devPrivateKeyPath = "license_keys/dev_private.pem"
-	devPublicKeyPath  = "license_keys/dev_public.pem"
-	// systemUserID is a placeholder "activated by" for the dev seeder.
-	// It is not a real user — it identifies bootstrap-time activations.
-	devSeederSystemUserID = "00000000-0000-0000-0000-000000000000"
-)
+// devSeederSystemUserID is a placeholder "activated by" for the dev seeder.
+// It is not a real user — it identifies bootstrap-time activations.
+const devSeederSystemUserID = "00000000-0000-0000-0000-000000000000"
 
 // SeedDevLicenseIfNeeded auto-activates a dev license at startup when:
 //  1. The license service is enabled AND
@@ -57,30 +47,20 @@ func SeedDevLicenseIfNeeded(ctx context.Context, cfg *config.Config, licenseSvc 
 		return fmt.Errorf("dev license seeder requires LICENSE_ENCRYPTION_KEY to be set")
 	}
 
-	privBytes, err := devLicenseKeys.ReadFile(devPrivateKeyPath)
-	if err != nil {
-		return fmt.Errorf("read embedded dev private key: %w", err)
-	}
-	pubBytes, err := devLicenseKeys.ReadFile(devPublicKeyPath)
-	if err != nil {
-		return fmt.Errorf("read embedded dev public key: %w", err)
-	}
-
 	expiryDays := cfg.License.DevSeedExpiryDays
-	if expiryDays <= 0 {
-		expiryDays = 90
-	}
-	token, err := signDevLicense(string(privBytes), expiryDays)
+	token, pubKey, err := devlicense.Issue(nil, expiryDays, 1000)
 	if err != nil {
-		return fmt.Errorf("sign dev license: %w", err)
+		return fmt.Errorf("issue dev license: %w", err)
 	}
 
 	systemUUID, _ := uuid.Parse(devSeederSystemUserID)
-	_, err = licenseSvc.Activate(ctx, token, string(pubBytes), systemUUID)
-	if err != nil {
+	if _, err := licenseSvc.Activate(ctx, token, pubKey, systemUUID); err != nil {
 		return fmt.Errorf("activate dev license: %w", err)
 	}
 
+	if expiryDays <= 0 {
+		expiryDays = 90
+	}
 	log.Printf("[license] DEV LICENSE SEEDED — NOT FOR PRODUCTION USE (features=%d, valid for %d days)",
 		len(licensing.Catalog), expiryDays)
 	return nil
@@ -91,38 +71,4 @@ func shouldSeedDev(cfg *config.Config) bool {
 		return true
 	}
 	return cfg.Env == "development"
-}
-
-// signDevLicense creates an RS256-signed JWT with every feature from the catalog,
-// a configurable expiry (default 90 days), and a 1000-user cap. Uses utils.LicenseClaims
-// so the format is byte-for-byte identical to a real Licensify-issued token.
-func signDevLicense(privateKeyPEM string, expiryDays int) (string, error) {
-	now := time.Now().UTC()
-	expiry := now.Add(time.Duration(expiryDays) * 24 * time.Hour)
-
-	claims := utils.LicenseClaims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(expiry),
-			Issuer:    "automax-dev-seeder",
-			Subject:   "license",
-		},
-		LicenseID:   uuid.New().String(),
-		ClientName:  "Automax Development",
-		ClientEmail: "devops@automax.local",
-		CompanyName: "Automax Dev",
-		Product:     "automax",
-		LicenseType: "development",
-		Features:    licensing.AllCodes(),
-		MaxUsers:    1000,
-	}
-
-	// Parse the PEM private key (comments before the BEGIN marker are ignored by jwt.ParseRSAPrivateKeyFromPEM).
-	privKey, err := jwt.ParseRSAPrivateKeyFromPEM([]byte(privateKeyPEM))
-	if err != nil {
-		return "", fmt.Errorf("parse private key: %w", err)
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	return token.SignedString(privKey)
 }
