@@ -159,7 +159,7 @@ func main() {
 	validate := validator.New()
 
 	// Initialize handlers
-	userHandler := handlers.NewUserHandler(userService, minioStorage)
+	userHandler := handlers.NewUserHandler(userService, minioStorage, redisClient, cfg)
 	healthHandler := handlers.NewHealthHandler()
 
 	// Initialize LDAP handler
@@ -210,7 +210,7 @@ func main() {
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore, userRepo)
-	loginRateLimitMiddleware := middleware.LoginRateLimitMiddleware(cfg, redisClient)
+	loginRateLimitMiddleware := middleware.LoginRateLimitMiddleware(cfg, redisClient, userService)
 
 	app := fiber.New(fiber.Config{
 		AppName:      "Automax Backend",
@@ -282,6 +282,7 @@ func main() {
 	auth.Post("/login", loginRateLimitMiddleware, userHandler.Login)
 	auth.Post("/refresh", userHandler.RefreshToken)
 	auth.Post("/logout", authMiddleware.Authenticate(), userHandler.Logout)
+	auth.Post("/unblock-user", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:unblock"), userHandler.UnblockUser)
 
 	// LDAP routes (public - for LDAP authentication)
 	ldap := v1.Group("/ldap")
