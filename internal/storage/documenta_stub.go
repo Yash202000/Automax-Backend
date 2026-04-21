@@ -26,8 +26,16 @@ func (s *StubDocumentaClient) CreateFolder(ctx context.Context, workspaceName st
 }
 
 func (s *StubDocumentaClient) EnsureFolder(ctx context.Context, workspaceName string, parentID string, name string) (string, error) {
+	// Special-case the root Goal Management folder so the stub Documents view
+	// shows the same UUID every time — otherwise every goal creation would
+	// produce a fresh "Goal Management" ID and break the illusion of hierarchy.
+	if parentID == "" && name == "Goal Management" {
+		id := "stub-folder-goal-mgmt"
+		log.Printf("[DOCUMENTA STUB] EnsureFolder: workspace=%s, parent=(root), name=%q → %s (stable)", workspaceName, name, id)
+		return id, nil
+	}
 	id := "stub-folder-" + uuid.New().String()
-	log.Printf("[DOCUMENTA STUB] EnsureFolder: workspace=%s, parent=%s, name=%s → folderID=%s", workspaceName, parentID, name, id)
+	log.Printf("[DOCUMENTA STUB] EnsureFolder: workspace=%s, parent=%s, name=%q → %s", workspaceName, parentID, name, id)
 	return id, nil
 }
 
@@ -63,10 +71,29 @@ func (s *StubDocumentaClient) DeleteFile(ctx context.Context, fileID string) err
 
 func (s *StubDocumentaClient) ListFiles(ctx context.Context, workspaceSlug string, parentID string) (*DmsListResult, error) {
 	log.Printf("[DOCUMENTA STUB] ListFiles: workspace=%s, parent=%s", workspaceSlug, parentID)
+	// Workspace root: show "Goal Management" + a sample file.
+	if parentID == "" {
+		return &DmsListResult{
+			Files: []DmsFile{
+				{UUID: "stub-folder-goal-mgmt", Name: "Goal Management", Type: "folder", CreatedAt: "2025-01-01T00:00:00Z", UpdatedAt: "2025-01-01T00:00:00Z"},
+				{UUID: "stub-file-readme", Name: "README.md", Type: "file", Size: 1024, MimeType: "text/markdown", CreatedAt: "2025-01-01T00:00:00Z", UpdatedAt: "2025-01-01T00:00:00Z"},
+			},
+		}, nil
+	}
+	// Inside the Goal Management folder: show a couple of sample goal folders.
+	if parentID == "stub-folder-goal-mgmt" {
+		return &DmsListResult{
+			Files: []DmsFile{
+				{UUID: "stub-folder-demo-goal-1", Name: "Sample Goal — Improve Safety", Type: "folder", Parent: parentID, CreatedAt: "2025-01-01T00:00:00Z", UpdatedAt: "2025-01-01T00:00:00Z"},
+				{UUID: "stub-folder-demo-goal-2", Name: "Sample Goal — Upgrade Systems", Type: "folder", Parent: parentID, CreatedAt: "2025-01-01T00:00:00Z", UpdatedAt: "2025-01-01T00:00:00Z"},
+			},
+		}, nil
+	}
+	// Any other stub parent: show a single sample file, no nested folders. This prevents
+	// the infinite-recursion breadcrumb you get if the stub always returned the same list.
 	return &DmsListResult{
 		Files: []DmsFile{
-			{UUID: "stub-folder-goal-mgmt", Name: "Goal Management", Type: "folder", CreatedAt: "2025-01-01T00:00:00Z", UpdatedAt: "2025-01-01T00:00:00Z"},
-			{UUID: "stub-file-readme", Name: "README.md", Type: "file", Size: 1024, MimeType: "text/markdown", CreatedAt: "2025-01-01T00:00:00Z", UpdatedAt: "2025-01-01T00:00:00Z"},
+			{UUID: "stub-file-evidence", Name: "evidence.pdf", Type: "file", Size: 2048, MimeType: "application/pdf", Parent: parentID, CreatedAt: "2025-01-01T00:00:00Z", UpdatedAt: "2025-01-01T00:00:00Z"},
 		},
 	}, nil
 }
