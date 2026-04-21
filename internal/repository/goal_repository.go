@@ -117,6 +117,7 @@ func (r *goalRepository) FindByIDWithRelations(ctx context.Context, id uuid.UUID
 		Preload("Owner").
 		Preload("CreatedBy").
 		Preload("Department").
+		Preload("CategoryRef").
 		Preload("ParentGoal").
 		Preload("Children").
 		Preload("Collaborators").
@@ -251,6 +252,7 @@ func (r *goalRepository) ListForExport(ctx context.Context, filter *models.GoalF
 	err := query.
 		Preload("Owner").
 		Preload("Department").
+		Preload("CategoryRef").
 		Preload("Metrics").
 		Preload("Collaborators.User").
 		Order("created_at DESC").
