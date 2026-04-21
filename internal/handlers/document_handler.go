@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"github.com/automax/backend/internal/services"
+	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
@@ -80,6 +81,23 @@ func (h *DocumentHandler) GetFileInfo(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "File info", result)
+}
+
+// GetFileBreadcrumb returns the folder chain (root → parent) for a file.
+// Used by the frontend to expand the Documents folder tree when deep-linking.
+// GET /documents/files/:id/breadcrumb
+func (h *DocumentHandler) GetFileBreadcrumb(c *fiber.Ctx) error {
+	fileID := c.Params("id")
+	email := h.getUserEmail(c)
+
+	chain, err := h.service.GetFileBreadcrumb(c.UserContext(), fileID, email)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to resolve breadcrumb: "+err.Error())
+	}
+	if chain == nil {
+		chain = []storage.DmsBreadcrumbEntry{}
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "File breadcrumb", fiber.Map{"breadcrumb": chain})
 }
 
 // GetPreviewURL returns a preview URL for a file.

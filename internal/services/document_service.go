@@ -18,6 +18,7 @@ type DocumentService interface {
 	SearchFiles(ctx context.Context, query string, userEmail string) (*storage.DmsSearchResult, error)
 	SearchFilesWithTags(ctx context.Context, query string, tags map[string]string, userEmail string) (*storage.DmsSearchResult, error)
 	GetFileInfo(ctx context.Context, fileID string, userEmail string) (*storage.DmsFile, error)
+	GetFileBreadcrumb(ctx context.Context, fileID string, userEmail string) ([]storage.DmsBreadcrumbEntry, error)
 	GetPreviewURL(ctx context.Context, fileID string, userEmail string) (string, error)
 	GetDownloadURL(ctx context.Context, fileID string, userEmail string) (string, error)
 	GetComments(ctx context.Context, fileID string, userEmail string) ([]storage.DmsComment, error)
@@ -80,6 +81,14 @@ func (s *documentService) GetFileInfo(ctx context.Context, fileID string, userEm
 		return nil, fmt.Errorf("get file info: %w", err)
 	}
 	return result, nil
+}
+
+func (s *documentService) GetFileBreadcrumb(ctx context.Context, fileID string, userEmail string) ([]storage.DmsBreadcrumbEntry, error) {
+	chain, err := s.client.GetFileBreadcrumb(s.withUser(ctx, userEmail), fileID)
+	if err != nil {
+		return nil, fmt.Errorf("get file breadcrumb: %w", err)
+	}
+	return chain, nil
 }
 
 func (s *documentService) GetPreviewURL(ctx context.Context, fileID string, userEmail string) (string, error) {

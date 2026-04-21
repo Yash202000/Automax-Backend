@@ -113,6 +113,15 @@ func (s *StubDocumentaClient) SearchFilesWithTags(ctx context.Context, workspace
 	return &DmsSearchResult{Files: []DmsFile{}, Total: 0}, nil
 }
 
+func (s *StubDocumentaClient) GetFileBreadcrumb(ctx context.Context, fileID string) ([]DmsBreadcrumbEntry, error) {
+	log.Printf("[DOCUMENTA STUB] GetFileBreadcrumb: fileID=%s", fileID)
+	// Pretend the file lives under Goal Management > a sample goal folder.
+	return []DmsBreadcrumbEntry{
+		{UUID: "stub-folder-goal-mgmt", Name: "Goal Management"},
+		{UUID: "stub-folder-demo-goal-1", Name: "Sample Goal — Improve Safety"},
+	}, nil
+}
+
 func (s *StubDocumentaClient) GetFileInfo(ctx context.Context, fileID string) (*DmsFile, error) {
 	log.Printf("[DOCUMENTA STUB] GetFileInfo: fileID=%s", fileID)
 	return &DmsFile{

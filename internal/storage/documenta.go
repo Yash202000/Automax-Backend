@@ -10,16 +10,27 @@ import (
 // ════════════════════════════════════════════════════
 
 // DmsFile represents a file or folder in the Documenta DMS.
+// JSON tags are the snake_case contract Automax presents to its own frontend.
+// Fields are filled by the HTTP client from upstream MyDocs responses
+// (which use camelCase — see ListFiles/GetFileInfo for the mapping).
 type DmsFile struct {
-	UUID      string            `json:"uuid"`
-	Name      string            `json:"name"`
-	Type      string            `json:"type"` // "file" or "folder"
-	Size      int64             `json:"size"`
-	MimeType  string            `json:"mime_type"`
-	Parent    string            `json:"parent"`
-	CreatedAt string            `json:"created_at"`
-	UpdatedAt string            `json:"updated_at"`
-	Metadata  map[string]string `json:"metadata"`
+	UUID       string            `json:"uuid"`
+	Name       string            `json:"name"`
+	Type       string            `json:"type"` // "file" or "folder"
+	Size       int64             `json:"size"`
+	MimeType   string            `json:"mime_type"`
+	Parent     string            `json:"parent"`      // legacy alias; mirrors ParentUUID
+	ParentUUID string            `json:"parent_uuid"` // direct parent folder UUID, empty for workspace root
+	Path       string            `json:"path"`        // absolute path, e.g. /Goal Management/Safety/file.pdf
+	CreatedAt  string            `json:"created_at"`
+	UpdatedAt  string            `json:"updated_at"`
+	Metadata   map[string]string `json:"metadata"`
+}
+
+// DmsBreadcrumbEntry is one step in a file's folder chain (workspace root → parent folder).
+type DmsBreadcrumbEntry struct {
+	UUID string `json:"uuid"`
+	Name string `json:"name"`
 }
 
 // DmsComment represents a comment on a file.
@@ -100,6 +111,11 @@ type DocumentaClient interface {
 
 	// GetFileInfo returns metadata for a single file.
 	GetFileInfo(ctx context.Context, fileID string) (*DmsFile, error)
+
+	// GetFileBreadcrumb returns the folder chain from workspace root down to
+	// (but excluding) the file itself. Each entry is (uuid, name). Used by the
+	// frontend Documents page to expand the folder tree when deep-linking to a file.
+	GetFileBreadcrumb(ctx context.Context, fileID string) ([]DmsBreadcrumbEntry, error)
 
 	// ── Comments ──
 

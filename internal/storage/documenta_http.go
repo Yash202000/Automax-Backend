@@ -446,14 +446,34 @@ func (c *httpDocumentaClient) ListFiles(ctx context.Context, workspaceSlug strin
 	}
 
 	// MyDocs returns { success, data: { files: [...], settings: {...}, workspaceRole: "..." } }
+	// Its file objects use camelCase (parentUuid, sizeBytes, mimeType, createdAt).
+	type mdFile struct {
+		UUID       string `json:"uuid"`
+		Name       string `json:"name"`
+		Type       string `json:"type"`
+		SizeBytes  int64  `json:"sizeBytes"`
+		MimeType   string `json:"mimeType"`
+		ParentUUID string `json:"parentUuid"`
+		Path       string `json:"path"`
+		CreatedAt  string `json:"createdAt"`
+		UpdatedAt  string `json:"updatedAt"`
+	}
 	type listData struct {
-		Files []DmsFile `json:"files"`
+		Files []mdFile `json:"files"`
 	}
 	result, parseErr := parseResponse[listData](resp)
 	if parseErr != nil {
 		return nil, parseErr
 	}
-	return &DmsListResult{Files: result.Files}, nil
+	files := make([]DmsFile, len(result.Files))
+	for i, f := range result.Files {
+		files[i] = DmsFile{
+			UUID: f.UUID, Name: f.Name, Type: f.Type, Size: f.SizeBytes, MimeType: f.MimeType,
+			Parent: f.ParentUUID, ParentUUID: f.ParentUUID, Path: f.Path,
+			CreatedAt: f.CreatedAt, UpdatedAt: f.UpdatedAt,
+		}
+	}
+	return &DmsListResult{Files: files}, nil
 }
 
 func (c *httpDocumentaClient) SearchFiles(ctx context.Context, workspaceSlug string, query string) (*DmsSearchResult, error) {
@@ -469,16 +489,40 @@ func (c *httpDocumentaClient) SearchFiles(ctx context.Context, workspaceSlug str
 	if err != nil {
 		return nil, err
 	}
+	return parseSearchResponse(resp)
+}
 
+// parseSearchResponse converts a MyDocs /search response (camelCase file objects)
+// into the snake_case DmsSearchResult the frontend expects.
+func parseSearchResponse(resp *http.Response) (*DmsSearchResult, error) {
+	type mdFile struct {
+		UUID       string `json:"uuid"`
+		Name       string `json:"name"`
+		Type       string `json:"type"`
+		SizeBytes  int64  `json:"sizeBytes"`
+		MimeType   string `json:"mimeType"`
+		ParentUUID string `json:"parentUuid"`
+		Path       string `json:"path"`
+		CreatedAt  string `json:"createdAt"`
+		UpdatedAt  string `json:"updatedAt"`
+	}
 	type searchData struct {
-		Files []DmsFile `json:"files"`
-		Total int       `json:"total"`
+		Files []mdFile `json:"files"`
+		Total int      `json:"total"`
 	}
-	result, parseErr := parseResponse[searchData](resp)
-	if parseErr != nil {
-		return nil, parseErr
+	result, err := parseResponse[searchData](resp)
+	if err != nil {
+		return nil, err
 	}
-	return &DmsSearchResult{Files: result.Files, Total: result.Total}, nil
+	files := make([]DmsFile, len(result.Files))
+	for i, f := range result.Files {
+		files[i] = DmsFile{
+			UUID: f.UUID, Name: f.Name, Type: f.Type, Size: f.SizeBytes, MimeType: f.MimeType,
+			Parent: f.ParentUUID, ParentUUID: f.ParentUUID, Path: f.Path,
+			CreatedAt: f.CreatedAt, UpdatedAt: f.UpdatedAt,
+		}
+	}
+	return &DmsSearchResult{Files: files, Total: result.Total}, nil
 }
 
 func (c *httpDocumentaClient) SearchFilesWithTags(ctx context.Context, workspaceSlug string, query string, tags map[string]string) (*DmsSearchResult, error) {
@@ -497,16 +541,7 @@ func (c *httpDocumentaClient) SearchFilesWithTags(ctx context.Context, workspace
 	if err != nil {
 		return nil, err
 	}
-
-	type searchData struct {
-		Files []DmsFile `json:"files"`
-		Total int       `json:"total"`
-	}
-	result, parseErr := parseResponse[searchData](resp)
-	if parseErr != nil {
-		return nil, parseErr
-	}
-	return &DmsSearchResult{Files: result.Files, Total: result.Total}, nil
+	return parseSearchResponse(resp)
 }
 
 func (c *httpDocumentaClient) GetFileInfo(ctx context.Context, fileID string) (*DmsFile, error) {
@@ -515,11 +550,59 @@ func (c *httpDocumentaClient) GetFileInfo(ctx context.Context, fileID string) (*
 		return nil, err
 	}
 
-	result, parseErr := parseResponse[DmsFile](resp)
+	// MyDocs uses camelCase field names; intermediate struct bridges the
+	// upstream payload to our snake_case DmsFile contract.
+	type mdFileInfo struct {
+		UUID       string `json:"uuid"`
+		Name       string `json:"name"`
+		Type       string `json:"type"`
+		SizeBytes  int64  `json:"sizeBytes"`
+		MimeType   string `json:"mimeType"`
+		ParentUUID string `json:"parentUuid"`
+		Path       string `json:"path"`
+		CreatedAt  string `json:"createdAt"`
+		UpdatedAt  string `json:"updatedAt"`
+	}
+	info, parseErr := parseResponse[mdFileInfo](resp)
 	if parseErr != nil {
 		return nil, parseErr
 	}
-	return result, nil
+	return &DmsFile{
+		UUID:       info.UUID,
+		Name:       info.Name,
+		Type:       info.Type,
+		Size:       info.SizeBytes,
+		MimeType:   info.MimeType,
+		Parent:     info.ParentUUID, // legacy alias
+		ParentUUID: info.ParentUUID,
+		Path:       info.Path,
+		CreatedAt:  info.CreatedAt,
+		UpdatedAt:  info.UpdatedAt,
+	}, nil
+}
+
+// GetFileBreadcrumb returns the folder chain from workspace root to the file's
+// parent folder (the file itself is NOT included). Walks up via GetFileInfo.
+// Returns an empty slice if the file is at workspace root.
+func (c *httpDocumentaClient) GetFileBreadcrumb(ctx context.Context, fileID string) ([]DmsBreadcrumbEntry, error) {
+	start, err := c.GetFileInfo(ctx, fileID)
+	if err != nil {
+		return nil, err
+	}
+	// Walk up: collect ancestors (not the file itself).
+	var chain []DmsBreadcrumbEntry
+	parentID := start.ParentUUID
+	const maxDepth = 32 // defensive limit to avoid runaway walks
+	for i := 0; parentID != "" && i < maxDepth; i++ {
+		parent, err := c.GetFileInfo(ctx, parentID)
+		if err != nil {
+			return nil, fmt.Errorf("documenta: resolve breadcrumb at %s: %w", parentID, err)
+		}
+		// Prepend so result is ordered root → parent.
+		chain = append([]DmsBreadcrumbEntry{{UUID: parent.UUID, Name: parent.Name}}, chain...)
+		parentID = parent.ParentUUID
+	}
+	return chain, nil
 }
 
 // ──────────────────────────────────────────────────

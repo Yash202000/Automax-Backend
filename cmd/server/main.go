@@ -864,6 +864,7 @@ func main() {
 	docs.Get("/files", authMiddleware.RequirePermission("goals:view"), documentHandler.ListFiles)
 	docs.Post("/search", authMiddleware.RequirePermission("goals:view"), documentHandler.SearchFiles)
 	docs.Get("/files/:id/info", authMiddleware.RequirePermission("goals:view"), documentHandler.GetFileInfo)
+	docs.Get("/files/:id/breadcrumb", authMiddleware.RequirePermission("goals:view"), documentHandler.GetFileBreadcrumb)
 	docs.Get("/files/:id/preview", authMiddleware.RequirePermission("goals:view"), documentHandler.GetPreviewURL)
 	docs.Get("/files/:id/download", authMiddleware.RequirePermission("goals:view"), documentHandler.GetDownloadURL)
 	docs.Get("/files/:id/comments", authMiddleware.RequirePermission("goals:view"), documentHandler.GetComments)
