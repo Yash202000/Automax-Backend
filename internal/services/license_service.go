@@ -29,7 +29,7 @@ var (
 )
 
 type LicenseService interface {
-	Activate(ctx context.Context, licenseKey string, publicKeyPEM string, activatedBy uuid.UUID) (*models.LicenseStatusResponse, error)
+	Activate(ctx context.Context, licenseKey string, jwksJSON string, activatedBy uuid.UUID) (*models.LicenseStatusResponse, error)
 	Deactivate(ctx context.Context) error
 	GetStatus(ctx context.Context) (*models.LicenseStatusResponse, error)
 	GetInfo(ctx context.Context) (*models.LicenseInfoResponse, error)
@@ -71,7 +71,7 @@ func (s *licenseService) IsEnabled() bool {
 	return s.cfg.Enabled
 }
 
-func (s *licenseService) Activate(ctx context.Context, licenseKey string, publicKeyPEM string, activatedBy uuid.UUID) (*models.LicenseStatusResponse, error) {
+func (s *licenseService) Activate(ctx context.Context, licenseKey string, jwksJSON string, activatedBy uuid.UUID) (*models.LicenseStatusResponse, error) {
 	if s.cfg.EncryptionKey == "" {
 		return nil, ErrEncryptionKey
 	}
@@ -85,8 +85,12 @@ func (s *licenseService) Activate(ctx context.Context, licenseKey string, public
 		return nil, ErrProductMismatch
 	}
 
-	// 2. Verify signature with RS256 public key
-	claims, err := utils.ValidateLicenseJWT(licenseKey, publicKeyPEM)
+	// 2. Parse the JWKS and verify the signature by looking up the token's kid.
+	keysByKid, err := utils.ParseJWKS(jwksJSON)
+	if err != nil {
+		return nil, fmt.Errorf("invalid JWKS: %w", err)
+	}
+	claims, err := utils.ValidateLicenseJWTWithJWKS(licenseKey, keysByKid)
 	if err != nil {
 		return nil, fmt.Errorf("license key validation failed: %w", err)
 	}
@@ -143,7 +147,7 @@ func (s *licenseService) Activate(ctx context.Context, licenseKey string, public
 		ActivatedAt:      &now,
 		ActivatedBy:      &activatedBy,
 		ValidationStatus: validationStatus,
-		PublicKey:         publicKeyPEM,
+		JWKS:             jwksJSON,
 	}
 
 	// 7. Upsert (replace any existing license)
@@ -265,7 +269,7 @@ func (s *licenseService) LoadFromDB(ctx context.Context) error {
 	}
 
 	// Decrypt and re-validate if encryption key is available
-	if s.cfg.EncryptionKey != "" && license.PublicKey != "" {
+	if s.cfg.EncryptionKey != "" && license.JWKS != "" {
 		plainKey, err := utils.DecryptLicenseKey(license.EncryptedKey, license.KeyNonce, s.cfg.EncryptionKey)
 		if err != nil {
 			log.Printf("License: Failed to decrypt stored key: %v", err)
@@ -273,7 +277,14 @@ func (s *licenseService) LoadFromDB(ctx context.Context) error {
 			return nil
 		}
 
-		claims, err := utils.ValidateLicenseJWT(plainKey, license.PublicKey)
+		keysByKid, err := utils.ParseJWKS(license.JWKS)
+		if err != nil {
+			log.Printf("License: Failed to parse stored JWKS: %v", err)
+			s.updateCacheFromLicense(license)
+			return nil
+		}
+
+		claims, err := utils.ValidateLicenseJWTWithJWKS(plainKey, keysByKid)
 		if err != nil {
 			log.Printf("License: Stored key failed validation: %v", err)
 			// Key might be expired — still load from DB for grace period handling

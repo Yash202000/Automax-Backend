@@ -48,13 +48,13 @@ func SeedDevLicenseIfNeeded(ctx context.Context, cfg *config.Config, licenseSvc 
 	}
 
 	expiryDays := cfg.License.DevSeedExpiryDays
-	token, pubKey, err := devlicense.Issue(nil, expiryDays, 1000)
+	token, jwks, err := devlicense.Issue(nil, expiryDays, 1000)
 	if err != nil {
 		return fmt.Errorf("issue dev license: %w", err)
 	}
 
 	systemUUID, _ := uuid.Parse(devSeederSystemUserID)
-	if _, err := licenseSvc.Activate(ctx, token, pubKey, systemUUID); err != nil {
+	if _, err := licenseSvc.Activate(ctx, token, jwks, systemUUID); err != nil {
 		return fmt.Errorf("activate dev license: %w", err)
 	}
 

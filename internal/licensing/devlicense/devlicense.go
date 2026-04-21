@@ -21,9 +21,9 @@ var devKeys embed.FS
 
 // Issue signs a dev license JWT with the given features and expiry.
 // If features is nil/empty, every feature in the catalog is granted.
-// Returns the JWT string and the matching public key PEM, both suitable
+// Returns the JWT string and a matching single-key JWKS JSON blob, both suitable
 // for POSTing to /api/v1/admin/license/activate.
-func Issue(features []string, expiryDays int, maxUsers int) (licenseKey, publicKey string, err error) {
+func Issue(features []string, expiryDays int, maxUsers int) (licenseKey, jwksJSON string, err error) {
 	if len(features) == 0 {
 		features = licensing.AllCodes()
 	}
@@ -48,6 +48,11 @@ func Issue(features []string, expiryDays int, maxUsers int) (licenseKey, publicK
 		return "", "", fmt.Errorf("parse private key: %w", err)
 	}
 
+	jwksJSON, kid, err := utils.JWKSFromPEM(string(pubBytes))
+	if err != nil {
+		return "", "", fmt.Errorf("build JWKS from dev public PEM: %w", err)
+	}
+
 	now := time.Now().UTC()
 	expiry := now.Add(time.Duration(expiryDays) * 24 * time.Hour)
 	claims := utils.LicenseClaims{
@@ -68,9 +73,10 @@ func Issue(features []string, expiryDays int, maxUsers int) (licenseKey, publicK
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = kid
 	signed, err := token.SignedString(privKey)
 	if err != nil {
 		return "", "", fmt.Errorf("sign token: %w", err)
 	}
-	return signed, string(pubBytes), nil
+	return signed, jwksJSON, nil
 }

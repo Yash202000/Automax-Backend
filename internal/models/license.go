@@ -26,7 +26,7 @@ type License struct {
 	ActivatedAt      *time.Time     `json:"activated_at"`
 	ActivatedBy      *uuid.UUID     `gorm:"type:uuid" json:"activated_by"`
 	ValidationStatus string         `gorm:"size:50;default:'pending'" json:"validation_status"` // pending/valid/expired/invalid
-	PublicKey        string         `gorm:"type:text" json:"-"`                  // Cached PEM public key
+	JWKS             string         `gorm:"type:text" json:"-"`                  // Cached JWKS JSON (RFC 7517)
 	CreatedAt        time.Time      `json:"created_at"`
 	UpdatedAt        time.Time      `json:"updated_at"`
 	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`
@@ -43,7 +43,7 @@ func (l *License) BeforeCreate(tx *gorm.DB) error {
 // LicenseActivateRequest is the request body for activating a license.
 type LicenseActivateRequest struct {
 	LicenseKey string `json:"license_key" validate:"required"`
-	PublicKey  string `json:"public_key" validate:"required"`
+	JWKS       string `json:"jwks" validate:"required"`
 }
 
 // LicenseStatusResponse is the full license status (admin only).

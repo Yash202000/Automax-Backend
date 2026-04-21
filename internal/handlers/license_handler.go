@@ -40,17 +40,17 @@ func (h *LicenseHandler) Activate(c *fiber.Ctx) error {
 		})
 	}
 
-	if strings.TrimSpace(req.PublicKey) == "" {
+	if strings.TrimSpace(req.JWKS) == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
 			"error":   "invalid_request",
-			"message": "Public key is required",
+			"message": "JWKS is required",
 		})
 	}
 
 	userID, _ := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	status, err := h.licenseService.Activate(c.UserContext(), req.LicenseKey, req.PublicKey, userID)
+	status, err := h.licenseService.Activate(c.UserContext(), req.LicenseKey, req.JWKS, userID)
 	if err != nil {
 		statusCode := fiber.StatusBadRequest
 

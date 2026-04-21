@@ -6,7 +6,7 @@
 //	go run ./cmd/devlicense -features goals,documents      # scoped license (e.g. for feature-gate tests)
 //	go run ./cmd/devlicense -days 1 -max-users 5           # short-lived, user-capped
 //
-// Output: {"license_key": "...", "public_key": "-----BEGIN PUBLIC KEY-----..."}
+// Output: {"license_key": "...", "jwks": "{\"keys\":[...]}"}
 //
 // Intended for CI pipelines, E2E scripts, and local troubleshooting. Never for production.
 package main
@@ -38,7 +38,7 @@ func main() {
 		}
 	}
 
-	token, pubKey, err := devlicense.Issue(features, *daysFlag, *usersFlag)
+	token, jwks, err := devlicense.Issue(features, *daysFlag, *usersFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "devlicense: %v\n", err)
 		os.Exit(1)
@@ -46,7 +46,7 @@ func main() {
 
 	out := map[string]string{
 		"license_key": token,
-		"public_key":  pubKey,
+		"jwks":        jwks,
 	}
 	if err := json.NewEncoder(os.Stdout).Encode(out); err != nil {
 		fmt.Fprintf(os.Stderr, "devlicense: encode: %v\n", err)

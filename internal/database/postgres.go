@@ -50,6 +50,14 @@ func Migrate(db *gorm.DB) error {
 		return fmt.Errorf("failed to create enum type: %w", err)
 	}
 
+	// License table schema migration: the old single-PEM public_key column has
+	// been replaced by a JWKS JSON blob. Dropping here is idempotent — AutoMigrate
+	// will add the new `jwks` column on the next step. Any pre-existing license row
+	// becomes non-verifiable; LoadFromDB gracefully falls back to cached state.
+	if err := db.Exec(`ALTER TABLE IF EXISTS licenses DROP COLUMN IF EXISTS public_key`).Error; err != nil {
+		log.Printf("Warning: failed to drop legacy licenses.public_key column: %v", err)
+	}
+
 	// Use session that disables FK constraints during migration to prevent auto-FK issues
 	migrationDB := db.Session(&gorm.Session{})
 	migrationDB.Config.DisableForeignKeyConstraintWhenMigrating = true
