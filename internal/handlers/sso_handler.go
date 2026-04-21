@@ -202,7 +202,7 @@ func (h *SSOHandler) Callback(c *fiber.Ctx) error {
 	}
 
 	// Generate local Automax token pair
-	tokenPair, err := h.jwtManager.GenerateTokenPair(user.ID, user.Email, role)
+	tokenPair, err := h.jwtManager.GenerateTokenPair(user.ID, user.Email, "", role)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to generate session tokens")
 	}

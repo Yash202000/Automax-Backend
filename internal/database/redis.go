@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/config"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -78,6 +80,84 @@ func (s *SessionStore) SetUserSession(ctx context.Context, userID string, sessio
 	return s.Set(ctx, key, sessionData, expiration)
 }
 
+func (s *SessionStore) SetUserSessionMultiDevices(ctx context.Context, userID string, sessionData interface{}, expiration time.Duration) (string, error) {
+
+	sessionID := uuid.New().String()
+
+	// Convert to JSON
+	dataBytes, err := json.Marshal(sessionData)
+	if err != nil {
+		return "", err
+	}
+
+	// 1. Store session
+	err = s.client.Set(ctx, "session:"+sessionID, dataBytes, expiration).Err()
+	if err != nil {
+		return "", err
+	}
+
+	//Map user -> sessions
+	err = s.client.SAdd(ctx, "user_sessions:"+userID, sessionID).Err()
+	if err != nil {
+		return "", err
+	}
+
+	//  Set TTL
+	s.client.Expire(ctx, "user_sessions:"+userID, expiration)
+
+	return sessionID, nil
+}
+func (s *SessionStore) DeleteAllUserSessions(ctx context.Context, userID string) error {
+
+	userSessionsKey := fmt.Sprintf("user_sessions:%s", userID)
+
+	sessionIDs, err := s.client.SMembers(ctx, userSessionsKey).Result()
+	if err != nil {
+		return err
+	}
+
+	for _, sid := range sessionIDs {
+		sessionKey := fmt.Sprintf("session:%s", sid)
+		s.client.Del(ctx, sessionKey)
+	}
+
+	// delete mapping
+	s.client.Del(ctx, userSessionsKey)
+
+	return nil
+}
+
+func (s *SessionStore) ValidateSession(ctx context.Context, sessionID string) (bool, error) {
+	key := "session:" + sessionID
+	exists, err := s.client.Exists(ctx, key).Result()
+	return exists == 1, err
+}
+
+func (s *SessionStore) ResetBlockedUserState(ctx context.Context, email string, phone string) error {
+	var keys []string
+
+	if email != "" {
+		emailKey := "email:" + strings.ToLower(strings.TrimSpace(email))
+		keys = append(keys,
+			"login_block:user:"+emailKey,
+			"login_attempts:user:"+emailKey,
+		)
+	}
+
+	if phone != "" {
+		phoneKey := "phone:" + strings.TrimSpace(phone)
+		keys = append(keys,
+			"login_block:user:"+phoneKey,
+			"login_attempts:user:"+phoneKey,
+		)
+	}
+
+	if len(keys) == 0 {
+		return nil
+	}
+	_, err := s.client.Del(ctx, keys...).Result()
+	return err
+}
 func (s *SessionStore) GetUserSession(ctx context.Context, userID string, dest interface{}) error {
 	key := fmt.Sprintf("session:%s", userID)
 	return s.Get(ctx, key, dest)
@@ -145,15 +225,15 @@ func (s *SessionStore) ClaimSSONonce(ctx context.Context, jti string, ttl time.D
 func ResetLoginAttempts(ctx context.Context, client *redis.Client, identifier string) error {
 	// Use pipeline to delete both keys atomically
 	pipe := client.Pipeline()
-	
+
 	// Remove attempt counter
 	attemptsKey := fmt.Sprintf("login_attempts:%s", identifier)
 	pipe.Del(ctx, attemptsKey)
-	
+
 	// Remove block if exists
 	blockKey := fmt.Sprintf("login_block:%s", identifier)
 	pipe.Del(ctx, blockKey)
-	
+
 	_, err := pipe.Exec(ctx)
 	return err
 }

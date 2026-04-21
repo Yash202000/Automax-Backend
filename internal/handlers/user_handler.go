@@ -184,6 +184,32 @@ func (h *UserHandler) ChangePassword(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "Password changed successfully", nil)
 }
 
+func (h *UserHandler) AdminResetPassword(c *fiber.Ctx) error {
+
+	adminUserID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+
+	targetUserIDStr := c.Params("userID")
+	targetUserID, err := uuid.Parse(targetUserIDStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid user ID")
+	}
+
+	var req struct {
+		NewPassword string `json:"new_password"`
+	}
+
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request")
+	}
+
+	err = h.userService.AdminResetPassword(c.UserContext(), adminUserID, targetUserID, req.NewPassword)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Password reset successfully", nil)
+}
+
 func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
@@ -743,40 +769,10 @@ func (h *UserHandler) HandleLoginSuccess(ctx context.Context, user string) {
 	h.redisClient.Del(ctx, "login_block:user:"+user)
 }
 
-func (h *UserHandler) UnblockUser1(c *fiber.Ctx) error {
-
-	type Request struct {
-		Email string `json:"email"`
-	}
-
-	var req Request
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Invalid request",
-		})
-	}
-
-	if req.Email == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Email is required",
-		})
-	}
-
-	// normalize
-	email := strings.ToLower(strings.TrimSpace(req.Email))
-	// delete Redis keys
-	h.redisClient.Del(c.UserContext(), "login_attempts:user:"+email)
-	h.redisClient.Del(c.UserContext(), "login_block:user:"+email)
-
-	return c.JSON(fiber.Map{
-		"message": "User unblocked successfully",
-	})
-}
-
 func (h *UserHandler) UnblockUser(c *fiber.Ctx) error {
 
 	type Request struct {
-		Email string `json:"email"`
+		Identifier string `json:"identifier"` // email OR phone
 	}
 
 	var req Request
@@ -786,21 +782,27 @@ func (h *UserHandler) UnblockUser(c *fiber.Ctx) error {
 		})
 	}
 
-	if req.Email == "" {
+	if req.Identifier == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Email is required",
+			"error": "Identifier is required",
 		})
 	}
 
-	// normalize email
-	email := strings.ToLower(strings.TrimSpace(req.Email))
+	//  INLINE buildLoginKey
+	identifier := strings.TrimSpace(req.Identifier)
+	var key string
+	if strings.Contains(identifier, "@") {
+		key = "email:" + strings.ToLower(identifier)
+	} else {
+		key = "phone:" + identifier
+	}
 
 	ctx := c.UserContext()
 
-	blockKey := "login_block:user:" + email
-	attemptKey := "login_attempts:user:" + email
+	blockKey := "login_block:user:" + key
+	attemptKey := "login_attempts:user:" + key
 
-	//Check if user is blocked
+	// Check if blocked
 	blockExists, err := h.redisClient.Exists(ctx, blockKey).Result()
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -808,7 +810,6 @@ func (h *UserHandler) UnblockUser(c *fiber.Ctx) error {
 		})
 	}
 
-	// If not blocked → return error
 	if blockExists == 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "User is not blocked",
@@ -820,6 +821,6 @@ func (h *UserHandler) UnblockUser(c *fiber.Ctx) error {
 	h.redisClient.Del(ctx, attemptKey)
 
 	return c.JSON(fiber.Map{
-		"message": "User unblocked successfully!!",
+		"message": "User unblocked successfully",
 	})
 }

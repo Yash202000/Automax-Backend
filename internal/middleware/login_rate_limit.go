@@ -7,19 +7,21 @@ import (
 	"time"
 
 	"github.com/automax/backend/internal/config"
+	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/gofiber/fiber/v2"
 	"github.com/redis/go-redis/v9"
 )
 
 func LoginRateLimitMiddleware(cfg *config.Config, redisClient *redis.Client, userService services.UserService) fiber.Handler {
-
 	return func(c *fiber.Ctx) error {
 
 		if !cfg.LoginRateLimit.Enabled {
 			return c.Next()
 		}
+
 		ctx := c.UserContext()
+
 		var reqBody map[string]interface{}
 		if err := c.BodyParser(&reqBody); err != nil {
 			return c.Next()
@@ -29,36 +31,51 @@ func LoginRateLimitMiddleware(cfg *config.Config, redisClient *redis.Client, use
 		if userIdentifier == "" {
 			return c.Next()
 		}
-		// STEP 1: Fetch user
-		user, err := userService.GetUserByEmail(ctx, userIdentifier)
+
+		var key string
+		if strings.Contains(userIdentifier, "@") {
+			key = "email:" + strings.ToLower(userIdentifier)
+		} else {
+			key = "phone:" + userIdentifier
+		}
+		redisKey := "user:" + key
+		// Fetch user (email / phone)
+		var user *models.User
+		var err error
+		//Get users
+		if strings.Contains(userIdentifier, "@") {
+			user, err = userService.GetUserByEmail(ctx, userIdentifier)
+		} else {
+			user, err = userService.GetUserByMobile(ctx, userIdentifier)
+		}
+
+		// ADMIN BYPASS
 		if err == nil && user != nil {
 			if cfg.LoginRateLimit.BypassForAdmin && user.IsSuperAdmin {
-				// Skip ALL rate limiting
 				return c.Next()
 			}
 		}
 
-		// Check if blocked
-		blocked, _ := checkIfBlocked(ctx, redisClient, "user:"+userIdentifier)
+		// check block
+		blocked, _ := checkIfBlocked(ctx, redisClient, redisKey)
 		if blocked {
 			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
 				"error": "Too many login attempts. Please try again later.",
 			})
 		}
 
-		// Get attempts
-		attempts, _ := getAttemptCount(ctx, redisClient, "user:"+userIdentifier)
-
+		// Attempts
+		attempts, _ := getAttemptCount(ctx, redisClient, redisKey)
 		if attempts >= cfg.LoginRateLimit.MaxAttempts {
-			blockIdentifier(ctx, redisClient, "user:"+userIdentifier, cfg)
+			blockIdentifier(ctx, redisClient, redisKey, cfg)
 
 			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
 				"error": "Too many login attempts. Please try again later.",
 			})
 		}
 
-		// Store identifier for handler
-		c.Locals("login_user_identifier", userIdentifier)
+		// STORE NORMALIZED KEY
+		c.Locals("login_user_identifier", key)
 
 		return c.Next()
 	}
