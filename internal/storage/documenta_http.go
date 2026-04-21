@@ -350,7 +350,10 @@ func (c *httpDocumentaClient) UploadFile(ctx context.Context, folderID, fileName
 		}
 	}
 
-	if err := writer.WriteField("parentUuid", folderID); err != nil {
+	// MyDocs file-upload handler reads "parent" (not "parentUuid") from the
+	// multipart form. Folder creation uses "parentUuid" in its JSON body — the
+	// two endpoints disagree on field naming, don't unify.
+	if err := writer.WriteField("parent", folderID); err != nil {
 		return "", fmt.Errorf("documenta: write parent field: %w", err)
 	}
 
