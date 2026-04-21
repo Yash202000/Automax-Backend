@@ -9,9 +9,10 @@ import (
 )
 
 type JWTClaims struct {
-	UserID uuid.UUID `json:"user_id"`
-	Email  string    `json:"email"`
-	Role   string    `json:"role"`
+	UserID    uuid.UUID `json:"user_id"`
+	Email     string    `json:"email"`
+	Role      string    `json:"role"`
+	SessionID string    `json:"session_id"`
 	jwt.RegisteredClaims
 }
 
@@ -27,19 +28,19 @@ type TokenPair struct {
 }
 
 type JWTManager struct {
-	secretKey        []byte
-	refreshSecretKey []byte
-	expireHour       int
-	refreshExpireDay int
+	secretKey         []byte
+	refreshSecretKey  []byte
+	expireHour        int
+	refreshExpireDay  int
 	rememberExpireDay int
 }
 
 func NewJWTManager(secret string, expireHour int) *JWTManager {
 	return &JWTManager{
-		secretKey:        []byte(secret),
-		refreshSecretKey: []byte(secret + "_refresh"), // Different secret for refresh tokens
-		expireHour:       expireHour,
-		refreshExpireDay: 7, // Refresh token valid for 7 days
+		secretKey:         []byte(secret),
+		refreshSecretKey:  []byte(secret + "_refresh"), // Different secret for refresh tokens
+		expireHour:        expireHour,
+		refreshExpireDay:  7,  // Refresh token valid for 7 days
 		rememberExpireDay: 30, // Refresh token valid for 30 days when remember_me is true
 	}
 }
@@ -63,15 +64,16 @@ func (j *JWTManager) GenerateToken(userID uuid.UUID, email, role string) (string
 }
 
 // GenerateTokenPair generates both access and refresh tokens
-func (j *JWTManager) GenerateTokenPair(userID uuid.UUID, email, role string, rememberMe ...bool) (*TokenPair, error) {
+func (j *JWTManager) GenerateTokenPair(userID uuid.UUID, email, role string, sessionID string, rememberMe ...bool) (*TokenPair, error) {
 	// Default to false if not provided
 	useRemember := len(rememberMe) > 0 && rememberMe[0]
-	
+
 	// Generate access token
 	accessClaims := JWTClaims{
-		UserID: userID,
-		Email:  email,
-		Role:   role,
+		UserID:    userID,
+		Email:     email,
+		Role:      role,
+		SessionID: sessionID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(j.expireHour) * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),

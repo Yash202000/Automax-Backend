@@ -304,6 +304,7 @@ func main() {
 	users.Put("/me/password", authMiddleware.Authenticate(), userHandler.ChangePassword)
 	users.Delete("/me", authMiddleware.Authenticate(), userHandler.DeleteAccount)
 	users.Put("/:userExtID/status", userHandler.UpdateUserCallStatus)
+	users.Put("/:userID/password", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:update"), userHandler.AdminResetPassword)
 
 	// Incident routes (authenticated users)
 	incidents := v1.Group("/incidents", authMiddleware.Authenticate())

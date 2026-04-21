@@ -44,6 +44,7 @@ type UserService interface {
 	UpdateProfile(ctx context.Context, req *models.UserUpdateRequest) (*models.UserResponse, error)
 	GenerateTokenViaUserID(ctx context.Context, mobile uuid.UUID) (*models.AuthResponse, error)
 	ValidateMobileForLogin(ctx context.Context, phone string) (*models.UserResponse, error)
+	AdminResetPassword(ctx context.Context, adminID, targetUserID uuid.UUID, newPassword string) error
 }
 
 type userService struct {
@@ -347,24 +348,26 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 		role = user.Roles[0].Code
 	}
 
-	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, role, req.RememberMe)
+	sessionID, err := s.sessionStore.SetUserSessionMultiDevices(ctx, user.ID.String(), map[string]interface{}{
+		"user_id": user.ID,
+		"email":   user.Email,
+		"role":    role,
+	}, s.jwtManager.GetTokenExpiration())
+
 	if err != nil {
 		return nil, err
 	}
 
-	if err := s.sessionStore.SetUserSession(ctx, user.ID.String(), map[string]interface{}{
-		"user_id": user.ID,
-		"email":   user.Email,
-		"role":    role,
-	}, s.jwtManager.GetTokenExpiration()); err != nil {
+	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, role, sessionID, req.RememberMe)
+	if err != nil {
 		return nil, err
 	}
 
-	// Update last login timestamp
-	go func() {
-		_ = s.userRepo.UpdateLastLogin(context.Background(), user.ID)
-	}()
-
+	go func(ctx context.Context, userID uuid.UUID) {
+		if err := s.userRepo.UpdateLastLogin(ctx, userID); err != nil {
+			fmt.Println("failed to update last login:", err)
+		}
+	}(ctx, user.ID)
 	// Log successful login
 	go func() {
 		if err := s.actionLogService.LogAction(context.Background(), &LogActionParams{
@@ -460,7 +463,7 @@ func (s *userService) RefreshToken(ctx context.Context, refreshToken string) (*m
 	}
 
 	// Generate new token pair
-	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, role)
+	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, "", role)
 	if err != nil {
 		return nil, err
 	}
@@ -552,7 +555,7 @@ func (s *userService) GenerateTokenViaUserID(ctx context.Context, userID uuid.UU
 	}
 	log.Println("user fetched for last 6 digits login")
 	// Continue with the rest of the login logic...
-	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, constants.USER_ROLE.CITIZEN)
+	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, "", constants.USER_ROLE.CITIZEN)
 	if err != nil {
 		return nil, err
 	}
@@ -1126,11 +1129,14 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 	err = s.userRepo.Update(ctx, user)
 
 	if err == nil {
-		// Invalidate the current session and token so the user must re-authenticate
-		_ = s.sessionStore.DeleteUserSession(ctx, userID.String())
-		if token, ok := ctx.Value(constants.ContextKeys.Token).(string); ok && token != "" {
-			_ = s.sessionStore.BlacklistToken(ctx, token, s.jwtManager.GetTokenExpiration())
+
+		err = s.sessionStore.DeleteAllUserSessions(ctx, userID.String())
+		if err != nil {
+			return err
 		}
+
+		// Reset login attempts + unblock user
+		_ = s.sessionStore.ResetBlockedUserState(ctx, user.Email, user.Phone)
 
 		// Log successful password change
 		go func() {
@@ -1163,6 +1169,56 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 	}
 
 	return err
+}
+
+func (s *userService) AdminResetPassword(ctx context.Context, adminID, targetUserID uuid.UUID, newPassword string) error {
+
+	// Check admin permission
+	admin, err := s.userRepo.FindByID(ctx, adminID)
+	if err != nil {
+		return err
+	}
+
+	if !admin.IsSuperAdmin {
+		return errors.New("unauthorized: only admin can reset password")
+	}
+
+	// Get target user
+	user, err := s.userRepo.FindByID(ctx, targetUserID)
+	if err != nil {
+		return err
+	}
+
+	// Hash new password
+	hashedPassword, err := utils.HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+
+	user.Password = hashedPassword
+
+	if err := s.userRepo.Update(ctx, user); err != nil {
+		return err
+	}
+
+	// Kill all sessions
+	_ = s.sessionStore.DeleteAllUserSessions(ctx, user.ID.String())
+
+	//Reset login attempts + unblock
+	_ = s.sessionStore.ResetBlockedUserState(ctx, user.Email, user.Phone)
+
+	go func() {
+		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+			UserID:      adminID,
+			Action:      "admin_password_reset",
+			Module:      "users",
+			ResourceID:  user.ID.String(),
+			Description: fmt.Sprintf("Admin reset password for user: %s (%s)", user.Username, user.Email),
+			Status:      "success",
+		})
+	}()
+
+	return nil
 }
 
 func (s *userService) UploadAvatar(ctx context.Context, userID uuid.UUID, file multipart.File, header *multipart.FileHeader) (*models.UserResponse, error) {
