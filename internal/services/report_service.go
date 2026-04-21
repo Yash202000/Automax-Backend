@@ -6,13 +6,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"math"
 	"strconv"
 	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/fonts"
 	"github.com/google/uuid"
 	"github.com/jung-kurt/gofpdf"
+	"github.com/xuri/excelize/v2"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 type ReportService interface {
@@ -288,13 +295,22 @@ func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExpo
 		return nil, "", "", err
 	}
 
-	title := "Report"
+	title := ""
 	if req.Options != nil && req.Options.Title != "" {
 		title = req.Options.Title
 	}
 
-	filename := title + "_" + time.Now().Format("2006-01-02_150405")
+	if title == "" {
+		lang, _ := ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE).(string)
+		title = resolveTitle(title, req.DataSource, lang)
+	}
 
+	filename := "Report"
+	if req.DataSource != "" {
+		filename = cases.Title(language.English).String(req.DataSource) + "_Report"
+	}
+	filename += "_" + time.Now().Format("2006-01-02_150405")
+	log.Printf("Exporting report with title: %s, filename: %s", title, filename)
 	if req.Format == "xlsx" {
 		xlsxData, err := s.generateExcel(data, req.Columns, title, req.Options)
 		if err != nil {
@@ -304,8 +320,10 @@ func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExpo
 			"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", nil
 	}
 
-	pdfData, err := s.generatePDF(data, req.Columns, title, req.Options)
+	pdfData, err := s.generatePDF(ctx, data, req.Columns, title, req.Options)
+	log.Println("pdf generation started ")
 	if err != nil {
+		log.Println(err)
 		return nil, "", "", err
 	}
 	return pdfData, filename + ".pdf", "application/pdf", nil
@@ -377,139 +395,346 @@ func (s *reportService) ExecuteReport(
 		Limit:   limit,
 	}, nil
 }
+func (s *reportService) generateExcel(
+	data []map[string]interface{},
+	columns []models.ColumnField,
+	title string,
+	options *models.ReportExportOptions,
+) ([]byte, error) {
 
-func (s *reportService) generateExcel(data []map[string]interface{}, columns []models.ColumnField, title string, options *models.ReportExportOptions) ([]byte, error) {
-	// This is a simple CSV-like implementation
-	// For a proper Excel file, you would use a library like excelize
-	var buf bytes.Buffer
+	f := excelize.NewFile()
+	sheet := "Report"
+	f.SetSheetName("Sheet1", sheet)
 
-	// Write BOM for Excel UTF-8 compatibility
-	buf.Write([]byte{0xEF, 0xBB, 0xBF})
+	// ── Column widths ─────────────────────────────────────────────────────
+	if len(columns) > 0 {
+		lastCol, _ := excelize.ColumnNumberToName(len(columns))
+		f.SetColWidth(sheet, "A", lastCol, 27)
+	}
 
-	// Write header
+	// Determine starting row
+	headerRow := 1
+	if title != "" {
+		headerRow = 2
+	}
+	dataStartRow := headerRow + 1
+
+	// ── Title row ─────────────────────────────────────────────────────────
+	if title != "" {
+		lastCol, _ := excelize.ColumnNumberToName(len(columns))
+		f.MergeCell(sheet, "A1", lastCol+"1")
+		titleStyle, _ := f.NewStyle(&excelize.Style{
+			Font:      &excelize.Font{Bold: true, Size: 14},
+			Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
+		})
+		f.SetCellValue(sheet, "A1", title)
+		f.SetCellStyle(sheet, "A1", "A1", titleStyle)
+		f.SetRowHeight(sheet, 1, 32)
+	}
+
+	// ── Header style — same as working version ────────────────────────────
+	headerStyleId, err := f.NewStyle(&excelize.Style{
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
+		Font:      &excelize.Font{Bold: true, Size: 15, Color: "FFFFFF"},
+		Fill:      excelize.Fill{Type: "pattern", Color: []string{"3B82F6"}, Pattern: 1},
+	})
+	if err == nil {
+		f.SetRowStyle(sheet, headerRow, headerRow, headerStyleId)
+	}
+	f.SetRowHeight(sheet, headerRow, 30)
+
+	// ── Body style — bulk apply to 1000 rows, same as working version ─────
+	bodyStyleId, err := f.NewStyle(&excelize.Style{
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
+	})
+	if err == nil {
+		f.SetRowStyle(sheet, dataStartRow, dataStartRow+1000, bodyStyleId)
+	}
+
+	// ── Detect language from options ──────────────────────────────────────
+	// (title already resolved before calling this function)
+
+	// ── Write headers ─────────────────────────────────────────────────────
+	headerRowStr := strconv.Itoa(headerRow)
 	for i, col := range columns {
-		if i > 0 {
-			buf.WriteString("\t")
-		}
-		buf.WriteString(col.Label)
-	}
-	buf.WriteString("\n")
-
-	// Write data rows
-	for _, row := range data {
-		for i, col := range columns {
-			if i > 0 {
-				buf.WriteString("\t")
-			}
-			if val, ok := row[col.Label]; ok && val != nil {
-				buf.WriteString(formatExportValue(col.Label, val))
-			}
-		}
-		buf.WriteString("\n")
+		colName, _ := excelize.ColumnNumberToName(i + 1)
+		f.SetCellValue(sheet, colName+headerRowStr, col.Label)
 	}
 
-	return buf.Bytes(), nil
-}
-
-func (s *reportService) generatePDF(data []map[string]interface{}, columns []models.ColumnField, title string, options *models.ReportExportOptions) ([]byte, error) {
-	pdf := gofpdf.New("L", "mm", "A4", "") // Landscape for tables
-	pdf.SetMargins(10, 15, 10)
-	pdf.SetAutoPageBreak(true, 15)
-	pdf.AddPage()
-
-	// Title
-	pdf.SetFont("Arial", "B", 16)
-	pdf.CellFormat(0, 10, title, "", 1, "C", false, 0, "")
-	pdf.Ln(5)
-
-	// Timestamp if requested
-	if options != nil && options.IncludeTimestamp {
-		pdf.SetFont("Arial", "I", 10)
-		pdf.SetTextColor(128, 128, 128)
-		pdf.CellFormat(0, 6, fmt.Sprintf("Generated: %s", time.Now().Format("2006-01-02 15:04:05")), "", 1, "C", false, 0, "")
-		pdf.SetTextColor(0, 0, 0)
-		pdf.Ln(5)
-	}
-
-	// Calculate column widths based on number of columns
-	pageWidth := 277.0 // A4 landscape minus margins
-	colCount := len(columns)
-	colWidth := pageWidth / float64(colCount)
-	if colWidth > 50 {
-		colWidth = 50 // Max column width
-	}
-
-	// Table header
-	pdf.SetFont("Arial", "B", 9)
-	pdf.SetFillColor(59, 130, 246) // Blue background
-	pdf.SetTextColor(255, 255, 255)
-	for _, col := range columns {
-		// Truncate column label if too long
-		displayCol := col.Label
-		if len(displayCol) > 15 {
-			displayCol = displayCol[:12] + "..."
-		}
-		pdf.CellFormat(colWidth, 8, displayCol, "1", 0, "C", true, 0, "")
-	}
-	pdf.Ln(-1)
-
-	// Table data
-	pdf.SetFont("Arial", "", 8)
-	pdf.SetTextColor(0, 0, 0)
-	pdf.SetFillColor(240, 240, 240)
-	fill := false
-
-	for _, row := range data {
-		// Check if we need a new page
-		if pdf.GetY() > 180 {
-			pdf.AddPage()
-			// Reprint header on new page
-			pdf.SetFont("Arial", "B", 9)
-			pdf.SetFillColor(59, 130, 246)
-			pdf.SetTextColor(255, 255, 255)
-			for _, col := range columns {
-				displayCol := col.Label
-				if len(displayCol) > 15 {
-					displayCol = displayCol[:12] + "..."
-				}
-				pdf.CellFormat(colWidth, 8, displayCol, "1", 0, "C", true, 0, "")
-			}
-			pdf.Ln(-1)
-			pdf.SetFont("Arial", "", 8)
-			pdf.SetTextColor(0, 0, 0)
-			pdf.SetFillColor(240, 240, 240)
-		}
-
-		for _, col := range columns {
+	// ── Write data rows ───────────────────────────────────────────────────
+	for rowIdx, row := range data {
+		excelRow := strconv.Itoa(dataStartRow + rowIdx)
+		for colIdx, col := range columns {
+			colName, _ := excelize.ColumnNumberToName(colIdx + 1)
 			val := ""
 			if v, ok := row[col.Label]; ok && v != nil {
 				val = formatExportValue(col.Label, v)
 			}
-			// Truncate value if too long
-			if len(val) > 20 {
-				val = val[:17] + "..."
+			if val == "" {
+				val = "-"
 			}
-			pdf.CellFormat(colWidth, 7, val, "1", 0, "L", fill, 0, "")
+			f.SetCellValue(sheet, colName+excelRow, val)
+		}
+	}
+
+	// ── Freeze pane ───────────────────────────────────────────────────────
+	freezeCell := "A" + strconv.Itoa(dataStartRow)
+	f.SetPanes(sheet, &excelize.Panes{
+		Freeze:      true,
+		YSplit:      headerRow,
+		TopLeftCell: freezeCell,
+		ActivePane:  "bottomLeft",
+	})
+
+	// ── Timestamp ─────────────────────────────────────────────────────────
+	if options != nil && options.IncludeTimestamp {
+		tsRow := strconv.Itoa(dataStartRow + len(data) + 1)
+		f.SetCellValue(sheet, "A"+tsRow,
+			fmt.Sprintf("Generated: %s", time.Now().Format("2006-01-02 15:04:05")))
+	}
+
+	// ── Output ────────────────────────────────────────────────────────────
+	var buf bytes.Buffer
+	if err := f.Write(&buf); err != nil {
+		return nil, fmt.Errorf("excel write error: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+func computeColWidths(pageWidth float64, colCount int) []float64 {
+	if colCount == 0 {
+		return nil
+	}
+	// Always divide equally — same as table-layout:fixed in HTML
+	// No clamping min/max: let the math decide, just like the browser does
+	colWidth := pageWidth / float64(colCount)
+	widths := make([]float64, colCount)
+	for i := range widths {
+		widths[i] = colWidth
+	}
+	return widths
+}
+
+func truncateRunes(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes-3]) + "..."
+}
+
+func isRTL(s string) bool {
+	for _, r := range s {
+		if r >= 0x0600 && r <= 0x06FF {
+			return true
+		}
+		if r >= 0x0590 && r <= 0x05FF {
+			return true
+		}
+	}
+	return false
+}
+
+func reverseColumns(cols []models.ColumnField) []models.ColumnField {
+	out := make([]models.ColumnField, len(cols))
+	for i, c := range cols {
+		out[len(cols)-1-i] = c
+	}
+	return out
+}
+
+func reverseWidths(w []float64) []float64 {
+	out := make([]float64, len(w))
+	for i, v := range w {
+		out[len(w)-1-i] = v
+	}
+	return out
+}
+
+func reverseStrings(s []string) []string {
+	out := make([]string, len(s))
+	for i, v := range s {
+		out[len(s)-1-i] = v
+	}
+	return out
+}
+
+func setupArabicFont(pdf *gofpdf.Fpdf) {
+	log.Printf("NotoArabicRegular size: %d bytes", len(fonts.NotoArabicRegular))
+	if len(fonts.NotoArabicRegular) == 0 {
+		log.Println("WARNING: Arabic font not loaded, will fall back to Arial")
+		return
+	}
+	pdf.AddUTF8FontFromBytes("NotoArabic", "", fonts.NotoArabicRegular)
+	pdf.AddUTF8FontFromBytes("NotoArabic", "B", fonts.NotoArabicRegular)
+}
+
+func (s *reportService) generatePDF(
+	ctx context.Context,
+	data []map[string]interface{},
+	columns []models.ColumnField,
+	title string,
+	options *models.ReportExportOptions,
+) ([]byte, error) {
+
+	lang, _ := ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE).(string)
+	rtlMode := lang == "ar" || lang == "he" || isRTL(title)
+	arabicLoaded := len(fonts.NotoArabicRegular) > 0
+	log.Println("RTL Mode: ", rtlMode)
+	pdf := gofpdf.New("L", "mm", "A4", "")
+	pdf.SetMargins(10, 15, 10)
+	pdf.SetAutoPageBreak(true, 15)
+
+	setupArabicFont(pdf)
+	pdf.AddPage()
+
+	pageWidth := 277.0 // A4 landscape 297mm minus 10+10 margins
+	colCount := len(columns)
+	colWidths := computeColWidths(pageWidth, colCount)
+
+	// Font size scales down with column count — mirrors 8px CSS at 20+ cols
+	baseFontSize := 9.0
+	switch {
+	case colCount > 20:
+		baseFontSize = 6.0
+	case colCount > 15:
+		baseFontSize = 7.0
+	case colCount > 10:
+		baseFontSize = 8.0
+	}
+
+	// Max runes per cell scales with column count too
+	maxCellRunes := 30
+	switch {
+	case colCount > 20:
+		maxCellRunes = 12
+	case colCount > 15:
+		maxCellRunes = 18
+	case colCount > 10:
+		maxCellRunes = 22
+	}
+
+	setFont := func(style string, size float64, text string) {
+		if arabicLoaded && (rtlMode || isRTL(text)) {
+			pdf.SetFont("NotoArabic", style, size)
+		} else {
+			pdf.SetFont("Arial", style, size)
+		}
+	}
+
+	drawHeader := func() {
+		setFont("B", baseFontSize, title)
+		pdf.SetFillColor(59, 130, 246)
+		pdf.SetTextColor(255, 255, 255)
+
+		orderedCols := columns
+		orderedWidths := colWidths
+		if rtlMode {
+			orderedCols = reverseColumns(columns)
+			orderedWidths = reverseWidths(colWidths)
+		}
+
+		for i, col := range orderedCols {
+			label := truncateRunes(col.Label, maxCellRunes)
+			pdf.CellFormat(orderedWidths[i], 8, label, "1", 0, "C", true, 0, "")
+		}
+		pdf.Ln(-1)
+
+		// Reset after header
+		pdf.SetTextColor(0, 0, 0)
+		pdf.SetFillColor(255, 255, 255)
+	}
+
+	// ── Title ────────────────────────────────────────────────────────────────
+	setFont("B", 14, title)
+	pdf.SetTextColor(0, 0, 0)
+	pdf.CellFormat(0, 10, title, "", 1, "C", false, 0, "")
+	pdf.Ln(3)
+
+	// ── Timestamp ────────────────────────────────────────────────────────────
+	if options != nil && options.IncludeTimestamp {
+		setFont("", 9, "")
+		pdf.SetTextColor(128, 128, 128)
+		pdf.CellFormat(0, 6, fmt.Sprintf("Generated: %s", time.Now().Format("2006-01-02 15:04:05")), "", 1, "C", false, 0, "")
+		pdf.SetTextColor(0, 0, 0)
+		pdf.Ln(3)
+	}
+
+	// ── Table header ─────────────────────────────────────────────────────────
+	drawHeader()
+
+	// ── Rows ─────────────────────────────────────────────────────────────────
+	rowH := 7.0
+	if rtlMode {
+		rowH = 8.5
+	}
+	// Tighter rows when many columns
+	if colCount > 15 {
+		rowH = 6.0
+	}
+
+	fill := false
+	for _, row := range data {
+		if pdf.GetY() > 185 {
+			pdf.AddPage()
+			drawHeader()
+		}
+
+		if fill {
+			pdf.SetFillColor(240, 245, 255)
+		} else {
+			pdf.SetFillColor(255, 255, 255)
+		}
+
+		vals := make([]string, colCount)
+		for i, col := range columns {
+			v := row[col.Label]
+			if v == nil {
+				vals[i] = ""
+			} else {
+				vals[i] = truncateRunes(formatExportValue(col.Label, v), maxCellRunes)
+			}
+		}
+
+		renderCols := columns
+		renderWidths := colWidths
+		renderVals := vals
+		if rtlMode {
+			renderCols = reverseColumns(columns)
+			renderWidths = reverseWidths(colWidths)
+			renderVals = reverseStrings(vals)
+		}
+
+		for i := range renderCols {
+			val := renderVals[i]
+			setFont("", baseFontSize, val)
+			align := "L"
+			if rtlMode || isRTL(val) {
+				align = "R"
+			}
+			pdf.CellFormat(renderWidths[i], rowH, val, "1", 0, align, fill, 0, "")
 		}
 		pdf.Ln(-1)
 		fill = !fill
 	}
 
-	// Total records
+	// ── Footer ───────────────────────────────────────────────────────────────
 	pdf.Ln(5)
-	pdf.SetFont("Arial", "I", 10)
-	pdf.CellFormat(0, 6, fmt.Sprintf("Total records: %d", len(data)), "", 1, "L", false, 0, "")
-
-	// Output to buffer
-	var buf bytes.Buffer
-	err := pdf.Output(&buf)
-	if err != nil {
-		return nil, err
+	setFont("", 9, "")
+	pdf.SetTextColor(100, 100, 100)
+	footerText := fmt.Sprintf("Total records: %d", len(data))
+	if rtlMode {
+		footerText = fmt.Sprintf("إجمالي السجلات: %d", len(data))
 	}
+	pdf.CellFormat(0, 6, footerText, "", 1, "L", false, 0, "")
 
+	// ── Output ───────────────────────────────────────────────────────────────
+	var buf bytes.Buffer
+	if err := pdf.Output(&buf); err != nil {
+		return nil, fmt.Errorf("pdf output error: %w", err)
+	}
 	return buf.Bytes(), nil
 }
-
 func formatValue(v interface{}) string {
 	switch val := v.(type) {
 	case string:
@@ -867,4 +1092,95 @@ func toExecutionResponse(e *models.ReportExecution) models.ReportExecutionRespon
 	}
 
 	return resp
+}
+
+func resolveTitle(title, dataSource, lang string) string {
+	if title != "" {
+		return title
+	}
+	log.Print("Language", lang)
+	// Fallback titles per data source
+	titles := map[string]map[string]string{
+		"incidents": {
+			"ar": "تقرير الحوادث",
+			"en": "Incidents_Report",
+		},
+		"requests": {
+			"ar": "تقرير الطلبات",
+			"en": "Requests_Report",
+		},
+		"users": {
+			"ar": "تقرير المستخدمين",
+			"en": "Users_Report",
+		},
+		"location": {
+			"ar": "تقرير الموقع",
+			"en": "Location_Report",
+		},
+		"departments": {
+			"ar": "تقرير الأقسام",
+			"en": "Departments_Report",
+		},
+		"classifications": {
+			"ar": "تقرير التصنيفات",
+			"en": "Classifications_Report",
+		},
+		"workflows": {
+			"ar": "تقرير سير العمل",
+			"en": "Workflows_Report",
+		},
+		"action_logs": {
+			"ar": "تقرير سجلات الإجراءات",
+			"en": "Action_Logs_Report",
+		},
+		"rejection_logs": {
+			"ar": "تقرير سجلات الرفض",
+			"en": "Rejection_Logs_Report",
+		},
+	}
+
+	if langs, ok := titles[dataSource]; ok {
+		if lang == "ar" {
+			return langs["ar"]
+		}
+		return langs["en"]
+	}
+
+	// Unknown data source — generic fallback
+	if lang == "ar" {
+		return "تقرير"
+	}
+	return "Report"
+}
+
+// estimateRowHeight returns a row height tall enough for wrapped content
+// based on the longest cell value in that row at col width 27
+func estimateRowHeight(row map[string]interface{}, columns []models.ColumnField, colWidth float64) float64 {
+	const charPerLine = 30.0 // ~chars that fit in width 27 at font size 11
+	const lineHeight = 15.0  // points per line in Excel
+	const minHeight = 20.0
+	const maxHeight = 120.0
+
+	maxLines := 1.0
+	for _, col := range columns {
+		v, ok := row[col.Label]
+		if !ok || v == nil {
+			continue
+		}
+		val := formatExportValue(col.Label, v)
+		// Count lines needed: length / chars per line, minimum 1
+		lines := math.Ceil(float64(len([]rune(val))) / charPerLine)
+		if lines > maxLines {
+			maxLines = lines
+		}
+	}
+
+	height := maxLines * lineHeight
+	if height < minHeight {
+		return minHeight
+	}
+	if height > maxHeight {
+		return maxHeight
+	}
+	return height
 }
