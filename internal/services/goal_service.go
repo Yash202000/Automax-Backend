@@ -15,6 +15,7 @@ import (
 	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/internal/services/metricformula"
 	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/google/uuid"
@@ -218,6 +219,70 @@ func (s *goalService) canModifyGoal(ctx context.Context, goalID uuid.UUID, userI
 	}
 
 	return false, nil
+}
+
+// metricSiblingsMap builds the name -> current value map consumed by the formula
+// evaluator. Pass the result of ListMetricsByGoalID; the caller can exclude
+// a specific metric (e.g. the one being recomputed) by nil'ing it first.
+func metricSiblingsMap(metrics []models.GoalMetric) map[string]float64 {
+	out := make(map[string]float64, len(metrics))
+	for _, m := range metrics {
+		out[m.Name] = m.CurrentValue
+	}
+	return out
+}
+
+// recomputeDependentFormulas re-evaluates every formula-bearing metric on the
+// goal that references the changed metric by name. Errors are logged, not
+// surfaced — one bad formula should not block a value update. changedMetricID
+// is excluded so the just-updated metric doesn't re-run its own formula.
+func (s *goalService) recomputeDependentFormulas(ctx context.Context, goalID, changedMetricID uuid.UUID) {
+	all, err := s.goalRepo.ListMetricsByGoalID(ctx, goalID)
+	if err != nil {
+		return
+	}
+	// Find which metric name was changed so we can scan formulas for references.
+	var changedName string
+	for _, m := range all {
+		if m.ID == changedMetricID {
+			changedName = m.Name
+			break
+		}
+	}
+	for _, m := range all {
+		if m.ID == changedMetricID || strings.TrimSpace(m.Formula) == "" {
+			continue
+		}
+		if changedName != "" && !strings.Contains(m.Formula, changedName) {
+			continue // formula doesn't reference the changed metric; skip
+		}
+		siblings := make([]models.GoalMetric, 0, len(all))
+		for _, sib := range all {
+			if sib.ID != m.ID {
+				siblings = append(siblings, sib)
+			}
+		}
+		computed, ferr := metricformula.Evaluate(m.Formula, metricSiblingsMap(siblings))
+		if ferr != nil {
+			log.Printf("[goal_service] recomputeDependentFormulas: metric %s formula %q failed: %v", m.ID, m.Formula, ferr)
+			continue
+		}
+		if computed == m.CurrentValue {
+			continue
+		}
+		history := &models.MetricHistory{
+			MetricID: m.ID,
+			OldValue: m.CurrentValue,
+			NewValue: computed,
+			Comment:  fmt.Sprintf("Auto-recomputed after %s changed", changedName),
+		}
+		_ = s.goalRepo.CreateMetricHistory(ctx, history)
+		metricCopy := m
+		metricCopy.CurrentValue = computed
+		if err := s.goalRepo.UpdateMetric(ctx, &metricCopy); err != nil {
+			log.Printf("[goal_service] recomputeDependentFormulas: update metric %s failed: %v", m.ID, err)
+		}
+	}
 }
 
 // isSuperAdmin checks if the current request is from a super admin
@@ -693,6 +758,18 @@ func (s *goalService) CreateMetric(ctx context.Context, goalID uuid.UUID, req *m
 		CurrentValue:  req.CurrentValue,
 		TargetValue:   req.TargetValue,
 		Weight:        weight,
+		Formula:       strings.TrimSpace(req.Formula),
+	}
+
+	// If a formula was provided, validate it compiles and pre-compute CurrentValue
+	// from siblings so the metric isn't stuck at 0 until the next value update.
+	if metric.Formula != "" {
+		siblings, _ := s.goalRepo.ListMetricsByGoalID(ctx, goalID)
+		if computed, ferr := metricformula.Evaluate(metric.Formula, metricSiblingsMap(siblings)); ferr != nil {
+			return nil, fmt.Errorf("invalid formula: %w", ferr)
+		} else {
+			metric.CurrentValue = computed
+		}
 	}
 
 	if err := s.goalRepo.CreateMetric(ctx, metric); err != nil {
@@ -752,6 +829,26 @@ func (s *goalService) UpdateMetric(ctx context.Context, id uuid.UUID, req *model
 	}
 	if req.Weight != nil {
 		metric.Weight = *req.Weight
+	}
+	if req.Formula != nil {
+		metric.Formula = strings.TrimSpace(*req.Formula)
+	}
+
+	// If the (possibly new) formula is non-empty, validate and recompute now.
+	if metric.Formula != "" {
+		siblings, _ := s.goalRepo.ListMetricsByGoalID(ctx, metric.GoalID)
+		// Exclude self so a formula can't read its own stale value.
+		filtered := make([]models.GoalMetric, 0, len(siblings))
+		for _, sib := range siblings {
+			if sib.ID != metric.ID {
+				filtered = append(filtered, sib)
+			}
+		}
+		computed, ferr := metricformula.Evaluate(metric.Formula, metricSiblingsMap(filtered))
+		if ferr != nil {
+			return nil, fmt.Errorf("invalid formula: %w", ferr)
+		}
+		metric.CurrentValue = computed
 	}
 
 	if err := s.goalRepo.UpdateMetric(ctx, metric); err != nil {
@@ -834,11 +931,30 @@ func (s *goalService) UpdateMetricValue(ctx context.Context, id uuid.UUID, req *
 		return nil, fmt.Errorf("access denied: you can only modify goals you own or are assigned to review")
 	}
 
+	// If the metric has a formula, compute CurrentValue from siblings — the
+	// submitted raw value is ignored but logged in history for traceability.
+	newValue := req.Value
+	if strings.TrimSpace(metric.Formula) != "" {
+		siblings, _ := s.goalRepo.ListMetricsByGoalID(ctx, metric.GoalID)
+		filtered := make([]models.GoalMetric, 0, len(siblings))
+		for _, sib := range siblings {
+			if sib.ID != metric.ID {
+				filtered = append(filtered, sib)
+			}
+		}
+		if computed, ferr := metricformula.Evaluate(metric.Formula, metricSiblingsMap(filtered)); ferr == nil {
+			newValue = computed
+		} else {
+			log.Printf("[goal_service] UpdateMetricValue: formula %q on metric %s failed to evaluate (%v); falling back to submitted value",
+				metric.Formula, metric.ID, ferr)
+		}
+	}
+
 	// Create history entry
 	history := &models.MetricHistory{
 		MetricID:    metric.ID,
 		OldValue:    metric.CurrentValue,
-		NewValue:    req.Value,
+		NewValue:    newValue,
 		ChangedByID: userID,
 		Comment:     req.Comment,
 	}
@@ -848,7 +964,7 @@ func (s *goalService) UpdateMetricValue(ctx context.Context, id uuid.UUID, req *
 	}
 
 	// Update metric current value
-	metric.CurrentValue = req.Value
+	metric.CurrentValue = newValue
 
 	if err := s.goalRepo.UpdateMetric(ctx, metric); err != nil {
 		return nil, fmt.Errorf("failed to update metric value: %w", err)
@@ -858,6 +974,10 @@ func (s *goalService) UpdateMetricValue(ctx context.Context, id uuid.UUID, req *
 	if err := s.RecalculateProgress(ctx, metric.GoalID); err != nil {
 		return nil, fmt.Errorf("failed to recalculate progress: %w", err)
 	}
+
+	// After updating this metric's value, recompute any sibling metrics that
+	// reference it in their own formulas — keeps the whole goal consistent.
+	s.recomputeDependentFormulas(ctx, metric.GoalID, metric.ID)
 
 	// Audit log
 	s.actionLogService.LogAction(ctx, &LogActionParams{

@@ -169,9 +169,14 @@ type GoalMetric struct {
 	CurrentValue  float64        `gorm:"default:0" json:"current_value"`
 	TargetValue   float64        `gorm:"not null" json:"target_value"`
 	Weight        float64        `gorm:"default:1.0" json:"weight"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
-	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
+	// Formula is an optional expression that computes CurrentValue from sibling metrics.
+	// Reference other metrics by name: "${tasks_completed} / ${tasks_total} * 100".
+	// When set, UpdateMetricValue ignores the submitted raw value and evaluates the formula instead.
+	// Evaluation uses github.com/expr-lang/expr with access restricted to numeric sibling values.
+	Formula   string         `gorm:"type:text" json:"formula"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (m *GoalMetric) BeforeCreate(tx *gorm.DB) error {
@@ -488,6 +493,7 @@ type GoalMetricCreateRequest struct {
 	CurrentValue  float64 `json:"current_value"`
 	TargetValue   float64 `json:"target_value" validate:"required"`
 	Weight        float64 `json:"weight" validate:"gt=0"`
+	Formula       string  `json:"formula" validate:"max=500"`
 }
 
 type GoalMetricUpdateRequest struct {
@@ -497,6 +503,7 @@ type GoalMetricUpdateRequest struct {
 	BaselineValue *float64 `json:"baseline_value"`
 	TargetValue   *float64 `json:"target_value"`
 	Weight        *float64 `json:"weight" validate:"omitempty,gt=0"`
+	Formula       *string  `json:"formula" validate:"omitempty,max=500"`
 }
 
 type MetricValueUpdateRequest struct {
@@ -602,6 +609,7 @@ type GoalMetricResponse struct {
 	CurrentValue  float64   `json:"current_value"`
 	TargetValue   float64   `json:"target_value"`
 	Weight        float64   `json:"weight"`
+	Formula       string    `json:"formula"`
 	Progress      float64   `json:"progress"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
@@ -1014,6 +1022,7 @@ func (m *GoalMetric) ToResponse() GoalMetricResponse {
 		CurrentValue:  m.CurrentValue,
 		TargetValue:   m.TargetValue,
 		Weight:        m.Weight,
+		Formula:       m.Formula,
 		Progress:      progress,
 		CreatedAt:     m.CreatedAt,
 		UpdatedAt:     m.UpdatedAt,
