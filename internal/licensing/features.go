@@ -70,10 +70,13 @@ var Catalog = []Feature{
 		TierMinimum:       "professional",
 	},
 	{
-		Code:              FeatureDocuments,
-		Name:              "Document Management",
-		Description:       "File storage, versioning, comments, and tagging via Documenta DMS integration.",
-		PermissionModules: []string{"documents"},
+		Code: FeatureDocuments,
+		Name: "Document Management",
+		Description: "File storage, versioning, comments, and tagging via Documenta DMS integration.",
+		// documents routes currently reuse goals:* permissions (see cmd/server/main.go).
+		// A follow-up should introduce dedicated documents:view/update permissions and
+		// list them here. Until then this is intentionally empty.
+		PermissionModules: []string{},
 		Dependencies:      []FeatureCode{FeatureGoals},
 		TierMinimum:       "professional",
 	},
