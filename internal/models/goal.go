@@ -121,7 +121,11 @@ type Goal struct {
 	ID                uuid.UUID          `gorm:"type:uuid;primary_key" json:"id"`
 	Title             string             `gorm:"size:255;not null" json:"title"`
 	Description       string             `gorm:"type:text" json:"description"`
-	Category          string             `gorm:"size:100" json:"category"`
+	// Category is the legacy free-text category (kept for backward compatibility).
+	// New goals should use CategoryID to reference the hierarchical Category tree.
+	Category    string     `gorm:"size:100" json:"category"`
+	CategoryID  *uuid.UUID `gorm:"type:uuid;index" json:"category_id"`
+	CategoryRef *Category  `gorm:"foreignKey:CategoryID" json:"category_ref,omitempty"`
 	Priority          string             `gorm:"size:20;not null;default:'Medium'" json:"priority"`
 	Status            string             `gorm:"size:30;not null;default:'Draft'" json:"status"`
 	OwnerID           uuid.UUID          `gorm:"type:uuid;index;not null" json:"owner_id"`
@@ -420,6 +424,7 @@ type GoalCreateRequest struct {
 	Title        string     `json:"title" validate:"required,max=255"`
 	Description  string     `json:"description"`
 	Category     string     `json:"category" validate:"max=100"`
+	CategoryID   *uuid.UUID `json:"category_id"`
 	Priority     string     `json:"priority" validate:"required,oneof=Critical High Medium Low"`
 	DepartmentID *uuid.UUID `json:"department_id"`
 	OwnerID      uuid.UUID  `json:"owner_id" validate:"required"`
@@ -443,6 +448,7 @@ type GoalUpdateRequest struct {
 	Title        *string    `json:"title" validate:"omitempty,max=255"`
 	Description  *string    `json:"description"`
 	Category     *string    `json:"category" validate:"omitempty,max=100"`
+	CategoryID   *uuid.UUID `json:"category_id"`
 	Priority     *string    `json:"priority" validate:"omitempty,oneof=Critical High Medium Low"`
 	DepartmentID *uuid.UUID `json:"department_id"`
 	OwnerID      *uuid.UUID `json:"owner_id"`
@@ -542,6 +548,8 @@ type GoalResponse struct {
 	Title             string                     `json:"title"`
 	Description       string                     `json:"description"`
 	Category          string                     `json:"category"`
+	CategoryID        *uuid.UUID                 `json:"category_id,omitempty"`
+	CategoryRef       *CategoryResponse          `json:"category_ref,omitempty"`
 	Priority          string                     `json:"priority"`
 	Status            string                     `json:"status"`
 	OwnerID           uuid.UUID                  `json:"owner_id"`
@@ -922,6 +930,7 @@ func (g *Goal) ToResponse() GoalResponse {
 		Title:             g.Title,
 		Description:       g.Description,
 		Category:          g.Category,
+		CategoryID:        g.CategoryID,
 		Priority:          g.Priority,
 		Status:            g.Status,
 		OwnerID:           g.OwnerID,
@@ -943,6 +952,11 @@ func (g *Goal) ToResponse() GoalResponse {
 		EvidenceCount:     len(g.Evidences),
 		CreatedAt:         g.CreatedAt,
 		UpdatedAt:         g.UpdatedAt,
+	}
+
+	if g.CategoryRef != nil {
+		ref := ToCategoryResponse(g.CategoryRef)
+		resp.CategoryRef = &ref
 	}
 
 	if g.Children != nil {

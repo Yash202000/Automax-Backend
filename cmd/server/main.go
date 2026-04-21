@@ -65,6 +65,7 @@ func main() {
 
 	// Initialize repositories
 	userRepo := repository.NewUserRepository(db)
+	categoryRepo := repository.NewCategoryRepository(db)
 	classificationRepo := repository.NewClassificationRepository(db)
 	locationRepo := repository.NewLocationRepository(db)
 	departmentRepo := repository.NewDepartmentRepository(db)
@@ -167,6 +168,8 @@ func main() {
 	// Initialize LDAP handler
 	ldapHandler := handlers.NewLDAPHandler(ldapService, userService, userRepo, jwtManager, sessionStore, cfg)
 
+	categoryService := services.NewCategoryService(categoryRepo)
+	categoryHandler := handlers.NewCategoryHandler(categoryService)
 	classificationHandler := handlers.NewClassificationHandler(classificationRepo)
 	locationHandler := handlers.NewLocationHandler(locationRepo)
 	departmentHandler := handlers.NewDepartmentHandler(departmentRepo)
@@ -438,6 +441,19 @@ func main() {
 	usersGroup.Get("/:id", authMiddleware.RequirePermission("users:view"), userHandler.GetUser)
 	usersGroup.Put("/:id", authMiddleware.RequirePermission("users:update"), userHandler.AdminUpdateUser)
 	usersGroup.Delete("/:id", authMiddleware.RequirePermission("users:delete"), userHandler.AdminDeleteUser)
+
+	// Category routes (foundational admin taxonomy used by goals — no license gate)
+	categories := admin.Group("/categories", middleware.ActionLogger(middleware.ActionLoggerConfig{
+		Enabled:     true,
+		LogService:  actionLogService,
+		SkipMethods: []string{"GET"},
+	}))
+	categories.Post("/", authMiddleware.RequirePermission("categories:create"), categoryHandler.Create)
+	categories.Get("/", authMiddleware.RequirePermission("categories:view"), categoryHandler.List)
+	categories.Get("/tree", authMiddleware.RequirePermission("categories:view"), categoryHandler.GetTree)
+	categories.Get("/:id", authMiddleware.RequirePermission("categories:view"), categoryHandler.GetByID)
+	categories.Put("/:id", authMiddleware.RequirePermission("categories:update"), categoryHandler.Update)
+	categories.Delete("/:id", authMiddleware.RequirePermission("categories:delete"), categoryHandler.Delete)
 
 	// Classification routes (with action logging)
 	classifications := admin.Group("/classifications", middleware.ActionLogger(middleware.ActionLoggerConfig{
