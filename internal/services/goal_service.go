@@ -361,6 +361,7 @@ func (s *goalService) CreateGoal(ctx context.Context, req *models.GoalCreateRequ
 		Title:             req.Title,
 		Description:       req.Description,
 		Category:          req.Category,
+		CategoryID:        req.CategoryID,
 		Priority:          req.Priority,
 		Status:            models.GoalStatusDraft,
 		OwnerID:           req.OwnerID,
@@ -482,6 +483,9 @@ func (s *goalService) UpdateGoal(ctx context.Context, id uuid.UUID, req *models.
 	}
 	if req.Category != nil {
 		goal.Category = *req.Category
+	}
+	if req.CategoryID != nil {
+		goal.CategoryID = req.CategoryID
 	}
 	if req.Priority != nil {
 		goal.Priority = *req.Priority
