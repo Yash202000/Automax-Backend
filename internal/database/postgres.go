@@ -3,11 +3,13 @@ package database
 import (
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/database/migrations"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/pkg/utils"
+	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -48,6 +50,14 @@ func Migrate(db *gorm.DB) error {
 		return fmt.Errorf("failed to create enum type: %w", err)
 	}
 
+	// License table schema migration: the old single-PEM public_key column has
+	// been replaced by a JWKS JSON blob. Dropping here is idempotent — AutoMigrate
+	// will add the new `jwks` column on the next step. Any pre-existing license row
+	// becomes non-verifiable; LoadFromDB gracefully falls back to cached state.
+	if err := db.Exec(`ALTER TABLE IF EXISTS licenses DROP COLUMN IF EXISTS public_key`).Error; err != nil {
+		log.Printf("Warning: failed to drop legacy licenses.public_key column: %v", err)
+	}
+
 	// Use session that disables FK constraints during migration to prevent auto-FK issues
 	migrationDB := db.Session(&gorm.Session{})
 	migrationDB.Config.DisableForeignKeyConstraintWhenMigrating = true
@@ -55,6 +65,7 @@ func Migrate(db *gorm.DB) error {
 	err := migrationDB.AutoMigrate(
 		&models.Permission{},
 		&models.Role{},
+		&models.Category{},
 		&models.Classification{},
 		&models.ClassificationType{},
 		&models.ClassificationCriticality{},
@@ -127,6 +138,8 @@ func Migrate(db *gorm.DB) error {
 		&models.GoalScore{},
 		// AI Quality Feedback
 		&models.AIQualityFeedback{},
+		// License Management
+		&models.License{},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
@@ -175,8 +188,122 @@ func Migrate(db *gorm.DB) error {
 		log.Printf("Warning: classification types migration failed: %v", err)
 	}
 
+	// Seed existing free-text goal categories as root Category rows
+	// and back-fill goals.category_id. Idempotent: safe to run repeatedly.
+	if err := migrateFreeTextGoalCategories(db); err != nil {
+		log.Printf("Warning: goal category back-fill migration failed: %v", err)
+	}
+
 	log.Println("Database migrations completed")
 	return nil
+}
+
+// migrateFreeTextGoalCategories seeds root Category rows from distinct
+// non-empty `goals.category` values (where `category_id IS NULL`) and links
+// those goals to the new Category rows. Idempotent.
+func migrateFreeTextGoalCategories(db *gorm.DB) error {
+	// Guard: only run if both columns exist on the goals table. On a fresh DB
+	// the goals table may not exist yet during very first boot (it does after
+	// AutoMigrate above, but we still double-check defensively).
+	var hasTable bool
+	if err := db.Raw(
+		`SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'goals')`,
+	).Scan(&hasTable).Error; err != nil || !hasTable {
+		return nil
+	}
+
+	type row struct {
+		Category string
+	}
+	var rows []row
+	if err := db.Raw(
+		`SELECT DISTINCT category FROM goals
+		 WHERE category IS NOT NULL AND category <> ''
+		   AND category_id IS NULL
+		   AND deleted_at IS NULL`,
+	).Scan(&rows).Error; err != nil {
+		return fmt.Errorf("scan distinct goal categories: %w", err)
+	}
+
+	if len(rows) == 0 {
+		return nil
+	}
+
+	sortOrder := 0
+	for _, r := range rows {
+		name := r.Category
+		code := slugifyCategoryCode(name)
+		if code == "" {
+			continue
+		}
+
+		// Idempotency: check if a category with this code already exists.
+		var existing models.Category
+		lookup := db.Where("code = ?", code).First(&existing)
+		if lookup.Error != nil && lookup.Error != gorm.ErrRecordNotFound {
+			log.Printf("category seed lookup failed for %q: %v", code, lookup.Error)
+			continue
+		}
+
+		var catID uuid.UUID
+		if lookup.Error == gorm.ErrRecordNotFound {
+			newCat := models.Category{
+				Name:      name,
+				Code:      code,
+				Level:     0,
+				Path:      "/" + code,
+				IsActive:  true,
+				SortOrder: sortOrder,
+			}
+			if err := db.Create(&newCat).Error; err != nil {
+				log.Printf("failed to create category %q from legacy goal value: %v", code, err)
+				continue
+			}
+			catID = newCat.ID
+			sortOrder++
+		} else {
+			catID = existing.ID
+		}
+
+		// Back-fill goals.category_id for matching free-text rows.
+		if err := db.Exec(
+			`UPDATE goals SET category_id = ?
+			 WHERE category = ? AND category_id IS NULL AND deleted_at IS NULL`,
+			catID, name,
+		).Error; err != nil {
+			log.Printf("failed to back-fill goals.category_id for %q: %v", name, err)
+		}
+	}
+
+	return nil
+}
+
+// slugifyCategoryCode converts a free-text category name to a lowercase,
+// hyphen-separated code suitable for the Category.Code field.
+func slugifyCategoryCode(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	prevHyphen := false
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevHyphen = false
+		default:
+			if !prevHyphen && b.Len() > 0 {
+				b.WriteRune('-')
+				prevHyphen = true
+			}
+		}
+	}
+	out := strings.TrimRight(b.String(), "-")
+	if len(out) > 100 {
+		out = out[:100]
+	}
+	return out
 }
 
 func Seed(db *gorm.DB) error {
@@ -217,6 +344,12 @@ func Seed(db *gorm.DB) error {
 		{Name: "Create Classifications", Code: "classifications:create", Module: "classifications", Action: "create", Description: "Create classifications"},
 		{Name: "Update Classifications", Code: "classifications:update", Module: "classifications", Action: "update", Description: "Update classifications"},
 		{Name: "Delete Classifications", Code: "classifications:delete", Module: "classifications", Action: "delete", Description: "Delete classifications"},
+
+		// Category permissions (hierarchical taxonomy used by goals)
+		{Name: "View Categories", Code: "categories:view", Module: "categories", Action: "view", Description: "View categories"},
+		{Name: "Create Categories", Code: "categories:create", Module: "categories", Action: "create", Description: "Create categories"},
+		{Name: "Update Categories", Code: "categories:update", Module: "categories", Action: "update", Description: "Update categories"},
+		{Name: "Delete Categories", Code: "categories:delete", Module: "categories", Action: "delete", Description: "Delete categories"},
 
 		// Settings permissions
 		{Name: "View Settings", Code: "settings:view", Module: "settings", Action: "view", Description: "View system settings"},
@@ -333,6 +466,10 @@ func Seed(db *gorm.DB) error {
 		// Caller Sentiment permissions
 		{Name: "Create Caller Sentiment", Code: "caller-sentiment:create", Module: "caller-sentiment", Action: "create", Description: "Record a sentiment entry after a call"},
 		{Name: "View Caller Sentiments", Code: "caller-sentiment:view", Module: "caller-sentiment", Action: "view", Description: "View all caller sentiment records and summaries"},
+
+		// License permissions
+		{Name: "View License", Code: "license:view", Module: "license", Action: "view", Description: "View license status and info"},
+		{Name: "Manage License", Code: "license:manage", Module: "license", Action: "manage", Description: "Activate, deactivate, and manage license keys"},
 
 		// Dashboard permissions
 		{Name: "Goals Dashboard", Code: "dashboard:goals", Module: "dashboard", Action: "goals", Description: "Access goal cards on dashboard"},

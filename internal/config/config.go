@@ -7,6 +7,7 @@ import (
 )
 
 type Config struct {
+	Env            string // env: APP_ENV ("development" | "staging" | "production"). Default: "production".
 	Server         ServerConfig
 	Database       DatabaseConfig
 	Redis          RedisConfig
@@ -21,6 +22,20 @@ type Config struct {
 	ReadyToClose   ReadyToCloseConfig
 	Documenta      DocumentaConfig
 	AIQuality      AIQualityConfig
+	License        LicenseConfig
+}
+
+type LicenseConfig struct {
+	EncryptionKey   string // env: LICENSE_ENCRYPTION_KEY (64-char hex = 32 bytes for AES-256)
+	GracePeriodDays int    // env: LICENSE_GRACE_PERIOD_DAYS (default: 7)
+	Enabled         bool   // env: LICENSE_ENABLED (default: true, set false for dev bypass)
+	// DevSeedEnabled forces the dev-license auto-seeder to run even if APP_ENV != "development".
+	// env: LICENSE_DEV_SEED (default: false). For CI pipelines that seed their own DB.
+	DevSeedEnabled bool
+	// DevSeedExpiryDays controls how long the auto-seeded dev license is valid.
+	// env: LICENSE_DEV_EXPIRY_DAYS (default: 90). Kept short so developers exercise
+	// the expiry and renewal flow rather than running against a never-expiring license.
+	DevSeedExpiryDays int
 }
 
 // AIQualityConfig holds settings for the AI Quality Monitor.
@@ -124,6 +139,7 @@ type LoginRateLimitConfig struct {
 
 func Load() *Config {
 	return &Config{
+		Env: getEnv("APP_ENV", "production"),
 		Server: ServerConfig{
 			Port:         getEnv("SERVER_PORT", "8080"),
 			Host:         getEnv("SERVER_HOST", "0.0.0.0"),
@@ -202,6 +218,13 @@ func Load() *Config {
 			AppProtocol:          getEnv("APP_PROTOCOL", "http"),
 			AppHost:              getEnv("APP_HOST", "localhost:8080"),
 			AppToken:             getEnv("APP_TOKEN", ""),
+		},
+		License: LicenseConfig{
+			EncryptionKey:     getEnv("LICENSE_ENCRYPTION_KEY", ""),
+			GracePeriodDays:   getEnvAsInt("LICENSE_GRACE_PERIOD_DAYS", 7),
+			Enabled:           getEnvAsBool("LICENSE_ENABLED", true),
+			DevSeedEnabled:    getEnvAsBool("LICENSE_DEV_SEED", false),
+			DevSeedExpiryDays: getEnvAsInt("LICENSE_DEV_EXPIRY_DAYS", 90),
 		},
 	}
 }

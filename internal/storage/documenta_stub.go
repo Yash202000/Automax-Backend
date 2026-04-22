@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log"
@@ -26,8 +27,16 @@ func (s *StubDocumentaClient) CreateFolder(ctx context.Context, workspaceName st
 }
 
 func (s *StubDocumentaClient) EnsureFolder(ctx context.Context, workspaceName string, parentID string, name string) (string, error) {
+	// Special-case the root Goal Management folder so the stub Documents view
+	// shows the same UUID every time — otherwise every goal creation would
+	// produce a fresh "Goal Management" ID and break the illusion of hierarchy.
+	if parentID == "" && name == "Goal Management" {
+		id := "stub-folder-goal-mgmt"
+		log.Printf("[DOCUMENTA STUB] EnsureFolder: workspace=%s, parent=(root), name=%q → %s (stable)", workspaceName, name, id)
+		return id, nil
+	}
 	id := "stub-folder-" + uuid.New().String()
-	log.Printf("[DOCUMENTA STUB] EnsureFolder: workspace=%s, parent=%s, name=%s → folderID=%s", workspaceName, parentID, name, id)
+	log.Printf("[DOCUMENTA STUB] EnsureFolder: workspace=%s, parent=%s, name=%q → %s", workspaceName, parentID, name, id)
 	return id, nil
 }
 
@@ -49,6 +58,19 @@ func (s *StubDocumentaClient) GetDownloadURL(ctx context.Context, fileID string)
 	return url, nil
 }
 
+func (s *StubDocumentaClient) DownloadFile(ctx context.Context, fileID string) (io.ReadCloser, *DmsFile, error) {
+	log.Printf("[DOCUMENTA STUB] DownloadFile: fileID=%s", fileID)
+	content := []byte("stub content for " + fileID)
+	info := &DmsFile{
+		UUID:     fileID,
+		Name:     "stub-file.txt",
+		Type:     "file",
+		Size:     int64(len(content)),
+		MimeType: "text/plain",
+	}
+	return io.NopCloser(bytes.NewReader(content)), info, nil
+}
+
 func (s *StubDocumentaClient) UpdateMetadata(ctx context.Context, fileID string, metadata map[string]string) error {
 	log.Printf("[DOCUMENTA STUB] UpdateMetadata: fileID=%s, metadata=%v", fileID, metadata)
 	return nil
@@ -63,10 +85,29 @@ func (s *StubDocumentaClient) DeleteFile(ctx context.Context, fileID string) err
 
 func (s *StubDocumentaClient) ListFiles(ctx context.Context, workspaceSlug string, parentID string) (*DmsListResult, error) {
 	log.Printf("[DOCUMENTA STUB] ListFiles: workspace=%s, parent=%s", workspaceSlug, parentID)
+	// Workspace root: show "Goal Management" + a sample file.
+	if parentID == "" {
+		return &DmsListResult{
+			Files: []DmsFile{
+				{UUID: "stub-folder-goal-mgmt", Name: "Goal Management", Type: "folder", CreatedAt: "2025-01-01T00:00:00Z", UpdatedAt: "2025-01-01T00:00:00Z"},
+				{UUID: "stub-file-readme", Name: "README.md", Type: "file", Size: 1024, MimeType: "text/markdown", CreatedAt: "2025-01-01T00:00:00Z", UpdatedAt: "2025-01-01T00:00:00Z"},
+			},
+		}, nil
+	}
+	// Inside the Goal Management folder: show a couple of sample goal folders.
+	if parentID == "stub-folder-goal-mgmt" {
+		return &DmsListResult{
+			Files: []DmsFile{
+				{UUID: "stub-folder-demo-goal-1", Name: "Sample Goal — Improve Safety", Type: "folder", Parent: parentID, CreatedAt: "2025-01-01T00:00:00Z", UpdatedAt: "2025-01-01T00:00:00Z"},
+				{UUID: "stub-folder-demo-goal-2", Name: "Sample Goal — Upgrade Systems", Type: "folder", Parent: parentID, CreatedAt: "2025-01-01T00:00:00Z", UpdatedAt: "2025-01-01T00:00:00Z"},
+			},
+		}, nil
+	}
+	// Any other stub parent: show a single sample file, no nested folders. This prevents
+	// the infinite-recursion breadcrumb you get if the stub always returned the same list.
 	return &DmsListResult{
 		Files: []DmsFile{
-			{UUID: "stub-folder-goal-mgmt", Name: "Goal Management", Type: "folder", CreatedAt: "2025-01-01T00:00:00Z", UpdatedAt: "2025-01-01T00:00:00Z"},
-			{UUID: "stub-file-readme", Name: "README.md", Type: "file", Size: 1024, MimeType: "text/markdown", CreatedAt: "2025-01-01T00:00:00Z", UpdatedAt: "2025-01-01T00:00:00Z"},
+			{UUID: "stub-file-evidence", Name: "evidence.pdf", Type: "file", Size: 2048, MimeType: "application/pdf", Parent: parentID, CreatedAt: "2025-01-01T00:00:00Z", UpdatedAt: "2025-01-01T00:00:00Z"},
 		},
 	}, nil
 }
@@ -84,6 +125,15 @@ func (s *StubDocumentaClient) SearchFiles(ctx context.Context, workspaceSlug str
 func (s *StubDocumentaClient) SearchFilesWithTags(ctx context.Context, workspaceSlug string, query string, tags map[string]string) (*DmsSearchResult, error) {
 	log.Printf("[DOCUMENTA STUB] SearchFilesWithTags: workspace=%s, query=%s, tags=%v", workspaceSlug, query, tags)
 	return &DmsSearchResult{Files: []DmsFile{}, Total: 0}, nil
+}
+
+func (s *StubDocumentaClient) GetFileBreadcrumb(ctx context.Context, fileID string) ([]DmsBreadcrumbEntry, error) {
+	log.Printf("[DOCUMENTA STUB] GetFileBreadcrumb: fileID=%s", fileID)
+	// Pretend the file lives under Goal Management > a sample goal folder.
+	return []DmsBreadcrumbEntry{
+		{UUID: "stub-folder-goal-mgmt", Name: "Goal Management"},
+		{UUID: "stub-folder-demo-goal-1", Name: "Sample Goal — Improve Safety"},
+	}, nil
 }
 
 func (s *StubDocumentaClient) GetFileInfo(ctx context.Context, fileID string) (*DmsFile, error) {

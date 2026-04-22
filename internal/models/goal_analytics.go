@@ -105,5 +105,6 @@ type OKRGoalNode struct {
 	Level         int                `json:"level"`
 	MetricSummary string             `json:"metric_summary"`
 	Health        string             `json:"health"`
+	IsFilteredOut bool               `json:"is_filtered_out,omitempty"`
 	Children      []OKRGoalNode      `json:"children,omitempty"`
 }

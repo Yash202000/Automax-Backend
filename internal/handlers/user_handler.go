@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -403,6 +404,13 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 
 	response, err := h.userService.Register(c.UserContext(), &req)
 	if err != nil {
+		if errors.Is(err, services.ErrUserLimitReached) {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+				"success": false,
+				"error":   "user_limit_reached",
+				"message": err.Error(),
+			})
+		}
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 

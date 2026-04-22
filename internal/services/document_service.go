@@ -18,8 +18,12 @@ type DocumentService interface {
 	SearchFiles(ctx context.Context, query string, userEmail string) (*storage.DmsSearchResult, error)
 	SearchFilesWithTags(ctx context.Context, query string, tags map[string]string, userEmail string) (*storage.DmsSearchResult, error)
 	GetFileInfo(ctx context.Context, fileID string, userEmail string) (*storage.DmsFile, error)
+	GetFileBreadcrumb(ctx context.Context, fileID string, userEmail string) ([]storage.DmsBreadcrumbEntry, error)
 	GetPreviewURL(ctx context.Context, fileID string, userEmail string) (string, error)
 	GetDownloadURL(ctx context.Context, fileID string, userEmail string) (string, error)
+	// DownloadFile streams the raw bytes of a DMS file. Caller owns the returned
+	// reader and must Close it.
+	DownloadFile(ctx context.Context, fileID string, userEmail string) (io.ReadCloser, *storage.DmsFile, error)
 	GetComments(ctx context.Context, fileID string, userEmail string) ([]storage.DmsComment, error)
 	AddComment(ctx context.Context, fileID string, content string, userEmail string) error
 	GetTags(ctx context.Context, fileID string, userEmail string) (map[string]string, error)
@@ -82,6 +86,14 @@ func (s *documentService) GetFileInfo(ctx context.Context, fileID string, userEm
 	return result, nil
 }
 
+func (s *documentService) GetFileBreadcrumb(ctx context.Context, fileID string, userEmail string) ([]storage.DmsBreadcrumbEntry, error) {
+	chain, err := s.client.GetFileBreadcrumb(s.withUser(ctx, userEmail), fileID)
+	if err != nil {
+		return nil, fmt.Errorf("get file breadcrumb: %w", err)
+	}
+	return chain, nil
+}
+
 func (s *documentService) GetPreviewURL(ctx context.Context, fileID string, userEmail string) (string, error) {
 	url, err := s.client.GetPreviewURL(s.withUser(ctx, userEmail), fileID)
 	if err != nil {
@@ -96,6 +108,14 @@ func (s *documentService) GetDownloadURL(ctx context.Context, fileID string, use
 		return "", fmt.Errorf("get download url: %w", err)
 	}
 	return url, nil
+}
+
+func (s *documentService) DownloadFile(ctx context.Context, fileID string, userEmail string) (io.ReadCloser, *storage.DmsFile, error) {
+	reader, info, err := s.client.DownloadFile(s.withUser(ctx, userEmail), fileID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("download file: %w", err)
+	}
+	return reader, info, nil
 }
 
 func (s *documentService) GetComments(ctx context.Context, fileID string, userEmail string) ([]storage.DmsComment, error) {
