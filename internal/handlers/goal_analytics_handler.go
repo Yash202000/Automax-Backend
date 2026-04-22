@@ -11,22 +11,48 @@ import (
 	"github.com/google/uuid"
 )
 
-// deptFilterFromCtx extracts the department filter for analytics.
-// If an explicit department_id query param is given, it takes precedence.
-// Otherwise, non-super-admin users are scoped to their own department.
-func deptFilterFromCtx(c *fiber.Ctx) (*uuid.UUID, error) {
+// analyticsScopeFromCtx derives both department and owner filters from the caller:
+//   - super admin → no filters (full org)
+//   - has goals:delete OR goals:approve → department filter as before, no owner filter
+//   - else → scoped to own goals + collaborations (ownerID = current user); no dept filter
+//
+// Any explicit department_id query string override still wins (for admins / reviewers).
+func analyticsScopeFromCtx(c *fiber.Ctx) (*uuid.UUID, *uuid.UUID, error) {
 	if deptStr := c.Query("department_id"); deptStr != "" {
 		id, err := uuid.Parse(deptStr)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return &id, nil
+		return &id, nil, nil
 	}
 	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
-	if user != nil && !user.IsSuperAdmin {
-		return user.DepartmentID, nil
+	if user == nil || user.IsSuperAdmin {
+		return nil, nil, nil
 	}
-	return nil, nil
+	// Admin-like goal users keep the existing department-scoped behaviour.
+	if userHasAny(user, "goals:delete", "goals:approve") {
+		return user.DepartmentID, nil, nil
+	}
+	// Plain contributors: scope to their own goals + collaborations.
+	return nil, &user.ID, nil
+}
+
+// userHasAny returns true if any of the given permission codes appears in the
+// user's role-permission graph.
+func userHasAny(u *models.User, codes ...string) bool {
+	wanted := map[string]struct{}{}
+	for _, c := range codes {
+		wanted[c] = struct{}{}
+	}
+	for _, role := range u.Roles {
+		for _, p := range role.Permissions {
+			code := p.Module + ":" + p.Action
+			if _, ok := wanted[code]; ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // GoalAnalyticsHandler handles goal analytics endpoints
@@ -41,12 +67,12 @@ func NewGoalAnalyticsHandler(service services.GoalAnalyticsService) *GoalAnalyti
 
 // GetGoalStats returns aggregate goal counts by status
 func (h *GoalAnalyticsHandler) GetGoalStats(c *fiber.Ctx) error {
-	deptFilter, err := deptFilterFromCtx(c)
+	deptFilter, ownerFilter, err := analyticsScopeFromCtx(c)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid department_id"})
 	}
 
-	stats, err := h.service.GetStats(c.Context(), deptFilter)
+	stats, err := h.service.GetStats(c.Context(), deptFilter, ownerFilter)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Failed to get goal statistics",
@@ -57,12 +83,12 @@ func (h *GoalAnalyticsHandler) GetGoalStats(c *fiber.Ctx) error {
 
 // GetDistributions returns goal distributions by status, priority, department, category
 func (h *GoalAnalyticsHandler) GetDistributions(c *fiber.Ctx) error {
-	departmentID, deptErr := deptFilterFromCtx(c)
+	departmentID, ownerFilter, deptErr := analyticsScopeFromCtx(c)
 	if deptErr != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid department_id"})
 	}
 
-	dist, err := h.service.GetDistributions(c.Context(), departmentID)
+	dist, err := h.service.GetDistributions(c.Context(), departmentID, ownerFilter)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Failed to get goal distributions",
@@ -73,12 +99,12 @@ func (h *GoalAnalyticsHandler) GetDistributions(c *fiber.Ctx) error {
 
 // GetProgressSummary returns progress distribution data
 func (h *GoalAnalyticsHandler) GetProgressSummary(c *fiber.Ctx) error {
-	deptFilter, err := deptFilterFromCtx(c)
+	deptFilter, ownerFilter, err := analyticsScopeFromCtx(c)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid department_id"})
 	}
 
-	summary, err := h.service.GetProgressSummary(c.Context(), deptFilter)
+	summary, err := h.service.GetProgressSummary(c.Context(), deptFilter, ownerFilter)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Failed to get progress summary",
@@ -89,7 +115,7 @@ func (h *GoalAnalyticsHandler) GetProgressSummary(c *fiber.Ctx) error {
 
 // GetAtRiskGoals returns paginated list of at-risk goals
 func (h *GoalAnalyticsHandler) GetAtRiskGoals(c *fiber.Ctx) error {
-	deptFilter, deptErr := deptFilterFromCtx(c)
+	deptFilter, ownerFilter, deptErr := analyticsScopeFromCtx(c)
 	if deptErr != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid department_id"})
 	}
@@ -97,7 +123,7 @@ func (h *GoalAnalyticsHandler) GetAtRiskGoals(c *fiber.Ctx) error {
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit, _ := strconv.Atoi(c.Query("limit", "10"))
 
-	goals, total, err := h.service.GetAtRiskGoals(c.Context(), deptFilter, page, limit)
+	goals, total, err := h.service.GetAtRiskGoals(c.Context(), deptFilter, ownerFilter, page, limit)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Failed to get at-risk goals",
@@ -121,14 +147,14 @@ func (h *GoalAnalyticsHandler) GetAtRiskGoals(c *fiber.Ctx) error {
 
 // GetTrendData returns monthly goal creation/completion trend
 func (h *GoalAnalyticsHandler) GetTrendData(c *fiber.Ctx) error {
-	deptFilter, deptErr := deptFilterFromCtx(c)
+	deptFilter, ownerFilter, deptErr := analyticsScopeFromCtx(c)
 	if deptErr != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid department_id"})
 	}
 
 	months, _ := strconv.Atoi(c.Query("months", "12"))
 
-	trend, err := h.service.GetTrendData(c.Context(), deptFilter, months)
+	trend, err := h.service.GetTrendData(c.Context(), deptFilter, ownerFilter, months)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Failed to get trend data",
@@ -139,7 +165,7 @@ func (h *GoalAnalyticsHandler) GetTrendData(c *fiber.Ctx) error {
 
 // GetOKRTree returns the OKR alignment tree organized by department
 func (h *GoalAnalyticsHandler) GetOKRTree(c *fiber.Ctx) error {
-	departmentID, deptErr := deptFilterFromCtx(c)
+	departmentID, ownerFilter, deptErr := analyticsScopeFromCtx(c)
 	if deptErr != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid department_id"})
 	}
@@ -164,7 +190,7 @@ func (h *GoalAnalyticsHandler) GetOKRTree(c *fiber.Ctx) error {
 
 	status := c.Query("status")
 
-	tree, err := h.service.GetOKRTree(c.Context(), departmentID, periodStart, periodEnd, status)
+	tree, err := h.service.GetOKRTree(c.Context(), departmentID, ownerFilter, periodStart, periodEnd, status)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Failed to get OKR tree",

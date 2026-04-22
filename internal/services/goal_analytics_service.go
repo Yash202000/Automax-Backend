@@ -13,12 +13,25 @@ import (
 
 // GoalAnalyticsService provides analytics and reporting for goals
 type GoalAnalyticsService interface {
-	GetStats(ctx context.Context, departmentID *uuid.UUID) (*models.GoalStatsResponse, error)
-	GetDistributions(ctx context.Context, departmentID *uuid.UUID) (*models.GoalDistributionsResponse, error)
-	GetProgressSummary(ctx context.Context, departmentID *uuid.UUID) (*models.ProgressSummaryResponse, error)
-	GetAtRiskGoals(ctx context.Context, departmentID *uuid.UUID, page, limit int) ([]models.AtRiskGoalResponse, int64, error)
-	GetTrendData(ctx context.Context, departmentID *uuid.UUID, months int) (*models.TrendDataResponse, error)
-	GetOKRTree(ctx context.Context, departmentID *uuid.UUID, periodStart *time.Time, periodEnd *time.Time, status string) (*models.OKRTreeResponse, error)
+	GetStats(ctx context.Context, departmentID *uuid.UUID, ownerScope *uuid.UUID) (*models.GoalStatsResponse, error)
+	GetDistributions(ctx context.Context, departmentID *uuid.UUID, ownerScope *uuid.UUID) (*models.GoalDistributionsResponse, error)
+	GetProgressSummary(ctx context.Context, departmentID *uuid.UUID, ownerScope *uuid.UUID) (*models.ProgressSummaryResponse, error)
+	GetAtRiskGoals(ctx context.Context, departmentID *uuid.UUID, ownerScope *uuid.UUID, page, limit int) ([]models.AtRiskGoalResponse, int64, error)
+	GetTrendData(ctx context.Context, departmentID *uuid.UUID, ownerScope *uuid.UUID, months int) (*models.TrendDataResponse, error)
+	GetOKRTree(ctx context.Context, departmentID *uuid.UUID, ownerScope *uuid.UUID, periodStart *time.Time, periodEnd *time.Time, status string) (*models.OKRTreeResponse, error)
+}
+
+// applyOwnerScope restricts results to goals owned or collaborated on by the given user.
+// If ownerScope is nil, no filter is added. Uses the "goals" table alias — callers must
+// ensure their base query either uses that alias or no alias (GORM default).
+func applyOwnerScope(q *gorm.DB, ownerScope *uuid.UUID) *gorm.DB {
+	if ownerScope == nil {
+		return q
+	}
+	return q.Where(
+		"goals.owner_id = ? OR goals.id IN (SELECT goal_id FROM goal_collaborators WHERE user_id = ?)",
+		*ownerScope, *ownerScope,
+	)
 }
 
 type goalAnalyticsService struct {
@@ -34,7 +47,7 @@ func NewGoalAnalyticsService(db *gorm.DB) GoalAnalyticsService {
 }
 
 // GetStats returns aggregate goal counts by status plus overdue/at-risk counts
-func (s *goalAnalyticsService) GetStats(ctx context.Context, departmentID *uuid.UUID) (*models.GoalStatsResponse, error) {
+func (s *goalAnalyticsService) GetStats(ctx context.Context, departmentID *uuid.UUID, ownerScope *uuid.UUID) (*models.GoalStatsResponse, error) {
 	stats := &models.GoalStatsResponse{}
 
 	// Count by status
@@ -49,6 +62,7 @@ func (s *goalAnalyticsService) GetStats(ctx context.Context, departmentID *uuid.
 	if departmentID != nil {
 		q = q.Where("department_id = ?", *departmentID)
 	}
+	q = applyOwnerScope(q, ownerScope)
 	err := q.Group("status").
 		Scan(&counts).Error
 	if err != nil {
@@ -80,6 +94,7 @@ func (s *goalAnalyticsService) GetStats(ctx context.Context, departmentID *uuid.
 	if departmentID != nil {
 		overdueQuery = overdueQuery.Where("department_id = ?", *departmentID)
 	}
+	overdueQuery = applyOwnerScope(overdueQuery, ownerScope)
 	err = overdueQuery.Count(&stats.Overdue).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to count overdue goals: %w", err)
@@ -104,6 +119,10 @@ func (s *goalAnalyticsService) GetStats(ctx context.Context, departmentID *uuid.
 		atRiskSQL += " AND g.department_id = ?"
 		atRiskArgs = append(atRiskArgs, *departmentID)
 	}
+	if ownerScope != nil {
+		atRiskSQL += " AND (g.owner_id = ? OR g.id IN (SELECT goal_id FROM goal_collaborators WHERE user_id = ?))"
+		atRiskArgs = append(atRiskArgs, *ownerScope, *ownerScope)
+	}
 	err = s.db.WithContext(ctx).Raw(atRiskSQL, atRiskArgs...).Scan(&stats.AtRisk).Error
 	if err != nil {
 		// Non-critical: at-risk count may fail if no check-ins exist
@@ -114,7 +133,7 @@ func (s *goalAnalyticsService) GetStats(ctx context.Context, departmentID *uuid.
 }
 
 // GetDistributions returns goal distributions by status, priority, department, and category
-func (s *goalAnalyticsService) GetDistributions(ctx context.Context, departmentID *uuid.UUID) (*models.GoalDistributionsResponse, error) {
+func (s *goalAnalyticsService) GetDistributions(ctx context.Context, departmentID *uuid.UUID, ownerScope *uuid.UUID) (*models.GoalDistributionsResponse, error) {
 	resp := &models.GoalDistributionsResponse{}
 	baseQuery := s.db.WithContext(ctx).Model(&models.Goal{})
 	if departmentID != nil {
@@ -147,6 +166,7 @@ func (s *goalAnalyticsService) GetDistributions(ctx context.Context, departmentI
 	if departmentID != nil {
 		q = q.Where("department_id = ?", *departmentID)
 	}
+	q = applyOwnerScope(q, ownerScope)
 	if err := q.Scan(&statusDist).Error; err != nil {
 		return nil, fmt.Errorf("failed to get status distribution: %w", err)
 	}
@@ -161,6 +181,7 @@ func (s *goalAnalyticsService) GetDistributions(ctx context.Context, departmentI
 	if departmentID != nil {
 		q = q.Where("department_id = ?", *departmentID)
 	}
+	q = applyOwnerScope(q, ownerScope)
 	if err := q.Scan(&priorityDist).Error; err != nil {
 		return nil, fmt.Errorf("failed to get priority distribution: %w", err)
 	}
@@ -179,6 +200,7 @@ func (s *goalAnalyticsService) GetDistributions(ctx context.Context, departmentI
 	if departmentID != nil {
 		q = q.Where("goals.department_id = ?", *departmentID)
 	}
+	q = applyOwnerScope(q, ownerScope)
 	if err := q.Group("d.name").Order("value DESC").Limit(15).Scan(&deptDist).Error; err != nil {
 		return nil, fmt.Errorf("failed to get department distribution: %w", err)
 	}
@@ -195,6 +217,7 @@ func (s *goalAnalyticsService) GetDistributions(ctx context.Context, departmentI
 	if departmentID != nil {
 		q = q.Where("department_id = ?", *departmentID)
 	}
+	q = applyOwnerScope(q, ownerScope)
 	if err := q.Scan(&catDist).Error; err != nil {
 		return nil, fmt.Errorf("failed to get category distribution: %w", err)
 	}
@@ -207,7 +230,7 @@ func (s *goalAnalyticsService) GetDistributions(ctx context.Context, departmentI
 }
 
 // GetProgressSummary returns average progress and progress range distribution
-func (s *goalAnalyticsService) GetProgressSummary(ctx context.Context, departmentID *uuid.UUID) (*models.ProgressSummaryResponse, error) {
+func (s *goalAnalyticsService) GetProgressSummary(ctx context.Context, departmentID *uuid.UUID, ownerScope *uuid.UUID) (*models.ProgressSummaryResponse, error) {
 	resp := &models.ProgressSummaryResponse{}
 
 	// Average progress (exclude Draft and Closed)
@@ -217,6 +240,7 @@ func (s *goalAnalyticsService) GetProgressSummary(ctx context.Context, departmen
 	if departmentID != nil {
 		avgQuery = avgQuery.Where("department_id = ?", *departmentID)
 	}
+	avgQuery = applyOwnerScope(avgQuery, ownerScope)
 	err := avgQuery.Select("COALESCE(AVG(progress), 0)").
 		Scan(&resp.Average).Error
 	if err != nil {
@@ -247,6 +271,10 @@ func (s *goalAnalyticsService) GetProgressSummary(ctx context.Context, departmen
 	if departmentID != nil {
 		rangeSQL += " AND department_id = ?"
 		rangeArgs = append(rangeArgs, *departmentID)
+	}
+	if ownerScope != nil {
+		rangeSQL += " AND (goals.owner_id = ? OR goals.id IN (SELECT goal_id FROM goal_collaborators WHERE user_id = ?))"
+		rangeArgs = append(rangeArgs, *ownerScope, *ownerScope)
 	}
 	rangeSQL += " GROUP BY range_label ORDER BY range_label"
 	err = s.db.WithContext(ctx).Raw(rangeSQL, rangeArgs...).Scan(&ranges).Error
@@ -280,7 +308,7 @@ func (s *goalAnalyticsService) GetProgressSummary(ctx context.Context, departmen
 }
 
 // GetAtRiskGoals returns goals that are overdue or have at-risk check-in status
-func (s *goalAnalyticsService) GetAtRiskGoals(ctx context.Context, departmentID *uuid.UUID, page, limit int) ([]models.AtRiskGoalResponse, int64, error) {
+func (s *goalAnalyticsService) GetAtRiskGoals(ctx context.Context, departmentID *uuid.UUID, ownerScope *uuid.UUID, page, limit int) ([]models.AtRiskGoalResponse, int64, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -315,6 +343,11 @@ func (s *goalAnalyticsService) GetAtRiskGoals(ctx context.Context, departmentID 
 		deptClause = "AND g.department_id = ?"
 		extraArgs = append(extraArgs, *departmentID)
 	}
+	ownerClause := ""
+	if ownerScope != nil {
+		ownerClause = "AND (g.owner_id = ? OR g.id IN (SELECT goal_id FROM goal_collaborators WHERE user_id = ?))"
+		extraArgs = append(extraArgs, *ownerScope, *ownerScope)
+	}
 
 	query := fmt.Sprintf(`
 		WITH latest_checkins AS (
@@ -344,6 +377,7 @@ func (s *goalAnalyticsService) GetAtRiskGoals(ctx context.Context, departmentID 
 		WHERE g.deleted_at IS NULL
 		  AND g.status IN (?, ?)
 		  %s
+		  %s
 		  AND (
 			g.target_date < NOW()
 			OR lc.status IN ('at_risk', 'behind', 'blocked')
@@ -351,7 +385,7 @@ func (s *goalAnalyticsService) GetAtRiskGoals(ctx context.Context, departmentID 
 		ORDER BY
 			CASE WHEN g.target_date < NOW() THEN 0 ELSE 1 END,
 			g.target_date ASC NULLS LAST
-	`, deptClause)
+	`, deptClause, ownerClause)
 
 	// Build args: status1, status2, [deptID]
 	baseArgs := []interface{}{models.GoalStatusActive, models.GoalStatusUnderReview}
@@ -423,7 +457,7 @@ func (s *goalAnalyticsService) GetAtRiskGoals(ctx context.Context, departmentID 
 }
 
 // GetTrendData returns monthly goal creation and completion counts
-func (s *goalAnalyticsService) GetTrendData(ctx context.Context, departmentID *uuid.UUID, months int) (*models.TrendDataResponse, error) {
+func (s *goalAnalyticsService) GetTrendData(ctx context.Context, departmentID *uuid.UUID, ownerScope *uuid.UUID, months int) (*models.TrendDataResponse, error) {
 	if months < 1 || months > 24 {
 		months = 12
 	}
@@ -446,6 +480,10 @@ func (s *goalAnalyticsService) GetTrendData(ctx context.Context, departmentID *u
 		createdSQL += " AND department_id = ?"
 		createdArgs = append(createdArgs, *departmentID)
 	}
+	if ownerScope != nil {
+		createdSQL += " AND (goals.owner_id = ? OR goals.id IN (SELECT goal_id FROM goal_collaborators WHERE user_id = ?))"
+		createdArgs = append(createdArgs, *ownerScope, *ownerScope)
+	}
 	createdSQL += " GROUP BY DATE_TRUNC('month', created_at) ORDER BY month"
 
 	var created []monthCount
@@ -466,6 +504,10 @@ func (s *goalAnalyticsService) GetTrendData(ctx context.Context, departmentID *u
 	if departmentID != nil {
 		completedSQL += " AND department_id = ?"
 		completedArgs = append(completedArgs, *departmentID)
+	}
+	if ownerScope != nil {
+		completedSQL += " AND (goals.owner_id = ? OR goals.id IN (SELECT goal_id FROM goal_collaborators WHERE user_id = ?))"
+		completedArgs = append(completedArgs, *ownerScope, *ownerScope)
 	}
 	completedSQL += " GROUP BY DATE_TRUNC('month', updated_at) ORDER BY month"
 
@@ -503,7 +545,7 @@ func (s *goalAnalyticsService) GetTrendData(ctx context.Context, departmentID *u
 }
 
 // GetOKRTree returns the full OKR alignment tree organized by department hierarchy
-func (s *goalAnalyticsService) GetOKRTree(ctx context.Context, departmentID *uuid.UUID, periodStart *time.Time, periodEnd *time.Time, status string) (*models.OKRTreeResponse, error) {
+func (s *goalAnalyticsService) GetOKRTree(ctx context.Context, departmentID *uuid.UUID, ownerScope *uuid.UUID, periodStart *time.Time, periodEnd *time.Time, status string) (*models.OKRTreeResponse, error) {
 	// Load departments
 	var departments []models.Department
 	deptQuery := s.db.WithContext(ctx).Where("is_active = true").Order("sort_order, name")
@@ -528,6 +570,7 @@ func (s *goalAnalyticsService) GetOKRTree(ctx context.Context, departmentID *uui
 		}
 		goalQuery = goalQuery.Where("department_id IN ?", deptIDs)
 	}
+	goalQuery = applyOwnerScope(goalQuery, ownerScope)
 	if status != "" {
 		goalQuery = goalQuery.Where("status = ?", status)
 	}
