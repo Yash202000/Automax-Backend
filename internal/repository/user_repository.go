@@ -17,6 +17,7 @@ type UserRepository interface {
 	FindByIDWithPermissions(ctx context.Context, id uuid.UUID) (*models.User, error)
 	FindByEmail(ctx context.Context, email string) (*models.User, error)
 	FindByEmailWithRelations(ctx context.Context, email string) (*models.User, error)
+	FindByEmailForLogin(ctx context.Context, email string) (*models.User, error)
 	FindByUsername(ctx context.Context, username string) (*models.User, error)
 	FindByLast6Digits(ctx context.Context, last6Digits string) (*models.User, error)
 	Update(ctx context.Context, user *models.User) error
@@ -39,6 +40,7 @@ type UserRepository interface {
 	FindByExtension(ctx context.Context, extension string) (*models.User, error)
 	FindByMobile(ctx context.Context, phone string) (*models.User, error)
 	FindByPhoneWithRelations(ctx context.Context, phone string) (*models.User, error)
+	FindByPhoneForLogin(ctx context.Context, phone string) (*models.User, error)
 	FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.User, error)
 	FindByRoleAndContext(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID *uuid.UUID) ([]models.User, error)
 	// FindByDepartmentAndRole returns active users belonging to departmentID AND holding roleID.
@@ -120,6 +122,32 @@ func (r *userRepository) FindByEmailWithRelations(ctx context.Context, email str
 		Preload("Roles").
 		Preload("Roles.Permissions").
 		First(&user, "email = ?", email).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+// FindByEmailForLogin loads only active roles and their permissions — fast path for login.
+func (r *userRepository) FindByEmailForLogin(ctx context.Context, email string) (*models.User, error) {
+	var user models.User
+	err := r.db.WithContext(ctx).
+		Preload("Roles", "is_active = ?", true).
+		Preload("Roles.Permissions", "is_active = ?", true).
+		First(&user, "email = ?", email).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+// FindByPhoneForLogin loads only active roles and their permissions — fast path for OTP login.
+func (r *userRepository) FindByPhoneForLogin(ctx context.Context, phone string) (*models.User, error) {
+	var user models.User
+	err := r.db.WithContext(ctx).
+		Preload("Roles", "is_active = ?", true).
+		Preload("Roles.Permissions", "is_active = ?", true).
+		First(&user, "phone = ?", phone).Error
 	if err != nil {
 		return nil, err
 	}

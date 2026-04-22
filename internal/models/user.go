@@ -197,6 +197,47 @@ type AuthResponse struct {
 	ExpiresIn    int64        `json:"expires_in,omitempty"` // seconds until access token expires
 }
 
+// RoleBasicResponse is a slimmed-down role for the login response (no nested permissions).
+type RoleBasicResponse struct {
+	ID       uuid.UUID `json:"id"`
+	Name     string    `json:"name"`
+	Code     string    `json:"code"`
+	IsSystem bool      `json:"is_system"`
+	IsActive bool      `json:"is_active"`
+}
+
+// UserLoginResponse is a slimmed-down user for the login response.
+// Heavy relations (departments, locations, classifications, role permissions) are omitted.
+// Clients that need full data should call GET /users/me after login.
+type UserLoginResponse struct {
+	ID             uuid.UUID           `json:"id"`
+	Email          string              `json:"email"`
+	Username       string              `json:"username"`
+	FirstName      string              `json:"first_name"`
+	LastName       string              `json:"last_name"`
+	Phone          string              `json:"phone"`
+	MobileVerified bool                `json:"mobile_verified"`
+	Avatar         string              `json:"avatar"`
+	DepartmentID   *uuid.UUID          `json:"department_id"`
+	LocationID     *uuid.UUID          `json:"location_id"`
+	Roles          []RoleBasicResponse `json:"roles,omitempty"`
+	Permissions    []string            `json:"permissions,omitempty"`
+	IsActive       bool                `json:"is_active"`
+	IsSuperAdmin   bool                `json:"is_super_admin"`
+	Extension      string              `json:"extension"`
+	CallStatus     string              `json:"call_status"`
+	LastLoginAt    *time.Time          `json:"last_login_at"`
+	CreatedAt      time.Time           `json:"created_at"`
+}
+
+// AuthLoginResponse is the response for POST /auth/login.
+type AuthLoginResponse struct {
+	User         UserLoginResponse `json:"user"`
+	Token        string           `json:"token"`
+	RefreshToken string           `json:"refresh_token,omitempty"`
+	ExpiresIn    int64            `json:"expires_in,omitempty"`
+}
+
 type RefreshTokenRequest struct {
 	RefreshToken string `json:"refresh_token" validate:"required"`
 }
@@ -220,6 +261,45 @@ type UserMatchResponse struct {
 	Users         []UserResponse `json:"users"`
 	SingleMatch   bool           `json:"single_match"`
 	MatchedUserID *string        `json:"matched_user_id,omitempty"`
+}
+
+func ToRoleBasicResponse(role *Role) RoleBasicResponse {
+	return RoleBasicResponse{
+		ID:       role.ID,
+		Name:     role.Name,
+		Code:     role.Code,
+		IsSystem: role.IsSystem,
+		IsActive: role.IsActive,
+	}
+}
+
+func ToUserLoginResponse(user *User) UserLoginResponse {
+	resp := UserLoginResponse{
+		ID:             user.ID,
+		Email:          user.Email,
+		Username:       user.Username,
+		FirstName:      user.FirstName,
+		LastName:       user.LastName,
+		Phone:          user.Phone,
+		MobileVerified: user.MobileVerified,
+		Avatar:         user.Avatar,
+		DepartmentID:   user.DepartmentID,
+		LocationID:     user.LocationID,
+		IsActive:       user.IsActive,
+		IsSuperAdmin:   user.IsSuperAdmin,
+		Extension:      user.Extension,
+		CallStatus:     string(user.CallStatus),
+		LastLoginAt:    user.LastLoginAt,
+		CreatedAt:      user.CreatedAt,
+		Permissions:    user.GetPermissions(),
+	}
+	if len(user.Roles) > 0 {
+		resp.Roles = make([]RoleBasicResponse, len(user.Roles))
+		for i, role := range user.Roles {
+			resp.Roles[i] = ToRoleBasicResponse(&role)
+		}
+	}
+	return resp
 }
 
 func ToUserResponse(user *User) UserResponse {

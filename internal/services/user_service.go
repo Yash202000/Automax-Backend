@@ -23,7 +23,7 @@ import (
 
 type UserService interface {
 	Register(ctx context.Context, req *models.UserRegisterRequest) (*models.AuthResponse, error)
-	Login(ctx context.Context, req *models.UserLoginRequest) (*models.AuthResponse, error)
+	Login(ctx context.Context, req *models.UserLoginRequest) (*models.AuthLoginResponse, error)
 	RefreshToken(ctx context.Context, refreshToken string) (*models.AuthResponse, error)
 	Logout(ctx context.Context) error
 	GetProfile(ctx context.Context, userID uuid.UUID) (*models.UserResponse, error)
@@ -197,7 +197,7 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 	}, nil
 }
 
-func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (*models.AuthResponse, error) {
+func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (*models.AuthLoginResponse, error) {
 	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
 	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
 
@@ -209,7 +209,7 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 	switch loginType {
 	case "email_password":
 		// Email/Password login
-		user, err = s.userRepo.FindByEmailWithRelations(ctx, req.Email)
+		user, err = s.userRepo.FindByEmailForLogin(ctx, req.Email)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				go func() {
@@ -256,7 +256,7 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 		}
 
 		// First check if user exists with this phone number
-		user, err = s.userRepo.FindByPhoneWithRelations(ctx, req.Phone)
+		user, err = s.userRepo.FindByPhoneForLogin(ctx, req.Phone)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				go func() {
@@ -404,8 +404,8 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 		_ = database.ResetLoginAttempts(context.Background(), database.RedisClient, "ip:"+ipAddress)
 	}()
 
-	return &models.AuthResponse{
-		User:         models.ToUserResponse(user),
+	return &models.AuthLoginResponse{
+		User:         models.ToUserLoginResponse(user),
 		Token:        tokenPair.AccessToken,
 		RefreshToken: tokenPair.RefreshToken,
 		ExpiresIn:    tokenPair.ExpiresIn,
