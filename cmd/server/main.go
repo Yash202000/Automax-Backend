@@ -163,7 +163,7 @@ func main() {
 	validate := validator.New()
 
 	// Initialize handlers
-	userHandler := handlers.NewUserHandler(userService, minioStorage)
+	userHandler := handlers.NewUserHandler(userService, minioStorage, redisClient, cfg)
 	healthHandler := handlers.NewHealthHandler()
 
 	// Initialize LDAP handler
@@ -233,7 +233,7 @@ func main() {
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore, userRepo)
 	licenseMiddleware := middleware.NewLicenseMiddleware(licenseService)
-	loginRateLimitMiddleware := middleware.LoginRateLimitMiddleware(cfg, redisClient)
+	loginRateLimitMiddleware := middleware.LoginRateLimitMiddleware(cfg, redisClient, userService)
 
 	app := fiber.New(fiber.Config{
 		AppName:      "Automax Backend",
@@ -305,6 +305,7 @@ func main() {
 	auth.Post("/login", loginRateLimitMiddleware, userHandler.Login)
 	auth.Post("/refresh", userHandler.RefreshToken)
 	auth.Post("/logout", authMiddleware.Authenticate(), userHandler.Logout)
+	auth.Post("/unblock-user", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:unblock"), userHandler.UnblockUser)
 
 	// LDAP routes (public - for LDAP authentication)
 	ldap := v1.Group("/ldap")
@@ -326,6 +327,7 @@ func main() {
 	users.Put("/me/password", authMiddleware.Authenticate(), userHandler.ChangePassword)
 	users.Delete("/me", authMiddleware.Authenticate(), userHandler.DeleteAccount)
 	users.Put("/:userExtID/status", userHandler.UpdateUserCallStatus)
+	users.Put("/:userID/password", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:update"), userHandler.AdminResetPassword)
 
 	// Incident routes (authenticated users)
 	incidents := v1.Group("/incidents", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureIncidents)))

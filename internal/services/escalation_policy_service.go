@@ -156,7 +156,7 @@ func (s *EscalationPolicyService) ResolveStepTargetUsers(ctx context.Context, ta
 	var result []models.User
 
 	for _, t := range targets {
-		users, err := s.ResolveUsers(ctx, t.DepartmentID, t.RoleID, t.ExcludedUserIDs)
+		users, err := s.ResolveUsers(ctx, t.DepartmentID, t.RoleID, []string(t.ExcludedUserIDs))
 		if err != nil {
 			return nil, err
 		}
@@ -176,7 +176,7 @@ func (s *EscalationPolicyService) ResolveGroupTargetUsers(ctx context.Context, t
 	var result []models.User
 
 	for _, t := range targets {
-		users, err := s.ResolveUsers(ctx, t.DepartmentID, t.RoleID, t.ExcludedUserIDs)
+		users, err := s.ResolveUsers(ctx, t.DepartmentID, t.RoleID, []string(t.ExcludedUserIDs))
 		if err != nil {
 			return nil, err
 		}

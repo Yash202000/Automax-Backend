@@ -232,7 +232,7 @@ type EscalationGroupTarget struct {
 	Department        *Department `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
 	RoleID            *uuid.UUID  `gorm:"type:uuid;index" json:"role_id,omitempty"`
 	Role              *Role       `gorm:"foreignKey:RoleID" json:"role,omitempty"`
-	ExcludedUserIDs   []string    `gorm:"type:text[]" json:"excluded_user_ids"`
+	ExcludedUserIDs   TextArray   `gorm:"type:text[]" json:"excluded_user_ids"`
 	CreatedAt         time.Time   `json:"created_at"`
 }
 

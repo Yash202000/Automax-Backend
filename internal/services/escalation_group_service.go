@@ -28,26 +28,14 @@ type EscalationGroupService struct {
 	policyService       *EscalationPolicyService
 	notificationService *NotificationService
 	frontendURL         string
-	dailyHour           int
-	dailyMinute         int
-	weeklyHour          int
-	weeklyMinute        int
 }
 
 func NewEscalationGroupService(groupRepo repository.EscalationGroupRepository, incidentRepo repository.IncidentRepository, userRepo repository.UserRepository, notificationService *NotificationService, cfg config.EscalationConfig) *EscalationGroupService {
-	dailyHour, _ := strconv.Atoi(os.Getenv("ESCALATION_DAILY_HOUR"))
-	dailyMinute, _ := strconv.Atoi(os.Getenv("ESCALATION_DAILY_MINUTE"))
-	weeklyHour, _ := strconv.Atoi(os.Getenv("ESCALATION_WEEKLY_HOUR"))
-	weeklyMinute, _ := strconv.Atoi(os.Getenv("ESCALATION_WEEKLY_MINUTE"))
 	return &EscalationGroupService{
 		groupRepo:           groupRepo,
 		incidentRepo:        incidentRepo,
 		userRepo:            userRepo,
 		notificationService: notificationService,
-		dailyHour:           dailyHour,
-		dailyMinute:         dailyMinute,
-		weeklyHour:          weeklyHour,
-		weeklyMinute:        weeklyMinute,
 	}
 }
 
@@ -65,11 +53,16 @@ func (s *EscalationGroupService) Create(ctx context.Context, req *models.CreateE
 		isActive = *req.IsActive
 	}
 
+	scheduledTime := req.ScheduledTime
+	if scheduledTime == "" {
+		scheduledTime = "09:00"
+	}
 	group := &models.EscalationGroup{
-		Name:      req.Name,
-		Frequency: req.Frequency,
-		Channel:   req.Channel,
-		IsActive:  isActive,
+		Name:          req.Name,
+		Frequency:     req.Frequency,
+		ScheduledTime: scheduledTime,
+		Channel:       req.Channel,
+		IsActive:      isActive,
 	}
 
 	// Legacy single classification_id
@@ -146,6 +139,9 @@ func (s *EscalationGroupService) Update(ctx context.Context, id uuid.UUID, req *
 	if req.Frequency != nil {
 		group.Frequency = *req.Frequency
 	}
+	if req.ScheduledTime != nil {
+		group.ScheduledTime = *req.ScheduledTime
+	}
 	if req.Channel != nil {
 		group.Channel = *req.Channel
 	}
@@ -177,7 +173,7 @@ func (s *EscalationGroupService) Update(ctx context.Context, id uuid.UUID, req *
 		}
 	}
 
-	// Targets take priority over legacy UserIDs; nil slice = no change
+	// nil slice = no change; non-nil (even empty) = full replacement
 	if req.Targets != nil {
 		targets, err := buildGroupTargets(req.Targets)
 		if err != nil {
@@ -186,7 +182,8 @@ func (s *EscalationGroupService) Update(ctx context.Context, id uuid.UUID, req *
 		if err := s.groupRepo.SetTargets(ctx, group.ID, targets); err != nil {
 			return nil, err
 		}
-	} else if req.UserIDs != nil {
+	}
+	if req.UserIDs != nil {
 		userIDs, err := parseUUIDSlice(req.UserIDs)
 		if err != nil {
 			return nil, fmt.Errorf("invalid user_id in list: %w", err)
@@ -262,17 +259,29 @@ func (s *EscalationGroupService) ProcessGroupEscalations(ctx context.Context) er
 			continue
 		}
 
-		// Resolve recipients: prefer Targets (dept+role), fall back to legacy Users
+		// Merge recipients from both dept/role targets and directly-assigned users (deduplicated)
+		seen := make(map[uuid.UUID]struct{})
 		var recipients []models.User
+
 		if len(group.Targets) > 0 && s.policyService != nil {
 			resolved, err := s.policyService.ResolveGroupTargetUsers(ctx, group.Targets)
 			if err != nil {
 				log.Printf("[EscalationGroupService] ResolveGroupTargetUsers error for group '%s': %v", group.Name, err)
 				continue
 			}
-			recipients = resolved
-		} else {
-			recipients = group.Users
+			for _, u := range resolved {
+				if _, ok := seen[u.ID]; !ok {
+					seen[u.ID] = struct{}{}
+					recipients = append(recipients, u)
+				}
+			}
+		}
+
+		for _, u := range group.Users {
+			if _, ok := seen[u.ID]; !ok {
+				seen[u.ID] = struct{}{}
+				recipients = append(recipients, u)
+			}
 		}
 
 		if len(recipients) == 0 {
@@ -300,11 +309,11 @@ func (s *EscalationGroupService) ProcessGroupEscalations(ctx context.Context) er
 			incidents = append(incidents, batch...)
 		}
 		// Deduplicate by incident ID
-		seen := make(map[uuid.UUID]struct{})
+		seenIncidents := make(map[uuid.UUID]struct{})
 		deduped := incidents[:0]
 		for _, inc := range incidents {
-			if _, ok := seen[inc.ID]; !ok {
-				seen[inc.ID] = struct{}{}
+			if _, ok := seenIncidents[inc.ID]; !ok {
+				seenIncidents[inc.ID] = struct{}{}
 				deduped = append(deduped, inc)
 			}
 		}
@@ -387,10 +396,10 @@ func (s *EscalationGroupService) sendGroupNotification(ctx context.Context, grou
 		slaPageURL,
 	)
 
-	// sentBy: use the first user with escalation-groups:manage permission; fall back to the notified user
+	// sentBy: default to admin@automax.com; fall back to the notified user
 	var sentBy *uuid.UUID
-	if managers, err := s.userRepo.FindByPermissionCode(ctx, "escalation-groups:manage_rules"); err == nil && len(managers) > 0 {
-		sentBy = &managers[0].ID
+	if admin, err := s.userRepo.FindByEmail(ctx, "admin@automax.com"); err == nil && admin != nil {
+		sentBy = &admin.ID
 	} else {
 		sentBy = &user.ID
 	}
@@ -501,6 +510,19 @@ func buildGroupCSVReport(incidents []models.Incident, classificationName string)
 	return buf.Bytes()
 }
 
+// parseScheduledTime parses a "HH:MM" string and returns (hour, minute).
+// Falls back to 09:00 on any parse error.
+func parseScheduledTime(t string) (int, int) {
+	if len(t) == 5 && t[2] == ':' {
+		h, err1 := strconv.Atoi(t[0:2])
+		m, err2 := strconv.Atoi(t[3:5])
+		if err1 == nil && err2 == nil && h >= 0 && h <= 23 && m >= 0 && m <= 59 {
+			return h, m
+		}
+	}
+	return 9, 0
+}
+
 // shouldSendNow returns true when the group's scheduled send window has arrived
 
 func (s *EscalationGroupService) shouldSendNow(group *models.EscalationGroup) bool {
@@ -512,52 +534,110 @@ func (s *EscalationGroupService) shouldSendNow(group *models.EscalationGroup) bo
 	}
 	now := time.Now().In(loc)
 
+	schedHour, schedMinute := parseScheduledTime(group.ScheduledTime)
+
 	switch group.Frequency {
+	case "hourly":
+		// Fire at schedMinute of each hour
+		target := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), schedMinute, 0, 0, loc)
+		if now.Before(target) {
+			return false
+		}
+		if group.LastNotifiedAt == nil {
+			return true
+		}
+		return group.LastNotifiedAt.Before(target)
+
+	case "every_6_hours":
+		// Fire at :schedMinute past 00, 06, 12, 18
+		slot := (now.Hour() / 6) * 6
+		target := time.Date(now.Year(), now.Month(), now.Day(), slot, schedMinute, 0, 0, loc)
+		if now.Before(target) {
+			return false
+		}
+		if group.LastNotifiedAt == nil {
+			return true
+		}
+		return group.LastNotifiedAt.Before(target)
+
+	case "every_12_hours":
+		// Fire at :schedMinute past 00 and 12
+		slot := (now.Hour() / 12) * 12
+		target := time.Date(now.Year(), now.Month(), now.Day(), slot, schedMinute, 0, 0, loc)
+		if now.Before(target) {
+			return false
+		}
+		if group.LastNotifiedAt == nil {
+			return true
+		}
+		return group.LastNotifiedAt.Before(target)
+
 	case "daily":
-		// The target time is today at dailyHour:dailyMinute
 		target := time.Date(now.Year(), now.Month(), now.Day(),
-			s.dailyHour, s.dailyMinute, 0, 0, loc)
+			schedHour, schedMinute, 0, 0, loc)
 		log.Printf(
 			"[DEBUG] Now=%v | Target=%v | LastNotifiedAt=%v",
 			now,
 			target,
 			group.LastNotifiedAt,
 		)
-
-		// Has the scheduled time arrived today?
 		if now.Before(target) {
-			return false // too early today
+			return false
 		}
-		// Has it already been sent since this target time?
 		if group.LastNotifiedAt == nil {
 			return true
 		}
 		return group.LastNotifiedAt.Before(target)
 
 	case "weekly":
-		// Find this week's Monday
 		weekday := int(now.Weekday()) // 0 = Sunday
 		if weekday == 0 {
-			weekday = 7 // treat Sunday as 7 so Monday is always offset -(weekday-1)
+			weekday = 7
 		}
 		monday := now.AddDate(0, 0, -(weekday - 1))
-
-		// The target time is this Monday at weeklyHour:weeklyMinute
-		// target := time.Date(monday.Year(), monday.Month(), monday.Day(),
-		// 	s.weeklyHour, s.weeklyMinute, 0, 0, now.Location())
-
 		target := time.Date(monday.Year(), monday.Month(), monday.Day(),
-			s.weeklyHour, s.weeklyMinute, 0, 0, loc)
-
-		// Has the scheduled time arrived this week?
+			schedHour, schedMinute, 0, 0, loc)
 		if now.Before(target) {
-			return false // too early this week (e.g. Monday but before 09:00)
+			return false
 		}
-		// Has it already been sent since this target time?
 		if group.LastNotifiedAt == nil {
 			return true
 		}
+		return group.LastNotifiedAt.Before(target)
 
+	case "bi_weekly":
+		weekday := int(now.Weekday())
+		if weekday == 0 {
+			weekday = 7
+		}
+		monday := now.AddDate(0, 0, -(weekday - 1))
+		_, isoWeek := monday.ISOWeek()
+		if isoWeek%2 != 1 {
+			return false
+		}
+		target := time.Date(monday.Year(), monday.Month(), monday.Day(),
+			schedHour, schedMinute, 0, 0, loc)
+		if now.Before(target) {
+			return false
+		}
+		if group.LastNotifiedAt == nil {
+			return true
+		}
+		return group.LastNotifiedAt.Before(target)
+
+	case "monthly":
+		// Fire on the 1st of each month at the scheduled time
+		if now.Day() != 1 {
+			return false
+		}
+		target := time.Date(now.Year(), now.Month(), 1,
+			schedHour, schedMinute, 0, 0, loc)
+		if now.Before(target) {
+			return false
+		}
+		if group.LastNotifiedAt == nil {
+			return true
+		}
 		return group.LastNotifiedAt.Before(target)
 	}
 
@@ -569,10 +649,10 @@ func buildGroupTargets(reqs []models.EscalationGroupTargetRequest) ([]models.Esc
 	targets := make([]models.EscalationGroupTarget, 0, len(reqs))
 	for _, r := range reqs {
 		t := models.EscalationGroupTarget{
-			ExcludedUserIDs: r.ExcludedUserIDs,
+			ExcludedUserIDs: models.TextArray(r.ExcludedUserIDs),
 		}
 		if t.ExcludedUserIDs == nil {
-			t.ExcludedUserIDs = []string{}
+			t.ExcludedUserIDs = models.TextArray{}
 		}
 		if r.DepartmentID != nil {
 			id, err := uuid.Parse(*r.DepartmentID)

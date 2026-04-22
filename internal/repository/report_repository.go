@@ -517,11 +517,13 @@ func (r *reportRepository) ExecuteRequestQuery(ctx context.Context, filters []mo
 	}
 
 	offset := (page - 1) * limit
-	rows, err := query.
+	rows, err := query.Debug().
 		Select(
 			"incidents.incident_number as request_number, " +
-				"incidents.created_by_mobile as created_by_mobile, " +
+				// "incidents.created_by_mobile as created_by_mobile, " +
 				"reporters.first_name as reporter_first_name, reporters.last_name as reporter_last_name, " +
+				"TRIM(reporters.first_name || ' ' || reporters.last_name) as reporter_name, " +
+				"reporters.phone as reporter_phone, " +
 				"classifications.name as classification_name, " +
 				"locations.name as location_name, " +
 				"incidents.title as title, " +
@@ -609,7 +611,7 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 	rows, err := dataQuery.
 		Select("incidents.*, " +
 			"reporters.email as reporter_email, reporters.first_name as reporter_first_name, reporters.last_name as reporter_last_name, " +
-			"reporters.username as reporter_username, " +
+			"reporters.username as reporter_username, " + "reporters.phone as reporter_phone, " +
 			"assignees.email as assignee_email, assignees.first_name as assignee_first_name, assignees.last_name as assignee_last_name, " +
 			"assignees.username as assignee_username, " +
 			"workflow_states.name as current_state_name, workflow_states.state_type as current_state_state_type, " +

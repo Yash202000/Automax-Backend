@@ -231,6 +231,7 @@ type UserBasicInfo struct {
 	Email     string    `json:"email"`
 	FirstName string    `json:"first_name"`
 	LastName  string    `json:"last_name"`
+	Phone     string    `json:"phone"`
 	Avatar    string    `json:"avatar,omitempty"`
 }
 
@@ -312,6 +313,7 @@ func ToNotificationLogResponse(log *NotificationLog) NotificationLogResponse {
 			Email:     log.SentByUser.Email,
 			FirstName: log.SentByUser.FirstName,
 			LastName:  log.SentByUser.LastName,
+			Phone:     log.SentByUser.Phone,
 			Avatar:    log.SentByUser.Avatar,
 		}
 	}
@@ -424,7 +426,7 @@ type NotificationUserCounts struct {
 	Sent   int64 `json:"sent"`
 	Failed int64 `json:"failed"`
 	Inbox  int64 `json:"inbox"`
-	Draft  int64 `json:"draft"`
+	Draft  int64 `json:"drafts"`
 	Outbox int64 `json:"outbox"`
 	Trash  int64 `json:"trash"`
 	Spam   int64 `json:"spam"`

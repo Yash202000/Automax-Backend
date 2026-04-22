@@ -437,6 +437,8 @@ func Seed(db *gorm.DB) error {
 		// Notification permissions
 		{Name: "View Notifications", Code: "notifications:read", Module: "notifications", Action: "read", Description: "View notification logs"},
 		{Name: "Send Notifications", Code: "notifications:send", Module: "notifications", Action: "send", Description: "Send email/SMS notifications"},
+		{Name: "Create Draft Notifications", Code: "notifications:create", Module: "notifications", Action: "create", Description: "Create draft notifications"},
+		{Name: "Update Draft Notifications", Code: "notifications:update", Module: "notifications", Action: "update", Description: "Update draft notifications"},
 		{Name: "Delete Notifications", Code: "notifications:delete", Module: "notifications", Action: "delete", Description: "Delete notification logs"},
 
 		// Template permissions

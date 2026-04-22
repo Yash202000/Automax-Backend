@@ -157,7 +157,7 @@ func (h *CallLogHandler) ListCallLogs(c *fiber.Ctx) error {
 
 	filter.ParticipantID = &userID
 
-	callLogs, total, err := h.service.ListCallLogs(c.UserContext(), &filter)
+	items, total, err := h.service.ListCallLogsSummary(c.UserContext(), &filter, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -166,7 +166,7 @@ func (h *CallLogHandler) ListCallLogs(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{
 		"success":     true,
-		"data":        callLogs,
+		"data":        items,
 		"total_items": total,
 		"total_pages": totalPages,
 		"page":        filter.Page,
@@ -192,7 +192,7 @@ func (h *CallLogHandler) StartCall(c *fiber.Ctx) error {
 	var req struct {
 		CallUUID     string        `json:"call_uuid" validate:"required"`
 		Participants []interface{} `json:"participants,omitempty"`
-		InitiatorID  *uuid.UUID    `json:"initiator_id" validate:"required"`
+		InitiatorID  string        `json:"initiator_id" validate:"required"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -210,10 +210,11 @@ func (h *CallLogHandler) StartCall(c *fiber.Ctx) error {
 	// if !ok {
 	// 	return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
 	// }
-	user, err := h.userSvc.GetUserByID(c.Context(), *req.InitiatorID)
+	user, err := h.userSvc.FindByExtension(c.Context(), req.InitiatorID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "User not found")
 	}
+
 	userID := user.ID
 
 	// Resolve participant IDs from user IDs or extension IDs
@@ -259,14 +260,22 @@ func (h *CallLogHandler) EndCall(c *fiber.Ctx) error {
 	}
 
 	var req struct {
-		EndAt *time.Time `json:"end_at,omitempty"`
+		EndAt  *time.Time `json:"end_at,omitempty"`
+		Status string     `json:"status,omitempty" validate:"required"` // e.g., "completed", "missed", etc.
 	}
 
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	callLog, err := h.service.EndCall(c.UserContext(), callUUID, req.EndAt)
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	callLog, err := h.service.EndCall(c.UserContext(), callUUID, req.EndAt, req.Status)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}

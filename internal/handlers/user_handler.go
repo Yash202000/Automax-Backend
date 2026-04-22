@@ -1,12 +1,15 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
@@ -16,19 +19,24 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 type UserHandler struct {
 	userService services.UserService
 	storage     *storage.MinIOStorage
 	validator   *validator.Validate
+	redisClient *redis.Client
+	cfg         *config.Config
 }
 
-func NewUserHandler(userService services.UserService, storage *storage.MinIOStorage) *UserHandler {
+func NewUserHandler(userService services.UserService, storage *storage.MinIOStorage, redisClient *redis.Client, cfg *config.Config) *UserHandler {
 	return &UserHandler{
 		userService: userService,
 		storage:     storage,
 		validator:   validator.New(),
+		redisClient: redisClient,
+		cfg:         cfg,
 	}
 }
 
@@ -75,9 +83,20 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 		return utils.SuccessResponse(c, fiber.StatusOK, "Mobile verified. Please send OTP.", response)
 	}
 
-	response, err := h.userService.Login(c.UserContext(), &req)
+	ctx := c.UserContext()
+	identifier := c.Locals("login_user_identifier")
+	response, err := h.userService.Login(ctx, &req)
+	//response, err := h.userService.Login(c.UserContext(), &req)
 	if err != nil {
+		if id, ok := identifier.(string); ok && id != "" {
+			h.HandleLoginFailure(ctx, id)
+		}
 		return utils.ErrorResponse(c, fiber.StatusUnauthorized, err.Error())
+	}
+
+	//  LOGIN SUCCESS
+	if id, ok := identifier.(string); ok && id != "" {
+		h.HandleLoginSuccess(ctx, id)
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Login successful", response)
@@ -164,6 +183,32 @@ func (h *UserHandler) ChangePassword(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Password changed successfully", nil)
+}
+
+func (h *UserHandler) AdminResetPassword(c *fiber.Ctx) error {
+
+	adminUserID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+
+	targetUserIDStr := c.Params("userID")
+	targetUserID, err := uuid.Parse(targetUserIDStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid user ID")
+	}
+
+	var req struct {
+		NewPassword string `json:"new_password"`
+	}
+
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request")
+	}
+
+	err = h.userService.AdminResetPassword(c.UserContext(), adminUserID, targetUserID, req.NewPassword)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Password reset successfully", nil)
 }
 
 func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
@@ -704,4 +749,86 @@ func (h *UserHandler) Import(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Import completed", result)
+}
+
+func (h *UserHandler) HandleLoginFailure(ctx context.Context, user string) {
+
+	key := "login_attempts:user:" + user
+	count, err := h.redisClient.Incr(ctx, key).Result()
+	if err != nil {
+		return
+	}
+
+	// set expiry only first time
+	if count == 1 {
+		h.redisClient.Expire(ctx, key, time.Duration(h.cfg.LoginRateLimit.BlockDuration)*time.Minute)
+	}
+
+	// block user if limit reached
+	if int(count) >= h.cfg.LoginRateLimit.MaxAttempts {
+		blockKey := "login_block:user:" + user
+		h.redisClient.Set(ctx, blockKey, "1", time.Duration(h.cfg.LoginRateLimit.BlockDuration)*time.Minute)
+	}
+}
+
+func (h *UserHandler) HandleLoginSuccess(ctx context.Context, user string) {
+
+	h.redisClient.Del(ctx, "login_attempts:user:"+user)
+	h.redisClient.Del(ctx, "login_block:user:"+user)
+}
+
+func (h *UserHandler) UnblockUser(c *fiber.Ctx) error {
+
+	type Request struct {
+		Identifier string `json:"identifier"` // email OR phone
+	}
+
+	var req Request
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid request",
+		})
+	}
+
+	if req.Identifier == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Identifier is required",
+		})
+	}
+
+	//  INLINE buildLoginKey
+	identifier := strings.TrimSpace(req.Identifier)
+	var key string
+	if strings.Contains(identifier, "@") {
+		key = "email:" + strings.ToLower(identifier)
+	} else {
+		key = "phone:" + identifier
+	}
+
+	ctx := c.UserContext()
+
+	blockKey := "login_block:user:" + key
+	attemptKey := "login_attempts:user:" + key
+
+	// Check if blocked
+	blockExists, err := h.redisClient.Exists(ctx, blockKey).Result()
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Redis error",
+		})
+	}
+
+	if blockExists == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "User is not blocked",
+		})
+	}
+
+	// Delete keys
+	h.redisClient.Del(ctx, blockKey)
+	h.redisClient.Del(ctx, attemptKey)
+
+	return c.JSON(fiber.Map{
+		"message": "User unblocked successfully",
+	})
 }

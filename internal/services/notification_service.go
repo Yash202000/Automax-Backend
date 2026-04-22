@@ -85,6 +85,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 
 	status := "sent"
 	provider := channel
+	fromPhone := ""
 	var recipientStatuses models.RecipientArray
 	var attachmentInfo models.AttachmentArray
 
@@ -149,6 +150,11 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 
 		provider = "smtp"
 	case "sms":
+		if sentBy != nil {
+			if senderUser, err := s.userRepo.FindByID(ctx, *sentBy); err == nil && senderUser != nil {
+				fromPhone = senderUser.Phone
+			}
+		}
 		for _, phone := range to {
 			err := utils.SendSMS(phone, body)
 			if err != nil {
@@ -222,6 +228,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		Recipients:   recipientStatuses,
 		CC:           cc,
 		BCC:          bcc,
+		From:         fromPhone,
 		Subject:      subject,
 		Body:         body,
 		OTPSessionID: sessionID,
@@ -393,32 +400,20 @@ func (s *NotificationService) GetNotificationStats(ctx context.Context, channel 
 
 // GetNotificationStatsByUser returns merged sent+received counts for a single user.
 func (s *NotificationService) GetNotificationStatsByUser(ctx context.Context, channel string, userID uuid.UUID) (*models.NotificationStatsResponse, error) {
-	sentByRows, err := s.logRepo.GetStatsBySentBy(ctx, channel, &userID, nil)
+	row, err := s.logRepo.GetUserNotificationStats(ctx, channel, userID)
 	if err != nil {
 		return nil, err
 	}
 
-	receivedByRows, err := s.logRepo.GetStatsByReceivedBy(ctx, channel, nil, &userID)
-	if err != nil {
-		return nil, err
-	}
-
-	var counts models.NotificationUserCounts
-	// Sent side: user is the sender — owns sent status, failed status, draft/outbox/trash categories
-	for _, r := range sentByRows {
-		counts.Total += r.Total
-		counts.Sent += r.Sent
-		counts.Failed += r.Failed
-		counts.Draft += r.Draft
-		counts.Outbox += r.Outbox
-		counts.Trash += r.Trash
-	}
-	// Received side: user is the receiver — owns inbox, spam, trash categories
-	for _, r := range receivedByRows {
-		counts.Total += r.Total
-		counts.Inbox += r.Inbox
-		counts.Spam += r.Spam
-		counts.Trash += r.Trash
+	counts := models.NotificationUserCounts{
+		Total:  row.Total,
+		Sent:   row.Sent,
+		Failed: row.Failed,
+		Inbox:  row.Inbox,
+		Draft:  row.Draft,
+		Outbox: row.Outbox,
+		Trash:  row.Trash,
+		Spam:   row.Spam,
 	}
 
 	return &models.NotificationStatsResponse{

@@ -16,6 +16,7 @@ type CallLogRepository interface {
 	Update(ctx context.Context, callLog *models.CallLog) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, filter *models.CallLogFilter) ([]models.CallLog, int64, error)
+	ListSummary(ctx context.Context, filter *models.CallLogFilter) ([]models.CallLog, int64, error)
 	GetStats(ctx context.Context) (*models.CallLogStats, error)
 	FindByUserID(ctx context.Context, userID uuid.UUID, page, limit int) ([]models.CallLog, int64, error)
 }
@@ -109,6 +110,52 @@ func (r *callLogRepository) List(ctx context.Context, filter *models.CallLogFilt
 	}
 
 	return callLogs, total, nil
+}
+
+// ListSummary fetches call logs with only the columns required for the list view.
+// Creator is preloaded so the service can derive direction and other-party details.
+// Participant JSON arrays are NOT expanded here — that is done in the service layer.
+func (r *callLogRepository) ListSummary(ctx context.Context, filter *models.CallLogFilter) ([]models.CallLog, int64, error) {
+	var callLogs []models.CallLog
+	var total int64
+
+	query := r.db.WithContext(ctx).Model(&models.CallLog{})
+
+	if filter.CreatedBy != nil {
+		query = query.Where("created_by = ?", *filter.CreatedBy)
+	}
+	if filter.Status != "" {
+		query = query.Where("status = ?", filter.Status)
+	}
+	if filter.StartDate != nil {
+		query = query.Where("created_at >= ?", *filter.StartDate)
+	}
+	if filter.EndDate != nil {
+		query = query.Where("created_at <= ?", *filter.EndDate)
+	}
+	if filter.ParticipantID != nil {
+		query = query.Where(
+			"created_by = ? OR participants::jsonb @> ?::jsonb OR invited_users::jsonb @> ?::jsonb",
+			*filter.ParticipantID,
+			`["`+filter.ParticipantID.String()+`"]`,
+			`["`+filter.ParticipantID.String()+`"]`,
+		)
+	}
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	offset := (filter.Page - 1) * filter.Limit
+	err := query.
+		Select("id, call_uuid, created_by, start_at, end_at, status, participants, invited_users, meta, created_at").
+		Preload("Creator").
+		Order("created_at DESC").
+		Offset(offset).
+		Limit(filter.Limit).
+		Find(&callLogs).Error
+
+	return callLogs, total, err
 }
 
 func (r *callLogRepository) GetStats(ctx context.Context) (*models.CallLogStats, error) {

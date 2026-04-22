@@ -321,8 +321,7 @@ func (h *ClassificationHandler) Export(c *fiber.Ctx) error {
 	invalidUUID := "00000000-0000-0000-0000-000000000000"
 
 	for _, cls := range classifications {
-		if cls.ID.String() == invalidUUID ||
-			strings.Contains(cls.Path, invalidUUID) {
+		if cls.ID.String() == invalidUUID {
 			continue
 		}
 		validClassifications = append(validClassifications, cls)

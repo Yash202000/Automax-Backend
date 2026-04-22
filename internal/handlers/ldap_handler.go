@@ -61,10 +61,10 @@ type LDAPLoginResponse struct {
 
 // LDAPTestRequest represents the LDAP test connection request
 type LDAPTestRequest struct {
-	URL          string `json:"url"`
-	BaseDN       string `json:"base_dn"`
-	BindDN       string `json:"bind_dn"`
-	BindPassword string `json:"bind_password"`
+	URL            string `json:"url"`
+	BaseDN         string `json:"base_dn"`
+	BindDN         string `json:"bind_dn"`
+	BindPassword   string `json:"bind_password"`
 	UserSearchBase string `json:"user_search_base"`
 }
 
@@ -81,9 +81,9 @@ type LDAPSearchRequest struct {
 
 // LDAPSearchResponse represents the LDAP user search response
 type LDAPSearchResponse struct {
-	Found   bool                `json:"found"`
+	Found   bool                  `json:"found"`
 	User    *LDAPUserInfoResponse `json:"user,omitempty"`
-	Message string              `json:"message,omitempty"`
+	Message string                `json:"message,omitempty"`
 }
 
 // LDAPUserInfoResponse represents LDAP user info in response
@@ -166,16 +166,16 @@ func (h *LDAPHandler) Login(c *fiber.Ctx) error {
 	}
 
 	// Generate JWT tokens
-	tokenPair, err := h.jwtManager.GenerateTokenPair(user.ID, user.Email, role)
+	tokenPair, err := h.jwtManager.GenerateTokenPair(user.ID, user.Email, "", role)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to generate authentication tokens")
 	}
 
 	// Store session
 	if err := h.sessionStore.SetUserSession(c.UserContext(), user.ID.String(), map[string]interface{}{
-		"user_id": user.ID,
-		"email":   user.Email,
-		"role":    role,
+		"user_id":     user.ID,
+		"email":       user.Email,
+		"role":        role,
 		"auth_source": "ldap",
 	}, h.jwtManager.GetTokenExpiration()); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to store session")

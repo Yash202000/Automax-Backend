@@ -128,6 +128,9 @@ type UserLoginRequest struct {
 	Phone     string `json:"phone" validate:"omitempty"`
 	SessionID string `json:"session_id" validate:"omitempty"`
 	OTP       string `json:"otp" validate:"omitempty"`
+
+	// Remember me flag
+	RememberMe bool `json:"remember_me"`
 }
 
 // LoginType returns the type of login request

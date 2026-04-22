@@ -134,6 +134,7 @@ type LoginRateLimitConfig struct {
 	MaxAttempts     int
 	RateLimitWindow int // in minutes
 	BlockDuration   int // in minutes
+	BypassForAdmin  bool
 }
 
 func Load() *Config {
@@ -187,6 +188,7 @@ func Load() *Config {
 			MaxAttempts:     getEnvAsInt("MAX_LOGIN_ATTEMPTS", 5),
 			RateLimitWindow: getEnvAsInt("RATE_LIMIT_WINDOW", 5),
 			BlockDuration:   getEnvAsInt("BLOCK_DURATION", 15),
+			BypassForAdmin:  getEnvAsBool("BYPASS_RATE_LIMIT_FOR_ADMIN", true),
 		},
 		SSOPrivateKey:  getEnv("SSO_RSA_PRIVATE_KEY", ""),
 		SSOIssuerURL:   getEnv("SSO_ISSUER_URL", ""),

@@ -1417,18 +1417,24 @@ func (r *incidentRepository) GetIncidentsExceedingStateSLA(ctx context.Context) 
 	err := r.db.WithContext(ctx).
 		Select("incidents.*").
 		Joins("JOIN workflow_states ws ON incidents.current_state_id = ws.id").
-		Where("ws.sla_hours IS NOT NULL").
+		Where("ws.sla_hours IS NOT NULL AND ws.sla_hours > 0").
 		Where("ws.state_type != 'terminal'").
 		Where("ws.deleted_at IS NULL").
-		Where(`(
+		Where(`
 			EXTRACT(EPOCH FROM (NOW() - COALESCE(
 				(SELECT MAX(ith.transitioned_at)
 				 FROM incident_transition_histories ith
 				 WHERE ith.incident_id = incidents.id
 				   AND ith.to_state_id = incidents.current_state_id),
 				incidents.created_at
-			))) / 3600
-		) > ws.sla_hours`).
+			))) >
+			CASE COALESCE(ws.sla_unit, 'hours')
+				WHEN 'minutes' THEN ws.sla_hours * 60
+				WHEN 'days'    THEN ws.sla_hours * 86400
+				WHEN 'months'  THEN ws.sla_hours * 2592000
+				ELSE ws.sla_hours * 3600
+			END
+		`).
 		Preload("CurrentState").
 		Preload("Workflow").
 		Preload("Location").

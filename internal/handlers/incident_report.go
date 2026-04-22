@@ -364,15 +364,15 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 		}(),
 		func() string {
 			if l.Dir == "rtl" {
-				return "left"
+				return "right"
 			}
-			return "right"
+			return "left"
 		}(),
 		func() string {
 			if l.Dir == "rtl" {
-				return "left"
+				return "right"
 			}
-			return "right"
+			return "left"
 		}(),
 		func() string {
 			if l.Dir == "rtl" {

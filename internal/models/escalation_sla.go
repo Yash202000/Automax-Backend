@@ -39,7 +39,7 @@ type EscalationSLA struct {
 	Phone string `gorm:"size:50"  json:"phone"`
 
 	// Actions taken during the escalation
-	Actions []string `gorm:"type:text[]" json:"actions"`
+	Actions TextArray `gorm:"type:text[]" json:"actions"`
 
 	// SLA context
 	SLAHoursAllowed int     `gorm:"default:0" json:"sla_hours_allowed"` // configured SLA hours for the state

@@ -46,6 +46,7 @@ type UserRepository interface {
 	FindByDepartmentAndRole(ctx context.Context, departmentID, roleID *uuid.UUID) ([]models.User, error)
 	UpdateProfile(ctx context.Context, user map[string]interface{}) error
 	FindByPermissionCode(ctx context.Context, permissionCode string) ([]models.User, error)
+	ExistsByPhone(ctx context.Context, phone string, excludeUserID uuid.UUID) (bool, error)
 }
 
 type userRepository struct {
@@ -173,7 +174,20 @@ func (r *userRepository) FindByLast6Digits(ctx context.Context, last6Digits stri
 }
 
 func (r *userRepository) Update(ctx context.Context, user *models.User) error {
-	return r.db.WithContext(ctx).Save(user).Error
+	// Use Updates() with specific fields instead of Save() to avoid saving all loaded relations
+	// This prevents the "extended protocol limited to 65535 parameters" error
+	return r.db.WithContext(ctx).Model(&models.User{}).Where("id = ?", user.ID).Updates(map[string]interface{}{
+		"username":        user.Username,
+		"first_name":      user.FirstName,
+		"last_name":       user.LastName,
+		"phone":           user.Phone,
+		"extension":       user.Extension,
+		"password":        user.Password,
+		"mobile_verified": user.MobileVerified,
+		"is_active":       user.IsActive,
+		"department_id":   user.DepartmentID,
+		"location_id":     user.LocationID,
+	}).Error
 }
 
 func (r *userRepository) UpdateLastLogin(ctx context.Context, id uuid.UUID) error {
@@ -648,4 +662,14 @@ func (r *userRepository) FindByRoleAndContext(ctx context.Context, roleIDs []uui
 		Where("id IN ?", userIDs).
 		Find(&users).Error
 	return users, err
+}
+
+func (r *userRepository) ExistsByPhone(ctx context.Context, phone string, excludeUserID uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&models.User{}).
+		Where("phone = ? AND id != ?", phone, excludeUserID).
+		Count(&count).Error
+
+	return count > 0, err
 }
