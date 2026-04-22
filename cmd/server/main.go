@@ -137,6 +137,7 @@ func main() {
 	}
 	goalService := services.NewGoalService(goalRepo, workflowRepo, userRepo, departmentRepo, documentaClient, notificationService, actionLogService, cfg, wsHub)
 	documentService := services.NewDocumentService(documentaClient, cfg.Documenta)
+	documentAuthzService := services.NewDocumentAuthzService(db, documentaClient, cfg.Documenta)
 
 	// Ready-to-Close service
 	readyToCloseRepo := repository.NewReadyToCloseRepository(db)
@@ -206,7 +207,7 @@ func main() {
 	reviewRepo := repository.NewReviewRepository(db)
 	reviewService := services.NewReviewService(reviewRepo, goalRepo)
 	reviewHandler := handlers.NewReviewHandler(reviewService)
-	documentHandler := handlers.NewDocumentHandler(documentService)
+	documentHandler := handlers.NewDocumentHandler(documentService, documentAuthzService, cfg.Documenta.WorkspaceName)
 
 	// Goal Templates
 	goalTemplateRepo := repository.NewGoalTemplateRepository(db)
@@ -882,7 +883,7 @@ func main() {
 	docs.Get("/files/:id/info", authMiddleware.RequirePermission("goals:view"), documentHandler.GetFileInfo)
 	docs.Get("/files/:id/breadcrumb", authMiddleware.RequirePermission("goals:view"), documentHandler.GetFileBreadcrumb)
 	docs.Get("/files/:id/preview", authMiddleware.RequirePermission("goals:view"), documentHandler.GetPreviewURL)
-	docs.Get("/files/:id/download", authMiddleware.RequirePermission("goals:view"), documentHandler.GetDownloadURL)
+	docs.Get("/files/:id/download", authMiddleware.RequirePermission("goals:view"), documentHandler.DownloadFile)
 	docs.Get("/files/:id/comments", authMiddleware.RequirePermission("goals:view"), documentHandler.GetComments)
 	docs.Post("/files/:id/comments", authMiddleware.RequirePermission("goals:update"), documentHandler.AddComment)
 	docs.Get("/files/:id/tags", authMiddleware.RequirePermission("goals:view"), documentHandler.GetTags)

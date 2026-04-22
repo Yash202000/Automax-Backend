@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log"
@@ -55,6 +56,19 @@ func (s *StubDocumentaClient) GetDownloadURL(ctx context.Context, fileID string)
 	url := "https://documenta.stub/download/" + fileID
 	log.Printf("[DOCUMENTA STUB] GetDownloadURL: fileID=%s → %s", fileID, url)
 	return url, nil
+}
+
+func (s *StubDocumentaClient) DownloadFile(ctx context.Context, fileID string) (io.ReadCloser, *DmsFile, error) {
+	log.Printf("[DOCUMENTA STUB] DownloadFile: fileID=%s", fileID)
+	content := []byte("stub content for " + fileID)
+	info := &DmsFile{
+		UUID:     fileID,
+		Name:     "stub-file.txt",
+		Type:     "file",
+		Size:     int64(len(content)),
+		MimeType: "text/plain",
+	}
+	return io.NopCloser(bytes.NewReader(content)), info, nil
 }
 
 func (s *StubDocumentaClient) UpdateMetadata(ctx context.Context, fileID string, metadata map[string]string) error {

@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -407,6 +409,47 @@ func (c *httpDocumentaClient) GetPreviewURL(ctx context.Context, fileID string) 
 
 func (c *httpDocumentaClient) GetDownloadURL(ctx context.Context, fileID string) (string, error) {
 	return fmt.Sprintf("/api/v1/documents/files/%s/download", fileID), nil
+}
+
+// DownloadFile streams the raw bytes of a file from MyDocs GET /api/v1/files/{uuid}.
+// That endpoint returns the file content (not JSON) with Content-Type,
+// Content-Disposition and Content-Length headers set by MyDocs. The caller owns
+// the returned reader and must Close it.
+func (c *httpDocumentaClient) DownloadFile(ctx context.Context, fileID string) (io.ReadCloser, *DmsFile, error) {
+	if fileID == "" {
+		return nil, nil, fmt.Errorf("documenta: download file: empty fileID")
+	}
+	resp, err := c.doRequest(ctx, http.MethodGet, "/files/"+fileID, nil, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, nil, fmt.Errorf("documenta: download file failed (%d): %s", resp.StatusCode, string(body))
+	}
+
+	// Pull metadata from the response headers. MyDocs sets Content-Type,
+	// Content-Length and Content-Disposition: attachment; filename="..." on this
+	// endpoint — see mydocs/gateway/rest/server.go handleGetFile.
+	info := &DmsFile{
+		UUID:     fileID,
+		Type:     "file",
+		MimeType: resp.Header.Get("Content-Type"),
+	}
+	if cl := resp.Header.Get("Content-Length"); cl != "" {
+		if n, perr := strconv.ParseInt(cl, 10, 64); perr == nil {
+			info.Size = n
+		}
+	}
+	if cd := resp.Header.Get("Content-Disposition"); cd != "" {
+		if _, params, perr := mime.ParseMediaType(cd); perr == nil {
+			if fn := params["filename"]; fn != "" {
+				info.Name = fn
+			}
+		}
+	}
+	return resp.Body, info, nil
 }
 
 func (c *httpDocumentaClient) UpdateMetadata(ctx context.Context, fileID string, metadata map[string]string) error {

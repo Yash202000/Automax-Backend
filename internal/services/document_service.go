@@ -21,6 +21,9 @@ type DocumentService interface {
 	GetFileBreadcrumb(ctx context.Context, fileID string, userEmail string) ([]storage.DmsBreadcrumbEntry, error)
 	GetPreviewURL(ctx context.Context, fileID string, userEmail string) (string, error)
 	GetDownloadURL(ctx context.Context, fileID string, userEmail string) (string, error)
+	// DownloadFile streams the raw bytes of a DMS file. Caller owns the returned
+	// reader and must Close it.
+	DownloadFile(ctx context.Context, fileID string, userEmail string) (io.ReadCloser, *storage.DmsFile, error)
 	GetComments(ctx context.Context, fileID string, userEmail string) ([]storage.DmsComment, error)
 	AddComment(ctx context.Context, fileID string, content string, userEmail string) error
 	GetTags(ctx context.Context, fileID string, userEmail string) (map[string]string, error)
@@ -105,6 +108,14 @@ func (s *documentService) GetDownloadURL(ctx context.Context, fileID string, use
 		return "", fmt.Errorf("get download url: %w", err)
 	}
 	return url, nil
+}
+
+func (s *documentService) DownloadFile(ctx context.Context, fileID string, userEmail string) (io.ReadCloser, *storage.DmsFile, error) {
+	reader, info, err := s.client.DownloadFile(s.withUser(ctx, userEmail), fileID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("download file: %w", err)
+	}
+	return reader, info, nil
 }
 
 func (s *documentService) GetComments(ctx context.Context, fileID string, userEmail string) ([]storage.DmsComment, error) {

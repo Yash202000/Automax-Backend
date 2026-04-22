@@ -92,6 +92,11 @@ type DocumentaClient interface {
 	// GetDownloadURL returns a URL that can be used to download a file.
 	GetDownloadURL(ctx context.Context, fileID string) (downloadURL string, err error)
 
+	// DownloadFile streams the raw bytes of a file from MyDocs. Returns the
+	// response body (caller must Close), and file metadata (name, mime type, size)
+	// so the caller can set Content-Disposition / Content-Type correctly.
+	DownloadFile(ctx context.Context, fileID string) (io.ReadCloser, *DmsFile, error)
+
 	// UpdateMetadata updates the metadata tags on a file in Documenta.
 	UpdateMetadata(ctx context.Context, fileID string, metadata map[string]string) error
 
