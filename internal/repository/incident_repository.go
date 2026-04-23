@@ -431,6 +431,7 @@ func (r *incidentRepository) GetTransitionHistory(ctx context.Context, incidentI
 		Preload("FromState").
 		Preload("ToState").
 		Preload("PerformedBy").
+		Preload("PerformedBy.Departments").
 		Where("incident_id = ?", incidentID).
 		Order("transitioned_at DESC").
 		Find(&history).Error
@@ -494,6 +495,7 @@ func (r *incidentRepository) ListAttachments(ctx context.Context, incidentID uui
 	err := r.db.WithContext(ctx).
 		Preload("UploadedBy").
 		Preload("UploadedBy.Roles").
+		Preload("UploadedBy.Departments").
 		Where("incident_id = ?", incidentID).
 		Order("created_at DESC").
 		Find(&attachments).Error
@@ -1257,6 +1259,7 @@ func (r *incidentRepository) ListRevisions(ctx context.Context, filter *models.I
 	err := query.
 		Preload("PerformedBy").
 		Preload("PerformedBy.Roles").
+		Preload("PerformedBy.Departments").
 		Preload("TransitionHistory").
 		Preload("TransitionHistory.Transition").
 		Preload("TransitionHistory.FromState").
