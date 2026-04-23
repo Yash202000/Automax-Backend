@@ -527,10 +527,18 @@ func (r *reportRepository) ExecuteRequestQuery(ctx context.Context, filters []mo
 				"classifications.name as classification_name, " +
 				"locations.name as location_name, " +
 				"incidents.title as title, " +
+				// Conditional: if source_incident_id IS NULL → fetch reporter's role, else mark as converted
+				"CASE " +
+				"  WHEN incidents.source_incident_id IS NULL THEN roles.name " +
+				"  ELSE 'Converted from Incident' " +
+				"END as request_source, " +
 				"incidents.created_at as created_at").
 		Joins("LEFT JOIN users as reporters ON incidents.reporter_id = reporters.id").
 		Joins("LEFT JOIN classifications ON incidents.classification_id = classifications.id").
 		Joins("LEFT JOIN locations ON incidents.location_id = locations.id").
+		// Join user_roles and roles only for reporter
+		Joins("LEFT JOIN user_roles ON user_roles.user_id = reporters.id").
+		Joins("LEFT JOIN roles ON roles.id = user_roles.role_id AND roles.deleted_at IS NULL AND roles.is_active = true").
 		Offset(offset).
 		Limit(limit).
 		Rows()
