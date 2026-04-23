@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -15,12 +16,12 @@ import (
 
 type mockActionLogService struct {
 	services.ActionLogService
-	logActionFunc       func(ctx context.Context, params *services.LogActionParams) error
-	getActionLogFunc    func(ctx context.Context, id uuid.UUID) (*models.ActionLogResponse, error)
-	listLogsFunc        func(ctx context.Context, filter *models.ActionLogFilter) ([]models.ActionLogResponse, int64, error)
-	getStatsFunc        func(ctx context.Context) (*models.ActionLogStats, error)
+	logActionFunc        func(ctx context.Context, params *services.LogActionParams) error
+	getActionLogFunc     func(ctx context.Context, id uuid.UUID) (*models.ActionLogResponse, error)
+	listLogsFunc         func(ctx context.Context, filter *models.ActionLogFilter) ([]models.ActionLogResponse, int64, error)
+	getStatsFunc         func(ctx context.Context) (*models.ActionLogStats, error)
 	getFilterOptionsFunc func(ctx context.Context) (*services.FilterOptions, error)
-	getUserActionsFunc  func(ctx context.Context, userID uuid.UUID, page, limit int) ([]models.ActionLogResponse, int64, error)
+	getUserActionsFunc   func(ctx context.Context, userID uuid.UUID, page, limit int) ([]models.ActionLogResponse, int64, error)
 }
 
 func (m *mockActionLogService) LogAction(ctx context.Context, params *services.LogActionParams) error {
@@ -39,6 +40,7 @@ func (m *mockActionLogService) GetActionLog(ctx context.Context, id uuid.UUID) (
 
 func (m *mockActionLogService) ListActionLogs(ctx context.Context, filter *models.ActionLogFilter) ([]models.ActionLogResponse, int64, error) {
 	if m.listLogsFunc != nil {
+		fmt.Println("")
 		return m.listLogsFunc(ctx, filter)
 	}
 	return []models.ActionLogResponse{}, 0, nil
@@ -167,7 +169,7 @@ func TestActionLogHandler(t *testing.T) {
 	t.Run("GetStats_Success", func(t *testing.T) {
 		mSvc.getStatsFunc = func(ctx context.Context) (*models.ActionLogStats, error) {
 			return &models.ActionLogStats{
-				TotalActions: 100,
+				TotalActions:    100,
 				ActionsByModule: map[string]int64{"users": 50, "incidents": 50},
 			}, nil
 		}
@@ -186,7 +188,7 @@ func TestActionLogHandler(t *testing.T) {
 		mSvc.getFilterOptionsFunc = func(ctx context.Context) (*services.FilterOptions, error) {
 			return &services.FilterOptions{
 				Modules: []string{"users", "incidents"},
-				Actions:  []string{"create", "update", "delete"},
+				Actions: []string{"create", "update", "delete"},
 			}, nil
 		}
 
