@@ -89,6 +89,8 @@ func Migrate(db *gorm.DB) error {
 		&models.TransitionRequirement{},
 		&models.TransitionAction{},
 		&models.TransitionFieldChange{},
+		&models.CommentTemplate{},
+		&models.FeedbackTemplate{},
 		// Incident models
 		&models.Incident{},
 		&models.IncidentComment{},
