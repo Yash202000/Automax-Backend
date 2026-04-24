@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"strconv"
@@ -56,6 +57,7 @@ type GoalService interface {
 	GetEvidence(ctx context.Context, id uuid.UUID) (*models.EvidenceResponse, error)
 	GetEvidencePreview(ctx context.Context, evidenceID uuid.UUID) (string, error)
 	GetEvidenceDownloadURL(ctx context.Context, evidenceID uuid.UUID) (string, error)
+	DownloadEvidenceFile(ctx context.Context, evidenceID uuid.UUID) (io.ReadCloser, *storage.DmsFile, string, string, error)
 	ReplaceEvidenceFile(ctx context.Context, evidenceID uuid.UUID, fileName string, fileSize int64, mimeType string, fileData []byte, userID uuid.UUID) (*models.EvidenceResponse, error)
 
 	// Evidence Workflow Transitions
@@ -388,6 +390,22 @@ func (s *goalService) CreateGoal(ctx context.Context, req *models.GoalCreateRequ
 	}
 	if err := s.goalRepo.Update(ctx, goal); err != nil {
 		return nil, fmt.Errorf("failed to set goal path: %w", err)
+	}
+
+	// Add the creator as a collaborator when they are not the owner. If
+	// an admin/manager creates a goal on someone else's behalf they still
+	// need access to the goal they authored; adding them as a collaborator
+	// (not duplicating them when they are already the owner) preserves the
+	// owner-vs-collaborator distinction without losing audit/access.
+	if userID != req.OwnerID {
+		collab := &models.GoalCollaborator{
+			GoalID: goal.ID,
+			UserID: userID,
+			Role:   "collaborator",
+		}
+		if err := s.goalRepo.AddCollaborator(ctx, collab); err != nil {
+			log.Printf("[goal_service] CreateGoal: failed to add creator %s as collaborator on goal %s: %v", userID, goal.ID, err)
+		}
 	}
 
 	// Audit log
@@ -2030,6 +2048,41 @@ func (s *goalService) GetEvidenceDownloadURL(ctx context.Context, evidenceID uui
 	}
 
 	return downloadURL, nil
+}
+
+// DownloadEvidenceFile proxies the evidence bytes from Documenta through the
+// Automax backend. Returns the body reader plus the DmsFile metadata, a best-
+// guess content type, and a filename for Content-Disposition. The caller owns
+// the reader and must Close it.
+//
+// Replaces the redirect-based flow in GetEvidenceDownloadURL so the HTTP
+// handler can stream bytes back to the client directly — this keeps downloads
+// working under deployments that use a path prefix (VITE_BASE_PATH) where a
+// root-relative 307 Location header would resolve to the wrong URL.
+func (s *goalService) DownloadEvidenceFile(ctx context.Context, evidenceID uuid.UUID) (io.ReadCloser, *storage.DmsFile, string, string, error) {
+	evidence, err := s.goalRepo.FindEvidenceByID(ctx, evidenceID)
+	if err != nil {
+		return nil, nil, "", "", fmt.Errorf("evidence not found: %w", err)
+	}
+
+	reader, info, err := s.documentaClient.DownloadFile(ctx, evidence.DocumentaFileID)
+	if err != nil {
+		return nil, nil, "", "", fmt.Errorf("failed to download evidence: %w", err)
+	}
+
+	contentType := ""
+	if info != nil && info.MimeType != "" {
+		contentType = info.MimeType
+	} else if evidence.MimeType != "" {
+		contentType = evidence.MimeType
+	}
+
+	filename := evidence.FileName
+	if filename == "" && info != nil {
+		filename = info.Name
+	}
+
+	return reader, info, contentType, filename, nil
 }
 
 // ──────────────────────────────────────────────────

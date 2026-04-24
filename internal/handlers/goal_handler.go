@@ -212,9 +212,12 @@ func (h *GoalHandler) ListGoals(c *fiber.Ctx) error {
 		filter.Limit = 20
 	}
 
-	// Apply user-scoped filtering (super admins see all)
+	// Apply user-scoped filtering (super admins see all by default).
+	// scope=mine is a UX-level narrowing for the "My Goals" view; it must
+	// apply to every caller including super admins, so set UserID unconditionally
+	// when scope=mine is requested.
 	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
-	if user == nil || !user.IsSuperAdmin {
+	if filter.Scope == "mine" || user == nil || !user.IsSuperAdmin {
 		userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 		filter.UserID = &userID
 	}
@@ -631,18 +634,49 @@ func (h *GoalHandler) GetEvidencePreview(c *fiber.Ctx) error {
 	})
 }
 
+// DownloadEvidence streams the evidence file bytes back to the caller.
+//
+// Previously this issued a 307 redirect to the Documenta-relative path
+// "/api/v1/documents/files/<uuid>/download". That breaks any deployment
+// where Automax is served under a path prefix (e.g. VITE_BASE_PATH=/ax3/
+// with nginx proxying /ax3/api/v1/*): the Location header has no awareness
+// of the caller's base path, so the browser resolves it against the origin
+// root and hits a 404. Streaming bytes through this handler avoids the
+// path-sensitive redirect entirely.
 func (h *GoalHandler) DownloadEvidence(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	url, err := h.service.GetEvidenceDownloadURL(c.UserContext(), id)
+	reader, info, contentType, filename, err := h.service.DownloadEvidenceFile(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Evidence download not available")
 	}
 
-	return c.Redirect(url, fiber.StatusTemporaryRedirect)
+	// Buffer the body before returning because Fiber's c.SendStream runs
+	// after the handler returns, so a deferred reader.Close would truncate
+	// the response. Evidence files are typical doc sizes; buffering is safe.
+	payload, readErr := io.ReadAll(reader)
+	reader.Close()
+	if readErr != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read evidence bytes: "+readErr.Error())
+	}
+
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	if filename == "" {
+		if info != nil && info.Name != "" {
+			filename = info.Name
+		} else {
+			filename = id.String()
+		}
+	}
+
+	c.Set("Content-Type", contentType)
+	c.Set("Content-Disposition", "attachment; filename=\""+filename+"\"")
+	return c.Send(payload)
 }
 
 // ──────────────────────────────────────────────────
