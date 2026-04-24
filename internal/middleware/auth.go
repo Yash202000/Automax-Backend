@@ -81,7 +81,6 @@ func (m *AuthMiddleware) Authenticate() fiber.Handler {
 		ctx = context.WithValue(ctx, constants.ContextKeys.Token, token)
 		ctx = context.WithValue(ctx, constants.ContextKeys.IP_ADDRESS, ipAddress)
 		ctx = context.WithValue(ctx, constants.ContextKeys.USER_AGENT, userAgent)
-		c.SetUserContext(ctx)
 		// Fetch user details to get the name for presence tracking
 		user, err := m.userRepo.FindByID(ctx, claims.UserID)
 		if err == nil && user != nil {
@@ -91,8 +90,11 @@ func (m *AuthMiddleware) Authenticate() fiber.Handler {
 				userName = user.Username
 			}
 			c.Locals(constants.ContextKeys.UserName, userName)
+			ctx = context.WithValue(ctx, constants.ContextKeys.UserName, userName)
+
 		}
 
+		c.SetUserContext(ctx)
 		return c.Next()
 	}
 }

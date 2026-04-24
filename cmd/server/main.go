@@ -88,6 +88,8 @@ func main() {
 	callerSentimentRepo := repository.NewCallerSentimentRepo(db)
 	goalRepo := repository.NewGoalRepository(db)
 	aiQualityFeedbackRepo := repository.NewAIQualityFeedbackRepository(db)
+	feedbackTemplateRepo := repository.NewFeedbackTemplateRepository(db)
+	commentTemplateRepo := repository.NewCommentTemplateRepository(db)
 
 	// Initialize WebSocket hub and start it
 	wsHub := services.NewWSHub()
@@ -125,6 +127,8 @@ func main() {
 	escalationGroupService.SetPolicyService(escalationPolicyService)
 	fcmService := services.NewFCMService(repository.NewDeviceTokenRepository(db), notificationLogRepo)
 	callerSentimentService := services.NewCallerSentimentService(callerSentimentRepo)
+	feedbackTemplateService := services.NewFeedbackTemplateService(feedbackTemplateRepo)
+	commentTemplateService := services.NewCommentTemplateService(commentTemplateRepo)
 
 	// Goal management services
 	var documentaClient storage.DocumentaClient
@@ -196,6 +200,8 @@ func main() {
 	escalationHandler := handlers.NewEscalationHandler(escalationService)
 	escalationGroupHandler := handlers.NewEscalationGroupHandler(escalationGroupService)
 	escalationPolicyHandler := handlers.NewEscalationPolicyHandler(escalationPolicyService, userRepo, departmentRepo)
+	feedbackTemplateHandler := handlers.NewFeedbackTemplateHandler(feedbackTemplateService)
+	commentTemplateHandler := handlers.NewCommentTemplateHandler(commentTemplateService)
 	rejectionLogHandler := handlers.NewRejectionLogHandler(rejectionLogRepo)
 	incidentFeedbackHandler := handlers.NewIncidentFeedbackHandler(incidentRepo)
 	aiQualityFeedbackHandler := handlers.NewAIQualityFeedbackHandler(aiQualityFeedbackRepo, incidentService, userRepo)
@@ -608,6 +614,31 @@ func main() {
 	transitions.Put("/:id/requirements", authMiddleware.RequirePermission("workflows:update"), workflowHandler.SetTransitionRequirements)
 	transitions.Put("/:id/actions", authMiddleware.RequirePermission("workflows:update"), workflowHandler.SetTransitionActions)
 	transitions.Put("/:id/field-changes", authMiddleware.RequirePermission("workflows:update"), workflowHandler.SetTransitionFieldChanges)
+
+	// Comment Template routes (with action logging)
+	commentTemplates := admin.Group("/comment-templates", middleware.ActionLogger(middleware.ActionLoggerConfig{
+		Enabled:     true,
+		LogService:  actionLogService,
+		SkipMethods: []string{"GET"},
+	}))
+	commentTemplates.Post("/", authMiddleware.RequirePermission("workflows:update"), commentTemplateHandler.Create)
+	commentTemplates.Get("/", authMiddleware.RequirePermission("workflows:view"), commentTemplateHandler.List)
+	commentTemplates.Get("/workflow-transition/:workflowTransitionId", authMiddleware.RequirePermission("workflows:view"), commentTemplateHandler.GetByWorkflowTransitionID)
+	commentTemplates.Get("/:id", authMiddleware.RequirePermission("workflows:view"), commentTemplateHandler.GetByID)
+	commentTemplates.Put("/:id", authMiddleware.RequirePermission("workflows:update"), commentTemplateHandler.Update)
+	commentTemplates.Delete("/:id", authMiddleware.RequirePermission("workflows:update"), commentTemplateHandler.Delete)
+
+	feedbackTemplates := admin.Group("/feedback-templates", middleware.ActionLogger(middleware.ActionLoggerConfig{
+		Enabled:     true,
+		LogService:  actionLogService,
+		SkipMethods: []string{"GET"},
+	}))
+	feedbackTemplates.Post("/", authMiddleware.RequirePermission("workflows:update"), feedbackTemplateHandler.Create)
+	feedbackTemplates.Get("/", authMiddleware.RequirePermission("workflows:view"), feedbackTemplateHandler.List)
+	feedbackTemplates.Get("/workflow-transition/:workflowTransitionId", authMiddleware.RequirePermission("workflows:view"), feedbackTemplateHandler.GetByWorkflowTransitionID)
+	feedbackTemplates.Get("/:id", authMiddleware.RequirePermission("workflows:view"), feedbackTemplateHandler.GetByID)
+	feedbackTemplates.Put("/:id", authMiddleware.RequirePermission("workflows:update"), feedbackTemplateHandler.Update)
+	feedbackTemplates.Delete("/:id", authMiddleware.RequirePermission("workflows:update"), feedbackTemplateHandler.Delete)
 
 	// Rejection Log routes (admin-level reporting)
 	rejectionLogs := admin.Group("/rejection-logs")
