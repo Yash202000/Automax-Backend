@@ -185,6 +185,14 @@ func (r *goalRepository) List(ctx context.Context, filter *models.GoalFilter) ([
 			*filter.UserID, *filter.UserID, *filter.UserID,
 		)
 	}
+	// scope=mine narrows the listing to owner-or-collaborator, ignoring
+	// department-wide visibility. Used by the "My Goals" view.
+	if filter.Scope == "mine" && filter.UserID != nil {
+		query = query.Where(
+			"owner_id = ? OR id IN (SELECT goal_id FROM goal_collaborators WHERE user_id = ?)",
+			*filter.UserID, *filter.UserID,
+		)
+	}
 
 	// Count total
 	if err := query.Count(&total).Error; err != nil {

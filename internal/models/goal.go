@@ -488,6 +488,10 @@ type GoalFilter struct {
 	TargetTo     *time.Time `query:"target_to"`
 	SortBy       string     `query:"sort_by"`
 	SortOrder    string     `query:"sort_order"`
+	// Scope restricts the listing. "mine" returns goals where the caller is
+	// the owner or a collaborator. Any other value (including empty) returns
+	// the full set subject to other filters.
+	Scope        string     `query:"scope"`
 	UserID       *uuid.UUID `query:"-"` // Set by handler, not from query params
 }
 

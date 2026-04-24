@@ -392,6 +392,22 @@ func (s *goalService) CreateGoal(ctx context.Context, req *models.GoalCreateRequ
 		return nil, fmt.Errorf("failed to set goal path: %w", err)
 	}
 
+	// Add the creator as a collaborator when they are not the owner. If
+	// an admin/manager creates a goal on someone else's behalf they still
+	// need access to the goal they authored; adding them as a collaborator
+	// (not duplicating them when they are already the owner) preserves the
+	// owner-vs-collaborator distinction without losing audit/access.
+	if userID != req.OwnerID {
+		collab := &models.GoalCollaborator{
+			GoalID: goal.ID,
+			UserID: userID,
+			Role:   "collaborator",
+		}
+		if err := s.goalRepo.AddCollaborator(ctx, collab); err != nil {
+			log.Printf("[goal_service] CreateGoal: failed to add creator %s as collaborator on goal %s: %v", userID, goal.ID, err)
+		}
+	}
+
 	// Audit log
 	s.actionLogService.LogAction(ctx, &LogActionParams{
 		UserID:      userID,
