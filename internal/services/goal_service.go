@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"strconv"
@@ -56,6 +57,7 @@ type GoalService interface {
 	GetEvidence(ctx context.Context, id uuid.UUID) (*models.EvidenceResponse, error)
 	GetEvidencePreview(ctx context.Context, evidenceID uuid.UUID) (string, error)
 	GetEvidenceDownloadURL(ctx context.Context, evidenceID uuid.UUID) (string, error)
+	DownloadEvidenceFile(ctx context.Context, evidenceID uuid.UUID) (io.ReadCloser, *storage.DmsFile, string, string, error)
 	ReplaceEvidenceFile(ctx context.Context, evidenceID uuid.UUID, fileName string, fileSize int64, mimeType string, fileData []byte, userID uuid.UUID) (*models.EvidenceResponse, error)
 
 	// Evidence Workflow Transitions
@@ -2030,6 +2032,41 @@ func (s *goalService) GetEvidenceDownloadURL(ctx context.Context, evidenceID uui
 	}
 
 	return downloadURL, nil
+}
+
+// DownloadEvidenceFile proxies the evidence bytes from Documenta through the
+// Automax backend. Returns the body reader plus the DmsFile metadata, a best-
+// guess content type, and a filename for Content-Disposition. The caller owns
+// the reader and must Close it.
+//
+// Replaces the redirect-based flow in GetEvidenceDownloadURL so the HTTP
+// handler can stream bytes back to the client directly — this keeps downloads
+// working under deployments that use a path prefix (VITE_BASE_PATH) where a
+// root-relative 307 Location header would resolve to the wrong URL.
+func (s *goalService) DownloadEvidenceFile(ctx context.Context, evidenceID uuid.UUID) (io.ReadCloser, *storage.DmsFile, string, string, error) {
+	evidence, err := s.goalRepo.FindEvidenceByID(ctx, evidenceID)
+	if err != nil {
+		return nil, nil, "", "", fmt.Errorf("evidence not found: %w", err)
+	}
+
+	reader, info, err := s.documentaClient.DownloadFile(ctx, evidence.DocumentaFileID)
+	if err != nil {
+		return nil, nil, "", "", fmt.Errorf("failed to download evidence: %w", err)
+	}
+
+	contentType := ""
+	if info != nil && info.MimeType != "" {
+		contentType = info.MimeType
+	} else if evidence.MimeType != "" {
+		contentType = evidence.MimeType
+	}
+
+	filename := evidence.FileName
+	if filename == "" && info != nil {
+		filename = info.Name
+	}
+
+	return reader, info, contentType, filename, nil
 }
 
 // ──────────────────────────────────────────────────
