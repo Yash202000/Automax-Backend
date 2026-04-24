@@ -212,9 +212,12 @@ func (h *GoalHandler) ListGoals(c *fiber.Ctx) error {
 		filter.Limit = 20
 	}
 
-	// Apply user-scoped filtering (super admins see all)
+	// Apply user-scoped filtering (super admins see all by default).
+	// scope=mine is a UX-level narrowing for the "My Goals" view; it must
+	// apply to every caller including super admins, so set UserID unconditionally
+	// when scope=mine is requested.
 	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
-	if user == nil || !user.IsSuperAdmin {
+	if filter.Scope == "mine" || user == nil || !user.IsSuperAdmin {
 		userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 		filter.UserID = &userID
 	}
