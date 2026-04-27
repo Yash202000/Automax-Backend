@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -831,4 +832,68 @@ func (h *UserHandler) UnblockUser(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"message": "User unblocked successfully",
 	})
+}
+
+func (h *UserHandler) ForgotPassword(c *fiber.Ctx) error {
+	var req models.ForgotPasswordRequest
+
+	// Parse request
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, 400, "invalid request body")
+	}
+	if strings.TrimSpace(req.Value) == "" || strings.TrimSpace(req.Channel) == "" {
+		return utils.ErrorResponse(c, 400, "channel and value are required")
+	}
+	sessionID, err := h.userService.ForgotPassword(c.UserContext(), &req)
+	if err != nil {
+		log.Println("ForgotPassword ERROR:", err)
+		return utils.ErrorResponse(c, 500, "failed to send OTP")
+	}
+
+	return utils.SuccessResponse(c, 200, "OTP sent", fiber.Map{
+		"sessionID": sessionID, // may be empty if user not found
+	})
+}
+
+func (h *UserHandler) VerifyOTPForReset(c *fiber.Ctx) error {
+	var req models.VerifyOTPRequest
+
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, 400, "invalid request")
+	}
+
+	resetToken, err := h.userService.VerifyOTPForReset(c.UserContext(), &req)
+	if err != nil {
+		return utils.ErrorResponse(c, 400, err.Error())
+	}
+
+	return utils.SuccessResponse(c, 200, "OTP verified", fiber.Map{
+		"resetToken": resetToken,
+	})
+}
+
+func (h *UserHandler) ResetPassword(c *fiber.Ctx) error {
+	var req struct {
+		ResetToken  string `json:"resetToken"`
+		NewPassword string `json:"newPassword"`
+	}
+
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, 400, "invalid request")
+	}
+
+	if req.ResetToken == "" || req.NewPassword == "" {
+		return utils.ErrorResponse(c, 400, "missing required fields")
+	}
+
+	err := h.userService.ResetPassword(
+		c.UserContext(),
+		req.ResetToken,
+		req.NewPassword,
+	)
+	if err != nil {
+		return utils.ErrorResponse(c, 400, err.Error())
+	}
+
+	return utils.SuccessResponse(c, 200, "password reset successful", nil)
 }

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 	"mime/multipart"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,7 +18,11 @@ import (
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/redis/go-redis/v9"
+
 	"github.com/automax/backend/pkg/utils"
+
+	intutils "github.com/automax/backend/internal/utils"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -46,6 +52,9 @@ type UserService interface {
 	ValidateMobileForLogin(ctx context.Context, phone string) (*models.UserResponse, error)
 	SetLicenseService(ls LicenseService, lr repository.LicenseRepository)
 	AdminResetPassword(ctx context.Context, adminID, targetUserID uuid.UUID, newPassword string) error
+	ForgotPassword(ctx context.Context, req *models.ForgotPasswordRequest) (string, error)
+	VerifyOTPForReset(ctx context.Context, req *models.VerifyOTPRequest) (string, error)
+	ResetPassword(ctx context.Context, resetToken, newPassword string) error
 }
 
 type userService struct {
@@ -59,6 +68,7 @@ type userService struct {
 	otpService       *OTPService
 	licenseService   LicenseService
 	licenseRepo      repository.LicenseRepository
+	redis            *redis.Client
 }
 
 // SetLicenseService injects the license service (post-construction to avoid circular deps).
@@ -76,6 +86,7 @@ func NewUserService(
 	cfg *config.Config,
 	actionLogService ActionLogService,
 	otpService *OTPService,
+	redis *redis.Client,
 ) UserService {
 	return &userService{
 		userRepo:         userRepo,
@@ -86,6 +97,7 @@ func NewUserService(
 		config:           cfg,
 		actionLogService: actionLogService,
 		otpService:       otpService,
+		redis:            redis,
 	}
 }
 
@@ -1646,4 +1658,185 @@ func equalUUIDSlices(a, b []uuid.UUID) bool {
 	}
 
 	return true
+}
+
+func (s *userService) ForgotPassword(ctx context.Context, req *models.ForgotPasswordRequest) (string, error) {
+	var user *models.User
+
+	channel := strings.ToLower(strings.TrimSpace(req.Channel))
+	value := strings.TrimSpace(req.Value)
+	// channel check
+	if channel == "email" {
+		user, _ = s.userRepo.FindByEmail(ctx, value)
+	} else {
+		user, _ = s.userRepo.FindByMobile(ctx, value)
+	}
+	if user == nil {
+		return "", nil
+	}
+
+	//Generate OTP
+	otp, err := s.otpService.GenerateOTP()
+	if err != nil {
+		return "", err
+	}
+	sessionID := uuid.New().String()
+	//Send OTP
+	if channel == "email" {
+		err = s.SendEmailOTP(value, otp)
+	} else {
+		err = s.SendSMSOTP(value, otp)
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to send OTP: %w", err)
+	}
+
+	if err != nil {
+		return "", err
+	}
+	//Store OTP in Redis
+	key := fmt.Sprintf("otp:%s:%s:%s", channel, value, sessionID)
+	data := map[string]interface{}{
+		"value":     value,
+		"otp":       HashOTP(otp),
+		"channel":   channel,
+		"attempts":  0,
+		"createdAt": time.Now(),
+	}
+
+	jsonData, _ := json.Marshal(data)
+	err = s.redis.Set(ctx, key, jsonData, 5*time.Minute).Err()
+	if err != nil {
+		return "", err
+	}
+	return sessionID, nil
+}
+
+func (s *userService) SendSMSOTP(phone, otp string) error {
+
+	if !strings.HasPrefix(phone, "+") {
+		return fmt.Errorf("phone must include country code")
+	}
+	message := fmt.Sprintf("Your OTP is %s. It is valid for 5 minutes.", otp)
+	return intutils.SendSMS(phone, message)
+}
+
+func (s *userService) SendEmailOTP(toEmail, otp string) error {
+	toEmail = strings.TrimSpace(toEmail)
+	if toEmail == "" {
+		return fmt.Errorf("empty email address")
+	}
+
+	if !strings.Contains(toEmail, "@") {
+		return fmt.Errorf("invalid email format: %s", toEmail)
+	}
+	subject := "Your OTP for Password Reset"
+	// HTML body (avoid leading spaces/newlines issues)
+	body := fmt.Sprintf(
+		"<html><body>"+
+			"<h2>OTP Verification</h2>"+
+			"<p>Your OTP is:</p>"+
+			"<h1>%s</h1>"+
+			"<p>This OTP is valid for 5 minutes.</p>"+
+			"</body></html>",
+		otp,
+	)
+
+	to := []string{toEmail}
+
+	_, err := intutils.SendSMTPWithCCBCC(to, nil, nil, subject, body, nil)
+	// Logging
+	if err != nil {
+		log.Println("SMTP ERROR:", err)
+		return err
+	}
+
+	log.Println("Email sent successfully")
+	return nil
+}
+
+func (s *userService) VerifyOTPForReset(ctx context.Context, req *models.VerifyOTPRequest) (string, error) {
+
+	channel := strings.ToLower(strings.TrimSpace(req.Channel))
+	value := strings.TrimSpace(req.Value)
+	var key string
+	if channel == "email" {
+		key = "otp:email:" + value + ":" + req.SessionID
+	} else {
+		key = "otp:sms:" + value + ":" + req.SessionID
+	}
+	val, err := s.redis.Get(ctx, key).Result()
+	if err != nil {
+		return "", fmt.Errorf("otp expired or invalid session")
+	}
+	var data models.OTPData
+	if err := json.Unmarshal([]byte(val), &data); err != nil {
+		return "", fmt.Errorf("invalid stored otp data")
+	}
+	maxVerifyStr := os.Getenv("VERIFY_OTP_MAX_ATTEMPT")
+	maxVerify, _ := strconv.Atoi(maxVerifyStr)
+	if maxVerify == 0 {
+		maxVerify = 3
+	}
+
+	if data.Attempts >= maxVerify {
+		s.redis.Del(ctx, key)
+		return "", fmt.Errorf("max verify attempts exceeded")
+	}
+
+	if data.Hash != HashOTP(req.OTP) {
+		data.Attempts++
+		updated, _ := json.Marshal(data)
+		ttl, _ := s.redis.TTL(ctx, key).Result()
+		s.redis.Set(ctx, key, updated, ttl)
+
+		return "", fmt.Errorf("invalid otp")
+	}
+
+	//enerate reset token
+	resetToken := uuid.New().String()
+	resetKey := "reset:" + resetToken
+
+	s.redis.Set(ctx, resetKey, value, 10*time.Minute)
+	s.redis.Del(ctx, key)
+	return resetToken, nil
+}
+
+func (s *userService) ResetPassword(ctx context.Context, resetToken, newPassword string) error {
+
+	val, err := s.redis.Get(ctx, "reset:"+resetToken).Result()
+	if err != nil {
+		return fmt.Errorf("invalid or expired token")
+	}
+
+	var user *models.User
+	if strings.Contains(val, "@") {
+		user, err = s.userRepo.FindByEmail(ctx, val)
+		log.Printf("User found by email: %s\n", val, user)
+	} else {
+		user, err = s.userRepo.FindByMobile(ctx, val)
+		log.Printf("User found by mobile: %s\n", val, user)
+	}
+	if err != nil || user == nil {
+		return fmt.Errorf("user not found")
+	}
+
+	//hash password
+	hashed, err := utils.HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+
+	// update struct
+	user.Password = hashed
+
+	// call repo correctly
+	if err := s.userRepo.Update(ctx, user); err != nil {
+		return err
+	}
+
+	// delete reset token after use
+	s.redis.Del(ctx, "reset:"+resetToken)
+
+	return nil
 }

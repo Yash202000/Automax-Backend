@@ -101,7 +101,7 @@ func main() {
 	// Initialize services
 	actionLogService := services.NewActionLogService(actionLogRepo)
 	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo, userRepo, minioStorage)
-	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg, actionLogService, nil)
+	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg, actionLogService, nil, redisClient)
 	otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo, userRepo, userService)
 
 	// Initialize LDAP service
@@ -312,6 +312,9 @@ func main() {
 	auth.Post("/refresh", userHandler.RefreshToken)
 	auth.Post("/logout", authMiddleware.Authenticate(), userHandler.Logout)
 	auth.Post("/unblock-user", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:unblock"), userHandler.UnblockUser)
+	auth.Post("/forgot-password", userHandler.ForgotPassword)
+	auth.Post("/verify-reset-otp", userHandler.VerifyOTPForReset)
+	auth.Post("/reset-password", userHandler.ResetPassword)
 
 	// LDAP routes (public - for LDAP authentication)
 	ldap := v1.Group("/ldap")
