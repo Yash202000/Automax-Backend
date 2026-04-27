@@ -535,14 +535,19 @@ func (c *httpDocumentaClient) SearchFiles(ctx context.Context, workspaceSlug str
 	return parseSearchResponse(resp)
 }
 
-// parseSearchResponse converts a MyDocs /search response (camelCase file objects)
-// into the snake_case DmsSearchResult the frontend expects.
+// parseSearchResponse converts a MyDocs /search response into the
+// DmsSearchResult shape the frontend consumes.
+//
+// MyDocs returns results under "results" (not "files") with paginated
+// "totalCount", "limit", "offset" siblings, and uses bare "size" rather
+// than "sizeBytes" — earlier mapping silently produced an empty result
+// set because the field names didn't match.
 func parseSearchResponse(resp *http.Response) (*DmsSearchResult, error) {
 	type mdFile struct {
 		UUID       string `json:"uuid"`
 		Name       string `json:"name"`
 		Type       string `json:"type"`
-		SizeBytes  int64  `json:"sizeBytes"`
+		Size       int64  `json:"size"`
 		MimeType   string `json:"mimeType"`
 		ParentUUID string `json:"parentUuid"`
 		Path       string `json:"path"`
@@ -550,22 +555,22 @@ func parseSearchResponse(resp *http.Response) (*DmsSearchResult, error) {
 		UpdatedAt  string `json:"updatedAt"`
 	}
 	type searchData struct {
-		Files []mdFile `json:"files"`
-		Total int      `json:"total"`
+		Results    []mdFile `json:"results"`
+		TotalCount int      `json:"totalCount"`
 	}
 	result, err := parseResponse[searchData](resp)
 	if err != nil {
 		return nil, err
 	}
-	files := make([]DmsFile, len(result.Files))
-	for i, f := range result.Files {
+	files := make([]DmsFile, len(result.Results))
+	for i, f := range result.Results {
 		files[i] = DmsFile{
-			UUID: f.UUID, Name: f.Name, Type: f.Type, Size: f.SizeBytes, MimeType: f.MimeType,
+			UUID: f.UUID, Name: f.Name, Type: f.Type, Size: f.Size, MimeType: f.MimeType,
 			Parent: f.ParentUUID, ParentUUID: f.ParentUUID, Path: f.Path,
 			CreatedAt: f.CreatedAt, UpdatedAt: f.UpdatedAt,
 		}
 	}
-	return &DmsSearchResult{Files: files, Total: result.Total}, nil
+	return &DmsSearchResult{Files: files, Total: result.TotalCount}, nil
 }
 
 func (c *httpDocumentaClient) SearchFilesWithTags(ctx context.Context, workspaceSlug string, query string, tags map[string]string) (*DmsSearchResult, error) {
