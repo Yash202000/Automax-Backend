@@ -557,8 +557,16 @@ func (r *goalRepository) ListCompletedApprovals(ctx context.Context, userID uuid
 	var histories []models.EvidenceTransitionHistory
 	var total int64
 
+	// "Completed approvals" must show only reviewer-side transitions the user
+	// performed, not their own evidence submissions. Otherwise the uploader's
+	// own "submit"/"resubmit" actions appear in their Completed tab — which
+	// confused super admins who saw their evidence uploads listed as if they
+	// were approvals they had performed.
 	query := r.db.WithContext(ctx).Model(&models.EvidenceTransitionHistory{}).
-		Where("performed_by_id = ? AND is_system_action = false", userID)
+		Joins("LEFT JOIN workflow_transitions wt ON wt.id = evidence_transition_histories.transition_id").
+		Where("evidence_transition_histories.performed_by_id = ?", userID).
+		Where("evidence_transition_histories.is_system_action = false").
+		Where("wt.code IS NULL OR wt.code NOT IN ?", []string{"submit", "resubmit"})
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
