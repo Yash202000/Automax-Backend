@@ -254,13 +254,17 @@ func (s *goalAnalyticsService) GetProgressSummary(ctx context.Context, departmen
 		Count      int64  `gorm:"column:count"`
 	}
 	var ranges []rangeCount
+	// Note: GORM Raw uses parameterized SQL, not Sprintf. Single percent is
+	// correct here — earlier '0-25%%' was treating the string as a format
+	// directive and ended up with a literal double-percent label that never
+	// matched the rangeColors lookup, so all ranges came back zero.
 	rangeSQL := `
 		SELECT
 			CASE
-				WHEN progress < 25 THEN '0-25%%'
-				WHEN progress < 50 THEN '25-50%%'
-				WHEN progress < 75 THEN '50-75%%'
-				ELSE '75-100%%'
+				WHEN progress < 25 THEN '0-25%'
+				WHEN progress < 50 THEN '25-50%'
+				WHEN progress < 75 THEN '50-75%'
+				ELSE '75-100%'
 			END AS range_label,
 			COUNT(*) AS count
 		FROM goals
