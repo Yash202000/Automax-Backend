@@ -14,6 +14,7 @@ type LookupCategory struct {
 	Name              string         `gorm:"size:100;not null" json:"name"`
 	NameAr            string         `gorm:"size:100" json:"name_ar"`
 	Description       string         `gorm:"size:500" json:"description"`
+	RedirectURL       string         `gorm:"size:500" json:"redirect_url"`
 	IsSystem          bool           `gorm:"default:false" json:"is_system"`
 	IsActive          bool           `gorm:"default:true" json:"is_active"`
 	AddToIncidentForm bool           `gorm:"default:false" json:"add_to_incident_form"`
@@ -65,6 +66,7 @@ type LookupCategoryCreateRequest struct {
 	Name              string `json:"name" validate:"required,min=1,max=100"`
 	NameAr            string `json:"name_ar" validate:"max=100"`
 	Description       string `json:"description" validate:"max=500"`
+	RedirectURL       string `json:"redirect_url" validate:"max=500"`
 	IsActive          *bool  `json:"is_active"`
 	AddToIncidentForm *bool  `json:"add_to_incident_form"`
 	FieldType         string `json:"field_type" validate:"omitempty,oneof=text number date select multiselect checkbox textarea"`
@@ -77,6 +79,7 @@ type LookupCategoryUpdateRequest struct {
 	Name              string `json:"name" validate:"max=100"`
 	NameAr            string `json:"name_ar" validate:"max=100"`
 	Description       string `json:"description" validate:"max=500"`
+	RedirectURL       string `json:"redirect_url" validate:"max=500"`
 	IsActive          *bool  `json:"is_active"`
 	AddToIncidentForm *bool  `json:"add_to_incident_form"`
 	FieldType         string `json:"field_type" validate:"omitempty,oneof=text number date select multiselect checkbox textarea"`
@@ -116,6 +119,7 @@ type LookupCategoryResponse struct {
 	Name              string                `json:"name"`
 	NameAr            string                `json:"name_ar"`
 	Description       string                `json:"description"`
+	RedirectURL       string                `json:"redirect_url"`
 	IsSystem          bool                  `json:"is_system"`
 	IsActive          bool                  `json:"is_active"`
 	AddToIncidentForm bool                  `json:"add_to_incident_form"`
@@ -129,19 +133,19 @@ type LookupCategoryResponse struct {
 
 // LookupValueResponse for API responses
 type LookupValueResponse struct {
-	ID          uuid.UUID                `json:"id"`
-	CategoryID  uuid.UUID                `json:"category_id"`
-	Category    *LookupCategoryResponse  `json:"category,omitempty"`
-	Code        string                   `json:"code"`
-	Name        string                   `json:"name"`
-	NameAr      string                   `json:"name_ar"`
-	Description string                   `json:"description"`
-	SortOrder   int                      `json:"sort_order"`
-	Color       string                   `json:"color"`
-	IsDefault   bool                     `json:"is_default"`
-	IsActive    bool                     `json:"is_active"`
-	CreatedAt   time.Time                `json:"created_at"`
-	UpdatedAt   time.Time                `json:"updated_at"`
+	ID          uuid.UUID               `json:"id"`
+	CategoryID  uuid.UUID               `json:"category_id"`
+	Category    *LookupCategoryResponse `json:"category,omitempty"`
+	Code        string                  `json:"code"`
+	Name        string                  `json:"name"`
+	NameAr      string                  `json:"name_ar"`
+	Description string                  `json:"description"`
+	SortOrder   int                     `json:"sort_order"`
+	Color       string                  `json:"color"`
+	IsDefault   bool                    `json:"is_default"`
+	IsActive    bool                    `json:"is_active"`
+	CreatedAt   time.Time               `json:"created_at"`
+	UpdatedAt   time.Time               `json:"updated_at"`
 }
 
 // ToLookupCategoryResponse converts a LookupCategory to LookupCategoryResponse
@@ -152,6 +156,7 @@ func ToLookupCategoryResponse(c *LookupCategory) LookupCategoryResponse {
 		Name:              c.Name,
 		NameAr:            c.NameAr,
 		Description:       c.Description,
+		RedirectURL:       c.RedirectURL,
 		IsSystem:          c.IsSystem,
 		IsActive:          c.IsActive,
 		AddToIncidentForm: c.AddToIncidentForm,
