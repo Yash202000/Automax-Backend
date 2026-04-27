@@ -1661,18 +1661,25 @@ func equalUUIDSlices(a, b []uuid.UUID) bool {
 }
 
 func (s *userService) ForgotPassword(ctx context.Context, req *models.ForgotPasswordRequest) (string, error) {
-	var user *models.User
 
 	channel := strings.ToLower(strings.TrimSpace(req.Channel))
 	value := strings.TrimSpace(req.Value)
-	// channel check
+
+	var user *models.User
+	var err error
+
 	if channel == "email" {
-		user, _ = s.userRepo.FindByEmail(ctx, value)
+		user, err = s.userRepo.FindByEmail(ctx, value)
 	} else {
-		user, _ = s.userRepo.FindByMobile(ctx, value)
+		user, err = s.userRepo.FindByMobile(ctx, value)
 	}
+
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch user: %w", err)
+	}
+
 	if user == nil {
-		return "", nil
+		return "", fmt.Errorf("User not found")
 	}
 
 	//Generate OTP
@@ -1769,7 +1776,7 @@ func (s *userService) VerifyOTPForReset(ctx context.Context, req *models.VerifyO
 	if err != nil {
 		return "", fmt.Errorf("otp expired or invalid session")
 	}
-	var data models.OTPData
+	var data models.RedisOTPData
 	if err := json.Unmarshal([]byte(val), &data); err != nil {
 		return "", fmt.Errorf("invalid stored otp data")
 	}
@@ -1784,7 +1791,7 @@ func (s *userService) VerifyOTPForReset(ctx context.Context, req *models.VerifyO
 		return "", fmt.Errorf("max verify attempts exceeded")
 	}
 
-	if data.Hash != HashOTP(req.OTP) {
+	if data.OTP != HashOTP(req.OTP) {
 		data.Attempts++
 		updated, _ := json.Marshal(data)
 		ttl, _ := s.redis.TTL(ctx, key).Result()

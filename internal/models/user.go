@@ -380,3 +380,10 @@ type ResetPasswordRequest struct {
 	Token       string `json:"token" validate:"required"`
 	NewPassword string `json:"new_password" validate:"required"`
 }
+
+type RedisOTPData struct {
+	Value    string `json:"value"`
+	OTP      string `json:"otp"` // hashed OTP stored here
+	Channel  string `json:"channel"`
+	Attempts int    `json:"attempts"`
+}
