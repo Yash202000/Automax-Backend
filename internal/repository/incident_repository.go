@@ -155,6 +155,7 @@ func (r *incidentRepository) FindByIDWithRelations(ctx context.Context, id uuid.
 		Preload("TransitionHistory.FromState").
 		Preload("TransitionHistory.ToState").
 		Preload("TransitionHistory.PerformedBy").
+		Preload("TransitionHistory.Transition").
 		First(&incident, "id = ?", id).Error
 	if err != nil {
 		return nil, err
