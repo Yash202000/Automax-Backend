@@ -1769,7 +1769,7 @@ func (s *userService) VerifyOTPForReset(ctx context.Context, req *models.VerifyO
 	if err != nil {
 		return "", fmt.Errorf("otp expired or invalid session")
 	}
-	var data models.OTPData
+	var data models.RedisOTPData
 	if err := json.Unmarshal([]byte(val), &data); err != nil {
 		return "", fmt.Errorf("invalid stored otp data")
 	}
@@ -1784,7 +1784,7 @@ func (s *userService) VerifyOTPForReset(ctx context.Context, req *models.VerifyO
 		return "", fmt.Errorf("max verify attempts exceeded")
 	}
 
-	if data.Hash != HashOTP(req.OTP) {
+	if data.OTP != HashOTP(req.OTP) {
 		data.Attempts++
 		updated, _ := json.Marshal(data)
 		ttl, _ := s.redis.TTL(ctx, key).Result()
