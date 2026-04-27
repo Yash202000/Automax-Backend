@@ -233,9 +233,9 @@ type UserLoginResponse struct {
 // AuthLoginResponse is the response for POST /auth/login.
 type AuthLoginResponse struct {
 	User         UserLoginResponse `json:"user"`
-	Token        string           `json:"token"`
-	RefreshToken string           `json:"refresh_token,omitempty"`
-	ExpiresIn    int64            `json:"expires_in,omitempty"`
+	Token        string            `json:"token"`
+	RefreshToken string            `json:"refresh_token,omitempty"`
+	ExpiresIn    int64             `json:"expires_in,omitempty"`
 }
 
 type RefreshTokenRequest struct {
@@ -362,4 +362,21 @@ func ToUserResponse(user *User) UserResponse {
 	}
 
 	return resp
+}
+
+type ForgotPasswordRequest struct {
+	Channel string `json:"channel" validate:"required"` // email | phone
+	Value   string `json:"value" validate:"required"`
+}
+
+type VerifyOTPRequest struct {
+	Channel   string `json:"channel" validate:"required"`
+	SessionID string `json:"session_id" validate:"required"`
+	Value     string `json:"value" validate:"required"`
+	OTP       string `json:"otp" validate:"required"`
+}
+
+type ResetPasswordRequest struct {
+	Token       string `json:"token" validate:"required"`
+	NewPassword string `json:"new_password" validate:"required"`
 }

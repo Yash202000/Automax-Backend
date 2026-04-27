@@ -42,7 +42,7 @@ func NewOTPService(
 	}
 }
 
-func GenerateOTP() (string, error) {
+func (s *OTPService) GenerateOTP() (string, error) {
 	max := big.NewInt(1000000)
 	n, err := rand.Int(rand.Reader, max)
 	if err != nil {
@@ -127,7 +127,7 @@ func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode strin
 	}
 
 	//GENERATE OTP
-	otp, err := GenerateOTP()
+	otp, err := s.GenerateOTP()
 	if err != nil {
 		return "", fmt.Errorf("failed to generate otp: %w", err)
 	}
