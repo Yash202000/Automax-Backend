@@ -198,6 +198,30 @@ func (h *LookupHandler) UpdateCategory(c *fiber.Ctx) error {
 		if req.ValidationRules != "" {
 			category.ValidationRules = req.ValidationRules
 		}
+
+		if req.RedirectURL != "" {
+			category.RedirectURL = req.RedirectURL
+		}
+		// If code is being updated, ensure it's unique
+		if req.Code != "" && !category.IsSystem {
+			existing, err := h.repo.FindCategoryByCode(c.UserContext(), category.Code)
+			if err == nil && existing.ID != category.ID {
+				return utils.ErrorResponse(c, fiber.StatusConflict, "Another category with this code already exists")
+			}
+		}
+
+		// If setting as inactive, ensure no active values exist
+		if req.IsActive != nil && !*req.IsActive {
+			values, err := h.repo.ListValuesByCategory(c.UserContext(), category.ID)
+			if err != nil {
+				return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to check category values")
+			}
+			for _, v := range values {
+				if v.IsActive {
+					return utils.ErrorResponse(c, fiber.StatusBadRequest, "Cannot deactivate category with active values. Please deactivate or delete all values first.")
+				}
+			}
+		}
 	}
 
 	if err := h.repo.UpdateCategory(c.UserContext(), category); err != nil {
