@@ -837,7 +837,6 @@ func (h *UserHandler) UnblockUser(c *fiber.Ctx) error {
 func (h *UserHandler) ForgotPassword(c *fiber.Ctx) error {
 	var req models.ForgotPasswordRequest
 
-	// Parse request
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, 400, "invalid request body")
 	}
@@ -845,13 +844,14 @@ func (h *UserHandler) ForgotPassword(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, 400, "channel and value are required")
 	}
 	sessionID, err := h.userService.ForgotPassword(c.UserContext(), &req)
+
 	if err != nil {
 		log.Println("ForgotPassword ERROR:", err)
-		return utils.ErrorResponse(c, 500, "failed to send OTP")
+		return utils.ErrorResponse(c, 400, err.Error())
 	}
 
 	return utils.SuccessResponse(c, 200, "OTP sent", fiber.Map{
-		"sessionID": sessionID, // may be empty if user not found
+		"sessionID": sessionID,
 	})
 }
 
