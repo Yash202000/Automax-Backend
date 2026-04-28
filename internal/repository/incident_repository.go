@@ -263,11 +263,33 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		query = query.Where("NULLIF(custom_fields, '')::jsonb -> 'lookup:TASK ID' ->> 'value' ILIKE ?", "%"+filter.TaskID+"%")
 	}
 
-	// Count total
+	// Transition filters — JOIN only when needed
+	if filter.TransitionID != nil || filter.FromStateID != nil || filter.ToStateID != nil {
+		// Build a subquery to get matching incident IDs
+		subQuery := r.db.WithContext(ctx).
+			Table("incident_transition_histories ith").
+			Select("DISTINCT ith.incident_id").
+			Joins("JOIN workflow_transitions wt ON wt.id = ith.transition_id")
+
+		if filter.TransitionID != nil {
+			subQuery = subQuery.Where("wt.id = ?", *filter.TransitionID)
+		}
+		if filter.FromStateID != nil {
+			subQuery = subQuery.Where("wt.from_state_id = ?", *filter.FromStateID)
+		}
+		if filter.ToStateID != nil {
+			subQuery = subQuery.Where("wt.to_state_id = ?", *filter.ToStateID)
+		}
+
+		// Use IN subquery on main query — no JOIN, no DISTINCT needed
+		query = query.Where("incidents.id IN (?)", subQuery)
+	}
+
+	// Single unified count — works for all cases
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-
+	// Apply pagination
 	// Apply pagination
 	if filter.Page < 1 {
 		filter.Page = 1
@@ -285,7 +307,7 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		Preload("Department").
 		Preload("Location").
 		Preload("LookupValues.Category").
-		Order("created_at DESC").
+		Order("incidents.created_at DESC").
 		Offset(offset).
 		Limit(filter.Limit).
 		Find(&incidents).Error
