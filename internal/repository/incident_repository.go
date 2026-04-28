@@ -285,6 +285,7 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		Preload("Department").
 		Preload("Location").
 		Preload("LookupValues.Category").
+		Preload("TransitionHistory.Transition").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(filter.Limit).
