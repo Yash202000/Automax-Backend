@@ -38,6 +38,9 @@ type WorkflowService interface {
 	UpdateState(ctx context.Context, stateID uuid.UUID, req *models.WorkflowStateUpdateRequest) (*models.WorkflowStateResponse, error)
 	DeleteState(ctx context.Context, stateID uuid.UUID) error
 
+	// Check Workflow Existence by Code or Name
+	WorkflowExistsByCodeOrName(ctx context.Context, codeOrName []string) error
+
 	// Transition management
 	CreateTransition(ctx context.Context, workflowID uuid.UUID, req *models.WorkflowTransitionCreateRequest) (*models.WorkflowTransitionResponse, error)
 	GetTransition(ctx context.Context, transitionID uuid.UUID) (*models.WorkflowTransitionResponse, error)
@@ -64,11 +67,11 @@ type WorkflowService interface {
 }
 
 type workflowService struct {
-	repo       repository.WorkflowRepository
-	roleRepo   repository.RoleRepository
-	deptRepo   repository.DepartmentRepository
-	classRepo  repository.ClassificationRepository
-	db         *gorm.DB
+	repo      repository.WorkflowRepository
+	roleRepo  repository.RoleRepository
+	deptRepo  repository.DepartmentRepository
+	classRepo repository.ClassificationRepository
+	db        *gorm.DB
 }
 
 func NewWorkflowService(repo repository.WorkflowRepository, roleRepo repository.RoleRepository, deptRepo repository.DepartmentRepository, classRepo repository.ClassificationRepository, db *gorm.DB) WorkflowService {
@@ -611,6 +614,17 @@ func (s *workflowService) UpdateWorkflow(ctx context.Context, id uuid.UUID, req 
 
 	resp := models.ToWorkflowResponse(updated)
 	return &resp, nil
+}
+
+func (s *workflowService) WorkflowExistsByCodeOrName(ctx context.Context, codeOrName []string) error {
+	exists, err := s.repo.ExistsByCodeOrName(ctx, codeOrName)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("workflow with code '%s' or name '%s' already exists", codeOrName[0], codeOrName[1])
+	}
+	return nil
 }
 
 func (s *workflowService) DeleteWorkflow(ctx context.Context, id uuid.UUID) error {
@@ -1744,6 +1758,21 @@ func (s *workflowService) ImportWorkflow(ctx context.Context, data *models.Workf
 		return nil, nil, errors.New("workflow must have at least one state")
 	}
 
+	codeOrName := []string{data.Workflow.Code, data.Workflow.Name}
+	exist, err := s.repo.ExistsByCodeOrName(ctx, codeOrName)
+	if err != nil {
+
+		return nil, nil, err
+	}
+
+	if exist {
+		// Append timestamp to make it unique
+		timestamp := time.Now().Format("20060102_150405")
+		data.Workflow.Code = fmt.Sprintf("%s_imported_%s", data.Workflow.Code, timestamp)
+		data.Workflow.Name = fmt.Sprintf("%s (Imported %s)", data.Workflow.Name, timestamp)
+		warnings = append(warnings, fmt.Sprintf("Workflow code was modified to '%s' to avoid duplicate", data.Workflow.Code))
+	}
+
 	// Validate at least one initial state exists
 	hasInitialState := false
 	for _, state := range data.Workflow.States {
@@ -1831,7 +1860,7 @@ func (s *workflowService) ImportWorkflow(ctx context.Context, data *models.Workf
 
 	// Assign classifications
 	if len(classificationIDs) > 0 {
-		if err := tx.Exec("INSERT INTO workflow_classifications (workflow_id, classification_id) VALUES "+
+		if err := tx.Exec("INSERT INTO workflow_classifications (workflow_id, classification_id) VALUES " +
 			buildBulkInsertValues(workflow.ID, classificationIDs)).Error; err != nil {
 			tx.Rollback()
 			return nil, nil, err
@@ -1840,7 +1869,7 @@ func (s *workflowService) ImportWorkflow(ctx context.Context, data *models.Workf
 
 	// Assign convert-to-request roles
 	if len(convertRoleIDs) > 0 {
-		if err := tx.Exec("INSERT INTO workflow_convert_to_request_roles (workflow_id, role_id) VALUES "+
+		if err := tx.Exec("INSERT INTO workflow_convert_to_request_roles (workflow_id, role_id) VALUES " +
 			buildBulkInsertValues(workflow.ID, convertRoleIDs)).Error; err != nil {
 			tx.Rollback()
 			return nil, nil, err
@@ -1886,7 +1915,7 @@ func (s *workflowService) ImportWorkflow(ctx context.Context, data *models.Workf
 			}
 
 			if len(roleIDs) > 0 {
-				if err := tx.Exec("INSERT INTO state_viewable_roles (workflow_state_id, role_id) VALUES "+
+				if err := tx.Exec("INSERT INTO state_viewable_roles (workflow_state_id, role_id) VALUES " +
 					buildBulkInsertValues(state.ID, roleIDs)).Error; err != nil {
 					tx.Rollback()
 					return nil, nil, err
@@ -1907,7 +1936,7 @@ func (s *workflowService) ImportWorkflow(ctx context.Context, data *models.Workf
 			}
 
 			if len(roleIDs) > 0 {
-				if err := tx.Exec("INSERT INTO state_editable_roles (workflow_state_id, role_id) VALUES "+
+				if err := tx.Exec("INSERT INTO state_editable_roles (workflow_state_id, role_id) VALUES " +
 					buildBulkInsertValues(state.ID, roleIDs)).Error; err != nil {
 					tx.Rollback()
 					return nil, nil, err
@@ -1983,7 +2012,7 @@ func (s *workflowService) ImportWorkflow(ctx context.Context, data *models.Workf
 				assignRoleIDs = append(assignRoleIDs, role.ID)
 			}
 			if len(assignRoleIDs) > 0 {
-				if err := tx.Exec("INSERT INTO transition_assignment_roles (workflow_transition_id, role_id) VALUES "+
+				if err := tx.Exec("INSERT INTO transition_assignment_roles (workflow_transition_id, role_id) VALUES " +
 					buildBulkInsertValues(transition.ID, assignRoleIDs)).Error; err != nil {
 					tx.Rollback()
 					return nil, nil, err
@@ -2004,7 +2033,7 @@ func (s *workflowService) ImportWorkflow(ctx context.Context, data *models.Workf
 			}
 
 			if len(roleIDs) > 0 {
-				if err := tx.Exec("INSERT INTO transition_allowed_roles (workflow_transition_id, role_id) VALUES "+
+				if err := tx.Exec("INSERT INTO transition_allowed_roles (workflow_transition_id, role_id) VALUES " +
 					buildBulkInsertValues(transition.ID, roleIDs)).Error; err != nil {
 					tx.Rollback()
 					return nil, nil, err

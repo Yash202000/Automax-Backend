@@ -12,7 +12,7 @@ import (
 type Workflow struct {
 	ID          uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
 	Name        string    `gorm:"not null;size:100;uniqueIndex" json:"name"`
-	Code        string    `gorm:"not null;size:50;uniqueIndex" json:"code"`
+	Code        string    `gorm:"not null;size:100;uniqueIndex" json:"code"`
 	Description string    `gorm:"size:500" json:"description"`
 	Version     int       `gorm:"default:1" json:"version"`
 	IsActive    bool      `gorm:"default:true" json:"is_active"`
@@ -291,7 +291,7 @@ type WorkflowCreateRequest struct {
 
 type WorkflowUpdateRequest struct {
 	Name                    string   `json:"name" validate:"omitempty,min=2,max=100"`
-	Code                    string   `json:"code" validate:"omitempty,min=2,max=50"`
+	Code                    string   `json:"code" validate:"omitempty,min=2,max=100"`
 	Description             string   `json:"description" validate:"max=500"`
 	RecordType              *string  `json:"record_type" validate:"omitempty,oneof=incident request complaint query evidence both all"`
 	Sources                 []string `json:"sources"`    // Array of source strings (nil means not updating)
@@ -839,24 +839,31 @@ type CodeNamePair struct {
 
 // WorkflowExportData is the top-level export structure
 type WorkflowExportData struct {
-	ExportVersion string                `json:"export_version"`
-	ExportedAt    string                `json:"exported_at"`
-	Workflow      WorkflowExportContent `json:"workflow"`
+	ExportVersion string                `json:"export_version" validate:"required"`
+	ExportedAt    string                `json:"exported_at" validate:"required,datetime=2006-01-02T15:04:05Z07:00"`
+	Workflow      WorkflowExportContent `json:"workflow" validate:"required"`
 }
 
 // WorkflowExportContent contains workflow data with codes instead of IDs
 type WorkflowExportContent struct {
-	Name                  string                     `json:"name"`
-	Code                  string                     `json:"code"`
-	Description           string                     `json:"description"`
-	RecordType            string                     `json:"record_type"`
-	Sources               []string                   `json:"sources,omitempty"`
-	Priorities            []int                      `json:"priorities,omitempty"`
-	RequiredFields        []string                   `json:"required_fields"`
-	States                []WorkflowStateExport      `json:"states"`
-	Transitions           []WorkflowTransitionExport `json:"transitions"`
-	Classifications       []CodeNamePair             `json:"classifications"`
-	ConvertToRequestRoles []CodeNamePair             `json:"convert_to_request_roles"`
+	Name        string `json:"name"        validate:"required,min=2,max=100"`
+	Code        string `json:"code"        validate:"required,min=2,max=50"`
+	Description string `json:"description" validate:"omitempty,max=500"`
+
+	// FIX: oneof belongs on the string itself, not a []string slice
+	RecordType string   `json:"record_type,omitempty" validate:"omitempty,oneof=incident request complaint query evidence both all"`
+	Sources    []string `json:"sources,omitempty"    validate:"omitempty,dive,min=1"`
+
+	// FIX: []int can't use oneof with string values — validate the range differently
+	Priorities []int `json:"priorities,omitempty" validate:"omitempty,dive,min=1,max=5"`
+
+	// FIX: dive into slices for per-element validation
+	RequiredFields  []string                   `json:"required_fields,omitempty"   validate:"omitempty,dive,min=1"`
+	States          []WorkflowStateExport      `json:"states,omitempty"            validate:"omitempty,dive"`
+	Transitions     []WorkflowTransitionExport `json:"transitions,omitempty"       validate:"omitempty,dive"`
+	Classifications []CodeNamePair             `json:"classifications,omitempty"   validate:"omitempty,dive"`
+
+	ConvertToRequestRoles []CodeNamePair `json:"convert_to_request_roles,omitempty" validate:"omitempty,dive"`
 }
 
 // WorkflowStateExport represents a state with viewable role codes
