@@ -301,6 +301,8 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 
 	err := query.
 		Preload("Classification").
+		Preload("TransitionHistory").
+		Preload("TransitionHistory.PerformedBy").
 		Preload("Workflow").
 		Preload("CurrentState").
 		Preload("Assignee").
@@ -1146,6 +1148,8 @@ func (r *incidentRepository) GetAssignedToUser(ctx context.Context, userID uuid.
 	// Main query with preloads
 	if err := baseQuery.
 		Preload("Classification").
+		Preload("TransitionHistory").
+		Preload("TransitionHistory.PerformedBy").
 		Preload("Workflow").
 		Preload("CurrentState").
 		Preload("Assignee").
@@ -1187,6 +1191,8 @@ func (r *incidentRepository) GetAssignedToUser1(ctx context.Context, userID uuid
 	}
 	err := baseQuery.
 		Preload("Classification").
+		Preload("TransitionHistory").
+		Preload("TransitionHistory.PerformedBy").
 		Preload("Workflow").
 		Preload("CurrentState").
 		Preload("Assignee").
@@ -1228,6 +1234,8 @@ func (r *incidentRepository) GetReportedByUser(ctx context.Context, userID uuid.
 
 	err := baseQuery.
 		Preload("Classification").
+		Preload("TransitionHistory").
+		Preload("TransitionHistory.PerformedBy").
 		Preload("CurrentState").
 		Preload("Workflow").
 		Preload("Assignee").
