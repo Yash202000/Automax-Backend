@@ -307,7 +307,8 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		Preload("Department").
 		Preload("Location").
 		Preload("LookupValues.Category").
-		Order("incidents.created_at DESC").
+		Preload("TransitionHistory.Transition").
+		Order("created_at DESC").
 		Offset(offset).
 		Limit(filter.Limit).
 		Find(&incidents).Error
@@ -1151,6 +1152,7 @@ func (r *incidentRepository) GetAssignedToUser(ctx context.Context, userID uuid.
 		Preload("Department").
 		Preload("Location").
 		Preload("LookupValues.Category").
+		Preload("TransitionHistory.Transition").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(limit).
@@ -1191,6 +1193,7 @@ func (r *incidentRepository) GetAssignedToUser1(ctx context.Context, userID uuid
 		Preload("Department").
 		Preload("Location").
 		Preload("LookupValues.Category").
+		Preload("TransitionHistory.Transition").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(limit).
@@ -1231,6 +1234,7 @@ func (r *incidentRepository) GetReportedByUser(ctx context.Context, userID uuid.
 		Preload("Department").
 		Preload("Location").
 		Preload("LookupValues.Category").
+		Preload("TransitionHistory.Transition").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(limit).
