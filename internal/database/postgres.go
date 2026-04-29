@@ -124,6 +124,10 @@ func Migrate(db *gorm.DB) error {
 		&models.Evidence{},
 		&models.EvidenceTransitionHistory{},
 		&models.GoalCheckIn{},
+		// Goal Metric approval workflow
+		&models.GoalMetricValueChange{},
+		&models.MetricTransitionHistory{},
+		&models.MetricValueChangeTransitionHistory{},
 		// Goal Templates
 		&models.GoalTemplate{},
 		// Metric Import Batch models
@@ -162,6 +166,10 @@ func Migrate(db *gorm.DB) error {
 	db.Exec("ALTER TABLE evidence_transition_histories DROP CONSTRAINT IF EXISTS evidence_transition_histories_performed_by_id_fkey")
 	db.Exec("ALTER TABLE metric_import_batch_transition_histories DROP CONSTRAINT IF EXISTS fk_metric_import_batch_transition_histories_performed_by")
 	db.Exec("ALTER TABLE metric_import_batch_transition_histories DROP CONSTRAINT IF EXISTS metric_import_batch_transition_histories_performed_by_id_fkey")
+	db.Exec("ALTER TABLE metric_transition_histories DROP CONSTRAINT IF EXISTS fk_metric_transition_histories_performed_by")
+	db.Exec("ALTER TABLE metric_transition_histories DROP CONSTRAINT IF EXISTS metric_transition_histories_performed_by_id_fkey")
+	db.Exec("ALTER TABLE metric_value_change_transition_histories DROP CONSTRAINT IF EXISTS fk_metric_value_change_transition_histories_performed_by")
+	db.Exec("ALTER TABLE metric_value_change_transition_histories DROP CONSTRAINT IF EXISTS metric_value_change_transition_histories_performed_by_id_fkey")
 
 	// Migrate transition assignment roles (single → many-to-many)
 	if err := migrations.MigrateTransitionAssignmentRoles(db); err != nil {
@@ -582,6 +590,9 @@ func Seed(db *gorm.DB) error {
 	// Seed default evidence approval workflow
 	seedEvidenceApprovalWorkflow(db)
 
+	// Seed default metric & metric_value_change approval workflows
+	seedMetricApprovalWorkflows(db)
+
 	log.Println("Database seeding completed")
 	return nil
 }
@@ -743,6 +754,156 @@ func seedEvidenceApprovalWorkflow(db *gorm.DB) {
 	}
 
 	log.Println("Evidence approval workflow seeded successfully")
+}
+
+// seedMetricApprovalWorkflows seeds two parallel workflows used by the
+// metric approval gate (item #21):
+//   - record_type='metric' covers initial metric creation visibility.
+//   - record_type='metric_value_change' covers each subsequent value update.
+//
+// Both have the same shape as the evidence workflow. Idempotent: skips if
+// the workflow code already exists.
+func seedMetricApprovalWorkflows(db *gorm.DB) {
+	specs := []struct {
+		Name        string
+		Code        string
+		Description string
+		RecordType  string
+	}{
+		{
+			Name:        "Goal Metric Approval",
+			Code:        "metric_approval",
+			Description: "Default approval workflow for goal metric definitions. Supports L1 and optional L2 review.",
+			RecordType:  "metric",
+		},
+		{
+			Name:        "Goal Metric Value Change Approval",
+			Code:        "metric_value_change_approval",
+			Description: "Default approval workflow for proposed metric value changes. Supports L1 and optional L2 review.",
+			RecordType:  "metric_value_change",
+		},
+	}
+
+	for _, s := range specs {
+		var existing models.Workflow
+		if err := db.Where("code = ?", s.Code).First(&existing).Error; err == nil {
+			continue // already seeded
+		}
+
+		log.Printf("Seeding default %s workflow...", s.RecordType)
+
+		workflow := models.Workflow{
+			Name:        s.Name,
+			Code:        s.Code,
+			Description: s.Description,
+			RecordType:  s.RecordType,
+			IsActive:    true,
+			IsDefault:   true,
+		}
+		if err := db.Create(&workflow).Error; err != nil {
+			log.Printf("Failed to create %s workflow: %v", s.Code, err)
+			continue
+		}
+
+		type stateSpec struct {
+			Name      string
+			Code      string
+			StateType string
+			Color     string
+			SortOrder int
+			PosX      int
+			PosY      int
+		}
+
+		stateSpecs := []stateSpec{
+			{"Draft", "draft", "initial", "#94a3b8", 1, 100, 200},
+			{"Submitted", "submitted", "normal", "#3b82f6", 2, 300, 200},
+			{"L1 Review", "l1_review", "normal", "#f59e0b", 3, 500, 200},
+			{"L2 Review", "l2_review", "normal", "#f97316", 4, 700, 200},
+			{"Approved", "approved", "terminal", "#22c55e", 5, 700, 400},
+			{"Rejected", "rejected", "terminal", "#ef4444", 6, 500, 400},
+			{"Changes Requested", "changes_requested", "normal", "#f97316", 7, 300, 400},
+		}
+
+		stateMap := make(map[string]models.WorkflowState)
+		for _, sp := range stateSpecs {
+			state := models.WorkflowState{
+				WorkflowID: workflow.ID,
+				Name:       sp.Name,
+				Code:       sp.Code,
+				StateType:  sp.StateType,
+				Color:      sp.Color,
+				SortOrder:  sp.SortOrder,
+				PositionX:  sp.PosX,
+				PositionY:  sp.PosY,
+				IsActive:   true,
+			}
+			if err := db.Create(&state).Error; err != nil {
+				log.Printf("Failed to create state %s for %s: %v", sp.Code, s.Code, err)
+				return
+			}
+			stateMap[sp.Code] = state
+		}
+
+		type transSpec struct {
+			Name        string
+			Code        string
+			From        string
+			To          string
+			IsRejection bool
+			CommentReq  bool
+			SortOrder   int
+		}
+
+		transSpecs := []transSpec{
+			{"Submit for Review", "submit", "draft", "submitted", false, false, 1},
+			{"Assign L1 Reviewer", "assign_l1", "submitted", "l1_review", false, false, 2},
+			{"Approve (L1)", "approve_l1", "l1_review", "l2_review", false, false, 3},
+			{"Approve (Final)", "approve_l1_final", "l1_review", "approved", false, false, 4},
+			{"Request Changes", "request_changes_l1", "l1_review", "changes_requested", false, true, 5},
+			{"Reject", "reject_l1", "l1_review", "rejected", true, true, 6},
+			{"Approve (L2)", "approve_l2", "l2_review", "approved", false, false, 7},
+			{"Request Changes", "request_changes_l2", "l2_review", "changes_requested", false, true, 8},
+			{"Reject", "reject_l2", "l2_review", "rejected", true, true, 9},
+			{"Resubmit", "resubmit", "changes_requested", "submitted", false, false, 10},
+		}
+
+		boolTrue := true
+		for _, sp := range transSpecs {
+			fromState := stateMap[sp.From]
+			toState := stateMap[sp.To]
+
+			transition := models.WorkflowTransition{
+				WorkflowID:  workflow.ID,
+				Name:        sp.Name,
+				Code:        sp.Code,
+				FromStateID: fromState.ID,
+				ToStateID:   toState.ID,
+				IsRejection: sp.IsRejection,
+				IsActive:    true,
+				SortOrder:   sp.SortOrder,
+			}
+
+			if err := db.Create(&transition).Error; err != nil {
+				log.Printf("Failed to create transition %s for %s: %v", sp.Code, s.Code, err)
+				return
+			}
+
+			if sp.CommentReq {
+				requirement := models.TransitionRequirement{
+					TransitionID:    transition.ID,
+					RequirementType: "comment",
+					IsMandatory:     &boolTrue,
+					ErrorMessage:    "Comment is required for this action",
+				}
+				if err := db.Create(&requirement).Error; err != nil {
+					log.Printf("Failed to create requirement for %s: %v", sp.Code, err)
+				}
+			}
+		}
+
+		log.Printf("%s workflow seeded successfully", s.Code)
+	}
 }
 
 func Close(db *gorm.DB) error {

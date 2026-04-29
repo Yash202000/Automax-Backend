@@ -177,15 +177,107 @@ type GoalMetric struct {
 	// Reference other metrics by name: "${tasks_completed} / ${tasks_total} * 100".
 	// When set, UpdateMetricValue ignores the submitted raw value and evaluates the formula instead.
 	// Evaluation uses github.com/expr-lang/expr with access restricted to numeric sibling values.
-	Formula   string         `gorm:"type:text" json:"formula"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	Formula string `gorm:"type:text" json:"formula"`
+	// Workflow engine fields — gates initial visibility of newly-created metrics.
+	// Definition edits remain free for owners. Per-value-change approvals are tracked in goal_metric_value_changes.
+	WorkflowID     *uuid.UUID     `gorm:"type:uuid;index" json:"workflow_id"`
+	CurrentStateID *uuid.UUID     `gorm:"type:uuid;index" json:"current_state_id"`
+	CurrentState   *WorkflowState `gorm:"foreignKey:CurrentStateID" json:"current_state,omitempty"`
+	AssignedToID   *uuid.UUID     `gorm:"type:uuid;index" json:"assigned_to_id"`
+	AssignedTo     *User          `gorm:"foreignKey:AssignedToID" json:"assigned_to,omitempty"`
+	Version        int            `gorm:"default:1" json:"version"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (m *GoalMetric) BeforeCreate(tx *gorm.DB) error {
 	if m.ID == uuid.Nil {
 		m.ID = uuid.New()
+	}
+	return nil
+}
+
+// GoalMetricValueChange is a proposed value change for a metric that must go
+// through the metric_value_change approval workflow before being applied.
+// On a transition into the terminal-approved state the parent metric's
+// CurrentValue is updated and ApplyAt is set.
+type GoalMetricValueChange struct {
+	ID             uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	MetricID       uuid.UUID      `gorm:"type:uuid;index;not null" json:"metric_id"`
+	Metric         *GoalMetric    `gorm:"foreignKey:MetricID" json:"metric,omitempty"`
+	ProposedValue  float64        `gorm:"not null" json:"proposed_value"`
+	PreviousValue  float64        `gorm:"not null" json:"previous_value"`
+	Comment        string         `gorm:"type:text" json:"comment"`
+	SubmittedByID  uuid.UUID      `gorm:"type:uuid;index;not null" json:"submitted_by_id"`
+	SubmittedBy    *User          `gorm:"foreignKey:SubmittedByID" json:"submitted_by,omitempty"`
+	WorkflowID     uuid.UUID      `gorm:"type:uuid;index;not null" json:"workflow_id"`
+	CurrentStateID uuid.UUID      `gorm:"type:uuid;index;not null" json:"current_state_id"`
+	CurrentState   *WorkflowState `gorm:"foreignKey:CurrentStateID" json:"current_state,omitempty"`
+	AssignedToID   *uuid.UUID     `gorm:"type:uuid;index" json:"assigned_to_id"`
+	AssignedTo     *User          `gorm:"foreignKey:AssignedToID" json:"assigned_to,omitempty"`
+	AppliedAt      *time.Time     `json:"applied_at"`
+	Version        int            `gorm:"default:1" json:"version"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (c *GoalMetricValueChange) BeforeCreate(tx *gorm.DB) error {
+	if c.ID == uuid.Nil {
+		c.ID = uuid.New()
+	}
+	return nil
+}
+
+// MetricTransitionHistory records each state change for a goal metric.
+type MetricTransitionHistory struct {
+	ID             uuid.UUID           `gorm:"type:uuid;primary_key" json:"id"`
+	MetricID       uuid.UUID           `gorm:"type:uuid;index;not null" json:"metric_id"`
+	Metric         *GoalMetric         `gorm:"foreignKey:MetricID" json:"metric,omitempty"`
+	TransitionID   *uuid.UUID          `gorm:"type:uuid;index" json:"transition_id"`
+	Transition     *WorkflowTransition `gorm:"foreignKey:TransitionID" json:"transition,omitempty"`
+	FromStateID    uuid.UUID           `gorm:"type:uuid;not null;index" json:"from_state_id"`
+	FromState      *WorkflowState      `gorm:"foreignKey:FromStateID" json:"from_state,omitempty"`
+	ToStateID      uuid.UUID           `gorm:"type:uuid;not null;index" json:"to_state_id"`
+	ToState        *WorkflowState      `gorm:"foreignKey:ToStateID" json:"to_state,omitempty"`
+	PerformedByID  uuid.UUID           `gorm:"type:uuid;not null;index" json:"performed_by_id"`
+	PerformedBy    *User               `gorm:"foreignKey:PerformedByID" json:"performed_by,omitempty"`
+	Comment        string              `gorm:"type:text" json:"comment"`
+	IsSystemAction bool                `gorm:"default:false" json:"is_system_action"`
+	TransitionedAt time.Time           `gorm:"index" json:"transitioned_at"`
+	CreatedAt      time.Time           `json:"created_at"`
+}
+
+func (h *MetricTransitionHistory) BeforeCreate(tx *gorm.DB) error {
+	if h.ID == uuid.Nil {
+		h.ID = uuid.New()
+	}
+	return nil
+}
+
+// MetricValueChangeTransitionHistory records each state change for a value change.
+type MetricValueChangeTransitionHistory struct {
+	ID                  uuid.UUID              `gorm:"type:uuid;primary_key" json:"id"`
+	MetricValueChangeID uuid.UUID              `gorm:"type:uuid;index;not null" json:"metric_value_change_id"`
+	MetricValueChange   *GoalMetricValueChange `gorm:"foreignKey:MetricValueChangeID" json:"metric_value_change,omitempty"`
+	TransitionID        *uuid.UUID             `gorm:"type:uuid;index" json:"transition_id"`
+	Transition          *WorkflowTransition    `gorm:"foreignKey:TransitionID" json:"transition,omitempty"`
+	FromStateID         uuid.UUID              `gorm:"type:uuid;not null;index" json:"from_state_id"`
+	FromState           *WorkflowState         `gorm:"foreignKey:FromStateID" json:"from_state,omitempty"`
+	ToStateID           uuid.UUID              `gorm:"type:uuid;not null;index" json:"to_state_id"`
+	ToState             *WorkflowState         `gorm:"foreignKey:ToStateID" json:"to_state,omitempty"`
+	PerformedByID       uuid.UUID              `gorm:"type:uuid;not null;index" json:"performed_by_id"`
+	PerformedBy         *User                  `gorm:"foreignKey:PerformedByID" json:"performed_by,omitempty"`
+	Comment             string                 `gorm:"type:text" json:"comment"`
+	IsSystemAction      bool                   `gorm:"default:false" json:"is_system_action"`
+	TransitionedAt      time.Time              `gorm:"index" json:"transitioned_at"`
+	CreatedAt           time.Time              `json:"created_at"`
+}
+
+func (h *MetricValueChangeTransitionHistory) BeforeCreate(tx *gorm.DB) error {
+	if h.ID == uuid.Nil {
+		h.ID = uuid.New()
 	}
 	return nil
 }
@@ -533,6 +625,13 @@ type EvidenceTransitionRequest struct {
 	Version      int    `json:"version" validate:"required,min=1"`
 }
 
+// MetricTransitionRequest is sent to execute a workflow transition on a metric definition or value change.
+type MetricTransitionRequest struct {
+	TransitionID string `json:"transition_id" validate:"required,uuid"`
+	Comment      string `json:"comment"`
+	Version      int    `json:"version" validate:"omitempty,min=1"`
+}
+
 type EvidenceFilter struct {
 	Page         int    `query:"page"`
 	Limit        int    `query:"limit"`
@@ -541,6 +640,10 @@ type EvidenceFilter struct {
 	EvidenceType string `query:"evidence_type"`
 	StartDate    string `query:"start_date"`
 	EndDate      string `query:"end_date"`
+	// ApprovedOnly is set by the service layer (not a query param) to restrict
+	// the listing to evidences in a terminal-approved state. Used to enforce
+	// the visibility gate for view-only callers.
+	ApprovedOnly bool `query:"-"`
 }
 
 // ════════════════════════════════════════════════════
@@ -612,19 +715,25 @@ type GoalCollaboratorResponse struct {
 }
 
 type GoalMetricResponse struct {
-	ID            uuid.UUID `json:"id"`
-	GoalID        uuid.UUID `json:"goal_id"`
-	Name          string    `json:"name"`
-	MetricType    string    `json:"metric_type"`
-	Unit          string    `json:"unit"`
-	BaselineValue float64   `json:"baseline_value"`
-	CurrentValue  float64   `json:"current_value"`
-	TargetValue   float64   `json:"target_value"`
-	Weight        float64   `json:"weight"`
-	Formula       string    `json:"formula"`
-	Progress      float64   `json:"progress"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID             uuid.UUID           `json:"id"`
+	GoalID         uuid.UUID           `json:"goal_id"`
+	Name           string              `json:"name"`
+	MetricType     string              `json:"metric_type"`
+	Unit           string              `json:"unit"`
+	BaselineValue  float64             `json:"baseline_value"`
+	CurrentValue   float64             `json:"current_value"`
+	TargetValue    float64             `json:"target_value"`
+	Weight         float64             `json:"weight"`
+	Formula        string              `json:"formula"`
+	Progress       float64             `json:"progress"`
+	WorkflowID     *uuid.UUID          `json:"workflow_id,omitempty"`
+	CurrentStateID *uuid.UUID          `json:"current_state_id,omitempty"`
+	CurrentState   *WorkflowStateBrief `json:"current_state,omitempty"`
+	AssignedToID   *uuid.UUID          `json:"assigned_to_id,omitempty"`
+	AssignedTo     *UserBriefResponse  `json:"assigned_to,omitempty"`
+	Version        int                 `json:"version"`
+	CreatedAt      time.Time           `json:"created_at"`
+	UpdatedAt      time.Time           `json:"updated_at"`
 }
 
 type MetricHistoryResponse struct {
@@ -1031,19 +1140,25 @@ func (m *GoalMetric) ToResponse() GoalMetricResponse {
 	}
 
 	return GoalMetricResponse{
-		ID:            m.ID,
-		GoalID:        m.GoalID,
-		Name:          m.Name,
-		MetricType:    m.MetricType,
-		Unit:          m.Unit,
-		BaselineValue: m.BaselineValue,
-		CurrentValue:  m.CurrentValue,
-		TargetValue:   m.TargetValue,
-		Weight:        m.Weight,
-		Formula:       m.Formula,
-		Progress:      progress,
-		CreatedAt:     m.CreatedAt,
-		UpdatedAt:     m.UpdatedAt,
+		ID:             m.ID,
+		GoalID:         m.GoalID,
+		Name:           m.Name,
+		MetricType:     m.MetricType,
+		Unit:           m.Unit,
+		BaselineValue:  m.BaselineValue,
+		CurrentValue:   m.CurrentValue,
+		TargetValue:    m.TargetValue,
+		Weight:         m.Weight,
+		Formula:        m.Formula,
+		Progress:       progress,
+		WorkflowID:     m.WorkflowID,
+		CurrentStateID: m.CurrentStateID,
+		CurrentState:   ToWorkflowStateBrief(m.CurrentState),
+		AssignedToID:   m.AssignedToID,
+		AssignedTo:     ToUserBriefResponse(m.AssignedTo),
+		Version:        m.Version,
+		CreatedAt:      m.CreatedAt,
+		UpdatedAt:      m.UpdatedAt,
 	}
 }
 
@@ -1239,4 +1354,162 @@ func (h *MetricImportBatchTransitionHistory) ToResponse() MetricImportBatchTrans
 		resp.ToStateColor = h.ToState.Color
 	}
 	return resp
+}
+
+// ════════════════════════════════════════════════════
+// METRIC VALUE CHANGE / TRANSITION RESPONSE TYPES
+// ════════════════════════════════════════════════════
+
+type GoalMetricValueChangeResponse struct {
+	ID             uuid.UUID           `json:"id"`
+	MetricID       uuid.UUID           `json:"metric_id"`
+	MetricName     string              `json:"metric_name,omitempty"`
+	GoalID         uuid.UUID           `json:"goal_id,omitempty"`
+	GoalTitle      string              `json:"goal_title,omitempty"`
+	ProposedValue  float64             `json:"proposed_value"`
+	PreviousValue  float64             `json:"previous_value"`
+	Comment        string              `json:"comment"`
+	SubmittedByID  uuid.UUID           `json:"submitted_by_id"`
+	SubmittedBy    *UserBriefResponse  `json:"submitted_by,omitempty"`
+	WorkflowID     uuid.UUID           `json:"workflow_id"`
+	CurrentStateID uuid.UUID           `json:"current_state_id"`
+	CurrentState   *WorkflowStateBrief `json:"current_state,omitempty"`
+	AssignedToID   *uuid.UUID          `json:"assigned_to_id,omitempty"`
+	AssignedTo     *UserBriefResponse  `json:"assigned_to,omitempty"`
+	AppliedAt      *time.Time          `json:"applied_at"`
+	Version        int                 `json:"version"`
+	CreatedAt      time.Time           `json:"created_at"`
+	UpdatedAt      time.Time           `json:"updated_at"`
+}
+
+func (c *GoalMetricValueChange) ToResponse() GoalMetricValueChangeResponse {
+	resp := GoalMetricValueChangeResponse{
+		ID:             c.ID,
+		MetricID:       c.MetricID,
+		ProposedValue:  c.ProposedValue,
+		PreviousValue:  c.PreviousValue,
+		Comment:        c.Comment,
+		SubmittedByID:  c.SubmittedByID,
+		SubmittedBy:    ToUserBriefResponse(c.SubmittedBy),
+		WorkflowID:     c.WorkflowID,
+		CurrentStateID: c.CurrentStateID,
+		CurrentState:   ToWorkflowStateBrief(c.CurrentState),
+		AssignedToID:   c.AssignedToID,
+		AssignedTo:     ToUserBriefResponse(c.AssignedTo),
+		AppliedAt:      c.AppliedAt,
+		Version:        c.Version,
+		CreatedAt:      c.CreatedAt,
+		UpdatedAt:      c.UpdatedAt,
+	}
+	if c.Metric != nil {
+		resp.MetricName = c.Metric.Name
+		resp.GoalID = c.Metric.GoalID
+		if c.Metric.Goal != nil {
+			resp.GoalTitle = c.Metric.Goal.Title
+		}
+	}
+	return resp
+}
+
+type MetricTransitionHistoryResponse struct {
+	ID             uuid.UUID          `json:"id"`
+	MetricID       uuid.UUID          `json:"metric_id"`
+	TransitionName string             `json:"transition_name"`
+	FromStateName  string             `json:"from_state_name"`
+	ToStateName    string             `json:"to_state_name"`
+	FromStateColor string             `json:"from_state_color"`
+	ToStateColor   string             `json:"to_state_color"`
+	PerformedByID  uuid.UUID          `json:"performed_by_id"`
+	PerformedBy    *UserBriefResponse `json:"performed_by,omitempty"`
+	Comment        string             `json:"comment"`
+	IsSystemAction bool               `json:"is_system_action"`
+	TransitionedAt time.Time          `json:"transitioned_at"`
+	CreatedAt      time.Time          `json:"created_at"`
+}
+
+func (h *MetricTransitionHistory) ToResponse() MetricTransitionHistoryResponse {
+	resp := MetricTransitionHistoryResponse{
+		ID:             h.ID,
+		MetricID:       h.MetricID,
+		PerformedByID:  h.PerformedByID,
+		PerformedBy:    ToUserBriefResponse(h.PerformedBy),
+		Comment:        h.Comment,
+		IsSystemAction: h.IsSystemAction,
+		TransitionedAt: h.TransitionedAt,
+		CreatedAt:      h.CreatedAt,
+	}
+	if h.Transition != nil {
+		resp.TransitionName = h.Transition.Name
+	}
+	if h.FromState != nil {
+		resp.FromStateName = h.FromState.Name
+		resp.FromStateColor = h.FromState.Color
+	}
+	if h.ToState != nil {
+		resp.ToStateName = h.ToState.Name
+		resp.ToStateColor = h.ToState.Color
+	}
+	return resp
+}
+
+type MetricValueChangeTransitionHistoryResponse struct {
+	ID                  uuid.UUID          `json:"id"`
+	MetricValueChangeID uuid.UUID          `json:"metric_value_change_id"`
+	TransitionName      string             `json:"transition_name"`
+	FromStateName       string             `json:"from_state_name"`
+	ToStateName         string             `json:"to_state_name"`
+	FromStateColor      string             `json:"from_state_color"`
+	ToStateColor        string             `json:"to_state_color"`
+	PerformedByID       uuid.UUID          `json:"performed_by_id"`
+	PerformedBy         *UserBriefResponse `json:"performed_by,omitempty"`
+	Comment             string             `json:"comment"`
+	IsSystemAction      bool               `json:"is_system_action"`
+	TransitionedAt      time.Time          `json:"transitioned_at"`
+	CreatedAt           time.Time          `json:"created_at"`
+}
+
+func (h *MetricValueChangeTransitionHistory) ToResponse() MetricValueChangeTransitionHistoryResponse {
+	resp := MetricValueChangeTransitionHistoryResponse{
+		ID:                  h.ID,
+		MetricValueChangeID: h.MetricValueChangeID,
+		PerformedByID:       h.PerformedByID,
+		PerformedBy:         ToUserBriefResponse(h.PerformedBy),
+		Comment:             h.Comment,
+		IsSystemAction:      h.IsSystemAction,
+		TransitionedAt:      h.TransitionedAt,
+		CreatedAt:           h.CreatedAt,
+	}
+	if h.Transition != nil {
+		resp.TransitionName = h.Transition.Name
+	}
+	if h.FromState != nil {
+		resp.FromStateName = h.FromState.Name
+		resp.FromStateColor = h.FromState.Color
+	}
+	if h.ToState != nil {
+		resp.ToStateName = h.ToState.Name
+		resp.ToStateColor = h.ToState.Color
+	}
+	return resp
+}
+
+// MetricApprovalListResponse is the row format for pending/completed approval lists
+// of metric definitions or value changes — mirrors ApprovalListResponse for evidence.
+type MetricApprovalListResponse struct {
+	ID            uuid.UUID          `json:"id"`
+	MetricID      uuid.UUID          `json:"metric_id"`
+	MetricName    string             `json:"metric_name"`
+	ChangeID      *uuid.UUID         `json:"change_id,omitempty"`
+	ProposedValue *float64           `json:"proposed_value,omitempty"`
+	PreviousValue *float64           `json:"previous_value,omitempty"`
+	GoalID        uuid.UUID          `json:"goal_id"`
+	GoalTitle     string             `json:"goal_title"`
+	GoalPriority  string             `json:"goal_priority"`
+	StateName     string             `json:"state_name"`
+	StateColor    string             `json:"state_color"`
+	SubmittedBy   *UserBriefResponse `json:"submitted_by,omitempty"`
+	AssignedTo    *UserBriefResponse `json:"assigned_to,omitempty"`
+	Version       int                `json:"version"`
+	CreatedAt     time.Time          `json:"created_at"`
+	UpdatedAt     time.Time          `json:"updated_at"`
 }

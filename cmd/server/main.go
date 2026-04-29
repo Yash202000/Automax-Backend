@@ -855,10 +855,24 @@ func main() {
 	goals.Post("/evidences/:id/transition", authMiddleware.RequirePermission("goals:update"), goalHandler.ExecuteEvidenceTransition)
 	goals.Get("/evidences/:id/transition-history", authMiddleware.RequirePermission("goals:view"), goalHandler.GetEvidenceTransitionHistory)
 
+	// ---- METRIC APPROVAL WORKFLOW ROUTES ----
+	goalMetrics := v1.Group("/goal-metrics", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureGoals)))
+	goalMetrics.Get("/:id/available-transitions", authMiddleware.RequirePermission("goals:view"), goalHandler.GetAvailableMetricTransitions)
+	goalMetrics.Post("/:id/transition", authMiddleware.RequirePermission("goals:approve"), goalHandler.TransitionMetric)
+
+	goalMetricValueChanges := v1.Group("/goal-metric-value-changes", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureGoals)))
+	goalMetricValueChanges.Get("/:id/available-transitions", authMiddleware.RequirePermission("goals:view"), goalHandler.GetAvailableMetricValueChangeTransitions)
+	goalMetricValueChanges.Post("/:id/transition", authMiddleware.RequirePermission("goals:approve"), goalHandler.TransitionMetricValueChange)
+
+	// Per-metric value-change history (any caller with access to the parent goal)
+	goals.Get("/:id/metrics/:metric_id/value-changes", authMiddleware.RequirePermission("goals:view"), goalHandler.ListMetricValueChanges)
+
 	// ---- APPROVAL ROUTES ----
 	approvals := v1.Group("/approvals", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureGoals)))
 	approvals.Get("/pending", authMiddleware.RequirePermission("goals:approve"), goalHandler.ListPendingApprovals)
 	approvals.Get("/completed", authMiddleware.RequirePermission("goals:approve"), goalHandler.ListCompletedApprovals)
+	approvals.Get("/pending-metrics", authMiddleware.RequirePermission("goals:approve"), goalHandler.ListPendingMetricApprovals)
+	approvals.Get("/pending-metric-value-changes", authMiddleware.RequirePermission("goals:approve"), goalHandler.ListPendingMetricValueChangeApprovals)
 
 	// ---- PERFORMANCE REVIEW ROUTES ----
 	reviews := v1.Group("/reviews", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureGoals)))
