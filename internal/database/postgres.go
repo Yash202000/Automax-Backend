@@ -166,6 +166,8 @@ func Migrate(db *gorm.DB) error {
 	db.Exec("ALTER TABLE metric_import_batch_transition_histories DROP CONSTRAINT IF EXISTS metric_import_batch_transition_histories_performed_by_id_fkey")
 
 	db.Exec("ALTER TABLE lookup_categories ADD COLUMN IF NOT EXISTS redirect_url VARCHAR(500)")
+	// Workflow code column was previously VARCHAR(50) which is too short for some existing workflows. Increase to 100 chars. Note: MySQL syntax is ALTER TABLE workflows MODIFY code VARCHAR(100) NOT NULL but Postgres is ALTER TABLE workflows ALTER COLUMN code TYPE VARCHAR(100). GORM's AutoMigrate doesn't handle this edge case, so we run raw SQL. Idempotent: safe to run repeatedly.
+	db.Exec("ALTER TABLE workflows ALTER COLUMN code TYPE VARCHAR(100)")
 
 	// Migrate transition assignment roles (single → many-to-many)
 	if err := migrations.MigrateTransitionAssignmentRoles(db); err != nil {

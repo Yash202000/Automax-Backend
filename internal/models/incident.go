@@ -537,21 +537,25 @@ type BulkConvertToRequestResponse struct {
 }
 
 type IncidentFilter struct {
-	Search           string      `query:"search" json:"search" validate:"omitempty"`
-	WorkflowID       []string    `query:"workflow_id" json:"workflow_id" validate:"omitempty,dive,uuid"`
-	CurrentStateID   []string    `query:"current_state_id" json:"current_state_id" validate:"omitempty,dive,uuid"`
-	ClassificationID []string    `query:"classification_id" json:"classification_id" validate:"omitempty,dive,uuid"`
-	Priority         *int        `query:"priority" json:"priority" validate:"omitempty,min=1,max=5"`
-	AssigneeID       []string    `query:"assignee_id" json:"assignee_id" validate:"omitempty,dive,uuid"`
-	DepartmentID     []string    `query:"department_id" json:"department_id" validate:"omitempty,dive,uuid"`
-	LocationID       []string    `query:"location_id" json:"location_id" validate:"omitempty,dive,uuid"`
-	ReporterID       []string    `query:"reporter_id" json:"reporter_id" validate:"omitempty,dive,uuid"`
-	SLABreached      *bool       `query:"sla_breached" json:"sla_breached" validate:"omitempty"`
-	RecordType       *string     `query:"record_type" json:"record_type" validate:"omitempty,oneof=incident request complaint query"` // 'incident', 'request', 'complaint', or 'query'
-	Channel          *string     `query:"channel" json:"channel" validate:"omitempty"`                                                // for complaints
-	Source           *string     `query:"source" json:"source" validate:"omitempty"`
-	StartDate        *time.Time  `query:"start_date" json:"start_date" validate:"omitempty"`                 // filter by created_at >= start_date
-	EndDate          *time.Time  `query:"end_date" json:"end_date" validate:"omitempty"`                     // filter by created_at <= end_date
+	Search           string     `query:"search" json:"search" validate:"omitempty"`
+	WorkflowID       []string   `query:"workflow_id" json:"workflow_id" validate:"omitempty,dive,uuid"`
+	CurrentStateID   []string   `query:"current_state_id" json:"current_state_id" validate:"omitempty,dive,uuid"`
+	ClassificationID []string   `query:"classification_id" json:"classification_id" validate:"omitempty,dive,uuid"`
+	Priority         *int       `query:"priority" json:"priority" validate:"omitempty,min=1,max=5"`
+	AssigneeID       []string   `query:"assignee_id" json:"assignee_id" validate:"omitempty,dive,uuid"`
+	DepartmentID     []string   `query:"department_id" json:"department_id" validate:"omitempty,dive,uuid"`
+	LocationID       []string   `query:"location_id" json:"location_id" validate:"omitempty,dive,uuid"`
+	ReporterID       []string   `query:"reporter_id" json:"reporter_id" validate:"omitempty,dive,uuid"`
+	SLABreached      *bool      `query:"sla_breached" json:"sla_breached" validate:"omitempty"`
+	RecordType       *string    `query:"record_type" json:"record_type" validate:"omitempty,oneof=incident request complaint query"` // 'incident', 'request', 'complaint', or 'query'
+	Channel          *string    `query:"channel" json:"channel" validate:"omitempty"`                                                // for complaints
+	Source           *string    `query:"source" json:"source" validate:"omitempty"`
+	StartDate        *time.Time `query:"start_date" json:"start_date" validate:"omitempty"` // filter by created_at >= start_date
+	EndDate          *time.Time `query:"end_date" json:"end_date" validate:"omitempty"`     // filter by created_at <= end_date
+	// Transition filters
+	TransitionID     *uuid.UUID  `query:"transition_id" json:"transition_id" validate:"omitempty,uuid"`
+	FromStateID      *uuid.UUID  `query:"from_state_id" json:"from_state_id" validate:"omitempty"`
+	ToStateID        *uuid.UUID  `query:"to_state_id" json:"to_state_id" validate:"omitempty"`
 	CustomFieldKey   string      `query:"custom_field_key" json:"custom_field_key" validate:"omitempty"`     // e.g. "lookup:TASK ID"
 	CustomFieldValue string      `query:"custom_field_value" json:"custom_field_value" validate:"omitempty"` // e.g. "TASK-1235"
 	TaskID           string      `query:"task_id" json:"task_id" validate:"omitempty"`                       // filter by task ID in custom_fields
