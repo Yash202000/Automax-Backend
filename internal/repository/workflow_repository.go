@@ -18,10 +18,10 @@ type WorkflowRepository interface {
 	ListByRecordType(ctx context.Context, recordType string, activeOnly bool) ([]models.Workflow, error)
 	Update(ctx context.Context, workflow *models.Workflow) error
 	Delete(ctx context.Context, id uuid.UUID) error
-	HardDelete(ctx context.Context, id uuid.UUID) error   // Permanently delete with cascading
+	HardDelete(ctx context.Context, id uuid.UUID) error         // Permanently delete with cascading
 	ListDeleted(ctx context.Context) ([]models.Workflow, error) // List soft-deleted workflows
-	Restore(ctx context.Context, id uuid.UUID) error      // Restore a soft-deleted workflow
-
+	Restore(ctx context.Context, id uuid.UUID) error            // Restore a soft-deleted workflow
+	ExistsByCodeOrName(ctx context.Context, codeOrName []string) (bool, error)
 	// Workflow-Classification assignments
 	AssignClassifications(ctx context.Context, workflowID uuid.UUID, classificationIDs []uuid.UUID) error
 	GetByClassificationID(ctx context.Context, classificationID uuid.UUID) (*models.Workflow, error)
@@ -145,6 +145,18 @@ func (r *workflowRepository) FindByCode(ctx context.Context, code string) (*mode
 		return nil, err
 	}
 	return &workflow, nil
+}
+
+func (r *workflowRepository) ExistsByCodeOrName(ctx context.Context, codeOrName []string) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&models.Workflow{}).
+		Where("code IN (?) OR name IN (?)", codeOrName, codeOrName).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 func (r *workflowRepository) List(ctx context.Context, activeOnly bool) ([]models.Workflow, error) {
