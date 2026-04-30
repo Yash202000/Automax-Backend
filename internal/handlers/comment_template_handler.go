@@ -1,12 +1,15 @@
 package handlers
 
 import (
+	"errors"
+
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type CommentTemplateHandler struct {
@@ -29,6 +32,15 @@ func (h *CommentTemplateHandler) Create(c *fiber.Ctx) error {
 			"success": false,
 			"errors":  validationErrors,
 		})
+	}
+
+	exist, err := h.service.CommentTemplateExist(c.UserContext(), req.CommentText, req.WorkflowTransitionID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to check existence")
+	}
+
+	if exist {
+		return utils.ErrorResponse(c, fiber.StatusConflict, "Comment template already exists")
 	}
 
 	resp, err := h.service.Create(c.UserContext(), &req)
@@ -101,6 +113,27 @@ func (h *CommentTemplateHandler) Update(c *fiber.Ctx) error {
 			"success": false,
 			"errors":  validationErrors,
 		})
+	}
+	commentTemplate, err := h.service.Get(c.UserContext(), id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return utils.ErrorResponse(c, fiber.StatusNotFound, "comment template not found")
+		}
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to retrieve comment template")
+	}
+
+	if commentTemplate == nil || commentTemplate.WorkflowTransition == nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "comment template not found")
+	}
+
+	if commentTemplate.CommentText != *req.CommentText {
+		exist, err := h.service.CommentTemplateExist(c.UserContext(), *req.CommentText, commentTemplate.WorkflowTransitionID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to check existence")
+		}
+		if exist {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "Comment template with the same text already exists for the new workflow transition")
+		}
 	}
 
 	resp, err := h.service.Update(c.UserContext(), id, &req)

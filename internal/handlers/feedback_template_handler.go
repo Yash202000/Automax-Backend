@@ -1,12 +1,15 @@
 package handlers
 
 import (
+	"errors"
+
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type FeedbackTemplateHandler struct {
@@ -29,6 +32,15 @@ func (h *FeedbackTemplateHandler) Create(c *fiber.Ctx) error {
 			"success": false,
 			"errors":  validationErrors,
 		})
+	}
+
+	exist, err := h.service.FeedbackTemplateExist(c.UserContext(), req.FeedbackText, req.WorkflowTransitionID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to check existence")
+	}
+
+	if exist {
+		return utils.ErrorResponse(c, fiber.StatusConflict, "Feedback template already exists")
 	}
 
 	resp, err := h.service.Create(c.UserContext(), &req)
@@ -101,6 +113,28 @@ func (h *FeedbackTemplateHandler) Update(c *fiber.Ctx) error {
 			"success": false,
 			"errors":  validationErrors,
 		})
+	}
+
+	feedbackTemplate, err := h.service.Get(c.UserContext(), id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return utils.ErrorResponse(c, fiber.StatusNotFound, "feedback template not found")
+		}
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to retrieve feedback template")
+	}
+
+	if feedbackTemplate == nil || feedbackTemplate.WorkflowTransition == nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "feedback template not found")
+	}
+
+	if feedbackTemplate.FeedbackText != *req.FeedbackText {
+		exist, err := h.service.FeedbackTemplateExist(c.UserContext(), *req.FeedbackText, feedbackTemplate.WorkflowTransitionID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to check existence")
+		}
+		if exist {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "Feedback template with the same text already exists for the new workflow transition")
+		}
 	}
 
 	resp, err := h.service.Update(c.UserContext(), id, &req)
