@@ -31,6 +31,15 @@ func (h *CommentTemplateHandler) Create(c *fiber.Ctx) error {
 		})
 	}
 
+	exist, err := h.service.CommentTemplateExist(c.UserContext(), req.CommentText, req.WorkflowTransitionID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to check existence")
+	}
+
+	if exist {
+		return utils.ErrorResponse(c, fiber.StatusConflict, "Comment template already exists")
+	}
+
 	resp, err := h.service.Create(c.UserContext(), &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())

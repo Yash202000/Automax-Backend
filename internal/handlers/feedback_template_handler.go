@@ -31,6 +31,15 @@ func (h *FeedbackTemplateHandler) Create(c *fiber.Ctx) error {
 		})
 	}
 
+	exist, err := h.service.FeedbackTemplateExist(c.UserContext(), req.FeedbackText, req.WorkflowTransitionID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to check existence")
+	}
+
+	if exist {
+		return utils.ErrorResponse(c, fiber.StatusConflict, "Feedback template already exists")
+	}
+
 	resp, err := h.service.Create(c.UserContext(), &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())

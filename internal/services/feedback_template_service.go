@@ -18,6 +18,7 @@ type FeedbackTemplateService interface {
 	Update(ctx context.Context, id uuid.UUID, req *models.FeedbackTemplateUpdateRequest) (*models.FeedbackTemplateResponse, error)
 	Get(ctx context.Context, id uuid.UUID) (*models.FeedbackTemplateResponse, error)
 	GetByWorkflowTransitionID(ctx context.Context, workflowTransitionID uuid.UUID) ([]models.FeedbackTemplateResponse, error)
+	FeedbackTemplateExist(ctx context.Context, feedback string, workflowTransitionID uuid.UUID) (bool, error)
 	List(ctx context.Context, includeInactive bool) ([]models.FeedbackTemplateResponse, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 }
@@ -117,6 +118,14 @@ func (s *feedbackTemplateService) GetByWorkflowTransitionID(ctx context.Context,
 	}
 
 	return responses, nil
+}
+
+func (s *feedbackTemplateService) FeedbackTemplateExist(ctx context.Context, feedback string, workflowTransitionID uuid.UUID) (bool, error) {
+	exist, err := s.repo.FeedbackTemplateExist(ctx, feedback, workflowTransitionID)
+	if err != nil {
+		return false, fmt.Errorf("failed to check feedback template existence: %w", err)
+	}
+	return exist, nil
 }
 
 func (s *feedbackTemplateService) List(ctx context.Context, includeInactive bool) ([]models.FeedbackTemplateResponse, error) {
