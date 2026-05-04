@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"log"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
@@ -36,6 +37,7 @@ func (h *FeedbackTemplateHandler) Create(c *fiber.Ctx) error {
 
 	exist, err := h.service.FeedbackTemplateExist(c.UserContext(), req.FeedbackText, req.WorkflowTransitionID)
 	if err != nil {
+		log.Print(err)
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to check existence")
 	}
 
@@ -133,7 +135,7 @@ func (h *FeedbackTemplateHandler) Update(c *fiber.Ctx) error {
 			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to check existence")
 		}
 		if exist {
-			return utils.ErrorResponse(c, fiber.StatusConflict, "Feedback template with the same text already exists for the new workflow transition")
+			return utils.ErrorResponse(c, fiber.StatusConflict, "Feedback template with the same text already exists for the current workflow transition")
 		}
 	}
 
