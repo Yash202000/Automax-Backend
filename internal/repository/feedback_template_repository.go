@@ -52,8 +52,8 @@ func (r *feedbackTemplateRepository) FindByWorkflowTransitionID(ctx context.Cont
 
 func (r *feedbackTemplateRepository) FeedbackTemplateExist(ctx context.Context, feedback string, workflowTransitionID uuid.UUID) (bool, error) {
 	var count int64
-	err := r.db.WithContext(ctx).
-		Where("feedback = ? AND workflow_transition_id = ?", feedback, workflowTransitionID).
+	err := r.db.WithContext(ctx).Model(&models.FeedbackTemplate{}).
+		Where("feedback_text = ? AND workflow_transition_id = ?", feedback, workflowTransitionID).
 		Count(&count).Error
 	if err != nil {
 		return false, err
