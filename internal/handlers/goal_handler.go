@@ -466,15 +466,15 @@ func (h *GoalHandler) UpdateMetricValue(c *fiber.Ctx) error {
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	ctx := userContext(c)
 
-	metric, err := h.service.UpdateMetricValue(ctx, id, &req, userID)
+	change, err := h.service.UpdateMetricValue(ctx, id, &req, userID)
 	if err != nil {
 		if strings.Contains(err.Error(), "access denied") {
 			return utils.ErrorResponse(c, fiber.StatusForbidden, err.Error())
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to update metric value")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to submit metric value change")
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Metric value updated", metric)
+	return utils.SuccessResponse(c, fiber.StatusAccepted, "Metric value change submitted for approval", change)
 }
 
 func (h *GoalHandler) GetMetricHistory(c *fiber.Ctx) error {
@@ -807,6 +807,150 @@ func (h *GoalHandler) GetEvidenceTransitionHistory(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Transition history", history)
+}
+
+// ──────────────────────────────────────────────────
+// Metric & Metric Value Change Workflow Transitions
+// ──────────────────────────────────────────────────
+
+func (h *GoalHandler) GetAvailableMetricTransitions(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	transitions, err := h.service.GetAvailableMetricTransitions(c.UserContext(), id, userID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "Available transitions", transitions)
+}
+
+func (h *GoalHandler) TransitionMetric(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+	}
+
+	var req models.MetricTransitionRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	result, err := h.service.TransitionMetric(c.UserContext(), id, &req, userID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "Transition executed", result)
+}
+
+func (h *GoalHandler) GetAvailableMetricValueChangeTransitions(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	transitions, err := h.service.GetAvailableMetricValueChangeTransitions(c.UserContext(), id, userID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "Available transitions", transitions)
+}
+
+func (h *GoalHandler) TransitionMetricValueChange(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+	}
+
+	var req models.MetricTransitionRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	result, err := h.service.TransitionMetricValueChange(c.UserContext(), id, &req, userID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "Transition executed", result)
+}
+
+// ListMetricValueChanges returns all value changes for a specific metric.
+// Open to anyone with access to the parent goal (owner/collaborator/dept).
+func (h *GoalHandler) ListMetricValueChanges(c *fiber.Ctx) error {
+	metricID, err := uuid.Parse(c.Params("metric_id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid metric ID")
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	changes, err := h.service.ListMetricValueChanges(c.UserContext(), metricID, userID)
+	if err != nil {
+		if strings.Contains(err.Error(), "access denied") {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, err.Error())
+		}
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data":    changes,
+		"total":   len(changes),
+	})
+}
+
+func (h *GoalHandler) ListPendingMetricApprovals(c *fiber.Ctx) error {
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	page := c.QueryInt("page", 1)
+	limit := c.QueryInt("limit", 10)
+
+	approvals, total, err := h.service.ListPendingMetricApprovals(c.UserContext(), userID, page, limit)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to list pending metric approvals")
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data":    approvals,
+		"total":   total,
+		"page":    page,
+		"limit":   limit,
+	})
+}
+
+func (h *GoalHandler) ListPendingMetricValueChangeApprovals(c *fiber.Ctx) error {
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	page := c.QueryInt("page", 1)
+	limit := c.QueryInt("limit", 10)
+
+	approvals, total, err := h.service.ListPendingMetricValueChangeApprovals(c.UserContext(), userID, page, limit)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to list pending metric value change approvals")
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data":    approvals,
+		"total":   total,
+		"page":    page,
+		"limit":   limit,
+	})
 }
 
 // ──────────────────────────────────────────────────

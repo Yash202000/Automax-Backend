@@ -35,6 +35,23 @@ type GoalRepository interface {
 	CreateMetricHistory(ctx context.Context, history *models.MetricHistory) error
 	ListMetricHistory(ctx context.Context, metricID uuid.UUID, page int, limit int) ([]models.MetricHistory, int64, error)
 
+	// Metric Workflow / Approval Gate
+	FindMetricByIDWithRelations(ctx context.Context, id uuid.UUID) (*models.GoalMetric, error)
+	FindMetricByIDForUpdate(ctx context.Context, tx *gorm.DB, id uuid.UUID) (*models.GoalMetric, error)
+	UpdateMetricInTx(ctx context.Context, tx *gorm.DB, metric *models.GoalMetric) error
+	CreateMetricTransitionHistory(ctx context.Context, tx *gorm.DB, h *models.MetricTransitionHistory) error
+	ListMetricTransitionHistory(ctx context.Context, metricID uuid.UUID) ([]models.MetricTransitionHistory, error)
+	ListPendingMetricApprovals(ctx context.Context, userID uuid.UUID, page int, limit int) ([]models.GoalMetric, int64, error)
+
+	// Metric Value Change
+	CreateMetricValueChange(ctx context.Context, change *models.GoalMetricValueChange) error
+	FindMetricValueChangeByIDWithRelations(ctx context.Context, id uuid.UUID) (*models.GoalMetricValueChange, error)
+	FindMetricValueChangeByIDForUpdate(ctx context.Context, tx *gorm.DB, id uuid.UUID) (*models.GoalMetricValueChange, error)
+	UpdateMetricValueChangeInTx(ctx context.Context, tx *gorm.DB, change *models.GoalMetricValueChange) error
+	ListMetricValueChangesByMetricID(ctx context.Context, metricID uuid.UUID) ([]models.GoalMetricValueChange, error)
+	CreateMetricValueChangeTransitionHistory(ctx context.Context, tx *gorm.DB, h *models.MetricValueChangeTransitionHistory) error
+	ListPendingMetricValueChangeApprovals(ctx context.Context, userID uuid.UUID, page int, limit int) ([]models.GoalMetricValueChange, int64, error)
+
 	// Evidence
 	CreateEvidence(ctx context.Context, evidence *models.Evidence) error
 	FindEvidenceByID(ctx context.Context, id uuid.UUID) (*models.Evidence, error)
@@ -333,6 +350,8 @@ func (r *goalRepository) DeleteMetric(ctx context.Context, id uuid.UUID) error {
 func (r *goalRepository) ListMetricsByGoalID(ctx context.Context, goalID uuid.UUID) ([]models.GoalMetric, error) {
 	var metrics []models.GoalMetric
 	err := r.db.WithContext(ctx).
+		Preload("CurrentState").
+		Preload("AssignedTo").
 		Where("goal_id = ?", goalID).
 		Find(&metrics).Error
 	return metrics, err
@@ -375,6 +394,197 @@ func (r *goalRepository) ListMetricHistory(ctx context.Context, metricID uuid.UU
 	}
 
 	return histories, total, nil
+}
+
+// ──────────────────────────────────────────────────
+// Metric Workflow / Approval Gate
+// ──────────────────────────────────────────────────
+
+func (r *goalRepository) FindMetricByIDWithRelations(ctx context.Context, id uuid.UUID) (*models.GoalMetric, error) {
+	var metric models.GoalMetric
+	err := r.db.WithContext(ctx).
+		Preload("Goal").
+		Preload("CurrentState").
+		Preload("AssignedTo").
+		First(&metric, "id = ?", id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &metric, nil
+}
+
+func (r *goalRepository) FindMetricByIDForUpdate(ctx context.Context, tx *gorm.DB, id uuid.UUID) (*models.GoalMetric, error) {
+	var metric models.GoalMetric
+	err := tx.WithContext(ctx).
+		Set("gorm:query_option", "FOR UPDATE").
+		Preload("CurrentState").
+		Preload("AssignedTo").
+		First(&metric, "id = ?", id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &metric, nil
+}
+
+func (r *goalRepository) UpdateMetricInTx(ctx context.Context, tx *gorm.DB, metric *models.GoalMetric) error {
+	return tx.WithContext(ctx).
+		Select("current_state_id", "assigned_to_id", "current_value", "version", "updated_at").
+		Save(metric).Error
+}
+
+func (r *goalRepository) CreateMetricTransitionHistory(ctx context.Context, tx *gorm.DB, h *models.MetricTransitionHistory) error {
+	return tx.WithContext(ctx).Create(h).Error
+}
+
+func (r *goalRepository) ListMetricTransitionHistory(ctx context.Context, metricID uuid.UUID) ([]models.MetricTransitionHistory, error) {
+	var histories []models.MetricTransitionHistory
+	err := r.db.WithContext(ctx).
+		Preload("FromState").
+		Preload("ToState").
+		Preload("Transition").
+		Preload("PerformedBy").
+		Where("metric_id = ?", metricID).
+		Order("transitioned_at DESC").
+		Find(&histories).Error
+	return histories, err
+}
+
+func (r *goalRepository) ListPendingMetricApprovals(ctx context.Context, userID uuid.UUID, page int, limit int) ([]models.GoalMetric, int64, error) {
+	var metrics []models.GoalMetric
+	var total int64
+
+	base := r.db.WithContext(ctx).Model(&models.GoalMetric{}).
+		Where("goal_metrics.assigned_to_id = ?", userID).
+		Joins("JOIN workflow_states ON workflow_states.id = goal_metrics.current_state_id").
+		Where("workflow_states.state_type NOT IN ?", []string{"initial", "terminal"})
+
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 || limit > 100 {
+		limit = 10
+	}
+	offset := (page - 1) * limit
+
+	err := r.db.WithContext(ctx).
+		Preload("Goal", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
+		Preload("CurrentState").
+		Preload("AssignedTo").
+		Where("goal_metrics.assigned_to_id = ?", userID).
+		Joins("JOIN workflow_states ON workflow_states.id = goal_metrics.current_state_id").
+		Where("workflow_states.state_type NOT IN ?", []string{"initial", "terminal"}).
+		Order("goal_metrics.updated_at DESC").
+		Offset(offset).
+		Limit(limit).
+		Find(&metrics).Error
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return metrics, total, nil
+}
+
+// ──────────────────────────────────────────────────
+// Metric Value Change
+// ──────────────────────────────────────────────────
+
+func (r *goalRepository) CreateMetricValueChange(ctx context.Context, change *models.GoalMetricValueChange) error {
+	return r.db.WithContext(ctx).Create(change).Error
+}
+
+func (r *goalRepository) FindMetricValueChangeByIDWithRelations(ctx context.Context, id uuid.UUID) (*models.GoalMetricValueChange, error) {
+	var change models.GoalMetricValueChange
+	err := r.db.WithContext(ctx).
+		Preload("Metric").
+		Preload("Metric.Goal").
+		Preload("SubmittedBy").
+		Preload("CurrentState").
+		Preload("AssignedTo").
+		First(&change, "id = ?", id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &change, nil
+}
+
+func (r *goalRepository) FindMetricValueChangeByIDForUpdate(ctx context.Context, tx *gorm.DB, id uuid.UUID) (*models.GoalMetricValueChange, error) {
+	var change models.GoalMetricValueChange
+	err := tx.WithContext(ctx).
+		Set("gorm:query_option", "FOR UPDATE").
+		Preload("CurrentState").
+		Preload("AssignedTo").
+		First(&change, "id = ?", id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &change, nil
+}
+
+func (r *goalRepository) UpdateMetricValueChangeInTx(ctx context.Context, tx *gorm.DB, change *models.GoalMetricValueChange) error {
+	return tx.WithContext(ctx).
+		Select("current_state_id", "assigned_to_id", "applied_at", "version", "updated_at").
+		Save(change).Error
+}
+
+func (r *goalRepository) ListMetricValueChangesByMetricID(ctx context.Context, metricID uuid.UUID) ([]models.GoalMetricValueChange, error) {
+	var changes []models.GoalMetricValueChange
+	err := r.db.WithContext(ctx).
+		Preload("SubmittedBy").
+		Preload("CurrentState").
+		Preload("AssignedTo").
+		Where("metric_id = ?", metricID).
+		Order("created_at DESC").
+		Find(&changes).Error
+	return changes, err
+}
+
+func (r *goalRepository) CreateMetricValueChangeTransitionHistory(ctx context.Context, tx *gorm.DB, h *models.MetricValueChangeTransitionHistory) error {
+	return tx.WithContext(ctx).Create(h).Error
+}
+
+func (r *goalRepository) ListPendingMetricValueChangeApprovals(ctx context.Context, userID uuid.UUID, page int, limit int) ([]models.GoalMetricValueChange, int64, error) {
+	var changes []models.GoalMetricValueChange
+	var total int64
+
+	base := r.db.WithContext(ctx).Model(&models.GoalMetricValueChange{}).
+		Where("goal_metric_value_changes.assigned_to_id = ?", userID).
+		Joins("JOIN workflow_states ON workflow_states.id = goal_metric_value_changes.current_state_id").
+		Where("workflow_states.state_type NOT IN ?", []string{"initial", "terminal"})
+
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 || limit > 100 {
+		limit = 10
+	}
+	offset := (page - 1) * limit
+
+	err := r.db.WithContext(ctx).
+		Preload("Metric", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
+		Preload("Metric.Goal", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
+		Preload("SubmittedBy").
+		Preload("CurrentState").
+		Preload("AssignedTo").
+		Where("goal_metric_value_changes.assigned_to_id = ?", userID).
+		Joins("JOIN workflow_states ON workflow_states.id = goal_metric_value_changes.current_state_id").
+		Where("workflow_states.state_type NOT IN ?", []string{"initial", "terminal"}).
+		Order("goal_metric_value_changes.updated_at DESC").
+		Offset(offset).
+		Limit(limit).
+		Find(&changes).Error
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return changes, total, nil
 }
 
 // ──────────────────────────────────────────────────
@@ -443,23 +653,33 @@ func (r *goalRepository) ListEvidencesByGoalID(ctx context.Context, goalID uuid.
 	var evidences []models.Evidence
 	var total int64
 
-	query := r.db.WithContext(ctx).Model(&models.Evidence{}).Where("goal_id = ?", goalID)
+	query := r.db.WithContext(ctx).Model(&models.Evidence{}).Where("evidences.goal_id = ?", goalID)
 
 	if filter.Status != "" {
-		query = query.Where("status = ?", filter.Status)
+		query = query.Where("evidences.status = ?", filter.Status)
 	}
 	if filter.Search != "" {
 		searchPattern := "%" + filter.Search + "%"
-		query = query.Where("(title ILIKE ? OR file_name ILIKE ?)", searchPattern, searchPattern)
+		query = query.Where("(evidences.title ILIKE ? OR evidences.file_name ILIKE ?)", searchPattern, searchPattern)
 	}
 	if filter.EvidenceType != "" {
-		query = query.Where("evidence_type = ?", filter.EvidenceType)
+		query = query.Where("evidences.evidence_type = ?", filter.EvidenceType)
 	}
 	if filter.StartDate != "" {
-		query = query.Where("created_at >= ?", filter.StartDate)
+		query = query.Where("evidences.created_at >= ?", filter.StartDate)
 	}
 	if filter.EndDate != "" {
-		query = query.Where("created_at <= ?", filter.EndDate+"T23:59:59Z")
+		query = query.Where("evidences.created_at <= ?", filter.EndDate+"T23:59:59Z")
+	}
+
+	// ApprovedOnly: restrict to evidences in a terminal state (Approved/Rejected).
+	// Set by the service layer for view-only callers. Legacy rows without a
+	// current_state_id are excluded — they were created before the gate so
+	// view-only callers should not see drafts.
+	if filter.ApprovedOnly {
+		query = query.
+			Joins("JOIN workflow_states ON workflow_states.id = evidences.current_state_id").
+			Where("workflow_states.state_type = ?", "terminal")
 	}
 
 	if err := query.Count(&total).Error; err != nil {
@@ -480,7 +700,7 @@ func (r *goalRepository) ListEvidencesByGoalID(ctx context.Context, goalID uuid.
 		Preload("UploadedBy").
 		Preload("CurrentState").
 		Preload("AssignedTo").
-		Order("created_at DESC").
+		Order("evidences.created_at DESC").
 		Offset(offset).
 		Limit(limit).
 		Find(&evidences).Error
