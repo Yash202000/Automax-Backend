@@ -63,6 +63,11 @@ func (m *AuthMiddleware) Authenticate() fiber.Handler {
 		if err != nil {
 			return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Invalid or expired token")
 		}
+		//validate session for multi-device
+		err = m.sessionStore.DeleteAllUserSessions(c.UserContext(), claims.SessionID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Session expired. Please login again.")
+		}
 
 		c.Locals(constants.ContextKeys.UserID, claims.UserID)
 		c.Locals(constants.ContextKeys.Email, claims.Email)

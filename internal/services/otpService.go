@@ -7,13 +7,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/big"
 	"os"
 	"strconv"
 	"time"
 
+	"github.com/automax/backend/internal/database"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
@@ -24,6 +27,8 @@ type OTPService struct {
 	notificationLogRepo repository.NotificationLogRepository
 	userRepo            repository.UserRepository
 	userService         UserService
+	sessionStore        *database.SessionStore
+	jwtManager          *utils.JWTManager
 }
 
 func NewOTPService(
@@ -32,6 +37,8 @@ func NewOTPService(
 	notificationLogRepo repository.NotificationLogRepository,
 	userRepo repository.UserRepository,
 	userService UserService,
+	sessionStore *database.SessionStore,
+	jwtManager *utils.JWTManager,
 ) *OTPService {
 	return &OTPService{
 		redis:               redisClient,
@@ -39,6 +46,8 @@ func NewOTPService(
 		notificationLogRepo: notificationLogRepo,
 		userRepo:            userRepo,
 		userService:         userService,
+		sessionStore:        sessionStore,
+		jwtManager:          jwtManager,
 	}
 }
 
@@ -128,6 +137,7 @@ func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode strin
 
 	//GENERATE OTP
 	otp, err := s.GenerateOTP()
+	fmt.Println("Generated OTP:", otp)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate otp: %w", err)
 	}
@@ -232,6 +242,30 @@ func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID stri
 		return nil, fmt.Errorf("user not found")
 	}
 
+	// Determine role
+	role := "user"
+	if user.IsSuperAdmin {
+		role = "admin"
+	} else if len(user.Roles) > 0 {
+		role = user.Roles[0].Code
+	}
+
+	//CREATE SESSION
+	_, err = s.sessionStore.SetUserSessionMultiDevices(
+		ctx,
+		user.ID.String(),
+		map[string]interface{}{
+			"user_id": user.ID,
+			"email":   user.Email,
+			"role":    role,
+		},
+		s.jwtManager.GetTokenExpiration(),
+	)
+	log.Println("Session ID for mobile login :", sessionID, "and user id :", user.ID.String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create session: %w", err)
+	}
+
 	authResp, err := s.userService.GenerateTokenViaUserID(ctx, user.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate token: %w", err)
@@ -247,7 +281,7 @@ func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID stri
 	// update notification log
 	err = s.notificationLogRepo.MarkOTPVerified(ctx, sessionID, time.Now())
 	if err != nil {
-		return nil, fmt.Errorf("failed to update otp status")
+		return nil, fmt.Errorf("failed to update otp status: %w", err)
 	}
 	//SUCCESS  then DELETE OTP FROM REDIS
 	s.redis.Del(ctx, key)

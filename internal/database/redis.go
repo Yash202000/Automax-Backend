@@ -110,7 +110,7 @@ func (s *SessionStore) SetUserSessionMultiDevices(ctx context.Context, userID st
 func (s *SessionStore) DeleteAllUserSessions(ctx context.Context, userID string) error {
 
 	userSessionsKey := fmt.Sprintf("user_sessions:%s", userID)
-
+	log.Printf("Deleting all sessions for user %s with key %s", userID, userSessionsKey)
 	sessionIDs, err := s.client.SMembers(ctx, userSessionsKey).Result()
 	if err != nil {
 		return err
