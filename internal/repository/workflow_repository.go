@@ -505,7 +505,7 @@ func (r *workflowRepository) ListTransitionsFromState(ctx context.Context, state
 		Preload("FieldChanges", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order")
 		}).
-		Where("to_state_id = ? AND is_active = ?", stateID, true).
+		Where("from_state_id = ? AND is_active = ?", stateID, true).
 		Order("sort_order, name").
 		Find(&transitions).Error
 	return transitions, err
