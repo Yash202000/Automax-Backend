@@ -1179,14 +1179,14 @@ func (h *WorkflowHandler) SetTransitionFieldChanges(c *fiber.Ctx) error {
 
 // Helper endpoints
 
-func (h *WorkflowHandler) GetTransitionsFromState(c *fiber.Ctx) error {
+func (h *WorkflowHandler) GetTransitionsToState(c *fiber.Ctx) error {
 	stateIDStr := c.Params("state_id")
 	stateID, err := uuid.Parse(stateIDStr)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid state ID")
 	}
 
-	transitions, err := h.service.GetTransitionsFromState(c.UserContext(), stateID)
+	transitions, err := h.service.GetTransitionsToState(c.UserContext(), stateID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
