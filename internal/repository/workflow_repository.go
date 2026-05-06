@@ -55,6 +55,7 @@ type WorkflowRepository interface {
 	FindTransitionByIDWithRelations(ctx context.Context, id uuid.UUID) (*models.WorkflowTransition, error)
 	ListTransitionsByWorkflowID(ctx context.Context, workflowID uuid.UUID) ([]models.WorkflowTransition, error)
 	ListTransitionsFromState(ctx context.Context, stateID uuid.UUID) ([]models.WorkflowTransition, error)
+	ListTransitionsToState(ctx context.Context, stateID uuid.UUID) ([]models.WorkflowTransition, error)
 	UpdateTransition(ctx context.Context, transition *models.WorkflowTransition) error
 	DeleteTransition(ctx context.Context, id uuid.UUID) error
 
@@ -506,6 +507,28 @@ func (r *workflowRepository) ListTransitionsFromState(ctx context.Context, state
 			return db.Order("sort_order")
 		}).
 		Where("from_state_id = ? AND is_active = ?", stateID, true).
+		Order("sort_order, name").
+		Find(&transitions).Error
+	return transitions, err
+}
+
+func (r *workflowRepository) ListTransitionsToState(ctx context.Context, stateID uuid.UUID) ([]models.WorkflowTransition, error) {
+	var transitions []models.WorkflowTransition
+	err := r.db.WithContext(ctx).
+		Preload("FromState").
+		Preload("ToState").
+		Preload("AllowedRoles").
+		Preload("AssignDepartment").
+		Preload("AssignUser").
+		Preload("AssignmentRoles").
+		Preload("Requirements").
+		Preload("Actions", func(db *gorm.DB) *gorm.DB {
+			return db.Order("execution_order")
+		}).
+		Preload("FieldChanges", func(db *gorm.DB) *gorm.DB {
+			return db.Order("sort_order")
+		}).
+		Where("to_state_id = ? AND is_active = ?", stateID, true).
 		Order("sort_order, name").
 		Find(&transitions).Error
 	return transitions, err

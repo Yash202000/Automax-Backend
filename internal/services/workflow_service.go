@@ -56,6 +56,7 @@ type WorkflowService interface {
 
 	// Get transitions from a state (for incident transition UI)
 	GetTransitionsFromState(ctx context.Context, stateID uuid.UUID) ([]models.WorkflowTransitionResponse, error)
+	GetTransitionsToState(ctx context.Context, stateID uuid.UUID) ([]models.WorkflowTransitionResponse, error)
 	GetInitialState(ctx context.Context, workflowID uuid.UUID) (*models.WorkflowStateResponse, error)
 
 	// Workflow matching - for mobile apps and other clients
@@ -1314,6 +1315,21 @@ func (s *workflowService) GetTransitionsFromState(ctx context.Context, stateID u
 	return responses, nil
 }
 
+// Get transitions to a state (for incident transition UI)
+
+func (s *workflowService) GetTransitionsToState(ctx context.Context, stateID uuid.UUID) ([]models.WorkflowTransitionResponse, error) {
+	transitions, err := s.repo.ListTransitionsToState(ctx, stateID)
+	if err != nil {
+		return nil, err
+	}
+
+	responses := make([]models.WorkflowTransitionResponse, len(transitions))
+	for i, trans := range transitions {
+		responses[i] = models.ToWorkflowTransitionResponse(&trans)
+	}
+
+	return responses, nil
+}
 func (s *workflowService) GetInitialState(ctx context.Context, workflowID uuid.UUID) (*models.WorkflowStateResponse, error) {
 	state, err := s.repo.GetInitialState(ctx, workflowID)
 	if err != nil {
