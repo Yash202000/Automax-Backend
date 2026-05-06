@@ -100,6 +100,13 @@ type WorkflowState struct {
 	// Role-based editability (many-to-many) - empty = no state-level restriction (falls back to incidents:update permission)
 	EditableRoles []Role `gorm:"many2many:state_editable_roles;" json:"editable_roles,omitempty"`
 
+	// Creation-time assignment (applied when an incident is placed into this state on creation)
+	AssignUserID     *uuid.UUID `gorm:"type:uuid" json:"assign_user_id"`
+	AssignUser       *User      `gorm:"foreignKey:AssignUserID" json:"assign_user,omitempty"`
+	AssignmentRoles  []Role     `gorm:"many2many:state_assignment_roles;" json:"assignment_roles,omitempty"`
+	AutoMatchUser    bool       `gorm:"default:false" json:"auto_match_user"`
+	ManualSelectUser bool       `gorm:"default:false" json:"manual_select_user"`
+
 	SortOrder int            `gorm:"default:0" json:"sort_order"`
 	IsActive  bool           `gorm:"default:true" json:"is_active"`
 	CreatedAt time.Time      `json:"created_at"`
@@ -323,6 +330,11 @@ type WorkflowStateCreateRequest struct {
 	SortOrder          int      `json:"sort_order"`
 	ViewableRoleIDs    []string `json:"viewable_role_ids"`
 	EditableRoleIDs    []string `json:"editable_role_ids"`
+	// Creation-time assignment
+	AssignUserID      *string  `json:"assign_user_id" validate:"omitempty,uuid"`
+	AssignmentRoleIDs []string `json:"assignment_role_ids"`
+	AutoMatchUser     bool     `json:"auto_match_user"`
+	ManualSelectUser  bool     `json:"manual_select_user"`
 }
 
 type WorkflowStateUpdateRequest struct {
@@ -343,6 +355,11 @@ type WorkflowStateUpdateRequest struct {
 	IsActive           *bool    `json:"is_active"`
 	ViewableRoleIDs    []string `json:"viewable_role_ids"`
 	EditableRoleIDs    []string `json:"editable_role_ids"`
+	// Creation-time assignment
+	AssignUserID      *string  `json:"assign_user_id" validate:"omitempty,uuid"`
+	AssignmentRoleIDs []string `json:"assignment_role_ids"`
+	AutoMatchUser     *bool    `json:"auto_match_user"`
+	ManualSelectUser  *bool    `json:"manual_select_user"`
 }
 
 type WorkflowTransitionCreateRequest struct {
@@ -494,6 +511,12 @@ type WorkflowStateResponse struct {
 	IsActive           bool                      `json:"is_active"`
 	ViewableRoles      []RoleResponse            `json:"viewable_roles,omitempty"`
 	EditableRoles      []RoleResponse            `json:"editable_roles,omitempty"`
+	// Creation-time assignment
+	AssignUserID     *uuid.UUID    `json:"assign_user_id,omitempty"`
+	AssignUser       *UserResponse `json:"assign_user,omitempty"`
+	AssignmentRoles  []RoleResponse `json:"assignment_roles,omitempty"`
+	AutoMatchUser    bool          `json:"auto_match_user"`
+	ManualSelectUser bool          `json:"manual_select_user"`
 	CreatedAt          time.Time                 `json:"created_at"`
 }
 
@@ -705,6 +728,20 @@ func ToWorkflowStateResponse(s *WorkflowState) WorkflowStateResponse {
 		resp.EditableRoles = make([]RoleResponse, len(s.EditableRoles))
 		for i, r := range s.EditableRoles {
 			resp.EditableRoles[i] = ToRoleResponse(&r)
+		}
+	}
+
+	resp.AssignUserID = s.AssignUserID
+	if s.AssignUser != nil {
+		u := ToUserResponse(s.AssignUser)
+		resp.AssignUser = &u
+	}
+	resp.AutoMatchUser = s.AutoMatchUser
+	resp.ManualSelectUser = s.ManualSelectUser
+	if len(s.AssignmentRoles) > 0 {
+		resp.AssignmentRoles = make([]RoleResponse, len(s.AssignmentRoles))
+		for i, r := range s.AssignmentRoles {
+			resp.AssignmentRoles[i] = ToRoleResponse(&r)
 		}
 	}
 

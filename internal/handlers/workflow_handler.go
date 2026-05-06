@@ -1209,6 +1209,38 @@ func (h *WorkflowHandler) GetInitialState(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "Initial state retrieved", state)
 }
 
+func (h *WorkflowHandler) GetInitialStateMatchingUsers(c *fiber.Ctx) error {
+	workflowIDStr := c.Params("id")
+	workflowID, err := uuid.Parse(workflowIDStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid workflow ID")
+	}
+
+	var classificationID, locationID, departmentID *uuid.UUID
+	if v := c.Query("classification_id"); v != "" {
+		if id, err := uuid.Parse(v); err == nil {
+			classificationID = &id
+		}
+	}
+	if v := c.Query("location_id"); v != "" {
+		if id, err := uuid.Parse(v); err == nil {
+			locationID = &id
+		}
+	}
+	if v := c.Query("department_id"); v != "" {
+		if id, err := uuid.Parse(v); err == nil {
+			departmentID = &id
+		}
+	}
+
+	users, err := h.service.GetInitialStateMatchingUsers(c.UserContext(), workflowID, classificationID, locationID, departmentID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Matching users retrieved", users)
+}
+
 // MatchWorkflow finds a workflow based on incident criteria and returns form configuration
 // This endpoint is designed for mobile apps and other clients to get:
 // 1. The matched workflow based on classification, location, source, etc.

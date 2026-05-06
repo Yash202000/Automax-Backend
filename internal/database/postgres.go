@@ -182,6 +182,11 @@ func Migrate(db *gorm.DB) error {
 		log.Printf("Warning: transition assignment roles migration failed: %v", err)
 	}
 
+	// Migrate state assignment roles (creation-time user assignment join table)
+	if err := migrations.MigrateStateAssignmentRoles(db); err != nil {
+		log.Printf("Warning: state assignment roles migration failed: %v", err)
+	}
+
 	// Migrate closed incident edit tracking
 	if err := migrations.MigrateClosedIncidentEditTracking(db); err != nil {
 		log.Printf("Warning: closed incident edit tracking migration failed: %v", err)

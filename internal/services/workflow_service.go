@@ -58,6 +58,9 @@ type WorkflowService interface {
 	GetTransitionsFromState(ctx context.Context, stateID uuid.UUID) ([]models.WorkflowTransitionResponse, error)
 	GetInitialState(ctx context.Context, workflowID uuid.UUID) (*models.WorkflowStateResponse, error)
 
+	// Get matching users for a workflow's initial state (for manual-select creation assignment)
+	GetInitialStateMatchingUsers(ctx context.Context, workflowID uuid.UUID, classificationID, locationID, departmentID *uuid.UUID) ([]models.UserResponse, error)
+
 	// Workflow matching - for mobile apps and other clients
 	MatchWorkflow(ctx context.Context, req *models.WorkflowMatchRequest) (*models.WorkflowMatchResponse, error)
 
@@ -71,15 +74,17 @@ type workflowService struct {
 	roleRepo  repository.RoleRepository
 	deptRepo  repository.DepartmentRepository
 	classRepo repository.ClassificationRepository
+	userRepo  repository.UserRepository
 	db        *gorm.DB
 }
 
-func NewWorkflowService(repo repository.WorkflowRepository, roleRepo repository.RoleRepository, deptRepo repository.DepartmentRepository, classRepo repository.ClassificationRepository, db *gorm.DB) WorkflowService {
+func NewWorkflowService(repo repository.WorkflowRepository, roleRepo repository.RoleRepository, deptRepo repository.DepartmentRepository, classRepo repository.ClassificationRepository, userRepo repository.UserRepository, db *gorm.DB) WorkflowService {
 	return &workflowService{
 		repo:      repo,
 		roleRepo:  roleRepo,
 		deptRepo:  deptRepo,
 		classRepo: classRepo,
+		userRepo:  userRepo,
 		db:        db,
 	}
 }
@@ -823,10 +828,17 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 		DurationOptions: durationOptionsJSON,
 		SortOrder:       req.SortOrder,
 		IsActive:        true,
+		AutoMatchUser:   req.AutoMatchUser,
+		ManualSelectUser: req.ManualSelectUser,
 	}
 	if req.EscalationPolicyID != nil && *req.EscalationPolicyID != "" {
 		if id, err := uuid.Parse(*req.EscalationPolicyID); err == nil {
 			state.EscalationPolicyID = &id
+		}
+	}
+	if req.AssignUserID != nil && *req.AssignUserID != "" {
+		if id, err := uuid.Parse(*req.AssignUserID); err == nil {
+			state.AssignUserID = &id
 		}
 	}
 
@@ -867,6 +879,21 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 			roleIDs = append(roleIDs, id)
 		}
 		if err := s.repo.AssignStateEditableRoles(ctx, state.ID, roleIDs); err != nil {
+			return nil, err
+		}
+	}
+
+	// Assign creation-time assignment roles if provided
+	if len(req.AssignmentRoleIDs) > 0 {
+		roleIDs := make([]uuid.UUID, 0, len(req.AssignmentRoleIDs))
+		for _, idStr := range req.AssignmentRoleIDs {
+			id, err := uuid.Parse(idStr)
+			if err != nil {
+				continue
+			}
+			roleIDs = append(roleIDs, id)
+		}
+		if err := s.repo.AssignStateAssignmentRoles(ctx, state.ID, roleIDs); err != nil {
 			return nil, err
 		}
 	}
@@ -968,6 +995,21 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 	if req.IsActive != nil {
 		state.IsActive = *req.IsActive
 	}
+	if req.AutoMatchUser != nil {
+		state.AutoMatchUser = *req.AutoMatchUser
+	}
+	if req.ManualSelectUser != nil {
+		state.ManualSelectUser = *req.ManualSelectUser
+	}
+	if req.AssignUserID != nil {
+		if *req.AssignUserID == "" {
+			state.AssignUserID = nil
+		} else {
+			if id, err := uuid.Parse(*req.AssignUserID); err == nil {
+				state.AssignUserID = &id
+			}
+		}
+	}
 
 	if err := s.repo.UpdateState(ctx, state); err != nil {
 		return nil, err
@@ -999,6 +1041,21 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 			roleIDs = append(roleIDs, id)
 		}
 		if err := s.repo.AssignStateEditableRoles(ctx, stateID, roleIDs); err != nil {
+			return nil, err
+		}
+	}
+
+	// Update creation-time assignment roles if provided (nil = no change, empty = clear all)
+	if req.AssignmentRoleIDs != nil {
+		roleIDs := make([]uuid.UUID, 0, len(req.AssignmentRoleIDs))
+		for _, idStr := range req.AssignmentRoleIDs {
+			id, err := uuid.Parse(idStr)
+			if err != nil {
+				continue
+			}
+			roleIDs = append(roleIDs, id)
+		}
+		if err := s.repo.AssignStateAssignmentRoles(ctx, stateID, roleIDs); err != nil {
 			return nil, err
 		}
 	}
@@ -1322,6 +1379,33 @@ func (s *workflowService) GetInitialState(ctx context.Context, workflowID uuid.U
 
 	resp := models.ToWorkflowStateResponse(state)
 	return &resp, nil
+}
+
+func (s *workflowService) GetInitialStateMatchingUsers(ctx context.Context, workflowID uuid.UUID, classificationID, locationID, departmentID *uuid.UUID) ([]models.UserResponse, error) {
+	state, err := s.repo.GetInitialState(ctx, workflowID)
+	if err != nil {
+		return nil, err
+	}
+
+	if !state.ManualSelectUser || len(state.AssignmentRoles) == 0 {
+		return []models.UserResponse{}, nil
+	}
+
+	roleIDs := make([]uuid.UUID, len(state.AssignmentRoles))
+	for i, r := range state.AssignmentRoles {
+		roleIDs[i] = r.ID
+	}
+
+	users, err := s.userRepo.FindMatching(ctx, roleIDs, classificationID, locationID, departmentID, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]models.UserResponse, len(users))
+	for i, u := range users {
+		result[i] = models.ToUserResponse(&u)
+	}
+	return result, nil
 }
 
 // MatchWorkflow finds a workflow based on incident criteria and returns form configuration

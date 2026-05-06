@@ -495,6 +495,85 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		}
 	}
 
+	// Apply creation-time assignment rules from the initial state
+	if initialState.AssignUserID != nil {
+		// Specific user — always assign to this pre-configured user
+		if err := s.incidentRepo.AssignIncident(ctx, incident.ID, *initialState.AssignUserID); err != nil {
+			fmt.Printf("Warning: creation assignment (specific user) failed: %v\n", err)
+		} else {
+			if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{*initialState.AssignUserID}); err != nil {
+				fmt.Printf("Warning: SetAssignees (specific user) failed: %v\n", err)
+			}
+		}
+	} else if initialState.AutoMatchUser && len(initialState.AssignmentRoles) > 0 {
+		// Auto-match — find all users matching roles + incident's classification/location/department
+		var classID, locID, deptID *uuid.UUID
+		if incident.ClassificationID != nil {
+			classID = incident.ClassificationID
+		}
+		if incident.LocationID != nil {
+			locID = incident.LocationID
+		}
+		if incident.DepartmentID != nil {
+			deptID = incident.DepartmentID
+		}
+		roleIDs := make([]uuid.UUID, len(initialState.AssignmentRoles))
+		for i, r := range initialState.AssignmentRoles {
+			roleIDs[i] = r.ID
+		}
+		matchedUsers, err := s.userRepo.FindMatching(ctx, roleIDs, classID, locID, deptID, nil)
+		if err == nil && len(matchedUsers) == 0 {
+			// Fallback: role-only match
+			matchedUsers, err = s.userRepo.FindMatching(ctx, roleIDs, nil, nil, nil, nil)
+		}
+		if err == nil && len(matchedUsers) > 0 {
+			assigneeIDs := make([]uuid.UUID, len(matchedUsers))
+			for i, u := range matchedUsers {
+				assigneeIDs[i] = u.ID
+			}
+			if err := s.incidentRepo.AssignIncident(ctx, incident.ID, matchedUsers[0].ID); err != nil {
+				fmt.Printf("Warning: creation assignment (auto-match) failed: %v\n", err)
+			} else {
+				if err := s.incidentRepo.SetAssignees(ctx, incident.ID, assigneeIDs); err != nil {
+					fmt.Printf("Warning: SetAssignees (auto-match) failed: %v\n", err)
+				}
+			}
+		}
+	} else if initialState.ManualSelectUser && len(initialState.AssignmentRoles) > 0 && req.AssigneeID != nil && *req.AssigneeID != "" {
+		// Manual select — validate the operator-chosen assignee is in the matching pool
+		assigneeUUID, parseErr := uuid.Parse(*req.AssigneeID)
+		if parseErr == nil {
+			roleIDs := make([]uuid.UUID, len(initialState.AssignmentRoles))
+			for i, r := range initialState.AssignmentRoles {
+				roleIDs[i] = r.ID
+			}
+			var classID, locID, deptID *uuid.UUID
+			if incident.ClassificationID != nil {
+				classID = incident.ClassificationID
+			}
+			if incident.LocationID != nil {
+				locID = incident.LocationID
+			}
+			if incident.DepartmentID != nil {
+				deptID = incident.DepartmentID
+			}
+			matchedUsers, _ := s.userRepo.FindMatching(ctx, roleIDs, classID, locID, deptID, nil)
+			validPool := make(map[uuid.UUID]bool, len(matchedUsers))
+			for _, u := range matchedUsers {
+				validPool[u.ID] = true
+			}
+			if validPool[assigneeUUID] {
+				if err := s.incidentRepo.AssignIncident(ctx, incident.ID, assigneeUUID); err != nil {
+					fmt.Printf("Warning: creation assignment (manual select) failed: %v\n", err)
+				} else {
+					if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{assigneeUUID}); err != nil {
+						fmt.Printf("Warning: SetAssignees (manual select) failed: %v\n", err)
+					}
+				}
+			}
+		}
+	}
+
 	// Set lookup values using Association API (GORM many-to-many requires this after create)
 	if len(req.LookupValueIDs) > 0 {
 		var lookupValues []models.LookupValue

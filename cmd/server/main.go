@@ -112,7 +112,7 @@ func main() {
 	defer ldapService.Close()
 
 	callLogService := services.NewCallLogService(callLogRepo, userRepo)
-	workflowService := services.NewWorkflowService(workflowRepo, roleRepo, departmentRepo, classificationRepo, db)
+	workflowService := services.NewWorkflowService(workflowRepo, roleRepo, departmentRepo, classificationRepo, userRepo, db)
 	incidentService := services.NewIncidentService(incidentRepo, incidentMergeRepo, workflowRepo, userRepo, departmentRepo, classificationRepo, rejectionLogRepo, roleRepo, minioStorage, db, wsHub)
 	incidentMergeService := services.NewIncidentMergeService(incidentMergeRepo, incidentRepo, workflowRepo, roleRepo, locationRepo, classificationRepo, db, wsHub)
 	reportService := services.NewReportService(reportRepo, rejectionLogRepo)
@@ -591,6 +591,7 @@ func main() {
 	workflows.Post("/:id/duplicate", authMiddleware.RequirePermission("workflows:create"), workflowHandler.DuplicateWorkflow)
 	workflows.Post("/:id/classifications", authMiddleware.RequirePermission("workflows:update"), workflowHandler.AssignClassifications)
 	workflows.Get("/:id/initial-state", authMiddleware.RequirePermission("workflows:view"), workflowHandler.GetInitialState)
+	workflows.Get("/:id/initial-state/matching-users", authMiddleware.RequirePermission("workflows:view"), workflowHandler.GetInitialStateMatchingUsers)
 	workflows.Get("/:id/export", authMiddleware.RequirePermission("workflows:view"), workflowHandler.ExportWorkflow)
 	workflows.Post("/import", authMiddleware.RequirePermission("workflows:create"), workflowHandler.ImportWorkflow)
 
