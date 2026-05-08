@@ -2370,7 +2370,6 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		tx.Rollback()
 		return nil, errors.New("invalid transition_id")
 	}
-
 	// Get the transition with relations
 	transition, err := s.workflowRepo.FindTransitionByIDWithRelations(ctx, transitionID)
 	if err != nil {
@@ -2983,6 +2982,48 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	if transition.IsRejection && s.rejectionLogRepo != nil {
 		bgCtx := context.Background()
 		go s.createRejectionLog(bgCtx, incidentID, incident, transition, history, userID, userRoleIDs)
+	}
+
+	// Send SMS to citizen when Not Belong transition closes the incident.
+	if transition.IsNotBelong {
+		log.Printf("NOT-BELONG-SMS: Triggered for incident %s and transition.IsNotBelong: %v", incident.IncidentNumber, transition.IsNotBelong)
+		var assignedDeptID *uuid.UUID
+		if deptIDVal, ok := updates["department_id"]; ok {
+			if deptID, ok := deptIDVal.(uuid.UUID); ok {
+				assignedDeptID = &deptID
+			}
+		}
+		bgCtx := context.Background()
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("NOT-BELONG-SMS: Panic recovered for incident %s: %v", incident.IncidentNumber, r)
+				}
+			}()
+
+			log.Printf("NOT-BELONG-SMS: Sending SMS for incident %s", incident.IncidentNumber)
+			s.SendNotBelongClosureSMS(bgCtx, incident.IncidentNumber, incident.CreatedByMobile, incident.ReporterID, transition, assignedDeptID, userID)
+			log.Printf("NOT-BELONG-SMS: SMS process completed for incident %s", incident.IncidentNumber)
+		}()
+	}
+
+	// Send SMS to citizen when Missing Incident Information transition closes the incident.
+
+	if transition.IsMissingInfo {
+		log.Printf("MISSING-INFO-SMS: Triggered for incident %s and transition.IsMissingInfo: %v", incident.IncidentNumber, transition.IsMissingInfo)
+		bgCtx := context.Background()
+		//go s.SendMissingInfoClosureSMS(bgCtx, incident.IncidentNumber, incident.CreatedByMobile, incident.ReporterID, userID)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("MISSING-INFO-SMS: Panic recovered for incident %s: %v", incident.IncidentNumber, r)
+				}
+			}()
+
+			log.Printf("MISSING-INFO-SMS: Sending SMS for incident %s", incident.IncidentNumber)
+			s.SendMissingInfoClosureSMS(bgCtx, incident.IncidentNumber, incident.CreatedByMobile, incident.ReporterID, userID)
+			log.Printf("MISSING-INFO-SMS: SMS process completed for incident %s", incident.IncidentNumber)
+		}()
 	}
 
 	// Fetch updated incident (outside transaction)
@@ -4555,4 +4596,164 @@ func (s *incidentService) UpdateClosedIncidentSummary(
 
 	resp := models.ToIncidentResponse(updated)
 	return &resp, nil
+}
+
+// SendNotBelongClosureSMS sends an SMS to the citizen when an incident is closed via a "Not Belong" transition.
+func (s *incidentService) SendNotBelongClosureSMS(
+	ctx context.Context,
+	incidentNumber string,
+	citizenMobile string,
+	reporterID *uuid.UUID,
+	transition *models.WorkflowTransition,
+	assignedDeptID *uuid.UUID,
+	userID uuid.UUID,
+) {
+	mobile := citizenMobile
+	// Only fall back to reporter's phone when the reporter is confirmed to be a citizen.
+	if mobile == "" && reporterID != nil {
+		roles, err := s.userRepo.GetUserRoles(ctx, *reporterID)
+		if err == nil {
+			isCitizen := false
+			for _, r := range roles {
+				if r.Code == constants.USER_ROLE.CITIZEN {
+					isCitizen = true
+					break
+				}
+			}
+			if isCitizen {
+				if reporter, err := s.userRepo.FindByID(ctx, *reporterID); err == nil {
+					mobile = reporter.Phone
+				}
+			}
+		}
+	}
+	if mobile == "" {
+		log.Printf("NOT-BELONG-SMS: No citizen mobile for incident %s, skipping", incidentNumber)
+		return
+	}
+
+	// Resolve external department name
+	deptName := "External Department"
+	if transition.AssignDepartment != nil && transition.AssignDepartment.Name != "" {
+		deptName = transition.AssignDepartment.Name
+	} else if assignedDeptID != nil {
+		if dept, err := s.deptRepo.FindByID(ctx, *assignedDeptID); err == nil {
+			deptName = dept.Name
+		}
+	}
+
+	smsMessage := fmt.Sprintf(
+		"Dear Citizen, your incident (ID: %s) has been reviewed. The issue belongs to the %s department and does not fall under our department's scope for processing. Kindly contact the concerned department for further assistance. We appreciate your understanding.",
+		incidentNumber,
+		deptName,
+	)
+
+	now := time.Now()
+	smsErr := utils.SendSMS(mobile, smsMessage)
+	status := "sent"
+	if smsErr != nil {
+		status = "failed"
+		log.Printf("NOT-BELONG-SMS: Failed for incident %s to %s: %v", incidentNumber, mobile, smsErr)
+	} else {
+		log.Printf("NOT-BELONG-SMS: Sent successfully to %s for incident %s", mobile, incidentNumber)
+	}
+
+	notification := &models.NotificationLog{
+		Channel:    "sms",
+		Direction:  "outbound",
+		Category:   "sent",
+		Language:   "en",
+		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
+		Subject:    "Incident Not Belong Closure",
+		Body:       smsMessage,
+		Status:     status,
+		Provider:   "twilio",
+		IsRead:     false,
+		SentBy:     &userID,
+		SentAt:     &now,
+	}
+	if smsErr != nil {
+		notification.ErrorMessage = smsErr.Error()
+	}
+	if err := s.incidentRepo.CreateNotification(ctx, notification); err != nil {
+		log.Printf("NOT-BELONG-SMS: Failed to log notification for incident %s: %v", incidentNumber, err)
+	}
+}
+
+// SendMissingInfoClosureSMS sends an SMS to the citizen when an incident is closed via a "Missing Incident Information" transition.
+func (s *incidentService) SendMissingInfoClosureSMS(
+	ctx context.Context,
+	incidentNumber string,
+	citizenMobile string,
+	reporterID *uuid.UUID,
+	userID uuid.UUID,
+) {
+	mobile := citizenMobile
+	// Only fall back to reporter's phone when the reporter is confirmed to be a citizen.
+	if mobile == "" && reporterID != nil {
+		roles, err := s.userRepo.GetUserRoles(ctx, *reporterID)
+		if err == nil {
+			isCitizen := false
+			for _, r := range roles {
+				if r.Code == constants.USER_ROLE.CITIZEN {
+					isCitizen = true
+					break
+				}
+			}
+			if isCitizen {
+				if reporter, err := s.userRepo.FindByID(ctx, *reporterID); err == nil {
+					mobile = reporter.Phone
+				}
+			}
+		}
+	}
+	if mobile == "" {
+		log.Printf("MISSING-INFO-SMS: No citizen mobile for incident %s, skipping", incidentNumber)
+		return
+	}
+
+	smsMessage := fmt.Sprintf(
+		"Dear Citizen, your incident (ID: %s) has been closed due to insufficient information. We kindly request that you raise it again with all the required details so we can assist you better. Thank you!",
+		incidentNumber,
+	)
+
+	now := time.Now()
+
+	smsErr := utils.SendSMS(mobile, smsMessage)
+	status := "sent"
+	if smsErr != nil {
+		status = "failed"
+		log.Printf("MISSING-INFO-SMS: Failed for incident %s to %s: %v", incidentNumber, mobile, smsErr)
+	} else {
+		log.Printf("MISSING-INFO-SMS: Sent successfully to %s for incident %s", mobile, incidentNumber)
+	}
+
+	notification := &models.NotificationLog{
+		Channel:   "sms",
+		Direction: "outbound",
+		Category:  "sent",
+		Language:  "en",
+		Recipients: models.RecipientArray{
+			{
+				Email:  mobile,
+				Type:   "to",
+				Status: status,
+			},
+		},
+		Subject:  "Incident Closed - Missing Information",
+		Body:     smsMessage,
+		Status:   status,
+		Provider: "twilio",
+		IsRead:   false,
+		SentBy:   &userID,
+		SentAt:   &now,
+	}
+
+	if smsErr != nil {
+		notification.ErrorMessage = smsErr.Error()
+	}
+
+	if err := s.incidentRepo.CreateNotification(ctx, notification); err != nil {
+		log.Printf("MISSING-INFO-SMS: Failed to log notification for incident %s: %v", incidentNumber, err)
+	}
 }

@@ -814,22 +814,22 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 	}
 
 	state := &models.WorkflowState{
-		WorkflowID:      workflowID,
-		Name:            req.Name,
-		Code:            req.Code,
-		Description:     req.Description,
-		StateType:       req.StateType,
-		Color:           req.Color,
-		PositionX:       req.PositionX,
-		PositionY:       req.PositionY,
-		SLAHours:        req.SLAHours,
-		SLAUnit:         req.SLAUnit,
-		IsMergable:      req.IsMergable,
-		IsReadyToClose:  req.IsReadyToClose,
-		DurationOptions: durationOptionsJSON,
-		SortOrder:       req.SortOrder,
-		IsActive:        true,
-		AutoMatchUser:   req.AutoMatchUser,
+		WorkflowID:       workflowID,
+		Name:             req.Name,
+		Code:             req.Code,
+		Description:      req.Description,
+		StateType:        req.StateType,
+		Color:            req.Color,
+		PositionX:        req.PositionX,
+		PositionY:        req.PositionY,
+		SLAHours:         req.SLAHours,
+		SLAUnit:          req.SLAUnit,
+		IsMergable:       req.IsMergable,
+		IsReadyToClose:   req.IsReadyToClose,
+		DurationOptions:  durationOptionsJSON,
+		SortOrder:        req.SortOrder,
+		IsActive:         true,
+		AutoMatchUser:    req.AutoMatchUser,
 		ManualSelectUser: req.ManualSelectUser,
 	}
 	if req.EscalationPolicyID != nil && *req.EscalationPolicyID != "" {
@@ -1098,6 +1098,8 @@ func (s *workflowService) CreateTransition(ctx context.Context, workflowID uuid.
 		SortOrder:            req.SortOrder,
 		IsActive:             true,
 		IsRejection:          req.IsRejection,
+		IsNotBelong:          req.IsNotBelong,
+		IsMissingInfo:        req.IsMissingInfo,
 		AutoDetectDepartment: req.AutoDetectDepartment,
 		DepartmentTypeFilter: req.DepartmentTypeFilter,
 		AutoMatchUser:        req.AutoMatchUser,
@@ -1224,6 +1226,12 @@ func (s *workflowService) UpdateTransition(ctx context.Context, transitionID uui
 		transition.IsRejection = *req.IsRejection
 	}
 
+	if req.IsNotBelong != nil {
+		transition.IsNotBelong = *req.IsNotBelong
+	}
+	if req.IsMissingInfo != nil {
+		transition.IsMissingInfo = *req.IsMissingInfo
+	}
 	// Department Assignment
 	if req.AutoDetectDepartment != nil {
 		transition.AutoDetectDepartment = *req.AutoDetectDepartment
