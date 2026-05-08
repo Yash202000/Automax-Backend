@@ -9,9 +9,11 @@ import (
 
 // ReportTemplate represents a saved report template configuration
 type ReportTemplate struct {
-	ID          uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
-	Name        string         `gorm:"size:255;not null" json:"name"`
-	Description string         `gorm:"type:text" json:"description"`
+	ID            uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	Name          string         `gorm:"size:255;not null" json:"name"`
+	NameAr        string         `gorm:"size:255" json:"name_ar"`
+	Description   string         `gorm:"type:text" json:"description"`
+	DescriptionAr string         `gorm:"type:text" json:"description_ar"`
 	Template    string         `gorm:"type:text" json:"template"` // JSON serialized TemplateConfig
 	IsDefault   bool           `gorm:"default:false" json:"is_default"`
 	IsPublic    bool           `gorm:"default:false" json:"is_public"`
@@ -259,24 +261,30 @@ type ChartContent struct {
 // Request/Response types
 
 type ReportTemplateCreateRequest struct {
-	Name        string         `json:"name" validate:"required,max=255"`
-	Description string         `json:"description"`
+	Name          string         `json:"name" validate:"required,max=255"`
+	NameAr        string         `json:"name_ar" validate:"max=255"`
+	Description   string         `json:"description"`
+	DescriptionAr string         `json:"description_ar"`
 	Template    TemplateConfig `json:"template" validate:"required"`
 	IsPublic    bool           `json:"is_public"`
 }
 
 type ReportTemplateUpdateRequest struct {
-	Name        string          `json:"name" validate:"omitempty,max=255"`
-	Description string          `json:"description"`
+	Name          string          `json:"name" validate:"omitempty,max=255"`
+	NameAr        string          `json:"name_ar" validate:"max=255"`
+	Description   string          `json:"description"`
+	DescriptionAr string          `json:"description_ar"`
 	Template    *TemplateConfig `json:"template"`
 	IsPublic    *bool           `json:"is_public"`
 	IsDefault   *bool           `json:"is_default"`
 }
 
 type ReportTemplateResponse struct {
-	ID          string              `json:"id"`
-	Name        string              `json:"name"`
-	Description string              `json:"description"`
+	ID            string              `json:"id"`
+	Name          string              `json:"name"`
+	NameAr        string              `json:"name_ar,omitempty"`
+	Description   string              `json:"description"`
+	DescriptionAr string              `json:"description_ar,omitempty"`
 	Template    TemplateConfig      `json:"template"`
 	IsDefault   bool                `json:"is_default"`
 	IsPublic    bool                `json:"is_public"`

@@ -72,12 +72,14 @@ func (h *ClassificationHandler) Create(c *fiber.Ctx) error {
 	}
 
 	classification := &models.Classification{
-		Name:        req.Name,
-		Description: req.Description,
-		Types:       typeRecords,
-		ParentID:    req.ParentID,
-		SortOrder:   req.SortOrder,
-		IsActive:    true,
+		Name:          req.Name,
+		NameAr:        req.NameAr,
+		Description:   req.Description,
+		DescriptionAr: req.DescriptionAr,
+		Types:         typeRecords,
+		ParentID:      req.ParentID,
+		SortOrder:     req.SortOrder,
+		IsActive:      true,
 	}
 
 	if err := h.repo.Create(c.UserContext(), classification); err != nil {
@@ -154,8 +156,14 @@ func (h *ClassificationHandler) Update(c *fiber.Ctx) error {
 	if req.Name != "" {
 		classification.Name = req.Name
 	}
+	if req.NameAr != "" {
+		classification.NameAr = req.NameAr
+	}
 	if req.Description != "" {
 		classification.Description = req.Description
+	}
+	if req.DescriptionAr != "" {
+		classification.DescriptionAr = req.DescriptionAr
 	}
 	classification.IsActive = true // Keep active on update
 	if req.SortOrder >= 0 {

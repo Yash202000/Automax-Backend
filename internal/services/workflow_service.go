@@ -341,8 +341,10 @@ func (s *workflowService) CreateWorkflow(ctx context.Context, req *models.Workfl
 
 	workflow := &models.Workflow{
 		Name:           req.Name,
+		NameAr:         req.NameAr,
 		Code:           req.Code,
 		Description:    req.Description,
+		DescriptionAr:  req.DescriptionAr,
 		RecordType:     recordType,
 		Sources:        sourcesJSON,
 		Priorities:     prioritiesJSON,
@@ -525,11 +527,17 @@ func (s *workflowService) UpdateWorkflow(ctx context.Context, id uuid.UUID, req 
 	if req.Name != "" {
 		workflow.Name = req.Name
 	}
+	if req.NameAr != "" {
+		workflow.NameAr = req.NameAr
+	}
 	if req.Code != "" {
 		workflow.Code = req.Code
 	}
 	if req.Description != "" {
 		workflow.Description = req.Description
+	}
+	if req.DescriptionAr != "" {
+		workflow.DescriptionAr = req.DescriptionAr
 	}
 	if req.IsActive != nil {
 		workflow.IsActive = *req.IsActive
@@ -687,10 +695,12 @@ func (s *workflowService) DuplicateWorkflow(ctx context.Context, id uuid.UUID, c
 	// Duplicate states
 	for _, state := range original.States {
 		newState := &models.WorkflowState{
-			WorkflowID:  newWorkflow.ID,
-			Name:        state.Name,
-			Code:        state.Code,
-			Description: state.Description,
+			WorkflowID:    newWorkflow.ID,
+			Name:          state.Name,
+			NameAr:        state.NameAr,
+			Code:          state.Code,
+			Description:   state.Description,
+			DescriptionAr: state.DescriptionAr,
 			StateType:   state.StateType,
 			Color:       state.Color,
 			PositionX:   state.PositionX,
@@ -718,10 +728,12 @@ func (s *workflowService) DuplicateWorkflow(ctx context.Context, id uuid.UUID, c
 		}
 
 		newTrans := &models.WorkflowTransition{
-			WorkflowID:  newWorkflow.ID,
-			Name:        trans.Name,
-			Code:        trans.Code,
-			Description: trans.Description,
+			WorkflowID:    newWorkflow.ID,
+			Name:          trans.Name,
+			NameAr:        trans.NameAr,
+			Code:          trans.Code,
+			Description:   trans.Description,
+			DescriptionAr: trans.DescriptionAr,
 			FromStateID: newFromStateID,
 			ToStateID:   newToStateID,
 			SortOrder:   trans.SortOrder,
@@ -816,8 +828,10 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 	state := &models.WorkflowState{
 		WorkflowID:      workflowID,
 		Name:            req.Name,
+		NameAr:          req.NameAr,
 		Code:            req.Code,
 		Description:     req.Description,
+		DescriptionAr:   req.DescriptionAr,
 		StateType:       req.StateType,
 		Color:           req.Color,
 		PositionX:       req.PositionX,
@@ -942,11 +956,17 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 	if req.Name != "" {
 		state.Name = req.Name
 	}
+	if req.NameAr != "" {
+		state.NameAr = req.NameAr
+	}
 	if req.Code != "" {
 		state.Code = req.Code
 	}
 	if req.Description != "" {
 		state.Description = req.Description
+	}
+	if req.DescriptionAr != "" {
+		state.DescriptionAr = req.DescriptionAr
 	}
 	if req.StateType != "" {
 		state.StateType = req.StateType
@@ -1091,8 +1111,10 @@ func (s *workflowService) CreateTransition(ctx context.Context, workflowID uuid.
 	transition := &models.WorkflowTransition{
 		WorkflowID:           workflowID,
 		Name:                 req.Name,
+		NameAr:               req.NameAr,
 		Code:                 req.Code,
 		Description:          req.Description,
+		DescriptionAr:        req.DescriptionAr,
 		FromStateID:          fromStateID,
 		ToStateID:            toStateID,
 		SortOrder:            req.SortOrder,
@@ -1196,11 +1218,17 @@ func (s *workflowService) UpdateTransition(ctx context.Context, transitionID uui
 	if req.Name != "" {
 		transition.Name = req.Name
 	}
+	if req.NameAr != "" {
+		transition.NameAr = req.NameAr
+	}
 	if req.Code != "" {
 		transition.Code = req.Code
 	}
 	if req.Description != "" {
 		transition.Description = req.Description
+	}
+	if req.DescriptionAr != "" {
+		transition.DescriptionAr = req.DescriptionAr
 	}
 	if req.FromStateID != "" {
 		fromStateID, err := uuid.Parse(req.FromStateID)

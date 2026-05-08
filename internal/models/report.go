@@ -9,23 +9,25 @@ import (
 
 // Report represents a saved report configuration
 type Report struct {
-	ID           uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
-	Name         string         `gorm:"size:255;not null" json:"name"`
-	Description  string         `gorm:"type:text" json:"description"`
-	DataSource   string         `gorm:"size:50;not null;index" json:"data_source"` // incidents, users, workflows, etc.
-	Columns      string         `gorm:"type:text" json:"columns"`                  // JSON array of column configs
-	Filters      string         `gorm:"type:text" json:"filters"`                  // JSON array of filter configs
-	Sorting      string         `gorm:"type:text" json:"sorting"`                  // JSON object for sorting config
-	Grouping     string         `gorm:"type:text" json:"grouping"`                 // JSON object for grouping config
-	OutputFormat string         `gorm:"size:20;default:'table'" json:"output_format"`
-	IsPublic     bool           `gorm:"default:false" json:"is_public"`
-	IsScheduled  bool           `gorm:"default:false" json:"is_scheduled"`
-	Schedule     string         `gorm:"type:text" json:"schedule"` // JSON object for schedule config
-	CreatedByID  uuid.UUID      `gorm:"type:uuid;index" json:"created_by_id"`
-	CreatedBy    *User          `gorm:"foreignKey:CreatedByID" json:"created_by,omitempty"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
-	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
+	ID            uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	Name          string         `gorm:"size:255;not null" json:"name"`
+	NameAr        string         `gorm:"size:255" json:"name_ar"`
+	Description   string         `gorm:"type:text" json:"description"`
+	DescriptionAr string         `gorm:"type:text" json:"description_ar"`
+	DataSource    string         `gorm:"size:50;not null;index" json:"data_source"` // incidents, users, workflows, etc.
+	Columns       string         `gorm:"type:text" json:"columns"`                  // JSON array of column configs
+	Filters       string         `gorm:"type:text" json:"filters"`                  // JSON array of filter configs
+	Sorting       string         `gorm:"type:text" json:"sorting"`                  // JSON object for sorting config
+	Grouping      string         `gorm:"type:text" json:"grouping"`                 // JSON object for grouping config
+	OutputFormat  string         `gorm:"size:20;default:'table'" json:"output_format"`
+	IsPublic      bool           `gorm:"default:false" json:"is_public"`
+	IsScheduled   bool           `gorm:"default:false" json:"is_scheduled"`
+	Schedule      string         `gorm:"type:text" json:"schedule"` // JSON object for schedule config
+	CreatedByID   uuid.UUID      `gorm:"type:uuid;index" json:"created_by_id"`
+	CreatedBy     *User          `gorm:"foreignKey:CreatedByID" json:"created_by,omitempty"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (r *Report) BeforeCreate(tx *gorm.DB) error {
@@ -101,18 +103,22 @@ type ReportCreateRequestConfig struct {
 }
 
 type ReportCreateRequest struct {
-	Name        string                    `json:"name" validate:"required,max=255"`
-	Description string                    `json:"description"`
-	DataSource  string                    `json:"data_source" validate:"required,oneof=incidents action_logs users users_performance workflows departments locations classifications request logs locations_by_count classifications_by_count departments_by_count classifications_by_status locations_by_status requests"`
-	Config      ReportCreateRequestConfig `json:"config" validate:"required"`
-	IsPublic    bool                      `json:"is_public"`
+	Name          string                    `json:"name" validate:"required,max=255"`
+	NameAr        string                    `json:"name_ar" validate:"max=255"`
+	Description   string                    `json:"description"`
+	DescriptionAr string                    `json:"description_ar"`
+	DataSource    string                    `json:"data_source" validate:"required,oneof=incidents action_logs users users_performance workflows departments locations classifications requests"`
+	Config        ReportCreateRequestConfig `json:"config" validate:"required"`
+	IsPublic      bool                      `json:"is_public"`
 }
 
 type ReportUpdateRequest struct {
-	Name        string                     `json:"name" validate:"omitempty,max=255"`
-	Description string                     `json:"description"`
-	Config      *ReportCreateRequestConfig `json:"config"`
-	IsPublic    *bool                      `json:"is_public"`
+	Name          string                     `json:"name" validate:"omitempty,max=255"`
+	NameAr        string                     `json:"name_ar" validate:"max=255"`
+	Description   string                     `json:"description"`
+	DescriptionAr string                     `json:"description_ar"`
+	Config        *ReportCreateRequestConfig `json:"config"`
+	IsPublic      *bool                      `json:"is_public"`
 }
 
 type ReportExecuteRequest struct {
@@ -180,18 +186,20 @@ type ReportConfigOptions struct {
 }
 
 type ReportResponse struct {
-	ID          string               `json:"id"`
-	Name        string               `json:"name"`
-	Description string               `json:"description"`
-	DataSource  string               `json:"data_source"`
-	Config      ReportTemplateConfig `json:"config"`
-	IsPublic    bool                 `json:"is_public"`
-	IsSystem    bool                 `json:"is_system"`
-	CreatedBy   *UserBasicResponse   `json:"created_by,omitempty"`
-	SharedWith  []SharedUserResponse `json:"shared_with,omitempty"`
-	CanEdit     bool                 `json:"can_edit"`
-	CreatedAt   string               `json:"created_at"`
-	UpdatedAt   string               `json:"updated_at"`
+	ID            string               `json:"id"`
+	Name          string               `json:"name"`
+	NameAr        string               `json:"name_ar,omitempty"`
+	Description   string               `json:"description"`
+	DescriptionAr string               `json:"description_ar,omitempty"`
+	DataSource    string               `json:"data_source"`
+	Config        ReportTemplateConfig `json:"config"`
+	IsPublic      bool                 `json:"is_public"`
+	IsSystem      bool                 `json:"is_system"`
+	CreatedBy     *UserBasicResponse   `json:"created_by,omitempty"`
+	SharedWith    []SharedUserResponse `json:"shared_with,omitempty"`
+	CanEdit       bool                 `json:"can_edit"`
+	CreatedAt     string               `json:"created_at"`
+	UpdatedAt     string               `json:"updated_at"`
 }
 
 type SharedUserResponse struct {

@@ -56,8 +56,10 @@ func (s *reportTemplateService) CreateTemplate(ctx context.Context, req *models.
 	}
 
 	template := &models.ReportTemplate{
-		Name:        req.Name,
-		Description: req.Description,
+		Name:          req.Name,
+		NameAr:        req.NameAr,
+		Description:   req.Description,
+		DescriptionAr: req.DescriptionAr,
 		Template:    string(templateJSON),
 		IsPublic:    req.IsPublic,
 		CreatedByID: userID,
@@ -106,8 +108,14 @@ func (s *reportTemplateService) UpdateTemplate(ctx context.Context, id uuid.UUID
 	if req.Name != "" {
 		template.Name = req.Name
 	}
+	if req.NameAr != "" {
+		template.NameAr = req.NameAr
+	}
 	if req.Description != "" {
 		template.Description = req.Description
+	}
+	if req.DescriptionAr != "" {
+		template.DescriptionAr = req.DescriptionAr
 	}
 	if req.Template != nil {
 		templateJSON, err := json.Marshal(req.Template)
@@ -1323,9 +1331,11 @@ func toReportTemplateResponse(t *models.ReportTemplate) *models.ReportTemplateRe
 	json.Unmarshal([]byte(t.Template), &templateConfig)
 
 	resp := &models.ReportTemplateResponse{
-		ID:          t.ID.String(),
-		Name:        t.Name,
-		Description: t.Description,
+		ID:            t.ID.String(),
+		Name:          t.Name,
+		NameAr:        t.NameAr,
+		Description:   t.Description,
+		DescriptionAr: t.DescriptionAr,
 		Template:    templateConfig,
 		IsDefault:   t.IsDefault,
 		IsPublic:    t.IsPublic,

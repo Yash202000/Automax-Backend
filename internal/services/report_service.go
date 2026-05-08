@@ -96,8 +96,10 @@ func (s *reportService) CreateReport(ctx context.Context, req *models.ReportCrea
 	sortingJSON, _ := json.Marshal(req.Config.Sorting)
 
 	report := &models.Report{
-		Name:         req.Name,
-		Description:  req.Description,
+		Name:          req.Name,
+		NameAr:        req.NameAr,
+		Description:   req.Description,
+		DescriptionAr: req.DescriptionAr,
 		DataSource:   req.DataSource,
 		Columns:      string(columnsJSON),
 		Filters:      string(filtersJSON),
@@ -151,8 +153,14 @@ func (s *reportService) UpdateReport(ctx context.Context, id uuid.UUID, req *mod
 	if req.Name != "" {
 		report.Name = req.Name
 	}
+	if req.NameAr != "" {
+		report.NameAr = req.NameAr
+	}
 	if req.Description != "" {
 		report.Description = req.Description
+	}
+	if req.DescriptionAr != "" {
+		report.DescriptionAr = req.DescriptionAr
 	}
 	if req.Config != nil {
 		if req.Config.Columns != nil {
@@ -1036,9 +1044,11 @@ func toReportResponse(r *models.Report) *models.ReportResponse {
 	}
 
 	resp := &models.ReportResponse{
-		ID:          r.ID.String(),
-		Name:        r.Name,
-		Description: r.Description,
+		ID:            r.ID.String(),
+		Name:          r.Name,
+		NameAr:        r.NameAr,
+		Description:   r.Description,
+		DescriptionAr: r.DescriptionAr,
 		DataSource:  r.DataSource,
 		Config:      config,
 		IsPublic:    r.IsPublic,

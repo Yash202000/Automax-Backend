@@ -10,10 +10,12 @@ import (
 
 // Workflow represents a reusable workflow template
 type Workflow struct {
-	ID          uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
-	Name        string    `gorm:"not null;size:100;uniqueIndex" json:"name"`
-	Code        string    `gorm:"not null;size:100;uniqueIndex" json:"code"`
-	Description string    `gorm:"size:500" json:"description"`
+	ID            uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
+	Name          string    `gorm:"not null;size:100;uniqueIndex" json:"name"`
+	NameAr        string    `gorm:"size:100" json:"name_ar"`
+	Code          string    `gorm:"not null;size:100;uniqueIndex" json:"code"`
+	Description   string    `gorm:"size:500" json:"description"`
+	DescriptionAr string    `gorm:"size:500" json:"description_ar"`
 	Version     int       `gorm:"default:1" json:"version"`
 	IsActive    bool      `gorm:"default:true" json:"is_active"`
 	IsDefault   bool      `gorm:"default:false" json:"is_default"`
@@ -60,12 +62,14 @@ func (w *Workflow) BeforeCreate(tx *gorm.DB) error {
 
 // WorkflowState represents a state/node within a workflow
 type WorkflowState struct {
-	ID          uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
-	WorkflowID  uuid.UUID `gorm:"type:uuid;index;not null" json:"workflow_id"`
-	Workflow    *Workflow `gorm:"foreignKey:WorkflowID" json:"workflow,omitempty"`
-	Name        string    `gorm:"not null;size:100" json:"name"`
-	Code        string    `gorm:"not null;size:50" json:"code"`
-	Description string    `gorm:"size:500" json:"description"`
+	ID            uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
+	WorkflowID    uuid.UUID `gorm:"type:uuid;index;not null" json:"workflow_id"`
+	Workflow      *Workflow `gorm:"foreignKey:WorkflowID" json:"workflow,omitempty"`
+	Name          string    `gorm:"not null;size:100" json:"name"`
+	NameAr        string    `gorm:"size:100" json:"name_ar"`
+	Code          string    `gorm:"not null;size:50" json:"code"`
+	Description   string    `gorm:"size:500" json:"description"`
+	DescriptionAr string    `gorm:"size:500" json:"description_ar"`
 	StateType   string    `gorm:"size:20;default:'normal'" json:"state_type"` // initial, normal, terminal
 	Color       string    `gorm:"size:20;default:'#6366f1'" json:"color"`
 
@@ -148,12 +152,14 @@ func (s *WorkflowState) SLAAsHours() float64 {
 
 // WorkflowTransition represents a transition between states
 type WorkflowTransition struct {
-	ID          uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
-	WorkflowID  uuid.UUID `gorm:"type:uuid;index;not null" json:"workflow_id"`
-	Workflow    *Workflow `gorm:"foreignKey:WorkflowID" json:"workflow,omitempty"`
-	Name        string    `gorm:"not null;size:100" json:"name"`
-	Code        string    `gorm:"not null;size:50" json:"code"`
-	Description string    `gorm:"size:500" json:"description"`
+	ID            uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
+	WorkflowID    uuid.UUID `gorm:"type:uuid;index;not null" json:"workflow_id"`
+	Workflow      *Workflow `gorm:"foreignKey:WorkflowID" json:"workflow,omitempty"`
+	Name          string    `gorm:"not null;size:100" json:"name"`
+	NameAr        string    `gorm:"size:100" json:"name_ar"`
+	Code          string    `gorm:"not null;size:50" json:"code"`
+	Description   string    `gorm:"size:500" json:"description"`
+	DescriptionAr string    `gorm:"size:500" json:"description_ar"`
 
 	FromStateID uuid.UUID      `gorm:"type:uuid;index;not null" json:"from_state_id"`
 	FromState   *WorkflowState `gorm:"foreignKey:FromStateID" json:"from_state,omitempty"`
@@ -286,8 +292,10 @@ func (f *TransitionFieldChange) BeforeCreate(tx *gorm.DB) error {
 
 type WorkflowCreateRequest struct {
 	Name              string   `json:"name" validate:"required,min=2,max=100"`
+	NameAr            string   `json:"name_ar" validate:"max=100"`
 	Code              string   `json:"code" validate:"required,min=2,max=50"`
 	Description       string   `json:"description" validate:"max=500"`
+	DescriptionAr     string   `json:"description_ar" validate:"max=500"`
 	RecordType        string   `json:"record_type" validate:"omitempty,oneof=incident request complaint query evidence both all"`
 	Sources           []string `json:"sources"`    // Array of source strings
 	Priorities        []int    `json:"priorities"` // Array of priority integers
@@ -298,8 +306,10 @@ type WorkflowCreateRequest struct {
 
 type WorkflowUpdateRequest struct {
 	Name                    string   `json:"name" validate:"omitempty,min=2,max=100"`
+	NameAr                  string   `json:"name_ar" validate:"max=100"`
 	Code                    string   `json:"code" validate:"omitempty,min=2,max=100"`
 	Description             string   `json:"description" validate:"max=500"`
+	DescriptionAr           string   `json:"description_ar" validate:"max=500"`
 	RecordType              *string  `json:"record_type" validate:"omitempty,oneof=incident request complaint query evidence both all"`
 	Sources                 []string `json:"sources"`    // Array of source strings (nil means not updating)
 	Priorities              []int    `json:"priorities"` // Array of priority integers (nil means not updating)
@@ -315,8 +325,10 @@ type WorkflowUpdateRequest struct {
 
 type WorkflowStateCreateRequest struct {
 	Name               string   `json:"name" validate:"required,min=2,max=100"`
+	NameAr             string   `json:"name_ar" validate:"max=100"`
 	Code               string   `json:"code" validate:"required,min=2,max=50"`
 	Description        string   `json:"description" validate:"max=500"`
+	DescriptionAr      string   `json:"description_ar" validate:"max=500"`
 	StateType          string   `json:"state_type" validate:"omitempty,oneof=initial normal terminal"`
 	Color              string   `json:"color" validate:"omitempty,max=20"`
 	PositionX          int      `json:"position_x"`
@@ -339,8 +351,10 @@ type WorkflowStateCreateRequest struct {
 
 type WorkflowStateUpdateRequest struct {
 	Name               string   `json:"name" validate:"omitempty,min=2,max=100"`
+	NameAr             string   `json:"name_ar" validate:"max=100"`
 	Code               string   `json:"code" validate:"omitempty,min=2,max=50"`
 	Description        string   `json:"description" validate:"max=500"`
+	DescriptionAr      string   `json:"description_ar" validate:"max=500"`
 	StateType          string   `json:"state_type" validate:"omitempty,oneof=initial normal terminal"`
 	Color              string   `json:"color" validate:"omitempty,max=20"`
 	PositionX          *int     `json:"position_x"`
@@ -363,9 +377,11 @@ type WorkflowStateUpdateRequest struct {
 }
 
 type WorkflowTransitionCreateRequest struct {
-	Name        string   `json:"name" validate:"required,min=2,max=100"`
-	Code        string   `json:"code" validate:"required,min=2,max=50"`
-	Description string   `json:"description" validate:"max=500"`
+	Name          string   `json:"name" validate:"required,min=2,max=100"`
+	NameAr        string   `json:"name_ar" validate:"max=100"`
+	Code          string   `json:"code" validate:"required,min=2,max=50"`
+	Description   string   `json:"description" validate:"max=500"`
+	DescriptionAr string   `json:"description_ar" validate:"max=500"`
 	FromStateID string   `json:"from_state_id" validate:"required,uuid"`
 	ToStateID   string   `json:"to_state_id" validate:"required,uuid"`
 	RoleIDs     []string `json:"role_ids"`
@@ -385,9 +401,11 @@ type WorkflowTransitionCreateRequest struct {
 }
 
 type WorkflowTransitionUpdateRequest struct {
-	Name        string   `json:"name" validate:"omitempty,min=2,max=100"`
-	Code        string   `json:"code" validate:"omitempty,min=2,max=50"`
-	Description string   `json:"description" validate:"max=500"`
+	Name          string   `json:"name" validate:"omitempty,min=2,max=100"`
+	NameAr        string   `json:"name_ar" validate:"max=100"`
+	Code          string   `json:"code" validate:"omitempty,min=2,max=50"`
+	Description   string   `json:"description" validate:"max=500"`
+	DescriptionAr string   `json:"description_ar" validate:"max=500"`
 	FromStateID string   `json:"from_state_id" validate:"omitempty,uuid"`
 	ToStateID   string   `json:"to_state_id" validate:"omitempty,uuid"`
 	RoleIDs     []string `json:"role_ids"`
@@ -467,8 +485,10 @@ type WorkflowMatchResponse struct {
 type WorkflowResponse struct {
 	ID                    uuid.UUID                    `json:"id"`
 	Name                  string                       `json:"name"`
+	NameAr                string                       `json:"name_ar,omitempty"`
 	Code                  string                       `json:"code"`
 	Description           string                       `json:"description"`
+	DescriptionAr         string                       `json:"description_ar,omitempty"`
 	Version               int                          `json:"version"`
 	IsActive              bool                         `json:"is_active"`
 	IsDefault             bool                         `json:"is_default"`
@@ -494,8 +514,10 @@ type WorkflowStateResponse struct {
 	ID                 uuid.UUID                 `json:"id"`
 	WorkflowID         uuid.UUID                 `json:"workflow_id"`
 	Name               string                    `json:"name"`
+	NameAr             string                    `json:"name_ar,omitempty"`
 	Code               string                    `json:"code"`
 	Description        string                    `json:"description"`
+	DescriptionAr      string                    `json:"description_ar,omitempty"`
 	StateType          string                    `json:"state_type"`
 	Color              string                    `json:"color"`
 	PositionX          int                       `json:"position_x"`
@@ -521,11 +543,13 @@ type WorkflowStateResponse struct {
 }
 
 type WorkflowTransitionResponse struct {
-	ID           uuid.UUID              `json:"id"`
-	WorkflowID   uuid.UUID              `json:"workflow_id"`
-	Name         string                 `json:"name"`
-	Code         string                 `json:"code"`
-	Description  string                 `json:"description"`
+	ID            uuid.UUID              `json:"id"`
+	WorkflowID    uuid.UUID              `json:"workflow_id"`
+	Name          string                 `json:"name"`
+	NameAr        string                 `json:"name_ar,omitempty"`
+	Code          string                 `json:"code"`
+	Description   string                 `json:"description"`
+	DescriptionAr string                 `json:"description_ar,omitempty"`
 	FromStateID  uuid.UUID              `json:"from_state_id"`
 	FromState    *WorkflowStateResponse `json:"from_state,omitempty"`
 	ToStateID    uuid.UUID              `json:"to_state_id"`
@@ -618,8 +642,10 @@ func ToWorkflowResponse(w *Workflow) WorkflowResponse {
 	resp := WorkflowResponse{
 		ID:               w.ID,
 		Name:             w.Name,
+		NameAr:           w.NameAr,
 		Code:             w.Code,
 		Description:      w.Description,
+		DescriptionAr:    w.DescriptionAr,
 		Version:          w.Version,
 		IsActive:         w.IsActive,
 		IsDefault:        w.IsDefault,
@@ -689,8 +715,10 @@ func ToWorkflowStateResponse(s *WorkflowState) WorkflowStateResponse {
 		ID:                 s.ID,
 		WorkflowID:         s.WorkflowID,
 		Name:               s.Name,
+		NameAr:             s.NameAr,
 		Code:               s.Code,
 		Description:        s.Description,
+		DescriptionAr:      s.DescriptionAr,
 		StateType:          s.StateType,
 		Color:              s.Color,
 		PositionX:          s.PositionX,
@@ -753,8 +781,10 @@ func ToWorkflowTransitionResponse(t *WorkflowTransition) WorkflowTransitionRespo
 		ID:                   t.ID,
 		WorkflowID:           t.WorkflowID,
 		Name:                 t.Name,
+		NameAr:               t.NameAr,
 		Code:                 t.Code,
 		Description:          t.Description,
+		DescriptionAr:        t.DescriptionAr,
 		FromStateID:          t.FromStateID,
 		ToStateID:            t.ToStateID,
 		AssignDepartmentID:   t.AssignDepartmentID,

@@ -39,16 +39,18 @@ func (h *LocationHandler) Create(c *fiber.Ctx) error {
 	}
 
 	location := &models.Location{
-		Name:        req.Name,
-		Code:        req.Code,
-		Description: req.Description,
-		Type:        req.Type,
-		ParentID:    req.ParentID,
-		Address:     req.Address,
-		Latitude:    req.Latitude,
-		Longitude:   req.Longitude,
-		SortOrder:   req.SortOrder,
-		IsActive:    true,
+		Name:          req.Name,
+		NameAr:        req.NameAr,
+		Code:          req.Code,
+		Description:   req.Description,
+		DescriptionAr: req.DescriptionAr,
+		Type:          req.Type,
+		ParentID:      req.ParentID,
+		Address:       req.Address,
+		Latitude:      req.Latitude,
+		Longitude:     req.Longitude,
+		SortOrder:     req.SortOrder,
+		IsActive:      true,
 	}
 
 	if err := h.repo.Create(c.UserContext(), location); err != nil {
@@ -93,11 +95,17 @@ func (h *LocationHandler) Update(c *fiber.Ctx) error {
 	if req.Name != "" {
 		location.Name = req.Name
 	}
+	if req.NameAr != "" {
+		location.NameAr = req.NameAr
+	}
 	if req.Code != "" {
 		location.Code = req.Code
 	}
 	if req.Description != "" {
 		location.Description = req.Description
+	}
+	if req.DescriptionAr != "" {
+		location.DescriptionAr = req.DescriptionAr
 	}
 	if req.Type != "" {
 		location.Type = req.Type

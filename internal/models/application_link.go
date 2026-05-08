@@ -11,7 +11,9 @@ import (
 type ApplicationLink struct {
 	ID             uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
 	Name           string         `gorm:"not null;size:100" json:"name"`
+	NameAr         string         `gorm:"size:100" json:"name_ar"`
 	Description    string         `gorm:"size:500" json:"description"`
+	DescriptionAr  string         `gorm:"size:500" json:"description_ar"`
 	URL            string         `gorm:"not null;size:500" json:"url"`
 	Icon           string         `gorm:"size:50;default:'ExternalLink'" json:"icon"` // Lucide icon name (fallback if no image)
 	ImageURL       string         `gorm:"size:500" json:"image_url"`                  // Uploaded logo image URL
@@ -36,7 +38,9 @@ func (a *ApplicationLink) BeforeCreate(tx *gorm.DB) error {
 
 type ApplicationLinkCreateRequest struct {
 	Name           string `json:"name" validate:"required,min=2,max=100"`
+	NameAr         string `json:"name_ar" validate:"max=100"`
 	Description    string `json:"description" validate:"max=500"`
+	DescriptionAr  string `json:"description_ar" validate:"max=500"`
 	URL            string `json:"url" validate:"required,url,max=500"`
 	Icon           string `json:"icon" validate:"max=50"`
 	ImageURL       string `json:"image_url" validate:"max=500"`
@@ -49,7 +53,9 @@ type ApplicationLinkCreateRequest struct {
 
 type ApplicationLinkUpdateRequest struct {
 	Name           string  `json:"name" validate:"omitempty,min=2,max=100"`
+	NameAr         string  `json:"name_ar" validate:"max=100"`
 	Description    string  `json:"description" validate:"max=500"`
+	DescriptionAr  string  `json:"description_ar" validate:"max=500"`
 	URL            string  `json:"url" validate:"omitempty,url,max=500"`
 	Icon           string  `json:"icon" validate:"max=50"`
 	ImageURL       string  `json:"image_url" validate:"max=500"`
@@ -63,7 +69,9 @@ type ApplicationLinkUpdateRequest struct {
 type ApplicationLinkResponse struct {
 	ID             string    `json:"id"`
 	Name           string    `json:"name"`
+	NameAr         string    `json:"name_ar,omitempty"`
 	Description    string    `json:"description"`
+	DescriptionAr  string    `json:"description_ar,omitempty"`
 	URL            string    `json:"url"`
 	Icon           string    `json:"icon"`
 	ImageURL       string    `json:"image_url"`
@@ -81,7 +89,9 @@ func ToApplicationLinkResponse(link *ApplicationLink) ApplicationLinkResponse {
 	return ApplicationLinkResponse{
 		ID:             link.ID.String(),
 		Name:           link.Name,
+		NameAr:         link.NameAr,
 		Description:    link.Description,
+		DescriptionAr:  link.DescriptionAr,
 		URL:            link.URL,
 		Icon:           link.Icon,
 		ImageURL:       link.ImageURL,
