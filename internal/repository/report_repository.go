@@ -10,6 +10,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -814,6 +815,35 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 				setField(results[i], "closed_date", date)
 			}
 
+			// Calculated "Approved By" and "Approved Time" fields from Closed transition
+			if name := closedNames[incidentID]; name != "" {
+				setField(results[i], "approved_by", name)
+			}
+			if date := closedDates[incidentID]; date != "" {
+				setField(results[i], "approved_time", date)
+				setField(results[i], "approved_at", date)
+				if createdAt, ok := row["created_at"].(string); ok {
+					totalClosingTime, err := utils.CalculateDuration(createdAt, date)
+					if err == nil {
+						setField(results[i], "total_closing_duration", totalClosingTime)
+					} else {
+
+						log.Println("error calculating total closing time for incident", incidentID, ":", err)
+						setField(results[i], "total_closing_duration", nil)
+					}
+				}
+			} else {
+				if createdAt, ok := row["created_at"].(string); ok {
+					totalClosingTime, err := utils.CalculateDuration(createdAt, date)
+					if err == nil {
+						setField(results[i], "total_closing_duration", totalClosingTime)
+					} else {
+						log.Println("error calculating total closing time for incident", incidentID, ":", err)
+						setField(results[i], "total_closing_duration", nil)
+					}
+				}
+			}
+
 			// Rejected
 			if name := rejectedNames[incidentID]; name != "" {
 				setField(results[i], "rejected_by", name)
@@ -1514,6 +1544,7 @@ func (r *reportRepository) ExecuteUserPerformanceQuery(ctx context.Context, filt
 		row := make(map[string]interface{})
 		if len(reqColumns) > 0 {
 			for _, col := range reqColumns {
+				log.Printf("Col Label: %s, Field: %s", col.Label, col.Field)
 				row[col.Label] = rawRow[col.Field]
 			}
 		} else {
@@ -1934,7 +1965,13 @@ func (r *reportRepository) ExecuteActionLogQuery(ctx context.Context, filters []
 func buildCountRow(rawRow map[string]interface{}, reqColumns []models.ColumnField, defaults map[string]string) map[string]interface{} {
 	row := make(map[string]interface{})
 	if len(reqColumns) > 0 {
+		if rawRow["status_name"] != nil && rawRow["status_name"] != "" && rawRow["incident_count"] != nil {
+			status_name := fmt.Sprintf("%s", rawRow["status_name"])
+			rawRow[status_name] = fmt.Sprintf("%d", rawRow["incident_count"])
+		}
+
 		for _, col := range reqColumns {
+			// log.Printf("Raw Label: %s, Field: %s", rawRow[col.Label], col.Field)
 			row[col.Label] = rawRow[col.Field]
 		}
 	} else {
