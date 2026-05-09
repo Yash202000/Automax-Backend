@@ -6,17 +6,19 @@ import (
 )
 
 func parseTimeFlexible(t string) (time.Time, error) {
-	// 1. Try RFC3339
-	if parsed, err := time.Parse(time.RFC3339, t); err == nil {
-		return parsed, nil
+	formats := []string{
+		time.RFC3339, // 2006-01-02T15:04:05Z07:00
+		"2006-01-02 15:04:05.999999999 -0700 MST", // Go time.Time string → "2026-01-19 14:13:00.969689 +0530 IST"
+		"2006-01-02 15:04:05 -0700 MST",           // same without nanoseconds
+		"2006-01-02T15:04:05.999999999Z07:00",     // RFC3339 with nanoseconds
+		"01-02-2006 03:04:05 PM",                  // your custom format
 	}
 
-	// 2. Try your custom format: "09-13-2025 09:32:09 AM"
-	customLayout := "01-02-2006 03:04:05 PM"
-	if parsed, err := time.Parse(customLayout, t); err == nil {
-		return parsed, nil
+	for _, layout := range formats {
+		if parsed, err := time.Parse(layout, t); err == nil {
+			return parsed, nil
+		}
 	}
-
 	return time.Time{}, fmt.Errorf("unsupported time format: %s", t)
 }
 
