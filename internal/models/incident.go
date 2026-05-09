@@ -231,8 +231,8 @@ type IncidentTransitionHistory struct {
 	PerformedByID uuid.UUID `gorm:"type:uuid;index;not null" json:"performed_by_id"`
 	PerformedBy   *User     `gorm:"foreignKey:PerformedByID" json:"performed_by,omitempty"`
 
-	Comment   string             `gorm:"type:text" json:"comment"`
-	Feedbacks []IncidentFeedback `gorm:"foreignKey:TransitionHistoryID" json:"feedbacks,omitempty"`
+	Comment   string            `gorm:"type:text" json:"comment"`
+	Feedbacks *IncidentFeedback `gorm:"foreignKey:TransitionHistoryID" json:"feedbacks,omitempty"`
 
 	// IsSystemAction is true for automatically triggered transitions (e.g. expiry reversion).
 	IsSystemAction bool `gorm:"default:false" json:"is_system_action"`
@@ -1036,11 +1036,9 @@ func ToTransitionHistoryResponse(h *IncidentTransitionHistory) TransitionHistory
 		resp.PerformedBy = &perfResp
 	}
 
-	if len(h.Feedbacks) != 0 {
-		feedbackResponses := make([]IncidentFeedbackResponse, len(h.Feedbacks))
-		for idx, f := range h.Feedbacks {
-			feedbackResponses[idx] = ToIncidentFeedbackResponse(&f)
-		}
+	if h.Feedbacks != nil {
+		feedbackResponses := make([]IncidentFeedbackResponse, 1)
+		feedbackResponses[0] = ToIncidentFeedbackResponse(h.Feedbacks)
 		resp.Feedbacks = feedbackResponses
 	}
 	return resp
