@@ -2911,8 +2911,8 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		}()
 	}
 
-	// Send FCM push notification to the citizen reporter on incident closure
-	if s.fcmService != nil && newState.StateType == "terminal" && incident.ReporterID != nil {
+	// Send FCM push notification + in-app notification to the citizen reporter on incident closure
+	if (s.fcmService != nil || s.notificationService != nil) && newState.StateType == "terminal" && incident.ReporterID != nil {
 		bgCtx := context.Background()
 		reporterID := *incident.ReporterID
 		closedAt := time.Now()
@@ -2921,6 +2921,8 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		incidentTitle := incident.Title
 		recordType := strings.ToUpper(incident.RecordType)
 		capturedID := incidentID
+		reporterEmail := incident.ReporterEmail
+		capturedByUser := userID
 		go func() {
 			// Only send to citizens — skip internal staff
 			roles, err := s.userRepo.GetUserRoles(bgCtx, reporterID)
@@ -2936,10 +2938,11 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				}
 			}
 			if !isCitizen {
-				log.Printf("FCM-CLOSURE: Reporter %s is not a citizen, skipping push", reporterID)
+				log.Printf("FCM-CLOSURE: Reporter %s is not a citizen, skipping", reporterID)
 				return
 			}
 
+			subject := fmt.Sprintf("Your Incident %s Has Been Closed", incidentNumber)
 			body := fmt.Sprintf(
 				"Your incident \"%s\" (ID: %s) has been closed on %s.",
 				incidentTitle, incidentNumber, closedAt.Format("02 Jan 2006"),
@@ -2947,23 +2950,52 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			if comment != "" {
 				body += fmt.Sprintf(" Comment: %s", comment)
 			}
-			pushReq := &models.PushRequest{
-				UserID: reporterID,
-				Title:  "Your Incident Has Been Closed",
-				Body:   body,
-				Data: map[string]string{
-					"id":        capturedID.String(),
-					"type":      recordType,
-					"closed_at": closedAt.Format(time.RFC3339),
-					"comment":   comment,
-				},
+
+			// Send in-app notification
+			if s.notificationService != nil {
+				email := reporterEmail
+				if email == "" {
+					if u, ferr := s.userRepo.FindByID(bgCtx, reporterID); ferr == nil {
+						email = u.Email
+					}
+				}
+				if email != "" {
+					if result, nerr := s.notificationService.SendNotification(
+						bgCtx, "notification", nil, "en",
+						[]string{email}, nil, nil,
+						subject, body,
+						nil, nil, &capturedByUser, nil,
+					); nerr == nil && len(result.InboxLogIDs) > 0 {
+						_ = s.notificationService.SetMetaOnLogs(bgCtx, result.InboxLogIDs, &models.NotificationMeta{
+							ID:   capturedID.String(),
+							Type: recordType,
+						})
+					} else if nerr != nil {
+						log.Printf("INAPP-CLOSURE: Failed for citizen %s: %v", reporterID, nerr)
+					}
+				}
 			}
-			log.Printf("FCM-CLOSURE: Sending push to citizen %s | title: %q | body: %q | data: %v",
-				reporterID, pushReq.Title, pushReq.Body, pushReq.Data)
-			if err := s.fcmService.Push(bgCtx, pushReq); err != nil {
-				log.Printf("FCM-CLOSURE: Failed for citizen %s: %v", reporterID, err)
-			} else {
-				log.Printf("FCM-CLOSURE: Sent successfully to citizen %s", reporterID)
+
+			// Send FCM push notification
+			if s.fcmService != nil {
+				pushReq := &models.PushRequest{
+					UserID: reporterID,
+					Title:  "Your Incident Has Been Closed",
+					Body:   body,
+					Data: map[string]string{
+						"id":        capturedID.String(),
+						"type":      recordType,
+						"closed_at": closedAt.Format(time.RFC3339),
+						"comment":   comment,
+					},
+				}
+				log.Printf("FCM-CLOSURE: Sending push to citizen %s | title: %q | body: %q | data: %v",
+					reporterID, pushReq.Title, pushReq.Body, pushReq.Data)
+				if err := s.fcmService.Push(bgCtx, pushReq); err != nil {
+					log.Printf("FCM-CLOSURE: Failed for citizen %s: %v", reporterID, err)
+				} else {
+					log.Printf("FCM-CLOSURE: Sent successfully to citizen %s", reporterID)
+				}
 			}
 		}()
 	}
