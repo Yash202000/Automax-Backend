@@ -550,8 +550,8 @@ type IncidentFilter struct {
 	RecordType       *string    `query:"record_type" json:"record_type" validate:"omitempty,oneof=incident request complaint query"` // 'incident', 'request', 'complaint', or 'query'
 	Channel          *string    `query:"channel" json:"channel" validate:"omitempty"`                                                // for complaints
 	Source           *string    `query:"source" json:"source" validate:"omitempty"`
-	StartDate        *time.Time `query:"start_date" json:"start_date" validate:"omitempty"` // filter by created_at >= start_date
-	EndDate          *time.Time `query:"end_date" json:"end_date" validate:"omitempty"`     // filter by created_at <= end_date
+	StartDate        *time.Time `json:"start_date"` // filter by created_at >= start_date; parsed manually in handler (not via QueryParser)
+	EndDate          *time.Time `json:"end_date"`   // filter by created_at <= end_date; parsed manually in handler (not via QueryParser)
 	// Transition filters
 	TransitionID     *uuid.UUID  `query:"transition_id" json:"transition_id" validate:"omitempty,uuid"`
 	FromStateID      *uuid.UUID  `query:"from_state_id" json:"from_state_id" validate:"omitempty"`
