@@ -747,7 +747,7 @@ type TransitionHistoryResponse struct {
 	OldValues      string                      `json:"old_values,omitempty"`
 	NewValues      string                      `json:"new_values,omitempty"`
 	ActionResults  string                      `json:"action_results,omitempty"`
-	Feedbacks      []IncidentFeedbackResponse  `json:"feedbacks,omitempty"`
+	Feedbacks      IncidentFeedbackResponse    `json:"feedbacks,omitempty"`
 	TransitionedAt time.Time                   `json:"transitioned_at"`
 }
 
@@ -1036,9 +1036,12 @@ func ToTransitionHistoryResponse(h *IncidentTransitionHistory) TransitionHistory
 		resp.PerformedBy = &perfResp
 	}
 
-	if h.Feedbacks != nil {
-		feedbackResponses := make([]IncidentFeedbackResponse, 1)
-		feedbackResponses[0] = ToIncidentFeedbackResponse(h.Feedbacks)
+	if h.Feedbacks != nil && h.Feedbacks.ID != uuid.Nil && h.Feedbacks.Comment != "" {
+		feedbackResponses := IncidentFeedbackResponse{}
+		feedbackResponses.Comment = h.Feedbacks.Comment
+		feedbackResponses.CreatedAt = h.Feedbacks.CreatedAt
+		feedbackResponses.ID = h.Feedbacks.ID
+		// feedbackResponses = ToIncidentFeedbackResponse(h.Feedbacks)
 		resp.Feedbacks = feedbackResponses
 	}
 	return resp
