@@ -386,8 +386,10 @@ type WorkflowTransitionCreateRequest struct {
 	FromStateID string   `json:"from_state_id" validate:"required,uuid"`
 	ToStateID   string   `json:"to_state_id" validate:"required,uuid"`
 	RoleIDs     []string `json:"role_ids"`
-	SortOrder   int      `json:"sort_order"`
-	IsRejection bool     `json:"is_rejection"`
+	SortOrder     int  `json:"sort_order"`
+	IsRejection   bool `json:"is_rejection"`
+	IsNotBelong   bool `json:"is_not_belong"`
+	IsMissingInfo bool `json:"is_missing_info"`
 
 	// Department Assignment
 	AssignDepartmentID   *string `json:"assign_department_id" validate:"omitempty,uuid"`
@@ -411,8 +413,10 @@ type WorkflowTransitionUpdateRequest struct {
 	ToStateID   string   `json:"to_state_id" validate:"omitempty,uuid"`
 	RoleIDs     []string `json:"role_ids"`
 	SortOrder   *int     `json:"sort_order"`
-	IsActive    *bool    `json:"is_active"`
-	IsRejection *bool    `json:"is_rejection"`
+	IsActive      *bool `json:"is_active"`
+	IsRejection   *bool `json:"is_rejection"`
+	IsNotBelong   *bool `json:"is_not_belong"`
+	IsMissingInfo *bool `json:"is_missing_info"`
 
 	// Department Assignment
 	AssignDepartmentID   *string `json:"assign_department_id" validate:"omitempty,uuid"`
