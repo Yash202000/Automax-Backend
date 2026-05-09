@@ -10,9 +10,40 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+// TransitionPair represents a from→to state name pair for transition lookups.
+type TransitionPair struct {
+	From string
+	To   string
+}
+
+type TransitionLinkedResult struct {
+	IncidentID  string
+	CreatedBy   string
+	Comment     string
+	CreatedAt   string
+	ToStateName string
+}
+
+var TransitionPairs = struct {
+	Rejected        TransitionPair
+	UnderResolution TransitionPair
+	InProgress      TransitionPair
+	ReadyToClose    TransitionPair
+	Closed          TransitionPair
+	Reopened        TransitionPair
+}{
+	Rejected:        TransitionPair{From: "Open", To: "Rejected"},
+	UnderResolution: TransitionPair{From: "In Progress", To: "Under Resolution"},
+	InProgress:      TransitionPair{From: "Open", To: "In Progress"},
+	ReadyToClose:    TransitionPair{From: "In Progress", To: "Ready To Close"},
+	Closed:          TransitionPair{From: "Ready To Close", To: "Closed"},
+	Reopened:        TransitionPair{From: "Closed", To: "Open"},
+}
 
 type ReportRepository interface {
 	// Report CRUD
@@ -35,7 +66,7 @@ type ReportRepository interface {
 	// GetTransitionUserNames returns a map of incident_id → full name of the user
 	// who performed the most-recent status transition TO newStateName for each
 	// incident in incidentIDs. Queries incident_revisions joined with users.
-	GetTransitionUserNames(ctx context.Context, newStateName string, incidentIDs []string) (map[string]string, error)
+	// GetTransitionUserNames(ctx context.Context, newStateName string, incidentIDs []string) (map[string]string, error)
 	ExecuteUserQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 	ExecuteUserPerformanceQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 	ExecuteWorkflowQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
@@ -675,17 +706,39 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 				rawRow[colName] = val
 			}
 		}
+		log.Printf("rawRow keys: %v", func() []string {
+			keys := make([]string, 0, len(rawRow))
+			for k := range rawRow {
+				keys = append(keys, k)
+			}
+			return keys
+		}())
 		// Build row dynamically from the requested columns.
 		// col.Field is the SQL alias present in rawRow; col.Label is the output key.
 		row := make(map[string]interface{})
 		if len(reqColumns) > 0 {
+
 			for _, col := range reqColumns {
 				row[col.Label] = rawRow[col.Field]
 			}
 			// Always carry the internal "id" field so enrichment can key results.
 			if _, ok := row["id"]; !ok {
 				row["id"] = rawRow["id"]
+				row["created_at"] = rawRow["created_at"] // also carry created_at for aging calculations in enrichment
 			}
+			var createdAt string
+			switch v := rawRow["created_at"].(type) {
+			case string:
+				createdAt = v
+			case time.Time:
+				createdAt = v.Format(time.RFC3339Nano)
+			}
+			if createdAt != "" {
+				row["created_at"] = createdAt
+				log.Print("Incident created at", row["created_at"])
+			}
+			log.Printf("row created_at type=%T value=%v", row["created_at"], row["created_at"])
+
 		} else {
 			for k, v := range rawRow {
 				row[k] = v
@@ -766,10 +819,10 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 		}
 
 		// 4. General comments
-		var commentsMap map[string][]map[string]interface{}
-		if hasCol("comments", "comments_array") {
-			commentsMap, _ = r.fetchGeneralComments(ctx, incidentIDs)
-		}
+		// var commentsMap map[string][]map[string]interface{}
+		// if hasCol("comments", "comments_array") {
+		// 	commentsMap, _ = r.fetchGeneralComments(ctx, incidentIDs)
+		// }
 
 		// 5. Contractor comment
 		var contractorCommentsMap map[string]string
@@ -795,6 +848,91 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			allAttachMap, _ = r.fetchAllAttachments(ctx, incidentIDs, protocol, hostname, token)
 		}
 
+		// 9. Feedback
+		// in the bulk enrichment block, alongside other hasCol checks
+		var feedbackMap map[string][]TransitionLinkedResult
+		if hasCol("feedbacks", "feedback_array") {
+			feedbackMap, _ = r.fetchFeedbackData(ctx, incidentIDs)
+		}
+
+		// Closed feedback
+		var closedFeedbackMap map[string][]TransitionLinkedResult
+		if hasCol("closed_feedback") {
+			closedFeedbackMap, _ = r.fetchFeedbackDataByState(ctx, "Closed", incidentIDs)
+		}
+
+		// Rejected feedback
+		var rejectedFeedbackMap map[string][]TransitionLinkedResult
+		if hasCol("rejected_feedback") {
+			rejectedFeedbackMap, _ = r.fetchFeedbackDataByState(ctx, "Rejected", incidentIDs)
+		}
+
+		// Under Resolution feedback
+		var underResFeedbackMap map[string][]TransitionLinkedResult
+		if hasCol("under_resolution_feedback") {
+			underResFeedbackMap, _ = r.fetchFeedbackDataByState(ctx, "Under Resolution", incidentIDs)
+		}
+
+		// In Progress feedback
+		var inProgressFeedbackMap map[string][]TransitionLinkedResult
+		if hasCol("in_progress_feedback") {
+			inProgressFeedbackMap, _ = r.fetchFeedbackDataByState(ctx, "In Progress", incidentIDs)
+		}
+
+		// Ready To Close feedback
+		var readyToCloseFeedbackMap map[string][]TransitionLinkedResult
+		if hasCol("ready_to_close_feedback") {
+			readyToCloseFeedbackMap, _ = r.fetchFeedbackDataByState(ctx, "Ready To Close", incidentIDs)
+		}
+
+		// Reopened feedback
+		var reopenedFeedbackMap map[string][]TransitionLinkedResult
+		if hasCol("reopened_feedback") {
+			reopenedFeedbackMap, _ = r.fetchFeedbackDataByState(ctx, "Reopened", incidentIDs)
+		}
+		// 10. Comment
+		// in the bulk enrichment block, alongside other hasCol checks
+		var commentsMap map[string][]TransitionLinkedResult
+		if hasCol("comments", "comment_array") {
+			commentsMap, _ = r.fetchCommentData(ctx, incidentIDs)
+		}
+
+		// Closed feedback
+		var closedCommentMap map[string][]TransitionLinkedResult
+		if hasCol("closed_comment") {
+			closedCommentMap, _ = r.fetchCommentDataByState(ctx, "Closed", incidentIDs)
+		}
+
+		// Rejected feedback
+		var rejectedCommentMap map[string][]TransitionLinkedResult
+		if hasCol("rejected_comment") {
+			rejectedCommentMap, _ = r.fetchCommentDataByState(ctx, "Rejected", incidentIDs)
+		}
+
+		// Under Resolution feedback
+		var underResCommentMap map[string][]TransitionLinkedResult
+		if hasCol("under_resolution_comment") {
+			underResCommentMap, _ = r.fetchCommentDataByState(ctx, "Under Resolution", incidentIDs)
+		}
+
+		// In Progress feedback
+		var inProgressCommentMap map[string][]TransitionLinkedResult
+		if hasCol("in_progress_comment") {
+			inProgressCommentMap, _ = r.fetchCommentDataByState(ctx, "In Progress", incidentIDs)
+		}
+
+		// Ready To Close feedback
+		var readyToCloseCommentMap map[string][]TransitionLinkedResult
+		if hasCol("ready_to_close_comment") {
+			readyToCloseCommentMap, _ = r.fetchCommentDataByState(ctx, "Ready To Close", incidentIDs)
+		}
+
+		// Reopened feedback
+		var reopenedCommentMap map[string][]TransitionLinkedResult
+		if hasCol("reopened_comment") {
+			reopenedCommentMap, _ = r.fetchCommentDataByState(ctx, "Reopened", incidentIDs)
+		}
+
 		for i, row := range results {
 			incidentID := incidentIDStr(row["id"])
 			if incidentID == "" {
@@ -812,6 +950,40 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			}
 			if date := closedDates[incidentID]; date != "" {
 				setField(results[i], "closed_date", date)
+			}
+
+			// Calculated "Approved By" and "Approved Time" fields from Closed transition
+			if name := closedNames[incidentID]; name != "" {
+				setField(results[i], "approved_by", name)
+			}
+			if date := closedDates[incidentID]; date != "" {
+				setField(results[i], "approved_time", date)
+				setField(results[i], "approved_at", date)
+				if createdAt, ok := row["created_at"].(string); ok {
+					totalClosingTime, err := utils.CalculateDuration(createdAt, date)
+					if err == nil {
+						setField(results[i], "total_closing_duration", totalClosingTime)
+					} else {
+						log.Println("error calculating total closing time for incident", incidentID, ":", err)
+						setField(results[i], "total_closing_duration", nil)
+					}
+				} else {
+					log.Print("Created at not set")
+					setField(results[i], "total_closing_duration", nil)
+				}
+			} else {
+				if createdAt, ok := row["created_at"].(string); ok {
+					totalClosingTime, err := utils.CalculateDuration(createdAt, date)
+					if err == nil {
+						setField(results[i], "total_closing_duration", totalClosingTime)
+					} else {
+						log.Println("error calculating total closing time for incident", incidentID, ":", err)
+						setField(results[i], "total_closing_duration", nil)
+					}
+				} else {
+					log.Print("Created at not set")
+					setField(results[i], "total_closing_duration", nil)
+				}
 			}
 
 			// Rejected
@@ -863,14 +1035,14 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			}
 
 			// General comments
-			if comments, ok := commentsMap[incidentID]; ok {
-				parts := make([]string, 0, len(comments))
-				for _, c := range comments {
-					parts = append(parts, fmt.Sprintf("%s", c["content"]))
-				}
-				setField(results[i], "comments", strings.Join(parts, " | "))
-				setField(results[i], "comments_array", comments)
-			}
+			// if comments, ok := commentsMap[incidentID]; ok {
+			// 	parts := make([]string, 0, len(comments))
+			// 	for _, c := range comments {
+			// 		parts = append(parts, fmt.Sprintf("%s", c["content"]))
+			// 	}
+			// 	setField(results[i], "comments", strings.Join(parts, " | "))
+			// 	setField(results[i], "comments_array", comments)
+			// }
 
 			// Contractor comment (first/latest comment from a transition)
 			if cc := contractorCommentsMap[incidentID]; cc != "" {
@@ -894,6 +1066,115 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 				setField(results[i], "attachments", strings.Join(urls, " | "))
 			}
 
+			// Closed feedback
+			if feedbacks, ok := closedFeedbackMap[incidentID]; ok && len(feedbacks) > 0 {
+				setField(results[i], "closed_feedback", feedbacks[0].Comment)
+			}
+
+			// Rejected feedback
+			if feedbacks, ok := rejectedFeedbackMap[incidentID]; ok && len(feedbacks) > 0 {
+				setField(results[i], "rejected_feedback", feedbacks[0].Comment)
+			}
+
+			// Under Resolution feedback
+			if feedbacks, ok := underResFeedbackMap[incidentID]; ok && len(feedbacks) > 0 {
+				setField(results[i], "under_resolution_feedback", feedbacks[0].Comment)
+			}
+
+			// In Progress feedback
+			if feedbacks, ok := inProgressFeedbackMap[incidentID]; ok && len(feedbacks) > 0 {
+				setField(results[i], "in_progress_feedback", feedbacks[0].Comment)
+			}
+
+			// Ready To Close feedback
+			if feedbacks, ok := readyToCloseFeedbackMap[incidentID]; ok && len(feedbacks) > 0 {
+				setField(results[i], "ready_to_close_feedback", feedbacks[0].Comment)
+			}
+
+			// Reopened feedback
+			if feedbacks, ok := reopenedFeedbackMap[incidentID]; ok && len(feedbacks) > 0 {
+				setField(results[i], "reopened_feedback", feedbacks[0].Comment)
+			}
+
+			if feedbacks, ok := feedbackMap[incidentID]; ok {
+				// flat joined string for simple columns
+				parts := make([]string, 0, len(feedbacks))
+				for _, fb := range feedbacks {
+					parts = append(parts, fmt.Sprintf(" %s", fb.Comment))
+				}
+				setField(results[i], "feedbacks", strings.Join(parts, " | "))
+
+				// raw slice for array column (e.g. JSON export)
+				raw := make([]map[string]interface{}, 0, len(feedbacks))
+				for _, fb := range feedbacks {
+					entry := map[string]interface{}{
+						"created_by":    fb.CreatedBy,
+						"comment":       fb.Comment,
+						"created_at":    fb.CreatedAt,
+						"to_state_name": fb.ToStateName,
+					}
+
+					raw = append(raw, entry)
+				}
+
+				setField(results[i], "feedback_array", raw)
+			}
+
+			// 11. Comments
+			// Closed comment
+			if comments, ok := closedCommentMap[incidentID]; ok && len(comments) > 0 {
+				setField(results[i], "closed_comment", comments[0].Comment)
+			}
+
+			// Rejected comment
+			if comments, ok := rejectedCommentMap[incidentID]; ok && len(comments) > 0 {
+				setField(results[i], "rejected_comment", comments[0].Comment)
+			}
+
+			// Under Resolution comment
+			if comments, ok := underResCommentMap[incidentID]; ok && len(comments) > 0 {
+				setField(results[i], "under_resolution_comment", comments[0].Comment)
+			}
+
+			// In Progress comment
+			if comments, ok := inProgressCommentMap[incidentID]; ok && len(comments) > 0 {
+				setField(results[i], "in_progress_comment", comments[0].Comment)
+			}
+
+			// Ready To Close comment
+			if comments, ok := readyToCloseCommentMap[incidentID]; ok && len(comments) > 0 {
+				setField(results[i], "ready_to_close_comment", comments[0].Comment)
+			}
+
+			// Reopened comment
+			if comments, ok := reopenedCommentMap[incidentID]; ok && len(comments) > 0 {
+				setField(results[i], "reopened_comment", comments[0].Comment)
+			}
+
+			if comments, ok := commentsMap[incidentID]; ok {
+				// flat joined string for simple columns
+				parts := make([]string, 0, len(comments))
+				for _, fb := range comments {
+					parts = append(parts, fmt.Sprintf(" %s", fb.Comment))
+				}
+				setField(results[i], "comments", strings.Join(parts, " | "))
+
+				// raw slice for array column (e.g. JSON export)
+				raw := make([]map[string]interface{}, 0, len(comments))
+				for _, fb := range comments {
+					entry := map[string]interface{}{
+						"created_by":    fb.CreatedBy,
+						"comment":       fb.Comment,
+						"created_at":    fb.CreatedAt,
+						"to_state_name": fb.ToStateName,
+					}
+
+					raw = append(raw, entry)
+				}
+
+				setField(results[i], "comment_array", raw)
+			}
+
 			_ = row
 		}
 	}
@@ -904,9 +1185,75 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 // GetTransitionUserNames returns incident_id → performer full name for the
 // most-recent status_changed revision where new_value = newStateName.
 // Delegates to fetchStatusTransitionData (names only).
-func (r *reportRepository) GetTransitionUserNames(ctx context.Context, newStateName string, incidentIDs []string) (map[string]string, error) {
-	names, _, err := r.fetchStatusTransitionData(ctx, models.IncidentRevisionStatus(newStateName), incidentIDs)
-	return names, err
+// func (r *reportRepository) GetTransitionUserNames0(ctx context.Context, newStateName string, incidentIDs []string) (map[string]string, error) {
+// 	names, _, err := r.fetchStatusTransitionData(ctx, models.IncidentRevisionStatus(newStateName), incidentIDs)
+// 	return names, err
+// }
+
+func (r *reportRepository) fetchFeedbackDataByState(
+	ctx context.Context,
+	toStateName string,
+	incidentIDs []string,
+) (map[string][]TransitionLinkedResult, error) {
+	feedbacK_table := "incident_feedbacks"
+	return r.fetchTransitionLinkedData(ctx, feedbacK_table, toStateName, incidentIDs)
+}
+
+func (r *reportRepository) fetchTransitionLinkedData(
+	ctx context.Context,
+	table,
+	toStateName string,
+	incidentIDs []string,
+) (map[string][]TransitionLinkedResult, error) {
+	result := map[string][]TransitionLinkedResult{}
+	if len(incidentIDs) == 0 {
+		return result, nil
+	}
+
+	query := `
+		SELECT
+			f.incident_id::text,
+			TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS full_name,
+			COALESCE(f.comment, '')                                             AS comment,
+			f.created_at::text,
+			COALESCE(tws.name, '')                                              AS to_state_name
+		FROM ` + table + ` f
+		INNER JOIN users u ON u.id = f.created_by_id
+		LEFT JOIN incident_transition_histories tr ON tr.id = f.transition_history_id
+		LEFT JOIN workflow_states tws ON tws.id = tr.to_state_id
+		WHERE f.incident_id::text IN (?)
+		  AND tws.name = ?
+		ORDER BY f.incident_id, f.created_at ASC`
+
+	rows, err := r.db.WithContext(ctx).Raw(query, incidentIDs, toStateName).Rows()
+	if err != nil {
+		return nil, fmt.Errorf("fetchFeedbackDataByState(%s): %w", toStateName, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var fb TransitionLinkedResult
+		if err := rows.Scan(
+			&fb.IncidentID,
+			&fb.CreatedBy,
+			&fb.Comment,
+			&fb.CreatedAt,
+			&fb.ToStateName,
+		); err != nil {
+			continue
+		}
+		result[fb.IncidentID] = append(result[fb.IncidentID], fb)
+	}
+	return result, nil
+}
+
+func (r *reportRepository) fetchCommentDataByState(
+	ctx context.Context,
+	toStateName string,
+	incidentIDs []string,
+) (map[string][]TransitionLinkedResult, error) {
+	feedbacK_table := "incident_comments"
+	return r.fetchTransitionLinkedData(ctx, feedbacK_table, toStateName, incidentIDs)
 }
 
 // fetchStatusTransitionData is the single generic query behind all per-status
@@ -921,7 +1268,7 @@ func (r *reportRepository) GetTransitionUserNames(ctx context.Context, newStateN
 //	new_value     = string(status)
 func (r *reportRepository) fetchStatusTransitionData(
 	ctx context.Context,
-	status models.IncidentRevisionStatus,
+	fromState, toState string,
 	incidentIDs []string,
 ) (names map[string]string, dates map[string]string, err error) {
 	names = map[string]string{}
@@ -931,22 +1278,23 @@ func (r *reportRepository) fetchStatusTransitionData(
 	}
 
 	query := `
-		SELECT DISTINCT ON (ir.incident_id)
-			ir.incident_id::text,
+		SELECT DISTINCT ON (tr.incident_id)
+			tr.incident_id::text,
 			TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS full_name,
-			ir.created_at::text AS transition_date
-		FROM incident_revisions ir
-		CROSS JOIN jsonb_array_elements(ir.changes::jsonb) AS chg
-		LEFT JOIN users u ON ir.performed_by_id = u.id
-		WHERE ir.action_type = 'status_changed'
-		  AND chg->>'field_name' = 'current_state_id'
-		  AND chg->>'new_value' = ?
-		  AND ir.incident_id IN (?)
-		ORDER BY ir.incident_id, ir.created_at DESC`
+			tr.transitioned_at::text
+		FROM incident_transition_histories tr
+		INNER JOIN workflow_states fws ON fws.id = tr.from_state_id
+		INNER JOIN workflow_states tws ON tws.id = tr.to_state_id
+		INNER JOIN users u ON u.id = tr.performed_by_id
+		WHERE tws.name = ?
+		  AND fws.name = ?
+		  AND tr.incident_id::text IN (?)
+		  AND tr.is_system_action = false
+		ORDER BY tr.incident_id, tr.transitioned_at DESC`
 
-	rows, qerr := r.db.WithContext(ctx).Raw(query, string(status), incidentIDs).Rows()
+	rows, qerr := r.db.WithContext(ctx).Raw(query, toState, fromState, incidentIDs).Rows()
 	if qerr != nil {
-		err = fmt.Errorf("fetchStatusTransitionData(%s) query failed: %w", status, qerr)
+		err = fmt.Errorf("fetchStatusTransitionData(%s->%s): %w", fromState, toState, qerr)
 		return
 	}
 	defer rows.Close()
@@ -963,25 +1311,34 @@ func (r *reportRepository) fetchStatusTransitionData(
 }
 
 // ── Per-status wrappers (use IncidentRevisionStatus constants) ────────────────
-
-func (r *reportRepository) fetchRejectedData(ctx context.Context, incidentIDs []string) (map[string]string, map[string]string, error) {
-	return r.fetchStatusTransitionData(ctx, models.RevisionStatusRejected, incidentIDs)
+func (r *reportRepository) fetchRejectedData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
+	p := TransitionPairs.Rejected
+	return r.fetchStatusTransitionData(ctx, p.From, p.To, ids)
 }
 
-func (r *reportRepository) fetchUnderResolutionData(ctx context.Context, incidentIDs []string) (map[string]string, map[string]string, error) {
-	return r.fetchStatusTransitionData(ctx, models.RevisionStatusUnderResolution, incidentIDs)
+func (r *reportRepository) fetchUnderResolutionData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
+	p := TransitionPairs.UnderResolution
+	return r.fetchStatusTransitionData(ctx, p.From, p.To, ids)
 }
 
-func (r *reportRepository) fetchInProgressData(ctx context.Context, incidentIDs []string) (map[string]string, map[string]string, error) {
-	return r.fetchStatusTransitionData(ctx, models.RevisionStatusInProgress, incidentIDs)
+func (r *reportRepository) fetchInProgressData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
+	p := TransitionPairs.InProgress
+	return r.fetchStatusTransitionData(ctx, p.From, p.To, ids)
 }
 
-func (r *reportRepository) fetchReadyToCloseData(ctx context.Context, incidentIDs []string) (map[string]string, map[string]string, error) {
-	return r.fetchStatusTransitionData(ctx, models.RevisionStatusReadyToClose, incidentIDs)
+func (r *reportRepository) fetchReadyToCloseData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
+	p := TransitionPairs.ReadyToClose
+	return r.fetchStatusTransitionData(ctx, p.From, p.To, ids)
 }
 
-func (r *reportRepository) fetchClosedData(ctx context.Context, incidentIDs []string) (map[string]string, map[string]string, error) {
-	return r.fetchStatusTransitionData(ctx, models.RevisionStatusClosed, incidentIDs)
+func (r *reportRepository) fetchClosedData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
+	p := TransitionPairs.Closed
+	return r.fetchStatusTransitionData(ctx, p.From, p.To, ids)
+}
+
+func (r *reportRepository) fetchReopenData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
+	p := TransitionPairs.Reopened
+	return r.fetchStatusTransitionData(ctx, p.From, p.To, ids)
 }
 
 // ── Bulk enrichment queries ───────────────────────────────────────────────────
@@ -1022,6 +1379,96 @@ func (r *reportRepository) fetchGeneralComments(ctx context.Context, incidentIDs
 			"author":     authorName,
 			"created_at": createdAt,
 		})
+	}
+	return result, nil
+}
+
+func (r *reportRepository) fetchFeedbackData(
+	ctx context.Context,
+	incidentIDs []string,
+) (map[string][]TransitionLinkedResult, error) {
+	result := map[string][]TransitionLinkedResult{}
+	if len(incidentIDs) == 0 {
+		return result, nil
+	}
+
+	query := `
+		SELECT
+			f.incident_id::text,
+			TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS full_name,
+			COALESCE(f.comment, '')                                             AS comment,
+			f.created_at::text,
+			COALESCE(tws.name, '')                                              AS to_state_name
+		FROM incident_feedbacks f
+		INNER JOIN users u ON u.id = f.created_by_id
+		LEFT JOIN incident_transition_histories tr ON tr.id = f.transition_history_id
+		LEFT JOIN workflow_states tws ON tws.id = tr.to_state_id
+		WHERE f.incident_id::text IN (?)
+		ORDER BY f.incident_id, f.created_at ASC`
+
+	rows, err := r.db.WithContext(ctx).Raw(query, incidentIDs).Rows()
+	if err != nil {
+		return nil, fmt.Errorf("fetchFeedbackData: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var fb TransitionLinkedResult
+		if err := rows.Scan(
+			&fb.IncidentID,
+			&fb.CreatedBy,
+			&fb.Comment,
+			&fb.CreatedAt,
+			&fb.ToStateName,
+		); err != nil {
+			continue
+		}
+		result[fb.IncidentID] = append(result[fb.IncidentID], fb)
+	}
+	return result, nil
+}
+
+func (r *reportRepository) fetchCommentData(
+	ctx context.Context,
+	incidentIDs []string,
+) (map[string][]TransitionLinkedResult, error) {
+	result := map[string][]TransitionLinkedResult{}
+	if len(incidentIDs) == 0 {
+		return result, nil
+	}
+
+	query := `
+		SELECT
+			f.incident_id::text,
+			TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS full_name,
+			COALESCE(f.comment, '')                                             AS comment,
+			f.created_at::text,
+			COALESCE(tws.name, '')                                              AS to_state_name
+		FROM incident_comments f
+		INNER JOIN users u ON u.id = f.created_by_id
+		LEFT JOIN incident_transition_histories tr ON tr.id = f.transition_history_id
+		LEFT JOIN workflow_states tws ON tws.id = tr.to_state_id
+		WHERE f.incident_id::text IN (?)
+		ORDER BY f.incident_id, f.created_at ASC`
+
+	rows, err := r.db.WithContext(ctx).Raw(query, incidentIDs).Rows()
+	if err != nil {
+		return nil, fmt.Errorf("fetchCommentData: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var fb TransitionLinkedResult
+		if err := rows.Scan(
+			&fb.IncidentID,
+			&fb.CreatedBy,
+			&fb.Comment,
+			&fb.CreatedAt,
+			&fb.ToStateName,
+		); err != nil {
+			continue
+		}
+		result[fb.IncidentID] = append(result[fb.IncidentID], fb)
 	}
 	return result, nil
 }
@@ -1140,7 +1587,7 @@ func (r *reportRepository) scanAttachmentURLs(ctx context.Context, query string,
 // incident. A reopen is detected in incident_revisions when action_type =
 // 'status_changed' and the old state is terminal while the new state is not.
 // Uses the same JSONB changes pattern as GetTransitionUserNames.
-func (r *reportRepository) fetchReopenData(ctx context.Context, incidentIDs []string) (names map[string]string, dates map[string]string, err error) {
+func (r *reportRepository) fetchReopenDataOld(ctx context.Context, incidentIDs []string) (names map[string]string, dates map[string]string, err error) {
 	names = map[string]string{}
 	dates = map[string]string{}
 	if len(incidentIDs) == 0 {
@@ -1328,6 +1775,8 @@ func (r *reportRepository) ExecuteUserQuery(ctx context.Context, filters []model
 			val := columns[i]
 			if b, ok := val.([]byte); ok {
 				rawRow[colName] = string(b)
+			} else if t, ok := val.(time.Time); ok {
+				rawRow[colName] = t.Format(time.RFC3339Nano) // convert to string here
 			} else {
 				rawRow[colName] = val
 			}
@@ -1514,6 +1963,7 @@ func (r *reportRepository) ExecuteUserPerformanceQuery(ctx context.Context, filt
 		row := make(map[string]interface{})
 		if len(reqColumns) > 0 {
 			for _, col := range reqColumns {
+				log.Printf("Col Label: %s, Field: %s", col.Label, col.Field)
 				row[col.Label] = rawRow[col.Field]
 			}
 		} else {
@@ -1934,7 +2384,13 @@ func (r *reportRepository) ExecuteActionLogQuery(ctx context.Context, filters []
 func buildCountRow(rawRow map[string]interface{}, reqColumns []models.ColumnField, defaults map[string]string) map[string]interface{} {
 	row := make(map[string]interface{})
 	if len(reqColumns) > 0 {
+		if rawRow["status_name"] != nil && rawRow["status_name"] != "" && rawRow["incident_count"] != nil {
+			status_name := fmt.Sprintf("%s", rawRow["status_name"])
+			rawRow[status_name] = fmt.Sprintf("%d", rawRow["incident_count"])
+		}
+
 		for _, col := range reqColumns {
+			// log.Printf("Raw Label: %s, Field: %s", rawRow[col.Label], col.Field)
 			row[col.Label] = rawRow[col.Field]
 		}
 	} else {
