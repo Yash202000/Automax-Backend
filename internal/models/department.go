@@ -11,8 +11,10 @@ import (
 type Department struct {
 	ID              uuid.UUID        `gorm:"type:uuid;primary_key" json:"id"`
 	Name            string           `gorm:"not null;size:100" json:"name"`
+	NameAr          string           `gorm:"size:100" json:"name_ar"`
 	Code            string           `gorm:"size:50;uniqueIndex" json:"code"`
 	Description     string           `gorm:"size:500" json:"description"`
+	DescriptionAr   string           `gorm:"size:500" json:"description_ar"`
 	Type            string           `gorm:"size:20;default:internal" json:"type"` // internal | external
 	ParentID        *uuid.UUID       `gorm:"type:uuid;index" json:"parent_id"`
 	Parent          *Department      `gorm:"foreignKey:ParentID" json:"parent,omitempty"`
@@ -43,8 +45,10 @@ func (d *Department) BeforeCreate(tx *gorm.DB) error {
 // DepartmentCreateRequest for creating a new department
 type DepartmentCreateRequest struct {
 	Name              string      `json:"name" validate:"required,min=1,max=100"`
+	NameAr            string      `json:"name_ar" validate:"max=100"`
 	Code              string      `json:"code" validate:"required,min=1,max=50"`
 	Description       string      `json:"description" validate:"max=500"`
+	DescriptionAr     string      `json:"description_ar" validate:"max=500"`
 	Type              string      `json:"type" validate:"omitempty,oneof=internal external"`
 	ParentID          *uuid.UUID  `json:"parent_id"`
 	ManagerID         *uuid.UUID  `json:"manager_id"`
@@ -57,8 +61,10 @@ type DepartmentCreateRequest struct {
 // DepartmentUpdateRequest for updating a department
 type DepartmentUpdateRequest struct {
 	Name              string      `json:"name" validate:"min=1,max=100"`
+	NameAr            string      `json:"name_ar" validate:"max=100"`
 	Code              string      `json:"code" validate:"min=1,max=50"`
 	Description       string      `json:"description" validate:"max=500"`
+	DescriptionAr     string      `json:"description_ar" validate:"max=500"`
 	Type              string      `json:"type" validate:"omitempty,oneof=internal external"`
 	ManagerID         *uuid.UUID  `json:"manager_id"`
 	LocationIDs       []uuid.UUID `json:"location_ids"`
@@ -72,8 +78,10 @@ type DepartmentUpdateRequest struct {
 type DepartmentResponse struct {
 	ID              uuid.UUID                `json:"id"`
 	Name            string                   `json:"name"`
+	NameAr          string                   `json:"name_ar"`
 	Code            string                   `json:"code"`
 	Description     string                   `json:"description"`
+	DescriptionAr   string                   `json:"description_ar"`
 	Type            string                   `json:"type"`
 	ParentID        *uuid.UUID               `json:"parent_id"`
 	Level           int                      `json:"level"`
@@ -108,18 +116,20 @@ func ToDepartmentResponse(d *Department) DepartmentResponse {
 		dType = "internal"
 	}
 	resp := DepartmentResponse{
-		ID:          d.ID,
-		Name:        d.Name,
-		Code:        d.Code,
-		Description: d.Description,
-		Type:        dType,
-		ParentID:    d.ParentID,
-		Level:       d.Level,
-		Path:        d.Path,
-		ManagerID:   d.ManagerID,
-		IsActive:    d.IsActive,
-		SortOrder:   d.SortOrder,
-		CreatedAt:   d.CreatedAt,
+		ID:            d.ID,
+		Name:          d.Name,
+		NameAr:        d.NameAr,
+		Code:          d.Code,
+		Description:   d.Description,
+		DescriptionAr: d.DescriptionAr,
+		Type:          dType,
+		ParentID:      d.ParentID,
+		Level:         d.Level,
+		Path:          d.Path,
+		ManagerID:     d.ManagerID,
+		IsActive:      d.IsActive,
+		SortOrder:     d.SortOrder,
+		CreatedAt:     d.CreatedAt,
 	}
 
 	if len(d.Children) > 0 {

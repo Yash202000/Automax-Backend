@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/automax/backend/internal/models"
@@ -18,6 +19,7 @@ type GoalRepository interface {
 	ListForExport(ctx context.Context, filter *models.GoalFilter) ([]models.Goal, error)
 	Update(ctx context.Context, goal *models.Goal) error
 	Delete(ctx context.Context, id uuid.UUID) error
+	FindGoalByTitleAndOwner(ctx context.Context, title string, ownerID uuid.UUID) (*models.Goal, error)
 
 	// Collaborators
 	AddCollaborator(ctx context.Context, collaborator *models.GoalCollaborator) error
@@ -1080,4 +1082,19 @@ func (r *goalRepository) ListMetricBatchTransitionHistory(ctx context.Context, b
 		Order("transitioned_at ASC").
 		Find(&history).Error
 	return history, err
+}
+
+func (r *goalRepository) FindGoalByTitleAndOwner(ctx context.Context, title string, ownerID uuid.UUID) (*models.Goal, error) {
+	var goal models.Goal
+	err := r.db.WithContext(ctx).
+		Where("LOWER(title) = LOWER(?) AND owner_id = ?", title, ownerID).
+		First(&goal).Error
+
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &goal, nil
 }

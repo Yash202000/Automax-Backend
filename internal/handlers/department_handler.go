@@ -44,14 +44,16 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 		deptType = "internal"
 	}
 	department := &models.Department{
-		Name:        req.Name,
-		Code:        req.Code,
-		Description: req.Description,
-		Type:        deptType,
-		ParentID:    req.ParentID,
-		ManagerID:   req.ManagerID,
-		SortOrder:   req.SortOrder,
-		IsActive:    true,
+		Name:          req.Name,
+		NameAr:        req.NameAr,
+		Code:          req.Code,
+		Description:   req.Description,
+		DescriptionAr: req.DescriptionAr,
+		Type:          deptType,
+		ParentID:      req.ParentID,
+		ManagerID:     req.ManagerID,
+		SortOrder:     req.SortOrder,
+		IsActive:      true,
 	}
 
 	if err := h.repo.Create(c.UserContext(), department); err != nil {
@@ -110,11 +112,17 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 	if req.Name != "" {
 		department.Name = req.Name
 	}
+	if req.NameAr != "" {
+		department.NameAr = req.NameAr
+	}
 	if req.Code != "" {
 		department.Code = req.Code
 	}
 	if req.Description != "" {
 		department.Description = req.Description
+	}
+	if req.DescriptionAr != "" {
+		department.DescriptionAr = req.DescriptionAr
 	}
 	if req.Type != "" {
 		department.Type = req.Type

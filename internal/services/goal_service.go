@@ -369,6 +369,15 @@ func (s *goalService) CreateGoal(ctx context.Context, req *models.GoalCreateRequ
 		return nil, err
 	}
 
+	// Check duplicate goal (title &  owner)
+	existingGoal, err := s.goalRepo.FindGoalByTitleAndOwner(ctx, req.Title, req.OwnerID)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to check existing goal: %w", err)
+	}
+	if existingGoal != nil {
+		return nil, fmt.Errorf("This goal already exists")
+	}
+
 	// Validate parent goal hierarchy
 	var parentPath string
 	var parentLevel int
@@ -430,6 +439,7 @@ func (s *goalService) CreateGoal(ctx context.Context, req *models.GoalCreateRequ
 	}
 
 	if err := s.goalRepo.Create(ctx, goal); err != nil {
+		fmt.Println("goal creation", err)
 		return nil, fmt.Errorf("failed to create goal: %w", err)
 	}
 

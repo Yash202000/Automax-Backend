@@ -166,17 +166,25 @@ func (h *GoalHandler) CreateGoal(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-
 	goal, err := h.service.CreateGoal(c.UserContext(), &req, userID)
 	if err != nil {
-		if strings.Contains(err.Error(), "parent goal not found") || strings.Contains(err.Error(), "maximum goal hierarchy depth") {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+		if strings.Contains(err.Error(), "parent goal not found") || strings.Contains(err.Error(), "maximum goal hierarchy depth") || strings.Contains(err.Error(), "already exists") {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"success": false,
+				"message": err.Error(),
+			})
 		}
-		log.Printf("[GoalHandler] CreateGoal error: %v", err)
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create goal")
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"success": false,
+			"message": err.Error(),
+		})
 	}
-
-	return utils.SuccessResponse(c, fiber.StatusCreated, "Goal created", goal)
+	// Success response
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"success": true,
+		"message": "Goal created",
+		"data":    goal,
+	})
 }
 
 func (h *GoalHandler) GetGoal(c *fiber.Ctx) error {

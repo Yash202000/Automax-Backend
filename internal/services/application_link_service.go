@@ -31,7 +31,9 @@ func NewApplicationLinkService(linkRepo repository.ApplicationLinkRepository) Ap
 func (s *applicationLinkService) CreateLink(ctx context.Context, req *models.ApplicationLinkCreateRequest) (*models.ApplicationLinkResponse, error) {
 	link := &models.ApplicationLink{
 		Name:           req.Name,
+		NameAr:         req.NameAr,
 		Description:    req.Description,
+		DescriptionAr:  req.DescriptionAr,
 		URL:            req.URL,
 		Icon:           req.Icon,
 		ImageURL:       req.ImageURL,
@@ -106,8 +108,14 @@ func (s *applicationLinkService) UpdateLink(ctx context.Context, id uuid.UUID, r
 	if req.Name != "" {
 		link.Name = req.Name
 	}
+	if req.NameAr != "" {
+		link.NameAr = req.NameAr
+	}
 	if req.Description != "" {
 		link.Description = req.Description
+	}
+	if req.DescriptionAr != "" {
+		link.DescriptionAr = req.DescriptionAr
 	}
 	if req.URL != "" {
 		link.URL = req.URL
