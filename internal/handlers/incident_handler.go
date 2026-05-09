@@ -171,6 +171,24 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 		filter.Limit = 20
 	}
 
+	// QueryParser cannot parse plain YYYY-MM-DD into *time.Time; do it manually.
+	if startStr := c.Query("start_date"); startStr != "" {
+		if t, err := time.Parse("2006-01-02", startStr); err == nil {
+			filter.StartDate = &t
+		} else if t, err := time.Parse(time.RFC3339, startStr); err == nil {
+			filter.StartDate = &t
+		}
+	}
+	if endStr := c.Query("end_date"); endStr != "" {
+		if t, err := time.Parse("2006-01-02", endStr); err == nil {
+			// Include the full end day up to 23:59:59.
+			endOfDay := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, t.Location())
+			filter.EndDate = &endOfDay
+		} else if t, err := time.Parse(time.RFC3339, endStr); err == nil {
+			filter.EndDate = &t
+		}
+	}
+
 	incidents, total, err := h.service.ListIncidents(c.UserContext(), filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
