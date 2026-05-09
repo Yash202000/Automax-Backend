@@ -196,13 +196,14 @@ type WorkflowTransition struct {
 
 	// IsRejection marks this transition as a rejection action.
 	// When true, executing this transition will create an IncidentRejectionLog record.
-	IsRejection bool `gorm:"default:false" json:"is_rejection"`
-
-	IsActive  bool           `gorm:"default:true" json:"is_active"`
-	SortOrder int            `gorm:"default:0" json:"sort_order"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	IsRejection   bool           `gorm:"default:false" json:"is_rejection"`
+	IsNotBelong   bool           `gorm:"default:false" json:"is_not_belong"`   // IsNotBelong marks this transition as a "Not Belong" closure action.
+	IsMissingInfo bool           `gorm:"default:false" json:"is_missing_info"` // IsMissingInfo marks this transition as a "Missing Incident Information" closure action — triggers SMS to citizen.
+	IsActive      bool           `gorm:"default:true" json:"is_active"`
+	SortOrder     int            `gorm:"default:0" json:"sort_order"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (t *WorkflowTransition) BeforeCreate(tx *gorm.DB) error {
@@ -534,12 +535,12 @@ type WorkflowStateResponse struct {
 	ViewableRoles      []RoleResponse            `json:"viewable_roles,omitempty"`
 	EditableRoles      []RoleResponse            `json:"editable_roles,omitempty"`
 	// Creation-time assignment
-	AssignUserID     *uuid.UUID    `json:"assign_user_id,omitempty"`
-	AssignUser       *UserResponse `json:"assign_user,omitempty"`
+	AssignUserID     *uuid.UUID     `json:"assign_user_id,omitempty"`
+	AssignUser       *UserResponse  `json:"assign_user,omitempty"`
 	AssignmentRoles  []RoleResponse `json:"assignment_roles,omitempty"`
-	AutoMatchUser    bool          `json:"auto_match_user"`
-	ManualSelectUser bool          `json:"manual_select_user"`
-	CreatedAt          time.Time                 `json:"created_at"`
+	AutoMatchUser    bool           `json:"auto_match_user"`
+	ManualSelectUser bool           `json:"manual_select_user"`
+	CreatedAt        time.Time      `json:"created_at"`
 }
 
 type WorkflowTransitionResponse struct {
@@ -568,13 +569,15 @@ type WorkflowTransitionResponse struct {
 	AutoMatchUser    bool           `json:"auto_match_user"`
 	ManualSelectUser bool           `json:"manual_select_user"`
 
-	Requirements []TransitionRequirementResponse `json:"requirements,omitempty"`
-	Actions      []TransitionActionResponse      `json:"actions,omitempty"`
-	FieldChanges []TransitionFieldChangeResponse `json:"field_changes,omitempty"`
-	IsRejection  bool                            `json:"is_rejection"`
-	IsActive     bool                            `json:"is_active"`
-	SortOrder    int                             `json:"sort_order"`
-	CreatedAt    time.Time                       `json:"created_at"`
+	Requirements  []TransitionRequirementResponse `json:"requirements,omitempty"`
+	Actions       []TransitionActionResponse      `json:"actions,omitempty"`
+	FieldChanges  []TransitionFieldChangeResponse `json:"field_changes,omitempty"`
+	IsRejection   bool                            `json:"is_rejection"`
+	IsNotBelong   bool                            `json:"is_not_belong"`
+	IsMissingInfo bool                            `json:"is_missing_info"`
+	IsActive      bool                            `json:"is_active"`
+	SortOrder     int                             `json:"sort_order"`
+	CreatedAt     time.Time                       `json:"created_at"`
 }
 
 type TransitionRequirementResponse struct {
@@ -793,6 +796,8 @@ func ToWorkflowTransitionResponse(t *WorkflowTransition) WorkflowTransitionRespo
 		AutoMatchUser:        t.AutoMatchUser,
 		ManualSelectUser:     t.ManualSelectUser,
 		IsRejection:          t.IsRejection,
+		IsNotBelong:          t.IsNotBelong,
+		IsMissingInfo:        t.IsMissingInfo,
 		IsActive:             t.IsActive,
 		SortOrder:            t.SortOrder,
 		CreatedAt:            t.CreatedAt,

@@ -1120,6 +1120,8 @@ func (s *workflowService) CreateTransition(ctx context.Context, workflowID uuid.
 		SortOrder:            req.SortOrder,
 		IsActive:             true,
 		IsRejection:          req.IsRejection,
+		IsNotBelong:          req.IsNotBelong,
+		IsMissingInfo:        req.IsMissingInfo,
 		AutoDetectDepartment: req.AutoDetectDepartment,
 		DepartmentTypeFilter: req.DepartmentTypeFilter,
 		AutoMatchUser:        req.AutoMatchUser,
@@ -1252,6 +1254,12 @@ func (s *workflowService) UpdateTransition(ctx context.Context, transitionID uui
 		transition.IsRejection = *req.IsRejection
 	}
 
+	if req.IsNotBelong != nil {
+		transition.IsNotBelong = *req.IsNotBelong
+	}
+	if req.IsMissingInfo != nil {
+		transition.IsMissingInfo = *req.IsMissingInfo
+	}
 	// Department Assignment
 	if req.AutoDetectDepartment != nil {
 		transition.AutoDetectDepartment = *req.AutoDetectDepartment
