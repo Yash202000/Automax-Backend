@@ -58,6 +58,9 @@ type IncidentService interface {
 	UpdateComment(ctx context.Context, commentID uuid.UUID, req *models.IncidentCommentRequest, userID uuid.UUID) (*models.IncidentCommentResponse, error)
 	DeleteComment(ctx context.Context, commentID uuid.UUID, userID uuid.UUID) error
 
+	// Feedback
+	ListFeedbacks(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentFeedbackResponse, error)
+
 	// Attachments
 	AddAttachment(ctx context.Context, incidentID uuid.UUID, attachment *models.IncidentAttachment) (*models.IncidentAttachmentResponse, error)
 	ListAttachments(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentAttachmentResponse, error)
@@ -3407,6 +3410,22 @@ func (s *incidentService) DeleteComment(ctx context.Context, commentID uuid.UUID
 	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionCommentDeleted, description, nil, userID)
 
 	return nil
+}
+
+// Feedback
+
+func (s *incidentService) ListFeedbacks(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentFeedbackResponse, error) {
+	feedbackList, err := s.incidentRepo.ListFeedback(ctx, incidentID)
+	if err != nil {
+		return nil, err
+	}
+
+	responses := make([]models.IncidentFeedbackResponse, len(feedbackList))
+	for i, f := range feedbackList {
+		responses[i] = models.ToIncidentFeedbackResponse(&f)
+	}
+
+	return responses, nil
 }
 
 // Attachments

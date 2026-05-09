@@ -555,6 +555,23 @@ func (h *IncidentHandler) DeleteComment(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "Comment deleted", nil)
 }
 
+// Feedback
+
+func (h *IncidentHandler) ListFeedbacks(c *fiber.Ctx) error {
+	incidentIDStr := c.Params("id")
+	incidentID, err := uuid.Parse(incidentIDStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
+	}
+
+	feedbacks, err := h.service.ListFeedbacks(c.UserContext(), incidentID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Feedbacks retrieved", feedbacks)
+}
+
 // Attachments
 
 func (h *IncidentHandler) UploadAttachment(c *fiber.Ctx) error {

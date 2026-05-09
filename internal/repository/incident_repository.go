@@ -452,12 +452,14 @@ func (r *incidentRepository) CreateTransitionHistory(ctx context.Context, histor
 
 func (r *incidentRepository) GetTransitionHistory(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentTransitionHistory, error) {
 	var history []models.IncidentTransitionHistory
-	err := r.db.WithContext(ctx).
+	err := r.db.WithContext(ctx).Debug().
 		Preload("Transition").
 		Preload("FromState").
 		Preload("ToState").
 		Preload("PerformedBy").
 		Preload("PerformedBy.Departments").
+		Preload("Feedbacks").
+		Preload("Feedbacks.CreatedBy").
 		Where("incident_id = ?", incidentID).
 		Order("transitioned_at DESC").
 		Find(&history).Error
