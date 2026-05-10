@@ -78,6 +78,29 @@ func (c *CallLog) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
+// IncidentAttachment represents a file attached to an incident
+type CallLogAttachment struct {
+	ID        uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
+	CallLogID uuid.UUID `gorm:"type:uuid;index;not null" json:"call_uuid"`
+	FileName  string    `gorm:"size:255;not null" json:"file_name"`
+	FileSize  int64     `json:"file_size"`
+	MimeType  string    `gorm:"size:100" json:"mime_type"`
+	FilePath  string    `gorm:"size:500;not null" json:"file_path"`
+
+	UploadedByID uuid.UUID `gorm:"type:uuid;index;not null" json:"uploaded_by_id"`
+	UploadedBy   *User     `gorm:"foreignKey:UploadedByID" json:"uploaded_by,omitempty"`
+
+	CreatedAt time.Time      `json:"created_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (a *CallLogAttachment) BeforeCreate(tx *gorm.DB) error {
+	if a.ID == uuid.Nil {
+		a.ID = uuid.New()
+	}
+	return nil
+}
+
 type CallLogMeta struct {
 	Duration   int                    `json:"duration,omitempty"`  // Duration in seconds
 	CallType   string                 `json:"call_type,omitempty"` // audio, video, etc.
@@ -134,6 +157,18 @@ type CallLogResponse struct {
 	Meta         string                `json:"meta,omitempty"`
 	CreatedAt    time.Time             `json:"created_at"`
 	UpdatedAt    *time.Time            `json:"updated_at,omitempty"`
+}
+
+type CallLogAttachmentResponse struct {
+	ID                  uuid.UUID     `json:"id"`
+	CallLogID           uuid.UUID     `json:"call_uuid"`
+	FileName            string        `json:"file_name"`
+	FileSize            int64         `json:"file_size"`
+	MimeType            string        `json:"mime_type"`
+	URL                 string        `json:"url,omitempty"`
+	UploadedBy          *UserResponse `json:"uploaded_by,omitempty"`
+	TransitionHistoryID *uuid.UUID    `json:"transition_history_id,omitempty"`
+	CreatedAt           time.Time     `json:"created_at"`
 }
 
 // CallLogListItem is the slim response returned by the listing API.
@@ -213,4 +248,23 @@ func ToCallLogResponseWithoutCreator(callLog *CallLog) CallLogResponse {
 		CreatedAt:    callLog.CreatedAt,
 		UpdatedAt:    callLog.UpdatedAt,
 	}
+}
+
+func ToCallLogAttachmentResponse(a *CallLogAttachment, url string) CallLogAttachmentResponse {
+	resp := CallLogAttachmentResponse{
+		ID:        a.ID,
+		CallLogID: a.CallLogID,
+		FileName:  a.FileName,
+		FileSize:  a.FileSize,
+		MimeType:  a.MimeType,
+		URL:       url,
+		CreatedAt: a.CreatedAt,
+	}
+
+	if a.UploadedBy != nil {
+		uploaderResp := ToUserResponse(a.UploadedBy)
+		resp.UploadedBy = &uploaderResp
+	}
+
+	return resp
 }

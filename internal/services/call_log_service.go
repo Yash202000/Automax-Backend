@@ -9,6 +9,9 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/internal/storage"
+	pkgUtils "github.com/automax/backend/pkg/utils"
+
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -26,17 +29,23 @@ type CallLogService interface {
 	JoinCall(ctx context.Context, callUUID string, userID uuid.UUID) error
 	GetCallLogsByUserID(ctx context.Context, userID uuid.UUID, page, limit int) ([]models.CallLogResponse, int64, error)
 	GetSipInfo(ctx context.Context) (map[string]interface{}, error)
+
+	// Attachments
+	AddAttachment(ctx context.Context, callUUID uuid.UUID, attachment *models.CallLogAttachment) error
+	GetAttachment(ctx context.Context, attachmentID uuid.UUID) (*models.CallLogAttachment, error)
 }
 
 type callLogService struct {
 	repo     repository.CallLogRepository
 	userRepo repository.UserRepository
+	storage  *storage.MinIOStorage
 }
 
-func NewCallLogService(repo repository.CallLogRepository, userRepo repository.UserRepository) CallLogService {
+func NewCallLogService(repo repository.CallLogRepository, userRepo repository.UserRepository, storage *storage.MinIOStorage) CallLogService {
 	return &callLogService{
 		repo:     repo,
 		userRepo: userRepo,
+		storage:  storage,
 	}
 }
 
@@ -445,4 +454,42 @@ func (s *callLogService) toCallLogResponseWithUsers(ctx context.Context, callLog
 	}
 
 	return resp, nil
+}
+
+// Attachments
+
+func (s *callLogService) AddAttachment(ctx context.Context, callLogID uuid.UUID, attachment *models.CallLogAttachment) error {
+	attachment.CallLogID = callLogID
+
+	if err := s.repo.CreateAttachment(ctx, attachment); err != nil {
+		return err
+	}
+
+	// created, err := s.repo.FindAttachmentByID(ctx, attachment.ID)
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	// @Todo need to add a log to record for the call attachment maybe maybe not
+	// url, err := s.storage.GetFileURL(ctx, attachment.FilePath)
+	// if err != nil {
+	// 	// Log the error but don't fail the operation
+	// 	fmt.Printf("Warning: failed to get presigned URL for attachment %s: %v\n", attachment.ID, err)
+	// }
+
+	if attachment.ID != uuid.Nil {
+		recordingURL := pkgUtils.GenerateAttachmentAppURL(ctx, attachment.ID)
+		updates := map[string]interface{}{"recording_url": recordingURL}
+		if err := s.repo.UpdateByField(ctx, callLogID, updates); err != nil {
+			return err
+		}
+
+	}
+
+	// resp := models.ToCallLogAttachmentResponse(attachment, url)
+	return nil
+}
+
+func (s *callLogService) GetAttachment(ctx context.Context, attachmentID uuid.UUID) (*models.CallLogAttachment, error) {
+	return s.repo.FindAttachmentByID(ctx, attachmentID)
 }

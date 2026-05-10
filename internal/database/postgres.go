@@ -74,6 +74,7 @@ func Migrate(db *gorm.DB) error {
 		&models.User{},
 		&models.ActionLog{},
 		&models.CallLog{},
+		&models.CallLogAttachment{},
 		&models.NotificationTemplate{},
 		&models.NotificationLog{},
 		&models.EscalationSLA{},
