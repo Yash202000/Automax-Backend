@@ -32,7 +32,7 @@ type TransitionLinkedResult struct {
 	ToStateName string
 }
 
-var TransitionPairs = struct {
+var TransitionPairsOld = struct {
 	Rejected        TransitionPair
 	UnderResolution TransitionPair
 	InProgress      TransitionPair
@@ -46,6 +46,29 @@ var TransitionPairs = struct {
 	ReadyToClose:    TransitionPair{From: "In Progress", To: "Ready To Close"},
 	Closed:          TransitionPair{From: "Ready To Close", To: "Closed"},
 	Reopened:        TransitionPair{From: "Closed", To: "Open"},
+}
+
+var TransitionPairs = struct {
+	Rejected        []TransitionPair
+	UnderResolution []TransitionPair
+	ReadyToClose    []TransitionPair
+	Closed          []TransitionPair
+	Reopened        []TransitionPair
+}{
+	Rejected: []TransitionPair{{From: "Under Resolution", To: "Rejected"}},
+	UnderResolution: []TransitionPair{
+		{From: "New Incident", To: "Under Resolution"},
+		{From: "Rejected", To: "Under Resolution"},
+	},
+	ReadyToClose: []TransitionPair{{From: "Under Resolution", To: "Ready To Close"}},
+	Closed: []TransitionPair{
+		{From: "Ready To Close", To: "Closed"},
+		{From: "New Incident", To: "Closed"},
+	},
+	Reopened: []TransitionPair{
+		{From: "Ready To Close", To: "Under Resolution"},
+		{From: "Closed", To: "Under Resolution"},
+	},
 }
 
 type ReportRepository interface {
@@ -739,6 +762,8 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			if _, ok := row["id"]; !ok {
 				row["id"] = rawRow["id"]
 				row["created_at"] = rawRow["created_at"] // also carry created_at for aging calculations in enrichment
+				row["classification_id"] = rawRow["classification_id"]
+				row["location_id"] = rawRow["location_id"]
 			}
 			var createdAt string
 			switch v := rawRow["created_at"].(type) {
@@ -769,12 +794,16 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			if id := IDStr(row["id"]); id != "" {
 				incidentIDs = append(incidentIDs, id)
 			}
-			if id := IDStr(row["location"]); id != "" {
+			if id := IDStr(row["location_id"]); id != "" {
 				locationIDs = append(locationIDs, id)
 			}
-			if id := IDStr(row["classification"]); id != "" {
+			if id := IDStr(row["classification_id"]); id != "" {
 				classificationIDs = append(classificationIDs, id)
 			}
+		}
+
+		if len(locationIDs) != 0 || len(classificationIDs) != 0 {
+			log.Printf("Bulk enrichment for %d incidents: %d location IDs, %d classification IDs", len(results), len(locationIDs), len(classificationIDs))
 		}
 
 		// hasCol returns true when at least one of the given field names was
@@ -811,10 +840,10 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			underResNames, underResDates, _ = r.fetchUnderResolutionData(ctx, incidentIDs)
 		}
 
-		var inProgressNames, inProgressDates map[string]string
-		if hasCol("in_progress_by", "in_progress_date") {
-			inProgressNames, inProgressDates, _ = r.fetchInProgressData(ctx, incidentIDs)
-		}
+		// var inProgressNames, inProgressDates map[string]string
+		// if hasCol("in_progress_by", "in_progress_date") {
+		// 	inProgressNames, inProgressDates, _ = r.fetchInProgressData(ctx, incidentIDs)
+		// }
 
 		var readyToCloseNames, readyToCloseDates map[string]string
 		if hasCol("ready_to_close_by", "ready_to_close_date") {
@@ -957,10 +986,12 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 		// 11. Location Full path
 		var locationFullPathMap map[string]string
 		if hasCol("full_location") {
+			log.Printf("Fetching location full paths for %d location IDs", len(locationIDs))
 			locationFullPathMap, err = r.fetchLocationPaths(ctx, locationIDs)
 			if err != nil {
 				log.Print("error fetching location full name", locationFullPathMap)
 			}
+			log.Printf("Fetched %d location full paths", len(locationFullPathMap))
 		}
 
 		// 11. Classification Full path
@@ -977,9 +1008,12 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			if incidentID == "" {
 				continue
 			}
-			locationID := IDStr(row["locationid"])
-			classificationID := IDStr(row["classificationid"])
-
+			locationID := IDStr(row["location_id"])
+			classificationID := IDStr(row["classification_id"])
+			if locationID == "" || classificationID == "" {
+				// continue
+				log.Printf("location is empyy %s class is empty %s", locationID, classificationID)
+			}
 			// ── Per-status By / Date ─────────────────────────────────────────────
 
 			// Closed
@@ -993,38 +1027,28 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 				setField(results[i], "closed_date", date)
 			}
 
-			// Calculated "Approved By" and "Approved Time" fields from Closed transition
-			if name := closedNames[incidentID]; name != "" {
+			// approved_by — only from UnderResolution (Approve transition)
+			if name := underResNames[incidentID]; name != "" {
 				setField(results[i], "approved_by", name)
 			}
-			if date := closedDates[incidentID]; date != "" {
+			if date := underResDates[incidentID]; date != "" {
 				setField(results[i], "approved_time", date)
 				setField(results[i], "approved_at", date)
-				if createdAt, ok := row["created_at"].(string); ok {
-					totalClosingTime, err := utils.CalculateDuration(createdAt, date)
+			}
+
+			// total_closing_duration — FIXED: guard empty date
+			closedDate := closedDates[incidentID]
+			if closedDate != "" {
+				if createdAt, ok := row["created_at"].(string); ok && createdAt != "" {
+					totalClosingTime, err := utils.CalculateDuration(createdAt, closedDate)
 					if err == nil {
 						setField(results[i], "total_closing_duration", totalClosingTime)
 					} else {
-						log.Println("error calculating total closing time for incident", incidentID, ":", err)
 						setField(results[i], "total_closing_duration", nil)
 					}
-				} else {
-					log.Print("Created at not set")
-					setField(results[i], "total_closing_duration", nil)
 				}
 			} else {
-				if createdAt, ok := row["created_at"].(string); ok {
-					totalClosingTime, err := utils.CalculateDuration(createdAt, date)
-					if err == nil {
-						setField(results[i], "total_closing_duration", totalClosingTime)
-					} else {
-						log.Println("error calculating total closing time for incident", incidentID, ":", err)
-						setField(results[i], "total_closing_duration", nil)
-					}
-				} else {
-					log.Print("Created at not set")
-					setField(results[i], "total_closing_duration", nil)
-				}
+				setField(results[i], "total_closing_duration", nil)
 			}
 
 			// Rejected
@@ -1036,23 +1060,23 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			}
 
 			// Under Resolution
-			if name := underResNames[incidentID]; name != "" {
-				setField(results[i], "under_resolution_by", name)
-				setField(results[i], "approved_by", name)
-			}
-			if date := underResDates[incidentID]; date != "" {
-				setField(results[i], "under_resolution_date", date)
-				setField(results[i], "approved_time", date)
-				setField(results[i], "approved_at", date)
-			}
+			// if name := underResNames[incidentID]; name != "" {
+			// 	setField(results[i], "under_resolution_by", name)
+			// 	setField(results[i], "approved_by", name)
+			// }
+			// if date := underResDates[incidentID]; date != "" {
+			// 	setField(results[i], "under_resolution_date", date)
+			// 	setField(results[i], "approved_time", date)
+			// 	setField(results[i], "approved_at", date)
+			// }
 
 			// In Progress
-			if name := inProgressNames[incidentID]; name != "" {
-				setField(results[i], "in_progress_by", name)
-			}
-			if date := inProgressDates[incidentID]; date != "" {
-				setField(results[i], "in_progress_date", date)
-			}
+			// if name := inProgressNames[incidentID]; name != "" {
+			// 	setField(results[i], "in_progress_by", name)
+			// }
+			// if date := inProgressDates[incidentID]; date != "" {
+			// 	setField(results[i], "in_progress_date", date)
+			// }
 
 			// Ready To Close
 			if name := readyToCloseNames[incidentID]; name != "" {
@@ -1199,7 +1223,7 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 
 			// Location Full path
 			if loc, ok := locationFullPathMap[locationID]; ok && len(loc) > 0 {
-				setField(results[i], "full_locification", loc)
+				setField(results[i], "full_location", loc)
 			}
 
 			if comments, ok := commentsMap[incidentID]; ok {
@@ -1236,23 +1260,31 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 // GetTransitionUserNames returns incident_id → performer full name for the
 // most-recent status_changed revision where new_value = newStateName.
 // Delegates to fetchStatusTransitionData (names only).
-// func (r *reportRepository) GetTransitionUserNames0(ctx context.Context, newStateName string, incidentIDs []string) (map[string]string, error) {
-// 	names, _, err := r.fetchStatusTransitionData(ctx, models.IncidentRevisionStatus(newStateName), incidentIDs)
-// 	return names, err
-// }
-
+//
+//	func (r *reportRepository) GetTransitionUserNames0(ctx context.Context, newStateName string, incidentIDs []string) (map[string]string, error) {
+//		names, _, err := r.fetchStatusTransitionData(ctx, models.IncidentRevisionStatus(newStateName), incidentIDs)
+//		return names, err
+//	}
 func (r *reportRepository) fetchFeedbackDataByState(
 	ctx context.Context,
 	toStateName string,
 	incidentIDs []string,
 ) (map[string][]TransitionLinkedResult, error) {
-	feedbacK_table := "incident_feedbacks"
-	return r.fetchTransitionLinkedData(ctx, feedbacK_table, toStateName, incidentIDs)
+	return r.fetchTransitionLinkedData(ctx, "incident_feedbacks", "created_by_id", toStateName, incidentIDs)
+}
+
+func (r *reportRepository) fetchCommentDataByState(
+	ctx context.Context,
+	toStateName string,
+	incidentIDs []string,
+) (map[string][]TransitionLinkedResult, error) {
+	return r.fetchTransitionLinkedData(ctx, "incident_comments", "author_id", toStateName, incidentIDs)
 }
 
 func (r *reportRepository) fetchTransitionLinkedData(
 	ctx context.Context,
 	table,
+	userIDCol,
 	toStateName string,
 	incidentIDs []string,
 ) (map[string][]TransitionLinkedResult, error) {
@@ -1261,27 +1293,39 @@ func (r *reportRepository) fetchTransitionLinkedData(
 		return result, nil
 	}
 
+	// is_internal filter only applies to incident_comments
+	internalFilter := ""
+	if table == "incident_comments" {
+		internalFilter = "AND f.is_internal = false"
+	}
+
+	// incident_comments uses content column, feedbacks use comment
+	commentCol := "comment"
+	if table == "incident_comments" {
+		commentCol = "content"
+	}
+
 	query := `
-		SELECT
-			f.incident_id::text,
-			TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS full_name,
-			COALESCE(f.comment, '')                                             AS comment,
-			f.created_at::text,
-			COALESCE(tws.name, '')                                              AS to_state_name
-		FROM ` + table + ` f
-		INNER JOIN users u ON u.id = f.created_by_id
-		LEFT JOIN incident_transition_histories tr ON tr.id = f.transition_history_id
-		LEFT JOIN workflow_states tws ON tws.id = tr.to_state_id
-		WHERE f.incident_id::text IN (?)
-		  AND tws.name = ?
-		ORDER BY f.incident_id, f.created_at ASC`
+        SELECT
+            f.incident_id::text,
+            TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS full_name,
+            COALESCE(f.` + commentCol + `, '')                                  AS comment,
+            f.created_at::text,
+            COALESCE(tws.name, '')                                              AS to_state_name
+        FROM ` + table + ` f
+        INNER JOIN users u ON u.id = f.` + userIDCol + `
+        LEFT JOIN incident_transition_histories tr ON tr.id = f.transition_history_id
+        LEFT JOIN workflow_states tws ON tws.id = tr.to_state_id
+        WHERE f.incident_id::text IN (?)
+          AND tws.name = ?
+          ` + internalFilter + `
+        ORDER BY f.incident_id, f.created_at ASC`
 
 	rows, err := r.db.WithContext(ctx).Raw(query, incidentIDs, toStateName).Rows()
 	if err != nil {
-		return nil, fmt.Errorf("fetchFeedbackDataByState(%s): %w", toStateName, err)
+		return nil, fmt.Errorf("fetchTransitionLinkedData(%s->%s): %w", table, toStateName, err)
 	}
 	defer rows.Close()
-
 	for rows.Next() {
 		var fb TransitionLinkedResult
 		if err := rows.Scan(
@@ -1296,15 +1340,6 @@ func (r *reportRepository) fetchTransitionLinkedData(
 		result[fb.IncidentID] = append(result[fb.IncidentID], fb)
 	}
 	return result, nil
-}
-
-func (r *reportRepository) fetchCommentDataByState(
-	ctx context.Context,
-	toStateName string,
-	incidentIDs []string,
-) (map[string][]TransitionLinkedResult, error) {
-	feedbacK_table := "incident_comments"
-	return r.fetchTransitionLinkedData(ctx, feedbacK_table, toStateName, incidentIDs)
 }
 
 // fetchStatusTransitionData is the single generic query behind all per-status
@@ -1361,35 +1396,57 @@ func (r *reportRepository) fetchStatusTransitionData(
 	return
 }
 
-// ── Per-status wrappers (use IncidentRevisionStatus constants) ────────────────
+// New
+func (r *reportRepository) fetchMultiPairTransitionData(
+	ctx context.Context,
+	pairs []TransitionPair,
+	incidentIDs []string,
+) (names map[string]string, dates map[string]string, err error) {
+	names = map[string]string{}
+	dates = map[string]string{}
+
+	for _, pair := range pairs {
+		n, d, e := r.fetchStatusTransitionData(ctx, pair.From, pair.To, incidentIDs)
+		if e != nil {
+			err = e
+			continue
+		}
+		for id, name := range n {
+			if existing, ok := names[id]; ok {
+				names[id] = existing + " | " + name
+			} else {
+				names[id] = name
+			}
+		}
+		for id, date := range d {
+			if existing, ok := dates[id]; ok {
+				dates[id] = existing + " | " + date
+			} else {
+				dates[id] = date
+			}
+		}
+	}
+	return
+}
+
 func (r *reportRepository) fetchRejectedData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
-	p := TransitionPairs.Rejected
-	return r.fetchStatusTransitionData(ctx, p.From, p.To, ids)
+	return r.fetchMultiPairTransitionData(ctx, TransitionPairs.Rejected, ids)
 }
 
 func (r *reportRepository) fetchUnderResolutionData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
-	p := TransitionPairs.UnderResolution
-	return r.fetchStatusTransitionData(ctx, p.From, p.To, ids)
-}
-
-func (r *reportRepository) fetchInProgressData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
-	p := TransitionPairs.InProgress
-	return r.fetchStatusTransitionData(ctx, p.From, p.To, ids)
+	return r.fetchMultiPairTransitionData(ctx, TransitionPairs.UnderResolution, ids)
 }
 
 func (r *reportRepository) fetchReadyToCloseData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
-	p := TransitionPairs.ReadyToClose
-	return r.fetchStatusTransitionData(ctx, p.From, p.To, ids)
+	return r.fetchMultiPairTransitionData(ctx, TransitionPairs.ReadyToClose, ids)
 }
 
 func (r *reportRepository) fetchClosedData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
-	p := TransitionPairs.Closed
-	return r.fetchStatusTransitionData(ctx, p.From, p.To, ids)
+	return r.fetchMultiPairTransitionData(ctx, TransitionPairs.Closed, ids)
 }
 
 func (r *reportRepository) fetchReopenData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
-	p := TransitionPairs.Reopened
-	return r.fetchStatusTransitionData(ctx, p.From, p.To, ids)
+	return r.fetchMultiPairTransitionData(ctx, TransitionPairs.Reopened, ids)
 }
 
 // ── full path queries ───────────────────────────────────────────────────
@@ -1592,25 +1649,25 @@ func (r *reportRepository) fetchCommentData(
 	}
 
 	query := `
-		SELECT
-			f.incident_id::text,
-			TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS full_name,
-			COALESCE(f.comment, '')                                             AS comment,
-			f.created_at::text,
-			COALESCE(tws.name, '')                                              AS to_state_name
-		FROM incident_comments f
-		INNER JOIN users u ON u.id = f.created_by_id
-		LEFT JOIN incident_transition_histories tr ON tr.id = f.transition_history_id
-		LEFT JOIN workflow_states tws ON tws.id = tr.to_state_id
-		WHERE f.incident_id::text IN (?)
-		ORDER BY f.incident_id, f.created_at ASC`
+        SELECT
+            f.incident_id::text,
+            TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS full_name,
+            COALESCE(f.content, '')                                             AS comment,
+            f.created_at::text,
+            COALESCE(tws.name, '')                                              AS to_state_name
+        FROM incident_comments f
+        INNER JOIN users u ON u.id = f.author_id                   -- FIXED: was created_by_id
+        LEFT JOIN incident_transition_histories tr ON tr.id = f.transition_history_id
+        LEFT JOIN workflow_states tws ON tws.id = tr.to_state_id
+        WHERE f.incident_id::text IN (?)
+          AND f.is_internal = false                                 -- FIXED: filter internal
+        ORDER BY f.incident_id, f.created_at ASC`
 
 	rows, err := r.db.WithContext(ctx).Raw(query, incidentIDs).Rows()
 	if err != nil {
 		return nil, fmt.Errorf("fetchCommentData: %w", err)
 	}
 	defer rows.Close()
-
 	for rows.Next() {
 		var fb TransitionLinkedResult
 		if err := rows.Scan(
@@ -2839,9 +2896,9 @@ func (r *reportRepository) ExecuteClassificationCountByStatusQuery(ctx context.C
 		if totalIncidents > 0 {
 			percentage = math.Round((float64(clsTotal)/float64(totalIncidents))*10000) / 100
 		}
+		row["incident_count"] = clsTotal
 		row["total"] = clsTotal
-		row["percentage"] = percentage // e.g. 23.45 means this classification is 23.45% of all incidents
-
+		row["percentage"] = fmt.Sprintf("%.2f%%", percentage)
 		currentRow := buildCountRow(row, reqColumns, defaults)
 		results = append(results, currentRow)
 	}
