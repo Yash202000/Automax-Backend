@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/automax/backend/pkg/constants"
+	"github.com/google/uuid"
 )
 
 // Generate App URL from context and id
@@ -27,4 +28,14 @@ func BuildSMSLink(ctx context.Context, incidentID string, t time.Duration) strin
 		incidentID,
 		url.QueryEscape(token), // encodes | → %7C
 	)
+}
+
+// Generate App URL from context and id
+func GenerateAttachmentAppURL(ctx context.Context, attachmentID uuid.UUID) string {
+	hostname, _ := ctx.Value(constants.ContextKeys.HOSTNAME).(string)
+	protocol, _ := ctx.Value(constants.ContextKeys.PROTOCOL).(string)
+	token, _ := ctx.Value(constants.ContextKeys.Token).(string)
+
+	url := protocol + "://" + hostname + "/api/v1/calls/" + fmt.Sprint(attachmentID) + "/preview?token=" + token
+	return url
 }

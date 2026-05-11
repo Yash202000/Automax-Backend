@@ -1,11 +1,14 @@
 package handlers
 
 import (
+	"fmt"
+	"io"
 	"strconv"
 	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
+	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
@@ -18,13 +21,15 @@ type CallLogHandler struct {
 	service   services.CallLogService
 	validator *validator.Validate
 	userSvc   services.UserService
+	storage   *storage.MinIOStorage
 }
 
-func NewCallLogHandler(service services.CallLogService, validator *validator.Validate, userSvc services.UserService) *CallLogHandler {
+func NewCallLogHandler(service services.CallLogService, validator *validator.Validate, userSvc services.UserService, storage *storage.MinIOStorage) *CallLogHandler {
 	return &CallLogHandler{
 		service:   service,
 		validator: validator,
 		userSvc:   userSvc,
+		storage:   storage,
 	}
 }
 
@@ -379,6 +384,86 @@ func (h *CallLogHandler) GetCallLogsByExtension(c *fiber.Ctx) error {
 		"page":         page,
 		"limit":        limit,
 	})
+}
+
+// Attachments
+
+func (h *CallLogHandler) UploadAttachment(c *fiber.Ctx) error {
+	callUUIDStr := c.Params("call_uuid")
+	callUUID, err := uuid.Parse(callUUIDStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
+	}
+
+	file, err := c.FormFile("file")
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "No file uploaded")
+	}
+
+	// Open the file
+	src, err := file.Open()
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read file")
+	}
+	defer src.Close()
+
+	// Upload to storage
+	folder := fmt.Sprintf("calls/%s", callUUID.String())
+	filePath, err := h.storage.UploadFile(c.UserContext(), src, file, folder)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to upload file")
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+
+	attachment := &models.CallLogAttachment{
+		FileName:     file.Filename,
+		FileSize:     file.Size,
+		MimeType:     file.Header.Get("Content-Type"),
+		FilePath:     filePath,
+		UploadedByID: userID,
+	}
+
+	if err := h.service.AddAttachment(c.UserContext(), callUUID, attachment); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	result := map[string]interface{}{
+		"success": true,
+	}
+	return utils.SuccessResponse(c, fiber.StatusCreated, "Attachment uploaded", result)
+}
+
+func (h *CallLogHandler) PreviewAttachment(c *fiber.Ctx) error {
+	attachmentIDStr := c.Params("attachment_id")
+
+	// Try as incident attachment first (UUID format)
+	attachmentID, err := uuid.Parse(attachmentIDStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	// Try incident attachment
+	attachment, err := h.service.GetAttachment(c.UserContext(), attachmentID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Attachment not found")
+	}
+	file, err := h.storage.GetFile(c.UserContext(), attachment.FilePath)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to retrieve file")
+	}
+	defer file.Close()
+
+	fileData, err := io.ReadAll(file)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read file")
+	}
+
+	c.Set("Content-Type", attachment.MimeType)
+	c.Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", attachment.FileName))
+	c.Set("Content-Length", fmt.Sprintf("%d", len(fileData)))
+	return c.Send(fileData)
+
 }
 
 func (h *CallLogHandler) GetSipInfo(c *fiber.Ctx) error {

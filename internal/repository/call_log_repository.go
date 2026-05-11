@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/automax/backend/internal/models"
@@ -14,11 +16,14 @@ type CallLogRepository interface {
 	FindByID(ctx context.Context, id uuid.UUID) (*models.CallLog, error)
 	FindByCallUUID(ctx context.Context, callUUID string) (*models.CallLog, error)
 	Update(ctx context.Context, callLog *models.CallLog) error
+	UpdateByField(ctx context.Context, id uuid.UUID, fields map[string]interface{}) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, filter *models.CallLogFilter) ([]models.CallLog, int64, error)
 	ListSummary(ctx context.Context, filter *models.CallLogFilter) ([]models.CallLog, int64, error)
 	GetStats(ctx context.Context) (*models.CallLogStats, error)
 	FindByUserID(ctx context.Context, userID uuid.UUID, page, limit int) ([]models.CallLog, int64, error)
+	CreateAttachment(ctx context.Context, attachment *models.CallLogAttachment) error
+	FindAttachmentByID(ctx context.Context, id uuid.UUID) (*models.CallLogAttachment, error)
 }
 
 type callLogRepository struct {
@@ -57,6 +62,27 @@ func (r *callLogRepository) FindByCallUUID(ctx context.Context, callUUID string)
 
 func (r *callLogRepository) Update(ctx context.Context, callLog *models.CallLog) error {
 	return r.db.WithContext(ctx).Save(callLog).Error
+}
+
+func (r *callLogRepository) UpdateByField(ctx context.Context, id uuid.UUID, fields map[string]interface{}) error {
+	if len(fields) == 0 {
+		return errors.New("no fields provided for update")
+	}
+
+	result := r.db.WithContext(ctx).
+		Model(&models.CallLog{}).
+		Where("call_uuid = ?", id).
+		Updates(fields)
+
+	if result.Error != nil {
+		return fmt.Errorf("failed to update call log: %w", result.Error)
+	}
+
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("call log with id %s not found", id)
+	}
+
+	return nil
 }
 
 func (r *callLogRepository) Delete(ctx context.Context, id uuid.UUID) error {
@@ -219,4 +245,21 @@ func (r *callLogRepository) FindByUserID(ctx context.Context, userID uuid.UUID, 
 	}
 
 	return callLogs, total, nil
+}
+
+// Attachments
+
+func (r *callLogRepository) CreateAttachment(ctx context.Context, attachment *models.CallLogAttachment) error {
+	return r.db.WithContext(ctx).Create(attachment).Error
+}
+
+func (r *callLogRepository) FindAttachmentByID(ctx context.Context, id uuid.UUID) (*models.CallLogAttachment, error) {
+	var attachment models.CallLogAttachment
+	err := r.db.WithContext(ctx).
+		Preload("UploadedBy").
+		First(&attachment, "id = ?", id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &attachment, nil
 }

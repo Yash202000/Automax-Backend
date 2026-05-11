@@ -111,7 +111,7 @@ func main() {
 	}
 	defer ldapService.Close()
 
-	callLogService := services.NewCallLogService(callLogRepo, userRepo)
+	callLogService := services.NewCallLogService(callLogRepo, userRepo, minioStorage)
 	workflowService := services.NewWorkflowService(workflowRepo, roleRepo, departmentRepo, classificationRepo, userRepo, db)
 	incidentService := services.NewIncidentService(incidentRepo, incidentMergeRepo, workflowRepo, userRepo, departmentRepo, classificationRepo, rejectionLogRepo, roleRepo, minioStorage, db, wsHub)
 	incidentMergeService := services.NewIncidentMergeService(incidentMergeRepo, incidentRepo, workflowRepo, roleRepo, locationRepo, classificationRepo, db, wsHub)
@@ -180,7 +180,7 @@ func main() {
 	departmentHandler := handlers.NewDepartmentHandler(departmentRepo)
 	roleHandler := handlers.NewRoleHandler(roleRepo, permissionRepo)
 	actionLogHandler := handlers.NewActionLogHandler(actionLogService, validate)
-	callLogHandler := handlers.NewCallLogHandler(callLogService, validate, userService)
+	callLogHandler := handlers.NewCallLogHandler(callLogService, validate, userService, minioStorage)
 	workflowHandler := handlers.NewWorkflowHandler(workflowService, actionLogService)
 	incidentHandler := handlers.NewIncidentHandler(incidentService, userService, userRepo, incidentRepo, minioStorage, presenceService)
 	incidentHandler.SetReadyToCloseService(readyToCloseService)
@@ -728,6 +728,8 @@ func main() {
 	calls.Post("/start", callLogHandler.StartCall)
 	calls.Post("/:call_uuid/end", callLogHandler.EndCall)
 	calls.Post("/:call_uuid/join", callLogHandler.JoinCall)
+	calls.Post("/:call_uuid/attachments", callLogHandler.UploadAttachment)
+	calls.Get("/:attachment_id/preview", callLogHandler.PreviewAttachment)
 
 	// Call logs routes
 	callLogsPublic := v1.Group("/call-logs", authMiddleware.Authenticate())
