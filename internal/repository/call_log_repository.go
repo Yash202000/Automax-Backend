@@ -174,7 +174,7 @@ func (r *callLogRepository) ListSummary(ctx context.Context, filter *models.Call
 
 	offset := (filter.Page - 1) * filter.Limit
 	err := query.
-		Select("id, call_uuid, created_by, start_at, end_at, status, participants, invited_users, meta, created_at").
+		Select("id, call_uuid, created_by, start_at, end_at, status, participants, invited_users, meta, created_at, recording_url").
 		Preload("Creator").
 		Order("created_at DESC").
 		Offset(offset).

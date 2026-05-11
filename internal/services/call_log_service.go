@@ -221,12 +221,13 @@ func (s *callLogService) ListCallLogsSummary(ctx context.Context, filter *models
 		}
 
 		item := models.CallLogListItem{
-			ID:        cl.ID,
-			CallUuid:  cl.CallUuid,
-			Status:    cl.Status,
-			Direction: directions[i],
-			Duration:  duration,
-			CreatedAt: cl.CreatedAt,
+			ID:           cl.ID,
+			CallUuid:     cl.CallUuid,
+			Status:       cl.Status,
+			Direction:    directions[i],
+			Duration:     duration,
+			RecordingUrl: cl.RecordingUrl,
+			CreatedAt:    cl.CreatedAt,
 		}
 
 		if otherPartyIdx < len(otherPartyIDs) {

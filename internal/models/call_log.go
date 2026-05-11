@@ -181,6 +181,7 @@ type CallLogListItem struct {
 	OtherPartyName      string    `json:"other_party_name"`      // full name of the other participant
 	OtherPartyExtension string    `json:"other_party_extension"` // SIP extension of the other participant
 	Duration            int       `json:"duration"`              // seconds; 0 when call is ongoing
+	RecordingUrl        string    `json:"recording_url"`
 	CreatedAt           time.Time `json:"created_at"`
 }
 
