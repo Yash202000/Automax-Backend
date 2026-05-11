@@ -1172,8 +1172,25 @@ func (s *goalService) CreateEvidence(ctx context.Context, goalID uuid.UUID, titl
 		return nil, fmt.Errorf("goal not found: %w", err)
 	}
 
-	// Determine upload folder (metric subfolder if metricID provided)
+	// Determine upload folder (metric subfolder if metricID provided).
+	// If the goal's folder ID is missing (e.g. created before Documenta was
+	// enabled), lazily provision the hierarchy now so the upload can proceed.
 	uploadFolderID := goal.DocumentaFolderID
+	if uploadFolderID == "" {
+		goalMgmtID, ensureErr := s.documentaClient.EnsureFolder(ctx, s.cfg.Documenta.WorkspaceName, "", "Goal Management")
+		if ensureErr != nil {
+			return nil, fmt.Errorf("failed to ensure Goal Management folder: %w", ensureErr)
+		}
+		newFolderID, createErr := s.documentaClient.CreateFolder(ctx, s.cfg.Documenta.WorkspaceName, goalMgmtID, goal.Title)
+		if createErr != nil {
+			return nil, fmt.Errorf("failed to create goal folder for evidence upload: %w", createErr)
+		}
+		uploadFolderID = newFolderID
+		// Persist the new folder ID so future uploads don't need to recreate it.
+		if updateErr := s.goalRepo.UpdateDocumentaFolderID(ctx, goalID, newFolderID); updateErr != nil {
+			log.Printf("[goal_service] CreateEvidence: failed to persist DocumentaFolderID for goal %s: %v", goalID, updateErr)
+		}
+	}
 	var metricName string
 	if metricID != nil {
 		metric, metricErr := s.goalRepo.FindMetricByID(ctx, *metricID)
@@ -1181,7 +1198,7 @@ func (s *goalService) CreateEvidence(ctx context.Context, goalID uuid.UUID, titl
 			metricName = metric.Name
 			// Lazy-create metric subfolder under goal folder
 			metricFolderID, ensureErr := s.documentaClient.EnsureFolder(
-				ctx, s.cfg.Documenta.WorkspaceName, goal.DocumentaFolderID, metric.Name,
+				ctx, s.cfg.Documenta.WorkspaceName, uploadFolderID, metric.Name,
 			)
 			if ensureErr == nil {
 				uploadFolderID = metricFolderID
