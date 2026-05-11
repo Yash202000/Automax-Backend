@@ -222,8 +222,11 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 		lbl = labelsEN
 	}
 
+	leftLogoB64 := fetchLogoBase64(os.Getenv("LOGO_LEFT_URL"))
+	rightLogoB64 := fetchLogoBase64(os.Getenv("LOGO_RIGHT_URL"))
+
 	format := c.Query("format", "pdf")
-	htmlBytes := buildReportHTML(c, h, incident, rawIncident, lbl)
+	htmlBytes := buildReportHTML(c, h, incident, rawIncident, leftLogoB64, rightLogoB64, lbl)
 
 	switch format {
 	case "html":
@@ -293,12 +296,26 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 }
 
 // ── HTML builder ──────────────────────────────────────────────────────────────
+func fetchLogoBase64(url string) string {
+	resp, err := http.Get(url)
+	if err != nil || resp.StatusCode != 200 {
+		return ""
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(data)
+}
 
 func buildReportHTML(
 	c *fiber.Ctx,
 	h *IncidentHandler,
 	inc *models.IncidentDetailResponse,
 	raw *models.Incident,
+	leftLogoB64 string, // "http://localhost:5173/epm-logo.png"
+	rightLogoB64 string, // "http://localhost:5173/callcenter.png"
 	l reportLabels,
 ) []byte {
 	var b bytes.Buffer
@@ -319,7 +336,9 @@ func buildReportHTML(
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;background:#fff;direction:%s}
 .page{max-width:780px;margin:0 auto;padding:14px}
-.main-header{background:#375a6e;color:#fff;text-align:center;padding:11px;font-size:16pt;font-weight:bold}
+.logo-bar{display:flex;justify-content:space-between;align-items:center;padding:6px 0 10px 0}
+.logo-bar img{height:48px;width:auto;object-fit:contain}
+.main-header{background:#375a6e;color:#fff;text-align:center;padding:11px;font-size:16pt;font-weight:bold}.main-header{background:#375a6e;color:#fff;text-align:center;padding:11px;font-size:16pt;font-weight:bold}
 .section-header{background:#6491a5;color:#fff;text-align:center;padding:5px 8px;font-size:11pt;font-weight:bold;margin-top:10px}
 .grid{width:100%%;border-collapse:collapse}
 .grid tr:nth-child(even) td{background:#e8f4fa}
@@ -382,9 +401,34 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 		}(),
 	))
 
-	b.WriteString(fmt.Sprintf(`<div class="main-header">%s</div>`, html.EscapeString(l.Title)))
+	// ── Logo Bar + Title ─────────────────────────────────────────────────────
+	url := utils.GenerateAppURL(c.UserContext())
+	if leftLogoB64 == "" {
+		leftLogoB64 = fetchLogoBase64(url + "/epm-logo.png")
 
-	// ── Section: Incident Details ─────────────────────────────────────────────
+	}
+
+	if rightLogoB64 == "" {
+		rightLogoB64 = fetchLogoBase64(url + "/callcenter.png")
+	} // ── Logo Bar + Title ─────────────────────────────────────────────────────
+
+	b.WriteString(`<div class="logo-bar">`)
+
+	if leftLogoB64 != "" {
+		fmt.Fprintf(&b, `<img src="data:image/png;base64,%s" alt="EPM Logo">`, leftLogoB64)
+	} else {
+		b.WriteString(`<span></span>`)
+	}
+
+	fmt.Fprintf(&b, `<div class="main-header" style="flex:1;margin:0 10px">%s</div>`, html.EscapeString(l.Title))
+
+	if rightLogoB64 != "" {
+		fmt.Fprintf(&b, `<img src="data:image/png;base64,%s" alt="Call Center Logo">`, rightLogoB64)
+	} else {
+		b.WriteString(`<span></span>`)
+	}
+
+	b.WriteString(`</div>`) //  ── Section: Incident Details ─────────────────────────────────────────────
 	statusName := ""
 	if inc.CurrentState != nil {
 		statusName = inc.CurrentState.Name

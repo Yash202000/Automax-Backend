@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/models"
@@ -51,19 +53,29 @@ type queryHandlerFn func(
 ) ([]map[string]interface{}, int64, error)
 
 type reportService struct {
-	reportRepo       repository.ReportRepository
-	rejectionLogRepo repository.RejectionLogRepository
-	queryHandlers    map[string]queryHandlerFn // ← single registry
+	reportRepo         repository.ReportRepository
+	rejectionLogRepo   repository.RejectionLogRepository
+	locationRepo       repository.LocationRepository
+	classificationRepo repository.ClassificationRepository
+	queryHandlers      map[string]queryHandlerFn // ← single registry
 }
 
-func NewReportService(reportRepo repository.ReportRepository, rejectionLogRepo repository.RejectionLogRepository) ReportService {
+func NewReportService(
+	reportRepo repository.ReportRepository,
+	rejectionLogRepo repository.RejectionLogRepository,
+	locationRepo repository.LocationRepository,
+	classificationRepo repository.ClassificationRepository,
+
+) ReportService {
 	// return &reportService{
 	// 	reportRepo:       reportRepo,
 	// 	rejectionLogRepo: rejectionLogRepo,
 	// }
 	s := &reportService{
-		reportRepo:       reportRepo,
-		rejectionLogRepo: rejectionLogRepo,
+		reportRepo:         reportRepo,
+		rejectionLogRepo:   rejectionLogRepo,
+		locationRepo:       locationRepo,
+		classificationRepo: classificationRepo,
 	}
 	// All four switch statements collapse into this one map.
 	// Adding a new data source = one line here, zero changes elsewhere.
@@ -100,13 +112,13 @@ func (s *reportService) CreateReport(ctx context.Context, req *models.ReportCrea
 		NameAr:        req.NameAr,
 		Description:   req.Description,
 		DescriptionAr: req.DescriptionAr,
-		DataSource:   req.DataSource,
-		Columns:      string(columnsJSON),
-		Filters:      string(filtersJSON),
-		Sorting:      string(sortingJSON),
-		OutputFormat: "table",
-		IsPublic:     req.IsPublic,
-		CreatedByID:  userID,
+		DataSource:    req.DataSource,
+		Columns:       string(columnsJSON),
+		Filters:       string(filtersJSON),
+		Sorting:       string(sortingJSON),
+		OutputFormat:  "table",
+		IsPublic:      req.IsPublic,
+		CreatedByID:   userID,
 	}
 
 	if err := s.reportRepo.Create(ctx, report); err != nil {
@@ -327,8 +339,12 @@ func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExpo
 		return xlsxData, filename + ".xlsx",
 			"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", nil
 	}
+	log.Println(req.Filters)
 
-	pdfData, err := s.generatePDF(ctx, data, req.Columns, title, req.Options)
+	// @working on it
+	filters := s.buildFilterDisplay(ctx, req.Filters)
+	// in ExportReport, change the generatePDF call:
+	pdfData, err := s.generatePDF(ctx, data, req.Columns, title, req.Options, filters)
 	log.Println("pdf generation started ")
 	if err != nil {
 		log.Println(err)
@@ -583,6 +599,7 @@ func (s *reportService) generatePDF(
 	columns []models.ColumnField,
 	title string,
 	options *models.ReportExportOptions,
+	filterDisplay map[string]interface{}, // NEW
 ) ([]byte, error) {
 
 	lang, _ := ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE).(string)
@@ -596,11 +613,10 @@ func (s *reportService) generatePDF(
 	setupArabicFont(pdf)
 	pdf.AddPage()
 
-	pageWidth := 277.0 // A4 landscape 297mm minus 10+10 margins
+	pageWidth := 277.0
 	colCount := len(columns)
 	colWidths := computeColWidths(pageWidth, colCount)
 
-	// Font size scales down with column count — mirrors 8px CSS at 20+ cols
 	baseFontSize := 9.0
 	switch {
 	case colCount > 20:
@@ -611,7 +627,6 @@ func (s *reportService) generatePDF(
 		baseFontSize = 8.0
 	}
 
-	// Max runes per cell scales with column count too
 	maxCellRunes := 30
 	switch {
 	case colCount > 20:
@@ -648,7 +663,6 @@ func (s *reportService) generatePDF(
 		}
 		pdf.Ln(-1)
 
-		// Reset after header
 		pdf.SetTextColor(0, 0, 0)
 		pdf.SetFillColor(255, 255, 255)
 	}
@@ -660,6 +674,7 @@ func (s *reportService) generatePDF(
 	pdf.Ln(3)
 
 	// ── Timestamp ────────────────────────────────────────────────────────────
+	// ── Timestamp ────────────────────────────────────────────────────────────────
 	if options != nil && options.IncludeTimestamp {
 		setFont("", 9, "")
 		pdf.SetTextColor(128, 128, 128)
@@ -668,7 +683,11 @@ func (s *reportService) generatePDF(
 		pdf.Ln(3)
 	}
 
-	// ── Table header ─────────────────────────────────────────────────────────
+	// ── Filters + Stats (first page only) ────────────────────────────────────────
+	drawFiltersAndStats(pdf, filterDisplay, len(data), setFont)
+	pdf.Ln(2)
+
+	// ── Table header ─────────────────────────────────────────────────────────────
 	drawHeader()
 
 	// ── Rows ─────────────────────────────────────────────────────────────────
@@ -743,6 +762,135 @@ func (s *reportService) generatePDF(
 	}
 	return buf.Bytes(), nil
 }
+
+func (s *reportService) buildFilterDisplay(ctx context.Context, filters []models.ReportFilterConfig) map[string]interface{} {
+	display := map[string]interface{}{}
+
+	// ── Step 1: collect all IDs per type ─────────────────────────────────
+	locationIDSet := map[uuid.UUID]struct{}{}
+	classificationIDSet := map[uuid.UUID]struct{}{}
+
+	for _, f := range filters {
+		if f.Value == nil {
+			continue
+		}
+		log.Print("build filter", f.Field, f.Value)
+		switch f.Field {
+		case "location_id":
+			ids := toStringSlice(f.Value)
+			if len(ids) > 1 {
+				display["Location"] = "Multiple"
+				continue
+			}
+			if id, err := uuid.Parse(ids[0]); err == nil {
+				if loc, err := s.locationRepo.FindByID(ctx, id); err == nil && loc != nil {
+					display["Location"] = loc.Name
+				}
+			}
+
+		case "classification_id":
+			ids := toStringSlice(f.Value)
+			if len(ids) > 1 {
+				display["Classification"] = "Multiple"
+				continue
+			}
+			if id, err := uuid.Parse(ids[0]); err == nil {
+				if cls, err := s.classificationRepo.FindByID(ctx, id); err == nil && cls != nil {
+					display["Classification"] = cls.Name
+				}
+			}
+		}
+	}
+
+	// ── Step 2: batch fetch ───────────────────────────────────────────────
+	locationNames := map[uuid.UUID]string{}
+	classificationNames := map[uuid.UUID]string{}
+
+	if len(locationIDSet) > 0 {
+		ids := make([]uuid.UUID, 0, len(locationIDSet))
+		for id := range locationIDSet {
+			ids = append(ids, id)
+		}
+		if locs, err := s.locationRepo.FindByIDs(ctx, ids); err == nil {
+			for _, loc := range *locs {
+				locationNames[loc.ID] = loc.Name
+			}
+		}
+	}
+
+	if len(classificationIDSet) > 0 {
+		ids := make([]uuid.UUID, 0, len(classificationIDSet))
+		for id := range classificationIDSet {
+			ids = append(ids, id)
+		}
+		if cls, err := s.classificationRepo.FindByIDs(ctx, ids); err == nil {
+			for _, c := range *cls {
+				classificationNames[c.ID] = c.Name
+			}
+		}
+	}
+
+	// ── Step 3: build display map ─────────────────────────────────────────
+	for _, f := range filters {
+		if f.Value == nil {
+			continue
+		}
+
+		switch f.Field {
+		case "location_id":
+			names := []string{}
+			for _, rawID := range toStringSlice(f.Value) {
+				if id, err := uuid.Parse(rawID); err == nil {
+					if name, ok := locationNames[id]; ok {
+						names = append(names, name)
+					}
+				}
+			}
+			if len(names) > 0 {
+				display["Location"] = strings.Join(names, ", ")
+				continue
+			}
+
+		case "classification_id":
+			names := []string{}
+			for _, rawID := range toStringSlice(f.Value) {
+				if id, err := uuid.Parse(rawID); err == nil {
+					if name, ok := classificationNames[id]; ok {
+						names = append(names, name)
+					}
+				}
+			}
+			if len(names) > 0 {
+				display["Classification"] = strings.Join(names, ", ")
+				continue
+			}
+
+		default:
+			label := cases.Title(language.English).String(strings.ReplaceAll(f.Field, "_", " "))
+			display[label] = formatFilterValue(f.Operator, f.Value)
+		}
+	}
+
+	return display
+}
+
+func toStringSlice(v interface{}) []string {
+	switch val := v.(type) {
+	case []interface{}:
+		out := make([]string, 0, len(val))
+		for _, item := range val {
+			out = append(out, fmt.Sprintf("%v", item))
+		}
+		return out
+	case []string:
+		return val
+	case string:
+		return []string{val}
+	default:
+		return []string{fmt.Sprintf("%v", v)}
+	}
+}
+
 func formatValue(v interface{}) string {
 	switch val := v.(type) {
 	case string:
@@ -815,6 +963,135 @@ func getPriorityLabel(priority int) string {
 	default:
 		return strconv.Itoa(priority)
 	}
+}
+func drawFiltersAndStats(
+	pdf *gofpdf.Fpdf,
+	filterDisplay map[string]interface{},
+	totalRows int,
+	setFont func(string, float64, string),
+) {
+	if len(filterDisplay) == 0 {
+		return
+	}
+
+	rowsPerPage := 30
+	totalPages := (totalRows + rowsPerPage - 1) / rowsPerPage
+	if totalPages < 1 {
+		totalPages = 1
+	}
+
+	// Sort filter keys for consistent ordering
+	filterKeys := make([]string, 0, len(filterDisplay))
+	for k := range filterDisplay {
+		filterKeys = append(filterKeys, k)
+	}
+	sort.Strings(filterKeys)
+
+	// Build filter lines
+	filterLines := []string{"Filters:"}
+	for _, k := range filterKeys {
+		v := filterDisplay[k]
+		label := cases.Title(language.English).String(strings.ReplaceAll(k, "_", " "))
+		filterLines = append(filterLines, fmt.Sprintf("  %s: %s", label, formatFilterValue("", v)))
+	}
+
+	statsLines := []string{
+		fmt.Sprintf("Total Rows  : %d", totalRows),
+		fmt.Sprintf("Total Pages : %d", totalPages),
+	}
+
+	const (
+		lineH     = 5.5
+		padding   = 3.0
+		leftX     = 10.0
+		pageWidth = 277.0
+		rightColW = 55.0
+	)
+	leftColW := pageWidth - rightColW - 4
+
+	maxLines := len(filterLines)
+	if len(statsLines) > maxLines {
+		maxLines = len(statsLines)
+	}
+	boxH := float64(maxLines)*lineH + padding*2
+
+	boxTopY := pdf.GetY()
+
+	// Background box
+	pdf.SetFillColor(245, 247, 250)
+	pdf.Rect(leftX, boxTopY, pageWidth, boxH, "F")
+
+	// Left: filter lines
+	for i, line := range filterLines {
+		pdf.SetXY(leftX+2, boxTopY+padding+float64(i)*lineH)
+		if i == 0 {
+			setFont("B", 8, "")
+		} else {
+			setFont("", 8, "")
+		}
+		pdf.SetTextColor(60, 60, 60)
+		pdf.CellFormat(leftColW, lineH, truncateRunes(line, 80), "", 0, "L", false, 0, "")
+	}
+
+	// Right: stats lines
+	for i, line := range statsLines {
+		pdf.SetXY(leftX+leftColW+2, boxTopY+padding+float64(i)*lineH)
+		setFont("B", 8, "")
+		pdf.SetTextColor(59, 130, 246)
+		pdf.CellFormat(rightColW, lineH, line, "", 0, "R", false, 0, "")
+	}
+
+	// Move cursor below box
+	pdf.SetY(boxTopY + boxH + 4)
+	pdf.SetTextColor(0, 0, 0)
+}
+
+// formatFilterValue formats filter values cleanly for display
+func formatFilterValue(operator string, value interface{}) string {
+	switch v := value.(type) {
+
+	case string:
+		return cleanDateStr(v)
+
+	// between — map{"from": "...", "to": "..."}
+	case map[string]interface{}:
+		from, _ := v["from"].(string)
+		to, _ := v["to"].(string)
+		from = cleanDateStr(from)
+		to = cleanDateStr(to)
+		if from != "" && to != "" {
+			return fmt.Sprintf("%s -> %s", from, to)
+		}
+		if from != "" {
+			return fmt.Sprintf("from %s", from)
+		}
+		if to != "" {
+			return fmt.Sprintf("until %s", to)
+		}
+		return fmt.Sprintf("%v", value)
+
+	// array / IN operator
+	case []interface{}:
+		parts := make([]string, len(v))
+		for i, item := range v {
+			parts[i] = fmt.Sprintf("%v", item)
+		}
+		return strings.Join(parts, ", ")
+
+	case []string:
+		return strings.Join(v, ", ")
+
+	default:
+		return fmt.Sprintf("%v", value)
+	}
+}
+
+// cleanDateStr strips time from ISO timestamps: "2026-04-26T00:00:00.000Z" -> "2026-04-26"
+func cleanDateStr(s string) string {
+	if idx := strings.Index(s, "T"); idx != -1 {
+		return s[:idx]
+	}
+	return s
 }
 
 func (s *reportService) GetExecutionHistory(ctx context.Context, reportID uuid.UUID, page, limit int) ([]models.ReportExecutionResponse, int64, error) {
@@ -1049,13 +1326,13 @@ func toReportResponse(r *models.Report) *models.ReportResponse {
 		NameAr:        r.NameAr,
 		Description:   r.Description,
 		DescriptionAr: r.DescriptionAr,
-		DataSource:  r.DataSource,
-		Config:      config,
-		IsPublic:    r.IsPublic,
-		IsSystem:    false, // Reports created by users are not system reports
-		CanEdit:     true,  // Will be set based on permissions later
-		CreatedAt:   r.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:   r.UpdatedAt.Format(time.RFC3339),
+		DataSource:    r.DataSource,
+		Config:        config,
+		IsPublic:      r.IsPublic,
+		IsSystem:      false, // Reports created by users are not system reports
+		CanEdit:       true,  // Will be set based on permissions later
+		CreatedAt:     r.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:     r.UpdatedAt.Format(time.RFC3339),
 	}
 
 	if r.CreatedBy != nil {
