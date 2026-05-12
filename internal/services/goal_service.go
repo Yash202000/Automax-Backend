@@ -659,15 +659,23 @@ func (s *goalService) UpdateGoal(ctx context.Context, id uuid.UUID, req *models.
 // ──────────────────────────────────────────────────
 
 func (s *goalService) DeleteGoal(ctx context.Context, id uuid.UUID, userID uuid.UUID) error {
-	// Access check
-	canModify, _ := s.canModifyGoal(ctx, id, userID)
-	if !canModify {
-		return fmt.Errorf("access denied: only the goal owner can delete this goal")
-	}
-
 	goal, err := s.goalRepo.FindByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("goal not found: %w", err)
+	}
+
+	isSuperAdmin := s.isSuperAdmin(ctx)
+
+	if goal.Status == models.GoalStatusDraft {
+		// Draft goals: only the owner or a super admin may delete
+		if goal.OwnerID != userID && !isSuperAdmin {
+			return fmt.Errorf("access denied: only the goal owner or an administrator can delete this goal")
+		}
+	} else {
+		// Non-draft goals: only a super admin may delete
+		if !isSuperAdmin {
+			return fmt.Errorf("access denied: only an administrator can delete a goal that is not in Draft status")
+		}
 	}
 
 	if err := s.goalRepo.Delete(ctx, id); err != nil {
