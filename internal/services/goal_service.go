@@ -1161,7 +1161,6 @@ func (s *goalService) CreateEvidence(ctx context.Context, goalID uuid.UUID, titl
 		return nil, fmt.Errorf("access denied")
 	}
 
-	// Validate comment is non-empty
 	if strings.TrimSpace(comment) == "" {
 		return nil, fmt.Errorf("comment is mandatory")
 	}
@@ -1172,9 +1171,7 @@ func (s *goalService) CreateEvidence(ctx context.Context, goalID uuid.UUID, titl
 		return nil, fmt.Errorf("goal not found: %w", err)
 	}
 
-	// Determine upload folder (metric subfolder if metricID provided).
-	// If the goal's folder ID is missing (e.g. created before Documenta was
-	// enabled), lazily provision the hierarchy now so the upload can proceed.
+	// Determine upload folder (metric subfolder if metricID provided). If the goal's folder ID is missing (e.g. created before Documenta was enabled), lazily provision the hierarchy now so the upload can proceed.
 	uploadFolderID := goal.DocumentaFolderID
 	if uploadFolderID == "" {
 		goalMgmtID, ensureErr := s.documentaClient.EnsureFolder(ctx, s.cfg.Documenta.WorkspaceName, "", "Goal Management")
