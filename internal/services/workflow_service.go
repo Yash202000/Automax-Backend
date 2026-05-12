@@ -278,6 +278,15 @@ func (s *workflowService) CreateWorkflow(ctx context.Context, req *models.Workfl
 		}
 	}
 
+	// Convert OptionalFields array to JSON string
+	optionalFieldsJSON := "[]"
+	if len(req.OptionalFields) > 0 {
+		jsonBytes, err := json.Marshal(req.OptionalFields)
+		if err == nil {
+			optionalFieldsJSON = string(jsonBytes)
+		}
+	}
+
 	recordType := "incident"
 	if req.RecordType != "" {
 		recordType = req.RecordType
@@ -349,6 +358,7 @@ func (s *workflowService) CreateWorkflow(ctx context.Context, req *models.Workfl
 		Sources:        sourcesJSON,
 		Priorities:     prioritiesJSON,
 		RequiredFields: requiredFieldsJSON,
+		OptionalFields: optionalFieldsJSON,
 		CreatedByID:    &createdByID,
 		IsActive:       true,
 		Version:        1,
@@ -570,6 +580,13 @@ func (s *workflowService) UpdateWorkflow(ctx context.Context, id uuid.UUID, req 
 		jsonBytes, err := json.Marshal(req.RequiredFields)
 		if err == nil {
 			workflow.RequiredFields = string(jsonBytes)
+		}
+	}
+	// Update OptionalFields if provided (nil means not updating, empty array means clear)
+	if req.OptionalFields != nil {
+		jsonBytes, err := json.Marshal(req.OptionalFields)
+		if err == nil {
+			workflow.OptionalFields = string(jsonBytes)
 		}
 	}
 
@@ -1626,16 +1643,35 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 	// Title is always required
 	requiredFields = append([]string{"title"}, requiredFields...)
 
-	// Update form fields with required status
-	formFields := make([]models.IncidentFormFieldConfig, len(allFormFields))
-	for i, f := range allFormFields {
-		formFields[i] = f
+	// Parse optional fields from workflow
+	var optionalFields []string
+	if fullWorkflow.OptionalFields != "" {
+		json.Unmarshal([]byte(fullWorkflow.OptionalFields), &optionalFields)
+	}
+
+	// Build a set of fields to include in the form (required + optional)
+	formFieldSet := make(map[string]bool)
+	for _, f := range requiredFields {
+		formFieldSet[f] = true
+	}
+	for _, f := range optionalFields {
+		formFieldSet[f] = true
+	}
+
+	// Update form fields with required/optional status
+	formFields := make([]models.IncidentFormFieldConfig, 0, len(allFormFields))
+	for _, f := range allFormFields {
+		if !formFieldSet[f.Field] {
+			continue
+		}
+		fc := f
 		for _, rf := range requiredFields {
 			if rf == f.Field {
-				formFields[i].IsRequired = true
+				fc.IsRequired = true
 				break
 			}
 		}
+		formFields = append(formFields, fc)
 	}
 
 	// Get initial state
@@ -1650,6 +1686,9 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 	// Build response
 	workflowIDStr := fullWorkflow.ID.String()
 	recordType := fullWorkflow.RecordType
+	if optionalFields == nil {
+		optionalFields = []string{}
+	}
 	response := &models.WorkflowMatchResponse{
 		Matched:        true,
 		WorkflowID:     &workflowIDStr,
@@ -1657,6 +1696,7 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 		WorkflowCode:   &fullWorkflow.Code,
 		RecordType:     &recordType,
 		RequiredFields: requiredFields,
+		OptionalFields: optionalFields,
 		FormFields:     formFields,
 		InitialStateID: initialStateID,
 		InitialState:   initialStateName,

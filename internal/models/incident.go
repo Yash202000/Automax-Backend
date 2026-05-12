@@ -80,6 +80,7 @@ type Incident struct {
 	Reporter      *User      `gorm:"foreignKey:ReporterID" json:"reporter,omitempty"`
 	ReporterEmail string     `gorm:"size:100" json:"reporter_email"`
 	ReporterName  string     `gorm:"size:200" json:"reporter_name"`
+	ReporterPhone string     `gorm:"size:50" json:"reporter_phone"`
 
 	// Source (origin of the record)
 	Source string `gorm:"size:100" json:"source"`
@@ -674,6 +675,7 @@ type IncidentResponse struct {
 	ReporterID            uuid.UUID                   `json:"reporter_id"`
 	ReporterEmail         string                      `json:"reporter_email"`
 	ReporterName          string                      `json:"reporter_name"`
+	ReporterPhone         string                      `json:"reporter_phone"`
 	Channel               string                      `json:"channel,omitempty"`
 	TransitionHistory     []TransitionHistoryResponse `json:"transition_history,omitempty"`
 	CreatedByName         string                      `json:"created_by_name,omitempty"`
@@ -821,6 +823,7 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 		Source:                i.Source,
 		ReporterEmail:         i.ReporterEmail,
 		ReporterName:          i.ReporterName,
+		ReporterPhone:         i.ReporterPhone,
 		Channel:               i.Channel,
 		CreatedByName:         i.CreatedByName,
 		CreatedByMobile:       i.CreatedByMobile,

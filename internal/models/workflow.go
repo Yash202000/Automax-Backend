@@ -33,6 +33,8 @@ type Workflow struct {
 	// Form configuration - stores which fields are required (JSON array of field names)
 	// e.g., ["description", "classification_id", "priority", "assignee_id", "department_id", "location_id", "due_date", "reporter_name", "reporter_email", "source"]
 	RequiredFields string `gorm:"type:text" json:"required_fields"`
+	// OptionalFields stores fields that appear in the creation form but are not mandatory
+	OptionalFields string `gorm:"type:text" json:"optional_fields"`
 
 	// Relationships
 	States          []WorkflowState      `gorm:"foreignKey:WorkflowID" json:"states,omitempty"`
@@ -303,6 +305,7 @@ type WorkflowCreateRequest struct {
 	ClassificationIDs []string `json:"classification_ids"`
 	LocationIDs       []string `json:"location_ids"`
 	RequiredFields    []string `json:"required_fields"`
+	OptionalFields    []string `json:"optional_fields"`
 }
 
 type WorkflowUpdateRequest struct {
@@ -320,6 +323,7 @@ type WorkflowUpdateRequest struct {
 	ClassificationIDs       []string `json:"classification_ids"`
 	LocationIDs             []string `json:"location_ids"`
 	RequiredFields          []string `json:"required_fields"`
+	OptionalFields          []string `json:"optional_fields"`
 	ConvertToRequestRoleIDs []string `json:"convert_to_request_role_ids"`
 	MergeAllowedRoleIDs     []string `json:"merge_allowed_role_ids"`
 }
@@ -480,6 +484,7 @@ type WorkflowMatchResponse struct {
 	WorkflowCode   *string                   `json:"workflow_code,omitempty"`
 	RecordType     *string                   `json:"record_type,omitempty"`
 	RequiredFields []string                  `json:"required_fields"`
+	OptionalFields []string                  `json:"optional_fields"`
 	FormFields     []IncidentFormFieldConfig `json:"form_fields"`
 	InitialStateID *string                   `json:"initial_state_id,omitempty"`
 	InitialState   *string                   `json:"initial_state,omitempty"`
@@ -502,6 +507,7 @@ type WorkflowResponse struct {
 	Priorities            []int                        `json:"priorities"` // Array of priorities
 	CanvasLayout          string                       `json:"canvas_layout,omitempty"`
 	RequiredFields        []string                     `json:"required_fields"`
+	OptionalFields        []string                     `json:"optional_fields"`
 	States                []WorkflowStateResponse      `json:"states,omitempty"`
 	Transitions           []WorkflowTransitionResponse `json:"transitions,omitempty"`
 	Classifications       []ClassificationResponse     `json:"classifications,omitempty"`
@@ -628,6 +634,15 @@ func ToWorkflowResponse(w *Workflow) WorkflowResponse {
 		requiredFields = []string{}
 	}
 
+	// Parse OptionalFields JSON string to array
+	var optionalFields []string
+	if w.OptionalFields != "" {
+		json.Unmarshal([]byte(w.OptionalFields), &optionalFields)
+	}
+	if optionalFields == nil {
+		optionalFields = []string{}
+	}
+
 	// Parse Sources JSON string to array
 	var sources []string
 	if w.Sources != "" {
@@ -661,6 +676,7 @@ func ToWorkflowResponse(w *Workflow) WorkflowResponse {
 		Priorities:       priorities,
 		CanvasLayout:     w.CanvasLayout,
 		RequiredFields:   requiredFields,
+		OptionalFields:   optionalFields,
 		StatesCount:      len(w.States),
 		TransitionsCount: len(w.Transitions),
 		CreatedAt:        w.CreatedAt,
