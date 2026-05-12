@@ -20,6 +20,7 @@ type GoalRepository interface {
 	Update(ctx context.Context, goal *models.Goal) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	FindGoalByTitleAndOwner(ctx context.Context, title string, ownerID uuid.UUID) (*models.Goal, error)
+	UpdateDocumentaFolderID(ctx context.Context, goalID uuid.UUID, folderID string) error
 
 	// Collaborators
 	AddCollaborator(ctx context.Context, collaborator *models.GoalCollaborator) error
@@ -298,6 +299,12 @@ func (r *goalRepository) Update(ctx context.Context, goal *models.Goal) error {
 
 func (r *goalRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return r.db.WithContext(ctx).Delete(&models.Goal{}, "id = ?", id).Error
+}
+
+func (r *goalRepository) UpdateDocumentaFolderID(ctx context.Context, goalID uuid.UUID, folderID string) error {
+	return r.db.WithContext(ctx).Model(&models.Goal{}).
+		Where("id = ?", goalID).
+		Update("documenta_folder_id", folderID).Error
 }
 
 // ──────────────────────────────────────────────────
