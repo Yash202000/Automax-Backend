@@ -1819,10 +1819,10 @@ func (s *userService) ResetPassword(ctx context.Context, resetToken, newPassword
 	var user *models.User
 	if strings.Contains(val, "@") {
 		user, err = s.userRepo.FindByEmail(ctx, val)
-		log.Printf("User found by email: %s\n", val, user)
+		// log.Printf("User found by email: %s\n", val, user)
 	} else {
 		user, err = s.userRepo.FindByMobile(ctx, val)
-		log.Printf("User found by mobile: %s\n", val, user)
+		// log.Printf("User found by mobile: %s\n", val, user)
 	}
 	if err != nil || user == nil {
 		return fmt.Errorf("user not found")

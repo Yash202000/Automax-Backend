@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
+	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -29,7 +32,7 @@ type TransitionLinkedResult struct {
 	ToStateName string
 }
 
-var TransitionPairs = struct {
+var TransitionPairsOld = struct {
 	Rejected        TransitionPair
 	UnderResolution TransitionPair
 	InProgress      TransitionPair
@@ -43,6 +46,29 @@ var TransitionPairs = struct {
 	ReadyToClose:    TransitionPair{From: "In Progress", To: "Ready To Close"},
 	Closed:          TransitionPair{From: "Ready To Close", To: "Closed"},
 	Reopened:        TransitionPair{From: "Closed", To: "Open"},
+}
+
+var TransitionPairs = struct {
+	Rejected        []TransitionPair
+	UnderResolution []TransitionPair
+	ReadyToClose    []TransitionPair
+	Closed          []TransitionPair
+	Reopened        []TransitionPair
+}{
+	Rejected: []TransitionPair{{From: "Under Resolution", To: "Rejected"}},
+	UnderResolution: []TransitionPair{
+		{From: "New Incident", To: "Under Resolution"},
+		{From: "Rejected", To: "Under Resolution"},
+	},
+	ReadyToClose: []TransitionPair{{From: "Under Resolution", To: "Ready To Close"}},
+	Closed: []TransitionPair{
+		{From: "Ready To Close", To: "Closed"},
+		{From: "New Incident", To: "Closed"},
+	},
+	Reopened: []TransitionPair{
+		{From: "Ready To Close", To: "Under Resolution"},
+		{From: "Closed", To: "Under Resolution"},
+	},
 }
 
 type ReportRepository interface {
@@ -448,6 +474,14 @@ var dataSourceFilterFields = map[string]map[string]string{
 	"departments_by_status":     departmentCountByStatusFilterFields,
 }
 
+// add this helper alongside your repo functions
+func isSlice(v interface{}) bool {
+	if v == nil {
+		return false
+	}
+	return reflect.TypeOf(v).Kind() == reflect.Slice
+}
+
 // applyFilters applies ReportFilterConfig entries to the query. It reads the
 // active data source from ctx (set by WithReportDataSource) to select the
 // correct allowed-fields map. Each logical field name is mapped to a qualified
@@ -477,7 +511,11 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 
 		switch f.Operator {
 		case "equals":
-			query = query.Where(col+" = ?", f.Value)
+			if isSlice(f.Value) {
+				query = query.Where(col+" IN ?", f.Value)
+			} else {
+				query = query.Where(col+" = ?", f.Value)
+			}
 		case "not_equals":
 			query = query.Where(col+" != ?", f.Value)
 		case "contains":
@@ -639,7 +677,6 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 	if err := buildBase().Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	log.Println(filters)
 
 	dataQuery := buildBase()
 	dataQuery = r.applySorting(dataQuery, sorting)
@@ -706,13 +743,13 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 				rawRow[colName] = val
 			}
 		}
-		log.Printf("rawRow keys: %v", func() []string {
-			keys := make([]string, 0, len(rawRow))
-			for k := range rawRow {
-				keys = append(keys, k)
-			}
-			return keys
-		}())
+		// log.Printf("rawRow keys: %v", func() []string {
+		// 	keys := make([]string, 0, len(rawRow))
+		// 	for k := range rawRow {
+		// 		keys = append(keys, k)
+		// 	}
+		// 	return keys
+		// }())
 		// Build row dynamically from the requested columns.
 		// col.Field is the SQL alias present in rawRow; col.Label is the output key.
 		row := make(map[string]interface{})
@@ -725,6 +762,8 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			if _, ok := row["id"]; !ok {
 				row["id"] = rawRow["id"]
 				row["created_at"] = rawRow["created_at"] // also carry created_at for aging calculations in enrichment
+				row["classification_id"] = rawRow["classification_id"]
+				row["location_id"] = rawRow["location_id"]
 			}
 			var createdAt string
 			switch v := rawRow["created_at"].(type) {
@@ -735,9 +774,7 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			}
 			if createdAt != "" {
 				row["created_at"] = createdAt
-				log.Print("Incident created at", row["created_at"])
 			}
-			log.Printf("row created_at type=%T value=%v", row["created_at"], row["created_at"])
 
 		} else {
 			for k, v := range rawRow {
@@ -751,10 +788,22 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 	// ── Bulk enrichment from related tables ──────────────────────────────────
 	if len(results) > 0 {
 		incidentIDs := make([]string, 0, len(results))
+		locationIDs := make([]string, 0, len(results))
+		classificationIDs := make([]string, 0, len(results))
 		for _, row := range results {
-			if id := incidentIDStr(row["id"]); id != "" {
+			if id := IDStr(row["id"]); id != "" {
 				incidentIDs = append(incidentIDs, id)
 			}
+			if id := IDStr(row["location_id"]); id != "" {
+				locationIDs = append(locationIDs, id)
+			}
+			if id := IDStr(row["classification_id"]); id != "" {
+				classificationIDs = append(classificationIDs, id)
+			}
+		}
+
+		if len(locationIDs) != 0 || len(classificationIDs) != 0 {
+			log.Printf("Bulk enrichment for %d incidents: %d location IDs, %d classification IDs", len(results), len(locationIDs), len(classificationIDs))
 		}
 
 		// hasCol returns true when at least one of the given field names was
@@ -791,10 +840,10 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			underResNames, underResDates, _ = r.fetchUnderResolutionData(ctx, incidentIDs)
 		}
 
-		var inProgressNames, inProgressDates map[string]string
-		if hasCol("in_progress_by", "in_progress_date") {
-			inProgressNames, inProgressDates, _ = r.fetchInProgressData(ctx, incidentIDs)
-		}
+		// var inProgressNames, inProgressDates map[string]string
+		// if hasCol("in_progress_by", "in_progress_date") {
+		// 	inProgressNames, inProgressDates, _ = r.fetchInProgressData(ctx, incidentIDs)
+		// }
 
 		var readyToCloseNames, readyToCloseDates map[string]string
 		if hasCol("ready_to_close_by", "ready_to_close_date") {
@@ -933,12 +982,38 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			reopenedCommentMap, _ = r.fetchCommentDataByState(ctx, "Reopened", incidentIDs)
 		}
 
+		// @todo urgent update the incident id to location/classification id
+		// 11. Location Full path
+		var locationFullPathMap map[string]string
+		if hasCol("full_location") {
+			log.Printf("Fetching location full paths for %d location IDs", len(locationIDs))
+			locationFullPathMap, err = r.fetchLocationPaths(ctx, locationIDs)
+			if err != nil {
+				log.Print("error fetching location full name", locationFullPathMap)
+			}
+			log.Printf("Fetched %d location full paths", len(locationFullPathMap))
+		}
+
+		// 11. Classification Full path
+		var classificationFullPathMap map[string]string
+		if hasCol("full_classification") {
+			classificationFullPathMap, err = r.fetchClassificationPaths(ctx, classificationIDs)
+			if err != nil {
+				log.Print("error fetching classification full name", locationFullPathMap)
+			}
+		}
+
 		for i, row := range results {
-			incidentID := incidentIDStr(row["id"])
+			incidentID := IDStr(row["id"])
 			if incidentID == "" {
 				continue
 			}
-
+			locationID := IDStr(row["location_id"])
+			classificationID := IDStr(row["classification_id"])
+			if locationID == "" || classificationID == "" {
+				// continue
+				log.Printf("location is empyy %s class is empty %s", locationID, classificationID)
+			}
 			// ── Per-status By / Date ─────────────────────────────────────────────
 
 			// Closed
@@ -952,38 +1027,28 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 				setField(results[i], "closed_date", date)
 			}
 
-			// Calculated "Approved By" and "Approved Time" fields from Closed transition
-			if name := closedNames[incidentID]; name != "" {
+			// approved_by — only from UnderResolution (Approve transition)
+			if name := underResNames[incidentID]; name != "" {
 				setField(results[i], "approved_by", name)
 			}
-			if date := closedDates[incidentID]; date != "" {
+			if date := underResDates[incidentID]; date != "" {
 				setField(results[i], "approved_time", date)
 				setField(results[i], "approved_at", date)
-				if createdAt, ok := row["created_at"].(string); ok {
-					totalClosingTime, err := utils.CalculateDuration(createdAt, date)
+			}
+
+			// total_closing_duration — FIXED: guard empty date
+			closedDate := closedDates[incidentID]
+			if closedDate != "" {
+				if createdAt, ok := row["created_at"].(string); ok && createdAt != "" {
+					totalClosingTime, err := utils.CalculateDuration(createdAt, closedDate)
 					if err == nil {
 						setField(results[i], "total_closing_duration", totalClosingTime)
 					} else {
-						log.Println("error calculating total closing time for incident", incidentID, ":", err)
 						setField(results[i], "total_closing_duration", nil)
 					}
-				} else {
-					log.Print("Created at not set")
-					setField(results[i], "total_closing_duration", nil)
 				}
 			} else {
-				if createdAt, ok := row["created_at"].(string); ok {
-					totalClosingTime, err := utils.CalculateDuration(createdAt, date)
-					if err == nil {
-						setField(results[i], "total_closing_duration", totalClosingTime)
-					} else {
-						log.Println("error calculating total closing time for incident", incidentID, ":", err)
-						setField(results[i], "total_closing_duration", nil)
-					}
-				} else {
-					log.Print("Created at not set")
-					setField(results[i], "total_closing_duration", nil)
-				}
+				setField(results[i], "total_closing_duration", nil)
 			}
 
 			// Rejected
@@ -995,23 +1060,23 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			}
 
 			// Under Resolution
-			if name := underResNames[incidentID]; name != "" {
-				setField(results[i], "under_resolution_by", name)
-				setField(results[i], "approved_by", name)
-			}
-			if date := underResDates[incidentID]; date != "" {
-				setField(results[i], "under_resolution_date", date)
-				setField(results[i], "approved_time", date)
-				setField(results[i], "approved_at", date)
-			}
+			// if name := underResNames[incidentID]; name != "" {
+			// 	setField(results[i], "under_resolution_by", name)
+			// 	setField(results[i], "approved_by", name)
+			// }
+			// if date := underResDates[incidentID]; date != "" {
+			// 	setField(results[i], "under_resolution_date", date)
+			// 	setField(results[i], "approved_time", date)
+			// 	setField(results[i], "approved_at", date)
+			// }
 
 			// In Progress
-			if name := inProgressNames[incidentID]; name != "" {
-				setField(results[i], "in_progress_by", name)
-			}
-			if date := inProgressDates[incidentID]; date != "" {
-				setField(results[i], "in_progress_date", date)
-			}
+			// if name := inProgressNames[incidentID]; name != "" {
+			// 	setField(results[i], "in_progress_by", name)
+			// }
+			// if date := inProgressDates[incidentID]; date != "" {
+			// 	setField(results[i], "in_progress_date", date)
+			// }
 
 			// Ready To Close
 			if name := readyToCloseNames[incidentID]; name != "" {
@@ -1151,6 +1216,16 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 				setField(results[i], "reopened_comment", comments[0].Comment)
 			}
 
+			// Classification Full path
+			if class, ok := classificationFullPathMap[classificationID]; ok && len(class) > 0 {
+				setField(results[i], "full_classification", class)
+			}
+
+			// Location Full path
+			if loc, ok := locationFullPathMap[locationID]; ok && len(loc) > 0 {
+				setField(results[i], "full_location", loc)
+			}
+
 			if comments, ok := commentsMap[incidentID]; ok {
 				// flat joined string for simple columns
 				parts := make([]string, 0, len(comments))
@@ -1185,23 +1260,31 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 // GetTransitionUserNames returns incident_id → performer full name for the
 // most-recent status_changed revision where new_value = newStateName.
 // Delegates to fetchStatusTransitionData (names only).
-// func (r *reportRepository) GetTransitionUserNames0(ctx context.Context, newStateName string, incidentIDs []string) (map[string]string, error) {
-// 	names, _, err := r.fetchStatusTransitionData(ctx, models.IncidentRevisionStatus(newStateName), incidentIDs)
-// 	return names, err
-// }
-
+//
+//	func (r *reportRepository) GetTransitionUserNames0(ctx context.Context, newStateName string, incidentIDs []string) (map[string]string, error) {
+//		names, _, err := r.fetchStatusTransitionData(ctx, models.IncidentRevisionStatus(newStateName), incidentIDs)
+//		return names, err
+//	}
 func (r *reportRepository) fetchFeedbackDataByState(
 	ctx context.Context,
 	toStateName string,
 	incidentIDs []string,
 ) (map[string][]TransitionLinkedResult, error) {
-	feedbacK_table := "incident_feedbacks"
-	return r.fetchTransitionLinkedData(ctx, feedbacK_table, toStateName, incidentIDs)
+	return r.fetchTransitionLinkedData(ctx, "incident_feedbacks", "created_by_id", toStateName, incidentIDs)
+}
+
+func (r *reportRepository) fetchCommentDataByState(
+	ctx context.Context,
+	toStateName string,
+	incidentIDs []string,
+) (map[string][]TransitionLinkedResult, error) {
+	return r.fetchTransitionLinkedData(ctx, "incident_comments", "author_id", toStateName, incidentIDs)
 }
 
 func (r *reportRepository) fetchTransitionLinkedData(
 	ctx context.Context,
 	table,
+	userIDCol,
 	toStateName string,
 	incidentIDs []string,
 ) (map[string][]TransitionLinkedResult, error) {
@@ -1210,27 +1293,39 @@ func (r *reportRepository) fetchTransitionLinkedData(
 		return result, nil
 	}
 
+	// is_internal filter only applies to incident_comments
+	internalFilter := ""
+	if table == "incident_comments" {
+		internalFilter = "AND f.is_internal = false"
+	}
+
+	// incident_comments uses content column, feedbacks use comment
+	commentCol := "comment"
+	if table == "incident_comments" {
+		commentCol = "content"
+	}
+
 	query := `
-		SELECT
-			f.incident_id::text,
-			TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS full_name,
-			COALESCE(f.comment, '')                                             AS comment,
-			f.created_at::text,
-			COALESCE(tws.name, '')                                              AS to_state_name
-		FROM ` + table + ` f
-		INNER JOIN users u ON u.id = f.created_by_id
-		LEFT JOIN incident_transition_histories tr ON tr.id = f.transition_history_id
-		LEFT JOIN workflow_states tws ON tws.id = tr.to_state_id
-		WHERE f.incident_id::text IN (?)
-		  AND tws.name = ?
-		ORDER BY f.incident_id, f.created_at ASC`
+        SELECT
+            f.incident_id::text,
+            TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS full_name,
+            COALESCE(f.` + commentCol + `, '')                                  AS comment,
+            f.created_at::text,
+            COALESCE(tws.name, '')                                              AS to_state_name
+        FROM ` + table + ` f
+        INNER JOIN users u ON u.id = f.` + userIDCol + `
+        LEFT JOIN incident_transition_histories tr ON tr.id = f.transition_history_id
+        LEFT JOIN workflow_states tws ON tws.id = tr.to_state_id
+        WHERE f.incident_id::text IN (?)
+          AND tws.name = ?
+          ` + internalFilter + `
+        ORDER BY f.incident_id, f.created_at ASC`
 
 	rows, err := r.db.WithContext(ctx).Raw(query, incidentIDs, toStateName).Rows()
 	if err != nil {
-		return nil, fmt.Errorf("fetchFeedbackDataByState(%s): %w", toStateName, err)
+		return nil, fmt.Errorf("fetchTransitionLinkedData(%s->%s): %w", table, toStateName, err)
 	}
 	defer rows.Close()
-
 	for rows.Next() {
 		var fb TransitionLinkedResult
 		if err := rows.Scan(
@@ -1245,15 +1340,6 @@ func (r *reportRepository) fetchTransitionLinkedData(
 		result[fb.IncidentID] = append(result[fb.IncidentID], fb)
 	}
 	return result, nil
-}
-
-func (r *reportRepository) fetchCommentDataByState(
-	ctx context.Context,
-	toStateName string,
-	incidentIDs []string,
-) (map[string][]TransitionLinkedResult, error) {
-	feedbacK_table := "incident_comments"
-	return r.fetchTransitionLinkedData(ctx, feedbacK_table, toStateName, incidentIDs)
 }
 
 // fetchStatusTransitionData is the single generic query behind all per-status
@@ -1310,35 +1396,160 @@ func (r *reportRepository) fetchStatusTransitionData(
 	return
 }
 
-// ── Per-status wrappers (use IncidentRevisionStatus constants) ────────────────
+// New
+func (r *reportRepository) fetchMultiPairTransitionData(
+	ctx context.Context,
+	pairs []TransitionPair,
+	incidentIDs []string,
+) (names map[string]string, dates map[string]string, err error) {
+	names = map[string]string{}
+	dates = map[string]string{}
+
+	for _, pair := range pairs {
+		n, d, e := r.fetchStatusTransitionData(ctx, pair.From, pair.To, incidentIDs)
+		if e != nil {
+			err = e
+			continue
+		}
+		for id, name := range n {
+			if existing, ok := names[id]; ok {
+				names[id] = existing + " | " + name
+			} else {
+				names[id] = name
+			}
+		}
+		for id, date := range d {
+			if existing, ok := dates[id]; ok {
+				dates[id] = existing + " | " + date
+			} else {
+				dates[id] = date
+			}
+		}
+	}
+	return
+}
+
 func (r *reportRepository) fetchRejectedData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
-	p := TransitionPairs.Rejected
-	return r.fetchStatusTransitionData(ctx, p.From, p.To, ids)
+	return r.fetchMultiPairTransitionData(ctx, TransitionPairs.Rejected, ids)
 }
 
 func (r *reportRepository) fetchUnderResolutionData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
-	p := TransitionPairs.UnderResolution
-	return r.fetchStatusTransitionData(ctx, p.From, p.To, ids)
-}
-
-func (r *reportRepository) fetchInProgressData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
-	p := TransitionPairs.InProgress
-	return r.fetchStatusTransitionData(ctx, p.From, p.To, ids)
+	return r.fetchMultiPairTransitionData(ctx, TransitionPairs.UnderResolution, ids)
 }
 
 func (r *reportRepository) fetchReadyToCloseData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
-	p := TransitionPairs.ReadyToClose
-	return r.fetchStatusTransitionData(ctx, p.From, p.To, ids)
+	return r.fetchMultiPairTransitionData(ctx, TransitionPairs.ReadyToClose, ids)
 }
 
 func (r *reportRepository) fetchClosedData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
-	p := TransitionPairs.Closed
-	return r.fetchStatusTransitionData(ctx, p.From, p.To, ids)
+	return r.fetchMultiPairTransitionData(ctx, TransitionPairs.Closed, ids)
 }
 
 func (r *reportRepository) fetchReopenData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
-	p := TransitionPairs.Reopened
-	return r.fetchStatusTransitionData(ctx, p.From, p.To, ids)
+	return r.fetchMultiPairTransitionData(ctx, TransitionPairs.Reopened, ids)
+}
+
+// ── full path queries ───────────────────────────────────────────────────
+func (r *reportRepository) fetchLocationPaths(
+	ctx context.Context,
+	locationIDs []string,
+) (paths map[string]string, err error) {
+	paths = map[string]string{}
+	if len(locationIDs) == 0 {
+		return
+	}
+
+	query := `
+		WITH RECURSIVE location_hierarchy AS (
+			SELECT
+				id,
+				name,
+				parent_id,
+				name::TEXT AS full_path
+			FROM locations
+			WHERE parent_id IS NULL
+
+			UNION ALL
+
+			SELECT
+				l.id,
+				l.name,
+				l.parent_id,
+				lh.full_path || ' > ' || l.name
+			FROM locations l
+			INNER JOIN location_hierarchy lh ON l.parent_id = lh.id
+		)
+		SELECT
+			id::text,
+			full_path
+		FROM location_hierarchy
+		WHERE id::text IN (?)
+	`
+
+	rows, qerr := r.db.WithContext(ctx).Raw(query, locationIDs).Rows()
+	if qerr != nil {
+		err = fmt.Errorf("fetchLocationPaths: %w", qerr)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var locationID, fullPath string
+		if serr := rows.Scan(&locationID, &fullPath); serr != nil {
+			continue
+		}
+		paths[locationID] = fullPath
+	}
+	return
+}
+
+func (r *reportRepository) fetchClassificationPaths(
+	ctx context.Context,
+	classificationIDs []string,
+) (paths map[string]string, err error) {
+	paths = map[string]string{}
+	if len(classificationIDs) == 0 {
+		return
+	}
+
+	query := `
+		WITH RECURSIVE classification_hierarchy AS (
+			SELECT
+				id,
+				name::TEXT AS full_path
+			FROM classifications
+			WHERE parent_id IS NULL
+
+			UNION ALL
+
+			SELECT
+				c.id,
+				ch.full_path || ' > ' || c.name
+			FROM classifications c
+			INNER JOIN classification_hierarchy ch ON c.parent_id = ch.id
+		)
+		SELECT
+			id::text,
+			full_path
+		FROM classification_hierarchy
+		WHERE id::text IN (?)
+	`
+
+	rows, qerr := r.db.WithContext(ctx).Raw(query, classificationIDs).Rows()
+	if qerr != nil {
+		err = fmt.Errorf("fetchClassificationPaths: %w", qerr)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var classificationID, fullPath string
+		if serr := rows.Scan(&classificationID, &fullPath); serr != nil {
+			continue
+		}
+		paths[classificationID] = fullPath
+	}
+	return
 }
 
 // ── Bulk enrichment queries ───────────────────────────────────────────────────
@@ -1438,25 +1649,25 @@ func (r *reportRepository) fetchCommentData(
 	}
 
 	query := `
-		SELECT
-			f.incident_id::text,
-			TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS full_name,
-			COALESCE(f.comment, '')                                             AS comment,
-			f.created_at::text,
-			COALESCE(tws.name, '')                                              AS to_state_name
-		FROM incident_comments f
-		INNER JOIN users u ON u.id = f.created_by_id
-		LEFT JOIN incident_transition_histories tr ON tr.id = f.transition_history_id
-		LEFT JOIN workflow_states tws ON tws.id = tr.to_state_id
-		WHERE f.incident_id::text IN (?)
-		ORDER BY f.incident_id, f.created_at ASC`
+        SELECT
+            f.incident_id::text,
+            TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS full_name,
+            COALESCE(f.content, '')                                             AS comment,
+            f.created_at::text,
+            COALESCE(tws.name, '')                                              AS to_state_name
+        FROM incident_comments f
+        INNER JOIN users u ON u.id = f.author_id                   -- FIXED: was created_by_id
+        LEFT JOIN incident_transition_histories tr ON tr.id = f.transition_history_id
+        LEFT JOIN workflow_states tws ON tws.id = tr.to_state_id
+        WHERE f.incident_id::text IN (?)
+          AND f.is_internal = false                                 -- FIXED: filter internal
+        ORDER BY f.incident_id, f.created_at ASC`
 
 	rows, err := r.db.WithContext(ctx).Raw(query, incidentIDs).Rows()
 	if err != nil {
 		return nil, fmt.Errorf("fetchCommentData: %w", err)
 	}
 	defer rows.Close()
-
 	for rows.Next() {
 		var fb TransitionLinkedResult
 		if err := rows.Scan(
@@ -1689,9 +1900,9 @@ func extractCF(raw interface{}, key string) interface{} {
 	return ""
 }
 
-// incidentIDStr extracts an incident UUID as a lowercase hyphenated string from
+// IDStr extracts an incident UUID as a lowercase hyphenated string from
 // whatever type the pgx/GORM driver returns (string, []byte, or [16]byte).
-func incidentIDStr(v interface{}) string {
+func IDStr(v interface{}) string {
 	if v == nil {
 		return ""
 	}
@@ -2384,11 +2595,6 @@ func (r *reportRepository) ExecuteActionLogQuery(ctx context.Context, filters []
 func buildCountRow(rawRow map[string]interface{}, reqColumns []models.ColumnField, defaults map[string]string) map[string]interface{} {
 	row := make(map[string]interface{})
 	if len(reqColumns) > 0 {
-		if rawRow["status_name"] != nil && rawRow["status_name"] != "" && rawRow["incident_count"] != nil {
-			status_name := fmt.Sprintf("%s", rawRow["status_name"])
-			rawRow[status_name] = fmt.Sprintf("%d", rawRow["incident_count"])
-		}
-
 		for _, col := range reqColumns {
 			// log.Printf("Raw Label: %s, Field: %s", rawRow[col.Label], col.Field)
 			row[col.Label] = rawRow[col.Field]
@@ -2444,6 +2650,7 @@ func (r *reportRepository) ExecuteLocationCountQuery(ctx context.Context, filter
 			continue
 		}
 		results = append(results, buildCountRow(map[string]interface{}{"location_name": locationName, "parent_location_name": parentName, "incident_count": count}, reqColumns, defaults))
+
 	}
 	return results, total, nil
 }
@@ -2461,7 +2668,7 @@ func (r *reportRepository) ExecuteLocationCountByStatusQuery(ctx context.Context
 		return r.applyFilters(ctx, q, filters)
 	}
 	var total int64
-	if err := buildBase().Select("COUNT(DISTINCT locations.id::text || '|' || COALESCE(workflow_states.name, ''))").Scan(&total).Error; err != nil {
+	if err := buildBase().Select("COUNT(DISTINCT locations.id::text || '|' || COALESCE(workflow_states.code, ''))").Scan(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	orderClause := "locations.name ASC, COUNT(incidents.id) DESC"
@@ -2476,22 +2683,76 @@ func (r *reportRepository) ExecuteLocationCountByStatusQuery(ctx context.Context
 	}
 	offset := (page - 1) * limit
 	rows, err := buildBase().
-		Select("locations.name AS location_name, COALESCE(parent_loc.name, '') AS parent_location_name, COALESCE(workflow_states.name, '') AS status_name, COUNT(incidents.id) AS incident_count").
-		Group("locations.id, locations.name, parent_loc.name, workflow_states.name").
+		Select("locations.name AS location_name, COALESCE(parent_loc.name, '') AS parent_location_name, COALESCE(workflow_states.code, '') AS status_name, COUNT(incidents.id) AS incident_count").
+		Group("locations.id, locations.name, parent_loc.name, workflow_states.code").
 		Order(orderClause).Offset(offset).Limit(limit).Rows()
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
 	defaults := map[string]string{"location_name": "Location", "parent_location_name": "Parent Location", "status_name": "Status", "incident_count": "No. of Incidents"}
-	var results []map[string]interface{}
+	var stateCount = map[string]map[string]int64{}
+	var locationTotal = map[string]int64{}
+	var locationMeta = map[string]map[string]string{}
+	var allStatuses = map[string]struct{}{}
+	var totalIncidents int64
+
+	// First pass: accumulate counts
 	for rows.Next() {
 		var locationName, parentName, statusName string
 		var count int64
 		if err := rows.Scan(&locationName, &parentName, &statusName, &count); err != nil {
 			continue
 		}
-		results = append(results, buildCountRow(map[string]interface{}{"location_name": locationName, "parent_location_name": parentName, "status_name": statusName, "incident_count": count}, reqColumns, defaults))
+		totalIncidents += count
+		locationTotal[locationName] += count
+		allStatuses[statusName] = struct{}{}
+
+		if stateCount[locationName] == nil {
+			stateCount[locationName] = map[string]int64{}
+		}
+		stateCount[locationName][statusName] += count
+
+		if locationMeta[locationName] == nil {
+			locationMeta[locationName] = map[string]string{}
+		}
+		locationMeta[locationName]["parent_name"] = parentName
+	}
+
+	// Sort statuses for consistent column ordering
+	sortedStatuses := make([]string, 0, len(allStatuses))
+	for s := range allStatuses {
+		sortedStatuses = append(sortedStatuses, s)
+	}
+	sort.Strings(sortedStatuses)
+
+	// Second pass: build pivoted rows
+	var results []map[string]interface{}
+	for locationName, statuses := range stateCount {
+		clsTotal := locationTotal[locationName]
+		meta := locationMeta[locationName]
+
+		row := map[string]interface{}{
+			"location_name":        locationName,
+			"parent_location_name": meta["parent_name"],
+		}
+
+		// one column per status
+		for _, statusName := range sortedStatuses {
+			row[statusName] = statuses[statusName] // 0 if not present
+		}
+
+		// total and overall percentage of this location vs all incidents
+		var percentage float64
+		if totalIncidents > 0 {
+			percentage = math.Round((float64(clsTotal)/float64(totalIncidents))*10000) / 100
+		}
+		row["total"] = clsTotal
+		row["incident_count"] = clsTotal
+		row["percentage"] = percentage // e.g. 23.45 means this location is 23.45% of all incidents
+		log.Print("row status report  : ", clsTotal, percentage)
+		currentRow := buildCountRow(row, reqColumns, defaults)
+		results = append(results, currentRow)
 	}
 	return results, total, nil
 }
@@ -2556,7 +2817,7 @@ func (r *reportRepository) ExecuteClassificationCountByStatusQuery(ctx context.C
 		return r.applyFilters(ctx, q, filters)
 	}
 	var total int64
-	if err := buildBase().Select("COUNT(DISTINCT classifications.id::text || '|' || COALESCE(workflow_states.name, ''))").Scan(&total).Error; err != nil {
+	if err := buildBase().Select("COUNT(DISTINCT classifications.id::text || '|' || COALESCE(workflow_states.code, ''))").Scan(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	orderClause := "classifications.name ASC, COUNT(incidents.id) DESC"
@@ -2571,23 +2832,77 @@ func (r *reportRepository) ExecuteClassificationCountByStatusQuery(ctx context.C
 	}
 	offset := (page - 1) * limit
 	rows, err := buildBase().
-		Select("classifications.name AS classification_name, COALESCE(parent_cls.name, '') AS parent_classification_name, COALESCE(workflow_states.name, '') AS status_name, COUNT(incidents.id) AS incident_count").
-		Group("classifications.id, classifications.name, parent_cls.name, workflow_states.name").
+		Select("classifications.name AS classification_name, COALESCE(parent_cls.name, '') AS parent_classification_name, COALESCE(workflow_states.code, '') AS status_name, COUNT(incidents.id) AS incident_count").
+		Group("classifications.id, classifications.name, parent_cls.name, workflow_states.code").
 		Order(orderClause).Offset(offset).Limit(limit).Rows()
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
 	defaults := map[string]string{"classification_name": "Classification", "parent_classification_name": "Parent Classification", "status_name": "Status", "incident_count": "No. of Incidents"}
-	var results []map[string]interface{}
+	var stateCount = map[string]map[string]int64{}
+	var classificationTotal = map[string]int64{}
+	var classificationMeta = map[string]map[string]string{}
+	var allStatuses = map[string]struct{}{}
+	var totalIncidents int64
+
+	// First pass: accumulate counts
 	for rows.Next() {
 		var classificationName, parentName, statusName string
 		var count int64
 		if err := rows.Scan(&classificationName, &parentName, &statusName, &count); err != nil {
 			continue
 		}
-		results = append(results, buildCountRow(map[string]interface{}{"classification_name": classificationName, "parent_classification_name": parentName, "status_name": statusName, "incident_count": count}, reqColumns, defaults))
+		totalIncidents += count
+		classificationTotal[classificationName] += count
+		allStatuses[statusName] = struct{}{}
+
+		if stateCount[classificationName] == nil {
+			stateCount[classificationName] = map[string]int64{}
+		}
+		stateCount[classificationName][statusName] += count
+
+		if classificationMeta[classificationName] == nil {
+			classificationMeta[classificationName] = map[string]string{}
+		}
+		classificationMeta[classificationName]["parent_name"] = parentName
 	}
+
+	// Sort statuses for consistent column ordering
+	sortedStatuses := make([]string, 0, len(allStatuses))
+	for s := range allStatuses {
+		sortedStatuses = append(sortedStatuses, s)
+	}
+	sort.Strings(sortedStatuses)
+
+	// Second pass: build pivoted rows
+	var results []map[string]interface{}
+	for classificationName, statuses := range stateCount {
+		clsTotal := classificationTotal[classificationName]
+		meta := classificationMeta[classificationName]
+
+		row := map[string]interface{}{
+			"classification_name":        classificationName,
+			"parent_classification_name": meta["parent_name"],
+		}
+
+		// one column per status
+		for _, statusName := range sortedStatuses {
+			row[statusName] = statuses[statusName] // 0 if not present
+		}
+
+		// total and overall percentage of this classification vs all incidents
+		var percentage float64
+		if totalIncidents > 0 {
+			percentage = math.Round((float64(clsTotal)/float64(totalIncidents))*10000) / 100
+		}
+		row["incident_count"] = clsTotal
+		row["total"] = clsTotal
+		row["percentage"] = fmt.Sprintf("%.2f%%", percentage)
+		currentRow := buildCountRow(row, reqColumns, defaults)
+		results = append(results, currentRow)
+	}
+
 	return results, total, nil
 }
 

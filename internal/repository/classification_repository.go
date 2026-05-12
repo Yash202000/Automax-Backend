@@ -12,10 +12,10 @@ import (
 // typeExistsWhere returns a GORM WHERE condition and args for filtering classifications
 // by the given types slice, using an EXISTS subquery to avoid duplicate rows.
 //
-//   nil / empty / ["all"] → no condition (all classifications)
-//   ["both"]              → exists with type IN ('incident','request')
-//   ["incident","mobile"] → exists with type IN ('incident','mobile')
-//   ["incident"]          → exists with type = 'incident'
+//	nil / empty / ["all"] → no condition (all classifications)
+//	["both"]              → exists with type IN ('incident','request')
+//	["incident","mobile"] → exists with type IN ('incident','mobile')
+//	["incident"]          → exists with type = 'incident'
 func typeExistsWhere(types []string) (condition string, args []interface{}) {
 	if len(types) == 0 {
 		return "", nil
@@ -60,6 +60,7 @@ func typeExistsWhere(types []string) (condition string, args []interface{}) {
 type ClassificationRepository interface {
 	Create(ctx context.Context, classification *models.Classification) error
 	FindByID(ctx context.Context, id uuid.UUID) (*models.Classification, error)
+	FindByIDs(ctx context.Context, id []uuid.UUID) (*[]models.Classification, error)
 	FindByNameAndParent(ctx context.Context, name string, parentID *uuid.UUID) (*models.Classification, error)
 	Update(ctx context.Context, classification *models.Classification) error
 	Delete(ctx context.Context, id uuid.UUID) error
@@ -116,6 +117,15 @@ func (r *classificationRepository) FindByID(ctx context.Context, id uuid.UUID) (
 		return nil, err
 	}
 	return &classification, nil
+}
+func (r *classificationRepository) FindByIDs(ctx context.Context, ids []uuid.UUID) (*[]models.Classification, error) {
+	var classifications []models.Classification
+	err := r.db.WithContext(ctx).
+		Find(&classifications, "id IN ?", ids).Error // Find not First
+	if err != nil {
+		return nil, err
+	}
+	return &classifications, nil
 }
 
 func (r *classificationRepository) FindByNameAndParent(ctx context.Context, name string, parentID *uuid.UUID) (*models.Classification, error) {

@@ -12,6 +12,7 @@ import (
 type LocationRepository interface {
 	Create(ctx context.Context, location *models.Location) error
 	FindByID(ctx context.Context, id uuid.UUID) (*models.Location, error)
+	FindByIDs(ctx context.Context, id []uuid.UUID) (*[]models.Location, error)
 	FindByNameAndParent(ctx context.Context, name string, parentID *uuid.UUID) (*models.Location, error)
 	Update(ctx context.Context, location *models.Location) error
 	Delete(ctx context.Context, id uuid.UUID) error
@@ -54,7 +55,15 @@ func (r *locationRepository) FindByID(ctx context.Context, id uuid.UUID) (*model
 	}
 	return &location, nil
 }
-
+func (r *locationRepository) FindByIDs(ctx context.Context, ids []uuid.UUID) (*[]models.Location, error) {
+	var locations []models.Location
+	err := r.db.WithContext(ctx).
+		Find(&locations, "id IN ?", ids).Error
+	if err != nil {
+		return nil, err
+	}
+	return &locations, nil
+}
 func (r *locationRepository) FindByNameAndParent(ctx context.Context, name string, parentID *uuid.UUID) (*models.Location, error) {
 	var location models.Location
 	query := r.db.WithContext(ctx).Where("name = ?", name)
