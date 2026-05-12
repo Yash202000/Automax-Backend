@@ -607,35 +607,36 @@ func (s *reportService) generatePDF(
 	arabicLoaded := len(fonts.NotoArabicRegular) > 0
 	log.Println("RTL Mode: ", rtlMode)
 	pdf := gofpdf.New("L", "mm", "A4", "")
-	pdf.SetMargins(10, 15, 10)
-	pdf.SetAutoPageBreak(true, 15)
+	pdf.SetMargins(16, 16, 16) // match HTML template: @page { margin: 16mm }
+	pdf.SetAutoPageBreak(true, 16)
 
 	setupArabicFont(pdf)
 	pdf.AddPage()
 
-	pageWidth := 277.0
+	// A4 landscape = 297mm wide; 297 - 16 - 16 = 265mm usable (matches HTML template)
+	pageWidth := 265.0
 	colCount := len(columns)
 	colWidths := computeColWidths(pageWidth, colCount)
 
+	// Body font: 9pt (≈ HTML 12px). Scale down for many columns.
 	baseFontSize := 9.0
 	switch {
 	case colCount > 20:
-		baseFontSize = 6.0
+		baseFontSize = 6.5
 	case colCount > 15:
-		baseFontSize = 7.0
+		baseFontSize = 7.5
 	case colCount > 10:
 		baseFontSize = 8.0
 	}
+	// Header font: 12pt (≈ HTML th { font-size: 16px })
+	headerFontSize := baseFontSize + 3.0
 
-	maxCellRunes := 30
-	switch {
-	case colCount > 20:
-		maxCellRunes = 12
-	case colCount > 15:
-		maxCellRunes = 18
-	case colCount > 10:
-		maxCellRunes = 22
-	}
+	// lineH: height of one wrapped text line — 1pt ≈ 0.353mm, add ~2mm padding
+	lineH := baseFontSize*0.353 + 2.2
+	headerH := headerFontSize*0.353 + 3.5 // taller header row, matches HTML th padding
+
+	const leftMargin = 16.0
+	const pageH = 210.0 // A4 height in mm
 
 	setFont := func(style string, size float64, text string) {
 		if arabicLoaded && (rtlMode || isRTL(text)) {
@@ -646,9 +647,9 @@ func (s *reportService) generatePDF(
 	}
 
 	drawHeader := func() {
-		setFont("B", baseFontSize, title)
-		pdf.SetFillColor(59, 130, 246)
-		pdf.SetTextColor(255, 255, 255)
+		setFont("B", headerFontSize, title)
+		pdf.SetFillColor(244, 246, 248) // #f4f6f8 — matches HTML thead background
+		pdf.SetTextColor(34, 34, 34)    // #222
 
 		orderedCols := columns
 		orderedWidths := colWidths
@@ -657,11 +658,19 @@ func (s *reportService) generatePDF(
 			orderedWidths = reverseWidths(colWidths)
 		}
 
+		startY := pdf.GetY()
+		curX := leftMargin
 		for i, col := range orderedCols {
-			label := truncateRunes(col.Label, maxCellRunes)
-			pdf.CellFormat(orderedWidths[i], 8, label, "1", 0, "C", true, 0, "")
+			// Fill + border for full header height
+			pdf.SetFillColor(244, 246, 248)
+			pdf.Rect(curX, startY, orderedWidths[i], headerH, "FD")
+			// Text centred with 1mm inset
+			pdf.SetXY(curX+1, startY+1)
+			setFont("B", headerFontSize, col.Label)
+			pdf.MultiCell(orderedWidths[i]-2, headerH-2, col.Label, "", "C", false)
+			curX += orderedWidths[i]
 		}
-		pdf.Ln(-1)
+		pdf.SetXY(leftMargin, startY+headerH)
 
 		pdf.SetTextColor(0, 0, 0)
 		pdf.SetFillColor(255, 255, 255)
@@ -691,35 +700,20 @@ func (s *reportService) generatePDF(
 	drawHeader()
 
 	// ── Rows ─────────────────────────────────────────────────────────────────
-	rowH := 7.0
-	if rtlMode {
-		rowH = 8.5
-	}
-	// Tighter rows when many columns
-	if colCount > 15 {
-		rowH = 6.0
-	}
+	// minRowH: a row must be at least this tall even when content is short
+	minRowH := lineH + 2
+	bottomBound := pageH - leftMargin // leave 16mm bottom margin
 
 	fill := false
 	for _, row := range data {
-		if pdf.GetY() > 185 {
-			pdf.AddPage()
-			drawHeader()
-		}
-
-		if fill {
-			pdf.SetFillColor(240, 245, 255)
-		} else {
-			pdf.SetFillColor(255, 255, 255)
-		}
-
+		// Build values without truncation — MultiCell will wrap long text
 		vals := make([]string, colCount)
 		for i, col := range columns {
 			v := row[col.Label]
 			if v == nil {
 				vals[i] = ""
 			} else {
-				vals[i] = truncateRunes(formatExportValue(col.Label, v), maxCellRunes)
+				vals[i] = formatExportValue(col.Label, v)
 			}
 		}
 
@@ -732,6 +726,38 @@ func (s *reportService) generatePDF(
 			renderVals = reverseStrings(vals)
 		}
 
+		// Calculate the tallest cell in this row to fix uniform row height
+		rowH := minRowH
+		for i := range renderCols {
+			setFont("", baseFontSize, renderVals[i])
+			nb := len(pdf.SplitLines([]byte(renderVals[i]), renderWidths[i]-2))
+			if nb < 1 {
+				nb = 1
+			}
+			needed := float64(nb)*lineH + 2
+			if needed > rowH {
+				rowH = needed
+			}
+		}
+
+		startY := pdf.GetY()
+
+		// Page break before drawing (check combined height)
+		if startY+rowH > bottomBound {
+			pdf.AddPage()
+			drawHeader()
+			startY = pdf.GetY()
+		}
+
+		// Alternating row background
+		var fillR, fillG, fillB int
+		if fill {
+			fillR, fillG, fillB = 240, 245, 255
+		} else {
+			fillR, fillG, fillB = 255, 255, 255
+		}
+
+		curX := leftMargin
 		for i := range renderCols {
 			val := renderVals[i]
 			setFont("", baseFontSize, val)
@@ -739,9 +765,18 @@ func (s *reportService) generatePDF(
 			if rtlMode || isRTL(val) {
 				align = "R"
 			}
-			pdf.CellFormat(renderWidths[i], rowH, val, "1", 0, align, fill, 0, "")
+			// Background fill
+			pdf.SetFillColor(fillR, fillG, fillB)
+			pdf.Rect(curX, startY, renderWidths[i], rowH, "F")
+			// Border (border: 1px solid #333)
+			pdf.SetDrawColor(51, 51, 51)
+			pdf.Rect(curX, startY, renderWidths[i], rowH, "D")
+			// Text with 1mm inset on each side so it doesn't touch the border
+			pdf.SetXY(curX+1, startY+1)
+			pdf.MultiCell(renderWidths[i]-2, lineH, val, "", align, false)
+			curX += renderWidths[i]
 		}
-		pdf.Ln(-1)
+		pdf.SetXY(leftMargin, startY+rowH)
 		fill = !fill
 	}
 
@@ -1003,8 +1038,8 @@ func drawFiltersAndStats(
 	const (
 		lineH     = 5.5
 		padding   = 3.0
-		leftX     = 10.0
-		pageWidth = 277.0
+		leftX     = 16.0  // match left margin
+		pageWidth = 265.0 // 297 - 16 - 16 (A4 landscape with 16mm margins)
 		rightColW = 55.0
 	)
 	leftColW := pageWidth - rightColW - 4
