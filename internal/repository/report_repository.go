@@ -19,9 +19,17 @@ import (
 )
 
 // TransitionPair represents a from→to state name pair for transition lookups.
+// TransitionPair represents a from→to state name pair loaded from the DB.
+// FromStateType ("initial", "normal", "terminal") lets callers split pairs
+// by semantic category (e.g. reopen = terminal → Under Resolution).
+// Roles is the comma-split list of role names allowed to execute this transition.
 type TransitionPair struct {
-	From string
-	To   string
+	Name          string
+	Code          string // wt.code — used to build dynamic field names like {code}_at
+	From          string
+	To            string
+	FromStateType string
+	Roles         []string
 }
 
 type TransitionLinkedResult struct {
@@ -32,43 +40,14 @@ type TransitionLinkedResult struct {
 	ToStateName string
 }
 
-var TransitionPairsOld = struct {
-	Rejected        TransitionPair
-	UnderResolution TransitionPair
-	InProgress      TransitionPair
-	ReadyToClose    TransitionPair
-	Closed          TransitionPair
-	Reopened        TransitionPair
-}{
-	Rejected:        TransitionPair{From: "Open", To: "Rejected"},
-	UnderResolution: TransitionPair{From: "In Progress", To: "Under Resolution"},
-	InProgress:      TransitionPair{From: "Open", To: "In Progress"},
-	ReadyToClose:    TransitionPair{From: "In Progress", To: "Ready To Close"},
-	Closed:          TransitionPair{From: "Ready To Close", To: "Closed"},
-	Reopened:        TransitionPair{From: "Closed", To: "Open"},
-}
-
-var TransitionPairs = struct {
-	Rejected        []TransitionPair
-	UnderResolution []TransitionPair
-	ReadyToClose    []TransitionPair
-	Closed          []TransitionPair
-	Reopened        []TransitionPair
-}{
-	Rejected: []TransitionPair{{From: "Under Resolution", To: "Rejected"}},
-	UnderResolution: []TransitionPair{
-		{From: "New Incident", To: "Under Resolution"},
-		{From: "Rejected", To: "Under Resolution"},
-	},
-	ReadyToClose: []TransitionPair{{From: "Under Resolution", To: "Ready To Close"}},
-	Closed: []TransitionPair{
-		{From: "Ready To Close", To: "Closed"},
-		{From: "New Incident", To: "Closed"},
-	},
-	Reopened: []TransitionPair{
-		{From: "Ready To Close", To: "Under Resolution"},
-		{From: "Closed", To: "Under Resolution"},
-	},
+// TransitionEnrichment holds all per-incident enrichment for one workflow transition.
+// Keyed by incident_id → transition_code in the map returned by fetchTransitionEnrichments.
+type TransitionEnrichment struct {
+	PerformedBy    string
+	TransitionedAt string
+	Comment        string
+	Feedback       string
+	Attachments    []string
 }
 
 type ReportRepository interface {
@@ -695,9 +674,7 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			"classifications.name as classification_name, " +
 			"departments.name as department_name, " +
 			"locations.name as location_name, " +
-			"incident_attachments.id as attachment_id, " +
 			"workflows.name as workflow_name").
-		Joins("LEFT JOIN incident_attachments ON incidents.id = incident_attachments.incident_id").
 		Offset(offset).
 		Limit(limit).
 		Rows()
@@ -828,37 +805,72 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			}
 		}
 
+		// Load workflow transition pairs (with from-state type and allowed roles) from
+		// the DB once per report run. Keys are to-state names (e.g. "Rejected", "Closed").
+		// "Under Resolution" pairs are split into:
+		//   underResPairs  – originate from non-terminal states (initial assignment / approval)
+		//   reopenPairs    – originate from terminal states (Ready To Close, Closed → reopen)
+		dynPairs, _ := r.loadDynamicTransitionPairs(ctx)
+		var underResPairs, reopenPairs []TransitionPair
+		for _, p := range dynPairs["Under Resolution"] {
+			if p.FromStateType == "terminal" {
+				reopenPairs = append(reopenPairs, p)
+			} else {
+				underResPairs = append(underResPairs, p)
+			}
+		}
+
+		// Build by-code index across all to-states for dynamic {code}_* field detection.
+		byCode := map[string][]TransitionPair{}
+		for _, pairs := range dynPairs {
+			for _, p := range pairs {
+				if p.Code != "" {
+					byCode[p.Code] = append(byCode[p.Code], p)
+				}
+			}
+		}
+		dynSuffixes := []string{"_at", "_by", "_comment", "_feedback", "_attachment", "_attachments"}
+		neededCodes := map[string]bool{}
+		for _, col := range reqColumns {
+			for code := range byCode {
+				for _, suf := range dynSuffixes {
+					if col.Field == code+suf {
+						neededCodes[code] = true
+					}
+				}
+			}
+		}
+		var transEnrichMap map[string]map[string]TransitionEnrichment
+		if len(neededCodes) > 0 {
+			transEnrichMap, _ = r.fetchTransitionEnrichments(ctx, incidentIDs, protocol, hostname, token)
+		}
+
 		// 1. Per-status transition data – only fetched when the matching
 		//    By/Date column is actually requested.
 		var rejectedNames, rejectedDates map[string]string
-		if hasCol("rejected_by", "rejected_date") {
-			rejectedNames, rejectedDates, _ = r.fetchRejectedData(ctx, incidentIDs)
+		if hasCol("rejected_by", "rejected_date", "rejected_at") {
+			rejectedNames, rejectedDates, _ = r.fetchMultiPairTransitionData(ctx, dynPairs["Rejected"], incidentIDs)
 		}
 
 		var underResNames, underResDates map[string]string
-		if hasCol("under_resolution_by", "under_resolution_date") {
-			underResNames, underResDates, _ = r.fetchUnderResolutionData(ctx, incidentIDs)
+		if hasCol("under_resolution_by", "under_resolution_date", "approved_by", "approved_at", "approved_time") {
+			underResNames, underResDates, _ = r.fetchMultiPairTransitionData(ctx, underResPairs, incidentIDs)
 		}
-
-		// var inProgressNames, inProgressDates map[string]string
-		// if hasCol("in_progress_by", "in_progress_date") {
-		// 	inProgressNames, inProgressDates, _ = r.fetchInProgressData(ctx, incidentIDs)
-		// }
 
 		var readyToCloseNames, readyToCloseDates map[string]string
 		if hasCol("ready_to_close_by", "ready_to_close_date") {
-			readyToCloseNames, readyToCloseDates, _ = r.fetchReadyToCloseData(ctx, incidentIDs)
+			readyToCloseNames, readyToCloseDates, _ = r.fetchMultiPairTransitionData(ctx, dynPairs["Ready To Close"], incidentIDs)
 		}
 
 		var closedNames, closedDates map[string]string
 		if hasCol("closed_by", "closed_date", "contractor", "contractor_user", "solved_by") {
-			closedNames, closedDates, _ = r.fetchClosedData(ctx, incidentIDs)
+			closedNames, closedDates, _ = r.fetchMultiPairTransitionData(ctx, dynPairs["Closed"], incidentIDs)
 		}
 
 		// 2. Reopened By + Reopen Date
 		var reopenedByNames, reopenDates map[string]string
 		if hasCol("reopened_by", "reopen_date") {
-			reopenedByNames, reopenDates, _ = r.fetchReopenData(ctx, incidentIDs)
+			reopenedByNames, reopenDates, _ = r.fetchMultiPairTransitionData(ctx, reopenPairs, incidentIDs)
 		}
 
 		// 3. Escalation Date
@@ -922,22 +934,16 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			underResFeedbackMap, _ = r.fetchFeedbackDataByState(ctx, "Under Resolution", incidentIDs)
 		}
 
-		// In Progress feedback
-		var inProgressFeedbackMap map[string][]TransitionLinkedResult
-		if hasCol("in_progress_feedback") {
-			inProgressFeedbackMap, _ = r.fetchFeedbackDataByState(ctx, "In Progress", incidentIDs)
-		}
-
 		// Ready To Close feedback
 		var readyToCloseFeedbackMap map[string][]TransitionLinkedResult
 		if hasCol("ready_to_close_feedback") {
 			readyToCloseFeedbackMap, _ = r.fetchFeedbackDataByState(ctx, "Ready To Close", incidentIDs)
 		}
 
-		// Reopened feedback
+		// Reopened feedback — reopen transitions land in "Under Resolution"
 		var reopenedFeedbackMap map[string][]TransitionLinkedResult
 		if hasCol("reopened_feedback") {
-			reopenedFeedbackMap, _ = r.fetchFeedbackDataByState(ctx, "Reopened", incidentIDs)
+			reopenedFeedbackMap, _ = r.fetchFeedbackDataByState(ctx, "Under Resolution", incidentIDs)
 		}
 		// 10. Comment
 		// in the bulk enrichment block, alongside other hasCol checks
@@ -976,10 +982,10 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			readyToCloseCommentMap, _ = r.fetchCommentDataByState(ctx, "Ready To Close", incidentIDs)
 		}
 
-		// Reopened feedback
+		// Reopened comment — reopen transitions land in "Under Resolution"
 		var reopenedCommentMap map[string][]TransitionLinkedResult
 		if hasCol("reopened_comment") {
-			reopenedCommentMap, _ = r.fetchCommentDataByState(ctx, "Reopened", incidentIDs)
+			reopenedCommentMap, _ = r.fetchCommentDataByState(ctx, "Under Resolution", incidentIDs)
 		}
 
 		// @todo urgent update the incident id to location/classification id
@@ -999,7 +1005,7 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 		if hasCol("full_classification") {
 			classificationFullPathMap, err = r.fetchClassificationPaths(ctx, classificationIDs)
 			if err != nil {
-				log.Print("error fetching classification full name", locationFullPathMap)
+				log.Print("error fetching classification full name", classificationFullPathMap)
 			}
 		}
 
@@ -1010,10 +1016,6 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			}
 			locationID := IDStr(row["location_id"])
 			classificationID := IDStr(row["classification_id"])
-			if locationID == "" || classificationID == "" {
-				// continue
-				log.Printf("location is empyy %s class is empty %s", locationID, classificationID)
-			}
 			// ── Per-status By / Date ─────────────────────────────────────────────
 
 			// Closed
@@ -1040,9 +1042,8 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			closedDate := closedDates[incidentID]
 			if closedDate != "" {
 				if createdAt, ok := row["created_at"].(string); ok && createdAt != "" {
-					totalClosingTime, err := utils.CalculateDuration(createdAt, closedDate)
-					if err == nil {
-						setField(results[i], "total_closing_duration", totalClosingTime)
+					if dur, err := utils.CalculateDuration(createdAt, closedDate); err == nil {
+						setField(results[i], "total_closing_duration", dur)
 					} else {
 						setField(results[i], "total_closing_duration", nil)
 					}
@@ -1057,6 +1058,7 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			}
 			if date := rejectedDates[incidentID]; date != "" {
 				setField(results[i], "rejected_date", date)
+				setField(results[i], "rejected_at", date)
 			}
 
 			// Under Resolution
@@ -1144,11 +1146,6 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			// Under Resolution feedback
 			if feedbacks, ok := underResFeedbackMap[incidentID]; ok && len(feedbacks) > 0 {
 				setField(results[i], "under_resolution_feedback", feedbacks[0].Comment)
-			}
-
-			// In Progress feedback
-			if feedbacks, ok := inProgressFeedbackMap[incidentID]; ok && len(feedbacks) > 0 {
-				setField(results[i], "in_progress_feedback", feedbacks[0].Comment)
 			}
 
 			// Ready To Close feedback
@@ -1250,6 +1247,34 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 				setField(results[i], "comment_array", raw)
 			}
 
+			// Dynamic {code}_* enrichments from fetchTransitionEnrichments
+			if transEnrichMap != nil {
+				if codeMap, ok := transEnrichMap[incidentID]; ok {
+					for code, enrich := range codeMap {
+						if !neededCodes[code] {
+							continue
+						}
+						if enrich.PerformedBy != "" {
+							setField(results[i], code+"_by", enrich.PerformedBy)
+						}
+						if enrich.TransitionedAt != "" {
+							setField(results[i], code+"_at", enrich.TransitionedAt)
+							setField(results[i], code+"_date", enrich.TransitionedAt)
+						}
+						if enrich.Comment != "" {
+							setField(results[i], code+"_comment", enrich.Comment)
+						}
+						if enrich.Feedback != "" {
+							setField(results[i], code+"_feedback", enrich.Feedback)
+						}
+						if len(enrich.Attachments) > 0 {
+							setField(results[i], code+"_attachment", strings.Join(enrich.Attachments, " | "))
+							setField(results[i], code+"_attachments", enrich.Attachments)
+						}
+					}
+				}
+			}
+
 			_ = row
 		}
 	}
@@ -1313,7 +1338,7 @@ func (r *reportRepository) fetchTransitionLinkedData(
             f.created_at::text,
             COALESCE(tws.name, '')                                              AS to_state_name
         FROM ` + table + ` f
-        INNER JOIN users u ON u.id = f.` + userIDCol + `
+        LEFT JOIN users u ON u.id = f.` + userIDCol + `
         LEFT JOIN incident_transition_histories tr ON tr.id = f.transition_history_id
         LEFT JOIN workflow_states tws ON tws.id = tr.to_state_id
         WHERE f.incident_id::text IN (?)
@@ -1427,26 +1452,6 @@ func (r *reportRepository) fetchMultiPairTransitionData(
 		}
 	}
 	return
-}
-
-func (r *reportRepository) fetchRejectedData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
-	return r.fetchMultiPairTransitionData(ctx, TransitionPairs.Rejected, ids)
-}
-
-func (r *reportRepository) fetchUnderResolutionData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
-	return r.fetchMultiPairTransitionData(ctx, TransitionPairs.UnderResolution, ids)
-}
-
-func (r *reportRepository) fetchReadyToCloseData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
-	return r.fetchMultiPairTransitionData(ctx, TransitionPairs.ReadyToClose, ids)
-}
-
-func (r *reportRepository) fetchClosedData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
-	return r.fetchMultiPairTransitionData(ctx, TransitionPairs.Closed, ids)
-}
-
-func (r *reportRepository) fetchReopenData(ctx context.Context, ids []string) (map[string]string, map[string]string, error) {
-	return r.fetchMultiPairTransitionData(ctx, TransitionPairs.Reopened, ids)
 }
 
 // ── full path queries ───────────────────────────────────────────────────
@@ -1611,7 +1616,7 @@ func (r *reportRepository) fetchFeedbackData(
 			f.created_at::text,
 			COALESCE(tws.name, '')                                              AS to_state_name
 		FROM incident_feedbacks f
-		INNER JOIN users u ON u.id = f.created_by_id
+		LEFT JOIN users u ON u.id = f.created_by_id
 		LEFT JOIN incident_transition_histories tr ON tr.id = f.transition_history_id
 		LEFT JOIN workflow_states tws ON tws.id = tr.to_state_id
 		WHERE f.incident_id::text IN (?)
@@ -1656,11 +1661,12 @@ func (r *reportRepository) fetchCommentData(
             f.created_at::text,
             COALESCE(tws.name, '')                                              AS to_state_name
         FROM incident_comments f
-        INNER JOIN users u ON u.id = f.author_id                   -- FIXED: was created_by_id
+        LEFT JOIN users u ON u.id = f.author_id
         LEFT JOIN incident_transition_histories tr ON tr.id = f.transition_history_id
         LEFT JOIN workflow_states tws ON tws.id = tr.to_state_id
         WHERE f.incident_id::text IN (?)
-          AND f.is_internal = false                                 -- FIXED: filter internal
+          AND f.is_internal = false
+          AND f.deleted_at IS NULL
         ORDER BY f.incident_id, f.created_at ASC`
 
 	rows, err := r.db.WithContext(ctx).Raw(query, incidentIDs).Rows()
@@ -1696,11 +1702,16 @@ func (r *reportRepository) fetchContractorComments(ctx context.Context, incident
 		SELECT DISTINCT ON (ic.incident_id)
 			ic.incident_id::text,
 			ic.content
-		FROM incident_comments ic
-		WHERE ic.incident_id IN (?)
-		  AND ic.deleted_at IS NULL
-		  AND ic.transition_history_id IS NOT NULL
-		ORDER BY ic.incident_id, ic.created_at DESC`
+			FROM incident_comments ic
+			JOIN incident_transition_histories th ON th.id = ic.transition_history_id
+			INNER JOIN workflow_states fws ON fws.id = th.from_state_id
+			INNER JOIN workflow_states tws ON tws.id = th.to_state_id
+			INNER JOIN users u ON u.id = th.performed_by_id
+			WHERE ic.incident_id IN (?)
+			  AND fws.name = 'Under Resolution'
+			  AND tws.name = 'Ready To Close'
+			  AND ic.deleted_at IS NULL
+			  AND ic.is_internal = false`
 
 	rows, err := r.db.WithContext(ctx).Raw(query, incidentIDs).Rows()
 	if err != nil {
@@ -1749,9 +1760,14 @@ func (r *reportRepository) fetchAfterAttachments(ctx context.Context, incidentID
 	query := `
 		SELECT ia.incident_id::text, ia.id::text
 		FROM incident_attachments ia
-		WHERE ia.incident_id IN (?)
-		  AND ia.deleted_at IS NULL
-		  AND ia.transition_history_id IS NOT NULL
+		JOIN incident_transition_histories th ON th.id = ia.transition_history_id
+		INNER JOIN workflow_states fws ON fws.id = th.from_state_id
+		INNER JOIN workflow_states tws ON tws.id = th.to_state_id
+		WHERE tws.name = 'Ready To Close'
+			AND fws.name = 'Under Resolution'
+		  	AND ia.incident_id IN (?)
+		  	AND ia.deleted_at IS NULL
+		  	AND ia.transition_history_id IS NOT NULL
 		ORDER BY ia.incident_id, ia.created_at ASC`
 
 	return r.scanAttachmentURLs(ctx, query, incidentIDs, protocol, hostname, token)
@@ -1871,6 +1887,198 @@ func (r *reportRepository) fetchEscalationDates(ctx context.Context, incidentIDs
 			continue
 		}
 		result[incidentID] = date
+	}
+	return result, nil
+}
+
+// fetchTransitionEnrichments returns per-(incident, transition_code) enrichment data
+// covering: performer name & timestamp, first non-internal comment, first feedback,
+// and all attachment preview URLs. Only called when at least one {code}_* column is
+// requested by the report.
+func (r *reportRepository) fetchTransitionEnrichments(
+	ctx context.Context,
+	incidentIDs []string,
+	protocol, hostname, token string,
+) (map[string]map[string]TransitionEnrichment, error) {
+	result := map[string]map[string]TransitionEnrichment{}
+	if len(incidentIDs) == 0 {
+		return result, nil
+	}
+
+	ensure := func(iID, code string) {
+		if result[iID] == nil {
+			result[iID] = map[string]TransitionEnrichment{}
+		}
+	}
+
+	// Query 1 — performers & timestamps (most-recent per incident+code)
+	q1 := `
+		SELECT DISTINCT ON (ith.incident_id, wt.code)
+			ith.incident_id::text,
+			wt.code,
+			TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')) AS performer,
+			ith.transitioned_at::text
+		FROM incident_transition_histories ith
+		INNER JOIN workflow_transitions wt ON wt.id = ith.transition_id AND wt.deleted_at IS NULL
+		LEFT JOIN users u ON u.id = ith.performed_by_id
+		WHERE ith.incident_id::text IN (?)
+		  AND ith.is_system_action = false
+		ORDER BY ith.incident_id, wt.code, ith.transitioned_at DESC`
+	rows1, err := r.db.WithContext(ctx).Raw(q1, incidentIDs).Rows()
+	if err != nil {
+		return nil, fmt.Errorf("fetchTransitionEnrichments performers: %w", err)
+	}
+	defer rows1.Close()
+	for rows1.Next() {
+		var iID, code, performer, transAt string
+		if err := rows1.Scan(&iID, &code, &performer, &transAt); err != nil {
+			continue
+		}
+		ensure(iID, code)
+		e := result[iID][code]
+		e.PerformedBy = performer
+		e.TransitionedAt = transAt
+		result[iID][code] = e
+	}
+
+	// Query 2 — first non-internal comment per incident+code
+	q2 := `
+		SELECT DISTINCT ON (c.incident_id, wt.code)
+			c.incident_id::text,
+			wt.code,
+			COALESCE(c.content, '') AS comment
+		FROM incident_comments c
+		INNER JOIN incident_transition_histories ith ON ith.id = c.transition_history_id
+		INNER JOIN workflow_transitions wt ON wt.id = ith.transition_id AND wt.deleted_at IS NULL
+		WHERE c.incident_id::text IN (?)
+		  AND c.is_internal = false
+		  AND c.deleted_at IS NULL
+		ORDER BY c.incident_id, wt.code, c.created_at ASC`
+	rows2, err := r.db.WithContext(ctx).Raw(q2, incidentIDs).Rows()
+	if err != nil {
+		return nil, fmt.Errorf("fetchTransitionEnrichments comments: %w", err)
+	}
+	defer rows2.Close()
+	for rows2.Next() {
+		var iID, code, comment string
+		if err := rows2.Scan(&iID, &code, &comment); err != nil {
+			continue
+		}
+		ensure(iID, code)
+		e := result[iID][code]
+		e.Comment = comment
+		result[iID][code] = e
+	}
+
+	// Query 3 — first feedback per incident+code
+	q3 := `
+		SELECT DISTINCT ON (f.incident_id, wt.code)
+			f.incident_id::text,
+			wt.code,
+			COALESCE(f.comment, '') AS feedback
+		FROM incident_feedbacks f
+		INNER JOIN incident_transition_histories ith ON ith.id = f.transition_history_id
+		INNER JOIN workflow_transitions wt ON wt.id = ith.transition_id AND wt.deleted_at IS NULL
+		WHERE f.incident_id::text IN (?)
+		ORDER BY f.incident_id, wt.code, f.created_at ASC`
+	rows3, err := r.db.WithContext(ctx).Raw(q3, incidentIDs).Rows()
+	if err != nil {
+		return nil, fmt.Errorf("fetchTransitionEnrichments feedbacks: %w", err)
+	}
+	defer rows3.Close()
+	for rows3.Next() {
+		var iID, code, feedback string
+		if err := rows3.Scan(&iID, &code, &feedback); err != nil {
+			continue
+		}
+		ensure(iID, code)
+		e := result[iID][code]
+		e.Feedback = feedback
+		result[iID][code] = e
+	}
+
+	// Query 4 — all attachments per incident+code (build preview URLs)
+	if hostname != "" {
+		q4 := `
+			SELECT
+				ia.incident_id::text,
+				wt.code,
+				ia.id::text AS attachment_id
+			FROM incident_attachments ia
+			INNER JOIN incident_transition_histories ith ON ith.id = ia.transition_history_id
+			INNER JOIN workflow_transitions wt ON wt.id = ith.transition_id AND wt.deleted_at IS NULL
+			WHERE ia.incident_id::text IN (?)
+			  AND ia.deleted_at IS NULL
+			ORDER BY ia.incident_id, wt.code, ia.created_at ASC`
+		rows4, err := r.db.WithContext(ctx).Raw(q4, incidentIDs).Rows()
+		if err != nil {
+			return nil, fmt.Errorf("fetchTransitionEnrichments attachments: %w", err)
+		}
+		defer rows4.Close()
+		for rows4.Next() {
+			var iID, code, attachID string
+			if err := rows4.Scan(&iID, &code, &attachID); err != nil {
+				continue
+			}
+			ensure(iID, code)
+			url := protocol + "://" + hostname + "/api/v1/attachments/" + attachID + "/preview?token=" + token
+			e := result[iID][code]
+			e.Attachments = append(e.Attachments, url)
+			result[iID][code] = e
+		}
+	}
+
+	return result, nil
+}
+
+// loadDynamicTransitionPairs queries workflow_transitions joined with workflow_states
+// and transition_allowed_roles to build a map of to-state-name → []TransitionPair.
+// Each TransitionPair carries the from-state name and the comma-separated roles
+// that are allowed to execute that transition.
+// Returns the map so callers can replace the hardcoded TransitionPairs variable.
+func (r *reportRepository) loadDynamicTransitionPairs(ctx context.Context) (map[string][]TransitionPair, error) {
+	query := `
+		SELECT
+			wt.name                                                                  AS transition_name,
+			wt.code                                                                  AS transition_code,
+			fws.name                                                                 AS from_state,
+			COALESCE(fws.state_type, 'normal')                                       AS from_state_type,
+			tws.name                                                                 AS to_state,
+			COALESCE(STRING_AGG(DISTINCT r.name, ',' ORDER BY r.name), '')          AS allowed_roles
+		FROM workflow_transitions wt
+		INNER JOIN workflow_states fws ON fws.id = wt.from_state_id AND fws.deleted_at IS NULL
+		INNER JOIN workflow_states tws ON tws.id = wt.to_state_id   AND tws.deleted_at IS NULL
+		LEFT  JOIN transition_allowed_roles tar ON tar.workflow_transition_id = wt.id
+		LEFT  JOIN roles r ON r.id = tar.role_id AND r.deleted_at IS NULL AND r.is_active = true
+		WHERE wt.deleted_at IS NULL
+		  AND wt.is_active  = true
+		GROUP BY wt.name, wt.code, fws.name, fws.state_type, tws.name
+		ORDER BY tws.name, fws.name`
+
+	rows, err := r.db.WithContext(ctx).Raw(query).Rows()
+	if err != nil {
+		return nil, fmt.Errorf("loadDynamicTransitionPairs: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string][]TransitionPair)
+	for rows.Next() {
+		var transName, transCode, fromState, fromStateType, toState, rolesStr string
+		if err := rows.Scan(&transName, &transCode, &fromState, &fromStateType, &toState, &rolesStr); err != nil {
+			continue
+		}
+		var roles []string
+		if rolesStr != "" {
+			roles = strings.Split(rolesStr, ",")
+		}
+		result[toState] = append(result[toState], TransitionPair{
+			Name:          transName,
+			Code:          transCode,
+			From:          fromState,
+			To:            toState,
+			FromStateType: fromStateType,
+			Roles:         roles,
+		})
 	}
 	return result, nil
 }
@@ -2615,7 +2823,8 @@ func (r *reportRepository) ExecuteLocationCountQuery(ctx context.Context, filter
 		q := r.db.WithContext(ctx).Debug().
 			Table("locations").
 			Joins("LEFT JOIN locations parent_loc ON parent_loc.id = locations.parent_id").
-			Joins("LEFT JOIN incidents ON incidents.location_id = locations.id AND incidents.deleted_at IS NULL")
+			Joins("LEFT JOIN incidents ON incidents.location_id = locations.id AND incidents.deleted_at IS NULL").
+			Joins("LEFT JOIN classifications class ON class.id = incidents.classification_id")
 		return r.applyFilters(ctx, q, filters)
 	}
 	var total int64
@@ -2664,6 +2873,7 @@ func (r *reportRepository) ExecuteLocationCountByStatusQuery(ctx context.Context
 			Table("locations").
 			Joins("LEFT JOIN locations parent_loc ON parent_loc.id = locations.parent_id").
 			Joins("LEFT JOIN incidents ON incidents.location_id = locations.id AND incidents.deleted_at IS NULL").
+			Joins("LEFT JOIN classifications class ON class.id = incidents.classification_id").
 			Joins("LEFT JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
 		return r.applyFilters(ctx, q, filters)
 	}
@@ -2749,8 +2959,7 @@ func (r *reportRepository) ExecuteLocationCountByStatusQuery(ctx context.Context
 		}
 		row["total"] = clsTotal
 		row["incident_count"] = clsTotal
-		row["percentage"] = percentage // e.g. 23.45 means this location is 23.45% of all incidents
-		log.Print("row status report  : ", clsTotal, percentage)
+		row["percentage"] = fmt.Sprintf("%.2f%%", percentage) // e.g. 23.45 means this location is 23.45% of all incidents
 		currentRow := buildCountRow(row, reqColumns, defaults)
 		results = append(results, currentRow)
 	}
@@ -2765,7 +2974,8 @@ func (r *reportRepository) ExecuteClassificationCountQuery(ctx context.Context, 
 		q := r.db.WithContext(ctx).
 			Table("classifications").
 			Joins("LEFT JOIN classifications parent_cls ON parent_cls.id = classifications.parent_id").
-			Joins("LEFT JOIN incidents ON incidents.classification_id = classifications.id AND incidents.deleted_at IS NULL")
+			Joins("LEFT JOIN incidents ON incidents.classification_id = classifications.id AND incidents.deleted_at IS NULL").
+			Joins("LEFT JOIN locations loc ON loc.id = incidents.location_id")
 		return r.applyFilters(ctx, q, filters)
 	}
 	var total int64
@@ -2813,6 +3023,7 @@ func (r *reportRepository) ExecuteClassificationCountByStatusQuery(ctx context.C
 			Table("classifications").
 			Joins("LEFT JOIN classifications parent_cls ON parent_cls.id = classifications.parent_id").
 			Joins("LEFT JOIN incidents ON incidents.classification_id = classifications.id AND incidents.deleted_at IS NULL").
+			Joins("LEFT JOIN locations loc ON loc.id = incidents.location_id").
 			Joins("LEFT JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
 		return r.applyFilters(ctx, q, filters)
 	}
