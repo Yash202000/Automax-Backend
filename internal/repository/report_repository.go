@@ -271,6 +271,8 @@ var incidentFilterFields = map[string]string{
 	"assignee_username":   "assignees.username",
 	"assignee_first_name": "assignees.first_name",
 	"assignee_last_name":  "assignees.last_name",
+	// ── Subquery-handled (empty col = silently skipped by applyFilters) ───────
+	"workflow_transition_name": "", // handled via IN-subquery in ExecuteIncidentQuery
 }
 
 // requestFilterFields reuses the incident columns (same table, filtered by record_type).
@@ -382,11 +384,12 @@ func init() {
 	}
 
 	locationSpecific := map[string]string{
-		"location_id":       "locations.id",
-		"location_name":     "locations.name",
-		"parent_id":         "locations.parent_id",
-		"classification_id": "incidents.classification_id",
-		"department_id":     "incidents.department_id",
+		"location_id":         "locations.id",
+		"location_name":       "locations.name",
+		"parent_id":           "locations.parent_id",
+		"classification_id":   "incidents.classification_id",
+		"classification_name": "class.name",
+		"department_id":       "incidents.department_id",
 	}
 	locationCountFilterFields = mergeFilterFields(incidentCountFilterFields, locationSpecific)
 	locationCountByStatusFilterFields = mergeFilterFields(incidentCountFilterFields, locationSpecific, statusFields)
@@ -396,6 +399,7 @@ func init() {
 		"classification_name": "classifications.name",
 		"parent_id":           "classifications.parent_id",
 		"location_id":         "incidents.location_id",
+		"location_name":       "loc.name",
 		"department_id":       "incidents.department_id",
 	}
 	classificationCountFilterFields = mergeFilterFields(incidentCountFilterFields, classificationSpecific)
@@ -479,9 +483,12 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 
 	for _, f := range filters {
 		col, ok := fieldMap[f.Field]
-		if !ok || col == "" {
+		if !ok {
 			log.Println("skipping unknown filter field:", f.Field, "for data source:", dataSource)
 			continue
+		}
+		if col == "" {
+			continue // silently skip; handled by the query function directly (e.g. subquery filters)
 		}
 		if f.Value == nil {
 			log.Println("skipping filter with nil value for field:", f.Field)
@@ -650,6 +657,37 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			Joins("LEFT JOIN departments ON incidents.department_id = departments.id").
 			Joins("LEFT JOIN locations ON incidents.location_id = locations.id").
 			Joins("LEFT JOIN workflows ON incidents.workflow_id = workflows.id")
+
+		// workflow_transition_name: optional filter — restricts to incidents that have
+		// passed through at least one matching transition (name or code match).
+		// Uses an IN subquery instead of a JOIN to avoid row fan-out.
+		const transSubq = `incidents.id IN (
+			SELECT ith.incident_id
+			FROM incident_transition_histories ith
+			INNER JOIN workflow_transitions wt ON wt.id = ith.transition_id AND wt.deleted_at IS NULL
+			WHERE ith.is_system_action = false`
+		for _, f := range filters {
+			if f.Field != "workflow_transition_name" || f.Value == nil {
+				continue
+			}
+			switch f.Operator {
+			case "equals":
+				if isSlice(f.Value) {
+					q = q.Where(transSubq+" AND wt.name IN (?))", f.Value)
+				} else {
+					q = q.Where(transSubq+" AND wt.name = ?)", f.Value)
+				}
+			case "in":
+				q = q.Where(transSubq+" AND wt.name IN (?))", f.Value)
+			case "contains":
+				q = q.Where(transSubq+" AND wt.name ILIKE ?)", "%"+f.Value.(string)+"%")
+			case "starts_with":
+				q = q.Where(transSubq+" AND wt.name ILIKE ?)", f.Value.(string)+"%")
+			case "ends_with":
+				q = q.Where(transSubq+" AND wt.name ILIKE ?)", "%"+f.Value.(string))
+			}
+		}
+
 		return r.applyFilters(ctx, q, filters)
 	}
 
@@ -863,7 +901,7 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 		}
 
 		var closedNames, closedDates map[string]string
-		if hasCol("closed_by", "closed_date", "contractor", "contractor_user", "solved_by") {
+		if hasCol("closed_by", "closed_date", "contractor", "contractor_user", "solved_by", "total_closing_duration") {
 			closedNames, closedDates, _ = r.fetchMultiPairTransitionData(ctx, dynPairs["Closed"], incidentIDs)
 		}
 
@@ -1038,8 +1076,12 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 				setField(results[i], "approved_at", date)
 			}
 
-			// total_closing_duration — FIXED: guard empty date
+			// total_closing_duration
 			closedDate := closedDates[incidentID]
+			// fetchMultiPairTransitionData may join multiple matches with " | "; use only the first.
+			if idx := strings.Index(closedDate, " | "); idx >= 0 {
+				closedDate = closedDate[:idx]
+			}
 			if closedDate != "" {
 				if createdAt, ok := row["created_at"].(string); ok && createdAt != "" {
 					if dur, err := utils.CalculateDuration(createdAt, closedDate); err == nil {
@@ -2817,6 +2859,8 @@ func buildCountRow(rawRow map[string]interface{}, reqColumns []models.ColumnFiel
 
 // ── Location count (without status) ──────────────────────────────────────────
 // Output col.Field names: location_name | parent_location_name | incident_count
+// The classifications JOIN is kept for filter support (classification_id / classification_name)
+// but is not part of the grouping — one row per location.
 func (r *reportRepository) ExecuteLocationCountQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
 	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
 	buildBase := func() *gorm.DB {
@@ -2843,45 +2887,106 @@ func (r *reportRepository) ExecuteLocationCountQuery(ctx context.Context, filter
 	}
 	offset := (page - 1) * limit
 	rows, err := buildBase().Debug().
-		Select("locations.name AS location_name, COALESCE(parent_loc.name, '') AS parent_location_name, COUNT(incidents.id) AS incident_count").
+		Select("locations.id::text AS location_id, locations.name AS location_name, COALESCE(parent_loc.name, '') AS parent_location_name, COUNT(incidents.id) AS incident_count").
 		Group("locations.id, locations.name, parent_loc.name").
 		Order(orderClause).Offset(offset).Limit(limit).Rows()
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
-	defaults := map[string]string{"location_name": "Location", "parent_location_name": "Parent Location", "incident_count": "No. of Incidents"}
-	var results []map[string]interface{}
+
+	type locCountRow struct {
+		id, name, parent string
+		count            int64
+	}
+	var raw []locCountRow
+	var allIDs []string
 	for rows.Next() {
-		var locationName, parentName string
-		var count int64
-		if err := rows.Scan(&locationName, &parentName, &count); err != nil {
+		var r locCountRow
+		if err := rows.Scan(&r.id, &r.name, &r.parent, &r.count); err != nil {
 			continue
 		}
-		results = append(results, buildCountRow(map[string]interface{}{"location_name": locationName, "parent_location_name": parentName, "incident_count": count}, reqColumns, defaults))
+		raw = append(raw, r)
+		allIDs = append(allIDs, r.id)
+	}
 
+	pathMap, _ := r.fetchLocationPaths(ctx, allIDs)
+	defaults := map[string]string{"location_name": "Location", "parent_location_name": "Parent Location", "incident_count": "No. of Incidents"}
+	var results []map[string]interface{}
+	for _, loc := range raw {
+		displayName := pathMap[loc.id]
+		if displayName == "" {
+			displayName = loc.name
+		}
+		results = append(results, buildCountRow(map[string]interface{}{"location_name": displayName, "parent_location_name": loc.parent, "incident_count": loc.count}, reqColumns, defaults))
 	}
 	return results, total, nil
 }
 
 // ── Location count by status ──────────────────────────────────────────────────
-// Output col.Field names: location_name | parent_location_name | status_name | incident_count
+// Output col.Field names: location_name | parent_location_name | classification_name | status_name | incident_count
 func (r *reportRepository) ExecuteLocationCountByStatusQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
 	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
+	// Step 0: Build full path map for all locations using recursive CTE
+	type pathRow struct {
+		ID       string
+		FullPath string
+	}
+	var pathRows []pathRow
+	err := r.db.WithContext(ctx).Raw(`
+    WITH RECURSIVE location_tree AS (
+        SELECT 
+            id,
+            parent_id,
+            name::text AS full_path
+        FROM locations
+        WHERE deleted_at IS NULL AND parent_id IS NULL
+
+        UNION ALL
+
+        SELECT 
+            l.id,
+            l.parent_id,
+            lt.full_path || ' > ' || l.name
+        FROM locations l
+        INNER JOIN location_tree lt ON lt.id = l.parent_id
+        WHERE l.deleted_at IS NULL
+    )
+    SELECT id, full_path FROM location_tree
+`).Scan(&pathRows).Error
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Build lookup map: location_id → full_path
+	fullPathMap := make(map[string]string, len(pathRows))
+	for _, p := range pathRows {
+		fullPathMap[p.ID] = p.FullPath
+	}
+
 	buildBase := func() *gorm.DB {
 		q := r.db.WithContext(ctx).
 			Table("locations").
 			Joins("LEFT JOIN locations parent_loc ON parent_loc.id = locations.parent_id").
 			Joins("LEFT JOIN incidents ON incidents.location_id = locations.id AND incidents.deleted_at IS NULL").
-			Joins("LEFT JOIN classifications class ON class.id = incidents.classification_id").
+			// Joins("LEFT JOIN classifications class ON class.id = incidents.classification_id").
 			Joins("LEFT JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
 		return r.applyFilters(ctx, q, filters)
 	}
-	var total int64
-	if err := buildBase().Select("COUNT(DISTINCT locations.id::text || '|' || COALESCE(workflow_states.code, ''))").Scan(&total).Error; err != nil {
-		return nil, 0, err
+
+	buildBaseForPaging := func() *gorm.DB {
+		q := r.db.WithContext(ctx).
+			Table("locations").
+			Joins("LEFT JOIN locations parent_loc ON parent_loc.id = locations.parent_id").
+			Joins("LEFT JOIN incidents ON incidents.location_id = locations.id AND incidents.deleted_at IS NULL")
+			// Joins("LEFT JOIN classifications class ON class.id = incidents.classification_id")
+			// ❌ No workflow_states join here
+		return r.applyFilters(ctx, q, filters)
 	}
-	orderClause := "locations.name ASC, COUNT(incidents.id) DESC"
+
+	// Step 1: Get distinct location IDs with correct pagination
+	// Build ordered list of location IDs for this page first
+	orderClause := "locations.name ASC"
 	if sorting != nil && sorting.Field != "" {
 		if col, ok := locationCountByStatusFilterFields[sorting.Field]; ok {
 			dir := "ASC"
@@ -2891,83 +2996,143 @@ func (r *reportRepository) ExecuteLocationCountByStatusQuery(ctx context.Context
 			orderClause = col + " " + dir
 		}
 	}
+
+	// Step 2: Get total distinct location count
+	var total int64
+	if err := buildBaseForPaging().
+		Select("COUNT(DISTINCT locations.id)").
+		Scan(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// Step 3: Get paginated location IDs in correct order
 	offset := (page - 1) * limit
+	type locRow struct {
+		LocationID   string
+		LocationName string
+		ParentName   string
+	}
+	var pagedLocs []locRow
+	if err := buildBaseForPaging().
+		Select("DISTINCT locations.id AS location_id, locations.name AS location_name, COALESCE(parent_loc.name, '') AS parent_name").
+		Group("locations.id, locations.name, parent_loc.name").
+		Order(orderClause).
+		Offset(offset).
+		Limit(limit).
+		Scan(&pagedLocs).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if len(pagedLocs) == 0 {
+		return []map[string]interface{}{}, total, nil
+	}
+
+	// Step 4: Extract location IDs for filtering status query
+	// Step 4: Use ID as key, not name
+	locIDs := make([]string, len(pagedLocs))
+	locOrder := make([]string, len(pagedLocs)) // ordered list of IDs
+	locMeta := map[string]locRow{}             // keyed by ID
+
+	for i, loc := range pagedLocs {
+		locIDs[i] = loc.LocationID
+		locOrder[i] = loc.LocationID  // ✅ ID, not name
+		locMeta[loc.LocationID] = loc // ✅ ID, not name
+	}
+
+	// Step 5: Fetch grand total incidents (across ALL locations, not just this page)
+	// so percentage is meaningful
+	var grandTotal int64
+	if err := buildBaseForPaging().
+		Select("COUNT(incidents.id)").
+		Scan(&grandTotal).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// Step 6: Fetch status breakdown only for this page's locations
 	rows, err := buildBase().
-		Select("locations.name AS location_name, COALESCE(parent_loc.name, '') AS parent_location_name, COALESCE(workflow_states.code, '') AS status_name, COUNT(incidents.id) AS incident_count").
-		Group("locations.id, locations.name, parent_loc.name, workflow_states.code").
-		Order(orderClause).Offset(offset).Limit(limit).Rows()
+		Select(`locations.id::text AS location_id, COALESCE(workflow_states.code, '') AS status_name, COUNT(incidents.id) AS incident_count`).
+		Where("locations.id IN ?", locIDs).
+		Group("locations.id, workflow_states.code").
+		Rows()
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
-	defaults := map[string]string{"location_name": "Location", "parent_location_name": "Parent Location", "status_name": "Status", "incident_count": "No. of Incidents"}
-	var stateCount = map[string]map[string]int64{}
-	var locationTotal = map[string]int64{}
-	var locationMeta = map[string]map[string]string{}
-	var allStatuses = map[string]struct{}{}
-	var totalIncidents int64
 
-	// First pass: accumulate counts
+	// Step 7: Accumulate pivot data keyed by location ID
+	stateCount := map[string]map[string]int64{}
+	locationTotal := map[string]int64{}
+	allStatuses := map[string]struct{}{}
+
 	for rows.Next() {
-		var locationName, parentName, statusName string
+		var locationID, statusName string
 		var count int64
-		if err := rows.Scan(&locationName, &parentName, &statusName, &count); err != nil {
+		if err := rows.Scan(&locationID, &statusName, &count); err != nil {
 			continue
 		}
-		totalIncidents += count
-		locationTotal[locationName] += count
 		allStatuses[statusName] = struct{}{}
+		locationTotal[locationID] += count
 
-		if stateCount[locationName] == nil {
-			stateCount[locationName] = map[string]int64{}
+		if stateCount[locationID] == nil {
+			stateCount[locationID] = map[string]int64{}
 		}
-		stateCount[locationName][statusName] += count
-
-		if locationMeta[locationName] == nil {
-			locationMeta[locationName] = map[string]string{}
-		}
-		locationMeta[locationName]["parent_name"] = parentName
+		stateCount[locationID][statusName] += count
 	}
 
-	// Sort statuses for consistent column ordering
+	// Step 8: Sort statuses for consistent column ordering
 	sortedStatuses := make([]string, 0, len(allStatuses))
 	for s := range allStatuses {
 		sortedStatuses = append(sortedStatuses, s)
 	}
 	sort.Strings(sortedStatuses)
 
-	// Second pass: build pivoted rows
+	defaults := map[string]string{
+		"location_name":        "Location",
+		"parent_location_name": "Parent Location",
+		"status_name":          "Status",
+		"incident_count":       "No. of Incidents",
+		"total":                "Total",
+		"percentage":           "Percentage",
+	}
+
+	pathMap, _ := r.fetchLocationPaths(ctx, locIDs)
+
+	// Step 9: Build results in correct paginated order
 	var results []map[string]interface{}
-	for locationName, statuses := range stateCount {
-		clsTotal := locationTotal[locationName]
-		meta := locationMeta[locationName]
+	for _, locationID := range locOrder {
+		meta := locMeta[locationID]
+		locTotal := locationTotal[locationID]
+		statuses := stateCount[locationID]
+
+		displayName := pathMap[locationID]
+		if displayName == "" {
+			displayName = meta.LocationName
+		}
 
 		row := map[string]interface{}{
-			"location_name":        locationName,
-			"parent_location_name": meta["parent_name"],
+			"location_name":        displayName,
+			"parent_location_name": meta.ParentName,
 		}
 
-		// one column per status
 		for _, statusName := range sortedStatuses {
-			row[statusName] = statuses[statusName] // 0 if not present
+			row[statusName] = statuses[statusName]
 		}
 
-		// total and overall percentage of this location vs all incidents
 		var percentage float64
-		if totalIncidents > 0 {
-			percentage = math.Round((float64(clsTotal)/float64(totalIncidents))*10000) / 100
+		if grandTotal > 0 {
+			percentage = math.Round((float64(locTotal)/float64(grandTotal))*10000) / 100
 		}
-		row["total"] = clsTotal
-		row["incident_count"] = clsTotal
-		row["percentage"] = fmt.Sprintf("%.2f%%", percentage) // e.g. 23.45 means this location is 23.45% of all incidents
-		currentRow := buildCountRow(row, reqColumns, defaults)
-		results = append(results, currentRow)
+		row["total"] = locTotal
+		row["incident_count"] = locTotal
+		row["percentage"] = fmt.Sprintf("%.2f%%", percentage)
+
+		results = append(results, buildCountRow(row, reqColumns, defaults))
 	}
 	return results, total, nil
 }
 
 // ── Classification count (without status) ────────────────────────────────────
-// Output col.Field names: classification_name | parent_classification_name | incident_count
+// Output col.Field names: classification_name | parent_classification_name | location_name | incident_count
 func (r *reportRepository) ExecuteClassificationCountQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
 	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
 	buildBase := func() *gorm.DB {
@@ -2994,30 +3159,48 @@ func (r *reportRepository) ExecuteClassificationCountQuery(ctx context.Context, 
 	}
 	offset := (page - 1) * limit
 	rows, err := buildBase().
-		Select("classifications.name AS classification_name, COALESCE(parent_cls.name, '') AS parent_classification_name, COUNT(incidents.id) AS incident_count").
+		Select("classifications.id::text AS classification_id, classifications.name AS classification_name, COALESCE(parent_cls.name, '') AS parent_classification_name, COUNT(incidents.id) AS incident_count").
 		Group("classifications.id, classifications.name, parent_cls.name").
 		Order(orderClause).Offset(offset).Limit(limit).Rows()
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
-	defaults := map[string]string{"classification_name": "Classification", "parent_classification_name": "Parent Classification", "incident_count": "No. of Incidents"}
-	var results []map[string]interface{}
+
+	type clsCountRow struct {
+		id, name, parent string
+		count            int64
+	}
+	var raw []clsCountRow
+	var allIDs []string
 	for rows.Next() {
-		var classificationName, parentName string
-		var count int64
-		if err := rows.Scan(&classificationName, &parentName, &count); err != nil {
+		var c clsCountRow
+		if err := rows.Scan(&c.id, &c.name, &c.parent, &c.count); err != nil {
 			continue
 		}
-		results = append(results, buildCountRow(map[string]interface{}{"classification_name": classificationName, "parent_classification_name": parentName, "incident_count": count}, reqColumns, defaults))
+		raw = append(raw, c)
+		allIDs = append(allIDs, c.id)
+	}
+
+	pathMap, _ := r.fetchClassificationPaths(ctx, allIDs)
+	defaults := map[string]string{"classification_name": "Classification", "parent_classification_name": "Parent Classification", "incident_count": "No. of Incidents"}
+	var results []map[string]interface{}
+	for _, cls := range raw {
+		displayName := pathMap[cls.id]
+		if displayName == "" {
+			displayName = cls.name
+		}
+		results = append(results, buildCountRow(map[string]interface{}{"classification_name": displayName, "parent_classification_name": cls.parent, "incident_count": cls.count}, reqColumns, defaults))
 	}
 	return results, total, nil
 }
 
 // ── Classification count by status ───────────────────────────────────────────
-// Output col.Field names: classification_name | parent_classification_name | status_name | incident_count
+// Output col.Field names: classification_name | parent_classification_name | location_name | status_name | incident_count
 func (r *reportRepository) ExecuteClassificationCountByStatusQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
 	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
+
+	// buildBase includes workflow_states for the status breakdown query
 	buildBase := func() *gorm.DB {
 		q := r.db.WithContext(ctx).
 			Table("classifications").
@@ -3027,11 +3210,22 @@ func (r *reportRepository) ExecuteClassificationCountByStatusQuery(ctx context.C
 			Joins("LEFT JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
 		return r.applyFilters(ctx, q, filters)
 	}
+	// buildBaseForPaging omits workflow_states so COUNT(DISTINCT classifications.id) is not inflated
+	buildBaseForPaging := func() *gorm.DB {
+		q := r.db.WithContext(ctx).
+			Table("classifications").
+			Joins("LEFT JOIN classifications parent_cls ON parent_cls.id = classifications.parent_id").
+			Joins("LEFT JOIN incidents ON incidents.classification_id = classifications.id AND incidents.deleted_at IS NULL").
+			Joins("LEFT JOIN locations loc ON loc.id = incidents.location_id")
+		return r.applyFilters(ctx, q, filters)
+	}
+
 	var total int64
-	if err := buildBase().Select("COUNT(DISTINCT classifications.id::text || '|' || COALESCE(workflow_states.code, ''))").Scan(&total).Error; err != nil {
+	if err := buildBaseForPaging().Select("COUNT(DISTINCT classifications.id)").Scan(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	orderClause := "classifications.name ASC, COUNT(incidents.id) DESC"
+
+	orderClause := "classifications.name ASC"
 	if sorting != nil && sorting.Field != "" {
 		if col, ok := classificationCountByStatusFilterFields[sorting.Field]; ok {
 			dir := "ASC"
@@ -3041,77 +3235,113 @@ func (r *reportRepository) ExecuteClassificationCountByStatusQuery(ctx context.C
 			orderClause = col + " " + dir
 		}
 	}
+
+	// Phase C: paginate classification IDs
 	offset := (page - 1) * limit
+	type clsRow struct {
+		ClassificationID   string
+		ClassificationName string
+		ParentName         string
+	}
+	var pagedCls []clsRow
+	if err := buildBaseForPaging().
+		Select("classifications.id::text AS classification_id, classifications.name AS classification_name, COALESCE(parent_cls.name, '') AS parent_name").
+		Group("classifications.id, classifications.name, parent_cls.name").
+		Order(orderClause).Offset(offset).Limit(limit).
+		Scan(&pagedCls).Error; err != nil {
+		return nil, 0, err
+	}
+	if len(pagedCls) == 0 {
+		return []map[string]interface{}{}, total, nil
+	}
+
+	clsIDs := make([]string, len(pagedCls))
+	clsOrder := make([]string, len(pagedCls))
+	clsMeta := map[string]clsRow{}
+	for i, c := range pagedCls {
+		clsIDs[i] = c.ClassificationID
+		clsOrder[i] = c.ClassificationID
+		clsMeta[c.ClassificationID] = c
+	}
+
+	// Phase D: grand total for percentage calculation
+	var grandTotal int64
+	if err := buildBaseForPaging().Select("COUNT(incidents.id)").Scan(&grandTotal).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// Phase E: status breakdown for this page's classification IDs only
 	rows, err := buildBase().
-		Select("classifications.name AS classification_name, COALESCE(parent_cls.name, '') AS parent_classification_name, COALESCE(workflow_states.code, '') AS status_name, COUNT(incidents.id) AS incident_count").
-		Group("classifications.id, classifications.name, parent_cls.name, workflow_states.code").
-		Order(orderClause).Offset(offset).Limit(limit).Rows()
+		Select(`classifications.id::text AS classification_id, COALESCE(workflow_states.code, '') AS status_name, COUNT(incidents.id) AS incident_count`).
+		Where("classifications.id::text IN ?", clsIDs).
+		Group("classifications.id, workflow_states.code").
+		Rows()
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
-	defaults := map[string]string{"classification_name": "Classification", "parent_classification_name": "Parent Classification", "status_name": "Status", "incident_count": "No. of Incidents"}
-	var stateCount = map[string]map[string]int64{}
-	var classificationTotal = map[string]int64{}
-	var classificationMeta = map[string]map[string]string{}
-	var allStatuses = map[string]struct{}{}
-	var totalIncidents int64
 
-	// First pass: accumulate counts
+	stateCount := map[string]map[string]int64{}
+	classificationTotal := map[string]int64{}
+	allStatuses := map[string]struct{}{}
+
 	for rows.Next() {
-		var classificationName, parentName, statusName string
+		var classificationID, statusName string
 		var count int64
-		if err := rows.Scan(&classificationName, &parentName, &statusName, &count); err != nil {
+		if err := rows.Scan(&classificationID, &statusName, &count); err != nil {
 			continue
 		}
-		totalIncidents += count
-		classificationTotal[classificationName] += count
 		allStatuses[statusName] = struct{}{}
-
-		if stateCount[classificationName] == nil {
-			stateCount[classificationName] = map[string]int64{}
+		classificationTotal[classificationID] += count
+		if stateCount[classificationID] == nil {
+			stateCount[classificationID] = map[string]int64{}
 		}
-		stateCount[classificationName][statusName] += count
-
-		if classificationMeta[classificationName] == nil {
-			classificationMeta[classificationName] = map[string]string{}
-		}
-		classificationMeta[classificationName]["parent_name"] = parentName
+		stateCount[classificationID][statusName] += count
 	}
 
-	// Sort statuses for consistent column ordering
 	sortedStatuses := make([]string, 0, len(allStatuses))
 	for s := range allStatuses {
 		sortedStatuses = append(sortedStatuses, s)
 	}
 	sort.Strings(sortedStatuses)
 
-	// Second pass: build pivoted rows
+	// Phase F: build results using full classification path
+	pathMap, _ := r.fetchClassificationPaths(ctx, clsIDs)
+	defaults := map[string]string{
+		"classification_name":        "Classification",
+		"parent_classification_name": "Parent Classification",
+		"status_name":                "Status",
+		"incident_count":             "No. of Incidents",
+		"total":                      "Total",
+		"percentage":                 "Percentage",
+	}
 	var results []map[string]interface{}
-	for classificationName, statuses := range stateCount {
-		clsTotal := classificationTotal[classificationName]
-		meta := classificationMeta[classificationName]
+	for _, clsID := range clsOrder {
+		meta := clsMeta[clsID]
+		clsTotal := classificationTotal[clsID]
+		statuses := stateCount[clsID]
+
+		displayName := pathMap[clsID]
+		if displayName == "" {
+			displayName = meta.ClassificationName
+		}
 
 		row := map[string]interface{}{
-			"classification_name":        classificationName,
-			"parent_classification_name": meta["parent_name"],
+			"classification_name":        displayName,
+			"parent_classification_name": meta.ParentName,
 		}
-
-		// one column per status
 		for _, statusName := range sortedStatuses {
-			row[statusName] = statuses[statusName] // 0 if not present
+			row[statusName] = statuses[statusName]
 		}
 
-		// total and overall percentage of this classification vs all incidents
 		var percentage float64
-		if totalIncidents > 0 {
-			percentage = math.Round((float64(clsTotal)/float64(totalIncidents))*10000) / 100
+		if grandTotal > 0 {
+			percentage = math.Round((float64(clsTotal)/float64(grandTotal))*10000) / 100
 		}
 		row["incident_count"] = clsTotal
 		row["total"] = clsTotal
 		row["percentage"] = fmt.Sprintf("%.2f%%", percentage)
-		currentRow := buildCountRow(row, reqColumns, defaults)
-		results = append(results, currentRow)
+		results = append(results, buildCountRow(row, reqColumns, defaults))
 	}
 
 	return results, total, nil
