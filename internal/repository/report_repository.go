@@ -779,6 +779,7 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 				row["created_at"] = rawRow["created_at"] // also carry created_at for aging calculations in enrichment
 				row["classification_id"] = rawRow["classification_id"]
 				row["location_id"] = rawRow["location_id"]
+				row["closed_at"] = rawRow["closed_at"]
 			}
 			var createdAt string
 			switch v := rawRow["created_at"].(type) {
@@ -815,10 +816,6 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			if id := IDStr(row["classification_id"]); id != "" {
 				classificationIDs = append(classificationIDs, id)
 			}
-		}
-
-		if len(locationIDs) != 0 || len(classificationIDs) != 0 {
-			log.Printf("Bulk enrichment for %d incidents: %d location IDs, %d classification IDs", len(results), len(locationIDs), len(classificationIDs))
 		}
 
 		// hasCol returns true when at least one of the given field names was
@@ -1030,12 +1027,10 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 		// 11. Location Full path
 		var locationFullPathMap map[string]string
 		if hasCol("full_location") {
-			log.Printf("Fetching location full paths for %d location IDs", len(locationIDs))
 			locationFullPathMap, err = r.fetchLocationPaths(ctx, locationIDs)
 			if err != nil {
 				log.Print("error fetching location full name", locationFullPathMap)
 			}
-			log.Printf("Fetched %d location full paths", len(locationFullPathMap))
 		}
 
 		// 11. Classification Full path
@@ -2424,7 +2419,6 @@ func (r *reportRepository) ExecuteUserPerformanceQuery(ctx context.Context, filt
 		row := make(map[string]interface{})
 		if len(reqColumns) > 0 {
 			for _, col := range reqColumns {
-				log.Printf("Col Label: %s, Field: %s", col.Label, col.Field)
 				row[col.Label] = rawRow[col.Field]
 			}
 		} else {
@@ -2846,7 +2840,6 @@ func buildCountRow(rawRow map[string]interface{}, reqColumns []models.ColumnFiel
 	row := make(map[string]interface{})
 	if len(reqColumns) > 0 {
 		for _, col := range reqColumns {
-			// log.Printf("Raw Label: %s, Field: %s", rawRow[col.Label], col.Field)
 			row[col.Label] = rawRow[col.Field]
 		}
 	} else {
@@ -2965,12 +2958,13 @@ func (r *reportRepository) ExecuteLocationCountByStatusQuery(ctx context.Context
 	}
 
 	buildBase := func() *gorm.DB {
-		q := r.db.WithContext(ctx).
+		q := r.db.WithContext(ctx).Debug().
 			Table("locations").
 			Joins("LEFT JOIN locations parent_loc ON parent_loc.id = locations.parent_id").
 			Joins("LEFT JOIN incidents ON incidents.location_id = locations.id AND incidents.deleted_at IS NULL").
-			// Joins("LEFT JOIN classifications class ON class.id = incidents.classification_id").
-			Joins("LEFT JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
+			Joins("LEFT JOIN classifications class ON class.id = incidents.classification_id").
+			Joins("INNER JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
+			Joins("INNER JOIN workflows ON workflows.id = workflow_states.workflow_id")
 		return r.applyFilters(ctx, q, filters)
 	}
 
@@ -2978,9 +2972,10 @@ func (r *reportRepository) ExecuteLocationCountByStatusQuery(ctx context.Context
 		q := r.db.WithContext(ctx).
 			Table("locations").
 			Joins("LEFT JOIN locations parent_loc ON parent_loc.id = locations.parent_id").
-			Joins("LEFT JOIN incidents ON incidents.location_id = locations.id AND incidents.deleted_at IS NULL")
-			// Joins("LEFT JOIN classifications class ON class.id = incidents.classification_id")
-			// ❌ No workflow_states join here
+			Joins("LEFT JOIN incidents ON incidents.location_id = locations.id AND incidents.deleted_at IS NULL").
+			Joins("LEFT JOIN classifications class ON class.id = incidents.classification_id").
+			Joins("INNER JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
+			Joins("INNER JOIN workflows ON workflows.id = workflow_states.workflow_id")
 		return r.applyFilters(ctx, q, filters)
 	}
 
@@ -3202,21 +3197,25 @@ func (r *reportRepository) ExecuteClassificationCountByStatusQuery(ctx context.C
 
 	// buildBase includes workflow_states for the status breakdown query
 	buildBase := func() *gorm.DB {
-		q := r.db.WithContext(ctx).
+		q := r.db.WithContext(ctx).Debug().
 			Table("classifications").
 			Joins("LEFT JOIN classifications parent_cls ON parent_cls.id = classifications.parent_id").
 			Joins("LEFT JOIN incidents ON incidents.classification_id = classifications.id AND incidents.deleted_at IS NULL").
 			Joins("LEFT JOIN locations loc ON loc.id = incidents.location_id").
-			Joins("LEFT JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
+			Joins("INNER JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
+			Joins("INNER JOIN workflows ON workflows.id = workflow_states.workflow_id").
+			Where("workflows.record_type = ?", "incident")
 		return r.applyFilters(ctx, q, filters)
 	}
-	// buildBaseForPaging omits workflow_states so COUNT(DISTINCT classifications.id) is not inflated
 	buildBaseForPaging := func() *gorm.DB {
-		q := r.db.WithContext(ctx).
+		q := r.db.WithContext(ctx).Debug().
 			Table("classifications").
 			Joins("LEFT JOIN classifications parent_cls ON parent_cls.id = classifications.parent_id").
 			Joins("LEFT JOIN incidents ON incidents.classification_id = classifications.id AND incidents.deleted_at IS NULL").
-			Joins("LEFT JOIN locations loc ON loc.id = incidents.location_id")
+			Joins("LEFT JOIN locations loc ON loc.id = incidents.location_id").
+			Joins("INNER JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
+			Joins("INNER JOIN workflows ON workflows.id = workflow_states.workflow_id").
+			Where("workflows.record_type = ?", "incident")
 		return r.applyFilters(ctx, q, filters)
 	}
 
@@ -3290,6 +3289,11 @@ func (r *reportRepository) ExecuteClassificationCountByStatusQuery(ctx context.C
 		var count int64
 		if err := rows.Scan(&classificationID, &statusName, &count); err != nil {
 			continue
+		}
+		log.Printf("total count of class %s status %s : %d", classificationID, statusName, count)
+		if statusName == "" {
+			statusName = "X"
+			count = 1
 		}
 		allStatuses[statusName] = struct{}{}
 		classificationTotal[classificationID] += count
