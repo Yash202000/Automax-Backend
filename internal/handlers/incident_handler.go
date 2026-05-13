@@ -13,6 +13,7 @@ import (
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
+	internalUtils "github.com/automax/backend/internal/utils"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
@@ -1321,4 +1322,89 @@ func (h *IncidentHandler) UpdateClosedIncidentSummary(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Closed incident summary updated", updatedIncident)
+}
+
+// RequestCitizenInfo sends an SMS to the citizen requesting additional information (attachments, location, comments)
+// for an incident that lacks required fields like attachments.
+func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
+	idStr := c.Params("id")
+	incidentID, err := uuid.Parse(idStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+
+	// Fetch incident with relations to get attachments, reporter info
+	incident, err := h.incidentRepo.FindByIDWithRelations(c.UserContext(), incidentID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not found")
+	}
+
+	// Check if incident already has attachments
+	if len(incident.Attachments) > 0 {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Incident already has attachments, no additional information needed")
+	}
+
+	// Determine phone number to send SMS to
+	mobile := incident.CreatedByMobile
+	if mobile == "" && incident.ReporterID != nil {
+		if reporter, err := h.userRepo.FindByID(c.UserContext(), *incident.ReporterID); err == nil && reporter.Phone != "" {
+			mobile = reporter.Phone
+		}
+	}
+	if mobile == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "No citizen mobile number found for this incident")
+	}
+
+	// Build secure SMS link
+	smsLink := utils.BuildSMSLink(c.UserContext(), incidentID.String(), 48*time.Hour)
+
+	smsMessage := fmt.Sprintf(
+		"Dear Citizen, please provide additional details for your reported incident (%s) using the following secure link: %s",
+		incident.IncidentNumber,
+		smsLink,
+	)
+
+	now := time.Now()
+	smsErr := internalUtils.SendSMS(mobile, smsMessage)
+	status := "sent"
+	if smsErr != nil {
+		status = "failed"
+		log.Printf("REQUEST-INFO-SMS: Failed for incident %s to %s: %v", incident.IncidentNumber, mobile, smsErr)
+	} else {
+		log.Printf("REQUEST-INFO-SMS: Sent successfully to %s for incident %s", mobile, incident.IncidentNumber)
+	}
+
+	// Log notification
+	notification := &models.NotificationLog{
+		Channel:    "sms",
+		Direction:  "outbound",
+		Category:   "sent",
+		Language:   "en",
+		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
+		Subject:    "Request Additional Information",
+		Body:       smsMessage,
+		Status:     status,
+		Provider:   "twilio",
+		IsRead:     false,
+		SentBy:     &userID,
+		SentAt:     &now,
+	}
+	if smsErr != nil {
+		notification.ErrorMessage = smsErr.Error()
+	}
+	if err := h.incidentRepo.CreateNotification(c.UserContext(), notification); err != nil {
+		log.Printf("REQUEST-INFO-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
+	}
+
+	if smsErr != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, fmt.Sprintf("Failed to send SMS: %v", smsErr))
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "SMS sent successfully to citizen", fiber.Map{
+		"mobile":          mobile,
+		"incident_number": incident.IncidentNumber,
+		"status":          status,
+	})
 }
