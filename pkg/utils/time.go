@@ -7,11 +7,15 @@ import (
 
 func parseTimeFlexible(t string) (time.Time, error) {
 	formats := []string{
-		time.RFC3339, // 2006-01-02T15:04:05Z07:00
+		time.RFC3339,                              // 2006-01-02T15:04:05Z07:00
+		"2006-01-02T15:04:05.999999999Z07:00",    // RFC3339 with nanoseconds
+		"2006-01-02 15:04:05.999999999-07:00",    // PostgreSQL with colon offset e.g. +05:30
+		"2006-01-02 15:04:05.999999999-07",       // PostgreSQL short offset e.g. +00
+		"2006-01-02 15:04:05-07:00",              // without nanoseconds, colon offset
+		"2006-01-02 15:04:05-07",                 // without nanoseconds, short offset
 		"2006-01-02 15:04:05.999999999 -0700 MST", // Go time.Time string → "2026-01-19 14:13:00.969689 +0530 IST"
 		"2006-01-02 15:04:05 -0700 MST",           // same without nanoseconds
-		"2006-01-02T15:04:05.999999999Z07:00",     // RFC3339 with nanoseconds
-		"01-02-2006 03:04:05 PM",                  // your custom format
+		"01-02-2006 03:04:05 PM",                  // custom format
 	}
 
 	for _, layout := range formats {

@@ -628,12 +628,11 @@ func (s *reportService) generatePDF(
 	case colCount > 10:
 		baseFontSize = 8.0
 	}
-	// Header font: 12pt (≈ HTML th { font-size: 16px })
-	headerFontSize := baseFontSize + 3.0
+	// Header font: 1pt above body — readable but never larger than the column width allows.
+	headerFontSize := baseFontSize + 1.0
 
 	// lineH: height of one wrapped text line — 1pt ≈ 0.353mm, add ~2mm padding
 	lineH := baseFontSize*0.353 + 2.2
-	headerH := headerFontSize*0.353 + 3.5 // taller header row, matches HTML th padding
 
 	const leftMargin = 16.0
 	const pageH = 210.0 // A4 height in mm
@@ -647,9 +646,8 @@ func (s *reportService) generatePDF(
 	}
 
 	drawHeader := func() {
-		setFont("B", headerFontSize, title)
-		pdf.SetFillColor(244, 246, 248) // #f4f6f8 — matches HTML thead background
-		pdf.SetTextColor(34, 34, 34)    // #222
+		pdf.SetFillColor(244, 246, 248)
+		pdf.SetTextColor(34, 34, 34)
 
 		orderedCols := columns
 		orderedWidths := colWidths
@@ -658,19 +656,32 @@ func (s *reportService) generatePDF(
 			orderedWidths = reverseWidths(colWidths)
 		}
 
+		// Measure every label at the header font to find the tallest column,
+		// then size the row to fit — prevents text being clipped or overflowing.
+		setFont("B", headerFontSize, "")
+		maxLines := 1
+		for i, col := range orderedCols {
+			nb := len(pdf.SplitLines([]byte(col.Label), orderedWidths[i]-2))
+			if nb < 1 {
+				nb = 1
+			}
+			if nb > maxLines {
+				maxLines = nb
+			}
+		}
+		hdrH := float64(maxLines)*lineH + 3.5
+
 		startY := pdf.GetY()
 		curX := leftMargin
 		for i, col := range orderedCols {
-			// Fill + border for full header height
 			pdf.SetFillColor(244, 246, 248)
-			pdf.Rect(curX, startY, orderedWidths[i], headerH, "FD")
-			// Text centred with 1mm inset
+			pdf.Rect(curX, startY, orderedWidths[i], hdrH, "FD")
 			pdf.SetXY(curX+1, startY+1)
 			setFont("B", headerFontSize, col.Label)
-			pdf.MultiCell(orderedWidths[i]-2, headerH-2, col.Label, "", "C", false)
+			pdf.MultiCell(orderedWidths[i]-2, lineH, col.Label, "", "C", false)
 			curX += orderedWidths[i]
 		}
-		pdf.SetXY(leftMargin, startY+headerH)
+		pdf.SetXY(leftMargin, startY+hdrH)
 
 		pdf.SetTextColor(0, 0, 0)
 		pdf.SetFillColor(255, 255, 255)
@@ -799,105 +810,61 @@ func (s *reportService) generatePDF(
 }
 
 func (s *reportService) buildFilterDisplay(ctx context.Context, filters []models.ReportFilterConfig) map[string]interface{} {
-	display := map[string]interface{}{}
-
-	// ── Step 1: collect all IDs per type ─────────────────────────────────
-	locationIDSet := map[uuid.UUID]struct{}{}
-	classificationIDSet := map[uuid.UUID]struct{}{}
+	// Always-present entries sorted to the top via numeric prefix.
+	// drawFiltersAndStats strips the "N_" prefix before rendering.
+	display := map[string]interface{}{
+		"1_Location":       "All",
+		"2_Classification": "All",
+		"3_From Date":      "-",
+		"4_To Date":        "-",
+	}
 
 	for _, f := range filters {
 		if f.Value == nil {
 			continue
 		}
-		log.Print("build filter", f.Field, f.Value)
 		switch f.Field {
 		case "location_id":
 			ids := toStringSlice(f.Value)
 			if len(ids) > 1 {
-				display["Location"] = "Multiple"
+				display["1_Location"] = "Multiple"
 				continue
 			}
 			if id, err := uuid.Parse(ids[0]); err == nil {
 				if loc, err := s.locationRepo.FindByID(ctx, id); err == nil && loc != nil {
-					display["Location"] = loc.Name
+					display["1_Location"] = loc.Name
 				}
 			}
 
 		case "classification_id":
 			ids := toStringSlice(f.Value)
 			if len(ids) > 1 {
-				display["Classification"] = "Multiple"
+				display["2_Classification"] = "Multiple"
 				continue
 			}
 			if id, err := uuid.Parse(ids[0]); err == nil {
 				if cls, err := s.classificationRepo.FindByID(ctx, id); err == nil && cls != nil {
-					display["Classification"] = cls.Name
+					display["2_Classification"] = cls.Name
 				}
 			}
-		}
-	}
 
-	// ── Step 2: batch fetch ───────────────────────────────────────────────
-	locationNames := map[uuid.UUID]string{}
-	classificationNames := map[uuid.UUID]string{}
-
-	if len(locationIDSet) > 0 {
-		ids := make([]uuid.UUID, 0, len(locationIDSet))
-		for id := range locationIDSet {
-			ids = append(ids, id)
-		}
-		if locs, err := s.locationRepo.FindByIDs(ctx, ids); err == nil {
-			for _, loc := range *locs {
-				locationNames[loc.ID] = loc.Name
-			}
-		}
-	}
-
-	if len(classificationIDSet) > 0 {
-		ids := make([]uuid.UUID, 0, len(classificationIDSet))
-		for id := range classificationIDSet {
-			ids = append(ids, id)
-		}
-		if cls, err := s.classificationRepo.FindByIDs(ctx, ids); err == nil {
-			for _, c := range *cls {
-				classificationNames[c.ID] = c.Name
-			}
-		}
-	}
-
-	// ── Step 3: build display map ─────────────────────────────────────────
-	for _, f := range filters {
-		if f.Value == nil {
-			continue
-		}
-
-		switch f.Field {
-		case "location_id":
-			names := []string{}
-			for _, rawID := range toStringSlice(f.Value) {
-				if id, err := uuid.Parse(rawID); err == nil {
-					if name, ok := locationNames[id]; ok {
-						names = append(names, name)
+		// Both "created_at" (incidents/requests) and "incident_created_at"
+		// (count-group queries) map to From / To Date.
+		case "created_at", "incident_created_at":
+			switch f.Operator {
+			case "between":
+				if m, ok := f.Value.(map[string]interface{}); ok {
+					if from, ok := m["from"].(string); ok && from != "" {
+						display["3_From Date"] = cleanDateStr(from)
+					}
+					if to, ok := m["to"].(string); ok && to != "" {
+						display["4_To Date"] = cleanDateStr(to)
 					}
 				}
-			}
-			if len(names) > 0 {
-				display["Location"] = strings.Join(names, ", ")
-				continue
-			}
-
-		case "classification_id":
-			names := []string{}
-			for _, rawID := range toStringSlice(f.Value) {
-				if id, err := uuid.Parse(rawID); err == nil {
-					if name, ok := classificationNames[id]; ok {
-						names = append(names, name)
-					}
-				}
-			}
-			if len(names) > 0 {
-				display["Classification"] = strings.Join(names, ", ")
-				continue
+			case "gte":
+				display["3_From Date"] = cleanDateStr(fmt.Sprintf("%v", f.Value))
+			case "lte":
+				display["4_To Date"] = cleanDateStr(fmt.Sprintf("%v", f.Value))
 			}
 
 		default:
@@ -1005,28 +972,25 @@ func drawFiltersAndStats(
 	totalRows int,
 	setFont func(string, float64, string),
 ) {
-	if len(filterDisplay) == 0 {
-		return
-	}
-
 	rowsPerPage := 30
 	totalPages := (totalRows + rowsPerPage - 1) / rowsPerPage
 	if totalPages < 1 {
 		totalPages = 1
 	}
 
-	// Sort filter keys for consistent ordering
+	// Sort filter keys for consistent ordering (numeric "N_" prefixes sort to top)
 	filterKeys := make([]string, 0, len(filterDisplay))
 	for k := range filterDisplay {
 		filterKeys = append(filterKeys, k)
 	}
 	sort.Strings(filterKeys)
 
-	// Build filter lines
+	// Build filter lines; strip any "N_" sort prefix before rendering the label
 	filterLines := []string{"Filters:"}
 	for _, k := range filterKeys {
 		v := filterDisplay[k]
-		label := cases.Title(language.English).String(strings.ReplaceAll(k, "_", " "))
+		rawKey := stripSortPrefix(k)
+		label := cases.Title(language.English).String(strings.ReplaceAll(rawKey, "_", " "))
 		filterLines = append(filterLines, fmt.Sprintf("  %s: %s", label, formatFilterValue("", v)))
 	}
 
@@ -1079,6 +1043,21 @@ func drawFiltersAndStats(
 	// Move cursor below box
 	pdf.SetY(boxTopY + boxH + 4)
 	pdf.SetTextColor(0, 0, 0)
+}
+
+// stripSortPrefix removes a leading "N_" numeric sort prefix from a filter display key,
+// e.g. "1_Location" → "Location", "3_From Date" → "From Date".
+func stripSortPrefix(k string) string {
+	idx := strings.Index(k, "_")
+	if idx <= 0 {
+		return k
+	}
+	for _, c := range k[:idx] {
+		if c < '0' || c > '9' {
+			return k
+		}
+	}
+	return k[idx+1:]
 }
 
 // formatFilterValue formats filter values cleanly for display
