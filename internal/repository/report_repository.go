@@ -272,7 +272,7 @@ var incidentFilterFields = map[string]string{
 	"assignee_first_name": "assignees.first_name",
 	"assignee_last_name":  "assignees.last_name",
 	// ── Subquery-handled (empty col = silently skipped by applyFilters) ───────
-	"workflow_transition_name": "", // handled via IN-subquery in ExecuteIncidentQuery
+	"workflow_transition_id": "", // handled via IN-subquery in ExecuteIncidentQuery
 }
 
 // requestFilterFields reuses the incident columns (same table, filtered by record_type).
@@ -724,7 +724,7 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			Joins("LEFT JOIN locations ON incidents.location_id = locations.id").
 			Joins("LEFT JOIN workflows ON incidents.workflow_id = workflows.id")
 
-		// workflow_transition_name: optional filter — restricts to incidents that have
+		// workflow_transition_id: optional filter — restricts to incidents that have
 		// passed through at least one matching transition (name or code match).
 		// Uses an IN subquery instead of a JOIN to avoid row fan-out.
 		const transSubq = `incidents.id IN (
@@ -733,24 +733,24 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			INNER JOIN workflow_transitions wt ON wt.id = ith.transition_id AND wt.deleted_at IS NULL
 			WHERE ith.is_system_action = false`
 		for _, f := range filters {
-			if f.Field != "workflow_transition_name" || f.Value == nil {
+			if f.Field != "workflow_transition_id" || f.Value == nil {
 				continue
 			}
 			switch f.Operator {
 			case "equals":
 				if isSlice(f.Value) {
-					q = q.Where(transSubq+" AND wt.name IN (?))", f.Value)
+					q = q.Where(transSubq+" AND wt.id IN (?))", f.Value)
 				} else {
-					q = q.Where(transSubq+" AND wt.name = ?)", f.Value)
+					q = q.Where(transSubq+" AND wt.id = ?)", f.Value)
 				}
 			case "in":
-				q = q.Where(transSubq+" AND wt.name IN (?))", f.Value)
+				q = q.Where(transSubq+" AND wt.id IN (?))", f.Value)
 			case "contains":
-				q = q.Where(transSubq+" AND wt.name ILIKE ?)", "%"+f.Value.(string)+"%")
+				q = q.Where(transSubq+" AND wt.id ILIKE ?)", "%"+f.Value.(string)+"%")
 			case "starts_with":
-				q = q.Where(transSubq+" AND wt.name ILIKE ?)", f.Value.(string)+"%")
+				q = q.Where(transSubq+" AND wt.id ILIKE ?)", f.Value.(string)+"%")
 			case "ends_with":
-				q = q.Where(transSubq+" AND wt.name ILIKE ?)", "%"+f.Value.(string))
+				q = q.Where(transSubq+" AND wt.id ILIKE ?)", "%"+f.Value.(string))
 			}
 		}
 
@@ -3103,15 +3103,6 @@ func (r *reportRepository) ExecuteLocationCountByStatusQuery(ctx context.Context
 		locMeta[loc.LocationID] = loc // ✅ ID, not name
 	}
 
-	// Step 5: Fetch grand total incidents (across ALL locations, not just this page)
-	// so percentage is meaningful
-	var grandTotal int64
-	if err := buildBaseForPaging().
-		Select("COUNT(incidents.id)").
-		Scan(&grandTotal).Error; err != nil {
-		return nil, 0, err
-	}
-
 	// Step 6: Fetch status breakdown only for this page's locations
 	rows, err := buildBase().
 		Select(`locations.id::text AS location_id, COALESCE(workflow_states.code, '') AS status_name, COUNT(incidents.id) AS incident_count`).
@@ -3182,9 +3173,10 @@ func (r *reportRepository) ExecuteLocationCountByStatusQuery(ctx context.Context
 			row[statusName] = statuses[statusName]
 		}
 
+		closedCount := statuses["closed"]
 		var percentage float64
-		if grandTotal > 0 {
-			percentage = math.Round((float64(locTotal)/float64(grandTotal))*10000) / 100
+		if locTotal > 0 && closedCount > 0 {
+			percentage = math.Round((float64(closedCount)/float64(locTotal))*10000) / 100
 		}
 		row["total"] = locTotal
 		row["incident_count"] = locTotal
@@ -3333,12 +3325,6 @@ func (r *reportRepository) ExecuteClassificationCountByStatusQuery(ctx context.C
 		clsMeta[c.ClassificationID] = c
 	}
 
-	// Phase D: grand total for percentage calculation
-	var grandTotal int64
-	if err := buildBaseForPaging().Select("COUNT(incidents.id)").Scan(&grandTotal).Error; err != nil {
-		return nil, 0, err
-	}
-
 	// Phase E: status breakdown for this page's classification IDs only
 	rows, err := buildBase().
 		Select(`classifications.id::text AS classification_id, COALESCE(workflow_states.code, '') AS status_name, COUNT(incidents.id) AS incident_count`).
@@ -3408,9 +3394,10 @@ func (r *reportRepository) ExecuteClassificationCountByStatusQuery(ctx context.C
 			row[statusName] = statuses[statusName]
 		}
 
+		closedCount := statuses["closed"]
 		var percentage float64
-		if grandTotal > 0 {
-			percentage = math.Round((float64(clsTotal)/float64(grandTotal))*10000) / 100
+		if clsTotal > 0 && closedCount > 0 {
+			percentage = math.Round((float64(closedCount)/float64(clsTotal))*10000) / 100
 		}
 		row["incident_count"] = clsTotal
 		row["total"] = clsTotal
