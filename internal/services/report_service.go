@@ -331,8 +331,9 @@ func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExpo
 	}
 	filename += "_" + time.Now().Format("2006-01-02_150405")
 	log.Printf("Exporting report with title: %s, filename: %s", title, filename)
+	filters := s.buildFilterDisplay(ctx, req.Filters)
 	if req.Format == "xlsx" {
-		xlsxData, err := s.generateExcel(data, req.Columns, title, req.Options)
+		xlsxData, err := s.generateExcel(data, req.Columns, title, req.Options, filters)
 		if err != nil {
 			return nil, "", "", err
 		}
@@ -340,9 +341,6 @@ func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExpo
 			"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", nil
 	}
 	log.Println(req.Filters)
-
-	// @working on it
-	filters := s.buildFilterDisplay(ctx, req.Filters)
 	// in ExportReport, change the generatePDF call:
 	pdfData, err := s.generatePDF(ctx, data, req.Columns, title, req.Options, filters)
 	log.Println("pdf generation started ")
@@ -424,6 +422,7 @@ func (s *reportService) generateExcel(
 	columns []models.ColumnField,
 	title string,
 	options *models.ReportExportOptions,
+	filterDisplay map[string]interface{},
 ) ([]byte, error) {
 
 	f := excelize.NewFile()
@@ -432,8 +431,9 @@ func (s *reportService) generateExcel(
 
 	// ── Column widths ─────────────────────────────────────────────────────
 	if len(columns) > 0 {
-		lastCol, _ := excelize.ColumnNumberToName(len(columns))
-		f.SetColWidth(sheet, "A", lastCol, 27)
+		f.SetColWidth(sheet, "A", "A", 8) // S.No. column
+		lastCol, _ := excelize.ColumnNumberToName(len(columns) + 1)
+		f.SetColWidth(sheet, "B", lastCol, 27)
 	}
 
 	// Determine starting row
@@ -445,7 +445,7 @@ func (s *reportService) generateExcel(
 
 	// ── Title row ─────────────────────────────────────────────────────────
 	if title != "" {
-		lastCol, _ := excelize.ColumnNumberToName(len(columns))
+		lastCol, _ := excelize.ColumnNumberToName(len(columns) + 1)
 		f.MergeCell(sheet, "A1", lastCol+"1")
 		titleStyle, _ := f.NewStyle(&excelize.Style{
 			Font:      &excelize.Font{Bold: true, Size: 14},
@@ -480,16 +480,18 @@ func (s *reportService) generateExcel(
 
 	// ── Write headers ─────────────────────────────────────────────────────
 	headerRowStr := strconv.Itoa(headerRow)
+	f.SetCellValue(sheet, "A"+headerRowStr, "#")
 	for i, col := range columns {
-		colName, _ := excelize.ColumnNumberToName(i + 1)
+		colName, _ := excelize.ColumnNumberToName(i + 2)
 		f.SetCellValue(sheet, colName+headerRowStr, col.Label)
 	}
 
 	// ── Write data rows ───────────────────────────────────────────────────
 	for rowIdx, row := range data {
 		excelRow := strconv.Itoa(dataStartRow + rowIdx)
+		f.SetCellValue(sheet, "A"+excelRow, rowIdx+1)
 		for colIdx, col := range columns {
-			colName, _ := excelize.ColumnNumberToName(colIdx + 1)
+			colName, _ := excelize.ColumnNumberToName(colIdx + 2)
 			val := ""
 			if v, ok := row[col.Label]; ok && v != nil {
 				val = formatExportValue(col.Label, v)
@@ -510,10 +512,54 @@ func (s *reportService) generateExcel(
 		ActivePane:  "bottomLeft",
 	})
 
+	// ── Filters & Stats ───────────────────────────────────────────────────
+	currentRow := dataStartRow + len(data) + 2 // one blank row after last data row
+	lastDataCol, _ := excelize.ColumnNumberToName(len(columns) + 1)
+
+	if len(filterDisplay) > 0 {
+		filterKeys := make([]string, 0, len(filterDisplay))
+		for k := range filterDisplay {
+			filterKeys = append(filterKeys, k)
+		}
+		sort.Strings(filterKeys)
+
+		filterHeaderStyle, _ := f.NewStyle(&excelize.Style{
+			Font: &excelize.Font{Bold: true, Size: 10},
+			Fill: excelize.Fill{Type: "pattern", Color: []string{"E8EDF5"}, Pattern: 1},
+		})
+		rowStr := strconv.Itoa(currentRow)
+		f.MergeCell(sheet, "A"+rowStr, lastDataCol+rowStr)
+		f.SetCellValue(sheet, "A"+rowStr, "Filters:")
+		f.SetCellStyle(sheet, "A"+rowStr, lastDataCol+rowStr, filterHeaderStyle)
+		currentRow++
+
+		filterRowStyle, _ := f.NewStyle(&excelize.Style{
+			Fill: excelize.Fill{Type: "pattern", Color: []string{"F5F7FA"}, Pattern: 1},
+		})
+		for _, k := range filterKeys {
+			v := filterDisplay[k]
+			rawKey := stripSortPrefix(k)
+			label := cases.Title(language.English).String(strings.ReplaceAll(rawKey, "_", " "))
+			rowStr = strconv.Itoa(currentRow)
+			f.SetCellValue(sheet, "A"+rowStr, label+":")
+			f.SetCellValue(sheet, "B"+rowStr, formatFilterValue("", v))
+			f.SetCellStyle(sheet, "A"+rowStr, "B"+rowStr, filterRowStyle)
+			currentRow++
+		}
+
+		statsStyle, _ := f.NewStyle(&excelize.Style{
+			Font: &excelize.Font{Bold: true, Size: 10, Color: "3B82F6"},
+			Fill: excelize.Fill{Type: "pattern", Color: []string{"E8EDF5"}, Pattern: 1},
+		})
+		rowStr = strconv.Itoa(currentRow)
+		f.SetCellValue(sheet, "A"+rowStr, fmt.Sprintf("Total Rows: %d", len(data)))
+		f.SetCellStyle(sheet, "A"+rowStr, "A"+rowStr, statsStyle)
+		currentRow += 2 // blank row before timestamp
+	}
+
 	// ── Timestamp ─────────────────────────────────────────────────────────
 	if options != nil && options.IncludeTimestamp {
-		tsRow := strconv.Itoa(dataStartRow + len(data) + 1)
-		f.SetCellValue(sheet, "A"+tsRow,
+		f.SetCellValue(sheet, "A"+strconv.Itoa(currentRow),
 			fmt.Sprintf("Generated: %s", time.Now().Format("2006-01-02 15:04:05")))
 	}
 
@@ -523,6 +569,86 @@ func (s *reportService) generateExcel(
 		return nil, fmt.Errorf("excel write error: %w", err)
 	}
 	return buf.Bytes(), nil
+}
+
+// computeFilterBoxH returns the height of the filter+stats box drawn by drawFiltersAndStats.
+func computeFilterBoxH(filterDisplay map[string]interface{}) float64 {
+	const lineH = 5.5
+	const padding = 3.0
+	filterLines := 1 + len(filterDisplay) // "Filters:" header + one line per entry
+	statsLines := 2                       // "Total Rows" + "Total Pages"
+	maxLines := filterLines
+	if statsLines > maxLines {
+		maxLines = statsLines
+	}
+	return float64(maxLines)*lineH + padding*2
+}
+
+// computeActualPageCount simulates the row-drawing loop to return the real page count.
+// firstPageDataY is the Y coordinate where the first data row will be drawn.
+func computeActualPageCount(
+	pdf *gofpdf.Fpdf,
+	data []map[string]interface{},
+	columns []models.ColumnField,
+	colWidths []float64,
+	firstPageDataY float64,
+	hdrH float64,
+	lineH float64,
+	baseFontSize float64,
+	rtlMode bool,
+	setFont func(string, float64, string),
+) int {
+	const pageH = 210.0
+	const leftMargin = 16.0
+	bottomBound := pageH - leftMargin
+
+	colCount := len(columns)
+	minRowH := lineH + 2
+	currentY := firstPageDataY
+	pages := 1
+
+	renderWidths := colWidths
+	if rtlMode {
+		renderWidths = reverseWidths(colWidths)
+	}
+
+	for _, row := range data {
+		vals := make([]string, colCount)
+		for i, col := range columns {
+			v := row[col.Label]
+			if v == nil {
+				vals[i] = ""
+			} else {
+				vals[i] = formatExportValue(col.Label, v)
+			}
+		}
+		if rtlMode {
+			vals = reverseStrings(vals)
+		}
+
+		rowH := minRowH
+		for i := range columns {
+			setFont("", baseFontSize, vals[i])
+			nb := len(pdf.SplitLines([]byte(vals[i]), renderWidths[i]-2))
+			if nb < 1 {
+				nb = 1
+			}
+			if needed := float64(nb)*lineH + 2; needed > rowH {
+				rowH = needed
+			}
+		}
+
+		if currentY+rowH > bottomBound {
+			pages++
+			currentY = leftMargin + hdrH
+		}
+		currentY += rowH
+	}
+
+	if pages < 1 {
+		return 1
+	}
+	return pages
 }
 
 func computeColWidths(pageWidth float64, colCount int) []float64 {
@@ -615,8 +741,9 @@ func (s *reportService) generatePDF(
 
 	// A4 landscape = 297mm wide; 297 - 16 - 16 = 265mm usable (matches HTML template)
 	pageWidth := 265.0
+	const snoWidth = 12.0 // fixed width for the serial-number column
 	colCount := len(columns)
-	colWidths := computeColWidths(pageWidth, colCount)
+	colWidths := computeColWidths(pageWidth-snoWidth, colCount)
 
 	// Body font: 9pt (≈ HTML 12px). Scale down for many columns.
 	baseFontSize := 9.0
@@ -673,6 +800,15 @@ func (s *reportService) generatePDF(
 
 		startY := pdf.GetY()
 		curX := leftMargin
+
+		// Serial number header cell (always at the visual left)
+		pdf.SetFillColor(244, 246, 248)
+		pdf.Rect(curX, startY, snoWidth, hdrH, "FD")
+		pdf.SetXY(curX+1, startY+1)
+		setFont("B", headerFontSize, "")
+		pdf.MultiCell(snoWidth-2, lineH, "#", "", "C", false)
+		curX += snoWidth
+
 		for i, col := range orderedCols {
 			pdf.SetFillColor(244, 246, 248)
 			pdf.Rect(curX, startY, orderedWidths[i], hdrH, "FD")
@@ -704,7 +840,25 @@ func (s *reportService) generatePDF(
 	}
 
 	// ── Filters + Stats (first page only) ────────────────────────────────────────
-	drawFiltersAndStats(pdf, filterDisplay, len(data), setFont)
+	// Measure header height (same logic as drawHeader) so we can compute the real
+	// Y where data rows start on the first page — needed for accurate page count.
+	setFont("B", headerFontSize, "")
+	hdrMaxLines := 1
+	for i, col := range columns {
+		nb := len(pdf.SplitLines([]byte(col.Label), colWidths[i]-2))
+		if nb < 1 {
+			nb = 1
+		}
+		if nb > hdrMaxLines {
+			hdrMaxLines = nb
+		}
+	}
+	measuredHdrH := float64(hdrMaxLines)*lineH + 3.5
+	// firstPageDataY = current cursor + filter-box height + 4mm gap + Ln(2) + header
+	firstPageDataY := pdf.GetY() + computeFilterBoxH(filterDisplay) + 4.0 + 2.0 + measuredHdrH
+	actualPageCount := computeActualPageCount(pdf, data, columns, colWidths, firstPageDataY, measuredHdrH, lineH, baseFontSize, rtlMode, setFont)
+
+	drawFiltersAndStats(pdf, filterDisplay, len(data), actualPageCount, setFont)
 	pdf.Ln(2)
 
 	// ── Table header ─────────────────────────────────────────────────────────────
@@ -716,7 +870,7 @@ func (s *reportService) generatePDF(
 	bottomBound := pageH - leftMargin // leave 16mm bottom margin
 
 	fill := false
-	for _, row := range data {
+	for rowIdx, row := range data {
 		// Build values without truncation — MultiCell will wrap long text
 		vals := make([]string, colCount)
 		for i, col := range columns {
@@ -769,6 +923,18 @@ func (s *reportService) generatePDF(
 		}
 
 		curX := leftMargin
+
+		// Serial number cell (always at the visual left)
+		snoVal := strconv.Itoa(rowIdx + 1)
+		setFont("", baseFontSize, "")
+		pdf.SetFillColor(fillR, fillG, fillB)
+		pdf.Rect(curX, startY, snoWidth, rowH, "F")
+		pdf.SetDrawColor(51, 51, 51)
+		pdf.Rect(curX, startY, snoWidth, rowH, "D")
+		pdf.SetXY(curX+1, startY+1)
+		pdf.MultiCell(snoWidth-2, lineH, snoVal, "", "C", false)
+		curX += snoWidth
+
 		for i := range renderCols {
 			val := renderVals[i]
 			setFont("", baseFontSize, val)
@@ -970,14 +1136,9 @@ func drawFiltersAndStats(
 	pdf *gofpdf.Fpdf,
 	filterDisplay map[string]interface{},
 	totalRows int,
+	totalPages int,
 	setFont func(string, float64, string),
 ) {
-	rowsPerPage := 30
-	totalPages := (totalRows + rowsPerPage - 1) / rowsPerPage
-	if totalPages < 1 {
-		totalPages = 1
-	}
-
 	// Sort filter keys for consistent ordering (numeric "N_" prefixes sort to top)
 	filterKeys := make([]string, 0, len(filterDisplay))
 	for k := range filterDisplay {
