@@ -3033,18 +3033,18 @@ func (r *reportRepository) ExecuteLocationCountByStatusQuery(ctx context.Context
 			Joins("LEFT JOIN incidents ON incidents.location_id = locations.id AND incidents.deleted_at IS NULL").
 			Joins("LEFT JOIN classifications class ON class.id = incidents.classification_id").
 			Joins("INNER JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
-			Joins("INNER JOIN workflows ON workflows.id = workflow_states.workflow_id")
+			Joins("INNER JOIN workflows ON workflows.id = workflow_states.workflow_id AND workflows.record_type = 'incident' AND workflows.deleted_at IS NULL")
 		return r.applyFilters(ctx, q, filters)
 	}
 
 	buildBaseForPaging := func() *gorm.DB {
-		q := r.db.WithContext(ctx).
+		q := r.db.WithContext(ctx).Debug().
 			Table("locations").
 			Joins("LEFT JOIN locations parent_loc ON parent_loc.id = locations.parent_id").
 			Joins("LEFT JOIN incidents ON incidents.location_id = locations.id AND incidents.deleted_at IS NULL").
 			Joins("LEFT JOIN classifications class ON class.id = incidents.classification_id").
 			Joins("INNER JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
-			Joins("INNER JOIN workflows ON workflows.id = workflow_states.workflow_id")
+			Joins("INNER JOIN workflows ON workflows.id = workflow_states.workflow_id AND workflows.record_type = 'incident' AND workflows.deleted_at IS NULL")
 		return r.applyFilters(ctx, q, filters)
 	}
 
@@ -3275,8 +3275,7 @@ func (r *reportRepository) ExecuteClassificationCountByStatusQuery(ctx context.C
 			Joins("LEFT JOIN incidents ON incidents.classification_id = classifications.id AND incidents.deleted_at IS NULL").
 			Joins("LEFT JOIN locations loc ON loc.id = incidents.location_id").
 			Joins("INNER JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
-			Joins("INNER JOIN workflows ON workflows.id = workflow_states.workflow_id").
-			Where("workflows.record_type = ?", "incident")
+			Joins("INNER JOIN workflows ON workflows.id = workflow_states.workflow_id AND workflows.record_type = 'incident' AND workflows.deleted_at IS NULL")
 		return r.applyFilters(ctx, q, filters)
 	}
 	buildBaseForPaging := func() *gorm.DB {
@@ -3286,8 +3285,7 @@ func (r *reportRepository) ExecuteClassificationCountByStatusQuery(ctx context.C
 			Joins("LEFT JOIN incidents ON incidents.classification_id = classifications.id AND incidents.deleted_at IS NULL").
 			Joins("LEFT JOIN locations loc ON loc.id = incidents.location_id").
 			Joins("INNER JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
-			Joins("INNER JOIN workflows ON workflows.id = workflow_states.workflow_id").
-			Where("workflows.record_type = ?", "incident")
+			Joins("INNER JOIN workflows ON workflows.id = workflow_states.workflow_id AND workflows.record_type = 'incident' AND workflows.deleted_at IS NULL")
 		return r.applyFilters(ctx, q, filters)
 	}
 
