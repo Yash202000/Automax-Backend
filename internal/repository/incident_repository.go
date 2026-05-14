@@ -246,6 +246,13 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	if filter.Source != nil && *filter.Source != "" {
 		query = query.Where("source = ?", *filter.Source)
 	}
+	if filter.ConvertedToRequest != nil {
+		if *filter.ConvertedToRequest {
+			query = query.Where("converted_request_id IS NOT NULL")
+		} else {
+			query = query.Where("converted_request_id IS NULL")
+		}
+	}
 	if filter.StartDate != nil {
 		query = query.Where("created_at >= ?", *filter.StartDate)
 	}
