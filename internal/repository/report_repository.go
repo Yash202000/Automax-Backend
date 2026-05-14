@@ -276,7 +276,38 @@ var incidentFilterFields = map[string]string{
 }
 
 // requestFilterFields reuses the incident columns (same table, filtered by record_type).
-var requestFilterFields = incidentFilterFields
+var requestFilterFields = map[string]string{
+	// ── Direct incidents columns ──────────────────────────────────────────────
+	"id":                   "incidents.id",
+	"incident_number":      "incidents.incident_number",
+	"title":                "incidents.title",
+	"description":          "incidents.description",
+	"classification_id":    "incidents.classification_id",
+	"workflow_id":          "incidents.workflow_id",
+	"current_state_id":     "incidents.current_state_id",
+	"workflow_state_id":    "incidents.current_state_id",
+	"priority":             "incidents.priority",
+	"severity":             "incidents.severity",
+	"assignee_id":          "incidents.assignee_id",
+	"department_id":        "incidents.department_id",
+	"location_id":          "incidents.location_id",
+	"latitude":             "incidents.latitude",
+	"longitude":            "incidents.longitude",
+	"due_date":             "incidents.due_date",
+	"resolved_at":          "incidents.resolved_at",
+	"closed_at":            "incidents.closed_at",
+	"sla_breached":         "incidents.sla_breached",
+	"sla_deadline":         "incidents.sla_deadline",
+	"reporter_id":          "incidents.reporter_id",
+	"created_at":           "incidents.created_at",
+	"updated_at":           "incidents.updated_at",
+	"deleted_at":           "incidents.deleted_at",
+	"record_type":          "incidents.record_type",
+	"source_incident_id":   "incidents.source_incident_id",
+	"converted_request_id": "incidents.converted_request_id",
+	"channel":              "incidents.channel",
+	"source":               "incidents.source",
+}
 
 var userFilterFields = map[string]string{
 	"id":             "users.id",
@@ -364,6 +395,8 @@ var incidentCountFilterFields = map[string]string{
 	"assignee_id":         "incidents.assignee_id",
 	"sla_breached":        "incidents.sla_breached",
 	"reporter_id":         "incidents.reporter_id",
+	"channel":             "incidents.channel",
+	"source":              "incidents.source",
 }
 
 // The 6 count-group filter maps are populated by init() via mergeFilterFields so that
@@ -390,6 +423,8 @@ func init() {
 		"classification_id":   "incidents.classification_id",
 		"classification_name": "class.name",
 		"department_id":       "incidents.department_id",
+		"status":              "workflow_states.id",
+		"status_name":         "workflow_states.name",
 	}
 	locationCountFilterFields = mergeFilterFields(incidentCountFilterFields, locationSpecific)
 	locationCountByStatusFilterFields = mergeFilterFields(incidentCountFilterFields, locationSpecific, statusFields)
@@ -401,6 +436,8 @@ func init() {
 		"location_id":         "incidents.location_id",
 		"location_name":       "loc.name",
 		"department_id":       "incidents.department_id",
+		"status":              "workflow_states.id",
+		"status_name":         "workflow_states.name",
 	}
 	classificationCountFilterFields = mergeFilterFields(incidentCountFilterFields, classificationSpecific)
 	classificationCountByStatusFilterFields = mergeFilterFields(incidentCountFilterFields, classificationSpecific, statusFields)
@@ -411,9 +448,21 @@ func init() {
 		"parent_id":         "departments.parent_id",
 		"location_id":       "incidents.location_id",
 		"classification_id": "incidents.classification_id",
+		"status":            "workflow_states.id",
+		"status_name":       "workflow_states.name",
 	}
 	departmentCountFilterFields = mergeFilterFields(incidentCountFilterFields, departmentSpecific)
 	departmentCountByStatusFilterFields = mergeFilterFields(incidentCountFilterFields, departmentSpecific, statusFields)
+
+	// dataSourceFilterFields is a var literal initialized before init() runs, so the
+	// count filter maps (populated above) are nil in the map at that point.
+	// Fix: overwrite those entries now that the maps are fully built.
+	dataSourceFilterFields["locations_by_count"] = locationCountFilterFields
+	dataSourceFilterFields["locations_by_status"] = locationCountByStatusFilterFields
+	dataSourceFilterFields["classifications_by_count"] = classificationCountFilterFields
+	dataSourceFilterFields["classifications_by_status"] = classificationCountByStatusFilterFields
+	dataSourceFilterFields["departments_by_count"] = departmentCountFilterFields
+	dataSourceFilterFields["departments_by_status"] = departmentCountByStatusFilterFields
 }
 
 // userPerformanceFilterFields covers the joined tables used by ExecuteUserPerformanceQuery.
@@ -442,6 +491,7 @@ var userPerformanceFilterFields = map[string]string{
 var dataSourceFilterFields = map[string]map[string]string{
 	"incidents":                 incidentFilterFields,
 	"request":                   requestFilterFields,
+	"requests":                  requestFilterFields,
 	"users":                     userFilterFields,
 	"workflows":                 workflowFilterFields,
 	"departments":               departmentFilterFields,
@@ -455,6 +505,21 @@ var dataSourceFilterFields = map[string]map[string]string{
 	"classifications_by_status": classificationCountByStatusFilterFields,
 	"departments_by_count":      departmentCountFilterFields,
 	"departments_by_status":     departmentCountByStatusFilterFields,
+}
+
+// hasFilter returns true if any filter in the slice targets the given field name.
+func hasFilter(filters []models.ReportFilterConfig, field string) bool {
+	for _, f := range filters {
+		if f.Field == field && f.Value != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// needsStatusJoin reports whether any filter requires workflow_states to be joined.
+func needsStatusJoin(filters []models.ReportFilterConfig) bool {
+	return hasFilter(filters, "status_name") || hasFilter(filters, "status") || hasFilter(filters, "current_state_id") || hasFilter(filters, "state_name")
 }
 
 // add this helper alongside your repo functions
@@ -482,6 +547,7 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 	}
 
 	for _, f := range filters {
+		log.Printf("field %s datasource %s value %s", f.Field, dataSource, f.Value)
 		col, ok := fieldMap[f.Field]
 		if !ok {
 			log.Println("skipping unknown filter field:", f.Field, "for data source:", dataSource)
@@ -494,7 +560,7 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 			log.Println("skipping filter with nil value for field:", f.Field)
 			continue
 		}
-
+		log.Print(col, f.Value)
 		switch f.Operator {
 		case "equals":
 			if isSlice(f.Value) {
@@ -2862,6 +2928,9 @@ func (r *reportRepository) ExecuteLocationCountQuery(ctx context.Context, filter
 			Joins("LEFT JOIN locations parent_loc ON parent_loc.id = locations.parent_id").
 			Joins("LEFT JOIN incidents ON incidents.location_id = locations.id AND incidents.deleted_at IS NULL").
 			Joins("LEFT JOIN classifications class ON class.id = incidents.classification_id")
+		if needsStatusJoin(filters) {
+			q = q.Joins("LEFT JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
+		}
 		return r.applyFilters(ctx, q, filters)
 	}
 	var total int64
@@ -3136,6 +3205,9 @@ func (r *reportRepository) ExecuteClassificationCountQuery(ctx context.Context, 
 			Joins("LEFT JOIN classifications parent_cls ON parent_cls.id = classifications.parent_id").
 			Joins("LEFT JOIN incidents ON incidents.classification_id = classifications.id AND incidents.deleted_at IS NULL").
 			Joins("LEFT JOIN locations loc ON loc.id = incidents.location_id")
+		if needsStatusJoin(filters) {
+			q = q.Joins("LEFT JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
+		}
 		return r.applyFilters(ctx, q, filters)
 	}
 	var total int64
@@ -3290,7 +3362,7 @@ func (r *reportRepository) ExecuteClassificationCountByStatusQuery(ctx context.C
 		if err := rows.Scan(&classificationID, &statusName, &count); err != nil {
 			continue
 		}
-		log.Printf("total count of class %s status %s : %d", classificationID, statusName, count)
+
 		if statusName == "" {
 			statusName = "X"
 			count = 1
@@ -3360,6 +3432,9 @@ func (r *reportRepository) ExecuteDepartmentCountQuery(ctx context.Context, filt
 			Table("departments").
 			Joins("LEFT JOIN departments parent_dept ON parent_dept.id = departments.parent_id").
 			Joins("LEFT JOIN incidents ON incidents.department_id = departments.id AND incidents.deleted_at IS NULL")
+		if needsStatusJoin(filters) {
+			q = q.Joins("LEFT JOIN workflow_states ON workflow_states.id = incidents.current_state_id")
+		}
 		return r.applyFilters(ctx, q, filters)
 	}
 	var total int64

@@ -57,6 +57,7 @@ type reportService struct {
 	rejectionLogRepo   repository.RejectionLogRepository
 	locationRepo       repository.LocationRepository
 	classificationRepo repository.ClassificationRepository
+	workflowRepo       repository.WorkflowRepository
 	queryHandlers      map[string]queryHandlerFn // ← single registry
 }
 
@@ -65,6 +66,7 @@ func NewReportService(
 	rejectionLogRepo repository.RejectionLogRepository,
 	locationRepo repository.LocationRepository,
 	classificationRepo repository.ClassificationRepository,
+	workflowRepo repository.WorkflowRepository,
 
 ) ReportService {
 	// return &reportService{
@@ -76,6 +78,7 @@ func NewReportService(
 		rejectionLogRepo:   rejectionLogRepo,
 		locationRepo:       locationRepo,
 		classificationRepo: classificationRepo,
+		workflowRepo:       workflowRepo,
 	}
 	// All four switch statements collapse into this one map.
 	// Adding a new data source = one line here, zero changes elsewhere.
@@ -1013,6 +1016,25 @@ func (s *reportService) buildFilterDisplay(ctx context.Context, filters []models
 					display["2_Classification"] = cls.Name
 				}
 			}
+		case "status_id":
+			ids := toStringSlice(f.Value)
+			if len(ids) > 1 {
+				display["5_Status"] = "Multiple"
+				continue
+			}
+			if id, err := uuid.Parse(ids[0]); err == nil {
+				if wrflw, err := s.workflowRepo.FindStateByID(ctx, id); err == nil && wrflw != nil {
+					display["5_Status"] = wrflw.Name
+				}
+			}
+
+		case "status_name", "status":
+			ids := toStringSlice(f.Value)
+			if len(ids) > 1 {
+				display["5_Status"] = "Multiple"
+			} else {
+				display["5_Status"] = ids[0]
+			}
 
 		// Both "created_at" (incidents/requests) and "incident_created_at"
 		// (count-group queries) map to From / To Date.
@@ -1398,6 +1420,7 @@ func (s *reportService) GetDataSources(ctx context.Context) []models.DataSourceI
 				{Field: "location_name", Label: "Location", Type: "string", Filterable: false, Sortable: true},
 				{Field: "parent_location_name", Label: "Parent Location", Type: "string", Filterable: false, Sortable: true},
 				{Field: "incident_count", Label: "No. of Incidents", Type: "number", Filterable: false, Sortable: true},
+				{Field: "status_name", Label: "Status", Type: "uuid", Filterable: true, Sortable: false},
 			},
 		},
 		{
@@ -1417,6 +1440,7 @@ func (s *reportService) GetDataSources(ctx context.Context) []models.DataSourceI
 				{Field: "classification_name", Label: "Classification", Type: "string", Filterable: false, Sortable: true},
 				{Field: "parent_classification_name", Label: "Parent Classification", Type: "string", Filterable: false, Sortable: true},
 				{Field: "incident_count", Label: "No. of Incidents", Type: "number", Filterable: false, Sortable: true},
+				{Field: "status_name", Label: "Status", Type: "uuid", Filterable: true, Sortable: false},
 			},
 		},
 		{
@@ -1436,6 +1460,7 @@ func (s *reportService) GetDataSources(ctx context.Context) []models.DataSourceI
 				{Field: "department_name", Label: "Department", Type: "string", Filterable: false, Sortable: true},
 				{Field: "parent_department_name", Label: "Parent Department", Type: "string", Filterable: false, Sortable: true},
 				{Field: "incident_count", Label: "No. of Incidents", Type: "number", Filterable: false, Sortable: true},
+				{Field: "status_name", Label: "Status", Type: "uuid", Filterable: true, Sortable: false},
 			},
 		},
 		{
