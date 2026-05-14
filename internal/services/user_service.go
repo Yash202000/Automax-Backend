@@ -29,7 +29,9 @@ import (
 
 type UserService interface {
 	Register(ctx context.Context, req *models.UserRegisterRequest) (*models.AuthResponse, error)
+	SSORegister(ctx context.Context, req *models.SSORegisterRequest) (*models.AuthResponse, error)
 	Login(ctx context.Context, req *models.UserLoginRequest) (*models.AuthLoginResponse, error)
+	SSOLogin(ctx context.Context, req *models.SSOLoginRequest) (*models.AuthLoginResponse, error)
 	RefreshToken(ctx context.Context, refreshToken string) (*models.AuthResponse, error)
 	Logout(ctx context.Context) error
 	GetProfile(ctx context.Context, userID uuid.UUID) (*models.UserResponse, error)
@@ -223,6 +225,228 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 	return &models.AuthResponse{
 		User:  models.ToUserResponse(user),
 		Token: token,
+	}, nil
+}
+
+func (s *userService) SSORegister(ctx context.Context, req *models.SSORegisterRequest) (*models.AuthResponse, error) {
+	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
+
+	if req.Phone != "" {
+		exists, err := s.userRepo.ExistsByPhone(ctx, req.Phone, uuid.Nil)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			return nil, errors.New("Phone number already in use")
+		}
+	}
+
+	exists, err := s.userRepo.ExistsByEmail(ctx, req.Email)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, errors.New("email already exists")
+	}
+
+	exists, err = s.userRepo.ExistsByUsername(ctx, req.Username)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, errors.New("username already exists")
+	}
+
+	exists, err = s.userRepo.ExistsByNationalID(ctx, req.NationalID)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, errors.New("national ID already exists")
+	}
+
+	hashedPassword, err := utils.HashPassword(req.Password)
+	if err != nil {
+		return nil, err
+	}
+
+	user := &models.User{
+		Email:        req.Email,
+		Username:     req.Username,
+		Password:     hashedPassword,
+		NationalID:   req.NationalID,
+		FirstName:    req.FirstName,
+		LastName:     req.LastName,
+		Phone:        req.Phone,
+		Extension:    req.Extension,
+		DepartmentID: req.DepartmentID,
+		LocationID:   req.LocationID,
+		IsActive:     true,
+	}
+
+	if s.licenseService != nil && s.licenseService.IsValid() && s.licenseRepo != nil {
+		activeCount, countErr := s.licenseRepo.CountActiveUsers(ctx)
+		if countErr == nil && activeCount >= int64(s.licenseService.GetMaxUsers()) {
+			return nil, fmt.Errorf("%w: %d active users, license limit is %d", ErrUserLimitReached, activeCount, s.licenseService.GetMaxUsers())
+		}
+	}
+
+	if err := s.userRepo.Create(ctx, user); err != nil {
+		return nil, err
+	}
+
+	if len(req.RoleIDs) > 0 {
+		s.userRepo.AssignRoles(ctx, user.ID, req.RoleIDs)
+	}
+	if len(req.DepartmentIDs) > 0 {
+		s.userRepo.AssignDepartments(ctx, user.ID, req.DepartmentIDs)
+	}
+	if len(req.LocationIDs) > 0 {
+		s.userRepo.AssignLocations(ctx, user.ID, req.LocationIDs)
+	}
+	if len(req.ClassificationIDs) > 0 {
+		s.userRepo.AssignClassifications(ctx, user.ID, req.ClassificationIDs)
+	}
+
+	role := "user"
+	if user.IsSuperAdmin {
+		role = "admin"
+	}
+
+	token, err := s.jwtManager.GenerateToken(user.ID, user.Email, role)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.sessionStore.SetUserSession(ctx, user.ID.String(), map[string]interface{}{
+		"user_id": user.ID,
+		"email":   user.Email,
+		"role":    role,
+	}, s.jwtManager.GetTokenExpiration()); err != nil {
+		return nil, err
+	}
+
+	user, _ = s.userRepo.FindByIDWithRelations(ctx, user.ID)
+
+	go func() {
+		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+			UserID:      uuid.Nil,
+			Action:      "sso_register",
+			Module:      "users",
+			ResourceID:  user.ID.String(),
+			Description: fmt.Sprintf("SSO user registered: %s (%s, national_id: %s)", user.Username, user.Email, user.NationalID),
+			OldValue:    nil,
+			NewValue:    req,
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		})
+	}()
+
+	return &models.AuthResponse{
+		User:  models.ToUserResponse(user),
+		Token: token,
+	}, nil
+}
+
+func (s *userService) SSOLogin(ctx context.Context, req *models.SSOLoginRequest) (*models.AuthLoginResponse, error) {
+	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
+
+	user, err := s.userRepo.FindByNationalIDForLogin(ctx, req.NationalID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			go func() {
+				_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+					UserID:      uuid.Nil,
+					Action:      "sso_login_failed",
+					Module:      "users",
+					ResourceID:  "",
+					Description: fmt.Sprintf("Failed SSO login attempt for national_id: %s", req.NationalID),
+					OldValue:    nil,
+					NewValue:    nil,
+					IPAddress:   ipAddress,
+					UserAgent:   userAgent,
+					Status:      "failed",
+				})
+			}()
+			return nil, errors.New("invalid credentials")
+		}
+		return nil, err
+	}
+
+	if !utils.CheckPassword(req.Password, user.Password) {
+		go func() {
+			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+				UserID:      user.ID,
+				Action:      "sso_login_failed",
+				Module:      "users",
+				ResourceID:  user.ID.String(),
+				Description: fmt.Sprintf("Failed SSO login attempt for user: %s (%s)", user.Username, user.Email),
+				OldValue:    nil,
+				NewValue:    nil,
+				IPAddress:   ipAddress,
+				UserAgent:   userAgent,
+				Status:      "failed",
+			})
+		}()
+		return nil, errors.New("invalid credentials")
+	}
+
+	if !user.IsActive {
+		return nil, errors.New("account is deactivated")
+	}
+
+	role := "user"
+	if user.IsSuperAdmin {
+		role = "admin"
+	} else if len(user.Roles) > 0 {
+		role = user.Roles[0].Code
+	}
+
+	sessionID, err := s.sessionStore.SetUserSessionMultiDevices(ctx, user.ID.String(), map[string]interface{}{
+		"user_id": user.ID,
+		"email":   user.Email,
+		"role":    role,
+	}, s.jwtManager.GetTokenExpiration())
+	if err != nil {
+		return nil, err
+	}
+
+	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, role, sessionID, req.RememberMe)
+	if err != nil {
+		return nil, err
+	}
+
+	go func(ctx context.Context, userID uuid.UUID) {
+		if err := s.userRepo.UpdateLastLogin(ctx, userID); err != nil {
+			fmt.Println("failed to update last login:", err)
+		}
+	}(ctx, user.ID)
+
+	go func() {
+		if err := s.actionLogService.LogAction(context.Background(), &LogActionParams{
+			UserID:      user.ID,
+			Action:      "sso_login",
+			Module:      "users",
+			ResourceID:  user.ID.String(),
+			Description: fmt.Sprintf("Successful SSO login for user: %s (%s)", user.Username, user.Email),
+			OldValue:    nil,
+			NewValue:    nil,
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		}); err != nil {
+			fmt.Printf("Error logging SSO login action: %v\n", err)
+		}
+	}()
+
+	return &models.AuthLoginResponse{
+		User:         models.ToUserLoginResponse(user),
+		Token:        tokenPair.AccessToken,
+		RefreshToken: tokenPair.RefreshToken,
+		ExpiresIn:    tokenPair.ExpiresIn,
 	}, nil
 }
 

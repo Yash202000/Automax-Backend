@@ -8,20 +8,24 @@ import (
 	"github.com/automax/backend/internal/database"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/automax/backend/pkg/validation"
 )
 
-// SSOHandler handles SSO launch and callback requests
+// SSOHandler handles SSO launch, callback, and SSO-specific auth requests
 type SSOHandler struct {
 	ssoJWT       *utils.SSOJWTManager
 	jwtManager   *utils.JWTManager
 	sessionStore *database.SessionStore
 	userRepo     repository.UserRepository
 	appLinkRepo  repository.ApplicationLinkRepository
+	userService  services.UserService
 	frontendURL  string // SSO_FRONTEND_URL — where /sso-complete lives (frontend origin)
 }
 
@@ -31,6 +35,7 @@ func NewSSOHandler(
 	sessionStore *database.SessionStore,
 	userRepo repository.UserRepository,
 	appLinkRepo repository.ApplicationLinkRepository,
+	userService services.UserService,
 	frontendURL string,
 ) *SSOHandler {
 	return &SSOHandler{
@@ -39,6 +44,7 @@ func NewSSOHandler(
 		sessionStore: sessionStore,
 		userRepo:     userRepo,
 		appLinkRepo:  appLinkRepo,
+		userService:  userService,
 		frontendURL:  frontendURL,
 	}
 }
@@ -233,4 +239,48 @@ func (h *SSOHandler) Callback(c *fiber.Ctx) error {
 		base, tokenPair.AccessToken, tokenPair.RefreshToken)
 
 	return c.Redirect(redirectURL, fiber.StatusFound)
+}
+
+// SSORegister handles POST /auth/sso/register (public)
+func (h *SSOHandler) SSORegister(c *fiber.Ctx) error {
+	var req models.SSORegisterRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	response, err := h.userService.SSORegister(c.UserContext(), &req)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusCreated, "SSO user registered successfully", response)
+}
+
+// SSOLogin handles POST /auth/sso/login (public)
+func (h *SSOHandler) SSOLogin(c *fiber.Ctx) error {
+	var req models.SSOLoginRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	response, err := h.userService.SSOLogin(c.UserContext(), &req)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusUnauthorized, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "SSO login successful", response)
 }
