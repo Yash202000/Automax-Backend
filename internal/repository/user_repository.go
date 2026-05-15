@@ -49,6 +49,8 @@ type UserRepository interface {
 	UpdateProfile(ctx context.Context, user map[string]interface{}) error
 	FindByPermissionCode(ctx context.Context, permissionCode string) ([]models.User, error)
 	ExistsByPhone(ctx context.Context, phone string, excludeUserID uuid.UUID) (bool, error)
+	ExistsByNationalID(ctx context.Context, nationalID string) (bool, error)
+	FindByNationalIDForLogin(ctx context.Context, nationalID string) (*models.User, error)
 }
 
 type userRepository struct {
@@ -700,4 +702,22 @@ func (r *userRepository) ExistsByPhone(ctx context.Context, phone string, exclud
 		Count(&count).Error
 
 	return count > 0, err
+}
+
+func (r *userRepository) ExistsByNationalID(ctx context.Context, nationalID string) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&models.User{}).Where("national_id = ?", nationalID).Count(&count).Error
+	return count > 0, err
+}
+
+func (r *userRepository) FindByNationalIDForLogin(ctx context.Context, nationalID string) (*models.User, error) {
+	var user models.User
+	err := r.db.WithContext(ctx).
+		Preload("Roles", "is_active = ?", true).
+		Preload("Roles.Permissions", "is_active = ?", true).
+		First(&user, "national_id = ?", nationalID).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
 }

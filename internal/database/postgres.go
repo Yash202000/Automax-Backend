@@ -208,6 +208,11 @@ func Migrate(db *gorm.DB) error {
 		log.Printf("Warning: classification types migration failed: %v", err)
 	}
 
+	// Migrate user national_id column
+	if err := migrations.MigrateUserNationalID(db); err != nil {
+		log.Printf("Warning: user national_id migration failed: %v", err)
+	}
+
 	// Seed existing free-text goal categories as root Category rows
 	// and back-fill goals.category_id. Idempotent: safe to run repeatedly.
 	if err := migrateFreeTextGoalCategories(db); err != nil {

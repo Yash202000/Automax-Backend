@@ -8,21 +8,27 @@ import (
 	"github.com/automax/backend/internal/database"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/automax/backend/pkg/validation"
 )
 
-// SSOHandler handles SSO launch and callback requests
+// SSOHandler handles SSO launch, callback, and SSO-specific auth requests
 type SSOHandler struct {
-	ssoJWT       *utils.SSOJWTManager
-	jwtManager   *utils.JWTManager
-	sessionStore *database.SessionStore
-	userRepo     repository.UserRepository
-	appLinkRepo  repository.ApplicationLinkRepository
-	frontendURL  string // SSO_FRONTEND_URL — where /sso-complete lives (frontend origin)
+	ssoJWT            *utils.SSOJWTManager
+	jwtManager        *utils.JWTManager
+	sessionStore      *database.SessionStore
+	userRepo          repository.UserRepository
+	appLinkRepo       repository.ApplicationLinkRepository
+	userService       services.UserService
+	otpService        *services.OTPService
+	frontendURL       string // SSO_FRONTEND_URL — where /sso-complete lives (frontend origin)
+	nafathAPIBaseURL string // NAFATH_API_BASE_URL — Nafath validation API
 }
 
 func NewSSOHandler(
@@ -31,16 +37,30 @@ func NewSSOHandler(
 	sessionStore *database.SessionStore,
 	userRepo repository.UserRepository,
 	appLinkRepo repository.ApplicationLinkRepository,
+	userService services.UserService,
+	otpService *services.OTPService,
 	frontendURL string,
+	nafathAPIBaseURL string,
 ) *SSOHandler {
 	return &SSOHandler{
-		ssoJWT:       ssoJWT,
-		jwtManager:   jwtManager,
-		sessionStore: sessionStore,
-		userRepo:     userRepo,
-		appLinkRepo:  appLinkRepo,
-		frontendURL:  frontendURL,
+		ssoJWT:            ssoJWT,
+		jwtManager:        jwtManager,
+		sessionStore:      sessionStore,
+		userRepo:          userRepo,
+		appLinkRepo:       appLinkRepo,
+		userService:       userService,
+		otpService:        otpService,
+		frontendURL:       frontendURL,
+		nafathAPIBaseURL: nafathAPIBaseURL,
 	}
+}
+
+// maskPhone masks the middle digits of a phone number for display.
+func maskPhone(phone string) string {
+	if len(phone) < 6 {
+		return phone
+	}
+	return phone[:3] + "****" + phone[len(phone)-3:]
 }
 
 // launchRequest is the body expected by POST /api/v1/sso/launch
@@ -233,4 +253,91 @@ func (h *SSOHandler) Callback(c *fiber.Ctx) error {
 		base, tokenPair.AccessToken, tokenPair.RefreshToken)
 
 	return c.Redirect(redirectURL, fiber.StatusFound)
+}
+
+// SSORegister handles POST /auth/sso/register (public)
+func (h *SSOHandler) SSORegister(c *fiber.Ctx) error {
+	var req models.SSORegisterRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	_, err := h.userService.SSORegister(c.UserContext(), &req)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	sessionID, err := h.otpService.SendOTP(c.UserContext(), req.Phone, "sms", nil)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to send OTP: "+err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusCreated, "OTP sent to your mobile number", fiber.Map{
+		"session_id":   sessionID,
+		"phone":        req.Phone,
+		"phone_masked": maskPhone(req.Phone),
+	})
+}
+
+// SSOLogin handles POST /auth/sso/login (public)
+func (h *SSOHandler) SSOLogin(c *fiber.Ctx) error {
+	var req models.SSOLoginRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	resp, err := h.userService.SSOLogin(c.UserContext(), &req)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusUnauthorized, err.Error())
+	}
+
+	if h.nafathAPIBaseURL != "" {
+		base := strings.TrimRight(h.nafathAPIBaseURL, "/")
+		resp.ValidationURL = base + "/validate?token=" + resp.Token
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Login successful", resp)
+}
+
+// SSOValidate handles GET /auth/sso/validate?token=<JWT>
+// Validates the JWT and returns user info for the 3rd party validation app.
+func (h *SSOHandler) SSOValidate(c *fiber.Ctx) error {
+	tokenStr := c.Query("token")
+	if tokenStr == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Missing token parameter")
+	}
+
+	claims, err := h.jwtManager.ValidateToken(tokenStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Invalid or expired token")
+	}
+
+	user, err := h.userRepo.FindByID(c.UserContext(), claims.UserID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "User not found")
+	}
+
+	fullName := strings.TrimSpace(user.FirstName + " " + user.LastName)
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Token validated", fiber.Map{
+		"user_id":     user.ID.String(),
+		"national_id": user.NationalID,
+		"full_name":   fullName,
+		"email":       user.Email,
+		"phone":       user.Phone,
+	})
 }
