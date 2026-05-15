@@ -194,6 +194,9 @@ func (s *reportService) UpdateReport(ctx context.Context, id uuid.UUID, req *mod
 	if req.IsPublic != nil {
 		report.IsPublic = *req.IsPublic
 	}
+	if req.TimestampKey != "" {
+		report.TimestampKey = req.TimestampKey
+	}
 
 	if err := s.reportRepo.Update(ctx, report); err != nil {
 		return nil, err
@@ -1524,6 +1527,7 @@ func toReportResponse(r *models.Report) *models.ReportResponse {
 		ID:            r.ID.String(),
 		Name:          r.Name,
 		NameAr:        r.NameAr,
+		TimestampKey:  r.TimestampKey,
 		Description:   r.Description,
 		DescriptionAr: r.DescriptionAr,
 		DataSource:    r.DataSource,
