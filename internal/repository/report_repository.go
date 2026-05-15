@@ -306,7 +306,7 @@ var requestFilterFields = map[string]string{
 	"record_type":          "incidents.record_type",
 	"source_incident_id":   "incidents.source_incident_id",
 	"converted_request_id": "incidents.converted_request_id",
-	"channel":              "incidents.channel",
+	"channel":              "incidents.source",
 	"source":               "incidents.source",
 }
 
@@ -562,7 +562,6 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 			log.Println("skipping filter with nil value for field:", f.Field)
 			continue
 		}
-		log.Print(col, f.Value)
 		switch f.Operator {
 		case "equals":
 			if isSlice(f.Value) {
@@ -733,7 +732,7 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			SELECT ith.incident_id
 			FROM incident_transition_histories ith
 			INNER JOIN workflow_transitions wt ON wt.id = ith.transition_id AND wt.deleted_at IS NULL
-			WHERE ith.is_system_action = false`
+			`
 		for _, f := range filters {
 			if f.Field != "workflow_transition_id" || f.Value == nil {
 				continue
@@ -741,18 +740,18 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			switch f.Operator {
 			case "equals":
 				if isSlice(f.Value) {
-					q = q.Where(transSubq+" AND wt.id IN (?))", f.Value)
+					q = q.Where(transSubq+" WHERE wt.id IN (?))", f.Value)
 				} else {
-					q = q.Where(transSubq+" AND wt.id = ?)", f.Value)
+					q = q.Where(transSubq+" WHERE wt.id = ?)", f.Value)
 				}
 			case "in":
-				q = q.Where(transSubq+" AND wt.id IN (?))", f.Value)
+				q = q.Where(transSubq+" WHERE wt.id IN (?))", f.Value)
 			case "contains":
-				q = q.Where(transSubq+" AND wt.id ILIKE ?)", "%"+f.Value.(string)+"%")
+				q = q.Where(transSubq+" WHERE wt.id ILIKE ?)", "%"+f.Value.(string)+"%")
 			case "starts_with":
-				q = q.Where(transSubq+" AND wt.id ILIKE ?)", f.Value.(string)+"%")
+				q = q.Where(transSubq+" WHERE wt.id ILIKE ?)", f.Value.(string)+"%")
 			case "ends_with":
-				q = q.Where(transSubq+" AND wt.id ILIKE ?)", "%"+f.Value.(string))
+				q = q.Where(transSubq+" WHERE wt.id ILIKE ?)", "%"+f.Value.(string))
 			}
 		}
 
@@ -1367,9 +1366,11 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 							setField(results[i], code+"_date", enrich.TransitionedAt)
 						}
 						if enrich.Comment != "" {
+							log.Println("code for comment", code, enrich.Comment)
 							setField(results[i], code+"_comment", enrich.Comment)
 						}
 						if enrich.Feedback != "" {
+							log.Println("code for feedback ", code, enrich.Feedback)
 							setField(results[i], code+"_feedback", enrich.Feedback)
 						}
 						if len(enrich.Attachments) > 0 {
@@ -1425,9 +1426,9 @@ func (r *reportRepository) fetchTransitionLinkedData(
 
 	// is_internal filter only applies to incident_comments
 	internalFilter := ""
-	if table == "incident_comments" {
-		internalFilter = "AND f.is_internal = false"
-	}
+	// if table == "incident_comments" {
+	// 	internalFilter = "AND f.is_internal = false"
+	// }
 
 	// incident_comments uses content column, feedbacks use comment
 	commentCol := "comment"
@@ -1505,7 +1506,6 @@ func (r *reportRepository) fetchStatusTransitionData(
 		WHERE tws.name = ?
 		  AND fws.name = ?
 		  AND tr.incident_id::text IN (?)
-		  AND tr.is_system_action = false
 		ORDER BY tr.incident_id, tr.transitioned_at DESC`
 
 	rows, qerr := r.db.WithContext(ctx).Raw(query, toState, fromState, incidentIDs).Rows()
@@ -2027,7 +2027,6 @@ func (r *reportRepository) fetchTransitionEnrichments(
 		INNER JOIN workflow_transitions wt ON wt.id = ith.transition_id AND wt.deleted_at IS NULL
 		LEFT JOIN users u ON u.id = ith.performed_by_id
 		WHERE ith.incident_id::text IN (?)
-		  AND ith.is_system_action = false
 		ORDER BY ith.incident_id, wt.code, ith.transitioned_at DESC`
 	rows1, err := r.db.WithContext(ctx).Raw(q1, incidentIDs).Rows()
 	if err != nil {
@@ -2046,19 +2045,20 @@ func (r *reportRepository) fetchTransitionEnrichments(
 		result[iID][code] = e
 	}
 
-	// Query 2 — first non-internal comment per incident+code
+	// Query 2 — all comments per incident+code, concatenated with " | "
+	// is_internal is intentionally not filtered here: transition-linked comments
+	// (e.g. reopen notes) are saved as internal but must still appear in reports.
 	q2 := `
-		SELECT DISTINCT ON (c.incident_id, wt.code)
+		SELECT
 			c.incident_id::text,
 			wt.code,
-			COALESCE(c.content, '') AS comment
+			STRING_AGG(COALESCE(c.content, ''), ' | ' ORDER BY c.created_at ASC) AS comment
 		FROM incident_comments c
 		INNER JOIN incident_transition_histories ith ON ith.id = c.transition_history_id
 		INNER JOIN workflow_transitions wt ON wt.id = ith.transition_id AND wt.deleted_at IS NULL
 		WHERE c.incident_id::text IN (?)
-		  AND c.is_internal = false
 		  AND c.deleted_at IS NULL
-		ORDER BY c.incident_id, wt.code, c.created_at ASC`
+		GROUP BY c.incident_id, wt.code`
 	rows2, err := r.db.WithContext(ctx).Raw(q2, incidentIDs).Rows()
 	if err != nil {
 		return nil, fmt.Errorf("fetchTransitionEnrichments comments: %w", err)
@@ -2075,17 +2075,17 @@ func (r *reportRepository) fetchTransitionEnrichments(
 		result[iID][code] = e
 	}
 
-	// Query 3 — first feedback per incident+code
+	// Query 3 — all feedbacks per incident+code, concatenated with " | "
 	q3 := `
-		SELECT DISTINCT ON (f.incident_id, wt.code)
+		SELECT
 			f.incident_id::text,
 			wt.code,
-			COALESCE(f.comment, '') AS feedback
+			STRING_AGG(COALESCE(f.comment, ''), ' | ' ORDER BY f.created_at ASC) AS feedback
 		FROM incident_feedbacks f
 		INNER JOIN incident_transition_histories ith ON ith.id = f.transition_history_id
 		INNER JOIN workflow_transitions wt ON wt.id = ith.transition_id AND wt.deleted_at IS NULL
 		WHERE f.incident_id::text IN (?)
-		ORDER BY f.incident_id, wt.code, f.created_at ASC`
+		GROUP BY f.incident_id, wt.code`
 	rows3, err := r.db.WithContext(ctx).Raw(q3, incidentIDs).Rows()
 	if err != nil {
 		return nil, fmt.Errorf("fetchTransitionEnrichments feedbacks: %w", err)
