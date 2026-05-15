@@ -285,6 +285,7 @@ var requestFilterFields = map[string]string{
 	"classification_id":    "incidents.classification_id",
 	"workflow_id":          "incidents.workflow_id",
 	"current_state_id":     "incidents.current_state_id",
+	"status_id":            "incidents.current_state_id",
 	"workflow_state_id":    "incidents.current_state_id",
 	"priority":             "incidents.priority",
 	"severity":             "incidents.severity",
@@ -395,8 +396,9 @@ var incidentCountFilterFields = map[string]string{
 	"assignee_id":         "incidents.assignee_id",
 	"sla_breached":        "incidents.sla_breached",
 	"reporter_id":         "incidents.reporter_id",
-	"channel":             "incidents.channel",
+	"channel":             "incidents.source",
 	"source":              "incidents.source",
+	"created_at":          "incidents.created_at",
 }
 
 // The 6 count-group filter maps are populated by init() via mergeFilterFields so that
