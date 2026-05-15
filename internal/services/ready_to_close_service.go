@@ -15,21 +15,24 @@ import (
 	"gorm.io/gorm"
 )
 
-// ReadyToCloseService handles all logic for the "Ready to Close" expiry feature.
+// ReadyToCloseService handles expiry logic for the "Partial Close" state.
+// When an incident enters a partial_close state a duration is selected;
+// this service tracks the entry, sends a pre-expiry notification, and
+// automatically reverts the incident if the window expires.
 type ReadyToCloseService interface {
-	// CreateEntry records a new Ready-to-Close expiry entry when an incident enters the ready_to_close state. It also updates the incident's ReadyToCloseExpiresAt field.
+	// CreateEntry records a new Partial Close expiry entry and updates partial_close_expires_at/duration on the incident.
 	CreateEntry(ctx context.Context, incidentID uuid.UUID, duration string, comment string, enteredBy uuid.UUID) error
 
-	// DeactivateForIncident deactivates any active Ready-to-Close entry for an incident(called when the incident transitions away from the ready_to_close state).
+	// DeactivateForIncident deactivates all active Partial Close entries for an incident (called when leaving the partial_close state).
 	DeactivateForIncident(ctx context.Context, incidentID uuid.UUID) error
 
-	// ProcessExpiries checks for incidents whose Ready-to-Close window has expired and automatically reverts them to the configured revert state (e.g. Under Resolution).
+	// ProcessExpiries checks for incidents whose Partial Close window has expired and automatically reverts them to the configured revert state.
 	ProcessExpiries(ctx context.Context) error
 
-	// ProcessPreExpiryNotifications sends a single in-app notification to the assignee when an incident is within PreExpiryNotificationHours of its expiry.
+	// ProcessPreExpiryNotifications sends a single in-app notification to the assignee when an incident is within PreExpiryNotificationHours of its Partial Close expiry.
 	ProcessPreExpiryNotifications(ctx context.Context) error
 
-	// GetDurationOptionsForState returns the duration options for a given workflow state.It uses the state's DurationOptions if set, otherwise falls back to the global config.
+	// GetDurationOptionsForState returns the duration options for a given workflow state (state-specific overrides global config).
 	GetDurationOptionsForState(state *models.WorkflowStateResponse) []string
 
 	// ParseDuration converts a human-readable duration label (e.g. "1 Week") to a time.Duration.
@@ -87,14 +90,14 @@ func (s *readyToCloseService) CreateEntry(ctx context.Context, incidentID uuid.U
 		return err
 	}
 
-	// Update the incident's expiry fields for quick lookup
+	// Update the incident's partial close expiry fields for quick lookup
 	return s.db.WithContext(ctx).
 		Model(&models.Incident{}).
 		Where("id = ?", incidentID).
 		Updates(map[string]interface{}{
-			"ready_to_close_expires_at": expiresAt,
-			"ready_to_close_duration":   duration,
-			"ready_to_close_notified":   false,
+			"partial_close_expires_at": expiresAt,
+			"partial_close_duration":   duration,
+			"partial_close_notified":   false,
 		}).Error
 }
 
@@ -107,9 +110,9 @@ func (s *readyToCloseService) DeactivateForIncident(ctx context.Context, inciden
 		Model(&models.Incident{}).
 		Where("id = ?", incidentID).
 		Updates(map[string]interface{}{
-			"ready_to_close_expires_at": nil,
-			"ready_to_close_duration":   "",
-			"ready_to_close_notified":   false,
+			"partial_close_expires_at": nil,
+			"partial_close_duration":   "",
+			"partial_close_notified":   false,
 		}).Error
 }
 
@@ -123,11 +126,11 @@ func (s *readyToCloseService) ProcessExpiries(ctx context.Context) error {
 		return nil
 	}
 
-	log.Printf("[ReadyToClose] Processing %d expired entries", len(entries))
+	log.Printf("[PartialClose] Processing %d expired entries", len(entries))
 
 	for _, entry := range entries {
 		if err := s.revertIncident(ctx, &entry); err != nil {
-			log.Printf("[ReadyToClose] Failed to revert incident %s: %v", entry.IncidentID, err)
+			log.Printf("[PartialClose] Failed to revert incident %s: %v", entry.IncidentID, err)
 			// Continue processing other entries
 		}
 	}
@@ -142,8 +145,8 @@ func (s *readyToCloseService) revertIncident(ctx context.Context, entry *models.
 		return fmt.Errorf("incident not found: %w", err)
 	}
 
-	// Verify the incident is still in a ready_to_close state
-	if incident.CurrentState == nil || !incident.CurrentState.IsReadyToClose {
+	// Verify the incident is still in a partial_close state
+	if incident.CurrentState == nil || !incident.CurrentState.IsPartialClose {
 		// Already moved away — just deactivate the entry
 		return s.repo.DeactivateEntry(ctx, entry.ID)
 	}
@@ -159,7 +162,7 @@ func (s *readyToCloseService) revertIncident(ctx context.Context, entry *models.
 
 	// Build history comment
 	histComment := fmt.Sprintf(
-		"Automatic reversion: incident expired in Ready to Close state after %s (entered at %s, expired at %s).",
+		"Automatic reversion: incident expired in Partial Close state after %s (entered at %s, expired at %s).",
 		entry.Duration,
 		entry.EnteredAt.Format("2006-01-02 15:04:05"),
 		entry.ExpiresAt.Format("2006-01-02 15:04:05"),
@@ -191,13 +194,13 @@ func (s *readyToCloseService) revertIncident(ctx context.Context, entry *models.
 			return err
 		}
 
-		// Update incident state and clear expiry fields
+		// Update incident state and clear partial close expiry fields
 		updates := map[string]interface{}{
-			"current_state_id":          revertState.ID,
-			"ready_to_close_expires_at": nil,
-			"ready_to_close_duration":   "",
-			"ready_to_close_notified":   false,
-			"updated_at":                now,
+			"current_state_id":         revertState.ID,
+			"partial_close_expires_at": nil,
+			"partial_close_duration":   "",
+			"partial_close_notified":   false,
+			"updated_at":               now,
 		}
 		if err := tx.Model(&models.Incident{}).
 			Where("id = ?", entry.IncidentID).
@@ -225,7 +228,7 @@ func (s *readyToCloseService) revertIncident(ctx context.Context, entry *models.
 			IncidentID:          entry.IncidentID,
 			RevisionNumber:      revNum,
 			ActionType:          models.RevisionActionStatusChanged,
-			ActionDescription:   fmt.Sprintf("Automatic reversion: status changed from %s to %s (Ready to Close expired)", oldStateName, newStateName),
+			ActionDescription:   fmt.Sprintf("Automatic reversion: status changed from %s to %s (Partial Close expired)", oldStateName, newStateName),
 			Changes:             string(changesBytes),
 			PerformedByID:       systemUserID,
 			PerformedByRoles:    `["system"]`,
@@ -236,7 +239,7 @@ func (s *readyToCloseService) revertIncident(ctx context.Context, entry *models.
 			return err
 		}
 
-		log.Printf("[ReadyToClose] Reverted incident %s from %s to %s (entry %s expired)",
+		log.Printf("[PartialClose] Reverted incident %s from %s to %s (entry %s expired)",
 			entry.IncidentID, oldStateName, newStateName, entry.ID)
 		return nil
 	})
@@ -252,11 +255,11 @@ func (s *readyToCloseService) ProcessPreExpiryNotifications(ctx context.Context)
 		return nil
 	}
 
-	log.Printf("[ReadyToClose] Sending pre-expiry notifications for %d entries", len(entries))
+	log.Printf("[PartialClose] Sending pre-expiry notifications for %d entries", len(entries))
 
 	for _, entry := range entries {
 		if err := s.sendPreExpiryNotification(ctx, &entry); err != nil {
-			log.Printf("[ReadyToClose] Pre-expiry notification failed for incident %s: %v", entry.IncidentID, err)
+			log.Printf("[PartialClose] Pre-expiry notification failed for incident %s: %v", entry.IncidentID, err)
 		}
 	}
 	return nil
@@ -281,7 +284,7 @@ func (s *readyToCloseService) sendPreExpiryNotification(ctx context.Context, ent
 	}
 
 	if len(emailSet) == 0 {
-		log.Printf("[ReadyToClose] Incident %s has no assignees; skipping pre-expiry notification", entry.IncidentID)
+		log.Printf("[PartialClose] Incident %s has no assignees; skipping pre-expiry notification", entry.IncidentID)
 		return s.repo.MarkExpiryNotified(ctx, entry.ID)
 	}
 
@@ -295,7 +298,7 @@ func (s *readyToCloseService) sendPreExpiryNotification(ctx context.Context, ent
 	minutes := int(remaining.Minutes()) % 60
 	timeStr := fmt.Sprintf("%dh %dm", hours, minutes)
 
-	subject := fmt.Sprintf("Incident %s: Ready to Close Expiring Soon", incident.IncidentNumber)
+	subject := fmt.Sprintf("Incident %s: Partial Close Expiring Soon", incident.IncidentNumber)
 	body := fmt.Sprintf(
 		"This incident will automatically move back to '%s' if not closed within %s.\n\nIncident: %s\nTitle: %s\nExpiry: %s",
 		strings.Title(strings.ReplaceAll(s.cfg.RevertStateCode, "_", " ")),
@@ -322,7 +325,7 @@ func (s *readyToCloseService) sendPreExpiryNotification(ctx context.Context, ent
 		nil,
 		nil, nil,
 	); err != nil {
-		log.Printf("[ReadyToClose] Notification delivery failed for incident %s: %v", entry.IncidentID, err)
+		log.Printf("[PartialClose] Notification delivery failed for incident %s: %v", entry.IncidentID, err)
 		// Still mark as notified to prevent infinite retry
 	}
 
@@ -331,11 +334,11 @@ func (s *readyToCloseService) sendPreExpiryNotification(ctx context.Context, ent
 		return err
 	}
 
-	// Update incident-level flag
+	// Update incident-level partial close notification flag
 	if err := s.db.WithContext(ctx).
 		Model(&models.Incident{}).
 		Where("id = ?", entry.IncidentID).
-		Update("ready_to_close_notified", true).Error; err != nil {
+		Update("partial_close_notified", true).Error; err != nil {
 		return err
 	}
 
@@ -351,7 +354,7 @@ func (s *readyToCloseService) sendPreExpiryNotification(ctx context.Context, ent
 		IncidentID:        entry.IncidentID,
 		RevisionNumber:    revNum,
 		ActionType:        models.RevisionActionStatusChanged,
-		ActionDescription: fmt.Sprintf("Pre-expiry notification sent: Ready to Close expires in %s (at %s)", timeStr, entry.ExpiresAt.Format("2006-01-02 15:04:05")),
+		ActionDescription: fmt.Sprintf("Pre-expiry notification sent: Partial Close expires in %s (at %s)", timeStr, entry.ExpiresAt.Format("2006-01-02 15:04:05")),
 		Changes:           `[]`,
 		PerformedByID:     uuid.Nil,
 		PerformedByRoles:  `["system"]`,
@@ -359,7 +362,7 @@ func (s *readyToCloseService) sendPreExpiryNotification(ctx context.Context, ent
 	}
 	s.db.WithContext(ctx).Create(revision)
 
-	log.Printf("ReadyToClose Pre-expiry notification sent for incident %s (expires %s)", entry.IncidentID, entry.ExpiresAt.Format(time.RFC3339))
+	log.Printf("[PartialClose] Pre-expiry notification sent for incident %s (expires %s)", entry.IncidentID, entry.ExpiresAt.Format(time.RFC3339))
 	return nil
 }
 

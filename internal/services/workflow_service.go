@@ -857,6 +857,7 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 		SLAUnit:         req.SLAUnit,
 		IsMergable:      req.IsMergable,
 		IsReadyToClose:  req.IsReadyToClose,
+		IsPartialClose:  req.IsPartialClose,
 		DurationOptions: durationOptionsJSON,
 		SortOrder:       req.SortOrder,
 		IsActive:        true,
@@ -1017,6 +1018,9 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 	}
 	if req.IsReadyToClose != nil {
 		state.IsReadyToClose = *req.IsReadyToClose
+	}
+	if req.IsPartialClose != nil {
+		state.IsPartialClose = *req.IsPartialClose
 	}
 	if req.DurationOptions != nil {
 		if len(req.DurationOptions) > 0 {

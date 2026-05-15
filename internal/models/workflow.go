@@ -97,6 +97,8 @@ type WorkflowState struct {
 
 	// IsReadyToClose marks this state as a "Ready to Close" state that requires a
 	IsReadyToClose bool `gorm:"default:false" json:"is_ready_to_close"`
+	// IsPartialClose marks this state as a "Partial Close" state that requires a duration selection.
+	IsPartialClose bool `gorm:"default:false" json:"is_partial_close"`
 	// DurationOptions is a JSON array of duration label strings (e.g. ["1 Day","1 Week"]).When non-empty it overrides the global READY_TO_CLOSE_DURATION_OPTIONS env variable.
 	DurationOptions string `gorm:"type:text" json:"duration_options"`
 
@@ -343,6 +345,7 @@ type WorkflowStateCreateRequest struct {
 	EscalationPolicyID *string  `json:"escalation_policy_id" validate:"omitempty,uuid"`
 	IsMergable         bool     `json:"is_mergable"`
 	IsReadyToClose     bool     `json:"is_ready_to_close"`
+	IsPartialClose     bool     `json:"is_partial_close"`
 	DurationOptions    []string `json:"duration_options"`
 	SortOrder          int      `json:"sort_order"`
 	ViewableRoleIDs    []string `json:"viewable_role_ids"`
@@ -369,6 +372,7 @@ type WorkflowStateUpdateRequest struct {
 	EscalationPolicyID *string  `json:"escalation_policy_id" validate:"omitempty,uuid"`
 	IsMergable         *bool    `json:"is_mergable"`
 	IsReadyToClose     *bool    `json:"is_ready_to_close"`
+	IsPartialClose     *bool    `json:"is_partial_close"`
 	DurationOptions    []string `json:"duration_options"`
 	SortOrder          *int     `json:"sort_order"`
 	IsActive           *bool    `json:"is_active"`
@@ -539,6 +543,7 @@ type WorkflowStateResponse struct {
 	EscalationPolicy   *EscalationPolicyResponse `json:"escalation_policy,omitempty"`
 	IsMergable         bool                      `json:"is_mergable"`
 	IsReadyToClose     bool                      `json:"is_ready_to_close"`
+	IsPartialClose     bool                      `json:"is_partial_close"`
 	DurationOptions    []string                  `json:"duration_options,omitempty"`
 	SortOrder          int                       `json:"sort_order"`
 	IsActive           bool                      `json:"is_active"`
@@ -751,6 +756,7 @@ func ToWorkflowStateResponse(s *WorkflowState) WorkflowStateResponse {
 		EscalationPolicyID: s.EscalationPolicyID,
 		IsMergable:         s.IsMergable,
 		IsReadyToClose:     s.IsReadyToClose,
+		IsPartialClose:     s.IsPartialClose,
 		SortOrder:          s.SortOrder,
 		IsActive:           s.IsActive,
 		CreatedAt:          s.CreatedAt,

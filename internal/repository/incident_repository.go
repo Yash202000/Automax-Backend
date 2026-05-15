@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/automax/backend/internal/models"
@@ -902,6 +903,17 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 	)
 	if err := slaQuery.Count(&stats.SLABreached).Error; err != nil {
 		return nil, err
+	}
+
+	// Partial Close (incidents currently in a partial_close state)
+	pcQuery := applyBaseFilters(
+		r.db.WithContext(ctx).Model(&models.Incident{}).
+			Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
+			Where("workflow_states.is_partial_close = ? AND incidents.workflow_id IN (SELECT id FROM workflows WHERE deleted_at IS NULL)", true),
+	)
+	if err := pcQuery.Count(&stats.PartialClose).Error; err != nil {
+		// Non-fatal: column may not exist yet on older schema — partial_close stays 0
+		log.Printf("[GetStatsV2] partial_close count query failed (schema may need migration): %v", err)
 	}
 
 	// Per-state counts (workflow_stats + by_state)

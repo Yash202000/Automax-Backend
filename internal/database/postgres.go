@@ -214,6 +214,12 @@ func Migrate(db *gorm.DB) error {
 		log.Printf("Warning: goal category back-fill migration failed: %v", err)
 	}
 
+	// Partial Close feature columns — idempotent, safe to run repeatedly
+	db.Exec("ALTER TABLE workflow_states ADD COLUMN IF NOT EXISTS is_partial_close BOOLEAN NOT NULL DEFAULT false")
+	db.Exec("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS partial_close_expires_at TIMESTAMPTZ")
+	db.Exec("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS partial_close_duration VARCHAR(100) NOT NULL DEFAULT ''")
+	db.Exec("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS partial_close_notified BOOLEAN NOT NULL DEFAULT false")
+
 	log.Println("Database migrations completed")
 	return nil
 }
