@@ -91,8 +91,8 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 		if slaUnit == "" {
 			slaUnit = "hours"
 		}
-		log.Printf("[EscalationService] Incident %s has been in state '%s' for %.2fh (SLA: %d %s)",
-			incident.IncidentNumber, state.Name, hoursInState, *state.SLAHours, slaUnit)
+		// log.Printf("[EscalationService] Incident %s has been in state '%s' for %.2fh (SLA: %d %s)",
+		// 	incident.IncidentNumber, state.Name, hoursInState, *state.SLAHours, slaUnit)
 
 		// ── Policy-driven path ──────────────────────────────────────────────
 		if state.EscalationPolicyID != nil && s.policyService != nil {
