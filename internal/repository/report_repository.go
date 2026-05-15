@@ -273,6 +273,7 @@ var incidentFilterFields = map[string]string{
 	"assignee_last_name":  "assignees.last_name",
 	// ── Subquery-handled (empty col = silently skipped by applyFilters) ───────
 	"workflow_transition_id": "", // handled via IN-subquery in ExecuteIncidentQuery
+	"workflow_transition_at": "", // handled via IN-subquery in ExecuteIncidentQuery
 }
 
 // requestFilterFields reuses the incident columns (same table, filtered by record_type).
@@ -732,6 +733,7 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			SELECT ith.incident_id
 			FROM incident_transition_histories ith
 			INNER JOIN workflow_transitions wt ON wt.id = ith.transition_id AND wt.deleted_at IS NULL
+			WHERE 1=1
 			`
 		for _, f := range filters {
 			if f.Field != "workflow_transition_id" || f.Value == nil {
@@ -740,21 +742,53 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			switch f.Operator {
 			case "equals":
 				if isSlice(f.Value) {
-					q = q.Where(transSubq+" WHERE wt.id IN (?))", f.Value)
+					q = q.Where(transSubq+" AND wt.id IN (?))", f.Value)
 				} else {
-					q = q.Where(transSubq+" WHERE wt.id = ?)", f.Value)
+					q = q.Where(transSubq+" AND wt.id = ?)", f.Value)
 				}
 			case "in":
-				q = q.Where(transSubq+" WHERE wt.id IN (?))", f.Value)
+				q = q.Where(transSubq+" AND wt.id IN (?))", f.Value)
 			case "contains":
-				q = q.Where(transSubq+" WHERE wt.id ILIKE ?)", "%"+f.Value.(string)+"%")
+				q = q.Where(transSubq+" AND wt.id ILIKE ?)", "%"+f.Value.(string)+"%")
 			case "starts_with":
-				q = q.Where(transSubq+" WHERE wt.id ILIKE ?)", f.Value.(string)+"%")
+				q = q.Where(transSubq+" AND wt.id ILIKE ?)", f.Value.(string)+"%")
 			case "ends_with":
-				q = q.Where(transSubq+" WHERE wt.id ILIKE ?)", "%"+f.Value.(string))
+				q = q.Where(transSubq+" AND wt.id ILIKE ?)", "%"+f.Value.(string))
 			}
 		}
 
+		for _, f := range filters {
+			if f.Field != "workflow_transition_at" || f.Value == nil {
+				continue
+			}
+			switch f.Operator {
+			case "between":
+				if m, ok := f.Value.(map[string]interface{}); ok {
+					fromStr, _ := m["from"].(string)
+					toStr, _ := m["to"].(string)
+					from, err1 := time.Parse(time.RFC3339, fromStr)
+					to, err2 := time.Parse(time.RFC3339, toStr)
+					if err1 == nil && err2 == nil {
+						q = q.Where(transSubq+" AND ith.transitioned_at BETWEEN ? AND ?)", from, to)
+					}
+				}
+			case "equals":
+				t, err := time.Parse(time.RFC3339, fmt.Sprint(f.Value))
+				if err == nil {
+					q = q.Where(transSubq+" AND ith.transitioned_at = ?)", t)
+				}
+			case "gt":
+				t, err := time.Parse(time.RFC3339, fmt.Sprint(f.Value))
+				if err == nil {
+					q = q.Where(transSubq+" AND ith.transitioned_at > ?)", t)
+				}
+			case "lt":
+				t, err := time.Parse(time.RFC3339, fmt.Sprint(f.Value))
+				if err == nil {
+					q = q.Where(transSubq+" AND ith.transitioned_at < ?)", t)
+				}
+			}
+		}
 		return r.applyFilters(ctx, q, filters)
 	}
 

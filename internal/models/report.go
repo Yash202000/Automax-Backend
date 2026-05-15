@@ -13,6 +13,7 @@ type Report struct {
 	Name          string         `gorm:"size:255;not null" json:"name"`
 	NameAr        string         `gorm:"size:255" json:"name_ar"`
 	Description   string         `gorm:"type:text" json:"description"`
+	TimestampKey  string         `gorm:"type:text" json:"timestamp_key"`
 	DescriptionAr string         `gorm:"type:text" json:"description_ar"`
 	DataSource    string         `gorm:"size:50;not null;index" json:"data_source"` // incidents, users, workflows, etc.
 	Columns       string         `gorm:"type:text" json:"columns"`                  // JSON array of column configs
@@ -106,6 +107,7 @@ type ReportCreateRequest struct {
 	Name          string                    `json:"name" validate:"required,max=255"`
 	NameAr        string                    `json:"name_ar" validate:"max=255"`
 	Description   string                    `json:"description"`
+	TimestampKey  string                    `json:"timestamp_key"`
 	DescriptionAr string                    `json:"description_ar"`
 	DataSource    string                    `json:"data_source" validate:"required"`
 	Config        ReportCreateRequestConfig `json:"config" validate:"required"`
@@ -115,6 +117,7 @@ type ReportCreateRequest struct {
 type ReportUpdateRequest struct {
 	Name          string                     `json:"name" validate:"omitempty,max=255"`
 	NameAr        string                     `json:"name_ar" validate:"max=255"`
+	TimestampKey  string                     `json:"timestamp_key"`
 	Description   string                     `json:"description"`
 	DescriptionAr string                     `json:"description_ar"`
 	Config        *ReportCreateRequestConfig `json:"config"`
@@ -189,6 +192,7 @@ type ReportResponse struct {
 	ID            string               `json:"id"`
 	Name          string               `json:"name"`
 	NameAr        string               `json:"name_ar,omitempty"`
+	TimestampKey  string               `json:"timestamp_key"`
 	Description   string               `json:"description"`
 	DescriptionAr string               `json:"description_ar,omitempty"`
 	DataSource    string               `json:"data_source"`
