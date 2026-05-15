@@ -266,7 +266,8 @@ func (s *userService) SSORegister(ctx context.Context, req *models.SSORegisterRe
 		return nil, errors.New("national ID already exists")
 	}
 
-	hashedPassword, err := utils.HashPassword(req.Password)
+	randomPw, _ := uuid.NewRandom()
+	hashedPassword, err := utils.HashPassword(randomPw.String())
 	if err != nil {
 		return nil, err
 	}
@@ -351,47 +352,12 @@ func (s *userService) SSORegister(ctx context.Context, req *models.SSORegisterRe
 }
 
 func (s *userService) SSOLogin(ctx context.Context, req *models.SSOLoginRequest) (*models.AuthLoginResponse, error) {
-	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
-	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
-
 	user, err := s.userRepo.FindByNationalIDForLogin(ctx, req.NationalID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			go func() {
-				_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
-					UserID:      uuid.Nil,
-					Action:      "sso_login_failed",
-					Module:      "users",
-					ResourceID:  "",
-					Description: fmt.Sprintf("Failed SSO login attempt for national_id: %s", req.NationalID),
-					OldValue:    nil,
-					NewValue:    nil,
-					IPAddress:   ipAddress,
-					UserAgent:   userAgent,
-					Status:      "failed",
-				})
-			}()
 			return nil, errors.New("invalid credentials")
 		}
 		return nil, err
-	}
-
-	if !utils.CheckPassword(req.Password, user.Password) {
-		go func() {
-			_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
-				UserID:      user.ID,
-				Action:      "sso_login_failed",
-				Module:      "users",
-				ResourceID:  user.ID.String(),
-				Description: fmt.Sprintf("Failed SSO login attempt for user: %s (%s)", user.Username, user.Email),
-				OldValue:    nil,
-				NewValue:    nil,
-				IPAddress:   ipAddress,
-				UserAgent:   userAgent,
-				Status:      "failed",
-			})
-		}()
-		return nil, errors.New("invalid credentials")
 	}
 
 	if !user.IsActive {
@@ -414,7 +380,7 @@ func (s *userService) SSOLogin(ctx context.Context, req *models.SSOLoginRequest)
 		return nil, err
 	}
 
-	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, role, sessionID, req.RememberMe)
+	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, role, sessionID, false)
 	if err != nil {
 		return nil, err
 	}
@@ -424,23 +390,6 @@ func (s *userService) SSOLogin(ctx context.Context, req *models.SSOLoginRequest)
 			fmt.Println("failed to update last login:", err)
 		}
 	}(ctx, user.ID)
-
-	go func() {
-		if err := s.actionLogService.LogAction(context.Background(), &LogActionParams{
-			UserID:      user.ID,
-			Action:      "sso_login",
-			Module:      "users",
-			ResourceID:  user.ID.String(),
-			Description: fmt.Sprintf("Successful SSO login for user: %s (%s)", user.Username, user.Email),
-			OldValue:    nil,
-			NewValue:    nil,
-			IPAddress:   ipAddress,
-			UserAgent:   userAgent,
-			Status:      "success",
-		}); err != nil {
-			fmt.Printf("Error logging SSO login action: %v\n", err)
-		}
-	}()
 
 	return &models.AuthLoginResponse{
 		User:         models.ToUserLoginResponse(user),

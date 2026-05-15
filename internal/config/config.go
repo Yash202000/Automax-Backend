@@ -17,8 +17,9 @@ type Config struct {
 	LoginRateLimit LoginRateLimitConfig
 	SSOPrivateKey  string // env: SSO_RSA_PRIVATE_KEY (PEM, optional — auto-gen if empty)
 	SSOIssuerURL   string // env: SSO_ISSUER_URL (e.g. https://automax.example.com — embedded in iss claim)
-	SSOFrontendURL string // env: SSO_FRONTEND_URL (e.g. https://automax.example.com — where /sso-complete lives)
-	Escalation     EscalationConfig
+	SSOFrontendURL   string // env: SSO_FRONTEND_URL (e.g. https://automax.example.com — where /sso-complete lives)
+	NafathAPIBaseURL string // env: NAFATH_API_BASE_URL (e.g. https://nafath.amanathail.gov.sa)
+	Escalation        EscalationConfig
 	ReadyToClose   ReadyToCloseConfig
 	Documenta      DocumentaConfig
 	AIQuality      AIQualityConfig
@@ -190,9 +191,10 @@ func Load() *Config {
 			BlockDuration:   getEnvAsInt("BLOCK_DURATION", 15),
 			BypassForAdmin:  getEnvAsBool("BYPASS_RATE_LIMIT_FOR_ADMIN", true),
 		},
-		SSOPrivateKey:  getEnv("SSO_RSA_PRIVATE_KEY", ""),
-		SSOIssuerURL:   getEnv("SSO_ISSUER_URL", ""),
-		SSOFrontendURL: getEnv("SSO_FRONTEND_URL", ""),
+		SSOPrivateKey:     getEnv("SSO_RSA_PRIVATE_KEY", ""),
+		SSOIssuerURL:      getEnv("SSO_ISSUER_URL", ""),
+		SSOFrontendURL:    getEnv("SSO_FRONTEND_URL", ""),
+		NafathAPIBaseURL: getEnv("NAFATH_API_BASE_URL", ""),
 		Escalation: EscalationConfig{
 			DailyHour:    getEnvAsInt("ESCALATION_DAILY_HOUR", 18),
 			DailyMinute:  getEnvAsInt("ESCALATION_DAILY_MINUTE", 0),
