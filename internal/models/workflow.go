@@ -16,10 +16,10 @@ type Workflow struct {
 	Code          string    `gorm:"not null;size:100;uniqueIndex" json:"code"`
 	Description   string    `gorm:"size:500" json:"description"`
 	DescriptionAr string    `gorm:"size:500" json:"description_ar"`
-	Version     int       `gorm:"default:1" json:"version"`
-	IsActive    bool      `gorm:"default:true" json:"is_active"`
-	IsDefault   bool      `gorm:"default:false" json:"is_default"`
-	RecordType  string    `gorm:"size:20;default:'incident'" json:"record_type"` // 'incident', 'request', 'complaint', 'query', 'evidence', 'both', 'all'
+	Version       int       `gorm:"default:1" json:"version"`
+	IsActive      bool      `gorm:"default:true" json:"is_active"`
+	IsDefault     bool      `gorm:"default:false" json:"is_default"`
+	RecordType    string    `gorm:"size:20;default:'incident'" json:"record_type"` // 'incident', 'request', 'complaint', 'query', 'evidence', 'both', 'all'
 
 	// Matching criteria - stored as JSON arrays, empty/null means matches any value
 	// Sources: ["email", "phone", "web", "mobile", "emergency_hotline", etc.]
@@ -72,8 +72,8 @@ type WorkflowState struct {
 	Code          string    `gorm:"not null;size:50" json:"code"`
 	Description   string    `gorm:"size:500" json:"description"`
 	DescriptionAr string    `gorm:"size:500" json:"description_ar"`
-	StateType   string    `gorm:"size:20;default:'normal'" json:"state_type"` // initial, normal, terminal
-	Color       string    `gorm:"size:20;default:'#6366f1'" json:"color"`
+	StateType     string    `gorm:"size:20;default:'normal'" json:"state_type"` // initial, normal, terminal
+	Color         string    `gorm:"size:20;default:'#6366f1'" json:"color"`
 
 	// Visual position on canvas
 	PositionX int `gorm:"default:0" json:"position_x"`
@@ -391,16 +391,16 @@ type WorkflowTransitionCreateRequest struct {
 	Code          string   `json:"code" validate:"required,min=2,max=50"`
 	Description   string   `json:"description" validate:"max=500"`
 	DescriptionAr string   `json:"description_ar" validate:"max=500"`
-	FromStateID string   `json:"from_state_id" validate:"required,uuid"`
-	ToStateID   string   `json:"to_state_id" validate:"required,uuid"`
-	RoleIDs     []string `json:"role_ids"`
-	SortOrder     int  `json:"sort_order"`
-	IsRejection   bool `json:"is_rejection"`
-	IsNotBelong   bool `json:"is_not_belong"`
-	IsMissingInfo bool `json:"is_missing_info"`
+	FromStateID   string   `json:"from_state_id" validate:"required,uuid"`
+	ToStateID     string   `json:"to_state_id" validate:"required,uuid"`
+	RoleIDs       []string `json:"role_ids"`
+	SortOrder     int      `json:"sort_order"`
+	IsRejection   bool     `json:"is_rejection"`
+	IsNotBelong   bool     `json:"is_not_belong"`
+	IsMissingInfo bool     `json:"is_missing_info"`
 
 	// Department Assignment
-	AssignDepartmentID   *string `json:"assign_department_id" validate:"omitempty,uuid"`
+	AssignDepartmentID   *string `json:"assign_department_id" validate:"omitempty"`
 	AutoDetectDepartment bool    `json:"auto_detect_department"`
 	DepartmentTypeFilter string  `json:"department_type_filter" validate:"omitempty,oneof=internal external"`
 
@@ -417,14 +417,14 @@ type WorkflowTransitionUpdateRequest struct {
 	Code          string   `json:"code" validate:"omitempty,min=2,max=50"`
 	Description   string   `json:"description" validate:"max=500"`
 	DescriptionAr string   `json:"description_ar" validate:"max=500"`
-	FromStateID string   `json:"from_state_id" validate:"omitempty,uuid"`
-	ToStateID   string   `json:"to_state_id" validate:"omitempty,uuid"`
-	RoleIDs     []string `json:"role_ids"`
-	SortOrder   *int     `json:"sort_order"`
-	IsActive      *bool `json:"is_active"`
-	IsRejection   *bool `json:"is_rejection"`
-	IsNotBelong   *bool `json:"is_not_belong"`
-	IsMissingInfo *bool `json:"is_missing_info"`
+	FromStateID   string   `json:"from_state_id" validate:"omitempty,uuid"`
+	ToStateID     string   `json:"to_state_id" validate:"omitempty,uuid"`
+	RoleIDs       []string `json:"role_ids"`
+	SortOrder     *int     `json:"sort_order"`
+	IsActive      *bool    `json:"is_active"`
+	IsRejection   *bool    `json:"is_rejection"`
+	IsNotBelong   *bool    `json:"is_not_belong"`
+	IsMissingInfo *bool    `json:"is_missing_info"`
 
 	// Department Assignment
 	AssignDepartmentID   *string `json:"assign_department_id" validate:"omitempty,uuid"`
@@ -566,11 +566,11 @@ type WorkflowTransitionResponse struct {
 	Code          string                 `json:"code"`
 	Description   string                 `json:"description"`
 	DescriptionAr string                 `json:"description_ar,omitempty"`
-	FromStateID  uuid.UUID              `json:"from_state_id"`
-	FromState    *WorkflowStateResponse `json:"from_state,omitempty"`
-	ToStateID    uuid.UUID              `json:"to_state_id"`
-	ToState      *WorkflowStateResponse `json:"to_state,omitempty"`
-	AllowedRoles []RoleResponse         `json:"allowed_roles,omitempty"`
+	FromStateID   uuid.UUID              `json:"from_state_id"`
+	FromState     *WorkflowStateResponse `json:"from_state,omitempty"`
+	ToStateID     uuid.UUID              `json:"to_state_id"`
+	ToState       *WorkflowStateResponse `json:"to_state,omitempty"`
+	AllowedRoles  []RoleResponse         `json:"allowed_roles,omitempty"`
 
 	// Department Assignment
 	AssignDepartmentID   *uuid.UUID          `json:"assign_department_id,omitempty"`
