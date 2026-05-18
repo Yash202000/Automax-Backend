@@ -137,10 +137,15 @@ func (h *IncidentHandler) GetIncident(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		// Not a UUID — try resolving by incident number
+		inc, lookupErr := h.incidentRepo.FindByIncidentNumber(c.UserContext(), idStr)
+		if lookupErr != nil {
+			return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not found")
+		}
+		id = inc.ID
 	}
 
-	log.Printf("Generate Signed url: %s", utils.GenerateIncidentToken(idStr, 24*time.Hour))
+	log.Printf("Generate Signed url: %s", utils.GenerateIncidentToken(id.String(), 24*time.Hour))
 	incident, err := h.service.GetIncident(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not found")
