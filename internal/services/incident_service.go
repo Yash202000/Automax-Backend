@@ -93,6 +93,8 @@ type IncidentService interface {
 	SetUserService(us UserService)
 	// SetFCMService wires in the FCMService (called post-construction).
 	SetFCMService(fcm *FCMService)
+	// SetActionExecutor wires in the ActionExecutor (called post-construction).
+	SetActionExecutor(ae ActionExecutor)
 
 	// Closed incident editing
 	UpdateClosedIncidentSummary(ctx context.Context, incidentID uuid.UUID, userID uuid.UUID, newDescription string, reason string) (*models.IncidentResponse, error)
@@ -114,6 +116,7 @@ type incidentService struct {
 	notificationService *NotificationService
 	userService         UserService
 	fcmService          *FCMService
+	actionExecutor      ActionExecutor
 }
 
 func NewIncidentService(
@@ -163,6 +166,10 @@ func (s *incidentService) SetUserService(us UserService) {
 // SetFCMService wires the FCMService into the incident service.
 func (s *incidentService) SetFCMService(fcm *FCMService) {
 	s.fcmService = fcm
+}
+
+func (s *incidentService) SetActionExecutor(ae ActionExecutor) {
+	s.actionExecutor = ae
 }
 
 // calculateSLADeadline calculates the SLA deadline based on classification criticality.
@@ -3063,10 +3070,28 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		}()
 	}
 
-	// Fetch updated incident (outside transaction)
+	// Fetch updated incident (outside transaction) with all relations for response and action execution.
 	updated, err := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Execute automation actions configured on this transition.
+	// Uses the fully-preloaded incident so recipient fields (Assignee.Email, Reporter.Email, etc.) are available.
+	if s.actionExecutor != nil && len(transition.Actions) > 0 {
+		capturedTransition := transition
+		capturedIncident := updated
+		capturedUserID := userID
+		bgCtx := context.Background()
+		go func() {
+			var performer *models.User
+			if u, err := s.userRepo.FindByID(bgCtx, capturedUserID); err == nil {
+				performer = u
+			}
+			if err := s.actionExecutor.ExecuteActions(bgCtx, capturedIncident, capturedTransition, performer); err != nil {
+				log.Printf("ExecuteActions failed for transition %s: %v", capturedTransition.Name, err)
+			}
+		}()
 	}
 
 	resp := models.ToIncidentResponse(updated)

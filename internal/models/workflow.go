@@ -443,7 +443,7 @@ type TransitionRequirementRequest struct {
 }
 
 type TransitionActionRequest struct {
-	ActionType     string `json:"action_type" validate:"required,oneof=email field_update webhook notification"`
+	ActionType     string `json:"action_type" validate:"required,oneof=email field_update webhook notification sms"`
 	Name           string `json:"name" validate:"required,min=2,max=100"`
 	Description    string `json:"description"`
 	Config         string `json:"config"`

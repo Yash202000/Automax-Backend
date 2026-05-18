@@ -492,6 +492,9 @@ func (r *workflowRepository) ListTransitionsByWorkflowID(ctx context.Context, wo
 		Preload("AssignUser").
 		Preload("AssignmentRoles").
 		Preload("Requirements").
+		Preload("Actions", func(db *gorm.DB) *gorm.DB {
+			return db.Order("execution_order")
+		}).
 		Preload("FieldChanges", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order")
 		}).
