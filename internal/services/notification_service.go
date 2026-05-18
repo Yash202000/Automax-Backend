@@ -1,11 +1,10 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"strings"
-	"text/template"
 	"time"
 
 	"github.com/automax/backend/internal/models"
@@ -46,8 +45,10 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		return nil, fmt.Errorf("at least one recipient (to, cc, or bcc) is required")
 	}
 
-	// REQUIRED: subject OR body
-	if strings.TrimSpace(subject) == "" && strings.TrimSpace(body) == "" {
+	// When a template code is provided the template itself supplies subject/body,
+	// so the caller is allowed to pass empty strings for both.
+	if (templateCode == nil || *templateCode == "") &&
+		strings.TrimSpace(subject) == "" && strings.TrimSpace(body) == "" {
 		return nil, fmt.Errorf("either subject or body must be provided")
 	}
 
@@ -56,32 +57,33 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 
 		tpl, err := s.templateRepo.FindByCode(ctx, *templateCode, channel)
 		if err != nil {
-			return nil, err
-		}
-
-		// Pick the language variant; fall back to EN if AR is empty.
-		var tplBody, tplSubject string
-		if language == "ar" && tpl.BodyAR != "" {
-			tplBody = tpl.BodyAR
-			tplSubject = tpl.SubjectAR
+			// Template not found — fall through and use the provided subject/body as-is.
+			log.Printf("[NotificationService] template '%s' not found for channel '%s', using fallback content: %v", *templateCode, channel, err)
 		} else {
-			tplBody = tpl.BodyEN
-			tplSubject = tpl.SubjectEN
-		}
+			// Pick the language variant; fall back to EN if AR is empty.
+			var tplBody, tplSubject string
+			if language == "ar" && tpl.BodyAR != "" {
+				tplBody = tpl.BodyAR
+				tplSubject = tpl.SubjectAR
+			} else {
+				tplBody = tpl.BodyEN
+				tplSubject = tpl.SubjectEN
+			}
 
-		if len(variables) > 0 {
-			if tplBody != "" {
-				body, _ = RenderTemplate(tplBody, variables)
-			}
-			if tplSubject != "" {
-				subject, _ = RenderTemplate(tplSubject, variables)
-			}
-		} else {
-			if tplBody != "" {
-				body = tplBody
-			}
-			if tplSubject != "" {
-				subject = tplSubject
+			if len(variables) > 0 {
+				if tplBody != "" {
+					body, _ = RenderTemplate(tplBody, variables)
+				}
+				if tplSubject != "" {
+					subject, _ = RenderTemplate(tplSubject, variables)
+				}
+			} else {
+				if tplBody != "" {
+					body = tplBody
+				}
+				if tplSubject != "" {
+					subject = tplSubject
+				}
 			}
 		}
 
@@ -799,12 +801,14 @@ func (s *NotificationService) SetMetaOnLogs(ctx context.Context, ids []uuid.UUID
 	return s.logRepo.SetMeta(ctx, ids, meta)
 }
 
+// RenderTemplate substitutes variables into a template string.
+// Supports both {{variable_name}} and {{.variable_name}} syntax.
+// Unknown variables are left unchanged in the output (never errors).
 func RenderTemplate(tpl string, vars map[string]string) (string, error) {
-	t, err := template.New("tpl").Option("missingkey=zero").Parse(tpl)
-	if err != nil {
-		return "", err
+	result := tpl
+	for k, v := range vars {
+		result = strings.ReplaceAll(result, "{{"+k+"}}", v)
+		result = strings.ReplaceAll(result, "{{."+k+"}}", v)
 	}
-	var buf bytes.Buffer
-	err = t.Execute(&buf, vars)
-	return buf.String(), err
+	return result, nil
 }

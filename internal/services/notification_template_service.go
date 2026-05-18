@@ -39,6 +39,14 @@ func (s *notificationTemplateService) Create(ctx context.Context, req *models.No
 		return nil, errors.New("code and channel are required")
 	}
 
+	exists, err := s.repo.ExistsByCodeAndChannel(ctx, req.Code, req.Channel, nil)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, errors.New("a template with this code and channel already exists")
+	}
+
 	tpl := &models.NotificationTemplate{
 		Name:         req.Name,
 		Code:         req.Code,

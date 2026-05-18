@@ -15,6 +15,7 @@ type Config struct {
 	JWT            JWTConfig
 	LDAP           LDAPConfig
 	LoginRateLimit LoginRateLimitConfig
+	FrontendURL    string // env: FRONTEND_URL — base URL of the frontend app, used in notification links
 	SSOPrivateKey  string // env: SSO_RSA_PRIVATE_KEY (PEM, optional — auto-gen if empty)
 	SSOIssuerURL   string // env: SSO_ISSUER_URL (e.g. https://automax.example.com — embedded in iss claim)
 	SSOFrontendURL string // env: SSO_FRONTEND_URL (e.g. https://automax.example.com — where /sso-complete lives)
@@ -192,6 +193,7 @@ func Load() *Config {
 		},
 		SSOPrivateKey:  getEnv("SSO_RSA_PRIVATE_KEY", ""),
 		SSOIssuerURL:   getEnv("SSO_ISSUER_URL", ""),
+		FrontendURL:    getEnv("FRONTEND_URL", ""),
 		SSOFrontendURL: getEnv("SSO_FRONTEND_URL", ""),
 		Escalation: EscalationConfig{
 			DailyHour:    getEnvAsInt("ESCALATION_DAILY_HOUR", 18),

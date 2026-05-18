@@ -843,25 +843,27 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 	}
 
 	state := &models.WorkflowState{
-		WorkflowID:      workflowID,
-		Name:            req.Name,
-		NameAr:          req.NameAr,
-		Code:            req.Code,
-		Description:     req.Description,
-		DescriptionAr:   req.DescriptionAr,
-		StateType:       req.StateType,
-		Color:           req.Color,
-		PositionX:       req.PositionX,
-		PositionY:       req.PositionY,
-		SLAHours:        req.SLAHours,
-		SLAUnit:         req.SLAUnit,
-		IsMergable:      req.IsMergable,
-		IsReadyToClose:  req.IsReadyToClose,
-		DurationOptions: durationOptionsJSON,
-		SortOrder:       req.SortOrder,
-		IsActive:        true,
-		AutoMatchUser:   req.AutoMatchUser,
-		ManualSelectUser: req.ManualSelectUser,
+		WorkflowID:                   workflowID,
+		Name:                         req.Name,
+		NameAr:                       req.NameAr,
+		Code:                         req.Code,
+		Description:                  req.Description,
+		DescriptionAr:                req.DescriptionAr,
+		StateType:                    req.StateType,
+		Color:                        req.Color,
+		PositionX:                    req.PositionX,
+		PositionY:                    req.PositionY,
+		SLAHours:                     req.SLAHours,
+		SLAUnit:                      req.SLAUnit,
+		IsMergable:                   req.IsMergable,
+		IsReadyToClose:               req.IsReadyToClose,
+		DurationOptions:              durationOptionsJSON,
+		SortOrder:                    req.SortOrder,
+		IsActive:                     true,
+		AutoMatchUser:                req.AutoMatchUser,
+		ManualSelectUser:             req.ManualSelectUser,
+		NewIncidentEmailTemplateCode: req.NewIncidentEmailTemplateCode,
+		NewIncidentSMSTemplateCode:   req.NewIncidentSMSTemplateCode,
 	}
 	if req.EscalationPolicyID != nil && *req.EscalationPolicyID != "" {
 		if id, err := uuid.Parse(*req.EscalationPolicyID); err == nil {
@@ -1047,6 +1049,12 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 				state.AssignUserID = &id
 			}
 		}
+	}
+	if req.NewIncidentEmailTemplateCode != nil {
+		state.NewIncidentEmailTemplateCode = *req.NewIncidentEmailTemplateCode
+	}
+	if req.NewIncidentSMSTemplateCode != nil {
+		state.NewIncidentSMSTemplateCode = *req.NewIncidentSMSTemplateCode
 	}
 
 	if err := s.repo.UpdateState(ctx, state); err != nil {

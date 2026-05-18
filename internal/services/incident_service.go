@@ -688,6 +688,78 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		log.Println("ivr sms link send: ", smsLink)
 	}
 
+	// Send template-based email/SMS notifications for the initial state (if configured)
+	if s.notificationService != nil && (initialState.NewIncidentEmailTemplateCode != "" || initialState.NewIncidentSMSTemplateCode != "") {
+		bgCtx := context.Background()
+		capturedCreated := created
+		capturedInitialState := initialState
+		go func() {
+			vars := map[string]string{
+				"incident_number": capturedCreated.IncidentNumber,
+				"incident_title":  capturedCreated.Title,
+				"incident_id":     capturedCreated.ID.String(),
+			}
+			if capturedCreated.Assignee != nil {
+				name := capturedCreated.Assignee.Username
+				if capturedCreated.Assignee.FirstName != "" {
+					name = capturedCreated.Assignee.FirstName + " " + capturedCreated.Assignee.LastName
+				}
+				vars["assignee"] = name
+				vars["first_name"] = capturedCreated.Assignee.FirstName
+				vars["last_name"] = capturedCreated.Assignee.LastName
+			}
+			if capturedCreated.Reporter != nil {
+				rname := capturedCreated.Reporter.Username
+				if capturedCreated.Reporter.FirstName != "" {
+					rname = capturedCreated.Reporter.FirstName + " " + capturedCreated.Reporter.LastName
+				}
+				vars["reporter"] = rname
+			}
+			if capturedInitialState.NewIncidentEmailTemplateCode != "" {
+				var emails []string
+				if capturedCreated.Assignee != nil && capturedCreated.Assignee.Email != "" {
+					emails = append(emails, capturedCreated.Assignee.Email)
+				}
+				if capturedCreated.Reporter != nil && capturedCreated.Reporter.Email != "" {
+					emails = append(emails, capturedCreated.Reporter.Email)
+				} else if capturedCreated.ReporterEmail != "" {
+					emails = append(emails, capturedCreated.ReporterEmail)
+				}
+				if len(emails) > 0 {
+					code := capturedInitialState.NewIncidentEmailTemplateCode
+					if _, err := s.notificationService.SendNotification(
+						bgCtx, "email", &code, "en",
+						emails, nil, nil,
+						"", "",
+						vars, nil, nil, nil,
+					); err != nil {
+						log.Printf("NEW-INCIDENT-EMAIL: Failed for incident %s: %v", capturedCreated.IncidentNumber, err)
+					}
+				}
+			}
+			if capturedInitialState.NewIncidentSMSTemplateCode != "" {
+				var phones []string
+				if capturedCreated.Assignee != nil && capturedCreated.Assignee.Phone != "" {
+					phones = append(phones, capturedCreated.Assignee.Phone)
+				}
+				if capturedCreated.Reporter != nil && capturedCreated.Reporter.Phone != "" {
+					phones = append(phones, capturedCreated.Reporter.Phone)
+				}
+				if len(phones) > 0 {
+					code := capturedInitialState.NewIncidentSMSTemplateCode
+					if _, err := s.notificationService.SendNotification(
+						bgCtx, "sms", &code, "en",
+						phones, nil, nil,
+						"", "",
+						vars, nil, nil, nil,
+					); err != nil {
+						log.Printf("NEW-INCIDENT-SMS: Failed for incident %s: %v", capturedCreated.IncidentNumber, err)
+					}
+				}
+			}
+		}()
+	}
+
 	// Send FCM push notification to the initial assignee (employee)
 	if s.fcmService != nil && incident.AssigneeID != nil {
 		bgCtx := context.Background()

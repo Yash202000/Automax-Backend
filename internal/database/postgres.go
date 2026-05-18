@@ -198,6 +198,9 @@ func Migrate(db *gorm.DB) error {
 	db.Exec("ALTER TABLE notification_templates DROP COLUMN IF EXISTS subject")
 	db.Exec("ALTER TABLE notification_templates DROP COLUMN IF EXISTS body")
 	db.Exec("ALTER TABLE notification_templates DROP COLUMN IF EXISTS description")
+	// Enforce uniqueness of (code, channel) for non-deleted templates so duplicate codes
+	// are rejected at the DB level in addition to the service-level check.
+	db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_notification_templates_code_channel ON notification_templates(code, channel) WHERE deleted_at IS NULL`)
 
 	// Workflow code column was previously VARCHAR(50) which is too short for some existing workflows. Increase to 100 chars. Note: MySQL syntax is ALTER TABLE workflows MODIFY code VARCHAR(100) NOT NULL but Postgres is ALTER TABLE workflows ALTER COLUMN code TYPE VARCHAR(100). GORM's AutoMigrate doesn't handle this edge case, so we run raw SQL. Idempotent: safe to run repeatedly.
 	db.Exec("ALTER TABLE workflows ALTER COLUMN code TYPE VARCHAR(100)")

@@ -15,6 +15,9 @@ type NotificationTemplateRepository interface {
 	FindByCode(ctx context.Context, code, channel string) (*models.NotificationTemplate, error)
 	// FindByCodeChannelLanguage is kept for notification service compatibility; language param is ignored.
 	FindByCodeChannelLanguage(ctx context.Context, code, channel, language string) (*models.NotificationTemplate, error)
+	// ExistsByCodeAndChannel returns true if a non-deleted template with the given code+channel exists.
+	// Pass excludeID to skip a specific record (useful during updates).
+	ExistsByCodeAndChannel(ctx context.Context, code, channel string, excludeID *uuid.UUID) (bool, error)
 	Update(ctx context.Context, tpl *models.NotificationTemplate) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context) ([]models.NotificationTemplate, error)
@@ -56,6 +59,17 @@ func (r *notificationTemplateRepository) FindByCode(ctx context.Context, code, c
 
 func (r *notificationTemplateRepository) FindByCodeChannelLanguage(ctx context.Context, code, channel, _ string) (*models.NotificationTemplate, error) {
 	return r.FindByCode(ctx, code, channel)
+}
+
+func (r *notificationTemplateRepository) ExistsByCodeAndChannel(ctx context.Context, code, channel string, excludeID *uuid.UUID) (bool, error) {
+	q := r.db.WithContext(ctx).Model(&models.NotificationTemplate{}).
+		Where("code = ? AND channel = ?", code, channel)
+	if excludeID != nil {
+		q = q.Where("id != ?", *excludeID)
+	}
+	var count int64
+	err := q.Count(&count).Error
+	return count > 0, err
 }
 
 func (r *notificationTemplateRepository) Update(ctx context.Context, tpl *models.NotificationTemplate) error {

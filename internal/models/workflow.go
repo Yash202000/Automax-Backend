@@ -113,6 +113,10 @@ type WorkflowState struct {
 	AutoMatchUser    bool       `gorm:"default:false" json:"auto_match_user"`
 	ManualSelectUser bool       `gorm:"default:false" json:"manual_select_user"`
 
+	// Notification template codes sent when a new incident enters this state (initial states only)
+	NewIncidentEmailTemplateCode string `gorm:"size:100" json:"new_incident_email_template_code"`
+	NewIncidentSMSTemplateCode   string `gorm:"size:100" json:"new_incident_sms_template_code"`
+
 	SortOrder int            `gorm:"default:0" json:"sort_order"`
 	IsActive  bool           `gorm:"default:true" json:"is_active"`
 	CreatedAt time.Time      `json:"created_at"`
@@ -352,6 +356,9 @@ type WorkflowStateCreateRequest struct {
 	AssignmentRoleIDs []string `json:"assignment_role_ids"`
 	AutoMatchUser     bool     `json:"auto_match_user"`
 	ManualSelectUser  bool     `json:"manual_select_user"`
+	// New incident notification templates (initial states only)
+	NewIncidentEmailTemplateCode string `json:"new_incident_email_template_code"`
+	NewIncidentSMSTemplateCode   string `json:"new_incident_sms_template_code"`
 }
 
 type WorkflowStateUpdateRequest struct {
@@ -379,6 +386,9 @@ type WorkflowStateUpdateRequest struct {
 	AssignmentRoleIDs []string `json:"assignment_role_ids"`
 	AutoMatchUser     *bool    `json:"auto_match_user"`
 	ManualSelectUser  *bool    `json:"manual_select_user"`
+	// New incident notification templates (initial states only)
+	NewIncidentEmailTemplateCode *string `json:"new_incident_email_template_code"`
+	NewIncidentSMSTemplateCode   *string `json:"new_incident_sms_template_code"`
 }
 
 type WorkflowTransitionCreateRequest struct {
@@ -550,7 +560,10 @@ type WorkflowStateResponse struct {
 	AssignmentRoles  []RoleResponse `json:"assignment_roles,omitempty"`
 	AutoMatchUser    bool           `json:"auto_match_user"`
 	ManualSelectUser bool           `json:"manual_select_user"`
-	CreatedAt        time.Time      `json:"created_at"`
+	// New incident notification templates (initial states only)
+	NewIncidentEmailTemplateCode string `json:"new_incident_email_template_code,omitempty"`
+	NewIncidentSMSTemplateCode   string `json:"new_incident_sms_template_code,omitempty"`
+	CreatedAt                    time.Time `json:"created_at"`
 }
 
 type WorkflowTransitionResponse struct {
@@ -795,6 +808,9 @@ func ToWorkflowStateResponse(s *WorkflowState) WorkflowStateResponse {
 			resp.AssignmentRoles[i] = ToRoleResponse(&r)
 		}
 	}
+
+	resp.NewIncidentEmailTemplateCode = s.NewIncidentEmailTemplateCode
+	resp.NewIncidentSMSTemplateCode = s.NewIncidentSMSTemplateCode
 
 	return resp
 }

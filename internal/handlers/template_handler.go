@@ -216,3 +216,13 @@ func (h *NotificationTemplateHandler) Delete(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{"success": true})
 }
+
+// GET /admin/notification-templates/available-variables
+// Returns the map of action_type → available variable names that can be used in template bodies.
+func (h *NotificationTemplateHandler) GetAvailableVariables(c *fiber.Ctx) error {
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data":    models.AvailableVariablesByActionType,
+		"syntax":  "Use {{variable_name}} in body/subject, e.g. Dear {{first_name}}, incident {{incident_number}}",
+	})
+}

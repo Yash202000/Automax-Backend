@@ -29,8 +29,62 @@ const (
 	TemplateActionClosure      = "closure"
 	TemplateActionStatusChange = "status_change"
 	TemplateActionReadyToClose = "ready_to_close"
+	TemplateActionNewIncident  = "new_incident"
 	TemplateActionCustom       = "custom"
 )
+
+// AvailableVariablesByActionType documents which template variables are injected at send-time
+// for each action type. Use {{variable_name}} or {{.variable_name}} in template bodies.
+var AvailableVariablesByActionType = map[string][]string{
+	TemplateActionStatusChange: {
+		"incident_number", "incident_title", "incident_id",
+		"from_state", "to_state", "transition_name",
+		"performed_by", "first_name", "last_name",
+		"assignee", "current_state",
+	},
+	// Escalation GROUP templates (one email per batch run, covers many incidents):
+	// Use: first_name, last_name, incident_count, classification_name,
+	//      sla_page_url, incidents_summary, report_date
+	//
+	// Escalation POLICY STEP templates (one email per incident):
+	// Use: first_name, last_name, incident_number, incident_title, incident_url,
+	//      state_name, hours_in_state, sla_hours, policy_name, step_order, hours_in_breach
+	TemplateActionEscalation: {
+		// Group batch notification variables
+		"incident_count", "classification_name", "sla_page_url",
+		"incidents_summary", "report_date",
+		// Per-user (available in both group and policy step)
+		"first_name", "last_name",
+		// Policy step per-incident variables
+		"incident_number", "incident_title", "incident_id", "incident_url",
+		"state_name", "hours_in_state", "sla_hours",
+		"policy_name", "step_order", "hours_in_breach",
+		// Legacy state SLA breach path
+		"transition_name",
+	},
+	TemplateActionNewIncident: {
+		"incident_number", "incident_title", "incident_id",
+		"assignee", "first_name", "last_name", "reporter",
+	},
+	TemplateActionReadyToClose: {
+		"incident_number", "incident_title", "incident_id",
+		"expires_at", "remaining_time",
+		"first_name", "last_name",
+	},
+	TemplateActionAssignment: {
+		"incident_number", "incident_title", "incident_id",
+		"assignee", "first_name", "last_name", "performed_by",
+	},
+	TemplateActionClosure: {
+		"incident_number", "incident_title", "incident_id",
+		"assignee", "first_name", "last_name", "performed_by",
+	},
+	TemplateActionCustom: {
+		"incident_number", "incident_title", "incident_id",
+		"assignee", "first_name", "last_name", "performed_by",
+		"from_state", "to_state", "transition_name", "current_state",
+	},
+}
 
 // NotificationTemplate stores a bilingual template (EN + AR) in a single row.
 type NotificationTemplate struct {
@@ -66,7 +120,7 @@ type NotificationTemplateCreateRequest struct {
 	Code         string     `json:"code"          validate:"required"`
 	Channel      string     `json:"channel"       validate:"required,oneof=email sms"`
 	ModuleType   string     `json:"module_type"   validate:"omitempty,oneof=incident complaint request query global"`
-	ActionType   string     `json:"action_type"   validate:"omitempty,oneof=escalation assignment closure status_change ready_to_close custom"`
+	ActionType   string     `json:"action_type"   validate:"omitempty,oneof=escalation assignment closure status_change ready_to_close new_incident custom"`
 	Variables    string     `json:"variables"`
 	TransitionID *uuid.UUID `json:"transition_id"`
 	SubjectEN    string     `json:"subject_en"`

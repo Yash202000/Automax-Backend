@@ -6,8 +6,8 @@ import (
 	"encoding/csv"
 	"fmt"
 	"log"
-	"os"
 	"strconv"
+	"strings"
 	"time"
 	_ "time/tzdata"
 
@@ -39,6 +39,11 @@ func NewEscalationGroupService(groupRepo repository.EscalationGroupRepository, i
 	}
 }
 
+// SetFrontendURL sets the base URL used to build deep-links in notification bodies.
+func (s *EscalationGroupService) SetFrontendURL(url string) {
+	s.frontendURL = url
+}
+
 // SetPolicyService injects the EscalationPolicyService for user resolution.
 // Called after construction to avoid circular deps.
 func (s *EscalationGroupService) SetPolicyService(ps *EscalationPolicyService) {
@@ -58,11 +63,13 @@ func (s *EscalationGroupService) Create(ctx context.Context, req *models.CreateE
 		scheduledTime = "09:00"
 	}
 	group := &models.EscalationGroup{
-		Name:          req.Name,
-		Frequency:     req.Frequency,
-		ScheduledTime: scheduledTime,
-		Channel:       req.Channel,
-		IsActive:      isActive,
+		Name:              req.Name,
+		Frequency:         req.Frequency,
+		ScheduledTime:     scheduledTime,
+		Channel:           req.Channel,
+		EmailTemplateCode: req.EmailTemplateCode,
+		SMSTemplateCode:   req.SMSTemplateCode,
+		IsActive:          isActive,
 	}
 
 	// Legacy single classification_id
@@ -144,6 +151,12 @@ func (s *EscalationGroupService) Update(ctx context.Context, id uuid.UUID, req *
 	}
 	if req.Channel != nil {
 		group.Channel = *req.Channel
+	}
+	if req.EmailTemplateCode != nil {
+		group.EmailTemplateCode = *req.EmailTemplateCode
+	}
+	if req.SMSTemplateCode != nil {
+		group.SMSTemplateCode = *req.SMSTemplateCode
 	}
 	if req.IsActive != nil {
 		group.IsActive = *req.IsActive
@@ -339,19 +352,13 @@ func (s *EscalationGroupService) ProcessGroupEscalations(ctx context.Context) er
 		log.Printf("[EscalationGroupService] Group '%s' — %d breached incident(s), notifying %d recipient(s) via %s.",
 			group.Name, len(incidents), len(recipients), group.Channel)
 
-		// URL linking to the SLA-breached incidents page on the frontend
-		frontendURL := os.Getenv("FRONTEND_URL")
-		if frontendURL == "" {
-			log.Printf("[EscalationGroupService] FRONTEND_URL is not set — skipping group '%s'", group.Name)
-			continue
-		}
-		slaPageURL := fmt.Sprintf("%s/incidents?sla_breached=true", frontendURL)
+		slaPageURL := fmt.Sprintf("%s/incidents?sla_breached=true", s.frontendURL)
 
 		// CSV report built once and shared across every recipient in this group
 		csvData := buildGroupCSVReport(incidents, classificationName)
 
 		for _, user := range recipients {
-			s.sendGroupNotification(ctx, group, user, len(incidents), classificationName, slaPageURL, csvData)
+			s.sendGroupNotification(ctx, group, user, classificationName, slaPageURL, csvData, incidents)
 		}
 
 		// Stamp last_notified_at so this window is not fired again
@@ -365,36 +372,32 @@ func (s *EscalationGroupService) ProcessGroupEscalations(ctx context.Context) er
 }
 
 // sendGroupNotification dispatches SMS and/or email to one user for one group run.
-
-func (s *EscalationGroupService) sendGroupNotification(ctx context.Context, group models.EscalationGroup, user models.User, incidentCount int,
+// When the group has a template code configured, it is passed to SendNotification for
+// variable substitution; otherwise falls back to the built-in hardcoded message.
+func (s *EscalationGroupService) sendGroupNotification(
+	ctx context.Context,
+	group models.EscalationGroup,
+	user models.User,
 	classificationName string,
 	slaPageURL string,
 	csvData []byte,
+	incidents []models.Incident,
 ) {
+	incidentCount := len(incidents)
 
-	smsBody := templates.BuildSLABreachSMS(
-		user.FirstName,
-		user.LastName,
-		incidentCount,
-		classificationName,
-		slaPageURL,
-	)
-
-	smsHTML := templates.BuildSLABreachSMSHTML(
-		user.FirstName,
-		user.LastName,
-		incidentCount,
-		classificationName,
-		slaPageURL,
-	)
-
-	emailSubject, emailBody := templates.BuildSLABreachEmail(
-		user.FirstName,
-		user.LastName,
-		incidentCount,
-		classificationName,
-		slaPageURL,
-	)
+	// Build template variables used for both template-based and fallback sends.
+	// incidents_summary contains a numbered plain-text list of all breached incidents
+	// so group email templates can include per-incident detail without needing
+	// per-incident variable keys (which don't make sense for a batch notification).
+	vars := map[string]string{
+		"first_name":          user.FirstName,
+		"last_name":           user.LastName,
+		"incident_count":      fmt.Sprintf("%d", incidentCount),
+		"classification_name": classificationName,
+		"sla_page_url":        slaPageURL,
+		"incidents_summary":   buildIncidentsSummary(incidents),
+		"report_date":         time.Now().Format("02 Jan 2006, 15:04"),
+	}
 
 	// sentBy: default to admin@automax.com; fall back to the notified user
 	var sentBy *uuid.UUID
@@ -408,10 +411,21 @@ func (s *EscalationGroupService) sendGroupNotification(ctx context.Context, grou
 	sendEmail := group.Channel == "email" || group.Channel == "both"
 
 	if sendSMS && user.Phone != "" {
+		// Always build the hardcoded SMS as fallback content.
+		// If the group has a template code, SendNotification will override it with the DB template.
+		smsBody := templates.BuildSLABreachSMS(user.FirstName, user.LastName, incidentCount, classificationName, slaPageURL)
+
+		var templateCode *string
+		var smsVars map[string]string
+		if group.SMSTemplateCode != "" {
+			templateCode = &group.SMSTemplateCode
+			smsVars = vars
+		}
+
 		_, err := s.notificationService.SendNotification(
-			ctx, "sms", nil, "en",
+			ctx, "sms", templateCode, "en",
 			[]string{user.Phone}, nil, nil,
-			"", smsBody, map[string]string{"body_html": smsHTML}, nil, sentBy, nil,
+			"", smsBody, smsVars, nil, sentBy, nil,
 		)
 		if err != nil {
 			log.Printf("[EscalationGroupService] SMS failed for user %s (group '%s'): %v", user.Email, group.Name, err)
@@ -421,18 +435,30 @@ func (s *EscalationGroupService) sendGroupNotification(ctx context.Context, grou
 	}
 
 	if sendEmail && user.Email != "" {
+		// Always build the hardcoded email as fallback content.
+		// If the group has a template code, SendNotification will override it with the DB template.
+		emailSubject, emailBody := templates.BuildSLABreachEmail(user.FirstName, user.LastName, incidentCount, classificationName, slaPageURL)
+
+		var templateCode *string
+		var emailVars map[string]string
+		if group.EmailTemplateCode != "" {
+			templateCode = &group.EmailTemplateCode
+			emailVars = vars
+		}
+
 		attachments := []models.AttachmentData{
-			{AttachmentID: uuid.New(),
-				Filename:    fmt.Sprintf("sla_breach_report_%s.csv", time.Now().Format("2006-01-02")),
-				ContentType: "text/csv; charset=UTF-8",
-				Data:        csvData,
+			{
+				AttachmentID: uuid.New(),
+				Filename:     fmt.Sprintf("sla_breach_report_%s.csv", time.Now().Format("2006-01-02")),
+				ContentType:  "text/csv; charset=UTF-8",
+				Data:         csvData,
 			},
 		}
 		_, err := s.notificationService.SendNotification(
-			ctx, "email", nil, "en",
+			ctx, "email", templateCode, "en",
 			[]string{user.Email}, nil, nil,
 			emailSubject, emailBody,
-			nil, attachments, sentBy, nil,
+			emailVars, attachments, sentBy, nil,
 		)
 		if err != nil {
 			log.Printf("[EscalationGroupService] Email failed for user (group '%s'): %v", group.Name, err)
@@ -683,6 +709,28 @@ func joinStrings(ss []string, sep string) string {
 		result += s
 	}
 	return result
+}
+
+// buildIncidentsSummary returns a numbered plain-text list of breached incidents
+// suitable for use as the {{incidents_summary}} template variable in group emails.
+// Each line: "N. INC-0001 — Title (State: X | SLA exceeded by 5.2h)"
+func buildIncidentsSummary(incidents []models.Incident) string {
+	now := time.Now()
+	var sb strings.Builder
+	for i, inc := range incidents {
+		stateName := "Unknown"
+		if inc.CurrentState != nil {
+			stateName = inc.CurrentState.Name
+		}
+		overdue := ""
+		if inc.SLADeadline != nil && now.After(*inc.SLADeadline) {
+			h := now.Sub(*inc.SLADeadline).Hours()
+			overdue = fmt.Sprintf(" | SLA exceeded by %.1fh", h)
+		}
+		sb.WriteString(fmt.Sprintf("%d. %s — %s (State: %s%s)\n",
+			i+1, inc.IncidentNumber, inc.Title, stateName, overdue))
+	}
+	return sb.String()
 }
 
 // parseUUIDSlice parses a slice of UUID strings into []uuid.UUID.

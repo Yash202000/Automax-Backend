@@ -140,6 +140,7 @@ func (e *actionExecutor) executeNotification(ctx context.Context, action *models
 type EmailConfig struct {
 	Recipients             []string `json:"recipients"`              // "assignee", "reporter", "creator", "department_head", "custom"
 	CustomEmails           []string `json:"custom_emails"`           // explicit email addresses when "custom" is selected
+	TemplateCode           string   `json:"template_code,omitempty"` // notification template code — overrides subject/body when set
 	SubjectTemplate        string   `json:"subject_template"`
 	BodyTemplate           string   `json:"body_template"`
 	IncludeIncidentDetails bool     `json:"include_incident_details"`
@@ -164,29 +165,38 @@ func (e *actionExecutor) executeEmail(ctx context.Context, action *models.Transi
 		return nil
 	}
 
-	subject := e.replacePlaceholders(config.SubjectTemplate, incident, transition, performedBy)
-	body := e.replacePlaceholders(config.BodyTemplate, incident, transition, performedBy)
+	vars := e.buildVariables(incident, transition, performedBy)
 
-	if config.IncludeIncidentDetails {
-		body += e.buildIncidentDetails(incident)
-	}
-	if config.IncludeTransitionInfo && transition != nil {
-		fromState := ""
-		if transition.FromState != nil {
-			fromState = transition.FromState.Name
+	var templateCode *string
+	var subject, body string
+
+	if config.TemplateCode != "" {
+		templateCode = &config.TemplateCode
+	} else {
+		subject = e.replacePlaceholders(config.SubjectTemplate, incident, transition, performedBy)
+		body = e.replacePlaceholders(config.BodyTemplate, incident, transition, performedBy)
+
+		if config.IncludeIncidentDetails {
+			body += e.buildIncidentDetails(incident)
 		}
-		toState := ""
-		if transition.ToState != nil {
-			toState = transition.ToState.Name
+		if config.IncludeTransitionInfo && transition != nil {
+			fromState := ""
+			if transition.FromState != nil {
+				fromState = transition.FromState.Name
+			}
+			toState := ""
+			if transition.ToState != nil {
+				toState = transition.ToState.Name
+			}
+			body += fmt.Sprintf("\n\nTransition: %s → %s", fromState, toState)
 		}
-		body += fmt.Sprintf("\n\nTransition: %s → %s", fromState, toState)
 	}
 
 	_, err := e.notificationService.SendNotification(
-		ctx, "email", nil, "en",
+		ctx, "email", templateCode, "en",
 		emails, nil, nil,
 		subject, body,
-		nil, nil, nil, nil,
+		vars, nil, nil, nil,
 	)
 	if err != nil {
 		return fmt.Errorf("email send failed: %w", err)
@@ -196,9 +206,10 @@ func (e *actionExecutor) executeEmail(ctx context.Context, action *models.Transi
 
 // SmsConfig represents the configuration for an SMS action
 type SmsConfig struct {
-	Recipients     []string `json:"recipients"`      // "assignee", "reporter", "creator"
-	CustomPhones   []string `json:"custom_phones"`   // explicit phone numbers
-	MessageTemplate string  `json:"message_template"`
+	Recipients      []string `json:"recipients"`              // "assignee", "reporter", "creator"
+	CustomPhones    []string `json:"custom_phones"`           // explicit phone numbers
+	TemplateCode    string   `json:"template_code,omitempty"` // notification template code — overrides message_template when set
+	MessageTemplate string   `json:"message_template"`
 }
 
 // executeSms sends SMS notifications via the notification service
@@ -218,13 +229,22 @@ func (e *actionExecutor) executeSms(ctx context.Context, action *models.Transiti
 		return nil
 	}
 
-	message := e.replacePlaceholders(config.MessageTemplate, incident, transition, performedBy)
+	vars := e.buildVariables(incident, transition, performedBy)
+
+	var templateCode *string
+	var message string
+
+	if config.TemplateCode != "" {
+		templateCode = &config.TemplateCode
+	} else {
+		message = e.replacePlaceholders(config.MessageTemplate, incident, transition, performedBy)
+	}
 
 	_, err := e.notificationService.SendNotification(
-		ctx, "sms", nil, "en",
+		ctx, "sms", templateCode, "en",
 		phones, nil, nil,
 		"", message,
-		nil, nil, nil, nil,
+		vars, nil, nil, nil,
 	)
 	if err != nil {
 		return fmt.Errorf("sms send failed: %w", err)
@@ -412,6 +432,51 @@ func (e *actionExecutor) resolveRecipientPhones(incident *models.Incident, recip
 	}
 
 	return phones
+}
+
+// buildVariables returns a map of template variables compatible with RenderTemplate (Go text/template).
+func (e *actionExecutor) buildVariables(incident *models.Incident, transition *models.WorkflowTransition, performedBy *models.User) map[string]string {
+	vars := map[string]string{
+		"incident_number": incident.IncidentNumber,
+		"incident_title":  incident.Title,
+		"incident_id":     incident.ID.String(),
+	}
+
+	if transition != nil {
+		vars["transition_name"] = transition.Name
+		if transition.FromState != nil {
+			vars["from_state"] = transition.FromState.Name
+		}
+		if transition.ToState != nil {
+			vars["to_state"] = transition.ToState.Name
+		}
+	}
+
+	if performedBy != nil {
+		name := performedBy.Username
+		if performedBy.FirstName != "" {
+			name = performedBy.FirstName + " " + performedBy.LastName
+		}
+		vars["performed_by"] = name
+		vars["first_name"] = performedBy.FirstName
+		vars["last_name"] = performedBy.LastName
+	}
+
+	if incident.Assignee != nil {
+		name := incident.Assignee.Username
+		if incident.Assignee.FirstName != "" {
+			name = incident.Assignee.FirstName + " " + incident.Assignee.LastName
+		}
+		vars["assignee"] = name
+	} else {
+		vars["assignee"] = "Unassigned"
+	}
+
+	if incident.CurrentState != nil {
+		vars["current_state"] = incident.CurrentState.Name
+	}
+
+	return vars
 }
 
 // replacePlaceholders replaces template placeholders with actual values
