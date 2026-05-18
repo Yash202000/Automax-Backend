@@ -20,6 +20,7 @@ func NewNotificationTemplateHandler(svc services.NotificationTemplateService) *N
 }
 
 // POST /admin/notification-templates
+// Creates a bilingual template (EN + AR) as a single DB row.
 func (h *NotificationTemplateHandler) Create(c *fiber.Ctx) error {
 	var req models.NotificationTemplateCreateRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -37,36 +38,11 @@ func (h *NotificationTemplateHandler) Create(c *fiber.Ctx) error {
 	})
 }
 
-// POST /admin/notification-templates/bilingual
-// Creates English and Arabic variants of the same template in one call.
-func (h *NotificationTemplateHandler) CreateBilingual(c *fiber.Ctx) error {
-	var req models.NotificationTemplateBilingualRequest
-	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
-	}
-
-	templates, err := h.svc.CreateBilingual(c.UserContext(), &req)
-	if err != nil {
-		return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
-	}
-
-	responses := make([]models.NotificationTemplateResponse, len(templates))
-	for i, t := range templates {
-		responses[i] = models.ToNotificationTemplateResponse(t)
-	}
-
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
-		"success": true,
-		"data":    responses,
-	})
-}
-
 // GET /admin/notification-templates
-// Query params: channel, language, module_type, action_type, is_active (true/false), code, search, page, limit
+// Query params: channel, module_type, action_type, is_active (true/false), code, search, page, limit
 func (h *NotificationTemplateHandler) List(c *fiber.Ctx) error {
 	filter := models.NotificationTemplateFilter{
 		Channel:    c.Query("channel"),
-		Language:   c.Query("language"),
 		ModuleType: c.Query("module_type"),
 		ActionType: c.Query("action_type"),
 		Code:       c.Query("code"),

@@ -654,7 +654,6 @@ func main() {
 		LogService:  actionLogService,
 		SkipMethods: []string{"GET"},
 	}))
-	notifTemplates.Post("/bilingual", authMiddleware.RequirePermission("templates:create"), templateHandler.CreateBilingual)
 	notifTemplates.Post("/", authMiddleware.RequirePermission("templates:create"), templateHandler.Create)
 	notifTemplates.Get("/by-code/:code", authMiddleware.RequirePermission("templates:read"), templateHandler.GetByCode)
 	notifTemplates.Get("/by-transition/:transitionId", authMiddleware.RequirePermission("templates:read"), templateHandler.GetByTransition)

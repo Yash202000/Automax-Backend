@@ -12,7 +12,6 @@ import (
 
 type NotificationTemplateService interface {
 	Create(ctx context.Context, req *models.NotificationTemplateCreateRequest) (*models.NotificationTemplate, error)
-	CreateBilingual(ctx context.Context, req *models.NotificationTemplateBilingualRequest) ([]*models.NotificationTemplate, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*models.NotificationTemplate, error)
 	List(ctx context.Context, filter models.NotificationTemplateFilter) ([]models.NotificationTemplate, int64, error)
 	Update(ctx context.Context, id uuid.UUID, req *models.NotificationTemplateUpdateRequest) (*models.NotificationTemplate, error)
@@ -31,24 +30,25 @@ func NewNotificationTemplateService(repo repository.NotificationTemplateReposito
 	return &notificationTemplateService{repo: repo, db: db}
 }
 
+// Create stores a bilingual template as a single DB row.
 func (s *notificationTemplateService) Create(ctx context.Context, req *models.NotificationTemplateCreateRequest) (*models.NotificationTemplate, error) {
-	if req.Body == "" {
-		return nil, errors.New("body is required")
+	if req.BodyEN == "" && req.BodyAR == "" {
+		return nil, errors.New("At least one of body_en or body_ar is required")
 	}
-	if req.Code == "" || req.Channel == "" || req.Language == "" {
-		return nil, errors.New("code, channel, and language are required")
+	if req.Code == "" || req.Channel == "" {
+		return nil, errors.New("code and channel are required")
 	}
 
 	tpl := &models.NotificationTemplate{
 		Name:         req.Name,
 		Code:         req.Code,
 		Channel:      req.Channel,
-		Language:     req.Language,
 		ModuleType:   req.ModuleType,
 		ActionType:   req.ActionType,
-		Subject:      req.Subject,
-		Body:         req.Body,
-		Description:  req.Description,
+		SubjectEN:    req.SubjectEN,
+		BodyEN:       req.BodyEN,
+		SubjectAR:    req.SubjectAR,
+		BodyAR:       req.BodyAR,
 		Variables:    req.Variables,
 		TransitionID: req.TransitionID,
 		IsActive:     req.IsActive,
@@ -58,67 +58,6 @@ func (s *notificationTemplateService) Create(ctx context.Context, req *models.No
 		return nil, err
 	}
 	return tpl, nil
-}
-
-// CreateBilingual atomically creates English and Arabic variants of the same template.
-func (s *notificationTemplateService) CreateBilingual(ctx context.Context, req *models.NotificationTemplateBilingualRequest) ([]*models.NotificationTemplate, error) {
-	if req.BodyEN == "" {
-		return nil, errors.New("body_en is required")
-	}
-	if req.Code == "" || req.Channel == "" {
-		return nil, errors.New("code and channel are required")
-	}
-
-	en := &models.NotificationTemplate{
-		Name:         req.Name,
-		Code:         req.Code,
-		Channel:      req.Channel,
-		Language:     models.TemplateLangEN,
-		ModuleType:   req.ModuleType,
-		ActionType:   req.ActionType,
-		Subject:      req.SubjectEN,
-		Body:         req.BodyEN,
-		Description:  req.Description,
-		Variables:    req.Variables,
-		TransitionID: req.TransitionID,
-		IsActive:     req.IsActive,
-	}
-
-	ar := &models.NotificationTemplate{
-		Name:         req.Name,
-		Code:         req.Code,
-		Channel:      req.Channel,
-		Language:     models.TemplateLangAR,
-		ModuleType:   req.ModuleType,
-		ActionType:   req.ActionType,
-		Subject:      req.SubjectAR,
-		Body:         req.BodyAR,
-		Description:  req.Description,
-		Variables:    req.Variables,
-		TransitionID: req.TransitionID,
-		IsActive:     req.IsActive,
-	}
-
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(en).Error; err != nil {
-			return err
-		}
-		if req.BodyAR != "" {
-			if err := tx.Create(ar).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	result := []*models.NotificationTemplate{en}
-	if req.BodyAR != "" {
-		result = append(result, ar)
-	}
-	return result, nil
 }
 
 func (s *notificationTemplateService) GetByID(ctx context.Context, id uuid.UUID) (*models.NotificationTemplate, error) {
@@ -138,23 +77,26 @@ func (s *notificationTemplateService) Update(ctx context.Context, id uuid.UUID, 
 	if req.Name != nil {
 		tpl.Name = *req.Name
 	}
-	if req.Subject != nil {
-		tpl.Subject = *req.Subject
+	if req.SubjectEN != nil {
+		tpl.SubjectEN = *req.SubjectEN
 	}
-	if req.Body != nil {
-		if *req.Body == "" {
-			return nil, errors.New("body cannot be empty")
+	if req.BodyEN != nil {
+		if *req.BodyEN == "" {
+			return nil, errors.New("body_en cannot be empty")
 		}
-		tpl.Body = *req.Body
+		tpl.BodyEN = *req.BodyEN
+	}
+	if req.SubjectAR != nil {
+		tpl.SubjectAR = *req.SubjectAR
+	}
+	if req.BodyAR != nil {
+		tpl.BodyAR = *req.BodyAR
 	}
 	if req.ModuleType != nil {
 		tpl.ModuleType = *req.ModuleType
 	}
 	if req.ActionType != nil {
 		tpl.ActionType = *req.ActionType
-	}
-	if req.Description != nil {
-		tpl.Description = *req.Description
 	}
 	if req.Variables != nil {
 		tpl.Variables = *req.Variables

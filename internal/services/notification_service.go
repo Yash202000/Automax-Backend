@@ -54,20 +54,34 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 	//TEMPLATE LOGIC
 	if templateCode != nil && *templateCode != "" {
 
-		tpl, err := s.templateRepo.FindByCodeChannelLanguage(
-			ctx, *templateCode, channel, language,
-		)
+		tpl, err := s.templateRepo.FindByCode(ctx, *templateCode, channel)
 		if err != nil {
 			return nil, err
 		}
 
-		// Render only if variables exist
+		// Pick the language variant; fall back to EN if AR is empty.
+		var tplBody, tplSubject string
+		if language == "ar" && tpl.BodyAR != "" {
+			tplBody = tpl.BodyAR
+			tplSubject = tpl.SubjectAR
+		} else {
+			tplBody = tpl.BodyEN
+			tplSubject = tpl.SubjectEN
+		}
+
 		if len(variables) > 0 {
-			if tpl.Body != "" {
-				body, _ = RenderTemplate(tpl.Body, variables)
+			if tplBody != "" {
+				body, _ = RenderTemplate(tplBody, variables)
 			}
-			if tpl.Subject != "" {
-				subject, _ = RenderTemplate(tpl.Subject, variables)
+			if tplSubject != "" {
+				subject, _ = RenderTemplate(tplSubject, variables)
+			}
+		} else {
+			if tplBody != "" {
+				body = tplBody
+			}
+			if tplSubject != "" {
+				subject = tplSubject
 			}
 		}
 

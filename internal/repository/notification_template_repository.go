@@ -11,13 +11,13 @@ import (
 type NotificationTemplateRepository interface {
 	Create(ctx context.Context, tpl *models.NotificationTemplate) error
 	FindByID(ctx context.Context, id uuid.UUID) (*models.NotificationTemplate, error)
-	// FindByCode / FindByCodeChannelLanguage kept for notification service compatibility.
-	FindByCode(ctx context.Context, code, channel, language string) (*models.NotificationTemplate, error)
+	// FindByCode looks up an active template by code and channel.
+	FindByCode(ctx context.Context, code, channel string) (*models.NotificationTemplate, error)
+	// FindByCodeChannelLanguage is kept for notification service compatibility; language param is ignored.
 	FindByCodeChannelLanguage(ctx context.Context, code, channel, language string) (*models.NotificationTemplate, error)
 	Update(ctx context.Context, tpl *models.NotificationTemplate) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context) ([]models.NotificationTemplate, error)
-	// New query methods
 	ListWithFilters(ctx context.Context, filter models.NotificationTemplateFilter) ([]models.NotificationTemplate, int64, error)
 	FindAllByCode(ctx context.Context, code, channel string) ([]models.NotificationTemplate, error)
 	FindByTransitionID(ctx context.Context, transitionID uuid.UUID) ([]models.NotificationTemplate, error)
@@ -43,10 +43,10 @@ func (r *notificationTemplateRepository) FindByID(ctx context.Context, id uuid.U
 	return &tpl, nil
 }
 
-func (r *notificationTemplateRepository) FindByCode(ctx context.Context, code, channel, language string) (*models.NotificationTemplate, error) {
+func (r *notificationTemplateRepository) FindByCode(ctx context.Context, code, channel string) (*models.NotificationTemplate, error) {
 	var tpl models.NotificationTemplate
 	err := r.db.WithContext(ctx).
-		Where("code = ? AND channel = ? AND language = ? AND is_active = true", code, channel, language).
+		Where("code = ? AND channel = ? AND is_active = true", code, channel).
 		First(&tpl).Error
 	if err != nil {
 		return nil, err
@@ -54,8 +54,8 @@ func (r *notificationTemplateRepository) FindByCode(ctx context.Context, code, c
 	return &tpl, nil
 }
 
-func (r *notificationTemplateRepository) FindByCodeChannelLanguage(ctx context.Context, code, channel, language string) (*models.NotificationTemplate, error) {
-	return r.FindByCode(ctx, code, channel, language)
+func (r *notificationTemplateRepository) FindByCodeChannelLanguage(ctx context.Context, code, channel, _ string) (*models.NotificationTemplate, error) {
+	return r.FindByCode(ctx, code, channel)
 }
 
 func (r *notificationTemplateRepository) Update(ctx context.Context, tpl *models.NotificationTemplate) error {
@@ -78,9 +78,6 @@ func (r *notificationTemplateRepository) ListWithFilters(ctx context.Context, fi
 	if filter.Channel != "" {
 		q = q.Where("channel = ?", filter.Channel)
 	}
-	if filter.Language != "" {
-		q = q.Where("language = ?", filter.Language)
-	}
 	if filter.ModuleType != "" {
 		q = q.Where("module_type = ?", filter.ModuleType)
 	}
@@ -95,7 +92,7 @@ func (r *notificationTemplateRepository) ListWithFilters(ctx context.Context, fi
 	}
 	if filter.Search != "" {
 		like := "%" + filter.Search + "%"
-		q = q.Where("name ILIKE ? OR description ILIKE ?", like, like)
+		q = q.Where("name ILIKE ?", like)
 	}
 	if filter.TransitionID != nil {
 		q = q.Where("transition_id = ?", *filter.TransitionID)
@@ -117,7 +114,7 @@ func (r *notificationTemplateRepository) ListWithFilters(ctx context.Context, fi
 	offset := (page - 1) * limit
 
 	var list []models.NotificationTemplate
-	err := q.Order("code ASC, language ASC").Offset(offset).Limit(limit).Find(&list).Error
+	err := q.Order("code ASC").Offset(offset).Limit(limit).Find(&list).Error
 	return list, total, err
 }
 
@@ -127,7 +124,7 @@ func (r *notificationTemplateRepository) FindAllByCode(ctx context.Context, code
 	if channel != "" {
 		q = q.Where("channel = ?", channel)
 	}
-	err := q.Order("language ASC").Find(&list).Error
+	err := q.Order("code ASC").Find(&list).Error
 	return list, err
 }
 
@@ -135,7 +132,7 @@ func (r *notificationTemplateRepository) FindByTransitionID(ctx context.Context,
 	var list []models.NotificationTemplate
 	err := r.db.WithContext(ctx).
 		Where("transition_id = ?", transitionID).
-		Order("code ASC, language ASC").
+		Order("code ASC").
 		Find(&list).Error
 	return list, err
 }
