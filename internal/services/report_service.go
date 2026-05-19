@@ -57,6 +57,7 @@ type reportService struct {
 	rejectionLogRepo   repository.RejectionLogRepository
 	locationRepo       repository.LocationRepository
 	classificationRepo repository.ClassificationRepository
+	workflowRepo       repository.WorkflowRepository
 	queryHandlers      map[string]queryHandlerFn // ← single registry
 }
 
@@ -65,6 +66,7 @@ func NewReportService(
 	rejectionLogRepo repository.RejectionLogRepository,
 	locationRepo repository.LocationRepository,
 	classificationRepo repository.ClassificationRepository,
+	workflowRepo repository.WorkflowRepository,
 
 ) ReportService {
 	// return &reportService{
@@ -76,6 +78,7 @@ func NewReportService(
 		rejectionLogRepo:   rejectionLogRepo,
 		locationRepo:       locationRepo,
 		classificationRepo: classificationRepo,
+		workflowRepo:       workflowRepo,
 	}
 	// All four switch statements collapse into this one map.
 	// Adding a new data source = one line here, zero changes elsewhere.
@@ -190,6 +193,9 @@ func (s *reportService) UpdateReport(ctx context.Context, id uuid.UUID, req *mod
 	}
 	if req.IsPublic != nil {
 		report.IsPublic = *req.IsPublic
+	}
+	if req.TimestampKey != "" {
+		report.TimestampKey = req.TimestampKey
 	}
 
 	if err := s.reportRepo.Update(ctx, report); err != nil {
@@ -331,8 +337,9 @@ func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExpo
 	}
 	filename += "_" + time.Now().Format("2006-01-02_150405")
 	log.Printf("Exporting report with title: %s, filename: %s", title, filename)
+	filters := s.buildFilterDisplay(ctx, req.Filters)
 	if req.Format == "xlsx" {
-		xlsxData, err := s.generateExcel(data, req.Columns, title, req.Options)
+		xlsxData, err := s.generateExcel(data, req.Columns, title, req.Options, filters)
 		if err != nil {
 			return nil, "", "", err
 		}
@@ -340,9 +347,6 @@ func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExpo
 			"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", nil
 	}
 	log.Println(req.Filters)
-
-	// @working on it
-	filters := s.buildFilterDisplay(ctx, req.Filters)
 	// in ExportReport, change the generatePDF call:
 	pdfData, err := s.generatePDF(ctx, data, req.Columns, title, req.Options, filters)
 	log.Println("pdf generation started ")
@@ -424,6 +428,7 @@ func (s *reportService) generateExcel(
 	columns []models.ColumnField,
 	title string,
 	options *models.ReportExportOptions,
+	filterDisplay map[string]interface{},
 ) ([]byte, error) {
 
 	f := excelize.NewFile()
@@ -432,8 +437,9 @@ func (s *reportService) generateExcel(
 
 	// ── Column widths ─────────────────────────────────────────────────────
 	if len(columns) > 0 {
-		lastCol, _ := excelize.ColumnNumberToName(len(columns))
-		f.SetColWidth(sheet, "A", lastCol, 27)
+		f.SetColWidth(sheet, "A", "A", 8) // S.No. column
+		lastCol, _ := excelize.ColumnNumberToName(len(columns) + 1)
+		f.SetColWidth(sheet, "B", lastCol, 27)
 	}
 
 	// Determine starting row
@@ -445,7 +451,7 @@ func (s *reportService) generateExcel(
 
 	// ── Title row ─────────────────────────────────────────────────────────
 	if title != "" {
-		lastCol, _ := excelize.ColumnNumberToName(len(columns))
+		lastCol, _ := excelize.ColumnNumberToName(len(columns) + 1)
 		f.MergeCell(sheet, "A1", lastCol+"1")
 		titleStyle, _ := f.NewStyle(&excelize.Style{
 			Font:      &excelize.Font{Bold: true, Size: 14},
@@ -480,16 +486,18 @@ func (s *reportService) generateExcel(
 
 	// ── Write headers ─────────────────────────────────────────────────────
 	headerRowStr := strconv.Itoa(headerRow)
+	f.SetCellValue(sheet, "A"+headerRowStr, "#")
 	for i, col := range columns {
-		colName, _ := excelize.ColumnNumberToName(i + 1)
+		colName, _ := excelize.ColumnNumberToName(i + 2)
 		f.SetCellValue(sheet, colName+headerRowStr, col.Label)
 	}
 
 	// ── Write data rows ───────────────────────────────────────────────────
 	for rowIdx, row := range data {
 		excelRow := strconv.Itoa(dataStartRow + rowIdx)
+		f.SetCellValue(sheet, "A"+excelRow, rowIdx+1)
 		for colIdx, col := range columns {
-			colName, _ := excelize.ColumnNumberToName(colIdx + 1)
+			colName, _ := excelize.ColumnNumberToName(colIdx + 2)
 			val := ""
 			if v, ok := row[col.Label]; ok && v != nil {
 				val = formatExportValue(col.Label, v)
@@ -510,10 +518,54 @@ func (s *reportService) generateExcel(
 		ActivePane:  "bottomLeft",
 	})
 
+	// ── Filters & Stats ───────────────────────────────────────────────────
+	currentRow := dataStartRow + len(data) + 2 // one blank row after last data row
+	lastDataCol, _ := excelize.ColumnNumberToName(len(columns) + 1)
+
+	if len(filterDisplay) > 0 {
+		filterKeys := make([]string, 0, len(filterDisplay))
+		for k := range filterDisplay {
+			filterKeys = append(filterKeys, k)
+		}
+		sort.Strings(filterKeys)
+
+		filterHeaderStyle, _ := f.NewStyle(&excelize.Style{
+			Font: &excelize.Font{Bold: true, Size: 10},
+			Fill: excelize.Fill{Type: "pattern", Color: []string{"E8EDF5"}, Pattern: 1},
+		})
+		rowStr := strconv.Itoa(currentRow)
+		f.MergeCell(sheet, "A"+rowStr, lastDataCol+rowStr)
+		f.SetCellValue(sheet, "A"+rowStr, "Filters:")
+		f.SetCellStyle(sheet, "A"+rowStr, lastDataCol+rowStr, filterHeaderStyle)
+		currentRow++
+
+		filterRowStyle, _ := f.NewStyle(&excelize.Style{
+			Fill: excelize.Fill{Type: "pattern", Color: []string{"F5F7FA"}, Pattern: 1},
+		})
+		for _, k := range filterKeys {
+			v := filterDisplay[k]
+			rawKey := stripSortPrefix(k)
+			label := cases.Title(language.English).String(strings.ReplaceAll(rawKey, "_", " "))
+			rowStr = strconv.Itoa(currentRow)
+			f.SetCellValue(sheet, "A"+rowStr, label+":")
+			f.SetCellValue(sheet, "B"+rowStr, formatFilterValue("", v))
+			f.SetCellStyle(sheet, "A"+rowStr, "B"+rowStr, filterRowStyle)
+			currentRow++
+		}
+
+		statsStyle, _ := f.NewStyle(&excelize.Style{
+			Font: &excelize.Font{Bold: true, Size: 10, Color: "3B82F6"},
+			Fill: excelize.Fill{Type: "pattern", Color: []string{"E8EDF5"}, Pattern: 1},
+		})
+		rowStr = strconv.Itoa(currentRow)
+		f.SetCellValue(sheet, "A"+rowStr, fmt.Sprintf("Total Rows: %d", len(data)))
+		f.SetCellStyle(sheet, "A"+rowStr, "A"+rowStr, statsStyle)
+		currentRow += 2 // blank row before timestamp
+	}
+
 	// ── Timestamp ─────────────────────────────────────────────────────────
 	if options != nil && options.IncludeTimestamp {
-		tsRow := strconv.Itoa(dataStartRow + len(data) + 1)
-		f.SetCellValue(sheet, "A"+tsRow,
+		f.SetCellValue(sheet, "A"+strconv.Itoa(currentRow),
 			fmt.Sprintf("Generated: %s", time.Now().Format("2006-01-02 15:04:05")))
 	}
 
@@ -523,6 +575,86 @@ func (s *reportService) generateExcel(
 		return nil, fmt.Errorf("excel write error: %w", err)
 	}
 	return buf.Bytes(), nil
+}
+
+// computeFilterBoxH returns the height of the filter+stats box drawn by drawFiltersAndStats.
+func computeFilterBoxH(filterDisplay map[string]interface{}) float64 {
+	const lineH = 5.5
+	const padding = 3.0
+	filterLines := 1 + len(filterDisplay) // "Filters:" header + one line per entry
+	statsLines := 2                       // "Total Rows" + "Total Pages"
+	maxLines := filterLines
+	if statsLines > maxLines {
+		maxLines = statsLines
+	}
+	return float64(maxLines)*lineH + padding*2
+}
+
+// computeActualPageCount simulates the row-drawing loop to return the real page count.
+// firstPageDataY is the Y coordinate where the first data row will be drawn.
+func computeActualPageCount(
+	pdf *gofpdf.Fpdf,
+	data []map[string]interface{},
+	columns []models.ColumnField,
+	colWidths []float64,
+	firstPageDataY float64,
+	hdrH float64,
+	lineH float64,
+	baseFontSize float64,
+	rtlMode bool,
+	setFont func(string, float64, string),
+) int {
+	const pageH = 210.0
+	const leftMargin = 16.0
+	bottomBound := pageH - leftMargin
+
+	colCount := len(columns)
+	minRowH := lineH + 2
+	currentY := firstPageDataY
+	pages := 1
+
+	renderWidths := colWidths
+	if rtlMode {
+		renderWidths = reverseWidths(colWidths)
+	}
+
+	for _, row := range data {
+		vals := make([]string, colCount)
+		for i, col := range columns {
+			v := row[col.Label]
+			if v == nil {
+				vals[i] = ""
+			} else {
+				vals[i] = formatExportValue(col.Label, v)
+			}
+		}
+		if rtlMode {
+			vals = reverseStrings(vals)
+		}
+
+		rowH := minRowH
+		for i := range columns {
+			setFont("", baseFontSize, vals[i])
+			nb := len(pdf.SplitLines([]byte(vals[i]), renderWidths[i]-2))
+			if nb < 1 {
+				nb = 1
+			}
+			if needed := float64(nb)*lineH + 2; needed > rowH {
+				rowH = needed
+			}
+		}
+
+		if currentY+rowH > bottomBound {
+			pages++
+			currentY = leftMargin + hdrH
+		}
+		currentY += rowH
+	}
+
+	if pages < 1 {
+		return 1
+	}
+	return pages
 }
 
 func computeColWidths(pageWidth float64, colCount int) []float64 {
@@ -607,35 +739,36 @@ func (s *reportService) generatePDF(
 	arabicLoaded := len(fonts.NotoArabicRegular) > 0
 	log.Println("RTL Mode: ", rtlMode)
 	pdf := gofpdf.New("L", "mm", "A4", "")
-	pdf.SetMargins(10, 15, 10)
-	pdf.SetAutoPageBreak(true, 15)
+	pdf.SetMargins(16, 16, 16) // match HTML template: @page { margin: 16mm }
+	pdf.SetAutoPageBreak(true, 16)
 
 	setupArabicFont(pdf)
 	pdf.AddPage()
 
-	pageWidth := 277.0
+	// A4 landscape = 297mm wide; 297 - 16 - 16 = 265mm usable (matches HTML template)
+	pageWidth := 265.0
+	const snoWidth = 12.0 // fixed width for the serial-number column
 	colCount := len(columns)
-	colWidths := computeColWidths(pageWidth, colCount)
+	colWidths := computeColWidths(pageWidth-snoWidth, colCount)
 
+	// Body font: 9pt (≈ HTML 12px). Scale down for many columns.
 	baseFontSize := 9.0
 	switch {
 	case colCount > 20:
-		baseFontSize = 6.0
+		baseFontSize = 6.5
 	case colCount > 15:
-		baseFontSize = 7.0
+		baseFontSize = 7.5
 	case colCount > 10:
 		baseFontSize = 8.0
 	}
+	// Header font: 1pt above body — readable but never larger than the column width allows.
+	headerFontSize := baseFontSize + 1.0
 
-	maxCellRunes := 30
-	switch {
-	case colCount > 20:
-		maxCellRunes = 12
-	case colCount > 15:
-		maxCellRunes = 18
-	case colCount > 10:
-		maxCellRunes = 22
-	}
+	// lineH: height of one wrapped text line — 1pt ≈ 0.353mm, add ~2mm padding
+	lineH := baseFontSize*0.353 + 2.2
+
+	const leftMargin = 16.0
+	const pageH = 210.0 // A4 height in mm
 
 	setFont := func(style string, size float64, text string) {
 		if arabicLoaded && (rtlMode || isRTL(text)) {
@@ -646,9 +779,8 @@ func (s *reportService) generatePDF(
 	}
 
 	drawHeader := func() {
-		setFont("B", baseFontSize, title)
-		pdf.SetFillColor(59, 130, 246)
-		pdf.SetTextColor(255, 255, 255)
+		pdf.SetFillColor(244, 246, 248)
+		pdf.SetTextColor(34, 34, 34)
 
 		orderedCols := columns
 		orderedWidths := colWidths
@@ -657,11 +789,41 @@ func (s *reportService) generatePDF(
 			orderedWidths = reverseWidths(colWidths)
 		}
 
+		// Measure every label at the header font to find the tallest column,
+		// then size the row to fit — prevents text being clipped or overflowing.
+		setFont("B", headerFontSize, "")
+		maxLines := 1
 		for i, col := range orderedCols {
-			label := truncateRunes(col.Label, maxCellRunes)
-			pdf.CellFormat(orderedWidths[i], 8, label, "1", 0, "C", true, 0, "")
+			nb := len(pdf.SplitLines([]byte(col.Label), orderedWidths[i]-2))
+			if nb < 1 {
+				nb = 1
+			}
+			if nb > maxLines {
+				maxLines = nb
+			}
 		}
-		pdf.Ln(-1)
+		hdrH := float64(maxLines)*lineH + 3.5
+
+		startY := pdf.GetY()
+		curX := leftMargin
+
+		// Serial number header cell (always at the visual left)
+		pdf.SetFillColor(244, 246, 248)
+		pdf.Rect(curX, startY, snoWidth, hdrH, "FD")
+		pdf.SetXY(curX+1, startY+1)
+		setFont("B", headerFontSize, "")
+		pdf.MultiCell(snoWidth-2, lineH, "#", "", "C", false)
+		curX += snoWidth
+
+		for i, col := range orderedCols {
+			pdf.SetFillColor(244, 246, 248)
+			pdf.Rect(curX, startY, orderedWidths[i], hdrH, "FD")
+			pdf.SetXY(curX+1, startY+1)
+			setFont("B", headerFontSize, col.Label)
+			pdf.MultiCell(orderedWidths[i]-2, lineH, col.Label, "", "C", false)
+			curX += orderedWidths[i]
+		}
+		pdf.SetXY(leftMargin, startY+hdrH)
 
 		pdf.SetTextColor(0, 0, 0)
 		pdf.SetFillColor(255, 255, 255)
@@ -684,42 +846,45 @@ func (s *reportService) generatePDF(
 	}
 
 	// ── Filters + Stats (first page only) ────────────────────────────────────────
-	drawFiltersAndStats(pdf, filterDisplay, len(data), setFont)
+	// Measure header height (same logic as drawHeader) so we can compute the real
+	// Y where data rows start on the first page — needed for accurate page count.
+	setFont("B", headerFontSize, "")
+	hdrMaxLines := 1
+	for i, col := range columns {
+		nb := len(pdf.SplitLines([]byte(col.Label), colWidths[i]-2))
+		if nb < 1 {
+			nb = 1
+		}
+		if nb > hdrMaxLines {
+			hdrMaxLines = nb
+		}
+	}
+	measuredHdrH := float64(hdrMaxLines)*lineH + 3.5
+	// firstPageDataY = current cursor + filter-box height + 4mm gap + Ln(2) + header
+	firstPageDataY := pdf.GetY() + computeFilterBoxH(filterDisplay) + 4.0 + 2.0 + measuredHdrH
+	actualPageCount := computeActualPageCount(pdf, data, columns, colWidths, firstPageDataY, measuredHdrH, lineH, baseFontSize, rtlMode, setFont)
+
+	drawFiltersAndStats(pdf, filterDisplay, len(data), actualPageCount, setFont)
 	pdf.Ln(2)
 
 	// ── Table header ─────────────────────────────────────────────────────────────
 	drawHeader()
 
 	// ── Rows ─────────────────────────────────────────────────────────────────
-	rowH := 7.0
-	if rtlMode {
-		rowH = 8.5
-	}
-	// Tighter rows when many columns
-	if colCount > 15 {
-		rowH = 6.0
-	}
+	// minRowH: a row must be at least this tall even when content is short
+	minRowH := lineH + 2
+	bottomBound := pageH - leftMargin // leave 16mm bottom margin
 
 	fill := false
-	for _, row := range data {
-		if pdf.GetY() > 185 {
-			pdf.AddPage()
-			drawHeader()
-		}
-
-		if fill {
-			pdf.SetFillColor(240, 245, 255)
-		} else {
-			pdf.SetFillColor(255, 255, 255)
-		}
-
+	for rowIdx, row := range data {
+		// Build values without truncation — MultiCell will wrap long text
 		vals := make([]string, colCount)
 		for i, col := range columns {
 			v := row[col.Label]
 			if v == nil {
 				vals[i] = ""
 			} else {
-				vals[i] = truncateRunes(formatExportValue(col.Label, v), maxCellRunes)
+				vals[i] = formatExportValue(col.Label, v)
 			}
 		}
 
@@ -732,6 +897,50 @@ func (s *reportService) generatePDF(
 			renderVals = reverseStrings(vals)
 		}
 
+		// Calculate the tallest cell in this row to fix uniform row height
+		rowH := minRowH
+		for i := range renderCols {
+			setFont("", baseFontSize, renderVals[i])
+			nb := len(pdf.SplitLines([]byte(renderVals[i]), renderWidths[i]-2))
+			if nb < 1 {
+				nb = 1
+			}
+			needed := float64(nb)*lineH + 2
+			if needed > rowH {
+				rowH = needed
+			}
+		}
+
+		startY := pdf.GetY()
+
+		// Page break before drawing (check combined height)
+		if startY+rowH > bottomBound {
+			pdf.AddPage()
+			drawHeader()
+			startY = pdf.GetY()
+		}
+
+		// Alternating row background
+		var fillR, fillG, fillB int
+		if fill {
+			fillR, fillG, fillB = 240, 245, 255
+		} else {
+			fillR, fillG, fillB = 255, 255, 255
+		}
+
+		curX := leftMargin
+
+		// Serial number cell (always at the visual left)
+		snoVal := strconv.Itoa(rowIdx + 1)
+		setFont("", baseFontSize, "")
+		pdf.SetFillColor(fillR, fillG, fillB)
+		pdf.Rect(curX, startY, snoWidth, rowH, "F")
+		pdf.SetDrawColor(51, 51, 51)
+		pdf.Rect(curX, startY, snoWidth, rowH, "D")
+		pdf.SetXY(curX+1, startY+1)
+		pdf.MultiCell(snoWidth-2, lineH, snoVal, "", "C", false)
+		curX += snoWidth
+
 		for i := range renderCols {
 			val := renderVals[i]
 			setFont("", baseFontSize, val)
@@ -739,9 +948,18 @@ func (s *reportService) generatePDF(
 			if rtlMode || isRTL(val) {
 				align = "R"
 			}
-			pdf.CellFormat(renderWidths[i], rowH, val, "1", 0, align, fill, 0, "")
+			// Background fill
+			pdf.SetFillColor(fillR, fillG, fillB)
+			pdf.Rect(curX, startY, renderWidths[i], rowH, "F")
+			// Border (border: 1px solid #333)
+			pdf.SetDrawColor(51, 51, 51)
+			pdf.Rect(curX, startY, renderWidths[i], rowH, "D")
+			// Text with 1mm inset on each side so it doesn't touch the border
+			pdf.SetXY(curX+1, startY+1)
+			pdf.MultiCell(renderWidths[i]-2, lineH, val, "", align, false)
+			curX += renderWidths[i]
 		}
-		pdf.Ln(-1)
+		pdf.SetXY(leftMargin, startY+rowH)
 		fill = !fill
 	}
 
@@ -764,110 +982,85 @@ func (s *reportService) generatePDF(
 }
 
 func (s *reportService) buildFilterDisplay(ctx context.Context, filters []models.ReportFilterConfig) map[string]interface{} {
-	display := map[string]interface{}{}
-
-	// ── Step 1: collect all IDs per type ─────────────────────────────────
-	locationIDSet := map[uuid.UUID]struct{}{}
-	classificationIDSet := map[uuid.UUID]struct{}{}
+	// Always-present entries sorted to the top via numeric prefix.
+	// drawFiltersAndStats strips the "N_" prefix before rendering.
+	display := map[string]interface{}{
+		"1_Location":       "All",
+		"2_Classification": "All",
+		"3_From Date":      "-",
+		"4_To Date":        "-",
+	}
 
 	for _, f := range filters {
 		if f.Value == nil {
 			continue
 		}
-		log.Print("build filter", f.Field, f.Value)
 		switch f.Field {
 		case "location_id":
 			ids := toStringSlice(f.Value)
 			if len(ids) > 1 {
-				display["Location"] = "Multiple"
+				display["1_Location"] = "Multiple"
 				continue
 			}
 			if id, err := uuid.Parse(ids[0]); err == nil {
 				if loc, err := s.locationRepo.FindByID(ctx, id); err == nil && loc != nil {
-					display["Location"] = loc.Name
+					display["1_Location"] = loc.Name
 				}
 			}
 
 		case "classification_id":
 			ids := toStringSlice(f.Value)
 			if len(ids) > 1 {
-				display["Classification"] = "Multiple"
+				display["2_Classification"] = "Multiple"
 				continue
 			}
 			if id, err := uuid.Parse(ids[0]); err == nil {
 				if cls, err := s.classificationRepo.FindByID(ctx, id); err == nil && cls != nil {
-					display["Classification"] = cls.Name
+					display["2_Classification"] = cls.Name
 				}
 			}
-		}
-	}
+		// case "status_id":
+		// 	ids := toStringSlice(f.Value)
+		// 	if len(ids) > 1 {
+		// 		display["5_Status"] = "Multiple"
+		// 		continue
+		// 	}
+		// 	if id, err := uuid.Parse(ids[0]); err == nil {
+		// 		if wrflw, err := s.workflowRepo.FindStateByID(ctx, id); err == nil && wrflw != nil {
+		// 			display["5_Status"] = wrflw.Name
+		// 		}
+		// 	}
 
-	// ── Step 2: batch fetch ───────────────────────────────────────────────
-	locationNames := map[uuid.UUID]string{}
-	classificationNames := map[uuid.UUID]string{}
+		// case "status_name", "status":
+		// 	ids := toStringSlice(f.Value)
+		// 	if len(ids) > 1 {
+		// 		display["5_Status"] = "Multiple"
+		// 	} else {
+		// 		display["5_Status"] = ids[0]
+		// 	}
 
-	if len(locationIDSet) > 0 {
-		ids := make([]uuid.UUID, 0, len(locationIDSet))
-		for id := range locationIDSet {
-			ids = append(ids, id)
-		}
-		if locs, err := s.locationRepo.FindByIDs(ctx, ids); err == nil {
-			for _, loc := range *locs {
-				locationNames[loc.ID] = loc.Name
-			}
-		}
-	}
-
-	if len(classificationIDSet) > 0 {
-		ids := make([]uuid.UUID, 0, len(classificationIDSet))
-		for id := range classificationIDSet {
-			ids = append(ids, id)
-		}
-		if cls, err := s.classificationRepo.FindByIDs(ctx, ids); err == nil {
-			for _, c := range *cls {
-				classificationNames[c.ID] = c.Name
-			}
-		}
-	}
-
-	// ── Step 3: build display map ─────────────────────────────────────────
-	for _, f := range filters {
-		if f.Value == nil {
-			continue
-		}
-
-		switch f.Field {
-		case "location_id":
-			names := []string{}
-			for _, rawID := range toStringSlice(f.Value) {
-				if id, err := uuid.Parse(rawID); err == nil {
-					if name, ok := locationNames[id]; ok {
-						names = append(names, name)
+		// Both "created_at" (incidents/requests) and "incident_created_at"
+		// (count-group queries) map to From / To Date.
+		case "created_at", "incident_created_at":
+			switch f.Operator {
+			case "between":
+				if m, ok := f.Value.(map[string]interface{}); ok {
+					if from, ok := m["from"].(string); ok && from != "" {
+						display["3_From Date"] = cleanDateStr(from)
+					}
+					if to, ok := m["to"].(string); ok && to != "" {
+						display["4_To Date"] = cleanDateStr(to)
 					}
 				}
-			}
-			if len(names) > 0 {
-				display["Location"] = strings.Join(names, ", ")
-				continue
-			}
-
-		case "classification_id":
-			names := []string{}
-			for _, rawID := range toStringSlice(f.Value) {
-				if id, err := uuid.Parse(rawID); err == nil {
-					if name, ok := classificationNames[id]; ok {
-						names = append(names, name)
-					}
-				}
-			}
-			if len(names) > 0 {
-				display["Classification"] = strings.Join(names, ", ")
-				continue
+			case "gte":
+				display["3_From Date"] = cleanDateStr(fmt.Sprintf("%v", f.Value))
+			case "lte":
+				display["4_To Date"] = cleanDateStr(fmt.Sprintf("%v", f.Value))
 			}
 
-		default:
-			label := cases.Title(language.English).String(strings.ReplaceAll(f.Field, "_", " "))
-			display[label] = formatFilterValue(f.Operator, f.Value)
+			// default:
+			// 	label := cases.Title(language.English).String(strings.ReplaceAll(f.Field, "_", " "))
+			// 	display[label] = formatFilterValue(f.Operator, f.Value)
 		}
 	}
 
@@ -968,30 +1161,22 @@ func drawFiltersAndStats(
 	pdf *gofpdf.Fpdf,
 	filterDisplay map[string]interface{},
 	totalRows int,
+	totalPages int,
 	setFont func(string, float64, string),
 ) {
-	if len(filterDisplay) == 0 {
-		return
-	}
-
-	rowsPerPage := 30
-	totalPages := (totalRows + rowsPerPage - 1) / rowsPerPage
-	if totalPages < 1 {
-		totalPages = 1
-	}
-
-	// Sort filter keys for consistent ordering
+	// Sort filter keys for consistent ordering (numeric "N_" prefixes sort to top)
 	filterKeys := make([]string, 0, len(filterDisplay))
 	for k := range filterDisplay {
 		filterKeys = append(filterKeys, k)
 	}
 	sort.Strings(filterKeys)
 
-	// Build filter lines
+	// Build filter lines; strip any "N_" sort prefix before rendering the label
 	filterLines := []string{"Filters:"}
 	for _, k := range filterKeys {
 		v := filterDisplay[k]
-		label := cases.Title(language.English).String(strings.ReplaceAll(k, "_", " "))
+		rawKey := stripSortPrefix(k)
+		label := cases.Title(language.English).String(strings.ReplaceAll(rawKey, "_", " "))
 		filterLines = append(filterLines, fmt.Sprintf("  %s: %s", label, formatFilterValue("", v)))
 	}
 
@@ -1003,8 +1188,8 @@ func drawFiltersAndStats(
 	const (
 		lineH     = 5.5
 		padding   = 3.0
-		leftX     = 10.0
-		pageWidth = 277.0
+		leftX     = 16.0  // match left margin
+		pageWidth = 265.0 // 297 - 16 - 16 (A4 landscape with 16mm margins)
 		rightColW = 55.0
 	)
 	leftColW := pageWidth - rightColW - 4
@@ -1044,6 +1229,21 @@ func drawFiltersAndStats(
 	// Move cursor below box
 	pdf.SetY(boxTopY + boxH + 4)
 	pdf.SetTextColor(0, 0, 0)
+}
+
+// stripSortPrefix removes a leading "N_" numeric sort prefix from a filter display key,
+// e.g. "1_Location" → "Location", "3_From Date" → "From Date".
+func stripSortPrefix(k string) string {
+	idx := strings.Index(k, "_")
+	if idx <= 0 {
+		return k
+	}
+	for _, c := range k[:idx] {
+		if c < '0' || c > '9' {
+			return k
+		}
+	}
+	return k[idx+1:]
 }
 
 // formatFilterValue formats filter values cleanly for display
@@ -1223,6 +1423,7 @@ func (s *reportService) GetDataSources(ctx context.Context) []models.DataSourceI
 				{Field: "location_name", Label: "Location", Type: "string", Filterable: false, Sortable: true},
 				{Field: "parent_location_name", Label: "Parent Location", Type: "string", Filterable: false, Sortable: true},
 				{Field: "incident_count", Label: "No. of Incidents", Type: "number", Filterable: false, Sortable: true},
+				{Field: "status_name", Label: "Status", Type: "uuid", Filterable: true, Sortable: false},
 			},
 		},
 		{
@@ -1242,6 +1443,7 @@ func (s *reportService) GetDataSources(ctx context.Context) []models.DataSourceI
 				{Field: "classification_name", Label: "Classification", Type: "string", Filterable: false, Sortable: true},
 				{Field: "parent_classification_name", Label: "Parent Classification", Type: "string", Filterable: false, Sortable: true},
 				{Field: "incident_count", Label: "No. of Incidents", Type: "number", Filterable: false, Sortable: true},
+				{Field: "status_name", Label: "Status", Type: "uuid", Filterable: true, Sortable: false},
 			},
 		},
 		{
@@ -1261,6 +1463,7 @@ func (s *reportService) GetDataSources(ctx context.Context) []models.DataSourceI
 				{Field: "department_name", Label: "Department", Type: "string", Filterable: false, Sortable: true},
 				{Field: "parent_department_name", Label: "Parent Department", Type: "string", Filterable: false, Sortable: true},
 				{Field: "incident_count", Label: "No. of Incidents", Type: "number", Filterable: false, Sortable: true},
+				{Field: "status_name", Label: "Status", Type: "uuid", Filterable: true, Sortable: false},
 			},
 		},
 		{
@@ -1324,6 +1527,7 @@ func toReportResponse(r *models.Report) *models.ReportResponse {
 		ID:            r.ID.String(),
 		Name:          r.Name,
 		NameAr:        r.NameAr,
+		TimestampKey:  r.TimestampKey,
 		Description:   r.Description,
 		DescriptionAr: r.DescriptionAr,
 		DataSource:    r.DataSource,

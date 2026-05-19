@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/internal/utils"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -243,6 +246,39 @@ func (s *incidentMergeService) ValidateMerge(ctx context.Context, incidentIDStrs
 				return response, nil
 			}
 			// Both nil is OK - both incidents have same top-level classification
+		}
+	}
+
+	// Validate all incidents are within configured radius of each other
+	maxMergeDistanceStr := os.Getenv("MAX_INCIDENT_DISTANCE")
+	maxMergeDistance, err := strconv.ParseFloat(maxMergeDistanceStr, 64)
+	if err != nil || maxMergeDistance <= 0 {
+		maxMergeDistance = 500 // Default to 500 meters
+	}
+
+	// Check if all incidents have coordinates
+	allHaveCoordinates := true
+	for _, incident := range incidents {
+		if incident.Latitude == nil || incident.Longitude == nil {
+			allHaveCoordinates = false
+			break
+		}
+	}
+
+	if allHaveCoordinates {
+		for i := 0; i < len(incidents); i++ {
+			for j := i + 1; j < len(incidents); j++ {
+				distance := utils.CalculateDistance(
+					*incidents[i].Latitude, *incidents[i].Longitude,
+					*incidents[j].Latitude, *incidents[j].Longitude,
+				)
+				if distance > maxMergeDistance {
+					response.Errors = append(response.Errors,
+						fmt.Sprintf("Incidents must be within %.0f meters of each other (incidents %s and %s are %.0f meters apart)",
+							maxMergeDistance, incidents[i].IncidentNumber, incidents[j].IncidentNumber, distance))
+					return response, nil
+				}
+			}
 		}
 	}
 

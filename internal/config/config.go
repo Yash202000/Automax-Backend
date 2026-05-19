@@ -7,23 +7,24 @@ import (
 )
 
 type Config struct {
-	Env            string // env: APP_ENV ("development" | "staging" | "production"). Default: "production".
-	Server         ServerConfig
-	Database       DatabaseConfig
-	Redis          RedisConfig
-	MinIO          MinIOConfig
-	JWT            JWTConfig
-	LDAP           LDAPConfig
-	LoginRateLimit LoginRateLimitConfig
-	FrontendURL    string // env: FRONTEND_URL — base URL of the frontend app, used in notification links
-	SSOPrivateKey  string // env: SSO_RSA_PRIVATE_KEY (PEM, optional — auto-gen if empty)
-	SSOIssuerURL   string // env: SSO_ISSUER_URL (e.g. https://automax.example.com — embedded in iss claim)
-	SSOFrontendURL string // env: SSO_FRONTEND_URL (e.g. https://automax.example.com — where /sso-complete lives)
-	Escalation     EscalationConfig
-	ReadyToClose   ReadyToCloseConfig
-	Documenta      DocumentaConfig
-	AIQuality      AIQualityConfig
-	License        LicenseConfig
+	Env              string // env: APP_ENV ("development" | "staging" | "production"). Default: "production".
+	Server           ServerConfig
+	Database         DatabaseConfig
+	Redis            RedisConfig
+	MinIO            MinIOConfig
+	JWT              JWTConfig
+	LDAP             LDAPConfig
+	LoginRateLimit   LoginRateLimitConfig
+	FrontendURL      string // env: FRONTEND_URL — base URL of the frontend app, used in notification links
+	SSOPrivateKey    string // env: SSO_RSA_PRIVATE_KEY (PEM, optional — auto-gen if empty)
+	SSOIssuerURL     string // env: SSO_ISSUER_URL (e.g. https://automax.example.com — embedded in iss claim)
+	SSOFrontendURL   string // env: SSO_FRONTEND_URL (e.g. https://automax.example.com — where /sso-complete lives)
+	NafathAPIBaseURL string // env: NAFATH_API_BASE_URL (e.g. https://nafath.amanathail.gov.sa)
+	Escalation       EscalationConfig
+	ReadyToClose     ReadyToCloseConfig
+	Documenta        DocumentaConfig
+	AIQuality        AIQualityConfig
+	License          LicenseConfig
 }
 
 type LicenseConfig struct {
@@ -191,10 +192,11 @@ func Load() *Config {
 			BlockDuration:   getEnvAsInt("BLOCK_DURATION", 15),
 			BypassForAdmin:  getEnvAsBool("BYPASS_RATE_LIMIT_FOR_ADMIN", true),
 		},
-		SSOPrivateKey:  getEnv("SSO_RSA_PRIVATE_KEY", ""),
-		SSOIssuerURL:   getEnv("SSO_ISSUER_URL", ""),
-		FrontendURL:    getEnv("FRONTEND_URL", ""),
-		SSOFrontendURL: getEnv("SSO_FRONTEND_URL", ""),
+		SSOPrivateKey:    getEnv("SSO_RSA_PRIVATE_KEY", ""),
+		SSOIssuerURL:     getEnv("SSO_ISSUER_URL", ""),
+		FrontendURL:      getEnv("FRONTEND_URL", ""),
+		SSOFrontendURL:   getEnv("SSO_FRONTEND_URL", ""),
+		NafathAPIBaseURL: getEnv("NAFATH_API_BASE_URL", ""),
 		Escalation: EscalationConfig{
 			DailyHour:    getEnvAsInt("ESCALATION_DAILY_HOUR", 18),
 			DailyMinute:  getEnvAsInt("ESCALATION_DAILY_MINUTE", 0),

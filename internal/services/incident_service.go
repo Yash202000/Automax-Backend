@@ -2592,10 +2592,10 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		return nil, errors.New("target state not found")
 	}
 
-	// Validate Ready-to-Close duration when transitioning INTO a ready_to_close state
-	if newState.IsReadyToClose && req.ReadyToCloseDuration == "" {
+	// Validate duration when transitioning INTO a partial_close state
+	if newState.IsPartialClose && req.ReadyToCloseDuration == "" {
 		tx.Rollback()
-		return nil, errors.New("ready_to_close_duration is required when transitioning to this state")
+		return nil, errors.New("partial_close_duration is required when transitioning to this state")
 	}
 
 	// Prepare updates map for all fields that need to change
@@ -2604,11 +2604,11 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		"updated_at":       time.Now(),
 	}
 
-	// When leaving a ready_to_close state, clear expiry fields
-	if transition.FromState != nil && transition.FromState.IsReadyToClose {
-		updates["ready_to_close_expires_at"] = nil
-		updates["ready_to_close_duration"] = ""
-		updates["ready_to_close_notified"] = false
+	// When leaving a partial_close state, clear partial close fields
+	if transition.FromState != nil && transition.FromState.IsPartialClose {
+		updates["partial_close_expires_at"] = nil
+		updates["partial_close_duration"] = ""
+		updates["partial_close_notified"] = false
 	}
 
 	// Handle department assignment from transition settings
@@ -2841,25 +2841,25 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		CreatedAt:             time.Now(),
 	})
 
-	// Create revision entry that includes duration/comment info for ready_to_close
-	if newState.IsReadyToClose && req.ReadyToCloseDuration != "" {
-		rtcDescription := fmt.Sprintf(
-			"Status changed from %s to %s — Duration: %s",
+	// Create revision entry for partial_close duration selection
+	if newState.IsPartialClose && req.ReadyToCloseDuration != "" {
+		pcDescription := fmt.Sprintf(
+			"Status changed from %s to %s — Partial Close Duration: %s",
 			transition.FromState.Name, newState.Name, req.ReadyToCloseDuration,
 		)
 		if req.Comment != "" {
-			rtcDescription += fmt.Sprintf("; Comment: %s", req.Comment)
+			pcDescription += fmt.Sprintf("; Comment: %s", req.Comment)
 		}
-		rtcRevNum, _ := txRepo.GetNextRevisionNumber(ctx, incidentID)
-		rtcChangesBytes, _ := json.Marshal([]models.IncidentFieldChange{
-			{FieldName: "ready_to_close_duration", FieldLabel: "Close Duration", OldValue: nil, NewValue: &req.ReadyToCloseDuration},
+		pcRevNum, _ := txRepo.GetNextRevisionNumber(ctx, incidentID)
+		pcChangesBytes, _ := json.Marshal([]models.IncidentFieldChange{
+			{FieldName: "partial_close_duration", FieldLabel: "Partial Close Duration", OldValue: nil, NewValue: &req.ReadyToCloseDuration},
 		})
 		txRepo.CreateRevision(ctx, &models.IncidentRevision{
 			IncidentID:            incidentID,
-			RevisionNumber:        rtcRevNum,
+			RevisionNumber:        pcRevNum,
 			ActionType:            models.RevisionActionStatusChanged,
-			ActionDescription:     rtcDescription,
-			Changes:               string(rtcChangesBytes),
+			ActionDescription:     pcDescription,
+			Changes:               string(pcChangesBytes),
 			PerformedByID:         userID,
 			SyncedIncidentNumbers: syncedNumbersJSON,
 			CreatedAt:             time.Now(),
@@ -2871,20 +2871,20 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		return nil, err
 	}
 
-	// Handle Ready-to-Close entry lifecycle AFTER commit
+	// Handle Partial-Close entry lifecycle AFTER commit
 	if s.readyToCloseService != nil {
-		// Deactivate any prior entry when leaving ready_to_close state
-		if transition.FromState != nil && transition.FromState.IsReadyToClose {
+		// Deactivate any prior entry when leaving a partial_close state
+		if transition.FromState != nil && transition.FromState.IsPartialClose {
 			if err := s.readyToCloseService.DeactivateForIncident(ctx, incidentID); err != nil {
 				// Non-fatal: log and continue
-				fmt.Printf("Warning: failed to deactivate ready_to_close entry for incident %s: %v\n", incidentID, err)
+				fmt.Printf("Warning: failed to deactivate partial_close entry for incident %s: %v\n", incidentID, err)
 			}
 		}
-		// Create new entry when entering ready_to_close state
-		if newState.IsReadyToClose && req.ReadyToCloseDuration != "" {
+		// Create new entry when entering partial_close state (sets partial_close_expires_at/duration on incident)
+		if newState.IsPartialClose && req.ReadyToCloseDuration != "" {
 			if err := s.readyToCloseService.CreateEntry(ctx, incidentID, req.ReadyToCloseDuration, req.Comment, userID); err != nil {
 				// Non-fatal: log and continue — transition already committed
-				fmt.Printf("Warning: failed to create ready_to_close entry for incident %s: %v\n", incidentID, err)
+				fmt.Printf("Warning: failed to create partial_close entry for incident %s: %v\n", incidentID, err)
 			}
 		}
 	}

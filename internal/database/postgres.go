@@ -204,6 +204,7 @@ func Migrate(db *gorm.DB) error {
 
 	// Workflow code column was previously VARCHAR(50) which is too short for some existing workflows. Increase to 100 chars. Note: MySQL syntax is ALTER TABLE workflows MODIFY code VARCHAR(100) NOT NULL but Postgres is ALTER TABLE workflows ALTER COLUMN code TYPE VARCHAR(100). GORM's AutoMigrate doesn't handle this edge case, so we run raw SQL. Idempotent: safe to run repeatedly.
 	db.Exec("ALTER TABLE workflows ALTER COLUMN code TYPE VARCHAR(100)")
+	db.Exec("ALTER TABLE reports ALTER COLUMN timestamp_key TYPE VARCHAR(100) Default 'created_at'")
 
 	// Migrate transition assignment roles (single → many-to-many)
 	if err := migrations.MigrateTransitionAssignmentRoles(db); err != nil {
@@ -235,11 +236,22 @@ func Migrate(db *gorm.DB) error {
 		log.Printf("Warning: classification types migration failed: %v", err)
 	}
 
+	// Migrate user national_id column
+	if err := migrations.MigrateUserNationalID(db); err != nil {
+		log.Printf("Warning: user national_id migration failed: %v", err)
+	}
+
 	// Seed existing free-text goal categories as root Category rows
 	// and back-fill goals.category_id. Idempotent: safe to run repeatedly.
 	if err := migrateFreeTextGoalCategories(db); err != nil {
 		log.Printf("Warning: goal category back-fill migration failed: %v", err)
 	}
+
+	// Partial Close feature columns — idempotent, safe to run repeatedly
+	db.Exec("ALTER TABLE workflow_states ADD COLUMN IF NOT EXISTS is_partial_close BOOLEAN NOT NULL DEFAULT false")
+	db.Exec("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS partial_close_expires_at TIMESTAMPTZ")
+	db.Exec("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS partial_close_duration VARCHAR(100) NOT NULL DEFAULT ''")
+	db.Exec("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS partial_close_notified BOOLEAN NOT NULL DEFAULT false")
 
 	log.Println("Database migrations completed")
 	return nil
@@ -421,6 +433,7 @@ func Seed(db *gorm.DB) error {
 		{Name: "Manage SLA", Code: "incidents:manage_sla", Module: "incidents", Action: "manage_sla", Description: "Override SLA settings"},
 		{Name: "Merge Incidents", Code: "incidents:merge", Module: "incidents", Action: "merge", Description: "Merge multiple incidents into one"},
 		{Name: "Edit Closed Incidents", Code: "incidents:edit-closed", Module: "incidents", Action: "edit_closed", Description: "Edit summary/description of closed incidents"},
+		{Name: "Request Info on Incidents", Code: "incidents:request-info", Module: "incidents", Action: "request_info", Description: "Request additional information from citizens"},
 
 		// Request permissions
 		{Name: "View Requests", Code: "requests:view", Module: "requests", Action: "view", Description: "View requests"},

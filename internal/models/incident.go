@@ -75,6 +75,11 @@ type Incident struct {
 	ReadyToCloseDuration  string     `gorm:"size:100" json:"ready_to_close_duration"`
 	ReadyToCloseNotified  bool       `gorm:"default:false" json:"ready_to_close_notified"`
 
+	// Partial-Close tracking (set when incident enters a partial_close state)
+	PartialCloseExpiresAt *time.Time `gorm:"index" json:"partial_close_expires_at"`
+	PartialCloseDuration  string     `gorm:"size:100" json:"partial_close_duration"`
+	PartialCloseNotified  bool       `gorm:"default:false" json:"partial_close_notified"`
+
 	// Reporter
 	ReporterID    *uuid.UUID `gorm:"type:uuid;index" json:"reporter_id"`
 	Reporter      *User      `gorm:"foreignKey:ReporterID" json:"reporter,omitempty"`
@@ -551,8 +556,9 @@ type IncidentFilter struct {
 	SLABreached      *bool      `query:"sla_breached" json:"sla_breached" validate:"omitempty"`
 	RecordType       *string    `query:"record_type" json:"record_type" validate:"omitempty,oneof=incident request complaint query"` // 'incident', 'request', 'complaint', or 'query'
 	Channel          *string    `query:"channel" json:"channel" validate:"omitempty"`                                                // for complaints
-	Source           *string    `query:"source" json:"source" validate:"omitempty"`
-	StartDate        *time.Time `json:"start_date"` // filter by created_at >= start_date; parsed manually in handler (not via QueryParser)
+	Source              *string    `query:"source" json:"source" validate:"omitempty"`
+	ConvertedToRequest  *bool      `query:"converted_to_request" json:"converted_to_request" validate:"omitempty"`
+	StartDate           *time.Time `json:"start_date"` // filter by created_at >= start_date; parsed manually in handler (not via QueryParser)
 	EndDate          *time.Time `json:"end_date"`   // filter by created_at <= end_date; parsed manually in handler (not via QueryParser)
 	// Transition filters
 	TransitionID     *uuid.UUID  `query:"transition_id" json:"transition_id" validate:"omitempty,uuid"`
@@ -670,6 +676,9 @@ type IncidentResponse struct {
 	SLADeadline           *time.Time                  `json:"sla_deadline"`
 	ReadyToCloseExpiresAt *time.Time                  `json:"ready_to_close_expires_at,omitempty"`
 	ReadyToCloseDuration  string                      `json:"ready_to_close_duration,omitempty"`
+	PartialCloseExpiresAt *time.Time                  `json:"partial_close_expires_at,omitempty"`
+	PartialCloseDuration  string                      `json:"partial_close_duration,omitempty"`
+	PartialCloseNotified  bool                        `json:"partial_close_notified,omitempty"`
 	Source                string                      `json:"source,omitempty"`
 	Reporter              *UserResponse               `json:"reporter,omitempty"`
 	ReporterID            uuid.UUID                   `json:"reporter_id"`
@@ -791,6 +800,7 @@ type IncidentStatsResponseV2 struct {
 	InProgress    int64           `json:"in_progress"`
 	Resolved      int64           `json:"resolved"`
 	Closed        int64           `json:"closed"`
+	PartialClose  int64           `json:"partial_close"`
 	SLABreached   int64           `json:"sla_breached"`
 	WorkflowStats []WorkflowStats `json:"workflow_stats,omitempty"`
 }
@@ -820,6 +830,8 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 		SLADeadline:           i.SLADeadline,
 		ReadyToCloseExpiresAt: i.ReadyToCloseExpiresAt,
 		ReadyToCloseDuration:  i.ReadyToCloseDuration,
+		PartialCloseExpiresAt: i.PartialCloseExpiresAt,
+		PartialCloseDuration:  i.PartialCloseDuration,
 		Source:                i.Source,
 		ReporterEmail:         i.ReporterEmail,
 		ReporterName:          i.ReporterName,
