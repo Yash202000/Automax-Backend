@@ -62,6 +62,7 @@ type ClassificationRepository interface {
 	FindByID(ctx context.Context, id uuid.UUID) (*models.Classification, error)
 	FindByIDs(ctx context.Context, id []uuid.UUID) (*[]models.Classification, error)
 	FindByNameAndParent(ctx context.Context, name string, parentID *uuid.UUID) (*models.Classification, error)
+	FindByExternalID(ctx context.Context, externalID string) (*models.Classification, error)
 	Update(ctx context.Context, classification *models.Classification) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context) ([]models.Classification, error)
@@ -137,6 +138,15 @@ func (r *classificationRepository) FindByNameAndParent(ctx context.Context, name
 		query = query.Where("parent_id = ?", parentID)
 	}
 	err := query.First(&classification).Error
+	if err != nil {
+		return nil, err
+	}
+	return &classification, nil
+}
+
+func (r *classificationRepository) FindByExternalID(ctx context.Context, externalID string) (*models.Classification, error) {
+	var classification models.Classification
+	err := r.db.WithContext(ctx).First(&classification, "external_id = ?", externalID).Error
 	if err != nil {
 		return nil, err
 	}

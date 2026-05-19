@@ -26,6 +26,7 @@ type Location struct {
 	Longitude   *float64       `gorm:"type:decimal(11,8)" json:"longitude"`
 	IsActive    bool           `gorm:"default:true" json:"is_active"`
 	SortOrder   int            `gorm:"default:0" json:"sort_order"`
+	ExternalID  string         `gorm:"size:100" json:"external_id"`
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
 	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`

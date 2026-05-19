@@ -236,6 +236,10 @@ func main() {
 	// Wire license service into user service for user limit enforcement
 	userService.SetLicenseService(licenseService, licenseRepo)
 
+	// Initialize EPM handler
+	epmHandler := handlers.NewEPMHandler(userRepo, jwtManager, sessionStore)
+	epmIncidentHandler := handlers.NewEPMIncidentHandler(userRepo, locationRepo, classificationRepo, incidentRepo, workflowRepo, lookupRepo, jwtManager, sessionStore, minioStorage, db)
+
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore, userRepo)
 	licenseMiddleware := middleware.NewLicenseMiddleware(licenseService)
@@ -267,6 +271,10 @@ func main() {
 	// Public SSO routes (no auth required — browser redirect landing points)
 	app.Get("/.well-known/jwks.json", jwksHandler.GetJWKS)
 	app.Get("/sso/callback", ssoHandler.Callback)
+
+	// EPM external API routes
+	app.Post("/Momra/API/EPM/Login", epmHandler.Login)
+	app.Post("/Momra/API/EPM/InsertIncidents", epmIncidentHandler.InsertIncidents)
 
 	api := app.Group("/api")
 	v1 := api.Group("/v1")
