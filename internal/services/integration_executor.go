@@ -246,6 +246,8 @@ func extractField(m map[string]interface{}, path string) string {
 
 // buildIncidentContext builds a flat map from selected field mappings.
 // If no mappings are provided, all basic incident fields are included.
+// Non-string values (float64, []interface{}) are stored with their native types
+// so that JS scripts and the typed HTTP body resolver can use proper JSON types.
 func (e *integrationExecutor) buildIncidentContext(incident *models.Incident, fieldMappingsJSON string) map[string]interface{} {
 	ctx := map[string]interface{}{
 		"id":              incident.ID.String(),
@@ -253,33 +255,93 @@ func (e *integrationExecutor) buildIncidentContext(incident *models.Incident, fi
 		"title":           incident.Title,
 		"description":     incident.Description,
 		"record_type":     incident.RecordType,
+		"workflow_id":     incident.WorkflowID.String(),
+		"source":          incident.Source,
+		"channel":         incident.Channel,
+		"address":         incident.Address,
+		"city":            incident.City,
+		"geo_state":       incident.State,
+		"country":         incident.Country,
+		"postal_code":     incident.PostalCode,
+		"custom_fields":   incident.CustomFields,
+		// Direct reporter fields (always present even without a linked user)
+		"reporter_email": incident.ReporterEmail,
+		"reporter_name":  incident.ReporterName,
+		"reporter_phone": incident.ReporterPhone,
+		"sla_breached":   incident.SLABreached,
+		"created_at":     incident.CreatedAt.Format(time.RFC3339),
+		"updated_at":     incident.UpdatedAt.Format(time.RFC3339),
 	}
 
+	// For FK + relation pairs, fall back to the loaded relation's ID when the
+	// FK pointer is nil (can happen due to GORM join vs. preload differences).
+	if incident.ClassificationID != nil {
+		ctx["classification_id"] = incident.ClassificationID.String()
+	} else if incident.Classification != nil {
+		ctx["classification_id"] = incident.Classification.ID.String()
+	}
 	if incident.Classification != nil {
 		ctx["classification_name"] = incident.Classification.Name
-		ctx["classification_id"] = incident.ClassificationID.String()
 	}
 	if incident.CurrentState != nil {
 		ctx["current_state"] = incident.CurrentState.Name
 		ctx["current_state_id"] = incident.CurrentStateID.String()
 	}
+	if incident.LocationID != nil {
+		ctx["location_id"] = incident.LocationID.String()
+	} else if incident.Location != nil {
+		ctx["location_id"] = incident.Location.ID.String()
+	}
+	if incident.Location != nil {
+		ctx["location_name"] = incident.Location.Name
+	}
+	if incident.DepartmentID != nil {
+		ctx["department_id"] = incident.DepartmentID.String()
+	} else if incident.Department != nil {
+		ctx["department_id"] = incident.Department.ID.String()
+	}
 	if incident.Department != nil {
 		ctx["department"] = incident.Department.Name
+	}
+	if incident.AssigneeID != nil {
+		ctx["assignee_id"] = incident.AssigneeID.String()
+	} else if incident.Assignee != nil {
+		ctx["assignee_id"] = incident.Assignee.ID.String()
 	}
 	if incident.Assignee != nil {
 		ctx["assignee_name"] = incident.Assignee.FirstName + " " + incident.Assignee.LastName
 		ctx["assignee_email"] = incident.Assignee.Email
 	}
 	if incident.Reporter != nil {
-		ctx["reporter_name"] = incident.Reporter.FirstName + " " + incident.Reporter.LastName
-		ctx["reporter_email"] = incident.Reporter.Email
+		// Prefer relation fields if a linked user exists
+		if incident.Reporter.Email != "" {
+			ctx["reporter_email"] = incident.Reporter.Email
+		}
+		fullName := strings.TrimSpace(incident.Reporter.FirstName + " " + incident.Reporter.LastName)
+		if fullName != "" {
+			ctx["reporter_name"] = fullName
+		}
 	}
 	if incident.DueDate != nil {
 		ctx["due_date"] = incident.DueDate.Format(time.RFC3339)
 	}
-	ctx["sla_breached"] = incident.SLABreached
-	ctx["created_at"] = incident.CreatedAt.Format(time.RFC3339)
-	ctx["updated_at"] = incident.UpdatedAt.Format(time.RFC3339)
+	if incident.Latitude != nil {
+		ctx["latitude"] = *incident.Latitude // float64 — proper type for JS + HTTP body
+	}
+	if incident.Longitude != nil {
+		ctx["longitude"] = *incident.Longitude
+	}
+
+	// Lookup value IDs as a proper slice so they serialise as a JSON array.
+	if len(incident.LookupValues) > 0 {
+		ids := make([]interface{}, len(incident.LookupValues))
+		for i, lv := range incident.LookupValues {
+			ids[i] = lv.ID.String()
+		}
+		ctx["lookup_value_ids"] = ids
+	} else {
+		ctx["lookup_value_ids"] = []interface{}{}
+	}
 
 	// If explicit field mappings were given, build a remapped context.
 	if fieldMappingsJSON == "" {
@@ -315,12 +377,20 @@ func (e *integrationExecutor) executeHTTP(
 
 	resolve := func(s string) string { return resolvePlaceholders(s, incidentCtx, vars) }
 
-	// Build body
+	// Build body.  Walk the body object and resolve placeholders with proper types:
+	// a string value that is EXACTLY one placeholder (e.g. "{{incident.latitude}}")
+	// is replaced by the typed value from the context (float64, []interface{}, etc.)
+	// so the outbound JSON contains proper numbers/arrays instead of quoted strings.
 	var bodyBytes []byte
 	if cfg.Body != nil {
-		bodyJSON, _ := json.Marshal(cfg.Body)
-		resolved := resolve(string(bodyJSON))
-		bodyBytes = []byte(resolved)
+		resolved := resolveBodyTyped(cfg.Body, incidentCtx, vars)
+		if b, err2 := json.Marshal(resolved); err2 == nil {
+			bodyBytes = b
+		} else {
+			// Fallback to the legacy string-replace path
+			bodyJSON, _ := json.Marshal(cfg.Body)
+			bodyBytes = []byte(resolve(string(bodyJSON)))
+		}
 	}
 	requestPayload = string(bodyBytes)
 
@@ -530,6 +600,73 @@ func (e *integrationExecutor) fetchOAuth2Token(ctx context.Context, auth models.
 		return "", fmt.Errorf("oauth2 error: %s", tokenResp.Error)
 	}
 	return tokenResp.AccessToken, nil
+}
+
+// resolveBodyTyped walks a JSON body object and resolves {{incident.X}} / {{vars.Y}}
+// placeholders while preserving native types.  If a string value is *exactly* one
+// placeholder token (nothing else), the value from the context is used as-is
+// (float64, []interface{}, bool, etc.) so that the outbound JSON contains proper
+// numbers and arrays rather than quoted strings.  Mixed strings (e.g.
+// "prefix {{incident.title}} suffix") fall back to string replacement.
+func resolveBodyTyped(body interface{}, incidentCtx map[string]interface{}, vars map[string]string) interface{} {
+	singlePlaceholderRe := func(s string) (string, bool) {
+		trimmed := strings.TrimSpace(s)
+		if strings.HasPrefix(trimmed, "{{") && strings.HasSuffix(trimmed, "}}") && strings.Count(trimmed, "{{") == 1 {
+			inner := trimmed[2 : len(trimmed)-2]
+			return inner, true
+		}
+		return "", false
+	}
+
+	lookupTyped := func(key string) (interface{}, bool) {
+		if strings.HasPrefix(key, "incident.") {
+			k := key[len("incident."):]
+			if v, ok := incidentCtx[k]; ok {
+				return v, true
+			}
+		}
+		if strings.HasPrefix(key, "vars.") {
+			k := key[len("vars."):]
+			if v, ok := vars[k]; ok {
+				return v, true
+			}
+		}
+		// Bare key — try incidentCtx then vars
+		if v, ok := incidentCtx[key]; ok {
+			return v, true
+		}
+		if v, ok := vars[key]; ok {
+			return v, true
+		}
+		return nil, false
+	}
+
+	switch v := body.(type) {
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(v))
+		for k, mv := range v {
+			out[k] = resolveBodyTyped(mv, incidentCtx, vars)
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, len(v))
+		for i, mv := range v {
+			out[i] = resolveBodyTyped(mv, incidentCtx, vars)
+		}
+		return out
+	case string:
+		if key, ok := singlePlaceholderRe(v); ok {
+			if typed, found := lookupTyped(key); found {
+				return typed
+			}
+			// Unresolved single placeholder (field not set on this incident) → null.
+			// This prevents the literal "{{incident.X}}" string from reaching the API
+			// and failing validation (e.g. treating it as an invalid UUID).
+			return nil
+		}
+		return resolvePlaceholders(v, incidentCtx, vars)
+	}
+	return body
 }
 
 // resolvePlaceholders replaces {{incident.X}}, {{vars.Y}}, and {{X}} in a string.
