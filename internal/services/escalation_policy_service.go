@@ -197,9 +197,11 @@ func buildSteps(reqs []models.EscalationPolicyStepRequest) ([]models.EscalationP
 	steps := make([]models.EscalationPolicyStep, 0, len(reqs))
 	for _, sr := range reqs {
 		step := models.EscalationPolicyStep{
-			StepOrder:  sr.StepOrder,
-			DelayHours: sr.DelayHours,
-			Channel:    sr.Channel,
+			StepOrder:         sr.StepOrder,
+			DelayHours:        sr.DelayHours,
+			Channel:           sr.Channel,
+			EmailTemplateCode: sr.EmailTemplateCode,
+			SMSTemplateCode:   sr.SMSTemplateCode,
 		}
 		for _, tr := range sr.Targets {
 			target := models.EscalationPolicyStepTarget{

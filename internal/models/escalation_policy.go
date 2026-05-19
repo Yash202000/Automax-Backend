@@ -80,14 +80,16 @@ func (e *EscalationPolicy) BeforeCreate(_ *gorm.DB) error {
 // DelayHours = 0 means fire immediately when the SLA is first breached;
 // DelayHours = N means fire N hours after the breach started.
 type EscalationPolicyStep struct {
-	ID         uuid.UUID                      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
-	PolicyID   uuid.UUID                      `gorm:"type:uuid;index;not null" json:"policy_id"`
-	StepOrder  int                            `gorm:"default:1;not null" json:"step_order"`
-	DelayHours int                            `gorm:"default:0;not null" json:"delay_hours"` // hours after breach to fire
-	Channel    string                         `gorm:"size:20;not null;default:'both'" json:"channel"` // "email" | "sms" | "both"
-	Targets    []EscalationPolicyStepTarget   `gorm:"foreignKey:StepID;constraint:OnDelete:CASCADE" json:"targets,omitempty"`
-	CreatedAt  time.Time                      `json:"created_at"`
-	UpdatedAt  time.Time                      `json:"updated_at"`
+	ID                uuid.UUID                    `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	PolicyID          uuid.UUID                    `gorm:"type:uuid;index;not null" json:"policy_id"`
+	StepOrder         int                          `gorm:"default:1;not null" json:"step_order"`
+	DelayHours        int                          `gorm:"default:0;not null" json:"delay_hours"` // hours after breach to fire
+	Channel           string                       `gorm:"size:20;not null;default:'both'" json:"channel"` // "email" | "sms" | "both"
+	EmailTemplateCode string                       `gorm:"size:100" json:"email_template_code"` // optional — overrides SLA_POLICY_BREACH
+	SMSTemplateCode   string                       `gorm:"size:100" json:"sms_template_code"`   // optional — overrides SLA_POLICY_BREACH_SMS
+	Targets           []EscalationPolicyStepTarget `gorm:"foreignKey:StepID;constraint:OnDelete:CASCADE" json:"targets,omitempty"`
+	CreatedAt         time.Time                    `json:"created_at"`
+	UpdatedAt         time.Time                    `json:"updated_at"`
 }
 
 func (e *EscalationPolicyStep) BeforeCreate(_ *gorm.DB) error {
@@ -128,10 +130,12 @@ type EscalationPolicyStepTargetRequest struct {
 }
 
 type EscalationPolicyStepRequest struct {
-	StepOrder  int                                  `json:"step_order" validate:"min=1"`
-	DelayHours int                                  `json:"delay_hours" validate:"min=0"`
-	Channel    string                               `json:"channel" validate:"required,oneof=email sms both"`
-	Targets    []EscalationPolicyStepTargetRequest  `json:"targets"`
+	StepOrder         int                                 `json:"step_order" validate:"min=1"`
+	DelayHours        int                                 `json:"delay_hours" validate:"min=0"`
+	Channel           string                              `json:"channel" validate:"required,oneof=email sms both"`
+	EmailTemplateCode string                              `json:"email_template_code"`
+	SMSTemplateCode   string                              `json:"sms_template_code"`
+	Targets           []EscalationPolicyStepTargetRequest `json:"targets"`
 }
 
 type CreateEscalationPolicyRequest struct {
@@ -160,11 +164,13 @@ type EscalationPolicyStepTargetResponse struct {
 }
 
 type EscalationPolicyStepResponse struct {
-	ID         uuid.UUID                            `json:"id"`
-	StepOrder  int                                  `json:"step_order"`
-	DelayHours int                                  `json:"delay_hours"`
-	Channel    string                               `json:"channel"`
-	Targets    []EscalationPolicyStepTargetResponse `json:"targets"`
+	ID                uuid.UUID                            `json:"id"`
+	StepOrder         int                                  `json:"step_order"`
+	DelayHours        int                                  `json:"delay_hours"`
+	Channel           string                               `json:"channel"`
+	EmailTemplateCode string                               `json:"email_template_code"`
+	SMSTemplateCode   string                               `json:"sms_template_code"`
+	Targets           []EscalationPolicyStepTargetResponse `json:"targets"`
 }
 
 type EscalationPolicyResponse struct {
@@ -189,11 +195,13 @@ func ToEscalationPolicyResponse(p *EscalationPolicy) EscalationPolicyResponse {
 	}
 	for _, step := range p.Steps {
 		sr := EscalationPolicyStepResponse{
-			ID:         step.ID,
-			StepOrder:  step.StepOrder,
-			DelayHours: step.DelayHours,
-			Channel:    step.Channel,
-			Targets:    []EscalationPolicyStepTargetResponse{},
+			ID:                step.ID,
+			StepOrder:         step.StepOrder,
+			DelayHours:        step.DelayHours,
+			Channel:           step.Channel,
+			EmailTemplateCode: step.EmailTemplateCode,
+			SMSTemplateCode:   step.SMSTemplateCode,
+			Targets:           []EscalationPolicyStepTargetResponse{},
 		}
 		for _, t := range step.Targets {
 			tr := EscalationPolicyStepTargetResponse{

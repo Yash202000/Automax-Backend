@@ -14,6 +14,7 @@ type LocationRepository interface {
 	FindByID(ctx context.Context, id uuid.UUID) (*models.Location, error)
 	FindByIDs(ctx context.Context, id []uuid.UUID) (*[]models.Location, error)
 	FindByNameAndParent(ctx context.Context, name string, parentID *uuid.UUID) (*models.Location, error)
+	FindByExternalID(ctx context.Context, externalID string) (*models.Location, error)
 	Update(ctx context.Context, location *models.Location) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context) ([]models.Location, error)
@@ -73,6 +74,15 @@ func (r *locationRepository) FindByNameAndParent(ctx context.Context, name strin
 		query = query.Where("parent_id = ?", parentID)
 	}
 	err := query.First(&location).Error
+	if err != nil {
+		return nil, err
+	}
+	return &location, nil
+}
+
+func (r *locationRepository) FindByExternalID(ctx context.Context, externalID string) (*models.Location, error) {
+	var location models.Location
+	err := r.db.WithContext(ctx).First(&location, "external_id = ?", externalID).Error
 	if err != nil {
 		return nil, err
 	}
