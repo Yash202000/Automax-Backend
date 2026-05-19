@@ -36,6 +36,7 @@ type Classification struct {
 	Path          string                      `gorm:"size:1000" json:"path"` // Materialized path for efficient queries
 	IsActive      bool                        `gorm:"default:true" json:"is_active"`
 	SortOrder     int                         `gorm:"default:0" json:"sort_order"`
+	ExternalID    string                      `gorm:"size:100" json:"external_id"`
 	Criticalities []ClassificationCriticality `gorm:"foreignKey:ClassificationID" json:"criticalities,omitempty"`
 	CreatedAt     time.Time                   `json:"created_at"`
 	UpdatedAt     time.Time                   `json:"updated_at"`
