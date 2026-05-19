@@ -147,6 +147,14 @@ func Migrate(db *gorm.DB) error {
 		&models.AIQualityFeedback{},
 		// License Management
 		&models.License{},
+		// External Integration
+		&models.IntegrationVariable{},
+		&models.IntegrationScript{},
+		&models.WorkflowStateTrigger{},
+		&models.WorkflowTransitionTrigger{},
+		&models.IntegrationExecutionLog{},
+		&models.IncidentBridge{},
+		&models.WebhookCallbackConfig{},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)

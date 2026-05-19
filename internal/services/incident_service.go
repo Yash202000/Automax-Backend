@@ -93,6 +93,8 @@ type IncidentService interface {
 	SetUserService(us UserService)
 	// SetFCMService wires in the FCMService (called post-construction).
 	SetFCMService(fcm *FCMService)
+	// SetIntegrationExecutor wires in the IntegrationExecutor (called post-construction).
+	SetIntegrationExecutor(exec IntegrationExecutor)
 	// SetActionExecutor wires in the ActionExecutor (called post-construction).
 	SetActionExecutor(ae ActionExecutor)
 
@@ -116,6 +118,7 @@ type incidentService struct {
 	notificationService *NotificationService
 	userService         UserService
 	fcmService          *FCMService
+	integrationExecutor IntegrationExecutor
 	actionExecutor      ActionExecutor
 }
 
@@ -166,6 +169,11 @@ func (s *incidentService) SetUserService(us UserService) {
 // SetFCMService wires the FCMService into the incident service.
 func (s *incidentService) SetFCMService(fcm *FCMService) {
 	s.fcmService = fcm
+}
+
+// SetIntegrationExecutor wires the IntegrationExecutor into the incident service.
+func (s *incidentService) SetIntegrationExecutor(exec IntegrationExecutor) {
+	s.integrationExecutor = exec
 }
 
 func (s *incidentService) SetActionExecutor(ae ActionExecutor) {
@@ -2869,6 +2877,19 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	// Commit transaction first so all master incident changes are visible
 	if err := tx.Commit().Error; err != nil {
 		return nil, err
+	}
+
+	// Fire integration triggers AFTER commit so the new state is visible.
+	if s.integrationExecutor != nil {
+		updatedForExec, execErr := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
+		if execErr == nil {
+			// Transition triggers
+			s.integrationExecutor.RunTransitionTriggers(ctx, updatedForExec, transitionID, transition.Name)
+			// State-enter triggers on the destination state
+			s.integrationExecutor.RunStateTriggers(ctx, updatedForExec, transition.ToStateID, newState.Name, "enter")
+			// State-exit triggers on the source state
+			s.integrationExecutor.RunStateTriggers(ctx, updatedForExec, transition.FromStateID, transition.FromState.Name, "exit")
+		}
 	}
 
 	// Handle Partial-Close entry lifecycle AFTER commit
