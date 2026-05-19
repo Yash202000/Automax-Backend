@@ -153,6 +153,12 @@ func main() {
 	incidentService.SetUserService(userService)
 	incidentService.SetFCMService(fcmService)
 
+	// External Integration
+	integrationRepo := repository.NewIntegrationRepository(db)
+	integrationService := services.NewIntegrationService(integrationRepo, cfg.Integration.SecretsKey)
+	integrationExecutor := services.NewIntegrationExecutor(integrationRepo, integrationService)
+	incidentService.SetIntegrationExecutor(integrationExecutor)
+
 	// Initialize and start SLA Monitor (checks every 5 minutes)
 	slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, escalationGroupService, readyToCloseService, 5*time.Minute)
 	ctx := context.Background()
@@ -219,6 +225,10 @@ func main() {
 	goalTemplateRepo := repository.NewGoalTemplateRepository(db)
 	goalTemplateService := services.NewGoalTemplateService(goalTemplateRepo)
 	goalTemplateHandler := handlers.NewGoalTemplateHandler(goalTemplateService)
+
+	// Integration handler
+	integrationHandler := handlers.NewIntegrationHandler(integrationService, integrationExecutor, integrationRepo, incidentRepo)
+	webhookHandler := handlers.NewWebhookHandler(integrationService, incidentService)
 
 	// License management
 	licenseRepo := repository.NewLicenseRepository(db)
@@ -297,6 +307,7 @@ func main() {
 	// Webhook routes (no authentication required - external services)
 	webhooks := v1.Group("/webhooks")
 	webhooks.Post("/sendgrid/inbound", notificationHandler.SendGridInboundWebhook)
+	webhooks.Post("/automax-callback", webhookHandler.HandleAutomaxCallback)
 
 	ivr := v1.Group("/ivr/incident")
 	// Public: validates signed URL + last 6 digits, returns incident + session token
@@ -649,6 +660,44 @@ func main() {
 	feedbackTemplates.Get("/:id", authMiddleware.RequirePermission("workflows:view"), feedbackTemplateHandler.GetByID)
 	feedbackTemplates.Put("/:id", authMiddleware.RequirePermission("workflows:update"), feedbackTemplateHandler.Update)
 	feedbackTemplates.Delete("/:id", authMiddleware.RequirePermission("workflows:update"), feedbackTemplateHandler.Delete)
+
+	// External Integration routes
+	integrationVars := admin.Group("/integration-variables")
+	integrationVars.Post("/", authMiddleware.RequirePermission("admin:integration"), integrationHandler.CreateVariable)
+	integrationVars.Get("/", authMiddleware.RequirePermission("admin:integration"), integrationHandler.ListVariables)
+	integrationVars.Delete("/:id", authMiddleware.RequirePermission("admin:integration"), integrationHandler.DeleteVariable)
+
+	integrationScripts := admin.Group("/integration-scripts")
+	integrationScripts.Post("/", authMiddleware.RequirePermission("admin:integration"), integrationHandler.CreateScript)
+	integrationScripts.Get("/", authMiddleware.RequirePermission("admin:integration"), integrationHandler.ListScripts)
+	integrationScripts.Get("/:id", authMiddleware.RequirePermission("admin:integration"), integrationHandler.GetScript)
+	integrationScripts.Put("/:id", authMiddleware.RequirePermission("admin:integration"), integrationHandler.UpdateScript)
+	integrationScripts.Delete("/:id", authMiddleware.RequirePermission("admin:integration"), integrationHandler.DeleteScript)
+	integrationScripts.Post("/:id/test", authMiddleware.RequirePermission("admin:integration"), integrationHandler.TestScript)
+	integrationScripts.Get("/:id/logs", authMiddleware.RequirePermission("admin:integration"), integrationHandler.ListLogsByScript)
+
+	stateIntegrations := admin.Group("/workflow-states")
+	stateIntegrations.Post("/:stateId/triggers", authMiddleware.RequirePermission("admin:integration"), integrationHandler.CreateStateTrigger)
+	stateIntegrations.Get("/:stateId/triggers", authMiddleware.RequirePermission("admin:integration"), integrationHandler.ListStateTriggers)
+	stateIntegrations.Put("/:stateId/triggers/:id", authMiddleware.RequirePermission("admin:integration"), integrationHandler.UpdateStateTrigger)
+	stateIntegrations.Delete("/:stateId/triggers/:id", authMiddleware.RequirePermission("admin:integration"), integrationHandler.DeleteStateTrigger)
+
+	transitionIntegrations := admin.Group("/workflow-transitions")
+	transitionIntegrations.Post("/:transitionId/triggers", authMiddleware.RequirePermission("admin:integration"), integrationHandler.CreateTransitionTrigger)
+	transitionIntegrations.Get("/:transitionId/triggers", authMiddleware.RequirePermission("admin:integration"), integrationHandler.ListTransitionTriggers)
+	transitionIntegrations.Put("/:transitionId/triggers/:id", authMiddleware.RequirePermission("admin:integration"), integrationHandler.UpdateTransitionTrigger)
+	transitionIntegrations.Delete("/:transitionId/triggers/:id", authMiddleware.RequirePermission("admin:integration"), integrationHandler.DeleteTransitionTrigger)
+
+	// Per-incident integration log + bridge viewer (accessible to incident handlers)
+	v1.Get("/incidents/:incidentId/integration-logs", authMiddleware.Authenticate(), authMiddleware.RequirePermission("incidents:view"), integrationHandler.ListLogsByIncident)
+	v1.Get("/incidents/:incidentId/bridges", authMiddleware.Authenticate(), authMiddleware.RequirePermission("incidents:view"), integrationHandler.ListBridgesByIncident)
+
+	// Webhook callback config management
+	webhookConfigs := admin.Group("/webhook-configs")
+	webhookConfigs.Post("/", authMiddleware.RequirePermission("admin:integration"), integrationHandler.CreateWebhookConfig)
+	webhookConfigs.Get("/", authMiddleware.RequirePermission("admin:integration"), integrationHandler.ListWebhookConfigs)
+	webhookConfigs.Put("/:id", authMiddleware.RequirePermission("admin:integration"), integrationHandler.UpdateWebhookConfig)
+	webhookConfigs.Delete("/:id", authMiddleware.RequirePermission("admin:integration"), integrationHandler.DeleteWebhookConfig)
 
 	// Rejection Log routes (admin-level reporting)
 	rejectionLogs := admin.Group("/rejection-logs")

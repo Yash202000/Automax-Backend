@@ -24,6 +24,11 @@ type Config struct {
 	Documenta      DocumentaConfig
 	AIQuality      AIQualityConfig
 	License        LicenseConfig
+	Integration    IntegrationConfig
+}
+
+type IntegrationConfig struct {
+	SecretsKey string // env: INTEGRATION_SECRETS_KEY (64-char hex = 32 bytes for AES-256-GCM)
 }
 
 type LicenseConfig struct {
@@ -227,6 +232,9 @@ func Load() *Config {
 			Enabled:           getEnvAsBool("LICENSE_ENABLED", true),
 			DevSeedEnabled:    getEnvAsBool("LICENSE_DEV_SEED", false),
 			DevSeedExpiryDays: getEnvAsInt("LICENSE_DEV_EXPIRY_DAYS", 90),
+		},
+		Integration: IntegrationConfig{
+			SecretsKey: getEnv("INTEGRATION_SECRETS_KEY", ""),
 		},
 	}
 }
