@@ -718,14 +718,14 @@ func (s *workflowService) DuplicateWorkflow(ctx context.Context, id uuid.UUID, c
 			Code:          state.Code,
 			Description:   state.Description,
 			DescriptionAr: state.DescriptionAr,
-			StateType:   state.StateType,
-			Color:       state.Color,
-			PositionX:   state.PositionX,
-			PositionY:   state.PositionY,
-			SLAHours:    state.SLAHours,
-			SLAUnit:     state.SLAUnit,
-			SortOrder:   state.SortOrder,
-			IsActive:    state.IsActive,
+			StateType:     state.StateType,
+			Color:         state.Color,
+			PositionX:     state.PositionX,
+			PositionY:     state.PositionY,
+			SLAHours:      state.SLAHours,
+			SLAUnit:       state.SLAUnit,
+			SortOrder:     state.SortOrder,
+			IsActive:      state.IsActive,
 		}
 		if err := s.repo.CreateState(ctx, newState); err != nil {
 			return nil, err
@@ -751,10 +751,10 @@ func (s *workflowService) DuplicateWorkflow(ctx context.Context, id uuid.UUID, c
 			Code:          trans.Code,
 			Description:   trans.Description,
 			DescriptionAr: trans.DescriptionAr,
-			FromStateID: newFromStateID,
-			ToStateID:   newToStateID,
-			SortOrder:   trans.SortOrder,
-			IsActive:    trans.IsActive,
+			FromStateID:   newFromStateID,
+			ToStateID:     newToStateID,
+			SortOrder:     trans.SortOrder,
+			IsActive:      trans.IsActive,
 		}
 		if err := s.repo.CreateTransition(ctx, newTrans); err != nil {
 			return nil, err
@@ -843,26 +843,28 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 	}
 
 	state := &models.WorkflowState{
-		WorkflowID:      workflowID,
-		Name:            req.Name,
-		NameAr:          req.NameAr,
-		Code:            req.Code,
-		Description:     req.Description,
-		DescriptionAr:   req.DescriptionAr,
-		StateType:       req.StateType,
-		Color:           req.Color,
-		PositionX:       req.PositionX,
-		PositionY:       req.PositionY,
-		SLAHours:        req.SLAHours,
-		SLAUnit:         req.SLAUnit,
-		IsMergable:      req.IsMergable,
-		IsReadyToClose:  req.IsReadyToClose,
-		IsPartialClose:  req.IsPartialClose,
-		DurationOptions: durationOptionsJSON,
-		SortOrder:       req.SortOrder,
-		IsActive:        true,
-		AutoMatchUser:   req.AutoMatchUser,
-		ManualSelectUser: req.ManualSelectUser,
+		WorkflowID:                   workflowID,
+		Name:                         req.Name,
+		NameAr:                       req.NameAr,
+		Code:                         req.Code,
+		Description:                  req.Description,
+		DescriptionAr:                req.DescriptionAr,
+		StateType:                    req.StateType,
+		Color:                        req.Color,
+		PositionX:                    req.PositionX,
+		PositionY:                    req.PositionY,
+		SLAHours:                     req.SLAHours,
+		SLAUnit:                      req.SLAUnit,
+		IsMergable:                   req.IsMergable,
+		IsReadyToClose:               req.IsReadyToClose,
+		IsPartialClose:               req.IsPartialClose,
+		DurationOptions:              durationOptionsJSON,
+		SortOrder:                    req.SortOrder,
+		IsActive:                     true,
+		AutoMatchUser:                req.AutoMatchUser,
+		ManualSelectUser:             req.ManualSelectUser,
+		NewIncidentEmailTemplateCode: req.NewIncidentEmailTemplateCode,
+		NewIncidentSMSTemplateCode:   req.NewIncidentSMSTemplateCode,
 	}
 	if req.EscalationPolicyID != nil && *req.EscalationPolicyID != "" {
 		if id, err := uuid.Parse(*req.EscalationPolicyID); err == nil {
@@ -1051,6 +1053,12 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 				state.AssignUserID = &id
 			}
 		}
+	}
+	if req.NewIncidentEmailTemplateCode != nil {
+		state.NewIncidentEmailTemplateCode = *req.NewIncidentEmailTemplateCode
+	}
+	if req.NewIncidentSMSTemplateCode != nil {
+		state.NewIncidentSMSTemplateCode = *req.NewIncidentSMSTemplateCode
 	}
 
 	if err := s.repo.UpdateState(ctx, state); err != nil {

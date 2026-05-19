@@ -31,6 +31,10 @@ type EscalationGroup struct {
 	// Which channels to use: "sms", "email", or "both"
 	Channel string `gorm:"size:20;not null;default:'both'" json:"channel"`
 
+	// Optional notification template codes. When set, used instead of the default built-in message.
+	EmailTemplateCode string `gorm:"size:100" json:"email_template_code"`
+	SMSTemplateCode   string `gorm:"size:100" json:"sms_template_code"`
+
 	IsActive bool `gorm:"default:true" json:"is_active"`
 
 	// Tracks when the last notification batch was sent (used for schedule enforcement)
@@ -65,6 +69,8 @@ type CreateEscalationGroupRequest struct {
 	Frequency         string                         `json:"frequency" validate:"required,oneof=hourly every_6_hours every_12_hours daily weekly bi_weekly monthly"`
 	ScheduledTime     string                         `json:"scheduled_time" validate:"required,datetime=15:04"`
 	Channel           string                         `json:"channel" validate:"required,oneof=sms email both"`
+	EmailTemplateCode string                         `json:"email_template_code"`
+	SMSTemplateCode   string                         `json:"sms_template_code"`
 	IsActive          *bool                          `json:"is_active"`
 	Targets           []EscalationGroupTargetRequest `json:"targets"`
 	// Deprecated: use Targets instead
@@ -80,6 +86,8 @@ type UpdateEscalationGroupRequest struct {
 	Frequency         *string                        `json:"frequency" validate:"omitempty,oneof=hourly every_6_hours every_12_hours daily weekly bi_weekly monthly"`
 	ScheduledTime     *string                        `json:"scheduled_time" validate:"omitempty,datetime=15:04"`
 	Channel           *string                        `json:"channel" validate:"omitempty,oneof=sms email both"`
+	EmailTemplateCode *string                        `json:"email_template_code"`
+	SMSTemplateCode   *string                        `json:"sms_template_code"`
 	IsActive          *bool                          `json:"is_active"`
 	Targets           []EscalationGroupTargetRequest `json:"targets"` // nil = no change; non-nil = full replacement
 	// Deprecated: use Targets instead
@@ -89,37 +97,41 @@ type UpdateEscalationGroupRequest struct {
 // Response type ---
 
 type EscalationGroupResponse struct {
-	ID               uuid.UUID                       `json:"id"`
-	Name             string                          `json:"name"`
-	ClassificationID *uuid.UUID                      `json:"classification_id,omitempty"`
-	Classification   *ClassificationResponse         `json:"classification,omitempty"`
-	Classifications  []ClassificationResponse        `json:"classifications"`
-	Frequency        string                          `json:"frequency"`
-	ScheduledTime    string                          `json:"scheduled_time"`
-	Channel          string                          `json:"channel"`
-	IsActive         bool                            `json:"is_active"`
-	LastNotifiedAt   *time.Time                      `json:"last_notified_at,omitempty"`
-	Targets          []EscalationGroupTargetResponse `json:"targets"`
-	Users            []UserResponse                  `json:"users"` // legacy
-	CreatedAt        time.Time                       `json:"created_at"`
-	UpdatedAt        time.Time                       `json:"updated_at"`
+	ID                uuid.UUID                       `json:"id"`
+	Name              string                          `json:"name"`
+	ClassificationID  *uuid.UUID                      `json:"classification_id,omitempty"`
+	Classification    *ClassificationResponse         `json:"classification,omitempty"`
+	Classifications   []ClassificationResponse        `json:"classifications"`
+	Frequency         string                          `json:"frequency"`
+	ScheduledTime     string                          `json:"scheduled_time"`
+	Channel           string                          `json:"channel"`
+	EmailTemplateCode string                          `json:"email_template_code"`
+	SMSTemplateCode   string                          `json:"sms_template_code"`
+	IsActive          bool                            `json:"is_active"`
+	LastNotifiedAt    *time.Time                      `json:"last_notified_at,omitempty"`
+	Targets           []EscalationGroupTargetResponse `json:"targets"`
+	Users             []UserResponse                  `json:"users"` // legacy
+	CreatedAt         time.Time                       `json:"created_at"`
+	UpdatedAt         time.Time                       `json:"updated_at"`
 }
 
 func ToEscalationGroupResponse(g *EscalationGroup) EscalationGroupResponse {
 	resp := EscalationGroupResponse{
-		ID:              g.ID,
-		Name:            g.Name,
-		ClassificationID: g.ClassificationID,
-		Frequency:       g.Frequency,
-		ScheduledTime:   g.ScheduledTime,
-		Channel:         g.Channel,
-		IsActive:        g.IsActive,
-		LastNotifiedAt:  g.LastNotifiedAt,
-		Classifications: []ClassificationResponse{},
-		Targets:         []EscalationGroupTargetResponse{},
-		Users:           []UserResponse{},
-		CreatedAt:       g.CreatedAt,
-		UpdatedAt:       g.UpdatedAt,
+		ID:                g.ID,
+		Name:              g.Name,
+		ClassificationID:  g.ClassificationID,
+		Frequency:         g.Frequency,
+		ScheduledTime:     g.ScheduledTime,
+		Channel:           g.Channel,
+		EmailTemplateCode: g.EmailTemplateCode,
+		SMSTemplateCode:   g.SMSTemplateCode,
+		IsActive:          g.IsActive,
+		LastNotifiedAt:    g.LastNotifiedAt,
+		Classifications:   []ClassificationResponse{},
+		Targets:           []EscalationGroupTargetResponse{},
+		Users:             []UserResponse{},
+		CreatedAt:         g.CreatedAt,
+		UpdatedAt:         g.UpdatedAt,
 	}
 	if g.Classification != nil {
 		r := ToClassificationResponse(g.Classification)

@@ -123,7 +123,9 @@ func main() {
 	escalationPolicyService := services.NewEscalationPolicyService(escalationPolicyRepo, userRepo)
 	escalationService := services.NewEscalationService(escalationRepo, escalationPolicyRepo, incidentRepo, workflowRepo, userRepo, notificationService)
 	escalationService.SetPolicyService(escalationPolicyService)
+	escalationService.SetFrontendURL(cfg.FrontendURL)
 	escalationGroupService := services.NewEscalationGroupService(escalationGroupRepo, incidentRepo, userRepo, notificationService, cfg.Escalation)
+	escalationGroupService.SetFrontendURL(cfg.FrontendURL)
 	escalationGroupService.SetPolicyService(escalationPolicyService)
 	fcmService := services.NewFCMService(repository.NewDeviceTokenRepository(db), notificationLogRepo)
 	callerSentimentService := services.NewCallerSentimentService(callerSentimentRepo)
@@ -152,6 +154,7 @@ func main() {
 	incidentService.SetNotificationService(notificationService)
 	incidentService.SetUserService(userService)
 	incidentService.SetFCMService(fcmService)
+	incidentService.SetActionExecutor(services.NewActionExecutor(incidentRepo, userRepo, notificationService))
 
 	// Initialize and start SLA Monitor (checks every 5 minutes)
 	slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, escalationGroupService, readyToCloseService, 5*time.Minute)
@@ -193,8 +196,9 @@ func main() {
 	settingsHandler := handlers.NewSettingsHandler(settingsService)
 	jwksHandler := handlers.NewJWKSHandler(ssoJWTManager)
 	ssoHandler := handlers.NewSSOHandler(ssoJWTManager, jwtManager, sessionStore, userRepo, applicationLinkRepo, userService, otpService, cfg.SSOFrontendURL, cfg.NafathAPIBaseURL)
+	notificationTemplateService := services.NewNotificationTemplateService(notificationTemplateRepo, db)
 	notificationHandler := handlers.NewNotificationHandler(notificationService, minioStorage)
-	templateHandler := handlers.NewNotificationTemplateHandler(notificationTemplateRepo)
+	templateHandler := handlers.NewNotificationTemplateHandler(notificationTemplateService)
 	attachmentHandler := handlers.NewAttachmentHandler(incidentService, notificationService, minioStorage)
 	otpHandler := handlers.NewOTPHandler(otpService)
 	escalationHandler := handlers.NewEscalationHandler(escalationService)
@@ -650,6 +654,22 @@ func main() {
 	feedbackTemplates.Put("/:id", authMiddleware.RequirePermission("workflows:update"), feedbackTemplateHandler.Update)
 	feedbackTemplates.Delete("/:id", authMiddleware.RequirePermission("workflows:update"), feedbackTemplateHandler.Delete)
 
+	// Notification Template routes (admin managed: email/SMS templates with bilingual support)
+	notifTemplates := admin.Group("/notification-templates", middleware.ActionLogger(middleware.ActionLoggerConfig{
+		Enabled:     true,
+		LogService:  actionLogService,
+		SkipMethods: []string{"GET"},
+	}))
+	notifTemplates.Post("/", authMiddleware.RequirePermission("templates:create"), templateHandler.Create)
+	notifTemplates.Get("/by-code/:code", authMiddleware.RequirePermission("templates:read"), templateHandler.GetByCode)
+	notifTemplates.Get("/by-transition/:transitionId", authMiddleware.RequirePermission("templates:read"), templateHandler.GetByTransition)
+	notifTemplates.Get("/available-variables", authMiddleware.RequirePermission("templates:read"), templateHandler.GetAvailableVariables)
+	notifTemplates.Get("/", authMiddleware.RequirePermission("templates:read"), templateHandler.List)
+	notifTemplates.Get("/:id", authMiddleware.RequirePermission("templates:read"), templateHandler.GetByID)
+	notifTemplates.Put("/:id", authMiddleware.RequirePermission("templates:update"), templateHandler.Update)
+	notifTemplates.Patch("/:id/toggle", authMiddleware.RequirePermission("templates:update"), templateHandler.Toggle)
+	notifTemplates.Delete("/:id", authMiddleware.RequirePermission("templates:delete"), templateHandler.Delete)
+
 	// Rejection Log routes (admin-level reporting)
 	rejectionLogs := admin.Group("/rejection-logs")
 	rejectionLogs.Get("/", authMiddleware.RequirePermission("reports:view"), rejectionLogHandler.List)
@@ -740,8 +760,8 @@ func main() {
 	callLogsPublic.Get("/sip-info", callLogHandler.GetSipInfo)
 	callLogsPublic.Get("/extension/:extension", callLogHandler.GetCallLogsByExtension)
 
-	// ---- TEMPLATE ROUTES ----
-	templates := v1.Group("/templates", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureCommunication)))
+	// ---- TEMPLATE ROUTES (legacy path, no feature-license gate) ----
+	templates := v1.Group("/templates", authMiddleware.Authenticate())
 	templates.Post("/", authMiddleware.RequirePermission("templates:create"), templateHandler.Create)
 	templates.Get("/", authMiddleware.RequirePermission("templates:read"), templateHandler.List)
 	templates.Get("/:id", authMiddleware.RequirePermission("templates:read"), templateHandler.GetByID)

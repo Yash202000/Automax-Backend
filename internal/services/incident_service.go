@@ -93,6 +93,8 @@ type IncidentService interface {
 	SetUserService(us UserService)
 	// SetFCMService wires in the FCMService (called post-construction).
 	SetFCMService(fcm *FCMService)
+	// SetActionExecutor wires in the ActionExecutor (called post-construction).
+	SetActionExecutor(ae ActionExecutor)
 
 	// Closed incident editing
 	UpdateClosedIncidentSummary(ctx context.Context, incidentID uuid.UUID, userID uuid.UUID, newDescription string, reason string) (*models.IncidentResponse, error)
@@ -114,6 +116,7 @@ type incidentService struct {
 	notificationService *NotificationService
 	userService         UserService
 	fcmService          *FCMService
+	actionExecutor      ActionExecutor
 }
 
 func NewIncidentService(
@@ -163,6 +166,10 @@ func (s *incidentService) SetUserService(us UserService) {
 // SetFCMService wires the FCMService into the incident service.
 func (s *incidentService) SetFCMService(fcm *FCMService) {
 	s.fcmService = fcm
+}
+
+func (s *incidentService) SetActionExecutor(ae ActionExecutor) {
+	s.actionExecutor = ae
 }
 
 // calculateSLADeadline calculates the SLA deadline based on classification criticality.
@@ -679,6 +686,78 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		}
 		log.Printf("IVR incident created with ID %s, SMS sent: %v", incident.ID, sent)
 		log.Println("ivr sms link send: ", smsLink)
+	}
+
+	// Send template-based email/SMS notifications for the initial state (if configured)
+	if s.notificationService != nil && (initialState.NewIncidentEmailTemplateCode != "" || initialState.NewIncidentSMSTemplateCode != "") {
+		bgCtx := context.Background()
+		capturedCreated := created
+		capturedInitialState := initialState
+		go func() {
+			vars := map[string]string{
+				"incident_number": capturedCreated.IncidentNumber,
+				"incident_title":  capturedCreated.Title,
+				"incident_id":     capturedCreated.ID.String(),
+			}
+			if capturedCreated.Assignee != nil {
+				name := capturedCreated.Assignee.Username
+				if capturedCreated.Assignee.FirstName != "" {
+					name = capturedCreated.Assignee.FirstName + " " + capturedCreated.Assignee.LastName
+				}
+				vars["assignee"] = name
+				vars["first_name"] = capturedCreated.Assignee.FirstName
+				vars["last_name"] = capturedCreated.Assignee.LastName
+			}
+			if capturedCreated.Reporter != nil {
+				rname := capturedCreated.Reporter.Username
+				if capturedCreated.Reporter.FirstName != "" {
+					rname = capturedCreated.Reporter.FirstName + " " + capturedCreated.Reporter.LastName
+				}
+				vars["reporter"] = rname
+			}
+			if capturedInitialState.NewIncidentEmailTemplateCode != "" {
+				var emails []string
+				if capturedCreated.Assignee != nil && capturedCreated.Assignee.Email != "" {
+					emails = append(emails, capturedCreated.Assignee.Email)
+				}
+				if capturedCreated.Reporter != nil && capturedCreated.Reporter.Email != "" {
+					emails = append(emails, capturedCreated.Reporter.Email)
+				} else if capturedCreated.ReporterEmail != "" {
+					emails = append(emails, capturedCreated.ReporterEmail)
+				}
+				if len(emails) > 0 {
+					code := capturedInitialState.NewIncidentEmailTemplateCode
+					if _, err := s.notificationService.SendNotification(
+						bgCtx, "email", &code, "en",
+						emails, nil, nil,
+						"", "",
+						vars, nil, nil, nil,
+					); err != nil {
+						log.Printf("NEW-INCIDENT-EMAIL: Failed for incident %s: %v", capturedCreated.IncidentNumber, err)
+					}
+				}
+			}
+			if capturedInitialState.NewIncidentSMSTemplateCode != "" {
+				var phones []string
+				if capturedCreated.Assignee != nil && capturedCreated.Assignee.Phone != "" {
+					phones = append(phones, capturedCreated.Assignee.Phone)
+				}
+				if capturedCreated.Reporter != nil && capturedCreated.Reporter.Phone != "" {
+					phones = append(phones, capturedCreated.Reporter.Phone)
+				}
+				if len(phones) > 0 {
+					code := capturedInitialState.NewIncidentSMSTemplateCode
+					if _, err := s.notificationService.SendNotification(
+						bgCtx, "sms", &code, "en",
+						phones, nil, nil,
+						"", "",
+						vars, nil, nil, nil,
+					); err != nil {
+						log.Printf("NEW-INCIDENT-SMS: Failed for incident %s: %v", capturedCreated.IncidentNumber, err)
+					}
+				}
+			}
+		}()
 	}
 
 	// Send FCM push notification to the initial assignee (employee)
@@ -3063,10 +3142,28 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		}()
 	}
 
-	// Fetch updated incident (outside transaction)
+	// Fetch updated incident (outside transaction) with all relations for response and action execution.
 	updated, err := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Execute automation actions configured on this transition.
+	// Uses the fully-preloaded incident so recipient fields (Assignee.Email, Reporter.Email, etc.) are available.
+	if s.actionExecutor != nil && len(transition.Actions) > 0 {
+		capturedTransition := transition
+		capturedIncident := updated
+		capturedUserID := userID
+		bgCtx := context.Background()
+		go func() {
+			var performer *models.User
+			if u, err := s.userRepo.FindByID(bgCtx, capturedUserID); err == nil {
+				performer = u
+			}
+			if err := s.actionExecutor.ExecuteActions(bgCtx, capturedIncident, capturedTransition, performer); err != nil {
+				log.Printf("ExecuteActions failed for transition %s: %v", capturedTransition.Name, err)
+			}
+		}()
 	}
 
 	resp := models.ToIncidentResponse(updated)
