@@ -27,21 +27,25 @@ type IncidentHandler struct {
 	userService         services.UserService
 	userRepo            repository.UserRepository
 	incidentRepo        repository.IncidentRepository
+	locationRepo        repository.LocationRepository
+	classificationRepo  repository.ClassificationRepository
 	storage             *storage.MinIOStorage
 	presenceService     services.PresenceService
 	readyToCloseService services.ReadyToCloseService
 	validator           *validator.Validate
 }
 
-func NewIncidentHandler(service services.IncidentService, userService services.UserService, userRepo repository.UserRepository, incidentRepo repository.IncidentRepository, storage *storage.MinIOStorage, presenceService services.PresenceService) *IncidentHandler {
+func NewIncidentHandler(service services.IncidentService, userService services.UserService, userRepo repository.UserRepository, incidentRepo repository.IncidentRepository, locationRepo repository.LocationRepository, classificationRepo repository.ClassificationRepository, storage *storage.MinIOStorage, presenceService services.PresenceService) *IncidentHandler {
 	return &IncidentHandler{
-		service:         service,
-		userService:     userService,
-		userRepo:        userRepo,
-		incidentRepo:    incidentRepo,
-		storage:         storage,
-		presenceService: presenceService,
-		validator:       validator.New(),
+		service:            service,
+		userService:        userService,
+		userRepo:           userRepo,
+		incidentRepo:       incidentRepo,
+		locationRepo:       locationRepo,
+		classificationRepo: classificationRepo,
+		storage:            storage,
+		presenceService:    presenceService,
+		validator:          validator.New(),
 	}
 }
 

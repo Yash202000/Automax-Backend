@@ -23,6 +23,8 @@ type LocationRepository interface {
 	GetByParentID(ctx context.Context, parentID *uuid.UUID) ([]models.Location, error)
 	GetByType(ctx context.Context, locationType string) ([]models.Location, error)
 	GetTreeWithStats(ctx context.Context, recordType string) ([]models.LocationWithStats, error)
+	FetchLocationFullPaths(ctx context.Context, locationIDs []string) (map[string]string, error)
+	FetchLocationFullPathByID(ctx context.Context, locationID uuid.UUID) (string, error)
 }
 
 type locationRepository struct {
@@ -235,4 +237,102 @@ func (r *locationRepository) GetTreeWithStats(ctx context.Context, recordType st
 	}
 
 	return roots, nil
+}
+
+// full path queries
+
+// ── full path queries ───────────────────────────────────────────────────
+func (r *locationRepository) FetchLocationFullPaths(
+	ctx context.Context,
+	locationIDs []string,
+) (paths map[string]string, err error) {
+	paths = map[string]string{}
+	if len(locationIDs) == 0 {
+		return
+	}
+
+	query := `
+		WITH RECURSIVE location_hierarchy AS (
+			SELECT
+				id,
+				name,
+				parent_id,
+				name::TEXT AS full_path
+			FROM locations
+			WHERE parent_id IS NULL
+
+			UNION ALL
+
+			SELECT
+				l.id,
+				l.name,
+				l.parent_id,
+				lh.full_path || ' > ' || l.name
+			FROM locations l
+			INNER JOIN location_hierarchy lh ON l.parent_id = lh.id
+		)
+		SELECT
+			id::text,
+			full_path
+		FROM location_hierarchy
+		WHERE id::text IN (?)
+	`
+
+	rows, qerr := r.db.WithContext(ctx).Raw(query, locationIDs).Rows()
+	if qerr != nil {
+		err = fmt.Errorf("fetchLocationPaths: %w", qerr)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var locationID, fullPath string
+		if serr := rows.Scan(&locationID, &fullPath); serr != nil {
+			continue
+		}
+		paths[locationID] = fullPath
+	}
+	return
+}
+
+// @Todo: Add filter in temp table to only fetch paths for locations that are relevant to the incident list query (e.g. only fetch paths for locations that have incidents matching the filter criteria). This will reduce the number of paths we need to fetch and improve performance.
+func (r *locationRepository) FetchLocationFullPathByID(
+	ctx context.Context,
+	locationID uuid.UUID,
+) (string, error) {
+	const query = `
+		WITH RECURSIVE location_hierarchy AS (
+			SELECT
+				id,
+				name,
+				parent_id,
+				name::TEXT AS full_path
+			FROM locations
+			WHERE parent_id IS NULL
+
+			UNION ALL
+
+			SELECT
+				l.id,
+				l.name,
+				l.parent_id,
+				lh.full_path || ' > ' || l.name
+			FROM locations l
+			INNER JOIN location_hierarchy lh ON l.parent_id = lh.id
+		)
+		SELECT full_path
+		FROM location_hierarchy
+		WHERE id = $1
+	`
+
+	var fullPath string
+	err := r.db.WithContext(ctx).Raw(query, locationID).Scan(&fullPath).Error
+	if err != nil {
+		return "", fmt.Errorf("fetchLocationFullPathByID: %w", err)
+	}
+	if fullPath == "" {
+		return "", fmt.Errorf("fetchLocationFullPathByID: location %s not found", locationID)
+	}
+
+	return fullPath, nil
 }

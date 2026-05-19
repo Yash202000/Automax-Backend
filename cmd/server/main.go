@@ -191,7 +191,7 @@ func main() {
 	actionLogHandler := handlers.NewActionLogHandler(actionLogService, validate)
 	callLogHandler := handlers.NewCallLogHandler(callLogService, validate, userService, minioStorage)
 	workflowHandler := handlers.NewWorkflowHandler(workflowService, actionLogService)
-	incidentHandler := handlers.NewIncidentHandler(incidentService, userService, userRepo, incidentRepo, minioStorage, presenceService)
+	incidentHandler := handlers.NewIncidentHandler(incidentService, userService, userRepo, incidentRepo, locationRepo, classificationRepo, minioStorage, presenceService)
 	incidentHandler.SetReadyToCloseService(readyToCloseService)
 	incidentMergeHandler := handlers.NewIncidentMergeHandler(incidentMergeService, userRepo)
 	websocketHandler := handlers.NewWebSocketHandler(wsHub)
