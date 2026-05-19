@@ -275,6 +275,7 @@ func main() {
 	// EPM external API routes
 	app.Post("/Momra/API/EPM/Login", epmHandler.Login)
 	app.Post("/Momra/API/EPM/InsertIncidents", epmIncidentHandler.InsertIncidents)
+	app.Get("/Momra/API/EPM/GetMomraIncidentStatusDetails", epmIncidentHandler.GetMomraIncidentStatusDetails)
 
 	api := app.Group("/api")
 	v1 := api.Group("/v1")

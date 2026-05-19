@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -89,11 +90,38 @@ type EPMInsertIncidentRequest struct {
 }
 
 type EPMInsertIncidentResponse struct {
-	Ex           string `json:"ex"`
-	HTTPStatusCode int  `json:"httpStatusCode"`
-	Message      string `json:"message"`
-	Result       bool   `json:"result"`
-	TicketNumber string `json:"ticketNumber"`
+	Ex             string `json:"ex"`
+	HTTPStatusCode int    `json:"httpStatusCode"`
+	Message        string `json:"message"`
+	Result         bool   `json:"result"`
+	TicketNumber   string `json:"ticketNumber"`
+}
+
+type EPMIncidentStatusItems struct {
+	RequestID         string     `json:"requestID"`
+	Status            interface{} `json:"status"`
+	Comments          string     `json:"comments"`
+	IsNotified        bool       `json:"isNotified"`
+	CreatedDatetime   string     `json:"createdDatetime"`
+	SynchedDatetime   string     `json:"synchedDatetime"`
+	AmanaIncidentNo   string     `json:"amanaIncidentNo"`
+	EvaluationFlag    int        `json:"evaluationFlag"`
+	IncidentImageAlert interface{} `json:"incidentImageAlert"`
+}
+
+type EPMIncidentAttachmentItem struct {
+	AttachmentID    int    `json:"attachmentID"`
+	TicketNumber    string `json:"ticketNumber"`
+	AttachmentsName string `json:"attachmentsName"`
+	Attachments     string `json:"attachments"`
+}
+
+type EPMGetMomraIncidentStatusDetailsResponse struct {
+	Items        *EPMIncidentStatusItems       `json:"items"`
+	Attachements []EPMIncidentAttachmentItem  `json:"attachements"`
+	Result       bool                          `json:"result"`
+	Ex           string                        `json:"ex"`
+	HTTPStatusCode int                         `json:"httpStatusCode"`
 }
 
 func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
@@ -355,6 +383,117 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 		Message:        "Successful call with all required parameters",
 		Result:         true,
 		TicketNumber:   incident.IncidentNumber,
+	})
+}
+
+func (h *EPMIncidentHandler) GetMomraIncidentStatusDetails(c *fiber.Ctx) error {
+	authHeader := c.Get("Authorization")
+	if authHeader == "" {
+		return c.Status(fiber.StatusUnauthorized).JSON(EPMGetMomraIncidentStatusDetailsResponse{
+			HTTPStatusCode: fiber.StatusUnauthorized,
+			Ex:             "Missing Authorization header",
+			Result:         false,
+		})
+	}
+
+	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+	if tokenString == authHeader {
+		return c.Status(fiber.StatusUnauthorized).JSON(EPMGetMomraIncidentStatusDetailsResponse{
+			HTTPStatusCode: fiber.StatusUnauthorized,
+			Ex:             "Invalid Authorization header format, use Bearer token",
+			Result:         false,
+		})
+	}
+
+	claims, err := h.jwtManager.ValidateToken(tokenString)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(EPMGetMomraIncidentStatusDetailsResponse{
+			HTTPStatusCode: fiber.StatusUnauthorized,
+			Ex:             "Invalid or expired token",
+			Result:         false,
+		})
+	}
+
+	var sessionData map[string]interface{}
+	if err := h.sessionStore.GetUserSession(c.UserContext(), claims.UserID.String(), &sessionData); err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(EPMGetMomraIncidentStatusDetailsResponse{
+			HTTPStatusCode: fiber.StatusUnauthorized,
+			Ex:             "Session expired or invalid",
+			Result:         false,
+		})
+	}
+
+	ticketNumber := c.Query("ticketNumber")
+	if ticketNumber == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMGetMomraIncidentStatusDetailsResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Ex:             "ticketNumber query parameter is required",
+			Result:         false,
+		})
+	}
+
+	incident, err := h.incidentRepo.FindByIncidentNumber(c.UserContext(), ticketNumber)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(EPMGetMomraIncidentStatusDetailsResponse{
+			HTTPStatusCode: fiber.StatusNotFound,
+			Ex:             "Incident not found: " + ticketNumber,
+			Result:         false,
+		})
+	}
+
+	var status interface{}
+	if incident.CurrentState != nil {
+		status = incident.CurrentState.Name
+	}
+
+	var latestComment string
+	comments, err := h.incidentRepo.ListComments(c.UserContext(), incident.ID)
+	if err == nil && len(comments) > 0 {
+		latestComment = comments[0].Content
+	}
+
+	items := &EPMIncidentStatusItems{
+		RequestID:          incident.IncidentNumber,
+		Status:             status,
+		Comments:           latestComment,
+		IsNotified:         false,
+		CreatedDatetime:    incident.CreatedAt.Format("2006-01-02T15:04:05.00"),
+		SynchedDatetime:    incident.UpdatedAt.Format("2006-01-02T15:04:05.00"),
+		AmanaIncidentNo:    incident.IncidentNumber,
+		EvaluationFlag:     incident.EvaluationCount,
+		IncidentImageAlert: nil,
+	}
+
+	attachments, err := h.incidentRepo.ListAttachments(c.UserContext(), incident.ID)
+	var attachmentItems []EPMIncidentAttachmentItem
+	if err == nil {
+		for i, att := range attachments {
+			content, readErr := h.storage.GetFile(c.UserContext(), att.FilePath)
+			encoded := ""
+			if readErr == nil {
+				data, readErr := io.ReadAll(content)
+				content.Close()
+				if readErr == nil {
+					encoded = base64.StdEncoding.EncodeToString(data)
+				}
+			}
+			attachmentItems = append(attachmentItems, EPMIncidentAttachmentItem{
+				AttachmentID:    i + 1,
+				TicketNumber:    incident.IncidentNumber,
+				AttachmentsName: att.FileName,
+				Attachments:     encoded,
+			})
+		}
+	}
+	if attachmentItems == nil {
+		attachmentItems = []EPMIncidentAttachmentItem{}
+	}
+
+	return c.Status(fiber.StatusOK).JSON(EPMGetMomraIncidentStatusDetailsResponse{
+		Items:          items,
+		Attachements:   attachmentItems,
+		Result:         true,
+		HTTPStatusCode: fiber.StatusOK,
 	})
 }
 
