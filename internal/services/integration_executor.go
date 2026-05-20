@@ -265,7 +265,7 @@ func (e *integrationExecutor) buildIncidentContext(incident *models.Incident, fi
 		"postal_code":     incident.PostalCode,
 		"custom_fields":   incident.CustomFields,
 		// Direct reporter fields (always present even without a linked user)
-		"reporter_email": incident.ReporterEmail,
+		"reporter_email":     incident.ReporterEmail,
 		"reporter_name":  incident.ReporterName,
 		"reporter_phone": incident.ReporterPhone,
 		"sla_breached":   incident.SLABreached,
@@ -313,14 +313,24 @@ func (e *integrationExecutor) buildIncidentContext(incident *models.Incident, fi
 		ctx["assignee_email"] = incident.Assignee.Email
 	}
 	if incident.Reporter != nil {
-		// Prefer relation fields if a linked user exists
-		if incident.Reporter.Email != "" {
+		if ctx["reporter_email"] == "" && incident.Reporter.Email != "" {
 			ctx["reporter_email"] = incident.Reporter.Email
 		}
 		fullName := strings.TrimSpace(incident.Reporter.FirstName + " " + incident.Reporter.LastName)
-		if fullName != "" {
+		if ctx["reporter_name"] == "" && fullName != "" {
 			ctx["reporter_name"] = fullName
 		}
+		if ctx["reporter_phone"] == "" && incident.Reporter.Phone != "" {
+			ctx["reporter_phone"] = incident.Reporter.Phone
+		}
+		ctx["reporter_id"] = incident.Reporter.ID.String()
+		ctx["reporter_username"] = incident.Reporter.Username
+		ctx["reporter_first_name"] = incident.Reporter.FirstName
+		ctx["reporter_last_name"] = incident.Reporter.LastName
+		ctx["reporter_extension"] = incident.Reporter.Extension
+	}
+	if incident.SourceIncidentID != nil {
+		ctx["source_incident_id"] = incident.SourceIncidentID.String()
 	}
 	if incident.DueDate != nil {
 		ctx["due_date"] = incident.DueDate.Format(time.RFC3339)
