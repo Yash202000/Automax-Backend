@@ -1350,11 +1350,6 @@ func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not found")
 	}
 
-	// Check if incident already has attachments
-	if len(incident.Attachments) > 0 {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Incident already has attachments, no additional information needed")
-	}
-
 	// Determine phone number to send SMS to
 	mobile := incident.CreatedByMobile
 	if mobile == "" && incident.ReporterID != nil {
