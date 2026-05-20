@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
@@ -512,6 +513,72 @@ func (e *integrationExecutor) executeJS(
 			return result
 		})
 	}
+
+	// http.getBytes(url, headers) — downloads a file and returns base64-encoded content + mime type.
+	// Use this to fetch attachments before re-uploading them elsewhere.
+	httpObj.Set("getBytes", func(targetURL string, headers map[string]interface{}) map[string]interface{} { //nolint
+		req, err := http.NewRequest("GET", targetURL, nil)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		for k, v := range headers {
+			req.Header.Set(k, fmt.Sprintf("%v", v))
+		}
+		resp, err := e.httpClient.Do(req)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		defer resp.Body.Close()
+		fileBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 50*1024*1024)) // 50 MB cap
+		return map[string]interface{}{
+			"status":   resp.StatusCode,
+			"data":     base64.StdEncoding.EncodeToString(fileBytes),
+			"mimeType": resp.Header.Get("Content-Type"),
+		}
+	})
+
+	// http.upload(url, base64Data, fileName, mimeType, headers) — multipart/form-data upload.
+	// Pair with getBytes to bridge attachments across Automax instances.
+	httpObj.Set("upload", func(targetURL, base64Data, fileName, mimeType string, headers map[string]interface{}) map[string]interface{} { //nolint
+		fileBytes, err := base64.StdEncoding.DecodeString(base64Data)
+		if err != nil {
+			panic(vm.NewGoError(fmt.Errorf("upload: invalid base64 data: %w", err)))
+		}
+		var buf bytes.Buffer
+		writer := multipart.NewWriter(&buf)
+		part, err := writer.CreateFormFile("file", fileName)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		if _, err = part.Write(fileBytes); err != nil {
+			panic(vm.NewGoError(err))
+		}
+		writer.Close()
+
+		req, err := http.NewRequest("POST", targetURL, &buf)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+		for k, v := range headers {
+			req.Header.Set(k, fmt.Sprintf("%v", v))
+		}
+		resp, err := e.httpClient.Do(req)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		defer resp.Body.Close()
+		respBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		capturedResponse = string(respBytes)
+		var respJSON interface{}
+		json.Unmarshal(respBytes, &respJSON)
+		return map[string]interface{}{
+			"status": resp.StatusCode,
+			"body":   respJSON,
+			"raw":    capturedResponse,
+		}
+	})
+
 	vm.Set("http", httpObj) //nolint
 
 	// Timeout: interrupt after 30 seconds
