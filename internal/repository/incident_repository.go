@@ -243,7 +243,7 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		query = query.Where("reporter_id IN ?", filter.ReporterID)
 	}
 	if filter.ReporterPhone != "" {
-		query = query.Where("reporter_phone = ?", filter.ReporterPhone)
+		query = query.Where("reporter_id IN (Select id from users where phone = ?)", filter.ReporterPhone)
 	}
 	if filter.SLABreached != nil {
 		query = query.Where("sla_breached = ?", *filter.SLABreached)
