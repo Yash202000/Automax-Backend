@@ -25,11 +25,13 @@ var USER_ROLE = struct {
 }
 
 var CLIENT_CODE = struct {
-	VIUSIONAL string
-	EPM940    string
+	VIUSIONAL    string
+	EPM940       string
+	IVR_INST_SMS string
 }{
-	VIUSIONAL: "Viusional",
-	EPM940:    "EPM940",
+	VIUSIONAL:    "Viusional",
+	EPM940:       "EPM940",
+	IVR_INST_SMS: "IVRINSTSMS",
 }
 
 var INCIDENT_SOURCE = struct {
