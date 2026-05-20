@@ -1225,11 +1225,11 @@ type IncidentReportData struct {
 	LocationID           *uuid.UUID `db:"location_id"`
 	LocationName         string     `db:"location_name"`
 	LocationNameAr       string     `db:"location_name_ar"`
-	ReporterFirstName    string     `db:"reporter_first_name"`
-	ReporterLastName     string     `db:"reporter_last_name"`
-	ReporterEmail        string     `db:"reporter_email"`
-	ReporterPhone        string     `db:"reporter_phone"`
-	ReporterName         string     `db:"reporter_name"`
+	CreatorFullName      string     `db:"creator_full_name"`
+	CreatorEmail         string     `db:"creator_email"`
+	CreatorPhone         string     `db:"creator_phone"`
+	CallerPhone          string     `db:"caller_phone"`
+	CallerName           string     `db:"caller_name"`
 	CreatedByMobile      string     `db:"created_by_mobile"`
 	CreatedByName        string     `db:"created_by_name"`
 	AssigneeFirstName    string     `db:"assignee_first_name"`

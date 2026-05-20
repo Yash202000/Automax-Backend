@@ -655,7 +655,10 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		})
 	}
 
-	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.IVR) && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
+	IvrInstSms := strings.TrimSpace(os.Getenv("IVR_INST_SMS"))
+	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.IVR) &&
+		strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) &&
+		strings.EqualFold(IvrInstSms, constants.CLIENT_CODE.IVR_INST_SMS) {
 		// send notification to IVR user about incident creation via sms
 		// in phase 4 we can add more details in the sms and also add notification in the app
 		// add columns like NotificationSent bool, NotificationSentAt time.Time in the incident table to track this

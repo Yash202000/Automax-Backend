@@ -572,10 +572,7 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 	b.WriteString(`</table>`)
 
 	// ── Section: Submitter ────────────────────────────────────────────────────
-	reporterName := strings.TrimSpace(data.ReporterFirstName + " " + data.ReporterLastName)
-	if reporterName == "" {
-		reporterName = data.ReporterName
-	}
+
 	assigneeName := data.AssigneesName
 	if assigneeName == "" {
 		assigneeName = strings.TrimSpace(data.AssigneeFirstName + " " + data.AssigneeLastName)
@@ -583,18 +580,18 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 
 	secHeader(&b, l.SectionReporter)
 	b.WriteString(`<table class="grid">`)
-	row2(&b, l.Reporter, html.EscapeString(reporterName), l.Assignee, html.EscapeString(assigneeName))
-	row2(&b, l.ReporterEmail, html.EscapeString(data.ReporterEmail), l.ReporterMobile, html.EscapeString(data.ReporterPhone))
+	row2(&b, l.Reporter, html.EscapeString(data.CreatorFullName), l.Assignee, html.EscapeString(assigneeName))
+	row2(&b, l.ReporterEmail, html.EscapeString(data.CreatorEmail), l.ReporterMobile, html.EscapeString(data.CreatorPhone))
 	row1(&b, l.Department, html.EscapeString(data.DepartmentName))
 	b.WriteString(`</table>`)
 
 	// ── Section: Caller Details (IVR / SMS-Link only) ─────────────────────────
-	// if data.Source == "ivr" || data.Source == "sms-link" {
-	secHeader(&b, l.SectionCaller)
-	b.WriteString(`<table class="grid">`)
-	row2(&b, l.CallerName, html.EscapeString(reporterName), l.CallerMobile, html.EscapeString(data.ReporterPhone))
-	b.WriteString(`</table>`)
-	// }
+	if data.CallerPhone != "" && data.Source == constants.INCIDENT_SOURCE.IVR {
+		secHeader(&b, l.SectionCaller)
+		b.WriteString(`<table class="grid">`)
+		row2(&b, l.CallerName, html.EscapeString(data.CallerName), l.CallerMobile, html.EscapeString(data.CallerPhone))
+		b.WriteString(`</table>`)
+	}
 
 	// ── Section: Location ─────────────────────────────────────────────────────
 	hasLocation := data.Latitude != nil || data.Longitude != nil || data.Address != "" ||

@@ -35,7 +35,7 @@ type CallParticipant struct {
 	CallLogID   uuid.UUID  `gorm:"type:uuid;index" json:"call_log_id"`
 	UserID      *uuid.UUID `gorm:"type:uuid;index" json:"user_id,omitempty"`
 	PhoneNumber *string    `gorm:"size:50" json:"phone_number,omitempty"`
-	Role        string     `gorm:"size:20" json:"role"`       // "initiator", "recipient", "participant"
+	Role        string     `gorm:"size:20" json:"role"`        // "initiator", "recipient", "participant"
 	JoinStatus  string     `gorm:"size:20" json:"join_status"` // "invited", "joined", "declined", "missed"
 	JoinedAt    *time.Time `json:"joined_at,omitempty"`
 	LeftAt      *time.Time `json:"left_at,omitempty"`
@@ -108,14 +108,14 @@ type CallParticipantInput struct {
 	Extension   string `json:"extension,omitempty"`
 	PhoneNumber string `json:"phone_number,omitempty"`
 	Role        string `json:"role" validate:"required,oneof=initiator recipient participant"`
-	JoinStatus  string `json:"join_status,omitempty" validate:"omitempty,oneof=invited joined declined missed"`
+	JoinStatus  string `json:"join_status,omitempty" validate:"omitempty,oneof=invited joined declined missed ended completed complete in_call cancelled"`
 }
 
 // CallLogCreateRequest for the admin endpoint
 type CallLogCreateRequest struct {
 	CallUuid     string                 `json:"call_uuid,omitempty" validate:"omitempty,max=36"`
 	CallType     string                 `json:"call_type" validate:"required,oneof=direct group"`
-	Status       string                 `json:"status" validate:"required,oneof=initiated ongoing ended missed"`
+	Status       string                 `json:"status" validate:"required,oneof=initiated ongoing ended missed in_call cancelled completed complete"`
 	StartAt      *time.Time             `json:"start_at,omitempty"`
 	EndAt        *time.Time             `json:"end_at,omitempty"`
 	RecordingUrl string                 `json:"recording_url,omitempty" validate:"omitempty,max=500"`
@@ -127,7 +127,7 @@ type CallLogCreateRequest struct {
 type CallLogUpdateRequest struct {
 	StartAt      *time.Time     `json:"start_at,omitempty"`
 	EndAt        *time.Time     `json:"end_at,omitempty"`
-	Status       string         `json:"status,omitempty" validate:"omitempty,oneof=initiated ongoing ended missed"`
+	Status       string         `json:"status,omitempty" validate:"omitempty,oneof=initiated ongoing ended missed in_call cancelled complete completed"`
 	RecordingUrl string         `json:"recording_url,omitempty" validate:"omitempty,max=500"`
 	Meta         datatypes.JSON `json:"meta,omitempty"`
 }
@@ -166,14 +166,14 @@ type CallLogResponse struct {
 }
 
 type CallLogAttachmentResponse struct {
-	ID        uuid.UUID     `json:"id"`
-	CallLogID uuid.UUID     `json:"call_uuid"`
-	FileName  string        `json:"file_name"`
-	FileSize  int64         `json:"file_size"`
-	MimeType  string        `json:"mime_type"`
-	URL       string        `json:"url,omitempty"`
+	ID         uuid.UUID     `json:"id"`
+	CallLogID  uuid.UUID     `json:"call_uuid"`
+	FileName   string        `json:"file_name"`
+	FileSize   int64         `json:"file_size"`
+	MimeType   string        `json:"mime_type"`
+	URL        string        `json:"url,omitempty"`
 	UploadedBy *UserResponse `json:"uploaded_by,omitempty"`
-	CreatedAt time.Time     `json:"created_at"`
+	CreatedAt  time.Time     `json:"created_at"`
 }
 
 // CallLogListItem is the slim response returned by the listing API.
@@ -193,7 +193,7 @@ type CallLogListItem struct {
 
 // CallLogFilter for filtering call logs
 type CallLogFilter struct {
-	Status        string     `json:"status" validate:"omitempty,oneof=initiated ongoing ended missed"`
+	Status        string     `json:"status" validate:"omitempty,oneof=initiated ongoing ended missed in_call cancelled complete completed"`
 	StartDate     *time.Time `json:"start_date" validate:"omitempty"`
 	EndDate       *time.Time `json:"end_date" validate:"omitempty"`
 	Search        string     `json:"search" validate:"omitempty,max=255"`

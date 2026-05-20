@@ -243,7 +243,7 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		query = query.Where("reporter_id IN ?", filter.ReporterID)
 	}
 	if filter.ReporterPhone != "" {
-		query = query.Where("reporter_id IN (Select id from users where phone = ?)", filter.ReporterPhone)
+		query = query.Where("reporter_phone = ? OR reporter_id IN (Select id from users where phone = ?)", filter.ReporterPhone, filter.ReporterPhone)
 	}
 	if filter.SLABreached != nil {
 		query = query.Where("sla_breached = ?", *filter.SLABreached)
@@ -1643,11 +1643,14 @@ SELECT
     COALESCE(cl.name_ar, '')    AS classification_name_ar,
     COALESCE(loc.name, '')      AS location_name,
     COALESCE(loc.name_ar, '')   AS location_name_ar,
-    COALESCE(rep.username, '') AS reporter_username,
-    COALESCE(rep.first_name, '') AS reporter_first_name,
-    COALESCE(rep.last_name, '')  AS reporter_last_name,
-    COALESCE(rep.email, '')  AS reporter_email,
-    COALESCE(rep.phone, '')  AS reporter_phone,
+    COALESCE(creator.username, '') AS creator_username,
+    COALESCE(creator.first_name, '') AS creator_first_name,
+    COALESCE(creator.last_name, '')  AS creator_last_name,
+	CONCAT_WS(' ', creator.first_name, creator.last_name) AS creator_full_name,
+    COALESCE(creator.email, '')  AS creator_email,
+    COALESCE(creator.phone, '')  AS creator_phone,
+    reporter_phone AS caller_phone,
+    reporter_name AS caller_name,
     COALESCE(asn.first_name, '') AS assignee_first_name,
     COALESCE(asn.last_name, '')  AS assignee_last_name,
     COALESCE(dep.name, '')       AS department_name,
@@ -1661,7 +1664,7 @@ FROM incidents i
 LEFT JOIN workflow_states ws ON ws.id  = i.current_state_id
 LEFT JOIN classifications cl  ON cl.id  = i.classification_id
 LEFT JOIN locations loc        ON loc.id = i.location_id
-LEFT JOIN users rep            ON rep.id = i.reporter_id
+LEFT JOIN users creator            ON creator.id = i.reporter_id
 LEFT JOIN users asn            ON asn.id = i.assignee_id
 LEFT JOIN departments dep      ON dep.id = i.department_id
 WHERE i.id = ?`
