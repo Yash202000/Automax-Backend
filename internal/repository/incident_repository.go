@@ -94,6 +94,13 @@ type IncidentRepository interface {
 
 	// Complaint-specific
 	IncrementEvaluationCount(ctx context.Context, id uuid.UUID) error
+
+	// Report section queries
+	GetReportIncidentData(ctx context.Context, incidentID uuid.UUID) (*models.IncidentReportData, error)
+	GetReportLookupValues(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentReportLookupValue, error)
+	GetReportTransitions(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentReportTransition, error)
+	GetReportAttachments(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentReportAttachment, error)
+	GetReportRevisions(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentReportRevision, error)
 }
 
 type incidentRepository struct {
@@ -234,6 +241,9 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	}
 	if len(filter.ReporterID) != 0 {
 		query = query.Where("reporter_id IN ?", filter.ReporterID)
+	}
+	if filter.ReporterPhone != "" {
+		query = query.Where("reporter_id IN (Select id from users where phone = ?)", filter.ReporterPhone)
 	}
 	if filter.SLABreached != nil {
 		query = query.Where("sla_breached = ?", *filter.SLABreached)
@@ -1523,4 +1533,157 @@ func (r *incidentRepository) GetNewlyBreachedIncidents(ctx context.Context) ([]m
 		Preload("CurrentState").
 		Find(&incidents).Error
 	return incidents, err
+}
+
+func (r *incidentRepository) GetReportTransitions(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentReportTransition, error) {
+	var results []models.IncidentReportTransition
+	sql := `
+SELECT
+    ith.id, ith.transition_id, ith.performed_by_id,
+    ith.comment, ith.old_values, ith.new_values, ith.transitioned_at,
+    COALESCE(u.first_name, '')      AS performed_by_first_name,
+    COALESCE(u.last_name, '')       AS performed_by_last_name,
+    COALESCE(wt.name, '')           AS transition_name,
+    COALESCE(wt.name_ar, '')        AS transition_name_ar,
+    COALESCE(wt.code, '')           AS transition_code,
+    ith.from_state_id,
+    COALESCE(fs.name, '')           AS from_state_name,
+    COALESCE(fs.name_ar, '')        AS from_state_name_ar,
+    COALESCE(fs.code, '')           AS from_state_code,
+    COALESCE(fs.color, '')          AS from_state_color,
+    COALESCE(fs.state_type, '')     AS from_state_type,
+    ith.to_state_id,
+    COALESCE(ts.name, '')           AS to_state_name,
+    COALESCE(ts.name_ar, '')        AS to_state_name_ar,
+    COALESCE(ts.code, '')           AS to_state_code,
+    COALESCE(ts.color, '')          AS to_state_color,
+    COALESCE(ts.state_type, '')     AS to_state_type,
+    COALESCE(ifb.comment, '')       AS feedback_comment
+FROM incident_transition_histories ith
+LEFT JOIN workflow_transitions wt  ON wt.id  = ith.transition_id
+LEFT JOIN workflow_states fs       ON fs.id  = ith.from_state_id
+LEFT JOIN workflow_states ts       ON ts.id  = ith.to_state_id
+LEFT JOIN users u                  ON u.id   = ith.performed_by_id
+LEFT JOIN incident_feedbacks ifb   ON ifb.transition_history_id = ith.id
+WHERE ith.incident_id = ?
+ORDER BY ith.transitioned_at ASC`
+	err := r.db.WithContext(ctx).Raw(sql, incidentID).Scan(&results).Error
+	return results, err
+}
+
+func (r *incidentRepository) GetReportAttachments(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentReportAttachment, error) {
+	var results []models.IncidentReportAttachment
+	sql := `
+SELECT
+    ia.id, ia.incident_id, ia.transition_history_id,
+    ia.file_name, ia.file_size, ia.mime_type, ia.file_path,
+    ia.uploaded_by_id, ia.created_at, ia.deleted_at,
+    COALESCE(u.first_name, '')  AS uploaded_by_first_name,
+    COALESCE(u.last_name, '')   AS uploaded_by_last_name,
+    wt.name                     AS transition_name,
+    wt.name_ar                  AS transition_name_ar,
+    fs.name                     AS from_state_name,
+    fs.name_ar                  AS from_state_name_ar,
+    ts.name                     AS to_state_name,
+    ts.name_ar                  AS to_state_name_ar
+FROM incident_attachments ia
+LEFT JOIN users u                            ON u.id  = ia.uploaded_by_id
+LEFT JOIN incident_transition_histories ith  ON ith.id = ia.transition_history_id
+LEFT JOIN workflow_transitions wt            ON wt.id  = ith.transition_id
+LEFT JOIN workflow_states fs                 ON fs.id  = ith.from_state_id
+LEFT JOIN workflow_states ts                 ON ts.id  = ith.to_state_id
+WHERE ia.incident_id = ?
+ORDER BY ia.created_at ASC`
+	err := r.db.WithContext(ctx).Raw(sql, incidentID).Scan(&results).Error
+	return results, err
+}
+
+func (r *incidentRepository) GetReportRevisions(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentReportRevision, error) {
+	var results []models.IncidentReportRevision
+	sql := `
+SELECT
+    ir.id, ir.incident_id, ir.transition_history_id,
+    ir.comment_id, ir.attachment_id,
+    ir.revision_number, ir.action_type, ir.action_description,
+    ir.changes, ir.performed_by_id,
+    COALESCE(ir.performed_by_roles, '') AS performed_by_roles,
+    COALESCE(ir.performed_by_phone, '') AS performed_by_phone,
+    ir.created_at,
+    COALESCE(u.first_name, '') AS performed_by_first_name,
+    COALESCE(u.last_name, '')  AS performed_by_last_name
+FROM incident_revisions ir
+LEFT JOIN users u ON u.id = ir.performed_by_id
+WHERE ir.incident_id = ?
+ORDER BY ir.created_at ASC`
+	err := r.db.WithContext(ctx).Raw(sql, incidentID).Scan(&results).Error
+	return results, err
+}
+
+func (r *incidentRepository) GetReportIncidentData(ctx context.Context, incidentID uuid.UUID) (*models.IncidentReportData, error) {
+	var result models.IncidentReportData
+	sql := `
+SELECT
+    i.id, i.incident_number, i.title, i.description,
+    i.channel, i.source, i.record_type,
+    i.created_at, i.updated_at,
+    i.sla_breached, i.sla_deadline,
+    i.due_date, i.resolved_at, i.closed_at,
+    i.classification_id, i.location_id,
+    COALESCE(i.created_by_mobile, '') AS created_by_mobile,
+    COALESCE(i.created_by_name, '')   AS created_by_name,
+    i.latitude, i.longitude,
+    COALESCE(i.address, '')     AS address,
+    COALESCE(i.city, '')        AS city,
+    COALESCE(i.state, '')       AS state,
+    COALESCE(i.country, '')     AS country,
+    COALESCE(i.postal_code, '') AS postal_code,
+    COALESCE(ws.name, '')       AS status_name,
+    COALESCE(ws.name_ar, '')    AS status_name_ar,
+    COALESCE(cl.name, '')       AS classification_name,
+    COALESCE(cl.name_ar, '')    AS classification_name_ar,
+    COALESCE(loc.name, '')      AS location_name,
+    COALESCE(loc.name_ar, '')   AS location_name_ar,
+    COALESCE(rep.username, '') AS reporter_username,
+    COALESCE(rep.first_name, '') AS reporter_first_name,
+    COALESCE(rep.last_name, '')  AS reporter_last_name,
+    COALESCE(rep.email, '')  AS reporter_email,
+    COALESCE(rep.phone, '')  AS reporter_phone,
+    COALESCE(asn.first_name, '') AS assignee_first_name,
+    COALESCE(asn.last_name, '')  AS assignee_last_name,
+    COALESCE(dep.name, '')       AS department_name,
+    COALESCE((
+        SELECT string_agg(u2.first_name || ' ' || u2.last_name, ', ')
+        FROM incident_assignees ia2
+        JOIN users u2 ON u2.id = ia2.user_id
+        WHERE ia2.incident_id = i.id
+    ), '') AS assignees_name
+FROM incidents i
+LEFT JOIN workflow_states ws ON ws.id  = i.current_state_id
+LEFT JOIN classifications cl  ON cl.id  = i.classification_id
+LEFT JOIN locations loc        ON loc.id = i.location_id
+LEFT JOIN users rep            ON rep.id = i.reporter_id
+LEFT JOIN users asn            ON asn.id = i.assignee_id
+LEFT JOIN departments dep      ON dep.id = i.department_id
+WHERE i.id = ?`
+	err := r.db.WithContext(ctx).Raw(sql, incidentID).Scan(&result).Error
+	return &result, err
+}
+
+func (r *incidentRepository) GetReportLookupValues(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentReportLookupValue, error) {
+	var results []models.IncidentReportLookupValue
+	sql := `
+SELECT
+    COALESCE(lc.id, '00000000-0000-0000-0000-000000000000'::uuid) AS category_id,
+    COALESCE(lc.name, lv.code)  AS category_name,
+    COALESCE(lc.name_ar, '')    AS category_name_ar,
+    lv.code,
+    COALESCE(lv.name, '')       AS name,
+    COALESCE(lv.name_ar, '')    AS name_ar
+FROM incident_lookup_values ilv
+JOIN  lookup_values lv     ON lv.id  = ilv.lookup_value_id
+LEFT JOIN lookup_categories lc ON lc.id = lv.category_id
+WHERE ilv.incident_id = ?
+ORDER BY lc.name, lv.sort_order`
+	err := r.db.WithContext(ctx).Raw(sql, incidentID).Scan(&results).Error
+	return results, err
 }
