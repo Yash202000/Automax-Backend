@@ -670,7 +670,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 
 		var sent []string
 		if req.ReporterPhone != "" {
-			smsBody := fmt.Sprintf("Your incident %s has been created. Update Incident details: %s", incident.IncidentNumber, smsLink)
+			smsBody := fmt.Sprintf("Dear Citizen, please provide additional details for your reported incident (%s) using the following secure link: %s", incident.IncidentNumber, smsLink)
 			_, err := s.notificationService.SendNotification(
 				ctx,
 				"sms",
