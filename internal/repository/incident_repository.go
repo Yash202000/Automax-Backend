@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/models"
@@ -243,7 +244,18 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		query = query.Where("reporter_id IN ?", filter.ReporterID)
 	}
 	if filter.ReporterPhone != "" {
-		query = query.Where("reporter_phone = ? OR reporter_id IN (Select id from users where phone = ? or extension = ?)", filter.ReporterPhone, filter.ReporterPhone, filter.ReporterPhone)
+		phone := filter.ReporterPhone
+		phoneWithPlus := "+" + phone
+		if strings.HasPrefix(phone, "+") {
+			phoneWithPlus = phone
+			phone = strings.TrimPrefix(phone, "+")
+		}
+		query = query.Where(
+			"reporter_phone IN (?, ?) OR reporter_id IN (SELECT id FROM users WHERE phone IN (?, ?) OR extension IN (?, ?))",
+			phone, phoneWithPlus,
+			phone, phoneWithPlus,
+			phone, phoneWithPlus,
+		)
 	}
 	if filter.SLABreached != nil {
 		query = query.Where("sla_breached = ?", *filter.SLABreached)
