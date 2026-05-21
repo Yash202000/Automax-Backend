@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 
@@ -51,6 +52,7 @@ type UserRepository interface {
 	ExistsByPhone(ctx context.Context, phone string, excludeUserID uuid.UUID) (bool, error)
 	ExistsByNationalID(ctx context.Context, nationalID string) (bool, error)
 	FindByNationalIDForLogin(ctx context.Context, nationalID string) (*models.User, error)
+	ExistsByPhoneAndName(ctx context.Context, phone string, name ...string) (bool, error)
 }
 
 type userRepository struct {
@@ -702,6 +704,31 @@ func (r *userRepository) ExistsByPhone(ctx context.Context, phone string, exclud
 		Count(&count).Error
 
 	return count > 0, err
+}
+
+func (r *userRepository) ExistsByPhoneAndName(ctx context.Context, phone string, name ...string) (bool, error) {
+	query := r.db.WithContext(ctx).Model(&models.User{})
+
+	query = query.Where("phone = ?", phone)
+
+	if len(name) > 0 && name[0] != "" {
+		query = query.Where("username = ?", name[0])
+	}
+
+	// Use Select("1") + Limit(1) instead of Count — faster, stops at first match
+	var user models.User
+	err := query.Select("id").Limit(1).
+		Where("is_active = ?", true).
+		Where("deleted_at IS NULL").
+		First(&user).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	return true, nil
 }
 
 func (r *userRepository) ExistsByNationalID(ctx context.Context, nationalID string) (bool, error) {

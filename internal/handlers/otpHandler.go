@@ -5,29 +5,51 @@ import (
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
+	"github.com/automax/backend/pkg/validation"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 )
 
 type OTPHandler struct {
-	otpService *services.OTPService
+	otpService  *services.OTPService
+	userService services.UserService
 }
 
-func NewOTPHandler(otpService *services.OTPService) *OTPHandler {
+func NewOTPHandler(otpService *services.OTPService,
+	userService services.UserService,
+) *OTPHandler {
 	return &OTPHandler{
-		otpService: otpService,
+		otpService:  otpService,
+		userService: userService,
 	}
 }
 
 func (h *OTPHandler) SendOTP(c *fiber.Ctx) error {
 
 	var req struct {
-		Phone   string `json:"phone"`
-		Channel string `json:"channel"`
+		Phone   string `json:"phone"   validate:"required,e164|numeric,max=20"`
+		Name    string `json:"name"    validate:"omitempty,min=3,max=100"`
+		Channel string `json:"channel" validate:"required,oneof=sms whatsapp voice email wa"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, 400, "invalid request")
+	}
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	exist, err := h.userService.ExistsByPhoneAndName(c.UserContext(), req.Phone, req.Name)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	if !exist {
+		return utils.ErrorResponse(c, 400, "no user found with this phone number")
 	}
 
 	// Get userID from token

@@ -206,7 +206,7 @@ func main() {
 	notificationHandler := handlers.NewNotificationHandler(notificationService, minioStorage)
 	templateHandler := handlers.NewNotificationTemplateHandler(notificationTemplateService)
 	attachmentHandler := handlers.NewAttachmentHandler(incidentService, notificationService, minioStorage)
-	otpHandler := handlers.NewOTPHandler(otpService)
+	otpHandler := handlers.NewOTPHandler(otpService, userService)
 	escalationHandler := handlers.NewEscalationHandler(escalationService)
 	escalationGroupHandler := handlers.NewEscalationGroupHandler(escalationGroupService)
 	escalationPolicyHandler := handlers.NewEscalationPolicyHandler(escalationPolicyService, userRepo, departmentRepo)
