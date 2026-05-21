@@ -717,7 +717,10 @@ func (r *userRepository) ExistsByPhoneAndName(ctx context.Context, phone string,
 
 	// Use Select("1") + Limit(1) instead of Count — faster, stops at first match
 	var user models.User
-	err := query.Select("id").Limit(1).First(&user).Error
+	err := query.Select("id").Limit(1).
+		Where("is_active = ?", true).
+		Where("deleted_at IS NULL").
+		First(&user).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return false, nil
