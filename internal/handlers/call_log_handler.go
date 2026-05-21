@@ -298,7 +298,7 @@ func (h *CallLogHandler) EndCall(c *fiber.Ctx) error {
 
 	var req struct {
 		EndAt  *time.Time `json:"end_at,omitempty"`
-		Status string     `json:"status" validate:"required,oneof=ended missed"`
+		Status string     `json:"status" validate:"required,oneof=initiated ongoing ended missed in_call cancelled complete completed"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
