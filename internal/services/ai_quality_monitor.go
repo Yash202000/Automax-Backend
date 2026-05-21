@@ -172,6 +172,7 @@ type aiQualityAPIResponse struct {
 	// Legacy / shared fields
 	ChangeSummary    string           `json:"change_summary"`
 	ResolutionStatus string           `json:"resolution_status"`
+	DistanceMeters   float64          `json:"distance_meters"`
 	Confidence       float64          `json:"confidence"`
 	ReasoningPoints  []string         `json:"reasoning_points"`
 	RiskFlags        []string         `json:"risk_flags"`
@@ -265,6 +266,22 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 
 	writer.Close() // must close before reading body
 
+	// Log the full payload summary before sending.
+	log.Printf("[AIQualityMonitor] incident=%s === PAYLOAD SUMMARY ===", incident.IncidentNumber)
+	log.Printf("[AIQualityMonitor]   user_comment      = %q", truncate(userComment, 200))
+	log.Printf("[AIQualityMonitor]   resolver_comment   = %q", truncate(resolverComment, 200))
+	log.Printf("[AIQualityMonitor]   before_coordinates = %q", beforeCoords)
+	log.Printf("[AIQualityMonitor]   after_coordinates  = %q", afterCoords)
+	log.Printf("[AIQualityMonitor]   before_image: id=%s name=%s mime=%s path=%s size=%d",
+		beforeAtt.ID, beforeAtt.FileName, beforeAtt.MimeType, beforeAtt.FilePath, beforeAtt.FileSize)
+	if len(imageAttachments) >= 2 {
+		afterAtt := imageAttachments[len(imageAttachments)-1]
+		log.Printf("[AIQualityMonitor]   after_image:  id=%s name=%s mime=%s path=%s size=%d",
+			afterAtt.ID, afterAtt.FileName, afterAtt.MimeType, afterAtt.FilePath, afterAtt.FileSize)
+	}
+	log.Printf("[AIQualityMonitor]   total_payload_bytes = %d", body.Len())
+	log.Printf("[AIQualityMonitor] === END PAYLOAD ===")
+
 	// Call the AI API.
 	log.Printf("[AIQualityMonitor] incident=%s calling API endpoint: %s", incident.IncidentNumber, m.cfg.APIEndpoint)
 	apiResp, rawBody, err := m.callAIAPI(ctx, body, writer.FormDataContentType())
@@ -298,18 +315,12 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 			incident.IncidentNumber, apiResp.CoordinatesCheck.Note)
 	}
 
-	// Resolve distance_meters (null in API means 0 for storage).
-	distanceMeters := 0.0
-	if apiResp.CoordinatesCheck.DistanceMeters != nil {
-		distanceMeters = *apiResp.CoordinatesCheck.DistanceMeters
-	}
-
 	// Persist AIQualityFeedback.
 	feedback := &models.AIQualityFeedback{
 		IncidentID:       incident.ID,
 		ChangedSummary:   apiResp.ChangeSummary,
 		ResolutionStatus: apiResp.ResolutionStatus,
-		DistanceMeters:   distanceMeters,
+		DistanceMeters:   apiResp.DistanceMeters,
 		RawResponse:      rawBody,
 	}
 	if err := m.feedbackRepo.Create(ctx, feedback); err != nil {
@@ -333,7 +344,7 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 	}
 
 	log.Printf("[AIQualityMonitor] incident=%s DONE — status=%q distance=%.4fm",
-		incident.IncidentNumber, apiResp.ResolutionStatus, distanceMeters)
+		incident.IncidentNumber, apiResp.ResolutionStatus, apiResp.DistanceMeters)
 	return nil
 }
 
