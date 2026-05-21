@@ -320,9 +320,9 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 	updates := map[string]interface{}{
 		"is_ai_verified": true,
 	}
-	if apiResp.ChangeSummary != "" {
-		updates["description"] = apiResp.ChangeSummary
-	}
+	// NOTE: ChangeSummary is already stored in the AIQualityFeedback record.
+	// Do NOT write it to the incident's description — that would overwrite
+	// the original reporter-provided description.
 	if err := m.incidentRepo.UpdateFields(ctx, incident.ID, updates); err != nil {
 		// Non-fatal — the feedback record was already persisted.
 		log.Printf("[AIQualityMonitor] incident=%s WARNING: could not update incident fields: %v",
