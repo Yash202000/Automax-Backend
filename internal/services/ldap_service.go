@@ -25,6 +25,8 @@ type LDAPService interface {
 	SyncUser(ctx context.Context, ldapUser *LDAPUserInfo) (*models.User, error)
 	// TestConnection tests the LDAP connection
 	TestConnection(ctx context.Context) error
+	// FetchUserList retrieves all users from AD with pagination
+	FetchUserList(ctx context.Context) ([]LDAPUserListItem, error)
 	// Close closes the LDAP connection pool
 	Close()
 }
@@ -54,6 +56,15 @@ type LDAPGroupInfo struct {
 	Name        string
 	Description string
 	Members     []string
+}
+
+// LDAPUserListItem contains summary info for listing AD users
+type LDAPUserListItem struct {
+	DN          string `json:"dn"`
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
+	UPN         string `json:"upn"`
+	Email       string `json:"email"`
 }
 
 // ldapService implements LDAPService
@@ -120,12 +131,14 @@ func (p *ldapConnectionPool) dial() (*ldap.Conn, error) {
 	var conn *ldap.Conn
 	var err error
 
+	// Build TLS config
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: p.config.InsecureSkipVerify,
+	}
+
 	// Check if using LDAPS
 	if strings.HasPrefix(p.config.URL, "ldaps://") {
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: p.config.InsecureSkipVerify,
-			ServerName:         strings.Split(strings.TrimPrefix(p.config.URL, "ldaps://"), ":")[0],
-		}
+		tlsConfig.ServerName = strings.Split(strings.TrimPrefix(p.config.URL, "ldaps://"), ":")[0]
 		conn, err = ldap.DialTLS("tcp", strings.TrimPrefix(p.config.URL, "ldaps://"), tlsConfig)
 	} else {
 		conn, err = ldap.Dial("tcp", strings.TrimPrefix(p.config.URL, "ldap://"))
@@ -137,6 +150,16 @@ func (p *ldapConnectionPool) dial() (*ldap.Conn, error) {
 
 	// Set timeout
 	conn.SetTimeout(dialTimeout)
+
+	// If using plain LDAP, upgrade to StartTLS (required by most AD servers)
+	if !strings.HasPrefix(p.config.URL, "ldaps://") {
+		host := strings.Split(strings.TrimPrefix(p.config.URL, "ldap://"), ":")[0]
+		tlsConfig.ServerName = host
+		if err := conn.StartTLS(tlsConfig); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("failed to start TLS: %w", err)
+		}
+	}
 
 	// If bind credentials are provided, perform bind
 	if p.config.BindDN != "" && p.config.BindPassword != "" {
@@ -191,6 +214,59 @@ func (p *ldapConnectionPool) Close() {
 	}
 }
 
+// FetchUserList retrieves all users from Active Directory
+func (s *ldapService) FetchUserList(ctx context.Context) ([]LDAPUserListItem, error) {
+	if s.pool == nil {
+		return nil, errors.New("LDAP is not enabled")
+	}
+
+	conn, err := s.pool.getConnection()
+	if err != nil {
+		return nil, err
+	}
+	defer s.pool.releaseConnection()
+
+	filter := "(&(objectCategory=person)(objectClass=user))"
+	attrs := []string{
+		"dn",
+		"sAMAccountName",
+		"displayName",
+		"userPrincipalName",
+		"mail",
+	}
+
+	searchRequest := ldap.NewSearchRequest(
+		s.config.UserSearchBase,
+		ldap.ScopeWholeSubtree,
+		ldap.NeverDerefAliases,
+		0,
+		int(requestTimeout.Seconds()),
+		false,
+		filter,
+		attrs,
+		nil,
+	)
+
+	result, err := conn.Search(searchRequest)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search AD users: %w", err)
+	}
+
+	users := make([]LDAPUserListItem, 0, len(result.Entries))
+	for _, entry := range result.Entries {
+		user := LDAPUserListItem{
+			DN:          entry.DN,
+			Username:    entry.GetAttributeValue("sAMAccountName"),
+			DisplayName: entry.GetAttributeValue("displayName"),
+			UPN:         entry.GetAttributeValue("userPrincipalName"),
+			Email:       entry.GetAttributeValue("mail"),
+		}
+		users = append(users, user)
+	}
+
+	return users, nil
+}
+
 // Authenticate authenticates a user against LDAP/AD
 func (s *ldapService) Authenticate(ctx context.Context, username, password string) (*LDAPUserInfo, error) {
 	if s.pool == nil {
@@ -205,11 +281,11 @@ func (s *ldapService) Authenticate(ctx context.Context, username, password strin
 
 	// Create a new connection for authentication (don't use pooled connection for user bind)
 	var authConn *ldap.Conn
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: s.config.InsecureSkipVerify,
+	}
 	if strings.HasPrefix(s.config.URL, "ldaps://") {
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: s.config.InsecureSkipVerify,
-			ServerName:         strings.Split(strings.TrimPrefix(s.config.URL, "ldaps://"), ":")[0],
-		}
+		tlsConfig.ServerName = strings.Split(strings.TrimPrefix(s.config.URL, "ldaps://"), ":")[0]
 		authConn, err = ldap.DialTLS("tcp", strings.TrimPrefix(s.config.URL, "ldaps://"), tlsConfig)
 	} else {
 		authConn, err = ldap.Dial("tcp", strings.TrimPrefix(s.config.URL, "ldap://"))
@@ -219,6 +295,15 @@ func (s *ldapService) Authenticate(ctx context.Context, username, password strin
 		return nil, fmt.Errorf("failed to connect for authentication: %w", err)
 	}
 	defer authConn.Close()
+
+	// Upgrade to StartTLS for plain LDAP connections
+	if !strings.HasPrefix(s.config.URL, "ldaps://") {
+		host := strings.Split(strings.TrimPrefix(s.config.URL, "ldap://"), ":")[0]
+		tlsConfig.ServerName = host
+		if err := authConn.StartTLS(tlsConfig); err != nil {
+			return nil, fmt.Errorf("failed to start TLS for authentication: %w", err)
+		}
+	}
 
 	// Attempt to bind with user credentials
 	if err := authConn.Bind(userInfo.DN, password); err != nil {
