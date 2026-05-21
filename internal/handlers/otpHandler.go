@@ -43,12 +43,12 @@ func (h *OTPHandler) SendOTP(c *fiber.Ctx) error {
 		})
 	}
 
-	response, err := h.userService.ValidateMobileForLogin(c.UserContext(), req.Phone)
+	exist, err := h.userService.ExistsByPhoneAndName(c.UserContext(), req.Phone, req.Name)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	if response == nil {
+	if !exist {
 		return utils.ErrorResponse(c, 400, "no user found with this phone number")
 	}
 

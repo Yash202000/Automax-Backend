@@ -523,7 +523,7 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 	secHeader(&b, l.SectionIncident)
 	b.WriteString(`<table class="grid">`)
 	row2(&b, l.IncidentNo, html.EscapeString(data.IncidentNumber), l.Date, html.EscapeString(ts(data.CreatedAt)))
-	row2(&b, l.Status, html.EscapeString(statusName), l.Channel, html.EscapeString(data.Channel))
+	row2(&b, l.Date+" ("+l.Status+")", html.EscapeString(ts(data.CreatedAt)), l.Status, html.EscapeString(statusName))
 	row2(&b, l.Source, html.EscapeString(data.Source), l.RecordTypeLbl, html.EscapeString(data.RecordType))
 	row1(&b, l.Title2, html.EscapeString(data.Title))
 
@@ -575,7 +575,6 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 			row1(&b, l.ClosedAt, html.EscapeString(tsp(data.ClosedAt)))
 		}
 	}
-	row2(&b, l.Date+" ("+l.Status+")", html.EscapeString(ts(data.UpdatedAt)), "", "")
 	b.WriteString(`</table>`)
 
 	// ── Section: Submitter ────────────────────────────────────────────────────
