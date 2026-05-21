@@ -85,6 +85,8 @@ type reportLabels struct {
 	AttSize          string
 	AttUploadedBy    string
 	AttUploadedAt    string
+	AttDeleted       string
+	AttDeletedAt     string
 	PrintDate        string
 	Yes              string
 	No               string
@@ -152,6 +154,8 @@ var labelsAR = reportLabels{
 	AttSize:          "الحجم",
 	AttUploadedBy:    "رُفع بواسطة",
 	AttUploadedAt:    "تاريخ الرفع",
+	AttDeleted:       "تم حذف هذا الملف",
+	AttDeletedAt:     "تاريخ الحذف",
 	PrintDate:        "تاريخ الطباعة",
 	Yes:              "نعم",
 	No:               "لا",
@@ -219,6 +223,8 @@ var labelsEN = reportLabels{
 	AttSize:          "Size",
 	AttUploadedBy:    "Uploaded By",
 	AttUploadedAt:    "Uploaded At",
+	AttDeleted:       "This file has been deleted",
+	AttDeletedAt:     "Deleted At",
 	PrintDate:        "Print Date",
 	Yes:              "Yes",
 	No:               "No",
@@ -436,6 +442,7 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 .att-img{display:block;max-width:100%%;max-height:280px;object-fit:contain;margin:0 auto;padding:6px}
 .att-meta{display:flex;flex-wrap:wrap;gap:12px;padding:5px 8px;font-size:8.5pt;background:#f0f8fc;border-top:1px solid #c8dce4}
 .att-card:nth-child(even){background:#f7fbfd}
+.att-deleted{padding:10px 12px;color:#c0392b;background:#fdf3f2;border:1px dashed #c0392b;margin:8px;border-radius:4px;font-size:9pt;text-align:center;font-weight:bold}
 .badge-breached{color:#fff;background:#c0392b;padding:1px 5px;border-radius:3px;font-size:8pt}
 .badge-ok{color:#fff;background:#27ae60;padding:1px 5px;border-radius:3px;font-size:8pt}
 .footer{margin-top:14px;display:flex;justify-content:space-between;font-size:8pt;color:#888;border-top:1px solid #c8dce4;padding-top:5px}
@@ -586,7 +593,7 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 	b.WriteString(`</table>`)
 
 	// ── Section: Caller Details (IVR / SMS-Link only) ─────────────────────────
-	if data.CallerPhone != "" && data.Source == constants.INCIDENT_SOURCE.IVR {
+	if data.CallerPhone != "" {
 		secHeader(&b, l.SectionCaller)
 		b.WriteString(`<table class="grid">`)
 		row2(&b, l.CallerName, html.EscapeString(data.CallerName), l.CallerMobile, html.EscapeString(data.CallerPhone))
@@ -741,8 +748,9 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 			b.WriteString(attTransitionLabel)
 			fmt.Fprintf(&b, `<div class="att-name">%s</div>`, html.EscapeString(att.FileName))
 
-			// embed image as base64 data URI
-			if strings.HasPrefix(att.MimeType, "image/") && att.FilePath != "" {
+			if att.DeletedAt != nil {
+				fmt.Fprintf(&b, `<div class="att-deleted">&#x1F5D1; %s</div>`, html.EscapeString(l.AttDeleted))
+			} else if strings.HasPrefix(att.MimeType, "image/") && att.FilePath != "" {
 				if fr, ferr := h.storage.GetFile(c.UserContext(), att.FilePath); ferr == nil {
 					if imgData, rerr := io.ReadAll(fr); rerr == nil && len(imgData) > 0 {
 						encoded := base64.StdEncoding.EncodeToString(imgData)
@@ -759,12 +767,17 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 				sizeStr = fmt.Sprintf("%d bytes", att.FileSize)
 			}
 			fmt.Fprintf(&b,
-				`<div class="att-meta"><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span></div>`,
+				`<div class="att-meta"><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span>`,
 				html.EscapeString(l.AttType), html.EscapeString(att.MimeType),
 				html.EscapeString(l.AttSize), sizeStr,
 				html.EscapeString(l.AttUploadedBy), html.EscapeString(uploadedBy),
 				html.EscapeString(l.AttUploadedAt), html.EscapeString(ts(att.CreatedAt)),
 			)
+			if att.DeletedAt != nil {
+				fmt.Fprintf(&b, `<span style="color:#c0392b">%s: <b>%s</b></span>`,
+					html.EscapeString(l.AttDeletedAt), html.EscapeString(ts(*att.DeletedAt)))
+			}
+			b.WriteString(`</div>`)
 			b.WriteString(`</div>`)
 		}
 		b.WriteString(`</div>`)
