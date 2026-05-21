@@ -567,12 +567,30 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 	if data.Description != "" {
 		row1(&b, l.Description, html.EscapeString(data.Description))
 	}
-	row2(&b, l.SLABreached, fmt.Sprintf(`<span class="%s">%s</span>`, slaClass, html.EscapeString(slaStatus)),
-		l.SLADeadline, html.EscapeString(tsp(data.SLADeadline)))
-	if data.DueDate != nil || data.ResolvedAt != nil || data.ClosedAt != nil {
-		row2(&b, l.DueDate, html.EscapeString(tsp(data.DueDate)), l.ResolvedAt, html.EscapeString(tsp(data.ResolvedAt)))
-		if data.ClosedAt != nil {
-			row1(&b, l.ClosedAt, html.EscapeString(tsp(data.ClosedAt)))
+	if data.SLADeadline != nil {
+		row2(&b, l.SLABreached, fmt.Sprintf(`<span class="%s">%s</span>`, slaClass, html.EscapeString(slaStatus)),
+			l.SLADeadline, html.EscapeString(tsp(data.SLADeadline)))
+	} else {
+		row1(&b, l.SLABreached, fmt.Sprintf(`<span class="%s">%s</span>`, slaClass, html.EscapeString(slaStatus)))
+	}
+	var dateFields [][2]string
+
+	if data.DueDate != nil {
+		dateFields = append(dateFields, [2]string{l.DueDate, html.EscapeString(tsp(data.DueDate))})
+	}
+	if data.ResolvedAt != nil {
+		dateFields = append(dateFields, [2]string{l.ResolvedAt, html.EscapeString(tsp(data.ResolvedAt))})
+	}
+	if data.ClosedAt != nil {
+		dateFields = append(dateFields, [2]string{l.ClosedAt, html.EscapeString(tsp(data.ClosedAt))})
+	}
+
+	// pair them: row2 for pairs, row1 for leftover
+	for i := 0; i < len(dateFields); i += 2 {
+		if i+1 < len(dateFields) {
+			row2(&b, dateFields[i][0], dateFields[i][1], dateFields[i+1][0], dateFields[i+1][1])
+		} else {
+			row1(&b, dateFields[i][0], dateFields[i][1])
 		}
 	}
 	b.WriteString(`</table>`)
