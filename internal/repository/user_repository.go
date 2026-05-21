@@ -712,7 +712,7 @@ func (r *userRepository) ExistsByPhoneAndName(ctx context.Context, phone string,
 	query = query.Where("phone = ?", phone)
 
 	if len(name) > 0 && name[0] != "" {
-		query = query.Where("name = ?", name[0])
+		query = query.Where("username = ?", name[0])
 	}
 
 	// Use Select("1") + Limit(1) instead of Count — faster, stops at first match
