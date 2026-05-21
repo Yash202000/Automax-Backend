@@ -261,6 +261,9 @@ func Migrate(db *gorm.DB) error {
 	db.Exec("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS partial_close_duration VARCHAR(100) NOT NULL DEFAULT ''")
 	db.Exec("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS partial_close_notified BOOLEAN NOT NULL DEFAULT false")
 
+	// AD/LDAP user flag — idempotent
+	db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_ad_user BOOLEAN NOT NULL DEFAULT false")
+
 	log.Println("Database migrations completed")
 	return nil
 }

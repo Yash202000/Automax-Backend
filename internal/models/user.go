@@ -36,6 +36,7 @@ type User struct {
 	Roles           []Role           `gorm:"many2many:user_roles;" json:"roles,omitempty"`
 	IsActive        bool             `gorm:"default:true" json:"is_active"`
 	IsSuperAdmin    bool             `gorm:"default:false" json:"is_super_admin"`
+	IsADUser        bool             `gorm:"default:false" json:"is_ad_user"`
 	Extension       string           `gorm:"size:20" json:"extension"`
 	CallStatus      CallStatus       `gorm:"type:user_call_status;default:offline" json:"call_status"`
 	LastLoginAt     *time.Time       `json:"last_login_at"`
@@ -206,6 +207,7 @@ type UserResponse struct {
 	Permissions     []string                 `json:"permissions,omitempty"`
 	IsActive        bool                     `json:"is_active"`
 	IsSuperAdmin    bool                     `json:"is_super_admin"`
+	IsADUser        bool                     `json:"is_ad_user"`
 	Extension       string                   `json:"extension"`
 	CallStatus      string                   `json:"call_status"`
 	LastLoginAt     *time.Time               `json:"last_login_at"`
@@ -248,6 +250,7 @@ type UserLoginResponse struct {
 	Permissions    []string            `json:"permissions,omitempty"`
 	IsActive       bool                `json:"is_active"`
 	IsSuperAdmin   bool                `json:"is_super_admin"`
+	IsADUser       bool                `json:"is_ad_user"`
 	Extension      string              `json:"extension"`
 	CallStatus     string              `json:"call_status"`
 	LastLoginAt    *time.Time          `json:"last_login_at"`
@@ -313,6 +316,7 @@ func ToUserLoginResponse(user *User) UserLoginResponse {
 		LocationID:     user.LocationID,
 		IsActive:       user.IsActive,
 		IsSuperAdmin:   user.IsSuperAdmin,
+		IsADUser:       user.IsADUser,
 		Extension:      user.Extension,
 		CallStatus:     string(user.CallStatus),
 		LastLoginAt:    user.LastLoginAt,
@@ -343,6 +347,7 @@ func ToUserResponse(user *User) UserResponse {
 		LocationID:     user.LocationID,
 		IsActive:       user.IsActive,
 		IsSuperAdmin:   user.IsSuperAdmin,
+		IsADUser:       user.IsADUser,
 		Extension:      user.Extension,
 		CallStatus:     string(user.CallStatus),
 		LastLoginAt:    user.LastLoginAt,

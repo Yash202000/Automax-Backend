@@ -433,6 +433,11 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 			return nil, err
 		}
 
+		// Redirect AD users to LDAP login
+		if user.IsADUser {
+			return nil, errors.New("this account uses Active Directory authentication. Please use the AD login option")
+		}
+
 		if !utils.CheckPassword(req.Password, user.Password) {
 			go func() {
 				_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
@@ -1290,7 +1295,12 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
 	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
 
-	// Block LDAP-authenticated users from changing their password via the app
+	// Block AD/LDAP users from changing their password via the app
+	user, userErr := s.userRepo.FindByID(ctx, userID)
+	if userErr == nil && user.IsADUser {
+		return errors.New("password cannot be changed for Active Directory accounts")
+	}
+
 	var sessionData map[string]interface{}
 	if getErr := s.sessionStore.GetUserSession(ctx, userID.String(), &sessionData); getErr == nil {
 		if authSource, ok := sessionData["auth_source"].(string); ok && authSource == "ldap" {
@@ -1389,6 +1399,11 @@ func (s *userService) AdminResetPassword(ctx context.Context, adminID, targetUse
 	user, err := s.userRepo.FindByID(ctx, targetUserID)
 	if err != nil {
 		return err
+	}
+
+	// Block password reset for AD users
+	if user.IsADUser {
+		return errors.New("cannot reset password for Active Directory accounts")
 	}
 
 	// Hash new password
@@ -1853,6 +1868,11 @@ func (s *userService) ForgotPassword(ctx context.Context, req *models.ForgotPass
 
 	if user == nil {
 		return "", fmt.Errorf("User not found")
+	}
+
+	// Block AD users from resetting password
+	if user.IsADUser {
+		return "", errors.New("password cannot be reset for Active Directory accounts. Please contact your IT administrator")
 	}
 
 	//Generate OTP
