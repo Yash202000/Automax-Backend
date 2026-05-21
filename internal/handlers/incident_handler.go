@@ -27,6 +27,7 @@ type IncidentHandler struct {
 	userService         services.UserService
 	userRepo            repository.UserRepository
 	incidentRepo        repository.IncidentRepository
+	workflowRepo        repository.WorkflowRepository
 	locationRepo        repository.LocationRepository
 	classificationRepo  repository.ClassificationRepository
 	storage             *storage.MinIOStorage
@@ -35,12 +36,13 @@ type IncidentHandler struct {
 	validator           *validator.Validate
 }
 
-func NewIncidentHandler(service services.IncidentService, userService services.UserService, userRepo repository.UserRepository, incidentRepo repository.IncidentRepository, locationRepo repository.LocationRepository, classificationRepo repository.ClassificationRepository, storage *storage.MinIOStorage, presenceService services.PresenceService) *IncidentHandler {
+func NewIncidentHandler(service services.IncidentService, userService services.UserService, userRepo repository.UserRepository, incidentRepo repository.IncidentRepository, workflowRepo repository.WorkflowRepository, locationRepo repository.LocationRepository, classificationRepo repository.ClassificationRepository, storage *storage.MinIOStorage, presenceService services.PresenceService) *IncidentHandler {
 	return &IncidentHandler{
 		service:            service,
 		userService:        userService,
 		userRepo:           userRepo,
 		incidentRepo:       incidentRepo,
+		workflowRepo:       workflowRepo,
 		locationRepo:       locationRepo,
 		classificationRepo: classificationRepo,
 		storage:            storage,
@@ -1411,4 +1413,73 @@ func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
 		"incident_number": incident.IncidentNumber,
 		"status":          status,
 	})
+}
+
+// ForceState directly sets current_state_id on an incident, bypassing workflow
+// transition logic. Intended for system-level bridge syncs only.
+// Accepts either state_id (UUID) or state_name, resolves and validates against
+// the incident's assigned workflow before applying.
+func (h *IncidentHandler) ForceState(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
+	}
+	var req struct {
+		StateID   string `json:"state_id"`
+		StateName string `json:"state_name"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+	if req.StateID == "" && req.StateName == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Provide state_id or state_name")
+	}
+
+	// Fetch incident to get its assigned workflow
+	incident, err := h.incidentRepo.FindByID(c.UserContext(), id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not found")
+	}
+
+	var resolvedStateID uuid.UUID
+
+	if req.StateID != "" {
+		// Resolve by ID — verify it belongs to this incident's workflow
+		stateID, err := uuid.Parse(req.StateID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid state_id")
+		}
+		state, err := h.workflowRepo.FindStateByID(c.UserContext(), stateID)
+		if err != nil || state == nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, "State not found")
+		}
+		if state.WorkflowID != incident.WorkflowID {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest,
+				"State does not belong to this incident's workflow")
+		}
+		resolvedStateID = stateID
+	} else {
+		// Resolve by name — look up within the incident's workflow states
+		states, err := h.workflowRepo.ListStatesByWorkflowID(c.UserContext(), incident.WorkflowID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch workflow states")
+		}
+		for _, s := range states {
+			if s.Name == req.StateName {
+				resolvedStateID = s.ID
+				break
+			}
+		}
+		if resolvedStateID == uuid.Nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest,
+				"State '"+req.StateName+"' not found in this incident's workflow")
+		}
+	}
+
+	if err := h.incidentRepo.UpdateFields(c.UserContext(), id, map[string]interface{}{
+		"current_state_id": resolvedStateID,
+	}); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to update state")
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "State updated", nil)
 }

@@ -166,7 +166,7 @@ func (e *integrationExecutor) execute(
 	case "http_request":
 		requestPayload, responseBody, statusCode, execErr = e.executeHTTP(ctx, script, incidentCtx, vars)
 	case "javascript":
-		requestPayload, responseBody, execErr = e.executeJS(script, incidentCtx, vars)
+		requestPayload, responseBody, execErr = e.executeJS(script, incident, incidentCtx, vars)
 	default:
 		execErr = fmt.Errorf("unknown script_type: %s", script.ScriptType)
 	}
@@ -442,6 +442,7 @@ func (e *integrationExecutor) executeHTTP(
 // executeJS executes a javascript type script in a goja sandbox.
 func (e *integrationExecutor) executeJS(
 	script *models.IntegrationScript,
+	incident *models.Incident,
 	incidentCtx map[string]interface{},
 	vars map[string]string,
 ) (requestPayload, responseBody string, err error) {
@@ -580,6 +581,26 @@ func (e *integrationExecutor) executeJS(
 	})
 
 	vm.Set("http", httpObj) //nolint
+
+	// createBridge(remoteSystemName, remoteSystemUrl, remoteIncidentId, remoteIncidentNumber, direction)
+	// Creates a bridge record on the LOCAL instance linking this incident to a remote one.
+	vm.Set("createBridge", func(remoteSystemName, remoteSystemURL, remoteIncidentID, remoteIncidentNumber, direction string) { //nolint
+		if direction != "inbound" {
+			direction = "outbound"
+		}
+		bridge := &models.IncidentBridge{
+			LocalIncidentID:      incident.ID,
+			RemoteSystemName:     remoteSystemName,
+			RemoteSystemURL:      remoteSystemURL,
+			RemoteIncidentID:     remoteIncidentID,
+			RemoteIncidentNumber: remoteIncidentNumber,
+			Direction:            direction,
+			Status:               "open",
+		}
+		if err := e.integrationSvc.CreateBridge(context.Background(), bridge); err != nil {
+			panic(vm.NewGoError(fmt.Errorf("createBridge failed: %w", err)))
+		}
+	})
 
 	// Timeout: interrupt after 30 seconds
 	done := make(chan struct{})

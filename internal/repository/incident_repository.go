@@ -269,6 +269,9 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	if filter.Source != nil && *filter.Source != "" {
 		query = query.Where("source = ?", *filter.Source)
 	}
+	if filter.SourceIncidentID != nil && *filter.SourceIncidentID != "" {
+		query = query.Where("source_incident_id = ?", *filter.SourceIncidentID)
+	}
 	if filter.ConvertedToRequest != nil {
 		if *filter.ConvertedToRequest {
 			query = query.Where("converted_request_id IS NOT NULL")

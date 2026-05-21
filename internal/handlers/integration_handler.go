@@ -320,6 +320,39 @@ func (h *IntegrationHandler) ListBridgesByIncident(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "Bridges retrieved", list)
 }
 
+func (h *IntegrationHandler) CreateBridgeForIncident(c *fiber.Ctx) error {
+	incidentID, err := uuid.Parse(c.Params("incidentId"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
+	}
+	var req struct {
+		RemoteSystemName     string `json:"remote_system_name"`
+		RemoteSystemURL      string `json:"remote_system_url"`
+		RemoteIncidentID     string `json:"remote_incident_id"`
+		RemoteIncidentNumber string `json:"remote_incident_number"`
+		Direction            string `json:"direction"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+	if req.Direction != "inbound" {
+		req.Direction = "outbound"
+	}
+	bridge := &models.IncidentBridge{
+		LocalIncidentID:      incidentID,
+		RemoteSystemName:     req.RemoteSystemName,
+		RemoteSystemURL:      req.RemoteSystemURL,
+		RemoteIncidentID:     req.RemoteIncidentID,
+		RemoteIncidentNumber: req.RemoteIncidentNumber,
+		Direction:            req.Direction,
+		Status:               "open",
+	}
+	if err := h.svc.CreateBridge(c.UserContext(), bridge); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create bridge")
+	}
+	return utils.SuccessResponse(c, fiber.StatusCreated, "Bridge created", bridge)
+}
+
 // ---- Webhook callback configs ----
 
 func (h *IntegrationHandler) CreateWebhookConfig(c *fiber.Ctx) error {

@@ -559,6 +559,7 @@ type IncidentFilter struct {
 	Channel            *string    `query:"channel" json:"channel" validate:"omitempty"`                                                // for complaints
 	Source             *string    `query:"source" json:"source" validate:"omitempty"`
 	ConvertedToRequest *bool      `query:"converted_to_request" json:"converted_to_request" validate:"omitempty"`
+	SourceIncidentID   *string    `query:"source_incident_id" json:"source_incident_id" validate:"omitempty,uuid"`
 	StartDate          *time.Time `json:"start_date"` // filter by created_at >= start_date; parsed manually in handler (not via QueryParser)
 	EndDate            *time.Time `json:"end_date"`   // filter by created_at <= end_date; parsed manually in handler (not via QueryParser)
 	// Transition filters

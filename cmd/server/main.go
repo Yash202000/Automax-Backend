@@ -191,7 +191,7 @@ func main() {
 	actionLogHandler := handlers.NewActionLogHandler(actionLogService, validate)
 	callLogHandler := handlers.NewCallLogHandler(callLogService, validate, userService, minioStorage)
 	workflowHandler := handlers.NewWorkflowHandler(workflowService, actionLogService)
-	incidentHandler := handlers.NewIncidentHandler(incidentService, userService, userRepo, incidentRepo, locationRepo, classificationRepo, minioStorage, presenceService)
+	incidentHandler := handlers.NewIncidentHandler(incidentService, userService, userRepo, incidentRepo, workflowRepo, locationRepo, classificationRepo, minioStorage, presenceService)
 	incidentHandler.SetReadyToCloseService(readyToCloseService)
 	incidentMergeHandler := handlers.NewIncidentMergeHandler(incidentMergeService, userRepo)
 	websocketHandler := handlers.NewWebSocketHandler(wsHub)
@@ -382,6 +382,7 @@ func main() {
 	incidents.Put("/:id", authMiddleware.RequirePermission("incidents:update"), incidentHandler.UpdateIncident)
 	incidents.Delete("/:id", authMiddleware.RequirePermission("incidents:delete"), incidentHandler.DeleteIncident)
 	incidents.Post("/:id/transition", authMiddleware.RequirePermission("incidents:transition"), incidentHandler.ExecuteTransition)
+	incidents.Put("/:id/state", authMiddleware.RequirePermission("incidents:transition"), incidentHandler.ForceState)
 	incidents.Post("/:id/convert-to-request", authMiddleware.RequirePermission("incidents:update"), incidentHandler.ConvertToRequest)
 	incidents.Get("/:id/can-convert", authMiddleware.RequirePermission("incidents:view"), incidentHandler.CanConvertToRequest)
 	incidents.Get("/:id/available-transitions", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetAvailableTransitions)
@@ -720,6 +721,7 @@ func main() {
 	// Per-incident integration log + bridge viewer (accessible to incident handlers)
 	v1.Get("/incidents/:incidentId/integration-logs", authMiddleware.Authenticate(), authMiddleware.RequirePermission("incidents:view"), integrationHandler.ListLogsByIncident)
 	v1.Get("/incidents/:incidentId/bridges", authMiddleware.Authenticate(), authMiddleware.RequirePermission("incidents:view"), integrationHandler.ListBridgesByIncident)
+	v1.Post("/incidents/:incidentId/bridges", authMiddleware.Authenticate(), authMiddleware.RequirePermission("incidents:update"), integrationHandler.CreateBridgeForIncident)
 
 	// Webhook callback config management
 	webhookConfigs := admin.Group("/webhook-configs")
