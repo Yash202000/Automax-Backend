@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,6 +24,9 @@ type AIQualityFeedback struct {
 
 	// DistanceMeters is the geographic distance (in metres) reported by the AI analysis.
 	DistanceMeters float64 `gorm:"type:decimal(12,4)" json:"distance_meters"`
+
+	// RawResponse stores the full JSON response from the AI quality API for auditing.
+	RawResponse json.RawMessage `gorm:"type:jsonb" json:"raw_response,omitempty"`
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
