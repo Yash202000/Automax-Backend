@@ -172,7 +172,6 @@ type aiQualityAPIResponse struct {
 	// Legacy / shared fields
 	ChangeSummary    string           `json:"change_summary"`
 	ResolutionStatus string           `json:"resolution_status"`
-	DistanceMeters   float64          `json:"distance_meters"`
 	Confidence       float64          `json:"confidence"`
 	ReasoningPoints  []string         `json:"reasoning_points"`
 	RiskFlags        []string         `json:"risk_flags"`
@@ -315,12 +314,18 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 			incident.IncidentNumber, apiResp.CoordinatesCheck.Note)
 	}
 
+	// Resolve distance_meters (null in API means 0 for storage).
+	distanceMeters := 0.0
+	if apiResp.CoordinatesCheck.DistanceMeters != nil {
+		distanceMeters = *apiResp.CoordinatesCheck.DistanceMeters
+	}
+
 	// Persist AIQualityFeedback.
 	feedback := &models.AIQualityFeedback{
 		IncidentID:       incident.ID,
 		ChangedSummary:   apiResp.ChangeSummary,
 		ResolutionStatus: apiResp.ResolutionStatus,
-		DistanceMeters:   apiResp.DistanceMeters,
+		DistanceMeters:   distanceMeters,
 		RawResponse:      rawBody,
 	}
 	if err := m.feedbackRepo.Create(ctx, feedback); err != nil {
@@ -344,7 +349,7 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 	}
 
 	log.Printf("[AIQualityMonitor] incident=%s DONE — status=%q distance=%.4fm",
-		incident.IncidentNumber, apiResp.ResolutionStatus, apiResp.DistanceMeters)
+		incident.IncidentNumber, apiResp.ResolutionStatus, distanceMeters)
 	return nil
 }
 
