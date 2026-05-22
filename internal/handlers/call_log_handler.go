@@ -48,23 +48,17 @@ func (h *CallLogHandler) CreateCallLog(c *fiber.Ctx) error {
 		})
 	}
 
-	// Resolve each participant: extension → user ID, or use phone number for guests.
+	// Build participant data from extension or phone_number — stored as-is, resolved at read time.
 	resolved := make([]models.ParticipantData, 0, len(req.Participants))
 	for _, pi := range req.Participants {
-		pd := models.ParticipantData{}
-		if pi.Extension != "" {
-			user, err := h.userSvc.FindByExtension(c.UserContext(), pi.Extension)
-			if err != nil {
-				return utils.ErrorResponse(c, fiber.StatusNotFound, "Participant not found: "+pi.Extension)
-			}
-			pd.UserID = &user.ID
-		} else if pi.PhoneNumber != "" {
-			phone := pi.PhoneNumber
-			pd.Phone = &phone
-		} else {
+		phone := pi.Extension
+		if phone == "" {
+			phone = pi.PhoneNumber
+		}
+		if phone == "" {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Each participant must have extension or phone_number")
 		}
-		resolved = append(resolved, pd)
+		resolved = append(resolved, models.ParticipantData{Phone: phone})
 	}
 
 	callLog, err := h.service.CreateCallLog(c.UserContext(), &req, resolved)
@@ -205,17 +199,23 @@ func (h *CallLogHandler) GetStats(c *fiber.Ctx) error {
 	})
 }
 
+// resolvePhone wraps a raw phone/extension string into ParticipantData.
+// Resolution against the users table happens at read time, not write time.
+func resolvePhone(phone string) models.ParticipantData {
+	return models.ParticipantData{Phone: phone}
+}
+
 // StartCall handles POST /api/v1/calls/start
 //
 // Payload for a direct call:
 //
 //	{ "call_uuid":"...", "call_type":"direct",
-//	  "initiator":{"extension":"101"}, "recipient":{"guest_phone":"+919876543210"} }
+//	  "initiator":{"phone":"101"}, "recipient":{"phone":"+919876543210"} }
 //
 // Payload for a group call:
 //
 //	{ "call_uuid":"...", "call_type":"group",
-//	  "initiator":{"extension":"101"}, "participants":[{"extension":"102"},{"guest_phone":"..."}] }
+//	  "initiator":{"phone":"101"}, "participants":[{"phone":"102"},{"phone":"..."}] }
 func (h *CallLogHandler) StartCall(c *fiber.Ctx) error {
 	var req models.StartCallRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -229,8 +229,8 @@ func (h *CallLogHandler) StartCall(c *fiber.Ctx) error {
 		})
 	}
 
-	if req.Initiator.Extension == "" && req.Initiator.GuestPhone == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Initiator must have either extension or guest_phone")
+	if req.Initiator.Phone == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Initiator phone is required")
 	}
 	if req.CallType == "direct" && req.Recipient == nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Direct call requires a recipient")
@@ -239,20 +239,8 @@ func (h *CallLogHandler) StartCall(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Group call requires at least one participant")
 	}
 
-	// Resolve initiator.
-	initiator := models.ParticipantData{}
-	if req.Initiator.Extension != "" {
-		user, err := h.userSvc.FindByExtension(c.Context(), req.Initiator.Extension)
-		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusNotFound, "Initiator not found")
-		}
-		initiator.UserID = &user.ID
-	} else {
-		phone := req.Initiator.GuestPhone
-		initiator.Phone = &phone
-	}
+	initiator := resolvePhone(req.Initiator.Phone)
 
-	// Collect recipient/participant parties.
 	var parties []models.StartCallParty
 	if req.CallType == "direct" {
 		parties = []models.StartCallParty{*req.Recipient}
@@ -262,20 +250,10 @@ func (h *CallLogHandler) StartCall(c *fiber.Ctx) error {
 
 	recipients := make([]models.ParticipantData, 0, len(parties))
 	for _, p := range parties {
-		pd := models.ParticipantData{}
-		if p.Extension != "" {
-			user, err := h.userSvc.FindByExtension(c.UserContext(), p.Extension)
-			if err != nil {
-				return utils.ErrorResponse(c, fiber.StatusNotFound, "Participant not found: "+p.Extension)
-			}
-			pd.UserID = &user.ID
-		} else if p.GuestPhone != "" {
-			phone := p.GuestPhone
-			pd.Phone = &phone
-		} else {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Each participant must have extension or guest_phone")
+		if p.Phone == "" {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Each participant must have a phone value")
 		}
-		recipients = append(recipients, pd)
+		recipients = append(recipients, resolvePhone(p.Phone))
 	}
 
 	callLog, err := h.service.StartCall(c.UserContext(), req.CallUUID, req.CallType, initiator, recipients)
@@ -298,7 +276,7 @@ func (h *CallLogHandler) EndCall(c *fiber.Ctx) error {
 
 	var req struct {
 		EndAt  *time.Time `json:"end_at,omitempty"`
-		Status string     `json:"status" validate:"required,oneof=initiated ongoing ended missed in_call cancelled complete completed"`
+		Status string     `json:"status" validate:"required"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -331,30 +309,18 @@ func (h *CallLogHandler) JoinCall(c *fiber.Ctx) error {
 	}
 
 	var req struct {
-		Extension  string `json:"extension"`
-		GuestPhone string `json:"guest_phone"`
+		Phone string `json:"phone"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
-	if req.Extension == "" && req.GuestPhone == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Either extension or guest_phone is required")
+	if req.Phone == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "phone is required")
 	}
 
-	var userID *uuid.UUID
-	if req.Extension != "" {
-		log.Println("payload req : ", req.Extension)
-		user, err := h.userSvc.FindByExtension(c.Context(), req.Extension)
-		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusNotFound, "User not found")
-		}
-		userID = &user.ID
-		log.Println("user id ;", userID)
-	}
-
-	if err := h.service.JoinCall(c.UserContext(), callUUID, userID, req.GuestPhone); err != nil {
+	if err := h.service.JoinCall(c.UserContext(), callUUID, req.Phone); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -374,12 +340,12 @@ func (h *CallLogHandler) GetCallLogsByExtension(c *fiber.Ctx) error {
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit, _ := strconv.Atoi(c.Query("limit", "10"))
 
-	user, err := h.userSvc.FindByExtension(c.UserContext(), extension)
-	if err != nil {
+	// Verify the extension exists, then find calls by the stored phone/extension value.
+	if _, err := h.userSvc.FindByExtension(c.UserContext(), extension); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "User with extension not found")
 	}
 
-	callLogs, total, err := h.service.GetCallLogsByUserID(c.UserContext(), user.ID, page, limit)
+	callLogs, total, err := h.service.GetCallLogsByPhone(c.UserContext(), extension, page, limit)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -389,7 +355,6 @@ func (h *CallLogHandler) GetCallLogsByExtension(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"success":      true,
 		"extension_id": extension,
-		"user_id":      user.ID,
 		"data":         callLogs,
 		"total_items":  total,
 		"total_pages":  totalPages,

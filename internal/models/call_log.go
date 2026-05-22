@@ -9,18 +9,18 @@ import (
 )
 
 type CallLog struct {
-	ID           uuid.UUID         `gorm:"type:uuid;primary_key" json:"id"`
-	CallUuid     string            `gorm:"size:36;uniqueIndex" json:"call_uuid,omitempty"`
-	CallType     string            `gorm:"size:20" json:"call_type"`
-	Status       string            `gorm:"size:20;not null" json:"status"`
-	StartAt      *time.Time        `json:"start_at,omitempty"`
-	EndAt        *time.Time        `json:"end_at,omitempty"`
-	RecordingUrl string            `gorm:"size:500" json:"recording_url,omitempty"`
-	Meta         datatypes.JSON    `gorm:"type:jsonb" json:"meta,omitempty"`
-	CreatedAt    time.Time         `json:"created_at"`
-	UpdatedAt    *time.Time        `json:"updated_at,omitempty"`
-	DeletedAt    gorm.DeletedAt    `gorm:"index" json:"-"`
-	Participants []CallParticipant `gorm:"foreignKey:CallLogID" json:"participants,omitempty"`
+	ID           uuid.UUID           `gorm:"type:uuid;primary_key" json:"id"`
+	CallUuid     string              `gorm:"size:36;uniqueIndex" json:"call_uuid,omitempty"`
+	CallType     string              `gorm:"size:20" json:"call_type"`
+	Status       string              `gorm:"size:20;not null" json:"status"`
+	StartAt      *time.Time          `json:"start_at,omitempty"`
+	EndAt        *time.Time          `json:"end_at,omitempty"`
+	Meta         datatypes.JSON      `gorm:"type:jsonb" json:"meta,omitempty"`
+	CreatedAt    time.Time           `json:"created_at"`
+	UpdatedAt    *time.Time          `json:"updated_at,omitempty"`
+	DeletedAt    gorm.DeletedAt      `gorm:"index" json:"-"`
+	Participants []CallParticipant   `gorm:"foreignKey:CallLogID" json:"participants,omitempty"`
+	Attachments  []CallLogAttachment `gorm:"foreignKey:CallLogID" json:"-"`
 }
 
 func (c *CallLog) BeforeCreate(tx *gorm.DB) error {
@@ -33,8 +33,7 @@ func (c *CallLog) BeforeCreate(tx *gorm.DB) error {
 type CallParticipant struct {
 	ID          uuid.UUID  `gorm:"type:uuid;primary_key" json:"id"`
 	CallLogID   uuid.UUID  `gorm:"type:uuid;index" json:"call_log_id"`
-	UserID      *uuid.UUID `gorm:"type:uuid;index" json:"user_id,omitempty"`
-	PhoneNumber *string    `gorm:"size:50" json:"phone_number,omitempty"`
+	PhoneNumber string     `gorm:"size:50;not null" json:"phone_number"`
 	Role        string     `gorm:"size:20" json:"role"`        // "initiator", "recipient", "participant"
 	JoinStatus  string     `gorm:"size:20" json:"join_status"` // "invited", "joined", "declined", "missed"
 	JoinedAt    *time.Time `json:"joined_at,omitempty"`
@@ -79,16 +78,14 @@ type CallLogMeta struct {
 	Notes      string                 `json:"notes,omitempty"`
 }
 
-// ParticipantData carries a resolved participant (user ID xor phone) for service calls.
+// ParticipantData carries a phone/extension for service calls.
 type ParticipantData struct {
-	UserID *uuid.UUID
-	Phone  *string
+	Phone string
 }
 
 // StartCallParty represents one party in a call start request (registered or guest).
 type StartCallParty struct {
-	Extension  string `json:"extension"`
-	GuestPhone string `json:"guest_phone"`
+	Phone string `json:"phone" validate:"required"`
 }
 
 // StartCallRequest is the payload for POST /api/v1/calls/start.
@@ -118,18 +115,16 @@ type CallLogCreateRequest struct {
 	Status       string                 `json:"status" validate:"required,oneof=initiated ongoing ended missed in_call cancelled completed complete"`
 	StartAt      *time.Time             `json:"start_at,omitempty"`
 	EndAt        *time.Time             `json:"end_at,omitempty"`
-	RecordingUrl string                 `json:"recording_url,omitempty" validate:"omitempty,max=500"`
 	Meta         datatypes.JSON         `json:"meta,omitempty"`
 	Participants []CallParticipantInput `json:"participants,omitempty"`
 }
 
 // CallLogUpdateRequest for updating a call log
 type CallLogUpdateRequest struct {
-	StartAt      *time.Time     `json:"start_at,omitempty"`
-	EndAt        *time.Time     `json:"end_at,omitempty"`
-	Status       string         `json:"status,omitempty" validate:"omitempty,oneof=initiated ongoing ended missed in_call cancelled complete completed"`
-	RecordingUrl string         `json:"recording_url,omitempty" validate:"omitempty,max=500"`
-	Meta         datatypes.JSON `json:"meta,omitempty"`
+	StartAt *time.Time     `json:"start_at,omitempty"`
+	EndAt   *time.Time     `json:"end_at,omitempty"`
+	Status  string         `json:"status,omitempty" validate:"omitempty,oneof=initiated ongoing ended missed in_call cancelled complete completed"`
+	Meta    datatypes.JSON `json:"meta,omitempty"`
 }
 
 // UserMinimalResponse for minimal user info embedded in participant responses
@@ -140,14 +135,13 @@ type UserMinimalResponse struct {
 
 // CallParticipantResponse for API responses
 type CallParticipantResponse struct {
-	ID          uuid.UUID            `json:"id"`
-	UserID      *uuid.UUID           `json:"user_id,omitempty"`
-	PhoneNumber *string              `json:"phone_number,omitempty"`
-	Role        string               `json:"role"`
-	JoinStatus  string               `json:"join_status"`
-	JoinedAt    *time.Time           `json:"joined_at,omitempty"`
-	LeftAt      *time.Time           `json:"left_at,omitempty"`
-	User        *UserMinimalResponse `json:"user,omitempty"`
+	ID          uuid.UUID  `json:"id"`
+	PhoneNumber string     `json:"phone_number"`
+	Name        string     `json:"name,omitempty"`
+	Role        string     `json:"role"`
+	JoinStatus  string     `json:"join_status"`
+	JoinedAt    *time.Time `json:"joined_at,omitempty"`
+	LeftAt      *time.Time `json:"left_at,omitempty"`
 }
 
 // CallLogResponse for API responses

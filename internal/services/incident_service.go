@@ -2791,6 +2791,51 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				updates["title"] = fieldValue
 			case "description":
 				updates["description"] = fieldValue
+			default:
+				if !strings.HasPrefix(fieldName, "lookup:") {
+					continue
+				}
+				categoryCode := strings.TrimPrefix(fieldName, "lookup:")
+				if categoryCode == "" {
+					continue
+				}
+				// Resolve the category by code
+				var category models.LookupCategory
+				if err := s.db.WithContext(ctx).
+					Where("code = ? AND is_active = ?", categoryCode, true).
+					First(&category).Error; err != nil {
+					fmt.Printf("Warning: lookup category not found for code %s: %v\n", categoryCode, err)
+					continue
+				}
+				// Find or create the lookup value by code within that category
+				var lookupVal models.LookupValue
+				err := tx.WithContext(ctx).
+					Where("category_id = ? AND code = ?", category.ID, fieldValue).
+					First(&lookupVal).Error
+				if err != nil {
+					lookupVal = models.LookupValue{
+						CategoryID: category.ID,
+						Code:       fieldValue,
+						Name:       fieldValue,
+						IsActive:   true,
+					}
+					if createErr := tx.WithContext(ctx).Create(&lookupVal).Error; createErr != nil {
+						fmt.Printf("Warning: failed to create lookup value for category %s code %s: %v\n", categoryCode, fieldValue, createErr)
+						continue
+					}
+				}
+				// Replace any existing value from this category on the incident, then append the new one
+				if err := tx.WithContext(ctx).Exec(
+					"DELETE FROM incident_lookup_values WHERE incident_id = ? AND lookup_value_id IN (SELECT id FROM lookup_values WHERE category_id = ?)",
+					incidentID, category.ID,
+				).Error; err != nil {
+					fmt.Printf("Warning: failed to clear old lookup values for category %s: %v\n", categoryCode, err)
+				}
+				incRef := models.Incident{}
+				incRef.ID = incidentID
+				if err := tx.WithContext(ctx).Model(&incRef).Association("LookupValues").Append(&lookupVal); err != nil {
+					fmt.Printf("Warning: failed to append lookup value for category %s: %v\n", categoryCode, err)
+				}
 			}
 		}
 	}

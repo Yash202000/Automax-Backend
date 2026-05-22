@@ -26,8 +26,8 @@ type CallLogService interface {
 	GetStats(ctx context.Context) (*models.CallLogStats, error)
 	StartCall(ctx context.Context, callUUID, callType string, initiator models.ParticipantData, recipients []models.ParticipantData) (*models.CallLogResponse, error)
 	EndCall(ctx context.Context, callUUID string, endAt *time.Time, status string) (*models.CallLogResponse, error)
-	JoinCall(ctx context.Context, callUUID string, userID *uuid.UUID, guestPhone string) error
-	GetCallLogsByUserID(ctx context.Context, userID uuid.UUID, page, limit int) ([]models.CallLogResponse, int64, error)
+	JoinCall(ctx context.Context, callUUID string, phone string) error
+	GetCallLogsByPhone(ctx context.Context, phone string, page, limit int) ([]models.CallLogResponse, int64, error)
 	GetSipInfo(ctx context.Context) (map[string]interface{}, error)
 
 	// Attachments
@@ -51,14 +51,13 @@ func NewCallLogService(repo repository.CallLogRepository, userRepo repository.Us
 
 func (s *callLogService) CreateCallLog(ctx context.Context, req *models.CallLogCreateRequest, participants []models.ParticipantData) (*models.CallLogResponse, error) {
 	callLog := &models.CallLog{
-		CallUuid:     req.CallUuid,
-		CallType:     req.CallType,
-		StartAt:      req.StartAt,
-		EndAt:        req.EndAt,
-		Status:       req.Status,
-		RecordingUrl: req.RecordingUrl,
-		Meta:         req.Meta,
-		CreatedAt:    time.Now(),
+		CallUuid:  req.CallUuid,
+		CallType:  req.CallType,
+		StartAt:   req.StartAt,
+		EndAt:     req.EndAt,
+		Status:    req.Status,
+		Meta:      req.Meta,
+		CreatedAt: time.Now(),
 	}
 
 	callParticipants := make([]*models.CallParticipant, 0, len(req.Participants))
@@ -72,10 +71,7 @@ func (s *callLogService) CreateCallLog(ctx context.Context, req *models.CallLogC
 			JoinStatus: joinStatus,
 		}
 		if i < len(participants) {
-			cp.UserID = participants[i].UserID
-			if participants[i].Phone != nil {
-				cp.PhoneNumber = participants[i].Phone
-			}
+			cp.PhoneNumber = participants[i].Phone
 		}
 		callParticipants = append(callParticipants, cp)
 	}
@@ -103,9 +99,6 @@ func (s *callLogService) UpdateCallLog(ctx context.Context, id uuid.UUID, req *m
 	}
 	if req.Status != "" {
 		updates["status"] = req.Status
-	}
-	if req.RecordingUrl != "" {
-		updates["recording_url"] = req.RecordingUrl
 	}
 	if req.Meta != nil {
 		updates["meta"] = req.Meta
@@ -162,27 +155,41 @@ func (s *callLogService) ListCallLogsSummary(ctx context.Context, filter *models
 		return nil, 0, err
 	}
 
-	// Bulk-fetch all participant user IDs across all calls.
-	userIDSet := make(map[uuid.UUID]struct{})
+	// Bulk-fetch users by participant phone numbers across all calls.
+	phoneSet := make(map[string]struct{})
 	for _, cl := range callLogs {
 		for _, p := range cl.Participants {
-			if p.UserID != nil {
-				userIDSet[*p.UserID] = struct{}{}
+			if p.PhoneNumber != "" {
+				phoneSet[p.PhoneNumber] = struct{}{}
+			}
+		}
+	}
+	phones := make([]string, 0, len(phoneSet))
+	for ph := range phoneSet {
+		phones = append(phones, ph)
+	}
+	nameMap := make(map[string]string) // phone/ext → full name
+	extMap := make(map[string]string)  // phone/ext → extension
+	if users, err := s.userRepo.FindByExtOrPhoneList(ctx, phones); err == nil {
+		for _, u := range users {
+			fullName := strings.TrimSpace(u.FirstName + " " + u.LastName)
+			if u.Extension != "" {
+				nameMap[u.Extension] = fullName
+				extMap[u.Extension] = u.Extension
+			}
+			if u.Phone != "" {
+				nameMap[u.Phone] = fullName
+				extMap[u.Phone] = u.Extension
 			}
 		}
 	}
 
-	userMap := make(map[uuid.UUID]*models.User)
-	if len(userIDSet) > 0 {
-		ids := make([]uuid.UUID, 0, len(userIDSet))
-		for id := range userIDSet {
-			ids = append(ids, id)
-		}
-		if users, err := s.userRepo.FindByIDs(ctx, ids); err == nil {
-			for i := range users {
-				userMap[users[i].ID] = &users[i]
-			}
-		}
+	// Resolve the current user's phone/extension for direction detection.
+	currentUserPhone := ""
+	currentUserExt := ""
+	if u, err := s.userRepo.FindByID(ctx, currentUserID); err == nil {
+		currentUserPhone = u.Phone
+		currentUserExt = u.Extension
 	}
 
 	items := make([]models.CallLogListItem, len(callLogs))
@@ -194,13 +201,17 @@ func (s *callLogService) ListCallLogsSummary(ctx context.Context, filter *models
 			}
 		}
 
+		var recordingURL string
+		if len(cl.Attachments) > 0 {
+			recordingURL = pkgUtils.GenerateAttachmentAppURL(ctx, cl.Attachments[0].ID)
+		}
 		item := models.CallLogListItem{
 			ID:           cl.ID,
 			CallUuid:     cl.CallUuid,
 			CallType:     cl.CallType,
 			Status:       cl.Status,
 			Duration:     duration,
-			RecordingUrl: cl.RecordingUrl,
+			RecordingUrl: recordingURL,
 			CreatedAt:    cl.CreatedAt,
 		}
 
@@ -216,36 +227,25 @@ func (s *callLogService) ListCallLogsSummary(ctx context.Context, filter *models
 			}
 		}
 
-		if initiatorParticipant != nil && initiatorParticipant.UserID != nil && *initiatorParticipant.UserID == currentUserID {
+		// Direction: outgoing if the current user is the initiator.
+		isInitiator := initiatorParticipant != nil &&
+			(initiatorParticipant.PhoneNumber == currentUserExt || initiatorParticipant.PhoneNumber == currentUserPhone)
+		if isInitiator {
 			item.Direction = "outgoing"
 		} else {
 			item.Direction = "incoming"
 		}
 
-		if item.Direction == "outgoing" {
-			if otherParticipant != nil {
-				if otherParticipant.UserID != nil {
-					if u, ok := userMap[*otherParticipant.UserID]; ok {
-						item.OtherPartyName = strings.TrimSpace(u.FirstName + " " + u.LastName)
-						item.OtherPartyExtension = u.Extension
-					}
-				} else if otherParticipant.PhoneNumber != nil {
-					item.OtherPartyName = *otherParticipant.PhoneNumber
-					item.OtherPartyPhone = *otherParticipant.PhoneNumber
-				}
-			}
-		} else {
-			// Incoming: the initiator is the other party.
-			if initiatorParticipant != nil {
-				if initiatorParticipant.UserID != nil {
-					if u, ok := userMap[*initiatorParticipant.UserID]; ok {
-						item.OtherPartyName = strings.TrimSpace(u.FirstName + " " + u.LastName)
-						item.OtherPartyExtension = u.Extension
-					}
-				} else if initiatorParticipant.PhoneNumber != nil {
-					item.OtherPartyName = *initiatorParticipant.PhoneNumber
-					item.OtherPartyPhone = *initiatorParticipant.PhoneNumber
-				}
+		otherP := otherParticipant
+		if !isInitiator {
+			otherP = initiatorParticipant
+		}
+		if otherP != nil {
+			item.OtherPartyPhone = otherP.PhoneNumber
+			item.OtherPartyName = nameMap[otherP.PhoneNumber]
+			item.OtherPartyExtension = extMap[otherP.PhoneNumber]
+			if item.OtherPartyName == "" {
+				item.OtherPartyName = otherP.PhoneNumber
 			}
 		}
 
@@ -278,7 +278,6 @@ func (s *callLogService) StartCall(ctx context.Context, callUUID, callType strin
 
 	participants := make([]*models.CallParticipant, 0, 1+len(recipients))
 	participants = append(participants, &models.CallParticipant{
-		UserID:      initiator.UserID,
 		PhoneNumber: initiator.Phone,
 		Role:        "initiator",
 		JoinStatus:  "joined",
@@ -290,10 +289,8 @@ func (s *callLogService) StartCall(ctx context.Context, callUUID, callType strin
 		recipientRole = "participant"
 	}
 	for _, r := range recipients {
-		p := r // copy
 		participants = append(participants, &models.CallParticipant{
-			UserID:      p.UserID,
-			PhoneNumber: p.Phone,
+			PhoneNumber: r.Phone,
 			Role:        recipientRole,
 			JoinStatus:  "invited",
 		})
@@ -323,6 +320,21 @@ func (s *callLogService) EndCall(ctx context.Context, callUUID string, endAt *ti
 		"status":     status,
 		"updated_at": now,
 	}
+
+	// If start_at was never set (recipient never joined), derive it from the
+	// earliest joined_at among participants so duration can be computed.
+	if callLog.StartAt == nil {
+		for _, p := range callLog.Participants {
+			if p.JoinedAt == nil {
+				continue
+			}
+			existing, ok := updates["start_at"].(time.Time)
+			if !ok || p.JoinedAt.Before(existing) {
+				updates["start_at"] = *p.JoinedAt
+			}
+		}
+	}
+
 	if err := s.repo.UpdateByField(ctx, callLog.ID, updates); err != nil {
 		return nil, err
 	}
@@ -334,7 +346,7 @@ func (s *callLogService) EndCall(ctx context.Context, callUUID string, endAt *ti
 	return s.getCallLogResponse(ctx, callLog.ID)
 }
 
-func (s *callLogService) JoinCall(ctx context.Context, callUUID string, userID *uuid.UUID, guestPhone string) error {
+func (s *callLogService) JoinCall(ctx context.Context, callUUID string, phone string) error {
 	callLog, err := s.repo.FindByCallUUID(ctx, callUUID)
 	if err != nil {
 		return err
@@ -342,12 +354,7 @@ func (s *callLogService) JoinCall(ctx context.Context, callUUID string, userID *
 
 	now := time.Now()
 
-	var phone *string
-	if guestPhone != "" {
-		phone = &guestPhone
-	}
-
-	participant, err := s.repo.FindParticipant(ctx, callLog.ID, userID, phone)
+	participant, err := s.repo.FindParticipant(ctx, callLog.ID, phone)
 	if err != nil && err != gorm.ErrRecordNotFound {
 		return err
 	}
@@ -363,7 +370,6 @@ func (s *callLogService) JoinCall(ctx context.Context, callUUID string, userID *
 	} else {
 		if err := s.repo.CreateParticipant(ctx, &models.CallParticipant{
 			CallLogID:   callLog.ID,
-			UserID:      userID,
 			PhoneNumber: phone,
 			Role:        "participant",
 			JoinStatus:  "joined",
@@ -386,7 +392,7 @@ func (s *callLogService) JoinCall(ctx context.Context, callUUID string, userID *
 	return nil
 }
 
-func (s *callLogService) GetCallLogsByUserID(ctx context.Context, userID uuid.UUID, page, limit int) ([]models.CallLogResponse, int64, error) {
+func (s *callLogService) GetCallLogsByPhone(ctx context.Context, phone string, page, limit int) ([]models.CallLogResponse, int64, error) {
 	if page <= 0 {
 		page = 1
 	}
@@ -394,7 +400,7 @@ func (s *callLogService) GetCallLogsByUserID(ctx context.Context, userID uuid.UU
 		limit = 10
 	}
 
-	callLogs, total, err := s.repo.FindByUserID(ctx, userID, page, limit)
+	callLogs, total, err := s.repo.FindByPhone(ctx, phone, page, limit)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -442,8 +448,12 @@ func (s *callLogService) getCallLogResponse(ctx context.Context, id uuid.UUID) (
 }
 
 // toCallLogResponse converts a CallLog (with preloaded Participants) to the API response,
-// bulk-fetching user details for registered participants.
+// bulk-fetching user names for participants by phone/extension.
 func (s *callLogService) toCallLogResponse(ctx context.Context, callLog *models.CallLog) (models.CallLogResponse, error) {
+	var recordingURL string
+	if len(callLog.Attachments) > 0 {
+		recordingURL = pkgUtils.GenerateAttachmentAppURL(ctx, callLog.Attachments[0].ID)
+	}
 	resp := models.CallLogResponse{
 		ID:           callLog.ID,
 		CallUuid:     callLog.CallUuid,
@@ -451,7 +461,7 @@ func (s *callLogService) toCallLogResponse(ctx context.Context, callLog *models.
 		Status:       callLog.Status,
 		StartAt:      callLog.StartAt,
 		EndAt:        callLog.EndAt,
-		RecordingUrl: callLog.RecordingUrl,
+		RecordingUrl: recordingURL,
 		Meta:         callLog.Meta,
 		CreatedAt:    callLog.CreatedAt,
 		UpdatedAt:    callLog.UpdatedAt,
@@ -462,43 +472,41 @@ func (s *callLogService) toCallLogResponse(ctx context.Context, callLog *models.
 		return resp, nil
 	}
 
-	// Collect unique user IDs for a single bulk fetch.
-	var userIDs []uuid.UUID
+	// Bulk-fetch users matching participant phone numbers/extensions.
+	phones := make([]string, 0, len(callLog.Participants))
 	for _, p := range callLog.Participants {
-		if p.UserID != nil {
-			userIDs = append(userIDs, *p.UserID)
+		if p.PhoneNumber != "" {
+			phones = append(phones, p.PhoneNumber)
 		}
 	}
-
-	userMap := make(map[uuid.UUID]*models.User)
-	if len(userIDs) > 0 {
-		if users, err := s.userRepo.FindByIDs(ctx, userIDs); err == nil {
-			for i := range users {
-				userMap[users[i].ID] = &users[i]
+	nameMap := make(map[string]string) // phone/ext → full name
+	if users, err := s.userRepo.FindByExtOrPhoneList(ctx, phones); err == nil {
+		for _, u := range users {
+			fullName := strings.TrimSpace(u.FirstName + " " + u.LastName)
+			if u.Extension != "" {
+				nameMap[u.Extension] = fullName
+			}
+			if u.Phone != "" {
+				nameMap[u.Phone] = fullName
 			}
 		}
 	}
 
 	participantResponses := make([]models.CallParticipantResponse, len(callLog.Participants))
 	for i, p := range callLog.Participants {
-		pr := models.CallParticipantResponse{
+		name := nameMap[p.PhoneNumber]
+		if name == "" {
+			name = p.PhoneNumber
+		}
+		participantResponses[i] = models.CallParticipantResponse{
 			ID:          p.ID,
-			UserID:      p.UserID,
 			PhoneNumber: p.PhoneNumber,
+			Name:        name,
 			Role:        p.Role,
 			JoinStatus:  p.JoinStatus,
 			JoinedAt:    p.JoinedAt,
 			LeftAt:      p.LeftAt,
 		}
-		if p.UserID != nil {
-			if u, ok := userMap[*p.UserID]; ok {
-				pr.User = &models.UserMinimalResponse{
-					ID:        u.ID,
-					Extension: u.Extension,
-				}
-			}
-		}
-		participantResponses[i] = pr
 	}
 	resp.Participants = participantResponses
 
@@ -516,19 +524,7 @@ func (s *callLogService) AddAttachment(ctx context.Context, callUUID string, att
 
 	attachment.CallLogID = callLog.ID
 
-	if err := s.repo.CreateAttachment(ctx, attachment); err != nil {
-		return err
-	}
-
-	if attachment.ID != uuid.Nil {
-		recordingURL := pkgUtils.GenerateAttachmentAppURL(ctx, attachment.ID)
-		updates := map[string]interface{}{"recording_url": recordingURL}
-		if err := s.repo.UpdateByField(ctx, callLog.ID, updates); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return s.repo.CreateAttachment(ctx, attachment)
 }
 
 func (s *callLogService) GetAttachment(ctx context.Context, attachmentID uuid.UUID) (*models.CallLogAttachment, error) {

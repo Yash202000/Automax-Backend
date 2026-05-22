@@ -21,10 +21,10 @@ type CallLogRepository interface {
 	List(ctx context.Context, filter *models.CallLogFilter) ([]models.CallLog, int64, error)
 	ListSummary(ctx context.Context, filter *models.CallLogFilter) ([]models.CallLog, int64, error)
 	GetStats(ctx context.Context) (*models.CallLogStats, error)
-	FindByUserID(ctx context.Context, userID uuid.UUID, page, limit int) ([]models.CallLog, int64, error)
+	FindByPhone(ctx context.Context, phone string, page, limit int) ([]models.CallLog, int64, error)
 	CreateWithParticipants(ctx context.Context, callLog *models.CallLog, participants []*models.CallParticipant) error
 	CreateParticipant(ctx context.Context, p *models.CallParticipant) error
-	FindParticipant(ctx context.Context, callLogID uuid.UUID, userID *uuid.UUID, phone *string) (*models.CallParticipant, error)
+	FindParticipant(ctx context.Context, callLogID uuid.UUID, phone string) (*models.CallParticipant, error)
 	UpdateParticipant(ctx context.Context, p *models.CallParticipant) error
 	UpdateParticipantsLeftAt(ctx context.Context, callLogID uuid.UUID, leftAt time.Time) error
 	CreateAttachment(ctx context.Context, attachment *models.CallLogAttachment) error
@@ -47,6 +47,7 @@ func (r *callLogRepository) FindByID(ctx context.Context, id uuid.UUID) (*models
 	var callLog models.CallLog
 	err := r.db.WithContext(ctx).
 		Preload("Participants").
+		Preload("Attachments").
 		First(&callLog, "id = ?", id).Error
 	if err != nil {
 		return nil, err
@@ -111,11 +112,15 @@ func (r *callLogRepository) List(ctx context.Context, filter *models.CallLogFilt
 	}
 	if filter.Search != "" {
 		searchPattern := "%" + filter.Search + "%"
-		query = query.Where("call_uuid ILIKE ? OR recording_url ILIKE ?", searchPattern, searchPattern)
+		query = query.Where("call_uuid ILIKE ?", searchPattern)
 	}
 	if filter.ParticipantID != nil {
 		query = query.Where(
-			"id IN (SELECT call_log_id FROM call_participants WHERE user_id = ?)",
+			`id IN (
+				SELECT cp.call_log_id FROM call_participants cp
+				JOIN users u ON cp.phone_number = u.extension OR cp.phone_number = u.phone
+				WHERE u.id = ?
+			)`,
 			*filter.ParticipantID,
 		)
 	}
@@ -127,6 +132,7 @@ func (r *callLogRepository) List(ctx context.Context, filter *models.CallLogFilt
 	offset := (filter.Page - 1) * filter.Limit
 	err := query.
 		Preload("Participants").
+		Preload("Attachments").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(filter.Limit).
@@ -155,7 +161,11 @@ func (r *callLogRepository) ListSummary(ctx context.Context, filter *models.Call
 	}
 	if filter.ParticipantID != nil {
 		query = query.Where(
-			"id IN (SELECT call_log_id FROM call_participants WHERE user_id = ?)",
+			`id IN (
+				SELECT cp.call_log_id FROM call_participants cp
+				JOIN users u ON cp.phone_number = u.extension OR cp.phone_number = u.phone
+				WHERE u.id = ?
+			)`,
 			*filter.ParticipantID,
 		)
 	}
@@ -166,8 +176,9 @@ func (r *callLogRepository) ListSummary(ctx context.Context, filter *models.Call
 
 	offset := (filter.Page - 1) * filter.Limit
 	err := query.
-		Select("id, call_uuid, call_type, start_at, end_at, status, created_at, recording_url").
+		Select("id, call_uuid, call_type, start_at, end_at, status, created_at").
 		Preload("Participants").
+		Preload("Attachments").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(filter.Limit).
@@ -203,12 +214,12 @@ func (r *callLogRepository) GetStats(ctx context.Context) (*models.CallLogStats,
 	return stats, nil
 }
 
-func (r *callLogRepository) FindByUserID(ctx context.Context, userID uuid.UUID, page, limit int) ([]models.CallLog, int64, error) {
+func (r *callLogRepository) FindByPhone(ctx context.Context, phone string, page, limit int) ([]models.CallLog, int64, error) {
 	var callLogs []models.CallLog
 	var total int64
 
 	query := r.db.WithContext(ctx).Model(&models.CallLog{}).
-		Where("id IN (SELECT call_log_id FROM call_participants WHERE user_id = ?)", userID)
+		Where("id IN (SELECT call_log_id FROM call_participants WHERE phone_number = ?)", phone)
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -217,6 +228,7 @@ func (r *callLogRepository) FindByUserID(ctx context.Context, userID uuid.UUID, 
 	offset := (page - 1) * limit
 	err := query.
 		Preload("Participants").
+		Preload("Attachments").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(limit).
@@ -247,17 +259,11 @@ func (r *callLogRepository) CreateParticipant(ctx context.Context, p *models.Cal
 	return r.db.WithContext(ctx).Create(p).Error
 }
 
-func (r *callLogRepository) FindParticipant(ctx context.Context, callLogID uuid.UUID, userID *uuid.UUID, phone *string) (*models.CallParticipant, error) {
+func (r *callLogRepository) FindParticipant(ctx context.Context, callLogID uuid.UUID, phone string) (*models.CallParticipant, error) {
 	var p models.CallParticipant
-	query := r.db.WithContext(ctx).Where("call_log_id = ?", callLogID)
-	if userID != nil {
-		query = query.Where("user_id = ?", *userID)
-	} else if phone != nil {
-		query = query.Where("phone_number = ?", *phone)
-	} else {
-		return nil, fmt.Errorf("userID or phone must be provided")
-	}
-	if err := query.First(&p).Error; err != nil {
+	if err := r.db.WithContext(ctx).
+		Where("call_log_id = ? AND phone_number = ?", callLogID, phone).
+		First(&p).Error; err != nil {
 		return nil, err
 	}
 	return &p, nil
