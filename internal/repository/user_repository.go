@@ -39,6 +39,8 @@ type UserRepository interface {
 	FindMatching(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.User, error)
 
 	FindByExtension(ctx context.Context, extension string) (*models.User, error)
+	FindByExtOrPhone(ctx context.Context, phone string) (*models.User, error)
+	FindByExtOrPhoneList(ctx context.Context, phones []string) ([]models.User, error)
 	FindByMobile(ctx context.Context, phone string) (*models.User, error)
 	FindByPhoneWithRelations(ctx context.Context, phone string) (*models.User, error)
 	FindByPhoneForLogin(ctx context.Context, phone string) (*models.User, error)
@@ -586,6 +588,26 @@ func (r *userRepository) FindByExtension(ctx context.Context, extension string) 
 	var user models.User
 	err := r.db.WithContext(ctx).Where("extension = ?", extension).First(&user).Error
 	return &user, err
+}
+
+func (r *userRepository) FindByExtOrPhone(ctx context.Context, phone string) (*models.User, error) {
+	var user models.User
+	err := r.db.WithContext(ctx).Where("extension = ? OR phone = ?", phone, phone).First(&user).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *userRepository) FindByExtOrPhoneList(ctx context.Context, phones []string) ([]models.User, error) {
+	if len(phones) == 0 {
+		return []models.User{}, nil
+	}
+	var users []models.User
+	err := r.db.WithContext(ctx).
+		Where("extension IN ? OR phone IN ?", phones, phones).
+		Find(&users).Error
+	return users, err
 }
 
 func (r *userRepository) FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.User, error) {

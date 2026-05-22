@@ -49,6 +49,8 @@ type UserService interface {
 	FindMatchingUsers(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.UserResponse, error)
 	UpdateUserCallStatus(ctx context.Context, extension string, status string) (interface{}, error)
 	FindByExtension(ctx context.Context, extension string) (*models.User, error)
+	FindByExtOrPhone(ctx context.Context, phone string) (*models.User, error)
+	FindByExtOrPhoneList(ctx context.Context, phones []string) ([]models.User, error)
 	UpdateProfile(ctx context.Context, req *models.UserUpdateRequest) (*models.UserResponse, error)
 	GenerateTokenViaUserID(ctx context.Context, mobile uuid.UUID) (*models.AuthResponse, error)
 	ValidateMobileForLogin(ctx context.Context, phone string) (*models.UserResponse, error)
@@ -1742,6 +1744,14 @@ func (s *userService) FindByExtension(ctx context.Context, extension string) (*m
 		return nil, err
 	}
 	return user, nil
+}
+
+func (s *userService) FindByExtOrPhone(ctx context.Context, phone string) (*models.User, error) {
+	return s.userRepo.FindByExtOrPhone(ctx, phone)
+}
+
+func (s *userService) FindByExtOrPhoneList(ctx context.Context, phones []string) ([]models.User, error) {
+	return s.userRepo.FindByExtOrPhoneList(ctx, phones)
 }
 
 func (s *userService) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {

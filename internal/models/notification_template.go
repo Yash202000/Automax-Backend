@@ -174,6 +174,7 @@ type NotificationTemplateCreateRequest struct {
 type NotificationTemplateUpdateRequest struct {
 	Name         *string    `json:"name"`
 	SubjectEN    *string    `json:"subject_en"`
+	Channel      string     `json:"channel"       validate:"required,oneof=email sms"`
 	BodyEN       *string    `json:"body_en"`
 	SubjectAR    *string    `json:"subject_ar"`
 	BodyAR       *string    `json:"body_ar"`

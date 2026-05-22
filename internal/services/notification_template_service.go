@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"log"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
@@ -88,12 +89,15 @@ func (s *notificationTemplateService) Update(ctx context.Context, id uuid.UUID, 
 	if req.SubjectEN != nil {
 		tpl.SubjectEN = *req.SubjectEN
 	}
+
+	if req.BodyEN != nil && *req.BodyEN == "" && req.BodyAR != nil && *req.BodyAR == "" {
+		return nil, errors.New("body cannot be empty")
+	}
+
 	if req.BodyEN != nil {
-		if *req.BodyEN == "" {
-			return nil, errors.New("body_en cannot be empty")
-		}
 		tpl.BodyEN = *req.BodyEN
 	}
+
 	if req.SubjectAR != nil {
 		tpl.SubjectAR = *req.SubjectAR
 	}
@@ -114,6 +118,10 @@ func (s *notificationTemplateService) Update(ctx context.Context, id uuid.UUID, 
 	}
 	if req.IsActive != nil {
 		tpl.IsActive = *req.IsActive
+	}
+	log.Print("Channel: ", req.Channel)
+	if req.Channel != "" {
+		tpl.Channel = req.Channel
 	}
 
 	if err := s.repo.Update(ctx, tpl); err != nil {

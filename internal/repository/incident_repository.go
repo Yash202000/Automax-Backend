@@ -1434,7 +1434,7 @@ func (r *incidentRepository) UpdateFieldsWithVersion(ctx context.Context, id uui
 	updates["version"] = expectedVersion + 1
 	updates["updated_at"] = time.Now()
 
-	result := r.db.WithContext(ctx).
+	result := r.db.WithContext(ctx).Debug().
 		Model(&models.Incident{}).
 		Where("id = ? AND version = ?", id, expectedVersion).
 		Updates(updates)

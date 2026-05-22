@@ -250,6 +250,16 @@ func Migrate(db *gorm.DB) error {
 		log.Printf("Warning: user national_id migration failed: %v", err)
 	}
 
+	// Drop recording_url from call_logs — URLs are now generated from call_log_attachments
+	if err := migrations.MigrateCallLogRecordingURL(db); err != nil {
+		log.Printf("Warning: call_log recording_url migration failed: %v", err)
+	}
+
+	// Drop user_id from call_participants — participants are identified by phone_number only
+	if err := migrations.MigrateCallParticipantPhone(db); err != nil {
+		log.Printf("Warning: call_participant phone migration failed: %v", err)
+	}
+
 	// Seed existing free-text goal categories as root Category rows
 	// and back-fill goals.category_id. Idempotent: safe to run repeatedly.
 	if err := migrateFreeTextGoalCategories(db); err != nil {
