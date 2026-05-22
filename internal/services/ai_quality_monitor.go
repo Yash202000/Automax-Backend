@@ -265,9 +265,25 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 
 	writer.Close() // must close before reading body
 
+	// Log the full payload summary before sending.
+	log.Printf("[AIQualityMonitor] incident=%s === PAYLOAD SUMMARY ===", incident.IncidentNumber)
+	log.Printf("[AIQualityMonitor]   user_comment      = %q", truncate(userComment, 200))
+	log.Printf("[AIQualityMonitor]   resolver_comment   = %q", truncate(resolverComment, 200))
+	log.Printf("[AIQualityMonitor]   before_coordinates = %q", beforeCoords)
+	log.Printf("[AIQualityMonitor]   after_coordinates  = %q", afterCoords)
+	log.Printf("[AIQualityMonitor]   before_image: id=%s name=%s mime=%s path=%s size=%d",
+		beforeAtt.ID, beforeAtt.FileName, beforeAtt.MimeType, beforeAtt.FilePath, beforeAtt.FileSize)
+	if len(imageAttachments) >= 2 {
+		afterAtt := imageAttachments[len(imageAttachments)-1]
+		log.Printf("[AIQualityMonitor]   after_image:  id=%s name=%s mime=%s path=%s size=%d",
+			afterAtt.ID, afterAtt.FileName, afterAtt.MimeType, afterAtt.FilePath, afterAtt.FileSize)
+	}
+	log.Printf("[AIQualityMonitor]   total_payload_bytes = %d", body.Len())
+	log.Printf("[AIQualityMonitor] === END PAYLOAD ===")
+
 	// Call the AI API.
 	log.Printf("[AIQualityMonitor] incident=%s calling API endpoint: %s", incident.IncidentNumber, m.cfg.APIEndpoint)
-	apiResp, err := m.callAIAPI(ctx, body, writer.FormDataContentType())
+	apiResp, rawBody, err := m.callAIAPI(ctx, body, writer.FormDataContentType())
 	if err != nil {
 		return fmt.Errorf("AI API call: %w", err)
 	}
@@ -310,6 +326,7 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 		ChangedSummary:   apiResp.ChangeSummary,
 		ResolutionStatus: apiResp.ResolutionStatus,
 		DistanceMeters:   distanceMeters,
+		RawResponse:      rawBody,
 	}
 	if err := m.feedbackRepo.Create(ctx, feedback); err != nil {
 		return fmt.Errorf("save AIQualityFeedback: %w", err)
@@ -399,10 +416,10 @@ func (m *aiQualityMonitor) writeFileFieldViaURL(ctx context.Context, part io.Wri
 }
 
 // callAIAPI sends the multipart body to the AI API and parses the JSON response.
-func (m *aiQualityMonitor) callAIAPI(ctx context.Context, body *bytes.Buffer, contentType string) (*aiQualityAPIResponse, error) {
+func (m *aiQualityMonitor) callAIAPI(ctx context.Context, body *bytes.Buffer, contentType string) (*aiQualityAPIResponse, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.cfg.APIEndpoint, body)
 	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
+		return nil, nil, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
@@ -412,26 +429,26 @@ func (m *aiQualityMonitor) callAIAPI(ctx context.Context, body *bytes.Buffer, co
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
+		return nil, nil, fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	rawBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read response body: %w", err)
+		return nil, nil, fmt.Errorf("read response body: %w", err)
 	}
 
 	log.Printf("[AIQualityMonitor] API HTTP %d — body: %s", resp.StatusCode, truncate(string(rawBody), 500))
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("API returned HTTP %d: %s", resp.StatusCode, string(rawBody))
+		return nil, nil, fmt.Errorf("API returned HTTP %d: %s", resp.StatusCode, string(rawBody))
 	}
 
 	var apiResp aiQualityAPIResponse
 	if err := json.Unmarshal(rawBody, &apiResp); err != nil {
-		return nil, fmt.Errorf("decode response JSON: %w", err)
+		return nil, nil, fmt.Errorf("decode response JSON: %w", err)
 	}
-	return &apiResp, nil
+	return &apiResp, rawBody, nil
 }
 
 // ---- helpers ---------------------------------------------------------------
