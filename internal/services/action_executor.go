@@ -440,6 +440,33 @@ func (e *actionExecutor) buildVariables(incident *models.Incident, transition *m
 		"incident_number": incident.IncidentNumber,
 		"incident_title":  incident.Title,
 		"incident_id":     incident.ID.String(),
+		"description":     incident.Description,
+		"record_type":     incident.RecordType,
+		"source":          incident.Source,
+		"channel":         incident.Channel,
+		"reporter_name":   incident.ReporterName,
+		"reporter_email":  incident.ReporterEmail,
+		"reporter_phone":  incident.ReporterPhone,
+		"created_by_name": incident.CreatedByName,
+		"sla_breached":    fmt.Sprintf("%t", incident.SLABreached),
+		"address":         incident.Address,
+		"city":            incident.City,
+		"country":         incident.Country,
+	}
+
+	if incident.DueDate != nil {
+		vars["due_date"] = incident.DueDate.Format("2006-01-02 15:04:05")
+	}
+	if incident.SLADeadline != nil {
+		vars["sla_deadline"] = incident.SLADeadline.Format("2006-01-02 15:04:05")
+	}
+	vars["created_at"] = incident.CreatedAt.Format("2006-01-02 15:04:05")
+
+	if incident.Classification != nil {
+		vars["classification_name"] = incident.Classification.Name
+	}
+	if incident.Workflow != nil {
+		vars["workflow_name"] = incident.Workflow.Name
 	}
 
 	if transition != nil {
@@ -468,6 +495,8 @@ func (e *actionExecutor) buildVariables(incident *models.Incident, transition *m
 			name = incident.Assignee.FirstName + " " + incident.Assignee.LastName
 		}
 		vars["assignee"] = name
+		vars["assignee_email"] = incident.Assignee.Email
+		vars["assignee_phone"] = incident.Assignee.Phone
 	} else {
 		vars["assignee"] = "Unassigned"
 	}
@@ -485,6 +514,33 @@ func (e *actionExecutor) replacePlaceholders(template string, incident *models.I
 		"{{incident_number}}": incident.IncidentNumber,
 		"{{incident_title}}":  incident.Title,
 		"{{incident_id}}":     incident.ID.String(),
+		"{{description}}":    incident.Description,
+		"{{record_type}}":    incident.RecordType,
+		"{{source}}":         incident.Source,
+		"{{channel}}":        incident.Channel,
+		"{{reporter_name}}":  incident.ReporterName,
+		"{{reporter_email}}": incident.ReporterEmail,
+		"{{reporter_phone}}": incident.ReporterPhone,
+		"{{created_by_name}}": incident.CreatedByName,
+		"{{sla_breached}}":   fmt.Sprintf("%t", incident.SLABreached),
+		"{{address}}":        incident.Address,
+		"{{city}}":           incident.City,
+		"{{country}}":        incident.Country,
+	}
+
+	if incident.DueDate != nil {
+		replacements["{{due_date}}"] = incident.DueDate.Format("2006-01-02 15:04:05")
+	}
+	if incident.SLADeadline != nil {
+		replacements["{{sla_deadline}}"] = incident.SLADeadline.Format("2006-01-02 15:04:05")
+	}
+	replacements["{{created_at}}"] = incident.CreatedAt.Format("2006-01-02 15:04:05")
+
+	if incident.Classification != nil {
+		replacements["{{classification_name}}"] = incident.Classification.Name
+	}
+	if incident.Workflow != nil {
+		replacements["{{workflow_name}}"] = incident.Workflow.Name
 	}
 
 	priority := "N/A"
@@ -519,6 +575,8 @@ func (e *actionExecutor) replacePlaceholders(template string, incident *models.I
 			name = incident.Assignee.FirstName + " " + incident.Assignee.LastName
 		}
 		replacements["{{assignee}}"] = name
+		replacements["{{assignee_email}}"] = incident.Assignee.Email
+		replacements["{{assignee_phone}}"] = incident.Assignee.Phone
 	} else {
 		replacements["{{assignee}}"] = "Unassigned"
 	}
