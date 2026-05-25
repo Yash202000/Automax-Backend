@@ -358,7 +358,7 @@ func (r *userRepository) ListByDepartment(ctx context.Context, departmentID uuid
 
 func (r *userRepository) ExistsByEmail(ctx context.Context, email string) (bool, error) {
 	var count int64
-	err := r.db.WithContext(ctx).Model(&models.User{}).Where("email = ?", email).Count(&count).Error
+	err := r.db.WithContext(ctx).Model(&models.User{}).Where("LOWER(email) = LOWER(?)", email).Count(&count).Error
 	return count > 0, err
 }
 

@@ -111,6 +111,10 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 	actorID, _ := ctx.Value(constants.ContextKeys.UserID).(uuid.UUID)
 	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
 	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
+
+	// Normalize email to lowercase to avoid case-sensitivity issues
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+
 	if req.Phone != "" {
 		exists, err := s.userRepo.ExistsByPhone(ctx, req.Phone, uuid.Nil)
 		if err != nil {
@@ -164,6 +168,17 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 	}
 
 	if err := s.userRepo.Create(ctx, user); err != nil {
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "23505") {
+			if strings.Contains(err.Error(), "idx_users_email") {
+				return nil, errors.New("email already exists")
+			}
+			if strings.Contains(err.Error(), "idx_users_username") {
+				return nil, errors.New("username already exists")
+			}
+			if strings.Contains(err.Error(), "idx_users_phone") {
+				return nil, errors.New("phone number already in use")
+			}
+		}
 		return nil, err
 	}
 
