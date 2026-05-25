@@ -93,7 +93,7 @@ type WorkflowState struct {
 	// IsAIQA marks this state as requiring AI Quality Assurance.
 	// When an incident with is_ai_verified=true reaches a state where is_ai_qa=true,
 	// the AI quality monitor will process it.
-	IsAIQA bool `gorm:"default:false" json:"is_ai_qa"`
+	IsAIQA bool `gorm:"column:is_ai_qa;default:false" json:"is_ai_qa"`
 
 	// IsReadyToClose marks this state as a "Ready to Close" state that requires a
 	IsReadyToClose bool `gorm:"default:false" json:"is_ready_to_close"`
@@ -207,6 +207,7 @@ type WorkflowTransition struct {
 	IsRejection   bool           `gorm:"default:false" json:"is_rejection"`
 	IsNotBelong   bool           `gorm:"default:false" json:"is_not_belong"`   // IsNotBelong marks this transition as a "Not Belong" closure action.
 	IsMissingInfo bool           `gorm:"default:false" json:"is_missing_info"` // IsMissingInfo marks this transition as a "Missing Incident Information" closure action — triggers SMS to citizen.
+	IsReopen      bool           `gorm:"default:false" json:"is_reopen"`       // IsReopen marks this transition as a reopen action — used by AI Quality Audit to identify the reopen transition.
 	IsActive      bool           `gorm:"default:true" json:"is_active"`
 	SortOrder     int            `gorm:"default:0" json:"sort_order"`
 	CreatedAt     time.Time      `json:"created_at"`
@@ -348,6 +349,7 @@ type WorkflowStateCreateRequest struct {
 	SLAUnit            string   `json:"sla_unit" validate:"omitempty,oneof=minutes hours days months"`
 	EscalationPolicyID *string  `json:"escalation_policy_id" validate:"omitempty,uuid"`
 	IsMergable         bool     `json:"is_mergable"`
+	IsAIQA             bool     `json:"is_ai_qa"`
 	IsReadyToClose     bool     `json:"is_ready_to_close"`
 	IsPartialClose     bool     `json:"is_partial_close"`
 	DurationOptions    []string `json:"duration_options"`
@@ -378,6 +380,7 @@ type WorkflowStateUpdateRequest struct {
 	SLAUnit            string   `json:"sla_unit" validate:"omitempty,oneof=minutes hours days months"`
 	EscalationPolicyID *string  `json:"escalation_policy_id" validate:"omitempty,uuid"`
 	IsMergable         *bool    `json:"is_mergable"`
+	IsAIQA             *bool    `json:"is_ai_qa"`
 	IsReadyToClose     *bool    `json:"is_ready_to_close"`
 	IsPartialClose     *bool    `json:"is_partial_close"`
 	DurationOptions    []string `json:"duration_options"`
@@ -408,6 +411,7 @@ type WorkflowTransitionCreateRequest struct {
 	IsRejection   bool     `json:"is_rejection"`
 	IsNotBelong   bool     `json:"is_not_belong"`
 	IsMissingInfo bool     `json:"is_missing_info"`
+	IsReopen      bool     `json:"is_reopen"`
 
 	// Department Assignment
 	AssignDepartmentID   *string `json:"assign_department_id" validate:"omitempty"`
@@ -435,6 +439,7 @@ type WorkflowTransitionUpdateRequest struct {
 	IsRejection   *bool    `json:"is_rejection"`
 	IsNotBelong   *bool    `json:"is_not_belong"`
 	IsMissingInfo *bool    `json:"is_missing_info"`
+	IsReopen      *bool    `json:"is_reopen"`
 
 	// Department Assignment
 	AssignDepartmentID   *string `json:"assign_department_id" validate:"omitempty,uuid"`
@@ -552,6 +557,7 @@ type WorkflowStateResponse struct {
 	EscalationPolicyID *uuid.UUID                `json:"escalation_policy_id,omitempty"`
 	EscalationPolicy   *EscalationPolicyResponse `json:"escalation_policy,omitempty"`
 	IsMergable         bool                      `json:"is_mergable"`
+	IsAIQA             bool                      `json:"is_ai_qa"`
 	IsReadyToClose     bool                      `json:"is_ready_to_close"`
 	IsPartialClose     bool                      `json:"is_partial_close"`
 	DurationOptions    []string                  `json:"duration_options,omitempty"`
@@ -603,6 +609,7 @@ type WorkflowTransitionResponse struct {
 	IsRejection   bool                            `json:"is_rejection"`
 	IsNotBelong   bool                            `json:"is_not_belong"`
 	IsMissingInfo bool                            `json:"is_missing_info"`
+	IsReopen      bool                            `json:"is_reopen"`
 	IsActive      bool                            `json:"is_active"`
 	SortOrder     int                             `json:"sort_order"`
 	CreatedAt     time.Time                       `json:"created_at"`
@@ -768,6 +775,7 @@ func ToWorkflowStateResponse(s *WorkflowState) WorkflowStateResponse {
 		SLAUnit:            s.SLAUnit,
 		EscalationPolicyID: s.EscalationPolicyID,
 		IsMergable:         s.IsMergable,
+		IsAIQA:             s.IsAIQA,
 		IsReadyToClose:     s.IsReadyToClose,
 		IsPartialClose:     s.IsPartialClose,
 		SortOrder:          s.SortOrder,
@@ -840,6 +848,7 @@ func ToWorkflowTransitionResponse(t *WorkflowTransition) WorkflowTransitionRespo
 		IsRejection:          t.IsRejection,
 		IsNotBelong:          t.IsNotBelong,
 		IsMissingInfo:        t.IsMissingInfo,
+		IsReopen:             t.IsReopen,
 		IsActive:             t.IsActive,
 		SortOrder:            t.SortOrder,
 		CreatedAt:            t.CreatedAt,

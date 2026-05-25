@@ -28,6 +28,10 @@ type AIQualityFeedback struct {
 	// RawResponse stores the full JSON response from the AI quality API for auditing.
 	RawResponse json.RawMessage `gorm:"type:jsonb" json:"raw_response,omitempty"`
 
+	// IsReopened is set to true when a QA agent clicks "Reopen" from the Quality Audit page.
+	// Reset to false automatically when the incident returns to a QA state (closed/ready_to_close).
+	IsReopened bool `gorm:"column:is_reopened;default:false" json:"is_reopened"`
+
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`

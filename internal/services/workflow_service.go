@@ -856,6 +856,7 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 		SLAHours:                     req.SLAHours,
 		SLAUnit:                      req.SLAUnit,
 		IsMergable:                   req.IsMergable,
+		IsAIQA:                       req.IsAIQA,
 		IsReadyToClose:               req.IsReadyToClose,
 		IsPartialClose:               req.IsPartialClose,
 		DurationOptions:              durationOptionsJSON,
@@ -1018,6 +1019,9 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 	if req.IsMergable != nil {
 		state.IsMergable = *req.IsMergable
 	}
+	if req.IsAIQA != nil {
+		state.IsAIQA = *req.IsAIQA
+	}
 	if req.IsReadyToClose != nil {
 		state.IsReadyToClose = *req.IsReadyToClose
 	}
@@ -1151,6 +1155,7 @@ func (s *workflowService) CreateTransition(ctx context.Context, workflowID uuid.
 		IsRejection:          req.IsRejection,
 		IsNotBelong:          req.IsNotBelong,
 		IsMissingInfo:        req.IsMissingInfo,
+		IsReopen:             req.IsReopen,
 		AutoDetectDepartment: req.AutoDetectDepartment,
 		DepartmentTypeFilter: req.DepartmentTypeFilter,
 		AutoMatchUser:        req.AutoMatchUser,
@@ -1288,6 +1293,9 @@ func (s *workflowService) UpdateTransition(ctx context.Context, transitionID uui
 	}
 	if req.IsMissingInfo != nil {
 		transition.IsMissingInfo = *req.IsMissingInfo
+	}
+	if req.IsReopen != nil {
+		transition.IsReopen = *req.IsReopen
 	}
 	// Department Assignment
 	if req.AutoDetectDepartment != nil {
