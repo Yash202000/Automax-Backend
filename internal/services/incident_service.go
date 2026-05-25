@@ -1299,8 +1299,12 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 
 	resp := models.ToIncidentResponse(updated)
 
+	if len(updated.Assignees) == 0 {
+		log.Printf("No Assignees found for incident Number %s incident no. %s", incident.IncidentNumber, incident.ID.String())
+	}
+
 	// Send in-app notification to all assigned agents
-	if s.notificationService != nil {
+	if s.notificationService != nil && len(updated.Assignees) != 0 {
 		var emails []string
 		seen := make(map[string]bool)
 		addEmail := func(email string) {
@@ -1309,7 +1313,6 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 				emails = append(emails, email)
 			}
 		}
-		log.Printf("Updated assignee: %v, %v, %v, %v, %d", updated.AssigneeID, updated.Assignee, updated.Assignee.Email, updated.Assignees, len(updated.Assignees))
 		if updated.Assignee != nil {
 			addEmail(updated.Assignee.Email)
 		}
@@ -2865,17 +2868,27 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 					continue
 				}
 				// Find or create the lookup value by code within that category
+				code := fieldValue
+				if len(code) > 50 {
+					code = code[:50]
+				}
+				name := fieldValue
+				if len(name) > 200 {
+					name = name[:200]
+				}
 				var lookupVal models.LookupValue
 				err := tx.WithContext(ctx).
-					Where("category_id = ? AND code = ?", category.ID, fieldValue).
+					Where("category_id = ? AND code = ?", category.ID, code).
 					First(&lookupVal).Error
 				if err != nil {
 					lookupVal = models.LookupValue{
 						CategoryID: category.ID,
-						Code:       fieldValue,
-						Name:       fieldValue,
-						IsActive:   true,
+						Code:       code,
+						Name:       name,
+						// Description: fieldValue,
+						IsActive: true,
 					}
+
 					if createErr := tx.WithContext(ctx).Create(&lookupVal).Error; createErr != nil {
 						fmt.Printf("Warning: failed to create lookup value for category %s code %s: %v\n", categoryCode, fieldValue, createErr)
 						continue

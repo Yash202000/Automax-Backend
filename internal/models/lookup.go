@@ -89,8 +89,8 @@ type LookupCategoryUpdateRequest struct {
 // LookupValueCreateRequest for creating a new lookup value
 type LookupValueCreateRequest struct {
 	Code        string `json:"code" validate:"required,min=1,max=50"`
-	Name        string `json:"name" validate:"required,min=1,max=100"`
-	NameAr      string `json:"name_ar" validate:"max=100"`
+	Name        string `json:"name" validate:"required,min=1,max=200"`
+	NameAr      string `json:"name_ar" validate:"max=200"`
 	Description string `json:"description" validate:"max=500"`
 	SortOrder   int    `json:"sort_order"`
 	Color       string `json:"color" validate:"max=50"`
@@ -101,8 +101,8 @@ type LookupValueCreateRequest struct {
 // LookupValueUpdateRequest for updating a lookup value
 type LookupValueUpdateRequest struct {
 	Code        string `json:"code" validate:"max=50"`
-	Name        string `json:"name" validate:"max=100"`
-	NameAr      string `json:"name_ar" validate:"max=100"`
+	Name        string `json:"name" validate:"max=200"`
+	NameAr      string `json:"name_ar" validate:"max=200"`
 	Description string `json:"description" validate:"max=500"`
 	SortOrder   *int   `json:"sort_order"`
 	Color       string `json:"color" validate:"max=50"`
