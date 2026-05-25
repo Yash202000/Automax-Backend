@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"strings"
 
 	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/database"
@@ -419,6 +420,9 @@ func (h *LDAPHandler) RegisterADUser(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "User not found in LDAP: "+err.Error())
 	}
 
+	// Normalize email to lowercase
+	ldapUser.Email = strings.ToLower(strings.TrimSpace(ldapUser.Email))
+
 	// Check if user already exists by username or email
 	existingUser, _ := h.userRepo.FindByUsername(c.UserContext(), ldapUser.Username)
 	if existingUser != nil {
@@ -445,7 +449,15 @@ func (h *LDAPHandler) RegisterADUser(c *fiber.Ctx) error {
 	}
 
 	if err := h.userRepo.Create(c.UserContext(), user); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create user: "+err.Error())
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "23505") {
+			if strings.Contains(err.Error(), "idx_users_email") {
+				return utils.ErrorResponse(c, fiber.StatusConflict, "User with this email already exists in the system")
+			}
+			if strings.Contains(err.Error(), "idx_users_username") {
+				return utils.ErrorResponse(c, fiber.StatusConflict, "User with this username already exists in the system")
+			}
+		}
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create user")
 	}
 
 	// Reload with relations
