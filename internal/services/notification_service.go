@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 
@@ -60,17 +61,31 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 			// Template not found — fall through and use the provided subject/body as-is.
 			log.Printf("[NotificationService] template '%s' not found for channel '%s', using fallback content: %v", *templateCode, channel, err)
 		} else {
-			// Pick the language variant; fall back to EN if AR is empty.
+			// Pick the language variant.
+			// Primary: use the requested language if that variant is non-empty.
+			// Fallback: use whichever variant is available (AR falls back to EN, EN falls back to AR).
 			var tplBody, tplSubject string
 			if language == "ar" && tpl.BodyAR != "" {
 				tplBody = tpl.BodyAR
 				tplSubject = tpl.SubjectAR
-			} else {
+				log.Printf("[NotificationService] Template '%s': using AR variant", *templateCode)
+			} else if tpl.BodyEN != "" {
 				tplBody = tpl.BodyEN
 				tplSubject = tpl.SubjectEN
+				if language == "ar" {
+					log.Printf("[NotificationService] Template '%s': AR body is empty, falling back to EN", *templateCode)
+				}
+			} else if tpl.BodyAR != "" {
+				// EN body is empty but AR is set — use AR regardless of requested language
+				tplBody = tpl.BodyAR
+				tplSubject = tpl.SubjectAR
+				log.Printf("[NotificationService] Template '%s': EN body is empty, falling back to AR", *templateCode)
+			} else {
+				log.Printf("[NotificationService] Template '%s': both EN and AR bodies are empty — email will have no body", *templateCode)
 			}
 
 			if len(variables) > 0 {
+				log.Printf("[NotificationService] Rendering template '%s' (channel=%s) with %d variable(s)", *templateCode, channel, len(variables))
 				if tplBody != "" {
 					body, _ = RenderTemplate(tplBody, variables)
 				}
@@ -78,6 +93,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 					subject, _ = RenderTemplate(tplSubject, variables)
 				}
 			} else {
+				log.Printf("[NotificationService] Rendering template '%s' (channel=%s) with NO variables — placeholders will not be substituted", *templateCode, channel)
 				if tplBody != "" {
 					body = tplBody
 				}
@@ -801,14 +817,44 @@ func (s *NotificationService) SetMetaOnLogs(ctx context.Context, ids []uuid.UUID
 	return s.logRepo.SetMeta(ctx, ids, meta)
 }
 
+// placeholderRe matches {{key}} and {{.key}} patterns (key may contain letters, digits, underscores).
+var placeholderRe = regexp.MustCompile(`\{\{\.?([A-Za-z0-9_]+)\}\}`)
+
 // RenderTemplate substitutes variables into a template string.
+// Matching is case-insensitive: {{Incident_Number}} matches vars["incident_number"].
 // Supports both {{variable_name}} and {{.variable_name}} syntax.
 // Unknown variables are left unchanged in the output (never errors).
+// Logs which variables were substituted and which placeholders remain unmapped.
 func RenderTemplate(tpl string, vars map[string]string) (string, error) {
-	result := tpl
+	// Build a lowercase-keyed copy for case-insensitive lookups.
+	lower := make(map[string]string, len(vars))
 	for k, v := range vars {
-		result = strings.ReplaceAll(result, "{{"+k+"}}", v)
-		result = strings.ReplaceAll(result, "{{."+k+"}}", v)
+		lower[strings.ToLower(k)] = v
 	}
+
+	var substituted []string
+	result := placeholderRe.ReplaceAllStringFunc(tpl, func(match string) string {
+		// Extract inner key, strip optional leading dot.
+		sub := placeholderRe.FindStringSubmatch(match)
+		if len(sub) < 2 {
+			return match
+		}
+		key := strings.ToLower(strings.TrimSpace(sub[1]))
+		if v, ok := lower[key]; ok {
+			substituted = append(substituted, sub[1]) // log original casing
+			return v
+		}
+		return match // leave unrecognised placeholders as-is
+	})
+
+	// Detect any remaining unmapped placeholders.
+	unmapped := placeholderRe.FindAllString(result, -1)
+	if len(unmapped) > 0 {
+		log.Printf("[RenderTemplate] WARNING: %d unmapped placeholder(s) remain: %v | substituted: %v",
+			len(unmapped), unmapped, substituted)
+	} else {
+		log.Printf("[RenderTemplate] OK: substituted variables: %v", substituted)
+	}
+
 	return result, nil
 }

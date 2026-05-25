@@ -1,0 +1,175 @@
+package services
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/automax/backend/internal/models"
+)
+
+// BuildIncidentVariables builds the complete map of template variables for an incident.
+//
+// This is the SINGLE SOURCE OF TRUTH for template variable mapping.
+// Add new variables here — they automatically become available in every
+// notification path (transitions, escalations, new-incident, group alerts).
+//
+// Callers that have additional context-specific values (e.g. hours_in_state,
+// policy_name for escalation steps, or incident_count for group alerts) should
+// merge those on top of the returned map.
+//
+// Variable semantics:
+//   - first_name / last_name : the performedBy user (person who triggered the action).
+//     Escalation services should override these with the notified user's name.
+//   - state_name             : alias for current_state.
+//   - hours_in_state         : calculated from the latest TransitionHistory entry if loaded;
+//     escalation callers override with their own computed value.
+func BuildIncidentVariables(
+	incident *models.Incident,
+	transition *models.WorkflowTransition,
+	performedBy *models.User,
+) map[string]string {
+	vars := map[string]string{
+		// Core incident fields
+		"incident_number": incident.IncidentNumber,
+		"incident_title":  incident.Title,
+		"incident_id":     incident.ID.String(),
+		"description":     incident.Description,
+		"record_type":     incident.RecordType,
+		"source":          incident.Source,
+		"channel":         incident.Channel,
+		// Reporter plain fields (overridden below if Reporter relation is loaded)
+		"reporter_name":   incident.ReporterName,
+		"reporter_email":  incident.ReporterEmail,
+		"reporter_phone":  incident.ReporterPhone,
+		// Creator / location
+		"created_by_name": incident.CreatedByName,
+		"address":         incident.Address,
+		"city":            incident.City,
+		"country":         incident.Country,
+		// SLA
+		"sla_breached": fmt.Sprintf("%t", incident.SLABreached),
+		// Escalation-specific — empty by default; callers override
+		"hours_in_state":    "",
+		"sla_hours":         "",
+		"state_name":        "",
+		"hours_in_breach":   "",
+		"incident_url":      "",
+		"policy_name":       "",
+		"step_order":        "",
+		"incident_count":    "",
+		"sla_page_url":      "",
+		"incidents_summary": "",
+		"report_date":       "",
+	}
+
+	// Dates
+	vars["created_at"] = incident.CreatedAt.Format("2006-01-02 15:04:05")
+	if incident.DueDate != nil {
+		vars["due_date"] = incident.DueDate.Format("2006-01-02 15:04:05")
+	} else {
+		vars["due_date"] = ""
+	}
+	if incident.SLADeadline != nil {
+		vars["sla_deadline"] = incident.SLADeadline.Format("2006-01-02 15:04:05")
+	} else {
+		vars["sla_deadline"] = ""
+	}
+
+	// Classification
+	if incident.Classification != nil {
+		vars["classification_name"] = incident.Classification.Name
+	}
+
+	// Workflow
+	if incident.Workflow != nil {
+		vars["workflow_name"] = incident.Workflow.Name
+	}
+
+	// Location
+	if incident.Location != nil {
+		vars["location_name"] = incident.Location.Name
+	}
+
+	// Current state + SLA hours for this state
+	if incident.CurrentState != nil {
+		vars["current_state"] = incident.CurrentState.Name
+		vars["state_name"] = incident.CurrentState.Name
+		if incident.CurrentState.SLAHours != nil {
+			vars["sla_hours"] = fmt.Sprintf("%d", *incident.CurrentState.SLAHours)
+		}
+	}
+
+	// Assignee
+	if incident.Assignee != nil {
+		aname := incident.Assignee.Username
+		if incident.Assignee.FirstName != "" {
+			aname = incident.Assignee.FirstName + " " + incident.Assignee.LastName
+		}
+		vars["assignee"] = aname
+		vars["assignee_email"] = incident.Assignee.Email
+		vars["assignee_phone"] = incident.Assignee.Phone
+	} else {
+		vars["assignee"] = "Unassigned"
+		vars["assignee_email"] = ""
+		vars["assignee_phone"] = ""
+	}
+
+	// Reporter relation (overrides plain string fields where relation has richer data)
+	if incident.Reporter != nil {
+		rname := incident.Reporter.Username
+		if incident.Reporter.FirstName != "" {
+			rname = incident.Reporter.FirstName + " " + incident.Reporter.LastName
+		}
+		vars["reporter"] = rname
+		if vars["reporter_name"] == "" {
+			vars["reporter_name"] = rname
+		}
+		if vars["reporter_email"] == "" {
+			vars["reporter_email"] = incident.Reporter.Email
+		}
+		if vars["reporter_phone"] == "" {
+			vars["reporter_phone"] = incident.Reporter.Phone
+		}
+	}
+
+	// Transition fields
+	if transition != nil {
+		vars["transition_name"] = transition.Name
+		if transition.FromState != nil {
+			vars["from_state"] = transition.FromState.Name
+		}
+		if transition.ToState != nil {
+			vars["to_state"] = transition.ToState.Name
+		}
+	}
+
+	// Performed-by user (first_name / last_name refer to this person)
+	if performedBy != nil {
+		name := performedBy.Username
+		if performedBy.FirstName != "" {
+			name = performedBy.FirstName + " " + performedBy.LastName
+		}
+		vars["performed_by"] = name
+		vars["first_name"] = performedBy.FirstName
+		vars["last_name"] = performedBy.LastName
+	}
+
+	// Priority from lookup values
+	for _, lv := range incident.LookupValues {
+		if lv.Category != nil && lv.Category.Code == "PRIORITY" {
+			vars["priority"] = lv.Name
+			break
+		}
+	}
+
+	// Latest transition comment + hours_in_state (requires TransitionHistory to be preloaded)
+	if len(incident.TransitionHistory) > 0 {
+		latest := incident.TransitionHistory[len(incident.TransitionHistory)-1]
+		vars["comments"] = latest.Comment
+		vars["transition_comment"] = latest.Comment
+		hoursInState := time.Since(latest.TransitionedAt).Hours()
+		vars["hours_in_state"] = fmt.Sprintf("%.1f", hoursInState)
+	}
+
+	return vars
+}

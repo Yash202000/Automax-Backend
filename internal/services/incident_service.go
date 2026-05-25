@@ -705,27 +705,14 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		capturedCreated := created
 		capturedInitialState := initialState
 		go func() {
-			vars := map[string]string{
-				"incident_number": capturedCreated.IncidentNumber,
-				"incident_title":  capturedCreated.Title,
-				"incident_id":     capturedCreated.ID.String(),
-			}
+			// Use the centralized variable builder (no transition or performedBy for new incidents).
+			vars := BuildIncidentVariables(capturedCreated, nil, nil)
+			// For new_incident context, first_name/last_name refer to the assignee.
 			if capturedCreated.Assignee != nil {
-				name := capturedCreated.Assignee.Username
-				if capturedCreated.Assignee.FirstName != "" {
-					name = capturedCreated.Assignee.FirstName + " " + capturedCreated.Assignee.LastName
-				}
-				vars["assignee"] = name
 				vars["first_name"] = capturedCreated.Assignee.FirstName
 				vars["last_name"] = capturedCreated.Assignee.LastName
 			}
-			if capturedCreated.Reporter != nil {
-				rname := capturedCreated.Reporter.Username
-				if capturedCreated.Reporter.FirstName != "" {
-					rname = capturedCreated.Reporter.FirstName + " " + capturedCreated.Reporter.LastName
-				}
-				vars["reporter"] = rname
-			}
+			log.Printf("[NEW-INCIDENT-NOTIFY] Built %d variable(s) for incident %s", len(vars), capturedCreated.IncidentNumber)
 			if capturedInitialState.NewIncidentEmailTemplateCode != "" {
 				var emails []string
 				if capturedCreated.Assignee != nil && capturedCreated.Assignee.Email != "" {

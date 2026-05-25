@@ -1524,6 +1524,7 @@ func (r *incidentRepository) GetIncidentsExceedingStateSLA(ctx context.Context) 
 		Preload("Location").
 		Preload("Classification").
 		Preload("Assignee").
+		Preload("Reporter").
 		Find(&incidents).Error
 
 	return incidents, err

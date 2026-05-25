@@ -312,19 +312,18 @@ func (s *EscalationService) sendPolicyNotification(
 		step.StepOrder, policyName, incident.IncidentNumber, state.Name, hoursInState, slaHours, incidentURL,
 	)
 
-	vars := map[string]string{
-		"first_name":       user.FirstName,
-		"last_name":        user.LastName,
-		"incident_number":  incident.IncidentNumber,
-		"incident_title":   incident.Title,
-		"state_name":       state.Name,
-		"hours_in_state":   fmt.Sprintf("%.1f", hoursInState),
-		"sla_hours":        fmt.Sprintf("%d", slaHours),
-		"policy_name":      policyName,
-		"step_order":       fmt.Sprintf("%d", step.StepOrder),
-		"hours_in_breach":  fmt.Sprintf("%.1f", hoursInState-float64(slaHours)),
-		"incident_url":     incidentURL,
-	}
+	// Start from the full incident variable set, then override/add policy-step-specific values.
+	vars := BuildIncidentVariables(&incident, nil, nil)
+	vars["first_name"] = user.FirstName
+	vars["last_name"] = user.LastName
+	vars["state_name"] = state.Name
+	vars["current_state"] = state.Name
+	vars["hours_in_state"] = fmt.Sprintf("%.1f", hoursInState)
+	vars["sla_hours"] = fmt.Sprintf("%d", slaHours)
+	vars["policy_name"] = policyName
+	vars["step_order"] = fmt.Sprintf("%d", step.StepOrder)
+	vars["hours_in_breach"] = fmt.Sprintf("%.1f", hoursInState-float64(slaHours))
+	vars["incident_url"] = incidentURL
 
 	// Only look up a DB template when the step has one explicitly configured.
 	// nil = use the hardcoded subject/body above directly.
@@ -391,17 +390,17 @@ func (s *EscalationService) sendNotifications(
 		incident.IncidentNumber, state.Name, hoursInState, *state.SLAHours, transitionName, incidentURL,
 	)
 
-	vars := map[string]string{
-		"first_name":      user.FirstName,
-		"last_name":       user.LastName,
-		"incident_number": incident.IncidentNumber,
-		"incident_title":  incident.Title,
-		"state_name":      state.Name,
-		"hours_in_state":  fmt.Sprintf("%.1f", hoursInState),
-		"sla_hours":       fmt.Sprintf("%d", *state.SLAHours),
-		"transition_name": transitionName,
-		"incident_url":    incidentURL,
-	}
+	// Start from the full incident variable set, then override/add escalation-specific values.
+	vars := BuildIncidentVariables(&incident, nil, nil)
+	vars["first_name"] = user.FirstName
+	vars["last_name"] = user.LastName
+	vars["state_name"] = state.Name
+	vars["current_state"] = state.Name
+	vars["hours_in_state"] = fmt.Sprintf("%.1f", hoursInState)
+	vars["sla_hours"] = fmt.Sprintf("%d", *state.SLAHours)
+	vars["transition_name"] = transitionName
+	vars["incident_url"] = incidentURL
+	vars["hours_in_breach"] = fmt.Sprintf("%.1f", hoursInState-float64(*state.SLAHours))
 
 	emailCode := "SLA_STATE_BREACH"
 	smsCode := "SLA_STATE_BREACH_SMS"

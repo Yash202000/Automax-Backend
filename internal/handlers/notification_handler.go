@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -253,11 +254,14 @@ func (h *NotificationHandler) Send(c *fiber.Ctx) error {
 	subject := c.FormValue("subject")
 	body := c.FormValue("body")
 
-	// Parse variables if provided
+	// Parse variables if provided (expects a JSON object string, e.g. {"key":"value"})
 	variables := make(map[string]string)
 	if varsStr := c.FormValue("variables"); varsStr != "" {
-		// Simple key=value parsing (can be enhanced to JSON)
-		// For now, expect comma-separated key=value pairs
+		if err := json.Unmarshal([]byte(varsStr), &variables); err != nil {
+			log.Printf("[NotificationHandler] Failed to parse variables JSON from form: %v — variables will be empty", err)
+		} else {
+			log.Printf("[NotificationHandler] Parsed %d variable(s) from multipart form", len(variables))
+		}
 	}
 
 	// Handle attachments
