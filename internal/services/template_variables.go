@@ -2,6 +2,8 @@ package services
 
 import (
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/models"
@@ -53,13 +55,22 @@ func BuildIncidentVariables(
 		"sla_hours":         "",
 		"state_name":        "",
 		"hours_in_breach":   "",
-		"incident_url":      "",
 		"policy_name":       "",
 		"step_order":        "",
 		"incident_count":    "",
-		"sla_page_url":      "",
 		"incidents_summary": "",
 		"report_date":       "",
+	}
+
+	// Build URL variables from FRONTEND_URL env var (set in .env / deployment config).
+	// Escalation callers override incident_url with their own pre-built value.
+	frontendBase := strings.TrimRight(os.Getenv("FRONTEND_URL"), "/")
+	if frontendBase != "" {
+		vars["incident_url"] = frontendBase + "/incidents/" + incident.ID.String()
+		vars["sla_page_url"] = frontendBase + "/incidents?sla_breached=true"
+	} else {
+		vars["incident_url"] = ""
+		vars["sla_page_url"] = ""
 	}
 
 	// Dates

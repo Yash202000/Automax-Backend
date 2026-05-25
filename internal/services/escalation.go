@@ -324,6 +324,7 @@ func (s *EscalationService) sendPolicyNotification(
 	vars["step_order"] = fmt.Sprintf("%d", step.StepOrder)
 	vars["hours_in_breach"] = fmt.Sprintf("%.1f", hoursInState-float64(slaHours))
 	vars["incident_url"] = incidentURL
+	vars["sla_page_url"] = fmt.Sprintf("%s/incidents?sla_breached=true", s.frontendURL)
 
 	// Only look up a DB template when the step has one explicitly configured.
 	// nil = use the hardcoded subject/body above directly.
@@ -400,6 +401,7 @@ func (s *EscalationService) sendNotifications(
 	vars["sla_hours"] = fmt.Sprintf("%d", *state.SLAHours)
 	vars["transition_name"] = transitionName
 	vars["incident_url"] = incidentURL
+	vars["sla_page_url"] = fmt.Sprintf("%s/incidents?sla_breached=true", s.frontendURL)
 	vars["hours_in_breach"] = fmt.Sprintf("%.1f", hoursInState-float64(*state.SLAHours))
 
 	emailCode := "SLA_STATE_BREACH"
@@ -574,17 +576,18 @@ func (s *EscalationService) sendGlobalBreachNotification(
 		incidentURL,
 	)
 
-	vars := map[string]string{
-		"first_name":      user.FirstName,
-		"last_name":       user.LastName,
-		"incident_number": incident.IncidentNumber,
-		"incident_title":  incident.Title,
-		"incident_id":     incident.ID.String(),
-		"state_name":      stateName,
-		"hours_open":      fmt.Sprintf("%.1f", totalHoursOpen),
-		"sla_hours":       fmt.Sprintf("%d", slaHoursAllowed),
-		"incident_url":    incidentURL,
-	}
+	// Start from the full incident variable set, then override/add global-breach-specific values.
+	vars := BuildIncidentVariables(&incident, nil, nil)
+	vars["first_name"] = user.FirstName
+	vars["last_name"] = user.LastName
+	vars["state_name"] = stateName
+	vars["current_state"] = stateName
+	vars["hours_open"] = fmt.Sprintf("%.1f", totalHoursOpen)
+	vars["hours_in_state"] = fmt.Sprintf("%.1f", totalHoursOpen)
+	vars["sla_hours"] = fmt.Sprintf("%d", slaHoursAllowed)
+	vars["incident_url"] = incidentURL
+	vars["sla_page_url"] = fmt.Sprintf("%s/incidents?sla_breached=true", s.frontendURL)
+	vars["hours_in_breach"] = fmt.Sprintf("%.1f", totalHoursOpen-float64(slaHoursAllowed))
 
 	emailCode := "SLA_GLOBAL_BREACH"
 	smsCode := "SLA_GLOBAL_BREACH_SMS"
