@@ -214,7 +214,7 @@ func main() {
 	commentTemplateHandler := handlers.NewCommentTemplateHandler(commentTemplateService)
 	rejectionLogHandler := handlers.NewRejectionLogHandler(rejectionLogRepo)
 	incidentFeedbackHandler := handlers.NewIncidentFeedbackHandler(incidentRepo)
-	aiQualityFeedbackHandler := handlers.NewAIQualityFeedbackHandler(aiQualityFeedbackRepo, incidentService, userRepo)
+	aiQualityFeedbackHandler := handlers.NewAIQualityFeedbackHandler(aiQualityFeedbackRepo)
 	fcmHandler := handlers.NewFCMHandler(fcmService)
 	sentimentHandler := handlers.NewCallerSentimentHandler(callerSentimentService)
 	goalHandler := handlers.NewGoalHandler(goalService, actionLogService)
@@ -401,7 +401,6 @@ func main() {
 	incidents.Get("/:id/revisions", authMiddleware.RequirePermission("incidents:view"), incidentHandler.ListRevisions)
 	incidents.Get("/:id/rejection-logs", authMiddleware.RequirePermission("incidents:view"), rejectionLogHandler.GetByIncident)
 	incidents.Get("/:id/ai-quality", authMiddleware.RequirePermission("incidents:view"), aiQualityFeedbackHandler.GetByIncident)
-	incidents.Post("/:id/reopen", authMiddleware.RequirePermission("incidents:transition"), aiQualityFeedbackHandler.ReopenIncident)
 	incidents.Post("/:id/request-info", authMiddleware.RequirePermission("incidents:request-info"), incidentHandler.RequestCitizenInfo)
 
 	aiQuality := v1.Group("/ai-quality", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureAIQuality)))
