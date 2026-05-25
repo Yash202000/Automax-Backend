@@ -1312,6 +1312,76 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 
 	resp := models.ToIncidentResponse(updated)
 
+	// Send in-app notification to all assigned agents
+	if s.notificationService != nil {
+		var emails []string
+		seen := make(map[string]bool)
+		addEmail := func(email string) {
+			if email != "" && !seen[email] {
+				seen[email] = true
+				emails = append(emails, email)
+			}
+		}
+		log.Printf("Updated assignee: %v, %v, %v, %v, %d", updated.AssigneeID, updated.Assignee, updated.Assignee.Email, updated.Assignees, len(updated.Assignees))
+		if updated.Assignee != nil {
+			addEmail(updated.Assignee.Email)
+		}
+		for _, a := range updated.Assignees {
+			log.Printf("Iterating assignees: %v, %v, %v", a.ID, a.Username, a.Email)
+			addEmail(a.Email)
+		}
+		// if len(emails) > 0 {
+		// 	log.Printf("Sending update notification to emails: %v", emails)
+		// 	bgCtx := context.Background()
+		// 	capturedEmails := emails
+		// 	capturedNumber := updated.IncidentNumber
+		// 	capturedTitle := updated.Title
+		// 	capturedID := updated.ID
+		// 	capturedUserID := userID
+		// 	go func() {
+		// 		subject := fmt.Sprintf("Incident Updated: %s", capturedNumber)
+		// 		notifBody := fmt.Sprintf("Incident \"%s\" (%s) has been updated.", capturedTitle, capturedNumber)
+		// 		if _, err := s.notificationService.SendNotification(
+		// 			bgCtx, "notification", nil, "en",
+		// 			capturedEmails, nil, nil,
+		// 			subject, notifBody,
+		// 			map[string]string{
+		// 				"incident_id":     capturedID.String(),
+		// 				"incident_number": capturedNumber,
+		// 				"incident_title":  capturedTitle,
+		// 				"id":              capturedID.String(),
+		// 			},
+		// 			nil, &capturedUserID, nil,
+		// 		); err != nil {
+		// 			log.Printf("UPDATE-INCIDENT-NOTIFY: Failed for %s: %v", capturedNumber, err)
+		// 		}
+		// 	}()
+		// }
+
+		if len(emails) > 0 {
+			subject := fmt.Sprintf("Incident %s updated", incident.IncidentNumber)
+			// body := fmt.Sprintf(
+			// 	"Incident \"%s\" has been assigned to you. Status changed to: %s.",
+			// 	incident.Title, "newStateName",
+			// )
+
+			// subject := fmt.Sprintf("Incident Updated: %s", id.String())
+			body := fmt.Sprintf("Incident \"%s\" (%s) has been updated.", incident.Title, incident.IncidentNumber)
+
+			if result, err := s.notificationService.SendNotification(
+				ctx, "notification", nil, "en",
+				emails, nil, nil,
+				subject, body,
+				nil, nil, &userID, nil,
+			); err == nil && len(result.InboxLogIDs) > 0 {
+				_ = s.notificationService.SetMetaOnLogs(ctx, result.InboxLogIDs, &models.NotificationMeta{
+					ID:   id.String(),
+					Type: strings.ToUpper(incident.RecordType),
+				})
+			}
+		}
+	}
+
 	// Broadcast update to WebSocket subscribers
 	if s.wsHub != nil {
 		// Broadcast to incident-specific subscribers
