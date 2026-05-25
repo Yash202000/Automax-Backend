@@ -40,7 +40,7 @@ func NewJWTManager(secret string, expireHour int) *JWTManager {
 		secretKey:         []byte(secret),
 		refreshSecretKey:  []byte(secret + "_refresh"), // Different secret for refresh tokens
 		expireHour:        expireHour,
-		refreshExpireDay:  7,  // Refresh token valid for 7 days
+		refreshExpireDay:  1,  // Refresh token valid for 1 days
 		rememberExpireDay: 30, // Refresh token valid for 30 days when remember_me is true
 	}
 }
