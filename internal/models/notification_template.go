@@ -48,6 +48,8 @@ var AvailableVariablesByActionType = map[string][]string{
 		"sla_breached", "sla_deadline", "due_date",
 		"created_at", "created_by_name",
 		"address", "city", "country",
+		"location_name", "priority",
+		"comments", "transition_comment",
 	},
 	TemplateActionEscalation: {
 		"incident_number", "incident_title", "incident_id",
@@ -61,6 +63,7 @@ var AvailableVariablesByActionType = map[string][]string{
 		"sla_breached", "sla_deadline", "due_date",
 		"created_at", "created_by_name",
 		"address", "city", "country",
+		"location_name", "priority",
 		// Group batch notification variables
 		"incident_count", "sla_page_url", "incidents_summary", "report_date",
 		// Policy step per-incident variables
@@ -76,6 +79,7 @@ var AvailableVariablesByActionType = map[string][]string{
 		"sla_breached", "sla_deadline", "due_date",
 		"created_at", "created_by_name",
 		"address", "city", "country",
+		"location_name", "priority",
 	},
 	TemplateActionReadyToClose: {
 		"incident_number", "incident_title", "incident_id",
@@ -88,6 +92,7 @@ var AvailableVariablesByActionType = map[string][]string{
 		"sla_breached", "sla_deadline", "due_date",
 		"created_at", "created_by_name",
 		"address", "city", "country",
+		"location_name", "priority",
 	},
 	TemplateActionAssignment: {
 		"incident_number", "incident_title", "incident_id",
@@ -99,6 +104,8 @@ var AvailableVariablesByActionType = map[string][]string{
 		"sla_breached", "sla_deadline", "due_date",
 		"created_at", "created_by_name",
 		"address", "city", "country",
+		"location_name", "priority",
+		"comments", "transition_comment",
 	},
 	TemplateActionClosure: {
 		"incident_number", "incident_title", "incident_id",
@@ -110,6 +117,8 @@ var AvailableVariablesByActionType = map[string][]string{
 		"sla_breached", "sla_deadline", "due_date",
 		"created_at", "created_by_name",
 		"address", "city", "country",
+		"location_name", "priority",
+		"comments", "transition_comment",
 	},
 	TemplateActionCustom: {
 		"incident_number", "incident_title", "incident_id",
@@ -123,6 +132,8 @@ var AvailableVariablesByActionType = map[string][]string{
 		"sla_breached", "sla_deadline", "due_date",
 		"created_at", "created_by_name",
 		"address", "city", "country",
+		"location_name", "priority",
+		"comments", "transition_comment",
 	},
 }
 

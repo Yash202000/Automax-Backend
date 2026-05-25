@@ -385,19 +385,22 @@ func (s *EscalationGroupService) sendGroupNotification(
 ) {
 	incidentCount := len(incidents)
 
-	// Build template variables used for both template-based and fallback sends.
-	// incidents_summary contains a numbered plain-text list of all breached incidents
-	// so group email templates can include per-incident detail without needing
-	// per-incident variable keys (which don't make sense for a batch notification).
-	vars := map[string]string{
-		"first_name":          user.FirstName,
-		"last_name":           user.LastName,
-		"incident_count":      fmt.Sprintf("%d", incidentCount),
-		"classification_name": classificationName,
-		"sla_page_url":        slaPageURL,
-		"incidents_summary":   buildIncidentsSummary(incidents),
-		"report_date":         time.Now().Format("02 Jan 2006, 15:04"),
+	// Build template variables: base incident vars from a representative incident (if any),
+	// then merge group-specific fields on top.
+	// incidents_summary contains a numbered plain-text list of all breached incidents.
+	var vars map[string]string
+	if len(incidents) > 0 {
+		vars = BuildIncidentVariables(&incidents[0], nil, nil)
+	} else {
+		vars = make(map[string]string)
 	}
+	vars["first_name"] = user.FirstName
+	vars["last_name"] = user.LastName
+	vars["incident_count"] = fmt.Sprintf("%d", incidentCount)
+	vars["classification_name"] = classificationName
+	vars["sla_page_url"] = slaPageURL
+	vars["incidents_summary"] = buildIncidentsSummary(incidents)
+	vars["report_date"] = time.Now().Format("02 Jan 2006, 15:04")
 
 	// sentBy: default to admin@automax.com; fall back to the notified user
 	var sentBy *uuid.UUID

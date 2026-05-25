@@ -165,7 +165,7 @@ func (e *actionExecutor) executeEmail(ctx context.Context, action *models.Transi
 		return nil
 	}
 
-	vars := e.buildVariables(incident, transition, performedBy)
+	vars := BuildIncidentVariables(incident, transition, performedBy)
 
 	var templateCode *string
 	var subject, body string
@@ -229,7 +229,7 @@ func (e *actionExecutor) executeSms(ctx context.Context, action *models.Transiti
 		return nil
 	}
 
-	vars := e.buildVariables(incident, transition, performedBy)
+	vars := BuildIncidentVariables(incident, transition, performedBy)
 
 	var templateCode *string
 	var message string
@@ -434,79 +434,6 @@ func (e *actionExecutor) resolveRecipientPhones(incident *models.Incident, recip
 	return phones
 }
 
-// buildVariables returns a map of template variables compatible with RenderTemplate (Go text/template).
-func (e *actionExecutor) buildVariables(incident *models.Incident, transition *models.WorkflowTransition, performedBy *models.User) map[string]string {
-	vars := map[string]string{
-		"incident_number": incident.IncidentNumber,
-		"incident_title":  incident.Title,
-		"incident_id":     incident.ID.String(),
-		"description":     incident.Description,
-		"record_type":     incident.RecordType,
-		"source":          incident.Source,
-		"channel":         incident.Channel,
-		"reporter_name":   incident.ReporterName,
-		"reporter_email":  incident.ReporterEmail,
-		"reporter_phone":  incident.ReporterPhone,
-		"created_by_name": incident.CreatedByName,
-		"sla_breached":    fmt.Sprintf("%t", incident.SLABreached),
-		"address":         incident.Address,
-		"city":            incident.City,
-		"country":         incident.Country,
-	}
-
-	if incident.DueDate != nil {
-		vars["due_date"] = incident.DueDate.Format("2006-01-02 15:04:05")
-	}
-	if incident.SLADeadline != nil {
-		vars["sla_deadline"] = incident.SLADeadline.Format("2006-01-02 15:04:05")
-	}
-	vars["created_at"] = incident.CreatedAt.Format("2006-01-02 15:04:05")
-
-	if incident.Classification != nil {
-		vars["classification_name"] = incident.Classification.Name
-	}
-	if incident.Workflow != nil {
-		vars["workflow_name"] = incident.Workflow.Name
-	}
-
-	if transition != nil {
-		vars["transition_name"] = transition.Name
-		if transition.FromState != nil {
-			vars["from_state"] = transition.FromState.Name
-		}
-		if transition.ToState != nil {
-			vars["to_state"] = transition.ToState.Name
-		}
-	}
-
-	if performedBy != nil {
-		name := performedBy.Username
-		if performedBy.FirstName != "" {
-			name = performedBy.FirstName + " " + performedBy.LastName
-		}
-		vars["performed_by"] = name
-		vars["first_name"] = performedBy.FirstName
-		vars["last_name"] = performedBy.LastName
-	}
-
-	if incident.Assignee != nil {
-		name := incident.Assignee.Username
-		if incident.Assignee.FirstName != "" {
-			name = incident.Assignee.FirstName + " " + incident.Assignee.LastName
-		}
-		vars["assignee"] = name
-		vars["assignee_email"] = incident.Assignee.Email
-		vars["assignee_phone"] = incident.Assignee.Phone
-	} else {
-		vars["assignee"] = "Unassigned"
-	}
-
-	if incident.CurrentState != nil {
-		vars["current_state"] = incident.CurrentState.Name
-	}
-
-	return vars
-}
 
 // replacePlaceholders replaces template placeholders with actual values
 func (e *actionExecutor) replacePlaceholders(template string, incident *models.Incident, transition *models.WorkflowTransition, performedBy *models.User) string {
