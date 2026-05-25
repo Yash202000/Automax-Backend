@@ -83,27 +83,37 @@ func (h *AIQualityFeedbackHandler) ReopenIncident(c *fiber.Ctx) error {
 		roleIDs[i] = r.ID
 	}
 
+	// Fetch incident to get current version for optimistic locking
+	incidentDetail, err := h.incidentSvc.GetIncident(c.UserContext(), incidentID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not found")
+	}
+
 	// Get available transitions
 	transitions, err := h.incidentSvc.GetAvailableTransitions(c.UserContext(), incidentID, roleIDs)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Failed to get available transitions: "+err.Error())
 	}
 
-	// Pick the first executable transition
+	// Pick the first executable transition marked as a reopen transition
 	var targetTransitionID string
 	for _, t := range transitions {
-		if t.CanExecute {
+		if !t.CanExecute {
+			continue
+		}
+		if t.Transition.IsReopen {
 			targetTransitionID = t.Transition.ID.String()
 			break
 		}
 	}
 	if targetTransitionID == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "No available transitions for this incident")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "No reopen transition available for this incident")
 	}
 
 	req := &models.IncidentTransitionRequest{
 		TransitionID: targetTransitionID,
 		Comment:      "Reopened via Quality Audit",
+		Version:      incidentDetail.Version,
 	}
 
 	incident, err := h.incidentSvc.ExecuteTransition(c.UserContext(), incidentID, req, userID, roleIDs)

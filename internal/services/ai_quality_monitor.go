@@ -153,6 +153,11 @@ type coordinatesCheck struct {
 	Note              string          `json:"note"`
 }
 
+// coordinateDiff captures the coordinate comparison block returned by the API.
+type coordinateDiff struct {
+	Verdict string `json:"verdict"`
+}
+
 // sameSceneCheck captures the same-location analysis block returned by the API.
 type sameSceneCheck struct {
 	IsSameLocation bool     `json:"is_same_location"`
@@ -168,19 +173,119 @@ type incidentAssessment struct {
 }
 
 // aiQualityAPIResponse mirrors the JSON returned by the verify-incident endpoint.
+// It covers both the legacy v1 format and the new v2 format in a single struct so that
+// a single json.Unmarshal handles either response. Use the helper methods
+// (resolvedResolutionStatus, resolvedChangeSummary, resolvedDistanceMeters) to read
+// values — they auto-detect the format and return the correct field.
 type aiQualityAPIResponse struct {
-	// Legacy / shared fields
+	// ── v1 (legacy) fields ────────────────────────────────────────────────────
 	ChangeSummary    string           `json:"change_summary"`
 	ResolutionStatus string           `json:"resolution_status"`
 	Confidence       float64          `json:"confidence"`
 	ReasoningPoints  []string         `json:"reasoning_points"`
 	RiskFlags        []string         `json:"risk_flags"`
 	CoordinatesCheck coordinatesCheck `json:"coordinates_check"`
-	// Extended fields
-	IncidentType     string             `json:"incident_type"`
-	SameScene        sameSceneCheck     `json:"same_scene"`
+	CoordinateDiff   coordinateDiff   `json:"coordinate_diff"`
+	IncidentType     string           `json:"incident_type"`
+	SameScene        sameSceneCheck   `json:"same_scene"`
 	BeforeAssessment incidentAssessment `json:"before_assessment"`
 	AfterAssessment  incidentAssessment `json:"after_assessment"`
+
+	// ── v2 (new) fields ───────────────────────────────────────────────────────
+	AuditID          string             `json:"audit_id"`
+	AuditDecision    v2AuditDecision    `json:"audit_decision"`
+	RiskFindings     v2RiskFindings     `json:"risk_findings"`
+	EvidenceFindings v2EvidenceFindings `json:"evidence_findings"`
+}
+
+// isV2 returns true when the response uses the new v2 schema,
+// identified by the presence of a non-empty audit_decision.audit_result.
+func (r *aiQualityAPIResponse) isV2() bool {
+	return r.AuditDecision.AuditResult != ""
+}
+
+// resolvedResolutionStatus returns the resolution status from whichever
+// response format is present.
+//
+//	v2: audit_decision.audit_result
+//	v1: resolution_status
+func (r *aiQualityAPIResponse) resolvedResolutionStatus() string {
+	if r.isV2() {
+		return r.AuditDecision.AuditResult
+	}
+	return r.ResolutionStatus // v1
+}
+
+// resolvedChangeSummary returns the human-readable change summary from
+// whichever response format is present.
+//
+//	v2: risk_findings.second_opinion.summary
+//	v1: change_summary
+func (r *aiQualityAPIResponse) resolvedChangeSummary() string {
+	summary := r.ChangeSummary
+	if r.isV2() {
+		summary = r.RiskFindings.SecondOpinion.Summary
+	}
+	if verdict := r.CoordinateDiff.Verdict; verdict != "" {
+		summary = summary + " | " + verdict
+	}
+	return summary
+}
+
+// resolvedDistanceMeters returns the GPS drift distance from whichever
+// response format is present.
+//
+//	v2: evidence_findings.geospatial.distance_meters
+//	v1: coordinates_check.distance_meters (nullable — nil treated as 0)
+func (r *aiQualityAPIResponse) resolvedDistanceMeters() float64 {
+	if r.isV2() {
+		return r.EvidenceFindings.Geospatial.DistanceMeters
+	}
+	// v1: nullable pointer
+	if r.CoordinatesCheck.DistanceMeters != nil {
+		return *r.CoordinatesCheck.DistanceMeters
+	}
+	return 0.0
+}
+
+// ── v2 nested types ──────────────────────────────────────────────────────────
+
+type v2AuditReasons struct {
+	FailedChecks        []string `json:"failed_checks"`
+	VerifiedChecks      []string `json:"verified_checks"`
+	ManualReviewReasons []string `json:"manual_review_reasons"`
+}
+
+type v2AuditDecision struct {
+	AuditResult       string         `json:"audit_result"`
+	TrustScore        float64        `json:"trust_score"`
+	RecommendedAction string         `json:"recommended_action"`
+	Reasons           v2AuditReasons `json:"reasons"`
+}
+
+type v2SecondOpinion struct {
+	Used              bool    `json:"used"`
+	Summary           string  `json:"summary"`
+	Provider          string  `json:"provider"`
+	Confidence        float64 `json:"confidence"`
+	ResolutionStatus  string  `json:"resolution_status"`
+	AgreesWithPrimary bool    `json:"agrees_with_primary"`
+}
+
+type v2RiskFindings struct {
+	RiskFlags     []string        `json:"risk_flags"`
+	SecondOpinion v2SecondOpinion `json:"second_opinion"`
+}
+
+type v2Geospatial struct {
+	DistanceMeters float64 `json:"distance_meters"`
+	GPSFound       bool    `json:"gps_found"`
+	GPSMatch       bool    `json:"gps_match"`
+	Trust          string  `json:"trust"`
+}
+
+type v2EvidenceFindings struct {
+	Geospatial v2Geospatial `json:"geospatial"`
 }
 
 // ---- core processing -------------------------------------------------------
@@ -288,9 +393,9 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 		return fmt.Errorf("AI API call: %w", err)
 	}
 
-	log.Printf("[AIQualityMonitor] incident=%s API response — incident_type=%q resolution_status=%q confidence=%.2f same_location=%v distance_meters=%v risk_flags=%v",
-		incident.IncidentNumber, apiResp.IncidentType, apiResp.ResolutionStatus, apiResp.Confidence,
-		apiResp.SameScene.IsSameLocation, nilableFloat(apiResp.CoordinatesCheck.DistanceMeters), apiResp.RiskFlags)
+	log.Printf("[AIQualityMonitor] incident=%s API response (format=%s) — resolution_status=%q change_summary=%q distance_meters=%.4f",
+		incident.IncidentNumber, map[bool]string{true: "v2", false: "v1"}[apiResp.isV2()],
+		apiResp.resolvedResolutionStatus(), truncate(apiResp.resolvedChangeSummary(), 120), apiResp.resolvedDistanceMeters())
 
 	if apiResp.BeforeAssessment.Summary != "" {
 		log.Printf("[AIQualityMonitor] incident=%s before_assessment: severity=%q summary=%q",
@@ -314,17 +419,20 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 			incident.IncidentNumber, apiResp.CoordinatesCheck.Note)
 	}
 
-	// Resolve distance_meters (null in API means 0 for storage).
-	distanceMeters := 0.0
-	if apiResp.CoordinatesCheck.DistanceMeters != nil {
-		distanceMeters = *apiResp.CoordinatesCheck.DistanceMeters
-	}
+	// Resolve the three stored fields using format-aware helpers.
+	// To revert to v1-only extraction, replace the three helper calls below with:
+	//   resolutionStatus = apiResp.ResolutionStatus
+	//   changeSummary    = apiResp.ChangeSummary
+	//   distanceMeters   = 0.0; if apiResp.CoordinatesCheck.DistanceMeters != nil { distanceMeters = *apiResp.CoordinatesCheck.DistanceMeters }
+	resolutionStatus := apiResp.resolvedResolutionStatus()
+	changeSummary := apiResp.resolvedChangeSummary()
+	distanceMeters := apiResp.resolvedDistanceMeters()
 
 	// Persist AIQualityFeedback.
 	feedback := &models.AIQualityFeedback{
 		IncidentID:       incident.ID,
-		ChangedSummary:   apiResp.ChangeSummary,
-		ResolutionStatus: apiResp.ResolutionStatus,
+		ChangedSummary:   changeSummary,
+		ResolutionStatus: resolutionStatus,
 		DistanceMeters:   distanceMeters,
 		RawResponse:      rawBody,
 	}
@@ -349,7 +457,7 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 	}
 
 	log.Printf("[AIQualityMonitor] incident=%s DONE — status=%q distance=%.4fm",
-		incident.IncidentNumber, apiResp.ResolutionStatus, distanceMeters)
+		incident.IncidentNumber, resolutionStatus, distanceMeters)
 	return nil
 }
 

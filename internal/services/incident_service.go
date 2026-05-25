@@ -2857,6 +2857,61 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		}
 	}
 
+	// If the destination state is an AI-QA state, reset so the monitor re-triggers:
+	// - is_ai_verified = false on the incident (monitor only picks up false)
+	// - is_reopened = false on the feedback record (button shows "Reopen" again)
+	// The feedback record itself is kept so the incident stays visible in the QA list.
+	// The monitor's Create uses upsert, so it overwrites the stale audit data in place.
+	// If the destination state is an AI-QA state, reset so the monitor re-triggers:
+	// - is_ai_verified = false on the incident (monitor only picks up false)
+	// - clear stale QA result fields so the UI shows the ticket is pending re-evaluation
+	// - is_reopened = false so the "Reopen" button reappears after re-evaluation
+	// raw_response is intentionally preserved until the new evaluation overwrites it.
+	// The feedback record itself is kept so the incident stays visible in the QA list.
+	if newState.IsAIQA {
+		var existingFeedback models.AIQualityFeedback
+		var setIsReopened bool
+		err := tx.WithContext(ctx).
+			Where("incident_id = ?", incidentID).
+			First(&existingFeedback).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			fmt.Printf("Warning: failed to query existing AI quality feedback: %v\n", err)
+		}
+		if existingFeedback.ID != uuid.Nil {
+			setIsReopened = true
+		}
+
+		if err := tx.WithContext(ctx).
+			Model(&models.Incident{}).
+			Where("id = ?", incidentID).
+			Update("is_ai_verified", false).Error; err != nil {
+			fmt.Printf("Warning: failed to reset is_ai_verified for AI-QA state: %v\n", err)
+		}
+		if err := tx.WithContext(ctx).
+			Model(&models.AIQualityFeedback{}).
+			Where("incident_id = ?", incidentID).
+			Updates(map[string]interface{}{
+				"is_reopened":       setIsReopened, // Only set to true if there was an existing feedback record (i.e. this is not the first time entering an AI-QA state)
+				"changed_summary":   "",
+				"resolution_status": "",
+				"distance_meters":   0,
+			}).Error; err != nil {
+			fmt.Printf("Warning: failed to reset ai_quality_feedback fields for AI-QA state: %v\n", err)
+		}
+	}
+
+	// If this is a reopen transition and the incident has an AI quality feedback record,
+	// mark it as reopened so the QA page reflects the action regardless of which
+	// surface (incident details or QA page) triggered the reopen.
+	if transition.IsReopen {
+		if err := tx.WithContext(ctx).
+			Model(&models.AIQualityFeedback{}).
+			Where("incident_id = ?", incidentID).
+			Update("is_reopened", true).Error; err != nil {
+			fmt.Printf("Warning: failed to set is_reopened on reopen transition: %v\n", err)
+		}
+	}
+
 	// Create revision for state change (using txRepo to stay within the transaction)
 	oldStateName := transition.FromState.Name
 	newStateName := newState.Name
