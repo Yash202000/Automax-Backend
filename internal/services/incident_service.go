@@ -1299,76 +1299,82 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 
 	resp := models.ToIncidentResponse(updated)
 
-	// Send in-app notification to all assigned agents
-	if s.notificationService != nil {
-		var emails []string
-		seen := make(map[string]bool)
-		addEmail := func(email string) {
-			if email != "" && !seen[email] {
-				seen[email] = true
-				emails = append(emails, email)
+	if len(updated.Assignees) == 0 {
+		log.Printf("No Assignees found for incident Number %s incident no. %s", incident.IncidentNumber, incident.ID.String())
+	}
+
+	// Only give notification for IVR updates from EPM940 based on req.
+	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.IVR) && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
+
+		// Send in-app notification to all assigned agents
+		if s.notificationService != nil && len(updated.Assignees) != 0 {
+			var emails []string
+			seen := make(map[string]bool)
+			addEmail := func(email string) {
+				if email != "" && !seen[email] {
+					seen[email] = true
+					emails = append(emails, email)
+				}
 			}
-		}
-		log.Printf("Updated assignee: %v, %v, %v, %v, %d", updated.AssigneeID, updated.Assignee, updated.Assignee.Email, updated.Assignees, len(updated.Assignees))
-		if updated.Assignee != nil {
-			addEmail(updated.Assignee.Email)
-		}
-		for _, a := range updated.Assignees {
-			log.Printf("Iterating assignees: %v, %v, %v", a.ID, a.Username, a.Email)
-			addEmail(a.Email)
-		}
-		// if len(emails) > 0 {
-		// 	log.Printf("Sending update notification to emails: %v", emails)
-		// 	bgCtx := context.Background()
-		// 	capturedEmails := emails
-		// 	capturedNumber := updated.IncidentNumber
-		// 	capturedTitle := updated.Title
-		// 	capturedID := updated.ID
-		// 	capturedUserID := userID
-		// 	go func() {
-		// 		subject := fmt.Sprintf("Incident Updated: %s", capturedNumber)
-		// 		notifBody := fmt.Sprintf("Incident \"%s\" (%s) has been updated.", capturedTitle, capturedNumber)
-		// 		if _, err := s.notificationService.SendNotification(
-		// 			bgCtx, "notification", nil, "en",
-		// 			capturedEmails, nil, nil,
-		// 			subject, notifBody,
-		// 			map[string]string{
-		// 				"incident_id":     capturedID.String(),
-		// 				"incident_number": capturedNumber,
-		// 				"incident_title":  capturedTitle,
-		// 				"id":              capturedID.String(),
-		// 			},
-		// 			nil, &capturedUserID, nil,
-		// 		); err != nil {
-		// 			log.Printf("UPDATE-INCIDENT-NOTIFY: Failed for %s: %v", capturedNumber, err)
-		// 		}
-		// 	}()
-		// }
+			if updated.Assignee != nil {
+				addEmail(updated.Assignee.Email)
+			}
+			for _, a := range updated.Assignees {
+				log.Printf("Iterating assignees: %v, %v, %v", a.ID, a.Username, a.Email)
+				addEmail(a.Email)
+			}
+			// if len(emails) > 0 {
+			// 	log.Printf("Sending update notification to emails: %v", emails)
+			// 	bgCtx := context.Background()
+			// 	capturedEmails := emails
+			// 	capturedNumber := updated.IncidentNumber
+			// 	capturedTitle := updated.Title
+			// 	capturedID := updated.ID
+			// 	capturedUserID := userID
+			// 	go func() {
+			// 		subject := fmt.Sprintf("Incident Updated: %s", capturedNumber)
+			// 		notifBody := fmt.Sprintf("Incident \"%s\" (%s) has been updated.", capturedTitle, capturedNumber)
+			// 		if _, err := s.notificationService.SendNotification(
+			// 			bgCtx, "notification", nil, "en",
+			// 			capturedEmails, nil, nil,
+			// 			subject, notifBody,
+			// 			map[string]string{
+			// 				"incident_id":     capturedID.String(),
+			// 				"incident_number": capturedNumber,
+			// 				"incident_title":  capturedTitle,
+			// 				"id":              capturedID.String(),
+			// 			},
+			// 			nil, &capturedUserID, nil,
+			// 		); err != nil {
+			// 			log.Printf("UPDATE-INCIDENT-NOTIFY: Failed for %s: %v", capturedNumber, err)
+			// 		}
+			// 	}()
+			// }
 
-		if len(emails) > 0 {
-			subject := fmt.Sprintf("Incident %s updated", incident.IncidentNumber)
-			// body := fmt.Sprintf(
-			// 	"Incident \"%s\" has been assigned to you. Status changed to: %s.",
-			// 	incident.Title, "newStateName",
-			// )
+			if len(emails) > 0 {
+				subject := fmt.Sprintf("Incident %s updated", incident.IncidentNumber)
+				// body := fmt.Sprintf(
+				// 	"Incident \"%s\" has been assigned to you. Status changed to: %s.",
+				// 	incident.Title, "newStateName",
+				// )
 
-			// subject := fmt.Sprintf("Incident Updated: %s", id.String())
-			body := fmt.Sprintf("Incident \"%s\" (%s) has been updated.", incident.Title, incident.IncidentNumber)
+				// subject := fmt.Sprintf("Incident Updated: %s", id.String())
+				body := fmt.Sprintf("Incident \"%s\" (%s) has been updated.", incident.Title, incident.IncidentNumber)
 
-			if result, err := s.notificationService.SendNotification(
-				ctx, "notification", nil, "en",
-				emails, nil, nil,
-				subject, body,
-				nil, nil, &userID, nil,
-			); err == nil && len(result.InboxLogIDs) > 0 {
-				_ = s.notificationService.SetMetaOnLogs(ctx, result.InboxLogIDs, &models.NotificationMeta{
-					ID:   id.String(),
-					Type: strings.ToUpper(incident.RecordType),
-				})
+				if result, err := s.notificationService.SendNotification(
+					ctx, "notification", nil, "en",
+					emails, nil, nil,
+					subject, body,
+					nil, nil, &userID, nil,
+				); err == nil && len(result.InboxLogIDs) > 0 {
+					_ = s.notificationService.SetMetaOnLogs(ctx, result.InboxLogIDs, &models.NotificationMeta{
+						ID:   id.String(),
+						Type: strings.ToUpper(incident.RecordType),
+					})
+				}
 			}
 		}
 	}
-
 	// Broadcast update to WebSocket subscribers
 	if s.wsHub != nil {
 		// Broadcast to incident-specific subscribers
@@ -2865,17 +2871,27 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 					continue
 				}
 				// Find or create the lookup value by code within that category
+				code := fieldValue
+				if len(code) > 50 {
+					code = code[:50]
+				}
+				name := fieldValue
+				if len(name) > 200 {
+					name = name[:200]
+				}
 				var lookupVal models.LookupValue
 				err := tx.WithContext(ctx).
-					Where("category_id = ? AND code = ?", category.ID, fieldValue).
+					Where("category_id = ? AND code = ?", category.ID, code).
 					First(&lookupVal).Error
 				if err != nil {
 					lookupVal = models.LookupValue{
 						CategoryID: category.ID,
-						Code:       fieldValue,
-						Name:       fieldValue,
-						IsActive:   true,
+						Code:       code,
+						Name:       name,
+						// Description: fieldValue,
+						IsActive: true,
 					}
+
 					if createErr := tx.WithContext(ctx).Create(&lookupVal).Error; createErr != nil {
 						fmt.Printf("Warning: failed to create lookup value for category %s code %s: %v\n", categoryCode, fieldValue, createErr)
 						continue
