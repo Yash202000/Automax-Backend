@@ -31,6 +31,7 @@ const (
 	TemplateActionReadyToClose     = "ready_to_close"
 	TemplateActionNewIncident      = "new_incident"
 	TemplateActionConvertToRequest = "convert_to_request"
+	TemplateActionMissingInfo      = "missing_info"
 	TemplateActionCustom           = "custom"
 )
 
@@ -218,6 +219,16 @@ var AvailableVariablesByActionType = map[string][]string{
 		// URLs
 		"incident_url", "sla_page_url",
 	},
+	// ── Missing incident information closure ────────────────────────────────
+	TemplateActionMissingInfo: {
+		"incident_number", "incident_title", "incident_id",
+		"description", "record_type", "source", "channel",
+		"reporter_name", "reporter_email", "reporter_phone",
+		"classification_name", "workflow_name", "location_name",
+		"created_at", "created_by_name",
+		"address", "city", "country",
+		"incident_url", "sla_page_url",
+	},
 	// ── Custom / catch-all ───────────────────────────────────────────────────
 	TemplateActionCustom: {
 		// Core incident
@@ -279,7 +290,7 @@ type NotificationTemplateCreateRequest struct {
 	Code         string     `json:"code"          validate:"required"`
 	Channel      string     `json:"channel"       validate:"required,oneof=email sms"`
 	ModuleType   string     `json:"module_type"   validate:"omitempty,oneof=incident complaint request query global"`
-	ActionType   string     `json:"action_type"   validate:"omitempty,oneof=escalation assignment closure status_change ready_to_close new_incident convert_to_request custom"`
+	ActionType   string     `json:"action_type"   validate:"omitempty,oneof=escalation assignment closure status_change ready_to_close new_incident convert_to_request missing_info custom"`
 	Variables    string     `json:"variables"`
 	TransitionID *uuid.UUID `json:"transition_id"`
 	SubjectEN    string     `json:"subject_en"`

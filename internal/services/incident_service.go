@@ -3353,7 +3353,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			}()
 
 			log.Printf("MISSING-INFO-SMS: Sending SMS for incident %s", incident.IncidentNumber)
-			s.SendMissingInfoClosureSMS(bgCtx, incident.IncidentNumber, incident.CreatedByMobile, incident.ReporterID, userID)
+			s.SendMissingInfoClosureSMS(bgCtx, incident, incident.CreatedByMobile, incident.ReporterID, userID)
 			log.Printf("MISSING-INFO-SMS: SMS process completed for incident %s", incident.IncidentNumber)
 		}()
 	}
@@ -5145,15 +5145,15 @@ func (s *incidentService) sendConvertToRequestSMS(ctx context.Context, incident 
 }
 
 // SendMissingInfoClosureSMS sends an SMS to the citizen when an incident is closed via a "Missing Incident Information" transition.
+// Uses active templates with action_type=missing_info first; falls back to hardcoded Arabic message.
 func (s *incidentService) SendMissingInfoClosureSMS(
 	ctx context.Context,
-	incidentNumber string,
+	incident *models.Incident,
 	citizenMobile string,
 	reporterID *uuid.UUID,
 	userID uuid.UUID,
 ) {
 	mobile := citizenMobile
-	// Only fall back to reporter's phone when the reporter is confirmed to be a citizen.
 	if mobile == "" && reporterID != nil {
 		roles, err := s.userRepo.GetUserRoles(ctx, *reporterID)
 		if err == nil {
@@ -5172,24 +5172,38 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 		}
 	}
 	if mobile == "" {
-		log.Printf("MISSING-INFO-SMS: No citizen mobile for incident %s, skipping", incidentNumber)
+		log.Printf("MISSING-INFO-SMS: No citizen mobile for incident %s, skipping", incident.IncidentNumber)
 		return
 	}
 
+	vars := BuildIncidentVariables(incident, nil, nil)
+
+	if s.notificationService != nil {
+		err := s.notificationService.SendByActionType(
+			ctx, models.TemplateActionMissingInfo, "sms", "ar",
+			[]string{mobile}, vars, &userID,
+		)
+		if err != nil {
+			log.Printf("MISSING-INFO-SMS: No active templates for incident %s, falling back to hardcoded: %v", incident.IncidentNumber, err)
+		} else {
+			log.Printf("MISSING-INFO-SMS: Sent via template to %s for incident %s", mobile, incident.IncidentNumber)
+			return
+		}
+	}
+
+	// Hardcoded fallback
 	smsMessage := fmt.Sprintf(
 		"Dear Citizen, your incident (ID: %s) has been closed due to insufficient information. We kindly request that you raise it again with all the required details so we can assist you better. Thank you!",
-		incidentNumber,
+		incident.IncidentNumber,
 	)
-
 	now := time.Now()
-
 	smsErr := utils.SendSMS(mobile, smsMessage)
 	status := "sent"
 	if smsErr != nil {
 		status = "failed"
-		log.Printf("MISSING-INFO-SMS: Failed for incident %s to %s: %v", incidentNumber, mobile, smsErr)
+		log.Printf("MISSING-INFO-SMS: Fallback failed for incident %s to %s: %v", incident.IncidentNumber, mobile, smsErr)
 	} else {
-		log.Printf("MISSING-INFO-SMS: Sent successfully to %s for incident %s", mobile, incidentNumber)
+		log.Printf("MISSING-INFO-SMS: Fallback sent to %s for incident %s", mobile, incident.IncidentNumber)
 	}
 
 	notification := &models.NotificationLog{
@@ -5197,27 +5211,19 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 		Direction: "outbound",
 		Category:  "sent",
 		Language:  "en",
-		Recipients: models.RecipientArray{
-			{
-				Email:  mobile,
-				Type:   "to",
-				Status: status,
-			},
-		},
-		Subject:  "Incident Closed - Missing Information",
-		Body:     smsMessage,
-		Status:   status,
-		Provider: "twilio",
-		IsRead:   false,
-		SentBy:   &userID,
-		SentAt:   &now,
+		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
+		Subject:   "Incident Closed - Missing Information",
+		Body:      smsMessage,
+		Status:    status,
+		Provider:  "twilio",
+		IsRead:    false,
+		SentBy:    &userID,
+		SentAt:    &now,
 	}
-
 	if smsErr != nil {
 		notification.ErrorMessage = smsErr.Error()
 	}
-
 	if err := s.incidentRepo.CreateNotification(ctx, notification); err != nil {
-		log.Printf("MISSING-INFO-SMS: Failed to log notification for incident %s: %v", incidentNumber, err)
+		log.Printf("MISSING-INFO-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
 	}
 }

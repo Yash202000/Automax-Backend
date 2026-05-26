@@ -2,11 +2,13 @@ package services
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/models"
+	pkgutils "github.com/automax/backend/pkg/utils"
 )
 
 // BuildIncidentVariables builds the complete map of template variables for an incident.
@@ -88,7 +90,9 @@ func BuildIncidentVariables(
 		vars["sla_page_url"] = ""
 	}
 	if smsPortalBase != "" {
-		vars["sms_link"] = smsPortalBase + "/incidents/" + incident.ID.String()
+		token := pkgutils.GenerateIncidentToken(incident.ID.String(), 24*time.Hour)
+		vars["sms_link"] = fmt.Sprintf("%s/ivr/incident/sms-link/%s?signed_token=%s",
+			smsPortalBase, incident.ID.String(), url.QueryEscape(token))
 	} else {
 		vars["sms_link"] = ""
 	}
