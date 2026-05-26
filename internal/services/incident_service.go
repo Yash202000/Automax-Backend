@@ -5154,6 +5154,7 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 	userID uuid.UUID,
 ) {
 	mobile := citizenMobile
+	log.Printf("MISSING-INFO-SMS: citizenMobile=%q reporterID=%v for incident %s", citizenMobile, reporterID, incident.IncidentNumber)
 	if mobile == "" && reporterID != nil {
 		roles, err := s.userRepo.GetUserRoles(ctx, *reporterID)
 		if err == nil {
@@ -5167,7 +5168,10 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 			if isCitizen {
 				if reporter, err := s.userRepo.FindByID(ctx, *reporterID); err == nil {
 					mobile = reporter.Phone
+					log.Printf("MISSING-INFO-SMS: resolved citizen mobile from reporter: %q", mobile)
 				}
+			} else {
+				log.Printf("MISSING-INFO-SMS: reporter is not a citizen, skipping phone lookup")
 			}
 		}
 	}
@@ -5176,6 +5180,7 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 		return
 	}
 
+	log.Printf("MISSING-INFO-SMS: targeting mobile=%q for incident %s", mobile, incident.IncidentNumber)
 	vars := BuildIncidentVariables(incident, nil, nil)
 
 	if s.notificationService != nil {

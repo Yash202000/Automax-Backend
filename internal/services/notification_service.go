@@ -831,9 +831,11 @@ func (s *NotificationService) SendByActionType(
 	if err != nil || len(templates) == 0 {
 		return fmt.Errorf("no active %s templates found for channel %s", actionType, channel)
 	}
+	log.Printf("[SendByActionType] action=%s channel=%s lang=%s recipients=%v templates_found=%d", actionType, channel, language, to, len(templates))
 	var lastErr error
 	for _, tpl := range templates {
 		code := tpl.Code
+		log.Printf("[SendByActionType] sending template code=%s body_en_len=%d body_ar_len=%d", code, len(tpl.BodyEN), len(tpl.BodyAR))
 		_, sendErr := s.SendNotification(
 			ctx, channel, &code, language,
 			to, nil, nil,
@@ -842,6 +844,8 @@ func (s *NotificationService) SendByActionType(
 		if sendErr != nil {
 			log.Printf("[SendByActionType] template %s send failed: %v", code, sendErr)
 			lastErr = sendErr
+		} else {
+			log.Printf("[SendByActionType] template %s sent OK", code)
 		}
 	}
 	return lastErr
