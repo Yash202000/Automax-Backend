@@ -357,6 +357,15 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 	}
 }
 
+// appTimezone returns the report timezone based on APP_REGION env var.
+// APP_REGION=SA → Arabia Standard Time (UTC+3); anything else → IST (UTC+5:30).
+func appTimezone() *time.Location {
+	if strings.ToUpper(os.Getenv("APP_REGION")) == "SA" {
+		return time.FixedZone("AST", 3*60*60)
+	}
+	return time.FixedZone("IST", 5*60*60+30*60)
+}
+
 // ── HTML builder ──────────────────────────────────────────────────────────────
 func fetchLogoBase64(url string) string {
 	resp, err := http.Get(url)
@@ -386,8 +395,8 @@ func buildReportHTML(
 	var b bytes.Buffer
 
 	// helpers
-	ist := time.FixedZone("IST", 5*60*60+30*60)
-	ts := func(t time.Time) string { return t.In(ist).Format("02/01/2006 03:04 PM") }
+	tz := appTimezone()
+	ts := func(t time.Time) string { return t.In(tz).Format("02/01/2006 03:04 PM") }
 	tsp := func(t *time.Time) string {
 		if t == nil {
 			return ""
@@ -881,8 +890,8 @@ func buildIncidentTmplData(
 	raw *models.Incident,
 	l reportLabels,
 ) map[string]interface{} {
-	ist := time.FixedZone("IST", 5*60*60+30*60)
-	ts := func(t time.Time) string { return t.In(ist).Format("02/01/2006 03:04 PM") }
+	tz := appTimezone()
+	ts := func(t time.Time) string { return t.In(tz).Format("02/01/2006 03:04 PM") }
 	tsp := func(t *time.Time) string {
 		if t == nil {
 			return ""
