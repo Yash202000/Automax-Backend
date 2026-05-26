@@ -342,15 +342,15 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 		c.Set("Content-Type", "application/pdf")
 		c.Set("Content-Disposition", fmt.Sprintf(
 			`attachment; filename="incident_%s_%s.pdf"`,
-			reportData.IncidentNumber, time.Now().Format("20060102"),
+			reportData.IncidentNumber, time.Now().In(appTimezone()).Format("20060102"),
 		))
 		return c.Send(pdfData)
 
 	case "json":
 		c.Set("Content-Type", "application/json")
 		c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename=incident_%s_%s.json`,
-			reportData.IncidentNumber, time.Now().Format("20060102")))
-		return c.JSON(map[string]interface{}{"generated_at": time.Now().Format(time.RFC3339), "incident": reportData})
+			reportData.IncidentNumber, time.Now().In(appTimezone()).Format("20060102")))
+		return c.JSON(map[string]interface{}{"generated_at": time.Now().In(appTimezone()).Format(time.RFC3339), "incident": reportData})
 
 	default:
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Use format=pdf, html, or json")
