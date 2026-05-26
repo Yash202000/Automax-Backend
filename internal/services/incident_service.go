@@ -5229,18 +5229,18 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 	}
 
 	notification := &models.NotificationLog{
-		Channel:   "sms",
-		Direction: "outbound",
-		Category:  "sent",
-		Language:  "en",
+		Channel:    "sms",
+		Direction:  "outbound",
+		Category:   "sent",
+		Language:   "en",
 		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
-		Subject:   "Incident Closed - Missing Information",
-		Body:      smsMessage,
-		Status:    status,
-		Provider:  "twilio",
-		IsRead:    false,
-		SentBy:    &userID,
-		SentAt:    &now,
+		Subject:    "Incident Closed - Missing Information",
+		Body:       smsMessage,
+		Status:     status,
+		Provider:   "twilio",
+		IsRead:     false,
+		SentBy:     &userID,
+		SentAt:     &now,
 	}
 	if smsErr != nil {
 		notification.ErrorMessage = smsErr.Error()
