@@ -250,6 +250,10 @@ func main() {
 	// Wire license service into user service for user limit enforcement
 	userService.SetLicenseService(licenseService, licenseRepo)
 
+	// Initialize GIS handler
+	gisService := services.NewGISService()
+	gisHandler := handlers.NewGISHandler(gisService)
+
 	// Initialize EPM handler
 	epmHandler := handlers.NewEPMHandler(userRepo, jwtManager, sessionStore)
 	epmIncidentHandler := handlers.NewEPMIncidentHandler(userRepo, locationRepo, classificationRepo, incidentRepo, workflowRepo, lookupRepo, jwtManager, sessionStore, minioStorage, db)
@@ -1015,6 +1019,10 @@ func main() {
 	reviews.Post("/assignments/:id/submit", authMiddleware.RequirePermission("goals:update"), reviewHandler.SubmitReview)
 	reviews.Get("/my-reviews", authMiddleware.RequirePermission("goals:view"), reviewHandler.ListMyReviews)
 	reviews.Get("/my-review-tasks", authMiddleware.RequirePermission("goals:view"), reviewHandler.ListMyReviewTasks)
+
+	// ---- GIS ROUTES ----
+	gis := v1.Group("/gis", authMiddleware.Authenticate())
+	gis.Post("/identify", gisHandler.Identify)
 
 	// ---- DOCUMENT MANAGEMENT ROUTES ----
 	docs := v1.Group("/documents", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureDocuments)))

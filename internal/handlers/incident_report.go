@@ -386,7 +386,8 @@ func buildReportHTML(
 	var b bytes.Buffer
 
 	// helpers
-	ts := func(t time.Time) string { return t.Format("02/01/2006 03:04 PM") }
+	ist := time.FixedZone("IST", 5*60*60+30*60)
+	ts := func(t time.Time) string { return t.In(ist).Format("02/01/2006 03:04 PM") }
 	tsp := func(t *time.Time) string {
 		if t == nil {
 			return ""
@@ -880,7 +881,8 @@ func buildIncidentTmplData(
 	raw *models.Incident,
 	l reportLabels,
 ) map[string]interface{} {
-	ts := func(t time.Time) string { return t.Format("02/01/2006 03:04 PM") }
+	ist := time.FixedZone("IST", 5*60*60+30*60)
+	ts := func(t time.Time) string { return t.In(ist).Format("02/01/2006 03:04 PM") }
 	tsp := func(t *time.Time) string {
 		if t == nil {
 			return ""
