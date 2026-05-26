@@ -115,10 +115,14 @@ var AvailableVariablesByActionType = map[string][]string{
 		"sla_breached", "sla_deadline", "due_date", "created_at", "created_by_name",
 		// Geography
 		"address", "city", "country",
+		// Geolocation / map
+		"latitude", "longitude", "map_url", "location_url",
 		// Extra
 		"priority",
 		// URLs
 		"incident_url", "sla_page_url",
+		// Citizen-facing SMS link
+		"sms_link",
 	},
 	// ── Partial Close (Ready-to-Close) expiry warning ────────────────────────
 	TemplateActionReadyToClose: {

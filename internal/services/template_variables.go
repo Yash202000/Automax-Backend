@@ -57,6 +57,8 @@ func BuildIncidentVariables(
 		"comment": "",
 		// SLA
 		"sla_breached": fmt.Sprintf("%t", incident.SLABreached),
+		// Citizen-facing link (SMS_PORTAL_URL/incidents/{id}, falls back to FRONTEND_URL)
+		"sms_link": "",
 		// Escalation-specific — empty by default; callers override
 		"hours_in_state":    "",
 		"sla_hours":         "",
@@ -69,15 +71,26 @@ func BuildIncidentVariables(
 		"report_date":       "",
 	}
 
-	// Build URL variables from FRONTEND_URL env var (set in .env / deployment config).
+	// Build URL variables.
+	// SMS_PORTAL_URL is a citizen-facing base URL (e.g. a public portal).
+	// Falls back to FRONTEND_URL if not set.
 	// Escalation callers override incident_url with their own pre-built value.
 	frontendBase := strings.TrimRight(os.Getenv("FRONTEND_URL"), "/")
+	smsPortalBase := strings.TrimRight(os.Getenv("SMS_PORTAL_URL"), "/")
+	if smsPortalBase == "" {
+		smsPortalBase = frontendBase
+	}
 	if frontendBase != "" {
 		vars["incident_url"] = frontendBase + "/incidents/" + incident.ID.String()
 		vars["sla_page_url"] = frontendBase + "/incidents?sla_breached=true"
 	} else {
 		vars["incident_url"] = ""
 		vars["sla_page_url"] = ""
+	}
+	if smsPortalBase != "" {
+		vars["sms_link"] = smsPortalBase + "/incidents/" + incident.ID.String()
+	} else {
+		vars["sms_link"] = ""
 	}
 
 	// Dates
