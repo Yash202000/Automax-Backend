@@ -574,7 +574,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 				fmt.Printf("Warning: SetAssignees (self-assign for web) failed: %v\n", err)
 			}
 		}
-	} else if len(initialState.AssignmentRoles) > 0 || initialState.AutoMatchUser {
+	} else {
 		// Rule 2: Non-web sources → round-robin among online eligible agents
 		var classID, locID, deptID *uuid.UUID
 		if incident.ClassificationID != nil {
@@ -607,48 +607,6 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		} else {
 			// No online eligible agents — leave unassigned, do NOT fall back to offline agents
 			fmt.Printf("Warning: no online eligible agents for round-robin, incident %s left unassigned: %v\n", incident.IncidentNumber, err)
-		}
-	} else if initialState.AssignUserID != nil {
-		// Specific user — always assign to this pre-configured user
-		if err := s.incidentRepo.AssignIncident(ctx, incident.ID, *initialState.AssignUserID); err != nil {
-			fmt.Printf("Warning: creation assignment (specific user) failed: %v\n", err)
-		} else {
-			if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{*initialState.AssignUserID}); err != nil {
-				fmt.Printf("Warning: SetAssignees (specific user) failed: %v\n", err)
-			}
-		}
-	} else if initialState.ManualSelectUser && len(initialState.AssignmentRoles) > 0 && req.AssigneeID != nil && *req.AssigneeID != "" {
-		// Manual select — validate the operator-chosen assignee is in the matching pool
-		assigneeUUID, parseErr := uuid.Parse(*req.AssigneeID)
-		if parseErr == nil {
-			roleIDs := make([]uuid.UUID, len(initialState.AssignmentRoles))
-			for i, r := range initialState.AssignmentRoles {
-				roleIDs[i] = r.ID
-			}
-			var classID, locID, deptID *uuid.UUID
-			if incident.ClassificationID != nil {
-				classID = incident.ClassificationID
-			}
-			if incident.LocationID != nil {
-				locID = incident.LocationID
-			}
-			if incident.DepartmentID != nil {
-				deptID = incident.DepartmentID
-			}
-			matchedUsers, _ := s.userRepo.FindMatching(ctx, roleIDs, classID, locID, deptID, nil)
-			validPool := make(map[uuid.UUID]bool, len(matchedUsers))
-			for _, u := range matchedUsers {
-				validPool[u.ID] = true
-			}
-			if validPool[assigneeUUID] {
-				if err := s.incidentRepo.AssignIncident(ctx, incident.ID, assigneeUUID); err != nil {
-					fmt.Printf("Warning: creation assignment (manual select) failed: %v\n", err)
-				} else {
-					if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{assigneeUUID}); err != nil {
-						fmt.Printf("Warning: SetAssignees (manual select) failed: %v\n", err)
-					}
-				}
-			}
 		}
 	}
 
