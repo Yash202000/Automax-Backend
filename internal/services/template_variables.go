@@ -48,6 +48,13 @@ func BuildIncidentVariables(
 		"address":         incident.Address,
 		"city":            incident.City,
 		"country":         incident.Country,
+		// Geolocation
+		"latitude":     "",
+		"longitude":    "",
+		"map_url":      "",
+		"location_url": "",
+		// Comment aliases
+		"comment": "",
 		// SLA
 		"sla_breached": fmt.Sprintf("%t", incident.SLABreached),
 		// Escalation-specific — empty by default; callers override
@@ -84,6 +91,15 @@ func BuildIncidentVariables(
 		vars["sla_deadline"] = incident.SLADeadline.Format("2006-01-02 15:04:05")
 	} else {
 		vars["sla_deadline"] = ""
+	}
+
+	// Geolocation — build map URL when lat/lng are present
+	if incident.Latitude != nil && incident.Longitude != nil {
+		vars["latitude"] = fmt.Sprintf("%f", *incident.Latitude)
+		vars["longitude"] = fmt.Sprintf("%f", *incident.Longitude)
+		mapURL := fmt.Sprintf("http://maps.google.com/?q=%f,%f", *incident.Latitude, *incident.Longitude)
+		vars["map_url"] = mapURL
+		vars["location_url"] = mapURL
 	}
 
 	// Classification
@@ -177,6 +193,7 @@ func BuildIncidentVariables(
 	if len(incident.TransitionHistory) > 0 {
 		latest := incident.TransitionHistory[len(incident.TransitionHistory)-1]
 		vars["comments"] = latest.Comment
+		vars["comment"] = latest.Comment
 		vars["transition_comment"] = latest.Comment
 		hoursInState := time.Since(latest.TransitionedAt).Hours()
 		vars["hours_in_state"] = fmt.Sprintf("%.1f", hoursInState)

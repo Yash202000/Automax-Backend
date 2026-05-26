@@ -24,13 +24,14 @@ const (
 
 // Action type constants — what event triggers this template
 const (
-	TemplateActionEscalation   = "escalation"
-	TemplateActionAssignment   = "assignment"
-	TemplateActionClosure      = "closure"
-	TemplateActionStatusChange = "status_change"
-	TemplateActionReadyToClose = "ready_to_close"
-	TemplateActionNewIncident  = "new_incident"
-	TemplateActionCustom       = "custom"
+	TemplateActionEscalation       = "escalation"
+	TemplateActionAssignment       = "assignment"
+	TemplateActionClosure          = "closure"
+	TemplateActionStatusChange     = "status_change"
+	TemplateActionReadyToClose     = "ready_to_close"
+	TemplateActionNewIncident      = "new_incident"
+	TemplateActionConvertToRequest = "convert_to_request"
+	TemplateActionCustom           = "custom"
 )
 
 // AvailableVariablesByActionType documents which template variables are injected at send-time
@@ -85,6 +86,10 @@ var AvailableVariablesByActionType = map[string][]string{
 		"sla_breached", "sla_deadline", "due_date", "created_at", "created_by_name",
 		// Geography
 		"address", "city", "country",
+		// Geolocation / map
+		"latitude", "longitude", "map_url", "location_url",
+		// Comments
+		"comment", "comments", "transition_comment",
 		// Extra
 		"priority",
 		// URLs
@@ -186,6 +191,26 @@ var AvailableVariablesByActionType = map[string][]string{
 		"address", "city", "country",
 		// Extra
 		"priority", "comments", "transition_comment",
+		// Not-belong closure: the external department the incident was referred to
+		"department_name",
+		// URLs
+		"incident_url", "sla_page_url",
+	},
+	// ── Incident converted to request ────────────────────────────────────────
+	TemplateActionConvertToRequest: {
+		// Core incident (source)
+		"incident_number", "incident_title", "incident_id",
+		"description", "record_type", "source", "channel",
+		// The new request number
+		"request_number",
+		// Reporter / citizen
+		"reporter_name", "reporter_email", "reporter_phone",
+		// Classification / workflow / location
+		"classification_name", "workflow_name", "location_name",
+		// Dates
+		"created_at", "created_by_name",
+		// Geography
+		"address", "city", "country",
 		// URLs
 		"incident_url", "sla_page_url",
 	},
@@ -250,7 +275,7 @@ type NotificationTemplateCreateRequest struct {
 	Code         string     `json:"code"          validate:"required"`
 	Channel      string     `json:"channel"       validate:"required,oneof=email sms"`
 	ModuleType   string     `json:"module_type"   validate:"omitempty,oneof=incident complaint request query global"`
-	ActionType   string     `json:"action_type"   validate:"omitempty,oneof=escalation assignment closure status_change ready_to_close new_incident custom"`
+	ActionType   string     `json:"action_type"   validate:"omitempty,oneof=escalation assignment closure status_change ready_to_close new_incident convert_to_request custom"`
 	Variables    string     `json:"variables"`
 	TransitionID *uuid.UUID `json:"transition_id"`
 	SubjectEN    string     `json:"subject_en"`
