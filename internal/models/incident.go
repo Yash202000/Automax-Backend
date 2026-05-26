@@ -442,6 +442,7 @@ type CreateComplaintRequest struct {
 	ReporterID       *string  `json:"reporter_id" validate:"omitempty,uuid"` // link to user who created the complaint
 	ReporterEmail    string   `json:"reporter_email" validate:"omitempty,email"`
 	ReporterName     string   `json:"reporter_name" validate:"omitempty,max=200"`
+	ReporterPhone    string   `json:"reporter_phone" validate:"omitempty,max=50"`
 	DepartmentID     *string  `json:"department_id" validate:"omitempty,uuid"`
 	AssigneeID       *string  `json:"assignee_id" validate:"omitempty,uuid"`
 	LocationID       *string  `json:"location_id" validate:"omitempty,uuid"`

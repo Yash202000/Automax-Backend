@@ -4626,6 +4626,9 @@ func (s *incidentService) CreateComplaint(ctx context.Context, req *models.Creat
 		WorkflowID:       workflowID,
 		CurrentStateID:   initialState.ID,
 		Channel:          req.Channel,
+		ReporterName:     req.ReporterName,
+		ReporterEmail:    req.ReporterEmail,
+		ReporterPhone:    req.ReporterPhone,
 	}
 
 	// Set reporter - use provided reporter_id or fall back to creator
