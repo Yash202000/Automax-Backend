@@ -1,0 +1,296 @@
+{
+  "info": {
+    "name": "Automax – Incident Public Feedback API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Two-phase public feedback flow for incidents.\n\nPhase 1 (authenticated): staff creates a feedback record and receives a signed token that is SMS'd to the reporter.\nPhase 2 (public): reporter opens the signed link, submits satisfied/not-satisfied + optional comment. If not satisfied, a complaint is auto-created."
+  },
+  "variable": [
+    { "key": "base_url",     "value": "http://localhost:8080/api/v1", "type": "string" },
+    { "key": "token",        "value": "<your-bearer-token>",          "type": "string" },
+    { "key": "incident_id",  "value": "<incident-uuid>",              "type": "string" },
+    { "key": "feedback_id",  "value": "<feedback-uuid>",              "type": "string" },
+    { "key": "signed_token", "value": "",                             "type": "string",  "description": "Auto-populated from the Create Feedback response." }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "Phase 1 – Authenticated",
+      "description": "Endpoints that require a valid JWT. Requires the incidents:update or incidents:view permission.",
+      "item": [
+        {
+          "name": "Create Feedback",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var res = pm.response.json();",
+                  "if (res.data && res.data.id) {",
+                  "    pm.collectionVariables.set('feedback_id', res.data.id);",
+                  "    pm.test('feedback_id captured', function() { pm.expect(res.data.id).to.be.a('string'); });",
+                  "}",
+                  "if (res.data && res.data.signed_token) {",
+                  "    pm.collectionVariables.set('signed_token', res.data.signed_token);",
+                  "    pm.test('signed_token captured', function() { pm.expect(res.data.signed_token).to.be.a('string'); });",
+                  "}",
+                  "pm.test('Status 201', function() { pm.response.to.have.status(201); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/public-feedback/{{incident_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["public-feedback", "{{incident_id}}"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mobile_no\": \"+966501234567\",\n  \"source\": \"sms\",\n  \"reporter_id\": null,\n  \"meta\": \"{}\",\n  \"message\": \"\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Creates a feedback record for the given incident.\n\n**Returns** the created record including `signed_token` (72-hour HMAC token). The token is also SMS'd to `mobile_no`.\n\nIf `message` is empty the SMS body defaults to:\n> \"Please rate your experience. Submit your feedback here: <link>\"\n\nThe test script auto-saves `feedback_id` and `signed_token` into collection variables.\n\n**Auth:** Bearer token required. Permission: `incidents:update`."
+          },
+          "response": [
+            {
+              "name": "201 Created",
+              "status": "Created",
+              "code": 201,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"success\": true,\n  \"message\": \"Public feedback created\",\n  \"data\": {\n    \"id\": \"a1b2c3d4-0000-0000-0000-000000000001\",\n    \"incident_id\": \"a1b2c3d4-0000-0000-0000-000000000002\",\n    \"mobile_no\": \"+966501234567\",\n    \"satisfied\": null,\n    \"comment\": null,\n    \"source\": \"sms\",\n    \"meta\": \"{}\",\n    \"reporter_id\": null,\n    \"created_by\": \"a1b2c3d4-0000-0000-0000-000000000003\",\n    \"created_at\": \"2026-05-26T10:00:00Z\",\n    \"submitted_at\": null,\n    \"updated_at\": \"2026-05-26T10:00:00Z\",\n    \"signed_token\": \"fb|a1b2c3d4-...|a1b2c3d4-...|1748476800|abcdef1234567890\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "List All Feedback",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function() { pm.response.to.have.status(200); });",
+                  "pm.test('data is array', function() {",
+                  "    var res = pm.response.json();",
+                  "    pm.expect(res.data).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/public-feedback/",
+              "host": ["{{base_url}}"],
+              "path": ["public-feedback", ""]
+            },
+            "description": "Returns all public feedback records across all incidents, ordered by `created_at DESC`.\n\n**Auth:** Bearer token required. Permission: `incidents:view`."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"success\": true,\n  \"message\": \"Public feedback retrieved\",\n  \"data\": [\n    {\n      \"id\": \"a1b2c3d4-0000-0000-0000-000000000001\",\n      \"incident_id\": \"a1b2c3d4-0000-0000-0000-000000000002\",\n      \"mobile_no\": \"+966501234567\",\n      \"satisfied\": true,\n      \"comment\": \"Great service!\",\n      \"source\": \"sms\",\n      \"meta\": \"{}\",\n      \"reporter_id\": null,\n      \"created_by\": \"a1b2c3d4-0000-0000-0000-000000000003\",\n      \"created_at\": \"2026-05-26T10:00:00Z\",\n      \"submitted_at\": \"2026-05-26T11:30:00Z\",\n      \"updated_at\": \"2026-05-26T11:30:00Z\",\n      \"signed_token\": \"\"\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "List Feedback by Incident",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function() { pm.response.to.have.status(200); });",
+                  "pm.test('data is array', function() {",
+                  "    var res = pm.response.json();",
+                  "    pm.expect(res.data).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/public-feedback/{{incident_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["public-feedback", "{{incident_id}}"]
+            },
+            "description": "Returns all public feedback records for a specific incident, ordered by `created_at DESC`.\n\n**Auth:** Bearer token required. Permission: `incidents:view`."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"success\": true,\n  \"message\": \"Public feedback retrieved\",\n  \"data\": [\n    {\n      \"id\": \"a1b2c3d4-0000-0000-0000-000000000001\",\n      \"incident_id\": \"a1b2c3d4-0000-0000-0000-000000000002\",\n      \"mobile_no\": \"+966501234567\",\n      \"satisfied\": false,\n      \"comment\": \"Long wait time.\",\n      \"source\": \"sms\",\n      \"meta\": \"{}\",\n      \"reporter_id\": null,\n      \"created_by\": \"a1b2c3d4-0000-0000-0000-000000000003\",\n      \"created_at\": \"2026-05-26T10:00:00Z\",\n      \"submitted_at\": \"2026-05-26T12:00:00Z\",\n      \"updated_at\": \"2026-05-26T12:00:00Z\",\n      \"signed_token\": \"\"\n    }\n  ]\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Phase 2 – Public (no auth)",
+      "description": "Endpoint called by the reporter via the signed link. No JWT required.",
+      "item": [
+        {
+          "name": "Submit Feedback – Satisfied",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function() { pm.response.to.have.status(200); });",
+                  "pm.test('submitted_at is set', function() {",
+                  "    var res = pm.response.json();",
+                  "    pm.expect(res.data.submitted_at).to.not.be.null;",
+                  "});",
+                  "pm.test('satisfied is true', function() {",
+                  "    var res = pm.response.json();",
+                  "    pm.expect(res.data.satisfied).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/public-feedback/{{incident_id}}/submit?signed_token={{signed_token}}",
+              "host": ["{{base_url}}"],
+              "path": ["public-feedback", "{{incident_id}}", "submit"],
+              "query": [
+                { "key": "signed_token", "value": "{{signed_token}}", "description": "HMAC-signed token from the Create response (format: fb|feedbackID|incidentID|expiresAt|hmac)." }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"satisfied\": true,\n  \"comment\": \"Great service, resolved quickly!\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Public endpoint — no JWT required. The signed token in the query string authenticates the request.\n\n**Token validation rules:**\n- Token must not be expired (72-hour window from creation)\n- Token HMAC must be intact (tampered tokens → 401)\n- Token must match the `incident_id` in the URL\n\n**Business rules:**\n- Feedback record must exist and not be soft-deleted\n- Feedback must not already be submitted (`submitted_at IS NULL`)\n- `satisfied: true` → stores the response, no further action\n- `satisfied: false` → stores the response **and** auto-creates a complaint in the background using the first active complaint workflow and classification"
+          },
+          "response": [
+            {
+              "name": "200 OK – Satisfied",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"success\": true,\n  \"message\": \"Feedback submitted successfully\",\n  \"data\": {\n    \"id\": \"a1b2c3d4-0000-0000-0000-000000000001\",\n    \"incident_id\": \"a1b2c3d4-0000-0000-0000-000000000002\",\n    \"mobile_no\": \"+966501234567\",\n    \"satisfied\": true,\n    \"comment\": \"Great service, resolved quickly!\",\n    \"source\": \"sms\",\n    \"meta\": \"{}\",\n    \"reporter_id\": null,\n    \"created_by\": \"a1b2c3d4-0000-0000-0000-000000000003\",\n    \"created_at\": \"2026-05-26T10:00:00Z\",\n    \"submitted_at\": \"2026-05-26T11:30:00Z\",\n    \"updated_at\": \"2026-05-26T11:30:00Z\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Submit Feedback – Not Satisfied (auto-complaint)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function() { pm.response.to.have.status(200); });",
+                  "pm.test('satisfied is false', function() {",
+                  "    var res = pm.response.json();",
+                  "    pm.expect(res.data.satisfied).to.eql(false);",
+                  "});",
+                  "pm.test('submitted_at is set', function() {",
+                  "    var res = pm.response.json();",
+                  "    pm.expect(res.data.submitted_at).to.not.be.null;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/public-feedback/{{incident_id}}/submit?signed_token={{signed_token}}",
+              "host": ["{{base_url}}"],
+              "path": ["public-feedback", "{{incident_id}}", "submit"],
+              "query": [
+                { "key": "signed_token", "value": "{{signed_token}}" }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"satisfied\": false,\n  \"comment\": \"Took too long to resolve.\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Same as 'Submit Feedback – Satisfied' but `satisfied: false`.\n\nA complaint is automatically created in the background using the first active complaint workflow and classification found in the system. The complaint title is set to \"Unsatisfied feedback for incident <incidentID>\" and the comment is used as the complaint description."
+          },
+          "response": [
+            {
+              "name": "200 OK – Not Satisfied",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"success\": true,\n  \"message\": \"Feedback submitted successfully\",\n  \"data\": {\n    \"id\": \"a1b2c3d4-0000-0000-0000-000000000001\",\n    \"incident_id\": \"a1b2c3d4-0000-0000-0000-000000000002\",\n    \"mobile_no\": \"+966501234567\",\n    \"satisfied\": false,\n    \"comment\": \"Took too long to resolve.\",\n    \"source\": \"sms\",\n    \"meta\": \"{}\",\n    \"reporter_id\": null,\n    \"created_by\": \"a1b2c3d4-0000-0000-0000-000000000003\",\n    \"created_at\": \"2026-05-26T10:00:00Z\",\n    \"submitted_at\": \"2026-05-26T12:00:00Z\",\n    \"updated_at\": \"2026-05-26T12:00:00Z\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Submit Feedback – Error: Expired Token",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/public-feedback/{{incident_id}}/submit?signed_token=fb%7Cfeedback-id%7Cincident-id%7C1000000000%7Cbadsig",
+              "host": ["{{base_url}}"],
+              "path": ["public-feedback", "{{incident_id}}", "submit"],
+              "query": [
+                { "key": "signed_token", "value": "fb%7Cfeedback-id%7Cincident-id%7C1000000000%7Cbadsig", "description": "An expired / invalid token for testing error handling." }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"satisfied\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Demonstrates the 401 response returned when the signed token has expired or is tampered with."
+          },
+          "response": [
+            {
+              "name": "401 Expired",
+              "status": "Unauthorized",
+              "code": 401,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"success\": false,\n  \"message\": \"Token has expired\"\n}"
+            },
+            {
+              "name": "401 Invalid",
+              "status": "Unauthorized",
+              "code": 401,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"success\": false,\n  \"message\": \"Invalid token\"\n}"
+            },
+            {
+              "name": "409 Already Submitted",
+              "status": "Conflict",
+              "code": 409,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"success\": false,\n  \"message\": \"Feedback has already been submitted\"\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

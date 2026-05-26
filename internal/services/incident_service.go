@@ -655,10 +655,9 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		})
 	}
 
-	IvrInstSms := strings.TrimSpace(os.Getenv("IVR_INST_SMS"))
+	// IvrInstSms := strings.TrimSpace(os.Getenv("IVR_INST_SMS"))
 	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.IVR) &&
-		strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) &&
-		strings.EqualFold(IvrInstSms, constants.CLIENT_CODE.IVR_INST_SMS) {
+		strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
 		// send notification to IVR user about incident creation via sms
 		// in phase 4 we can add more details in the sms and also add notification in the app
 		// add columns like NotificationSent bool, NotificationSentAt time.Time in the incident table to track this
@@ -666,14 +665,14 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		// url := pkgutils.GenerateAppURL(ctx)
 
 		// log.Printf("Generate Signed url: %s", utils.GenerateIncidentToken(incident.ID.String(), 24*time.Hour))
-		signed_token := pkgutils.GenerateIncidentToken(incident.ID.String(), 24*time.Hour)
-		log.Printf("Generated signed token for IVR incident: %s", signed_token)
-		// smsLink := fmt.Sprintf("%s/ivr/incident/sms-link/%s?signed_token=%s", url, incident.ID.String(), signed_token)
-		smsLink := pkgutils.BuildSMSLink(ctx, incident.ID.String(), 24*time.Hour)
+		// signed_token := pkgutils.GenerateIncidentToken(incident.ID.String(), 24*time.Hour)
+		// log.Printf("Generated signed token for IVR incident: %s", signed_token)
+		// // smsLink := fmt.Sprintf("%s/ivr/incident/sms-link/%s?signed_token=%s", url, incident.ID.String(), signed_token)
+		// smsLink := pkgutils.BuildSMSLink(ctx, incident.ID.String(), 24*time.Hour)
 
 		var sent []string
 		if req.ReporterPhone != "" {
-			smsBody := fmt.Sprintf("Dear Citizen, please provide additional details for your reported incident (%s) using the following secure link: %s", incident.IncidentNumber, smsLink)
+			smsBody := fmt.Sprintf("Thank you for contacting Eastern Province Muncipality. Your incident (%s) has been created successfully.", incident.IncidentNumber)
 			_, err := s.notificationService.SendNotification(
 				ctx,
 				"sms",
@@ -696,7 +695,6 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 			}
 		}
 		log.Printf("IVR incident created with ID %s, SMS sent: %v", incident.ID, sent)
-		log.Println("ivr sms link send: ", smsLink)
 	}
 
 	// Send template-based email/SMS notifications for the initial state (if configured)

@@ -120,6 +120,52 @@ func ValidateIvrSessionToken(token, expectedID string) error {
 	return nil
 }
 
+const fbPrefix = "fb"
+
+// GenerateFeedbackToken creates a signed token embedding both feedbackID and incidentID.
+// Format: fb|feedbackID|incidentID|expiresAt|hmac
+func GenerateFeedbackToken(feedbackID, incidentID string, duration time.Duration) string {
+	expiresAt := time.Now().Add(duration).Unix()
+	payload := fmt.Sprintf("%s|%s|%s|%d", fbPrefix, feedbackID, incidentID, expiresAt)
+	return fmt.Sprintf("%s|%s", payload, sign(payload))
+}
+
+// ValidateFeedbackToken verifies the fb-prefixed token and returns the embedded feedbackID.
+func ValidateFeedbackToken(token, expectedFeedbackID, expectedIncidentID string) (string, error) {
+	decoded, err := url.QueryUnescape(token)
+	if err == nil {
+		token = decoded
+	}
+
+	parts := strings.Split(token, "|")
+	if len(parts) != 5 {
+		return "", ErrMalformed
+	}
+
+	prefix, feedbackID, incidentID, expiresAtStr, sig := parts[0], parts[1], parts[2], parts[3], parts[4]
+	if prefix != fbPrefix {
+		return "", ErrWrongTokenType
+	}
+
+	payload := fmt.Sprintf("%s|%s|%s|%s", prefix, feedbackID, incidentID, expiresAtStr)
+	if !hmac.Equal([]byte(sign(payload)), []byte(sig)) {
+		return "", ErrInvalid
+	}
+
+	expiresAt, err := strconv.ParseInt(expiresAtStr, 10, 64)
+	if err != nil {
+		return "", ErrMalformed
+	}
+	if time.Now().Unix() > expiresAt {
+		return "", ErrExpired
+	}
+
+	if feedbackID != expectedFeedbackID || incidentID != expectedIncidentID {
+		return "", ErrIDMismatch
+	}
+	return feedbackID, nil
+}
+
 func sign(payload string) string {
 	secret := os.Getenv("SIGNED_URL_SECRET") // e.g. "my-secret-key-32chars"
 	mac := hmac.New(sha256.New, []byte(secret))
