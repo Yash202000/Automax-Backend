@@ -2,9 +2,13 @@ package services
 
 import (
 	"fmt"
+	"net/url"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/models"
+	pkgutils "github.com/automax/backend/pkg/utils"
 )
 
 // BuildIncidentVariables builds the complete map of template variables for an incident.
@@ -46,20 +50,51 @@ func BuildIncidentVariables(
 		"address":         incident.Address,
 		"city":            incident.City,
 		"country":         incident.Country,
+		// Geolocation
+		"latitude":     "",
+		"longitude":    "",
+		"map_url":      "",
+		"location_url": "",
+		// Comment aliases
+		"comment": "",
 		// SLA
 		"sla_breached": fmt.Sprintf("%t", incident.SLABreached),
+		// Citizen-facing link (SMS_PORTAL_URL/incidents/{id}, falls back to FRONTEND_URL)
+		"sms_link": "",
 		// Escalation-specific — empty by default; callers override
 		"hours_in_state":    "",
 		"sla_hours":         "",
 		"state_name":        "",
 		"hours_in_breach":   "",
-		"incident_url":      "",
 		"policy_name":       "",
 		"step_order":        "",
 		"incident_count":    "",
-		"sla_page_url":      "",
 		"incidents_summary": "",
 		"report_date":       "",
+	}
+
+	// Build URL variables.
+	// SMS_PORTAL_URL is a citizen-facing base URL (e.g. a public portal).
+	// Falls back to FRONTEND_URL if not set.
+	// Escalation callers override incident_url with their own pre-built value.
+	frontendBase := strings.TrimRight(os.Getenv("FRONTEND_URL"), "/")
+	smsPortalBase := strings.TrimRight(os.Getenv("SMS_PORTAL_URL"), "/")
+	if smsPortalBase == "" {
+		smsPortalBase = frontendBase
+	}
+	if frontendBase != "" {
+		vars["incident_url"] = frontendBase + "/incidents/" + incident.ID.String()
+		vars["sla_page_url"] = frontendBase + "/incidents?sla_breached=true"
+	} else {
+		vars["incident_url"] = ""
+		vars["sla_page_url"] = ""
+	}
+	if smsPortalBase != "" {
+		token := pkgutils.GenerateIncidentToken(incident.ID.String(), 24*time.Hour)
+		vars["sms_link"] = fmt.Sprintf("%s/ivr/incident/sms-link/%s?signed_token=%s",
+			smsPortalBase, incident.ID.String(), url.QueryEscape(token))
+	} else {
+		vars["sms_link"] = ""
 	}
 
 	// Dates
@@ -73,6 +108,15 @@ func BuildIncidentVariables(
 		vars["sla_deadline"] = incident.SLADeadline.Format("2006-01-02 15:04:05")
 	} else {
 		vars["sla_deadline"] = ""
+	}
+
+	// Geolocation — build map URL when lat/lng are present
+	if incident.Latitude != nil && incident.Longitude != nil {
+		vars["latitude"] = fmt.Sprintf("%f", *incident.Latitude)
+		vars["longitude"] = fmt.Sprintf("%f", *incident.Longitude)
+		mapURL := fmt.Sprintf("http://maps.google.com/?q=%f,%f", *incident.Latitude, *incident.Longitude)
+		vars["map_url"] = mapURL
+		vars["location_url"] = mapURL
 	}
 
 	// Classification
@@ -166,6 +210,7 @@ func BuildIncidentVariables(
 	if len(incident.TransitionHistory) > 0 {
 		latest := incident.TransitionHistory[len(incident.TransitionHistory)-1]
 		vars["comments"] = latest.Comment
+		vars["comment"] = latest.Comment
 		vars["transition_comment"] = latest.Comment
 		hoursInState := time.Since(latest.TransitionedAt).Hours()
 		vars["hours_in_state"] = fmt.Sprintf("%.1f", hoursInState)

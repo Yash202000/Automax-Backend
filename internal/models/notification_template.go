@@ -24,116 +24,235 @@ const (
 
 // Action type constants — what event triggers this template
 const (
-	TemplateActionEscalation   = "escalation"
-	TemplateActionAssignment   = "assignment"
-	TemplateActionClosure      = "closure"
-	TemplateActionStatusChange = "status_change"
-	TemplateActionReadyToClose = "ready_to_close"
-	TemplateActionNewIncident  = "new_incident"
-	TemplateActionCustom       = "custom"
+	TemplateActionEscalation       = "escalation"
+	TemplateActionAssignment       = "assignment"
+	TemplateActionClosure          = "closure"
+	TemplateActionStatusChange     = "status_change"
+	TemplateActionReadyToClose     = "ready_to_close"
+	TemplateActionNewIncident      = "new_incident"
+	TemplateActionConvertToRequest = "convert_to_request"
+	TemplateActionMissingInfo      = "missing_info"
+	TemplateActionCustom           = "custom"
 )
 
 // AvailableVariablesByActionType documents which template variables are injected at send-time
 // for each action type. Use {{variable_name}} or {{.variable_name}} in template bodies.
+// AvailableVariablesByActionType lists every {{variable}} that will be substituted
+// when a template of a given action_type is rendered.
+//
+// The canonical implementation is BuildIncidentVariables() in template_variables.go.
+// Add a new variable there first, then add it here so the frontend shows it.
 var AvailableVariablesByActionType = map[string][]string{
+	// ── Transition-triggered (workflow action executor) ───────────────────────
 	TemplateActionStatusChange: {
+		// Core incident
 		"incident_number", "incident_title", "incident_id",
 		"description", "record_type", "source", "channel",
+		// Transition context
 		"from_state", "to_state", "transition_name",
 		"performed_by", "first_name", "last_name",
+		// Assignee
 		"assignee", "assignee_email", "assignee_phone",
-		"current_state",
+		// State
+		"current_state", "state_name", "sla_hours",
+		// Reporter
 		"reporter_name", "reporter_email", "reporter_phone",
-		"classification_name", "workflow_name",
-		"sla_breached", "sla_deadline", "due_date",
-		"created_at", "created_by_name",
+		// Classification / workflow / location
+		"classification_name", "workflow_name", "location_name",
+		// SLA / dates
+		"sla_breached", "sla_deadline", "due_date", "created_at", "created_by_name",
+		// Geography
 		"address", "city", "country",
-		"location_name", "priority",
-		"comments", "transition_comment",
+		// Extra
+		"priority", "comments", "transition_comment",
+		// URLs
+		"incident_url", "sla_page_url",
 	},
+	// ── SLA escalation (per-incident and policy-step) ────────────────────────
 	TemplateActionEscalation: {
+		// Core incident
 		"incident_number", "incident_title", "incident_id",
 		"description", "record_type", "source", "channel",
-		"from_state", "to_state", "transition_name",
+		// Notified user
 		"first_name", "last_name",
+		// Assignee
 		"assignee", "assignee_email", "assignee_phone",
-		"current_state", "state_name", "hours_in_state", "sla_hours",
+		// State / SLA
+		"current_state", "state_name", "hours_in_state", "sla_hours", "hours_in_breach",
+		// Reporter
 		"reporter_name", "reporter_email", "reporter_phone",
-		"classification_name", "workflow_name",
-		"sla_breached", "sla_deadline", "due_date",
-		"created_at", "created_by_name",
+		// Classification / workflow / location
+		"classification_name", "workflow_name", "location_name",
+		// SLA / dates
+		"sla_breached", "sla_deadline", "due_date", "created_at", "created_by_name",
+		// Geography
 		"address", "city", "country",
-		"location_name", "priority",
-		// Group batch notification variables
-		"incident_count", "sla_page_url", "incidents_summary", "report_date",
-		// Policy step per-incident variables
-		"incident_url", "policy_name", "step_order", "hours_in_breach",
+		// Geolocation / map
+		"latitude", "longitude", "map_url", "location_url",
+		// Comments
+		"comment", "comments", "transition_comment",
+		// Extra
+		"priority",
+		// URLs
+		"incident_url", "sla_page_url",
+		// Policy-step specific
+		"policy_name", "step_order",
+		// Group batch specific
+		"incident_count", "incidents_summary", "report_date",
 	},
+	// ── New incident created ─────────────────────────────────────────────────
 	TemplateActionNewIncident: {
+		// Core incident
 		"incident_number", "incident_title", "incident_id",
 		"description", "record_type", "source", "channel",
+		// Assignee (first_name/last_name = assignee for new incidents)
 		"assignee", "assignee_email", "assignee_phone",
-		"first_name", "last_name", "reporter",
-		"reporter_name", "reporter_email", "reporter_phone",
-		"classification_name", "workflow_name",
-		"sla_breached", "sla_deadline", "due_date",
-		"created_at", "created_by_name",
+		"first_name", "last_name",
+		// Reporter
+		"reporter", "reporter_name", "reporter_email", "reporter_phone",
+		// Classification / workflow / location
+		"classification_name", "workflow_name", "location_name",
+		// SLA / dates
+		"sla_breached", "sla_deadline", "due_date", "created_at", "created_by_name",
+		// Geography
 		"address", "city", "country",
-		"location_name", "priority",
+		// Geolocation / map
+		"latitude", "longitude", "map_url", "location_url",
+		// Extra
+		"priority",
+		// URLs
+		"incident_url", "sla_page_url",
+		// Citizen-facing SMS link
+		"sms_link",
 	},
+	// ── Partial Close (Ready-to-Close) expiry warning ────────────────────────
 	TemplateActionReadyToClose: {
+		// Core incident
 		"incident_number", "incident_title", "incident_id",
 		"description", "record_type", "source", "channel",
+		// Expiry-specific
 		"expires_at", "remaining_time",
+		// Assignee (first_name/last_name = assignee)
 		"first_name", "last_name",
 		"assignee", "assignee_email", "assignee_phone",
+		// Reporter
 		"reporter_name", "reporter_email", "reporter_phone",
-		"classification_name", "workflow_name",
-		"sla_breached", "sla_deadline", "due_date",
-		"created_at", "created_by_name",
+		// Classification / workflow / location
+		"classification_name", "workflow_name", "location_name",
+		// SLA / dates
+		"sla_breached", "sla_deadline", "due_date", "created_at", "created_by_name",
+		// Geography
 		"address", "city", "country",
-		"location_name", "priority",
+		// Extra
+		"priority",
+		// URLs
+		"incident_url", "sla_page_url",
 	},
+	// ── Assignee changed ─────────────────────────────────────────────────────
 	TemplateActionAssignment: {
+		// Core incident
 		"incident_number", "incident_title", "incident_id",
 		"description", "record_type", "source", "channel",
+		// Assignee (first_name/last_name = new assignee via performedBy)
 		"assignee", "assignee_email", "assignee_phone",
 		"first_name", "last_name", "performed_by",
+		// Transition context
+		"from_state", "to_state", "transition_name",
+		// State
+		"current_state", "state_name", "sla_hours",
+		// Reporter
 		"reporter_name", "reporter_email", "reporter_phone",
-		"classification_name", "workflow_name",
-		"sla_breached", "sla_deadline", "due_date",
-		"created_at", "created_by_name",
+		// Classification / workflow / location
+		"classification_name", "workflow_name", "location_name",
+		// SLA / dates
+		"sla_breached", "sla_deadline", "due_date", "created_at", "created_by_name",
+		// Geography
 		"address", "city", "country",
-		"location_name", "priority",
-		"comments", "transition_comment",
+		// Extra
+		"priority", "comments", "transition_comment",
+		// URLs
+		"incident_url", "sla_page_url",
 	},
+	// ── Incident closed ──────────────────────────────────────────────────────
 	TemplateActionClosure: {
+		// Core incident
 		"incident_number", "incident_title", "incident_id",
 		"description", "record_type", "source", "channel",
-		"assignee", "assignee_email", "assignee_phone",
+		// Performer
 		"first_name", "last_name", "performed_by",
+		// Transition context
+		"from_state", "to_state", "transition_name",
+		// State
+		"current_state", "state_name", "sla_hours",
+		// Assignee
+		"assignee", "assignee_email", "assignee_phone",
+		// Reporter
 		"reporter_name", "reporter_email", "reporter_phone",
-		"classification_name", "workflow_name",
-		"sla_breached", "sla_deadline", "due_date",
+		// Classification / workflow / location
+		"classification_name", "workflow_name", "location_name",
+		// SLA / dates
+		"sla_breached", "sla_deadline", "due_date", "created_at", "created_by_name",
+		// Geography
+		"address", "city", "country",
+		// Extra
+		"priority", "comments", "transition_comment",
+		// Not-belong closure: the external department the incident was referred to
+		"department_name",
+		// URLs
+		"incident_url", "sla_page_url",
+	},
+	// ── Incident converted to request ────────────────────────────────────────
+	TemplateActionConvertToRequest: {
+		// Core incident (source)
+		"incident_number", "incident_title", "incident_id",
+		"description", "record_type", "source", "channel",
+		// The new request number
+		"request_number",
+		// Reporter / citizen
+		"reporter_name", "reporter_email", "reporter_phone",
+		// Classification / workflow / location
+		"classification_name", "workflow_name", "location_name",
+		// Dates
+		"created_at", "created_by_name",
+		// Geography
+		"address", "city", "country",
+		// URLs
+		"incident_url", "sla_page_url",
+	},
+	// ── Missing incident information closure ────────────────────────────────
+	TemplateActionMissingInfo: {
+		"incident_number", "incident_title", "incident_id",
+		"description", "record_type", "source", "channel",
+		"reporter_name", "reporter_email", "reporter_phone",
+		"classification_name", "workflow_name", "location_name",
 		"created_at", "created_by_name",
 		"address", "city", "country",
-		"location_name", "priority",
-		"comments", "transition_comment",
+		"incident_url", "sla_page_url",
 	},
+	// ── Custom / catch-all ───────────────────────────────────────────────────
 	TemplateActionCustom: {
+		// Core incident
 		"incident_number", "incident_title", "incident_id",
 		"description", "record_type", "source", "channel",
+		// Transition context
 		"from_state", "to_state", "transition_name",
 		"performed_by", "first_name", "last_name",
+		// Assignee
 		"assignee", "assignee_email", "assignee_phone",
-		"current_state",
+		// State
+		"current_state", "state_name", "sla_hours",
+		// Reporter
 		"reporter_name", "reporter_email", "reporter_phone",
-		"classification_name", "workflow_name",
-		"sla_breached", "sla_deadline", "due_date",
-		"created_at", "created_by_name",
+		// Classification / workflow / location
+		"classification_name", "workflow_name", "location_name",
+		// SLA / dates
+		"sla_breached", "sla_deadline", "due_date", "created_at", "created_by_name",
+		// Geography
 		"address", "city", "country",
-		"location_name", "priority",
-		"comments", "transition_comment",
+		// Extra
+		"priority", "comments", "transition_comment",
+		// URLs
+		"incident_url", "sla_page_url",
 	},
 }
 
@@ -171,7 +290,7 @@ type NotificationTemplateCreateRequest struct {
 	Code         string     `json:"code"          validate:"required"`
 	Channel      string     `json:"channel"       validate:"required,oneof=email sms"`
 	ModuleType   string     `json:"module_type"   validate:"omitempty,oneof=incident complaint request query global"`
-	ActionType   string     `json:"action_type"   validate:"omitempty,oneof=escalation assignment closure status_change ready_to_close new_incident custom"`
+	ActionType   string     `json:"action_type"   validate:"omitempty,oneof=escalation assignment closure status_change ready_to_close new_incident convert_to_request missing_info custom"`
 	Variables    string     `json:"variables"`
 	TransitionID *uuid.UUID `json:"transition_id"`
 	SubjectEN    string     `json:"subject_en"`

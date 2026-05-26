@@ -308,20 +308,25 @@ func (s *readyToCloseService) sendPreExpiryNotification(ctx context.Context, ent
 		entry.ExpiresAt.Format("2006-01-02 15:04:05"),
 	)
 
+	// Build the full variable map so any DB template using ready_to_close variables works.
+	vars := BuildIncidentVariables(incident, nil, nil)
+	vars["expires_at"] = entry.ExpiresAt.Format("2006-01-02 15:04:05")
+	vars["remaining_time"] = timeStr
+	// first_name / last_name refer to the assignee for ready_to_close notifications.
+	if incident.Assignee != nil {
+		vars["first_name"] = incident.Assignee.FirstName
+		vars["last_name"] = incident.Assignee.LastName
+	}
+
 	if _, err := s.notifService.SendNotification(
 		ctx,
 		"notification", // in-app
 		nil,            // no template
 		"en",
-		recipients, // notify all current assignees of the incident
+		recipients,
 		nil, nil,
 		subject, body,
-		map[string]string{
-			"incident_number": incident.IncidentNumber,
-			"incident_title":  incident.Title,
-			"expires_at":      entry.ExpiresAt.Format("2006-01-02 15:04:05"),
-			"remaining_time":  timeStr,
-		},
+		vars,
 		nil,
 		nil, nil,
 	); err != nil {

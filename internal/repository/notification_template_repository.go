@@ -24,6 +24,8 @@ type NotificationTemplateRepository interface {
 	ListWithFilters(ctx context.Context, filter models.NotificationTemplateFilter) ([]models.NotificationTemplate, int64, error)
 	FindAllByCode(ctx context.Context, code, channel string) ([]models.NotificationTemplate, error)
 	FindByTransitionID(ctx context.Context, transitionID uuid.UUID) ([]models.NotificationTemplate, error)
+	// FindActiveByActionTypeAndChannel returns all active templates for a given action_type + channel.
+	FindActiveByActionTypeAndChannel(ctx context.Context, actionType, channel string) ([]models.NotificationTemplate, error)
 }
 
 type notificationTemplateRepository struct {
@@ -147,6 +149,15 @@ func (r *notificationTemplateRepository) FindByTransitionID(ctx context.Context,
 	err := r.db.WithContext(ctx).
 		Where("transition_id = ?", transitionID).
 		Order("code ASC").
+		Find(&list).Error
+	return list, err
+}
+
+func (r *notificationTemplateRepository) FindActiveByActionTypeAndChannel(ctx context.Context, actionType, channel string) ([]models.NotificationTemplate, error) {
+	var list []models.NotificationTemplate
+	err := r.db.WithContext(ctx).
+		Where("action_type = ? AND channel = ? AND is_active = true", actionType, channel).
+		Order("created_at ASC").
 		Find(&list).Error
 	return list, err
 }

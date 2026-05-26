@@ -61,27 +61,23 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 			// Template not found — fall through and use the provided subject/body as-is.
 			log.Printf("[NotificationService] template '%s' not found for channel '%s', using fallback content: %v", *templateCode, channel, err)
 		} else {
-			// Pick the language variant.
-			// Primary: use the requested language if that variant is non-empty.
-			// Fallback: use whichever variant is available (AR falls back to EN, EN falls back to AR).
+			// Use whichever body is set. When the requested language has content, prefer it;
+			// otherwise use whichever variant is non-empty so the template always sends.
 			var tplBody, tplSubject string
 			if language == "ar" && tpl.BodyAR != "" {
 				tplBody = tpl.BodyAR
 				tplSubject = tpl.SubjectAR
-				log.Printf("[NotificationService] Template '%s': using AR variant", *templateCode)
+			} else if language != "ar" && tpl.BodyEN != "" {
+				tplBody = tpl.BodyEN
+				tplSubject = tpl.SubjectEN
 			} else if tpl.BodyEN != "" {
 				tplBody = tpl.BodyEN
 				tplSubject = tpl.SubjectEN
-				if language == "ar" {
-					log.Printf("[NotificationService] Template '%s': AR body is empty, falling back to EN", *templateCode)
-				}
 			} else if tpl.BodyAR != "" {
-				// EN body is empty but AR is set — use AR regardless of requested language
 				tplBody = tpl.BodyAR
 				tplSubject = tpl.SubjectAR
-				log.Printf("[NotificationService] Template '%s': EN body is empty, falling back to AR", *templateCode)
 			} else {
-				log.Printf("[NotificationService] Template '%s': both EN and AR bodies are empty — email will have no body", *templateCode)
+				log.Printf("[NotificationService] Template '%s': both EN and AR bodies are empty — skipping send", *templateCode)
 			}
 
 			if len(variables) > 0 {
@@ -821,6 +817,40 @@ func (s *NotificationService) SetMetaOnLogs(ctx context.Context, ids []uuid.UUID
 var placeholderRe = regexp.MustCompile(`\{\{\.?([A-Za-z0-9_]+)\}\}`)
 
 // RenderTemplate substitutes variables into a template string.
+// SendByActionType sends all active templates matching actionType+channel to the given recipients.
+// Each active template is sent as a separate notification.
+// Returns an error only when NO active templates are found, so callers can fall back to hardcoded content.
+func (s *NotificationService) SendByActionType(
+	ctx context.Context,
+	actionType, channel, language string,
+	to []string,
+	variables map[string]string,
+	sentBy *uuid.UUID,
+) error {
+	templates, err := s.templateRepo.FindActiveByActionTypeAndChannel(ctx, actionType, channel)
+	if err != nil || len(templates) == 0 {
+		return fmt.Errorf("no active %s templates found for channel %s", actionType, channel)
+	}
+	log.Printf("[SendByActionType] action=%s channel=%s lang=%s recipients=%v templates_found=%d", actionType, channel, language, to, len(templates))
+	var lastErr error
+	for _, tpl := range templates {
+		code := tpl.Code
+		log.Printf("[SendByActionType] sending template code=%s body_en_len=%d body_ar_len=%d", code, len(tpl.BodyEN), len(tpl.BodyAR))
+		_, sendErr := s.SendNotification(
+			ctx, channel, &code, language,
+			to, nil, nil,
+			"", "", variables, nil, sentBy, nil,
+		)
+		if sendErr != nil {
+			log.Printf("[SendByActionType] template %s send failed: %v", code, sendErr)
+			lastErr = sendErr
+		} else {
+			log.Printf("[SendByActionType] template %s sent OK", code)
+		}
+	}
+	return lastErr
+}
+
 // Matching is case-insensitive: {{Incident_Number}} matches vars["incident_number"].
 // Supports both {{variable_name}} and {{.variable_name}} syntax.
 // Unknown variables are left unchanged in the output (never errors).

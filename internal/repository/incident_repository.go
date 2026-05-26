@@ -1525,6 +1525,7 @@ func (r *incidentRepository) GetIncidentsExceedingStateSLA(ctx context.Context) 
 		Preload("Classification").
 		Preload("Assignee").
 		Preload("Reporter").
+		Preload("LookupValues.Category").
 		Find(&incidents).Error
 
 	return incidents, err
@@ -1547,6 +1548,10 @@ func (r *incidentRepository) GetNewlyBreachedIncidents(ctx context.Context) ([]m
 		Preload("Assignee").
 		Preload("Reporter").
 		Preload("CurrentState").
+		Preload("Location").
+		Preload("Classification").
+		Preload("Workflow").
+		Preload("LookupValues.Category").
 		Find(&incidents).Error
 	return incidents, err
 }
