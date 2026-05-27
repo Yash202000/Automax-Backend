@@ -459,9 +459,10 @@ func (h *IncidentHandler) GetAvailableTransitions(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	roleIDs := h.getUserRoleIDs(c)
 
-	transitions, err := h.service.GetAvailableTransitions(c.UserContext(), id, roleIDs)
+	transitions, err := h.service.GetAvailableTransitions(c.UserContext(), id, userID, roleIDs)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}

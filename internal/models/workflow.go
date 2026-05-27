@@ -207,8 +207,9 @@ type WorkflowTransition struct {
 	IsRejection   bool           `gorm:"default:false" json:"is_rejection"`
 	IsNotBelong   bool           `gorm:"default:false" json:"is_not_belong"`   // IsNotBelong marks this transition as a "Not Belong" closure action.
 	IsMissingInfo bool           `gorm:"default:false" json:"is_missing_info"` // IsMissingInfo marks this transition as a "Missing Incident Information" closure action — triggers SMS to citizen.
-	IsReopen      bool           `gorm:"default:false" json:"is_reopen"`       // IsReopen marks this transition as a reopen action — used by AI Quality Audit to identify the reopen transition.
-	IsActive      bool           `gorm:"default:true" json:"is_active"`
+	IsReopen         bool           `gorm:"default:false" json:"is_reopen"`          // IsReopen marks this transition as a reopen action — used by AI Quality Audit to identify the reopen transition.
+	RequireAssignee  bool           `gorm:"default:false" json:"require_assignee"`   // RequireAssignee: when true, only the assigned user(s) can execute this transition
+	IsActive         bool           `gorm:"default:true" json:"is_active"`
 	SortOrder     int            `gorm:"default:0" json:"sort_order"`
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
@@ -408,10 +409,11 @@ type WorkflowTransitionCreateRequest struct {
 	ToStateID     string   `json:"to_state_id" validate:"required,uuid"`
 	RoleIDs       []string `json:"role_ids"`
 	SortOrder     int      `json:"sort_order"`
-	IsRejection   bool     `json:"is_rejection"`
-	IsNotBelong   bool     `json:"is_not_belong"`
-	IsMissingInfo bool     `json:"is_missing_info"`
-	IsReopen      bool     `json:"is_reopen"`
+	IsRejection     bool     `json:"is_rejection"`
+	IsNotBelong     bool     `json:"is_not_belong"`
+	IsMissingInfo   bool     `json:"is_missing_info"`
+	IsReopen        bool     `json:"is_reopen"`
+	RequireAssignee bool     `json:"require_assignee"`
 
 	// Department Assignment
 	AssignDepartmentID   *string `json:"assign_department_id" validate:"omitempty"`
@@ -436,10 +438,11 @@ type WorkflowTransitionUpdateRequest struct {
 	RoleIDs       []string `json:"role_ids"`
 	SortOrder     *int     `json:"sort_order"`
 	IsActive      *bool    `json:"is_active"`
-	IsRejection   *bool    `json:"is_rejection"`
-	IsNotBelong   *bool    `json:"is_not_belong"`
-	IsMissingInfo *bool    `json:"is_missing_info"`
-	IsReopen      *bool    `json:"is_reopen"`
+	IsRejection     *bool    `json:"is_rejection"`
+	IsNotBelong     *bool    `json:"is_not_belong"`
+	IsMissingInfo   *bool    `json:"is_missing_info"`
+	IsReopen        *bool    `json:"is_reopen"`
+	RequireAssignee *bool    `json:"require_assignee"`
 
 	// Department Assignment
 	AssignDepartmentID   *string `json:"assign_department_id" validate:"omitempty,uuid"`
@@ -606,13 +609,14 @@ type WorkflowTransitionResponse struct {
 	Requirements  []TransitionRequirementResponse `json:"requirements,omitempty"`
 	Actions       []TransitionActionResponse      `json:"actions,omitempty"`
 	FieldChanges  []TransitionFieldChangeResponse `json:"field_changes,omitempty"`
-	IsRejection   bool                            `json:"is_rejection"`
-	IsNotBelong   bool                            `json:"is_not_belong"`
-	IsMissingInfo bool                            `json:"is_missing_info"`
-	IsReopen      bool                            `json:"is_reopen"`
-	IsActive      bool                            `json:"is_active"`
-	SortOrder     int                             `json:"sort_order"`
-	CreatedAt     time.Time                       `json:"created_at"`
+	IsRejection     bool                            `json:"is_rejection"`
+	IsNotBelong     bool                            `json:"is_not_belong"`
+	IsMissingInfo   bool                            `json:"is_missing_info"`
+	IsReopen        bool                            `json:"is_reopen"`
+	RequireAssignee bool                            `json:"require_assignee"`
+	IsActive        bool                            `json:"is_active"`
+	SortOrder       int                             `json:"sort_order"`
+	CreatedAt       time.Time                       `json:"created_at"`
 }
 
 type TransitionRequirementResponse struct {
@@ -849,6 +853,7 @@ func ToWorkflowTransitionResponse(t *WorkflowTransition) WorkflowTransitionRespo
 		IsNotBelong:          t.IsNotBelong,
 		IsMissingInfo:        t.IsMissingInfo,
 		IsReopen:             t.IsReopen,
+		RequireAssignee:      t.RequireAssignee,
 		IsActive:             t.IsActive,
 		SortOrder:            t.SortOrder,
 		CreatedAt:            t.CreatedAt,
