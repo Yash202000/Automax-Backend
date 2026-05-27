@@ -52,7 +52,7 @@ type IncidentService interface {
 
 	// State transitions
 	ExecuteTransition(ctx context.Context, incidentID uuid.UUID, req *models.IncidentTransitionRequest, userID uuid.UUID, userRoleIDs []uuid.UUID) (*models.IncidentResponse, error)
-	GetAvailableTransitions(ctx context.Context, incidentID uuid.UUID, userRoleIDs []uuid.UUID) ([]models.AvailableTransitionResponse, error)
+	GetAvailableTransitions(ctx context.Context, incidentID uuid.UUID, userID uuid.UUID, userRoleIDs []uuid.UUID) ([]models.AvailableTransitionResponse, error)
 	GetTransitionHistory(ctx context.Context, incidentID uuid.UUID) ([]models.TransitionHistoryResponse, error)
 
 	// Comments
@@ -2683,6 +2683,22 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		}
 	}
 
+	// Check assignee requirement
+	if transition.RequireAssignee {
+		isAssignee := incident.AssigneeID != nil && *incident.AssigneeID == userID
+		if !isAssignee {
+			var count int64
+			tx.Table("incident_assignees").
+				Where("incident_id = ? AND user_id = ?", incidentID, userID).
+				Count(&count)
+			isAssignee = count > 0
+		}
+		if !isAssignee {
+			tx.Rollback()
+			return nil, errors.New("only the assigned user can perform this transition")
+		}
+	}
+
 	// Validate requirements
 	for _, requirement := range transition.Requirements {
 		if requirement.IsMandatory == nil || !*requirement.IsMandatory {
@@ -3575,7 +3591,7 @@ func (s *incidentService) createRejectionLog(
 	}
 }
 
-func (s *incidentService) GetAvailableTransitions(ctx context.Context, incidentID uuid.UUID, userRoleIDs []uuid.UUID) ([]models.AvailableTransitionResponse, error) {
+func (s *incidentService) GetAvailableTransitions(ctx context.Context, incidentID uuid.UUID, userID uuid.UUID, userRoleIDs []uuid.UUID) ([]models.AvailableTransitionResponse, error) {
 	// Get the incident
 	incident, err := s.incidentRepo.FindByID(ctx, incidentID)
 	if err != nil {
@@ -3586,6 +3602,16 @@ func (s *incidentService) GetAvailableTransitions(ctx context.Context, incidentI
 	transitions, err := s.workflowRepo.ListTransitionsFromState(ctx, incident.CurrentStateID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Pre-compute assignee status for require_assignee checks
+	isAssignee := incident.AssigneeID != nil && *incident.AssigneeID == userID
+	if !isAssignee {
+		var count int64
+		s.db.Table("incident_assignees").
+			Where("incident_id = ? AND user_id = ?", incidentID, userID).
+			Count(&count)
+		isAssignee = count > 0
 	}
 
 	responses := make([]models.AvailableTransitionResponse, len(transitions))
@@ -3617,6 +3643,12 @@ func (s *incidentService) GetAvailableTransitions(ctx context.Context, incidentI
 				canExecute = false
 				reason = "Insufficient permissions"
 			}
+		}
+
+		// Check assignee requirement
+		if canExecute && trans.RequireAssignee && !isAssignee {
+			canExecute = false
+			reason = "Only the assigned user can perform this transition"
 		}
 
 		// Convert requirements
