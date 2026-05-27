@@ -37,6 +37,7 @@ type UserRepository interface {
 	GetUserRoles(ctx context.Context, userID uuid.UUID) ([]models.Role, error)
 	GetUserPermissions(ctx context.Context, userID uuid.UUID) ([]string, error)
 	FindMatching(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.User, error)
+	FindMatchingOnline(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.User, error)
 
 	FindByExtension(ctx context.Context, extension string) (*models.User, error)
 	FindByExtOrPhone(ctx context.Context, phone string) (*models.User, error)
@@ -574,6 +575,51 @@ func (r *userRepository) FindMatching(ctx context.Context, roleIDs []uuid.UUID, 
 	}
 
 	// Filter by department if provided (user must have the department in their assigned departments OR primary department)
+	if departmentID != nil {
+		query = query.
+			Joins("LEFT JOIN user_departments ud ON ud.user_id = users.id").
+			Where("users.department_id = ? OR ud.department_id = ?", departmentID, departmentID)
+	}
+
+	err := query.Distinct().Order("first_name, last_name").Find(&users).Error
+	return users, err
+}
+
+func (r *userRepository) FindMatchingOnline(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.User, error) {
+	var users []models.User
+
+	query := r.db.WithContext(ctx).
+		Preload("Department").
+		Preload("Location").
+		Preload("Departments").
+		Preload("Locations").
+		Preload("Classifications").
+		Preload("Roles").
+		Where("is_active = ?", true).
+		Where("call_status = ?", models.CallStatusOnline)
+
+	if excludeUserID != nil {
+		query = query.Where("id != ?", excludeUserID)
+	}
+
+	if len(roleIDs) > 0 {
+		query = query.
+			Joins("JOIN user_roles ur ON ur.user_id = users.id").
+			Where("ur.role_id IN ?", roleIDs)
+	}
+
+	if classificationID != nil {
+		query = query.
+			Joins("JOIN user_classifications uc ON uc.user_id = users.id").
+			Where("uc.classification_id = ?", classificationID)
+	}
+
+	if locationID != nil {
+		query = query.
+			Joins("JOIN user_locations ul ON ul.user_id = users.id").
+			Where("ul.location_id = ?", locationID)
+	}
+
 	if departmentID != nil {
 		query = query.
 			Joins("LEFT JOIN user_departments ud ON ud.user_id = users.id").
