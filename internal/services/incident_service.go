@@ -3331,6 +3331,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	}
 
 	// Send SMS to citizen when Not Belong transition closes the incident.
+
 	if transition.IsNotBelong {
 		log.Printf("NOT-BELONG-SMS: Triggered for incident %s and transition.IsNotBelong: %v", incident.IncidentNumber, transition.IsNotBelong)
 		var assignedDeptID *uuid.UUID
@@ -3369,6 +3370,25 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			log.Printf("MISSING-INFO-SMS: Sending SMS for incident %s", incident.IncidentNumber)
 			s.SendMissingInfoClosureSMS(bgCtx, incident, incident.CreatedByMobile, incident.ReporterID, userID)
 			log.Printf("MISSING-INFO-SMS: SMS process completed for incident %s", incident.IncidentNumber)
+		}()
+	}
+
+	// Send SMS with feedback link only for the Final Close transition (Ready to Close → Closed).
+	fmt.Println("test ", transition.IsFinalClose)
+	if transition.IsFinalClose {
+		log.Printf("NORMAL-CLOSURE-SMS: Triggered for incident %s", incident.IncidentNumber)
+		bgCtx := context.Background()
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("NORMAL-CLOSURE-SMS: Panic recovered for incident %s: %v", incident.IncidentNumber, r)
+				}
+			}()
+			fmt.Print("incident.CreatedByMobile ", incident.CreatedByMobile)
+
+			log.Printf("NORMAL-CLOSURE-SMS: Sending SMS for incident %s mobile=%s", incident.IncidentNumber, incident.CreatedByMobile)
+			s.SendNormalClosureSMS(bgCtx, incident, incident.CreatedByMobile, incident.ReporterID, userID)
+			log.Printf("NORMAL-CLOSURE-SMS: SMS process completed for incident %s", incident.IncidentNumber)
 		}()
 	}
 
@@ -5247,5 +5267,103 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 	}
 	if err := s.incidentRepo.CreateNotification(ctx, notification); err != nil {
 		log.Printf("MISSING-INFO-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
+	}
+}
+
+// SendNormalClosureSMS sends a closure SMS with a feedback link to the citizen when an incident
+// is closed via a normal terminal transition (not Not-Belong, not Missing Info).
+// Uses active templates with action_type=closure first; falls back to a hardcoded Arabic message.
+func (s *incidentService) SendNormalClosureSMS(
+	ctx context.Context,
+	incident *models.Incident,
+	citizenMobile string,
+	reporterID *uuid.UUID,
+	userID uuid.UUID,
+) {
+	mobile := citizenMobile
+	log.Printf("NORMAL-CLOSURE-SMS: citizenMobile=%q reporterID=%v for incident %s", citizenMobile, reporterID, incident.IncidentNumber)
+	if mobile == "" && reporterID != nil {
+		roles, err := s.userRepo.GetUserRoles(ctx, *reporterID)
+		if err == nil {
+			isCitizen := false
+			for _, r := range roles {
+				if r.Code == constants.USER_ROLE.CITIZEN {
+					isCitizen = true
+					break
+				}
+			}
+			if isCitizen {
+				if reporter, err := s.userRepo.FindByID(ctx, *reporterID); err == nil {
+					mobile = reporter.Phone
+					log.Printf("NORMAL-CLOSURE-SMS: resolved citizen mobile from reporter: %q", mobile)
+				}
+			} else {
+				log.Printf("NORMAL-CLOSURE-SMS: reporter is not a citizen, skipping phone lookup")
+			}
+		}
+	}
+	if mobile == "" {
+		log.Printf("NORMAL-CLOSURE-SMS: No citizen mobile for incident %s, skipping", incident.IncidentNumber)
+		return
+	}
+
+	log.Printf("NORMAL-CLOSURE-SMS: targeting mobile=%q for incident %s", mobile, incident.IncidentNumber)
+
+	// Fetch performer so {{performed_by}} / {{first_name}} / {{last_name}} are substituted in the template.
+	var performer *models.User
+	if u, err := s.userRepo.FindByID(ctx, userID); err == nil {
+		performer = u
+	}
+	vars := BuildIncidentVariables(incident, nil, performer)
+
+	if s.notificationService != nil {
+		err := s.notificationService.SendByActionType(
+			ctx, models.TemplateActionClosure, "sms", "ar",
+			[]string{mobile}, vars, &userID,
+		)
+		if err != nil {
+			log.Printf("NORMAL-CLOSURE-SMS: No active templates for incident %s, falling back to hardcoded: %v", incident.IncidentNumber, err)
+		} else {
+			log.Printf("NORMAL-CLOSURE-SMS: Sent via template to %s for incident %s", mobile, incident.IncidentNumber)
+			return
+		}
+	}
+
+	// Hardcoded Arabic fallback
+	feedbackURL := vars["feedback_url"]
+	smsMessage := fmt.Sprintf(
+		"شكراً لتواصلكم مع أمانة المنطقة الشرقية، تم إغلاق بلاغكم\n\nرقم البلاغ: %s\n\nلتقييم مستوى الخدمة، الرجاء الضغط على الرابط أدناه:\n%s",
+		incident.IncidentNumber,
+		feedbackURL,
+	)
+	now := time.Now()
+	smsErr := utils.SendSMS(mobile, smsMessage)
+	status := "sent"
+	if smsErr != nil {
+		status = "failed"
+		log.Printf("NORMAL-CLOSURE-SMS: Fallback failed for incident %s to %s: %v", incident.IncidentNumber, mobile, smsErr)
+	} else {
+		log.Printf("NORMAL-CLOSURE-SMS: Fallback sent to %s for incident %s", mobile, incident.IncidentNumber)
+	}
+
+	notification := &models.NotificationLog{
+		Channel:    "sms",
+		Direction:  "outbound",
+		Category:   "sent",
+		Language:   "ar",
+		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
+		Subject:    "Incident Normal Closure",
+		Body:       smsMessage,
+		Status:     status,
+		Provider:   "twilio",
+		IsRead:     false,
+		SentBy:     &userID,
+		SentAt:     &now,
+	}
+	if smsErr != nil {
+		notification.ErrorMessage = smsErr.Error()
+	}
+	if err := s.incidentRepo.CreateNotification(ctx, notification); err != nil {
+		log.Printf("NORMAL-CLOSURE-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
 	}
 }
