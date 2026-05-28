@@ -210,6 +210,7 @@ type SmsConfig struct {
 	CustomPhones    []string `json:"custom_phones"`           // explicit phone numbers
 	TemplateCode    string   `json:"template_code,omitempty"` // notification template code — overrides message_template when set
 	MessageTemplate string   `json:"message_template"`
+	Language        string   `json:"language,omitempty"` // "ar" or "en"; defaults to "ar" when empty
 }
 
 // executeSms sends SMS notifications via the notification service
@@ -240,8 +241,13 @@ func (e *actionExecutor) executeSms(ctx context.Context, action *models.Transiti
 		message = e.replacePlaceholders(config.MessageTemplate, incident, transition, performedBy)
 	}
 
+	lang := config.Language
+	if lang == "" {
+		lang = "ar"
+	}
+
 	_, err := e.notificationService.SendNotification(
-		ctx, "sms", templateCode, "ar",
+		ctx, "sms", templateCode, lang,
 		phones, nil, nil,
 		"", message,
 		vars, nil, nil, nil,
