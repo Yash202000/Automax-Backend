@@ -241,7 +241,7 @@ func (e *actionExecutor) executeSms(ctx context.Context, action *models.Transiti
 	}
 
 	_, err := e.notificationService.SendNotification(
-		ctx, "sms", templateCode, "en",
+		ctx, "sms", templateCode, "ar",
 		phones, nil, nil,
 		"", message,
 		vars, nil, nil, nil,

@@ -208,6 +208,7 @@ type WorkflowTransition struct {
 	IsNotBelong   bool           `gorm:"default:false" json:"is_not_belong"`   // IsNotBelong marks this transition as a "Not Belong" closure action.
 	IsMissingInfo bool           `gorm:"default:false" json:"is_missing_info"` // IsMissingInfo marks this transition as a "Missing Incident Information" closure action — triggers SMS to citizen.
 	IsReopen      bool           `gorm:"default:false" json:"is_reopen"`       // IsReopen marks this transition as a reopen action — used by AI Quality Audit to identify the reopen transition.
+	IsFinalClose  bool           `gorm:"default:false" json:"is_final_close"`  // IsFinalClose marks this transition as the definitive closure from a Ready-to-Close state — triggers SMS to citizen.
 	IsActive      bool           `gorm:"default:true" json:"is_active"`
 	SortOrder     int            `gorm:"default:0" json:"sort_order"`
 	CreatedAt     time.Time      `json:"created_at"`
@@ -412,6 +413,7 @@ type WorkflowTransitionCreateRequest struct {
 	IsNotBelong   bool     `json:"is_not_belong"`
 	IsMissingInfo bool     `json:"is_missing_info"`
 	IsReopen      bool     `json:"is_reopen"`
+	IsFinalClose  bool     `json:"is_final_close"`
 
 	// Department Assignment
 	AssignDepartmentID   *string `json:"assign_department_id" validate:"omitempty"`
@@ -440,6 +442,7 @@ type WorkflowTransitionUpdateRequest struct {
 	IsNotBelong   *bool    `json:"is_not_belong"`
 	IsMissingInfo *bool    `json:"is_missing_info"`
 	IsReopen      *bool    `json:"is_reopen"`
+	IsFinalClose  *bool    `json:"is_final_close"`
 
 	// Department Assignment
 	AssignDepartmentID   *string `json:"assign_department_id" validate:"omitempty,uuid"`
@@ -610,6 +613,7 @@ type WorkflowTransitionResponse struct {
 	IsNotBelong   bool                            `json:"is_not_belong"`
 	IsMissingInfo bool                            `json:"is_missing_info"`
 	IsReopen      bool                            `json:"is_reopen"`
+	IsFinalClose  bool                            `json:"is_final_close"`
 	IsActive      bool                            `json:"is_active"`
 	SortOrder     int                             `json:"sort_order"`
 	CreatedAt     time.Time                       `json:"created_at"`
@@ -849,6 +853,7 @@ func ToWorkflowTransitionResponse(t *WorkflowTransition) WorkflowTransitionRespo
 		IsNotBelong:          t.IsNotBelong,
 		IsMissingInfo:        t.IsMissingInfo,
 		IsReopen:             t.IsReopen,
+		IsFinalClose:         t.IsFinalClose,
 		IsActive:             t.IsActive,
 		SortOrder:            t.SortOrder,
 		CreatedAt:            t.CreatedAt,

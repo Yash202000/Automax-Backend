@@ -3374,6 +3374,10 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		}()
 	}
 
+	// NOTE: Final Close SMS is handled by the action executor below.
+	// Add an SMS automation action on the Final Close transition in the workflow editor;
+	// the action executor will send it with the correct recipients and template.
+
 	// Fetch updated incident (outside transaction) with all relations for response and action execution.
 	updated, err := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
 	if err != nil {
@@ -5231,18 +5235,18 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 	}
 
 	notification := &models.NotificationLog{
-		Channel:   "sms",
-		Direction: "outbound",
-		Category:  "sent",
-		Language:  "en",
+		Channel:    "sms",
+		Direction:  "outbound",
+		Category:   "sent",
+		Language:   "en",
 		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
-		Subject:   "Incident Closed - Missing Information",
-		Body:      smsMessage,
-		Status:    status,
-		Provider:  "twilio",
-		IsRead:    false,
-		SentBy:    &userID,
-		SentAt:    &now,
+		Subject:    "Incident Closed - Missing Information",
+		Body:       smsMessage,
+		Status:     status,
+		Provider:   "twilio",
+		IsRead:     false,
+		SentBy:     &userID,
+		SentAt:     &now,
 	}
 	if smsErr != nil {
 		notification.ErrorMessage = smsErr.Error()
@@ -5251,3 +5255,4 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 		log.Printf("MISSING-INFO-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
 	}
 }
+
