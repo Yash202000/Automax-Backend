@@ -50,8 +50,28 @@ func (h *IncidentFeedbackHandler) CreateFeedback(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not found")
 	}
 
-	if incident.ReporterID == nil || *incident.ReporterID != userID {
-		return utils.ErrorResponse(c, fiber.StatusForbidden, "Only the incident reporter can submit feedback")
+	// Allow feedback from the reporter OR any user with incidents:transition permission (e.g., chatbot service account)
+	isReporter := incident.ReporterID != nil && *incident.ReporterID == userID
+	if !isReporter {
+		if user, ok := c.Locals(constants.ContextKeys.User).(*models.User); ok && user != nil {
+			hasPermission := false
+			for _, role := range user.Roles {
+				for _, perm := range role.Permissions {
+					if perm.Code == "incidents:transition" {
+						hasPermission = true
+						break
+					}
+				}
+				if hasPermission {
+					break
+				}
+			}
+			if !hasPermission {
+				return utils.ErrorResponse(c, fiber.StatusForbidden, "Only the incident reporter or authorized users can submit feedback")
+			}
+		} else {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, "Only the incident reporter or authorized users can submit feedback")
+		}
 	}
 
 	feedback := &models.IncidentFeedback{
