@@ -28,6 +28,8 @@ type IntegrationExecutor interface {
 	RunTransitionTriggers(ctx context.Context, incident *models.Incident, transitionID uuid.UUID, transitionName string)
 	// RunScriptForTest executes a script once against a real incident for dry-run/testing.
 	RunScriptForTest(ctx context.Context, script *models.IntegrationScript, incident *models.Incident, fieldMappings string) *models.IntegrationExecutionLog
+	// HasActiveTransitionTriggers returns true if the given transition has at least one active integration trigger.
+	HasActiveTransitionTriggers(ctx context.Context, transitionID uuid.UUID) (bool, error)
 }
 
 type integrationExecutor struct {
@@ -94,6 +96,14 @@ func (e *integrationExecutor) RunTransitionTriggers(ctx context.Context, inciden
 
 func (e *integrationExecutor) RunScriptForTest(ctx context.Context, script *models.IntegrationScript, incident *models.Incident, fieldMappings string) *models.IntegrationExecutionLog {
 	return e.execute(ctx, incident, script, fieldMappings, "test", uuid.Nil, "test")
+}
+
+func (e *integrationExecutor) HasActiveTransitionTriggers(ctx context.Context, transitionID uuid.UUID) (bool, error) {
+	triggers, err := e.integrationRepo.ListActiveTransitionTriggers(ctx, transitionID)
+	if err != nil {
+		return false, err
+	}
+	return len(triggers) > 0, nil
 }
 
 // classificationMatches returns true if:
