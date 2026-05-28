@@ -332,6 +332,8 @@ func main() {
 	ivr := v1.Group("/ivr/incident")
 	// Public: validates signed URL + last 6 digits, returns incident + session token
 	ivr.Get("/sms-link/:id", incidentHandler.FindByIDWithLast6DigitValidation)
+	// Public: validates signed URL from normal closure SMS, returns incident info for feedback page
+	ivr.Get("/feedback/:id", incidentHandler.FindByIDForFeedback)
 	// Protected: require valid IVR session token issued by the GET route above
 	// ivr.Put("/sms-link/update/:id", authMiddleware.ValidateIvrSmsToken(), incidentHandler.UpdateIncidentViaIvrSms)
 	// ivr.Post("/sms-link/attachment/:id", authMiddleware.ValidateIvrSmsToken(), incidentHandler.UploadAttachmentIvrSms)

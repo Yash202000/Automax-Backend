@@ -204,12 +204,18 @@ func (e *actionExecutor) executeEmail(ctx context.Context, action *models.Transi
 	return nil
 }
 
-// SmsConfig represents the configuration for an SMS action
+// SmsConfig represents the configuration for an SMS action.
+//
+// Recipients supports: "assignee", "reporter", "creator", "custom",
+// "user:<uuid>" (specific user by ID), "phone:<number>" (inline number).
+// CustomPhones is used when "custom" is in Recipients.
+// Language defaults to "ar" when empty.
 type SmsConfig struct {
-	Recipients      []string `json:"recipients"`              // "assignee", "reporter", "creator"
-	CustomPhones    []string `json:"custom_phones"`           // explicit phone numbers
+	Recipients      []string `json:"recipients"`              // "assignee", "reporter", "creator", "custom", "user:<uuid>", "phone:<number>"
+	CustomPhones    []string `json:"custom_phones"`           // explicit phone numbers (used with "custom" recipient)
 	TemplateCode    string   `json:"template_code,omitempty"` // notification template code — overrides message_template when set
 	MessageTemplate string   `json:"message_template"`
+	Language        string   `json:"language,omitempty"` // "ar" or "en"; defaults to "ar"
 }
 
 // executeSms sends SMS notifications via the notification service
@@ -224,8 +230,9 @@ func (e *actionExecutor) executeSms(ctx context.Context, action *models.Transiti
 		return nil
 	}
 
-	phones := e.resolveRecipientPhones(incident, config.Recipients, config.CustomPhones)
+	phones := e.resolveRecipientPhones(ctx, incident, config.Recipients, config.CustomPhones)
 	if len(phones) == 0 {
+		log.Printf("SMS action %q: no phones resolved for incident %s", action.Name, incident.IncidentNumber)
 		return nil
 	}
 
@@ -240,8 +247,13 @@ func (e *actionExecutor) executeSms(ctx context.Context, action *models.Transiti
 		message = e.replacePlaceholders(config.MessageTemplate, incident, transition, performedBy)
 	}
 
+	lang := config.Language
+	if lang == "" {
+		lang = "ar"
+	}
+
 	_, err := e.notificationService.SendNotification(
-		ctx, "sms", templateCode, "en",
+		ctx, "sms", templateCode, lang,
 		phones, nil, nil,
 		"", message,
 		vars, nil, nil, nil,
@@ -249,6 +261,7 @@ func (e *actionExecutor) executeSms(ctx context.Context, action *models.Transiti
 	if err != nil {
 		return fmt.Errorf("sms send failed: %w", err)
 	}
+	log.Printf("SMS action %q: sent to %v for incident %s", action.Name, phones, incident.IncidentNumber)
 	return nil
 }
 
@@ -401,14 +414,17 @@ func (e *actionExecutor) resolveRecipientEmails(ctx context.Context, recipients 
 }
 
 // resolveRecipientPhones resolves recipient identifiers to phone numbers for SMS.
-func (e *actionExecutor) resolveRecipientPhones(incident *models.Incident, recipients []string, customPhones []string) []string {
+// Supported values: "assignee", "reporter", "creator", "custom",
+// "user:<uuid>" (look up user by ID), "phone:<number>" (inline number).
+func (e *actionExecutor) resolveRecipientPhones(ctx context.Context, incident *models.Incident, recipients []string, customPhones []string) []string {
 	var phones []string
 	seen := make(map[string]bool)
 
 	add := func(phone string) {
-		if phone != "" && !seen[phone] {
-			phones = append(phones, phone)
-			seen[phone] = true
+		p := strings.TrimSpace(phone)
+		if p != "" && !seen[p] {
+			phones = append(phones, p)
+			seen[p] = true
 		}
 	}
 
@@ -421,12 +437,25 @@ func (e *actionExecutor) resolveRecipientPhones(incident *models.Incident, recip
 		case "reporter":
 			if incident.Reporter != nil {
 				add(incident.Reporter.Phone)
+			} else {
+				// fall back to plain string field when relation is not loaded
+				add(incident.ReporterPhone)
 			}
 		case "creator":
 			add(incident.CreatedByMobile)
 		case "custom":
 			for _, p := range customPhones {
-				add(strings.TrimSpace(p))
+				add(p)
+			}
+		default:
+			if strings.HasPrefix(recipient, "user:") {
+				if uid, err := uuid.Parse(strings.TrimPrefix(recipient, "user:")); err == nil {
+					if u, err := e.userRepo.FindByID(ctx, uid); err == nil {
+						add(u.Phone)
+					}
+				}
+			} else if strings.HasPrefix(recipient, "phone:") {
+				add(strings.TrimPrefix(recipient, "phone:"))
 			}
 		}
 	}

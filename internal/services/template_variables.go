@@ -61,6 +61,8 @@ func BuildIncidentVariables(
 		"sla_breached": fmt.Sprintf("%t", incident.SLABreached),
 		// Citizen-facing link (SMS_PORTAL_URL/incidents/{id}, falls back to FRONTEND_URL)
 		"sms_link": "",
+		// Closure feedback link (SMS_PORTAL_URL/incident/feedback/{id}?signed_token=...)
+		"feedback_url": "",
 		// Escalation-specific — empty by default; callers override
 		"hours_in_state":    "",
 		"sla_hours":         "",
@@ -93,8 +95,12 @@ func BuildIncidentVariables(
 		token := pkgutils.GenerateIncidentToken(incident.ID.String(), 24*time.Hour)
 		vars["sms_link"] = fmt.Sprintf("%s/ivr/incident/sms-link/%s?signed_token=%s",
 			smsPortalBase, incident.ID.String(), url.QueryEscape(token))
+		feedbackToken := pkgutils.GenerateIncidentToken(incident.ID.String(), 72*time.Hour)
+		vars["feedback_url"] = fmt.Sprintf("%s/incident/feedback/%s?signed_token=%s",
+			smsPortalBase, incident.ID.String(), url.QueryEscape(feedbackToken))
 	} else {
 		vars["sms_link"] = ""
+		vars["feedback_url"] = ""
 	}
 
 	// Dates

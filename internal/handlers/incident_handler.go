@@ -280,6 +280,51 @@ func (h *IncidentHandler) FindByIDWithLast6DigitValidation(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "Incident retrieved", data)
 }
 
+// FindByIDForFeedback validates a closure feedback link and returns minimal incident info.
+// Public endpoint — no authentication required.
+// Input: path param :id (incident UUID), query param signed_token (incident token).
+// Output: incident_number, description, status.
+func (h *IncidentHandler) FindByIDForFeedback(c *fiber.Ctx) error {
+	idStr := c.Params("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+	}
+
+	token := c.Query("signed_token")
+	if token == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Token is required")
+	}
+
+	if err := utils.ValidateIncidentToken(token, idStr); err != nil {
+		log.Printf("FEEDBACK-LINK: Token validation failed for incident %s: %v", idStr, err)
+		switch err {
+		case utils.ErrExpired:
+			return utils.ErrorResponse(c, fiber.StatusGone, "Link has expired")
+		case utils.ErrInvalid, utils.ErrIDMismatch:
+			return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Invalid or tampered token")
+		default:
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Malformed token")
+		}
+	}
+
+	incident, err := h.incidentRepo.FindByIDWithRelations(c.UserContext(), id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not found")
+	}
+
+	status := ""
+	if incident.CurrentState != nil {
+		status = incident.CurrentState.Name
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Incident retrieved", fiber.Map{
+		"incident_number": incident.IncidentNumber,
+		"description":     incident.Description,
+		"status":          status,
+	})
+}
+
 func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)

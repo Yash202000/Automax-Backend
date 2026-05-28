@@ -199,7 +199,7 @@ var AvailableVariablesByActionType = map[string][]string{
 		// Not-belong closure: the external department the incident was referred to
 		"department_name",
 		// URLs
-		"incident_url", "sla_page_url",
+		"incident_url", "sla_page_url", "feedback_url",
 	},
 	// ── Incident converted to request ────────────────────────────────────────
 	TemplateActionConvertToRequest: {
