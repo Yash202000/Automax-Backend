@@ -46,6 +46,7 @@ type IncidentService interface {
 	// Complaint operations
 	CreateComplaint(ctx context.Context, req *models.CreateComplaintRequest, creatorID uuid.UUID) (*models.IncidentResponse, error)
 	IncrementEvaluationCount(ctx context.Context, id uuid.UUID) error
+	TriggerEvaluation(ctx context.Context, id uuid.UUID) error
 
 	// Query operations
 	CreateQuery(ctx context.Context, req *models.CreateQueryRequest, creatorID uuid.UUID) (*models.IncidentResponse, error)
@@ -4887,6 +4888,63 @@ func (s *incidentService) IncrementEvaluationCount(ctx context.Context, id uuid.
 	}
 
 	return s.incidentRepo.IncrementEvaluationCount(ctx, id)
+}
+
+// TriggerEvaluation fires integration triggers for manual feedback evaluation.
+// It finds the last transition that brought the incident to its current state,
+// verifies that transition has active integration triggers, then increments the
+// evaluation count and fires those triggers.
+// Returns error if no triggers are configured (button should not have been clickable).
+func (s *incidentService) TriggerEvaluation(ctx context.Context, id uuid.UUID) error {
+	incident, err := s.incidentRepo.FindByIDWithRelations(ctx, id)
+	if err != nil {
+		return errors.New("incident not found")
+	}
+
+	if incident.CurrentState == nil {
+		return errors.New("incident has no current state")
+	}
+
+	if incident.CurrentState.StateType != "terminal" {
+		return errors.New("can only trigger evaluation on closed records")
+	}
+
+	if s.integrationExecutor == nil {
+		return errors.New("integration executor not configured")
+	}
+
+	// Find the last transition that moved the incident to its current state
+	var lastHistory models.IncidentTransitionHistory
+	if err := s.db.Where("incident_id = ? AND to_state_id = ? AND transition_id IS NOT NULL", id, incident.CurrentStateID).
+		Order("transitioned_at DESC").
+		Preload("Transition").
+		First(&lastHistory).Error; err != nil {
+		return errors.New("no transition history found for current state")
+	}
+
+	if lastHistory.TransitionID == nil {
+		return errors.New("last transition has no transition ID")
+	}
+
+	// Check that the transition actually has active integration triggers
+	hasTriggers, err := s.integrationExecutor.HasActiveTransitionTriggers(ctx, *lastHistory.TransitionID)
+	if err != nil || !hasTriggers {
+		return errors.New("no integration triggers configured for this transition")
+	}
+
+	// All checks passed — increment evaluation count
+	if err := s.incidentRepo.IncrementEvaluationCount(ctx, id); err != nil {
+		return fmt.Errorf("failed to increment evaluation count: %w", err)
+	}
+
+	transitionName := ""
+	if lastHistory.Transition != nil {
+		transitionName = lastHistory.Transition.Name
+	}
+
+	// Fire the transition triggers — same as what happens during ExecuteTransition
+	s.integrationExecutor.RunTransitionTriggers(ctx, incident, *lastHistory.TransitionID, transitionName)
+	return nil
 }
 
 func (s *incidentService) CreateQuery(ctx context.Context, req *models.CreateQueryRequest, creatorID uuid.UUID) (*models.IncidentResponse, error) {
