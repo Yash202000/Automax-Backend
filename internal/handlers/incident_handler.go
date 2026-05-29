@@ -504,9 +504,10 @@ func (h *IncidentHandler) GetAvailableTransitions(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	roleIDs := h.getUserRoleIDs(c)
 
-	transitions, err := h.service.GetAvailableTransitions(c.UserContext(), id, roleIDs)
+	transitions, err := h.service.GetAvailableTransitions(c.UserContext(), id, userID, roleIDs)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -1147,7 +1148,9 @@ func (h *IncidentHandler) IncrementEvaluation(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	if err := h.service.IncrementEvaluationCount(c.UserContext(), id); err != nil {
+	// TriggerEvaluation validates the state, checks for active integration triggers,
+	// increments the evaluation count, and fires the transition triggers.
+	if err := h.service.TriggerEvaluation(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
@@ -1157,7 +1160,7 @@ func (h *IncidentHandler) IncrementEvaluation(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Evaluation count incremented", complaint)
+	return utils.SuccessResponse(c, fiber.StatusOK, "Evaluation triggered", complaint)
 }
 
 // Query handlers

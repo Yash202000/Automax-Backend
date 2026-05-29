@@ -99,7 +99,13 @@ func (s *gisService) getToken(ctx context.Context) (string, error) {
 	return s.fetchToken(ctx)
 }
 
+var gisMockResponse = json.RawMessage(`{"results":[{"layerId":0,"layerName":"Municipality_Boundary","displayFieldName":"MUNICIPALITY_NAME","value":"??????","attributes":{"OBJECTID":"8044","MUNICIPALITY_NAME":"??????","SHAPE":"Polygon"}},{"layerId":2,"layerName":"District_Boundary","displayFieldName":"REMARKS","value":"??????? ???????","attributes":{"OBJECTID":"6393","DISTRICT_NAME":"?? ??????? ???????","SHAPE":"Polygon"}},{"layerId":3,"layerName":"Plan_Data","displayFieldName":"PLAN_NO","value":"? ? 1015","attributes":{"OBJECTID":"97209","PLAN_NO":"? ? 1015","SHAPE":"Polygon"}},{"layerId":5,"layerName":"Street_Naming","displayFieldName":"STREET_FULLNAME","value":"2?","attributes":{"OBJECTID":"12378","STREET_FULLNAME":"2?","SHAPE.LEN":"702.749001"}},{"layerId":5,"layerName":"Street_Naming","displayFieldName":"STREET_FULLNAME","value":"?????? ????????","attributes":{"OBJECTID":"12525","STREET_FULLNAME":"?????? ????????","SHAPE.LEN":"349.969662"}}]}`)
+
 func (s *gisService) Identify(ctx context.Context, x, y float64) (json.RawMessage, error) {
+	if strings.TrimSpace(s.username) == "" || strings.TrimSpace(s.password) == "" {
+		return gisMockResponse, nil
+	}
+
 	token, err := s.getToken(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("GIS auth failed: %w", err)

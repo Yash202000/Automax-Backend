@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/automax/backend/internal/models"
@@ -43,13 +46,14 @@ type IncidentService interface {
 	// Complaint operations
 	CreateComplaint(ctx context.Context, req *models.CreateComplaintRequest, creatorID uuid.UUID) (*models.IncidentResponse, error)
 	IncrementEvaluationCount(ctx context.Context, id uuid.UUID) error
+	TriggerEvaluation(ctx context.Context, id uuid.UUID) error
 
 	// Query operations
 	CreateQuery(ctx context.Context, req *models.CreateQueryRequest, creatorID uuid.UUID) (*models.IncidentResponse, error)
 
 	// State transitions
 	ExecuteTransition(ctx context.Context, incidentID uuid.UUID, req *models.IncidentTransitionRequest, userID uuid.UUID, userRoleIDs []uuid.UUID) (*models.IncidentResponse, error)
-	GetAvailableTransitions(ctx context.Context, incidentID uuid.UUID, userRoleIDs []uuid.UUID) ([]models.AvailableTransitionResponse, error)
+	GetAvailableTransitions(ctx context.Context, incidentID uuid.UUID, userID uuid.UUID, userRoleIDs []uuid.UUID) ([]models.AvailableTransitionResponse, error)
 	GetTransitionHistory(ctx context.Context, incidentID uuid.UUID) ([]models.TransitionHistoryResponse, error)
 
 	// Comments
@@ -120,6 +124,8 @@ type incidentService struct {
 	fcmService          *FCMService
 	integrationExecutor IntegrationExecutor
 	actionExecutor      ActionExecutor
+	rrCounters          map[string]int64
+	rrMu                sync.Mutex
 }
 
 func NewIncidentService(
@@ -147,6 +153,7 @@ func NewIncidentService(
 		storage:            storage,
 		db:                 db,
 		wsHub:              wsHub,
+		rrCounters:         make(map[string]int64),
 	}
 }
 
@@ -232,6 +239,47 @@ func (s *incidentService) calculateSLADeadline(ctx context.Context, classificati
 	}
 
 	return deadline, nil
+}
+
+// roundRobinPoolKey generates a deterministic key for a set of role IDs.
+// Only role IDs are used — classification/location/department filter the pool
+// at query time but should not create separate round-robin sequences.
+func roundRobinPoolKey(roleIDs []uuid.UUID) string {
+	if len(roleIDs) == 0 {
+		return "__all_agents__"
+	}
+	sortedRoles := make([]string, len(roleIDs))
+	for i, id := range roleIDs {
+		sortedRoles[i] = id.String()
+	}
+	sort.Strings(sortedRoles)
+
+	hash := sha256.Sum256([]byte(strings.Join(sortedRoles, ",")))
+	return hex.EncodeToString(hash[:])
+}
+
+// getNextRoundRobinAssignee picks the next agent from the online eligible pool using round-robin.
+func (s *incidentService) getNextRoundRobinAssignee(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID *uuid.UUID) (*uuid.UUID, error) {
+	users, err := s.userRepo.FindMatchingOnline(ctx, roleIDs, classificationID, locationID, departmentID, nil)
+	if err != nil {
+		return nil, fmt.Errorf("find online agents: %w", err)
+	}
+	if len(users) == 0 {
+		return nil, fmt.Errorf("no online agents available")
+	}
+
+	sort.Slice(users, func(i, j int) bool {
+		return users[i].ID.String() < users[j].ID.String()
+	})
+
+	poolKey := roundRobinPoolKey(roleIDs)
+
+	s.rrMu.Lock()
+	s.rrCounters[poolKey]++
+	idx := int(s.rrCounters[poolKey]-1) % len(users)
+	s.rrMu.Unlock()
+
+	return &users[idx].ID, nil
 }
 
 // Incident CRUD
@@ -514,58 +562,21 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		}
 	}
 
-	// Apply creation-time assignment rules from the initial state
-	if initialState.AssignUserID != nil {
-		// Specific user — always assign to this pre-configured user
-		if err := s.incidentRepo.AssignIncident(ctx, incident.ID, *initialState.AssignUserID); err != nil {
-			fmt.Printf("Warning: creation assignment (specific user) failed: %v\n", err)
-		} else {
-			if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{*initialState.AssignUserID}); err != nil {
-				fmt.Printf("Warning: SetAssignees (specific user) failed: %v\n", err)
-			}
-		}
-	} else if initialState.AutoMatchUser && len(initialState.AssignmentRoles) > 0 {
-		// Auto-match — find all users matching roles + incident's classification/location/department
-		var classID, locID, deptID *uuid.UUID
-		if incident.ClassificationID != nil {
-			classID = incident.ClassificationID
-		}
-		if incident.LocationID != nil {
-			locID = incident.LocationID
-		}
-		if incident.DepartmentID != nil {
-			deptID = incident.DepartmentID
-		}
-		roleIDs := make([]uuid.UUID, len(initialState.AssignmentRoles))
-		for i, r := range initialState.AssignmentRoles {
-			roleIDs[i] = r.ID
-		}
-		matchedUsers, err := s.userRepo.FindMatching(ctx, roleIDs, classID, locID, deptID, nil)
-		if err == nil && len(matchedUsers) == 0 {
-			// Fallback: role-only match
-			matchedUsers, err = s.userRepo.FindMatching(ctx, roleIDs, nil, nil, nil, nil)
-		}
-		if err == nil && len(matchedUsers) > 0 {
-			assigneeIDs := make([]uuid.UUID, len(matchedUsers))
-			for i, u := range matchedUsers {
-				assigneeIDs[i] = u.ID
-			}
-			if err := s.incidentRepo.AssignIncident(ctx, incident.ID, matchedUsers[0].ID); err != nil {
-				fmt.Printf("Warning: creation assignment (auto-match) failed: %v\n", err)
+	// Apply creation-time assignment rules
+	distributeAssign := strings.TrimSpace(os.Getenv("DISTRIBUTE_INCIDENT_ASSIGN"))
+	if strings.EqualFold(distributeAssign, "true") {
+		// DISTRIBUTE_INCIDENT_ASSIGN=true mode:
+		//   1. Web-created incidents → assign to the creator agent (always)
+		//   2. Other sources → round-robin among online eligible agents (never assign to offline)
+		if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.WEB) {
+			if err := s.incidentRepo.AssignIncident(ctx, incident.ID, reporterID); err != nil {
+				fmt.Printf("Warning: creation assignment (self-assign for web) failed: %v\n", err)
 			} else {
-				if err := s.incidentRepo.SetAssignees(ctx, incident.ID, assigneeIDs); err != nil {
-					fmt.Printf("Warning: SetAssignees (auto-match) failed: %v\n", err)
+				if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{reporterID}); err != nil {
+					fmt.Printf("Warning: SetAssignees (self-assign for web) failed: %v\n", err)
 				}
 			}
-		}
-	} else if initialState.ManualSelectUser && len(initialState.AssignmentRoles) > 0 && req.AssigneeID != nil && *req.AssigneeID != "" {
-		// Manual select — validate the operator-chosen assignee is in the matching pool
-		assigneeUUID, parseErr := uuid.Parse(*req.AssigneeID)
-		if parseErr == nil {
-			roleIDs := make([]uuid.UUID, len(initialState.AssignmentRoles))
-			for i, r := range initialState.AssignmentRoles {
-				roleIDs[i] = r.ID
-			}
+		} else {
 			var classID, locID, deptID *uuid.UUID
 			if incident.ClassificationID != nil {
 				classID = incident.ClassificationID
@@ -576,17 +587,89 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 			if incident.DepartmentID != nil {
 				deptID = incident.DepartmentID
 			}
-			matchedUsers, _ := s.userRepo.FindMatching(ctx, roleIDs, classID, locID, deptID, nil)
-			validPool := make(map[uuid.UUID]bool, len(matchedUsers))
-			for _, u := range matchedUsers {
-				validPool[u.ID] = true
+
+			var roleIDs []uuid.UUID
+			if len(initialState.AssignmentRoles) > 0 {
+				roleIDs = make([]uuid.UUID, len(initialState.AssignmentRoles))
+				for i, r := range initialState.AssignmentRoles {
+					roleIDs[i] = r.ID
+				}
 			}
-			if validPool[assigneeUUID] {
-				if err := s.incidentRepo.AssignIncident(ctx, incident.ID, assigneeUUID); err != nil {
+
+			nextAssigneeID, err := s.getNextRoundRobinAssignee(ctx, roleIDs, classID, locID, deptID)
+			if err == nil && nextAssigneeID != nil {
+				if err := s.incidentRepo.AssignIncident(ctx, incident.ID, *nextAssigneeID); err != nil {
+					fmt.Printf("Warning: creation assignment (round-robin) failed: %v\n", err)
+				} else {
+					if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{*nextAssigneeID}); err != nil {
+						fmt.Printf("Warning: SetAssignees (round-robin) failed: %v\n", err)
+					}
+				}
+			} else {
+				fmt.Printf("Warning: no online eligible agents for round-robin, incident %s left unassigned: %v\n", incident.IncidentNumber, err)
+			}
+		}
+	} else {
+		// DISTRIBUTE_INCIDENT_ASSIGN not true: use workflow initial-state assignment config
+		if initialState.AssignUserID != nil {
+			if err := s.incidentRepo.AssignIncident(ctx, incident.ID, *initialState.AssignUserID); err != nil {
+				fmt.Printf("Warning: creation assignment (assign_user_id) failed: %v\n", err)
+			} else {
+				if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{*initialState.AssignUserID}); err != nil {
+					fmt.Printf("Warning: SetAssignees (assign_user_id) failed: %v\n", err)
+				}
+			}
+		} else if initialState.ManualSelectUser && len(initialState.AssignmentRoles) > 0 {
+			var classID, locID, deptID *uuid.UUID
+			if incident.ClassificationID != nil {
+				classID = incident.ClassificationID
+			}
+			if incident.LocationID != nil {
+				locID = incident.LocationID
+			}
+			if incident.DepartmentID != nil {
+				deptID = incident.DepartmentID
+			}
+			var roleIDs []uuid.UUID
+			for _, r := range initialState.AssignmentRoles {
+				roleIDs = append(roleIDs, r.ID)
+			}
+			availableUsers, _ := s.userRepo.FindMatching(ctx, roleIDs, classID, locID, deptID, nil)
+			if len(availableUsers) > 0 {
+				if err := s.incidentRepo.AssignIncident(ctx, incident.ID, availableUsers[0].ID); err != nil {
 					fmt.Printf("Warning: creation assignment (manual select) failed: %v\n", err)
 				} else {
-					if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{assigneeUUID}); err != nil {
+					if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{availableUsers[0].ID}); err != nil {
 						fmt.Printf("Warning: SetAssignees (manual select) failed: %v\n", err)
+					}
+				}
+			}
+		} else if initialState.AutoMatchUser && len(initialState.AssignmentRoles) > 0 {
+			var classID, locID, deptID *uuid.UUID
+			if incident.ClassificationID != nil {
+				classID = incident.ClassificationID
+			}
+			if incident.LocationID != nil {
+				locID = incident.LocationID
+			}
+			if incident.DepartmentID != nil {
+				deptID = incident.DepartmentID
+			}
+			var roleIDs []uuid.UUID
+			for _, r := range initialState.AssignmentRoles {
+				roleIDs = append(roleIDs, r.ID)
+			}
+			matchedUsers, err := s.userRepo.FindMatching(ctx, roleIDs, classID, locID, deptID, nil)
+			if err == nil && len(matchedUsers) > 0 {
+				if err := s.incidentRepo.AssignIncident(ctx, incident.ID, matchedUsers[0].ID); err != nil {
+					fmt.Printf("Warning: creation assignment (auto match) failed: %v\n", err)
+				} else {
+					allIDs := make([]uuid.UUID, len(matchedUsers))
+					for i, u := range matchedUsers {
+						allIDs[i] = u.ID
+					}
+					if err := s.incidentRepo.SetAssignees(ctx, incident.ID, allIDs); err != nil {
+						fmt.Printf("Warning: SetAssignees (auto match) failed: %v\n", err)
 					}
 				}
 			}
@@ -2601,6 +2684,22 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		}
 	}
 
+	// Check assignee requirement
+	if transition.RequireAssignee {
+		isAssignee := incident.AssigneeID != nil && *incident.AssigneeID == userID
+		if !isAssignee {
+			var count int64
+			tx.Table("incident_assignees").
+				Where("incident_id = ? AND user_id = ?", incidentID, userID).
+				Count(&count)
+			isAssignee = count > 0
+		}
+		if !isAssignee {
+			tx.Rollback()
+			return nil, errors.New("only the assigned user can perform this transition")
+		}
+	}
+
 	// Validate requirements
 	for _, requirement := range transition.Requirements {
 		if requirement.IsMandatory == nil || !*requirement.IsMandatory {
@@ -3497,7 +3596,7 @@ func (s *incidentService) createRejectionLog(
 	}
 }
 
-func (s *incidentService) GetAvailableTransitions(ctx context.Context, incidentID uuid.UUID, userRoleIDs []uuid.UUID) ([]models.AvailableTransitionResponse, error) {
+func (s *incidentService) GetAvailableTransitions(ctx context.Context, incidentID uuid.UUID, userID uuid.UUID, userRoleIDs []uuid.UUID) ([]models.AvailableTransitionResponse, error) {
 	// Get the incident
 	incident, err := s.incidentRepo.FindByID(ctx, incidentID)
 	if err != nil {
@@ -3508,6 +3607,16 @@ func (s *incidentService) GetAvailableTransitions(ctx context.Context, incidentI
 	transitions, err := s.workflowRepo.ListTransitionsFromState(ctx, incident.CurrentStateID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Pre-compute assignee status for require_assignee checks
+	isAssignee := incident.AssigneeID != nil && *incident.AssigneeID == userID
+	if !isAssignee {
+		var count int64
+		s.db.Table("incident_assignees").
+			Where("incident_id = ? AND user_id = ?", incidentID, userID).
+			Count(&count)
+		isAssignee = count > 0
 	}
 
 	responses := make([]models.AvailableTransitionResponse, len(transitions))
@@ -3539,6 +3648,12 @@ func (s *incidentService) GetAvailableTransitions(ctx context.Context, incidentI
 				canExecute = false
 				reason = "Insufficient permissions"
 			}
+		}
+
+		// Check assignee requirement
+		if canExecute && trans.RequireAssignee && !isAssignee {
+			canExecute = false
+			reason = "Only the assigned user can perform this transition"
 		}
 
 		// Convert requirements
@@ -4777,6 +4892,63 @@ func (s *incidentService) IncrementEvaluationCount(ctx context.Context, id uuid.
 	}
 
 	return s.incidentRepo.IncrementEvaluationCount(ctx, id)
+}
+
+// TriggerEvaluation fires integration triggers for manual feedback evaluation.
+// It finds the last transition that brought the incident to its current state,
+// verifies that transition has active integration triggers, then increments the
+// evaluation count and fires those triggers.
+// Returns error if no triggers are configured (button should not have been clickable).
+func (s *incidentService) TriggerEvaluation(ctx context.Context, id uuid.UUID) error {
+	incident, err := s.incidentRepo.FindByIDWithRelations(ctx, id)
+	if err != nil {
+		return errors.New("incident not found")
+	}
+
+	if incident.CurrentState == nil {
+		return errors.New("incident has no current state")
+	}
+
+	if incident.CurrentState.StateType != "terminal" {
+		return errors.New("can only trigger evaluation on closed records")
+	}
+
+	if s.integrationExecutor == nil {
+		return errors.New("integration executor not configured")
+	}
+
+	// Find the last transition that moved the incident to its current state
+	var lastHistory models.IncidentTransitionHistory
+	if err := s.db.Where("incident_id = ? AND to_state_id = ? AND transition_id IS NOT NULL", id, incident.CurrentStateID).
+		Order("transitioned_at DESC").
+		Preload("Transition").
+		First(&lastHistory).Error; err != nil {
+		return errors.New("no transition history found for current state")
+	}
+
+	if lastHistory.TransitionID == nil {
+		return errors.New("last transition has no transition ID")
+	}
+
+	// Check that the transition actually has active integration triggers
+	hasTriggers, err := s.integrationExecutor.HasActiveTransitionTriggers(ctx, *lastHistory.TransitionID)
+	if err != nil || !hasTriggers {
+		return errors.New("no integration triggers configured for this transition")
+	}
+
+	// All checks passed — increment evaluation count
+	if err := s.incidentRepo.IncrementEvaluationCount(ctx, id); err != nil {
+		return fmt.Errorf("failed to increment evaluation count: %w", err)
+	}
+
+	transitionName := ""
+	if lastHistory.Transition != nil {
+		transitionName = lastHistory.Transition.Name
+	}
+
+	// Fire the transition triggers — same as what happens during ExecuteTransition
+	s.integrationExecutor.RunTransitionTriggers(ctx, incident, *lastHistory.TransitionID, transitionName)
+	return nil
 }
 
 func (s *incidentService) CreateQuery(ctx context.Context, req *models.CreateQueryRequest, creatorID uuid.UUID) (*models.IncidentResponse, error) {

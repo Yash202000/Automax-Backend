@@ -107,6 +107,9 @@ func (s *settingsService) UpdateSettings(ctx context.Context, req *models.Settin
 	if req.DefaultLanguage != nil {
 		settings.DefaultLanguage = *req.DefaultLanguage
 	}
+	if req.ShowEvaluateButton != nil {
+		settings.ShowEvaluateButton = *req.ShowEvaluateButton
+	}
 
 	// Save updated settings
 	if err := s.settingsRepo.Update(ctx, settings); err != nil {

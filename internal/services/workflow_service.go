@@ -1157,6 +1157,7 @@ func (s *workflowService) CreateTransition(ctx context.Context, workflowID uuid.
 		IsMissingInfo:        req.IsMissingInfo,
 		IsReopen:             req.IsReopen,
 		IsFinalClose:         req.IsFinalClose,
+		RequireAssignee:      req.RequireAssignee,
 		AutoDetectDepartment: req.AutoDetectDepartment,
 		DepartmentTypeFilter: req.DepartmentTypeFilter,
 		AutoMatchUser:        req.AutoMatchUser,
@@ -1300,6 +1301,9 @@ func (s *workflowService) UpdateTransition(ctx context.Context, transitionID uui
 	}
 	if req.IsFinalClose != nil {
 		transition.IsFinalClose = *req.IsFinalClose
+	}
+	if req.RequireAssignee != nil {
+		transition.RequireAssignee = *req.RequireAssignee
 	}
 	// Department Assignment
 	if req.AutoDetectDepartment != nil {

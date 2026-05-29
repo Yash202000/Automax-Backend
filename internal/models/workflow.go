@@ -204,16 +204,17 @@ type WorkflowTransition struct {
 
 	// IsRejection marks this transition as a rejection action.
 	// When true, executing this transition will create an IncidentRejectionLog record.
-	IsRejection   bool           `gorm:"default:false" json:"is_rejection"`
-	IsNotBelong   bool           `gorm:"default:false" json:"is_not_belong"`   // IsNotBelong marks this transition as a "Not Belong" closure action.
-	IsMissingInfo bool           `gorm:"default:false" json:"is_missing_info"` // IsMissingInfo marks this transition as a "Missing Incident Information" closure action — triggers SMS to citizen.
-	IsReopen      bool           `gorm:"default:false" json:"is_reopen"`       // IsReopen marks this transition as a reopen action — used by AI Quality Audit to identify the reopen transition.
-	IsFinalClose  bool           `gorm:"default:false" json:"is_final_close"`  // IsFinalClose marks this transition as the definitive closure from a Ready-to-Close state — triggers SMS to citizen.
-	IsActive      bool           `gorm:"default:true" json:"is_active"`
-	SortOrder     int            `gorm:"default:0" json:"sort_order"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
-	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
+	IsRejection     bool           `gorm:"default:false" json:"is_rejection"`
+	IsNotBelong     bool           `gorm:"default:false" json:"is_not_belong"`    // IsNotBelong marks this transition as a "Not Belong" closure action.
+	IsMissingInfo   bool           `gorm:"default:false" json:"is_missing_info"`  // IsMissingInfo marks this transition as a "Missing Incident Information" closure action — triggers SMS to citizen.
+	IsReopen        bool           `gorm:"default:false" json:"is_reopen"`        // IsReopen marks this transition as a reopen action — used by AI Quality Audit to identify the reopen transition.
+	RequireAssignee bool           `gorm:"default:false" json:"require_assignee"` // RequireAssignee: when true, only the assigned user(s) can execute this transition
+	IsActive        bool           `gorm:"default:true" json:"is_active"`
+	IsFinalClose    bool           `gorm:"default:false" json:"is_final_close"` // IsFinalClose marks this transition as the definitive closure from a Ready-to-Close state — triggers SMS to citizen.
+	SortOrder       int            `gorm:"default:0" json:"sort_order"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (t *WorkflowTransition) BeforeCreate(tx *gorm.DB) error {
@@ -400,20 +401,21 @@ type WorkflowStateUpdateRequest struct {
 }
 
 type WorkflowTransitionCreateRequest struct {
-	Name          string   `json:"name" validate:"required,min=2,max=100"`
-	NameAr        string   `json:"name_ar" validate:"max=100"`
-	Code          string   `json:"code" validate:"required,min=2,max=50"`
-	Description   string   `json:"description" validate:"max=500"`
-	DescriptionAr string   `json:"description_ar" validate:"max=500"`
-	FromStateID   string   `json:"from_state_id" validate:"required,uuid"`
-	ToStateID     string   `json:"to_state_id" validate:"required,uuid"`
-	RoleIDs       []string `json:"role_ids"`
-	SortOrder     int      `json:"sort_order"`
-	IsRejection   bool     `json:"is_rejection"`
-	IsNotBelong   bool     `json:"is_not_belong"`
-	IsMissingInfo bool     `json:"is_missing_info"`
-	IsReopen      bool     `json:"is_reopen"`
-	IsFinalClose  bool     `json:"is_final_close"`
+	Name            string   `json:"name" validate:"required,min=2,max=100"`
+	NameAr          string   `json:"name_ar" validate:"max=100"`
+	Code            string   `json:"code" validate:"required,min=2,max=50"`
+	Description     string   `json:"description" validate:"max=500"`
+	DescriptionAr   string   `json:"description_ar" validate:"max=500"`
+	FromStateID     string   `json:"from_state_id" validate:"required,uuid"`
+	ToStateID       string   `json:"to_state_id" validate:"required,uuid"`
+	RoleIDs         []string `json:"role_ids"`
+	SortOrder       int      `json:"sort_order"`
+	IsRejection     bool     `json:"is_rejection"`
+	IsNotBelong     bool     `json:"is_not_belong"`
+	IsMissingInfo   bool     `json:"is_missing_info"`
+	IsReopen        bool     `json:"is_reopen"`
+	IsFinalClose    bool     `json:"is_final_close"`
+	RequireAssignee bool     `json:"require_assignee"`
 
 	// Department Assignment
 	AssignDepartmentID   *string `json:"assign_department_id" validate:"omitempty"`
@@ -428,21 +430,22 @@ type WorkflowTransitionCreateRequest struct {
 }
 
 type WorkflowTransitionUpdateRequest struct {
-	Name          string   `json:"name" validate:"omitempty,min=2,max=100"`
-	NameAr        string   `json:"name_ar" validate:"max=100"`
-	Code          string   `json:"code" validate:"omitempty,min=2,max=50"`
-	Description   string   `json:"description" validate:"max=500"`
-	DescriptionAr string   `json:"description_ar" validate:"max=500"`
-	FromStateID   string   `json:"from_state_id" validate:"omitempty,uuid"`
-	ToStateID     string   `json:"to_state_id" validate:"omitempty,uuid"`
-	RoleIDs       []string `json:"role_ids"`
-	SortOrder     *int     `json:"sort_order"`
-	IsActive      *bool    `json:"is_active"`
-	IsRejection   *bool    `json:"is_rejection"`
-	IsNotBelong   *bool    `json:"is_not_belong"`
-	IsMissingInfo *bool    `json:"is_missing_info"`
-	IsReopen      *bool    `json:"is_reopen"`
-	IsFinalClose  *bool    `json:"is_final_close"`
+	Name            string   `json:"name" validate:"omitempty,min=2,max=100"`
+	NameAr          string   `json:"name_ar" validate:"max=100"`
+	Code            string   `json:"code" validate:"omitempty,min=2,max=50"`
+	Description     string   `json:"description" validate:"max=500"`
+	DescriptionAr   string   `json:"description_ar" validate:"max=500"`
+	FromStateID     string   `json:"from_state_id" validate:"omitempty,uuid"`
+	ToStateID       string   `json:"to_state_id" validate:"omitempty,uuid"`
+	RoleIDs         []string `json:"role_ids"`
+	SortOrder       *int     `json:"sort_order"`
+	IsActive        *bool    `json:"is_active"`
+	IsRejection     *bool    `json:"is_rejection"`
+	IsNotBelong     *bool    `json:"is_not_belong"`
+	IsMissingInfo   *bool    `json:"is_missing_info"`
+	IsReopen        *bool    `json:"is_reopen"`
+	IsFinalClose    *bool    `json:"is_final_close"`
+	RequireAssignee *bool    `json:"require_assignee"`
 
 	// Department Assignment
 	AssignDepartmentID   *string `json:"assign_department_id" validate:"omitempty,uuid"`
@@ -575,8 +578,8 @@ type WorkflowStateResponse struct {
 	AutoMatchUser    bool           `json:"auto_match_user"`
 	ManualSelectUser bool           `json:"manual_select_user"`
 	// New incident notification templates (initial states only)
-	NewIncidentEmailTemplateCode string `json:"new_incident_email_template_code,omitempty"`
-	NewIncidentSMSTemplateCode   string `json:"new_incident_sms_template_code,omitempty"`
+	NewIncidentEmailTemplateCode string    `json:"new_incident_email_template_code,omitempty"`
+	NewIncidentSMSTemplateCode   string    `json:"new_incident_sms_template_code,omitempty"`
 	CreatedAt                    time.Time `json:"created_at"`
 }
 
@@ -606,17 +609,18 @@ type WorkflowTransitionResponse struct {
 	AutoMatchUser    bool           `json:"auto_match_user"`
 	ManualSelectUser bool           `json:"manual_select_user"`
 
-	Requirements  []TransitionRequirementResponse `json:"requirements,omitempty"`
-	Actions       []TransitionActionResponse      `json:"actions,omitempty"`
-	FieldChanges  []TransitionFieldChangeResponse `json:"field_changes,omitempty"`
-	IsRejection   bool                            `json:"is_rejection"`
-	IsNotBelong   bool                            `json:"is_not_belong"`
-	IsMissingInfo bool                            `json:"is_missing_info"`
-	IsReopen      bool                            `json:"is_reopen"`
-	IsFinalClose  bool                            `json:"is_final_close"`
-	IsActive      bool                            `json:"is_active"`
-	SortOrder     int                             `json:"sort_order"`
-	CreatedAt     time.Time                       `json:"created_at"`
+	Requirements    []TransitionRequirementResponse `json:"requirements,omitempty"`
+	Actions         []TransitionActionResponse      `json:"actions,omitempty"`
+	FieldChanges    []TransitionFieldChangeResponse `json:"field_changes,omitempty"`
+	IsRejection     bool                            `json:"is_rejection"`
+	IsNotBelong     bool                            `json:"is_not_belong"`
+	IsMissingInfo   bool                            `json:"is_missing_info"`
+	IsReopen        bool                            `json:"is_reopen"`
+	IsFinalClose    bool                            `json:"is_final_close"`
+	RequireAssignee bool                            `json:"require_assignee"`
+	IsActive        bool                            `json:"is_active"`
+	SortOrder       int                             `json:"sort_order"`
+	CreatedAt       time.Time                       `json:"created_at"`
 }
 
 type TransitionRequirementResponse struct {
@@ -854,6 +858,7 @@ func ToWorkflowTransitionResponse(t *WorkflowTransition) WorkflowTransitionRespo
 		IsMissingInfo:        t.IsMissingInfo,
 		IsReopen:             t.IsReopen,
 		IsFinalClose:         t.IsFinalClose,
+		RequireAssignee:      t.RequireAssignee,
 		IsActive:             t.IsActive,
 		SortOrder:            t.SortOrder,
 		CreatedAt:            t.CreatedAt,
