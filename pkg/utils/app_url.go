@@ -30,6 +30,17 @@ func BuildSMSLink(ctx context.Context, incidentID string, t time.Duration) strin
 	)
 }
 
+// BuildFeedbackLink builds the public URL a reporter uses to submit their feedback.
+func BuildFeedbackLink(ctx context.Context, incidentID, feedbackID string, duration time.Duration) string {
+	baseURL := GenerateAppURL(ctx)
+	token := GenerateFeedbackToken(feedbackID, incidentID, duration)
+	return fmt.Sprintf("%s/api/v1/public-feedback/%s/submit?signed_token=%s",
+		baseURL,
+		incidentID,
+		url.QueryEscape(token),
+	)
+}
+
 // Generate App URL from context and id
 func GenerateAttachmentAppURL(ctx context.Context, attachmentID uuid.UUID) string {
 	hostname, _ := ctx.Value(constants.ContextKeys.HOSTNAME).(string)

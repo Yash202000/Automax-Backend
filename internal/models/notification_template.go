@@ -67,6 +67,8 @@ var AvailableVariablesByActionType = map[string][]string{
 		"priority", "comments", "transition_comment",
 		// URLs
 		"incident_url", "sla_page_url",
+		// Citizen-facing SMS link
+		"sms_link", "feedback_url",
 	},
 	// ── SLA escalation (per-incident and policy-step) ────────────────────────
 	TemplateActionEscalation: {
@@ -200,6 +202,8 @@ var AvailableVariablesByActionType = map[string][]string{
 		"department_name",
 		// URLs
 		"incident_url", "sla_page_url",
+		// Citizen-facing feedback link
+		"sms_link", "feedback_url",
 	},
 	// ── Incident converted to request ────────────────────────────────────────
 	TemplateActionConvertToRequest: {

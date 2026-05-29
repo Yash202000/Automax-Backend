@@ -89,6 +89,7 @@ func main() {
 	goalRepo := repository.NewGoalRepository(db)
 	aiQualityFeedbackRepo := repository.NewAIQualityFeedbackRepository(db)
 	feedbackTemplateRepo := repository.NewFeedbackTemplateRepository(db)
+	publicFeedbackRepo := repository.NewIncidentPublicFeedbackRepository(db)
 	commentTemplateRepo := repository.NewCommentTemplateRepository(db)
 
 	// Initialize WebSocket hub and start it
@@ -130,6 +131,7 @@ func main() {
 	fcmService := services.NewFCMService(repository.NewDeviceTokenRepository(db), notificationLogRepo)
 	callerSentimentService := services.NewCallerSentimentService(callerSentimentRepo)
 	feedbackTemplateService := services.NewFeedbackTemplateService(feedbackTemplateRepo)
+	publicFeedbackService := services.NewIncidentPublicFeedbackService(publicFeedbackRepo, notificationService, incidentService, workflowRepo, classificationRepo)
 	commentTemplateService := services.NewCommentTemplateService(commentTemplateRepo)
 
 	// Goal management services
@@ -214,6 +216,7 @@ func main() {
 	commentTemplateHandler := handlers.NewCommentTemplateHandler(commentTemplateService)
 	rejectionLogHandler := handlers.NewRejectionLogHandler(rejectionLogRepo)
 	incidentFeedbackHandler := handlers.NewIncidentFeedbackHandler(incidentRepo)
+	publicFeedbackHandler := handlers.NewIncidentPublicFeedbackHandler(publicFeedbackService, actionLogService)
 	aiQualityFeedbackHandler := handlers.NewAIQualityFeedbackHandler(aiQualityFeedbackRepo)
 	fcmHandler := handlers.NewFCMHandler(fcmService)
 	sentimentHandler := handlers.NewCallerSentimentHandler(callerSentimentService)
@@ -329,6 +332,8 @@ func main() {
 	ivr := v1.Group("/ivr/incident")
 	// Public: validates signed URL + last 6 digits, returns incident + session token
 	ivr.Get("/sms-link/:id", incidentHandler.FindByIDWithLast6DigitValidation)
+	// Public: validates signed URL from normal closure SMS, returns incident info for feedback page
+	ivr.Get("/feedback/:id", incidentHandler.FindByIDForFeedback)
 	// Protected: require valid IVR session token issued by the GET route above
 	// ivr.Put("/sms-link/update/:id", authMiddleware.ValidateIvrSmsToken(), incidentHandler.UpdateIncidentViaIvrSms)
 	// ivr.Post("/sms-link/attachment/:id", authMiddleware.ValidateIvrSmsToken(), incidentHandler.UploadAttachmentIvrSms)
@@ -414,6 +419,13 @@ func main() {
 	feedback.Get("/", authMiddleware.RequirePermission("incidents:view"), incidentFeedbackHandler.ListAllFeedback)
 	feedback.Post("/:id", authMiddleware.RequirePermission("incidents:update"), incidentFeedbackHandler.CreateFeedback)
 	feedback.Get("/:id", authMiddleware.RequirePermission("incidents:view"), incidentFeedbackHandler.ListFeedback)
+
+	publicFeedback := v1.Group("/public-feedback")
+	publicFeedback.Post("/:incidentID", authMiddleware.Authenticate(), authMiddleware.RequirePermission("incidents:update"), publicFeedbackHandler.Create)
+	publicFeedback.Get("/", authMiddleware.Authenticate(), authMiddleware.RequirePermission("incidents:view"), publicFeedbackHandler.ListAll)
+	publicFeedback.Get("/:incidentID", authMiddleware.Authenticate(), authMiddleware.RequirePermission("incidents:view"), publicFeedbackHandler.ListByIncident)
+	publicFeedback.Get("/:incidentID/init", publicFeedbackHandler.Init)
+	publicFeedback.Put("/:incidentID/submit", publicFeedbackHandler.Submit)
 
 	// Closed incident editing (requires special permission)
 	incidents.Patch("/:id/closed-summary", authMiddleware.RequirePermission("incidents:edit-closed"), incidentHandler.UpdateClosedIncidentSummary)
