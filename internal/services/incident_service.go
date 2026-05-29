@@ -2962,6 +2962,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	}
 
 	// Apply user-provided field changes configured on the transition
+	var transitionLookupChanges []models.IncidentFieldChange
 	if len(req.FieldChanges) > 0 {
 		for fieldName, fieldValue := range req.FieldChanges {
 			if fieldValue == "" {
@@ -3042,6 +3043,12 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				incRef.ID = incidentID
 				if err := tx.WithContext(ctx).Model(&incRef).Association("LookupValues").Append(&lookupVal); err != nil {
 					fmt.Printf("Warning: failed to append lookup value for category %s: %v\n", categoryCode, err)
+				} else {
+					transitionLookupChanges = append(transitionLookupChanges, models.IncidentFieldChange{
+						FieldName:  fieldName,
+						FieldLabel: category.Name,
+						NewValue:   &lookupVal.Name,
+					})
 				}
 			}
 		}
@@ -3130,7 +3137,24 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			NewValue:   &newStateName,
 		},
 	}
+	changes = append(changes, transitionLookupChanges...)
 	revDescription := fmt.Sprintf("Status changed from %s to %s", oldStateName, newStateName)
+	for _, lc := range transitionLookupChanges {
+		val := ""
+		if lc.NewValue != nil {
+			val = *lc.NewValue
+		}
+		revDescription += fmt.Sprintf("; %s: %s", lc.FieldLabel, val)
+	}
+	if len(transitionLookupChanges) > 0 {
+		historyComment := revDescription
+		if history.Comment != "" {
+			historyComment = history.Comment + " | " + revDescription
+		}
+		tx.WithContext(ctx).Model(history).Update("comment", historyComment)
+		// Do NOT mutate history.Comment — syncTransitionToMergedIncidents uses it
+		// to propagate only the user-typed comment to child incidents.
+	}
 	revNum, _ := txRepo.GetNextRevisionNumber(ctx, incidentID)
 	changesBytes, _ := json.Marshal(changes)
 
