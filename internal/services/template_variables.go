@@ -42,9 +42,9 @@ func BuildIncidentVariables(
 		"source":          incident.Source,
 		"channel":         incident.Channel,
 		// Reporter plain fields (overridden below if Reporter relation is loaded)
-		"reporter_name":   incident.ReporterName,
-		"reporter_email":  incident.ReporterEmail,
-		"reporter_phone":  incident.ReporterPhone,
+		"reporter_name":  incident.ReporterName,
+		"reporter_email": incident.ReporterEmail,
+		"reporter_phone": incident.ReporterPhone,
 		// Creator / location
 		"created_by_name": incident.CreatedByName,
 		"address":         incident.Address,
