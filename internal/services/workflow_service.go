@@ -1505,6 +1505,17 @@ func (s *workflowService) GetInitialStateMatchingUsers(ctx context.Context, work
 	return result, nil
 }
 
+// workflowMatchesRecordType checks if a workflow's RecordType is compatible with the requested record type.
+func workflowMatchesRecordType(workflowRT, requestRT string) bool {
+	if workflowRT == "all" {
+		return true
+	}
+	if workflowRT == "both" {
+		return requestRT == "incident" || requestRT == "request"
+	}
+	return workflowRT == requestRT
+}
+
 // MatchWorkflow finds a workflow based on incident criteria and returns form configuration
 func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.WorkflowMatchRequest) (*models.WorkflowMatchResponse, error) {
 	// Get all active workflows with their classifications
@@ -1539,6 +1550,27 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 		return defaultResponse, nil
 	}
 
+	// Filter by RecordType first — only consider workflows that have RecordType configured
+	var eligible []models.Workflow
+	for _, w := range workflows {
+		if !w.IsActive {
+			continue
+		}
+		// Skip workflows with no RecordType set — they don't participate in matching
+		if w.RecordType == "" {
+			continue
+		}
+		// Check if workflow's RecordType is compatible with the requested record type
+		if req.RecordType != "" && !workflowMatchesRecordType(w.RecordType, req.RecordType) {
+			continue
+		}
+		eligible = append(eligible, w)
+	}
+
+	if len(eligible) == 0 {
+		return defaultResponse, nil
+	}
+
 	// Parse classification ID if provided
 	var classificationID uuid.UUID
 	if req.ClassificationID != "" {
@@ -1554,12 +1586,10 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 	// Find matching workflow
 	var matchedWorkflow *models.Workflow
 	var highestScore int
+	var matchedIsDefault bool
 
-	for i := range workflows {
-		w := &workflows[i]
-		if !w.IsActive {
-			continue
-		}
+	for i := range eligible {
+		w := &eligible[i]
 
 		score := 0
 
@@ -1626,31 +1656,37 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 			}
 		}
 
-		// Check if it's the default workflow
+		// Specificity bonus: exact record_type match beats broad ("all"/"both")
+		if req.RecordType != "" && w.RecordType == req.RecordType {
+			score += 5
+		}
+
+		// Default workflow bonus
 		if w.IsDefault {
 			score += 1
 		}
 
-		// If this workflow has a higher score, use it
-		if score > highestScore || (score == highestScore && matchedWorkflow == nil) {
+		// Tie-breaking: higher score wins; on tie, prefer IsDefault over non-default
+		if score > highestScore || (score == highestScore && !matchedIsDefault && w.IsDefault) || (score == highestScore && matchedWorkflow == nil) {
 			highestScore = score
 			matchedWorkflow = w
+			matchedIsDefault = w.IsDefault
 		}
 	}
 
-	// If no workflow matched by criteria, use the default workflow
+	// If no workflow matched by criteria, use the default workflow (from eligible set)
 	if matchedWorkflow == nil {
-		for i := range workflows {
-			if workflows[i].IsDefault {
-				matchedWorkflow = &workflows[i]
+		for i := range eligible {
+			if eligible[i].IsDefault {
+				matchedWorkflow = &eligible[i]
 				break
 			}
 		}
 	}
 
-	// If still no workflow, use the first active one
-	if matchedWorkflow == nil && len(workflows) > 0 {
-		matchedWorkflow = &workflows[0]
+	// If still no workflow, use the first eligible one
+	if matchedWorkflow == nil && len(eligible) > 0 {
+		matchedWorkflow = &eligible[0]
 	}
 
 	if matchedWorkflow == nil {
