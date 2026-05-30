@@ -491,6 +491,7 @@ type WorkflowMatchRequest struct {
 	LocationID       string `json:"location_id"`
 	Source           string `json:"source"`
 	Priority         int    `json:"priority"`
+	RecordType       string `json:"record_type"` // "incident", "request", "complaint", "query" — required for matching
 }
 
 // Form field configuration for incident creation
