@@ -43,26 +43,26 @@ func (h *OTPHandler) SendOTP(c *fiber.Ctx) error {
 		})
 	}
 
-	exist, err := h.userService.ExistsByPhoneAndName(c.UserContext(), req.Phone, req.Name)
-	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
-	}
+	// [Citizen Auto-Register] Removed ExistsByPhoneAndName check.
+	// Previously, OTP send was blocked if no user existed with this phone+name.
+	// Now we allow any phone number to receive OTP. If the user doesn't exist,
+	// they will be auto-registered as a citizen upon successful OTP verification.
+	// To revert: restore the ExistsByPhoneAndName check here and remove citizenName from SendOTP.
 
-	if !exist {
-		return utils.ErrorResponse(c, 400, "no user found with this phone number")
-	}
-
-	// Get userID from token
+	// Get userID from token (nil for unauthenticated citizen requests)
 	var sentBy *uuid.UUID
 	if userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID); ok {
 		sentBy = &userID
 	}
 
+	// [Citizen Auto-Register] Pass citizen name to SendOTP so it's stored in Redis
+	// and available for auto-creating the user record during OTP verification.
 	sessionID, err := h.otpService.SendOTP(
 		c.UserContext(),
 		req.Phone,
 		req.Channel,
 		sentBy,
+		req.Name,
 	)
 
 	if err != nil {
