@@ -191,8 +191,11 @@ func (s *incidentMergeService) ValidateMerge(ctx context.Context, incidentIDStrs
 		if err != nil {
 			return locationID // fallback to exact match
 		}
-		// Return parent ID if exists, otherwise return self (top-level)
-		return loc.ParentID
+		// Return parent ID if exists, otherwise return own ID (top-level)
+		if loc.ParentID != nil {
+			return loc.ParentID
+		}
+		return &loc.ID
 	}
 
 	firstParentLocationID := getParentLocationID(firstIncident.LocationID)
@@ -225,8 +228,11 @@ func (s *incidentMergeService) ValidateMerge(ctx context.Context, incidentIDStrs
 		if err != nil {
 			return classificationID // fallback to exact match
 		}
-		// Return parent ID if exists, otherwise return nil (top-level)
-		return cls.ParentID
+		// Return parent ID if exists, otherwise return own ID (top-level)
+		if cls.ParentID != nil {
+			return cls.ParentID
+		}
+		return &cls.ID
 	}
 
 	firstParentClassificationID := getParentClassificationID(firstIncident.ClassificationID)
@@ -245,7 +251,7 @@ func (s *incidentMergeService) ValidateMerge(ctx context.Context, incidentIDStrs
 				response.Errors = append(response.Errors, "All incidents must have the same parent classification")
 				return response, nil
 			}
-			// Both nil is OK - both incidents have same top-level classification
+			// Both nil is OK - both incidents have no classification set
 		}
 	}
 
