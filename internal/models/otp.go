@@ -12,6 +12,8 @@ type OTPData struct {
 	Hash       string `json:"hash"`
 	SenderMode string `json:"senderMode"`
 	Attempts   int    `json:"attempts"`
+	// [Citizen Auto-Register] Name provided by citizen during OTP send, used to auto-create user on verify
+	Name string `json:"name,omitempty"`
 }
 
 type OTPReq struct {

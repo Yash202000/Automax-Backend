@@ -103,7 +103,7 @@ func main() {
 	actionLogService := services.NewActionLogService(actionLogRepo)
 	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo, userRepo, minioStorage)
 	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg, actionLogService, nil, redisClient)
-	otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo, userRepo, userService)
+	otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo, userRepo, userService, roleRepo)
 
 	// Initialize LDAP service
 	ldapService, err := services.NewLDAPService(cfg)

@@ -24,6 +24,8 @@ type OTPService struct {
 	notificationLogRepo repository.NotificationLogRepository
 	userRepo            repository.UserRepository
 	userService         UserService
+	// [Citizen Auto-Register] roleRepo is used to find the "citizen" role when auto-creating citizen users
+	roleRepo repository.RoleRepository
 }
 
 func NewOTPService(
@@ -32,6 +34,7 @@ func NewOTPService(
 	notificationLogRepo repository.NotificationLogRepository,
 	userRepo repository.UserRepository,
 	userService UserService,
+	roleRepo repository.RoleRepository,
 ) *OTPService {
 	return &OTPService{
 		redis:               redisClient,
@@ -39,6 +42,7 @@ func NewOTPService(
 		notificationLogRepo: notificationLogRepo,
 		userRepo:            userRepo,
 		userService:         userService,
+		roleRepo:            roleRepo,
 	}
 }
 
@@ -90,9 +94,14 @@ type OTPData struct {
 	SentAt     time.Time  `json:"sentAt"`
 	VerifiedAt *time.Time `json:"verifiedAt,omitempty"`
 	SentBy     *uuid.UUID `json:"sentBy"`
+	// [Citizen Auto-Register] Citizen name stored during SendOTP, used for auto-creating user on VerifyOTP
+	Name string `json:"name,omitempty"`
 }
 
-func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode string, sentBy *uuid.UUID) (string, error) {
+// [Citizen Auto-Register] Added citizenName parameter — stored in Redis alongside OTP
+// so it can be used to auto-create the citizen user upon successful OTP verification.
+// Pass empty string for non-citizen flows (e.g. authenticated OTP sends).
+func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode string, sentBy *uuid.UUID, citizenName ...string) (string, error) {
 
 	// - RATE LIMIT COUNTER
 	counterKey := "otp_counter:" + phone
@@ -147,6 +156,12 @@ func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode strin
 		return "", fmt.Errorf("failed to send otp: %w", err)
 	}
 
+	// [Citizen Auto-Register] Store citizen name in OTP data for auto-registration on verify
+	name := ""
+	if len(citizenName) > 0 {
+		name = citizenName[0]
+	}
+
 	otpData := OTPData{
 		Phone:      phone,
 		Hash:       HashOTP(otp),
@@ -156,6 +171,7 @@ func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode strin
 		Status:     "sent",
 		SentAt:     time.Now(),
 		SentBy:     sentBy,
+		Name:       name,
 	}
 
 	jsonData, _ := json.Marshal(otpData)
@@ -226,10 +242,18 @@ func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID stri
 		return nil, fmt.Errorf("invalid otp")
 	}
 
-	// Fetch user by phone
+	// Fetch user by phone — if not found, auto-create as citizen
 	user, err := s.userRepo.FindByMobile(ctx, phone)
 	if err != nil {
-		return nil, fmt.Errorf("user not found")
+		// [Citizen Auto-Register] Auto-create citizen user on first OTP-verified login.
+		// The citizen name was stored in Redis during SendOTP. A unique email/username
+		// is generated from the phone number since these fields are required (DB unique constraints).
+		// The "citizen" role is assigned automatically. To revert this feature, restore the
+		// original line: return nil, fmt.Errorf("user not found")
+		user, err = s.autoCreateCitizenUser(ctx, phone, data.Name)
+		if err != nil {
+			return nil, fmt.Errorf("failed to register citizen: %w", err)
+		}
 	}
 
 	authResp, err := s.userService.GenerateTokenViaUserID(ctx, user.ID)
@@ -253,6 +277,45 @@ func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID stri
 	s.redis.Del(ctx, key)
 
 	return resp, nil
+}
+
+// [Citizen Auto-Register] autoCreateCitizenUser creates a new user record for an unregistered citizen
+// who has successfully verified their phone via OTP. The user gets:
+//   - Phone = the verified mobile number
+//   - FirstName = citizen name provided during OTP send
+//   - Email = citizen_<phone>@automax.local (synthetic, to satisfy DB unique constraint)
+//   - Username = citizen_<phone> (synthetic, to satisfy DB unique constraint)
+//   - MobileVerified = true (phone was just verified via OTP)
+//   - Role = "citizen" (looked up by code from roles table)
+//
+// To revert this feature: remove this method and restore "user not found" error in VerifyOTP.
+func (s *OTPService) autoCreateCitizenUser(ctx context.Context, phone string, name string) (*models.User, error) {
+	if name == "" {
+		name = "Citizen"
+	}
+
+	// Find the "citizen" role
+	citizenRole, err := s.roleRepo.FindByCode(ctx, "citizen")
+	if err != nil {
+		return nil, fmt.Errorf("citizen role not found in database — please create a role with code 'citizen'")
+	}
+
+	newUser := &models.User{
+		FirstName:      name,
+		Phone:          phone,
+		Email:          fmt.Sprintf("citizen_%s@automax.local", phone),
+		Username:       fmt.Sprintf("citizen_%s", phone),
+		Password:       uuid.New().String(), // random password — citizen logs in via OTP only
+		MobileVerified: true,
+		IsActive:       true,
+		Roles:          []models.Role{*citizenRole},
+	}
+
+	if err := s.userRepo.Create(ctx, newUser); err != nil {
+		return nil, fmt.Errorf("failed to create citizen user: %w", err)
+	}
+
+	return newUser, nil
 }
 
 // func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID string, inputOTP string) error {
