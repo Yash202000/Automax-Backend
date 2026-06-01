@@ -90,6 +90,7 @@ func main() {
 	aiQualityFeedbackRepo := repository.NewAIQualityFeedbackRepository(db)
 	feedbackTemplateRepo := repository.NewFeedbackTemplateRepository(db)
 	publicFeedbackRepo := repository.NewIncidentPublicFeedbackRepository(db)
+	ivrSmsLinkRepo := repository.NewIvrSmsLinkRepository(db)
 	commentTemplateRepo := repository.NewCommentTemplateRepository(db)
 
 	// Initialize WebSocket hub and start it
@@ -156,6 +157,7 @@ func main() {
 	incidentService.SetNotificationService(notificationService)
 	incidentService.SetUserService(userService)
 	incidentService.SetFCMService(fcmService)
+	incidentService.SetIvrSmsLinkRepo(ivrSmsLinkRepo)
 	incidentService.SetActionExecutor(services.NewActionExecutor(incidentRepo, userRepo, notificationService))
 	incidentService.SetPublicFeedbackRepo(publicFeedbackRepo)
 
@@ -196,6 +198,7 @@ func main() {
 	workflowHandler := handlers.NewWorkflowHandler(workflowService, actionLogService)
 	incidentHandler := handlers.NewIncidentHandler(incidentService, userService, userRepo, incidentRepo, workflowRepo, locationRepo, classificationRepo, minioStorage, presenceService)
 	incidentHandler.SetReadyToCloseService(readyToCloseService)
+	incidentHandler.SetIvrSmsLinkRepo(ivrSmsLinkRepo)
 	incidentMergeHandler := handlers.NewIncidentMergeHandler(incidentMergeService, userRepo)
 	websocketHandler := handlers.NewWebSocketHandler(wsHub)
 	reportHandler := handlers.NewReportHandler(reportService)

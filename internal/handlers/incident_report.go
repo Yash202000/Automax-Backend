@@ -619,7 +619,7 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 	row1(&b, l.Department, html.EscapeString(data.DepartmentName))
 	b.WriteString(`</table>`)
 
-	// ── Section: Caller Details (IVR / SMS-Link only) ─────────────────────────
+	// ── Section: Caller Details ─────────────────────────
 	if data.CallerPhone != "" {
 		secHeader(&b, l.SectionCaller)
 		b.WriteString(`<table class="grid">`)

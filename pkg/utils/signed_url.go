@@ -14,6 +14,13 @@ import (
 	"time"
 )
 
+// HashToken returns the sha256 hex digest of the raw signed token.
+// Used to store a compact, lookup-friendly reference in ivr_sms_links.
+func HashToken(token string) string {
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:])
+}
+
 var (
 	ErrExpired        = errors.New("token has expired")
 	ErrInvalid        = errors.New("invalid token signature")

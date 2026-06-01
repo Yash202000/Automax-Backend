@@ -33,6 +33,7 @@ type IncidentHandler struct {
 	storage             *storage.MinIOStorage
 	presenceService     services.PresenceService
 	readyToCloseService services.ReadyToCloseService
+	ivrSmsLinkRepo      repository.IvrSmsLinkRepository
 	validator           *validator.Validate
 }
 
@@ -49,6 +50,11 @@ func NewIncidentHandler(service services.IncidentService, userService services.U
 		presenceService:    presenceService,
 		validator:          validator.New(),
 	}
+}
+
+// SetIvrSmsLinkRepo wires in the IvrSmsLinkRepository for SMS link lifecycle management.
+func (h *IncidentHandler) SetIvrSmsLinkRepo(repo repository.IvrSmsLinkRepository) {
+	h.ivrSmsLinkRepo = repo
 }
 
 // SetReadyToCloseService wires in the ReadyToCloseService for duration-options endpoint.
@@ -252,11 +258,32 @@ func (h *IncidentHandler) FindByIDWithLast6DigitValidation(c *fiber.Ctx) error {
 		}
 	}
 
+	// Check the IVR SMS link record: is it still active, and has the citizen already submitted?
+	if h.ivrSmsLinkRepo != nil {
+		tokenHash := utils.HashToken(token)
+		link, err := h.ivrSmsLinkRepo.FindByTokenHash(c.UserContext(), tokenHash, id)
+		if err != nil || link == nil {
+			log.Printf("IVR SMS link not found for token hash %s incident %s: %v", tokenHash, idStr, err)
+			return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Link not recognized")
+		}
+		if !link.IsActive {
+			return utils.ErrorResponse(c, fiber.StatusGone, "A newer link has been sent. Please use the latest SMS link.")
+		}
+		if link.SubmittedAt != nil {
+			// Citizen already submitted — tell the frontend to show the "Update Submitted" screen.
+			return c.Status(fiber.StatusOK).JSON(fiber.Map{
+				"success":           true,
+				"already_submitted": true,
+				"message":           "You have already submitted your information for this incident.",
+			})
+		}
+	}
+
 	log.Println("incident last6 digit op start")
 	incident, err := h.service.FindByIDWithLast6DigitValidation(c.UserContext(), id, last6Digits)
 	if err != nil {
 		log.Printf("Err fetching Incident via last 6 digit and id %v ", err)
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not exist or already updated")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Phone number is not recognized")
 	}
 
 	authResponse, err := h.userService.GenerateTokenViaUserID(c.UserContext(), incident.ReporterID)
@@ -1415,8 +1442,10 @@ func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "No citizen mobile number found for this incident")
 	}
 
-	// Build secure SMS link
-	smsLink := utils.BuildSMSLink(c.UserContext(), incidentID.String(), 48*time.Hour)
+	// Build secure SMS link — generate the raw token first so we can hash and store it.
+	const ivrSmsDuration = 48 * time.Hour
+	rawToken := utils.GenerateIncidentToken(incidentID.String(), ivrSmsDuration)
+	smsLink := utils.BuildSMSLinkFromToken(c.UserContext(), incidentID.String(), rawToken)
 
 	smsMessage := fmt.Sprintf(
 		"Dear Citizen, please provide additional details for your reported incident (%s) using the following secure link: %s",
@@ -1432,6 +1461,24 @@ func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
 		log.Printf("REQUEST-INFO-SMS: Failed for incident %s to %s: %v", incident.IncidentNumber, mobile, smsErr)
 	} else {
 		log.Printf("REQUEST-INFO-SMS: Sent successfully to %s for incident %s", mobile, incident.IncidentNumber)
+	}
+
+	// Track IVR SMS link: deactivate old links, create new record.
+	if h.ivrSmsLinkRepo != nil && smsErr == nil {
+		_ = h.ivrSmsLinkRepo.DeactivateAllForIncident(c.UserContext(), incidentID)
+		_ = h.ivrSmsLinkRepo.Create(c.UserContext(), &models.IvrSmsLink{
+			IncidentID: incidentID,
+			TokenHash:  utils.HashToken(rawToken),
+			SentBy:     &userID,
+			SentAt:     now,
+			ExpiresAt:  now.Add(ivrSmsDuration),
+			IsActive:   true,
+		})
+		// Log revision so agents can see the SMS send event in the audit trail.
+		_ = h.service.CreateRevision(c.UserContext(), incidentID,
+			models.RevisionActionIVRSmsSent,
+			fmt.Sprintf("Agent requested additional information from citizen via SMS to %s", mobile),
+			nil, userID)
 	}
 
 	// Log notification

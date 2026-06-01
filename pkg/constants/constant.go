@@ -42,7 +42,6 @@ var INCIDENT_SOURCE = struct {
 	FACEBOOK string
 	TWITTER  string
 	EMAIL    string
-	SMS_LINK string
 }{
 	WEB:      "web",
 	MOBILE:   "mobile",
@@ -51,7 +50,6 @@ var INCIDENT_SOURCE = struct {
 	FACEBOOK: "facebook",
 	TWITTER:  "twitter",
 	EMAIL:    "email",
-	SMS_LINK: "sms-link",
 }
 
 var PREFIX = struct {

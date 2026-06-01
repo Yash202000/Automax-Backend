@@ -21,12 +21,18 @@ func GenerateAppURL(ctx context.Context) string {
 
 // When building the SMS link, encode the token
 func BuildSMSLink(ctx context.Context, incidentID string, t time.Duration) string {
+	rawToken := GenerateIncidentToken(incidentID, t)
+	return BuildSMSLinkFromToken(ctx, incidentID, rawToken)
+}
+
+// BuildSMSLinkFromToken builds the SMS link from a pre-generated raw token.
+// Use this when you need to also store the token hash before building the URL.
+func BuildSMSLinkFromToken(ctx context.Context, incidentID string, rawToken string) string {
 	baseURL := GenerateAppURL(ctx)
-	token := GenerateIncidentToken(incidentID, t)
 	return fmt.Sprintf("%s/ivr/incident/sms-link/%s?signed_token=%s",
 		baseURL,
 		incidentID,
-		url.QueryEscape(token), // encodes | → %7C
+		url.QueryEscape(rawToken), // encodes | → %7C
 	)
 }
 

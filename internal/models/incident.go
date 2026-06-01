@@ -275,6 +275,8 @@ const (
 	RevisionActionAssigneeChanged   IncidentRevisionActionType = "assignee_changed"
 	RevisionActionStatusChanged     IncidentRevisionActionType = "status_changed"
 	RevisionActionCreated           IncidentRevisionActionType = "created"
+	RevisionActionIVRSmsSent        IncidentRevisionActionType = "ivr_sms_sent"
+	RevisionActionIVRSmsSubmitted   IncidentRevisionActionType = "ivr_sms_submitted"
 )
 
 type IncidentRevisionStatus string
@@ -395,6 +397,9 @@ type IncidentUpdateRequest struct {
 	CustomLookupFields map[string]interface{} `json:"custom_lookup_fields"`
 	Comment            string                 `json:"comment"` // optional comment attached to the update
 	Version            int                    `json:"version" validate:"required,min=1"`
+	// IvrLinkToken is the raw signed token from the SMS URL. When present, the update is
+	// attributed to the citizen's IVR SMS link submission (exact link lookup by token hash).
+	IvrLinkToken string `json:"ivr_link_token"`
 }
 
 type IncidentTransitionRequest struct {
@@ -702,6 +707,10 @@ type IncidentResponse struct {
 	LookupValues          []LookupValueResponse       `json:"lookup_values,omitempty"`
 	Version               int                         `json:"version"`
 	ActiveViewers         int                         `json:"active_viewers,omitempty"` // Number of users currently viewing this incident
+
+	// IVR SMS link submission state (EPM940 only, populated for source=ivr incidents).
+	IvrSubmitted   bool       `json:"ivr_submitted,omitempty"`
+	IvrSubmittedAt *time.Time `json:"ivr_submitted_at,omitempty"`
 
 	// Merge-related fields
 	MasterIncidentID     *uuid.UUID        `json:"master_incident_id,omitempty"`
