@@ -101,7 +101,7 @@ func BuildIncidentVariables(
 		vars["sms_link"] = fmt.Sprintf("%s/ivr/incident/sms-link/%s?signed_token=%s",
 			smsPortalBase, incident.ID.String(), url.QueryEscape(token))
 		if incident.FeedbackID != nil {
-			vars["feedback_url"] = fmt.Sprintf("%s/feedback/%s?feedback_id=%s",
+			vars["feedback_url"] = fmt.Sprintf("%s/feedback/%s?signed_token=%s",
 				smsPortalBase, incident.ID.String(), incident.FeedbackID.String())
 		} else {
 			feedbackToken := pkgutils.GenerateIncidentToken(incident.ID.String(), feedbackTokenDuration)
