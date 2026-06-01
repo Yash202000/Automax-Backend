@@ -6,6 +6,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
+	cstmContext "github.com/automax/backend/pkg/context"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -162,7 +163,8 @@ func (h *ReportTemplateHandler) GenerateReport(c *fiber.Ctx) error {
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	data, filename, contentType, err := h.templateService.GenerateReport(c.UserContext(), &req, userID)
+	ctx := cstmContext.WithReportTimezone(c.UserContext(), req.Timezone)
+	data, filename, contentType, err := h.templateService.GenerateReport(ctx, &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}

@@ -303,14 +303,15 @@ type ReportTemplateFilter struct {
 
 // GenerateReportRequest for generating a report from template
 type GenerateReportRequest struct {
-	TemplateID   string               `json:"template_id" validate:"required,uuid"`
-	DataSource   string               `json:"data_source" validate:"required"`
-	Filters      []ReportFilterConfig `json:"filters"`
-	Sorting      []ReportSortConfig   `json:"sorting"`
-	Format       string               `json:"format" validate:"required,oneof=pdf xlsx"`
-	FileName     string               `json:"file_name"`
+	TemplateID string               `json:"template_id" validate:"required,uuid"`
+	DataSource string               `json:"data_source" validate:"required"`
+	Filters    []ReportFilterConfig `json:"filters"`
+	Sorting    []ReportSortConfig   `json:"sorting"`
+	Format     string               `json:"format" validate:"required,oneof=pdf xlsx"`
+	FileName   string               `json:"file_name"`
+	Timezone   string               `json:"timezone"` // IANA timezone e.g. "Asia/Kolkata", "Asia/Riyadh"
 	// Override template values
-	Overrides    *TemplateOverrides   `json:"overrides,omitempty"`
+	Overrides *TemplateOverrides `json:"overrides,omitempty"`
 }
 
 type TemplateOverrides struct {
