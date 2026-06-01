@@ -965,7 +965,8 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 				workflow_states.state_type as state_type,
 				count(*) as count
 			`).
-			Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
+			//Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
+			Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id AND workflow_states.deleted_at IS NULL").
 			Joins("JOIN workflows ON workflows.id = incidents.workflow_id AND workflows.deleted_at IS NULL"),
 	)
 
@@ -986,7 +987,8 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 	stateTypeQuery := applyBaseFilters(
 		r.db.WithContext(ctx).Model(&models.Incident{}).
 			Select("workflow_states.state_type as state_type, workflow_states.code as state_code, count(*) as count").
-			Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
+			//Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
+			Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id AND workflow_states.deleted_at IS NULL").
 			Where("incidents.workflow_id IN (SELECT id FROM workflows WHERE deleted_at IS NULL)"),
 	)
 
