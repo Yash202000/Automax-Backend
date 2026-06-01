@@ -66,9 +66,9 @@ var AvailableVariablesByActionType = map[string][]string{
 		// Extra
 		"priority", "comments", "transition_comment",
 		// URLs
-		"incident_url", "sla_page_url",
+		"incident_url", "sla_page_url", "sla_page_link",
 		// Citizen-facing SMS link
-		"sms_link", "feedback_url",
+		"sms_link", "feedback_url", "feedback_link",
 	},
 	// ── SLA escalation (per-incident and policy-step) ────────────────────────
 	TemplateActionEscalation: {
@@ -90,13 +90,13 @@ var AvailableVariablesByActionType = map[string][]string{
 		// Geography
 		"address", "city", "country",
 		// Geolocation / map
-		"latitude", "longitude", "map_url", "location_url",
+		"latitude", "longitude", "map_url", "location_url", "map_link",
 		// Comments
 		"comment", "comments", "transition_comment",
 		// Extra
 		"priority",
 		// URLs
-		"incident_url", "sla_page_url",
+		"incident_url", "sla_page_url", "sla_page_link",
 		// Policy-step specific
 		"policy_name", "step_order",
 		// Group batch specific
@@ -119,11 +119,11 @@ var AvailableVariablesByActionType = map[string][]string{
 		// Geography
 		"address", "city", "country",
 		// Geolocation / map
-		"latitude", "longitude", "map_url", "location_url",
+		"latitude", "longitude", "map_url", "location_url", "map_link",
 		// Extra
 		"priority",
 		// URLs
-		"incident_url", "sla_page_url",
+		"incident_url", "sla_page_url", "sla_page_link",
 		// Citizen-facing SMS link
 		"sms_link",
 	},
@@ -148,7 +148,7 @@ var AvailableVariablesByActionType = map[string][]string{
 		// Extra
 		"priority",
 		// URLs
-		"incident_url", "sla_page_url",
+		"incident_url", "sla_page_url", "sla_page_link",
 	},
 	// ── Assignee changed ─────────────────────────────────────────────────────
 	TemplateActionAssignment: {
@@ -173,7 +173,7 @@ var AvailableVariablesByActionType = map[string][]string{
 		// Extra
 		"priority", "comments", "transition_comment",
 		// URLs
-		"incident_url", "sla_page_url",
+		"incident_url", "sla_page_url", "sla_page_link",
 	},
 	// ── Incident closed ──────────────────────────────────────────────────────
 	TemplateActionClosure: {
@@ -201,9 +201,9 @@ var AvailableVariablesByActionType = map[string][]string{
 		// Not-belong closure: the external department the incident was referred to
 		"department_name",
 		// URLs
-		"incident_url", "sla_page_url",
+		"incident_url", "sla_page_url", "sla_page_link",
 		// Citizen-facing feedback link
-		"sms_link", "feedback_url",
+		"sms_link", "feedback_url", "feedback_link",
 	},
 	// ── Incident converted to request ────────────────────────────────────────
 	TemplateActionConvertToRequest: {
@@ -221,7 +221,7 @@ var AvailableVariablesByActionType = map[string][]string{
 		// Geography
 		"address", "city", "country",
 		// URLs
-		"incident_url", "sla_page_url",
+		"incident_url", "sla_page_url", "sla_page_link",
 	},
 	// ── Missing incident information closure ────────────────────────────────
 	TemplateActionMissingInfo: {
@@ -231,7 +231,7 @@ var AvailableVariablesByActionType = map[string][]string{
 		"classification_name", "workflow_name", "location_name",
 		"created_at", "created_by_name",
 		"address", "city", "country",
-		"incident_url", "sla_page_url",
+		"incident_url", "sla_page_url", "sla_page_link",
 	},
 	// ── Custom / catch-all ───────────────────────────────────────────────────
 	TemplateActionCustom: {
@@ -256,7 +256,7 @@ var AvailableVariablesByActionType = map[string][]string{
 		// Extra
 		"priority", "comments", "transition_comment",
 		// URLs
-		"incident_url", "sla_page_url",
+		"incident_url", "sla_page_url", "sla_page_link",
 	},
 }
 

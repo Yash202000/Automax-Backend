@@ -106,6 +106,7 @@ type Incident struct {
 	MasterIncidentID *uuid.UUID `gorm:"type:uuid;index;column:master_incident_id" json:"master_incident_id,omitempty"`
 	MasterIncident   *Incident  `gorm:"-" json:"master_incident,omitempty"`
 	MergedIncidents  []Incident `gorm:"-" json:"merged_incidents,omitempty"`
+	FeedbackID       *uuid.UUID `gorm:"-" json:"-"` // ephemeral: pre-created feedback record ID injected by ExecuteTransition on IsFinalClose
 	IsMerged         bool       `gorm:"default:false;index" json:"is_merged"`
 	MergedAt         *time.Time `json:"merged_at,omitempty"`
 	MergedByUserID   *uuid.UUID `gorm:"type:uuid" json:"merged_by_user_id,omitempty"`

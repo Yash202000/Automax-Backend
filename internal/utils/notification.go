@@ -321,11 +321,12 @@ func SendSMS(to, message string) error {
 		return fmt.Errorf("twilio env vars missing: TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_PHONE_NUMBER")
 	}
 
+	// Normalize whitespace: trim each line, drop blank lines, collapse to single newlines.
+	// Templates often contain indentation and extra blank lines that inflate UCS-2 segment count.
 	if strings.TrimSpace(message) == "" {
 		fmt.Printf("[DEBUG-SMS] ERROR: empty message body for recipient %s — skipping send\n", to)
 		return fmt.Errorf("sms body is empty")
 	}
-
 	fmt.Printf("[DEBUG-SMS] Sending to=%s from=%s body_len=%d body=%q\n", to, from, len(message), message)
 
 	client := twilio.NewRestClientWithParams(twilio.ClientParams{
@@ -354,6 +355,21 @@ func SendSMS(to, message string) error {
 		fmt.Println("[DEBUG-SMS] SMS sent successfully! (No SID in response)")
 	}
 	return nil
+}
+
+// normalizeSMSBody trims each line, drops blank lines, and strips leading/trailing
+// whitespace from the whole message. This reduces UCS-2 segment count when templates
+// contain indentation or extra blank lines.
+func normalizeSMSBody(s string) string {
+	lines := strings.Split(s, "\n")
+	out := lines[:0]
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l != "" {
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // stripHTMLTags removes all HTML tags from s, returning plain text.

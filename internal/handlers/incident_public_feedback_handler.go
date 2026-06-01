@@ -90,41 +90,50 @@ func (h *IncidentPublicFeedbackHandler) Init(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "Feedback initialized", resp)
 }
 
-// Submit handles PUT /api/v1/public-feedback/:incidentID/submit?signed_token=xxx (public, no auth).
+// Submit handles PUT /api/v1/public-feedback/:incidentID/submit (public, no auth).
+// Accepts either ?signed_token=<fb-token> or ?feedback_id=<uuid>.
+// When feedback_id is used, ownership is validated by the DB in the service layer.
 func (h *IncidentPublicFeedbackHandler) Submit(c *fiber.Ctx) error {
 	incidentID, err := uuid.Parse(c.Params("incidentID"))
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
 	}
 
+	var feedbackID uuid.UUID
+
 	token := c.Query("signed_token")
-	if token == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Missing signed token")
-	}
+	directFeedbackID := c.Query("feedback_id")
 
-	// Extract feedbackID from the raw token (format: fb|feedbackID|incidentID|expiresAt|hmac).
-	// ValidateFeedbackToken will re-verify the HMAC over the full payload including feedbackID,
-	// so any tampering causes ErrInvalid regardless of what we read here.
-	rawParts := strings.Split(token, "|")
-	if len(rawParts) != 5 {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Malformed token")
-	}
-	feedbackIDStr := rawParts[1]
-
-	feedbackID, err := uuid.Parse(feedbackIDStr)
-	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Malformed token")
-	}
-
-	if _, err := utils.ValidateFeedbackToken(token, feedbackIDStr, incidentID.String()); err != nil {
-		switch {
-		case errors.Is(err, utils.ErrExpired):
-			return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Token has expired")
-		case errors.Is(err, utils.ErrIDMismatch):
-			return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Token does not match this incident")
-		default:
-			return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Invalid token")
+	switch {
+	case token != "":
+		// Token-based path: validate fb-format signed token and extract feedbackID from it.
+		rawParts := strings.Split(token, "|")
+		if len(rawParts) != 5 {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Malformed token")
 		}
+		feedbackIDStr := rawParts[1]
+		feedbackID, err = uuid.Parse(feedbackIDStr)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Malformed token")
+		}
+		if _, err := utils.ValidateFeedbackToken(token, feedbackIDStr, incidentID.String()); err != nil {
+			switch {
+			case errors.Is(err, utils.ErrExpired):
+				return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Token has expired")
+			case errors.Is(err, utils.ErrIDMismatch):
+				return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Token does not match this incident")
+			default:
+				return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Invalid token")
+			}
+		}
+	case directFeedbackID != "":
+		// Direct feedback_id path: no token — DB validates that this feedback_id belongs to the incident.
+		feedbackID, err = uuid.Parse(directFeedbackID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid feedback ID")
+		}
+	default:
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Missing signed token or feedback ID")
 	}
 
 	var req models.IncidentPublicFeedbackSubmitRequest

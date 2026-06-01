@@ -143,6 +143,7 @@ type EmailConfig struct {
 	TemplateCode           string   `json:"template_code,omitempty"` // notification template code — overrides subject/body when set
 	SubjectTemplate        string   `json:"subject_template"`
 	BodyTemplate           string   `json:"body_template"`
+	Language               string   `json:"language,omitempty"`      // "ar" or "en"; defaults to "ar" when empty
 	IncludeIncidentDetails bool     `json:"include_incident_details"`
 	IncludeTransitionInfo  bool     `json:"include_transition_info"`
 	IncludeComments        bool     `json:"include_comments"`
@@ -192,8 +193,13 @@ func (e *actionExecutor) executeEmail(ctx context.Context, action *models.Transi
 		}
 	}
 
+	lang := config.Language
+	if lang == "" {
+		lang = "ar"
+	}
+
 	_, err := e.notificationService.SendNotification(
-		ctx, "email", templateCode, "en",
+		ctx, "email", templateCode, lang,
 		emails, nil, nil,
 		subject, body,
 		vars, nil, nil, nil,

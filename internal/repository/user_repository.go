@@ -201,7 +201,7 @@ func (r *userRepository) FindByPhoneWithRelations(ctx context.Context, phone str
 func (r *userRepository) FindByLast6Digits(ctx context.Context, last6Digits string) (*models.User, error) {
 	var user models.User
 	log.Printf("Query start: %s", last6Digits)
-	err := r.db.WithContext(ctx).Debug().Where("RIGHT(phone, 6) = ? AND is_active = ?", last6Digits, true).First(&user).Error
+	err := r.db.WithContext(ctx).Where("RIGHT(phone, 6) = ? AND is_active = ?", last6Digits, true).First(&user).Error
 	if err != nil {
 		return nil, err
 	}

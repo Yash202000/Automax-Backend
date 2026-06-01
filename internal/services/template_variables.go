@@ -55,6 +55,7 @@ func BuildIncidentVariables(
 		"longitude":    "",
 		"map_url":      "",
 		"location_url": "",
+		"map_link":     "",
 		// Comment aliases
 		"comment": "",
 		// SLA
@@ -62,7 +63,9 @@ func BuildIncidentVariables(
 		// Citizen-facing link (SMS_PORTAL_URL/incidents/{id}, falls back to FRONTEND_URL)
 		"sms_link": "",
 		// Citizen feedback link (SMS_PORTAL_URL/feedback/{id}?signed_token=...)
-		"feedback_url": "",
+		"feedback_url":  "",
+		"feedback_link": "",
+		"sla_page_link": "",
 		// Escalation-specific — empty by default; callers override
 		"hours_in_state":    "",
 		"sla_hours":         "",
@@ -87,20 +90,29 @@ func BuildIncidentVariables(
 	if frontendBase != "" {
 		vars["incident_url"] = frontendBase + "/incidents/" + incident.ID.String()
 		vars["sla_page_url"] = frontendBase + "/incidents?sla_breached=true"
+		vars["sla_page_link"] = fmt.Sprintf(`<a href="%s">SLA Breached Incidents</a>`, vars["sla_page_url"])
 	} else {
 		vars["incident_url"] = ""
 		vars["sla_page_url"] = ""
+		vars["sla_page_link"] = ""
 	}
 	if smsPortalBase != "" {
 		token := pkgutils.GenerateIncidentToken(incident.ID.String(), 24*time.Hour)
 		vars["sms_link"] = fmt.Sprintf("%s/ivr/incident/sms-link/%s?signed_token=%s",
 			smsPortalBase, incident.ID.String(), url.QueryEscape(token))
-		feedbackToken := pkgutils.GenerateIncidentToken(incident.ID.String(), 7*24*time.Hour)
-		vars["feedback_url"] = fmt.Sprintf("%s/feedback/%s?signed_token=%s",
-			smsPortalBase, incident.ID.String(), url.QueryEscape(feedbackToken))
+		if incident.FeedbackID != nil {
+			vars["feedback_url"] = fmt.Sprintf("%s/feedback/%s?feedback_id=%s",
+				smsPortalBase, incident.ID.String(), incident.FeedbackID.String())
+		} else {
+			feedbackToken := pkgutils.GenerateIncidentToken(incident.ID.String(), feedbackTokenDuration)
+			vars["feedback_url"] = fmt.Sprintf("%s/feedback/%s?signed_token=%s",
+				smsPortalBase, incident.ID.String(), feedbackToken)
+		}
+		vars["feedback_link"] = fmt.Sprintf(`<a href="%s">تقييم الخدمة</a>`, vars["feedback_url"])
 	} else {
 		vars["sms_link"] = ""
 		vars["feedback_url"] = ""
+		vars["feedback_link"] = ""
 	}
 
 	// Dates
@@ -123,6 +135,7 @@ func BuildIncidentVariables(
 		mapURL := fmt.Sprintf("http://maps.google.com/?q=%f,%f", *incident.Latitude, *incident.Longitude)
 		vars["map_url"] = mapURL
 		vars["location_url"] = mapURL
+		vars["map_link"] = fmt.Sprintf(`<a href="%s">View on Map</a>`, mapURL)
 	}
 
 	// Classification
