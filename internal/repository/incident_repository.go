@@ -336,6 +336,7 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		Preload("Classification").
 		Preload("TransitionHistory").
 		Preload("TransitionHistory.PerformedBy").
+		Preload("Reporter").
 		Preload("Workflow").
 		Preload("CurrentState").
 		Preload("Assignee").
