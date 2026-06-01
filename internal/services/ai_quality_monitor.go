@@ -74,7 +74,6 @@ func (m *aiQualityMonitor) Start(ctx context.Context) {
 		return
 	}
 	m.running = true
-	log.Printf("[AIQualityMonitor] Started — interval: %v, endpoint: %s", m.interval, m.cfg.APIEndpoint)
 
 	go func() {
 		if err := m.ProcessAIQualityChecks(ctx); err != nil {
@@ -127,11 +126,8 @@ func (m *aiQualityMonitor) ProcessAIQualityChecks(ctx context.Context) error {
 		return nil
 	}
 
-	log.Printf("[AIQualityMonitor] Found %d pending incident(s)", len(incidents))
-
 	for i := range incidents {
 		inc := &incidents[i]
-		log.Printf("[AIQualityMonitor] Processing incident %s (%s)", inc.IncidentNumber, inc.ID)
 		if err := m.processIncident(ctx, inc); err != nil {
 			log.Printf("[AIQualityMonitor] ERROR — incident %s: %v", inc.IncidentNumber, err)
 			// Continue with the next incident; one failure must not block others.
@@ -179,15 +175,15 @@ type incidentAssessment struct {
 // values — they auto-detect the format and return the correct field.
 type aiQualityAPIResponse struct {
 	// ── v1 (legacy) fields ────────────────────────────────────────────────────
-	ChangeSummary    string           `json:"change_summary"`
-	ResolutionStatus string           `json:"resolution_status"`
-	Confidence       float64          `json:"confidence"`
-	ReasoningPoints  []string         `json:"reasoning_points"`
-	RiskFlags        []string         `json:"risk_flags"`
-	CoordinatesCheck coordinatesCheck `json:"coordinates_check"`
-	CoordinateDiff   coordinateDiff   `json:"coordinate_diff"`
-	IncidentType     string           `json:"incident_type"`
-	SameScene        sameSceneCheck   `json:"same_scene"`
+	ChangeSummary    string             `json:"change_summary"`
+	ResolutionStatus string             `json:"resolution_status"`
+	Confidence       float64            `json:"confidence"`
+	ReasoningPoints  []string           `json:"reasoning_points"`
+	RiskFlags        []string           `json:"risk_flags"`
+	CoordinatesCheck coordinatesCheck   `json:"coordinates_check"`
+	CoordinateDiff   coordinateDiff     `json:"coordinate_diff"`
+	IncidentType     string             `json:"incident_type"`
+	SameScene        sameSceneCheck     `json:"same_scene"`
 	BeforeAssessment incidentAssessment `json:"before_assessment"`
 	AfterAssessment  incidentAssessment `json:"after_assessment"`
 
@@ -299,9 +295,6 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 		return imageAttachments[i].CreatedAt.Before(imageAttachments[j].CreatedAt)
 	})
 
-	log.Printf("[AIQualityMonitor] incident=%s total_attachments=%d image_attachments=%d",
-		incident.IncidentNumber, len(incident.Attachments), len(imageAttachments))
-
 	if len(imageAttachments) == 0 {
 		return fmt.Errorf("no image attachments found — before_image is required")
 	}
@@ -327,10 +320,6 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 	beforeCoords := formatCoords(incident.Latitude, incident.Longitude)
 	afterCoords := beforeCoords // same location reference; override if resolver coords are stored elsewhere
 
-	log.Printf("[AIQualityMonitor] incident=%s userComment=%q resolverComment=%q coords=%q",
-		incident.IncidentNumber, truncate(userComment, 80),
-		truncate(resolverComment, 80), beforeCoords)
-
 	// Build multipart body.
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -354,7 +343,6 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 		writer.Close()
 		return fmt.Errorf("before_image (%s): %w", beforeAtt.FileName, err)
 	}
-	log.Printf("[AIQualityMonitor] incident=%s before_image=%s (mime=%s)", incident.IncidentNumber, beforeAtt.FileName, beforeAtt.MimeType)
 
 	// after_image — newest image attachment (only when there are at least two images).
 	if len(imageAttachments) >= 2 {
@@ -363,31 +351,20 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 			writer.Close()
 			return fmt.Errorf("after_image (%s): %w", afterAtt.FileName, err)
 		}
-		log.Printf("[AIQualityMonitor] incident=%s after_image=%s (mime=%s)", incident.IncidentNumber, afterAtt.FileName, afterAtt.MimeType)
+
 	} else {
 		log.Printf("[AIQualityMonitor] incident=%s only one image attachment — after_image not sent", incident.IncidentNumber)
 	}
 
 	writer.Close() // must close before reading body
 
-	// Log the full payload summary before sending.
-	log.Printf("[AIQualityMonitor] incident=%s === PAYLOAD SUMMARY ===", incident.IncidentNumber)
-	log.Printf("[AIQualityMonitor]   user_comment      = %q", truncate(userComment, 200))
-	log.Printf("[AIQualityMonitor]   resolver_comment   = %q", truncate(resolverComment, 200))
-	log.Printf("[AIQualityMonitor]   before_coordinates = %q", beforeCoords)
-	log.Printf("[AIQualityMonitor]   after_coordinates  = %q", afterCoords)
-	log.Printf("[AIQualityMonitor]   before_image: id=%s name=%s mime=%s path=%s size=%d",
-		beforeAtt.ID, beforeAtt.FileName, beforeAtt.MimeType, beforeAtt.FilePath, beforeAtt.FileSize)
 	if len(imageAttachments) >= 2 {
 		afterAtt := imageAttachments[len(imageAttachments)-1]
 		log.Printf("[AIQualityMonitor]   after_image:  id=%s name=%s mime=%s path=%s size=%d",
 			afterAtt.ID, afterAtt.FileName, afterAtt.MimeType, afterAtt.FilePath, afterAtt.FileSize)
 	}
-	log.Printf("[AIQualityMonitor]   total_payload_bytes = %d", body.Len())
-	log.Printf("[AIQualityMonitor] === END PAYLOAD ===")
 
 	// Call the AI API.
-	log.Printf("[AIQualityMonitor] incident=%s calling API endpoint: %s", incident.IncidentNumber, m.cfg.APIEndpoint)
 	apiResp, rawBody, err := m.callAIAPI(ctx, body, writer.FormDataContentType())
 	if err != nil {
 		return fmt.Errorf("AI API call: %w", err)
@@ -439,7 +416,6 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 	if err := m.feedbackRepo.Create(ctx, feedback); err != nil {
 		return fmt.Errorf("save AIQualityFeedback: %w", err)
 	}
-	log.Printf("[AIQualityMonitor] incident=%s saved feedback id=%s", incident.IncidentNumber, feedback.ID)
 
 	// Update the incident: mark as AI-verified and apply the AI-derived change summary.
 	updates := map[string]interface{}{
@@ -464,7 +440,6 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 // writeFileField downloads the attachment from MinIO and writes it as a multipart file field.
 // If the MinIO object is not found it falls back to downloading via the attachment preview API.
 func (m *aiQualityMonitor) writeFileField(ctx context.Context, writer *multipart.Writer, field string, att models.IncidentAttachment) error {
-	log.Printf("[AIQualityMonitor] writeFileField: field=%s fileName=%s filePath=%s", field, att.FileName, att.FilePath)
 
 	part, err := writer.CreateFormFile(field, att.FileName)
 	if err != nil {
@@ -499,9 +474,6 @@ func (m *aiQualityMonitor) writeFileFieldViaURL(ctx context.Context, part io.Wri
 	}
 
 	attachURL := utils.GenerateAttachmentURL(m.cfg.AppProtocol, m.cfg.AppHost, att.ID.String(), token)
-	log.Printf("[AIQualityMonitor] fetching attachment via API: protocol=%s host=%s id=%s", m.cfg.AppProtocol, m.cfg.AppHost, att.ID)
-	log.Println("[AIQualityMonitor] WARNING: using API fallback for attachment download is slower and should be avoided in production — consider setting up APP_TOKEN or ensuring MinIO availability")
-	log.Println("Attachment URL:", attachURL)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, attachURL, nil)
 	if err != nil {
 		return fmt.Errorf("build fallback request: %w", err)
@@ -545,8 +517,6 @@ func (m *aiQualityMonitor) callAIAPI(ctx context.Context, body *bytes.Buffer, co
 	if err != nil {
 		return nil, nil, fmt.Errorf("read response body: %w", err)
 	}
-
-	log.Printf("[AIQualityMonitor] API HTTP %d — body: %s", resp.StatusCode, truncate(string(rawBody), 500))
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, nil, fmt.Errorf("API returned HTTP %d: %s", resp.StatusCode, string(rawBody))

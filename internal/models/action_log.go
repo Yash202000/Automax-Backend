@@ -42,6 +42,7 @@ type ActionLogFilter struct {
 	StartDate  *time.Time `query:"-"          json:"start_date" validate:"omitempty"`
 	EndDate    *time.Time `query:"-"          json:"end_date"   validate:"omitempty"`
 	Search     string     `query:"search"     json:"search"     validate:"omitempty"`
+	Sort       string     `query:"sort"       json:"sort"       validate:"omitempty,oneof=asc desc"`
 	Page       int        `query:"page"       json:"page"       validate:"omitempty,gte=1"`
 	Limit      int        `query:"limit"      json:"limit"      validate:"omitempty,gte=1,lte=100"`
 }
