@@ -157,6 +157,7 @@ func main() {
 	incidentService.SetUserService(userService)
 	incidentService.SetFCMService(fcmService)
 	incidentService.SetActionExecutor(services.NewActionExecutor(incidentRepo, userRepo, notificationService))
+	incidentService.SetPublicFeedbackRepo(publicFeedbackRepo)
 
 	// External Integration
 	integrationRepo := repository.NewIntegrationRepository(db)

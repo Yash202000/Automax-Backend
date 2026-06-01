@@ -361,7 +361,7 @@ func (r *incidentRepository) FindByIDWithLast6DigitValidation(
 
 	var incident models.Incident
 
-	err := r.db.WithContext(ctx).Debug().
+	err := r.db.WithContext(ctx).
 		Preload("CurrentState").
 		Preload("Workflow").
 		Joins("JOIN users ON users.id = incidents.reporter_id").
@@ -485,7 +485,7 @@ func (r *incidentRepository) CreateTransitionHistory(ctx context.Context, histor
 
 func (r *incidentRepository) GetTransitionHistory(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentTransitionHistory, error) {
 	var history []models.IncidentTransitionHistory
-	err := r.db.WithContext(ctx).Debug().
+	err := r.db.WithContext(ctx).
 		Preload("Transition").
 		Preload("FromState").
 		Preload("ToState").
@@ -1402,7 +1402,7 @@ func (r *incidentRepository) ListFeedback(ctx context.Context, incidentID uuid.U
 
 func (r *incidentRepository) ListAllFeedback(ctx context.Context) ([]models.IncidentFeedback, error) {
 	var feedback []models.IncidentFeedback
-	err := r.db.WithContext(ctx).Debug().
+	err := r.db.WithContext(ctx).
 		Preload("CreatedBy").
 		Preload("Incident").
 		Order("created_at DESC").
@@ -1434,7 +1434,7 @@ func (r *incidentRepository) UpdateFieldsWithVersion(ctx context.Context, id uui
 	updates["version"] = expectedVersion + 1
 	updates["updated_at"] = time.Now()
 
-	result := r.db.WithContext(ctx).Debug().
+	result := r.db.WithContext(ctx).
 		Model(&models.Incident{}).
 		Where("id = ? AND version = ?", id, expectedVersion).
 		Updates(updates)

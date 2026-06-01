@@ -101,6 +101,9 @@ type IncidentService interface {
 	SetIntegrationExecutor(exec IntegrationExecutor)
 	// SetActionExecutor wires in the ActionExecutor (called post-construction).
 	SetActionExecutor(ae ActionExecutor)
+	// SetPublicFeedbackRepo wires in the feedback repo so IsFinalClose transitions can
+	// pre-create a feedback record and embed a direct GenerateFeedbackToken URL in the SMS.
+	SetPublicFeedbackRepo(repo repository.IncidentPublicFeedbackRepository)
 
 	// Closed incident editing
 	UpdateClosedIncidentSummary(ctx context.Context, incidentID uuid.UUID, userID uuid.UUID, newDescription string, reason string) (*models.IncidentResponse, error)
@@ -124,6 +127,7 @@ type incidentService struct {
 	fcmService          *FCMService
 	integrationExecutor IntegrationExecutor
 	actionExecutor      ActionExecutor
+	publicFeedbackRepo  repository.IncidentPublicFeedbackRepository
 	rrCounters          map[string]int64
 	rrMu                sync.Mutex
 }
@@ -185,6 +189,10 @@ func (s *incidentService) SetIntegrationExecutor(exec IntegrationExecutor) {
 
 func (s *incidentService) SetActionExecutor(ae ActionExecutor) {
 	s.actionExecutor = ae
+}
+
+func (s *incidentService) SetPublicFeedbackRepo(repo repository.IncidentPublicFeedbackRepository) {
+	s.publicFeedbackRepo = repo
 }
 
 // calculateSLADeadline calculates the SLA deadline based on classification criticality.
@@ -3507,6 +3515,26 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		return nil, err
 	}
 
+	// IsFinalClose: pre-create a pending feedback record so BuildIncidentVariables can call
+	// GenerateFeedbackToken with a real feedbackID, producing a direct submit URL in {{feedback_url}}.
+	if transition.IsFinalClose && s.publicFeedbackRepo != nil {
+		mobileNo := updated.ReporterPhone
+		if mobileNo == "" && updated.Reporter != nil {
+			mobileNo = updated.Reporter.Phone
+		}
+		f := &models.IncidentPublicFeedback{
+			IncidentID: incidentID,
+			MobileNo:   mobileNo,
+			Source:     "sms",
+			CreatedBy:  userID,
+		}
+		if err := s.publicFeedbackRepo.Create(ctx, f); err == nil {
+			updated.FeedbackID = &f.ID
+		} else {
+			log.Printf("[ExecuteTransition] failed to pre-create feedback record for IsFinalClose incident %s: %v", incidentID, err)
+		}
+	}
+
 	// Execute automation actions configured on this transition.
 	// Uses the fully-preloaded incident so recipient fields (Assignee.Email, Reporter.Email, etc.) are available.
 	if s.actionExecutor != nil && len(transition.Actions) > 0 {
@@ -5451,4 +5479,3 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 		log.Printf("MISSING-INFO-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
 	}
 }
-
