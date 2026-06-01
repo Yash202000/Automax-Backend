@@ -105,7 +105,7 @@ func (r *aiQualityFeedbackRepository) SetReopened(ctx context.Context, incidentI
 // Comments are preloaded ordered newest-first so index 0 = the latest resolver comment.
 func (r *aiQualityFeedbackRepository) FindPendingIncidents(ctx context.Context) ([]models.Incident, error) {
 	var incidents []models.Incident
-	err := r.db.WithContext(ctx).Debug().
+	err := r.db.WithContext(ctx).
 		Preload("CurrentState").
 		Preload("Attachments", func(db *gorm.DB) *gorm.DB {
 			return db.Order("created_at ASC")
