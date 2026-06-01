@@ -549,6 +549,10 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 		fieldMap = incidentFilterFields
 	}
 
+	// Resolve user timezone for interpreting datetime-local filter values
+	tzStr, _ := ctx.Value(constants.ContextKeys.REPORT_TIMEZONE).(string)
+	loc := utils.ResolveTimezone(tzStr)
+
 	for _, f := range filters {
 		log.Printf("field %s datasource %s value %s", f.Field, dataSource, f.Value)
 		col, ok := fieldMap[f.Field]
@@ -579,13 +583,13 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 		case "ends_with":
 			query = query.Where(col+" ILIKE ?", "%"+f.Value.(string))
 		case "gt":
-			query = query.Where(col+" > ?", f.Value)
+			query = query.Where(col+" > ?", parseDateOrPassthrough(f.Value, loc))
 		case "lt":
-			query = query.Where(col+" < ?", f.Value)
+			query = query.Where(col+" < ?", parseDateOrPassthrough(f.Value, loc))
 		case "gte":
-			query = query.Where(col+" >= ?", f.Value)
+			query = query.Where(col+" >= ?", parseDateOrPassthrough(f.Value, loc))
 		case "lte":
-			query = query.Where(col+" <= ?", f.Value)
+			query = query.Where(col+" <= ?", parseDateOrPassthrough(f.Value, loc))
 		case "in":
 			query = query.Where(col+" IN ?", f.Value)
 		case "is_null":
@@ -596,8 +600,8 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 			if m, ok := f.Value.(map[string]interface{}); ok {
 				fromStr, _ := m["from"].(string)
 				toStr, _ := m["to"].(string)
-				from, err1 := time.Parse(time.RFC3339, fromStr)
-				to, err2 := time.Parse(time.RFC3339, toStr)
+				from, err1 := parseDateFlexible(fromStr, loc)
+				to, err2 := parseDateFlexible(toStr, loc)
 				if err1 == nil && err2 == nil {
 					query = query.Where(col+" BETWEEN ? AND ?", from, to)
 				}
@@ -605,6 +609,54 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 		}
 	}
 	return query
+}
+
+// parseDateOrPassthrough tries to parse a string value as a date/datetime.
+// If successful, returns the parsed time.Time (timezone-aware). Otherwise
+// returns the original value unchanged (for non-date comparisons like numbers).
+func parseDateOrPassthrough(v interface{}, loc *time.Location) interface{} {
+	s, ok := v.(string)
+	if !ok {
+		return v
+	}
+	if t, err := parseDateFlexible(s, loc); err == nil {
+		return t
+	}
+	return v
+}
+
+// parseDateFlexible parses date strings in multiple formats:
+// RFC3339 (has timezone offset), datetime-local (from HTML input, no timezone),
+// and plain date. For formats without timezone info, the value is interpreted
+// in the provided location (user's timezone) so that filter queries match the
+// user's intended local time.
+func parseDateFlexible(s string, loc *time.Location) (time.Time, error) {
+	// Formats with timezone info — parse as-is
+	tzFormats := []string{
+		time.RFC3339,
+		"2006-01-02T15:04:05.999999999Z07:00",
+	}
+	for _, f := range tzFormats {
+		if t, err := time.Parse(f, s); err == nil {
+			return t, nil
+		}
+	}
+
+	// Formats without timezone info — interpret in user's timezone
+	if loc == nil {
+		loc = time.UTC
+	}
+	localFormats := []string{
+		"2006-01-02T15:04:05",
+		"2006-01-02T15:04",
+		"2006-01-02",
+	}
+	for _, f := range localFormats {
+		if t, err := time.ParseInLocation(f, s, loc); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unsupported date format: %s", s)
 }
 
 func (r *reportRepository) applySorting(query *gorm.DB, sorting *models.ReportSortConfig) *gorm.DB {

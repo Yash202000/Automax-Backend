@@ -138,6 +138,7 @@ type ReportExportRequest struct {
 	Filters    []ReportFilterConfig `json:"filters"`
 	Sorting    []ReportSortConfig   `json:"sorting"`
 	Format     string               `json:"format" validate:"required,oneof=xlsx pdf json"`
+	Timezone   string               `json:"timezone"` // IANA timezone e.g. "Asia/Kolkata", "Asia/Riyadh"
 	Options    *ReportExportOptions `json:"options"`
 }
 
@@ -145,6 +146,7 @@ type ReportExportOptions struct {
 	Title            string `json:"title"`
 	IncludeFilters   bool   `json:"includeFilters"`
 	IncludeTimestamp bool   `json:"includeTimestamp"`
+	Timezone         string `json:"timezone"` // IANA timezone e.g. "Asia/Kolkata", "Asia/Riyadh"
 }
 
 // ReportQueryRequest is used for ad-hoc report queries without saving
@@ -155,6 +157,7 @@ type ReportQueryRequest struct {
 	Sorting    []ReportSortConfig   `json:"sorting"`
 	Page       int                  `json:"page"`
 	Limit      int                  `json:"limit"`
+	Timezone   string               `json:"timezone"` // IANA timezone e.g. "Asia/Kolkata", "Asia/Riyadh"
 	Options    *ReportQueryOptions  `json:"options"`
 }
 

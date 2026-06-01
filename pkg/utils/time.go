@@ -5,6 +5,19 @@ import (
 	"time"
 )
 
+// ResolveTimezone returns the *time.Location for the given IANA timezone name.
+// Falls back to UTC if the timezone is empty or invalid.
+func ResolveTimezone(tz string) *time.Location {
+	if tz == "" {
+		return time.UTC
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		return time.UTC
+	}
+	return loc
+}
+
 func parseTimeFlexible(t string) (time.Time, error) {
 	formats := []string{
 		time.RFC3339,                              // 2006-01-02T15:04:05Z07:00

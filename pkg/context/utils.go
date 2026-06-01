@@ -20,3 +20,10 @@ func WithReportColumns(ctx context.Context, columns []models.ColumnField) contex
 func WithReportDataSource(ctx context.Context, dataSource string) context.Context {
 	return context.WithValue(ctx, constants.ContextKeys.REPORT_DATA_SOURCE, dataSource)
 }
+
+// WithReportTimezone returns a derived context that carries the user's IANA
+// timezone (e.g. "Asia/Kolkata") so applyFilters can interpret datetime-local
+// filter values in the correct timezone.
+func WithReportTimezone(ctx context.Context, timezone string) context.Context {
+	return context.WithValue(ctx, constants.ContextKeys.REPORT_TIMEZONE, timezone)
+}

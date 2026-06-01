@@ -17,6 +17,7 @@ import (
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/fonts"
+	"github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 	"github.com/jung-kurt/gofpdf"
 	"github.com/xuri/excelize/v2"
@@ -331,11 +332,19 @@ func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExpo
 		title = resolveTitle(title, req.DataSource, lang)
 	}
 
+	// Resolve user timezone for timestamps and date values
+	var tz string
+	if req.Options != nil {
+		tz = req.Options.Timezone
+	}
+	loc := utils.ResolveTimezone(tz)
+	convertDataTimezone(data, loc)
+
 	filename := "Report"
 	if req.DataSource != "" {
 		filename = cases.Title(language.English).String(req.DataSource) + "_Report"
 	}
-	filename += "_" + time.Now().Format("2006-01-02_150405")
+	filename += "_" + time.Now().In(loc).Format("2006-01-02_150405")
 	log.Printf("Exporting report with title: %s, filename: %s", title, filename)
 	filters := s.buildFilterDisplay(ctx, req.Filters)
 	if req.Format == "xlsx" {
@@ -563,10 +572,11 @@ func (s *reportService) generateExcel(
 		currentRow += 2 // blank row before timestamp
 	}
 
-	// ── Timestamp ─────────────────────────────────────────────────────────
+	// ── Timestamp (uses user timezone) ────────────────────────────────────
 	if options != nil && options.IncludeTimestamp {
+		loc := utils.ResolveTimezone(options.Timezone)
 		f.SetCellValue(sheet, "A"+strconv.Itoa(currentRow),
-			fmt.Sprintf("Generated: %s", time.Now().Format("2006-01-02 15:04:05")))
+			fmt.Sprintf("Generated: %s", time.Now().In(loc).Format("2006-01-02 15:04:05")))
 	}
 
 	// ── Output ────────────────────────────────────────────────────────────
@@ -836,11 +846,12 @@ func (s *reportService) generatePDF(
 	pdf.Ln(3)
 
 	// ── Timestamp ────────────────────────────────────────────────────────────
-	// ── Timestamp ────────────────────────────────────────────────────────────────
+	// ── Timestamp (uses user timezone) ───────────────────────────────────────────
 	if options != nil && options.IncludeTimestamp {
+		loc := utils.ResolveTimezone(options.Timezone)
 		setFont("", 9, "")
 		pdf.SetTextColor(128, 128, 128)
-		pdf.CellFormat(0, 6, fmt.Sprintf("Generated: %s", time.Now().Format("2006-01-02 15:04:05")), "", 1, "C", false, 0, "")
+		pdf.CellFormat(0, 6, fmt.Sprintf("Generated: %s", time.Now().In(loc).Format("2006-01-02 15:04:05")), "", 1, "C", false, 0, "")
 		pdf.SetTextColor(0, 0, 0)
 		pdf.Ln(3)
 	}
@@ -1088,6 +1099,11 @@ func formatValue(v interface{}) string {
 	switch val := v.(type) {
 	case string:
 		return val
+	case time.Time:
+		if val.IsZero() {
+			return ""
+		}
+		return val.Format("2006-01-02 15:04:05")
 	case float64:
 		if val == float64(int64(val)) {
 			return strconv.FormatInt(int64(val), 10)
@@ -1106,6 +1122,18 @@ func formatValue(v interface{}) string {
 		return ""
 	default:
 		return fmt.Sprintf("%v", val)
+	}
+}
+
+// convertDataTimezone converts all time.Time values in report data to the given timezone.
+// Called once before rendering so all formatters automatically use the correct timezone.
+func convertDataTimezone(data []map[string]interface{}, loc *time.Location) {
+	for _, row := range data {
+		for k, v := range row {
+			if t, ok := v.(time.Time); ok {
+				row[k] = t.In(loc)
+			}
+		}
 	}
 }
 
@@ -1286,10 +1314,22 @@ func formatFilterValue(operator string, value interface{}) string {
 	}
 }
 
-// cleanDateStr strips time from ISO timestamps: "2026-04-26T00:00:00.000Z" -> "2026-04-26"
+// cleanDateStr formats a date/datetime string for display in the report filter section.
+// Handles datetime-local ("2026-06-01T00:01"), ISO ("2026-06-01T00:01:00.000Z"),
+// and plain date ("2026-06-01") formats.
 func cleanDateStr(s string) string {
 	if idx := strings.Index(s, "T"); idx != -1 {
-		return s[:idx]
+		timePart := s[idx+1:]
+		// Strip trailing Z and fractional seconds for cleaner display
+		timePart = strings.TrimSuffix(timePart, "Z")
+		if dotIdx := strings.Index(timePart, "."); dotIdx != -1 {
+			timePart = timePart[:dotIdx]
+		}
+		// If time is midnight (00:00 or 00:00:00), show date only
+		if timePart == "00:00" || timePart == "00:00:00" {
+			return s[:idx]
+		}
+		return s[:idx] + " " + timePart
 	}
 	return s
 }
