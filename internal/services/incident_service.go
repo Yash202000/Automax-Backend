@@ -104,6 +104,8 @@ type IncidentService interface {
 	// SetPublicFeedbackRepo wires in the feedback repo so IsFinalClose transitions can
 	// pre-create a feedback record and embed a direct GenerateFeedbackToken URL in the SMS.
 	SetPublicFeedbackRepo(repo repository.IncidentPublicFeedbackRepository)
+	// SetIvrSmsLinkRepo wires in the IvrSmsLinkRepository (called post-construction).
+	SetIvrSmsLinkRepo(repo repository.IvrSmsLinkRepository)
 
 	// Closed incident editing
 	UpdateClosedIncidentSummary(ctx context.Context, incidentID uuid.UUID, userID uuid.UUID, newDescription string, reason string) (*models.IncidentResponse, error)
@@ -128,6 +130,7 @@ type incidentService struct {
 	integrationExecutor IntegrationExecutor
 	actionExecutor      ActionExecutor
 	publicFeedbackRepo  repository.IncidentPublicFeedbackRepository
+	ivrSmsLinkRepo      repository.IvrSmsLinkRepository
 	rrCounters          map[string]int64
 	rrMu                sync.Mutex
 }
@@ -175,6 +178,11 @@ func (s *incidentService) SetNotificationService(ns *NotificationService) {
 // SetUserService wires the UserService into the incident service.
 func (s *incidentService) SetUserService(us UserService) {
 	s.userService = us
+}
+
+// SetIvrSmsLinkRepo wires the IvrSmsLinkRepository into the incident service.
+func (s *incidentService) SetIvrSmsLinkRepo(repo repository.IvrSmsLinkRepository) {
+	s.ivrSmsLinkRepo = repo
 }
 
 // SetFCMService wires the FCMService into the incident service.
@@ -746,25 +754,33 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		})
 	}
 
-	IvrInstSms := strings.TrimSpace(os.Getenv("IVR_INST_SMS"))
+	// IvrInstSms := strings.TrimSpace(os.Getenv("IVR_INST_SMS"))
 	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.IVR) &&
-		strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) &&
-		strings.EqualFold(IvrInstSms, constants.CLIENT_CODE.IVR_INST_SMS) {
-		// send notification to IVR user about incident creation via sms
-		// in phase 4 we can add more details in the sms and also add notification in the app
-		// add columns like NotificationSent bool, NotificationSentAt time.Time in the incident table to track this
+		strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
 
-		// url := pkgutils.GenerateAppURL(ctx)
+		// const ivrSmsDuration = 24 * time.Hour
+		// rawToken := pkgutils.GenerateIncidentToken(incident.ID.String(), ivrSmsDuration)
+		// smsLink := pkgutils.BuildSMSLinkFromToken(ctx, incident.ID.String(), rawToken)
+		// log.Printf("Generated IVR SMS link for incident %s", incident.ID)
 
-		// log.Printf("Generate Signed url: %s", utils.GenerateIncidentToken(incident.ID.String(), 24*time.Hour))
-		signed_token := pkgutils.GenerateIncidentToken(incident.ID.String(), 24*time.Hour)
-		log.Printf("Generated signed token for IVR incident: %s", signed_token)
-		// smsLink := fmt.Sprintf("%s/ivr/incident/sms-link/%s?signed_token=%s", url, incident.ID.String(), signed_token)
-		smsLink := pkgutils.BuildSMSLink(ctx, incident.ID.String(), 24*time.Hour)
+		// // Track link so old links can be invalidated and submission state can be detected.
+		// if s.ivrSmsLinkRepo != nil {
+		// 	_ = s.ivrSmsLinkRepo.DeactivateAllForIncident(ctx, incident.ID)
+		// 	_ = s.ivrSmsLinkRepo.Create(ctx, &models.IvrSmsLink{
+		// 		IncidentID: incident.ID,
+		// 		TokenHash:  pkgutils.HashToken(rawToken),
+		// 		SentAt:     time.Now(),
+		// 		ExpiresAt:  time.Now().Add(ivrSmsDuration),
+		// 		IsActive:   true,
+		// 	})
+		// }
 
 		var sent []string
+		if req.ReporterPhone == "" {
+			log.Printf("[IncidentService] No reporter phone for IVR incident %s, skipping SMS", incident.ID)
+		}
 		if req.ReporterPhone != "" {
-			smsBody := fmt.Sprintf("Dear Citizen, please provide additional details for your reported incident (%s) using the following secure link: %s", incident.IncidentNumber, smsLink)
+			smsBody := fmt.Sprintf("Thank you, for contacting Easter Province Muncipality. Your Incident(%s) has been created", incident.IncidentNumber)
 			_, err := s.notificationService.SendNotification(
 				ctx,
 				"sms",
@@ -781,13 +797,17 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 				nil,
 			)
 			if err != nil {
-				log.Printf("[EscalationService] SMS failed for %s: %v", req.ReporterPhone, err)
+				log.Printf("[IncidentService] SMS failed for %s: %v", req.ReporterPhone, err)
 			} else {
 				sent = append(sent, "SMS")
 			}
 		}
 		log.Printf("IVR incident created with ID %s, SMS sent: %v", incident.ID, sent)
-		log.Println("ivr sms link send: ", smsLink)
+		// log.Println("ivr sms link send: ", smsLink)
+
+		// Log revision so agents can see when the initial SMS was sent.
+		_ = s.CreateRevision(ctx, incident.ID, models.RevisionActionIVRSmsSent,
+			"IVR SMS sent to citizen on incident creation", nil, reporterID)
 	}
 
 	// Send template-based email/SMS notifications for the initial state (if configured)
@@ -925,11 +945,10 @@ func (s *incidentService) FindByIDWithLast6DigitValidation(ctx context.Context, 
 	if incident == nil || incident.ID == uuid.Nil {
 		return nil, errors.New("invalid incident")
 	}
-	log.Println("incident fetch via last 6 digit  ")
-
-	if incident.Latitude != nil || incident.Longitude != nil || incident.Version > 1 || incident.ReporterID == nil {
-		return nil, errors.New("incident has already updated location or has been updated since creation, cannot validate with last 6 digits")
+	if incident.ReporterID == nil {
+		return nil, errors.New("invalid incident")
 	}
+	log.Println("incident fetch via last 6 digit")
 
 	resp := &models.IncidentResponse{
 		ID:             incident.ID,
@@ -974,6 +993,31 @@ func (s *incidentService) ListIncidents(ctx context.Context, filter *models.Inci
 		if s.incidentMergeRepo != nil {
 			mergedIncidents, _ := s.incidentMergeRepo.GetMergedIncidents(ctx, inc.ID)
 			responses[i].MergedIncidentsCount = len(mergedIncidents)
+		}
+	}
+
+	// For EPM940: enrich IVR incidents with SMS link submission state.
+	// Collect IVR incident IDs, do a single batch lookup, then stamp each response.
+	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+	if strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) && s.ivrSmsLinkRepo != nil {
+		var ivrIDs []uuid.UUID
+		ivrIdx := make(map[uuid.UUID]int, len(incidents))
+		for i, inc := range incidents {
+			if strings.EqualFold(inc.Source, constants.INCIDENT_SOURCE.IVR) {
+				ivrIDs = append(ivrIDs, inc.ID)
+				ivrIdx[inc.ID] = i
+			}
+		}
+		if len(ivrIDs) > 0 {
+			submittedLinks, err := s.ivrSmsLinkRepo.FindSubmittedByIncidentIDs(ctx, ivrIDs)
+			if err == nil {
+				for incID, idx := range ivrIdx {
+					if link, ok := submittedLinks[incID]; ok {
+						responses[idx].IvrSubmitted = true
+						responses[idx].IvrSubmittedAt = link.SubmittedAt
+					}
+				}
+			}
 		}
 	}
 
@@ -1319,10 +1363,6 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		updates["sla_deadline"] = *incident.SLADeadline
 		updates["sla_breached"] = incident.SLABreached
 	}
-	if strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
-		// For IVR updates from EPM940, mark source as sms-link so downstream logic tracks origin correctly.
-		updates["source"] = constants.INCIDENT_SOURCE.SMS_LINK
-	}
 	log.Println(len(updates), len(changes))
 	if len(updates) == 0 || len(changes) == 0 {
 		tx.Rollback()
@@ -1394,7 +1434,34 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		log.Printf("No Assignees found for incident Number %s incident no. %s", incident.IncidentNumber, incident.ID.String())
 	}
 
-	// Only give notification for IVR updates from EPM940 based on req.
+	// Mark SMS link as submitted whenever the citizen forwards their ivr_link_token.
+	// This runs regardless of the source field — the token presence is the definitive signal.
+	if req.IvrLinkToken != "" && s.ivrSmsLinkRepo != nil {
+		var linkID uuid.UUID
+		tokenHash := pkgutils.HashToken(req.IvrLinkToken)
+		log.Printf("[IVR] looking up link by token hash %s for incident %s", tokenHash, id)
+		if link, err := s.ivrSmsLinkRepo.FindByTokenHash(ctx, tokenHash, id); err == nil && link != nil {
+			linkID = link.ID
+		} else {
+			log.Printf("[IVR] token hash lookup failed (%v), falling back to latest active link", err)
+			if link, err := s.ivrSmsLinkRepo.FindLatestActiveByIncidentID(ctx, id); err == nil && link != nil {
+				linkID = link.ID
+			}
+		}
+		if linkID != uuid.Nil {
+			if err := s.ivrSmsLinkRepo.MarkSubmitted(ctx, linkID, updated.ReporterPhone); err != nil {
+				log.Printf("[IVR] MarkSubmitted failed for link %s: %v", linkID, err)
+			} else {
+				log.Printf("[IVR] link %s marked as submitted for incident %s", linkID, id)
+			}
+		} else {
+			log.Printf("[IVR] no active link found to mark as submitted for incident %s", id)
+		}
+		_ = s.CreateRevision(ctx, id, models.RevisionActionIVRSmsSubmitted,
+			"Citizen submitted additional information via IVR SMS link", changes, userID)
+	}
+
+	// Send in-app notification and revision for IVR updates from EPM940.
 	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.IVR) && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
 
 		// Send in-app notification to all assigned agents

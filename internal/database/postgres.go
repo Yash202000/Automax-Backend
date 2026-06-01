@@ -102,6 +102,7 @@ func Migrate(db *gorm.DB) error {
 		&models.IncidentTransitionHistory{},
 		&models.IncidentRevision{},
 		&models.IncidentRejectionLog{},
+		&models.IvrSmsLink{},
 		// Report models
 		&models.Report{},
 		&models.ReportExecution{},
