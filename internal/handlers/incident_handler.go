@@ -296,15 +296,19 @@ func (h *IncidentHandler) FindByIDForFeedback(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Token is required")
 	}
 
-	if err := utils.ValidateIncidentToken(token, idStr); err != nil {
-		log.Printf("FEEDBACK-LINK: Token validation failed for incident %s: %v", idStr, err)
-		switch err {
-		case utils.ErrExpired:
-			return utils.ErrorResponse(c, fiber.StatusGone, "Link has expired")
-		case utils.ErrInvalid, utils.ErrIDMismatch:
-			return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Invalid or tampered token")
-		default:
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Malformed token")
+	// If signed_token is a plain UUID it carries the feedback_id — skip HMAC validation.
+	// Otherwise validate as a standard 3-part incident token.
+	if _, uuidErr := uuid.Parse(token); uuidErr != nil {
+		if err := utils.ValidateIncidentToken(token, idStr); err != nil {
+			log.Printf("FEEDBACK-LINK: Token validation failed for incident %s: %v", idStr, err)
+			switch err {
+			case utils.ErrExpired:
+				return utils.ErrorResponse(c, fiber.StatusGone, "Link has expired")
+			case utils.ErrInvalid, utils.ErrIDMismatch:
+				return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Invalid or tampered token")
+			default:
+				return utils.ErrorResponse(c, fiber.StatusBadRequest, "Malformed token")
+			}
 		}
 	}
 

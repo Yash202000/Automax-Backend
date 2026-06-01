@@ -106,28 +106,32 @@ func (h *IncidentPublicFeedbackHandler) Submit(c *fiber.Ctx) error {
 
 	switch {
 	case token != "":
-		// Token-based path: validate fb-format signed token and extract feedbackID from it.
-		rawParts := strings.Split(token, "|")
-		if len(rawParts) != 5 {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Malformed token")
-		}
-		feedbackIDStr := rawParts[1]
-		feedbackID, err = uuid.Parse(feedbackIDStr)
-		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Malformed token")
-		}
-		if _, err := utils.ValidateFeedbackToken(token, feedbackIDStr, incidentID.String()); err != nil {
-			switch {
-			case errors.Is(err, utils.ErrExpired):
-				return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Token has expired")
-			case errors.Is(err, utils.ErrIDMismatch):
-				return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Token does not match this incident")
-			default:
-				return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Invalid token")
+		// If signed_token is a plain UUID, treat it directly as feedback_id (no HMAC validation).
+		// Otherwise expect a full fb-format token (fb|feedbackID|incidentID|expiresAt|hmac).
+		if parsed, uuidErr := uuid.Parse(token); uuidErr == nil {
+			feedbackID = parsed
+		} else {
+			rawParts := strings.Split(token, "|")
+			if len(rawParts) != 5 {
+				return utils.ErrorResponse(c, fiber.StatusBadRequest, "Malformed token")
+			}
+			feedbackIDStr := rawParts[1]
+			feedbackID, err = uuid.Parse(feedbackIDStr)
+			if err != nil {
+				return utils.ErrorResponse(c, fiber.StatusBadRequest, "Malformed token")
+			}
+			if _, err := utils.ValidateFeedbackToken(token, feedbackIDStr, incidentID.String()); err != nil {
+				switch {
+				case errors.Is(err, utils.ErrExpired):
+					return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Token has expired")
+				case errors.Is(err, utils.ErrIDMismatch):
+					return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Token does not match this incident")
+				default:
+					return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Invalid token")
+				}
 			}
 		}
 	case directFeedbackID != "":
-		// Direct feedback_id path: no token — DB validates that this feedback_id belongs to the incident.
 		feedbackID, err = uuid.Parse(directFeedbackID)
 		if err != nil {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid feedback ID")
