@@ -65,6 +65,7 @@ type LDAPUserListItem struct {
 	DisplayName string `json:"display_name"`
 	UPN         string `json:"upn"`
 	Email       string `json:"email"`
+	Phone       string `json:"phone"`
 }
 
 // ldapService implements LDAPService
@@ -233,6 +234,7 @@ func (s *ldapService) FetchUserList(ctx context.Context) ([]LDAPUserListItem, er
 		"displayName",
 		"userPrincipalName",
 		"mail",
+		"telephoneNumber",
 	}
 
 	searchRequest := ldap.NewSearchRequest(
@@ -260,6 +262,7 @@ func (s *ldapService) FetchUserList(ctx context.Context) ([]LDAPUserListItem, er
 			DisplayName: entry.GetAttributeValue("displayName"),
 			UPN:         entry.GetAttributeValue("userPrincipalName"),
 			Email:       entry.GetAttributeValue("mail"),
+			Phone:       entry.GetAttributeValue("telephoneNumber"),
 		}
 		users = append(users, user)
 	}
