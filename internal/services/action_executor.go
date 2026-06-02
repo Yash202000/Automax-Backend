@@ -231,7 +231,7 @@ func (e *actionExecutor) executeSms(ctx context.Context, action *models.Transiti
 		return nil
 	}
 
-	phones := e.resolveRecipientPhones(incident, config.Recipients, config.CustomPhones)
+	phones := e.resolveRecipientPhones(ctx, incident, config.Recipients, config.CustomPhones)
 	if len(phones) == 0 {
 		return nil
 	}
@@ -385,7 +385,26 @@ func (e *actionExecutor) resolveRecipientEmails(ctx context.Context, recipients 
 				add(incident.ReporterEmail)
 			}
 		case "creator":
-			// Incident has no CreatedBy relation; creator email is not directly stored
+			// Try mobile lookup first, then fall back to oldest transition history performer.
+			if incident.CreatedByMobile != "" {
+				if u, err := e.userRepo.FindByMobile(ctx, incident.CreatedByMobile); err == nil {
+					add(u.Email)
+				}
+			} else if len(incident.TransitionHistory) > 0 {
+				oldest := incident.TransitionHistory[len(incident.TransitionHistory)-1]
+				if oldest.PerformedBy != nil {
+					add(oldest.PerformedBy.Email)
+				}
+			}
+		case "previous_assignee":
+			// Use the performer of the most recent transition as the previous assignee.
+			for i := len(incident.TransitionHistory) - 1; i >= 0; i-- {
+				h := incident.TransitionHistory[i]
+				if h.PerformedBy != nil && h.PerformedBy.Email != "" {
+					add(h.PerformedBy.Email)
+					break
+				}
+			}
 		case "department_head":
 			if incident.Department != nil && incident.Department.ManagerID != nil {
 				if u, err := e.userRepo.FindByID(ctx, *incident.Department.ManagerID); err == nil {
@@ -413,7 +432,7 @@ func (e *actionExecutor) resolveRecipientEmails(ctx context.Context, recipients 
 }
 
 // resolveRecipientPhones resolves recipient identifiers to phone numbers for SMS.
-func (e *actionExecutor) resolveRecipientPhones(incident *models.Incident, recipients []string, customPhones []string) []string {
+func (e *actionExecutor) resolveRecipientPhones(ctx context.Context, incident *models.Incident, recipients []string, customPhones []string) []string {
 	var phones []string
 	seen := make(map[string]bool)
 
@@ -433,9 +452,26 @@ func (e *actionExecutor) resolveRecipientPhones(incident *models.Incident, recip
 		case "reporter":
 			if incident.Reporter != nil {
 				add(incident.Reporter.Phone)
+			} else {
+				add(incident.ReporterPhone)
 			}
 		case "creator":
 			add(incident.CreatedByMobile)
+		case "department_head":
+			if incident.Department != nil && incident.Department.ManagerID != nil {
+				if u, err := e.userRepo.FindByID(ctx, *incident.Department.ManagerID); err == nil {
+					add(u.Phone)
+				}
+			}
+		case "previous_assignee":
+			// Resolved from the most recent transition history entry that recorded a prior assignee.
+			for i := len(incident.TransitionHistory) - 1; i >= 0; i-- {
+				h := incident.TransitionHistory[i]
+				if h.PerformedBy != nil && h.PerformedBy.Phone != "" {
+					add(h.PerformedBy.Phone)
+					break
+				}
+			}
 		case "custom":
 			for _, p := range customPhones {
 				add(strings.TrimSpace(p))
