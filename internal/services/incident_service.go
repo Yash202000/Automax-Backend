@@ -2703,6 +2703,25 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		return nil, errors.New("incident not found or locked by another transaction")
 	}
 
+	// Capture ALL pre-transition assignee IDs INSIDE the transaction BEFORE SetAssignees modifies the table.
+	// This is the only reliable way to get the true previous multi-assignee list.
+	var preTxAssigneeIDs []uuid.UUID
+	if incident.AssigneeID != nil && *incident.AssigneeID != uuid.Nil {
+		preTxAssigneeIDs = append(preTxAssigneeIDs, *incident.AssigneeID)
+	}
+	var multiIDs []uuid.UUID
+	tx.Table("incident_assignees").Where("incident_id = ?", incidentID).Pluck("user_id", &multiIDs)
+	seen := make(map[uuid.UUID]bool)
+	for _, uid := range preTxAssigneeIDs {
+		seen[uid] = true
+	}
+	for _, uid := range multiIDs {
+		if uid != uuid.Nil && !seen[uid] {
+			seen[uid] = true
+			preTxAssigneeIDs = append(preTxAssigneeIDs, uid)
+		}
+	}
+
 	// BLOCK: Prevent manual transitions on child incidents (merged into another)
 	if incident.IsMerged && incident.MasterIncidentID != nil {
 		tx.Rollback()
@@ -3581,6 +3600,11 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	if err != nil {
 		return nil, err
 	}
+
+	// Use the pre-transaction snapshot captured at the top of ExecuteTransition.
+	updated.PreviousAssigneeIDs = preTxAssigneeIDs
+	log.Printf("[ExecuteTransition] incident=%s transition=%s — PreviousAssigneeIDs(%d) CurrentAssigneeID=%v",
+		incident.IncidentNumber, transition.Name, len(preTxAssigneeIDs), updated.AssigneeID)
 
 	// IsFinalClose: pre-create a pending feedback record so BuildIncidentVariables can call
 	// GenerateFeedbackToken with a real feedbackID, producing a direct submit URL in {{feedback_url}}.

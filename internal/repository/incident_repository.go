@@ -1504,6 +1504,7 @@ func (r *incidentRepository) GetIncidentsExceedingStateSLA(ctx context.Context) 
 	err := r.db.WithContext(ctx).
 		Select("incidents.*").
 		Joins("JOIN workflow_states ws ON incidents.current_state_id = ws.id").
+		Where("incidents.record_type = 'incident'").
 		Where("ws.sla_hours IS NOT NULL AND ws.sla_hours > 0").
 		Where("ws.state_type != 'terminal'").
 		Where("ws.deleted_at IS NULL").
@@ -1528,7 +1529,11 @@ func (r *incidentRepository) GetIncidentsExceedingStateSLA(ctx context.Context) 
 		Preload("Classification").
 		Preload("Assignee").
 		Preload("Reporter").
+		Preload("Department").
 		Preload("LookupValues.Category").
+		Preload("TransitionHistory", func(db *gorm.DB) *gorm.DB {
+			return db.Order("transitioned_at DESC").Limit(1)
+		}).
 		Find(&incidents).Error
 
 	return incidents, err

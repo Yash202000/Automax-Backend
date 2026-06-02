@@ -251,11 +251,8 @@ func (s *EscalationService) processPolicySteps(
 			policy.Name, step.StepOrder, incident.IncidentNumber, hoursInBreach)
 
 		for _, user := range users {
-			sentChannels := s.sendPolicyNotification(ctx, incident, state, policy.Name, step, user, hoursInState)
-			if sentChannels == nil {
-				sentChannels = []string{}
-			}
-
+			// Create the breach log BEFORE sending so deduplication always works,
+			// even if the notification send fails.
 			now := time.Now()
 			stepID := step.ID
 			breach := &models.EscalationSLA{
@@ -264,7 +261,7 @@ func (s *EscalationService) processPolicySteps(
 				NotifiedUserID:         &user.ID,
 				Email:                  user.Email,
 				Phone:                  user.Phone,
-				Actions:                sentChannels,
+				Actions:                models.TextArray{},
 				SLAHoursAllowed:        int(slaAsHours),
 				HoursInState:           hoursInState,
 				EscalationPolicyID:     &policy.ID,
@@ -273,7 +270,20 @@ func (s *EscalationService) processPolicySteps(
 				NotifiedAt:             &now,
 			}
 			if err := s.repo.Create(ctx, breach); err != nil {
-				log.Printf("[EscalationService] Failed to store policy breach log: %v", err)
+				log.Printf("[EscalationService] Failed to store policy breach log for user %s / incident %s: %v — skipping send",
+					user.Email, incident.IncidentNumber, err)
+				continue
+			}
+
+			sentChannels := s.sendPolicyNotification(ctx, incident, state, policy.Name, step, user, hoursInState)
+			if sentChannels == nil {
+				sentChannels = []string{}
+			}
+
+			// Update the breach log with which channels were actually used.
+			breach.Actions = sentChannels
+			if err := s.repo.Update(ctx, breach); err != nil {
+				log.Printf("[EscalationService] Failed to update breach log actions for user %s: %v", user.Email, err)
 			}
 		}
 	}
@@ -377,21 +387,6 @@ func (s *EscalationService) sendNotifications(
 
 	incidentURL := fmt.Sprintf("%s/incidents/%s", s.frontendURL, incident.ID)
 
-	// Fallback content used when the DB template does not exist yet.
-	subject := fmt.Sprintf("SLA Alert: Incident %s has exceeded SLA in state '%s'",
-		incident.IncidentNumber, state.Name)
-	emailBody := fmt.Sprintf(
-		"Dear %s %s,\n\nIncident %s - \"%s\" has been in \"%s\" for %.1f hours (SLA: %d h).\n\nAction required for transition \"%s\".\n\nView: %s",
-		user.FirstName, user.LastName,
-		incident.IncidentNumber, incident.Title, state.Name, hoursInState, *state.SLAHours,
-		transitionName, incidentURL,
-	)
-	smsBody := fmt.Sprintf(
-		"SLA ALERT: Incident %s in '%s' for %.1fh (SLA: %dh). Action required for '%s'. View: %s",
-		incident.IncidentNumber, state.Name, hoursInState, *state.SLAHours, transitionName, incidentURL,
-	)
-
-	// Start from the full incident variable set, then override/add escalation-specific values.
 	vars := BuildIncidentVariables(&incident, nil, nil)
 	vars["first_name"] = user.FirstName
 	vars["last_name"] = user.LastName
@@ -404,16 +399,12 @@ func (s *EscalationService) sendNotifications(
 	vars["sla_page_url"] = fmt.Sprintf("%s/incidents?sla_breached=true", s.frontendURL)
 	vars["hours_in_breach"] = fmt.Sprintf("%.1f", hoursInState-float64(*state.SLAHours))
 
-	emailCode := "SLA_STATE_BREACH"
-	smsCode := "SLA_STATE_BREACH_SMS"
-
+	// Templates configured from admin UI (action_type = "escalation") — no hardcoded codes.
 	if user.Email != "" {
-		_, err := s.notificationService.SendNotification(
-			ctx, "email", &emailCode, "en",
-			[]string{user.Email}, nil, nil,
-			subject, emailBody, vars, nil, nil, nil,
-		)
-		if err != nil {
+		if err := s.notificationService.SendByActionType(
+			ctx, models.TemplateActionEscalation, "email", "ar",
+			[]string{user.Email}, vars, nil,
+		); err != nil {
 			log.Printf("[EscalationService] EMAIL failed for %s: %v", user.Email, err)
 		} else {
 			sent = append(sent, "EMAIL")
@@ -421,12 +412,10 @@ func (s *EscalationService) sendNotifications(
 	}
 
 	if user.Phone != "" {
-		_, err := s.notificationService.SendNotification(
-			ctx, "sms", &smsCode, "en",
-			[]string{user.Phone}, nil, nil,
-			"", smsBody, vars, nil, nil, nil,
-		)
-		if err != nil {
+		if err := s.notificationService.SendByActionType(
+			ctx, models.TemplateActionEscalation, "sms", "ar",
+			[]string{user.Phone}, vars, nil,
+		); err != nil {
 			log.Printf("[EscalationService] SMS failed for %s: %v", user.Phone, err)
 		} else {
 			sent = append(sent, "SMS")
