@@ -271,10 +271,13 @@ func (h *IncidentHandler) FindByIDWithLast6DigitValidation(c *fiber.Ctx) error {
 		}
 		if link.SubmittedAt != nil {
 			// Citizen already submitted — tell the frontend to show the "Update Submitted" screen.
-			return c.Status(fiber.StatusOK).JSON(fiber.Map{
-				"success":           true,
-				"already_submitted": true,
-				"message":           "You have already submitted your information for this incident.",
+			return c.Status(fiber.StatusAlreadyReported).JSON(fiber.Map{
+				"data": map[string]interface{}{
+					"success":           false,
+					"already_submitted": true,
+					"error":             "You have already submitted your information for this incident.",
+					// "error":             "You have already submitted your information for this incident.",
+				},
 			})
 		}
 	}
