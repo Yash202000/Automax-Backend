@@ -82,7 +82,7 @@ type EPMInsertIncidentRequest struct {
 	MunicipalityID      string `json:"municipalityID"`
 	NationalID          string `json:"nationalID"`
 	Priority            string `json:"priority"`
-	SPLClassificationID int    `json:"splClassificationID"`
+	SPLClassificationID string `json:"splClassificationID"`
 	SubBaladyaName      string `json:"subBaladyaName"`
 	SubClassificationID string `json:"subClassificationID"`
 	SubMunicipalityID   string `json:"subMunicipalityID"`
@@ -177,6 +177,75 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 			Result:         false,
 		})
 	}
+	if req.FirstName == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "firstName is required",
+			Result:         false,
+		})
+	}
+	if req.IssueDiscription == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "issueDiscription is required",
+			Result:         false,
+		})
+	}
+	if len(req.IssueDiscription) > 250 {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "issueDiscription exceeds maximum length of 250 characters",
+			Result:         false,
+		})
+	}
+	if req.Priority == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "priority is required",
+			Result:         false,
+		})
+	}
+	if req.FileKey == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "fileKey is required",
+			Result:         false,
+		})
+	}
+	if req.Latitude == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "latitude is required",
+			Result:         false,
+		})
+	}
+	if req.Longitude == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "longitude is required",
+			Result:         false,
+		})
+	}
+	if req.MobileNumber == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "mobileNumber is required",
+			Result:         false,
+		})
+	}
+
+	// check for duplicate momra incident number
+	var duplicateCount int64
+	h.db.WithContext(c.UserContext()).Model(&models.Incident{}).
+		Where("source = ? AND custom_fields LIKE ?", "MOMRA", "%\"momra_incident_no\":\""+req.IncidentNo+"\"%").
+		Count(&duplicateCount)
+	if duplicateCount > 0 {
+		return c.Status(fiber.StatusConflict).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusConflict,
+			Message:        "Duplicate incident number: " + req.IncidentNo,
+			Result:         false,
+		})
+	}
 
 	custFields := map[string]interface{}{
 		"momra_incident_no": req.IncidentNo,
@@ -202,37 +271,95 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 	}
 	custFieldBytes, _ := json.Marshal(custFields)
 
-	// resolve location hierarchy
+	// validate all provided locations exist in DB
+	municipalityLoc, err := h.validateAndResolveLocation(c.UserContext(), req.MunicipalityID)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "Municipality not found: " + req.MunicipalityID,
+			Result:         false,
+		})
+	}
+
+	subMunicipalityLoc, err := h.validateAndResolveLocation(c.UserContext(), req.SubMunicipalityID)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "Sub municipality not found: " + req.SubMunicipalityID,
+			Result:         false,
+		})
+	}
+
+	subSubMunicipalityLoc, err := h.validateAndResolveLocation(c.UserContext(), req.SubSubMunicipalityID)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "Sub sub municipality not found: " + req.SubSubMunicipalityID,
+			Result:         false,
+		})
+	}
+
+	// prefer the most specific location that was provided
 	var locationID *uuid.UUID
-	if req.MunicipalityID != "" {
-		loc, err := h.locationRepo.FindByExternalID(c.UserContext(), req.MunicipalityID)
-		if err == nil && loc != nil {
-			locationID = &loc.ID
-		}
+	switch {
+	case subSubMunicipalityLoc != nil:
+		locationID = subSubMunicipalityLoc
+	case subMunicipalityLoc != nil:
+		locationID = subMunicipalityLoc
+	case municipalityLoc != nil:
+		locationID = municipalityLoc
 	}
-	// try sub-municipality as more specific location
-	if locationID == nil && req.SubMunicipalityID != "" {
-		loc, err := h.locationRepo.FindByExternalID(c.UserContext(), req.SubMunicipalityID)
-		if err == nil && loc != nil {
-			locationID = &loc.ID
-		}
+
+	// validate all provided classifications exist in DB
+	subCls, err := h.validateAndResolveClassification(c.UserContext(), req.SubClassificationID)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "Sub classification not found: " + req.SubClassificationID,
+			Result:         false,
+		})
 	}
-	if locationID == nil && req.SubSubMunicipalityID != "" {
-		loc, err := h.locationRepo.FindByExternalID(c.UserContext(), req.SubSubMunicipalityID)
-		if err == nil && loc != nil {
-			locationID = &loc.ID
+
+	mainCls, err := h.validateAndResolveClassification(c.UserContext(), req.MainClassificationID)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "Main classification not found: " + req.MainClassificationID,
+			Result:         false,
+		})
+	}
+
+	var splCls *uuid.UUID
+	if req.SPLClassificationID != "" {
+		splCls, err = h.validateAndResolveClassification(c.UserContext(), req.SPLClassificationID)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+				HTTPStatusCode: fiber.StatusBadRequest,
+				Message:        "Special classification not found: " + req.SPLClassificationID,
+				Result:         false,
+			})
 		}
 	}
 
-	// resolve classification hierarchy (prefer the most specific)
+	// prefer the most specific classification that was provided
 	var classificationID *uuid.UUID
-	classificationID = h.resolveClassification(c.UserContext(), req.SubClassificationID)
-	if classificationID == nil {
-		classificationID = h.resolveClassification(c.UserContext(), req.MainClassificationID)
-	}
-	if classificationID == nil && req.SPLClassificationID != 0 {
-		extID := fmt.Sprintf("%d", req.SPLClassificationID)
-		classificationID = h.resolveClassification(c.UserContext(), extID)
+	switch {
+	case subCls != nil:
+		classificationID = subCls
+	case mainCls != nil:
+		classificationID = mainCls
+	case splCls != nil:
+		classificationID = splCls
+	default:
+		msg := "Main classification ID is missing"
+		if req.MainClassificationID != "" {
+			msg = "Sub classification ID is missing"
+		}
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        msg,
+			Result:         false,
+		})
 	}
 
 	// get incident workflow and initial state
@@ -495,6 +622,32 @@ func (h *EPMIncidentHandler) GetMomraIncidentStatusDetails(c *fiber.Ctx) error {
 		Result:         true,
 		HTTPStatusCode: fiber.StatusOK,
 	})
+}
+
+func (h *EPMIncidentHandler) validateAndResolveLocation(ctx context.Context, externalID string) (*uuid.UUID, error) {
+	if externalID == "" {
+		return nil, nil
+	}
+
+	loc, err := h.locationRepo.FindByExternalID(ctx, externalID)
+	if err != nil || loc == nil {
+		return nil, fmt.Errorf("location not found: %s", externalID)
+	}
+
+	return &loc.ID, nil
+}
+
+func (h *EPMIncidentHandler) validateAndResolveClassification(ctx context.Context, externalID string) (*uuid.UUID, error) {
+	if externalID == "" {
+		return nil, nil
+	}
+
+	cls, err := h.classificationRepo.FindByExternalID(ctx, externalID)
+	if err != nil || cls == nil {
+		return nil, fmt.Errorf("classification not found: %s", externalID)
+	}
+
+	return &cls.ID, nil
 }
 
 func (h *EPMIncidentHandler) resolveClassification(ctx context.Context, externalID string) *uuid.UUID {
