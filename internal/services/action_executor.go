@@ -157,12 +157,22 @@ func (e *actionExecutor) executeEmail(ctx context.Context, action *models.Transi
 	}
 
 	if e.notificationService == nil {
-		log.Printf("NotificationService not available; skipping email action %q", action.Name)
+		log.Printf("[EMAIL-ACTION] NotificationService not available; skipping action %q", action.Name)
 		return nil
 	}
 
+	transitionName := action.Name
+	if transition != nil {
+		transitionName = transition.Name
+	}
+
 	emails := e.resolveRecipientEmails(ctx, config.Recipients, config.CustomEmails, incident)
+	log.Printf("[EMAIL-ACTION] transition=%q incident=%s recipients_config=%v resolved_emails=%v template=%q",
+		transitionName, incident.IncidentNumber, config.Recipients, emails, config.TemplateCode)
+
 	if len(emails) == 0 {
+		log.Printf("[EMAIL-ACTION] transition=%q incident=%s — no email recipients resolved, skipping",
+			transitionName, incident.IncidentNumber)
 		return nil
 	}
 
@@ -198,15 +208,24 @@ func (e *actionExecutor) executeEmail(ctx context.Context, action *models.Transi
 		lang = "ar"
 	}
 
+	var sentByID *uuid.UUID
+	if performedBy != nil {
+		sentByID = &performedBy.ID
+	}
+
 	_, err := e.notificationService.SendNotification(
 		ctx, "email", templateCode, lang,
 		emails, nil, nil,
 		subject, body,
-		vars, nil, nil, nil,
+		vars, nil, sentByID, nil,
 	)
 	if err != nil {
+		log.Printf("[EMAIL-ACTION] transition=%q incident=%s emails=%v template=%q — FAILED: %v",
+			transitionName, incident.IncidentNumber, emails, config.TemplateCode, err)
 		return fmt.Errorf("email send failed: %w", err)
 	}
+	log.Printf("[EMAIL-ACTION] transition=%q incident=%s emails=%v template=%q — SENT OK",
+		transitionName, incident.IncidentNumber, emails, config.TemplateCode)
 	return nil
 }
 
@@ -227,12 +246,22 @@ func (e *actionExecutor) executeSms(ctx context.Context, action *models.Transiti
 	}
 
 	if e.notificationService == nil {
-		log.Printf("NotificationService not available; skipping SMS action %q", action.Name)
+		log.Printf("[SMS-ACTION] NotificationService not available; skipping action %q", action.Name)
 		return nil
 	}
 
+	transitionName := action.Name
+	if transition != nil {
+		transitionName = transition.Name
+	}
+
 	phones := e.resolveRecipientPhones(ctx, incident, config.Recipients, config.CustomPhones)
+	log.Printf("[SMS-ACTION] transition=%q incident=%s recipients_config=%v resolved_phones=%v template=%q",
+		transitionName, incident.IncidentNumber, config.Recipients, phones, config.TemplateCode)
+
 	if len(phones) == 0 {
+		log.Printf("[SMS-ACTION] transition=%q incident=%s — no phone recipients resolved, skipping",
+			transitionName, incident.IncidentNumber)
 		return nil
 	}
 
@@ -252,15 +281,24 @@ func (e *actionExecutor) executeSms(ctx context.Context, action *models.Transiti
 		lang = "ar"
 	}
 
+	var smsSentByID *uuid.UUID
+	if performedBy != nil {
+		smsSentByID = &performedBy.ID
+	}
+
 	_, err := e.notificationService.SendNotification(
 		ctx, "sms", templateCode, lang,
 		phones, nil, nil,
 		"", message,
-		vars, nil, nil, nil,
+		vars, nil, smsSentByID, nil,
 	)
 	if err != nil {
+		log.Printf("[SMS-ACTION] transition=%q incident=%s phones=%v template=%q — FAILED: %v",
+			transitionName, incident.IncidentNumber, phones, config.TemplateCode, err)
 		return fmt.Errorf("sms send failed: %w", err)
 	}
+	log.Printf("[SMS-ACTION] transition=%q incident=%s phones=%v template=%q — SENT OK",
+		transitionName, incident.IncidentNumber, phones, config.TemplateCode)
 	return nil
 }
 
@@ -375,34 +413,61 @@ func (e *actionExecutor) resolveRecipientEmails(ctx context.Context, recipients 
 	for _, recipient := range recipients {
 		switch recipient {
 		case "assignee":
+			// Primary assignee
 			if incident.Assignee != nil {
+				log.Printf("[EMAIL-RESOLVE] assignee (primary) → %s (%s)", incident.Assignee.Email, incident.Assignee.Username)
 				add(incident.Assignee.Email)
+			}
+			// Additional assignees (many-to-many)
+			for _, a := range incident.Assignees {
+				log.Printf("[EMAIL-RESOLVE] assignee (multi) → %s (%s)", a.Email, a.Username)
+				add(a.Email)
+			}
+			if incident.Assignee == nil && len(incident.Assignees) == 0 {
+				log.Printf("[EMAIL-RESOLVE] assignee → none (incident has no assignee)")
 			}
 		case "reporter":
 			if incident.Reporter != nil {
+				log.Printf("[EMAIL-RESOLVE] reporter → %s", incident.Reporter.Email)
 				add(incident.Reporter.Email)
 			} else {
+				log.Printf("[EMAIL-RESOLVE] reporter (plain field) → %s", incident.ReporterEmail)
 				add(incident.ReporterEmail)
 			}
 		case "creator":
 			// Try mobile lookup first, then fall back to oldest transition history performer.
 			if incident.CreatedByMobile != "" {
 				if u, err := e.userRepo.FindByMobile(ctx, incident.CreatedByMobile); err == nil {
+					log.Printf("[EMAIL-RESOLVE] creator → %s (via mobile %s)", u.Email, incident.CreatedByMobile)
 					add(u.Email)
+				} else {
+					log.Printf("[EMAIL-RESOLVE] creator → mobile lookup failed: %v", err)
 				}
 			} else if len(incident.TransitionHistory) > 0 {
 				oldest := incident.TransitionHistory[len(incident.TransitionHistory)-1]
 				if oldest.PerformedBy != nil {
+					log.Printf("[EMAIL-RESOLVE] creator → %s (oldest transition performer)", oldest.PerformedBy.Email)
 					add(oldest.PerformedBy.Email)
 				}
+			} else {
+				log.Printf("[EMAIL-RESOLVE] creator → could not resolve (no mobile, no history)")
 			}
 		case "previous_assignee":
-			// Use the performer of the most recent transition as the previous assignee.
-			for i := len(incident.TransitionHistory) - 1; i >= 0; i-- {
-				h := incident.TransitionHistory[i]
-				if h.PerformedBy != nil && h.PerformedBy.Email != "" {
-					add(h.PerformedBy.Email)
-					break
+			// PreviousAssigneeIDs = all historical assignees collected by ExecuteTransition.
+			// Skip citizen/IVR users (username prefix "citizen_").
+			if len(incident.PreviousAssigneeIDs) == 0 {
+				log.Printf("[EMAIL-RESOLVE] previous_assignee → none found")
+			}
+			for _, uid := range incident.PreviousAssigneeIDs {
+				if u, err := e.userRepo.FindByID(ctx, uid); err == nil {
+					if strings.HasPrefix(u.Username, "citizen_") {
+						log.Printf("[EMAIL-RESOLVE] previous_assignee → skipped citizen %s", u.Username)
+					} else {
+						log.Printf("[EMAIL-RESOLVE] previous_assignee → %s (%s)", u.Email, u.Username)
+						add(u.Email)
+					}
+				} else {
+					log.Printf("[EMAIL-RESOLVE] previous_assignee → lookup failed for %s: %v", uid, err)
 				}
 			}
 		case "department_head":
@@ -446,8 +511,13 @@ func (e *actionExecutor) resolveRecipientPhones(ctx context.Context, incident *m
 	for _, recipient := range recipients {
 		switch recipient {
 		case "assignee":
+			// Primary assignee
 			if incident.Assignee != nil {
 				add(incident.Assignee.Phone)
+			}
+			// Additional assignees (many-to-many)
+			for _, a := range incident.Assignees {
+				add(a.Phone)
 			}
 		case "reporter":
 			if incident.Reporter != nil {
@@ -464,12 +534,11 @@ func (e *actionExecutor) resolveRecipientPhones(ctx context.Context, incident *m
 				}
 			}
 		case "previous_assignee":
-			// Resolved from the most recent transition history entry that recorded a prior assignee.
-			for i := len(incident.TransitionHistory) - 1; i >= 0; i-- {
-				h := incident.TransitionHistory[i]
-				if h.PerformedBy != nil && h.PerformedBy.Phone != "" {
-					add(h.PerformedBy.Phone)
-					break
+			for _, uid := range incident.PreviousAssigneeIDs {
+				if u, err := e.userRepo.FindByID(ctx, uid); err == nil {
+					if !strings.HasPrefix(u.Username, "citizen_") {
+						add(u.Phone)
+					}
 				}
 			}
 		case "custom":
@@ -584,4 +653,27 @@ func (e *actionExecutor) buildIncidentDetails(incident *models.Incident) string 
 		b.WriteString("\nAssignee: " + name)
 	}
 	return b.String()
+}
+
+// extractPreviousAssigneeID finds the assignee_id stored in OldValues of the most recent
+// transition history entry that recorded an assignee change.
+// TransitionHistory is ordered DESC (newest first), so we scan from index 0.
+func extractPreviousAssigneeID(history []models.IncidentTransitionHistory) uuid.UUID {
+	for _, h := range history {
+		if h.OldValues == "" {
+			continue
+		}
+		var old map[string]interface{}
+		if err := json.Unmarshal([]byte(h.OldValues), &old); err != nil {
+			continue
+		}
+		if raw, ok := old["assignee_id"]; ok && raw != nil {
+			if idStr, ok := raw.(string); ok && idStr != "" {
+				if uid, err := uuid.Parse(idStr); err == nil {
+					return uid
+				}
+			}
+		}
+	}
+	return uuid.Nil
 }
