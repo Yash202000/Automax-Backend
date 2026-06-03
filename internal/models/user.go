@@ -176,7 +176,7 @@ type UserUpdateRequest struct {
 	Username          string      `json:"username" validate:"omitempty,min=3,max=50"`
 	Phone             string      `json:"phone" validate:"max=20"`
 	MobileVerified    *bool       `json:"mobile_verified"`
-	Extension         *string     `json:"extension" validate:"max=20"`
+	Extension         *string     `json:"extension" validate:"omitempty,max=20"`
 	DepartmentID      *uuid.UUID  `json:"department_id"`
 	LocationID        *uuid.UUID  `json:"location_id"`
 	DepartmentIDs     []uuid.UUID `json:"department_ids"`

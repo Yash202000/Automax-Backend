@@ -458,6 +458,7 @@ func Seed(db *gorm.DB) error {
 		{Name: "Merge Incidents", Code: "incidents:merge", Module: "incidents", Action: "merge", Description: "Merge multiple incidents into one"},
 		{Name: "Edit Closed Incidents", Code: "incidents:edit-closed", Module: "incidents", Action: "edit_closed", Description: "Edit summary/description of closed incidents"},
 		{Name: "Request Info on Incidents", Code: "incidents:request-info", Module: "incidents", Action: "request_info", Description: "Request additional information from citizens"},
+		{Name: "Share Incidents", Code: "incidents:share", Module: "incidents", Action: "share", Description: "Share incident details with external parties"},
 
 		// Request permissions
 		{Name: "View Requests", Code: "requests:view", Module: "requests", Action: "view", Description: "View requests"},
