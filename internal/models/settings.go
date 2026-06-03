@@ -49,6 +49,9 @@ type Settings struct {
 	// Feature Toggles
 	ShowEvaluateButton bool `gorm:"default:false" json:"show_evaluate_button"` // Manual feedback trigger button on complaint/query detail pages
 
+	// Default Department for auto-retrieved locations (reverse geocode)
+	DefaultDepartmentID *uuid.UUID `gorm:"type:uuid" json:"default_department_id"`
+
 	// Timestamps
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -102,6 +105,9 @@ type SettingsUpdateRequest struct {
 
 	// Feature Toggles
 	ShowEvaluateButton *bool `json:"show_evaluate_button"`
+
+	// Default Department for auto-retrieved locations
+	DefaultDepartmentID *string `json:"default_department_id" validate:"omitempty,uuid"`
 }
 
 // SettingsResponse represents the public settings response
@@ -146,13 +152,16 @@ type SettingsResponse struct {
 	// Feature Toggles
 	ShowEvaluateButton bool `json:"show_evaluate_button"`
 
+	// Default Department for auto-retrieved locations
+	DefaultDepartmentID *string `json:"default_department_id"`
+
 	// Timestamps
 	UpdatedAt string `json:"updated_at"`
 }
 
 // ToSettingsResponse converts Settings model to response DTO
 func (s *Settings) ToSettingsResponse() *SettingsResponse {
-	return &SettingsResponse{
+	resp := &SettingsResponse{
 		ID:                  s.ID.String(),
 		AppName:             s.AppName,
 		AppTagline:          s.AppTagline,
@@ -180,4 +189,11 @@ func (s *Settings) ToSettingsResponse() *SettingsResponse {
 		ShowEvaluateButton:  s.ShowEvaluateButton,
 		UpdatedAt:           s.UpdatedAt.Format(time.RFC3339),
 	}
+
+	if s.DefaultDepartmentID != nil {
+		id := s.DefaultDepartmentID.String()
+		resp.DefaultDepartmentID = &id
+	}
+
+	return resp
 }

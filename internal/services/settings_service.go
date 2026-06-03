@@ -5,6 +5,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/google/uuid"
 )
 
 type SettingsService interface {
@@ -109,6 +110,17 @@ func (s *settingsService) UpdateSettings(ctx context.Context, req *models.Settin
 	}
 	if req.ShowEvaluateButton != nil {
 		settings.ShowEvaluateButton = *req.ShowEvaluateButton
+	}
+	if req.DefaultDepartmentID != nil {
+		if *req.DefaultDepartmentID == "" {
+			settings.DefaultDepartmentID = nil
+		} else {
+			id, err := uuid.Parse(*req.DefaultDepartmentID)
+			if err != nil {
+				return nil, err
+			}
+			settings.DefaultDepartmentID = &id
+		}
 	}
 
 	// Save updated settings

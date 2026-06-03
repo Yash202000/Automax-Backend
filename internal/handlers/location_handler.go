@@ -15,14 +15,16 @@ import (
 )
 
 type LocationHandler struct {
-	repo      repository.LocationRepository
-	validator *validator.Validate
+	repo         repository.LocationRepository
+	settingsRepo repository.SettingsRepository
+	validator    *validator.Validate
 }
 
-func NewLocationHandler(repo repository.LocationRepository) *LocationHandler {
+func NewLocationHandler(repo repository.LocationRepository, settingsRepo repository.SettingsRepository) *LocationHandler {
 	return &LocationHandler{
-		repo:      repo,
-		validator: validator.New(),
+		repo:         repo,
+		settingsRepo: settingsRepo,
+		validator:    validator.New(),
 	}
 }
 
@@ -55,6 +57,13 @@ func (h *LocationHandler) Create(c *fiber.Ctx) error {
 
 	if err := h.repo.Create(c.UserContext(), location); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	// Link to default department if requested (auto-retrieved locations)
+	if req.LinkDefaultDepartment {
+		if settings, err := h.settingsRepo.GetOrCreate(c.UserContext()); err == nil && settings.DefaultDepartmentID != nil {
+			_ = h.repo.LinkDepartment(c.UserContext(), location.ID, *settings.DefaultDepartmentID)
+		}
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, "Location created", models.ToLocationResponse(location))

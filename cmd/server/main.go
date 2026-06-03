@@ -190,7 +190,7 @@ func main() {
 	categoryService := services.NewCategoryService(categoryRepo)
 	categoryHandler := handlers.NewCategoryHandler(categoryService)
 	classificationHandler := handlers.NewClassificationHandler(classificationRepo)
-	locationHandler := handlers.NewLocationHandler(locationRepo)
+	locationHandler := handlers.NewLocationHandler(locationRepo, settingsRepo)
 	departmentHandler := handlers.NewDepartmentHandler(departmentRepo)
 	roleHandler := handlers.NewRoleHandler(roleRepo, permissionRepo)
 	actionLogHandler := handlers.NewActionLogHandler(actionLogService, validate)
