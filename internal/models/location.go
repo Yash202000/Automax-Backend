@@ -52,6 +52,7 @@ type LocationCreateRequest struct {
 	Latitude    *float64   `json:"latitude" validate:"omitempty,min=-90,max=90"`
 	Longitude   *float64   `json:"longitude" validate:"omitempty,min=-180,max=180"`
 	SortOrder   int        `json:"sort_order"`
+	LinkDefaultDepartment bool `json:"link_default_department"` // When true, link to Settings.DefaultDepartmentID
 }
 
 // LocationUpdateRequest for updating a location

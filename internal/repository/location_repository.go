@@ -25,6 +25,7 @@ type LocationRepository interface {
 	GetTreeWithStats(ctx context.Context, recordType string) ([]models.LocationWithStats, error)
 	FetchLocationFullPaths(ctx context.Context, locationIDs []string) (map[string]string, error)
 	FetchLocationFullPathByID(ctx context.Context, locationID uuid.UUID) (string, error)
+	LinkDepartment(ctx context.Context, locationID uuid.UUID, departmentID uuid.UUID) error
 }
 
 type locationRepository struct {
@@ -335,4 +336,11 @@ func (r *locationRepository) FetchLocationFullPathByID(
 	}
 
 	return fullPath, nil
+}
+
+func (r *locationRepository) LinkDepartment(ctx context.Context, locationID uuid.UUID, departmentID uuid.UUID) error {
+	return r.db.WithContext(ctx).Exec(
+		"INSERT INTO department_locations (department_id, location_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+		departmentID, locationID,
+	).Error
 }
