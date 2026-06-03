@@ -326,10 +326,10 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 
 	// Text fields.
 	for field, value := range map[string]string{
-		"user_comment":       userComment,
-		"resolver_comment":   resolverComment,
-		"before_coordinates": "",
-		"after_coordinates":  "",
+		"user_comment":     userComment,
+		"resolver_comment": resolverComment,
+		// "before_coordinates": "beforeCoords",
+		// "after_coordinates":  "afterCoords",
 	} {
 		if err := writer.WriteField(field, value); err != nil {
 			writer.Close()
