@@ -317,8 +317,8 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 	}
 
 	// Format coordinates as "lat,lng" strings (empty string when not set).
-	beforeCoords := formatCoords(incident.Latitude, incident.Longitude)
-	afterCoords := beforeCoords // same location reference; override if resolver coords are stored elsewhere
+	// beforeCoords := formatCoords(incident.Latitude, incident.Longitude)
+	// afterCoords := beforeCoords // same location reference; override if resolver coords are stored elsewhere
 
 	// Build multipart body.
 	body := &bytes.Buffer{}
@@ -328,8 +328,8 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 	for field, value := range map[string]string{
 		"user_comment":       userComment,
 		"resolver_comment":   resolverComment,
-		"before_coordinates": beforeCoords,
-		"after_coordinates":  afterCoords,
+		"before_coordinates": "",
+		"after_coordinates":  "",
 	} {
 		if err := writer.WriteField(field, value); err != nil {
 			writer.Close()
