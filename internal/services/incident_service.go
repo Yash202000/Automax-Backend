@@ -780,7 +780,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 			log.Printf("[IncidentService] No reporter phone for IVR incident %s, skipping SMS", incident.ID)
 		}
 		if req.ReporterPhone != "" {
-			smsBody := fmt.Sprintf("Thank you, for contacting Easter Province Muncipality. Your Incident(%s) has been created", incident.IncidentNumber)
+			smsBody := fmt.Sprintf("Thank you for contacting Eastern Province Municipality. Your incident %s has been created.", incident.IncidentNumber)
 			_, err := s.notificationService.SendNotification(
 				ctx,
 				"sms",
