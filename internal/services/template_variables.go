@@ -56,8 +56,29 @@ func BuildIncidentVariables(
 		"map_url":      "",
 		"location_url": "",
 		"map_link":     "",
+		// Relation fields — overridden below when relations are loaded; empty string ensures
+		// RenderTemplate substitutes them (even if empty) rather than leaving {{placeholder}} literal.
+		"classification_name": "",
+		"workflow_name":       "",
+		"location_name":       "",
+		"current_state":       "",
+		"assignee":            "",
+		"assignee_email":      "",
+		"assignee_phone":      "",
+		"reporter":            "",
+		"performed_by":        "",
+		"first_name":          "",
+		"last_name":           "",
+		"transition_name":     "",
+		"from_state":          "",
+		"to_state":            "",
+		"priority":            "",
+		"due_date":            "",
+		"sla_deadline":        "",
 		// Comment aliases
-		"comment": "",
+		"comment":            "",
+		"comments":           "",
+		"transition_comment": "",
 		// SLA
 		"sla_breached": fmt.Sprintf("%t", incident.SLABreached),
 		// Citizen-facing link (SMS_PORTAL_URL/incidents/{id}, falls back to FRONTEND_URL)
