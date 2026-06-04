@@ -268,6 +268,7 @@ type AuthLoginResponse struct {
 
 type RefreshTokenRequest struct {
 	RefreshToken string `json:"refresh_token" validate:"required"`
+	RememberMe   bool   `json:"remember_me"`
 }
 
 type ChangePasswordRequest struct {

@@ -32,7 +32,7 @@ type UserService interface {
 	SSORegister(ctx context.Context, req *models.SSORegisterRequest) (*models.AuthResponse, error)
 	Login(ctx context.Context, req *models.UserLoginRequest) (*models.AuthLoginResponse, error)
 	SSOLogin(ctx context.Context, req *models.SSOLoginRequest) (*models.AuthLoginResponse, error)
-	RefreshToken(ctx context.Context, refreshToken string) (*models.AuthResponse, error)
+	RefreshToken(ctx context.Context, refreshToken string, rememberMe ...bool) (*models.AuthResponse, error)
 	Logout(ctx context.Context) error
 	GetProfile(ctx context.Context, userID uuid.UUID) (*models.UserResponse, error)
 	UpdateAdminProfile(ctx context.Context, userID uuid.UUID, req *models.UserUpdateRequest) (*models.UserResponse, error)
@@ -662,7 +662,7 @@ func (s *userService) ValidateMobileForLogin(ctx context.Context, phone string) 
 	return &resp, nil
 }
 
-func (s *userService) RefreshToken(ctx context.Context, refreshToken string) (*models.AuthResponse, error) {
+func (s *userService) RefreshToken(ctx context.Context, refreshToken string, rememberMe ...bool) (*models.AuthResponse, error) {
 	// Validate the refresh token
 	claims, err := s.jwtManager.ValidateRefreshToken(refreshToken)
 	if err != nil {
@@ -687,18 +687,22 @@ func (s *userService) RefreshToken(ctx context.Context, refreshToken string) (*m
 		role = user.Roles[0].Code
 	}
 
-	// Generate new token pair
-	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, "", role)
+	// Create new session
+	sessionID, err := s.sessionStore.SetUserSessionMultiDevices(ctx, user.ID.String(), map[string]interface{}{
+		"user_id": user.ID,
+		"email":   user.Email,
+		"role":    role,
+	}, s.jwtManager.GetTokenExpiration())
 	if err != nil {
 		return nil, err
 	}
 
-	// Update session
-	if err := s.sessionStore.SetUserSession(ctx, user.ID.String(), map[string]interface{}{
-		"user_id": user.ID,
-		"email":   user.Email,
-		"role":    role,
-	}, s.jwtManager.GetTokenExpiration()); err != nil {
+	// Default to false if not provided
+	useRemember := len(rememberMe) > 0 && rememberMe[0]
+
+	// Generate new token pair
+	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, role, sessionID, useRemember)
+	if err != nil {
 		return nil, err
 	}
 
@@ -780,16 +784,17 @@ func (s *userService) GenerateTokenViaUserID(ctx context.Context, userID uuid.UU
 	}
 	log.Println("user fetched for last 6 digits login")
 	// Continue with the rest of the login logic...
-	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, "", constants.USER_ROLE.CITIZEN)
+	sessionID, err := s.sessionStore.SetUserSessionMultiDevices(ctx, user.ID.String(), map[string]interface{}{
+		"user_id": user.ID,
+		"email":   user.Email,
+		"role":    constants.USER_ROLE.CITIZEN,
+	}, s.jwtManager.GetTokenExpiration())
 	if err != nil {
 		return nil, err
 	}
 
-	if err := s.sessionStore.SetUserSession(ctx, user.ID.String(), map[string]interface{}{
-		"user_id": user.ID,
-		"email":   user.Email,
-		"role":    constants.USER_ROLE.CITIZEN,
-	}, s.jwtManager.GetTokenExpiration()); err != nil {
+	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, constants.USER_ROLE.CITIZEN, sessionID, false)
+	if err != nil {
 		return nil, err
 	}
 
