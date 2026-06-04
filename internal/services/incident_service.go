@@ -793,7 +793,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 				smsBody,
 				nil,
 				nil,
-				nil,
+				&reporterID,
 				nil,
 			)
 			if err != nil {
@@ -815,10 +815,9 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		bgCtx := context.Background()
 		capturedCreated := created
 		capturedInitialState := initialState
+		capturedReporterID := reporterID
 		go func() {
-			// Use the centralized variable builder (no transition or performedBy for new incidents).
 			vars := BuildIncidentVariables(capturedCreated, nil, nil)
-			// For new_incident context, first_name/last_name refer to the assignee.
 			if capturedCreated.Assignee != nil {
 				vars["first_name"] = capturedCreated.Assignee.FirstName
 				vars["last_name"] = capturedCreated.Assignee.LastName
@@ -840,9 +839,11 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 						bgCtx, "email", &code, "en",
 						emails, nil, nil,
 						"", "",
-						vars, nil, nil, nil,
+						vars, nil, &capturedReporterID, nil,
 					); err != nil {
 						log.Printf("NEW-INCIDENT-EMAIL: Failed for incident %s: %v", capturedCreated.IncidentNumber, err)
+					} else {
+						log.Printf("NEW-INCIDENT-EMAIL: Sent to %v for incident %s", emails, capturedCreated.IncidentNumber)
 					}
 				}
 			}
@@ -860,9 +861,11 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 						bgCtx, "sms", &code, "en",
 						phones, nil, nil,
 						"", "",
-						vars, nil, nil, nil,
+						vars, nil, &capturedReporterID, nil,
 					); err != nil {
 						log.Printf("NEW-INCIDENT-SMS: Failed for incident %s: %v", capturedCreated.IncidentNumber, err)
+					} else {
+						log.Printf("NEW-INCIDENT-SMS: Sent to %v for incident %s", phones, capturedCreated.IncidentNumber)
 					}
 				}
 			}
