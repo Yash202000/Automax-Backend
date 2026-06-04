@@ -164,20 +164,21 @@ func (h *LDAPHandler) Login(c *fiber.Ctx) error {
 		role = user.Roles[0].Code
 	}
 
-	// Generate JWT tokens
-	tokenPair, err := h.jwtManager.GenerateTokenPair(user.ID, user.Email, "", role)
-	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to generate authentication tokens")
-	}
-
 	// Store session
-	if err := h.sessionStore.SetUserSession(c.UserContext(), user.ID.String(), map[string]interface{}{
+	sessionID, err := h.sessionStore.SetUserSessionMultiDevices(c.UserContext(), user.ID.String(), map[string]interface{}{
 		"user_id":     user.ID,
 		"email":       user.Email,
 		"role":        role,
 		"auth_source": "ldap",
-	}, h.jwtManager.GetTokenExpiration()); err != nil {
+	}, h.jwtManager.GetTokenExpiration())
+	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to store session")
+	}
+
+	// Generate JWT tokens
+	tokenPair, err := h.jwtManager.GenerateTokenPair(user.ID, user.Email, role, sessionID, false)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to generate authentication tokens")
 	}
 
 	// Update last login timestamp

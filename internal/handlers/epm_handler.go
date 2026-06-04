@@ -95,22 +95,23 @@ func (h *EPMHandler) Login(c *fiber.Ctx) error {
 		role = user.Roles[0].Code
 	}
 
-	tokenPair, err := h.jwtManager.GenerateTokenPair(user.ID, user.Email, "", role)
+	sessionID, err := h.sessionStore.SetUserSessionMultiDevices(c.UserContext(), user.ID.String(), map[string]interface{}{
+		"user_id": user.ID,
+		"email":   user.Email,
+		"role":    role,
+	}, h.jwtManager.GetTokenExpiration())
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"success": false,
+			"message": "Failed to store session",
+		})
+	}
+
+	tokenPair, err := h.jwtManager.GenerateTokenPair(user.ID, user.Email, role, sessionID, false)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"success": false,
 			"message": "Failed to generate authentication token",
-		})
-	}
-
-	if err := h.sessionStore.SetUserSession(c.UserContext(), user.ID.String(), map[string]interface{}{
-		"user_id": user.ID,
-		"email":   user.Email,
-		"role":    role,
-	}, h.jwtManager.GetTokenExpiration()); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"success": false,
-			"message": "Failed to store session",
 		})
 	}
 

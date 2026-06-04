@@ -60,7 +60,7 @@ func main() {
 		log.Fatalf("Failed to connect to MinIO: %v", err)
 	}
 
-	jwtManager := utils.NewJWTManager(cfg.JWT.Secret, cfg.JWT.ExpireHour)
+	jwtManager := utils.NewJWTManager(cfg.JWT.Secret, cfg.JWT.ExpireHour, cfg.JWT.RefreshExpireHour, cfg.JWT.RememberExpireHour)
 	ssoJWTManager := utils.NewSSOJWTManager(cfg.SSOPrivateKey, cfg.SSOIssuerURL)
 	sessionStore := database.NewSessionStore(redisClient)
 

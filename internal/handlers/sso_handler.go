@@ -221,19 +221,20 @@ func (h *SSOHandler) Callback(c *fiber.Ctx) error {
 		role = user.Roles[0].Code
 	}
 
-	// Generate local Automax token pair
-	tokenPair, err := h.jwtManager.GenerateTokenPair(user.ID, user.Email, "", role)
-	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to generate session tokens")
-	}
-
 	// Store local session
-	if err := h.sessionStore.SetUserSession(c.UserContext(), user.ID.String(), map[string]interface{}{
+	sessionID, err := h.sessionStore.SetUserSessionMultiDevices(c.UserContext(), user.ID.String(), map[string]interface{}{
 		"user_id": user.ID,
 		"email":   user.Email,
 		"role":    role,
-	}, h.jwtManager.GetTokenExpiration()); err != nil {
+	}, h.jwtManager.GetTokenExpiration())
+	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to store session")
+	}
+
+	// Generate local Automax token pair
+	tokenPair, err := h.jwtManager.GenerateTokenPair(user.ID, user.Email, role, sessionID, false)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to generate session tokens")
 	}
 
 	// Redirect to frontend /sso-complete page.

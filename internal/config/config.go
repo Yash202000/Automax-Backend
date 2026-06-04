@@ -119,8 +119,10 @@ type MinIOConfig struct {
 }
 
 type JWTConfig struct {
-	Secret     string
-	ExpireHour int
+	Secret             string
+	ExpireHour         float64
+	RefreshExpireHour  float64
+	RememberExpireHour float64
 }
 
 type LDAPConfig struct {
@@ -175,8 +177,10 @@ func Load() *Config {
 			BucketName:      getEnv("MINIO_BUCKET", "automax"),
 		},
 		JWT: JWTConfig{
-			Secret:     getEnv("JWT_SECRET", "your-super-secret-jwt-key-change-in-production"),
-			ExpireHour: getEnvAsInt("JWT_EXPIRE_HOUR", 24),
+			Secret:             getEnv("JWT_SECRET", "your-super-secret-jwt-key-change-in-production"),
+			ExpireHour:         getEnvAsFloat("JWT_EXPIRE_HOUR", 24),
+			RefreshExpireHour:  getEnvAsFloat("JWT_REFRESH_EXPIRE_HOUR", 168),
+			RememberExpireHour: getEnvAsFloat("JWT_REMEMBER_EXPIRE_HOUR", 720),
 		},
 		LDAP: LDAPConfig{
 			Enabled:            getEnvAsBool("LDAP_ENABLED", false),
@@ -277,6 +281,15 @@ func getEnvAsStringSlice(key string, defaultValue []string) []string {
 		}
 		if len(result) > 0 {
 			return result
+		}
+	}
+	return defaultValue
+}
+
+func getEnvAsFloat(key string, defaultValue float64) float64 {
+	if value, exists := os.LookupEnv(key); exists {
+		if floatValue, err := strconv.ParseFloat(value, 64); err == nil {
+			return floatValue
 		}
 	}
 	return defaultValue
