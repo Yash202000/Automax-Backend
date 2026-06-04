@@ -210,6 +210,7 @@ func main() {
 	incidentHandler := handlers.NewIncidentHandler(incidentService, userService, userRepo, incidentRepo, workflowRepo, locationRepo, classificationRepo, minioStorage, presenceService)
 	incidentHandler.SetReadyToCloseService(readyToCloseService)
 	incidentHandler.SetIvrSmsLinkRepo(ivrSmsLinkRepo)
+	incidentHandler.SetPublicFeedbackRepo(publicFeedbackRepo)
 	incidentMergeHandler := handlers.NewIncidentMergeHandler(incidentMergeService, userRepo)
 	websocketHandler := handlers.NewWebSocketHandler(wsHub)
 	reportHandler := handlers.NewReportHandler(reportService)

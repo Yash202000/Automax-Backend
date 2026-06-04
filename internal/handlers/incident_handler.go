@@ -34,6 +34,7 @@ type IncidentHandler struct {
 	presenceService     services.PresenceService
 	readyToCloseService services.ReadyToCloseService
 	ivrSmsLinkRepo      repository.IvrSmsLinkRepository
+	publicFeedbackRepo  repository.IncidentPublicFeedbackRepository
 	validator           *validator.Validate
 }
 
@@ -55,6 +56,11 @@ func NewIncidentHandler(service services.IncidentService, userService services.U
 // SetIvrSmsLinkRepo wires in the IvrSmsLinkRepository for SMS link lifecycle management.
 func (h *IncidentHandler) SetIvrSmsLinkRepo(repo repository.IvrSmsLinkRepository) {
 	h.ivrSmsLinkRepo = repo
+}
+
+// SetPublicFeedbackRepo wires in the feedback repository for submitted-status checks.
+func (h *IncidentHandler) SetPublicFeedbackRepo(repo repository.IncidentPublicFeedbackRepository) {
+	h.publicFeedbackRepo = repo
 }
 
 // SetReadyToCloseService wires in the ReadyToCloseService for duration-options endpoint.
@@ -312,8 +318,8 @@ func (h *IncidentHandler) FindByIDWithLast6DigitValidation(c *fiber.Ctx) error {
 
 // FindByIDForFeedback validates a closure feedback link and returns minimal incident info.
 // Public endpoint — no authentication required.
-// Input: path param :id (incident UUID), query param signed_token (incident token).
-// Output: incident_number, description, status.
+// Input: path param :id (incident UUID), query param signed_token (incident/feedback token).
+// Returns 410 Gone if feedback has already been submitted.
 func (h *IncidentHandler) FindByIDForFeedback(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
@@ -326,12 +332,31 @@ func (h *IncidentHandler) FindByIDForFeedback(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Token is required")
 	}
 
-	// If signed_token is a plain UUID it carries the feedback_id — skip HMAC validation.
-	// Otherwise validate as a standard 3-part incident token.
-	if _, uuidErr := uuid.Parse(token); uuidErr != nil {
-		if err := utils.ValidateIncidentToken(token, idStr); err != nil {
-			log.Printf("FEEDBACK-LINK: Token validation failed for incident %s: %v", idStr, err)
-			switch err {
+	// Determine token type and validate; also extract feedbackID when available.
+	var feedbackID *uuid.UUID
+
+	if parsed, uuidErr := uuid.Parse(token); uuidErr == nil {
+		// Plain UUID — treat as feedbackID directly, no HMAC validation.
+		feedbackID = &parsed
+	} else if parts := strings.Split(token, "|"); len(parts) == 5 && parts[0] == "fb" {
+		// fb-format token: fb|feedbackID|incidentID|expiresAt|hmac
+		if _, valErr := utils.ValidateFeedbackToken(token, parts[1], idStr); valErr != nil {
+			log.Printf("[FindByIDForFeedback] fb-token validation failed for incident %s: %v", idStr, valErr)
+			switch {
+			case errors.Is(valErr, utils.ErrExpired):
+				return utils.ErrorResponse(c, fiber.StatusGone, "Link has expired")
+			default:
+				return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Invalid or tampered token")
+			}
+		}
+		if parsed, pErr := uuid.Parse(parts[1]); pErr == nil {
+			feedbackID = &parsed
+		}
+	} else {
+		// 3-part incident token
+		if valErr := utils.ValidateIncidentToken(token, idStr); valErr != nil {
+			log.Printf("[FindByIDForFeedback] token validation failed for incident %s: %v", idStr, valErr)
+			switch valErr {
 			case utils.ErrExpired:
 				return utils.ErrorResponse(c, fiber.StatusGone, "Link has expired")
 			case utils.ErrInvalid, utils.ErrIDMismatch:
@@ -339,6 +364,20 @@ func (h *IncidentHandler) FindByIDForFeedback(c *fiber.Ctx) error {
 			default:
 				return utils.ErrorResponse(c, fiber.StatusBadRequest, "Malformed token")
 			}
+		}
+	}
+
+	// Check if feedback has already been submitted — if so the link is invalid.
+	if h.publicFeedbackRepo != nil {
+		var f *models.IncidentPublicFeedback
+		if feedbackID != nil {
+			f, _ = h.publicFeedbackRepo.FindByID(c.UserContext(), *feedbackID)
+		} else {
+			f, _ = h.publicFeedbackRepo.FindLatestByIncidentID(c.UserContext(), id)
+		}
+		if f != nil && f.SubmittedAt != nil {
+			log.Printf("[FindByIDForFeedback] feedback already submitted for incident %s feedbackID %s", idStr, f.ID)
+			return utils.ErrorResponse(c, fiber.StatusGone, "Feedback has already been submitted")
 		}
 	}
 

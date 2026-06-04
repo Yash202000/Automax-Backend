@@ -15,6 +15,9 @@ type IncidentPublicFeedbackRepository interface {
 	// FindLatestPendingByIncidentID returns the most-recently created feedback record
 	// for the incident that has not yet been submitted (submitted_at IS NULL).
 	FindLatestPendingByIncidentID(ctx context.Context, incidentID uuid.UUID) (*models.IncidentPublicFeedback, error)
+	// FindLatestByIncidentID returns the most-recently created feedback record
+	// regardless of submitted status.
+	FindLatestByIncidentID(ctx context.Context, incidentID uuid.UUID) (*models.IncidentPublicFeedback, error)
 	List(ctx context.Context) ([]models.IncidentPublicFeedback, error)
 	Update(ctx context.Context, f *models.IncidentPublicFeedback) error
 }
@@ -52,6 +55,18 @@ func (r *incidentPublicFeedbackRepository) FindLatestPendingByIncidentID(ctx con
 	var f models.IncidentPublicFeedback
 	err := r.db.WithContext(ctx).
 		Where("incident_id = ? AND submitted_at IS NULL", incidentID).
+		Order("created_at DESC").
+		First(&f).Error
+	if err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
+func (r *incidentPublicFeedbackRepository) FindLatestByIncidentID(ctx context.Context, incidentID uuid.UUID) (*models.IncidentPublicFeedback, error) {
+	var f models.IncidentPublicFeedback
+	err := r.db.WithContext(ctx).
+		Where("incident_id = ?", incidentID).
 		Order("created_at DESC").
 		First(&f).Error
 	if err != nil {
