@@ -455,6 +455,14 @@ func (h *WorkflowHandler) CreateState(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
+	// Normalize empty optional UUID strings to nil so "omitempty,uuid" validation passes
+	if req.EscalationPolicyID != nil && *req.EscalationPolicyID == "" {
+		req.EscalationPolicyID = nil
+	}
+	if req.AssignUserID != nil && *req.AssignUserID == "" {
+		req.AssignUserID = nil
+	}
+
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,

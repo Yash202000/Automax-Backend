@@ -15,16 +15,14 @@ import (
 )
 
 type LocationHandler struct {
-	repo         repository.LocationRepository
-	settingsRepo repository.SettingsRepository
-	validator    *validator.Validate
+	repo      repository.LocationRepository
+	validator *validator.Validate
 }
 
-func NewLocationHandler(repo repository.LocationRepository, settingsRepo repository.SettingsRepository) *LocationHandler {
+func NewLocationHandler(repo repository.LocationRepository) *LocationHandler {
 	return &LocationHandler{
-		repo:         repo,
-		settingsRepo: settingsRepo,
-		validator:    validator.New(),
+		repo:      repo,
+		validator: validator.New(),
 	}
 }
 
@@ -40,6 +38,11 @@ func (h *LocationHandler) Create(c *fiber.Ctx) error {
 		})
 	}
 
+	source := req.Source
+	if source == "" {
+		source = "master"
+	}
+
 	location := &models.Location{
 		Name:          req.Name,
 		NameAr:        req.NameAr,
@@ -52,18 +55,12 @@ func (h *LocationHandler) Create(c *fiber.Ctx) error {
 		Latitude:      req.Latitude,
 		Longitude:     req.Longitude,
 		SortOrder:     req.SortOrder,
+		Source:        source,
 		IsActive:      true,
 	}
 
 	if err := h.repo.Create(c.UserContext(), location); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
-	}
-
-	// Link to default department if requested (auto-retrieved locations)
-	if req.LinkDefaultDepartment {
-		if settings, err := h.settingsRepo.GetOrCreate(c.UserContext()); err == nil && settings.DefaultDepartmentID != nil {
-			_ = h.repo.LinkDepartment(c.UserContext(), location.ID, *settings.DefaultDepartmentID)
-		}
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, "Location created", models.ToLocationResponse(location))

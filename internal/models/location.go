@@ -26,6 +26,7 @@ type Location struct {
 	Longitude   *float64       `gorm:"type:decimal(11,8)" json:"longitude"`
 	IsActive    bool           `gorm:"default:true" json:"is_active"`
 	SortOrder   int            `gorm:"default:0" json:"sort_order"`
+	Source      string         `gorm:"size:20;default:'master'" json:"source"` // "master" or "map"
 	ExternalID  string         `gorm:"size:100" json:"external_id"`
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
@@ -52,7 +53,7 @@ type LocationCreateRequest struct {
 	Latitude    *float64   `json:"latitude" validate:"omitempty,min=-90,max=90"`
 	Longitude   *float64   `json:"longitude" validate:"omitempty,min=-180,max=180"`
 	SortOrder   int        `json:"sort_order"`
-	LinkDefaultDepartment bool `json:"link_default_department"` // When true, link to Settings.DefaultDepartmentID
+	Source    string     `json:"source"`                  // "master" or "map" (reverse geocoding)
 }
 
 // LocationUpdateRequest for updating a location
@@ -87,6 +88,7 @@ type LocationResponse struct {
 	Longitude   *float64           `json:"longitude,omitempty"`
 	IsActive    bool               `json:"is_active"`
 	SortOrder   int                `json:"sort_order"`
+	Source      string             `json:"source"`
 	Children    []LocationResponse `json:"children,omitempty"`
 	CreatedAt   time.Time          `json:"created_at"`
 }
@@ -108,6 +110,7 @@ func ToLocationResponse(l *Location) LocationResponse {
 		Longitude:     l.Longitude,
 		IsActive:      l.IsActive,
 		SortOrder:     l.SortOrder,
+		Source:        l.Source,
 		CreatedAt:     l.CreatedAt,
 	}
 
