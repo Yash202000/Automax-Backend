@@ -153,7 +153,7 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 	}
 
 	var sessionData map[string]interface{}
-	if err := h.sessionStore.GetUserSession(c.UserContext(), claims.UserID.String(), &sessionData); err != nil {
+	if err := h.sessionStore.GetUserSession(c.UserContext(), claims.SessionID, &sessionData); err != nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(EPMInsertIncidentResponse{
 			HTTPStatusCode: fiber.StatusUnauthorized,
 			Message:        "Session expired or invalid",
