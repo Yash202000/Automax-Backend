@@ -628,7 +628,20 @@ func (r *incidentRepository) SetLookupValues(ctx context.Context, incidentID uui
 		return err
 	}
 
-	return r.db.WithContext(ctx).Model(&incident).Association("LookupValues").Replace(actualLookupValues)
+	// Deduplicate by category: last value per category wins.
+	// Prevents storing multiple values from the same category (e.g. two Priorities).
+	seen := make(map[uuid.UUID]int)
+	var dedupValues []models.LookupValue
+	for _, lv := range actualLookupValues {
+		if idx, exists := seen[lv.CategoryID]; exists {
+			dedupValues[idx] = lv
+		} else {
+			seen[lv.CategoryID] = len(dedupValues)
+			dedupValues = append(dedupValues, lv)
+		}
+	}
+
+	return r.db.WithContext(ctx).Model(&incident).Association("LookupValues").Replace(dedupValues)
 }
 
 // Stats
