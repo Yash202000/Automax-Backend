@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -167,8 +168,18 @@ func main() {
 	integrationExecutor := services.NewIntegrationExecutor(integrationRepo, integrationService)
 	incidentService.SetIntegrationExecutor(integrationExecutor)
 
-	// Initialize and start SLA Monitor (checks every 5 minutes)
-	slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, escalationGroupService, readyToCloseService, 5*time.Minute)
+	// Initialize and start SLA Monitor.
+	// Interval is controlled by SLA_MONITOR_INTERVAL_MINUTES (default 5).
+	slaIntervalMinutes := 5
+	if v := os.Getenv("SLA_MONITOR_INTERVAL_MINUTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			slaIntervalMinutes = n
+		} else {
+			log.Printf("Warning: invalid SLA_MONITOR_INTERVAL_MINUTES=%q, using default %d min", v, slaIntervalMinutes)
+		}
+	}
+	log.Printf("SLA Monitor interval: %d minutes", slaIntervalMinutes)
+	slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, escalationGroupService, readyToCloseService, time.Duration(slaIntervalMinutes)*time.Minute)
 	ctx := context.Background()
 	slaMonitor.Start(ctx)
 	defer slaMonitor.Stop()
@@ -921,6 +932,7 @@ func main() {
 	escalationPolicies.Get("/:id", escalationPolicyHandler.GetByID)
 	escalationPolicies.Put("/:id", escalationPolicyHandler.Update)
 	escalationPolicies.Delete("/:id", escalationPolicyHandler.Delete)
+	escalationPolicies.Put("/:id/targets/:target_id/excluded-users", escalationPolicyHandler.UpdateTargetExcludedUsers)
 
 	//FCM
 	fcm := v1.Group("/fcm", authMiddleware.Authenticate())

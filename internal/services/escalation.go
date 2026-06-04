@@ -100,12 +100,22 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 		// 	incident.IncidentNumber, state.Name, hoursInState, *state.SLAHours, slaUnit)
 
 		// ── Policy-driven path ──────────────────────────────────────────────
-		if state.EscalationPolicyID != nil && s.policyService != nil {
-			s.processPolicySteps(ctx, incident, state, hoursInState)
+		if state.EscalationPolicyID != nil {
+			if s.policyService != nil {
+				s.processPolicySteps(ctx, incident, state, hoursInState)
+			} else {
+				log.Printf("[EscalationService] Incident %s / state '%s' has escalation_policy_id set but policyService is nil — skipping",
+					incident.IncidentNumber, state.Name)
+			}
 			continue
 		}
 
-		// ── Legacy path: notify users allowed on outgoing transitions ───────
+		// No escalation policy attached to this state — skip to avoid unintended notifications.
+		// log.Printf("[EscalationService] Incident %s / state '%s' has no escalation policy attached — skipping SLA notification",
+		// 	incident.IncidentNumber, state.Name)
+		continue
+
+		// ── Legacy path (disabled — states must have an escalation policy) ───
 		transitions, err := s.workflowRepo.ListTransitionsFromState(ctx, state.ID)
 		if err != nil {
 			log.Printf("[EscalationService] Failed to list transitions from state '%s': %v", state.Name, err)
@@ -166,11 +176,8 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 					continue
 				}
 
-				sentChannels := s.sendNotifications(ctx, incident, state, transition.Name, user, hoursInState)
-				if sentChannels == nil {
-					sentChannels = []string{}
-				}
-
+				// Create breach log BEFORE sending so deduplication always works,
+				// even if the notification send fails.
 				now := time.Now()
 				breach := &models.EscalationSLA{
 					IncidentID:      &incident.ID,
@@ -179,15 +186,27 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 					NotifiedUserID:  &user.ID,
 					Email:           user.Email,
 					Phone:           user.Phone,
-					Actions:         sentChannels,
+					Actions:         models.TextArray{},
 					SLAHoursAllowed: int(state.SLAAsHours()),
 					HoursInState:    hoursInState,
 					EscalationType:  "state_sla",
 					NotifiedAt:      &now,
 				}
 				if err := s.repo.Create(ctx, breach); err != nil {
-					log.Printf("[EscalationService] Failed to persist breach log for user %s / incident %s: %v",
+					log.Printf("[EscalationService] Failed to persist breach log for user %s / incident %s: %v — skipping send",
 						user.Email, incident.IncidentNumber, err)
+					continue
+				}
+
+				sentChannels := s.sendNotifications(ctx, incident, state, transition.Name, user, hoursInState)
+				if sentChannels == nil {
+					sentChannels = []string{}
+				}
+
+				// Update breach log with actual channels sent
+				breach.Actions = sentChannels
+				if err := s.repo.Update(ctx, breach); err != nil {
+					log.Printf("[EscalationService] Failed to update breach log actions for user %s: %v", user.Email, err)
 				} else {
 					log.Printf("[EscalationService] Breach log stored — incident %s, state '%s', user %s, channels %v",
 						incident.IncidentNumber, state.Name, user.Email, sentChannels)
@@ -352,7 +371,7 @@ func (s *EscalationService) sendPolicyNotification(
 
 	if sendEmail && user.Email != "" {
 		if _, err := s.notificationService.SendNotification(ctx, "email", emailCodePtr, "en",
-			[]string{user.Email}, nil, nil, subject, emailBody, vars, nil, nil, nil,
+			[]string{user.Email}, nil, nil, subject, emailBody, vars, nil, &user.ID, nil,
 		); err != nil {
 			log.Printf("[EscalationService] Policy EMAIL failed for %s: %v", user.Email, err)
 		} else {
@@ -362,7 +381,7 @@ func (s *EscalationService) sendPolicyNotification(
 
 	if sendSMS && user.Phone != "" {
 		if _, err := s.notificationService.SendNotification(ctx, "sms", smsCodePtr, "en",
-			[]string{user.Phone}, nil, nil, "", smsBody, vars, nil, nil, nil,
+			[]string{user.Phone}, nil, nil, "", smsBody, vars, nil, &user.ID, nil,
 		); err != nil {
 			log.Printf("[EscalationService] Policy SMS failed for %s: %v", user.Phone, err)
 		} else {
@@ -586,7 +605,7 @@ func (s *EscalationService) sendGlobalBreachNotification(
 			ctx, "email", &emailCode, "en",
 			[]string{user.Email}, nil, nil,
 			subject, emailBody,
-			vars, nil, nil, nil,
+			vars, nil, &user.ID, nil,
 		)
 		if err != nil {
 			log.Printf("[EscalationService] Global breach EMAIL failed for %s: %v", user.Email, err)
@@ -600,7 +619,7 @@ func (s *EscalationService) sendGlobalBreachNotification(
 			ctx, "sms", &smsCode, "en",
 			[]string{user.Phone}, nil, nil,
 			"", smsBody,
-			vars, nil, nil, nil,
+			vars, nil, &user.ID, nil,
 		)
 		if err != nil {
 			log.Printf("[EscalationService] Global breach SMS failed for %s: %v", user.Phone, err)
