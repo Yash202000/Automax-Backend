@@ -105,11 +105,23 @@ func (r *escalationPolicyRepository) SetSteps(ctx context.Context, policyID uuid
 			return err
 		}
 		existingByOrder := make(map[int]uuid.UUID, len(existing))
+		existingIDs := make([]uuid.UUID, 0, len(existing))
 		for _, s := range existing {
 			existingByOrder[s.StepOrder] = s.ID
+			existingIDs = append(existingIDs, s.ID)
 		}
 
-		// Delete all existing steps and their targets.
+		// Explicitly delete targets first. ON DELETE CASCADE is defined in the GORM
+		// model tag but may not be enforced on the existing table if the constraint
+		// was added after the table was created. Deleting explicitly guarantees no
+		// stale targets survive when steps are recreated with the same UUID.
+		if len(existingIDs) > 0 {
+			if err := tx.Where("step_id IN ?", existingIDs).Delete(&models.EscalationPolicyStepTarget{}).Error; err != nil {
+				return err
+			}
+		}
+
+		// Delete all existing steps.
 		if err := tx.Where("policy_id = ?", policyID).Delete(&models.EscalationPolicyStep{}).Error; err != nil {
 			return err
 		}
