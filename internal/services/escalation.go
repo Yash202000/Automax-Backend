@@ -79,14 +79,17 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 
 	log.Printf("[EscalationService] %d incident(s) have exceeded their current state SLA.", len(incidents))
 
+	var processed, skippedNoPolicy, skippedOther int
 	for _, incident := range incidents {
 		if incident.CurrentState == nil {
 			log.Printf("[EscalationService] Incident %s has no CurrentState loaded — skipping", incident.IncidentNumber)
+			skippedOther++
 			continue
 		}
 		state := incident.CurrentState
 		if state.SLAHours == nil {
 			log.Printf("[EscalationService] Incident %s / state '%s' has no SLAHours — skipping", incident.IncidentNumber, state.Name)
+			skippedOther++
 			continue
 		}
 
@@ -103,16 +106,19 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 		if state.EscalationPolicyID != nil {
 			if s.policyService != nil {
 				s.processPolicySteps(ctx, incident, state, hoursInState)
+				processed++
 			} else {
 				log.Printf("[EscalationService] Incident %s / state '%s' has escalation_policy_id set but policyService is nil — skipping",
 					incident.IncidentNumber, state.Name)
+				skippedOther++
 			}
 			continue
 		}
 
 		// No escalation policy attached to this state — skip to avoid unintended notifications.
-		// log.Printf("[EscalationService] Incident %s / state '%s' has no escalation policy attached — skipping SLA notification",
+		// log.Printf("[EscalationService] Incident %s / state '%s' has no escalation policy attached — assign one to enable SLA notifications",
 		// 	incident.IncidentNumber, state.Name)
+		skippedNoPolicy++
 		continue
 
 		// ── Legacy path (disabled — states must have an escalation policy) ───
@@ -216,6 +222,8 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 		}
 	}
 
+	log.Printf("[EscalationService] Done — processed: %d, skipped (no policy): %d, skipped (other): %d",
+		processed, skippedNoPolicy, skippedOther)
 	return nil
 }
 
@@ -305,6 +313,12 @@ func (s *EscalationService) processPolicySteps(
 				log.Printf("[EscalationService] Failed to update breach log actions for user %s: %v", user.Email, err)
 			}
 		}
+
+		// Fire at most one new step per incident per monitor run. If multiple steps
+		// are all eligible at once (e.g. a long-breached incident where delay_hours=0,1,4
+		// are all due), firing them all simultaneously produces an email burst. Instead,
+		// advance one step per cycle — the next monitor run will fire the following step.
+		break
 	}
 }
 

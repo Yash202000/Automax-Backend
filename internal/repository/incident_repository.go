@@ -1567,6 +1567,7 @@ func (r *incidentRepository) GetIncidentsExceedingStateSLA(ctx context.Context) 
 		Preload("TransitionHistory", func(db *gorm.DB) *gorm.DB {
 			return db.Order("transitioned_at DESC").Limit(1)
 		}).
+		Order("incidents.created_at DESC").
 		Find(&incidents).Error
 
 	return incidents, err
