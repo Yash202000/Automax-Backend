@@ -289,11 +289,12 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		searchPattern := "%" + filter.Search + "%"
 		query = query.Where("incident_number ILIKE ? OR title ILIKE ? OR description ILIKE ?", searchPattern, searchPattern, searchPattern)
 	}
-	if filter.CustomFieldKey != "" && filter.CustomFieldValue != "" {
-		query = query.Where("NULLIF(custom_fields, '')::jsonb -> ? ->> 'value' ILIKE ?", filter.CustomFieldKey, "%"+filter.CustomFieldValue+"%")
-	}
 	if filter.TaskID != "" {
 		query = query.Where("NULLIF(custom_fields, '')::jsonb -> 'lookup:TASK ID' ->> 'value' ILIKE ?", "%"+filter.TaskID+"%")
+	}
+	// Flat custom_fields filters: cf=key:value (AND-ed)
+	for _, cf := range filter.CustomFieldFilters {
+		query = query.Where("NULLIF(custom_fields, '')::jsonb ->> ? ILIKE ?", cf.Key, "%"+cf.Value+"%")
 	}
 
 	// Transition filters — JOIN only when needed

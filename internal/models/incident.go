@@ -551,6 +551,13 @@ type BulkConvertToRequestResponse struct {
 	Results []BulkConvertToRequestResult `json:"results"`
 }
 
+// CustomFieldFilter represents a single key=value filter on the custom_fields JSON column.
+// Multiple filters are AND-ed together. Supports flat values (e.g. {"caller_identity":"123"}).
+type CustomFieldFilter struct {
+	Key   string
+	Value string
+}
+
 type IncidentFilter struct {
 	Search             string     `query:"search" json:"search" validate:"omitempty"`
 	WorkflowID         []string   `query:"workflow_id" json:"workflow_id" validate:"omitempty,dive,uuid"`
@@ -574,9 +581,10 @@ type IncidentFilter struct {
 	TransitionID     *uuid.UUID  `query:"transition_id" json:"transition_id" validate:"omitempty,uuid"`
 	FromStateID      *uuid.UUID  `query:"from_state_id" json:"from_state_id" validate:"omitempty"`
 	ToStateID        *uuid.UUID  `query:"to_state_id" json:"to_state_id" validate:"omitempty"`
-	CustomFieldKey   string      `query:"custom_field_key" json:"custom_field_key" validate:"omitempty"`     // e.g. "lookup:TASK ID"
-	CustomFieldValue string      `query:"custom_field_value" json:"custom_field_value" validate:"omitempty"` // e.g. "TASK-1235"
 	TaskID           string      `query:"task_id" json:"task_id" validate:"omitempty"`                       // filter by task ID in custom_fields
+	// CustomFieldFilters holds repeatable cf=key:value filters. Parsed manually in handler.
+	// Each filter does: custom_fields::jsonb ->> 'key' ILIKE '%value%'. Multiple are AND-ed.
+	CustomFieldFilters []CustomFieldFilter `json:"-"`
 	Page             int         `query:"page" json:"page" validate:"omitempty,min=1"`
 	Limit            int         `query:"limit" json:"limit" validate:"omitempty,min=1,max=100"`
 	UserRoleIDs      []uuid.UUID `json:"-"`     // For filtering stats by user's roles

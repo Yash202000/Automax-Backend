@@ -213,6 +213,18 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 		}
 	}
 
+	// Parse repeatable cf=key:value query params for flat custom_fields JSON filtering.
+	// e.g. ?cf=caller_identity:1314245&cf=caller_identity_2:1111111 → AND both conditions.
+	for _, cfParam := range c.Context().QueryArgs().PeekMulti("cf") {
+		raw := string(cfParam)
+		if idx := strings.IndexByte(raw, ':'); idx > 0 && idx < len(raw)-1 {
+			filter.CustomFieldFilters = append(filter.CustomFieldFilters, models.CustomFieldFilter{
+				Key:   raw[:idx],
+				Value: raw[idx+1:],
+			})
+		}
+	}
+
 	incidents, total, err := h.service.ListIncidents(c.UserContext(), filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
