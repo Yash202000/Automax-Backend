@@ -13,6 +13,7 @@ const (
 	CallStatusOffline CallStatus = "offline"
 	CallStatusOnline  CallStatus = "online"
 	CallStatusBusy    CallStatus = "busy"
+	CallStatusInCall  CallStatus = "in_call"
 )
 
 type User struct {

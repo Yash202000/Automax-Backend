@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -194,13 +195,6 @@ func (s *callLogService) ListCallLogsSummary(ctx context.Context, filter *models
 
 	items := make([]models.CallLogListItem, len(callLogs))
 	for i, cl := range callLogs {
-		duration := 0
-		if cl.StartAt != nil && cl.EndAt != nil {
-			if secs := int(cl.EndAt.Sub(*cl.StartAt).Seconds()); secs > 0 {
-				duration = secs
-			}
-		}
-
 		var recordingURL string
 		if len(cl.Attachments) > 0 {
 			recordingURL = pkgUtils.GenerateAttachmentAppURL(ctx, cl.Attachments[0].ID)
@@ -210,14 +204,14 @@ func (s *callLogService) ListCallLogsSummary(ctx context.Context, filter *models
 			CallUuid:     cl.CallUuid,
 			CallType:     cl.CallType,
 			Status:       cl.Status,
-			Duration:     duration,
 			RecordingUrl: recordingURL,
 			CreatedAt:    cl.CreatedAt,
 		}
 
-		// Identify initiator and first non-initiator from preloaded participants.
+		// Identify initiator, first non-initiator, and current user's own participant.
 		var initiatorParticipant *models.CallParticipant
 		var otherParticipant *models.CallParticipant
+		var myParticipant *models.CallParticipant
 		for j := range cl.Participants {
 			p := &cl.Participants[j]
 			if p.Role == "initiator" {
@@ -225,7 +219,31 @@ func (s *callLogService) ListCallLogsSummary(ctx context.Context, filter *models
 			} else if otherParticipant == nil {
 				otherParticipant = p
 			}
+			if p.PhoneNumber == currentUserExt || p.PhoneNumber == currentUserPhone {
+				myParticipant = p
+			}
 		}
+
+		// Duration = how long the current user was on the call (joined_at → left_at).
+		// Falls back to end_at when left_at is not recorded, and to total call duration
+		// when no participant record is matched.
+		duration := 0
+		if myParticipant != nil && myParticipant.JoinedAt != nil {
+			endTime := myParticipant.LeftAt
+			if endTime == nil {
+				endTime = cl.EndAt
+			}
+			if endTime != nil {
+				if secs := int(endTime.Sub(*myParticipant.JoinedAt).Seconds()); secs > 0 {
+					duration = secs
+				}
+			}
+		} else if cl.StartAt != nil && cl.EndAt != nil {
+			if secs := int(cl.EndAt.Sub(*cl.StartAt).Seconds()); secs > 0 {
+				duration = secs
+			}
+		}
+		item.Duration = duration
 
 		// Direction: outgoing if the current user is the initiator.
 		isInitiator := initiatorParticipant != nil &&
@@ -257,6 +275,26 @@ func (s *callLogService) ListCallLogsSummary(ctx context.Context, filter *models
 
 func (s *callLogService) GetStats(ctx context.Context) (*models.CallLogStats, error) {
 	return s.repo.GetStats(ctx)
+}
+
+// setUserCallStatus looks up a user by phone/extension and updates their call_status.
+// Uses UpdateProfile (targeted map update) because the generic Update method does not
+// include call_status in its field list.
+// Silently skips if the user is not found in the users table.
+func (s *callLogService) setUserCallStatus(ctx context.Context, phone, status string) {
+	user, err := s.userRepo.FindByExtOrPhone(ctx, phone)
+	if err != nil {
+		return // not a system user — skip
+	}
+	if string(user.CallStatus) == status {
+		return
+	}
+	if err := s.userRepo.UpdateProfile(ctx, map[string]interface{}{
+		"id":          user.ID,
+		"call_status": status,
+	}); err != nil {
+		log.Printf("[CallLog] setUserCallStatus: failed to update user %s: %v", user.ID, err)
+	}
 }
 
 func (s *callLogService) StartCall(ctx context.Context, callUUID, callType string, initiator models.ParticipantData, recipients []models.ParticipantData) (*models.CallLogResponse, error) {
@@ -299,6 +337,9 @@ func (s *callLogService) StartCall(ctx context.Context, callUUID, callType strin
 	if err := s.repo.CreateWithParticipants(ctx, callLog, participants); err != nil {
 		return nil, err
 	}
+
+	// Initiator is immediately joined — mark them in_call.
+	s.setUserCallStatus(ctx, initiator.Phone, "in_call")
 
 	return s.getCallLogResponse(ctx, callLog.ID)
 }
@@ -343,6 +384,25 @@ func (s *callLogService) EndCall(ctx context.Context, callUUID string, endAt *ti
 		return nil, err
 	}
 
+	// Revert in_call → online for all participants found in the users table.
+	phones := make([]string, 0, len(callLog.Participants))
+	for _, p := range callLog.Participants {
+		phones = append(phones, p.PhoneNumber)
+	}
+	if len(phones) > 0 {
+		users, err := s.userRepo.FindByExtOrPhoneList(ctx, phones)
+		if err == nil {
+			for i := range users {
+				if users[i].CallStatus == models.CallStatusInCall {
+					s.userRepo.UpdateProfile(ctx, map[string]interface{}{
+						"id":          users[i].ID,
+						"call_status": string(models.CallStatusOnline),
+					})
+				}
+			}
+		}
+	}
+
 	return s.getCallLogResponse(ctx, callLog.ID)
 }
 
@@ -378,6 +438,9 @@ func (s *callLogService) JoinCall(ctx context.Context, callUUID string, phone st
 			return err
 		}
 	}
+
+	// Mark the joining user in_call if they exist in the users table.
+	s.setUserCallStatus(ctx, phone, "in_call")
 
 	// StartAt is set only when a non-initiator joins — that marks the real call start.
 	if callLog.Status == "initiated" && joinedRole != "initiator" {
