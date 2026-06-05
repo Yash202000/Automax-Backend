@@ -93,6 +93,9 @@ type IncidentRepository interface {
 	// Notifications
 	CreateNotification(ctx context.Context, notification *models.NotificationLog) error
 
+	// Auto-assign monitor
+	FindUnassignedByStateCode(ctx context.Context, stateCode string) ([]models.Incident, error)
+
 	// Complaint-specific
 	IncrementEvaluationCount(ctx context.Context, id uuid.UUID) error
 
@@ -1441,6 +1444,22 @@ func (r *incidentRepository) IncrementEvaluationCount(ctx context.Context, id uu
 		Where("id = ?", id).
 		Where("record_type = 'complaint'").
 		Update("evaluation_count", gorm.Expr("evaluation_count + 1")).Error
+}
+
+func (r *incidentRepository) FindUnassignedByStateCode(ctx context.Context, stateCode string) ([]models.Incident, error) {
+	var incidents []models.Incident
+	err := r.db.WithContext(ctx).
+		Joins("JOIN workflow_states ws ON ws.id = incidents.current_state_id").
+		Where("ws.code = ?", stateCode).
+		Where("incidents.id NOT IN (SELECT incident_id FROM incident_assignees) AND incidents.record_type = ?", "incident").
+		Preload("CurrentState").
+		Preload("CurrentState.AssignmentRoles").
+		Preload("CurrentState.AssignUser").
+		Preload("Classification").
+		Preload("Location").
+		Preload("Department").
+		Find(&incidents).Error
+	return incidents, err
 }
 
 // Concurrency Control

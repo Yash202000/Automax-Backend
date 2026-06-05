@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
@@ -188,6 +190,14 @@ func main() {
 	aiQualityMonitor := services.NewAIQualityMonitor(aiQualityFeedbackRepo, incidentRepo, minioStorage, cfg.AIQuality)
 	aiQualityMonitor.Start(ctx)
 	defer aiQualityMonitor.Stop()
+
+	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+	if strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
+		// Initialize and start Auto-Assign Monitor
+		autoAssignMonitor := services.NewAutoAssignMonitor(incidentService, cfg.AutoAssign)
+		autoAssignMonitor.Start(ctx)
+		defer autoAssignMonitor.Stop()
+	}
 	// Initialize validator
 	validate := validator.New()
 

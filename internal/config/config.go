@@ -24,6 +24,7 @@ type Config struct {
 	ReadyToClose     ReadyToCloseConfig
 	Documenta        DocumentaConfig
 	AIQuality        AIQualityConfig
+	AutoAssign       AutoAssignConfig
 	License          LicenseConfig
 	Integration      IntegrationConfig
 }
@@ -59,6 +60,15 @@ type AIQualityConfig struct {
 	AppHost string
 	// AppToken is an internal bearer token used when downloading attachments via the API fallback. env: APP_TOKEN
 	AppToken string
+}
+
+// AutoAssignConfig holds settings for the Auto-Assign Monitor.
+type AutoAssignConfig struct {
+	// StateCode is the workflow state code to scan for unassigned incidents. env: AUTO_ASSIGN_STATE_CODE
+	// Leave empty to disable the monitor entirely.
+	StateCode string
+	// IntervalMinutes controls how often the monitor sweeps (default 5). env: AUTO_ASSIGN_INTERVAL_MINUTES
+	IntervalMinutes int
 }
 
 type DocumentaConfig struct {
@@ -224,13 +234,18 @@ func Load() *Config {
 			PreExpiryNotificationHours: getEnvAsInt("READY_TO_CLOSE_PRE_EXPIRY_HOURS", 24),
 			RevertStateCode:            getEnv("READY_TO_CLOSE_REVERT_STATE_CODE", "under_resolution"),
 			StateCode:                  getEnv("READY_TO_CLOSE_STATE_CODE", "ready_to_close"),
-		}, AIQuality: AIQualityConfig{
+		},
+		AIQuality: AIQualityConfig{
 			APIEndpoint:          getEnv("AI_QUALITY_API_ENDPOINT", ""),
 			APIKey:               getEnv("AI_QUALITY_API_KEY", ""),
 			CheckIntervalMinutes: getEnvAsInt("AI_QUALITY_CHECK_INTERVAL_MINUTES", 10),
 			AppProtocol:          getEnv("APP_PROTOCOL", "http"),
 			AppHost:              getEnv("APP_HOST", "localhost:8080"),
 			AppToken:             getEnv("APP_TOKEN", ""),
+		},
+		AutoAssign: AutoAssignConfig{
+			StateCode:       getEnv("AUTO_ASSIGN_STATE_CODE", ""),
+			IntervalMinutes: getEnvAsInt("AUTO_ASSIGN_INTERVAL_MINUTES", 5),
 		},
 		License: LicenseConfig{
 			EncryptionKey:     getEnv("LICENSE_ENCRYPTION_KEY", ""),

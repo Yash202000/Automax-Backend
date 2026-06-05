@@ -109,6 +109,9 @@ type IncidentService interface {
 
 	// Closed incident editing
 	UpdateClosedIncidentSummary(ctx context.Context, incidentID uuid.UUID, userID uuid.UUID, newDescription string, reason string) (*models.IncidentResponse, error)
+
+	// Auto-assign monitor
+	AutoAssignUnassigned(ctx context.Context) error
 }
 
 type incidentService struct {
@@ -5572,4 +5575,112 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 	if err := s.incidentRepo.CreateNotification(ctx, notification); err != nil {
 		log.Printf("MISSING-INFO-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
 	}
+}
+
+// AutoAssignUnassigned finds incidents in the state configured by AUTO_ASSIGN_STATE_CODE that
+// have no rows in incident_assignees, and assigns them to an online eligible agent using the
+// same logic as CreateIncident (respects DISTRIBUTE_INCIDENT_ASSIGN and workflow state rules).
+func (s *incidentService) AutoAssignUnassigned(ctx context.Context) error {
+	stateCode := strings.TrimSpace(os.Getenv("AUTO_ASSIGN_STATE_CODE"))
+	if stateCode == "" {
+		return nil
+	}
+
+	incidents, err := s.incidentRepo.FindUnassignedByStateCode(ctx, stateCode)
+	if err != nil {
+		return fmt.Errorf("auto-assign: query unassigned: %w", err)
+	}
+	if len(incidents) == 0 {
+		return nil
+	}
+
+	log.Printf("[AutoAssign] Found %d unassigned incident(s) in state %q", len(incidents), stateCode)
+
+	distributeAssign := strings.EqualFold(strings.TrimSpace(os.Getenv("DISTRIBUTE_INCIDENT_ASSIGN")), "true")
+
+	for i := range incidents {
+		incident := &incidents[i]
+		if incident.CurrentState == nil {
+			log.Printf("[AutoAssign] Skipping %s: CurrentState not loaded", incident.IncidentNumber)
+			continue
+		}
+		currentState := incident.CurrentState
+
+		var classID, locID, deptID *uuid.UUID
+		if incident.ClassificationID != nil {
+			classID = incident.ClassificationID
+		}
+		if incident.LocationID != nil {
+			locID = incident.LocationID
+		}
+		if incident.DepartmentID != nil {
+			deptID = incident.DepartmentID
+		}
+
+		var assigneeID *uuid.UUID
+
+		// @Maybe add logic source basis also
+		if distributeAssign {
+			var roleIDs []uuid.UUID
+			for _, r := range currentState.AssignmentRoles {
+				roleIDs = append(roleIDs, r.ID)
+			}
+			nextID, err := s.getNextRoundRobinAssignee(ctx, roleIDs, classID, locID, deptID)
+			if err != nil || nextID == nil {
+				log.Printf("[AutoAssign] %s: no online agents for round-robin: %v", incident.IncidentNumber, err)
+				continue
+			}
+			assigneeID = nextID
+		} else if currentState.AssignUserID != nil {
+			online, err := s.userRepo.IsUserOnline(ctx, *currentState.AssignUserID)
+			if err != nil || !online {
+				log.Printf("[AutoAssign] %s: fixed assignee offline or error: %v", incident.IncidentNumber, err)
+				continue
+			}
+			assigneeID = currentState.AssignUserID
+		} else if len(currentState.AssignmentRoles) > 0 {
+			var roleIDs []uuid.UUID
+			for _, r := range currentState.AssignmentRoles {
+				roleIDs = append(roleIDs, r.ID)
+			}
+			users, err := s.userRepo.FindMatchingOnline(ctx, roleIDs, classID, locID, deptID, nil)
+			if err != nil || len(users) == 0 {
+				log.Printf("[AutoAssign] %s: no online matching users: %v", incident.IncidentNumber, err)
+				continue
+			}
+			assigneeID = &users[0].ID
+
+			if currentState.AutoMatchUser {
+				allIDs := make([]uuid.UUID, len(users))
+				for j, u := range users {
+					allIDs[j] = u.ID
+				}
+				if err := s.incidentRepo.AssignIncident(ctx, incident.ID, *assigneeID); err != nil {
+					log.Printf("[AutoAssign] %s: AssignIncident failed: %v", incident.IncidentNumber, err)
+					continue
+				}
+				if err := s.incidentRepo.SetAssignees(ctx, incident.ID, allIDs); err != nil {
+					log.Printf("[AutoAssign] %s: SetAssignees failed: %v", incident.IncidentNumber, err)
+				} else {
+					log.Printf("[AutoAssign] %s: assigned to %s (+%d total)", incident.IncidentNumber, assigneeID, len(allIDs))
+				}
+				continue
+			}
+		} else {
+			log.Printf("[AutoAssign] %s: no assignment rule configured on state %q", incident.IncidentNumber, currentState.Code)
+			continue
+		}
+
+		if err := s.incidentRepo.AssignIncident(ctx, incident.ID, *assigneeID); err != nil {
+			log.Printf("[AutoAssign] %s: AssignIncident failed: %v", incident.IncidentNumber, err)
+			continue
+		}
+		if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{*assigneeID}); err != nil {
+			log.Printf("[AutoAssign] %s: SetAssignees failed: %v", incident.IncidentNumber, err)
+		} else {
+			log.Printf("[AutoAssign] %s: assigned to %s", incident.IncidentNumber, assigneeID)
+		}
+	}
+
+	return nil
 }

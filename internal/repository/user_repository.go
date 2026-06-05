@@ -52,6 +52,7 @@ type UserRepository interface {
 	FindByDepartmentAndRole(ctx context.Context, departmentID, roleID *uuid.UUID) ([]models.User, error)
 	UpdateProfile(ctx context.Context, user map[string]interface{}) error
 	FindByPermissionCode(ctx context.Context, permissionCode string) ([]models.User, error)
+	IsUserOnline(ctx context.Context, userID uuid.UUID) (bool, error)
 	ExistsByPhone(ctx context.Context, phone string, excludeUserID uuid.UUID) (bool, error)
 	ExistsByNationalID(ctx context.Context, nationalID string) (bool, error)
 	FindByNationalIDForLogin(ctx context.Context, nationalID string) (*models.User, error)
@@ -628,6 +629,14 @@ func (r *userRepository) FindMatchingOnline(ctx context.Context, roleIDs []uuid.
 
 	err := query.Distinct().Order("first_name, last_name").Find(&users).Error
 	return users, err
+}
+
+func (r *userRepository) IsUserOnline(ctx context.Context, userID uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&models.User{}).
+		Where("id = ? AND is_active = ? AND call_status = ?", userID, true, models.CallStatusOnline).
+		Count(&count).Error
+	return count > 0, err
 }
 
 func (r *userRepository) FindByExtension(ctx context.Context, extension string) (*models.User, error) {
