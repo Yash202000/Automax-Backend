@@ -2,7 +2,6 @@ package services
 
 import (
 	"fmt"
-	"log"
 	"net/url"
 	"os"
 	"strings"
@@ -123,14 +122,12 @@ func BuildIncidentVariables(
 		vars["sms_link"] = fmt.Sprintf("%s/ivr/incident/sms-link/%s?signed_token=%s",
 			smsPortalBase, incident.ID.String(), url.QueryEscape(token))
 		if incident.FeedbackID != nil {
-			log.Printf("incident.FeedbackID  inside  not nil case")
 			vars["feedback_url"] = fmt.Sprintf("%s/feedback/%s?signed_token=%s",
 				smsPortalBase, incident.ID.String(), incident.FeedbackID.String())
 		} else {
 			feedbackToken := pkgutils.GenerateIncidentToken(incident.ID.String(), feedbackTokenDuration)
 			vars["feedback_url"] = fmt.Sprintf("%s/feedback/%s?signed_token=%s",
 				smsPortalBase, incident.ID.String(), feedbackToken)
-
 		}
 		vars["feedback_link"] = fmt.Sprintf(`<a href="%s">تقييم الخدمة</a>`, vars["feedback_url"])
 	} else {

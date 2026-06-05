@@ -116,6 +116,7 @@ func (r *aiQualityFeedbackRepository) FindPendingIncidents(ctx context.Context) 
 		Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
 		Where("incidents.is_ai_verified = ? AND workflow_states.is_ai_qa = ?", false, true).
 		Where("incidents.deleted_at IS NULL AND workflow_states.deleted_at IS NULL").
+		Where("incidents.record_type = ?", "incident").
 		// Where("NOT EXISTS (SELECT 1 FROM ai_quality_feedbacks WHERE ai_quality_feedbacks.incident_id = incidents.id AND ai_quality_feedbacks.deleted_at IS NULL)").
 		Find(&incidents).Error
 	return incidents, err

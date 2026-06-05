@@ -231,7 +231,7 @@ func (e *actionExecutor) executeEmail(ctx context.Context, action *models.Transi
 
 // SmsConfig represents the configuration for an SMS action
 type SmsConfig struct {
-	Recipients      []string `json:"recipients"`              // "assignee", "reporter", "creator"
+	Recipients      []string `json:"recipients"`              // "assignee", "reporter", "creator", "caller"
 	CustomPhones    []string `json:"custom_phones"`           // explicit phone numbers
 	TemplateCode    string   `json:"template_code,omitempty"` // notification template code — overrides message_template when set
 	MessageTemplate string   `json:"message_template"`
@@ -533,6 +533,8 @@ func (e *actionExecutor) resolveRecipientPhones(ctx context.Context, incident *m
 					add(u.Phone)
 				}
 			}
+		case "caller":
+			add(incident.ReporterPhone)
 		case "previous_assignee":
 			for _, uid := range incident.PreviousAssigneeIDs {
 				if u, err := e.userRepo.FindByID(ctx, uid); err == nil {
