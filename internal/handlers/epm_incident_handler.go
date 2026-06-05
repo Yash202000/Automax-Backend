@@ -20,16 +20,16 @@ import (
 )
 
 type EPMIncidentHandler struct {
-	userRepo          repository.UserRepository
-	locationRepo      repository.LocationRepository
+	userRepo           repository.UserRepository
+	locationRepo       repository.LocationRepository
 	classificationRepo repository.ClassificationRepository
-	incidentRepo      repository.IncidentRepository
-	workflowRepo      repository.WorkflowRepository
-	lookupRepo        repository.LookupRepository
-	jwtManager        *utils.JWTManager
-	sessionStore      *database.SessionStore
-	storage           *storage.MinIOStorage
-	db                *gorm.DB
+	incidentRepo       repository.IncidentRepository
+	workflowRepo       repository.WorkflowRepository
+	lookupRepo         repository.LookupRepository
+	jwtManager         *utils.JWTManager
+	sessionStore       *database.SessionStore
+	storage            *storage.MinIOStorage
+	db                 *gorm.DB
 }
 
 func NewEPMIncidentHandler(
@@ -45,47 +45,47 @@ func NewEPMIncidentHandler(
 	db *gorm.DB,
 ) *EPMIncidentHandler {
 	return &EPMIncidentHandler{
-		userRepo:          userRepo,
-		locationRepo:      locationRepo,
+		userRepo:           userRepo,
+		locationRepo:       locationRepo,
 		classificationRepo: classificationRepo,
-		incidentRepo:      incidentRepo,
-		workflowRepo:      workflowRepo,
-		lookupRepo:        lookupRepo,
-		jwtManager:        jwtManager,
-		sessionStore:      sessionStore,
-		storage:           minioStorage,
-		db:                db,
+		incidentRepo:       incidentRepo,
+		workflowRepo:       workflowRepo,
+		lookupRepo:         lookupRepo,
+		jwtManager:         jwtManager,
+		sessionStore:       sessionStore,
+		storage:            minioStorage,
+		db:                 db,
 	}
 }
 
 type EPMInsertIncidentRequest struct {
-	Address             string `json:"address"`
-	BeneficiaryInfo     string `json:"beneficiaryInfo"`
-	DistrictCode        int    `json:"districtCode"`
-	DistrictName        string `json:"districtName"`
-	Email               string `json:"email"`
-	FileKey             string `json:"fileKey"`
-	FirstName           string `json:"firstName"`
-	IncidentNo          string `json:"incidentNo"`
-	IncidentStartDate   string `json:"incidentStartDate"`
-	IncidentStatusID    int    `json:"incidentStatusID"`
-	IqamaID             string `json:"iqamaID"`
-	IssueDiscription    string `json:"issueDiscription"`
-	Language            string `json:"language"`
-	LastName            string `json:"lastName"`
-	Latitude            string `json:"latitude"`
-	LocationDirection   string `json:"locationDirection"`
-	Longitude           string `json:"longitude"`
+	Address              string `json:"address"`
+	BeneficiaryInfo      string `json:"beneficiaryInfo"`
+	DistrictCode         int    `json:"districtCode"`
+	DistrictName         string `json:"districtName"`
+	Email                string `json:"email"`
+	FileKey              string `json:"fileKey"`
+	FirstName            string `json:"firstName"`
+	IncidentNo           string `json:"incidentNo"`
+	IncidentStartDate    string `json:"incidentStartDate"`
+	IncidentStatusID     int    `json:"incidentStatusID"`
+	IqamaID              string `json:"iqamaID"`
+	IssueDiscription     string `json:"issueDiscription"`
+	Language             string `json:"language"`
+	LastName             string `json:"lastName"`
+	Latitude             string `json:"latitude"`
+	LocationDirection    string `json:"locationDirection"`
+	Longitude            string `json:"longitude"`
 	MainClassificationID string `json:"mainClassificationID"`
-	MiddleName          string `json:"middleName"`
-	MobileNumber        string `json:"mobileNumber"`
-	MunicipalityID      string `json:"municipalityID"`
-	NationalID          string `json:"nationalID"`
-	Priority            string `json:"priority"`
-	SPLClassificationID string `json:"splClassificationID"`
-	SubBaladyaName      string `json:"subBaladyaName"`
-	SubClassificationID string `json:"subClassificationID"`
-	SubMunicipalityID   string `json:"subMunicipalityID"`
+	MiddleName           string `json:"middleName"`
+	MobileNumber         string `json:"mobileNumber"`
+	MunicipalityID       string `json:"municipalityID"`
+	NationalID           string `json:"nationalID"`
+	Priority             string `json:"priority"`
+	SPLClassificationID  string `json:"splClassificationID"`
+	SubBaladyaName       string `json:"subBaladyaName"`
+	SubClassificationID  string `json:"subClassificationID"`
+	SubMunicipalityID    string `json:"subMunicipalityID"`
 	SubSubMunicipalityID string `json:"sub_SubMunicipalityID"`
 }
 
@@ -98,14 +98,14 @@ type EPMInsertIncidentResponse struct {
 }
 
 type EPMIncidentStatusItems struct {
-	RequestID         string     `json:"requestID"`
-	Status            interface{} `json:"status"`
-	Comments          string     `json:"comments"`
-	IsNotified        bool       `json:"isNotified"`
-	CreatedDatetime   string     `json:"createdDatetime"`
-	SynchedDatetime   string     `json:"synchedDatetime"`
-	AmanaIncidentNo   string     `json:"amanaIncidentNo"`
-	EvaluationFlag    int        `json:"evaluationFlag"`
+	RequestID          string      `json:"requestID"`
+	Status             interface{} `json:"status"`
+	Comments           string      `json:"comments"`
+	IsNotified         bool        `json:"isNotified"`
+	CreatedDatetime    string      `json:"createdDatetime"`
+	SynchedDatetime    string      `json:"synchedDatetime"`
+	AmanaIncidentNo    string      `json:"amanaIncidentNo"`
+	EvaluationFlag     int         `json:"evaluationFlag"`
 	IncidentImageAlert interface{} `json:"incidentImageAlert"`
 }
 
@@ -117,10 +117,10 @@ type EPMIncidentAttachmentItem struct {
 }
 
 type EPMGetMomraIncidentStatusDetailsResponse struct {
-	Items        *EPMIncidentStatusItems       `json:"items"`
-	Attachements []EPMIncidentAttachmentItem  `json:"attachements"`
-	Result       bool                          `json:"result"`
-	Ex           string                        `json:"ex"`
+	Items          *EPMIncidentStatusItems     `json:"items"`
+	Attachements   []EPMIncidentAttachmentItem `json:"attachements"`
+	Result         bool                        `json:"result"`
+	Ex             string                      `json:"ex"`
 	HTTPStatusCode int                         `json:"httpStatusCode"`
 }
 
@@ -542,7 +542,7 @@ func (h *EPMIncidentHandler) GetMomraIncidentStatusDetails(c *fiber.Ctx) error {
 	}
 
 	var sessionData map[string]interface{}
-	if err := h.sessionStore.GetUserSession(c.UserContext(), claims.UserID.String(), &sessionData); err != nil {
+	if err := h.sessionStore.GetUserSession(c.UserContext(), claims.SessionID, &sessionData); err != nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(EPMGetMomraIncidentStatusDetailsResponse{
 			HTTPStatusCode: fiber.StatusUnauthorized,
 			Ex:             "Session expired or invalid",
