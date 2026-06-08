@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"math/big"
 	"os"
 	"strconv"
@@ -266,30 +265,7 @@ func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID stri
 		}
 	}
 
-	// Determine role
-	role := "user"
-	if user.IsSuperAdmin {
-		role = "admin"
-	} else if len(user.Roles) > 0 {
-		role = user.Roles[0].Code
-	}
-
-	//CREATE SESSION
-	_, err = s.sessionStore.SetUserSessionMultiDevices(
-		ctx,
-		user.ID.String(),
-		map[string]interface{}{
-			"user_id": user.ID,
-			"email":   user.Email,
-			"role":    role,
-		},
-		s.jwtManager.GetTokenExpiration(),
-	)
-	log.Println("Session ID for mobile login :", sessionID, "and user id :", user.ID.String())
-	if err != nil {
-		return nil, fmt.Errorf("failed to create session: %w", err)
-	}
-
+	// GenerateTokenViaUserID creates its own session internally; no separate session needed here.
 	authResp, err := s.userService.GenerateTokenViaUserID(ctx, user.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate token: %w", err)

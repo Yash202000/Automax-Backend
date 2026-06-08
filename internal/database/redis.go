@@ -133,6 +133,34 @@ func (s *SessionStore) ValidateSession(ctx context.Context, sessionID string) (b
 	return exists == 1, err
 }
 
+// DeleteSession removes a specific session and its reference from the user's session set.
+// Call this on logout so the session is cleaned up immediately rather than waiting for TTL.
+func (s *SessionStore) DeleteSession(ctx context.Context, userID, sessionID string) error {
+	pipe := s.client.Pipeline()
+	pipe.Del(ctx, "session:"+sessionID)
+	pipe.SRem(ctx, "user_sessions:"+userID, sessionID)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// SetPasswordChangedAt records the current time under pass_changed:{userID}.
+// RefreshToken checks this to reject refresh tokens issued before a password change.
+// TTL should be the maximum refresh token lifetime so old tokens can never bypass it.
+func (s *SessionStore) SetPasswordChangedAt(ctx context.Context, userID string, expiration time.Duration) error {
+	key := "pass_changed:" + userID
+	return s.client.Set(ctx, key, time.Now().Unix(), expiration).Err()
+}
+
+// GetPasswordChangedAt returns the Unix timestamp of the last password change, and whether it exists.
+func (s *SessionStore) GetPasswordChangedAt(ctx context.Context, userID string) (int64, bool) {
+	key := "pass_changed:" + userID
+	val, err := s.client.Get(ctx, key).Int64()
+	if err != nil {
+		return 0, false
+	}
+	return val, true
+}
+
 func (s *SessionStore) ResetBlockedUserState(ctx context.Context, email string, phone string) error {
 	var keys []string
 
