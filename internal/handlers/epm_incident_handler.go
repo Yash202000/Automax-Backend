@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -205,10 +207,24 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 			Result:         false,
 		})
 	}
+	if parsePriorityLevel(req.Priority) == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "priority must be valid value",
+			Result:         false,
+		})
+	}
 	if req.FileKey == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
 			HTTPStatusCode: fiber.StatusBadRequest,
 			Message:        "fileKey is required",
+			Result:         false,
+		})
+	}
+	if _, err := base64.StdEncoding.DecodeString(req.FileKey); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "fileKey must be a valid base64 encoded string",
 			Result:         false,
 		})
 	}
@@ -226,10 +242,31 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 			Result:         false,
 		})
 	}
+	if _, err := strconv.ParseFloat(req.Latitude, 64); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "latitude must be a valid number",
+			Result:         false,
+		})
+	}
+	if _, err := strconv.ParseFloat(req.Longitude, 64); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "longitude must be a valid number",
+			Result:         false,
+		})
+	}
 	if req.MobileNumber == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
 			HTTPStatusCode: fiber.StatusBadRequest,
 			Message:        "mobileNumber is required",
+			Result:         false,
+		})
+	}
+	if !regexp.MustCompile(`^\+?[0-9\-\(\)\s]+$`).MatchString(req.MobileNumber) {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "mobileNumber must contain only digits and valid phone characters (+, -, (, ))",
 			Result:         false,
 		})
 	}
@@ -269,9 +306,39 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 	if req.SubBaladyaName != "" {
 		custFields["subBaladyaName"] = req.SubBaladyaName
 	}
+	if req.SubClassificationID != "" {
+		custFields["subClassificationID"] = req.SubClassificationID
+	}
+	if req.SPLClassificationID != "" {
+		custFields["splClassificationID"] = req.SPLClassificationID
+	}
+	if req.MunicipalityID != "" {
+		custFields["municipalityID"] = req.MunicipalityID
+	}
 	custFieldBytes, _ := json.Marshal(custFields)
 
-	// validate all provided locations exist in DB
+	// validate all locations are provided and exist in DB
+	if req.MunicipalityID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "municipalityID is required",
+			Result:         false,
+		})
+	}
+	if req.SubMunicipalityID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "subMunicipalityID is required",
+			Result:         false,
+		})
+	}
+	if req.SubSubMunicipalityID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "sub_SubMunicipalityID is required",
+			Result:         false,
+		})
+	}
 	municipalityLoc, err := h.validateAndResolveLocation(c.UserContext(), req.MunicipalityID)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
@@ -310,7 +377,28 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 		locationID = municipalityLoc
 	}
 
-	// validate all provided classifications exist in DB
+	// validate all classifications are provided and exist in DB
+	if req.MainClassificationID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "mainClassificationID is required",
+			Result:         false,
+		})
+	}
+	if req.SubClassificationID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "subClassificationID is required",
+			Result:         false,
+		})
+	}
+	if req.SPLClassificationID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "splClassificationID is required",
+			Result:         false,
+		})
+	}
 	subCls, err := h.validateAndResolveClassification(c.UserContext(), req.SubClassificationID)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
