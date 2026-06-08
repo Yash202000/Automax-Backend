@@ -114,12 +114,20 @@ func (r *escalationGroupRepository) UpdateLastNotifiedAt(ctx context.Context, id
 }
 
 func (r *escalationGroupRepository) SetUsers(ctx context.Context, groupID uuid.UUID, userIDs []uuid.UUID) error {
-	users := make([]models.User, len(userIDs))
-	for i, id := range userIDs {
-		users[i] = models.User{ID: id}
-	}
-	group := models.EscalationGroup{ID: groupID}
-	return r.db.WithContext(ctx).Model(&group).Association("Users").Replace(users)
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("DELETE FROM escalation_group_users WHERE escalation_group_id = ?", groupID).Error; err != nil {
+			return err
+		}
+		for _, userID := range userIDs {
+			if err := tx.Exec(
+				"INSERT INTO escalation_group_users (escalation_group_id, user_id) VALUES (?, ?)",
+				groupID, userID,
+			).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // SetTargets atomically replaces all targets for a group.

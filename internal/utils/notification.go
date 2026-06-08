@@ -2,6 +2,7 @@ package utils
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -10,12 +11,97 @@ import (
 	"net/smtp"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/twilio/twilio-go"
 	openapi "github.com/twilio/twilio-go/rest/api/v2010"
 )
+
+// smtpPool holds one reusable authenticated SMTP connection so that every
+// outgoing email does NOT trigger a new SMTP AUTH handshake. Gmail counts
+// each AUTH as a "login attempt" and rate-limits after too many in a short
+// window — a single persistent connection avoids that entirely.
+var smtpPool = struct {
+	mu     sync.Mutex
+	client *smtp.Client
+}{}
+
+// getOrCreateSMTPClient returns the live pooled client, or dials+authenticates
+// a fresh one if the connection is absent or has gone stale (NOOP check).
+func getOrCreateSMTPClient() (*smtp.Client, error) {
+	smtpPool.mu.Lock()
+	defer smtpPool.mu.Unlock()
+
+	if smtpPool.client != nil {
+		if err := smtpPool.client.Noop(); err == nil {
+			return smtpPool.client, nil
+		}
+		smtpPool.client.Close()
+		smtpPool.client = nil
+	}
+
+	host := os.Getenv("SMTP_HOST")
+	port := os.Getenv("SMTP_PORT")
+	user := os.Getenv("SMTP_USER")
+	pass := os.Getenv("SMTP_PASS")
+
+	c, err := smtp.Dial(fmt.Sprintf("%s:%s", host, port))
+	if err != nil {
+		return nil, fmt.Errorf("smtp dial: %w", err)
+	}
+	if err = c.StartTLS(&tls.Config{ServerName: host}); err != nil {
+		c.Close()
+		return nil, fmt.Errorf("smtp starttls: %w", err)
+	}
+	if err = c.Auth(smtp.PlainAuth("", user, pass, host)); err != nil {
+		c.Close()
+		return nil, fmt.Errorf("smtp auth: %w", err)
+	}
+
+	smtpPool.client = c
+	return c, nil
+}
+
+// sendViaPool delivers msg using the persistent client.
+// On any mid-send error the connection is discarded so the next call reconnects.
+func sendViaPool(fromEmail string, recipients []string, msg []byte) error {
+	smtpPool.mu.Lock()
+	defer smtpPool.mu.Unlock()
+
+	c := smtpPool.client
+	if c == nil {
+		return fmt.Errorf("smtp client not initialised")
+	}
+
+	reset := func(err error) error {
+		smtpPool.client.Close()
+		smtpPool.client = nil
+		return err
+	}
+
+	if err := c.Mail(fromEmail); err != nil {
+		return reset(fmt.Errorf("smtp MAIL FROM: %w", err))
+	}
+	for _, r := range recipients {
+		if err := c.Rcpt(r); err != nil {
+			return reset(fmt.Errorf("smtp RCPT TO %s: %w", r, err))
+		}
+	}
+	w, err := c.Data()
+	if err != nil {
+		return reset(fmt.Errorf("smtp DATA: %w", err))
+	}
+	if _, err = w.Write(msg); err != nil {
+		return reset(fmt.Errorf("smtp write: %w", err))
+	}
+	if err = w.Close(); err != nil {
+		return reset(fmt.Errorf("smtp close data: %w", err))
+	}
+	_ = c.Reset() // prepare connection for the next message
+	return nil
+}
 
 func SendOTPWithMetaTemplate(phone string, otp string) error {
 	metaURL := os.Getenv("OTP_TEMPLATE_URL")
@@ -193,16 +279,31 @@ func SendWhatsApp(phone string, message string) error {
 	)
 }
 
-// SendSMTPWithCCBCC sends email with TO, CC, BCC, and attachments support
+// SendSMTPWithCCBCC sends email with TO, CC, BCC, and attachments support.
+// It reuses a persistent SMTP connection (authenticated once) to avoid Gmail's
+// "too many login attempts" rate limit.
 func SendSMTPWithCCBCC(to []string, cc []string, bcc []string, subject, body string, attachments []models.AttachmentData) (models.RecipientArray, error) {
-	host := os.Getenv("SMTP_HOST")
-	port := os.Getenv("SMTP_PORT")
-	user := os.Getenv("SMTP_USER")
-	pass := os.Getenv("SMTP_PASS")
-	from := os.Getenv("SMTP_FROM")
+	fromEmail := os.Getenv("SMTP_FROM")
+	fromName := os.Getenv("SMTP_FROM_NAME")
 
-	addr := fmt.Sprintf("%s:%s", host, port)
-	auth := smtp.PlainAuth("", user, pass, host)
+	// fromHeader = display name + address for the email From: header.
+	// fromEmail  = bare address for the SMTP envelope (smtp requires no display name).
+	fromHeader := fromEmail
+	if fromName != "" {
+		fromHeader = fmt.Sprintf("%s <%s>", fromName, fromEmail)
+	}
+
+	// Ensure the pooled connection is alive before building the message.
+	if _, err := getOrCreateSMTPClient(); err != nil {
+		var recipientStatuses models.RecipientArray
+		for _, r := range append(append([]string{}, to...), append(cc, bcc...)...) {
+			recipientStatuses = append(recipientStatuses, models.RecipientInfo{
+				Email: r, Channel: r,
+				Type: GetRecipientType(r, to, cc, bcc), Status: "failed", Error: err.Error(),
+			})
+		}
+		return recipientStatuses, err
+	}
 
 	// Build recipient list for SMTP (TO + CC + BCC)
 	allRecipients := make([]string, 0, len(to)+len(cc)+len(bcc))
@@ -215,7 +316,7 @@ func SendSMTPWithCCBCC(to []string, cc []string, bcc []string, subject, body str
 	boundary := "==_boundary_=="
 
 	// Headers
-	msg.WriteString(fmt.Sprintf("From: %s\r\n", from))
+	msg.WriteString(fmt.Sprintf("From: %s\r\n", fromHeader))
 	if len(to) > 0 {
 		msg.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(to, ", ")))
 	}
@@ -278,8 +379,8 @@ func SendSMTPWithCCBCC(to []string, cc []string, bcc []string, subject, body str
 
 	msg.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
 
-	// Send email
-	err := smtp.SendMail(addr, auth, from, allRecipients, msg.Bytes())
+	// Send via persistent connection — no new AUTH handshake per email.
+	err := sendViaPool(fromEmail, allRecipients, msg.Bytes())
 
 	// Build recipient status array
 	var recipientStatuses models.RecipientArray
@@ -321,6 +422,14 @@ func SendSMS(to, message string) error {
 		return fmt.Errorf("twilio env vars missing: TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_PHONE_NUMBER")
 	}
 
+	// Normalize whitespace: trim each line, drop blank lines, collapse to single newlines.
+	// Templates often contain indentation and extra blank lines that inflate UCS-2 segment count.
+	if strings.TrimSpace(message) == "" {
+		fmt.Printf("[DEBUG-SMS] ERROR: empty message body for recipient %s — skipping send\n", to)
+		return fmt.Errorf("sms body is empty")
+	}
+	fmt.Printf("[DEBUG-SMS] Sending to=%s from=%s body_len=%d body=%q\n", to, from, len(message), message)
+
 	client := twilio.NewRestClientWithParams(twilio.ClientParams{
 		Username: accountSID,
 		Password: authToken,
@@ -333,16 +442,35 @@ func SendSMS(to, message string) error {
 
 	resp, err := client.Api.CreateMessage(params)
 	if err != nil {
-		fmt.Printf("[DEBUG-SMS] Twilio API error: %v\n", err)
+		fmt.Printf("[DEBUG-SMS] Twilio API error to=%s: %v\n", to, err)
 		return fmt.Errorf("twilio send sms error: %w", err)
 	}
 
 	if resp != nil && resp.Sid != nil {
-		fmt.Printf("[DEBUG-SMS] SMS sent successfully! Message SID: %s\n", *resp.Sid)
+		status := ""
+		if resp.Status != nil {
+			status = *resp.Status
+		}
+		fmt.Printf("[DEBUG-SMS] Accepted by Twilio: SID=%s status=%s to=%s\n", *resp.Sid, status, to)
 	} else {
 		fmt.Println("[DEBUG-SMS] SMS sent successfully! (No SID in response)")
 	}
 	return nil
+}
+
+// normalizeSMSBody trims each line, drops blank lines, and strips leading/trailing
+// whitespace from the whole message. This reduces UCS-2 segment count when templates
+// contain indentation or extra blank lines.
+func normalizeSMSBody(s string) string {
+	lines := strings.Split(s, "\n")
+	out := lines[:0]
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l != "" {
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // stripHTMLTags removes all HTML tags from s, returning plain text.

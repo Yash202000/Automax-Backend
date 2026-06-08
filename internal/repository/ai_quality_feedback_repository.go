@@ -2,10 +2,12 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type AIQualityFeedbackRepository interface {
@@ -25,6 +27,9 @@ type AIQualityFeedbackRepository interface {
 	// FindPendingIncidents returns incidents that are AI-verified and whose current workflow state
 	// is marked as AI QA required, but do not yet have an AIQualityFeedback record.
 	FindPendingIncidents(ctx context.Context) ([]models.Incident, error)
+
+	// SetReopened updates the is_reopened flag on the feedback record for the given incident.
+	SetReopened(ctx context.Context, incidentID uuid.UUID, value bool) error
 }
 
 type aiQualityFeedbackRepository struct {
@@ -36,7 +41,20 @@ func NewAIQualityFeedbackRepository(db *gorm.DB) AIQualityFeedbackRepository {
 }
 
 func (r *aiQualityFeedbackRepository) Create(ctx context.Context, feedback *models.AIQualityFeedback) error {
-	return r.db.WithContext(ctx).Create(feedback).Error
+	return r.db.WithContext(ctx).
+		Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "incident_id"}},
+			DoUpdates: clause.Assignments(map[string]interface{}{
+				"changed_summary":   feedback.ChangedSummary,
+				"resolution_status": feedback.ResolutionStatus,
+				"distance_meters":   feedback.DistanceMeters,
+				"raw_response":      feedback.RawResponse,
+				"is_reopened":       false,
+				"deleted_at":        nil,
+				"updated_at":        time.Now(),
+			}),
+		}).
+		Create(feedback).Error
 }
 
 func (r *aiQualityFeedbackRepository) ListAllWithIncident(ctx context.Context) ([]models.AIQualityFeedback, error) {
@@ -45,6 +63,7 @@ func (r *aiQualityFeedbackRepository) ListAllWithIncident(ctx context.Context) (
 		Preload("Incident.CurrentState").
 		Preload("Incident.Classification").
 		Preload("Incident.Department").
+		Preload("Incident.Assignees").
 		Order("ai_quality_feedbacks.created_at DESC").
 		Find(&feedbacks).Error
 	return feedbacks, err
@@ -70,6 +89,13 @@ func (r *aiQualityFeedbackRepository) ExistsForIncident(ctx context.Context, inc
 	return count > 0, err
 }
 
+func (r *aiQualityFeedbackRepository) SetReopened(ctx context.Context, incidentID uuid.UUID, value bool) error {
+	return r.db.WithContext(ctx).
+		Model(&models.AIQualityFeedback{}).
+		Where("incident_id = ?", incidentID).
+		Update("is_reopened", value).Error
+}
+
 // FindPendingIncidents fetches incidents that satisfy both conditions:
 //   - is_ai_verified = true on the incident
 //   - is_ai_qa = true on the incident's current workflow state
@@ -79,7 +105,7 @@ func (r *aiQualityFeedbackRepository) ExistsForIncident(ctx context.Context, inc
 // Comments are preloaded ordered newest-first so index 0 = the latest resolver comment.
 func (r *aiQualityFeedbackRepository) FindPendingIncidents(ctx context.Context) ([]models.Incident, error) {
 	var incidents []models.Incident
-	err := r.db.WithContext(ctx).Debug().
+	err := r.db.WithContext(ctx).
 		Preload("CurrentState").
 		Preload("Attachments", func(db *gorm.DB) *gorm.DB {
 			return db.Order("created_at ASC")
@@ -90,7 +116,8 @@ func (r *aiQualityFeedbackRepository) FindPendingIncidents(ctx context.Context) 
 		Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
 		Where("incidents.is_ai_verified = ? AND workflow_states.is_ai_qa = ?", false, true).
 		Where("incidents.deleted_at IS NULL AND workflow_states.deleted_at IS NULL").
-		Where("NOT EXISTS (SELECT 1 FROM ai_quality_feedbacks WHERE ai_quality_feedbacks.incident_id = incidents.id AND ai_quality_feedbacks.deleted_at IS NULL)").
+		Where("incidents.record_type = ?", "incident").
+		// Where("NOT EXISTS (SELECT 1 FROM ai_quality_feedbacks WHERE ai_quality_feedbacks.incident_id = incidents.id AND ai_quality_feedbacks.deleted_at IS NULL)").
 		Find(&incidents).Error
 	return incidents, err
 }

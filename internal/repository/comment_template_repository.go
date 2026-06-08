@@ -12,6 +12,7 @@ type CommentTemplateRepository interface {
 	Create(ctx context.Context, commentTemplate *models.CommentTemplate) error
 	FindByID(ctx context.Context, id uuid.UUID) (*models.CommentTemplate, error)
 	FindByWorkflowTransitionID(ctx context.Context, workflowTransitionID uuid.UUID) ([]models.CommentTemplate, error)
+	CommentTemplateExist(ctx context.Context, comment string, workflowTransitionID uuid.UUID) (bool, error)
 	List(ctx context.Context, includeInactive bool) ([]models.CommentTemplate, error)
 	Update(ctx context.Context, commentTemplate *models.CommentTemplate) error
 	Delete(ctx context.Context, id uuid.UUID) error
@@ -47,6 +48,15 @@ func (r *commentTemplateRepository) FindByWorkflowTransitionID(ctx context.Conte
 		Where("workflow_transition_id = ? AND is_active = ?", workflowTransitionID, true).
 		Find(&commentTemplates).Error
 	return commentTemplates, err
+}
+
+func (r *commentTemplateRepository) CommentTemplateExist(ctx context.Context, comment string, workflowTransitionID uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&models.CommentTemplate{}).
+		Where("comment_text = ? AND workflow_transition_id = ?", comment, workflowTransitionID).
+		Count(&count).Error
+	return count > 0, err
 }
 
 func (r *commentTemplateRepository) List(ctx context.Context, includeInactive bool) ([]models.CommentTemplate, error) {

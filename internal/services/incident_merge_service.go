@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/internal/utils"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -178,71 +181,76 @@ func (s *incidentMergeService) ValidateMerge(ctx context.Context, incidentIDStrs
 		return response, nil
 	}
 
-	// Validate all incidents have the same parent location
-	// Resolve each incident's location to its parent (or itself if no parent)
-	getParentLocationID := func(locationID *uuid.UUID) *uuid.UUID {
-		if locationID == nil {
-			return nil
-		}
-		loc, err := s.locationRepo.FindByID(ctx, *locationID)
-		if err != nil {
-			return locationID // fallback to exact match
-		}
-		// Return parent ID if exists, otherwise return self (top-level)
-		return loc.ParentID
-	}
-
-	firstParentLocationID := getParentLocationID(firstIncident.LocationID)
+	// Validate all incidents have the exact same location (changed from parent-location match to direct match)
+	firstLocationID := firstIncident.LocationID
 	for i, incident := range incidents {
 		if i > 0 {
-			parentLocID := getParentLocationID(incident.LocationID)
-			if firstParentLocationID == nil && parentLocID != nil {
-				response.Errors = append(response.Errors, "All incidents must have the same parent location")
+			if firstLocationID == nil && incident.LocationID != nil {
+				response.Errors = append(response.Errors, "All incidents must have the same location")
 				return response, nil
 			}
-			if firstParentLocationID != nil && parentLocID == nil {
-				response.Errors = append(response.Errors, "All incidents must have the same parent location")
+			if firstLocationID != nil && incident.LocationID == nil {
+				response.Errors = append(response.Errors, "All incidents must have the same location")
 				return response, nil
 			}
-			if firstParentLocationID != nil && parentLocID != nil && *firstParentLocationID != *parentLocID {
-				response.Errors = append(response.Errors, "All incidents must have the same parent location")
+			if firstLocationID != nil && incident.LocationID != nil && *firstLocationID != *incident.LocationID {
+				response.Errors = append(response.Errors, "All incidents must have the same location")
 				return response, nil
 			}
-			// Both nil is OK - both incidents have no location
+			// Both nil is OK - both incidents have no location set
 		}
 	}
 
-	// Validate all incidents have the same parent classification
-	// Resolve each incident's classification to its parent (or itself if no parent)
-	getParentClassificationID := func(classificationID *uuid.UUID) *uuid.UUID {
-		if classificationID == nil {
-			return nil
-		}
-		cls, err := s.classificationRepo.FindByID(ctx, *classificationID)
-		if err != nil {
-			return classificationID // fallback to exact match
-		}
-		// Return parent ID if exists, otherwise return nil (top-level)
-		return cls.ParentID
-	}
-
-	firstParentClassificationID := getParentClassificationID(firstIncident.ClassificationID)
+	// Validate all incidents have the exact same classification (changed from parent-classification match to direct match)
+	firstClassificationID := firstIncident.ClassificationID
 	for i, incident := range incidents {
 		if i > 0 {
-			parentClsID := getParentClassificationID(incident.ClassificationID)
-			if firstParentClassificationID == nil && parentClsID != nil {
-				response.Errors = append(response.Errors, "All incidents must have the same parent classification")
+			if firstClassificationID == nil && incident.ClassificationID != nil {
+				response.Errors = append(response.Errors, "All incidents must have the same classification")
 				return response, nil
 			}
-			if firstParentClassificationID != nil && parentClsID == nil {
-				response.Errors = append(response.Errors, "All incidents must have the same parent classification")
+			if firstClassificationID != nil && incident.ClassificationID == nil {
+				response.Errors = append(response.Errors, "All incidents must have the same classification")
 				return response, nil
 			}
-			if firstParentClassificationID != nil && parentClsID != nil && *firstParentClassificationID != *parentClsID {
-				response.Errors = append(response.Errors, "All incidents must have the same parent classification")
+			if firstClassificationID != nil && incident.ClassificationID != nil && *firstClassificationID != *incident.ClassificationID {
+				response.Errors = append(response.Errors, "All incidents must have the same classification")
 				return response, nil
 			}
-			// Both nil is OK - both incidents have same top-level classification
+			// Both nil is OK - both incidents have no classification set
+		}
+	}
+
+	// Validate all incidents are within configured radius of each other
+	maxMergeDistanceStr := os.Getenv("MAX_INCIDENT_DISTANCE")
+	maxMergeDistance, err := strconv.ParseFloat(maxMergeDistanceStr, 64)
+	if err != nil || maxMergeDistance <= 0 {
+		maxMergeDistance = 500 // Default to 500 meters
+	}
+
+	// Check if all incidents have coordinates
+	allHaveCoordinates := true
+	for _, incident := range incidents {
+		if incident.Latitude == nil || incident.Longitude == nil {
+			allHaveCoordinates = false
+			break
+		}
+	}
+
+	if allHaveCoordinates {
+		for i := 0; i < len(incidents); i++ {
+			for j := i + 1; j < len(incidents); j++ {
+				distance := utils.CalculateDistance(
+					*incidents[i].Latitude, *incidents[i].Longitude,
+					*incidents[j].Latitude, *incidents[j].Longitude,
+				)
+				if distance > maxMergeDistance {
+					response.Errors = append(response.Errors,
+						fmt.Sprintf("Incidents must be within %.0f meters of each other (incidents %s and %s are %.0f meters apart)",
+							maxMergeDistance, incidents[i].IncidentNumber, incidents[j].IncidentNumber, distance))
+					return response, nil
+				}
+			}
 		}
 	}
 

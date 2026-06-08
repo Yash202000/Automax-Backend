@@ -18,10 +18,10 @@ type WorkflowRepository interface {
 	ListByRecordType(ctx context.Context, recordType string, activeOnly bool) ([]models.Workflow, error)
 	Update(ctx context.Context, workflow *models.Workflow) error
 	Delete(ctx context.Context, id uuid.UUID) error
-	HardDelete(ctx context.Context, id uuid.UUID) error   // Permanently delete with cascading
+	HardDelete(ctx context.Context, id uuid.UUID) error         // Permanently delete with cascading
 	ListDeleted(ctx context.Context) ([]models.Workflow, error) // List soft-deleted workflows
-	Restore(ctx context.Context, id uuid.UUID) error      // Restore a soft-deleted workflow
-
+	Restore(ctx context.Context, id uuid.UUID) error            // Restore a soft-deleted workflow
+	ExistsByCodeOrName(ctx context.Context, codeOrName []string) (bool, error)
 	// Workflow-Classification assignments
 	AssignClassifications(ctx context.Context, workflowID uuid.UUID, classificationIDs []uuid.UUID) error
 	GetByClassificationID(ctx context.Context, classificationID uuid.UUID) (*models.Workflow, error)
@@ -55,6 +55,7 @@ type WorkflowRepository interface {
 	FindTransitionByIDWithRelations(ctx context.Context, id uuid.UUID) (*models.WorkflowTransition, error)
 	ListTransitionsByWorkflowID(ctx context.Context, workflowID uuid.UUID) ([]models.WorkflowTransition, error)
 	ListTransitionsFromState(ctx context.Context, stateID uuid.UUID) ([]models.WorkflowTransition, error)
+	ListTransitionsToState(ctx context.Context, stateID uuid.UUID) ([]models.WorkflowTransition, error)
 	UpdateTransition(ctx context.Context, transition *models.WorkflowTransition) error
 	DeleteTransition(ctx context.Context, id uuid.UUID) error
 
@@ -67,6 +68,9 @@ type WorkflowRepository interface {
 
 	// State editable role assignments
 	AssignStateEditableRoles(ctx context.Context, stateID uuid.UUID, roleIDs []uuid.UUID) error
+
+	// State creation-time assignment roles
+	AssignStateAssignmentRoles(ctx context.Context, stateID uuid.UUID, roleIDs []uuid.UUID) error
 
 	// TransitionRequirement CRUD
 	SetTransitionRequirements(ctx context.Context, transitionID uuid.UUID, requirements []models.TransitionRequirement) error
@@ -145,6 +149,18 @@ func (r *workflowRepository) FindByCode(ctx context.Context, code string) (*mode
 		return nil, err
 	}
 	return &workflow, nil
+}
+
+func (r *workflowRepository) ExistsByCodeOrName(ctx context.Context, codeOrName []string) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&models.Workflow{}).
+		Where("code IN (?) OR name IN (?)", codeOrName, codeOrName).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 func (r *workflowRepository) List(ctx context.Context, activeOnly bool) ([]models.Workflow, error) {
@@ -367,6 +383,8 @@ func (r *workflowRepository) FindStateByID(ctx context.Context, id uuid.UUID) (*
 	err := r.db.WithContext(ctx).
 		Preload("ViewableRoles").
 		Preload("EditableRoles").
+		Preload("AssignmentRoles").
+		Preload("AssignUser").
 		First(&state, "id = ?", id).Error
 	if err != nil {
 		return nil, err
@@ -379,6 +397,8 @@ func (r *workflowRepository) FindStateByCode(ctx context.Context, workflowID uui
 	err := r.db.WithContext(ctx).
 		Preload("ViewableRoles").
 		Preload("EditableRoles").
+		Preload("AssignmentRoles").
+		Preload("AssignUser").
 		Where("workflow_id = ? AND code = ?", workflowID, code).
 		First(&state).Error
 	if err != nil {
@@ -395,6 +415,8 @@ func (r *workflowRepository) ListStatesByWorkflowID(ctx context.Context, workflo
 	err := r.db.WithContext(ctx).
 		Preload("ViewableRoles").
 		Preload("EditableRoles").
+		Preload("AssignmentRoles").
+		Preload("AssignUser").
 		Where("workflow_id = ?", workflowID).
 		Order("sort_order, name").
 		Find(&states).Error
@@ -412,6 +434,8 @@ func (r *workflowRepository) DeleteState(ctx context.Context, id uuid.UUID) erro
 func (r *workflowRepository) GetInitialState(ctx context.Context, workflowID uuid.UUID) (*models.WorkflowState, error) {
 	var state models.WorkflowState
 	err := r.db.WithContext(ctx).
+		Preload("AssignmentRoles").
+		Preload("AssignUser").
 		Where("workflow_id = ? AND state_type = ? AND is_active = ?", workflowID, "initial", true).
 		First(&state).Error
 	if err != nil {
@@ -468,6 +492,9 @@ func (r *workflowRepository) ListTransitionsByWorkflowID(ctx context.Context, wo
 		Preload("AssignUser").
 		Preload("AssignmentRoles").
 		Preload("Requirements").
+		Preload("Actions", func(db *gorm.DB) *gorm.DB {
+			return db.Order("execution_order")
+		}).
 		Preload("FieldChanges", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order")
 		}).
@@ -494,6 +521,28 @@ func (r *workflowRepository) ListTransitionsFromState(ctx context.Context, state
 			return db.Order("sort_order")
 		}).
 		Where("from_state_id = ? AND is_active = ?", stateID, true).
+		Order("sort_order, name").
+		Find(&transitions).Error
+	return transitions, err
+}
+
+func (r *workflowRepository) ListTransitionsToState(ctx context.Context, stateID uuid.UUID) ([]models.WorkflowTransition, error) {
+	var transitions []models.WorkflowTransition
+	err := r.db.WithContext(ctx).
+		Preload("FromState").
+		Preload("ToState").
+		Preload("AllowedRoles").
+		Preload("AssignDepartment").
+		Preload("AssignUser").
+		Preload("AssignmentRoles").
+		Preload("Requirements").
+		Preload("Actions", func(db *gorm.DB) *gorm.DB {
+			return db.Order("execution_order")
+		}).
+		Preload("FieldChanges", func(db *gorm.DB) *gorm.DB {
+			return db.Order("sort_order")
+		}).
+		Where("to_state_id = ? AND is_active = ?", stateID, true).
 		Order("sort_order, name").
 		Find(&transitions).Error
 	return transitions, err
@@ -571,6 +620,22 @@ func (r *workflowRepository) AssignStateEditableRoles(ctx context.Context, state
 	}
 
 	return r.db.WithContext(ctx).Model(&state).Association("EditableRoles").Replace(roles)
+}
+
+func (r *workflowRepository) AssignStateAssignmentRoles(ctx context.Context, stateID uuid.UUID, roleIDs []uuid.UUID) error {
+	var state models.WorkflowState
+	if err := r.db.WithContext(ctx).First(&state, "id = ?", stateID).Error; err != nil {
+		return err
+	}
+
+	var roles []models.Role
+	if len(roleIDs) > 0 {
+		if err := r.db.WithContext(ctx).Where("id IN ?", roleIDs).Find(&roles).Error; err != nil {
+			return err
+		}
+	}
+
+	return r.db.WithContext(ctx).Model(&state).Association("AssignmentRoles").Replace(roles)
 }
 
 // TransitionRequirement CRUD

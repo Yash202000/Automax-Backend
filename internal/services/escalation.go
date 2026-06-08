@@ -41,6 +41,11 @@ func NewEscalationService(
 	}
 }
 
+// SetFrontendURL sets the base URL used to build incident deep-links in notification bodies.
+func (s *EscalationService) SetFrontendURL(url string) {
+	s.frontendURL = url
+}
+
 // SetPolicyService injects the shared EscalationPolicyService for user resolution.
 func (s *EscalationService) SetPolicyService(ps *EscalationPolicyService) {
 	s.policyService = ps
@@ -74,14 +79,17 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 
 	log.Printf("[EscalationService] %d incident(s) have exceeded their current state SLA.", len(incidents))
 
+	var processed, skippedNoPolicy, skippedOther int
 	for _, incident := range incidents {
 		if incident.CurrentState == nil {
 			log.Printf("[EscalationService] Incident %s has no CurrentState loaded — skipping", incident.IncidentNumber)
+			skippedOther++
 			continue
 		}
 		state := incident.CurrentState
 		if state.SLAHours == nil {
 			log.Printf("[EscalationService] Incident %s / state '%s' has no SLAHours — skipping", incident.IncidentNumber, state.Name)
+			skippedOther++
 			continue
 		}
 
@@ -91,16 +99,29 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 		if slaUnit == "" {
 			slaUnit = "hours"
 		}
-		log.Printf("[EscalationService] Incident %s has been in state '%s' for %.2fh (SLA: %d %s)",
-			incident.IncidentNumber, state.Name, hoursInState, *state.SLAHours, slaUnit)
+		// log.Printf("[EscalationService] Incident %s has been in state '%s' for %.2fh (SLA: %d %s)",
+		// 	incident.IncidentNumber, state.Name, hoursInState, *state.SLAHours, slaUnit)
 
 		// ── Policy-driven path ──────────────────────────────────────────────
-		if state.EscalationPolicyID != nil && s.policyService != nil {
-			s.processPolicySteps(ctx, incident, state, hoursInState)
+		if state.EscalationPolicyID != nil {
+			if s.policyService != nil {
+				s.processPolicySteps(ctx, incident, state, hoursInState)
+				processed++
+			} else {
+				log.Printf("[EscalationService] Incident %s / state '%s' has escalation_policy_id set but policyService is nil — skipping",
+					incident.IncidentNumber, state.Name)
+				skippedOther++
+			}
 			continue
 		}
 
-		// ── Legacy path: notify users allowed on outgoing transitions ───────
+		// No escalation policy attached to this state — skip to avoid unintended notifications.
+		// log.Printf("[EscalationService] Incident %s / state '%s' has no escalation policy attached — assign one to enable SLA notifications",
+		// 	incident.IncidentNumber, state.Name)
+		skippedNoPolicy++
+		continue
+
+		// ── Legacy path (disabled — states must have an escalation policy) ───
 		transitions, err := s.workflowRepo.ListTransitionsFromState(ctx, state.ID)
 		if err != nil {
 			log.Printf("[EscalationService] Failed to list transitions from state '%s': %v", state.Name, err)
@@ -161,11 +182,8 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 					continue
 				}
 
-				sentChannels := s.sendNotifications(ctx, incident, state, transition.Name, user, hoursInState)
-				if sentChannels == nil {
-					sentChannels = []string{}
-				}
-
+				// Create breach log BEFORE sending so deduplication always works,
+				// even if the notification send fails.
 				now := time.Now()
 				breach := &models.EscalationSLA{
 					IncidentID:      &incident.ID,
@@ -174,15 +192,27 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 					NotifiedUserID:  &user.ID,
 					Email:           user.Email,
 					Phone:           user.Phone,
-					Actions:         sentChannels,
+					Actions:         models.TextArray{},
 					SLAHoursAllowed: int(state.SLAAsHours()),
 					HoursInState:    hoursInState,
 					EscalationType:  "state_sla",
 					NotifiedAt:      &now,
 				}
 				if err := s.repo.Create(ctx, breach); err != nil {
-					log.Printf("[EscalationService] Failed to persist breach log for user %s / incident %s: %v",
+					log.Printf("[EscalationService] Failed to persist breach log for user %s / incident %s: %v — skipping send",
 						user.Email, incident.IncidentNumber, err)
+					continue
+				}
+
+				sentChannels := s.sendNotifications(ctx, incident, state, transition.Name, user, hoursInState)
+				if sentChannels == nil {
+					sentChannels = []string{}
+				}
+
+				// Update breach log with actual channels sent
+				breach.Actions = sentChannels
+				if err := s.repo.Update(ctx, breach); err != nil {
+					log.Printf("[EscalationService] Failed to update breach log actions for user %s: %v", user.Email, err)
 				} else {
 					log.Printf("[EscalationService] Breach log stored — incident %s, state '%s', user %s, channels %v",
 						incident.IncidentNumber, state.Name, user.Email, sentChannels)
@@ -192,6 +222,8 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 		}
 	}
 
+	log.Printf("[EscalationService] Done — processed: %d, skipped (no policy): %d, skipped (other): %d",
+		processed, skippedNoPolicy, skippedOther)
 	return nil
 }
 
@@ -246,11 +278,8 @@ func (s *EscalationService) processPolicySteps(
 			policy.Name, step.StepOrder, incident.IncidentNumber, hoursInBreach)
 
 		for _, user := range users {
-			sentChannels := s.sendPolicyNotification(ctx, incident, state, policy.Name, step, user, hoursInState)
-			if sentChannels == nil {
-				sentChannels = []string{}
-			}
-
+			// Create the breach log BEFORE sending so deduplication always works,
+			// even if the notification send fails.
 			now := time.Now()
 			stepID := step.ID
 			breach := &models.EscalationSLA{
@@ -259,7 +288,7 @@ func (s *EscalationService) processPolicySteps(
 				NotifiedUserID:         &user.ID,
 				Email:                  user.Email,
 				Phone:                  user.Phone,
-				Actions:                sentChannels,
+				Actions:                models.TextArray{},
 				SLAHoursAllowed:        int(slaAsHours),
 				HoursInState:           hoursInState,
 				EscalationPolicyID:     &policy.ID,
@@ -268,9 +297,28 @@ func (s *EscalationService) processPolicySteps(
 				NotifiedAt:             &now,
 			}
 			if err := s.repo.Create(ctx, breach); err != nil {
-				log.Printf("[EscalationService] Failed to store policy breach log: %v", err)
+				log.Printf("[EscalationService] Failed to store policy breach log for user %s / incident %s: %v — skipping send",
+					user.Email, incident.IncidentNumber, err)
+				continue
+			}
+
+			sentChannels := s.sendPolicyNotification(ctx, incident, state, policy.Name, step, user, hoursInState)
+			if sentChannels == nil {
+				sentChannels = []string{}
+			}
+
+			// Update the breach log with which channels were actually used.
+			breach.Actions = sentChannels
+			if err := s.repo.Update(ctx, breach); err != nil {
+				log.Printf("[EscalationService] Failed to update breach log actions for user %s: %v", user.Email, err)
 			}
 		}
+
+		// Fire at most one new step per incident per monitor run. If multiple steps
+		// are all eligible at once (e.g. a long-breached incident where delay_hours=0,1,4
+		// are all due), firing them all simultaneously produces an email burst. Instead,
+		// advance one step per cycle — the next monitor run will fire the following step.
+		break
 	}
 }
 
@@ -292,34 +340,52 @@ func (s *EscalationService) sendPolicyNotification(
 
 	incidentURL := fmt.Sprintf("%s/incidents/%s", s.frontendURL, incident.ID)
 
+	// Fallback content used when the DB template does not exist yet.
 	subject := fmt.Sprintf("SLA Alert [Step %d]: Incident %s exceeded SLA in state '%s'",
 		step.StepOrder, incident.IncidentNumber, state.Name)
-
 	emailBody := fmt.Sprintf(
-		"Dear %s %s,\n\n"+
-			"Escalation policy \"%s\" (step %d) has triggered for the following incident.\n\n"+
-			"Incident %s - \"%s\" has been in state \"%s\" for %.1f hours "+
-			"(SLA limit: %d hours, breach +%.1fh).\n\n"+
-			"View Incident: %s\n\nPlease take immediate action.",
-		user.FirstName, user.LastName,
-		policyName, step.StepOrder,
+		"Dear %s %s,\n\nEscalation policy \"%s\" (step %d) triggered.\n\n"+
+			"Incident %s - \"%s\" in state \"%s\" for %.1f hours (SLA: %d h, breach +%.1fh).\n\nView: %s",
+		user.FirstName, user.LastName, policyName, step.StepOrder,
 		incident.IncidentNumber, incident.Title, state.Name,
-		hoursInState, slaHours, hoursInState-float64(slaHours),
-		incidentURL,
+		hoursInState, slaHours, hoursInState-float64(slaHours), incidentURL,
 	)
-
 	smsBody := fmt.Sprintf(
 		"SLA ALERT [Step %d] — %s: Incident %s in '%s' for %.1fh (limit %dh). View: %s",
-		step.StepOrder, policyName,
-		incident.IncidentNumber, state.Name, hoursInState, slaHours, incidentURL,
+		step.StepOrder, policyName, incident.IncidentNumber, state.Name, hoursInState, slaHours, incidentURL,
 	)
+
+	// Start from the full incident variable set, then override/add policy-step-specific values.
+	vars := BuildIncidentVariables(&incident, nil, nil)
+	vars["first_name"] = user.FirstName
+	vars["last_name"] = user.LastName
+	vars["state_name"] = state.Name
+	vars["current_state"] = state.Name
+	vars["hours_in_state"] = fmt.Sprintf("%.1f", hoursInState)
+	vars["sla_hours"] = fmt.Sprintf("%d", slaHours)
+	vars["policy_name"] = policyName
+	vars["step_order"] = fmt.Sprintf("%d", step.StepOrder)
+	vars["hours_in_breach"] = fmt.Sprintf("%.1f", hoursInState-float64(slaHours))
+	vars["incident_url"] = incidentURL
+	vars["sla_page_url"] = fmt.Sprintf("%s/incidents?sla_breached=true", s.frontendURL)
+
+	// Only look up a DB template when the step has one explicitly configured.
+	// nil = use the hardcoded subject/body above directly.
+	var emailCodePtr *string
+	if step.EmailTemplateCode != "" {
+		emailCodePtr = &step.EmailTemplateCode
+	}
+	var smsCodePtr *string
+	if step.SMSTemplateCode != "" {
+		smsCodePtr = &step.SMSTemplateCode
+	}
 
 	sendEmail := step.Channel == "email" || step.Channel == "both"
 	sendSMS := step.Channel == "sms" || step.Channel == "both"
 
 	if sendEmail && user.Email != "" {
-		if _, err := s.notificationService.SendNotification(ctx, "email", nil, "en",
-			[]string{user.Email}, nil, nil, subject, emailBody, nil, nil, nil, nil,
+		if _, err := s.notificationService.SendNotification(ctx, "email", emailCodePtr, "en",
+			[]string{user.Email}, nil, nil, subject, emailBody, vars, nil, &user.ID, nil,
 		); err != nil {
 			log.Printf("[EscalationService] Policy EMAIL failed for %s: %v", user.Email, err)
 		} else {
@@ -328,8 +394,8 @@ func (s *EscalationService) sendPolicyNotification(
 	}
 
 	if sendSMS && user.Phone != "" {
-		if _, err := s.notificationService.SendNotification(ctx, "sms", nil, "en",
-			[]string{user.Phone}, nil, nil, "", smsBody, nil, nil, nil, nil,
+		if _, err := s.notificationService.SendNotification(ctx, "sms", smsCodePtr, "en",
+			[]string{user.Phone}, nil, nil, "", smsBody, vars, nil, &user.ID, nil,
 		); err != nil {
 			log.Printf("[EscalationService] Policy SMS failed for %s: %v", user.Phone, err)
 		} else {
@@ -350,93 +416,39 @@ func (s *EscalationService) sendNotifications(
 	user models.User,
 	hoursInState float64,
 ) []string {
-	sent := make([]string, 0) // use make so the slice is never nil
+	sent := make([]string, 0)
 
 	incidentURL := fmt.Sprintf("%s/incidents/%s", s.frontendURL, incident.ID)
 
-	subject := fmt.Sprintf(
-		"SLA Alert: Incident %s has exceeded SLA in state '%s'",
-		incident.IncidentNumber,
-		state.Name,
-	)
+	vars := BuildIncidentVariables(&incident, nil, nil)
+	vars["first_name"] = user.FirstName
+	vars["last_name"] = user.LastName
+	vars["state_name"] = state.Name
+	vars["current_state"] = state.Name
+	vars["hours_in_state"] = fmt.Sprintf("%.1f", hoursInState)
+	vars["sla_hours"] = fmt.Sprintf("%d", *state.SLAHours)
+	vars["transition_name"] = transitionName
+	vars["incident_url"] = incidentURL
+	vars["sla_page_url"] = fmt.Sprintf("%s/incidents?sla_breached=true", s.frontendURL)
+	vars["hours_in_breach"] = fmt.Sprintf("%.1f", hoursInState-float64(*state.SLAHours))
 
-	emailBody := fmt.Sprintf(
-		"Dear %s %s,\n\n"+
-			"This is an automated SLA breach notification.\n\n"+
-			"Incident %s - \"%s\" has been in the state \"%s\" for %.1f hours, "+
-			"which exceeds the allowed SLA limit of %d hours.\n\n"+
-			"You are listed as responsible for the transition \"%s\" from this state. "+
-			"Please take action as soon as possible.\n\n"+
-			"Incident Details:\n"+
-			"  Number  : %s\n"+
-			"  Title   : %s\n"+
-			"  State   : %s\n"+
-			"  Elapsed : %.1f hours (SLA limit: %d hours)\n\n"+
-			"View Incident: %s\n\n"+
-			"Please log in to the system and resolve this incident.",
-		user.FirstName, user.LastName,
-		incident.IncidentNumber, incident.Title,
-		state.Name, hoursInState, *state.SLAHours,
-		transitionName,
-		incident.IncidentNumber,
-		incident.Title,
-		state.Name,
-		hoursInState, *state.SLAHours,
-		incidentURL,
-	)
-
-	smsBody := fmt.Sprintf(
-		"SLA ALERT: Incident %s has been in '%s' for %.1fh (SLA: %dh). Action required for '%s'. View: %s",
-		incident.IncidentNumber,
-		state.Name,
-		hoursInState,
-		*state.SLAHours,
-		transitionName,
-		incidentURL,
-	)
-
-	// Send EMAIL if the user has an email address
+	// Templates configured from admin UI (action_type = "escalation") — no hardcoded codes.
 	if user.Email != "" {
-		_, err := s.notificationService.SendNotification(
-			ctx,
-			"email",
-			nil,
-			"en",
-			[]string{user.Email},
-			nil,
-			nil,
-			subject,
-			emailBody,
-			nil,
-			nil,
-			nil,
-			nil,
-		)
-		if err != nil {
+		if err := s.notificationService.SendByActionType(
+			ctx, models.TemplateActionEscalation, "email", "ar",
+			[]string{user.Email}, vars, nil,
+		); err != nil {
 			log.Printf("[EscalationService] EMAIL failed for %s: %v", user.Email, err)
 		} else {
 			sent = append(sent, "EMAIL")
 		}
 	}
 
-	// Send SMS if the user has a phone number
 	if user.Phone != "" {
-		_, err := s.notificationService.SendNotification(
-			ctx,
-			"sms",
-			nil,
-			"en",
-			[]string{user.Phone},
-			nil,
-			nil,
-			"",
-			smsBody,
-			nil,
-			nil,
-			nil,
-			nil,
-		)
-		if err != nil {
+		if err := s.notificationService.SendByActionType(
+			ctx, models.TemplateActionEscalation, "sms", "ar",
+			[]string{user.Phone}, vars, nil,
+		); err != nil {
 			log.Printf("[EscalationService] SMS failed for %s: %v", user.Phone, err)
 		} else {
 			sent = append(sent, "SMS")
@@ -586,12 +598,28 @@ func (s *EscalationService) sendGlobalBreachNotification(
 		incidentURL,
 	)
 
+	// Start from the full incident variable set, then override/add global-breach-specific values.
+	vars := BuildIncidentVariables(&incident, nil, nil)
+	vars["first_name"] = user.FirstName
+	vars["last_name"] = user.LastName
+	vars["state_name"] = stateName
+	vars["current_state"] = stateName
+	vars["hours_open"] = fmt.Sprintf("%.1f", totalHoursOpen)
+	vars["hours_in_state"] = fmt.Sprintf("%.1f", totalHoursOpen)
+	vars["sla_hours"] = fmt.Sprintf("%d", slaHoursAllowed)
+	vars["incident_url"] = incidentURL
+	vars["sla_page_url"] = fmt.Sprintf("%s/incidents?sla_breached=true", s.frontendURL)
+	vars["hours_in_breach"] = fmt.Sprintf("%.1f", totalHoursOpen-float64(slaHoursAllowed))
+
+	emailCode := "SLA_GLOBAL_BREACH"
+	smsCode := "SLA_GLOBAL_BREACH_SMS"
+
 	if user.Email != "" {
 		_, err := s.notificationService.SendNotification(
-			ctx, "email", nil, "en",
+			ctx, "email", &emailCode, "en",
 			[]string{user.Email}, nil, nil,
 			subject, emailBody,
-			nil, nil, nil, nil,
+			vars, nil, &user.ID, nil,
 		)
 		if err != nil {
 			log.Printf("[EscalationService] Global breach EMAIL failed for %s: %v", user.Email, err)
@@ -602,10 +630,10 @@ func (s *EscalationService) sendGlobalBreachNotification(
 
 	if user.Phone != "" {
 		_, err := s.notificationService.SendNotification(
-			ctx, "sms", nil, "en",
+			ctx, "sms", &smsCode, "en",
 			[]string{user.Phone}, nil, nil,
 			"", smsBody,
-			nil, nil, nil, nil,
+			vars, nil, &user.ID, nil,
 		)
 		if err != nil {
 			log.Printf("[EscalationService] Global breach SMS failed for %s: %v", user.Phone, err)

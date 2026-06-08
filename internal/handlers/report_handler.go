@@ -244,6 +244,7 @@ func (h *ReportHandler) QueryReport(c *fiber.Ctx) error {
 
 	ctx := cstmContext.WithReportDataSource(c.UserContext(), req.DataSource)
 	ctx = cstmContext.WithReportColumns(ctx, req.Columns)
+	ctx = cstmContext.WithReportTimezone(ctx, req.Timezone)
 	result, err := h.service.QueryReport(ctx, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
@@ -265,8 +266,14 @@ func (h *ReportHandler) ExportReport(c *fiber.Ctx) error {
 		})
 	}
 
+	// Use timezone from top-level field, fall back to options.timezone
+	tz := req.Timezone
+	if tz == "" && req.Options != nil {
+		tz = req.Options.Timezone
+	}
 	ctx := cstmContext.WithReportDataSource(c.UserContext(), req.DataSource)
 	ctx = cstmContext.WithReportColumns(ctx, req.Columns)
+	ctx = cstmContext.WithReportTimezone(ctx, tz)
 	data, filename, contentType, err := h.service.ExportReport(ctx, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())

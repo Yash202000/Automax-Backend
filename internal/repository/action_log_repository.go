@@ -82,10 +82,14 @@ func (r *actionLogRepository) List(ctx context.Context, filter *models.ActionLog
 	}
 
 	// Apply pagination
+	order := "created_at DESC"
+	if filter.Sort == "asc" {
+		order = "created_at ASC"
+	}
 	offset := (filter.Page - 1) * filter.Limit
 	err := query.
 		Preload("User").
-		Order("created_at DESC").
+		Order(order).
 		Offset(offset).
 		Limit(filter.Limit).
 		Find(&logs).Error

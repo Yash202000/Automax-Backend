@@ -15,6 +15,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 	"github.com/jung-kurt/gofpdf"
 )
@@ -56,8 +57,10 @@ func (s *reportTemplateService) CreateTemplate(ctx context.Context, req *models.
 	}
 
 	template := &models.ReportTemplate{
-		Name:        req.Name,
-		Description: req.Description,
+		Name:          req.Name,
+		NameAr:        req.NameAr,
+		Description:   req.Description,
+		DescriptionAr: req.DescriptionAr,
 		Template:    string(templateJSON),
 		IsPublic:    req.IsPublic,
 		CreatedByID: userID,
@@ -106,8 +109,14 @@ func (s *reportTemplateService) UpdateTemplate(ctx context.Context, id uuid.UUID
 	if req.Name != "" {
 		template.Name = req.Name
 	}
+	if req.NameAr != "" {
+		template.NameAr = req.NameAr
+	}
 	if req.Description != "" {
 		template.Description = req.Description
+	}
+	if req.DescriptionAr != "" {
+		template.DescriptionAr = req.DescriptionAr
 	}
 	if req.Template != nil {
 		templateJSON, err := json.Marshal(req.Template)
@@ -284,10 +293,14 @@ func (s *reportTemplateService) GenerateReport(ctx context.Context, req *models.
 		fmt.Printf("[GenerateReport] First record keys: %v\n", getMapKeys(data[0]))
 	}
 
+	// Resolve user timezone for timestamps and date values
+	loc := utils.ResolveTimezone(req.Timezone)
+	convertDataTimezone(data, loc)
+
 	// Generate filename
 	filename := req.FileName
 	if filename == "" {
-		filename = template.Name + "_" + time.Now().Format("2006-01-02_150405")
+		filename = template.Name + "_" + time.Now().In(loc).Format("2006-01-02_150405")
 	}
 
 	// Generate report based on format
@@ -300,7 +313,7 @@ func (s *reportTemplateService) GenerateReport(ctx context.Context, req *models.
 	}
 
 	// Default to PDF
-	pdfData, err := s.generatePDFFromTemplate(&templateConfig, data)
+	pdfData, err := s.generatePDFFromTemplate(&templateConfig, data, loc)
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -337,12 +350,12 @@ func (s *reportTemplateService) PreviewTemplate(ctx context.Context, template *m
 		return nil, err
 	}
 
-	return s.generatePDFFromTemplate(template, data)
+	return s.generatePDFFromTemplate(template, data, time.UTC)
 }
 
 // PDF Generation from Template
 
-func (s *reportTemplateService) generatePDFFromTemplate(template *models.TemplateConfig, data []map[string]interface{}) ([]byte, error) {
+func (s *reportTemplateService) generatePDFFromTemplate(template *models.TemplateConfig, data []map[string]interface{}, loc *time.Location) ([]byte, error) {
 	// Determine page settings
 	pageSize := template.PageSettings.Size
 	if pageSize == "" {
@@ -384,7 +397,7 @@ func (s *reportTemplateService) generatePDFFromTemplate(template *models.Templat
 
 	// Render header on first page
 	if template.Header != nil && template.Header.Enabled {
-		s.renderHeader(pdf, template.Header, pageWidth, marginLeft, marginRight)
+		s.renderHeader(pdf, template.Header, pageWidth, marginLeft, marginRight, loc)
 	}
 
 	// Render body elements
@@ -392,12 +405,12 @@ func (s *reportTemplateService) generatePDFFromTemplate(template *models.Templat
 		if !element.Visible {
 			continue
 		}
-		s.renderElement(pdf, &element, data, pageWidth, pageHeight, marginLeft, marginTop)
+		s.renderElement(pdf, &element, data, pageWidth, pageHeight, marginLeft, marginTop, loc)
 	}
 
 	// Render footer on all pages
 	if template.Footer != nil && template.Footer.Enabled {
-		s.renderFooter(pdf, template.Footer, pageWidth, pageHeight, marginLeft, marginRight, marginBottom)
+		s.renderFooter(pdf, template.Footer, pageWidth, pageHeight, marginLeft, marginRight, marginBottom, loc)
 	}
 
 	// Output to buffer
@@ -409,7 +422,7 @@ func (s *reportTemplateService) generatePDFFromTemplate(template *models.Templat
 	return buf.Bytes(), nil
 }
 
-func (s *reportTemplateService) renderHeader(pdf *gofpdf.Fpdf, header *models.HeaderConfig, pageWidth, marginLeft, marginRight float64) {
+func (s *reportTemplateService) renderHeader(pdf *gofpdf.Fpdf, header *models.HeaderConfig, pageWidth, marginLeft, marginRight float64, loc *time.Location) {
 	if header.Background != "" {
 		r, g, b := hexToRGB(header.Background)
 		pdf.SetFillColor(r, g, b)
@@ -420,14 +433,14 @@ func (s *reportTemplateService) renderHeader(pdf *gofpdf.Fpdf, header *models.He
 		if !element.Visible {
 			continue
 		}
-		s.renderHeaderElement(pdf, &element, pageWidth, marginLeft, marginRight, header.Height)
+		s.renderHeaderElement(pdf, &element, pageWidth, marginLeft, marginRight, header.Height, loc)
 	}
 
 	// Move cursor below header
 	pdf.SetY(header.Height + 5)
 }
 
-func (s *reportTemplateService) renderHeaderElement(pdf *gofpdf.Fpdf, element *models.TemplateElement, pageWidth, marginLeft, marginRight, headerHeight float64) {
+func (s *reportTemplateService) renderHeaderElement(pdf *gofpdf.Fpdf, element *models.TemplateElement, pageWidth, marginLeft, marginRight, headerHeight float64, loc *time.Location) {
 	x := element.Position.X + marginLeft
 	y := element.Position.Y
 
@@ -437,11 +450,11 @@ func (s *reportTemplateService) renderHeaderElement(pdf *gofpdf.Fpdf, element *m
 	case "image":
 		s.renderImageElement(pdf, element, x, y)
 	case "dynamic_field":
-		s.renderDynamicField(pdf, element, x, y)
+		s.renderDynamicField(pdf, element, x, y, loc)
 	}
 }
 
-func (s *reportTemplateService) renderElement(pdf *gofpdf.Fpdf, element *models.TemplateElement, data []map[string]interface{}, pageWidth, pageHeight, marginLeft, marginTop float64) {
+func (s *reportTemplateService) renderElement(pdf *gofpdf.Fpdf, element *models.TemplateElement, data []map[string]interface{}, pageWidth, pageHeight, marginLeft, marginTop float64, loc *time.Location) {
 	x := element.Position.X + marginLeft
 	y := element.Position.Y + marginTop
 
@@ -464,7 +477,7 @@ func (s *reportTemplateService) renderElement(pdf *gofpdf.Fpdf, element *models.
 	case "spacer":
 		pdf.SetY(y + element.Size.Height)
 	case "dynamic_field":
-		s.renderDynamicField(pdf, element, x, y)
+		s.renderDynamicField(pdf, element, x, y, loc)
 	}
 }
 
@@ -886,7 +899,7 @@ func (s *reportTemplateService) renderShapeElement(pdf *gofpdf.Fpdf, element *mo
 	}
 }
 
-func (s *reportTemplateService) renderDynamicField(pdf *gofpdf.Fpdf, element *models.TemplateElement, x, y float64) {
+func (s *reportTemplateService) renderDynamicField(pdf *gofpdf.Fpdf, element *models.TemplateElement, x, y float64, loc *time.Location) {
 	contentJSON, _ := json.Marshal(element.Content)
 	var content models.DynamicFieldContent
 	json.Unmarshal(contentJSON, &content)
@@ -916,6 +929,7 @@ func (s *reportTemplateService) renderDynamicField(pdf *gofpdf.Fpdf, element *mo
 		pdf.SetTextColor(r, g, b)
 	}
 
+	now := time.Now().In(loc)
 	var value string
 	switch content.Field {
 	case "date":
@@ -923,13 +937,13 @@ func (s *reportTemplateService) renderDynamicField(pdf *gofpdf.Fpdf, element *mo
 		if format == "" {
 			format = "2006-01-02"
 		}
-		value = time.Now().Format(format)
+		value = now.Format(format)
 	case "datetime":
 		format := content.Format
 		if format == "" {
 			format = "2006-01-02 15:04:05"
 		}
-		value = time.Now().Format(format)
+		value = now.Format(format)
 	case "page_number":
 		value = fmt.Sprintf("%d", pdf.PageNo())
 	case "custom":
@@ -953,7 +967,7 @@ func (s *reportTemplateService) renderDynamicField(pdf *gofpdf.Fpdf, element *mo
 	pdf.CellFormat(element.Size.Width, fontSize*0.35, text, "", 0, align, false, 0, "")
 }
 
-func (s *reportTemplateService) renderFooter(pdf *gofpdf.Fpdf, footer *models.FooterConfig, pageWidth, pageHeight, marginLeft, marginRight, marginBottom float64) {
+func (s *reportTemplateService) renderFooter(pdf *gofpdf.Fpdf, footer *models.FooterConfig, pageWidth, pageHeight, marginLeft, marginRight, marginBottom float64, loc *time.Location) {
 	// Footer is rendered at bottom of page
 	footerY := pageHeight - marginBottom - footer.Height
 
@@ -975,7 +989,7 @@ func (s *reportTemplateService) renderFooter(pdf *gofpdf.Fpdf, footer *models.Fo
 		case "text":
 			s.renderTextElement(pdf, &element, x, y)
 		case "dynamic_field":
-			s.renderDynamicField(pdf, &element, x, y)
+			s.renderDynamicField(pdf, &element, x, y, loc)
 		}
 	}
 
@@ -1323,9 +1337,11 @@ func toReportTemplateResponse(t *models.ReportTemplate) *models.ReportTemplateRe
 	json.Unmarshal([]byte(t.Template), &templateConfig)
 
 	resp := &models.ReportTemplateResponse{
-		ID:          t.ID.String(),
-		Name:        t.Name,
-		Description: t.Description,
+		ID:            t.ID.String(),
+		Name:          t.Name,
+		NameAr:        t.NameAr,
+		Description:   t.Description,
+		DescriptionAr: t.DescriptionAr,
 		Template:    templateConfig,
 		IsDefault:   t.IsDefault,
 		IsPublic:    t.IsPublic,

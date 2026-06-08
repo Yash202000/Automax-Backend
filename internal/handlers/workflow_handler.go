@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 	"time"
 
@@ -45,6 +46,10 @@ func (h *WorkflowHandler) CreateWorkflow(c *fiber.Ctx) error {
 			"success": false,
 			"errors":  validationErrors,
 		})
+	}
+
+	if err := h.service.WorkflowExistsByCodeOrName(c.UserContext(), []string{req.Code, req.Name}); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusConflict, "Workflow with this code or name already exists")
 	}
 
 	// Get user ID from context
@@ -130,6 +135,11 @@ func (h *WorkflowHandler) UpdateWorkflow(c *fiber.Ctx) error {
 
 	var req models.WorkflowUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
+		log.Println(err)
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
@@ -137,6 +147,21 @@ func (h *WorkflowHandler) UpdateWorkflow(c *fiber.Ctx) error {
 	oldWorkflow, err := h.service.GetWorkflow(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	search := []string{}
+	if req.Code != "" && req.Code != oldWorkflow.Code {
+		search = append(search, req.Code)
+	}
+	if req.Name != "" && req.Name != oldWorkflow.Name {
+
+		search = append(search, req.Name)
+	}
+
+	if len(search) > 0 {
+		if err := h.service.WorkflowExistsByCodeOrName(c.UserContext(), search); err != nil {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "Workflow with this code or name already exists")
+		}
 	}
 
 	workflow, err := h.service.UpdateWorkflow(c.UserContext(), id, &req)
@@ -428,6 +453,14 @@ func (h *WorkflowHandler) CreateState(c *fiber.Ctx) error {
 	var req models.WorkflowStateCreateRequest
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	// Normalize empty optional UUID strings to nil so "omitempty,uuid" validation passes
+	if req.EscalationPolicyID != nil && *req.EscalationPolicyID == "" {
+		req.EscalationPolicyID = nil
+	}
+	if req.AssignUserID != nil && *req.AssignUserID == "" {
+		req.AssignUserID = nil
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -1154,14 +1187,14 @@ func (h *WorkflowHandler) SetTransitionFieldChanges(c *fiber.Ctx) error {
 
 // Helper endpoints
 
-func (h *WorkflowHandler) GetTransitionsFromState(c *fiber.Ctx) error {
+func (h *WorkflowHandler) GetTransitionsToState(c *fiber.Ctx) error {
 	stateIDStr := c.Params("state_id")
 	stateID, err := uuid.Parse(stateIDStr)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid state ID")
 	}
 
-	transitions, err := h.service.GetTransitionsFromState(c.UserContext(), stateID)
+	transitions, err := h.service.GetTransitionsToState(c.UserContext(), stateID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -1182,6 +1215,38 @@ func (h *WorkflowHandler) GetInitialState(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Initial state retrieved", state)
+}
+
+func (h *WorkflowHandler) GetInitialStateMatchingUsers(c *fiber.Ctx) error {
+	workflowIDStr := c.Params("id")
+	workflowID, err := uuid.Parse(workflowIDStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid workflow ID")
+	}
+
+	var classificationID, locationID, departmentID *uuid.UUID
+	if v := c.Query("classification_id"); v != "" {
+		if id, err := uuid.Parse(v); err == nil {
+			classificationID = &id
+		}
+	}
+	if v := c.Query("location_id"); v != "" {
+		if id, err := uuid.Parse(v); err == nil {
+			locationID = &id
+		}
+	}
+	if v := c.Query("department_id"); v != "" {
+		if id, err := uuid.Parse(v); err == nil {
+			departmentID = &id
+		}
+	}
+
+	users, err := h.service.GetInitialStateMatchingUsers(c.UserContext(), workflowID, classificationID, locationID, departmentID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Matching users retrieved", users)
 }
 
 // MatchWorkflow finds a workflow based on incident criteria and returns form configuration
@@ -1232,6 +1297,7 @@ func (h *WorkflowHandler) ImportWorkflow(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "No file uploaded")
 	}
 
+	log.Println("err check")
 	// Validate file size (10MB limit)
 	const maxFileSize = 10 * 1024 * 1024 // 10MB
 	if file.Size > maxFileSize {
@@ -1244,6 +1310,7 @@ func (h *WorkflowHandler) ImportWorkflow(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read file")
 	}
 	defer fileContent.Close()
+	log.Println("err check")
 
 	// Read file content
 	buf, err := io.ReadAll(fileContent)
@@ -1256,13 +1323,23 @@ func (h *WorkflowHandler) ImportWorkflow(c *fiber.Ctx) error {
 	if err := json.Unmarshal(buf, &importData); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid JSON format: "+err.Error())
 	}
+	log.Println("Parsed import data:", importData)
 
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &importData); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	log.Println("Validation passed for import data")
 	// Get user ID from context
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
 	// Import workflow
 	workflow, warnings, err := h.service.ImportWorkflow(c.UserContext(), &importData, userID)
 	if err != nil {
+		log.Println(err)
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 

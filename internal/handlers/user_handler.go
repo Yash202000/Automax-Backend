@@ -124,7 +124,7 @@ func (h *UserHandler) RefreshToken(c *fiber.Ctx) error {
 		})
 	}
 
-	response, err := h.userService.RefreshToken(c.UserContext(), req.RefreshToken)
+	response, err := h.userService.RefreshToken(c.UserContext(), req.RefreshToken, req.RememberMe)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusUnauthorized, err.Error())
 	}

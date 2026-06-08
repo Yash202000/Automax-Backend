@@ -118,14 +118,14 @@ const (
 
 // Goal is the main goal entity
 type Goal struct {
-	ID                uuid.UUID          `gorm:"type:uuid;primary_key" json:"id"`
-	Title             string             `gorm:"size:255;not null" json:"title"`
-	Description       string             `gorm:"type:text" json:"description"`
+	ID          uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
+	Title       string    `gorm:"size:255;not null" json:"title"`
+	Description string    `gorm:"type:text" json:"description"`
 	// Category is the legacy free-text category (kept for backward compatibility).
 	// New goals should use CategoryID to reference the hierarchical Category tree.
-	Category    string     `gorm:"size:100" json:"category"`
-	CategoryID  *uuid.UUID `gorm:"type:uuid;index" json:"category_id"`
-	CategoryRef *Category  `gorm:"foreignKey:CategoryID" json:"category_ref,omitempty"`
+	Category          string             `gorm:"size:100" json:"category"`
+	CategoryID        *uuid.UUID         `gorm:"type:uuid;index" json:"category_id"`
+	CategoryRef       *Category          `gorm:"foreignKey:CategoryID" json:"category_ref,omitempty"`
 	Priority          string             `gorm:"size:20;not null;default:'Medium'" json:"priority"`
 	Status            string             `gorm:"size:30;not null;default:'Draft'" json:"status"`
 	OwnerID           uuid.UUID          `gorm:"type:uuid;index;not null" json:"owner_id"`
@@ -163,29 +163,121 @@ func (g *Goal) BeforeCreate(tx *gorm.DB) error {
 
 // GoalMetric defines a measurable metric for a goal
 type GoalMetric struct {
-	ID            uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
-	GoalID        uuid.UUID      `gorm:"type:uuid;index;not null" json:"goal_id"`
-	Goal          *Goal          `gorm:"foreignKey:GoalID" json:"goal,omitempty"`
-	Name          string         `gorm:"size:255;not null" json:"name"`
-	MetricType    string         `gorm:"size:20;not null" json:"metric_type"`
-	Unit          string         `gorm:"size:50" json:"unit"`
-	BaselineValue float64        `gorm:"default:0" json:"baseline_value"`
-	CurrentValue  float64        `gorm:"default:0" json:"current_value"`
-	TargetValue   float64        `gorm:"not null" json:"target_value"`
-	Weight        float64        `gorm:"default:1.0" json:"weight"`
+	ID            uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
+	GoalID        uuid.UUID `gorm:"type:uuid;index;not null" json:"goal_id"`
+	Goal          *Goal     `gorm:"foreignKey:GoalID" json:"goal,omitempty"`
+	Name          string    `gorm:"size:255;not null" json:"name"`
+	MetricType    string    `gorm:"size:20;not null" json:"metric_type"`
+	Unit          string    `gorm:"size:50" json:"unit"`
+	BaselineValue float64   `gorm:"default:0" json:"baseline_value"`
+	CurrentValue  float64   `gorm:"default:0" json:"current_value"`
+	TargetValue   float64   `gorm:"not null" json:"target_value"`
+	Weight        float64   `gorm:"default:1.0" json:"weight"`
 	// Formula is an optional expression that computes CurrentValue from sibling metrics.
 	// Reference other metrics by name: "${tasks_completed} / ${tasks_total} * 100".
 	// When set, UpdateMetricValue ignores the submitted raw value and evaluates the formula instead.
 	// Evaluation uses github.com/expr-lang/expr with access restricted to numeric sibling values.
-	Formula   string         `gorm:"type:text" json:"formula"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	Formula string `gorm:"type:text" json:"formula"`
+	// Workflow engine fields — gates initial visibility of newly-created metrics.
+	// Definition edits remain free for owners. Per-value-change approvals are tracked in goal_metric_value_changes.
+	WorkflowID     *uuid.UUID     `gorm:"type:uuid;index" json:"workflow_id"`
+	CurrentStateID *uuid.UUID     `gorm:"type:uuid;index" json:"current_state_id"`
+	CurrentState   *WorkflowState `gorm:"foreignKey:CurrentStateID" json:"current_state,omitempty"`
+	AssignedToID   *uuid.UUID     `gorm:"type:uuid;index" json:"assigned_to_id"`
+	AssignedTo     *User          `gorm:"foreignKey:AssignedToID" json:"assigned_to,omitempty"`
+	Version        int            `gorm:"default:1" json:"version"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (m *GoalMetric) BeforeCreate(tx *gorm.DB) error {
 	if m.ID == uuid.Nil {
 		m.ID = uuid.New()
+	}
+	return nil
+}
+
+// GoalMetricValueChange is a proposed value change for a metric that must go
+// through the metric_value_change approval workflow before being applied.
+// On a transition into the terminal-approved state the parent metric's
+// CurrentValue is updated and ApplyAt is set.
+type GoalMetricValueChange struct {
+	ID             uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	MetricID       uuid.UUID      `gorm:"type:uuid;index;not null" json:"metric_id"`
+	Metric         *GoalMetric    `gorm:"foreignKey:MetricID" json:"metric,omitempty"`
+	ProposedValue  float64        `gorm:"not null" json:"proposed_value"`
+	PreviousValue  float64        `gorm:"not null" json:"previous_value"`
+	Comment        string         `gorm:"type:text" json:"comment"`
+	SubmittedByID  uuid.UUID      `gorm:"type:uuid;index;not null" json:"submitted_by_id"`
+	SubmittedBy    *User          `gorm:"foreignKey:SubmittedByID" json:"submitted_by,omitempty"`
+	WorkflowID     uuid.UUID      `gorm:"type:uuid;index;not null" json:"workflow_id"`
+	CurrentStateID uuid.UUID      `gorm:"type:uuid;index;not null" json:"current_state_id"`
+	CurrentState   *WorkflowState `gorm:"foreignKey:CurrentStateID" json:"current_state,omitempty"`
+	AssignedToID   *uuid.UUID     `gorm:"type:uuid;index" json:"assigned_to_id"`
+	AssignedTo     *User          `gorm:"foreignKey:AssignedToID" json:"assigned_to,omitempty"`
+	AppliedAt      *time.Time     `json:"applied_at"`
+	Version        int            `gorm:"default:1" json:"version"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (c *GoalMetricValueChange) BeforeCreate(tx *gorm.DB) error {
+	if c.ID == uuid.Nil {
+		c.ID = uuid.New()
+	}
+	return nil
+}
+
+// MetricTransitionHistory records each state change for a goal metric.
+type MetricTransitionHistory struct {
+	ID             uuid.UUID           `gorm:"type:uuid;primary_key" json:"id"`
+	MetricID       uuid.UUID           `gorm:"type:uuid;index;not null" json:"metric_id"`
+	Metric         *GoalMetric         `gorm:"foreignKey:MetricID" json:"metric,omitempty"`
+	TransitionID   *uuid.UUID          `gorm:"type:uuid;index" json:"transition_id"`
+	Transition     *WorkflowTransition `gorm:"foreignKey:TransitionID" json:"transition,omitempty"`
+	FromStateID    uuid.UUID           `gorm:"type:uuid;not null;index" json:"from_state_id"`
+	FromState      *WorkflowState      `gorm:"foreignKey:FromStateID" json:"from_state,omitempty"`
+	ToStateID      uuid.UUID           `gorm:"type:uuid;not null;index" json:"to_state_id"`
+	ToState        *WorkflowState      `gorm:"foreignKey:ToStateID" json:"to_state,omitempty"`
+	PerformedByID  uuid.UUID           `gorm:"type:uuid;not null;index" json:"performed_by_id"`
+	PerformedBy    *User               `gorm:"foreignKey:PerformedByID" json:"performed_by,omitempty"`
+	Comment        string              `gorm:"type:text" json:"comment"`
+	IsSystemAction bool                `gorm:"default:false" json:"is_system_action"`
+	TransitionedAt time.Time           `gorm:"index" json:"transitioned_at"`
+	CreatedAt      time.Time           `json:"created_at"`
+}
+
+func (h *MetricTransitionHistory) BeforeCreate(tx *gorm.DB) error {
+	if h.ID == uuid.Nil {
+		h.ID = uuid.New()
+	}
+	return nil
+}
+
+// MetricValueChangeTransitionHistory records each state change for a value change.
+type MetricValueChangeTransitionHistory struct {
+	ID                  uuid.UUID              `gorm:"type:uuid;primary_key" json:"id"`
+	MetricValueChangeID uuid.UUID              `gorm:"type:uuid;index;not null" json:"metric_value_change_id"`
+	MetricValueChange   *GoalMetricValueChange `gorm:"foreignKey:MetricValueChangeID" json:"metric_value_change,omitempty"`
+	TransitionID        *uuid.UUID             `gorm:"type:uuid;index" json:"transition_id"`
+	Transition          *WorkflowTransition    `gorm:"foreignKey:TransitionID" json:"transition,omitempty"`
+	FromStateID         uuid.UUID              `gorm:"type:uuid;not null;index" json:"from_state_id"`
+	FromState           *WorkflowState         `gorm:"foreignKey:FromStateID" json:"from_state,omitempty"`
+	ToStateID           uuid.UUID              `gorm:"type:uuid;not null;index" json:"to_state_id"`
+	ToState             *WorkflowState         `gorm:"foreignKey:ToStateID" json:"to_state,omitempty"`
+	PerformedByID       uuid.UUID              `gorm:"type:uuid;not null;index" json:"performed_by_id"`
+	PerformedBy         *User                  `gorm:"foreignKey:PerformedByID" json:"performed_by,omitempty"`
+	Comment             string                 `gorm:"type:text" json:"comment"`
+	IsSystemAction      bool                   `gorm:"default:false" json:"is_system_action"`
+	TransitionedAt      time.Time              `gorm:"index" json:"transitioned_at"`
+	CreatedAt           time.Time              `json:"created_at"`
+}
+
+func (h *MetricValueChangeTransitionHistory) BeforeCreate(tx *gorm.DB) error {
+	if h.ID == uuid.Nil {
+		h.ID = uuid.New()
 	}
 	return nil
 }
@@ -273,21 +365,21 @@ func (ci *GoalCheckIn) BeforeCreate(tx *gorm.DB) error {
 // Evidence is a file/document uploaded as proof of goal progress.
 // Workflow state is tracked via CurrentStateID referencing the shared WorkflowState model.
 type Evidence struct {
-	ID              uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
-	GoalID          uuid.UUID      `gorm:"type:uuid;index;not null" json:"goal_id"`
-	Goal            *Goal          `gorm:"foreignKey:GoalID" json:"goal,omitempty"`
-	MetricID        *uuid.UUID     `gorm:"type:uuid;index" json:"metric_id"`
-	Metric          *GoalMetric    `gorm:"foreignKey:MetricID" json:"metric,omitempty"`
-	Title           string         `gorm:"size:255;not null" json:"title"`
-	EvidenceType    string         `gorm:"size:50;not null;default:'Other'" json:"evidence_type"`
-	Comment         string         `gorm:"type:text;not null" json:"comment"`
-	Status          string         `gorm:"size:30;not null;default:'Draft'" json:"status"`
-	DocumentaFileID string         `gorm:"size:255" json:"documenta_file_id"`
-	FileName        string         `gorm:"size:255" json:"file_name"`
-	FileSize        int64          `json:"file_size"`
-	MimeType        string         `gorm:"size:100" json:"mime_type"`
-	UploadedByID    uuid.UUID      `gorm:"type:uuid;index" json:"uploaded_by_id"`
-	UploadedBy      *User          `gorm:"foreignKey:UploadedByID" json:"uploaded_by,omitempty"`
+	ID              uuid.UUID   `gorm:"type:uuid;primary_key" json:"id"`
+	GoalID          uuid.UUID   `gorm:"type:uuid;index;not null" json:"goal_id"`
+	Goal            *Goal       `gorm:"foreignKey:GoalID" json:"goal,omitempty"`
+	MetricID        *uuid.UUID  `gorm:"type:uuid;index" json:"metric_id"`
+	Metric          *GoalMetric `gorm:"foreignKey:MetricID" json:"metric,omitempty"`
+	Title           string      `gorm:"size:255;not null" json:"title"`
+	EvidenceType    string      `gorm:"size:50;not null;default:'Other'" json:"evidence_type"`
+	Comment         string      `gorm:"type:text;not null" json:"comment"`
+	Status          string      `gorm:"size:30;not null;default:'Draft'" json:"status"`
+	DocumentaFileID string      `gorm:"size:255" json:"documenta_file_id"`
+	FileName        string      `gorm:"size:255" json:"file_name"`
+	FileSize        int64       `json:"file_size"`
+	MimeType        string      `gorm:"size:100" json:"mime_type"`
+	UploadedByID    uuid.UUID   `gorm:"type:uuid;index" json:"uploaded_by_id"`
+	UploadedBy      *User       `gorm:"foreignKey:UploadedByID" json:"uploaded_by,omitempty"`
 	// Workflow engine fields
 	WorkflowID     *uuid.UUID     `gorm:"type:uuid;index" json:"workflow_id"`
 	CurrentStateID *uuid.UUID     `gorm:"type:uuid;index" json:"current_state_id"`
@@ -340,27 +432,27 @@ func (h *EvidenceTransitionHistory) BeforeCreate(tx *gorm.DB) error {
 // MetricImportBatch represents a single bulk import of metric values
 // that must go through the evidence approval workflow before being applied.
 type MetricImportBatch struct {
-	ID             uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
-	Title          string         `gorm:"size:255;not null" json:"title"`
-	Comment        string         `gorm:"type:text" json:"comment"`
-	Status         string         `gorm:"size:30;not null;default:'Draft'" json:"status"`
-	ItemCount      int            `gorm:"not null;default:0" json:"item_count"`
-	GoalCount      int            `gorm:"not null;default:0" json:"goal_count"`
-	FileName       string         `gorm:"size:255" json:"file_name"`
-	ImportedByID   uuid.UUID      `gorm:"type:uuid;index;not null" json:"imported_by_id"`
-	ImportedBy     *User          `gorm:"foreignKey:ImportedByID" json:"imported_by,omitempty"`
-	PrimaryGoalID  uuid.UUID      `gorm:"type:uuid;index;not null" json:"primary_goal_id"`
-	PrimaryGoal    *Goal          `gorm:"foreignKey:PrimaryGoalID" json:"primary_goal,omitempty"`
-	WorkflowID     *uuid.UUID     `gorm:"type:uuid;index" json:"workflow_id"`
-	CurrentStateID *uuid.UUID     `gorm:"type:uuid;index" json:"current_state_id"`
-	CurrentState   *WorkflowState `gorm:"foreignKey:CurrentStateID" json:"current_state,omitempty"`
-	AssignedToID   *uuid.UUID     `gorm:"type:uuid;index" json:"assigned_to_id"`
-	AssignedTo     *User          `gorm:"foreignKey:AssignedToID" json:"assigned_to,omitempty"`
-	Version        int            `gorm:"default:1" json:"version"`
+	ID             uuid.UUID          `gorm:"type:uuid;primary_key" json:"id"`
+	Title          string             `gorm:"size:255;not null" json:"title"`
+	Comment        string             `gorm:"type:text" json:"comment"`
+	Status         string             `gorm:"size:30;not null;default:'Draft'" json:"status"`
+	ItemCount      int                `gorm:"not null;default:0" json:"item_count"`
+	GoalCount      int                `gorm:"not null;default:0" json:"goal_count"`
+	FileName       string             `gorm:"size:255" json:"file_name"`
+	ImportedByID   uuid.UUID          `gorm:"type:uuid;index;not null" json:"imported_by_id"`
+	ImportedBy     *User              `gorm:"foreignKey:ImportedByID" json:"imported_by,omitempty"`
+	PrimaryGoalID  uuid.UUID          `gorm:"type:uuid;index;not null" json:"primary_goal_id"`
+	PrimaryGoal    *Goal              `gorm:"foreignKey:PrimaryGoalID" json:"primary_goal,omitempty"`
+	WorkflowID     *uuid.UUID         `gorm:"type:uuid;index" json:"workflow_id"`
+	CurrentStateID *uuid.UUID         `gorm:"type:uuid;index" json:"current_state_id"`
+	CurrentState   *WorkflowState     `gorm:"foreignKey:CurrentStateID" json:"current_state,omitempty"`
+	AssignedToID   *uuid.UUID         `gorm:"type:uuid;index" json:"assigned_to_id"`
+	AssignedTo     *User              `gorm:"foreignKey:AssignedToID" json:"assigned_to,omitempty"`
+	Version        int                `gorm:"default:1" json:"version"`
 	Items          []MetricImportItem `gorm:"foreignKey:BatchID" json:"items,omitempty"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
-	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
+	CreatedAt      time.Time          `json:"created_at"`
+	UpdatedAt      time.Time          `json:"updated_at"`
+	DeletedAt      gorm.DeletedAt     `gorm:"index" json:"-"`
 }
 
 func (b *MetricImportBatch) BeforeCreate(tx *gorm.DB) error {
@@ -422,15 +514,15 @@ func (h *MetricImportBatchTransitionHistory) BeforeCreate(tx *gorm.DB) error {
 
 type GoalCreateRequest struct {
 	Title        string     `json:"title" validate:"required,max=255"`
-	Description  string     `json:"description"`
+	Description  string     `json:"description" validate:"required"`
 	Category     string     `json:"category" validate:"max=100"`
 	CategoryID   *uuid.UUID `json:"category_id"`
 	Priority     string     `json:"priority" validate:"required,oneof=Critical High Medium Low"`
 	DepartmentID *uuid.UUID `json:"department_id"`
 	OwnerID      uuid.UUID  `json:"owner_id" validate:"required"`
 	ParentGoalID *uuid.UUID `json:"parent_goal_id"`
-	StartDate    *time.Time `json:"start_date"`
-	TargetDate   *time.Time `json:"target_date"`
+	StartDate    *time.Time `json:"start_date" validate:"required"`
+	TargetDate   *time.Time `json:"target_date" validate:"required"`
 	ReviewDate   *time.Time `json:"review_date"`
 	Metadata     string     `json:"metadata"`
 }
@@ -491,8 +583,8 @@ type GoalFilter struct {
 	// Scope restricts the listing. "mine" returns goals where the caller is
 	// the owner or a collaborator. Any other value (including empty) returns
 	// the full set subject to other filters.
-	Scope        string     `query:"scope"`
-	UserID       *uuid.UUID `query:"-"` // Set by handler, not from query params
+	Scope  string     `query:"scope"`
+	UserID *uuid.UUID `query:"-"` // Set by handler, not from query params
 }
 
 type GoalMetricCreateRequest struct {
@@ -533,6 +625,13 @@ type EvidenceTransitionRequest struct {
 	Version      int    `json:"version" validate:"required,min=1"`
 }
 
+// MetricTransitionRequest is sent to execute a workflow transition on a metric definition or value change.
+type MetricTransitionRequest struct {
+	TransitionID string `json:"transition_id" validate:"required,uuid"`
+	Comment      string `json:"comment"`
+	Version      int    `json:"version" validate:"omitempty,min=1"`
+}
+
 type EvidenceFilter struct {
 	Page         int    `query:"page"`
 	Limit        int    `query:"limit"`
@@ -541,6 +640,10 @@ type EvidenceFilter struct {
 	EvidenceType string `query:"evidence_type"`
 	StartDate    string `query:"start_date"`
 	EndDate      string `query:"end_date"`
+	// ApprovedOnly is set by the service layer (not a query param) to restrict
+	// the listing to evidences in a terminal-approved state. Used to enforce
+	// the visibility gate for view-only callers.
+	ApprovedOnly bool `query:"-"`
 }
 
 // ════════════════════════════════════════════════════
@@ -612,19 +715,25 @@ type GoalCollaboratorResponse struct {
 }
 
 type GoalMetricResponse struct {
-	ID            uuid.UUID `json:"id"`
-	GoalID        uuid.UUID `json:"goal_id"`
-	Name          string    `json:"name"`
-	MetricType    string    `json:"metric_type"`
-	Unit          string    `json:"unit"`
-	BaselineValue float64   `json:"baseline_value"`
-	CurrentValue  float64   `json:"current_value"`
-	TargetValue   float64   `json:"target_value"`
-	Weight        float64   `json:"weight"`
-	Formula       string    `json:"formula"`
-	Progress      float64   `json:"progress"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID             uuid.UUID           `json:"id"`
+	GoalID         uuid.UUID           `json:"goal_id"`
+	Name           string              `json:"name"`
+	MetricType     string              `json:"metric_type"`
+	Unit           string              `json:"unit"`
+	BaselineValue  float64             `json:"baseline_value"`
+	CurrentValue   float64             `json:"current_value"`
+	TargetValue    float64             `json:"target_value"`
+	Weight         float64             `json:"weight"`
+	Formula        string              `json:"formula"`
+	Progress       float64             `json:"progress"`
+	WorkflowID     *uuid.UUID          `json:"workflow_id,omitempty"`
+	CurrentStateID *uuid.UUID          `json:"current_state_id,omitempty"`
+	CurrentState   *WorkflowStateBrief `json:"current_state,omitempty"`
+	AssignedToID   *uuid.UUID          `json:"assigned_to_id,omitempty"`
+	AssignedTo     *UserBriefResponse  `json:"assigned_to,omitempty"`
+	Version        int                 `json:"version"`
+	CreatedAt      time.Time           `json:"created_at"`
+	UpdatedAt      time.Time           `json:"updated_at"`
 }
 
 type MetricHistoryResponse struct {
@@ -726,8 +835,8 @@ type GoalImportResponse struct {
 	ValidCount     int               `json:"valid_count"`
 	ErrorCount     int               `json:"error_count"`
 	WarningCount   int               `json:"warning_count"`
-	Rows           []ImportRowResult  `json:"rows"`
-	CreatedGoalIDs []string           `json:"created_goal_ids,omitempty"`
+	Rows           []ImportRowResult `json:"rows"`
+	CreatedGoalIDs []string          `json:"created_goal_ids,omitempty"`
 }
 
 // ════════════════════════════════════════════════════
@@ -770,26 +879,26 @@ type MetricImportDryRunResponse struct {
 }
 
 type MetricImportBatchResponse struct {
-	ID             uuid.UUID                    `json:"id"`
-	Title          string                       `json:"title"`
-	Comment        string                       `json:"comment"`
-	Status         string                       `json:"status"`
-	ItemCount      int                          `json:"item_count"`
-	GoalCount      int                          `json:"goal_count"`
-	FileName       string                       `json:"file_name"`
-	ImportedByID   uuid.UUID                    `json:"imported_by_id"`
-	ImportedBy     *UserBriefResponse           `json:"imported_by,omitempty"`
-	PrimaryGoalID  uuid.UUID                    `json:"primary_goal_id"`
+	ID               uuid.UUID                  `json:"id"`
+	Title            string                     `json:"title"`
+	Comment          string                     `json:"comment"`
+	Status           string                     `json:"status"`
+	ItemCount        int                        `json:"item_count"`
+	GoalCount        int                        `json:"goal_count"`
+	FileName         string                     `json:"file_name"`
+	ImportedByID     uuid.UUID                  `json:"imported_by_id"`
+	ImportedBy       *UserBriefResponse         `json:"imported_by,omitempty"`
+	PrimaryGoalID    uuid.UUID                  `json:"primary_goal_id"`
 	PrimaryGoalTitle string                     `json:"primary_goal_title,omitempty"`
-	WorkflowID     *uuid.UUID                   `json:"workflow_id"`
-	CurrentStateID *uuid.UUID                   `json:"current_state_id"`
-	CurrentState   *WorkflowStateBrief          `json:"current_state,omitempty"`
-	AssignedToID   *uuid.UUID                   `json:"assigned_to_id"`
-	AssignedTo     *UserBriefResponse           `json:"assigned_to,omitempty"`
-	Version        int                          `json:"version"`
-	Items          []MetricImportItemResponse   `json:"items,omitempty"`
-	CreatedAt      time.Time                    `json:"created_at"`
-	UpdatedAt      time.Time                    `json:"updated_at"`
+	WorkflowID       *uuid.UUID                 `json:"workflow_id"`
+	CurrentStateID   *uuid.UUID                 `json:"current_state_id"`
+	CurrentState     *WorkflowStateBrief        `json:"current_state,omitempty"`
+	AssignedToID     *uuid.UUID                 `json:"assigned_to_id"`
+	AssignedTo       *UserBriefResponse         `json:"assigned_to,omitempty"`
+	Version          int                        `json:"version"`
+	Items            []MetricImportItemResponse `json:"items,omitempty"`
+	CreatedAt        time.Time                  `json:"created_at"`
+	UpdatedAt        time.Time                  `json:"updated_at"`
 }
 
 type MetricImportItemResponse struct {
@@ -862,15 +971,15 @@ type CheckInMetricUpdate struct {
 }
 
 type CheckInResponse struct {
-	ID             uuid.UUID          `json:"id"`
-	GoalID         uuid.UUID          `json:"goal_id"`
-	AuthorID       uuid.UUID          `json:"author_id"`
-	Author         *UserBriefResponse `json:"author,omitempty"`
-	Status         string             `json:"status"`
-	Content        string             `json:"content"`
-	ProgressSnap   float64            `json:"progress_snapshot"`
-	MetricUpdates  string             `json:"metric_updates"`
-	CreatedAt      time.Time          `json:"created_at"`
+	ID            uuid.UUID          `json:"id"`
+	GoalID        uuid.UUID          `json:"goal_id"`
+	AuthorID      uuid.UUID          `json:"author_id"`
+	Author        *UserBriefResponse `json:"author,omitempty"`
+	Status        string             `json:"status"`
+	Content       string             `json:"content"`
+	ProgressSnap  float64            `json:"progress_snapshot"`
+	MetricUpdates string             `json:"metric_updates"`
+	CreatedAt     time.Time          `json:"created_at"`
 }
 
 // ════════════════════════════════════════════════════
@@ -1031,19 +1140,25 @@ func (m *GoalMetric) ToResponse() GoalMetricResponse {
 	}
 
 	return GoalMetricResponse{
-		ID:            m.ID,
-		GoalID:        m.GoalID,
-		Name:          m.Name,
-		MetricType:    m.MetricType,
-		Unit:          m.Unit,
-		BaselineValue: m.BaselineValue,
-		CurrentValue:  m.CurrentValue,
-		TargetValue:   m.TargetValue,
-		Weight:        m.Weight,
-		Formula:       m.Formula,
-		Progress:      progress,
-		CreatedAt:     m.CreatedAt,
-		UpdatedAt:     m.UpdatedAt,
+		ID:             m.ID,
+		GoalID:         m.GoalID,
+		Name:           m.Name,
+		MetricType:     m.MetricType,
+		Unit:           m.Unit,
+		BaselineValue:  m.BaselineValue,
+		CurrentValue:   m.CurrentValue,
+		TargetValue:    m.TargetValue,
+		Weight:         m.Weight,
+		Formula:        m.Formula,
+		Progress:       progress,
+		WorkflowID:     m.WorkflowID,
+		CurrentStateID: m.CurrentStateID,
+		CurrentState:   ToWorkflowStateBrief(m.CurrentState),
+		AssignedToID:   m.AssignedToID,
+		AssignedTo:     ToUserBriefResponse(m.AssignedTo),
+		Version:        m.Version,
+		CreatedAt:      m.CreatedAt,
+		UpdatedAt:      m.UpdatedAt,
 	}
 }
 
@@ -1239,4 +1354,162 @@ func (h *MetricImportBatchTransitionHistory) ToResponse() MetricImportBatchTrans
 		resp.ToStateColor = h.ToState.Color
 	}
 	return resp
+}
+
+// ════════════════════════════════════════════════════
+// METRIC VALUE CHANGE / TRANSITION RESPONSE TYPES
+// ════════════════════════════════════════════════════
+
+type GoalMetricValueChangeResponse struct {
+	ID             uuid.UUID           `json:"id"`
+	MetricID       uuid.UUID           `json:"metric_id"`
+	MetricName     string              `json:"metric_name,omitempty"`
+	GoalID         uuid.UUID           `json:"goal_id,omitempty"`
+	GoalTitle      string              `json:"goal_title,omitempty"`
+	ProposedValue  float64             `json:"proposed_value"`
+	PreviousValue  float64             `json:"previous_value"`
+	Comment        string              `json:"comment"`
+	SubmittedByID  uuid.UUID           `json:"submitted_by_id"`
+	SubmittedBy    *UserBriefResponse  `json:"submitted_by,omitempty"`
+	WorkflowID     uuid.UUID           `json:"workflow_id"`
+	CurrentStateID uuid.UUID           `json:"current_state_id"`
+	CurrentState   *WorkflowStateBrief `json:"current_state,omitempty"`
+	AssignedToID   *uuid.UUID          `json:"assigned_to_id,omitempty"`
+	AssignedTo     *UserBriefResponse  `json:"assigned_to,omitempty"`
+	AppliedAt      *time.Time          `json:"applied_at"`
+	Version        int                 `json:"version"`
+	CreatedAt      time.Time           `json:"created_at"`
+	UpdatedAt      time.Time           `json:"updated_at"`
+}
+
+func (c *GoalMetricValueChange) ToResponse() GoalMetricValueChangeResponse {
+	resp := GoalMetricValueChangeResponse{
+		ID:             c.ID,
+		MetricID:       c.MetricID,
+		ProposedValue:  c.ProposedValue,
+		PreviousValue:  c.PreviousValue,
+		Comment:        c.Comment,
+		SubmittedByID:  c.SubmittedByID,
+		SubmittedBy:    ToUserBriefResponse(c.SubmittedBy),
+		WorkflowID:     c.WorkflowID,
+		CurrentStateID: c.CurrentStateID,
+		CurrentState:   ToWorkflowStateBrief(c.CurrentState),
+		AssignedToID:   c.AssignedToID,
+		AssignedTo:     ToUserBriefResponse(c.AssignedTo),
+		AppliedAt:      c.AppliedAt,
+		Version:        c.Version,
+		CreatedAt:      c.CreatedAt,
+		UpdatedAt:      c.UpdatedAt,
+	}
+	if c.Metric != nil {
+		resp.MetricName = c.Metric.Name
+		resp.GoalID = c.Metric.GoalID
+		if c.Metric.Goal != nil {
+			resp.GoalTitle = c.Metric.Goal.Title
+		}
+	}
+	return resp
+}
+
+type MetricTransitionHistoryResponse struct {
+	ID             uuid.UUID          `json:"id"`
+	MetricID       uuid.UUID          `json:"metric_id"`
+	TransitionName string             `json:"transition_name"`
+	FromStateName  string             `json:"from_state_name"`
+	ToStateName    string             `json:"to_state_name"`
+	FromStateColor string             `json:"from_state_color"`
+	ToStateColor   string             `json:"to_state_color"`
+	PerformedByID  uuid.UUID          `json:"performed_by_id"`
+	PerformedBy    *UserBriefResponse `json:"performed_by,omitempty"`
+	Comment        string             `json:"comment"`
+	IsSystemAction bool               `json:"is_system_action"`
+	TransitionedAt time.Time          `json:"transitioned_at"`
+	CreatedAt      time.Time          `json:"created_at"`
+}
+
+func (h *MetricTransitionHistory) ToResponse() MetricTransitionHistoryResponse {
+	resp := MetricTransitionHistoryResponse{
+		ID:             h.ID,
+		MetricID:       h.MetricID,
+		PerformedByID:  h.PerformedByID,
+		PerformedBy:    ToUserBriefResponse(h.PerformedBy),
+		Comment:        h.Comment,
+		IsSystemAction: h.IsSystemAction,
+		TransitionedAt: h.TransitionedAt,
+		CreatedAt:      h.CreatedAt,
+	}
+	if h.Transition != nil {
+		resp.TransitionName = h.Transition.Name
+	}
+	if h.FromState != nil {
+		resp.FromStateName = h.FromState.Name
+		resp.FromStateColor = h.FromState.Color
+	}
+	if h.ToState != nil {
+		resp.ToStateName = h.ToState.Name
+		resp.ToStateColor = h.ToState.Color
+	}
+	return resp
+}
+
+type MetricValueChangeTransitionHistoryResponse struct {
+	ID                  uuid.UUID          `json:"id"`
+	MetricValueChangeID uuid.UUID          `json:"metric_value_change_id"`
+	TransitionName      string             `json:"transition_name"`
+	FromStateName       string             `json:"from_state_name"`
+	ToStateName         string             `json:"to_state_name"`
+	FromStateColor      string             `json:"from_state_color"`
+	ToStateColor        string             `json:"to_state_color"`
+	PerformedByID       uuid.UUID          `json:"performed_by_id"`
+	PerformedBy         *UserBriefResponse `json:"performed_by,omitempty"`
+	Comment             string             `json:"comment"`
+	IsSystemAction      bool               `json:"is_system_action"`
+	TransitionedAt      time.Time          `json:"transitioned_at"`
+	CreatedAt           time.Time          `json:"created_at"`
+}
+
+func (h *MetricValueChangeTransitionHistory) ToResponse() MetricValueChangeTransitionHistoryResponse {
+	resp := MetricValueChangeTransitionHistoryResponse{
+		ID:                  h.ID,
+		MetricValueChangeID: h.MetricValueChangeID,
+		PerformedByID:       h.PerformedByID,
+		PerformedBy:         ToUserBriefResponse(h.PerformedBy),
+		Comment:             h.Comment,
+		IsSystemAction:      h.IsSystemAction,
+		TransitionedAt:      h.TransitionedAt,
+		CreatedAt:           h.CreatedAt,
+	}
+	if h.Transition != nil {
+		resp.TransitionName = h.Transition.Name
+	}
+	if h.FromState != nil {
+		resp.FromStateName = h.FromState.Name
+		resp.FromStateColor = h.FromState.Color
+	}
+	if h.ToState != nil {
+		resp.ToStateName = h.ToState.Name
+		resp.ToStateColor = h.ToState.Color
+	}
+	return resp
+}
+
+// MetricApprovalListResponse is the row format for pending/completed approval lists
+// of metric definitions or value changes — mirrors ApprovalListResponse for evidence.
+type MetricApprovalListResponse struct {
+	ID            uuid.UUID          `json:"id"`
+	MetricID      uuid.UUID          `json:"metric_id"`
+	MetricName    string             `json:"metric_name"`
+	ChangeID      *uuid.UUID         `json:"change_id,omitempty"`
+	ProposedValue *float64           `json:"proposed_value,omitempty"`
+	PreviousValue *float64           `json:"previous_value,omitempty"`
+	GoalID        uuid.UUID          `json:"goal_id"`
+	GoalTitle     string             `json:"goal_title"`
+	GoalPriority  string             `json:"goal_priority"`
+	StateName     string             `json:"state_name"`
+	StateColor    string             `json:"state_color"`
+	SubmittedBy   *UserBriefResponse `json:"submitted_by,omitempty"`
+	AssignedTo    *UserBriefResponse `json:"assigned_to,omitempty"`
+	Version       int                `json:"version"`
+	CreatedAt     time.Time          `json:"created_at"`
+	UpdatedAt     time.Time          `json:"updated_at"`
 }

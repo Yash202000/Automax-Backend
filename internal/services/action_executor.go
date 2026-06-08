@@ -22,16 +22,18 @@ type ActionExecutor interface {
 }
 
 type actionExecutor struct {
-	incidentRepo repository.IncidentRepository
-	userRepo     repository.UserRepository
-	httpClient   *http.Client
+	incidentRepo        repository.IncidentRepository
+	userRepo            repository.UserRepository
+	notificationService *NotificationService
+	httpClient          *http.Client
 }
 
 // NewActionExecutor creates a new action executor
-func NewActionExecutor(incidentRepo repository.IncidentRepository, userRepo repository.UserRepository) ActionExecutor {
+func NewActionExecutor(incidentRepo repository.IncidentRepository, userRepo repository.UserRepository, notificationService *NotificationService) ActionExecutor {
 	return &actionExecutor{
-		incidentRepo: incidentRepo,
-		userRepo:     userRepo,
+		incidentRepo:        incidentRepo,
+		userRepo:            userRepo,
+		notificationService: notificationService,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -40,7 +42,7 @@ func NewActionExecutor(incidentRepo repository.IncidentRepository, userRepo repo
 
 // ExecuteActions executes all actions for a transition
 func (e *actionExecutor) ExecuteActions(ctx context.Context, incident *models.Incident, transition *models.WorkflowTransition, performedBy *models.User) error {
-	if transition.Actions == nil || len(transition.Actions) == 0 {
+	if len(transition.Actions) == 0 {
 		return nil
 	}
 
@@ -62,17 +64,14 @@ func (e *actionExecutor) ExecuteActions(ctx context.Context, incident *models.In
 		}
 
 		if action.IsAsync {
-			// Execute asynchronously
 			go func(act models.TransitionAction) {
 				if err := e.ExecuteAction(context.Background(), &act, incident, transition, performedBy); err != nil {
-					log.Printf("Async action execution failed: %v", err)
+					log.Printf("Async action execution failed (transition=%s action=%s): %v", transition.Name, act.Name, err)
 				}
 			}(action)
 		} else {
-			// Execute synchronously
 			if err := e.ExecuteAction(ctx, &action, incident, transition, performedBy); err != nil {
-				log.Printf("Action execution failed: %v", err)
-				// Continue with other actions even if one fails
+				log.Printf("Action execution failed (transition=%s action=%s): %v", transition.Name, action.Name, err)
 			}
 		}
 	}
@@ -87,6 +86,8 @@ func (e *actionExecutor) ExecuteAction(ctx context.Context, action *models.Trans
 		return e.executeNotification(ctx, action, incident, transition, performedBy)
 	case "email":
 		return e.executeEmail(ctx, action, incident, transition, performedBy)
+	case "sms":
+		return e.executeSms(ctx, action, incident, transition, performedBy)
 	case "webhook":
 		return e.executeWebhook(ctx, action, incident, transition, performedBy)
 	case "field_update":
@@ -96,71 +97,217 @@ func (e *actionExecutor) ExecuteAction(ctx context.Context, action *models.Trans
 	}
 }
 
-// NotificationConfig represents the configuration for a notification action
+// NotificationConfig represents the configuration for an in-app notification action
 type NotificationConfig struct {
-	Recipients []string `json:"recipients"` // "assignee", "reporter", "role:admin", "user:uuid"
+	Recipients []string `json:"recipients"` // "assignee", "reporter", "creator", "user:uuid"
 	Title      string   `json:"title"`
 	Message    string   `json:"message"`
 }
 
-// executeNotification sends in-app notifications
+// executeNotification sends in-app notifications via the notification service
 func (e *actionExecutor) executeNotification(ctx context.Context, action *models.TransitionAction, incident *models.Incident, transition *models.WorkflowTransition, performedBy *models.User) error {
 	var config NotificationConfig
 	if err := json.Unmarshal([]byte(action.Config), &config); err != nil {
 		return fmt.Errorf("invalid notification config: %w", err)
 	}
 
-	// Resolve recipients
-	recipientIDs := e.resolveRecipients(ctx, config.Recipients, incident)
+	if e.notificationService == nil {
+		log.Printf("NotificationService not available; skipping notification action %q", action.Name)
+		return nil
+	}
 
-	// Replace placeholders in title and message
+	emails := e.resolveRecipientEmails(ctx, config.Recipients, nil, incident)
+	if len(emails) == 0 {
+		return nil
+	}
+
 	title := e.replacePlaceholders(config.Title, incident, transition, performedBy)
 	message := e.replacePlaceholders(config.Message, incident, transition, performedBy)
 
-	// Log the notification (in a real system, this would create notification records)
-	log.Printf("Notification: To=%v, Title=%s, Message=%s", recipientIDs, title, message)
-
-	// TODO: Create actual notification records in database
-	// For now, just log it
+	_, err := e.notificationService.SendNotification(
+		ctx, "notification", nil, "en",
+		emails, nil, nil,
+		title, message,
+		nil, nil, nil, nil,
+	)
+	if err != nil {
+		return fmt.Errorf("notification send failed: %w", err)
+	}
 	return nil
 }
 
-// EmailConfig represents the configuration for an email action
+// EmailConfig matches the TransitionEmailConfig sent by the frontend
 type EmailConfig struct {
-	Recipients []string `json:"recipients"` // Same as notification
-	Subject    string   `json:"subject"`
-	Body       string   `json:"body"`
-	IsHTML     bool     `json:"is_html"`
+	Recipients             []string `json:"recipients"`              // "assignee", "reporter", "creator", "department_head", "custom"
+	CustomEmails           []string `json:"custom_emails"`           // explicit email addresses when "custom" is selected
+	TemplateCode           string   `json:"template_code,omitempty"` // notification template code — overrides subject/body when set
+	SubjectTemplate        string   `json:"subject_template"`
+	BodyTemplate           string   `json:"body_template"`
+	Language               string   `json:"language,omitempty"`      // "ar" or "en"; defaults to "ar" when empty
+	IncludeIncidentDetails bool     `json:"include_incident_details"`
+	IncludeTransitionInfo  bool     `json:"include_transition_info"`
+	IncludeComments        bool     `json:"include_comments"`
 }
 
-// executeEmail sends email notifications
+// executeEmail sends email notifications via the notification service
 func (e *actionExecutor) executeEmail(ctx context.Context, action *models.TransitionAction, incident *models.Incident, transition *models.WorkflowTransition, performedBy *models.User) error {
 	var config EmailConfig
 	if err := json.Unmarshal([]byte(action.Config), &config); err != nil {
 		return fmt.Errorf("invalid email config: %w", err)
 	}
 
-	// Resolve recipient emails
-	recipientEmails := e.resolveRecipientEmails(ctx, config.Recipients, incident)
+	if e.notificationService == nil {
+		log.Printf("[EMAIL-ACTION] NotificationService not available; skipping action %q", action.Name)
+		return nil
+	}
 
-	// Replace placeholders
-	subject := e.replacePlaceholders(config.Subject, incident, transition, performedBy)
-	body := e.replacePlaceholders(config.Body, incident, transition, performedBy)
+	transitionName := action.Name
+	if transition != nil {
+		transitionName = transition.Name
+	}
 
-	// Log the email (in a real system, this would send actual emails)
-	log.Printf("Email: To=%v, Subject=%s, Body=%s", recipientEmails, subject, body)
+	emails := e.resolveRecipientEmails(ctx, config.Recipients, config.CustomEmails, incident)
+	log.Printf("[EMAIL-ACTION] transition=%q incident=%s recipients_config=%v resolved_emails=%v template=%q",
+		transitionName, incident.IncidentNumber, config.Recipients, emails, config.TemplateCode)
 
-	// TODO: Integrate with email service (SMTP, SendGrid, etc.)
-	// For now, just log it
+	if len(emails) == 0 {
+		log.Printf("[EMAIL-ACTION] transition=%q incident=%s — no email recipients resolved, skipping",
+			transitionName, incident.IncidentNumber)
+		return nil
+	}
+
+	vars := BuildIncidentVariables(incident, transition, performedBy)
+
+	var templateCode *string
+	var subject, body string
+
+	if config.TemplateCode != "" {
+		templateCode = &config.TemplateCode
+	} else {
+		subject = e.replacePlaceholders(config.SubjectTemplate, incident, transition, performedBy)
+		body = e.replacePlaceholders(config.BodyTemplate, incident, transition, performedBy)
+
+		if config.IncludeIncidentDetails {
+			body += e.buildIncidentDetails(incident)
+		}
+		if config.IncludeTransitionInfo && transition != nil {
+			fromState := ""
+			if transition.FromState != nil {
+				fromState = transition.FromState.Name
+			}
+			toState := ""
+			if transition.ToState != nil {
+				toState = transition.ToState.Name
+			}
+			body += fmt.Sprintf("\n\nTransition: %s → %s", fromState, toState)
+		}
+	}
+
+	lang := config.Language
+	if lang == "" {
+		lang = "ar"
+	}
+
+	var sentByID *uuid.UUID
+	if performedBy != nil {
+		sentByID = &performedBy.ID
+	}
+
+	_, err := e.notificationService.SendNotification(
+		ctx, "email", templateCode, lang,
+		emails, nil, nil,
+		subject, body,
+		vars, nil, sentByID, nil,
+	)
+	if err != nil {
+		log.Printf("[EMAIL-ACTION] transition=%q incident=%s emails=%v template=%q — FAILED: %v",
+			transitionName, incident.IncidentNumber, emails, config.TemplateCode, err)
+		return fmt.Errorf("email send failed: %w", err)
+	}
+	log.Printf("[EMAIL-ACTION] transition=%q incident=%s emails=%v template=%q — SENT OK",
+		transitionName, incident.IncidentNumber, emails, config.TemplateCode)
+	return nil
+}
+
+// SmsConfig represents the configuration for an SMS action
+type SmsConfig struct {
+	Recipients      []string `json:"recipients"`              // "assignee", "reporter", "creator", "caller"
+	CustomPhones    []string `json:"custom_phones"`           // explicit phone numbers
+	TemplateCode    string   `json:"template_code,omitempty"` // notification template code — overrides message_template when set
+	MessageTemplate string   `json:"message_template"`
+	Language        string   `json:"language,omitempty"` // "ar" or "en"; defaults to "ar" when empty
+}
+
+// executeSms sends SMS notifications via the notification service
+func (e *actionExecutor) executeSms(ctx context.Context, action *models.TransitionAction, incident *models.Incident, transition *models.WorkflowTransition, performedBy *models.User) error {
+	var config SmsConfig
+	if err := json.Unmarshal([]byte(action.Config), &config); err != nil {
+		return fmt.Errorf("invalid sms config: %w", err)
+	}
+
+	if e.notificationService == nil {
+		log.Printf("[SMS-ACTION] NotificationService not available; skipping action %q", action.Name)
+		return nil
+	}
+
+	transitionName := action.Name
+	if transition != nil {
+		transitionName = transition.Name
+	}
+
+	phones := e.resolveRecipientPhones(ctx, incident, config.Recipients, config.CustomPhones)
+	log.Printf("[SMS-ACTION] transition=%q incident=%s recipients_config=%v resolved_phones=%v template=%q",
+		transitionName, incident.IncidentNumber, config.Recipients, phones, config.TemplateCode)
+
+	if len(phones) == 0 {
+		log.Printf("[SMS-ACTION] transition=%q incident=%s — no phone recipients resolved, skipping",
+			transitionName, incident.IncidentNumber)
+		return nil
+	}
+
+	vars := BuildIncidentVariables(incident, transition, performedBy)
+
+	var templateCode *string
+	var message string
+
+	if config.TemplateCode != "" {
+		templateCode = &config.TemplateCode
+	} else {
+		message = e.replacePlaceholders(config.MessageTemplate, incident, transition, performedBy)
+	}
+
+	lang := config.Language
+	if lang == "" {
+		lang = "ar"
+	}
+
+	var smsSentByID *uuid.UUID
+	if performedBy != nil {
+		smsSentByID = &performedBy.ID
+	}
+
+	_, err := e.notificationService.SendNotification(
+		ctx, "sms", templateCode, lang,
+		phones, nil, nil,
+		"", message,
+		vars, nil, smsSentByID, nil,
+	)
+	if err != nil {
+		log.Printf("[SMS-ACTION] transition=%q incident=%s phones=%v template=%q — FAILED: %v",
+			transitionName, incident.IncidentNumber, phones, config.TemplateCode, err)
+		return fmt.Errorf("sms send failed: %w", err)
+	}
+	log.Printf("[SMS-ACTION] transition=%q incident=%s phones=%v template=%q — SENT OK",
+		transitionName, incident.IncidentNumber, phones, config.TemplateCode)
 	return nil
 }
 
 // WebhookConfig represents the configuration for a webhook action
 type WebhookConfig struct {
 	URL     string            `json:"url"`
-	Method  string            `json:"method"` // GET, POST, PUT
+	Method  string            `json:"method"`
 	Headers map[string]string `json:"headers"`
-	Body    string            `json:"body"` // JSON template
+	Body    string            `json:"body"`
 }
 
 // executeWebhook calls an external webhook
@@ -174,22 +321,18 @@ func (e *actionExecutor) executeWebhook(ctx context.Context, action *models.Tran
 		config.Method = "POST"
 	}
 
-	// Replace placeholders in body
 	body := e.replacePlaceholders(config.Body, incident, transition, performedBy)
 
-	// Create request
 	req, err := http.NewRequestWithContext(ctx, config.Method, config.URL, bytes.NewBufferString(body))
 	if err != nil {
 		return fmt.Errorf("failed to create webhook request: %w", err)
 	}
 
-	// Set headers
 	req.Header.Set("Content-Type", "application/json")
 	for key, value := range config.Headers {
 		req.Header.Set(key, value)
 	}
 
-	// Execute request
 	resp, err := e.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("webhook request failed: %w", err)
@@ -206,7 +349,7 @@ func (e *actionExecutor) executeWebhook(ctx context.Context, action *models.Tran
 
 // FieldUpdateConfig represents the configuration for a field update action
 type FieldUpdateConfig struct {
-	Field string      `json:"field"` // priority, severity, assignee_id, etc.
+	Field string      `json:"field"`
 	Value interface{} `json:"value"`
 }
 
@@ -217,7 +360,6 @@ func (e *actionExecutor) executeFieldUpdate(ctx context.Context, action *models.
 		return fmt.Errorf("invalid field update config: %w", err)
 	}
 
-	// Update the field based on config
 	updates := make(map[string]interface{})
 
 	switch config.Field {
@@ -249,77 +391,104 @@ func (e *actionExecutor) executeFieldUpdate(ctx context.Context, action *models.
 		if err := e.incidentRepo.UpdateFields(ctx, incident.ID, updates); err != nil {
 			return fmt.Errorf("failed to update field: %w", err)
 		}
-		log.Printf("Field updated: Incident=%s, Field=%s, Value=%v", incident.IncidentNumber, config.Field, config.Value)
+		log.Printf("Field updated: Incident=%s, Field=%s", incident.IncidentNumber, config.Field)
 	}
 
 	return nil
 }
 
-// resolveRecipients resolves recipient identifiers to user IDs
-func (e *actionExecutor) resolveRecipients(ctx context.Context, recipients []string, incident *models.Incident) []uuid.UUID {
-	var userIDs []uuid.UUID
-	seen := make(map[uuid.UUID]bool)
-
-	for _, recipient := range recipients {
-		switch {
-		case recipient == "assignee":
-			if incident.AssigneeID != nil && !seen[*incident.AssigneeID] {
-				userIDs = append(userIDs, *incident.AssigneeID)
-				seen[*incident.AssigneeID] = true
-			}
-		case recipient == "reporter":
-			if incident.ReporterID != nil && !seen[*incident.ReporterID] {
-				userIDs = append(userIDs, *incident.ReporterID)
-				seen[*incident.ReporterID] = true
-			}
-		case strings.HasPrefix(recipient, "user:"):
-			if uid, err := uuid.Parse(strings.TrimPrefix(recipient, "user:")); err == nil && !seen[uid] {
-				userIDs = append(userIDs, uid)
-				seen[uid] = true
-			}
-		case strings.HasPrefix(recipient, "role:"):
-			// TODO: Fetch users with specific role
-			roleName := strings.TrimPrefix(recipient, "role:")
-			log.Printf("Would notify users with role: %s", roleName)
-		}
-	}
-
-	return userIDs
-}
-
-// resolveRecipientEmails resolves recipient identifiers to email addresses
-func (e *actionExecutor) resolveRecipientEmails(ctx context.Context, recipients []string, incident *models.Incident) []string {
+// resolveRecipientEmails resolves recipient identifiers to email addresses.
+// customEmails is merged in directly (used for the "custom" recipient type).
+func (e *actionExecutor) resolveRecipientEmails(ctx context.Context, recipients []string, customEmails []string, incident *models.Incident) []string {
 	var emails []string
 	seen := make(map[string]bool)
 
+	add := func(email string) {
+		if email != "" && !seen[email] {
+			emails = append(emails, email)
+			seen[email] = true
+		}
+	}
+
 	for _, recipient := range recipients {
-		switch {
-		case recipient == "assignee":
-			if incident.Assignee != nil && incident.Assignee.Email != "" && !seen[incident.Assignee.Email] {
-				emails = append(emails, incident.Assignee.Email)
-				seen[incident.Assignee.Email] = true
+		switch recipient {
+		case "assignee":
+			// Primary assignee
+			if incident.Assignee != nil {
+				log.Printf("[EMAIL-RESOLVE] assignee (primary) → %s (%s)", incident.Assignee.Email, incident.Assignee.Username)
+				add(incident.Assignee.Email)
 			}
-		case recipient == "reporter":
-			if incident.Reporter != nil && incident.Reporter.Email != "" && !seen[incident.Reporter.Email] {
-				emails = append(emails, incident.Reporter.Email)
-				seen[incident.Reporter.Email] = true
-			} else if incident.ReporterEmail != "" && !seen[incident.ReporterEmail] {
-				emails = append(emails, incident.ReporterEmail)
-				seen[incident.ReporterEmail] = true
+			// Additional assignees (many-to-many)
+			for _, a := range incident.Assignees {
+				log.Printf("[EMAIL-RESOLVE] assignee (multi) → %s (%s)", a.Email, a.Username)
+				add(a.Email)
 			}
-		case strings.HasPrefix(recipient, "email:"):
-			email := strings.TrimPrefix(recipient, "email:")
-			if !seen[email] {
-				emails = append(emails, email)
-				seen[email] = true
+			if incident.Assignee == nil && len(incident.Assignees) == 0 {
+				log.Printf("[EMAIL-RESOLVE] assignee → none (incident has no assignee)")
 			}
-		case strings.HasPrefix(recipient, "user:"):
-			if uid, err := uuid.Parse(strings.TrimPrefix(recipient, "user:")); err == nil {
-				user, err := e.userRepo.FindByID(ctx, uid)
-				if err == nil && user.Email != "" && !seen[user.Email] {
-					emails = append(emails, user.Email)
-					seen[user.Email] = true
+		case "reporter":
+			if incident.Reporter != nil {
+				log.Printf("[EMAIL-RESOLVE] reporter → %s", incident.Reporter.Email)
+				add(incident.Reporter.Email)
+			} else {
+				log.Printf("[EMAIL-RESOLVE] reporter (plain field) → %s", incident.ReporterEmail)
+				add(incident.ReporterEmail)
+			}
+		case "creator":
+			// Try mobile lookup first, then fall back to oldest transition history performer.
+			if incident.CreatedByMobile != "" {
+				if u, err := e.userRepo.FindByMobile(ctx, incident.CreatedByMobile); err == nil {
+					log.Printf("[EMAIL-RESOLVE] creator → %s (via mobile %s)", u.Email, incident.CreatedByMobile)
+					add(u.Email)
+				} else {
+					log.Printf("[EMAIL-RESOLVE] creator → mobile lookup failed: %v", err)
 				}
+			} else if len(incident.TransitionHistory) > 0 {
+				oldest := incident.TransitionHistory[len(incident.TransitionHistory)-1]
+				if oldest.PerformedBy != nil {
+					log.Printf("[EMAIL-RESOLVE] creator → %s (oldest transition performer)", oldest.PerformedBy.Email)
+					add(oldest.PerformedBy.Email)
+				}
+			} else {
+				log.Printf("[EMAIL-RESOLVE] creator → could not resolve (no mobile, no history)")
+			}
+		case "previous_assignee":
+			// PreviousAssigneeIDs = all historical assignees collected by ExecuteTransition.
+			// Skip citizen/IVR users (username prefix "citizen_").
+			if len(incident.PreviousAssigneeIDs) == 0 {
+				log.Printf("[EMAIL-RESOLVE] previous_assignee → none found")
+			}
+			for _, uid := range incident.PreviousAssigneeIDs {
+				if u, err := e.userRepo.FindByID(ctx, uid); err == nil {
+					if strings.HasPrefix(u.Username, "citizen_") {
+						log.Printf("[EMAIL-RESOLVE] previous_assignee → skipped citizen %s", u.Username)
+					} else {
+						log.Printf("[EMAIL-RESOLVE] previous_assignee → %s (%s)", u.Email, u.Username)
+						add(u.Email)
+					}
+				} else {
+					log.Printf("[EMAIL-RESOLVE] previous_assignee → lookup failed for %s: %v", uid, err)
+				}
+			}
+		case "department_head":
+			if incident.Department != nil && incident.Department.ManagerID != nil {
+				if u, err := e.userRepo.FindByID(ctx, *incident.Department.ManagerID); err == nil {
+					add(u.Email)
+				}
+			}
+		case "custom":
+			for _, em := range customEmails {
+				add(strings.TrimSpace(em))
+			}
+		default:
+			if strings.HasPrefix(recipient, "user:") {
+				if uid, err := uuid.Parse(strings.TrimPrefix(recipient, "user:")); err == nil {
+					if u, err := e.userRepo.FindByID(ctx, uid); err == nil {
+						add(u.Email)
+					}
+				}
+			} else if strings.HasPrefix(recipient, "email:") {
+				add(strings.TrimPrefix(recipient, "email:"))
 			}
 		}
 	}
@@ -327,21 +496,102 @@ func (e *actionExecutor) resolveRecipientEmails(ctx context.Context, recipients 
 	return emails
 }
 
+// resolveRecipientPhones resolves recipient identifiers to phone numbers for SMS.
+func (e *actionExecutor) resolveRecipientPhones(ctx context.Context, incident *models.Incident, recipients []string, customPhones []string) []string {
+	var phones []string
+	seen := make(map[string]bool)
+
+	add := func(phone string) {
+		if phone != "" && !seen[phone] {
+			phones = append(phones, phone)
+			seen[phone] = true
+		}
+	}
+
+	for _, recipient := range recipients {
+		switch recipient {
+		case "assignee":
+			// Primary assignee
+			if incident.Assignee != nil {
+				add(incident.Assignee.Phone)
+			}
+			// Additional assignees (many-to-many)
+			for _, a := range incident.Assignees {
+				add(a.Phone)
+			}
+		case "reporter":
+			if incident.Reporter != nil {
+				add(incident.Reporter.Phone)
+			} else {
+				add(incident.ReporterPhone)
+			}
+		case "creator":
+			add(incident.CreatedByMobile)
+		case "department_head":
+			if incident.Department != nil && incident.Department.ManagerID != nil {
+				if u, err := e.userRepo.FindByID(ctx, *incident.Department.ManagerID); err == nil {
+					add(u.Phone)
+				}
+			}
+		case "caller":
+			add(incident.ReporterPhone)
+		case "previous_assignee":
+			for _, uid := range incident.PreviousAssigneeIDs {
+				if u, err := e.userRepo.FindByID(ctx, uid); err == nil {
+					if !strings.HasPrefix(u.Username, "citizen_") {
+						add(u.Phone)
+					}
+				}
+			}
+		case "custom":
+			for _, p := range customPhones {
+				add(strings.TrimSpace(p))
+			}
+		}
+	}
+
+	return phones
+}
+
+
 // replacePlaceholders replaces template placeholders with actual values
 func (e *actionExecutor) replacePlaceholders(template string, incident *models.Incident, transition *models.WorkflowTransition, performedBy *models.User) string {
 	replacements := map[string]string{
 		"{{incident_number}}": incident.IncidentNumber,
 		"{{incident_title}}":  incident.Title,
 		"{{incident_id}}":     incident.ID.String(),
+		"{{description}}":    incident.Description,
+		"{{record_type}}":    incident.RecordType,
+		"{{source}}":         incident.Source,
+		"{{channel}}":        incident.Channel,
+		"{{reporter_name}}":  incident.ReporterName,
+		"{{reporter_email}}": incident.ReporterEmail,
+		"{{reporter_phone}}": incident.ReporterPhone,
+		"{{created_by_name}}": incident.CreatedByName,
+		"{{sla_breached}}":   fmt.Sprintf("%t", incident.SLABreached),
+		"{{address}}":        incident.Address,
+		"{{city}}":           incident.City,
+		"{{country}}":        incident.Country,
 	}
 
-	// Dynamic placeholders for lookup values
+	if incident.DueDate != nil {
+		replacements["{{due_date}}"] = incident.DueDate.Format("2006-01-02 15:04:05")
+	}
+	if incident.SLADeadline != nil {
+		replacements["{{sla_deadline}}"] = incident.SLADeadline.Format("2006-01-02 15:04:05")
+	}
+	replacements["{{created_at}}"] = incident.CreatedAt.Format("2006-01-02 15:04:05")
+
+	if incident.Classification != nil {
+		replacements["{{classification_name}}"] = incident.Classification.Name
+	}
+	if incident.Workflow != nil {
+		replacements["{{workflow_name}}"] = incident.Workflow.Name
+	}
+
 	priority := "N/A"
 	for _, lv := range incident.LookupValues {
-		if lv.Category == nil {
-			continue
-		}
-		if lv.Category.Code == "PRIORITY" {
+		if lv.Category != nil && lv.Category.Code == "PRIORITY" {
 			priority = lv.Name
 		}
 	}
@@ -358,17 +608,21 @@ func (e *actionExecutor) replacePlaceholders(template string, incident *models.I
 	}
 
 	if performedBy != nil {
-		replacements["{{performed_by}}"] = performedBy.Username
+		name := performedBy.Username
 		if performedBy.FirstName != "" {
-			replacements["{{performed_by}}"] = performedBy.FirstName + " " + performedBy.LastName
+			name = performedBy.FirstName + " " + performedBy.LastName
 		}
+		replacements["{{performed_by}}"] = name
 	}
 
 	if incident.Assignee != nil {
-		replacements["{{assignee}}"] = incident.Assignee.Username
+		name := incident.Assignee.Username
 		if incident.Assignee.FirstName != "" {
-			replacements["{{assignee}}"] = incident.Assignee.FirstName + " " + incident.Assignee.LastName
+			name = incident.Assignee.FirstName + " " + incident.Assignee.LastName
 		}
+		replacements["{{assignee}}"] = name
+		replacements["{{assignee_email}}"] = incident.Assignee.Email
+		replacements["{{assignee_phone}}"] = incident.Assignee.Phone
 	} else {
 		replacements["{{assignee}}"] = "Unassigned"
 	}
@@ -381,6 +635,47 @@ func (e *actionExecutor) replacePlaceholders(template string, incident *models.I
 	for placeholder, value := range replacements {
 		result = strings.ReplaceAll(result, placeholder, value)
 	}
-
 	return result
+}
+
+// buildIncidentDetails appends a plain-text summary of the incident to an email body
+func (e *actionExecutor) buildIncidentDetails(incident *models.Incident) string {
+	var b strings.Builder
+	b.WriteString("\n\n--- Incident Details ---")
+	b.WriteString("\nNumber: " + incident.IncidentNumber)
+	b.WriteString("\nTitle: " + incident.Title)
+	if incident.CurrentState != nil {
+		b.WriteString("\nStatus: " + incident.CurrentState.Name)
+	}
+	if incident.Assignee != nil {
+		name := incident.Assignee.Username
+		if incident.Assignee.FirstName != "" {
+			name = incident.Assignee.FirstName + " " + incident.Assignee.LastName
+		}
+		b.WriteString("\nAssignee: " + name)
+	}
+	return b.String()
+}
+
+// extractPreviousAssigneeID finds the assignee_id stored in OldValues of the most recent
+// transition history entry that recorded an assignee change.
+// TransitionHistory is ordered DESC (newest first), so we scan from index 0.
+func extractPreviousAssigneeID(history []models.IncidentTransitionHistory) uuid.UUID {
+	for _, h := range history {
+		if h.OldValues == "" {
+			continue
+		}
+		var old map[string]interface{}
+		if err := json.Unmarshal([]byte(h.OldValues), &old); err != nil {
+			continue
+		}
+		if raw, ok := old["assignee_id"]; ok && raw != nil {
+			if idStr, ok := raw.(string); ok && idStr != "" {
+				if uid, err := uuid.Parse(idStr); err == nil {
+					return uid
+				}
+			}
+		}
+	}
+	return uuid.Nil
 }

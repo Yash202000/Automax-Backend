@@ -38,6 +38,9 @@ type WorkflowService interface {
 	UpdateState(ctx context.Context, stateID uuid.UUID, req *models.WorkflowStateUpdateRequest) (*models.WorkflowStateResponse, error)
 	DeleteState(ctx context.Context, stateID uuid.UUID) error
 
+	// Check Workflow Existence by Code or Name
+	WorkflowExistsByCodeOrName(ctx context.Context, codeOrName []string) error
+
 	// Transition management
 	CreateTransition(ctx context.Context, workflowID uuid.UUID, req *models.WorkflowTransitionCreateRequest) (*models.WorkflowTransitionResponse, error)
 	GetTransition(ctx context.Context, transitionID uuid.UUID) (*models.WorkflowTransitionResponse, error)
@@ -53,7 +56,11 @@ type WorkflowService interface {
 
 	// Get transitions from a state (for incident transition UI)
 	GetTransitionsFromState(ctx context.Context, stateID uuid.UUID) ([]models.WorkflowTransitionResponse, error)
+	GetTransitionsToState(ctx context.Context, stateID uuid.UUID) ([]models.WorkflowTransitionResponse, error)
 	GetInitialState(ctx context.Context, workflowID uuid.UUID) (*models.WorkflowStateResponse, error)
+
+	// Get matching users for a workflow's initial state (for manual-select creation assignment)
+	GetInitialStateMatchingUsers(ctx context.Context, workflowID uuid.UUID, classificationID, locationID, departmentID *uuid.UUID) ([]models.UserResponse, error)
 
 	// Workflow matching - for mobile apps and other clients
 	MatchWorkflow(ctx context.Context, req *models.WorkflowMatchRequest) (*models.WorkflowMatchResponse, error)
@@ -64,19 +71,21 @@ type WorkflowService interface {
 }
 
 type workflowService struct {
-	repo       repository.WorkflowRepository
-	roleRepo   repository.RoleRepository
-	deptRepo   repository.DepartmentRepository
-	classRepo  repository.ClassificationRepository
-	db         *gorm.DB
+	repo      repository.WorkflowRepository
+	roleRepo  repository.RoleRepository
+	deptRepo  repository.DepartmentRepository
+	classRepo repository.ClassificationRepository
+	userRepo  repository.UserRepository
+	db        *gorm.DB
 }
 
-func NewWorkflowService(repo repository.WorkflowRepository, roleRepo repository.RoleRepository, deptRepo repository.DepartmentRepository, classRepo repository.ClassificationRepository, db *gorm.DB) WorkflowService {
+func NewWorkflowService(repo repository.WorkflowRepository, roleRepo repository.RoleRepository, deptRepo repository.DepartmentRepository, classRepo repository.ClassificationRepository, userRepo repository.UserRepository, db *gorm.DB) WorkflowService {
 	return &workflowService{
 		repo:      repo,
 		roleRepo:  roleRepo,
 		deptRepo:  deptRepo,
 		classRepo: classRepo,
+		userRepo:  userRepo,
 		db:        db,
 	}
 }
@@ -269,6 +278,15 @@ func (s *workflowService) CreateWorkflow(ctx context.Context, req *models.Workfl
 		}
 	}
 
+	// Convert OptionalFields array to JSON string
+	optionalFieldsJSON := "[]"
+	if len(req.OptionalFields) > 0 {
+		jsonBytes, err := json.Marshal(req.OptionalFields)
+		if err == nil {
+			optionalFieldsJSON = string(jsonBytes)
+		}
+	}
+
 	recordType := "incident"
 	if req.RecordType != "" {
 		recordType = req.RecordType
@@ -332,12 +350,15 @@ func (s *workflowService) CreateWorkflow(ctx context.Context, req *models.Workfl
 
 	workflow := &models.Workflow{
 		Name:           req.Name,
+		NameAr:         req.NameAr,
 		Code:           req.Code,
 		Description:    req.Description,
+		DescriptionAr:  req.DescriptionAr,
 		RecordType:     recordType,
 		Sources:        sourcesJSON,
 		Priorities:     prioritiesJSON,
 		RequiredFields: requiredFieldsJSON,
+		OptionalFields: optionalFieldsJSON,
 		CreatedByID:    &createdByID,
 		IsActive:       true,
 		Version:        1,
@@ -516,11 +537,17 @@ func (s *workflowService) UpdateWorkflow(ctx context.Context, id uuid.UUID, req 
 	if req.Name != "" {
 		workflow.Name = req.Name
 	}
+	if req.NameAr != "" {
+		workflow.NameAr = req.NameAr
+	}
 	if req.Code != "" {
 		workflow.Code = req.Code
 	}
 	if req.Description != "" {
 		workflow.Description = req.Description
+	}
+	if req.DescriptionAr != "" {
+		workflow.DescriptionAr = req.DescriptionAr
 	}
 	if req.IsActive != nil {
 		workflow.IsActive = *req.IsActive
@@ -553,6 +580,13 @@ func (s *workflowService) UpdateWorkflow(ctx context.Context, id uuid.UUID, req 
 		jsonBytes, err := json.Marshal(req.RequiredFields)
 		if err == nil {
 			workflow.RequiredFields = string(jsonBytes)
+		}
+	}
+	// Update OptionalFields if provided (nil means not updating, empty array means clear)
+	if req.OptionalFields != nil {
+		jsonBytes, err := json.Marshal(req.OptionalFields)
+		if err == nil {
+			workflow.OptionalFields = string(jsonBytes)
 		}
 	}
 
@@ -613,6 +647,17 @@ func (s *workflowService) UpdateWorkflow(ctx context.Context, id uuid.UUID, req 
 	return &resp, nil
 }
 
+func (s *workflowService) WorkflowExistsByCodeOrName(ctx context.Context, codeOrName []string) error {
+	exists, err := s.repo.ExistsByCodeOrName(ctx, codeOrName)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("workflow with code '%s' or name '%s' already exists", codeOrName[0], codeOrName[1])
+	}
+	return nil
+}
+
 func (s *workflowService) DeleteWorkflow(ctx context.Context, id uuid.UUID) error {
 	// Soft delete - marks workflow as deleted but keeps in database
 	return s.repo.Delete(ctx, id)
@@ -667,18 +712,20 @@ func (s *workflowService) DuplicateWorkflow(ctx context.Context, id uuid.UUID, c
 	// Duplicate states
 	for _, state := range original.States {
 		newState := &models.WorkflowState{
-			WorkflowID:  newWorkflow.ID,
-			Name:        state.Name,
-			Code:        state.Code,
-			Description: state.Description,
-			StateType:   state.StateType,
-			Color:       state.Color,
-			PositionX:   state.PositionX,
-			PositionY:   state.PositionY,
-			SLAHours:    state.SLAHours,
-			SLAUnit:     state.SLAUnit,
-			SortOrder:   state.SortOrder,
-			IsActive:    state.IsActive,
+			WorkflowID:    newWorkflow.ID,
+			Name:          state.Name,
+			NameAr:        state.NameAr,
+			Code:          state.Code,
+			Description:   state.Description,
+			DescriptionAr: state.DescriptionAr,
+			StateType:     state.StateType,
+			Color:         state.Color,
+			PositionX:     state.PositionX,
+			PositionY:     state.PositionY,
+			SLAHours:      state.SLAHours,
+			SLAUnit:       state.SLAUnit,
+			SortOrder:     state.SortOrder,
+			IsActive:      state.IsActive,
 		}
 		if err := s.repo.CreateState(ctx, newState); err != nil {
 			return nil, err
@@ -698,14 +745,16 @@ func (s *workflowService) DuplicateWorkflow(ctx context.Context, id uuid.UUID, c
 		}
 
 		newTrans := &models.WorkflowTransition{
-			WorkflowID:  newWorkflow.ID,
-			Name:        trans.Name,
-			Code:        trans.Code,
-			Description: trans.Description,
-			FromStateID: newFromStateID,
-			ToStateID:   newToStateID,
-			SortOrder:   trans.SortOrder,
-			IsActive:    trans.IsActive,
+			WorkflowID:    newWorkflow.ID,
+			Name:          trans.Name,
+			NameAr:        trans.NameAr,
+			Code:          trans.Code,
+			Description:   trans.Description,
+			DescriptionAr: trans.DescriptionAr,
+			FromStateID:   newFromStateID,
+			ToStateID:     newToStateID,
+			SortOrder:     trans.SortOrder,
+			IsActive:      trans.IsActive,
 		}
 		if err := s.repo.CreateTransition(ctx, newTrans); err != nil {
 			return nil, err
@@ -794,25 +843,38 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 	}
 
 	state := &models.WorkflowState{
-		WorkflowID:      workflowID,
-		Name:            req.Name,
-		Code:            req.Code,
-		Description:     req.Description,
-		StateType:       req.StateType,
-		Color:           req.Color,
-		PositionX:       req.PositionX,
-		PositionY:       req.PositionY,
-		SLAHours:        req.SLAHours,
-		SLAUnit:         req.SLAUnit,
-		IsMergable:      req.IsMergable,
-		IsReadyToClose:  req.IsReadyToClose,
-		DurationOptions: durationOptionsJSON,
-		SortOrder:       req.SortOrder,
-		IsActive:        true,
+		WorkflowID:                   workflowID,
+		Name:                         req.Name,
+		NameAr:                       req.NameAr,
+		Code:                         req.Code,
+		Description:                  req.Description,
+		DescriptionAr:                req.DescriptionAr,
+		StateType:                    req.StateType,
+		Color:                        req.Color,
+		PositionX:                    req.PositionX,
+		PositionY:                    req.PositionY,
+		SLAHours:                     req.SLAHours,
+		SLAUnit:                      req.SLAUnit,
+		IsMergable:                   req.IsMergable,
+		IsAIQA:                       req.IsAIQA,
+		IsReadyToClose:               req.IsReadyToClose,
+		IsPartialClose:               req.IsPartialClose,
+		DurationOptions:              durationOptionsJSON,
+		SortOrder:                    req.SortOrder,
+		IsActive:                     true,
+		AutoMatchUser:                req.AutoMatchUser,
+		ManualSelectUser:             req.ManualSelectUser,
+		NewIncidentEmailTemplateCode: req.NewIncidentEmailTemplateCode,
+		NewIncidentSMSTemplateCode:   req.NewIncidentSMSTemplateCode,
 	}
 	if req.EscalationPolicyID != nil && *req.EscalationPolicyID != "" {
 		if id, err := uuid.Parse(*req.EscalationPolicyID); err == nil {
 			state.EscalationPolicyID = &id
+		}
+	}
+	if req.AssignUserID != nil && *req.AssignUserID != "" {
+		if id, err := uuid.Parse(*req.AssignUserID); err == nil {
+			state.AssignUserID = &id
 		}
 	}
 
@@ -853,6 +915,21 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 			roleIDs = append(roleIDs, id)
 		}
 		if err := s.repo.AssignStateEditableRoles(ctx, state.ID, roleIDs); err != nil {
+			return nil, err
+		}
+	}
+
+	// Assign creation-time assignment roles if provided
+	if len(req.AssignmentRoleIDs) > 0 {
+		roleIDs := make([]uuid.UUID, 0, len(req.AssignmentRoleIDs))
+		for _, idStr := range req.AssignmentRoleIDs {
+			id, err := uuid.Parse(idStr)
+			if err != nil {
+				continue
+			}
+			roleIDs = append(roleIDs, id)
+		}
+		if err := s.repo.AssignStateAssignmentRoles(ctx, state.ID, roleIDs); err != nil {
 			return nil, err
 		}
 	}
@@ -900,11 +977,17 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 	if req.Name != "" {
 		state.Name = req.Name
 	}
+	if req.NameAr != "" {
+		state.NameAr = req.NameAr
+	}
 	if req.Code != "" {
 		state.Code = req.Code
 	}
 	if req.Description != "" {
 		state.Description = req.Description
+	}
+	if req.DescriptionAr != "" {
+		state.DescriptionAr = req.DescriptionAr
 	}
 	if req.StateType != "" {
 		state.StateType = req.StateType
@@ -936,8 +1019,14 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 	if req.IsMergable != nil {
 		state.IsMergable = *req.IsMergable
 	}
+	if req.IsAIQA != nil {
+		state.IsAIQA = *req.IsAIQA
+	}
 	if req.IsReadyToClose != nil {
 		state.IsReadyToClose = *req.IsReadyToClose
+	}
+	if req.IsPartialClose != nil {
+		state.IsPartialClose = *req.IsPartialClose
 	}
 	if req.DurationOptions != nil {
 		if len(req.DurationOptions) > 0 {
@@ -953,6 +1042,27 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 	}
 	if req.IsActive != nil {
 		state.IsActive = *req.IsActive
+	}
+	if req.AutoMatchUser != nil {
+		state.AutoMatchUser = *req.AutoMatchUser
+	}
+	if req.ManualSelectUser != nil {
+		state.ManualSelectUser = *req.ManualSelectUser
+	}
+	if req.AssignUserID != nil {
+		if *req.AssignUserID == "" {
+			state.AssignUserID = nil
+		} else {
+			if id, err := uuid.Parse(*req.AssignUserID); err == nil {
+				state.AssignUserID = &id
+			}
+		}
+	}
+	if req.NewIncidentEmailTemplateCode != nil {
+		state.NewIncidentEmailTemplateCode = *req.NewIncidentEmailTemplateCode
+	}
+	if req.NewIncidentSMSTemplateCode != nil {
+		state.NewIncidentSMSTemplateCode = *req.NewIncidentSMSTemplateCode
 	}
 
 	if err := s.repo.UpdateState(ctx, state); err != nil {
@@ -989,6 +1099,21 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 		}
 	}
 
+	// Update creation-time assignment roles if provided (nil = no change, empty = clear all)
+	if req.AssignmentRoleIDs != nil {
+		roleIDs := make([]uuid.UUID, 0, len(req.AssignmentRoleIDs))
+		for _, idStr := range req.AssignmentRoleIDs {
+			id, err := uuid.Parse(idStr)
+			if err != nil {
+				continue
+			}
+			roleIDs = append(roleIDs, id)
+		}
+		if err := s.repo.AssignStateAssignmentRoles(ctx, stateID, roleIDs); err != nil {
+			return nil, err
+		}
+	}
+
 	// Fetch the state with relations
 	updated, err := s.repo.FindStateByID(ctx, stateID)
 	if err != nil {
@@ -1019,13 +1144,20 @@ func (s *workflowService) CreateTransition(ctx context.Context, workflowID uuid.
 	transition := &models.WorkflowTransition{
 		WorkflowID:           workflowID,
 		Name:                 req.Name,
+		NameAr:               req.NameAr,
 		Code:                 req.Code,
 		Description:          req.Description,
+		DescriptionAr:        req.DescriptionAr,
 		FromStateID:          fromStateID,
 		ToStateID:            toStateID,
 		SortOrder:            req.SortOrder,
 		IsActive:             true,
 		IsRejection:          req.IsRejection,
+		IsNotBelong:          req.IsNotBelong,
+		IsMissingInfo:        req.IsMissingInfo,
+		IsReopen:             req.IsReopen,
+		IsFinalClose:         req.IsFinalClose,
+		RequireAssignee:      req.RequireAssignee,
 		AutoDetectDepartment: req.AutoDetectDepartment,
 		DepartmentTypeFilter: req.DepartmentTypeFilter,
 		AutoMatchUser:        req.AutoMatchUser,
@@ -1124,11 +1256,17 @@ func (s *workflowService) UpdateTransition(ctx context.Context, transitionID uui
 	if req.Name != "" {
 		transition.Name = req.Name
 	}
+	if req.NameAr != "" {
+		transition.NameAr = req.NameAr
+	}
 	if req.Code != "" {
 		transition.Code = req.Code
 	}
 	if req.Description != "" {
 		transition.Description = req.Description
+	}
+	if req.DescriptionAr != "" {
+		transition.DescriptionAr = req.DescriptionAr
 	}
 	if req.FromStateID != "" {
 		fromStateID, err := uuid.Parse(req.FromStateID)
@@ -1152,6 +1290,21 @@ func (s *workflowService) UpdateTransition(ctx context.Context, transitionID uui
 		transition.IsRejection = *req.IsRejection
 	}
 
+	if req.IsNotBelong != nil {
+		transition.IsNotBelong = *req.IsNotBelong
+	}
+	if req.IsMissingInfo != nil {
+		transition.IsMissingInfo = *req.IsMissingInfo
+	}
+	if req.IsReopen != nil {
+		transition.IsReopen = *req.IsReopen
+	}
+	if req.IsFinalClose != nil {
+		transition.IsFinalClose = *req.IsFinalClose
+	}
+	if req.RequireAssignee != nil {
+		transition.RequireAssignee = *req.RequireAssignee
+	}
 	// Department Assignment
 	if req.AutoDetectDepartment != nil {
 		transition.AutoDetectDepartment = *req.AutoDetectDepartment
@@ -1300,6 +1453,21 @@ func (s *workflowService) GetTransitionsFromState(ctx context.Context, stateID u
 	return responses, nil
 }
 
+// Get transitions to a state (for incident transition UI)
+
+func (s *workflowService) GetTransitionsToState(ctx context.Context, stateID uuid.UUID) ([]models.WorkflowTransitionResponse, error) {
+	transitions, err := s.repo.ListTransitionsToState(ctx, stateID)
+	if err != nil {
+		return nil, err
+	}
+
+	responses := make([]models.WorkflowTransitionResponse, len(transitions))
+	for i, trans := range transitions {
+		responses[i] = models.ToWorkflowTransitionResponse(&trans)
+	}
+
+	return responses, nil
+}
 func (s *workflowService) GetInitialState(ctx context.Context, workflowID uuid.UUID) (*models.WorkflowStateResponse, error) {
 	state, err := s.repo.GetInitialState(ctx, workflowID)
 	if err != nil {
@@ -1308,6 +1476,44 @@ func (s *workflowService) GetInitialState(ctx context.Context, workflowID uuid.U
 
 	resp := models.ToWorkflowStateResponse(state)
 	return &resp, nil
+}
+
+func (s *workflowService) GetInitialStateMatchingUsers(ctx context.Context, workflowID uuid.UUID, classificationID, locationID, departmentID *uuid.UUID) ([]models.UserResponse, error) {
+	state, err := s.repo.GetInitialState(ctx, workflowID)
+	if err != nil {
+		return nil, err
+	}
+
+	if !state.ManualSelectUser || len(state.AssignmentRoles) == 0 {
+		return []models.UserResponse{}, nil
+	}
+
+	roleIDs := make([]uuid.UUID, len(state.AssignmentRoles))
+	for i, r := range state.AssignmentRoles {
+		roleIDs[i] = r.ID
+	}
+
+	users, err := s.userRepo.FindMatching(ctx, roleIDs, classificationID, locationID, departmentID, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]models.UserResponse, len(users))
+	for i, u := range users {
+		result[i] = models.ToUserResponse(&u)
+	}
+	return result, nil
+}
+
+// workflowMatchesRecordType checks if a workflow's RecordType is compatible with the requested record type.
+func workflowMatchesRecordType(workflowRT, requestRT string) bool {
+	if workflowRT == "all" {
+		return true
+	}
+	if workflowRT == "both" {
+		return requestRT == "incident" || requestRT == "request"
+	}
+	return workflowRT == requestRT
 }
 
 // MatchWorkflow finds a workflow based on incident criteria and returns form configuration
@@ -1344,6 +1550,27 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 		return defaultResponse, nil
 	}
 
+	// Filter by RecordType first — only consider workflows that have RecordType configured
+	var eligible []models.Workflow
+	for _, w := range workflows {
+		if !w.IsActive {
+			continue
+		}
+		// Skip workflows with no RecordType set — they don't participate in matching
+		if w.RecordType == "" {
+			continue
+		}
+		// Check if workflow's RecordType is compatible with the requested record type
+		if req.RecordType != "" && !workflowMatchesRecordType(w.RecordType, req.RecordType) {
+			continue
+		}
+		eligible = append(eligible, w)
+	}
+
+	if len(eligible) == 0 {
+		return defaultResponse, nil
+	}
+
 	// Parse classification ID if provided
 	var classificationID uuid.UUID
 	if req.ClassificationID != "" {
@@ -1359,12 +1586,10 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 	// Find matching workflow
 	var matchedWorkflow *models.Workflow
 	var highestScore int
+	var matchedIsDefault bool
 
-	for i := range workflows {
-		w := &workflows[i]
-		if !w.IsActive {
-			continue
-		}
+	for i := range eligible {
+		w := &eligible[i]
 
 		score := 0
 
@@ -1431,31 +1656,37 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 			}
 		}
 
-		// Check if it's the default workflow
+		// Specificity bonus: exact record_type match beats broad ("all"/"both")
+		if req.RecordType != "" && w.RecordType == req.RecordType {
+			score += 5
+		}
+
+		// Default workflow bonus
 		if w.IsDefault {
 			score += 1
 		}
 
-		// If this workflow has a higher score, use it
-		if score > highestScore || (score == highestScore && matchedWorkflow == nil) {
+		// Tie-breaking: higher score wins; on tie, prefer IsDefault over non-default
+		if score > highestScore || (score == highestScore && !matchedIsDefault && w.IsDefault) || (score == highestScore && matchedWorkflow == nil) {
 			highestScore = score
 			matchedWorkflow = w
+			matchedIsDefault = w.IsDefault
 		}
 	}
 
-	// If no workflow matched by criteria, use the default workflow
+	// If no workflow matched by criteria, use the default workflow (from eligible set)
 	if matchedWorkflow == nil {
-		for i := range workflows {
-			if workflows[i].IsDefault {
-				matchedWorkflow = &workflows[i]
+		for i := range eligible {
+			if eligible[i].IsDefault {
+				matchedWorkflow = &eligible[i]
 				break
 			}
 		}
 	}
 
-	// If still no workflow, use the first active one
-	if matchedWorkflow == nil && len(workflows) > 0 {
-		matchedWorkflow = &workflows[0]
+	// If still no workflow, use the first eligible one
+	if matchedWorkflow == nil && len(eligible) > 0 {
+		matchedWorkflow = &eligible[0]
 	}
 
 	if matchedWorkflow == nil {
@@ -1476,16 +1707,35 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 	// Title is always required
 	requiredFields = append([]string{"title"}, requiredFields...)
 
-	// Update form fields with required status
-	formFields := make([]models.IncidentFormFieldConfig, len(allFormFields))
-	for i, f := range allFormFields {
-		formFields[i] = f
+	// Parse optional fields from workflow
+	var optionalFields []string
+	if fullWorkflow.OptionalFields != "" {
+		json.Unmarshal([]byte(fullWorkflow.OptionalFields), &optionalFields)
+	}
+
+	// Build a set of fields to include in the form (required + optional)
+	formFieldSet := make(map[string]bool)
+	for _, f := range requiredFields {
+		formFieldSet[f] = true
+	}
+	for _, f := range optionalFields {
+		formFieldSet[f] = true
+	}
+
+	// Update form fields with required/optional status
+	formFields := make([]models.IncidentFormFieldConfig, 0, len(allFormFields))
+	for _, f := range allFormFields {
+		if !formFieldSet[f.Field] {
+			continue
+		}
+		fc := f
 		for _, rf := range requiredFields {
 			if rf == f.Field {
-				formFields[i].IsRequired = true
+				fc.IsRequired = true
 				break
 			}
 		}
+		formFields = append(formFields, fc)
 	}
 
 	// Get initial state
@@ -1500,6 +1750,9 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 	// Build response
 	workflowIDStr := fullWorkflow.ID.String()
 	recordType := fullWorkflow.RecordType
+	if optionalFields == nil {
+		optionalFields = []string{}
+	}
 	response := &models.WorkflowMatchResponse{
 		Matched:        true,
 		WorkflowID:     &workflowIDStr,
@@ -1507,6 +1760,7 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 		WorkflowCode:   &fullWorkflow.Code,
 		RecordType:     &recordType,
 		RequiredFields: requiredFields,
+		OptionalFields: optionalFields,
 		FormFields:     formFields,
 		InitialStateID: initialStateID,
 		InitialState:   initialStateName,
@@ -1744,6 +1998,21 @@ func (s *workflowService) ImportWorkflow(ctx context.Context, data *models.Workf
 		return nil, nil, errors.New("workflow must have at least one state")
 	}
 
+	codeOrName := []string{data.Workflow.Code, data.Workflow.Name}
+	exist, err := s.repo.ExistsByCodeOrName(ctx, codeOrName)
+	if err != nil {
+
+		return nil, nil, err
+	}
+
+	if exist {
+		// Append timestamp to make it unique
+		timestamp := time.Now().Format("20060102_150405")
+		data.Workflow.Code = fmt.Sprintf("%s_imported_%s", data.Workflow.Code, timestamp)
+		data.Workflow.Name = fmt.Sprintf("%s (Imported %s)", data.Workflow.Name, timestamp)
+		warnings = append(warnings, fmt.Sprintf("Workflow code was modified to '%s' to avoid duplicate", data.Workflow.Code))
+	}
+
 	// Validate at least one initial state exists
 	hasInitialState := false
 	for _, state := range data.Workflow.States {
@@ -1831,7 +2100,7 @@ func (s *workflowService) ImportWorkflow(ctx context.Context, data *models.Workf
 
 	// Assign classifications
 	if len(classificationIDs) > 0 {
-		if err := tx.Exec("INSERT INTO workflow_classifications (workflow_id, classification_id) VALUES "+
+		if err := tx.Exec("INSERT INTO workflow_classifications (workflow_id, classification_id) VALUES " +
 			buildBulkInsertValues(workflow.ID, classificationIDs)).Error; err != nil {
 			tx.Rollback()
 			return nil, nil, err
@@ -1840,7 +2109,7 @@ func (s *workflowService) ImportWorkflow(ctx context.Context, data *models.Workf
 
 	// Assign convert-to-request roles
 	if len(convertRoleIDs) > 0 {
-		if err := tx.Exec("INSERT INTO workflow_convert_to_request_roles (workflow_id, role_id) VALUES "+
+		if err := tx.Exec("INSERT INTO workflow_convert_to_request_roles (workflow_id, role_id) VALUES " +
 			buildBulkInsertValues(workflow.ID, convertRoleIDs)).Error; err != nil {
 			tx.Rollback()
 			return nil, nil, err
@@ -1886,7 +2155,7 @@ func (s *workflowService) ImportWorkflow(ctx context.Context, data *models.Workf
 			}
 
 			if len(roleIDs) > 0 {
-				if err := tx.Exec("INSERT INTO state_viewable_roles (workflow_state_id, role_id) VALUES "+
+				if err := tx.Exec("INSERT INTO state_viewable_roles (workflow_state_id, role_id) VALUES " +
 					buildBulkInsertValues(state.ID, roleIDs)).Error; err != nil {
 					tx.Rollback()
 					return nil, nil, err
@@ -1907,7 +2176,7 @@ func (s *workflowService) ImportWorkflow(ctx context.Context, data *models.Workf
 			}
 
 			if len(roleIDs) > 0 {
-				if err := tx.Exec("INSERT INTO state_editable_roles (workflow_state_id, role_id) VALUES "+
+				if err := tx.Exec("INSERT INTO state_editable_roles (workflow_state_id, role_id) VALUES " +
 					buildBulkInsertValues(state.ID, roleIDs)).Error; err != nil {
 					tx.Rollback()
 					return nil, nil, err
@@ -1983,7 +2252,7 @@ func (s *workflowService) ImportWorkflow(ctx context.Context, data *models.Workf
 				assignRoleIDs = append(assignRoleIDs, role.ID)
 			}
 			if len(assignRoleIDs) > 0 {
-				if err := tx.Exec("INSERT INTO transition_assignment_roles (workflow_transition_id, role_id) VALUES "+
+				if err := tx.Exec("INSERT INTO transition_assignment_roles (workflow_transition_id, role_id) VALUES " +
 					buildBulkInsertValues(transition.ID, assignRoleIDs)).Error; err != nil {
 					tx.Rollback()
 					return nil, nil, err
@@ -2004,7 +2273,7 @@ func (s *workflowService) ImportWorkflow(ctx context.Context, data *models.Workf
 			}
 
 			if len(roleIDs) > 0 {
-				if err := tx.Exec("INSERT INTO transition_allowed_roles (workflow_transition_id, role_id) VALUES "+
+				if err := tx.Exec("INSERT INTO transition_allowed_roles (workflow_transition_id, role_id) VALUES " +
 					buildBulkInsertValues(transition.ID, roleIDs)).Error; err != nil {
 					tx.Rollback()
 					return nil, nil, err

@@ -47,8 +47,17 @@ type GoalService interface {
 	CreateMetric(ctx context.Context, goalID uuid.UUID, req *models.GoalMetricCreateRequest, userID uuid.UUID) (*models.GoalMetricResponse, error)
 	UpdateMetric(ctx context.Context, id uuid.UUID, req *models.GoalMetricUpdateRequest, userID uuid.UUID) (*models.GoalMetricResponse, error)
 	DeleteMetric(ctx context.Context, id uuid.UUID, userID uuid.UUID) error
-	UpdateMetricValue(ctx context.Context, id uuid.UUID, req *models.MetricValueUpdateRequest, userID uuid.UUID) (*models.GoalMetricResponse, error)
+	UpdateMetricValue(ctx context.Context, id uuid.UUID, req *models.MetricValueUpdateRequest, userID uuid.UUID) (*models.GoalMetricValueChangeResponse, error)
 	GetMetricHistory(ctx context.Context, metricID uuid.UUID, page int, limit int) ([]models.MetricHistoryResponse, int64, error)
+	ListMetricValueChanges(ctx context.Context, metricID uuid.UUID, userID uuid.UUID) ([]models.GoalMetricValueChangeResponse, error)
+
+	// Metric Workflow Transitions
+	GetAvailableMetricTransitions(ctx context.Context, metricID uuid.UUID, userID uuid.UUID) ([]models.AvailableTransitionResponse, error)
+	TransitionMetric(ctx context.Context, metricID uuid.UUID, req *models.MetricTransitionRequest, userID uuid.UUID) (*models.GoalMetricResponse, error)
+	GetAvailableMetricValueChangeTransitions(ctx context.Context, changeID uuid.UUID, userID uuid.UUID) ([]models.AvailableTransitionResponse, error)
+	TransitionMetricValueChange(ctx context.Context, changeID uuid.UUID, req *models.MetricTransitionRequest, userID uuid.UUID) (*models.GoalMetricValueChangeResponse, error)
+	ListPendingMetricApprovals(ctx context.Context, userID uuid.UUID, page int, limit int) ([]models.MetricApprovalListResponse, int64, error)
+	ListPendingMetricValueChangeApprovals(ctx context.Context, userID uuid.UUID, page int, limit int) ([]models.MetricApprovalListResponse, int64, error)
 
 	// Evidence
 	CreateEvidence(ctx context.Context, goalID uuid.UUID, title string, evidenceType string, comment string, metricID *uuid.UUID, fileName string, fileSize int64, mimeType string, fileData []byte, userID uuid.UUID) (*models.EvidenceResponse, error)
@@ -196,6 +205,48 @@ func (s *goalService) canAccessGoal(ctx context.Context, goalID uuid.UUID, userI
 	return false, nil
 }
 
+// canSeeUnapprovedItems returns true if the caller should see metrics/evidence
+// regardless of workflow state. This includes super admins, the goal owner, any
+// goal collaborator, and users that hold a goals:approve permission. View-only
+// callers (goals:view but no other privileges) get the filtered listing.
+//
+// We deliberately *do not* peek at the user's permissions through the role
+// store here — instead we look at whether the caller already has approve
+// authority via the *models.User snapshot in context. That's sufficient for
+// the cases the platform exercises (approve permission is granted by role
+// assignment which IsSuperAdmin or has goals:approve).
+func (s *goalService) canSeeUnapprovedItems(ctx context.Context, goalID uuid.UUID, userID uuid.UUID) bool {
+	if s.isSuperAdmin(ctx) {
+		return true
+	}
+	if s.userHasPermission(ctx, "goals:approve") || s.userHasPermission(ctx, "goals:delete") {
+		return true
+	}
+	goal, err := s.goalRepo.FindByID(ctx, goalID)
+	if err != nil {
+		return false
+	}
+	if goal.OwnerID == userID {
+		return true
+	}
+	collaborators, _ := s.goalRepo.ListCollaborators(ctx, goalID)
+	for _, c := range collaborators {
+		if c.UserID == userID {
+			return true
+		}
+	}
+	return false
+}
+
+// userHasPermission checks the *models.User in context for a permission code.
+func (s *goalService) userHasPermission(ctx context.Context, code string) bool {
+	user, ok := ctx.Value(constants.ContextKeys.User).(*models.User)
+	if !ok || user == nil {
+		return false
+	}
+	return user.HasPermission(code)
+}
+
 // canModifyGoal checks if the user can modify the goal (owner, reviewer, or super admin)
 func (s *goalService) canModifyGoal(ctx context.Context, goalID uuid.UUID, userID uuid.UUID) (bool, error) {
 	if s.isSuperAdmin(ctx) {
@@ -318,6 +369,15 @@ func (s *goalService) CreateGoal(ctx context.Context, req *models.GoalCreateRequ
 		return nil, err
 	}
 
+	// Check duplicate goal (title &  owner)
+	existingGoal, err := s.goalRepo.FindGoalByTitleAndOwner(ctx, req.Title, req.OwnerID)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to check existing goal: %w", err)
+	}
+	if existingGoal != nil {
+		return nil, fmt.Errorf("This goal already exists")
+	}
+
 	// Validate parent goal hierarchy
 	var parentPath string
 	var parentLevel int
@@ -379,6 +439,7 @@ func (s *goalService) CreateGoal(ctx context.Context, req *models.GoalCreateRequ
 	}
 
 	if err := s.goalRepo.Create(ctx, goal); err != nil {
+		fmt.Println("goal creation", err)
 		return nil, fmt.Errorf("failed to create goal: %w", err)
 	}
 
@@ -445,6 +506,36 @@ func (s *goalService) GetGoal(ctx context.Context, id uuid.UUID, userID uuid.UUI
 	goal, err := s.goalRepo.FindByIDWithRelations(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("goal not found: %w", err)
+	}
+
+	// Visibility gate: view-only callers see only terminal-approved metrics
+	// and evidences. Owners, collaborators, super admins, and approve-permission
+	// holders see everything (so reviewers can see drafts).
+	if !s.canSeeUnapprovedItems(ctx, id, userID) {
+		filteredMetrics := make([]models.GoalMetric, 0, len(goal.Metrics))
+		for _, m := range goal.Metrics {
+			if m.CurrentStateID == nil {
+				// Legacy metric (pre-gate) — visible.
+				filteredMetrics = append(filteredMetrics, m)
+				continue
+			}
+			if m.CurrentState != nil && m.CurrentState.StateType == "terminal" {
+				filteredMetrics = append(filteredMetrics, m)
+			}
+		}
+		goal.Metrics = filteredMetrics
+
+		filteredEvidences := make([]models.Evidence, 0, len(goal.Evidences))
+		for _, e := range goal.Evidences {
+			if e.CurrentStateID == nil {
+				filteredEvidences = append(filteredEvidences, e)
+				continue
+			}
+			if e.CurrentState != nil && e.CurrentState.StateType == "terminal" {
+				filteredEvidences = append(filteredEvidences, e)
+			}
+		}
+		goal.Evidences = filteredEvidences
 	}
 
 	resp := goal.ToResponse()
@@ -568,15 +659,23 @@ func (s *goalService) UpdateGoal(ctx context.Context, id uuid.UUID, req *models.
 // ──────────────────────────────────────────────────
 
 func (s *goalService) DeleteGoal(ctx context.Context, id uuid.UUID, userID uuid.UUID) error {
-	// Access check
-	canModify, _ := s.canModifyGoal(ctx, id, userID)
-	if !canModify {
-		return fmt.Errorf("access denied: only the goal owner can delete this goal")
-	}
 
 	goal, err := s.goalRepo.FindByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("goal not found: %w", err)
+	}
+	isSuperAdmin := s.isSuperAdmin(ctx)
+
+	if goal.Status == models.GoalStatusDraft {
+		// Draft goals: only the owner or a super admin may delete
+		if goal.OwnerID != userID && !isSuperAdmin {
+			return fmt.Errorf("access denied: only the goal owner or an administrator can delete this goal")
+		}
+	} else {
+		// Non-draft goals: only a super admin can  delete
+		if !isSuperAdmin {
+			return fmt.Errorf("access denied: only an administrator can delete a goal that is not in Draft status")
+		}
 	}
 
 	if err := s.goalRepo.Delete(ctx, id); err != nil {
@@ -781,6 +880,7 @@ func (s *goalService) CreateMetric(ctx context.Context, goalID uuid.UUID, req *m
 		TargetValue:   req.TargetValue,
 		Weight:        weight,
 		Formula:       strings.TrimSpace(req.Formula),
+		Version:       1,
 	}
 
 	// If a formula was provided, validate it compiles and pre-compute CurrentValue
@@ -791,6 +891,17 @@ func (s *goalService) CreateMetric(ctx context.Context, goalID uuid.UUID, req *m
 			return nil, fmt.Errorf("invalid formula: %w", ferr)
 		} else {
 			metric.CurrentValue = computed
+		}
+	}
+
+	// Assign the metric workflow's initial state. Owners can see drafts but
+	// view-only callers will be filtered out by ListMetrics until a transition
+	// reaches the terminal-approved state.
+	if wfs, wfErr := s.workflowRepo.ListByRecordType(ctx, "metric", true); wfErr == nil && len(wfs) > 0 {
+		wf := wfs[0]
+		if initial, ierr := s.workflowRepo.GetInitialState(ctx, wf.ID); ierr == nil && initial != nil {
+			metric.WorkflowID = &wf.ID
+			metric.CurrentStateID = &initial.ID
 		}
 	}
 
@@ -940,8 +1051,12 @@ func (s *goalService) DeleteMetric(ctx context.Context, id uuid.UUID, userID uui
 // ──────────────────────────────────────────────────
 // 12. UpdateMetricValue
 // ──────────────────────────────────────────────────
-
-func (s *goalService) UpdateMetricValue(ctx context.Context, id uuid.UUID, req *models.MetricValueUpdateRequest, userID uuid.UUID) (*models.GoalMetricResponse, error) {
+//
+// Per item #21, a value change is no longer mutated directly. Instead a
+// GoalMetricValueChange is created and put through the metric_value_change
+// approval workflow. The metric's CurrentValue is only updated when the
+// value change reaches a terminal-approved state via TransitionMetricValueChange.
+func (s *goalService) UpdateMetricValue(ctx context.Context, id uuid.UUID, req *models.MetricValueUpdateRequest, userID uuid.UUID) (*models.GoalMetricValueChangeResponse, error) {
 	metric, err := s.goalRepo.FindMetricByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("metric not found: %w", err)
@@ -953,8 +1068,8 @@ func (s *goalService) UpdateMetricValue(ctx context.Context, id uuid.UUID, req *
 		return nil, fmt.Errorf("access denied: you can only modify goals you own or are assigned to review")
 	}
 
-	// If the metric has a formula, compute CurrentValue from siblings — the
-	// submitted raw value is ignored but logged in history for traceability.
+	// If the metric has a formula, compute the proposed value from siblings —
+	// the submitted raw value is ignored. Reviewers approve the computed value.
 	newValue := req.Value
 	if strings.TrimSpace(metric.Formula) != "" {
 		siblings, _ := s.goalRepo.ListMetricsByGoalID(ctx, metric.GoalID)
@@ -972,46 +1087,49 @@ func (s *goalService) UpdateMetricValue(ctx context.Context, id uuid.UUID, req *
 		}
 	}
 
-	// Create history entry
-	history := &models.MetricHistory{
-		MetricID:    metric.ID,
-		OldValue:    metric.CurrentValue,
-		NewValue:    newValue,
-		ChangedByID: userID,
-		Comment:     req.Comment,
+	// Resolve the metric_value_change workflow + initial state
+	wfs, wfErr := s.workflowRepo.ListByRecordType(ctx, "metric_value_change", true)
+	if wfErr != nil || len(wfs) == 0 {
+		return nil, fmt.Errorf("no active metric value change workflow found")
+	}
+	wf := wfs[0]
+	initial, ierr := s.workflowRepo.GetInitialState(ctx, wf.ID)
+	if ierr != nil || initial == nil {
+		return nil, fmt.Errorf("metric value change workflow has no initial state")
 	}
 
-	if err := s.goalRepo.CreateMetricHistory(ctx, history); err != nil {
-		return nil, fmt.Errorf("failed to create metric history: %w", err)
+	change := &models.GoalMetricValueChange{
+		MetricID:       metric.ID,
+		ProposedValue:  newValue,
+		PreviousValue:  metric.CurrentValue,
+		Comment:        req.Comment,
+		SubmittedByID:  userID,
+		WorkflowID:     wf.ID,
+		CurrentStateID: initial.ID,
+		Version:        1,
 	}
 
-	// Update metric current value
-	metric.CurrentValue = newValue
-
-	if err := s.goalRepo.UpdateMetric(ctx, metric); err != nil {
-		return nil, fmt.Errorf("failed to update metric value: %w", err)
+	if err := s.goalRepo.CreateMetricValueChange(ctx, change); err != nil {
+		return nil, fmt.Errorf("failed to create metric value change: %w", err)
 	}
-
-	// Recalculate goal progress
-	if err := s.RecalculateProgress(ctx, metric.GoalID); err != nil {
-		return nil, fmt.Errorf("failed to recalculate progress: %w", err)
-	}
-
-	// After updating this metric's value, recompute any sibling metrics that
-	// reference it in their own formulas — keeps the whole goal consistent.
-	s.recomputeDependentFormulas(ctx, metric.GoalID, metric.ID)
 
 	// Audit log
 	s.actionLogService.LogAction(ctx, &LogActionParams{
 		UserID:      userID,
-		Action:      "update",
+		Action:      "create",
 		Module:      "goals",
-		ResourceID:  metric.ID.String(),
-		Description: fmt.Sprintf("Updated metric value for '%s': %.2f -> %.2f", metric.Name, history.OldValue, req.Value),
+		ResourceID:  change.ID.String(),
+		Description: fmt.Sprintf("Proposed metric value change for '%s': %.2f -> %.2f (pending approval)", metric.Name, metric.CurrentValue, newValue),
 		Status:      "success",
 	})
 
-	resp := metric.ToResponse()
+	// Reload with relations
+	reloaded, rerr := s.goalRepo.FindMetricValueChangeByIDWithRelations(ctx, change.ID)
+	if rerr == nil {
+		resp := reloaded.ToResponse()
+		return &resp, nil
+	}
+	resp := change.ToResponse()
 	return &resp, nil
 }
 
@@ -1051,7 +1169,6 @@ func (s *goalService) CreateEvidence(ctx context.Context, goalID uuid.UUID, titl
 		return nil, fmt.Errorf("access denied")
 	}
 
-	// Validate comment is non-empty
 	if strings.TrimSpace(comment) == "" {
 		return nil, fmt.Errorf("comment is mandatory")
 	}
@@ -1062,8 +1179,23 @@ func (s *goalService) CreateEvidence(ctx context.Context, goalID uuid.UUID, titl
 		return nil, fmt.Errorf("goal not found: %w", err)
 	}
 
-	// Determine upload folder (metric subfolder if metricID provided)
+	// Determine upload folder (metric subfolder if metricID provided). If the goal's folder ID is missing (e.g. created before Documenta was enabled), lazily provision the hierarchy now so the upload can proceed.
 	uploadFolderID := goal.DocumentaFolderID
+	if uploadFolderID == "" {
+		goalMgmtID, ensureErr := s.documentaClient.EnsureFolder(ctx, s.cfg.Documenta.WorkspaceName, "", "Goal Management")
+		if ensureErr != nil {
+			return nil, fmt.Errorf("failed to ensure Goal Management folder: %w", ensureErr)
+		}
+		newFolderID, createErr := s.documentaClient.CreateFolder(ctx, s.cfg.Documenta.WorkspaceName, goalMgmtID, goal.Title)
+		if createErr != nil {
+			return nil, fmt.Errorf("failed to create goal folder for evidence upload: %w", createErr)
+		}
+		uploadFolderID = newFolderID
+		// Persist the new folder ID so future uploads don't need to recreate it.
+		if updateErr := s.goalRepo.UpdateDocumentaFolderID(ctx, goalID, newFolderID); updateErr != nil {
+			log.Printf("[goal_service] CreateEvidence: failed to persist DocumentaFolderID for goal %s: %v", goalID, updateErr)
+		}
+	}
 	var metricName string
 	if metricID != nil {
 		metric, metricErr := s.goalRepo.FindMetricByID(ctx, *metricID)
@@ -1071,7 +1203,7 @@ func (s *goalService) CreateEvidence(ctx context.Context, goalID uuid.UUID, titl
 			metricName = metric.Name
 			// Lazy-create metric subfolder under goal folder
 			metricFolderID, ensureErr := s.documentaClient.EnsureFolder(
-				ctx, s.cfg.Documenta.WorkspaceName, goal.DocumentaFolderID, metric.Name,
+				ctx, s.cfg.Documenta.WorkspaceName, uploadFolderID, metric.Name,
 			)
 			if ensureErr == nil {
 				uploadFolderID = metricFolderID
@@ -1202,6 +1334,11 @@ func (s *goalService) ListEvidences(ctx context.Context, goalID uuid.UUID, filte
 	}
 	if filter.Limit < 1 {
 		filter.Limit = 10
+	}
+
+	// Visibility gate: view-only callers see only terminal-approved evidence.
+	if !s.canSeeUnapprovedItems(ctx, goalID, userID) {
+		filter.ApprovedOnly = true
 	}
 
 	evidences, total, err := s.goalRepo.ListEvidencesByGoalID(ctx, goalID, filter)
@@ -1906,6 +2043,645 @@ func (s *goalService) ListCompletedApprovals(ctx context.Context, userID uuid.UU
 			}
 		}
 
+		responses[i] = resp
+	}
+
+	return responses, total, nil
+}
+
+// ════════════════════════════════════════════════════
+// METRIC APPROVAL WORKFLOW
+// ════════════════════════════════════════════════════
+
+// GetAvailableMetricTransitions mirrors GetAvailableEvidenceTransitions for metrics.
+func (s *goalService) GetAvailableMetricTransitions(ctx context.Context, metricID uuid.UUID, userID uuid.UUID) ([]models.AvailableTransitionResponse, error) {
+	metric, err := s.goalRepo.FindMetricByIDWithRelations(ctx, metricID)
+	if err != nil {
+		return nil, fmt.Errorf("metric not found: %w", err)
+	}
+
+	if metric.CurrentStateID == nil || metric.WorkflowID == nil {
+		return nil, fmt.Errorf("metric has no workflow assigned")
+	}
+
+	transitions, err := s.workflowRepo.ListTransitionsFromState(ctx, *metric.CurrentStateID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transitions: %w", err)
+	}
+
+	collaborators, err := s.goalRepo.ListCollaborators(ctx, metric.GoalID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list collaborators: %w", err)
+	}
+
+	var hasL2Reviewer bool
+	for _, c := range collaborators {
+		if c.Role == models.CollaboratorRoleReviewerL2 {
+			hasL2Reviewer = true
+			break
+		}
+	}
+
+	results := s.buildAvailableTransitions(ctx, transitions, metric.GoalID, metric.AssignedToID, userID, hasL2Reviewer)
+	return results, nil
+}
+
+// GetAvailableMetricValueChangeTransitions mirrors GetAvailableEvidenceTransitions for value changes.
+func (s *goalService) GetAvailableMetricValueChangeTransitions(ctx context.Context, changeID uuid.UUID, userID uuid.UUID) ([]models.AvailableTransitionResponse, error) {
+	change, err := s.goalRepo.FindMetricValueChangeByIDWithRelations(ctx, changeID)
+	if err != nil {
+		return nil, fmt.Errorf("metric value change not found: %w", err)
+	}
+	if change.Metric == nil {
+		return nil, fmt.Errorf("orphaned metric value change")
+	}
+
+	transitions, err := s.workflowRepo.ListTransitionsFromState(ctx, change.CurrentStateID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transitions: %w", err)
+	}
+
+	collaborators, err := s.goalRepo.ListCollaborators(ctx, change.Metric.GoalID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list collaborators: %w", err)
+	}
+
+	var hasL2Reviewer bool
+	for _, c := range collaborators {
+		if c.Role == models.CollaboratorRoleReviewerL2 {
+			hasL2Reviewer = true
+			break
+		}
+	}
+
+	results := s.buildAvailableTransitions(ctx, transitions, change.Metric.GoalID, change.AssignedToID, userID, hasL2Reviewer)
+	return results, nil
+}
+
+// buildAvailableTransitions implements the same gating logic used for evidence
+// (submit/approve_l1/approve_l2/etc.) for any record participating in the
+// shared 7-state workflow.
+func (s *goalService) buildAvailableTransitions(ctx context.Context, transitions []models.WorkflowTransition, goalID uuid.UUID, assignedToID *uuid.UUID, userID uuid.UUID, hasL2Reviewer bool) []models.AvailableTransitionResponse {
+	var results []models.AvailableTransitionResponse
+	for _, t := range transitions {
+		canExecute := true
+		reason := ""
+
+		requirements, _ := s.workflowRepo.GetTransitionRequirements(ctx, t.ID)
+
+		switch t.Code {
+		case "submit", "resubmit":
+			goal, _ := s.goalRepo.FindByID(ctx, goalID)
+			if goal == nil || (goal.OwnerID != userID && !s.isSuperAdmin(ctx)) {
+				canExecute = false
+				reason = "Only the goal owner can submit"
+			}
+		case "approve_l1":
+			if !hasL2Reviewer {
+				continue
+			}
+			if assignedToID == nil || *assignedToID != userID {
+				canExecute = false
+				reason = "Only the assigned reviewer can approve"
+			}
+		case "approve_l1_final":
+			if hasL2Reviewer {
+				continue
+			}
+			if assignedToID == nil || *assignedToID != userID {
+				canExecute = false
+				reason = "Only the assigned reviewer can approve"
+			}
+		case "request_changes_l1", "reject_l1", "request_changes_l2", "reject_l2":
+			if assignedToID == nil || *assignedToID != userID {
+				canExecute = false
+				reason = "Only the assigned reviewer can perform this action"
+			}
+		case "approve_l2":
+			if assignedToID == nil || *assignedToID != userID {
+				canExecute = false
+				reason = "Only the assigned L2 reviewer can approve"
+			}
+		case "assign_l1":
+			continue
+		}
+
+		reqResponses := make([]models.TransitionRequirementResponse, len(requirements))
+		for i, r := range requirements {
+			reqResponses[i] = models.ToTransitionRequirementResponse(&r)
+		}
+
+		results = append(results, models.AvailableTransitionResponse{
+			Transition:   models.ToWorkflowTransitionResponse(&t),
+			CanExecute:   canExecute,
+			Requirements: reqResponses,
+			Reason:       reason,
+		})
+	}
+	return results
+}
+
+// TransitionMetric runs a workflow transition on a metric definition.
+func (s *goalService) TransitionMetric(ctx context.Context, metricID uuid.UUID, req *models.MetricTransitionRequest, userID uuid.UUID) (*models.GoalMetricResponse, error) {
+	transitionID, err := uuid.Parse(req.TransitionID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid transition_id: %w", err)
+	}
+
+	tx := s.goalRepo.BeginTx(ctx)
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	metric, err := s.goalRepo.FindMetricByIDForUpdate(ctx, tx, metricID)
+	if err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("metric not found: %w", err)
+	}
+
+	if req.Version > 0 && metric.Version != req.Version {
+		tx.Rollback()
+		return nil, fmt.Errorf("metric has been modified by another user (expected version %d, got %d)", metric.Version, req.Version)
+	}
+
+	if metric.CurrentStateID == nil || metric.WorkflowID == nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("metric has no workflow assigned")
+	}
+
+	transition, err := s.workflowRepo.FindTransitionByIDWithRelations(ctx, transitionID)
+	if err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("transition not found: %w", err)
+	}
+
+	if transition.WorkflowID != *metric.WorkflowID {
+		tx.Rollback()
+		return nil, fmt.Errorf("transition does not belong to metric's workflow")
+	}
+	if transition.FromStateID != *metric.CurrentStateID {
+		tx.Rollback()
+		return nil, fmt.Errorf("transition is not valid from current state")
+	}
+
+	// Authorization
+	switch transition.Code {
+	case "submit", "resubmit":
+		goal, _ := s.goalRepo.FindByID(ctx, metric.GoalID)
+		if !s.isSuperAdmin(ctx) && (goal == nil || goal.OwnerID != userID) {
+			tx.Rollback()
+			return nil, fmt.Errorf("only the goal owner can submit")
+		}
+	case "approve_l1", "approve_l1_final", "request_changes_l1", "reject_l1", "approve_l2", "request_changes_l2", "reject_l2":
+		if metric.AssignedToID == nil || *metric.AssignedToID != userID {
+			tx.Rollback()
+			return nil, fmt.Errorf("only the assigned reviewer can perform this action")
+		}
+	}
+
+	// Validate requirements (mandatory comment for reject/request_changes)
+	requirements, _ := s.workflowRepo.GetTransitionRequirements(ctx, transitionID)
+	for _, r := range requirements {
+		if r.RequirementType == "comment" && r.IsMandatory != nil && *r.IsMandatory {
+			if strings.TrimSpace(req.Comment) == "" {
+				tx.Rollback()
+				errMsg := r.ErrorMessage
+				if errMsg == "" {
+					errMsg = "Comment is required for this transition"
+				}
+				return nil, fmt.Errorf("%s", errMsg)
+			}
+		}
+	}
+
+	fromStateID := *metric.CurrentStateID
+	now := time.Now()
+
+	history := &models.MetricTransitionHistory{
+		MetricID:       metricID,
+		TransitionID:   &transitionID,
+		FromStateID:    fromStateID,
+		ToStateID:      transition.ToStateID,
+		PerformedByID:  userID,
+		Comment:        req.Comment,
+		IsSystemAction: false,
+		TransitionedAt: now,
+	}
+	if err := s.goalRepo.CreateMetricTransitionHistory(ctx, tx, history); err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("failed to create transition history: %w", err)
+	}
+
+	metric.CurrentStateID = &transition.ToStateID
+	metric.Version++
+
+	collaborators, _ := s.goalRepo.ListCollaborators(ctx, metric.GoalID)
+	switch transition.Code {
+	case "submit", "resubmit":
+		var reviewerL1 *models.GoalCollaborator
+		for i := range collaborators {
+			if collaborators[i].Role == models.CollaboratorRoleReviewerL1 {
+				reviewerL1 = &collaborators[i]
+				break
+			}
+		}
+		if reviewerL1 == nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("no L1 reviewer assigned to this goal")
+		}
+		l1State, _ := s.workflowRepo.FindStateByCode(ctx, *metric.WorkflowID, "l1_review")
+		if l1State != nil {
+			autoHistory := &models.MetricTransitionHistory{
+				MetricID:       metricID,
+				FromStateID:    transition.ToStateID,
+				ToStateID:      l1State.ID,
+				PerformedByID:  userID,
+				Comment:        "Auto-assigned to L1 reviewer",
+				IsSystemAction: true,
+				TransitionedAt: now,
+			}
+			s.goalRepo.CreateMetricTransitionHistory(ctx, tx, autoHistory)
+			metric.CurrentStateID = &l1State.ID
+		}
+		metric.AssignedToID = &reviewerL1.UserID
+	case "approve_l1":
+		var reviewerL2 *models.GoalCollaborator
+		for i := range collaborators {
+			if collaborators[i].Role == models.CollaboratorRoleReviewerL2 {
+				reviewerL2 = &collaborators[i]
+				break
+			}
+		}
+		if reviewerL2 != nil {
+			metric.AssignedToID = &reviewerL2.UserID
+		}
+	case "approve_l1_final", "approve_l2":
+		metric.AssignedToID = nil
+	case "request_changes_l1", "request_changes_l2", "reject_l1", "reject_l2":
+		metric.AssignedToID = nil
+	}
+
+	if err := s.goalRepo.UpdateMetricInTx(ctx, tx, metric); err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("failed to update metric: %w", err)
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	// Audit log
+	s.actionLogService.LogAction(ctx, &LogActionParams{
+		UserID:      userID,
+		Action:      "transition",
+		Module:      "goals",
+		ResourceID:  metricID.String(),
+		Description: fmt.Sprintf("Executed '%s' on metric '%s'", transition.Name, metric.Name),
+		Status:      "success",
+	})
+
+	if s.wsHub != nil {
+		s.wsHub.BroadcastToGoal(metric.GoalID, "metric_transitioned", map[string]interface{}{
+			"metric_id":  metricID,
+			"goal_id":    metric.GoalID,
+			"transition": transition.Name,
+		}, userID)
+	}
+
+	reloaded, rerr := s.goalRepo.FindMetricByIDWithRelations(ctx, metricID)
+	if rerr == nil {
+		resp := reloaded.ToResponse()
+		return &resp, nil
+	}
+	resp := metric.ToResponse()
+	return &resp, nil
+}
+
+// TransitionMetricValueChange runs a workflow transition on a value change.
+// On a transition into a terminal-approved state the parent metric's
+// CurrentValue is updated and AppliedAt is set.
+func (s *goalService) TransitionMetricValueChange(ctx context.Context, changeID uuid.UUID, req *models.MetricTransitionRequest, userID uuid.UUID) (*models.GoalMetricValueChangeResponse, error) {
+	transitionID, err := uuid.Parse(req.TransitionID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid transition_id: %w", err)
+	}
+
+	tx := s.goalRepo.BeginTx(ctx)
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	change, err := s.goalRepo.FindMetricValueChangeByIDForUpdate(ctx, tx, changeID)
+	if err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("metric value change not found: %w", err)
+	}
+
+	if req.Version > 0 && change.Version != req.Version {
+		tx.Rollback()
+		return nil, fmt.Errorf("value change has been modified by another user (expected version %d, got %d)", change.Version, req.Version)
+	}
+
+	transition, err := s.workflowRepo.FindTransitionByIDWithRelations(ctx, transitionID)
+	if err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("transition not found: %w", err)
+	}
+	if transition.WorkflowID != change.WorkflowID {
+		tx.Rollback()
+		return nil, fmt.Errorf("transition does not belong to value change's workflow")
+	}
+	if transition.FromStateID != change.CurrentStateID {
+		tx.Rollback()
+		return nil, fmt.Errorf("transition is not valid from current state")
+	}
+
+	// Need parent metric for goal/owner lookups + applying value
+	metric, mErr := s.goalRepo.FindMetricByID(ctx, change.MetricID)
+	if mErr != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("parent metric not found: %w", mErr)
+	}
+
+	// Authorization
+	switch transition.Code {
+	case "submit", "resubmit":
+		goal, _ := s.goalRepo.FindByID(ctx, metric.GoalID)
+		if change.SubmittedByID != userID && !s.isSuperAdmin(ctx) && (goal == nil || goal.OwnerID != userID) {
+			tx.Rollback()
+			return nil, fmt.Errorf("only the submitter or goal owner can submit")
+		}
+	case "approve_l1", "approve_l1_final", "request_changes_l1", "reject_l1", "approve_l2", "request_changes_l2", "reject_l2":
+		if change.AssignedToID == nil || *change.AssignedToID != userID {
+			tx.Rollback()
+			return nil, fmt.Errorf("only the assigned reviewer can perform this action")
+		}
+	}
+
+	requirements, _ := s.workflowRepo.GetTransitionRequirements(ctx, transitionID)
+	for _, r := range requirements {
+		if r.RequirementType == "comment" && r.IsMandatory != nil && *r.IsMandatory {
+			if strings.TrimSpace(req.Comment) == "" {
+				tx.Rollback()
+				errMsg := r.ErrorMessage
+				if errMsg == "" {
+					errMsg = "Comment is required for this transition"
+				}
+				return nil, fmt.Errorf("%s", errMsg)
+			}
+		}
+	}
+
+	fromStateID := change.CurrentStateID
+	now := time.Now()
+
+	history := &models.MetricValueChangeTransitionHistory{
+		MetricValueChangeID: changeID,
+		TransitionID:        &transitionID,
+		FromStateID:         fromStateID,
+		ToStateID:           transition.ToStateID,
+		PerformedByID:       userID,
+		Comment:             req.Comment,
+		IsSystemAction:      false,
+		TransitionedAt:      now,
+	}
+	if err := s.goalRepo.CreateMetricValueChangeTransitionHistory(ctx, tx, history); err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("failed to create transition history: %w", err)
+	}
+
+	change.CurrentStateID = transition.ToStateID
+	change.Version++
+
+	collaborators, _ := s.goalRepo.ListCollaborators(ctx, metric.GoalID)
+	applied := false
+
+	switch transition.Code {
+	case "submit", "resubmit":
+		var reviewerL1 *models.GoalCollaborator
+		for i := range collaborators {
+			if collaborators[i].Role == models.CollaboratorRoleReviewerL1 {
+				reviewerL1 = &collaborators[i]
+				break
+			}
+		}
+		if reviewerL1 == nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("no L1 reviewer assigned to this goal")
+		}
+		l1State, _ := s.workflowRepo.FindStateByCode(ctx, change.WorkflowID, "l1_review")
+		if l1State != nil {
+			autoHistory := &models.MetricValueChangeTransitionHistory{
+				MetricValueChangeID: changeID,
+				FromStateID:         transition.ToStateID,
+				ToStateID:           l1State.ID,
+				PerformedByID:       userID,
+				Comment:             "Auto-assigned to L1 reviewer",
+				IsSystemAction:      true,
+				TransitionedAt:      now,
+			}
+			s.goalRepo.CreateMetricValueChangeTransitionHistory(ctx, tx, autoHistory)
+			change.CurrentStateID = l1State.ID
+		}
+		change.AssignedToID = &reviewerL1.UserID
+	case "approve_l1":
+		var reviewerL2 *models.GoalCollaborator
+		for i := range collaborators {
+			if collaborators[i].Role == models.CollaboratorRoleReviewerL2 {
+				reviewerL2 = &collaborators[i]
+				break
+			}
+		}
+		if reviewerL2 != nil {
+			change.AssignedToID = &reviewerL2.UserID
+		}
+	case "approve_l1_final", "approve_l2":
+		// Apply the proposed value to the parent metric.
+		change.AssignedToID = nil
+		change.AppliedAt = &now
+
+		oldValue := metric.CurrentValue
+		metric.CurrentValue = change.ProposedValue
+		if err := tx.Model(&models.GoalMetric{}).Where("id = ?", metric.ID).
+			Update("current_value", change.ProposedValue).Error; err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("failed to apply value to metric: %w", err)
+		}
+
+		// Append a MetricHistory record so the change shows in the per-metric
+		// history endpoint alongside legacy entries.
+		histEntry := &models.MetricHistory{
+			MetricID:    metric.ID,
+			OldValue:    oldValue,
+			NewValue:    change.ProposedValue,
+			ChangedByID: userID,
+			Comment:     fmt.Sprintf("Approved value change %s", changeID.String()[:8]),
+		}
+		if err := tx.Create(histEntry).Error; err != nil {
+			log.Printf("[goal_service] TransitionMetricValueChange: history insert failed: %v", err)
+		}
+		applied = true
+
+	case "request_changes_l1", "request_changes_l2", "reject_l1", "reject_l2":
+		change.AssignedToID = nil
+	}
+
+	if err := s.goalRepo.UpdateMetricValueChangeInTx(ctx, tx, change); err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("failed to update value change: %w", err)
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	// Post-commit: cascade formula recompute & progress
+	if applied {
+		s.recomputeDependentFormulas(ctx, metric.GoalID, metric.ID)
+		if err := s.RecalculateProgress(ctx, metric.GoalID); err != nil {
+			log.Printf("[goal_service] TransitionMetricValueChange: progress recalc failed: %v", err)
+		}
+	}
+
+	// Audit log
+	s.actionLogService.LogAction(ctx, &LogActionParams{
+		UserID:      userID,
+		Action:      "transition",
+		Module:      "goals",
+		ResourceID:  changeID.String(),
+		Description: fmt.Sprintf("Executed '%s' on metric value change for '%s'", transition.Name, metric.Name),
+		Status:      "success",
+	})
+
+	if s.wsHub != nil {
+		s.wsHub.BroadcastToGoal(metric.GoalID, "metric_value_change_transitioned", map[string]interface{}{
+			"change_id":  changeID,
+			"metric_id":  metric.ID,
+			"goal_id":    metric.GoalID,
+			"transition": transition.Name,
+			"applied":    applied,
+		}, userID)
+	}
+
+	reloaded, rerr := s.goalRepo.FindMetricValueChangeByIDWithRelations(ctx, changeID)
+	if rerr == nil {
+		resp := reloaded.ToResponse()
+		return &resp, nil
+	}
+	resp := change.ToResponse()
+	return &resp, nil
+}
+
+// ListMetricValueChanges returns all value changes for a given metric.
+func (s *goalService) ListMetricValueChanges(ctx context.Context, metricID uuid.UUID, userID uuid.UUID) ([]models.GoalMetricValueChangeResponse, error) {
+	metric, err := s.goalRepo.FindMetricByID(ctx, metricID)
+	if err != nil {
+		return nil, fmt.Errorf("metric not found: %w", err)
+	}
+	canAccess, _ := s.canAccessGoal(ctx, metric.GoalID, userID)
+	if !canAccess {
+		return nil, fmt.Errorf("access denied")
+	}
+
+	changes, err := s.goalRepo.ListMetricValueChangesByMetricID(ctx, metricID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list value changes: %w", err)
+	}
+
+	responses := make([]models.GoalMetricValueChangeResponse, len(changes))
+	for i, c := range changes {
+		responses[i] = c.ToResponse()
+	}
+	return responses, nil
+}
+
+// ListPendingMetricApprovals lists metric definitions awaiting the caller's approval.
+func (s *goalService) ListPendingMetricApprovals(ctx context.Context, userID uuid.UUID, page int, limit int) ([]models.MetricApprovalListResponse, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 10
+	}
+
+	metrics, total, err := s.goalRepo.ListPendingMetricApprovals(ctx, userID, page, limit)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to list pending metric approvals: %w", err)
+	}
+
+	responses := make([]models.MetricApprovalListResponse, len(metrics))
+	for i, m := range metrics {
+		resp := models.MetricApprovalListResponse{
+			ID:         m.ID,
+			MetricID:   m.ID,
+			MetricName: m.Name,
+			Version:    m.Version,
+			AssignedTo: models.ToUserBriefResponse(m.AssignedTo),
+			CreatedAt:  m.CreatedAt,
+			UpdatedAt:  m.UpdatedAt,
+		}
+		if m.CurrentState != nil {
+			resp.StateName = m.CurrentState.Name
+			resp.StateColor = m.CurrentState.Color
+		}
+		if m.Goal != nil {
+			resp.GoalID = m.Goal.ID
+			resp.GoalTitle = m.Goal.Title
+			resp.GoalPriority = m.Goal.Priority
+		}
+		responses[i] = resp
+	}
+
+	return responses, total, nil
+}
+
+// ListPendingMetricValueChangeApprovals lists value changes awaiting the caller's approval.
+func (s *goalService) ListPendingMetricValueChangeApprovals(ctx context.Context, userID uuid.UUID, page int, limit int) ([]models.MetricApprovalListResponse, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 10
+	}
+
+	changes, total, err := s.goalRepo.ListPendingMetricValueChangeApprovals(ctx, userID, page, limit)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to list pending value change approvals: %w", err)
+	}
+
+	responses := make([]models.MetricApprovalListResponse, len(changes))
+	for i, c := range changes {
+		changeID := c.ID
+		proposed := c.ProposedValue
+		previous := c.PreviousValue
+		resp := models.MetricApprovalListResponse{
+			ID:            c.ID,
+			ChangeID:      &changeID,
+			MetricID:      c.MetricID,
+			ProposedValue: &proposed,
+			PreviousValue: &previous,
+			Version:       c.Version,
+			SubmittedBy:   models.ToUserBriefResponse(c.SubmittedBy),
+			AssignedTo:    models.ToUserBriefResponse(c.AssignedTo),
+			CreatedAt:     c.CreatedAt,
+			UpdatedAt:     c.UpdatedAt,
+		}
+		if c.CurrentState != nil {
+			resp.StateName = c.CurrentState.Name
+			resp.StateColor = c.CurrentState.Color
+		}
+		if c.Metric != nil {
+			resp.MetricName = c.Metric.Name
+			if c.Metric.Goal != nil {
+				resp.GoalID = c.Metric.Goal.ID
+				resp.GoalTitle = c.Metric.Goal.Title
+				resp.GoalPriority = c.Metric.Goal.Priority
+			}
+		}
 		responses[i] = resp
 	}
 

@@ -28,20 +28,20 @@ type TokenPair struct {
 }
 
 type JWTManager struct {
-	secretKey         []byte
-	refreshSecretKey  []byte
-	expireHour        int
-	refreshExpireDay  int
-	rememberExpireDay int
+	secretKey          []byte
+	refreshSecretKey   []byte
+	expireHour         float64
+	refreshExpireHour  float64
+	rememberExpireHour float64
 }
 
-func NewJWTManager(secret string, expireHour int) *JWTManager {
+func NewJWTManager(secret string, expireHour float64, refreshExpireHour float64, rememberExpireHour float64) *JWTManager {
 	return &JWTManager{
-		secretKey:         []byte(secret),
-		refreshSecretKey:  []byte(secret + "_refresh"), // Different secret for refresh tokens
-		expireHour:        expireHour,
-		refreshExpireDay:  7,  // Refresh token valid for 7 days
-		rememberExpireDay: 30, // Refresh token valid for 30 days when remember_me is true
+		secretKey:          []byte(secret),
+		refreshSecretKey:   []byte(secret + "_refresh"),
+		expireHour:         expireHour,
+		refreshExpireHour:  refreshExpireHour,
+		rememberExpireHour: rememberExpireHour,
 	}
 }
 
@@ -52,7 +52,7 @@ func (j *JWTManager) GenerateToken(userID uuid.UUID, email, role string) (string
 		Email:  email,
 		Role:   role,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(j.expireHour) * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(j.expireHour * float64(time.Hour)))),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
 			Issuer:    "automax",
@@ -75,7 +75,7 @@ func (j *JWTManager) GenerateTokenPair(userID uuid.UUID, email, role string, ses
 		Role:      role,
 		SessionID: sessionID,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(j.expireHour) * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(j.expireHour * float64(time.Hour)))),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
 			Issuer:    "automax",
@@ -89,15 +89,15 @@ func (j *JWTManager) GenerateTokenPair(userID uuid.UUID, email, role string, ses
 	}
 
 	// Generate refresh token with different expiration based on remember_me
-	refreshExpireDays := j.refreshExpireDay
+	refreshExpireHours := j.refreshExpireHour
 	if useRemember {
-		refreshExpireDays = j.rememberExpireDay
+		refreshExpireHours = j.rememberExpireHour
 	}
 
 	refreshClaims := RefreshClaims{
 		UserID: userID,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(refreshExpireDays) * 24 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(refreshExpireHours * float64(time.Hour)))),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
 			Issuer:    "automax",
@@ -159,5 +159,5 @@ func (j *JWTManager) ValidateRefreshToken(tokenString string) (*RefreshClaims, e
 }
 
 func (j *JWTManager) GetTokenExpiration() time.Duration {
-	return time.Duration(j.expireHour) * time.Hour
+	return time.Duration(j.expireHour * float64(time.Hour))
 }

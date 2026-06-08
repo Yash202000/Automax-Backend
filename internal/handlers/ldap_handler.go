@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"strings"
 
 	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/database"
@@ -11,8 +12,6 @@ import (
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/gofiber/fiber/v2"
-	"github.com/google/uuid"
-	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -165,20 +164,21 @@ func (h *LDAPHandler) Login(c *fiber.Ctx) error {
 		role = user.Roles[0].Code
 	}
 
-	// Generate JWT tokens
-	tokenPair, err := h.jwtManager.GenerateTokenPair(user.ID, user.Email, "", role)
-	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to generate authentication tokens")
-	}
-
 	// Store session
-	if err := h.sessionStore.SetUserSession(c.UserContext(), user.ID.String(), map[string]interface{}{
+	sessionID, err := h.sessionStore.SetUserSessionMultiDevices(c.UserContext(), user.ID.String(), map[string]interface{}{
 		"user_id":     user.ID,
 		"email":       user.Email,
 		"role":        role,
 		"auth_source": "ldap",
-	}, h.jwtManager.GetTokenExpiration()); err != nil {
+	}, h.jwtManager.GetTokenExpiration())
+	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to store session")
+	}
+
+	// Generate JWT tokens
+	tokenPair, err := h.jwtManager.GenerateTokenPair(user.ID, user.Email, role, sessionID, false)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to generate authentication tokens")
 	}
 
 	// Update last login timestamp
@@ -343,18 +343,15 @@ func (h *LDAPHandler) SyncUser(c *fiber.Ctx) error {
 
 // createOrUpdateUserFromLDAP creates a new user from LDAP data
 func (h *LDAPHandler) createOrUpdateUserFromLDAP(ctx context.Context, ldapUser *services.LDAPUserInfo) (*models.User, error) {
-	// Generate a random unusable password since LDAP users won't use password login
-	randomPw, _ := uuid.NewRandom()
-	hashedPw, _ := bcrypt.GenerateFromPassword([]byte(randomPw.String()), bcrypt.DefaultCost)
-
 	user := &models.User{
 		Email:     ldapUser.Email,
 		Username:  ldapUser.Username,
-		Password:  string(hashedPw),
+		Password:  "",
 		FirstName: ldapUser.FirstName,
 		LastName:  ldapUser.LastName,
 		Phone:     ldapUser.Phone,
 		IsActive:  true,
+		IsADUser:  true,
 	}
 
 	if err := h.userRepo.Create(ctx, user); err != nil {
@@ -370,6 +367,7 @@ func (h *LDAPHandler) updateUserFromLDAP(ctx context.Context, user *models.User,
 	user.FirstName = ldapUser.FirstName
 	user.LastName = ldapUser.LastName
 	user.Phone = ldapUser.Phone
+	user.IsADUser = true
 	user.IsActive = ldapUser.Enabled
 
 	if err := h.userRepo.Update(ctx, user); err != nil {
@@ -377,6 +375,100 @@ func (h *LDAPHandler) updateUserFromLDAP(ctx context.Context, user *models.User,
 	}
 
 	return user, nil
+}
+
+// ListADUsers returns all users from Active Directory
+// POST /api/v1/ldap/users
+func (h *LDAPHandler) ListADUsers(c *fiber.Ctx) error {
+	if !h.config.LDAP.Enabled {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "LDAP is not enabled")
+	}
+
+	users, err := h.ldapService.FetchUserList(c.UserContext())
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch AD users: "+err.Error())
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data":    users,
+	})
+}
+
+// RegisterADUser fetches a user from AD and creates a local user with IsADUser=true
+// POST /api/v1/ldap/register
+func (h *LDAPHandler) RegisterADUser(c *fiber.Ctx) error {
+	if !h.config.LDAP.Enabled {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "LDAP is not enabled")
+	}
+
+	var req LDAPSearchRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		errMsg := ""
+		for field, err := range validationErrors {
+			errMsg += field + ": " + err + "; "
+		}
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, errMsg)
+	}
+
+	// Search for user in LDAP
+	ldapUser, err := h.ldapService.SearchUser(c.UserContext(), req.Username)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "User not found in LDAP: "+err.Error())
+	}
+
+	// Normalize email to lowercase
+	ldapUser.Email = strings.ToLower(strings.TrimSpace(ldapUser.Email))
+
+	// Check if user already exists by username or email
+	existingUser, _ := h.userRepo.FindByUsername(c.UserContext(), ldapUser.Username)
+	if existingUser != nil {
+		return utils.ErrorResponse(c, fiber.StatusConflict, "User with this username already exists in the system")
+	}
+
+	if ldapUser.Email != "" {
+		existingUser, _ = h.userRepo.FindByEmail(c.UserContext(), ldapUser.Email)
+		if existingUser != nil {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "User with this email already exists in the system")
+		}
+	}
+
+	// Create user with IsADUser=true (no local password — AD handles auth)
+	user := &models.User{
+		Email:     ldapUser.Email,
+		Username:  ldapUser.Username,
+		Password:  "",
+		FirstName: ldapUser.FirstName,
+		LastName:  ldapUser.LastName,
+		Phone:     ldapUser.Phone,
+		IsActive:  true,
+		IsADUser:  true,
+	}
+
+	if err := h.userRepo.Create(c.UserContext(), user); err != nil {
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "23505") {
+			if strings.Contains(err.Error(), "idx_users_email") {
+				return utils.ErrorResponse(c, fiber.StatusConflict, "User with this email already exists in the system")
+			}
+			if strings.Contains(err.Error(), "idx_users_username") {
+				return utils.ErrorResponse(c, fiber.StatusConflict, "User with this username already exists in the system")
+			}
+		}
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create user")
+	}
+
+	// Reload with relations
+	user, _ = h.userRepo.FindByIDWithRelations(c.UserContext(), user.ID)
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data":    models.ToUserResponse(user),
+		"message": "AD user registered successfully",
+	})
 }
 
 // GetLDAPStatus returns the current LDAP configuration status

@@ -29,8 +29,10 @@ import (
 
 type UserService interface {
 	Register(ctx context.Context, req *models.UserRegisterRequest) (*models.AuthResponse, error)
+	SSORegister(ctx context.Context, req *models.SSORegisterRequest) (*models.AuthResponse, error)
 	Login(ctx context.Context, req *models.UserLoginRequest) (*models.AuthLoginResponse, error)
-	RefreshToken(ctx context.Context, refreshToken string) (*models.AuthResponse, error)
+	SSOLogin(ctx context.Context, req *models.SSOLoginRequest) (*models.AuthLoginResponse, error)
+	RefreshToken(ctx context.Context, refreshToken string, rememberMe ...bool) (*models.AuthResponse, error)
 	Logout(ctx context.Context) error
 	GetProfile(ctx context.Context, userID uuid.UUID) (*models.UserResponse, error)
 	UpdateAdminProfile(ctx context.Context, userID uuid.UUID, req *models.UserUpdateRequest) (*models.UserResponse, error)
@@ -47,6 +49,8 @@ type UserService interface {
 	FindMatchingUsers(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.UserResponse, error)
 	UpdateUserCallStatus(ctx context.Context, extension string, status string) (interface{}, error)
 	FindByExtension(ctx context.Context, extension string) (*models.User, error)
+	FindByExtOrPhone(ctx context.Context, phone string) (*models.User, error)
+	FindByExtOrPhoneList(ctx context.Context, phones []string) ([]models.User, error)
 	UpdateProfile(ctx context.Context, req *models.UserUpdateRequest) (*models.UserResponse, error)
 	GenerateTokenViaUserID(ctx context.Context, mobile uuid.UUID) (*models.AuthResponse, error)
 	ValidateMobileForLogin(ctx context.Context, phone string) (*models.UserResponse, error)
@@ -55,6 +59,7 @@ type UserService interface {
 	ForgotPassword(ctx context.Context, req *models.ForgotPasswordRequest) (string, error)
 	VerifyOTPForReset(ctx context.Context, req *models.VerifyOTPRequest) (string, error)
 	ResetPassword(ctx context.Context, resetToken, newPassword string) error
+	ExistsByPhoneAndName(ctx context.Context, phone string, name ...string) (bool, error)
 }
 
 type userService struct {
@@ -106,6 +111,10 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 	actorID, _ := ctx.Value(constants.ContextKeys.UserID).(uuid.UUID)
 	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
 	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
+
+	// Normalize email to lowercase to avoid case-sensitivity issues
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+
 	if req.Phone != "" {
 		exists, err := s.userRepo.ExistsByPhone(ctx, req.Phone, uuid.Nil)
 		if err != nil {
@@ -159,6 +168,17 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 	}
 
 	if err := s.userRepo.Create(ctx, user); err != nil {
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "23505") {
+			if strings.Contains(err.Error(), "idx_users_email") {
+				return nil, errors.New("email already exists")
+			}
+			if strings.Contains(err.Error(), "idx_users_username") {
+				return nil, errors.New("username already exists")
+			}
+			if strings.Contains(err.Error(), "idx_users_phone") {
+				return nil, errors.New("phone number already in use")
+			}
+		}
 		return nil, err
 	}
 
@@ -226,6 +246,177 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 	}, nil
 }
 
+func (s *userService) SSORegister(ctx context.Context, req *models.SSORegisterRequest) (*models.AuthResponse, error) {
+	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
+	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
+
+	if req.Phone != "" {
+		exists, err := s.userRepo.ExistsByPhone(ctx, req.Phone, uuid.Nil)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			return nil, errors.New("Phone number already in use")
+		}
+	}
+
+	exists, err := s.userRepo.ExistsByEmail(ctx, req.Email)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, errors.New("email already exists")
+	}
+
+	exists, err = s.userRepo.ExistsByUsername(ctx, req.Username)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, errors.New("username already exists")
+	}
+
+	exists, err = s.userRepo.ExistsByNationalID(ctx, req.NationalID)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, errors.New("national ID already exists")
+	}
+
+	randomPw, _ := uuid.NewRandom()
+	hashedPassword, err := utils.HashPassword(randomPw.String())
+	if err != nil {
+		return nil, err
+	}
+
+	user := &models.User{
+		Email:        req.Email,
+		Username:     req.Username,
+		Password:     hashedPassword,
+		NationalID:   req.NationalID,
+		FirstName:    req.FirstName,
+		LastName:     req.LastName,
+		Phone:        req.Phone,
+		Extension:    req.Extension,
+		DepartmentID: req.DepartmentID,
+		LocationID:   req.LocationID,
+		IsActive:     true,
+	}
+
+	if s.licenseService != nil && s.licenseService.IsValid() && s.licenseRepo != nil {
+		activeCount, countErr := s.licenseRepo.CountActiveUsers(ctx)
+		if countErr == nil && activeCount >= int64(s.licenseService.GetMaxUsers()) {
+			return nil, fmt.Errorf("%w: %d active users, license limit is %d", ErrUserLimitReached, activeCount, s.licenseService.GetMaxUsers())
+		}
+	}
+
+	if err := s.userRepo.Create(ctx, user); err != nil {
+		return nil, err
+	}
+
+	if len(req.RoleIDs) > 0 {
+		s.userRepo.AssignRoles(ctx, user.ID, req.RoleIDs)
+	}
+	if len(req.DepartmentIDs) > 0 {
+		s.userRepo.AssignDepartments(ctx, user.ID, req.DepartmentIDs)
+	}
+	if len(req.LocationIDs) > 0 {
+		s.userRepo.AssignLocations(ctx, user.ID, req.LocationIDs)
+	}
+	if len(req.ClassificationIDs) > 0 {
+		s.userRepo.AssignClassifications(ctx, user.ID, req.ClassificationIDs)
+	}
+
+	role := "user"
+	if user.IsSuperAdmin {
+		role = "admin"
+	}
+
+	token, err := s.jwtManager.GenerateToken(user.ID, user.Email, role)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.sessionStore.SetUserSession(ctx, user.ID.String(), map[string]interface{}{
+		"user_id": user.ID,
+		"email":   user.Email,
+		"role":    role,
+	}, s.jwtManager.GetTokenExpiration()); err != nil {
+		return nil, err
+	}
+
+	user, _ = s.userRepo.FindByIDWithRelations(ctx, user.ID)
+
+	go func() {
+		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+			UserID:      uuid.Nil,
+			Action:      "sso_register",
+			Module:      "users",
+			ResourceID:  user.ID.String(),
+			Description: fmt.Sprintf("SSO user registered: %s (%s, national_id: %s)", user.Username, user.Email, user.NationalID),
+			OldValue:    nil,
+			NewValue:    req,
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		})
+	}()
+
+	return &models.AuthResponse{
+		User:  models.ToUserResponse(user),
+		Token: token,
+	}, nil
+}
+
+func (s *userService) SSOLogin(ctx context.Context, req *models.SSOLoginRequest) (*models.AuthLoginResponse, error) {
+	user, err := s.userRepo.FindByNationalIDForLogin(ctx, req.NationalID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("invalid credentials")
+		}
+		return nil, err
+	}
+
+	if !user.IsActive {
+		return nil, errors.New("account is deactivated")
+	}
+
+	role := "user"
+	if user.IsSuperAdmin {
+		role = "admin"
+	} else if len(user.Roles) > 0 {
+		role = user.Roles[0].Code
+	}
+
+	sessionID, err := s.sessionStore.SetUserSessionMultiDevices(ctx, user.ID.String(), map[string]interface{}{
+		"user_id": user.ID,
+		"email":   user.Email,
+		"role":    role,
+	}, s.jwtManager.GetTokenExpiration())
+	if err != nil {
+		return nil, err
+	}
+
+	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, role, sessionID, false)
+	if err != nil {
+		return nil, err
+	}
+
+	go func(ctx context.Context, userID uuid.UUID) {
+		if err := s.userRepo.UpdateLastLogin(ctx, userID); err != nil {
+			fmt.Println("failed to update last login:", err)
+		}
+	}(ctx, user.ID)
+
+	return &models.AuthLoginResponse{
+		User:         models.ToUserLoginResponse(user),
+		Token:        tokenPair.AccessToken,
+		RefreshToken: tokenPair.RefreshToken,
+		ExpiresIn:    tokenPair.ExpiresIn,
+	}, nil
+}
+
 func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (*models.AuthLoginResponse, error) {
 	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
 	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
@@ -259,6 +450,11 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 				return nil, errors.New("invalid credentials")
 			}
 			return nil, err
+		}
+
+		// Redirect AD users to LDAP login
+		if user.IsADUser {
+			return nil, errors.New("this account uses Active Directory authentication. Please use the AD login option")
 		}
 
 		if !utils.CheckPassword(req.Password, user.Password) {
@@ -468,7 +664,7 @@ func (s *userService) ValidateMobileForLogin(ctx context.Context, phone string) 
 	return &resp, nil
 }
 
-func (s *userService) RefreshToken(ctx context.Context, refreshToken string) (*models.AuthResponse, error) {
+func (s *userService) RefreshToken(ctx context.Context, refreshToken string, rememberMe ...bool) (*models.AuthResponse, error) {
 	// Validate the refresh token
 	claims, err := s.jwtManager.ValidateRefreshToken(refreshToken)
 	if err != nil {
@@ -493,18 +689,22 @@ func (s *userService) RefreshToken(ctx context.Context, refreshToken string) (*m
 		role = user.Roles[0].Code
 	}
 
-	// Generate new token pair
-	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, "", role)
+	// Create new session
+	sessionID, err := s.sessionStore.SetUserSessionMultiDevices(ctx, user.ID.String(), map[string]interface{}{
+		"user_id": user.ID,
+		"email":   user.Email,
+		"role":    role,
+	}, s.jwtManager.GetTokenExpiration())
 	if err != nil {
 		return nil, err
 	}
 
-	// Update session
-	if err := s.sessionStore.SetUserSession(ctx, user.ID.String(), map[string]interface{}{
-		"user_id": user.ID,
-		"email":   user.Email,
-		"role":    role,
-	}, s.jwtManager.GetTokenExpiration()); err != nil {
+	// Default to false if not provided
+	useRemember := len(rememberMe) > 0 && rememberMe[0]
+
+	// Generate new token pair
+	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, role, sessionID, useRemember)
+	if err != nil {
 		return nil, err
 	}
 
@@ -586,16 +786,17 @@ func (s *userService) GenerateTokenViaUserID(ctx context.Context, userID uuid.UU
 	}
 	log.Println("user fetched for last 6 digits login")
 	// Continue with the rest of the login logic...
-	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, "", constants.USER_ROLE.CITIZEN)
+	sessionID, err := s.sessionStore.SetUserSessionMultiDevices(ctx, user.ID.String(), map[string]interface{}{
+		"user_id": user.ID,
+		"email":   user.Email,
+		"role":    constants.USER_ROLE.CITIZEN,
+	}, s.jwtManager.GetTokenExpiration())
 	if err != nil {
 		return nil, err
 	}
 
-	if err := s.sessionStore.SetUserSession(ctx, user.ID.String(), map[string]interface{}{
-		"user_id": user.ID,
-		"email":   user.Email,
-		"role":    constants.USER_ROLE.CITIZEN,
-	}, s.jwtManager.GetTokenExpiration()); err != nil {
+	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, constants.USER_ROLE.CITIZEN, sessionID, false)
+	if err != nil {
 		return nil, err
 	}
 
@@ -1119,7 +1320,12 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
 	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
 
-	// Block LDAP-authenticated users from changing their password via the app
+	// Block AD/LDAP users from changing their password via the app
+	user, userErr := s.userRepo.FindByID(ctx, userID)
+	if userErr == nil && user.IsADUser {
+		return errors.New("password cannot be changed for Active Directory accounts")
+	}
+
 	var sessionData map[string]interface{}
 	if getErr := s.sessionStore.GetUserSession(ctx, userID.String(), &sessionData); getErr == nil {
 		if authSource, ok := sessionData["auth_source"].(string); ok && authSource == "ldap" {
@@ -1218,6 +1424,11 @@ func (s *userService) AdminResetPassword(ctx context.Context, adminID, targetUse
 	user, err := s.userRepo.FindByID(ctx, targetUserID)
 	if err != nil {
 		return err
+	}
+
+	// Block password reset for AD users
+	if user.IsADUser {
+		return errors.New("cannot reset password for Active Directory accounts")
 	}
 
 	// Hash new password
@@ -1338,6 +1549,10 @@ func (s *userService) UpdateAvatar(ctx context.Context, userID uuid.UUID, avatar
 	}
 
 	return err
+}
+
+func (s *userService) ExistsByPhoneAndName(ctx context.Context, phone string, name ...string) (bool, error) {
+	return s.userRepo.ExistsByPhoneAndName(ctx, phone, name...)
 }
 
 func (s *userService) DeleteUser(ctx context.Context) error {
@@ -1553,6 +1768,14 @@ func (s *userService) FindByExtension(ctx context.Context, extension string) (*m
 	return user, nil
 }
 
+func (s *userService) FindByExtOrPhone(ctx context.Context, phone string) (*models.User, error) {
+	return s.userRepo.FindByExtOrPhone(ctx, phone)
+}
+
+func (s *userService) FindByExtOrPhoneList(ctx context.Context, phones []string) ([]models.User, error) {
+	return s.userRepo.FindByExtOrPhoneList(ctx, phones)
+}
+
 func (s *userService) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
 	return s.userRepo.FindByEmail(ctx, email)
 }
@@ -1682,6 +1905,11 @@ func (s *userService) ForgotPassword(ctx context.Context, req *models.ForgotPass
 
 	if user == nil {
 		return "", fmt.Errorf("User not found")
+	}
+
+	// Block AD users from resetting password
+	if user.IsADUser {
+		return "", errors.New("password cannot be reset for Active Directory accounts. Please contact your IT administrator")
 	}
 
 	//Generate OTP
@@ -1821,10 +2049,10 @@ func (s *userService) ResetPassword(ctx context.Context, resetToken, newPassword
 	var user *models.User
 	if strings.Contains(val, "@") {
 		user, err = s.userRepo.FindByEmail(ctx, val)
-		log.Printf("User found by email: %s\n", val, user)
+		// log.Printf("User found by email: %s\n", val, user)
 	} else {
 		user, err = s.userRepo.FindByMobile(ctx, val)
-		log.Printf("User found by mobile: %s\n", val, user)
+		// log.Printf("User found by mobile: %s\n", val, user)
 	}
 	if err != nil || user == nil {
 		return fmt.Errorf("user not found")

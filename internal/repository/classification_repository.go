@@ -12,10 +12,10 @@ import (
 // typeExistsWhere returns a GORM WHERE condition and args for filtering classifications
 // by the given types slice, using an EXISTS subquery to avoid duplicate rows.
 //
-//   nil / empty / ["all"] → no condition (all classifications)
-//   ["both"]              → exists with type IN ('incident','request')
-//   ["incident","mobile"] → exists with type IN ('incident','mobile')
-//   ["incident"]          → exists with type = 'incident'
+//	nil / empty / ["all"] → no condition (all classifications)
+//	["both"]              → exists with type IN ('incident','request')
+//	["incident","mobile"] → exists with type IN ('incident','mobile')
+//	["incident"]          → exists with type = 'incident'
 func typeExistsWhere(types []string) (condition string, args []interface{}) {
 	if len(types) == 0 {
 		return "", nil
@@ -60,7 +60,9 @@ func typeExistsWhere(types []string) (condition string, args []interface{}) {
 type ClassificationRepository interface {
 	Create(ctx context.Context, classification *models.Classification) error
 	FindByID(ctx context.Context, id uuid.UUID) (*models.Classification, error)
+	FindByIDs(ctx context.Context, id []uuid.UUID) (*[]models.Classification, error)
 	FindByNameAndParent(ctx context.Context, name string, parentID *uuid.UUID) (*models.Classification, error)
+	FindByExternalID(ctx context.Context, externalID string) (*models.Classification, error)
 	Update(ctx context.Context, classification *models.Classification) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context) ([]models.Classification, error)
@@ -80,6 +82,8 @@ type ClassificationRepository interface {
 	GetCriticalityByID(ctx context.Context, id uuid.UUID) (*models.ClassificationCriticality, error)
 	GetCriticalityByClassificationAndCriticalityID(ctx context.Context, classificationID, criticalityID uuid.UUID) (*models.ClassificationCriticality, error)
 	GetCriticalityByClassificationAndPriorityCode(ctx context.Context, classificationID uuid.UUID, priorityCode string) (*models.ClassificationCriticality, error)
+	FetchClassificationFullPaths(ctx context.Context, classificationIDs []uuid.UUID) (map[string]string, error)
+	FetchClassificationFullPathByID(ctx context.Context, classificationID uuid.UUID) (string, error)
 }
 
 type classificationRepository struct {
@@ -117,6 +121,15 @@ func (r *classificationRepository) FindByID(ctx context.Context, id uuid.UUID) (
 	}
 	return &classification, nil
 }
+func (r *classificationRepository) FindByIDs(ctx context.Context, ids []uuid.UUID) (*[]models.Classification, error) {
+	var classifications []models.Classification
+	err := r.db.WithContext(ctx).
+		Find(&classifications, "id IN ?", ids).Error // Find not First
+	if err != nil {
+		return nil, err
+	}
+	return &classifications, nil
+}
 
 func (r *classificationRepository) FindByNameAndParent(ctx context.Context, name string, parentID *uuid.UUID) (*models.Classification, error) {
 	var classification models.Classification
@@ -127,6 +140,15 @@ func (r *classificationRepository) FindByNameAndParent(ctx context.Context, name
 		query = query.Where("parent_id = ?", parentID)
 	}
 	err := query.First(&classification).Error
+	if err != nil {
+		return nil, err
+	}
+	return &classification, nil
+}
+
+func (r *classificationRepository) FindByExternalID(ctx context.Context, externalID string) (*models.Classification, error) {
+	var classification models.Classification
+	err := r.db.WithContext(ctx).First(&classification, "external_id = ?", externalID).Error
 	if err != nil {
 		return nil, err
 	}
@@ -427,4 +449,101 @@ func (r *classificationRepository) GetCriticalityByClassificationAndPriorityCode
 		return nil, err
 	}
 	return &criticality, nil
+}
+
+// full path queries
+
+// ── full path queries ───────────────────────────────────────────────────
+func (r *classificationRepository) FetchClassificationFullPaths(
+	ctx context.Context,
+	classificationIDs []uuid.UUID,
+) (paths map[string]string, err error) {
+	paths = map[string]string{}
+	if len(classificationIDs) == 0 {
+		return
+	}
+
+	query := `
+		WITH RECURSIVE classification_hierarchy AS (
+			SELECT
+				id,
+				name,
+				parent_id,
+				name::TEXT AS full_path
+			FROM classifications
+			WHERE parent_id IS NULL
+
+			UNION ALL
+
+			SELECT
+				l.id,
+				l.name,
+				l.parent_id,
+				lh.full_path || ' > ' || l.name
+			FROM classifications l
+			INNER JOIN classification_hierarchy lh ON l.parent_id = lh.id
+		)
+		SELECT
+			id::text,
+			full_path
+		FROM classification_hierarchy
+		WHERE id::text IN (?)
+	`
+
+	rows, qerr := r.db.WithContext(ctx).Raw(query, classificationIDs).Rows()
+	if qerr != nil {
+		err = fmt.Errorf("fetchLocationPaths: %w", qerr)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var locationID, fullPath string
+		if serr := rows.Scan(&locationID, &fullPath); serr != nil {
+			continue
+		}
+		paths[locationID] = fullPath
+	}
+	return
+}
+
+func (r *classificationRepository) FetchClassificationFullPathByID(
+	ctx context.Context,
+	classificationID uuid.UUID,
+) (string, error) {
+	const query = `
+		WITH RECURSIVE classification_hierarchy AS (
+			SELECT
+				id,
+				name,
+				parent_id,
+				name::TEXT AS full_path
+			FROM classifications
+			WHERE parent_id IS NULL
+
+			UNION ALL
+
+			SELECT
+				l.id,
+				l.name,
+				l.parent_id,
+				lh.full_path || ' > ' || l.name
+			FROM classifications l
+			INNER JOIN classification_hierarchy lh ON l.parent_id = lh.id
+		)
+		SELECT full_path
+		FROM classification_hierarchy
+		WHERE id = $1
+	`
+
+	var fullPath string
+	err := r.db.WithContext(ctx).Raw(query, classificationID).Scan(&fullPath).Error
+	if err != nil {
+		return "", fmt.Errorf("fetchLocationFullPathByID: %w", err)
+	}
+	if fullPath == "" {
+		return "", fmt.Errorf("fetchLocationFullPathByID: location %s not found", classificationID)
+	}
+
+	return fullPath, nil
 }

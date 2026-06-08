@@ -74,7 +74,6 @@ func (m *aiQualityMonitor) Start(ctx context.Context) {
 		return
 	}
 	m.running = true
-	log.Printf("[AIQualityMonitor] Started — interval: %v, endpoint: %s", m.interval, m.cfg.APIEndpoint)
 
 	go func() {
 		if err := m.ProcessAIQualityChecks(ctx); err != nil {
@@ -127,11 +126,8 @@ func (m *aiQualityMonitor) ProcessAIQualityChecks(ctx context.Context) error {
 		return nil
 	}
 
-	log.Printf("[AIQualityMonitor] Found %d pending incident(s)", len(incidents))
-
 	for i := range incidents {
 		inc := &incidents[i]
-		log.Printf("[AIQualityMonitor] Processing incident %s (%s)", inc.IncidentNumber, inc.ID)
 		if err := m.processIncident(ctx, inc); err != nil {
 			log.Printf("[AIQualityMonitor] ERROR — incident %s: %v", inc.IncidentNumber, err)
 			// Continue with the next incident; one failure must not block others.
@@ -153,6 +149,11 @@ type coordinatesCheck struct {
 	Note              string          `json:"note"`
 }
 
+// coordinateDiff captures the coordinate comparison block returned by the API.
+type coordinateDiff struct {
+	Verdict string `json:"verdict"`
+}
+
 // sameSceneCheck captures the same-location analysis block returned by the API.
 type sameSceneCheck struct {
 	IsSameLocation bool     `json:"is_same_location"`
@@ -168,19 +169,119 @@ type incidentAssessment struct {
 }
 
 // aiQualityAPIResponse mirrors the JSON returned by the verify-incident endpoint.
+// It covers both the legacy v1 format and the new v2 format in a single struct so that
+// a single json.Unmarshal handles either response. Use the helper methods
+// (resolvedResolutionStatus, resolvedChangeSummary, resolvedDistanceMeters) to read
+// values — they auto-detect the format and return the correct field.
 type aiQualityAPIResponse struct {
-	// Legacy / shared fields
-	ChangeSummary    string           `json:"change_summary"`
-	ResolutionStatus string           `json:"resolution_status"`
-	Confidence       float64          `json:"confidence"`
-	ReasoningPoints  []string         `json:"reasoning_points"`
-	RiskFlags        []string         `json:"risk_flags"`
-	CoordinatesCheck coordinatesCheck `json:"coordinates_check"`
-	// Extended fields
+	// ── v1 (legacy) fields ────────────────────────────────────────────────────
+	ChangeSummary    string             `json:"change_summary"`
+	ResolutionStatus string             `json:"resolution_status"`
+	Confidence       float64            `json:"confidence"`
+	ReasoningPoints  []string           `json:"reasoning_points"`
+	RiskFlags        []string           `json:"risk_flags"`
+	CoordinatesCheck coordinatesCheck   `json:"coordinates_check"`
+	CoordinateDiff   coordinateDiff     `json:"coordinate_diff"`
 	IncidentType     string             `json:"incident_type"`
 	SameScene        sameSceneCheck     `json:"same_scene"`
 	BeforeAssessment incidentAssessment `json:"before_assessment"`
 	AfterAssessment  incidentAssessment `json:"after_assessment"`
+
+	// ── v2 (new) fields ───────────────────────────────────────────────────────
+	AuditID          string             `json:"audit_id"`
+	AuditDecision    v2AuditDecision    `json:"audit_decision"`
+	RiskFindings     v2RiskFindings     `json:"risk_findings"`
+	EvidenceFindings v2EvidenceFindings `json:"evidence_findings"`
+}
+
+// isV2 returns true when the response uses the new v2 schema,
+// identified by the presence of a non-empty audit_decision.audit_result.
+func (r *aiQualityAPIResponse) isV2() bool {
+	return r.AuditDecision.AuditResult != ""
+}
+
+// resolvedResolutionStatus returns the resolution status from whichever
+// response format is present.
+//
+//	v2: audit_decision.audit_result
+//	v1: resolution_status
+func (r *aiQualityAPIResponse) resolvedResolutionStatus() string {
+	if r.isV2() {
+		return r.AuditDecision.AuditResult
+	}
+	return r.ResolutionStatus // v1
+}
+
+// resolvedChangeSummary returns the human-readable change summary from
+// whichever response format is present.
+//
+//	v2: risk_findings.second_opinion.summary
+//	v1: change_summary
+func (r *aiQualityAPIResponse) resolvedChangeSummary() string {
+	summary := r.ChangeSummary
+	if r.isV2() {
+		summary = r.RiskFindings.SecondOpinion.Summary
+	}
+	if verdict := r.CoordinateDiff.Verdict; verdict != "" {
+		summary = summary + " | " + verdict
+	}
+	return summary
+}
+
+// resolvedDistanceMeters returns the GPS drift distance from whichever
+// response format is present.
+//
+//	v2: evidence_findings.geospatial.distance_meters
+//	v1: coordinates_check.distance_meters (nullable — nil treated as 0)
+func (r *aiQualityAPIResponse) resolvedDistanceMeters() float64 {
+	if r.isV2() {
+		return r.EvidenceFindings.Geospatial.DistanceMeters
+	}
+	// v1: nullable pointer
+	if r.CoordinatesCheck.DistanceMeters != nil {
+		return *r.CoordinatesCheck.DistanceMeters
+	}
+	return 0.0
+}
+
+// ── v2 nested types ──────────────────────────────────────────────────────────
+
+type v2AuditReasons struct {
+	FailedChecks        []string `json:"failed_checks"`
+	VerifiedChecks      []string `json:"verified_checks"`
+	ManualReviewReasons []string `json:"manual_review_reasons"`
+}
+
+type v2AuditDecision struct {
+	AuditResult       string         `json:"audit_result"`
+	TrustScore        float64        `json:"trust_score"`
+	RecommendedAction string         `json:"recommended_action"`
+	Reasons           v2AuditReasons `json:"reasons"`
+}
+
+type v2SecondOpinion struct {
+	Used              bool    `json:"used"`
+	Summary           string  `json:"summary"`
+	Provider          string  `json:"provider"`
+	Confidence        float64 `json:"confidence"`
+	ResolutionStatus  string  `json:"resolution_status"`
+	AgreesWithPrimary bool    `json:"agrees_with_primary"`
+}
+
+type v2RiskFindings struct {
+	RiskFlags     []string        `json:"risk_flags"`
+	SecondOpinion v2SecondOpinion `json:"second_opinion"`
+}
+
+type v2Geospatial struct {
+	DistanceMeters float64 `json:"distance_meters"`
+	GPSFound       bool    `json:"gps_found"`
+	GPSMatch       bool    `json:"gps_match"`
+	Trust          string  `json:"trust"`
+}
+
+type v2EvidenceFindings struct {
+	Geospatial v2Geospatial `json:"geospatial"`
 }
 
 // ---- core processing -------------------------------------------------------
@@ -193,9 +294,6 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 	sort.Slice(imageAttachments, func(i, j int) bool {
 		return imageAttachments[i].CreatedAt.Before(imageAttachments[j].CreatedAt)
 	})
-
-	log.Printf("[AIQualityMonitor] incident=%s total_attachments=%d image_attachments=%d",
-		incident.IncidentNumber, len(incident.Attachments), len(imageAttachments))
 
 	if len(imageAttachments) == 0 {
 		return fmt.Errorf("no image attachments found — before_image is required")
@@ -219,12 +317,8 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 	}
 
 	// Format coordinates as "lat,lng" strings (empty string when not set).
-	beforeCoords := formatCoords(incident.Latitude, incident.Longitude)
-	afterCoords := beforeCoords // same location reference; override if resolver coords are stored elsewhere
-
-	log.Printf("[AIQualityMonitor] incident=%s userComment=%q resolverComment=%q coords=%q",
-		incident.IncidentNumber, truncate(userComment, 80),
-		truncate(resolverComment, 80), beforeCoords)
+	// beforeCoords := formatCoords(incident.Latitude, incident.Longitude)
+	// afterCoords := beforeCoords // same location reference; override if resolver coords are stored elsewhere
 
 	// Build multipart body.
 	body := &bytes.Buffer{}
@@ -232,10 +326,10 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 
 	// Text fields.
 	for field, value := range map[string]string{
-		"user_comment":       userComment,
-		"resolver_comment":   resolverComment,
-		"before_coordinates": beforeCoords,
-		"after_coordinates":  afterCoords,
+		"user_comment":     userComment,
+		"resolver_comment": resolverComment,
+		// "before_coordinates": "beforeCoords",
+		// "after_coordinates":  "afterCoords",
 	} {
 		if err := writer.WriteField(field, value); err != nil {
 			writer.Close()
@@ -249,7 +343,6 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 		writer.Close()
 		return fmt.Errorf("before_image (%s): %w", beforeAtt.FileName, err)
 	}
-	log.Printf("[AIQualityMonitor] incident=%s before_image=%s (mime=%s)", incident.IncidentNumber, beforeAtt.FileName, beforeAtt.MimeType)
 
 	// after_image — newest image attachment (only when there are at least two images).
 	if len(imageAttachments) >= 2 {
@@ -258,23 +351,28 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 			writer.Close()
 			return fmt.Errorf("after_image (%s): %w", afterAtt.FileName, err)
 		}
-		log.Printf("[AIQualityMonitor] incident=%s after_image=%s (mime=%s)", incident.IncidentNumber, afterAtt.FileName, afterAtt.MimeType)
+
 	} else {
 		log.Printf("[AIQualityMonitor] incident=%s only one image attachment — after_image not sent", incident.IncidentNumber)
 	}
 
 	writer.Close() // must close before reading body
 
+	if len(imageAttachments) >= 2 {
+		afterAtt := imageAttachments[len(imageAttachments)-1]
+		log.Printf("[AIQualityMonitor]   after_image:  id=%s name=%s mime=%s path=%s size=%d",
+			afterAtt.ID, afterAtt.FileName, afterAtt.MimeType, afterAtt.FilePath, afterAtt.FileSize)
+	}
+
 	// Call the AI API.
-	log.Printf("[AIQualityMonitor] incident=%s calling API endpoint: %s", incident.IncidentNumber, m.cfg.APIEndpoint)
-	apiResp, err := m.callAIAPI(ctx, body, writer.FormDataContentType())
+	apiResp, rawBody, err := m.callAIAPI(ctx, body, writer.FormDataContentType())
 	if err != nil {
 		return fmt.Errorf("AI API call: %w", err)
 	}
 
-	log.Printf("[AIQualityMonitor] incident=%s API response — incident_type=%q resolution_status=%q confidence=%.2f same_location=%v distance_meters=%v risk_flags=%v",
-		incident.IncidentNumber, apiResp.IncidentType, apiResp.ResolutionStatus, apiResp.Confidence,
-		apiResp.SameScene.IsSameLocation, nilableFloat(apiResp.CoordinatesCheck.DistanceMeters), apiResp.RiskFlags)
+	log.Printf("[AIQualityMonitor] incident=%s API response (format=%s) — resolution_status=%q change_summary=%q distance_meters=%.4f",
+		incident.IncidentNumber, map[bool]string{true: "v2", false: "v1"}[apiResp.isV2()],
+		apiResp.resolvedResolutionStatus(), truncate(apiResp.resolvedChangeSummary(), 120), apiResp.resolvedDistanceMeters())
 
 	if apiResp.BeforeAssessment.Summary != "" {
 		log.Printf("[AIQualityMonitor] incident=%s before_assessment: severity=%q summary=%q",
@@ -298,31 +396,34 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 			incident.IncidentNumber, apiResp.CoordinatesCheck.Note)
 	}
 
-	// Resolve distance_meters (null in API means 0 for storage).
-	distanceMeters := 0.0
-	if apiResp.CoordinatesCheck.DistanceMeters != nil {
-		distanceMeters = *apiResp.CoordinatesCheck.DistanceMeters
-	}
+	// Resolve the three stored fields using format-aware helpers.
+	// To revert to v1-only extraction, replace the three helper calls below with:
+	//   resolutionStatus = apiResp.ResolutionStatus
+	//   changeSummary    = apiResp.ChangeSummary
+	//   distanceMeters   = 0.0; if apiResp.CoordinatesCheck.DistanceMeters != nil { distanceMeters = *apiResp.CoordinatesCheck.DistanceMeters }
+	resolutionStatus := apiResp.resolvedResolutionStatus()
+	changeSummary := apiResp.resolvedChangeSummary()
+	distanceMeters := apiResp.resolvedDistanceMeters()
 
 	// Persist AIQualityFeedback.
 	feedback := &models.AIQualityFeedback{
 		IncidentID:       incident.ID,
-		ChangedSummary:   apiResp.ChangeSummary,
-		ResolutionStatus: apiResp.ResolutionStatus,
+		ChangedSummary:   changeSummary,
+		ResolutionStatus: resolutionStatus,
 		DistanceMeters:   distanceMeters,
+		RawResponse:      rawBody,
 	}
 	if err := m.feedbackRepo.Create(ctx, feedback); err != nil {
 		return fmt.Errorf("save AIQualityFeedback: %w", err)
 	}
-	log.Printf("[AIQualityMonitor] incident=%s saved feedback id=%s", incident.IncidentNumber, feedback.ID)
 
 	// Update the incident: mark as AI-verified and apply the AI-derived change summary.
 	updates := map[string]interface{}{
 		"is_ai_verified": true,
 	}
-	if apiResp.ChangeSummary != "" {
-		updates["description"] = apiResp.ChangeSummary
-	}
+	// NOTE: ChangeSummary is already stored in the AIQualityFeedback record.
+	// Do NOT write it to the incident's description — that would overwrite
+	// the original reporter-provided description.
 	if err := m.incidentRepo.UpdateFields(ctx, incident.ID, updates); err != nil {
 		// Non-fatal — the feedback record was already persisted.
 		log.Printf("[AIQualityMonitor] incident=%s WARNING: could not update incident fields: %v",
@@ -332,14 +433,13 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 	}
 
 	log.Printf("[AIQualityMonitor] incident=%s DONE — status=%q distance=%.4fm",
-		incident.IncidentNumber, apiResp.ResolutionStatus, distanceMeters)
+		incident.IncidentNumber, resolutionStatus, distanceMeters)
 	return nil
 }
 
 // writeFileField downloads the attachment from MinIO and writes it as a multipart file field.
 // If the MinIO object is not found it falls back to downloading via the attachment preview API.
 func (m *aiQualityMonitor) writeFileField(ctx context.Context, writer *multipart.Writer, field string, att models.IncidentAttachment) error {
-	log.Printf("[AIQualityMonitor] writeFileField: field=%s fileName=%s filePath=%s", field, att.FileName, att.FilePath)
 
 	part, err := writer.CreateFormFile(field, att.FileName)
 	if err != nil {
@@ -374,9 +474,6 @@ func (m *aiQualityMonitor) writeFileFieldViaURL(ctx context.Context, part io.Wri
 	}
 
 	attachURL := utils.GenerateAttachmentURL(m.cfg.AppProtocol, m.cfg.AppHost, att.ID.String(), token)
-	log.Printf("[AIQualityMonitor] fetching attachment via API: protocol=%s host=%s id=%s", m.cfg.AppProtocol, m.cfg.AppHost, att.ID)
-	log.Println("[AIQualityMonitor] WARNING: using API fallback for attachment download is slower and should be avoided in production — consider setting up APP_TOKEN or ensuring MinIO availability")
-	log.Println("Attachment URL:", attachURL)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, attachURL, nil)
 	if err != nil {
 		return fmt.Errorf("build fallback request: %w", err)
@@ -399,10 +496,10 @@ func (m *aiQualityMonitor) writeFileFieldViaURL(ctx context.Context, part io.Wri
 }
 
 // callAIAPI sends the multipart body to the AI API and parses the JSON response.
-func (m *aiQualityMonitor) callAIAPI(ctx context.Context, body *bytes.Buffer, contentType string) (*aiQualityAPIResponse, error) {
+func (m *aiQualityMonitor) callAIAPI(ctx context.Context, body *bytes.Buffer, contentType string) (*aiQualityAPIResponse, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.cfg.APIEndpoint, body)
 	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
+		return nil, nil, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
@@ -412,26 +509,24 @@ func (m *aiQualityMonitor) callAIAPI(ctx context.Context, body *bytes.Buffer, co
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
+		return nil, nil, fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	rawBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read response body: %w", err)
+		return nil, nil, fmt.Errorf("read response body: %w", err)
 	}
 
-	log.Printf("[AIQualityMonitor] API HTTP %d — body: %s", resp.StatusCode, truncate(string(rawBody), 500))
-
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("API returned HTTP %d: %s", resp.StatusCode, string(rawBody))
+		return nil, nil, fmt.Errorf("API returned HTTP %d: %s", resp.StatusCode, string(rawBody))
 	}
 
 	var apiResp aiQualityAPIResponse
 	if err := json.Unmarshal(rawBody, &apiResp); err != nil {
-		return nil, fmt.Errorf("decode response JSON: %w", err)
+		return nil, nil, fmt.Errorf("decode response JSON: %w", err)
 	}
-	return &apiResp, nil
+	return &apiResp, rawBody, nil
 }
 
 // ---- helpers ---------------------------------------------------------------

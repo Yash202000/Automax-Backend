@@ -93,6 +93,36 @@ func (h *EscalationPolicyHandler) Delete(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "Escalation policy deleted", nil)
 }
 
+// UpdateTargetExcludedUsers — PUT /api/v1/admin/escalation-policies/:id/targets/:target_id/excluded-users
+// Body: { "excluded_user_ids": ["uuid1", "uuid2"] }
+// Replaces the excluded_user_ids for a single step target in-place without
+// requiring the frontend to re-send the entire policy/steps structure.
+func (h *EscalationPolicyHandler) UpdateTargetExcludedUsers(c *fiber.Ctx) error {
+	policyID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid policy ID")
+	}
+	targetID, err := uuid.Parse(c.Params("target_id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid target ID")
+	}
+
+	var req struct {
+		ExcludedUserIDs []string `json:"excluded_user_ids" validate:"omitempty,dive,uuid"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+	if req.ExcludedUserIDs == nil {
+		req.ExcludedUserIDs = []string{}
+	}
+
+	if err := h.service.UpdateTargetExcludedUsers(c.UserContext(), policyID, targetID, req.ExcludedUserIDs); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "Excluded users updated", nil)
+}
+
 // ResolveTargetUsers — POST /api/v1/admin/escalation-policies/resolve-users
 // Body: { "department_id": "...", "role_id": "...", "excluded_user_ids": [...] }
 // Returns the list of users that would be notified given this target config.

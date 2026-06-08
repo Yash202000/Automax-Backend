@@ -1,74 +1,26 @@
 package models
 
 import (
-	"database/sql/driver"
-	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
-// UUIDArray represents an array of UUIDs for PostgreSQL
-type UUIDArray []uuid.UUID
-
-// Value implements the driver.Valuer interface
-func (u UUIDArray) Value() (driver.Value, error) {
-	return json.Marshal(u)
-}
-
-// Scan implements the sql.Scanner interface
-func (u *UUIDArray) Scan(value interface{}) error {
-	if value == nil {
-		*u = nil
-		return nil
-	}
-
-	var bytes []byte
-	switch v := value.(type) {
-	case []byte:
-		bytes = v
-	case string:
-		bytes = []byte(v)
-	default:
-		return fmt.Errorf("unsupported type: %T", value)
-	}
-
-	return json.Unmarshal(bytes, u)
-}
-
-// MarshalJSON implements json.Marshaler
-func (u UUIDArray) MarshalJSON() ([]byte, error) {
-	return json.Marshal([]uuid.UUID(u))
-}
-
-// UnmarshalJSON implements json.Unmarshaler
-func (u *UUIDArray) UnmarshalJSON(data []byte) error {
-	var uuids []uuid.UUID
-	if err := json.Unmarshal(data, &uuids); err != nil {
-		return err
-	}
-	*u = UUIDArray(uuids)
-	return nil
-}
-
 type CallLog struct {
-	ID           uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
-	CallUuid     string         `gorm:"size:36;uniqueIndex" json:"call_uuid,omitempty"`
-	CreatedBy    uuid.UUID      `gorm:"type:uuid;index;not null" json:"created_by"`
-	Creator      *User          `gorm:"foreignKey:CreatedBy" json:"creator,omitempty"`
-	StartAt      *time.Time     `json:"start_at,omitempty"`
-	EndAt        *time.Time     `json:"end_at,omitempty"`
-	Status       string         `gorm:"size:20;not null" json:"status"`
-	Participants UUIDArray      `gorm:"type:text" json:"participants,omitempty"`
-	JoinedUsers  UUIDArray      `gorm:"type:text" json:"joined_users,omitempty"`
-	InvitedUsers UUIDArray      `gorm:"type:text" json:"invited_users,omitempty"`
-	RecordingUrl string         `gorm:"size:500" json:"recording_url,omitempty"`
-	Meta         string         `gorm:"type:json" json:"meta,omitempty"` // JSON string for metadata
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    *time.Time     `json:"updated_at,omitempty"`
-	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
+	ID           uuid.UUID           `gorm:"type:uuid;primary_key" json:"id"`
+	CallUuid     string              `gorm:"size:36;uniqueIndex" json:"call_uuid,omitempty"`
+	CallType     string              `gorm:"size:20" json:"call_type"`
+	Status       string              `gorm:"size:20;not null" json:"status"`
+	StartAt      *time.Time          `json:"start_at,omitempty"`
+	EndAt        *time.Time          `json:"end_at,omitempty"`
+	Meta         datatypes.JSON      `gorm:"type:jsonb" json:"meta,omitempty"`
+	CreatedAt    time.Time           `json:"created_at"`
+	UpdatedAt    *time.Time          `json:"updated_at,omitempty"`
+	DeletedAt    gorm.DeletedAt      `gorm:"index" json:"-"`
+	Participants []CallParticipant   `gorm:"foreignKey:CallLogID" json:"participants,omitempty"`
+	Attachments  []CallLogAttachment `gorm:"foreignKey:CallLogID" json:"-"`
 }
 
 func (c *CallLog) BeforeCreate(tx *gorm.DB) error {
@@ -78,81 +30,164 @@ func (c *CallLog) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
+type CallParticipant struct {
+	ID          uuid.UUID  `gorm:"type:uuid;primary_key" json:"id"`
+	CallLogID   uuid.UUID  `gorm:"type:uuid;index" json:"call_log_id"`
+	PhoneNumber string     `gorm:"size:50;not null" json:"phone_number"`
+	Role        string     `gorm:"size:20" json:"role"`        // "initiator", "recipient", "participant"
+	JoinStatus  string     `gorm:"size:20" json:"join_status"` // "invited", "joined", "declined", "missed"
+	JoinedAt    *time.Time `json:"joined_at,omitempty"`
+	LeftAt      *time.Time `json:"left_at,omitempty"`
+}
+
+func (p *CallParticipant) BeforeCreate(tx *gorm.DB) error {
+	if p.ID == uuid.Nil {
+		p.ID = uuid.New()
+	}
+	return nil
+}
+
+// CallLogAttachment represents a file attached to a call log
+type CallLogAttachment struct {
+	ID        uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
+	CallLogID uuid.UUID `gorm:"type:uuid;index;not null" json:"call_uuid"`
+	FileName  string    `gorm:"size:255;not null" json:"file_name"`
+	FileSize  int64     `json:"file_size"`
+	MimeType  string    `gorm:"size:100" json:"mime_type"`
+	FilePath  string    `gorm:"size:500;not null" json:"file_path"`
+
+	UploadedByID uuid.UUID `gorm:"type:uuid;index;not null" json:"uploaded_by_id"`
+	UploadedBy   *User     `gorm:"foreignKey:UploadedByID" json:"uploaded_by,omitempty"`
+
+	CreatedAt time.Time      `json:"created_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (a *CallLogAttachment) BeforeCreate(tx *gorm.DB) error {
+	if a.ID == uuid.Nil {
+		a.ID = uuid.New()
+	}
+	return nil
+}
+
 type CallLogMeta struct {
-	Duration   int                    `json:"duration,omitempty"`  // Duration in seconds
-	CallType   string                 `json:"call_type,omitempty"` // audio, video, etc.
-	Platform   string                 `json:"platform,omitempty"`  // web, mobile, etc.
+	Duration   int                    `json:"duration,omitempty"`
+	Platform   string                 `json:"platform,omitempty"`
 	DeviceInfo map[string]interface{} `json:"device_info,omitempty"`
-	Quality    string                 `json:"quality,omitempty"` // hd, sd, etc.
+	Quality    string                 `json:"quality,omitempty"`
 	Notes      string                 `json:"notes,omitempty"`
 }
 
-// CallLogCreateRequest for creating a new call log
+// ParticipantData carries a phone/extension for service calls.
+type ParticipantData struct {
+	Phone string
+}
+
+// StartCallParty represents one party in a call start request (registered or guest).
+type StartCallParty struct {
+	Phone string `json:"phone" validate:"required"`
+}
+
+// StartCallRequest is the payload for POST /api/v1/calls/start.
+// Direct call:  provide initiator + recipient.
+// Group call:   provide initiator + participants (array).
+type StartCallRequest struct {
+	CallUUID     string           `json:"call_uuid" validate:"required,max=36"`
+	CallType     string           `json:"call_type" validate:"required,oneof=direct group"`
+	Initiator    StartCallParty   `json:"initiator"`
+	Recipient    *StartCallParty  `json:"recipient,omitempty"`
+	Participants []StartCallParty `json:"participants,omitempty"`
+}
+
+// CallParticipantInput is used in the admin create endpoint.
+// Identify a registered user via Extension, or an external party via PhoneNumber.
+type CallParticipantInput struct {
+	Extension   string `json:"extension,omitempty"`
+	PhoneNumber string `json:"phone_number,omitempty"`
+	Role        string `json:"role" validate:"required,oneof=initiator recipient participant"`
+	JoinStatus  string `json:"join_status,omitempty" validate:"omitempty,oneof=invited joined declined missed ended completed complete in_call cancelled"`
+}
+
+// CallLogCreateRequest for the admin endpoint
 type CallLogCreateRequest struct {
-	CallUuid     string     `json:"call_uuid,omitempty" validate:"omitempty,max=36"`
-	StartAt      *time.Time `json:"start_at,omitempty"`
-	EndAt        *time.Time `json:"end_at,omitempty"`
-	Status       string     `json:"status" validate:"required,max=20"`
-	Participants UUIDArray  `json:"participants,omitempty"`
-	InvitedUsers UUIDArray  `json:"invited_users,omitempty"`
-	RecordingUrl string     `json:"recording_url,omitempty" validate:"omitempty,max=500"`
-	InitiatorID  uuid.UUID  `json:"initiator_id" validate:"required,uuid4"`
-	Meta         string     `json:"meta,omitempty"`
+	CallUuid     string                 `json:"call_uuid,omitempty" validate:"omitempty,max=36"`
+	CallType     string                 `json:"call_type" validate:"required,oneof=direct group"`
+	Status       string                 `json:"status" validate:"required,oneof=initiated ongoing ended missed in_call cancelled completed complete"`
+	StartAt      *time.Time             `json:"start_at,omitempty"`
+	EndAt        *time.Time             `json:"end_at,omitempty"`
+	Meta         datatypes.JSON         `json:"meta,omitempty"`
+	Participants []CallParticipantInput `json:"participants,omitempty"`
 }
 
 // CallLogUpdateRequest for updating a call log
 type CallLogUpdateRequest struct {
-	StartAt      *time.Time `json:"start_at,omitempty"`
-	EndAt        *time.Time `json:"end_at,omitempty"`
-	Status       string     `json:"status,omitempty" validate:"omitempty,max=20"`
-	Participants UUIDArray  `json:"participants,omitempty"`
-	JoinedUsers  UUIDArray  `json:"joined_users,omitempty"`
-	InvitedUsers UUIDArray  `json:"invited_users,omitempty"`
-	RecordingUrl string     `json:"recording_url,omitempty" validate:"omitempty,max=500"`
-	Meta         string     `json:"meta,omitempty"`
+	StartAt *time.Time     `json:"start_at,omitempty"`
+	EndAt   *time.Time     `json:"end_at,omitempty"`
+	Status  string         `json:"status,omitempty" validate:"omitempty,oneof=initiated ongoing ended missed in_call cancelled complete completed"`
+	Meta    datatypes.JSON `json:"meta,omitempty"`
 }
 
-// UserMinimalResponse for minimal user info in call logs
+// UserMinimalResponse for minimal user info embedded in participant responses
 type UserMinimalResponse struct {
 	ID        uuid.UUID `json:"user_id"`
 	Extension string    `json:"extension"`
 }
 
+// CallParticipantResponse for API responses
+type CallParticipantResponse struct {
+	ID          uuid.UUID  `json:"id"`
+	PhoneNumber string     `json:"phone_number"`
+	Name        string     `json:"name,omitempty"`
+	Role        string     `json:"role"`
+	JoinStatus  string     `json:"join_status"`
+	JoinedAt    *time.Time `json:"joined_at,omitempty"`
+	LeftAt      *time.Time `json:"left_at,omitempty"`
+}
+
 // CallLogResponse for API responses
 type CallLogResponse struct {
-	ID           uuid.UUID             `json:"id"`
-	CallUuid     string                `json:"call_uuid,omitempty"`
-	CreatedBy    uuid.UUID             `json:"created_by"`
-	Creator      *UserResponse         `json:"creator,omitempty"`
-	StartAt      *time.Time            `json:"start_at,omitempty"`
-	EndAt        *time.Time            `json:"end_at,omitempty"`
-	Status       string                `json:"status"`
-	Participants []UserMinimalResponse `json:"participants,omitempty"`
-	JoinedUsers  []UserMinimalResponse `json:"joined_users,omitempty"`
-	InvitedUsers []UserMinimalResponse `json:"invited_users,omitempty"`
-	RecordingUrl string                `json:"recording_url,omitempty"`
-	Meta         string                `json:"meta,omitempty"`
-	CreatedAt    time.Time             `json:"created_at"`
-	UpdatedAt    *time.Time            `json:"updated_at,omitempty"`
+	ID           uuid.UUID                 `json:"id"`
+	CallUuid     string                    `json:"call_uuid,omitempty"`
+	CallType     string                    `json:"call_type"`
+	Status       string                    `json:"status"`
+	StartAt      *time.Time                `json:"start_at,omitempty"`
+	EndAt        *time.Time                `json:"end_at,omitempty"`
+	RecordingUrl string                    `json:"recording_url,omitempty"`
+	Meta         datatypes.JSON            `json:"meta,omitempty"`
+	Participants []CallParticipantResponse `json:"participants"`
+	CreatedAt    time.Time                 `json:"created_at"`
+	UpdatedAt    *time.Time                `json:"updated_at,omitempty"`
+}
+
+type CallLogAttachmentResponse struct {
+	ID         uuid.UUID     `json:"id"`
+	CallLogID  uuid.UUID     `json:"call_uuid"`
+	FileName   string        `json:"file_name"`
+	FileSize   int64         `json:"file_size"`
+	MimeType   string        `json:"mime_type"`
+	URL        string        `json:"url,omitempty"`
+	UploadedBy *UserResponse `json:"uploaded_by,omitempty"`
+	CreatedAt  time.Time     `json:"created_at"`
 }
 
 // CallLogListItem is the slim response returned by the listing API.
-// It contains only the fields needed for list views.
 type CallLogListItem struct {
 	ID                  uuid.UUID `json:"id"`
 	CallUuid            string    `json:"call_uuid"`
+	CallType            string    `json:"call_type"`
 	Status              string    `json:"status"`
-	Direction           string    `json:"direction"`             // "incoming" or "outgoing"
-	OtherPartyName      string    `json:"other_party_name"`      // full name of the other participant
-	OtherPartyExtension string    `json:"other_party_extension"` // SIP extension of the other participant
-	Duration            int       `json:"duration"`              // seconds; 0 when call is ongoing
+	Direction           string    `json:"direction"`
+	OtherPartyName      string    `json:"other_party_name"`
+	OtherPartyExtension string    `json:"other_party_extension"`
+	OtherPartyPhone     string    `json:"other_party_phone,omitempty"`
+	Duration            int       `json:"duration"`
+	RecordingUrl        string    `json:"recording_url"`
 	CreatedAt           time.Time `json:"created_at"`
 }
 
 // CallLogFilter for filtering call logs
 type CallLogFilter struct {
-	CreatedBy     *uuid.UUID `json:"created_by" validate:"omitempty,uuid4"`
-	Status        string     `json:"status" validate:"omitempty,oneof=ongoing completed failed"`
+	Status        string     `json:"status" validate:"omitempty,oneof=initiated ongoing ended missed in_call cancelled complete completed"`
 	StartDate     *time.Time `json:"start_date" validate:"omitempty"`
 	EndDate       *time.Time `json:"end_date" validate:"omitempty"`
 	Search        string     `json:"search" validate:"omitempty,max=255"`
@@ -168,49 +203,19 @@ type CallLogStats struct {
 	CallsByStatus map[string]int64 `json:"calls_by_status"`
 }
 
-func ToCallLogResponse(callLog *CallLog, userRepo interface{}) CallLogResponse {
-	resp := CallLogResponse{
-		ID:           callLog.ID,
-		CallUuid:     callLog.CallUuid,
-		CreatedBy:    callLog.CreatedBy,
-		StartAt:      callLog.StartAt,
-		EndAt:        callLog.EndAt,
-		Status:       callLog.Status,
-		RecordingUrl: callLog.RecordingUrl,
-		Meta:         callLog.Meta,
-		CreatedAt:    callLog.CreatedAt,
-		UpdatedAt:    callLog.UpdatedAt,
+func ToCallLogAttachmentResponse(a *CallLogAttachment, url string) CallLogAttachmentResponse {
+	resp := CallLogAttachmentResponse{
+		ID:        a.ID,
+		CallLogID: a.CallLogID,
+		FileName:  a.FileName,
+		FileSize:  a.FileSize,
+		MimeType:  a.MimeType,
+		URL:       url,
+		CreatedAt: a.CreatedAt,
 	}
-
-	if callLog.Creator != nil {
-		creatorResp := ToUserResponse(callLog.Creator)
-		resp.Creator = &creatorResp
+	if a.UploadedBy != nil {
+		uploaderResp := ToUserResponse(a.UploadedBy)
+		resp.UploadedBy = &uploaderResp
 	}
-
-	// Note: For participants, joined_users, and invited_users,
-	// you would need to fetch the users separately and populate them
-	// This is a simplified version - in a real implementation,
-	// you'd want to preload or fetch these users
-
 	return resp
-}
-
-// ToCallLogResponseWithoutCreator creates a response without creator details
-func ToCallLogResponseWithoutCreator(callLog *CallLog) CallLogResponse {
-	return CallLogResponse{
-		ID:           callLog.ID,
-		CallUuid:     callLog.CallUuid,
-		CreatedBy:    callLog.CreatedBy,
-		Status:       callLog.Status,
-		Participants: []UserMinimalResponse{},
-		JoinedUsers:  []UserMinimalResponse{},
-		InvitedUsers: []UserMinimalResponse{},
-		StartAt:      callLog.StartAt,
-		EndAt:        callLog.EndAt,
-
-		RecordingUrl: callLog.RecordingUrl,
-		Meta:         callLog.Meta,
-		CreatedAt:    callLog.CreatedAt,
-		UpdatedAt:    callLog.UpdatedAt,
-	}
 }

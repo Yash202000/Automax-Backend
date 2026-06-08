@@ -13,6 +13,7 @@ import (
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
+	internalUtils "github.com/automax/backend/internal/utils"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
@@ -26,22 +27,40 @@ type IncidentHandler struct {
 	userService         services.UserService
 	userRepo            repository.UserRepository
 	incidentRepo        repository.IncidentRepository
+	workflowRepo        repository.WorkflowRepository
+	locationRepo        repository.LocationRepository
+	classificationRepo  repository.ClassificationRepository
 	storage             *storage.MinIOStorage
 	presenceService     services.PresenceService
 	readyToCloseService services.ReadyToCloseService
+	ivrSmsLinkRepo      repository.IvrSmsLinkRepository
+	publicFeedbackRepo  repository.IncidentPublicFeedbackRepository
 	validator           *validator.Validate
 }
 
-func NewIncidentHandler(service services.IncidentService, userService services.UserService, userRepo repository.UserRepository, incidentRepo repository.IncidentRepository, storage *storage.MinIOStorage, presenceService services.PresenceService) *IncidentHandler {
+func NewIncidentHandler(service services.IncidentService, userService services.UserService, userRepo repository.UserRepository, incidentRepo repository.IncidentRepository, workflowRepo repository.WorkflowRepository, locationRepo repository.LocationRepository, classificationRepo repository.ClassificationRepository, storage *storage.MinIOStorage, presenceService services.PresenceService) *IncidentHandler {
 	return &IncidentHandler{
-		service:         service,
-		userService:     userService,
-		userRepo:        userRepo,
-		incidentRepo:    incidentRepo,
-		storage:         storage,
-		presenceService: presenceService,
-		validator:       validator.New(),
+		service:            service,
+		userService:        userService,
+		userRepo:           userRepo,
+		incidentRepo:       incidentRepo,
+		workflowRepo:       workflowRepo,
+		locationRepo:       locationRepo,
+		classificationRepo: classificationRepo,
+		storage:            storage,
+		presenceService:    presenceService,
+		validator:          validator.New(),
 	}
+}
+
+// SetIvrSmsLinkRepo wires in the IvrSmsLinkRepository for SMS link lifecycle management.
+func (h *IncidentHandler) SetIvrSmsLinkRepo(repo repository.IvrSmsLinkRepository) {
+	h.ivrSmsLinkRepo = repo
+}
+
+// SetPublicFeedbackRepo wires in the feedback repository for submitted-status checks.
+func (h *IncidentHandler) SetPublicFeedbackRepo(repo repository.IncidentPublicFeedbackRepository) {
+	h.publicFeedbackRepo = repo
 }
 
 // SetReadyToCloseService wires in the ReadyToCloseService for duration-options endpoint.
@@ -136,10 +155,15 @@ func (h *IncidentHandler) GetIncident(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		// Not a UUID — try resolving by incident number
+		inc, lookupErr := h.incidentRepo.FindByIncidentNumber(c.UserContext(), idStr)
+		if lookupErr != nil {
+			return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not found")
+		}
+		id = inc.ID
 	}
 
-	log.Printf("Generate Signed url: %s", utils.GenerateIncidentToken(idStr, 24*time.Hour))
+	log.Printf("Generate Signed url: %s", utils.GenerateIncidentToken(id.String(), 24*time.Hour))
 	incident, err := h.service.GetIncident(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not found")
@@ -169,6 +193,36 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 
 	if filter.Limit < 1 || filter.Limit > 100 {
 		filter.Limit = 20
+	}
+
+	// QueryParser cannot parse plain YYYY-MM-DD into *time.Time; do it manually.
+	if startStr := c.Query("start_date"); startStr != "" {
+		if t, err := time.Parse("2006-01-02", startStr); err == nil {
+			filter.StartDate = &t
+		} else if t, err := time.Parse(time.RFC3339, startStr); err == nil {
+			filter.StartDate = &t
+		}
+	}
+	if endStr := c.Query("end_date"); endStr != "" {
+		if t, err := time.Parse("2006-01-02", endStr); err == nil {
+			// Include the full end day up to 23:59:59.
+			endOfDay := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, t.Location())
+			filter.EndDate = &endOfDay
+		} else if t, err := time.Parse(time.RFC3339, endStr); err == nil {
+			filter.EndDate = &t
+		}
+	}
+
+	// Parse repeatable cf=key:value query params for flat custom_fields JSON filtering.
+	// e.g. ?cf=caller_identity:1314245&cf=caller_identity_2:1111111 → AND both conditions.
+	for _, cfParam := range c.Context().QueryArgs().PeekMulti("cf") {
+		raw := string(cfParam)
+		if idx := strings.IndexByte(raw, ':'); idx > 0 && idx < len(raw)-1 {
+			filter.CustomFieldFilters = append(filter.CustomFieldFilters, models.CustomFieldFilter{
+				Key:   raw[:idx],
+				Value: raw[idx+1:],
+			})
+		}
 	}
 
 	incidents, total, err := h.service.ListIncidents(c.UserContext(), filter)
@@ -222,11 +276,35 @@ func (h *IncidentHandler) FindByIDWithLast6DigitValidation(c *fiber.Ctx) error {
 		}
 	}
 
+	// Check the IVR SMS link record: is it still active, and has the citizen already submitted?
+	if h.ivrSmsLinkRepo != nil {
+		tokenHash := utils.HashToken(token)
+		link, err := h.ivrSmsLinkRepo.FindByTokenHash(c.UserContext(), tokenHash, id)
+		if err != nil || link == nil {
+			log.Printf("IVR SMS link not found for token hash %s incident %s: %v", tokenHash, idStr, err)
+			return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Link not recognized")
+		}
+		if !link.IsActive {
+			return utils.ErrorResponse(c, fiber.StatusGone, "A newer link has been sent. Please use the latest SMS link.")
+		}
+		if link.SubmittedAt != nil {
+			// Citizen already submitted — tell the frontend to show the "Update Submitted" screen.
+			return c.Status(fiber.StatusAlreadyReported).JSON(fiber.Map{
+				"data": map[string]interface{}{
+					"success":           false,
+					"already_submitted": true,
+					"error":             "You have already submitted your information for this incident.",
+					// "error":             "You have already submitted your information for this incident.",
+				},
+			})
+		}
+	}
+
 	log.Println("incident last6 digit op start")
 	incident, err := h.service.FindByIDWithLast6DigitValidation(c.UserContext(), id, last6Digits)
 	if err != nil {
 		log.Printf("Err fetching Incident via last 6 digit and id %v ", err)
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not exist or already updated")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Phone number is not recognized")
 	}
 
 	authResponse, err := h.userService.GenerateTokenViaUserID(c.UserContext(), incident.ReporterID)
@@ -248,6 +326,88 @@ func (h *IncidentHandler) FindByIDWithLast6DigitValidation(c *fiber.Ctx) error {
 		"auth_data": authResponse,
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, "Incident retrieved", data)
+}
+
+// FindByIDForFeedback validates a closure feedback link and returns minimal incident info.
+// Public endpoint — no authentication required.
+// Input: path param :id (incident UUID), query param signed_token (incident/feedback token).
+// Returns 410 Gone if feedback has already been submitted.
+func (h *IncidentHandler) FindByIDForFeedback(c *fiber.Ctx) error {
+	idStr := c.Params("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+	}
+
+	token := c.Query("signed_token")
+	if token == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Token is required")
+	}
+
+	// Determine token type and validate; also extract feedbackID when available.
+	var feedbackID *uuid.UUID
+
+	if parsed, uuidErr := uuid.Parse(token); uuidErr == nil {
+		// Plain UUID — treat as feedbackID directly, no HMAC validation.
+		feedbackID = &parsed
+	} else if parts := strings.Split(token, "|"); len(parts) == 5 && parts[0] == "fb" {
+		// fb-format token: fb|feedbackID|incidentID|expiresAt|hmac
+		if _, valErr := utils.ValidateFeedbackToken(token, parts[1], idStr); valErr != nil {
+			log.Printf("[FindByIDForFeedback] fb-token validation failed for incident %s: %v", idStr, valErr)
+			switch {
+			case errors.Is(valErr, utils.ErrExpired):
+				return utils.ErrorResponse(c, fiber.StatusGone, "Link has expired")
+			default:
+				return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Invalid or tampered token")
+			}
+		}
+		if parsed, pErr := uuid.Parse(parts[1]); pErr == nil {
+			feedbackID = &parsed
+		}
+	} else {
+		// 3-part incident token
+		if valErr := utils.ValidateIncidentToken(token, idStr); valErr != nil {
+			log.Printf("[FindByIDForFeedback] token validation failed for incident %s: %v", idStr, valErr)
+			switch valErr {
+			case utils.ErrExpired:
+				return utils.ErrorResponse(c, fiber.StatusGone, "Link has expired")
+			case utils.ErrInvalid, utils.ErrIDMismatch:
+				return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Invalid or tampered token")
+			default:
+				return utils.ErrorResponse(c, fiber.StatusBadRequest, "Malformed token")
+			}
+		}
+	}
+
+	// Check if feedback has already been submitted — if so the link is invalid.
+	if h.publicFeedbackRepo != nil {
+		var f *models.IncidentPublicFeedback
+		if feedbackID != nil {
+			f, _ = h.publicFeedbackRepo.FindByID(c.UserContext(), *feedbackID)
+		} else {
+			f, _ = h.publicFeedbackRepo.FindLatestByIncidentID(c.UserContext(), id)
+		}
+		if f != nil && f.SubmittedAt != nil {
+			log.Printf("[FindByIDForFeedback] feedback already submitted for incident %s feedbackID %s", idStr, f.ID)
+			return utils.ErrorResponse(c, fiber.StatusGone, "Feedback has already been submitted")
+		}
+	}
+
+	incident, err := h.incidentRepo.FindByIDWithRelations(c.UserContext(), id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not found")
+	}
+
+	status := ""
+	if incident.CurrentState != nil {
+		status = incident.CurrentState.Name
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Incident retrieved", fiber.Map{
+		"incident_number": incident.IncidentNumber,
+		"description":     incident.Description,
+		"status":          status,
+	})
 }
 
 func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
@@ -429,9 +589,10 @@ func (h *IncidentHandler) GetAvailableTransitions(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	roleIDs := h.getUserRoleIDs(c)
 
-	transitions, err := h.service.GetAvailableTransitions(c.UserContext(), id, roleIDs)
+	transitions, err := h.service.GetAvailableTransitions(c.UserContext(), id, userID, roleIDs)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -535,6 +696,23 @@ func (h *IncidentHandler) DeleteComment(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Comment deleted", nil)
+}
+
+// Feedback
+
+func (h *IncidentHandler) ListFeedbacks(c *fiber.Ctx) error {
+	incidentIDStr := c.Params("id")
+	incidentID, err := uuid.Parse(incidentIDStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
+	}
+
+	feedbacks, err := h.service.ListFeedbacks(c.UserContext(), incidentID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Feedbacks retrieved", feedbacks)
 }
 
 // Attachments
@@ -1055,7 +1233,9 @@ func (h *IncidentHandler) IncrementEvaluation(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
-	if err := h.service.IncrementEvaluationCount(c.UserContext(), id); err != nil {
+	// TriggerEvaluation validates the state, checks for active integration triggers,
+	// increments the evaluation count, and fires the transition triggers.
+	if err := h.service.TriggerEvaluation(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
@@ -1065,7 +1245,7 @@ func (h *IncidentHandler) IncrementEvaluation(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Evaluation count incremented", complaint)
+	return utils.SuccessResponse(c, fiber.StatusOK, "Evaluation triggered", complaint)
 }
 
 // Query handlers
@@ -1286,4 +1466,173 @@ func (h *IncidentHandler) UpdateClosedIncidentSummary(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Closed incident summary updated", updatedIncident)
+}
+
+// RequestCitizenInfo sends an SMS to the citizen requesting additional information (attachments, location, comments)
+// for an incident that lacks required fields like attachments.
+func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
+	idStr := c.Params("id")
+	incidentID, err := uuid.Parse(idStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+
+	// Fetch incident with relations to get attachments, reporter info
+	incident, err := h.incidentRepo.FindByIDWithRelations(c.UserContext(), incidentID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not found")
+	}
+
+	// Determine phone number to send SMS to
+	mobile := incident.CreatedByMobile
+	if mobile == "" && incident.ReporterID != nil {
+		if reporter, err := h.userRepo.FindByID(c.UserContext(), *incident.ReporterID); err == nil && reporter.Phone != "" {
+			mobile = reporter.Phone
+		}
+	}
+	if mobile == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "No citizen mobile number found for this incident")
+	}
+
+	// Build secure SMS link — generate the raw token first so we can hash and store it.
+	const ivrSmsDuration = 48 * time.Hour
+	rawToken := utils.GenerateIncidentToken(incidentID.String(), ivrSmsDuration)
+	smsLink := utils.BuildSMSLinkFromToken(c.UserContext(), incidentID.String(), rawToken)
+
+	smsMessage := fmt.Sprintf(
+		"Dear Citizen, please provide additional details for your reported incident (%s) using the following secure link: %s",
+		incident.IncidentNumber,
+		smsLink,
+	)
+
+	now := time.Now()
+	smsErr := internalUtils.SendSMS(mobile, smsMessage)
+	status := "sent"
+	if smsErr != nil {
+		status = "failed"
+		log.Printf("REQUEST-INFO-SMS: Failed for incident %s to %s: %v", incident.IncidentNumber, mobile, smsErr)
+	} else {
+		log.Printf("REQUEST-INFO-SMS: Sent successfully to %s for incident %s", mobile, incident.IncidentNumber)
+	}
+
+	// Track IVR SMS link: deactivate old links, create new record.
+	if h.ivrSmsLinkRepo != nil && smsErr == nil {
+		_ = h.ivrSmsLinkRepo.DeactivateAllForIncident(c.UserContext(), incidentID)
+		_ = h.ivrSmsLinkRepo.Create(c.UserContext(), &models.IvrSmsLink{
+			IncidentID: incidentID,
+			TokenHash:  utils.HashToken(rawToken),
+			SentBy:     &userID,
+			SentAt:     now,
+			ExpiresAt:  now.Add(ivrSmsDuration),
+			IsActive:   true,
+		})
+		// Log revision so agents can see the SMS send event in the audit trail.
+		_ = h.service.CreateRevision(c.UserContext(), incidentID,
+			models.RevisionActionIVRSmsSent,
+			fmt.Sprintf("Agent requested additional information from citizen via SMS to %s", mobile),
+			nil, userID)
+	}
+
+	// Log notification
+	notification := &models.NotificationLog{
+		Channel:    "sms",
+		Direction:  "outbound",
+		Category:   "sent",
+		Language:   "en",
+		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
+		Subject:    "Request Additional Information",
+		Body:       smsMessage,
+		Status:     status,
+		Provider:   "twilio",
+		IsRead:     false,
+		SentBy:     &userID,
+		SentAt:     &now,
+	}
+	if smsErr != nil {
+		notification.ErrorMessage = smsErr.Error()
+	}
+	if err := h.incidentRepo.CreateNotification(c.UserContext(), notification); err != nil {
+		log.Printf("REQUEST-INFO-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
+	}
+
+	if smsErr != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, fmt.Sprintf("Failed to send SMS: %v", smsErr))
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "SMS sent successfully to citizen", fiber.Map{
+		"mobile":          mobile,
+		"incident_number": incident.IncidentNumber,
+		"status":          status,
+	})
+}
+
+// ForceState directly sets current_state_id on an incident, bypassing workflow
+// transition logic. Intended for system-level bridge syncs only.
+// Accepts either state_id (UUID) or state_name, resolves and validates against
+// the incident's assigned workflow before applying.
+func (h *IncidentHandler) ForceState(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
+	}
+	var req struct {
+		StateID   string `json:"state_id"`
+		StateName string `json:"state_name"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+	}
+	if req.StateID == "" && req.StateName == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Provide state_id or state_name")
+	}
+
+	// Fetch incident to get its assigned workflow
+	incident, err := h.incidentRepo.FindByID(c.UserContext(), id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not found")
+	}
+
+	var resolvedStateID uuid.UUID
+
+	if req.StateID != "" {
+		// Resolve by ID — verify it belongs to this incident's workflow
+		stateID, err := uuid.Parse(req.StateID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid state_id")
+		}
+		state, err := h.workflowRepo.FindStateByID(c.UserContext(), stateID)
+		if err != nil || state == nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, "State not found")
+		}
+		if state.WorkflowID != incident.WorkflowID {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest,
+				"State does not belong to this incident's workflow")
+		}
+		resolvedStateID = stateID
+	} else {
+		// Resolve by name — look up within the incident's workflow states
+		states, err := h.workflowRepo.ListStatesByWorkflowID(c.UserContext(), incident.WorkflowID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch workflow states")
+		}
+		for _, s := range states {
+			if s.Name == req.StateName {
+				resolvedStateID = s.ID
+				break
+			}
+		}
+		if resolvedStateID == uuid.Nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest,
+				"State '"+req.StateName+"' not found in this incident's workflow")
+		}
+	}
+
+	if err := h.incidentRepo.UpdateFields(c.UserContext(), id, map[string]interface{}{
+		"current_state_id": resolvedStateID,
+	}); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to update state")
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "State updated", nil)
 }

@@ -12,6 +12,7 @@ type FeedbackTemplateRepository interface {
 	Create(ctx context.Context, feedbackTemplate *models.FeedbackTemplate) error
 	FindByID(ctx context.Context, id uuid.UUID) (*models.FeedbackTemplate, error)
 	FindByWorkflowTransitionID(ctx context.Context, workflowTransitionID uuid.UUID) ([]models.FeedbackTemplate, error)
+	FeedbackTemplateExist(ctx context.Context, feedback string, workflowTransitionID uuid.UUID) (bool, error)
 	List(ctx context.Context, includeInactive bool) ([]models.FeedbackTemplate, error)
 	Update(ctx context.Context, feedbackTemplate *models.FeedbackTemplate) error
 	Delete(ctx context.Context, id uuid.UUID) error
@@ -47,6 +48,17 @@ func (r *feedbackTemplateRepository) FindByWorkflowTransitionID(ctx context.Cont
 		Where("workflow_transition_id = ? AND is_active = ?", workflowTransitionID, true).
 		Find(&feedbackTemplates).Error
 	return feedbackTemplates, err
+}
+
+func (r *feedbackTemplateRepository) FeedbackTemplateExist(ctx context.Context, feedback string, workflowTransitionID uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&models.FeedbackTemplate{}).
+		Where("feedback_text = ? AND workflow_transition_id = ?", feedback, workflowTransitionID).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 func (r *feedbackTemplateRepository) List(ctx context.Context, includeInactive bool) ([]models.FeedbackTemplate, error) {

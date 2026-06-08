@@ -9,23 +9,26 @@ import (
 
 // Report represents a saved report configuration
 type Report struct {
-	ID           uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
-	Name         string         `gorm:"size:255;not null" json:"name"`
-	Description  string         `gorm:"type:text" json:"description"`
-	DataSource   string         `gorm:"size:50;not null;index" json:"data_source"` // incidents, users, workflows, etc.
-	Columns      string         `gorm:"type:text" json:"columns"`                  // JSON array of column configs
-	Filters      string         `gorm:"type:text" json:"filters"`                  // JSON array of filter configs
-	Sorting      string         `gorm:"type:text" json:"sorting"`                  // JSON object for sorting config
-	Grouping     string         `gorm:"type:text" json:"grouping"`                 // JSON object for grouping config
-	OutputFormat string         `gorm:"size:20;default:'table'" json:"output_format"`
-	IsPublic     bool           `gorm:"default:false" json:"is_public"`
-	IsScheduled  bool           `gorm:"default:false" json:"is_scheduled"`
-	Schedule     string         `gorm:"type:text" json:"schedule"` // JSON object for schedule config
-	CreatedByID  uuid.UUID      `gorm:"type:uuid;index" json:"created_by_id"`
-	CreatedBy    *User          `gorm:"foreignKey:CreatedByID" json:"created_by,omitempty"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
-	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
+	ID            uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	Name          string         `gorm:"size:255;not null" json:"name"`
+	NameAr        string         `gorm:"size:255" json:"name_ar"`
+	Description   string         `gorm:"type:text" json:"description"`
+	TimestampKey  string         `gorm:"type:text" json:"timestamp_key"`
+	DescriptionAr string         `gorm:"type:text" json:"description_ar"`
+	DataSource    string         `gorm:"size:50;not null;index" json:"data_source"` // incidents, users, workflows, etc.
+	Columns       string         `gorm:"type:text" json:"columns"`                  // JSON array of column configs
+	Filters       string         `gorm:"type:text" json:"filters"`                  // JSON array of filter configs
+	Sorting       string         `gorm:"type:text" json:"sorting"`                  // JSON object for sorting config
+	Grouping      string         `gorm:"type:text" json:"grouping"`                 // JSON object for grouping config
+	OutputFormat  string         `gorm:"size:20;default:'table'" json:"output_format"`
+	IsPublic      bool           `gorm:"default:false" json:"is_public"`
+	IsScheduled   bool           `gorm:"default:false" json:"is_scheduled"`
+	Schedule      string         `gorm:"type:text" json:"schedule"` // JSON object for schedule config
+	CreatedByID   uuid.UUID      `gorm:"type:uuid;index" json:"created_by_id"`
+	CreatedBy     *User          `gorm:"foreignKey:CreatedByID" json:"created_by,omitempty"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (r *Report) BeforeCreate(tx *gorm.DB) error {
@@ -101,18 +104,24 @@ type ReportCreateRequestConfig struct {
 }
 
 type ReportCreateRequest struct {
-	Name        string                    `json:"name" validate:"required,max=255"`
-	Description string                    `json:"description"`
-	DataSource  string                    `json:"data_source" validate:"required,oneof=incidents action_logs users users_performance workflows departments locations classifications requests"`
-	Config      ReportCreateRequestConfig `json:"config" validate:"required"`
-	IsPublic    bool                      `json:"is_public"`
+	Name          string                    `json:"name" validate:"required,max=255"`
+	NameAr        string                    `json:"name_ar" validate:"max=255"`
+	Description   string                    `json:"description"`
+	TimestampKey  string                    `json:"timestamp_key"`
+	DescriptionAr string                    `json:"description_ar"`
+	DataSource    string                    `json:"data_source" validate:"required"`
+	Config        ReportCreateRequestConfig `json:"config" validate:"required"`
+	IsPublic      bool                      `json:"is_public"`
 }
 
 type ReportUpdateRequest struct {
-	Name        string                     `json:"name" validate:"omitempty,max=255"`
-	Description string                     `json:"description"`
-	Config      *ReportCreateRequestConfig `json:"config"`
-	IsPublic    *bool                      `json:"is_public"`
+	Name          string                     `json:"name" validate:"omitempty,max=255"`
+	NameAr        string                     `json:"name_ar" validate:"max=255"`
+	TimestampKey  string                     `json:"timestamp_key"`
+	Description   string                     `json:"description"`
+	DescriptionAr string                     `json:"description_ar"`
+	Config        *ReportCreateRequestConfig `json:"config"`
+	IsPublic      *bool                      `json:"is_public"`
 }
 
 type ReportExecuteRequest struct {
@@ -129,6 +138,7 @@ type ReportExportRequest struct {
 	Filters    []ReportFilterConfig `json:"filters"`
 	Sorting    []ReportSortConfig   `json:"sorting"`
 	Format     string               `json:"format" validate:"required,oneof=xlsx pdf json"`
+	Timezone   string               `json:"timezone"` // IANA timezone e.g. "Asia/Kolkata", "Asia/Riyadh"
 	Options    *ReportExportOptions `json:"options"`
 }
 
@@ -136,6 +146,7 @@ type ReportExportOptions struct {
 	Title            string `json:"title"`
 	IncludeFilters   bool   `json:"includeFilters"`
 	IncludeTimestamp bool   `json:"includeTimestamp"`
+	Timezone         string `json:"timezone"` // IANA timezone e.g. "Asia/Kolkata", "Asia/Riyadh"
 }
 
 // ReportQueryRequest is used for ad-hoc report queries without saving
@@ -146,6 +157,7 @@ type ReportQueryRequest struct {
 	Sorting    []ReportSortConfig   `json:"sorting"`
 	Page       int                  `json:"page"`
 	Limit      int                  `json:"limit"`
+	Timezone   string               `json:"timezone"` // IANA timezone e.g. "Asia/Kolkata", "Asia/Riyadh"
 	Options    *ReportQueryOptions  `json:"options"`
 }
 
@@ -180,18 +192,21 @@ type ReportConfigOptions struct {
 }
 
 type ReportResponse struct {
-	ID          string               `json:"id"`
-	Name        string               `json:"name"`
-	Description string               `json:"description"`
-	DataSource  string               `json:"data_source"`
-	Config      ReportTemplateConfig `json:"config"`
-	IsPublic    bool                 `json:"is_public"`
-	IsSystem    bool                 `json:"is_system"`
-	CreatedBy   *UserBasicResponse   `json:"created_by,omitempty"`
-	SharedWith  []SharedUserResponse `json:"shared_with,omitempty"`
-	CanEdit     bool                 `json:"can_edit"`
-	CreatedAt   string               `json:"created_at"`
-	UpdatedAt   string               `json:"updated_at"`
+	ID            string               `json:"id"`
+	Name          string               `json:"name"`
+	NameAr        string               `json:"name_ar,omitempty"`
+	TimestampKey  string               `json:"timestamp_key"`
+	Description   string               `json:"description"`
+	DescriptionAr string               `json:"description_ar,omitempty"`
+	DataSource    string               `json:"data_source"`
+	Config        ReportTemplateConfig `json:"config"`
+	IsPublic      bool                 `json:"is_public"`
+	IsSystem      bool                 `json:"is_system"`
+	CreatedBy     *UserBasicResponse   `json:"created_by,omitempty"`
+	SharedWith    []SharedUserResponse `json:"shared_with,omitempty"`
+	CanEdit       bool                 `json:"can_edit"`
+	CreatedAt     string               `json:"created_at"`
+	UpdatedAt     string               `json:"updated_at"`
 }
 
 type SharedUserResponse struct {

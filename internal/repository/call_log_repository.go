@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/automax/backend/internal/models"
@@ -14,11 +16,19 @@ type CallLogRepository interface {
 	FindByID(ctx context.Context, id uuid.UUID) (*models.CallLog, error)
 	FindByCallUUID(ctx context.Context, callUUID string) (*models.CallLog, error)
 	Update(ctx context.Context, callLog *models.CallLog) error
+	UpdateByField(ctx context.Context, id uuid.UUID, fields map[string]interface{}) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, filter *models.CallLogFilter) ([]models.CallLog, int64, error)
 	ListSummary(ctx context.Context, filter *models.CallLogFilter) ([]models.CallLog, int64, error)
 	GetStats(ctx context.Context) (*models.CallLogStats, error)
-	FindByUserID(ctx context.Context, userID uuid.UUID, page, limit int) ([]models.CallLog, int64, error)
+	FindByPhone(ctx context.Context, phone string, page, limit int) ([]models.CallLog, int64, error)
+	CreateWithParticipants(ctx context.Context, callLog *models.CallLog, participants []*models.CallParticipant) error
+	CreateParticipant(ctx context.Context, p *models.CallParticipant) error
+	FindParticipant(ctx context.Context, callLogID uuid.UUID, phone string) (*models.CallParticipant, error)
+	UpdateParticipant(ctx context.Context, p *models.CallParticipant) error
+	UpdateParticipantsLeftAt(ctx context.Context, callLogID uuid.UUID, leftAt time.Time) error
+	CreateAttachment(ctx context.Context, attachment *models.CallLogAttachment) error
+	FindAttachmentByID(ctx context.Context, id uuid.UUID) (*models.CallLogAttachment, error)
 }
 
 type callLogRepository struct {
@@ -36,7 +46,8 @@ func (r *callLogRepository) Create(ctx context.Context, callLog *models.CallLog)
 func (r *callLogRepository) FindByID(ctx context.Context, id uuid.UUID) (*models.CallLog, error) {
 	var callLog models.CallLog
 	err := r.db.WithContext(ctx).
-		Preload("Creator").
+		Preload("Participants").
+		Preload("Attachments").
 		First(&callLog, "id = ?", id).Error
 	if err != nil {
 		return nil, err
@@ -47,7 +58,7 @@ func (r *callLogRepository) FindByID(ctx context.Context, id uuid.UUID) (*models
 func (r *callLogRepository) FindByCallUUID(ctx context.Context, callUUID string) (*models.CallLog, error) {
 	var callLog models.CallLog
 	err := r.db.WithContext(ctx).
-		Preload("Creator").
+		Preload("Participants").
 		First(&callLog, "call_uuid = ?", callUUID).Error
 	if err != nil {
 		return nil, err
@@ -56,7 +67,28 @@ func (r *callLogRepository) FindByCallUUID(ctx context.Context, callUUID string)
 }
 
 func (r *callLogRepository) Update(ctx context.Context, callLog *models.CallLog) error {
-	return r.db.WithContext(ctx).Save(callLog).Error
+	return r.db.WithContext(ctx).Omit("Participants").Save(callLog).Error
+}
+
+func (r *callLogRepository) UpdateByField(ctx context.Context, id uuid.UUID, fields map[string]interface{}) error {
+	if len(fields) == 0 {
+		return errors.New("no fields provided for update")
+	}
+
+	result := r.db.WithContext(ctx).
+		Model(&models.CallLog{}).
+		Where("id = ?", id).
+		Updates(fields)
+
+	if result.Error != nil {
+		return fmt.Errorf("failed to update call log: %w", result.Error)
+	}
+
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("call log with id %s not found", id)
+	}
+
+	return nil
 }
 
 func (r *callLogRepository) Delete(ctx context.Context, id uuid.UUID) error {
@@ -69,10 +101,6 @@ func (r *callLogRepository) List(ctx context.Context, filter *models.CallLogFilt
 
 	query := r.db.WithContext(ctx).Model(&models.CallLog{})
 
-	// Apply filters
-	if filter.CreatedBy != nil {
-		query = query.Where("created_by = ?", *filter.CreatedBy)
-	}
 	if filter.Status != "" {
 		query = query.Where("status = ?", filter.Status)
 	}
@@ -84,23 +112,27 @@ func (r *callLogRepository) List(ctx context.Context, filter *models.CallLogFilt
 	}
 	if filter.Search != "" {
 		searchPattern := "%" + filter.Search + "%"
-		query = query.Where("call_uuid ILIKE ? OR recording_url ILIKE ?", searchPattern, searchPattern)
+		query = query.Where("call_uuid ILIKE ?", searchPattern)
 	}
 	if filter.ParticipantID != nil {
 		query = query.Where(
-			"participants IS NOT NULL AND participants::jsonb @> ?::jsonb",
-			`["`+filter.ParticipantID.String()+`"]`,
+			`id IN (
+				SELECT cp.call_log_id FROM call_participants cp
+				JOIN users u ON cp.phone_number = u.extension OR cp.phone_number = u.phone
+				WHERE u.id = ?
+			)`,
+			*filter.ParticipantID,
 		)
 	}
-	// Count total
+
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	// Apply pagination
 	offset := (filter.Page - 1) * filter.Limit
 	err := query.
-		Preload("Creator").
+		Preload("Participants").
+		Preload("Attachments").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(filter.Limit).
@@ -112,18 +144,12 @@ func (r *callLogRepository) List(ctx context.Context, filter *models.CallLogFilt
 	return callLogs, total, nil
 }
 
-// ListSummary fetches call logs with only the columns required for the list view.
-// Creator is preloaded so the service can derive direction and other-party details.
-// Participant JSON arrays are NOT expanded here — that is done in the service layer.
 func (r *callLogRepository) ListSummary(ctx context.Context, filter *models.CallLogFilter) ([]models.CallLog, int64, error) {
 	var callLogs []models.CallLog
 	var total int64
 
 	query := r.db.WithContext(ctx).Model(&models.CallLog{})
 
-	if filter.CreatedBy != nil {
-		query = query.Where("created_by = ?", *filter.CreatedBy)
-	}
 	if filter.Status != "" {
 		query = query.Where("status = ?", filter.Status)
 	}
@@ -135,10 +161,12 @@ func (r *callLogRepository) ListSummary(ctx context.Context, filter *models.Call
 	}
 	if filter.ParticipantID != nil {
 		query = query.Where(
-			"created_by = ? OR participants::jsonb @> ?::jsonb OR invited_users::jsonb @> ?::jsonb",
+			`id IN (
+				SELECT cp.call_log_id FROM call_participants cp
+				JOIN users u ON cp.phone_number = u.extension OR cp.phone_number = u.phone
+				WHERE u.id = ?
+			)`,
 			*filter.ParticipantID,
-			`["`+filter.ParticipantID.String()+`"]`,
-			`["`+filter.ParticipantID.String()+`"]`,
 		)
 	}
 
@@ -148,8 +176,9 @@ func (r *callLogRepository) ListSummary(ctx context.Context, filter *models.Call
 
 	offset := (filter.Page - 1) * filter.Limit
 	err := query.
-		Select("id, call_uuid, created_by, start_at, end_at, status, participants, invited_users, meta, created_at").
-		Preload("Creator").
+		Select("id, call_uuid, call_type, start_at, end_at, status, created_at").
+		Preload("Participants").
+		Preload("Attachments").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(filter.Limit).
@@ -161,10 +190,8 @@ func (r *callLogRepository) ListSummary(ctx context.Context, filter *models.Call
 func (r *callLogRepository) GetStats(ctx context.Context) (*models.CallLogStats, error) {
 	stats := &models.CallLogStats{}
 
-	// Total calls
 	r.db.WithContext(ctx).Model(&models.CallLog{}).Count(&stats.TotalCalls)
 
-	// Calls by status
 	var statusStats []struct {
 		Status string
 		Count  int64
@@ -179,7 +206,6 @@ func (r *callLogRepository) GetStats(ctx context.Context) (*models.CallLogStats,
 		stats.CallsByStatus[stat.Status] = stat.Count
 	}
 
-	// Recent calls (last 30 days)
 	thirtyDaysAgo := time.Now().AddDate(0, 0, -30)
 	r.db.WithContext(ctx).Model(&models.CallLog{}).
 		Where("created_at >= ?", thirtyDaysAgo).
@@ -188,28 +214,21 @@ func (r *callLogRepository) GetStats(ctx context.Context) (*models.CallLogStats,
 	return stats, nil
 }
 
-func (r *callLogRepository) FindByUserID(ctx context.Context, userID uuid.UUID, page, limit int) ([]models.CallLog, int64, error) {
+func (r *callLogRepository) FindByPhone(ctx context.Context, phone string, page, limit int) ([]models.CallLog, int64, error) {
 	var callLogs []models.CallLog
 	var total int64
 
-	// Convert UUID to JSON format for comparison
-	userIDJSON := `"` + userID.String() + `"`
-
-	// Build query to find calls where user is creator or participant
-	// Using JSON contains operator (@>) since participants/joined_users/invited_users are stored as JSON text
 	query := r.db.WithContext(ctx).Model(&models.CallLog{}).
-		Where("created_by = ? OR participants::jsonb @> ?::jsonb OR joined_users::jsonb @> ?::jsonb OR invited_users::jsonb @> ?::jsonb",
-			userID, "["+userIDJSON+"]", "["+userIDJSON+"]", "["+userIDJSON+"]")
+		Where("id IN (SELECT call_log_id FROM call_participants WHERE phone_number = ?)", phone)
 
-	// Count total
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	// Apply pagination
 	offset := (page - 1) * limit
 	err := query.
-		Preload("Creator").
+		Preload("Participants").
+		Preload("Attachments").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(limit).
@@ -219,4 +238,62 @@ func (r *callLogRepository) FindByUserID(ctx context.Context, userID uuid.UUID, 
 	}
 
 	return callLogs, total, nil
+}
+
+func (r *callLogRepository) CreateWithParticipants(ctx context.Context, callLog *models.CallLog, participants []*models.CallParticipant) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(callLog).Error; err != nil {
+			return err
+		}
+		for _, p := range participants {
+			p.CallLogID = callLog.ID
+			if err := tx.Create(p).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (r *callLogRepository) CreateParticipant(ctx context.Context, p *models.CallParticipant) error {
+	return r.db.WithContext(ctx).Create(p).Error
+}
+
+func (r *callLogRepository) FindParticipant(ctx context.Context, callLogID uuid.UUID, phone string) (*models.CallParticipant, error) {
+	var p models.CallParticipant
+	if err := r.db.WithContext(ctx).
+		Where("call_log_id = ? AND phone_number = ?", callLogID, phone).
+		First(&p).Error; err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+func (r *callLogRepository) UpdateParticipant(ctx context.Context, p *models.CallParticipant) error {
+	return r.db.WithContext(ctx).Save(p).Error
+}
+
+func (r *callLogRepository) UpdateParticipantsLeftAt(ctx context.Context, callLogID uuid.UUID, leftAt time.Time) error {
+	return r.db.WithContext(ctx).
+		Model(&models.CallParticipant{}).
+		Where("call_log_id = ? AND join_status = ?", callLogID, "joined").
+		Update("left_at", leftAt).
+		Error
+}
+
+// Attachments
+
+func (r *callLogRepository) CreateAttachment(ctx context.Context, attachment *models.CallLogAttachment) error {
+	return r.db.WithContext(ctx).Create(attachment).Error
+}
+
+func (r *callLogRepository) FindAttachmentByID(ctx context.Context, id uuid.UUID) (*models.CallLogAttachment, error) {
+	var attachment models.CallLogAttachment
+	err := r.db.WithContext(ctx).
+		Preload("UploadedBy").
+		First(&attachment, "id = ?", id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &attachment, nil
 }

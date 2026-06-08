@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
@@ -59,7 +62,7 @@ func main() {
 		log.Fatalf("Failed to connect to MinIO: %v", err)
 	}
 
-	jwtManager := utils.NewJWTManager(cfg.JWT.Secret, cfg.JWT.ExpireHour)
+	jwtManager := utils.NewJWTManager(cfg.JWT.Secret, cfg.JWT.ExpireHour, cfg.JWT.RefreshExpireHour, cfg.JWT.RememberExpireHour)
 	ssoJWTManager := utils.NewSSOJWTManager(cfg.SSOPrivateKey, cfg.SSOIssuerURL)
 	sessionStore := database.NewSessionStore(redisClient)
 
@@ -89,6 +92,8 @@ func main() {
 	goalRepo := repository.NewGoalRepository(db)
 	aiQualityFeedbackRepo := repository.NewAIQualityFeedbackRepository(db)
 	feedbackTemplateRepo := repository.NewFeedbackTemplateRepository(db)
+	publicFeedbackRepo := repository.NewIncidentPublicFeedbackRepository(db)
+	ivrSmsLinkRepo := repository.NewIvrSmsLinkRepository(db)
 	commentTemplateRepo := repository.NewCommentTemplateRepository(db)
 
 	// Initialize WebSocket hub and start it
@@ -102,7 +107,8 @@ func main() {
 	actionLogService := services.NewActionLogService(actionLogRepo)
 	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo, userRepo, minioStorage)
 	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg, actionLogService, nil, redisClient)
-	otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo, userRepo, userService, sessionStore, jwtManager)
+	otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo, userRepo, userService, sessionStore, jwtManager, roleRepo)
+	//otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo, userRepo, userService, roleRepo)
 
 	// Initialize LDAP service
 	ldapService, err := services.NewLDAPService(cfg)
@@ -111,11 +117,11 @@ func main() {
 	}
 	defer ldapService.Close()
 
-	callLogService := services.NewCallLogService(callLogRepo, userRepo)
-	workflowService := services.NewWorkflowService(workflowRepo, roleRepo, departmentRepo, classificationRepo, db)
+	callLogService := services.NewCallLogService(callLogRepo, userRepo, minioStorage)
+	workflowService := services.NewWorkflowService(workflowRepo, roleRepo, departmentRepo, classificationRepo, userRepo, db)
 	incidentService := services.NewIncidentService(incidentRepo, incidentMergeRepo, workflowRepo, userRepo, departmentRepo, classificationRepo, rejectionLogRepo, roleRepo, minioStorage, db, wsHub)
 	incidentMergeService := services.NewIncidentMergeService(incidentMergeRepo, incidentRepo, workflowRepo, roleRepo, locationRepo, classificationRepo, db, wsHub)
-	reportService := services.NewReportService(reportRepo, rejectionLogRepo)
+	reportService := services.NewReportService(reportRepo, rejectionLogRepo, locationRepo, classificationRepo, workflowRepo)
 	reportTemplateService := services.NewReportTemplateService(reportTemplateRepo, reportRepo)
 	applicationLinkService := services.NewApplicationLinkService(applicationLinkRepo)
 	settingsService := services.NewSettingsService(settingsRepo)
@@ -123,11 +129,14 @@ func main() {
 	escalationPolicyService := services.NewEscalationPolicyService(escalationPolicyRepo, userRepo)
 	escalationService := services.NewEscalationService(escalationRepo, escalationPolicyRepo, incidentRepo, workflowRepo, userRepo, notificationService)
 	escalationService.SetPolicyService(escalationPolicyService)
+	escalationService.SetFrontendURL(cfg.FrontendURL)
 	escalationGroupService := services.NewEscalationGroupService(escalationGroupRepo, incidentRepo, userRepo, notificationService, cfg.Escalation)
+	escalationGroupService.SetFrontendURL(cfg.FrontendURL)
 	escalationGroupService.SetPolicyService(escalationPolicyService)
 	fcmService := services.NewFCMService(repository.NewDeviceTokenRepository(db), notificationLogRepo)
 	callerSentimentService := services.NewCallerSentimentService(callerSentimentRepo)
 	feedbackTemplateService := services.NewFeedbackTemplateService(feedbackTemplateRepo)
+	publicFeedbackService := services.NewIncidentPublicFeedbackService(publicFeedbackRepo, notificationService, incidentService, workflowRepo, classificationRepo)
 	commentTemplateService := services.NewCommentTemplateService(commentTemplateRepo)
 
 	// Goal management services
@@ -152,9 +161,28 @@ func main() {
 	incidentService.SetNotificationService(notificationService)
 	incidentService.SetUserService(userService)
 	incidentService.SetFCMService(fcmService)
+	incidentService.SetIvrSmsLinkRepo(ivrSmsLinkRepo)
+	incidentService.SetActionExecutor(services.NewActionExecutor(incidentRepo, userRepo, notificationService))
+	incidentService.SetPublicFeedbackRepo(publicFeedbackRepo)
 
-	// Initialize and start SLA Monitor (checks every 5 minutes)
-	slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, escalationGroupService, readyToCloseService, 5*time.Minute)
+	// External Integration
+	integrationRepo := repository.NewIntegrationRepository(db)
+	integrationService := services.NewIntegrationService(integrationRepo, cfg.Integration.SecretsKey)
+	integrationExecutor := services.NewIntegrationExecutor(integrationRepo, integrationService)
+	incidentService.SetIntegrationExecutor(integrationExecutor)
+
+	// Initialize and start SLA Monitor.
+	// Interval is controlled by SLA_MONITOR_INTERVAL_MINUTES (default 5).
+	slaIntervalMinutes := 5
+	if v := os.Getenv("SLA_MONITOR_INTERVAL_MINUTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			slaIntervalMinutes = n
+		} else {
+			log.Printf("Warning: invalid SLA_MONITOR_INTERVAL_MINUTES=%q, using default %d min", v, slaIntervalMinutes)
+		}
+	}
+	log.Printf("SLA Monitor interval: %d minutes", slaIntervalMinutes)
+	slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, escalationGroupService, readyToCloseService, time.Duration(slaIntervalMinutes)*time.Minute)
 	ctx := context.Background()
 	slaMonitor.Start(ctx)
 	defer slaMonitor.Stop()
@@ -163,6 +191,14 @@ func main() {
 	aiQualityMonitor := services.NewAIQualityMonitor(aiQualityFeedbackRepo, incidentRepo, minioStorage, cfg.AIQuality)
 	aiQualityMonitor.Start(ctx)
 	defer aiQualityMonitor.Stop()
+
+	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+	if strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
+		// Initialize and start Auto-Assign Monitor
+		autoAssignMonitor := services.NewAutoAssignMonitor(incidentService, cfg.AutoAssign)
+		autoAssignMonitor.Start(ctx)
+		defer autoAssignMonitor.Stop()
+	}
 	// Initialize validator
 	validate := validator.New()
 
@@ -180,10 +216,12 @@ func main() {
 	departmentHandler := handlers.NewDepartmentHandler(departmentRepo)
 	roleHandler := handlers.NewRoleHandler(roleRepo, permissionRepo)
 	actionLogHandler := handlers.NewActionLogHandler(actionLogService, validate)
-	callLogHandler := handlers.NewCallLogHandler(callLogService, validate, userService)
+	callLogHandler := handlers.NewCallLogHandler(callLogService, validate, userService, minioStorage)
 	workflowHandler := handlers.NewWorkflowHandler(workflowService, actionLogService)
-	incidentHandler := handlers.NewIncidentHandler(incidentService, userService, userRepo, incidentRepo, minioStorage, presenceService)
+	incidentHandler := handlers.NewIncidentHandler(incidentService, userService, userRepo, incidentRepo, workflowRepo, locationRepo, classificationRepo, minioStorage, presenceService)
 	incidentHandler.SetReadyToCloseService(readyToCloseService)
+	incidentHandler.SetIvrSmsLinkRepo(ivrSmsLinkRepo)
+	incidentHandler.SetPublicFeedbackRepo(publicFeedbackRepo)
 	incidentMergeHandler := handlers.NewIncidentMergeHandler(incidentMergeService, userRepo)
 	websocketHandler := handlers.NewWebSocketHandler(wsHub)
 	reportHandler := handlers.NewReportHandler(reportService)
@@ -192,11 +230,12 @@ func main() {
 	applicationLinkHandler := handlers.NewApplicationLinkHandler(applicationLinkService, minioStorage)
 	settingsHandler := handlers.NewSettingsHandler(settingsService)
 	jwksHandler := handlers.NewJWKSHandler(ssoJWTManager)
-	ssoHandler := handlers.NewSSOHandler(ssoJWTManager, jwtManager, sessionStore, userRepo, applicationLinkRepo, cfg.SSOFrontendURL)
+	ssoHandler := handlers.NewSSOHandler(ssoJWTManager, jwtManager, sessionStore, userRepo, applicationLinkRepo, userService, otpService, cfg.SSOFrontendURL, cfg.NafathAPIBaseURL)
+	notificationTemplateService := services.NewNotificationTemplateService(notificationTemplateRepo, db)
 	notificationHandler := handlers.NewNotificationHandler(notificationService, minioStorage)
-	templateHandler := handlers.NewNotificationTemplateHandler(notificationTemplateRepo)
+	templateHandler := handlers.NewNotificationTemplateHandler(notificationTemplateService)
 	attachmentHandler := handlers.NewAttachmentHandler(incidentService, notificationService, minioStorage)
-	otpHandler := handlers.NewOTPHandler(otpService)
+	otpHandler := handlers.NewOTPHandler(otpService, userService)
 	escalationHandler := handlers.NewEscalationHandler(escalationService)
 	escalationGroupHandler := handlers.NewEscalationGroupHandler(escalationGroupService)
 	escalationPolicyHandler := handlers.NewEscalationPolicyHandler(escalationPolicyService, userRepo, departmentRepo)
@@ -204,7 +243,8 @@ func main() {
 	commentTemplateHandler := handlers.NewCommentTemplateHandler(commentTemplateService)
 	rejectionLogHandler := handlers.NewRejectionLogHandler(rejectionLogRepo)
 	incidentFeedbackHandler := handlers.NewIncidentFeedbackHandler(incidentRepo)
-	aiQualityFeedbackHandler := handlers.NewAIQualityFeedbackHandler(aiQualityFeedbackRepo, incidentService, userRepo)
+	publicFeedbackHandler := handlers.NewIncidentPublicFeedbackHandler(publicFeedbackService, actionLogService)
+	aiQualityFeedbackHandler := handlers.NewAIQualityFeedbackHandler(aiQualityFeedbackRepo)
 	fcmHandler := handlers.NewFCMHandler(fcmService)
 	sentimentHandler := handlers.NewCallerSentimentHandler(callerSentimentService)
 	goalHandler := handlers.NewGoalHandler(goalService, actionLogService)
@@ -219,6 +259,10 @@ func main() {
 	goalTemplateRepo := repository.NewGoalTemplateRepository(db)
 	goalTemplateService := services.NewGoalTemplateService(goalTemplateRepo)
 	goalTemplateHandler := handlers.NewGoalTemplateHandler(goalTemplateService)
+
+	// Integration handler
+	integrationHandler := handlers.NewIntegrationHandler(integrationService, integrationExecutor, integrationRepo, incidentRepo)
+	webhookHandler := handlers.NewWebhookHandler(integrationService, incidentService)
 
 	// License management
 	licenseRepo := repository.NewLicenseRepository(db)
@@ -235,6 +279,14 @@ func main() {
 
 	// Wire license service into user service for user limit enforcement
 	userService.SetLicenseService(licenseService, licenseRepo)
+
+	// Initialize GIS handler
+	gisService := services.NewGISService()
+	gisHandler := handlers.NewGISHandler(gisService)
+
+	// Initialize EPM handler
+	epmHandler := handlers.NewEPMHandler(userRepo, jwtManager, sessionStore)
+	epmIncidentHandler := handlers.NewEPMIncidentHandler(userRepo, locationRepo, classificationRepo, incidentRepo, workflowRepo, lookupRepo, jwtManager, sessionStore, minioStorage, db)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore, userRepo)
@@ -268,6 +320,11 @@ func main() {
 	app.Get("/.well-known/jwks.json", jwksHandler.GetJWKS)
 	app.Get("/sso/callback", ssoHandler.Callback)
 
+	// EPM external API routes
+	app.Post("/Momra/API/EPM/Login", epmHandler.Login)
+	app.Post("/Momra/API/EPM/InsertIncidents", epmIncidentHandler.InsertIncidents)
+	app.Get("/Momra/API/EPM/GetMomraIncidentStatusDetails", epmIncidentHandler.GetMomraIncidentStatusDetails)
+
 	api := app.Group("/api")
 	v1 := api.Group("/v1")
 
@@ -297,10 +354,13 @@ func main() {
 	// Webhook routes (no authentication required - external services)
 	webhooks := v1.Group("/webhooks")
 	webhooks.Post("/sendgrid/inbound", notificationHandler.SendGridInboundWebhook)
+	webhooks.Post("/automax-callback", webhookHandler.HandleAutomaxCallback)
 
 	ivr := v1.Group("/ivr/incident")
 	// Public: validates signed URL + last 6 digits, returns incident + session token
 	ivr.Get("/sms-link/:id", incidentHandler.FindByIDWithLast6DigitValidation)
+	// Public: validates signed URL from normal closure SMS, returns incident info for feedback page
+	ivr.Get("/feedback/:id", incidentHandler.FindByIDForFeedback)
 	// Protected: require valid IVR session token issued by the GET route above
 	// ivr.Put("/sms-link/update/:id", authMiddleware.ValidateIvrSmsToken(), incidentHandler.UpdateIncidentViaIvrSms)
 	// ivr.Post("/sms-link/attachment/:id", authMiddleware.ValidateIvrSmsToken(), incidentHandler.UploadAttachmentIvrSms)
@@ -308,7 +368,10 @@ func main() {
 	// Auth routes
 	auth := v1.Group("/auth")
 	auth.Post("/register", userHandler.Register)
+	auth.Post("/sso/register", ssoHandler.SSORegister)
 	auth.Post("/login", loginRateLimitMiddleware, userHandler.Login)
+	auth.Post("/sso/login", ssoHandler.SSOLogin)
+	auth.Get("/sso/validate", ssoHandler.SSOValidate)
 	auth.Post("/refresh", userHandler.RefreshToken)
 	auth.Post("/logout", authMiddleware.Authenticate(), userHandler.Logout)
 	auth.Post("/unblock-user", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:unblock"), userHandler.UnblockUser)
@@ -322,6 +385,8 @@ func main() {
 	ldap.Post("/test", authMiddleware.Authenticate(), authMiddleware.RequirePermission("admin:ldap"), ldapHandler.TestConnection)
 	ldap.Post("/search", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:view"), ldapHandler.SearchUser)
 	ldap.Post("/sync", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:update"), ldapHandler.SyncUser)
+	ldap.Post("/users", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:view"), ldapHandler.ListADUsers)
+	ldap.Post("/register", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:create"), ldapHandler.RegisterADUser)
 	ldap.Get("/status", authMiddleware.Authenticate(), authMiddleware.RequirePermission("admin:ldap"), ldapHandler.GetLDAPStatus)
 
 	// SSO routes
@@ -355,12 +420,14 @@ func main() {
 	incidents.Put("/:id", authMiddleware.RequirePermission("incidents:update"), incidentHandler.UpdateIncident)
 	incidents.Delete("/:id", authMiddleware.RequirePermission("incidents:delete"), incidentHandler.DeleteIncident)
 	incidents.Post("/:id/transition", authMiddleware.RequirePermission("incidents:transition"), incidentHandler.ExecuteTransition)
+	incidents.Put("/:id/state", authMiddleware.RequirePermission("incidents:transition"), incidentHandler.ForceState)
 	incidents.Post("/:id/convert-to-request", authMiddleware.RequirePermission("incidents:update"), incidentHandler.ConvertToRequest)
 	incidents.Get("/:id/can-convert", authMiddleware.RequirePermission("incidents:view"), incidentHandler.CanConvertToRequest)
 	incidents.Get("/:id/available-transitions", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetAvailableTransitions)
 	incidents.Get("/:id/history", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetTransitionHistory)
 	incidents.Post("/:id/comments", authMiddleware.RequirePermission("incidents:comment"), incidentHandler.AddComment)
 	incidents.Get("/:id/comments", authMiddleware.RequirePermission("incidents:view"), incidentHandler.ListComments)
+	incidents.Get("/:id/feedbacks", authMiddleware.RequirePermission("incidents:view"), incidentHandler.ListFeedbacks)
 	incidents.Put("/:id/comments/:comment_id", authMiddleware.RequirePermission("incidents:comment"), incidentHandler.UpdateComment)
 	incidents.Delete("/:id/comments/:comment_id", authMiddleware.RequirePermission("incidents:comment"), incidentHandler.DeleteComment)
 	incidents.Post("/:id/attachments", authMiddleware.RequirePermission("incidents:update"), incidentHandler.UploadAttachment)
@@ -370,7 +437,7 @@ func main() {
 	incidents.Get("/:id/revisions", authMiddleware.RequirePermission("incidents:view"), incidentHandler.ListRevisions)
 	incidents.Get("/:id/rejection-logs", authMiddleware.RequirePermission("incidents:view"), rejectionLogHandler.GetByIncident)
 	incidents.Get("/:id/ai-quality", authMiddleware.RequirePermission("incidents:view"), aiQualityFeedbackHandler.GetByIncident)
-	incidents.Post("/:id/reopen", authMiddleware.RequirePermission("incidents:transition"), aiQualityFeedbackHandler.ReopenIncident)
+	incidents.Post("/:id/request-info", authMiddleware.RequirePermission("incidents:request-info"), incidentHandler.RequestCitizenInfo)
 
 	aiQuality := v1.Group("/ai-quality", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureAIQuality)))
 	aiQuality.Get("/", authMiddleware.RequirePermission("incidents:view"), aiQualityFeedbackHandler.GetAll)
@@ -379,6 +446,13 @@ func main() {
 	feedback.Get("/", authMiddleware.RequirePermission("incidents:view"), incidentFeedbackHandler.ListAllFeedback)
 	feedback.Post("/:id", authMiddleware.RequirePermission("incidents:update"), incidentFeedbackHandler.CreateFeedback)
 	feedback.Get("/:id", authMiddleware.RequirePermission("incidents:view"), incidentFeedbackHandler.ListFeedback)
+
+	publicFeedback := v1.Group("/public-feedback")
+	publicFeedback.Post("/:incidentID", authMiddleware.Authenticate(), authMiddleware.RequirePermission("incidents:update"), publicFeedbackHandler.Create)
+	publicFeedback.Get("/", authMiddleware.Authenticate(), authMiddleware.RequirePermission("incidents:view"), publicFeedbackHandler.ListAll)
+	publicFeedback.Get("/:incidentID", authMiddleware.Authenticate(), authMiddleware.RequirePermission("incidents:view"), publicFeedbackHandler.ListByIncident)
+	publicFeedback.Get("/:incidentID/init", publicFeedbackHandler.Init)
+	publicFeedback.Put("/:incidentID/submit", publicFeedbackHandler.Submit)
 
 	// Closed incident editing (requires special permission)
 	incidents.Patch("/:id/closed-summary", authMiddleware.RequirePermission("incidents:edit-closed"), incidentHandler.UpdateClosedIncidentSummary)
@@ -413,6 +487,7 @@ func main() {
 	complaints.Get("/:id/history", authMiddleware.RequirePermission("complaints:view"), incidentHandler.GetTransitionHistory)
 	complaints.Post("/:id/comments", authMiddleware.RequirePermission("complaints:comment"), incidentHandler.AddComment)
 	complaints.Get("/:id/comments", authMiddleware.RequirePermission("complaints:view"), incidentHandler.ListComments)
+	complaints.Get("/:id/feedbacks", authMiddleware.RequirePermission("complaints:view"), incidentHandler.ListFeedbacks)
 	complaints.Put("/:id/comments/:comment_id", authMiddleware.RequirePermission("complaints:comment"), incidentHandler.UpdateComment)
 	complaints.Delete("/:id/comments/:comment_id", authMiddleware.RequirePermission("complaints:comment"), incidentHandler.DeleteComment)
 	complaints.Post("/:id/attachments", authMiddleware.RequirePermission("complaints:update"), incidentHandler.UploadAttachment)
@@ -591,6 +666,7 @@ func main() {
 	workflows.Post("/:id/duplicate", authMiddleware.RequirePermission("workflows:create"), workflowHandler.DuplicateWorkflow)
 	workflows.Post("/:id/classifications", authMiddleware.RequirePermission("workflows:update"), workflowHandler.AssignClassifications)
 	workflows.Get("/:id/initial-state", authMiddleware.RequirePermission("workflows:view"), workflowHandler.GetInitialState)
+	workflows.Get("/:id/initial-state/matching-users", authMiddleware.RequirePermission("workflows:view"), workflowHandler.GetInitialStateMatchingUsers)
 	workflows.Get("/:id/export", authMiddleware.RequirePermission("workflows:view"), workflowHandler.ExportWorkflow)
 	workflows.Post("/import", authMiddleware.RequirePermission("workflows:create"), workflowHandler.ImportWorkflow)
 
@@ -599,7 +675,7 @@ func main() {
 	workflows.Get("/:id/states", authMiddleware.RequirePermission("workflows:view"), workflowHandler.ListStates)
 	workflows.Put("/:id/states/:state_id", authMiddleware.RequirePermission("workflows:update"), workflowHandler.UpdateState)
 	workflows.Delete("/:id/states/:state_id", authMiddleware.RequirePermission("workflows:update"), workflowHandler.DeleteState)
-	workflows.Get("/states/:state_id/transitions", authMiddleware.RequirePermission("workflows:view"), workflowHandler.GetTransitionsFromState)
+	workflows.Get("/states/:state_id/transitions", authMiddleware.RequirePermission("workflows:view"), workflowHandler.GetTransitionsToState)
 
 	// Workflow transition routes (with action logging)
 	workflows.Post("/:id/transitions", authMiddleware.RequirePermission("workflows:update"), workflowHandler.CreateTransition)
@@ -642,6 +718,61 @@ func main() {
 	feedbackTemplates.Get("/:id", authMiddleware.RequirePermission("workflows:view"), feedbackTemplateHandler.GetByID)
 	feedbackTemplates.Put("/:id", authMiddleware.RequirePermission("workflows:update"), feedbackTemplateHandler.Update)
 	feedbackTemplates.Delete("/:id", authMiddleware.RequirePermission("workflows:update"), feedbackTemplateHandler.Delete)
+
+	// Notification Template routes (admin managed: email/SMS templates with bilingual support)
+	notifTemplates := admin.Group("/notification-templates", middleware.ActionLogger(middleware.ActionLoggerConfig{
+		Enabled:     true,
+		LogService:  actionLogService,
+		SkipMethods: []string{"GET"},
+	}))
+	notifTemplates.Post("/", authMiddleware.RequirePermission("templates:create"), templateHandler.Create)
+	notifTemplates.Get("/by-code/:code", authMiddleware.RequirePermission("templates:read"), templateHandler.GetByCode)
+	notifTemplates.Get("/by-transition/:transitionId", authMiddleware.RequirePermission("templates:read"), templateHandler.GetByTransition)
+	notifTemplates.Get("/available-variables", authMiddleware.RequirePermission("templates:read"), templateHandler.GetAvailableVariables)
+	notifTemplates.Get("/", authMiddleware.RequirePermission("templates:read"), templateHandler.List)
+	notifTemplates.Get("/:id", authMiddleware.RequirePermission("templates:read"), templateHandler.GetByID)
+	notifTemplates.Put("/:id", authMiddleware.RequirePermission("templates:update"), templateHandler.Update)
+	notifTemplates.Patch("/:id/toggle", authMiddleware.RequirePermission("templates:update"), templateHandler.Toggle)
+	notifTemplates.Delete("/:id", authMiddleware.RequirePermission("templates:delete"), templateHandler.Delete)
+
+	// External Integration routes
+	integrationVars := admin.Group("/integration-variables")
+	integrationVars.Post("/", authMiddleware.RequirePermission("admin:integration"), integrationHandler.CreateVariable)
+	integrationVars.Get("/", authMiddleware.RequirePermission("admin:integration"), integrationHandler.ListVariables)
+	integrationVars.Delete("/:id", authMiddleware.RequirePermission("admin:integration"), integrationHandler.DeleteVariable)
+
+	integrationScripts := admin.Group("/integration-scripts")
+	integrationScripts.Post("/", authMiddleware.RequirePermission("admin:integration"), integrationHandler.CreateScript)
+	integrationScripts.Get("/", authMiddleware.RequirePermission("admin:integration"), integrationHandler.ListScripts)
+	integrationScripts.Get("/:id", authMiddleware.RequirePermission("admin:integration"), integrationHandler.GetScript)
+	integrationScripts.Put("/:id", authMiddleware.RequirePermission("admin:integration"), integrationHandler.UpdateScript)
+	integrationScripts.Delete("/:id", authMiddleware.RequirePermission("admin:integration"), integrationHandler.DeleteScript)
+	integrationScripts.Post("/:id/test", authMiddleware.RequirePermission("admin:integration"), integrationHandler.TestScript)
+	integrationScripts.Get("/:id/logs", authMiddleware.RequirePermission("admin:integration"), integrationHandler.ListLogsByScript)
+
+	stateIntegrations := admin.Group("/workflow-states")
+	stateIntegrations.Post("/:stateId/triggers", authMiddleware.RequirePermission("admin:integration"), integrationHandler.CreateStateTrigger)
+	stateIntegrations.Get("/:stateId/triggers", authMiddleware.RequirePermission("admin:integration"), integrationHandler.ListStateTriggers)
+	stateIntegrations.Put("/:stateId/triggers/:id", authMiddleware.RequirePermission("admin:integration"), integrationHandler.UpdateStateTrigger)
+	stateIntegrations.Delete("/:stateId/triggers/:id", authMiddleware.RequirePermission("admin:integration"), integrationHandler.DeleteStateTrigger)
+
+	transitionIntegrations := admin.Group("/workflow-transitions")
+	transitionIntegrations.Post("/:transitionId/triggers", authMiddleware.RequirePermission("admin:integration"), integrationHandler.CreateTransitionTrigger)
+	transitionIntegrations.Get("/:transitionId/triggers", authMiddleware.RequirePermission("admin:integration"), integrationHandler.ListTransitionTriggers)
+	transitionIntegrations.Put("/:transitionId/triggers/:id", authMiddleware.RequirePermission("admin:integration"), integrationHandler.UpdateTransitionTrigger)
+	transitionIntegrations.Delete("/:transitionId/triggers/:id", authMiddleware.RequirePermission("admin:integration"), integrationHandler.DeleteTransitionTrigger)
+
+	// Per-incident integration log + bridge viewer (accessible to incident handlers)
+	v1.Get("/incidents/:incidentId/integration-logs", authMiddleware.Authenticate(), authMiddleware.RequirePermission("incidents:view"), integrationHandler.ListLogsByIncident)
+	v1.Get("/incidents/:incidentId/bridges", authMiddleware.Authenticate(), authMiddleware.RequirePermission("incidents:view"), integrationHandler.ListBridgesByIncident)
+	v1.Post("/incidents/:incidentId/bridges", authMiddleware.Authenticate(), authMiddleware.RequirePermission("incidents:update"), integrationHandler.CreateBridgeForIncident)
+
+	// Webhook callback config management
+	webhookConfigs := admin.Group("/webhook-configs")
+	webhookConfigs.Post("/", authMiddleware.RequirePermission("admin:integration"), integrationHandler.CreateWebhookConfig)
+	webhookConfigs.Get("/", authMiddleware.RequirePermission("admin:integration"), integrationHandler.ListWebhookConfigs)
+	webhookConfigs.Put("/:id", authMiddleware.RequirePermission("admin:integration"), integrationHandler.UpdateWebhookConfig)
+	webhookConfigs.Delete("/:id", authMiddleware.RequirePermission("admin:integration"), integrationHandler.DeleteWebhookConfig)
 
 	// Rejection Log routes (admin-level reporting)
 	rejectionLogs := admin.Group("/rejection-logs")
@@ -725,14 +856,16 @@ func main() {
 	calls.Post("/start", callLogHandler.StartCall)
 	calls.Post("/:call_uuid/end", callLogHandler.EndCall)
 	calls.Post("/:call_uuid/join", callLogHandler.JoinCall)
+	calls.Post("/:call_uuid/attachments", callLogHandler.UploadAttachment)
+	calls.Get("/:attachment_id/preview", callLogHandler.PreviewAttachment)
 
 	// Call logs routes
 	callLogsPublic := v1.Group("/call-logs", authMiddleware.Authenticate())
 	callLogsPublic.Get("/sip-info", callLogHandler.GetSipInfo)
 	callLogsPublic.Get("/extension/:extension", callLogHandler.GetCallLogsByExtension)
 
-	// ---- TEMPLATE ROUTES ----
-	templates := v1.Group("/templates", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureCommunication)))
+	// ---- TEMPLATE ROUTES (legacy path, no feature-license gate) ----
+	templates := v1.Group("/templates", authMiddleware.Authenticate())
 	templates.Post("/", authMiddleware.RequirePermission("templates:create"), templateHandler.Create)
 	templates.Get("/", authMiddleware.RequirePermission("templates:read"), templateHandler.List)
 	templates.Get("/:id", authMiddleware.RequirePermission("templates:read"), templateHandler.GetByID)
@@ -811,6 +944,7 @@ func main() {
 	escalationPolicies.Get("/:id", escalationPolicyHandler.GetByID)
 	escalationPolicies.Put("/:id", escalationPolicyHandler.Update)
 	escalationPolicies.Delete("/:id", escalationPolicyHandler.Delete)
+	escalationPolicies.Put("/:id/targets/:target_id/excluded-users", escalationPolicyHandler.UpdateTargetExcludedUsers)
 
 	//FCM
 	fcm := v1.Group("/fcm", authMiddleware.Authenticate())
@@ -889,10 +1023,24 @@ func main() {
 	goals.Post("/evidences/:id/transition", authMiddleware.RequirePermission("goals:update"), goalHandler.ExecuteEvidenceTransition)
 	goals.Get("/evidences/:id/transition-history", authMiddleware.RequirePermission("goals:view"), goalHandler.GetEvidenceTransitionHistory)
 
+	// ---- METRIC APPROVAL WORKFLOW ROUTES ----
+	goalMetrics := v1.Group("/goal-metrics", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureGoals)))
+	goalMetrics.Get("/:id/available-transitions", authMiddleware.RequirePermission("goals:view"), goalHandler.GetAvailableMetricTransitions)
+	goalMetrics.Post("/:id/transition", authMiddleware.RequirePermission("goals:approve"), goalHandler.TransitionMetric)
+
+	goalMetricValueChanges := v1.Group("/goal-metric-value-changes", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureGoals)))
+	goalMetricValueChanges.Get("/:id/available-transitions", authMiddleware.RequirePermission("goals:view"), goalHandler.GetAvailableMetricValueChangeTransitions)
+	goalMetricValueChanges.Post("/:id/transition", authMiddleware.RequirePermission("goals:approve"), goalHandler.TransitionMetricValueChange)
+
+	// Per-metric value-change history (any caller with access to the parent goal)
+	goals.Get("/:id/metrics/:metric_id/value-changes", authMiddleware.RequirePermission("goals:view"), goalHandler.ListMetricValueChanges)
+
 	// ---- APPROVAL ROUTES ----
 	approvals := v1.Group("/approvals", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureGoals)))
 	approvals.Get("/pending", authMiddleware.RequirePermission("goals:approve"), goalHandler.ListPendingApprovals)
 	approvals.Get("/completed", authMiddleware.RequirePermission("goals:approve"), goalHandler.ListCompletedApprovals)
+	approvals.Get("/pending-metrics", authMiddleware.RequirePermission("goals:approve"), goalHandler.ListPendingMetricApprovals)
+	approvals.Get("/pending-metric-value-changes", authMiddleware.RequirePermission("goals:approve"), goalHandler.ListPendingMetricValueChangeApprovals)
 
 	// ---- PERFORMANCE REVIEW ROUTES ----
 	reviews := v1.Group("/reviews", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureGoals)))
@@ -911,6 +1059,10 @@ func main() {
 	reviews.Post("/assignments/:id/submit", authMiddleware.RequirePermission("goals:update"), reviewHandler.SubmitReview)
 	reviews.Get("/my-reviews", authMiddleware.RequirePermission("goals:view"), reviewHandler.ListMyReviews)
 	reviews.Get("/my-review-tasks", authMiddleware.RequirePermission("goals:view"), reviewHandler.ListMyReviewTasks)
+
+	// ---- GIS ROUTES ----
+	gis := v1.Group("/gis", authMiddleware.Authenticate())
+	gis.Post("/identify", gisHandler.Identify)
 
 	// ---- DOCUMENT MANAGEMENT ROUTES ----
 	docs := v1.Group("/documents", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureDocuments)))

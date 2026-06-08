@@ -41,9 +41,13 @@ type Settings struct {
 	Feature3Description string `gorm:"size:200" json:"feature3_description"`
 
 	// System Configuration
-	DateFormat     string `gorm:"size:50;default:'YYYY-MM-DD'" json:"date_format"`
-	TimeFormat     string `gorm:"size:50;default:'HH:mm:ss'" json:"time_format"`
-	DefaultLanguage string `gorm:"size:10;default:'en'" json:"default_language"`
+	DateFormat         string `gorm:"size:50;default:'YYYY-MM-DD'" json:"date_format"`
+	TimeFormat         string `gorm:"size:50;default:'HH:mm:ss'" json:"time_format"`
+	DefaultLanguage    string `gorm:"size:10;default:'en'" json:"default_language"`
+	SupportedLanguages string `gorm:"size:500;default:'[\"en\",\"ar\"]'" json:"supported_languages"`
+
+	// Feature Toggles
+	ShowEvaluateButton bool `gorm:"default:false" json:"show_evaluate_button"` // Manual feedback trigger button on complaint/query detail pages
 
 	// Timestamps
 	CreatedAt time.Time      `json:"created_at"`
@@ -91,9 +95,13 @@ type SettingsUpdateRequest struct {
 	Feature3Description *string `json:"feature3_description" validate:"omitempty,max=200"`
 
 	// System Configuration
-	DateFormat     *string `json:"date_format" validate:"omitempty,max=50"`
-	TimeFormat     *string `json:"time_format" validate:"omitempty,max=50"`
-	DefaultLanguage *string `json:"default_language" validate:"omitempty,oneof=en ar"`
+	DateFormat         *string `json:"date_format" validate:"omitempty,max=50"`
+	TimeFormat         *string `json:"time_format" validate:"omitempty,max=50"`
+	DefaultLanguage    *string `json:"default_language" validate:"omitempty,min=2,max=10"`
+	SupportedLanguages *string `json:"supported_languages" validate:"omitempty,max=500"`
+
+	// Feature Toggles
+	ShowEvaluateButton *bool `json:"show_evaluate_button"`
 }
 
 // SettingsResponse represents the public settings response
@@ -130,9 +138,13 @@ type SettingsResponse struct {
 	Feature3Description string `json:"feature3_description"`
 
 	// System Configuration
-	DateFormat     string `json:"date_format"`
-	TimeFormat     string `json:"time_format"`
-	DefaultLanguage string `json:"default_language"`
+	DateFormat         string `json:"date_format"`
+	TimeFormat         string `json:"time_format"`
+	DefaultLanguage    string `json:"default_language"`
+	SupportedLanguages string `json:"supported_languages"`
+
+	// Feature Toggles
+	ShowEvaluateButton bool `json:"show_evaluate_button"`
 
 	// Timestamps
 	UpdatedAt string `json:"updated_at"`
@@ -164,6 +176,8 @@ func (s *Settings) ToSettingsResponse() *SettingsResponse {
 		DateFormat:          s.DateFormat,
 		TimeFormat:          s.TimeFormat,
 		DefaultLanguage:     s.DefaultLanguage,
+		SupportedLanguages:  s.SupportedLanguages,
+		ShowEvaluateButton:  s.ShowEvaluateButton,
 		UpdatedAt:           s.UpdatedAt.Format(time.RFC3339),
 	}
 }

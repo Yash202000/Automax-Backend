@@ -13,10 +13,12 @@ const (
 	CallStatusOffline CallStatus = "offline"
 	CallStatusOnline  CallStatus = "online"
 	CallStatusBusy    CallStatus = "busy"
+	CallStatusInCall  CallStatus = "in_call"
 )
 
 type User struct {
 	ID              uuid.UUID        `gorm:"type:uuid;primary_key" json:"id"`
+	NationalID      string           `gorm:"not null;default:''" json:"national_id"`
 	Email           string           `gorm:"uniqueIndex;not null" json:"email"`
 	Username        string           `gorm:"uniqueIndex;not null" json:"username"`
 	Password        string           `gorm:"not null" json:"-"`
@@ -35,6 +37,7 @@ type User struct {
 	Roles           []Role           `gorm:"many2many:user_roles;" json:"roles,omitempty"`
 	IsActive        bool             `gorm:"default:true" json:"is_active"`
 	IsSuperAdmin    bool             `gorm:"default:false" json:"is_super_admin"`
+	IsADUser        bool             `gorm:"default:false" json:"is_ad_user"`
 	Extension       string           `gorm:"size:20" json:"extension"`
 	CallStatus      CallStatus       `gorm:"type:user_call_status;default:offline" json:"call_status"`
 	LastLoginAt     *time.Time       `json:"last_login_at"`
@@ -148,13 +151,33 @@ func (r *UserLoginRequest) LoginType() string {
 	return "unknown"
 }
 
+type SSORegisterRequest struct {
+	Email             string      `json:"email" validate:"required,email"`
+	Username          string      `json:"username" validate:"required,min=3,max=50"`
+	NationalID        string      `json:"national_id" validate:"required"`
+	FirstName         string      `json:"first_name" validate:"max=100"`
+	LastName          string      `json:"last_name" validate:"max=100"`
+	Phone             string      `json:"phone" validate:"required,max=20"`
+	Extension         string      `json:"extension" validate:"max=20"`
+	DepartmentID      *uuid.UUID  `json:"department_id"`
+	LocationID        *uuid.UUID  `json:"location_id"`
+	DepartmentIDs     []uuid.UUID `json:"department_ids"`
+	LocationIDs       []uuid.UUID `json:"location_ids"`
+	ClassificationIDs []uuid.UUID `json:"classification_ids"`
+	RoleIDs           []uuid.UUID `json:"role_ids"`
+}
+
+type SSOLoginRequest struct {
+	NationalID string `json:"national_id" validate:"required"`
+}
+
 type UserUpdateRequest struct {
 	FirstName         string      `json:"first_name" validate:"max=100"`
 	LastName          string      `json:"last_name" validate:"max=100"`
 	Username          string      `json:"username" validate:"omitempty,min=3,max=50"`
 	Phone             string      `json:"phone" validate:"max=20"`
 	MobileVerified    *bool       `json:"mobile_verified"`
-	Extension         *string     `json:"extension" validate:"max=20"`
+	Extension         *string     `json:"extension" validate:"omitempty,max=20"`
 	DepartmentID      *uuid.UUID  `json:"department_id"`
 	LocationID        *uuid.UUID  `json:"location_id"`
 	DepartmentIDs     []uuid.UUID `json:"department_ids"`
@@ -166,6 +189,7 @@ type UserUpdateRequest struct {
 
 type UserResponse struct {
 	ID              uuid.UUID                `json:"id"`
+	NationalID      string                   `json:"national_id"`
 	Email           string                   `json:"email"`
 	Username        string                   `json:"username"`
 	FirstName       string                   `json:"first_name"`
@@ -184,6 +208,7 @@ type UserResponse struct {
 	Permissions     []string                 `json:"permissions,omitempty"`
 	IsActive        bool                     `json:"is_active"`
 	IsSuperAdmin    bool                     `json:"is_super_admin"`
+	IsADUser        bool                     `json:"is_ad_user"`
 	Extension       string                   `json:"extension"`
 	CallStatus      string                   `json:"call_status"`
 	LastLoginAt     *time.Time               `json:"last_login_at"`
@@ -191,10 +216,11 @@ type UserResponse struct {
 }
 
 type AuthResponse struct {
-	User         UserResponse `json:"user"`
-	Token        string       `json:"token"`
-	RefreshToken string       `json:"refresh_token,omitempty"`
-	ExpiresIn    int64        `json:"expires_in,omitempty"` // seconds until access token expires
+	User          UserResponse `json:"user"`
+	Token         string       `json:"token"`
+	RefreshToken  string       `json:"refresh_token,omitempty"`
+	ExpiresIn     int64        `json:"expires_in,omitempty"` // seconds until access token expires
+	ValidationURL string       `json:"validation_url,omitempty"`
 }
 
 // RoleBasicResponse is a slimmed-down role for the login response (no nested permissions).
@@ -211,6 +237,7 @@ type RoleBasicResponse struct {
 // Clients that need full data should call GET /users/me after login.
 type UserLoginResponse struct {
 	ID             uuid.UUID           `json:"id"`
+	NationalID     string              `json:"national_id"`
 	Email          string              `json:"email"`
 	Username       string              `json:"username"`
 	FirstName      string              `json:"first_name"`
@@ -224,6 +251,7 @@ type UserLoginResponse struct {
 	Permissions    []string            `json:"permissions,omitempty"`
 	IsActive       bool                `json:"is_active"`
 	IsSuperAdmin   bool                `json:"is_super_admin"`
+	IsADUser       bool                `json:"is_ad_user"`
 	Extension      string              `json:"extension"`
 	CallStatus     string              `json:"call_status"`
 	LastLoginAt    *time.Time          `json:"last_login_at"`
@@ -232,14 +260,16 @@ type UserLoginResponse struct {
 
 // AuthLoginResponse is the response for POST /auth/login.
 type AuthLoginResponse struct {
-	User         UserLoginResponse `json:"user"`
-	Token        string            `json:"token"`
-	RefreshToken string            `json:"refresh_token,omitempty"`
-	ExpiresIn    int64             `json:"expires_in,omitempty"`
+	User          UserLoginResponse `json:"user"`
+	Token         string            `json:"token"`
+	RefreshToken  string            `json:"refresh_token,omitempty"`
+	ExpiresIn     int64             `json:"expires_in,omitempty"`
+	ValidationURL string            `json:"validation_url,omitempty"` // 3rd party validation URL for SSO flow
 }
 
 type RefreshTokenRequest struct {
 	RefreshToken string `json:"refresh_token" validate:"required"`
+	RememberMe   bool   `json:"remember_me"`
 }
 
 type ChangePasswordRequest struct {
@@ -276,6 +306,7 @@ func ToRoleBasicResponse(role *Role) RoleBasicResponse {
 func ToUserLoginResponse(user *User) UserLoginResponse {
 	resp := UserLoginResponse{
 		ID:             user.ID,
+		NationalID:     user.NationalID,
 		Email:          user.Email,
 		Username:       user.Username,
 		FirstName:      user.FirstName,
@@ -287,6 +318,7 @@ func ToUserLoginResponse(user *User) UserLoginResponse {
 		LocationID:     user.LocationID,
 		IsActive:       user.IsActive,
 		IsSuperAdmin:   user.IsSuperAdmin,
+		IsADUser:       user.IsADUser,
 		Extension:      user.Extension,
 		CallStatus:     string(user.CallStatus),
 		LastLoginAt:    user.LastLoginAt,
@@ -305,6 +337,7 @@ func ToUserLoginResponse(user *User) UserLoginResponse {
 func ToUserResponse(user *User) UserResponse {
 	resp := UserResponse{
 		ID:             user.ID,
+		NationalID:     user.NationalID,
 		Email:          user.Email,
 		Username:       user.Username,
 		FirstName:      user.FirstName,
@@ -316,6 +349,7 @@ func ToUserResponse(user *User) UserResponse {
 		LocationID:     user.LocationID,
 		IsActive:       user.IsActive,
 		IsSuperAdmin:   user.IsSuperAdmin,
+		IsADUser:       user.IsADUser,
 		Extension:      user.Extension,
 		CallStatus:     string(user.CallStatus),
 		LastLoginAt:    user.LastLoginAt,

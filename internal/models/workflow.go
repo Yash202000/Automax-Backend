@@ -10,14 +10,16 @@ import (
 
 // Workflow represents a reusable workflow template
 type Workflow struct {
-	ID          uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
-	Name        string    `gorm:"not null;size:100;uniqueIndex" json:"name"`
-	Code        string    `gorm:"not null;size:50;uniqueIndex" json:"code"`
-	Description string    `gorm:"size:500" json:"description"`
-	Version     int       `gorm:"default:1" json:"version"`
-	IsActive    bool      `gorm:"default:true" json:"is_active"`
-	IsDefault   bool      `gorm:"default:false" json:"is_default"`
-	RecordType  string    `gorm:"size:20;default:'incident'" json:"record_type"` // 'incident', 'request', 'complaint', 'query', 'evidence', 'both', 'all'
+	ID            uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
+	Name          string    `gorm:"not null;size:100;uniqueIndex" json:"name"`
+	NameAr        string    `gorm:"size:100" json:"name_ar"`
+	Code          string    `gorm:"not null;size:100;uniqueIndex" json:"code"`
+	Description   string    `gorm:"size:500" json:"description"`
+	DescriptionAr string    `gorm:"size:500" json:"description_ar"`
+	Version       int       `gorm:"default:1" json:"version"`
+	IsActive      bool      `gorm:"default:true" json:"is_active"`
+	IsDefault     bool      `gorm:"default:false" json:"is_default"`
+	RecordType    string    `gorm:"size:20;default:'incident'" json:"record_type"` // 'incident', 'request', 'complaint', 'query', 'evidence', 'both', 'all'
 
 	// Matching criteria - stored as JSON arrays, empty/null means matches any value
 	// Sources: ["email", "phone", "web", "mobile", "emergency_hotline", etc.]
@@ -31,6 +33,8 @@ type Workflow struct {
 	// Form configuration - stores which fields are required (JSON array of field names)
 	// e.g., ["description", "classification_id", "priority", "assignee_id", "department_id", "location_id", "due_date", "reporter_name", "reporter_email", "source"]
 	RequiredFields string `gorm:"type:text" json:"required_fields"`
+	// OptionalFields stores fields that appear in the creation form but are not mandatory
+	OptionalFields string `gorm:"type:text" json:"optional_fields"`
 
 	// Relationships
 	States          []WorkflowState      `gorm:"foreignKey:WorkflowID" json:"states,omitempty"`
@@ -60,14 +64,16 @@ func (w *Workflow) BeforeCreate(tx *gorm.DB) error {
 
 // WorkflowState represents a state/node within a workflow
 type WorkflowState struct {
-	ID          uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
-	WorkflowID  uuid.UUID `gorm:"type:uuid;index;not null" json:"workflow_id"`
-	Workflow    *Workflow `gorm:"foreignKey:WorkflowID" json:"workflow,omitempty"`
-	Name        string    `gorm:"not null;size:100" json:"name"`
-	Code        string    `gorm:"not null;size:50" json:"code"`
-	Description string    `gorm:"size:500" json:"description"`
-	StateType   string    `gorm:"size:20;default:'normal'" json:"state_type"` // initial, normal, terminal
-	Color       string    `gorm:"size:20;default:'#6366f1'" json:"color"`
+	ID            uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
+	WorkflowID    uuid.UUID `gorm:"type:uuid;index;not null" json:"workflow_id"`
+	Workflow      *Workflow `gorm:"foreignKey:WorkflowID" json:"workflow,omitempty"`
+	Name          string    `gorm:"not null;size:100" json:"name"`
+	NameAr        string    `gorm:"size:100" json:"name_ar"`
+	Code          string    `gorm:"not null;size:50" json:"code"`
+	Description   string    `gorm:"size:500" json:"description"`
+	DescriptionAr string    `gorm:"size:500" json:"description_ar"`
+	StateType     string    `gorm:"size:20;default:'normal'" json:"state_type"` // initial, normal, terminal
+	Color         string    `gorm:"size:20;default:'#6366f1'" json:"color"`
 
 	// Visual position on canvas
 	PositionX int `gorm:"default:0" json:"position_x"`
@@ -87,10 +93,12 @@ type WorkflowState struct {
 	// IsAIQA marks this state as requiring AI Quality Assurance.
 	// When an incident with is_ai_verified=true reaches a state where is_ai_qa=true,
 	// the AI quality monitor will process it.
-	IsAIQA bool `gorm:"default:false" json:"is_ai_qa"`
+	IsAIQA bool `gorm:"column:is_ai_qa;default:false" json:"is_ai_qa"`
 
 	// IsReadyToClose marks this state as a "Ready to Close" state that requires a
 	IsReadyToClose bool `gorm:"default:false" json:"is_ready_to_close"`
+	// IsPartialClose marks this state as a "Partial Close" state that requires a duration selection.
+	IsPartialClose bool `gorm:"default:false" json:"is_partial_close"`
 	// DurationOptions is a JSON array of duration label strings (e.g. ["1 Day","1 Week"]).When non-empty it overrides the global READY_TO_CLOSE_DURATION_OPTIONS env variable.
 	DurationOptions string `gorm:"type:text" json:"duration_options"`
 
@@ -99,6 +107,17 @@ type WorkflowState struct {
 
 	// Role-based editability (many-to-many) - empty = no state-level restriction (falls back to incidents:update permission)
 	EditableRoles []Role `gorm:"many2many:state_editable_roles;" json:"editable_roles,omitempty"`
+
+	// Creation-time assignment (applied when an incident is placed into this state on creation)
+	AssignUserID     *uuid.UUID `gorm:"type:uuid" json:"assign_user_id"`
+	AssignUser       *User      `gorm:"foreignKey:AssignUserID" json:"assign_user,omitempty"`
+	AssignmentRoles  []Role     `gorm:"many2many:state_assignment_roles;" json:"assignment_roles,omitempty"`
+	AutoMatchUser    bool       `gorm:"default:false" json:"auto_match_user"`
+	ManualSelectUser bool       `gorm:"default:false" json:"manual_select_user"`
+
+	// Notification template codes sent when a new incident enters this state (initial states only)
+	NewIncidentEmailTemplateCode string `gorm:"size:100" json:"new_incident_email_template_code"`
+	NewIncidentSMSTemplateCode   string `gorm:"size:100" json:"new_incident_sms_template_code"`
 
 	SortOrder int            `gorm:"default:0" json:"sort_order"`
 	IsActive  bool           `gorm:"default:true" json:"is_active"`
@@ -141,12 +160,14 @@ func (s *WorkflowState) SLAAsHours() float64 {
 
 // WorkflowTransition represents a transition between states
 type WorkflowTransition struct {
-	ID          uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
-	WorkflowID  uuid.UUID `gorm:"type:uuid;index;not null" json:"workflow_id"`
-	Workflow    *Workflow `gorm:"foreignKey:WorkflowID" json:"workflow,omitempty"`
-	Name        string    `gorm:"not null;size:100" json:"name"`
-	Code        string    `gorm:"not null;size:50" json:"code"`
-	Description string    `gorm:"size:500" json:"description"`
+	ID            uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
+	WorkflowID    uuid.UUID `gorm:"type:uuid;index;not null" json:"workflow_id"`
+	Workflow      *Workflow `gorm:"foreignKey:WorkflowID" json:"workflow,omitempty"`
+	Name          string    `gorm:"not null;size:100" json:"name"`
+	NameAr        string    `gorm:"size:100" json:"name_ar"`
+	Code          string    `gorm:"not null;size:50" json:"code"`
+	Description   string    `gorm:"size:500" json:"description"`
+	DescriptionAr string    `gorm:"size:500" json:"description_ar"`
 
 	FromStateID uuid.UUID      `gorm:"type:uuid;index;not null" json:"from_state_id"`
 	FromState   *WorkflowState `gorm:"foreignKey:FromStateID" json:"from_state,omitempty"`
@@ -183,13 +204,17 @@ type WorkflowTransition struct {
 
 	// IsRejection marks this transition as a rejection action.
 	// When true, executing this transition will create an IncidentRejectionLog record.
-	IsRejection bool `gorm:"default:false" json:"is_rejection"`
-
-	IsActive  bool           `gorm:"default:true" json:"is_active"`
-	SortOrder int            `gorm:"default:0" json:"sort_order"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	IsRejection     bool           `gorm:"default:false" json:"is_rejection"`
+	IsNotBelong     bool           `gorm:"default:false" json:"is_not_belong"`    // IsNotBelong marks this transition as a "Not Belong" closure action.
+	IsMissingInfo   bool           `gorm:"default:false" json:"is_missing_info"`  // IsMissingInfo marks this transition as a "Missing Incident Information" closure action — triggers SMS to citizen.
+	IsReopen        bool           `gorm:"default:false" json:"is_reopen"`        // IsReopen marks this transition as a reopen action — used by AI Quality Audit to identify the reopen transition.
+	RequireAssignee bool           `gorm:"default:false" json:"require_assignee"` // RequireAssignee: when true, only the assigned user(s) can execute this transition
+	IsActive        bool           `gorm:"default:true" json:"is_active"`
+	IsFinalClose    bool           `gorm:"default:false" json:"is_final_close"` // IsFinalClose marks this transition as the definitive closure from a Ready-to-Close state — triggers SMS to citizen.
+	SortOrder       int            `gorm:"default:0" json:"sort_order"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (t *WorkflowTransition) BeforeCreate(tx *gorm.DB) error {
@@ -279,20 +304,25 @@ func (f *TransitionFieldChange) BeforeCreate(tx *gorm.DB) error {
 
 type WorkflowCreateRequest struct {
 	Name              string   `json:"name" validate:"required,min=2,max=100"`
+	NameAr            string   `json:"name_ar" validate:"max=100"`
 	Code              string   `json:"code" validate:"required,min=2,max=50"`
 	Description       string   `json:"description" validate:"max=500"`
+	DescriptionAr     string   `json:"description_ar" validate:"max=500"`
 	RecordType        string   `json:"record_type" validate:"omitempty,oneof=incident request complaint query evidence both all"`
 	Sources           []string `json:"sources"`    // Array of source strings
 	Priorities        []int    `json:"priorities"` // Array of priority integers
 	ClassificationIDs []string `json:"classification_ids"`
 	LocationIDs       []string `json:"location_ids"`
 	RequiredFields    []string `json:"required_fields"`
+	OptionalFields    []string `json:"optional_fields"`
 }
 
 type WorkflowUpdateRequest struct {
 	Name                    string   `json:"name" validate:"omitempty,min=2,max=100"`
-	Code                    string   `json:"code" validate:"omitempty,min=2,max=50"`
+	NameAr                  string   `json:"name_ar" validate:"max=100"`
+	Code                    string   `json:"code" validate:"omitempty,min=2,max=100"`
 	Description             string   `json:"description" validate:"max=500"`
+	DescriptionAr           string   `json:"description_ar" validate:"max=500"`
 	RecordType              *string  `json:"record_type" validate:"omitempty,oneof=incident request complaint query evidence both all"`
 	Sources                 []string `json:"sources"`    // Array of source strings (nil means not updating)
 	Priorities              []int    `json:"priorities"` // Array of priority integers (nil means not updating)
@@ -302,14 +332,17 @@ type WorkflowUpdateRequest struct {
 	ClassificationIDs       []string `json:"classification_ids"`
 	LocationIDs             []string `json:"location_ids"`
 	RequiredFields          []string `json:"required_fields"`
+	OptionalFields          []string `json:"optional_fields"`
 	ConvertToRequestRoleIDs []string `json:"convert_to_request_role_ids"`
 	MergeAllowedRoleIDs     []string `json:"merge_allowed_role_ids"`
 }
 
 type WorkflowStateCreateRequest struct {
 	Name               string   `json:"name" validate:"required,min=2,max=100"`
+	NameAr             string   `json:"name_ar" validate:"max=100"`
 	Code               string   `json:"code" validate:"required,min=2,max=50"`
 	Description        string   `json:"description" validate:"max=500"`
+	DescriptionAr      string   `json:"description_ar" validate:"max=500"`
 	StateType          string   `json:"state_type" validate:"omitempty,oneof=initial normal terminal"`
 	Color              string   `json:"color" validate:"omitempty,max=20"`
 	PositionX          int      `json:"position_x"`
@@ -318,17 +351,29 @@ type WorkflowStateCreateRequest struct {
 	SLAUnit            string   `json:"sla_unit" validate:"omitempty,oneof=minutes hours days months"`
 	EscalationPolicyID *string  `json:"escalation_policy_id" validate:"omitempty,uuid"`
 	IsMergable         bool     `json:"is_mergable"`
+	IsAIQA             bool     `json:"is_ai_qa"`
 	IsReadyToClose     bool     `json:"is_ready_to_close"`
+	IsPartialClose     bool     `json:"is_partial_close"`
 	DurationOptions    []string `json:"duration_options"`
 	SortOrder          int      `json:"sort_order"`
 	ViewableRoleIDs    []string `json:"viewable_role_ids"`
 	EditableRoleIDs    []string `json:"editable_role_ids"`
+	// Creation-time assignment
+	AssignUserID      *string  `json:"assign_user_id" validate:"omitempty,uuid"`
+	AssignmentRoleIDs []string `json:"assignment_role_ids"`
+	AutoMatchUser     bool     `json:"auto_match_user"`
+	ManualSelectUser  bool     `json:"manual_select_user"`
+	// New incident notification templates (initial states only)
+	NewIncidentEmailTemplateCode string `json:"new_incident_email_template_code"`
+	NewIncidentSMSTemplateCode   string `json:"new_incident_sms_template_code"`
 }
 
 type WorkflowStateUpdateRequest struct {
 	Name               string   `json:"name" validate:"omitempty,min=2,max=100"`
+	NameAr             string   `json:"name_ar" validate:"max=100"`
 	Code               string   `json:"code" validate:"omitempty,min=2,max=50"`
 	Description        string   `json:"description" validate:"max=500"`
+	DescriptionAr      string   `json:"description_ar" validate:"max=500"`
 	StateType          string   `json:"state_type" validate:"omitempty,oneof=initial normal terminal"`
 	Color              string   `json:"color" validate:"omitempty,max=20"`
 	PositionX          *int     `json:"position_x"`
@@ -337,26 +382,43 @@ type WorkflowStateUpdateRequest struct {
 	SLAUnit            string   `json:"sla_unit" validate:"omitempty,oneof=minutes hours days months"`
 	EscalationPolicyID *string  `json:"escalation_policy_id" validate:"omitempty,uuid"`
 	IsMergable         *bool    `json:"is_mergable"`
+	IsAIQA             *bool    `json:"is_ai_qa"`
 	IsReadyToClose     *bool    `json:"is_ready_to_close"`
+	IsPartialClose     *bool    `json:"is_partial_close"`
 	DurationOptions    []string `json:"duration_options"`
 	SortOrder          *int     `json:"sort_order"`
 	IsActive           *bool    `json:"is_active"`
 	ViewableRoleIDs    []string `json:"viewable_role_ids"`
 	EditableRoleIDs    []string `json:"editable_role_ids"`
+	// Creation-time assignment
+	AssignUserID      *string  `json:"assign_user_id" validate:"omitempty,uuid"`
+	AssignmentRoleIDs []string `json:"assignment_role_ids"`
+	AutoMatchUser     *bool    `json:"auto_match_user"`
+	ManualSelectUser  *bool    `json:"manual_select_user"`
+	// New incident notification templates (initial states only)
+	NewIncidentEmailTemplateCode *string `json:"new_incident_email_template_code"`
+	NewIncidentSMSTemplateCode   *string `json:"new_incident_sms_template_code"`
 }
 
 type WorkflowTransitionCreateRequest struct {
-	Name        string   `json:"name" validate:"required,min=2,max=100"`
-	Code        string   `json:"code" validate:"required,min=2,max=50"`
-	Description string   `json:"description" validate:"max=500"`
-	FromStateID string   `json:"from_state_id" validate:"required,uuid"`
-	ToStateID   string   `json:"to_state_id" validate:"required,uuid"`
-	RoleIDs     []string `json:"role_ids"`
-	SortOrder   int      `json:"sort_order"`
-	IsRejection bool     `json:"is_rejection"`
+	Name            string   `json:"name" validate:"required,min=2,max=100"`
+	NameAr          string   `json:"name_ar" validate:"max=100"`
+	Code            string   `json:"code" validate:"required,min=2,max=50"`
+	Description     string   `json:"description" validate:"max=500"`
+	DescriptionAr   string   `json:"description_ar" validate:"max=500"`
+	FromStateID     string   `json:"from_state_id" validate:"required,uuid"`
+	ToStateID       string   `json:"to_state_id" validate:"required,uuid"`
+	RoleIDs         []string `json:"role_ids"`
+	SortOrder       int      `json:"sort_order"`
+	IsRejection     bool     `json:"is_rejection"`
+	IsNotBelong     bool     `json:"is_not_belong"`
+	IsMissingInfo   bool     `json:"is_missing_info"`
+	IsReopen        bool     `json:"is_reopen"`
+	IsFinalClose    bool     `json:"is_final_close"`
+	RequireAssignee bool     `json:"require_assignee"`
 
 	// Department Assignment
-	AssignDepartmentID   *string `json:"assign_department_id" validate:"omitempty,uuid"`
+	AssignDepartmentID   *string `json:"assign_department_id" validate:"omitempty"`
 	AutoDetectDepartment bool    `json:"auto_detect_department"`
 	DepartmentTypeFilter string  `json:"department_type_filter" validate:"omitempty,oneof=internal external"`
 
@@ -368,15 +430,22 @@ type WorkflowTransitionCreateRequest struct {
 }
 
 type WorkflowTransitionUpdateRequest struct {
-	Name        string   `json:"name" validate:"omitempty,min=2,max=100"`
-	Code        string   `json:"code" validate:"omitempty,min=2,max=50"`
-	Description string   `json:"description" validate:"max=500"`
-	FromStateID string   `json:"from_state_id" validate:"omitempty,uuid"`
-	ToStateID   string   `json:"to_state_id" validate:"omitempty,uuid"`
-	RoleIDs     []string `json:"role_ids"`
-	SortOrder   *int     `json:"sort_order"`
-	IsActive    *bool    `json:"is_active"`
-	IsRejection *bool    `json:"is_rejection"`
+	Name            string   `json:"name" validate:"omitempty,min=2,max=100"`
+	NameAr          string   `json:"name_ar" validate:"max=100"`
+	Code            string   `json:"code" validate:"omitempty,min=2,max=50"`
+	Description     string   `json:"description" validate:"max=500"`
+	DescriptionAr   string   `json:"description_ar" validate:"max=500"`
+	FromStateID     string   `json:"from_state_id" validate:"omitempty,uuid"`
+	ToStateID       string   `json:"to_state_id" validate:"omitempty,uuid"`
+	RoleIDs         []string `json:"role_ids"`
+	SortOrder       *int     `json:"sort_order"`
+	IsActive        *bool    `json:"is_active"`
+	IsRejection     *bool    `json:"is_rejection"`
+	IsNotBelong     *bool    `json:"is_not_belong"`
+	IsMissingInfo   *bool    `json:"is_missing_info"`
+	IsReopen        *bool    `json:"is_reopen"`
+	IsFinalClose    *bool    `json:"is_final_close"`
+	RequireAssignee *bool    `json:"require_assignee"`
 
 	// Department Assignment
 	AssignDepartmentID   *string `json:"assign_department_id" validate:"omitempty,uuid"`
@@ -399,7 +468,7 @@ type TransitionRequirementRequest struct {
 }
 
 type TransitionActionRequest struct {
-	ActionType     string `json:"action_type" validate:"required,oneof=email field_update webhook notification"`
+	ActionType     string `json:"action_type" validate:"required,oneof=email field_update webhook notification sms"`
 	Name           string `json:"name" validate:"required,min=2,max=100"`
 	Description    string `json:"description"`
 	Config         string `json:"config"`
@@ -422,6 +491,7 @@ type WorkflowMatchRequest struct {
 	LocationID       string `json:"location_id"`
 	Source           string `json:"source"`
 	Priority         int    `json:"priority"`
+	RecordType       string `json:"record_type"` // "incident", "request", "complaint", "query" — required for matching
 }
 
 // Form field configuration for incident creation
@@ -440,6 +510,7 @@ type WorkflowMatchResponse struct {
 	WorkflowCode   *string                   `json:"workflow_code,omitempty"`
 	RecordType     *string                   `json:"record_type,omitempty"`
 	RequiredFields []string                  `json:"required_fields"`
+	OptionalFields []string                  `json:"optional_fields"`
 	FormFields     []IncidentFormFieldConfig `json:"form_fields"`
 	InitialStateID *string                   `json:"initial_state_id,omitempty"`
 	InitialState   *string                   `json:"initial_state,omitempty"`
@@ -450,8 +521,10 @@ type WorkflowMatchResponse struct {
 type WorkflowResponse struct {
 	ID                    uuid.UUID                    `json:"id"`
 	Name                  string                       `json:"name"`
+	NameAr                string                       `json:"name_ar,omitempty"`
 	Code                  string                       `json:"code"`
 	Description           string                       `json:"description"`
+	DescriptionAr         string                       `json:"description_ar,omitempty"`
 	Version               int                          `json:"version"`
 	IsActive              bool                         `json:"is_active"`
 	IsDefault             bool                         `json:"is_default"`
@@ -460,6 +533,7 @@ type WorkflowResponse struct {
 	Priorities            []int                        `json:"priorities"` // Array of priorities
 	CanvasLayout          string                       `json:"canvas_layout,omitempty"`
 	RequiredFields        []string                     `json:"required_fields"`
+	OptionalFields        []string                     `json:"optional_fields"`
 	States                []WorkflowStateResponse      `json:"states,omitempty"`
 	Transitions           []WorkflowTransitionResponse `json:"transitions,omitempty"`
 	Classifications       []ClassificationResponse     `json:"classifications,omitempty"`
@@ -477,8 +551,10 @@ type WorkflowStateResponse struct {
 	ID                 uuid.UUID                 `json:"id"`
 	WorkflowID         uuid.UUID                 `json:"workflow_id"`
 	Name               string                    `json:"name"`
+	NameAr             string                    `json:"name_ar,omitempty"`
 	Code               string                    `json:"code"`
 	Description        string                    `json:"description"`
+	DescriptionAr      string                    `json:"description_ar,omitempty"`
 	StateType          string                    `json:"state_type"`
 	Color              string                    `json:"color"`
 	PositionX          int                       `json:"position_x"`
@@ -488,26 +564,39 @@ type WorkflowStateResponse struct {
 	EscalationPolicyID *uuid.UUID                `json:"escalation_policy_id,omitempty"`
 	EscalationPolicy   *EscalationPolicyResponse `json:"escalation_policy,omitempty"`
 	IsMergable         bool                      `json:"is_mergable"`
+	IsAIQA             bool                      `json:"is_ai_qa"`
 	IsReadyToClose     bool                      `json:"is_ready_to_close"`
+	IsPartialClose     bool                      `json:"is_partial_close"`
 	DurationOptions    []string                  `json:"duration_options,omitempty"`
 	SortOrder          int                       `json:"sort_order"`
 	IsActive           bool                      `json:"is_active"`
 	ViewableRoles      []RoleResponse            `json:"viewable_roles,omitempty"`
 	EditableRoles      []RoleResponse            `json:"editable_roles,omitempty"`
-	CreatedAt          time.Time                 `json:"created_at"`
+	// Creation-time assignment
+	AssignUserID     *uuid.UUID     `json:"assign_user_id,omitempty"`
+	AssignUser       *UserResponse  `json:"assign_user,omitempty"`
+	AssignmentRoles  []RoleResponse `json:"assignment_roles,omitempty"`
+	AutoMatchUser    bool           `json:"auto_match_user"`
+	ManualSelectUser bool           `json:"manual_select_user"`
+	// New incident notification templates (initial states only)
+	NewIncidentEmailTemplateCode string    `json:"new_incident_email_template_code,omitempty"`
+	NewIncidentSMSTemplateCode   string    `json:"new_incident_sms_template_code,omitempty"`
+	CreatedAt                    time.Time `json:"created_at"`
 }
 
 type WorkflowTransitionResponse struct {
-	ID           uuid.UUID              `json:"id"`
-	WorkflowID   uuid.UUID              `json:"workflow_id"`
-	Name         string                 `json:"name"`
-	Code         string                 `json:"code"`
-	Description  string                 `json:"description"`
-	FromStateID  uuid.UUID              `json:"from_state_id"`
-	FromState    *WorkflowStateResponse `json:"from_state,omitempty"`
-	ToStateID    uuid.UUID              `json:"to_state_id"`
-	ToState      *WorkflowStateResponse `json:"to_state,omitempty"`
-	AllowedRoles []RoleResponse         `json:"allowed_roles,omitempty"`
+	ID            uuid.UUID              `json:"id"`
+	WorkflowID    uuid.UUID              `json:"workflow_id"`
+	Name          string                 `json:"name"`
+	NameAr        string                 `json:"name_ar,omitempty"`
+	Code          string                 `json:"code"`
+	Description   string                 `json:"description"`
+	DescriptionAr string                 `json:"description_ar,omitempty"`
+	FromStateID   uuid.UUID              `json:"from_state_id"`
+	FromState     *WorkflowStateResponse `json:"from_state,omitempty"`
+	ToStateID     uuid.UUID              `json:"to_state_id"`
+	ToState       *WorkflowStateResponse `json:"to_state,omitempty"`
+	AllowedRoles  []RoleResponse         `json:"allowed_roles,omitempty"`
 
 	// Department Assignment
 	AssignDepartmentID   *uuid.UUID          `json:"assign_department_id,omitempty"`
@@ -521,13 +610,18 @@ type WorkflowTransitionResponse struct {
 	AutoMatchUser    bool           `json:"auto_match_user"`
 	ManualSelectUser bool           `json:"manual_select_user"`
 
-	Requirements []TransitionRequirementResponse `json:"requirements,omitempty"`
-	Actions      []TransitionActionResponse      `json:"actions,omitempty"`
-	FieldChanges []TransitionFieldChangeResponse `json:"field_changes,omitempty"`
-	IsRejection  bool                            `json:"is_rejection"`
-	IsActive     bool                            `json:"is_active"`
-	SortOrder    int                             `json:"sort_order"`
-	CreatedAt    time.Time                       `json:"created_at"`
+	Requirements    []TransitionRequirementResponse `json:"requirements,omitempty"`
+	Actions         []TransitionActionResponse      `json:"actions,omitempty"`
+	FieldChanges    []TransitionFieldChangeResponse `json:"field_changes,omitempty"`
+	IsRejection     bool                            `json:"is_rejection"`
+	IsNotBelong     bool                            `json:"is_not_belong"`
+	IsMissingInfo   bool                            `json:"is_missing_info"`
+	IsReopen        bool                            `json:"is_reopen"`
+	IsFinalClose    bool                            `json:"is_final_close"`
+	RequireAssignee bool                            `json:"require_assignee"`
+	IsActive        bool                            `json:"is_active"`
+	SortOrder       int                             `json:"sort_order"`
+	CreatedAt       time.Time                       `json:"created_at"`
 }
 
 type TransitionRequirementResponse struct {
@@ -574,6 +668,15 @@ func ToWorkflowResponse(w *Workflow) WorkflowResponse {
 		requiredFields = []string{}
 	}
 
+	// Parse OptionalFields JSON string to array
+	var optionalFields []string
+	if w.OptionalFields != "" {
+		json.Unmarshal([]byte(w.OptionalFields), &optionalFields)
+	}
+	if optionalFields == nil {
+		optionalFields = []string{}
+	}
+
 	// Parse Sources JSON string to array
 	var sources []string
 	if w.Sources != "" {
@@ -595,8 +698,10 @@ func ToWorkflowResponse(w *Workflow) WorkflowResponse {
 	resp := WorkflowResponse{
 		ID:               w.ID,
 		Name:             w.Name,
+		NameAr:           w.NameAr,
 		Code:             w.Code,
 		Description:      w.Description,
+		DescriptionAr:    w.DescriptionAr,
 		Version:          w.Version,
 		IsActive:         w.IsActive,
 		IsDefault:        w.IsDefault,
@@ -605,6 +710,7 @@ func ToWorkflowResponse(w *Workflow) WorkflowResponse {
 		Priorities:       priorities,
 		CanvasLayout:     w.CanvasLayout,
 		RequiredFields:   requiredFields,
+		OptionalFields:   optionalFields,
 		StatesCount:      len(w.States),
 		TransitionsCount: len(w.Transitions),
 		CreatedAt:        w.CreatedAt,
@@ -666,8 +772,10 @@ func ToWorkflowStateResponse(s *WorkflowState) WorkflowStateResponse {
 		ID:                 s.ID,
 		WorkflowID:         s.WorkflowID,
 		Name:               s.Name,
+		NameAr:             s.NameAr,
 		Code:               s.Code,
 		Description:        s.Description,
+		DescriptionAr:      s.DescriptionAr,
 		StateType:          s.StateType,
 		Color:              s.Color,
 		PositionX:          s.PositionX,
@@ -676,7 +784,9 @@ func ToWorkflowStateResponse(s *WorkflowState) WorkflowStateResponse {
 		SLAUnit:            s.SLAUnit,
 		EscalationPolicyID: s.EscalationPolicyID,
 		IsMergable:         s.IsMergable,
+		IsAIQA:             s.IsAIQA,
 		IsReadyToClose:     s.IsReadyToClose,
+		IsPartialClose:     s.IsPartialClose,
 		SortOrder:          s.SortOrder,
 		IsActive:           s.IsActive,
 		CreatedAt:          s.CreatedAt,
@@ -708,6 +818,23 @@ func ToWorkflowStateResponse(s *WorkflowState) WorkflowStateResponse {
 		}
 	}
 
+	resp.AssignUserID = s.AssignUserID
+	if s.AssignUser != nil {
+		u := ToUserResponse(s.AssignUser)
+		resp.AssignUser = &u
+	}
+	resp.AutoMatchUser = s.AutoMatchUser
+	resp.ManualSelectUser = s.ManualSelectUser
+	if len(s.AssignmentRoles) > 0 {
+		resp.AssignmentRoles = make([]RoleResponse, len(s.AssignmentRoles))
+		for i, r := range s.AssignmentRoles {
+			resp.AssignmentRoles[i] = ToRoleResponse(&r)
+		}
+	}
+
+	resp.NewIncidentEmailTemplateCode = s.NewIncidentEmailTemplateCode
+	resp.NewIncidentSMSTemplateCode = s.NewIncidentSMSTemplateCode
+
 	return resp
 }
 
@@ -716,8 +843,10 @@ func ToWorkflowTransitionResponse(t *WorkflowTransition) WorkflowTransitionRespo
 		ID:                   t.ID,
 		WorkflowID:           t.WorkflowID,
 		Name:                 t.Name,
+		NameAr:               t.NameAr,
 		Code:                 t.Code,
 		Description:          t.Description,
+		DescriptionAr:        t.DescriptionAr,
 		FromStateID:          t.FromStateID,
 		ToStateID:            t.ToStateID,
 		AssignDepartmentID:   t.AssignDepartmentID,
@@ -726,6 +855,11 @@ func ToWorkflowTransitionResponse(t *WorkflowTransition) WorkflowTransitionRespo
 		AutoMatchUser:        t.AutoMatchUser,
 		ManualSelectUser:     t.ManualSelectUser,
 		IsRejection:          t.IsRejection,
+		IsNotBelong:          t.IsNotBelong,
+		IsMissingInfo:        t.IsMissingInfo,
+		IsReopen:             t.IsReopen,
+		IsFinalClose:         t.IsFinalClose,
+		RequireAssignee:      t.RequireAssignee,
 		IsActive:             t.IsActive,
 		SortOrder:            t.SortOrder,
 		CreatedAt:            t.CreatedAt,
@@ -839,24 +973,31 @@ type CodeNamePair struct {
 
 // WorkflowExportData is the top-level export structure
 type WorkflowExportData struct {
-	ExportVersion string                `json:"export_version"`
-	ExportedAt    string                `json:"exported_at"`
-	Workflow      WorkflowExportContent `json:"workflow"`
+	ExportVersion string                `json:"export_version" validate:"required"`
+	ExportedAt    string                `json:"exported_at" validate:"required,datetime=2006-01-02T15:04:05Z07:00"`
+	Workflow      WorkflowExportContent `json:"workflow" validate:"required"`
 }
 
 // WorkflowExportContent contains workflow data with codes instead of IDs
 type WorkflowExportContent struct {
-	Name                  string                     `json:"name"`
-	Code                  string                     `json:"code"`
-	Description           string                     `json:"description"`
-	RecordType            string                     `json:"record_type"`
-	Sources               []string                   `json:"sources,omitempty"`
-	Priorities            []int                      `json:"priorities,omitempty"`
-	RequiredFields        []string                   `json:"required_fields"`
-	States                []WorkflowStateExport      `json:"states"`
-	Transitions           []WorkflowTransitionExport `json:"transitions"`
-	Classifications       []CodeNamePair             `json:"classifications"`
-	ConvertToRequestRoles []CodeNamePair             `json:"convert_to_request_roles"`
+	Name        string `json:"name"        validate:"required,min=2,max=100"`
+	Code        string `json:"code"        validate:"required,min=2,max=50"`
+	Description string `json:"description" validate:"omitempty,max=500"`
+
+	// FIX: oneof belongs on the string itself, not a []string slice
+	RecordType string   `json:"record_type,omitempty" validate:"omitempty,oneof=incident request complaint query evidence both all"`
+	Sources    []string `json:"sources,omitempty"    validate:"omitempty,dive,min=1"`
+
+	// FIX: []int can't use oneof with string values — validate the range differently
+	Priorities []int `json:"priorities,omitempty" validate:"omitempty,dive,min=1,max=5"`
+
+	// FIX: dive into slices for per-element validation
+	RequiredFields  []string                   `json:"required_fields,omitempty"   validate:"omitempty,dive,min=1"`
+	States          []WorkflowStateExport      `json:"states,omitempty"            validate:"omitempty,dive"`
+	Transitions     []WorkflowTransitionExport `json:"transitions,omitempty"       validate:"omitempty,dive"`
+	Classifications []CodeNamePair             `json:"classifications,omitempty"   validate:"omitempty,dive"`
+
+	ConvertToRequestRoles []CodeNamePair `json:"convert_to_request_roles,omitempty" validate:"omitempty,dive"`
 }
 
 // WorkflowStateExport represents a state with viewable role codes

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 
@@ -36,8 +37,11 @@ type UserRepository interface {
 	GetUserRoles(ctx context.Context, userID uuid.UUID) ([]models.Role, error)
 	GetUserPermissions(ctx context.Context, userID uuid.UUID) ([]string, error)
 	FindMatching(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.User, error)
+	FindMatchingOnline(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.User, error)
 
 	FindByExtension(ctx context.Context, extension string) (*models.User, error)
+	FindByExtOrPhone(ctx context.Context, phone string) (*models.User, error)
+	FindByExtOrPhoneList(ctx context.Context, phones []string) ([]models.User, error)
 	FindByMobile(ctx context.Context, phone string) (*models.User, error)
 	FindByPhoneWithRelations(ctx context.Context, phone string) (*models.User, error)
 	FindByPhoneForLogin(ctx context.Context, phone string) (*models.User, error)
@@ -48,7 +52,11 @@ type UserRepository interface {
 	FindByDepartmentAndRole(ctx context.Context, departmentID, roleID *uuid.UUID) ([]models.User, error)
 	UpdateProfile(ctx context.Context, user map[string]interface{}) error
 	FindByPermissionCode(ctx context.Context, permissionCode string) ([]models.User, error)
+	IsUserOnline(ctx context.Context, userID uuid.UUID) (bool, error)
 	ExistsByPhone(ctx context.Context, phone string, excludeUserID uuid.UUID) (bool, error)
+	ExistsByNationalID(ctx context.Context, nationalID string) (bool, error)
+	FindByNationalIDForLogin(ctx context.Context, nationalID string) (*models.User, error)
+	ExistsByPhoneAndName(ctx context.Context, phone string, name ...string) (bool, error)
 }
 
 type userRepository struct {
@@ -194,7 +202,7 @@ func (r *userRepository) FindByPhoneWithRelations(ctx context.Context, phone str
 func (r *userRepository) FindByLast6Digits(ctx context.Context, last6Digits string) (*models.User, error) {
 	var user models.User
 	log.Printf("Query start: %s", last6Digits)
-	err := r.db.WithContext(ctx).Debug().Where("RIGHT(phone, 6) = ? AND is_active = ?", last6Digits, true).First(&user).Error
+	err := r.db.WithContext(ctx).Where("RIGHT(phone, 6) = ? AND is_active = ?", last6Digits, true).First(&user).Error
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +360,7 @@ func (r *userRepository) ListByDepartment(ctx context.Context, departmentID uuid
 
 func (r *userRepository) ExistsByEmail(ctx context.Context, email string) (bool, error) {
 	var count int64
-	err := r.db.WithContext(ctx).Model(&models.User{}).Where("email = ?", email).Count(&count).Error
+	err := r.db.WithContext(ctx).Model(&models.User{}).Where("LOWER(email) = LOWER(?)", email).Count(&count).Error
 	return count > 0, err
 }
 
@@ -578,10 +586,83 @@ func (r *userRepository) FindMatching(ctx context.Context, roleIDs []uuid.UUID, 
 	return users, err
 }
 
+func (r *userRepository) FindMatchingOnline(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.User, error) {
+	var users []models.User
+
+	query := r.db.WithContext(ctx).
+		Preload("Department").
+		Preload("Location").
+		Preload("Departments").
+		Preload("Locations").
+		Preload("Classifications").
+		Preload("Roles").
+		Where("is_active = ?", true).
+		Where("call_status = ?", models.CallStatusOnline)
+
+	if excludeUserID != nil {
+		query = query.Where("id != ?", excludeUserID)
+	}
+
+	if len(roleIDs) > 0 {
+		query = query.
+			Joins("JOIN user_roles ur ON ur.user_id = users.id").
+			Where("ur.role_id IN ?", roleIDs)
+	}
+
+	if classificationID != nil {
+		query = query.
+			Joins("JOIN user_classifications uc ON uc.user_id = users.id").
+			Where("uc.classification_id = ?", classificationID)
+	}
+
+	if locationID != nil {
+		query = query.
+			Joins("JOIN user_locations ul ON ul.user_id = users.id").
+			Where("ul.location_id = ?", locationID)
+	}
+
+	if departmentID != nil {
+		query = query.
+			Joins("LEFT JOIN user_departments ud ON ud.user_id = users.id").
+			Where("users.department_id = ? OR ud.department_id = ?", departmentID, departmentID)
+	}
+
+	err := query.Distinct().Order("first_name, last_name").Find(&users).Error
+	return users, err
+}
+
+func (r *userRepository) IsUserOnline(ctx context.Context, userID uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&models.User{}).
+		Where("id = ? AND is_active = ? AND call_status = ?", userID, true, models.CallStatusOnline).
+		Count(&count).Error
+	return count > 0, err
+}
+
 func (r *userRepository) FindByExtension(ctx context.Context, extension string) (*models.User, error) {
 	var user models.User
 	err := r.db.WithContext(ctx).Where("extension = ?", extension).First(&user).Error
 	return &user, err
+}
+
+func (r *userRepository) FindByExtOrPhone(ctx context.Context, phone string) (*models.User, error) {
+	var user models.User
+	err := r.db.WithContext(ctx).Where("extension = ? OR phone = ?", phone, phone).First(&user).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *userRepository) FindByExtOrPhoneList(ctx context.Context, phones []string) ([]models.User, error) {
+	if len(phones) == 0 {
+		return []models.User{}, nil
+	}
+	var users []models.User
+	err := r.db.WithContext(ctx).
+		Where("extension IN ? OR phone IN ?", phones, phones).
+		Find(&users).Error
+	return users, err
 }
 
 func (r *userRepository) FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.User, error) {
@@ -700,4 +781,47 @@ func (r *userRepository) ExistsByPhone(ctx context.Context, phone string, exclud
 		Count(&count).Error
 
 	return count > 0, err
+}
+
+func (r *userRepository) ExistsByPhoneAndName(ctx context.Context, phone string, name ...string) (bool, error) {
+	query := r.db.WithContext(ctx).Model(&models.User{})
+
+	query = query.Where("phone = ?", phone)
+
+	if len(name) > 0 && name[0] != "" {
+		query = query.Where("username = ?", name[0])
+	}
+
+	// Use Select("1") + Limit(1) instead of Count — faster, stops at first match
+	var user models.User
+	err := query.Select("id").Limit(1).
+		Where("is_active = ?", true).
+		Where("deleted_at IS NULL").
+		First(&user).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	return true, nil
+}
+
+func (r *userRepository) ExistsByNationalID(ctx context.Context, nationalID string) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&models.User{}).Where("national_id = ?", nationalID).Count(&count).Error
+	return count > 0, err
+}
+
+func (r *userRepository) FindByNationalIDForLogin(ctx context.Context, nationalID string) (*models.User, error) {
+	var user models.User
+	err := r.db.WithContext(ctx).
+		Preload("Roles", "is_active = ?", true).
+		Preload("Roles.Permissions", "is_active = ?", true).
+		First(&user, "national_id = ?", nationalID).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
 }

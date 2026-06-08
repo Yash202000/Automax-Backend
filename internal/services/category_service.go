@@ -62,14 +62,16 @@ func (s *categoryService) Create(ctx context.Context, req *models.CategoryCreate
 	}
 
 	category := &models.Category{
-		Name:        strings.TrimSpace(req.Name),
-		Code:        code,
-		Description: req.Description,
-		ParentID:    req.ParentID,
-		Level:       level,
-		Path:        path,
-		SortOrder:   req.SortOrder,
-		IsActive:    true,
+		Name:          strings.TrimSpace(req.Name),
+		NameAr:        req.NameAr,
+		Code:          code,
+		Description:   req.Description,
+		DescriptionAr: req.DescriptionAr,
+		ParentID:      req.ParentID,
+		Level:         level,
+		Path:          path,
+		SortOrder:     req.SortOrder,
+		IsActive:      true,
 	}
 
 	if err := s.repo.Create(ctx, category); err != nil {
@@ -93,8 +95,14 @@ func (s *categoryService) Update(ctx context.Context, id uuid.UUID, req *models.
 		}
 		category.Name = n
 	}
+	if req.NameAr != nil {
+		category.NameAr = *req.NameAr
+	}
 	if req.Description != nil {
 		category.Description = *req.Description
+	}
+	if req.DescriptionAr != nil {
+		category.DescriptionAr = *req.DescriptionAr
 	}
 	if req.IsActive != nil {
 		category.IsActive = *req.IsActive

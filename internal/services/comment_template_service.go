@@ -18,6 +18,7 @@ type CommentTemplateService interface {
 	Update(ctx context.Context, id uuid.UUID, req *models.CommentTemplateUpdateRequest) (*models.CommentTemplateResponse, error)
 	Get(ctx context.Context, id uuid.UUID) (*models.CommentTemplateResponse, error)
 	GetByWorkflowTransitionID(ctx context.Context, workflowTransitionID uuid.UUID) ([]models.CommentTemplateResponse, error)
+	CommentTemplateExist(ctx context.Context, comment string, workflowTransitionID uuid.UUID) (bool, error)
 	List(ctx context.Context, includeInactive bool) ([]models.CommentTemplateResponse, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 }
@@ -117,6 +118,10 @@ func (s *commentTemplateService) GetByWorkflowTransitionID(ctx context.Context, 
 	}
 
 	return responses, nil
+}
+
+func (s *commentTemplateService) CommentTemplateExist(ctx context.Context, comment string, workflowTransitionID uuid.UUID) (bool, error) {
+	return s.repo.CommentTemplateExist(ctx, comment, workflowTransitionID)
 }
 
 func (s *commentTemplateService) List(ctx context.Context, includeInactive bool) ([]models.CommentTemplateResponse, error) {

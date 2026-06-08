@@ -1,11 +1,11 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"fmt"
+	"log"
+	"regexp"
 	"strings"
-	"text/template"
 	"time"
 
 	"github.com/automax/backend/internal/models"
@@ -46,28 +46,56 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		return nil, fmt.Errorf("at least one recipient (to, cc, or bcc) is required")
 	}
 
-	// REQUIRED: subject OR body
-	if strings.TrimSpace(subject) == "" && strings.TrimSpace(body) == "" {
+	// When a template code is provided the template itself supplies subject/body,
+	// so the caller is allowed to pass empty strings for both.
+	if (templateCode == nil || *templateCode == "") &&
+		strings.TrimSpace(subject) == "" && strings.TrimSpace(body) == "" {
 		return nil, fmt.Errorf("either subject or body must be provided")
 	}
 
 	//TEMPLATE LOGIC
 	if templateCode != nil && *templateCode != "" {
 
-		tpl, err := s.templateRepo.FindByCodeChannelLanguage(
-			ctx, *templateCode, channel, language,
-		)
+		tpl, err := s.templateRepo.FindByCode(ctx, *templateCode, channel)
 		if err != nil {
-			return nil, err
-		}
-
-		// Render only if variables exist
-		if len(variables) > 0 {
-			if tpl.Body != "" {
-				body, _ = RenderTemplate(tpl.Body, variables)
+			// Template not found — fall through and use the provided subject/body as-is.
+			log.Printf("[NotificationService] template '%s' not found for channel '%s', using fallback content: %v", *templateCode, channel, err)
+		} else {
+			// Use whichever body is set. When the requested language has content, prefer it;
+			// otherwise use whichever variant is non-empty so the template always sends.
+			var tplBody, tplSubject string
+			if language == "ar" && tpl.BodyAR != "" {
+				tplBody = tpl.BodyAR
+				tplSubject = tpl.SubjectAR
+			} else if language != "ar" && tpl.BodyEN != "" {
+				tplBody = tpl.BodyEN
+				tplSubject = tpl.SubjectEN
+			} else if tpl.BodyEN != "" {
+				tplBody = tpl.BodyEN
+				tplSubject = tpl.SubjectEN
+			} else if tpl.BodyAR != "" {
+				tplBody = tpl.BodyAR
+				tplSubject = tpl.SubjectAR
+			} else {
+				log.Printf("[NotificationService] Template '%s': both EN and AR bodies are empty — skipping send", *templateCode)
 			}
-			if tpl.Subject != "" {
-				subject, _ = RenderTemplate(tpl.Subject, variables)
+
+			if len(variables) > 0 {
+				log.Printf("[NotificationService] Rendering template '%s' (channel=%s) with %d variable(s)", *templateCode, channel, len(variables))
+				if tplBody != "" {
+					body, _ = RenderTemplate(tplBody, variables)
+				}
+				if tplSubject != "" {
+					subject, _ = RenderTemplate(tplSubject, variables)
+				}
+			} else {
+				log.Printf("[NotificationService] Rendering template '%s' (channel=%s) with NO variables — placeholders will not be substituted", *templateCode, channel)
+				if tplBody != "" {
+					body = tplBody
+				}
+				if tplSubject != "" {
+					subject = tplSubject
+				}
 			}
 		}
 
@@ -785,12 +813,78 @@ func (s *NotificationService) SetMetaOnLogs(ctx context.Context, ids []uuid.UUID
 	return s.logRepo.SetMeta(ctx, ids, meta)
 }
 
-func RenderTemplate(tpl string, vars map[string]string) (string, error) {
-	t, err := template.New("tpl").Option("missingkey=zero").Parse(tpl)
-	if err != nil {
-		return "", err
+// placeholderRe matches {{key}} and {{.key}} patterns (key may contain letters, digits, underscores).
+var placeholderRe = regexp.MustCompile(`\{\{\.?([A-Za-z0-9_]+)\}\}`)
+
+// RenderTemplate substitutes variables into a template string.
+// SendByActionType sends all active templates matching actionType+channel to the given recipients.
+// Each active template is sent as a separate notification.
+// Returns an error only when NO active templates are found, so callers can fall back to hardcoded content.
+func (s *NotificationService) SendByActionType(
+	ctx context.Context,
+	actionType, channel, language string,
+	to []string,
+	variables map[string]string,
+	sentBy *uuid.UUID,
+) error {
+	templates, err := s.templateRepo.FindActiveByActionTypeAndChannel(ctx, actionType, channel)
+	if err != nil || len(templates) == 0 {
+		return fmt.Errorf("no active %s templates found for channel %s", actionType, channel)
 	}
-	var buf bytes.Buffer
-	err = t.Execute(&buf, vars)
-	return buf.String(), err
+	log.Printf("[SendByActionType] action=%s channel=%s lang=%s recipients=%v templates_found=%d", actionType, channel, language, to, len(templates))
+	var lastErr error
+	for _, tpl := range templates {
+		code := tpl.Code
+		log.Printf("[SendByActionType] sending template code=%s body_en_len=%d body_ar_len=%d", code, len(tpl.BodyEN), len(tpl.BodyAR))
+		_, sendErr := s.SendNotification(
+			ctx, channel, &code, language,
+			to, nil, nil,
+			"", "", variables, nil, sentBy, nil,
+		)
+		if sendErr != nil {
+			log.Printf("[SendByActionType] template %s send failed: %v", code, sendErr)
+			lastErr = sendErr
+		} else {
+			log.Printf("[SendByActionType] template %s sent OK", code)
+		}
+	}
+	return lastErr
+}
+
+// Matching is case-insensitive: {{Incident_Number}} matches vars["incident_number"].
+// Supports both {{variable_name}} and {{.variable_name}} syntax.
+// Unknown variables are left unchanged in the output (never errors).
+// Logs which variables were substituted and which placeholders remain unmapped.
+func RenderTemplate(tpl string, vars map[string]string) (string, error) {
+	// Build a lowercase-keyed copy for case-insensitive lookups.
+	lower := make(map[string]string, len(vars))
+	for k, v := range vars {
+		lower[strings.ToLower(k)] = v
+	}
+
+	var substituted []string
+	result := placeholderRe.ReplaceAllStringFunc(tpl, func(match string) string {
+		// Extract inner key, strip optional leading dot.
+		sub := placeholderRe.FindStringSubmatch(match)
+		if len(sub) < 2 {
+			return match
+		}
+		key := strings.ToLower(strings.TrimSpace(sub[1]))
+		if v, ok := lower[key]; ok {
+			substituted = append(substituted, sub[1]) // log original casing
+			return v
+		}
+		return match // leave unrecognised placeholders as-is
+	})
+
+	// Detect any remaining unmapped placeholders.
+	unmapped := placeholderRe.FindAllString(result, -1)
+	if len(unmapped) > 0 {
+		log.Printf("[RenderTemplate] WARNING: %d unmapped placeholder(s) remain: %v | substituted: %v",
+			len(unmapped), unmapped, substituted)
+	} else {
+		log.Printf("[RenderTemplate] OK: substituted variables: %v", substituted)
+	}
+
+	return result, nil
 }

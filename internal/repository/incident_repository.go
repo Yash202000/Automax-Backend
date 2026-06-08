@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/models"
@@ -91,8 +93,18 @@ type IncidentRepository interface {
 	// Notifications
 	CreateNotification(ctx context.Context, notification *models.NotificationLog) error
 
+	// Auto-assign monitor
+	FindUnassignedByStateCode(ctx context.Context, stateCode string) ([]models.Incident, error)
+
 	// Complaint-specific
 	IncrementEvaluationCount(ctx context.Context, id uuid.UUID) error
+
+	// Report section queries
+	GetReportIncidentData(ctx context.Context, incidentID uuid.UUID) (*models.IncidentReportData, error)
+	GetReportLookupValues(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentReportLookupValue, error)
+	GetReportTransitions(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentReportTransition, error)
+	GetReportAttachments(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentReportAttachment, error)
+	GetReportRevisions(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentReportRevision, error)
 }
 
 type incidentRepository struct {
@@ -234,6 +246,20 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	if len(filter.ReporterID) != 0 {
 		query = query.Where("reporter_id IN ?", filter.ReporterID)
 	}
+	if filter.ReporterPhone != "" {
+		phone := filter.ReporterPhone
+		phoneWithPlus := "+" + phone
+		if strings.HasPrefix(phone, "+") {
+			phoneWithPlus = phone
+			phone = strings.TrimPrefix(phone, "+")
+		}
+		query = query.Where(
+			"reporter_phone IN (?, ?) OR reporter_id IN (SELECT id FROM users WHERE phone IN (?, ?) OR extension IN (?, ?))",
+			phone, phoneWithPlus,
+			phone, phoneWithPlus,
+			phone, phoneWithPlus,
+		)
+	}
 	if filter.SLABreached != nil {
 		query = query.Where("sla_breached = ?", *filter.SLABreached)
 	}
@@ -246,6 +272,16 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	if filter.Source != nil && *filter.Source != "" {
 		query = query.Where("source = ?", *filter.Source)
 	}
+	if filter.SourceIncidentID != nil && *filter.SourceIncidentID != "" {
+		query = query.Where("source_incident_id = ?", *filter.SourceIncidentID)
+	}
+	if filter.ConvertedToRequest != nil {
+		if *filter.ConvertedToRequest {
+			query = query.Where("converted_request_id IS NOT NULL")
+		} else {
+			query = query.Where("converted_request_id IS NULL")
+		}
+	}
 	if filter.StartDate != nil {
 		query = query.Where("created_at >= ?", *filter.StartDate)
 	}
@@ -256,18 +292,41 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		searchPattern := "%" + filter.Search + "%"
 		query = query.Where("incident_number ILIKE ? OR title ILIKE ? OR description ILIKE ?", searchPattern, searchPattern, searchPattern)
 	}
-	if filter.CustomFieldKey != "" && filter.CustomFieldValue != "" {
-		query = query.Where("NULLIF(custom_fields, '')::jsonb -> ? ->> 'value' ILIKE ?", filter.CustomFieldKey, "%"+filter.CustomFieldValue+"%")
-	}
 	if filter.TaskID != "" {
 		query = query.Where("NULLIF(custom_fields, '')::jsonb -> 'lookup:TASK ID' ->> 'value' ILIKE ?", "%"+filter.TaskID+"%")
 	}
+	// Flat custom_fields filters: cf=key:value (AND-ed)
+	for _, cf := range filter.CustomFieldFilters {
+		query = query.Where("NULLIF(custom_fields, '')::jsonb ->> ? ILIKE ?", cf.Key, "%"+cf.Value+"%")
+	}
 
-	// Count total
+	// Transition filters — JOIN only when needed
+	if filter.TransitionID != nil || filter.FromStateID != nil || filter.ToStateID != nil {
+		// Build a subquery to get matching incident IDs
+		subQuery := r.db.WithContext(ctx).
+			Table("incident_transition_histories ith").
+			Select("DISTINCT ith.incident_id").
+			Joins("JOIN workflow_transitions wt ON wt.id = ith.transition_id")
+
+		if filter.TransitionID != nil {
+			subQuery = subQuery.Where("wt.id = ?", *filter.TransitionID)
+		}
+		if filter.FromStateID != nil {
+			subQuery = subQuery.Where("wt.from_state_id = ?", *filter.FromStateID)
+		}
+		if filter.ToStateID != nil {
+			subQuery = subQuery.Where("wt.to_state_id = ?", *filter.ToStateID)
+		}
+
+		// Use IN subquery on main query — no JOIN, no DISTINCT needed
+		query = query.Where("incidents.id IN (?)", subQuery)
+	}
+
+	// Single unified count — works for all cases
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-
+	// Apply pagination
 	// Apply pagination
 	if filter.Page < 1 {
 		filter.Page = 1
@@ -279,12 +338,16 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 
 	err := query.
 		Preload("Classification").
+		Preload("TransitionHistory").
+		Preload("TransitionHistory.PerformedBy").
+		Preload("Reporter").
 		Preload("Workflow").
 		Preload("CurrentState").
 		Preload("Assignee").
 		Preload("Department").
 		Preload("Location").
 		Preload("LookupValues.Category").
+		Preload("TransitionHistory.Transition").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(filter.Limit).
@@ -303,7 +366,7 @@ func (r *incidentRepository) FindByIDWithLast6DigitValidation(
 
 	var incident models.Incident
 
-	err := r.db.WithContext(ctx).Debug().
+	err := r.db.WithContext(ctx).
 		Preload("CurrentState").
 		Preload("Workflow").
 		Joins("JOIN users ON users.id = incidents.reporter_id").
@@ -433,6 +496,8 @@ func (r *incidentRepository) GetTransitionHistory(ctx context.Context, incidentI
 		Preload("ToState").
 		Preload("PerformedBy").
 		Preload("PerformedBy.Departments").
+		Preload("Feedbacks").
+		Preload("Feedbacks.CreatedBy").
 		Where("incident_id = ?", incidentID).
 		Order("transitioned_at DESC").
 		Find(&history).Error
@@ -567,7 +632,20 @@ func (r *incidentRepository) SetLookupValues(ctx context.Context, incidentID uui
 		return err
 	}
 
-	return r.db.WithContext(ctx).Model(&incident).Association("LookupValues").Replace(actualLookupValues)
+	// Deduplicate by category: last value per category wins.
+	// Prevents storing multiple values from the same category (e.g. two Priorities).
+	seen := make(map[uuid.UUID]int)
+	var dedupValues []models.LookupValue
+	for _, lv := range actualLookupValues {
+		if idx, exists := seen[lv.CategoryID]; exists {
+			dedupValues[idx] = lv
+		} else {
+			seen[lv.CategoryID] = len(dedupValues)
+			dedupValues = append(dedupValues, lv)
+		}
+	}
+
+	return r.db.WithContext(ctx).Model(&incident).Association("LookupValues").Replace(dedupValues)
 }
 
 // Stats
@@ -870,6 +948,17 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 		return nil, err
 	}
 
+	// Partial Close (incidents currently in a partial_close state)
+	pcQuery := applyBaseFilters(
+		r.db.WithContext(ctx).Model(&models.Incident{}).
+			Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
+			Where("workflow_states.is_partial_close = ? AND incidents.workflow_id IN (SELECT id FROM workflows WHERE deleted_at IS NULL)", true),
+	)
+	if err := pcQuery.Count(&stats.PartialClose).Error; err != nil {
+		// Non-fatal: column may not exist yet on older schema — partial_close stays 0
+		log.Printf("[GetStatsV2] partial_close count query failed (schema may need migration): %v", err)
+	}
+
 	// Per-state counts (workflow_stats + by_state)
 	type stateCount struct {
 		WorkflowID   uuid.UUID `gorm:"column:workflow_id"`
@@ -893,7 +982,8 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 				workflow_states.state_type as state_type,
 				count(*) as count
 			`).
-			Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
+			//Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
+			Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id AND workflow_states.deleted_at IS NULL").
 			Joins("JOIN workflows ON workflows.id = incidents.workflow_id AND workflows.deleted_at IS NULL"),
 	)
 
@@ -914,7 +1004,8 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 	stateTypeQuery := applyBaseFilters(
 		r.db.WithContext(ctx).Model(&models.Incident{}).
 			Select("workflow_states.state_type as state_type, workflow_states.code as state_code, count(*) as count").
-			Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
+			//Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
+			Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id AND workflow_states.deleted_at IS NULL").
 			Where("incidents.workflow_id IN (SELECT id FROM workflows WHERE deleted_at IS NULL)"),
 	)
 
@@ -1123,12 +1214,15 @@ func (r *incidentRepository) GetAssignedToUser(ctx context.Context, userID uuid.
 	// Main query with preloads
 	if err := baseQuery.
 		Preload("Classification").
+		Preload("TransitionHistory").
+		Preload("TransitionHistory.PerformedBy").
 		Preload("Workflow").
 		Preload("CurrentState").
 		Preload("Assignee").
 		Preload("Department").
 		Preload("Location").
 		Preload("LookupValues.Category").
+		Preload("TransitionHistory.Transition").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(limit).
@@ -1163,12 +1257,15 @@ func (r *incidentRepository) GetAssignedToUser1(ctx context.Context, userID uuid
 	}
 	err := baseQuery.
 		Preload("Classification").
+		Preload("TransitionHistory").
+		Preload("TransitionHistory.PerformedBy").
 		Preload("Workflow").
 		Preload("CurrentState").
 		Preload("Assignee").
 		Preload("Department").
 		Preload("Location").
 		Preload("LookupValues.Category").
+		Preload("TransitionHistory.Transition").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(limit).
@@ -1203,12 +1300,15 @@ func (r *incidentRepository) GetReportedByUser(ctx context.Context, userID uuid.
 
 	err := baseQuery.
 		Preload("Classification").
+		Preload("TransitionHistory").
+		Preload("TransitionHistory.PerformedBy").
 		Preload("CurrentState").
 		Preload("Workflow").
 		Preload("Assignee").
 		Preload("Department").
 		Preload("Location").
 		Preload("LookupValues.Category").
+		Preload("TransitionHistory.Transition").
 		Order("created_at DESC").
 		Offset(offset).
 		Limit(limit).
@@ -1322,7 +1422,7 @@ func (r *incidentRepository) ListFeedback(ctx context.Context, incidentID uuid.U
 
 func (r *incidentRepository) ListAllFeedback(ctx context.Context) ([]models.IncidentFeedback, error) {
 	var feedback []models.IncidentFeedback
-	err := r.db.WithContext(ctx).Debug().
+	err := r.db.WithContext(ctx).
 		Preload("CreatedBy").
 		Preload("Incident").
 		Order("created_at DESC").
@@ -1345,6 +1445,22 @@ func (r *incidentRepository) IncrementEvaluationCount(ctx context.Context, id uu
 		Where("id = ?", id).
 		Where("record_type = 'complaint'").
 		Update("evaluation_count", gorm.Expr("evaluation_count + 1")).Error
+}
+
+func (r *incidentRepository) FindUnassignedByStateCode(ctx context.Context, stateCode string) ([]models.Incident, error) {
+	var incidents []models.Incident
+	err := r.db.WithContext(ctx).
+		Joins("JOIN workflow_states ws ON ws.id = incidents.current_state_id").
+		Where("ws.code = ?", stateCode).
+		Where("incidents.id NOT IN (SELECT incident_id FROM incident_assignees) AND incidents.record_type = ?", "incident").
+		Preload("CurrentState").
+		Preload("CurrentState.AssignmentRoles").
+		Preload("CurrentState.AssignUser").
+		Preload("Classification").
+		Preload("Location").
+		Preload("Department").
+		Find(&incidents).Error
+	return incidents, err
 }
 
 // Concurrency Control
@@ -1421,6 +1537,7 @@ func (r *incidentRepository) GetIncidentsExceedingStateSLA(ctx context.Context) 
 	err := r.db.WithContext(ctx).
 		Select("incidents.*").
 		Joins("JOIN workflow_states ws ON incidents.current_state_id = ws.id").
+		Where("incidents.record_type = 'incident'").
 		Where("ws.sla_hours IS NOT NULL AND ws.sla_hours > 0").
 		Where("ws.state_type != 'terminal'").
 		Where("ws.deleted_at IS NULL").
@@ -1444,6 +1561,13 @@ func (r *incidentRepository) GetIncidentsExceedingStateSLA(ctx context.Context) 
 		Preload("Location").
 		Preload("Classification").
 		Preload("Assignee").
+		Preload("Reporter").
+		Preload("Department").
+		Preload("LookupValues.Category").
+		Preload("TransitionHistory", func(db *gorm.DB) *gorm.DB {
+			return db.Order("transitioned_at DESC").Limit(1)
+		}).
+		Order("incidents.created_at DESC").
 		Find(&incidents).Error
 
 	return incidents, err
@@ -1466,6 +1590,166 @@ func (r *incidentRepository) GetNewlyBreachedIncidents(ctx context.Context) ([]m
 		Preload("Assignee").
 		Preload("Reporter").
 		Preload("CurrentState").
+		Preload("Location").
+		Preload("Classification").
+		Preload("Workflow").
+		Preload("LookupValues.Category").
 		Find(&incidents).Error
 	return incidents, err
+}
+
+func (r *incidentRepository) GetReportTransitions(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentReportTransition, error) {
+	var results []models.IncidentReportTransition
+	sql := `
+SELECT
+    ith.id, ith.transition_id, ith.performed_by_id,
+    ith.comment, ith.old_values, ith.new_values, ith.transitioned_at,
+    COALESCE(u.first_name, '')      AS performed_by_first_name,
+    COALESCE(u.last_name, '')       AS performed_by_last_name,
+    COALESCE(wt.name, '')           AS transition_name,
+    COALESCE(wt.name_ar, '')        AS transition_name_ar,
+    COALESCE(wt.code, '')           AS transition_code,
+    ith.from_state_id,
+    COALESCE(fs.name, '')           AS from_state_name,
+    COALESCE(fs.name_ar, '')        AS from_state_name_ar,
+    COALESCE(fs.code, '')           AS from_state_code,
+    COALESCE(fs.color, '')          AS from_state_color,
+    COALESCE(fs.state_type, '')     AS from_state_type,
+    ith.to_state_id,
+    COALESCE(ts.name, '')           AS to_state_name,
+    COALESCE(ts.name_ar, '')        AS to_state_name_ar,
+    COALESCE(ts.code, '')           AS to_state_code,
+    COALESCE(ts.color, '')          AS to_state_color,
+    COALESCE(ts.state_type, '')     AS to_state_type,
+    COALESCE(ifb.comment, '')       AS feedback_comment
+FROM incident_transition_histories ith
+LEFT JOIN workflow_transitions wt  ON wt.id  = ith.transition_id
+LEFT JOIN workflow_states fs       ON fs.id  = ith.from_state_id
+LEFT JOIN workflow_states ts       ON ts.id  = ith.to_state_id
+LEFT JOIN users u                  ON u.id   = ith.performed_by_id
+LEFT JOIN incident_feedbacks ifb   ON ifb.transition_history_id = ith.id
+WHERE ith.incident_id = ?
+ORDER BY ith.transitioned_at ASC`
+	err := r.db.WithContext(ctx).Raw(sql, incidentID).Scan(&results).Error
+	return results, err
+}
+
+func (r *incidentRepository) GetReportAttachments(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentReportAttachment, error) {
+	var results []models.IncidentReportAttachment
+	sql := `
+SELECT
+    ia.id, ia.incident_id, ia.transition_history_id,
+    ia.file_name, ia.file_size, ia.mime_type, ia.file_path,
+    ia.uploaded_by_id, ia.created_at, ia.deleted_at,
+    COALESCE(u.first_name, '')  AS uploaded_by_first_name,
+    COALESCE(u.last_name, '')   AS uploaded_by_last_name,
+    wt.name                     AS transition_name,
+    wt.name_ar                  AS transition_name_ar,
+    fs.name                     AS from_state_name,
+    fs.name_ar                  AS from_state_name_ar,
+    ts.name                     AS to_state_name,
+    ts.name_ar                  AS to_state_name_ar
+FROM incident_attachments ia
+LEFT JOIN users u                            ON u.id  = ia.uploaded_by_id
+LEFT JOIN incident_transition_histories ith  ON ith.id = ia.transition_history_id
+LEFT JOIN workflow_transitions wt            ON wt.id  = ith.transition_id
+LEFT JOIN workflow_states fs                 ON fs.id  = ith.from_state_id
+LEFT JOIN workflow_states ts                 ON ts.id  = ith.to_state_id
+WHERE ia.incident_id = ?
+ORDER BY ia.created_at ASC`
+	err := r.db.WithContext(ctx).Raw(sql, incidentID).Scan(&results).Error
+	return results, err
+}
+
+func (r *incidentRepository) GetReportRevisions(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentReportRevision, error) {
+	var results []models.IncidentReportRevision
+	sql := `
+SELECT
+    ir.id, ir.incident_id, ir.transition_history_id,
+    ir.comment_id, ir.attachment_id,
+    ir.revision_number, ir.action_type, ir.action_description,
+    ir.changes, ir.performed_by_id,
+    COALESCE(ir.performed_by_roles, '') AS performed_by_roles,
+    COALESCE(ir.performed_by_phone, '') AS performed_by_phone,
+    ir.created_at,
+    COALESCE(u.first_name, '') AS performed_by_first_name,
+    COALESCE(u.last_name, '')  AS performed_by_last_name
+FROM incident_revisions ir
+LEFT JOIN users u ON u.id = ir.performed_by_id
+WHERE ir.incident_id = ?
+ORDER BY ir.created_at ASC`
+	err := r.db.WithContext(ctx).Raw(sql, incidentID).Scan(&results).Error
+	return results, err
+}
+
+func (r *incidentRepository) GetReportIncidentData(ctx context.Context, incidentID uuid.UUID) (*models.IncidentReportData, error) {
+	var result models.IncidentReportData
+	sql := `
+SELECT
+    i.id, i.incident_number, i.title, i.description,
+    i.channel, i.source, i.record_type,
+    i.created_at, i.updated_at,
+    i.sla_breached, i.sla_deadline,
+    i.due_date, i.resolved_at, i.closed_at,
+    i.classification_id, i.location_id,
+    COALESCE(i.created_by_mobile, '') AS created_by_mobile,
+    COALESCE(i.created_by_name, '')   AS created_by_name,
+    i.latitude, i.longitude,
+    COALESCE(i.address, '')     AS address,
+    COALESCE(i.city, '')        AS city,
+    COALESCE(i.state, '')       AS state,
+    COALESCE(i.country, '')     AS country,
+    COALESCE(i.postal_code, '') AS postal_code,
+    COALESCE(ws.name, '')       AS status_name,
+    COALESCE(ws.name_ar, '')    AS status_name_ar,
+    COALESCE(cl.name, '')       AS classification_name,
+    COALESCE(cl.name_ar, '')    AS classification_name_ar,
+    COALESCE(loc.name, '')      AS location_name,
+    COALESCE(loc.name_ar, '')   AS location_name_ar,
+    COALESCE(creator.username, '') AS creator_username,
+    COALESCE(creator.first_name, '') AS creator_first_name,
+    COALESCE(creator.last_name, '')  AS creator_last_name,
+	CONCAT_WS(' ', creator.first_name, creator.last_name) AS creator_full_name,
+    COALESCE(creator.email, '')  AS creator_email,
+    COALESCE(creator.phone, '')  AS creator_phone,
+    reporter_phone AS caller_phone,
+    reporter_name AS caller_name,
+    COALESCE(asn.first_name, '') AS assignee_first_name,
+    COALESCE(asn.last_name, '')  AS assignee_last_name,
+    COALESCE(dep.name, '')       AS department_name,
+    COALESCE((
+        SELECT string_agg(u2.first_name || ' ' || u2.last_name, ', ')
+        FROM incident_assignees ia2
+        JOIN users u2 ON u2.id = ia2.user_id
+        WHERE ia2.incident_id = i.id
+    ), '') AS assignees_name
+FROM incidents i
+LEFT JOIN workflow_states ws ON ws.id  = i.current_state_id
+LEFT JOIN classifications cl  ON cl.id  = i.classification_id
+LEFT JOIN locations loc        ON loc.id = i.location_id
+LEFT JOIN users creator            ON creator.id = i.reporter_id
+LEFT JOIN users asn            ON asn.id = i.assignee_id
+LEFT JOIN departments dep      ON dep.id = i.department_id
+WHERE i.id = ?`
+	err := r.db.WithContext(ctx).Raw(sql, incidentID).Scan(&result).Error
+	return &result, err
+}
+
+func (r *incidentRepository) GetReportLookupValues(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentReportLookupValue, error) {
+	var results []models.IncidentReportLookupValue
+	sql := `
+SELECT
+    COALESCE(lc.id, '00000000-0000-0000-0000-000000000000'::uuid) AS category_id,
+    COALESCE(lc.name, lv.code)  AS category_name,
+    COALESCE(lc.name_ar, '')    AS category_name_ar,
+    lv.code,
+    COALESCE(lv.name, '')       AS name,
+    COALESCE(lv.name_ar, '')    AS name_ar
+FROM incident_lookup_values ilv
+JOIN  lookup_values lv     ON lv.id  = ilv.lookup_value_id
+LEFT JOIN lookup_categories lc ON lc.id = lv.category_id
+WHERE ilv.incident_id = ?
+ORDER BY lc.name, lv.sort_order`
+	err := r.db.WithContext(ctx).Raw(sql, incidentID).Scan(&results).Error
+	return results, err
 }

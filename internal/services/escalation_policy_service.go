@@ -190,6 +190,15 @@ func (s *EscalationPolicyService) ResolveGroupTargetUsers(ctx context.Context, t
 	return result, nil
 }
 
+// UpdateTargetExcludedUsers replaces the excluded_user_ids list for a single
+// step target identified by targetID. The target must belong to policyID.
+func (s *EscalationPolicyService) UpdateTargetExcludedUsers(ctx context.Context, policyID, targetID uuid.UUID, excludedUserIDs []string) error {
+	if _, err := s.repo.FindByID(ctx, policyID); err != nil {
+		return fmt.Errorf("escalation policy not found")
+	}
+	return s.repo.UpdateTargetExcludedUsers(ctx, policyID, targetID, excludedUserIDs)
+}
+
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 // buildSteps converts the API request steps into model structs.
@@ -197,9 +206,11 @@ func buildSteps(reqs []models.EscalationPolicyStepRequest) ([]models.EscalationP
 	steps := make([]models.EscalationPolicyStep, 0, len(reqs))
 	for _, sr := range reqs {
 		step := models.EscalationPolicyStep{
-			StepOrder:  sr.StepOrder,
-			DelayHours: sr.DelayHours,
-			Channel:    sr.Channel,
+			StepOrder:         sr.StepOrder,
+			DelayHours:        sr.DelayHours,
+			Channel:           sr.Channel,
+			EmailTemplateCode: sr.EmailTemplateCode,
+			SMSTemplateCode:   sr.SMSTemplateCode,
 		}
 		for _, tr := range sr.Targets {
 			target := models.EscalationPolicyStepTarget{

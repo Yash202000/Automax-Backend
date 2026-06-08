@@ -74,6 +74,8 @@ func Migrate(db *gorm.DB) error {
 		&models.User{},
 		&models.ActionLog{},
 		&models.CallLog{},
+		&models.CallParticipant{},
+		&models.CallLogAttachment{},
 		&models.NotificationTemplate{},
 		&models.NotificationLog{},
 		&models.EscalationSLA{},
@@ -96,9 +98,11 @@ func Migrate(db *gorm.DB) error {
 		&models.IncidentComment{},
 		&models.IncidentAttachment{},
 		&models.IncidentFeedback{},
+		&models.IncidentPublicFeedback{},
 		&models.IncidentTransitionHistory{},
 		&models.IncidentRevision{},
 		&models.IncidentRejectionLog{},
+		&models.IvrSmsLink{},
 		// Report models
 		&models.Report{},
 		&models.ReportExecution{},
@@ -126,6 +130,10 @@ func Migrate(db *gorm.DB) error {
 		&models.Evidence{},
 		&models.EvidenceTransitionHistory{},
 		&models.GoalCheckIn{},
+		// Goal Metric approval workflow
+		&models.GoalMetricValueChange{},
+		&models.MetricTransitionHistory{},
+		&models.MetricValueChangeTransitionHistory{},
 		// Goal Templates
 		&models.GoalTemplate{},
 		// Metric Import Batch models
@@ -142,6 +150,14 @@ func Migrate(db *gorm.DB) error {
 		&models.AIQualityFeedback{},
 		// License Management
 		&models.License{},
+		// External Integration
+		&models.IntegrationVariable{},
+		&models.IntegrationScript{},
+		&models.WorkflowStateTrigger{},
+		&models.WorkflowTransitionTrigger{},
+		&models.IntegrationExecutionLog{},
+		&models.IncidentBridge{},
+		&models.WebhookCallbackConfig{},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
@@ -164,12 +180,51 @@ func Migrate(db *gorm.DB) error {
 	db.Exec("ALTER TABLE evidence_transition_histories DROP CONSTRAINT IF EXISTS evidence_transition_histories_performed_by_id_fkey")
 	db.Exec("ALTER TABLE metric_import_batch_transition_histories DROP CONSTRAINT IF EXISTS fk_metric_import_batch_transition_histories_performed_by")
 	db.Exec("ALTER TABLE metric_import_batch_transition_histories DROP CONSTRAINT IF EXISTS metric_import_batch_transition_histories_performed_by_id_fkey")
+	db.Exec("ALTER TABLE metric_transition_histories DROP CONSTRAINT IF EXISTS fk_metric_transition_histories_performed_by")
+	db.Exec("ALTER TABLE metric_transition_histories DROP CONSTRAINT IF EXISTS metric_transition_histories_performed_by_id_fkey")
+	db.Exec("ALTER TABLE metric_value_change_transition_histories DROP CONSTRAINT IF EXISTS fk_metric_value_change_transition_histories_performed_by")
+	db.Exec("ALTER TABLE metric_value_change_transition_histories DROP CONSTRAINT IF EXISTS metric_value_change_transition_histories_performed_by_id_fkey")
 
 	db.Exec("ALTER TABLE lookup_categories ADD COLUMN IF NOT EXISTS redirect_url VARCHAR(500)")
+
+	// Notification template enhancements: add categorisation and bilingual-linking columns.
+	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS name VARCHAR(200)")
+	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS module_type VARCHAR(50)")
+	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS action_type VARCHAR(50)")
+	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS variables TEXT")
+	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS transition_id UUID REFERENCES workflow_transitions(id) ON DELETE SET NULL")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_notification_templates_module_type ON notification_templates(module_type)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_notification_templates_action_type ON notification_templates(action_type)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_notification_templates_transition_id ON notification_templates(transition_id)")
+
+	// Bilingual redesign: add new columns, migrate existing data, drop old single-language columns.
+	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS subject_en TEXT")
+	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS body_en    TEXT")
+	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS subject_ar TEXT")
+	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS body_ar    TEXT")
+	db.Exec("UPDATE notification_templates SET subject_en = subject, body_en = body WHERE language = 'en' AND body_en IS NULL")
+	db.Exec(`UPDATE notification_templates t SET subject_ar = ar.subject, body_ar = ar.body FROM notification_templates ar WHERE ar.language = 'ar' AND ar.code = t.code AND ar.channel = t.channel AND t.language = 'en'`)
+	db.Exec("DELETE FROM notification_templates WHERE language = 'ar'")
+	db.Exec("ALTER TABLE notification_templates DROP COLUMN IF EXISTS language")
+	db.Exec("ALTER TABLE notification_templates DROP COLUMN IF EXISTS subject")
+	db.Exec("ALTER TABLE notification_templates DROP COLUMN IF EXISTS body")
+	db.Exec("ALTER TABLE notification_templates DROP COLUMN IF EXISTS description")
+	// Enforce uniqueness of (code, channel) for non-deleted templates so duplicate codes
+	// are rejected at the DB level in addition to the service-level check.
+	db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_notification_templates_code_channel ON notification_templates(code, channel) WHERE deleted_at IS NULL`)
+
+	// Workflow code column was previously VARCHAR(50) which is too short for some existing workflows. Increase to 100 chars. Note: MySQL syntax is ALTER TABLE workflows MODIFY code VARCHAR(100) NOT NULL but Postgres is ALTER TABLE workflows ALTER COLUMN code TYPE VARCHAR(100). GORM's AutoMigrate doesn't handle this edge case, so we run raw SQL. Idempotent: safe to run repeatedly.
+	db.Exec("ALTER TABLE workflows ALTER COLUMN code TYPE VARCHAR(100)")
+	db.Exec("ALTER TABLE reports ALTER COLUMN timestamp_key TYPE VARCHAR(100) Default 'created_at'")
 
 	// Migrate transition assignment roles (single → many-to-many)
 	if err := migrations.MigrateTransitionAssignmentRoles(db); err != nil {
 		log.Printf("Warning: transition assignment roles migration failed: %v", err)
+	}
+
+	// Migrate state assignment roles (creation-time user assignment join table)
+	if err := migrations.MigrateStateAssignmentRoles(db); err != nil {
+		log.Printf("Warning: state assignment roles migration failed: %v", err)
 	}
 
 	// Migrate closed incident edit tracking
@@ -192,11 +247,35 @@ func Migrate(db *gorm.DB) error {
 		log.Printf("Warning: classification types migration failed: %v", err)
 	}
 
+	// Migrate user national_id column
+	if err := migrations.MigrateUserNationalID(db); err != nil {
+		log.Printf("Warning: user national_id migration failed: %v", err)
+	}
+
+	// Drop recording_url from call_logs — URLs are now generated from call_log_attachments
+	if err := migrations.MigrateCallLogRecordingURL(db); err != nil {
+		log.Printf("Warning: call_log recording_url migration failed: %v", err)
+	}
+
+	// Drop user_id from call_participants — participants are identified by phone_number only
+	if err := migrations.MigrateCallParticipantPhone(db); err != nil {
+		log.Printf("Warning: call_participant phone migration failed: %v", err)
+	}
+
 	// Seed existing free-text goal categories as root Category rows
 	// and back-fill goals.category_id. Idempotent: safe to run repeatedly.
 	if err := migrateFreeTextGoalCategories(db); err != nil {
 		log.Printf("Warning: goal category back-fill migration failed: %v", err)
 	}
+
+	// Partial Close feature columns — idempotent, safe to run repeatedly
+	db.Exec("ALTER TABLE workflow_states ADD COLUMN IF NOT EXISTS is_partial_close BOOLEAN NOT NULL DEFAULT false")
+	db.Exec("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS partial_close_expires_at TIMESTAMPTZ")
+	db.Exec("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS partial_close_duration VARCHAR(100) NOT NULL DEFAULT ''")
+	db.Exec("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS partial_close_notified BOOLEAN NOT NULL DEFAULT false")
+
+	// AD/LDAP user flag — idempotent
+	db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_ad_user BOOLEAN NOT NULL DEFAULT false")
 
 	log.Println("Database migrations completed")
 	return nil
@@ -378,6 +457,8 @@ func Seed(db *gorm.DB) error {
 		{Name: "Manage SLA", Code: "incidents:manage_sla", Module: "incidents", Action: "manage_sla", Description: "Override SLA settings"},
 		{Name: "Merge Incidents", Code: "incidents:merge", Module: "incidents", Action: "merge", Description: "Merge multiple incidents into one"},
 		{Name: "Edit Closed Incidents", Code: "incidents:edit-closed", Module: "incidents", Action: "edit_closed", Description: "Edit summary/description of closed incidents"},
+		{Name: "Request Info on Incidents", Code: "incidents:request-info", Module: "incidents", Action: "request_info", Description: "Request additional information from citizens"},
+		{Name: "Share Incidents", Code: "incidents:share", Module: "incidents", Action: "share", Description: "Share incident details with external parties"},
 
 		// Request permissions
 		{Name: "View Requests", Code: "requests:view", Module: "requests", Action: "view", Description: "View requests"},
@@ -586,6 +667,9 @@ func Seed(db *gorm.DB) error {
 	// Seed default evidence approval workflow
 	seedEvidenceApprovalWorkflow(db)
 
+	// Seed default metric & metric_value_change approval workflows
+	seedMetricApprovalWorkflows(db)
+
 	log.Println("Database seeding completed")
 	return nil
 }
@@ -747,6 +831,156 @@ func seedEvidenceApprovalWorkflow(db *gorm.DB) {
 	}
 
 	log.Println("Evidence approval workflow seeded successfully")
+}
+
+// seedMetricApprovalWorkflows seeds two parallel workflows used by the
+// metric approval gate (item #21):
+//   - record_type='metric' covers initial metric creation visibility.
+//   - record_type='metric_value_change' covers each subsequent value update.
+//
+// Both have the same shape as the evidence workflow. Idempotent: skips if
+// the workflow code already exists.
+func seedMetricApprovalWorkflows(db *gorm.DB) {
+	specs := []struct {
+		Name        string
+		Code        string
+		Description string
+		RecordType  string
+	}{
+		{
+			Name:        "Goal Metric Approval",
+			Code:        "metric_approval",
+			Description: "Default approval workflow for goal metric definitions. Supports L1 and optional L2 review.",
+			RecordType:  "metric",
+		},
+		{
+			Name:        "Goal Metric Value Change Approval",
+			Code:        "metric_value_change_approval",
+			Description: "Default approval workflow for proposed metric value changes. Supports L1 and optional L2 review.",
+			RecordType:  "metric_value_change",
+		},
+	}
+
+	for _, s := range specs {
+		var existing models.Workflow
+		if err := db.Where("code = ?", s.Code).First(&existing).Error; err == nil {
+			continue // already seeded
+		}
+
+		log.Printf("Seeding default %s workflow...", s.RecordType)
+
+		workflow := models.Workflow{
+			Name:        s.Name,
+			Code:        s.Code,
+			Description: s.Description,
+			RecordType:  s.RecordType,
+			IsActive:    true,
+			IsDefault:   true,
+		}
+		if err := db.Create(&workflow).Error; err != nil {
+			log.Printf("Failed to create %s workflow: %v", s.Code, err)
+			continue
+		}
+
+		type stateSpec struct {
+			Name      string
+			Code      string
+			StateType string
+			Color     string
+			SortOrder int
+			PosX      int
+			PosY      int
+		}
+
+		stateSpecs := []stateSpec{
+			{"Draft", "draft", "initial", "#94a3b8", 1, 100, 200},
+			{"Submitted", "submitted", "normal", "#3b82f6", 2, 300, 200},
+			{"L1 Review", "l1_review", "normal", "#f59e0b", 3, 500, 200},
+			{"L2 Review", "l2_review", "normal", "#f97316", 4, 700, 200},
+			{"Approved", "approved", "terminal", "#22c55e", 5, 700, 400},
+			{"Rejected", "rejected", "terminal", "#ef4444", 6, 500, 400},
+			{"Changes Requested", "changes_requested", "normal", "#f97316", 7, 300, 400},
+		}
+
+		stateMap := make(map[string]models.WorkflowState)
+		for _, sp := range stateSpecs {
+			state := models.WorkflowState{
+				WorkflowID: workflow.ID,
+				Name:       sp.Name,
+				Code:       sp.Code,
+				StateType:  sp.StateType,
+				Color:      sp.Color,
+				SortOrder:  sp.SortOrder,
+				PositionX:  sp.PosX,
+				PositionY:  sp.PosY,
+				IsActive:   true,
+			}
+			if err := db.Create(&state).Error; err != nil {
+				log.Printf("Failed to create state %s for %s: %v", sp.Code, s.Code, err)
+				return
+			}
+			stateMap[sp.Code] = state
+		}
+
+		type transSpec struct {
+			Name        string
+			Code        string
+			From        string
+			To          string
+			IsRejection bool
+			CommentReq  bool
+			SortOrder   int
+		}
+
+		transSpecs := []transSpec{
+			{"Submit for Review", "submit", "draft", "submitted", false, false, 1},
+			{"Assign L1 Reviewer", "assign_l1", "submitted", "l1_review", false, false, 2},
+			{"Approve (L1)", "approve_l1", "l1_review", "l2_review", false, false, 3},
+			{"Approve (Final)", "approve_l1_final", "l1_review", "approved", false, false, 4},
+			{"Request Changes", "request_changes_l1", "l1_review", "changes_requested", false, true, 5},
+			{"Reject", "reject_l1", "l1_review", "rejected", true, true, 6},
+			{"Approve (L2)", "approve_l2", "l2_review", "approved", false, false, 7},
+			{"Request Changes", "request_changes_l2", "l2_review", "changes_requested", false, true, 8},
+			{"Reject", "reject_l2", "l2_review", "rejected", true, true, 9},
+			{"Resubmit", "resubmit", "changes_requested", "submitted", false, false, 10},
+		}
+
+		boolTrue := true
+		for _, sp := range transSpecs {
+			fromState := stateMap[sp.From]
+			toState := stateMap[sp.To]
+
+			transition := models.WorkflowTransition{
+				WorkflowID:  workflow.ID,
+				Name:        sp.Name,
+				Code:        sp.Code,
+				FromStateID: fromState.ID,
+				ToStateID:   toState.ID,
+				IsRejection: sp.IsRejection,
+				IsActive:    true,
+				SortOrder:   sp.SortOrder,
+			}
+
+			if err := db.Create(&transition).Error; err != nil {
+				log.Printf("Failed to create transition %s for %s: %v", sp.Code, s.Code, err)
+				return
+			}
+
+			if sp.CommentReq {
+				requirement := models.TransitionRequirement{
+					TransitionID:    transition.ID,
+					RequirementType: "comment",
+					IsMandatory:     &boolTrue,
+					ErrorMessage:    "Comment is required for this action",
+				}
+				if err := db.Create(&requirement).Error; err != nil {
+					log.Printf("Failed to create requirement for %s: %v", sp.Code, err)
+				}
+			}
+		}
+
+		log.Printf("%s workflow seeded successfully", s.Code)
+	}
 }
 
 func Close(db *gorm.DB) error {

@@ -11,6 +11,8 @@ import (
 type EscalationRepository interface {
 	// Create stores a new SLA breach notification record
 	Create(ctx context.Context, e *models.EscalationSLA) error
+	// Update updates an existing SLA breach notification record
+	Update(ctx context.Context, e *models.EscalationSLA) error
 
 	// GetAll returns all breach notification records (most recent first)
 	GetAll(ctx context.Context) ([]models.EscalationSLA, error)
@@ -42,6 +44,10 @@ func NewEscalationRepository(db *gorm.DB) EscalationRepository {
 
 func (r *escalationRepository) Create(ctx context.Context, e *models.EscalationSLA) error {
 	return r.db.WithContext(ctx).Create(e).Error
+}
+
+func (r *escalationRepository) Update(ctx context.Context, e *models.EscalationSLA) error {
+	return r.db.WithContext(ctx).Save(e).Error
 }
 
 func (r *escalationRepository) GetAll(ctx context.Context) ([]models.EscalationSLA, error) {

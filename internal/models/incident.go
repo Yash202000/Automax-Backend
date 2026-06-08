@@ -75,11 +75,17 @@ type Incident struct {
 	ReadyToCloseDuration  string     `gorm:"size:100" json:"ready_to_close_duration"`
 	ReadyToCloseNotified  bool       `gorm:"default:false" json:"ready_to_close_notified"`
 
+	// Partial-Close tracking (set when incident enters a partial_close state)
+	PartialCloseExpiresAt *time.Time `gorm:"index" json:"partial_close_expires_at"`
+	PartialCloseDuration  string     `gorm:"size:100" json:"partial_close_duration"`
+	PartialCloseNotified  bool       `gorm:"default:false" json:"partial_close_notified"`
+
 	// Reporter
 	ReporterID    *uuid.UUID `gorm:"type:uuid;index" json:"reporter_id"`
 	Reporter      *User      `gorm:"foreignKey:ReporterID" json:"reporter,omitempty"`
 	ReporterEmail string     `gorm:"size:100" json:"reporter_email"`
 	ReporterName  string     `gorm:"size:200" json:"reporter_name"`
+	ReporterPhone string     `gorm:"size:50" json:"reporter_phone"`
 
 	// Source (origin of the record)
 	Source string `gorm:"size:100" json:"source"`
@@ -100,6 +106,8 @@ type Incident struct {
 	MasterIncidentID *uuid.UUID `gorm:"type:uuid;index;column:master_incident_id" json:"master_incident_id,omitempty"`
 	MasterIncident   *Incident  `gorm:"-" json:"master_incident,omitempty"`
 	MergedIncidents  []Incident `gorm:"-" json:"merged_incidents,omitempty"`
+	FeedbackID          *uuid.UUID   `gorm:"-" json:"-"` // ephemeral: pre-created feedback record ID injected by ExecuteTransition on IsFinalClose
+	PreviousAssigneeIDs []uuid.UUID  `gorm:"-" json:"-"` // ephemeral: all historical assignees, injected by ExecuteTransition
 	IsMerged         bool       `gorm:"default:false;index" json:"is_merged"`
 	MergedAt         *time.Time `json:"merged_at,omitempty"`
 	MergedByUserID   *uuid.UUID `gorm:"type:uuid" json:"merged_by_user_id,omitempty"`
@@ -231,7 +239,8 @@ type IncidentTransitionHistory struct {
 	PerformedByID uuid.UUID `gorm:"type:uuid;index;not null" json:"performed_by_id"`
 	PerformedBy   *User     `gorm:"foreignKey:PerformedByID" json:"performed_by,omitempty"`
 
-	Comment string `gorm:"type:text" json:"comment"`
+	Comment   string            `gorm:"type:text" json:"comment"`
+	Feedbacks *IncidentFeedback `gorm:"foreignKey:TransitionHistoryID" json:"feedbacks,omitempty"`
 
 	// IsSystemAction is true for automatically triggered transitions (e.g. expiry reversion).
 	IsSystemAction bool `gorm:"default:false" json:"is_system_action"`
@@ -267,6 +276,8 @@ const (
 	RevisionActionAssigneeChanged   IncidentRevisionActionType = "assignee_changed"
 	RevisionActionStatusChanged     IncidentRevisionActionType = "status_changed"
 	RevisionActionCreated           IncidentRevisionActionType = "created"
+	RevisionActionIVRSmsSent        IncidentRevisionActionType = "ivr_sms_sent"
+	RevisionActionIVRSmsSubmitted   IncidentRevisionActionType = "ivr_sms_submitted"
 )
 
 type IncidentRevisionStatus string
@@ -387,6 +398,9 @@ type IncidentUpdateRequest struct {
 	CustomLookupFields map[string]interface{} `json:"custom_lookup_fields"`
 	Comment            string                 `json:"comment"` // optional comment attached to the update
 	Version            int                    `json:"version" validate:"required,min=1"`
+	// IvrLinkToken is the raw signed token from the SMS URL. When present, the update is
+	// attributed to the citizen's IVR SMS link submission (exact link lookup by token hash).
+	IvrLinkToken string `json:"ivr_link_token"`
 }
 
 type IncidentTransitionRequest struct {
@@ -435,6 +449,7 @@ type CreateComplaintRequest struct {
 	ReporterID       *string  `json:"reporter_id" validate:"omitempty,uuid"` // link to user who created the complaint
 	ReporterEmail    string   `json:"reporter_email" validate:"omitempty,email"`
 	ReporterName     string   `json:"reporter_name" validate:"omitempty,max=200"`
+	ReporterPhone    string   `json:"reporter_phone" validate:"omitempty,max=50"`
 	DepartmentID     *string  `json:"department_id" validate:"omitempty,uuid"`
 	AssigneeID       *string  `json:"assignee_id" validate:"omitempty,uuid"`
 	LocationID       *string  `json:"location_id" validate:"omitempty,uuid"`
@@ -536,25 +551,40 @@ type BulkConvertToRequestResponse struct {
 	Results []BulkConvertToRequestResult `json:"results"`
 }
 
+// CustomFieldFilter represents a single key=value filter on the custom_fields JSON column.
+// Multiple filters are AND-ed together. Supports flat values (e.g. {"caller_identity":"123"}).
+type CustomFieldFilter struct {
+	Key   string
+	Value string
+}
+
 type IncidentFilter struct {
-	Search           string      `query:"search" json:"search" validate:"omitempty"`
-	WorkflowID       []string    `query:"workflow_id" json:"workflow_id" validate:"omitempty,dive,uuid"`
-	CurrentStateID   []string    `query:"current_state_id" json:"current_state_id" validate:"omitempty,dive,uuid"`
-	ClassificationID []string    `query:"classification_id" json:"classification_id" validate:"omitempty,dive,uuid"`
-	Priority         *int        `query:"priority" json:"priority" validate:"omitempty,min=1,max=5"`
-	AssigneeID       []string    `query:"assignee_id" json:"assignee_id" validate:"omitempty,dive,uuid"`
-	DepartmentID     []string    `query:"department_id" json:"department_id" validate:"omitempty,dive,uuid"`
-	LocationID       []string    `query:"location_id" json:"location_id" validate:"omitempty,dive,uuid"`
-	ReporterID       []string    `query:"reporter_id" json:"reporter_id" validate:"omitempty,dive,uuid"`
-	SLABreached      *bool       `query:"sla_breached" json:"sla_breached" validate:"omitempty"`
-	RecordType       *string     `query:"record_type" json:"record_type" validate:"omitempty,oneof=incident request complaint query"` // 'incident', 'request', 'complaint', or 'query'
-	Channel          *string     `query:"channel" json:"channel" validate:"omitempty"`                                                // for complaints
-	Source           *string     `query:"source" json:"source" validate:"omitempty"`
-	StartDate        *time.Time  `query:"start_date" json:"start_date" validate:"omitempty"`                 // filter by created_at >= start_date
-	EndDate          *time.Time  `query:"end_date" json:"end_date" validate:"omitempty"`                     // filter by created_at <= end_date
-	CustomFieldKey   string      `query:"custom_field_key" json:"custom_field_key" validate:"omitempty"`     // e.g. "lookup:TASK ID"
-	CustomFieldValue string      `query:"custom_field_value" json:"custom_field_value" validate:"omitempty"` // e.g. "TASK-1235"
+	Search             string     `query:"search" json:"search" validate:"omitempty"`
+	WorkflowID         []string   `query:"workflow_id" json:"workflow_id" validate:"omitempty,dive,uuid"`
+	CurrentStateID     []string   `query:"current_state_id" json:"current_state_id" validate:"omitempty,dive,uuid"`
+	ClassificationID   []string   `query:"classification_id" json:"classification_id" validate:"omitempty,dive,uuid"`
+	Priority           *int       `query:"priority" json:"priority" validate:"omitempty,min=1,max=5"`
+	AssigneeID         []string   `query:"assignee_id" json:"assignee_id" validate:"omitempty,dive,uuid"`
+	DepartmentID       []string   `query:"department_id" json:"department_id" validate:"omitempty,dive,uuid"`
+	LocationID         []string   `query:"location_id" json:"location_id" validate:"omitempty,dive,uuid"`
+	ReporterID         []string   `query:"reporter_id" json:"reporter_id" validate:"omitempty,dive,uuid"`
+	ReporterPhone      string     `query:"reporter_phone" json:"reporter_phone" validate:"omitempty"`
+	SLABreached        *bool      `query:"sla_breached" json:"sla_breached" validate:"omitempty"`
+	RecordType         *string    `query:"record_type" json:"record_type" validate:"omitempty,oneof=incident request complaint query"` // 'incident', 'request', 'complaint', or 'query'
+	Channel            *string    `query:"channel" json:"channel" validate:"omitempty"`                                                // for complaints
+	Source             *string    `query:"source" json:"source" validate:"omitempty"`
+	ConvertedToRequest *bool      `query:"converted_to_request" json:"converted_to_request" validate:"omitempty"`
+	SourceIncidentID   *string    `query:"source_incident_id" json:"source_incident_id" validate:"omitempty,uuid"`
+	StartDate          *time.Time `json:"start_date"` // filter by created_at >= start_date; parsed manually in handler (not via QueryParser)
+	EndDate            *time.Time `json:"end_date"`   // filter by created_at <= end_date; parsed manually in handler (not via QueryParser)
+	// Transition filters
+	TransitionID     *uuid.UUID  `query:"transition_id" json:"transition_id" validate:"omitempty,uuid"`
+	FromStateID      *uuid.UUID  `query:"from_state_id" json:"from_state_id" validate:"omitempty"`
+	ToStateID        *uuid.UUID  `query:"to_state_id" json:"to_state_id" validate:"omitempty"`
 	TaskID           string      `query:"task_id" json:"task_id" validate:"omitempty"`                       // filter by task ID in custom_fields
+	// CustomFieldFilters holds repeatable cf=key:value filters. Parsed manually in handler.
+	// Each filter does: custom_fields::jsonb ->> 'key' ILIKE '%value%'. Multiple are AND-ed.
+	CustomFieldFilters []CustomFieldFilter `json:"-"`
 	Page             int         `query:"page" json:"page" validate:"omitempty,min=1"`
 	Limit            int         `query:"limit" json:"limit" validate:"omitempty,min=1,max=100"`
 	UserRoleIDs      []uuid.UUID `json:"-"`     // For filtering stats by user's roles
@@ -634,53 +664,62 @@ type IncidentUnmergeResponse struct {
 // Response types
 
 type IncidentResponse struct {
-	ID                    uuid.UUID               `json:"id"`
-	IncidentNumber        string                  `json:"incident_number"`
-	Title                 string                  `json:"title"`
-	Description           string                  `json:"description"`
-	RecordType            string                  `json:"record_type"`
-	SourceIncidentID      *uuid.UUID              `json:"source_incident_id,omitempty"`
-	SourceIncident        *IncidentResponse       `json:"source_incident,omitempty"`
-	ConvertedRequestID    *uuid.UUID              `json:"converted_request_id,omitempty"`
-	ConvertedRequest      *IncidentResponse       `json:"converted_request,omitempty"`
-	Classification        *ClassificationResponse `json:"classification,omitempty"`
-	Workflow              *WorkflowResponse       `json:"workflow,omitempty"`
-	CurrentState          *WorkflowStateResponse  `json:"current_state,omitempty"`
-	Assignee              *UserResponse           `json:"assignee,omitempty"`
-	Assignees             []UserResponse          `json:"assignees,omitempty"`
-	Department            *DepartmentResponse     `json:"department,omitempty"`
-	Location              *LocationResponse       `json:"location,omitempty"`
-	Latitude              *float64                `json:"latitude,omitempty"`
-	Longitude             *float64                `json:"longitude,omitempty"`
-	Address               string                  `json:"address,omitempty"`
-	City                  string                  `json:"city,omitempty"`
-	State                 string                  `json:"state,omitempty"`
-	Country               string                  `json:"country,omitempty"`
-	PostalCode            string                  `json:"postal_code,omitempty"`
-	DueDate               *time.Time              `json:"due_date"`
-	ResolvedAt            *time.Time              `json:"resolved_at"`
-	ClosedAt              *time.Time              `json:"closed_at"`
-	SLABreached           bool                    `json:"sla_breached"`
-	SLADeadline           *time.Time              `json:"sla_deadline"`
-	ReadyToCloseExpiresAt *time.Time              `json:"ready_to_close_expires_at,omitempty"`
-	ReadyToCloseDuration  string                  `json:"ready_to_close_duration,omitempty"`
-	Source                string                  `json:"source,omitempty"`
-	Reporter              *UserResponse           `json:"reporter,omitempty"`
-	ReporterID            uuid.UUID               `json:"reporter_id"`
-	ReporterEmail         string                  `json:"reporter_email"`
-	ReporterName          string                  `json:"reporter_name"`
-	Channel               string                  `json:"channel,omitempty"`
-	CreatedByName         string                  `json:"created_by_name,omitempty"`
-	CreatedByMobile       string                  `json:"created_by_mobile,omitempty"`
-	EvaluationCount       int                     `json:"evaluation_count,omitempty"`
-	CustomFields          string                  `json:"custom_fields,omitempty"`
-	CommentsCount         int                     `json:"comments_count"`
-	AttachmentsCount      int                     `json:"attachments_count"`
-	CreatedAt             time.Time               `json:"created_at"`
-	UpdatedAt             time.Time               `json:"updated_at"`
-	LookupValues          []LookupValueResponse   `json:"lookup_values,omitempty"`
-	Version               int                     `json:"version"`
-	ActiveViewers         int                     `json:"active_viewers,omitempty"` // Number of users currently viewing this incident
+	ID                    uuid.UUID                   `json:"id"`
+	IncidentNumber        string                      `json:"incident_number"`
+	Title                 string                      `json:"title"`
+	Description           string                      `json:"description"`
+	RecordType            string                      `json:"record_type"`
+	SourceIncidentID      *uuid.UUID                  `json:"source_incident_id,omitempty"`
+	SourceIncident        *IncidentResponse           `json:"source_incident,omitempty"`
+	ConvertedRequestID    *uuid.UUID                  `json:"converted_request_id,omitempty"`
+	ConvertedRequest      *IncidentResponse           `json:"converted_request,omitempty"`
+	Classification        *ClassificationResponse     `json:"classification,omitempty"`
+	Workflow              *WorkflowResponse           `json:"workflow,omitempty"`
+	CurrentState          *WorkflowStateResponse      `json:"current_state,omitempty"`
+	Assignee              *UserResponse               `json:"assignee,omitempty"`
+	Assignees             []UserResponse              `json:"assignees,omitempty"`
+	Department            *DepartmentResponse         `json:"department,omitempty"`
+	Location              *LocationResponse           `json:"location,omitempty"`
+	Latitude              *float64                    `json:"latitude,omitempty"`
+	Longitude             *float64                    `json:"longitude,omitempty"`
+	Address               string                      `json:"address,omitempty"`
+	City                  string                      `json:"city,omitempty"`
+	State                 string                      `json:"state,omitempty"`
+	Country               string                      `json:"country,omitempty"`
+	PostalCode            string                      `json:"postal_code,omitempty"`
+	DueDate               *time.Time                  `json:"due_date"`
+	ResolvedAt            *time.Time                  `json:"resolved_at"`
+	ClosedAt              *time.Time                  `json:"closed_at"`
+	SLABreached           bool                        `json:"sla_breached"`
+	SLADeadline           *time.Time                  `json:"sla_deadline"`
+	ReadyToCloseExpiresAt *time.Time                  `json:"ready_to_close_expires_at,omitempty"`
+	ReadyToCloseDuration  string                      `json:"ready_to_close_duration,omitempty"`
+	PartialCloseExpiresAt *time.Time                  `json:"partial_close_expires_at,omitempty"`
+	PartialCloseDuration  string                      `json:"partial_close_duration,omitempty"`
+	PartialCloseNotified  bool                        `json:"partial_close_notified,omitempty"`
+	Source                string                      `json:"source,omitempty"`
+	Reporter              *UserResponse               `json:"reporter,omitempty"`
+	ReporterID            uuid.UUID                   `json:"reporter_id"`
+	ReporterEmail         string                      `json:"reporter_email"`
+	ReporterName          string                      `json:"reporter_name"`
+	ReporterPhone         string                      `json:"reporter_phone"`
+	Channel               string                      `json:"channel,omitempty"`
+	TransitionHistory     []TransitionHistoryResponse `json:"transition_history,omitempty"`
+	CreatedByName         string                      `json:"created_by_name,omitempty"`
+	CreatedByMobile       string                      `json:"created_by_mobile,omitempty"`
+	EvaluationCount       int                         `json:"evaluation_count,omitempty"`
+	CustomFields          string                      `json:"custom_fields,omitempty"`
+	CommentsCount         int                         `json:"comments_count"`
+	AttachmentsCount      int                         `json:"attachments_count"`
+	CreatedAt             time.Time                   `json:"created_at"`
+	UpdatedAt             time.Time                   `json:"updated_at"`
+	LookupValues          []LookupValueResponse       `json:"lookup_values,omitempty"`
+	Version               int                         `json:"version"`
+	ActiveViewers         int                         `json:"active_viewers,omitempty"` // Number of users currently viewing this incident
+
+	// IVR SMS link submission state (EPM940 only, populated for source=ivr incidents).
+	IvrSubmitted   bool       `json:"ivr_submitted,omitempty"`
+	IvrSubmittedAt *time.Time `json:"ivr_submitted_at,omitempty"`
 
 	// Merge-related fields
 	MasterIncidentID     *uuid.UUID        `json:"master_incident_id,omitempty"`
@@ -741,6 +780,7 @@ type TransitionHistoryResponse struct {
 	OldValues      string                      `json:"old_values,omitempty"`
 	NewValues      string                      `json:"new_values,omitempty"`
 	ActionResults  string                      `json:"action_results,omitempty"`
+	Feedbacks      IncidentFeedbackResponse    `json:"feedbacks,omitempty"`
 	TransitionedAt time.Time                   `json:"transitioned_at"`
 }
 
@@ -782,6 +822,7 @@ type IncidentStatsResponseV2 struct {
 	InProgress    int64           `json:"in_progress"`
 	Resolved      int64           `json:"resolved"`
 	Closed        int64           `json:"closed"`
+	PartialClose  int64           `json:"partial_close"`
 	SLABreached   int64           `json:"sla_breached"`
 	WorkflowStats []WorkflowStats `json:"workflow_stats,omitempty"`
 }
@@ -811,19 +852,32 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 		SLADeadline:           i.SLADeadline,
 		ReadyToCloseExpiresAt: i.ReadyToCloseExpiresAt,
 		ReadyToCloseDuration:  i.ReadyToCloseDuration,
+		PartialCloseExpiresAt: i.PartialCloseExpiresAt,
+		PartialCloseDuration:  i.PartialCloseDuration,
 		Source:                i.Source,
 		ReporterEmail:         i.ReporterEmail,
 		ReporterName:          i.ReporterName,
+		ReporterPhone:         i.ReporterPhone,
 		Channel:               i.Channel,
 		CreatedByName:         i.CreatedByName,
 		CreatedByMobile:       i.CreatedByMobile,
 		EvaluationCount:       i.EvaluationCount,
-		CustomFields:          i.CustomFields,
-		CommentsCount:         len(i.Comments),
-		AttachmentsCount:      len(i.Attachments),
-		CreatedAt:             i.CreatedAt,
-		UpdatedAt:             i.UpdatedAt,
-		Version:               i.Version,
+		// TransitionHistory:     i.TransitionHistory, // Include transition history for stats on frontend
+		CustomFields:     i.CustomFields,
+		CommentsCount:    len(i.Comments),
+		AttachmentsCount: len(i.Attachments),
+		CreatedAt:        i.CreatedAt,
+		UpdatedAt:        i.UpdatedAt,
+		Version:          i.Version,
+	}
+
+	if len(i.TransitionHistory) > 0 {
+		// resp.TransitionHistory = i.TransitionHistory
+		transitionHistoryResp := make([]TransitionHistoryResponse, len(i.TransitionHistory))
+		for idx, h := range i.TransitionHistory {
+			transitionHistoryResp[idx] = ToTransitionHistoryResponse(&h)
+		}
+		resp.TransitionHistory = transitionHistoryResp
 	}
 
 	if i.SourceIncident != nil {
@@ -1019,6 +1073,14 @@ func ToTransitionHistoryResponse(h *IncidentTransitionHistory) TransitionHistory
 		resp.PerformedBy = &perfResp
 	}
 
+	if h.Feedbacks != nil && h.Feedbacks.ID != uuid.Nil && h.Feedbacks.Comment != "" {
+		feedbackResponses := IncidentFeedbackResponse{}
+		feedbackResponses.Comment = h.Feedbacks.Comment
+		feedbackResponses.CreatedAt = h.Feedbacks.CreatedAt
+		feedbackResponses.ID = h.Feedbacks.ID
+		// feedbackResponses = ToIncidentFeedbackResponse(h.Feedbacks)
+		resp.Feedbacks = feedbackResponses
+	}
 	return resp
 }
 
@@ -1087,4 +1149,136 @@ func ToIncidentRevisionResponse(r *IncidentRevision) IncidentRevisionResponse {
 
 	return resp
 
+}
+
+// IncidentReportTransition is a flat result for the Transition History report section.
+type IncidentReportTransition struct {
+	ID                   uuid.UUID  `db:"id"`
+	TransitionID         *uuid.UUID `db:"transition_id"`
+	PerformedByID        *uuid.UUID `db:"performed_by_id"`
+	PerformedByFirstName string     `db:"performed_by_first_name"`
+	PerformedByLastName  string     `db:"performed_by_last_name"`
+	Comment              string     `db:"comment"`
+	OldValues            string     `db:"old_values"`
+	NewValues            string     `db:"new_values"`
+	FeedbackComment      string     `db:"feedback_comment"`
+	TransitionedAt       time.Time  `db:"transitioned_at"`
+	TransitionName       string     `db:"transition_name"`
+	TransitionNameAr     string     `db:"transition_name_ar"`
+	TransitionCode       string     `db:"transition_code"`
+	FromStateID          uuid.UUID  `db:"from_state_id"`
+	FromStateName        string     `db:"from_state_name"`
+	FromStateNameAr      string     `db:"from_state_name_ar"`
+	FromStateCode        string     `db:"from_state_code"`
+	FromStateColor       string     `db:"from_state_color"`
+	FromStateType        string     `db:"from_state_type"`
+	ToStateID            uuid.UUID  `db:"to_state_id"`
+	ToStateName          string     `db:"to_state_name"`
+	ToStateNameAr        string     `db:"to_state_name_ar"`
+	ToStateCode          string     `db:"to_state_code"`
+	ToStateColor         string     `db:"to_state_color"`
+	ToStateType          string     `db:"to_state_type"`
+}
+
+// IncidentReportAttachment is a flat result for the Attachments report section,
+// carrying transition context when the attachment belongs to a transition.
+type IncidentReportAttachment struct {
+	ID                  uuid.UUID  `db:"id"`
+	IncidentID          uuid.UUID  `db:"incident_id"`
+	TransitionHistoryID *uuid.UUID `db:"transition_history_id"`
+	FileName            string     `db:"file_name"`
+	FileSize            int64      `db:"file_size"`
+	MimeType            string     `db:"mime_type"`
+	FilePath            string     `db:"file_path"`
+	UploadedByID        *uuid.UUID `db:"uploaded_by_id"`
+	UploadedByFirstName string     `db:"uploaded_by_first_name"`
+	UploadedByLastName  string     `db:"uploaded_by_last_name"`
+	CreatedAt           time.Time  `db:"created_at"`
+	DeletedAt           *time.Time `db:"deleted_at"`
+	TransitionName      *string    `db:"transition_name"`
+	TransitionNameAr    *string    `db:"transition_name_ar"`
+	FromStateName       *string    `db:"from_state_name"`
+	FromStateNameAr     *string    `db:"from_state_name_ar"`
+	ToStateName         *string    `db:"to_state_name"`
+	ToStateNameAr       *string    `db:"to_state_name_ar"`
+}
+
+// IncidentReportRevision is a flat result for the Revisions report section.
+type IncidentReportRevision struct {
+	ID                   uuid.UUID  `db:"id"`
+	IncidentID           uuid.UUID  `db:"incident_id"`
+	TransitionHistoryID  *uuid.UUID `db:"transition_history_id"`
+	CommentID            *uuid.UUID `db:"comment_id"`
+	AttachmentID         *uuid.UUID `db:"attachment_id"`
+	RevisionNumber       int64      `db:"revision_number"`
+	ActionType           string     `db:"action_type"`
+	ActionDescription    string     `db:"action_description"`
+	Changes              string     `db:"changes"`
+	PerformedByID        uuid.UUID  `db:"performed_by_id"`
+	PerformedByRoles     string     `db:"performed_by_roles"`
+	PerformedByPhone     string     `db:"performed_by_phone"`
+	PerformedByFirstName string     `db:"performed_by_first_name"`
+	PerformedByLastName  string     `db:"performed_by_last_name"`
+	CreatedAt            time.Time  `db:"created_at"`
+}
+
+// IncidentReportData is a flat result for the main incident header/details section of the report.
+type IncidentReportData struct {
+	ID                   uuid.UUID  `db:"id"`
+	IncidentNumber       string     `db:"incident_number"`
+	Title                string     `db:"title"`
+	Description          string     `db:"description"`
+	Channel              string     `db:"channel"`
+	Source               string     `db:"source"`
+	RecordType           string     `db:"record_type"`
+	CreatedAt            time.Time  `db:"created_at"`
+	UpdatedAt            time.Time  `db:"updated_at"`
+	SLABreached          bool       `db:"sla_breached"`
+	SLADeadline          *time.Time `db:"sla_deadline"`
+	DueDate              *time.Time `db:"due_date"`
+	ResolvedAt           *time.Time `db:"resolved_at"`
+	ClosedAt             *time.Time `db:"closed_at"`
+	StatusName           string     `db:"status_name"`
+	StatusNameAr         string     `db:"status_name_ar"`
+	ClassificationID     *uuid.UUID `db:"classification_id"`
+	ClassificationName   string     `db:"classification_name"`
+	ClassificationNameAr string     `db:"classification_name_ar"`
+	LocationID           *uuid.UUID `db:"location_id"`
+	LocationName         string     `db:"location_name"`
+	LocationNameAr       string     `db:"location_name_ar"`
+	CreatorFullName      string     `db:"creator_full_name"`
+	CreatorEmail         string     `db:"creator_email"`
+	CreatorPhone         string     `db:"creator_phone"`
+	CallerPhone          string     `db:"caller_phone"`
+	CallerName           string     `db:"caller_name"`
+	CreatedByMobile      string     `db:"created_by_mobile"`
+	CreatedByName        string     `db:"created_by_name"`
+	AssigneeFirstName    string     `db:"assignee_first_name"`
+	AssigneeLastName     string     `db:"assignee_last_name"`
+	AssigneesName        string     `db:"assignees_name"`
+	DepartmentName       string     `db:"department_name"`
+	Latitude             *float64   `db:"latitude"`
+	Longitude            *float64   `db:"longitude"`
+	Address              string     `db:"address"`
+	City                 string     `db:"city"`
+	State                string     `db:"state"`
+	Country              string     `db:"country"`
+	PostalCode           string     `db:"postal_code"`
+}
+
+// IncidentReportLookupValue is a flat result for lookup (dynamic attribute) values in the report.
+type IncidentReportLookupValue struct {
+	CategoryID     uuid.UUID `db:"category_id"`
+	CategoryName   string    `db:"category_name"`
+	CategoryNameAr string    `db:"category_name_ar"`
+	Code           string    `db:"code"`
+	Name           string    `db:"name"`
+	NameAr         string    `db:"name_ar"`
+}
+
+// IncidentRevisionChange is used to parse the JSON changes field of a report revision row.
+type IncidentRevisionChange struct {
+	FieldLabel string  `json:"field_label"`
+	OldValue   *string `json:"old_value"`
+	NewValue   *string `json:"new_value"`
 }

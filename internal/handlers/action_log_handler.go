@@ -5,6 +5,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
@@ -47,6 +48,25 @@ func (h *ActionLogHandler) ListActionLogs(c *fiber.Ctx) error {
 
 	if filter.Limit == 0 {
 		filter.Limit = 20
+	}
+
+	// QueryParser cannot parse plain YYYY-MM-DD into *time.Time; do it manually.
+	// Use time.Local so date-only strings cover the entire local day, not UTC midnight.
+	if startStr := c.Query("start_date"); startStr != "" {
+		if t, err := time.Parse("2006-01-02", startStr); err == nil {
+			localStart := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.Local)
+			filter.StartDate = &localStart
+		} else if t, err := time.Parse(time.RFC3339, startStr); err == nil {
+			filter.StartDate = &t
+		}
+	}
+	if endStr := c.Query("end_date"); endStr != "" {
+		if t, err := time.Parse("2006-01-02", endStr); err == nil {
+			localEnd := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, time.Local)
+			filter.EndDate = &localEnd
+		} else if t, err := time.Parse(time.RFC3339, endStr); err == nil {
+			filter.EndDate = &t
+		}
 	}
 
 	logs, total, err := h.service.ListActionLogs(c.UserContext(), filter)
@@ -161,6 +181,25 @@ func (h *ActionLogHandler) ExportActionLogs(c *fiber.Ctx) error {
 			"success": false,
 			"errors":  validationErrors,
 		})
+	}
+
+	// QueryParser cannot parse plain YYYY-MM-DD into *time.Time; do it manually.
+	// Use time.Local so date-only strings cover the entire local day, not UTC midnight.
+	if startStr := c.Query("start_date"); startStr != "" {
+		if t, err := time.Parse("2006-01-02", startStr); err == nil {
+			localStart := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.Local)
+			filter.StartDate = &localStart
+		} else if t, err := time.Parse(time.RFC3339, startStr); err == nil {
+			filter.StartDate = &t
+		}
+	}
+	if endStr := c.Query("end_date"); endStr != "" {
+		if t, err := time.Parse("2006-01-02", endStr); err == nil {
+			localEnd := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, time.Local)
+			filter.EndDate = &localEnd
+		} else if t, err := time.Parse(time.RFC3339, endStr); err == nil {
+			filter.EndDate = &t
+		}
 	}
 
 	logs, _, err := h.service.ListActionLogs(c.UserContext(), &filter)

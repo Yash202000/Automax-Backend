@@ -7,22 +7,30 @@ import (
 )
 
 type Config struct {
-	Env            string // env: APP_ENV ("development" | "staging" | "production"). Default: "production".
-	Server         ServerConfig
-	Database       DatabaseConfig
-	Redis          RedisConfig
-	MinIO          MinIOConfig
-	JWT            JWTConfig
-	LDAP           LDAPConfig
-	LoginRateLimit LoginRateLimitConfig
-	SSOPrivateKey  string // env: SSO_RSA_PRIVATE_KEY (PEM, optional — auto-gen if empty)
-	SSOIssuerURL   string // env: SSO_ISSUER_URL (e.g. https://automax.example.com — embedded in iss claim)
-	SSOFrontendURL string // env: SSO_FRONTEND_URL (e.g. https://automax.example.com — where /sso-complete lives)
-	Escalation     EscalationConfig
-	ReadyToClose   ReadyToCloseConfig
-	Documenta      DocumentaConfig
-	AIQuality      AIQualityConfig
-	License        LicenseConfig
+	Env              string // env: APP_ENV ("development" | "staging" | "production"). Default: "production".
+	Server           ServerConfig
+	Database         DatabaseConfig
+	Redis            RedisConfig
+	MinIO            MinIOConfig
+	JWT              JWTConfig
+	LDAP             LDAPConfig
+	LoginRateLimit   LoginRateLimitConfig
+	FrontendURL      string // env: FRONTEND_URL — base URL of the frontend app, used in notification links
+	SSOPrivateKey    string // env: SSO_RSA_PRIVATE_KEY (PEM, optional — auto-gen if empty)
+	SSOIssuerURL     string // env: SSO_ISSUER_URL (e.g. https://automax.example.com — embedded in iss claim)
+	SSOFrontendURL   string // env: SSO_FRONTEND_URL (e.g. https://automax.example.com — where /sso-complete lives)
+	NafathAPIBaseURL string // env: NAFATH_API_BASE_URL (e.g. https://nafath.amanathail.gov.sa)
+	Escalation       EscalationConfig
+	ReadyToClose     ReadyToCloseConfig
+	Documenta        DocumentaConfig
+	AIQuality        AIQualityConfig
+	AutoAssign       AutoAssignConfig
+	License          LicenseConfig
+	Integration      IntegrationConfig
+}
+
+type IntegrationConfig struct {
+	SecretsKey string // env: INTEGRATION_SECRETS_KEY (64-char hex = 32 bytes for AES-256-GCM)
 }
 
 type LicenseConfig struct {
@@ -52,6 +60,15 @@ type AIQualityConfig struct {
 	AppHost string
 	// AppToken is an internal bearer token used when downloading attachments via the API fallback. env: APP_TOKEN
 	AppToken string
+}
+
+// AutoAssignConfig holds settings for the Auto-Assign Monitor.
+type AutoAssignConfig struct {
+	// StateCode is the workflow state code to scan for unassigned incidents. env: AUTO_ASSIGN_STATE_CODE
+	// Leave empty to disable the monitor entirely.
+	StateCode string
+	// IntervalMinutes controls how often the monitor sweeps (default 5). env: AUTO_ASSIGN_INTERVAL_MINUTES
+	IntervalMinutes int
 }
 
 type DocumentaConfig struct {
@@ -112,8 +129,10 @@ type MinIOConfig struct {
 }
 
 type JWTConfig struct {
-	Secret     string
-	ExpireHour int
+	Secret             string
+	ExpireHour         float64
+	RefreshExpireHour  float64
+	RememberExpireHour float64
 }
 
 type LDAPConfig struct {
@@ -168,8 +187,10 @@ func Load() *Config {
 			BucketName:      getEnv("MINIO_BUCKET", "automax"),
 		},
 		JWT: JWTConfig{
-			Secret:     getEnv("JWT_SECRET", "your-super-secret-jwt-key-change-in-production"),
-			ExpireHour: getEnvAsInt("JWT_EXPIRE_HOUR", 24),
+			Secret:             getEnv("JWT_SECRET", "your-super-secret-jwt-key-change-in-production"),
+			ExpireHour:         getEnvAsFloat("JWT_EXPIRE_HOUR", 24),
+			RefreshExpireHour:  getEnvAsFloat("JWT_REFRESH_EXPIRE_HOUR", 168),
+			RememberExpireHour: getEnvAsFloat("JWT_REMEMBER_EXPIRE_HOUR", 720),
 		},
 		LDAP: LDAPConfig{
 			Enabled:            getEnvAsBool("LDAP_ENABLED", false),
@@ -190,9 +211,11 @@ func Load() *Config {
 			BlockDuration:   getEnvAsInt("BLOCK_DURATION", 15),
 			BypassForAdmin:  getEnvAsBool("BYPASS_RATE_LIMIT_FOR_ADMIN", true),
 		},
-		SSOPrivateKey:  getEnv("SSO_RSA_PRIVATE_KEY", ""),
-		SSOIssuerURL:   getEnv("SSO_ISSUER_URL", ""),
-		SSOFrontendURL: getEnv("SSO_FRONTEND_URL", ""),
+		SSOPrivateKey:    getEnv("SSO_RSA_PRIVATE_KEY", ""),
+		SSOIssuerURL:     getEnv("SSO_ISSUER_URL", ""),
+		FrontendURL:      getEnv("FRONTEND_URL", ""),
+		SSOFrontendURL:   getEnv("SSO_FRONTEND_URL", ""),
+		NafathAPIBaseURL: getEnv("NAFATH_API_BASE_URL", ""),
 		Escalation: EscalationConfig{
 			DailyHour:    getEnvAsInt("ESCALATION_DAILY_HOUR", 18),
 			DailyMinute:  getEnvAsInt("ESCALATION_DAILY_MINUTE", 0),
@@ -211,7 +234,8 @@ func Load() *Config {
 			PreExpiryNotificationHours: getEnvAsInt("READY_TO_CLOSE_PRE_EXPIRY_HOURS", 24),
 			RevertStateCode:            getEnv("READY_TO_CLOSE_REVERT_STATE_CODE", "under_resolution"),
 			StateCode:                  getEnv("READY_TO_CLOSE_STATE_CODE", "ready_to_close"),
-		}, AIQuality: AIQualityConfig{
+		},
+		AIQuality: AIQualityConfig{
 			APIEndpoint:          getEnv("AI_QUALITY_API_ENDPOINT", ""),
 			APIKey:               getEnv("AI_QUALITY_API_KEY", ""),
 			CheckIntervalMinutes: getEnvAsInt("AI_QUALITY_CHECK_INTERVAL_MINUTES", 10),
@@ -219,12 +243,19 @@ func Load() *Config {
 			AppHost:              getEnv("APP_HOST", "localhost:8080"),
 			AppToken:             getEnv("APP_TOKEN", ""),
 		},
+		AutoAssign: AutoAssignConfig{
+			StateCode:       getEnv("AUTO_ASSIGN_STATE_CODE", ""),
+			IntervalMinutes: getEnvAsInt("AUTO_ASSIGN_INTERVAL_MINUTES", 5),
+		},
 		License: LicenseConfig{
 			EncryptionKey:     getEnv("LICENSE_ENCRYPTION_KEY", ""),
 			GracePeriodDays:   getEnvAsInt("LICENSE_GRACE_PERIOD_DAYS", 7),
 			Enabled:           getEnvAsBool("LICENSE_ENABLED", true),
 			DevSeedEnabled:    getEnvAsBool("LICENSE_DEV_SEED", false),
 			DevSeedExpiryDays: getEnvAsInt("LICENSE_DEV_EXPIRY_DAYS", 90),
+		},
+		Integration: IntegrationConfig{
+			SecretsKey: getEnv("INTEGRATION_SECRETS_KEY", ""),
 		},
 	}
 }
@@ -265,6 +296,15 @@ func getEnvAsStringSlice(key string, defaultValue []string) []string {
 		}
 		if len(result) > 0 {
 			return result
+		}
+	}
+	return defaultValue
+}
+
+func getEnvAsFloat(key string, defaultValue float64) float64 {
+	if value, exists := os.LookupEnv(key); exists {
+		if floatValue, err := strconv.ParseFloat(value, 64); err == nil {
+			return floatValue
 		}
 	}
 	return defaultValue
