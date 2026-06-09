@@ -63,12 +63,18 @@ func (m *AuthMiddleware) Authenticate() fiber.Handler {
 		if err != nil {
 			return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Invalid or expired token")
 		}
+		// Validate that this session still exists — catches forced logouts (e.g. password change)
+		valid, err := m.sessionStore.ValidateSession(c.UserContext(), claims.SessionID)
+		if err != nil || !valid {
+			return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Session expired. Please login again.")
+		}
 
 		c.Locals(constants.ContextKeys.UserID, claims.UserID)
 		c.Locals(constants.ContextKeys.Email, claims.Email)
 		c.Locals(constants.ContextKeys.UserEmail, claims.Email) // For compatibility with presence tracking
 		c.Locals(constants.ContextKeys.Role, claims.Role)
 		c.Locals(constants.ContextKeys.Token, token)
+		c.Locals(constants.ContextKeys.SessionID, claims.SessionID)
 
 		// Preserve IP_ADDRESS and USER_AGENT from RequestContext middleware
 		ipAddress, _ := c.Locals(constants.ContextKeys.IP_ADDRESS).(string)
@@ -79,6 +85,7 @@ func (m *AuthMiddleware) Authenticate() fiber.Handler {
 		ctx = context.WithValue(ctx, constants.ContextKeys.Email, claims.Email)
 		ctx = context.WithValue(ctx, constants.ContextKeys.Role, claims.Role)
 		ctx = context.WithValue(ctx, constants.ContextKeys.Token, token)
+		ctx = context.WithValue(ctx, constants.ContextKeys.SessionID, claims.SessionID)
 		ctx = context.WithValue(ctx, constants.ContextKeys.IP_ADDRESS, ipAddress)
 		ctx = context.WithValue(ctx, constants.ContextKeys.USER_AGENT, userAgent)
 		// Fetch user details to get the name for presence tracking

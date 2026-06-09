@@ -430,6 +430,7 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 	case "email_password":
 		// Email/Password login
 		user, err = s.userRepo.FindByEmailForLogin(ctx, req.Email)
+		log.Println("Login for email and User ID:", user.ID.String())
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				go func() {
@@ -482,6 +483,7 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 
 		// First check if user exists with this phone number
 		user, err = s.userRepo.FindByPhoneForLogin(ctx, req.Phone)
+		log.Println("Login for mobile and User ID:", user.ID.String())
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				go func() {
@@ -578,7 +580,7 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 		"email":   user.Email,
 		"role":    role,
 	}, s.jwtManager.GetTokenExpiration())
-
+	log.Println("Login: User session created:", sessionID, "and User ID:", user.ID.String())
 	if err != nil {
 		return nil, err
 	}
@@ -669,6 +671,15 @@ func (s *userService) RefreshToken(ctx context.Context, refreshToken string, rem
 		return nil, errors.New("invalid or expired refresh token")
 	}
 
+	// Reject if password was changed after this refresh token was issued.
+	// This closes the gap where Browser B's frontend would silently refresh
+	// and get a new session even though all sessions were killed on password change.
+	if passChangedAt, ok := s.sessionStore.GetPasswordChangedAt(ctx, claims.UserID.String()); ok {
+		if claims.IssuedAt != nil && claims.IssuedAt.Unix() < passChangedAt {
+			return nil, errors.New("password was changed. Please login again.")
+		}
+	}
+
 	// Get user from database
 	user, err := s.userRepo.FindByIDWithRelations(ctx, claims.UserID)
 	if err != nil {
@@ -756,7 +767,18 @@ func (s *userService) Logout(ctx context.Context) error {
 	}
 
 	token, _ := ctx.Value(constants.ContextKeys.Token).(string)
-	return s.sessionStore.BlacklistToken(ctx, token, s.jwtManager.GetTokenExpiration())
+	if err := s.sessionStore.BlacklistToken(ctx, token, s.jwtManager.GetTokenExpiration()); err != nil {
+		return err
+	}
+
+	// Also remove the specific session so ValidateSession immediately rejects any reuse
+	if userID, ok := userIDInterface.(uuid.UUID); ok {
+		sessionID, _ := ctx.Value(constants.ContextKeys.SessionID).(string)
+		if sessionID != "" {
+			_ = s.sessionStore.DeleteSession(ctx, userID.String(), sessionID)
+		}
+	}
+	return nil
 }
 
 func (s *userService) GetProfile(ctx context.Context, userID uuid.UUID) (*models.UserResponse, error) {
@@ -1370,6 +1392,9 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 			return err
 		}
 
+		// Prevent old refresh tokens from creating new sessions after password change
+		_ = s.sessionStore.SetPasswordChangedAt(ctx, userID.String(), s.jwtManager.GetRefreshExpiration())
+
 		// Reset login attempts + unblock user
 		_ = s.sessionStore.ResetBlockedUserState(ctx, user.Email, user.Phone)
 
@@ -1443,6 +1468,9 @@ func (s *userService) AdminResetPassword(ctx context.Context, adminID, targetUse
 
 	// Kill all sessions
 	_ = s.sessionStore.DeleteAllUserSessions(ctx, user.ID.String())
+
+	// Prevent old refresh tokens from creating new sessions after password reset
+	_ = s.sessionStore.SetPasswordChangedAt(ctx, user.ID.String(), s.jwtManager.GetRefreshExpiration())
 
 	//Reset login attempts + unblock
 	_ = s.sessionStore.ResetBlockedUserState(ctx, user.Email, user.Phone)

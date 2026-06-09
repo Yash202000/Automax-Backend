@@ -12,8 +12,10 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/automax/backend/internal/database"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
@@ -24,6 +26,8 @@ type OTPService struct {
 	notificationLogRepo repository.NotificationLogRepository
 	userRepo            repository.UserRepository
 	userService         UserService
+	sessionStore        *database.SessionStore
+	jwtManager          *utils.JWTManager
 	// [Citizen Auto-Register] roleRepo is used to find the "citizen" role when auto-creating citizen users
 	roleRepo repository.RoleRepository
 }
@@ -34,6 +38,8 @@ func NewOTPService(
 	notificationLogRepo repository.NotificationLogRepository,
 	userRepo repository.UserRepository,
 	userService UserService,
+	sessionStore *database.SessionStore,
+	jwtManager *utils.JWTManager,
 	roleRepo repository.RoleRepository,
 ) *OTPService {
 	return &OTPService{
@@ -42,6 +48,8 @@ func NewOTPService(
 		notificationLogRepo: notificationLogRepo,
 		userRepo:            userRepo,
 		userService:         userService,
+		sessionStore:        sessionStore,
+		jwtManager:          jwtManager,
 		roleRepo:            roleRepo,
 	}
 }
@@ -137,6 +145,7 @@ func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode strin
 
 	//GENERATE OTP
 	otp, err := s.GenerateOTP()
+	fmt.Println("Generated OTP:", otp)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate otp: %w", err)
 	}
@@ -256,6 +265,7 @@ func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID stri
 		}
 	}
 
+	// GenerateTokenViaUserID creates its own session internally; no separate session needed here.
 	authResp, err := s.userService.GenerateTokenViaUserID(ctx, user.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate token: %w", err)
@@ -271,7 +281,7 @@ func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID stri
 	// update notification log
 	err = s.notificationLogRepo.MarkOTPVerified(ctx, sessionID, time.Now())
 	if err != nil {
-		return nil, fmt.Errorf("failed to update otp status")
+		return nil, fmt.Errorf("failed to update otp status: %w", err)
 	}
 	//SUCCESS  then DELETE OTP FROM REDIS
 	s.redis.Del(ctx, key)

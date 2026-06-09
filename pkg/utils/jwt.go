@@ -161,3 +161,13 @@ func (j *JWTManager) ValidateRefreshToken(tokenString string) (*RefreshClaims, e
 func (j *JWTManager) GetTokenExpiration() time.Duration {
 	return time.Duration(j.expireHour * float64(time.Hour))
 }
+
+// GetRefreshExpiration returns the longest possible refresh token lifetime.
+// Used to set the TTL on the password-changed marker so it outlives all refresh tokens.
+func (j *JWTManager) GetRefreshExpiration() time.Duration {
+	max := j.refreshExpireHour
+	if j.rememberExpireHour > max {
+		max = j.rememberExpireHour
+	}
+	return time.Duration(max * float64(time.Hour))
+}

@@ -21,6 +21,7 @@ var ContextKeys = struct {
 	UserEmail             contextKey
 	Role                  contextKey
 	Token                 contextKey
+	SessionID             contextKey
 	UserName              contextKey
 	User                  contextKey
 }{
@@ -47,6 +48,7 @@ var ContextKeys = struct {
 	UserEmail: "user_email",
 	Role:      "role",
 	Token:     "token",
+	SessionID: "session_id",
 	UserName:  "user_name",
 	User:      "user",
 }
