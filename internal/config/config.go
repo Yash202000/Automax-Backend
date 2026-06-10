@@ -90,8 +90,8 @@ type EscalationConfig struct {
 // SmsFeedbackConfig controls the delayed SMS fallback sent when the WhatsApp chatbot
 // has not received a response within the configured window after a final-close transition.
 type SmsFeedbackConfig struct {
-	// DelayHours is how long to wait before sending the SMS fallback. env: SMS_FEEDBACK_DELAY_HOURS (default: 48)
-	DelayHours int
+	// DelayMinutes is how long to wait before sending the SMS fallback. env: SMS_FEEDBACK_DELAY_MINUTES (default: 2880)
+	DelayMinutes int
 }
 
 type ReadyToCloseConfig struct {
@@ -266,7 +266,7 @@ func Load() *Config {
 			SecretsKey: getEnv("INTEGRATION_SECRETS_KEY", ""),
 		},
 		SmsFeedback: SmsFeedbackConfig{
-			DelayHours: getEnvAsInt("SMS_FEEDBACK_DELAY_HOURS", 48),
+			DelayMinutes: getEnvAsInt("SMS_FEEDBACK_DELAY_MINUTES", 2880),
 		},
 	}
 }

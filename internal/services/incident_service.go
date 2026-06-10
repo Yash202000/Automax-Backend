@@ -137,7 +137,7 @@ type incidentService struct {
 	actionExecutor      ActionExecutor
 	publicFeedbackRepo     repository.IncidentPublicFeedbackRepository
 	smsFeedbackPendingRepo repository.SmsFeedbackPendingRepository
-	smsFeedbackDelayHours  int
+	smsFeedbackDelayMinutes int
 	ivrSmsLinkRepo         repository.IvrSmsLinkRepository
 	rrCounters          map[string]int64
 	rrMu                sync.Mutex
@@ -211,9 +211,9 @@ func (s *incidentService) SetPublicFeedbackRepo(repo repository.IncidentPublicFe
 	s.publicFeedbackRepo = repo
 }
 
-func (s *incidentService) SetSmsFeedbackPendingRepo(repo repository.SmsFeedbackPendingRepository, delayHours int) {
+func (s *incidentService) SetSmsFeedbackPendingRepo(repo repository.SmsFeedbackPendingRepository, delayMinutes int) {
 	s.smsFeedbackPendingRepo = repo
-	s.smsFeedbackDelayHours = delayHours
+	s.smsFeedbackDelayMinutes = delayMinutes
 }
 
 // calculateSLADeadline calculates the SLA deadline based on classification criticality.
@@ -3641,9 +3641,9 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			updated.FeedbackID = &f.ID
 			// Schedule delayed SMS fallback.
 			if s.smsFeedbackPendingRepo != nil {
-				delayHours := s.smsFeedbackDelayHours
-				if delayHours <= 0 {
-					delayHours = 48
+				delayMinutes := s.smsFeedbackDelayMinutes
+				if delayMinutes <= 0 {
+					delayMinutes = 2880
 				}
 				closedAt := time.Now()
 				pending := &models.SmsFeedbackPending{
@@ -3651,13 +3651,13 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 					FeedbackID:  f.ID,
 					MobileNo:    mobileNo,
 					ClosedAt:    closedAt,
-					ScheduledAt: closedAt.Add(time.Duration(delayHours) * time.Hour),
+					ScheduledAt: closedAt.Add(time.Duration(delayMinutes) * time.Minute),
 				}
 				if err := s.smsFeedbackPendingRepo.Create(ctx, pending); err != nil {
 					log.Printf("[SmsFeedback] failed to create pending SMS record for incident %s: %v", incidentID, err)
 				} else {
-					log.Printf("[SmsFeedback] incident=%s — SMS fallback scheduled at %s (delay=%dh)",
-						incidentID, pending.ScheduledAt.Format(time.RFC3339), delayHours)
+					log.Printf("[SmsFeedback] incident=%s — SMS fallback scheduled at %s (delay=%dm)",
+						incidentID, pending.ScheduledAt.Format(time.RFC3339), delayMinutes)
 				}
 			}
 		} else {

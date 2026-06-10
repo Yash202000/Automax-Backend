@@ -50,7 +50,7 @@ func (r *smsFeedbackPendingRepository) HasWhatsAppFeedback(ctx context.Context, 
 	var count int64
 	err := r.db.WithContext(ctx).
 		Table("incident_feedbacks").
-		Where("incident_id = ? AND transition_history_id IS NULL AND created_at >= ? AND deleted_at IS NULL", incidentID, since).
+		Where("incident_id = ? AND transition_history_id IS NULL AND created_at >= ?", incidentID, since).
 		Count(&count).Error
 	return count > 0, err
 }

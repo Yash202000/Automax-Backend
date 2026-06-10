@@ -164,7 +164,7 @@ func main() {
 	incidentService.SetActionExecutor(services.NewActionExecutor(incidentRepo, userRepo, notificationService))
 	incidentService.SetPublicFeedbackRepo(publicFeedbackRepo)
 	smsFeedbackPendingRepo := repository.NewSmsFeedbackPendingRepository(db)
-	incidentService.SetSmsFeedbackPendingRepo(smsFeedbackPendingRepo, cfg.SmsFeedback.DelayHours)
+	incidentService.SetSmsFeedbackPendingRepo(smsFeedbackPendingRepo, cfg.SmsFeedback.DelayMinutes)
 
 	// External Integration
 	integrationRepo := repository.NewIntegrationRepository(db)
