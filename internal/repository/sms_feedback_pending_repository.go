@@ -13,6 +13,7 @@ type SmsFeedbackPendingRepository interface {
 	Create(ctx context.Context, record *models.SmsFeedbackPending) error
 	FindDue(ctx context.Context) ([]models.SmsFeedbackPending, error)
 	Update(ctx context.Context, record *models.SmsFeedbackPending) error
+	SetTemplateCode(ctx context.Context, incidentID uuid.UUID, templateCode, language string) error
 	// HasWhatsAppFeedback returns true if the incident received feedback via the
 	// WhatsApp chatbot (transition_history_id IS NULL) after the given time.
 	HasWhatsAppFeedback(ctx context.Context, incidentID uuid.UUID, since time.Time) (bool, error)
@@ -42,6 +43,12 @@ func (r *smsFeedbackPendingRepository) FindDue(ctx context.Context) ([]models.Sm
 
 func (r *smsFeedbackPendingRepository) Update(ctx context.Context, record *models.SmsFeedbackPending) error {
 	return r.db.WithContext(ctx).Save(record).Error
+}
+
+func (r *smsFeedbackPendingRepository) SetTemplateCode(ctx context.Context, incidentID uuid.UUID, templateCode, language string) error {
+	return r.db.WithContext(ctx).Model(&models.SmsFeedbackPending{}).
+		Where("incident_id = ? AND sent = false AND skipped = false", incidentID).
+		Updates(map[string]interface{}{"template_code": templateCode, "language": language}).Error
 }
 
 // HasWhatsAppFeedback checks the incident_feedbacks table for a row submitted by the

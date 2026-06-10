@@ -19,6 +19,11 @@ type SmsFeedbackPending struct {
 	ClosedAt    time.Time `gorm:"not null" json:"closed_at"`    // when the final-close happened
 	ScheduledAt time.Time `gorm:"not null" json:"scheduled_at"` // ClosedAt + delay hours
 
+	// TemplateCode is the notification template code from the workflow SMS action config.
+	// Set by the action executor when deferring the caller SMS on final-close.
+	TemplateCode string `gorm:"size:100" json:"template_code"`
+	Language     string `gorm:"size:10" json:"language"`
+
 	Sent        bool       `gorm:"default:false" json:"sent"`
 	Skipped     bool       `gorm:"default:false" json:"skipped"` // true when WhatsApp responded
 	RetryCount  int        `gorm:"default:0" json:"retry_count"`

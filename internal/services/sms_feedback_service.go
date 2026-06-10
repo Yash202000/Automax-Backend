@@ -24,15 +24,18 @@ const smsFeedbackMaxRetries = 3
 // If yes → skip SMS. If no → send SMS with the feedback link.
 type SmsFeedbackService struct {
 	pendingRepo  repository.SmsFeedbackPendingRepository
+	incidentRepo repository.IncidentRepository
 	notification *NotificationService
 }
 
 func NewSmsFeedbackService(
 	pendingRepo repository.SmsFeedbackPendingRepository,
+	incidentRepo repository.IncidentRepository,
 	notification *NotificationService,
 ) *SmsFeedbackService {
 	return &SmsFeedbackService{
 		pendingRepo:  pendingRepo,
+		incidentRepo: incidentRepo,
 		notification: notification,
 	}
 }
@@ -86,29 +89,49 @@ func (s *SmsFeedbackService) processOne(ctx context.Context, p *models.SmsFeedba
 		return
 	}
 
-	smsPortalBase := strings.TrimRight(os.Getenv("SMS_PORTAL_URL"), "/")
-	if smsPortalBase == "" {
-		smsPortalBase = strings.TrimRight(os.Getenv("FRONTEND_URL"), "/")
-	}
-	if smsPortalBase == "" {
+	if p.TemplateCode == "" {
 		p.Skipped = true
-		p.Log = "SMS skipped — SMS_PORTAL_URL and FRONTEND_URL are both unset"
-		log.Printf("[SmsFeedback] incident=%s — no portal URL configured, SMS skipped", p.IncidentID)
+		p.Log = "SMS skipped — no template_code configured on the final-close SMS action"
+		log.Printf("[SmsFeedback] incident=%s — no template_code, SMS skipped", p.IncidentID)
 		s.save(ctx, p)
 		return
 	}
 
-	feedbackToken := pkgutils.GenerateFeedbackToken(p.FeedbackID.String(), p.IncidentID.String(), smsFeedbackTokenDuration)
-	feedbackURL := fmt.Sprintf("%s/feedback/%s?signed_token=%s",
-		smsPortalBase, p.IncidentID.String(), url.QueryEscape(feedbackToken))
-	smsBody := fmt.Sprintf("Please rate your experience. Submit your feedback here: %s", feedbackURL)
+	incident, err := s.incidentRepo.FindByIDWithRelations(ctx, p.IncidentID)
+	if err != nil {
+		p.RetryCount++
+		p.Log = fmt.Sprintf("failed to load incident: %v", err)
+		log.Printf("[SmsFeedback] incident=%s — failed to load incident: %v", p.IncidentID, err)
+		s.save(ctx, p)
+		return
+	}
 
-	log.Printf("[SmsFeedback] incident=%s — no WhatsApp feedback after delay, sending SMS to %s", p.IncidentID, p.MobileNo)
+	vars := BuildIncidentVariables(incident, nil, nil)
+
+	// Override feedback_url with a properly signed token tied to the pre-created feedback record.
+	smsPortalBase := strings.TrimRight(os.Getenv("SMS_PORTAL_URL"), "/")
+	if smsPortalBase == "" {
+		smsPortalBase = strings.TrimRight(os.Getenv("FRONTEND_URL"), "/")
+	}
+	if smsPortalBase != "" {
+		feedbackToken := pkgutils.GenerateFeedbackToken(p.FeedbackID.String(), p.IncidentID.String(), smsFeedbackTokenDuration)
+		vars["feedback_url"] = fmt.Sprintf("%s/feedback/%s?signed_token=%s",
+			smsPortalBase, p.IncidentID.String(), url.QueryEscape(feedbackToken))
+		vars["feedback_link"] = fmt.Sprintf(`<a href="%s">تقييم الخدمة</a>`, vars["feedback_url"])
+	}
+
+	lang := p.Language
+	if lang == "" {
+		lang = "ar"
+	}
+	templateCode := p.TemplateCode
+
+	log.Printf("[SmsFeedback] incident=%s — no WhatsApp feedback after delay, sending SMS to %s (template=%s)", p.IncidentID, p.MobileNo, templateCode)
 
 	_, sendErr := s.notification.SendNotification(
-		ctx, "sms", nil, "en",
+		ctx, "sms", &templateCode, lang,
 		[]string{p.MobileNo}, nil, nil,
-		"", smsBody, nil, nil, nil, nil,
+		"", "", vars, nil, nil, nil,
 	)
 	if sendErr != nil {
 		p.RetryCount++
@@ -132,6 +155,6 @@ func (s *SmsFeedbackService) processOne(ctx context.Context, p *models.SmsFeedba
 
 func (s *SmsFeedbackService) save(ctx context.Context, p *models.SmsFeedbackPending) {
 	if err := s.pendingRepo.Update(ctx, p); err != nil {
-		log.Printf("[SmsFeedback] failed to update pending record %s: %v", p.ID, err)
+		log.Printf("SMS fallback scheduled at  failed to update pending record %s: %v", p.ID, err)
 	}
 }

@@ -22,18 +22,20 @@ type ActionExecutor interface {
 }
 
 type actionExecutor struct {
-	incidentRepo        repository.IncidentRepository
-	userRepo            repository.UserRepository
-	notificationService *NotificationService
-	httpClient          *http.Client
+	incidentRepo           repository.IncidentRepository
+	userRepo               repository.UserRepository
+	notificationService    *NotificationService
+	smsFeedbackPendingRepo repository.SmsFeedbackPendingRepository
+	httpClient             *http.Client
 }
 
 // NewActionExecutor creates a new action executor
-func NewActionExecutor(incidentRepo repository.IncidentRepository, userRepo repository.UserRepository, notificationService *NotificationService) ActionExecutor {
+func NewActionExecutor(incidentRepo repository.IncidentRepository, userRepo repository.UserRepository, notificationService *NotificationService, smsFeedbackPendingRepo repository.SmsFeedbackPendingRepository) ActionExecutor {
 	return &actionExecutor{
-		incidentRepo:        incidentRepo,
-		userRepo:            userRepo,
-		notificationService: notificationService,
+		incidentRepo:           incidentRepo,
+		userRepo:               userRepo,
+		notificationService:    notificationService,
+		smsFeedbackPendingRepo: smsFeedbackPendingRepo,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -91,8 +93,20 @@ func (e *actionExecutor) ExecuteAction(ctx context.Context, action *models.Trans
 		// (sent only if WhatsApp chatbot receives no response within the delay window).
 		// All other recipients (assignee, reporter, creator, custom, etc.) send immediately.
 		if transition != nil && transition.IsFinalClose && hasCallerRecipient(action) {
-			log.Printf("[ActionExecutor] incident=%s action=%q — caller SMS deferred (IsFinalClose), WhatsApp 48h window active",
+			log.Printf("[ActionExecutor] incident=%s action=%q — caller SMS deferred (IsFinalClose), WhatsApp window active",
 				incident.IncidentNumber, action.Name)
+			if e.smsFeedbackPendingRepo != nil {
+				var cfg SmsConfig
+				if err := json.Unmarshal([]byte(action.Config), &cfg); err == nil && cfg.TemplateCode != "" {
+					lang := cfg.Language
+					if lang == "" {
+						lang = "ar"
+					}
+					if err := e.smsFeedbackPendingRepo.SetTemplateCode(ctx, incident.ID, cfg.TemplateCode, lang); err != nil {
+						log.Printf("[ActionExecutor] incident=%s — failed to set template_code on pending SMS record: %v", incident.IncidentNumber, err)
+					}
+				}
+			}
 			return nil
 		}
 		return e.executeSms(ctx, action, incident, transition, performedBy)

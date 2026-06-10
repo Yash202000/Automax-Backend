@@ -161,9 +161,9 @@ func main() {
 	incidentService.SetUserService(userService)
 	incidentService.SetFCMService(fcmService)
 	incidentService.SetIvrSmsLinkRepo(ivrSmsLinkRepo)
-	incidentService.SetActionExecutor(services.NewActionExecutor(incidentRepo, userRepo, notificationService))
-	incidentService.SetPublicFeedbackRepo(publicFeedbackRepo)
 	smsFeedbackPendingRepo := repository.NewSmsFeedbackPendingRepository(db)
+	incidentService.SetActionExecutor(services.NewActionExecutor(incidentRepo, userRepo, notificationService, smsFeedbackPendingRepo))
+	incidentService.SetPublicFeedbackRepo(publicFeedbackRepo)
 	incidentService.SetSmsFeedbackPendingRepo(smsFeedbackPendingRepo, cfg.SmsFeedback.DelayMinutes)
 
 	// External Integration
@@ -183,7 +183,7 @@ func main() {
 		}
 	}
 	log.Printf("SLA Monitor interval: %d minutes", slaIntervalMinutes)
-	smsFeedbackService := services.NewSmsFeedbackService(smsFeedbackPendingRepo, notificationService)
+	smsFeedbackService := services.NewSmsFeedbackService(smsFeedbackPendingRepo, incidentRepo, notificationService)
 	slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, escalationGroupService, readyToCloseService, smsFeedbackService, time.Duration(slaIntervalMinutes)*time.Minute)
 	ctx := context.Background()
 	slaMonitor.Start(ctx)
