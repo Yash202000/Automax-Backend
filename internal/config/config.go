@@ -22,6 +22,7 @@ type Config struct {
 	NafathAPIBaseURL string // env: NAFATH_API_BASE_URL (e.g. https://nafath.amanathail.gov.sa)
 	Escalation       EscalationConfig
 	ReadyToClose     ReadyToCloseConfig
+	SmsFeedback      SmsFeedbackConfig
 	Documenta        DocumentaConfig
 	AIQuality        AIQualityConfig
 	AutoAssign       AutoAssignConfig
@@ -84,6 +85,13 @@ type EscalationConfig struct {
 	DailyMinute  int
 	WeeklyHour   int
 	WeeklyMinute int
+}
+
+// SmsFeedbackConfig controls the delayed SMS fallback sent when the WhatsApp chatbot
+// has not received a response within the configured window after a final-close transition.
+type SmsFeedbackConfig struct {
+	// DelayHours is how long to wait before sending the SMS fallback. env: SMS_FEEDBACK_DELAY_HOURS (default: 48)
+	DelayHours int
 }
 
 type ReadyToCloseConfig struct {
@@ -256,6 +264,9 @@ func Load() *Config {
 		},
 		Integration: IntegrationConfig{
 			SecretsKey: getEnv("INTEGRATION_SECRETS_KEY", ""),
+		},
+		SmsFeedback: SmsFeedbackConfig{
+			DelayHours: getEnvAsInt("SMS_FEEDBACK_DELAY_HOURS", 48),
 		},
 	}
 }

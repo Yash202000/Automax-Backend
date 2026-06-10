@@ -163,6 +163,8 @@ func main() {
 	incidentService.SetIvrSmsLinkRepo(ivrSmsLinkRepo)
 	incidentService.SetActionExecutor(services.NewActionExecutor(incidentRepo, userRepo, notificationService))
 	incidentService.SetPublicFeedbackRepo(publicFeedbackRepo)
+	smsFeedbackPendingRepo := repository.NewSmsFeedbackPendingRepository(db)
+	incidentService.SetSmsFeedbackPendingRepo(smsFeedbackPendingRepo, cfg.SmsFeedback.DelayHours)
 
 	// External Integration
 	integrationRepo := repository.NewIntegrationRepository(db)
@@ -181,7 +183,8 @@ func main() {
 		}
 	}
 	log.Printf("SLA Monitor interval: %d minutes", slaIntervalMinutes)
-	slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, escalationGroupService, readyToCloseService, time.Duration(slaIntervalMinutes)*time.Minute)
+	smsFeedbackService := services.NewSmsFeedbackService(smsFeedbackPendingRepo, notificationService)
+	slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, escalationGroupService, readyToCloseService, smsFeedbackService, time.Duration(slaIntervalMinutes)*time.Minute)
 	ctx := context.Background()
 	slaMonitor.Start(ctx)
 	defer slaMonitor.Stop()

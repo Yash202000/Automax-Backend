@@ -104,6 +104,9 @@ type IncidentService interface {
 	// SetPublicFeedbackRepo wires in the feedback repo so IsFinalClose transitions can
 	// pre-create a feedback record and embed a direct GenerateFeedbackToken URL in the SMS.
 	SetPublicFeedbackRepo(repo repository.IncidentPublicFeedbackRepository)
+	// SetSmsFeedbackPendingRepo wires in the SMS feedback pending repo and delay hours.
+	// The SLA monitor will send the SMS only if no WhatsApp response is received within delayHours.
+	SetSmsFeedbackPendingRepo(repo repository.SmsFeedbackPendingRepository, delayHours int)
 	// SetIvrSmsLinkRepo wires in the IvrSmsLinkRepository (called post-construction).
 	SetIvrSmsLinkRepo(repo repository.IvrSmsLinkRepository)
 
@@ -132,8 +135,10 @@ type incidentService struct {
 	fcmService          *FCMService
 	integrationExecutor IntegrationExecutor
 	actionExecutor      ActionExecutor
-	publicFeedbackRepo  repository.IncidentPublicFeedbackRepository
-	ivrSmsLinkRepo      repository.IvrSmsLinkRepository
+	publicFeedbackRepo     repository.IncidentPublicFeedbackRepository
+	smsFeedbackPendingRepo repository.SmsFeedbackPendingRepository
+	smsFeedbackDelayHours  int
+	ivrSmsLinkRepo         repository.IvrSmsLinkRepository
 	rrCounters          map[string]int64
 	rrMu                sync.Mutex
 }
@@ -204,6 +209,11 @@ func (s *incidentService) SetActionExecutor(ae ActionExecutor) {
 
 func (s *incidentService) SetPublicFeedbackRepo(repo repository.IncidentPublicFeedbackRepository) {
 	s.publicFeedbackRepo = repo
+}
+
+func (s *incidentService) SetSmsFeedbackPendingRepo(repo repository.SmsFeedbackPendingRepository, delayHours int) {
+	s.smsFeedbackPendingRepo = repo
+	s.smsFeedbackDelayHours = delayHours
 }
 
 // calculateSLADeadline calculates the SLA deadline based on classification criticality.
@@ -3614,6 +3624,8 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 
 	// IsFinalClose: pre-create a pending feedback record so BuildIncidentVariables can call
 	// GenerateFeedbackToken with a real feedbackID, producing a direct submit URL in {{feedback_url}}.
+	// Also schedule the SMS fallback via SmsFeedbackPending — the SMS is NOT sent immediately;
+	// the SLA monitor will send it only if the WhatsApp chatbot receives no response within the delay window.
 	if transition.IsFinalClose && s.publicFeedbackRepo != nil {
 		mobileNo := updated.ReporterPhone
 		if mobileNo == "" && updated.Reporter != nil {
@@ -3627,6 +3639,27 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		}
 		if err := s.publicFeedbackRepo.Create(ctx, f); err == nil {
 			updated.FeedbackID = &f.ID
+			// Schedule delayed SMS fallback.
+			if s.smsFeedbackPendingRepo != nil {
+				delayHours := s.smsFeedbackDelayHours
+				if delayHours <= 0 {
+					delayHours = 48
+				}
+				closedAt := time.Now()
+				pending := &models.SmsFeedbackPending{
+					IncidentID:  incidentID,
+					FeedbackID:  f.ID,
+					MobileNo:    mobileNo,
+					ClosedAt:    closedAt,
+					ScheduledAt: closedAt.Add(time.Duration(delayHours) * time.Hour),
+				}
+				if err := s.smsFeedbackPendingRepo.Create(ctx, pending); err != nil {
+					log.Printf("[SmsFeedback] failed to create pending SMS record for incident %s: %v", incidentID, err)
+				} else {
+					log.Printf("[SmsFeedback] incident=%s — SMS fallback scheduled at %s (delay=%dh)",
+						incidentID, pending.ScheduledAt.Format(time.RFC3339), delayHours)
+				}
+			}
 		} else {
 			log.Printf("[ExecuteTransition] failed to pre-create feedback record for IsFinalClose incident %s: %v", incidentID, err)
 		}

@@ -20,13 +20,14 @@ type slaMonitor struct {
 	escalationService      *EscalationService
 	escalationGroupService *EscalationGroupService
 	readyToCloseService    ReadyToCloseService
+	smsFeedbackService     *SmsFeedbackService
 	interval               time.Duration
 	stopChan               chan struct{}
 	running                bool
 }
 
 // NewSLAMonitor creates a new SLA monitor
-func NewSLAMonitor(incidentRepo repository.IncidentRepository, escalationService *EscalationService, escalationGroupService *EscalationGroupService, readyToCloseService ReadyToCloseService, checkInterval time.Duration) SLAMonitor {
+func NewSLAMonitor(incidentRepo repository.IncidentRepository, escalationService *EscalationService, escalationGroupService *EscalationGroupService, readyToCloseService ReadyToCloseService, smsFeedbackService *SmsFeedbackService, checkInterval time.Duration) SLAMonitor {
 	if checkInterval == 0 {
 		checkInterval = 5 * time.Minute // Default to 5 minutes
 	}
@@ -35,6 +36,7 @@ func NewSLAMonitor(incidentRepo repository.IncidentRepository, escalationService
 		escalationService:      escalationService,
 		escalationGroupService: escalationGroupService,
 		readyToCloseService:    readyToCloseService,
+		smsFeedbackService:     smsFeedbackService,
 		interval:               checkInterval,
 		stopChan:               make(chan struct{}),
 	}
@@ -138,6 +140,14 @@ func (m *slaMonitor) CheckSLABreaches(ctx context.Context) error {
 		// Auto-revert incidents that have exceeded their Ready-to-Close window
 		if err := m.readyToCloseService.ProcessExpiries(ctx); err != nil {
 			log.Printf("Ready-to-Close expiry processing failed: %v", err)
+		}
+	}
+
+	// Send SMS feedback fallback for final-close incidents where WhatsApp chatbot
+	// received no response within the configured delay window.
+	if m.smsFeedbackService != nil {
+		if err := m.smsFeedbackService.ProcessPending(ctx); err != nil {
+			log.Printf("SMS feedback pending processing failed: %v", err)
 		}
 	}
 

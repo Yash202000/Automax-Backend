@@ -99,6 +99,7 @@ func Migrate(db *gorm.DB) error {
 		&models.IncidentAttachment{},
 		&models.IncidentFeedback{},
 		&models.IncidentPublicFeedback{},
+		&models.SmsFeedbackPending{},
 		&models.IncidentTransitionHistory{},
 		&models.IncidentRevision{},
 		&models.IncidentRejectionLog{},
