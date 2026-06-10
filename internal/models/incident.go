@@ -573,7 +573,7 @@ type IncidentFilter struct {
 	RecordType         *string    `query:"record_type" json:"record_type" validate:"omitempty,oneof=incident request complaint query"` // 'incident', 'request', 'complaint', or 'query'
 	Channel            *string    `query:"channel" json:"channel" validate:"omitempty"`                                                // for complaints
 	Source             *string    `query:"source" json:"source" validate:"omitempty"`
-	MyRecord           *string    `query:"my_record" json:"my_record" validate:"omitempty"`
+	MyRecord           *string    `query:"my_record" json:"my_record" validate:"omitempty,uuid"`
 	ConvertedToRequest *bool      `query:"converted_to_request" json:"converted_to_request" validate:"omitempty"`
 	SourceIncidentID   *string    `query:"source_incident_id" json:"source_incident_id" validate:"omitempty,uuid"`
 	StartDate          *time.Time `json:"start_date"` // filter by created_at >= start_date; parsed manually in handler (not via QueryParser)
