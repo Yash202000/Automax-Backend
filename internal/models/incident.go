@@ -103,14 +103,14 @@ type Incident struct {
 	Assignees []User `gorm:"many2many:incident_assignees;" json:"assignees,omitempty"`
 
 	// Merge Relationships - tracked via incident_merges table (no FK constraint)
-	MasterIncidentID *uuid.UUID `gorm:"type:uuid;index;column:master_incident_id" json:"master_incident_id,omitempty"`
-	MasterIncident   *Incident  `gorm:"-" json:"master_incident,omitempty"`
-	MergedIncidents  []Incident `gorm:"-" json:"merged_incidents,omitempty"`
-	FeedbackID          *uuid.UUID   `gorm:"-" json:"-"` // ephemeral: pre-created feedback record ID injected by ExecuteTransition on IsFinalClose
-	PreviousAssigneeIDs []uuid.UUID  `gorm:"-" json:"-"` // ephemeral: all historical assignees, injected by ExecuteTransition
-	IsMerged         bool       `gorm:"default:false;index" json:"is_merged"`
-	MergedAt         *time.Time `json:"merged_at,omitempty"`
-	MergedByUserID   *uuid.UUID `gorm:"type:uuid" json:"merged_by_user_id,omitempty"`
+	MasterIncidentID    *uuid.UUID  `gorm:"type:uuid;index;column:master_incident_id" json:"master_incident_id,omitempty"`
+	MasterIncident      *Incident   `gorm:"-" json:"master_incident,omitempty"`
+	MergedIncidents     []Incident  `gorm:"-" json:"merged_incidents,omitempty"`
+	FeedbackID          *uuid.UUID  `gorm:"-" json:"-"` // ephemeral: pre-created feedback record ID injected by ExecuteTransition on IsFinalClose
+	PreviousAssigneeIDs []uuid.UUID `gorm:"-" json:"-"` // ephemeral: all historical assignees, injected by ExecuteTransition
+	IsMerged            bool        `gorm:"default:false;index" json:"is_merged"`
+	MergedAt            *time.Time  `json:"merged_at,omitempty"`
+	MergedByUserID      *uuid.UUID  `gorm:"type:uuid" json:"merged_by_user_id,omitempty"`
 
 	// Closed Incident Edit Tracking
 	ClosedBy         *uuid.UUID     `gorm:"type:uuid;index" json:"closed_by,omitempty"`
@@ -573,24 +573,25 @@ type IncidentFilter struct {
 	RecordType         *string    `query:"record_type" json:"record_type" validate:"omitempty,oneof=incident request complaint query"` // 'incident', 'request', 'complaint', or 'query'
 	Channel            *string    `query:"channel" json:"channel" validate:"omitempty"`                                                // for complaints
 	Source             *string    `query:"source" json:"source" validate:"omitempty"`
+	MyRecord           *string    `query:"my_record" json:"my_record" validate:"omitempty"`
 	ConvertedToRequest *bool      `query:"converted_to_request" json:"converted_to_request" validate:"omitempty"`
 	SourceIncidentID   *string    `query:"source_incident_id" json:"source_incident_id" validate:"omitempty,uuid"`
 	StartDate          *time.Time `json:"start_date"` // filter by created_at >= start_date; parsed manually in handler (not via QueryParser)
 	EndDate            *time.Time `json:"end_date"`   // filter by created_at <= end_date; parsed manually in handler (not via QueryParser)
 	// Transition filters
-	TransitionID     *uuid.UUID  `query:"transition_id" json:"transition_id" validate:"omitempty,uuid"`
-	FromStateID      *uuid.UUID  `query:"from_state_id" json:"from_state_id" validate:"omitempty"`
-	ToStateID        *uuid.UUID  `query:"to_state_id" json:"to_state_id" validate:"omitempty"`
-	TaskID           string      `query:"task_id" json:"task_id" validate:"omitempty"`                       // filter by task ID in custom_fields
+	TransitionID *uuid.UUID `query:"transition_id" json:"transition_id" validate:"omitempty,uuid"`
+	FromStateID  *uuid.UUID `query:"from_state_id" json:"from_state_id" validate:"omitempty"`
+	ToStateID    *uuid.UUID `query:"to_state_id" json:"to_state_id" validate:"omitempty"`
+	TaskID       string     `query:"task_id" json:"task_id" validate:"omitempty"` // filter by task ID in custom_fields
 	// CustomFieldFilters holds repeatable cf=key:value filters. Parsed manually in handler.
 	// Each filter does: custom_fields::jsonb ->> 'key' ILIKE '%value%'. Multiple are AND-ed.
 	CustomFieldFilters []CustomFieldFilter `json:"-"`
-	Page             int         `query:"page" json:"page" validate:"omitempty,min=1"`
-	Limit            int         `query:"limit" json:"limit" validate:"omitempty,min=1,max=100"`
-	UserRoleIDs      []uuid.UUID `json:"-"`     // For filtering stats by user's roles
-	FilterType       string      `query:"type"` // created | assigned
-	UserID           uuid.UUID   `json:"-"`
-	IsAdmin          bool        `json:"-"` // Super admin bypasses user-scoped assigned filter
+	Page               int                 `query:"page" json:"page" validate:"omitempty,min=1"`
+	Limit              int                 `query:"limit" json:"limit" validate:"omitempty,min=1,max=100"`
+	UserRoleIDs        []uuid.UUID         `json:"-"`     // For filtering stats by user's roles
+	FilterType         string              `query:"type"` // created | assigned
+	UserID             uuid.UUID           `json:"-"`
+	IsAdmin            bool                `json:"-"` // Super admin bypasses user-scoped assigned filter
 }
 
 // Merge Incident Types
