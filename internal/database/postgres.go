@@ -35,7 +35,7 @@ func Connect(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 	return db, nil
 }
 
-func Migrate(db *gorm.DB) error {
+func Migrate(db *gorm.DB, cfg *config.Config) error {
 	log.Println("Running database migrations...")
 	// Manually create the ENUM type for call_status if it doesn't exist
 	createEnumQuery := `
@@ -123,30 +123,6 @@ func Migrate(db *gorm.DB) error {
 		&models.IncidentReadyToCloseEntry{},
 		&models.DeviceToken{},
 		&models.CallerSentiment{},
-		// Goal Management models
-		&models.Goal{},
-		&models.GoalMetric{},
-		&models.MetricHistory{},
-		&models.GoalCollaborator{},
-		&models.Evidence{},
-		&models.EvidenceTransitionHistory{},
-		&models.GoalCheckIn{},
-		// Goal Metric approval workflow
-		&models.GoalMetricValueChange{},
-		&models.MetricTransitionHistory{},
-		&models.MetricValueChangeTransitionHistory{},
-		// Goal Templates
-		&models.GoalTemplate{},
-		// Metric Import Batch models
-		&models.MetricImportBatch{},
-		&models.MetricImportItem{},
-		&models.MetricImportBatchTransitionHistory{},
-		// Goal Comments
-		&models.GoalComment{},
-		// Performance Review models
-		&models.ReviewCycle{},
-		&models.ReviewAssignment{},
-		&models.GoalScore{},
 		// AI Quality Feedback
 		&models.AIQualityFeedback{},
 		// License Management
@@ -162,6 +138,31 @@ func Migrate(db *gorm.DB) error {
 	)
 	if err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
+	}
+
+	if cfg.GoalManagement.Enabled {
+		if err := migrationDB.AutoMigrate(
+			&models.Goal{},
+			&models.GoalMetric{},
+			&models.MetricHistory{},
+			&models.GoalCollaborator{},
+			&models.Evidence{},
+			&models.EvidenceTransitionHistory{},
+			&models.GoalCheckIn{},
+			&models.GoalMetricValueChange{},
+			&models.MetricTransitionHistory{},
+			&models.MetricValueChangeTransitionHistory{},
+			&models.GoalTemplate{},
+			&models.MetricImportBatch{},
+			&models.MetricImportItem{},
+			&models.MetricImportBatchTransitionHistory{},
+			&models.GoalComment{},
+			&models.ReviewCycle{},
+			&models.ReviewAssignment{},
+			&models.GoalScore{},
+		); err != nil {
+			return fmt.Errorf("failed to run goal management migrations: %w", err)
+		}
 	}
 
 	// Drop problematic foreign key constraints on incidents table
@@ -265,8 +266,10 @@ func Migrate(db *gorm.DB) error {
 
 	// Seed existing free-text goal categories as root Category rows
 	// and back-fill goals.category_id. Idempotent: safe to run repeatedly.
-	if err := migrateFreeTextGoalCategories(db); err != nil {
-		log.Printf("Warning: goal category back-fill migration failed: %v", err)
+	if cfg.GoalManagement.Enabled {
+		if err := migrateFreeTextGoalCategories(db); err != nil {
+			log.Printf("Warning: goal category back-fill migration failed: %v", err)
+		}
 	}
 
 	// Partial Close feature columns — idempotent, safe to run repeatedly
@@ -277,6 +280,12 @@ func Migrate(db *gorm.DB) error {
 
 	// AD/LDAP user flag — idempotent
 	db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_ad_user BOOLEAN NOT NULL DEFAULT false")
+
+	// role_permissions is a GORM many2many join table with no primary key.
+	// Without a replica identity PostgreSQL refuses DELETE operations on tables
+	// that are part of a logical replication publication (SQLSTATE 55000).
+	// FULL uses the entire row as identity — idempotent, safe to run repeatedly.
+	db.Exec("ALTER TABLE role_permissions REPLICA IDENTITY FULL")
 
 	log.Println("Database migrations completed")
 	return nil
@@ -390,7 +399,7 @@ func slugifyCategoryCode(s string) string {
 	return out
 }
 
-func Seed(db *gorm.DB) error {
+func Seed(db *gorm.DB, cfg *config.Config) error {
 	log.Println("Seeding database...")
 
 	// Seed default permissions
@@ -541,14 +550,6 @@ func Seed(db *gorm.DB) error {
 		{Name: "Assign Users to Escalation Group", Code: "escalation-groups:assign_users", Module: "escalation-groups", Action: "assign_users", Description: "Add or remove users from escalation groups"},
 		{Name: "Manage Escalation Rules", Code: "escalation-groups:manage_rules", Module: "escalation-groups", Action: "manage_rules", Description: "Configure escalation frequency, channel, and classification rules"},
 
-		// Goal permissions
-		{Name: "View Goals", Code: "goals:view", Module: "goals", Action: "view", Description: "View goals"},
-		{Name: "Create Goals", Code: "goals:create", Module: "goals", Action: "create", Description: "Create new goals"},
-		{Name: "Update Goals", Code: "goals:update", Module: "goals", Action: "update", Description: "Update goals"},
-		{Name: "Delete Goals", Code: "goals:delete", Module: "goals", Action: "delete", Description: "Delete goals"},
-		{Name: "Assign Goals", Code: "goals:assign", Module: "goals", Action: "assign", Description: "Assign goal collaborators"},
-		{Name: "Approve Goals", Code: "goals:approve", Module: "goals", Action: "approve", Description: "Approve/reject goal evidence"},
-
 		// Caller Sentiment permissions
 		{Name: "Create Caller Sentiment", Code: "caller-sentiment:create", Module: "caller-sentiment", Action: "create", Description: "Record a sentiment entry after a call"},
 		{Name: "View Caller Sentiments", Code: "caller-sentiment:view", Module: "caller-sentiment", Action: "view", Description: "View all caller sentiment records and summaries"},
@@ -558,7 +559,6 @@ func Seed(db *gorm.DB) error {
 		{Name: "Manage License", Code: "license:manage", Module: "license", Action: "manage", Description: "Activate, deactivate, and manage license keys"},
 
 		// Dashboard permissions
-		{Name: "Goals Dashboard", Code: "dashboard:goals", Module: "dashboard", Action: "goals", Description: "Access goal cards on dashboard"},
 		{Name: "Admin Dashboard", Code: "dashboard:admin", Module: "dashboard", Action: "admin", Description: "Access admin section cards on dashboard"},
 		{Name: "Incidents Dashboard", Code: "dashboard:incidents", Module: "dashboard", Action: "incidents", Description: "Access incident cards on dashboard"},
 		{Name: "Requests Dashboard", Code: "dashboard:requests", Module: "dashboard", Action: "requests", Description: "Access request cards on dashboard"},
@@ -566,6 +566,18 @@ func Seed(db *gorm.DB) error {
 		{Name: "Queries Dashboard", Code: "dashboard:queries", Module: "dashboard", Action: "queries", Description: "Access query cards on dashboard"},
 		{Name: "Workflows Dashboard", Code: "dashboard:workflows", Module: "dashboard", Action: "workflows", Description: "Access workflow cards on dashboard"},
 		{Name: "CCM Dashboard", Code: "dashboard:ccm", Module: "dashboard", Action: "ccm", Description: "Access ccm cards on dashboard"},
+	}
+
+	if cfg.GoalManagement.Enabled {
+		permissions = append(permissions,
+			models.Permission{Name: "View Goals", Code: "goals:view", Module: "goals", Action: "view", Description: "View goals"},
+			models.Permission{Name: "Create Goals", Code: "goals:create", Module: "goals", Action: "create", Description: "Create new goals"},
+			models.Permission{Name: "Update Goals", Code: "goals:update", Module: "goals", Action: "update", Description: "Update goals"},
+			models.Permission{Name: "Delete Goals", Code: "goals:delete", Module: "goals", Action: "delete", Description: "Delete goals"},
+			models.Permission{Name: "Assign Goals", Code: "goals:assign", Module: "goals", Action: "assign", Description: "Assign goal collaborators"},
+			models.Permission{Name: "Approve Goals", Code: "goals:approve", Module: "goals", Action: "approve", Description: "Approve/reject goal evidence"},
+			models.Permission{Name: "Goals Dashboard", Code: "dashboard:goals", Module: "dashboard", Action: "goals", Description: "Access goal cards on dashboard"},
+		)
 	}
 
 	for _, perm := range permissions {
@@ -665,14 +677,118 @@ func Seed(db *gorm.DB) error {
 	// Seed default lookup categories
 	seedLookupCategories(db)
 
-	// Seed default evidence approval workflow
-	seedEvidenceApprovalWorkflow(db)
+	if cfg.GoalManagement.Enabled {
+		// Seed default evidence approval workflow
+		seedEvidenceApprovalWorkflow(db)
 
-	// Seed default metric & metric_value_change approval workflows
-	seedMetricApprovalWorkflows(db)
-
+		// Seed default metric & metric_value_change approval workflows
+		seedMetricApprovalWorkflows(db)
+	} else {
+		unseedGoalManagement(db)
+	}
 	log.Println("Database seeding completed")
 	return nil
+}
+
+// unseedGoalManagement hard-deletes all goal-related rows from the DB.
+// Called on every startup when GOAL_MANAGEMENT=false. Safe to run repeatedly.
+// Runs inside a transaction with session_replication_role=replica to bypass
+// FK constraints (incidents→workflows, incident_transition_histories→transitions)
+// and the replica-identity restriction on role_permissions.
+func unseedGoalManagement(db *gorm.DB) {
+	log.Println("GOAL_MANAGEMENT=false — purging goal data from DB...")
+
+	tx := db.Begin()
+	if tx.Error != nil {
+		log.Printf("  [unseed] ERROR starting transaction: %v", tx.Error)
+		return
+	}
+
+	// Disable FK triggers and replica-identity checks for this session.
+	if err := tx.Exec("SET LOCAL session_replication_role = 'replica'").Error; err != nil {
+		log.Printf("  [unseed] WARNING could not set session_replication_role: %v", err)
+	}
+
+	exec := func(label, sql string) {
+		r := tx.Exec(sql)
+		if r.Error != nil {
+			log.Printf("  [unseed] ERROR %s: %v", label, r.Error)
+		} else {
+			log.Printf("  [unseed] %s: %d rows deleted", label, r.RowsAffected)
+		}
+	}
+
+	// Step 1: delete goal data (children before parents)
+	for _, table := range []string{
+		"goal_scores",
+		"review_assignments",
+		"review_cycles",
+		"metric_value_change_transition_histories",
+		"goal_metric_value_changes",
+		"metric_transition_histories",
+		"metric_import_batch_transition_histories",
+		"metric_import_items",
+		"metric_import_batches",
+		"metric_histories",
+		"goal_metrics",
+		"evidence_transition_histories",
+		"evidences",
+		"goal_collaborators",
+		"goal_check_ins",
+		"goal_comments",
+		"goal_templates",
+		"goals",
+	} {
+		exec(table, "DROP TABLE IF EXISTS "+table+" CASCADE")
+	}
+
+	// Step 2: delete goal approval workflows
+	wfCodes := "('evidence_approval','metric_approval','metric_value_change_approval')"
+	wfSub := "SELECT id FROM workflows WHERE code IN " + wfCodes
+	stSub := "SELECT id FROM workflow_states WHERE workflow_id IN (" + wfSub + ")"
+	trSub := "SELECT id FROM workflow_transitions WHERE workflow_id IN (" + wfSub + ")"
+
+	exec("transition_requirements (goal wf)", "DELETE FROM transition_requirements WHERE transition_id IN ("+trSub+")")
+	exec("transition_actions (goal wf)", "DELETE FROM transition_actions WHERE transition_id IN ("+trSub+")")
+	exec("transition_field_changes (goal wf)", "DELETE FROM transition_field_changes WHERE transition_id IN ("+trSub+")")
+	// workflow_state_triggers.workflow_state_id / workflow_transition_triggers.workflow_transition_id
+	exec("workflow_state_triggers (goal wf)", "DELETE FROM workflow_state_triggers WHERE workflow_state_id IN ("+stSub+")")
+	exec("workflow_transition_triggers (goal wf)", "DELETE FROM workflow_transition_triggers WHERE workflow_transition_id IN ("+trSub+")")
+	exec("workflow_transitions (goal wf)", "DELETE FROM workflow_transitions WHERE workflow_id IN ("+wfSub+")")
+	exec("workflow_states (goal wf)", "DELETE FROM workflow_states WHERE workflow_id IN ("+wfSub+")")
+	exec("workflows (goal)", "DELETE FROM workflows WHERE code IN "+wfCodes)
+
+	// Step 3: unlink goal permissions from roles, then delete them
+	permSub := "SELECT id FROM permissions WHERE module = 'goals' OR code = 'dashboard:goals'"
+	exec("role_permissions (goals)", "DELETE FROM role_permissions WHERE permission_id IN ("+permSub+")")
+	exec("permissions (goals)", "DELETE FROM permissions WHERE module = 'goals' OR code = 'dashboard:goals'")
+
+	// Step 4: delete goal-specific roles and all their join-table associations
+	roleSub := "SELECT id FROM roles WHERE code IN ('goal_manager','goal_collaborator')"
+	for _, step := range []struct{ label, sql string }{
+		{"user_roles (goal roles)", "DELETE FROM user_roles WHERE role_id IN (" + roleSub + ")"},
+		{"role_permissions (goal roles)", "DELETE FROM role_permissions WHERE role_id IN (" + roleSub + ")"},
+		{"department_roles (goal roles)", "DELETE FROM department_roles WHERE role_id IN (" + roleSub + ")"},
+		{"state_viewable_roles (goal roles)", "DELETE FROM state_viewable_roles WHERE role_id IN (" + roleSub + ")"},
+		{"state_editable_roles (goal roles)", "DELETE FROM state_editable_roles WHERE role_id IN (" + roleSub + ")"},
+		{"state_assignment_roles (goal roles)", "DELETE FROM state_assignment_roles WHERE role_id IN (" + roleSub + ")"},
+		{"transition_allowed_roles (goal roles)", "DELETE FROM transition_allowed_roles WHERE role_id IN (" + roleSub + ")"},
+		{"transition_assignment_roles (goal roles)", "DELETE FROM transition_assignment_roles WHERE role_id IN (" + roleSub + ")"},
+		{"workflow_convert_to_request_roles (goal roles)", "DELETE FROM workflow_convert_to_request_roles WHERE role_id IN (" + roleSub + ")"},
+		{"workflow_merge_allowed_roles (goal roles)", "DELETE FROM workflow_merge_allowed_roles WHERE role_id IN (" + roleSub + ")"},
+		{"escalation_policy_step_targets (goal roles)", "DELETE FROM escalation_policy_step_targets WHERE role_id IN (" + roleSub + ")"},
+		{"escalation_group_targets (goal roles)", "DELETE FROM escalation_group_targets WHERE role_id IN (" + roleSub + ")"},
+		{"roles (goal)", "DELETE FROM roles WHERE code IN ('goal_manager','goal_collaborator')"},
+	} {
+		exec(step.label, step.sql)
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		log.Printf("  [unseed] ERROR committing: %v", err)
+		tx.Rollback()
+		return
+	}
+	log.Println("  [unseed] done")
 }
 
 func seedLookupCategories(db *gorm.DB) {
