@@ -33,6 +33,7 @@ const (
 	TemplateActionConvertToRequest = "convert_to_request"
 	TemplateActionMissingInfo      = "missing_info"
 	TemplateActionCustom           = "custom"
+	TemplateActionSmsFeedback      = "sms_feedback"
 )
 
 // AvailableVariablesByActionType documents which template variables are injected at send-time

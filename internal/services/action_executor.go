@@ -22,18 +22,20 @@ type ActionExecutor interface {
 }
 
 type actionExecutor struct {
-	incidentRepo        repository.IncidentRepository
-	userRepo            repository.UserRepository
-	notificationService *NotificationService
-	httpClient          *http.Client
+	incidentRepo           repository.IncidentRepository
+	userRepo               repository.UserRepository
+	notificationService    *NotificationService
+	smsFeedbackPendingRepo repository.SmsFeedbackPendingRepository
+	httpClient             *http.Client
 }
 
 // NewActionExecutor creates a new action executor
-func NewActionExecutor(incidentRepo repository.IncidentRepository, userRepo repository.UserRepository, notificationService *NotificationService) ActionExecutor {
+func NewActionExecutor(incidentRepo repository.IncidentRepository, userRepo repository.UserRepository, notificationService *NotificationService, smsFeedbackPendingRepo repository.SmsFeedbackPendingRepository) ActionExecutor {
 	return &actionExecutor{
-		incidentRepo:        incidentRepo,
-		userRepo:            userRepo,
-		notificationService: notificationService,
+		incidentRepo:           incidentRepo,
+		userRepo:               userRepo,
+		notificationService:    notificationService,
+		smsFeedbackPendingRepo: smsFeedbackPendingRepo,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -87,6 +89,26 @@ func (e *actionExecutor) ExecuteAction(ctx context.Context, action *models.Trans
 	case "email":
 		return e.executeEmail(ctx, action, incident, transition, performedBy)
 	case "sms":
+		// On final-close, only "caller" recipient SMS is deferred to the SLA monitor
+		// (sent only if WhatsApp chatbot receives no response within the delay window).
+		// All other recipients (assignee, reporter, creator, custom, etc.) send immediately.
+		if transition != nil && transition.IsFinalClose && hasCallerRecipient(action) {
+			log.Printf("[ActionExecutor] incident=%s action=%q — caller SMS deferred (IsFinalClose), WhatsApp window active",
+				incident.IncidentNumber, action.Name)
+			if e.smsFeedbackPendingRepo != nil {
+				var cfg SmsConfig
+				if err := json.Unmarshal([]byte(action.Config), &cfg); err == nil && cfg.TemplateCode != "" {
+					lang := cfg.Language
+					if lang == "" {
+						lang = "ar"
+					}
+					if err := e.smsFeedbackPendingRepo.SetTemplateCode(ctx, incident.ID, cfg.TemplateCode, lang); err != nil {
+						log.Printf("[ActionExecutor] incident=%s — failed to set template_code on pending SMS record: %v", incident.IncidentNumber, err)
+					}
+				}
+			}
+			return nil
+		}
 		return e.executeSms(ctx, action, incident, transition, performedBy)
 	case "webhook":
 		return e.executeWebhook(ctx, action, incident, transition, performedBy)
@@ -236,6 +258,21 @@ type SmsConfig struct {
 	TemplateCode    string   `json:"template_code,omitempty"` // notification template code — overrides message_template when set
 	MessageTemplate string   `json:"message_template"`
 	Language        string   `json:"language,omitempty"` // "ar" or "en"; defaults to "ar" when empty
+}
+
+// hasCallerRecipient reports whether this SMS action targets the "caller" recipient.
+// Used to decide whether to defer the SMS on a final-close transition.
+func hasCallerRecipient(action *models.TransitionAction) bool {
+	var config SmsConfig
+	if err := json.Unmarshal([]byte(action.Config), &config); err != nil {
+		return false
+	}
+	for _, r := range config.Recipients {
+		if r == "caller" {
+			return true
+		}
+	}
+	return false
 }
 
 // executeSms sends SMS notifications via the notification service
