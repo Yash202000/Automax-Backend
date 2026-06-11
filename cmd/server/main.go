@@ -245,7 +245,7 @@ func main() {
 	feedbackTemplateHandler := handlers.NewFeedbackTemplateHandler(feedbackTemplateService)
 	commentTemplateHandler := handlers.NewCommentTemplateHandler(commentTemplateService)
 	rejectionLogHandler := handlers.NewRejectionLogHandler(rejectionLogRepo)
-	incidentFeedbackHandler := handlers.NewIncidentFeedbackHandler(incidentRepo)
+	incidentFeedbackHandler := handlers.NewIncidentFeedbackHandler(incidentRepo, publicFeedbackRepo)
 	publicFeedbackHandler := handlers.NewIncidentPublicFeedbackHandler(publicFeedbackService, actionLogService)
 	aiQualityFeedbackHandler := handlers.NewAIQualityFeedbackHandler(aiQualityFeedbackRepo)
 	fcmHandler := handlers.NewFCMHandler(fcmService)

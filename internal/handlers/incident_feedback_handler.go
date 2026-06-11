@@ -13,11 +13,12 @@ import (
 )
 
 type IncidentFeedbackHandler struct {
-	incidentRepo repository.IncidentRepository
+	incidentRepo       repository.IncidentRepository
+	publicFeedbackRepo repository.IncidentPublicFeedbackRepository
 }
 
-func NewIncidentFeedbackHandler(incidentRepo repository.IncidentRepository) *IncidentFeedbackHandler {
-	return &IncidentFeedbackHandler{incidentRepo: incidentRepo}
+func NewIncidentFeedbackHandler(incidentRepo repository.IncidentRepository, publicFeedbackRepo repository.IncidentPublicFeedbackRepository) *IncidentFeedbackHandler {
+	return &IncidentFeedbackHandler{incidentRepo: incidentRepo, publicFeedbackRepo: publicFeedbackRepo}
 }
 
 // CreateFeedback creates a feedback entry for an incident.
@@ -71,6 +72,28 @@ func (h *IncidentFeedbackHandler) CreateFeedback(c *fiber.Ctx) error {
 			}
 		} else {
 			return utils.ErrorResponse(c, fiber.StatusForbidden, "Only the incident reporter or authorized users can submit feedback")
+		}
+	}
+
+	// Block duplicate WhatsApp chatbot submissions (transition_history_id IS NULL).
+	// A regular agent feedback always has transition_history_id set, so this only
+	// fires when the chatbot tries to submit a second time for the same incident.
+	alreadySubmitted, err := h.incidentRepo.HasWhatsAppFeedback(c.UserContext(), incidentID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to validate feedback status")
+	}
+	if alreadySubmitted {
+		return utils.ErrorResponse(c, fiber.StatusConflict, "Feedback has already been submitted for this incident via WhatsApp")
+	}
+
+	// Block if public SMS feedback has already been submitted for this incident.
+	if h.publicFeedbackRepo != nil {
+		publicSubmitted, err := h.publicFeedbackRepo.HasSubmittedFeedback(c.UserContext(), incidentID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to validate feedback status")
+		}
+		if publicSubmitted {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "Feedback has already been submitted for this incident")
 		}
 	}
 

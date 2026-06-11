@@ -90,6 +90,7 @@ type IncidentRepository interface {
 	ListFeedback(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentFeedback, error)
 	ListAllFeedback(ctx context.Context) ([]models.IncidentFeedback, error)
 	LinkFeedbackToTransition(ctx context.Context, feedbackID uuid.UUID, transitionHistoryID uuid.UUID) error
+	HasWhatsAppFeedback(ctx context.Context, incidentID uuid.UUID) (bool, error)
 
 	// Notifications
 	CreateNotification(ctx context.Context, notification *models.NotificationLog) error
@@ -1467,6 +1468,17 @@ func (r *incidentRepository) LinkFeedbackToTransition(ctx context.Context, feedb
 		Model(&models.IncidentFeedback{}).
 		Where("id = ?", feedbackID).
 		Update("transition_history_id", transitionHistoryID).Error
+}
+
+// HasWhatsAppFeedback returns true if a WhatsApp chatbot feedback row already exists
+// for this incident (transition_history_id IS NULL = chatbot submission, not a transition).
+func (r *incidentRepository) HasWhatsAppFeedback(ctx context.Context, incidentID uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&models.IncidentFeedback{}).
+		Where("incident_id = ? AND transition_history_id IS NULL", incidentID).
+		Count(&count).Error
+	return count > 0, err
 }
 
 // Complaint-specific
