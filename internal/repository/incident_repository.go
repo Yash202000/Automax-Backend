@@ -62,6 +62,7 @@ type IncidentRepository interface {
 	SetAssignees(ctx context.Context, incidentID uuid.UUID, userIDs []uuid.UUID) error
 	ClearAssignees(ctx context.Context, incidentID uuid.UUID) error
 	SetLookupValues(ctx context.Context, incidentID uuid.UUID, lookupValues []models.LookupValue) error
+	AppendLookupValues(ctx context.Context, incidentID uuid.UUID, lookupValues []models.LookupValue) error
 
 	// Stats
 	GetStats(ctx context.Context, filter *models.IncidentFilter) (*models.IncidentStatsResponse, error)
@@ -650,6 +651,29 @@ func (r *incidentRepository) SetLookupValues(ctx context.Context, incidentID uui
 	}
 
 	return r.db.WithContext(ctx).Model(&incident).Association("LookupValues").Replace(dedupValues)
+}
+
+// AppendLookupValues adds lookup values to an incident without removing existing ones.
+// Unlike SetLookupValues, this allows multiple values per category (e.g. multiple priorities
+// from different source incidents during convert-to-request).
+func (r *incidentRepository) AppendLookupValues(ctx context.Context, incidentID uuid.UUID, lookupValues []models.LookupValue) error {
+	var incident models.Incident
+	if err := r.db.WithContext(ctx).First(&incident, "id = ?", incidentID).Error; err != nil {
+		return err
+	}
+
+	// Fetch the actual LookupValue records from database
+	lookupIDs := make([]uuid.UUID, len(lookupValues))
+	for i, lv := range lookupValues {
+		lookupIDs[i] = lv.ID
+	}
+
+	var actualLookupValues []models.LookupValue
+	if err := r.db.WithContext(ctx).Where("id IN ?", lookupIDs).Find(&actualLookupValues).Error; err != nil {
+		return err
+	}
+
+	return r.db.WithContext(ctx).Model(&incident).Association("LookupValues").Append(actualLookupValues)
 }
 
 // Stats
