@@ -29,6 +29,7 @@ type IncidentPublicFeedbackService interface {
 
 type incidentPublicFeedbackService struct {
 	repo               repository.IncidentPublicFeedbackRepository
+	incidentRepo       repository.IncidentRepository
 	notification       *NotificationService
 	incidentService    IncidentService
 	workflowRepo       repository.WorkflowRepository
@@ -37,6 +38,7 @@ type incidentPublicFeedbackService struct {
 
 func NewIncidentPublicFeedbackService(
 	repo repository.IncidentPublicFeedbackRepository,
+	incidentRepo repository.IncidentRepository,
 	notification *NotificationService,
 	incidentService IncidentService,
 	workflowRepo repository.WorkflowRepository,
@@ -44,6 +46,7 @@ func NewIncidentPublicFeedbackService(
 ) IncidentPublicFeedbackService {
 	return &incidentPublicFeedbackService{
 		repo:               repo,
+		incidentRepo:       incidentRepo,
 		notification:       notification,
 		incidentService:    incidentService,
 		workflowRepo:       workflowRepo,
@@ -146,6 +149,27 @@ func (s *incidentPublicFeedbackService) Submit(ctx context.Context, incidentID u
 
 	if f.SubmittedAt != nil {
 		return nil, errors.New("feedback has already been submitted")
+	}
+
+	// Block if another public feedback record for this incident was already submitted.
+	otherPublic, err := s.repo.HasSubmittedFeedbackExcluding(ctx, incidentID, feedbackID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to validate feedback status: %w", err)
+	}
+	if otherPublic {
+		return nil, errors.New("Feedback has already been submitted for this incident")
+	}
+
+	// Block if a WhatsApp chatbot feedback (transition_history_id IS NULL) was already
+	// written to incident_feedbacks for this incident.
+	if s.incidentRepo != nil {
+		whatsappDone, err := s.incidentRepo.HasWhatsAppFeedback(ctx, incidentID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to validate feedback status: %w", err)
+		}
+		if whatsappDone {
+			return nil, errors.New("Feedback has already been submitted for this incident via WhatsApp")
+		}
 	}
 
 	now := time.Now()

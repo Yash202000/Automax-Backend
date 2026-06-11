@@ -21,6 +21,10 @@ type IncidentPublicFeedbackRepository interface {
 	// HasSubmittedFeedback returns true if a public (SMS/WhatsApp) feedback record
 	// has already been submitted (submitted_at IS NOT NULL) for this incident.
 	HasSubmittedFeedback(ctx context.Context, incidentID uuid.UUID) (bool, error)
+	// HasSubmittedFeedbackExcluding returns true if any submitted public feedback exists
+	// for this incident OTHER than the given feedback ID (used inside Submit to detect
+	// a concurrent or duplicate submission on a different record).
+	HasSubmittedFeedbackExcluding(ctx context.Context, incidentID uuid.UUID, excludeID uuid.UUID) (bool, error)
 	List(ctx context.Context) ([]models.IncidentPublicFeedback, error)
 	Update(ctx context.Context, f *models.IncidentPublicFeedback) error
 }
@@ -91,6 +95,15 @@ func (r *incidentPublicFeedbackRepository) HasSubmittedFeedback(ctx context.Cont
 	err := r.db.WithContext(ctx).
 		Model(&models.IncidentPublicFeedback{}).
 		Where("incident_id = ? AND submitted_at IS NOT NULL", incidentID).
+		Count(&count).Error
+	return count > 0, err
+}
+
+func (r *incidentPublicFeedbackRepository) HasSubmittedFeedbackExcluding(ctx context.Context, incidentID uuid.UUID, excludeID uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&models.IncidentPublicFeedback{}).
+		Where("incident_id = ? AND submitted_at IS NOT NULL AND id != ?", incidentID, excludeID).
 		Count(&count).Error
 	return count > 0, err
 }

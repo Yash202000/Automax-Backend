@@ -157,7 +157,9 @@ func (h *IncidentPublicFeedbackHandler) Submit(c *fiber.Ctx) error {
 		switch err.Error() {
 		case "feedback record not found":
 			return utils.ErrorResponse(c, fiber.StatusNotFound, err.Error())
-		case "feedback has already been submitted":
+		case "feedback has already been submitted",
+			"feedback has already been submitted for this incident",
+			"feedback has already been submitted for this incident via WhatsApp":
 			return utils.ErrorResponse(c, fiber.StatusConflict, err.Error())
 		default:
 			return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
