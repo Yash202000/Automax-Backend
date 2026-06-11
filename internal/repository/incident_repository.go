@@ -889,6 +889,10 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 			q = q.Where(`incidents.assignee_id IN ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id IN ?)`,
 				filter.AssigneeID, filter.AssigneeID)
 		}
+		if filter.MyRecord != nil {
+			q = q.Where("incidents.reporter_id = ? OR incidents.assignee_id = ? OR incidents.id IN (Select incident_id from incident_assignees where user_id = ?)", filter.MyRecord, filter.MyRecord, filter.MyRecord)
+		}
+
 		return q
 	}
 

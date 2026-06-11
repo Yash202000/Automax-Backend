@@ -26,6 +26,7 @@ type Config struct {
 	Documenta        DocumentaConfig
 	AIQuality        AIQualityConfig
 	AutoAssign       AutoAssignConfig
+	GoalManagement   GoalManagementConfig
 	License          LicenseConfig
 	Integration      IntegrationConfig
 }
@@ -70,6 +71,10 @@ type AutoAssignConfig struct {
 	StateCode string
 	// IntervalMinutes controls how often the monitor sweeps (default 5). env: AUTO_ASSIGN_INTERVAL_MINUTES
 	IntervalMinutes int
+}
+
+type GoalManagementConfig struct {
+	Enabled bool // env: GOAL_MANAGEMENT
 }
 
 type DocumentaConfig struct {
@@ -254,6 +259,9 @@ func Load() *Config {
 		AutoAssign: AutoAssignConfig{
 			StateCode:       getEnv("AUTO_ASSIGN_STATE_CODE", ""),
 			IntervalMinutes: getEnvAsInt("AUTO_ASSIGN_INTERVAL_MINUTES", 5),
+		},
+		GoalManagement: GoalManagementConfig{
+			Enabled: getEnvAsBool("GOAL_MANAGEMENT", false),
 		},
 		License: LicenseConfig{
 			EncryptionKey:     getEnv("LICENSE_ENCRYPTION_KEY", ""),

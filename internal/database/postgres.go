@@ -35,7 +35,7 @@ func Connect(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 	return db, nil
 }
 
-func Migrate(db *gorm.DB) error {
+func Migrate(db *gorm.DB, cfg *config.Config) error {
 	log.Println("Running database migrations...")
 	// Manually create the ENUM type for call_status if it doesn't exist
 	createEnumQuery := `
@@ -123,30 +123,6 @@ func Migrate(db *gorm.DB) error {
 		&models.IncidentReadyToCloseEntry{},
 		&models.DeviceToken{},
 		&models.CallerSentiment{},
-		// Goal Management models
-		&models.Goal{},
-		&models.GoalMetric{},
-		&models.MetricHistory{},
-		&models.GoalCollaborator{},
-		&models.Evidence{},
-		&models.EvidenceTransitionHistory{},
-		&models.GoalCheckIn{},
-		// Goal Metric approval workflow
-		&models.GoalMetricValueChange{},
-		&models.MetricTransitionHistory{},
-		&models.MetricValueChangeTransitionHistory{},
-		// Goal Templates
-		&models.GoalTemplate{},
-		// Metric Import Batch models
-		&models.MetricImportBatch{},
-		&models.MetricImportItem{},
-		&models.MetricImportBatchTransitionHistory{},
-		// Goal Comments
-		&models.GoalComment{},
-		// Performance Review models
-		&models.ReviewCycle{},
-		&models.ReviewAssignment{},
-		&models.GoalScore{},
 		// AI Quality Feedback
 		&models.AIQualityFeedback{},
 		// License Management
@@ -162,6 +138,31 @@ func Migrate(db *gorm.DB) error {
 	)
 	if err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
+	}
+
+	if cfg.GoalManagement.Enabled {
+		if err := migrationDB.AutoMigrate(
+			&models.Goal{},
+			&models.GoalMetric{},
+			&models.MetricHistory{},
+			&models.GoalCollaborator{},
+			&models.Evidence{},
+			&models.EvidenceTransitionHistory{},
+			&models.GoalCheckIn{},
+			&models.GoalMetricValueChange{},
+			&models.MetricTransitionHistory{},
+			&models.MetricValueChangeTransitionHistory{},
+			&models.GoalTemplate{},
+			&models.MetricImportBatch{},
+			&models.MetricImportItem{},
+			&models.MetricImportBatchTransitionHistory{},
+			&models.GoalComment{},
+			&models.ReviewCycle{},
+			&models.ReviewAssignment{},
+			&models.GoalScore{},
+		); err != nil {
+			return fmt.Errorf("failed to run goal management migrations: %w", err)
+		}
 	}
 
 	// Drop problematic foreign key constraints on incidents table
@@ -265,8 +266,10 @@ func Migrate(db *gorm.DB) error {
 
 	// Seed existing free-text goal categories as root Category rows
 	// and back-fill goals.category_id. Idempotent: safe to run repeatedly.
-	if err := migrateFreeTextGoalCategories(db); err != nil {
-		log.Printf("Warning: goal category back-fill migration failed: %v", err)
+	if cfg.GoalManagement.Enabled {
+		if err := migrateFreeTextGoalCategories(db); err != nil {
+			log.Printf("Warning: goal category back-fill migration failed: %v", err)
+		}
 	}
 
 	// Partial Close feature columns — idempotent, safe to run repeatedly
@@ -390,7 +393,7 @@ func slugifyCategoryCode(s string) string {
 	return out
 }
 
-func Seed(db *gorm.DB) error {
+func Seed(db *gorm.DB, cfg *config.Config) error {
 	log.Println("Seeding database...")
 
 	// Seed default permissions
@@ -541,14 +544,6 @@ func Seed(db *gorm.DB) error {
 		{Name: "Assign Users to Escalation Group", Code: "escalation-groups:assign_users", Module: "escalation-groups", Action: "assign_users", Description: "Add or remove users from escalation groups"},
 		{Name: "Manage Escalation Rules", Code: "escalation-groups:manage_rules", Module: "escalation-groups", Action: "manage_rules", Description: "Configure escalation frequency, channel, and classification rules"},
 
-		// Goal permissions
-		{Name: "View Goals", Code: "goals:view", Module: "goals", Action: "view", Description: "View goals"},
-		{Name: "Create Goals", Code: "goals:create", Module: "goals", Action: "create", Description: "Create new goals"},
-		{Name: "Update Goals", Code: "goals:update", Module: "goals", Action: "update", Description: "Update goals"},
-		{Name: "Delete Goals", Code: "goals:delete", Module: "goals", Action: "delete", Description: "Delete goals"},
-		{Name: "Assign Goals", Code: "goals:assign", Module: "goals", Action: "assign", Description: "Assign goal collaborators"},
-		{Name: "Approve Goals", Code: "goals:approve", Module: "goals", Action: "approve", Description: "Approve/reject goal evidence"},
-
 		// Caller Sentiment permissions
 		{Name: "Create Caller Sentiment", Code: "caller-sentiment:create", Module: "caller-sentiment", Action: "create", Description: "Record a sentiment entry after a call"},
 		{Name: "View Caller Sentiments", Code: "caller-sentiment:view", Module: "caller-sentiment", Action: "view", Description: "View all caller sentiment records and summaries"},
@@ -558,7 +553,6 @@ func Seed(db *gorm.DB) error {
 		{Name: "Manage License", Code: "license:manage", Module: "license", Action: "manage", Description: "Activate, deactivate, and manage license keys"},
 
 		// Dashboard permissions
-		{Name: "Goals Dashboard", Code: "dashboard:goals", Module: "dashboard", Action: "goals", Description: "Access goal cards on dashboard"},
 		{Name: "Admin Dashboard", Code: "dashboard:admin", Module: "dashboard", Action: "admin", Description: "Access admin section cards on dashboard"},
 		{Name: "Incidents Dashboard", Code: "dashboard:incidents", Module: "dashboard", Action: "incidents", Description: "Access incident cards on dashboard"},
 		{Name: "Requests Dashboard", Code: "dashboard:requests", Module: "dashboard", Action: "requests", Description: "Access request cards on dashboard"},
@@ -566,6 +560,18 @@ func Seed(db *gorm.DB) error {
 		{Name: "Queries Dashboard", Code: "dashboard:queries", Module: "dashboard", Action: "queries", Description: "Access query cards on dashboard"},
 		{Name: "Workflows Dashboard", Code: "dashboard:workflows", Module: "dashboard", Action: "workflows", Description: "Access workflow cards on dashboard"},
 		{Name: "CCM Dashboard", Code: "dashboard:ccm", Module: "dashboard", Action: "ccm", Description: "Access ccm cards on dashboard"},
+	}
+
+	if cfg.GoalManagement.Enabled {
+		permissions = append(permissions,
+			models.Permission{Name: "View Goals", Code: "goals:view", Module: "goals", Action: "view", Description: "View goals"},
+			models.Permission{Name: "Create Goals", Code: "goals:create", Module: "goals", Action: "create", Description: "Create new goals"},
+			models.Permission{Name: "Update Goals", Code: "goals:update", Module: "goals", Action: "update", Description: "Update goals"},
+			models.Permission{Name: "Delete Goals", Code: "goals:delete", Module: "goals", Action: "delete", Description: "Delete goals"},
+			models.Permission{Name: "Assign Goals", Code: "goals:assign", Module: "goals", Action: "assign", Description: "Assign goal collaborators"},
+			models.Permission{Name: "Approve Goals", Code: "goals:approve", Module: "goals", Action: "approve", Description: "Approve/reject goal evidence"},
+			models.Permission{Name: "Goals Dashboard", Code: "dashboard:goals", Module: "dashboard", Action: "goals", Description: "Access goal cards on dashboard"},
+		)
 	}
 
 	for _, perm := range permissions {
