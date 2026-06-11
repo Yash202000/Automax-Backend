@@ -1625,6 +1625,11 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 
 		// Append this incident to the existing request's source incidents
 		existingSourceIDs := existingRequest.SourceIncidentIDs
+		// If the array is empty but the singular field is set (request created before array was populated),
+		// seed the array from the singular field so it isn't lost.
+		if len(existingSourceIDs) == 0 && existingRequest.SourceIncidentID != nil {
+			existingSourceIDs = []string{existingRequest.SourceIncidentID.String()}
+		}
 		sourceIncidentIDStrs := []string{incidentID.String()}
 		if len(existingSourceIDs) > 0 {
 			sourceIncidentIDStrs = append(existingSourceIDs, sourceIncidentIDStrs...)
@@ -1643,6 +1648,13 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		}
 		if err := s.incidentRepo.UpdateFields(ctx, existingRequestID, updateFieldsReq); err != nil {
 			fmt.Printf("Warning: failed to update existing request source incidents: %v\n", err)
+		}
+
+		// Append the source incident's lookup values (e.g. priority) to the existing request
+		if len(sourceIncident.LookupValues) > 0 {
+			if err := s.incidentRepo.AppendLookupValues(ctx, existingRequestID, sourceIncident.LookupValues); err != nil {
+				fmt.Printf("Warning: failed to append lookup values to existing request: %v\n", err)
+			}
 		}
 
 		// Link incident to existing request
@@ -1831,21 +1843,22 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 	}
 
 	newRequest := &models.Incident{
-		IncidentNumber:   requestNumber,
-		Title:            title,
-		Description:      description,
-		RecordType:       "request",
-		SourceIncidentID: &incidentID,
-		ClassificationID: &classificationID,
-		WorkflowID:       workflowID,
-		CurrentStateID:   initialState.ID,
-		ReporterID:       sourceIncident.ReporterID,
-		ReporterEmail:    sourceIncident.ReporterEmail,
-		ReporterName:     sourceIncident.ReporterName,
-		LocationID:       sourceIncident.LocationID,
-		Latitude:         sourceIncident.Latitude,
-		Longitude:        sourceIncident.Longitude,
-		CustomFields:     sourceIncident.CustomFields,
+		IncidentNumber:    requestNumber,
+		Title:             title,
+		Description:       description,
+		RecordType:        "request",
+		SourceIncidentID:  &incidentID,
+		SourceIncidentIDs: []string{incidentID.String()},
+		ClassificationID:  &classificationID,
+		WorkflowID:        workflowID,
+		CurrentStateID:    initialState.ID,
+		ReporterID:        sourceIncident.ReporterID,
+		ReporterEmail:     sourceIncident.ReporterEmail,
+		ReporterName:      sourceIncident.ReporterName,
+		LocationID:        sourceIncident.LocationID,
+		Latitude:          sourceIncident.Latitude,
+		Longitude:         sourceIncident.Longitude,
+		CustomFields:      sourceIncident.CustomFields,
 	}
 
 	// Handle optional assignee override
@@ -2361,6 +2374,9 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 
 		// Append new source incident IDs to existing ones
 		existingSourceIDs := existingRequest.SourceIncidentIDs
+		if len(existingSourceIDs) == 0 && existingRequest.SourceIncidentID != nil {
+			existingSourceIDs = []string{existingRequest.SourceIncidentID.String()}
+		}
 		if len(existingSourceIDs) > 0 {
 			sourceIncidentIDStrs = append(existingSourceIDs, sourceIncidentIDStrs...)
 		}
@@ -2511,8 +2527,16 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 		for _, lv := range lookupValueMap {
 			lookupValues = append(lookupValues, lv)
 		}
-		if err := s.incidentRepo.SetLookupValues(ctx, newRequest.ID, lookupValues); err != nil {
-			fmt.Printf("Warning: failed to copy lookup values: %v\n", err)
+		if existingRequestID != nil {
+			// Existing request: append so we don't wipe lookup values from previous conversions
+			if err := s.incidentRepo.AppendLookupValues(ctx, newRequest.ID, lookupValues); err != nil {
+				fmt.Printf("Warning: failed to append lookup values to existing request: %v\n", err)
+			}
+		} else {
+			// New request: replace is fine since there are no pre-existing values
+			if err := s.incidentRepo.SetLookupValues(ctx, newRequest.ID, lookupValues); err != nil {
+				fmt.Printf("Warning: failed to copy lookup values: %v\n", err)
+			}
 		}
 	}
 
