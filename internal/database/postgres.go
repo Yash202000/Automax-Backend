@@ -671,12 +671,13 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 	// Seed default lookup categories
 	seedLookupCategories(db)
 
-	// Seed default evidence approval workflow
-	seedEvidenceApprovalWorkflow(db)
+	if cfg.GoalManagement.Enabled {
+		// Seed default evidence approval workflow
+		seedEvidenceApprovalWorkflow(db)
 
-	// Seed default metric & metric_value_change approval workflows
-	seedMetricApprovalWorkflows(db)
-
+		// Seed default metric & metric_value_change approval workflows
+		seedMetricApprovalWorkflows(db)
+	}
 	log.Println("Database seeding completed")
 	return nil
 }
