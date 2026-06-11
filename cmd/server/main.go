@@ -136,7 +136,7 @@ func main() {
 	fcmService := services.NewFCMService(repository.NewDeviceTokenRepository(db), notificationLogRepo)
 	callerSentimentService := services.NewCallerSentimentService(callerSentimentRepo)
 	feedbackTemplateService := services.NewFeedbackTemplateService(feedbackTemplateRepo)
-	publicFeedbackService := services.NewIncidentPublicFeedbackService(publicFeedbackRepo, notificationService, incidentService, workflowRepo, classificationRepo)
+	publicFeedbackService := services.NewIncidentPublicFeedbackService(publicFeedbackRepo, incidentRepo, notificationService, incidentService, workflowRepo, classificationRepo)
 	commentTemplateService := services.NewCommentTemplateService(commentTemplateRepo)
 
 	// Goal management services
