@@ -246,6 +246,10 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	if len(filter.ReporterID) != 0 {
 		query = query.Where("reporter_id IN ?", filter.ReporterID)
 	}
+	if filter.MyRecord != nil {
+		query = query.Where("reporter_id = ? OR assignee_id = ? OR id IN (Select incident_id from incident_assignees where user_id = ?)", filter.MyRecord, filter.MyRecord, filter.MyRecord)
+	}
+
 	if filter.ReporterPhone != "" {
 		phone := filter.ReporterPhone
 		phoneWithPlus := "+" + phone
