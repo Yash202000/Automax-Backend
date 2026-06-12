@@ -188,14 +188,18 @@ func (s *incidentPublicFeedbackService) Submit(ctx context.Context, incidentID u
 
 	// Not satisfied → create a complaint synchronously and include its number in the response.
 	if !req.Satisfied {
-		complaintNumber, complaintID := s.createComplaint(ctx, f)
-		resp.ComplaintNumber = complaintNumber
-		if complaintID != uuid.Nil {
-			resp.ComplaintID = &complaintID
-			// Persist the link back to the feedback record (non-fatal if it fails).
-			f.ComplaintID = &complaintID
-			if updateErr := s.repo.Update(ctx, f); updateErr != nil {
-				log.Printf("[IncidentPublicFeedback] failed to persist complaint_id on feedback %s: %v", f.ID, updateErr)
+		complaintNumber, complaintID, complaintErr := s.createComplaint(ctx, f)
+		if complaintErr != nil {
+			log.Printf("[IncidentPublicFeedback] complaint creation failed for feedback %s: %v", f.ID, complaintErr)
+			resp.ComplaintError = complaintErr.Error()
+		} else {
+			resp.ComplaintNumber = complaintNumber
+			if complaintID != uuid.Nil {
+				resp.ComplaintID = &complaintID
+				f.ComplaintID = &complaintID
+				if updateErr := s.repo.Update(ctx, f); updateErr != nil {
+					log.Printf("[IncidentPublicFeedback] failed to persist complaint_id on feedback %s: %v", f.ID, updateErr)
+				}
 			}
 		}
 	}
@@ -204,22 +208,32 @@ func (s *incidentPublicFeedbackService) Submit(ctx context.Context, incidentID u
 }
 
 // createComplaint resolves the first active complaint workflow and classification,
-// creates a complaint record, and returns its incident number and ID.
-// Any failure is logged but does not surface to the caller.
-func (s *incidentPublicFeedbackService) createComplaint(ctx context.Context, f *models.IncidentPublicFeedback) (string, uuid.UUID) {
+// creates a complaint record, and returns its incident number, ID, and any error.
+func (s *incidentPublicFeedbackService) createComplaint(ctx context.Context, f *models.IncidentPublicFeedback) (string, uuid.UUID, error) {
 	workflows, err := s.workflowRepo.ListByRecordType(ctx, "complaint", true)
-	if err != nil || len(workflows) == 0 {
-		log.Printf("[IncidentPublicFeedback] no active complaint workflow found for feedback %s: %v", f.ID, err)
-		return "", uuid.Nil
+	if err != nil {
+		return "", uuid.Nil, fmt.Errorf("failed to query complaint workflows: %w", err)
+	}
+	if len(workflows) == 0 {
+		return "", uuid.Nil, fmt.Errorf("no active complaint workflow found — create one in workflow settings")
 	}
 	workflow := workflows[0]
 
 	classifications, err := s.classificationRepo.ListByType(ctx, []string{"complaint"})
-	if err != nil || len(classifications) == 0 {
-		log.Printf("[IncidentPublicFeedback] no complaint classification found for feedback %s: %v", f.ID, err)
-		return "", uuid.Nil
+	if err != nil {
+		return "", uuid.Nil, fmt.Errorf("failed to query complaint classifications: %w", err)
 	}
-	classification := classifications[0]
+	// Filter to only active classifications.
+	var activeClassifications []models.Classification
+	for _, c := range classifications {
+		if c.IsActive {
+			activeClassifications = append(activeClassifications, c)
+		}
+	}
+	if len(activeClassifications) == 0 {
+		return "", uuid.Nil, fmt.Errorf("no active complaint classification found — create one in classification settings")
+	}
+	classification := activeClassifications[0]
 
 	comment := ""
 	if f.Comment != nil {
@@ -241,10 +255,9 @@ func (s *incidentPublicFeedbackService) createComplaint(ctx context.Context, f *
 
 	complaint, err := s.incidentService.CreateComplaint(ctx, complaintReq, f.CreatedBy)
 	if err != nil {
-		log.Printf("[IncidentPublicFeedback] complaint creation failed for feedback %s: %v", f.ID, err)
-		return "", uuid.Nil
+		return "", uuid.Nil, fmt.Errorf("CreateComplaint failed: %w", err)
 	}
-	return complaint.IncidentNumber, complaint.ID
+	return complaint.IncidentNumber, complaint.ID, nil
 }
 
 func (s *incidentPublicFeedbackService) List(ctx context.Context) ([]models.IncidentPublicFeedbackResponse, error) {
