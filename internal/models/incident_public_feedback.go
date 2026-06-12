@@ -73,6 +73,8 @@ type IncidentPublicFeedbackResponse struct {
 	SignedToken string `json:"signed_token,omitempty"`
 	// ComplaintNumber is populated in the Submit response when satisfied=false.
 	ComplaintNumber string `json:"complaint_number,omitempty"`
+	// ComplaintError is populated when complaint creation failed (non-fatal).
+	ComplaintError string `json:"complaint_error,omitempty"`
 }
 
 // IncidentPublicFeedbackInitResponse is returned by the Init endpoint.
