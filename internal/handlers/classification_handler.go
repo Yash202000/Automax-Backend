@@ -83,6 +83,9 @@ func (h *ClassificationHandler) Create(c *fiber.Ctx) error {
 	}
 
 	if err := h.repo.Create(c.UserContext(), classification); err != nil {
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "A classification with this name already exists")
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -172,6 +175,9 @@ func (h *ClassificationHandler) Update(c *fiber.Ctx) error {
 
 	// Update classification fields
 	if err := h.repo.Update(c.UserContext(), classification); err != nil {
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "A classification with this name already exists")
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 

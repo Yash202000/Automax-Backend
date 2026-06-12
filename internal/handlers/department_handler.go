@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
@@ -57,6 +58,9 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 	}
 
 	if err := h.repo.Create(c.UserContext(), department); err != nil {
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "A department with this code already exists")
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -138,6 +142,9 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 	}
 
 	if err := h.repo.Update(c.UserContext(), department); err != nil {
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "A department with this code already exists")
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 

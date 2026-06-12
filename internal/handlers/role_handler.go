@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
@@ -49,6 +50,9 @@ func (h *RoleHandler) CreateRole(c *fiber.Ctx) error {
 	}
 
 	if err := h.roleRepo.Create(c.UserContext(), role); err != nil {
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "A role with this code already exists")
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -106,6 +110,9 @@ func (h *RoleHandler) UpdateRole(c *fiber.Ctx) error {
 	}
 
 	if err := h.roleRepo.Update(c.UserContext(), role); err != nil {
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "A role with this code already exists")
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -203,6 +210,9 @@ func (h *RoleHandler) CreatePermission(c *fiber.Ctx) error {
 	}
 
 	if err := h.permissionRepo.Create(c.UserContext(), permission); err != nil {
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "A permission with this code already exists")
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
