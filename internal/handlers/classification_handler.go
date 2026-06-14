@@ -65,6 +65,16 @@ func (h *ClassificationHandler) Create(c *fiber.Ctx) error {
 		classTypes = []string{"incident", "request"}
 	}
 
+	existing, err := h.repo.FindByNameOrNameAr(c.UserContext(), req.Name, req.NameAr)
+	if err == nil && existing != nil {
+		existingPath, _ := h.repo.FetchClassificationFullPathByID(c.UserContext(), existing.ID)
+		msg := fmt.Sprintf("Classification '%s' already exists", existing.Name)
+		if existingPath != "" {
+			msg += fmt.Sprintf(" at '%s'", existingPath)
+		}
+		return utils.ErrorResponse(c, fiber.StatusConflict, msg)
+	}
+
 	// Build ClassificationType associations so GORM creates them with the classification
 	typeRecords := make([]models.ClassificationType, len(classTypes))
 	for i, t := range classTypes {
@@ -151,6 +161,27 @@ func (h *ClassificationHandler) Update(c *fiber.Ctx) error {
 	classification, err := h.repo.FindByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Classification not found")
+	}
+
+	checkName := req.Name
+	if checkName == "" {
+		checkName = classification.Name
+	}
+	checkNameAr := req.NameAr
+	if checkNameAr == "" {
+		checkNameAr = classification.NameAr
+	}
+
+	if (req.Name != "" && req.Name != classification.Name) || (req.NameAr != "" && req.NameAr != classification.NameAr) {
+		existing, err := h.repo.FindByNameOrNameAr(c.UserContext(), checkName, checkNameAr)
+		if err == nil && existing != nil && existing.ID != id {
+			existingPath, _ := h.repo.FetchClassificationFullPathByID(c.UserContext(), existing.ID)
+			msg := fmt.Sprintf("Classification '%s' already exists", existing.Name)
+			if existingPath != "" {
+				msg += fmt.Sprintf(" at '%s'", existingPath)
+			}
+			return utils.ErrorResponse(c, fiber.StatusConflict, msg)
+		}
 	}
 
 	if req.Name != "" {

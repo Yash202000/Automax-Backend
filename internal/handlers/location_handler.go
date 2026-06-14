@@ -38,7 +38,7 @@ func (h *LocationHandler) Create(c *fiber.Ctx) error {
 		})
 	}
 
-	existing, err := h.repo.FindByNameAndParent(c.UserContext(), req.Name, req.ParentID)
+	existing, err := h.repo.FindByNameOrNameAr(c.UserContext(), req.Name, req.NameAr)
 	if err == nil && existing != nil {
 		existingPath, _ := h.repo.FetchLocationFullPathByID(c.UserContext(), existing.ID)
 		msg := fmt.Sprintf("Location '%s' already exists", existing.Name)
@@ -108,8 +108,17 @@ func (h *LocationHandler) Update(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Location not found")
 	}
 
-	if req.Name != "" && req.Name != location.Name {
-		existing, err := h.repo.FindByNameAndParent(c.UserContext(), req.Name, location.ParentID)
+	checkName := req.Name
+	if checkName == "" {
+		checkName = location.Name
+	}
+	checkNameAr := req.NameAr
+	if checkNameAr == "" {
+		checkNameAr = location.NameAr
+	}
+
+	if (req.Name != "" && req.Name != location.Name) || (req.NameAr != "" && req.NameAr != location.NameAr) {
+		existing, err := h.repo.FindByNameOrNameAr(c.UserContext(), checkName, checkNameAr)
 		if err == nil && existing != nil && existing.ID != id {
 			existingPath, _ := h.repo.FetchLocationFullPathByID(c.UserContext(), existing.ID)
 			msg := fmt.Sprintf("Location '%s' already exists", existing.Name)
@@ -118,6 +127,9 @@ func (h *LocationHandler) Update(c *fiber.Ctx) error {
 			}
 			return utils.ErrorResponse(c, fiber.StatusConflict, msg)
 		}
+	}
+
+	if req.Name != "" {
 		location.Name = req.Name
 	}
 	if req.NameAr != "" {
