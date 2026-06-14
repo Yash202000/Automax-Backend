@@ -14,6 +14,7 @@ type DepartmentRepository interface {
 	FindByID(ctx context.Context, id uuid.UUID) (*models.Department, error)
 	FindByCode(ctx context.Context, code string) (*models.Department, error)
 	FindByNameAndParent(ctx context.Context, name string, parentID *uuid.UUID) (*models.Department, error)
+	FindByNameOrNameAr(ctx context.Context, name string, nameAr string) (*models.Department, error)
 	Update(ctx context.Context, department *models.Department) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context) ([]models.Department, error)
@@ -79,6 +80,21 @@ func (r *departmentRepository) FindByNameAndParent(ctx context.Context, name str
 		query = query.Where("parent_id IS NULL")
 	} else {
 		query = query.Where("parent_id = ?", parentID)
+	}
+	err := query.First(&department).Error
+	if err != nil {
+		return nil, err
+	}
+	return &department, nil
+}
+
+func (r *departmentRepository) FindByNameOrNameAr(ctx context.Context, name string, nameAr string) (*models.Department, error) {
+	var department models.Department
+	query := r.db.WithContext(ctx)
+	if nameAr != "" && nameAr != name {
+		query = query.Where("name = ? OR name_ar = ?", name, nameAr)
+	} else {
+		query = query.Where("name = ?", name)
 	}
 	err := query.First(&department).Error
 	if err != nil {

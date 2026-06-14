@@ -44,8 +44,8 @@ func (d *Department) BeforeCreate(tx *gorm.DB) error {
 
 // DepartmentCreateRequest for creating a new department
 type DepartmentCreateRequest struct {
-	Name              string      `json:"name" validate:"required,min=1,max=100"`
-	NameAr            string      `json:"name_ar" validate:"max=100"`
+	Name              string      `json:"name" validate:"required,notblank,name,min=1,max=100"`
+	NameAr            string      `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
 	Code              string      `json:"code" validate:"required,min=1,max=50"`
 	Description       string      `json:"description" validate:"max=500"`
 	DescriptionAr     string      `json:"description_ar" validate:"max=500"`
@@ -60,8 +60,8 @@ type DepartmentCreateRequest struct {
 
 // DepartmentUpdateRequest for updating a department
 type DepartmentUpdateRequest struct {
-	Name              string      `json:"name" validate:"min=1,max=100"`
-	NameAr            string      `json:"name_ar" validate:"max=100"`
+	Name              string      `json:"name" validate:"omitempty,notblank,name,min=1,max=100"`
+	NameAr            string      `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
 	Code              string      `json:"code" validate:"min=1,max=50"`
 	Description       string      `json:"description" validate:"max=500"`
 	DescriptionAr     string      `json:"description_ar" validate:"max=500"`

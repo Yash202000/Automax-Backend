@@ -69,19 +69,20 @@ func validateBlogStatus(fl validator.FieldLevel) bool {
 	}
 	return false
 }
+var nameRegex = regexp.MustCompile(`^[\p{L}0-9\s\-'.,&()/]+$`)
+
 // validateName ensures the name contains at least one letter and only letters, numbers, spaces, and common punctuation
 func validateName(fl validator.FieldLevel) bool {
 	s := fl.Field().String()
-	hasLetter := false
+	if !nameRegex.MatchString(s) {
+		return false
+	}
 	for _, r := range s {
 		if unicode.IsLetter(r) {
-			hasLetter = true
-		}
-		if !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != ' ' && r != '-' && r != '\'' && r != '.' && r != ',' && r != '&' && r != '(' && r != ')' && r != '/' {
-			return false
+			return true
 		}
 	}
-	return hasLetter
+	return false
 }
 
 func GetTranslator(lang string) ut.Translator {
