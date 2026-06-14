@@ -38,6 +38,16 @@ func (h *LocationHandler) Create(c *fiber.Ctx) error {
 		})
 	}
 
+	existing, err := h.repo.FindByNameAndParent(c.UserContext(), req.Name, req.ParentID)
+	if err == nil && existing != nil {
+		existingPath, _ := h.repo.FetchLocationFullPathByID(c.UserContext(), existing.ID)
+		msg := fmt.Sprintf("Location '%s' already exists", existing.Name)
+		if existingPath != "" {
+			msg += fmt.Sprintf(" at '%s'", existingPath)
+		}
+		return utils.ErrorResponse(c, fiber.StatusConflict, msg)
+	}
+
 	source := req.Source
 	if source == "" {
 		source = "master"
@@ -98,7 +108,16 @@ func (h *LocationHandler) Update(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Location not found")
 	}
 
-	if req.Name != "" {
+	if req.Name != "" && req.Name != location.Name {
+		existing, err := h.repo.FindByNameAndParent(c.UserContext(), req.Name, location.ParentID)
+		if err == nil && existing != nil && existing.ID != id {
+			existingPath, _ := h.repo.FetchLocationFullPathByID(c.UserContext(), existing.ID)
+			msg := fmt.Sprintf("Location '%s' already exists", existing.Name)
+			if existingPath != "" {
+				msg += fmt.Sprintf(" at '%s'", existingPath)
+			}
+			return utils.ErrorResponse(c, fiber.StatusConflict, msg)
+		}
 		location.Name = req.Name
 	}
 	if req.NameAr != "" {
