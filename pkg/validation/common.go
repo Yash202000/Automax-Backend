@@ -69,6 +69,21 @@ func validateBlogStatus(fl validator.FieldLevel) bool {
 	}
 	return false
 }
+// validateName ensures the name contains at least one letter and only letters, numbers, spaces, and common punctuation
+func validateName(fl validator.FieldLevel) bool {
+	s := fl.Field().String()
+	hasLetter := false
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			hasLetter = true
+		}
+		if !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != ' ' && r != '-' && r != '\'' && r != '.' && r != ',' && r != '&' && r != '(' && r != ')' && r != '/' {
+			return false
+		}
+	}
+	return hasLetter
+}
+
 func GetTranslator(lang string) ut.Translator {
 	// Normalize: "en-US" -> "en", "fr-FR" -> "fr"
 	lang = strings.ToLower(strings.Split(lang, "-")[0])
