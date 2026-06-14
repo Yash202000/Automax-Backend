@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
@@ -31,6 +32,8 @@ func (h *LocationHandler) Create(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.NameAr = strings.TrimSpace(req.NameAr)
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
@@ -102,6 +105,9 @@ func (h *LocationHandler) Update(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
+
+	req.Name = strings.TrimSpace(req.Name)
+	req.NameAr = strings.TrimSpace(req.NameAr)
 
 	location, err := h.repo.FindByID(c.UserContext(), id)
 	if err != nil {

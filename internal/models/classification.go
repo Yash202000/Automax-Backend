@@ -77,8 +77,8 @@ func (cc *ClassificationCriticality) BeforeCreate(tx *gorm.DB) error {
 
 // ClassificationCreateRequest for creating a new classification
 type ClassificationCreateRequest struct {
-	Name          string     `json:"name" validate:"required,min=1,max=100"`
-	NameAr        string     `json:"name_ar" validate:"max=100"`
+	Name          string     `json:"name" validate:"required,notblank,name,min=1,max=100"`
+	NameAr        string     `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
 	Description   string     `json:"description" validate:"max=500"`
 	DescriptionAr string     `json:"description_ar" validate:"max=500"`
 	Types       []string   `json:"types" validate:"omitempty,dive,oneof=incident request complaint query mobile ivr"`
@@ -88,8 +88,8 @@ type ClassificationCreateRequest struct {
 
 // ClassificationUpdateRequest for updating a classification
 type ClassificationUpdateRequest struct {
-	Name          string   `json:"name" validate:"min=1,max=100"`
-	NameAr        string   `json:"name_ar" validate:"max=100"`
+	Name          string   `json:"name" validate:"omitempty,notblank,name,min=1,max=100"`
+	NameAr        string   `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
 	Description   string   `json:"description" validate:"max=500"`
 	DescriptionAr string   `json:"description_ar" validate:"max=500"`
 	Types       []string `json:"types" validate:"omitempty,dive,oneof=incident request complaint query mobile ivr"`
@@ -246,8 +246,8 @@ func ToClassificationCriticalityResponse(cc *ClassificationCriticality) Classifi
 
 // ClassificationCreateRequestWithCriticalities extends ClassificationCreateRequest with criticalities
 type ClassificationCreateRequestWithCriticalities struct {
-	Name          string                                   `json:"name" validate:"required,min=1,max=100"`
-	NameAr        string                                   `json:"name_ar" validate:"max=100"`
+	Name          string                                   `json:"name" validate:"required,notblank,name,min=1,max=100"`
+	NameAr        string                                   `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
 	Description   string                                   `json:"description" validate:"max=500"`
 	DescriptionAr string                                   `json:"description_ar" validate:"max=500"`
 	Types         []string                                 `json:"types" validate:"omitempty,dive,oneof=incident request complaint query mobile ivr"`

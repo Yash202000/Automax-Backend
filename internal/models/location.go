@@ -42,8 +42,8 @@ func (l *Location) BeforeCreate(tx *gorm.DB) error {
 
 // LocationCreateRequest for creating a new location
 type LocationCreateRequest struct {
-	Name          string     `json:"name" validate:"required,min=1,max=100"`
-	NameAr        string     `json:"name_ar" validate:"max=100"`
+	Name          string     `json:"name" validate:"required,notblank,name,min=1,max=100"`
+	NameAr        string     `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
 	Code          string     `json:"code" validate:"max=50"`
 	Description   string     `json:"description" validate:"max=500"`
 	DescriptionAr string     `json:"description_ar" validate:"max=500"`
@@ -58,8 +58,8 @@ type LocationCreateRequest struct {
 
 // LocationUpdateRequest for updating a location
 type LocationUpdateRequest struct {
-	Name          string   `json:"name" validate:"min=1,max=100"`
-	NameAr        string   `json:"name_ar" validate:"max=100"`
+	Name          string   `json:"name" validate:"omitempty,notblank,name,min=1,max=100"`
+	NameAr        string   `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
 	Code          string   `json:"code" validate:"max=50"`
 	Description   string   `json:"description" validate:"max=500"`
 	DescriptionAr string   `json:"description_ar" validate:"max=500"`

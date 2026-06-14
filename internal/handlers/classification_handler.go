@@ -52,6 +52,9 @@ func (h *ClassificationHandler) Create(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
+	req.Name = strings.TrimSpace(req.Name)
+	req.NameAr = strings.TrimSpace(req.NameAr)
+
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
@@ -157,6 +160,9 @@ func (h *ClassificationHandler) Update(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
+
+	req.Name = strings.TrimSpace(req.Name)
+	req.NameAr = strings.TrimSpace(req.NameAr)
 
 	classification, err := h.repo.FindByID(c.UserContext(), id)
 	if err != nil {
