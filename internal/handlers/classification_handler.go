@@ -205,7 +205,9 @@ func (h *ClassificationHandler) Update(c *fiber.Ctx) error {
 	if req.DescriptionAr != "" {
 		classification.DescriptionAr = req.DescriptionAr
 	}
-	classification.IsActive = true // Keep active on update
+	if req.IsActive != nil {
+		classification.IsActive = *req.IsActive
+	}
 	if req.SortOrder >= 0 {
 		classification.SortOrder = req.SortOrder
 	}

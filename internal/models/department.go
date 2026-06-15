@@ -62,7 +62,7 @@ type DepartmentCreateRequest struct {
 type DepartmentUpdateRequest struct {
 	Name              string      `json:"name" validate:"omitempty,notblank,name,min=1,max=100"`
 	NameAr            string      `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
-	Code              string      `json:"code" validate:"min=1,max=50"`
+	Code              string      `json:"code" validate:"omitempty,min=1,max=50"`
 	Description       string      `json:"description" validate:"max=500"`
 	DescriptionAr     string      `json:"description_ar" validate:"max=500"`
 	Type              string      `json:"type" validate:"omitempty,oneof=internal external"`
