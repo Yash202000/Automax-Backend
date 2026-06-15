@@ -252,6 +252,7 @@ type ClassificationCreateRequestWithCriticalities struct {
 	DescriptionAr string                                   `json:"description_ar" validate:"max=500"`
 	Types         []string                                 `json:"types" validate:"omitempty,dive,oneof=incident request complaint query mobile ivr"`
 	ParentID      *uuid.UUID                               `json:"parent_id"`
+	IsActive      *bool                                    `json:"is_active"`
 	SortOrder     int                                      `json:"sort_order"`
 	Criticalities []ClassificationCriticalityCreateRequest `json:"criticalities,omitempty"`
 }
