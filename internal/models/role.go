@@ -92,7 +92,7 @@ func ToPermissionResponse(p *Permission) PermissionResponse {
 
 // RoleCreateRequest for creating a new role
 type RoleCreateRequest struct {
-	Name          string      `json:"name" validate:"required,min=1,max=100"`
+	Name          string      `json:"name" validate:"required,notblank,name,min=1,max=100"`
 	Code          string      `json:"code" validate:"required,min=1,max=50"`
 	Description   string      `json:"description" validate:"max=500"`
 	PermissionIDs []uuid.UUID `json:"permission_ids"`
@@ -100,7 +100,7 @@ type RoleCreateRequest struct {
 
 // RoleUpdateRequest for updating a role
 type RoleUpdateRequest struct {
-	Name          string      `json:"name" validate:"min=1,max=100"`
+	Name          string      `json:"name" validate:"omitempty,notblank,name,min=1,max=100"`
 	Description   string      `json:"description" validate:"max=500"`
 	PermissionIDs []uuid.UUID `json:"permission_ids"`
 	IsActive      *bool       `json:"is_active"`

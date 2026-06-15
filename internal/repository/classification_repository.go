@@ -62,6 +62,8 @@ type ClassificationRepository interface {
 	FindByID(ctx context.Context, id uuid.UUID) (*models.Classification, error)
 	FindByIDs(ctx context.Context, id []uuid.UUID) (*[]models.Classification, error)
 	FindByNameAndParent(ctx context.Context, name string, parentID *uuid.UUID) (*models.Classification, error)
+	FindByNameOrNameArAndParent(ctx context.Context, name string, nameAr string, parentID *uuid.UUID) (*models.Classification, error)
+	FindByNameOrNameAr(ctx context.Context, name string, nameAr string) (*models.Classification, error)
 	FindByExternalID(ctx context.Context, externalID string) (*models.Classification, error)
 	Update(ctx context.Context, classification *models.Classification) error
 	Delete(ctx context.Context, id uuid.UUID) error
@@ -138,6 +140,41 @@ func (r *classificationRepository) FindByNameAndParent(ctx context.Context, name
 		query = query.Where("parent_id IS NULL")
 	} else {
 		query = query.Where("parent_id = ?", parentID)
+	}
+	err := query.First(&classification).Error
+	if err != nil {
+		return nil, err
+	}
+	return &classification, nil
+}
+
+func (r *classificationRepository) FindByNameOrNameArAndParent(ctx context.Context, name string, nameAr string, parentID *uuid.UUID) (*models.Classification, error) {
+	var classification models.Classification
+	query := r.db.WithContext(ctx)
+	if nameAr != "" && nameAr != name {
+		query = query.Where("name = ? OR name_ar = ?", name, nameAr)
+	} else {
+		query = query.Where("name = ?", name)
+	}
+	if parentID == nil {
+		query = query.Where("parent_id IS NULL")
+	} else {
+		query = query.Where("parent_id = ?", parentID)
+	}
+	err := query.First(&classification).Error
+	if err != nil {
+		return nil, err
+	}
+	return &classification, nil
+}
+
+func (r *classificationRepository) FindByNameOrNameAr(ctx context.Context, name string, nameAr string) (*models.Classification, error) {
+	var classification models.Classification
+	query := r.db.WithContext(ctx)
+	if nameAr != "" && nameAr != name {
+		query = query.Where("name = ? OR name_ar = ?", name, nameAr)
+	} else {
+		query = query.Where("name = ?", name)
 	}
 	err := query.First(&classification).Error
 	if err != nil {

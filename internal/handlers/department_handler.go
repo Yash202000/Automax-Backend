@@ -33,11 +33,20 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
+	req.Name = strings.TrimSpace(req.Name)
+	req.NameAr = strings.TrimSpace(req.NameAr)
+
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
 			"errors":  validationErrors,
 		})
+	}
+
+	existing, err := h.repo.FindByNameOrNameAr(c.UserContext(), req.Name, req.NameAr)
+	if err == nil && existing != nil {
+		msg := fmt.Sprintf("Department '%s' already exists", existing.Name)
+		return utils.ErrorResponse(c, fiber.StatusConflict, msg)
 	}
 
 	deptType := req.Type
@@ -108,9 +117,36 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
+	req.Name = strings.TrimSpace(req.Name)
+	req.NameAr = strings.TrimSpace(req.NameAr)
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
 	department, err := h.repo.FindByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Department not found")
+	}
+
+	checkName := req.Name
+	if checkName == "" {
+		checkName = department.Name
+	}
+	checkNameAr := req.NameAr
+	if checkNameAr == "" {
+		checkNameAr = department.NameAr
+	}
+
+	if (req.Name != "" && req.Name != department.Name) || (req.NameAr != "" && req.NameAr != department.NameAr) {
+		existing, err := h.repo.FindByNameOrNameAr(c.UserContext(), checkName, checkNameAr)
+		if err == nil && existing != nil && existing.ID != id {
+			msg := fmt.Sprintf("Department '%s' already exists", existing.Name)
+			return utils.ErrorResponse(c, fiber.StatusConflict, msg)
+		}
 	}
 
 	if req.Name != "" {

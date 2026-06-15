@@ -20,6 +20,7 @@ var messages = map[string]map[string]string{
 		"max":          "{0} must be at most {1} characters",
 		"uuid":         "{0} must be a valid UUID",
 		"title":        "{0} must be a valid title (letters, numbers, spaces, and basic punctuation only)",
+		"name":         "{0} can only contain letters, numbers, spaces, and basic punctuation (- ' . , & ( ) /)",
 	},
 	"fr": {
 		"slug":         "{0} doit être un slug valide (lettres minuscules, chiffres et tirets uniquement)",
@@ -44,6 +45,7 @@ var messages = map[string]map[string]string{
 		"max":          "{0} يجب أن لا يتجاوز {1} أحرف",
 		"uuid":         "{0} يجب أن يكون UUID صالحاً",
 		"title":        "{0} يجب أن يكون عنواناً صالحاً (أحرف وأرقام ومسافات وعلامات ترقيم أساسية فقط)",
+		"name":         "{0} يمكن أن يحتوي على أحرف وأرقام ومسافات وعلامات ترقيم أساسية فقط (- ' . , & ( ) /)",
 	},
 }
 
@@ -75,6 +77,7 @@ func registerCustomValidators(validate *validator.Validate, trans ut.Translator,
 	registerCustom("alpha_spaces", validateAlphaAndSpaces, false)
 	registerCustom("no_spaces", validateNoSpaces, false)
 	registerCustom("title", validateTitle, false)
+	registerCustom("name", validateName, false)
 
 	// Override default validator translations
 	for _, tag := range []string{"required", "email", "min", "max"} {

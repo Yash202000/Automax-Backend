@@ -14,6 +14,8 @@ type LocationRepository interface {
 	FindByID(ctx context.Context, id uuid.UUID) (*models.Location, error)
 	FindByIDs(ctx context.Context, id []uuid.UUID) (*[]models.Location, error)
 	FindByNameAndParent(ctx context.Context, name string, parentID *uuid.UUID) (*models.Location, error)
+	FindByNameOrNameArAndParent(ctx context.Context, name string, nameAr string, parentID *uuid.UUID) (*models.Location, error)
+	FindByNameOrNameAr(ctx context.Context, name string, nameAr string) (*models.Location, error)
 	FindByExternalID(ctx context.Context, externalID string) (*models.Location, error)
 	Update(ctx context.Context, location *models.Location) error
 	Delete(ctx context.Context, id uuid.UUID) error
@@ -74,6 +76,41 @@ func (r *locationRepository) FindByNameAndParent(ctx context.Context, name strin
 		query = query.Where("parent_id IS NULL")
 	} else {
 		query = query.Where("parent_id = ?", parentID)
+	}
+	err := query.First(&location).Error
+	if err != nil {
+		return nil, err
+	}
+	return &location, nil
+}
+
+func (r *locationRepository) FindByNameOrNameArAndParent(ctx context.Context, name string, nameAr string, parentID *uuid.UUID) (*models.Location, error) {
+	var location models.Location
+	query := r.db.WithContext(ctx)
+	if nameAr != "" && nameAr != name {
+		query = query.Where("name = ? OR name_ar = ?", name, nameAr)
+	} else {
+		query = query.Where("name = ?", name)
+	}
+	if parentID == nil {
+		query = query.Where("parent_id IS NULL")
+	} else {
+		query = query.Where("parent_id = ?", parentID)
+	}
+	err := query.First(&location).Error
+	if err != nil {
+		return nil, err
+	}
+	return &location, nil
+}
+
+func (r *locationRepository) FindByNameOrNameAr(ctx context.Context, name string, nameAr string) (*models.Location, error) {
+	var location models.Location
+	query := r.db.WithContext(ctx)
+	if nameAr != "" && nameAr != name {
+		query = query.Where("name = ? OR name_ar = ?", name, nameAr)
+	} else {
+		query = query.Where("name = ?", name)
 	}
 	err := query.First(&location).Error
 	if err != nil {

@@ -32,11 +32,23 @@ func (h *LocationHandler) Create(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.NameAr = strings.TrimSpace(req.NameAr)
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
 			"errors":  validationErrors,
 		})
+	}
+
+	existing, err := h.repo.FindByNameOrNameAr(c.UserContext(), req.Name, req.NameAr)
+	if err == nil && existing != nil {
+		existingPath, _ := h.repo.FetchLocationFullPathByID(c.UserContext(), existing.ID)
+		msg := fmt.Sprintf("Location '%s' already exists", existing.Name)
+		if existingPath != "" {
+			msg += fmt.Sprintf(" at '%s'", existingPath)
+		}
+		return utils.ErrorResponse(c, fiber.StatusConflict, msg)
 	}
 
 	source := req.Source
@@ -97,9 +109,33 @@ func (h *LocationHandler) Update(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
 	}
 
+	req.Name = strings.TrimSpace(req.Name)
+	req.NameAr = strings.TrimSpace(req.NameAr)
+
 	location, err := h.repo.FindByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Location not found")
+	}
+
+	checkName := req.Name
+	if checkName == "" {
+		checkName = location.Name
+	}
+	checkNameAr := req.NameAr
+	if checkNameAr == "" {
+		checkNameAr = location.NameAr
+	}
+
+	if (req.Name != "" && req.Name != location.Name) || (req.NameAr != "" && req.NameAr != location.NameAr) {
+		existing, err := h.repo.FindByNameOrNameAr(c.UserContext(), checkName, checkNameAr)
+		if err == nil && existing != nil && existing.ID != id {
+			existingPath, _ := h.repo.FetchLocationFullPathByID(c.UserContext(), existing.ID)
+			msg := fmt.Sprintf("Location '%s' already exists", existing.Name)
+			if existingPath != "" {
+				msg += fmt.Sprintf(" at '%s'", existingPath)
+			}
+			return utils.ErrorResponse(c, fiber.StatusConflict, msg)
+		}
 	}
 
 	if req.Name != "" {
