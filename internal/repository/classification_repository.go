@@ -86,6 +86,7 @@ type ClassificationRepository interface {
 	GetCriticalityByClassificationAndPriorityCode(ctx context.Context, classificationID uuid.UUID, priorityCode string) (*models.ClassificationCriticality, error)
 	FetchClassificationFullPaths(ctx context.Context, classificationIDs []uuid.UUID) (map[string]string, error)
 	FetchClassificationFullPathByID(ctx context.Context, classificationID uuid.UUID) (string, error)
+	GetAncestors(ctx context.Context, id uuid.UUID) ([]models.Classification, error)
 }
 
 type classificationRepository struct {
@@ -602,4 +603,27 @@ func (r *classificationRepository) FetchClassificationFullPathByID(
 	}
 
 	return fullPath, nil
+}
+
+// GetAncestors returns the node and all its ancestors ordered from root (lowest level) to the
+// given node (highest level), using a recursive CTE.
+func (r *classificationRepository) GetAncestors(ctx context.Context, id uuid.UUID) ([]models.Classification, error) {
+	query := `
+		WITH RECURSIVE ancestors AS (
+			SELECT id, name, name_ar, level, parent_id
+			FROM classifications
+			WHERE id = ? AND deleted_at IS NULL
+			UNION ALL
+			SELECT c.id, c.name, c.name_ar, c.level, c.parent_id
+			FROM classifications c
+			INNER JOIN ancestors a ON c.id = a.parent_id
+			WHERE c.deleted_at IS NULL
+		)
+		SELECT * FROM ancestors ORDER BY level ASC
+	`
+	var results []models.Classification
+	if err := r.db.WithContext(ctx).Raw(query, id).Scan(&results).Error; err != nil {
+		return nil, err
+	}
+	return results, nil
 }

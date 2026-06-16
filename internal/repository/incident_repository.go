@@ -266,6 +266,9 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 			phone, phoneWithPlus,
 		)
 	}
+	if filter.CallerIdentity != "" {
+		query = query.Where("caller_identity = ?", filter.CallerIdentity)
+	}
 	if filter.SLABreached != nil {
 		query = query.Where("sla_breached = ?", *filter.SLABreached)
 	}
@@ -1744,6 +1747,7 @@ SELECT
     COALESCE(i.state, '')       AS state,
     COALESCE(i.country, '')     AS country,
     COALESCE(i.postal_code, '') AS postal_code,
+    COALESCE(i.custom_fields, '') AS custom_fields,
     COALESCE(ws.name, '')       AS status_name,
     COALESCE(ws.name_ar, '')    AS status_name_ar,
     COALESCE(cl.name, '')       AS classification_name,

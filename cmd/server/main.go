@@ -35,6 +35,7 @@ func main() {
 	godotenv.Load() // must be before config.Load() so .env values are in the environment
 	cfg := config.Load()
 
+	log.Printf("GOAL_MANAGEMENT enabled: %v", cfg.GoalManagement.Enabled)
 	validation.InitValidatorRegistry()
 	db, err := database.Connect(&cfg.Database)
 	if err != nil {
@@ -119,7 +120,7 @@ func main() {
 
 	callLogService := services.NewCallLogService(callLogRepo, userRepo, minioStorage)
 	workflowService := services.NewWorkflowService(workflowRepo, roleRepo, departmentRepo, classificationRepo, userRepo, db)
-	incidentService := services.NewIncidentService(incidentRepo, incidentMergeRepo, workflowRepo, userRepo, departmentRepo, classificationRepo, rejectionLogRepo, roleRepo, minioStorage, db, wsHub)
+	incidentService := services.NewIncidentService(incidentRepo, incidentMergeRepo, workflowRepo, workflowService, userRepo, departmentRepo, classificationRepo, rejectionLogRepo, roleRepo, minioStorage, db, wsHub)
 	incidentMergeService := services.NewIncidentMergeService(incidentMergeRepo, incidentRepo, workflowRepo, roleRepo, locationRepo, classificationRepo, db, wsHub)
 	reportService := services.NewReportService(reportRepo, rejectionLogRepo, locationRepo, classificationRepo, workflowRepo)
 	reportTemplateService := services.NewReportTemplateService(reportTemplateRepo, reportRepo)
@@ -225,6 +226,7 @@ func main() {
 	incidentHandler.SetReadyToCloseService(readyToCloseService)
 	incidentHandler.SetIvrSmsLinkRepo(ivrSmsLinkRepo)
 	incidentHandler.SetPublicFeedbackRepo(publicFeedbackRepo)
+	incidentHandler.SetLookupRepo(lookupRepo)
 	incidentMergeHandler := handlers.NewIncidentMergeHandler(incidentMergeService, userRepo)
 	websocketHandler := handlers.NewWebSocketHandler(wsHub)
 	reportHandler := handlers.NewReportHandler(reportService)
@@ -1061,10 +1063,6 @@ func main() {
 		reviews.Get("/my-reviews", authMiddleware.RequirePermission("goals:view"), reviewHandler.ListMyReviews)
 		reviews.Get("/my-review-tasks", authMiddleware.RequirePermission("goals:view"), reviewHandler.ListMyReviewTasks)
 
-		// ---- GIS ROUTES ----
-		gis := v1.Group("/gis", authMiddleware.Authenticate())
-		gis.Post("/identify", gisHandler.Identify)
-
 		// ---- DOCUMENT MANAGEMENT ROUTES ----
 		docs := v1.Group("/documents", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureDocuments)))
 		docs.Get("/files", authMiddleware.RequirePermission("goals:view"), documentHandler.ListFiles)
@@ -1082,6 +1080,10 @@ func main() {
 		docs.Get("/versions/:vid/download", authMiddleware.RequirePermission("goals:view"), documentHandler.DownloadVersion)
 		docs.Post("/files/:id/versions/rollback", authMiddleware.RequirePermission("goals:update"), documentHandler.RollbackVersion)
 	} // end cfg.GoalManagement.Enabled
+
+	// ---- GIS ROUTES ----
+	gis := v1.Group("/gis", authMiddleware.Authenticate())
+	gis.Post("/identify", gisHandler.Identify)
 
 	go func() {
 		addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)

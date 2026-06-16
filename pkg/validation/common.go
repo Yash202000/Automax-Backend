@@ -44,6 +44,12 @@ func validateSlug1(fl validator.FieldLevel) bool {
 	return regex.MatchString(slug)
 }
 
+// validateSlug ensures slug is lowercase alphanumeric with hyphens
+func validateStartswith12(fl validator.FieldLevel) bool {
+	s := fl.Field().String()
+	return len(s) > 0 && (s[0] == '1' || s[0] == '2')
+}
+
 // validateNoSpaces ensures there is no space in the field
 
 func validateNoSpaces(fl validator.FieldLevel) bool {
@@ -69,6 +75,7 @@ func validateBlogStatus(fl validator.FieldLevel) bool {
 	}
 	return false
 }
+
 var nameRegex = regexp.MustCompile(`^[\p{L}0-9\s\-'.,&()/]+$`)
 
 // validateName ensures the name contains at least one letter and only letters, numbers, spaces, and common punctuation

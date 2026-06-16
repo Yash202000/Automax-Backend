@@ -284,11 +284,45 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 		lbl = labelsEN
 	}
 
+	var reportCustomFields []reportCustomField
+	if reportData.CustomFields != "" && h.lookupRepo != nil {
+		var cf map[string]struct {
+			CategoryID string `json:"category_id"`
+			FieldType  string `json:"field_type"`
+			Value      string `json:"value"`
+		}
+		if json.Unmarshal([]byte(reportData.CustomFields), &cf) == nil {
+			for _, entry := range cf {
+				catID, parseErr := uuid.Parse(entry.CategoryID)
+				if parseErr != nil {
+					continue
+				}
+				cat, fetchErr := h.lookupRepo.FindCategoryByID(c.UserContext(), catID)
+				if fetchErr != nil {
+					continue
+				}
+				label := cat.Name
+				if lbl.Dir == "rtl" && cat.NameAr != "" {
+					label = cat.NameAr
+				}
+				link := ""
+				if cat.RedirectURL != "" {
+					link = strings.ReplaceAll(cat.RedirectURL, ":id", entry.Value)
+				}
+				reportCustomFields = append(reportCustomFields, reportCustomField{
+					Label: label,
+					Value: entry.Value,
+					URL:   link,
+				})
+			}
+		}
+	}
+
 	leftLogoB64 := fetchLogoBase64(os.Getenv("LOGO_LEFT_URL"))
 	rightLogoB64 := fetchLogoBase64(os.Getenv("LOGO_RIGHT_URL"))
 
 	format := c.Query("format", "pdf")
-	htmlBytes := buildReportHTML(c, h, reportData, reportLookupValues, leftLogoB64, rightLogoB64, lbl, reportTransitions, reportAttachments, reportRevisions)
+	htmlBytes := buildReportHTML(c, h, reportData, reportLookupValues, leftLogoB64, rightLogoB64, lbl, reportTransitions, reportAttachments, reportRevisions, reportCustomFields)
 
 	switch format {
 	case "html":
@@ -380,6 +414,12 @@ func fetchLogoBase64(url string) string {
 	return base64.StdEncoding.EncodeToString(data)
 }
 
+type reportCustomField struct {
+	Label string
+	Value string
+	URL   string
+}
+
 func buildReportHTML(
 	c *fiber.Ctx,
 	h *IncidentHandler,
@@ -391,6 +431,7 @@ func buildReportHTML(
 	reportTransitions []models.IncidentReportTransition,
 	reportAttachments []models.IncidentReportAttachment,
 	reportRevisions []models.IncidentReportRevision,
+	customFields []reportCustomField,
 ) []byte {
 	var b bytes.Buffer
 
@@ -604,6 +645,34 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 		}
 	}
 	b.WriteString(`</table>`)
+
+	// ── Section: Custom Fields ────────────────────────────────────────────────
+	if len(customFields) > 0 {
+		cfHeader := "Custom Fields"
+		if l.Dir == "rtl" {
+			cfHeader = "الحقول المخصصة"
+		}
+		secHeader(&b, cfHeader)
+		b.WriteString(`<table class="grid">`)
+		for i := 0; i < len(customFields); i += 2 {
+			cf1 := customFields[i]
+			val1 := html.EscapeString(cf1.Value)
+			if cf1.URL != "" {
+				val1 = fmt.Sprintf(`<a href="%s" target="_blank">%s</a>`, html.EscapeString(cf1.URL), html.EscapeString(cf1.Value))
+			}
+			if i+1 < len(customFields) {
+				cf2 := customFields[i+1]
+				val2 := html.EscapeString(cf2.Value)
+				if cf2.URL != "" {
+					val2 = fmt.Sprintf(`<a href="%s" target="_blank">%s</a>`, html.EscapeString(cf2.URL), html.EscapeString(cf2.Value))
+				}
+				row2(&b, html.EscapeString(cf1.Label), val1, html.EscapeString(cf2.Label), val2)
+			} else {
+				row1(&b, html.EscapeString(cf1.Label), val1)
+			}
+		}
+		b.WriteString(`</table>`)
+	}
 
 	// ── Section: Submitter ────────────────────────────────────────────────────
 

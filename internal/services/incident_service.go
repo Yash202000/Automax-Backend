@@ -27,6 +27,7 @@ import (
 
 var ErrDuplicateIncident = errors.New("duplicate_incident")
 var ErrInvalidLocation = errors.New("invalid_location")
+var ErrEmptyWorkflow = errors.New("empty_workflow")
 var ErrEditNotAllowed = errors.New("edit_not_allowed_in_current_state")
 
 type IncidentService interface {
@@ -118,35 +119,37 @@ type IncidentService interface {
 }
 
 type incidentService struct {
-	incidentRepo        repository.IncidentRepository
-	incidentMergeRepo   repository.IncidentMergeRepository
-	workflowRepo        repository.WorkflowRepository
-	userRepo            repository.UserRepository
-	deptRepo            repository.DepartmentRepository
-	rejectionLogRepo    repository.RejectionLogRepository
-	classificationRepo  repository.ClassificationRepository
-	roleRepo            repository.RoleRepository
-	storage             *storage.MinIOStorage
-	db                  *gorm.DB
-	wsHub               *WSHub
-	readyToCloseService ReadyToCloseService
-	notificationService *NotificationService
-	userService         UserService
-	fcmService          *FCMService
-	integrationExecutor IntegrationExecutor
-	actionExecutor      ActionExecutor
-	publicFeedbackRepo     repository.IncidentPublicFeedbackRepository
-	smsFeedbackPendingRepo repository.SmsFeedbackPendingRepository
+	incidentRepo            repository.IncidentRepository
+	incidentMergeRepo       repository.IncidentMergeRepository
+	workflowRepo            repository.WorkflowRepository
+	workflowService         WorkflowService
+	userRepo                repository.UserRepository
+	deptRepo                repository.DepartmentRepository
+	rejectionLogRepo        repository.RejectionLogRepository
+	classificationRepo      repository.ClassificationRepository
+	roleRepo                repository.RoleRepository
+	storage                 *storage.MinIOStorage
+	db                      *gorm.DB
+	wsHub                   *WSHub
+	readyToCloseService     ReadyToCloseService
+	notificationService     *NotificationService
+	userService             UserService
+	fcmService              *FCMService
+	integrationExecutor     IntegrationExecutor
+	actionExecutor          ActionExecutor
+	publicFeedbackRepo      repository.IncidentPublicFeedbackRepository
+	smsFeedbackPendingRepo  repository.SmsFeedbackPendingRepository
 	smsFeedbackDelayMinutes int
-	ivrSmsLinkRepo         repository.IvrSmsLinkRepository
-	rrCounters          map[string]int64
-	rrMu                sync.Mutex
+	ivrSmsLinkRepo          repository.IvrSmsLinkRepository
+	rrCounters              map[string]int64
+	rrMu                    sync.Mutex
 }
 
 func NewIncidentService(
 	incidentRepo repository.IncidentRepository,
 	incidentMergeRepo repository.IncidentMergeRepository,
 	workflowRepo repository.WorkflowRepository,
+	workflowService WorkflowService,
 	userRepo repository.UserRepository,
 	deptRepo repository.DepartmentRepository,
 	classificationRepo repository.ClassificationRepository,
@@ -160,6 +163,7 @@ func NewIncidentService(
 		incidentRepo:       incidentRepo,
 		incidentMergeRepo:  incidentMergeRepo,
 		workflowRepo:       workflowRepo,
+		workflowService:    workflowService,
 		userRepo:           userRepo,
 		deptRepo:           deptRepo,
 		rejectionLogRepo:   rejectionLogRepo,
@@ -423,6 +427,33 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		}
 	}
 
+	// Auto-resolve workflow for epmportal when the caller omits workflow_id
+	if req.WorkflowID == "" && strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.EPMPORTAL) {
+		var locID, classID *uuid.UUID
+		if req.LocationID != nil {
+			if id, err := uuid.Parse(*req.LocationID); err == nil {
+				locID = &id
+			}
+		}
+		if req.ClassificationID != nil {
+			if id, err := uuid.Parse(*req.ClassificationID); err == nil {
+				classID = &id
+			}
+		}
+		rt := req.RecordType
+		if rt == "" {
+			rt = "incident"
+		}
+		resolvedID, err := s.workflowService.ResolveWorkflow(ctx, locID, classID, rt)
+		if err != nil {
+			return nil, err
+		}
+		req.WorkflowID = resolvedID.String()
+	}
+
+	if req.WorkflowID == "" {
+		return nil, ErrEmptyWorkflow
+	}
 	// Parse workflow ID
 	workflowID, err := uuid.Parse(req.WorkflowID)
 	if err != nil {
@@ -457,28 +488,29 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		return nil, err
 	}
 
-	// Merge custom lookup fields into CustomFields JSON
-	customFieldsJSON := req.CustomFields
-	if len(req.CustomLookupFields) > 0 {
-		// Parse existing custom fields
-		var customFields map[string]interface{}
-		if customFieldsJSON != "" {
-			if err := json.Unmarshal([]byte(customFieldsJSON), &customFields); err != nil {
-				customFields = make(map[string]interface{})
+	// Merge custom lookup fields and extra request fields into CustomFields JSON
+	var customFieldsJSON string
+	{
+		customFields := make(map[string]interface{})
+		if len(req.CustomFields) > 0 {
+			if err := json.Unmarshal(req.CustomFields, &customFields); err != nil {
+				// Client sent custom_fields as a JSON-encoded string; unwrap and parse it.
+				var s string
+				if json.Unmarshal(req.CustomFields, &s) == nil {
+					_ = json.Unmarshal([]byte(s), &customFields)
+				}
 			}
-		} else {
-			customFields = make(map[string]interface{})
 		}
-
-		// Merge custom lookup fields
 		for key, value := range req.CustomLookupFields {
 			customFields[key] = value
 		}
-
-		// Convert back to JSON
-		customFieldsBytes, err := json.Marshal(customFields)
-		if err == nil {
-			customFieldsJSON = string(customFieldsBytes)
+		if req.GisLocation != "" {
+			customFields["gis_location"] = req.GisLocation
+		}
+		if len(customFields) > 0 {
+			if b, err := json.Marshal(customFields); err == nil {
+				customFieldsJSON = string(b)
+			}
 		}
 	}
 
@@ -492,6 +524,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		ReporterEmail:  req.ReporterEmail,
 		ReporterName:   req.ReporterName,
 		ReporterPhone:  req.ReporterPhone,
+		CallerIdentity: req.CallerIdentity,
 		CustomFields:   customFieldsJSON,
 		Latitude:       req.Latitude,
 		Longitude:      req.Longitude,
@@ -1158,7 +1191,7 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	}
 
 	// Handle custom fields and custom lookup fields
-	if req.CustomFields != "" || len(req.CustomLookupFields) > 0 {
+	if len(req.CustomFields) > 0 || len(req.CustomLookupFields) > 0 {
 		var customFields map[string]interface{}
 
 		// Start with existing custom fields
@@ -1171,12 +1204,16 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		}
 
 		// Update with new custom fields if provided
-		if req.CustomFields != "" {
+		if len(req.CustomFields) > 0 {
 			var newCustomFields map[string]interface{}
-			if err := json.Unmarshal([]byte(req.CustomFields), &newCustomFields); err == nil {
-				for k, v := range newCustomFields {
-					customFields[k] = v
+			if err := json.Unmarshal(req.CustomFields, &newCustomFields); err != nil {
+				var s string
+				if json.Unmarshal(req.CustomFields, &s) == nil {
+					_ = json.Unmarshal([]byte(s), &newCustomFields)
 				}
+			}
+			for k, v := range newCustomFields {
+				customFields[k] = v
 			}
 		}
 
