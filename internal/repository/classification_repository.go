@@ -197,7 +197,26 @@ func (r *classificationRepository) Update(ctx context.Context, classification *m
 }
 
 func (r *classificationRepository) Delete(ctx context.Context, id uuid.UUID) error {
+	if err := r.deleteDescendants(ctx, id); err != nil {
+		return err
+	}
 	return r.db.WithContext(ctx).Delete(&models.Classification{}, "id = ?", id).Error
+}
+
+func (r *classificationRepository) deleteDescendants(ctx context.Context, parentID uuid.UUID) error {
+	var children []models.Classification
+	if err := r.db.WithContext(ctx).Where("parent_id = ? AND deleted_at IS NULL", parentID).Find(&children).Error; err != nil {
+		return err
+	}
+	for _, child := range children {
+		if err := r.deleteDescendants(ctx, child.ID); err != nil {
+			return err
+		}
+		if err := r.db.WithContext(ctx).Delete(&models.Classification{}, "id = ?", child.ID).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *classificationRepository) List(ctx context.Context) ([]models.Classification, error) {
