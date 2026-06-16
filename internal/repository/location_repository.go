@@ -397,4 +397,3 @@ func (r *locationRepository) GetAncestors(ctx context.Context, id uuid.UUID) ([]
 	}
 	return results, nil
 }
-
