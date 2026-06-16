@@ -66,6 +66,7 @@ func (e *ReportExecution) BeforeCreate(tx *gorm.DB) error {
 type ReportColumnConfig struct {
 	Field   string `json:"field"`
 	Label   string `json:"label"`
+	LabelAr string `json:"label_ar,omitempty"`
 	Visible bool   `json:"visible"`
 	Width   int    `json:"width,omitempty"`
 }
@@ -256,8 +257,9 @@ type UserBasicResponse struct {
 	Avatar    string `json:"avatar,omitempty"`
 }
 type ColumnField struct {
-	Label string `json:"label"`
-	Field string `json:"field"`
+	Label   string `json:"label"`
+	LabelAr string `json:"label_ar,omitempty"`
+	Field   string `json:"field"`
 }
 
 // DataSource metadata for frontend

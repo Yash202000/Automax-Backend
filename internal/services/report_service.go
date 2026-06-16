@@ -116,6 +116,7 @@ func (s *reportService) CreateReport(ctx context.Context, req *models.ReportCrea
 		NameAr:        req.NameAr,
 		Description:   req.Description,
 		DescriptionAr: req.DescriptionAr,
+		TimestampKey:  req.TimestampKey,
 		DataSource:    req.DataSource,
 		Columns:       string(columnsJSON),
 		Filters:       string(filtersJSON),
@@ -273,6 +274,46 @@ func firstSorting(sorting []models.ReportSortConfig) *models.ReportSortConfig {
 }
 
 // Report Execution
+// resolveColumnLabel returns label_ar when lang=="ar" and it is non-empty, otherwise label.
+func resolveColumnLabel(label, labelAr, lang string) string {
+	if lang == "ar" && labelAr != "" {
+		return labelAr
+	}
+	return label
+}
+
+// applyLangToColumns remaps column labels and matching data-row keys to Arabic when lang=="ar".
+func applyLangToColumns(data []map[string]interface{}, cols []models.ColumnField, lang string) ([]map[string]interface{}, []models.ColumnField) {
+	if lang != "ar" {
+		return data, cols
+	}
+	remap := make(map[string]string)
+	newCols := make([]models.ColumnField, len(cols))
+	for i, c := range cols {
+		newCols[i] = c
+		if c.LabelAr != "" {
+			remap[c.Label] = c.LabelAr
+			newCols[i].Label = c.LabelAr
+		}
+	}
+	if len(remap) == 0 {
+		return data, cols
+	}
+	newData := make([]map[string]interface{}, len(data))
+	for i, row := range data {
+		newRow := make(map[string]interface{}, len(row))
+		for k, v := range row {
+			if ar, ok := remap[k]; ok {
+				newRow[ar] = v
+			} else {
+				newRow[k] = v
+			}
+		}
+		newData[i] = newRow
+	}
+	return newData, newCols
+}
+
 func (s *reportService) QueryReport(ctx context.Context, req *models.ReportQueryRequest) (*models.ReportQueryResponse, error) {
 	data, total, err := s.dispatchQuery(ctx,
 		req.DataSource, req.Filters, firstSorting(req.Sorting), req.Page, req.Limit,
@@ -281,6 +322,9 @@ func (s *reportService) QueryReport(ctx context.Context, req *models.ReportQuery
 		return nil, err
 	}
 
+	lang, _ := ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE).(string)
+	data, resolvedCols := applyLangToColumns(data, req.Columns, lang)
+
 	totalPages := int(total) / req.Limit
 	if int(total)%req.Limit > 0 {
 		totalPages++
@@ -288,7 +332,7 @@ func (s *reportService) QueryReport(ctx context.Context, req *models.ReportQuery
 	return &models.ReportQueryResponse{
 		Success:    true,
 		Data:       data,
-		Columns:    req.Columns,
+		Columns:    resolvedCols,
 		TotalItems: total,
 		TotalPages: totalPages,
 		Page:       req.Page,
@@ -322,13 +366,14 @@ func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExpo
 		return nil, "", "", err
 	}
 
+	lang, _ := ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE).(string)
+
 	title := ""
 	if req.Options != nil && req.Options.Title != "" {
 		title = req.Options.Title
 	}
 
 	if title == "" {
-		lang, _ := ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE).(string)
 		title = resolveTitle(title, req.DataSource, lang)
 	}
 
@@ -348,7 +393,7 @@ func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExpo
 	log.Printf("Exporting report with title: %s, filename: %s", title, filename)
 	filters := s.buildFilterDisplay(ctx, req.Filters)
 	if req.Format == "xlsx" {
-		xlsxData, err := s.generateExcel(data, req.Columns, title, req.Options, filters)
+		xlsxData, err := s.generateExcel(data, req.Columns, title, req.Options, filters, lang)
 		if err != nil {
 			return nil, "", "", err
 		}
@@ -438,6 +483,7 @@ func (s *reportService) generateExcel(
 	title string,
 	options *models.ReportExportOptions,
 	filterDisplay map[string]interface{},
+	lang string,
 ) ([]byte, error) {
 
 	f := excelize.NewFile()
@@ -490,15 +536,12 @@ func (s *reportService) generateExcel(
 		f.SetRowStyle(sheet, dataStartRow, dataStartRow+1000, bodyStyleId)
 	}
 
-	// ── Detect language from options ──────────────────────────────────────
-	// (title already resolved before calling this function)
-
 	// ── Write headers ─────────────────────────────────────────────────────
 	headerRowStr := strconv.Itoa(headerRow)
 	f.SetCellValue(sheet, "A"+headerRowStr, "#")
 	for i, col := range columns {
 		colName, _ := excelize.ColumnNumberToName(i + 2)
-		f.SetCellValue(sheet, colName+headerRowStr, col.Label)
+		f.SetCellValue(sheet, colName+headerRowStr, resolveColumnLabel(col.Label, col.LabelAr, lang))
 	}
 
 	// ── Write data rows ───────────────────────────────────────────────────
@@ -804,7 +847,8 @@ func (s *reportService) generatePDF(
 		setFont("B", headerFontSize, "")
 		maxLines := 1
 		for i, col := range orderedCols {
-			nb := len(pdf.SplitLines([]byte(col.Label), orderedWidths[i]-2))
+			hdrLabel := resolveColumnLabel(col.Label, col.LabelAr, lang)
+			nb := len(pdf.SplitLines([]byte(hdrLabel), orderedWidths[i]-2))
 			if nb < 1 {
 				nb = 1
 			}
@@ -826,11 +870,12 @@ func (s *reportService) generatePDF(
 		curX += snoWidth
 
 		for i, col := range orderedCols {
+			hdrLabel := resolveColumnLabel(col.Label, col.LabelAr, lang)
 			pdf.SetFillColor(244, 246, 248)
 			pdf.Rect(curX, startY, orderedWidths[i], hdrH, "FD")
 			pdf.SetXY(curX+1, startY+1)
-			setFont("B", headerFontSize, col.Label)
-			pdf.MultiCell(orderedWidths[i]-2, lineH, col.Label, "", "C", false)
+			setFont("B", headerFontSize, hdrLabel)
+			pdf.MultiCell(orderedWidths[i]-2, lineH, hdrLabel, "", "C", false)
 			curX += orderedWidths[i]
 		}
 		pdf.SetXY(leftMargin, startY+hdrH)
@@ -862,7 +907,7 @@ func (s *reportService) generatePDF(
 	setFont("B", headerFontSize, "")
 	hdrMaxLines := 1
 	for i, col := range columns {
-		nb := len(pdf.SplitLines([]byte(col.Label), colWidths[i]-2))
+		nb := len(pdf.SplitLines([]byte(resolveColumnLabel(col.Label, col.LabelAr, lang)), colWidths[i]-2))
 		if nb < 1 {
 			nb = 1
 		}
