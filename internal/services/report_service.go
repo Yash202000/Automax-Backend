@@ -911,6 +911,17 @@ func (s *reportService) generatePDF(
 		// Calculate the tallest cell in this row to fix uniform row height
 		rowH := minRowH
 		for i := range renderCols {
+			if isAttachmentCol(renderCols[i].Label) {
+				urls := parseAttachmentURLs(renderVals[i])
+				n := len(urls)
+				if n < 1 {
+					n = 1
+				}
+				if needed := float64(n)*lineH + 2; needed > rowH {
+					rowH = needed
+				}
+				continue
+			}
 			setFont("", baseFontSize, renderVals[i])
 			nb := len(pdf.SplitLines([]byte(renderVals[i]), renderWidths[i]-2))
 			if nb < 1 {
@@ -954,20 +965,32 @@ func (s *reportService) generatePDF(
 
 		for i := range renderCols {
 			val := renderVals[i]
-			setFont("", baseFontSize, val)
-			align := "L"
-			if rtlMode || isRTL(val) {
-				align = "R"
-			}
 			// Background fill
 			pdf.SetFillColor(fillR, fillG, fillB)
 			pdf.Rect(curX, startY, renderWidths[i], rowH, "F")
 			// Border (border: 1px solid #333)
 			pdf.SetDrawColor(51, 51, 51)
 			pdf.Rect(curX, startY, renderWidths[i], rowH, "D")
-			// Text with 1mm inset on each side so it doesn't touch the border
-			pdf.SetXY(curX+1, startY+1)
-			pdf.MultiCell(renderWidths[i]-2, lineH, val, "", align, false)
+
+			if isAttachmentCol(renderCols[i].Label) {
+				urls := parseAttachmentURLs(val)
+				pdf.SetFont("Arial", "U", baseFontSize)
+				pdf.SetTextColor(0, 0, 238)
+				for j, u := range urls {
+					pdf.SetXY(curX+1, startY+1+float64(j)*lineH)
+					pdf.WriteLinkString(lineH, fmt.Sprintf("Attachment %d", j+1), u)
+				}
+				pdf.SetTextColor(0, 0, 0)
+			} else {
+				setFont("", baseFontSize, val)
+				align := "L"
+				if rtlMode || isRTL(val) {
+					align = "R"
+				}
+				// Text with 1mm inset on each side so it doesn't touch the border
+				pdf.SetXY(curX+1, startY+1)
+				pdf.MultiCell(renderWidths[i]-2, lineH, val, "", align, false)
+			}
 			curX += renderWidths[i]
 		}
 		pdf.SetXY(leftMargin, startY+rowH)
@@ -1167,6 +1190,21 @@ func formatExportValue(col string, v interface{}) string {
 	}
 
 	return formatValue(v)
+}
+
+func isAttachmentCol(label string) bool {
+	return strings.Contains(strings.ToLower(label), "attachment")
+}
+
+func parseAttachmentURLs(val string) []string {
+	var urls []string
+	for _, u := range strings.Split(val, "|") {
+		u = strings.TrimSpace(u)
+		if u != "" {
+			urls = append(urls, u)
+		}
+	}
+	return urls
 }
 
 func getPriorityLabel(priority int) string {

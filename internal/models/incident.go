@@ -81,11 +81,12 @@ type Incident struct {
 	PartialCloseNotified  bool       `gorm:"default:false" json:"partial_close_notified"`
 
 	// Reporter
-	ReporterID    *uuid.UUID `gorm:"type:uuid;index" json:"reporter_id"`
-	Reporter      *User      `gorm:"foreignKey:ReporterID" json:"reporter,omitempty"`
-	ReporterEmail string     `gorm:"size:100" json:"reporter_email"`
-	ReporterName  string     `gorm:"size:200" json:"reporter_name"`
-	ReporterPhone string     `gorm:"size:50" json:"reporter_phone"`
+	ReporterID     *uuid.UUID `gorm:"type:uuid;index" json:"reporter_id"`
+	Reporter       *User      `gorm:"foreignKey:ReporterID" json:"reporter,omitempty"`
+	ReporterEmail  string     `gorm:"size:100" json:"reporter_email"`
+	ReporterName   string     `gorm:"size:200" json:"reporter_name"`
+	ReporterPhone  string     `gorm:"size:50" json:"reporter_phone"`
+	CallerIdentity string     `gorm:"size:50;column:caller_identity" json:"caller_identity"`
 
 	// Source (origin of the record)
 	Source string `gorm:"size:100" json:"source"`
@@ -355,7 +356,7 @@ type IncidentCreateRequest struct {
 	Description        string                 `json:"description" validate:"omitempty,max=1000"`
 	Comment            string                 `json:"comment" validate:"omitempty,max=2000"`
 	ClassificationID   *string                `json:"classification_id" validate:"omitempty,uuid"`
-	WorkflowID         string                 `json:"workflow_id" validate:"required,uuid"`
+	WorkflowID         string                 `json:"workflow_id" validate:"omitempty,uuid"`
 	Source             string                 `json:"source" validate:"omitempty,max=100"`
 	AssigneeID         *string                `json:"assignee_id" validate:"omitempty,uuid"`
 	DepartmentID       *string                `json:"department_id" validate:"omitempty,uuid"`
@@ -370,8 +371,10 @@ type IncidentCreateRequest struct {
 	DueDate            *string                `json:"due_date" validate:"omitempty,datetime=2006-01-02T15:04:05Z07:00"`
 	ReporterEmail      string                 `json:"reporter_email" validate:"omitempty,email"`
 	ReporterName       string                 `json:"reporter_name" validate:"omitempty,max=200"`
-	ReporterPhone      string                 `json:"reporter_phone" validate:"omitempty,max=200"`
-	CustomFields       string                 `json:"custom_fields"`
+	ReporterPhone      string                 `json:"reporter_phone" validate:"omitempty,max=20"`
+	CallerIdentity     string                 `json:"caller_identity" validate:"omitempty,len=10,numeric,startswith12"`
+	GisLocation        string                 `json:"gis_location" validate:"omitempty"`
+	CustomFields       json.RawMessage        `json:"custom_fields"`
 	LookupValueIDs     []string               `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
 	CustomLookupFields map[string]interface{} `json:"custom_lookup_fields"`
 	RecordType         string                 `json:"record_type" validate:"omitempty,oneof=incident request complaint query"`
@@ -392,7 +395,7 @@ type IncidentUpdateRequest struct {
 	Country            string                 `json:"country"`
 	PostalCode         string                 `json:"postal_code"`
 	DueDate            *string                `json:"due_date"`
-	CustomFields       string                 `json:"custom_fields"`
+	CustomFields       json.RawMessage        `json:"custom_fields"`
 	LookupValueIDs     []string               `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
 	Source             string                 `json:"source" validate:"omitempty,max=100"`
 	CustomLookupFields map[string]interface{} `json:"custom_lookup_fields"`
@@ -569,6 +572,7 @@ type IncidentFilter struct {
 	LocationID         []string   `query:"location_id" json:"location_id" validate:"omitempty,dive,uuid"`
 	ReporterID         []string   `query:"reporter_id" json:"reporter_id" validate:"omitempty,dive,uuid"`
 	ReporterPhone      string     `query:"reporter_phone" json:"reporter_phone" validate:"omitempty"`
+	CallerIdentity     string     `query:"caller_identity" json:"caller_identity" validate:"omitempty,number"`
 	SLABreached        *bool      `query:"sla_breached" json:"sla_breached" validate:"omitempty"`
 	RecordType         *string    `query:"record_type" json:"record_type" validate:"omitempty,oneof=incident request complaint query"` // 'incident', 'request', 'complaint', or 'query'
 	Channel            *string    `query:"channel" json:"channel" validate:"omitempty"`                                                // for complaints
@@ -664,6 +668,34 @@ type IncidentUnmergeResponse struct {
 
 // Response types
 
+// EpmPortalHierarchyNode is a single level in a classification or location ancestor chain.
+type EpmPortalHierarchyNode struct {
+	Name   string `json:"name"`
+	NameAr string `json:"name_ar"`
+	Level  int    `json:"level"`
+}
+
+// EpmPortalStateInfo carries the state name fields needed by the EPM portal.
+type EpmPortalStateInfo struct {
+	Name   string `json:"name"`
+	NameAr string `json:"name_ar"`
+}
+
+// EpmPortalIncidentResponse is the trimmed incident payload returned to EPM940 portal clients.
+type EpmPortalIncidentResponse struct {
+	IncidentNumber string                   `json:"incident_number"`
+	ReporterName   string                   `json:"reporter_name"`
+	ReporterEmail  string                   `json:"reporter_email"`
+	ReporterPhone  string                   `json:"reporter_phone"`
+	CallerIdentity string                   `json:"caller_identity"`
+	Address        string                   `json:"address"`
+	Description    string                   `json:"description"`
+	Classification []EpmPortalHierarchyNode `json:"classification"`
+	Location       []EpmPortalHierarchyNode `json:"location"`
+	CurrentState   *EpmPortalStateInfo      `json:"current_state,omitempty"`
+	GisLocation    interface{}              `json:"gis_location,omitempty"`
+}
+
 type IncidentResponse struct {
 	ID                    uuid.UUID                   `json:"id"`
 	IncidentNumber        string                      `json:"incident_number"`
@@ -704,6 +736,7 @@ type IncidentResponse struct {
 	ReporterEmail         string                      `json:"reporter_email"`
 	ReporterName          string                      `json:"reporter_name"`
 	ReporterPhone         string                      `json:"reporter_phone"`
+	CallerIdentity        string                      `json:"caller_identity,omitempty"`
 	Channel               string                      `json:"channel,omitempty"`
 	TransitionHistory     []TransitionHistoryResponse `json:"transition_history,omitempty"`
 	CreatedByName         string                      `json:"created_by_name,omitempty"`
@@ -859,6 +892,7 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 		ReporterEmail:         i.ReporterEmail,
 		ReporterName:          i.ReporterName,
 		ReporterPhone:         i.ReporterPhone,
+		CallerIdentity:        i.CallerIdentity,
 		Channel:               i.Channel,
 		CreatedByName:         i.CreatedByName,
 		CreatedByMobile:       i.CreatedByMobile,
@@ -1265,6 +1299,7 @@ type IncidentReportData struct {
 	State                string     `db:"state"`
 	Country              string     `db:"country"`
 	PostalCode           string     `db:"postal_code"`
+	CustomFields         string     `db:"custom_fields"`
 }
 
 // IncidentReportLookupValue is a flat result for lookup (dynamic attribute) values in the report.

@@ -27,6 +27,7 @@ type LocationRepository interface {
 	GetTreeWithStats(ctx context.Context, recordType string) ([]models.LocationWithStats, error)
 	FetchLocationFullPaths(ctx context.Context, locationIDs []string) (map[string]string, error)
 	FetchLocationFullPathByID(ctx context.Context, locationID uuid.UUID) (string, error)
+	GetAncestors(ctx context.Context, id uuid.UUID) ([]models.Location, error)
 }
 
 type locationRepository struct {
@@ -372,5 +373,28 @@ func (r *locationRepository) FetchLocationFullPathByID(
 	}
 
 	return fullPath, nil
+}
+
+// GetAncestors returns the node and all its ancestors ordered from root (lowest level) to the
+// given node (highest level), using a recursive CTE.
+func (r *locationRepository) GetAncestors(ctx context.Context, id uuid.UUID) ([]models.Location, error) {
+	query := `
+		WITH RECURSIVE ancestors AS (
+			SELECT id, name, name_ar, level, parent_id
+			FROM locations
+			WHERE id = ? AND deleted_at IS NULL
+			UNION ALL
+			SELECT l.id, l.name, l.name_ar, l.level, l.parent_id
+			FROM locations l
+			INNER JOIN ancestors a ON l.id = a.parent_id
+			WHERE l.deleted_at IS NULL
+		)
+		SELECT * FROM ancestors ORDER BY level ASC
+	`
+	var results []models.Location
+	if err := r.db.WithContext(ctx).Raw(query, id).Scan(&results).Error; err != nil {
+		return nil, err
+	}
+	return results, nil
 }
 

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -35,6 +36,7 @@ type IncidentHandler struct {
 	readyToCloseService services.ReadyToCloseService
 	ivrSmsLinkRepo      repository.IvrSmsLinkRepository
 	publicFeedbackRepo  repository.IncidentPublicFeedbackRepository
+	lookupRepo          repository.LookupRepository
 	validator           *validator.Validate
 }
 
@@ -66,6 +68,11 @@ func (h *IncidentHandler) SetPublicFeedbackRepo(repo repository.IncidentPublicFe
 // SetReadyToCloseService wires in the ReadyToCloseService for duration-options endpoint.
 func (h *IncidentHandler) SetReadyToCloseService(svc services.ReadyToCloseService) {
 	h.readyToCloseService = svc
+}
+
+// SetLookupRepo wires in the LookupRepository for custom field category resolution.
+func (h *IncidentHandler) SetLookupRepo(repo repository.LookupRepository) {
+	h.lookupRepo = repo
 }
 
 // GetReadyToCloseDurationOptions returns the global default duration options.
@@ -169,6 +176,10 @@ func (h *IncidentHandler) GetIncident(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not found")
 	}
 
+	if isEpmPortalRequest(c) {
+		return utils.SuccessResponse(c, fiber.StatusOK, "Incident retrieved", h.buildEpmPortalResponse(c, &incident.IncidentResponse))
+	}
+
 	return utils.SuccessResponse(c, fiber.StatusOK, "Incident retrieved", incident)
 }
 
@@ -231,6 +242,21 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 	}
 
 	totalPages := (int(total) + filter.Limit - 1) / filter.Limit
+
+	if isEpmPortalRequest(c) {
+		portalData := make([]models.EpmPortalIncidentResponse, len(incidents))
+		for i := range incidents {
+			portalData[i] = h.buildEpmPortalResponse(c, &incidents[i])
+		}
+		return c.JSON(fiber.Map{
+			"success":     true,
+			"data":        portalData,
+			"page":        filter.Page,
+			"limit":       filter.Limit,
+			"total_items": total,
+			"total_pages": totalPages,
+		})
+	}
 
 	return c.JSON(fiber.Map{
 		"success":     true,
@@ -1635,4 +1661,64 @@ func (h *IncidentHandler) ForceState(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to update state")
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, "State updated", nil)
+}
+
+// ---- EPM Portal helpers ----
+
+func isEpmPortalRequest(c *fiber.Ctx) bool {
+	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+	return strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) &&
+		strings.EqualFold(c.Query("source"), constants.INCIDENT_SOURCE.EPMPORTAL)
+}
+
+func (h *IncidentHandler) buildEpmPortalResponse(c *fiber.Ctx, incident *models.IncidentResponse) models.EpmPortalIncidentResponse {
+	resp := models.EpmPortalIncidentResponse{
+		IncidentNumber: incident.IncidentNumber,
+		ReporterName:   incident.ReporterName,
+		ReporterEmail:  incident.ReporterEmail,
+		ReporterPhone:  incident.ReporterPhone,
+		CallerIdentity: incident.CallerIdentity,
+		Address:        incident.Address,
+		Description:    incident.Description,
+	}
+
+	// Classification hierarchy
+	if incident.Classification != nil {
+		classID := incident.Classification.ID
+		if nodes, err := h.classificationRepo.GetAncestors(c.UserContext(), classID); err == nil {
+			resp.Classification = make([]models.EpmPortalHierarchyNode, len(nodes))
+			for i, n := range nodes {
+				resp.Classification[i] = models.EpmPortalHierarchyNode{Name: n.Name, NameAr: n.NameAr, Level: n.Level}
+			}
+		}
+	}
+
+	// Location hierarchy
+	if incident.Location != nil {
+		locID := incident.Location.ID
+		if nodes, err := h.locationRepo.GetAncestors(c.UserContext(), locID); err == nil {
+			resp.Location = make([]models.EpmPortalHierarchyNode, len(nodes))
+			for i, n := range nodes {
+				resp.Location[i] = models.EpmPortalHierarchyNode{Name: n.Name, NameAr: n.NameAr, Level: n.Level}
+			}
+		}
+	}
+
+	// Current state
+	if incident.CurrentState != nil {
+		resp.CurrentState = &models.EpmPortalStateInfo{
+			Name:   incident.CurrentState.Name,
+			NameAr: incident.CurrentState.NameAr,
+		}
+	}
+
+	// GIS location: expose the raw custom_fields as a parsed JSON object.
+	if incident.CustomFields != "" {
+		var cf interface{}
+		if err := json.Unmarshal([]byte(incident.CustomFields), &cf); err == nil {
+			resp.GisLocation = cf
+		}
+	}
+
+	return resp
 }

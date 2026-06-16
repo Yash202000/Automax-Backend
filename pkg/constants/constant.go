@@ -35,21 +35,23 @@ var CLIENT_CODE = struct {
 }
 
 var INCIDENT_SOURCE = struct {
-	WEB      string
-	MOBILE   string
-	IVR      string
-	WHATSAPP string
-	FACEBOOK string
-	TWITTER  string
-	EMAIL    string
+	WEB       string
+	MOBILE    string
+	IVR       string
+	WHATSAPP  string
+	FACEBOOK  string
+	TWITTER   string
+	EMAIL     string
+	EPMPORTAL string
 }{
-	WEB:      "web",
-	MOBILE:   "mobile",
-	IVR:      "ivr",
-	WHATSAPP: "whatsapp",
-	FACEBOOK: "facebook",
-	TWITTER:  "twitter",
-	EMAIL:    "email",
+	WEB:       "web",
+	MOBILE:    "mobile",
+	IVR:       "ivr",
+	WHATSAPP:  "whatsapp",
+	FACEBOOK:  "facebook",
+	TWITTER:   "twitter",
+	EMAIL:     "email",
+	EPMPORTAL: "epmportal",
 }
 
 var PREFIX = struct {

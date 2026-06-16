@@ -65,6 +65,10 @@ type WorkflowService interface {
 	// Workflow matching - for mobile apps and other clients
 	MatchWorkflow(ctx context.Context, req *models.WorkflowMatchRequest) (*models.WorkflowMatchResponse, error)
 
+	// ResolveWorkflow picks the best workflow for an incident based on location, classification, and
+	// record type, falling back to the default workflow when no specific match is found.
+	ResolveWorkflow(ctx context.Context, locationID, classificationID *uuid.UUID, recordType string) (uuid.UUID, error)
+
 	// Import/Export
 	ExportWorkflow(ctx context.Context, id uuid.UUID) ([]byte, string, error)
 	ImportWorkflow(ctx context.Context, data *models.WorkflowImportData, createdByID uuid.UUID) (*models.WorkflowResponse, []string, error)
@@ -1767,6 +1771,37 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 	}
 
 	return response, nil
+}
+
+// ResolveWorkflow picks the best-matching workflow UUID for an epmportal incident.
+// It delegates to MatchWorkflow for scoring, then falls back to GetDefaultWorkflow.
+func (s *workflowService) ResolveWorkflow(ctx context.Context, locationID, classificationID *uuid.UUID, recordType string) (uuid.UUID, error) {
+	req := &models.WorkflowMatchRequest{RecordType: recordType}
+	if locationID != nil {
+		req.LocationID = locationID.String()
+	}
+	if classificationID != nil {
+		req.ClassificationID = classificationID.String()
+	}
+
+	result, err := s.MatchWorkflow(ctx, req)
+	if err != nil {
+		return uuid.Nil, err
+	}
+
+	if result.Matched && result.WorkflowID != nil {
+		id, err := uuid.Parse(*result.WorkflowID)
+		if err == nil {
+			return id, nil
+		}
+	}
+
+	// Fall back to the global default workflow
+	defaultWf, err := s.repo.GetDefaultWorkflow(ctx)
+	if err != nil {
+		return uuid.Nil, errors.New("no workflow found and no default workflow configured")
+	}
+	return defaultWf.ID, nil
 }
 
 // ExportWorkflow exports a workflow as JSON with all related data
