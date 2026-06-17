@@ -118,8 +118,8 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 		// No escalation policy attached to this state — skip to avoid unintended notifications.
 		// log.Printf("[EscalationService] Incident %s / state '%s' has no escalation policy attached — assign one to enable SLA notifications",
 		// 	incident.IncidentNumber, state.Name)
-		skippedNoPolicy++
-		continue
+		// skippedNoPolicy++
+		// continue
 
 		// ── Legacy path (disabled — states must have an escalation policy) ───
 		transitions, err := s.workflowRepo.ListTransitionsFromState(ctx, state.ID)
