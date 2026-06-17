@@ -430,7 +430,6 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 	case "email_password":
 		// Email/Password login
 		user, err = s.userRepo.FindByEmailForLogin(ctx, req.Email)
-		log.Println("Login for email and User ID:", user.ID.String())
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				go func() {
@@ -483,7 +482,6 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 
 		// First check if user exists with this phone number
 		user, err = s.userRepo.FindByPhoneForLogin(ctx, req.Phone)
-		log.Println("Login for mobile and User ID:", user.ID.String())
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				go func() {
