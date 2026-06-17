@@ -67,6 +67,7 @@ type ClassificationRepository interface {
 	FindByExternalID(ctx context.Context, externalID string) (*models.Classification, error)
 	Update(ctx context.Context, classification *models.Classification) error
 	Delete(ctx context.Context, id uuid.UUID) error
+	CheckDependencies(ctx context.Context, id uuid.UUID) (incidents, workflows, users, departments int64, err error)
 	List(ctx context.Context) ([]models.Classification, error)
 	ListByType(ctx context.Context, types []string) ([]models.Classification, error)
 	GetTree(ctx context.Context) ([]models.Classification, error)
@@ -202,6 +203,24 @@ func (r *classificationRepository) Delete(ctx context.Context, id uuid.UUID) err
 		return err
 	}
 	return r.db.WithContext(ctx).Delete(&models.Classification{}, "id = ?", id).Error
+}
+
+func (r *classificationRepository) CheckDependencies(ctx context.Context, id uuid.UUID) (incidents, workflows, users, departments int64, err error) {
+	db := r.db.WithContext(ctx)
+
+	if err = db.Table("incidents").Where("classification_id = ? AND deleted_at IS NULL", id).Count(&incidents).Error; err != nil {
+		return
+	}
+	if err = db.Table("workflow_classifications").Where("classification_id = ?", id).Count(&workflows).Error; err != nil {
+		return
+	}
+	if err = db.Table("user_classifications").Where("classification_id = ?", id).Count(&users).Error; err != nil {
+		return
+	}
+	if err = db.Table("department_classifications").Where("classification_id = ?", id).Count(&departments).Error; err != nil {
+		return
+	}
+	return
 }
 
 func (r *classificationRepository) deleteDescendants(ctx context.Context, parentID uuid.UUID) error {
