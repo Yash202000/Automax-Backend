@@ -98,7 +98,8 @@ type Incident struct {
 	EvaluationCount int    `gorm:"default:0" json:"evaluation_count"`
 
 	// Custom Fields (JSON)
-	CustomFields string `gorm:"type:text" json:"custom_fields"`
+	CustomFields string         `gorm:"type:text" json:"custom_fields"`
+	GisLocation  datatypes.JSON `gorm:"type:jsonb" json:"gis_location"`
 
 	// Multiple Assignees (many-to-many)
 	Assignees []User `gorm:"many2many:incident_assignees;" json:"assignees,omitempty"`
@@ -373,7 +374,7 @@ type IncidentCreateRequest struct {
 	ReporterName       string                 `json:"reporter_name" validate:"omitempty,max=200"`
 	ReporterPhone      string                 `json:"reporter_phone" validate:"omitempty,max=20"`
 	CallerIdentity     string                 `json:"caller_identity" validate:"omitempty,len=10,numeric,startswith12"`
-	GisLocation        string                 `json:"gis_location" validate:"omitempty"`
+	GisLocation        json.RawMessage        `json:"gis_location" validate:"omitempty"`
 	CustomFields       json.RawMessage        `json:"custom_fields"`
 	LookupValueIDs     []string               `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
 	CustomLookupFields map[string]interface{} `json:"custom_lookup_fields"`
@@ -395,6 +396,7 @@ type IncidentUpdateRequest struct {
 	Country            string                 `json:"country"`
 	PostalCode         string                 `json:"postal_code"`
 	DueDate            *string                `json:"due_date"`
+	GisLocation        json.RawMessage        `json:"gis_location" validate:"omitempty"`
 	CustomFields       json.RawMessage        `json:"custom_fields"`
 	LookupValueIDs     []string               `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
 	Source             string                 `json:"source" validate:"omitempty,max=100"`
@@ -742,6 +744,7 @@ type IncidentResponse struct {
 	CreatedByName         string                      `json:"created_by_name,omitempty"`
 	CreatedByMobile       string                      `json:"created_by_mobile,omitempty"`
 	EvaluationCount       int                         `json:"evaluation_count,omitempty"`
+	GisLocation           json.RawMessage             `json:"gis_location,omitempty"`
 	CustomFields          string                      `json:"custom_fields,omitempty"`
 	CommentsCount         int                         `json:"comments_count"`
 	AttachmentsCount      int                         `json:"attachments_count"`
@@ -898,6 +901,7 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 		CreatedByMobile:       i.CreatedByMobile,
 		EvaluationCount:       i.EvaluationCount,
 		// TransitionHistory:     i.TransitionHistory, // Include transition history for stats on frontend
+		GisLocation:      json.RawMessage(i.GisLocation),
 		CustomFields:     i.CustomFields,
 		CommentsCount:    len(i.Comments),
 		AttachmentsCount: len(i.Attachments),

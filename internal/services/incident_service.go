@@ -22,6 +22,7 @@ import (
 	"github.com/automax/backend/pkg/constants"
 	pkgutils "github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -504,9 +505,6 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		for key, value := range req.CustomLookupFields {
 			customFields[key] = value
 		}
-		if req.GisLocation != "" {
-			customFields["gis_location"] = req.GisLocation
-		}
 		if len(customFields) > 0 {
 			if b, err := json.Marshal(customFields); err == nil {
 				customFieldsJSON = string(b)
@@ -526,6 +524,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		ReporterPhone:  req.ReporterPhone,
 		CallerIdentity: req.CallerIdentity,
 		CustomFields:   customFieldsJSON,
+		GisLocation:    datatypes.JSON(req.GisLocation),
 		Latitude:       req.Latitude,
 		Longitude:      req.Longitude,
 		Address:        req.Address,
@@ -1231,6 +1230,14 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		}
 	}
 
+	if len(req.GisLocation) > 0 {
+		incident.GisLocation = datatypes.JSON(req.GisLocation)
+		changes = append(changes, models.IncidentFieldChange{
+			FieldName:  "gis_location",
+			FieldLabel: "GIS Location",
+		})
+	}
+
 	// Parse optional UUIDs
 	if req.ClassificationID != nil {
 		if *req.ClassificationID == "" {
@@ -1410,6 +1417,9 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	}
 	if incident.CustomFields != "" {
 		updates["custom_fields"] = incident.CustomFields
+	}
+	if len(incident.GisLocation) > 0 {
+		updates["gis_location"] = incident.GisLocation
 	}
 	// Persist recalculated SLA deadline when lookup values were updated
 	if req.LookupValueIDs != nil && incident.SLADeadline != nil {
