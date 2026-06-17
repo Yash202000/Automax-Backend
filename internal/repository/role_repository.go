@@ -12,6 +12,7 @@ type RoleRepository interface {
 	Create(ctx context.Context, role *models.Role) error
 	FindByID(ctx context.Context, id uuid.UUID) (*models.Role, error)
 	FindByCode(ctx context.Context, code string) (*models.Role, error)
+	FindByName(ctx context.Context, name string) (*models.Role, error)
 	Update(ctx context.Context, role *models.Role) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context) ([]models.Role, error)
@@ -43,6 +44,15 @@ func (r *roleRepository) FindByID(ctx context.Context, id uuid.UUID) (*models.Ro
 func (r *roleRepository) FindByCode(ctx context.Context, code string) (*models.Role, error) {
 	var role models.Role
 	err := r.db.WithContext(ctx).Preload("Permissions").First(&role, "code = ?", code).Error
+	if err != nil {
+		return nil, err
+	}
+	return &role, nil
+}
+
+func (r *roleRepository) FindByName(ctx context.Context, name string) (*models.Role, error) {
+	var role models.Role
+	err := r.db.WithContext(ctx).First(&role, "LOWER(name) = LOWER(?)", name).Error
 	if err != nil {
 		return nil, err
 	}
