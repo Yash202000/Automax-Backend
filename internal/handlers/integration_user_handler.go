@@ -134,6 +134,32 @@ func (h *IntegrationUserHandler) CreateUser(c *fiber.Ctx) error {
 	authResp, err := h.userService.Register(c.UserContext(), registerReq)
 	if err != nil {
 		if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "already in use") {
+			// Look up the existing user to include in the conflict response
+			existingUser, lookupErr := h.userService.GetUserByEmail(c.UserContext(), req.Email)
+			if lookupErr == nil && existingUser != nil {
+				userResp, relErr := h.userService.GetUserByID(c.UserContext(), existingUser.ID)
+				if relErr == nil && userResp != nil {
+					var existingRoleNames []string
+					for _, r := range userResp.Roles {
+						existingRoleNames = append(existingRoleNames, r.Name)
+					}
+					data := IntegrationCreateUserResponse{
+						ID:        userResp.ID,
+						Email:     userResp.Email,
+						Username:  userResp.Username,
+						FirstName: userResp.FirstName,
+						LastName:  userResp.LastName,
+						Phone:     userResp.Phone,
+						IsActive:  userResp.IsActive,
+						Roles:     existingRoleNames,
+					}
+					return c.Status(fiber.StatusConflict).JSON(utils.Response{
+						Success: false,
+						Error:   err.Error(),
+						Data:    data,
+					})
+				}
+			}
 			return utils.ErrorResponse(c, fiber.StatusConflict, err.Error())
 		}
 		if strings.Contains(err.Error(), "user_limit_reached") {
