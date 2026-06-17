@@ -1597,49 +1597,6 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 
 		score := 0
 
-		// Parse workflow's sources and priorities
-		var wfSources []string
-		if w.Sources != "" {
-			json.Unmarshal([]byte(w.Sources), &wfSources)
-		}
-
-		var wfPriorities []int
-		if w.Priorities != "" {
-			json.Unmarshal([]byte(w.Priorities), &wfPriorities)
-		}
-
-		// Check source match - if workflow specifies sources, request source MUST be in the list
-		if len(wfSources) > 0 {
-			sourceMatched := false
-			for _, wfSource := range wfSources {
-				if wfSource == req.Source {
-					sourceMatched = true
-					score += 20 // Source match is highest priority
-					break
-				}
-			}
-			// If workflow has sources but none matched, skip this workflow
-			if !sourceMatched {
-				continue
-			}
-		}
-
-		// Check priority match - if workflow specifies priorities, request priority MUST be in the list
-		if len(wfPriorities) > 0 {
-			priorityMatched := false
-			for _, wfPriority := range wfPriorities {
-				if wfPriority == req.Priority {
-					priorityMatched = true
-					score += 15 // Priority match is high priority
-					break
-				}
-			}
-			// If workflow has priorities but none matched, skip this workflow
-			if !priorityMatched {
-				continue
-			}
-		}
-
 		// Check classification match
 		if classificationID != uuid.Nil && len(w.Classifications) > 0 {
 			for _, c := range w.Classifications {
