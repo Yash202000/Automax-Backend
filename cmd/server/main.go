@@ -251,6 +251,7 @@ func main() {
 	publicFeedbackHandler := handlers.NewIncidentPublicFeedbackHandler(publicFeedbackService, actionLogService)
 	aiQualityFeedbackHandler := handlers.NewAIQualityFeedbackHandler(aiQualityFeedbackRepo)
 	fcmHandler := handlers.NewFCMHandler(fcmService)
+	integrationUserHandler := handlers.NewIntegrationUserHandler(userService, roleRepo, departmentRepo, locationRepo, classificationRepo)
 	sentimentHandler := handlers.NewCallerSentimentHandler(callerSentimentService)
 	goalHandler := handlers.NewGoalHandler(goalService, actionLogService)
 	goalAnalyticsService := services.NewGoalAnalyticsService(db)
@@ -530,6 +531,10 @@ func main() {
 	usersGroup.Get("/:id", authMiddleware.RequirePermission("users:view"), userHandler.GetUser)
 	usersGroup.Put("/:id", authMiddleware.RequirePermission("users:update"), userHandler.AdminUpdateUser)
 	usersGroup.Delete("/:id", authMiddleware.RequirePermission("users:delete"), userHandler.AdminDeleteUser)
+
+	// Integration user provisioning (external teams create users with minimal payload)
+	integrationUsers := v1.Group("/integration/users", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:create"))
+	integrationUsers.Post("/", integrationUserHandler.CreateUser)
 
 	// Category routes (foundational admin taxonomy used by goals — no license gate)
 	categories := admin.Group("/categories", middleware.ActionLogger(middleware.ActionLoggerConfig{
