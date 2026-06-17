@@ -283,6 +283,28 @@ func (h *ClassificationHandler) Delete(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
 	}
 
+	incidents, workflows, users, departments, err := h.repo.CheckDependencies(c.UserContext(), id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to check dependencies")
+	}
+
+	var reasons []string
+	if incidents > 0 {
+		reasons = append(reasons, fmt.Sprintf("%d incident(s) are associated with this classification", incidents))
+	}
+	if workflows > 0 {
+		reasons = append(reasons, "it is linked to one or more workflows")
+	}
+	if users > 0 {
+		reasons = append(reasons, "it is assigned to one or more users")
+	}
+	if departments > 0 {
+		reasons = append(reasons, "it is assigned to one or more departments")
+	}
+	if len(reasons) > 0 {
+		return utils.ErrorResponse(c, fiber.StatusConflict, "Cannot delete this classification: "+strings.Join(reasons, "; "))
+	}
+
 	if err := h.repo.Delete(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
