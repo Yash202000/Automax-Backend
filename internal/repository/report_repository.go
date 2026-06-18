@@ -945,28 +945,46 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 				row["created_at"] = createdAt
 			}
 
-			// task_id column: show "Done" when custom_fields contains a task_id entry.
+			// task_id column: extract task ID value from custom_fields.
+			// Custom fields store task IDs under keys like "lookup:TASK ID".
 			for _, col := range reqColumns {
-				if col.Field != "task_id" && col.Label != "task_id" && col.Label != "Task ID" && col.Label != "TaskID" {
+				if strings.TrimSpace(col.Field) != "task_id" && col.Label != "task_id" && col.Label != "Task ID" && col.Label != "TaskID" {
 					continue
 				}
 				cfRaw, _ := rawRow["custom_fields"].(string)
-				taskDone := ""
+				taskValue := ""
+				catID := ""
 				if cfRaw != "" {
 					var cf map[string]struct {
-						FieldType string `json:"field_type"`
-						Value     string `json:"value"`
+						CategoryID string `json:"category_id"`
+						Value      string `json:"value"`
 					}
 					if json.Unmarshal([]byte(cfRaw), &cf) == nil {
-						for _, entry := range cf {
-							if entry.FieldType == "task_id" && entry.Value != "" {
-								taskDone = "Done"
+						for key, entry := range cf {
+							if strings.Contains(strings.ToUpper(key), "TASK ID") && entry.Value != "" {
+								taskValue = entry.Value
+								catID = entry.CategoryID
 								break
 							}
 						}
 					}
 				}
-				row[col.Label] = taskDone
+				if taskValue == "" {
+					continue
+				}
+				if catID != "" {
+					var redirectURL string
+					r.db.WithContext(ctx).
+						Table("lookup_categories").
+						Select("redirect_url").
+						Where("id = ?", catID).
+						Scan(&redirectURL)
+					if redirectURL != "" {
+						row[col.Label] = strings.ReplaceAll(redirectURL, ":id", taskValue)
+						continue
+					}
+				}
+				row[col.Label] = taskValue
 			}
 
 		} else {
@@ -2572,10 +2590,12 @@ func (r *reportRepository) ExecuteUserPerformanceQuery(ctx context.Context, filt
 		rawRow := map[string]interface{}{
 			"incident_number": e.incidentNumber,
 			"resource_id":     e.incidentNumber,
+			"incident_id":     e.incidentNumber,
 			"status":          e.toStateName,
 			"user":            e.userFullName,
 			"timestamp":       e.transitionedAt,
-			"comment":         commentStr,
+			"comments":        commentStr,
+			"location_name":   e.locationName,
 			"location":        e.locationName,
 			"classification":  e.classificationName,
 			"attachment":      attachStr,

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -1026,6 +1027,21 @@ func (s *reportService) generatePDF(
 					pdf.WriteLinkString(lineH, fmt.Sprintf("Attachment %d", j+1), u)
 				}
 				pdf.SetTextColor(0, 0, 0)
+			} else if isTaskIdCol(renderCols[i].Label) {
+				if val != "" {
+					isURL := strings.HasPrefix(val, "http://") || strings.HasPrefix(val, "https://")
+					pdf.SetXY(curX+1, startY+1)
+					if isURL {
+						displayText := extractTaskLabel(val)
+						pdf.SetFont("Arial", "U", baseFontSize)
+						pdf.SetTextColor(0, 0, 238)
+						pdf.WriteLinkString(lineH, displayText, val)
+						pdf.SetTextColor(0, 0, 0)
+					} else {
+						setFont("", baseFontSize, val)
+						pdf.MultiCell(renderWidths[i]-2, lineH, val, "", "L", false)
+					}
+				}
 			} else {
 				setFont("", baseFontSize, val)
 				align := "L"
@@ -1239,6 +1255,21 @@ func formatExportValue(col string, v interface{}) string {
 
 func isAttachmentCol(label string) bool {
 	return strings.Contains(strings.ToLower(label), "attachment")
+}
+
+func isTaskIdCol(label string) bool {
+	lower := strings.ToLower(label)
+	return strings.Contains(lower, "task_id") || strings.Contains(lower, "task id")
+}
+
+var taskIDPattern = regexp.MustCompile(`[A-Z]+-\d+`)
+
+// extractTaskLabel pulls out the task ID token (e.g. "TSK-06745") from a URL or plain string.
+func extractTaskLabel(val string) string {
+	if m := taskIDPattern.FindString(val); m != "" {
+		return m
+	}
+	return val
 }
 
 func parseAttachmentURLs(val string) []string {
