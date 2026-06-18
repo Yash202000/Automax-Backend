@@ -1863,16 +1863,12 @@ func (s *userService) syncDepartmentAttributesToUser(ctx context.Context, userID
 	}
 
 	// Assign to user (replace with department-derived values)
-	if len(classificationIDs) > 0 {
-		if err := s.userRepo.AssignClassifications(ctx, userID, classificationIDs); err != nil {
-			fmt.Printf("Warning: failed to sync classifications from departments: %v\n", err)
-		}
+	if err := s.userRepo.AssignClassifications(ctx, userID, classificationIDs); err != nil {
+		fmt.Printf("Warning: failed to sync classifications from departments: %v\n", err)
 	}
 
-	if len(locationIDs) > 0 {
-		if err := s.userRepo.AssignLocations(ctx, userID, locationIDs); err != nil {
-			fmt.Printf("Warning: failed to sync locations from departments: %v\n", err)
-		}
+	if err := s.userRepo.AssignLocations(ctx, userID, locationIDs); err != nil {
+		fmt.Printf("Warning: failed to sync locations from departments: %v\n", err)
 	}
 
 	return nil
