@@ -1112,13 +1112,8 @@ func ToTransitionHistoryResponse(h *IncidentTransitionHistory) TransitionHistory
 		resp.PerformedBy = &perfResp
 	}
 
-	if h.Feedbacks != nil && h.Feedbacks.ID != uuid.Nil && h.Feedbacks.Comment != "" {
-		feedbackResponses := IncidentFeedbackResponse{}
-		feedbackResponses.Comment = h.Feedbacks.Comment
-		feedbackResponses.CreatedAt = h.Feedbacks.CreatedAt
-		feedbackResponses.ID = h.Feedbacks.ID
-		// feedbackResponses = ToIncidentFeedbackResponse(h.Feedbacks)
-		resp.Feedbacks = feedbackResponses
+	if h.Feedbacks != nil && h.Feedbacks.ID != uuid.Nil {
+		resp.Feedbacks = ToIncidentFeedbackResponse(h.Feedbacks)
 	}
 	return resp
 }
