@@ -470,21 +470,20 @@ func init() {
 
 // userPerformanceFilterFields covers the joined tables used by ExecuteUserPerformanceQuery.
 var userPerformanceFilterFields = map[string]string{
-	// incident_revisions
-	"performed_by_id":     "incident_revisions.performed_by_id",
-	"revision_created_at": "incident_revisions.created_at",
+	// incident_transition_histories
+	"performed_by_id": "incident_transition_histories.performed_by_id",
+	"transitioned_at": "incident_transition_histories.transitioned_at",
 	// incidents
 	"incident_id":       "incidents.id",
 	"incident_number":   "incidents.incident_number",
 	"classification_id": "incidents.classification_id",
-	"current_state_id":  "incidents.current_state_id",
-	"department_id":     "incidents.department_id",
 	"location_id":       "incidents.location_id",
 	"record_type":       "incidents.record_type",
-	"created_at":        "incidents.created_at",
 	// joined tables
 	"classification_name": "classifications.name",
+	"to_state_name":       "workflow_states.name",
 	"state_name":          "workflow_states.name",
+	"location_name":       "locations.name",
 	"user_email":          "perf_users.email",
 	"user_first_name":     "perf_users.first_name",
 	"user_last_name":      "perf_users.last_name",
@@ -943,6 +942,30 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			}
 			if createdAt != "" {
 				row["created_at"] = createdAt
+			}
+
+			// task_id column: show "Done" when custom_fields contains a task_id entry.
+			for _, col := range reqColumns {
+				if col.Field != "task_id" && col.Label != "task_id" && col.Label != "Task ID" && col.Label != "TaskID" {
+					continue
+				}
+				cfRaw, _ := rawRow["custom_fields"].(string)
+				taskDone := ""
+				if cfRaw != "" {
+					var cf map[string]struct {
+						FieldType string `json:"field_type"`
+						Value     string `json:"value"`
+					}
+					if json.Unmarshal([]byte(cfRaw), &cf) == nil {
+						for _, entry := range cf {
+							if entry.FieldType == "task_id" && entry.Value != "" {
+								taskDone = "Done"
+								break
+							}
+						}
+					}
+				}
+				row[col.Label] = taskDone
 			}
 
 		} else {
@@ -2417,51 +2440,43 @@ func (r *reportRepository) ExecuteUserQuery(ctx context.Context, filters []model
 
 // ExecuteUserPerformanceQuery builds the User Performance report.
 //
-// A single query groups incident_revisions by incident and joins incidents,
-// classifications, workflow_states, and users so applyFilters can attach WHERE
-// clauses across all tables. Comments and attachments are bulk-fetched after.
+// Each row represents a single transition from incident_transition_histories so
+// callers can see exactly who performed each state change, when, with what comment,
+// and what attachments were uploaded during that transition.
 //
 // Filterable fields (use as filter.Field in payload):
 //
-//	performed_by_id | revision_created_at | incident_id | incident_number |
-//	classification_id | current_state_id | department_id | location_id |
-//	record_type | created_at | classification_name | state_name |
+//	performed_by_id | transitioned_at | incident_id | incident_number |
+//	classification_id | location_id | record_type |
+//	classification_name | to_state_name | state_name | location_name |
 //	user_email | user_first_name | user_last_name
 //
 // Output col.Field names:
 //
-//	timestamp | user | resource_id | classification | status | comments | attachments
+//	incident_number | resource_id | status | user | timestamp | comment | location | classification | attachment | attachments
 func (r *reportRepository) ExecuteUserPerformanceQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
 	hostname, _ := ctx.Value(constants.ContextKeys.HOSTNAME).(string)
 	protocol, _ := ctx.Value(constants.ContextKeys.PROTOCOL).(string)
 	token, _ := ctx.Value(constants.ContextKeys.Token).(string)
 	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
 
-	// buildBase returns a fresh *gorm.DB each time so GORM's statement does not
-	// accumulate across terminal calls (COUNT then Rows), which would duplicate JOINs.
 	buildBase := func() *gorm.DB {
 		q := r.db.WithContext(ctx).
-			Table("incident_revisions").
-			Joins("JOIN incidents ON incidents.id = incident_revisions.incident_id").
-			Joins("LEFT JOIN classifications ON classifications.id = incidents.classification_id").
-			Joins("LEFT JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
-			Joins("LEFT JOIN users perf_users ON perf_users.id = incident_revisions.performed_by_id")
+			Table("incident_transition_histories").
+			Joins("INNER JOIN incidents ON incidents.id = incident_transition_histories.incident_id").
+			Joins("LEFT JOIN workflow_states ON workflow_states.id = incident_transition_histories.to_state_id").
+			Joins("LEFT JOIN users perf_users ON perf_users.id = incident_transition_histories.performed_by_id").
+			Joins("LEFT JOIN locations ON locations.id = incidents.location_id").
+			Joins("LEFT JOIN classifications ON classifications.id = incidents.classification_id")
 		return r.applyFilters(ctx, q, filters)
 	}
 
-	// ── COUNT distinct incidents (respects all filters) ───────────────────────
 	var total int64
-	if err := buildBase().
-		Select("COUNT(DISTINCT incident_revisions.incident_id)").
-		Scan(&total).Error; err != nil {
+	if err := buildBase().Select("COUNT(*)").Scan(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	// ── Paginated data query ──────────────────────────────────────────────────
-	offset := (page - 1) * limit
-
-	// Determine sort order. Default: latest revision first.
-	orderClause := "MAX(incident_revisions.created_at) DESC"
+	orderClause := "incident_transition_histories.transitioned_at DESC"
 	if sorting != nil && sorting.Field != "" {
 		dir := "ASC"
 		if strings.EqualFold(sorting.Direction, "desc") {
@@ -2472,21 +2487,18 @@ func (r *reportRepository) ExecuteUserPerformanceQuery(ctx context.Context, filt
 		}
 	}
 
+	offset := (page - 1) * limit
 	dataRows, err := buildBase().
 		Select(
-			"incidents.id::text AS incident_id, " +
-				"MAX(incident_revisions.created_at) AS latest_rev_at, " +
+			"incident_transition_histories.id::text AS transition_id, " +
+				"incident_transition_histories.transitioned_at, " +
 				"incidents.incident_number, " +
-				"COALESCE(classifications.name, '') AS classification_name, " +
-				"COALESCE(workflow_states.name, '') AS current_state_name, " +
+				"COALESCE(workflow_states.name, '') AS to_state_name, " +
 				"COALESCE(perf_users.first_name, '') AS user_first_name, " +
 				"COALESCE(perf_users.last_name, '') AS user_last_name, " +
-				"COALESCE(perf_users.email, '') AS user_email",
-		).
-		Group(
-			"incidents.id, incidents.incident_number, " +
-				"classifications.name, workflow_states.name, " +
-				"perf_users.first_name, perf_users.last_name, perf_users.email",
+				"COALESCE(perf_users.email, '') AS user_email, " +
+				"COALESCE(locations.name, '') AS location_name, " +
+				"COALESCE(classifications.name, '') AS classification_name",
 		).
 		Order(orderClause).
 		Offset(offset).
@@ -2497,77 +2509,68 @@ func (r *reportRepository) ExecuteUserPerformanceQuery(ctx context.Context, filt
 	}
 	defer dataRows.Close()
 
-	type perfEntry struct {
-		incidentID         string
-		latestAt           time.Time
+	type transEntry struct {
+		transitionID       string
+		transitionedAt     time.Time
 		incidentNumber     string
-		classificationName string
-		currentStateName   string
+		toStateName        string
 		userFullName       string
+		locationName       string
+		classificationName string
 	}
-	var entries []perfEntry
-	incidentIDs := make([]string, 0)
+
+	var entries []transEntry
+	transitionIDs := make([]string, 0)
 
 	for dataRows.Next() {
 		var (
-			incID, incNumber, classificationName, stateName string
-			firstName, lastName, email                      string
-			latestAt                                        time.Time
+			transID, incNumber, stateName, firstName, lastName, email string
+			locationName, classificationName                          string
+			transitionedAt                                            time.Time
 		)
-		if err := dataRows.Scan(&incID, &latestAt, &incNumber, &classificationName, &stateName, &firstName, &lastName, &email); err != nil {
+		if err := dataRows.Scan(&transID, &transitionedAt, &incNumber, &stateName, &firstName, &lastName, &email, &locationName, &classificationName); err != nil {
 			continue
 		}
 		fullName := strings.TrimSpace(firstName + " " + lastName)
 		if fullName == "" {
 			fullName = email
 		}
-		entries = append(entries, perfEntry{
-			incidentID:         incID,
-			latestAt:           latestAt,
+		entries = append(entries, transEntry{
+			transitionID:       transID,
+			transitionedAt:     transitionedAt,
 			incidentNumber:     incNumber,
-			classificationName: classificationName,
-			currentStateName:   stateName,
+			toStateName:        stateName,
 			userFullName:       fullName,
+			locationName:       locationName,
+			classificationName: classificationName,
 		})
-		incidentIDs = append(incidentIDs, incID)
+		transitionIDs = append(transitionIDs, transID)
 	}
 
 	if len(entries) == 0 {
 		return []map[string]interface{}{}, total, nil
 	}
 
-	// ── Bulk-fetch comments and attachments ───────────────────────────────────
-	commentsMap, _ := r.fetchGeneralComments(ctx, incidentIDs)
-	allAttachMap, _ := r.fetchAllAttachments(ctx, incidentIDs, protocol, hostname, token)
+	commentsMap, _ := r.fetchCommentsByTransition(ctx, transitionIDs)
+	attachMap, _ := r.fetchAttachmentsByTransition(ctx, transitionIDs, protocol, hostname, token)
 
-	// ── Build result rows ─────────────────────────────────────────────────────
 	results := make([]map[string]interface{}, 0, len(entries))
 	for _, e := range entries {
-		var commentsStr string
-		if comments, ok := commentsMap[e.incidentID]; ok {
-			parts := make([]string, 0, len(comments))
-			for _, c := range comments {
-				if s, _ := c["content"].(string); s != "" {
-					parts = append(parts, s)
-				}
-			}
-			commentsStr = strings.Join(parts, " | ")
-		}
-
-		var attachmentsStr string
-		if urls := allAttachMap[e.incidentID]; len(urls) > 0 {
-			attachmentsStr = strings.Join(urls, " | ")
-		}
-
-		// Internal field → value (col.Field names)
+		commentStr := commentsMap[e.transitionID]
+		attachURLs := attachMap[e.transitionID]
+		attachStr := strings.Join(attachURLs, " | ")
+		log.Println(e.locationName)
 		rawRow := map[string]interface{}{
-			"timestamp":      e.latestAt,
-			"user":           e.userFullName,
-			"resource_id":    e.incidentNumber,
-			"classification": e.classificationName,
-			"status":         e.currentStateName,
-			"comments":       commentsStr,
-			"attachments":    attachmentsStr,
+			"incident_number": e.incidentNumber,
+			"resource_id":     e.incidentNumber,
+			"status":          e.toStateName,
+			"user":            e.userFullName,
+			"timestamp":       e.transitionedAt,
+			"comment":         commentStr,
+			"location":        e.locationName,
+			"classification":  e.classificationName,
+			"attachment":      attachStr,
+			"attachments":     attachStr,
 		}
 
 		row := make(map[string]interface{})
@@ -2576,12 +2579,13 @@ func (r *reportRepository) ExecuteUserPerformanceQuery(ctx context.Context, filt
 				row[col.Label] = rawRow[col.Field]
 			}
 		} else {
-			row["Timestamp"] = rawRow["timestamp"]
-			row["User"] = rawRow["user"]
-			row["Resource ID"] = rawRow["resource_id"]
-			row["Classification"] = rawRow["classification"]
+			row["Incident Number"] = rawRow["incident_number"]
 			row["Status"] = rawRow["status"]
-			row["Comments"] = rawRow["comments"]
+			row["User"] = rawRow["user"]
+			row["Date & Time"] = rawRow["timestamp"]
+			row["Comment"] = rawRow["comment"]
+			row["Location"] = rawRow["location"]
+			row["Classification"] = rawRow["classification"]
 			row["Attachments"] = rawRow["attachments"]
 		}
 
@@ -2589,6 +2593,63 @@ func (r *reportRepository) ExecuteUserPerformanceQuery(ctx context.Context, filt
 	}
 
 	return results, total, nil
+}
+
+// fetchCommentsByTransition returns the first (oldest) comment content per transition ID.
+func (r *reportRepository) fetchCommentsByTransition(ctx context.Context, transitionIDs []string) (map[string]string, error) {
+	result := make(map[string]string)
+	if len(transitionIDs) == 0 {
+		return result, nil
+	}
+	rows, err := r.db.WithContext(ctx).Raw(`
+		SELECT DISTINCT ON (ic.transition_history_id)
+			ic.transition_history_id::text,
+			ic.content
+		FROM incident_comments ic
+		WHERE ic.transition_history_id::text IN (?)
+		  AND ic.deleted_at IS NULL
+		ORDER BY ic.transition_history_id, ic.created_at ASC
+	`, transitionIDs).Rows()
+	if err != nil {
+		return result, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tid, content string
+		if err := rows.Scan(&tid, &content); err != nil {
+			continue
+		}
+		result[tid] = content
+	}
+	return result, nil
+}
+
+// fetchAttachmentsByTransition returns signed preview URLs for attachments grouped by transition ID.
+func (r *reportRepository) fetchAttachmentsByTransition(ctx context.Context, transitionIDs []string, protocol, hostname, token string) (map[string][]string, error) {
+	result := make(map[string][]string)
+	if len(transitionIDs) == 0 || hostname == "" {
+		return result, nil
+	}
+	rows, err := r.db.WithContext(ctx).Raw(`
+		SELECT ia.transition_history_id::text, ia.id::text
+		FROM incident_attachments ia
+		WHERE ia.transition_history_id::text IN (?)
+		  AND ia.deleted_at IS NULL
+		ORDER BY ia.transition_history_id, ia.created_at ASC
+	`, transitionIDs).Rows()
+	if err != nil {
+		return result, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tid, attachID string
+		if err := rows.Scan(&tid, &attachID); err != nil {
+			continue
+		}
+		url := protocol + "://" + hostname + "/api/v1/attachments/" + attachID + "/preview?token=" + token
+		result[tid] = append(result[tid], url)
+	}
+	return result, nil
 }
 
 func (r *reportRepository) ExecuteWorkflowQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {

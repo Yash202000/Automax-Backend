@@ -534,15 +534,16 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 	))
 
 	// ── Logo Bar + Title ─────────────────────────────────────────────────────
-	url := utils.GenerateAppURL(c.UserContext())
-	if leftLogoB64 == "" {
-		leftLogoB64 = fetchLogoBase64(url + "/epm-logo.png")
+	// url := utils.GenerateAppURL(c.UserContext())
+	// if leftLogoB64 == "" {
+	// 	leftLogoB64 = fetchLogoBase64(url + "/epm-logo.png")
 
-	}
+	// }
 
-	if rightLogoB64 == "" {
-		rightLogoB64 = fetchLogoBase64(url + "/callcenter.png")
-	} // ── Logo Bar + Title ─────────────────────────────────────────────────────
+	// if rightLogoB64 == "" {
+	// 	rightLogoB64 = fetchLogoBase64(url + "/callcenter.png")
+	// }
+	// ── Logo Bar + Title ─────────────────────────────────────────────────────
 
 	// Logos row
 	b.WriteString(`<div class="logo-bar">`)

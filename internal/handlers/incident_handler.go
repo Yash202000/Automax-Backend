@@ -1712,10 +1712,10 @@ func (h *IncidentHandler) buildEpmPortalResponse(c *fiber.Ctx, incident *models.
 		}
 	}
 
-	// GIS location: expose the raw custom_fields as a parsed JSON object.
-	if incident.CustomFields != "" {
+	// GIS location: read from the dedicated gis_location column.
+	if len(incident.GisLocation) > 0 {
 		var cf interface{}
-		if err := json.Unmarshal([]byte(incident.CustomFields), &cf); err == nil {
+		if err := json.Unmarshal(incident.GisLocation, &cf); err == nil {
 			resp.GisLocation = cf
 		}
 	}
