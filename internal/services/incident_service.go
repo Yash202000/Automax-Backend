@@ -275,8 +275,8 @@ func (s *incidentService) calculateSLADeadline(ctx context.Context, classificati
 	return deadline, nil
 }
 
-// userHasAssignmentRole returns true if the user holds at least one of the given roles.
-func (s *incidentService) userHasAssignmentRole(ctx context.Context, userID uuid.UUID, assignmentRoles []models.Role) bool {
+// UserHasAssignmentRole returns true if the user holds at least one of the given roles.
+func (s *incidentService) UserHasAssignmentRole(ctx context.Context, userID uuid.UUID, assignmentRoles []models.Role) bool {
 	if len(assignmentRoles) == 0 {
 		return false
 	}
@@ -652,7 +652,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		//   2. Web-created incidents by non-agent (admin, super-admin) → round-robin
 		//   3. Other sources → round-robin among online eligible agents (never assign to offline)
 		if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.WEB) &&
-			s.userHasAssignmentRole(ctx, reporterID, initialState.AssignmentRoles) {
+			s.UserHasAssignmentRole(ctx, reporterID, initialState.AssignmentRoles) {
 			if err := s.incidentRepo.AssignIncident(ctx, incident.ID, reporterID); err != nil {
 				fmt.Printf("Warning: creation assignment (self-assign for web) failed: %v\n", err)
 			} else {
