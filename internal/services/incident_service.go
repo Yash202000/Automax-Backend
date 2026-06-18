@@ -275,6 +275,27 @@ func (s *incidentService) calculateSLADeadline(ctx context.Context, classificati
 	return deadline, nil
 }
 
+// userHasAssignmentRole returns true if the user holds at least one of the given roles.
+func (s *incidentService) userHasAssignmentRole(ctx context.Context, userID uuid.UUID, assignmentRoles []models.Role) bool {
+	if len(assignmentRoles) == 0 {
+		return false
+	}
+	userRoles, err := s.userRepo.GetUserRoles(ctx, userID)
+	if err != nil || len(userRoles) == 0 {
+		return false
+	}
+	allowed := make(map[uuid.UUID]bool, len(assignmentRoles))
+	for _, r := range assignmentRoles {
+		allowed[r.ID] = true
+	}
+	for _, r := range userRoles {
+		if allowed[r.ID] {
+			return true
+		}
+	}
+	return false
+}
+
 // roundRobinPoolKey generates a deterministic key for a set of role IDs.
 // Only role IDs are used — classification/location/department filter the pool
 // at query time but should not create separate round-robin sequences.
@@ -627,9 +648,11 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 	distributeAssign := strings.TrimSpace(os.Getenv("DISTRIBUTE_INCIDENT_ASSIGN"))
 	if strings.EqualFold(distributeAssign, "true") {
 		// DISTRIBUTE_INCIDENT_ASSIGN=true mode:
-		//   1. Web-created incidents → assign to the creator agent (always)
-		//   2. Other sources → round-robin among online eligible agents (never assign to offline)
-		if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.WEB) {
+		//   1. Web-created incidents by an eligible agent → self-assign to creator
+		//   2. Web-created incidents by non-agent (admin, super-admin) → round-robin
+		//   3. Other sources → round-robin among online eligible agents (never assign to offline)
+		if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.WEB) &&
+			s.userHasAssignmentRole(ctx, reporterID, initialState.AssignmentRoles) {
 			if err := s.incidentRepo.AssignIncident(ctx, incident.ID, reporterID); err != nil {
 				fmt.Printf("Warning: creation assignment (self-assign for web) failed: %v\n", err)
 			} else {
