@@ -42,6 +42,13 @@ func (h *RoleHandler) CreateRole(c *fiber.Ctx) error {
 		})
 	}
 
+	if existing, _ := h.roleRepo.FindByName(c.UserContext(), req.Name); existing != nil {
+		return utils.ErrorResponse(c, fiber.StatusConflict, "This Role already exists")
+	}
+	if existing, _ := h.roleRepo.FindByCode(c.UserContext(), req.Code); existing != nil {
+		return utils.ErrorResponse(c, fiber.StatusConflict, "This Role already exists")
+	}
+
 	role := &models.Role{
 		Name:        req.Name,
 		Code:        req.Code,
@@ -52,7 +59,7 @@ func (h *RoleHandler) CreateRole(c *fiber.Ctx) error {
 
 	if err := h.roleRepo.Create(c.UserContext(), role); err != nil {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			return utils.ErrorResponse(c, fiber.StatusConflict, "A role with this code already exists")
+			return utils.ErrorResponse(c, fiber.StatusConflict, "This Role already exists")
 		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -107,7 +114,10 @@ func (h *RoleHandler) UpdateRole(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Role not found")
 	}
 
-	if req.Name != "" {
+	if req.Name != "" && !strings.EqualFold(req.Name, role.Name) {
+		if existing, _ := h.roleRepo.FindByName(c.UserContext(), req.Name); existing != nil && existing.ID != id {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "This Role already exists")
+		}
 		role.Name = req.Name
 	}
 	if req.Description != "" {
@@ -119,7 +129,7 @@ func (h *RoleHandler) UpdateRole(c *fiber.Ctx) error {
 
 	if err := h.roleRepo.Update(c.UserContext(), role); err != nil {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			return utils.ErrorResponse(c, fiber.StatusConflict, "A role with this code already exists")
+			return utils.ErrorResponse(c, fiber.StatusConflict, "This Role already exists")
 		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
