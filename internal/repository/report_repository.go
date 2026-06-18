@@ -483,7 +483,7 @@ var userPerformanceFilterFields = map[string]string{
 	// joined tables
 	"classification_name": "classifications.name",
 	"to_state_name":       "workflow_states.name",
-	"state_name":          "workflow_states.name",
+	"state_us":            "workflow_states.name",
 	"location_name":       "locations.name",
 	"user_email":          "perf_users.email",
 	"user_first_name":     "perf_users.first_name",
