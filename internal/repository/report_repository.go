@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -2018,7 +2019,11 @@ func (r *reportRepository) scanAttachmentURLs(ctx context.Context, query string,
 		if err := rows.Scan(&incidentID, &attachID); err != nil {
 			continue
 		}
-		url := protocol + "://" + hostname + "/api/v1/attachments/" + attachID + "/preview?token=" + token
+		apiPrefix := "/api/v1/attachments/"
+		if path := os.Getenv("VD2_STAGING_API_PREFIX"); path != "" {
+			apiPrefix = fmt.Sprintf("/%s%s", path, apiPrefix)
+		}
+		url := protocol + "://" + hostname + apiPrefix + attachID + "/preview?token=" + token
 		result[incidentID] = append(result[incidentID], url)
 	}
 	return result, nil
@@ -2235,7 +2240,11 @@ func (r *reportRepository) fetchTransitionEnrichments(
 				continue
 			}
 			ensure(iID, code)
-			url := protocol + "://" + hostname + "/api/v1/attachments/" + attachID + "/preview?token=" + token
+			apiPrefix := "/api/v1/attachments/"
+			if path := os.Getenv("VD2_STAGING_API_PREFIX"); path != "" {
+				apiPrefix = fmt.Sprintf("/%s%s", path, apiPrefix)
+			}
+			url := protocol + "://" + hostname + apiPrefix + attachID + "/preview?token=" + token
 			e := result[iID][code]
 			e.Attachments = append(e.Attachments, url)
 			result[iID][code] = e
@@ -2646,7 +2655,11 @@ func (r *reportRepository) fetchAttachmentsByTransition(ctx context.Context, tra
 		if err := rows.Scan(&tid, &attachID); err != nil {
 			continue
 		}
-		url := protocol + "://" + hostname + "/api/v1/attachments/" + attachID + "/preview?token=" + token
+		apiPrefix := "/api/v1/attachments/"
+		if path := os.Getenv("VD2_STAGING_API_PREFIX"); path != "" {
+			apiPrefix = fmt.Sprintf("/%s%s", path, apiPrefix)
+		}
+		url := protocol + "://" + hostname + apiPrefix + attachID + "/preview?token=" + token
 		result[tid] = append(result[tid], url)
 	}
 	return result, nil
