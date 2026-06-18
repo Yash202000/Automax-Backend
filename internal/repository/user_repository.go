@@ -50,6 +50,7 @@ type UserRepository interface {
 	// FindByDepartmentAndRole returns active users belonging to departmentID AND holding roleID.
 	// Either filter can be nil to skip it.
 	FindByDepartmentAndRole(ctx context.Context, departmentID, roleID *uuid.UUID) ([]models.User, error)
+	FindByDepartmentID(ctx context.Context, departmentID uuid.UUID) ([]models.User, error)
 	UpdateProfile(ctx context.Context, user map[string]interface{}) error
 	FindByPermissionCode(ctx context.Context, permissionCode string) ([]models.User, error)
 	IsUserOnline(ctx context.Context, userID uuid.UUID) (bool, error)
@@ -356,6 +357,47 @@ func (r *userRepository) ListByDepartment(ctx context.Context, departmentID uuid
 	}
 
 	return users, total, nil
+}
+
+func (r *userRepository) FindByDepartmentID(ctx context.Context, departmentID uuid.UUID) ([]models.User, error) {
+	var userIDs []uuid.UUID
+
+	r.db.WithContext(ctx).Model(&models.User{}).
+		Where("department_id = ?", departmentID).
+		Pluck("id", &userIDs)
+
+	var m2mIDs []uuid.UUID
+	r.db.WithContext(ctx).Table("user_departments").
+		Where("department_id = ?", departmentID).
+		Pluck("user_id", &m2mIDs)
+
+	idSet := make(map[uuid.UUID]bool)
+	for _, id := range userIDs {
+		idSet[id] = true
+	}
+	for _, id := range m2mIDs {
+		idSet[id] = true
+	}
+
+	mergedIDs := make([]uuid.UUID, 0, len(idSet))
+	for id := range idSet {
+		mergedIDs = append(mergedIDs, id)
+	}
+
+	if len(mergedIDs) == 0 {
+		return nil, nil
+	}
+
+	var users []models.User
+	err := r.db.WithContext(ctx).
+		Preload("Departments").
+		Preload("Locations").
+		Preload("Classifications").
+		Preload("Roles").
+		Where("id IN ?", mergedIDs).
+		Find(&users).Error
+
+	return users, err
 }
 
 func (r *userRepository) ExistsByEmail(ctx context.Context, email string) (bool, error) {

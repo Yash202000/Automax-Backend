@@ -217,7 +217,7 @@ func main() {
 	categoryHandler := handlers.NewCategoryHandler(categoryService)
 	classificationHandler := handlers.NewClassificationHandler(classificationRepo)
 	locationHandler := handlers.NewLocationHandler(locationRepo)
-	departmentHandler := handlers.NewDepartmentHandler(departmentRepo)
+	departmentHandler := handlers.NewDepartmentHandler(departmentRepo, userRepo)
 	roleHandler := handlers.NewRoleHandler(roleRepo, permissionRepo)
 	actionLogHandler := handlers.NewActionLogHandler(actionLogService, validate)
 	callLogHandler := handlers.NewCallLogHandler(callLogService, validate, userService, minioStorage)

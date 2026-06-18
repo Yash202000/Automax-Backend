@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -17,12 +18,14 @@ import (
 
 type DepartmentHandler struct {
 	repo      repository.DepartmentRepository
+	userRepo  repository.UserRepository
 	validator *validator.Validate
 }
 
-func NewDepartmentHandler(repo repository.DepartmentRepository) *DepartmentHandler {
+func NewDepartmentHandler(repo repository.DepartmentRepository, userRepo repository.UserRepository) *DepartmentHandler {
 	return &DepartmentHandler{
 		repo:      repo,
+		userRepo:  userRepo,
 		validator: validator.New(),
 	}
 }
@@ -88,6 +91,54 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 	department, _ = h.repo.FindByID(c.UserContext(), department.ID)
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, "Department created", models.ToDepartmentResponse(department))
+}
+
+// cascadeToUsers syncs department location/classification/role assignments to all users in this department
+func (h *DepartmentHandler) cascadeToUsers(ctx context.Context, departmentID uuid.UUID) {
+	users, err := h.userRepo.FindByDepartmentID(ctx, departmentID)
+	if err != nil || len(users) == 0 {
+		return
+	}
+
+	for _, user := range users {
+		// Collect classifications from all user's departments
+		classIDMap := make(map[uuid.UUID]bool)
+		locIDMap := make(map[uuid.UUID]bool)
+		roleIDMap := make(map[uuid.UUID]bool)
+
+		for _, dept := range user.Departments {
+			fullDept, err := h.repo.FindByID(ctx, dept.ID)
+			if err != nil {
+				continue
+			}
+			for _, c := range fullDept.Classifications {
+				classIDMap[c.ID] = true
+			}
+			for _, l := range fullDept.Locations {
+				locIDMap[l.ID] = true
+			}
+			for _, r := range fullDept.Roles {
+				roleIDMap[r.ID] = true
+			}
+		}
+
+		classIDs := make([]uuid.UUID, 0, len(classIDMap))
+		for id := range classIDMap {
+			classIDs = append(classIDs, id)
+		}
+		locIDs := make([]uuid.UUID, 0, len(locIDMap))
+		for id := range locIDMap {
+			locIDs = append(locIDs, id)
+		}
+		roleIDs := make([]uuid.UUID, 0, len(roleIDMap))
+		for id := range roleIDMap {
+			roleIDs = append(roleIDs, id)
+		}
+
+		_ = h.userRepo.AssignClassifications(ctx, user.ID, classIDs)
+		_ = h.userRepo.AssignLocations(ctx, user.ID, locIDs)
+		_ = h.userRepo.AssignRoles(ctx, user.ID, roleIDs)
+	}
 }
 
 func (h *DepartmentHandler) GetByID(c *fiber.Ctx) error {
@@ -185,14 +236,23 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 	}
 
 	// Update associations if provided
+	associationsChanged := false
 	if req.LocationIDs != nil {
 		h.repo.AssignLocations(c.UserContext(), department.ID, req.LocationIDs)
+		associationsChanged = true
 	}
 	if req.ClassificationIDs != nil {
 		h.repo.AssignClassifications(c.UserContext(), department.ID, req.ClassificationIDs)
+		associationsChanged = true
 	}
 	if req.RoleIDs != nil {
 		h.repo.AssignRoles(c.UserContext(), department.ID, req.RoleIDs)
+		associationsChanged = true
+	}
+
+	// Cascade changes to all users in this department
+	if associationsChanged {
+		h.cascadeToUsers(c.UserContext(), department.ID)
 	}
 
 	// Reload with associations
