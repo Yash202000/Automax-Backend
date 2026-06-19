@@ -2930,7 +2930,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				return nil, errors.New(errMsg)
 			}
 		case "feedback":
-			if req.Feedback == nil || req.Feedback.Rating == 0 {
+			if req.Feedback == nil {
 				errMsg := requirement.ErrorMessage
 				if errMsg == "" {
 					errMsg = "Feedback is required for this transition"
@@ -2984,7 +2984,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	}
 
 	// If feedback was provided, create a feedback record
-	if req.Feedback != nil && req.Feedback.Rating > 0 {
+	if req.Feedback != nil {
 		feedback := &models.IncidentFeedback{
 			IncidentID:          incidentID,
 			Rating:              req.Feedback.Rating,

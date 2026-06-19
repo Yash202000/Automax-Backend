@@ -1059,12 +1059,15 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 				}
 			}
 		}
+		log.Println("Code found : ", byCode)
 		dynSuffixes := []string{"_at", "_by", "_comment", "_feedback", "_attachment", "_attachments"}
 		neededCodes := map[string]bool{}
 		for _, col := range reqColumns {
+			log.Println("column:", col.Field)
 			for code := range byCode {
 				for _, suf := range dynSuffixes {
 					if col.Field == code+suf {
+						log.Println("MATCH", code)
 						neededCodes[code] = true
 					}
 				}
