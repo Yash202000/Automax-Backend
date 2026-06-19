@@ -764,10 +764,11 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 
 	// Counts by state
 	type stateCount struct {
-		StateID   uuid.UUID `gorm:"column:state_id"`
-		StateName string    `gorm:"column:state_name"`
-		StateCode string    `gorm:"column:state_code"`
-		Count     int64     `gorm:"column:count"`
+		StateID     uuid.UUID `gorm:"column:state_id"`
+		StateName   string    `gorm:"column:state_name"`
+		StateNameAr string    `gorm:"column:state_name_ar"`
+		StateCode   string    `gorm:"column:state_code"`
+		Count       int64     `gorm:"column:count"`
 	}
 
 	var stateCounts []stateCount
@@ -813,7 +814,7 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 	}
 
 	if err := stateQuery.
-		Group("workflow_states.id, workflow_states.name").
+		Group("workflow_states.id, workflow_states.name, workflow_states.name_ar").
 		Scan(&stateCounts).Error; err != nil {
 		return nil, err
 	}
@@ -825,9 +826,10 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 		stats.ByState[sc.StateName] = sc.Count
 
 		stats.ByStateDetails = append(stats.ByStateDetails, models.StateStatDetail{
-			ID:    sc.StateID,
-			Name:  sc.StateName,
-			Count: sc.Count,
+			ID:     sc.StateID,
+			Name:   sc.StateName,
+			NameAr: sc.StateNameAr,
+			Count:  sc.Count,
 		})
 
 		if sc.StateCode == "resolved" {
