@@ -1003,7 +1003,7 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 		WorkflowName string    `gorm:"column:workflow_name"`
 		StateID      uuid.UUID `gorm:"column:state_id"`
 		StateName    string    `gorm:"column:state_name"`
-		StateNameAr  string    `gorm:"column:state_name"`
+		StateNameAr  string    `gorm:"column:state_name_ar"`
 		StateCode    string    `gorm:"column:state_code"`
 		StateType    string    `gorm:"column:state_type"`
 		Count        int64     `gorm:"column:count"`
@@ -1017,6 +1017,7 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 				workflows.name  as workflow_name,
 				workflow_states.id         as state_id,
 				workflow_states.name       as state_name,
+				workflow_states.name_ar    as state_name_ar,
 				workflow_states.code       as state_code,
 				workflow_states.state_type as state_type,
 				count(*) as count
@@ -1027,7 +1028,7 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 	)
 
 	if err := stateQuery.
-		Group(`workflows.id, workflows.name, workflow_states.id, workflow_states.name, workflow_states.code, workflow_states.state_type`).
+		Group(`workflows.id, workflows.name, workflow_states.id, workflow_states.name, workflow_states.name_ar, workflow_states.code, workflow_states.state_type`).
 		Order("workflows.name ASC, workflow_states.state_type ASC").
 		Scan(&stateCounts).Error; err != nil {
 		return nil, err
