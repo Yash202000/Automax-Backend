@@ -1003,6 +1003,7 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 		WorkflowName string    `gorm:"column:workflow_name"`
 		StateID      uuid.UUID `gorm:"column:state_id"`
 		StateName    string    `gorm:"column:state_name"`
+		StateNameAr  string    `gorm:"column:state_name"`
 		StateCode    string    `gorm:"column:state_code"`
 		StateType    string    `gorm:"column:state_type"`
 		Count        int64     `gorm:"column:count"`
@@ -1090,9 +1091,10 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 			wf := workflowMap[sc.WorkflowID]
 			wf.ByState[sc.StateName] += sc.Count
 			wf.ByStateDetails = append(wf.ByStateDetails, models.StateStatDetail{
-				ID:    sc.StateID,
-				Name:  sc.StateName,
-				Count: sc.Count,
+				ID:     sc.StateID,
+				Name:   sc.StateName,
+				NameAr: sc.StateNameAr,
+				Count:  sc.Count,
 			})
 		}
 		for _, wf := range workflowMap {
