@@ -433,7 +433,7 @@ type IncidentTransitionRequest struct {
 }
 
 type IncidentFeedbackRequest struct {
-	Rating  int    `json:"rating" validate:"omitempty,min=1,max=5"`
+	Rating  int    `json:"rating" validate:"omitempty,min=0,max=5"`
 	Comment string `json:"comment"`
 }
 
@@ -829,9 +829,10 @@ type AvailableTransitionResponse struct {
 }
 
 type StateStatDetail struct {
-	ID    uuid.UUID `json:"id"`
-	Name  string    `json:"name"`
-	Count int64     `json:"count"`
+	ID     uuid.UUID `json:"id"`
+	Name   string    `json:"name"`
+	NameAr string    `json:"name_ar"`
+	Count  int64     `json:"count"`
 }
 
 type IncidentStatsResponse struct {

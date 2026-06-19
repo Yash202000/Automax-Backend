@@ -300,9 +300,10 @@ func main() {
 	loginRateLimitMiddleware := middleware.LoginRateLimitMiddleware(cfg, redisClient, userService)
 
 	app := fiber.New(fiber.Config{
-		AppName:      "Automax Backend",
-		ErrorHandler: customErrorHandler,
-		BodyLimit:    100 * 1024 * 1024, // 100MB max body size
+		AppName:        "Automax Backend",
+		ErrorHandler:   customErrorHandler,
+		BodyLimit:      100 * 1024 * 1024, // 100MB max body size
+		ReadBufferSize: 64 * 1024,
 	})
 
 	app.Use(recover.New())
