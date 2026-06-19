@@ -236,6 +236,37 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 		}
 	}
 
+	// Restrict incident list by the user's assigned classifications
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
+	if err == nil && user != nil && !user.IsSuperAdmin {
+		userClassIDs := make([]string, 0, len(user.Classifications))
+		for _, cls := range user.Classifications {
+			userClassIDs = append(userClassIDs, cls.ID.String())
+		}
+		if len(userClassIDs) > 0 {
+			if len(filter.ClassificationID) > 0 {
+				// Intersect with request's classification filter
+				requested := make(map[string]bool, len(filter.ClassificationID))
+				for _, id := range filter.ClassificationID {
+					requested[id] = true
+				}
+				var intersected []string
+				for _, id := range userClassIDs {
+					if requested[id] {
+						intersected = append(intersected, id)
+					}
+				}
+				filter.ClassificationID = intersected
+			} else {
+				filter.ClassificationID = userClassIDs
+			}
+		} else {
+			// User has no classifications assigned — nothing should be visible
+			filter.ClassificationID = []string{"00000000-0000-0000-0000-000000000000"}
+		}
+	}
+
 	incidents, total, err := h.service.ListIncidents(c.UserContext(), filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
