@@ -6,6 +6,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
@@ -32,7 +33,7 @@ func NewRoleHandler(roleRepo repository.RoleRepository, permissionRepo repositor
 func (h *RoleHandler) CreateRole(c *fiber.Ctx) error {
 	var req models.RoleCreateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -43,10 +44,10 @@ func (h *RoleHandler) CreateRole(c *fiber.Ctx) error {
 	}
 
 	if existing, _ := h.roleRepo.FindByName(c.UserContext(), req.Name); existing != nil {
-		return utils.ErrorResponse(c, fiber.StatusConflict, "This Role already exists")
+		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "role_already_exists"))
 	}
 	if existing, _ := h.roleRepo.FindByCode(c.UserContext(), req.Code); existing != nil {
-		return utils.ErrorResponse(c, fiber.StatusConflict, "This Role already exists")
+		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "role_already_exists"))
 	}
 
 	role := &models.Role{
@@ -59,7 +60,7 @@ func (h *RoleHandler) CreateRole(c *fiber.Ctx) error {
 
 	if err := h.roleRepo.Create(c.UserContext(), role); err != nil {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			return utils.ErrorResponse(c, fiber.StatusConflict, "This Role already exists")
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "role_already_exists"))
 		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -72,34 +73,34 @@ func (h *RoleHandler) CreateRole(c *fiber.Ctx) error {
 	// Reload with permissions
 	role, _ = h.roleRepo.FindByID(c.UserContext(), role.ID)
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "Role created", models.ToRoleResponse(role))
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "role_created"), models.ToRoleResponse(role))
 }
 
 func (h *RoleHandler) GetRole(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	role, err := h.roleRepo.FindByID(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Role not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "role_not_found"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Role retrieved", models.ToRoleResponse(role))
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "role_retrieved"), models.ToRoleResponse(role))
 }
 
 func (h *RoleHandler) UpdateRole(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	var req models.RoleUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -111,12 +112,12 @@ func (h *RoleHandler) UpdateRole(c *fiber.Ctx) error {
 
 	role, err := h.roleRepo.FindByID(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Role not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "role_not_found"))
 	}
 
 	if req.Name != "" && !strings.EqualFold(req.Name, role.Name) {
 		if existing, _ := h.roleRepo.FindByName(c.UserContext(), req.Name); existing != nil && existing.ID != id {
-			return utils.ErrorResponse(c, fiber.StatusConflict, "This Role already exists")
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "role_already_exists"))
 		}
 		role.Name = req.Name
 	}
@@ -129,7 +130,7 @@ func (h *RoleHandler) UpdateRole(c *fiber.Ctx) error {
 
 	if err := h.roleRepo.Update(c.UserContext(), role); err != nil {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			return utils.ErrorResponse(c, fiber.StatusConflict, "This Role already exists")
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "role_already_exists"))
 		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -142,30 +143,30 @@ func (h *RoleHandler) UpdateRole(c *fiber.Ctx) error {
 	// Reload with permissions
 	role, _ = h.roleRepo.FindByID(c.UserContext(), role.ID)
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Role updated", models.ToRoleResponse(role))
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "role_updated"), models.ToRoleResponse(role))
 }
 
 func (h *RoleHandler) DeleteRole(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	role, err := h.roleRepo.FindByID(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Role not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "role_not_found"))
 	}
 
 	if role.IsSystem {
-		return utils.ErrorResponse(c, fiber.StatusForbidden, "Cannot delete system role")
+		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "cannot_delete_system_role"))
 	}
 
 	if err := h.roleRepo.Delete(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Role deleted", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "role_deleted"), nil)
 }
 
 func (h *RoleHandler) ListRoles(c *fiber.Ctx) error {
@@ -179,21 +180,21 @@ func (h *RoleHandler) ListRoles(c *fiber.Ctx) error {
 		responses[i] = models.ToRoleResponse(&role)
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Roles retrieved", responses)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "roles_retrieved"), responses)
 }
 
 func (h *RoleHandler) AssignPermissions(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	var req struct {
 		PermissionIDs []uuid.UUID `json:"permission_ids"`
 	}
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if err := h.roleRepo.AssignPermissions(c.UserContext(), id, req.PermissionIDs); err != nil {
@@ -201,7 +202,7 @@ func (h *RoleHandler) AssignPermissions(c *fiber.Ctx) error {
 	}
 
 	role, _ := h.roleRepo.FindByID(c.UserContext(), id)
-	return utils.SuccessResponse(c, fiber.StatusOK, "Permissions assigned", models.ToRoleResponse(role))
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "permissions_assigned"), models.ToRoleResponse(role))
 }
 
 // Permission endpoints
@@ -209,7 +210,7 @@ func (h *RoleHandler) AssignPermissions(c *fiber.Ctx) error {
 func (h *RoleHandler) CreatePermission(c *fiber.Ctx) error {
 	var req models.PermissionCreateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -229,44 +230,44 @@ func (h *RoleHandler) CreatePermission(c *fiber.Ctx) error {
 
 	if err := h.permissionRepo.Create(c.UserContext(), permission); err != nil {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			return utils.ErrorResponse(c, fiber.StatusConflict, "A permission with this code already exists")
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "permission_already_exists"))
 		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "Permission created", models.ToPermissionResponse(permission))
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "permission_created"), models.ToPermissionResponse(permission))
 }
 
 func (h *RoleHandler) GetPermission(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	permission, err := h.permissionRepo.FindByID(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Permission not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "permission_not_found"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Permission retrieved", models.ToPermissionResponse(permission))
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "permission_retrieved"), models.ToPermissionResponse(permission))
 }
 
 func (h *RoleHandler) UpdatePermission(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	var req models.PermissionUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	permission, err := h.permissionRepo.FindByID(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Permission not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "permission_not_found"))
 	}
 
 	if req.Name != "" {
@@ -283,21 +284,21 @@ func (h *RoleHandler) UpdatePermission(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Permission updated", models.ToPermissionResponse(permission))
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "permission_updated"), models.ToPermissionResponse(permission))
 }
 
 func (h *RoleHandler) DeletePermission(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	if err := h.permissionRepo.Delete(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Permission deleted", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "permission_deleted"), nil)
 }
 
 func (h *RoleHandler) ListPermissions(c *fiber.Ctx) error {
@@ -321,7 +322,7 @@ func (h *RoleHandler) ListPermissions(c *fiber.Ctx) error {
 		responses[i] = models.ToPermissionResponse(&perm)
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Permissions retrieved", responses)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "permissions_retrieved"), responses)
 }
 
 func (h *RoleHandler) GetModules(c *fiber.Ctx) error {
@@ -330,7 +331,7 @@ func (h *RoleHandler) GetModules(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Modules retrieved", modules)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "modules_retrieved"), modules)
 }
 
 // Export roles to JSON
@@ -370,7 +371,7 @@ func (h *RoleHandler) Export(c *fiber.Ctx) error {
 
 	jsonData, err := json.MarshalIndent(exportData, "", "  ")
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create export file")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create_export"))
 	}
 
 	c.Set("Content-Type", "application/json")
@@ -382,12 +383,12 @@ func (h *RoleHandler) Export(c *fiber.Ctx) error {
 func (h *RoleHandler) Import(c *fiber.Ctx) error {
 	file, err := c.FormFile("file")
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "No file provided")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "no_file_provided"))
 	}
 
 	fileContent, err := file.Open()
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to open file")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_open_file"))
 	}
 	defer fileContent.Close()
 
@@ -403,7 +404,7 @@ func (h *RoleHandler) Import(c *fiber.Ctx) error {
 
 	var importData []ImportRole
 	if err := json.NewDecoder(fileContent).Decode(&importData); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid JSON format")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_json_format"))
 	}
 
 	imported := 0
@@ -443,7 +444,7 @@ func (h *RoleHandler) Import(c *fiber.Ctx) error {
 		imported++
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Import completed", map[string]interface{}{
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "import_completed"), map[string]interface{}{
 		"imported": imported,
 		"skipped":  skipped,
 		"errors":   errors,

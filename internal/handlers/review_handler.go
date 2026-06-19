@@ -6,6 +6,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
@@ -31,7 +32,7 @@ func NewReviewHandler(service services.ReviewService) *ReviewHandler {
 func (h *ReviewHandler) CreateCycle(c *fiber.Ctx) error {
 	var req models.ReviewCycleCreateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if err := h.validate.Struct(req); err != nil {
@@ -45,7 +46,7 @@ func (h *ReviewHandler) CreateCycle(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "Review cycle created", resp)
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "review_cycle_created"), resp)
 }
 
 func (h *ReviewHandler) ListCycles(c *fiber.Ctx) error {
@@ -57,7 +58,7 @@ func (h *ReviewHandler) ListCycles(c *fiber.Ctx) error {
 	if deptStr := c.Query("department_id"); deptStr != "" {
 		id, err := uuid.Parse(deptStr)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid department_id")
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_department_id"))
 		}
 		departmentID = &id
 	}
@@ -73,7 +74,7 @@ func (h *ReviewHandler) ListCycles(c *fiber.Ctx) error {
 func (h *ReviewHandler) GetCycle(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid cycle ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_cycle_id"))
 	}
 
 	resp, err := h.service.GetCycle(c.Context(), id)
@@ -81,18 +82,18 @@ func (h *ReviewHandler) GetCycle(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Review cycle retrieved", resp)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "review_cycle_retrieved"), resp)
 }
 
 func (h *ReviewHandler) UpdateCycle(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid cycle ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_cycle_id"))
 	}
 
 	var req models.ReviewCycleUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	resp, err := h.service.UpdateCycle(c.Context(), id, &req)
@@ -100,20 +101,20 @@ func (h *ReviewHandler) UpdateCycle(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Review cycle updated", resp)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "review_cycle_updated"), resp)
 }
 
 func (h *ReviewHandler) DeleteCycle(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid cycle ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_cycle_id"))
 	}
 
 	if err := h.service.DeleteCycle(c.Context(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Review cycle deleted", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "review_cycle_deleted"), nil)
 }
 
 // ──────────────────────────────────────────────────
@@ -123,7 +124,7 @@ func (h *ReviewHandler) DeleteCycle(c *fiber.Ctx) error {
 func (h *ReviewHandler) ActivateCycle(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid cycle ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_cycle_id"))
 	}
 
 	resp, err := h.service.ActivateCycle(c.Context(), id)
@@ -131,13 +132,13 @@ func (h *ReviewHandler) ActivateCycle(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Review cycle activated", resp)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "review_cycle_activated"), resp)
 }
 
 func (h *ReviewHandler) CompleteCycle(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid cycle ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_cycle_id"))
 	}
 
 	resp, err := h.service.CompleteCycle(c.Context(), id)
@@ -145,7 +146,7 @@ func (h *ReviewHandler) CompleteCycle(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Review cycle completed", resp)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "review_cycle_completed"), resp)
 }
 
 // ──────────────────────────────────────────────────
@@ -155,12 +156,12 @@ func (h *ReviewHandler) CompleteCycle(c *fiber.Ctx) error {
 func (h *ReviewHandler) AssignReviewees(c *fiber.Ctx) error {
 	cycleID, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid cycle ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_cycle_id"))
 	}
 
 	var req models.BulkAssignRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if err := h.validate.Struct(req); err != nil {
@@ -172,13 +173,13 @@ func (h *ReviewHandler) AssignReviewees(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "Reviewees assigned", assignments)
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "reviewees_assigned"), assignments)
 }
 
 func (h *ReviewHandler) ListCycleAssignments(c *fiber.Ctx) error {
 	cycleID, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid cycle ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_cycle_id"))
 	}
 
 	assignments, err := h.service.ListCycleAssignments(c.Context(), cycleID)
@@ -196,7 +197,7 @@ func (h *ReviewHandler) ListCycleAssignments(c *fiber.Ctx) error {
 func (h *ReviewHandler) GetAssignment(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid assignment ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_assignment_id"))
 	}
 
 	resp, err := h.service.GetAssignment(c.Context(), id)
@@ -204,20 +205,20 @@ func (h *ReviewHandler) GetAssignment(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Assignment retrieved", resp)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "assignment_retrieved"), resp)
 }
 
 func (h *ReviewHandler) RemoveAssignment(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid assignment ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_assignment_id"))
 	}
 
 	if err := h.service.RemoveAssignment(c.Context(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Assignment removed", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "assignment_removed"), nil)
 }
 
 // ──────────────────────────────────────────────────
@@ -257,12 +258,12 @@ func (h *ReviewHandler) ListMyReviewTasks(c *fiber.Ctx) error {
 func (h *ReviewHandler) ScoreGoals(c *fiber.Ctx) error {
 	assignmentID, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid assignment ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_assignment_id"))
 	}
 
 	var scores []models.GoalScoreUpdateRequest
 	if err := c.BodyParser(&scores); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
@@ -272,18 +273,18 @@ func (h *ReviewHandler) ScoreGoals(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Goal scores saved", resp)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "goal_scores_saved"), resp)
 }
 
 func (h *ReviewHandler) SubmitReview(c *fiber.Ctx) error {
 	assignmentID, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid assignment ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_assignment_id"))
 	}
 
 	var req models.ReviewSubmitRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if err := h.validate.Struct(req); err != nil {
@@ -297,5 +298,5 @@ func (h *ReviewHandler) SubmitReview(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Review submitted", resp)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "review_submitted"), resp)
 }

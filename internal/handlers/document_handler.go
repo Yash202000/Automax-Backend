@@ -8,6 +8,7 @@ import (
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
 )
@@ -56,12 +57,12 @@ func (h *DocumentHandler) getUser(c *fiber.Ctx) *models.User {
 func (h *DocumentHandler) resolveScope(c *fiber.Ctx) (*services.DocumentScope, error) {
 	user := h.getUser(c)
 	if user == nil {
-		_ = utils.ErrorResponse(c, fiber.StatusUnauthorized, "user context missing")
+		_ = utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "user_context_missing"))
 		return nil, fiber.ErrUnauthorized
 	}
 	scope, err := h.authzService.ResolveDocumentScope(c.UserContext(), user)
 	if err != nil {
-		_ = utils.ErrorResponse(c, fiber.StatusInternalServerError, "failed to resolve document scope")
+		_ = utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_resolve_scope"))
 		return nil, err
 	}
 	return scope, nil
@@ -74,11 +75,11 @@ func (h *DocumentHandler) enforceNode(c *fiber.Ctx, scope *services.DocumentScop
 	allowed, err := h.authzService.CheckFolderAccess(c.UserContext(), scope, nodeID, email)
 	if err != nil {
 		log.Printf("[document_handler] CheckFolderAccess error node=%s: %v", nodeID, err)
-		_ = utils.ErrorResponse(c, fiber.StatusInternalServerError, "failed to authorize document access")
+		_ = utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_authorize_doc"))
 		return false
 	}
 	if !allowed {
-		_ = utils.ErrorResponse(c, fiber.StatusForbidden, "access denied")
+		_ = utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "access_denied"))
 		return false
 	}
 	return true
@@ -110,9 +111,9 @@ func (h *DocumentHandler) ListFiles(c *fiber.Ctx) error {
 	if scope.IsUnrestricted {
 		result, err := h.service.ListFiles(c.UserContext(), parentID, email)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to list files: "+err.Error())
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_list_files"))
 		}
-		return utils.SuccessResponse(c, fiber.StatusOK, "Files listed", result)
+		return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "files_listed"), result)
 	}
 
 	// Scoped caller hitting the workspace root — return a synthetic list with
@@ -120,22 +121,22 @@ func (h *DocumentHandler) ListFiles(c *fiber.Ctx) error {
 	if parentID == "" {
 		gmID, gmErr := h.authzService.GoalManagementFolderID(c.UserContext(), email)
 		if gmErr != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to resolve Goal Management folder: "+gmErr.Error())
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_resolve_gm_folder"))
 		}
 		synth := &storage.DmsListResult{
 			Files: []storage.DmsFile{
 				{UUID: gmID, Name: "Goal Management", Type: "folder"},
 			},
 		}
-		return utils.SuccessResponse(c, fiber.StatusOK, "Files listed", synth)
+		return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "files_listed"), synth)
 	}
 
 	// Scoped caller hitting the Goal Management folder — pull the real listing
 	// but filter it down to goal folders this user may access.
 	if parentID == scope.GoalManagementFolderID {
-		result, err := h.service.ListFiles(c.UserContext(), parentID, email)
-		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to list files: "+err.Error())
+		result, listErr := h.service.ListFiles(c.UserContext(), parentID, email)
+		if listErr != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_list_files"))
 		}
 		filtered := make([]storage.DmsFile, 0, len(result.Files))
 		for _, f := range result.Files {
@@ -143,7 +144,7 @@ func (h *DocumentHandler) ListFiles(c *fiber.Ctx) error {
 				filtered = append(filtered, f)
 			}
 		}
-		return utils.SuccessResponse(c, fiber.StatusOK, "Files listed", &storage.DmsListResult{Files: filtered})
+		return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "files_listed"), &storage.DmsListResult{Files: filtered})
 	}
 
 	// Scoped caller hitting a deeper node — must live under a goal they can access.
@@ -154,7 +155,7 @@ func (h *DocumentHandler) ListFiles(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to list files: "+err.Error())
 	}
-	return utils.SuccessResponse(c, fiber.StatusOK, "Files listed", result)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "files_listed"), result)
 }
 
 // SearchFiles searches for files across the workspace, filtered to goals the
@@ -178,10 +179,10 @@ func (h *DocumentHandler) SearchFiles(c *fiber.Ctx) error {
 		Tags  map[string]string `json:"tags,omitempty"`
 	}
 	if err := c.BodyParser(&body); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 	if body.Query == "" && len(body.Tags) == 0 {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Query or tags are required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "query_or_tags_required"))
 	}
 
 	email := h.getUserEmail(c)
@@ -193,12 +194,12 @@ func (h *DocumentHandler) SearchFiles(c *fiber.Ctx) error {
 		raw, err = h.service.SearchFiles(c.UserContext(), body.Query, email)
 	}
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to search files: "+err.Error())
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_search_files"))
 	}
 
 	// Unrestricted callers see everything.
 	if scope.IsUnrestricted || raw == nil {
-		return utils.SuccessResponse(c, fiber.StatusOK, "Search results", raw)
+		return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "search_results"), raw)
 	}
 
 	filtered := make([]storage.DmsFile, 0, len(raw.Files))
@@ -225,7 +226,7 @@ func (h *DocumentHandler) SearchFiles(c *fiber.Ctx) error {
 			filtered = append(filtered, f)
 		}
 	}
-	return utils.SuccessResponse(c, fiber.StatusOK, "Search results", &storage.DmsSearchResult{
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "search_results"), &storage.DmsSearchResult{
 		Files: filtered,
 		Total: len(filtered),
 	})
@@ -248,7 +249,7 @@ func (h *DocumentHandler) GetFileInfo(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to get file info: "+err.Error())
 	}
-	return utils.SuccessResponse(c, fiber.StatusOK, "File info", result)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "file_info"), result)
 }
 
 // GetFileBreadcrumb returns the folder chain (root → parent) for a file.
@@ -271,7 +272,7 @@ func (h *DocumentHandler) GetFileBreadcrumb(c *fiber.Ctx) error {
 	if chain == nil {
 		chain = []storage.DmsBreadcrumbEntry{}
 	}
-	return utils.SuccessResponse(c, fiber.StatusOK, "File breadcrumb", fiber.Map{"breadcrumb": chain})
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), i18n.T(c.UserContext(), "breadcrumb")), fiber.Map{i18n.T(c.UserContext(), "breadcrumb"): chain})
 }
 
 // GetPreviewURL returns a preview URL for a file.
@@ -291,7 +292,7 @@ func (h *DocumentHandler) GetPreviewURL(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to get preview URL: "+err.Error())
 	}
-	return utils.SuccessResponse(c, fiber.StatusOK, "Preview URL", fiber.Map{"url": url})
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "preview_url"), fiber.Map{"url": url})
 }
 
 // DownloadFile streams the raw bytes of a file back to the caller. Replaces the
@@ -368,7 +369,7 @@ func (h *DocumentHandler) GetComments(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to get comments: "+err.Error())
 	}
-	return utils.SuccessResponse(c, fiber.StatusOK, "Comments", comments)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "comments"), comments)
 }
 
 // AddComment adds a comment to a file.
@@ -387,17 +388,17 @@ func (h *DocumentHandler) AddComment(c *fiber.Ctx) error {
 		Content string `json:"content"`
 	}
 	if err := c.BodyParser(&body); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 	if body.Content == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Comment content is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "comment_content_required"))
 	}
 
 	email := h.getUserEmail(c)
 	if err := h.service.AddComment(c.UserContext(), fileID, body.Content, email); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to add comment: "+err.Error())
 	}
-	return utils.SuccessResponse(c, fiber.StatusCreated, "Comment added", nil)
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "comment_added"), nil)
 }
 
 // GetTags returns the metadata tags on a file.
@@ -417,7 +418,7 @@ func (h *DocumentHandler) GetTags(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to get tags: "+err.Error())
 	}
-	return utils.SuccessResponse(c, fiber.StatusOK, "Tags", tags)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "tags"), tags)
 }
 
 // SetTags sets metadata tags on a file.
@@ -436,14 +437,14 @@ func (h *DocumentHandler) SetTags(c *fiber.Ctx) error {
 		Tags map[string]string `json:"tags"`
 	}
 	if err := c.BodyParser(&body); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	email := h.getUserEmail(c)
 	if err := h.service.SetTags(c.UserContext(), fileID, body.Tags, email); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to set tags: "+err.Error())
 	}
-	return utils.SuccessResponse(c, fiber.StatusOK, "Tags updated", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "tags_updated"), nil)
 }
 
 // ListVersions returns all versions of a file.
@@ -463,7 +464,7 @@ func (h *DocumentHandler) ListVersions(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to list versions: "+err.Error())
 	}
-	return utils.SuccessResponse(c, fiber.StatusOK, "Versions listed", versions)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "versions_listed"), versions)
 }
 
 // UploadVersion uploads a new version of a file.
@@ -481,12 +482,12 @@ func (h *DocumentHandler) UploadVersion(c *fiber.Ctx) error {
 	description := c.FormValue("description", "")
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "File is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "file_required"))
 	}
 
 	file, err := fileHeader.Open()
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to open uploaded file")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_open_uploaded_file"))
 	}
 	defer file.Close()
 
@@ -495,7 +496,7 @@ func (h *DocumentHandler) UploadVersion(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to upload version: "+err.Error())
 	}
-	return utils.SuccessResponse(c, fiber.StatusCreated, "Version uploaded", version)
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "version_uploaded"), version)
 }
 
 // DownloadVersion streams a specific version's content.
@@ -518,7 +519,7 @@ func (h *DocumentHandler) DownloadVersion(c *fiber.Ctx) error {
 		return nil
 	}
 	if !scope.IsUnrestricted {
-		return utils.ErrorResponse(c, fiber.StatusForbidden, "access denied")
+		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "access_denied"))
 	}
 	versionUUID := c.Params("vid")
 	email := h.getUserEmail(c)
@@ -550,10 +551,10 @@ func (h *DocumentHandler) RollbackVersion(c *fiber.Ctx) error {
 		VersionUUID string `json:"version_uuid"`
 	}
 	if err := c.BodyParser(&body); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 	if body.VersionUUID == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "version_uuid is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "version_uuid_required"))
 	}
 
 	email := h.getUserEmail(c)
@@ -561,5 +562,5 @@ func (h *DocumentHandler) RollbackVersion(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to rollback version: "+err.Error())
 	}
-	return utils.SuccessResponse(c, fiber.StatusOK, "Version rolled back", version)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "version_rolled_back"), version)
 }

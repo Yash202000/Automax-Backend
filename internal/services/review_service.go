@@ -8,6 +8,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -91,7 +92,7 @@ func (s *reviewService) GetCycle(ctx context.Context, id uuid.UUID) (*models.Rev
 	cycle, err := s.reviewRepo.FindCycleByIDWithRelations(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("review cycle not found")
+			return nil, fmt.Errorf("%s", i18n.T(ctx, "review_cycle_not_found"))
 		}
 		return nil, err
 	}
@@ -116,13 +117,13 @@ func (s *reviewService) UpdateCycle(ctx context.Context, id uuid.UUID, req *mode
 	cycle, err := s.reviewRepo.FindCycleByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("review cycle not found")
+			return nil, fmt.Errorf("%s", i18n.T(ctx, "review_cycle_not_found"))
 		}
 		return nil, err
 	}
 
 	if cycle.Status != models.ReviewCycleStatusDraft {
-		return nil, fmt.Errorf("can only update cycles in draft status")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "only_update_draft_cycle"))
 	}
 
 	if req.Title != nil {
@@ -157,13 +158,13 @@ func (s *reviewService) DeleteCycle(ctx context.Context, id uuid.UUID) error {
 	cycle, err := s.reviewRepo.FindCycleByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return fmt.Errorf("review cycle not found")
+			return fmt.Errorf("%s", i18n.T(ctx, "review_cycle_not_found"))
 		}
 		return err
 	}
 
 	if cycle.Status != models.ReviewCycleStatusDraft {
-		return fmt.Errorf("can only delete cycles in draft status")
+		return fmt.Errorf("%s", i18n.T(ctx, "only_delete_draft_cycle"))
 	}
 
 	return s.reviewRepo.DeleteCycle(ctx, id)
@@ -177,7 +178,7 @@ func (s *reviewService) ActivateCycle(ctx context.Context, id uuid.UUID) (*model
 	cycle, err := s.reviewRepo.FindCycleByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("review cycle not found")
+			return nil, fmt.Errorf("%s", i18n.T(ctx, "review_cycle_not_found"))
 		}
 		return nil, err
 	}
@@ -203,7 +204,7 @@ func (s *reviewService) CompleteCycle(ctx context.Context, id uuid.UUID) (*model
 	cycle, err := s.reviewRepo.FindCycleByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("review cycle not found")
+			return nil, fmt.Errorf("%s", i18n.T(ctx, "review_cycle_not_found"))
 		}
 		return nil, err
 	}
@@ -233,7 +234,7 @@ func (s *reviewService) AssignReviewees(ctx context.Context, cycleID uuid.UUID, 
 	cycle, err := s.reviewRepo.FindCycleByID(ctx, cycleID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("review cycle not found")
+			return nil, fmt.Errorf("%s", i18n.T(ctx, "review_cycle_not_found"))
 		}
 		return nil, err
 	}

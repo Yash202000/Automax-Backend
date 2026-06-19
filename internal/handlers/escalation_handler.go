@@ -3,6 +3,7 @@ package handlers
 import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -31,7 +32,7 @@ func (h *EscalationHandler) List(c *fiber.Ctx) error {
 		resp[i] = models.ToEscalationSLAResponse(&r)
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "SLA breach logs fetched", resp)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "sla_breach_logs_fetched"), resp)
 }
 
 // ListByIncident returns all SLA breach notifications for a specific incident.
@@ -41,7 +42,7 @@ func (h *EscalationHandler) ListByIncident(c *fiber.Ctx) error {
 	idStr := c.Params("incident_id")
 	incidentID, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "invalid incident_id")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_incident_id_param"))
 	}
 
 	records, err := h.service.GetBreachLogsByIncident(c.UserContext(), incidentID)
@@ -54,5 +55,5 @@ func (h *EscalationHandler) ListByIncident(c *fiber.Ctx) error {
 		resp[i] = models.ToEscalationSLAResponse(&r)
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Incident SLA breach logs fetched", resp)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "incident_sla_breach_logs"), resp)
 }

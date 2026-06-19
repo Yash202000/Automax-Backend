@@ -12,6 +12,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/utils"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -104,7 +105,7 @@ func (s *incidentMergeService) ValidateMerge(ctx context.Context, incidentIDStrs
 	}
 
 	if len(incidentIDStrs) < 2 {
-		response.Errors = append(response.Errors, "At least 2 incidents are required for merging")
+		response.Errors = append(response.Errors, i18n.T(ctx, "at_least_2_incidents_required"))
 		return response, nil
 	}
 
@@ -113,7 +114,7 @@ func (s *incidentMergeService) ValidateMerge(ctx context.Context, incidentIDStrs
 	for _, idStr := range incidentIDStrs {
 		id, err := uuid.Parse(idStr)
 		if err != nil {
-			response.Errors = append(response.Errors, fmt.Sprintf("Invalid incident ID: %s", idStr))
+			response.Errors = append(response.Errors, i18n.Tf(ctx, "invalid_incident_id_str", idStr))
 			return response, nil
 		}
 		incidentIDs = append(incidentIDs, id)
@@ -125,7 +126,7 @@ func (s *incidentMergeService) ValidateMerge(ctx context.Context, incidentIDStrs
 		incident, err := s.incidentRepo.FindByIDWithRelations(ctx, id)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				response.Errors = append(response.Errors, fmt.Sprintf("Incident not found: %s", incidentIDStrs[i]))
+				response.Errors = append(response.Errors, i18n.Tf(ctx, "incident_not_found_id", incidentIDStrs[i]))
 			} else {
 				response.Errors = append(response.Errors, fmt.Sprintf("Error fetching incident %s: %v", incidentIDStrs[i], err))
 			}
@@ -148,14 +149,14 @@ func (s *incidentMergeService) ValidateMerge(ctx context.Context, incidentIDStrs
 					masterIncidentNumber = masterInc.IncidentNumber
 				}
 			}
-			response.Errors = append(response.Errors, fmt.Sprintf("Incident %s is already merged into %s", incident.IncidentNumber, masterIncidentNumber))
+			response.Errors = append(response.Errors, i18n.Tf(ctx, "incident_already_merged", incident.IncidentNumber, masterIncidentNumber))
 			return response, nil
 		}
 
 		// Check if incident has merged children
 		hasChildren, _ := s.mergeRepo.HasMergedIncidents(ctx, incident.ID)
 		if hasChildren {
-			response.Errors = append(response.Errors, fmt.Sprintf("Incident %s already has merged incidents", incident.IncidentNumber))
+			response.Errors = append(response.Errors, i18n.Tf(ctx, "incident_has_merged_children", incident.IncidentNumber))
 			return response, nil
 		}
 	}
@@ -164,7 +165,7 @@ func (s *incidentMergeService) ValidateMerge(ctx context.Context, incidentIDStrs
 	firstStateID := incidents[0].CurrentStateID
 	for i, incident := range incidents {
 		if i > 0 && incident.CurrentStateID != firstStateID {
-			response.Errors = append(response.Errors, "All incidents must have the same status")
+			response.Errors = append(response.Errors, i18n.T(ctx, "all_incidents_same_status"))
 			return response, nil
 		}
 	}
@@ -177,7 +178,7 @@ func (s *incidentMergeService) ValidateMerge(ctx context.Context, incidentIDStrs
 		return response, nil
 	}
 	if !state.IsMergable {
-		response.Errors = append(response.Errors, fmt.Sprintf("Current status '%s' is not mergable", state.Name))
+		response.Errors = append(response.Errors, i18n.Tf(ctx, "status_not_mergable", state.Name))
 		return response, nil
 	}
 
@@ -186,15 +187,15 @@ func (s *incidentMergeService) ValidateMerge(ctx context.Context, incidentIDStrs
 	for i, incident := range incidents {
 		if i > 0 {
 			if firstLocationID == nil && incident.LocationID != nil {
-				response.Errors = append(response.Errors, "All incidents must have the same location")
+				response.Errors = append(response.Errors, i18n.T(ctx, "all_incidents_same_location"))
 				return response, nil
 			}
 			if firstLocationID != nil && incident.LocationID == nil {
-				response.Errors = append(response.Errors, "All incidents must have the same location")
+				response.Errors = append(response.Errors, i18n.T(ctx, "all_incidents_same_location"))
 				return response, nil
 			}
 			if firstLocationID != nil && incident.LocationID != nil && *firstLocationID != *incident.LocationID {
-				response.Errors = append(response.Errors, "All incidents must have the same location")
+				response.Errors = append(response.Errors, i18n.T(ctx, "all_incidents_same_location"))
 				return response, nil
 			}
 			// Both nil is OK - both incidents have no location set
@@ -206,15 +207,15 @@ func (s *incidentMergeService) ValidateMerge(ctx context.Context, incidentIDStrs
 	for i, incident := range incidents {
 		if i > 0 {
 			if firstClassificationID == nil && incident.ClassificationID != nil {
-				response.Errors = append(response.Errors, "All incidents must have the same classification")
+				response.Errors = append(response.Errors, i18n.T(ctx, "all_incidents_same_class"))
 				return response, nil
 			}
 			if firstClassificationID != nil && incident.ClassificationID == nil {
-				response.Errors = append(response.Errors, "All incidents must have the same classification")
+				response.Errors = append(response.Errors, i18n.T(ctx, "all_incidents_same_class"))
 				return response, nil
 			}
 			if firstClassificationID != nil && incident.ClassificationID != nil && *firstClassificationID != *incident.ClassificationID {
-				response.Errors = append(response.Errors, "All incidents must have the same classification")
+				response.Errors = append(response.Errors, i18n.T(ctx, "all_incidents_same_class"))
 				return response, nil
 			}
 			// Both nil is OK - both incidents have no classification set
@@ -246,7 +247,7 @@ func (s *incidentMergeService) ValidateMerge(ctx context.Context, incidentIDStrs
 				)
 				if distance > maxMergeDistance {
 					response.Errors = append(response.Errors,
-						fmt.Sprintf("Incidents must be within %.0f meters of each other (incidents %s and %s are %.0f meters apart)",
+						i18n.Tf(ctx, "incidents_distance_exceeded",
 							maxMergeDistance, incidents[i].IncidentNumber, incidents[j].IncidentNumber, distance))
 					return response, nil
 				}
@@ -274,7 +275,7 @@ func (s *incidentMergeService) ValidateMerge(ctx context.Context, incidentIDStrs
 func (s *incidentMergeService) MergeIncidents(ctx context.Context, req *models.IncidentMergeRequest, userID uuid.UUID, userRoleIDs []uuid.UUID) (*models.IncidentMergeResponse, error) {
 	// Parse incident IDs to get workflow ID
 	if len(req.IncidentIDs) == 0 {
-		return nil, errors.New("at least one incident ID is required")
+		return nil, errors.New(i18n.T(ctx, "at_least_one_incident_required"))
 	}
 
 	firstIncidentID, err := uuid.Parse(req.IncidentIDs[0])
@@ -294,12 +295,12 @@ func (s *incidentMergeService) MergeIncidents(ctx context.Context, req *models.I
 		return nil, err
 	}
 	if !canMerge {
-		return nil, errors.New("you do not have permission to merge incidents for this workflow")
+		return nil, errors.New(i18n.T(ctx, "no_permission_merge"))
 	}
 
 	// Master incident ID is required - must be one of the selected incidents
 	if req.MasterIncidentID == "" {
-		return nil, errors.New("master incident ID is required: select one of the incidents as the master")
+		return nil, errors.New(i18n.T(ctx, "master_id_required_select"))
 	}
 
 	// Validate master incident ID is in the selected list
@@ -311,7 +312,7 @@ func (s *incidentMergeService) MergeIncidents(ctx context.Context, req *models.I
 		}
 	}
 	if !masterInList {
-		return nil, errors.New("master incident must be one of the selected incidents")
+		return nil, errors.New(i18n.T(ctx, "master_must_be_in_selected"))
 	}
 
 	// Validate the merge first
@@ -476,7 +477,7 @@ func (s *incidentMergeService) UnmergeIncident(ctx context.Context, req *models.
 		return nil, err
 	}
 	if !canMerge {
-		return nil, errors.New("you do not have permission to unmerge incidents")
+		return nil, errors.New(i18n.T(ctx, "no_permission_unmerge"))
 	}
 
 	isMerged, err := s.mergeRepo.IsIncidentMerged(ctx, incidentID)
@@ -484,7 +485,7 @@ func (s *incidentMergeService) UnmergeIncident(ctx context.Context, req *models.
 		return nil, fmt.Errorf("error checking merge status: %v", err)
 	}
 	if !isMerged {
-		return nil, errors.New("incident is not merged into another incident")
+		return nil, errors.New(i18n.T(ctx, "incident_not_merged"))
 	}
 
 	tx := s.db.Begin()
@@ -585,7 +586,7 @@ func (s *incidentMergeService) BulkUnmergeIncidents(ctx context.Context, req *mo
 			return nil, err
 		}
 		if !canMerge {
-			return nil, fmt.Errorf("you do not have permission to unmerge incident %s", incident.IncidentNumber)
+			return nil, fmt.Errorf("%s", i18n.Tf(ctx, "no_permission_unmerge_incident", incident.IncidentNumber))
 		}
 	}
 

@@ -12,6 +12,7 @@ import (
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/gofiber/fiber/v2"
@@ -51,7 +52,7 @@ func (h *NotificationHandler) SendGridInboundWebhook(c *fiber.Ctx) error {
 	headersJSON := c.FormValue("headers")
 
 	if from == "" || to == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Missing required fields: from or to")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "missing_required_from_to"))
 	}
 
 	// Parse recipients (TO field can be comma-separated)
@@ -364,18 +365,18 @@ func (h *NotificationHandler) Send(c *fiber.Ctx) error {
 func (h *NotificationHandler) GetStats(c *fiber.Ctx) error {
 	v := strings.TrimSpace(c.Query("user_id"))
 	if v == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "user_id is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "user_id_required"))
 	}
 	userID, err := uuid.Parse(v)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid user_id UUID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_user_id_uuid"))
 	}
 
 	channel := strings.TrimSpace(c.Query("channel"))
 
 	stats, err := h.service.GetNotificationStatsByUser(c.Context(), channel, userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch notification stats")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_notif_stats"))
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
@@ -388,7 +389,7 @@ func (h *NotificationHandler) GetStats(c *fiber.Ctx) error {
 func (h *NotificationHandler) List(c *fiber.Ctx) error {
 	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if !ok {
-		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
+		return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "user_not_authenticated"))
 	}
 	log.Printf("[Notifications List] User %s requesting notifications", userID.String())
 
@@ -400,7 +401,7 @@ func (h *NotificationHandler) List(c *fiber.Ctx) error {
 
 	// Parse query parameters
 	if err := c.QueryParser(filter); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_query_parameters"))
 	}
 
 	if err := validation.ValidateStruct(c.UserContext(), filter); len(err) != 0 {
@@ -448,12 +449,12 @@ func (h *NotificationHandler) Get(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid notification ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_notification_id"))
 	}
 
 	notification, err := h.service.GetNotification(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Notification not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "notification_not_found"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -467,7 +468,7 @@ func (h *NotificationHandler) Delete(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid notification ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_notification_id"))
 	}
 
 	if err := h.service.DeleteNotification(c.UserContext(), id); err != nil {
@@ -485,7 +486,7 @@ func (h *NotificationHandler) PermanentDelete(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid notification ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_notification_id"))
 	}
 
 	if err := h.service.PermanentDelete(c.UserContext(), id); err != nil {
@@ -502,13 +503,13 @@ func (h *NotificationHandler) PermanentDelete(c *fiber.Ctx) error {
 func (h *NotificationHandler) CreateDraft(c *fiber.Ctx) error {
 	var req models.CreateDraftRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	// Get user ID from context
 	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if !ok {
-		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
+		return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "user_not_authenticated"))
 	}
 
 	draft, err := h.service.CreateDraft(c.UserContext(), &req, userID)
@@ -532,7 +533,7 @@ func (h *NotificationHandler) UpdateDraft(c *fiber.Ctx) error {
 
 	var req models.UpdateDraftRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	draft, err := h.service.UpdateDraft(c.UserContext(), id, &req)
@@ -571,7 +572,7 @@ func (h *NotificationHandler) MarkAsRead(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid notification ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_notification_id"))
 	}
 
 	type ReadRequest struct {
@@ -580,7 +581,7 @@ func (h *NotificationHandler) MarkAsRead(c *fiber.Ctx) error {
 
 	var req ReadRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if err := h.service.MarkAsRead(c.UserContext(), id, req.IsRead); err != nil {
@@ -598,7 +599,7 @@ func (h *NotificationHandler) ToggleStar(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid notification ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_notification_id"))
 	}
 
 	type StarRequest struct {
@@ -607,7 +608,7 @@ func (h *NotificationHandler) ToggleStar(c *fiber.Ctx) error {
 
 	var req StarRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if err := h.service.ToggleStar(c.UserContext(), id, req.IsStarred); err != nil {
@@ -625,7 +626,7 @@ func (h *NotificationHandler) MoveToCategory(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid notification ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_notification_id"))
 	}
 
 	type MoveRequest struct {
@@ -634,7 +635,7 @@ func (h *NotificationHandler) MoveToCategory(c *fiber.Ctx) error {
 
 	var req MoveRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if err := h.service.MoveToCategory(c.UserContext(), id, req.Category); err != nil {
@@ -656,7 +657,7 @@ func (h *NotificationHandler) BulkMoveToCategory(c *fiber.Ctx) error {
 
 	var req BulkMoveRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	// Parse UUIDs
@@ -687,7 +688,7 @@ func (h *NotificationHandler) BulkDelete(c *fiber.Ctx) error {
 
 	var req BulkDeleteRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	// Parse UUIDs
@@ -716,7 +717,7 @@ func (h *NotificationHandler) Reply(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	originalID, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid notification ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_notification_id"))
 	}
 
 	// Get user ID from context
@@ -736,7 +737,7 @@ func (h *NotificationHandler) Reply(c *fiber.Ctx) error {
 
 	var req ReplyRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	// Send reply with threading
@@ -787,19 +788,19 @@ func (h *NotificationHandler) DownloadAttachment(c *fiber.Ctx) error {
 	notificationIDStr := c.Params("id")
 	notificationID, err := uuid.Parse(notificationIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid notification ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_notification_id"))
 	}
 
 	// Get filename from URL
 	filename := c.Params("filename")
 	if filename == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Filename is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "filename_required"))
 	}
 
 	// Fetch the notification to verify it exists and get attachment info
 	notification, err := h.service.GetNotification(c.UserContext(), notificationID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Notification not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "notification_not_found"))
 	}
 
 	// Find the attachment with matching filename
@@ -814,12 +815,12 @@ func (h *NotificationHandler) DownloadAttachment(c *fiber.Ctx) error {
 	}
 
 	if storagePath == "" {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Attachment not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "attachment_not_found"))
 	}
 
 	// Download from MinIO
 	if h.storage == nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Storage not configured")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "storage_not_configured"))
 	}
 
 	fileReader, err := h.storage.GetFile(c.UserContext(), storagePath)
@@ -831,7 +832,7 @@ func (h *NotificationHandler) DownloadAttachment(c *fiber.Ctx) error {
 	// Read the file content
 	fileData, err := io.ReadAll(fileReader)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read attachment")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_read_attachment"))
 	}
 
 	// Set appropriate headers
@@ -849,19 +850,19 @@ func (h *NotificationHandler) GetAttachmentURL(c *fiber.Ctx) error {
 	notificationIDStr := c.Params("id")
 	notificationID, err := uuid.Parse(notificationIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid notification ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_notification_id"))
 	}
 
 	// Get filename from URL
 	filename := c.Params("filename")
 	if filename == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Filename is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "filename_required"))
 	}
 
 	// Fetch the notification to verify it exists and get attachment info
 	notification, err := h.service.GetNotification(c.UserContext(), notificationID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Notification not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "notification_not_found"))
 	}
 
 	// Find the attachment with matching filename
@@ -874,12 +875,12 @@ func (h *NotificationHandler) GetAttachmentURL(c *fiber.Ctx) error {
 	}
 
 	if storagePath == "" {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Attachment not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "attachment_not_found"))
 	}
 
 	// Generate presigned URL from MinIO
 	if h.storage == nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Storage not configured")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "storage_not_configured"))
 	}
 
 	presignedURL, err := h.storage.GetFileURL(c.UserContext(), storagePath)
@@ -901,22 +902,22 @@ func (h *NotificationHandler) GetAttachmentURL(c *fiber.Ctx) error {
 func (h *NotificationHandler) DownloadNotificationAttachmentByID(c *fiber.Ctx) error {
 	attachmentID := c.Params("attachment_id")
 	if attachmentID == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Attachment ID is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "attachment_id_required"))
 	}
 
 	// Find the notification containing this attachment
 	_, attachment, err := h.service.FindNotificationByAttachmentID(c.UserContext(), attachmentID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Attachment not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "attachment_not_found"))
 	}
 
 	if attachment.StoragePath == "" {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Attachment storage path not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "attachment_storage_missing"))
 	}
 
 	// Download from MinIO
 	if h.storage == nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Storage not configured")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "storage_not_configured"))
 	}
 
 	fileReader, err := h.storage.GetFile(c.UserContext(), attachment.StoragePath)
@@ -928,7 +929,7 @@ func (h *NotificationHandler) DownloadNotificationAttachmentByID(c *fiber.Ctx) e
 	// Read the file content
 	fileData, err := io.ReadAll(fileReader)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read attachment")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_read_attachment"))
 	}
 
 	// Set appropriate headers for download
@@ -944,22 +945,22 @@ func (h *NotificationHandler) DownloadNotificationAttachmentByID(c *fiber.Ctx) e
 func (h *NotificationHandler) PreviewNotificationAttachmentByID(c *fiber.Ctx) error {
 	attachmentID := c.Params("attachment_id")
 	if attachmentID == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Attachment ID is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "attachment_id_required"))
 	}
 
 	// Find the notification containing this attachment
 	_, attachment, err := h.service.FindNotificationByAttachmentID(c.UserContext(), attachmentID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Attachment not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "attachment_not_found"))
 	}
 
 	if attachment.StoragePath == "" {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Attachment storage path not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "attachment_storage_missing"))
 	}
 
 	// Download from MinIO
 	if h.storage == nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Storage not configured")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "storage_not_configured"))
 	}
 
 	fileReader, err := h.storage.GetFile(c.UserContext(), attachment.StoragePath)
@@ -971,7 +972,7 @@ func (h *NotificationHandler) PreviewNotificationAttachmentByID(c *fiber.Ctx) er
 	// Read the file content
 	fileData, err := io.ReadAll(fileReader)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read attachment")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_read_attachment"))
 	}
 
 	// Set appropriate headers for inline preview

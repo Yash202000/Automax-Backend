@@ -8,6 +8,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -85,7 +86,7 @@ func (s *categoryService) Create(ctx context.Context, req *models.CategoryCreate
 func (s *categoryService) Update(ctx context.Context, id uuid.UUID, req *models.CategoryUpdateRequest) (*models.CategoryResponse, error) {
 	category, err := s.repo.FindByID(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("category not found: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "category_not_found"), err)
 	}
 
 	if req.Name != nil {
@@ -122,7 +123,7 @@ func (s *categoryService) Update(ctx context.Context, id uuid.UUID, req *models.
 func (s *categoryService) Get(ctx context.Context, id uuid.UUID) (*models.CategoryResponse, error) {
 	category, err := s.repo.FindByID(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("category not found: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "category_not_found"), err)
 	}
 	resp := models.ToCategoryResponse(category)
 	return &resp, nil
@@ -143,7 +144,7 @@ func (s *categoryService) List(ctx context.Context, includeInactive bool) ([]mod
 func (s *categoryService) GetTree(ctx context.Context) ([]models.CategoryResponse, error) {
 	tree, err := s.repo.GetTree(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load category tree: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_load_category_tree"), err)
 	}
 	out := make([]models.CategoryResponse, len(tree))
 	for i := range tree {
@@ -154,7 +155,7 @@ func (s *categoryService) GetTree(ctx context.Context) ([]models.CategoryRespons
 
 func (s *categoryService) Delete(ctx context.Context, id uuid.UUID) error {
 	if _, err := s.repo.FindByID(ctx, id); err != nil {
-		return fmt.Errorf("category not found: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T(ctx, "category_not_found"), err)
 	}
 	return s.repo.Delete(ctx, id)
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/google/uuid"
 )
 
@@ -59,7 +60,7 @@ func (s *EscalationPolicyService) Create(ctx context.Context, req *models.Create
 func (s *EscalationPolicyService) Update(ctx context.Context, id uuid.UUID, req *models.UpdateEscalationPolicyRequest) (*models.EscalationPolicyResponse, error) {
 	policy, err := s.repo.FindByID(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("escalation policy not found")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "escalation_policy_not_found"))
 	}
 
 	if req.Name != nil {
@@ -97,7 +98,7 @@ func (s *EscalationPolicyService) Update(ctx context.Context, id uuid.UUID, req 
 
 func (s *EscalationPolicyService) Delete(ctx context.Context, id uuid.UUID) error {
 	if _, err := s.repo.FindByID(ctx, id); err != nil {
-		return fmt.Errorf("escalation policy not found")
+		return fmt.Errorf("%s", i18n.T(ctx, "escalation_policy_not_found"))
 	}
 	return s.repo.Delete(ctx, id)
 }
@@ -105,7 +106,7 @@ func (s *EscalationPolicyService) Delete(ctx context.Context, id uuid.UUID) erro
 func (s *EscalationPolicyService) GetByID(ctx context.Context, id uuid.UUID) (*models.EscalationPolicyResponse, error) {
 	policy, err := s.repo.FindByID(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("escalation policy not found")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "escalation_policy_not_found"))
 	}
 	resp := models.ToEscalationPolicyResponse(policy)
 	return &resp, nil
@@ -194,7 +195,7 @@ func (s *EscalationPolicyService) ResolveGroupTargetUsers(ctx context.Context, t
 // step target identified by targetID. The target must belong to policyID.
 func (s *EscalationPolicyService) UpdateTargetExcludedUsers(ctx context.Context, policyID, targetID uuid.UUID, excludedUserIDs []string) error {
 	if _, err := s.repo.FindByID(ctx, policyID); err != nil {
-		return fmt.Errorf("escalation policy not found")
+		return fmt.Errorf("%s", i18n.T(ctx, "escalation_policy_not_found"))
 	}
 	return s.repo.UpdateTargetExcludedUsers(ctx, policyID, targetID, excludedUserIDs)
 }

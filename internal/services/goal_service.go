@@ -19,6 +19,7 @@ import (
 	"github.com/automax/backend/internal/services/metricformula"
 	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/google/uuid"
 	"github.com/xuri/excelize/v2"
 	"gorm.io/gorm"
@@ -500,7 +501,7 @@ func (s *goalService) GetGoal(ctx context.Context, id uuid.UUID, userID uuid.UUI
 		return nil, fmt.Errorf("goal not found: %w", err)
 	}
 	if !canAccess {
-		return nil, fmt.Errorf("access denied")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "access_denied"))
 	}
 
 	goal, err := s.goalRepo.FindByIDWithRelations(ctx, id)
@@ -755,7 +756,7 @@ func (s *goalService) AddCollaborator(ctx context.Context, goalID uuid.UUID, req
 	// Verify user exists
 	user, err := s.userRepo.FindByID(ctx, req.UserID)
 	if err != nil {
-		return fmt.Errorf("user not found: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T(ctx, "user_not_found"), err)
 	}
 
 	collaborator := &models.GoalCollaborator{
@@ -1166,7 +1167,7 @@ func (s *goalService) CreateEvidence(ctx context.Context, goalID uuid.UUID, titl
 	// Access check
 	canAccess, _ := s.canAccessGoal(ctx, goalID, userID)
 	if !canAccess {
-		return nil, fmt.Errorf("access denied")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "access_denied"))
 	}
 
 	if strings.TrimSpace(comment) == "" {
@@ -1326,7 +1327,7 @@ func (s *goalService) ListEvidences(ctx context.Context, goalID uuid.UUID, filte
 	// Access check
 	canAccess, _ := s.canAccessGoal(ctx, goalID, userID)
 	if !canAccess {
-		return nil, 0, fmt.Errorf("access denied")
+		return nil, 0, fmt.Errorf("%s", i18n.T(ctx, "access_denied"))
 	}
 
 	if filter.Page < 1 {
@@ -1635,7 +1636,7 @@ func (s *goalService) GetAvailableEvidenceTransitions(ctx context.Context, evide
 func (s *goalService) ExecuteEvidenceTransition(ctx context.Context, evidenceID uuid.UUID, req *models.EvidenceTransitionRequest, userID uuid.UUID) (*models.EvidenceResponse, error) {
 	transitionID, err := uuid.Parse(req.TransitionID)
 	if err != nil {
-		return nil, fmt.Errorf("invalid transition_id: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "invalid_transition_id_svc"), err)
 	}
 
 	// Begin transaction
@@ -1668,7 +1669,7 @@ func (s *goalService) ExecuteEvidenceTransition(ctx context.Context, evidenceID 
 	transition, err := s.workflowRepo.FindTransitionByIDWithRelations(ctx, transitionID)
 	if err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("transition not found: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "transition_not_found"), err)
 	}
 
 	// Validate transition belongs to evidence's workflow
@@ -1680,7 +1681,7 @@ func (s *goalService) ExecuteEvidenceTransition(ctx context.Context, evidenceID 
 	// Validate transition's from_state matches evidence's current state
 	if transition.FromStateID != *evidence.CurrentStateID {
 		tx.Rollback()
-		return nil, fmt.Errorf("transition is not valid from current state")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "transition_invalid_from_state"))
 	}
 
 	// Authorization check
@@ -1694,7 +1695,7 @@ func (s *goalService) ExecuteEvidenceTransition(ctx context.Context, evidenceID 
 	case "approve_l1", "approve_l1_final", "request_changes_l1", "reject_l1", "approve_l2", "request_changes_l2", "reject_l2":
 		if evidence.AssignedToID == nil || *evidence.AssignedToID != userID {
 			tx.Rollback()
-			return nil, fmt.Errorf("only the assigned reviewer can perform this action")
+			return nil, fmt.Errorf("%s", i18n.T(ctx, "only_reviewer_action"))
 		}
 	}
 
@@ -2185,7 +2186,7 @@ func (s *goalService) buildAvailableTransitions(ctx context.Context, transitions
 func (s *goalService) TransitionMetric(ctx context.Context, metricID uuid.UUID, req *models.MetricTransitionRequest, userID uuid.UUID) (*models.GoalMetricResponse, error) {
 	transitionID, err := uuid.Parse(req.TransitionID)
 	if err != nil {
-		return nil, fmt.Errorf("invalid transition_id: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "invalid_transition_id_svc"), err)
 	}
 
 	tx := s.goalRepo.BeginTx(ctx)
@@ -2214,7 +2215,7 @@ func (s *goalService) TransitionMetric(ctx context.Context, metricID uuid.UUID, 
 	transition, err := s.workflowRepo.FindTransitionByIDWithRelations(ctx, transitionID)
 	if err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("transition not found: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "transition_not_found"), err)
 	}
 
 	if transition.WorkflowID != *metric.WorkflowID {
@@ -2223,7 +2224,7 @@ func (s *goalService) TransitionMetric(ctx context.Context, metricID uuid.UUID, 
 	}
 	if transition.FromStateID != *metric.CurrentStateID {
 		tx.Rollback()
-		return nil, fmt.Errorf("transition is not valid from current state")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "transition_invalid_from_state"))
 	}
 
 	// Authorization
@@ -2237,7 +2238,7 @@ func (s *goalService) TransitionMetric(ctx context.Context, metricID uuid.UUID, 
 	case "approve_l1", "approve_l1_final", "request_changes_l1", "reject_l1", "approve_l2", "request_changes_l2", "reject_l2":
 		if metric.AssignedToID == nil || *metric.AssignedToID != userID {
 			tx.Rollback()
-			return nil, fmt.Errorf("only the assigned reviewer can perform this action")
+			return nil, fmt.Errorf("%s", i18n.T(ctx, "only_reviewer_action"))
 		}
 	}
 
@@ -2365,7 +2366,7 @@ func (s *goalService) TransitionMetric(ctx context.Context, metricID uuid.UUID, 
 func (s *goalService) TransitionMetricValueChange(ctx context.Context, changeID uuid.UUID, req *models.MetricTransitionRequest, userID uuid.UUID) (*models.GoalMetricValueChangeResponse, error) {
 	transitionID, err := uuid.Parse(req.TransitionID)
 	if err != nil {
-		return nil, fmt.Errorf("invalid transition_id: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "invalid_transition_id_svc"), err)
 	}
 
 	tx := s.goalRepo.BeginTx(ctx)
@@ -2389,7 +2390,7 @@ func (s *goalService) TransitionMetricValueChange(ctx context.Context, changeID 
 	transition, err := s.workflowRepo.FindTransitionByIDWithRelations(ctx, transitionID)
 	if err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("transition not found: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "transition_not_found"), err)
 	}
 	if transition.WorkflowID != change.WorkflowID {
 		tx.Rollback()
@@ -2397,7 +2398,7 @@ func (s *goalService) TransitionMetricValueChange(ctx context.Context, changeID 
 	}
 	if transition.FromStateID != change.CurrentStateID {
 		tx.Rollback()
-		return nil, fmt.Errorf("transition is not valid from current state")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "transition_invalid_from_state"))
 	}
 
 	// Need parent metric for goal/owner lookups + applying value
@@ -2418,7 +2419,7 @@ func (s *goalService) TransitionMetricValueChange(ctx context.Context, changeID 
 	case "approve_l1", "approve_l1_final", "request_changes_l1", "reject_l1", "approve_l2", "request_changes_l2", "reject_l2":
 		if change.AssignedToID == nil || *change.AssignedToID != userID {
 			tx.Rollback()
-			return nil, fmt.Errorf("only the assigned reviewer can perform this action")
+			return nil, fmt.Errorf("%s", i18n.T(ctx, "only_reviewer_action"))
 		}
 	}
 
@@ -2584,7 +2585,7 @@ func (s *goalService) ListMetricValueChanges(ctx context.Context, metricID uuid.
 	}
 	canAccess, _ := s.canAccessGoal(ctx, metric.GoalID, userID)
 	if !canAccess {
-		return nil, fmt.Errorf("access denied")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "access_denied"))
 	}
 
 	changes, err := s.goalRepo.ListMetricValueChangesByMetricID(ctx, metricID)
@@ -3619,7 +3620,7 @@ func (s *goalService) CreateCheckIn(ctx context.Context, goalID uuid.UUID, req *
 	// Access check
 	canAccess, _ := s.canAccessGoal(ctx, goalID, userID)
 	if !canAccess {
-		return nil, fmt.Errorf("access denied")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "access_denied"))
 	}
 
 	// Verify goal exists
@@ -4280,7 +4281,7 @@ func (s *goalService) GetAvailableMetricBatchTransitions(ctx context.Context, ba
 	}
 
 	if batch.CurrentStateID == nil || batch.WorkflowID == nil {
-		return nil, fmt.Errorf("batch has no workflow assigned")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "batch_no_workflow"))
 	}
 
 	// Get all transitions from current state
@@ -4370,7 +4371,7 @@ func (s *goalService) GetAvailableMetricBatchTransitions(ctx context.Context, ba
 func (s *goalService) ExecuteMetricBatchTransition(ctx context.Context, batchID uuid.UUID, req *models.MetricImportBatchTransitionRequest, userID uuid.UUID) (*models.MetricImportBatchResponse, error) {
 	transitionID, err := uuid.Parse(req.TransitionID)
 	if err != nil {
-		return nil, fmt.Errorf("invalid transition_id: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "invalid_transition_id_svc"), err)
 	}
 
 	tx := s.goalRepo.BeginTx(ctx)
@@ -4395,24 +4396,24 @@ func (s *goalService) ExecuteMetricBatchTransition(ctx context.Context, batchID 
 
 	if batch.CurrentStateID == nil || batch.WorkflowID == nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("batch has no workflow assigned")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "batch_no_workflow"))
 	}
 
 	// Fetch transition
 	transition, err := s.workflowRepo.FindTransitionByIDWithRelations(ctx, transitionID)
 	if err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("transition not found: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "transition_not_found"), err)
 	}
 
 	if transition.WorkflowID != *batch.WorkflowID {
 		tx.Rollback()
-		return nil, fmt.Errorf("transition does not belong to batch's workflow")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "transition_not_in_batch_workflow"))
 	}
 
 	if transition.FromStateID != *batch.CurrentStateID {
 		tx.Rollback()
-		return nil, fmt.Errorf("transition is not valid from current state")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "transition_invalid_from_state"))
 	}
 
 	// Authorization check
@@ -4421,12 +4422,12 @@ func (s *goalService) ExecuteMetricBatchTransition(ctx context.Context, batchID 
 		goal, _ := s.goalRepo.FindByID(ctx, batch.PrimaryGoalID)
 		if batch.ImportedByID != userID && (goal == nil || goal.OwnerID != userID) {
 			tx.Rollback()
-			return nil, fmt.Errorf("only the importer or goal owner can submit")
+			return nil, fmt.Errorf("%s", i18n.T(ctx, "only_importer_or_owner"))
 		}
 	case "approve_l1", "approve_l1_final", "request_changes_l1", "reject_l1", "approve_l2", "request_changes_l2", "reject_l2":
 		if batch.AssignedToID == nil || *batch.AssignedToID != userID {
 			tx.Rollback()
-			return nil, fmt.Errorf("only the assigned reviewer can perform this action")
+			return nil, fmt.Errorf("%s", i18n.T(ctx, "only_reviewer_action"))
 		}
 	}
 
@@ -4502,7 +4503,7 @@ func (s *goalService) ExecuteMetricBatchTransition(ctx context.Context, batchID 
 		}
 		if reviewerL1 == nil {
 			tx.Rollback()
-			return nil, fmt.Errorf("no L1 reviewer assigned to the primary goal")
+			return nil, fmt.Errorf("%s", i18n.T(ctx, "no_l1_reviewer"))
 		}
 
 		l1State, _ := s.workflowRepo.FindStateByCode(ctx, *batch.WorkflowID, "l1_review")
@@ -4732,7 +4733,7 @@ func (s *goalService) AddComment(ctx context.Context, goalID uuid.UUID, content 
 		return nil, fmt.Errorf("failed to check goal access: %w", err)
 	}
 	if !canAccess {
-		return nil, fmt.Errorf("access denied")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "access_denied"))
 	}
 
 	comment := &models.GoalComment{
@@ -4777,7 +4778,7 @@ func (s *goalService) DeleteComment(ctx context.Context, commentID uuid.UUID, us
 
 	// Only the author or a super admin can delete
 	if comment.AuthorID != userID && !s.isSuperAdmin(ctx) {
-		return fmt.Errorf("access denied: only the comment author can delete")
+		return fmt.Errorf("%s", i18n.T(ctx, "only_comment_author_delete"))
 	}
 
 	if err := s.goalRepo.DeleteComment(ctx, commentID); err != nil {

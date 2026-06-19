@@ -7,6 +7,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 )
@@ -69,7 +70,7 @@ func NewGoalAnalyticsHandler(service services.GoalAnalyticsService) *GoalAnalyti
 func (h *GoalAnalyticsHandler) GetGoalStats(c *fiber.Ctx) error {
 	deptFilter, ownerFilter, err := analyticsScopeFromCtx(c)
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid department_id"})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": i18n.T(c.UserContext(), "invalid_department_id")})
 	}
 
 	stats, err := h.service.GetStats(c.Context(), deptFilter, ownerFilter)
@@ -85,7 +86,7 @@ func (h *GoalAnalyticsHandler) GetGoalStats(c *fiber.Ctx) error {
 func (h *GoalAnalyticsHandler) GetDistributions(c *fiber.Ctx) error {
 	departmentID, ownerFilter, deptErr := analyticsScopeFromCtx(c)
 	if deptErr != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid department_id"})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": i18n.T(c.UserContext(), "invalid_department_id")})
 	}
 
 	dist, err := h.service.GetDistributions(c.Context(), departmentID, ownerFilter)
@@ -101,7 +102,7 @@ func (h *GoalAnalyticsHandler) GetDistributions(c *fiber.Ctx) error {
 func (h *GoalAnalyticsHandler) GetProgressSummary(c *fiber.Ctx) error {
 	deptFilter, ownerFilter, err := analyticsScopeFromCtx(c)
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid department_id"})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": i18n.T(c.UserContext(), "invalid_department_id")})
 	}
 
 	summary, err := h.service.GetProgressSummary(c.Context(), deptFilter, ownerFilter)
@@ -117,7 +118,7 @@ func (h *GoalAnalyticsHandler) GetProgressSummary(c *fiber.Ctx) error {
 func (h *GoalAnalyticsHandler) GetAtRiskGoals(c *fiber.Ctx) error {
 	deptFilter, ownerFilter, deptErr := analyticsScopeFromCtx(c)
 	if deptErr != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid department_id"})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": i18n.T(c.UserContext(), "invalid_department_id")})
 	}
 
 	page, _ := strconv.Atoi(c.Query("page", "1"))
@@ -149,7 +150,7 @@ func (h *GoalAnalyticsHandler) GetAtRiskGoals(c *fiber.Ctx) error {
 func (h *GoalAnalyticsHandler) GetTrendData(c *fiber.Ctx) error {
 	deptFilter, ownerFilter, deptErr := analyticsScopeFromCtx(c)
 	if deptErr != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid department_id"})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": i18n.T(c.UserContext(), "invalid_department_id")})
 	}
 
 	months, _ := strconv.Atoi(c.Query("months", "12"))
@@ -167,7 +168,7 @@ func (h *GoalAnalyticsHandler) GetTrendData(c *fiber.Ctx) error {
 func (h *GoalAnalyticsHandler) GetOKRTree(c *fiber.Ctx) error {
 	departmentID, ownerFilter, deptErr := analyticsScopeFromCtx(c)
 	if deptErr != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid department_id"})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": i18n.T(c.UserContext(), "invalid_department_id")})
 	}
 
 	var periodStart *time.Time
