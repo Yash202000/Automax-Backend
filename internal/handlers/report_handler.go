@@ -7,6 +7,7 @@ import (
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
 	cstmContext "github.com/automax/backend/pkg/context"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
@@ -31,7 +32,7 @@ func NewReportHandler(service services.ReportService) *ReportHandler {
 func (h *ReportHandler) CreateReport(c *fiber.Ctx) error {
 	var req models.ReportCreateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -48,22 +49,22 @@ func (h *ReportHandler) CreateReport(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "Report created successfully", report)
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "report_created"), report)
 }
 
 func (h *ReportHandler) GetReport(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid report ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_report_id"))
 	}
 
 	report, err := h.service.GetReport(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Report not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "report_not_found"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Report retrieved successfully", report)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "report_retrieved"), report)
 }
 
 func (h *ReportHandler) ListReports(c *fiber.Ctx) error {
@@ -126,12 +127,12 @@ func (h *ReportHandler) UpdateReport(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid report ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_report_id"))
 	}
 
 	var req models.ReportUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
@@ -141,14 +142,14 @@ func (h *ReportHandler) UpdateReport(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Report updated successfully", report)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "report_updated"), report)
 }
 
 func (h *ReportHandler) DeleteReport(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid report ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_report_id"))
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
@@ -157,14 +158,14 @@ func (h *ReportHandler) DeleteReport(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Report deleted successfully", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "report_deleted"), nil)
 }
 
 func (h *ReportHandler) DuplicateReport(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid report ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_report_id"))
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
@@ -174,7 +175,7 @@ func (h *ReportHandler) DuplicateReport(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "Report duplicated successfully", report)
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "report_duplicated"), report)
 }
 
 // Report Execution
@@ -183,7 +184,7 @@ func (h *ReportHandler) ExecuteReport(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid report ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_report_id"))
 	}
 
 	var req models.ReportExecuteRequest
@@ -199,17 +200,17 @@ func (h *ReportHandler) ExecuteReport(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Report executed successfully", result)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "report_executed"), result)
 }
 
 func (h *ReportHandler) PreviewReport(c *fiber.Ctx) error {
 	var req models.ReportCreateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if req.DataSource == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "data_source is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "data_source_required"))
 	}
 
 	result, err := h.service.PreviewReport(c.UserContext(), &req)
@@ -217,21 +218,21 @@ func (h *ReportHandler) PreviewReport(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Preview generated successfully", result)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "preview_generated"), result)
 }
 
 func (h *ReportHandler) QueryReport(c *fiber.Ctx) error {
 	var req models.ReportQueryRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if req.DataSource == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "data_source is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "data_source_required"))
 	}
 
 	if len(req.Columns) == 0 {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "columns are required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "columns_required"))
 	}
 
 	// Set defaults
@@ -256,7 +257,7 @@ func (h *ReportHandler) QueryReport(c *fiber.Ctx) error {
 func (h *ReportHandler) ExportReport(c *fiber.Ctx) error {
 	var req models.ReportExportRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); validationErrors != nil {
@@ -288,7 +289,7 @@ func (h *ReportHandler) GetExecutionHistory(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid report ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_report_id"))
 	}
 
 	page, _ := strconv.Atoi(c.Query("page", "1"))
@@ -320,5 +321,5 @@ func (h *ReportHandler) GetExecutionHistory(c *fiber.Ctx) error {
 
 func (h *ReportHandler) GetDataSources(c *fiber.Ctx) error {
 	dataSources := h.service.GetDataSources(c.UserContext())
-	return utils.SuccessResponse(c, fiber.StatusOK, "Data sources retrieved successfully", dataSources)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "data_sources_retrieved"), dataSources)
 }

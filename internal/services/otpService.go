@@ -15,6 +15,7 @@ import (
 	"github.com/automax/backend/internal/database"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -220,13 +221,13 @@ func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID stri
 
 	val, err := s.redis.Get(ctx, key).Result()
 	if err != nil {
-		return nil, fmt.Errorf("otp expired or invalid session")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "otp_expired_invalid_session"))
 	}
 
 	var data models.OTPData
 	err = json.Unmarshal([]byte(val), &data)
 	if err != nil {
-		return nil, fmt.Errorf("invalid stored otp data")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "invalid_stored_otp"))
 	}
 
 	maxVerifyStr := os.Getenv("VERIFY_OTP_MAX_ATTEMPT")
@@ -237,7 +238,7 @@ func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID stri
 
 	if data.Attempts >= maxVerify {
 		s.redis.Del(ctx, key)
-		return nil, fmt.Errorf("max verify attempts exceeded")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "max_verify_attempts_exceeded"))
 	}
 
 	if data.Hash != HashOTP(inputOTP) {
@@ -248,7 +249,7 @@ func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID stri
 
 		s.redis.Set(ctx, key, updatedData, ttl)
 
-		return nil, fmt.Errorf("invalid otp")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "invalid_otp"))
 	}
 
 	// Fetch user by phone — if not found, auto-create as citizen
@@ -258,7 +259,7 @@ func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID stri
 		// The citizen name was stored in Redis during SendOTP. A unique email/username
 		// is generated from the phone number since these fields are required (DB unique constraints).
 		// The "citizen" role is assigned automatically. To revert this feature, restore the
-		// original line: return nil, fmt.Errorf("user not found")
+		// original line: return nil, fmt.Errorf("%s", i18n.T(ctx, "user_not_found"))
 		user, err = s.autoCreateCitizenUser(ctx, phone, data.Name)
 		if err != nil {
 			return nil, fmt.Errorf("failed to register citizen: %w", err)
@@ -332,7 +333,7 @@ func (s *OTPService) autoCreateCitizenUser(ctx context.Context, phone string, na
 // 	key := "otp:" + phone + "--" + sessionID
 // 	val, err := s.redis.Get(ctx, key).Result()
 // 	if err != nil {
-// 		return fmt.Errorf("otp expired or invalid session")
+// 		return fmt.Errorf("%s", i18n.T(ctx, "otp_expired_invalid_session"))
 // 	}
 
 // 	var data struct {
@@ -344,7 +345,7 @@ func (s *OTPService) autoCreateCitizenUser(ctx context.Context, phone string, na
 
 // 	err = json.Unmarshal([]byte(val), &data)
 // 	if err != nil {
-// 		return fmt.Errorf("invalid stored otp data")
+// 		return fmt.Errorf("%s", i18n.T(ctx, "invalid_stored_otp"))
 // 	}
 
 // 	// Load verify max attempt
@@ -357,7 +358,7 @@ func (s *OTPService) autoCreateCitizenUser(ctx context.Context, phone string, na
 // 	// Check max verify attempts
 // 	if data.Attempts >= maxVerify {
 // 		s.redis.Del(ctx, key)
-// 		return fmt.Errorf("max verify attempts exceeded")
+// 		return fmt.Errorf("%s", i18n.T(ctx, "max_verify_attempts_exceeded"))
 // 	}
 
 // 	// Check OTP match
@@ -369,7 +370,7 @@ func (s *OTPService) autoCreateCitizenUser(ctx context.Context, phone string, na
 // 		// Update attempts but keep original TTL
 // 		s.redis.Set(ctx, key, updatedData, ttl)
 
-// 		return fmt.Errorf("invalid otp")
+// 		return fmt.Errorf("%s", i18n.T(ctx, "invalid_otp"))
 // 	}
 // 	// UPDATE DB
 // 	err = s.notificationLogRepo.MarkOTPVerified(ctx, sessionID, time.Now())

@@ -4,6 +4,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 )
@@ -26,7 +27,7 @@ func (h *ApplicationLinkHandler) CreateLink(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
-			"error":   "Invalid request body",
+			"error":   i18n.T(c.UserContext(), "invalid_request_body"),
 		})
 	}
 
@@ -59,7 +60,7 @@ func (h *ApplicationLinkHandler) GetLink(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 			"success": false,
-			"error":   "Application link not found",
+			"error":   i18n.T(c.UserContext(), "application_link_not_found"),
 		})
 	}
 
@@ -116,7 +117,7 @@ func (h *ApplicationLinkHandler) UpdateLink(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
-			"error":   "Invalid request body",
+			"error":   i18n.T(c.UserContext(), "invalid_request_body"),
 		})
 	}
 
@@ -174,7 +175,7 @@ func (h *ApplicationLinkHandler) UploadImage(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 			"success": false,
-			"error":   "Application link not found",
+			"error":   i18n.T(c.UserContext(), "application_link_not_found"),
 		})
 	}
 
@@ -183,7 +184,7 @@ func (h *ApplicationLinkHandler) UploadImage(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
-			"error":   "No file uploaded",
+			"error":   i18n.T(c.UserContext(), "no_file_uploaded"),
 		})
 	}
 
@@ -191,7 +192,7 @@ func (h *ApplicationLinkHandler) UploadImage(c *fiber.Ctx) error {
 	if file.Size > 5*1024*1024 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
-			"error":   "File size exceeds 5MB limit",
+			"error":   i18n.T(c.UserContext(), "file_size_5mb"),
 		})
 	}
 
@@ -209,7 +210,7 @@ func (h *ApplicationLinkHandler) UploadImage(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"success": false,
-			"error":   "Failed to open file",
+			"error":   i18n.T(c.UserContext(), "failed_to_open_file"),
 		})
 	}
 	defer src.Close()
@@ -262,7 +263,7 @@ func (h *ApplicationLinkHandler) RemoveImage(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 			"success": false,
-			"error":   "Application link not found",
+			"error":   i18n.T(c.UserContext(), "application_link_not_found"),
 		})
 	}
 

@@ -227,6 +227,7 @@ var incidentFilterFields = map[string]string{
 	"reporter_id":               "incidents.reporter_id",
 	"reporter_email":            "incidents.reporter_email",
 	"reporter_name":             "incidents.reporter_name",
+	"reporter_phone":            "incidents.reporter_phone",
 	"custom_fields":             "incidents.custom_fields",
 	"created_at":                "incidents.created_at",
 	"updated_at":                "incidents.updated_at",
@@ -264,9 +265,11 @@ var incidentFilterFields = map[string]string{
 	// ── Via JOIN: workflows ───────────────────────────────────────────────────
 	"workflow_name": "workflows.name",
 	// ── Via JOIN: reporters (users aliased as reporters) ──────────────────────
-	"reporter_username":   "reporters.username",
-	"reporter_first_name": "reporters.first_name",
-	"reporter_last_name":  "reporters.last_name",
+	"creator_username":   "creator.username",
+	"creator_first_name": "creator.first_name",
+	"creator_last_name":  "creator.last_name",
+	"creator_email":      "creator.email",
+
 	// ── Via JOIN: assignees (users aliased as assignees) ──────────────────────
 	"assignee_email":      "assignees.email",
 	"assignee_username":   "assignees.username",
@@ -678,42 +681,50 @@ func (r *reportRepository) ExecuteRequestQuery(ctx context.Context, filters []mo
 	// Extract requested columns from context for dynamic row construction.
 	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
 
-	query := r.db.WithContext(ctx).Model(&models.Incident{}).
-		Where("incidents.record_type = ?", "request")
-	query = r.applyFilters(ctx, query, filters)
+	// buildBase returns a fresh *gorm.DB with all JOINs applied so that both
+	// the COUNT and the data query see the same tables (required when filters
+	// reference joined columns such as classifications.name or locations.name).
+	// Using a fresh base each time avoids GORM statement accumulation after Count().
+	buildBase := func() *gorm.DB {
+		q := r.db.WithContext(ctx).Model(&models.Incident{}).
+			Where("incidents.record_type = ?", "request").
+			Joins("LEFT JOIN users as creator ON incidents.reporter_id = creator.id").
+			Joins("LEFT JOIN classifications ON incidents.classification_id = classifications.id").
+			Joins("LEFT JOIN locations ON incidents.location_id = locations.id")
+		return r.applyFilters(ctx, q, filters)
+	}
 
-	if err := query.Count(&total).Error; err != nil {
+	if err := buildBase().Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	query = r.applySorting(query, sorting)
+	dataQuery := buildBase()
+	dataQuery = r.applySorting(dataQuery, sorting)
 	if sorting == nil {
-		query = query.Order("incidents.created_at DESC")
+		dataQuery = dataQuery.Order("incidents.created_at DESC")
 	}
 
 	offset := (page - 1) * limit
-	rows, err := query.Debug().
+	rows, err := dataQuery.
 		Select(
 			"incidents.incident_number as request_number, " +
-				// "incidents.created_by_mobile as created_by_mobile, " +
-				"reporters.first_name as reporter_first_name, reporters.last_name as reporter_last_name, " +
-				"TRIM(reporters.first_name || ' ' || reporters.last_name) as reporter_name, " +
-				"reporters.phone as reporter_phone, " +
+				"creator.first_name as creator_first_name, creator.last_name as creator_last_name, " +
+				"TRIM(creator.first_name || ' ' || creator.last_name) as creator_name, " +
+				"creator.phone as creator_phone, " +
 				"classifications.name as classification_name, " +
 				"locations.name as location_name, " +
 				"incidents.title as title, " +
-				// Conditional: if source_incident_id IS NULL → fetch reporter's role, else mark as converted
+				// Scalar subquery picks a single role name to avoid row fan-out when
+				// the reporter has multiple active roles.
 				"CASE " +
-				"  WHEN incidents.source_incident_id IS NULL THEN roles.name " +
+				"  WHEN incidents.source_incident_id IS NULL THEN (" +
+				"    SELECT r.name FROM user_roles ur" +
+				"    JOIN roles r ON r.id = ur.role_id AND r.deleted_at IS NULL AND r.is_active = true" +
+				"    WHERE ur.user_id = creator.id LIMIT 1" +
+				"  ) " +
 				"  ELSE 'Converted from Incident' " +
 				"END as request_source, " +
 				"incidents.created_at as created_at").
-		Joins("LEFT JOIN users as reporters ON incidents.reporter_id = reporters.id").
-		Joins("LEFT JOIN classifications ON incidents.classification_id = classifications.id").
-		Joins("LEFT JOIN locations ON incidents.location_id = locations.id").
-		// Join user_roles and roles only for reporter
-		Joins("LEFT JOIN user_roles ON user_roles.user_id = reporters.id").
-		Joins("LEFT JOIN roles ON roles.id = user_roles.role_id AND roles.deleted_at IS NULL AND roles.is_active = true").
 		Offset(offset).
 		Limit(limit).
 		Rows()
@@ -730,6 +741,7 @@ func (r *reportRepository) ExecuteRequestQuery(ctx context.Context, filters []mo
 			columnPointers[i] = &columns[i]
 		}
 		if err := rows.Scan(columnPointers...); err != nil {
+			log.Printf("ExecuteRequestQuery: scan error: %v", err)
 			continue
 		}
 
@@ -770,7 +782,7 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 	// (b) GORM statement accumulation does not duplicate JOINs across Count + Rows calls.
 	buildBase := func() *gorm.DB {
 		q := r.db.WithContext(ctx).Model(&models.Incident{}).Debug().
-			Joins("LEFT JOIN users as reporters ON incidents.reporter_id = reporters.id").
+			Joins("LEFT JOIN users as creator ON incidents.reporter_id = creator.id").
 			Joins("LEFT JOIN users as assignees ON incidents.assignee_id = assignees.id").
 			Joins("LEFT JOIN workflow_states ON incidents.current_state_id = workflow_states.id").
 			Joins("LEFT JOIN classifications ON incidents.classification_id = classifications.id").
@@ -801,11 +813,11 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			case "in":
 				q = q.Where(transSubq+" AND wt.id IN (?))", f.Value)
 			case "contains":
-				q = q.Where(transSubq+" AND wt.id ILIKE ?)", "%"+f.Value.(string)+"%")
+				q = q.Where(transSubq+" AND wt.name ILIKE ?)", "%"+f.Value.(string)+"%")
 			case "starts_with":
-				q = q.Where(transSubq+" AND wt.id ILIKE ?)", f.Value.(string)+"%")
+				q = q.Where(transSubq+" AND wt.name ILIKE ?)", f.Value.(string)+"%")
 			case "ends_with":
-				q = q.Where(transSubq+" AND wt.id ILIKE ?)", "%"+f.Value.(string))
+				q = q.Where(transSubq+" AND wt.name ILIKE ?)", "%"+f.Value.(string))
 			}
 		}
 
@@ -856,9 +868,9 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 	offset := (page - 1) * limit
 	rows, err := dataQuery.
 		Select("incidents.*, " +
-			"reporters.email as reporter_email, reporters.first_name as reporter_first_name, reporters.last_name as reporter_last_name, " +
-			"TRIM(reporters.first_name || ' ' || reporters.last_name) as reporter_name, " +
-			"reporters.username as reporter_username, " + "reporters.phone as reporter_phone, " +
+			"creator.email as creator_email, creator.first_name as creator_first_name, creator.last_name as creator_last_name, " +
+			"TRIM(creator.first_name || ' ' || creator.last_name) as creator_name, " +
+			"creator.username as creator_username, " + "creator.phone as creator_phone, " +
 			"assignees.email as assignee_email, assignees.first_name as assignee_first_name, assignees.last_name as assignee_last_name, " +
 			"assignees.username as assignee_username, " +
 			"workflow_states.name as current_state_name, workflow_states.state_type as current_state_state_type, " +
@@ -1161,22 +1173,17 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			rejectedFeedbackMap, _ = r.fetchFeedbackDataByState(ctx, "Rejected", incidentIDs)
 		}
 
-		// Under Resolution feedback
+		// Under Resolution + Reopened feedback share the same state; fetch once.
 		var underResFeedbackMap map[string][]TransitionLinkedResult
-		if hasCol("under_resolution_feedback") {
+		if hasCol("under_resolution_feedback", "reopened_feedback") {
 			underResFeedbackMap, _ = r.fetchFeedbackDataByState(ctx, "Under Resolution", incidentIDs)
 		}
+		reopenedFeedbackMap := underResFeedbackMap // alias — same data
 
 		// Ready To Close feedback
 		var readyToCloseFeedbackMap map[string][]TransitionLinkedResult
 		if hasCol("ready_to_close_feedback") {
 			readyToCloseFeedbackMap, _ = r.fetchFeedbackDataByState(ctx, "Ready To Close", incidentIDs)
-		}
-
-		// Reopened feedback — reopen transitions land in "Under Resolution"
-		var reopenedFeedbackMap map[string][]TransitionLinkedResult
-		if hasCol("reopened_feedback") {
-			reopenedFeedbackMap, _ = r.fetchFeedbackDataByState(ctx, "Under Resolution", incidentIDs)
 		}
 		// 10. Comment
 		// in the bulk enrichment block, alongside other hasCol checks
@@ -1197,28 +1204,23 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			rejectedCommentMap, _ = r.fetchCommentDataByState(ctx, "Rejected", incidentIDs)
 		}
 
-		// Under Resolution feedback
+		// Under Resolution + Reopened comments share the same state; fetch once.
 		var underResCommentMap map[string][]TransitionLinkedResult
-		if hasCol("under_resolution_comment") {
+		if hasCol("under_resolution_comment", "reopened_comment") {
 			underResCommentMap, _ = r.fetchCommentDataByState(ctx, "Under Resolution", incidentIDs)
 		}
+		reopenedCommentMap := underResCommentMap // alias — same data
 
-		// In Progress feedback
+		// In Progress comment
 		var inProgressCommentMap map[string][]TransitionLinkedResult
 		if hasCol("in_progress_comment") {
 			inProgressCommentMap, _ = r.fetchCommentDataByState(ctx, "In Progress", incidentIDs)
 		}
 
-		// Ready To Close feedback
+		// Ready To Close comment
 		var readyToCloseCommentMap map[string][]TransitionLinkedResult
 		if hasCol("ready_to_close_comment") {
 			readyToCloseCommentMap, _ = r.fetchCommentDataByState(ctx, "Ready To Close", incidentIDs)
-		}
-
-		// Reopened comment — reopen transitions land in "Under Resolution"
-		var reopenedCommentMap map[string][]TransitionLinkedResult
-		if hasCol("reopened_comment") {
-			reopenedCommentMap, _ = r.fetchCommentDataByState(ctx, "Under Resolution", incidentIDs)
 		}
 
 		// @todo urgent update the incident id to location/classification id

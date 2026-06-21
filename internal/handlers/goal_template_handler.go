@@ -4,6 +4,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/gofiber/fiber/v2"
@@ -21,7 +22,7 @@ func NewGoalTemplateHandler(service services.GoalTemplateService) *GoalTemplateH
 func (h *GoalTemplateHandler) Create(c *fiber.Ctx) error {
 	var req models.GoalTemplateCreateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -35,30 +36,30 @@ func (h *GoalTemplateHandler) Create(c *fiber.Ctx) error {
 
 	template, err := h.service.Create(c.UserContext(), &req, userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create goal template")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create_goal_template"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "Goal template created", template)
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "goal_template_created"), template)
 }
 
 func (h *GoalTemplateHandler) GetByID(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	template, err := h.service.GetByID(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Goal template not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "goal_template_not_found"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Goal template retrieved", template)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "goal_template_retrieved"), template)
 }
 
 func (h *GoalTemplateHandler) List(c *fiber.Ctx) error {
 	var filter models.GoalTemplateFilter
 	if err := c.QueryParser(&filter); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_query_parameters"))
 	}
 
 	if filter.Page < 1 {
@@ -70,7 +71,7 @@ func (h *GoalTemplateHandler) List(c *fiber.Ctx) error {
 
 	templates, total, err := h.service.List(c.UserContext(), &filter)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to list goal templates")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_list_goal_templates"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -85,40 +86,40 @@ func (h *GoalTemplateHandler) List(c *fiber.Ctx) error {
 func (h *GoalTemplateHandler) ListActive(c *fiber.Ctx) error {
 	templates, err := h.service.ListActive(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to list active templates")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_list_active_templates"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Active templates", templates)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "active_templates"), templates)
 }
 
 func (h *GoalTemplateHandler) Update(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	var req models.GoalTemplateUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	template, err := h.service.Update(c.UserContext(), id, &req)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to update goal template")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update_goal_template"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Goal template updated", template)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "goal_template_updated"), template)
 }
 
 func (h *GoalTemplateHandler) Delete(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	if err := h.service.Delete(c.UserContext(), id); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to delete goal template")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_delete_goal_template"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Goal template deleted", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "goal_template_deleted"), nil)
 }

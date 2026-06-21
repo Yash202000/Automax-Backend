@@ -9,6 +9,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/gofiber/fiber/v2"
@@ -103,12 +104,12 @@ type LDAPUserInfoResponse struct {
 func (h *LDAPHandler) Login(c *fiber.Ctx) error {
 	// Check if LDAP is enabled
 	if !h.config.LDAP.Enabled {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "LDAP authentication is not enabled")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "ldap_auth_not_enabled"))
 	}
 
 	var req LDAPLoginRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -128,7 +129,7 @@ func (h *LDAPHandler) Login(c *fiber.Ctx) error {
 
 	// Check if user is enabled
 	if !ldapUser.Enabled {
-		return utils.ErrorResponse(c, fiber.StatusForbidden, "Your account is disabled in Active Directory")
+		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "account_disabled_ad"))
 	}
 
 	// Look up or auto-create user in local database
@@ -153,7 +154,7 @@ func (h *LDAPHandler) Login(c *fiber.Ctx) error {
 
 	// Check if user is active in local database
 	if !user.IsActive {
-		return utils.ErrorResponse(c, fiber.StatusForbidden, "Your account is deactivated in the system")
+		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "account_deactivated"))
 	}
 
 	// Determine role for JWT
@@ -172,13 +173,13 @@ func (h *LDAPHandler) Login(c *fiber.Ctx) error {
 		"auth_source": "ldap",
 	}, h.jwtManager.GetTokenExpiration())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to store session")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_store_session"))
 	}
 
 	// Generate JWT tokens
 	tokenPair, err := h.jwtManager.GenerateTokenPair(user.ID, user.Email, role, sessionID, false)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to generate authentication tokens")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_generate_tokens"))
 	}
 
 	// Update last login timestamp
@@ -205,7 +206,7 @@ func (h *LDAPHandler) Login(c *fiber.Ctx) error {
 func (h *LDAPHandler) TestConnection(c *fiber.Ctx) error {
 	// Check if LDAP is enabled
 	if !h.config.LDAP.Enabled {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "LDAP is not enabled")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "ldap_not_enabled"))
 	}
 
 	// Test the connection
@@ -225,12 +226,12 @@ func (h *LDAPHandler) TestConnection(c *fiber.Ctx) error {
 func (h *LDAPHandler) SearchUser(c *fiber.Ctx) error {
 	// Check if LDAP is enabled
 	if !h.config.LDAP.Enabled {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "LDAP is not enabled")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "ldap_not_enabled"))
 	}
 
 	var req LDAPSearchRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -293,12 +294,12 @@ func (h *LDAPHandler) SearchUser(c *fiber.Ctx) error {
 func (h *LDAPHandler) SyncUser(c *fiber.Ctx) error {
 	// Check if LDAP is enabled
 	if !h.config.LDAP.Enabled {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "LDAP is not enabled")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "ldap_not_enabled"))
 	}
 
 	var req LDAPSearchRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -381,7 +382,7 @@ func (h *LDAPHandler) updateUserFromLDAP(ctx context.Context, user *models.User,
 // POST /api/v1/ldap/users
 func (h *LDAPHandler) ListADUsers(c *fiber.Ctx) error {
 	if !h.config.LDAP.Enabled {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "LDAP is not enabled")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "ldap_not_enabled"))
 	}
 
 	users, err := h.ldapService.FetchUserList(c.UserContext())
@@ -399,12 +400,12 @@ func (h *LDAPHandler) ListADUsers(c *fiber.Ctx) error {
 // POST /api/v1/ldap/register
 func (h *LDAPHandler) RegisterADUser(c *fiber.Ctx) error {
 	if !h.config.LDAP.Enabled {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "LDAP is not enabled")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "ldap_not_enabled"))
 	}
 
 	var req LDAPSearchRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -427,13 +428,13 @@ func (h *LDAPHandler) RegisterADUser(c *fiber.Ctx) error {
 	// Check if user already exists by username or email
 	existingUser, _ := h.userRepo.FindByUsername(c.UserContext(), ldapUser.Username)
 	if existingUser != nil {
-		return utils.ErrorResponse(c, fiber.StatusConflict, "User with this username already exists in the system")
+		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "username_already_exists"))
 	}
 
 	if ldapUser.Email != "" {
 		existingUser, _ = h.userRepo.FindByEmail(c.UserContext(), ldapUser.Email)
 		if existingUser != nil {
-			return utils.ErrorResponse(c, fiber.StatusConflict, "User with this email already exists in the system")
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "email_already_exists"))
 		}
 	}
 
@@ -452,13 +453,13 @@ func (h *LDAPHandler) RegisterADUser(c *fiber.Ctx) error {
 	if err := h.userRepo.Create(c.UserContext(), user); err != nil {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "23505") {
 			if strings.Contains(err.Error(), "idx_users_email") {
-				return utils.ErrorResponse(c, fiber.StatusConflict, "User with this email already exists in the system")
+				return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "email_already_exists"))
 			}
 			if strings.Contains(err.Error(), "idx_users_username") {
-				return utils.ErrorResponse(c, fiber.StatusConflict, "User with this username already exists in the system")
+				return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "username_already_exists"))
 			}
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create user")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create_user"))
 	}
 
 	// Reload with relations

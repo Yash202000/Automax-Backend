@@ -8,6 +8,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/gofiber/fiber/v2/log"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -33,13 +34,13 @@ func NewCommentTemplateService(repo repository.CommentTemplateRepository) Commen
 
 func (s *commentTemplateService) Create(ctx context.Context, req *models.CommentTemplateCreateRequest) (*models.CommentTemplateResponse, error) {
 	if req.CommentText == "" {
-		return nil, errors.New("comment text is required")
+		return nil, errors.New(i18n.T(ctx, "comment_text_required"))
 	}
 
 	username, ok := ctx.Value(constants.ContextKeys.UserName).(string)
 	if !ok {
 		log.Warn("UserName not found in context, using user id as fallback")
-		return nil, errors.New("user information not found in context")
+		return nil, errors.New(i18n.T(ctx, "user_context_missing"))
 	}
 
 	commentTemplate := &models.CommentTemplate{
@@ -67,7 +68,7 @@ func (s *commentTemplateService) Update(ctx context.Context, id uuid.UUID, req *
 	commentTemplate, err := s.repo.FindByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.New("comment template not found")
+			return nil, errors.New(i18n.T(ctx, "comment_template_not_found"))
 		}
 		return nil, fmt.Errorf("failed to find comment template: %w", err)
 	}
@@ -97,7 +98,7 @@ func (s *commentTemplateService) Get(ctx context.Context, id uuid.UUID) (*models
 	commentTemplate, err := s.repo.FindByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.New("comment template not found")
+			return nil, errors.New(i18n.T(ctx, "comment_template_not_found"))
 		}
 		return nil, fmt.Errorf("failed to find comment template: %w", err)
 	}
@@ -143,7 +144,7 @@ func (s *commentTemplateService) Delete(ctx context.Context, id uuid.UUID) error
 	_, err := s.repo.FindByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return errors.New("comment template not found")
+			return errors.New(i18n.T(ctx, "comment_template_not_found"))
 		}
 		return fmt.Errorf("failed to find comment template: %w", err)
 	}

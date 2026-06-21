@@ -10,6 +10,7 @@ import (
 
 	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/models"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/go-ldap/ldap/v3"
 )
 
@@ -33,21 +34,21 @@ type LDAPService interface {
 
 // LDAPUserInfo contains user information from LDAP/AD
 type LDAPUserInfo struct {
-	DN          string
-	Username    string
-	Email       string
-	FirstName   string
-	LastName    string
-	Phone       string
-	Department  string
-	Title       string
-	Manager     string
-	MemberOf    []string
-	ObjectGUID  string
-	SID         string
-	Enabled     bool
-	LastLogon   time.Time
-	CreatedAt   time.Time
+	DN         string
+	Username   string
+	Email      string
+	FirstName  string
+	LastName   string
+	Phone      string
+	Department string
+	Title      string
+	Manager    string
+	MemberOf   []string
+	ObjectGUID string
+	SID        string
+	Enabled    bool
+	LastLogon  time.Time
+	CreatedAt  time.Time
 }
 
 // LDAPGroupInfo contains group information from LDAP/AD
@@ -76,10 +77,10 @@ type ldapService struct {
 
 // ldapConnectionPool manages LDAP connections
 type ldapConnectionPool struct {
-	conn     *ldap.Conn
-	mu       chan struct{}
-	closed   bool
-	config   *config.LDAPConfig
+	conn   *ldap.Conn
+	mu     chan struct{}
+	closed bool
+	config *config.LDAPConfig
 }
 
 const (
@@ -311,7 +312,7 @@ func (s *ldapService) Authenticate(ctx context.Context, username, password strin
 	// Attempt to bind with user credentials
 	if err := authConn.Bind(userInfo.DN, password); err != nil {
 		if ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials) {
-			return nil, errors.New("invalid credentials")
+			return nil, errors.New(i18n.T(ctx, "invalid_credentials"))
 		}
 		return nil, fmt.Errorf("authentication failed: %w", err)
 	}
@@ -340,9 +341,9 @@ func (s *ldapService) SearchUser(ctx context.Context, username string) (*LDAPUse
 		s.config.UserSearchBase,
 		ldap.ScopeWholeSubtree,
 		ldap.NeverDerefAliases,
-		0,              // No size limit
+		0, // No size limit
 		int(requestTimeout.Seconds()),
-		false,          // Types only false (we want attributes)
+		false, // Types only false (we want attributes)
 		filter,
 		s.getUserAttributes(),
 		nil,
@@ -355,7 +356,7 @@ func (s *ldapService) SearchUser(ctx context.Context, username string) (*LDAPUse
 	}
 
 	if len(result.Entries) == 0 {
-		return nil, errors.New("user not found")
+		return nil, errors.New(i18n.T(ctx, "user_not_found"))
 	}
 
 	if len(result.Entries) > 1 {
@@ -475,9 +476,9 @@ func (s *ldapService) SearchGroup(ctx context.Context, userDN string) ([]LDAPGro
 		s.config.GroupSearchBase,
 		ldap.ScopeWholeSubtree,
 		ldap.NeverDerefAliases,
-		0,              // No size limit
+		0, // No size limit
 		int(requestTimeout.Seconds()),
-		false,          // Types only false
+		false, // Types only false
 		filter,
 		s.getGroupAttributes(),
 		nil,
@@ -609,7 +610,7 @@ func formatSID(sidBytes []byte) string {
 
 	revision := sidBytes[0]
 	subAuthCount := sidBytes[1]
-	
+
 	// Identifier authority (big-endian)
 	var idAuth uint64
 	for i := 0; i < 6; i++ {

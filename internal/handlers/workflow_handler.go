@@ -12,6 +12,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
@@ -38,7 +39,7 @@ func NewWorkflowHandler(service services.WorkflowService, actionLogService servi
 func (h *WorkflowHandler) CreateWorkflow(c *fiber.Ctx) error {
 	var req models.WorkflowCreateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -49,7 +50,7 @@ func (h *WorkflowHandler) CreateWorkflow(c *fiber.Ctx) error {
 	}
 
 	if err := h.service.WorkflowExistsByCodeOrName(c.UserContext(), []string{req.Code, req.Name}); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusConflict, "Workflow with this code or name already exists")
+		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "workflow_code_name_exists"))
 	}
 
 	// Get user ID from context
@@ -89,22 +90,22 @@ func (h *WorkflowHandler) CreateWorkflow(c *fiber.Ctx) error {
 		})
 	}()
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "Workflow created", workflow)
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "workflow_created"), workflow)
 }
 
 func (h *WorkflowHandler) GetWorkflow(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	workflow, err := h.service.GetWorkflow(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Workflow not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "workflow_not_found"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Workflow retrieved", workflow)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "workflow_retrieved"), workflow)
 }
 
 func (h *WorkflowHandler) ListWorkflows(c *fiber.Ctx) error {
@@ -123,24 +124,24 @@ func (h *WorkflowHandler) ListWorkflows(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Workflows retrieved", workflows)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "workflows_retrieved"), workflows)
 }
 
 func (h *WorkflowHandler) UpdateWorkflow(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	var req models.WorkflowUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
 		log.Println(err)
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	// Get old workflow for action logging
@@ -160,7 +161,7 @@ func (h *WorkflowHandler) UpdateWorkflow(c *fiber.Ctx) error {
 
 	if len(search) > 0 {
 		if err := h.service.WorkflowExistsByCodeOrName(c.UserContext(), search); err != nil {
-			return utils.ErrorResponse(c, fiber.StatusConflict, "Workflow with this code or name already exists")
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "workflow_code_name_exists"))
 		}
 	}
 
@@ -253,14 +254,14 @@ func (h *WorkflowHandler) UpdateWorkflow(c *fiber.Ctx) error {
 		})
 	}()
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Workflow updated", workflow)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "workflow_updated"), workflow)
 }
 
 func (h *WorkflowHandler) DeleteWorkflow(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	// Get workflow details for action logging
@@ -300,7 +301,7 @@ func (h *WorkflowHandler) DeleteWorkflow(c *fiber.Ctx) error {
 		})
 	}()
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Workflow deleted", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "workflow_deleted"), nil)
 }
 
 func (h *WorkflowHandler) ListDeletedWorkflows(c *fiber.Ctx) error {
@@ -309,42 +310,42 @@ func (h *WorkflowHandler) ListDeletedWorkflows(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Deleted workflows retrieved", workflows)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "deleted_workflows_retrieved"), workflows)
 }
 
 func (h *WorkflowHandler) PermanentDeleteWorkflow(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	if err := h.service.PermanentDeleteWorkflow(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Workflow permanently deleted", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "workflow_permanently_deleted"), nil)
 }
 
 func (h *WorkflowHandler) RestoreWorkflow(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	if err := h.service.RestoreWorkflow(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Workflow restored", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "workflow_restored"), nil)
 }
 
 func (h *WorkflowHandler) DuplicateWorkflow(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
@@ -354,7 +355,7 @@ func (h *WorkflowHandler) DuplicateWorkflow(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "Workflow duplicated", workflow)
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "workflow_duplicated"), workflow)
 }
 
 // Classification assignment
@@ -363,14 +364,14 @@ func (h *WorkflowHandler) AssignClassifications(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	var req struct {
 		ClassificationIDs []string `json:"classification_ids"`
 	}
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	classIDs := make([]uuid.UUID, 0, len(req.ClassificationIDs))
@@ -423,14 +424,14 @@ func (h *WorkflowHandler) AssignClassifications(c *fiber.Ctx) error {
 		})
 	}()
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Classifications assigned", workflow)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "classifications_assigned"), workflow)
 }
 
 func (h *WorkflowHandler) GetWorkflowByClassification(c *fiber.Ctx) error {
 	idStr := c.Params("classification_id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid classification ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_classification_id2"))
 	}
 
 	workflow, err := h.service.GetWorkflowByClassification(c.UserContext(), id)
@@ -438,7 +439,7 @@ func (h *WorkflowHandler) GetWorkflowByClassification(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Workflow retrieved", workflow)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "workflow_retrieved"), workflow)
 }
 
 // State management
@@ -447,12 +448,12 @@ func (h *WorkflowHandler) CreateState(c *fiber.Ctx) error {
 	workflowIDStr := c.Params("id")
 	workflowID, err := uuid.Parse(workflowIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid workflow ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_workflow_id"))
 	}
 
 	var req models.WorkflowStateCreateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	// Normalize empty optional UUID strings to nil so "omitempty,uuid" validation passes
@@ -522,14 +523,14 @@ func (h *WorkflowHandler) CreateState(c *fiber.Ctx) error {
 		})
 	}()
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "State created", state)
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "state_created"), state)
 }
 
 func (h *WorkflowHandler) ListStates(c *fiber.Ctx) error {
 	workflowIDStr := c.Params("id")
 	workflowID, err := uuid.Parse(workflowIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid workflow ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_workflow_id"))
 	}
 
 	states, err := h.service.ListStates(c.UserContext(), workflowID)
@@ -537,19 +538,19 @@ func (h *WorkflowHandler) ListStates(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "States retrieved", states)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "states_retrieved"), states)
 }
 
 func (h *WorkflowHandler) UpdateState(c *fiber.Ctx) error {
 	stateIDStr := c.Params("state_id")
 	stateID, err := uuid.Parse(stateIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid state ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_state_id2"))
 	}
 
 	var req models.WorkflowStateUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	// Get old state for action logging
@@ -655,14 +656,14 @@ func (h *WorkflowHandler) UpdateState(c *fiber.Ctx) error {
 		})
 	}()
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "State updated", state)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "state_updated"), state)
 }
 
 func (h *WorkflowHandler) DeleteState(c *fiber.Ctx) error {
 	stateIDStr := c.Params("state_id")
 	stateID, err := uuid.Parse(stateIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid state ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_state_id2"))
 	}
 
 	// Get state details for action logging
@@ -722,7 +723,7 @@ func (h *WorkflowHandler) DeleteState(c *fiber.Ctx) error {
 		})
 	}()
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "State deleted", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "state_deleted"), nil)
 }
 
 // Transition management
@@ -731,12 +732,12 @@ func (h *WorkflowHandler) CreateTransition(c *fiber.Ctx) error {
 	workflowIDStr := c.Params("id")
 	workflowID, err := uuid.Parse(workflowIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid workflow ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_workflow_id"))
 	}
 
 	var req models.WorkflowTransitionCreateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -799,14 +800,14 @@ func (h *WorkflowHandler) CreateTransition(c *fiber.Ctx) error {
 		})
 	}()
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "Transition created", transition)
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "transition_created"), transition)
 }
 
 func (h *WorkflowHandler) ListTransitions(c *fiber.Ctx) error {
 	workflowIDStr := c.Params("id")
 	workflowID, err := uuid.Parse(workflowIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid workflow ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_workflow_id"))
 	}
 
 	transitions, err := h.service.ListTransitions(c.UserContext(), workflowID)
@@ -814,19 +815,19 @@ func (h *WorkflowHandler) ListTransitions(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Transitions retrieved", transitions)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "transitions_retrieved"), transitions)
 }
 
 func (h *WorkflowHandler) UpdateTransition(c *fiber.Ctx) error {
 	transitionIDStr := c.Params("transition_id")
 	transitionID, err := uuid.Parse(transitionIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid transition ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_transition_id"))
 	}
 
 	var req models.WorkflowTransitionUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	// Get old transition for action logging
@@ -935,14 +936,14 @@ func (h *WorkflowHandler) UpdateTransition(c *fiber.Ctx) error {
 		})
 	}()
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Transition updated", transition)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "transition_updated"), transition)
 }
 
 func (h *WorkflowHandler) DeleteTransition(c *fiber.Ctx) error {
 	transitionIDStr := c.Params("transition_id")
 	transitionID, err := uuid.Parse(transitionIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid transition ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_transition_id"))
 	}
 
 	// Get transition details for action logging
@@ -1003,7 +1004,7 @@ func (h *WorkflowHandler) DeleteTransition(c *fiber.Ctx) error {
 		})
 	}()
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Transition deleted", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "transition_deleted"), nil)
 }
 
 // Transition configuration
@@ -1012,14 +1013,14 @@ func (h *WorkflowHandler) SetTransitionRoles(c *fiber.Ctx) error {
 	transitionIDStr := c.Params("id")
 	transitionID, err := uuid.Parse(transitionIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid transition ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_transition_id"))
 	}
 
 	var req struct {
 		RoleIDs []string `json:"role_ids"`
 	}
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	roleIDs := make([]uuid.UUID, 0, len(req.RoleIDs))
@@ -1056,21 +1057,21 @@ func (h *WorkflowHandler) SetTransitionRoles(c *fiber.Ctx) error {
 		})
 	}()
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Transition roles updated", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "transition_roles_updated"), nil)
 }
 
 func (h *WorkflowHandler) SetTransitionRequirements(c *fiber.Ctx) error {
 	transitionIDStr := c.Params("id")
 	transitionID, err := uuid.Parse(transitionIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid transition ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_transition_id"))
 	}
 
 	var req struct {
 		Requirements []models.TransitionRequirementRequest `json:"requirements"`
 	}
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if err := h.service.SetTransitionRequirements(c.UserContext(), transitionID, req.Requirements); err != nil {
@@ -1098,21 +1099,21 @@ func (h *WorkflowHandler) SetTransitionRequirements(c *fiber.Ctx) error {
 		})
 	}()
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Transition requirements updated", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "transition_requirements_updated"), nil)
 }
 
 func (h *WorkflowHandler) SetTransitionActions(c *fiber.Ctx) error {
 	transitionIDStr := c.Params("id")
 	transitionID, err := uuid.Parse(transitionIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid transition ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_transition_id"))
 	}
 
 	var req struct {
 		Actions []models.TransitionActionRequest `json:"actions"`
 	}
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if err := h.service.SetTransitionActions(c.UserContext(), transitionID, req.Actions); err != nil {
@@ -1140,21 +1141,21 @@ func (h *WorkflowHandler) SetTransitionActions(c *fiber.Ctx) error {
 		})
 	}()
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Transition actions updated", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "transition_actions_updated"), nil)
 }
 
 func (h *WorkflowHandler) SetTransitionFieldChanges(c *fiber.Ctx) error {
 	transitionIDStr := c.Params("id")
 	transitionID, err := uuid.Parse(transitionIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid transition ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_transition_id"))
 	}
 
 	var req struct {
 		FieldChanges []models.TransitionFieldChangeRequest `json:"field_changes"`
 	}
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if err := h.service.SetTransitionFieldChanges(c.UserContext(), transitionID, req.FieldChanges); err != nil {
@@ -1182,7 +1183,7 @@ func (h *WorkflowHandler) SetTransitionFieldChanges(c *fiber.Ctx) error {
 		})
 	}()
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Transition field changes updated", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "transition_field_changes_updated"), nil)
 }
 
 // Helper endpoints
@@ -1191,7 +1192,7 @@ func (h *WorkflowHandler) GetTransitionsToState(c *fiber.Ctx) error {
 	stateIDStr := c.Params("state_id")
 	stateID, err := uuid.Parse(stateIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid state ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_state_id2"))
 	}
 
 	transitions, err := h.service.GetTransitionsToState(c.UserContext(), stateID)
@@ -1199,29 +1200,29 @@ func (h *WorkflowHandler) GetTransitionsToState(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Transitions retrieved", transitions)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "transitions_retrieved"), transitions)
 }
 
 func (h *WorkflowHandler) GetInitialState(c *fiber.Ctx) error {
 	workflowIDStr := c.Params("id")
 	workflowID, err := uuid.Parse(workflowIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid workflow ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_workflow_id"))
 	}
 
 	state, err := h.service.GetInitialState(c.UserContext(), workflowID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Initial state not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "initial_state_not_found"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Initial state retrieved", state)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "initial_state_retrieved"), state)
 }
 
 func (h *WorkflowHandler) GetInitialStateMatchingUsers(c *fiber.Ctx) error {
 	workflowIDStr := c.Params("id")
 	workflowID, err := uuid.Parse(workflowIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid workflow ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_workflow_id"))
 	}
 
 	var classificationID, locationID, departmentID *uuid.UUID
@@ -1246,7 +1247,7 @@ func (h *WorkflowHandler) GetInitialStateMatchingUsers(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Matching users retrieved", users)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "matching_users_retrieved"), users)
 }
 
 // MatchWorkflow finds a workflow based on incident criteria and returns form configuration
@@ -1266,7 +1267,7 @@ func (h *WorkflowHandler) MatchWorkflow(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Workflow matched", result)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "workflow_matched"), result)
 }
 
 // ExportWorkflow exports a workflow as a JSON file
@@ -1274,7 +1275,7 @@ func (h *WorkflowHandler) ExportWorkflow(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	jsonBytes, filename, err := h.service.ExportWorkflow(c.UserContext(), id)
@@ -1294,20 +1295,20 @@ func (h *WorkflowHandler) ImportWorkflow(c *fiber.Ctx) error {
 	// Get file from multipart form
 	file, err := c.FormFile("file")
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "No file uploaded")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "no_file_uploaded"))
 	}
 
 	log.Println("err check")
 	// Validate file size (10MB limit)
 	const maxFileSize = 10 * 1024 * 1024 // 10MB
 	if file.Size > maxFileSize {
-		return utils.ErrorResponse(c, fiber.StatusRequestEntityTooLarge, "File size exceeds 10MB limit")
+		return utils.ErrorResponse(c, fiber.StatusRequestEntityTooLarge, i18n.T(c.UserContext(), "file_size_10mb"))
 	}
 
 	// Open and read file
 	fileContent, err := file.Open()
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read file")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_read_file"))
 	}
 	defer fileContent.Close()
 	log.Println("err check")
@@ -1315,7 +1316,7 @@ func (h *WorkflowHandler) ImportWorkflow(c *fiber.Ctx) error {
 	// Read file content
 	buf, err := io.ReadAll(fileContent)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read file content")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_read_file_content"))
 	}
 
 	// Parse JSON
@@ -1349,7 +1350,7 @@ func (h *WorkflowHandler) ImportWorkflow(c *fiber.Ctx) error {
 		Warnings: warnings,
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "Workflow imported successfully", response)
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "workflow_imported"), response)
 }
 
 // getChangedFields returns a comma-separated list of field names that changed

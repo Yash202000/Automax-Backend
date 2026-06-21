@@ -9,6 +9,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
+	"github.com/automax/backend/pkg/i18n"
 )
 
 type NotificationTemplateHandler struct {
@@ -24,7 +25,7 @@ func NewNotificationTemplateHandler(svc services.NotificationTemplateService) *N
 func (h *NotificationTemplateHandler) Create(c *fiber.Ctx) error {
 	var req models.NotificationTemplateCreateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		return fiber.NewError(fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	tpl, err := h.svc.Create(c.UserContext(), &req)
@@ -97,7 +98,7 @@ func (h *NotificationTemplateHandler) List(c *fiber.Ctx) error {
 func (h *NotificationTemplateHandler) GetByID(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid id")
+		return fiber.NewError(fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	tpl, err := h.svc.GetByID(c.UserContext(), id)
@@ -165,12 +166,12 @@ func (h *NotificationTemplateHandler) GetByTransition(c *fiber.Ctx) error {
 func (h *NotificationTemplateHandler) Update(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid id")
+		return fiber.NewError(fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	var req models.NotificationTemplateUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		return fiber.NewError(fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	tpl, err := h.svc.Update(c.UserContext(), id, &req)
@@ -188,7 +189,7 @@ func (h *NotificationTemplateHandler) Update(c *fiber.Ctx) error {
 func (h *NotificationTemplateHandler) Toggle(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid id")
+		return fiber.NewError(fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	tpl, err := h.svc.ToggleActive(c.UserContext(), id)
@@ -207,7 +208,7 @@ func (h *NotificationTemplateHandler) Toggle(c *fiber.Ctx) error {
 func (h *NotificationTemplateHandler) Delete(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid id")
+		return fiber.NewError(fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	if err := h.svc.Delete(c.UserContext(), id); err != nil {

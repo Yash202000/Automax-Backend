@@ -23,6 +23,7 @@ import (
 	"github.com/automax/backend/pkg/utils"
 
 	intutils "github.com/automax/backend/internal/utils"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -121,7 +122,7 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 			return nil, err
 		}
 		if exists {
-			return nil, errors.New("Phone number already in use")
+			return nil, errors.New(i18n.T(ctx, "phone_number_in_use"))
 		}
 	}
 
@@ -130,7 +131,7 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 		return nil, err
 	}
 	if exists {
-		return nil, errors.New("email already exists")
+		return nil, errors.New(i18n.T(ctx, "email_already_exists"))
 	}
 
 	exists, err = s.userRepo.ExistsByUsername(ctx, req.Username)
@@ -138,7 +139,7 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 		return nil, err
 	}
 	if exists {
-		return nil, errors.New("username already exists")
+		return nil, errors.New(i18n.T(ctx, "username_already_exists"))
 	}
 
 	hashedPassword, err := utils.HashPassword(req.Password)
@@ -170,13 +171,13 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 	if err := s.userRepo.Create(ctx, user); err != nil {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "23505") {
 			if strings.Contains(err.Error(), "idx_users_email") {
-				return nil, errors.New("email already exists")
+				return nil, errors.New(i18n.T(ctx, "email_already_exists"))
 			}
 			if strings.Contains(err.Error(), "idx_users_username") {
-				return nil, errors.New("username already exists")
+				return nil, errors.New(i18n.T(ctx, "username_already_exists"))
 			}
 			if strings.Contains(err.Error(), "idx_users_phone") {
-				return nil, errors.New("phone number already in use")
+				return nil, errors.New(i18n.T(ctx, "phone_number_in_use"))
 			}
 		}
 		return nil, err
@@ -256,7 +257,7 @@ func (s *userService) SSORegister(ctx context.Context, req *models.SSORegisterRe
 			return nil, err
 		}
 		if exists {
-			return nil, errors.New("Phone number already in use")
+			return nil, errors.New(i18n.T(ctx, "phone_number_in_use"))
 		}
 	}
 
@@ -265,7 +266,7 @@ func (s *userService) SSORegister(ctx context.Context, req *models.SSORegisterRe
 		return nil, err
 	}
 	if exists {
-		return nil, errors.New("email already exists")
+		return nil, errors.New(i18n.T(ctx, "email_already_exists"))
 	}
 
 	exists, err = s.userRepo.ExistsByUsername(ctx, req.Username)
@@ -273,7 +274,7 @@ func (s *userService) SSORegister(ctx context.Context, req *models.SSORegisterRe
 		return nil, err
 	}
 	if exists {
-		return nil, errors.New("username already exists")
+		return nil, errors.New(i18n.T(ctx, "username_already_exists"))
 	}
 
 	exists, err = s.userRepo.ExistsByNationalID(ctx, req.NationalID)
@@ -281,7 +282,7 @@ func (s *userService) SSORegister(ctx context.Context, req *models.SSORegisterRe
 		return nil, err
 	}
 	if exists {
-		return nil, errors.New("national ID already exists")
+		return nil, errors.New(i18n.T(ctx, "national_id_exists"))
 	}
 
 	randomPw, _ := uuid.NewRandom()
@@ -373,13 +374,13 @@ func (s *userService) SSOLogin(ctx context.Context, req *models.SSOLoginRequest)
 	user, err := s.userRepo.FindByNationalIDForLogin(ctx, req.NationalID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.New("invalid credentials")
+			return nil, errors.New(i18n.T(ctx, "invalid_credentials"))
 		}
 		return nil, err
 	}
 
 	if !user.IsActive {
-		return nil, errors.New("account is deactivated")
+		return nil, errors.New(i18n.T(ctx, "account_deactivated_service"))
 	}
 
 	role := "user"
@@ -446,14 +447,14 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 						Status:      "failed",
 					})
 				}()
-				return nil, errors.New("invalid credentials")
+				return nil, errors.New(i18n.T(ctx, "invalid_credentials"))
 			}
 			return nil, err
 		}
 
 		// Redirect AD users to LDAP login
 		if user.IsADUser {
-			return nil, errors.New("this account uses Active Directory authentication. Please use the AD login option")
+			return nil, errors.New(i18n.T(ctx, "use_ad_login"))
 		}
 
 		if !utils.CheckPassword(req.Password, user.Password) {
@@ -471,13 +472,13 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 					Status:      "failed",
 				})
 			}()
-			return nil, errors.New("invalid credentials")
+			return nil, errors.New(i18n.T(ctx, "invalid_credentials"))
 		}
 
 	case "mobile_otp":
 		// Mobile/OTP login
 		if s.otpService == nil {
-			return nil, errors.New("OTP service not available")
+			return nil, errors.New(i18n.T(ctx, "otp_service_unavailable"))
 		}
 
 		// First check if user exists with this phone number
@@ -498,7 +499,7 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 						Status:      "failed",
 					})
 				}()
-				return nil, errors.New("no user found for this mobile number")
+				return nil, errors.New(i18n.T(ctx, "no_user_for_mobile"))
 			}
 			return nil, err
 		}
@@ -519,7 +520,7 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 					Status:      "failed",
 				})
 			}()
-			return nil, errors.New("mobile number is not verified. Please contact administrator to verify your mobile number")
+			return nil, errors.New(i18n.T(ctx, "mobile_not_verified"))
 		}
 
 		// Verify OTP
@@ -539,11 +540,11 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 					Status:      "failed",
 				})
 			}()
-			return nil, errors.New("invalid or expired OTP")
+			return nil, errors.New(i18n.T(ctx, "invalid_or_expired_otp"))
 		}
 
 	default:
-		return nil, errors.New("invalid login credentials")
+		return nil, errors.New(i18n.T(ctx, "invalid_login_credentials"))
 	}
 
 	// Check if user is active
@@ -562,7 +563,7 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 				Status:      "failed",
 			})
 		}()
-		return nil, errors.New("account is deactivated")
+		return nil, errors.New(i18n.T(ctx, "account_deactivated_service"))
 	}
 
 	// Determine primary role for JWT
@@ -642,19 +643,19 @@ func (s *userService) ValidateMobileForLogin(ctx context.Context, phone string) 
 	user, err := s.userRepo.FindByPhoneWithRelations(ctx, phone)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.New("no user found for this mobile number")
+			return nil, errors.New(i18n.T(ctx, "no_user_for_mobile"))
 		}
 		return nil, err
 	}
 
 	// Check if mobile number is verified
 	if !user.MobileVerified {
-		return nil, errors.New("mobile number is not verified. Please contact administrator to verify your mobile number")
+		return nil, errors.New(i18n.T(ctx, "mobile_not_verified"))
 	}
 
 	// Check if user is active
 	if !user.IsActive {
-		return nil, errors.New("account is deactivated")
+		return nil, errors.New(i18n.T(ctx, "account_deactivated_service"))
 	}
 
 	// Mobile is verified and user is active - return user info
@@ -666,7 +667,7 @@ func (s *userService) RefreshToken(ctx context.Context, refreshToken string, rem
 	// Validate the refresh token
 	claims, err := s.jwtManager.ValidateRefreshToken(refreshToken)
 	if err != nil {
-		return nil, errors.New("invalid or expired refresh token")
+		return nil, errors.New(i18n.T(ctx, "invalid_refresh_token"))
 	}
 
 	// Reject if password was changed after this refresh token was issued.
@@ -674,18 +675,18 @@ func (s *userService) RefreshToken(ctx context.Context, refreshToken string, rem
 	// and get a new session even though all sessions were killed on password change.
 	if passChangedAt, ok := s.sessionStore.GetPasswordChangedAt(ctx, claims.UserID.String()); ok {
 		if claims.IssuedAt != nil && claims.IssuedAt.Unix() < passChangedAt {
-			return nil, errors.New("password was changed. Please login again.")
+			return nil, errors.New(i18n.T(ctx, "password_changed_relogin"))
 		}
 	}
 
 	// Get user from database
 	user, err := s.userRepo.FindByIDWithRelations(ctx, claims.UserID)
 	if err != nil {
-		return nil, errors.New("user not found")
+		return nil, errors.New(i18n.T(ctx, "user_not_found"))
 	}
 
 	if !user.IsActive {
-		return nil, errors.New("account is deactivated")
+		return nil, errors.New(i18n.T(ctx, "account_deactivated_service"))
 	}
 
 	// Determine primary role for JWT
@@ -861,7 +862,7 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 	// Get the authenticated user (who is performing this action) from context
 	actorID, ok := ctx.Value(constants.ContextKeys.UserID).(uuid.UUID)
 	if !ok {
-		return nil, errors.New("unauthorized: user not authenticated")
+		return nil, errors.New(i18n.T(ctx, "unauthorized_not_authenticated"))
 	}
 	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
 	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
@@ -958,7 +959,7 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 			return nil, err
 		}
 		if exists {
-			return nil, errors.New("username already exists")
+			return nil, errors.New(i18n.T(ctx, "username_already_exists"))
 		}
 		user.Username = req.Username
 	}
@@ -980,7 +981,7 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 				return nil, err
 			}
 			if exists {
-				return nil, errors.New("phone number already exists")
+				return nil, errors.New(i18n.T(ctx, "phone_number_in_use"))
 			}
 
 			user.Phone = req.Phone
@@ -1230,7 +1231,7 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 				return nil, err
 			}
 			if exists {
-				return nil, errors.New("phone number already exists")
+				return nil, errors.New(i18n.T(ctx, "phone_number_in_use"))
 			}
 		}
 		user.Phone = req.Phone
@@ -1257,7 +1258,7 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 			return nil, err
 		}
 		if exists {
-			return nil, errors.New("username already exists")
+			return nil, errors.New(i18n.T(ctx, "username_already_exists"))
 		}
 		user.Username = req.Username
 		update["username"] = req.Username
@@ -1341,13 +1342,13 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 	// Block AD/LDAP users from changing their password via the app
 	user, userErr := s.userRepo.FindByID(ctx, userID)
 	if userErr == nil && user.IsADUser {
-		return errors.New("password cannot be changed for Active Directory accounts")
+		return errors.New(i18n.T(ctx, "cannot_change_ad_password"))
 	}
 
 	var sessionData map[string]interface{}
 	if getErr := s.sessionStore.GetUserSession(ctx, userID.String(), &sessionData); getErr == nil {
 		if authSource, ok := sessionData["auth_source"].(string); ok && authSource == "ldap" {
-			return errors.New("password cannot be changed for LDAP-authenticated accounts")
+			return errors.New(i18n.T(ctx, "cannot_change_ldap_password"))
 		}
 	}
 
@@ -1372,7 +1373,7 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 				Status:      "failed",
 			})
 		}()
-		return errors.New("current password is incorrect")
+		return errors.New(i18n.T(ctx, "current_password_incorrect"))
 	}
 
 	hashedPassword, err := utils.HashPassword(req.NewPassword)
@@ -1438,7 +1439,7 @@ func (s *userService) AdminResetPassword(ctx context.Context, adminID, targetUse
 	}
 
 	if !admin.IsSuperAdmin {
-		return errors.New("unauthorized: only admin can reset password")
+		return errors.New(i18n.T(ctx, "only_admin_reset_password"))
 	}
 
 	// Get target user
@@ -1449,7 +1450,7 @@ func (s *userService) AdminResetPassword(ctx context.Context, adminID, targetUse
 
 	// Block password reset for AD users
 	if user.IsADUser {
-		return errors.New("cannot reset password for Active Directory accounts")
+		return errors.New(i18n.T(ctx, "cannot_reset_ad_password"))
 	}
 
 	// Hash new password
@@ -1652,7 +1653,7 @@ func (s *userService) AdminDeleteUser(ctx context.Context, userID uuid.UUID) err
 	// Get the authenticated user (who is performing this action) from context
 	actorID, ok := ctx.Value(constants.ContextKeys.UserID).(uuid.UUID)
 	if !ok {
-		return errors.New("unauthorized: user not authenticated")
+		return errors.New(i18n.T(ctx, "unauthorized_not_authenticated"))
 	}
 	ipAddress, _ := ctx.Value(constants.ContextKeys.IP_ADDRESS).(string)
 	userAgent, _ := ctx.Value(constants.ContextKeys.USER_AGENT).(string)
@@ -1924,12 +1925,12 @@ func (s *userService) ForgotPassword(ctx context.Context, req *models.ForgotPass
 	}
 
 	if user == nil {
-		return "", fmt.Errorf("User not found")
+		return "", fmt.Errorf("%s", i18n.T(ctx, "user_not_found"))
 	}
 
 	// Block AD users from resetting password
 	if user.IsADUser {
-		return "", errors.New("password cannot be reset for Active Directory accounts. Please contact your IT administrator")
+		return "", errors.New(i18n.T(ctx, "cannot_reset_ad_password_it"))
 	}
 
 	//Generate OTP
@@ -2024,11 +2025,11 @@ func (s *userService) VerifyOTPForReset(ctx context.Context, req *models.VerifyO
 	}
 	val, err := s.redis.Get(ctx, key).Result()
 	if err != nil {
-		return "", fmt.Errorf("otp expired or invalid session")
+		return "", fmt.Errorf("%s", i18n.T(ctx, "otp_expired_invalid_session"))
 	}
 	var data models.RedisOTPData
 	if err := json.Unmarshal([]byte(val), &data); err != nil {
-		return "", fmt.Errorf("invalid stored otp data")
+		return "", fmt.Errorf("%s", i18n.T(ctx, "invalid_stored_otp"))
 	}
 	maxVerifyStr := os.Getenv("VERIFY_OTP_MAX_ATTEMPT")
 	maxVerify, _ := strconv.Atoi(maxVerifyStr)
@@ -2038,7 +2039,7 @@ func (s *userService) VerifyOTPForReset(ctx context.Context, req *models.VerifyO
 
 	if data.Attempts >= maxVerify {
 		s.redis.Del(ctx, key)
-		return "", fmt.Errorf("max verify attempts exceeded")
+		return "", fmt.Errorf("%s", i18n.T(ctx, "max_verify_attempts_exceeded"))
 	}
 
 	if data.OTP != HashOTP(req.OTP) {
@@ -2047,7 +2048,7 @@ func (s *userService) VerifyOTPForReset(ctx context.Context, req *models.VerifyO
 		ttl, _ := s.redis.TTL(ctx, key).Result()
 		s.redis.Set(ctx, key, updated, ttl)
 
-		return "", fmt.Errorf("invalid otp")
+		return "", fmt.Errorf("%s", i18n.T(ctx, "invalid_otp"))
 	}
 
 	//enerate reset token
@@ -2063,7 +2064,7 @@ func (s *userService) ResetPassword(ctx context.Context, resetToken, newPassword
 
 	val, err := s.redis.Get(ctx, "reset:"+resetToken).Result()
 	if err != nil {
-		return fmt.Errorf("invalid or expired token")
+		return fmt.Errorf("%s", i18n.T(ctx, "invalid_or_expired_token"))
 	}
 
 	var user *models.User
@@ -2075,7 +2076,7 @@ func (s *userService) ResetPassword(ctx context.Context, resetToken, newPassword
 		// log.Printf("User found by mobile: %s\n", val, user)
 	}
 	if err != nil || user == nil {
-		return fmt.Errorf("user not found")
+		return fmt.Errorf("%s", i18n.T(ctx, "user_not_found"))
 	}
 
 	//hash password

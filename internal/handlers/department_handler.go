@@ -9,6 +9,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
@@ -33,7 +34,7 @@ func NewDepartmentHandler(repo repository.DepartmentRepository, userRepo reposit
 func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 	var req models.DepartmentCreateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	req.Name = strings.TrimSpace(req.Name)
@@ -71,7 +72,7 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 
 	if err := h.repo.Create(c.UserContext(), department); err != nil {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			return utils.ErrorResponse(c, fiber.StatusConflict, "A department with this code already exists")
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "department_code_exists"))
 		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -90,7 +91,7 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 	// Reload with associations
 	department, _ = h.repo.FindByID(c.UserContext(), department.ID)
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "Department created", models.ToDepartmentResponse(department))
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "department_created"), models.ToDepartmentResponse(department))
 }
 
 // cascadeToUsers syncs department location/classification/role assignments to all users in this department
@@ -145,27 +146,27 @@ func (h *DepartmentHandler) GetByID(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	department, err := h.repo.FindByID(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Department not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "department_not_found"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Department retrieved", models.ToDepartmentResponse(department))
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "department_retrieved"), models.ToDepartmentResponse(department))
 }
 
 func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	var req models.DepartmentUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	req.Name = strings.TrimSpace(req.Name)
@@ -180,7 +181,7 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 
 	department, err := h.repo.FindByID(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Department not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "department_not_found"))
 	}
 
 	checkName := req.Name
@@ -230,7 +231,7 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 
 	if err := h.repo.Update(c.UserContext(), department); err != nil {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
-			return utils.ErrorResponse(c, fiber.StatusConflict, "A department with this code already exists")
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "department_code_exists"))
 		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -258,21 +259,21 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 	// Reload with associations
 	department, _ = h.repo.FindByID(c.UserContext(), department.ID)
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Department updated", models.ToDepartmentResponse(department))
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "department_updated"), models.ToDepartmentResponse(department))
 }
 
 func (h *DepartmentHandler) Delete(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	if err := h.repo.Delete(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Department deleted", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "department_deleted"), nil)
 }
 
 func (h *DepartmentHandler) List(c *fiber.Ctx) error {
@@ -286,7 +287,7 @@ func (h *DepartmentHandler) List(c *fiber.Ctx) error {
 		responses[i] = models.ToDepartmentResponse(&dept)
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Departments retrieved", responses)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "departments_retrieved"), responses)
 }
 
 func (h *DepartmentHandler) GetTree(c *fiber.Ctx) error {
@@ -300,7 +301,7 @@ func (h *DepartmentHandler) GetTree(c *fiber.Ctx) error {
 		responses[i] = models.ToDepartmentResponse(&dept)
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Department tree retrieved", responses)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "department_tree_retrieved"), responses)
 }
 
 func (h *DepartmentHandler) GetChildren(c *fiber.Ctx) error {
@@ -314,7 +315,7 @@ func (h *DepartmentHandler) GetChildren(c *fiber.Ctx) error {
 	} else {
 		parentID, parseErr := uuid.Parse(parentIDStr)
 		if parseErr != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid parent ID")
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_parent_id"))
 		}
 		children, err = h.repo.GetByParentID(c.UserContext(), &parentID)
 	}
@@ -328,14 +329,14 @@ func (h *DepartmentHandler) GetChildren(c *fiber.Ctx) error {
 		responses[i] = models.ToDepartmentResponse(&dept)
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Children retrieved", responses)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "children_retrieved"), responses)
 }
 
 // MatchDepartment finds departments that match the given classification and/or location
 func (h *DepartmentHandler) MatchDepartment(c *fiber.Ctx) error {
 	var req models.DepartmentMatchRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	var classificationID, locationID *uuid.UUID
@@ -343,7 +344,7 @@ func (h *DepartmentHandler) MatchDepartment(c *fiber.Ctx) error {
 	if req.ClassificationID != nil && *req.ClassificationID != "" {
 		id, err := uuid.Parse(*req.ClassificationID)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid classification_id")
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_classification_id"))
 		}
 		classificationID = &id
 	}
@@ -351,7 +352,7 @@ func (h *DepartmentHandler) MatchDepartment(c *fiber.Ctx) error {
 	if req.LocationID != nil && *req.LocationID != "" {
 		id, err := uuid.Parse(*req.LocationID)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid location_id")
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_location_id"))
 		}
 		locationID = &id
 	}
@@ -377,7 +378,7 @@ func (h *DepartmentHandler) MatchDepartment(c *fiber.Ctx) error {
 		matchResponse.MatchedDepartmentID = &idStr
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Departments matched", matchResponse)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "departments_matched"), matchResponse)
 }
 
 // Export exports all departments as JSON
@@ -422,13 +423,13 @@ func (h *DepartmentHandler) Export(c *fiber.Ctx) error {
 func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 	file, err := c.FormFile("file")
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "No file uploaded")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "no_file_uploaded"))
 	}
 
 	// Open and read file
 	fileContent, err := file.Open()
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read file")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_read_file"))
 	}
 	defer fileContent.Close()
 
@@ -449,7 +450,7 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 	// Parse JSON from file
 	decoder := json.NewDecoder(fileContent)
 	if err := decoder.Decode(&importData); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid JSON format: "+err.Error())
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "invalid_json_format_detail", err.Error()))
 	}
 
 	// Sort by level to ensure parents are imported before children
@@ -516,5 +517,5 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 		"errors":   errors,
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Import completed", result)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "import_completed"), result)
 }

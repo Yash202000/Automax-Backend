@@ -4,6 +4,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -57,7 +58,7 @@ func (h *SettingsHandler) UpdateSettings(c *fiber.Ctx) error {
 
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Invalid request body",
+			"error": i18n.T(c.UserContext(), "invalid_request_body"),
 		})
 	}
 

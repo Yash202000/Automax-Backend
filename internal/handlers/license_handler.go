@@ -8,6 +8,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 )
@@ -28,7 +29,7 @@ func (h *LicenseHandler) Activate(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
 			"error":   "invalid_request",
-			"message": "Invalid request body",
+			"message": i18n.T(c.UserContext(), "invalid_request_body"),
 		})
 	}
 

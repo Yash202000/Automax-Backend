@@ -7,6 +7,7 @@ import (
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
 	cstmContext "github.com/automax/backend/pkg/context"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -26,7 +27,7 @@ func NewReportTemplateHandler(templateService services.ReportTemplateService) *R
 func (h *ReportTemplateHandler) CreateTemplate(c *fiber.Ctx) error {
 	var req models.ReportTemplateCreateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
@@ -36,22 +37,22 @@ func (h *ReportTemplateHandler) CreateTemplate(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "Template created successfully", template)
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "report_template_created"), template)
 }
 
 // GetTemplate retrieves a template by ID
 func (h *ReportTemplateHandler) GetTemplate(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid template ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_template_id"))
 	}
 
 	template, err := h.templateService.GetTemplate(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Template not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "report_template_not_found"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Template retrieved successfully", template)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "report_template_retrieved"), template)
 }
 
 // ListTemplates lists all templates with optional filters
@@ -79,12 +80,12 @@ func (h *ReportTemplateHandler) ListTemplates(c *fiber.Ctx) error {
 func (h *ReportTemplateHandler) UpdateTemplate(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid template ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_template_id"))
 	}
 
 	var req models.ReportTemplateUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
@@ -94,14 +95,14 @@ func (h *ReportTemplateHandler) UpdateTemplate(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Template updated successfully", template)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "report_template_updated"), template)
 }
 
 // DeleteTemplate deletes a template
 func (h *ReportTemplateHandler) DeleteTemplate(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid template ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_template_id"))
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
@@ -110,14 +111,14 @@ func (h *ReportTemplateHandler) DeleteTemplate(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Template deleted successfully", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "report_template_deleted"), nil)
 }
 
 // DuplicateTemplate creates a copy of an existing template
 func (h *ReportTemplateHandler) DuplicateTemplate(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid template ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_template_id"))
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
@@ -127,38 +128,38 @@ func (h *ReportTemplateHandler) DuplicateTemplate(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "Template duplicated successfully", template)
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "report_template_duplicated"), template)
 }
 
 // SetDefaultTemplate sets a template as the default
 func (h *ReportTemplateHandler) SetDefaultTemplate(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid template ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_template_id"))
 	}
 
 	if err := h.templateService.SetDefaultTemplate(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Default template set successfully", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "default_template_set"), nil)
 }
 
 // GetDefaultTemplate retrieves the default template
 func (h *ReportTemplateHandler) GetDefaultTemplate(c *fiber.Ctx) error {
 	template, err := h.templateService.GetDefaultTemplate(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "No default template found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "no_default_template"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Default template retrieved successfully", template)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "default_template_retrieved"), template)
 }
 
 // GenerateReport generates a report from a template
 func (h *ReportTemplateHandler) GenerateReport(c *fiber.Ctx) error {
 	var req models.GenerateReportRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
@@ -185,7 +186,7 @@ func (h *ReportTemplateHandler) PreviewTemplate(c *fiber.Ctx) error {
 	}
 
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if req.Limit == 0 {

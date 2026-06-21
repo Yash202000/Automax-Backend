@@ -6,6 +6,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -24,12 +25,12 @@ func NewRejectionLogHandler(repo repository.RejectionLogRepository) *RejectionLo
 func (h *RejectionLogHandler) GetByIncident(c *fiber.Ctx) error {
 	incidentID, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "invalid incident id")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_incident_id_lower"))
 	}
 
 	logs, err := h.repo.GetByIncident(c.UserContext(), incidentID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "failed to fetch rejection logs")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_fetch_rejection_logs"))
 	}
 
 	responses := make([]models.IncidentRejectionLogResponse, len(logs))
@@ -97,7 +98,7 @@ func (h *RejectionLogHandler) List(c *fiber.Ctx) error {
 
 	logs, total, err := h.repo.List(c.UserContext(), filter)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "failed to fetch rejection logs")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_fetch_rejection_logs"))
 	}
 
 	responses := make([]models.IncidentRejectionLogResponse, len(logs))

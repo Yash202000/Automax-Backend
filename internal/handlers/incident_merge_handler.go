@@ -5,6 +5,7 @@ import (
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
@@ -49,7 +50,7 @@ func (h *IncidentMergeHandler) getUserRoleIDs(c *fiber.Ctx) []uuid.UUID {
 func (h *IncidentMergeHandler) ValidateMerge(c *fiber.Ctx) error {
 	var req models.IncidentMergeValidationRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if err := h.validator.Struct(&req); err != nil {
@@ -66,14 +67,14 @@ func (h *IncidentMergeHandler) ValidateMerge(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, response.Errors[0])
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Merge validation completed", response)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "merge_validation_completed"), response)
 }
 
 // MergeIncidents merges multiple incidents into one master incident
 func (h *IncidentMergeHandler) MergeIncidents(c *fiber.Ctx) error {
 	var req models.IncidentMergeRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if err := h.validator.Struct(&req); err != nil {
@@ -88,14 +89,14 @@ func (h *IncidentMergeHandler) MergeIncidents(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Incidents merged successfully", response)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "incidents_merged"), response)
 }
 
 // UnmergeIncident detaches an incident from its master
 func (h *IncidentMergeHandler) UnmergeIncident(c *fiber.Ctx) error {
 	var req models.IncidentUnmergeRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if err := h.validator.Struct(&req); err != nil {
@@ -110,14 +111,14 @@ func (h *IncidentMergeHandler) UnmergeIncident(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Incident unmerged successfully", response)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "incident_unmerged"), response)
 }
 
 // BulkUnmergeIncidents detaches multiple incidents from their masters
 func (h *IncidentMergeHandler) BulkUnmergeIncidents(c *fiber.Ctx) error {
 	var req models.IncidentBulkUnmergeRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if err := h.validator.Struct(&req); err != nil {
@@ -132,19 +133,19 @@ func (h *IncidentMergeHandler) BulkUnmergeIncidents(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Incidents bulk unmerged successfully", response)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "incidents_bulk_unmerged"), response)
 }
 
 // GetMergedIncidents returns all incidents merged into a master incident
 func (h *IncidentMergeHandler) GetMergedIncidents(c *fiber.Ctx) error {
 	masterIncidentID := c.Params("id")
 	if masterIncidentID == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Master incident ID is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "master_incident_id_required"))
 	}
 
 	// Validate UUID
 	if _, err := uuid.Parse(masterIncidentID); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid master incident ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_master_incident_id"))
 	}
 
 	incidents, err := h.service.GetMergedIncidents(c.UserContext(), masterIncidentID)
@@ -152,19 +153,19 @@ func (h *IncidentMergeHandler) GetMergedIncidents(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Merged incidents retrieved", incidents)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "merged_incidents_retrieved"), incidents)
 }
 
 // CanMerge checks if the current user has permission to merge incidents for a specific workflow
 func (h *IncidentMergeHandler) CanMerge(c *fiber.Ctx) error {
 	workflowIDStr := c.Query("workflow_id")
 	if workflowIDStr == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "workflow_id is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "workflow_id_required"))
 	}
 
 	workflowID, err := uuid.Parse(workflowIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "invalid workflow_id")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_workflow_id_lower"))
 	}
 
 	roleIDs := h.getUserRoleIDs(c)
@@ -173,7 +174,7 @@ func (h *IncidentMergeHandler) CanMerge(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Permission check completed", fiber.Map{
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "permission_check_completed"), fiber.Map{
 		"can_merge": canMerge,
 	})
 }
