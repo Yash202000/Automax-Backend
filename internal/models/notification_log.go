@@ -188,10 +188,12 @@ type NotificationLog struct {
 	Language     string         `gorm:"size:10" json:"language"`
 	Recipients   RecipientArray `gorm:"type:jsonb;not null" json:"recipients"` // All recipients with status (TO, CC, BCC)
 
-	Subject  string `gorm:"type:text;index" json:"subject,omitempty"`
-	Body     string `gorm:"type:text;not null" json:"body"`
-	BodyHTML string `gorm:"type:text" json:"body_html,omitempty"` // HTML version of body
-	Status   string `gorm:"size:20;not null;index" json:"status"` // sent | failed | mock-sent | partial | draft | pending
+	Subject   string `gorm:"type:text;index" json:"subject,omitempty"`
+	SubjectAr string `gorm:"type:text" json:"subject_ar,omitempty"` // Arabic translation of subject
+	Body      string `gorm:"type:text;not null" json:"body"`
+	BodyAr    string `gorm:"type:text" json:"body_ar,omitempty"` // Arabic translation of body
+	BodyHTML  string `gorm:"type:text" json:"body_html,omitempty"` // HTML version of body
+	Status    string `gorm:"size:20;not null;index" json:"status"` // sent | failed | mock-sent | partial | draft | pending
 
 	Provider       string            `gorm:"size:50" json:"provider"`
 	OTPSessionID   *uuid.UUID        `gorm:"type:uuid;index" json:"otp_session_id,omitempty"`
@@ -248,7 +250,9 @@ type NotificationLogResponse struct {
 	BCC            []string          `json:"bcc,omitempty"`
 	From           string            `json:"from,omitempty"`
 	Subject        string            `json:"subject,omitempty"`
+	SubjectAr      string            `json:"subject_ar,omitempty"`
 	Body           string            `json:"body"`
+	BodyAr         string            `json:"body_ar,omitempty"`
 	BodyHTML       string            `json:"body_html,omitempty"`
 	Status         string            `json:"status"`
 	Provider       string            `json:"provider"`
@@ -341,7 +345,9 @@ func ToNotificationLogResponse(log *NotificationLog) NotificationLogResponse {
 		BCC:            log.BCC,
 		From:           log.From,
 		Subject:        log.Subject,
+		SubjectAr:      log.SubjectAr,
 		Body:           log.Body,
+		BodyAr:         log.BodyAr,
 		BodyHTML:       log.BodyHTML,
 		Status:         log.Status,
 		Provider:       log.Provider,

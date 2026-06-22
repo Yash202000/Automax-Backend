@@ -813,6 +813,10 @@ func (s *NotificationService) SetMetaOnLogs(ctx context.Context, ids []uuid.UUID
 	return s.logRepo.SetMeta(ctx, ids, meta)
 }
 
+func (s *NotificationService) SetArContentOnLogs(ctx context.Context, ids []uuid.UUID, subjectAr, bodyAr string) error {
+	return s.logRepo.SetArContent(ctx, ids, subjectAr, bodyAr)
+}
+
 // placeholderRe matches {{key}} and {{.key}} patterns (key may contain letters, digits, underscores).
 var placeholderRe = regexp.MustCompile(`\{\{\.?([A-Za-z0-9_]+)\}\}`)
 

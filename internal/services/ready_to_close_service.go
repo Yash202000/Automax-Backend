@@ -298,13 +298,19 @@ func (s *readyToCloseService) sendPreExpiryNotification(ctx context.Context, ent
 	minutes := int(remaining.Minutes()) % 60
 	timeStr := fmt.Sprintf("%dh %dm", hours, minutes)
 
+	revertStateName := strings.Title(strings.ReplaceAll(s.cfg.RevertStateCode, "_", " "))
 	subject := fmt.Sprintf("Incident %s: Partial Close Expiring Soon", incident.IncidentNumber)
 	body := fmt.Sprintf(
 		"This incident will automatically move back to '%s' if not closed within %s.\n\nIncident: %s\nTitle: %s\nExpiry: %s",
-		strings.Title(strings.ReplaceAll(s.cfg.RevertStateCode, "_", " ")),
+		revertStateName,
 		timeStr,
 		incident.IncidentNumber,
 		incident.Title,
+		entry.ExpiresAt.Format("2006-01-02 15:04:05"),
+	)
+	subjectAr, bodyAr := PartialCloseExpiryTextsAr(
+		incident.IncidentNumber, incident.Title,
+		revertStateName, timeStr,
 		entry.ExpiresAt.Format("2006-01-02 15:04:05"),
 	)
 
@@ -318,7 +324,7 @@ func (s *readyToCloseService) sendPreExpiryNotification(ctx context.Context, ent
 		vars["last_name"] = incident.Assignee.LastName
 	}
 
-	if _, err := s.notifService.SendNotification(
+	if result, err := s.notifService.SendNotification(
 		ctx,
 		"notification", // in-app
 		nil,            // no template
@@ -332,6 +338,8 @@ func (s *readyToCloseService) sendPreExpiryNotification(ctx context.Context, ent
 	); err != nil {
 		log.Printf("[PartialClose] Notification delivery failed for incident %s: %v", entry.IncidentID, err)
 		// Still mark as notified to prevent infinite retry
+	} else if result != nil && len(result.InboxLogIDs) > 0 {
+		_ = s.notifService.SetArContentOnLogs(ctx, result.InboxLogIDs, subjectAr, bodyAr)
 	}
 
 	// Mark entry as notified and update incident flag
