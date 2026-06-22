@@ -178,7 +178,7 @@ func (h *IncidentHandler) GetIncident(c *fiber.Ctx) error {
 	}
 
 	if isEpmPortalRequest(c) {
-		return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "incident_retrieved"), h.buildEpmPortalResponse(c, &incident.IncidentResponse))
+		return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "incident_retrieved"), h.buildEpmPortalResponse(c, &incident.IncidentResponse, true))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "incident_retrieved"), incident)
@@ -276,9 +276,21 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 	totalPages := (int(total) + filter.Limit - 1) / filter.Limit
 
 	if isEpmPortalRequest(c) {
+		// Portal requests must be scoped to a specific caller identity
+		if filter.CallerIdentity == "" && filter.ReporterPhone == "" {
+			return c.JSON(fiber.Map{
+				"success":     true,
+				"data":        []models.EpmPortalIncidentResponse{},
+				"page":        filter.Page,
+				"limit":       filter.Limit,
+				"total_items": 0,
+				"total_pages": 0,
+			})
+		}
+
 		portalData := make([]models.EpmPortalIncidentResponse, len(incidents))
 		for i := range incidents {
-			portalData[i] = h.buildEpmPortalResponse(c, &incidents[i])
+			portalData[i] = h.buildEpmPortalResponse(c, &incidents[i], false)
 		}
 		return c.JSON(fiber.Map{
 			"success":     true,
@@ -1703,8 +1715,11 @@ func isEpmPortalRequest(c *fiber.Ctx) bool {
 		strings.EqualFold(c.Query("source"), constants.INCIDENT_SOURCE.EPMPORTAL)
 }
 
-func (h *IncidentHandler) buildEpmPortalResponse(c *fiber.Ctx, incident *models.IncidentResponse) models.EpmPortalIncidentResponse {
+// buildEpmPortalResponse builds the portal-trimmed response. When includeGis is true
+// (single-incident detail), the gis_location field is populated; for listing it is omitted.
+func (h *IncidentHandler) buildEpmPortalResponse(c *fiber.Ctx, incident *models.IncidentResponse, includeGis bool) models.EpmPortalIncidentResponse {
 	resp := models.EpmPortalIncidentResponse{
+		ID:             incident.ID,
 		IncidentNumber: incident.IncidentNumber,
 		ReporterName:   incident.ReporterName,
 		ReporterEmail:  incident.ReporterEmail,
@@ -1714,25 +1729,27 @@ func (h *IncidentHandler) buildEpmPortalResponse(c *fiber.Ctx, incident *models.
 		Description:    incident.Description,
 	}
 
-	// Classification hierarchy
+	// Classification hierarchy — nested chain (root → leaf)
 	if incident.Classification != nil {
 		classID := incident.Classification.ID
 		if nodes, err := h.classificationRepo.GetAncestors(c.UserContext(), classID); err == nil {
-			resp.Classification = make([]models.EpmPortalHierarchyNode, len(nodes))
+			flat := make([]models.EpmPortalHierarchyNode, len(nodes))
 			for i, n := range nodes {
-				resp.Classification[i] = models.EpmPortalHierarchyNode{Name: n.Name, NameAr: n.NameAr, Level: n.Level}
+				flat[i] = models.EpmPortalHierarchyNode{Name: n.Name, NameAr: n.NameAr, Level: n.Level}
 			}
+			resp.Classification = models.BuildNestedHierarchy(flat)
 		}
 	}
 
-	// Location hierarchy
+	// Location hierarchy — nested chain (root → leaf)
 	if incident.Location != nil {
 		locID := incident.Location.ID
 		if nodes, err := h.locationRepo.GetAncestors(c.UserContext(), locID); err == nil {
-			resp.Location = make([]models.EpmPortalHierarchyNode, len(nodes))
+			flat := make([]models.EpmPortalHierarchyNode, len(nodes))
 			for i, n := range nodes {
-				resp.Location[i] = models.EpmPortalHierarchyNode{Name: n.Name, NameAr: n.NameAr, Level: n.Level}
+				flat[i] = models.EpmPortalHierarchyNode{Name: n.Name, NameAr: n.NameAr, Level: n.Level}
 			}
+			resp.Location = models.BuildNestedHierarchy(flat)
 		}
 	}
 
@@ -1744,8 +1761,8 @@ func (h *IncidentHandler) buildEpmPortalResponse(c *fiber.Ctx, incident *models.
 		}
 	}
 
-	// GIS location: read from the dedicated gis_location column.
-	if len(incident.GisLocation) > 0 {
+	// GIS location: only included for single-incident detail, not listing
+	if includeGis && len(incident.GisLocation) > 0 {
 		var cf interface{}
 		if err := json.Unmarshal(incident.GisLocation, &cf); err == nil {
 			resp.GisLocation = cf

@@ -222,6 +222,15 @@ func (h *LocationHandler) GetTree(c *fiber.Ctx) error {
 		responses[i] = models.ToLocationResponse(&loc)
 	}
 
+	// Return portal-trimmed tree when source=epmportal
+	if strings.EqualFold(c.Query("source"), "epmportal") {
+		portalTree := make([]models.EpmPortalTreeNode, len(responses))
+		for i := range responses {
+			portalTree[i] = models.ToEpmPortalLocationTree(&responses[i])
+		}
+		return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "location_tree_retrieved"), portalTree)
+	}
+
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "location_tree_retrieved"), responses)
 }
 
