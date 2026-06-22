@@ -7,18 +7,18 @@ import "fmt"
 // stored in subject_ar / body_ar and returned when Accept-Language: ar.
 
 func IncidentUpdatedTextsAr(incidentNumber, title string) (subject, body string) {
-	return fmt.Sprintf("تم تحديث البلاغ %s", incidentNumber),
-		fmt.Sprintf("تم تحديث البلاغ \"%s\" (%s).", title, incidentNumber)
+	return fmt.Sprintf("تم تحديث البلاغ رقم %s", incidentNumber),
+		fmt.Sprintf("تم تحديث بلاغ \"%s\" (%s)", title, incidentNumber)
 }
 
 func IncidentAssignedTransitionTextsAr(incidentNumber, title, stateName string) (subject, body string) {
-	return fmt.Sprintf("تم تعيين البلاغ %s إليك", incidentNumber),
-		fmt.Sprintf("تم تعيينك على البلاغ \"%s\". تغيرت الحالة إلى: %s.", title, stateName)
+	return fmt.Sprintf("بلاغ رقم %s مسند اليك", incidentNumber),
+		fmt.Sprintf("بلاغ \"%s\" اسند لك. تم تغيير الحالة الى : %s", title, stateName)
 }
 
 func IncidentAssignedDirectTextsAr(incidentNumber, title string) (subject, body string) {
-	return fmt.Sprintf("تم تعيين البلاغ %s إليك", incidentNumber),
-		fmt.Sprintf("تم تعيينك على البلاغ \"%s\".", title)
+	return fmt.Sprintf("بلاغ رقم %s مسند اليك", incidentNumber),
+		fmt.Sprintf("بلاغ \"%s\" اسند لك", title)
 }
 
 func PartialCloseExpiryTextsAr(incidentNumber, title, revertStateName, timeStr, expiresAt string) (subject, body string) {
