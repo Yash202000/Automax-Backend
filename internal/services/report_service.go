@@ -537,6 +537,12 @@ func (s *reportService) generateExcel(
 		f.SetRowStyle(sheet, dataStartRow, dataStartRow+1000, bodyStyleId)
 	}
 
+	// ── Hyperlink style — applied per-cell for attachment/task-id columns ──
+	hyperlinkStyleId, _ := f.NewStyle(&excelize.Style{
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
+		Font:      &excelize.Font{Color: "0000EE", Underline: "single"},
+	})
+
 	// ── Write headers ─────────────────────────────────────────────────────
 	headerRowStr := strconv.Itoa(headerRow)
 	f.SetCellValue(sheet, "A"+headerRowStr, "#")
@@ -551,14 +557,45 @@ func (s *reportService) generateExcel(
 		f.SetCellValue(sheet, "A"+excelRow, rowIdx+1)
 		for colIdx, col := range columns {
 			colName, _ := excelize.ColumnNumberToName(colIdx + 2)
+			cell := colName + excelRow
 			val := ""
 			if v, ok := row[col.Label]; ok && v != nil {
 				val = formatExportValue(col.Label, v)
 			}
-			if val == "" {
-				val = "-"
+
+			switch {
+			case isAttachmentCol(col.Label) && val != "":
+				urls := parseAttachmentURLs(val)
+				if len(urls) == 1 {
+					f.SetCellValue(sheet, cell, "Attachment 1")
+					f.SetCellHyperLink(sheet, cell, urls[0], "External")
+					f.SetCellStyle(sheet, cell, cell, hyperlinkStyleId)
+				} else if len(urls) > 1 {
+					labels := make([]string, len(urls))
+					for i := range urls {
+						labels[i] = fmt.Sprintf("Attachment %d", i+1)
+					}
+					f.SetCellValue(sheet, cell, strings.Join(labels, " | "))
+				} else {
+					f.SetCellValue(sheet, cell, "-")
+				}
+
+			case isTaskIdCol(col.Label) && val != "":
+				isURL := strings.HasPrefix(val, "http://") || strings.HasPrefix(val, "https://")
+				if isURL {
+					f.SetCellValue(sheet, cell, extractTaskLabel(val))
+					f.SetCellHyperLink(sheet, cell, val, "External")
+					f.SetCellStyle(sheet, cell, cell, hyperlinkStyleId)
+				} else {
+					f.SetCellValue(sheet, cell, val)
+				}
+
+			default:
+				if val == "" {
+					val = "-"
+				}
+				f.SetCellValue(sheet, cell, val)
 			}
-			f.SetCellValue(sheet, colName+excelRow, val)
 		}
 	}
 
@@ -897,7 +934,11 @@ func (s *reportService) generatePDF(
 		loc := utils.ResolveTimezone(options.Timezone)
 		setFont("", 9, "")
 		pdf.SetTextColor(128, 128, 128)
-		pdf.CellFormat(0, 6, fmt.Sprintf("Generated: %s", time.Now().In(loc).Format("2006-01-02 15:04:05")), "", 1, "C", false, 0, "")
+		if lang == "ar" {
+			pdf.CellFormat(0, 6, fmt.Sprintf("تاريخ الإنشاء: %s", time.Now().In(loc).Format("2006-01-02 15:04:05")), "", 1, "C", false, 0, "")
+		} else {
+			pdf.CellFormat(0, 6, fmt.Sprintf("Generated: %s", time.Now().In(loc).Format("2006-01-02 15:04:05")), "", 1, "C", false, 0, "")
+		}
 		pdf.SetTextColor(0, 0, 0)
 		pdf.Ln(3)
 	}
@@ -921,7 +962,7 @@ func (s *reportService) generatePDF(
 	firstPageDataY := pdf.GetY() + computeFilterBoxH(filterDisplay) + 4.0 + 2.0 + measuredHdrH
 	actualPageCount := computeActualPageCount(pdf, data, columns, colWidths, firstPageDataY, measuredHdrH, lineH, baseFontSize, rtlMode, setFont)
 
-	drawFiltersAndStats(pdf, filterDisplay, len(data), actualPageCount, setFont)
+	drawFiltersAndStats(pdf, filterDisplay, len(data), actualPageCount, setFont, lang)
 	pdf.Ln(2)
 
 	// ── Table header ─────────────────────────────────────────────────────────────
@@ -1077,11 +1118,18 @@ func (s *reportService) generatePDF(
 }
 
 func (s *reportService) buildFilterDisplay(ctx context.Context, filters []models.ReportFilterConfig) map[string]interface{} {
+	lang, _ := ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE).(string)
+
+	allLabel, multipleLabel := "All", "Multiple"
+	if lang == "ar" {
+		allLabel, multipleLabel = "الكل", "متعدد"
+	}
+
 	// Always-present entries sorted to the top via numeric prefix.
 	// drawFiltersAndStats strips the "N_" prefix before rendering.
 	display := map[string]interface{}{
-		"1_Location":       "All",
-		"2_Classification": "All",
+		"1_Location":       allLabel,
+		"2_Classification": allLabel,
 		"3_From Date":      "-",
 		"4_To Date":        "-",
 	}
@@ -1094,7 +1142,7 @@ func (s *reportService) buildFilterDisplay(ctx context.Context, filters []models
 		case "location_id":
 			ids := toStringSlice(f.Value)
 			if len(ids) > 1 {
-				display["1_Location"] = "Multiple"
+				display["1_Location"] = multipleLabel
 				continue
 			}
 			if id, err := uuid.Parse(ids[0]); err == nil {
@@ -1106,7 +1154,7 @@ func (s *reportService) buildFilterDisplay(ctx context.Context, filters []models
 		case "classification_id":
 			ids := toStringSlice(f.Value)
 			if len(ids) > 1 {
-				display["2_Classification"] = "Multiple"
+				display["2_Classification"] = multipleLabel
 				continue
 			}
 			if id, err := uuid.Parse(ids[0]); err == nil {
@@ -1305,7 +1353,24 @@ func drawFiltersAndStats(
 	totalRows int,
 	totalPages int,
 	setFont func(string, float64, string),
+	lang string,
 ) {
+	arFilterLabels := map[string]string{
+		"Location":       "الموقع",
+		"Classification": "التصنيف",
+		"From Date":      "من تاريخ",
+		"To Date":        "إلى تاريخ",
+	}
+
+	filtersHeader := "Filters:"
+	totalRowsFmt := "Total Rows  : %d"
+	totalPagesFmt := "Total Pages : %d"
+	if lang == "ar" {
+		filtersHeader = "الفلاتر:"
+		totalRowsFmt = "إجمالي الصفوف: %d"
+		totalPagesFmt = "إجمالي الصفحات: %d"
+	}
+
 	// Sort filter keys for consistent ordering (numeric "N_" prefixes sort to top)
 	filterKeys := make([]string, 0, len(filterDisplay))
 	for k := range filterDisplay {
@@ -1314,17 +1379,22 @@ func drawFiltersAndStats(
 	sort.Strings(filterKeys)
 
 	// Build filter lines; strip any "N_" sort prefix before rendering the label
-	filterLines := []string{"Filters:"}
+	filterLines := []string{filtersHeader}
 	for _, k := range filterKeys {
 		v := filterDisplay[k]
 		rawKey := stripSortPrefix(k)
 		label := cases.Title(language.English).String(strings.ReplaceAll(rawKey, "_", " "))
+		if lang == "ar" {
+			if arLabel, ok := arFilterLabels[label]; ok {
+				label = arLabel
+			}
+		}
 		filterLines = append(filterLines, fmt.Sprintf("  %s: %s", label, formatFilterValue("", v)))
 	}
 
 	statsLines := []string{
-		fmt.Sprintf("Total Rows  : %d", totalRows),
-		fmt.Sprintf("Total Pages : %d", totalPages),
+		fmt.Sprintf(totalRowsFmt, totalRows),
+		fmt.Sprintf(totalPagesFmt, totalPages),
 	}
 
 	const (
