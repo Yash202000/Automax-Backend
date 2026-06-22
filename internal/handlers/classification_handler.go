@@ -293,21 +293,41 @@ func (h *ClassificationHandler) Delete(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_check_deps"))
 	}
 
+	isAr := strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.Get("Accept-Language"))), "ar")
+
 	var reasons []string
-	if incidents > 0 {
-		reasons = append(reasons, fmt.Sprintf("%d incident(s) are associated with this classification", incidents))
-	}
-	if workflows > 0 {
-		reasons = append(reasons, "it is linked to one or more workflows")
-	}
-	if users > 0 {
-		reasons = append(reasons, "it is assigned to one or more users")
-	}
-	if departments > 0 {
-		reasons = append(reasons, "it is assigned to one or more departments")
-	}
-	if len(reasons) > 0 {
-		return utils.ErrorResponse(c, fiber.StatusConflict, "Cannot delete this classification: "+strings.Join(reasons, "; "))
+	if isAr {
+		if incidents > 0 {
+			reasons = append(reasons, fmt.Sprintf("مرتبط بـ%d بلاغ", incidents))
+		}
+		if workflows > 0 {
+			reasons = append(reasons, "مرتبط بسير اجراء او اكثر")
+		}
+		if users > 0 {
+			reasons = append(reasons, "مرتبط بمستخدم او اكثر")
+		}
+		if departments > 0 {
+			reasons = append(reasons, "مرتبط بادارة او اكثر")
+		}
+		if len(reasons) > 0 {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "لا يمكن حذف هذا التصنيف لانه "+strings.Join(reasons, "، و"))
+		}
+	} else {
+		if incidents > 0 {
+			reasons = append(reasons, fmt.Sprintf("%d incident(s) are associated with this classification", incidents))
+		}
+		if workflows > 0 {
+			reasons = append(reasons, "it is linked to one or more workflows")
+		}
+		if users > 0 {
+			reasons = append(reasons, "it is assigned to one or more users")
+		}
+		if departments > 0 {
+			reasons = append(reasons, "it is assigned to one or more departments")
+		}
+		if len(reasons) > 0 {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "Cannot delete this classification: "+strings.Join(reasons, "; "))
+		}
 	}
 
 	if err := h.repo.Delete(c.UserContext(), id); err != nil {
