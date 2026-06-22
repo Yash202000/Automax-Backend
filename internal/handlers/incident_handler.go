@@ -156,6 +156,10 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 		}
 	}
 
+	if isEpmPortalRequest(c) || isEpmPortalSource(req.Source) {
+		return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "incident_created"), h.buildEpmPortalResponse(c, incident, true))
+	}
+
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "incident_created"), incident)
 }
 
@@ -1713,6 +1717,13 @@ func isEpmPortalRequest(c *fiber.Ctx) bool {
 	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
 	return strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) &&
 		strings.EqualFold(c.Query("source"), constants.INCIDENT_SOURCE.EPMPORTAL)
+}
+
+// isEpmPortalSource checks the request body source field (for POST endpoints where source is in the body, not query string).
+func isEpmPortalSource(source string) bool {
+	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+	return strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) &&
+		strings.EqualFold(source, constants.INCIDENT_SOURCE.EPMPORTAL)
 }
 
 // buildEpmPortalResponse builds the portal-trimmed response. When includeGis is true
