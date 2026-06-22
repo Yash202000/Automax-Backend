@@ -4,6 +4,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/gofiber/fiber/v2"
@@ -24,7 +25,7 @@ func (h *CallerSentimentHandler) Create(c *fiber.Ctx) error {
 	var req models.CreateSentimentRequest
 
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -37,7 +38,7 @@ func (h *CallerSentimentHandler) Create(c *fiber.Ctx) error {
 	//Caller (from token)
 	CallerID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if !ok {
-		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
+		return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "user_not_authenticated"))
 	}
 	sentiment := &models.CallerSentiment{
 		ID:        uuid.New(),
@@ -61,7 +62,7 @@ func (h *CallerSentimentHandler) Create(c *fiber.Ctx) error {
 func (h *CallerSentimentHandler) GetCallerSentiments(c *fiber.Ctx) error {
 	callerID := c.Params("caller_id")
 	if callerID == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "caller_id is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "caller_id_required"))
 	}
 
 	res, err := h.service.GetCallerSentiments(c.UserContext(), callerID)
@@ -75,11 +76,11 @@ func (h *CallerSentimentHandler) GetCallerSentiments(c *fiber.Ctx) error {
 func (h *CallerSentimentHandler) GetCallerSentimentsByCallerAndCallee(c *fiber.Ctx) error {
 	callerID := c.Params("caller_id")
 	if callerID == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "caller_id is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "caller_id_required"))
 	}
 	calleeID := c.Params("callee_id")
 	if calleeID == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "callee_id is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "callee_id_required"))
 	}
 	res, err := h.service.GetCallerSentimentsByCallerAndCallee(c.UserContext(), callerID, calleeID)
 	if err != nil {

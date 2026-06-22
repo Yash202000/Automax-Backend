@@ -15,6 +15,7 @@ import (
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
@@ -44,7 +45,7 @@ func NewUserHandler(userService services.UserService, storage *storage.MinIOStor
 func (h *UserHandler) Register(c *fiber.Ctx) error {
 	var req models.UserRegisterRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -59,19 +60,19 @@ func (h *UserHandler) Register(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "User registered successfully", response)
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "user_registered"), response)
 }
 
 func (h *UserHandler) Login(c *fiber.Ctx) error {
 	var req models.UserLoginRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	// Validate login request - must have either email+password OR phone (with or without OTP)
 	loginType := req.LoginType()
 	if loginType == "unknown" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Provide either email+password OR phone number")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "provide_email_or_phone"))
 	}
 
 	// For mobile login, first check if only phone is provided (pre-validation step)
@@ -81,7 +82,7 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 		if err != nil {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 		}
-		return utils.SuccessResponse(c, fiber.StatusOK, "Mobile verified. Please send OTP.", response)
+		return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "mobile_verified_send_otp"), response)
 	}
 
 	ctx := c.UserContext()
@@ -100,21 +101,21 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 		h.HandleLoginSuccess(ctx, id)
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Login successful", response)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "login_successful"), response)
 }
 
 func (h *UserHandler) Logout(c *fiber.Ctx) error {
 	if err := h.userService.Logout(c.UserContext()); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to logout")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_logout"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Logout successful", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "logout_successful"), nil)
 }
 
 func (h *UserHandler) RefreshToken(c *fiber.Ctx) error {
 	var req models.RefreshTokenRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -129,7 +130,7 @@ func (h *UserHandler) RefreshToken(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusUnauthorized, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Token refreshed successfully", response)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "token_refreshed"), response)
 }
 
 func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
@@ -137,16 +138,16 @@ func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
 
 	response, err := h.userService.GetProfile(c.UserContext(), userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "User not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "user_not_found"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Profile retrieved successfully", response)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "profile_retrieved"), response)
 }
 
 func (h *UserHandler) UpdateProfile(c *fiber.Ctx) error {
 	var req models.UserUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -161,7 +162,7 @@ func (h *UserHandler) UpdateProfile(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Profile updated successfully", response)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "profile_updated"), response)
 }
 
 func (h *UserHandler) ChangePassword(c *fiber.Ctx) error {
@@ -169,7 +170,7 @@ func (h *UserHandler) ChangePassword(c *fiber.Ctx) error {
 
 	var req models.ChangePasswordRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -183,7 +184,7 @@ func (h *UserHandler) ChangePassword(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Password changed successfully", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "password_changed"), nil)
 }
 
 func (h *UserHandler) AdminResetPassword(c *fiber.Ctx) error {
@@ -193,7 +194,7 @@ func (h *UserHandler) AdminResetPassword(c *fiber.Ctx) error {
 	targetUserIDStr := c.Params("userID")
 	targetUserID, err := uuid.Parse(targetUserIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid user ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_user_id"))
 	}
 
 	var req struct {
@@ -201,7 +202,7 @@ func (h *UserHandler) AdminResetPassword(c *fiber.Ctx) error {
 	}
 
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request"))
 	}
 
 	err = h.userService.AdminResetPassword(c.UserContext(), adminUserID, targetUserID, req.NewPassword)
@@ -209,7 +210,7 @@ func (h *UserHandler) AdminResetPassword(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Password reset successfully", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "password_reset_successful"), nil)
 }
 
 func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
@@ -217,38 +218,38 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 
 	file, err := c.FormFile("avatar")
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "No file uploaded")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "no_file_uploaded"))
 	}
 
 	if file.Size > 5*1024*1024 {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "File size exceeds 5MB limit")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "file_size_5mb"))
 	}
 
 	contentType := file.Header.Get("Content-Type")
 	if contentType != "image/jpeg" && contentType != "image/png" && contentType != "image/gif" && contentType != "image/webp" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid file type. Only JPEG, PNG, GIF, and WebP are allowed")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_file_type_avatar"))
 	}
 
 	src, err := file.Open()
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to open file")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_open_file"))
 	}
 	defer src.Close()
 
 	response, err := h.userService.UploadAvatar(c.UserContext(), userID, src, file)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to upload avatar")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_upload_avatar"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Avatar uploaded successfully", response)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "avatar_uploaded"), response)
 }
 
 func (h *UserHandler) DeleteAccount(c *fiber.Ctx) error {
 	if err := h.userService.DeleteUser(c.UserContext()); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to delete account")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_delete_account"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Account deleted successfully", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "account_deleted"), nil)
 }
 
 // AdminDeleteUser handles DELETE /admin/users/:id (admin deletes another user)
@@ -256,14 +257,14 @@ func (h *UserHandler) AdminDeleteUser(c *fiber.Ctx) error {
 	userIDStr := c.Params("id")
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid user ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_user_id"))
 	}
 
 	if err := h.userService.AdminDeleteUser(c.UserContext(), userID); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to delete user")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_delete_user"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "User deleted successfully", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "user_deleted"), nil)
 }
 
 func parseUUIDList(raw string) []uuid.UUID {
@@ -298,7 +299,7 @@ func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 
 	users, total, err := h.userService.ListUsers(c.UserContext(), page, limit, search, roleIDs, departmentIDs, locationIDs, classificationIDs)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch users")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_users"))
 	}
 
 	return utils.PaginatedSuccessResponse(c, users, page, limit, total)
@@ -308,15 +309,15 @@ func (h *UserHandler) GetUser(c *fiber.Ctx) error {
 	userIDStr := c.Params("id")
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid user ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_user_id"))
 	}
 
 	response, err := h.userService.GetUserByID(c.UserContext(), userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "User not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "user_not_found"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "User retrieved successfully", response)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "user_retrieved"), response)
 }
 
 func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
@@ -392,7 +393,7 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 	} else {
 		// Regular JSON body
 		if err := c.BodyParser(&req); err != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 		}
 	}
 
@@ -438,19 +439,19 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 		}
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "User created successfully", response)
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "user_created"), response)
 }
 
 func (h *UserHandler) AdminUpdateUser(c *fiber.Ctx) error {
 	userIDStr := c.Params("id")
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid user ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_user_id"))
 	}
 
 	var req models.UserUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -465,14 +466,14 @@ func (h *UserHandler) AdminUpdateUser(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "User updated successfully", response)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "user_updated"), response)
 }
 
 // MatchUsers finds users that match the given criteria (role, classification, location, department)
 func (h *UserHandler) MatchUsers(c *fiber.Ctx) error {
 	var req models.UserMatchRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	var classificationID, locationID, departmentID, excludeUserID *uuid.UUID
@@ -484,7 +485,7 @@ func (h *UserHandler) MatchUsers(c *fiber.Ctx) error {
 		}
 		id, err := uuid.Parse(idStr)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid role_id: "+idStr)
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "invalid_role_id_detail", idStr))
 		}
 		roleIDs = append(roleIDs, id)
 	}
@@ -492,7 +493,7 @@ func (h *UserHandler) MatchUsers(c *fiber.Ctx) error {
 	if req.ClassificationID != nil && *req.ClassificationID != "" {
 		id, err := uuid.Parse(*req.ClassificationID)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid classification_id")
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_classification_id"))
 		}
 		classificationID = &id
 	}
@@ -500,7 +501,7 @@ func (h *UserHandler) MatchUsers(c *fiber.Ctx) error {
 	if req.LocationID != nil && *req.LocationID != "" {
 		id, err := uuid.Parse(*req.LocationID)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid location_id")
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_location_id"))
 		}
 		locationID = &id
 	}
@@ -508,7 +509,7 @@ func (h *UserHandler) MatchUsers(c *fiber.Ctx) error {
 	if req.DepartmentID != nil && *req.DepartmentID != "" {
 		id, err := uuid.Parse(*req.DepartmentID)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid department_id")
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_department_id"))
 		}
 		departmentID = &id
 	}
@@ -516,7 +517,7 @@ func (h *UserHandler) MatchUsers(c *fiber.Ctx) error {
 	if req.ExcludeUserID != nil && *req.ExcludeUserID != "" {
 		id, err := uuid.Parse(*req.ExcludeUserID)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid exclude_user_id")
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_exclude_user_id"))
 		}
 		excludeUserID = &id
 	}
@@ -537,7 +538,7 @@ func (h *UserHandler) MatchUsers(c *fiber.Ctx) error {
 		matchResponse.MatchedUserID = &idStr
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Users matched", matchResponse)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "users_matched"), matchResponse)
 }
 
 func (h *UserHandler) UpdateUserCallStatus(c *fiber.Ctx) error {
@@ -547,7 +548,7 @@ func (h *UserHandler) UpdateUserCallStatus(c *fiber.Ctx) error {
 		Status string `json:"call_status"`
 	}
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 	validStatuses := map[string]bool{
 		"available": true,
@@ -555,7 +556,7 @@ func (h *UserHandler) UpdateUserCallStatus(c *fiber.Ctx) error {
 		"offline":   true,
 	}
 	if !validStatuses[req.Status] {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid status: "+req.Status)
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "invalid_status", req.Status))
 	}
 
 	// Call Service
@@ -564,7 +565,7 @@ func (h *UserHandler) UpdateUserCallStatus(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "User call status updated successfully", resp)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "user_call_status_updated"), resp)
 }
 
 // Export exports all users as JSON
@@ -629,13 +630,13 @@ func (h *UserHandler) Export(c *fiber.Ctx) error {
 func (h *UserHandler) Import(c *fiber.Ctx) error {
 	file, err := c.FormFile("file")
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "No file uploaded")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "no_file_uploaded"))
 	}
 
 	// Open and read file
 	fileContent, err := file.Open()
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read file")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_read_file"))
 	}
 	defer fileContent.Close()
 
@@ -660,7 +661,7 @@ func (h *UserHandler) Import(c *fiber.Ctx) error {
 	// Parse JSON from file
 	decoder := json.NewDecoder(fileContent)
 	if err := decoder.Decode(&importData); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid JSON format: "+err.Error())
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "invalid_json_format_detail", err.Error()))
 	}
 
 	imported := 0
@@ -749,7 +750,7 @@ func (h *UserHandler) Import(c *fiber.Ctx) error {
 		"note":     "Imported users have default password: ChangeMe123! - Please ask users to change it",
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Import completed", result)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "import_completed"), result)
 }
 
 func (h *UserHandler) HandleLoginFailure(ctx context.Context, user string) {
@@ -838,10 +839,10 @@ func (h *UserHandler) ForgotPassword(c *fiber.Ctx) error {
 	var req models.ForgotPasswordRequest
 
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, 400, "invalid request body")
+		return utils.ErrorResponse(c, 400, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 	if strings.TrimSpace(req.Value) == "" || strings.TrimSpace(req.Channel) == "" {
-		return utils.ErrorResponse(c, 400, "channel and value are required")
+		return utils.ErrorResponse(c, 400, i18n.T(c.UserContext(), "channel_value_required"))
 	}
 	sessionID, err := h.userService.ForgotPassword(c.UserContext(), &req)
 
@@ -850,7 +851,7 @@ func (h *UserHandler) ForgotPassword(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, 400, err.Error())
 	}
 
-	return utils.SuccessResponse(c, 200, "OTP sent", fiber.Map{
+	return utils.SuccessResponse(c, 200, i18n.T(c.UserContext(), "otp_sent"), fiber.Map{
 		"sessionID": sessionID,
 	})
 }
@@ -859,7 +860,7 @@ func (h *UserHandler) VerifyOTPForReset(c *fiber.Ctx) error {
 	var req models.VerifyOTPRequest
 
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, 400, "invalid request")
+		return utils.ErrorResponse(c, 400, i18n.T(c.UserContext(), "invalid_request"))
 	}
 
 	resetToken, err := h.userService.VerifyOTPForReset(c.UserContext(), &req)
@@ -867,7 +868,7 @@ func (h *UserHandler) VerifyOTPForReset(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, 400, err.Error())
 	}
 
-	return utils.SuccessResponse(c, 200, "OTP verified", fiber.Map{
+	return utils.SuccessResponse(c, 200, i18n.T(c.UserContext(), "otp_verified"), fiber.Map{
 		"resetToken": resetToken,
 	})
 }
@@ -879,11 +880,11 @@ func (h *UserHandler) ResetPassword(c *fiber.Ctx) error {
 	}
 
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, 400, "invalid request")
+		return utils.ErrorResponse(c, 400, i18n.T(c.UserContext(), "invalid_request"))
 	}
 
 	if req.ResetToken == "" || req.NewPassword == "" {
-		return utils.ErrorResponse(c, 400, "missing required fields")
+		return utils.ErrorResponse(c, 400, i18n.T(c.UserContext(), "missing_required_fields"))
 	}
 
 	err := h.userService.ResetPassword(
@@ -895,5 +896,5 @@ func (h *UserHandler) ResetPassword(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, 400, err.Error())
 	}
 
-	return utils.SuccessResponse(c, 200, "password reset successful", nil)
+	return utils.SuccessResponse(c, 200, i18n.T(c.UserContext(), "password_reset_ok"), nil)
 }

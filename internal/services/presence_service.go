@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 // PresenceInfo represents information about a user viewing an incident
@@ -47,12 +48,12 @@ func (s *presenceService) MarkPresence(ctx context.Context, incidentID uuid.UUID
 
 	// Set the user's presence
 	if err := s.redis.HSet(ctx, key, field, data).Err(); err != nil {
-		return fmt.Errorf("failed to set presence: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_set_presence"), err)
 	}
 
 	// Set TTL for automatic cleanup (5 minutes)
 	if err := s.redis.Expire(ctx, key, 5*time.Minute).Err(); err != nil {
-		return fmt.Errorf("failed to set presence TTL: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_set_presence_ttl"), err)
 	}
 
 	return nil
@@ -64,7 +65,7 @@ func (s *presenceService) RemovePresence(ctx context.Context, incidentID uuid.UU
 	field := userID.String()
 
 	if err := s.redis.HDel(ctx, key, field).Err(); err != nil {
-		return fmt.Errorf("failed to remove presence: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_remove_presence_svc"), err)
 	}
 
 	return nil
@@ -77,7 +78,7 @@ func (s *presenceService) GetActiveUsers(ctx context.Context, incidentID uuid.UU
 
 	data, err := s.redis.HGetAll(ctx, key).Result()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get presence data: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_get_presence_svc"), err)
 	}
 
 	var users []PresenceInfo

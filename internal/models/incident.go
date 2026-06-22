@@ -433,7 +433,7 @@ type IncidentTransitionRequest struct {
 }
 
 type IncidentFeedbackRequest struct {
-	Rating  int    `json:"rating" validate:"omitempty,min=1,max=5"`
+	Rating  int    `json:"rating" validate:"omitempty,min=0,max=5"`
 	Comment string `json:"comment"`
 }
 
@@ -670,11 +670,21 @@ type IncidentUnmergeResponse struct {
 
 // Response types
 
-// EpmPortalHierarchyNode is a single level in a classification or location ancestor chain.
+// EpmPortalHierarchyNode is a single node in a nested classification or location chain.
 type EpmPortalHierarchyNode struct {
-	Name   string `json:"name"`
-	NameAr string `json:"name_ar"`
-	Level  int    `json:"level"`
+	Name   string                   `json:"name"`
+	NameAr string                   `json:"name_ar"`
+	Level  int                      `json:"level"`
+	Child  *EpmPortalHierarchyNode  `json:"child"`
+}
+
+// EpmPortalTreeNode is a node in the portal-specific classification/location tree.
+type EpmPortalTreeNode struct {
+	ID       uuid.UUID            `json:"id"`
+	Name     string               `json:"name"`
+	NameAr   string               `json:"name_ar"`
+	Level    int                  `json:"level"`
+	Children []EpmPortalTreeNode  `json:"children,omitempty"`
 }
 
 // EpmPortalStateInfo carries the state name fields needed by the EPM portal.
@@ -685,17 +695,67 @@ type EpmPortalStateInfo struct {
 
 // EpmPortalIncidentResponse is the trimmed incident payload returned to EPM940 portal clients.
 type EpmPortalIncidentResponse struct {
-	IncidentNumber string                   `json:"incident_number"`
-	ReporterName   string                   `json:"reporter_name"`
-	ReporterEmail  string                   `json:"reporter_email"`
-	ReporterPhone  string                   `json:"reporter_phone"`
-	CallerIdentity string                   `json:"caller_identity"`
-	Address        string                   `json:"address"`
-	Description    string                   `json:"description"`
-	Classification []EpmPortalHierarchyNode `json:"classification"`
-	Location       []EpmPortalHierarchyNode `json:"location"`
-	CurrentState   *EpmPortalStateInfo      `json:"current_state,omitempty"`
-	GisLocation    interface{}              `json:"gis_location,omitempty"`
+	ID             uuid.UUID               `json:"id"`
+	IncidentNumber string                  `json:"incident_number"`
+	ReporterName   string                  `json:"reporter_name"`
+	ReporterEmail  string                  `json:"reporter_email"`
+	ReporterPhone  string                  `json:"reporter_phone"`
+	CallerIdentity string                  `json:"caller_identity"`
+	Address        string                  `json:"address"`
+	Description    string                  `json:"description"`
+	Classification *EpmPortalHierarchyNode `json:"classification"`
+	Location       *EpmPortalHierarchyNode `json:"location"`
+	CurrentState   *EpmPortalStateInfo     `json:"current_state,omitempty"`
+	GisLocation    interface{}             `json:"gis_location,omitempty"`
+}
+
+// BuildNestedHierarchy converts a flat ordered slice of nodes (root→leaf) into a nested chain.
+func BuildNestedHierarchy(nodes []EpmPortalHierarchyNode) *EpmPortalHierarchyNode {
+	if len(nodes) == 0 {
+		return nil
+	}
+	root := nodes[0]
+	current := &root
+	for i := 1; i < len(nodes); i++ {
+		next := nodes[i]
+		current.Child = &next
+		current = current.Child
+	}
+	return &root
+}
+
+// ToEpmPortalClassificationTree converts a ClassificationResponse tree to portal-trimmed tree.
+func ToEpmPortalClassificationTree(c *ClassificationResponse) EpmPortalTreeNode {
+	node := EpmPortalTreeNode{
+		ID:     c.ID,
+		Name:   c.Name,
+		NameAr: c.NameAr,
+		Level:  c.Level,
+	}
+	if len(c.Children) > 0 {
+		node.Children = make([]EpmPortalTreeNode, len(c.Children))
+		for i := range c.Children {
+			node.Children[i] = ToEpmPortalClassificationTree(&c.Children[i])
+		}
+	}
+	return node
+}
+
+// ToEpmPortalLocationTree converts a LocationResponse tree to portal-trimmed tree.
+func ToEpmPortalLocationTree(l *LocationResponse) EpmPortalTreeNode {
+	node := EpmPortalTreeNode{
+		ID:     l.ID,
+		Name:   l.Name,
+		NameAr: l.NameAr,
+		Level:  l.Level,
+	}
+	if len(l.Children) > 0 {
+		node.Children = make([]EpmPortalTreeNode, len(l.Children))
+		for i := range l.Children {
+			node.Children[i] = ToEpmPortalLocationTree(&l.Children[i])
+		}
+	}
+	return node
 }
 
 type IncidentResponse struct {
@@ -829,9 +889,10 @@ type AvailableTransitionResponse struct {
 }
 
 type StateStatDetail struct {
-	ID    uuid.UUID `json:"id"`
-	Name  string    `json:"name"`
-	Count int64     `json:"count"`
+	ID     uuid.UUID `json:"id"`
+	Name   string    `json:"name"`
+	NameAr string    `json:"name_ar"`
+	Count  int64     `json:"count"`
 }
 
 type IncidentStatsResponse struct {

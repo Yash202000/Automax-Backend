@@ -9,6 +9,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
@@ -33,7 +34,7 @@ func (h *ActionLogHandler) ListActionLogs(c *fiber.Ctx) error {
 	filter := &models.ActionLogFilter{}
 	if err := c.QueryParser(filter); err != nil {
 		log.Printf("Error parsing query parameters: %v", err)
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_query_parameters"))
 	}
 	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -91,15 +92,15 @@ func (h *ActionLogHandler) GetActionLog(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid action log ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_action_log_id"))
 	}
 
 	log, err := h.service.GetActionLog(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Action log not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "action_log_not_found"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Action log retrieved successfully", log)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "action_log_retrieved"), log)
 }
 
 // GetStats handles GET /admin/action-logs/stats
@@ -109,7 +110,7 @@ func (h *ActionLogHandler) GetStats(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Stats retrieved successfully", stats)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "stats_retrieved_success"), stats)
 }
 
 // GetFilterOptions handles GET /admin/action-logs/filter-options
@@ -119,7 +120,7 @@ func (h *ActionLogHandler) GetFilterOptions(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Filter options retrieved successfully", options)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "filter_options_retrieved"), options)
 }
 
 // GetUserActions handles GET /admin/action-logs/user/:id
@@ -127,7 +128,7 @@ func (h *ActionLogHandler) GetUserActions(c *fiber.Ctx) error {
 	userIDStr := c.Params("id")
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid user ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_user_id"))
 	}
 
 	page, _ := strconv.Atoi(c.Query("page", "1"))
@@ -162,7 +163,7 @@ func (h *ActionLogHandler) CleanupOldLogs(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Old logs cleaned up", fiber.Map{
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "old_logs_cleaned_up"), fiber.Map{
 		"deleted_count":  deleted,
 		"retention_days": retentionDays,
 	})
@@ -173,7 +174,7 @@ func (h *ActionLogHandler) ExportActionLogs(c *fiber.Ctx) error {
 	var filter models.ActionLogFilter
 	if err := c.QueryParser(&filter); err != nil {
 		log.Printf("Error parsing query parameters: %v", err)
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_query_parameters"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &filter); len(validationErrors) != 0 {

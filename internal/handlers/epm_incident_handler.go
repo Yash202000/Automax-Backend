@@ -15,6 +15,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/storage"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -149,7 +150,7 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(EPMInsertIncidentResponse{
 			HTTPStatusCode: fiber.StatusUnauthorized,
-			Message:        "Invalid or expired token",
+			Message:        i18n.T(c.UserContext(), "invalid_or_expired_token"),
 			Result:         false,
 		})
 	}
@@ -624,7 +625,7 @@ func (h *EPMIncidentHandler) GetMomraIncidentStatusDetails(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(EPMGetMomraIncidentStatusDetailsResponse{
 			HTTPStatusCode: fiber.StatusUnauthorized,
-			Ex:             "Invalid or expired token",
+			Ex:             i18n.T(c.UserContext(), "invalid_or_expired_token"),
 			Result:         false,
 		})
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
@@ -38,7 +39,7 @@ func NewCallLogHandler(service services.CallLogService, validator *validator.Val
 func (h *CallLogHandler) CreateCallLog(c *fiber.Ctx) error {
 	var req models.CallLogCreateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -56,7 +57,7 @@ func (h *CallLogHandler) CreateCallLog(c *fiber.Ctx) error {
 			phone = pi.PhoneNumber
 		}
 		if phone == "" {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Each participant must have extension or phone_number")
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "each_participant_ext_or_phone"))
 		}
 		resolved = append(resolved, models.ParticipantData{Phone: phone})
 	}
@@ -77,12 +78,12 @@ func (h *CallLogHandler) GetCallLog(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid call log ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_call_log_id"))
 	}
 
 	callLog, err := h.service.GetCallLog(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Call log not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "call_log_not_found"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -96,12 +97,12 @@ func (h *CallLogHandler) UpdateCallLog(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid call log ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_call_log_id"))
 	}
 
 	var req models.CallLogUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -127,7 +128,7 @@ func (h *CallLogHandler) DeleteCallLog(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid call log ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_call_log_id"))
 	}
 
 	if err := h.service.DeleteCallLog(c.UserContext(), id); err != nil {
@@ -145,7 +146,7 @@ func (h *CallLogHandler) ListCallLogs(c *fiber.Ctx) error {
 	var filter models.CallLogFilter
 
 	if err := c.QueryParser(&filter); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid query parameters")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_query_parameters"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &filter); len(validationErrors) != 0 {
@@ -164,7 +165,7 @@ func (h *CallLogHandler) ListCallLogs(c *fiber.Ctx) error {
 
 	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if !ok {
-		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "User not authenticated")
+		return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "user_not_authenticated"))
 	}
 
 	filter.ParticipantID = &userID
@@ -230,13 +231,13 @@ func (h *CallLogHandler) StartCall(c *fiber.Ctx) error {
 	}
 
 	if req.Initiator.Phone == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Initiator phone is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "initiator_phone_required"))
 	}
 	if req.CallType == "direct" && req.Recipient == nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Direct call requires a recipient")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "direct_call_needs_recipient"))
 	}
 	if req.CallType == "group" && len(req.Participants) == 0 {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Group call requires at least one participant")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "group_call_needs_participant"))
 	}
 
 	initiator := resolvePhone(req.Initiator.Phone)
@@ -251,7 +252,7 @@ func (h *CallLogHandler) StartCall(c *fiber.Ctx) error {
 	recipients := make([]models.ParticipantData, 0, len(parties))
 	for _, p := range parties {
 		if p.Phone == "" {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Each participant must have a phone value")
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "each_participant_phone"))
 		}
 		recipients = append(recipients, resolvePhone(p.Phone))
 	}
@@ -271,7 +272,7 @@ func (h *CallLogHandler) StartCall(c *fiber.Ctx) error {
 func (h *CallLogHandler) EndCall(c *fiber.Ctx) error {
 	callUUID := c.Params("call_uuid")
 	if callUUID == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Call UUID is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "call_uuid_required"))
 	}
 
 	var req struct {
@@ -280,7 +281,7 @@ func (h *CallLogHandler) EndCall(c *fiber.Ctx) error {
 	}
 
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -305,7 +306,7 @@ func (h *CallLogHandler) EndCall(c *fiber.Ctx) error {
 func (h *CallLogHandler) JoinCall(c *fiber.Ctx) error {
 	callUUID := c.Params("call_uuid")
 	if callUUID == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Call UUID is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "call_uuid_required"))
 	}
 
 	var req struct {
@@ -313,11 +314,11 @@ func (h *CallLogHandler) JoinCall(c *fiber.Ctx) error {
 	}
 
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if req.Phone == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "phone is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "phone_required"))
 	}
 
 	if err := h.service.JoinCall(c.UserContext(), callUUID, req.Phone); err != nil {
@@ -334,7 +335,7 @@ func (h *CallLogHandler) JoinCall(c *fiber.Ctx) error {
 func (h *CallLogHandler) GetCallLogsByExtension(c *fiber.Ctx) error {
 	extension := c.Params("extension")
 	if extension == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Extension is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "extension_required"))
 	}
 
 	page, _ := strconv.Atoi(c.Query("page", "1"))
@@ -342,7 +343,7 @@ func (h *CallLogHandler) GetCallLogsByExtension(c *fiber.Ctx) error {
 
 	// Verify the extension exists, then find calls by the stored phone/extension value.
 	if _, err := h.userSvc.FindByExtension(c.UserContext(), extension); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "User with extension not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "user_with_ext_not_found"))
 	}
 
 	callLogs, total, err := h.service.GetCallLogsByPhone(c.UserContext(), extension, page, limit)
@@ -368,17 +369,17 @@ func (h *CallLogHandler) GetCallLogsByExtension(c *fiber.Ctx) error {
 func (h *CallLogHandler) UploadAttachment(c *fiber.Ctx) error {
 	callUUID := c.Params("call_uuid")
 	if callUUID == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Call UUID is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "call_uuid_required"))
 	}
 
 	file, err := c.FormFile("file")
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "No file uploaded")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "no_file_uploaded"))
 	}
 
 	src, err := file.Open()
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read file")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_read_file"))
 	}
 	defer src.Close()
 
@@ -388,7 +389,7 @@ func (h *CallLogHandler) UploadAttachment(c *fiber.Ctx) error {
 	folder := fmt.Sprintf("calls/%s", callUUID)
 	filePath, err := h.storage.UploadFile(c.UserContext(), src, file, folder)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to upload file")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_upload_file"))
 	}
 
 	log.Printf("[UploadAttachment] stored at path=%s", filePath)
@@ -412,19 +413,19 @@ func (h *CallLogHandler) UploadAttachment(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "Attachment uploaded", map[string]interface{}{"success": true})
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "attachment_uploaded"), map[string]interface{}{"success": true})
 }
 
 func (h *CallLogHandler) PreviewAttachment(c *fiber.Ctx) error {
 	attachmentIDStr := c.Params("attachment_id")
 	attachmentID, err := uuid.Parse(attachmentIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid attachment ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_attachment_id"))
 	}
 
 	attachment, err := h.service.GetAttachment(c.UserContext(), attachmentID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Attachment not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "attachment_not_found"))
 	}
 
 	log.Printf("[PreviewAttachment] id=%s file_path=%s mime=%s db_size=%d",
@@ -433,14 +434,14 @@ func (h *CallLogHandler) PreviewAttachment(c *fiber.Ctx) error {
 	file, err := h.storage.GetFile(c.UserContext(), attachment.FilePath)
 	if err != nil {
 		log.Printf("[PreviewAttachment] GetFile error: %v", err)
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to retrieve file")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_retrieve_file"))
 	}
 	defer file.Close()
 
 	fileData, err := io.ReadAll(file)
 	if err != nil {
 		log.Printf("[PreviewAttachment] ReadAll error: %v", err)
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read file")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_read_file"))
 	}
 
 	log.Printf("[PreviewAttachment] serving %d bytes mime=%s filename=%s", len(fileData), attachment.MimeType, attachment.FileName)

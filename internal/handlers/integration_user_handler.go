@@ -6,6 +6,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -61,11 +62,11 @@ type IntegrationCreateUserResponse struct {
 func (h *IntegrationUserHandler) CreateUser(c *fiber.Ctx) error {
 	var req IntegrationCreateUserRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if len(req.Roles) == 0 {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "At least one role is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "at_least_one_role"))
 	}
 
 	// Resolve role codes to IDs
@@ -78,10 +79,10 @@ func (h *IntegrationUserHandler) CreateUser(c *fiber.Ctx) error {
 		}
 		role, err := h.roleRepo.FindByCode(c.UserContext(), code)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Role not found: "+roleCode)
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "role_not_found"))
 		}
 		if !role.IsActive {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Role is inactive: "+roleCode)
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "role_inactive"))
 		}
 		roleIDs = append(roleIDs, role.ID)
 		roleNames = append(roleNames, role.Name)
@@ -90,7 +91,7 @@ func (h *IntegrationUserHandler) CreateUser(c *fiber.Ctx) error {
 	// Fetch all departments
 	departments, err := h.departmentRepo.List(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch departments")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_departments"))
 	}
 	departmentIDs := make([]uuid.UUID, len(departments))
 	for i, d := range departments {
@@ -100,7 +101,7 @@ func (h *IntegrationUserHandler) CreateUser(c *fiber.Ctx) error {
 	// Fetch all locations
 	locations, err := h.locationRepo.List(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch locations")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_locs"))
 	}
 	locationIDs := make([]uuid.UUID, len(locations))
 	for i, l := range locations {
@@ -110,7 +111,7 @@ func (h *IntegrationUserHandler) CreateUser(c *fiber.Ctx) error {
 	// Fetch all classifications
 	classifications, err := h.classificationRepo.List(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch classifications")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_classifications"))
 	}
 	classificationIDs := make([]uuid.UUID, len(classifications))
 	for i, cl := range classifications {
@@ -179,5 +180,5 @@ func (h *IntegrationUserHandler) CreateUser(c *fiber.Ctx) error {
 		Roles:     roleNames,
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "User created successfully", resp)
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "user_created"), resp)
 }

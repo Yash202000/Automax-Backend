@@ -5,6 +5,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/gofiber/fiber/v2"
@@ -24,7 +25,7 @@ func NewCommentTemplateHandler(service services.CommentTemplateService) *Comment
 func (h *CommentTemplateHandler) Create(c *fiber.Ctx) error {
 	var req models.CommentTemplateCreateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -36,11 +37,11 @@ func (h *CommentTemplateHandler) Create(c *fiber.Ctx) error {
 
 	exist, err := h.service.CommentTemplateExist(c.UserContext(), req.CommentText, req.WorkflowTransitionID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to check existence")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_check_exist"))
 	}
 
 	if exist {
-		return utils.ErrorResponse(c, fiber.StatusConflict, "Comment template already exists")
+		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "comment_template_exists"))
 	}
 
 	resp, err := h.service.Create(c.UserContext(), &req)
@@ -48,7 +49,7 @@ func (h *CommentTemplateHandler) Create(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "Comment template created successfully", resp)
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "comment_template_created"), resp)
 }
 
 // GetByID handles GET /admin/comment-templates/:id
@@ -56,7 +57,7 @@ func (h *CommentTemplateHandler) GetByID(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	resp, err := h.service.Get(c.UserContext(), id)
@@ -64,7 +65,7 @@ func (h *CommentTemplateHandler) GetByID(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Comment template retrieved successfully", resp)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "comment_template_retrieved"), resp)
 }
 
 // GetByWorkflowTransitionID handles GET /admin/comment-templates/workflow-transition/:workflowTransitionId
@@ -72,7 +73,7 @@ func (h *CommentTemplateHandler) GetByWorkflowTransitionID(c *fiber.Ctx) error {
 	workflowTransitionIDStr := c.Params("workflowTransitionId")
 	workflowTransitionID, err := uuid.Parse(workflowTransitionIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid workflow transition ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_workflow_transition_id"))
 	}
 
 	resp, err := h.service.GetByWorkflowTransitionID(c.UserContext(), workflowTransitionID)
@@ -80,7 +81,7 @@ func (h *CommentTemplateHandler) GetByWorkflowTransitionID(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Comment templates retrieved successfully", resp)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "comment_templates_retrieved"), resp)
 }
 
 // List handles GET /admin/comment-templates
@@ -92,7 +93,7 @@ func (h *CommentTemplateHandler) List(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Comment templates retrieved successfully", resp)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "comment_templates_retrieved"), resp)
 }
 
 // Update handles PUT /admin/comment-templates/:id
@@ -100,12 +101,12 @@ func (h *CommentTemplateHandler) Update(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	var req models.CommentTemplateUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -117,22 +118,22 @@ func (h *CommentTemplateHandler) Update(c *fiber.Ctx) error {
 	commentTemplate, err := h.service.Get(c.UserContext(), id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return utils.ErrorResponse(c, fiber.StatusNotFound, "comment template not found")
+			return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "comment_template_not_found"))
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to retrieve comment template")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_retrieve_comment_template"))
 	}
 
 	if commentTemplate == nil || commentTemplate.WorkflowTransition == nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "comment template not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "comment_template_not_found"))
 	}
 
 	if commentTemplate.CommentText != *req.CommentText {
 		exist, err := h.service.CommentTemplateExist(c.UserContext(), *req.CommentText, commentTemplate.WorkflowTransitionID)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to check existence")
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_check_exist"))
 		}
 		if exist {
-			return utils.ErrorResponse(c, fiber.StatusConflict, "Comment template with the same text already exists for the new workflow transition")
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "comment_template_text_exists"))
 		}
 	}
 
@@ -141,7 +142,7 @@ func (h *CommentTemplateHandler) Update(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Comment template updated successfully", resp)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "comment_template_updated"), resp)
 }
 
 // Delete handles DELETE /admin/comment-templates/:id
@@ -149,7 +150,7 @@ func (h *CommentTemplateHandler) Delete(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	err = h.service.Delete(c.UserContext(), id)
@@ -157,5 +158,5 @@ func (h *CommentTemplateHandler) Delete(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Comment template deleted successfully", nil)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "comment_template_deleted"), nil)
 }

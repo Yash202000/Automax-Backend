@@ -17,6 +17,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -237,12 +238,12 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
 	reportData, err := h.incidentRepo.GetReportIncidentData(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Incident not found")
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "incident_not_found"))
 	}
 
 	if reportData.LocationID != nil {
@@ -266,12 +267,12 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 
 	reportTransitions, err := h.incidentRepo.GetReportTransitions(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch transitions")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_transitions"))
 	}
 
 	reportAttachments, err := h.incidentRepo.GetReportAttachments(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch attachments")
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_attachments"))
 	}
 
 	reportRevisions, err := h.incidentRepo.GetReportRevisions(c.UserContext(), id)
@@ -332,17 +333,17 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 	case "pdf":
 		tmpHTML, terr := os.CreateTemp("", "report-*.html")
 		if terr != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create temp file")
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create_temp"))
 		}
 		defer os.Remove(tmpHTML.Name())
 		if _, terr = tmpHTML.Write(htmlBytes); terr != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to write HTML")
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_write_html"))
 		}
 		tmpHTML.Close()
 
 		tmpPDF, terr := os.CreateTemp("", "report-*.pdf")
 		if terr != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create PDF temp")
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create_pdf_temp"))
 		}
 		pdfPath := tmpPDF.Name()
 		tmpPDF.Close()
@@ -370,7 +371,7 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 		pdfData, terr := os.ReadFile(pdfPath)
 		if terr != nil || len(pdfData) == 0 {
 			log.Println("report pdf data err", err)
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read PDF output")
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_read_pdf"))
 		}
 
 		c.Set("Content-Type", "application/pdf")
@@ -387,7 +388,7 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 		return c.JSON(map[string]interface{}{"generated_at": time.Now().In(appTimezone()).Format(time.RFC3339), "incident": reportData})
 
 	default:
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Use format=pdf, html, or json")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "use_format_pdf_html_json"))
 	}
 }
 
@@ -1107,46 +1108,46 @@ func buildIncidentTmplData(
 	hasDates := tsp(inc.DueDate) != "" || tsp(inc.ResolvedAt) != "" || tsp(inc.ClosedAt) != ""
 
 	return map[string]interface{}{
-		"Dir":            l.Dir,
-		"Lang":           lang,
-		"IncidentNo":     inc.IncidentNumber,
-		"CreatedAt":      ts(inc.CreatedAt),
-		"Status":         statusName,
-		"Channel":        inc.Channel,
-		"Source":         inc.Source,
-		"RecordType":     inc.RecordType,
-		"WorkflowName":   workflowName,
-		"Priority":       "",
-		"Title":          inc.Title,
-		"Classification": classPath,
-		"Location":       locationName,
-		"Description":    inc.Description,
-		"SLABreached":    inc.SLABreached,
-		"SLABadgeClass":  slaClass,
-		"SLABadgeText":   slaStatus,
-		"SLADeadline":    tsp(inc.SLADeadline),
-		"DueDate":        tsp(inc.DueDate),
-		"ResolvedAt":     tsp(inc.ResolvedAt),
-		"ClosedAt":       tsp(inc.ClosedAt),
-		"HasDates":       hasDates,
-		"UpdatedAt":      ts(inc.UpdatedAt),
-		"Reporter":       reporterName,
-		"Assignee":       assigneeName,
-		"ReporterEmail":  inc.ReporterEmail,
-		"ReporterMobile": inc.CreatedByMobile,
-		"Department":     deptName,
-		"ReporterName":   inc.CreatedByName,
-		"HasLocation":    hasLocation,
-		"Latitude":       lat,
-		"Longitude":      lon,
-		"Address":        inc.Address,
-		"City":           inc.City,
-		"State":          inc.State,
-		"Country":        inc.Country,
-		"PostalCode":     inc.PostalCode,
-		"History":        history,
-		"Comments":       comments,
-		"Attachments":    attachments,
-		"PrintDate":      ts(time.Now()),
+		"Dir":                               l.Dir,
+		"Lang":                              lang,
+		"IncidentNo":                        inc.IncidentNumber,
+		"CreatedAt":                         ts(inc.CreatedAt),
+		"Status":                            statusName,
+		"Channel":                           inc.Channel,
+		"Source":                            inc.Source,
+		"RecordType":                        inc.RecordType,
+		"WorkflowName":                      workflowName,
+		"Priority":                          "",
+		"Title":                             inc.Title,
+		"Classification":                    classPath,
+		"Location":                          locationName,
+		"Description":                       inc.Description,
+		"SLABreached":                       inc.SLABreached,
+		"SLABadgeClass":                     slaClass,
+		"SLABadgeText":                      slaStatus,
+		"SLADeadline":                       tsp(inc.SLADeadline),
+		"DueDate":                           tsp(inc.DueDate),
+		"ResolvedAt":                        tsp(inc.ResolvedAt),
+		"ClosedAt":                          tsp(inc.ClosedAt),
+		"HasDates":                          hasDates,
+		"UpdatedAt":                         ts(inc.UpdatedAt),
+		"Reporter":                          reporterName,
+		"Assignee":                          assigneeName,
+		"ReporterEmail":                     inc.ReporterEmail,
+		"ReporterMobile":                    inc.CreatedByMobile,
+		"Department":                        deptName,
+		"ReporterName":                      inc.CreatedByName,
+		"HasLocation":                       hasLocation,
+		"Latitude":                          lat,
+		"Longitude":                         lon,
+		"Address":                           inc.Address,
+		"City":                              inc.City,
+		"State":                             inc.State,
+		"Country":                           inc.Country,
+		"PostalCode":                        inc.PostalCode,
+		"History":                           history,
+		i18n.T(c.UserContext(), "comments"): comments,
+		"Attachments":                       attachments,
+		"PrintDate":                         ts(time.Now()),
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/gofiber/fiber/v2"
@@ -30,12 +31,12 @@ func NewIncidentPublicFeedbackHandler(
 func (h *IncidentPublicFeedbackHandler) Create(c *fiber.Ctx) error {
 	incidentID, err := uuid.Parse(c.Params("incidentID"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_incident_id"))
 	}
 
 	var req models.IncidentPublicFeedbackCreateRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -57,7 +58,7 @@ func (h *IncidentPublicFeedbackHandler) Create(c *fiber.Ctx) error {
 		Description: "Incident public feedback created for incident " + incidentID.String(),
 	})
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "Public feedback created", resp)
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "public_feedback_created"), resp)
 }
 
 // Init handles GET /api/v1/public-feedback/:incidentID/init?signed_token=xxx (public, no auth).
@@ -67,12 +68,12 @@ func (h *IncidentPublicFeedbackHandler) Create(c *fiber.Ctx) error {
 func (h *IncidentPublicFeedbackHandler) Init(c *fiber.Ctx) error {
 	incidentID, err := uuid.Parse(c.Params("incidentID"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_incident_id"))
 	}
 
 	token := c.Query("signed_token")
 	if token == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Missing signed token")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "missing_signed_token"))
 	}
 
 	resp, err := h.service.Init(c.UserContext(), incidentID, token)
@@ -87,7 +88,7 @@ func (h *IncidentPublicFeedbackHandler) Init(c *fiber.Ctx) error {
 		}
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Feedback initialized", resp)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "feedback_initialized"), resp)
 }
 
 // Submit handles PUT /api/v1/public-feedback/:incidentID/submit (public, no auth).
@@ -96,7 +97,7 @@ func (h *IncidentPublicFeedbackHandler) Init(c *fiber.Ctx) error {
 func (h *IncidentPublicFeedbackHandler) Submit(c *fiber.Ctx) error {
 	incidentID, err := uuid.Parse(c.Params("incidentID"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_incident_id"))
 	}
 
 	var feedbackID uuid.UUID
@@ -113,19 +114,19 @@ func (h *IncidentPublicFeedbackHandler) Submit(c *fiber.Ctx) error {
 		} else {
 			rawParts := strings.Split(token, "|")
 			if len(rawParts) != 5 {
-				return utils.ErrorResponse(c, fiber.StatusBadRequest, "Malformed token")
+				return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "malformed_token"))
 			}
 			feedbackIDStr := rawParts[1]
 			feedbackID, err = uuid.Parse(feedbackIDStr)
 			if err != nil {
-				return utils.ErrorResponse(c, fiber.StatusBadRequest, "Malformed token")
+				return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "malformed_token"))
 			}
 			if _, err := utils.ValidateFeedbackToken(token, feedbackIDStr, incidentID.String()); err != nil {
 				switch {
 				case errors.Is(err, utils.ErrExpired):
-					return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Token has expired")
+					return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "token_expired"))
 				case errors.Is(err, utils.ErrIDMismatch):
-					return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Token does not match this incident")
+					return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "token_incident_mismatch"))
 				default:
 					return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Invalid token")
 				}
@@ -134,15 +135,15 @@ func (h *IncidentPublicFeedbackHandler) Submit(c *fiber.Ctx) error {
 	case directFeedbackID != "":
 		feedbackID, err = uuid.Parse(directFeedbackID)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid feedback ID")
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_feedback_id"))
 		}
 	default:
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Missing signed token or feedback ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "missing_token_or_feedback_id"))
 	}
 
 	var req models.IncidentPublicFeedbackSubmitRequest
 	if err := c.BodyParser(&req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request body")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
@@ -176,7 +177,7 @@ func (h *IncidentPublicFeedbackHandler) Submit(c *fiber.Ctx) error {
 		})
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Feedback submitted successfully", resp)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "feedback_submitted"), resp)
 }
 
 // ListAll handles GET /api/v1/public-feedback/ (authenticated, incidents:view).
@@ -185,19 +186,19 @@ func (h *IncidentPublicFeedbackHandler) ListAll(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
-	return utils.SuccessResponse(c, fiber.StatusOK, "Public feedback retrieved", items)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "public_feedback_retrieved"), items)
 }
 
 // ListByIncident handles GET /api/v1/public-feedback/:incidentID (authenticated, incidents:view).
 func (h *IncidentPublicFeedbackHandler) ListByIncident(c *fiber.Ctx) error {
 	incidentID, err := uuid.Parse(c.Params("incidentID"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid incident ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_incident_id"))
 	}
 
 	items, err := h.service.ListByIncident(c.UserContext(), incidentID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
-	return utils.SuccessResponse(c, fiber.StatusOK, "Public feedback retrieved", items)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "public_feedback_retrieved"), items)
 }

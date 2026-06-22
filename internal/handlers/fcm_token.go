@@ -6,6 +6,7 @@ import (
 	"github.com/automax/backend/pkg/constants"
 	"github.com/google/uuid"
 
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -23,7 +24,7 @@ func (h *FCMHandler) RegisterToken(c *fiber.Ctx) error {
 
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "Invalid request body",
+			"error": i18n.T(c.UserContext(), "invalid_request_body"),
 		})
 	}
 
@@ -91,7 +92,7 @@ func (h *FCMHandler) RemoveDevice(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
-			"error":   "Invalid request body",
+			"error":   i18n.T(c.UserContext(), "invalid_request_body"),
 		})
 	}
 
@@ -123,7 +124,7 @@ func (h *FCMHandler) PushNotification(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
-			"error":   "Invalid request body",
+			"error":   i18n.T(c.UserContext(), "invalid_request_body"),
 		})
 	}
 
@@ -131,7 +132,7 @@ func (h *FCMHandler) PushNotification(c *fiber.Ctx) error {
 	if req.UserID == uuid.Nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
-			"error":   "user_id is required",
+			"error":   i18n.T(c.UserContext(), "user_id_required"),
 		})
 	}
 

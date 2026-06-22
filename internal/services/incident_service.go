@@ -20,6 +20,7 @@ import (
 	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/internal/utils"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/i18n"
 	pkgutils "github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
@@ -275,6 +276,27 @@ func (s *incidentService) calculateSLADeadline(ctx context.Context, classificati
 	return deadline, nil
 }
 
+// UserHasAssignmentRole returns true if the user holds at least one of the given roles.
+func (s *incidentService) UserHasAssignmentRole(ctx context.Context, userID uuid.UUID, assignmentRoles []models.Role) bool {
+	if len(assignmentRoles) == 0 {
+		return false
+	}
+	userRoles, err := s.userRepo.GetUserRoles(ctx, userID)
+	if err != nil || len(userRoles) == 0 {
+		return false
+	}
+	allowed := make(map[uuid.UUID]bool, len(assignmentRoles))
+	for _, r := range assignmentRoles {
+		allowed[r.ID] = true
+	}
+	for _, r := range userRoles {
+		if allowed[r.ID] {
+			return true
+		}
+	}
+	return false
+}
+
 // roundRobinPoolKey generates a deterministic key for a set of role IDs.
 // Only role IDs are used — classification/location/department filter the pool
 // at query time but should not create separate round-robin sequences.
@@ -299,7 +321,7 @@ func (s *incidentService) getNextRoundRobinAssignee(ctx context.Context, roleIDs
 		return nil, fmt.Errorf("find online agents: %w", err)
 	}
 	if len(users) == 0 {
-		return nil, fmt.Errorf("no online agents available")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "no_online_agents"))
 	}
 
 	sort.Slice(users, func(i, j int) bool {
@@ -458,13 +480,13 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 	// Parse workflow ID
 	workflowID, err := uuid.Parse(req.WorkflowID)
 	if err != nil {
-		return nil, errors.New("invalid workflow_id")
+		return nil, errors.New(i18n.T(ctx, "invalid_workflow_id_lower"))
 	}
 
 	// Get the initial state of the workflow
 	initialState, err := s.workflowRepo.GetInitialState(ctx, workflowID)
 	if err != nil {
-		return nil, errors.New("workflow has no initial state configured")
+		return nil, errors.New(i18n.T(ctx, "workflow_no_initial_state"))
 	}
 
 	// Set record type, default to 'incident' if not provided
@@ -627,9 +649,11 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 	distributeAssign := strings.TrimSpace(os.Getenv("DISTRIBUTE_INCIDENT_ASSIGN"))
 	if strings.EqualFold(distributeAssign, "true") {
 		// DISTRIBUTE_INCIDENT_ASSIGN=true mode:
-		//   1. Web-created incidents → assign to the creator agent (always)
-		//   2. Other sources → round-robin among online eligible agents (never assign to offline)
-		if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.WEB) {
+		//   1. Web-created incidents by an eligible agent → self-assign to creator
+		//   2. Web-created incidents by non-agent (admin, super-admin) → round-robin
+		//   3. Other sources → round-robin among online eligible agents (never assign to offline)
+		if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.WEB) &&
+			s.UserHasAssignmentRole(ctx, reporterID, initialState.AssignmentRoles) {
 			if err := s.incidentRepo.AssignIncident(ctx, incident.ID, reporterID); err != nil {
 				fmt.Printf("Warning: creation assignment (self-assign for web) failed: %v\n", err)
 			} else {
@@ -657,6 +681,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 				}
 			}
 
+			log.Printf("role %v class %d loc %d dept %d", roleIDs, classID, locID, deptID)
 			nextAssigneeID, err := s.getNextRoundRobinAssignee(ctx, roleIDs, classID, locID, deptID)
 			if err == nil && nextAssigneeID != nil {
 				if err := s.incidentRepo.AssignIncident(ctx, incident.ID, *nextAssigneeID); err != nil {
@@ -991,10 +1016,10 @@ func (s *incidentService) FindByIDWithLast6DigitValidation(ctx context.Context, 
 	}
 
 	if incident == nil || incident.ID == uuid.Nil {
-		return nil, errors.New("invalid incident")
+		return nil, errors.New(i18n.T(ctx, "invalid_incident_lower"))
 	}
 	if incident.ReporterID == nil {
-		return nil, errors.New("invalid incident")
+		return nil, errors.New(i18n.T(ctx, "invalid_incident_lower"))
 	}
 	log.Println("incident fetch via last 6 digit")
 
@@ -1114,7 +1139,7 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	// BLOCK: Prevent editing child incidents (merged into another)
 	if incident.IsMerged && incident.MasterIncidentID != nil {
 		tx.Rollback()
-		return nil, errors.New("child incidents cannot be edited - they are locked after merging")
+		return nil, errors.New(i18n.T(ctx, "child_incidents_locked"))
 	}
 
 	// // Source validation: for IVR calls from EPM940, source must be provided.
@@ -1122,7 +1147,7 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.IVR) && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
 		if req.Source == "" || req.Source != constants.INCIDENT_SOURCE.IVR || incident.Comments == nil {
 			tx.Rollback()
-			return nil, errors.New("source is required for IVR updates")
+			return nil, errors.New(i18n.T(ctx, "source_required_ivr"))
 		}
 	}
 
@@ -1429,13 +1454,13 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	log.Println(len(updates), len(changes))
 	if len(updates) == 0 || len(changes) == 0 {
 		tx.Rollback()
-		return nil, errors.New("no changes detected")
+		return nil, errors.New(i18n.T(ctx, "no_changes_detected"))
 	}
 	// Execute optimistic lock update
 	if err := txRepo.UpdateFieldsWithVersion(ctx, id, updates, req.Version); err != nil {
 		tx.Rollback()
 		if err == repository.ErrVersionMismatch {
-			return nil, fmt.Errorf("conflict: incident was modified by another user")
+			return nil, fmt.Errorf("%s", i18n.T(ctx, "incident_conflict"))
 		}
 		return nil, err
 	}
@@ -1638,17 +1663,17 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 	// Get the source incident
 	sourceIncident, err := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
 	if err != nil {
-		return nil, errors.New("incident not found")
+		return nil, errors.New(i18n.T(ctx, "incident_not_found"))
 	}
 
 	// Validate it's not already a request
 	if sourceIncident.RecordType == "request" {
-		return nil, errors.New("cannot convert a request to another request")
+		return nil, errors.New(i18n.T(ctx, "cannot_convert_request"))
 	}
 
 	// Check if already converted
 	if sourceIncident.ConvertedRequestID != nil {
-		return nil, errors.New("this incident has already been converted to a request")
+		return nil, errors.New(i18n.T(ctx, "already_converted_to_request"))
 	}
 
 	// Handle existing request linking
@@ -1656,18 +1681,18 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 	if req.ExistingRequestID != nil && *req.ExistingRequestID != "" {
 		existingRequestID, err := uuid.Parse(*req.ExistingRequestID)
 		if err != nil {
-			return nil, errors.New("invalid existing_request_id")
+			return nil, errors.New(i18n.T(ctx, "invalid_existing_request_id"))
 		}
 
 		// Get the existing request
 		existingRequest, err = s.incidentRepo.FindByIDWithRelations(ctx, existingRequestID)
 		if err != nil {
-			return nil, errors.New("existing request not found")
+			return nil, errors.New(i18n.T(ctx, "existing_request_not_found"))
 		}
 
 		// Validate it's a request
 		if existingRequest.RecordType != "request" {
-			return nil, errors.New("the specified ID does not belong to a request")
+			return nil, errors.New(i18n.T(ctx, "id_not_a_request"))
 		}
 
 		// Append this incident to the existing request's source incidents
@@ -1813,7 +1838,7 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 	// Check role-based permission for converting to request
 	workflow, err := s.workflowRepo.FindByIDWithRelations(ctx, sourceIncident.WorkflowID)
 	if err != nil {
-		return nil, errors.New("workflow not found")
+		return nil, errors.New(i18n.T(ctx, "workflow_not_found"))
 	}
 
 	if len(workflow.ConvertToRequestRoles) > 0 {
@@ -1830,7 +1855,7 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 			}
 		}
 		if !hasPermission {
-			return nil, errors.New("you do not have permission to convert this incident to a request")
+			return nil, errors.New(i18n.T(ctx, "no_permission_convert"))
 		}
 	}
 
@@ -1850,26 +1875,26 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		// Reload the incident after transition
 		sourceIncident, err = s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
 		if err != nil {
-			return nil, errors.New("failed to reload incident after transition")
+			return nil, errors.New(i18n.T(ctx, "failed_reload_after_transition"))
 		}
 	}
 
 	// Parse workflow ID
 	workflowID, err := uuid.Parse(req.WorkflowID)
 	if err != nil {
-		return nil, errors.New("invalid workflow_id")
+		return nil, errors.New(i18n.T(ctx, "invalid_workflow_id_lower"))
 	}
 
 	// Get the initial state of the request workflow
 	initialState, err := s.workflowRepo.GetInitialState(ctx, workflowID)
 	if err != nil {
-		return nil, errors.New("workflow has no initial state configured")
+		return nil, errors.New(i18n.T(ctx, "workflow_no_initial_state"))
 	}
 
 	// Parse classification ID
 	classificationID, err := uuid.Parse(req.ClassificationID)
 	if err != nil {
-		return nil, errors.New("invalid classification_id")
+		return nil, errors.New(i18n.T(ctx, "invalid_classification_id"))
 	}
 
 	// Generate request number
@@ -2097,7 +2122,7 @@ func (s *incidentService) CanConvertToRequest(ctx context.Context, incidentID uu
 	// Get the source incident
 	sourceIncident, err := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
 	if err != nil {
-		return false, "", errors.New("incident not found")
+		return false, "", errors.New(i18n.T(ctx, "incident_not_found"))
 	}
 
 	// Check if it's already a request
@@ -2113,7 +2138,7 @@ func (s *incidentService) CanConvertToRequest(ctx context.Context, incidentID uu
 	// Get the workflow with ConvertToRequestRoles
 	workflow, err := s.workflowRepo.FindByIDWithRelations(ctx, sourceIncident.WorkflowID)
 	if err != nil {
-		return false, "", errors.New("workflow not found")
+		return false, "", errors.New(i18n.T(ctx, "workflow_not_found"))
 	}
 
 	// If no roles specified, all users can convert (backwards compatible)
@@ -2168,19 +2193,19 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 		hasGlobalFeedback := req.Feedback != nil
 		hasAnyItemFeedback := len(feedbackMap) > 0
 		if !hasGlobalFeedback && !hasAnyItemFeedback {
-			return nil, errors.New("feedback is required for bulk conversion (provide global feedback or per-item feedback)")
+			return nil, errors.New(i18n.T(ctx, "feedback_required_bulk"))
 		}
 	}
 
 	// Parse common fields
 	workflowID, err := uuid.Parse(req.WorkflowID)
 	if err != nil {
-		return nil, errors.New("invalid workflow_id")
+		return nil, errors.New(i18n.T(ctx, "invalid_workflow_id_lower"))
 	}
 
 	classificationID, err := uuid.Parse(req.ClassificationID)
 	if err != nil {
-		return nil, errors.New("invalid classification_id")
+		return nil, errors.New(i18n.T(ctx, "invalid_classification_id"))
 	}
 
 	// Parse optional fields
@@ -2214,14 +2239,14 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 	if req.ExistingRequestID != nil && *req.ExistingRequestID != "" {
 		id, err := uuid.Parse(*req.ExistingRequestID)
 		if err != nil {
-			return nil, errors.New("invalid existing_request_id")
+			return nil, errors.New(i18n.T(ctx, "invalid_existing_request_id"))
 		}
 		existingRequest, err = s.incidentRepo.FindByIDWithRelations(ctx, id)
 		if err != nil {
-			return nil, errors.New("existing request not found")
+			return nil, errors.New(i18n.T(ctx, "existing_request_not_found"))
 		}
 		if existingRequest.RecordType != "request" {
-			return nil, errors.New("existing_request_id must reference a request, not an incident")
+			return nil, errors.New(i18n.T(ctx, "request_id_not_incident"))
 		}
 		existingRequestID = &id
 	}
@@ -2231,7 +2256,7 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 	if existingRequestID == nil {
 		initialState, err = s.workflowRepo.GetInitialState(ctx, workflowID)
 		if err != nil {
-			return nil, errors.New("workflow has no initial state configured")
+			return nil, errors.New(i18n.T(ctx, "workflow_no_initial_state"))
 		}
 	}
 
@@ -2258,7 +2283,7 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 		sourceIncident, err := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
 		if err != nil {
 			result.Success = false
-			errMsg := "incident not found"
+			errMsg := i18n.T(ctx, "incident_not_found")
 			result.Error = &errMsg
 			response.Results = append(response.Results, result)
 			response.Failed++
@@ -2289,7 +2314,7 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 		workflow, err := s.workflowRepo.FindByIDWithRelations(ctx, sourceIncident.WorkflowID)
 		if err != nil {
 			result.Success = false
-			errMsg := "workflow not found"
+			errMsg := i18n.T(ctx, "workflow_not_found")
 			result.Error = &errMsg
 			response.Results = append(response.Results, result)
 			response.Failed++
@@ -2311,7 +2336,7 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 			}
 			if !hasPermission {
 				result.Success = false
-				errMsg := "you do not have permission to convert this incident to a request"
+				errMsg := i18n.T(ctx, "no_permission_convert")
 				result.Error = &errMsg
 				response.Results = append(response.Results, result)
 				response.Failed++
@@ -2787,7 +2812,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	incident, err := txRepo.LockForUpdate(ctx, tx, incidentID)
 	if err != nil {
 		tx.Rollback()
-		return nil, errors.New("incident not found or locked by another transaction")
+		return nil, errors.New(i18n.T(ctx, "incident_locked"))
 	}
 
 	// Capture ALL pre-transition assignee IDs INSIDE the transaction BEFORE SetAssignees modifies the table.
@@ -2812,37 +2837,37 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	// BLOCK: Prevent manual transitions on child incidents (merged into another)
 	if incident.IsMerged && incident.MasterIncidentID != nil {
 		tx.Rollback()
-		return nil, errors.New("child incidents cannot be transitioned manually - they follow the master incident's status")
+		return nil, errors.New(i18n.T(ctx, "child_incidents_no_manual_transition"))
 	}
 
 	// Verify version still matches (double-check optimistic lock)
 	if incident.Version != req.Version {
 		tx.Rollback()
-		return nil, fmt.Errorf("conflict: incident was modified by another user")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "incident_conflict"))
 	}
 
 	// Parse transition ID
 	transitionID, err := uuid.Parse(req.TransitionID)
 	if err != nil {
 		tx.Rollback()
-		return nil, errors.New("invalid transition_id")
+		return nil, errors.New(i18n.T(ctx, "invalid_transition_id_svc"))
 	}
 	// Get the transition with relations
 	transition, err := s.workflowRepo.FindTransitionByIDWithRelations(ctx, transitionID)
 	if err != nil {
-		return nil, errors.New("transition not found")
+		return nil, errors.New(i18n.T(ctx, "transition_not_found"))
 	}
 
 	// Verify the transition belongs to this workflow
 	if transition.WorkflowID != incident.WorkflowID {
 		tx.Rollback()
-		return nil, errors.New("transition does not belong to this workflow")
+		return nil, errors.New(i18n.T(ctx, "transition_not_in_workflow"))
 	}
 
 	// Verify the transition starts from the current state
 	if transition.FromStateID != incident.CurrentStateID {
 		tx.Rollback()
-		return nil, errors.New("transition cannot be executed from current state")
+		return nil, errors.New(i18n.T(ctx, "transition_not_from_current"))
 	}
 
 	// Check role authorization
@@ -2861,7 +2886,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		}
 		if !hasPermission {
 			tx.Rollback()
-			return nil, errors.New("you do not have permission to execute this transition")
+			return nil, errors.New(i18n.T(ctx, "no_permission_transition"))
 		}
 	}
 
@@ -2877,7 +2902,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		}
 		if !isAssignee {
 			tx.Rollback()
-			return nil, errors.New("only the assigned user can perform this transition")
+			return nil, errors.New(i18n.T(ctx, "only_assigned_user_transition"))
 		}
 	}
 
@@ -2907,7 +2932,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				return nil, errors.New(errMsg)
 			}
 		case "feedback":
-			if req.Feedback == nil || req.Feedback.Rating == 0 {
+			if req.Feedback == nil {
 				errMsg := requirement.ErrorMessage
 				if errMsg == "" {
 					errMsg = "Feedback is required for this transition"
@@ -2961,7 +2986,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	}
 
 	// If feedback was provided, create a feedback record
-	if req.Feedback != nil && req.Feedback.Rating > 0 {
+	if req.Feedback != nil {
 		feedback := &models.IncidentFeedback{
 			IncidentID:          incidentID,
 			Rating:              req.Feedback.Rating,
@@ -2978,13 +3003,13 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	newState, err := s.workflowRepo.FindStateByID(ctx, transition.ToStateID)
 	if err != nil {
 		tx.Rollback()
-		return nil, errors.New("target state not found")
+		return nil, errors.New(i18n.T(ctx, "target_state_not_found"))
 	}
 
 	// Validate duration when transitioning INTO a partial_close state
 	if newState.IsPartialClose && req.ReadyToCloseDuration == "" {
 		tx.Rollback()
-		return nil, errors.New("partial_close_duration is required when transitioning to this state")
+		return nil, errors.New(i18n.T(ctx, "partial_close_duration_required"))
 	}
 
 	// Prepare updates map for all fields that need to change
@@ -3026,12 +3051,12 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			// Multiple matches — user must have selected one
 			if req.DepartmentID == nil || *req.DepartmentID == "" {
 				tx.Rollback()
-				return nil, errors.New("department selection is required for this transition")
+				return nil, errors.New(i18n.T(ctx, "department_required_transition"))
 			}
 			deptID, err := uuid.Parse(*req.DepartmentID)
 			if err != nil {
 				tx.Rollback()
-				return nil, errors.New("invalid department_id")
+				return nil, errors.New(i18n.T(ctx, "invalid_department_id"))
 			}
 			updates["department_id"] = deptID
 		}
@@ -3068,7 +3093,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		if len(availableUsers) > 0 {
 			if len(req.UserIDs) == 0 {
 				tx.Rollback()
-				return nil, errors.New("user selection is required for this transition")
+				return nil, errors.New(i18n.T(ctx, "user_required_transition"))
 			}
 			// Build a lookup set of valid user IDs
 			validUserIDs := make(map[uuid.UUID]bool, len(availableUsers))
@@ -3083,7 +3108,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				}
 				if !validUserIDs[userAssignID] {
 					tx.Rollback()
-					return nil, errors.New("selected user does not belong to the incident's assigned location, classification, or department")
+					return nil, errors.New(i18n.T(ctx, "user_not_in_scope"))
 				}
 				assigneeUserIDs = append(assigneeUserIDs, userAssignID)
 			}
@@ -3239,7 +3264,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	if err := txRepo.UpdateFieldsWithVersion(ctx, incidentID, updates, req.Version); err != nil {
 		tx.Rollback()
 		if err == repository.ErrVersionMismatch {
-			return nil, fmt.Errorf("conflict: incident was modified by another user")
+			return nil, fmt.Errorf("%s", i18n.T(ctx, "incident_conflict"))
 		}
 		return nil, err
 	}
@@ -4093,7 +4118,7 @@ func (s *incidentService) UpdateComment(ctx context.Context, commentID uuid.UUID
 
 	// Only author can update their comment
 	if comment.AuthorID != userID {
-		return nil, errors.New("you can only edit your own comments")
+		return nil, errors.New(i18n.T(ctx, "only_edit_own_comments"))
 	}
 
 	oldContent := comment.Content
@@ -4130,7 +4155,7 @@ func (s *incidentService) DeleteComment(ctx context.Context, commentID uuid.UUID
 
 	// Only author can delete their comment
 	if comment.AuthorID != userID {
-		return errors.New("you can only delete your own comments")
+		return errors.New(i18n.T(ctx, "only_delete_own_comments"))
 	}
 
 	incidentID := comment.IncidentID
@@ -4350,7 +4375,7 @@ func (s *incidentService) DeleteAttachment(ctx context.Context, attachmentID uui
 
 	// Only uploader can delete their attachment
 	if attachment.UploadedByID != userID {
-		return errors.New("you can only delete your own attachments")
+		return errors.New(i18n.T(ctx, "only_delete_own_attachments"))
 	}
 
 	incidentID := attachment.IncidentID
@@ -5003,13 +5028,13 @@ func (s *incidentService) CreateComplaint(ctx context.Context, req *models.Creat
 	// Parse workflow ID
 	workflowID, err := uuid.Parse(req.WorkflowID)
 	if err != nil {
-		return nil, errors.New("invalid workflow_id")
+		return nil, errors.New(i18n.T(ctx, "invalid_workflow_id_lower"))
 	}
 
 	// Get the initial state of the workflow
 	initialState, err := s.workflowRepo.GetInitialState(ctx, workflowID)
 	if err != nil {
-		return nil, errors.New("workflow has no initial state configured")
+		return nil, errors.New(i18n.T(ctx, "workflow_no_initial_state"))
 	}
 
 	// Generate complaint number
@@ -5021,7 +5046,7 @@ func (s *incidentService) CreateComplaint(ctx context.Context, req *models.Creat
 	// Parse classification ID
 	classificationID, err := uuid.Parse(req.ClassificationID)
 	if err != nil {
-		return nil, errors.New("invalid classification_id")
+		return nil, errors.New(i18n.T(ctx, "invalid_classification_id"))
 	}
 
 	complaint := &models.Incident{
@@ -5055,7 +5080,7 @@ func (s *incidentService) CreateComplaint(ctx context.Context, req *models.Creat
 			// Validate source incident exists
 			_, err := s.incidentRepo.FindByID(ctx, sourceID)
 			if err != nil {
-				return nil, errors.New("source incident not found")
+				return nil, errors.New(i18n.T(ctx, "source_incident_not_found"))
 			}
 			complaint.SourceIncidentID = &sourceID
 		}
@@ -5132,16 +5157,16 @@ func (s *incidentService) IncrementEvaluationCount(ctx context.Context, id uuid.
 	// Verify it's a complaint and is closed
 	incident, err := s.incidentRepo.FindByIDWithRelations(ctx, id)
 	if err != nil {
-		return errors.New("complaint not found")
+		return errors.New(i18n.T(ctx, "complaint_not_found"))
 	}
 
 	if incident.RecordType != "complaint" {
-		return errors.New("can only evaluate complaints")
+		return errors.New(i18n.T(ctx, "can_only_evaluate_complaints"))
 	}
 
 	// Check if complaint is in a terminal state (closed)
 	if incident.CurrentState == nil || incident.CurrentState.StateType != "terminal" {
-		return errors.New("can only evaluate closed complaints")
+		return errors.New(i18n.T(ctx, "can_only_evaluate_closed"))
 	}
 
 	return s.incidentRepo.IncrementEvaluationCount(ctx, id)
@@ -5155,19 +5180,19 @@ func (s *incidentService) IncrementEvaluationCount(ctx context.Context, id uuid.
 func (s *incidentService) TriggerEvaluation(ctx context.Context, id uuid.UUID) error {
 	incident, err := s.incidentRepo.FindByIDWithRelations(ctx, id)
 	if err != nil {
-		return errors.New("incident not found")
+		return errors.New(i18n.T(ctx, "incident_not_found"))
 	}
 
 	if incident.CurrentState == nil {
-		return errors.New("incident has no current state")
+		return errors.New(i18n.T(ctx, "incident_no_current_state"))
 	}
 
 	if incident.CurrentState.StateType != "terminal" {
-		return errors.New("can only trigger evaluation on closed records")
+		return errors.New(i18n.T(ctx, "only_trigger_on_closed"))
 	}
 
 	if s.integrationExecutor == nil {
-		return errors.New("integration executor not configured")
+		return errors.New(i18n.T(ctx, "integration_executor_not_configured"))
 	}
 
 	// Find the last transition that moved the incident to its current state
@@ -5176,17 +5201,17 @@ func (s *incidentService) TriggerEvaluation(ctx context.Context, id uuid.UUID) e
 		Order("transitioned_at DESC").
 		Preload("Transition").
 		First(&lastHistory).Error; err != nil {
-		return errors.New("no transition history found for current state")
+		return errors.New(i18n.T(ctx, "no_transition_history"))
 	}
 
 	if lastHistory.TransitionID == nil {
-		return errors.New("last transition has no transition ID")
+		return errors.New(i18n.T(ctx, "last_transition_no_id"))
 	}
 
 	// Check that the transition actually has active integration triggers
 	hasTriggers, err := s.integrationExecutor.HasActiveTransitionTriggers(ctx, *lastHistory.TransitionID)
 	if err != nil || !hasTriggers {
-		return errors.New("no integration triggers configured for this transition")
+		return errors.New(i18n.T(ctx, "no_integration_triggers"))
 	}
 
 	// All checks passed — increment evaluation count
@@ -5208,13 +5233,13 @@ func (s *incidentService) CreateQuery(ctx context.Context, req *models.CreateQue
 	// Parse workflow ID
 	workflowID, err := uuid.Parse(req.WorkflowID)
 	if err != nil {
-		return nil, errors.New("invalid workflow_id")
+		return nil, errors.New(i18n.T(ctx, "invalid_workflow_id_lower"))
 	}
 
 	// Get the initial state of the workflow
 	initialState, err := s.workflowRepo.GetInitialState(ctx, workflowID)
 	if err != nil {
-		return nil, errors.New("workflow has no initial state configured")
+		return nil, errors.New(i18n.T(ctx, "workflow_no_initial_state"))
 	}
 
 	// Generate query number
@@ -5226,7 +5251,7 @@ func (s *incidentService) CreateQuery(ctx context.Context, req *models.CreateQue
 	// Parse classification ID
 	classificationID, err := uuid.Parse(req.ClassificationID)
 	if err != nil {
-		return nil, errors.New("invalid classification_id")
+		return nil, errors.New(i18n.T(ctx, "invalid_classification_id"))
 	}
 
 	query := &models.Incident{
@@ -5264,7 +5289,7 @@ func (s *incidentService) CreateQuery(ctx context.Context, req *models.CreateQue
 			// Validate source incident exists
 			_, err := s.incidentRepo.FindByID(ctx, sourceID)
 			if err != nil {
-				return nil, errors.New("source incident not found")
+				return nil, errors.New(i18n.T(ctx, "source_incident_not_found"))
 			}
 			query.SourceIncidentID = &sourceID
 		}
@@ -5361,7 +5386,7 @@ func (s *incidentService) UpdateClosedIncidentSummary(
 
 	// Verify incident is in terminal (closed) state
 	if incident.CurrentState == nil || incident.CurrentState.StateType != "terminal" {
-		return nil, fmt.Errorf("incident is not closed")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "incident_not_closed"))
 	}
 
 	// Store old description

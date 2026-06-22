@@ -10,6 +10,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -57,7 +58,7 @@ func NewIncidentPublicFeedbackService(
 func (s *incidentPublicFeedbackService) Create(ctx context.Context, incidentID uuid.UUID, req *models.IncidentPublicFeedbackCreateRequest) (*models.IncidentPublicFeedbackResponse, error) {
 	createdByID, ok := ctx.Value(constants.ContextKeys.UserID).(uuid.UUID)
 	if !ok {
-		return nil, errors.New("user information not found in context")
+		return nil, errors.New(i18n.T(ctx, "user_context_missing"))
 	}
 
 	f := &models.IncidentPublicFeedback{

@@ -7,6 +7,7 @@ import (
 
 	"github.com/automax/backend/internal/database"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
 )
@@ -103,7 +104,7 @@ func (h *EPMHandler) Login(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"success": false,
-			"message": "Failed to store session",
+			"message": i18n.T(c.UserContext(), "failed_to_store_session"),
 		})
 	}
 
