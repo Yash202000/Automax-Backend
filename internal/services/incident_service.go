@@ -1599,13 +1599,8 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 
 			if len(emails) > 0 {
 				subject := fmt.Sprintf("Incident %s updated", incident.IncidentNumber)
-				// body := fmt.Sprintf(
-				// 	"Incident \"%s\" has been assigned to you. Status changed to: %s.",
-				// 	incident.Title, "newStateName",
-				// )
-
-				// subject := fmt.Sprintf("Incident Updated: %s", id.String())
 				body := fmt.Sprintf("Incident \"%s\" (%s) has been updated.", incident.Title, incident.IncidentNumber)
+				subjectAr, bodyAr := IncidentUpdatedTextsAr(incident.IncidentNumber, incident.Title)
 
 				if result, err := s.notificationService.SendNotification(
 					ctx, "notification", nil, "en",
@@ -1617,6 +1612,7 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 						ID:   id.String(),
 						Type: strings.ToUpper(incident.RecordType),
 					})
+					_ = s.notificationService.SetArContentOnLogs(ctx, result.InboxLogIDs, subjectAr, bodyAr)
 				}
 			}
 		}
@@ -3510,6 +3506,8 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				"Incident \"%s\" has been assigned to you. Status changed to: %s.",
 				incident.Title, newStateName,
 			)
+			subjectAr, bodyAr := IncidentAssignedTransitionTextsAr(incident.IncidentNumber, incident.Title, newStateName)
+
 			if result, err := s.notificationService.SendNotification(
 				ctx, "notification", nil, "en",
 				assigneeEmails, nil, nil,
@@ -3520,6 +3518,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 					ID:   incidentID.String(),
 					Type: strings.ToUpper(incident.RecordType),
 				})
+				_ = s.notificationService.SetArContentOnLogs(ctx, result.InboxLogIDs, subjectAr, bodyAr)
 			}
 		}
 	}
@@ -4459,6 +4458,8 @@ func (s *incidentService) AssignIncident(ctx context.Context, incidentID, assign
 			if assigneeUser, err := s.userRepo.FindByID(ctx, assigneeID); err == nil && assigneeUser.Email != "" {
 				subject := fmt.Sprintf("Incident %s assigned to you", updated.IncidentNumber)
 				body := fmt.Sprintf("Incident \"%s\" has been assigned to you.", updated.Title)
+				subjectAr, bodyAr := IncidentAssignedDirectTextsAr(updated.IncidentNumber, updated.Title)
+
 				if result, err := s.notificationService.SendNotification(
 					ctx, "notification", nil, "en",
 					[]string{assigneeUser.Email}, nil, nil,
@@ -4469,6 +4470,7 @@ func (s *incidentService) AssignIncident(ctx context.Context, incidentID, assign
 						ID:   incidentID.String(),
 						Type: strings.ToUpper(updated.RecordType),
 					})
+					_ = s.notificationService.SetArContentOnLogs(ctx, result.InboxLogIDs, subjectAr, bodyAr)
 				}
 			}
 		}

@@ -29,6 +29,7 @@ type NotificationLogRepository interface {
 	BulkDelete(ctx context.Context, ids []uuid.UUID) error
 	MarkOTPVerified(ctx context.Context, sessionID string, verifiedAt time.Time) error
 	SetMeta(ctx context.Context, ids []uuid.UUID, meta *models.NotificationMeta) error
+	SetArContent(ctx context.Context, ids []uuid.UUID, subjectAr, bodyAr string) error
 }
 
 type notificationLogRepository struct {
@@ -231,6 +232,19 @@ func (r *notificationLogRepository) SetMeta(ctx context.Context, ids []uuid.UUID
 		Model(&models.NotificationLog{}).
 		Where("id IN ?", ids).
 		Update("meta", meta).Error
+}
+
+func (r *notificationLogRepository) SetArContent(ctx context.Context, ids []uuid.UUID, subjectAr, bodyAr string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).
+		Model(&models.NotificationLog{}).
+		Where("id IN ?", ids).
+		Updates(map[string]interface{}{
+			"subject_ar": subjectAr,
+			"body_ar":    bodyAr,
+		}).Error
 }
 
 func (r *notificationLogRepository) GetStats(ctx context.Context, channel string, sentBy *uuid.UUID, receivedBy *uuid.UUID) ([]models.NotificationChannelStat, error) {

@@ -432,6 +432,8 @@ func (h *NotificationHandler) List(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
+	applyAcceptLanguage(c.Get("Accept-Language"), notifications)
+
 	totalPages := (int(total) + filter.Limit - 1) / filter.Limit
 
 	return c.JSON(fiber.Map{
@@ -455,6 +457,15 @@ func (h *NotificationHandler) Get(c *fiber.Ctx) error {
 	notification, err := h.service.GetNotification(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "notification_not_found"))
+	}
+
+	if strings.HasPrefix(strings.ToLower(c.Get("Accept-Language")), "ar") {
+		if notification.SubjectAr != "" {
+			notification.Subject = notification.SubjectAr
+		}
+		if notification.BodyAr != "" {
+			notification.Body = notification.BodyAr
+		}
 	}
 
 	return c.JSON(fiber.Map{
@@ -773,6 +784,8 @@ func (h *NotificationHandler) GetThread(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
+	applyAcceptLanguage(c.Get("Accept-Language"), notifications)
+
 	return c.JSON(fiber.Map{
 		"success":     true,
 		"data":        notifications,
@@ -981,4 +994,21 @@ func (h *NotificationHandler) PreviewNotificationAttachmentByID(c *fiber.Ctx) er
 	c.Set("Content-Length", fmt.Sprintf("%d", len(fileData)))
 
 	return c.Send(fileData)
+}
+
+
+// applyAcceptLanguage replaces subject/body with Arabic versions in-place when
+// Accept-Language is "ar" and Arabic content is available.
+func applyAcceptLanguage(acceptLang string, notifications []models.NotificationLogResponse) {
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(acceptLang)), "ar") {
+		return
+	}
+	for i := range notifications {
+		if notifications[i].SubjectAr != "" {
+			notifications[i].Subject = notifications[i].SubjectAr
+		}
+		if notifications[i].BodyAr != "" {
+			notifications[i].Body = notifications[i].BodyAr
+		}
+	}
 }
