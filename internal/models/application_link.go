@@ -20,8 +20,9 @@ type ApplicationLink struct {
 	Color          string         `gorm:"size:50;default:'blue'" json:"color"`        // Color scheme: blue, violet, emerald, amber, rose, orange
 	SortOrder      int            `gorm:"default:0" json:"sort_order"`
 	IsActive       bool           `gorm:"default:true" json:"is_active"`
-	SSOEnabled     bool           `gorm:"default:false" json:"sso_enabled"`
-	SSOCallbackURL string         `gorm:"size:500" json:"sso_callback_url"` // e.g. https://target.app/sso/callback
+	SSOEnabled      bool           `gorm:"default:false" json:"sso_enabled"`
+	SSOCallbackURL  string         `gorm:"size:500" json:"sso_callback_url"`  // e.g. https://target.app/sso/callback
+	SSORedirectPath string         `gorm:"size:500" json:"sso_redirect_path"` // optional path to land on after SSO, e.g. /incidents
 	CreatedAt      time.Time      `json:"created_at"`
 	UpdatedAt      time.Time      `json:"updated_at"`
 	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
@@ -47,8 +48,9 @@ type ApplicationLinkCreateRequest struct {
 	Color          string `json:"color" validate:"max=50"`
 	SortOrder      int    `json:"sort_order"`
 	IsActive       bool   `json:"is_active"`
-	SSOEnabled     bool   `json:"sso_enabled"`
-	SSOCallbackURL string `json:"sso_callback_url" validate:"omitempty,url,max=500"`
+	SSOEnabled      bool   `json:"sso_enabled"`
+	SSOCallbackURL  string `json:"sso_callback_url" validate:"omitempty,url,max=500"`
+	SSORedirectPath string `json:"sso_redirect_path" validate:"max=500"`
 }
 
 type ApplicationLinkUpdateRequest struct {
@@ -62,8 +64,9 @@ type ApplicationLinkUpdateRequest struct {
 	Color          string  `json:"color" validate:"max=50"`
 	SortOrder      *int    `json:"sort_order"`
 	IsActive       *bool   `json:"is_active"`
-	SSOEnabled     *bool   `json:"sso_enabled"`
-	SSOCallbackURL *string `json:"sso_callback_url" validate:"omitempty,url,max=500"`
+	SSOEnabled      *bool   `json:"sso_enabled"`
+	SSOCallbackURL  *string `json:"sso_callback_url" validate:"omitempty,url,max=500"`
+	SSORedirectPath *string `json:"sso_redirect_path" validate:"omitempty,max=500"`
 }
 
 type ApplicationLinkResponse struct {
@@ -78,8 +81,9 @@ type ApplicationLinkResponse struct {
 	Color          string    `json:"color"`
 	SortOrder      int       `json:"sort_order"`
 	IsActive       bool      `json:"is_active"`
-	SSOEnabled     bool      `json:"sso_enabled"`
-	SSOCallbackURL string    `json:"sso_callback_url"`
+	SSOEnabled      bool      `json:"sso_enabled"`
+	SSOCallbackURL  string    `json:"sso_callback_url"`
+	SSORedirectPath string    `json:"sso_redirect_path"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }
@@ -98,8 +102,9 @@ func ToApplicationLinkResponse(link *ApplicationLink) ApplicationLinkResponse {
 		Color:          link.Color,
 		SortOrder:      link.SortOrder,
 		IsActive:       link.IsActive,
-		SSOEnabled:     link.SSOEnabled,
-		SSOCallbackURL: link.SSOCallbackURL,
+		SSOEnabled:      link.SSOEnabled,
+		SSOCallbackURL:  link.SSOCallbackURL,
+		SSORedirectPath: link.SSORedirectPath,
 		CreatedAt:      link.CreatedAt,
 		UpdatedAt:      link.UpdatedAt,
 	}

@@ -40,8 +40,9 @@ func (s *applicationLinkService) CreateLink(ctx context.Context, req *models.App
 		Color:          req.Color,
 		SortOrder:      req.SortOrder,
 		IsActive:       req.IsActive,
-		SSOEnabled:     req.SSOEnabled,
-		SSOCallbackURL: req.SSOCallbackURL,
+		SSOEnabled:      req.SSOEnabled,
+		SSOCallbackURL:  req.SSOCallbackURL,
+		SSORedirectPath: req.SSORedirectPath,
 	}
 
 	// Set defaults if not provided
@@ -140,6 +141,9 @@ func (s *applicationLinkService) UpdateLink(ctx context.Context, id uuid.UUID, r
 	}
 	if req.SSOCallbackURL != nil {
 		link.SSOCallbackURL = *req.SSOCallbackURL
+	}
+	if req.SSORedirectPath != nil {
+		link.SSORedirectPath = *req.SSORedirectPath
 	}
 
 	if err := s.linkRepo.Update(ctx, link); err != nil {

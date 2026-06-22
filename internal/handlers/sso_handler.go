@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -141,6 +142,9 @@ func (h *SSOHandler) Launch(c *fiber.Ctx) error {
 	}
 
 	redirectURL := fmt.Sprintf("%s?token=%s", appLink.SSOCallbackURL, ssoToken)
+	if appLink.SSORedirectPath != "" {
+		redirectURL = fmt.Sprintf("%s&redirect_to=%s", redirectURL, url.QueryEscape(appLink.SSORedirectPath))
+	}
 
 	return c.JSON(fiber.Map{
 		"success": true,
@@ -252,6 +256,9 @@ func (h *SSOHandler) Callback(c *fiber.Ctx) error {
 	}
 	redirectURL := fmt.Sprintf("%s/sso-complete?token=%s&refresh=%s",
 		base, tokenPair.AccessToken, tokenPair.RefreshToken)
+	if redirectTo := c.Query("redirect_to"); redirectTo != "" {
+		redirectURL = fmt.Sprintf("%s&redirect_to=%s", redirectURL, url.QueryEscape(redirectTo))
+	}
 
 	return c.Redirect(redirectURL, fiber.StatusFound)
 }
