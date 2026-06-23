@@ -370,7 +370,7 @@ func (h *ClassificationHandler) GetTree(c *fiber.Ctx) error {
 		tree, err = h.repo.GetTree(c.UserContext())
 	}
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return ErrorResponseWithKey(c, fiber.StatusInternalServerError, "internal_server_error")
 	}
 
 	responses := make([]models.ClassificationResponse, len(tree))

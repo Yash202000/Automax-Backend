@@ -41,6 +41,13 @@ func ErrorResponse(c *fiber.Ctx, statusCode int, message string) error {
 	})
 }
 
+// ErrorCodeResponse is the error response shape that includes an error_code field.
+type ErrorCodeResponse struct {
+	Success   bool   `json:"success"`
+	ErrorCode string `json:"error_code"`
+	Error     string `json:"error"`
+}
+
 // ValidationErrorResponse formats validation errors in a user-friendly way
 func FormatValidationError(c *fiber.Ctx, err error) error {
 	var errors []ValidationError
