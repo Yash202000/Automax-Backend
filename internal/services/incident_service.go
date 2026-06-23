@@ -1533,6 +1533,18 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		return nil, err
 	}
 
+	// Sync location change to merged child incidents
+	if req.LocationID != nil && s.incidentMergeRepo != nil {
+		hasMerged, _ := s.incidentMergeRepo.HasMergedIncidents(ctx, id)
+		if hasMerged {
+			newLocationName := ""
+			if updated.Location != nil {
+				newLocationName = updated.Location.Name
+			}
+			_ = s.SyncLocationToMergedIncidents(ctx, id, updated.LocationID, newLocationName, userID)
+		}
+	}
+
 	resp := models.ToIncidentResponse(updated)
 
 	if len(updated.Assignees) == 0 {
@@ -4575,6 +4587,57 @@ func (s *incidentService) syncAssigneeToMergedIncidents(ctx context.Context, mas
 
 		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionAssigneeChanged, description, changes, userID); revErr != nil {
 			fmt.Printf("[DEBUG] Failed to create revision for child %s: %v\n", merged.IncidentNumber, revErr)
+		}
+	}
+
+	return nil
+}
+
+// SyncLocationToMergedIncidents propagates a master incident's location change to all
+// child (merged) incidents so they stay consistent with the master.
+func (s *incidentService) SyncLocationToMergedIncidents(ctx context.Context, masterIncidentID uuid.UUID, newLocationID *uuid.UUID, newLocationName string, userID uuid.UUID) error {
+	mergedIncidents, err := s.incidentMergeRepo.GetMergedIncidents(ctx, masterIncidentID)
+	if err != nil {
+		return err
+	}
+	if len(mergedIncidents) == 0 {
+		return nil
+	}
+
+	masterIncident, err := s.incidentRepo.FindByID(ctx, masterIncidentID)
+	if err != nil {
+		return err
+	}
+
+	for _, merged := range mergedIncidents {
+		updates := map[string]interface{}{}
+		if newLocationID != nil {
+			updates["location_id"] = *newLocationID
+		} else {
+			updates["location_id"] = nil
+		}
+
+		if err := s.db.WithContext(ctx).Model(&models.Incident{}).
+			Where("id = ?", merged.ID).
+			Updates(updates).Error; err != nil {
+			log.Printf("[SyncLocation] Failed to update location for child %s: %v", merged.IncidentNumber, err)
+			continue
+		}
+
+		changes := []models.IncidentFieldChange{
+			{
+				FieldName:  "location_id",
+				FieldLabel: "Location",
+				OldValue:   nil,
+				NewValue:   &newLocationName,
+			},
+		}
+		description := fmt.Sprintf(
+			"Location changed to '%s' (synced from master incident %s)",
+			newLocationName, masterIncident.IncidentNumber,
+		)
+		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionFieldChange, description, changes, userID); revErr != nil {
+			log.Printf("[SyncLocation] Failed to create revision for child %s: %v", merged.IncidentNumber, revErr)
 		}
 	}
 
