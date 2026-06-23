@@ -316,12 +316,29 @@ func roundRobinPoolKey(roleIDs []uuid.UUID) string {
 
 // getNextRoundRobinAssignee picks the next agent from the online eligible pool using round-robin.
 func (s *incidentService) getNextRoundRobinAssignee(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID *uuid.UUID) (*uuid.UUID, error) {
-	users, err := s.userRepo.FindMatchingOnline(ctx, roleIDs, classificationID, locationID, departmentID, nil)
-	if err != nil {
-		return nil, fmt.Errorf("find online agents: %w", err)
-	}
-	if len(users) == 0 {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "no_online_agents"))
+	var users []models.User
+	if os.Getenv("CALLING_ENABLED") == "true" {
+		// For EPM940, use a different logic for finding online agents
+		onlineUsers, err := s.userRepo.FindMatchingOnline(ctx, roleIDs, classificationID, locationID, departmentID, nil)
+		if err != nil {
+			return nil, fmt.Errorf("find online agents: %w", err)
+		}
+		if len(onlineUsers) == 0 {
+			return nil, fmt.Errorf("%s", i18n.T(ctx, "no_online_agents"))
+		}
+
+		users = onlineUsers
+	} else {
+		// For other clients, use the default logic
+		offlineUsers, err := s.userRepo.FindMatching(ctx, roleIDs, classificationID, locationID, departmentID, nil)
+		if err != nil {
+			return nil, fmt.Errorf("find agents: %w", err)
+		}
+
+		if len(offlineUsers) == 0 {
+			return nil, fmt.Errorf("%s", i18n.T(ctx, "no_agents"))
+		}
+		users = offlineUsers
 	}
 
 	sort.Slice(users, func(i, j int) bool {

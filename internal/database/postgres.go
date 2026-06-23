@@ -287,11 +287,6 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	// FULL uses the entire row as identity — idempotent, safe to run repeatedly.
 	db.Exec("ALTER TABLE role_permissions REPLICA IDENTITY FULL")
 
-	// Change call_status default from 'offline' to 'online'
-	if err := migrations.MigrateUserCallStatusDefault(db); err != nil {
-		log.Printf("Warning: user call_status default migration failed: %v", err)
-	}
-
 	log.Println("Database migrations completed")
 	return nil
 }
