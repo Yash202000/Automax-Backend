@@ -39,7 +39,7 @@ type User struct {
 	IsSuperAdmin    bool             `gorm:"default:false" json:"is_super_admin"`
 	IsADUser        bool             `gorm:"default:false" json:"is_ad_user"`
 	Extension       string           `gorm:"size:20" json:"extension"`
-	CallStatus      CallStatus       `gorm:"type:user_call_status;default:offline" json:"call_status"`
+	CallStatus      CallStatus       `gorm:"type:user_call_status;default:online" json:"call_status"`
 	LastLoginAt     *time.Time       `json:"last_login_at"`
 	CreatedAt       time.Time        `json:"created_at"`
 	UpdatedAt       time.Time        `json:"updated_at"`
