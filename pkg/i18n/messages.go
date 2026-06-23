@@ -804,6 +804,7 @@ var messages = map[string][2]string{
 	"target_state_not_found":               {"Target state not found", "الحالة المستهدفة غير موجودة"},
 	"invalid_transition_id_svc":            {"Invalid transition_id", "معرّف الانتقال غير صالح"},
 	"no_online_agents":                     {"No online agents available", "لا يوجد موظفون متاحون عبر الإنترنت"},
+	"no_agents":                            {"No agents available", "لا يوجد وكلاء متاحون"},
 	"invalid_incident_lower":               {"Invalid incident", "البلاغ غير صالح"},
 	"feedback_required_bulk":               {"Feedback is required for bulk conversion (provide global feedback or per-item feedback)", "التغذية الراجعة مطلوبة للتحويل الجماعي (أدخل تغذية راجعة عامة أو لكل عنصر)"},
 
