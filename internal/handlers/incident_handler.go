@@ -115,7 +115,7 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 	var req models.IncidentCreateRequest
 	if err := c.BodyParser(&req); err != nil {
 		fmt.Printf("CreateIncident: Body parsing error: %v\n", err)
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+		return ErrorResponseWithKey(c, fiber.StatusBadRequest, "invalid_request_body", req.Source)
 	}
 
 	// Parse query parameters
@@ -134,25 +134,13 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 
 		switch {
 		case errors.Is(err, services.ErrDuplicateIncident):
-			return utils.ErrorResponse(
-				c,
-				fiber.StatusConflict,
-				i18n.T(c.UserContext(), "duplicate_incident"),
-			)
+			return ErrorResponseWithKey(c, fiber.StatusConflict, "duplicate_incident", req.Source)
 
 		case errors.Is(err, services.ErrInvalidLocation):
-			return utils.ErrorResponse(
-				c,
-				fiber.StatusBadRequest,
-				i18n.T(c.UserContext(), "invalid_location_class"),
-			)
+			return ErrorResponseWithKey(c, fiber.StatusBadRequest, "invalid_location_class", req.Source)
 
 		default:
-			return utils.ErrorResponse(
-				c,
-				fiber.StatusInternalServerError,
-				i18n.T(c.UserContext(), "internal_server_error"),
-			)
+			return ErrorResponseWithKey(c, fiber.StatusInternalServerError, "internal_server_error", req.Source)
 		}
 	}
 
@@ -170,7 +158,7 @@ func (h *IncidentHandler) GetIncident(c *fiber.Ctx) error {
 		// Not a UUID — try resolving by incident number
 		inc, lookupErr := h.incidentRepo.FindByIncidentNumber(c.UserContext(), idStr)
 		if lookupErr != nil {
-			return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "incident_not_found"))
+			return ErrorResponseWithKey(c, fiber.StatusNotFound, "incident_not_found")
 		}
 		id = inc.ID
 	}
@@ -178,7 +166,7 @@ func (h *IncidentHandler) GetIncident(c *fiber.Ctx) error {
 	log.Printf("Generate Signed url: %s", utils.GenerateIncidentToken(id.String(), 24*time.Hour))
 	incident, err := h.service.GetIncident(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "incident_not_found"))
+		return ErrorResponseWithKey(c, fiber.StatusNotFound, "incident_not_found")
 	}
 
 	if isEpmPortalRequest(c) {
@@ -193,7 +181,7 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 
 	// Parse query parameters
 	if err := c.QueryParser(filter); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_query_parameters"))
+		return ErrorResponseWithKey(c, fiber.StatusBadRequest, "invalid_query_parameters")
 	}
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
@@ -274,7 +262,7 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 
 	incidents, total, err := h.service.ListIncidents(c.UserContext(), filter)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return ErrorResponseWithKey(c, fiber.StatusInternalServerError, "internal_server_error")
 	}
 
 	totalPages := (int(total) + filter.Limit - 1) / filter.Limit

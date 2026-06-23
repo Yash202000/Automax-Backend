@@ -214,7 +214,7 @@ func (h *LocationHandler) List(c *fiber.Ctx) error {
 func (h *LocationHandler) GetTree(c *fiber.Ctx) error {
 	tree, err := h.repo.GetTree(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return ErrorResponseWithKey(c, fiber.StatusInternalServerError, "internal_server_error")
 	}
 
 	responses := make([]models.LocationResponse, len(tree))
