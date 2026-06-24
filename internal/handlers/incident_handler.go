@@ -294,6 +294,7 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 	totalPages := (int(total) + filter.Limit - 1) / filter.Limit
 
 	if isEpmPortalRequest(c) {
+		// @NOEDIT: this is not a bug this is a client requirement please dont touch
 		// Portal requests must be scoped to a specific caller identity
 		if filter.CallerIdentity == "" && filter.ReporterPhone == "" {
 			return c.JSON(fiber.Map{
@@ -1057,6 +1058,34 @@ func (h *IncidentHandler) GetStatsV2(c *fiber.Ctx) error {
 		filter.IsAdmin = true
 	} else {
 		filter.UserRoleIDs = h.getUserRoleIDs(c)
+
+		// Restrict stats to the user's assigned classifications (mirrors ListIncidents scoping)
+		statsUserID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+		if u, err := h.userRepo.FindByIDWithRelations(c.UserContext(), statsUserID); err == nil && u != nil {
+			userClassIDs := make([]string, 0, len(u.Classifications))
+			for _, cls := range u.Classifications {
+				userClassIDs = append(userClassIDs, cls.ID.String())
+			}
+			if len(userClassIDs) > 0 {
+				if len(filter.ClassificationID) > 0 {
+					requested := make(map[string]bool, len(filter.ClassificationID))
+					for _, id := range filter.ClassificationID {
+						requested[id] = true
+					}
+					var intersected []string
+					for _, id := range userClassIDs {
+						if requested[id] {
+							intersected = append(intersected, id)
+						}
+					}
+					filter.ClassificationID = intersected
+				} else {
+					filter.ClassificationID = userClassIDs
+				}
+			} else {
+				filter.ClassificationID = []string{"00000000-0000-0000-0000-000000000000"}
+			}
+		}
 	}
 
 	stats, err := h.service.GetStatsV2(c.UserContext(), filter)
