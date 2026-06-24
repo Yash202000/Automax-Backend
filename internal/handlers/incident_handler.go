@@ -170,6 +170,18 @@ func (h *IncidentHandler) GetIncident(c *fiber.Ctx) error {
 	}
 
 	if isEpmPortalRequest(c) {
+		// Phone-number scoping: if reporter_phone is provided, verify ownership
+		if phone := c.Query("reporter_phone"); phone != "" {
+			phoneWithPlus := "+" + phone
+			if strings.HasPrefix(phone, "+") {
+				phoneWithPlus = phone
+				phone = strings.TrimPrefix(phone, "+")
+			}
+			incPhone := incident.ReporterPhone
+			if incPhone != phone && incPhone != phoneWithPlus {
+				return ErrorResponseWithKey(c, fiber.StatusNotFound, "incident_not_found")
+			}
+		}
 		return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "incident_retrieved"), h.buildEpmPortalResponse(c, &incident.IncidentResponse, true))
 	}
 
