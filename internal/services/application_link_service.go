@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
@@ -30,22 +31,29 @@ func NewApplicationLinkService(linkRepo repository.ApplicationLinkRepository) Ap
 
 func (s *applicationLinkService) CreateLink(ctx context.Context, req *models.ApplicationLinkCreateRequest) (*models.ApplicationLinkResponse, error) {
 	link := &models.ApplicationLink{
-		Name:           req.Name,
-		NameAr:         req.NameAr,
-		Description:    req.Description,
-		DescriptionAr:  req.DescriptionAr,
-		URL:            req.URL,
-		Icon:           req.Icon,
-		ImageURL:       req.ImageURL,
-		Color:          req.Color,
-		SortOrder:      req.SortOrder,
-		IsActive:       req.IsActive,
+		Name:            req.Name,
+		NameAr:          req.NameAr,
+		Description:     req.Description,
+		DescriptionAr:   req.DescriptionAr,
+		URL:             req.URL,
+		Icon:            req.Icon,
+		ImageURL:        req.ImageURL,
+		Color:           req.Color,
+		SortOrder:       req.SortOrder,
+		IsActive:        req.IsActive,
 		SSOEnabled:      req.SSOEnabled,
 		SSOCallbackURL:  req.SSOCallbackURL,
 		SSORedirectPath: req.SSORedirectPath,
 	}
 
-	// Set defaults if not provided
+	if req.ParentID != nil && *req.ParentID != "" {
+		parentUUID, err := uuid.Parse(*req.ParentID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid parent_id: %w", err)
+		}
+		link.ParentID = &parentUUID
+	}
+
 	if link.Icon == "" {
 		link.Icon = "ExternalLink"
 	}
@@ -86,16 +94,15 @@ func (s *applicationLinkService) ListLinks(ctx context.Context) ([]models.Applic
 }
 
 func (s *applicationLinkService) ListActiveLinks(ctx context.Context) ([]models.ApplicationLinkResponse, error) {
-	links, err := s.linkRepo.ListActive(ctx)
+	links, err := s.linkRepo.ListActiveWithChildren(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	responses := make([]models.ApplicationLinkResponse, len(links))
-	for i, link := range links {
-		responses[i] = models.ToApplicationLinkResponse(&link)
+	for i := range links {
+		responses[i] = models.ToApplicationLinkResponse(&links[i])
 	}
-
 	return responses, nil
 }
 
@@ -105,7 +112,6 @@ func (s *applicationLinkService) UpdateLink(ctx context.Context, id uuid.UUID, r
 		return nil, err
 	}
 
-	// Update fields if provided
 	if req.Name != "" {
 		link.Name = req.Name
 	}
@@ -146,6 +152,20 @@ func (s *applicationLinkService) UpdateLink(ctx context.Context, id uuid.UUID, r
 		link.SSORedirectPath = *req.SSORedirectPath
 	}
 
+	// Handle parent assignment / removal
+	if req.ClearParent != nil && *req.ClearParent {
+		link.ParentID = nil
+	} else if req.ParentID != nil && *req.ParentID != "" {
+		parentUUID, err := uuid.Parse(*req.ParentID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid parent_id: %w", err)
+		}
+		if parentUUID == id {
+			return nil, fmt.Errorf("a link cannot be its own parent")
+		}
+		link.ParentID = &parentUUID
+	}
+
 	if err := s.linkRepo.Update(ctx, link); err != nil {
 		return nil, err
 	}
@@ -170,5 +190,9 @@ func (s *applicationLinkService) RemoveImage(ctx context.Context, id uuid.UUID) 
 }
 
 func (s *applicationLinkService) DeleteLink(ctx context.Context, id uuid.UUID) error {
+	// Orphan children before deleting so they become independent root cards
+	if err := s.linkRepo.OrphanChildren(ctx, id); err != nil {
+		return err
+	}
 	return s.linkRepo.Delete(ctx, id)
 }
