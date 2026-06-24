@@ -208,7 +208,7 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	var incidents []models.Incident
 	var total int64
 
-	query := r.db.WithContext(ctx).Model(&models.Incident{})
+	query := r.db.WithContext(ctx).Model(&models.Incident{}).Debug()
 
 	// Apply filters
 	if len(filter.WorkflowID) != 0 {
@@ -922,6 +922,9 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 		if filter.MyRecord != nil {
 			q = q.Where("incidents.reporter_id = ? OR incidents.assignee_id = ? OR incidents.id IN (Select incident_id from incident_assignees where user_id = ?)", filter.MyRecord, filter.MyRecord, filter.MyRecord)
 		}
+		if len(filter.ClassificationID) > 0 {
+			q = q.Where("incidents.classification_id IN ?", filter.ClassificationID)
+		}
 
 		return q
 	}
@@ -970,7 +973,7 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 
 	//  Total
 	baseQuery := applyBaseFilters(
-		r.db.WithContext(ctx).Model(&models.Incident{}).
+		r.db.WithContext(ctx).Model(&models.Incident{}).Debug().
 			Where("incidents.workflow_id IN (SELECT id FROM workflows WHERE deleted_at IS NULL)"),
 	)
 	if err := baseQuery.Count(&stats.Total).Error; err != nil {
@@ -988,7 +991,7 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 
 	// Partial Close (incidents currently in a partial_close state)
 	pcQuery := applyBaseFilters(
-		r.db.WithContext(ctx).Model(&models.Incident{}).
+		r.db.WithContext(ctx).Model(&models.Incident{}).Debug().
 			Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
 			Where("workflow_states.is_partial_close = ? AND incidents.workflow_id IN (SELECT id FROM workflows WHERE deleted_at IS NULL)", true),
 	)
@@ -1010,26 +1013,51 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 	}
 	var stateCounts []stateCount
 
-	stateQuery := applyCommonFilters(
+	// LEFT JOIN approach: start from workflow_states so states with zero matching
+	// incidents still appear in the result with count=0.
+	incidentSubQ := applyCommonFilters(
 		r.db.WithContext(ctx).Model(&models.Incident{}).
-			Select(`
-				workflows.id    as workflow_id,
-				workflows.name  as workflow_name,
-				workflow_states.id         as state_id,
-				workflow_states.name       as state_name,
-				workflow_states.name_ar    as state_name_ar,
-				workflow_states.code       as state_code,
-				workflow_states.state_type as state_type,
-				count(*) as count
-			`).
-			//Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
-			Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id AND workflow_states.deleted_at IS NULL").
-			Joins("JOIN workflows ON workflows.id = incidents.workflow_id AND workflows.deleted_at IS NULL"),
+			Select("incidents.id, incidents.current_state_id").
+			Where("incidents.workflow_id IN (SELECT id FROM workflows WHERE deleted_at IS NULL)"),
 	)
 
+	stateQuery := r.db.WithContext(ctx).
+		Table("workflow_states ws").
+		Select(`
+			w.id    as workflow_id,
+			w.name  as workflow_name,
+			ws.id         as state_id,
+			ws.name       as state_name,
+			ws.name_ar    as state_name_ar,
+			ws.code       as state_code,
+			ws.state_type as state_type,
+			COUNT(i.id)   as count
+		`).
+		Joins("JOIN workflows w ON w.id = ws.workflow_id AND w.deleted_at IS NULL").
+		Joins("LEFT JOIN (?) AS i ON i.current_state_id = ws.id", incidentSubQ).
+		Where("ws.deleted_at IS NULL")
+
+	if filter != nil {
+		if filter.RecordType != nil && *filter.RecordType != "" {
+			stateQuery = stateQuery.Where("w.record_type = ?", *filter.RecordType)
+		}
+		if len(filter.WorkflowID) > 0 {
+			stateQuery = stateQuery.Where("w.id IN ?", filter.WorkflowID)
+		}
+		if !isAdmin && len(filter.UserRoleIDs) > 0 {
+			isPersonalFilter := filter.FilterType == "assigned" || filter.FilterType == "created"
+			if !isPersonalFilter {
+				stateQuery = stateQuery.Where(`
+					NOT EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = ws.id)
+					OR EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = ws.id AND role_id IN ?)
+				`, filter.UserRoleIDs)
+			}
+		}
+	}
+
 	if err := stateQuery.
-		Group(`workflows.id, workflows.name, workflow_states.id, workflow_states.name, workflow_states.name_ar, workflow_states.code, workflow_states.state_type`).
-		Order("workflows.name ASC, workflow_states.state_type ASC").
+		Group(`w.id, w.name, ws.id, ws.name, ws.name_ar, ws.code, ws.state_type`).
+		Order("w.name ASC, ws.state_type ASC").
 		Scan(&stateCounts).Error; err != nil {
 		return nil, err
 	}
