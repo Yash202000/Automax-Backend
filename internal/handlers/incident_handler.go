@@ -115,11 +115,25 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 	var req models.IncidentCreateRequest
 	if err := c.BodyParser(&req); err != nil {
 		fmt.Printf("CreateIncident: Body parsing error: %v\n", err)
-		return ErrorResponseWithKey(c, fiber.StatusBadRequest, "invalid_request_body", req.Source)
+		// Extract source from raw body for portal detection even when parsing fails
+		source := extractSourceFromBody(c)
+		return ErrorResponseWithKey(c, fiber.StatusBadRequest, "invalid_request_body", source)
 	}
 
 	// Parse query parameters
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		if isEpmPortalSource(req.Source) {
+			var summaryParts []string
+			for field, msg := range validationErrors {
+				summaryParts = append(summaryParts, fmt.Sprintf("%s: %v", field, msg))
+			}
+			summary := strings.Join(summaryParts, "; ")
+			return c.Status(fiber.StatusBadRequest).JSON(utils.ErrorCodeResponse{
+				Success:   false,
+				ErrorCode: "VALIDATION_ERROR",
+				Error:     summary,
+			})
+		}
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
 			"errors":  validationErrors,
@@ -1724,6 +1738,18 @@ func isEpmPortalSource(source string) bool {
 	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
 	return strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) &&
 		strings.EqualFold(source, constants.INCIDENT_SOURCE.EPMPORTAL)
+}
+
+// extractSourceFromBody attempts to read the "source" field from the raw request body.
+// Used when BodyParser fails (malformed JSON) but we still need portal detection.
+func extractSourceFromBody(c *fiber.Ctx) string {
+	var partial struct {
+		Source string `json:"source"`
+	}
+	if err := json.Unmarshal(c.Body(), &partial); err == nil && partial.Source != "" {
+		return partial.Source
+	}
+	return ""
 }
 
 // buildEpmPortalResponse builds the portal-trimmed response. When includeGis is true

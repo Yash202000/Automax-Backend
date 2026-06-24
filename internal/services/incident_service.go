@@ -418,6 +418,28 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		}
 	}
 
+	// Extract lat/lng from gis_location when not provided explicitly
+	if req.Latitude == nil && req.Longitude == nil && len(req.GisLocation) > 0 {
+		var gis struct {
+			Data struct {
+				GeoJson struct {
+					DrawedPoint struct {
+						Coordinates []float64 `json:"coordinates"`
+					} `json:"drawedPoint"`
+				} `json:"geoJson"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(req.GisLocation, &gis); err == nil {
+			coords := gis.Data.GeoJson.DrawedPoint.Coordinates
+			if len(coords) >= 2 {
+				lng := coords[0]
+				lat := coords[1]
+				req.Latitude = &lat
+				req.Longitude = &lng
+			}
+		}
+	}
+
 	if strings.EqualFold(clientCode, "EPM940") && !sourceSkipped {
 		// Check if the incoming request has latitude, longitude, and classification
 		if req.Latitude != nil && req.Longitude != nil && req.ClassificationID != nil {
