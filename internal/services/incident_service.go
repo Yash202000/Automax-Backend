@@ -685,121 +685,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 	}
 
 	// Apply creation-time assignment rules
-	distributeAssign := strings.TrimSpace(os.Getenv("DISTRIBUTE_INCIDENT_ASSIGN"))
-	if strings.EqualFold(distributeAssign, "true") {
-		// DISTRIBUTE_INCIDENT_ASSIGN=true mode:
-		//   1. Web-created incidents by an eligible agent → self-assign to creator
-		//   2. Web-created incidents by non-agent (admin, super-admin) → round-robin
-		//   3. Other sources → round-robin among online eligible agents (never assign to offline)
-		if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.WEB) &&
-			s.UserHasAssignmentRole(ctx, reporterID, initialState.AssignmentRoles) {
-			if err := s.incidentRepo.AssignIncident(ctx, incident.ID, reporterID); err != nil {
-				fmt.Printf("Warning: creation assignment (self-assign for web) failed: %v\n", err)
-			} else {
-				if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{reporterID}); err != nil {
-					fmt.Printf("Warning: SetAssignees (self-assign for web) failed: %v\n", err)
-				}
-			}
-		} else {
-			var classID, locID, deptID *uuid.UUID
-			if incident.ClassificationID != nil {
-				classID = incident.ClassificationID
-			}
-			if incident.LocationID != nil {
-				locID = incident.LocationID
-			}
-			if incident.DepartmentID != nil {
-				deptID = incident.DepartmentID
-			}
-
-			var roleIDs []uuid.UUID
-			if len(initialState.AssignmentRoles) > 0 {
-				roleIDs = make([]uuid.UUID, len(initialState.AssignmentRoles))
-				for i, r := range initialState.AssignmentRoles {
-					roleIDs[i] = r.ID
-				}
-			}
-
-			log.Printf("role %v class %d loc %d dept %d", roleIDs, classID, locID, deptID)
-			nextAssigneeID, err := s.getNextRoundRobinAssignee(ctx, roleIDs, classID, locID, deptID)
-			if err == nil && nextAssigneeID != nil {
-				if err := s.incidentRepo.AssignIncident(ctx, incident.ID, *nextAssigneeID); err != nil {
-					fmt.Printf("Warning: creation assignment (round-robin) failed: %v\n", err)
-				} else {
-					if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{*nextAssigneeID}); err != nil {
-						fmt.Printf("Warning: SetAssignees (round-robin) failed: %v\n", err)
-					}
-				}
-			} else {
-				fmt.Printf("Warning: no online eligible agents for round-robin, incident %s left unassigned: %v\n", incident.IncidentNumber, err)
-			}
-		}
-	} else {
-		// DISTRIBUTE_INCIDENT_ASSIGN not true: use workflow initial-state assignment config
-		if initialState.AssignUserID != nil {
-			if err := s.incidentRepo.AssignIncident(ctx, incident.ID, *initialState.AssignUserID); err != nil {
-				fmt.Printf("Warning: creation assignment (assign_user_id) failed: %v\n", err)
-			} else {
-				if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{*initialState.AssignUserID}); err != nil {
-					fmt.Printf("Warning: SetAssignees (assign_user_id) failed: %v\n", err)
-				}
-			}
-		} else if initialState.ManualSelectUser && len(initialState.AssignmentRoles) > 0 {
-			var classID, locID, deptID *uuid.UUID
-			if incident.ClassificationID != nil {
-				classID = incident.ClassificationID
-			}
-			if incident.LocationID != nil {
-				locID = incident.LocationID
-			}
-			if incident.DepartmentID != nil {
-				deptID = incident.DepartmentID
-			}
-			var roleIDs []uuid.UUID
-			for _, r := range initialState.AssignmentRoles {
-				roleIDs = append(roleIDs, r.ID)
-			}
-			availableUsers, _ := s.userRepo.FindMatching(ctx, roleIDs, classID, locID, deptID, nil)
-			if len(availableUsers) > 0 {
-				if err := s.incidentRepo.AssignIncident(ctx, incident.ID, availableUsers[0].ID); err != nil {
-					fmt.Printf("Warning: creation assignment (manual select) failed: %v\n", err)
-				} else {
-					if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{availableUsers[0].ID}); err != nil {
-						fmt.Printf("Warning: SetAssignees (manual select) failed: %v\n", err)
-					}
-				}
-			}
-		} else if initialState.AutoMatchUser && len(initialState.AssignmentRoles) > 0 {
-			var classID, locID, deptID *uuid.UUID
-			if incident.ClassificationID != nil {
-				classID = incident.ClassificationID
-			}
-			if incident.LocationID != nil {
-				locID = incident.LocationID
-			}
-			if incident.DepartmentID != nil {
-				deptID = incident.DepartmentID
-			}
-			var roleIDs []uuid.UUID
-			for _, r := range initialState.AssignmentRoles {
-				roleIDs = append(roleIDs, r.ID)
-			}
-			matchedUsers, err := s.userRepo.FindMatching(ctx, roleIDs, classID, locID, deptID, nil)
-			if err == nil && len(matchedUsers) > 0 {
-				if err := s.incidentRepo.AssignIncident(ctx, incident.ID, matchedUsers[0].ID); err != nil {
-					fmt.Printf("Warning: creation assignment (auto match) failed: %v\n", err)
-				} else {
-					allIDs := make([]uuid.UUID, len(matchedUsers))
-					for i, u := range matchedUsers {
-						allIDs[i] = u.ID
-					}
-					if err := s.incidentRepo.SetAssignees(ctx, incident.ID, allIDs); err != nil {
-						fmt.Printf("Warning: SetAssignees (auto match) failed: %v\n", err)
-					}
-				}
-			}
-		}
-	}
+	s.applyCreationTimeAssignment(ctx, incident, initialState, reporterID, req.Source)
 
 	// Set lookup values using Association API (GORM many-to-many requires this after create)
 	if len(req.LookupValueIDs) > 0 {
@@ -5126,6 +5012,121 @@ func (s *incidentService) CreateRevision(ctx context.Context, incidentID uuid.UU
 	return s.incidentRepo.CreateRevision(ctx, revision)
 }
 
+// applyCreationTimeAssignment applies workflow initial-state assignment rules
+// to a newly created incident/complaint/query. This is the shared logic extracted
+// from CreateIncident so that CreateComplaint and CreateQuery get the same behaviour.
+func (s *incidentService) applyCreationTimeAssignment(ctx context.Context, incident *models.Incident, initialState *models.WorkflowState, creatorID uuid.UUID, source string) {
+	distributeAssign := strings.TrimSpace(os.Getenv("DISTRIBUTE_INCIDENT_ASSIGN"))
+	if strings.EqualFold(distributeAssign, "true") {
+		if strings.EqualFold(source, constants.INCIDENT_SOURCE.WEB) &&
+			s.UserHasAssignmentRole(ctx, creatorID, initialState.AssignmentRoles) {
+			if err := s.incidentRepo.AssignIncident(ctx, incident.ID, creatorID); err != nil {
+				fmt.Printf("Warning: creation assignment (self-assign for web) failed: %v\n", err)
+			} else {
+				if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{creatorID}); err != nil {
+					fmt.Printf("Warning: SetAssignees (self-assign for web) failed: %v\n", err)
+				}
+			}
+		} else {
+			var classID, locID, deptID *uuid.UUID
+			if incident.ClassificationID != nil {
+				classID = incident.ClassificationID
+			}
+			if incident.LocationID != nil {
+				locID = incident.LocationID
+			}
+			if incident.DepartmentID != nil {
+				deptID = incident.DepartmentID
+			}
+
+			var roleIDs []uuid.UUID
+			if len(initialState.AssignmentRoles) > 0 {
+				roleIDs = make([]uuid.UUID, len(initialState.AssignmentRoles))
+				for i, r := range initialState.AssignmentRoles {
+					roleIDs[i] = r.ID
+				}
+			}
+
+			nextAssigneeID, err := s.getNextRoundRobinAssignee(ctx, roleIDs, classID, locID, deptID)
+			if err == nil && nextAssigneeID != nil {
+				if err := s.incidentRepo.AssignIncident(ctx, incident.ID, *nextAssigneeID); err != nil {
+					fmt.Printf("Warning: creation assignment (round-robin) failed: %v\n", err)
+				} else {
+					if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{*nextAssigneeID}); err != nil {
+						fmt.Printf("Warning: SetAssignees (round-robin) failed: %v\n", err)
+					}
+				}
+			} else {
+				fmt.Printf("Warning: no online eligible agents for round-robin, %s %s left unassigned: %v\n", incident.RecordType, incident.IncidentNumber, err)
+			}
+		}
+	} else {
+		if initialState.AssignUserID != nil {
+			if err := s.incidentRepo.AssignIncident(ctx, incident.ID, *initialState.AssignUserID); err != nil {
+				fmt.Printf("Warning: creation assignment (assign_user_id) failed: %v\n", err)
+			} else {
+				if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{*initialState.AssignUserID}); err != nil {
+					fmt.Printf("Warning: SetAssignees (assign_user_id) failed: %v\n", err)
+				}
+			}
+		} else if initialState.ManualSelectUser && len(initialState.AssignmentRoles) > 0 {
+			var classID, locID, deptID *uuid.UUID
+			if incident.ClassificationID != nil {
+				classID = incident.ClassificationID
+			}
+			if incident.LocationID != nil {
+				locID = incident.LocationID
+			}
+			if incident.DepartmentID != nil {
+				deptID = incident.DepartmentID
+			}
+			var roleIDs []uuid.UUID
+			for _, r := range initialState.AssignmentRoles {
+				roleIDs = append(roleIDs, r.ID)
+			}
+			availableUsers, _ := s.userRepo.FindMatching(ctx, roleIDs, classID, locID, deptID, nil)
+			if len(availableUsers) > 0 {
+				if err := s.incidentRepo.AssignIncident(ctx, incident.ID, availableUsers[0].ID); err != nil {
+					fmt.Printf("Warning: creation assignment (manual select) failed: %v\n", err)
+				} else {
+					if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{availableUsers[0].ID}); err != nil {
+						fmt.Printf("Warning: SetAssignees (manual select) failed: %v\n", err)
+					}
+				}
+			}
+		} else if initialState.AutoMatchUser && len(initialState.AssignmentRoles) > 0 {
+			var classID, locID, deptID *uuid.UUID
+			if incident.ClassificationID != nil {
+				classID = incident.ClassificationID
+			}
+			if incident.LocationID != nil {
+				locID = incident.LocationID
+			}
+			if incident.DepartmentID != nil {
+				deptID = incident.DepartmentID
+			}
+			var roleIDs []uuid.UUID
+			for _, r := range initialState.AssignmentRoles {
+				roleIDs = append(roleIDs, r.ID)
+			}
+			matchedUsers, err := s.userRepo.FindMatching(ctx, roleIDs, classID, locID, deptID, nil)
+			if err == nil && len(matchedUsers) > 0 {
+				if err := s.incidentRepo.AssignIncident(ctx, incident.ID, matchedUsers[0].ID); err != nil {
+					fmt.Printf("Warning: creation assignment (auto match) failed: %v\n", err)
+				} else {
+					allIDs := make([]uuid.UUID, len(matchedUsers))
+					for i, u := range matchedUsers {
+						allIDs[i] = u.ID
+					}
+					if err := s.incidentRepo.SetAssignees(ctx, incident.ID, allIDs); err != nil {
+						fmt.Printf("Warning: SetAssignees (auto match) failed: %v\n", err)
+					}
+				}
+			}
+		}
+	}
+}
+
 // Complaint operations
 
 func (s *incidentService) CreateComplaint(ctx context.Context, req *models.CreateComplaintRequest, creatorID uuid.UUID) (*models.IncidentResponse, error) {
@@ -5227,6 +5228,11 @@ func (s *incidentService) CreateComplaint(ctx context.Context, req *models.Creat
 
 	if err := s.incidentRepo.Create(ctx, complaint); err != nil {
 		return nil, err
+	}
+
+	// Apply creation-time assignment rules (only if no explicit assignee was provided)
+	if complaint.AssigneeID == nil {
+		s.applyCreationTimeAssignment(ctx, complaint, initialState, creatorID, req.Source)
 	}
 
 	// Set lookup values if provided
@@ -5436,6 +5442,11 @@ func (s *incidentService) CreateQuery(ctx context.Context, req *models.CreateQue
 
 	if err := s.incidentRepo.Create(ctx, query); err != nil {
 		return nil, err
+	}
+
+	// Apply creation-time assignment rules (only if no explicit assignee was provided)
+	if query.AssigneeID == nil {
+		s.applyCreationTimeAssignment(ctx, query, initialState, creatorID, req.Source)
 	}
 
 	// Set lookup values if provided
