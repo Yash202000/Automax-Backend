@@ -211,6 +211,15 @@ func (h *ClassificationHandler) Update(c *fiber.Ctx) error {
 		classification.DescriptionAr = req.DescriptionAr
 	}
 	if req.IsActive != nil {
+		if !*req.IsActive && classification.IsActive {
+			hasActive, err := h.repo.HasActiveChildren(c.UserContext(), id)
+			if err != nil {
+				return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+			}
+			if hasActive {
+				return utils.ErrorResponse(c, fiber.StatusConflict, "Cannot deactivate this classification because it has active sub-classifications. Please deactivate all child classifications first.")
+			}
+		}
 		classification.IsActive = *req.IsActive
 	}
 	if req.SortOrder >= 0 {

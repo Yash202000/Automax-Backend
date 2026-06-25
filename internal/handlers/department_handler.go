@@ -223,6 +223,15 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 		department.ManagerID = req.ManagerID
 	}
 	if req.IsActive != nil {
+		if !*req.IsActive && department.IsActive {
+			hasActive, err := h.repo.HasActiveChildren(c.UserContext(), id)
+			if err != nil {
+				return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+			}
+			if hasActive {
+				return utils.ErrorResponse(c, fiber.StatusConflict, "Cannot deactivate this department because it has active sub-departments. Please deactivate all child departments first.")
+			}
+		}
 		department.IsActive = *req.IsActive
 	}
 	if req.SortOrder != nil {

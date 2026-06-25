@@ -167,6 +167,15 @@ func (h *LocationHandler) Update(c *fiber.Ctx) error {
 		location.Longitude = req.Longitude
 	}
 	if req.IsActive != nil {
+		if !*req.IsActive && location.IsActive {
+			hasActive, err := h.repo.HasActiveChildren(c.UserContext(), id)
+			if err != nil {
+				return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+			}
+			if hasActive {
+				return utils.ErrorResponse(c, fiber.StatusConflict, "Cannot deactivate this location because it has active sub-locations. Please deactivate all child locations first.")
+			}
+		}
 		location.IsActive = *req.IsActive
 	}
 	if req.SortOrder != nil {
