@@ -269,6 +269,25 @@ func (h *DepartmentHandler) Delete(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
+	children, users, incidents, err := h.repo.CheckDeleteDependencies(c.UserContext(), id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	var reasons []string
+	if children > 0 {
+		reasons = append(reasons, "it has sub-departments")
+	}
+	if users > 0 {
+		reasons = append(reasons, "it is assigned to one or more users")
+	}
+	if incidents > 0 {
+		reasons = append(reasons, fmt.Sprintf("%d incident(s) are associated with this department", incidents))
+	}
+	if len(reasons) > 0 {
+		return utils.ErrorResponse(c, fiber.StatusConflict, "Cannot delete this department: "+strings.Join(reasons, "; "))
+	}
+
 	if err := h.repo.Delete(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}

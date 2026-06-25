@@ -25,6 +25,7 @@ type DepartmentRepository interface {
 	AssignClassifications(ctx context.Context, departmentID uuid.UUID, classificationIDs []uuid.UUID) error
 	AssignRoles(ctx context.Context, departmentID uuid.UUID, roleIDs []uuid.UUID) error
 	FindMatching(ctx context.Context, classificationID, locationID *uuid.UUID, departmentType *string) ([]models.Department, error)
+	CheckDeleteDependencies(ctx context.Context, id uuid.UUID) (children, users, incidents int64, err error)
 }
 
 type departmentRepository struct {
@@ -208,6 +209,20 @@ func (r *departmentRepository) AssignRoles(ctx context.Context, departmentID uui
 	}
 
 	return r.db.WithContext(ctx).Model(&department).Association("Roles").Replace(roles)
+}
+
+func (r *departmentRepository) CheckDeleteDependencies(ctx context.Context, id uuid.UUID) (children, users, incidents int64, err error) {
+	db := r.db.WithContext(ctx)
+	if err = db.Model(&models.Department{}).Where("parent_id = ? AND deleted_at IS NULL", id).Count(&children).Error; err != nil {
+		return
+	}
+	if err = db.Table("user_departments").Where("department_id = ?", id).Count(&users).Error; err != nil {
+		return
+	}
+	if err = db.Table("incidents").Where("department_id = ? AND deleted_at IS NULL", id).Count(&incidents).Error; err != nil {
+		return
+	}
+	return
 }
 
 // FindMatching returns departments that match the given classification and/or location criteria

@@ -88,6 +88,7 @@ type ClassificationRepository interface {
 	FetchClassificationFullPaths(ctx context.Context, classificationIDs []uuid.UUID) (map[string]string, error)
 	FetchClassificationFullPathByID(ctx context.Context, classificationID uuid.UUID) (string, error)
 	GetAncestors(ctx context.Context, id uuid.UUID) ([]models.Classification, error)
+	CountChildren(ctx context.Context, id uuid.UUID) (int64, error)
 }
 
 type classificationRepository struct {
@@ -622,6 +623,14 @@ func (r *classificationRepository) FetchClassificationFullPathByID(
 	}
 
 	return fullPath, nil
+}
+
+func (r *classificationRepository) CountChildren(ctx context.Context, id uuid.UUID) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&models.Classification{}).
+		Where("parent_id = ? AND deleted_at IS NULL", id).
+		Count(&count).Error
+	return count, err
 }
 
 // GetAncestors returns the node and all its ancestors ordered from root (lowest level) to the

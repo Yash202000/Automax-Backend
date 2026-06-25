@@ -288,6 +288,11 @@ func (h *ClassificationHandler) Delete(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
+	children, childErr := h.repo.CountChildren(c.UserContext(), id)
+	if childErr != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_check_deps"))
+	}
+
 	incidents, workflows, users, departments, err := h.repo.CheckDependencies(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_check_deps"))
@@ -297,6 +302,9 @@ func (h *ClassificationHandler) Delete(c *fiber.Ctx) error {
 
 	var reasons []string
 	if isAr {
+		if children > 0 {
+			reasons = append(reasons, "له تصنيفات فرعية")
+		}
 		if incidents > 0 {
 			reasons = append(reasons, fmt.Sprintf("مرتبط بـ%d بلاغ", incidents))
 		}
@@ -313,6 +321,9 @@ func (h *ClassificationHandler) Delete(c *fiber.Ctx) error {
 			return utils.ErrorResponse(c, fiber.StatusConflict, "لا يمكن حذف هذا التصنيف لانه "+strings.Join(reasons, "، و"))
 		}
 	} else {
+		if children > 0 {
+			reasons = append(reasons, "it has sub-classifications")
+		}
 		if incidents > 0 {
 			reasons = append(reasons, fmt.Sprintf("%d incident(s) are associated with this classification", incidents))
 		}
