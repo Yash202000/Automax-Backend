@@ -28,6 +28,7 @@ type LocationRepository interface {
 	FetchLocationFullPaths(ctx context.Context, locationIDs []string) (map[string]string, error)
 	FetchLocationFullPathByID(ctx context.Context, locationID uuid.UUID) (string, error)
 	GetAncestors(ctx context.Context, id uuid.UUID) ([]models.Location, error)
+	HasActiveChildren(ctx context.Context, id uuid.UUID) (bool, error)
 	CheckDeleteDependencies(ctx context.Context, id uuid.UUID) (children, users, incidents int64, err error)
 }
 
@@ -374,6 +375,14 @@ func (r *locationRepository) FetchLocationFullPathByID(
 	}
 
 	return fullPath, nil
+}
+
+func (r *locationRepository) HasActiveChildren(ctx context.Context, id uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&models.Location{}).
+		Where("parent_id = ? AND is_active = true AND deleted_at IS NULL", id).
+		Count(&count).Error
+	return count > 0, err
 }
 
 func (r *locationRepository) CheckDeleteDependencies(ctx context.Context, id uuid.UUID) (children, users, incidents int64, err error) {
