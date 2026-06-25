@@ -25,6 +25,7 @@ type DepartmentRepository interface {
 	AssignClassifications(ctx context.Context, departmentID uuid.UUID, classificationIDs []uuid.UUID) error
 	AssignRoles(ctx context.Context, departmentID uuid.UUID, roleIDs []uuid.UUID) error
 	FindMatching(ctx context.Context, classificationID, locationID *uuid.UUID, departmentType *string) ([]models.Department, error)
+	HasActiveChildren(ctx context.Context, id uuid.UUID) (bool, error)
 }
 
 type departmentRepository struct {
@@ -208,6 +209,14 @@ func (r *departmentRepository) AssignRoles(ctx context.Context, departmentID uui
 	}
 
 	return r.db.WithContext(ctx).Model(&department).Association("Roles").Replace(roles)
+}
+
+func (r *departmentRepository) HasActiveChildren(ctx context.Context, id uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&models.Department{}).
+		Where("parent_id = ? AND is_active = true AND deleted_at IS NULL", id).
+		Count(&count).Error
+	return count > 0, err
 }
 
 // FindMatching returns departments that match the given classification and/or location criteria
