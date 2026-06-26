@@ -29,6 +29,7 @@ type LocationRepository interface {
 	FetchLocationFullPathByID(ctx context.Context, locationID uuid.UUID) (string, error)
 	GetAncestors(ctx context.Context, id uuid.UUID) ([]models.Location, error)
 	HasActiveChildren(ctx context.Context, id uuid.UUID) (bool, error)
+	CheckDeleteDependencies(ctx context.Context, id uuid.UUID) (children, users, incidents int64, err error)
 }
 
 type locationRepository struct {
@@ -388,6 +389,20 @@ func (r *locationRepository) HasActiveChildren(ctx context.Context, id uuid.UUID
 		Where("parent_id = ? AND is_active = true AND deleted_at IS NULL", id).
 		Count(&count).Error
 	return count > 0, err
+}
+
+func (r *locationRepository) CheckDeleteDependencies(ctx context.Context, id uuid.UUID) (children, users, incidents int64, err error) {
+	db := r.db.WithContext(ctx)
+	if err = db.Model(&models.Location{}).Where("parent_id = ? AND deleted_at IS NULL", id).Count(&children).Error; err != nil {
+		return
+	}
+	if err = db.Table("user_locations").Where("location_id = ?", id).Count(&users).Error; err != nil {
+		return
+	}
+	if err = db.Table("incidents").Where("location_id = ? AND deleted_at IS NULL", id).Count(&incidents).Error; err != nil {
+		return
+	}
+	return
 }
 
 // GetAncestors returns the node and all its ancestors ordered from root (lowest level) to the
