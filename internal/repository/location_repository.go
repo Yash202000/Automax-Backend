@@ -140,22 +140,26 @@ func (r *locationRepository) Delete(ctx context.Context, id uuid.UUID) error {
 
 func (r *locationRepository) List(ctx context.Context) ([]models.Location, error) {
 	var locations []models.Location
-	err := r.db.WithContext(ctx).Order("sort_order, name").Find(&locations).Error
+	err := r.db.WithContext(ctx).Where("deleted_at IS NULL").Order("sort_order, name").Find(&locations).Error
 	return locations, err
 }
 
 func (r *locationRepository) GetTree(ctx context.Context) ([]models.Location, error) {
 	var roots []models.Location
 	err := r.db.WithContext(ctx).
-		Where("parent_id IS NULL").
+		Where("parent_id IS NULL AND deleted_at IS NULL").
 		Preload("Children", func(db *gorm.DB) *gorm.DB {
-			return db.Order("sort_order, name")
+			return db.Where("deleted_at IS NULL").Order("sort_order, name")
 		}).
 		Preload("Children.Children", func(db *gorm.DB) *gorm.DB {
-			return db.Order("sort_order, name")
+			return db.Where("deleted_at IS NULL").Order("sort_order, name")
 		}).
-		Preload("Children.Children.Children").
-		Preload("Children.Children.Children.Children").
+		Preload("Children.Children.Children", func(db *gorm.DB) *gorm.DB {
+			return db.Where("deleted_at IS NULL").Order("sort_order, name")
+		}).
+		Preload("Children.Children.Children.Children", func(db *gorm.DB) *gorm.DB {
+			return db.Where("deleted_at IS NULL").Order("sort_order, name")
+		}).
 		Order("sort_order, name").
 		Find(&roots).Error
 	return roots, err
@@ -164,7 +168,7 @@ func (r *locationRepository) GetTree(ctx context.Context) ([]models.Location, er
 func (r *locationRepository) GetChildren(ctx context.Context, parentID uuid.UUID) ([]models.Location, error) {
 	var children []models.Location
 	err := r.db.WithContext(ctx).
-		Where("parent_id = ?", parentID).
+		Where("parent_id = ? AND deleted_at IS NULL", parentID).
 		Order("sort_order, name").
 		Find(&children).Error
 	return children, err
@@ -172,7 +176,7 @@ func (r *locationRepository) GetChildren(ctx context.Context, parentID uuid.UUID
 
 func (r *locationRepository) GetByParentID(ctx context.Context, parentID *uuid.UUID) ([]models.Location, error) {
 	var locations []models.Location
-	query := r.db.WithContext(ctx)
+	query := r.db.WithContext(ctx).Where("deleted_at IS NULL")
 	if parentID == nil {
 		query = query.Where("parent_id IS NULL")
 	} else {
@@ -185,7 +189,7 @@ func (r *locationRepository) GetByParentID(ctx context.Context, parentID *uuid.U
 func (r *locationRepository) GetByType(ctx context.Context, locationType string) ([]models.Location, error) {
 	var locations []models.Location
 	err := r.db.WithContext(ctx).
-		Where("type = ?", locationType).
+		Where("type = ? AND deleted_at IS NULL", locationType).
 		Order("sort_order, name").
 		Find(&locations).Error
 	return locations, err
@@ -194,7 +198,7 @@ func (r *locationRepository) GetByType(ctx context.Context, locationType string)
 func (r *locationRepository) GetTreeWithStats(ctx context.Context, recordType string) ([]models.LocationWithStats, error) {
 	// Get all locations
 	var locations []models.Location
-	if err := r.db.WithContext(ctx).Order("sort_order, name").Find(&locations).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("deleted_at IS NULL").Order("sort_order, name").Find(&locations).Error; err != nil {
 		return nil, err
 	}
 
@@ -298,7 +302,7 @@ func (r *locationRepository) FetchLocationFullPaths(
 				parent_id,
 				name::TEXT AS full_path
 			FROM locations
-			WHERE parent_id IS NULL
+			WHERE parent_id IS NULL AND deleted_at IS NULL
 
 			UNION ALL
 
@@ -309,6 +313,7 @@ func (r *locationRepository) FetchLocationFullPaths(
 				lh.full_path || ' > ' || l.name
 			FROM locations l
 			INNER JOIN location_hierarchy lh ON l.parent_id = lh.id
+			WHERE l.deleted_at IS NULL
 		)
 		SELECT
 			id::text,
@@ -347,7 +352,7 @@ func (r *locationRepository) FetchLocationFullPathByID(
 				parent_id,
 				name::TEXT AS full_path
 			FROM locations
-			WHERE parent_id IS NULL
+			WHERE parent_id IS NULL AND deleted_at IS NULL
 
 			UNION ALL
 
@@ -358,6 +363,7 @@ func (r *locationRepository) FetchLocationFullPathByID(
 				lh.full_path || ' > ' || l.name
 			FROM locations l
 			INNER JOIN location_hierarchy lh ON l.parent_id = lh.id
+			WHERE l.deleted_at IS NULL
 		)
 		SELECT full_path
 		FROM location_hierarchy
