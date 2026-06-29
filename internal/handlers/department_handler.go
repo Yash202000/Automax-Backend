@@ -283,18 +283,35 @@ func (h *DepartmentHandler) Delete(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
+	isAr := strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.Get("Accept-Language"))), "ar")
+
 	var reasons []string
-	if children > 0 {
-		reasons = append(reasons, "it has sub-departments")
-	}
-	if users > 0 {
-		reasons = append(reasons, "it is assigned to one or more users")
-	}
-	if incidents > 0 {
-		reasons = append(reasons, fmt.Sprintf("%d incident(s) are associated with this department", incidents))
-	}
-	if len(reasons) > 0 {
-		return utils.ErrorResponse(c, fiber.StatusConflict, "Cannot delete this department: "+strings.Join(reasons, "; "))
+	if isAr {
+		if children > 0 {
+			reasons = append(reasons, "له أقسام فرعية")
+		}
+		if users > 0 {
+			reasons = append(reasons, "مرتبط بمستخدم أو أكثر")
+		}
+		if incidents > 0 {
+			reasons = append(reasons, fmt.Sprintf("مرتبط بـ%d بلاغ", incidents))
+		}
+		if len(reasons) > 0 {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "لا يمكن حذف هذا القسم لأنه "+strings.Join(reasons, "، و"))
+		}
+	} else {
+		if children > 0 {
+			reasons = append(reasons, "it has sub-departments")
+		}
+		if users > 0 {
+			reasons = append(reasons, "it is assigned to one or more users")
+		}
+		if incidents > 0 {
+			reasons = append(reasons, fmt.Sprintf("%d incident(s) are associated with this department", incidents))
+		}
+		if len(reasons) > 0 {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "Cannot delete this department: "+strings.Join(reasons, "; "))
+		}
 	}
 
 	if err := h.repo.Delete(c.UserContext(), id); err != nil {
