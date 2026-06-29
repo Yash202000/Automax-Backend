@@ -754,7 +754,7 @@ var messages = map[string][2]string{
 	"national_id_exists":              {"National ID already exists", "رقم الهوية الوطنية مستخدم بالفعل"},
 	"invalid_or_expired_otp":          {"Invalid or expired OTP", "رمز التحقق غير صالح أو منتهي الصلاحية"},
 	"invalid_login_credentials":       {"Invalid login credentials", "بيانات تسجيل الدخول غير صحيحة"},
-	"invalid_credentials":             {"Invalid credentials", "بيانات الاعتماد غير صحيحة"},
+	"invalid_credentials":             {"Invalid credentials", "بيانات تسجيل الدخول غير صحيحة"},
 	"account_deactivated_service":     {"Account is deactivated", "الحساب غير نشط"},
 	"otp_service_unavailable":         {"OTP service not available", "خدمة رمز التحقق غير متاحة"},
 	"current_password_incorrect":      {"Current password is incorrect", "كلمة المرور الحالية غير صحيحة"},
