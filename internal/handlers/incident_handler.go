@@ -1602,11 +1602,25 @@ func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "incident_not_found"))
 	}
 
-	// Determine phone number to send SMS to
-	mobile := incident.CreatedByMobile
+	// Determine citizen phone number to send SMS to.
+	// ReporterPhone is the citizen's captured phone across all channels (IVR, web, mobile, agent-logged).
+	// CreatedByMobile is a MOMRA/EPM-specific fallback (same value as ReporterPhone in that flow).
+	// ReporterID fallback is only used when reporter is confirmed to have the citizen role.
+	mobile := incident.ReporterPhone
+	if mobile == "" {
+		mobile = incident.CreatedByMobile
+	}
 	if mobile == "" && incident.ReporterID != nil {
-		if reporter, err := h.userRepo.FindByID(c.UserContext(), *incident.ReporterID); err == nil && reporter.Phone != "" {
-			mobile = reporter.Phone
+		roles, err := h.userRepo.GetUserRoles(c.UserContext(), *incident.ReporterID)
+		if err == nil {
+			for _, r := range roles {
+				if r.Code == constants.USER_ROLE.CITIZEN {
+					if reporter, err := h.userRepo.FindByID(c.UserContext(), *incident.ReporterID); err == nil && reporter.Phone != "" {
+						mobile = reporter.Phone
+					}
+					break
+				}
+			}
 		}
 	}
 	if mobile == "" {
