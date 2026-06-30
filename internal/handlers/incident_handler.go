@@ -558,6 +558,24 @@ func (h *IncidentHandler) DeleteIncident(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
+	user, ok := c.Locals(constants.ContextKeys.User).(*models.User)
+	if !ok || user == nil {
+		return utils.ErrorResponse(c, fiber.StatusForbidden, "Insufficient permissions")
+	}
+
+	record, err := h.incidentRepo.FindByID(c.UserContext(), id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "incident_not_found"))
+	}
+
+	requiredPerm := "incidents:delete"
+	if record.RecordType == "request" {
+		requiredPerm = "requests:delete"
+	}
+	if !user.IsSuperAdmin && !user.HasPermission(requiredPerm) {
+		return utils.ErrorResponse(c, fiber.StatusForbidden, "Insufficient permissions")
+	}
+
 	if err := h.service.DeleteIncident(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
