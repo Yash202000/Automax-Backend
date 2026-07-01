@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -20,12 +21,33 @@ func NewNotificationTemplateHandler(svc services.NotificationTemplateService) *N
 	return &NotificationTemplateHandler{svc: svc}
 }
 
+func validateSMSBodies(channel, bodyEN, bodyAR string) error {
+	if channel != "sms" {
+		return nil
+	}
+	max, err := models.GetSMSMaxLength()
+	if err != nil {
+		return fmt.Errorf("SMS length validation is not configured: %s", err.Error())
+	}
+	if len([]rune(bodyEN)) > max {
+		return fmt.Errorf("SMS body (English) must not exceed %d characters including spaces", max)
+	}
+	if len([]rune(bodyAR)) > max {
+		return fmt.Errorf("SMS body (Arabic) must not exceed %d characters including spaces", max)
+	}
+	return nil
+}
+
 // POST /admin/notification-templates
 // Creates a bilingual template (EN + AR) as a single DB row.
 func (h *NotificationTemplateHandler) Create(c *fiber.Ctx) error {
 	var req models.NotificationTemplateCreateRequest
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+
+	if err := validateSMSBodies(req.Channel, req.BodyEN, req.BodyAR); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
 
 	tpl, err := h.svc.Create(c.UserContext(), &req)
@@ -172,6 +194,18 @@ func (h *NotificationTemplateHandler) Update(c *fiber.Ctx) error {
 	var req models.NotificationTemplateUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+
+	bodyEN := ""
+	if req.BodyEN != nil {
+		bodyEN = *req.BodyEN
+	}
+	bodyAR := ""
+	if req.BodyAR != nil {
+		bodyAR = *req.BodyAR
+	}
+	if err := validateSMSBodies(req.Channel, bodyEN, bodyAR); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
 	}
 
 	tpl, err := h.svc.Update(c.UserContext(), id, &req)
