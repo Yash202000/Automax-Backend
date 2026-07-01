@@ -1,4 +1,4 @@
-import { danger, warn, fail, message } from "danger";
+const { danger, warn, fail, message } = require("danger");
 
 const modifiedFiles = danger.git.modified_files;
 const createdFiles = danger.git.created_files;
@@ -43,7 +43,7 @@ const checkForCommentedCode = async () => {
     goFiles.map((f) => danger.git.diffForFile(f))
   );
 
-  const filesWithCommentedCode: string[] = [];
+  const filesWithCommentedCode = [];
 
   for (const diff of diffs) {
     if (!diff) continue;
@@ -56,7 +56,7 @@ const checkForCommentedCode = async () => {
         )
     );
     if (commentedOutLines.length > 3) {
-      filesWithCommentedCode.push(diff.path ?? "unknown");
+      filesWithCommentedCode.push(diff.path || "unknown");
     }
   }
 
