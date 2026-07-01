@@ -273,8 +273,11 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		query = query.Where("sla_breached = ?", *filter.SLABreached)
 	}
 	if filter.RecordType != nil {
-		query = query.Where("record_type = ?", *filter.RecordType)
+		query = query.Where(
+			"incidents.record_type = ? AND incidents.workflow_id IN (SELECT id FROM workflows WHERE record_type = ? AND deleted_at IS NULL)",
+			*filter.RecordType, *filter.RecordType)
 	}
+
 	if filter.Channel != nil && *filter.Channel != "" {
 		query = query.Where("channel = ?", *filter.Channel)
 	}
