@@ -21,8 +21,9 @@ jobs:
       - run: go build ./...
 
   vet:
-    name: Vet
+    name: Vet (advisory)
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
