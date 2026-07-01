@@ -1,0 +1,21 @@
+name: Danger PR Review
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  danger:
+    name: Danger.js
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install danger
+      - run: npx danger ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
