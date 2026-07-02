@@ -127,26 +127,26 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 		// 	log.Printf("[EscalationService] Failed to list transitions from state '%s': %v", state.Name, err)
 		// 	continue
 		// }
-		//
+
 		// if len(transitions) == 0 {
 		// 	log.Printf("[EscalationService] No outgoing transitions from state '%s' — nothing to notify", state.Name)
 		// 	continue
 		// }
 		// log.Printf("[EscalationService] Found %d outgoing transition(s) from state '%s'", len(transitions), state.Name)
-		//
+
 		// notifiedUsers := make(map[uuid.UUID]bool)
-		//
+
 		// for _, transition := range transitions {
 		// 	if len(transition.AllowedRoles) == 0 {
 		// 		log.Printf("[EscalationService] Transition '%s' has no AllowedRoles — skipping targeted notify", transition.Name)
 		// 		continue
 		// 	}
-		//
+
 		// 	roleIDs := make([]uuid.UUID, 0, len(transition.AllowedRoles))
 		// 	for _, role := range transition.AllowedRoles {
 		// 		roleIDs = append(roleIDs, role.ID)
 		// 	}
-		//
+
 		// 	users, err := s.userRepo.FindByRoleAndContext(
 		// 		ctx, roleIDs,
 		// 		incident.ClassificationID, incident.LocationID, incident.DepartmentID,
@@ -166,7 +166,7 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 		// 	if len(users) == 0 {
 		// 		continue
 		// 	}
-		//
+
 		// 	transitionID := transition.ID
 		// 	for _, user := range users {
 		// 		if notifiedUsers[user.ID] {
@@ -181,7 +181,9 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 		// 			notifiedUsers[user.ID] = true
 		// 			continue
 		// 		}
-		//
+
+		// 		// Create breach log BEFORE sending so deduplication always works,
+		// 		// even if the notification send fails.
 		// 		now := time.Now()
 		// 		breach := &models.EscalationSLA{
 		// 			IncidentID:      &incident.ID,
@@ -201,12 +203,13 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 		// 				user.Email, incident.IncidentNumber, err)
 		// 			continue
 		// 		}
-		//
+
 		// 		sentChannels := s.sendNotifications(ctx, incident, state, transition.Name, user, hoursInState)
 		// 		if sentChannels == nil {
 		// 			sentChannels = []string{}
 		// 		}
-		//
+
+		// 		// Update breach log with actual channels sent
 		// 		breach.Actions = sentChannels
 		// 		if err := s.repo.Update(ctx, breach); err != nil {
 		// 			log.Printf("[EscalationService] Failed to update breach log actions for user %s: %v", user.Email, err)
