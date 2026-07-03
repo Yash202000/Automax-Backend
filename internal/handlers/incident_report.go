@@ -26,210 +26,219 @@ import (
 // ── translations ─────────────────────────────────────────────────────────────
 
 type reportLabels struct {
-	Dir              string
-	Title            string
-	SectionIncident  string
-	SectionReporter  string
-	SectionLocation  string
-	SectionHistory   string
-	SectionComments  string
-	SectionRevisions string
-	SectionCaller    string
-	SectionAttach    string
-	IncidentNo       string
-	Date             string
-	Status           string
-	Channel          string
-	Classification   string
-	LocationLbl      string
-	Description      string
-	Title2           string
-	Source           string
-	Priority         string
-	SLA              string
-	SLABreached      string
-	SLADeadline      string
-	DueDate          string
-	ResolvedAt       string
-	ClosedAt         string
-	Reporter         string
-	ReporterEmail    string
-	ReporterMobile   string
-	ReporterName     string
-	Assignee         string
-	Department       string
-	Workflow         string
-	Latitude         string
-	Longitude        string
-	Address          string
-	City             string
-	State            string
-	Country          string
-	PostalCode       string
-	RecordTypeLbl    string
-	Comment          string
-	CommentBy        string
-	Internal         string
-	ColDate          string
-	ColName          string
-	ColAction        string
-	ColComment       string
-	ColFeedback      string
-	ColField         string
-	ColOldValue      string
-	ColNewValue      string
-	CallerName       string
-	CallerMobile     string
-	CallerEmail      string
-	AttName          string
-	AttType          string
-	AttSize          string
-	AttUploadedBy    string
-	AttUploadedAt    string
-	AttDeleted       string
-	AttDeletedAt     string
-	PrintDate        string
-	Yes              string
-	No               string
-	PriorityLabels   [6]string // index 1-5
+	Dir               string
+	Title             string
+	SectionIncident   string
+	SectionReporter   string
+	SectionLocation   string
+	SectionHistory    string
+	SectionComments   string
+	SectionRevisions  string
+	SectionCaller     string
+	SectionAttach     string
+	IncidentNo        string
+	Date              string
+	Status            string
+	Channel           string
+	Classification    string
+	LocationLbl       string
+	Description       string
+	Title2            string
+	Source            string
+	Priority          string
+	SLA               string
+	SLABreached       string
+	SLADeadline       string
+	DueDate           string
+	ResolvedAt        string
+	ClosedAt          string
+	Reporter          string
+	ReporterEmail     string
+	ReporterMobile    string
+	ReporterName      string
+	Assignee          string
+	Department        string
+	Workflow          string
+	Latitude          string
+	Longitude         string
+	Address           string
+	City              string
+	State             string
+	Country           string
+	PostalCode        string
+	RecordTypeLbl     string
+	Comment           string
+	CommentBy         string
+	Internal          string
+	ColDate           string
+	ColName           string
+	ColAction         string
+	ColComment        string
+	ColFeedback       string
+	ColField          string
+	ColOldValue       string
+	ColNewValue       string
+	CallerName        string
+	CallerMobile      string
+	CallerEmail       string
+	AttName           string
+	AttType           string
+	AttSize           string
+	AttUploadedBy     string
+	AttUploadedByRole string
+	AttUploadedAt     string
+	AttDeleted        string
+	AttDeletedAt      string
+	AttBeforeImage    string
+	AttAfterImage     string
+	PrintDate         string
+	Yes               string
+	No                string
+	PriorityLabels    [6]string // index 1-5
 }
 
 var labelsAR = reportLabels{
-	Dir:              "rtl",
-	Title:            "تفاصيل البلاغ",
-	SectionIncident:  "البلاغ",
-	SectionReporter:  "مقدم البلاغ",
-	SectionLocation:  "الموقع",
-	SectionHistory:   "سجل العمليات",
-	SectionComments:  "التعليقات",
-	SectionRevisions: "سجل التعديلات",
-	SectionCaller:    "تفاصيل المتصل",
-	SectionAttach:    "المرفقات",
-	IncidentNo:       "رقم البلاغ",
-	Date:             "تاريخ البلاغ",
-	Status:           "الحالة",
-	Channel:          "القناة",
-	Classification:   "التصنيف",
-	LocationLbl:      "الموقع",
-	Description:      "الوصف",
-	Title2:           "عنوان البلاغ",
-	Source:           "المصدر",
-	Priority:         "الأولوية",
-	SLA:              "SLA",
-	SLABreached:      "تجاوز SLA",
-	SLADeadline:      "موعد SLA",
-	DueDate:          "تاريخ الاستحقاق",
-	ResolvedAt:       "تاريخ الحل",
-	ClosedAt:         "تاريخ الإغلاق",
-	Reporter:         "المُبلِّغ",
-	ReporterEmail:    "البريد الإلكتروني",
-	ReporterMobile:   "رقم الجوال",
-	ReporterName:     "اسم المُبلِّغ",
-	Assignee:         "المسؤول",
-	Department:       "القسم",
-	Workflow:         "سير العمل",
-	Latitude:         "خط العرض",
-	Longitude:        "خط الطول",
-	Address:          "العنوان",
-	City:             "المدينة",
-	State:            "المنطقة",
-	Country:          "الدولة",
-	PostalCode:       "الرمز البريدي",
-	RecordTypeLbl:    "نوع السجل",
-	Comment:          "التعليق",
-	CommentBy:        "بواسطة",
-	Internal:         "[تعليق داخلي]",
-	ColDate:          "التاريخ",
-	ColName:          "الاسم",
-	ColAction:        "الإجراء",
-	ColComment:       "التعليقات",
-	ColFeedback:      "التغذية الراجعة",
-	ColField:         "الحقل",
-	ColOldValue:      "القيمة القديمة",
-	ColNewValue:      "القيمة الجديدة",
-	CallerName:       "اسم المتصل",
-	CallerMobile:     "رقم المتصل",
-	CallerEmail:      "بريد المتصل",
-	AttName:          "اسم الملف",
-	AttType:          "النوع",
-	AttSize:          "الحجم",
-	AttUploadedBy:    "رُفع بواسطة",
-	AttUploadedAt:    "تاريخ الرفع",
-	AttDeleted:       "تم حذف هذا الملف",
-	AttDeletedAt:     "تاريخ الحذف",
-	PrintDate:        "تاريخ الطباعة",
-	Yes:              "نعم",
-	No:               "لا",
-	PriorityLabels:   [6]string{"", "حرجة", "عالية", "متوسطة", "منخفضة", "منخفضة جداً"},
+	Dir:               "rtl",
+	Title:             "تفاصيل البلاغ",
+	SectionIncident:   "البلاغ",
+	SectionReporter:   "مقدم البلاغ",
+	SectionLocation:   "الموقع",
+	SectionHistory:    "سجل العمليات",
+	SectionComments:   "التعليقات",
+	SectionRevisions:  "سجل التعديلات",
+	SectionCaller:     "تفاصيل المتصل",
+	SectionAttach:     "المرفقات",
+	IncidentNo:        "رقم البلاغ",
+	Date:              "تاريخ البلاغ",
+	Status:            "الحالة",
+	Channel:           "القناة",
+	Classification:    "التصنيف",
+	LocationLbl:       "الموقع",
+	Description:       "الوصف",
+	Title2:            "عنوان البلاغ",
+	Source:            "المصدر",
+	Priority:          "الأولوية",
+	SLA:               "SLA",
+	SLABreached:       "تجاوز SLA",
+	SLADeadline:       "موعد SLA",
+	DueDate:           "تاريخ الاستحقاق",
+	ResolvedAt:        "تاريخ الحل",
+	ClosedAt:          "تاريخ الإغلاق",
+	Reporter:          "المُبلِّغ",
+	ReporterEmail:     "البريد الإلكتروني",
+	ReporterMobile:    "رقم الجوال",
+	ReporterName:      "اسم المُبلِّغ",
+	Assignee:          "المسؤول",
+	Department:        "القسم",
+	Workflow:          "سير العمل",
+	Latitude:          "خط العرض",
+	Longitude:         "خط الطول",
+	Address:           "العنوان",
+	City:              "المدينة",
+	State:             "المنطقة",
+	Country:           "الدولة",
+	PostalCode:        "الرمز البريدي",
+	RecordTypeLbl:     "نوع السجل",
+	Comment:           "التعليق",
+	CommentBy:         "بواسطة",
+	Internal:          "[تعليق داخلي]",
+	ColDate:           "التاريخ",
+	ColName:           "الاسم",
+	ColAction:         "الإجراء",
+	ColComment:        "التعليقات",
+	ColFeedback:       "التغذية الراجعة",
+	ColField:          "الحقل",
+	ColOldValue:       "القيمة القديمة",
+	ColNewValue:       "القيمة الجديدة",
+	CallerName:        "اسم المتصل",
+	CallerMobile:      "رقم المتصل",
+	CallerEmail:       "بريد المتصل",
+	AttName:           "اسم الملف",
+	AttType:           "النوع",
+	AttSize:           "الحجم",
+	AttUploadedBy:     "رُفع بواسطة",
+	AttUploadedByRole: "الدور",
+	AttUploadedAt:     "تاريخ الرفع",
+	AttDeleted:        "تم حذف هذا الملف",
+	AttDeletedAt:      "تاريخ الحذف",
+	AttBeforeImage:    "قبل",
+	AttAfterImage:     "بعد",
+	PrintDate:         "تاريخ الطباعة",
+	Yes:               "نعم",
+	No:                "لا",
+	PriorityLabels:    [6]string{"", "حرجة", "عالية", "متوسطة", "منخفضة", "منخفضة جداً"},
 }
 
 var labelsEN = reportLabels{
-	Dir:              "ltr",
-	Title:            "Incident Report",
-	SectionIncident:  "Incident Details",
-	SectionReporter:  "Reporter",
-	SectionLocation:  "Location",
-	SectionHistory:   "Transition History",
-	SectionComments:  "Comments",
-	SectionRevisions: "Revision History",
-	SectionCaller:    "Caller Details",
-	SectionAttach:    "Attachments",
-	IncidentNo:       "Incident No.",
-	Date:             "Created Date",
-	Status:           "Status",
-	Channel:          "Channel",
-	Classification:   "Classification",
-	LocationLbl:      "Location",
-	Description:      "Description",
-	Title2:           "Title",
-	Source:           "Source",
-	Priority:         "Priority",
-	SLA:              "SLA",
-	SLABreached:      "SLA Breached",
-	SLADeadline:      "SLA Deadline",
-	DueDate:          "Due Date",
-	ResolvedAt:       "Resolved At",
-	ClosedAt:         "Closed At",
-	Reporter:         "Reporter",
-	ReporterEmail:    "Reporter Email",
-	ReporterMobile:   "Reporter Mobile",
-	ReporterName:     "Reporter Name",
-	Assignee:         "Assigned To",
-	Department:       "Department",
-	Workflow:         "Workflow",
-	Latitude:         "Latitude",
-	Longitude:        "Longitude",
-	Address:          "Address",
-	City:             "City",
-	State:            "State",
-	Country:          "Country",
-	PostalCode:       "Postal Code",
-	RecordTypeLbl:    "Record Type",
-	Comment:          "Comment",
-	CommentBy:        "By",
-	Internal:         "[Internal Comment]",
-	ColDate:          "Date",
-	ColName:          "Name",
-	ColAction:        "Action",
-	ColComment:       "Comment",
-	ColFeedback:      "Feedback",
-	ColField:         "Field",
-	ColOldValue:      "Old Value",
-	ColNewValue:      "New Value",
-	CallerName:       "Caller Name",
-	CallerMobile:     "Caller Mobile",
-	CallerEmail:      "Caller Email",
-	AttName:          "File Name",
-	AttType:          "Type",
-	AttSize:          "Size",
-	AttUploadedBy:    "Uploaded By",
-	AttUploadedAt:    "Uploaded At",
-	AttDeleted:       "This file has been deleted",
-	AttDeletedAt:     "Deleted At",
-	PrintDate:        "Print Date",
-	Yes:              "Yes",
-	No:               "No",
-	PriorityLabels:   [6]string{"", "Critical", "High", "Medium", "Low", "Very Low"},
+	Dir:               "ltr",
+	Title:             "Incident Report",
+	SectionIncident:   "Incident Details",
+	SectionReporter:   "Reporter",
+	SectionLocation:   "Location",
+	SectionHistory:    "Transition History",
+	SectionComments:   "Comments",
+	SectionRevisions:  "Revision History",
+	SectionCaller:     "Caller Details",
+	SectionAttach:     "Attachments",
+	IncidentNo:        "Incident No.",
+	Date:              "Created Date",
+	Status:            "Status",
+	Channel:           "Channel",
+	Classification:    "Classification",
+	LocationLbl:       "Location",
+	Description:       "Description",
+	Title2:            "Title",
+	Source:            "Source",
+	Priority:          "Priority",
+	SLA:               "SLA",
+	SLABreached:       "SLA Breached",
+	SLADeadline:       "SLA Deadline",
+	DueDate:           "Due Date",
+	ResolvedAt:        "Resolved At",
+	ClosedAt:          "Closed At",
+	Reporter:          "Reporter",
+	ReporterEmail:     "Reporter Email",
+	ReporterMobile:    "Reporter Mobile",
+	ReporterName:      "Reporter Name",
+	Assignee:          "Assigned To",
+	Department:        "Department",
+	Workflow:          "Workflow",
+	Latitude:          "Latitude",
+	Longitude:         "Longitude",
+	Address:           "Address",
+	City:              "City",
+	State:             "State",
+	Country:           "Country",
+	PostalCode:        "Postal Code",
+	RecordTypeLbl:     "Record Type",
+	Comment:           "Comment",
+	CommentBy:         "By",
+	Internal:          "[Internal Comment]",
+	ColDate:           "Date",
+	ColName:           "Name",
+	ColAction:         "Action",
+	ColComment:        "Comment",
+	ColFeedback:       "Feedback",
+	ColField:          "Field",
+	ColOldValue:       "Old Value",
+	ColNewValue:       "New Value",
+	CallerName:        "Caller Name",
+	CallerMobile:      "Caller Mobile",
+	CallerEmail:       "Caller Email",
+	AttName:           "File Name",
+	AttType:           "Type",
+	AttSize:           "Size",
+	AttUploadedBy:     "Uploaded By",
+	AttUploadedByRole: "Role",
+	AttUploadedAt:     "Uploaded At",
+	AttDeleted:        "This file has been deleted",
+	AttDeletedAt:      "Deleted At",
+	AttBeforeImage:    "Before Image",
+	AttAfterImage:     "After Image",
+	PrintDate:         "Print Date",
+	Yes:               "Yes",
+	No:                "No",
+	PriorityLabels:    [6]string{"", "Critical", "High", "Medium", "Low", "Very Low"},
 }
 
 // ── handler ───────────────────────────────────────────────────────────────────
@@ -494,6 +503,7 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 .att-img{display:block;max-width:100%%;max-height:280px;object-fit:contain;margin:0 auto;padding:6px}
 .att-meta{display:flex;flex-wrap:wrap;gap:12px;padding:5px 8px;font-size:8.5pt;background:#f0f8fc;border-top:1px solid #c8dce4}
 .att-card:nth-child(even){background:#f7fbfd}
+.att-group-header{background:#6491a5;color:#fff;padding:5px 8px;font-size:10pt;font-weight:bold;margin:10px 0 4px 0}
 .att-deleted{padding:10px 12px;color:#c0392b;background:#fdf3f2;border:1px dashed #c0392b;margin:8px;border-radius:4px;font-size:9pt;text-align:center;font-weight:bold}
 .badge-breached{color:#fff;background:#c0392b;padding:1px 5px;border-radius:3px;font-size:8pt}
 .badge-ok{color:#fff;background:#27ae60;padding:1px 5px;border-radius:3px;font-size:8pt}
@@ -816,67 +826,104 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 	}
 
 	// ── Section: Attachments ──────────────────────────────────────────────────
+	// renderAttCard renders one attachment's card body (name/image/meta); prefixHTML,
+	// when non-empty, is written before the file name (used for the per-card
+	// transition context line on the default, non-grouped layout).
+	renderAttCard := func(att models.IncidentReportAttachment, prefixHTML string) {
+		b.WriteString(`<div class="att-card">`)
+		if prefixHTML != "" {
+			b.WriteString(prefixHTML)
+		}
+		fmt.Fprintf(&b, `<div class="att-name">%s</div>`, html.EscapeString(att.FileName))
+
+		if att.DeletedAt != nil {
+			fmt.Fprintf(&b, `<div class="att-deleted">&#x1F5D1; %s</div>`, html.EscapeString(l.AttDeleted))
+		} else if strings.HasPrefix(att.MimeType, "image/") && att.FilePath != "" {
+			if fr, ferr := h.storage.GetFile(c.UserContext(), att.FilePath); ferr == nil {
+				if imgData, rerr := io.ReadAll(fr); rerr == nil && len(imgData) > 0 {
+					encoded := base64.StdEncoding.EncodeToString(imgData)
+					fmt.Fprintf(&b, `<img class="att-img" src="data:%s;base64,%s" alt="%s">`,
+						att.MimeType, encoded, html.EscapeString(att.FileName))
+				}
+				fr.Close()
+			}
+		}
+
+		uploadedBy := strings.TrimSpace(att.UploadedByFirstName + " " + att.UploadedByLastName)
+		sizeStr := fmt.Sprintf("%.1f KB", float64(att.FileSize)/1024)
+		if att.FileSize < 1024 {
+			sizeStr = fmt.Sprintf("%d bytes", att.FileSize)
+		}
+		fmt.Fprintf(&b,
+			`<div class="att-meta"><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span>`,
+			html.EscapeString(l.AttType), html.EscapeString(att.MimeType),
+			html.EscapeString(l.AttSize), sizeStr,
+			html.EscapeString(l.AttUploadedBy), html.EscapeString(uploadedBy),
+			html.EscapeString(l.AttUploadedByRole), html.EscapeString(att.UploadedByRole),
+			html.EscapeString(l.AttUploadedAt), html.EscapeString(ts(att.CreatedAt)),
+		)
+		if att.DeletedAt != nil {
+			fmt.Fprintf(&b, `<span style="color:#c0392b">%s: <b>%s</b></span>`,
+				html.EscapeString(l.AttDeletedAt), html.EscapeString(ts(*att.DeletedAt)))
+		}
+		b.WriteString(`</div>`)
+		b.WriteString(`</div>`)
+	}
+
 	if len(reportAttachments) > 0 {
 		secHeader(&b, l.SectionAttach)
 		b.WriteString(`<div>`)
-		for _, att := range reportAttachments {
-			b.WriteString(`<div class="att-card">`)
-			// Resolve transition context; no transition → show as incident creation upload
-			var attTransitionLabel string
-			if att.TransitionHistoryID == nil {
-				attTransitionLabel = `<div class="att-transition"><span>Uploaded at: <b>Incident Creation</b></span></div>`
-			} else {
-				transName := localName(ptrStr(att.TransitionName), ptrStr(att.TransitionNameAr))
-				fromName := localName(ptrStr(att.FromStateName), ptrStr(att.FromStateNameAr))
-				toName := localName(ptrStr(att.ToStateName), ptrStr(att.ToStateNameAr))
-				if transName == "" {
-					transName = "NA"
-				}
-				if fromName == "" {
-					fromName = "NA"
-				}
-				if toName == "" {
-					toName = "NA"
-				}
-				attTransitionLabel = fmt.Sprintf(
-					`<div class="att-transition"><span>Transition: <b>%s</b></span><span>From: <b>%s</b></span><span>To: <b>%s</b></span></div>`,
-					html.EscapeString(transName), html.EscapeString(fromName), html.EscapeString(toName),
-				)
-			}
-			b.WriteString(attTransitionLabel)
-			fmt.Fprintf(&b, `<div class="att-name">%s</div>`, html.EscapeString(att.FileName))
 
-			if att.DeletedAt != nil {
-				fmt.Fprintf(&b, `<div class="att-deleted">&#x1F5D1; %s</div>`, html.EscapeString(l.AttDeleted))
-			} else if strings.HasPrefix(att.MimeType, "image/") && att.FilePath != "" {
-				if fr, ferr := h.storage.GetFile(c.UserContext(), att.FilePath); ferr == nil {
-					if imgData, rerr := io.ReadAll(fr); rerr == nil && len(imgData) > 0 {
-						encoded := base64.StdEncoding.EncodeToString(imgData)
-						fmt.Fprintf(&b, `<img class="att-img" src="data:%s;base64,%s" alt="%s">`,
-							att.MimeType, encoded, html.EscapeString(att.FileName))
+		clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+		if strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
+			// EPM940: group attachments by transition presence — no transition
+			// is the "before" evidence, any transition is the "after" evidence.
+			var beforeAtts, afterAtts []models.IncidentReportAttachment
+			for _, att := range reportAttachments {
+				if att.TransitionHistoryID == nil {
+					beforeAtts = append(beforeAtts, att)
+				} else {
+					afterAtts = append(afterAtts, att)
+				}
+			}
+			if len(beforeAtts) > 0 {
+				fmt.Fprintf(&b, `<div class="att-group-header">%s</div>`, html.EscapeString(l.AttBeforeImage))
+				for _, att := range beforeAtts {
+					renderAttCard(att, "")
+				}
+			}
+			if len(afterAtts) > 0 {
+				fmt.Fprintf(&b, `<div class="att-group-header">%s</div>`, html.EscapeString(l.AttAfterImage))
+				for _, att := range afterAtts {
+					renderAttCard(att, "")
+				}
+			}
+		} else {
+			for _, att := range reportAttachments {
+				// Resolve transition context; no transition → show as incident creation upload
+				var attTransitionLabel string
+				if att.TransitionHistoryID == nil {
+					attTransitionLabel = `<div class="att-transition"><span>Uploaded at: <b>Incident Creation</b></span></div>`
+				} else {
+					transName := localName(ptrStr(att.TransitionName), ptrStr(att.TransitionNameAr))
+					fromName := localName(ptrStr(att.FromStateName), ptrStr(att.FromStateNameAr))
+					toName := localName(ptrStr(att.ToStateName), ptrStr(att.ToStateNameAr))
+					if transName == "" {
+						transName = "NA"
 					}
-					fr.Close()
+					if fromName == "" {
+						fromName = "NA"
+					}
+					if toName == "" {
+						toName = "NA"
+					}
+					attTransitionLabel = fmt.Sprintf(
+						`<div class="att-transition"><span>Transition: <b>%s</b></span><span>From: <b>%s</b></span><span>To: <b>%s</b></span></div>`,
+						html.EscapeString(transName), html.EscapeString(fromName), html.EscapeString(toName),
+					)
 				}
+				renderAttCard(att, attTransitionLabel)
 			}
-
-			uploadedBy := strings.TrimSpace(att.UploadedByFirstName + " " + att.UploadedByLastName)
-			sizeStr := fmt.Sprintf("%.1f KB", float64(att.FileSize)/1024)
-			if att.FileSize < 1024 {
-				sizeStr = fmt.Sprintf("%d bytes", att.FileSize)
-			}
-			fmt.Fprintf(&b,
-				`<div class="att-meta"><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span>`,
-				html.EscapeString(l.AttType), html.EscapeString(att.MimeType),
-				html.EscapeString(l.AttSize), sizeStr,
-				html.EscapeString(l.AttUploadedBy), html.EscapeString(uploadedBy),
-				html.EscapeString(l.AttUploadedAt), html.EscapeString(ts(att.CreatedAt)),
-			)
-			if att.DeletedAt != nil {
-				fmt.Fprintf(&b, `<span style="color:#c0392b">%s: <b>%s</b></span>`,
-					html.EscapeString(l.AttDeletedAt), html.EscapeString(ts(*att.DeletedAt)))
-			}
-			b.WriteString(`</div>`)
-			b.WriteString(`</div>`)
 		}
 		b.WriteString(`</div>`)
 	}
