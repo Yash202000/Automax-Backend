@@ -255,10 +255,11 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 		}
 	}
 
-	// Restrict incident list by the user's assigned classifications
+	// Restrict incident list by the user's assigned classifications and locations
+	noAccessSentinel := []string{"00000000-0000-0000-0000-000000000000"}
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
-	if err == nil && user != nil && !user.IsSuperAdmin {
+	if err == nil && user != nil {
 		userClassIDs := make([]string, 0, len(user.Classifications))
 		for _, cls := range user.Classifications {
 			userClassIDs = append(userClassIDs, cls.ID.String())
@@ -276,13 +277,47 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 						intersected = append(intersected, id)
 					}
 				}
+				if len(intersected) == 0 {
+					// Requested classification(s) not among the user's own — no access, show nothing
+					intersected = noAccessSentinel
+				}
 				filter.ClassificationID = intersected
 			} else {
 				filter.ClassificationID = userClassIDs
 			}
 		} else {
 			// User has no classifications assigned — nothing should be visible
-			filter.ClassificationID = []string{"00000000-0000-0000-0000-000000000000"}
+			filter.ClassificationID = noAccessSentinel
+		}
+
+		userLocIDs := make([]string, 0, len(user.Locations))
+		for _, loc := range user.Locations {
+			userLocIDs = append(userLocIDs, loc.ID.String())
+		}
+		if len(userLocIDs) > 0 {
+			if len(filter.LocationID) > 0 {
+				// Intersect with request's location filter
+				requested := make(map[string]bool, len(filter.LocationID))
+				for _, id := range filter.LocationID {
+					requested[id] = true
+				}
+				var intersected []string
+				for _, id := range userLocIDs {
+					if requested[id] {
+						intersected = append(intersected, id)
+					}
+				}
+				if len(intersected) == 0 {
+					// Requested location(s) not among the user's own — no access, show nothing
+					intersected = noAccessSentinel
+				}
+				filter.LocationID = intersected
+			} else {
+				filter.LocationID = userLocIDs
+			}
+		} else {
+			// User has no locations assigned — nothing should be visible
+			filter.LocationID = noAccessSentinel
 		}
 	}
 
