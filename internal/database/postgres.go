@@ -160,6 +160,26 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			&models.ReviewCycle{},
 			&models.ReviewAssignment{},
 			&models.GoalScore{},
+
+		// KPI / Goal Management models
+		&models.Pillar{},
+		&models.Enabler{},
+		&models.StrategicGoal{},
+		&models.OperationalObjective{},
+		&models.Process{},
+		&models.Initiative{},
+		&models.Domain{},
+		&models.AwardCriterion{},
+		&models.AwardSubCriterion{},
+		&models.StrategicKPI{},
+		&models.OperationalKPI{},
+		&models.AwardKPI{},
+		&models.KpiAnnualTarget{},
+		&models.KpiPerformance{},
+		&models.KpiBenchmark{},
+		&models.KpiSegmentation{},
+		&models.KpiWorkflowInstance{},
+		&models.KpiWorkflowAction{},
 		); err != nil {
 			return fmt.Errorf("failed to run goal management migrations: %w", err)
 		}
@@ -186,6 +206,8 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	db.Exec("ALTER TABLE metric_transition_histories DROP CONSTRAINT IF EXISTS metric_transition_histories_performed_by_id_fkey")
 	db.Exec("ALTER TABLE metric_value_change_transition_histories DROP CONSTRAINT IF EXISTS fk_metric_value_change_transition_histories_performed_by")
 	db.Exec("ALTER TABLE metric_value_change_transition_histories DROP CONSTRAINT IF EXISTS metric_value_change_transition_histories_performed_by_id_fkey")
+	db.Exec("ALTER TABLE kpi_workflow_actions DROP CONSTRAINT IF EXISTS fk_kpi_workflow_actions_performed_by")
+	db.Exec("ALTER TABLE kpi_workflow_actions DROP CONSTRAINT IF EXISTS kpi_workflow_actions_performed_by_id_fkey")
 
 	db.Exec("ALTER TABLE lookup_categories ADD COLUMN IF NOT EXISTS redirect_url VARCHAR(500)")
 
@@ -577,6 +599,24 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			models.Permission{Name: "Assign Goals", Code: "goals:assign", Module: "goals", Action: "assign", Description: "Assign goal collaborators"},
 			models.Permission{Name: "Approve Goals", Code: "goals:approve", Module: "goals", Action: "approve", Description: "Approve/reject goal evidence"},
 			models.Permission{Name: "Goals Dashboard", Code: "dashboard:goals", Module: "dashboard", Action: "goals", Description: "Access goal cards on dashboard"},
+
+			// KPI / Goal Management permissions
+			models.Permission{Name: "Manage Goal Hierarchy", Code: "goals:manage", Module: "goals", Action: "manage", Description: "Create/update/delete goal hierarchy master data"},
+			models.Permission{Name: "View KPI Dictionary", Code: "kpi:view", Module: "kpi", Action: "view", Description: "View KPI definitions"},
+			models.Permission{Name: "Create KPI Definitions", Code: "kpi:create", Module: "kpi", Action: "create", Description: "Create new KPI definitions"},
+			models.Permission{Name: "Update KPI Definitions", Code: "kpi:update", Module: "kpi", Action: "update", Description: "Edit KPI metadata, formula, targets"},
+			models.Permission{Name: "Delete KPI Definitions", Code: "kpi:delete", Module: "kpi", Action: "delete", Description: "Soft-delete KPI records"},
+			models.Permission{Name: "View Performance Data", Code: "perf:view", Module: "perf", Action: "view", Description: "View KPI performance data"},
+			models.Permission{Name: "Submit Performance", Code: "perf:submit", Module: "perf", Action: "submit", Description: "Submit quarterly actuals for review"},
+			models.Permission{Name: "Review Performance", Code: "perf:review", Module: "perf", Action: "review", Description: "Start performance review process"},
+			models.Permission{Name: "Approve Performance", Code: "perf:approve", Module: "perf", Action: "approve", Description: "Approve reviewed performance entries"},
+			models.Permission{Name: "Reject Performance", Code: "perf:reject", Module: "perf", Action: "reject", Description: "Reject and return for revision"},
+			models.Permission{Name: "Publish Performance", Code: "perf:publish", Module: "perf", Action: "publish", Description: "Publish approved performance to dashboards"},
+			models.Permission{Name: "View Targets", Code: "targets:view", Module: "targets", Action: "view", Description: "View annual KPI targets"},
+			models.Permission{Name: "Set Targets", Code: "targets:set", Module: "targets", Action: "set", Description: "Create/update annual targets"},
+			models.Permission{Name: "Approve Targets", Code: "targets:approve", Module: "targets", Action: "approve", Description: "Approve target submissions"},
+			models.Permission{Name: "Manage Benchmarks", Code: "benchmark:manage", Module: "benchmark", Action: "manage", Description: "Create/update KPI benchmarks"},
+			models.Permission{Name: "Manage Segment Data", Code: "segment:manage", Module: "segment", Action: "manage", Description: "Create/update KPI segmentation data"},
 		)
 	}
 
@@ -683,6 +723,9 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 
 		// Seed default metric & metric_value_change approval workflows
 		seedMetricApprovalWorkflows(db)
+
+		// Seed default KPI performance approval workflow
+		seedKpiPerformanceWorkflow(db)
 	} else {
 		unseedGoalManagement(db)
 	}
@@ -762,6 +805,31 @@ func unseedGoalManagement(db *gorm.DB) {
 	permSub := "SELECT id FROM permissions WHERE module = 'goals' OR code = 'dashboard:goals'"
 	exec("role_permissions (goals)", "DELETE FROM role_permissions WHERE permission_id IN ("+permSub+")")
 	exec("permissions (goals)", "DELETE FROM permissions WHERE module = 'goals' OR code = 'dashboard:goals'")
+
+	// Step 3.5: delete KPI/goal management tables (children before parents)
+	log.Println("  WARNING: About to drop 18 KPI/goal tables — this IRREVERSIBLY deletes all KPI configuration and user-entered performance/target data!")
+	for _, table := range []string{
+		"kpi_workflow_actions",
+		"kpi_workflow_instances",
+		"kpi_segmentations",
+		"kpi_benchmarks",
+		"kpi_performances",
+		"kpi_annual_targets",
+		"award_kpis",
+		"operational_kpis",
+		"strategic_kpis",
+		"award_sub_criteria",
+		"award_criteria",
+		"domains",
+		"initiatives",
+		"processes",
+		"operational_objectives",
+		"strategic_goals",
+		"enablers",
+		"pillars",
+	} {
+		exec(table, "DROP TABLE IF EXISTS "+table+" CASCADE")
+	}
 
 	// Step 4: delete goal-specific roles and all their join-table associations
 	roleSub := "SELECT id FROM roles WHERE code IN ('goal_manager','goal_collaborator')"
@@ -1097,6 +1165,154 @@ func seedMetricApprovalWorkflows(db *gorm.DB) {
 		}
 
 		log.Printf("%s workflow seeded successfully", s.Code)
+	}
+}
+
+func seedKpiPerformanceWorkflow(db *gorm.DB) {
+	var wf models.Workflow
+	exists := db.Where("code = ?", "kpi_performance_approval").First(&wf).Error == nil
+
+	if !exists {
+		log.Println("Seeding default KPI performance approval workflow...")
+
+		wf = models.Workflow{
+			Name:        "KPI Performance Approval",
+			Code:        "kpi_performance_approval",
+			Description: "Default approval workflow for KPI performance entries. Supports submit, review, approve, reject, and publish.",
+			RecordType:  "kpi_performance",
+			IsActive:    true,
+			IsDefault:   true,
+		}
+		if err := db.Create(&wf).Error; err != nil {
+			log.Printf("Failed to create KPI performance workflow: %v", err)
+			return
+		}
+
+		type stateSpec struct {
+			Name      string
+			Code      string
+			StateType string
+			Color     string
+			SortOrder int
+			PosX      int
+			PosY      int
+		}
+
+		stateSpecs := []stateSpec{
+			{"Draft", "draft", "initial", "#94a3b8", 1, 100, 200},
+			{"Submitted", "submitted", "normal", "#3b82f6", 2, 300, 200},
+			{"Under Review", "under_review", "normal", "#f59e0b", 3, 500, 200},
+			{"Approved", "approved", "terminal", "#22c55e", 4, 700, 200},
+			{"Rejected", "rejected", "terminal", "#ef4444", 5, 700, 400},
+			{"Published", "published", "terminal", "#8b5cf6", 6, 300, 400},
+		}
+
+		for _, sp := range stateSpecs {
+			state := models.WorkflowState{
+				WorkflowID: wf.ID,
+				Name:       sp.Name,
+				Code:       sp.Code,
+				StateType:  sp.StateType,
+				Color:      sp.Color,
+				SortOrder:  sp.SortOrder,
+				PositionX:  sp.PosX,
+				PositionY:  sp.PosY,
+				IsActive:   true,
+			}
+			if err := db.Create(&state).Error; err != nil {
+				log.Printf("Failed to create state %s: %v", sp.Code, err)
+				return
+			}
+		}
+	}
+
+	// Ensure transitions exist (even if the workflow was already seeded)
+	requiredTransCode := map[string]bool{"submit": true, "review": true, "approve": true, "reject": true, "publish": true, "resubmit": true}
+	var missing []string
+	for code := range requiredTransCode {
+		var count int64
+		db.Model(&models.WorkflowTransition{}).Where("workflow_id = ? AND code = ?", wf.ID, code).Count(&count)
+		if count == 0 {
+			missing = append(missing, code)
+		}
+	}
+
+	if len(missing) > 0 {
+		log.Printf("Adding missing transitions to KPI performance workflow: %v", missing)
+
+		stateMap := make(map[string]models.WorkflowState)
+		var states []models.WorkflowState
+		db.Where("workflow_id = ?", wf.ID).Find(&states)
+		for _, s := range states {
+			stateMap[s.Code] = s
+		}
+
+		type transSpec struct {
+			Name        string
+			Code        string
+			From        string
+			To          string
+			IsRejection bool
+			CommentReq  bool
+			SortOrder   int
+		}
+
+		allTransSpecs := []transSpec{
+			{"Submit for Review", "submit", "draft", "submitted", false, false, 1},
+			{"Start Review", "review", "submitted", "under_review", false, false, 2},
+			{"Approve", "approve", "under_review", "approved", false, false, 3},
+			{"Reject", "reject", "under_review", "rejected", true, true, 4},
+			{"Publish", "publish", "approved", "published", false, false, 5},
+			{"Resubmit", "resubmit", "rejected", "submitted", false, false, 6},
+		}
+
+		boolTrue := true
+		for _, sp := range allTransSpecs {
+			fromState, fromOk := stateMap[sp.From]
+			toState, toOk := stateMap[sp.To]
+			if !fromOk || !toOk {
+				log.Printf("Skipping transition %s: missing state %s or %s", sp.Code, sp.From, sp.To)
+				continue
+			}
+
+			var count int64
+			db.Model(&models.WorkflowTransition{}).Where("workflow_id = ? AND code = ?", wf.ID, sp.Code).Count(&count)
+			if count > 0 {
+				continue
+			}
+
+			transition := models.WorkflowTransition{
+				WorkflowID:  wf.ID,
+				Name:        sp.Name,
+				Code:        sp.Code,
+				FromStateID: fromState.ID,
+				ToStateID:   toState.ID,
+				IsRejection: sp.IsRejection,
+				IsActive:    true,
+				SortOrder:   sp.SortOrder,
+			}
+
+			if err := db.Create(&transition).Error; err != nil {
+				log.Printf("Failed to create transition %s: %v", sp.Code, err)
+				continue
+			}
+
+			if sp.CommentReq {
+				requirement := models.TransitionRequirement{
+					TransitionID:    transition.ID,
+					RequirementType: "comment",
+					IsMandatory:     &boolTrue,
+					ErrorMessage:    "Comment is required for rejection",
+				}
+				if err := db.Create(&requirement).Error; err != nil {
+					log.Printf("Failed to create requirement for %s: %v", sp.Code, err)
+				}
+			}
+		}
+	}
+
+	if !exists && len(missing) == 0 {
+		log.Println("KPI performance approval workflow seeded successfully")
 	}
 }
 

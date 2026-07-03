@@ -266,6 +266,21 @@ func main() {
 	goalTemplateService := services.NewGoalTemplateService(goalTemplateRepo)
 	goalTemplateHandler := handlers.NewGoalTemplateHandler(goalTemplateService)
 
+	// KPI Master Data handler
+	kpiMasterDataHandler := handlers.NewKpiMasterDataHandler(db)
+
+	// KPI Dictionary handler
+	kpiDictionaryHandler := handlers.NewKpiDictionaryHandler(db)
+
+	// KPI Workflow service
+	kpiWorkflowService := services.NewKpiWorkflowService(db, workflowRepo)
+
+	// KPI Performance handler
+	kpiPerformanceHandler := handlers.NewKpiPerformanceHandler(db, kpiWorkflowService, actionLogService)
+
+	// KPI Dashboard handler
+	kpiDashboardHandler := handlers.NewKpiDashboardHandler(db)
+
 	// Integration handler
 	integrationHandler := handlers.NewIntegrationHandler(integrationService, integrationExecutor, integrationRepo, incidentRepo)
 	webhookHandler := handlers.NewWebhookHandler(integrationService, incidentService)
@@ -1086,6 +1101,105 @@ func main() {
 		docs.Get("/versions/:vid/download", authMiddleware.RequirePermission("goals:view"), documentHandler.DownloadVersion)
 		docs.Post("/files/:id/versions/rollback", authMiddleware.RequirePermission("goals:update"), documentHandler.RollbackVersion)
 	} // end cfg.GoalManagement.Enabled
+
+	// ---- KPI MASTER DATA ROUTES ----
+	kpi := v1.Group("/kpi", authMiddleware.Authenticate())
+
+	// Dashboard
+	kpi.Get("/dashboard", authMiddleware.RequirePermission("kpi:view"), kpiDashboardHandler.GetDashboard)
+
+	kpi.Get("/pillars", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListPillars)
+	kpi.Post("/pillars", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreatePillar)
+	kpi.Put("/pillars/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdatePillar)
+	kpi.Delete("/pillars/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeletePillar)
+
+	kpi.Get("/enablers", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListEnablers)
+	kpi.Post("/enablers", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateEnabler)
+	kpi.Put("/enablers/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateEnabler)
+	kpi.Delete("/enablers/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteEnabler)
+
+	kpi.Get("/strategic-goals", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListGoals)
+	kpi.Post("/strategic-goals", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateGoal)
+	kpi.Put("/strategic-goals/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateGoal)
+	kpi.Delete("/strategic-goals/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteGoal)
+
+	kpi.Get("/operational-objectives", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListOperationalObjectives)
+	kpi.Post("/operational-objectives", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateOperationalObjective)
+	kpi.Put("/operational-objectives/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateOperationalObjective)
+	kpi.Delete("/operational-objectives/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteOperationalObjective)
+
+	kpi.Get("/processes", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListProcesses)
+	kpi.Post("/processes", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateProcess)
+	kpi.Put("/processes/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateProcess)
+	kpi.Delete("/processes/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteProcess)
+
+	kpi.Get("/initiatives", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListInitiatives)
+	kpi.Post("/initiatives", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateInitiative)
+	kpi.Put("/initiatives/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateInitiative)
+	kpi.Delete("/initiatives/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteInitiative)
+
+	kpi.Get("/domains", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListDomains)
+	kpi.Post("/domains", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateDomain)
+	kpi.Put("/domains/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateDomain)
+	kpi.Delete("/domains/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteDomain)
+
+	kpi.Get("/award-criteria", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListAwardCriteria)
+	kpi.Post("/award-criteria", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateAwardCriterion)
+	kpi.Put("/award-criteria/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateAwardCriterion)
+	kpi.Delete("/award-criteria/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteAwardCriterion)
+
+	kpi.Get("/award-criteria/:criterionId/sub-criteria", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListAwardSubCriteria)
+	kpi.Post("/award-criteria/:criterionId/sub-criteria", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateAwardSubCriterion)
+	kpi.Get("/award-sub-criteria", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListAwardSubCriteria)
+	kpi.Put("/award-sub-criteria/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateAwardSubCriterion)
+	kpi.Delete("/award-sub-criteria/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteAwardSubCriterion)
+
+	// ---- KPI DICTIONARY ROUTES ----
+	kpi.Get("/strategic", authMiddleware.RequirePermission("kpi:view"), kpiDictionaryHandler.ListStrategic)
+	kpi.Get("/strategic/:id", authMiddleware.RequirePermission("kpi:view"), kpiDictionaryHandler.GetStrategic)
+	kpi.Post("/strategic", authMiddleware.RequirePermission("kpi:create"), kpiDictionaryHandler.CreateStrategic)
+	kpi.Put("/strategic/:id", authMiddleware.RequirePermission("kpi:update"), kpiDictionaryHandler.UpdateStrategic)
+	kpi.Delete("/strategic/:id", authMiddleware.RequirePermission("kpi:delete"), kpiDictionaryHandler.DeleteStrategic)
+
+	kpi.Get("/operational", authMiddleware.RequirePermission("kpi:view"), kpiDictionaryHandler.ListOperational)
+	kpi.Get("/operational/:id", authMiddleware.RequirePermission("kpi:view"), kpiDictionaryHandler.GetOperational)
+	kpi.Post("/operational", authMiddleware.RequirePermission("kpi:create"), kpiDictionaryHandler.CreateOperational)
+	kpi.Put("/operational/:id", authMiddleware.RequirePermission("kpi:update"), kpiDictionaryHandler.UpdateOperational)
+	kpi.Delete("/operational/:id", authMiddleware.RequirePermission("kpi:delete"), kpiDictionaryHandler.DeleteOperational)
+
+	kpi.Get("/award", authMiddleware.RequirePermission("kpi:view"), kpiDictionaryHandler.ListAward)
+	kpi.Get("/award/:id", authMiddleware.RequirePermission("kpi:view"), kpiDictionaryHandler.GetAward)
+	kpi.Post("/award", authMiddleware.RequirePermission("kpi:create"), kpiDictionaryHandler.CreateAward)
+	kpi.Put("/award/:id", authMiddleware.RequirePermission("kpi:update"), kpiDictionaryHandler.UpdateAward)
+	kpi.Delete("/award/:id", authMiddleware.RequirePermission("kpi:delete"), kpiDictionaryHandler.DeleteAward)
+
+	// ---- KPI PERFORMANCE ROUTES (must be before /:type/:id/transition to avoid route conflict) ----
+	kpi.Get("/targets", authMiddleware.RequirePermission("targets:view"), kpiPerformanceHandler.ListTargets)
+	kpi.Post("/targets", authMiddleware.RequirePermission("targets:set"), kpiPerformanceHandler.SetTarget)
+	kpi.Delete("/targets/:id", authMiddleware.RequirePermission("targets:set"), kpiPerformanceHandler.DeleteTarget)
+
+	kpi.Get("/performance", authMiddleware.RequirePermission("perf:view"), kpiPerformanceHandler.ListPerformance)
+	kpi.Get("/performance/:id", authMiddleware.RequirePermission("perf:view"), kpiPerformanceHandler.GetPerformance)
+	kpi.Post("/performance", authMiddleware.RequirePermission("perf:submit"), kpiPerformanceHandler.SubmitPerformance)
+	kpi.Post("/performance/:id/transition", authMiddleware.RequirePermission("perf:review"), kpiPerformanceHandler.TransitionPerformance)
+	kpi.Get("/performance/:id/transitions", authMiddleware.RequirePermission("perf:view"), kpiPerformanceHandler.GetAvailableTransitions)
+	kpi.Get("/performance/:id/history", authMiddleware.RequirePermission("perf:view"), kpiPerformanceHandler.GetPerformanceHistory)
+
+	kpi.Post("/:type/:id/transition", authMiddleware.RequirePermission("kpi:update"), kpiDictionaryHandler.TransitionKpiStatus)
+
+	kpi.Get("/benchmarks", authMiddleware.RequirePermission("benchmark:manage"), kpiPerformanceHandler.ListBenchmarks)
+	kpi.Post("/benchmarks", authMiddleware.RequirePermission("benchmark:manage"), kpiPerformanceHandler.CreateBenchmark)
+	kpi.Delete("/benchmarks/:id", authMiddleware.RequirePermission("benchmark:manage"), kpiPerformanceHandler.DeleteBenchmark)
+	kpi.Get("/benchmarks/summary", authMiddleware.RequirePermission("benchmark:manage"), kpiPerformanceHandler.ListBenchmarkSummary)
+
+	kpi.Get("/segmentation", authMiddleware.RequirePermission("segment:manage"), kpiPerformanceHandler.ListSegmentation)
+	kpi.Post("/segmentation", authMiddleware.RequirePermission("segment:manage"), kpiPerformanceHandler.CreateSegmentation)
+	kpi.Delete("/segmentation/:id", authMiddleware.RequirePermission("segment:manage"), kpiPerformanceHandler.DeleteSegmentation)
+	kpi.Get("/segmentation/summary", authMiddleware.RequirePermission("segment:manage"), kpiPerformanceHandler.ListSegmentationSummary)
+
+	// ---- KPI DASHBOARD TRENDS & CARDS ----
+	kpi.Get("/dashboard/trends", authMiddleware.RequirePermission("kpi:view"), kpiDashboardHandler.GetDashboardTrends)
+	kpi.Get("/dashboard/cards", authMiddleware.RequirePermission("kpi:view"), kpiDashboardHandler.GetKpiCardDefinitions)
 
 	// ---- GIS ROUTES ----
 	gis := v1.Group("/gis", authMiddleware.Authenticate())
