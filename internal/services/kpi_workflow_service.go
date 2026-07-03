@@ -8,6 +8,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -127,6 +128,12 @@ func (s *KpiWorkflowService) TransitionKpiPerformance(ctx context.Context, perfo
 		return nil, fmt.Errorf("%s", i18n.T(ctx, "transition_invalid_from_state"))
 	}
 
+	// Service-level permission check — not just route-level
+	if !s.userHasPermission(ctx, transitionPermissionCode(transition.Code)) {
+		tx.Rollback()
+		return nil, fmt.Errorf("insufficient permissions for transition '%s'", transition.Code)
+	}
+
 	fromStateID := wfInstance.CurrentStateID
 
 	requirements, _ := s.workflowRepo.GetTransitionRequirements(ctx, transitionID)
@@ -194,6 +201,32 @@ func (s *KpiWorkflowService) TransitionKpiPerformance(ctx context.Context, perfo
 	s.db.WithContext(ctx).Preload("SubmittedBy").Preload("ApprovedBy").First(&reloaded, performanceID)
 	resp := reloaded.ToResponse()
 	return &resp, nil
+}
+
+// transitionPermissionCode maps a workflow transition code to a granular permission
+func transitionPermissionCode(code string) string {
+	switch code {
+	case "submit":
+		return "perf:submit"
+	case "review":
+		return "perf:review"
+	case "approve", "approve_l1", "approve_l2", "approve_l1_final":
+		return "perf:approve"
+	case "reject":
+		return "perf:reject"
+	case "publish":
+		return "perf:publish"
+	default:
+		return "perf:review"
+	}
+}
+
+func (s *KpiWorkflowService) userHasPermission(ctx context.Context, code string) bool {
+	user, ok := ctx.Value(constants.ContextKeys.User).(*models.User)
+	if !ok || user == nil {
+		return false
+	}
+	return user.HasPermission(code)
 }
 
 func (s *KpiWorkflowService) ensureWorkflowInstance(ctx context.Context, perf *models.KpiPerformance, userID uuid.UUID) error {

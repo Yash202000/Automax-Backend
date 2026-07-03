@@ -531,6 +531,9 @@ func (h *KpiDictionaryHandler) TransitionKpiStatus(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
 
 	var newStatus string
 	switch req.Action {

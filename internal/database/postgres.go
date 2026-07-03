@@ -807,6 +807,7 @@ func unseedGoalManagement(db *gorm.DB) {
 	exec("permissions (goals)", "DELETE FROM permissions WHERE module = 'goals' OR code = 'dashboard:goals'")
 
 	// Step 3.5: delete KPI/goal management tables (children before parents)
+	log.Println("  WARNING: About to drop 18 KPI/goal tables — this IRREVERSIBLY deletes all KPI configuration and user-entered performance/target data!")
 	for _, table := range []string{
 		"kpi_workflow_actions",
 		"kpi_workflow_instances",

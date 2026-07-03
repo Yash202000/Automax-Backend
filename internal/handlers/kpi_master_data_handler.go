@@ -503,7 +503,11 @@ func (h *KpiMasterDataHandler) UpdateDomain(c *fiber.Ctx) error {
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
-	return utils.SuccessResponse(c, fiber.StatusOK, "", models.DomainResponse{ID: id, NameEn: req.NameEn, NameAr: req.NameAr, Type: req.Type})
+	var domain models.Domain
+	if err := h.db.WithContext(c.UserContext()).First(&domain, id).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", domain.ToResponse())
 }
 
 func (h *KpiMasterDataHandler) DeleteDomain(c *fiber.Ctx) error {

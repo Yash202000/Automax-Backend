@@ -239,6 +239,9 @@ func (h *KpiDashboardHandler) GetKpiCardDefinitions(c *fiber.Ctx) error {
 		}
 	}
 
-	allCards := append(append(strategicCards, operationalCards...), awardCards...)
+	allCards := make([]KpiCardDef, 0, len(strategicCards)+len(operationalCards)+len(awardCards))
+	allCards = append(allCards, strategicCards...)
+	allCards = append(allCards, operationalCards...)
+	allCards = append(allCards, awardCards...)
 	return utils.SuccessResponse(c, fiber.StatusOK, "", allCards)
 }
