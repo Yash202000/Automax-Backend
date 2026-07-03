@@ -111,8 +111,8 @@ type KpiPerformanceRequest struct {
 }
 
 type KpiPerformanceTransitionRequest struct {
-	Action  string `json:"action" validate:"required,oneof=submit review approve reject publish"`
-	Comment string `json:"comment"`
+	TransitionID string `json:"transition_id" validate:"required,uuid"`
+	Comment      string `json:"comment"`
 }
 
 type KpiPerformanceResponse struct {
@@ -168,9 +168,14 @@ type KpiBenchmark struct {
 	KpiCode              string         `gorm:"size:50;not null;index" json:"kpi_code"`
 	KpiType              string         `gorm:"size:20;not null" json:"kpi_type"`
 	Year                 int            `gorm:"not null" json:"year"`
+	Quarter              int            `gorm:"default:0" json:"quarter"`
+	Zone                 string         `gorm:"size:100;default:''" json:"zone"`
+	DepartmentID         *uuid.UUID     `gorm:"type:uuid;index" json:"department_id"`
+	Department           *Department    `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
 	BenchmarkEntity      string         `gorm:"size:255;not null" json:"benchmark_entity"`
 	InternalAchievement  float64        `gorm:"default:0" json:"internal_achievement"`
 	BenchmarkAchievement float64        `gorm:"default:0" json:"benchmark_achievement"`
+	Variance             float64        `gorm:"-" json:"variance"`
 	Notes                string         `gorm:"type:text" json:"notes"`
 	CreatedAt            time.Time      `json:"created_at"`
 	UpdatedAt            time.Time      `json:"updated_at"`
@@ -188,6 +193,9 @@ type KpiBenchmarkRequest struct {
 	KpiCode              string  `json:"kpi_code" validate:"required,max=50"`
 	KpiType              string  `json:"kpi_type" validate:"required,oneof=strategic operational award"`
 	Year                 int     `json:"year" validate:"required,min=2020,max=2040"`
+	Quarter              int     `json:"quarter"`
+	Zone                 string  `json:"zone"`
+	DepartmentID         *string `json:"department_id"`
 	BenchmarkEntity      string  `json:"benchmark_entity" validate:"required,max=255"`
 	InternalAchievement  float64 `json:"internal_achievement"`
 	BenchmarkAchievement float64 `json:"benchmark_achievement"`
@@ -195,15 +203,40 @@ type KpiBenchmarkRequest struct {
 }
 
 type KpiBenchmarkResponse struct {
-	ID                   uuid.UUID `json:"id"`
-	KpiCode              string    `json:"kpi_code"`
-	KpiType              string    `json:"kpi_type"`
-	Year                 int       `json:"year"`
-	BenchmarkEntity      string    `json:"benchmark_entity"`
-	InternalAchievement  float64   `json:"internal_achievement"`
-	BenchmarkAchievement float64   `json:"benchmark_achievement"`
-	Notes                string    `json:"notes"`
-	CreatedAt            time.Time `json:"created_at"`
+	ID                   uuid.UUID          `json:"id"`
+	KpiCode              string             `json:"kpi_code"`
+	KpiType              string             `json:"kpi_type"`
+	Year                 int                `json:"year"`
+	Quarter              int                `json:"quarter"`
+	Zone                 string             `json:"zone"`
+	DepartmentID         *uuid.UUID         `json:"department_id"`
+	Department           *DepartmentBriefResponse `json:"department,omitempty"`
+	BenchmarkEntity      string                   `json:"benchmark_entity"`
+	InternalAchievement  float64            `json:"internal_achievement"`
+	BenchmarkAchievement float64            `json:"benchmark_achievement"`
+	Variance             float64            `json:"variance"`
+	Notes                string             `json:"notes"`
+	CreatedAt            time.Time          `json:"created_at"`
+}
+
+func (b *KpiBenchmark) ToBenchmarkResponse() KpiBenchmarkResponse {
+	v := b.InternalAchievement - b.BenchmarkAchievement
+	return KpiBenchmarkResponse{
+		ID:                   b.ID,
+		KpiCode:              b.KpiCode,
+		KpiType:              b.KpiType,
+		Year:                 b.Year,
+		Quarter:              b.Quarter,
+		Zone:                 b.Zone,
+		DepartmentID:         b.DepartmentID,
+		Department:           ToDepartmentBriefResponse(b.Department),
+		BenchmarkEntity:      b.BenchmarkEntity,
+		InternalAchievement:  b.InternalAchievement,
+		BenchmarkAchievement: b.BenchmarkAchievement,
+		Variance:             v,
+		Notes:                b.Notes,
+		CreatedAt:            b.CreatedAt,
+	}
 }
 
 // ──────────────────────────────────────────────────────────
@@ -218,7 +251,12 @@ type KpiSegmentation struct {
 	Quarter       int            `gorm:"not null" json:"quarter"`
 	DimensionName string         `gorm:"size:100;not null" json:"dimension_name"`
 	SegmentName   string         `gorm:"size:255;not null" json:"segment_name"`
+	Target        float64        `gorm:"default:0" json:"target"`
 	Achievement   float64        `gorm:"default:0" json:"achievement"`
+	AchievementPct float64       `gorm:"-" json:"achievement_pct"`
+	DepartmentID  *uuid.UUID     `gorm:"type:uuid;index" json:"department_id"`
+	Department    *Department    `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
+	Zone          string         `gorm:"size:100;default:''" json:"zone"`
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
 	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
@@ -238,17 +276,48 @@ type KpiSegmentationRequest struct {
 	Quarter       int     `json:"quarter" validate:"required,min=1,max=4"`
 	DimensionName string  `json:"dimension_name" validate:"required,max=100"`
 	SegmentName   string  `json:"segment_name" validate:"required,max=255"`
+	Target        float64 `json:"target"`
 	Achievement   float64 `json:"achievement"`
+	DepartmentID  *string `json:"department_id"`
+	Zone          string  `json:"zone"`
 }
 
 type KpiSegmentationResponse struct {
-	ID            uuid.UUID `json:"id"`
-	KpiCode       string    `json:"kpi_code"`
-	KpiType       string    `json:"kpi_type"`
-	Year          int       `json:"year"`
-	Quarter       int       `json:"quarter"`
-	DimensionName string    `json:"dimension_name"`
-	SegmentName   string    `json:"segment_name"`
-	Achievement   float64   `json:"achievement"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID             uuid.UUID        `json:"id"`
+	KpiCode        string           `json:"kpi_code"`
+	KpiType        string           `json:"kpi_type"`
+	Year           int              `json:"year"`
+	Quarter        int              `json:"quarter"`
+	DimensionName  string           `json:"dimension_name"`
+	SegmentName    string           `json:"segment_name"`
+	Target         float64          `json:"target"`
+	Achievement    float64          `json:"achievement"`
+	AchievementPct float64          `json:"achievement_pct"`
+	DepartmentID   *uuid.UUID              `json:"department_id"`
+	Department     *DepartmentBriefResponse `json:"department,omitempty"`
+	Zone           string                   `json:"zone"`
+	CreatedAt      time.Time                `json:"created_at"`
+}
+
+func (s *KpiSegmentation) ToSegmentationResponse() KpiSegmentationResponse {
+	pct := float64(0)
+	if s.Target != 0 {
+		pct = (s.Achievement / s.Target) * 100
+	}
+	return KpiSegmentationResponse{
+		ID:             s.ID,
+		KpiCode:        s.KpiCode,
+		KpiType:        s.KpiType,
+		Year:           s.Year,
+		Quarter:        s.Quarter,
+		DimensionName:  s.DimensionName,
+		SegmentName:    s.SegmentName,
+		Target:         s.Target,
+		Achievement:    s.Achievement,
+		AchievementPct: pct,
+		DepartmentID:   s.DepartmentID,
+		Department:     ToDepartmentBriefResponse(s.Department),
+		Zone:           s.Zone,
+		CreatedAt:      s.CreatedAt,
+	}
 }

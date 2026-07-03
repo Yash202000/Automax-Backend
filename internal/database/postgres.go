@@ -723,6 +723,9 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 
 		// Seed default metric & metric_value_change approval workflows
 		seedMetricApprovalWorkflows(db)
+
+		// Seed default KPI performance approval workflow
+		seedKpiPerformanceWorkflow(db)
 	} else {
 		unseedGoalManagement(db)
 	}
@@ -1161,6 +1164,154 @@ func seedMetricApprovalWorkflows(db *gorm.DB) {
 		}
 
 		log.Printf("%s workflow seeded successfully", s.Code)
+	}
+}
+
+func seedKpiPerformanceWorkflow(db *gorm.DB) {
+	var wf models.Workflow
+	exists := db.Where("code = ?", "kpi_performance_approval").First(&wf).Error == nil
+
+	if !exists {
+		log.Println("Seeding default KPI performance approval workflow...")
+
+		wf = models.Workflow{
+			Name:        "KPI Performance Approval",
+			Code:        "kpi_performance_approval",
+			Description: "Default approval workflow for KPI performance entries. Supports submit, review, approve, reject, and publish.",
+			RecordType:  "kpi_performance",
+			IsActive:    true,
+			IsDefault:   true,
+		}
+		if err := db.Create(&wf).Error; err != nil {
+			log.Printf("Failed to create KPI performance workflow: %v", err)
+			return
+		}
+
+		type stateSpec struct {
+			Name      string
+			Code      string
+			StateType string
+			Color     string
+			SortOrder int
+			PosX      int
+			PosY      int
+		}
+
+		stateSpecs := []stateSpec{
+			{"Draft", "draft", "initial", "#94a3b8", 1, 100, 200},
+			{"Submitted", "submitted", "normal", "#3b82f6", 2, 300, 200},
+			{"Under Review", "under_review", "normal", "#f59e0b", 3, 500, 200},
+			{"Approved", "approved", "terminal", "#22c55e", 4, 700, 200},
+			{"Rejected", "rejected", "terminal", "#ef4444", 5, 700, 400},
+			{"Published", "published", "terminal", "#8b5cf6", 6, 300, 400},
+		}
+
+		for _, sp := range stateSpecs {
+			state := models.WorkflowState{
+				WorkflowID: wf.ID,
+				Name:       sp.Name,
+				Code:       sp.Code,
+				StateType:  sp.StateType,
+				Color:      sp.Color,
+				SortOrder:  sp.SortOrder,
+				PositionX:  sp.PosX,
+				PositionY:  sp.PosY,
+				IsActive:   true,
+			}
+			if err := db.Create(&state).Error; err != nil {
+				log.Printf("Failed to create state %s: %v", sp.Code, err)
+				return
+			}
+		}
+	}
+
+	// Ensure transitions exist (even if the workflow was already seeded)
+	requiredTransCode := map[string]bool{"submit": true, "review": true, "approve": true, "reject": true, "publish": true, "resubmit": true}
+	var missing []string
+	for code := range requiredTransCode {
+		var count int64
+		db.Model(&models.WorkflowTransition{}).Where("workflow_id = ? AND code = ?", wf.ID, code).Count(&count)
+		if count == 0 {
+			missing = append(missing, code)
+		}
+	}
+
+	if len(missing) > 0 {
+		log.Printf("Adding missing transitions to KPI performance workflow: %v", missing)
+
+		stateMap := make(map[string]models.WorkflowState)
+		var states []models.WorkflowState
+		db.Where("workflow_id = ?", wf.ID).Find(&states)
+		for _, s := range states {
+			stateMap[s.Code] = s
+		}
+
+		type transSpec struct {
+			Name        string
+			Code        string
+			From        string
+			To          string
+			IsRejection bool
+			CommentReq  bool
+			SortOrder   int
+		}
+
+		allTransSpecs := []transSpec{
+			{"Submit for Review", "submit", "draft", "submitted", false, false, 1},
+			{"Start Review", "review", "submitted", "under_review", false, false, 2},
+			{"Approve", "approve", "under_review", "approved", false, false, 3},
+			{"Reject", "reject", "under_review", "rejected", true, true, 4},
+			{"Publish", "publish", "approved", "published", false, false, 5},
+			{"Resubmit", "resubmit", "rejected", "submitted", false, false, 6},
+		}
+
+		boolTrue := true
+		for _, sp := range allTransSpecs {
+			fromState, fromOk := stateMap[sp.From]
+			toState, toOk := stateMap[sp.To]
+			if !fromOk || !toOk {
+				log.Printf("Skipping transition %s: missing state %s or %s", sp.Code, sp.From, sp.To)
+				continue
+			}
+
+			var count int64
+			db.Model(&models.WorkflowTransition{}).Where("workflow_id = ? AND code = ?", wf.ID, sp.Code).Count(&count)
+			if count > 0 {
+				continue
+			}
+
+			transition := models.WorkflowTransition{
+				WorkflowID:  wf.ID,
+				Name:        sp.Name,
+				Code:        sp.Code,
+				FromStateID: fromState.ID,
+				ToStateID:   toState.ID,
+				IsRejection: sp.IsRejection,
+				IsActive:    true,
+				SortOrder:   sp.SortOrder,
+			}
+
+			if err := db.Create(&transition).Error; err != nil {
+				log.Printf("Failed to create transition %s: %v", sp.Code, err)
+				continue
+			}
+
+			if sp.CommentReq {
+				requirement := models.TransitionRequirement{
+					TransitionID:    transition.ID,
+					RequirementType: "comment",
+					IsMandatory:     &boolTrue,
+					ErrorMessage:    "Comment is required for rejection",
+				}
+				if err := db.Create(&requirement).Error; err != nil {
+					log.Printf("Failed to create requirement for %s: %v", sp.Code, err)
+				}
+			}
+		}
+	}
+
+	if !exists && len(missing) == 0 {
+		log.Println("KPI performance approval workflow seeded successfully")
 	}
 }
 
