@@ -160,6 +160,26 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			&models.ReviewCycle{},
 			&models.ReviewAssignment{},
 			&models.GoalScore{},
+
+		// KPI / Goal Management models
+		&models.Pillar{},
+		&models.Enabler{},
+		&models.StrategicGoal{},
+		&models.OperationalObjective{},
+		&models.Process{},
+		&models.Initiative{},
+		&models.Domain{},
+		&models.AwardCriterion{},
+		&models.AwardSubCriterion{},
+		&models.StrategicKPI{},
+		&models.OperationalKPI{},
+		&models.AwardKPI{},
+		&models.KpiAnnualTarget{},
+		&models.KpiPerformance{},
+		&models.KpiBenchmark{},
+		&models.KpiSegmentation{},
+		&models.KpiWorkflowInstance{},
+		&models.KpiWorkflowAction{},
 		); err != nil {
 			return fmt.Errorf("failed to run goal management migrations: %w", err)
 		}
@@ -186,6 +206,8 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	db.Exec("ALTER TABLE metric_transition_histories DROP CONSTRAINT IF EXISTS metric_transition_histories_performed_by_id_fkey")
 	db.Exec("ALTER TABLE metric_value_change_transition_histories DROP CONSTRAINT IF EXISTS fk_metric_value_change_transition_histories_performed_by")
 	db.Exec("ALTER TABLE metric_value_change_transition_histories DROP CONSTRAINT IF EXISTS metric_value_change_transition_histories_performed_by_id_fkey")
+	db.Exec("ALTER TABLE kpi_workflow_actions DROP CONSTRAINT IF EXISTS fk_kpi_workflow_actions_performed_by")
+	db.Exec("ALTER TABLE kpi_workflow_actions DROP CONSTRAINT IF EXISTS kpi_workflow_actions_performed_by_id_fkey")
 
 	db.Exec("ALTER TABLE lookup_categories ADD COLUMN IF NOT EXISTS redirect_url VARCHAR(500)")
 
@@ -577,6 +599,24 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			models.Permission{Name: "Assign Goals", Code: "goals:assign", Module: "goals", Action: "assign", Description: "Assign goal collaborators"},
 			models.Permission{Name: "Approve Goals", Code: "goals:approve", Module: "goals", Action: "approve", Description: "Approve/reject goal evidence"},
 			models.Permission{Name: "Goals Dashboard", Code: "dashboard:goals", Module: "dashboard", Action: "goals", Description: "Access goal cards on dashboard"},
+
+			// KPI / Goal Management permissions
+			models.Permission{Name: "Manage Goal Hierarchy", Code: "goals:manage", Module: "goals", Action: "manage", Description: "Create/update/delete goal hierarchy master data"},
+			models.Permission{Name: "View KPI Dictionary", Code: "kpi:view", Module: "kpi", Action: "view", Description: "View KPI definitions"},
+			models.Permission{Name: "Create KPI Definitions", Code: "kpi:create", Module: "kpi", Action: "create", Description: "Create new KPI definitions"},
+			models.Permission{Name: "Update KPI Definitions", Code: "kpi:update", Module: "kpi", Action: "update", Description: "Edit KPI metadata, formula, targets"},
+			models.Permission{Name: "Delete KPI Definitions", Code: "kpi:delete", Module: "kpi", Action: "delete", Description: "Soft-delete KPI records"},
+			models.Permission{Name: "View Performance Data", Code: "perf:view", Module: "perf", Action: "view", Description: "View KPI performance data"},
+			models.Permission{Name: "Submit Performance", Code: "perf:submit", Module: "perf", Action: "submit", Description: "Submit quarterly actuals for review"},
+			models.Permission{Name: "Review Performance", Code: "perf:review", Module: "perf", Action: "review", Description: "Start performance review process"},
+			models.Permission{Name: "Approve Performance", Code: "perf:approve", Module: "perf", Action: "approve", Description: "Approve reviewed performance entries"},
+			models.Permission{Name: "Reject Performance", Code: "perf:reject", Module: "perf", Action: "reject", Description: "Reject and return for revision"},
+			models.Permission{Name: "Publish Performance", Code: "perf:publish", Module: "perf", Action: "publish", Description: "Publish approved performance to dashboards"},
+			models.Permission{Name: "View Targets", Code: "targets:view", Module: "targets", Action: "view", Description: "View annual KPI targets"},
+			models.Permission{Name: "Set Targets", Code: "targets:set", Module: "targets", Action: "set", Description: "Create/update annual targets"},
+			models.Permission{Name: "Approve Targets", Code: "targets:approve", Module: "targets", Action: "approve", Description: "Approve target submissions"},
+			models.Permission{Name: "Manage Benchmarks", Code: "benchmark:manage", Module: "benchmark", Action: "manage", Description: "Create/update KPI benchmarks"},
+			models.Permission{Name: "Manage Segment Data", Code: "segment:manage", Module: "segment", Action: "manage", Description: "Create/update KPI segmentation data"},
 		)
 	}
 
@@ -762,6 +802,30 @@ func unseedGoalManagement(db *gorm.DB) {
 	permSub := "SELECT id FROM permissions WHERE module = 'goals' OR code = 'dashboard:goals'"
 	exec("role_permissions (goals)", "DELETE FROM role_permissions WHERE permission_id IN ("+permSub+")")
 	exec("permissions (goals)", "DELETE FROM permissions WHERE module = 'goals' OR code = 'dashboard:goals'")
+
+	// Step 3.5: delete KPI/goal management tables (children before parents)
+	for _, table := range []string{
+		"kpi_workflow_actions",
+		"kpi_workflow_instances",
+		"kpi_segmentations",
+		"kpi_benchmarks",
+		"kpi_performances",
+		"kpi_annual_targets",
+		"award_kpis",
+		"operational_kpis",
+		"strategic_kpis",
+		"award_sub_criteria",
+		"award_criteria",
+		"domains",
+		"initiatives",
+		"processes",
+		"operational_objectives",
+		"strategic_goals",
+		"enablers",
+		"pillars",
+	} {
+		exec(table, "DROP TABLE IF EXISTS "+table+" CASCADE")
+	}
 
 	// Step 4: delete goal-specific roles and all their join-table associations
 	roleSub := "SELECT id FROM roles WHERE code IN ('goal_manager','goal_collaborator')"
