@@ -94,7 +94,7 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "department_created"), models.ToDepartmentResponse(department))
 }
 
-// cascadeToUsers syncs department location/classification/role assignments to all users in this department
+// cascadeToUsers syncs department location/classification assignments to all users in this department
 func (h *DepartmentHandler) cascadeToUsers(ctx context.Context, departmentID uuid.UUID) {
 	users, err := h.userRepo.FindByDepartmentID(ctx, departmentID)
 	if err != nil || len(users) == 0 {
@@ -102,10 +102,11 @@ func (h *DepartmentHandler) cascadeToUsers(ctx context.Context, departmentID uui
 	}
 
 	for _, user := range users {
-		// Collect classifications from all user's departments
+		// Collect classifications and locations from all user's departments
+		// NOTE: Roles are intentionally NOT synced here — they are managed
+		// independently per-user and must not be overwritten by department edits.
 		classIDMap := make(map[uuid.UUID]bool)
 		locIDMap := make(map[uuid.UUID]bool)
-		roleIDMap := make(map[uuid.UUID]bool)
 
 		for _, dept := range user.Departments {
 			fullDept, err := h.repo.FindByID(ctx, dept.ID)
@@ -118,9 +119,6 @@ func (h *DepartmentHandler) cascadeToUsers(ctx context.Context, departmentID uui
 			for _, l := range fullDept.Locations {
 				locIDMap[l.ID] = true
 			}
-			for _, r := range fullDept.Roles {
-				roleIDMap[r.ID] = true
-			}
 		}
 
 		classIDs := make([]uuid.UUID, 0, len(classIDMap))
@@ -131,14 +129,9 @@ func (h *DepartmentHandler) cascadeToUsers(ctx context.Context, departmentID uui
 		for id := range locIDMap {
 			locIDs = append(locIDs, id)
 		}
-		roleIDs := make([]uuid.UUID, 0, len(roleIDMap))
-		for id := range roleIDMap {
-			roleIDs = append(roleIDs, id)
-		}
 
 		_ = h.userRepo.AssignClassifications(ctx, user.ID, classIDs)
 		_ = h.userRepo.AssignLocations(ctx, user.ID, locIDs)
-		_ = h.userRepo.AssignRoles(ctx, user.ID, roleIDs)
 	}
 }
 
