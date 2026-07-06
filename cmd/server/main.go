@@ -270,7 +270,7 @@ func main() {
 	kpiMasterDataHandler := handlers.NewKpiMasterDataHandler(db)
 
 	// KPI Dictionary handler
-	kpiDictionaryHandler := handlers.NewKpiDictionaryHandler(db)
+	kpiDictionaryHandler := handlers.NewKpiDictionaryHandler(db, actionLogService)
 
 	// KPI Workflow service
 	kpiWorkflowService := services.NewKpiWorkflowService(db, workflowRepo)
@@ -280,6 +280,12 @@ func main() {
 
 	// KPI Dashboard handler
 	kpiDashboardHandler := handlers.NewKpiDashboardHandler(db)
+
+	// KPI Performance Band handler
+	kpiPerformanceBandHandler := handlers.NewKpiPerformanceBandHandler(db)
+
+	// KPI Corrective Action handler
+	kpiCorrectiveActionHandler := handlers.NewKpiCorrectiveActionHandler(db)
 
 	// Integration handler
 	integrationHandler := handlers.NewIntegrationHandler(integrationService, integrationExecutor, integrationRepo, incidentRepo)
@@ -1108,6 +1114,12 @@ func main() {
 	// Dashboard
 	kpi.Get("/dashboard", authMiddleware.RequirePermission("kpi:view"), kpiDashboardHandler.GetDashboard)
 
+	// Performance bands (RAG thresholds)
+	kpi.Get("/performance-bands", authMiddleware.RequirePermission("kpi:view"), kpiPerformanceBandHandler.ListBands)
+	kpi.Get("/performance-bands/effective", authMiddleware.RequirePermission("kpi:view"), kpiPerformanceBandHandler.GetEffectiveBand)
+	kpi.Post("/performance-bands", authMiddleware.RequirePermission("goals:manage"), kpiPerformanceBandHandler.UpsertBand)
+	kpi.Delete("/performance-bands/:id", authMiddleware.RequirePermission("goals:manage"), kpiPerformanceBandHandler.DeleteBand)
+
 	kpi.Get("/pillars", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListPillars)
 	kpi.Post("/pillars", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreatePillar)
 	kpi.Put("/pillars/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdatePillar)
@@ -1154,6 +1166,16 @@ func main() {
 	kpi.Put("/award-sub-criteria/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateAwardSubCriterion)
 	kpi.Delete("/award-sub-criteria/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteAwardSubCriterion)
 
+	kpi.Get("/data-sources", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListDataSources)
+	kpi.Post("/data-sources", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateDataSource)
+	kpi.Put("/data-sources/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateDataSource)
+	kpi.Delete("/data-sources/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteDataSource)
+
+	kpi.Get("/segmentation-dimensions", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListSegmentationDimensions)
+	kpi.Post("/segmentation-dimensions", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateSegmentationDimension)
+	kpi.Put("/segmentation-dimensions/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateSegmentationDimension)
+	kpi.Delete("/segmentation-dimensions/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteSegmentationDimension)
+
 	// ---- KPI DICTIONARY ROUTES ----
 	kpi.Get("/strategic", authMiddleware.RequirePermission("kpi:view"), kpiDictionaryHandler.ListStrategic)
 	kpi.Get("/strategic/:id", authMiddleware.RequirePermission("kpi:view"), kpiDictionaryHandler.GetStrategic)
@@ -1196,6 +1218,11 @@ func main() {
 	kpi.Post("/segmentation", authMiddleware.RequirePermission("segment:manage"), kpiPerformanceHandler.CreateSegmentation)
 	kpi.Delete("/segmentation/:id", authMiddleware.RequirePermission("segment:manage"), kpiPerformanceHandler.DeleteSegmentation)
 	kpi.Get("/segmentation/summary", authMiddleware.RequirePermission("segment:manage"), kpiPerformanceHandler.ListSegmentationSummary)
+
+	// ---- KPI CORRECTIVE ACTION ROUTES ----
+	kpi.Get("/corrective-actions", authMiddleware.RequirePermission("perf:view"), kpiCorrectiveActionHandler.ListByPerformance)
+	kpi.Post("/corrective-actions", authMiddleware.RequirePermission("corrective_action:manage"), kpiCorrectiveActionHandler.Create)
+	kpi.Put("/corrective-actions/:id/status", authMiddleware.RequirePermission("corrective_action:manage"), kpiCorrectiveActionHandler.UpdateStatus)
 
 	// ---- KPI DASHBOARD TRENDS & CARDS ----
 	kpi.Get("/dashboard/trends", authMiddleware.RequirePermission("kpi:view"), kpiDashboardHandler.GetDashboardTrends)

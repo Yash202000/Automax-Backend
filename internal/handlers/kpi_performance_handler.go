@@ -18,10 +18,10 @@ import (
 )
 
 type KpiPerformanceHandler struct {
-	db            *gorm.DB
-	validator     *validator.Validate
-	workflowSvc   *services.KpiWorkflowService
-	actionLogSvc  services.ActionLogService
+	db           *gorm.DB
+	validator    *validator.Validate
+	workflowSvc  *services.KpiWorkflowService
+	actionLogSvc services.ActionLogService
 }
 
 func NewKpiPerformanceHandler(db *gorm.DB, workflowSvc *services.KpiWorkflowService, actionLogSvc services.ActionLogService) *KpiPerformanceHandler {
@@ -65,14 +65,41 @@ func (h *KpiPerformanceHandler) SetTarget(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
 
+	periodType := req.PeriodType
+	if periodType == "" {
+		periodType = "annual"
+	}
+	periodKey := req.PeriodKey
+	if periodKey == "" {
+		periodKey = strconv.Itoa(req.Year)
+	}
+
+	db := h.db.WithContext(c.UserContext())
+	freq := services.GetKPIReportingFrequency(db, req.KpiCode, req.KpiType)
+	if err := services.ValidatePeriod(freq, periodType, periodKey); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	dupErr := db.Where(
+		"kpi_code = ? AND kpi_type = ? AND period_type = ? AND period_key = ?",
+		req.KpiCode, req.KpiType, periodType, periodKey,
+	).First(&models.KpiAnnualTarget{}).Error
+	if dupErr == nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, fmt.Sprintf("a target for %s already exists for period %s", req.KpiCode, periodKey))
+	} else if dupErr != gorm.ErrRecordNotFound {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+
 	item := &models.KpiAnnualTarget{
 		KpiCode:     req.KpiCode,
 		KpiType:     req.KpiType,
 		Year:        req.Year,
+		PeriodType:  periodType,
+		PeriodKey:   periodKey,
 		TargetValue: req.TargetValue,
 	}
 
-	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
+	if err := db.Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
 	}
 
@@ -185,20 +212,39 @@ func (h *KpiPerformanceHandler) SubmitPerformance(c *fiber.Ctx) error {
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
+	db := h.db.WithContext(c.UserContext())
+	polarity := services.GetKPIPolarity(db, req.KpiCode, req.KpiType)
+
+	periodType := req.PeriodType
+	if periodType == "" {
+		periodType = "quarter"
+	}
+	periodKey := req.PeriodKey
+	if periodKey == "" {
+		periodKey = fmt.Sprintf("%d-Q%d", req.Year, req.Quarter)
+	}
+	freq := services.GetKPIReportingFrequency(db, req.KpiCode, req.KpiType)
+	if err := services.ValidatePeriod(freq, periodType, periodKey); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+
 	item := &models.KpiPerformance{
 		KpiCode:          req.KpiCode,
 		KpiType:          req.KpiType,
 		Year:             req.Year,
 		Quarter:          req.Quarter,
+		PeriodType:       periodType,
+		PeriodKey:        periodKey,
 		Target:           req.Target,
 		Actual:           req.Actual,
+		AchievementPct:   services.CalculateAchievement(req.Actual, req.Target, polarity),
 		TrendDescription: req.TrendDescription,
 		Justification:    req.Justification,
 		CorrectiveAction: req.CorrectiveAction,
 		Status:           models.KPIPerfStatusDraft,
 	}
 
-	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
+	if err := db.Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
 	}
 
@@ -372,21 +418,21 @@ func (h *KpiPerformanceHandler) DeleteBenchmark(c *fiber.Ctx) error {
 
 func (h *KpiPerformanceHandler) ListBenchmarkSummary(c *fiber.Ctx) error {
 	type BenchSummary struct {
-		KpiCode              string  `json:"kpi_code"`
-		Zone                 string  `json:"zone"`
-		BenchmarkEntity      string  `json:"benchmark_entity"`
-		AvgInternal          float64 `json:"avg_internal"`
-		AvgBenchmark         float64 `json:"avg_benchmark"`
-		AvgVariance          float64 `json:"avg_variance"`
-		TotalRecords         int64   `json:"total_records"`
+		KpiCode         string  `json:"kpi_code"`
+		Zone            string  `json:"zone"`
+		BenchmarkEntity string  `json:"benchmark_entity"`
+		AvgInternal     float64 `json:"avg_internal"`
+		AvgBenchmark    float64 `json:"avg_benchmark"`
+		AvgVariance     float64 `json:"avg_variance"`
+		TotalRecords    int64   `json:"total_records"`
 	}
 
 	var results []BenchSummary
 	if err := h.db.WithContext(c.UserContext()).Model(&models.KpiBenchmark{}).
-		Select("kpi_code, zone, benchmark_entity, "+
-			"AVG(internal_achievement) as avg_internal, "+
-			"AVG(benchmark_achievement) as avg_benchmark, "+
-			"AVG(internal_achievement - benchmark_achievement) as avg_variance, "+
+		Select("kpi_code, zone, benchmark_entity, " +
+			"AVG(internal_achievement) as avg_internal, " +
+			"AVG(benchmark_achievement) as avg_benchmark, " +
+			"AVG(internal_achievement - benchmark_achievement) as avg_variance, " +
 			"COUNT(*) as total_records").
 		Group("kpi_code, zone, benchmark_entity").
 		Order("kpi_code ASC").
@@ -510,20 +556,20 @@ func (h *KpiPerformanceHandler) DeleteSegmentation(c *fiber.Ctx) error {
 
 func (h *KpiPerformanceHandler) ListSegmentationSummary(c *fiber.Ctx) error {
 	type SegSummary struct {
-		DimensionName string  `json:"dimension_name"`
-		SegmentName   string  `json:"segment_name"`
+		DimensionName  string  `json:"dimension_name"`
+		SegmentName    string  `json:"segment_name"`
 		AvgAchievement float64 `json:"avg_achievement"`
-		AvgTarget     float64 `json:"avg_target"`
-		AvgPct        float64 `json:"avg_pct"`
-		TotalRecords  int64   `json:"total_records"`
+		AvgTarget      float64 `json:"avg_target"`
+		AvgPct         float64 `json:"avg_pct"`
+		TotalRecords   int64   `json:"total_records"`
 	}
 
 	var results []SegSummary
 	if err := h.db.WithContext(c.UserContext()).Model(&models.KpiSegmentation{}).
-		Select("dimension_name, segment_name, "+
-			"AVG(achievement) as avg_achievement, "+
-			"AVG(target) as avg_target, "+
-			"CASE WHEN AVG(target) > 0 THEN (AVG(achievement) / AVG(target)) * 100 ELSE 0 END as avg_pct, "+
+		Select("dimension_name, segment_name, " +
+			"AVG(achievement) as avg_achievement, " +
+			"AVG(target) as avg_target, " +
+			"CASE WHEN AVG(target) > 0 THEN (AVG(achievement) / AVG(target)) * 100 ELSE 0 END as avg_pct, " +
 			"COUNT(*) as total_records").
 		Group("dimension_name, segment_name").
 		Order("dimension_name ASC, segment_name ASC").

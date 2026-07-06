@@ -180,8 +180,23 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		&models.KpiSegmentation{},
 		&models.KpiWorkflowInstance{},
 		&models.KpiWorkflowAction{},
+		&models.KpiPerformanceBand{},
+		&models.KpiCorrectiveAction{},
+		&models.KpiDataSource{},
+		&models.KpiSegmentationDimension{},
 		); err != nil {
 			return fmt.Errorf("failed to run goal management migrations: %w", err)
+		}
+
+		// Recompute achievement_pct for existing KPI performance rows now that the
+		// calculation respects each KPI's polarity instead of always using actual/target.
+		if err := migrations.MigrateKpiAchievementBackfill(migrationDB); err != nil {
+			log.Printf("Warning: KPI achievement backfill migration failed: %v", err)
+		}
+
+		// Backfill period_type/period_key on existing target/performance rows.
+		if err := migrations.MigrateKpiPeriodBackfill(migrationDB); err != nil {
+			log.Printf("Warning: KPI period backfill migration failed: %v", err)
 		}
 	}
 
@@ -606,6 +621,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			models.Permission{Name: "Create KPI Definitions", Code: "kpi:create", Module: "kpi", Action: "create", Description: "Create new KPI definitions"},
 			models.Permission{Name: "Update KPI Definitions", Code: "kpi:update", Module: "kpi", Action: "update", Description: "Edit KPI metadata, formula, targets"},
 			models.Permission{Name: "Delete KPI Definitions", Code: "kpi:delete", Module: "kpi", Action: "delete", Description: "Soft-delete KPI records"},
+			models.Permission{Name: "Approve KPI Performance", Code: "kpi:approve", Module: "kpi", Action: "approve", Description: "Approve/reject KPI performance submissions from the approvals inbox"},
 			models.Permission{Name: "View Performance Data", Code: "perf:view", Module: "perf", Action: "view", Description: "View KPI performance data"},
 			models.Permission{Name: "Submit Performance", Code: "perf:submit", Module: "perf", Action: "submit", Description: "Submit quarterly actuals for review"},
 			models.Permission{Name: "Review Performance", Code: "perf:review", Module: "perf", Action: "review", Description: "Start performance review process"},
@@ -617,6 +633,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			models.Permission{Name: "Approve Targets", Code: "targets:approve", Module: "targets", Action: "approve", Description: "Approve target submissions"},
 			models.Permission{Name: "Manage Benchmarks", Code: "benchmark:manage", Module: "benchmark", Action: "manage", Description: "Create/update KPI benchmarks"},
 			models.Permission{Name: "Manage Segment Data", Code: "segment:manage", Module: "segment", Action: "manage", Description: "Create/update KPI segmentation data"},
+			models.Permission{Name: "Manage Corrective Actions", Code: "corrective_action:manage", Module: "corrective_action", Action: "manage", Description: "Create and close KPI corrective actions"},
 		)
 	}
 
@@ -726,6 +743,13 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 
 		// Seed default KPI performance approval workflow
 		seedKpiPerformanceWorkflow(db)
+
+		// Seed default global RAG performance band (green >= 80, amber >= 60)
+		seedDefaultPerformanceBand(db)
+
+		// Seed starter data sources and segmentation dimensions
+		seedKpiDataSources(db)
+		seedKpiSegmentationDimensions(db)
 	} else {
 		unseedGoalManagement(db)
 	}
@@ -807,10 +831,14 @@ func unseedGoalManagement(db *gorm.DB) {
 	exec("permissions (goals)", "DELETE FROM permissions WHERE module = 'goals' OR code = 'dashboard:goals'")
 
 	// Step 3.5: delete KPI/goal management tables (children before parents)
-	log.Println("  WARNING: About to drop 18 KPI/goal tables — this IRREVERSIBLY deletes all KPI configuration and user-entered performance/target data!")
+	log.Println("  WARNING: About to drop 22 KPI/goal tables — this IRREVERSIBLY deletes all KPI configuration and user-entered performance/target data!")
 	for _, table := range []string{
+		"kpi_data_sources",
+		"kpi_segmentation_dimensions",
+		"kpi_corrective_actions",
 		"kpi_workflow_actions",
 		"kpi_workflow_instances",
+		"kpi_performance_bands",
 		"kpi_segmentations",
 		"kpi_benchmarks",
 		"kpi_performances",
@@ -1165,6 +1193,65 @@ func seedMetricApprovalWorkflows(db *gorm.DB) {
 		}
 
 		log.Printf("%s workflow seeded successfully", s.Code)
+	}
+}
+
+// seedDefaultPerformanceBand ensures exactly one global RAG default band row exists.
+func seedDefaultPerformanceBand(db *gorm.DB) {
+	var existing models.KpiPerformanceBand
+	if err := db.Where("kpi_code IS NULL").First(&existing).Error; err == nil {
+		return
+	}
+	band := models.KpiPerformanceBand{GreenMin: 80, AmberMin: 60}
+	if err := db.Create(&band).Error; err != nil {
+		log.Printf("Failed to seed default performance band: %v", err)
+	}
+}
+
+// seedKpiDataSources seeds a starter list of governed data source names so
+// the KPI dictionary forms' data source select isn't empty on a fresh install.
+func seedKpiDataSources(db *gorm.DB) {
+	names := []string{
+		"Municipal Data Dashboard",
+		"Infrastructure Asset System",
+		"GIS Planning System",
+		"Waste Operations System",
+		"Inspection Platform",
+		"Financial ERP",
+		"Digital Services Platform",
+		"Survey Platform",
+		"Engagement Platform",
+		"Quality of Life Dashboard",
+		"Manual Entry",
+		"System Integration",
+	}
+	for _, name := range names {
+		var existing models.KpiDataSource
+		if db.Where("name_en = ?", name).First(&existing).Error == gorm.ErrRecordNotFound {
+			db.Create(&models.KpiDataSource{NameEn: name})
+		}
+	}
+}
+
+// seedKpiSegmentationDimensions seeds a starter list of governed segmentation
+// dimension names so the segmentation form's dimension select isn't empty.
+func seedKpiSegmentationDimensions(db *gorm.DB) {
+	names := []string{
+		"Municipality",
+		"District",
+		"City",
+		"Road Segment",
+		"Service Zone",
+		"Contractor",
+		"Department",
+		"Customer Type",
+		"Channel",
+	}
+	for _, name := range names {
+		var existing models.KpiSegmentationDimension
+		if db.Where("name_en = ?", name).First(&existing).Error == gorm.ErrRecordNotFound {
+			db.Create(&models.KpiSegmentationDimension{NameEn: name})
+		}
 	}
 }
 

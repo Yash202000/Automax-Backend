@@ -26,17 +26,17 @@ const (
 // ──────────────────────────────────────────────────────────
 
 type Pillar struct {
-	ID          uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
-	NameEn      string         `gorm:"size:255;not null" json:"name_en"`
-	NameAr      string         `gorm:"size:255;not null;default:''" json:"name_ar"`
-	OwnerID     *uuid.UUID     `gorm:"type:uuid;index" json:"owner_id"`
-	Owner       *User          `gorm:"foreignKey:OwnerID" json:"owner,omitempty"`
+	ID          uuid.UUID       `gorm:"type:uuid;primary_key" json:"id"`
+	NameEn      string          `gorm:"size:255;not null" json:"name_en"`
+	NameAr      string          `gorm:"size:255;not null;default:''" json:"name_ar"`
+	OwnerID     *uuid.UUID      `gorm:"type:uuid;index" json:"owner_id"`
+	Owner       *User           `gorm:"foreignKey:OwnerID" json:"owner,omitempty"`
 	Goals       []StrategicGoal `gorm:"foreignKey:PillarID" json:"goals,omitempty"`
-	Initiatives []Initiative   `gorm:"foreignKey:PillarID" json:"initiatives,omitempty"`
-	IsActive    bool           `gorm:"default:true" json:"is_active"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+	Initiatives []Initiative    `gorm:"foreignKey:PillarID" json:"initiatives,omitempty"`
+	IsActive    bool            `gorm:"default:true" json:"is_active"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt  `gorm:"index" json:"-"`
 }
 
 func (p *Pillar) BeforeCreate(tx *gorm.DB) error {
@@ -79,17 +79,17 @@ func (p *Pillar) ToResponse() PillarResponse {
 // ──────────────────────────────────────────────────────────
 
 type Enabler struct {
-	ID          uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
-	NameEn      string         `gorm:"size:255;not null" json:"name_en"`
-	NameAr      string         `gorm:"size:255;not null;default:''" json:"name_ar"`
-	OwnerID     *uuid.UUID     `gorm:"type:uuid;index" json:"owner_id"`
-	Owner       *User          `gorm:"foreignKey:OwnerID" json:"owner,omitempty"`
+	ID          uuid.UUID       `gorm:"type:uuid;primary_key" json:"id"`
+	NameEn      string          `gorm:"size:255;not null" json:"name_en"`
+	NameAr      string          `gorm:"size:255;not null;default:''" json:"name_ar"`
+	OwnerID     *uuid.UUID      `gorm:"type:uuid;index" json:"owner_id"`
+	Owner       *User           `gorm:"foreignKey:OwnerID" json:"owner,omitempty"`
 	Goals       []StrategicGoal `gorm:"foreignKey:EnablerID" json:"goals,omitempty"`
-	Initiatives []Initiative   `gorm:"foreignKey:EnablerID" json:"initiatives,omitempty"`
-	IsActive    bool           `gorm:"default:true" json:"is_active"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+	Initiatives []Initiative    `gorm:"foreignKey:EnablerID" json:"initiatives,omitempty"`
+	IsActive    bool            `gorm:"default:true" json:"is_active"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt  `gorm:"index" json:"-"`
 }
 
 func (e *Enabler) BeforeCreate(tx *gorm.DB) error {
@@ -132,22 +132,22 @@ func (e *Enabler) ToResponse() EnablerResponse {
 // ──────────────────────────────────────────────────────────
 
 type StrategicGoal struct {
-	ID                    uuid.UUID               `gorm:"type:uuid;primary_key" json:"id"`
-	GoalCode              string                  `gorm:"size:50;not null;uniqueIndex" json:"goal_code"`
-	TitleEn               string                  `gorm:"size:255;not null" json:"title_en"`
-	TitleAr               string                  `gorm:"size:255;not null;default:''" json:"title_ar"`
-	NameEn                string                  `gorm:"size:255;not null" json:"name_en"`
-	NameAr                string                  `gorm:"size:255;not null;default:''" json:"name_ar"`
-	PillarID              *uuid.UUID              `gorm:"type:uuid;index" json:"pillar_id"`
-	Pillar                *Pillar                 `gorm:"foreignKey:PillarID" json:"pillar,omitempty"`
-	EnablerID             *uuid.UUID              `gorm:"type:uuid;index" json:"enabler_id"`
-	Enabler               *Enabler                `gorm:"foreignKey:EnablerID" json:"enabler,omitempty"`
-	OperationalObjectives []OperationalObjective  `gorm:"foreignKey:StrategicGoalID" json:"operational_objectives,omitempty"`
-	Initiatives           []Initiative            `gorm:"foreignKey:StrategicGoalID" json:"initiatives,omitempty"`
-	IsActive              bool                    `gorm:"default:true" json:"is_active"`
-	CreatedAt             time.Time               `json:"created_at"`
-	UpdatedAt             time.Time               `json:"updated_at"`
-	DeletedAt             gorm.DeletedAt          `gorm:"index" json:"-"`
+	ID                    uuid.UUID              `gorm:"type:uuid;primary_key" json:"id"`
+	GoalCode              string                 `gorm:"size:50;not null;uniqueIndex" json:"goal_code"`
+	TitleEn               string                 `gorm:"size:255;not null" json:"title_en"`
+	TitleAr               string                 `gorm:"size:255;not null;default:''" json:"title_ar"`
+	NameEn                string                 `gorm:"size:255;not null" json:"name_en"`
+	NameAr                string                 `gorm:"size:255;not null;default:''" json:"name_ar"`
+	PillarID              *uuid.UUID             `gorm:"type:uuid;index" json:"pillar_id"`
+	Pillar                *Pillar                `gorm:"foreignKey:PillarID" json:"pillar,omitempty"`
+	EnablerID             *uuid.UUID             `gorm:"type:uuid;index" json:"enabler_id"`
+	Enabler               *Enabler               `gorm:"foreignKey:EnablerID" json:"enabler,omitempty"`
+	OperationalObjectives []OperationalObjective `gorm:"foreignKey:StrategicGoalID" json:"operational_objectives,omitempty"`
+	Initiatives           []Initiative           `gorm:"foreignKey:StrategicGoalID" json:"initiatives,omitempty"`
+	IsActive              bool                   `gorm:"default:true" json:"is_active"`
+	CreatedAt             time.Time              `json:"created_at"`
+	UpdatedAt             time.Time              `json:"updated_at"`
+	DeletedAt             gorm.DeletedAt         `gorm:"index" json:"-"`
 }
 
 func (g *StrategicGoal) generateGoalCode() {
@@ -278,20 +278,20 @@ func (o *OperationalObjective) ToResponse() OperationalObjectiveResponse {
 // ──────────────────────────────────────────────────────────
 
 type Process struct {
-	ID                      uuid.UUID             `gorm:"type:uuid;primary_key" json:"id"`
-	NameEn                  string                `gorm:"size:255;not null" json:"name_en"`
-	NameAr                  string                `gorm:"size:255;not null;default:''" json:"name_ar"`
-	OperationalObjectiveID  uuid.UUID             `gorm:"type:uuid;not null;index" json:"operational_objective_id"`
-	OperationalObjective    *OperationalObjective `gorm:"foreignKey:OperationalObjectiveID" json:"operational_objective,omitempty"`
-	StrategicGoalID         uuid.UUID             `gorm:"type:uuid;not null;index" json:"strategic_goal_id"`
-	StrategicGoal           *StrategicGoal        `gorm:"foreignKey:StrategicGoalID" json:"strategic_goal,omitempty"`
-	DepartmentID            *uuid.UUID            `gorm:"type:uuid;index" json:"department_id"`
-	Department              *Department           `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
-	Unit                    string                `gorm:"size:255" json:"unit"`
-	IsActive                bool                  `gorm:"default:true" json:"is_active"`
-	CreatedAt               time.Time             `json:"created_at"`
-	UpdatedAt               time.Time             `json:"updated_at"`
-	DeletedAt               gorm.DeletedAt        `gorm:"index" json:"-"`
+	ID                     uuid.UUID             `gorm:"type:uuid;primary_key" json:"id"`
+	NameEn                 string                `gorm:"size:255;not null" json:"name_en"`
+	NameAr                 string                `gorm:"size:255;not null;default:''" json:"name_ar"`
+	OperationalObjectiveID uuid.UUID             `gorm:"type:uuid;not null;index" json:"operational_objective_id"`
+	OperationalObjective   *OperationalObjective `gorm:"foreignKey:OperationalObjectiveID" json:"operational_objective,omitempty"`
+	StrategicGoalID        uuid.UUID             `gorm:"type:uuid;not null;index" json:"strategic_goal_id"`
+	StrategicGoal          *StrategicGoal        `gorm:"foreignKey:StrategicGoalID" json:"strategic_goal,omitempty"`
+	DepartmentID           *uuid.UUID            `gorm:"type:uuid;index" json:"department_id"`
+	Department             *Department           `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
+	Unit                   string                `gorm:"size:255" json:"unit"`
+	IsActive               bool                  `gorm:"default:true" json:"is_active"`
+	CreatedAt              time.Time             `json:"created_at"`
+	UpdatedAt              time.Time             `json:"updated_at"`
+	DeletedAt              gorm.DeletedAt        `gorm:"index" json:"-"`
 }
 
 func (p *Process) BeforeCreate(tx *gorm.DB) error {
@@ -567,4 +567,91 @@ func (a *AwardSubCriterion) ToResponse() AwardSubCriterionResponse {
 		resp.AwardCriterion = &r
 	}
 	return resp
+}
+
+// ──────────────────────────────────────────────────────────
+// KpiDataSource — governed list of KPI data source names, replacing the
+// free-text data_source field on KPI dictionary records.
+// ──────────────────────────────────────────────────────────
+
+type KpiDataSource struct {
+	ID        uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	NameEn    string         `gorm:"size:255;not null;uniqueIndex" json:"name_en"`
+	NameAr    string         `gorm:"size:255;not null;default:''" json:"name_ar"`
+	IsActive  bool           `gorm:"default:true" json:"is_active"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (d *KpiDataSource) BeforeCreate(tx *gorm.DB) error {
+	if d.ID == uuid.Nil {
+		d.ID = uuid.New()
+	}
+	return nil
+}
+
+type KpiDataSourceRequest struct {
+	NameEn string `json:"name_en" validate:"required,max=255"`
+	NameAr string `json:"name_ar" validate:"max=255"`
+}
+
+type KpiDataSourceResponse struct {
+	ID       uuid.UUID `json:"id"`
+	NameEn   string    `json:"name_en"`
+	NameAr   string    `json:"name_ar"`
+	IsActive bool      `json:"is_active"`
+}
+
+func (d *KpiDataSource) ToResponse() KpiDataSourceResponse {
+	return KpiDataSourceResponse{
+		ID:       d.ID,
+		NameEn:   d.NameEn,
+		NameAr:   d.NameAr,
+		IsActive: d.IsActive,
+	}
+}
+
+// ──────────────────────────────────────────────────────────
+// KpiSegmentationDimension — governed list of segmentation dimension names
+// (e.g. Municipality, District, Zone), replacing free-text dimension_name
+// entries on KpiSegmentation records.
+// ──────────────────────────────────────────────────────────
+
+type KpiSegmentationDimension struct {
+	ID        uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	NameEn    string         `gorm:"size:255;not null;uniqueIndex" json:"name_en"`
+	NameAr    string         `gorm:"size:255;not null;default:''" json:"name_ar"`
+	IsActive  bool           `gorm:"default:true" json:"is_active"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (d *KpiSegmentationDimension) BeforeCreate(tx *gorm.DB) error {
+	if d.ID == uuid.Nil {
+		d.ID = uuid.New()
+	}
+	return nil
+}
+
+type KpiSegmentationDimensionRequest struct {
+	NameEn string `json:"name_en" validate:"required,max=255"`
+	NameAr string `json:"name_ar" validate:"max=255"`
+}
+
+type KpiSegmentationDimensionResponse struct {
+	ID       uuid.UUID `json:"id"`
+	NameEn   string    `json:"name_en"`
+	NameAr   string    `json:"name_ar"`
+	IsActive bool      `json:"is_active"`
+}
+
+func (d *KpiSegmentationDimension) ToResponse() KpiSegmentationDimensionResponse {
+	return KpiSegmentationDimensionResponse{
+		ID:       d.ID,
+		NameEn:   d.NameEn,
+		NameAr:   d.NameAr,
+		IsActive: d.IsActive,
+	}
 }

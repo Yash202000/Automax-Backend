@@ -21,10 +21,18 @@ const (
 // ──────────────────────────────────────────────────────────
 
 type KpiAnnualTarget struct {
-	ID          uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
-	KpiCode     string         `gorm:"size:50;not null;index:idx_kpi_target_unique" json:"kpi_code"`
-	KpiType     string         `gorm:"size:20;not null;index:idx_kpi_target_unique" json:"kpi_type"`
-	Year        int            `gorm:"not null;index:idx_kpi_target_unique" json:"year"`
+	ID      uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
+	KpiCode string    `gorm:"size:50;not null;index:idx_kpi_target_period_unique,unique" json:"kpi_code"`
+	KpiType string    `gorm:"size:20;not null;index:idx_kpi_target_period_unique,unique" json:"kpi_type"`
+	Year    int       `gorm:"not null;index" json:"year"`
+	// PeriodType/PeriodKey let a target apply to any reporting frequency
+	// (month/quarter/semi_annual/annual/custom), not just a calendar year.
+	// Existing rows default to PeriodType="annual", PeriodKey=Year as string.
+	PeriodType string `gorm:"size:20;not null;default:'annual';index:idx_kpi_target_period_unique,unique" json:"period_type"`
+	// PeriodKey is not DB-NOT-NULL so AutoMigrate can add the column to a
+	// table with existing rows; MigrateKpiPeriodBackfill fills it in right
+	// after, and the application layer (SetTarget) always requires it.
+	PeriodKey   string         `gorm:"size:20;index:idx_kpi_target_period_unique,unique" json:"period_key"`
 	TargetValue float64        `gorm:"not null" json:"target_value"`
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
@@ -42,6 +50,8 @@ type KpiAnnualTargetRequest struct {
 	KpiCode     string  `json:"kpi_code" validate:"required,max=50"`
 	KpiType     string  `json:"kpi_type" validate:"required,oneof=strategic operational award"`
 	Year        int     `json:"year" validate:"required,min=2020,max=2040"`
+	PeriodType  string  `json:"period_type" validate:"omitempty,oneof=month quarter semi_annual annual custom"`
+	PeriodKey   string  `json:"period_key" validate:"omitempty,max=20"`
 	TargetValue float64 `json:"target_value" validate:"required"`
 }
 
@@ -50,6 +60,8 @@ type KpiAnnualTargetResponse struct {
 	KpiCode     string    `json:"kpi_code"`
 	KpiType     string    `json:"kpi_type"`
 	Year        int       `json:"year"`
+	PeriodType  string    `json:"period_type"`
+	PeriodKey   string    `json:"period_key"`
 	TargetValue float64   `json:"target_value"`
 	CreatedAt   time.Time `json:"created_at"`
 }
@@ -59,41 +71,39 @@ type KpiAnnualTargetResponse struct {
 // ──────────────────────────────────────────────────────────
 
 type KpiPerformance struct {
-	ID                uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
-	KpiCode           string         `gorm:"size:50;not null;index" json:"kpi_code"`
-	KpiType           string         `gorm:"size:20;not null" json:"kpi_type"`
-	Year              int            `gorm:"not null" json:"year"`
-	Quarter           int            `gorm:"not null" json:"quarter"`
-	Target            float64        `gorm:"default:0" json:"target"`
-	Actual            float64        `gorm:"default:0" json:"actual"`
-	AchievementPct    float64        `gorm:"default:0" json:"achievement_pct"`
-	TrendDescription  string         `gorm:"type:text" json:"trend_description"`
-	Justification     string         `gorm:"type:text" json:"justification"`
-	CorrectiveAction  string         `gorm:"type:text" json:"corrective_action"`
-	Status            string         `gorm:"size:30;not null;default:'draft'" json:"status"`
-	SubmittedByID     *uuid.UUID     `gorm:"type:uuid;index" json:"submitted_by_id"`
-	SubmittedBy       *User          `gorm:"foreignKey:SubmittedByID" json:"submitted_by,omitempty"`
-	ApprovedByID      *uuid.UUID     `gorm:"type:uuid;index" json:"approved_by_id"`
-	ApprovedBy        *User          `gorm:"foreignKey:ApprovedByID" json:"approved_by,omitempty"`
-	WorkflowInstanceID *uuid.UUID    `gorm:"type:uuid;index" json:"workflow_instance_id"`
-	CreatedAt         time.Time      `json:"created_at"`
-	UpdatedAt         time.Time      `json:"updated_at"`
-	DeletedAt         gorm.DeletedAt `gorm:"index" json:"-"`
+	ID      uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
+	KpiCode string    `gorm:"size:50;not null;index" json:"kpi_code"`
+	KpiType string    `gorm:"size:20;not null" json:"kpi_type"`
+	Year    int       `gorm:"not null" json:"year"`
+	Quarter int       `gorm:"not null" json:"quarter"`
+	// PeriodType/PeriodKey let an actual apply to any reporting frequency.
+	// Existing rows default to PeriodType="quarter", PeriodKey="{year}-Q{quarter}".
+	PeriodType         string         `gorm:"size:20;not null;default:'quarter'" json:"period_type"`
+	PeriodKey          string         `gorm:"size:20" json:"period_key"`
+	Target             float64        `gorm:"default:0" json:"target"`
+	Actual             float64        `gorm:"default:0" json:"actual"`
+	AchievementPct     float64        `gorm:"default:0" json:"achievement_pct"`
+	TrendDescription   string         `gorm:"type:text" json:"trend_description"`
+	Justification      string         `gorm:"type:text" json:"justification"`
+	CorrectiveAction   string         `gorm:"type:text" json:"corrective_action"`
+	Status             string         `gorm:"size:30;not null;default:'draft'" json:"status"`
+	SubmittedByID      *uuid.UUID     `gorm:"type:uuid;index" json:"submitted_by_id"`
+	SubmittedBy        *User          `gorm:"foreignKey:SubmittedByID" json:"submitted_by,omitempty"`
+	ApprovedByID       *uuid.UUID     `gorm:"type:uuid;index" json:"approved_by_id"`
+	ApprovedBy         *User          `gorm:"foreignKey:ApprovedByID" json:"approved_by,omitempty"`
+	WorkflowInstanceID *uuid.UUID     `gorm:"type:uuid;index" json:"workflow_instance_id"`
+	CreatedAt          time.Time      `json:"created_at"`
+	UpdatedAt          time.Time      `json:"updated_at"`
+	DeletedAt          gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
+// AchievementPct is computed explicitly by callers (see services.CalculateAchievement)
+// so that the KPI's polarity (ascending/descending) is taken into account. It is not
+// recalculated automatically here because these hooks have no access to the KPI
+// dictionary's Polarity field.
 func (k *KpiPerformance) BeforeCreate(tx *gorm.DB) error {
 	if k.ID == uuid.Nil {
 		k.ID = uuid.New()
-	}
-	if k.Target != 0 {
-		k.AchievementPct = (k.Actual / k.Target) * 100
-	}
-	return nil
-}
-
-func (k *KpiPerformance) BeforeUpdate(tx *gorm.DB) error {
-	if k.Target != 0 {
-		k.AchievementPct = (k.Actual / k.Target) * 100
 	}
 	return nil
 }
@@ -103,6 +113,8 @@ type KpiPerformanceRequest struct {
 	KpiType          string  `json:"kpi_type" validate:"required,oneof=strategic operational award"`
 	Year             int     `json:"year" validate:"required,min=2020,max=2040"`
 	Quarter          int     `json:"quarter" validate:"required,min=1,max=4"`
+	PeriodType       string  `json:"period_type" validate:"omitempty,oneof=month quarter semi_annual annual custom"`
+	PeriodKey        string  `json:"period_key" validate:"omitempty,max=20"`
 	Target           float64 `json:"target"`
 	Actual           float64 `json:"actual"`
 	TrendDescription string  `json:"trend_description"`
@@ -121,6 +133,8 @@ type KpiPerformanceResponse struct {
 	KpiType          string             `json:"kpi_type"`
 	Year             int                `json:"year"`
 	Quarter          int                `json:"quarter"`
+	PeriodType       string             `json:"period_type"`
+	PeriodKey        string             `json:"period_key"`
 	Target           float64            `json:"target"`
 	Actual           float64            `json:"actual"`
 	AchievementPct   float64            `json:"achievement_pct"`
@@ -143,6 +157,8 @@ func (k *KpiPerformance) ToResponse() KpiPerformanceResponse {
 		KpiType:          k.KpiType,
 		Year:             k.Year,
 		Quarter:          k.Quarter,
+		PeriodType:       k.PeriodType,
+		PeriodKey:        k.PeriodKey,
 		Target:           k.Target,
 		Actual:           k.Actual,
 		AchievementPct:   k.AchievementPct,
@@ -203,20 +219,20 @@ type KpiBenchmarkRequest struct {
 }
 
 type KpiBenchmarkResponse struct {
-	ID                   uuid.UUID          `json:"id"`
-	KpiCode              string             `json:"kpi_code"`
-	KpiType              string             `json:"kpi_type"`
-	Year                 int                `json:"year"`
-	Quarter              int                `json:"quarter"`
-	Zone                 string             `json:"zone"`
-	DepartmentID         *uuid.UUID         `json:"department_id"`
+	ID                   uuid.UUID                `json:"id"`
+	KpiCode              string                   `json:"kpi_code"`
+	KpiType              string                   `json:"kpi_type"`
+	Year                 int                      `json:"year"`
+	Quarter              int                      `json:"quarter"`
+	Zone                 string                   `json:"zone"`
+	DepartmentID         *uuid.UUID               `json:"department_id"`
 	Department           *DepartmentBriefResponse `json:"department,omitempty"`
 	BenchmarkEntity      string                   `json:"benchmark_entity"`
-	InternalAchievement  float64            `json:"internal_achievement"`
-	BenchmarkAchievement float64            `json:"benchmark_achievement"`
-	Variance             float64            `json:"variance"`
-	Notes                string             `json:"notes"`
-	CreatedAt            time.Time          `json:"created_at"`
+	InternalAchievement  float64                  `json:"internal_achievement"`
+	BenchmarkAchievement float64                  `json:"benchmark_achievement"`
+	Variance             float64                  `json:"variance"`
+	Notes                string                   `json:"notes"`
+	CreatedAt            time.Time                `json:"created_at"`
 }
 
 func (b *KpiBenchmark) ToBenchmarkResponse() KpiBenchmarkResponse {
@@ -244,22 +260,22 @@ func (b *KpiBenchmark) ToBenchmarkResponse() KpiBenchmarkResponse {
 // ──────────────────────────────────────────────────────────
 
 type KpiSegmentation struct {
-	ID            uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
-	KpiCode       string         `gorm:"size:50;not null;index" json:"kpi_code"`
-	KpiType       string         `gorm:"size:20;not null" json:"kpi_type"`
-	Year          int            `gorm:"not null" json:"year"`
-	Quarter       int            `gorm:"not null" json:"quarter"`
-	DimensionName string         `gorm:"size:100;not null" json:"dimension_name"`
-	SegmentName   string         `gorm:"size:255;not null" json:"segment_name"`
-	Target        float64        `gorm:"default:0" json:"target"`
-	Achievement   float64        `gorm:"default:0" json:"achievement"`
-	AchievementPct float64       `gorm:"-" json:"achievement_pct"`
-	DepartmentID  *uuid.UUID     `gorm:"type:uuid;index" json:"department_id"`
-	Department    *Department    `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
-	Zone          string         `gorm:"size:100;default:''" json:"zone"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
-	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
+	ID             uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	KpiCode        string         `gorm:"size:50;not null;index" json:"kpi_code"`
+	KpiType        string         `gorm:"size:20;not null" json:"kpi_type"`
+	Year           int            `gorm:"not null" json:"year"`
+	Quarter        int            `gorm:"not null" json:"quarter"`
+	DimensionName  string         `gorm:"size:100;not null" json:"dimension_name"`
+	SegmentName    string         `gorm:"size:255;not null" json:"segment_name"`
+	Target         float64        `gorm:"default:0" json:"target"`
+	Achievement    float64        `gorm:"default:0" json:"achievement"`
+	AchievementPct float64        `gorm:"-" json:"achievement_pct"`
+	DepartmentID   *uuid.UUID     `gorm:"type:uuid;index" json:"department_id"`
+	Department     *Department    `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
+	Zone           string         `gorm:"size:100;default:''" json:"zone"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (s *KpiSegmentation) BeforeCreate(tx *gorm.DB) error {
@@ -283,17 +299,17 @@ type KpiSegmentationRequest struct {
 }
 
 type KpiSegmentationResponse struct {
-	ID             uuid.UUID        `json:"id"`
-	KpiCode        string           `json:"kpi_code"`
-	KpiType        string           `json:"kpi_type"`
-	Year           int              `json:"year"`
-	Quarter        int              `json:"quarter"`
-	DimensionName  string           `json:"dimension_name"`
-	SegmentName    string           `json:"segment_name"`
-	Target         float64          `json:"target"`
-	Achievement    float64          `json:"achievement"`
-	AchievementPct float64          `json:"achievement_pct"`
-	DepartmentID   *uuid.UUID              `json:"department_id"`
+	ID             uuid.UUID                `json:"id"`
+	KpiCode        string                   `json:"kpi_code"`
+	KpiType        string                   `json:"kpi_type"`
+	Year           int                      `json:"year"`
+	Quarter        int                      `json:"quarter"`
+	DimensionName  string                   `json:"dimension_name"`
+	SegmentName    string                   `json:"segment_name"`
+	Target         float64                  `json:"target"`
+	Achievement    float64                  `json:"achievement"`
+	AchievementPct float64                  `json:"achievement_pct"`
+	DepartmentID   *uuid.UUID               `json:"department_id"`
 	Department     *DepartmentBriefResponse `json:"department,omitempty"`
 	Zone           string                   `json:"zone"`
 	CreatedAt      time.Time                `json:"created_at"`
