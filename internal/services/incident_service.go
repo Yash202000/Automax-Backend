@@ -358,6 +358,7 @@ func (s *incidentService) getNextRoundRobinAssignee(ctx context.Context, roleIDs
 // Incident CRUD
 
 func (s *incidentService) CreateIncident(ctx context.Context, req *models.IncidentCreateRequest, reporterID uuid.UUID) (*models.IncidentResponse, error) {
+	creatorID := reporterID // preserve before IVR block may overwrite reporterID
 	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
 	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.IVR) && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
 		// For EPM940, if source is IVR, then fetch user based on mobile no. of citizen
@@ -448,8 +449,29 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 				return nil, ErrInvalidLocation
 			}
 
-			// Find user's open incidents that have location coordinates
-			openIncidents, err := s.incidentRepo.FindUserOpenIncidentsForDuplicateCheck(ctx, reporterID)
+			// Determine whether the original creating user is a Call Center Agent.
+			// If the role lookup fails we fall through to the reporter-based check (safe default).
+			isAgent := false
+			if creatorRoles, err := s.userRepo.GetUserRoles(ctx, creatorID); err == nil {
+				for _, r := range creatorRoles {
+					if strings.EqualFold(r.Code, constants.ROLES.AGENT) {
+						isAgent = true
+						break
+					}
+				}
+			}
+
+			// For agents acting on behalf of citizens, scope the duplicate check to the
+			// citizen's identity rather than the agent's reporterID, so incidents filed
+			// for different citizens are never incorrectly blocked.
+			var openIncidents []models.Incident
+			if isAgent {
+				openIncidents, err = s.incidentRepo.FindOpenIncidentsForDuplicateCheckByCaller(
+					ctx, req.ReporterName, req.ReporterPhone,
+				)
+			} else {
+				openIncidents, err = s.incidentRepo.FindUserOpenIncidentsForDuplicateCheck(ctx, reporterID)
+			}
 			if err != nil {
 				return nil, err
 			}

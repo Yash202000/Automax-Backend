@@ -672,19 +672,19 @@ type IncidentUnmergeResponse struct {
 
 // EpmPortalHierarchyNode is a single node in a nested classification or location chain.
 type EpmPortalHierarchyNode struct {
-	Name   string                   `json:"name"`
-	NameAr string                   `json:"name_ar"`
-	Level  int                      `json:"level"`
-	Child  *EpmPortalHierarchyNode  `json:"child"`
+	Name   string                  `json:"name"`
+	NameAr string                  `json:"name_ar"`
+	Level  int                     `json:"level"`
+	Child  *EpmPortalHierarchyNode `json:"child"`
 }
 
 // EpmPortalTreeNode is a node in the portal-specific classification/location tree.
 type EpmPortalTreeNode struct {
-	ID       uuid.UUID            `json:"id"`
-	Name     string               `json:"name"`
-	NameAr   string               `json:"name_ar"`
-	Level    int                  `json:"level"`
-	Children []EpmPortalTreeNode  `json:"children,omitempty"`
+	ID       uuid.UUID           `json:"id"`
+	Name     string              `json:"name"`
+	NameAr   string              `json:"name_ar"`
+	Level    int                 `json:"level"`
+	Children []EpmPortalTreeNode `json:"children,omitempty"`
 }
 
 // EpmPortalStateInfo carries the state name fields needed by the EPM portal.
@@ -1288,6 +1288,7 @@ type IncidentReportAttachment struct {
 	UploadedByID        *uuid.UUID `db:"uploaded_by_id"`
 	UploadedByFirstName string     `db:"uploaded_by_first_name"`
 	UploadedByLastName  string     `db:"uploaded_by_last_name"`
+	UploadedByRole      string     `db:"uploaded_by_role"`
 	CreatedAt           time.Time  `db:"created_at"`
 	DeletedAt           *time.Time `db:"deleted_at"`
 	TransitionName      *string    `db:"transition_name"`

@@ -17,11 +17,13 @@ var USER_ROLE = struct {
 	ADMIN       string
 	USER        string
 	CITIZEN     string
+	AGENT       string
 }{
 	SUPER_ADMIN: "super_admin",
 	ADMIN:       "admin",
 	USER:        "user",
 	CITIZEN:     "citizen",
+	AGENT:       "agent",
 }
 
 var CLIENT_CODE = struct {
@@ -75,9 +77,11 @@ var ROLES = struct {
 	ADMIN       string
 	USER        string
 	CITIZEN     string
+	AGENT       string
 }{
 	SUPER_ADMIN: "super_admin",
 	ADMIN:       "admin",
 	USER:        "user",
 	CITIZEN:     "citizen",
+	AGENT:       "agent",
 }
