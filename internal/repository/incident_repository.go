@@ -31,6 +31,7 @@ type IncidentRepository interface {
 	WithTx(tx *gorm.DB) IncidentRepository
 	LockForUpdate(ctx context.Context, tx *gorm.DB, id uuid.UUID) (*models.Incident, error)
 	FindUserOpenIncidentsForDuplicateCheck(ctx context.Context, reporterID uuid.UUID) ([]models.Incident, error)
+	FindOpenIncidentsForDuplicateCheckByCaller(ctx context.Context, reporterName string, reporterPhone string) ([]models.Incident, error)
 	FindByIDWithLast6DigitValidation(ctx context.Context, req *models.IncidentUpdateIVRRequest) (*models.Incident, error)
 	// Incident number generation
 	GenerateIncidentNumber(ctx context.Context) (string, error)
@@ -976,7 +977,7 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 
 	//  Total
 	baseQuery := applyBaseFilters(
-		r.db.WithContext(ctx).Model(&models.Incident{}).Debug().
+		r.db.WithContext(ctx).Model(&models.Incident{}).
 			Where("incidents.workflow_id IN (SELECT id FROM workflows WHERE deleted_at IS NULL)"),
 	)
 	if err := baseQuery.Count(&stats.Total).Error; err != nil {
@@ -1612,6 +1613,33 @@ func (r *incidentRepository) FindUserOpenIncidentsForDuplicateCheck(ctx context.
 	return incidents, err
 }
 
+func (r *incidentRepository) FindOpenIncidentsForDuplicateCheckByCaller(ctx context.Context, reporterName string, reporterPhone string) ([]models.Incident, error) {
+	if reporterName == "" && reporterPhone == "" {
+		return []models.Incident{}, nil
+	}
+
+	query := r.db.WithContext(ctx).
+		Where("closed_at IS NULL").
+		Where("latitude IS NOT NULL").
+		Where("longitude IS NOT NULL")
+
+	if reporterName != "" {
+		query = query.Where("reporter_name = ?", reporterName)
+	} else {
+		phone := reporterPhone
+		phoneWithPlus := "+" + phone
+		if strings.HasPrefix(phone, "+") {
+			phoneWithPlus = phone
+			phone = strings.TrimPrefix(phone, "+")
+		}
+		query = query.Where("reporter_phone IN (?, ?)", phone, phoneWithPlus)
+	}
+
+	var incidents []models.Incident
+	err := query.Find(&incidents).Error
+	return incidents, err
+}
+
 // GetIncidentsExceedingStateSLA returns incidents where the time spent in the current state
 
 func (r *incidentRepository) GetIncidentsExceedingStateSLA(ctx context.Context) ([]models.Incident, error) {
@@ -1726,6 +1754,12 @@ SELECT
     ia.uploaded_by_id, ia.created_at, ia.deleted_at,
     COALESCE(u.first_name, '')  AS uploaded_by_first_name,
     COALESCE(u.last_name, '')   AS uploaded_by_last_name,
+    COALESCE((
+        SELECT STRING_AGG(DISTINCT r.name, ', ' ORDER BY r.name)
+        FROM user_roles ur
+        JOIN roles r ON r.id = ur.role_id AND r.deleted_at IS NULL AND r.is_active = true
+        WHERE ur.user_id = ia.uploaded_by_id
+    ), '')                       AS uploaded_by_role,
     wt.name                     AS transition_name,
     wt.name_ar                  AS transition_name_ar,
     fs.name                     AS from_state_name,
