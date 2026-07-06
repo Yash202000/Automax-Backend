@@ -41,6 +41,7 @@ type KpiCardDef struct {
 	NameAr           string  `json:"name_ar"`
 	Formula          string  `json:"formula"`
 	Baseline         float64 `json:"baseline"`
+	UnitOfMeasure    string  `json:"unit_of_measure"`
 	Polarity         string  `json:"polarity"`
 	ReportingFreq    string  `json:"reporting_frequency"`
 	DataSource       string  `json:"data_source"`
@@ -59,10 +60,10 @@ type BenchmarkSummary struct {
 }
 
 type SegSummary struct {
-	DimensionName string  `json:"dimension_name"`
-	SegmentName   string  `json:"segment_name"`
+	DimensionName  string  `json:"dimension_name"`
+	SegmentName    string  `json:"segment_name"`
 	AvgAchievement float64 `json:"avg_achievement"`
-	AvgPct        float64 `json:"avg_pct"`
+	AvgPct         float64 `json:"avg_pct"`
 }
 
 type TrendData struct {
@@ -71,31 +72,40 @@ type TrendData struct {
 }
 
 type KpiPerformanceSummary struct {
-	KpiCode         string       `json:"kpi_code"`
-	TotalTarget     float64      `json:"total_target"`
-	TotalActual     float64      `json:"total_actual"`
-	AvgAchievement  float64      `json:"avg_achievement"`
-	LastUpdated     string       `json:"last_updated"`
-	QuarterlyTrend  []TrendData  `json:"quarterly_trend"`
+	KpiCode        string      `json:"kpi_code"`
+	TotalTarget    float64     `json:"total_target"`
+	TotalActual    float64     `json:"total_actual"`
+	AvgAchievement float64     `json:"avg_achievement"`
+	LastUpdated    string      `json:"last_updated"`
+	QuarterlyTrend []TrendData `json:"quarterly_trend"`
 }
 
 type EnhancedKpiDashboardData struct {
-	TotalStrategic        int64               `json:"total_strategic"`
-	TotalOperational      int64               `json:"total_operational"`
-	TotalAward            int64               `json:"total_award"`
-	PendingReviews        int64               `json:"pending_reviews"`
-	KpisByStatus          []StatusCount       `json:"kpis_by_status"`
-	KpisByGoal            []GoalCount         `json:"kpis_by_goal"`
-	PerformanceTrends     []PerformanceTrend  `json:"performance_trends"`
-	BenchmarkSummaries    []BenchmarkSummary  `json:"benchmark_summaries"`
-	SegmentationSummaries []SegSummary        `json:"segmentation_summaries"`
-	RecentKpiCards        []KpiCardDef        `json:"recent_kpi_cards"`
+	TotalStrategic        int64                   `json:"total_strategic"`
+	TotalOperational      int64                   `json:"total_operational"`
+	TotalAward            int64                   `json:"total_award"`
+	PendingReviews        int64                   `json:"pending_reviews"`
+	KpisByStatus          []StatusCount           `json:"kpis_by_status"`
+	KpisByGoal            []GoalCount             `json:"kpis_by_goal"`
+	PerformanceTrends     []PerformanceTrend      `json:"performance_trends"`
+	BenchmarkSummaries    []BenchmarkSummary      `json:"benchmark_summaries"`
+	SegmentationSummaries []SegSummary            `json:"segmentation_summaries"`
+	RecentKpiCards        []KpiCardDef            `json:"recent_kpi_cards"`
 	TopPerformers         []KpiPerformanceSummary `json:"top_performers"`
 	LowPerformers         []KpiPerformanceSummary `json:"low_performers"`
 }
 
 func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 	var data EnhancedKpiDashboardData
+
+	kpiType := c.Query("kpi_type") // strategic|operational|award — empty means all types
+	var year, quarter int
+	if v, err := strconv.Atoi(c.Query("year")); err == nil {
+		year = v
+	}
+	if v, err := strconv.Atoi(c.Query("quarter")); err == nil {
+		quarter = v
+	}
 
 	h.db.WithContext(c.UserContext()).Model(&models.StrategicKPI{}).Count(&data.TotalStrategic)
 	h.db.WithContext(c.UserContext()).Model(&models.OperationalKPI{}).Count(&data.TotalOperational)
@@ -111,18 +121,31 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 		Joins("left join strategic_goals sg on sg.id = strategic_kpis.strategic_goal_id").
 		Group("sg.name_en").Scan(&data.KpisByGoal)
 
-	h.db.WithContext(c.UserContext()).Model(&models.KpiPerformance{}).
+	perfQuery := func() *gorm.DB {
+		q := h.db.WithContext(c.UserContext()).Model(&models.KpiPerformance{}).Where("status = ?", "published")
+		if kpiType != "" {
+			q = q.Where("kpi_type = ?", kpiType)
+		}
+		if year != 0 {
+			q = q.Where("year = ?", year)
+		}
+		if quarter != 0 {
+			q = q.Where("quarter = ?", quarter)
+		}
+		return q
+	}
+
+	perfQuery().
 		Select("year, quarter, AVG(achievement_pct) as avg_achievement, count(*) as kpi_count").
-		Where("status = ?", "published").
 		Group("year, quarter").
 		Order("year DESC, quarter DESC").
 		Limit(8).
 		Scan(&data.PerformanceTrends)
 
 	h.db.WithContext(c.UserContext()).Model(&models.KpiBenchmark{}).
-		Select("kpi_code, zone, benchmark_entity, "+
-			"AVG(internal_achievement) as avg_internal, "+
-			"AVG(benchmark_achievement) as avg_benchmark, "+
+		Select("kpi_code, zone, benchmark_entity, " +
+			"AVG(internal_achievement) as avg_internal, " +
+			"AVG(benchmark_achievement) as avg_benchmark, " +
 			"AVG(internal_achievement - benchmark_achievement) as avg_variance").
 		Group("kpi_code, zone, benchmark_entity").
 		Order("avg_variance DESC").
@@ -130,35 +153,46 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 		Scan(&data.BenchmarkSummaries)
 
 	h.db.WithContext(c.UserContext()).Model(&models.KpiSegmentation{}).
-		Select("dimension_name, segment_name, "+
-			"AVG(achievement) as avg_achievement, "+
+		Select("dimension_name, segment_name, " +
+			"AVG(achievement) as avg_achievement, " +
 			"CASE WHEN AVG(target) > 0 THEN (AVG(achievement) / AVG(target)) * 100 ELSE 0 END as avg_pct").
 		Group("dimension_name, segment_name").
 		Order("avg_pct DESC").
 		Limit(10).
 		Scan(&data.SegmentationSummaries)
 
-	var strategicCards []KpiCardDef
-	h.db.WithContext(c.UserContext()).Model(&models.StrategicKPI{}).
-		Select("code, 'strategic' as type, name_en, name_ar, formula, baseline, polarity, reporting_frequency as reporting_freq, data_source, activation_status").
-		Limit(10).
-		Order("created_at DESC").
-		Scan(&strategicCards)
-	data.RecentKpiCards = strategicCards
+	cardQuery := func(model interface{}, typeLiteral string) []KpiCardDef {
+		var cards []KpiCardDef
+		h.db.WithContext(c.UserContext()).Model(model).
+			Select("code, '" + typeLiteral + "' as type, name_en, name_ar, formula, baseline, unit_of_measure, polarity, reporting_frequency as reporting_freq, data_source, activation_status").
+			Limit(10).
+			Order("created_at DESC").
+			Scan(&cards)
+		return cards
+	}
+
+	var recentCards []KpiCardDef
+	switch kpiType {
+	case "operational":
+		recentCards = cardQuery(&models.OperationalKPI{}, "operational")
+	case "award":
+		recentCards = cardQuery(&models.AwardKPI{}, "award")
+	default:
+		recentCards = cardQuery(&models.StrategicKPI{}, "strategic")
+	}
+	data.RecentKpiCards = recentCards
 
 	var topPerfs, lowPerfs []KpiPerformanceSummary
-	h.db.WithContext(c.UserContext()).Model(&models.KpiPerformance{}).
+	perfQuery().
 		Select("kpi_code, SUM(target) as total_target, SUM(actual) as total_actual, AVG(achievement_pct) as avg_achievement, MAX(updated_at) as last_updated").
-		Where("status = ?", "published").
 		Group("kpi_code").
 		Having("AVG(achievement_pct) >= ?", 80).
 		Order("avg_achievement DESC").
 		Limit(5).
 		Scan(&topPerfs)
 
-	h.db.WithContext(c.UserContext()).Model(&models.KpiPerformance{}).
+	perfQuery().
 		Select("kpi_code, SUM(target) as total_target, SUM(actual) as total_actual, AVG(achievement_pct) as avg_achievement, MAX(updated_at) as last_updated").
-		Where("status = ?", "published").
 		Group("kpi_code").
 		Having("AVG(achievement_pct) < ?", 80).
 		Order("avg_achievement ASC").
@@ -204,7 +238,7 @@ func (h *KpiDashboardHandler) GetKpiCardDefinitions(c *fiber.Ctx) error {
 
 	var strategicCards []KpiCardDef
 	q := h.db.WithContext(c.UserContext()).Model(&models.StrategicKPI{}).
-		Select("code, 'strategic' as type, name_en, name_ar, formula, baseline, polarity, reporting_frequency as reporting_freq, data_source, activation_status")
+		Select("code, 'strategic' as type, name_en, name_ar, formula, baseline, unit_of_measure, polarity, reporting_frequency as reporting_freq, data_source, activation_status")
 
 	if search != "" {
 		q = q.Where("(name_en ILIKE ? OR name_ar ILIKE ? OR code ILIKE ?)", "%"+search+"%", "%"+search+"%", "%"+search+"%")
@@ -218,7 +252,7 @@ func (h *KpiDashboardHandler) GetKpiCardDefinitions(c *fiber.Ctx) error {
 	var operationalCards []KpiCardDef
 	if kpiType == "operational" || kpiType == "" {
 		q2 := h.db.WithContext(c.UserContext()).Model(&models.OperationalKPI{}).
-			Select("code, 'operational' as type, name_en, name_ar, formula, baseline, polarity, reporting_frequency as reporting_freq, data_source, activation_status")
+			Select("code, 'operational' as type, name_en, name_ar, formula, baseline, unit_of_measure, polarity, reporting_frequency as reporting_freq, data_source, activation_status")
 		if search != "" {
 			q2 = q2.Where("(name_en ILIKE ? OR name_ar ILIKE ? OR code ILIKE ?)", "%"+search+"%", "%"+search+"%", "%"+search+"%")
 		}
@@ -230,7 +264,7 @@ func (h *KpiDashboardHandler) GetKpiCardDefinitions(c *fiber.Ctx) error {
 	var awardCards []KpiCardDef
 	if kpiType == "award" || kpiType == "" {
 		q3 := h.db.WithContext(c.UserContext()).Model(&models.AwardKPI{}).
-			Select("code, 'award' as type, name_en, name_ar, formula, baseline, polarity, reporting_frequency as reporting_freq, data_source, activation_status")
+			Select("code, 'award' as type, name_en, name_ar, formula, baseline, unit_of_measure, polarity, reporting_frequency as reporting_freq, data_source, activation_status")
 		if search != "" {
 			q3 = q3.Where("(name_en ILIKE ? OR name_ar ILIKE ? OR code ILIKE ?)", "%"+search+"%", "%"+search+"%", "%"+search+"%")
 		}

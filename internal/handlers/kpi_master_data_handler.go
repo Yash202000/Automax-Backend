@@ -342,12 +342,12 @@ func (h *KpiMasterDataHandler) UpdateProcess(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
 	result := h.db.WithContext(c.UserContext()).Model(&models.Process{ID: id}).Updates(map[string]interface{}{
-		"name_en":                   req.NameEn,
-		"name_ar":                   req.NameAr,
-		"operational_objective_id":  req.OperationalObjectiveID,
-		"strategic_goal_id":         req.StrategicGoalID,
-		"department_id":             req.DepartmentID,
-		"unit":                      req.Unit,
+		"name_en":                  req.NameEn,
+		"name_ar":                  req.NameAr,
+		"operational_objective_id": req.OperationalObjectiveID,
+		"strategic_goal_id":        req.StrategicGoalID,
+		"department_id":            req.DepartmentID,
+		"unit":                     req.Unit,
 	})
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
@@ -663,6 +663,140 @@ func (h *KpiMasterDataHandler) DeleteAwardSubCriterion(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 	result := h.db.WithContext(c.UserContext()).Delete(&models.AwardSubCriterion{}, id)
+	if result.RowsAffected == 0 {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
+}
+
+// ─── Data Sources ─────────────────────────────────────────────────────────────
+
+func (h *KpiMasterDataHandler) ListDataSources(c *fiber.Ctx) error {
+	var items []models.KpiDataSource
+	if err := h.db.WithContext(c.UserContext()).Order("name_en ASC").Find(&items).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+	resp := make([]models.KpiDataSourceResponse, len(items))
+	for i, item := range items {
+		resp[i] = item.ToResponse()
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
+}
+
+func (h *KpiMasterDataHandler) CreateDataSource(c *fiber.Ctx) error {
+	var req models.KpiDataSourceRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+	item := &models.KpiDataSource{NameEn: req.NameEn, NameAr: req.NameAr}
+	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusCreated, "", item.ToResponse())
+}
+
+func (h *KpiMasterDataHandler) UpdateDataSource(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	var req models.KpiDataSourceRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+	result := h.db.WithContext(c.UserContext()).Model(&models.KpiDataSource{ID: id}).Updates(map[string]interface{}{
+		"name_en": req.NameEn,
+		"name_ar": req.NameAr,
+	})
+	if result.RowsAffected == 0 {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	var item models.KpiDataSource
+	if err := h.db.WithContext(c.UserContext()).First(&item, id).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", item.ToResponse())
+}
+
+func (h *KpiMasterDataHandler) DeleteDataSource(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	result := h.db.WithContext(c.UserContext()).Delete(&models.KpiDataSource{}, id)
+	if result.RowsAffected == 0 {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
+}
+
+// ─── Segmentation Dimensions ──────────────────────────────────────────────────
+
+func (h *KpiMasterDataHandler) ListSegmentationDimensions(c *fiber.Ctx) error {
+	var items []models.KpiSegmentationDimension
+	if err := h.db.WithContext(c.UserContext()).Order("name_en ASC").Find(&items).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+	resp := make([]models.KpiSegmentationDimensionResponse, len(items))
+	for i, item := range items {
+		resp[i] = item.ToResponse()
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
+}
+
+func (h *KpiMasterDataHandler) CreateSegmentationDimension(c *fiber.Ctx) error {
+	var req models.KpiSegmentationDimensionRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+	item := &models.KpiSegmentationDimension{NameEn: req.NameEn, NameAr: req.NameAr}
+	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusCreated, "", item.ToResponse())
+}
+
+func (h *KpiMasterDataHandler) UpdateSegmentationDimension(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	var req models.KpiSegmentationDimensionRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+	result := h.db.WithContext(c.UserContext()).Model(&models.KpiSegmentationDimension{ID: id}).Updates(map[string]interface{}{
+		"name_en": req.NameEn,
+		"name_ar": req.NameAr,
+	})
+	if result.RowsAffected == 0 {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	var item models.KpiSegmentationDimension
+	if err := h.db.WithContext(c.UserContext()).First(&item, id).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", item.ToResponse())
+}
+
+func (h *KpiMasterDataHandler) DeleteSegmentationDimension(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	result := h.db.WithContext(c.UserContext()).Delete(&models.KpiSegmentationDimension{}, id)
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}

@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"fmt"
 	"strconv"
 
+	"github.com/automax/backend/internal/middleware"
 	"github.com/automax/backend/internal/models"
+	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
@@ -14,14 +17,16 @@ import (
 )
 
 type KpiDictionaryHandler struct {
-	db        *gorm.DB
-	validator *validator.Validate
+	db           *gorm.DB
+	validator    *validator.Validate
+	actionLogSvc services.ActionLogService
 }
 
-func NewKpiDictionaryHandler(db *gorm.DB) *KpiDictionaryHandler {
+func NewKpiDictionaryHandler(db *gorm.DB, actionLogSvc services.ActionLogService) *KpiDictionaryHandler {
 	return &KpiDictionaryHandler{
-		db:        db,
-		validator: validator.New(),
+		db:           db,
+		validator:    validator.New(),
+		actionLogSvc: actionLogSvc,
 	}
 }
 
@@ -109,6 +114,7 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 		DescriptionAr:      req.DescriptionAr,
 		Formula:            req.Formula,
 		Baseline:           req.Baseline,
+		UnitOfMeasure:      req.UnitOfMeasure,
 		ReportingFrequency: req.ReportingFrequency,
 		Lifecycle:          req.Lifecycle,
 		DataSource:         req.DataSource,
@@ -130,6 +136,14 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 	h.db.WithContext(c.UserContext()).
 		Preload("StrategicGoal").Preload("Pillar").Preload("Domain").Preload("OwnerDept").
 		First(item, item.ID)
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "create",
+		Module:      "kpi",
+		ResourceID:  item.ID.String(),
+		Description: fmt.Sprintf("Created strategic KPI %s", item.Code),
+		Status:      "success",
+	})
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, "", item.ToResponse())
 }
@@ -162,6 +176,7 @@ func (h *KpiDictionaryHandler) UpdateStrategic(c *fiber.Ctx) error {
 		"description_ar":      req.DescriptionAr,
 		"formula":             req.Formula,
 		"baseline":            req.Baseline,
+		"unit_of_measure":     req.UnitOfMeasure,
 		"reporting_frequency": req.ReportingFrequency,
 		"lifecycle":           req.Lifecycle,
 		"data_source":         req.DataSource,
@@ -183,6 +198,14 @@ func (h *KpiDictionaryHandler) UpdateStrategic(c *fiber.Ctx) error {
 		Preload("StrategicGoal").Preload("Pillar").Preload("Domain").Preload("OwnerDept").
 		First(&item, id)
 
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "update",
+		Module:      "kpi",
+		ResourceID:  id.String(),
+		Description: fmt.Sprintf("Updated strategic KPI %s", item.Code),
+		Status:      "success",
+	})
+
 	return utils.SuccessResponse(c, fiber.StatusOK, "", item.ToResponse())
 }
 
@@ -196,6 +219,14 @@ func (h *KpiDictionaryHandler) DeleteStrategic(c *fiber.Ctx) error {
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "delete",
+		Module:      "kpi",
+		ResourceID:  id.String(),
+		Description: fmt.Sprintf("Deleted strategic KPI %s", id),
+		Status:      "success",
+	})
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
 }
@@ -260,6 +291,7 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 		DescriptionAr:          req.DescriptionAr,
 		Formula:                req.Formula,
 		Baseline:               req.Baseline,
+		UnitOfMeasure:          req.UnitOfMeasure,
 		ReportingFrequency:     req.ReportingFrequency,
 		DataSource:             req.DataSource,
 		Notes:                  req.Notes,
@@ -278,6 +310,14 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 	h.db.WithContext(c.UserContext()).
 		Preload("StrategicGoal").Preload("OperationalObjective").Preload("Process").Preload("OwnerDept").
 		First(item, item.ID)
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "create",
+		Module:      "kpi",
+		ResourceID:  item.ID.String(),
+		Description: fmt.Sprintf("Created operational KPI %s", item.Code),
+		Status:      "success",
+	})
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, "", item.ToResponse())
 }
@@ -326,6 +366,7 @@ func (h *KpiDictionaryHandler) UpdateOperational(c *fiber.Ctx) error {
 		"description_ar":           req.DescriptionAr,
 		"formula":                  req.Formula,
 		"baseline":                 req.Baseline,
+		"unit_of_measure":          req.UnitOfMeasure,
 		"reporting_frequency":      req.ReportingFrequency,
 		"data_source":              req.DataSource,
 		"notes":                    req.Notes,
@@ -344,6 +385,14 @@ func (h *KpiDictionaryHandler) UpdateOperational(c *fiber.Ctx) error {
 		Preload("StrategicGoal").Preload("OperationalObjective").Preload("Process").Preload("OwnerDept").
 		First(&item, id)
 
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "update",
+		Module:      "kpi",
+		ResourceID:  id.String(),
+		Description: fmt.Sprintf("Updated operational KPI %s", item.Code),
+		Status:      "success",
+	})
+
 	return utils.SuccessResponse(c, fiber.StatusOK, "", item.ToResponse())
 }
 
@@ -357,6 +406,14 @@ func (h *KpiDictionaryHandler) DeleteOperational(c *fiber.Ctx) error {
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "delete",
+		Module:      "kpi",
+		ResourceID:  id.String(),
+		Description: fmt.Sprintf("Deleted operational KPI %s", id),
+		Status:      "success",
+	})
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
 }
@@ -414,6 +471,7 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 		DescriptionAr:       req.DescriptionAr,
 		Formula:             req.Formula,
 		Baseline:            req.Baseline,
+		UnitOfMeasure:       req.UnitOfMeasure,
 		ReportingFrequency:  req.ReportingFrequency,
 		DataSource:          req.DataSource,
 		Notes:               req.Notes,
@@ -433,6 +491,14 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 		Preload("AwardSubCriterion.AwardCriterion").Preload("OwnerDept").
 		First(item, item.ID)
 
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "create",
+		Module:      "kpi",
+		ResourceID:  item.ID.String(),
+		Description: fmt.Sprintf("Created award KPI %s", item.Code),
+		Status:      "success",
+	})
+
 	return utils.SuccessResponse(c, fiber.StatusCreated, "", item.ToResponse())
 }
 
@@ -446,6 +512,14 @@ func (h *KpiDictionaryHandler) DeleteAward(c *fiber.Ctx) error {
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "delete",
+		Module:      "kpi",
+		ResourceID:  id.String(),
+		Description: fmt.Sprintf("Deleted award KPI %s", id),
+		Status:      "success",
+	})
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
 }
@@ -488,10 +562,11 @@ func (h *KpiDictionaryHandler) UpdateAward(c *fiber.Ctx) error {
 		"owner_dept_id":          req.OwnerDeptID,
 		"polarity":               req.Polarity,
 		"activation_status":      req.ActivationStatus,
-		"description_en":        req.DescriptionEn,
-		"description_ar":        req.DescriptionAr,
+		"description_en":         req.DescriptionEn,
+		"description_ar":         req.DescriptionAr,
 		"formula":                req.Formula,
 		"baseline":               req.Baseline,
+		"unit_of_measure":        req.UnitOfMeasure,
 		"reporting_frequency":    req.ReportingFrequency,
 		"data_source":            req.DataSource,
 		"notes":                  req.Notes,
@@ -509,6 +584,14 @@ func (h *KpiDictionaryHandler) UpdateAward(c *fiber.Ctx) error {
 	h.db.WithContext(c.UserContext()).
 		Preload("AwardSubCriterion.AwardCriterion").Preload("OwnerDept").
 		First(&item, id)
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "update",
+		Module:      "kpi",
+		ResourceID:  id.String(),
+		Description: fmt.Sprintf("Updated award KPI %s", item.Code),
+		Status:      "success",
+	})
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "", item.ToResponse())
 }
@@ -589,6 +672,14 @@ func (h *KpiDictionaryHandler) TransitionKpiStatus(c *fiber.Ctx) error {
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "transition",
+		Module:      "kpi",
+		ResourceID:  id.String(),
+		Description: fmt.Sprintf("%s %s KPI %s (status -> %s)", req.Action, kpiType, id, newStatus),
+		Status:      "success",
+	})
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Status updated successfully", nil)
 }

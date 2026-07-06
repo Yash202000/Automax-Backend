@@ -56,6 +56,7 @@ type StrategicKPI struct {
 	DescriptionAr      string         `gorm:"type:text" json:"description_ar"`
 	Formula            string         `gorm:"type:text" json:"formula"`
 	Baseline           float64        `gorm:"default:0" json:"baseline"`
+	UnitOfMeasure      string         `gorm:"size:50" json:"unit_of_measure"`
 	ReportingFrequency string         `gorm:"size:50" json:"reporting_frequency"`
 	Lifecycle          string         `gorm:"size:100" json:"lifecycle"`
 	DataSource         string         `gorm:"size:255" json:"data_source"`
@@ -89,7 +90,8 @@ type StrategicKPIRequest struct {
 	DescriptionAr      string     `json:"description_ar"`
 	Formula            string     `json:"formula"`
 	Baseline           float64    `json:"baseline"`
-	ReportingFrequency string    `json:"reporting_frequency" validate:"omitempty,oneof=monthly quarterly annually"`
+	UnitOfMeasure      string     `json:"unit_of_measure" validate:"max=50"`
+	ReportingFrequency string     `json:"reporting_frequency" validate:"omitempty,oneof=monthly quarterly annually"`
 	Lifecycle          string     `json:"lifecycle" validate:"max=100"`
 	DataSource         string     `json:"data_source" validate:"max=255"`
 	SegmentationAxes   string     `json:"segmentation_axes"`
@@ -118,6 +120,7 @@ type StrategicKPIResponse struct {
 	DescriptionAr      string                   `json:"description_ar"`
 	Formula            string                   `json:"formula"`
 	Baseline           float64                  `json:"baseline"`
+	UnitOfMeasure      string                   `json:"unit_of_measure"`
 	ReportingFrequency string                   `json:"reporting_frequency"`
 	Lifecycle          string                   `json:"lifecycle"`
 	DataSource         string                   `json:"data_source"`
@@ -143,6 +146,7 @@ func (k *StrategicKPI) ToResponse() StrategicKPIResponse {
 		DescriptionAr:      k.DescriptionAr,
 		Formula:            k.Formula,
 		Baseline:           k.Baseline,
+		UnitOfMeasure:      k.UnitOfMeasure,
 		ReportingFrequency: k.ReportingFrequency,
 		Lifecycle:          k.Lifecycle,
 		DataSource:         k.DataSource,
@@ -196,6 +200,7 @@ type OperationalKPI struct {
 	DescriptionAr          string                `gorm:"type:text" json:"description_ar"`
 	Formula                string                `gorm:"type:text" json:"formula"`
 	Baseline               float64               `gorm:"default:0" json:"baseline"`
+	UnitOfMeasure          string                `gorm:"size:50" json:"unit_of_measure"`
 	ReportingFrequency     string                `gorm:"size:50" json:"reporting_frequency"`
 	DataSource             string                `gorm:"size:255" json:"data_source"`
 	Notes                  string                `gorm:"type:text" json:"notes"`
@@ -225,32 +230,34 @@ type OperationalKPIRequest struct {
 	DescriptionAr          string     `json:"description_ar"`
 	Formula                string     `json:"formula"`
 	Baseline               float64    `json:"baseline"`
+	UnitOfMeasure          string     `json:"unit_of_measure" validate:"max=50"`
 	ReportingFrequency     string     `json:"reporting_frequency" validate:"omitempty,oneof=monthly quarterly annually"`
 	DataSource             string     `json:"data_source" validate:"max=255"`
 	Notes                  string     `json:"notes"`
 }
 
 type OperationalKPIResponse struct {
-	ID                     uuid.UUID                     `json:"id"`
-	Code                   string                        `json:"code"`
-	NameEn                 string                        `json:"name_en"`
-	NameAr                 string                        `json:"name_ar"`
-	StrategicGoalID        uuid.UUID                     `json:"strategic_goal_id"`
-	OperationalObjectiveID uuid.UUID                     `json:"operational_objective_id"`
-	ProcessID              uuid.UUID                     `json:"process_id"`
-	Process                *ProcessResponse              `json:"process,omitempty"`
-	OwnerDeptID            *uuid.UUID                    `json:"owner_dept_id"`
-	OwnerDept              *DepartmentBriefResponse      `json:"owner_dept,omitempty"`
-	Polarity               string                        `json:"polarity"`
-	ActivationStatus       string                        `json:"activation_status"`
-	DescriptionEn          string                        `json:"description_en"`
-	Formula                string                        `json:"formula"`
-	Baseline               float64                       `json:"baseline"`
-	ReportingFrequency     string                        `json:"reporting_frequency"`
-	DataSource             string                        `json:"data_source"`
-	Notes                  string                        `json:"notes"`
-	CreatedAt              time.Time                     `json:"created_at"`
-	UpdatedAt              time.Time                     `json:"updated_at"`
+	ID                     uuid.UUID                `json:"id"`
+	Code                   string                   `json:"code"`
+	NameEn                 string                   `json:"name_en"`
+	NameAr                 string                   `json:"name_ar"`
+	StrategicGoalID        uuid.UUID                `json:"strategic_goal_id"`
+	OperationalObjectiveID uuid.UUID                `json:"operational_objective_id"`
+	ProcessID              uuid.UUID                `json:"process_id"`
+	Process                *ProcessResponse         `json:"process,omitempty"`
+	OwnerDeptID            *uuid.UUID               `json:"owner_dept_id"`
+	OwnerDept              *DepartmentBriefResponse `json:"owner_dept,omitempty"`
+	Polarity               string                   `json:"polarity"`
+	ActivationStatus       string                   `json:"activation_status"`
+	DescriptionEn          string                   `json:"description_en"`
+	Formula                string                   `json:"formula"`
+	Baseline               float64                  `json:"baseline"`
+	UnitOfMeasure          string                   `json:"unit_of_measure"`
+	ReportingFrequency     string                   `json:"reporting_frequency"`
+	DataSource             string                   `json:"data_source"`
+	Notes                  string                   `json:"notes"`
+	CreatedAt              time.Time                `json:"created_at"`
+	UpdatedAt              time.Time                `json:"updated_at"`
 }
 
 func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
@@ -268,6 +275,7 @@ func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 		DescriptionEn:          k.DescriptionEn,
 		Formula:                k.Formula,
 		Baseline:               k.Baseline,
+		UnitOfMeasure:          k.UnitOfMeasure,
 		ReportingFrequency:     k.ReportingFrequency,
 		DataSource:             k.DataSource,
 		Notes:                  k.Notes,
@@ -304,6 +312,7 @@ type AwardKPI struct {
 	DescriptionAr       string             `gorm:"type:text" json:"description_ar"`
 	Formula             string             `gorm:"type:text" json:"formula"`
 	Baseline            float64            `gorm:"default:0" json:"baseline"`
+	UnitOfMeasure       string             `gorm:"size:50" json:"unit_of_measure"`
 	ReportingFrequency  string             `gorm:"size:50" json:"reporting_frequency"`
 	DataSource          string             `gorm:"size:255" json:"data_source"`
 	Notes               string             `gorm:"type:text" json:"notes"`
@@ -331,6 +340,7 @@ type AwardKPIRequest struct {
 	DescriptionAr       string     `json:"description_ar"`
 	Formula             string     `json:"formula"`
 	Baseline            float64    `json:"baseline"`
+	UnitOfMeasure       string     `json:"unit_of_measure" validate:"max=50"`
 	ReportingFrequency  string     `json:"reporting_frequency" validate:"omitempty,oneof=monthly quarterly annually"`
 	DataSource          string     `json:"data_source" validate:"max=255"`
 	Notes               string     `json:"notes"`
@@ -350,6 +360,7 @@ type AwardKPIResponse struct {
 	DescriptionEn       string                     `json:"description_en"`
 	Formula             string                     `json:"formula"`
 	Baseline            float64                    `json:"baseline"`
+	UnitOfMeasure       string                     `json:"unit_of_measure"`
 	ReportingFrequency  string                     `json:"reporting_frequency"`
 	DataSource          string                     `json:"data_source"`
 	Notes               string                     `json:"notes"`
@@ -370,6 +381,7 @@ func (k *AwardKPI) ToResponse() AwardKPIResponse {
 		DescriptionEn:       k.DescriptionEn,
 		Formula:             k.Formula,
 		Baseline:            k.Baseline,
+		UnitOfMeasure:       k.UnitOfMeasure,
 		ReportingFrequency:  k.ReportingFrequency,
 		DataSource:          k.DataSource,
 		Notes:               k.Notes,
