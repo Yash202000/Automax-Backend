@@ -204,7 +204,7 @@ func (h *IncidentHandler) GetIncident(c *fiber.Ctx) error {
 
 func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 	filter := &models.IncidentFilter{}
-
+	fmt.Println("FILTER", filter)
 	// Parse query parameters
 	if err := c.QueryParser(filter); err != nil {
 		return ErrorResponseWithKey(c, fiber.StatusBadRequest, "invalid_query_parameters")
@@ -255,11 +255,14 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 		}
 	}
 
-	// Restrict incident list by the user's assigned classifications and locations
+	// Restrict incident list by the user's assigned classifications and locations.
+	// Super admins are exempt from this scoping unless RESTRICT_ADMIN_SCOPE=true,
+	// where admins must also be restricted like regular users.
 	noAccessSentinel := []string{"00000000-0000-0000-0000-000000000000"}
+	restrictSuperAdmins := strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_ADMIN_SCOPE")), "true")
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
-	if err == nil && user != nil {
+	if err == nil && user != nil && (!user.IsSuperAdmin || restrictSuperAdmins) {
 		userClassIDs := make([]string, 0, len(user.Classifications))
 		for _, cls := range user.Classifications {
 			userClassIDs = append(userClassIDs, cls.ID.String())
