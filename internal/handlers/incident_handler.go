@@ -255,11 +255,14 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 		}
 	}
 
-	// Restrict incident list by the user's assigned classifications and locations
+	// Restrict incident list by the user's assigned classifications and locations.
+	// Super admins are exempt from this scoping unless RESTRICT_ADMIN_SCOPE=true,
+	// where admins must also be restricted like regular users.
 	noAccessSentinel := []string{"00000000-0000-0000-0000-000000000000"}
+	restrictSuperAdmins := strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_ADMIN_SCOPE")), "true")
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
-	if err == nil && user != nil {
+	if err == nil && user != nil && (!user.IsSuperAdmin || restrictSuperAdmins) {
 		userClassIDs := make([]string, 0, len(user.Classifications))
 		for _, cls := range user.Classifications {
 			userClassIDs = append(userClassIDs, cls.ID.String())
@@ -1107,12 +1110,20 @@ func (h *IncidentHandler) GetStatsV2(c *fiber.Ctx) error {
 	}
 
 	// Super admins: IsAdmin=true (no role-visibility restriction on WorkflowStats),
+	// except when RESTRICT_ADMIN_SCOPE=true, where super admins must also be scoped
+	// by classification/location like regular users.
+	restrictSuperAdmins := strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_ADMIN_SCOPE")), "true")
+	isSuperAdmin := false
 	if user, ok := c.Locals(constants.ContextKeys.User).(*models.User); ok && user != nil && user.IsSuperAdmin {
+		isSuperAdmin = true
 		filter.IsAdmin = true
 	} else {
 		filter.UserRoleIDs = h.getUserRoleIDs(c)
+	}
 
-		// Restrict stats to the user's assigned classifications (mirrors ListIncidents scoping)
+	if !isSuperAdmin || restrictSuperAdmins {
+		// Restrict stats to the user's assigned classifications and locations (mirrors ListIncidents scoping)
+		noAccessSentinel := []string{"00000000-0000-0000-0000-000000000000"}
 		statsUserID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 		if u, err := h.userRepo.FindByIDWithRelations(c.UserContext(), statsUserID); err == nil && u != nil {
 			userClassIDs := make([]string, 0, len(u.Classifications))
@@ -1131,12 +1142,42 @@ func (h *IncidentHandler) GetStatsV2(c *fiber.Ctx) error {
 							intersected = append(intersected, id)
 						}
 					}
+					if len(intersected) == 0 {
+						intersected = noAccessSentinel
+					}
 					filter.ClassificationID = intersected
 				} else {
 					filter.ClassificationID = userClassIDs
 				}
 			} else {
-				filter.ClassificationID = []string{"00000000-0000-0000-0000-000000000000"}
+				filter.ClassificationID = noAccessSentinel
+			}
+
+			userLocIDs := make([]string, 0, len(u.Locations))
+			for _, loc := range u.Locations {
+				userLocIDs = append(userLocIDs, loc.ID.String())
+			}
+			if len(userLocIDs) > 0 {
+				if len(filter.LocationID) > 0 {
+					requested := make(map[string]bool, len(filter.LocationID))
+					for _, id := range filter.LocationID {
+						requested[id] = true
+					}
+					var intersected []string
+					for _, id := range userLocIDs {
+						if requested[id] {
+							intersected = append(intersected, id)
+						}
+					}
+					if len(intersected) == 0 {
+						intersected = noAccessSentinel
+					}
+					filter.LocationID = intersected
+				} else {
+					filter.LocationID = userLocIDs
+				}
+			} else {
+				filter.LocationID = noAccessSentinel
 			}
 		}
 	}
