@@ -1203,9 +1203,14 @@ func main() {
 	kpi.Get("/performance", authMiddleware.RequirePermission("perf:view"), kpiPerformanceHandler.ListPerformance)
 	kpi.Get("/performance/:id", authMiddleware.RequirePermission("perf:view"), kpiPerformanceHandler.GetPerformance)
 	kpi.Post("/performance", authMiddleware.RequirePermission("perf:submit"), kpiPerformanceHandler.SubmitPerformance)
+	kpi.Put("/performance/:id", authMiddleware.RequirePermission("perf:submit"), kpiPerformanceHandler.UpdatePerformance)
+	kpi.Delete("/performance/:id", authMiddleware.RequirePermission("perf:submit"), kpiPerformanceHandler.DeletePerformance)
 	kpi.Post("/performance/:id/transition", authMiddleware.RequirePermission("perf:review"), kpiPerformanceHandler.TransitionPerformance)
 	kpi.Get("/performance/:id/transitions", authMiddleware.RequirePermission("perf:view"), kpiPerformanceHandler.GetAvailableTransitions)
 	kpi.Get("/performance/:id/history", authMiddleware.RequirePermission("perf:view"), kpiPerformanceHandler.GetPerformanceHistory)
+	kpi.Get("/performance/:id/evidence", authMiddleware.RequirePermission("perf:view"), kpiPerformanceHandler.ListPerformanceEvidence)
+	kpi.Post("/performance/:id/evidence", authMiddleware.RequirePermission("perf:submit"), kpiPerformanceHandler.CreatePerformanceEvidence)
+	kpi.Delete("/performance/:id/evidence/:evidenceId", authMiddleware.RequirePermission("perf:submit"), kpiPerformanceHandler.DeletePerformanceEvidence)
 
 	kpi.Post("/:type/:id/transition", authMiddleware.RequirePermission("kpi:update"), kpiDictionaryHandler.TransitionKpiStatus)
 

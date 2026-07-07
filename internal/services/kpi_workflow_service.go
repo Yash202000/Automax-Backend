@@ -15,13 +15,13 @@ import (
 )
 
 type KpiWorkflowService struct {
-	db          *gorm.DB
+	db           *gorm.DB
 	workflowRepo repository.WorkflowRepository
 }
 
 func NewKpiWorkflowService(db *gorm.DB, workflowRepo repository.WorkflowRepository) *KpiWorkflowService {
 	return &KpiWorkflowService{
-		db:          db,
+		db:           db,
 		workflowRepo: workflowRepo,
 	}
 }
@@ -216,6 +216,8 @@ func transitionPermissionCode(code string) string {
 		return "perf:reject"
 	case "publish":
 		return "perf:publish"
+	case "request_changes":
+		return "perf:request_changes"
 	default:
 		return "perf:review"
 	}

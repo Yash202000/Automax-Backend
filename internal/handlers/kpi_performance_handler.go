@@ -281,7 +281,7 @@ func (h *KpiPerformanceHandler) TransitionPerformance(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-	result, err := h.workflowSvc.TransitionKpiPerformance(c.UserContext(), id, &req, userID)
+	result, err := h.workflowSvc.TransitionKpiPerformance(userContext(c), id, &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -613,4 +613,187 @@ func (h *KpiPerformanceHandler) GetPerformanceHistory(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
+}
+
+// isAdminOverride reports whether the current user may bypass the
+// approved-entry immutability rules ("For the Admin role, when Admin edits
+// an approved entry, the system permits an update").
+func isAdminOverride(c *fiber.Ctx) bool {
+	user, ok := c.Locals(constants.ContextKeys.User).(*models.User)
+	if !ok || user == nil {
+		return false
+	}
+	return user.IsSuperAdmin || user.HasPermission("perf:override_lock")
+}
+
+// ─── Update / Delete (approval-lock enforced) ──────────────────────────────────
+
+func (h *KpiPerformanceHandler) UpdatePerformance(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	var req models.KpiPerformanceUpdateRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+
+	db := h.db.WithContext(c.UserContext())
+	var perf models.KpiPerformance
+	if err := db.First(&perf, id).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+
+	if perf.Status == models.KPIPerfStatusApproved && !isAdminOverride(c) {
+		if req.Actual != perf.Actual {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, "Actual Value cannot be modified after approval.")
+		}
+		return utils.ErrorResponse(c, fiber.StatusForbidden, "Editing is not allowed. Approved KPI Entries cannot be modified.")
+	}
+
+	polarity := services.GetKPIPolarity(db, perf.KpiCode, perf.KpiType)
+	updates := map[string]interface{}{
+		"target":            req.Target,
+		"actual":            req.Actual,
+		"achievement_pct":   services.CalculateAchievement(req.Actual, req.Target, polarity),
+		"trend_description": req.TrendDescription,
+		"justification":     req.Justification,
+		"corrective_action": req.CorrectiveAction,
+	}
+	if err := db.Model(&models.KpiPerformance{ID: id}).Updates(updates).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
+	}
+
+	var reloaded models.KpiPerformance
+	db.Preload("SubmittedBy").Preload("ApprovedBy").First(&reloaded, id)
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "update",
+		Module:      "kpi",
+		ResourceID:  id.String(),
+		Description: fmt.Sprintf("Updated performance record for %s", reloaded.KpiCode),
+		Status:      "success",
+	})
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "", reloaded.ToResponse())
+}
+
+func (h *KpiPerformanceHandler) DeletePerformance(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	db := h.db.WithContext(c.UserContext())
+	var perf models.KpiPerformance
+	if err := db.First(&perf, id).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+
+	if perf.Status == models.KPIPerfStatusApproved && !isAdminOverride(c) {
+		return utils.ErrorResponse(c, fiber.StatusForbidden, "This KPI Entry has already been approved and cannot be deleted.")
+	}
+
+	result := db.Delete(&models.KpiPerformance{}, id)
+	if result.RowsAffected == 0 {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "delete",
+		Module:      "kpi",
+		ResourceID:  id.String(),
+		Description: fmt.Sprintf("Deleted performance record %s", id),
+		Status:      "success",
+	})
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
+}
+
+// ─── Evidence (removal blocked once approved) ──────────────────────────────────
+
+func (h *KpiPerformanceHandler) ListPerformanceEvidence(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	var items []models.KpiPerformanceEvidence
+	if err := h.db.WithContext(c.UserContext()).Preload("UploadedBy").
+		Where("kpi_performance_id = ?", id).Order("created_at DESC").Find(&items).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+
+	resp := make([]models.KpiPerformanceEvidenceResponse, len(items))
+	for i, item := range items {
+		resp[i] = item.ToResponse()
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
+}
+
+func (h *KpiPerformanceHandler) CreatePerformanceEvidence(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	var req models.KpiPerformanceEvidenceRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+
+	if err := h.db.WithContext(c.UserContext()).First(&models.KpiPerformance{}, id).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "the referenced performance record does not exist")
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+
+	item := &models.KpiPerformanceEvidence{
+		KpiPerformanceID: id,
+		Description:      req.Description,
+		FileURL:          req.FileURL,
+		UploadedByID:     userID,
+	}
+	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
+	}
+
+	var reloaded models.KpiPerformanceEvidence
+	h.db.WithContext(c.UserContext()).Preload("UploadedBy").First(&reloaded, item.ID)
+
+	return utils.SuccessResponse(c, fiber.StatusCreated, "", reloaded.ToResponse())
+}
+
+func (h *KpiPerformanceHandler) DeletePerformanceEvidence(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	evidenceID, err := uuid.Parse(c.Params("evidenceId"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	var perf models.KpiPerformance
+	if err := h.db.WithContext(c.UserContext()).First(&perf, id).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+
+	if perf.Status == models.KPIPerfStatusApproved && !isAdminOverride(c) {
+		return utils.ErrorResponse(c, fiber.StatusForbidden, "Evidence cannot be removed from an approved KPI Entry.")
+	}
+
+	result := h.db.WithContext(c.UserContext()).Where("kpi_performance_id = ?", id).Delete(&models.KpiPerformanceEvidence{}, evidenceID)
+	if result.RowsAffected == 0 {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
 }

@@ -161,29 +161,30 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			&models.ReviewAssignment{},
 			&models.GoalScore{},
 
-		// KPI / Goal Management models
-		&models.Pillar{},
-		&models.Enabler{},
-		&models.StrategicGoal{},
-		&models.OperationalObjective{},
-		&models.Process{},
-		&models.Initiative{},
-		&models.Domain{},
-		&models.AwardCriterion{},
-		&models.AwardSubCriterion{},
-		&models.StrategicKPI{},
-		&models.OperationalKPI{},
-		&models.AwardKPI{},
-		&models.KpiAnnualTarget{},
-		&models.KpiPerformance{},
-		&models.KpiBenchmark{},
-		&models.KpiSegmentation{},
-		&models.KpiWorkflowInstance{},
-		&models.KpiWorkflowAction{},
-		&models.KpiPerformanceBand{},
-		&models.KpiCorrectiveAction{},
-		&models.KpiDataSource{},
-		&models.KpiSegmentationDimension{},
+			// KPI / Goal Management models
+			&models.Pillar{},
+			&models.Enabler{},
+			&models.StrategicGoal{},
+			&models.OperationalObjective{},
+			&models.Process{},
+			&models.Initiative{},
+			&models.Domain{},
+			&models.AwardCriterion{},
+			&models.AwardSubCriterion{},
+			&models.StrategicKPI{},
+			&models.OperationalKPI{},
+			&models.AwardKPI{},
+			&models.KpiAnnualTarget{},
+			&models.KpiPerformance{},
+			&models.KpiBenchmark{},
+			&models.KpiSegmentation{},
+			&models.KpiWorkflowInstance{},
+			&models.KpiWorkflowAction{},
+			&models.KpiPerformanceBand{},
+			&models.KpiCorrectiveAction{},
+			&models.KpiDataSource{},
+			&models.KpiSegmentationDimension{},
+			&models.KpiPerformanceEvidence{},
 		); err != nil {
 			return fmt.Errorf("failed to run goal management migrations: %w", err)
 		}
@@ -628,6 +629,8 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			models.Permission{Name: "Approve Performance", Code: "perf:approve", Module: "perf", Action: "approve", Description: "Approve reviewed performance entries"},
 			models.Permission{Name: "Reject Performance", Code: "perf:reject", Module: "perf", Action: "reject", Description: "Reject and return for revision"},
 			models.Permission{Name: "Publish Performance", Code: "perf:publish", Module: "perf", Action: "publish", Description: "Publish approved performance to dashboards"},
+			models.Permission{Name: "Request Performance Changes", Code: "perf:request_changes", Module: "perf", Action: "request_changes", Description: "Send a submitted performance entry back for changes"},
+			models.Permission{Name: "Override Approval Lock", Code: "perf:override_lock", Module: "perf", Action: "override", Description: "Edit or delete an already-approved performance entry"},
 			models.Permission{Name: "View Targets", Code: "targets:view", Module: "targets", Action: "view", Description: "View annual KPI targets"},
 			models.Permission{Name: "Set Targets", Code: "targets:set", Module: "targets", Action: "set", Description: "Create/update annual targets"},
 			models.Permission{Name: "Approve Targets", Code: "targets:approve", Module: "targets", Action: "approve", Description: "Approve target submissions"},
@@ -831,7 +834,7 @@ func unseedGoalManagement(db *gorm.DB) {
 	exec("permissions (goals)", "DELETE FROM permissions WHERE module = 'goals' OR code = 'dashboard:goals'")
 
 	// Step 3.5: delete KPI/goal management tables (children before parents)
-	log.Println("  WARNING: About to drop 22 KPI/goal tables — this IRREVERSIBLY deletes all KPI configuration and user-entered performance/target data!")
+	log.Println("  WARNING: About to drop 23 KPI/goal tables — this IRREVERSIBLY deletes all KPI configuration and user-entered performance/target data!")
 	for _, table := range []string{
 		"kpi_data_sources",
 		"kpi_segmentation_dimensions",
@@ -839,6 +842,7 @@ func unseedGoalManagement(db *gorm.DB) {
 		"kpi_workflow_actions",
 		"kpi_workflow_instances",
 		"kpi_performance_bands",
+		"kpi_performance_evidences",
 		"kpi_segmentations",
 		"kpi_benchmarks",
 		"kpi_performances",
@@ -1313,20 +1317,11 @@ func seedKpiPerformanceWorkflow(db *gorm.DB) {
 		}
 	}
 
-	// Ensure transitions exist (even if the workflow was already seeded)
-	requiredTransCode := map[string]bool{"submit": true, "review": true, "approve": true, "reject": true, "publish": true, "resubmit": true}
-	var missing []string
-	for code := range requiredTransCode {
-		var count int64
-		db.Model(&models.WorkflowTransition{}).Where("workflow_id = ? AND code = ?", wf.ID, code).Count(&count)
-		if count == 0 {
-			missing = append(missing, code)
-		}
-	}
-
-	if len(missing) > 0 {
-		log.Printf("Adding missing transitions to KPI performance workflow: %v", missing)
-
+	// Ensure transitions exist (even if the workflow was already seeded). Some
+	// codes (approve/reject/request_changes) now have two rows apiece — one
+	// from "submitted" and one from "under_review" — so dedup must key off
+	// (code, from_state), not code alone.
+	{
 		stateMap := make(map[string]models.WorkflowState)
 		var states []models.WorkflowState
 		db.Where("workflow_id = ?", wf.ID).Find(&states)
@@ -1351,6 +1346,14 @@ func seedKpiPerformanceWorkflow(db *gorm.DB) {
 			{"Reject", "reject", "under_review", "rejected", true, true, 4},
 			{"Publish", "publish", "approved", "published", false, false, 5},
 			{"Resubmit", "resubmit", "rejected", "submitted", false, false, 6},
+			{"Request Changes", "request_changes", "under_review", "draft", false, true, 7},
+			// Reviewers may act directly on a Submitted entry without first
+			// clicking "Start Review" — these mirror the under_review→* transitions
+			// above but from submitted, so approve/reject/request_changes work
+			// immediately after submission as well as after an explicit review step.
+			{"Approve", "approve", "submitted", "approved", false, false, 8},
+			{"Reject", "reject", "submitted", "rejected", true, true, 9},
+			{"Request Changes", "request_changes", "submitted", "draft", false, true, 10},
 		}
 
 		boolTrue := true
@@ -1363,7 +1366,7 @@ func seedKpiPerformanceWorkflow(db *gorm.DB) {
 			}
 
 			var count int64
-			db.Model(&models.WorkflowTransition{}).Where("workflow_id = ? AND code = ?", wf.ID, sp.Code).Count(&count)
+			db.Model(&models.WorkflowTransition{}).Where("workflow_id = ? AND code = ? AND from_state_id = ?", wf.ID, sp.Code, fromState.ID).Count(&count)
 			if count > 0 {
 				continue
 			}
@@ -1385,11 +1388,17 @@ func seedKpiPerformanceWorkflow(db *gorm.DB) {
 			}
 
 			if sp.CommentReq {
+				errMsg := "Comment is required for this transition"
+				if sp.IsRejection {
+					errMsg = "Comment is required for rejection"
+				} else if sp.Code == "request_changes" {
+					errMsg = "Comment is required when requesting changes"
+				}
 				requirement := models.TransitionRequirement{
 					TransitionID:    transition.ID,
 					RequirementType: "comment",
 					IsMandatory:     &boolTrue,
-					ErrorMessage:    "Comment is required for rejection",
+					ErrorMessage:    errMsg,
 				}
 				if err := db.Create(&requirement).Error; err != nil {
 					log.Printf("Failed to create requirement for %s: %v", sp.Code, err)
@@ -1398,7 +1407,7 @@ func seedKpiPerformanceWorkflow(db *gorm.DB) {
 		}
 	}
 
-	if !exists && len(missing) == 0 {
+	if !exists {
 		log.Println("KPI performance approval workflow seeded successfully")
 	}
 }
