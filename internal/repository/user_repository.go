@@ -252,9 +252,10 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search strin
 
 	if search != "" {
 		like := "%" + strings.ToLower(search) + "%"
+		phoneLike := "%" + strings.TrimPrefix(search, "+") + "%"
 		base = base.Where(
-			"LOWER(users.username) LIKE ? OR LOWER(users.email) LIKE ? OR LOWER(users.first_name) LIKE ? OR LOWER(users.last_name) LIKE ?",
-			like, like, like, like,
+			"LOWER(users.username) LIKE ? OR LOWER(users.email) LIKE ? OR LOWER(users.first_name) LIKE ? OR LOWER(users.last_name) LIKE ? OR users.phone LIKE ? OR users.extension LIKE ?",
+			like, like, like, like, phoneLike, phoneLike,
 		)
 	}
 
