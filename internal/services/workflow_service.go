@@ -1405,6 +1405,7 @@ func (s *workflowService) SetTransitionRequirements(ctx context.Context, transit
 			FieldName:       req.FieldName,
 			FieldValue:      req.FieldValue,
 			IsMandatory:     req.IsMandatory,
+			IsMultiple:      req.IsMultiple,
 			ErrorMessage:    req.ErrorMessage,
 		}
 	}

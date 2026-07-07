@@ -234,6 +234,7 @@ type TransitionRequirement struct {
 	FieldName       string `gorm:"size:100" json:"field_name"`               // for field_value type
 	FieldValue      string `gorm:"size:500" json:"field_value"`              // expected value or validation rule
 	IsMandatory     *bool  `gorm:"default:true" json:"is_mandatory"`
+	IsMultiple      *bool  `gorm:"default:false" json:"is_multiple"`
 	ErrorMessage    string `gorm:"size:200" json:"error_message"`
 
 	CreatedAt time.Time `json:"created_at"`
@@ -464,6 +465,7 @@ type TransitionRequirementRequest struct {
 	FieldName       string `json:"field_name"`
 	FieldValue      string `json:"field_value"`
 	IsMandatory     *bool  `json:"is_mandatory"`
+	IsMultiple      *bool  `json:"is_multiple"`
 	ErrorMessage    string `json:"error_message"`
 }
 
@@ -630,6 +632,7 @@ type TransitionRequirementResponse struct {
 	RequirementType string    `json:"requirement_type"`
 	FieldName       string    `json:"field_name,omitempty"`
 	FieldValue      string    `json:"field_value,omitempty"`
+	IsMultiple      *bool     `json:"is_multiple"`
 	IsMandatory     *bool     `json:"is_mandatory"`
 	ErrorMessage    string    `json:"error_message,omitempty"`
 }
@@ -933,6 +936,7 @@ func ToTransitionRequirementResponse(r *TransitionRequirement) TransitionRequire
 		FieldName:       r.FieldName,
 		FieldValue:      r.FieldValue,
 		IsMandatory:     r.IsMandatory,
+		IsMultiple:      r.IsMultiple,
 		ErrorMessage:    r.ErrorMessage,
 	}
 }
