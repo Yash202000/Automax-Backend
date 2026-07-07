@@ -770,6 +770,7 @@ var messages = map[string][2]string{
 	"child_incidents_no_manual_transition": {"Child incidents cannot be transitioned manually - they follow the master incident's status", "لا يمكن تغيير حالة البلاغات الفرعية يدوياً - تتبع حالة البلاغ الرئيسي"},
 	"user_not_in_scope":                    {"Selected user does not belong to the incident's assigned location, classification, or department", "المستخدم المحدد لا ينتمي إلى الموقع أو التصنيف أو القسم المعيّن للبلاغ"},
 	"partial_close_duration_required":      {"partial_close_duration is required when transitioning to this state", "مطلوب partial_close_duration عند الانتقال إلى هذه الحالة"},
+	"partial_close_duration_invalid":       {"partial_close_duration must be a valid numeric duration like '1 Day' or '2 Weeks'", "يجب أن تكون partial_close_duration مدة رقمية صالحة مثل '1 Day' أو '2 Weeks'"},
 	"already_converted_to_request":         {"This incident has already been converted to a request", "تم تحويل هذا البلاغ إلى طلب بالفعل"},
 	"cannot_convert_request":               {"Cannot convert a request to another request", "لا يمكن تحويل طلب إلى طلب آخر"},
 	"request_id_not_incident":              {"existing_request_id must reference a request, not an incident", "يجب أن يشير existing_request_id إلى طلب وليس بلاغاً"},

@@ -929,6 +929,9 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 		if len(filter.ClassificationID) > 0 {
 			q = q.Where("incidents.classification_id IN ?", filter.ClassificationID)
 		}
+		if len(filter.LocationID) > 0 {
+			q = q.Where("incidents.location_id IN ?", filter.LocationID)
+		}
 
 		return q
 	}
