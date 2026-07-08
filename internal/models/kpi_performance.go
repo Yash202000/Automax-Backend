@@ -337,3 +337,65 @@ func (s *KpiSegmentation) ToSegmentationResponse() KpiSegmentationResponse {
 		CreatedAt:      s.CreatedAt,
 	}
 }
+
+// ──────────────────────────────────────────────────────────
+// KpiPerformanceEvidence — supporting documentation (link + note) attached to
+// a performance entry. Cannot be removed once the entry is approved (see
+// KpiPerformanceHandler.DeletePerformanceEvidence).
+// ──────────────────────────────────────────────────────────
+
+type KpiPerformanceEvidence struct {
+	ID               uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	KpiPerformanceID uuid.UUID      `gorm:"type:uuid;not null;index" json:"kpi_performance_id"`
+	Description      string         `gorm:"type:text;not null" json:"description"`
+	FileURL          string         `gorm:"size:500" json:"file_url"`
+	UploadedByID     uuid.UUID      `gorm:"type:uuid;not null" json:"uploaded_by_id"`
+	UploadedBy       *User          `gorm:"foreignKey:UploadedByID" json:"uploaded_by,omitempty"`
+	CreatedAt        time.Time      `json:"created_at"`
+	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (e *KpiPerformanceEvidence) BeforeCreate(tx *gorm.DB) error {
+	if e.ID == uuid.Nil {
+		e.ID = uuid.New()
+	}
+	return nil
+}
+
+type KpiPerformanceEvidenceRequest struct {
+	Description string `json:"description" validate:"required"`
+	FileURL     string `json:"file_url"`
+}
+
+type KpiPerformanceEvidenceResponse struct {
+	ID               uuid.UUID          `json:"id"`
+	KpiPerformanceID uuid.UUID          `json:"kpi_performance_id"`
+	Description      string             `json:"description"`
+	FileURL          string             `json:"file_url"`
+	UploadedByID     uuid.UUID          `json:"uploaded_by_id"`
+	UploadedBy       *UserBriefResponse `json:"uploaded_by,omitempty"`
+	CreatedAt        time.Time          `json:"created_at"`
+}
+
+func (e *KpiPerformanceEvidence) ToResponse() KpiPerformanceEvidenceResponse {
+	return KpiPerformanceEvidenceResponse{
+		ID:               e.ID,
+		KpiPerformanceID: e.KpiPerformanceID,
+		Description:      e.Description,
+		FileURL:          e.FileURL,
+		UploadedByID:     e.UploadedByID,
+		UploadedBy:       ToUserBriefResponse(e.UploadedBy),
+		CreatedAt:        e.CreatedAt,
+	}
+}
+
+// KpiPerformanceUpdateRequest carries the editable fields of an existing
+// performance entry. Locking rules (approved entries are immutable to
+// non-admins) are enforced in the handler, not here.
+type KpiPerformanceUpdateRequest struct {
+	Target           float64 `json:"target"`
+	Actual           float64 `json:"actual"`
+	TrendDescription string  `json:"trend_description"`
+	Justification    string  `json:"justification"`
+	CorrectiveAction string  `json:"corrective_action"`
+}
