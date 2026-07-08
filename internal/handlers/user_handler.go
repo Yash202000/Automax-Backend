@@ -645,6 +645,7 @@ func (h *UserHandler) Import(c *fiber.Ctx) error {
 		ID                uuid.UUID  `json:"id"`
 		Username          string     `json:"username"`
 		Email             string     `json:"email"`
+		Password          string     `json:"password"`
 		FirstName         string     `json:"first_name"`
 		LastName          string     `json:"last_name"`
 		Phone             string     `json:"phone"`
@@ -718,10 +719,15 @@ func (h *UserHandler) Import(c *fiber.Ctx) error {
 		}
 
 		// Create user registration request
+		if data.Password == "" {
+			skipped++
+			errors = append(errors, data.Email+" - Password is required, skipped")
+			continue
+		}
 		req := &models.UserRegisterRequest{
 			Username:          data.Username,
 			Email:             data.Email,
-			Password:          "ChangeMe123!", // Default password, user should change
+			Password:          data.Password,
 			FirstName:         data.FirstName,
 			LastName:          data.LastName,
 			Phone:             data.Phone,
@@ -747,7 +753,6 @@ func (h *UserHandler) Import(c *fiber.Ctx) error {
 		"imported": imported,
 		"skipped":  skipped,
 		"errors":   errors,
-		"note":     "Imported users have default password: ChangeMe123! - Please ask users to change it",
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "import_completed"), result)
