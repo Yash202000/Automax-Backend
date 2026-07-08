@@ -7,28 +7,42 @@ import (
 )
 
 type Config struct {
-	Env              string // env: APP_ENV ("development" | "staging" | "production"). Default: "production".
-	Server           ServerConfig
-	Database         DatabaseConfig
-	Redis            RedisConfig
-	MinIO            MinIOConfig
-	JWT              JWTConfig
-	LDAP             LDAPConfig
-	LoginRateLimit   LoginRateLimitConfig
-	FrontendURL      string // env: FRONTEND_URL — base URL of the frontend app, used in notification links
-	SSOPrivateKey    string // env: SSO_RSA_PRIVATE_KEY (PEM, optional — auto-gen if empty)
-	SSOIssuerURL     string // env: SSO_ISSUER_URL (e.g. https://automax.example.com — embedded in iss claim)
-	SSOFrontendURL   string // env: SSO_FRONTEND_URL (e.g. https://automax.example.com — where /sso-complete lives)
-	NafathAPIBaseURL string // env: NAFATH_API_BASE_URL (e.g. https://nafath.amanathail.gov.sa)
-	Escalation       EscalationConfig
-	ReadyToClose     ReadyToCloseConfig
-	SmsFeedback      SmsFeedbackConfig
-	Documenta        DocumentaConfig
-	AIQuality        AIQualityConfig
-	AutoAssign       AutoAssignConfig
-	GoalManagement   GoalManagementConfig
-	License          LicenseConfig
-	Integration      IntegrationConfig
+	Env                        string // env: APP_ENV ("development" | "staging" | "production"). Default: "production".
+	Server                     ServerConfig
+	Database                   DatabaseConfig
+	Redis                      RedisConfig
+	MinIO                      MinIOConfig
+	JWT                        JWTConfig
+	LDAP                       LDAPConfig
+	LoginRateLimit             LoginRateLimitConfig
+	FrontendURL                string // env: FRONTEND_URL — base URL of the frontend app, used in notification links
+	SSOPrivateKey              string // env: SSO_RSA_PRIVATE_KEY (PEM, optional — auto-gen if empty)
+	SSOIssuerURL               string // env: SSO_ISSUER_URL (e.g. https://automax.example.com — embedded in iss claim)
+	SSOFrontendURL             string // env: SSO_FRONTEND_URL (e.g. https://automax.example.com — where /sso-complete lives)
+	NafathAPIBaseURL           string // env: NAFATH_API_BASE_URL (e.g. https://nafath.amanathail.gov.sa)
+	Escalation                 EscalationConfig
+	ReadyToClose               ReadyToCloseConfig
+	SmsFeedback                SmsFeedbackConfig
+	Documenta                  DocumentaConfig
+	AIQuality                  AIQualityConfig
+	AutoAssign                 AutoAssignConfig
+	GoalManagement             GoalManagementConfig
+	License                    LicenseConfig
+	Integration                IntegrationConfig
+	FinalCloseWhatsAppFeedback FinalCloseWhatsAppFeedbackConfig
+}
+
+// FinalCloseWhatsAppFeedbackConfig holds settings for deleting a still-active
+// WhatsApp feedback session once the final-close feedback has already been
+// submitted via another channel (e.g. the SMS fallback link), so the WhatsApp
+// feedback link stops working for the reporter.
+type FinalCloseWhatsAppFeedbackConfig struct {
+	// SessionBaseURL is the full session endpoint of the WhatsApp feedback API,
+	// including the "/session" path segment, e.g.
+	// https://unicam.discretal.com/automax3-feedback/session. The mobile number
+	// is appended directly to this value to form the DELETE URL.
+	// env: FINAL_CLOSE_WHATSAPP_FEEDBACK_SESSION_BASE_URL
+	SessionBaseURL string
 }
 
 type IntegrationConfig struct {
@@ -255,6 +269,9 @@ func Load() *Config {
 			AppProtocol:          getEnv("APP_PROTOCOL", "http"),
 			AppHost:              getEnv("APP_HOST", "localhost:8080"),
 			AppToken:             getEnv("APP_TOKEN", ""),
+		},
+		FinalCloseWhatsAppFeedback: FinalCloseWhatsAppFeedbackConfig{
+			SessionBaseURL: getEnv("FINAL_CLOSE_WHATSAPP_FEEDBACK_SESSION_BASE_URL", ""),
 		},
 		AutoAssign: AutoAssignConfig{
 			StateCode:       getEnv("AUTO_ASSIGN_STATE_CODE", ""),
