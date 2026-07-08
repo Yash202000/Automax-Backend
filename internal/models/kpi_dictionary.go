@@ -40,8 +40,6 @@ type StrategicKPI struct {
 	Code               string         `gorm:"size:50;uniqueIndex;not null" json:"code"`
 	NameEn             string         `gorm:"size:255;not null" json:"name_en"`
 	NameAr             string         `gorm:"size:255;not null;default:''" json:"name_ar"`
-	StrategicGoalID    uuid.UUID      `gorm:"type:uuid;not null;index" json:"strategic_goal_id"`
-	StrategicGoal      *StrategicGoal `gorm:"foreignKey:StrategicGoalID" json:"strategic_goal,omitempty"`
 	PillarID           *uuid.UUID     `gorm:"type:uuid;index" json:"pillar_id"`
 	Pillar             *Pillar        `gorm:"foreignKey:PillarID" json:"pillar,omitempty"`
 	DomainID           *uuid.UUID     `gorm:"type:uuid;index" json:"domain_id"`
@@ -79,11 +77,10 @@ type StrategicKPIRequest struct {
 	Code               string     `json:"code" validate:"required,max=50"`
 	NameEn             string     `json:"name_en" validate:"required,max=255"`
 	NameAr             string     `json:"name_ar" validate:"max=255"`
-	StrategicGoalID    uuid.UUID  `json:"strategic_goal_id" validate:"required"`
 	PillarID           *uuid.UUID `json:"pillar_id"`
 	DomainID           *uuid.UUID `json:"domain_id"`
 	OwnerDeptID        *uuid.UUID `json:"owner_dept_id"`
-	GoalID             *uuid.UUID `json:"goal_id"`
+	GoalID             uuid.UUID  `json:"goal_id" validate:"required"`
 	Polarity           string     `json:"polarity" validate:"omitempty,oneof=ascending descending"`
 	ActivationStatus   string     `json:"activation_status" validate:"omitempty,oneof=draft active inactive"`
 	DescriptionEn      string     `json:"description_en"`
@@ -104,8 +101,6 @@ type StrategicKPIResponse struct {
 	Code               string                   `json:"code"`
 	NameEn             string                   `json:"name_en"`
 	NameAr             string                   `json:"name_ar"`
-	StrategicGoalID    uuid.UUID                `json:"strategic_goal_id"`
-	StrategicGoal      *StrategicGoalResponse   `json:"strategic_goal,omitempty"`
 	PillarID           *uuid.UUID               `json:"pillar_id"`
 	Pillar             *PillarResponse          `json:"pillar,omitempty"`
 	DomainID           *uuid.UUID               `json:"domain_id"`
@@ -135,7 +130,6 @@ func (k *StrategicKPI) ToResponse() StrategicKPIResponse {
 		Code:               k.Code,
 		NameEn:             k.NameEn,
 		NameAr:             k.NameAr,
-		StrategicGoalID:    k.StrategicGoalID,
 		PillarID:           k.PillarID,
 		DomainID:           k.DomainID,
 		OwnerDeptID:        k.OwnerDeptID,
@@ -153,10 +147,6 @@ func (k *StrategicKPI) ToResponse() StrategicKPIResponse {
 		Notes:              k.Notes,
 		CreatedAt:          k.CreatedAt,
 		UpdatedAt:          k.UpdatedAt,
-	}
-	if k.StrategicGoal != nil {
-		r := k.StrategicGoal.ToResponse()
-		resp.StrategicGoal = &r
 	}
 	if k.Pillar != nil {
 		r := k.Pillar.ToResponse()
@@ -186,8 +176,8 @@ type OperationalKPI struct {
 	Code                   string                `gorm:"size:50;uniqueIndex;not null" json:"code"`
 	NameEn                 string                `gorm:"size:255;not null" json:"name_en"`
 	NameAr                 string                `gorm:"size:255;not null;default:''" json:"name_ar"`
-	StrategicGoalID        uuid.UUID             `gorm:"type:uuid;not null;index" json:"strategic_goal_id"`
-	StrategicGoal          *StrategicGoal        `gorm:"foreignKey:StrategicGoalID" json:"strategic_goal,omitempty"`
+	GoalID                 *uuid.UUID            `gorm:"type:uuid;index" json:"goal_id"`
+	Goal                   *Goal                 `gorm:"foreignKey:GoalID" json:"goal,omitempty"`
 	OperationalObjectiveID uuid.UUID             `gorm:"type:uuid;not null;index" json:"operational_objective_id"`
 	OperationalObjective   *OperationalObjective `gorm:"foreignKey:OperationalObjectiveID" json:"operational_objective,omitempty"`
 	ProcessID              uuid.UUID             `gorm:"type:uuid;not null;index" json:"process_id"`
@@ -220,7 +210,7 @@ type OperationalKPIRequest struct {
 	Code                   string     `json:"code" validate:"required,max=50"`
 	NameEn                 string     `json:"name_en" validate:"required,max=255"`
 	NameAr                 string     `json:"name_ar" validate:"max=255"`
-	StrategicGoalID        uuid.UUID  `json:"strategic_goal_id" validate:"required"`
+	GoalID                 uuid.UUID  `json:"goal_id" validate:"required"`
 	OperationalObjectiveID uuid.UUID  `json:"operational_objective_id" validate:"required"`
 	ProcessID              uuid.UUID  `json:"process_id" validate:"required"`
 	OwnerDeptID            *uuid.UUID `json:"owner_dept_id"`
@@ -241,7 +231,8 @@ type OperationalKPIResponse struct {
 	Code                   string                   `json:"code"`
 	NameEn                 string                   `json:"name_en"`
 	NameAr                 string                   `json:"name_ar"`
-	StrategicGoalID        uuid.UUID                `json:"strategic_goal_id"`
+	GoalID                 *uuid.UUID               `json:"goal_id"`
+	Goal                   *GoalBriefResponse       `json:"goal,omitempty"`
 	OperationalObjectiveID uuid.UUID                `json:"operational_objective_id"`
 	ProcessID              uuid.UUID                `json:"process_id"`
 	Process                *ProcessResponse         `json:"process,omitempty"`
@@ -266,7 +257,7 @@ func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 		Code:                   k.Code,
 		NameEn:                 k.NameEn,
 		NameAr:                 k.NameAr,
-		StrategicGoalID:        k.StrategicGoalID,
+		GoalID:                 k.GoalID,
 		OperationalObjectiveID: k.OperationalObjectiveID,
 		ProcessID:              k.ProcessID,
 		OwnerDeptID:            k.OwnerDeptID,
@@ -285,6 +276,9 @@ func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 	if k.Process != nil {
 		r := k.Process.ToResponse()
 		resp.Process = &r
+	}
+	if k.Goal != nil {
+		resp.Goal = ToGoalBriefResponse(k.Goal)
 	}
 	if k.OwnerDept != nil {
 		resp.OwnerDept = ToDepartmentBriefResponse(k.OwnerDept)

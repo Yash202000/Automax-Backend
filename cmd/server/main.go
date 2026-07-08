@@ -279,6 +279,9 @@ func main() {
 	// KPI Performance handler
 	kpiPerformanceHandler := handlers.NewKpiPerformanceHandler(db, kpiWorkflowService, actionLogService)
 
+	// KPI Engagement handler (metrics, evidence, collaborators, check-ins, comments, activity)
+	kpiEngagementHandler := handlers.NewKpiEngagementHandler(db, actionLogService)
+
 	// KPI Dashboard handler
 	kpiDashboardHandler := handlers.NewKpiDashboardHandler(db)
 
@@ -1131,11 +1134,6 @@ func main() {
 	kpi.Put("/enablers/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateEnabler)
 	kpi.Delete("/enablers/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteEnabler)
 
-	kpi.Get("/strategic-goals", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListGoals)
-	kpi.Post("/strategic-goals", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateGoal)
-	kpi.Put("/strategic-goals/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateGoal)
-	kpi.Delete("/strategic-goals/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteGoal)
-
 	kpi.Get("/operational-objectives", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListOperationalObjectives)
 	kpi.Post("/operational-objectives", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateOperationalObjective)
 	kpi.Put("/operational-objectives/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateOperationalObjective)
@@ -1214,6 +1212,31 @@ func main() {
 	kpi.Delete("/performance/:id/evidence/:evidenceId", authMiddleware.RequirePermission("perf:submit"), kpiPerformanceHandler.DeletePerformanceEvidence)
 
 	kpi.Post("/:type/:id/transition", authMiddleware.RequirePermission("kpi:update"), kpiDictionaryHandler.TransitionKpiStatus)
+
+	// KPI engagement features — metrics, evidence, collaborators, check-ins, comments, activity
+	kpi.Get("/:type/:id/metrics", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListMetrics)
+	kpi.Post("/:type/:id/metrics", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.CreateMetric)
+	kpi.Put("/metrics/:id", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.UpdateMetric)
+	kpi.Put("/metrics/:id/value", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.UpdateMetricValue)
+	kpi.Delete("/metrics/:id", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.DeleteMetric)
+
+	kpi.Get("/:type/:id/evidence", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListEvidence)
+	kpi.Post("/:type/:id/evidence", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.CreateEvidence)
+	kpi.Delete("/evidence/:id", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.DeleteEvidence)
+
+	kpi.Get("/:type/:id/collaborators", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListCollaborators)
+	kpi.Post("/:type/:id/collaborators", authMiddleware.RequirePermission("kpi:assign"), kpiEngagementHandler.AddCollaborator)
+	kpi.Delete("/:type/:id/collaborators/:user_id", authMiddleware.RequirePermission("kpi:assign"), kpiEngagementHandler.RemoveCollaborator)
+
+	kpi.Get("/:type/:id/check-ins", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListCheckIns)
+	kpi.Post("/:type/:id/check-ins", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.CreateCheckIn)
+	kpi.Delete("/check-ins/:id", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.DeleteCheckIn)
+
+	kpi.Get("/:type/:id/comments", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListComments)
+	kpi.Post("/:type/:id/comments", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.AddComment)
+	kpi.Delete("/comments/:id", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.DeleteComment)
+
+	kpi.Get("/:type/:id/activity", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.GetActivity)
 
 	kpi.Get("/benchmarks", authMiddleware.RequirePermission("benchmark:manage"), kpiPerformanceHandler.ListBenchmarks)
 	kpi.Post("/benchmarks", authMiddleware.RequirePermission("benchmark:manage"), kpiPerformanceHandler.CreateBenchmark)

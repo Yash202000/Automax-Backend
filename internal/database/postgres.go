@@ -164,7 +164,6 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			// KPI / Goal Management models
 			&models.Pillar{},
 			&models.Enabler{},
-			&models.StrategicGoal{},
 			&models.OperationalObjective{},
 			&models.Process{},
 			&models.Initiative{},
@@ -185,6 +184,11 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			&models.KpiDataSource{},
 			&models.KpiSegmentationDimension{},
 			&models.KpiPerformanceEvidence{},
+			&models.KpiMetric{},
+			&models.KpiEvidence{},
+			&models.KpiCollaborator{},
+			&models.KpiCheckIn{},
+			&models.KpiComment{},
 		); err != nil {
 			return fmt.Errorf("failed to run goal management migrations: %w", err)
 		}
@@ -623,6 +627,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			models.Permission{Name: "Update KPI Definitions", Code: "kpi:update", Module: "kpi", Action: "update", Description: "Edit KPI metadata, formula, targets"},
 			models.Permission{Name: "Delete KPI Definitions", Code: "kpi:delete", Module: "kpi", Action: "delete", Description: "Soft-delete KPI records"},
 			models.Permission{Name: "Approve KPI Performance", Code: "kpi:approve", Module: "kpi", Action: "approve", Description: "Approve/reject KPI performance submissions from the approvals inbox"},
+			models.Permission{Name: "Assign KPI Collaborators", Code: "kpi:assign", Module: "kpi", Action: "assign", Description: "Add/remove collaborators on a KPI definition"},
 			models.Permission{Name: "View Performance Data", Code: "perf:view", Module: "perf", Action: "view", Description: "View KPI performance data"},
 			models.Permission{Name: "Submit Performance", Code: "perf:submit", Module: "perf", Action: "submit", Description: "Submit quarterly actuals for review"},
 			models.Permission{Name: "Review Performance", Code: "perf:review", Module: "perf", Action: "review", Description: "Start performance review process"},
@@ -834,8 +839,13 @@ func unseedGoalManagement(db *gorm.DB) {
 	exec("permissions (goals)", "DELETE FROM permissions WHERE module = 'goals' OR code = 'dashboard:goals'")
 
 	// Step 3.5: delete KPI/goal management tables (children before parents)
-	log.Println("  WARNING: About to drop 23 KPI/goal tables — this IRREVERSIBLY deletes all KPI configuration and user-entered performance/target data!")
+	log.Println("  WARNING: About to drop 27 KPI/goal tables — this IRREVERSIBLY deletes all KPI configuration and user-entered performance/target data!")
 	for _, table := range []string{
+		"kpi_comments",
+		"kpi_check_ins",
+		"kpi_collaborators",
+		"kpi_evidences",
+		"kpi_metrics",
 		"kpi_data_sources",
 		"kpi_segmentation_dimensions",
 		"kpi_corrective_actions",
@@ -856,7 +866,6 @@ func unseedGoalManagement(db *gorm.DB) {
 		"initiatives",
 		"processes",
 		"operational_objectives",
-		"strategic_goals",
 		"enablers",
 		"pillars",
 	} {

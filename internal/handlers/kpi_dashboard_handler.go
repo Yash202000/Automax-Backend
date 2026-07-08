@@ -117,9 +117,9 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 		Group("activation_status").Scan(&data.KpisByStatus)
 
 	h.db.WithContext(c.UserContext()).Model(&models.StrategicKPI{}).
-		Select("sg.name_en as goal, count(*) as count").
-		Joins("left join strategic_goals sg on sg.id = strategic_kpis.strategic_goal_id").
-		Group("sg.name_en").Scan(&data.KpisByGoal)
+		Select("g.title as goal, count(*) as count").
+		Joins("left join goals g on g.id = strategic_kpis.goal_id").
+		Group("g.title").Scan(&data.KpisByGoal)
 
 	perfQuery := func() *gorm.DB {
 		q := h.db.WithContext(c.UserContext()).Model(&models.KpiPerformance{}).Where("status = ?", "published")
