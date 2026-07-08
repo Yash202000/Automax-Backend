@@ -8,10 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/internal/utils"
+	pkgUtils "github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 )
 
@@ -21,6 +23,7 @@ type NotificationService struct {
 	userRepo     repository.UserRepository
 
 	storage *storage.MinIOStorage
+	cfg     *config.Config
 }
 
 type SendNotificationResult struct {
@@ -31,12 +34,14 @@ type SendNotificationResult struct {
 func NewNotificationService(
 	templateRepo repository.NotificationTemplateRepository,
 	logRepo repository.NotificationLogRepository, userRepo repository.UserRepository, storage *storage.MinIOStorage,
+	cfg *config.Config,
 ) *NotificationService {
 	return &NotificationService{
 		templateRepo: templateRepo,
 		logRepo:      logRepo,
 		userRepo:     userRepo,
 		storage:      storage,
+		cfg:          cfg,
 	}
 }
 
@@ -44,6 +49,12 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 	// REQUIRED: at least one recipient
 	if len(to) == 0 && len(cc) == 0 && len(bcc) == 0 {
 		return nil, fmt.Errorf("at least one recipient (to, cc, or bcc) is required")
+	}
+
+	if channel == "sms" {
+		for i, phone := range to {
+			to[i] = pkgUtils.NormalizeMobile(phone, s.cfg.CountryCode)
+		}
 	}
 
 	// When a template code is provided the template itself supplies subject/body,

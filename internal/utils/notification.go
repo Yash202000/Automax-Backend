@@ -15,9 +15,20 @@ import (
 	"time"
 
 	"github.com/automax/backend/internal/models"
+	pkgUtils "github.com/automax/backend/pkg/utils"
 	"github.com/twilio/twilio-go"
 	openapi "github.com/twilio/twilio-go/rest/api/v2010"
 )
+
+// systemCountryCode returns the COUNTRY_CODE env var (e.g. "+966"), matching
+// the default in internal/config.Config.CountryCode, for callers that don't
+// go through config.Config (this package only reads env vars directly).
+func systemCountryCode() string {
+	if cc := os.Getenv("COUNTRY_CODE"); cc != "" {
+		return cc
+	}
+	return "+966"
+}
 
 // smtpPool holds one reusable authenticated SMTP connection so that every
 // outgoing email does NOT trigger a new SMTP AUTH handshake. Gmail counts
@@ -421,6 +432,8 @@ func SendSMS(to, message string) error {
 		fmt.Println("[DEBUG-SMS] ERROR: Twilio env vars missing")
 		return fmt.Errorf("twilio env vars missing: TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_PHONE_NUMBER")
 	}
+
+	to = pkgUtils.NormalizeMobile(to, systemCountryCode())
 
 	// Normalize whitespace: trim each line, drop blank lines, collapse to single newlines.
 	// Templates often contain indentation and extra blank lines that inflate UCS-2 segment count.
