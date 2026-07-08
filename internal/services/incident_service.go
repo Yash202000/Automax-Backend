@@ -2886,6 +2886,10 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				tx.Rollback()
 				return nil, errors.New(errMsg)
 			}
+			if (requirement.IsMultiple == nil || !*requirement.IsMultiple) && len(req.Attachments) > 1 {
+				tx.Rollback()
+				return nil, errors.New("Only one attachment is allowed for this transition")
+			}
 		case "feedback":
 			if req.Feedback == nil {
 				errMsg := requirement.ErrorMessage
