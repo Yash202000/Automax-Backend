@@ -36,7 +36,7 @@ func (h *KpiDictionaryHandler) ListStrategic(c *fiber.Ctx) error {
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit, _ := strconv.Atoi(c.Query("limit", "10"))
 	search := c.Query("search")
-	goalIDStr := c.Query("strategic_goal_id")
+	goalIDStr := c.Query("goal_id")
 
 	page = max(page, 1)
 	if limit < 1 || limit > 100 {
@@ -44,7 +44,7 @@ func (h *KpiDictionaryHandler) ListStrategic(c *fiber.Ctx) error {
 	}
 
 	q := h.db.WithContext(c.UserContext()).Model(&models.StrategicKPI{}).
-		Preload("StrategicGoal").Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("Goal")
+		Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("Goal")
 
 	if search != "" {
 		q = q.Where("name_en ILIKE ? OR name_ar ILIKE ? OR code ILIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
@@ -54,7 +54,7 @@ func (h *KpiDictionaryHandler) ListStrategic(c *fiber.Ctx) error {
 		if err != nil {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 		}
-		q = q.Where("strategic_goal_id = ?", goalID)
+		q = q.Where("goal_id = ?", goalID)
 	}
 
 	var total int64
@@ -83,7 +83,7 @@ func (h *KpiDictionaryHandler) GetStrategic(c *fiber.Ctx) error {
 
 	var item models.StrategicKPI
 	if err := h.db.WithContext(c.UserContext()).
-		Preload("StrategicGoal").Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("Goal").
+		Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("Goal").
 		First(&item, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
@@ -104,7 +104,7 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 		Code:               req.Code,
 		NameEn:             req.NameEn,
 		NameAr:             req.NameAr,
-		StrategicGoalID:    req.StrategicGoalID,
+		GoalID:             &req.GoalID,
 		PillarID:           req.PillarID,
 		DomainID:           req.DomainID,
 		OwnerDeptID:        req.OwnerDeptID,
@@ -134,7 +134,7 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 	}
 
 	h.db.WithContext(c.UserContext()).
-		Preload("StrategicGoal").Preload("Pillar").Preload("Domain").Preload("OwnerDept").
+		Preload("Goal").Preload("Pillar").Preload("Domain").Preload("OwnerDept").
 		First(item, item.ID)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
@@ -166,7 +166,7 @@ func (h *KpiDictionaryHandler) UpdateStrategic(c *fiber.Ctx) error {
 		"code":                req.Code,
 		"name_en":             req.NameEn,
 		"name_ar":             req.NameAr,
-		"strategic_goal_id":   req.StrategicGoalID,
+		"goal_id":             req.GoalID,
 		"pillar_id":           req.PillarID,
 		"domain_id":           req.DomainID,
 		"owner_dept_id":       req.OwnerDeptID,
@@ -195,7 +195,7 @@ func (h *KpiDictionaryHandler) UpdateStrategic(c *fiber.Ctx) error {
 
 	var item models.StrategicKPI
 	h.db.WithContext(c.UserContext()).
-		Preload("StrategicGoal").Preload("Pillar").Preload("Domain").Preload("OwnerDept").
+		Preload("Goal").Preload("Pillar").Preload("Domain").Preload("OwnerDept").
 		First(&item, id)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
@@ -244,7 +244,7 @@ func (h *KpiDictionaryHandler) ListOperational(c *fiber.Ctx) error {
 	}
 
 	q := h.db.WithContext(c.UserContext()).Model(&models.OperationalKPI{}).
-		Preload("StrategicGoal").Preload("OperationalObjective").Preload("Process").Preload("OwnerDept")
+		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("OwnerDept")
 
 	if search != "" {
 		q = q.Where("name_en ILIKE ? OR name_ar ILIKE ? OR code ILIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
@@ -281,7 +281,7 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 		Code:                   req.Code,
 		NameEn:                 req.NameEn,
 		NameAr:                 req.NameAr,
-		StrategicGoalID:        req.StrategicGoalID,
+		GoalID:                 &req.GoalID,
 		OperationalObjectiveID: req.OperationalObjectiveID,
 		ProcessID:              req.ProcessID,
 		OwnerDeptID:            req.OwnerDeptID,
@@ -308,7 +308,7 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 	}
 
 	h.db.WithContext(c.UserContext()).
-		Preload("StrategicGoal").Preload("OperationalObjective").Preload("Process").Preload("OwnerDept").
+		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("OwnerDept").
 		First(item, item.ID)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
@@ -330,7 +330,7 @@ func (h *KpiDictionaryHandler) GetOperational(c *fiber.Ctx) error {
 
 	var item models.OperationalKPI
 	if err := h.db.WithContext(c.UserContext()).
-		Preload("StrategicGoal").Preload("OperationalObjective").Preload("Process").Preload("OwnerDept").
+		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("OwnerDept").
 		First(&item, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
@@ -356,7 +356,7 @@ func (h *KpiDictionaryHandler) UpdateOperational(c *fiber.Ctx) error {
 		"code":                     req.Code,
 		"name_en":                  req.NameEn,
 		"name_ar":                  req.NameAr,
-		"strategic_goal_id":        req.StrategicGoalID,
+		"goal_id":                  req.GoalID,
 		"operational_objective_id": req.OperationalObjectiveID,
 		"process_id":               req.ProcessID,
 		"owner_dept_id":            req.OwnerDeptID,
@@ -382,7 +382,7 @@ func (h *KpiDictionaryHandler) UpdateOperational(c *fiber.Ctx) error {
 
 	var item models.OperationalKPI
 	h.db.WithContext(c.UserContext()).
-		Preload("StrategicGoal").Preload("OperationalObjective").Preload("Process").Preload("OwnerDept").
+		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("OwnerDept").
 		First(&item, id)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{

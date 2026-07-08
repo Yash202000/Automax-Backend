@@ -26,17 +26,16 @@ const (
 // ──────────────────────────────────────────────────────────
 
 type Pillar struct {
-	ID          uuid.UUID       `gorm:"type:uuid;primary_key" json:"id"`
-	NameEn      string          `gorm:"size:255;not null" json:"name_en"`
-	NameAr      string          `gorm:"size:255;not null;default:''" json:"name_ar"`
-	OwnerID     *uuid.UUID      `gorm:"type:uuid;index" json:"owner_id"`
-	Owner       *User           `gorm:"foreignKey:OwnerID" json:"owner,omitempty"`
-	Goals       []StrategicGoal `gorm:"foreignKey:PillarID" json:"goals,omitempty"`
-	Initiatives []Initiative    `gorm:"foreignKey:PillarID" json:"initiatives,omitempty"`
-	IsActive    bool            `gorm:"default:true" json:"is_active"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
-	DeletedAt   gorm.DeletedAt  `gorm:"index" json:"-"`
+	ID          uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	NameEn      string         `gorm:"size:255;not null" json:"name_en"`
+	NameAr      string         `gorm:"size:255;not null;default:''" json:"name_ar"`
+	OwnerID     *uuid.UUID     `gorm:"type:uuid;index" json:"owner_id"`
+	Owner       *User          `gorm:"foreignKey:OwnerID" json:"owner,omitempty"`
+	Initiatives []Initiative   `gorm:"foreignKey:PillarID" json:"initiatives,omitempty"`
+	IsActive    bool           `gorm:"default:true" json:"is_active"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (p *Pillar) BeforeCreate(tx *gorm.DB) error {
@@ -79,17 +78,16 @@ func (p *Pillar) ToResponse() PillarResponse {
 // ──────────────────────────────────────────────────────────
 
 type Enabler struct {
-	ID          uuid.UUID       `gorm:"type:uuid;primary_key" json:"id"`
-	NameEn      string          `gorm:"size:255;not null" json:"name_en"`
-	NameAr      string          `gorm:"size:255;not null;default:''" json:"name_ar"`
-	OwnerID     *uuid.UUID      `gorm:"type:uuid;index" json:"owner_id"`
-	Owner       *User           `gorm:"foreignKey:OwnerID" json:"owner,omitempty"`
-	Goals       []StrategicGoal `gorm:"foreignKey:EnablerID" json:"goals,omitempty"`
-	Initiatives []Initiative    `gorm:"foreignKey:EnablerID" json:"initiatives,omitempty"`
-	IsActive    bool            `gorm:"default:true" json:"is_active"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
-	DeletedAt   gorm.DeletedAt  `gorm:"index" json:"-"`
+	ID          uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	NameEn      string         `gorm:"size:255;not null" json:"name_en"`
+	NameAr      string         `gorm:"size:255;not null;default:''" json:"name_ar"`
+	OwnerID     *uuid.UUID     `gorm:"type:uuid;index" json:"owner_id"`
+	Owner       *User          `gorm:"foreignKey:OwnerID" json:"owner,omitempty"`
+	Initiatives []Initiative   `gorm:"foreignKey:EnablerID" json:"initiatives,omitempty"`
+	IsActive    bool           `gorm:"default:true" json:"is_active"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (e *Enabler) BeforeCreate(tx *gorm.DB) error {
@@ -128,110 +126,24 @@ func (e *Enabler) ToResponse() EnablerResponse {
 }
 
 // ──────────────────────────────────────────────────────────
-// StrategicGoal
-// ──────────────────────────────────────────────────────────
-
-type StrategicGoal struct {
-	ID                    uuid.UUID              `gorm:"type:uuid;primary_key" json:"id"`
-	GoalCode              string                 `gorm:"size:50;not null;uniqueIndex" json:"goal_code"`
-	TitleEn               string                 `gorm:"size:255;not null" json:"title_en"`
-	TitleAr               string                 `gorm:"size:255;not null;default:''" json:"title_ar"`
-	NameEn                string                 `gorm:"size:255;not null" json:"name_en"`
-	NameAr                string                 `gorm:"size:255;not null;default:''" json:"name_ar"`
-	PillarID              *uuid.UUID             `gorm:"type:uuid;index" json:"pillar_id"`
-	Pillar                *Pillar                `gorm:"foreignKey:PillarID" json:"pillar,omitempty"`
-	EnablerID             *uuid.UUID             `gorm:"type:uuid;index" json:"enabler_id"`
-	Enabler               *Enabler               `gorm:"foreignKey:EnablerID" json:"enabler,omitempty"`
-	OperationalObjectives []OperationalObjective `gorm:"foreignKey:StrategicGoalID" json:"operational_objectives,omitempty"`
-	Initiatives           []Initiative           `gorm:"foreignKey:StrategicGoalID" json:"initiatives,omitempty"`
-	IsActive              bool                   `gorm:"default:true" json:"is_active"`
-	CreatedAt             time.Time              `json:"created_at"`
-	UpdatedAt             time.Time              `json:"updated_at"`
-	DeletedAt             gorm.DeletedAt         `gorm:"index" json:"-"`
-}
-
-func (g *StrategicGoal) generateGoalCode() {
-	if g.GoalCode == "" {
-		code := "SG-" + g.ID.String()[:8]
-		g.GoalCode = code
-	}
-}
-
-func (g *StrategicGoal) BeforeCreate(tx *gorm.DB) error {
-	if g.ID == uuid.Nil {
-		g.ID = uuid.New()
-	}
-	g.generateGoalCode()
-	if g.TitleEn == "" {
-		g.TitleEn = g.NameEn
-	}
-	if g.TitleAr == "" {
-		g.TitleAr = g.NameAr
-	}
-	return nil
-}
-
-type StrategicGoalRequest struct {
-	NameEn    string     `json:"name_en" validate:"required,max=255"`
-	NameAr    string     `json:"name_ar" validate:"max=255"`
-	PillarID  *uuid.UUID `json:"pillar_id"`
-	EnablerID *uuid.UUID `json:"enabler_id"`
-}
-
-type StrategicGoalResponse struct {
-	ID        uuid.UUID        `json:"id"`
-	GoalCode  string           `json:"goal_code"`
-	TitleEn   string           `json:"title_en"`
-	TitleAr   string           `json:"title_ar"`
-	NameEn    string           `json:"name_en"`
-	NameAr    string           `json:"name_ar"`
-	PillarID  *uuid.UUID       `json:"pillar_id"`
-	Pillar    *PillarResponse  `json:"pillar,omitempty"`
-	EnablerID *uuid.UUID       `json:"enabler_id"`
-	Enabler   *EnablerResponse `json:"enabler,omitempty"`
-	IsActive  bool             `json:"is_active"`
-	CreatedAt time.Time        `json:"created_at"`
-}
-
-func (g *StrategicGoal) ToResponse() StrategicGoalResponse {
-	resp := StrategicGoalResponse{
-		ID:        g.ID,
-		GoalCode:  g.GoalCode,
-		TitleEn:   g.TitleEn,
-		TitleAr:   g.TitleAr,
-		NameEn:    g.NameEn,
-		NameAr:    g.NameAr,
-		PillarID:  g.PillarID,
-		EnablerID: g.EnablerID,
-		IsActive:  g.IsActive,
-		CreatedAt: g.CreatedAt,
-	}
-	if g.Pillar != nil {
-		r := g.Pillar.ToResponse()
-		resp.Pillar = &r
-	}
-	if g.Enabler != nil {
-		r := g.Enabler.ToResponse()
-		resp.Enabler = &r
-	}
-	return resp
-}
-
-// ──────────────────────────────────────────────────────────
 // OperationalObjective
 // ──────────────────────────────────────────────────────────
+//
+// OperationalObjective, Process, and Initiative classify against the Goal
+// Management `Goal` entity directly (GoalID) rather than a separate
+// "StrategicGoal" master-data table — Goal already is the strategic goal.
 
 type OperationalObjective struct {
-	ID              uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
-	NameEn          string         `gorm:"size:255;not null" json:"name_en"`
-	NameAr          string         `gorm:"size:255;not null;default:''" json:"name_ar"`
-	StrategicGoalID uuid.UUID      `gorm:"type:uuid;not null;index" json:"strategic_goal_id"`
-	StrategicGoal   *StrategicGoal `gorm:"foreignKey:StrategicGoalID" json:"strategic_goal,omitempty"`
-	Processes       []Process      `gorm:"foreignKey:OperationalObjectiveID" json:"processes,omitempty"`
-	IsActive        bool           `gorm:"default:true" json:"is_active"`
-	CreatedAt       time.Time      `json:"created_at"`
-	UpdatedAt       time.Time      `json:"updated_at"`
-	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
+	ID        uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	NameEn    string         `gorm:"size:255;not null" json:"name_en"`
+	NameAr    string         `gorm:"size:255;not null;default:''" json:"name_ar"`
+	GoalID    *uuid.UUID     `gorm:"type:uuid;index" json:"goal_id"`
+	Goal      *Goal          `gorm:"foreignKey:GoalID" json:"goal,omitempty"`
+	Processes []Process      `gorm:"foreignKey:OperationalObjectiveID" json:"processes,omitempty"`
+	IsActive  bool           `gorm:"default:true" json:"is_active"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (o *OperationalObjective) BeforeCreate(tx *gorm.DB) error {
@@ -242,33 +154,32 @@ func (o *OperationalObjective) BeforeCreate(tx *gorm.DB) error {
 }
 
 type OperationalObjectiveRequest struct {
-	NameEn          string    `json:"name_en" validate:"required,max=255"`
-	NameAr          string    `json:"name_ar" validate:"max=255"`
-	StrategicGoalID uuid.UUID `json:"strategic_goal_id" validate:"required"`
+	NameEn string    `json:"name_en" validate:"required,max=255"`
+	NameAr string    `json:"name_ar" validate:"max=255"`
+	GoalID uuid.UUID `json:"goal_id" validate:"required"`
 }
 
 type OperationalObjectiveResponse struct {
-	ID              uuid.UUID              `json:"id"`
-	NameEn          string                 `json:"name_en"`
-	NameAr          string                 `json:"name_ar"`
-	StrategicGoalID uuid.UUID              `json:"strategic_goal_id"`
-	StrategicGoal   *StrategicGoalResponse `json:"strategic_goal,omitempty"`
-	IsActive        bool                   `json:"is_active"`
-	CreatedAt       time.Time              `json:"created_at"`
+	ID        uuid.UUID          `json:"id"`
+	NameEn    string             `json:"name_en"`
+	NameAr    string             `json:"name_ar"`
+	GoalID    *uuid.UUID         `json:"goal_id"`
+	Goal      *GoalBriefResponse `json:"goal,omitempty"`
+	IsActive  bool               `json:"is_active"`
+	CreatedAt time.Time          `json:"created_at"`
 }
 
 func (o *OperationalObjective) ToResponse() OperationalObjectiveResponse {
 	resp := OperationalObjectiveResponse{
-		ID:              o.ID,
-		NameEn:          o.NameEn,
-		NameAr:          o.NameAr,
-		StrategicGoalID: o.StrategicGoalID,
-		IsActive:        o.IsActive,
-		CreatedAt:       o.CreatedAt,
+		ID:        o.ID,
+		NameEn:    o.NameEn,
+		NameAr:    o.NameAr,
+		GoalID:    o.GoalID,
+		IsActive:  o.IsActive,
+		CreatedAt: o.CreatedAt,
 	}
-	if o.StrategicGoal != nil {
-		r := o.StrategicGoal.ToResponse()
-		resp.StrategicGoal = &r
+	if o.Goal != nil {
+		resp.Goal = ToGoalBriefResponse(o.Goal)
 	}
 	return resp
 }
@@ -283,8 +194,8 @@ type Process struct {
 	NameAr                 string                `gorm:"size:255;not null;default:''" json:"name_ar"`
 	OperationalObjectiveID uuid.UUID             `gorm:"type:uuid;not null;index" json:"operational_objective_id"`
 	OperationalObjective   *OperationalObjective `gorm:"foreignKey:OperationalObjectiveID" json:"operational_objective,omitempty"`
-	StrategicGoalID        uuid.UUID             `gorm:"type:uuid;not null;index" json:"strategic_goal_id"`
-	StrategicGoal          *StrategicGoal        `gorm:"foreignKey:StrategicGoalID" json:"strategic_goal,omitempty"`
+	GoalID                 *uuid.UUID            `gorm:"type:uuid;index" json:"goal_id"`
+	Goal                   *Goal                 `gorm:"foreignKey:GoalID" json:"goal,omitempty"`
 	DepartmentID           *uuid.UUID            `gorm:"type:uuid;index" json:"department_id"`
 	Department             *Department           `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
 	Unit                   string                `gorm:"size:255" json:"unit"`
@@ -305,7 +216,7 @@ type ProcessRequest struct {
 	NameEn                 string     `json:"name_en" validate:"required,max=255"`
 	NameAr                 string     `json:"name_ar" validate:"max=255"`
 	OperationalObjectiveID uuid.UUID  `json:"operational_objective_id" validate:"required"`
-	StrategicGoalID        uuid.UUID  `json:"strategic_goal_id" validate:"required"`
+	GoalID                 uuid.UUID  `json:"goal_id" validate:"required"`
 	DepartmentID           *uuid.UUID `json:"department_id"`
 	Unit                   string     `json:"unit" validate:"max=255"`
 }
@@ -316,7 +227,8 @@ type ProcessResponse struct {
 	NameAr                 string                        `json:"name_ar"`
 	OperationalObjectiveID uuid.UUID                     `json:"operational_objective_id"`
 	OperationalObjective   *OperationalObjectiveResponse `json:"operational_objective,omitempty"`
-	StrategicGoalID        uuid.UUID                     `json:"strategic_goal_id"`
+	GoalID                 *uuid.UUID                    `json:"goal_id"`
+	Goal                   *GoalBriefResponse            `json:"goal,omitempty"`
 	DepartmentID           *uuid.UUID                    `json:"department_id"`
 	Department             *DepartmentBriefResponse      `json:"department,omitempty"`
 	Unit                   string                        `json:"unit"`
@@ -330,7 +242,7 @@ func (p *Process) ToResponse() ProcessResponse {
 		NameEn:                 p.NameEn,
 		NameAr:                 p.NameAr,
 		OperationalObjectiveID: p.OperationalObjectiveID,
-		StrategicGoalID:        p.StrategicGoalID,
+		GoalID:                 p.GoalID,
 		DepartmentID:           p.DepartmentID,
 		Unit:                   p.Unit,
 		IsActive:               p.IsActive,
@@ -339,6 +251,9 @@ func (p *Process) ToResponse() ProcessResponse {
 	if p.OperationalObjective != nil {
 		r := p.OperationalObjective.ToResponse()
 		resp.OperationalObjective = &r
+	}
+	if p.Goal != nil {
+		resp.Goal = ToGoalBriefResponse(p.Goal)
 	}
 	if p.Department != nil {
 		resp.Department = ToDepartmentBriefResponse(p.Department)
@@ -351,21 +266,21 @@ func (p *Process) ToResponse() ProcessResponse {
 // ──────────────────────────────────────────────────────────
 
 type Initiative struct {
-	ID              uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
-	NameEn          string         `gorm:"size:255;not null" json:"name_en"`
-	NameAr          string         `gorm:"size:255;not null;default:''" json:"name_ar"`
-	StrategicGoalID uuid.UUID      `gorm:"type:uuid;not null;index" json:"strategic_goal_id"`
-	StrategicGoal   *StrategicGoal `gorm:"foreignKey:StrategicGoalID" json:"strategic_goal,omitempty"`
-	PillarID        *uuid.UUID     `gorm:"type:uuid;index" json:"pillar_id"`
-	Pillar          *Pillar        `gorm:"foreignKey:PillarID" json:"pillar,omitempty"`
-	EnablerID       *uuid.UUID     `gorm:"type:uuid;index" json:"enabler_id"`
-	Enabler         *Enabler       `gorm:"foreignKey:EnablerID" json:"enabler,omitempty"`
-	OwnerID         *uuid.UUID     `gorm:"type:uuid;index" json:"owner_id"`
-	Owner           *User          `gorm:"foreignKey:OwnerID" json:"owner,omitempty"`
-	Status          string         `gorm:"size:50;not null;default:'draft'" json:"status"`
-	CreatedAt       time.Time      `json:"created_at"`
-	UpdatedAt       time.Time      `json:"updated_at"`
-	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
+	ID        uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	NameEn    string         `gorm:"size:255;not null" json:"name_en"`
+	NameAr    string         `gorm:"size:255;not null;default:''" json:"name_ar"`
+	GoalID    *uuid.UUID     `gorm:"type:uuid;index" json:"goal_id"`
+	Goal      *Goal          `gorm:"foreignKey:GoalID" json:"goal,omitempty"`
+	PillarID  *uuid.UUID     `gorm:"type:uuid;index" json:"pillar_id"`
+	Pillar    *Pillar        `gorm:"foreignKey:PillarID" json:"pillar,omitempty"`
+	EnablerID *uuid.UUID     `gorm:"type:uuid;index" json:"enabler_id"`
+	Enabler   *Enabler       `gorm:"foreignKey:EnablerID" json:"enabler,omitempty"`
+	OwnerID   *uuid.UUID     `gorm:"type:uuid;index" json:"owner_id"`
+	Owner     *User          `gorm:"foreignKey:OwnerID" json:"owner,omitempty"`
+	Status    string         `gorm:"size:50;not null;default:'draft'" json:"status"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (i *Initiative) BeforeCreate(tx *gorm.DB) error {
@@ -376,45 +291,44 @@ func (i *Initiative) BeforeCreate(tx *gorm.DB) error {
 }
 
 type InitiativeRequest struct {
-	NameEn          string     `json:"name_en" validate:"required,max=255"`
-	NameAr          string     `json:"name_ar" validate:"max=255"`
-	StrategicGoalID uuid.UUID  `json:"strategic_goal_id" validate:"required"`
-	PillarID        *uuid.UUID `json:"pillar_id"`
-	EnablerID       *uuid.UUID `json:"enabler_id"`
-	OwnerID         *uuid.UUID `json:"owner_id"`
-	Status          string     `json:"status" validate:"omitempty,oneof=draft active on_hold complete cancelled"`
+	NameEn    string     `json:"name_en" validate:"required,max=255"`
+	NameAr    string     `json:"name_ar" validate:"max=255"`
+	GoalID    uuid.UUID  `json:"goal_id" validate:"required"`
+	PillarID  *uuid.UUID `json:"pillar_id"`
+	EnablerID *uuid.UUID `json:"enabler_id"`
+	OwnerID   *uuid.UUID `json:"owner_id"`
+	Status    string     `json:"status" validate:"omitempty,oneof=draft active on_hold complete cancelled"`
 }
 
 type InitiativeResponse struct {
-	ID              uuid.UUID              `json:"id"`
-	NameEn          string                 `json:"name_en"`
-	NameAr          string                 `json:"name_ar"`
-	StrategicGoalID uuid.UUID              `json:"strategic_goal_id"`
-	StrategicGoal   *StrategicGoalResponse `json:"strategic_goal,omitempty"`
-	PillarID        *uuid.UUID             `json:"pillar_id"`
-	EnablerID       *uuid.UUID             `json:"enabler_id"`
-	OwnerID         *uuid.UUID             `json:"owner_id"`
-	Owner           *UserBriefResponse     `json:"owner,omitempty"`
-	Status          string                 `json:"status"`
-	CreatedAt       time.Time              `json:"created_at"`
+	ID        uuid.UUID          `json:"id"`
+	NameEn    string             `json:"name_en"`
+	NameAr    string             `json:"name_ar"`
+	GoalID    *uuid.UUID         `json:"goal_id"`
+	Goal      *GoalBriefResponse `json:"goal,omitempty"`
+	PillarID  *uuid.UUID         `json:"pillar_id"`
+	EnablerID *uuid.UUID         `json:"enabler_id"`
+	OwnerID   *uuid.UUID         `json:"owner_id"`
+	Owner     *UserBriefResponse `json:"owner,omitempty"`
+	Status    string             `json:"status"`
+	CreatedAt time.Time          `json:"created_at"`
 }
 
 func (i *Initiative) ToResponse() InitiativeResponse {
 	resp := InitiativeResponse{
-		ID:              i.ID,
-		NameEn:          i.NameEn,
-		NameAr:          i.NameAr,
-		StrategicGoalID: i.StrategicGoalID,
-		PillarID:        i.PillarID,
-		EnablerID:       i.EnablerID,
-		OwnerID:         i.OwnerID,
-		Owner:           ToUserBriefResponse(i.Owner),
-		Status:          i.Status,
-		CreatedAt:       i.CreatedAt,
+		ID:        i.ID,
+		NameEn:    i.NameEn,
+		NameAr:    i.NameAr,
+		GoalID:    i.GoalID,
+		PillarID:  i.PillarID,
+		EnablerID: i.EnablerID,
+		OwnerID:   i.OwnerID,
+		Owner:     ToUserBriefResponse(i.Owner),
+		Status:    i.Status,
+		CreatedAt: i.CreatedAt,
 	}
-	if i.StrategicGoal != nil {
-		r := i.StrategicGoal.ToResponse()
-		resp.StrategicGoal = &r
+	if i.Goal != nil {
+		resp.Goal = ToGoalBriefResponse(i.Goal)
 	}
 	return resp
 }
