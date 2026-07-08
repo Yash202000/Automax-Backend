@@ -25,7 +25,7 @@ func NewFinalCloseWhatsAppFeedbackSessionService(baseURL string) *FinalCloseWhat
 	}
 	return &FinalCloseWhatsAppFeedbackSessionService{
 		baseURL:    trimmed,
-		httpClient: &http.Client{Timeout: 15 * time.Second},
+		httpClient: &http.Client{Timeout: 20 * time.Second},
 	}
 }
 
