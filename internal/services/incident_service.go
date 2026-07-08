@@ -2966,9 +2966,17 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	}
 
 	// Validate duration when transitioning INTO a partial_close state
-	if newState.IsPartialClose && req.ReadyToCloseDuration == "" {
-		tx.Rollback()
-		return nil, errors.New(i18n.T(ctx, "partial_close_duration_required"))
+	if newState.IsPartialClose {
+		if req.ReadyToCloseDuration == "" {
+			tx.Rollback()
+			return nil, errors.New(i18n.T(ctx, "partial_close_duration_required"))
+		}
+		if s.readyToCloseService != nil {
+			if _, err := s.readyToCloseService.ParseDuration(req.ReadyToCloseDuration); err != nil {
+				tx.Rollback()
+				return nil, errors.New(i18n.T(ctx, "partial_close_duration_invalid"))
+			}
+		}
 	}
 
 	// Prepare updates map for all fields that need to change
