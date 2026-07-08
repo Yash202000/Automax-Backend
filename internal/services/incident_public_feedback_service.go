@@ -29,12 +29,13 @@ type IncidentPublicFeedbackService interface {
 }
 
 type incidentPublicFeedbackService struct {
-	repo               repository.IncidentPublicFeedbackRepository
-	incidentRepo       repository.IncidentRepository
-	notification       *NotificationService
-	incidentService    IncidentService
-	workflowRepo       repository.WorkflowRepository
-	classificationRepo repository.ClassificationRepository
+	repo                   repository.IncidentPublicFeedbackRepository
+	incidentRepo           repository.IncidentRepository
+	notification           *NotificationService
+	incidentService        IncidentService
+	workflowRepo           repository.WorkflowRepository
+	classificationRepo     repository.ClassificationRepository
+	whatsappSessionCleanup *FinalCloseWhatsAppFeedbackSessionService
 }
 
 func NewIncidentPublicFeedbackService(
@@ -44,14 +45,16 @@ func NewIncidentPublicFeedbackService(
 	incidentService IncidentService,
 	workflowRepo repository.WorkflowRepository,
 	classificationRepo repository.ClassificationRepository,
+	whatsappSessionCleanup *FinalCloseWhatsAppFeedbackSessionService,
 ) IncidentPublicFeedbackService {
 	return &incidentPublicFeedbackService{
-		repo:               repo,
-		incidentRepo:       incidentRepo,
-		notification:       notification,
-		incidentService:    incidentService,
-		workflowRepo:       workflowRepo,
-		classificationRepo: classificationRepo,
+		repo:                   repo,
+		incidentRepo:           incidentRepo,
+		notification:           notification,
+		incidentService:        incidentService,
+		workflowRepo:           workflowRepo,
+		classificationRepo:     classificationRepo,
+		whatsappSessionCleanup: whatsappSessionCleanup,
 	}
 }
 
@@ -183,6 +186,24 @@ func (s *incidentPublicFeedbackService) Submit(ctx context.Context, incidentID u
 
 	if err := s.repo.Update(ctx, f); err != nil {
 		return nil, fmt.Errorf("failed to submit feedback: %w", err)
+	}
+
+	// Feedback was just submitted via this channel (typically the SMS fallback
+	// link) — a WhatsApp feedback session for the same reporter may still be
+	// active. Delete it so that link stops working. Best-effort: log and move
+	// on, never fail the submission because of this cleanup step.
+	if s.whatsappSessionCleanup != nil && f.MobileNo != "" {
+		mobileNo := f.MobileNo
+		feedbackID := f.ID
+		go func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			if cleanupErr := s.whatsappSessionCleanup.DeleteSession(cleanupCtx, mobileNo); cleanupErr != nil {
+				log.Printf("[IncidentPublicFeedback] WhatsApp session cleanup failed for feedback %s (mobile=%s): %v", feedbackID, mobileNo, cleanupErr)
+			} else {
+				log.Printf("[IncidentPublicFeedback] WhatsApp session cleanup completed for feedback %s (mobile=%s)", feedbackID, mobileNo)
+			}
+		}()
 	}
 
 	resp := models.ToIncidentPublicFeedbackResponse(f)

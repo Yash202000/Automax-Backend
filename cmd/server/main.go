@@ -137,7 +137,8 @@ func main() {
 	fcmService := services.NewFCMService(repository.NewDeviceTokenRepository(db), notificationLogRepo)
 	callerSentimentService := services.NewCallerSentimentService(callerSentimentRepo)
 	feedbackTemplateService := services.NewFeedbackTemplateService(feedbackTemplateRepo)
-	publicFeedbackService := services.NewIncidentPublicFeedbackService(publicFeedbackRepo, incidentRepo, notificationService, incidentService, workflowRepo, classificationRepo)
+	finalCloseWhatsAppFeedbackSessionService := services.NewFinalCloseWhatsAppFeedbackSessionService(cfg.FinalCloseWhatsAppFeedback.SessionBaseURL)
+	publicFeedbackService := services.NewIncidentPublicFeedbackService(publicFeedbackRepo, incidentRepo, notificationService, incidentService, workflowRepo, classificationRepo, finalCloseWhatsAppFeedbackSessionService)
 	commentTemplateService := services.NewCommentTemplateService(commentTemplateRepo)
 
 	// Goal management services
