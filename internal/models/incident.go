@@ -1347,6 +1347,7 @@ type IncidentReportData struct {
 	CreatorPhone         string     `db:"creator_phone"`
 	CallerPhone          string     `db:"caller_phone"`
 	CallerName           string     `db:"caller_name"`
+	ReporterEmail        string     `db:"reporter_email"`
 	CreatedByMobile      string     `db:"created_by_mobile"`
 	CreatedByName        string     `db:"created_by_name"`
 	AssigneeFirstName    string     `db:"assignee_first_name"`

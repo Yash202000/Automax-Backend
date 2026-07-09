@@ -30,10 +30,12 @@ var CLIENT_CODE = struct {
 	VIUSIONAL    string
 	EPM940       string
 	IVR_INST_SMS string
+	VD2          string
 }{
 	VIUSIONAL:    "Viusional",
 	EPM940:       "EPM940",
 	IVR_INST_SMS: "IVRINSTSMS",
+	VD2:          "VD2",
 }
 
 var INCIDENT_SOURCE = struct {
@@ -45,6 +47,7 @@ var INCIDENT_SOURCE = struct {
 	TWITTER   string
 	EMAIL     string
 	EPMPORTAL string
+	VIUSIONAL string
 }{
 	WEB:       "web",
 	MOBILE:    "mobile",
@@ -54,6 +57,7 @@ var INCIDENT_SOURCE = struct {
 	TWITTER:   "twitter",
 	EMAIL:     "email",
 	EPMPORTAL: "epmportal",
+	VIUSIONAL: "viusional",
 }
 
 var PREFIX = struct {

@@ -693,15 +693,31 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 		assigneeName = strings.TrimSpace(data.AssigneeFirstName + " " + data.AssigneeLastName)
 	}
 
+	// Client / source specific report tweaks.
+	//   VD2 client: the "Caller Details" section is hidden.
+	//   'visional' source: the incident's own reporter (name/phone/email) replaces
+	//   the internal creator's details inside the Reporter section.
+	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+	isVD2 := strings.EqualFold(clientCode, constants.CLIENT_CODE.VD2)
+	isVisionalSource := strings.EqualFold(strings.TrimSpace(data.Source), constants.INCIDENT_SOURCE.VIUSIONAL)
+
 	secHeader(&b, l.SectionReporter)
 	b.WriteString(`<table class="grid">`)
-	row2(&b, l.Reporter, html.EscapeString(data.CreatorFullName), l.Assignee, html.EscapeString(assigneeName))
-	row2(&b, l.ReporterEmail, html.EscapeString(data.CreatorEmail), l.ReporterMobile, html.EscapeString(data.CreatorPhone))
+	if isVisionalSource {
+		// data.CallerName / data.CallerPhone are the incident's reporter_name /
+		// reporter_phone (aliased in the report query); data.ReporterEmail is the
+		// incident's reporter_email.
+		row2(&b, l.ReporterName, html.EscapeString(data.CallerName), l.Assignee, html.EscapeString(assigneeName))
+		row2(&b, l.ReporterEmail, html.EscapeString(data.ReporterEmail), l.ReporterMobile, html.EscapeString(data.CallerPhone))
+	} else {
+		row2(&b, l.Reporter, html.EscapeString(data.CreatorFullName), l.Assignee, html.EscapeString(assigneeName))
+		row2(&b, l.ReporterEmail, html.EscapeString(data.CreatorEmail), l.ReporterMobile, html.EscapeString(data.CreatorPhone))
+	}
 	row1(&b, l.Department, html.EscapeString(data.DepartmentName))
 	b.WriteString(`</table>`)
 
 	// ── Section: Caller Details ─────────────────────────
-	if data.CallerPhone != "" {
+	if data.CallerPhone != "" && !isVD2 && !isVisionalSource {
 		secHeader(&b, l.SectionCaller)
 		b.WriteString(`<table class="grid">`)
 		row2(&b, l.CallerName, html.EscapeString(data.CallerName), l.CallerMobile, html.EscapeString(data.CallerPhone))

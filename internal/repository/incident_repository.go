@@ -1843,6 +1843,7 @@ SELECT
     COALESCE(creator.phone, '')  AS creator_phone,
     reporter_phone AS caller_phone,
     reporter_name AS caller_name,
+    COALESCE(i.reporter_email, '') AS reporter_email,
     COALESCE(asn.first_name, '') AS assignee_first_name,
     COALESCE(asn.last_name, '')  AS assignee_last_name,
     COALESCE(dep.name, '')       AS department_name,
