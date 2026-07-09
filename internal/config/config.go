@@ -20,6 +20,7 @@ type Config struct {
 	SSOIssuerURL               string // env: SSO_ISSUER_URL (e.g. https://automax.example.com — embedded in iss claim)
 	SSOFrontendURL             string // env: SSO_FRONTEND_URL (e.g. https://automax.example.com — where /sso-complete lives)
 	NafathAPIBaseURL           string // env: NAFATH_API_BASE_URL (e.g. https://nafath.amanathail.gov.sa)
+	CountryCode                string // env: COUNTRY_CODE (e.g. +966, +91)
 	Escalation                 EscalationConfig
 	ReadyToClose               ReadyToCloseConfig
 	SmsFeedback                SmsFeedbackConfig
@@ -243,6 +244,7 @@ func Load() *Config {
 		FrontendURL:      getEnv("FRONTEND_URL", ""),
 		SSOFrontendURL:   getEnv("SSO_FRONTEND_URL", ""),
 		NafathAPIBaseURL: getEnv("NAFATH_API_BASE_URL", ""),
+		CountryCode:      getEnv("COUNTRY_CODE", "+966"),
 		Escalation: EscalationConfig{
 			DailyHour:    getEnvAsInt("ESCALATION_DAILY_HOUR", 18),
 			DailyMinute:  getEnvAsInt("ESCALATION_DAILY_MINUTE", 0),
