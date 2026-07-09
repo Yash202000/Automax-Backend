@@ -339,6 +339,8 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
+	log.Printf("[List] total=%d classification_id=%v location_id=%v my_record=%v record_type=%v user_role_ids=%v",
+		total, filter.ClassificationID, filter.LocationID, filter.MyRecord, filter.RecordType, filter.UserRoleIDs)
 	// Apply pagination
 	// Apply pagination
 	if filter.Page < 1 {
@@ -986,6 +988,8 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 	if err := baseQuery.Count(&stats.Total).Error; err != nil {
 		return nil, err
 	}
+	log.Printf("[GetStatsV2] total=%d is_admin=%v classification_id=%v location_id=%v my_record=%v record_type=%v user_role_ids=%v",
+		stats.Total, isAdmin, filter.ClassificationID, filter.LocationID, filter.MyRecord, filter.RecordType, filter.UserRoleIDs)
 
 	// SLA Breached
 	slaQuery := applyBaseFilters(
@@ -998,7 +1002,7 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 
 	// Partial Close (incidents currently in a partial_close state)
 	pcQuery := applyBaseFilters(
-		r.db.WithContext(ctx).Model(&models.Incident{}).Debug().
+		r.db.WithContext(ctx).Model(&models.Incident{}).
 			Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
 			Where("workflow_states.is_partial_close = ? AND incidents.workflow_id IN (SELECT id FROM workflows WHERE deleted_at IS NULL)", true),
 	)
@@ -1628,7 +1632,9 @@ func (r *incidentRepository) FindOpenIncidentsForDuplicateCheckByCaller(ctx cont
 
 	if reporterName != "" {
 		query = query.Where("reporter_name = ?", reporterName)
-	} else {
+	}
+
+	if reporterPhone != "" {
 		phone := reporterPhone
 		phoneWithPlus := "+" + phone
 		if strings.HasPrefix(phone, "+") {
