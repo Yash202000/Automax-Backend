@@ -102,7 +102,10 @@ type DocumentaConfig struct {
 }
 
 // CintrixConfig holds settings for the Cintrix CTI integration (contact-center
-// softphone widget). env: CINTRIX_URL, CINTRIX_API_KEY_ID, CINTRIX_API_KEY_SECRET
+// softphone widget). env: CINTRIX_URL, CINTRIX_API_KEY_ID, CINTRIX_API_KEY_SECRET.
+// CINTRIX_URL must be the Cintrix FRONTEND origin (its nginx serves
+// cti-widget.js and proxies /api to the backend) — NOT the bare backend port;
+// the widget script 404s there and the widget never renders.
 // — leaving these unset disables the CTI routes.
 type CintrixConfig struct {
 	URL          string
