@@ -31,6 +31,7 @@ type Config struct {
 	License                    LicenseConfig
 	Integration                IntegrationConfig
 	FinalCloseWhatsAppFeedback FinalCloseWhatsAppFeedbackConfig
+	Cintrix                    CintrixConfig
 }
 
 // FinalCloseWhatsAppFeedbackConfig holds settings for deleting a still-active
@@ -98,6 +99,15 @@ type DocumentaConfig struct {
 	ClientSecret  string
 	WorkspaceName string
 	Enabled       bool
+}
+
+// CintrixConfig holds settings for the Cintrix CTI integration (contact-center
+// softphone widget). env: CINTRIX_URL, CINTRIX_API_KEY_ID, CINTRIX_API_KEY_SECRET
+// — leaving these unset disables the CTI routes.
+type CintrixConfig struct {
+	URL          string
+	APIKeyID     string
+	APIKeySecret string
 }
 
 type EscalationConfig struct {
@@ -294,6 +304,11 @@ func Load() *Config {
 		},
 		SmsFeedback: SmsFeedbackConfig{
 			DelayMinutes: getEnvAsInt("SMS_FEEDBACK_DELAY_MINUTES", 2880),
+		},
+		Cintrix: CintrixConfig{
+			URL:          getEnv("CINTRIX_URL", ""),
+			APIKeyID:     getEnv("CINTRIX_API_KEY_ID", ""),
+			APIKeySecret: getEnv("CINTRIX_API_KEY_SECRET", ""),
 		},
 	}
 }
