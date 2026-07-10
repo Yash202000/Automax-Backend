@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/automax/backend/pkg/constants"
@@ -26,7 +27,7 @@ type CTIHandler struct {
 
 func NewCTIHandler(cintrixURL, keyID, keySecret string) *CTIHandler {
 	return &CTIHandler{
-		cintrixURL: cintrixURL,
+		cintrixURL: strings.TrimRight(cintrixURL, "/"),
 		keyID:      keyID,
 		keySecret:  keySecret,
 		httpClient: &http.Client{Timeout: 10 * time.Second},
