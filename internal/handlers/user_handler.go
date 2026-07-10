@@ -286,6 +286,8 @@ func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit, _ := strconv.Atoi(c.Query("limit", "10"))
 	search := c.Query("search", "")
+	phone := strings.TrimSpace(c.Query("phone", ""))
+	extension := strings.TrimSpace(c.Query("extension", ""))
 
 	roleIDs := parseUUIDList(c.Query("role_ids", ""))
 	departmentIDs := parseUUIDList(c.Query("department_ids", ""))
@@ -297,7 +299,7 @@ func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 		limit = 10
 	}
 
-	users, total, err := h.userService.ListUsers(c.UserContext(), page, limit, search, roleIDs, departmentIDs, locationIDs, classificationIDs)
+	users, total, err := h.userService.ListUsers(c.UserContext(), page, limit, search, phone, extension, roleIDs, departmentIDs, locationIDs, classificationIDs)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_users"))
 	}
@@ -571,7 +573,7 @@ func (h *UserHandler) UpdateUserCallStatus(c *fiber.Ctx) error {
 // Export exports all users as JSON
 func (h *UserHandler) Export(c *fiber.Ctx) error {
 	// Get all users without pagination
-	users, _, err := h.userService.ListUsers(c.UserContext(), 1, 10000, "", nil, nil, nil, nil)
+	users, _, err := h.userService.ListUsers(c.UserContext(), 1, 10000, "", "", "", nil, nil, nil, nil)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}

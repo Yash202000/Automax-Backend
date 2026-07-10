@@ -24,7 +24,7 @@ type UserRepository interface {
 	Update(ctx context.Context, user *models.User) error
 	UpdateLastLogin(ctx context.Context, id uuid.UUID) error
 	Delete(ctx context.Context, id uuid.UUID) error
-	List(ctx context.Context, page, limit int, search string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.User, int64, error)
+	List(ctx context.Context, page, limit int, search, phone, extension string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.User, int64, error)
 	ListByDepartment(ctx context.Context, departmentID uuid.UUID, page, limit int) ([]models.User, int64, error)
 	ExistsByEmail(ctx context.Context, email string) (bool, error)
 	ExistsByUsername(ctx context.Context, username string) (bool, error)
@@ -240,7 +240,7 @@ func (r *userRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return r.db.WithContext(ctx).Delete(&models.User{}, "id = ?", id).Error
 }
 
-func (r *userRepository) List(ctx context.Context, page, limit int, search string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.User, int64, error) {
+func (r *userRepository) List(ctx context.Context, page, limit int, search, phone, extension string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.User, int64, error) {
 	var users []models.User
 	var total int64
 
@@ -257,6 +257,13 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search strin
 			"LOWER(users.username) LIKE ? OR LOWER(users.email) LIKE ? OR LOWER(users.first_name) LIKE ? OR LOWER(users.last_name) LIKE ? OR users.phone LIKE ? OR users.extension LIKE ?",
 			like, like, like, like, phoneLike, phoneLike,
 		)
+	}
+
+	if phone != "" {
+		base = base.Where("users.phone LIKE ?", "%"+strings.TrimPrefix(phone, "+")+"%")
+	}
+	if extension != "" {
+		base = base.Where("users.extension LIKE ?", "%"+extension+"%")
 	}
 
 	if len(roleIDs) > 0 {
