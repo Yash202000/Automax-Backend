@@ -102,15 +102,20 @@ type DocumentaConfig struct {
 }
 
 // CintrixConfig holds settings for the Cintrix CTI integration (contact-center
-// softphone widget). env: CINTRIX_URL, CINTRIX_API_KEY_ID, CINTRIX_API_KEY_SECRET.
+// softphone widget). env: CINTRIX_URL, CINTRIX_API_KEY_ID, CINTRIX_API_KEY_SECRET,
+// CINTRIX_WEBHOOK_SECRET.
 // CINTRIX_URL must be the Cintrix FRONTEND origin (its nginx serves
 // cti-widget.js and proxies /api to the backend) — NOT the bare backend port;
 // the widget script 404s there and the widget never renders.
 // — leaving these unset disables the CTI routes.
+// WebhookSecret authenticates inbound call-event webhooks from Cintrix
+// (Authorization: Bearer + X-Cintrix-Signature HMAC); leaving it unset
+// disables the webhook route (503).
 type CintrixConfig struct {
-	URL          string
-	APIKeyID     string
-	APIKeySecret string
+	URL           string
+	APIKeyID      string
+	APIKeySecret  string
+	WebhookSecret string
 }
 
 type EscalationConfig struct {
@@ -309,9 +314,10 @@ func Load() *Config {
 			DelayMinutes: getEnvAsInt("SMS_FEEDBACK_DELAY_MINUTES", 2880),
 		},
 		Cintrix: CintrixConfig{
-			URL:          getEnv("CINTRIX_URL", ""),
-			APIKeyID:     getEnv("CINTRIX_API_KEY_ID", ""),
-			APIKeySecret: getEnv("CINTRIX_API_KEY_SECRET", ""),
+			URL:           getEnv("CINTRIX_URL", ""),
+			APIKeyID:      getEnv("CINTRIX_API_KEY_ID", ""),
+			APIKeySecret:  getEnv("CINTRIX_API_KEY_SECRET", ""),
+			WebhookSecret: getEnv("CINTRIX_WEBHOOK_SECRET", ""),
 		},
 	}
 }

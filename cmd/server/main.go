@@ -295,6 +295,7 @@ func main() {
 	// Integration handler
 	integrationHandler := handlers.NewIntegrationHandler(integrationService, integrationExecutor, integrationRepo, incidentRepo)
 	webhookHandler := handlers.NewWebhookHandler(integrationService, incidentService)
+	cintrixWebhookHandler := handlers.NewCintrixWebhookHandler(cfg.Cintrix.WebhookSecret, callLogRepo, userRepo)
 
 	// License management
 	licenseRepo := repository.NewLicenseRepository(db)
@@ -385,6 +386,7 @@ func main() {
 	webhooks := v1.Group("/webhooks")
 	webhooks.Post("/sendgrid/inbound", notificationHandler.SendGridInboundWebhook)
 	webhooks.Post("/automax-callback", webhookHandler.HandleAutomaxCallback)
+	webhooks.Post("/cintrix/call-event", cintrixWebhookHandler.HandleCallEvent)
 
 	ivr := v1.Group("/ivr/incident")
 	// Public: validates signed URL + last 6 digits, returns incident + session token
