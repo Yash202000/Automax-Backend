@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,6 +33,22 @@ func (c *CallLog) BeforeCreate(tx *gorm.DB) error {
 		c.ID = uuid.New()
 	}
 	return nil
+}
+
+// RecordingURLFromMeta extracts the "recording_url" field from a CallLog's Meta
+// JSON (as stored verbatim by CintrixWebhookHandler from the call.ended payload).
+// Returns "" when Meta is empty, the field is absent/null, or Meta isn't valid JSON.
+func RecordingURLFromMeta(meta datatypes.JSON) string {
+	if len(meta) == 0 {
+		return ""
+	}
+	var m struct {
+		RecordingURL *string `json:"recording_url"`
+	}
+	if err := json.Unmarshal(meta, &m); err != nil || m.RecordingURL == nil {
+		return ""
+	}
+	return *m.RecordingURL
 }
 
 type CallParticipant struct {
