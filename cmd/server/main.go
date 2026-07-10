@@ -252,7 +252,7 @@ func main() {
 	publicFeedbackHandler := handlers.NewIncidentPublicFeedbackHandler(publicFeedbackService, actionLogService)
 	aiQualityFeedbackHandler := handlers.NewAIQualityFeedbackHandler(aiQualityFeedbackRepo)
 	fcmHandler := handlers.NewFCMHandler(fcmService)
-	ctiHandler := handlers.NewCTIHandler(cfg.Cintrix.URL, cfg.Cintrix.APIKeyID, cfg.Cintrix.APIKeySecret, callLogRepo)
+	ctiHandler := handlers.NewCTIHandler(cfg.Cintrix.URL, cfg.Cintrix.APIKeyID, cfg.Cintrix.APIKeySecret, callLogRepo, userRepo, ssoJWTManager, cfg.SSOPrivateKey != "")
 	integrationUserHandler := handlers.NewIntegrationUserHandler(userService, roleRepo, departmentRepo, locationRepo, classificationRepo)
 	sentimentHandler := handlers.NewCallerSentimentHandler(callerSentimentService)
 	goalHandler := handlers.NewGoalHandler(goalService, actionLogService)
@@ -904,6 +904,10 @@ func main() {
 	cti := v1.Group("/cti", authMiddleware.Authenticate())
 	cti.Get("/widget-token", ctiHandler.GetWidgetToken)
 	cti.Get("/recording", ctiHandler.GetRecording)
+	// Admin-only: mints a Cintrix SSO link. "admin:cti" is intentionally
+	// unseeded (same convention as "admin:ldap") so only super admins pass —
+	// RequirePermission's super-admin bypass is the actual gate.
+	cti.Get("/sso-link", authMiddleware.RequirePermission("admin:cti"), ctiHandler.GetSSOLink)
 
 	// ---- TEMPLATE ROUTES (legacy path, no feature-license gate) ----
 	templates := v1.Group("/templates", authMiddleware.Authenticate())

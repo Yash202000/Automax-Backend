@@ -16,7 +16,9 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 )
 
 // CTIHandler exchanges the server-held Cintrix API key for a per-agent,
@@ -27,17 +29,23 @@ type CTIHandler struct {
 	keyID            string
 	keySecret        string
 	callLogRepo      repository.CallLogRepository
+	userRepo         repository.UserRepository
+	ssoJWT           *utils.SSOJWTManager
+	ssoConfigured    bool // true when SSO_RSA_PRIVATE_KEY is explicitly configured (not the dev auto-generated key)
 	httpClient       *http.Client
 	noRedirectClient *http.Client
 }
 
-func NewCTIHandler(cintrixURL, keyID, keySecret string, callLogRepo repository.CallLogRepository) *CTIHandler {
+func NewCTIHandler(cintrixURL, keyID, keySecret string, callLogRepo repository.CallLogRepository, userRepo repository.UserRepository, ssoJWT *utils.SSOJWTManager, ssoConfigured bool) *CTIHandler {
 	return &CTIHandler{
-		cintrixURL:  strings.TrimRight(cintrixURL, "/"),
-		keyID:       keyID,
-		keySecret:   keySecret,
-		callLogRepo: callLogRepo,
-		httpClient:  &http.Client{Timeout: 10 * time.Second},
+		cintrixURL:    strings.TrimRight(cintrixURL, "/"),
+		keyID:         keyID,
+		keySecret:     keySecret,
+		callLogRepo:   callLogRepo,
+		userRepo:      userRepo,
+		ssoJWT:        ssoJWT,
+		ssoConfigured: ssoConfigured,
+		httpClient:    &http.Client{Timeout: 10 * time.Second},
 		noRedirectClient: &http.Client{
 			Timeout: 10 * time.Second,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -99,6 +107,50 @@ func (h *CTIHandler) GetWidgetToken(c *fiber.Ctx) error {
 	}
 	out["cintrix_url"] = h.cintrixURL
 	return c.JSON(out)
+}
+
+// GetSSOLink godoc: GET /api/v1/cti/sso-link (authenticated, admin-only route guard
+// applied where this handler is registered).
+//
+// Mints a short-lived RS256 SSO token the same way sso_handler.Launch does
+// (utils.SSOJWTManager.GenerateSSOToken) and wraps it in Cintrix's SSO landing
+// URL. Cintrix verifies the token against Automax's JWKS
+// (/.well-known/jwks.json) and requires the "role" claim to read "admin" —
+// this handler always emits Role: "admin" since only admins can reach it.
+func (h *CTIHandler) GetSSOLink(c *fiber.Ctx) error {
+	if h.cintrixURL == "" || !h.ssoConfigured {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"error": "CTI SSO is not configured",
+		})
+	}
+
+	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "no user in context"})
+	}
+	email, _ := c.Locals(constants.ContextKeys.Email).(string)
+
+	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to load user"})
+	}
+
+	fullName := strings.TrimSpace(user.FirstName + " " + user.LastName)
+	if fullName == "" {
+		fullName = user.Username
+	}
+	if email == "" {
+		email = user.Email
+	}
+
+	jti := uuid.New()
+	token, err := h.ssoJWT.GenerateSSOToken(userID.String(), email, fullName, "cintrix", "admin", jti)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to generate sso token"})
+	}
+
+	ssoURL := fmt.Sprintf("%s/api/v1/auth/sso/automax?token=%s", h.cintrixURL, url.QueryEscape(token))
+	return c.JSON(fiber.Map{"url": ssoURL})
 }
 
 // GetRecording godoc: GET /api/v1/cti/recording?call_uuid=<uuid> (authenticated).
