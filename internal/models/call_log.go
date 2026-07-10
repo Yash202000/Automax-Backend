@@ -9,7 +9,11 @@ import (
 )
 
 type CallLog struct {
-	ID           uuid.UUID           `gorm:"type:uuid;primary_key" json:"id"`
+	ID uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
+	// CreatedBy is nil for system/machine-ingested rows (e.g. the Cintrix
+	// webhook) — no user acted to create them. Column is nullable; do not
+	// backfill with a fabricated user, that would misrepresent the audit trail.
+	CreatedBy    *uuid.UUID          `gorm:"type:uuid;column:created_by" json:"created_by,omitempty"`
 	CallUuid     string              `gorm:"size:36;uniqueIndex" json:"call_uuid,omitempty"`
 	CallType     string              `gorm:"size:20" json:"call_type"`
 	Status       string              `gorm:"size:20;not null" json:"status"`

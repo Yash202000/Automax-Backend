@@ -14,6 +14,7 @@ import (
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -98,6 +99,7 @@ func (h *CintrixWebhookHandler) HandleCallEvent(c *fiber.Ctx) error {
 	// by email lookup. Missing/unresolvable agent is not an error — many events
 	// (e.g. missed calls) never carry one.
 	var agentIdentifier string
+	var agentUserID *uuid.UUID
 	if payload.AgentEmail != nil && *payload.AgentEmail != "" {
 		if user, err := h.userRepo.FindByEmail(ctx, *payload.AgentEmail); err == nil && user != nil {
 			if user.Extension != "" {
@@ -105,6 +107,7 @@ func (h *CintrixWebhookHandler) HandleCallEvent(c *fiber.Ctx) error {
 			} else {
 				agentIdentifier = user.Phone
 			}
+			agentUserID = &user.ID
 		} else if err != nil && err != gorm.ErrRecordNotFound {
 			log.Printf("[cintrix-webhook] agent lookup failed for %s: %v", *payload.AgentEmail, err)
 		}
@@ -127,12 +130,16 @@ func (h *CintrixWebhookHandler) HandleCallEvent(c *fiber.Ctx) error {
 
 	if existing == nil {
 		callLog := &models.CallLog{
-			CallUuid: payload.CallUuid,
-			CallType: "cintrix",
-			Status:   payload.Outcome,
-			StartAt:  startAt,
-			EndAt:    payload.EndedAt,
-			Meta:     meta,
+			// CreatedBy stays nil when the agent doesn't resolve to a user
+			// (e.g. missed calls) — this is a machine-ingested row, not the
+			// work of a real actor, so NULL is the truthful value.
+			CreatedBy: agentUserID,
+			CallUuid:  payload.CallUuid,
+			CallType:  "cintrix",
+			Status:    payload.Outcome,
+			StartAt:   startAt,
+			EndAt:     payload.EndedAt,
+			Meta:      meta,
 		}
 
 		participants := make([]*models.CallParticipant, 0, 2)
@@ -162,6 +169,9 @@ func (h *CintrixWebhookHandler) HandleCallEvent(c *fiber.Ctx) error {
 	// call.answered (or creates the terminal state directly for missed calls).
 	fields := map[string]interface{}{
 		"meta": meta,
+	}
+	if existing.CreatedBy == nil && agentUserID != nil {
+		fields["created_by"] = agentUserID
 	}
 	if payload.Outcome != "" {
 		fields["status"] = payload.Outcome

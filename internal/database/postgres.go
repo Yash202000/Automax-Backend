@@ -306,6 +306,10 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		log.Printf("Warning: call_participant phone migration failed: %v", err)
 	}
 
+	// call_logs.created_by must accept NULL: system/machine-ingested rows (e.g.
+	// the Cintrix call-event webhook) have no acting user. Idempotent.
+	db.Exec("ALTER TABLE call_logs ALTER COLUMN created_by DROP NOT NULL")
+
 	// Seed existing free-text goal categories as root Category rows
 	// and back-fill goals.category_id. Idempotent: safe to run repeatedly.
 	if cfg.GoalManagement.Enabled {
