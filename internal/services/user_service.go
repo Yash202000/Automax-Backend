@@ -1247,10 +1247,8 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 		update["mobile_verified"] = req.MobileVerified
 	}
 
-	if req.Extension != nil && *req.Extension != user.Extension {
-		user.Extension = *req.Extension
-		update["extension"] = req.Extension
-	}
+	// Extension is no longer stored on users — it is managed only via the extensions
+	// API (extension_assignments table). Any req.Extension here is ignored.
 
 	if req.Username != "" && req.Username != user.Username {
 		exists, err := s.userRepo.ExistsByUsername(ctx, req.Username)
@@ -1417,7 +1415,7 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 				Action:      "logout",
 				Module:      "users",
 				ResourceID:  userID.String(),
-				Description: fmt.Sprintf("User logged out after password change"),
+				Description: "User logged out after password change",
 				OldValue:    nil,
 				NewValue:    nil,
 				IPAddress:   ipAddress,

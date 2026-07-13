@@ -73,6 +73,8 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		&models.Department{},
 		&models.User{},
 		&models.ActionLog{},
+		&models.ExtensionAssignment{},
+		&models.ExtensionAssignmentHistory{},
 		&models.CallLog{},
 		&models.CallParticipant{},
 		&models.CallLogAttachment{},
@@ -306,6 +308,11 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		log.Printf("Warning: call_participant phone migration failed: %v", err)
 	}
 
+	// Decouple extension from users: backfill into extension_assignments, drop users.extension
+	if err := migrations.MigrateExtensionDecouple(db); err != nil {
+		log.Printf("Warning: extension decouple migration failed: %v", err)
+	}
+
 	// Seed existing free-text goal categories as root Category rows
 	// and back-fill goals.category_id. Idempotent: safe to run repeatedly.
 	if cfg.GoalManagement.Enabled {
@@ -467,6 +474,12 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Create Departments", Code: "departments:create", Module: "departments", Action: "create", Description: "Create departments"},
 		{Name: "Update Departments", Code: "departments:update", Module: "departments", Action: "update", Description: "Update departments"},
 		{Name: "Delete Departments", Code: "departments:delete", Module: "departments", Action: "delete", Description: "Delete departments"},
+
+		// Extension assignment permissions (EPM940 telephony feature)
+		{Name: "View Extensions", Code: "extensions:view", Module: "extensions", Action: "view", Description: "View PBX extensions and assignment status"},
+		{Name: "Assign Extensions", Code: "extensions:assign", Module: "extensions", Action: "assign", Description: "Assign/reassign PBX extensions to users"},
+		{Name: "Release Extensions", Code: "extensions:release", Module: "extensions", Action: "release", Description: "Release PBX extensions from users"},
+		{Name: "Create Extensions", Code: "extensions:create", Module: "extensions", Action: "create", Description: "Create new PBX extensions on the switch"},
 
 		// Location permissions
 		{Name: "View Locations", Code: "locations:view", Module: "locations", Action: "view", Description: "View locations"},
@@ -719,6 +732,30 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		var managerPerms []models.Permission
 		db.Where("action IN ?", []string{"view", "create", "update", "delete", "assign", "approve"}).Find(&managerPerms)
 		db.Model(&managerRole).Association("Permissions").Replace(managerPerms)
+	}
+
+	// Grant extension-management permissions to the agent role (if it exists).
+	// Admin already receives all permissions above; super admins bypass permission
+	// checks entirely. We append (not replace) so any other agent permissions stay intact.
+	var agentRole models.Role
+	if err := db.Where("code = ?", "agent").Preload("Permissions").First(&agentRole).Error; err == nil {
+		existing := make(map[uuid.UUID]bool, len(agentRole.Permissions))
+		for _, p := range agentRole.Permissions {
+			existing[p.ID] = true
+		}
+		var extPerms []models.Permission
+		db.Where("module = ?", "extensions").Find(&extPerms)
+		var toAdd []models.Permission
+		for _, p := range extPerms {
+			if !existing[p.ID] {
+				toAdd = append(toAdd, p)
+			}
+		}
+		if len(toAdd) > 0 {
+			if err := db.Model(&agentRole).Association("Permissions").Append(toAdd); err != nil {
+				log.Printf("Failed to grant extension permissions to agent role: %v", err)
+			}
+		}
 	}
 
 	// Create default super admin user
