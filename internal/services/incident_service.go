@@ -465,7 +465,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 			// citizen's identity rather than the agent's reporterID, so incidents filed
 			// for different citizens are never incorrectly blocked.
 			var openIncidents []models.Incident
-			if isAgent {
+			if isAgent && req.ReporterPhone != "" {
 				openIncidents, err = s.incidentRepo.FindOpenIncidentsForDuplicateCheckByCaller(
 					ctx, req.ReporterName, req.ReporterPhone,
 				)
@@ -473,6 +473,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 				openIncidents, err = s.incidentRepo.FindUserOpenIncidentsForDuplicateCheck(ctx, reporterID)
 			}
 			if err != nil {
+				log.Printf("[IncidentService] Error occurred while fetching open incidents: %v", err)
 				return nil, err
 			}
 
