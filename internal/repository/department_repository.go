@@ -18,6 +18,7 @@ type DepartmentRepository interface {
 	Update(ctx context.Context, department *models.Department) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context) ([]models.Department, error)
+	ListFiltered(ctx context.Context, filter models.DepartmentListFilter) ([]models.Department, int64, error)
 	GetTree(ctx context.Context) ([]models.Department, error)
 	GetChildren(ctx context.Context, parentID uuid.UUID) ([]models.Department, error)
 	GetByParentID(ctx context.Context, parentID *uuid.UUID) ([]models.Department, error)
@@ -122,6 +123,46 @@ func (r *departmentRepository) List(ctx context.Context) ([]models.Department, e
 		Order("sort_order, name").
 		Find(&departments).Error
 	return departments, err
+}
+
+// ListFiltered returns a paginated list of departments, optionally filtered by
+// location and/or classification. It returns the page of departments plus the
+// total count of departments matching the filters.
+func (r *departmentRepository) ListFiltered(ctx context.Context, filter models.DepartmentListFilter) ([]models.Department, int64, error) {
+	var departments []models.Department
+	var total int64
+
+	base := r.db.WithContext(ctx).Model(&models.Department{})
+
+	if filter.Classification != nil {
+		base = base.
+			Joins("JOIN department_classifications dc ON dc.department_id = departments.id").
+			Where("dc.classification_id = ?", filter.Classification)
+	}
+	if filter.Location != nil {
+		base = base.
+			Joins("JOIN department_locations dl ON dl.department_id = departments.id").
+			Where("dl.location_id = ?", filter.Location)
+	}
+
+	// Count distinct departments matching the filters (joins can duplicate rows).
+	if err := base.Session(&gorm.Session{}).
+		Distinct("departments.id").
+		Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	offset := (filter.Page - 1) * filter.Limit
+	err := base.
+		Preload("Locations").
+		Preload("Classifications").
+		Preload("Roles").
+		Group("departments.id"). // deduplicate rows produced by the joins
+		Order("departments.sort_order, departments.name").
+		Offset(offset).
+		Limit(filter.Limit).
+		Find(&departments).Error
+	return departments, total, err
 }
 
 func (r *departmentRepository) GetTree(ctx context.Context) ([]models.Department, error) {

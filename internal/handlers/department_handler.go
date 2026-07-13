@@ -315,7 +315,27 @@ func (h *DepartmentHandler) Delete(c *fiber.Ctx) error {
 }
 
 func (h *DepartmentHandler) List(c *fiber.Ctx) error {
-	departments, err := h.repo.List(c.UserContext())
+	var filter models.DepartmentListFilter
+	if err := c.QueryParser(&filter); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_query_parameters"))
+	}
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &filter); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	// Apply defaults for pagination.
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.Limit < 1 {
+		filter.Limit = 20
+	}
+
+	departments, total, err := h.repo.ListFiltered(c.UserContext(), filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -325,7 +345,7 @@ func (h *DepartmentHandler) List(c *fiber.Ctx) error {
 		responses[i] = models.ToDepartmentResponse(&dept)
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "departments_retrieved"), responses)
+	return utils.PaginatedSuccessResponse(c, responses, filter.Page, filter.Limit, total)
 }
 
 func (h *DepartmentHandler) GetTree(c *fiber.Ctx) error {
