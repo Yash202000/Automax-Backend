@@ -20,6 +20,7 @@ type WorkflowService interface {
 	GetWorkflow(ctx context.Context, id uuid.UUID) (*models.WorkflowResponse, error)
 	ListWorkflows(ctx context.Context, activeOnly bool) ([]models.WorkflowResponse, error)
 	ListWorkflowsByRecordType(ctx context.Context, recordType string, activeOnly bool) ([]models.WorkflowResponse, error)
+	ListWorkflowsFiltered(ctx context.Context, filter *models.WorkflowFilter) ([]models.WorkflowResponse, int64, error)
 	UpdateWorkflow(ctx context.Context, id uuid.UUID, req *models.WorkflowUpdateRequest) (*models.WorkflowResponse, error)
 	DeleteWorkflow(ctx context.Context, id uuid.UUID) error
 	PermanentDeleteWorkflow(ctx context.Context, id uuid.UUID) error
@@ -445,6 +446,20 @@ func (s *workflowService) ListWorkflowsByRecordType(ctx context.Context, recordT
 	}
 
 	return responses, nil
+}
+
+func (s *workflowService) ListWorkflowsFiltered(ctx context.Context, filter *models.WorkflowFilter) ([]models.WorkflowResponse, int64, error) {
+	workflows, total, err := s.repo.ListFiltered(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	responses := make([]models.WorkflowResponse, len(workflows))
+	for i, w := range workflows {
+		responses[i] = models.ToWorkflowResponse(&w)
+	}
+
+	return responses, total, nil
 }
 
 func (s *workflowService) UpdateWorkflow(ctx context.Context, id uuid.UUID, req *models.WorkflowUpdateRequest) (*models.WorkflowResponse, error) {

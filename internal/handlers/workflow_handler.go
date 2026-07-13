@@ -108,23 +108,122 @@ func (h *WorkflowHandler) GetWorkflow(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "workflow_retrieved"), workflow)
 }
 
+// ListWorkflows powers the Workflow List page: search by name and filter by
+// status, module/category (record_type), created_by, and created/modified date ranges.
 func (h *WorkflowHandler) ListWorkflows(c *fiber.Ctx) error {
-	activeOnly := c.Query("active_only") == "true"
-	recordType := c.Query("record_type")
-
-	var workflows []models.WorkflowResponse
-	var err error
-
-	if recordType != "" {
-		workflows, err = h.service.ListWorkflowsByRecordType(c.UserContext(), recordType, activeOnly)
-	} else {
-		workflows, err = h.service.ListWorkflows(c.UserContext(), activeOnly)
+	filter := &models.WorkflowFilter{}
+	if err := c.QueryParser(filter); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_query_parameters"))
 	}
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	// Workflow Status filter: status=active|inactive. "active_only=true" is kept
+	// for backward compatibility with existing callers of this endpoint.
+	switch strings.ToLower(c.Query("status")) {
+	case "active":
+		active := true
+		filter.IsActive = &active
+	case "inactive":
+		inactive := false
+		filter.IsActive = &inactive
+	default:
+		if c.Query("active_only") == "true" {
+			active := true
+			filter.IsActive = &active
+		}
+	}
+
+	// parseDate treats a date-only value (no time component) as the start of
+	// that day in the server's local timezone (not UTC) — the DB stores
+	// timestamptz, but the day boundary a user means by "2026-07-13" is a
+	// local-calendar-day boundary, matching the convention in
+	// action_log_handler.go. endOfDay pushes a "to" bound to
+	// 23:59:59.999999999 local so the entire day is included instead of being
+	// excluded by a midnight <= compare.
+	parseDate := func(param string, endOfDay bool) (*time.Time, error) {
+		v := c.Query(param)
+		if v == "" {
+			return nil, nil
+		}
+		if t, err := time.Parse("2006-01-02", v); err == nil {
+			if endOfDay {
+				local := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, time.Local)
+				return &local, nil
+			}
+			local := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.Local)
+			return &local, nil
+		}
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			return &t, nil
+		}
+		return nil, fmt.Errorf("%s must be YYYY-MM-DD or RFC3339", param)
+	}
+
+	var dateErr error
+	if filter.CreatedFrom, dateErr = parseDate("created_from", false); dateErr != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, dateErr.Error())
+	}
+	if filter.CreatedTo, dateErr = parseDate("created_to", true); dateErr != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, dateErr.Error())
+	}
+	if filter.ModifiedFrom, dateErr = parseDate("modified_from", false); dateErr != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, dateErr.Error())
+	}
+	if filter.ModifiedTo, dateErr = parseDate("modified_to", true); dateErr != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, dateErr.Error())
+	}
+
+	// Pagination is opt-in: existing callers (dropdowns/pickers across the app)
+	// hit this same endpoint expecting the full, unpaginated workflow list.
+	// Only paginate when the caller explicitly asks for it, so that behavior
+	// is unchanged for every other consumer.
+	paginate := c.Query("page") != "" || c.Query("limit") != ""
+	if paginate {
+		if filter.Page < 1 {
+			filter.Page = 1
+		}
+		if filter.Limit < 1 || filter.Limit > 100 {
+			filter.Limit = 20
+		}
+	} else {
+		filter.Page = 0
+		filter.Limit = 0
+	}
+
+	workflows, total, err := h.service.ListWorkflowsFiltered(c.UserContext(), filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "workflows_retrieved"), workflows)
+	message := i18n.T(c.UserContext(), "workflows_retrieved")
+	if total == 0 {
+		message = i18n.T(c.UserContext(), "no_workflows_found")
+	}
+
+	if !paginate {
+		return utils.SuccessResponse(c, fiber.StatusOK, message, workflows)
+	}
+
+	totalPages := 0
+	if total > 0 {
+		totalPages = (int(total) + filter.Limit - 1) / filter.Limit
+	}
+
+	return c.JSON(fiber.Map{
+		"success":     true,
+		"message":     message,
+		"data":        workflows,
+		"page":        filter.Page,
+		"limit":       filter.Limit,
+		"total_items": total,
+		"total_pages": totalPages,
+	})
 }
 
 func (h *WorkflowHandler) UpdateWorkflow(c *fiber.Ctx) error {
