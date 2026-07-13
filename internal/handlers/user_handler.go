@@ -295,8 +295,10 @@ func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 	classificationIDs := parseUUIDList(c.Query("classification_ids", ""))
 
 	page = max(page, 1)
-	if limit < 1 || limit > 100 {
+	if limit < 1 {
 		limit = 10
+	} else if limit > 1000 {
+		limit = 1000
 	}
 
 	users, total, err := h.userService.ListUsers(c.UserContext(), page, limit, search, phone, extension, roleIDs, departmentIDs, locationIDs, classificationIDs)
