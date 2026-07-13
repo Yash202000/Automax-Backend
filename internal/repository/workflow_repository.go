@@ -22,6 +22,7 @@ type WorkflowRepository interface {
 	ListDeleted(ctx context.Context) ([]models.Workflow, error) // List soft-deleted workflows
 	Restore(ctx context.Context, id uuid.UUID) error            // Restore a soft-deleted workflow
 	ExistsByCodeOrName(ctx context.Context, codeOrName []string) (bool, error)
+	ExistsByName(ctx context.Context, name string) (bool, error)
 	// Workflow-Classification assignments
 	AssignClassifications(ctx context.Context, workflowID uuid.UUID, classificationIDs []uuid.UUID) error
 	GetByClassificationID(ctx context.Context, classificationID uuid.UUID) (*models.Workflow, error)
@@ -156,6 +157,18 @@ func (r *workflowRepository) ExistsByCodeOrName(ctx context.Context, codeOrName 
 	err := r.db.WithContext(ctx).
 		Model(&models.Workflow{}).
 		Where("code IN (?) OR name IN (?)", codeOrName, codeOrName).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (r *workflowRepository) ExistsByName(ctx context.Context, name string) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&models.Workflow{}).
+		Where("name = ?", name).
 		Count(&count).Error
 	if err != nil {
 		return false, err

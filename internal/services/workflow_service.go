@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -40,6 +42,7 @@ type WorkflowService interface {
 
 	// Check Workflow Existence by Code or Name
 	WorkflowExistsByCodeOrName(ctx context.Context, codeOrName []string) error
+	WorkflowExistsByName(ctx context.Context, name string) error
 
 	// Transition management
 	CreateTransition(ctx context.Context, workflowID uuid.UUID, req *models.WorkflowTransitionCreateRequest) (*models.WorkflowTransitionResponse, error)
@@ -272,6 +275,58 @@ func (s *workflowService) checkForDuplicateRules(
 
 // Workflow CRUD
 
+// slugifyWorkflowName converts a workflow name into a lowercase, underscore-
+// separated code, e.g. "Incident Management" -> "incident_management".
+// Runs of non-alphanumeric characters collapse to a single underscore, and
+// leading/trailing underscores are trimmed.
+func slugifyWorkflowName(name string) string {
+	var b strings.Builder
+	prevUnderscore := true // treat start-of-string as "just wrote a separator" to skip leading underscores
+	for _, r := range strings.ToLower(name) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevUnderscore = false
+		default:
+			if !prevUnderscore {
+				b.WriteByte('_')
+				prevUnderscore = true
+			}
+		}
+	}
+	return strings.TrimSuffix(b.String(), "_")
+}
+
+// generateUniqueWorkflowCode derives a Workflow Code from the given name and
+// guarantees it doesn't collide with an existing code by appending a numeric
+// suffix (_2, _3, ...) when needed. The Workflow Code is always
+// system-generated and is never accepted from the client.
+func (s *workflowService) generateUniqueWorkflowCode(ctx context.Context, name string) (string, error) {
+	base := slugifyWorkflowName(name)
+	if base == "" {
+		base = "workflow"
+	}
+	const maxBaseLen = 90 // leave room for a "_<n>" suffix within the 100-char column
+	if len(base) > maxBaseLen {
+		base = strings.TrimSuffix(base[:maxBaseLen], "_")
+	}
+
+	code := base
+	for attempt := 1; attempt <= 1000; attempt++ {
+		if attempt > 1 {
+			code = fmt.Sprintf("%s_%d", base, attempt)
+		}
+		_, err := s.repo.FindByCode(ctx, code)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return code, nil
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("unable to generate a unique workflow code for %q", name)
+}
+
 func (s *workflowService) CreateWorkflow(ctx context.Context, req *models.WorkflowCreateRequest, createdByID uuid.UUID) (*models.WorkflowResponse, error) {
 	// Convert RequiredFields array to JSON string
 	requiredFieldsJSON := "[]"
@@ -352,10 +407,21 @@ func (s *workflowService) CreateWorkflow(ctx context.Context, req *models.Workfl
 		}
 	}
 
+	// Workflow Code is system-generated only for EPM940; other clients (e.g.
+	// VD2) keep supplying their own code, as before.
+	code := req.Code
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+		generated, err := s.generateUniqueWorkflowCode(ctx, req.Name)
+		if err != nil {
+			return nil, err
+		}
+		code = generated
+	}
+
 	workflow := &models.Workflow{
 		Name:           req.Name,
 		NameAr:         req.NameAr,
-		Code:           req.Code,
+		Code:           code,
 		Description:    req.Description,
 		DescriptionAr:  req.DescriptionAr,
 		RecordType:     recordType,
@@ -544,7 +610,9 @@ func (s *workflowService) UpdateWorkflow(ctx context.Context, id uuid.UUID, req 
 	if req.NameAr != "" {
 		workflow.NameAr = req.NameAr
 	}
-	if req.Code != "" {
+	// Workflow Code is system-generated at creation and is non-editable for
+	// EPM940. Other clients (e.g. VD2) may still update it.
+	if req.Code != "" && !strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
 		workflow.Code = req.Code
 	}
 	if req.Description != "" {
@@ -662,6 +730,20 @@ func (s *workflowService) WorkflowExistsByCodeOrName(ctx context.Context, codeOr
 	return nil
 }
 
+// WorkflowExistsByName reports whether a workflow with this name already
+// exists. The Workflow Code is system-generated, so callers creating or
+// renaming a workflow only need to pre-check the name for uniqueness.
+func (s *workflowService) WorkflowExistsByName(ctx context.Context, name string) error {
+	exists, err := s.repo.ExistsByName(ctx, name)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("workflow with name '%s' already exists", name)
+	}
+	return nil
+}
+
 func (s *workflowService) DeleteWorkflow(ctx context.Context, id uuid.UUID) error {
 	// Soft delete - marks workflow as deleted but keeps in database
 	return s.repo.Delete(ctx, id)
@@ -696,9 +778,20 @@ func (s *workflowService) DuplicateWorkflow(ctx context.Context, id uuid.UUID, c
 	}
 
 	// Create new workflow
+	newName := fmt.Sprintf("%s (Copy)", original.Name)
+	var newCode string
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+		generated, err := s.generateUniqueWorkflowCode(ctx, newName)
+		if err != nil {
+			return nil, err
+		}
+		newCode = generated
+	} else {
+		newCode = fmt.Sprintf("%s_copy_%s", original.Code, uuid.New().String()[:8])
+	}
 	newWorkflow := &models.Workflow{
-		Name:         fmt.Sprintf("%s (Copy)", original.Name),
-		Code:         fmt.Sprintf("%s_copy_%s", original.Code, uuid.New().String()[:8]),
+		Name:         newName,
+		Code:         newCode,
 		Description:  original.Description,
 		CanvasLayout: original.CanvasLayout,
 		CreatedByID:  &createdByID,
