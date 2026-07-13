@@ -162,7 +162,7 @@ func (h *KpiMasterDataHandler) DeleteEnabler(c *fiber.Ctx) error {
 
 func (h *KpiMasterDataHandler) ListOperationalObjectives(c *fiber.Ctx) error {
 	var items []models.OperationalObjective
-	if err := h.db.WithContext(c.UserContext()).Preload("Goal").Order("created_at DESC").Find(&items).Error; err != nil {
+	if err := h.db.WithContext(c.UserContext()).Preload("Goal").Preload("Pillar").Preload("Enabler").Order("created_at DESC").Find(&items).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
 	}
 	resp := make([]models.OperationalObjectiveResponse, len(items))
@@ -180,7 +180,13 @@ func (h *KpiMasterDataHandler) CreateOperationalObjective(c *fiber.Ctx) error {
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
-	item := &models.OperationalObjective{NameEn: req.NameEn, NameAr: req.NameAr, GoalID: &req.GoalID}
+	item := &models.OperationalObjective{
+		NameEn:    req.NameEn,
+		NameAr:    req.NameAr,
+		GoalID:    &req.GoalID,
+		PillarID:  req.PillarID,
+		EnablerID: req.EnablerID,
+	}
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
 	}
@@ -200,15 +206,17 @@ func (h *KpiMasterDataHandler) UpdateOperationalObjective(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
 	result := h.db.WithContext(c.UserContext()).Model(&models.OperationalObjective{ID: id}).Updates(map[string]interface{}{
-		"name_en": req.NameEn,
-		"name_ar": req.NameAr,
-		"goal_id": req.GoalID,
+		"name_en":    req.NameEn,
+		"name_ar":    req.NameAr,
+		"goal_id":    req.GoalID,
+		"pillar_id":  req.PillarID,
+		"enabler_id": req.EnablerID,
 	})
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 	var item models.OperationalObjective
-	h.db.WithContext(c.UserContext()).Preload("Goal").First(&item, id)
+	h.db.WithContext(c.UserContext()).Preload("Goal").Preload("Pillar").Preload("Enabler").First(&item, id)
 	return utils.SuccessResponse(c, fiber.StatusOK, "", item.ToResponse())
 }
 
@@ -228,7 +236,7 @@ func (h *KpiMasterDataHandler) DeleteOperationalObjective(c *fiber.Ctx) error {
 
 func (h *KpiMasterDataHandler) ListProcesses(c *fiber.Ctx) error {
 	var items []models.Process
-	if err := h.db.WithContext(c.UserContext()).Preload("OperationalObjective").Preload("Goal").Preload("Department").Order("created_at DESC").Find(&items).Error; err != nil {
+	if err := h.db.WithContext(c.UserContext()).Preload("OperationalObjective").Preload("Goal").Preload("Pillar").Preload("Enabler").Preload("Department").Order("created_at DESC").Find(&items).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
 	}
 	resp := make([]models.ProcessResponse, len(items))
@@ -251,6 +259,8 @@ func (h *KpiMasterDataHandler) CreateProcess(c *fiber.Ctx) error {
 		NameAr:                 req.NameAr,
 		OperationalObjectiveID: req.OperationalObjectiveID,
 		GoalID:                 &req.GoalID,
+		PillarID:               req.PillarID,
+		EnablerID:              req.EnablerID,
 		DepartmentID:           req.DepartmentID,
 		Unit:                   req.Unit,
 	}
@@ -277,6 +287,8 @@ func (h *KpiMasterDataHandler) UpdateProcess(c *fiber.Ctx) error {
 		"name_ar":                  req.NameAr,
 		"operational_objective_id": req.OperationalObjectiveID,
 		"goal_id":                  req.GoalID,
+		"pillar_id":                req.PillarID,
+		"enabler_id":               req.EnablerID,
 		"department_id":            req.DepartmentID,
 		"unit":                     req.Unit,
 	})
@@ -284,7 +296,7 @@ func (h *KpiMasterDataHandler) UpdateProcess(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 	var item models.Process
-	h.db.WithContext(c.UserContext()).Preload("OperationalObjective").Preload("Goal").Preload("Department").First(&item, id)
+	h.db.WithContext(c.UserContext()).Preload("OperationalObjective").Preload("Goal").Preload("Pillar").Preload("Enabler").Preload("Department").First(&item, id)
 	return utils.SuccessResponse(c, fiber.StatusOK, "", item.ToResponse())
 }
 
@@ -304,7 +316,7 @@ func (h *KpiMasterDataHandler) DeleteProcess(c *fiber.Ctx) error {
 
 func (h *KpiMasterDataHandler) ListInitiatives(c *fiber.Ctx) error {
 	var items []models.Initiative
-	if err := h.db.WithContext(c.UserContext()).Preload("Goal").Preload("Owner").Order("created_at DESC").Find(&items).Error; err != nil {
+	if err := h.db.WithContext(c.UserContext()).Preload("Goal").Preload("Objective").Preload("Owner").Order("created_at DESC").Find(&items).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
 	}
 	resp := make([]models.InitiativeResponse, len(items))
@@ -327,13 +339,14 @@ func (h *KpiMasterDataHandler) CreateInitiative(c *fiber.Ctx) error {
 		status = models.InitiativeStatusDraft
 	}
 	item := &models.Initiative{
-		NameEn:    req.NameEn,
-		NameAr:    req.NameAr,
-		GoalID:    &req.GoalID,
-		PillarID:  req.PillarID,
-		EnablerID: req.EnablerID,
-		OwnerID:   req.OwnerID,
-		Status:    status,
+		NameEn:      req.NameEn,
+		NameAr:      req.NameAr,
+		GoalID:      &req.GoalID,
+		ObjectiveID: req.ObjectiveID,
+		PillarID:    req.PillarID,
+		EnablerID:   req.EnablerID,
+		OwnerID:     req.OwnerID,
+		Status:      status,
 	}
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
@@ -354,12 +367,13 @@ func (h *KpiMasterDataHandler) UpdateInitiative(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
 	updates := map[string]interface{}{
-		"name_en":    req.NameEn,
-		"name_ar":    req.NameAr,
-		"goal_id":    req.GoalID,
-		"pillar_id":  req.PillarID,
-		"enabler_id": req.EnablerID,
-		"owner_id":   req.OwnerID,
+		"name_en":      req.NameEn,
+		"name_ar":      req.NameAr,
+		"goal_id":      req.GoalID,
+		"objective_id": req.ObjectiveID,
+		"pillar_id":    req.PillarID,
+		"enabler_id":   req.EnablerID,
+		"owner_id":     req.OwnerID,
 	}
 	if req.Status != "" {
 		updates["status"] = req.Status
@@ -369,7 +383,7 @@ func (h *KpiMasterDataHandler) UpdateInitiative(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 	var item models.Initiative
-	h.db.WithContext(c.UserContext()).Preload("Goal").Preload("Owner").First(&item, id)
+	h.db.WithContext(c.UserContext()).Preload("Goal").Preload("Objective").Preload("Owner").First(&item, id)
 	return utils.SuccessResponse(c, fiber.StatusOK, "", item.ToResponse())
 }
 
