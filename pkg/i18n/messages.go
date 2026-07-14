@@ -252,6 +252,8 @@ var messages = map[string][2]string{
 	"workflow_matched":             {"Workflow matched", "تم مطابقة سير العمل"},
 	"deleted_workflows_retrieved":  {"Deleted workflows retrieved", "تم استرجاع سير العمل المحذوف"},
 	"workflow_code_name_exists":    {"Workflow with this code or name already exists", "يوجد سير عمل بهذا الرمز أو الاسم مسبقاً"},
+	"workflow_name_exists":         {"A workflow with this name already exists", "يوجد سير عمل بهذا الاسم مسبقاً"},
+	"workflow_code_required":       {"Code is required", "الرمز مطلوب"},
 	"invalid_workflow_id":          {"Invalid workflow ID", "معرّف سير العمل غير صالح"},
 	"invalid_workflow_id_lower":    {"invalid workflow_id", "معرّف سير العمل غير صالح"},
 	"workflow_id_required":         {"workflow_id is required", "معرّف سير العمل مطلوب"},

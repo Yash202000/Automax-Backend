@@ -324,9 +324,13 @@ func (f *TransitionFieldChange) BeforeCreate(tx *gorm.DB) error {
 // Request/Response types
 
 type WorkflowCreateRequest struct {
-	Name              string   `json:"name" validate:"required,min=2,max=100"`
-	NameAr            string   `json:"name_ar" validate:"max=100"`
-	Code              string   `json:"code" validate:"required,min=2,max=50"`
+	Name   string `json:"name" validate:"required,min=2,max=100"`
+	NameAr string `json:"name_ar" validate:"max=100"`
+	// Code is only used for non-EPM940 clients (e.g. VD2); EPM940 auto-generates
+	// the code from Name and ignores whatever is sent here. Kept omitempty at
+	// the struct level so EPM940 callers can omit it — the handler enforces
+	// "required for VD2" manually since that rule is client-specific.
+	Code              string   `json:"code" validate:"omitempty,min=2,max=50"`
 	Description       string   `json:"description" validate:"max=500"`
 	DescriptionAr     string   `json:"description_ar" validate:"max=500"`
 	RecordType        string   `json:"record_type" validate:"omitempty,oneof=incident request complaint query evidence both all"`
@@ -339,8 +343,11 @@ type WorkflowCreateRequest struct {
 }
 
 type WorkflowUpdateRequest struct {
-	Name                    string   `json:"name" validate:"omitempty,min=2,max=100"`
-	NameAr                  string   `json:"name_ar" validate:"max=100"`
+	Name   string `json:"name" validate:"omitempty,min=2,max=100"`
+	NameAr string `json:"name_ar" validate:"max=100"`
+	// Code is immutable for EPM940 (system-generated at creation) and is
+	// ignored by the service for that client. Non-EPM940 clients (e.g. VD2)
+	// may still update it.
 	Code                    string   `json:"code" validate:"omitempty,min=2,max=100"`
 	Description             string   `json:"description" validate:"max=500"`
 	DescriptionAr           string   `json:"description_ar" validate:"max=500"`
