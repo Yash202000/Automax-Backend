@@ -42,6 +42,9 @@ type PBXConfig struct {
 	// BaseURL + "?action=list"; a single extension from + "&username=<ext>".
 	// env: PBX_BASE_URL
 	BaseURL string
+	// InsecureSkipVerify disables PBX TLS certificate validation. Dev/staging
+	// escape hatch only; defaults to false. env: PBX_INSECURE_SKIP_VERIFY
+	InsecureSkipVerify bool
 }
 
 // FinalCloseWhatsAppFeedbackConfig holds settings for deleting a still-active
@@ -307,7 +310,8 @@ func Load() *Config {
 			DelayMinutes: getEnvAsInt("SMS_FEEDBACK_DELAY_MINUTES", 2880),
 		},
 		PBX: PBXConfig{
-			BaseURL: getEnv("PBX_BASE_URL", "https://zkff.automaxsw.com/create_user.php"),
+			BaseURL:            getEnv("PBX_BASE_URL", "https://zkff.automaxsw.com/create_user.php"),
+			InsecureSkipVerify: getEnvAsBool("PBX_INSECURE_SKIP_VERIFY", false),
 		},
 	}
 }

@@ -369,7 +369,7 @@ func (s *extensionService) fetchPool(ctx context.Context) ([]pbxExtension, error
 	}
 	req.Header.Set("User-Agent", "Go-http-client/1.1")
 
-	resp, err := pbxHTTPClient().Do(req)
+	resp, err := pbxHTTPClient(s.cfg.PBX).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch extensions from PBX: %w", err)
 	}
@@ -415,7 +415,7 @@ func (s *extensionService) createPBXExtension(extension, password string) error 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", "Go-http-client/1.1")
 
-	resp, err := pbxHTTPClient().Do(req)
+	resp, err := pbxHTTPClient(s.cfg.PBX).Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
@@ -447,13 +447,18 @@ func (s *extensionService) createPBXExtension(extension, password string) error 
 }
 
 // pbxHTTPClient builds an HTTP client that forces TLS 1.2 and HTTP/1.1, matching
-// the PBX server's requirements.
-func pbxHTTPClient() *http.Client {
+// the PBX server's requirements. Certificate validation is enabled against the
+// system trust store; it is only skipped when cfg.InsecureSkipVerify is set
+// (dev/staging escape hatch, defaults to false).
+func pbxHTTPClient(cfg config.PBXConfig) *http.Client {
+	if cfg.InsecureSkipVerify {
+		log.Println("[ExtensionService] WARNING: PBX TLS certificate verification is disabled (PBX_INSECURE_SKIP_VERIFY=true)")
+	}
 	return &http.Client{
 		Timeout: 15 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
+				InsecureSkipVerify: cfg.InsecureSkipVerify,
 				MinVersion:         tls.VersionTLS12,
 				MaxVersion:         tls.VersionTLS12,
 			},
