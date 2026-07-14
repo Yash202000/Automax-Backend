@@ -244,6 +244,7 @@ var messages = map[string][2]string{
 	"workflow_deleted":             {"Workflow deleted", "تم حذف سير العمل"},
 	"workflow_retrieved":           {"Workflow retrieved", "تم استرجاع سير العمل"},
 	"workflows_retrieved":          {"Workflows retrieved", "تم استرجاع سير العمل"},
+	"no_workflows_found":           {"No workflows found", "لم يتم العثور على سير عمل"},
 	"workflow_duplicated":          {"Workflow duplicated", "تم نسخ سير العمل"},
 	"workflow_restored":            {"Workflow restored", "تم استعادة سير العمل"},
 	"workflow_permanently_deleted": {"Workflow permanently deleted", "تم حذف سير العمل نهائياً"},

@@ -62,6 +62,26 @@ func (w *Workflow) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
+// WorkflowFilter defines the search and filter criteria for the Workflow List page.
+// Search matches Workflow Name; RecordType doubles as the Module/Category filter.
+type WorkflowFilter struct {
+	Search      string `query:"search" json:"search" validate:"omitempty"`
+	RecordType  string `query:"record_type" json:"record_type" validate:"omitempty"`
+	CreatedByID string `query:"created_by" json:"created_by" validate:"omitempty,uuid"`
+
+	// IsActive and the date-range fields are parsed manually by the handler
+	// (from "status", "created_from", "created_to", "modified_from", "modified_to")
+	// because QueryParser cannot map them directly.
+	IsActive     *bool      `json:"is_active"`
+	CreatedFrom  *time.Time `json:"created_from"`
+	CreatedTo    *time.Time `json:"created_to"`
+	ModifiedFrom *time.Time `json:"modified_from"`
+	ModifiedTo   *time.Time `json:"modified_to"`
+
+	Page  int `query:"page" json:"page" validate:"omitempty,min=1"`
+	Limit int `query:"limit" json:"limit" validate:"omitempty,min=1,max=100"`
+}
+
 // WorkflowState represents a state/node within a workflow
 type WorkflowState struct {
 	ID            uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
