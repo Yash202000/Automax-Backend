@@ -467,7 +467,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 			var openIncidents []models.Incident
 			if isAgent && req.ReporterPhone != "" {
 				openIncidents, err = s.incidentRepo.FindOpenIncidentsForDuplicateCheckByCaller(
-					ctx, req.ReporterName, req.ReporterPhone,
+					ctx, req.ReporterPhone,
 				)
 			} else {
 				openIncidents, err = s.incidentRepo.FindUserOpenIncidentsForDuplicateCheck(ctx, reporterID)

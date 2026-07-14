@@ -31,7 +31,7 @@ type IncidentRepository interface {
 	WithTx(tx *gorm.DB) IncidentRepository
 	LockForUpdate(ctx context.Context, tx *gorm.DB, id uuid.UUID) (*models.Incident, error)
 	FindUserOpenIncidentsForDuplicateCheck(ctx context.Context, reporterID uuid.UUID) ([]models.Incident, error)
-	FindOpenIncidentsForDuplicateCheckByCaller(ctx context.Context, reporterName string, reporterPhone string) ([]models.Incident, error)
+	FindOpenIncidentsForDuplicateCheckByCaller(ctx context.Context, reporterPhone string) ([]models.Incident, error)
 	FindByIDWithLast6DigitValidation(ctx context.Context, req *models.IncidentUpdateIVRRequest) (*models.Incident, error)
 	// Incident number generation
 	GenerateIncidentNumber(ctx context.Context) (string, error)
@@ -338,7 +338,7 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	}
 
 	// Single unified count — works for all cases
-	if err := query.Count(&total).Error; err != nil {
+	if err := query.Debug().Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	log.Printf("[List] total=%d classification_id=%v location_id=%v my_record=%v record_type=%v user_role_ids=%v",
@@ -1622,8 +1622,8 @@ func (r *incidentRepository) FindUserOpenIncidentsForDuplicateCheck(ctx context.
 	return incidents, err
 }
 
-func (r *incidentRepository) FindOpenIncidentsForDuplicateCheckByCaller(ctx context.Context, reporterName string, reporterPhone string) ([]models.Incident, error) {
-	if reporterName == "" && reporterPhone == "" {
+func (r *incidentRepository) FindOpenIncidentsForDuplicateCheckByCaller(ctx context.Context, reporterPhone string) ([]models.Incident, error) {
+	if reporterPhone == "" {
 		return []models.Incident{}, nil
 	}
 
@@ -1631,10 +1631,6 @@ func (r *incidentRepository) FindOpenIncidentsForDuplicateCheckByCaller(ctx cont
 		Where("closed_at IS NULL").
 		Where("latitude IS NOT NULL").
 		Where("longitude IS NOT NULL")
-
-	if reporterName != "" {
-		query = query.Where("reporter_name = ?", reporterName)
-	}
 
 	if reporterPhone != "" {
 		phone := reporterPhone
