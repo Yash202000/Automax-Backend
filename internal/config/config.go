@@ -31,6 +31,20 @@ type Config struct {
 	License                    LicenseConfig
 	Integration                IntegrationConfig
 	FinalCloseWhatsAppFeedback FinalCloseWhatsAppFeedbackConfig
+	PBX                        PBXConfig
+}
+
+// PBXConfig holds settings for the external PBX used by the extension-assignment
+// feature. The extension pool is fetched from BaseURL with "?action=list".
+type PBXConfig struct {
+	// BaseURL is the PBX endpoint that lists/creates extensions, e.g.
+	// https://zkff.automaxsw.com/create_user.php. The extension pool is read from
+	// BaseURL + "?action=list"; a single extension from + "&username=<ext>".
+	// env: PBX_BASE_URL
+	BaseURL string
+	// InsecureSkipVerify disables PBX TLS certificate validation. Dev/staging
+	// escape hatch only; defaults to false. env: PBX_INSECURE_SKIP_VERIFY
+	InsecureSkipVerify bool
 }
 
 // FinalCloseWhatsAppFeedbackConfig holds settings for deleting a still-active
@@ -294,6 +308,10 @@ func Load() *Config {
 		},
 		SmsFeedback: SmsFeedbackConfig{
 			DelayMinutes: getEnvAsInt("SMS_FEEDBACK_DELAY_MINUTES", 2880),
+		},
+		PBX: PBXConfig{
+			BaseURL:            getEnv("PBX_BASE_URL", "https://zkff.automaxsw.com/create_user.php"),
+			InsecureSkipVerify: getEnvAsBool("PBX_INSECURE_SKIP_VERIFY", false),
 		},
 	}
 }

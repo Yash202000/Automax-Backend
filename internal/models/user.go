@@ -38,17 +38,32 @@ type User struct {
 	IsActive        bool             `gorm:"default:true" json:"is_active"`
 	IsSuperAdmin    bool             `gorm:"default:false" json:"is_super_admin"`
 	IsADUser        bool             `gorm:"default:false" json:"is_ad_user"`
-	Extension       string           `gorm:"size:20" json:"extension"`
-	CallStatus      CallStatus       `gorm:"type:user_call_status;default:offline" json:"call_status"`
-	LastLoginAt     *time.Time       `json:"last_login_at"`
-	CreatedAt       time.Time        `json:"created_at"`
-	UpdatedAt       time.Time        `json:"updated_at"`
-	DeletedAt       gorm.DeletedAt   `gorm:"index" json:"-"`
+	// Extension is transient (no DB column): the current PBX extension lives in the
+	// extension_assignments table. It is populated from CurrentExtension by AfterFind
+	// so API responses keep exposing it. Managed only via the extensions API.
+	Extension string `gorm:"-" json:"extension"`
+	// CurrentExtension is the user's current extension assignment (if any). Preload it
+	// to populate Extension on read.
+	CurrentExtension *ExtensionAssignment `gorm:"foreignKey:UserID" json:"-"`
+	CallStatus       CallStatus           `gorm:"type:user_call_status;default:offline" json:"call_status"`
+	LastLoginAt      *time.Time           `json:"last_login_at"`
+	CreatedAt        time.Time            `json:"created_at"`
+	UpdatedAt        time.Time            `json:"updated_at"`
+	DeletedAt        gorm.DeletedAt       `gorm:"index" json:"-"`
 }
 
 func (u *User) BeforeCreate(tx *gorm.DB) error {
 	if u.ID == uuid.Nil {
 		u.ID = uuid.New()
+	}
+	return nil
+}
+
+// AfterFind copies the preloaded current extension onto the transient Extension
+// field so serialized responses continue to include it.
+func (u *User) AfterFind(tx *gorm.DB) error {
+	if u.CurrentExtension != nil {
+		u.Extension = u.CurrentExtension.Extension
 	}
 	return nil
 }

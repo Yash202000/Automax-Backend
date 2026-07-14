@@ -118,7 +118,9 @@ func (r *callLogRepository) List(ctx context.Context, filter *models.CallLogFilt
 		query = query.Where(
 			`id IN (
 				SELECT cp.call_log_id FROM call_participants cp
-				JOIN users u ON cp.phone_number = u.extension OR cp.phone_number = u.phone
+				JOIN users u ON cp.phone_number = u.phone OR cp.phone_number IN (
+					SELECT ea.extension FROM extension_assignments ea WHERE ea.user_id = u.id
+				)
 				WHERE u.id = ?
 			)`,
 			*filter.ParticipantID,
@@ -163,7 +165,9 @@ func (r *callLogRepository) ListSummary(ctx context.Context, filter *models.Call
 		query = query.Where(
 			`id IN (
 				SELECT cp.call_log_id FROM call_participants cp
-				JOIN users u ON cp.phone_number = u.extension OR cp.phone_number = u.phone
+				JOIN users u ON cp.phone_number = u.phone OR cp.phone_number IN (
+					SELECT ea.extension FROM extension_assignments ea WHERE ea.user_id = u.id
+				)
 				WHERE u.id = ?
 			)`,
 			*filter.ParticipantID,

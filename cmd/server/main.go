@@ -108,6 +108,8 @@ func main() {
 	actionLogService := services.NewActionLogService(actionLogRepo)
 	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo, userRepo, minioStorage, cfg)
 	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg, actionLogService, nil, redisClient)
+	extensionAssignmentRepo := repository.NewExtensionAssignmentRepository(db)
+	extensionService := services.NewExtensionService(db, extensionAssignmentRepo, userRepo, roleRepo, actionLogService, notificationService, wsHub, sessionStore, cfg)
 	otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo, userRepo, userService, sessionStore, jwtManager, roleRepo)
 	//otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo, userRepo, userService, roleRepo)
 
@@ -219,6 +221,7 @@ func main() {
 	classificationHandler := handlers.NewClassificationHandler(classificationRepo)
 	locationHandler := handlers.NewLocationHandler(locationRepo)
 	departmentHandler := handlers.NewDepartmentHandler(departmentRepo, userRepo)
+	extensionHandler := handlers.NewExtensionHandler(extensionService)
 	roleHandler := handlers.NewRoleHandler(roleRepo, permissionRepo)
 	actionLogHandler := handlers.NewActionLogHandler(actionLogService, validate)
 	callLogHandler := handlers.NewCallLogHandler(callLogService, validate, userService, minioStorage)
@@ -904,6 +907,18 @@ func main() {
 	templates.Get("/:id", authMiddleware.RequirePermission("templates:read"), templateHandler.GetByID)
 	templates.Put("/:id", authMiddleware.RequirePermission("templates:update"), templateHandler.Update)
 	templates.Delete("/:id", authMiddleware.RequirePermission("templates:delete"), templateHandler.Delete)
+
+	// ---- EXTENSION ASSIGNMENT ROUTES (EPM940 telephony feature) ----
+	// Only registered for the EPM940 deployment; other clients get 404.
+	if strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
+		extensions := v1.Group("/extensions", authMiddleware.Authenticate())
+		extensions.Get("/", authMiddleware.RequirePermission("extensions:view"), extensionHandler.List)
+		extensions.Get("/mine", authMiddleware.RequirePermission("extensions:view"), extensionHandler.Mine)
+		extensions.Get("/:extension/history", authMiddleware.RequirePermission("extensions:view"), extensionHandler.History)
+		extensions.Post("/assign", authMiddleware.RequirePermission("extensions:assign"), extensionHandler.Assign)
+		extensions.Post("/create", authMiddleware.RequirePermission("extensions:create"), extensionHandler.Create)
+		extensions.Delete("/:extension", authMiddleware.RequirePermission("extensions:release"), extensionHandler.Release)
+	}
 
 	// ---- NOTIFICATION ROUTES ----
 	notifications := v1.Group("/notifications", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureCommunication)))
