@@ -338,7 +338,7 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	}
 
 	// Single unified count — works for all cases
-	if err := query.Debug().Count(&total).Error; err != nil {
+	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	log.Printf("[List] total=%d classification_id=%v location_id=%v my_record=%v record_type=%v user_role_ids=%v",
