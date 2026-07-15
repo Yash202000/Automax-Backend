@@ -892,25 +892,40 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 
 		clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
 		if strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
-			// EPM940: group attachments by transition presence — no transition
-			// is the "before" evidence, any transition is the "after" evidence.
-			var beforeAtts, afterAtts []models.IncidentReportAttachment
+			// EPM940: group attachments by workflow state. Creation-time uploads
+			// (no transition) sit under "Incident Creation"; transition uploads
+			// sit under "Incident <to-state name>". Groups keep first-seen order.
+			prefixLabel := "Incident"
+			creationLabel := "Incident Creation"
+			if l.Dir == "rtl" {
+				prefixLabel = "البلاغ"
+				creationLabel = "إنشاء البلاغ"
+			}
+			type attGroup struct {
+				label string
+				atts  []models.IncidentReportAttachment
+			}
+			seen := make(map[string]int)
+			var groups []attGroup
 			for _, att := range reportAttachments {
+				var label string
 				if att.TransitionHistoryID == nil {
-					beforeAtts = append(beforeAtts, att)
+					label = creationLabel
+				} else if trName := localName(ptrStr(att.TransitionName), ptrStr(att.TransitionNameAr)); trName != "" {
+					label = prefixLabel + " " + trName
 				} else {
-					afterAtts = append(afterAtts, att)
+					label = prefixLabel
+				}
+				if idx, ok := seen[label]; ok {
+					groups[idx].atts = append(groups[idx].atts, att)
+				} else {
+					seen[label] = len(groups)
+					groups = append(groups, attGroup{label: label, atts: []models.IncidentReportAttachment{att}})
 				}
 			}
-			if len(beforeAtts) > 0 {
-				fmt.Fprintf(&b, `<div class="att-group-header">%s</div>`, html.EscapeString(l.AttBeforeImage))
-				for _, att := range beforeAtts {
-					renderAttCard(att, "")
-				}
-			}
-			if len(afterAtts) > 0 {
-				fmt.Fprintf(&b, `<div class="att-group-header">%s</div>`, html.EscapeString(l.AttAfterImage))
-				for _, att := range afterAtts {
+			for _, g := range groups {
+				fmt.Fprintf(&b, `<div class="att-group-header">%s</div>`, html.EscapeString(g.label))
+				for _, att := range g.atts {
 					renderAttCard(att, "")
 				}
 			}
