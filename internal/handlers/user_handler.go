@@ -654,6 +654,7 @@ func (h *UserHandler) Import(c *fiber.Ctx) error {
 		FirstName         string     `json:"first_name"`
 		LastName          string     `json:"last_name"`
 		Phone             string     `json:"phone"`
+		Extension         string     `json:"extension"`
 		DepartmentID      *uuid.UUID `json:"department_id"`
 		LocationID        *uuid.UUID `json:"location_id"`
 		RoleIDs           []string   `json:"role_ids"`
@@ -736,6 +737,7 @@ func (h *UserHandler) Import(c *fiber.Ctx) error {
 			FirstName:         data.FirstName,
 			LastName:          data.LastName,
 			Phone:             data.Phone,
+			Extension:         data.Extension,
 			DepartmentID:      data.DepartmentID,
 			LocationID:        data.LocationID,
 			RoleIDs:           roleIDs,
