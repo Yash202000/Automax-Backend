@@ -231,6 +231,15 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	db.Exec("ALTER TABLE kpi_workflow_actions DROP CONSTRAINT IF EXISTS fk_kpi_workflow_actions_performed_by")
 	db.Exec("ALTER TABLE kpi_workflow_actions DROP CONSTRAINT IF EXISTS kpi_workflow_actions_performed_by_id_fkey")
 
+	// Legacy strategic_goal_id columns predate the StrategicGoal→Goal model rename.
+	// AutoMigrate never drops old columns, so on databases created before that
+	// rename these can still exist with a NOT NULL constraint (nothing populates
+	// them anymore), blocking every insert with a not-null violation. Drop them
+	// wherever they're still present; no-op on schemas that never had them.
+	for _, table := range []string{"operational_objectives", "processes", "initiatives", "strategic_kpis", "operational_kpis", "award_kpis"} {
+		db.Exec(fmt.Sprintf(`ALTER TABLE IF EXISTS %s DROP COLUMN IF EXISTS strategic_goal_id`, table))
+	}
+
 	db.Exec("ALTER TABLE lookup_categories ADD COLUMN IF NOT EXISTS redirect_url VARCHAR(500)")
 
 	// Notification template enhancements: add categorisation and bilingual-linking columns.
