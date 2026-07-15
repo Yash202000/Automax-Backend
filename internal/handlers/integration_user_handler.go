@@ -43,6 +43,7 @@ type IntegrationCreateUserRequest struct {
 	FirstName string   `json:"first_name" validate:"max=100"`
 	LastName  string   `json:"last_name" validate:"max=100"`
 	Phone     string   `json:"phone" validate:"max=20"`
+	Extension string   `json:"extension" validate:"max=20"`
 	Roles     []string `json:"roles" validate:"required,min=1"`
 }
 
@@ -126,6 +127,7 @@ func (h *IntegrationUserHandler) CreateUser(c *fiber.Ctx) error {
 		FirstName:         req.FirstName,
 		LastName:          req.LastName,
 		Phone:             req.Phone,
+		Extension:         req.Extension,
 		RoleIDs:           roleIDs,
 		DepartmentIDs:     departmentIDs,
 		LocationIDs:       locationIDs,

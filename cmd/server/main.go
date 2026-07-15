@@ -107,7 +107,7 @@ func main() {
 	// Initialize services
 	actionLogService := services.NewActionLogService(actionLogRepo)
 	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo, userRepo, minioStorage, cfg)
-	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg, actionLogService, nil, redisClient)
+	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg, actionLogService, nil, redisClient, db)
 	extensionAssignmentRepo := repository.NewExtensionAssignmentRepository(db)
 	extensionService := services.NewExtensionService(db, extensionAssignmentRepo, userRepo, roleRepo, actionLogService, notificationService, wsHub, sessionStore, cfg)
 	otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo, userRepo, userService, sessionStore, jwtManager, roleRepo)

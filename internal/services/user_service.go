@@ -74,6 +74,7 @@ type userService struct {
 	otpService       *OTPService
 	licenseService   LicenseService
 	licenseRepo      repository.LicenseRepository
+	db               *gorm.DB
 	redis            *redis.Client
 }
 
@@ -93,6 +94,7 @@ func NewUserService(
 	actionLogService ActionLogService,
 	otpService *OTPService,
 	redis *redis.Client,
+	db *gorm.DB,
 ) UserService {
 	return &userService{
 		userRepo:         userRepo,
@@ -104,6 +106,7 @@ func NewUserService(
 		actionLogService: actionLogService,
 		otpService:       otpService,
 		redis:            redis,
+		db:               db,
 	}
 }
 
@@ -201,6 +204,25 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 
 	if len(req.ClassificationIDs) > 0 {
 		s.userRepo.AssignClassifications(ctx, user.ID, req.ClassificationIDs)
+	}
+
+	// Assign extension if provided
+	if req.Extension != "" {
+		actorID, _ := ctx.Value(constants.ContextKeys.UserID).(uuid.UUID)
+		assignment := &models.ExtensionAssignment{
+			Extension:  req.Extension,
+			UserID:     user.ID,
+			AssignedBy: actorID,
+		}
+		if err := s.db.WithContext(ctx).Create(assignment).Error; err != nil {
+			return nil, fmt.Errorf("failed to assign extension: %w", err)
+		}
+		s.db.WithContext(ctx).Create(&models.ExtensionAssignmentHistory{
+			Extension:  req.Extension,
+			UserID:     &user.ID,
+			AssignedBy: actorID,
+			Action:     models.ExtensionActionAssign,
+		})
 	}
 
 	// Get user's primary role for JWT (use "user" as default)
