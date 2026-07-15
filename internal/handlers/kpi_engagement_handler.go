@@ -114,6 +114,8 @@ func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
 		TargetValue:   req.TargetValue,
 		Weight:        req.Weight,
 		Formula:       req.Formula,
+		StartDate:     req.StartDate,
+		DueDate:       req.DueDate,
 		CreatedByID:   userID,
 	}
 	if item.Weight == 0 {
@@ -122,6 +124,33 @@ func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
 	}
+
+	// An attachment on a metric is really just evidence for this KPI — create
+	// a real KpiEvidence row so it shows up as a manageable entry under the
+	// Evidence tab instead of being siloed on the metric.
+	if req.AttachmentFileURL != "" {
+		title := req.AttachmentTitle
+		if title == "" {
+			title = fmt.Sprintf("Attachment for metric: %s", req.Name)
+		}
+		h.db.WithContext(c.UserContext()).Create(&models.KpiEvidence{
+			KpiID:        id,
+			KpiType:      kpiType,
+			Title:        title,
+			Description:  fmt.Sprintf("Uploaded with metric %q", req.Name),
+			FileURL:      req.AttachmentFileURL,
+			UploadedByID: userID,
+		})
+	}
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "create",
+		Module:      "kpi",
+		ResourceID:  id.String(),
+		Description: fmt.Sprintf("Added metric %q", req.Name),
+		Status:      "success",
+	})
+
 	return utils.SuccessResponse(c, fiber.StatusCreated, "", item)
 }
 
@@ -145,12 +174,23 @@ func (h *KpiEngagementHandler) UpdateMetric(c *fiber.Ctx) error {
 		"target_value":   req.TargetValue,
 		"weight":         req.Weight,
 		"formula":        req.Formula,
+		"start_date":     req.StartDate,
+		"due_date":       req.DueDate,
 	})
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 	var item models.KpiMetric
 	h.db.WithContext(c.UserContext()).First(&item, id)
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "update",
+		Module:      "kpi",
+		ResourceID:  item.KpiID.String(),
+		Description: fmt.Sprintf("Updated metric %q", item.Name),
+		Status:      "success",
+	})
+
 	return utils.SuccessResponse(c, fiber.StatusOK, "", item)
 }
 
@@ -170,6 +210,15 @@ func (h *KpiEngagementHandler) UpdateMetricValue(c *fiber.Ctx) error {
 	}
 	var item models.KpiMetric
 	h.db.WithContext(c.UserContext()).First(&item, id)
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "update",
+		Module:      "kpi",
+		ResourceID:  item.KpiID.String(),
+		Description: fmt.Sprintf("Updated actual value for metric %q to %v", item.Name, req.Value),
+		Status:      "success",
+	})
+
 	return utils.SuccessResponse(c, fiber.StatusOK, "", item)
 }
 
@@ -178,10 +227,21 @@ func (h *KpiEngagementHandler) DeleteMetric(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
+	var item models.KpiMetric
+	h.db.WithContext(c.UserContext()).First(&item, id)
 	result := h.db.WithContext(c.UserContext()).Delete(&models.KpiMetric{}, id)
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "delete",
+		Module:      "kpi",
+		ResourceID:  item.KpiID.String(),
+		Description: fmt.Sprintf("Deleted metric %q", item.Name),
+		Status:      "success",
+	})
+
 	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
 }
 
@@ -227,6 +287,15 @@ func (h *KpiEngagementHandler) CreateEvidence(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
 	}
 	h.db.WithContext(c.UserContext()).Preload("UploadedBy").First(item, item.ID)
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "create",
+		Module:      "kpi",
+		ResourceID:  id.String(),
+		Description: fmt.Sprintf("Added evidence %q", item.Title),
+		Status:      "success",
+	})
+
 	return utils.SuccessResponse(c, fiber.StatusCreated, "", item)
 }
 
@@ -235,10 +304,21 @@ func (h *KpiEngagementHandler) DeleteEvidence(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
+	var item models.KpiEvidence
+	h.db.WithContext(c.UserContext()).First(&item, id)
 	result := h.db.WithContext(c.UserContext()).Delete(&models.KpiEvidence{}, id)
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "delete",
+		Module:      "kpi",
+		ResourceID:  item.KpiID.String(),
+		Description: fmt.Sprintf("Deleted evidence %q", item.Title),
+		Status:      "success",
+	})
+
 	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
 }
 
@@ -438,6 +518,15 @@ func (h *KpiEngagementHandler) AddComment(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
 	}
 	h.db.WithContext(c.UserContext()).Preload("Author").First(item, item.ID)
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "comment",
+		Module:      "kpi",
+		ResourceID:  id.String(),
+		Description: "Added a comment",
+		Status:      "success",
+	})
+
 	return utils.SuccessResponse(c, fiber.StatusCreated, "", item)
 }
 
@@ -459,6 +548,15 @@ func (h *KpiEngagementHandler) DeleteComment(c *fiber.Ctx) error {
 	if err := h.db.WithContext(c.UserContext()).Delete(&models.KpiComment{}, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_delete_comment"))
 	}
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "delete",
+		Module:      "kpi",
+		ResourceID:  comment.KpiID.String(),
+		Description: "Deleted a comment",
+		Status:      "success",
+	})
+
 	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
 }
 

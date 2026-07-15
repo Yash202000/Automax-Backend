@@ -240,3 +240,110 @@ func seedGoalManagementDemoData(db *gorm.DB, ownerID uuid.UUID) {
 
 	log.Println("Goal/KPI Management demo data seeded: 3 pillars, 3 enablers, 2 domains, 2 award criteria, 3 goals, 3 parent objectives, 3 child objectives, 3 strategic KPIs, 3 operational KPIs, 1 award KPI, 3 initiatives.")
 }
+
+// seedKpiEngagementDemoData adds Metrics/Evidence/Comments/Check-ins to the
+// demo KPIs created by seedGoalManagementDemoData. Kept as a separate,
+// independently-idempotent function (gated on its own marker, looked up by
+// KPI code rather than relying on the base seed just having run) so it also
+// backfills onto a DB where the base master-data/goal/KPI seed already ran
+// in an earlier session.
+func seedKpiEngagementDemoData(db *gorm.DB, ownerID uuid.UUID) {
+	const marker = "Portal Registrations"
+	var existingMetric models.KpiMetric
+	if db.Where("name = ?", marker).First(&existingMetric).Error != gorm.ErrRecordNotFound {
+		return // already seeded
+	}
+
+	var skDigital, skInfra, skCommunity models.StrategicKPI
+	var okDigital models.OperationalKPI
+	if db.Where("code = ?", "KPI-STR-001").First(&skDigital).Error != nil {
+		return // base demo KPIs not seeded yet — nothing to attach to
+	}
+	if db.Where("code = ?", "KPI-STR-002").First(&skInfra).Error != nil {
+		return
+	}
+	if db.Where("code = ?", "KPI-STR-003").First(&skCommunity).Error != nil {
+		return
+	}
+	if db.Where("code = ?", "KPI-OPS-001").First(&okDigital).Error != nil {
+		return
+	}
+
+	log.Println("Seeding KPI engagement demo data (metrics, evidence, comments, check-ins)...")
+
+	mStart := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	mDue := time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC)
+
+	// ── Metrics (Start/Due dates) ────────────────────────────────────────
+	db.Create(&models.KpiMetric{
+		KpiID: skDigital.ID, KpiType: models.KPITypeStrategic,
+		Name: "Portal Registrations", Unit: "users",
+		BaselineValue: 1000, CurrentValue: 2500, TargetValue: 5000,
+		StartDate: &mStart, DueDate: &mDue, CreatedByID: ownerID,
+	})
+	db.Create(&models.KpiMetric{
+		KpiID: skInfra.ID, KpiType: models.KPITypeStrategic,
+		Name: "Roads Resurfaced", Unit: "km",
+		BaselineValue: 10, CurrentValue: 22, TargetValue: 50,
+		StartDate: &mStart, DueDate: &mDue, CreatedByID: ownerID,
+	})
+	db.Create(&models.KpiMetric{
+		KpiID: skCommunity.ID, KpiType: models.KPITypeStrategic,
+		Name: "Council Meetings Held", Unit: "meetings",
+		BaselineValue: 0, CurrentValue: 5, TargetValue: 12,
+		StartDate: &mStart, DueDate: &mDue, CreatedByID: ownerID,
+	})
+	db.Create(&models.KpiMetric{
+		KpiID: okDigital.ID, KpiType: models.KPITypeOperational,
+		Name: "Tickets Resolved Same-Day", Unit: "%",
+		BaselineValue: 40, CurrentValue: 55, TargetValue: 80,
+		StartDate: &mStart, DueDate: &mDue, CreatedByID: ownerID,
+	})
+
+	// ── Evidence ─────────────────────────────────────────────────────────
+	db.Create(&models.KpiEvidence{
+		KpiID: skDigital.ID, KpiType: models.KPITypeStrategic,
+		Title: "Q1 Digital Adoption Report", Description: "Quarterly review of portal registration and usage trends.",
+		FileURL: "https://example.com/reports/digital-q1-2026.pdf", UploadedByID: ownerID,
+	})
+	db.Create(&models.KpiEvidence{
+		KpiID: skInfra.ID, KpiType: models.KPITypeStrategic,
+		Title: "Road Condition Survey 2026", Description: "Annual pavement condition survey results.",
+		FileURL: "https://example.com/reports/road-survey-2026.pdf", UploadedByID: ownerID,
+	})
+	db.Create(&models.KpiEvidence{
+		KpiID: skCommunity.ID, KpiType: models.KPITypeStrategic,
+		Title: "Community Engagement Survey Results", Description: "Resident survey following Q1 town halls.",
+		FileURL: "https://example.com/reports/community-survey-2026.pdf", UploadedByID: ownerID,
+	})
+
+	// ── Comments ─────────────────────────────────────────────────────────
+	db.Create(&models.KpiComment{
+		KpiID: skDigital.ID, KpiType: models.KPITypeStrategic, AuthorID: ownerID,
+		Content: "Adoption trending up after the portal relaunch in March.",
+	})
+	db.Create(&models.KpiComment{
+		KpiID: skInfra.ID, KpiType: models.KPITypeStrategic, AuthorID: ownerID,
+		Content: "Awaiting Q2 pavement condition data from the contractor.",
+	})
+	db.Create(&models.KpiComment{
+		KpiID: skCommunity.ID, KpiType: models.KPITypeStrategic, AuthorID: ownerID,
+		Content: "Great turnout at the March town hall — see attached survey.",
+	})
+
+	// ── Check-ins ────────────────────────────────────────────────────────
+	db.Create(&models.KpiCheckIn{
+		KpiID: skDigital.ID, KpiType: models.KPITypeStrategic, AuthorID: ownerID,
+		Status: models.KpiCheckInStatusOnTrack, Content: "Registrations tracking ahead of plan for Q1.",
+	})
+	db.Create(&models.KpiCheckIn{
+		KpiID: skInfra.ID, KpiType: models.KPITypeStrategic, AuthorID: ownerID,
+		Status: models.KpiCheckInStatusAtRisk, Content: "Contractor delays may push the resurfacing timeline.",
+	})
+	db.Create(&models.KpiCheckIn{
+		KpiID: skCommunity.ID, KpiType: models.KPITypeStrategic, AuthorID: ownerID,
+		Status: models.KpiCheckInStatusOnTrack, Content: "Engagement metrics improving month over month.",
+	})
+
+	log.Println("KPI engagement demo data seeded: 4 metrics, 3 evidence entries, 3 comments, 3 check-ins.")
+}

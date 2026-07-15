@@ -31,6 +31,8 @@ type KpiMetric struct {
 	TargetValue   float64        `gorm:"not null" json:"target_value"`
 	Weight        float64        `gorm:"default:1.0" json:"weight"`
 	Formula       string         `gorm:"type:text" json:"formula"`
+	StartDate     *time.Time     `json:"start_date"`
+	DueDate       *time.Time     `json:"due_date"`
 	CreatedByID   uuid.UUID      `gorm:"type:uuid;not null" json:"created_by_id"`
 	CreatedBy     *User          `gorm:"foreignKey:CreatedByID" json:"created_by,omitempty"`
 	CreatedAt     time.Time      `json:"created_at"`
@@ -46,13 +48,20 @@ func (m *KpiMetric) BeforeCreate(tx *gorm.DB) error {
 }
 
 type KpiMetricRequest struct {
-	Name          string  `json:"name" validate:"required"`
-	MetricType    string  `json:"metric_type"`
-	Unit          string  `json:"unit"`
-	BaselineValue float64 `json:"baseline_value"`
-	TargetValue   float64 `json:"target_value" validate:"required"`
-	Weight        float64 `json:"weight"`
-	Formula       string  `json:"formula"`
+	Name          string     `json:"name" validate:"required"`
+	MetricType    string     `json:"metric_type"`
+	Unit          string     `json:"unit"`
+	BaselineValue float64    `json:"baseline_value"`
+	TargetValue   float64    `json:"target_value" validate:"required"`
+	Weight        float64    `json:"weight"`
+	Formula       string     `json:"formula"`
+	StartDate     *time.Time `json:"start_date"`
+	DueDate       *time.Time `json:"due_date"`
+	// AttachmentTitle/AttachmentFileURL are optional — when FileURL is set on
+	// create, a KpiEvidence row is also created so the file shows up under
+	// the KPI's Evidence tab as a real, manageable entry.
+	AttachmentTitle   string `json:"attachment_title"`
+	AttachmentFileURL string `json:"attachment_file_url"`
 }
 
 type KpiMetricValueRequest struct {
