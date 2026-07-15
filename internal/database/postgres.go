@@ -799,6 +799,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		// Seed a small, idempotent demo dataset for Master Data, Goal
 		// Management, and KPI Management so a fresh environment isn't empty
 		seedGoalManagementDemoData(db, adminUser.ID)
+		seedKpiEngagementDemoData(db, adminUser.ID)
 	} else {
 		unseedGoalManagement(db)
 	}

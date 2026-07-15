@@ -237,28 +237,29 @@ type OperationalKPIRequest struct {
 }
 
 type OperationalKPIResponse struct {
-	ID                     uuid.UUID                `json:"id"`
-	Code                   string                   `json:"code"`
-	NameEn                 string                   `json:"name_en"`
-	NameAr                 string                   `json:"name_ar"`
-	GoalID                 *uuid.UUID               `json:"goal_id"`
-	Goal                   *GoalBriefResponse       `json:"goal,omitempty"`
-	OperationalObjectiveID uuid.UUID                `json:"operational_objective_id"`
-	ProcessID              uuid.UUID                `json:"process_id"`
-	Process                *ProcessResponse         `json:"process,omitempty"`
-	OwnerDeptID            *uuid.UUID               `json:"owner_dept_id"`
-	OwnerDept              *DepartmentBriefResponse `json:"owner_dept,omitempty"`
-	Polarity               string                   `json:"polarity"`
-	ActivationStatus       string                   `json:"activation_status"`
-	DescriptionEn          string                   `json:"description_en"`
-	Formula                string                   `json:"formula"`
-	Baseline               float64                  `json:"baseline"`
-	UnitOfMeasure          string                   `json:"unit_of_measure"`
-	ReportingFrequency     string                   `json:"reporting_frequency"`
-	DataSource             string                   `json:"data_source"`
-	Notes                  string                   `json:"notes"`
-	CreatedAt              time.Time                `json:"created_at"`
-	UpdatedAt              time.Time                `json:"updated_at"`
+	ID                     uuid.UUID                     `json:"id"`
+	Code                   string                        `json:"code"`
+	NameEn                 string                        `json:"name_en"`
+	NameAr                 string                        `json:"name_ar"`
+	GoalID                 *uuid.UUID                    `json:"goal_id"`
+	Goal                   *GoalBriefResponse            `json:"goal,omitempty"`
+	OperationalObjectiveID uuid.UUID                     `json:"operational_objective_id"`
+	OperationalObjective   *OperationalObjectiveResponse `json:"operational_objective,omitempty"`
+	ProcessID              uuid.UUID                     `json:"process_id"`
+	Process                *ProcessResponse              `json:"process,omitempty"`
+	OwnerDeptID            *uuid.UUID                    `json:"owner_dept_id"`
+	OwnerDept              *DepartmentBriefResponse      `json:"owner_dept,omitempty"`
+	Polarity               string                        `json:"polarity"`
+	ActivationStatus       string                        `json:"activation_status"`
+	DescriptionEn          string                        `json:"description_en"`
+	Formula                string                        `json:"formula"`
+	Baseline               float64                       `json:"baseline"`
+	UnitOfMeasure          string                        `json:"unit_of_measure"`
+	ReportingFrequency     string                        `json:"reporting_frequency"`
+	DataSource             string                        `json:"data_source"`
+	Notes                  string                        `json:"notes"`
+	CreatedAt              time.Time                     `json:"created_at"`
+	UpdatedAt              time.Time                     `json:"updated_at"`
 }
 
 func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
@@ -282,6 +283,10 @@ func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 		Notes:                  k.Notes,
 		CreatedAt:              k.CreatedAt,
 		UpdatedAt:              k.UpdatedAt,
+	}
+	if k.OperationalObjective != nil {
+		r := k.OperationalObjective.ToResponse()
+		resp.OperationalObjective = &r
 	}
 	if k.Process != nil {
 		r := k.Process.ToResponse()
