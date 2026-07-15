@@ -5053,7 +5053,14 @@ func (s *incidentService) CreateRevision(ctx context.Context, incidentID uuid.UU
 func (s *incidentService) applyCreationTimeAssignment(ctx context.Context, incident *models.Incident, initialState *models.WorkflowState, creatorID uuid.UUID, source string) {
 	distributeAssign := strings.TrimSpace(os.Getenv("DISTRIBUTE_INCIDENT_ASSIGN"))
 	if strings.EqualFold(distributeAssign, "true") {
-		if strings.EqualFold(source, constants.INCIDENT_SOURCE.WEB) &&
+		// VD2: distribute every source (incl. web) uniformly via round-robin,
+		// so a web incident is not self-assigned to its creator.
+		clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+		uniformRoundRobin := strings.EqualFold(clientCode, constants.CLIENT_CODE.VD2) &&
+			strings.EqualFold(incident.RecordType, "incident")
+
+		if !uniformRoundRobin &&
+			strings.EqualFold(source, constants.INCIDENT_SOURCE.WEB) &&
 			s.UserHasAssignmentRole(ctx, creatorID, initialState.AssignmentRoles) {
 			if err := s.incidentRepo.AssignIncident(ctx, incident.ID, creatorID); err != nil {
 				fmt.Printf("Warning: creation assignment (self-assign for web) failed: %v\n", err)
