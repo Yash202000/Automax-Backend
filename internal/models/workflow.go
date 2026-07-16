@@ -62,6 +62,26 @@ func (w *Workflow) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
+// WorkflowFilter defines the search and filter criteria for the Workflow List page.
+// Search matches Workflow Name; RecordType doubles as the Module/Category filter.
+type WorkflowFilter struct {
+	Search      string `query:"search" json:"search" validate:"omitempty"`
+	RecordType  string `query:"record_type" json:"record_type" validate:"omitempty"`
+	CreatedByID string `query:"created_by" json:"created_by" validate:"omitempty,uuid"`
+
+	// IsActive and the date-range fields are parsed manually by the handler
+	// (from "status", "created_from", "created_to", "modified_from", "modified_to")
+	// because QueryParser cannot map them directly.
+	IsActive     *bool      `json:"is_active"`
+	CreatedFrom  *time.Time `json:"created_from"`
+	CreatedTo    *time.Time `json:"created_to"`
+	ModifiedFrom *time.Time `json:"modified_from"`
+	ModifiedTo   *time.Time `json:"modified_to"`
+
+	Page  int `query:"page" json:"page" validate:"omitempty,min=1"`
+	Limit int `query:"limit" json:"limit" validate:"omitempty,min=1,max=100"`
+}
+
 // WorkflowState represents a state/node within a workflow
 type WorkflowState struct {
 	ID            uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
@@ -304,9 +324,13 @@ func (f *TransitionFieldChange) BeforeCreate(tx *gorm.DB) error {
 // Request/Response types
 
 type WorkflowCreateRequest struct {
-	Name              string   `json:"name" validate:"required,min=2,max=100"`
-	NameAr            string   `json:"name_ar" validate:"max=100"`
-	Code              string   `json:"code" validate:"required,min=2,max=50"`
+	Name   string `json:"name" validate:"required,min=2,max=100"`
+	NameAr string `json:"name_ar" validate:"max=100"`
+	// Code is only used for non-EPM940 clients (e.g. VD2); EPM940 auto-generates
+	// the code from Name and ignores whatever is sent here. Kept omitempty at
+	// the struct level so EPM940 callers can omit it — the handler enforces
+	// "required for VD2" manually since that rule is client-specific.
+	Code              string   `json:"code" validate:"omitempty,min=2,max=50"`
 	Description       string   `json:"description" validate:"max=500"`
 	DescriptionAr     string   `json:"description_ar" validate:"max=500"`
 	RecordType        string   `json:"record_type" validate:"omitempty,oneof=incident request complaint query evidence both all"`
@@ -319,8 +343,11 @@ type WorkflowCreateRequest struct {
 }
 
 type WorkflowUpdateRequest struct {
-	Name                    string   `json:"name" validate:"omitempty,min=2,max=100"`
-	NameAr                  string   `json:"name_ar" validate:"max=100"`
+	Name   string `json:"name" validate:"omitempty,min=2,max=100"`
+	NameAr string `json:"name_ar" validate:"max=100"`
+	// Code is immutable for EPM940 (system-generated at creation) and is
+	// ignored by the service for that client. Non-EPM940 clients (e.g. VD2)
+	// may still update it.
 	Code                    string   `json:"code" validate:"omitempty,min=2,max=100"`
 	Description             string   `json:"description" validate:"max=500"`
 	DescriptionAr           string   `json:"description_ar" validate:"max=500"`

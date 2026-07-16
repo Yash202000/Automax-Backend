@@ -107,7 +107,9 @@ func main() {
 	// Initialize services
 	actionLogService := services.NewActionLogService(actionLogRepo)
 	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo, userRepo, minioStorage, cfg)
-	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg, actionLogService, nil, redisClient)
+	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg, actionLogService, nil, redisClient, db)
+	extensionAssignmentRepo := repository.NewExtensionAssignmentRepository(db)
+	extensionService := services.NewExtensionService(db, extensionAssignmentRepo, userRepo, roleRepo, actionLogService, notificationService, wsHub, sessionStore, cfg)
 	otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo, userRepo, userService, sessionStore, jwtManager, roleRepo)
 	//otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo, userRepo, userService, roleRepo)
 
@@ -219,6 +221,7 @@ func main() {
 	classificationHandler := handlers.NewClassificationHandler(classificationRepo)
 	locationHandler := handlers.NewLocationHandler(locationRepo)
 	departmentHandler := handlers.NewDepartmentHandler(departmentRepo, userRepo)
+	extensionHandler := handlers.NewExtensionHandler(extensionService)
 	roleHandler := handlers.NewRoleHandler(roleRepo, permissionRepo)
 	actionLogHandler := handlers.NewActionLogHandler(actionLogService, validate)
 	callLogHandler := handlers.NewCallLogHandler(callLogService, validate, userService, minioStorage)
@@ -230,7 +233,7 @@ func main() {
 	incidentHandler.SetLookupRepo(lookupRepo)
 	incidentMergeHandler := handlers.NewIncidentMergeHandler(incidentMergeService, userRepo)
 	websocketHandler := handlers.NewWebSocketHandler(wsHub)
-	reportHandler := handlers.NewReportHandler(reportService)
+	reportHandler := handlers.NewReportHandler(reportService, userRepo)
 	reportTemplateHandler := handlers.NewReportTemplateHandler(reportTemplateService)
 	lookupHandler := handlers.NewLookupHandler(lookupRepo)
 	applicationLinkHandler := handlers.NewApplicationLinkHandler(applicationLinkService, minioStorage)
@@ -281,7 +284,7 @@ func main() {
 	kpiPerformanceHandler := handlers.NewKpiPerformanceHandler(db, kpiWorkflowService, actionLogService)
 
 	// KPI Engagement handler (metrics, evidence, collaborators, check-ins, comments, activity)
-	kpiEngagementHandler := handlers.NewKpiEngagementHandler(db, actionLogService)
+	kpiEngagementHandler := handlers.NewKpiEngagementHandler(db, actionLogService, minioStorage)
 
 	// KPI Dashboard handler
 	kpiDashboardHandler := handlers.NewKpiDashboardHandler(db)
@@ -913,6 +916,18 @@ func main() {
 	templates.Put("/:id", authMiddleware.RequirePermission("templates:update"), templateHandler.Update)
 	templates.Delete("/:id", authMiddleware.RequirePermission("templates:delete"), templateHandler.Delete)
 
+	// ---- EXTENSION ASSIGNMENT ROUTES (EPM940 telephony feature) ----
+	// Only registered for the EPM940 deployment; other clients get 404.
+	if strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
+		extensions := v1.Group("/extensions", authMiddleware.Authenticate())
+		extensions.Get("/", authMiddleware.RequirePermission("extensions:view"), extensionHandler.List)
+		extensions.Get("/mine", authMiddleware.RequirePermission("extensions:view"), extensionHandler.Mine)
+		extensions.Get("/:extension/history", authMiddleware.RequirePermission("extensions:view"), extensionHandler.History)
+		extensions.Post("/assign", authMiddleware.RequirePermission("extensions:assign"), extensionHandler.Assign)
+		extensions.Post("/create", authMiddleware.RequirePermission("extensions:create"), extensionHandler.Create)
+		extensions.Delete("/:extension", authMiddleware.RequirePermission("extensions:release"), extensionHandler.Release)
+	}
+
 	// ---- NOTIFICATION ROUTES ----
 	notifications := v1.Group("/notifications", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureCommunication)))
 
@@ -1224,6 +1239,7 @@ func main() {
 	// KPI engagement features — metrics, evidence, collaborators, check-ins, comments, activity
 	kpi.Get("/:type/:id/metrics", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListMetrics)
 	kpi.Post("/:type/:id/metrics", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.CreateMetric)
+	kpi.Post("/:type/:id/attachment", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.UploadAttachment)
 	kpi.Put("/metrics/:id", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.UpdateMetric)
 	kpi.Put("/metrics/:id/value", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.UpdateMetricValue)
 	kpi.Delete("/metrics/:id", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.DeleteMetric)
@@ -1231,6 +1247,7 @@ func main() {
 	kpi.Get("/:type/:id/evidence", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListEvidence)
 	kpi.Post("/:type/:id/evidence", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.CreateEvidence)
 	kpi.Delete("/evidence/:id", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.DeleteEvidence)
+	kpi.Get("/evidence/:id/download", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.DownloadEvidence)
 
 	kpi.Get("/:type/:id/collaborators", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListCollaborators)
 	kpi.Post("/:type/:id/collaborators", authMiddleware.RequirePermission("kpi:assign"), kpiEngagementHandler.AddCollaborator)

@@ -24,7 +24,7 @@ type UserRepository interface {
 	Update(ctx context.Context, user *models.User) error
 	UpdateLastLogin(ctx context.Context, id uuid.UUID) error
 	Delete(ctx context.Context, id uuid.UUID) error
-	List(ctx context.Context, page, limit int, search, phone, extension string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.User, int64, error)
+	List(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.User, int64, error)
 	ListByDepartment(ctx context.Context, departmentID uuid.UUID, page, limit int) ([]models.User, int64, error)
 	ExistsByEmail(ctx context.Context, email string) (bool, error)
 	ExistsByUsername(ctx context.Context, username string) (bool, error)
@@ -74,7 +74,7 @@ func (r *userRepository) Create(ctx context.Context, user *models.User) error {
 
 func (r *userRepository) FindByID(ctx context.Context, id uuid.UUID) (*models.User, error) {
 	var user models.User
-	err := r.db.WithContext(ctx).First(&user, "id = ?", id).Error
+	err := r.db.WithContext(ctx).Preload("CurrentExtension").First(&user, "id = ?", id).Error
 	if err != nil {
 		return nil, err
 	}
@@ -84,6 +84,7 @@ func (r *userRepository) FindByID(ctx context.Context, id uuid.UUID) (*models.Us
 func (r *userRepository) FindByIDWithRelations(ctx context.Context, id uuid.UUID) (*models.User, error) {
 	var user models.User
 	err := r.db.WithContext(ctx).
+		Preload("CurrentExtension").
 		Preload("Department").
 		Preload("Location").
 		Preload("Departments").
@@ -113,7 +114,7 @@ func (r *userRepository) FindByIDWithPermissions(ctx context.Context, id uuid.UU
 
 func (r *userRepository) FindByEmail(ctx context.Context, email string) (*models.User, error) {
 	var user models.User
-	err := r.db.WithContext(ctx).First(&user, "email = ?", email).Error
+	err := r.db.WithContext(ctx).Preload("CurrentExtension").First(&user, "email = ?", email).Error
 	if err != nil {
 		return nil, err
 	}
@@ -123,6 +124,7 @@ func (r *userRepository) FindByEmail(ctx context.Context, email string) (*models
 func (r *userRepository) FindByEmailWithRelations(ctx context.Context, email string) (*models.User, error) {
 	var user models.User
 	err := r.db.WithContext(ctx).
+		Preload("CurrentExtension").
 		Preload("Department").
 		Preload("Location").
 		Preload("Departments").
@@ -141,6 +143,7 @@ func (r *userRepository) FindByEmailWithRelations(ctx context.Context, email str
 func (r *userRepository) FindByEmailForLogin(ctx context.Context, email string) (*models.User, error) {
 	var user models.User
 	err := r.db.WithContext(ctx).
+		Preload("CurrentExtension").
 		Preload("Roles", "is_active = ?", true).
 		Preload("Roles.Permissions", "is_active = ?", true).
 		First(&user, "email = ?", email).Error
@@ -154,6 +157,7 @@ func (r *userRepository) FindByEmailForLogin(ctx context.Context, email string) 
 func (r *userRepository) FindByPhoneForLogin(ctx context.Context, phone string) (*models.User, error) {
 	var user models.User
 	err := r.db.WithContext(ctx).
+		Preload("CurrentExtension").
 		Preload("Roles", "is_active = ?", true).
 		Preload("Roles.Permissions", "is_active = ?", true).
 		First(&user, "phone = ?", phone).Error
@@ -165,7 +169,7 @@ func (r *userRepository) FindByPhoneForLogin(ctx context.Context, phone string) 
 
 func (r *userRepository) FindByUsername(ctx context.Context, username string) (*models.User, error) {
 	var user models.User
-	err := r.db.WithContext(ctx).First(&user, "username = ?", username).Error
+	err := r.db.WithContext(ctx).Preload("CurrentExtension").First(&user, "username = ?", username).Error
 	if err != nil {
 		return nil, err
 	}
@@ -186,6 +190,7 @@ func (r *userRepository) FindByMobile(ctx context.Context, phone string) (*model
 func (r *userRepository) FindByPhoneWithRelations(ctx context.Context, phone string) (*models.User, error) {
 	var user models.User
 	err := r.db.WithContext(ctx).
+		Preload("CurrentExtension").
 		Preload("Department").
 		Preload("Location").
 		Preload("Departments").
@@ -218,7 +223,6 @@ func (r *userRepository) Update(ctx context.Context, user *models.User) error {
 		"first_name":      user.FirstName,
 		"last_name":       user.LastName,
 		"phone":           user.Phone,
-		"extension":       user.Extension,
 		"password":        user.Password,
 		"mobile_verified": user.MobileVerified,
 		"is_active":       user.IsActive,
@@ -240,7 +244,7 @@ func (r *userRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return r.db.WithContext(ctx).Delete(&models.User{}, "id = ?", id).Error
 }
 
-func (r *userRepository) List(ctx context.Context, page, limit int, search, phone, extension string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.User, int64, error) {
+func (r *userRepository) List(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.User, int64, error) {
 	var users []models.User
 	var total int64
 
@@ -254,7 +258,7 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 		like := "%" + strings.ToLower(search) + "%"
 		phoneLike := "%" + strings.TrimPrefix(search, "+") + "%"
 		base = base.Where(
-			"LOWER(users.username) LIKE ? OR LOWER(users.email) LIKE ? OR LOWER(users.first_name) LIKE ? OR LOWER(users.last_name) LIKE ? OR users.phone LIKE ? OR users.extension LIKE ?",
+			"LOWER(users.username) LIKE ? OR LOWER(users.email) LIKE ? OR LOWER(users.first_name) LIKE ? OR LOWER(users.last_name) LIKE ? OR users.phone LIKE ? OR users.id IN (SELECT user_id FROM extension_assignments WHERE extension LIKE ?)",
 			like, like, like, like, phoneLike, phoneLike,
 		)
 	}
@@ -263,7 +267,10 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 		base = base.Where("users.phone LIKE ?", "%"+strings.TrimPrefix(phone, "+")+"%")
 	}
 	if extension != "" {
-		base = base.Where("users.extension LIKE ?", "%"+extension+"%")
+		base = base.Where("users.id IN (SELECT user_id FROM extension_assignments WHERE extension LIKE ?)", "%"+extension+"%")
+	}
+	if callStatus != "" {
+		base = base.Where("users.call_status = ?", callStatus)
 	}
 
 	if len(roleIDs) > 0 {
@@ -289,6 +296,7 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 			return nil, 0, err
 		}
 		err := base.
+			Preload("CurrentExtension").
 			Preload("Department").
 			Preload("Location").
 			Preload("Departments").
@@ -325,6 +333,7 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 
 	// Load full user records with all relations, preserving page order.
 	if err := r.db.WithContext(ctx).
+		Preload("CurrentExtension").
 		Preload("Department").
 		Preload("Location").
 		Preload("Departments").
@@ -689,15 +698,23 @@ func (r *userRepository) IsUserOnline(ctx context.Context, userID uuid.UUID) (bo
 	return count > 0, err
 }
 
+// FindByExtension resolves the user currently holding an extension via the
+// extension_assignments table (extension is no longer a column on users).
 func (r *userRepository) FindByExtension(ctx context.Context, extension string) (*models.User, error) {
 	var user models.User
-	err := r.db.WithContext(ctx).Where("extension = ?", extension).First(&user).Error
+	err := r.db.WithContext(ctx).
+		Preload("CurrentExtension").
+		Where("users.id IN (SELECT user_id FROM extension_assignments WHERE extension = ?)", extension).
+		First(&user).Error
 	return &user, err
 }
 
 func (r *userRepository) FindByExtOrPhone(ctx context.Context, phone string) (*models.User, error) {
 	var user models.User
-	err := r.db.WithContext(ctx).Where("extension = ? OR phone = ?", phone, phone).First(&user).Error
+	err := r.db.WithContext(ctx).
+		Preload("CurrentExtension").
+		Where("users.phone = ? OR users.id IN (SELECT user_id FROM extension_assignments WHERE extension = ?)", phone, phone).
+		First(&user).Error
 	if err != nil {
 		return nil, err
 	}
@@ -710,7 +727,8 @@ func (r *userRepository) FindByExtOrPhoneList(ctx context.Context, phones []stri
 	}
 	var users []models.User
 	err := r.db.WithContext(ctx).
-		Where("extension IN ? OR phone IN ?", phones, phones).
+		Preload("CurrentExtension").
+		Where("users.phone IN ? OR users.id IN (SELECT user_id FROM extension_assignments WHERE extension IN ?)", phones, phones).
 		Find(&users).Error
 	return users, err
 }

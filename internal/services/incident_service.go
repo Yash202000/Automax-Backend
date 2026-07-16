@@ -461,18 +461,23 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 				}
 			}
 
-			// For agents acting on behalf of citizens, scope the duplicate check to the
-			// citizen's identity rather than the agent's reporterID, so incidents filed
-			// for different citizens are never incorrectly blocked.
+			// WHATSAPP_SOURCE holds the chatbot's source string (e.g. "WhatsApp Chatbot").
+			whatsappSource := strings.TrimSpace(os.Getenv("WHATSAPP_SOURCE"))
+			isWhatsApp := whatsappSource != "" && strings.EqualFold(strings.TrimSpace(req.Source), whatsappSource)
+
+			// For agents (and the WhatsApp chatbot) acting on behalf of citizens, scope the
+			// duplicate check to the citizen's identity rather than the agent's reporterID, so
+			// incidents filed for different citizens are never incorrectly blocked.
 			var openIncidents []models.Incident
-			if isAgent {
+			if (isAgent || isWhatsApp) && req.ReporterPhone != "" {
 				openIncidents, err = s.incidentRepo.FindOpenIncidentsForDuplicateCheckByCaller(
-					ctx, req.ReporterName, req.ReporterPhone,
+					ctx, req.ReporterPhone,
 				)
 			} else {
 				openIncidents, err = s.incidentRepo.FindUserOpenIncidentsForDuplicateCheck(ctx, reporterID)
 			}
 			if err != nil {
+				log.Printf("[IncidentService] Error occurred while fetching open incidents: %v", err)
 				return nil, err
 			}
 
@@ -5052,7 +5057,14 @@ func (s *incidentService) CreateRevision(ctx context.Context, incidentID uuid.UU
 func (s *incidentService) applyCreationTimeAssignment(ctx context.Context, incident *models.Incident, initialState *models.WorkflowState, creatorID uuid.UUID, source string) {
 	distributeAssign := strings.TrimSpace(os.Getenv("DISTRIBUTE_INCIDENT_ASSIGN"))
 	if strings.EqualFold(distributeAssign, "true") {
-		if strings.EqualFold(source, constants.INCIDENT_SOURCE.WEB) &&
+		// VD2: distribute every source (incl. web) uniformly via round-robin,
+		// so a web incident is not self-assigned to its creator.
+		clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+		uniformRoundRobin := strings.EqualFold(clientCode, constants.CLIENT_CODE.VD2) &&
+			strings.EqualFold(incident.RecordType, "incident")
+
+		if !uniformRoundRobin &&
+			strings.EqualFold(source, constants.INCIDENT_SOURCE.WEB) &&
 			s.UserHasAssignmentRole(ctx, creatorID, initialState.AssignmentRoles) {
 			if err := s.incidentRepo.AssignIncident(ctx, incident.ID, creatorID); err != nil {
 				fmt.Printf("Warning: creation assignment (self-assign for web) failed: %v\n", err)

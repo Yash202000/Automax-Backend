@@ -288,6 +288,7 @@ func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 	search := c.Query("search", "")
 	phone := strings.TrimSpace(c.Query("phone", ""))
 	extension := strings.TrimSpace(c.Query("extension", ""))
+	callStatus := strings.TrimSpace(c.Query("call_status", ""))
 
 	roleIDs := parseUUIDList(c.Query("role_ids", ""))
 	departmentIDs := parseUUIDList(c.Query("department_ids", ""))
@@ -295,11 +296,13 @@ func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 	classificationIDs := parseUUIDList(c.Query("classification_ids", ""))
 
 	page = max(page, 1)
-	if limit < 1 || limit > 100 {
+	if limit < 1 {
 		limit = 10
+	} else if limit > 1000 {
+		limit = 1000
 	}
 
-	users, total, err := h.userService.ListUsers(c.UserContext(), page, limit, search, phone, extension, roleIDs, departmentIDs, locationIDs, classificationIDs)
+	users, total, err := h.userService.ListUsers(c.UserContext(), page, limit, search, phone, extension, callStatus, roleIDs, departmentIDs, locationIDs, classificationIDs)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_users"))
 	}
@@ -555,12 +558,16 @@ func (h *UserHandler) UpdateUserCallStatus(c *fiber.Ctx) error {
 	validStatuses := map[string]bool{
 		"available": true,
 		"in_call":   true,
+		"online":    true,
 		"offline":   true,
 	}
 	if !validStatuses[req.Status] {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "invalid_status", req.Status))
 	}
 
+	if strings.EqualFold(req.Status, "available") {
+		req.Status = string(models.CallStatusOnline) // "online"
+	}
 	// Call Service
 	resp, err := h.userService.UpdateUserCallStatus(c.UserContext(), userExt, req.Status)
 	if err != nil {
@@ -573,7 +580,7 @@ func (h *UserHandler) UpdateUserCallStatus(c *fiber.Ctx) error {
 // Export exports all users as JSON
 func (h *UserHandler) Export(c *fiber.Ctx) error {
 	// Get all users without pagination
-	users, _, err := h.userService.ListUsers(c.UserContext(), 1, 10000, "", "", "", nil, nil, nil, nil)
+	users, _, err := h.userService.ListUsers(c.UserContext(), 1, 10000, "", "", "", "", nil, nil, nil, nil)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -651,6 +658,7 @@ func (h *UserHandler) Import(c *fiber.Ctx) error {
 		FirstName         string     `json:"first_name"`
 		LastName          string     `json:"last_name"`
 		Phone             string     `json:"phone"`
+		Extension         string     `json:"extension"`
 		DepartmentID      *uuid.UUID `json:"department_id"`
 		LocationID        *uuid.UUID `json:"location_id"`
 		RoleIDs           []string   `json:"role_ids"`
@@ -733,6 +741,7 @@ func (h *UserHandler) Import(c *fiber.Ctx) error {
 			FirstName:         data.FirstName,
 			LastName:          data.LastName,
 			Phone:             data.Phone,
+			Extension:         data.Extension,
 			DepartmentID:      data.DepartmentID,
 			LocationID:        data.LocationID,
 			RoleIDs:           roleIDs,

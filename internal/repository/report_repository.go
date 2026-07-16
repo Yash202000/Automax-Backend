@@ -278,6 +278,7 @@ var incidentFilterFields = map[string]string{
 	// ── Subquery-handled (empty col = silently skipped by applyFilters) ───────
 	"workflow_transition_id": "", // handled via IN-subquery in ExecuteIncidentQuery
 	"workflow_transition_at": "", // handled via IN-subquery in ExecuteIncidentQuery
+	"my_record":             "", // handled via OR-subquery in ExecuteIncidentQuery / ExecuteRequestQuery
 }
 
 // requestFilterFields reuses the incident columns (same table, filtered by record_type).
@@ -313,6 +314,7 @@ var requestFilterFields = map[string]string{
 	"converted_request_id": "incidents.converted_request_id",
 	"channel":              "incidents.source",
 	"source":               "incidents.source",
+	"my_record":            "", // handled via OR-subquery in ExecuteRequestQuery
 }
 
 var userFilterFields = map[string]string{
@@ -691,6 +693,19 @@ func (r *reportRepository) ExecuteRequestQuery(ctx context.Context, filters []mo
 			Joins("LEFT JOIN users as creator ON incidents.reporter_id = creator.id").
 			Joins("LEFT JOIN classifications ON incidents.classification_id = classifications.id").
 			Joins("LEFT JOIN locations ON incidents.location_id = locations.id")
+
+		// my_record: show only records where the user is reporter, assignee, or co-assignee.
+		for _, f := range filters {
+			if f.Field != "my_record" || f.Value == nil {
+				continue
+			}
+			uid := fmt.Sprint(f.Value)
+			q = q.Where(
+				"incidents.reporter_id = ? OR incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)",
+				uid, uid, uid,
+			)
+		}
+
 		return r.applyFilters(ctx, q, filters)
 	}
 
@@ -782,13 +797,13 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 	// (b) GORM statement accumulation does not duplicate JOINs across Count + Rows calls.
 	buildBase := func() *gorm.DB {
 		q := r.db.WithContext(ctx).Model(&models.Incident{}).Debug().
-			Joins("LEFT JOIN users as creator ON incidents.reporter_id = creator.id").
-			Joins("LEFT JOIN users as assignees ON incidents.assignee_id = assignees.id").
-			Joins("LEFT JOIN workflow_states ON incidents.current_state_id = workflow_states.id").
-			Joins("LEFT JOIN classifications ON incidents.classification_id = classifications.id").
-			Joins("LEFT JOIN departments ON incidents.department_id = departments.id").
-			Joins("LEFT JOIN locations ON incidents.location_id = locations.id").
-			Joins("LEFT JOIN workflows ON incidents.workflow_id = workflows.id")
+			Joins("LEFT JOIN users as creator ON incidents.reporter_id = creator.id AND creator.deleted_at IS NULL").
+			Joins("LEFT JOIN users as assignees ON incidents.assignee_id = assignees.id AND assignees.deleted_at IS NULL").
+			Joins("INNER JOIN workflows ON incidents.workflow_id = workflows.id AND workflows.record_type = ? AND workflows.deleted_at IS NULL", "incident").
+			Joins("LEFT JOIN workflow_states ON incidents.current_state_id = workflow_states.id AND workflow_states.deleted_at IS NULL").
+			Joins("LEFT JOIN classifications ON incidents.classification_id = classifications.id AND classifications.deleted_at IS NULL").
+			Joins("LEFT JOIN departments ON incidents.department_id = departments.id AND departments.deleted_at IS NULL").
+			Joins("LEFT JOIN locations ON incidents.location_id = locations.id AND locations.deleted_at IS NULL")
 
 		// workflow_transition_id: optional filter — restricts to incidents that have
 		// passed through at least one matching transition (name or code match).
@@ -853,10 +868,23 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 				}
 			}
 		}
+
+		// my_record: show only incidents where the user is reporter, assignee, or co-assignee.
+		for _, f := range filters {
+			if f.Field != "my_record" || f.Value == nil {
+				continue
+			}
+			uid := fmt.Sprint(f.Value)
+			q = q.Where(
+				"incidents.reporter_id = ? OR incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)",
+				uid, uid, uid,
+			)
+		}
+
 		return r.applyFilters(ctx, q, filters)
 	}
 
-	if err := buildBase().Count(&total).Error; err != nil {
+	if err := buildBase().Count(&total).Debug().Error; err != nil {
 		return nil, 0, err
 	}
 

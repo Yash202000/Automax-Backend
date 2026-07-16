@@ -73,6 +73,8 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		&models.Department{},
 		&models.User{},
 		&models.ActionLog{},
+		&models.ExtensionAssignment{},
+		&models.ExtensionAssignmentHistory{},
 		&models.CallLog{},
 		&models.CallParticipant{},
 		&models.CallLogAttachment{},
@@ -229,6 +231,15 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	db.Exec("ALTER TABLE kpi_workflow_actions DROP CONSTRAINT IF EXISTS fk_kpi_workflow_actions_performed_by")
 	db.Exec("ALTER TABLE kpi_workflow_actions DROP CONSTRAINT IF EXISTS kpi_workflow_actions_performed_by_id_fkey")
 
+	// Legacy strategic_goal_id columns predate the StrategicGoal→Goal model rename.
+	// AutoMigrate never drops old columns, so on databases created before that
+	// rename these can still exist with a NOT NULL constraint (nothing populates
+	// them anymore), blocking every insert with a not-null violation. Drop them
+	// wherever they're still present; no-op on schemas that never had them.
+	for _, table := range []string{"operational_objectives", "processes", "initiatives", "strategic_kpis", "operational_kpis", "award_kpis"} {
+		db.Exec(fmt.Sprintf(`ALTER TABLE IF EXISTS %s DROP COLUMN IF EXISTS strategic_goal_id`, table))
+	}
+
 	db.Exec("ALTER TABLE lookup_categories ADD COLUMN IF NOT EXISTS redirect_url VARCHAR(500)")
 
 	// Notification template enhancements: add categorisation and bilingual-linking columns.
@@ -309,6 +320,11 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	// call_logs.created_by must accept NULL: system/machine-ingested rows (e.g.
 	// the Cintrix call-event webhook) have no acting user. Idempotent.
 	db.Exec("ALTER TABLE call_logs ALTER COLUMN created_by DROP NOT NULL")
+
+	// Decouple extension from users: backfill into extension_assignments, drop users.extension
+	if err := migrations.MigrateExtensionDecouple(db); err != nil {
+		log.Printf("Warning: extension decouple migration failed: %v", err)
+	}
 
 	// Seed existing free-text goal categories as root Category rows
 	// and back-fill goals.category_id. Idempotent: safe to run repeatedly.
@@ -471,6 +487,12 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Create Departments", Code: "departments:create", Module: "departments", Action: "create", Description: "Create departments"},
 		{Name: "Update Departments", Code: "departments:update", Module: "departments", Action: "update", Description: "Update departments"},
 		{Name: "Delete Departments", Code: "departments:delete", Module: "departments", Action: "delete", Description: "Delete departments"},
+
+		// Extension assignment permissions (EPM940 telephony feature)
+		{Name: "View Extensions", Code: "extensions:view", Module: "extensions", Action: "view", Description: "View PBX extensions and assignment status"},
+		{Name: "Assign Extensions", Code: "extensions:assign", Module: "extensions", Action: "assign", Description: "Assign/reassign PBX extensions to users"},
+		{Name: "Release Extensions", Code: "extensions:release", Module: "extensions", Action: "release", Description: "Release PBX extensions from users"},
+		{Name: "Create Extensions", Code: "extensions:create", Module: "extensions", Action: "create", Description: "Create new PBX extensions on the switch"},
 
 		// Location permissions
 		{Name: "View Locations", Code: "locations:view", Module: "locations", Action: "view", Description: "View locations"},
@@ -725,6 +747,30 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		db.Model(&managerRole).Association("Permissions").Replace(managerPerms)
 	}
 
+	// Grant extension-management permissions to the agent role (if it exists).
+	// Admin already receives all permissions above; super admins bypass permission
+	// checks entirely. We append (not replace) so any other agent permissions stay intact.
+	var agentRole models.Role
+	if err := db.Where("code = ?", "agent").Preload("Permissions").First(&agentRole).Error; err == nil {
+		existing := make(map[uuid.UUID]bool, len(agentRole.Permissions))
+		for _, p := range agentRole.Permissions {
+			existing[p.ID] = true
+		}
+		var extPerms []models.Permission
+		db.Where("module = ?", "extensions").Find(&extPerms)
+		var toAdd []models.Permission
+		for _, p := range extPerms {
+			if !existing[p.ID] {
+				toAdd = append(toAdd, p)
+			}
+		}
+		if len(toAdd) > 0 {
+			if err := db.Model(&agentRole).Association("Permissions").Append(toAdd); err != nil {
+				log.Printf("Failed to grant extension permissions to agent role: %v", err)
+			}
+		}
+	}
+
 	// Create default super admin user
 	var adminUser models.User
 	result = db.Where("email = ?", "admin@automax.com").First(&adminUser)
@@ -762,6 +808,11 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		// Seed starter data sources and segmentation dimensions
 		seedKpiDataSources(db)
 		seedKpiSegmentationDimensions(db)
+
+		// Seed a small, idempotent demo dataset for Master Data, Goal
+		// Management, and KPI Management so a fresh environment isn't empty
+		seedGoalManagementDemoData(db, adminUser.ID)
+		seedKpiEngagementDemoData(db, adminUser.ID)
 	} else {
 		unseedGoalManagement(db)
 	}

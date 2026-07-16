@@ -16,12 +16,14 @@ type WorkflowRepository interface {
 	FindByCode(ctx context.Context, code string) (*models.Workflow, error)
 	List(ctx context.Context, activeOnly bool) ([]models.Workflow, error)
 	ListByRecordType(ctx context.Context, recordType string, activeOnly bool) ([]models.Workflow, error)
+	ListFiltered(ctx context.Context, filter *models.WorkflowFilter) ([]models.Workflow, int64, error)
 	Update(ctx context.Context, workflow *models.Workflow) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	HardDelete(ctx context.Context, id uuid.UUID) error         // Permanently delete with cascading
 	ListDeleted(ctx context.Context) ([]models.Workflow, error) // List soft-deleted workflows
 	Restore(ctx context.Context, id uuid.UUID) error            // Restore a soft-deleted workflow
 	ExistsByCodeOrName(ctx context.Context, codeOrName []string) (bool, error)
+	ExistsByName(ctx context.Context, name string) (bool, error)
 	// Workflow-Classification assignments
 	AssignClassifications(ctx context.Context, workflowID uuid.UUID, classificationIDs []uuid.UUID) error
 	GetByClassificationID(ctx context.Context, classificationID uuid.UUID) (*models.Workflow, error)
@@ -163,6 +165,18 @@ func (r *workflowRepository) ExistsByCodeOrName(ctx context.Context, codeOrName 
 	return count > 0, nil
 }
 
+func (r *workflowRepository) ExistsByName(ctx context.Context, name string) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&models.Workflow{}).
+		Where("name = ?", name).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (r *workflowRepository) List(ctx context.Context, activeOnly bool) ([]models.Workflow, error) {
 	var workflows []models.Workflow
 	query := r.db.WithContext(ctx).
@@ -205,6 +219,75 @@ func (r *workflowRepository) ListByRecordType(ctx context.Context, recordType st
 
 	err := query.Order("name").Find(&workflows).Error
 	return workflows, err
+}
+
+func (r *workflowRepository) ListFiltered(ctx context.Context, filter *models.WorkflowFilter) ([]models.Workflow, int64, error) {
+	var workflows []models.Workflow
+	var total int64
+
+	query := r.db.WithContext(ctx).Model(&models.Workflow{})
+
+	if filter.Search != "" {
+		searchPattern := "%" + filter.Search + "%"
+		query = query.Where("name ILIKE ?", searchPattern)
+	}
+
+	if filter.IsActive != nil {
+		query = query.Where("is_active = ?", *filter.IsActive)
+	}
+
+	if filter.RecordType != "" {
+		// Support 'all' type which matches any type, 'both' matches incident/request
+		query = query.Where("(record_type = ? OR record_type = 'both' OR record_type = 'all')", filter.RecordType)
+	}
+
+	if filter.CreatedByID != "" {
+		query = query.Where("created_by_id = ?", filter.CreatedByID)
+	}
+
+	if filter.CreatedFrom != nil {
+		query = query.Where("created_at >= ?", *filter.CreatedFrom)
+	}
+	if filter.CreatedTo != nil {
+		query = query.Where("created_at <= ?", *filter.CreatedTo)
+	}
+	if filter.ModifiedFrom != nil {
+		query = query.Where("updated_at >= ?", *filter.ModifiedFrom)
+	}
+	if filter.ModifiedTo != nil {
+		query = query.Where("updated_at <= ?", *filter.ModifiedTo)
+	}
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	query = query.
+		Preload("States").
+		Preload("Transitions").
+		Preload("Classifications").
+		Preload("Locations").
+		Preload("CreatedBy").
+		Preload("ConvertToRequestRoles").
+		Preload("MergeAllowedRoles").
+		Order("name")
+
+	// Limit <= 0 means the caller didn't ask for pagination (page/limit not
+	// supplied) — return every matching row, as this endpoint always did
+	// before search/filter support was added.
+	if filter.Limit > 0 {
+		if filter.Page < 1 {
+			filter.Page = 1
+		}
+		offset := (filter.Page - 1) * filter.Limit
+		query = query.Offset(offset).Limit(filter.Limit)
+	}
+
+	if err := query.Find(&workflows).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return workflows, total, nil
 }
 
 func (r *workflowRepository) Update(ctx context.Context, workflow *models.Workflow) error {

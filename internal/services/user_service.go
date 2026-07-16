@@ -42,7 +42,7 @@ type UserService interface {
 	UpdateAvatar(ctx context.Context, userID uuid.UUID, avatarURL string) error
 	DeleteUser(ctx context.Context) error
 	AdminDeleteUser(ctx context.Context, userID uuid.UUID) error
-	ListUsers(ctx context.Context, page, limit int, search, phone, extension string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.UserResponse, int64, error)
+	ListUsers(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.UserResponse, int64, error)
 	GetUserByID(ctx context.Context, userID uuid.UUID) (*models.UserResponse, error)
 	GetUserByEmail(ctx context.Context, email string) (*models.User, error)
 	GetUserByMobile(ctx context.Context, phone string) (*models.User, error)
@@ -74,6 +74,7 @@ type userService struct {
 	otpService       *OTPService
 	licenseService   LicenseService
 	licenseRepo      repository.LicenseRepository
+	db               *gorm.DB
 	redis            *redis.Client
 }
 
@@ -93,6 +94,7 @@ func NewUserService(
 	actionLogService ActionLogService,
 	otpService *OTPService,
 	redis *redis.Client,
+	db *gorm.DB,
 ) UserService {
 	return &userService{
 		userRepo:         userRepo,
@@ -104,6 +106,7 @@ func NewUserService(
 		actionLogService: actionLogService,
 		otpService:       otpService,
 		redis:            redis,
+		db:               db,
 	}
 }
 
@@ -201,6 +204,25 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 
 	if len(req.ClassificationIDs) > 0 {
 		s.userRepo.AssignClassifications(ctx, user.ID, req.ClassificationIDs)
+	}
+
+	// Assign extension if provided
+	if req.Extension != "" {
+		actorID, _ := ctx.Value(constants.ContextKeys.UserID).(uuid.UUID)
+		assignment := &models.ExtensionAssignment{
+			Extension:  req.Extension,
+			UserID:     user.ID,
+			AssignedBy: actorID,
+		}
+		if err := s.db.WithContext(ctx).Create(assignment).Error; err != nil {
+			return nil, fmt.Errorf("failed to assign extension: %w", err)
+		}
+		s.db.WithContext(ctx).Create(&models.ExtensionAssignmentHistory{
+			Extension:  req.Extension,
+			UserID:     &user.ID,
+			AssignedBy: actorID,
+			Action:     models.ExtensionActionAssign,
+		})
 	}
 
 	// Get user's primary role for JWT (use "user" as default)
@@ -1247,10 +1269,8 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 		update["mobile_verified"] = req.MobileVerified
 	}
 
-	if req.Extension != nil && *req.Extension != user.Extension {
-		user.Extension = *req.Extension
-		update["extension"] = req.Extension
-	}
+	// Extension is no longer stored on users — it is managed only via the extensions
+	// API (extension_assignments table). Any req.Extension here is ignored.
 
 	if req.Username != "" && req.Username != user.Username {
 		exists, err := s.userRepo.ExistsByUsername(ctx, req.Username)
@@ -1417,7 +1437,7 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 				Action:      "logout",
 				Module:      "users",
 				ResourceID:  userID.String(),
-				Description: fmt.Sprintf("User logged out after password change"),
+				Description: "User logged out after password change",
 				OldValue:    nil,
 				NewValue:    nil,
 				IPAddress:   ipAddress,
@@ -1697,8 +1717,8 @@ func (s *userService) AdminDeleteUser(ctx context.Context, userID uuid.UUID) err
 	return err
 }
 
-func (s *userService) ListUsers(ctx context.Context, page, limit int, search, phone, extension string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.UserResponse, int64, error) {
-	users, total, err := s.userRepo.List(ctx, page, limit, search, phone, extension, roleIDs, departmentIDs, locationIDs, classificationIDs)
+func (s *userService) ListUsers(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.UserResponse, int64, error) {
+	users, total, err := s.userRepo.List(ctx, page, limit, search, phone, extension, callStatus, roleIDs, departmentIDs, locationIDs, classificationIDs)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1736,6 +1756,13 @@ func (s *userService) FindMatchingUsers(ctx context.Context, roleIDs []uuid.UUID
 }
 
 func (s *userService) UpdateUserCallStatus(ctx context.Context, extension string, status string) (interface{}, error) {
+	// The status endpoint exposes "available" as the ready-for-work state, but
+	// round-robin (FindMatchingOnline) matches call_status = 'online'. Map the
+	// client vocabulary onto the persisted enum so status drives assignment.
+	if strings.EqualFold(status, "available") {
+		status = string(models.CallStatusOnline) // "online"
+	}
+
 	//Setup cache key
 	cacheKey := fmt.Sprintf("USER_CALL_STATUS:%s", extension)
 	var cachedStatus map[string]interface{}
@@ -1753,12 +1780,17 @@ func (s *userService) UpdateUserCallStatus(ctx context.Context, extension string
 		return nil, fmt.Errorf("user with extension %s not found: %w", extension, err)
 	}
 
-	// Update DB if status is different
+	// Update DB if status is different. Use UpdateProfile (targeted map update)
+	// because the generic Update method omits call_status from its field list,
+	// so it would never persist the column that round-robin reads.
 	if string(user.CallStatus) != status {
-		user.CallStatus = models.CallStatus(status)
-		if err := s.userRepo.Update(ctx, user); err != nil {
+		if err := s.userRepo.UpdateProfile(ctx, map[string]interface{}{
+			"id":          user.ID,
+			"call_status": status,
+		}); err != nil {
 			return nil, err
 		}
+		user.CallStatus = models.CallStatus(status) // reflect new value in the response
 	}
 
 	// Prepare Response
