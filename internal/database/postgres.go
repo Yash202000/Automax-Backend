@@ -537,6 +537,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Edit Closed Incidents", Code: "incidents:edit-closed", Module: "incidents", Action: "edit_closed", Description: "Edit summary/description of closed incidents"},
 		{Name: "Request Info on Incidents", Code: "incidents:request-info", Module: "incidents", Action: "request_info", Description: "Request additional information from citizens"},
 		{Name: "Share Incidents", Code: "incidents:share", Module: "incidents", Action: "share", Description: "Share incident details with external parties"},
+		{Name: "Filter Incidents by Reporter Phone", Code: "incidents:filter_reporter_phone", Module: "incidents", Action: "filter_reporter_phone", Description: "Filter incidents by reporter phone number"},
 
 		// Request permissions
 		{Name: "View Requests", Code: "requests:view", Module: "requests", Action: "view", Description: "View requests"},
