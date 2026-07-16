@@ -318,7 +318,7 @@ type Initiative struct {
 	EnablerID   *uuid.UUID            `gorm:"type:uuid;index" json:"enabler_id"`
 	Enabler     *Enabler              `gorm:"foreignKey:EnablerID" json:"enabler,omitempty"`
 	OwnerID     *uuid.UUID            `gorm:"type:uuid;index" json:"owner_id"`
-	Owner       *User                 `gorm:"foreignKey:OwnerID" json:"owner,omitempty"`
+	Owner       *Department           `gorm:"foreignKey:OwnerID" json:"owner,omitempty"`
 	Status      string                `gorm:"size:50;not null;default:'draft'" json:"status"`
 	CreatedAt   time.Time             `json:"created_at"`
 	UpdatedAt   time.Time             `json:"updated_at"`
@@ -354,7 +354,7 @@ type InitiativeResponse struct {
 	PillarID    *uuid.UUID                    `json:"pillar_id"`
 	EnablerID   *uuid.UUID                    `json:"enabler_id"`
 	OwnerID     *uuid.UUID                    `json:"owner_id"`
-	Owner       *UserBriefResponse            `json:"owner,omitempty"`
+	Owner       *DepartmentBriefResponse      `json:"owner,omitempty"`
 	Status      string                        `json:"status"`
 	CreatedAt   time.Time                     `json:"created_at"`
 }
@@ -369,7 +369,7 @@ func (i *Initiative) ToResponse() InitiativeResponse {
 		PillarID:    i.PillarID,
 		EnablerID:   i.EnablerID,
 		OwnerID:     i.OwnerID,
-		Owner:       ToUserBriefResponse(i.Owner),
+		Owner:       ToDepartmentBriefResponse(i.Owner),
 		Status:      i.Status,
 		CreatedAt:   i.CreatedAt,
 	}
