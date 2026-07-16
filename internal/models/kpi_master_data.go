@@ -30,7 +30,7 @@ type Pillar struct {
 	NameEn      string         `gorm:"size:255;not null" json:"name_en"`
 	NameAr      string         `gorm:"size:255;not null;default:''" json:"name_ar"`
 	OwnerID     *uuid.UUID     `gorm:"type:uuid;index" json:"owner_id"`
-	Owner       *User          `gorm:"foreignKey:OwnerID" json:"owner,omitempty"`
+	Owner       *Department    `gorm:"foreignKey:OwnerID" json:"owner,omitempty"`
 	Initiatives []Initiative   `gorm:"foreignKey:PillarID" json:"initiatives,omitempty"`
 	IsActive    bool           `gorm:"default:true" json:"is_active"`
 	CreatedAt   time.Time      `json:"created_at"`
@@ -52,13 +52,13 @@ type PillarRequest struct {
 }
 
 type PillarResponse struct {
-	ID        uuid.UUID          `json:"id"`
-	NameEn    string             `json:"name_en"`
-	NameAr    string             `json:"name_ar"`
-	OwnerID   *uuid.UUID         `json:"owner_id"`
-	Owner     *UserBriefResponse `json:"owner,omitempty"`
-	IsActive  bool               `json:"is_active"`
-	CreatedAt time.Time          `json:"created_at"`
+	ID        uuid.UUID                `json:"id"`
+	NameEn    string                   `json:"name_en"`
+	NameAr    string                   `json:"name_ar"`
+	OwnerID   *uuid.UUID               `json:"owner_id"`
+	Owner     *DepartmentBriefResponse `json:"owner,omitempty"`
+	IsActive  bool                     `json:"is_active"`
+	CreatedAt time.Time                `json:"created_at"`
 }
 
 func (p *Pillar) ToResponse() PillarResponse {
@@ -67,7 +67,7 @@ func (p *Pillar) ToResponse() PillarResponse {
 		NameEn:    p.NameEn,
 		NameAr:    p.NameAr,
 		OwnerID:   p.OwnerID,
-		Owner:     ToUserBriefResponse(p.Owner),
+		Owner:     ToDepartmentBriefResponse(p.Owner),
 		IsActive:  p.IsActive,
 		CreatedAt: p.CreatedAt,
 	}
@@ -82,7 +82,7 @@ type Enabler struct {
 	NameEn      string         `gorm:"size:255;not null" json:"name_en"`
 	NameAr      string         `gorm:"size:255;not null;default:''" json:"name_ar"`
 	OwnerID     *uuid.UUID     `gorm:"type:uuid;index" json:"owner_id"`
-	Owner       *User          `gorm:"foreignKey:OwnerID" json:"owner,omitempty"`
+	Owner       *Department    `gorm:"foreignKey:OwnerID" json:"owner,omitempty"`
 	Initiatives []Initiative   `gorm:"foreignKey:EnablerID" json:"initiatives,omitempty"`
 	IsActive    bool           `gorm:"default:true" json:"is_active"`
 	CreatedAt   time.Time      `json:"created_at"`
@@ -104,13 +104,13 @@ type EnablerRequest struct {
 }
 
 type EnablerResponse struct {
-	ID        uuid.UUID          `json:"id"`
-	NameEn    string             `json:"name_en"`
-	NameAr    string             `json:"name_ar"`
-	OwnerID   *uuid.UUID         `json:"owner_id"`
-	Owner     *UserBriefResponse `json:"owner,omitempty"`
-	IsActive  bool               `json:"is_active"`
-	CreatedAt time.Time          `json:"created_at"`
+	ID        uuid.UUID                `json:"id"`
+	NameEn    string                   `json:"name_en"`
+	NameAr    string                   `json:"name_ar"`
+	OwnerID   *uuid.UUID               `json:"owner_id"`
+	Owner     *DepartmentBriefResponse `json:"owner,omitempty"`
+	IsActive  bool                     `json:"is_active"`
+	CreatedAt time.Time                `json:"created_at"`
 }
 
 func (e *Enabler) ToResponse() EnablerResponse {
@@ -119,7 +119,7 @@ func (e *Enabler) ToResponse() EnablerResponse {
 		NameEn:    e.NameEn,
 		NameAr:    e.NameAr,
 		OwnerID:   e.OwnerID,
-		Owner:     ToUserBriefResponse(e.Owner),
+		Owner:     ToDepartmentBriefResponse(e.Owner),
 		IsActive:  e.IsActive,
 		CreatedAt: e.CreatedAt,
 	}
