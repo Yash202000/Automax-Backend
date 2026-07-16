@@ -317,6 +317,10 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		log.Printf("Warning: call_participant phone migration failed: %v", err)
 	}
 
+	// call_logs.created_by must accept NULL: system/machine-ingested rows (e.g.
+	// the Cintrix call-event webhook) have no acting user. Idempotent.
+	db.Exec("ALTER TABLE call_logs ALTER COLUMN created_by DROP NOT NULL")
+
 	// Decouple extension from users: backfill into extension_assignments, drop users.extension
 	if err := migrations.MigrateExtensionDecouple(db); err != nil {
 		log.Printf("Warning: extension decouple migration failed: %v", err)

@@ -198,6 +198,10 @@ func (s *callLogService) ListCallLogsSummary(ctx context.Context, filter *models
 		var recordingURL string
 		if len(cl.Attachments) > 0 {
 			recordingURL = pkgUtils.GenerateAttachmentAppURL(ctx, cl.Attachments[0].ID)
+		} else if cl.CallUuid != "" && models.RecordingURLFromMeta(cl.Meta) != "" {
+			// Cintrix-originated call with a recording — proxy through the CTI
+			// endpoint rather than exposing the raw (HMAC-gated) Cintrix URL.
+			recordingURL = pkgUtils.GenerateCTIRecordingAppURL(ctx, cl.CallUuid)
 		}
 		item := models.CallLogListItem{
 			ID:           cl.ID,
@@ -516,6 +520,8 @@ func (s *callLogService) toCallLogResponse(ctx context.Context, callLog *models.
 	var recordingURL string
 	if len(callLog.Attachments) > 0 {
 		recordingURL = pkgUtils.GenerateAttachmentAppURL(ctx, callLog.Attachments[0].ID)
+	} else if callLog.CallUuid != "" && models.RecordingURLFromMeta(callLog.Meta) != "" {
+		recordingURL = pkgUtils.GenerateCTIRecordingAppURL(ctx, callLog.CallUuid)
 	}
 	resp := models.CallLogResponse{
 		ID:           callLog.ID,

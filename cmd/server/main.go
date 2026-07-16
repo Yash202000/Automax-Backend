@@ -255,6 +255,7 @@ func main() {
 	publicFeedbackHandler := handlers.NewIncidentPublicFeedbackHandler(publicFeedbackService, actionLogService)
 	aiQualityFeedbackHandler := handlers.NewAIQualityFeedbackHandler(aiQualityFeedbackRepo)
 	fcmHandler := handlers.NewFCMHandler(fcmService)
+	ctiHandler := handlers.NewCTIHandler(cfg.Cintrix.URL, cfg.Cintrix.APIKeyID, cfg.Cintrix.APIKeySecret, callLogRepo)
 	integrationUserHandler := handlers.NewIntegrationUserHandler(userService, roleRepo, departmentRepo, locationRepo, classificationRepo)
 	sentimentHandler := handlers.NewCallerSentimentHandler(callerSentimentService)
 	goalHandler := handlers.NewGoalHandler(goalService, actionLogService)
@@ -297,6 +298,7 @@ func main() {
 	// Integration handler
 	integrationHandler := handlers.NewIntegrationHandler(integrationService, integrationExecutor, integrationRepo, incidentRepo)
 	webhookHandler := handlers.NewWebhookHandler(integrationService, incidentService)
+	cintrixWebhookHandler := handlers.NewCintrixWebhookHandler(cfg.Cintrix.WebhookSecret, callLogRepo, userRepo)
 
 	// License management
 	licenseRepo := repository.NewLicenseRepository(db)
@@ -387,6 +389,7 @@ func main() {
 	webhooks := v1.Group("/webhooks")
 	webhooks.Post("/sendgrid/inbound", notificationHandler.SendGridInboundWebhook)
 	webhooks.Post("/automax-callback", webhookHandler.HandleAutomaxCallback)
+	webhooks.Post("/cintrix/call-event", cintrixWebhookHandler.HandleCallEvent)
 
 	ivr := v1.Group("/ivr/incident")
 	// Public: validates signed URL + last 6 digits, returns incident + session token
@@ -899,6 +902,11 @@ func main() {
 	callLogsPublic := v1.Group("/call-logs", authMiddleware.Authenticate())
 	callLogsPublic.Get("/sip-info", callLogHandler.GetSipInfo)
 	callLogsPublic.Get("/extension/:extension", callLogHandler.GetCallLogsByExtension)
+
+	// Cintrix CTI routes (contact-center softphone widget)
+	cti := v1.Group("/cti", authMiddleware.Authenticate())
+	cti.Get("/widget-token", ctiHandler.GetWidgetToken)
+	cti.Get("/recording", ctiHandler.GetRecording)
 
 	// ---- TEMPLATE ROUTES (legacy path, no feature-license gate) ----
 	templates := v1.Group("/templates", authMiddleware.Authenticate())

@@ -162,14 +162,19 @@ func (r *callLogRepository) ListSummary(ctx context.Context, filter *models.Call
 		query = query.Where("created_at <= ?", *filter.EndDate)
 	}
 	if filter.ParticipantID != nil {
+		// Cintrix PBX calls are company call-centre history: their participants
+		// are external callers and PBX extensions, not Automax user ids, so a
+		// participant join can never match (and missed calls have no agent at
+		// all). Show them to everyone this admin endpoint already gates;
+		// personal direct/group calls stay participant-scoped.
 		query = query.Where(
-			`id IN (
+			`(call_type = 'cintrix' OR id IN (
 				SELECT cp.call_log_id FROM call_participants cp
 				JOIN users u ON cp.phone_number = u.phone OR cp.phone_number IN (
 					SELECT ea.extension FROM extension_assignments ea WHERE ea.user_id = u.id
 				)
 				WHERE u.id = ?
-			)`,
+			))`,
 			*filter.ParticipantID,
 		)
 	}
@@ -180,7 +185,7 @@ func (r *callLogRepository) ListSummary(ctx context.Context, filter *models.Call
 
 	offset := (filter.Page - 1) * filter.Limit
 	err := query.
-		Select("id, call_uuid, call_type, start_at, end_at, status, created_at").
+		Select("id, call_uuid, call_type, start_at, end_at, status, meta, created_at").
 		Preload("Participants").
 		Preload("Attachments").
 		Order("created_at DESC").
