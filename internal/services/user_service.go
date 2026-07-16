@@ -1756,6 +1756,13 @@ func (s *userService) FindMatchingUsers(ctx context.Context, roleIDs []uuid.UUID
 }
 
 func (s *userService) UpdateUserCallStatus(ctx context.Context, extension string, status string) (interface{}, error) {
+	// The status endpoint exposes "available" as the ready-for-work state, but
+	// round-robin (FindMatchingOnline) matches call_status = 'online'. Map the
+	// client vocabulary onto the persisted enum so status drives assignment.
+	if strings.EqualFold(status, "available") {
+		status = string(models.CallStatusOnline) // "online"
+	}
+
 	//Setup cache key
 	cacheKey := fmt.Sprintf("USER_CALL_STATUS:%s", extension)
 	var cachedStatus map[string]interface{}
@@ -1773,12 +1780,17 @@ func (s *userService) UpdateUserCallStatus(ctx context.Context, extension string
 		return nil, fmt.Errorf("user with extension %s not found: %w", extension, err)
 	}
 
-	// Update DB if status is different
+	// Update DB if status is different. Use UpdateProfile (targeted map update)
+	// because the generic Update method omits call_status from its field list,
+	// so it would never persist the column that round-robin reads.
 	if string(user.CallStatus) != status {
-		user.CallStatus = models.CallStatus(status)
-		if err := s.userRepo.Update(ctx, user); err != nil {
+		if err := s.userRepo.UpdateProfile(ctx, map[string]interface{}{
+			"id":          user.ID,
+			"call_status": status,
+		}); err != nil {
 			return nil, err
 		}
+		user.CallStatus = models.CallStatus(status) // reflect new value in the response
 	}
 
 	// Prepare Response
