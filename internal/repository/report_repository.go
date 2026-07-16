@@ -278,6 +278,7 @@ var incidentFilterFields = map[string]string{
 	// ── Subquery-handled (empty col = silently skipped by applyFilters) ───────
 	"workflow_transition_id": "", // handled via IN-subquery in ExecuteIncidentQuery
 	"workflow_transition_at": "", // handled via IN-subquery in ExecuteIncidentQuery
+	"my_record":             "", // handled via OR-subquery in ExecuteIncidentQuery
 }
 
 // requestFilterFields reuses the incident columns (same table, filtered by record_type).
@@ -313,6 +314,7 @@ var requestFilterFields = map[string]string{
 	"converted_request_id": "incidents.converted_request_id",
 	"channel":              "incidents.source",
 	"source":               "incidents.source",
+	"my_record":            "", // handled via OR-subquery in ExecuteRequestQuery
 }
 
 var userFilterFields = map[string]string{
@@ -691,6 +693,19 @@ func (r *reportRepository) ExecuteRequestQuery(ctx context.Context, filters []mo
 			Joins("LEFT JOIN users as creator ON incidents.reporter_id = creator.id").
 			Joins("LEFT JOIN classifications ON incidents.classification_id = classifications.id").
 			Joins("LEFT JOIN locations ON incidents.location_id = locations.id")
+
+		// my_record: show only records where the user is reporter, assignee, or co-assignee.
+		for _, f := range filters {
+			if f.Field != "my_record" || f.Value == nil {
+				continue
+			}
+			uid := fmt.Sprint(f.Value)
+			q = q.Where(
+				"incidents.reporter_id = ? OR incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)",
+				uid, uid, uid,
+			)
+		}
+
 		return r.applyFilters(ctx, q, filters)
 	}
 
@@ -853,6 +868,19 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 				}
 			}
 		}
+
+		// my_record: show only incidents where the user is reporter, assignee, or co-assignee.
+		for _, f := range filters {
+			if f.Field != "my_record" || f.Value == nil {
+				continue
+			}
+			uid := fmt.Sprint(f.Value)
+			q = q.Where(
+				"incidents.reporter_id = ? OR incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)",
+				uid, uid, uid,
+			)
+		}
+
 		return r.applyFilters(ctx, q, filters)
 	}
 
