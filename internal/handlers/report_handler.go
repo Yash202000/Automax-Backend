@@ -60,9 +60,15 @@ func (h *ReportHandler) injectAccessScope(c *fiber.Ctx, dataSource string, filte
 		return filters
 	}
 
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
+	if err != nil || user == nil {
+		return filters
+	}
+
 	// Super admins bypass scoping unless RESTRICT_ADMIN_SCOPE=true
 	restrictSuperAdmins := strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_ADMIN_SCOPE")), "true")
-	if user, ok := c.Locals(constants.ContextKeys.User).(*models.User); ok && user != nil && user.IsSuperAdmin && !restrictSuperAdmins {
+	if user.IsSuperAdmin && !restrictSuperAdmins {
 		return filters
 	}
 
@@ -77,12 +83,6 @@ func (h *ReportHandler) injectAccessScope(c *fiber.Ctx, dataSource string, filte
 		}
 	}
 	if hasClassification && hasLocation {
-		return filters
-	}
-
-	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
-	if err != nil || user == nil {
 		return filters
 	}
 
