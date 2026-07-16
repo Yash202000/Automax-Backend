@@ -283,7 +283,7 @@ func main() {
 	kpiPerformanceHandler := handlers.NewKpiPerformanceHandler(db, kpiWorkflowService, actionLogService)
 
 	// KPI Engagement handler (metrics, evidence, collaborators, check-ins, comments, activity)
-	kpiEngagementHandler := handlers.NewKpiEngagementHandler(db, actionLogService)
+	kpiEngagementHandler := handlers.NewKpiEngagementHandler(db, actionLogService, minioStorage)
 
 	// KPI Dashboard handler
 	kpiDashboardHandler := handlers.NewKpiDashboardHandler(db)
@@ -1231,6 +1231,7 @@ func main() {
 	// KPI engagement features — metrics, evidence, collaborators, check-ins, comments, activity
 	kpi.Get("/:type/:id/metrics", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListMetrics)
 	kpi.Post("/:type/:id/metrics", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.CreateMetric)
+	kpi.Post("/:type/:id/attachment", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.UploadAttachment)
 	kpi.Put("/metrics/:id", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.UpdateMetric)
 	kpi.Put("/metrics/:id/value", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.UpdateMetricValue)
 	kpi.Delete("/metrics/:id", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.DeleteMetric)
@@ -1238,6 +1239,7 @@ func main() {
 	kpi.Get("/:type/:id/evidence", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListEvidence)
 	kpi.Post("/:type/:id/evidence", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.CreateEvidence)
 	kpi.Delete("/evidence/:id", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.DeleteEvidence)
+	kpi.Get("/evidence/:id/download", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.DownloadEvidence)
 
 	kpi.Get("/:type/:id/collaborators", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListCollaborators)
 	kpi.Post("/:type/:id/collaborators", authMiddleware.RequirePermission("kpi:assign"), kpiEngagementHandler.AddCollaborator)

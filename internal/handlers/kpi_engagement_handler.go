@@ -6,6 +6,7 @@ import (
 	"github.com/automax/backend/internal/middleware"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
+	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
@@ -26,13 +27,15 @@ type KpiEngagementHandler struct {
 	db           *gorm.DB
 	validator    *validator.Validate
 	actionLogSvc services.ActionLogService
+	storage      *storage.MinIOStorage
 }
 
-func NewKpiEngagementHandler(db *gorm.DB, actionLogSvc services.ActionLogService) *KpiEngagementHandler {
+func NewKpiEngagementHandler(db *gorm.DB, actionLogSvc services.ActionLogService, storage *storage.MinIOStorage) *KpiEngagementHandler {
 	return &KpiEngagementHandler{
 		db:           db,
 		validator:    validator.New(),
 		actionLogSvc: actionLogSvc,
+		storage:      storage,
 	}
 }
 
@@ -125,24 +128,6 @@ func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
 	}
 
-	// An attachment on a metric is really just evidence for this KPI — create
-	// a real KpiEvidence row so it shows up as a manageable entry under the
-	// Evidence tab instead of being siloed on the metric.
-	if req.AttachmentFileURL != "" {
-		title := req.AttachmentTitle
-		if title == "" {
-			title = fmt.Sprintf("Attachment for metric: %s", req.Name)
-		}
-		h.db.WithContext(c.UserContext()).Create(&models.KpiEvidence{
-			KpiID:        id,
-			KpiType:      kpiType,
-			Title:        title,
-			Description:  fmt.Sprintf("Uploaded with metric %q", req.Name),
-			FileURL:      req.AttachmentFileURL,
-			UploadedByID: userID,
-		})
-	}
-
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
 		Action:      "create",
 		Module:      "kpi",
@@ -152,6 +137,39 @@ func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
 	})
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, "", item)
+}
+
+// UploadAttachment uploads a real file for this KPI (used for a metric's
+// attachment or a standalone evidence upload) to object storage and hands
+// back a reference — it does not create a KpiMetric/KpiEvidence row itself,
+// callers pass the returned fields through to CreateMetric/CreateEvidence.
+func (h *KpiEngagementHandler) UploadAttachment(c *fiber.Ctx) error {
+	kpiType, id, err := h.parseTypeAndID(c)
+	if err != nil || !h.kpiExists(kpiType, id) {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	file, err := c.FormFile("file")
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "no_file_uploaded"))
+	}
+	src, err := file.Open()
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_read_file"))
+	}
+	defer src.Close()
+
+	folder := fmt.Sprintf("kpi/%s/%s", kpiType, id.String())
+	filePath, err := h.storage.UploadFile(c.UserContext(), src, file, folder)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_upload_file"))
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusCreated, "", fiber.Map{
+		"file_url":  filePath,
+		"file_name": file.Filename,
+		"file_size": file.Size,
+		"mime_type": file.Header.Get("Content-Type"),
+	})
 }
 
 func (h *KpiEngagementHandler) UpdateMetric(c *fiber.Ctx) error {
@@ -255,6 +273,7 @@ func (h *KpiEngagementHandler) ListEvidence(c *fiber.Ctx) error {
 	var items []models.KpiEvidence
 	if err := h.db.WithContext(c.UserContext()).
 		Preload("UploadedBy").
+		Preload("Metric").
 		Where("kpi_id = ? AND kpi_type = ?", id, kpiType).
 		Order("created_at DESC").Find(&items).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
@@ -275,18 +294,27 @@ func (h *KpiEngagementHandler) CreateEvidence(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	evidenceType := req.EvidenceType
+	if evidenceType == "" {
+		evidenceType = "Report"
+	}
 	item := &models.KpiEvidence{
 		KpiID:        id,
 		KpiType:      kpiType,
 		Title:        req.Title,
+		EvidenceType: evidenceType,
 		Description:  req.Description,
+		MetricID:     req.MetricID,
 		FileURL:      req.FileURL,
+		FileName:     req.FileName,
+		FileSize:     req.FileSize,
+		MimeType:     req.MimeType,
 		UploadedByID: userID,
 	}
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
 	}
-	h.db.WithContext(c.UserContext()).Preload("UploadedBy").First(item, item.ID)
+	h.db.WithContext(c.UserContext()).Preload("UploadedBy").Preload("Metric").First(item, item.ID)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
 		Action:      "create",
@@ -320,6 +348,31 @@ func (h *KpiEngagementHandler) DeleteEvidence(c *fiber.Ctx) error {
 	})
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
+}
+
+// DownloadEvidence streams a real-uploaded evidence file back from storage.
+// Evidence rows created the legacy way (a user-typed external URL, no
+// FileName) have nothing in object storage to stream — callers should just
+// link to file_url directly in that case.
+func (h *KpiEngagementHandler) DownloadEvidence(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	var item models.KpiEvidence
+	if err := h.db.WithContext(c.UserContext()).First(&item, id).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	if item.FileName == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "not_found"))
+	}
+	file, err := h.storage.GetFile(c.UserContext(), item.FileURL)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_retrieve_file"))
+	}
+	c.Set("Content-Type", item.MimeType)
+	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", item.FileName))
+	return c.SendStream(file)
 }
 
 // ─── Collaborators ──────────────────────────────────────────────────────────
