@@ -558,12 +558,16 @@ func (h *UserHandler) UpdateUserCallStatus(c *fiber.Ctx) error {
 	validStatuses := map[string]bool{
 		"available": true,
 		"in_call":   true,
+		"online":    true,
 		"offline":   true,
 	}
 	if !validStatuses[req.Status] {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "invalid_status", req.Status))
 	}
 
+	if strings.EqualFold(req.Status, "available") {
+		req.Status = string(models.CallStatusOnline) // "online"
+	}
 	// Call Service
 	resp, err := h.userService.UpdateUserCallStatus(c.UserContext(), userExt, req.Status)
 	if err != nil {
