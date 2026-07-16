@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -52,47 +51,20 @@ var incidentDataSources = map[string]bool{
 // If the caller already supplied a classification_id or location_id dynamic
 // filter, the corresponding user-scope filter is skipped.
 func (h *ReportHandler) injectAccessScope(c *fiber.Ctx, dataSource string, filters []models.ReportFilterConfig) []models.ReportFilterConfig {
-	log.Printf("[ReportScope] START dataSource=%s, incoming filters=%d", dataSource, len(filters))
-
 	// RESTRICT_REPORT_SCOPE=true enables user-level classification/location scoping on reports
-	envVal := os.Getenv("RESTRICT_REPORT_SCOPE")
-	log.Printf("[ReportScope] RESTRICT_REPORT_SCOPE env raw=%q", envVal)
-	if !strings.EqualFold(strings.TrimSpace(envVal), "true") {
-		log.Printf("[ReportScope] RESTRICT_REPORT_SCOPE not true, returning unmodified")
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_REPORT_SCOPE")), "true") {
 		return filters
 	}
 
 	if !incidentDataSources[dataSource] {
-		log.Printf("[ReportScope] dataSource=%s not in incidentDataSources, returning unmodified", dataSource)
 		return filters
 	}
-
-	rawUserID := c.Locals(constants.ContextKeys.UserID)
-	log.Printf("[ReportScope] rawUserID from c.Locals: %v (type: %T)", rawUserID, rawUserID)
-	userID := rawUserID.(uuid.UUID)
-
-	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
-	if err != nil {
-		log.Printf("[ReportScope] FindByIDWithRelations error: %v", err)
-		return filters
-	}
-	if user == nil {
-		log.Printf("[ReportScope] FindByIDWithRelations returned nil user")
-		return filters
-	}
-
-	log.Printf("[ReportScope] user=%s email=%s IsSuperAdmin=%v", user.ID, user.Email, user.IsSuperAdmin)
 
 	// Super admins bypass scoping unless RESTRICT_ADMIN_SCOPE=true
-	adminEnv := os.Getenv("RESTRICT_ADMIN_SCOPE")
-	restrictSuperAdmins := strings.EqualFold(strings.TrimSpace(adminEnv), "true")
-	log.Printf("[ReportScope] RESTRICT_ADMIN_SCOPE raw=%q restrictSuperAdmins=%v", adminEnv, restrictSuperAdmins)
-
-	if user.IsSuperAdmin && !restrictSuperAdmins {
-		log.Printf("[ReportScope] SUPER ADMIN BYPASS — returning unmodified filters")
+	restrictSuperAdmins := strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_ADMIN_SCOPE")), "true")
+	if user, ok := c.Locals(constants.ContextKeys.User).(*models.User); ok && user != nil && user.IsSuperAdmin && !restrictSuperAdmins {
 		return filters
 	}
-	log.Printf("[ReportScope] NOT bypassing: IsSuperAdmin=%v restrictSuperAdmins=%v", user.IsSuperAdmin, restrictSuperAdmins)
 
 	hasClassification := false
 	hasLocation := false
@@ -105,6 +77,12 @@ func (h *ReportHandler) injectAccessScope(c *fiber.Ctx, dataSource string, filte
 		}
 	}
 	if hasClassification && hasLocation {
+		return filters
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
+	if err != nil || user == nil {
 		return filters
 	}
 
@@ -138,25 +116,6 @@ func (h *ReportHandler) injectAccessScope(c *fiber.Ctx, dataSource string, filte
 			Operator: "in",
 			Value:    locIDs,
 		})
-	}
-
-	// Auto-inject my_record for record-level data sources so non-admin users
-	// only see incidents/requests they are reporter, assignee, or co-assignee of.
-	if dataSource == "incidents" || dataSource == "requests" {
-		hasMyRecord := false
-		for _, f := range filters {
-			if f.Field == "my_record" && f.Value != nil {
-				hasMyRecord = true
-				break
-			}
-		}
-		if !hasMyRecord {
-			filters = append(filters, models.ReportFilterConfig{
-				Field:    "my_record",
-				Operator: "equals",
-				Value:    userID.String(),
-			})
-		}
 	}
 
 	return filters
