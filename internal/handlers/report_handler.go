@@ -60,15 +60,9 @@ func (h *ReportHandler) injectAccessScope(c *fiber.Ctx, dataSource string, filte
 		return filters
 	}
 
-	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
-	if err != nil || user == nil {
-		return filters
-	}
-
 	// Super admins bypass scoping unless RESTRICT_ADMIN_SCOPE=true
 	restrictSuperAdmins := strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_ADMIN_SCOPE")), "true")
-	if user.IsSuperAdmin && !restrictSuperAdmins {
+	if user, ok := c.Locals(constants.ContextKeys.User).(*models.User); ok && user != nil && user.IsSuperAdmin && !restrictSuperAdmins {
 		return filters
 	}
 
@@ -83,6 +77,12 @@ func (h *ReportHandler) injectAccessScope(c *fiber.Ctx, dataSource string, filte
 		}
 	}
 	if hasClassification && hasLocation {
+		return filters
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
+	if err != nil || user == nil {
 		return filters
 	}
 
@@ -116,25 +116,6 @@ func (h *ReportHandler) injectAccessScope(c *fiber.Ctx, dataSource string, filte
 			Operator: "in",
 			Value:    locIDs,
 		})
-	}
-
-	// Auto-inject my_record for record-level data sources so non-admin users
-	// only see incidents/requests they are reporter, assignee, or co-assignee of.
-	if dataSource == "incidents" || dataSource == "requests" {
-		hasMyRecord := false
-		for _, f := range filters {
-			if f.Field == "my_record" && f.Value != nil {
-				hasMyRecord = true
-				break
-			}
-		}
-		if !hasMyRecord {
-			filters = append(filters, models.ReportFilterConfig{
-				Field:    "my_record",
-				Operator: "equals",
-				Value:    userID.String(),
-			})
-		}
 	}
 
 	return filters
