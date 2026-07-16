@@ -461,8 +461,6 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 				}
 			}
 
-			// WhatsApp chatbot incidents are filed on behalf of a citizen, so (like agents)
-			// dedupe against the caller's phone rather than the bot's reporter identity.
 			// WHATSAPP_SOURCE holds the chatbot's source string (e.g. "WhatsApp Chatbot").
 			whatsappSource := strings.TrimSpace(os.Getenv("WHATSAPP_SOURCE"))
 			isWhatsApp := whatsappSource != "" && strings.EqualFold(strings.TrimSpace(req.Source), whatsappSource)
