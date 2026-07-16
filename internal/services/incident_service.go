@@ -461,11 +461,17 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 				}
 			}
 
-			// For agents acting on behalf of citizens, scope the duplicate check to the
-			// citizen's identity rather than the agent's reporterID, so incidents filed
-			// for different citizens are never incorrectly blocked.
+			// WhatsApp chatbot incidents are filed on behalf of a citizen, so (like agents)
+			// dedupe against the caller's phone rather than the bot's reporter identity.
+			// WHATSAPP_SOURCE holds the chatbot's source string (e.g. "WhatsApp Chatbot").
+			whatsappSource := strings.TrimSpace(os.Getenv("WHATSAPP_SOURCE"))
+			isWhatsApp := whatsappSource != "" && strings.EqualFold(strings.TrimSpace(req.Source), whatsappSource)
+
+			// For agents (and the WhatsApp chatbot) acting on behalf of citizens, scope the
+			// duplicate check to the citizen's identity rather than the agent's reporterID, so
+			// incidents filed for different citizens are never incorrectly blocked.
 			var openIncidents []models.Incident
-			if isAgent && req.ReporterPhone != "" {
+			if (isAgent || isWhatsApp) && req.ReporterPhone != "" {
 				openIncidents, err = s.incidentRepo.FindOpenIncidentsForDuplicateCheckByCaller(
 					ctx, req.ReporterPhone,
 				)
