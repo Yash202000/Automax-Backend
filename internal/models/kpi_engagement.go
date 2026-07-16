@@ -57,11 +57,6 @@ type KpiMetricRequest struct {
 	Formula       string     `json:"formula"`
 	StartDate     *time.Time `json:"start_date"`
 	DueDate       *time.Time `json:"due_date"`
-	// AttachmentTitle/AttachmentFileURL are optional — when FileURL is set on
-	// create, a KpiEvidence row is also created so the file shows up under
-	// the KPI's Evidence tab as a real, manageable entry.
-	AttachmentTitle   string `json:"attachment_title"`
-	AttachmentFileURL string `json:"attachment_file_url"`
 }
 
 type KpiMetricValueRequest struct {
@@ -70,15 +65,30 @@ type KpiMetricValueRequest struct {
 
 // ─── KPI Evidence ───────────────────────────────────────────────────────────
 // Attached to the KPI dictionary entry itself (not a specific performance
-// period — see KpiPerformanceEvidence for that). Same simple text/URL shape.
+// period — see KpiPerformanceEvidence for that), mirroring Goal's Evidence
+// (Title/EvidenceType/Description-as-comment/optional Metric link + a real
+// uploaded file), minus Goal's workflow-gated approval.
 
 type KpiEvidence struct {
-	ID           uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
-	KpiID        uuid.UUID      `gorm:"type:uuid;index;not null" json:"kpi_id"`
-	KpiType      string         `gorm:"size:20;index;not null" json:"kpi_type"`
-	Title        string         `gorm:"size:255;not null" json:"title"`
-	Description  string         `gorm:"type:text" json:"description"`
+	ID           uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
+	KpiID        uuid.UUID `gorm:"type:uuid;index;not null" json:"kpi_id"`
+	KpiType      string    `gorm:"size:20;index;not null" json:"kpi_type"`
+	Title        string    `gorm:"size:255;not null" json:"title"`
+	EvidenceType string    `gorm:"size:50;not null;default:'Report'" json:"evidence_type"`
+	Description  string    `gorm:"type:text" json:"description"`
+	// MetricID optionally ties this evidence to one of the KPI's metrics
+	// (e.g. proof for a specific sub-metric's actual value); nil means it's
+	// evidence for the KPI as a whole.
+	MetricID *uuid.UUID `gorm:"type:uuid;index" json:"metric_id"`
+	Metric   *KpiMetric `gorm:"foreignKey:MetricID" json:"metric,omitempty"`
+	// FileURL holds either a storage object key (files uploaded via
+	// POST /kpi/:type/:id/attachment, downloaded via the dedicated download
+	// route) or, for evidence created the legacy way, a plain external URL.
+	// FileName/FileSize/MimeType are only populated for real uploads.
 	FileURL      string         `gorm:"size:500" json:"file_url"`
+	FileName     string         `gorm:"size:255" json:"file_name"`
+	FileSize     int64          `json:"file_size"`
+	MimeType     string         `gorm:"size:100" json:"mime_type"`
 	UploadedByID uuid.UUID      `gorm:"type:uuid;not null" json:"uploaded_by_id"`
 	UploadedBy   *User          `gorm:"foreignKey:UploadedByID" json:"uploaded_by,omitempty"`
 	CreatedAt    time.Time      `json:"created_at"`
@@ -93,9 +103,14 @@ func (e *KpiEvidence) BeforeCreate(tx *gorm.DB) error {
 }
 
 type KpiEvidenceRequest struct {
-	Title       string `json:"title" validate:"required"`
-	Description string `json:"description"`
-	FileURL     string `json:"file_url"`
+	Title        string     `json:"title" validate:"required"`
+	EvidenceType string     `json:"evidence_type"`
+	Description  string     `json:"description"`
+	MetricID     *uuid.UUID `json:"metric_id"`
+	FileURL      string     `json:"file_url"`
+	FileName     string     `json:"file_name"`
+	FileSize     int64      `json:"file_size"`
+	MimeType     string     `json:"mime_type"`
 }
 
 // ─── KPI Collaborators ──────────────────────────────────────────────────────
