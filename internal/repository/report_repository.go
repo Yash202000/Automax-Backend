@@ -785,7 +785,7 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			Joins("LEFT JOIN users as creator ON incidents.reporter_id = creator.id AND creator.deleted_at IS NULL").
 			Joins("LEFT JOIN users as assignees ON incidents.assignee_id = assignees.id AND assignees.deleted_at IS NULL").
 			Joins("INNER JOIN workflows ON incidents.workflow_id = workflows.id AND workflows.record_type = ? AND workflows.deleted_at IS NULL", "incident").
-			Joins("INNER JOIN workflow_states ON incidents.current_state_id = workflow_states.id AND workflow_states.deleted_at IS NULL").
+			Joins("LEFT JOIN workflow_states ON incidents.current_state_id = workflow_states.id AND workflow_states.deleted_at IS NULL").
 			Joins("LEFT JOIN classifications ON incidents.classification_id = classifications.id AND classifications.deleted_at IS NULL").
 			Joins("LEFT JOIN departments ON incidents.department_id = departments.id AND departments.deleted_at IS NULL").
 			Joins("LEFT JOIN locations ON incidents.location_id = locations.id AND locations.deleted_at IS NULL")
