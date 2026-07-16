@@ -233,7 +233,7 @@ func main() {
 	incidentHandler.SetLookupRepo(lookupRepo)
 	incidentMergeHandler := handlers.NewIncidentMergeHandler(incidentMergeService, userRepo)
 	websocketHandler := handlers.NewWebSocketHandler(wsHub)
-	reportHandler := handlers.NewReportHandler(reportService)
+	reportHandler := handlers.NewReportHandler(reportService, userRepo)
 	reportTemplateHandler := handlers.NewReportTemplateHandler(reportTemplateService)
 	lookupHandler := handlers.NewLookupHandler(lookupRepo)
 	applicationLinkHandler := handlers.NewApplicationLinkHandler(applicationLinkService, minioStorage)

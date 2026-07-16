@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"os"
 	"strconv"
+	"strings"
 
 	"github.com/automax/backend/internal/models"
+	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
 	cstmContext "github.com/automax/backend/pkg/context"
@@ -17,14 +20,105 @@ import (
 
 type ReportHandler struct {
 	service   services.ReportService
+	userRepo  repository.UserRepository
 	validator *validator.Validate
 }
 
-func NewReportHandler(service services.ReportService) *ReportHandler {
+func NewReportHandler(service services.ReportService, userRepo repository.UserRepository) *ReportHandler {
 	return &ReportHandler{
 		service:   service,
+		userRepo:  userRepo,
 		validator: validator.New(),
 	}
+}
+
+// incidentDataSources lists data sources that query the incidents table
+// and support classification_id / location_id filtering.
+var incidentDataSources = map[string]bool{
+	"incidents":                 true,
+	"requests":                  true,
+	"users_performance":         true,
+	"locations_by_count":        true,
+	"locations_by_status":       true,
+	"classifications_by_count":  true,
+	"classifications_by_status": true,
+	"departments_by_count":      true,
+	"departments_by_status":     true,
+}
+
+// injectAccessScope restricts report results to the calling user's assigned
+// classifications and locations — mirroring ListIncidents / GetStatsV2 scoping.
+// If the caller already supplied a classification_id or location_id dynamic
+// filter, the corresponding user-scope filter is skipped.
+func (h *ReportHandler) injectAccessScope(c *fiber.Ctx, dataSource string, filters []models.ReportFilterConfig) []models.ReportFilterConfig {
+	// RESTRICT_REPORT_SCOPE=true enables user-level classification/location scoping on reports
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_REPORT_SCOPE")), "true") {
+		return filters
+	}
+
+	if !incidentDataSources[dataSource] {
+		return filters
+	}
+
+	// Super admins bypass scoping unless RESTRICT_ADMIN_SCOPE=true
+	restrictSuperAdmins := strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_ADMIN_SCOPE")), "true")
+	if user, ok := c.Locals(constants.ContextKeys.User).(*models.User); ok && user != nil && user.IsSuperAdmin && !restrictSuperAdmins {
+		return filters
+	}
+
+	hasClassification := false
+	hasLocation := false
+	for _, f := range filters {
+		if f.Field == "classification_id" && f.Value != nil {
+			hasClassification = true
+		}
+		if f.Field == "location_id" && f.Value != nil {
+			hasLocation = true
+		}
+	}
+	if hasClassification && hasLocation {
+		return filters
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
+	if err != nil || user == nil {
+		return filters
+	}
+
+	noAccessSentinel := []interface{}{"00000000-0000-0000-0000-000000000000"}
+
+	if !hasClassification {
+		classIDs := make([]interface{}, 0, len(user.Classifications))
+		for _, cls := range user.Classifications {
+			classIDs = append(classIDs, cls.ID.String())
+		}
+		if len(classIDs) == 0 {
+			classIDs = noAccessSentinel
+		}
+		filters = append(filters, models.ReportFilterConfig{
+			Field:    "classification_id",
+			Operator: "in",
+			Value:    classIDs,
+		})
+	}
+
+	if !hasLocation {
+		locIDs := make([]interface{}, 0, len(user.Locations))
+		for _, loc := range user.Locations {
+			locIDs = append(locIDs, loc.ID.String())
+		}
+		if len(locIDs) == 0 {
+			locIDs = noAccessSentinel
+		}
+		filters = append(filters, models.ReportFilterConfig{
+			Field:    "location_id",
+			Operator: "in",
+			Value:    locIDs,
+		})
+	}
+
+	return filters
 }
 
 // Report CRUD
@@ -195,6 +289,18 @@ func (h *ReportHandler) ExecuteReport(c *fiber.Ctx) error {
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
+	// Fetch the saved report to get DataSource and stored filters for access scoping.
+	report, err := h.service.GetReport(c.UserContext(), id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+	// Mirror the service's filter resolution: use request filters if provided, else stored.
+	filters := report.Config.Filters
+	if len(req.Filters) > 0 {
+		filters = req.Filters
+	}
+	req.Filters = h.injectAccessScope(c, report.DataSource, filters)
+
 	result, err := h.service.ExecuteReport(c.UserContext(), id, &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
@@ -212,6 +318,8 @@ func (h *ReportHandler) PreviewReport(c *fiber.Ctx) error {
 	if req.DataSource == "" {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "data_source_required"))
 	}
+
+	req.Config.Filters = h.injectAccessScope(c, req.DataSource, req.Config.Filters)
 
 	result, err := h.service.PreviewReport(c.UserContext(), &req)
 	if err != nil {
@@ -243,6 +351,8 @@ func (h *ReportHandler) QueryReport(c *fiber.Ctx) error {
 		req.Limit = 50
 	}
 
+	req.Filters = h.injectAccessScope(c, req.DataSource, req.Filters)
+
 	ctx := cstmContext.WithReportDataSource(c.UserContext(), req.DataSource)
 	ctx = cstmContext.WithReportColumns(ctx, req.Columns)
 	ctx = cstmContext.WithReportTimezone(ctx, req.Timezone)
@@ -266,6 +376,8 @@ func (h *ReportHandler) ExportReport(c *fiber.Ctx) error {
 			"errors":  validationErrors,
 		})
 	}
+
+	req.Filters = h.injectAccessScope(c, req.DataSource, req.Filters)
 
 	// Use timezone from top-level field, fall back to options.timezone
 	tz := req.Timezone
