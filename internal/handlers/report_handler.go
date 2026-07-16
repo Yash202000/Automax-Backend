@@ -289,6 +289,18 @@ func (h *ReportHandler) ExecuteReport(c *fiber.Ctx) error {
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
+	// Fetch the saved report to get DataSource and stored filters for access scoping.
+	report, err := h.service.GetReport(c.UserContext(), id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+	// Mirror the service's filter resolution: use request filters if provided, else stored.
+	filters := report.Config.Filters
+	if len(req.Filters) > 0 {
+		filters = req.Filters
+	}
+	req.Filters = h.injectAccessScope(c, report.DataSource, filters)
+
 	result, err := h.service.ExecuteReport(c.UserContext(), id, &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
