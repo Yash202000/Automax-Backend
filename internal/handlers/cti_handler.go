@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 )
 
 // CTIHandler exchanges the server-held Cintrix API key for a per-agent,
@@ -27,16 +29,18 @@ type CTIHandler struct {
 	keyID            string
 	keySecret        string
 	callLogRepo      repository.CallLogRepository
+	userRepo         repository.UserRepository
 	httpClient       *http.Client
 	noRedirectClient *http.Client
 }
 
-func NewCTIHandler(cintrixURL, keyID, keySecret string, callLogRepo repository.CallLogRepository) *CTIHandler {
+func NewCTIHandler(cintrixURL, keyID, keySecret string, callLogRepo repository.CallLogRepository, userRepo repository.UserRepository) *CTIHandler {
 	return &CTIHandler{
 		cintrixURL:  strings.TrimRight(cintrixURL, "/"),
 		keyID:       keyID,
 		keySecret:   keySecret,
 		callLogRepo: callLogRepo,
+		userRepo:    userRepo,
 		httpClient:  &http.Client{Timeout: 10 * time.Second},
 		noRedirectClient: &http.Client{
 			Timeout: 10 * time.Second,
@@ -98,7 +102,40 @@ func (h *CTIHandler) GetWidgetToken(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "invalid cintrix response"})
 	}
 	out["cintrix_url"] = h.cintrixURL
+
+	// Best-effort: persist the Cintrix-allocated softphone extension onto the
+	// authenticated user so it always reflects the widget's current
+	// assignment. Never fail the token response over this.
+	if ext, ok := out["extension"].(string); ok && strings.TrimSpace(ext) != "" {
+		h.syncUserExtension(c, ext)
+	}
+
 	return c.JSON(out)
+}
+
+// syncUserExtension persists the Cintrix-allocated extension onto the
+// authenticated user. Best-effort: any failure is logged and swallowed.
+func (h *CTIHandler) syncUserExtension(c *fiber.Ctx, ext string) {
+	if h.userRepo == nil {
+		return
+	}
+	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	if !ok {
+		log.Printf("cti: could not resolve user id from context to sync extension")
+		return
+	}
+	user, err := h.userRepo.FindByID(c.UserContext(), userID)
+	if err != nil || user == nil {
+		log.Printf("cti: could not load user %s to sync extension: %v", userID, err)
+		return
+	}
+	if user.Extension == ext {
+		return
+	}
+	user.Extension = ext
+	if err := h.userRepo.Update(c.UserContext(), user); err != nil {
+		log.Printf("cti: failed to sync extension for user %s: %v", userID, err)
+	}
 }
 
 // GetRecording godoc: GET /api/v1/cti/recording?call_uuid=<uuid> (authenticated).
