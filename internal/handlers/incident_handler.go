@@ -322,6 +322,13 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 			// User has no locations assigned — nothing should be visible
 			filter.LocationID = noAccessSentinel
 		}
+
+		// Pass user's role IDs so List() can expand my_record with state_viewable_roles
+		roleIDs := make([]uuid.UUID, 0, len(user.Roles))
+		for _, r := range user.Roles {
+			roleIDs = append(roleIDs, r.ID)
+		}
+		filter.UserRoleIDs = roleIDs
 	}
 
 	incidents, total, err := h.service.ListIncidents(c.UserContext(), filter)

@@ -252,7 +252,17 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		query = query.Where("reporter_id IN ?", filter.ReporterID)
 	}
 	if filter.MyRecord != nil {
-		query = query.Where("reporter_id = ? OR assignee_id = ? OR id IN (Select incident_id from incident_assignees where user_id = ?)", filter.MyRecord, filter.MyRecord, filter.MyRecord)
+		if len(filter.UserRoleIDs) > 0 {
+			// Expand to include incidents in states where the user's role has viewable access
+			query = query.Where(
+				`reporter_id = ? OR assignee_id = ?
+				OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)
+				OR current_state_id IN (SELECT workflow_state_id FROM state_viewable_roles WHERE role_id IN ?)`,
+				filter.MyRecord, filter.MyRecord, filter.MyRecord, filter.UserRoleIDs,
+			)
+		} else {
+			query = query.Where("reporter_id = ? OR assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", filter.MyRecord, filter.MyRecord, filter.MyRecord)
+		}
 	}
 
 	if filter.ReporterPhone != "" {
@@ -928,7 +938,16 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 				filter.AssigneeID, filter.AssigneeID)
 		}
 		if filter.MyRecord != nil {
-			q = q.Where("incidents.reporter_id = ? OR incidents.assignee_id = ? OR incidents.id IN (Select incident_id from incident_assignees where user_id = ?)", filter.MyRecord, filter.MyRecord, filter.MyRecord)
+			if len(filter.UserRoleIDs) > 0 {
+				q = q.Where(
+					`incidents.reporter_id = ? OR incidents.assignee_id = ?
+					OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)
+					OR incidents.current_state_id IN (SELECT workflow_state_id FROM state_viewable_roles WHERE role_id IN ?)`,
+					filter.MyRecord, filter.MyRecord, filter.MyRecord, filter.UserRoleIDs,
+				)
+			} else {
+				q = q.Where("incidents.reporter_id = ? OR incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", filter.MyRecord, filter.MyRecord, filter.MyRecord)
+			}
 		}
 		if len(filter.ClassificationID) > 0 {
 			q = q.Where("incidents.classification_id IN ?", filter.ClassificationID)
