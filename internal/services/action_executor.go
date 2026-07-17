@@ -146,12 +146,15 @@ func (e *actionExecutor) executeNotification(ctx context.Context, action *models
 	title := e.replacePlaceholders(config.Title, incident, transition, performedBy)
 	message := e.replacePlaceholders(config.Message, incident, transition, performedBy)
 
-	_, err := e.notificationService.SendNotification(
+	result, err := e.notificationService.SendNotification(
 		ctx, "notification", nil, "en",
 		emails, nil, nil,
 		title, message,
 		nil, nil, nil, nil,
 	)
+	if result != nil && result.SentLog != nil && incident != nil {
+		_ = e.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
+	}
 	if err != nil {
 		return fmt.Errorf("notification send failed: %w", err)
 	}
@@ -235,12 +238,15 @@ func (e *actionExecutor) executeEmail(ctx context.Context, action *models.Transi
 		sentByID = &performedBy.ID
 	}
 
-	_, err := e.notificationService.SendNotification(
+	result, err := e.notificationService.SendNotification(
 		ctx, "email", templateCode, lang,
 		emails, nil, nil,
 		subject, body,
 		vars, nil, sentByID, nil,
 	)
+	if result != nil && result.SentLog != nil && incident != nil {
+		_ = e.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
+	}
 	if err != nil {
 		log.Printf("[EMAIL-ACTION] transition=%q incident=%s emails=%v template=%q — FAILED: %v",
 			transitionName, incident.IncidentNumber, emails, config.TemplateCode, err)
@@ -323,12 +329,15 @@ func (e *actionExecutor) executeSms(ctx context.Context, action *models.Transiti
 		smsSentByID = &performedBy.ID
 	}
 
-	_, err := e.notificationService.SendNotification(
+	result, err := e.notificationService.SendNotification(
 		ctx, "sms", templateCode, lang,
 		phones, nil, nil,
 		"", message,
 		vars, nil, smsSentByID, nil,
 	)
+	if result != nil && result.SentLog != nil && incident != nil {
+		_ = e.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
+	}
 	if err != nil {
 		log.Printf("[SMS-ACTION] transition=%q incident=%s phones=%v template=%q — FAILED: %v",
 			transitionName, incident.IncidentNumber, phones, config.TemplateCode, err)

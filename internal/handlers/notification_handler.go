@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/automax/backend/internal/models"
+	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/pkg/constants"
@@ -20,15 +22,59 @@ import (
 )
 
 type NotificationHandler struct {
-	service *services.NotificationService
-	storage *storage.MinIOStorage
+	service      *services.NotificationService
+	storage      *storage.MinIOStorage
+	userRepo     repository.UserRepository
+	incidentRepo repository.IncidentRepository
 }
 
-func NewNotificationHandler(service *services.NotificationService, storage *storage.MinIOStorage) *NotificationHandler {
+func NewNotificationHandler(
+	service *services.NotificationService,
+	storage *storage.MinIOStorage,
+	userRepo repository.UserRepository,
+	incidentRepo repository.IncidentRepository,
+) *NotificationHandler {
 	return &NotificationHandler{
-		service: service,
-		storage: storage,
+		service:      service,
+		storage:      storage,
+		userRepo:     userRepo,
+		incidentRepo: incidentRepo,
 	}
+}
+
+// canViewIncident checks whether the user has visibility into the given incident,
+// mirroring the classification/location scoping used in IncidentHandler.ListIncidents.
+func (h *NotificationHandler) canViewIncident(ctx context.Context, userID uuid.UUID, incidentID uuid.UUID) (bool, error) {
+	user, err := h.userRepo.FindByIDWithRelations(ctx, userID)
+	if err != nil || user == nil {
+		return false, err
+	}
+	if user.IsSuperAdmin {
+		return true, nil
+	}
+
+	incident, err := h.incidentRepo.FindByID(ctx, incidentID)
+	if err != nil || incident == nil {
+		return false, err
+	}
+
+	classOK := incident.ClassificationID == nil
+	for _, cls := range user.Classifications {
+		if incident.ClassificationID != nil && cls.ID == *incident.ClassificationID {
+			classOK = true
+			break
+		}
+	}
+
+	locOK := incident.LocationID == nil
+	for _, loc := range user.Locations {
+		if incident.LocationID != nil && loc.ID == *incident.LocationID {
+			locOK = true
+			break
+		}
+	}
+
+	return classOK && locOK, nil
 }
 
 // SendGridInboundWebhook handles incoming emails from SendGrid Inbound Parse
@@ -417,6 +463,20 @@ func (h *NotificationHandler) List(c *fiber.Ctx) error {
 
 	if filter.Limit < 1 || filter.Limit > 100 {
 		filter.Limit = 20
+	}
+
+	if filter.IncidentID != nil {
+		// Incident communication history request: this is not "my inbox" any more,
+		// so drop the personal sent_by/received_by scoping and instead require that
+		// the caller can actually view this specific incident.
+		filter.UserID = nil
+		allowed, err := h.canViewIncident(c.UserContext(), userID, *filter.IncidentID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		}
+		if !allowed {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, "Insufficient permissions")
+		}
 	}
 
 	if endDate := c.Query("end_date"); endDate != "" {

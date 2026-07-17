@@ -326,7 +326,14 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 	}
 
 	if status == "failed" {
-		return nil, fmt.Errorf("notification delivery failed")
+		// Still return the result alongside the error: the log row above was already
+		// persisted with status "failed", and callers that want to tag it (e.g. with
+		// an incident_id for the communication history) need SentLog.ID even on failure.
+		// Existing callers that only check `err != nil` before returning are unaffected.
+		return &SendNotificationResult{
+			SentLog:     log,
+			InboxLogIDs: inboxLogIDs,
+		}, fmt.Errorf("notification delivery failed")
 	}
 
 	return &SendNotificationResult{
@@ -828,6 +835,12 @@ func (s *NotificationService) SetArContentOnLogs(ctx context.Context, ids []uuid
 	return s.logRepo.SetArContent(ctx, ids, subjectAr, bodyAr)
 }
 
+// SetIncidentIDOnLogs tags notification log rows with the incident they belong to,
+// so they can be surfaced in the incident's Communication history tab.
+func (s *NotificationService) SetIncidentIDOnLogs(ctx context.Context, ids []uuid.UUID, incidentID uuid.UUID) error {
+	return s.logRepo.SetIncidentID(ctx, ids, incidentID)
+}
+
 // placeholderRe matches {{key}} and {{.key}} patterns (key may contain letters, digits, underscores).
 var placeholderRe = regexp.MustCompile(`\{\{\.?([A-Za-z0-9_]+)\}\}`)
 
@@ -842,6 +855,30 @@ func (s *NotificationService) SendByActionType(
 	variables map[string]string,
 	sentBy *uuid.UUID,
 ) error {
+	return s.sendByActionType(ctx, actionType, channel, language, to, variables, sentBy, nil)
+}
+
+// SendByActionTypeForIncident behaves like SendByActionType but additionally tags every
+// resulting notification log with incidentID, so it surfaces in the incident's communication history.
+func (s *NotificationService) SendByActionTypeForIncident(
+	ctx context.Context,
+	actionType, channel, language string,
+	to []string,
+	variables map[string]string,
+	sentBy *uuid.UUID,
+	incidentID uuid.UUID,
+) error {
+	return s.sendByActionType(ctx, actionType, channel, language, to, variables, sentBy, &incidentID)
+}
+
+func (s *NotificationService) sendByActionType(
+	ctx context.Context,
+	actionType, channel, language string,
+	to []string,
+	variables map[string]string,
+	sentBy *uuid.UUID,
+	incidentID *uuid.UUID,
+) error {
 	templates, err := s.templateRepo.FindActiveByActionTypeAndChannel(ctx, actionType, channel)
 	if err != nil || len(templates) == 0 {
 		return fmt.Errorf("no active %s templates found for channel %s", actionType, channel)
@@ -851,11 +888,14 @@ func (s *NotificationService) SendByActionType(
 	for _, tpl := range templates {
 		code := tpl.Code
 		log.Printf("[SendByActionType] sending template code=%s body_en_len=%d body_ar_len=%d", code, len(tpl.BodyEN), len(tpl.BodyAR))
-		_, sendErr := s.SendNotification(
+		result, sendErr := s.SendNotification(
 			ctx, channel, &code, language,
 			to, nil, nil,
 			"", "", variables, nil, sentBy, nil,
 		)
+		if incidentID != nil && result != nil && result.SentLog != nil {
+			_ = s.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, *incidentID)
+		}
 		if sendErr != nil {
 			log.Printf("[SendByActionType] template %s send failed: %v", code, sendErr)
 			lastErr = sendErr
