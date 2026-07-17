@@ -819,15 +819,17 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 		if len(filter.UserRoleIDs) > 0 {
 			stateQuery = stateQuery.Where(`
 				NOT EXISTS (
-					SELECT 1 FROM state_viewable_roles 
+					SELECT 1 FROM state_viewable_roles
 					WHERE workflow_state_id = workflow_states.id
 				)
 				OR EXISTS (
 					SELECT 1 FROM state_viewable_roles
-					WHERE workflow_state_id = workflow_states.id 
+					WHERE workflow_state_id = workflow_states.id
 					AND role_id IN ?
 				)
-			`, filter.UserRoleIDs)
+				OR incidents.reporter_id = ? OR incidents.assignee_id = ?
+				OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)
+			`, filter.UserRoleIDs, filter.UserID, filter.UserID, filter.UserID)
 		}
 	}
 
@@ -995,7 +997,9 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 				q = q.Where(`
 					NOT EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = incidents.current_state_id)
 					OR EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = incidents.current_state_id AND role_id IN ?)
-				`, filter.UserRoleIDs)
+					OR incidents.reporter_id = ? OR incidents.assignee_id = ?
+					OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)
+				`, filter.UserRoleIDs, filter.UserID, filter.UserID, filter.UserID)
 			}
 		}
 		return q
@@ -1082,7 +1086,9 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 				stateQuery = stateQuery.Where(`
 					NOT EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = ws.id)
 					OR EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = ws.id AND role_id IN ?)
-				`, filter.UserRoleIDs)
+					OR EXISTS (SELECT 1 FROM incidents WHERE current_state_id = ws.id AND deleted_at IS NULL
+						AND (reporter_id = ? OR assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))
+				`, filter.UserRoleIDs, filter.UserID, filter.UserID, filter.UserID)
 			}
 		}
 	}
@@ -1212,7 +1218,9 @@ func (r *incidentRepository) GetPriorityCounts(ctx context.Context, filter *mode
 					NOT EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = workflow_states.id)
 					OR EXISTS (SELECT 1 FROM state_viewable_roles
 					           WHERE workflow_state_id = workflow_states.id AND role_id IN ?)
-				`, filter.UserRoleIDs)
+					OR incidents.reporter_id = ? OR incidents.assignee_id = ?
+					OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)
+				`, filter.UserRoleIDs, filter.UserID, filter.UserID, filter.UserID)
 		}
 	}
 
