@@ -142,10 +142,9 @@ func (h *CTIHandler) syncUserExtension(c *fiber.Ctx, ext string) {
 //
 // Looks up the CallLog by call_uuid, reads recording_url out of its Meta JSON
 // (stored verbatim from the Cintrix call.ended webhook), and makes an
-// integration-signed request to that URL. Cintrix responds 302 with a
-// presigned MinIO URL in Location — we do not follow it, we relay the
-// Location header back to the caller as our own 302 so the browser fetches
-// the object directly from MinIO.
+// integration-signed request to that URL. Cintrix streams the recording bytes
+// back (200, audio/wav) — MinIO is never exposed publicly — and we relay those
+// bytes to the browser with the audio content type.
 func (h *CTIHandler) GetRecording(c *fiber.Ctx) error {
 	if h.cintrixURL == "" || h.keyID == "" || h.keySecret == "" {
 		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
@@ -195,13 +194,21 @@ func (h *CTIHandler) GetRecording(c *fiber.Ctx) error {
 	defer resp.Body.Close()
 
 	switch {
-	case resp.StatusCode >= 300 && resp.StatusCode < 400:
-		location := resp.Header.Get("Location")
-		if location == "" {
-			return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "recording service returned no location"})
+	case resp.StatusCode == http.StatusOK:
+		// Cintrix streams the recording bytes through (MinIO stays private);
+		// relay them to the browser with the audio content type. Recordings
+		// are small, so read fully rather than juggle a streaming body close.
+		data, rerr := io.ReadAll(resp.Body)
+		if rerr != nil {
+			return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "recording read failed"})
 		}
-		c.Set("Location", location)
-		return c.SendStatus(fiber.StatusFound)
+		ct := resp.Header.Get("Content-Type")
+		if ct == "" {
+			ct = "audio/wav"
+		}
+		c.Set("Content-Type", ct)
+		c.Set("Content-Disposition", `inline; filename="recording.wav"`)
+		return c.Send(data)
 	case resp.StatusCode == http.StatusNotFound:
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "recording not found"})
 	default:
