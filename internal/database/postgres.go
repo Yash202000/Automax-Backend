@@ -326,6 +326,11 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		log.Printf("Warning: extension decouple migration failed: %v", err)
 	}
 
+	// Composite index for the incident communication history query (filter by incident_id, sort by created_at)
+	if err := migrations.MigrateNotificationLogIncidentIndex(db); err != nil {
+		log.Printf("Warning: notification_log incident index migration failed: %v", err)
+	}
+
 	// Seed existing free-text goal categories as root Category rows
 	// and back-fill goals.category_id. Idempotent: safe to run repeatedly.
 	if cfg.GoalManagement.Enabled {

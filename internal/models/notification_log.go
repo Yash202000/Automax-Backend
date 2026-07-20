@@ -209,6 +209,7 @@ type NotificationLog struct {
 	ThreadID       *uuid.UUID        `gorm:"type:uuid;index" json:"thread_id,omitempty"`   // For email threading
 	InReplyTo      *uuid.UUID        `gorm:"type:uuid;index" json:"in_reply_to,omitempty"` // Reply to which email
 	Meta           *NotificationMeta `gorm:"type:jsonb" json:"meta,omitempty"`             // Contextual metadata (record id, type)
+	IncidentID     *uuid.UUID        `gorm:"type:uuid;index" json:"incident_id,omitempty"` // Incident this communication belongs to, if any
 	SentBy         *uuid.UUID        `gorm:"type:uuid;index" json:"sent_by,omitempty"`     // User who sent it (outbound)
 	ReceivedBy     *uuid.UUID        `gorm:"type:uuid;index" json:"received_by,omitempty"` // User who received it (inbound)
 	ScheduledAt    *time.Time        `json:"scheduled_at,omitempty"`                       // For scheduled sending (outbox)
@@ -259,6 +260,7 @@ type NotificationLogResponse struct {
 	ErrorMessage   string            `json:"error_message,omitempty"`
 	Attachments    []AttachmentInfo  `json:"attachments,omitempty"`
 	Meta           *NotificationMeta `json:"meta,omitempty"`
+	IncidentID     *uuid.UUID        `json:"incident_id,omitempty"`
 	IsRead         bool              `json:"is_read"`
 	IsStarred      bool              `json:"is_starred"`
 	ThreadID       *uuid.UUID        `json:"thread_id,omitempty"`
@@ -283,6 +285,7 @@ type NotificationLogFilter struct {
 	IsStarred    *bool      `query:"is_starred" json:"is_starred" validate:"omitempty"`                                                     // Filter by starred
 	Search       string     `query:"search" json:"search" validate:"omitempty,max=255"`                                                     // Search across subject, body, from, recipients
 	UserID       *uuid.UUID `json:"user_id"`                                                                                                // Filter by current user (sent_by OR received_by)
+	IncidentID   *uuid.UUID `query:"incident_id" json:"incident_id" validate:"omitempty"`                                                   // Filter by incident (bypasses UserID scoping — see handler)
 	SentBy       *uuid.UUID `query:"sent_by" json:"sent_by" validate:"omitempty"`                                                           // Filter by sender (outbound)
 	ReceivedBy   *uuid.UUID `query:"received_by" json:"received_by" validate:"omitempty"`                                                   // Filter by receiver (inbound)
 	StartDate    *time.Time `query:"start_date" json:"start_date" validate:"omitempty"`                                                     // Filter by sent_at >= start_date
@@ -354,6 +357,7 @@ func ToNotificationLogResponse(log *NotificationLog) NotificationLogResponse {
 		ErrorMessage:   log.ErrorMessage,
 		Attachments:    responseAttachments,
 		Meta:           log.Meta,
+		IncidentID:     log.IncidentID,
 		IsRead:         log.IsRead,
 		IsStarred:      log.IsStarred,
 		ThreadID:       log.ThreadID,

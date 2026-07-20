@@ -30,6 +30,7 @@ type NotificationLogRepository interface {
 	MarkOTPVerified(ctx context.Context, sessionID string, verifiedAt time.Time) error
 	SetMeta(ctx context.Context, ids []uuid.UUID, meta *models.NotificationMeta) error
 	SetArContent(ctx context.Context, ids []uuid.UUID, subjectAr, bodyAr string) error
+	SetIncidentID(ctx context.Context, ids []uuid.UUID, incidentID uuid.UUID) error
 }
 
 type notificationLogRepository struct {
@@ -75,13 +76,27 @@ func (r *notificationLogRepository) List(ctx context.Context, filter *models.Not
 	var logs []models.NotificationLog
 	var total int64
 
-	query := r.db.WithContext(ctx).Model(&models.NotificationLog{}).
-		Where("NOT (channel IN ('sms', 'email') AND status = 'failed')")
+	query := r.db.WithContext(ctx).Model(&models.NotificationLog{})
 
-	// Apply user filtering - show emails where user is either sender OR receiver
-	if filter.UserID != nil {
-		log.Printf("[Notifications Repository] Filtering by user_id: %s (sent_by OR received_by)", filter.UserID.String())
-		query = query.Where("sent_by = ? OR received_by = ?", *filter.UserID, *filter.UserID)
+	if filter.IncidentID != nil {
+		// Incident communication history: keep failed sends visible (audit trail requires it)
+		// and do not apply the personal inbox sent_by/received_by scoping below.
+		// Default to SMS/Email only (the requirement covers those two channels), but if the
+		// caller explicitly asked for a specific channel (e.g. ?channel=notification), trust
+		// that instead of overriding it — the `filter.Channel` check further below applies it.
+		log.Printf("[Notifications Repository] Filtering by incident_id: %s", filter.IncidentID.String())
+		query = query.Where("incident_id = ?", *filter.IncidentID)
+		if filter.Channel == "" {
+			query = query.Where("channel IN ('sms', 'email')")
+		}
+	} else {
+		query = query.Where("NOT (channel IN ('sms', 'email') AND status = 'failed')")
+
+		// Apply user filtering - show emails where user is either sender OR receiver
+		if filter.UserID != nil {
+			log.Printf("[Notifications Repository] Filtering by user_id: %s (sent_by OR received_by)", filter.UserID.String())
+			query = query.Where("sent_by = ? OR received_by = ?", *filter.UserID, *filter.UserID)
+		}
 	}
 
 	// Apply filters
@@ -149,10 +164,14 @@ func (r *notificationLogRepository) List(ctx context.Context, filter *models.Not
 
 	// Apply pagination
 	offset := (filter.Page - 1) * filter.Limit
+	order := "created_at DESC"
+	if filter.IncidentID != nil {
+		order = "created_at ASC" // audit trail: chronological order
+	}
 	err := query.
 		Preload("SentByUser").
 		Preload("ReceivedByUser").
-		Order("created_at DESC").
+		Order(order).
 		Offset(offset).
 		Limit(filter.Limit).
 		Find(&logs).Error
@@ -232,6 +251,16 @@ func (r *notificationLogRepository) SetMeta(ctx context.Context, ids []uuid.UUID
 		Model(&models.NotificationLog{}).
 		Where("id IN ?", ids).
 		Update("meta", meta).Error
+}
+
+func (r *notificationLogRepository) SetIncidentID(ctx context.Context, ids []uuid.UUID, incidentID uuid.UUID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).
+		Model(&models.NotificationLog{}).
+		Where("id IN ?", ids).
+		Update("incident_id", incidentID).Error
 }
 
 func (r *notificationLogRepository) SetArContent(ctx context.Context, ids []uuid.UUID, subjectAr, bodyAr string) error {

@@ -241,7 +241,7 @@ func main() {
 	jwksHandler := handlers.NewJWKSHandler(ssoJWTManager)
 	ssoHandler := handlers.NewSSOHandler(ssoJWTManager, jwtManager, sessionStore, userRepo, applicationLinkRepo, userService, otpService, cfg.SSOFrontendURL, cfg.NafathAPIBaseURL)
 	notificationTemplateService := services.NewNotificationTemplateService(notificationTemplateRepo, db)
-	notificationHandler := handlers.NewNotificationHandler(notificationService, minioStorage)
+	notificationHandler := handlers.NewNotificationHandler(notificationService, minioStorage, userRepo, incidentRepo)
 	templateHandler := handlers.NewNotificationTemplateHandler(notificationTemplateService)
 	attachmentHandler := handlers.NewAttachmentHandler(incidentService, notificationService, minioStorage)
 	otpHandler := handlers.NewOTPHandler(otpService, userService)

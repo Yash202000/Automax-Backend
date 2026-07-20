@@ -384,22 +384,34 @@ func (s *EscalationService) sendPolicyNotification(
 	sendSMS := step.Channel == "sms" || step.Channel == "both"
 
 	if sendEmail && user.Email != "" {
-		if _, err := s.notificationService.SendNotification(ctx, "email", emailCodePtr, "en",
+		if result, err := s.notificationService.SendNotification(ctx, "email", emailCodePtr, "en",
 			[]string{user.Email}, nil, nil, subject, emailBody, vars, nil, &user.ID, nil,
 		); err != nil {
 			log.Printf("[EscalationService] Policy EMAIL failed for %s: %v", user.Email, err)
+			if result != nil && result.SentLog != nil {
+				_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
+			}
 		} else {
 			sent = append(sent, "EMAIL")
+			if result != nil && result.SentLog != nil {
+				_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
+			}
 		}
 	}
 
 	if sendSMS && user.Phone != "" {
-		if _, err := s.notificationService.SendNotification(ctx, "sms", smsCodePtr, "en",
+		if result, err := s.notificationService.SendNotification(ctx, "sms", smsCodePtr, "en",
 			[]string{user.Phone}, nil, nil, "", smsBody, vars, nil, &user.ID, nil,
 		); err != nil {
 			log.Printf("[EscalationService] Policy SMS failed for %s: %v", user.Phone, err)
+			if result != nil && result.SentLog != nil {
+				_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
+			}
 		} else {
 			sent = append(sent, "SMS")
+			if result != nil && result.SentLog != nil {
+				_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
+			}
 		}
 	}
 
@@ -434,9 +446,9 @@ func (s *EscalationService) sendNotifications(
 
 	// Templates configured from admin UI (action_type = "escalation") — no hardcoded codes.
 	if user.Email != "" {
-		if err := s.notificationService.SendByActionType(
+		if err := s.notificationService.SendByActionTypeForIncident(
 			ctx, models.TemplateActionEscalation, "email", "ar",
-			[]string{user.Email}, vars, nil,
+			[]string{user.Email}, vars, nil, incident.ID,
 		); err != nil {
 			log.Printf("[EscalationService] EMAIL failed for %s: %v", user.Email, err)
 		} else {
@@ -445,9 +457,9 @@ func (s *EscalationService) sendNotifications(
 	}
 
 	if user.Phone != "" {
-		if err := s.notificationService.SendByActionType(
+		if err := s.notificationService.SendByActionTypeForIncident(
 			ctx, models.TemplateActionEscalation, "sms", "ar",
-			[]string{user.Phone}, vars, nil,
+			[]string{user.Phone}, vars, nil, incident.ID,
 		); err != nil {
 			log.Printf("[EscalationService] SMS failed for %s: %v", user.Phone, err)
 		} else {
