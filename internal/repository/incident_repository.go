@@ -279,6 +279,23 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 			phone, phoneWithPlus,
 		)
 	}
+	// this to avoid EPM Citizen Portal security boundary
+	if filter.ReporterPhoneSearch != "" {
+		phone := filter.ReporterPhoneSearch
+		phoneWithPlus := "+" + phone
+		if strings.HasPrefix(phone, "+") {
+			phoneWithPlus = phone
+			phone = strings.TrimPrefix(phone, "+")
+		}
+		phonePattern := "%" + phone + "%"
+		phoneWithPlusPattern := "%" + phoneWithPlus + "%"
+		query = query.Where(
+			"reporter_phone ILIKE ? OR reporter_phone ILIKE ? OR reporter_id IN (SELECT id FROM users WHERE phone ILIKE ? OR phone ILIKE ? OR extension ILIKE ? OR extension ILIKE ?)",
+			phonePattern, phoneWithPlusPattern,
+			phonePattern, phoneWithPlusPattern,
+			phonePattern, phoneWithPlusPattern,
+		)
+	}
 	if filter.CallerIdentity != "" {
 		query = query.Where("caller_identity = ?", filter.CallerIdentity)
 	}
