@@ -204,7 +204,6 @@ func (h *IncidentHandler) GetIncident(c *fiber.Ctx) error {
 
 func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 	filter := &models.IncidentFilter{}
-	fmt.Println("FILTER", filter)
 	// Parse query parameters
 	if err := c.QueryParser(filter); err != nil {
 		return ErrorResponseWithKey(c, fiber.StatusBadRequest, "invalid_query_parameters")
