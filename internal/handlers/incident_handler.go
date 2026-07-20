@@ -262,6 +262,11 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 	restrictSuperAdmins := strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_ADMIN_SCOPE")), "true")
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
+
+	// if filter.ReporterPhoneSearch != "" && user != nil && !user.IsSuperAdmin && !user.HasPermission("incidents:filter_reporter_phone") {
+	// 	return utils.ErrorResponse(c, fiber.StatusForbidden, "Insufficient permissions to filter by reporter phone")
+	// }
+
 	if err == nil && user != nil && (!user.IsSuperAdmin || restrictSuperAdmins) {
 		userClassIDs := make([]string, 0, len(user.Classifications))
 		for _, cls := range user.Classifications {
