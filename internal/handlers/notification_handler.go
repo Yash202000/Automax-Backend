@@ -468,7 +468,6 @@ func (h *NotificationHandler) List(c *fiber.Ctx) error {
 	if filter.IncidentID != nil {
 		// Incident communication history request: this is not "my inbox" any more,
 		// so drop the personal sent_by/received_by scoping and instead require that
-		// the caller can actually view this specific incident.
 		filter.UserID = nil
 		allowed, err := h.canViewIncident(c.UserContext(), userID, *filter.IncidentID)
 		if err != nil {
@@ -1055,7 +1054,6 @@ func (h *NotificationHandler) PreviewNotificationAttachmentByID(c *fiber.Ctx) er
 
 	return c.Send(fileData)
 }
-
 
 // applyAcceptLanguage replaces subject/body with Arabic versions in-place when
 // Accept-Language is "ar" and Arabic content is available.
