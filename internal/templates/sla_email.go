@@ -39,12 +39,14 @@ func BuildSLABreachEmail(
 
     <p>
          <a href="%s" 
-              style="background-color: #007bff; 
-                     color: #ffffff; 
-                     padding: 10px 15px; 
-                     text-decoration: none; 
+              style="background-color: #007bff;
+                     color: #ffffff;
+                     padding: 10px 15px;
+                     text-decoration: none;
                      border-radius: 5px;
-                     font-weight: bold;">
+                     font-weight: bold;
+                     display: inline-block;
+                     margin-bottom: 10px;">
             View SLA Breached Incidents
         </a>
     </p>
