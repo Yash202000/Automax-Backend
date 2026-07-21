@@ -255,7 +255,7 @@ func main() {
 	publicFeedbackHandler := handlers.NewIncidentPublicFeedbackHandler(publicFeedbackService, actionLogService)
 	aiQualityFeedbackHandler := handlers.NewAIQualityFeedbackHandler(aiQualityFeedbackRepo)
 	fcmHandler := handlers.NewFCMHandler(fcmService)
-	ctiHandler := handlers.NewCTIHandler(cfg.Cintrix.URL, cfg.Cintrix.APIKeyID, cfg.Cintrix.APIKeySecret, callLogRepo, userRepo)
+	ctiHandler := handlers.NewCTIHandler(cfg.Cintrix.URL, cfg.Cintrix.APIKeyID, cfg.Cintrix.APIKeySecret, callLogRepo, userRepo, extensionAssignmentRepo, db)
 	integrationUserHandler := handlers.NewIntegrationUserHandler(userService, roleRepo, departmentRepo, locationRepo, classificationRepo)
 	sentimentHandler := handlers.NewCallerSentimentHandler(callerSentimentService)
 	goalHandler := handlers.NewGoalHandler(goalService, actionLogService)
