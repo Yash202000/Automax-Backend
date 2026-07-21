@@ -22,6 +22,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type IncidentHandler struct {
@@ -674,6 +675,9 @@ func (h *IncidentHandler) CanConvertToRequest(c *fiber.Ctx) error {
 
 	canConvert, reason, err := h.service.CanConvertToRequest(c.UserContext(), id, roleIDs)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "incident_not_found"))
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 

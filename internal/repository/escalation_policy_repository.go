@@ -74,7 +74,7 @@ func (r *escalationPolicyRepository) List(ctx context.Context) ([]models.Escalat
 		Preload("Steps.Targets").
 		Preload("Steps.Targets.Department").
 		Preload("Steps.Targets.Role").
-		Order("name ASC").
+		Order("created_at DESC").
 		Find(&policies).Error
 	return policies, err
 }
@@ -89,7 +89,7 @@ func (r *escalationPolicyRepository) ListActive(ctx context.Context) ([]models.E
 		Preload("Steps.Targets").
 		Preload("Steps.Targets.Department").
 		Preload("Steps.Targets.Role").
-		Order("name ASC").
+		Order("created_at DESC").
 		Find(&policies).Error
 	return policies, err
 }

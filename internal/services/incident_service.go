@@ -222,6 +222,22 @@ func (s *incidentService) SetSmsFeedbackPendingRepo(repo repository.SmsFeedbackP
 	s.smsFeedbackDelayMinutes = delayMinutes
 }
 
+// convertibleStateCode returns the workflow state code an incident must be in
+// to be eligible for conversion to a request. Configurable via
+// CONVERT_TO_REQUEST_STATE_CODE (default "under_resolution").
+func (s *incidentService) convertibleStateCode() string {
+	if code := os.Getenv("CONVERT_TO_REQUEST_STATE_CODE"); code != "" {
+		return code
+	}
+	return "under_resolution"
+}
+
+// isInConvertibleState reports whether the incident's current state permits
+// conversion to a request.
+func (s *incidentService) isInConvertibleState(inc *models.Incident) bool {
+	return inc.CurrentState != nil && inc.CurrentState.Code == s.convertibleStateCode()
+}
+
 // calculateSLADeadline calculates the SLA deadline based on classification criticality.
 // Falls back to slaDuration (from the workflow state) if no criticality-based setting exists.
 func (s *incidentService) calculateSLADeadline(ctx context.Context, classificationID *uuid.UUID, lookupValueIDs []string, slaDuration time.Duration) (*time.Time, error) {
@@ -1636,6 +1652,11 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		return nil, errors.New(i18n.T(ctx, "already_converted_to_request"))
 	}
 
+	// Only allow conversion while the incident is in the configured state (e.g. "Under Resolution")
+	if !s.isInConvertibleState(sourceIncident) {
+		return nil, errors.New(i18n.T(ctx, "convert_requires_resolution_state"))
+	}
+
 	// Handle existing request linking
 	var existingRequest *models.Incident
 	if req.ExistingRequestID != nil && *req.ExistingRequestID != "" {
@@ -2082,17 +2103,22 @@ func (s *incidentService) CanConvertToRequest(ctx context.Context, incidentID uu
 	// Get the source incident
 	sourceIncident, err := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
 	if err != nil {
-		return false, "", errors.New(i18n.T(ctx, "incident_not_found"))
+		return false, "", err
 	}
 
 	// Check if it's already a request
 	if sourceIncident.RecordType == "request" {
-		return false, "This is already a request", nil
+		return false, i18n.T(ctx, "cannot_convert_request"), nil
 	}
 
 	// Check if it has already been converted
 	if sourceIncident.ConvertedRequestID != nil {
-		return false, "This incident has already been converted to a request", nil
+		return false, i18n.T(ctx, "already_converted_to_request"), nil
+	}
+
+	// Only allow conversion while the incident is in the configured state (e.g. "Under Resolution")
+	if !s.isInConvertibleState(sourceIncident) {
+		return false, i18n.T(ctx, "convert_requires_resolution_state"), nil
 	}
 
 	// Get the workflow with ConvertToRequestRoles
@@ -2115,7 +2141,7 @@ func (s *incidentService) CanConvertToRequest(ctx context.Context, incidentID uu
 		}
 	}
 
-	return false, "You do not have permission to convert this incident to a request", nil
+	return false, i18n.T(ctx, "no_permission_convert"), nil
 }
 
 // getTerminalStateForWorkflow finds a terminal state for the given workflow
