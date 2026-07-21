@@ -273,7 +273,7 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 			phone = strings.TrimPrefix(phone, "+")
 		}
 		query = query.Where(
-			"reporter_phone IN (?, ?) OR reporter_id IN (SELECT id FROM users WHERE phone IN (?, ?) OR extension IN (?, ?))",
+			"reporter_phone IN (?, ?) OR reporter_id IN (SELECT id FROM users WHERE phone IN (?, ?) OR id IN (SELECT user_id FROM extension_assignments WHERE extension IN (?, ?)))",
 			phone, phoneWithPlus,
 			phone, phoneWithPlus,
 			phone, phoneWithPlus,
@@ -290,7 +290,7 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		phonePattern := "%" + phone + "%"
 		phoneWithPlusPattern := "%" + phoneWithPlus + "%"
 		query = query.Where(
-			"reporter_phone ILIKE ? OR reporter_phone ILIKE ? OR reporter_id IN (SELECT id FROM users WHERE phone ILIKE ? OR phone ILIKE ? OR extension ILIKE ? OR extension ILIKE ?)",
+			"reporter_phone ILIKE ? OR reporter_phone ILIKE ? OR reporter_id IN (SELECT id FROM users WHERE phone ILIKE ? OR phone ILIKE ? OR id IN (SELECT user_id FROM extension_assignments WHERE extension ILIKE ? OR extension ILIKE ?))",
 			phonePattern, phoneWithPlusPattern,
 			phonePattern, phoneWithPlusPattern,
 			phonePattern, phoneWithPlusPattern,
