@@ -22,10 +22,11 @@ import (
 )
 
 type NotificationHandler struct {
-	service      *services.NotificationService
-	storage      *storage.MinIOStorage
-	userRepo     repository.UserRepository
-	incidentRepo repository.IncidentRepository
+	service           *services.NotificationService
+	storage           *storage.MinIOStorage
+	userRepo          repository.UserRepository
+	incidentRepo      repository.IncidentRepository
+	actionLogService  services.ActionLogService
 }
 
 func NewNotificationHandler(
@@ -33,12 +34,14 @@ func NewNotificationHandler(
 	storage *storage.MinIOStorage,
 	userRepo repository.UserRepository,
 	incidentRepo repository.IncidentRepository,
+	actionLogService services.ActionLogService,
 ) *NotificationHandler {
 	return &NotificationHandler{
-		service:      service,
-		storage:      storage,
-		userRepo:     userRepo,
-		incidentRepo: incidentRepo,
+		service:          service,
+		storage:          storage,
+		userRepo:         userRepo,
+		incidentRepo:     incidentRepo,
+		actionLogService: actionLogService,
 	}
 }
 
@@ -492,6 +495,112 @@ func (h *NotificationHandler) List(c *fiber.Ctx) error {
 	}
 
 	applyAcceptLanguage(c.Get("Accept-Language"), notifications)
+
+	totalPages := (int(total) + filter.Limit - 1) / filter.Limit
+
+	return c.JSON(fiber.Map{
+		"success":     true,
+		"data":        notifications,
+		"total_items": total,
+		"total_pages": totalPages,
+		"page":        filter.Page,
+		"limit":       filter.Limit,
+	})
+}
+
+// ResendNotification handles POST /api/v1/admin/notification-monitoring/:id/resend
+// — manually re-sends a failed/undeliverable/expired notification using its
+// stored subject/body/recipients, and records the action in the audit log.
+// This is always an explicit user action; there is no automatic retry.
+func (h *NotificationHandler) ResendNotification(c *fiber.Ctx) error {
+	idStr := c.Params("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_notification_id"))
+	}
+
+	var actorID uuid.UUID
+	if userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID); ok {
+		actorID = userID
+	}
+
+	resendResult, err := h.service.ResendNotification(c.UserContext(), id, &actorID)
+
+	logStatus := "success"
+	description := fmt.Sprintf("Resent notification %s", idStr)
+	if err != nil {
+		logStatus = "failed"
+		description = fmt.Sprintf("Failed to resend notification %s: %s", idStr, err.Error())
+	}
+	if h.actionLogService != nil {
+		_ = h.actionLogService.LogAction(c.UserContext(), &services.LogActionParams{
+			UserID:      actorID,
+			Action:      "resend",
+			Module:      "notifications",
+			ResourceID:  idStr,
+			Description: description,
+			IPAddress:   c.IP(),
+			UserAgent:   c.Get("User-Agent"),
+			Status:      logStatus,
+			ErrorMsg:    errString(err),
+		})
+	}
+
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"success": true,
+		"data":    resendResult,
+	})
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// ListMonitoring handles GET /api/v1/admin/notification-monitoring — the
+// admin-wide dashboard view (search/filter across every user's notifications,
+// unlike List which is scoped to the requesting user's inbox).
+func (h *NotificationHandler) ListMonitoring(c *fiber.Ctx) error {
+	filter := &models.NotificationMonitoringFilter{
+		Page:  1,
+		Limit: 20,
+	}
+
+	if err := c.QueryParser(filter); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_query_parameters"))
+	}
+
+	if err := validation.ValidateStruct(c.UserContext(), filter); len(err) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  err,
+		})
+	}
+
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.Limit < 1 || filter.Limit > 100 {
+		filter.Limit = 20
+	}
+
+	if endDate := c.Query("end_date"); endDate != "" {
+		if t, err := time.Parse("2006-01-02", endDate); err == nil {
+			t = t.Add(24*time.Hour - time.Second)
+			filter.EndDate = &t
+		}
+	}
+
+	notifications, total, err := h.service.ListMonitoring(c.UserContext(), filter)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
 
 	totalPages := (int(total) + filter.Limit - 1) / filter.Limit
 

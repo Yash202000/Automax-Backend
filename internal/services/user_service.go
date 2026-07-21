@@ -2008,7 +2008,8 @@ func (s *userService) SendSMSOTP(phone, otp string) error {
 		return fmt.Errorf("phone must include country code")
 	}
 	message := fmt.Sprintf("Your OTP is %s. It is valid for 5 minutes.", otp)
-	return intutils.SendSMS(phone, message)
+	_, err := intutils.SendSMS(phone, message)
+	return err
 }
 
 func (s *userService) SendEmailOTP(toEmail, otp string) error {

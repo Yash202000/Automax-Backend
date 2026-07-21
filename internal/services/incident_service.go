@@ -4784,7 +4784,7 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 
 			// Send actual SMS via Twilio
 			fmt.Println("[DEBUG] Calling utils.SendSMS...")
-			smsErr := utils.SendSMS(merged.Reporter.Phone, smsMessage)
+			_, smsErr := utils.SendSMS(merged.Reporter.Phone, smsMessage)
 			if smsErr != nil {
 				fmt.Printf("[DEBUG] SMS send failed: %v\n", smsErr)
 			} else {
@@ -4905,7 +4905,7 @@ func (s *incidentService) notifyStatusChangeToMergedIncidents(ctx context.Contex
 
 			// Send actual SMS via Twilio
 			fmt.Println("[DEBUG] Calling utils.SendSMS...")
-			smsErr := utils.SendSMS(merged.Reporter.Phone, smsMessage)
+			_, smsErr := utils.SendSMS(merged.Reporter.Phone, smsMessage)
 			if smsErr != nil {
 				fmt.Printf("[DEBUG] SMS send failed: %v\n", smsErr)
 			} else {
@@ -5671,7 +5671,7 @@ func (s *incidentService) SendNotBelongClosureSMS(
 	)
 
 	now := time.Now()
-	smsErr := utils.SendSMS(mobile, smsMessage)
+	_, smsErr := utils.SendSMS(mobile, smsMessage)
 	status := "sent"
 	if smsErr != nil {
 		status = "failed"
@@ -5747,7 +5747,7 @@ func (s *incidentService) sendConvertToRequestSMS(ctx context.Context, incident 
 	// Hardcoded Arabic fallback
 	smsMessage := fmt.Sprintf("تم تحويل بلاغك رقم %s إلى طلب رقم %s", incident.IncidentNumber, requestNumber)
 	now := time.Now()
-	smsErr := utils.SendSMS(mobile, smsMessage)
+	_, smsErr := utils.SendSMS(mobile, smsMessage)
 	status := "sent"
 	if smsErr != nil {
 		status = "failed"
@@ -5836,7 +5836,7 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 		incident.IncidentNumber,
 	)
 	now := time.Now()
-	smsErr := utils.SendSMS(mobile, smsMessage)
+	_, smsErr := utils.SendSMS(mobile, smsMessage)
 	status := "sent"
 	if smsErr != nil {
 		status = "failed"

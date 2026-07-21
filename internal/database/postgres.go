@@ -609,6 +609,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Create Draft Notifications", Code: "notifications:create", Module: "notifications", Action: "create", Description: "Create draft notifications"},
 		{Name: "Update Draft Notifications", Code: "notifications:update", Module: "notifications", Action: "update", Description: "Update draft notifications"},
 		{Name: "Delete Notifications", Code: "notifications:delete", Module: "notifications", Action: "delete", Description: "Delete notification logs"},
+		{Name: "View Notification Monitoring Dashboard", Code: "notification-monitoring:view", Module: "notification-monitoring", Action: "view", Description: "View the cross-user notification delivery monitoring dashboard"},
 
 		// Template permissions
 		{Name: "View Templates", Code: "templates:read", Module: "templates", Action: "read", Description: "View notification templates"},

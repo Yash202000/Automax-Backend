@@ -241,7 +241,7 @@ func main() {
 	jwksHandler := handlers.NewJWKSHandler(ssoJWTManager)
 	ssoHandler := handlers.NewSSOHandler(ssoJWTManager, jwtManager, sessionStore, userRepo, applicationLinkRepo, userService, otpService, cfg.SSOFrontendURL, cfg.NafathAPIBaseURL)
 	notificationTemplateService := services.NewNotificationTemplateService(notificationTemplateRepo, db)
-	notificationHandler := handlers.NewNotificationHandler(notificationService, minioStorage, userRepo, incidentRepo)
+	notificationHandler := handlers.NewNotificationHandler(notificationService, minioStorage, userRepo, incidentRepo, actionLogService)
 	templateHandler := handlers.NewNotificationTemplateHandler(notificationTemplateService)
 	attachmentHandler := handlers.NewAttachmentHandler(incidentService, notificationService, minioStorage)
 	otpHandler := handlers.NewOTPHandler(otpService, userService)
@@ -983,6 +983,12 @@ func main() {
 	// GET /api/v1/escalation— list all SLA breach notification records
 	escalation.Get("/", escalationHandler.List)
 	escalation.Get("/incident/:incident_id", escalationHandler.ListByIncident)
+
+	// Notification Monitoring Dashboard (admin) — cross-user delivery tracking, search & filter
+	notificationMonitoring := admin.Group("/notification-monitoring", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureCommunication)))
+	notificationMonitoring.Get("/", authMiddleware.RequirePermission("notification-monitoring:view"), notificationHandler.ListMonitoring)
+	notificationMonitoring.Get("/:id", authMiddleware.RequirePermission("notification-monitoring:view"), notificationHandler.Get)
+	notificationMonitoring.Post("/:id/resend", authMiddleware.RequirePermission("notifications:send"), notificationHandler.ResendNotification)
 
 	// Custom Escalation Groups (admin)
 	escalationGroups := admin.Group("/escalation-groups", authMiddleware.Authenticate(), authMiddleware.RequirePermission("escalation-groups:manage_rules"), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureEscalation)))

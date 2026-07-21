@@ -1744,7 +1744,7 @@ func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
 	)
 
 	now := time.Now()
-	smsErr := internalUtils.SendSMS(mobile, smsMessage)
+	_, smsErr := internalUtils.SendSMS(mobile, smsMessage)
 	status := "sent"
 	if smsErr != nil {
 		status = "failed"
