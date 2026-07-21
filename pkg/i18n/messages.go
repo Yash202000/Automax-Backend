@@ -780,6 +780,7 @@ var messages = map[string][2]string{
 	"partial_close_duration_invalid":       {"partial_close_duration must be a valid numeric duration like '1 Day' or '2 Weeks'", "يجب أن تكون partial_close_duration مدة رقمية صالحة مثل '1 Day' أو '2 Weeks'"},
 	"already_converted_to_request":         {"This incident has already been converted to a request", "تم تحويل هذا البلاغ إلى طلب بالفعل"},
 	"cannot_convert_request":               {"Cannot convert a request to another request", "لا يمكن تحويل طلب إلى طلب آخر"},
+	"convert_requires_resolution_state":    {"Incident must be under resolution to convert it to a request", "يجب أن يكون البلاغ قيد الحل لتحويله إلى طلب"},
 	"request_id_not_incident":              {"existing_request_id must reference a request, not an incident", "يجب أن يشير existing_request_id إلى طلب وليس بلاغاً"},
 	"incident_conflict":                    {"Conflict: incident was modified by another user", "تعارض: تم تعديل البلاغ من قِبل مستخدم آخر"},
 	"incident_locked":                      {"Incident not found or locked by another transaction", "البلاغ غير موجود أو محجوز من عملية أخرى"},
