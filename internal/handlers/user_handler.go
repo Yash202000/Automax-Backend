@@ -295,6 +295,40 @@ func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 	locationIDs := parseUUIDList(c.Query("location_ids", ""))
 	classificationIDs := parseUUIDList(c.Query("classification_ids", ""))
 
+	// Supervisor scope: restrict to their department
+	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
+	if user != nil && user.HasPermission("users:view_department_only") && user.DepartmentID != nil {
+		if !user.IsDepartmentManager() {
+			if len(departmentIDs) > 0 {
+				hasMatch := false
+				for _, d := range departmentIDs {
+					if d == *user.DepartmentID {
+						hasMatch = true
+						break
+					}
+				}
+				if !hasMatch {
+					departmentIDs = []uuid.UUID{uuid.Nil}
+				}
+			} else {
+				departmentIDs = []uuid.UUID{*user.DepartmentID}
+			}
+		}
+	}
+
+	// Department Manager scope: restrict to assigned department, classification, location
+	if user != nil && user.IsDepartmentManager() {
+		if user.DeptManagerDepartmentID != nil {
+			departmentIDs = []uuid.UUID{*user.DeptManagerDepartmentID}
+		}
+		if user.DeptManagerClassificationID != nil {
+			classificationIDs = []uuid.UUID{*user.DeptManagerClassificationID}
+		}
+		if user.DeptManagerLocationID != nil {
+			locationIDs = []uuid.UUID{*user.DeptManagerLocationID}
+		}
+	}
+
 	page = max(page, 1)
 	if limit < 1 {
 		limit = 10
@@ -323,6 +357,41 @@ func (h *UserHandler) GetUser(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "user_retrieved"), response)
+}
+
+func (h *UserHandler) GetManagerScope(c *fiber.Ctx) error {
+	userLocal, _ := c.Locals(constants.ContextKeys.User).(*models.User)
+	if userLocal == nil {
+		return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "unauthorized"))
+	}
+
+	// Reload with all scope relations for complete response
+	user, err := h.userService.GetUserByID(c.UserContext(), userLocal.ID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "user_not_found"))
+	}
+
+	if !userLocal.IsDepartmentManager() {
+		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "not_department_manager"))
+	}
+
+	scope := map[string]interface{}{
+		"is_department_manager": true,
+	}
+	if user.DeptManagerDepartmentID != nil {
+		scope["department_id"] = user.DeptManagerDepartmentID
+		scope["department"] = user.DeptManagerDepartment
+	}
+	if user.DeptManagerClassificationID != nil {
+		scope["classification_id"] = user.DeptManagerClassificationID
+		scope["classification"] = user.DeptManagerClassification
+	}
+	if user.DeptManagerLocationID != nil {
+		scope["location_id"] = user.DeptManagerLocationID
+		scope["location"] = user.DeptManagerLocation
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "scope_retrieved"), scope)
 }
 
 func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
