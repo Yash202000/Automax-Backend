@@ -188,7 +188,7 @@ func main() {
 		}
 	}
 	log.Printf("SLA Monitor interval: %d minutes", slaIntervalMinutes)
-	smsFeedbackService := services.NewSmsFeedbackService(smsFeedbackPendingRepo, incidentRepo, notificationService)
+	smsFeedbackService := services.NewSmsFeedbackService(smsFeedbackPendingRepo, incidentRepo, notificationService, finalCloseWhatsAppFeedbackSessionService)
 	slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, escalationGroupService, readyToCloseService, smsFeedbackService, time.Duration(slaIntervalMinutes)*time.Minute)
 	ctx := context.Background()
 	slaMonitor.Start(ctx)
@@ -255,7 +255,7 @@ func main() {
 	publicFeedbackHandler := handlers.NewIncidentPublicFeedbackHandler(publicFeedbackService, actionLogService)
 	aiQualityFeedbackHandler := handlers.NewAIQualityFeedbackHandler(aiQualityFeedbackRepo)
 	fcmHandler := handlers.NewFCMHandler(fcmService)
-	ctiHandler := handlers.NewCTIHandler(cfg.Cintrix.URL, cfg.Cintrix.APIKeyID, cfg.Cintrix.APIKeySecret, callLogRepo, userRepo)
+	ctiHandler := handlers.NewCTIHandler(cfg.Cintrix.URL, cfg.Cintrix.APIKeyID, cfg.Cintrix.APIKeySecret, callLogRepo, userRepo, extensionAssignmentRepo, db)
 	integrationUserHandler := handlers.NewIntegrationUserHandler(userService, roleRepo, departmentRepo, locationRepo, classificationRepo)
 	sentimentHandler := handlers.NewCallerSentimentHandler(callerSentimentService)
 	goalHandler := handlers.NewGoalHandler(goalService, actionLogService)
@@ -558,6 +558,7 @@ func main() {
 	usersGroup.Get("/", authMiddleware.RequirePermission("users:view"), userHandler.ListUsers)
 	usersGroup.Post("/", authMiddleware.RequirePermission("users:create"), userHandler.AdminCreateUser)
 	usersGroup.Post("/match", authMiddleware.RequirePermission("users:view"), userHandler.MatchUsers)
+	usersGroup.Get("/manager-scope", authMiddleware.RequirePermission("users:view"), userHandler.GetManagerScope)
 	usersGroup.Get("/export", authMiddleware.RequirePermission("users:view"), userHandler.Export)
 	usersGroup.Post("/import", authMiddleware.RequirePermission("users:create"), userHandler.Import)
 	usersGroup.Get("/:id", authMiddleware.RequirePermission("users:view"), userHandler.GetUser)

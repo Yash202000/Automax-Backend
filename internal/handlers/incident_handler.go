@@ -22,6 +22,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type IncidentHandler struct {
@@ -267,64 +268,83 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 	}
 
 	if err == nil && user != nil && (!user.IsSuperAdmin || restrictSuperAdmins) {
-		userClassIDs := make([]string, 0, len(user.Classifications))
-		for _, cls := range user.Classifications {
-			userClassIDs = append(userClassIDs, cls.ID.String())
-		}
-		if len(userClassIDs) > 0 {
-			if len(filter.ClassificationID) > 0 {
-				// Intersect with request's classification filter
-				requested := make(map[string]bool, len(filter.ClassificationID))
-				for _, id := range filter.ClassificationID {
-					requested[id] = true
-				}
-				var intersected []string
-				for _, id := range userClassIDs {
-					if requested[id] {
-						intersected = append(intersected, id)
+		// Supervisor: scope by department only, skip classification/location scoping
+		if user.HasPermission("incidents:view_department_only") && user.DepartmentID != nil {
+			deptIDStr := user.DepartmentID.String()
+			if len(filter.DepartmentID) > 0 {
+				hasMatch := false
+				for _, d := range filter.DepartmentID {
+					if d == deptIDStr {
+						hasMatch = true
+						break
 					}
 				}
-				if len(intersected) == 0 {
-					// Requested classification(s) not among the user's own — no access, show nothing
-					intersected = noAccessSentinel
+				if !hasMatch {
+					filter.DepartmentID = noAccessSentinel
 				}
-				filter.ClassificationID = intersected
 			} else {
-				filter.ClassificationID = userClassIDs
+				filter.DepartmentID = []string{deptIDStr}
 			}
 		} else {
-			// User has no classifications assigned — nothing should be visible
-			filter.ClassificationID = noAccessSentinel
-		}
+			userClassIDs := make([]string, 0, len(user.Classifications))
+			for _, cls := range user.Classifications {
+				userClassIDs = append(userClassIDs, cls.ID.String())
+			}
+			if len(userClassIDs) > 0 {
+				if len(filter.ClassificationID) > 0 {
+					// Intersect with request's classification filter
+					requested := make(map[string]bool, len(filter.ClassificationID))
+					for _, id := range filter.ClassificationID {
+						requested[id] = true
+					}
+					var intersected []string
+					for _, id := range userClassIDs {
+						if requested[id] {
+							intersected = append(intersected, id)
+						}
+					}
+					if len(intersected) == 0 {
+						// Requested classification(s) not among the user's own — no access, show nothing
+						intersected = noAccessSentinel
+					}
+					filter.ClassificationID = intersected
+				} else {
+					filter.ClassificationID = userClassIDs
+				}
+			} else {
+				// User has no classifications assigned — nothing should be visible
+				filter.ClassificationID = noAccessSentinel
+			}
 
-		userLocIDs := make([]string, 0, len(user.Locations))
-		for _, loc := range user.Locations {
-			userLocIDs = append(userLocIDs, loc.ID.String())
-		}
-		if len(userLocIDs) > 0 {
-			if len(filter.LocationID) > 0 {
-				// Intersect with request's location filter
-				requested := make(map[string]bool, len(filter.LocationID))
-				for _, id := range filter.LocationID {
-					requested[id] = true
-				}
-				var intersected []string
-				for _, id := range userLocIDs {
-					if requested[id] {
-						intersected = append(intersected, id)
-					}
-				}
-				if len(intersected) == 0 {
-					// Requested location(s) not among the user's own — no access, show nothing
-					intersected = noAccessSentinel
-				}
-				filter.LocationID = intersected
-			} else {
-				filter.LocationID = userLocIDs
+			userLocIDs := make([]string, 0, len(user.Locations))
+			for _, loc := range user.Locations {
+				userLocIDs = append(userLocIDs, loc.ID.String())
 			}
-		} else {
-			// User has no locations assigned — nothing should be visible
-			filter.LocationID = noAccessSentinel
+			if len(userLocIDs) > 0 {
+				if len(filter.LocationID) > 0 {
+					// Intersect with request's location filter
+					requested := make(map[string]bool, len(filter.LocationID))
+					for _, id := range filter.LocationID {
+						requested[id] = true
+					}
+					var intersected []string
+					for _, id := range userLocIDs {
+						if requested[id] {
+							intersected = append(intersected, id)
+						}
+					}
+					if len(intersected) == 0 {
+						// Requested location(s) not among the user's own — no access, show nothing
+						intersected = noAccessSentinel
+					}
+					filter.LocationID = intersected
+				} else {
+					filter.LocationID = userLocIDs
+				}
+			} else {
+				// User has no locations assigned — nothing should be visible
+				filter.LocationID = noAccessSentinel
+			}
 		}
 
 		// Pass user's role IDs so List() can expand my_record with state_viewable_roles
@@ -674,6 +694,9 @@ func (h *IncidentHandler) CanConvertToRequest(c *fiber.Ctx) error {
 
 	canConvert, reason, err := h.service.CanConvertToRequest(c.UserContext(), id, roleIDs)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "incident_not_found"))
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -1359,6 +1382,36 @@ func (h *IncidentHandler) ListRevisions(c *fiber.Ctx) error {
 	})
 }
 
+// applySupervisorScope restricts the filter to the user's department.
+func (h *IncidentHandler) applySupervisorScope(c *fiber.Ctx, filter *models.IncidentFilter) {
+	noAccessSentinel := []string{"00000000-0000-0000-0000-000000000000"}
+	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	if !ok {
+		return
+	}
+	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
+	if err != nil || user == nil {
+		return
+	}
+	if user.HasPermission("incidents:view_department_only") && user.DepartmentID != nil {
+		deptIDStr := user.DepartmentID.String()
+		if len(filter.DepartmentID) > 0 {
+			hasMatch := false
+			for _, d := range filter.DepartmentID {
+				if d == deptIDStr {
+					hasMatch = true
+					break
+				}
+			}
+			if !hasMatch {
+				filter.DepartmentID = noAccessSentinel
+			}
+		} else {
+			filter.DepartmentID = []string{deptIDStr}
+		}
+	}
+}
+
 // Complaint handlers
 
 func (h *IncidentHandler) CreateComplaint(c *fiber.Ctx) error {
@@ -1411,6 +1464,7 @@ func (h *IncidentHandler) ListComplaints(c *fiber.Ctx) error {
 	}
 
 	filter.RecordType = &recordType
+	h.applySupervisorScope(c, filter)
 	complaints, total, err := h.service.ListIncidents(c.UserContext(), filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
@@ -1521,6 +1575,8 @@ func (h *IncidentHandler) ListQueries(c *fiber.Ctx) error {
 		filter.Limit = 20
 	}
 	filter.RecordType = &recordType
+
+	h.applySupervisorScope(c, filter)
 
 	queries, total, err := h.service.ListIncidents(c.UserContext(), filter)
 	if err != nil {

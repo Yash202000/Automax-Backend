@@ -24,7 +24,7 @@ type UserRepository interface {
 	Update(ctx context.Context, user *models.User) error
 	UpdateLastLogin(ctx context.Context, id uuid.UUID) error
 	Delete(ctx context.Context, id uuid.UUID) error
-	List(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.User, int64, error)
+	List(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID, strictDepartment ...bool) ([]models.User, int64, error)
 	ListByDepartment(ctx context.Context, departmentID uuid.UUID, page, limit int) ([]models.User, int64, error)
 	ExistsByEmail(ctx context.Context, email string) (bool, error)
 	ExistsByUsername(ctx context.Context, username string) (bool, error)
@@ -92,6 +92,9 @@ func (r *userRepository) FindByIDWithRelations(ctx context.Context, id uuid.UUID
 		Preload("Classifications").
 		Preload("Roles").
 		Preload("Roles.Permissions").
+		Preload("DeptManagerDepartment").
+		Preload("DeptManagerClassification").
+		Preload("DeptManagerLocation").
 		First(&user, "id = ?", id).Error
 	if err != nil {
 		return nil, err
@@ -219,15 +222,18 @@ func (r *userRepository) Update(ctx context.Context, user *models.User) error {
 	// Use Updates() with specific fields instead of Save() to avoid saving all loaded relations
 	// This prevents the "extended protocol limited to 65535 parameters" error
 	return r.db.WithContext(ctx).Model(&models.User{}).Where("id = ?", user.ID).Updates(map[string]interface{}{
-		"username":        user.Username,
-		"first_name":      user.FirstName,
-		"last_name":       user.LastName,
-		"phone":           user.Phone,
-		"password":        user.Password,
-		"mobile_verified": user.MobileVerified,
-		"is_active":       user.IsActive,
-		"department_id":   user.DepartmentID,
-		"location_id":     user.LocationID,
+		"username":                        user.Username,
+		"first_name":                      user.FirstName,
+		"last_name":                       user.LastName,
+		"phone":                           user.Phone,
+		"password":                        user.Password,
+		"mobile_verified":                 user.MobileVerified,
+		"is_active":                       user.IsActive,
+		"department_id":                   user.DepartmentID,
+		"location_id":                     user.LocationID,
+		"dept_manager_department_id":      user.DeptManagerDepartmentID,
+		"dept_manager_classification_id":  user.DeptManagerClassificationID,
+		"dept_manager_location_id":        user.DeptManagerLocationID,
 	}).Error
 }
 
@@ -244,12 +250,13 @@ func (r *userRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return r.db.WithContext(ctx).Delete(&models.User{}, "id = ?", id).Error
 }
 
-func (r *userRepository) List(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.User, int64, error) {
+func (r *userRepository) List(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID, strictDepartment ...bool) ([]models.User, int64, error) {
 	var users []models.User
 	var total int64
 
 	offset := (page - 1) * limit
 	hasFilters := len(roleIDs) > 0 || len(departmentIDs) > 0 || len(locationIDs) > 0 || len(classificationIDs) > 0
+	isStrict := len(strictDepartment) > 0 && strictDepartment[0]
 
 	// Build base query with search + join filters
 	base := r.db.WithContext(ctx).Model(&models.User{})
@@ -278,8 +285,12 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 			Where("ur.role_id IN ?", roleIDs)
 	}
 	if len(departmentIDs) > 0 {
-		base = base.Joins("LEFT JOIN user_departments ud ON ud.user_id = users.id").
-			Where("users.department_id IN ? OR ud.department_id IN ?", departmentIDs, departmentIDs)
+		if isStrict {
+			base = base.Where("users.department_id IN ?", departmentIDs)
+		} else {
+			base = base.Joins("LEFT JOIN user_departments ud ON ud.user_id = users.id").
+				Where("users.department_id IN ? OR ud.department_id IN ?", departmentIDs, departmentIDs)
+		}
 	}
 	if len(locationIDs) > 0 {
 		base = base.Joins("LEFT JOIN user_locations ul ON ul.user_id = users.id").
@@ -303,6 +314,9 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 			Preload("Locations").
 			Preload("Classifications").
 			Preload("Roles").
+			Preload("DeptManagerDepartment").
+			Preload("DeptManagerClassification").
+			Preload("DeptManagerLocation").
 			Offset(offset).Limit(limit).
 			Order("users.created_at DESC").
 			Find(&users).Error
@@ -340,6 +354,9 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 		Preload("Locations").
 		Preload("Classifications").
 		Preload("Roles").
+		Preload("DeptManagerDepartment").
+		Preload("DeptManagerClassification").
+		Preload("DeptManagerLocation").
 		Where("id IN ?", userIDs).
 		Order("created_at DESC").
 		Find(&users).Error; err != nil {

@@ -22,6 +22,8 @@ type Department struct {
 	Level         int          `gorm:"default:0" json:"level"`
 	Path          string       `gorm:"size:1000" json:"path"`
 	ManagerID     *uuid.UUID   `gorm:"type:uuid" json:"manager_id"`
+	SupervisorID  *uuid.UUID   `gorm:"type:uuid" json:"supervisor_id"`
+	Supervisor    *User        `gorm:"foreignKey:SupervisorID" json:"supervisor,omitempty"`
 	IsActive      bool         `gorm:"default:true" json:"is_active"`
 	SortOrder     int          `gorm:"default:0" json:"sort_order"`
 
@@ -52,6 +54,7 @@ type DepartmentCreateRequest struct {
 	Type              string      `json:"type" validate:"omitempty,oneof=internal external"`
 	ParentID          *uuid.UUID  `json:"parent_id"`
 	ManagerID         *uuid.UUID  `json:"manager_id"`
+	SupervisorID      *uuid.UUID  `json:"supervisor_id"`
 	LocationIDs       []uuid.UUID `json:"location_ids"`
 	ClassificationIDs []uuid.UUID `json:"classification_ids"`
 	RoleIDs           []uuid.UUID `json:"role_ids"`
@@ -67,6 +70,7 @@ type DepartmentUpdateRequest struct {
 	DescriptionAr     string      `json:"description_ar" validate:"max=500"`
 	Type              string      `json:"type" validate:"omitempty,oneof=internal external"`
 	ManagerID         *uuid.UUID  `json:"manager_id"`
+	SupervisorID      *uuid.UUID  `json:"supervisor_id"`
 	LocationIDs       []uuid.UUID `json:"location_ids"`
 	ClassificationIDs []uuid.UUID `json:"classification_ids"`
 	RoleIDs           []uuid.UUID `json:"role_ids"`
@@ -95,6 +99,7 @@ type DepartmentResponse struct {
 	Level           int                      `json:"level"`
 	Path            string                   `json:"path"`
 	ManagerID       *uuid.UUID               `json:"manager_id"`
+	SupervisorID    *uuid.UUID               `json:"supervisor_id"`
 	IsActive        bool                     `json:"is_active"`
 	SortOrder       int                      `json:"sort_order"`
 	Children        []DepartmentResponse     `json:"children,omitempty"`
@@ -135,6 +140,7 @@ func ToDepartmentResponse(d *Department) DepartmentResponse {
 		Level:         d.Level,
 		Path:          d.Path,
 		ManagerID:     d.ManagerID,
+		SupervisorID:  d.SupervisorID,
 		IsActive:      d.IsActive,
 		SortOrder:     d.SortOrder,
 		CreatedAt:     d.CreatedAt,

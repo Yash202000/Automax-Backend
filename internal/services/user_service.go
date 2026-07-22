@@ -42,7 +42,7 @@ type UserService interface {
 	UpdateAvatar(ctx context.Context, userID uuid.UUID, avatarURL string) error
 	DeleteUser(ctx context.Context) error
 	AdminDeleteUser(ctx context.Context, userID uuid.UUID) error
-	ListUsers(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.UserResponse, int64, error)
+	ListUsers(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID, strictDepartment ...bool) ([]models.UserResponse, int64, error)
 	GetUserByID(ctx context.Context, userID uuid.UUID) (*models.UserResponse, error)
 	GetUserByEmail(ctx context.Context, email string) (*models.User, error)
 	GetUserByMobile(ctx context.Context, phone string) (*models.User, error)
@@ -186,8 +186,19 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 		return nil, err
 	}
 
-	// Assign roles if provided
+	// Prevent department managers from assigning the Department Manager role
 	if len(req.RoleIDs) > 0 {
+		actor, _ := s.userRepo.FindByIDWithRelations(ctx, actorID)
+		if actor != nil && actor.IsDepartmentManager() {
+			var dmRole models.Role
+			if err := s.db.Where("is_department_manager = ?", true).First(&dmRole).Error; err == nil {
+				for _, roleID := range req.RoleIDs {
+					if roleID == dmRole.ID {
+						return nil, errors.New(i18n.T(ctx, "cannot_assign_department_manager_role"))
+					}
+				}
+			}
+		}
 		s.userRepo.AssignRoles(ctx, user.ID, req.RoleIDs)
 	}
 
@@ -1019,6 +1030,15 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 	if req.IsActive != nil {
 		user.IsActive = *req.IsActive
 	}
+	if req.DeptManagerDepartmentID != nil {
+		user.DeptManagerDepartmentID = req.DeptManagerDepartmentID
+	}
+	if req.DeptManagerClassificationID != nil {
+		user.DeptManagerClassificationID = req.DeptManagerClassificationID
+	}
+	if req.DeptManagerLocationID != nil {
+		user.DeptManagerLocationID = req.DeptManagerLocationID
+	}
 
 	if req.Extension != nil {
 		user.Extension = *req.Extension
@@ -1026,6 +1046,21 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 
 	if err := s.userRepo.Update(ctx, user); err != nil {
 		return nil, err
+	}
+
+	// Prevent department managers from assigning the Department Manager role
+	if req.RoleIDs != nil {
+		actor, _ := s.userRepo.FindByIDWithRelations(ctx, actorID)
+		if actor != nil && actor.IsDepartmentManager() {
+			var dmRole models.Role
+			if err := s.db.Where("is_department_manager = ?", true).First(&dmRole).Error; err == nil {
+				for _, roleID := range req.RoleIDs {
+					if roleID == dmRole.ID {
+						return nil, errors.New(i18n.T(ctx, "cannot_assign_department_manager_role"))
+					}
+				}
+			}
+		}
 	}
 
 	// Always update associations (even if empty arrays) to allow removal
@@ -1717,8 +1752,8 @@ func (s *userService) AdminDeleteUser(ctx context.Context, userID uuid.UUID) err
 	return err
 }
 
-func (s *userService) ListUsers(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.UserResponse, int64, error) {
-	users, total, err := s.userRepo.List(ctx, page, limit, search, phone, extension, callStatus, roleIDs, departmentIDs, locationIDs, classificationIDs)
+func (s *userService) ListUsers(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID, strictDepartment ...bool) ([]models.UserResponse, int64, error) {
+	users, total, err := s.userRepo.List(ctx, page, limit, search, phone, extension, callStatus, roleIDs, departmentIDs, locationIDs, classificationIDs, strictDepartment...)
 	if err != nil {
 		return nil, 0, err
 	}

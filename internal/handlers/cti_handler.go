@@ -19,6 +19,7 @@ import (
 	"github.com/automax/backend/pkg/constants"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // CTIHandler exchanges the server-held Cintrix API key for a per-agent,
@@ -30,17 +31,21 @@ type CTIHandler struct {
 	keySecret        string
 	callLogRepo      repository.CallLogRepository
 	userRepo         repository.UserRepository
+	extRepo          repository.ExtensionAssignmentRepository
+	db               *gorm.DB
 	httpClient       *http.Client
 	noRedirectClient *http.Client
 }
 
-func NewCTIHandler(cintrixURL, keyID, keySecret string, callLogRepo repository.CallLogRepository, userRepo repository.UserRepository) *CTIHandler {
+func NewCTIHandler(cintrixURL, keyID, keySecret string, callLogRepo repository.CallLogRepository, userRepo repository.UserRepository, extRepo repository.ExtensionAssignmentRepository, db *gorm.DB) *CTIHandler {
 	return &CTIHandler{
 		cintrixURL:  strings.TrimRight(cintrixURL, "/"),
 		keyID:       keyID,
 		keySecret:   keySecret,
 		callLogRepo: callLogRepo,
 		userRepo:    userRepo,
+		extRepo:     extRepo,
+		db:          db,
 		httpClient:  &http.Client{Timeout: 10 * time.Second},
 		noRedirectClient: &http.Client{
 			Timeout: 10 * time.Second,
@@ -113,10 +118,20 @@ func (h *CTIHandler) GetWidgetToken(c *fiber.Ctx) error {
 	return c.JSON(out)
 }
 
-// syncUserExtension persists the Cintrix-allocated extension onto the
-// authenticated user. Best-effort: any failure is logged and swallowed.
+// syncUserExtension makes Automax's extension_assignments reflect the
+// Cintrix-allocated extension for the authenticated agent. Best-effort: any
+// failure is logged and swallowed (never fails the token response).
+//
+// The current PBX extension lives in extension_assignments (User.Extension is a
+// transient gorm:"-" field, so writing it persists NOTHING — the old bug where
+// Admin → Users and the softphone disagreed). Cintrix is the source of truth for
+// extension ALLOCATION, so we bypass Automax's manual "pool" check and force the
+// assignment to match: take the extension over from any other holder, release
+// the agent's previous extension, assign the new one — one tx, with history
+// (mirrors ExtensionService.AssignExtension minus the pool gate).
 func (h *CTIHandler) syncUserExtension(c *fiber.Ctx, ext string) {
-	if h.userRepo == nil {
+	ext = strings.TrimSpace(ext)
+	if ext == "" || h.extRepo == nil || h.db == nil {
 		return
 	}
 	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
@@ -124,17 +139,67 @@ func (h *CTIHandler) syncUserExtension(c *fiber.Ctx, ext string) {
 		log.Printf("cti: could not resolve user id from context to sync extension")
 		return
 	}
-	user, err := h.userRepo.FindByID(c.UserContext(), userID)
-	if err != nil || user == nil {
-		log.Printf("cti: could not load user %s to sync extension: %v", userID, err)
+	ctx := c.UserContext()
+
+	cur, err := h.extRepo.GetByUserID(ctx, userID)
+	if err != nil {
+		log.Printf("cti: load current extension for user %s failed: %v", userID, err)
 		return
 	}
-	if user.Extension == ext {
+	if cur != nil && cur.Extension == ext {
+		return // already correct
+	}
+	prev, err := h.extRepo.GetByExtension(ctx, ext)
+	if err != nil {
+		log.Printf("cti: load holder of extension %s failed: %v", ext, err)
 		return
 	}
-	user.Extension = ext
-	if err := h.userRepo.Update(c.UserContext(), user); err != nil {
-		log.Printf("cti: failed to sync extension for user %s: %v", userID, err)
+	if prev != nil && prev.UserID == userID {
+		return // extension already this user's (defensive; cur check usually covers it)
+	}
+	action := models.ExtensionActionAssign
+	if prev != nil {
+		action = models.ExtensionActionTakeover
+	}
+
+	txErr := h.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if prev != nil { // takeover: drop the other holder's current row
+			if err := h.extRepo.DeleteByExtensionTx(tx, ext); err != nil {
+				return err
+			}
+		}
+		if cur != nil && cur.Extension != ext { // one-per-user: release the old one
+			if err := h.extRepo.DeleteByUserTx(tx, userID); err != nil {
+				return err
+			}
+			if err := h.extRepo.CreateHistoryTx(tx, &models.ExtensionAssignmentHistory{
+				Extension:  cur.Extension,
+				UserID:     &userID,
+				AssignedBy: userID,
+				Action:     models.ExtensionActionRelease,
+				Note:       "auto-released on Cintrix extension sync",
+			}); err != nil {
+				return err
+			}
+		}
+		if err := h.extRepo.AssignTx(tx, &models.ExtensionAssignment{
+			Extension:  ext,
+			UserID:     userID,
+			AssignedBy: userID,
+			Note:       "synced from Cintrix",
+		}); err != nil {
+			return err
+		}
+		return h.extRepo.CreateHistoryTx(tx, &models.ExtensionAssignmentHistory{
+			Extension:  ext,
+			UserID:     &userID,
+			AssignedBy: userID,
+			Action:     action,
+			Note:       "synced from Cintrix",
+		})
+	})
+	if txErr != nil {
+		log.Printf("cti: failed to sync extension %s for user %s: %v", ext, userID, txErr)
 	}
 }
 

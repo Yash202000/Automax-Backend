@@ -312,7 +312,7 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		query = query.Where("channel = ?", *filter.Channel)
 	}
 	if filter.Source != nil && *filter.Source != "" {
-		query = query.Where("source = ?", *filter.Source)
+		query = query.Where("LOWER(source) = LOWER(?)", *filter.Source)
 	}
 	if filter.SourceIncidentID != nil && *filter.SourceIncidentID != "" {
 		query = query.Where("source_incident_id = ?", *filter.SourceIncidentID)
