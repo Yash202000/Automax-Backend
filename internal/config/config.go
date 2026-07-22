@@ -325,7 +325,7 @@ func Load() *Config {
 			SecretsKey: getEnv("INTEGRATION_SECRETS_KEY", ""),
 		},
 		SmsFeedback: SmsFeedbackConfig{
-			DelayMinutes: getEnvAsInt("SMS_FEEDBACK_DELAY_MINUTES", 2880),
+			DelayMinutes: getEnvAsInt("SMS_FEEDBACK_DELAY_MINUTES", 0),
 		},
 		Cintrix: CintrixConfig{
 			URL:           getEnv("CINTRIX_URL", ""),

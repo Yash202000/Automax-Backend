@@ -3739,9 +3739,6 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			// Schedule delayed SMS fallback.
 			if s.smsFeedbackPendingRepo != nil {
 				delayMinutes := s.smsFeedbackDelayMinutes
-				if delayMinutes <= 0 {
-					delayMinutes = 2880
-				}
 				closedAt := time.Now()
 				pending := &models.SmsFeedbackPending{
 					IncidentID:  incidentID,

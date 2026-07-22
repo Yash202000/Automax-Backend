@@ -188,7 +188,7 @@ func main() {
 		}
 	}
 	log.Printf("SLA Monitor interval: %d minutes", slaIntervalMinutes)
-	smsFeedbackService := services.NewSmsFeedbackService(smsFeedbackPendingRepo, incidentRepo, notificationService)
+	smsFeedbackService := services.NewSmsFeedbackService(smsFeedbackPendingRepo, incidentRepo, notificationService, finalCloseWhatsAppFeedbackSessionService)
 	slaMonitor := services.NewSLAMonitor(incidentRepo, escalationService, escalationGroupService, readyToCloseService, smsFeedbackService, time.Duration(slaIntervalMinutes)*time.Minute)
 	ctx := context.Background()
 	slaMonitor.Start(ctx)
