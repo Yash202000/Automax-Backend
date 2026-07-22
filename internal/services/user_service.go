@@ -2008,8 +2008,62 @@ func (s *userService) SendSMSOTP(phone, otp string) error {
 		return fmt.Errorf("phone must include country code")
 	}
 	message := fmt.Sprintf("Your OTP is %s. It is valid for 5 minutes.", otp)
-	_, err := intutils.SendSMS(phone, message)
+	sid, err := intutils.SendSMS(phone, message)
+	s.logOTPNotification("sms", "twilio", phone, message, sid, err)
 	return err
+}
+
+// logOTPNotification persists an OTP send attempt (success or failure) to
+// notification_logs so it shows up in the Notification Monitoring Dashboard.
+// This does not alter the OTP send/verify flow in any way: it runs after the
+// send already happened, and a failure here is only logged to stdout — it is
+// never returned to the caller, so it cannot affect password reset/login.
+func (s *userService) logOTPNotification(channel, provider, recipient, body, providerMessageID string, sendErr error) {
+	if s.db == nil {
+		return
+	}
+
+	status := "sent"
+	recipientStatus := "success"
+	errorMessage := ""
+	failureCode := ""
+	if sendErr != nil {
+		status = "failed"
+		recipientStatus = "failed"
+		errorMessage = sendErr.Error()
+		failureCode = ClassifyFailureCode(sendErr)
+	}
+
+	now := time.Now()
+	notification := &models.NotificationLog{
+		Channel:      channel,
+		Direction:    models.DirectionOutbound,
+		Category:     models.CategorySent,
+		TemplateCode: "OTP",
+		Language:     "en",
+		Recipients: models.RecipientArray{{
+			Email:             recipient,
+			Channel:           recipient,
+			Type:              "to",
+			Status:            recipientStatus,
+			Error:             errorMessage,
+			ErrorMessage:      errorMessage,
+			FailureCode:       failureCode,
+			ProviderMessageID: providerMessageID,
+		}},
+		Subject:     "OTP",
+		Body:        body,
+		Status:      status,
+		Provider:    provider,
+		FailureCode: failureCode,
+		SentAt:      &now,
+		CreatedAt:   now,
+		UpdatedAt:   &now,
+	}
+
+	if err := s.db.Create(notification).Error; err != nil {
+		log.Printf("[UserService] failed to persist OTP notification log: %v", err)
+	}
 }
 
 func (s *userService) SendEmailOTP(toEmail, otp string) error {
@@ -2036,6 +2090,7 @@ func (s *userService) SendEmailOTP(toEmail, otp string) error {
 	to := []string{toEmail}
 
 	_, err := intutils.SendSMTPWithCCBCC(to, nil, nil, subject, body, nil)
+	s.logOTPNotification("email", "smtp", toEmail, body, "", err)
 	// Logging
 	if err != nil {
 		log.Println("SMTP ERROR:", err)
