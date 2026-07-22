@@ -317,9 +317,12 @@ func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 	}
 
 	// Department Manager scope: restrict to assigned department, classification, location
+	// Uses normal LEFT JOIN (not strict) so users linked via join tables still appear.
 	if user != nil && user.IsDepartmentManager() {
 		if user.DeptManagerDepartmentID != nil {
 			departmentIDs = []uuid.UUID{*user.DeptManagerDepartmentID}
+		} else if user.DepartmentID != nil {
+			departmentIDs = []uuid.UUID{*user.DepartmentID}
 		}
 		if user.DeptManagerClassificationID != nil {
 			classificationIDs = []uuid.UUID{*user.DeptManagerClassificationID}
@@ -327,6 +330,8 @@ func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 		if user.DeptManagerLocationID != nil {
 			locationIDs = []uuid.UUID{*user.DeptManagerLocationID}
 		}
+		log.Printf("[DM Scope] user=%s, departmentIDs=%v, classificationIDs=%v, locationIDs=%v",
+			user.Email, departmentIDs, classificationIDs, locationIDs)
 	}
 
 	page = max(page, 1)
@@ -336,7 +341,7 @@ func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 		limit = 1000
 	}
 
-	users, total, err := h.userService.ListUsers(c.UserContext(), page, limit, search, phone, extension, callStatus, roleIDs, departmentIDs, locationIDs, classificationIDs)
+	users, total, err := h.userService.ListUsers(c.UserContext(), page, limit, search, phone, extension, callStatus, roleIDs, departmentIDs, locationIDs, classificationIDs, false)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_users"))
 	}
