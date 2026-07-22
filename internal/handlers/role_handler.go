@@ -6,6 +6,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
@@ -170,6 +171,45 @@ func (h *RoleHandler) DeleteRole(c *fiber.Ctx) error {
 }
 
 func (h *RoleHandler) ListRoles(c *fiber.Ctx) error {
+	// If department_id query param is provided, scope to that department's roles
+	deptIDStr := c.Query("department_id")
+	if deptIDStr != "" {
+		deptID, err := uuid.Parse(deptIDStr)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_department_id"))
+		}
+		roles, err := h.roleRepo.ListByDepartment(c.UserContext(), deptID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		}
+		responses := make([]models.RoleResponse, len(roles))
+		for i, role := range roles {
+			responses[i] = models.ToRoleResponse(&role)
+		}
+		return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "roles_retrieved"), responses)
+	}
+
+	// Check if current user is a department manager — scope roles automatically
+	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
+	if user != nil && user.IsDepartmentManager() && user.DeptManagerDepartmentID != nil {
+		roles, err := h.roleRepo.ListByDepartment(c.UserContext(), *user.DeptManagerDepartmentID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		}
+		// Department managers must not see the Department Manager role itself
+		filtered := make([]models.Role, 0, len(roles))
+		for _, role := range roles {
+			if !role.IsDepartmentManager {
+				filtered = append(filtered, role)
+			}
+		}
+		responses := make([]models.RoleResponse, len(filtered))
+		for i, role := range filtered {
+			responses[i] = models.ToRoleResponse(&role)
+		}
+		return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "roles_retrieved"), responses)
+	}
+
 	roles, err := h.roleRepo.List(c.UserContext())
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())

@@ -30,13 +30,14 @@ func (p *Permission) BeforeCreate(tx *gorm.DB) error {
 
 // Role represents a user role with associated permissions
 type Role struct {
-	ID          uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
-	Name        string         `gorm:"not null;size:100;uniqueIndex" json:"name"`
-	Code        string         `gorm:"not null;size:50;uniqueIndex" json:"code"`
-	Description string         `gorm:"size:500" json:"description"`
-	IsSystem    bool           `gorm:"default:false" json:"is_system"` // System roles cannot be deleted
-	IsActive    bool           `gorm:"default:true" json:"is_active"`
-	Permissions []Permission   `gorm:"many2many:role_permissions;" json:"permissions,omitempty"`
+	ID                  uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	Name                string         `gorm:"not null;size:100;uniqueIndex" json:"name"`
+	Code                string         `gorm:"not null;size:50;uniqueIndex" json:"code"`
+	Description         string         `gorm:"size:500" json:"description"`
+	IsSystem            bool           `gorm:"default:false" json:"is_system"` // System roles cannot be deleted
+	IsActive            bool           `gorm:"default:true" json:"is_active"`
+	IsDepartmentManager bool           `gorm:"default:false" json:"is_department_manager"`
+	Permissions         []Permission   `gorm:"many2many:role_permissions;" json:"permissions,omitempty"`
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
 	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
@@ -108,25 +109,27 @@ type RoleUpdateRequest struct {
 
 // RoleResponse for API responses
 type RoleResponse struct {
-	ID          uuid.UUID            `json:"id"`
-	Name        string               `json:"name"`
-	Code        string               `json:"code"`
-	Description string               `json:"description"`
-	IsSystem    bool                 `json:"is_system"`
-	IsActive    bool                 `json:"is_active"`
-	Permissions []PermissionResponse `json:"permissions,omitempty"`
-	CreatedAt   time.Time            `json:"created_at"`
+	ID                  uuid.UUID            `json:"id"`
+	Name                string               `json:"name"`
+	Code                string               `json:"code"`
+	Description         string               `json:"description"`
+	IsSystem            bool                 `json:"is_system"`
+	IsActive            bool                 `json:"is_active"`
+	IsDepartmentManager bool                 `json:"is_department_manager"`
+	Permissions         []PermissionResponse `json:"permissions,omitempty"`
+	CreatedAt           time.Time            `json:"created_at"`
 }
 
 func ToRoleResponse(r *Role) RoleResponse {
 	resp := RoleResponse{
-		ID:          r.ID,
-		Name:        r.Name,
-		Code:        r.Code,
-		Description: r.Description,
-		IsSystem:    r.IsSystem,
-		IsActive:    r.IsActive,
-		CreatedAt:   r.CreatedAt,
+		ID:                  r.ID,
+		Name:                r.Name,
+		Code:                r.Code,
+		Description:         r.Description,
+		IsSystem:            r.IsSystem,
+		IsActive:            r.IsActive,
+		IsDepartmentManager: r.IsDepartmentManager,
+		CreatedAt:           r.CreatedAt,
 	}
 
 	if len(r.Permissions) > 0 {

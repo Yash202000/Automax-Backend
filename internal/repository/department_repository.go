@@ -60,6 +60,7 @@ func (r *departmentRepository) FindByID(ctx context.Context, id uuid.UUID) (*mod
 		Preload("Locations").
 		Preload("Classifications").
 		Preload("Roles").
+		Preload("Supervisor").
 		First(&department, "id = ?", id).Error
 	if err != nil {
 		return nil, err
@@ -120,6 +121,7 @@ func (r *departmentRepository) List(ctx context.Context) ([]models.Department, e
 		Preload("Locations").
 		Preload("Classifications").
 		Preload("Roles").
+		Preload("Supervisor").
 		Order("sort_order, name").
 		Find(&departments).Error
 	return departments, err
@@ -157,6 +159,7 @@ func (r *departmentRepository) ListFiltered(ctx context.Context, filter models.D
 		Preload("Locations").
 		Preload("Classifications").
 		Preload("Roles").
+		Preload("Supervisor").
 		Group("departments.id"). // deduplicate rows produced by the joins
 		Order("departments.sort_order, departments.name").
 		Offset(offset).
@@ -179,6 +182,7 @@ func (r *departmentRepository) GetTree(ctx context.Context) ([]models.Department
 		Preload("Locations").
 		Preload("Classifications").
 		Preload("Roles").
+		Preload("Supervisor").
 		Order("sort_order, name").
 		Find(&roots).Error
 	return roots, err
@@ -283,6 +287,7 @@ func (r *departmentRepository) FindMatching(ctx context.Context, classificationI
 		Preload("Locations").
 		Preload("Classifications").
 		Preload("Roles").
+		Preload("Supervisor").
 		Where("departments.is_active = ?", true)
 
 	if departmentType != nil && *departmentType != "" {

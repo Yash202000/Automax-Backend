@@ -35,9 +35,15 @@ type User struct {
 	Locations       []Location       `gorm:"many2many:user_locations;" json:"locations,omitempty"`
 	Classifications []Classification `gorm:"many2many:user_classifications;" json:"classifications,omitempty"`
 	Roles           []Role           `gorm:"many2many:user_roles;" json:"roles,omitempty"`
-	IsActive        bool             `gorm:"default:true" json:"is_active"`
-	IsSuperAdmin    bool             `gorm:"default:false" json:"is_super_admin"`
-	IsADUser        bool             `gorm:"default:false" json:"is_ad_user"`
+	IsActive                      bool             `gorm:"default:true" json:"is_active"`
+	IsSuperAdmin                  bool             `gorm:"default:false" json:"is_super_admin"`
+	IsADUser                      bool             `gorm:"default:false" json:"is_ad_user"`
+	DeptManagerDepartmentID       *uuid.UUID       `gorm:"type:uuid;index" json:"dept_manager_department_id,omitempty"`
+	DeptManagerDepartment         *Department      `gorm:"foreignKey:DeptManagerDepartmentID" json:"dept_manager_department,omitempty"`
+	DeptManagerClassificationID   *uuid.UUID       `gorm:"type:uuid;index" json:"dept_manager_classification_id,omitempty"`
+	DeptManagerClassification     *Classification  `gorm:"foreignKey:DeptManagerClassificationID" json:"dept_manager_classification,omitempty"`
+	DeptManagerLocationID         *uuid.UUID       `gorm:"type:uuid;index" json:"dept_manager_location_id,omitempty"`
+	DeptManagerLocation           *Location        `gorm:"foreignKey:DeptManagerLocationID" json:"dept_manager_location,omitempty"`
 	// Extension is transient (no DB column): the current PBX extension lives in the
 	// extension_assignments table. It is populated from CurrentExtension by AfterFind
 	// so API responses keep exposing it. Managed only via the extensions API.
@@ -90,6 +96,19 @@ func (u *User) HasRole(roleCode string) bool {
 	}
 	for _, role := range u.Roles {
 		if role.Code == roleCode && role.IsActive {
+			return true
+		}
+	}
+	return false
+}
+
+// IsDepartmentManager checks if the user has any role with is_department_manager = true
+func (u *User) IsDepartmentManager() bool {
+	if u.IsSuperAdmin {
+		return false
+	}
+	for _, role := range u.Roles {
+		if role.IsDepartmentManager && role.IsActive {
 			return true
 		}
 	}
@@ -187,47 +206,56 @@ type SSOLoginRequest struct {
 }
 
 type UserUpdateRequest struct {
-	FirstName         string      `json:"first_name" validate:"max=100"`
-	LastName          string      `json:"last_name" validate:"max=100"`
-	Username          string      `json:"username" validate:"omitempty,min=3,max=50"`
-	Phone             string      `json:"phone" validate:"max=20"`
-	MobileVerified    *bool       `json:"mobile_verified"`
-	Extension         *string     `json:"extension" validate:"omitempty,max=20"`
-	DepartmentID      *uuid.UUID  `json:"department_id"`
-	LocationID        *uuid.UUID  `json:"location_id"`
-	DepartmentIDs     []uuid.UUID `json:"department_ids"`
-	LocationIDs       []uuid.UUID `json:"location_ids"`
-	ClassificationIDs []uuid.UUID `json:"classification_ids"`
-	RoleIDs           []uuid.UUID `json:"role_ids"`
-	IsActive          *bool       `json:"is_active"`
+	FirstName                   string      `json:"first_name" validate:"max=100"`
+	LastName                    string      `json:"last_name" validate:"max=100"`
+	Username                    string      `json:"username" validate:"omitempty,min=3,max=50"`
+	Phone                       string      `json:"phone" validate:"max=20"`
+	MobileVerified              *bool       `json:"mobile_verified"`
+	Extension                   *string     `json:"extension" validate:"omitempty,max=20"`
+	DepartmentID                *uuid.UUID  `json:"department_id"`
+	LocationID                  *uuid.UUID  `json:"location_id"`
+	DepartmentIDs               []uuid.UUID `json:"department_ids"`
+	LocationIDs                 []uuid.UUID `json:"location_ids"`
+	ClassificationIDs           []uuid.UUID `json:"classification_ids"`
+	RoleIDs                     []uuid.UUID `json:"role_ids"`
+	IsActive                    *bool       `json:"is_active"`
+	DeptManagerDepartmentID     *uuid.UUID  `json:"dept_manager_department_id"`
+	DeptManagerClassificationID *uuid.UUID  `json:"dept_manager_classification_id"`
+	DeptManagerLocationID       *uuid.UUID  `json:"dept_manager_location_id"`
 }
 
 type UserResponse struct {
-	ID              uuid.UUID                `json:"id"`
-	NationalID      string                   `json:"national_id"`
-	Email           string                   `json:"email"`
-	Username        string                   `json:"username"`
-	FirstName       string                   `json:"first_name"`
-	LastName        string                   `json:"last_name"`
-	Phone           string                   `json:"phone"`
-	MobileVerified  bool                     `json:"mobile_verified"`
-	Avatar          string                   `json:"avatar"`
-	DepartmentID    *uuid.UUID               `json:"department_id"`
-	Department      *DepartmentResponse      `json:"department,omitempty"`
-	Departments     []DepartmentResponse     `json:"departments,omitempty"`
-	LocationID      *uuid.UUID               `json:"location_id"`
-	Location        *LocationResponse        `json:"location,omitempty"`
-	Locations       []LocationResponse       `json:"locations,omitempty"`
-	Classifications []ClassificationResponse `json:"classifications,omitempty"`
-	Roles           []RoleResponse           `json:"roles,omitempty"`
-	Permissions     []string                 `json:"permissions,omitempty"`
-	IsActive        bool                     `json:"is_active"`
-	IsSuperAdmin    bool                     `json:"is_super_admin"`
-	IsADUser        bool                     `json:"is_ad_user"`
-	Extension       string                   `json:"extension"`
-	CallStatus      string                   `json:"call_status"`
-	LastLoginAt     *time.Time               `json:"last_login_at"`
-	CreatedAt       time.Time                `json:"created_at"`
+	ID                          uuid.UUID                `json:"id"`
+	NationalID                  string                   `json:"national_id"`
+	Email                       string                   `json:"email"`
+	Username                    string                   `json:"username"`
+	FirstName                   string                   `json:"first_name"`
+	LastName                    string                   `json:"last_name"`
+	Phone                       string                   `json:"phone"`
+	MobileVerified              bool                     `json:"mobile_verified"`
+	Avatar                      string                   `json:"avatar"`
+	DepartmentID                *uuid.UUID               `json:"department_id"`
+	Department                  *DepartmentResponse      `json:"department,omitempty"`
+	Departments                 []DepartmentResponse     `json:"departments,omitempty"`
+	LocationID                  *uuid.UUID               `json:"location_id"`
+	Location                    *LocationResponse        `json:"location,omitempty"`
+	Locations                   []LocationResponse       `json:"locations,omitempty"`
+	Classifications             []ClassificationResponse `json:"classifications,omitempty"`
+	Roles                       []RoleResponse           `json:"roles,omitempty"`
+	Permissions                 []string                 `json:"permissions,omitempty"`
+	IsActive                    bool                     `json:"is_active"`
+	IsSuperAdmin                bool                     `json:"is_super_admin"`
+	IsADUser                    bool                     `json:"is_ad_user"`
+	DeptManagerDepartmentID     *uuid.UUID               `json:"dept_manager_department_id,omitempty"`
+	DeptManagerDepartment       *DepartmentResponse      `json:"dept_manager_department,omitempty"`
+	DeptManagerClassificationID *uuid.UUID               `json:"dept_manager_classification_id,omitempty"`
+	DeptManagerClassification   *ClassificationResponse  `json:"dept_manager_classification,omitempty"`
+	DeptManagerLocationID       *uuid.UUID               `json:"dept_manager_location_id,omitempty"`
+	DeptManagerLocation         *LocationResponse        `json:"dept_manager_location,omitempty"`
+	Extension                   string                   `json:"extension"`
+	CallStatus                  string                   `json:"call_status"`
+	LastLoginAt                 *time.Time               `json:"last_login_at"`
+	CreatedAt                   time.Time                `json:"created_at"`
 }
 
 type AuthResponse struct {
@@ -240,11 +268,12 @@ type AuthResponse struct {
 
 // RoleBasicResponse is a slimmed-down role for the login response (no nested permissions).
 type RoleBasicResponse struct {
-	ID       uuid.UUID `json:"id"`
-	Name     string    `json:"name"`
-	Code     string    `json:"code"`
-	IsSystem bool      `json:"is_system"`
-	IsActive bool      `json:"is_active"`
+	ID                  uuid.UUID `json:"id"`
+	Name                string    `json:"name"`
+	Code                string    `json:"code"`
+	IsSystem            bool      `json:"is_system"`
+	IsActive            bool      `json:"is_active"`
+	IsDepartmentManager bool      `json:"is_department_manager"`
 }
 
 // UserLoginResponse is a slimmed-down user for the login response.
@@ -310,11 +339,12 @@ type UserMatchResponse struct {
 
 func ToRoleBasicResponse(role *Role) RoleBasicResponse {
 	return RoleBasicResponse{
-		ID:       role.ID,
-		Name:     role.Name,
-		Code:     role.Code,
-		IsSystem: role.IsSystem,
-		IsActive: role.IsActive,
+		ID:                  role.ID,
+		Name:                role.Name,
+		Code:                role.Code,
+		IsSystem:            role.IsSystem,
+		IsActive:            role.IsActive,
+		IsDepartmentManager: role.IsDepartmentManager,
 	}
 }
 
@@ -380,6 +410,21 @@ func ToUserResponse(user *User) UserResponse {
 	if user.Location != nil {
 		loc := ToLocationResponse(user.Location)
 		resp.Location = &loc
+	}
+
+	if user.DeptManagerDepartment != nil {
+		dept := ToDepartmentResponse(user.DeptManagerDepartment)
+		resp.DeptManagerDepartment = &dept
+	}
+
+	if user.DeptManagerClassification != nil {
+		cls := ToClassificationResponse(user.DeptManagerClassification)
+		resp.DeptManagerClassification = &cls
+	}
+
+	if user.DeptManagerLocation != nil {
+		loc := ToLocationResponse(user.DeptManagerLocation)
+		resp.DeptManagerLocation = &loc
 	}
 
 	if len(user.Departments) > 0 {

@@ -92,6 +92,9 @@ func (r *userRepository) FindByIDWithRelations(ctx context.Context, id uuid.UUID
 		Preload("Classifications").
 		Preload("Roles").
 		Preload("Roles.Permissions").
+		Preload("DeptManagerDepartment").
+		Preload("DeptManagerClassification").
+		Preload("DeptManagerLocation").
 		First(&user, "id = ?", id).Error
 	if err != nil {
 		return nil, err
@@ -219,15 +222,18 @@ func (r *userRepository) Update(ctx context.Context, user *models.User) error {
 	// Use Updates() with specific fields instead of Save() to avoid saving all loaded relations
 	// This prevents the "extended protocol limited to 65535 parameters" error
 	return r.db.WithContext(ctx).Model(&models.User{}).Where("id = ?", user.ID).Updates(map[string]interface{}{
-		"username":        user.Username,
-		"first_name":      user.FirstName,
-		"last_name":       user.LastName,
-		"phone":           user.Phone,
-		"password":        user.Password,
-		"mobile_verified": user.MobileVerified,
-		"is_active":       user.IsActive,
-		"department_id":   user.DepartmentID,
-		"location_id":     user.LocationID,
+		"username":                        user.Username,
+		"first_name":                      user.FirstName,
+		"last_name":                       user.LastName,
+		"phone":                           user.Phone,
+		"password":                        user.Password,
+		"mobile_verified":                 user.MobileVerified,
+		"is_active":                       user.IsActive,
+		"department_id":                   user.DepartmentID,
+		"location_id":                     user.LocationID,
+		"dept_manager_department_id":      user.DeptManagerDepartmentID,
+		"dept_manager_classification_id":  user.DeptManagerClassificationID,
+		"dept_manager_location_id":        user.DeptManagerLocationID,
 	}).Error
 }
 
@@ -303,6 +309,9 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 			Preload("Locations").
 			Preload("Classifications").
 			Preload("Roles").
+			Preload("DeptManagerDepartment").
+			Preload("DeptManagerClassification").
+			Preload("DeptManagerLocation").
 			Offset(offset).Limit(limit).
 			Order("users.created_at DESC").
 			Find(&users).Error
@@ -340,6 +349,9 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 		Preload("Locations").
 		Preload("Classifications").
 		Preload("Roles").
+		Preload("DeptManagerDepartment").
+		Preload("DeptManagerClassification").
+		Preload("DeptManagerLocation").
 		Where("id IN ?", userIDs).
 		Order("created_at DESC").
 		Find(&users).Error; err != nil {

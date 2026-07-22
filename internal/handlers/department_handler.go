@@ -66,6 +66,7 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 		Type:          deptType,
 		ParentID:      req.ParentID,
 		ManagerID:     req.ManagerID,
+		SupervisorID:  req.SupervisorID,
 		SortOrder:     req.SortOrder,
 		IsActive:      true,
 	}
@@ -214,6 +215,9 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 	}
 	if req.ManagerID != nil {
 		department.ManagerID = req.ManagerID
+	}
+	if req.SupervisorID != nil {
+		department.SupervisorID = req.SupervisorID
 	}
 	if req.IsActive != nil {
 		if !*req.IsActive && department.IsActive {

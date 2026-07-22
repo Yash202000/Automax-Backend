@@ -77,15 +77,17 @@ var APP = struct {
 }
 
 var ROLES = struct {
-	SUPER_ADMIN string
-	ADMIN       string
-	USER        string
-	CITIZEN     string
-	AGENT       string
+	SUPER_ADMIN        string
+	ADMIN              string
+	USER               string
+	CITIZEN            string
+	AGENT              string
+	DEPARTMENT_MANAGER string
 }{
-	SUPER_ADMIN: "super_admin",
-	ADMIN:       "admin",
-	USER:        "user",
-	CITIZEN:     "citizen",
-	AGENT:       "agent",
+	SUPER_ADMIN:        "super_admin",
+	ADMIN:              "admin",
+	USER:               "user",
+	CITIZEN:            "citizen",
+	AGENT:              "agent",
+	DEPARTMENT_MANAGER: "department_manager",
 }

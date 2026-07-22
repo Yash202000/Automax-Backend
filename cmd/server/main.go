@@ -558,6 +558,7 @@ func main() {
 	usersGroup.Get("/", authMiddleware.RequirePermission("users:view"), userHandler.ListUsers)
 	usersGroup.Post("/", authMiddleware.RequirePermission("users:create"), userHandler.AdminCreateUser)
 	usersGroup.Post("/match", authMiddleware.RequirePermission("users:view"), userHandler.MatchUsers)
+	usersGroup.Get("/manager-scope", authMiddleware.RequirePermission("users:view"), userHandler.GetManagerScope)
 	usersGroup.Get("/export", authMiddleware.RequirePermission("users:view"), userHandler.Export)
 	usersGroup.Post("/import", authMiddleware.RequirePermission("users:create"), userHandler.Import)
 	usersGroup.Get("/:id", authMiddleware.RequirePermission("users:view"), userHandler.GetUser)

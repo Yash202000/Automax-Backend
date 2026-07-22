@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/database/migrations"
@@ -640,6 +641,10 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Queries Dashboard", Code: "dashboard:queries", Module: "dashboard", Action: "queries", Description: "Access query cards on dashboard"},
 		{Name: "Workflows Dashboard", Code: "dashboard:workflows", Module: "dashboard", Action: "workflows", Description: "Access workflow cards on dashboard"},
 		{Name: "CCM Dashboard", Code: "dashboard:ccm", Module: "dashboard", Action: "ccm", Description: "Access ccm cards on dashboard"},
+
+		// Department-scoped permissions (configurable scoping)
+		{Name: "View Only Department Incidents", Code: "incidents:view_department_only", Module: "incidents", Action: "view_department_only", Description: "Restrict incident view to own department"},
+		{Name: "View Only Department Users", Code: "users:view_department_only", Module: "users", Action: "view_department_only", Description: "Restrict user view to own department"},
 	}
 
 	if cfg.GoalManagement.Enabled {
@@ -753,6 +758,80 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		db.Model(&managerRole).Association("Permissions").Replace(managerPerms)
 	}
 
+	// Department Manager role — manages users within assigned scope
+	var deptManagerRole models.Role
+	result = db.Where("code = ?", "department_manager").First(&deptManagerRole)
+	if result.Error == gorm.ErrRecordNotFound {
+		var deptManagerPerms []models.Permission
+		db.Where("code IN ?", []string{
+			"users:view", "users:create", "users:update",
+			"incidents:view", "incidents:view_all", "incidents:transition", "incidents:assign", "incidents:comment",
+			"requests:view", "requests:view_all", "requests:transition", "requests:assign", "requests:comment",
+			"complaints:view", "complaints:view_all", "complaints:transition", "complaints:assign", "complaints:comment",
+			"queries:view", "queries:view_all", "queries:transition", "queries:assign", "queries:comment",
+			"incidents:view_department_only", "users:view_department_only",
+		}).Find(&deptManagerPerms)
+		deptManagerRole = models.Role{
+			Name:                "Department Manager",
+			Code:                "department_manager",
+			Description:         "Department manager with restricted scope to assigned department, classification, and location",
+			IsSystem:            true,
+			IsActive:            true,
+			IsDepartmentManager: true,
+			Permissions:         deptManagerPerms,
+		}
+		db.Create(&deptManagerRole)
+	} else {
+		var deptManagerPerms []models.Permission
+		db.Where("code IN ?", []string{
+			"users:view", "users:create", "users:update",
+			"incidents:view", "incidents:view_all", "incidents:transition", "incidents:assign", "incidents:comment",
+			"requests:view", "requests:view_all", "requests:transition", "requests:assign", "requests:comment",
+			"complaints:view", "complaints:view_all", "complaints:transition", "complaints:assign", "complaints:comment",
+			"queries:view", "queries:view_all", "queries:transition", "queries:assign", "queries:comment",
+			"incidents:view_department_only", "users:view_department_only",
+		}).Find(&deptManagerPerms)
+		db.Model(&deptManagerRole).Association("Permissions").Replace(deptManagerPerms)
+		if !deptManagerRole.IsDepartmentManager {
+			db.Model(&deptManagerRole).Update("is_department_manager", true)
+		}
+	}
+
+	// Supervisor role with view permissions for department scoping
+	var supervisorRole models.Role
+	result = db.Where("code = ?", "supervisor").First(&supervisorRole)
+	if result.Error == gorm.ErrRecordNotFound {
+		var supervisorPerms []models.Permission
+		db.Where("code IN ?", []string{
+			"incidents:view", "incidents:view_all", "incidents:transition", "incidents:assign", "incidents:comment",
+			"requests:view", "requests:view_all", "requests:transition", "requests:assign", "requests:comment",
+			"complaints:view", "complaints:view_all", "complaints:transition", "complaints:assign", "complaints:comment",
+			"queries:view", "queries:view_all", "queries:transition", "queries:assign", "queries:comment",
+			"users:view",
+			"incidents:view_department_only", "users:view_department_only",
+		}).Find(&supervisorPerms)
+		supervisorRole = models.Role{
+			Name:        "Supervisor",
+			Code:        "supervisor",
+			Description: "Department supervisor with scoped access to tickets and personnel",
+			IsSystem:    true,
+			IsActive:    true,
+			Permissions: supervisorPerms,
+		}
+		db.Create(&supervisorRole)
+	} else {
+		var supervisorPerms []models.Permission
+		db.Where("code IN ?", []string{
+			"incidents:view", "incidents:view_all", "incidents:transition", "incidents:assign", "incidents:comment",
+			"requests:view", "requests:view_all", "requests:transition", "requests:assign", "requests:comment",
+			"complaints:view", "complaints:view_all", "complaints:transition", "complaints:assign", "complaints:comment",
+			"queries:view", "queries:view_all", "queries:transition", "queries:assign", "queries:comment",
+			"users:view",
+			"incidents:view_department_only", "users:view_department_only",
+		}).Find(&supervisorPerms)
+		db.Model(&supervisorRole).Association("Permissions").Replace(supervisorPerms)
+	}
+
 	// Grant extension-management permissions to the agent role (if it exists).
 	// Admin already receives all permissions above; super admins bypass permission
 	// checks entirely. We append (not replace) so any other agent permissions stay intact.
@@ -795,6 +874,61 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		db.Model(&adminUser).Association("Roles").Append(&adminRole)
 	}
 
+	// Create default departments for supervisor seeding
+	var defaultDept models.Department
+	if err := db.Where("name = ?", "General").First(&defaultDept).Error; err == gorm.ErrRecordNotFound {
+		defaultDept = models.Department{
+			Name:     "General",
+			Code:     "GEN",
+			IsActive: true,
+		}
+		db.Create(&defaultDept)
+	}
+
+	var supportDept models.Department
+	if err := db.Where("name = ?", "Support").First(&supportDept).Error; err == gorm.ErrRecordNotFound {
+		supportDept = models.Department{
+			Name:     "Support",
+			Code:     "SUP",
+			IsActive: true,
+		}
+		db.Create(&supportDept)
+	}
+
+	// Create supervisor users with department assignments
+	type supervisorSeed struct {
+		Email        string
+		Username     string
+		FirstName    string
+		LastName     string
+		DepartmentID *uuid.UUID
+	}
+	supervisors := []supervisorSeed{
+		{"supervisor1@automax.com", "supervisor1", "Ahmed", "Ali", &defaultDept.ID},
+		{"supervisor2@automax.com", "supervisor2", "Sara", "Mohammed", &supportDept.ID},
+	}
+	for _, su := range supervisors {
+		var existing models.User
+		if db.Where("email = ?", su.Email).First(&existing).Error == gorm.ErrRecordNotFound {
+			hashedPwd, _ := utils.HashPassword("supervisor123")
+			user := models.User{
+				Email:        su.Email,
+				Username:     su.Username,
+				Password:     hashedPwd,
+				FirstName:    su.FirstName,
+				LastName:     su.LastName,
+				IsActive:     true,
+				DepartmentID: su.DepartmentID,
+			}
+			db.Create(&user)
+			db.Model(&user).Association("Roles").Append(&supervisorRole)
+			db.Model(&models.Department{}).Where("id = ?", su.DepartmentID).Update("supervisor_id", user.ID)
+		}
+	}
+
+	// Seed a default incident workflow for demo/test incidents
+	seedDefaultIncidentWorkflow(db, defaultDept.ID, supportDept.ID, adminUser.ID)
+
 	// Seed default lookup categories
 	seedLookupCategories(db)
 
@@ -824,6 +958,122 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 	}
 	log.Println("Database seeding completed")
 	return nil
+}
+
+// seedDefaultIncidentWorkflow creates a minimal incident workflow and demo tickets
+// for the seeded departments so supervisors have data to view.
+func seedDefaultIncidentWorkflow(db *gorm.DB, defaultDeptID, supportDeptID, adminUserID uuid.UUID) {
+	var workflow models.Workflow
+	if err := db.Where("code = ?", "incident_default").First(&workflow).Error; err == gorm.ErrRecordNotFound {
+		workflow = models.Workflow{
+			Name:       "Default Incident Workflow",
+			Code:       "incident_default",
+			RecordType: "incident",
+			IsDefault:  true,
+			IsActive:   true,
+		}
+		db.Create(&workflow)
+
+		states := []models.WorkflowState{
+			{WorkflowID: workflow.ID, Name: "New", Code: "new", StateType: "initial", Color: "#6366f1"},
+			{WorkflowID: workflow.ID, Name: "In Progress", Code: "in_progress", StateType: "normal", Color: "#f59e0b"},
+			{WorkflowID: workflow.ID, Name: "Resolved", Code: "resolved", StateType: "normal", Color: "#10b981"},
+			{WorkflowID: workflow.ID, Name: "Closed", Code: "closed", StateType: "terminal", Color: "#6b7280"},
+			{WorkflowID: workflow.ID, Name: "Rejected", Code: "rejected", StateType: "terminal", Color: "#ef4444"},
+		}
+		for i := range states {
+			states[i].ID = uuid.New()
+			db.Create(&states[i])
+		}
+
+		newState := states[0]
+		inProgressState := states[1]
+		resolvedState := states[2]
+		closedState := states[3]
+
+		now := time.Now()
+
+		// Create demo incidents for each department
+		demoIncidents := []models.Incident{
+			{
+				IncidentNumber: "INC-2026-0001",
+				Title:         "Network outage in building A",
+				Description:   "Users in building A cannot access the network",
+				RecordType:    "incident",
+				WorkflowID:    workflow.ID,
+				CurrentStateID: newState.ID,
+				DepartmentID:  &defaultDeptID,
+				Source:        "phone",
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			},
+			{
+				IncidentNumber: "INC-2026-0002",
+				Title:         "Email server slow response",
+				Description:   "Email server taking more than 30 seconds to respond",
+				RecordType:    "incident",
+				WorkflowID:    workflow.ID,
+				CurrentStateID: inProgressState.ID,
+				DepartmentID:  &supportDeptID,
+				Source:        "email",
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			},
+			{
+				IncidentNumber: "REQ-2026-0001",
+				Title:         "New laptop request for onboarding",
+				Description:   "New employee needs a laptop for onboarding",
+				RecordType:    "request",
+				WorkflowID:    workflow.ID,
+				CurrentStateID: newState.ID,
+				DepartmentID:  &defaultDeptID,
+				Source:        "portal",
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			},
+			{
+				IncidentNumber: "REQ-2026-0002",
+				Title:         "Software license renewal",
+				Description:   "Renew Adobe Creative Cloud license for design team",
+				RecordType:    "request",
+				WorkflowID:    workflow.ID,
+				CurrentStateID: resolvedState.ID,
+				DepartmentID:  &supportDeptID,
+				Source:        "email",
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			},
+			{
+				IncidentNumber: "CMP-2026-0001",
+				Title:         "Rude behavior from support agent",
+				Description:   "Customer complained about rude behavior from support agent",
+				RecordType:    "complaint",
+				WorkflowID:    workflow.ID,
+				CurrentStateID: closedState.ID,
+				DepartmentID:  &supportDeptID,
+				Source:        "phone",
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			},
+			{
+				IncidentNumber: "QRY-2026-0001",
+				Title:         "Inquiry about service hours",
+				Description:   "Customer asking about weekend service hours",
+				RecordType:    "query",
+				WorkflowID:    workflow.ID,
+				CurrentStateID: newState.ID,
+				DepartmentID:  &defaultDeptID,
+				Source:        "portal",
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			},
+		}
+
+		for _, inc := range demoIncidents {
+			inc.ID = uuid.New()
+			db.Create(&inc)
+		}
+	}
 }
 
 // unseedGoalManagement hard-deletes all goal-related rows from the DB.
