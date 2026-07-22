@@ -189,25 +189,21 @@ func (h *RoleHandler) ListRoles(c *fiber.Ctx) error {
 		return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "roles_retrieved"), responses)
 	}
 
-	// Check if current user is a department manager — scope roles automatically
+	// Department-scoped users only see roles within their department
 	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
-	if user != nil && user.IsDepartmentManager() && user.DeptManagerDepartmentID != nil {
-		roles, err := h.roleRepo.ListByDepartment(c.UserContext(), *user.DeptManagerDepartmentID)
-		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
-		}
-		// Department managers must not see the Department Manager role itself
-		filtered := make([]models.Role, 0, len(roles))
-		for _, role := range roles {
-			if !role.IsDepartmentManager {
-				filtered = append(filtered, role)
+	if user != nil && !user.IsSuperAdmin && user.HasPermission("users:view_department_only") {
+		scopeDeptID := user.ScopeDepartmentID()
+		if scopeDeptID != nil {
+			roles, err := h.roleRepo.ListByDepartment(c.UserContext(), *scopeDeptID)
+			if err != nil {
+				return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 			}
+			responses := make([]models.RoleResponse, len(roles))
+			for i, role := range roles {
+				responses[i] = models.ToRoleResponse(&role)
+			}
+			return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "roles_retrieved"), responses)
 		}
-		responses := make([]models.RoleResponse, len(filtered))
-		for i, role := range filtered {
-			responses[i] = models.ToRoleResponse(&role)
-		}
-		return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "roles_retrieved"), responses)
 	}
 
 	roles, err := h.roleRepo.List(c.UserContext())

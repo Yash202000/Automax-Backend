@@ -108,6 +108,7 @@ func (r *userRepository) FindByIDWithPermissions(ctx context.Context, id uuid.UU
 	err := r.db.WithContext(ctx).
 		Preload("Roles", "is_active = ?", true).
 		Preload("Roles.Permissions", "is_active = ?", true).
+		Preload("Departments").
 		First(&user, "id = ?", id).Error
 	if err != nil {
 		return nil, err

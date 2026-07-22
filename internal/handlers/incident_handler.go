@@ -268,22 +268,33 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 	}
 
 	if err == nil && user != nil && (!user.IsSuperAdmin || restrictSuperAdmins) {
-		// Supervisor: scope by department only, skip classification/location scoping
-		if user.HasPermission("incidents:view_department_only") && user.DepartmentID != nil {
-			deptIDStr := user.DepartmentID.String()
-			if len(filter.DepartmentID) > 0 {
-				hasMatch := false
-				for _, d := range filter.DepartmentID {
-					if d == deptIDStr {
-						hasMatch = true
-						break
+		// Department-scoped: users with view_department_only see only their department's incidents.
+		// Uses DeptManagerDepartmentID if set, otherwise falls back to DepartmentID.
+		if user.HasPermission("incidents:view_department_only") {
+			scopeDeptID := user.ScopeDepartmentID()
+			if scopeDeptID != nil {
+				deptIDStr := scopeDeptID.String()
+				if len(filter.DepartmentID) > 0 {
+					hasMatch := false
+					for _, d := range filter.DepartmentID {
+						if d == deptIDStr {
+							hasMatch = true
+							break
+						}
 					}
+					if !hasMatch {
+						filter.DepartmentID = noAccessSentinel
+					}
+				} else {
+					filter.DepartmentID = []string{deptIDStr}
 				}
-				if !hasMatch {
-					filter.DepartmentID = noAccessSentinel
-				}
-			} else {
-				filter.DepartmentID = []string{deptIDStr}
+			}
+			// Also restrict by classification/location if DeptManager scope fields are set
+			if user.DeptManagerClassificationID != nil {
+				filter.ClassificationID = []string{user.DeptManagerClassificationID.String()}
+			}
+			if user.DeptManagerLocationID != nil {
+				filter.LocationID = []string{user.DeptManagerLocationID.String()}
 			}
 		} else {
 			userClassIDs := make([]string, 0, len(user.Classifications))
@@ -1382,8 +1393,9 @@ func (h *IncidentHandler) ListRevisions(c *fiber.Ctx) error {
 	})
 }
 
-// applySupervisorScope restricts the filter to the user's department.
-func (h *IncidentHandler) applySupervisorScope(c *fiber.Ctx, filter *models.IncidentFilter) {
+// applyDepartmentScope restricts the filter to the user's department scope.
+// Uses DeptManagerDepartmentID if set, otherwise falls back to DepartmentID.
+func (h *IncidentHandler) applyDepartmentScope(c *fiber.Ctx, filter *models.IncidentFilter) {
 	noAccessSentinel := []string{"00000000-0000-0000-0000-000000000000"}
 	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if !ok {
@@ -1393,8 +1405,12 @@ func (h *IncidentHandler) applySupervisorScope(c *fiber.Ctx, filter *models.Inci
 	if err != nil || user == nil {
 		return
 	}
-	if user.HasPermission("incidents:view_department_only") && user.DepartmentID != nil {
-		deptIDStr := user.DepartmentID.String()
+	if user.IsSuperAdmin || !user.HasPermission("incidents:view_department_only") {
+		return
+	}
+	scopeDeptID := user.ScopeDepartmentID()
+	if scopeDeptID != nil {
+		deptIDStr := scopeDeptID.String()
 		if len(filter.DepartmentID) > 0 {
 			hasMatch := false
 			for _, d := range filter.DepartmentID {
@@ -1409,6 +1425,12 @@ func (h *IncidentHandler) applySupervisorScope(c *fiber.Ctx, filter *models.Inci
 		} else {
 			filter.DepartmentID = []string{deptIDStr}
 		}
+	}
+	if user.DeptManagerClassificationID != nil {
+		filter.ClassificationID = []string{user.DeptManagerClassificationID.String()}
+	}
+	if user.DeptManagerLocationID != nil {
+		filter.LocationID = []string{user.DeptManagerLocationID.String()}
 	}
 }
 
@@ -1464,7 +1486,7 @@ func (h *IncidentHandler) ListComplaints(c *fiber.Ctx) error {
 	}
 
 	filter.RecordType = &recordType
-	h.applySupervisorScope(c, filter)
+	h.applyDepartmentScope(c, filter)
 	complaints, total, err := h.service.ListIncidents(c.UserContext(), filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
@@ -1576,7 +1598,7 @@ func (h *IncidentHandler) ListQueries(c *fiber.Ctx) error {
 	}
 	filter.RecordType = &recordType
 
-	h.applySupervisorScope(c, filter)
+	h.applyDepartmentScope(c, filter)
 
 	queries, total, err := h.service.ListIncidents(c.UserContext(), filter)
 	if err != nil {
