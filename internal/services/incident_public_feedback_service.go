@@ -192,16 +192,21 @@ func (s *incidentPublicFeedbackService) Submit(ctx context.Context, incidentID u
 	// link) — a WhatsApp feedback session for the same reporter may still be
 	// active. Delete it so that link stops working. Best-effort: log and move
 	// on, never fail the submission because of this cleanup step.
-	if s.whatsappSessionCleanup != nil && f.MobileNo != "" {
+	if s.whatsappSessionCleanup != nil && f.MobileNo != "" && s.incidentRepo != nil {
 		mobileNo := f.MobileNo
 		feedbackID := f.ID
 		go func() {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			if cleanupErr := s.whatsappSessionCleanup.DeleteSession(cleanupCtx, mobileNo); cleanupErr != nil {
-				log.Printf("[IncidentPublicFeedback] WhatsApp session cleanup failed for feedback %s (mobile=%s): %v", feedbackID, mobileNo, cleanupErr)
+			inc, incErr := s.incidentRepo.FindByID(cleanupCtx, incidentID)
+			if incErr != nil || inc == nil || inc.IncidentNumber == "" {
+				log.Printf("[IncidentPublicFeedback] WhatsApp session cleanup skipped for feedback %s: failed to resolve incident number (incident=%s): %v", feedbackID, incidentID, incErr)
+				return
+			}
+			if cleanupErr := s.whatsappSessionCleanup.DeleteSession(cleanupCtx, inc.IncidentNumber, mobileNo); cleanupErr != nil {
+				log.Printf("[IncidentPublicFeedback] WhatsApp session cleanup failed for feedback %s (incident=%s, mobile=%s): %v", feedbackID, inc.IncidentNumber, mobileNo, cleanupErr)
 			} else {
-				log.Printf("[IncidentPublicFeedback] WhatsApp session cleanup completed for feedback %s (mobile=%s)", feedbackID, mobileNo)
+				log.Printf("[IncidentPublicFeedback] WhatsApp session cleanup completed for feedback %s (incident=%s, mobile=%s)", feedbackID, inc.IncidentNumber, mobileNo)
 			}
 		}()
 	}

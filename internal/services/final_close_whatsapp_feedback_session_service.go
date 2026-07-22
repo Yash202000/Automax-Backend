@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -29,12 +30,8 @@ func NewFinalCloseWhatsAppFeedbackSessionService(baseURL string) *FinalCloseWhat
 	}
 }
 
-// DeleteSession calls DELETE {baseURL}/{mobileNo} to invalidate the WhatsApp
-// feedback session for the given number. baseURL is expected to already
-// include the "/session" path segment (see FINAL_CLOSE_WHATSAPP_FEEDBACK_SESSION_BASE_URL),
-// so it's not hardcoded here. A 404 ("no active session") means there was
-// nothing to clean up and is treated as success, not an error.
-func (s *FinalCloseWhatsAppFeedbackSessionService) DeleteSession(ctx context.Context, mobileNo string) error {
+// DeleteSession calls DELETE {baseURL}?incident_id={incidentNumber}&phone={mobileNo}
+func (s *FinalCloseWhatsAppFeedbackSessionService) DeleteSession(ctx context.Context, incidentNumber string, mobileNo string) error {
 	if s == nil {
 		return fmt.Errorf("[FinalCloseWhatsAppFeedbackSession] session: service not initialized")
 	}
@@ -46,6 +43,12 @@ func (s *FinalCloseWhatsAppFeedbackSessionService) DeleteSession(ctx context.Con
 		return nil
 	}
 
+	incidentNumber = strings.TrimSpace(incidentNumber)
+	if incidentNumber == "" {
+		log.Printf("[FinalCloseWhatsAppFeedbackSession] skipped: incident number is empty")
+		return fmt.Errorf("final-close whatsapp feedback session: incident number is empty")
+	}
+
 	mobileNo = strings.TrimSpace(mobileNo)
 	if mobileNo == "" {
 		log.Printf("[FinalCloseWhatsAppFeedbackSession] skipped: mobile number is empty")
@@ -53,12 +56,15 @@ func (s *FinalCloseWhatsAppFeedbackSessionService) DeleteSession(ctx context.Con
 	}
 	phone := strings.TrimPrefix(mobileNo, "+")
 
-	url := fmt.Sprintf("%s/%s", s.baseURL, phone)
-	log.Printf("[FinalCloseWhatsAppFeedbackSession] deleting session for %s", phone)
+	query := url.Values{}
+	query.Set("incident_id", incidentNumber)
+	query.Set("phone", phone)
+	reqURL := fmt.Sprintf("%s?%s", s.baseURL, query.Encode())
+	log.Printf("[FinalCloseWhatsAppFeedbackSession] deleting session for incident=%s phone=%s", incidentNumber, phone)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, reqURL, nil)
 	if err != nil {
-		log.Printf("[FinalCloseWhatsAppFeedbackSession] failed to build delete request for %s: %v", phone, err)
+		log.Printf("[FinalCloseWhatsAppFeedbackSession] failed to build delete request for incident=%s phone=%s: %v", incidentNumber, phone, err)
 		return fmt.Errorf("final-close whatsapp feedback session: build request for %s: %w", phone, err)
 	}
 	req.Header.Set("Accept", "application/json")
