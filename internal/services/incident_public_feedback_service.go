@@ -86,11 +86,15 @@ func (s *incidentPublicFeedbackService) Create(ctx context.Context, incidentID u
 			link := utils.BuildFeedbackLink(ctx, incidentID.String(), f.ID.String(), feedbackTokenDuration)
 			smsBody = fmt.Sprintf("Please rate your experience. Submit your feedback here: %s", link)
 		}
-		if _, err := s.notification.SendNotification(
+		result, err := s.notification.SendNotification(
 			context.Background(), "sms", nil, "en",
 			[]string{f.MobileNo}, nil, nil,
 			"", smsBody, nil, nil, &createdByID, nil,
-		); err != nil {
+		)
+		if result != nil && result.SentLog != nil {
+			_ = s.notification.SetIncidentIDOnLogs(context.Background(), []uuid.UUID{result.SentLog.ID}, incidentID)
+		}
+		if err != nil {
 			log.Printf("[IncidentPublicFeedback] SMS send failed for feedback %s: %v", f.ID, err)
 		}
 	}()
