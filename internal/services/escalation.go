@@ -627,12 +627,15 @@ func (s *EscalationService) sendGlobalBreachNotification(
 	smsCode := "SLA_GLOBAL_BREACH_SMS"
 
 	if user.Email != "" {
-		_, err := s.notificationService.SendNotification(
+		result, err := s.notificationService.SendNotification(
 			ctx, "email", &emailCode, "en",
 			[]string{user.Email}, nil, nil,
 			subject, emailBody,
 			vars, nil, &user.ID, nil,
 		)
+		if result != nil && result.SentLog != nil {
+			_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
+		}
 		if err != nil {
 			log.Printf("[EscalationService] Global breach EMAIL failed for %s: %v", user.Email, err)
 		} else {
@@ -641,12 +644,15 @@ func (s *EscalationService) sendGlobalBreachNotification(
 	}
 
 	if user.Phone != "" {
-		_, err := s.notificationService.SendNotification(
+		result, err := s.notificationService.SendNotification(
 			ctx, "sms", &smsCode, "en",
 			[]string{user.Phone}, nil, nil,
 			"", smsBody,
 			vars, nil, &user.ID, nil,
 		)
+		if result != nil && result.SentLog != nil {
+			_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
+		}
 		if err != nil {
 			log.Printf("[EscalationService] Global breach SMS failed for %s: %v", user.Phone, err)
 		} else {

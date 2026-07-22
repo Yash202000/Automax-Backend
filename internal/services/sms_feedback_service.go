@@ -12,6 +12,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	pkgutils "github.com/automax/backend/pkg/utils"
+	"github.com/google/uuid"
 )
 
 const smsFeedbackTokenDuration = 72 * time.Hour
@@ -88,9 +89,15 @@ func (s *SmsFeedbackService) processOne(ctx context.Context, p *models.SmsFeedba
 	// or session never existed) → skip. Still PENDING after the delay window → send SMS.
 	status, err := s.sessionService.GetSessionStatus(ctx, incident.IncidentNumber, p.MobileNo)
 	if err != nil {
-		log.Printf("[SmsFeedback] incident=%s — error checking WhatsApp feedback session: %v", p.IncidentID, err)
 		p.RetryCount++
-		p.Log = fmt.Sprintf("error checking WhatsApp feedback session: %v", err)
+		p.Log = fmt.Sprintf("error checking WhatsApp feedback session (attempt %d): %v", p.RetryCount, err)
+		log.Printf("[SmsFeedback] incident=%s — error checking WhatsApp feedback session (attempt %d/%d): %v",
+			p.IncidentID, p.RetryCount, smsFeedbackMaxRetries, err)
+		if p.RetryCount >= smsFeedbackMaxRetries {
+			p.Skipped = true
+			p.Log = fmt.Sprintf("SMS skipped after %d failed session checks: %v", smsFeedbackMaxRetries, err)
+			log.Printf("[SmsFeedback] incident=%s — max retries reached checking session status, marking skipped", p.IncidentID)
+		}
 		s.save(ctx, p)
 		return
 	}
@@ -136,11 +143,14 @@ func (s *SmsFeedbackService) processOne(ctx context.Context, p *models.SmsFeedba
 
 	log.Printf("[SmsFeedback] incident=%s — WhatsApp feedback session still pending after delay, sending SMS to %s (template=%s)", p.IncidentID, p.MobileNo, templateCode)
 
-	_, sendErr := s.notification.SendNotification(
+	sendResult, sendErr := s.notification.SendNotification(
 		ctx, "sms", &templateCode, lang,
 		[]string{p.MobileNo}, nil, nil,
 		"", "", vars, nil, nil, nil,
 	)
+	if sendResult != nil && sendResult.SentLog != nil {
+		_ = s.notification.SetIncidentIDOnLogs(ctx, []uuid.UUID{sendResult.SentLog.ID}, incident.ID)
+	}
 	if sendErr != nil {
 		p.RetryCount++
 		p.Log = fmt.Sprintf("SMS send failed (attempt %d): %v", p.RetryCount, sendErr)
