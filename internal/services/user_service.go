@@ -42,7 +42,7 @@ type UserService interface {
 	UpdateAvatar(ctx context.Context, userID uuid.UUID, avatarURL string) error
 	DeleteUser(ctx context.Context) error
 	AdminDeleteUser(ctx context.Context, userID uuid.UUID) error
-	ListUsers(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.UserResponse, int64, error)
+	ListUsers(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID, strictDepartment ...bool) ([]models.UserResponse, int64, error)
 	GetUserByID(ctx context.Context, userID uuid.UUID) (*models.UserResponse, error)
 	GetUserByEmail(ctx context.Context, email string) (*models.User, error)
 	GetUserByMobile(ctx context.Context, phone string) (*models.User, error)
@@ -1752,8 +1752,8 @@ func (s *userService) AdminDeleteUser(ctx context.Context, userID uuid.UUID) err
 	return err
 }
 
-func (s *userService) ListUsers(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.UserResponse, int64, error) {
-	users, total, err := s.userRepo.List(ctx, page, limit, search, phone, extension, callStatus, roleIDs, departmentIDs, locationIDs, classificationIDs)
+func (s *userService) ListUsers(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID, strictDepartment ...bool) ([]models.UserResponse, int64, error) {
+	users, total, err := s.userRepo.List(ctx, page, limit, search, phone, extension, callStatus, roleIDs, departmentIDs, locationIDs, classificationIDs, strictDepartment...)
 	if err != nil {
 		return nil, 0, err
 	}
