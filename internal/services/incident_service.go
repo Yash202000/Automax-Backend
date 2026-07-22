@@ -819,7 +819,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		}
 		if req.ReporterPhone != "" {
 			smsBody := fmt.Sprintf("Thank you for contacting Eastern Province Municipality. Your incident %s has been created.", incident.IncidentNumber)
-			_, err := s.notificationService.SendNotification(
+			result, err := s.notificationService.SendNotification(
 				ctx,
 				"sms",
 				nil,
@@ -834,6 +834,9 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 				&reporterID,
 				nil,
 			)
+			if result != nil && result.SentLog != nil {
+				_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
+			}
 			if err != nil {
 				log.Printf("[IncidentService] SMS failed for %s: %v", req.ReporterPhone, err)
 			} else {
@@ -873,12 +876,16 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 				}
 				if len(emails) > 0 {
 					code := capturedInitialState.NewIncidentEmailTemplateCode
-					if _, err := s.notificationService.SendNotification(
+					result, err := s.notificationService.SendNotification(
 						bgCtx, "email", &code, "en",
 						emails, nil, nil,
 						"", "",
 						vars, nil, &capturedReporterID, nil,
-					); err != nil {
+					)
+					if result != nil && result.SentLog != nil {
+						_ = s.notificationService.SetIncidentIDOnLogs(bgCtx, []uuid.UUID{result.SentLog.ID}, capturedCreated.ID)
+					}
+					if err != nil {
 						log.Printf("NEW-INCIDENT-EMAIL: Failed for incident %s: %v", capturedCreated.IncidentNumber, err)
 					} else {
 						log.Printf("NEW-INCIDENT-EMAIL: Sent to %v for incident %s", emails, capturedCreated.IncidentNumber)
@@ -895,12 +902,16 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 				}
 				if len(phones) > 0 {
 					code := capturedInitialState.NewIncidentSMSTemplateCode
-					if _, err := s.notificationService.SendNotification(
+					result, err := s.notificationService.SendNotification(
 						bgCtx, "sms", &code, "en",
 						phones, nil, nil,
 						"", "",
 						vars, nil, &capturedReporterID, nil,
-					); err != nil {
+					)
+					if result != nil && result.SentLog != nil {
+						_ = s.notificationService.SetIncidentIDOnLogs(bgCtx, []uuid.UUID{result.SentLog.ID}, capturedCreated.ID)
+					}
+					if err != nil {
 						log.Printf("NEW-INCIDENT-SMS: Failed for incident %s: %v", capturedCreated.IncidentNumber, err)
 					} else {
 						log.Printf("NEW-INCIDENT-SMS: Sent to %v for incident %s", phones, capturedCreated.IncidentNumber)
@@ -4821,6 +4832,7 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 				Category:   "sent",
 				Language:   "en",
 				Recipients: models.RecipientArray{{Email: merged.Reporter.Phone, Type: "to", Status: "sent"}},
+				IncidentID: &merged.ID,
 				Subject:    "Incident Closed",
 				Body:       smsMessage,
 				Status:     "sent",
@@ -4942,6 +4954,7 @@ func (s *incidentService) notifyStatusChangeToMergedIncidents(ctx context.Contex
 				Category:   "sent",
 				Language:   "en",
 				Recipients: models.RecipientArray{{Email: merged.Reporter.Phone, Type: "to", Status: "sent"}},
+				IncidentID: &merged.ID,
 				Subject:    "Incident Status Updated",
 				Body:       smsMessage,
 				Status:     "sent",
@@ -5673,11 +5686,14 @@ func (s *incidentService) SendNotBelongClosureSMS(
 		vars["department_name"] = deptName
 
 		templateCode := "INCIDENT_CLOSURE_NOT_BELONG_SMS"
-		_, err := s.notificationService.SendNotification(
+		result, err := s.notificationService.SendNotification(
 			ctx, "sms", &templateCode, "ar",
 			[]string{mobile}, nil, nil,
 			"", "", vars, nil, &userID, nil,
 		)
+		if result != nil && result.SentLog != nil {
+			_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
+		}
 		if err != nil {
 			log.Printf("NOT-BELONG-SMS: Template send failed for incident %s: %v", incident.IncidentNumber, err)
 		} else {
@@ -5709,6 +5725,7 @@ func (s *incidentService) SendNotBelongClosureSMS(
 		Category:   "sent",
 		Language:   "en",
 		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
+		IncidentID: &incident.ID,
 		Subject:    "Incident Not Belong Closure",
 		Body:       smsMessage,
 		Status:     status,
@@ -5755,9 +5772,9 @@ func (s *incidentService) sendConvertToRequestSMS(ctx context.Context, incident 
 	vars["request_number"] = requestNumber
 
 	if s.notificationService != nil {
-		err := s.notificationService.SendByActionType(
+		err := s.notificationService.SendByActionTypeForIncident(
 			ctx, models.TemplateActionConvertToRequest, "sms", "ar",
-			[]string{mobile}, vars, &userID,
+			[]string{mobile}, vars, &userID, incident.ID,
 		)
 		if err != nil {
 			log.Printf("CONVERT-TO-REQUEST-SMS: No active templates found for incident %s, falling back to hardcoded: %v", incident.IncidentNumber, err)
@@ -5785,6 +5802,7 @@ func (s *incidentService) sendConvertToRequestSMS(ctx context.Context, incident 
 		Category:   "sent",
 		Language:   "ar",
 		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
+		IncidentID: &incident.ID,
 		Subject:    "Incident Converted to Request",
 		Body:       smsMessage,
 		Status:     status,
@@ -5841,9 +5859,9 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 	vars := BuildIncidentVariables(incident, nil, nil)
 
 	if s.notificationService != nil {
-		err := s.notificationService.SendByActionType(
+		err := s.notificationService.SendByActionTypeForIncident(
 			ctx, models.TemplateActionMissingInfo, "sms", "ar",
-			[]string{mobile}, vars, &userID,
+			[]string{mobile}, vars, &userID, incident.ID,
 		)
 		if err != nil {
 			log.Printf("MISSING-INFO-SMS: No active templates for incident %s, falling back to hardcoded: %v", incident.IncidentNumber, err)
@@ -5874,6 +5892,7 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 		Category:   "sent",
 		Language:   "en",
 		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
+		IncidentID: &incident.ID,
 		Subject:    "Incident Closed - Missing Information",
 		Body:       smsMessage,
 		Status:     status,
