@@ -186,15 +186,17 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 		return nil, err
 	}
 
-	// Prevent department managers from assigning the Department Manager role
+	// Department-scoped users cannot assign roles that grant department scope
 	if len(req.RoleIDs) > 0 {
 		actor, _ := s.userRepo.FindByIDWithRelations(ctx, actorID)
-		if actor != nil && actor.IsDepartmentManager() {
-			var dmRole models.Role
-			if err := s.db.Where("is_department_manager = ?", true).First(&dmRole).Error; err == nil {
-				for _, roleID := range req.RoleIDs {
-					if roleID == dmRole.ID {
-						return nil, errors.New(i18n.T(ctx, "cannot_assign_department_manager_role"))
+		if actor != nil && !actor.IsSuperAdmin && actor.HasPermission("users:view_department_only") {
+			for _, roleID := range req.RoleIDs {
+				var targetRole models.Role
+				if err := s.db.Preload("Permissions").First(&targetRole, "id = ?", roleID).Error; err == nil {
+					for _, perm := range targetRole.Permissions {
+						if perm.Code == "users:view_department_only" {
+							return nil, errors.New(i18n.T(ctx, "cannot_assign_department_manager_role"))
+						}
 					}
 				}
 			}
@@ -1048,15 +1050,17 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		return nil, err
 	}
 
-	// Prevent department managers from assigning the Department Manager role
+	// Department-scoped users cannot assign roles that grant department scope
 	if req.RoleIDs != nil {
 		actor, _ := s.userRepo.FindByIDWithRelations(ctx, actorID)
-		if actor != nil && actor.IsDepartmentManager() {
-			var dmRole models.Role
-			if err := s.db.Where("is_department_manager = ?", true).First(&dmRole).Error; err == nil {
-				for _, roleID := range req.RoleIDs {
-					if roleID == dmRole.ID {
-						return nil, errors.New(i18n.T(ctx, "cannot_assign_department_manager_role"))
+		if actor != nil && !actor.IsSuperAdmin && actor.HasPermission("users:view_department_only") {
+			for _, roleID := range req.RoleIDs {
+				var targetRole models.Role
+				if err := s.db.Preload("Permissions").First(&targetRole, "id = ?", roleID).Error; err == nil {
+					for _, perm := range targetRole.Permissions {
+						if perm.Code == "users:view_department_only" {
+							return nil, errors.New(i18n.T(ctx, "cannot_assign_department_manager_role"))
+						}
 					}
 				}
 			}

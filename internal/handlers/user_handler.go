@@ -295,34 +295,13 @@ func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 	locationIDs := parseUUIDList(c.Query("location_ids", ""))
 	classificationIDs := parseUUIDList(c.Query("classification_ids", ""))
 
-	// Supervisor scope: restrict to their department
+	// Department-scoped: users with view_department_only see only their department's users.
+	// Uses ScopeDepartmentID() which checks DeptManagerDepartmentID > DepartmentID > M2M departments.
 	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
-	if user != nil && user.HasPermission("users:view_department_only") && user.DepartmentID != nil {
-		if !user.IsDepartmentManager() {
-			if len(departmentIDs) > 0 {
-				hasMatch := false
-				for _, d := range departmentIDs {
-					if d == *user.DepartmentID {
-						hasMatch = true
-						break
-					}
-				}
-				if !hasMatch {
-					departmentIDs = []uuid.UUID{uuid.Nil}
-				}
-			} else {
-				departmentIDs = []uuid.UUID{*user.DepartmentID}
-			}
-		}
-	}
-
-	// Department Manager scope: restrict to assigned department, classification, location
-	// Uses normal LEFT JOIN (not strict) so users linked via join tables still appear.
-	if user != nil && user.IsDepartmentManager() {
-		if user.DeptManagerDepartmentID != nil {
-			departmentIDs = []uuid.UUID{*user.DeptManagerDepartmentID}
-		} else if user.DepartmentID != nil {
-			departmentIDs = []uuid.UUID{*user.DepartmentID}
+	if user != nil && !user.IsSuperAdmin && user.HasPermission("users:view_department_only") {
+		scopeDeptID := user.ScopeDepartmentID()
+		if scopeDeptID != nil {
+			departmentIDs = []uuid.UUID{*scopeDeptID}
 		}
 		if user.DeptManagerClassificationID != nil {
 			classificationIDs = []uuid.UUID{*user.DeptManagerClassificationID}
@@ -330,8 +309,6 @@ func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 		if user.DeptManagerLocationID != nil {
 			locationIDs = []uuid.UUID{*user.DeptManagerLocationID}
 		}
-		log.Printf("[DM Scope] user=%s, departmentIDs=%v, classificationIDs=%v, locationIDs=%v",
-			user.Email, departmentIDs, classificationIDs, locationIDs)
 	}
 
 	page = max(page, 1)
@@ -376,12 +353,12 @@ func (h *UserHandler) GetManagerScope(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "user_not_found"))
 	}
 
-	if !userLocal.IsDepartmentManager() {
+	if !userLocal.HasPermission("users:view_department_only") {
 		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "not_department_manager"))
 	}
 
 	scope := map[string]interface{}{
-		"is_department_manager": true,
+		"is_department_scoped": true,
 	}
 	if user.DeptManagerDepartmentID != nil {
 		scope["department_id"] = user.DeptManagerDepartmentID

@@ -115,6 +115,22 @@ func (u *User) IsDepartmentManager() bool {
 	return false
 }
 
+// ScopeDepartmentID returns the department ID to use for department-scoped filtering.
+// Priority: DeptManagerDepartmentID > DepartmentID > first M2M department.
+func (u *User) ScopeDepartmentID() *uuid.UUID {
+	if u.DeptManagerDepartmentID != nil {
+		return u.DeptManagerDepartmentID
+	}
+	if u.DepartmentID != nil {
+		return u.DepartmentID
+	}
+	if len(u.Departments) > 0 {
+		id := u.Departments[0].ID
+		return &id
+	}
+	return nil
+}
+
 // GetPermissions returns all unique permission codes for the user
 func (u *User) GetPermissions() []string {
 	if u.IsSuperAdmin {
