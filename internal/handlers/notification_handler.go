@@ -22,11 +22,11 @@ import (
 )
 
 type NotificationHandler struct {
-	service           *services.NotificationService
-	storage           *storage.MinIOStorage
-	userRepo          repository.UserRepository
-	incidentRepo      repository.IncidentRepository
-	actionLogService  services.ActionLogService
+	service          *services.NotificationService
+	storage          *storage.MinIOStorage
+	userRepo         repository.UserRepository
+	incidentRepo     repository.IncidentRepository
+	actionLogService services.ActionLogService
 }
 
 func NewNotificationHandler(
@@ -581,6 +581,21 @@ func (h *NotificationHandler) ListMonitoring(c *fiber.Ctx) error {
 			"success": false,
 			"errors":  err,
 		})
+	}
+
+	if filter.Channel != "" {
+		validChannels := map[string]bool{
+			"email": true, "sms": true, "whatsapp": true, "notification": true, "push-notification": true,
+		}
+		for _, ch := range strings.Split(filter.Channel, ",") {
+			ch = strings.TrimSpace(ch)
+			if ch != "" && !validChannels[ch] {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+					"success": false,
+					"error":   fmt.Sprintf("invalid channel %q — must be one of email, sms, whatsapp, notification, push-notification", ch),
+				})
+			}
+		}
 	}
 
 	if filter.Page < 1 {

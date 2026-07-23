@@ -985,11 +985,11 @@ func main() {
 	escalation.Get("/", escalationHandler.List)
 	escalation.Get("/incident/:incident_id", escalationHandler.ListByIncident)
 
-	// Notification Monitoring Dashboard (admin) — cross-user delivery tracking, search & filter
+	// Communication Tracking Dashboard (admin, Call Center module) — cross-user delivery tracking, search & filter
 	notificationMonitoring := admin.Group("/notification-monitoring", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureCommunication)))
-	notificationMonitoring.Get("/", authMiddleware.RequirePermission("notification-monitoring:view"), notificationHandler.ListMonitoring)
-	notificationMonitoring.Get("/:id", authMiddleware.RequirePermission("notification-monitoring:view"), notificationHandler.Get)
-	notificationMonitoring.Post("/:id/resend", authMiddleware.RequirePermission("notifications:send"), notificationHandler.ResendNotification)
+	notificationMonitoring.Get("/", authMiddleware.RequirePermission("communication-tracking:view"), notificationHandler.ListMonitoring)
+	notificationMonitoring.Get("/:id", authMiddleware.RequirePermission("communication-tracking:view"), notificationHandler.Get)
+	notificationMonitoring.Post("/:id/resend", authMiddleware.RequirePermission("communication-tracking:update"), notificationHandler.ResendNotification)
 
 	// Custom Escalation Groups (admin)
 	escalationGroups := admin.Group("/escalation-groups", authMiddleware.Authenticate(), authMiddleware.RequirePermission("escalation-groups:manage_rules"), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureEscalation)))

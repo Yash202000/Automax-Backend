@@ -4844,6 +4844,7 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 			if smsErr != nil {
 				notification.Status = "failed"
 				notification.ErrorMessage = smsErr.Error()
+				notification.FailureCode = ClassifyFailureCode(smsErr)
 			}
 
 			fmt.Println("[DEBUG] Creating notification log...")
@@ -4966,6 +4967,7 @@ func (s *incidentService) notifyStatusChangeToMergedIncidents(ctx context.Contex
 			if smsErr != nil {
 				notification.Status = "failed"
 				notification.ErrorMessage = smsErr.Error()
+				notification.FailureCode = ClassifyFailureCode(smsErr)
 			}
 
 			fmt.Println("[DEBUG] Creating notification log...")
@@ -5736,6 +5738,7 @@ func (s *incidentService) SendNotBelongClosureSMS(
 	}
 	if smsErr != nil {
 		notification.ErrorMessage = smsErr.Error()
+		notification.FailureCode = ClassifyFailureCode(smsErr)
 	}
 	if err := s.incidentRepo.CreateNotification(ctx, notification); err != nil {
 		log.Printf("NOT-BELONG-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
@@ -5813,6 +5816,7 @@ func (s *incidentService) sendConvertToRequestSMS(ctx context.Context, incident 
 	}
 	if smsErr != nil {
 		notification.ErrorMessage = smsErr.Error()
+		notification.FailureCode = ClassifyFailureCode(smsErr)
 	}
 	if err := s.incidentRepo.CreateNotification(ctx, notification); err != nil {
 		log.Printf("CONVERT-TO-REQUEST-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
@@ -5903,6 +5907,7 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 	}
 	if smsErr != nil {
 		notification.ErrorMessage = smsErr.Error()
+		notification.FailureCode = ClassifyFailureCode(smsErr)
 	}
 	if err := s.incidentRepo.CreateNotification(ctx, notification); err != nil {
 		log.Printf("MISSING-INFO-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)

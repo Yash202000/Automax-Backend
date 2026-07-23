@@ -285,14 +285,26 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		return nil, fmt.Errorf("unsupported channel: %s", channel)
 	}
 
-	// Top-level failure code mirrors the first failed recipient's normalized
-	// reason, so a failed log can be filtered/reported on without inspecting
-	// each recipient individually.
-	var failureCode string
+	// Top-level failure code/message mirror the first failed recipient's
+	// normalized reason and raw error, so a failed log can be filtered/reported
+	// on without inspecting each recipient individually.
+	var failureCode, topLevelErrorMessage string
 	if status == "failed" {
 		for _, r := range recipientStatuses {
-			if r.Status == "failed" && r.FailureCode != "" {
+			if r.Status != "failed" {
+				continue
+			}
+			if failureCode == "" && r.FailureCode != "" {
 				failureCode = r.FailureCode
+			}
+			if topLevelErrorMessage == "" {
+				if r.ErrorMessage != "" {
+					topLevelErrorMessage = r.ErrorMessage
+				} else if r.Error != "" {
+					topLevelErrorMessage = r.Error
+				}
+			}
+			if failureCode != "" && topLevelErrorMessage != "" {
 				break
 			}
 		}
@@ -317,6 +329,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		Status:       status,
 		Provider:     provider,
 		FailureCode:  failureCode,
+		ErrorMessage: topLevelErrorMessage,
 		Attachments:  attachmentInfo,
 		SentBy:       sentBy,
 		SentAt:       &now,
@@ -357,6 +370,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 			Status:       status,
 			Provider:     provider,
 			FailureCode:  failureCode,
+			ErrorMessage: topLevelErrorMessage,
 			Attachments:  attachmentInfo,
 			SentBy:       sentBy,
 			ReceivedBy:   &user.ID, // this makes it appear in inbox

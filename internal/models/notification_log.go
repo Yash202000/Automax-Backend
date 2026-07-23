@@ -326,7 +326,7 @@ type NotificationLogFilter struct {
 // channel, recipient, status, date range, and record type — independent of the
 // personal inbox scoping NotificationLogFilter/List applies.
 type NotificationMonitoringFilter struct {
-	Channel     string     `query:"channel" json:"channel" validate:"omitempty,oneof=email sms whatsapp notification push-notification"`
+	Channel     string     `query:"channel" json:"channel" validate:"omitempty,max=255"`     // comma-separated list of channels, e.g. "sms,email,whatsapp" — each validated individually in the handler
 	Recipient   string     `query:"recipient" json:"recipient" validate:"omitempty,max=255"` // substring match against recipient email/phone
 	Status      string     `query:"status" json:"status" validate:"omitempty,oneof=sent failed mock-sent partial draft pending scheduled queued delivered read expired undeliverable"`
 	FailureCode string     `query:"failure_code" json:"failure_code" validate:"omitempty,max=30"`

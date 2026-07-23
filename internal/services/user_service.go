@@ -2086,14 +2086,15 @@ func (s *userService) logOTPNotification(channel, provider, recipient, body, pro
 			FailureCode:       failureCode,
 			ProviderMessageID: providerMessageID,
 		}},
-		Subject:     "OTP",
-		Body:        body,
-		Status:      status,
-		Provider:    provider,
-		FailureCode: failureCode,
-		SentAt:      &now,
-		CreatedAt:   now,
-		UpdatedAt:   &now,
+		Subject:      "OTP",
+		Body:         body,
+		Status:       status,
+		Provider:     provider,
+		FailureCode:  failureCode,
+		ErrorMessage: errorMessage,
+		SentAt:       &now,
+		CreatedAt:    now,
+		UpdatedAt:    &now,
 	}
 
 	if err := s.db.Create(notification).Error; err != nil {

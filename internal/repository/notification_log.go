@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/models"
@@ -254,7 +255,18 @@ func (r *notificationLogRepository) ListForMonitoring(ctx context.Context, filte
 		Where("direction = ?", models.DirectionOutbound)
 
 	if filter.Channel != "" {
-		query = query.Where("channel = ?", filter.Channel)
+		rawChannels := strings.Split(filter.Channel, ",")
+		channels := make([]string, 0, len(rawChannels))
+		for _, ch := range rawChannels {
+			if ch = strings.TrimSpace(ch); ch != "" {
+				channels = append(channels, ch)
+			}
+		}
+		if len(channels) == 1 {
+			query = query.Where("channel = ?", channels[0])
+		} else if len(channels) > 1 {
+			query = query.Where("channel IN ?", channels)
+		}
 	}
 	if filter.Status != "" {
 		query = query.Where("status = ?", filter.Status)
