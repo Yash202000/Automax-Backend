@@ -625,6 +625,9 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Assign Users to Escalation Group", Code: "escalation-groups:assign_users", Module: "escalation-groups", Action: "assign_users", Description: "Add or remove users from escalation groups"},
 		{Name: "Manage Escalation Rules", Code: "escalation-groups:manage_rules", Module: "escalation-groups", Action: "manage_rules", Description: "Configure escalation frequency, channel, and classification rules"},
 
+		// Escalation Policy permissions
+		{Name: "Create Escalation Policy", Code: "escalation-policies:create", Module: "escalation-policies", Action: "create", Description: "Create new escalation policies"},
+
 		// Caller Sentiment permissions
 		{Name: "Create Caller Sentiment", Code: "caller-sentiment:create", Module: "caller-sentiment", Action: "create", Description: "Record a sentiment entry after a call"},
 		{Name: "View Caller Sentiments", Code: "caller-sentiment:view", Module: "caller-sentiment", Action: "view", Description: "View all caller sentiment records and summaries"},
