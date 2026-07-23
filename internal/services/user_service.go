@@ -1663,13 +1663,14 @@ func (s *userService) DeleteUser(ctx context.Context) error {
 		return err
 	}
 
-	if user.Avatar != "" {
-		_ = s.storage.DeleteFile(ctx, user.Avatar)
-	}
-
+	// Deactivate instead of soft-deleting: keep the row alive (IsActive=false).
+	// Avatar file is preserved so a re-activated account keeps it.
 	_ = s.sessionStore.DeleteUserSession(ctx, userID.String())
 
-	err = s.userRepo.Delete(ctx, userID)
+	err = s.userRepo.UpdateProfile(ctx, map[string]interface{}{
+		"id":        userID,
+		"is_active": false,
+	})
 
 	if err == nil {
 		// Log successful user deletion
@@ -1722,18 +1723,18 @@ func (s *userService) AdminDeleteUser(ctx context.Context, userID uuid.UUID) err
 		return err
 	}
 
-	// Store user info for logging before deletion
+	// Store user info for logging before deactivation
 	username := user.Username
 	email := user.Email
-	avatar := user.Avatar
 
-	if avatar != "" {
-		_ = s.storage.DeleteFile(ctx, avatar)
-	}
-
+	// Deactivate instead of soft-deleting: keep the row alive (IsActive=false).
+	// Avatar file is preserved so a re-activated account keeps it.
 	_ = s.sessionStore.DeleteUserSession(ctx, userID.String())
 
-	err = s.userRepo.Delete(ctx, userID)
+	err = s.userRepo.UpdateProfile(ctx, map[string]interface{}{
+		"id":        userID,
+		"is_active": false,
+	})
 
 	if err == nil {
 		// Log successful admin user deletion with complete details
