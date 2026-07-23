@@ -192,6 +192,9 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			&models.KpiCollaborator{},
 			&models.KpiCheckIn{},
 			&models.KpiComment{},
+			&models.KpiEntry{},
+			&models.KpiEntryEvidence{},
+			&models.KpiCollaboratorAssignment{},
 		); err != nil {
 			return fmt.Errorf("failed to run goal management migrations: %w", err)
 		}

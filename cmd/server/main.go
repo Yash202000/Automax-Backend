@@ -295,6 +295,12 @@ func main() {
 	// KPI Corrective Action handler
 	kpiCorrectiveActionHandler := handlers.NewKpiCorrectiveActionHandler(db)
 
+	// KPI Entry handler
+	kpiEntryHandler := handlers.NewKpiEntryHandler(db, actionLogService)
+
+	// KPI Collaborator Assignment handler
+	kpiCollaboratorHandler := handlers.NewKpiCollaboratorHandler(db, actionLogService)
+
 	// Integration handler
 	integrationHandler := handlers.NewIntegrationHandler(integrationService, integrationExecutor, integrationRepo, incidentRepo)
 	webhookHandler := handlers.NewWebhookHandler(integrationService, incidentService)
@@ -1238,6 +1244,14 @@ func main() {
 	kpi.Post("/:type/:id/transition", authMiddleware.RequirePermission("kpi:update"), kpiDictionaryHandler.TransitionKpiStatus)
 
 	// KPI engagement features — metrics, evidence, collaborators, check-ins, comments, activity
+	kpi.Get("/metrics-by-code/:code", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListMetricsByCode)
+
+	// KPI Entries
+	kpi.Get("/entries", authMiddleware.RequirePermission("kpi:view"), kpiEntryHandler.ListAllEntries)
+	kpi.Get("/:type/:id/entries", authMiddleware.RequirePermission("kpi:view"), kpiEntryHandler.ListEntries)
+	kpi.Post("/:type/:id/entries", authMiddleware.RequirePermission("kpi:update"), kpiEntryHandler.CreateEntry)
+	kpi.Get("/entries/:entryId/evidence", authMiddleware.RequirePermission("kpi:view"), kpiEntryHandler.ListEntryEvidence)
+
 	kpi.Get("/:type/:id/metrics", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListMetrics)
 	kpi.Post("/:type/:id/metrics", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.CreateMetric)
 	kpi.Post("/:type/:id/attachment", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.UploadAttachment)
@@ -1253,6 +1267,13 @@ func main() {
 	kpi.Get("/:type/:id/collaborators", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListCollaborators)
 	kpi.Post("/:type/:id/collaborators", authMiddleware.RequirePermission("kpi:assign"), kpiEngagementHandler.AddCollaborator)
 	kpi.Delete("/:type/:id/collaborators/:user_id", authMiddleware.RequirePermission("kpi:assign"), kpiEngagementHandler.RemoveCollaborator)
+
+	kpi.Get("/:type/:id/collaborator-assignments", authMiddleware.RequirePermission("kpi:view"), kpiCollaboratorHandler.ListAssignments)
+	kpi.Get("/collaborator-assignments/:assignmentId", authMiddleware.RequirePermission("kpi:view"), kpiCollaboratorHandler.GetAssignment)
+	kpi.Post("/:type/:id/collaborator-assignments", authMiddleware.RequirePermission("kpi:assign"), kpiCollaboratorHandler.CreateAssignment)
+	kpi.Put("/collaborator-assignments/:assignmentId", authMiddleware.RequirePermission("kpi:assign"), kpiCollaboratorHandler.UpdateAssignment)
+	kpi.Delete("/collaborator-assignments/:assignmentId", authMiddleware.RequirePermission("kpi:assign"), kpiCollaboratorHandler.DeleteAssignment)
+	kpi.Get("/collaborator-permission-matrix", authMiddleware.RequirePermission("kpi:view"), kpiCollaboratorHandler.GetPermissionMatrix)
 
 	kpi.Get("/:type/:id/check-ins", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListCheckIns)
 	kpi.Post("/:type/:id/check-ins", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.CreateCheckIn)

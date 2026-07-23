@@ -20,24 +20,49 @@ import (
 // sub-metrics/breakdowns the KPI owner wants to track alongside it).
 
 type KpiMetric struct {
-	ID            uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
-	KpiID         uuid.UUID      `gorm:"type:uuid;index;not null" json:"kpi_id"`
-	KpiType       string         `gorm:"size:20;index;not null" json:"kpi_type"`
-	Name          string         `gorm:"size:255;not null" json:"name"`
-	MetricType    string         `gorm:"size:20;not null;default:'Numeric'" json:"metric_type"`
-	Unit          string         `gorm:"size:50" json:"unit"`
-	BaselineValue float64        `gorm:"default:0" json:"baseline_value"`
-	CurrentValue  float64        `gorm:"default:0" json:"current_value"`
-	TargetValue   float64        `gorm:"not null" json:"target_value"`
-	Weight        float64        `gorm:"default:1.0" json:"weight"`
-	Formula       string         `gorm:"type:text" json:"formula"`
-	StartDate     *time.Time     `json:"start_date"`
-	DueDate       *time.Time     `json:"due_date"`
-	CreatedByID   uuid.UUID      `gorm:"type:uuid;not null" json:"created_by_id"`
-	CreatedBy     *User          `gorm:"foreignKey:CreatedByID" json:"created_by,omitempty"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
-	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
+	ID                       uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	KpiID                    uuid.UUID      `gorm:"type:uuid;index;not null" json:"kpi_id"`
+	KpiType                  string         `gorm:"size:20;index;not null" json:"kpi_type"`
+	Name                     string         `gorm:"size:255;not null" json:"name"`
+	MetricCode               string         `gorm:"size:50;index" json:"metric_code"`
+	MetricDescription        string         `gorm:"type:text" json:"metric_description"`
+	MetricStatus             string         `gorm:"size:30;not null;default:'Active'" json:"metric_status"`
+	DisplayOrder             int            `gorm:"default:0" json:"display_order"`
+	MetricType               string         `gorm:"size:20;not null;default:'Numeric'" json:"metric_type"`
+	Unit                     string         `gorm:"size:50" json:"unit"`
+	CustomUnitLabel          string         `gorm:"size:255" json:"custom_unit_label"`
+	BaselineValue            float64        `gorm:"default:0" json:"baseline_value"`
+	CurrentValue             float64        `gorm:"default:0" json:"current_value"`
+	TargetValue              float64        `gorm:"not null" json:"target_value"`
+	Weight                   float64        `gorm:"default:1.0" json:"weight"`
+	Formula                  string         `gorm:"type:text" json:"formula"`
+	CalculationType          string         `gorm:"size:50;default:'Direct Value'" json:"calculation_type"`
+	Direction                string         `gorm:"size:50;default:'Higher is Better'" json:"direction"`
+	DecimalPrecision         int            `gorm:"default:0" json:"decimal_precision"`
+	AggregationMethod        string         `gorm:"size:50;default:'Sum'" json:"aggregation_method"`
+	ReportingFrequency       string         `gorm:"size:30" json:"reporting_frequency"`
+	NumeratorLabel           string         `gorm:"size:255" json:"numerator_label"`
+	NumeratorVariableCode    string         `gorm:"size:100" json:"numerator_variable_code"`
+	DenominatorLabel         string         `gorm:"size:255" json:"denominator_label"`
+	DenominatorVariableCode  string         `gorm:"size:100" json:"denominator_variable_code"`
+	DirectActualLabel        string         `gorm:"size:255" json:"direct_actual_label"`
+	AllowManualActualOverride bool          `gorm:"default:false" json:"allow_manual_actual_override"`
+	AdvancedFormulaEnabled   bool           `gorm:"default:false" json:"advanced_formula_enabled"`
+	FormulaCode              string         `gorm:"size:100" json:"formula_code"`
+	DivideByZeroHandling     string         `gorm:"size:50;default:'Block Submission'" json:"divide_by_zero_handling"`
+	RoundingRule             string         `gorm:"size:50;default:'Standard Round'" json:"rounding_rule"`
+	CalculationTraceRequired bool           `gorm:"default:true" json:"calculation_trace_required"`
+	MetricOwnerID            *uuid.UUID     `gorm:"type:uuid;index" json:"metric_owner_id"`
+	MetricOwner              *User          `gorm:"foreignKey:MetricOwnerID" json:"metric_owner,omitempty"`
+	DataSource               string         `gorm:"size:100" json:"data_source"`
+	EvidenceRequired         bool           `gorm:"default:false" json:"evidence_required"`
+	StartDate                *time.Time     `json:"start_date"`
+	DueDate                  *time.Time     `json:"due_date"`
+	CreatedByID              uuid.UUID      `gorm:"type:uuid;not null" json:"created_by_id"`
+	CreatedBy                *User          `gorm:"foreignKey:CreatedByID" json:"created_by,omitempty"`
+	CreatedAt                time.Time      `json:"created_at"`
+	UpdatedAt                time.Time      `json:"updated_at"`
+	DeletedAt                gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (m *KpiMetric) BeforeCreate(tx *gorm.DB) error {
@@ -48,15 +73,39 @@ func (m *KpiMetric) BeforeCreate(tx *gorm.DB) error {
 }
 
 type KpiMetricRequest struct {
-	Name          string     `json:"name" validate:"required"`
-	MetricType    string     `json:"metric_type"`
-	Unit          string     `json:"unit"`
-	BaselineValue float64    `json:"baseline_value"`
-	TargetValue   float64    `json:"target_value" validate:"required"`
-	Weight        float64    `json:"weight"`
-	Formula       string     `json:"formula"`
-	StartDate     *time.Time `json:"start_date"`
-	DueDate       *time.Time `json:"due_date"`
+	Name                     string     `json:"name" validate:"required"`
+	MetricCode               string     `json:"metric_code"`
+	MetricDescription        string     `json:"metric_description"`
+	MetricStatus             string     `json:"metric_status"`
+	DisplayOrder             int        `json:"display_order"`
+	MetricType               string     `json:"metric_type"`
+	Unit                     string     `json:"unit"`
+	CustomUnitLabel          string     `json:"custom_unit_label"`
+	BaselineValue            float64    `json:"baseline_value"`
+	TargetValue              float64    `json:"target_value" validate:"required"`
+	Weight                   float64    `json:"weight"`
+	Formula                  string     `json:"formula"`
+	CalculationType          string     `json:"calculation_type"`
+	Direction                string     `json:"direction"`
+	DecimalPrecision         int        `json:"decimal_precision"`
+	AggregationMethod        string     `json:"aggregation_method"`
+	ReportingFrequency       string     `json:"reporting_frequency"`
+	NumeratorLabel           string     `json:"numerator_label"`
+	NumeratorVariableCode    string     `json:"numerator_variable_code"`
+	DenominatorLabel         string     `json:"denominator_label"`
+	DenominatorVariableCode  string     `json:"denominator_variable_code"`
+	DirectActualLabel        string     `json:"direct_actual_label"`
+	AllowManualActualOverride bool     `json:"allow_manual_actual_override"`
+	AdvancedFormulaEnabled   bool       `json:"advanced_formula_enabled"`
+	FormulaCode              string     `json:"formula_code"`
+	DivideByZeroHandling     string     `json:"divide_by_zero_handling"`
+	RoundingRule             string     `json:"rounding_rule"`
+	CalculationTraceRequired bool       `json:"calculation_trace_required"`
+	MetricOwnerID            *string    `json:"metric_owner_id"`
+	DataSource               string     `json:"data_source"`
+	EvidenceRequired         bool       `json:"evidence_required"`
+	StartDate                *time.Time `json:"start_date"`
+	DueDate                  *time.Time `json:"due_date"`
 }
 
 type KpiMetricValueRequest struct {
