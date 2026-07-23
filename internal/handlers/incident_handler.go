@@ -1822,7 +1822,7 @@ func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
 	)
 
 	now := time.Now()
-	smsErr := internalUtils.SendSMS(mobile, smsMessage)
+	_, smsErr := internalUtils.SendSMS(mobile, smsMessage)
 	status := "sent"
 	if smsErr != nil {
 		status = "failed"
@@ -1866,6 +1866,7 @@ func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
 	}
 	if smsErr != nil {
 		notification.ErrorMessage = smsErr.Error()
+		notification.FailureCode = services.ClassifyFailureCode(smsErr)
 	}
 	if err := h.incidentRepo.CreateNotification(c.UserContext(), notification); err != nil {
 		log.Printf("REQUEST-INFO-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)

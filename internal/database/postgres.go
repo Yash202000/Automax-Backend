@@ -612,6 +612,10 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Update Draft Notifications", Code: "notifications:update", Module: "notifications", Action: "update", Description: "Update draft notifications"},
 		{Name: "Delete Notifications", Code: "notifications:delete", Module: "notifications", Action: "delete", Description: "Delete notification logs"},
 
+		// Communication Tracking Dashboard permissions (Call Center module)
+		{Name: "View Communication Tracking Dashboard", Code: "communication-tracking:view", Module: "communication-tracking", Action: "view", Description: "View the cross-channel communication tracking dashboard (SMS/Email/WhatsApp delivery status)"},
+		{Name: "Update Communication Tracking", Code: "communication-tracking:update", Module: "communication-tracking", Action: "update", Description: "Manually resend a failed/undeliverable/expired SMS, Email, or WhatsApp notification"},
+
 		// Template permissions
 		{Name: "View Templates", Code: "templates:read", Module: "templates", Action: "read", Description: "View notification templates"},
 		{Name: "Create Templates", Code: "templates:create", Module: "templates", Action: "create", Description: "Create notification templates"},
