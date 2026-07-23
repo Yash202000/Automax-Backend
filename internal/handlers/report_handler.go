@@ -47,16 +47,11 @@ var incidentDataSources = map[string]bool{
 }
 
 // injectAccessScope restricts report results to the calling user's assigned
-// classifications, locations, and department — mirroring ListIncidents scoping.
-// Two paths mirror the incident handler:
-//   1. view_department_only: restrict to user's ScopeDepartmentID, plus
-//      DeptManagerClassificationID / DeptManagerLocationID if set.
-//   2. Otherwise: restrict by user's M2M classifications and locations.
-//
-// If the caller already supplied a classification_id, location_id, or
-// department_id filter, the corresponding user-scope filter is skipped.
+// classifications and locations — mirroring ListIncidents / GetStatsV2 scoping.
+// If the caller already supplied a classification_id or location_id dynamic
+// filter, the corresponding user-scope filter is skipped.
 func (h *ReportHandler) injectAccessScope(c *fiber.Ctx, dataSource string, filters []models.ReportFilterConfig) []models.ReportFilterConfig {
-	// RESTRICT_REPORT_SCOPE=true enables user-level scoping on reports
+	// RESTRICT_REPORT_SCOPE=true enables user-level classification/location scoping on reports
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_REPORT_SCOPE")), "true") {
 		return filters
 	}
@@ -73,7 +68,6 @@ func (h *ReportHandler) injectAccessScope(c *fiber.Ctx, dataSource string, filte
 
 	hasClassification := false
 	hasLocation := false
-	hasDepartment := false
 	for _, f := range filters {
 		if f.Field == "classification_id" && f.Value != nil {
 			hasClassification = true
@@ -81,9 +75,9 @@ func (h *ReportHandler) injectAccessScope(c *fiber.Ctx, dataSource string, filte
 		if f.Field == "location_id" && f.Value != nil {
 			hasLocation = true
 		}
-		if f.Field == "department_id" && f.Value != nil {
-			hasDepartment = true
-		}
+	}
+	if hasClassification && hasLocation {
+		return filters
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
@@ -94,41 +88,6 @@ func (h *ReportHandler) injectAccessScope(c *fiber.Ctx, dataSource string, filte
 
 	noAccessSentinel := []interface{}{"00000000-0000-0000-0000-000000000000"}
 
-	// Path 1: Department-scoped users (mirrors incident_handler lines 273-298)
-	if user.HasPermission("incidents:view_department_only") {
-		// Restrict to user's scoped department
-		if !hasDepartment {
-			scopeDeptID := user.ScopeDepartmentID()
-			if scopeDeptID != nil {
-				filters = append(filters, models.ReportFilterConfig{
-					Field:    "department_id",
-					Operator: "equals",
-					Value:    scopeDeptID.String(),
-				})
-			}
-		}
-		// DeptManager classification/location overrides M2M assignments
-		if user.DeptManagerClassificationID != nil {
-			// Replace any existing classification filter with the narrower scope
-			filters = removeFilter(filters, "classification_id")
-			filters = append(filters, models.ReportFilterConfig{
-				Field:    "classification_id",
-				Operator: "equals",
-				Value:    user.DeptManagerClassificationID.String(),
-			})
-		}
-		if user.DeptManagerLocationID != nil {
-			filters = removeFilter(filters, "location_id")
-			filters = append(filters, models.ReportFilterConfig{
-				Field:    "location_id",
-				Operator: "equals",
-				Value:    user.DeptManagerLocationID.String(),
-			})
-		}
-		return filters
-	}
-
-	// Path 2: Classification + Location scoped (mirrors incident_handler lines 299-357)
 	if !hasClassification {
 		classIDs := make([]interface{}, 0, len(user.Classifications))
 		for _, cls := range user.Classifications {
@@ -160,17 +119,6 @@ func (h *ReportHandler) injectAccessScope(c *fiber.Ctx, dataSource string, filte
 	}
 
 	return filters
-}
-
-// removeFilter returns a new slice with all entries matching the given field removed.
-func removeFilter(filters []models.ReportFilterConfig, field string) []models.ReportFilterConfig {
-	result := make([]models.ReportFilterConfig, 0, len(filters))
-	for _, f := range filters {
-		if f.Field != field {
-			result = append(result, f)
-		}
-	}
-	return result
 }
 
 // Report CRUD
