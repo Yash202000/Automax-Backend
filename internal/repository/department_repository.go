@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/google/uuid"
@@ -30,6 +32,19 @@ type DepartmentRepository interface {
 	CheckDeleteDependencies(ctx context.Context, id uuid.UUID) (children, users, incidents int64, err error)
 }
 
+// orgCodePrefix is the fixed prefix for the auto-generated Organization Code (e.g. ORG-000001).
+const orgCodePrefix = "ORG-"
+
+// Organization Code allocation. orgCodeSeq is an in-process counter, seeded once
+// (orgCodeLoaded) from the current DB maximum and incremented under orgCodeMu on
+// every create. This assumes a single backend instance; the unique index on
+// departments.code is the last-resort guard if that assumption is ever violated.
+var (
+	orgCodeMu     sync.Mutex
+	orgCodeSeq    int64
+	orgCodeLoaded bool
+)
+
 type departmentRepository struct {
 	db *gorm.DB
 }
@@ -50,7 +65,47 @@ func (r *departmentRepository) Create(ctx context.Context, department *models.De
 		department.Level = 0
 		department.Path = department.ID.String()
 	}
+
+	// The Organization Code is system-generated and never supplied by the caller.
+	// When empty, allocate the next unique ORG-###### code from the in-process counter.
+	if strings.TrimSpace(department.Code) == "" {
+		code, err := r.nextOrgCode(ctx)
+		if err != nil {
+			return err
+		}
+		department.Code = code
+	}
+
 	return r.db.WithContext(ctx).Create(department).Error
+}
+
+// nextOrgCode returns the next unique Organization Code (e.g. ORG-000001). It seeds
+// an in-process counter once from the current DB maximum — Unscoped() so soft-deleted
+// departments keep their number reserved — then just increments in memory under the
+// mutex, so there is no per-create DB round-trip and no collision within this process.
+func (r *departmentRepository) nextOrgCode(ctx context.Context) (string, error) {
+	orgCodeMu.Lock()
+	defer orgCodeMu.Unlock()
+
+	if !orgCodeLoaded {
+		var maxCode *string
+		if err := r.db.WithContext(ctx).Unscoped().Model(&models.Department{}).
+			Select("MAX(code)").
+			Where("code LIKE ?", orgCodePrefix+"%").
+			Scan(&maxCode).Error; err != nil {
+			return "", err
+		}
+		if maxCode != nil && *maxCode != "" {
+			var n int64
+			if _, err := fmt.Sscanf(*maxCode, orgCodePrefix+"%d", &n); err == nil {
+				orgCodeSeq = n
+			}
+		}
+		orgCodeLoaded = true
+	}
+
+	orgCodeSeq++
+	return fmt.Sprintf("%s%06d", orgCodePrefix, orgCodeSeq), nil
 }
 
 func (r *departmentRepository) FindByID(ctx context.Context, id uuid.UUID) (*models.Department, error) {
@@ -135,6 +190,17 @@ func (r *departmentRepository) ListFiltered(ctx context.Context, filter models.D
 	var total int64
 
 	base := r.db.WithContext(ctx).Model(&models.Department{})
+
+	if s := strings.TrimSpace(filter.Search); s != "" {
+		like := "%" + s + "%"
+		base = base.Where(
+			"departments.name ILIKE ? OR departments.name_ar ILIKE ? OR departments.code ILIKE ?",
+			like, like, like,
+		)
+	}
+	if code := strings.TrimSpace(filter.Code); code != "" {
+		base = base.Where("departments.code ILIKE ?", "%"+code+"%")
+	}
 
 	if filter.Classification != nil {
 		base = base.

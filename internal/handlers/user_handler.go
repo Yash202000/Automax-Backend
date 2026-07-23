@@ -246,6 +246,9 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 
 func (h *UserHandler) DeleteAccount(c *fiber.Ctx) error {
 	if err := h.userService.DeleteUser(c.UserContext()); err != nil {
+		if errors.Is(err, services.ErrUserAssigned) {
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "cannot_delete_user_assigned"))
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_delete_account"))
 	}
 
@@ -261,6 +264,9 @@ func (h *UserHandler) AdminDeleteUser(c *fiber.Ctx) error {
 	}
 
 	if err := h.userService.AdminDeleteUser(c.UserContext(), userID); err != nil {
+		if errors.Is(err, services.ErrUserAssigned) {
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "cannot_delete_user_assigned"))
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_delete_user"))
 	}
 

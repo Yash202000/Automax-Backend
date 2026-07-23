@@ -3,12 +3,14 @@ package database
 import (
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/database/migrations"
 	"github.com/automax/backend/internal/models"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
@@ -330,6 +332,15 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	// Composite index for the incident communication history query (filter by incident_id, sort by created_at)
 	if err := migrations.MigrateNotificationLogIncidentIndex(db); err != nil {
 		log.Printf("Warning: notification_log incident index migration failed: %v", err)
+	}
+
+	// Assign a unique Organization Code (ORG-######) to any department missing one.
+	// EPM940 only — other clients supply department codes in the payload. Idempotent:
+	// only touches rows with an empty/NULL code.
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+		if err := migrations.MigrateDepartmentCodeBackfill(db); err != nil {
+			log.Printf("Warning: department code backfill failed: %v", err)
+		}
 	}
 
 	// Seed existing free-text goal categories as root Category rows

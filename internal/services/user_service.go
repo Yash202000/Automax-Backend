@@ -28,6 +28,10 @@ import (
 	"gorm.io/gorm"
 )
 
+// ErrUserAssigned is returned when a user cannot be deleted because they are still
+// assigned to one or more incidents. Handlers map it to HTTP 409 with a localized message.
+var ErrUserAssigned = errors.New("user is currently assigned")
+
 type UserService interface {
 	Register(ctx context.Context, req *models.UserRegisterRequest) (*models.AuthResponse, error)
 	SSORegister(ctx context.Context, req *models.SSORegisterRequest) (*models.AuthResponse, error)
@@ -786,7 +790,7 @@ func (s *userService) Logout(ctx context.Context) error {
 					Action:      "logout",
 					Module:      "users",
 					ResourceID:  userID.String(),
-					Description: fmt.Sprintf("User logged out"),
+					Description: "User logged out",
 					OldValue:    nil,
 					NewValue:    nil,
 					IPAddress:   ipAddress,
@@ -1663,6 +1667,13 @@ func (s *userService) DeleteUser(ctx context.Context) error {
 		return err
 	}
 
+	// Block deletion while the user is still assigned to any live incident.
+	if n, err := s.userRepo.CountAssignedIncidents(ctx, userID); err != nil {
+		return err
+	} else if n > 0 {
+		return ErrUserAssigned
+	}
+
 	// Deactivate instead of soft-deleting: keep the row alive (IsActive=false).
 	// Avatar file is preserved so a re-activated account keeps it.
 	_ = s.sessionStore.DeleteUserSession(ctx, userID.String())
@@ -1721,6 +1732,13 @@ func (s *userService) AdminDeleteUser(ctx context.Context, userID uuid.UUID) err
 	user, err := s.userRepo.FindByID(ctx, userID)
 	if err != nil {
 		return err
+	}
+
+	// Block deletion while the user is still assigned to any live incident.
+	if n, err := s.userRepo.CountAssignedIncidents(ctx, userID); err != nil {
+		return err
+	} else if n > 0 {
+		return ErrUserAssigned
 	}
 
 	// Store user info for logging before deactivation
