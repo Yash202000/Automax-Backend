@@ -268,6 +268,9 @@ func (r *notificationLogRepository) ListForMonitoring(ctx context.Context, filte
 			query = query.Where("channel IN ?", channels)
 		}
 	}
+	if filter.Category != "" {
+		query = query.Where("category = ?", filter.Category)
+	}
 	if filter.Status != "" {
 		query = query.Where("status = ?", filter.Status)
 	}
