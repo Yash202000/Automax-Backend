@@ -1,9 +1,11 @@
 package models
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -17,26 +19,56 @@ const (
 )
 
 // ──────────────────────────────────────────────────────────
-// KpiAnnualTarget — one row per KPI per year
+// KpiAnnualTarget — one row per KPI per metric per period
 // ──────────────────────────────────────────────────────────
 
+type KpiTargetSegmentationValue struct {
+	Dimension string `json:"dimension"`
+	Value     string `json:"value"`
+}
+
 type KpiAnnualTarget struct {
-	ID      uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
-	KpiCode string    `gorm:"size:50;not null;index:idx_kpi_target_period_unique,unique" json:"kpi_code"`
-	KpiType string    `gorm:"size:20;not null;index:idx_kpi_target_period_unique,unique" json:"kpi_type"`
-	Year    int       `gorm:"not null;index" json:"year"`
-	// PeriodType/PeriodKey let a target apply to any reporting frequency
-	// (month/quarter/semi_annual/annual/custom), not just a calendar year.
-	// Existing rows default to PeriodType="annual", PeriodKey=Year as string.
-	PeriodType string `gorm:"size:20;not null;default:'annual';index:idx_kpi_target_period_unique,unique" json:"period_type"`
-	// PeriodKey is not DB-NOT-NULL so AutoMigrate can add the column to a
-	// table with existing rows; MigrateKpiPeriodBackfill fills it in right
-	// after, and the application layer (SetTarget) always requires it.
-	PeriodKey   string         `gorm:"size:20;index:idx_kpi_target_period_unique,unique" json:"period_key"`
-	TargetValue float64        `gorm:"not null" json:"target_value"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+	ID                         uuid.UUID                  `gorm:"type:uuid;primary_key" json:"id"`
+	KpiCode                    string                     `gorm:"size:50;not null;index:idx_kpi_target_period_unique,unique" json:"kpi_code"`
+	KpiType                    string                     `gorm:"size:20;not null;index:idx_kpi_target_period_unique,unique" json:"kpi_type"`
+	Year                       int                        `gorm:"not null;index" json:"year"`
+	PeriodType                 string                     `gorm:"size:20;not null;default:'annual';index:idx_kpi_target_period_unique,unique" json:"period_type"`
+	PeriodKey                  string                     `gorm:"size:20;index:idx_kpi_target_period_unique,unique" json:"period_key"`
+	TargetValue                float64                    `gorm:"default:0" json:"target_value"`
+
+	// Phase 1 extended fields
+	MetricID                    *uuid.UUID                 `gorm:"type:uuid;index" json:"metric_id"`
+	Metric                      *KpiMetric                 `gorm:"foreignKey:MetricID" json:"metric,omitempty"`
+	CalculationTypeSnapshot     string                     `gorm:"size:50" json:"calculation_type_snapshot"`
+	DirectionSnapshot           string                     `gorm:"size:50" json:"direction_snapshot"`
+	UnitSnapshot                string                     `gorm:"size:50" json:"unit_snapshot"`
+	DecimalPrecisionSnapshot    int                        `gorm:"default:0" json:"decimal_precision_snapshot"`
+	AggregationMethodSnapshot   string                     `gorm:"size:50" json:"aggregation_method_snapshot"`
+	ReportingFrequencySnapshot  string                     `gorm:"size:50" json:"reporting_frequency_snapshot"`
+	TargetYear                  int                        `gorm:"default:0" json:"target_year"`
+	PeriodCode                  string                     `gorm:"size:50" json:"period_code"`
+	PeriodStart                 *time.Time                 `json:"period_start"`
+	PeriodEnd                   *time.Time                 `json:"period_end"`
+	TargetType                  string                     `gorm:"size:50;default:'Period Target'" json:"target_type"`
+	TargetBasis                 string                     `gorm:"size:50;default:'Management Decision'" json:"target_basis"`
+	TargetRationale             string                     `gorm:"type:text" json:"target_rationale"`
+	ThresholdMode               string                     `gorm:"size:50;default:'Use Global KPI Rules'" json:"threshold_mode"`
+	ExcellentThreshold          *float64                   `json:"excellent_threshold"`
+	AchievedThreshold           *float64                   `json:"achieved_threshold"`
+	WarningThreshold            *float64                   `json:"warning_threshold"`
+	TargetRangeMin              *float64                   `json:"target_range_min"`
+	TargetRangeMax              *float64                   `json:"target_range_max"`
+	SegmentationValues          datatypes.JSON             `gorm:"type:jsonb" json:"segmentation_values"`
+	TargetStatus                string                     `gorm:"size:30;not null;default:'draft'" json:"target_status"`
+	EffectiveFrom               *time.Time                 `json:"effective_from"`
+	EffectiveTo                 *time.Time                 `json:"effective_to"`
+	ApprovedByID                *uuid.UUID                 `gorm:"type:uuid;index" json:"approved_by_id"`
+	ApprovedBy                  *User                      `gorm:"foreignKey:ApprovedByID" json:"approved_by,omitempty"`
+	ApprovedAt                  *time.Time                 `json:"approved_at"`
+	SupersedesEntryID           *uuid.UUID                 `gorm:"type:uuid" json:"supersedes_entry_id"`
+	CreatedAt                   time.Time                  `json:"created_at"`
+	UpdatedAt                   time.Time                  `json:"updated_at"`
+	DeletedAt                   gorm.DeletedAt             `gorm:"index" json:"-"`
 }
 
 func (t *KpiAnnualTarget) BeforeCreate(tx *gorm.DB) error {
@@ -47,23 +79,209 @@ func (t *KpiAnnualTarget) BeforeCreate(tx *gorm.DB) error {
 }
 
 type KpiAnnualTargetRequest struct {
-	KpiCode     string  `json:"kpi_code" validate:"required,max=50"`
-	KpiType     string  `json:"kpi_type" validate:"required,oneof=strategic operational award"`
-	Year        int     `json:"year" validate:"required,min=2020,max=2040"`
-	PeriodType  string  `json:"period_type" validate:"omitempty,oneof=month quarter semi_annual annual custom"`
-	PeriodKey   string  `json:"period_key" validate:"omitempty,max=20"`
-	TargetValue float64 `json:"target_value" validate:"required"`
+	KpiCode          string                     `json:"kpi_code" validate:"required,max=50"`
+	KpiType          string                     `json:"kpi_type" validate:"required,oneof=strategic operational award"`
+	MetricID         *string                    `json:"metric_id"`
+	TargetYear       int                        `json:"target_year" validate:"min=2020,max=2040"`
+	PeriodCode       string                     `json:"period_code" validate:"required,max=50"`
+	PeriodStart      string                     `json:"period_start"`
+	PeriodEnd        string                     `json:"period_end"`
+	TargetValue      *float64                   `json:"target_value"`
+	TargetType       string                     `json:"target_type" validate:"omitempty,oneof='Period Target' 'Annual Target' 'Milestone / Ad Hoc'"`
+	TargetBasis      string                     `json:"target_basis"`
+	TargetRationale  string                     `json:"target_rationale"`
+	ThresholdMode    string                     `json:"threshold_mode"`
+	ExcellentThreshold  *float64                `json:"excellent_threshold"`
+	AchievedThreshold   *float64                `json:"achieved_threshold"`
+	WarningThreshold    *float64                `json:"warning_threshold"`
+	TargetRangeMin      *float64                `json:"target_range_min"`
+	TargetRangeMax      *float64                `json:"target_range_max"`
+	SegmentationValues  []KpiTargetSegmentationValue `json:"segmentation_values"`
+	EffectiveFrom    string                     `json:"effective_from"`
+	EffectiveTo      string                     `json:"effective_to"`
 }
 
+// ToModel hydrates a KpiAnnualTarget from the request, applying
+// snapshot fields from the linked KpiMetric if available.
+func (r *KpiAnnualTargetRequest) ToModel(db *gorm.DB) *KpiAnnualTarget {
+	item := &KpiAnnualTarget{
+		KpiCode:        r.KpiCode,
+		KpiType:        r.KpiType,
+		TargetYear:     r.TargetYear,
+		PeriodCode:     r.PeriodCode,
+		TargetValue:    float64(0),
+		TargetType:     r.TargetType,
+		TargetBasis:    r.TargetBasis,
+		TargetRationale: r.TargetRationale,
+		ThresholdMode:  r.ThresholdMode,
+		TargetStatus:   "draft",
+	}
+	if r.TargetValue != nil {
+		item.TargetValue = *r.TargetValue
+	}
+	if r.TargetType == "" {
+		item.TargetType = "Period Target"
+	}
+	if r.TargetBasis == "" {
+		item.TargetBasis = "Management Decision"
+	}
+	if r.ThresholdMode == "" {
+		item.ThresholdMode = "Use Global KPI Rules"
+	}
+	if r.ExcellentThreshold != nil {
+		item.ExcellentThreshold = r.ExcellentThreshold
+	}
+	if r.AchievedThreshold != nil {
+		item.AchievedThreshold = r.AchievedThreshold
+	}
+	if r.WarningThreshold != nil {
+		item.WarningThreshold = r.WarningThreshold
+	}
+	if r.TargetRangeMin != nil {
+		item.TargetRangeMin = r.TargetRangeMin
+	}
+	if r.TargetRangeMax != nil {
+		item.TargetRangeMax = r.TargetRangeMax
+	}
+	if r.PeriodStart != "" {
+		if t, err := time.Parse("2006-01-02", r.PeriodStart); err == nil {
+			item.PeriodStart = &t
+		}
+	}
+	if r.PeriodEnd != "" {
+		if t, err := time.Parse("2006-01-02", r.PeriodEnd); err == nil {
+			item.PeriodEnd = &t
+		}
+	}
+	if r.EffectiveFrom != "" {
+		if t, err := time.Parse("2006-01-02", r.EffectiveFrom); err == nil {
+			item.EffectiveFrom = &t
+		}
+	}
+	if r.EffectiveTo != "" {
+		if t, err := time.Parse("2006-01-02", r.EffectiveTo); err == nil {
+			item.EffectiveTo = &t
+		}
+	}
+	if r.MetricID != nil && *r.MetricID != "" {
+		if mid, err := uuid.Parse(*r.MetricID); err == nil {
+			item.MetricID = &mid
+			// Snapshot metric configuration fields at target creation time
+			var metric KpiMetric
+			if err := db.Where("id = ?", mid).First(&metric).Error; err == nil {
+				item.CalculationTypeSnapshot = metric.CalculationType
+				item.DirectionSnapshot = metric.Direction
+				item.UnitSnapshot = metric.Unit
+				item.DecimalPrecisionSnapshot = metric.DecimalPrecision
+				item.AggregationMethodSnapshot = metric.AggregationMethod
+			}
+		}
+	}
+	if len(r.SegmentationValues) > 0 {
+		data, _ := json.Marshal(r.SegmentationValues)
+		item.SegmentationValues = datatypes.JSON(data)
+	}
+	// Backward compat: set legacy fields
+	item.Year = r.TargetYear
+	item.PeriodType = "annual"
+	item.PeriodKey = r.PeriodCode
+
+	return item
+}
+
+// KpiAnnualTargetResponse is the JSON response shape returned by the API.
+// It mirrors the frontend KpiTarget type.
 type KpiAnnualTargetResponse struct {
-	ID          uuid.UUID `json:"id"`
-	KpiCode     string    `json:"kpi_code"`
-	KpiType     string    `json:"kpi_type"`
-	Year        int       `json:"year"`
-	PeriodType  string    `json:"period_type"`
-	PeriodKey   string    `json:"period_key"`
-	TargetValue float64   `json:"target_value"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID                          uuid.UUID                    `json:"id"`
+	KpiCode                     string                       `json:"kpi_code"`
+	KpiType                     string                       `json:"kpi_type"`
+	MetricID                    *uuid.UUID                   `json:"metric_id"`
+	Metric                      *KpiMetricBrief              `json:"metric,omitempty"`
+	CalculationTypeSnapshot     string                       `json:"calculation_type_snapshot"`
+	DirectionSnapshot           string                       `json:"direction_snapshot"`
+	UnitSnapshot                string                       `json:"unit_snapshot"`
+	DecimalPrecisionSnapshot    int                          `json:"decimal_precision_snapshot"`
+	AggregationMethodSnapshot   string                       `json:"aggregation_method_snapshot"`
+	ReportingFrequencySnapshot  string                       `json:"reporting_frequency_snapshot"`
+	TargetYear                  int                          `json:"target_year"`
+	PeriodCode                  string                       `json:"period_code"`
+	PeriodStart                 *time.Time                   `json:"period_start"`
+	PeriodEnd                   *time.Time                   `json:"period_end"`
+	TargetValue                 float64                      `json:"target_value"`
+	TargetType                  string                       `json:"target_type"`
+	TargetBasis                 string                       `json:"target_basis"`
+	TargetRationale             string                       `json:"target_rationale"`
+	ThresholdMode               string                       `json:"threshold_mode"`
+	ExcellentThreshold          *float64                     `json:"excellent_threshold"`
+	AchievedThreshold           *float64                     `json:"achieved_threshold"`
+	WarningThreshold            *float64                     `json:"warning_threshold"`
+	TargetRangeMin              *float64                     `json:"target_range_min"`
+	TargetRangeMax              *float64                     `json:"target_range_max"`
+	SegmentationValues          datatypes.JSON               `json:"segmentation_values"`
+	TargetStatus                string                       `json:"target_status"`
+	EffectiveFrom               *time.Time                   `json:"effective_from"`
+	EffectiveTo                 *time.Time                   `json:"effective_to"`
+	ApprovedByID                *uuid.UUID                   `json:"approved_by_id"`
+	ApprovedBy                  *UserBriefResponse           `json:"approved_by,omitempty"`
+	ApprovedAt                  *time.Time                   `json:"approved_at"`
+	SupersedesEntryID           *uuid.UUID                   `json:"supersedes_entry_id"`
+	CreatedAt                   time.Time                    `json:"created_at"`
+	UpdatedAt                   time.Time                    `json:"updated_at"`
+}
+
+func (t *KpiAnnualTarget) ToResponse() KpiAnnualTargetResponse {
+	r := KpiAnnualTargetResponse{
+		ID:                         t.ID,
+		KpiCode:                    t.KpiCode,
+		KpiType:                    t.KpiType,
+		MetricID:                   t.MetricID,
+		CalculationTypeSnapshot:    t.CalculationTypeSnapshot,
+		DirectionSnapshot:          t.DirectionSnapshot,
+		UnitSnapshot:               t.UnitSnapshot,
+		DecimalPrecisionSnapshot:   t.DecimalPrecisionSnapshot,
+		AggregationMethodSnapshot:  "",
+		ReportingFrequencySnapshot: t.ReportingFrequencySnapshot,
+		TargetYear:                 t.TargetYear,
+		PeriodCode:                 t.PeriodCode,
+		PeriodStart:                t.PeriodStart,
+		PeriodEnd:                  t.PeriodEnd,
+		TargetValue:                t.TargetValue,
+		TargetType:                 t.TargetType,
+		TargetBasis:                t.TargetBasis,
+		TargetRationale:            t.TargetRationale,
+		ThresholdMode:              t.ThresholdMode,
+		ExcellentThreshold:         t.ExcellentThreshold,
+		AchievedThreshold:          t.AchievedThreshold,
+		WarningThreshold:           t.WarningThreshold,
+		TargetRangeMin:             t.TargetRangeMin,
+		TargetRangeMax:             t.TargetRangeMax,
+		SegmentationValues:         t.SegmentationValues,
+		TargetStatus:               t.TargetStatus,
+		EffectiveFrom:              t.EffectiveFrom,
+		EffectiveTo:                t.EffectiveTo,
+		ApprovedByID:               t.ApprovedByID,
+		ApprovedBy:                 ToUserBriefResponse(t.ApprovedBy),
+		ApprovedAt:                 t.ApprovedAt,
+		SupersedesEntryID:          t.SupersedesEntryID,
+		CreatedAt:                  t.CreatedAt,
+		UpdatedAt:                  t.UpdatedAt,
+	}
+	if t.Metric != nil {
+		r.Metric = t.Metric.ToBrief()
+	}
+	return r
+}
+
+type KpiMetricBrief struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+func (m *KpiMetric) ToBrief() *KpiMetricBrief {
+	if m == nil {
+		return nil
+	}
+	return &KpiMetricBrief{ID: m.ID.String(), Name: m.Name}
 }
 
 // ──────────────────────────────────────────────────────────
@@ -76,6 +294,8 @@ type KpiPerformance struct {
 	KpiType string    `gorm:"size:20;not null" json:"kpi_type"`
 	Year    int       `gorm:"not null" json:"year"`
 	Quarter int       `gorm:"not null" json:"quarter"`
+	// TargetID links back to the approved KpiAnnualTarget at submission time (REL-18)
+	TargetID           *uuid.UUID     `gorm:"type:uuid;index" json:"target_id"`
 	// PeriodType/PeriodKey let an actual apply to any reporting frequency.
 	// Existing rows default to PeriodType="quarter", PeriodKey="{year}-Q{quarter}".
 	PeriodType         string         `gorm:"size:20;not null;default:'quarter'" json:"period_type"`
@@ -135,6 +355,7 @@ type KpiPerformanceResponse struct {
 	Quarter          int                `json:"quarter"`
 	PeriodType       string             `json:"period_type"`
 	PeriodKey        string             `json:"period_key"`
+	TargetID         *uuid.UUID         `json:"target_id"`
 	Target           float64            `json:"target"`
 	Actual           float64            `json:"actual"`
 	AchievementPct   float64            `json:"achievement_pct"`
@@ -159,6 +380,7 @@ func (k *KpiPerformance) ToResponse() KpiPerformanceResponse {
 		Quarter:          k.Quarter,
 		PeriodType:       k.PeriodType,
 		PeriodKey:        k.PeriodKey,
+		TargetID:         k.TargetID,
 		Target:           k.Target,
 		Actual:           k.Actual,
 		AchievementPct:   k.AchievementPct,

@@ -252,6 +252,7 @@ type OperationalKPIResponse struct {
 	Polarity               string                        `json:"polarity"`
 	ActivationStatus       string                        `json:"activation_status"`
 	DescriptionEn          string                        `json:"description_en"`
+	DescriptionAr          string                        `json:"description_ar"`
 	Formula                string                        `json:"formula"`
 	Baseline               float64                       `json:"baseline"`
 	UnitOfMeasure          string                        `json:"unit_of_measure"`
@@ -275,6 +276,7 @@ func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 		Polarity:               k.Polarity,
 		ActivationStatus:       k.ActivationStatus,
 		DescriptionEn:          k.DescriptionEn,
+		DescriptionAr:          k.DescriptionAr,
 		Formula:                k.Formula,
 		Baseline:               k.Baseline,
 		UnitOfMeasure:          k.UnitOfMeasure,
@@ -367,6 +369,7 @@ type AwardKPIResponse struct {
 	Polarity            string                     `json:"polarity"`
 	ActivationStatus    string                     `json:"activation_status"`
 	DescriptionEn       string                     `json:"description_en"`
+	DescriptionAr       string                     `json:"description_ar"`
 	Formula             string                     `json:"formula"`
 	Baseline            float64                    `json:"baseline"`
 	UnitOfMeasure       string                     `json:"unit_of_measure"`
@@ -388,6 +391,7 @@ func (k *AwardKPI) ToResponse() AwardKPIResponse {
 		Polarity:            k.Polarity,
 		ActivationStatus:    k.ActivationStatus,
 		DescriptionEn:       k.DescriptionEn,
+		DescriptionAr:       k.DescriptionAr,
 		Formula:             k.Formula,
 		Baseline:            k.Baseline,
 		UnitOfMeasure:       k.UnitOfMeasure,

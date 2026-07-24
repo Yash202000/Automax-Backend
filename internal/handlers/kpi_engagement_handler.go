@@ -89,6 +89,53 @@ func (h *KpiEngagementHandler) ListMetrics(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "", items)
 }
 
+// ListMetricsByCode returns all metrics for a KPI identified by its code.
+// It searches across strategic, operational, and award KPI tables to find the
+// matching (kpi_id, kpi_type) pair.
+// GET /kpi/metrics-by-code/:code
+func (h *KpiEngagementHandler) ListMetricsByCode(c *fiber.Ctx) error {
+	kpiCode := c.Params("code")
+	if kpiCode == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	// Search across all three KPI dictionary tables
+	type kpiLookup struct {
+		ID   uuid.UUID
+		Type string
+	}
+	var found *kpiLookup
+
+	var skpi models.StrategicKPI
+	if err := h.db.WithContext(c.UserContext()).Where("code = ?", kpiCode).First(&skpi).Error; err == nil {
+		found = &kpiLookup{ID: skpi.ID, Type: models.KPITypeStrategic}
+	}
+	if found == nil {
+		var okpi models.OperationalKPI
+		if err := h.db.WithContext(c.UserContext()).Where("code = ?", kpiCode).First(&okpi).Error; err == nil {
+			found = &kpiLookup{ID: okpi.ID, Type: models.KPITypeOperational}
+		}
+	}
+	if found == nil {
+		var akpi models.AwardKPI
+		if err := h.db.WithContext(c.UserContext()).Where("code = ?", kpiCode).First(&akpi).Error; err == nil {
+			found = &kpiLookup{ID: akpi.ID, Type: models.KPITypeAward}
+		}
+	}
+
+	if found == nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+
+	var items []models.KpiMetric
+	if err := h.db.WithContext(c.UserContext()).
+		Where("kpi_id = ? AND kpi_type = ?", found.ID, found.Type).
+		Order("created_at ASC").Find(&items).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", items)
+}
+
 func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
 	kpiType, id, err := h.parseTypeAndID(c)
 	if err != nil || !h.kpiExists(kpiType, id) {
@@ -106,20 +153,74 @@ func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
 	if metricType == "" {
 		metricType = "Numeric"
 	}
+	calcType := req.CalculationType
+	if calcType == "" {
+		calcType = "Direct Value"
+	}
+	direction := req.Direction
+	if direction == "" {
+		direction = "Higher is Better"
+	}
+	aggMethod := req.AggregationMethod
+	if aggMethod == "" {
+		aggMethod = "Sum"
+	}
+	metricStatus := req.MetricStatus
+	if metricStatus == "" {
+		metricStatus = "Active"
+	}
+	divideByZero := req.DivideByZeroHandling
+	if divideByZero == "" {
+		divideByZero = "Block Submission"
+	}
+	roundingRule := req.RoundingRule
+	if roundingRule == "" {
+		roundingRule = "Standard Round"
+	}
+	var metricOwnerID *uuid.UUID
+	if req.MetricOwnerID != nil && *req.MetricOwnerID != "" {
+		if mid, err := uuid.Parse(*req.MetricOwnerID); err == nil {
+			metricOwnerID = &mid
+		}
+	}
 	item := &models.KpiMetric{
-		KpiID:         id,
-		KpiType:       kpiType,
-		Name:          req.Name,
-		MetricType:    metricType,
-		Unit:          req.Unit,
-		BaselineValue: req.BaselineValue,
-		CurrentValue:  req.BaselineValue,
-		TargetValue:   req.TargetValue,
-		Weight:        req.Weight,
-		Formula:       req.Formula,
-		StartDate:     req.StartDate,
-		DueDate:       req.DueDate,
-		CreatedByID:   userID,
+		KpiID:                    id,
+		KpiType:                  kpiType,
+		Name:                     req.Name,
+		MetricCode:               req.MetricCode,
+		MetricDescription:        req.MetricDescription,
+		MetricStatus:             metricStatus,
+		DisplayOrder:             req.DisplayOrder,
+		MetricType:               metricType,
+		Unit:                     req.Unit,
+		CustomUnitLabel:          req.CustomUnitLabel,
+		BaselineValue:            req.BaselineValue,
+		CurrentValue:             req.BaselineValue,
+		TargetValue:              req.TargetValue,
+		Weight:                   req.Weight,
+		Formula:                  req.Formula,
+		CalculationType:          calcType,
+		Direction:                direction,
+		DecimalPrecision:         req.DecimalPrecision,
+		AggregationMethod:        aggMethod,
+		ReportingFrequency:       req.ReportingFrequency,
+		NumeratorLabel:           req.NumeratorLabel,
+		NumeratorVariableCode:    req.NumeratorVariableCode,
+		DenominatorLabel:         req.DenominatorLabel,
+		DenominatorVariableCode:  req.DenominatorVariableCode,
+		DirectActualLabel:        req.DirectActualLabel,
+		AllowManualActualOverride: req.AllowManualActualOverride,
+		AdvancedFormulaEnabled:   req.AdvancedFormulaEnabled,
+		FormulaCode:              req.FormulaCode,
+		DivideByZeroHandling:     divideByZero,
+		RoundingRule:             roundingRule,
+		CalculationTraceRequired: req.CalculationTraceRequired,
+		MetricOwnerID:            metricOwnerID,
+		DataSource:               req.DataSource,
+		EvidenceRequired:         req.EvidenceRequired,
+		StartDate:                req.StartDate,
+		DueDate:                  req.DueDate,
+		CreatedByID:              userID,
 	}
 	if item.Weight == 0 {
 		item.Weight = 1
@@ -184,16 +285,70 @@ func (h *KpiEngagementHandler) UpdateMetric(c *fiber.Ctx) error {
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
+	calcType := req.CalculationType
+	if calcType == "" {
+		calcType = "Direct Value"
+	}
+	direction := req.Direction
+	if direction == "" {
+		direction = "Higher is Better"
+	}
+	aggMethod := req.AggregationMethod
+	if aggMethod == "" {
+		aggMethod = "Sum"
+	}
+	metricStatus := req.MetricStatus
+	if metricStatus == "" {
+		metricStatus = "Active"
+	}
+	divideByZero := req.DivideByZeroHandling
+	if divideByZero == "" {
+		divideByZero = "Block Submission"
+	}
+	roundingRule := req.RoundingRule
+	if roundingRule == "" {
+		roundingRule = "Standard Round"
+	}
+	var metricOwnerID *uuid.UUID
+	if req.MetricOwnerID != nil && *req.MetricOwnerID != "" {
+		if mid, err := uuid.Parse(*req.MetricOwnerID); err == nil {
+			metricOwnerID = &mid
+		}
+	}
 	result := h.db.WithContext(c.UserContext()).Model(&models.KpiMetric{ID: id}).Updates(map[string]interface{}{
-		"name":           req.Name,
-		"metric_type":    req.MetricType,
-		"unit":           req.Unit,
-		"baseline_value": req.BaselineValue,
-		"target_value":   req.TargetValue,
-		"weight":         req.Weight,
-		"formula":        req.Formula,
-		"start_date":     req.StartDate,
-		"due_date":       req.DueDate,
+		"name":                        req.Name,
+		"metric_code":                 req.MetricCode,
+		"metric_description":          req.MetricDescription,
+		"metric_status":               metricStatus,
+		"display_order":               req.DisplayOrder,
+		"metric_type":                 req.MetricType,
+		"unit":                        req.Unit,
+		"custom_unit_label":           req.CustomUnitLabel,
+		"baseline_value":              req.BaselineValue,
+		"target_value":                req.TargetValue,
+		"weight":                      req.Weight,
+		"formula":                     req.Formula,
+		"calculation_type":            calcType,
+		"direction":                   direction,
+		"decimal_precision":           req.DecimalPrecision,
+		"aggregation_method":          aggMethod,
+		"reporting_frequency":         req.ReportingFrequency,
+		"numerator_label":             req.NumeratorLabel,
+		"numerator_variable_code":     req.NumeratorVariableCode,
+		"denominator_label":           req.DenominatorLabel,
+		"denominator_variable_code":   req.DenominatorVariableCode,
+		"direct_actual_label":         req.DirectActualLabel,
+		"allow_manual_actual_override": req.AllowManualActualOverride,
+		"advanced_formula_enabled":    req.AdvancedFormulaEnabled,
+		"formula_code":                req.FormulaCode,
+		"divide_by_zero_handling":     divideByZero,
+		"rounding_rule":               roundingRule,
+		"calculation_trace_required":  req.CalculationTraceRequired,
+		"metric_owner_id":             metricOwnerID,
+		"data_source":                 req.DataSource,
+		"evidence_required":           req.EvidenceRequired,
+		"start_date":                  req.StartDate,
+		"due_date":                    req.DueDate,
 	})
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
@@ -221,23 +376,42 @@ func (h *KpiEngagementHandler) UpdateMetricValue(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
-	result := h.db.WithContext(c.UserContext()).Model(&models.KpiMetric{ID: id}).
+
+	db := h.db.WithContext(c.UserContext())
+
+	// REL-11: Check if there are approved performance entries for any metric
+	// that would make direct current_value updates inconsistent.
+	var metric models.KpiMetric
+	if err := db.First(&metric, id).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	var approvedCount int64
+	db.Model(&models.KpiPerformance{}).
+		Where("kpi_code IN (SELECT code FROM strategic_kpis WHERE id = ? UNION SELECT code FROM operational_kpis WHERE id = ? UNION SELECT code FROM award_kpis WHERE id = ?)",
+			metric.KpiID, metric.KpiID, metric.KpiID).
+		Where("status = ?", models.KPIPerfStatusApproved).
+		Count(&approvedCount)
+	if approvedCount > 0 {
+		return utils.ErrorResponse(c, fiber.StatusForbidden,
+			"Cannot update metric current_value directly when approved performance entries exist. Use the performance entry workflow instead.")
+	}
+
+	result := db.Model(&models.KpiMetric{ID: id}).
 		Update("current_value", req.Value)
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
-	var item models.KpiMetric
-	h.db.WithContext(c.UserContext()).First(&item, id)
+	h.db.WithContext(c.UserContext()).First(&metric, id)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
 		Action:      "update",
 		Module:      "kpi",
-		ResourceID:  item.KpiID.String(),
-		Description: fmt.Sprintf("Updated actual value for metric %q to %v", item.Name, req.Value),
+		ResourceID:  metric.KpiID.String(),
+		Description: fmt.Sprintf("Updated actual value for metric %q to %v", metric.Name, req.Value),
 		Status:      "success",
 	})
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "", item)
+	return utils.SuccessResponse(c, fiber.StatusOK, "", metric)
 }
 
 func (h *KpiEngagementHandler) DeleteMetric(c *fiber.Ctx) error {

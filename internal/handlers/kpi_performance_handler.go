@@ -36,7 +36,8 @@ func NewKpiPerformanceHandler(db *gorm.DB, workflowSvc *services.KpiWorkflowServ
 // ─── Annual Targets ───────────────────────────────────────────────────────────
 
 func (h *KpiPerformanceHandler) ListTargets(c *fiber.Ctx) error {
-	q := h.db.WithContext(c.UserContext()).Model(&models.KpiAnnualTarget{})
+	q := h.db.WithContext(c.UserContext()).Model(&models.KpiAnnualTarget{}).
+		Preload("Metric").Preload("ApprovedBy")
 
 	if kpiCode := c.Query("kpi_code"); kpiCode != "" {
 		q = q.Where("kpi_code = ?", kpiCode)
@@ -47,13 +48,28 @@ func (h *KpiPerformanceHandler) ListTargets(c *fiber.Ctx) error {
 			q = q.Where("year = ?", year)
 		}
 	}
+	if metricID := c.Query("metric_id"); metricID != "" {
+		q = q.Where("metric_id = ?", metricID)
+	}
+	if periodCode := c.Query("period_code"); periodCode != "" {
+		q = q.Where("period_code = ?", periodCode)
+	}
+	if targetStatus := c.Query("target_status"); targetStatus != "" {
+		q = q.Where("target_status = ?", targetStatus)
+	}
+	// Also accept the old `kpi_code` filter (already handled above)
 
 	var items []models.KpiAnnualTarget
-	if err := q.Order("year DESC, kpi_code ASC").Find(&items).Error; err != nil {
+	if err := q.Order("target_year DESC, kpi_code ASC").Find(&items).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "", items)
+	resp := make([]models.KpiAnnualTargetResponse, len(items))
+	for i, item := range items {
+		resp[i] = item.ToResponse()
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
 }
 
 func (h *KpiPerformanceHandler) SetTarget(c *fiber.Ctx) error {
@@ -65,53 +81,66 @@ func (h *KpiPerformanceHandler) SetTarget(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
 
-	periodType := req.PeriodType
-	if periodType == "" {
-		periodType = "annual"
-	}
-	periodKey := req.PeriodKey
-	if periodKey == "" {
-		periodKey = strconv.Itoa(req.Year)
+	db := h.db.WithContext(c.UserContext())
+
+	// REL-03: Verify the KPI dictionary row exists
+	if !kpiExistsByCode(db, req.KpiCode, req.KpiType) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "KPI not found in dictionary")
 	}
 
-	db := h.db.WithContext(c.UserContext())
+	// REL-05: Validate period against KPI's reporting frequency
 	freq := services.GetKPIReportingFrequency(db, req.KpiCode, req.KpiType)
-	if err := services.ValidatePeriod(freq, periodType, periodKey); err != nil {
+	periodType := "annual"
+	if freq == "monthly" {
+		periodType = "month"
+	} else if freq == "quarterly" {
+		periodType = "quarter"
+	} else if freq == "semiannual" {
+		periodType = "semi_annual"
+	}
+	if err := services.ValidatePeriod(freq, periodType, req.PeriodCode); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
+	// REL-02: Validate metric exists and belongs to this KPI
+	if req.MetricID != nil && *req.MetricID != "" {
+		var metric models.KpiMetric
+		if err := db.Where("id = ?", *req.MetricID).First(&metric).Error; err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Metric not found")
+		}
+	}
+
+	// Check for duplicate: same KPI + metric + period
 	dupErr := db.Where(
-		"kpi_code = ? AND kpi_type = ? AND period_type = ? AND period_key = ?",
-		req.KpiCode, req.KpiType, periodType, periodKey,
+		"kpi_code = ? AND kpi_type = ? AND target_year = ? AND period_code = ?",
+		req.KpiCode, req.KpiType, req.TargetYear, req.PeriodCode,
 	).First(&models.KpiAnnualTarget{}).Error
 	if dupErr == nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, fmt.Sprintf("a target for %s already exists for period %s", req.KpiCode, periodKey))
+		return utils.ErrorResponse(c, fiber.StatusBadRequest,
+			fmt.Sprintf("a target for %s already exists for period %s/%d", req.KpiCode, req.PeriodCode, req.TargetYear))
 	} else if dupErr != gorm.ErrRecordNotFound {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
 	}
 
-	item := &models.KpiAnnualTarget{
-		KpiCode:     req.KpiCode,
-		KpiType:     req.KpiType,
-		Year:        req.Year,
-		PeriodType:  periodType,
-		PeriodKey:   periodKey,
-		TargetValue: req.TargetValue,
-	}
+	item := req.ToModel(db)
 
 	if err := db.Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
 	}
 
+	// Reload with preloads
+	var reloaded models.KpiAnnualTarget
+	db.Preload("Metric").Preload("ApprovedBy").First(&reloaded, item.ID)
+
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
 		Action:      "create",
 		Module:      "kpi",
-		ResourceID:  item.ID.String(),
-		Description: fmt.Sprintf("Set annual target for %s (%d)", item.KpiCode, item.Year),
+		ResourceID:  reloaded.ID.String(),
+		Description: fmt.Sprintf("Set target for %s period %s/%d", reloaded.KpiCode, reloaded.PeriodCode, reloaded.TargetYear),
 		Status:      "success",
 	})
 
-	return utils.SuccessResponse(c, fiber.StatusCreated, "", item)
+	return utils.SuccessResponse(c, fiber.StatusCreated, "", reloaded.ToResponse())
 }
 
 func (h *KpiPerformanceHandler) DeleteTarget(c *fiber.Ctx) error {
@@ -215,6 +244,20 @@ func (h *KpiPerformanceHandler) SubmitPerformance(c *fiber.Ctx) error {
 	db := h.db.WithContext(c.UserContext())
 	polarity := services.GetKPIPolarity(db, req.KpiCode, req.KpiType)
 
+	// REL-03: Verify KPI dictionary row exists
+	if !kpiExistsByCode(db, req.KpiCode, req.KpiType) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "KPI not found in dictionary")
+	}
+
+	// REL-18: Verify an approved target exists for this KPI + period
+	var target models.KpiAnnualTarget
+	if err := db.Where("kpi_code = ? AND kpi_type = ? AND target_year = ? AND period_code = ? AND target_status = 'approved'",
+		req.KpiCode, req.KpiType, req.Year, req.PeriodKey,
+	).First(&target).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest,
+			fmt.Sprintf("No approved target found for %s in period %s/%d", req.KpiCode, req.PeriodKey, req.Year))
+	}
+
 	periodType := req.PeriodType
 	if periodType == "" {
 		periodType = "quarter"
@@ -235,6 +278,7 @@ func (h *KpiPerformanceHandler) SubmitPerformance(c *fiber.Ctx) error {
 		Quarter:          req.Quarter,
 		PeriodType:       periodType,
 		PeriodKey:        periodKey,
+		TargetID:         &target.ID,
 		Target:           req.Target,
 		Actual:           req.Actual,
 		AchievementPct:   services.CalculateAchievement(req.Actual, req.Target, polarity),
