@@ -7,6 +7,7 @@ import (
 	"github.com/automax/backend/internal/middleware"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
@@ -682,6 +683,16 @@ func (h *KpiDictionaryHandler) TransitionKpiStatus(c *fiber.Ctx) error {
 		Description: fmt.Sprintf("%s %s KPI %s (status -> %s)", req.Action, kpiType, id, newStatus),
 		Status:      "success",
 	})
+
+	if req.Comment != "" {
+		userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+		h.db.WithContext(c.UserContext()).Create(&models.KpiComment{
+			KpiID:    id,
+			KpiType:  kpiType,
+			AuthorID: userID,
+			Content:  req.Comment,
+		})
+	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Status updated successfully", nil)
 }
