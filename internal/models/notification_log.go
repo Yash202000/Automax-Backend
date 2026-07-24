@@ -322,12 +322,14 @@ type NotificationLogFilter struct {
 }
 
 // NotificationMonitoringFilter is the admin-wide (not user-scoped) filter used by the
-// Notification Monitoring Dashboard: search/filter across ALL outbound notifications by
-// channel, recipient, status, date range, and record type — independent of the
-// personal inbox scoping NotificationLogFilter/List applies.
+// Communication Tracking Dashboard: search/filter across ALL notifications (both
+// inbound and outbound) by channel, recipient, category, status, date range, and
+// record type — independent of the personal inbox scoping NotificationLogFilter/List
+// applies.
 type NotificationMonitoringFilter struct {
 	Channel     string     `query:"channel" json:"channel" validate:"omitempty,max=255"`                                    // comma-separated list of channels, e.g. "sms,email,whatsapp" — each validated individually in the handler
 	Recipient   string     `query:"recipient" json:"recipient" validate:"omitempty,max=255"`                                // substring match against recipient email/phone
+	Direction   string     `query:"direction" json:"direction" validate:"omitempty,oneof=inbound outbound"`                 // inbound | outbound — optional; omit to see both
 	Category    string     `query:"category" json:"category" validate:"omitempty,oneof=inbox sent draft outbox trash spam"` // inbox | sent | draft | outbox | trash | spam
 	Status      string     `query:"status" json:"status" validate:"omitempty,oneof=sent failed mock-sent partial draft pending scheduled queued delivered read expired undeliverable"`
 	FailureCode string     `query:"failure_code" json:"failure_code" validate:"omitempty,max=30"`

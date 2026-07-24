@@ -247,12 +247,18 @@ func (r *notificationLogRepository) List(ctx context.Context, filter *models.Not
 // ListForMonitoring is the admin-wide equivalent of List: no sent_by/received_by
 // scoping and no exclusion of failed sms/email rows, since the monitoring
 // dashboard's whole purpose is to surface delivery failures across every user.
+// Unlike List, it does not restrict to outbound-only — the Communication
+// Tracking UI offers Inbox/Sent/Draft/etc. tabs (via the category filter)
+// spanning both directions, so direction filtering is optional here.
 func (r *notificationLogRepository) ListForMonitoring(ctx context.Context, filter *models.NotificationMonitoringFilter) ([]models.NotificationLog, int64, error) {
 	var logs []models.NotificationLog
 	var total int64
 
-	query := r.db.WithContext(ctx).Model(&models.NotificationLog{}).
-		Where("direction = ?", models.DirectionOutbound)
+	query := r.db.WithContext(ctx).Model(&models.NotificationLog{})
+
+	if filter.Direction != "" {
+		query = query.Where("direction = ?", filter.Direction)
+	}
 
 	if filter.Channel != "" {
 		rawChannels := strings.Split(filter.Channel, ",")
