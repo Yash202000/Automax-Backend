@@ -11,6 +11,7 @@ var ContextKeys = struct {
 	REPORT_COLUMNS        contextKey
 	REPORT_DATA_SOURCE    contextKey
 	REPORT_TIMEZONE       contextKey
+	REPORT_ACCESS_SCOPE   contextKey
 	HOSTNAME              contextKey
 	PROTOCOL              contextKey
 	IP_ADDRESS            contextKey
@@ -36,7 +37,8 @@ var ContextKeys = struct {
 	// REPORT_DATA_SOURCE holds the active data source string (e.g. "incidents",
 	// "users") so applyFilters can select the correct allowed-fields map.
 	REPORT_DATA_SOURCE: "ReportDataSource",
-	REPORT_TIMEZONE:    "ReportTimezone",
+	REPORT_TIMEZONE:      "ReportTimezone",
+	REPORT_ACCESS_SCOPE:  "ReportAccessScope",
 	HOSTNAME:           "hostname",
 	PROTOCOL:           "protocol",
 	IP_ADDRESS:         "ip_address",

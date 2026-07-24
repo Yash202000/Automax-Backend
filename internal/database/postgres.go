@@ -737,9 +737,9 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			Permissions: allPerms,
 		}
 		db.Create(&adminRole)
-	} else {
-		// Update existing admin role to have all permissions
-		db.Model(&adminRole).Association("Permissions").Replace(allPerms)
+	} else if db.Model(&adminRole).Association("Permissions").Count() == 0 {
+		// Only seed permissions if role has none (fresh DB); skip if already configured
+		db.Model(&adminRole).Association("Permissions").Append(allPerms)
 	}
 
 	// User role with basic permissions
@@ -757,11 +757,10 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			Permissions: viewPerms,
 		}
 		db.Create(&userRole)
-	} else {
-		// Update existing user role to have all view permissions
+	} else if db.Model(&userRole).Association("Permissions").Count() == 0 {
 		var viewPerms []models.Permission
 		db.Where("action = ?", "view").Find(&viewPerms)
-		db.Model(&userRole).Association("Permissions").Replace(viewPerms)
+		db.Model(&userRole).Association("Permissions").Append(viewPerms)
 	}
 
 	// Manager role with broader permissions
@@ -779,11 +778,10 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			Permissions: managerPerms,
 		}
 		db.Create(&managerRole)
-	} else {
-		// Update existing manager role to have full management permissions
+	} else if db.Model(&managerRole).Association("Permissions").Count() == 0 {
 		var managerPerms []models.Permission
 		db.Where("action IN ?", []string{"view", "create", "update", "delete", "assign", "approve"}).Find(&managerPerms)
-		db.Model(&managerRole).Association("Permissions").Replace(managerPerms)
+		db.Model(&managerRole).Association("Permissions").Append(managerPerms)
 	}
 
 	// Department Manager role — manages users within assigned scope
@@ -810,16 +808,18 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		}
 		db.Create(&deptManagerRole)
 	} else {
-		var deptManagerPerms []models.Permission
-		db.Where("code IN ?", []string{
-			"users:view", "users:create", "users:update",
-			"incidents:view", "incidents:view_all", "incidents:transition", "incidents:assign", "incidents:comment",
-			"requests:view", "requests:view_all", "requests:transition", "requests:assign", "requests:comment",
-			"complaints:view", "complaints:view_all", "complaints:transition", "complaints:assign", "complaints:comment",
-			"queries:view", "queries:view_all", "queries:transition", "queries:assign", "queries:comment",
-			"incidents:view_department_only", "users:view_department_only",
-		}).Find(&deptManagerPerms)
-		db.Model(&deptManagerRole).Association("Permissions").Replace(deptManagerPerms)
+		if db.Model(&deptManagerRole).Association("Permissions").Count() == 0 {
+			var deptManagerPerms []models.Permission
+			db.Where("code IN ?", []string{
+				"users:view", "users:create", "users:update",
+				"incidents:view", "incidents:view_all", "incidents:transition", "incidents:assign", "incidents:comment",
+				"requests:view", "requests:view_all", "requests:transition", "requests:assign", "requests:comment",
+				"complaints:view", "complaints:view_all", "complaints:transition", "complaints:assign", "complaints:comment",
+				"queries:view", "queries:view_all", "queries:transition", "queries:assign", "queries:comment",
+				"incidents:view_department_only", "users:view_department_only",
+			}).Find(&deptManagerPerms)
+			db.Model(&deptManagerRole).Association("Permissions").Append(deptManagerPerms)
+		}
 		if !deptManagerRole.IsDepartmentManager {
 			db.Model(&deptManagerRole).Update("is_department_manager", true)
 		}
@@ -847,7 +847,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			Permissions: supervisorPerms,
 		}
 		db.Create(&supervisorRole)
-	} else {
+	} else if db.Model(&supervisorRole).Association("Permissions").Count() == 0 {
 		var supervisorPerms []models.Permission
 		db.Where("code IN ?", []string{
 			"incidents:view", "incidents:view_all", "incidents:transition", "incidents:assign", "incidents:comment",
@@ -857,7 +857,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			"users:view",
 			"incidents:view_department_only", "users:view_department_only",
 		}).Find(&supervisorPerms)
-		db.Model(&supervisorRole).Association("Permissions").Replace(supervisorPerms)
+		db.Model(&supervisorRole).Association("Permissions").Append(supervisorPerms)
 	}
 
 	// Grant extension-management permissions to the agent role (if it exists).

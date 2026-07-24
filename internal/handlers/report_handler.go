@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"os"
 	"strconv"
 	"strings"
@@ -46,79 +47,110 @@ var incidentDataSources = map[string]bool{
 	"departments_by_status":     true,
 }
 
-// injectAccessScope restricts report results to the calling user's assigned
-// classifications and locations — mirroring ListIncidents / GetStatsV2 scoping.
-// If the caller already supplied a classification_id or location_id dynamic
-// filter, the corresponding user-scope filter is skipped.
-func (h *ReportHandler) injectAccessScope(c *fiber.Ctx, dataSource string, filters []models.ReportFilterConfig) []models.ReportFilterConfig {
-	// RESTRICT_REPORT_SCOPE=true enables user-level classification/location scoping on reports
+// injectReportScope applies all user-level report scoping when
+// RESTRICT_REPORT_SCOPE=true. This mirrors the incident list handler:
+//   - classification/location filtering (user's assigned set)
+//   - my_record + viewable_roles (state-level visibility)
+//   - view_department_only (department scoping)
+//
+// Returns the enriched filters and context. Super admins bypass all scoping
+// unless RESTRICT_ADMIN_SCOPE=true.
+func (h *ReportHandler) injectReportScope(c *fiber.Ctx, ctx context.Context, dataSource string, filters []models.ReportFilterConfig) ([]models.ReportFilterConfig, context.Context) {
 	if !strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_REPORT_SCOPE")), "true") {
-		return filters
+		return filters, ctx
 	}
-
 	if !incidentDataSources[dataSource] {
-		return filters
+		return filters, ctx
 	}
 
-	// Super admins bypass scoping unless RESTRICT_ADMIN_SCOPE=true
 	restrictSuperAdmins := strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_ADMIN_SCOPE")), "true")
-	if user, ok := c.Locals(constants.ContextKeys.User).(*models.User); ok && user != nil && user.IsSuperAdmin && !restrictSuperAdmins {
-		return filters
-	}
-
-	hasClassification := false
-	hasLocation := false
-	for _, f := range filters {
-		if f.Field == "classification_id" && f.Value != nil {
-			hasClassification = true
-		}
-		if f.Field == "location_id" && f.Value != nil {
-			hasLocation = true
-		}
-	}
-	if hasClassification && hasLocation {
-		return filters
-	}
-
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
 	if err != nil || user == nil {
-		return filters
+		return filters, ctx
+	}
+	if user.IsSuperAdmin && !restrictSuperAdmins {
+		return filters, ctx
 	}
 
+	// ── Classification / location / department scoping ─────────────────
 	noAccessSentinel := []interface{}{"00000000-0000-0000-0000-000000000000"}
 
-	if !hasClassification {
-		classIDs := make([]interface{}, 0, len(user.Classifications))
-		for _, cls := range user.Classifications {
-			classIDs = append(classIDs, cls.ID.String())
-		}
-		if len(classIDs) == 0 {
-			classIDs = noAccessSentinel
-		}
-		filters = append(filters, models.ReportFilterConfig{
-			Field:    "classification_id",
-			Operator: "in",
-			Value:    classIDs,
-		})
+	scope := &models.ReportAccessScope{
+		UserID:  userID,
+		ViewAll: user.HasPermission("incidents:view_all"),
 	}
 
-	if !hasLocation {
-		locIDs := make([]interface{}, 0, len(user.Locations))
-		for _, loc := range user.Locations {
-			locIDs = append(locIDs, loc.ID.String())
+	if user.HasPermission("incidents:view_department_only") {
+		// Department-scoped: use DeptManager fields (mirrors ListIncidents lines 273-298)
+		scope.ViewDepartmentOnly = true
+		scope.DepartmentIDs = user.ScopeDepartmentIDs()
+
+		if user.DeptManagerClassificationID != nil {
+			filters = append(filters, models.ReportFilterConfig{
+				Field:    "classification_id",
+				Operator: "equals",
+				Value:    user.DeptManagerClassificationID.String(),
+			})
 		}
-		if len(locIDs) == 0 {
-			locIDs = noAccessSentinel
+		if user.DeptManagerLocationID != nil {
+			filters = append(filters, models.ReportFilterConfig{
+				Field:    "location_id",
+				Operator: "equals",
+				Value:    user.DeptManagerLocationID.String(),
+			})
 		}
-		filters = append(filters, models.ReportFilterConfig{
-			Field:    "location_id",
-			Operator: "in",
-			Value:    locIDs,
-		})
+	} else {
+		// Regular user: use M2M classification/location assignments
+		hasClassification := false
+		hasLocation := false
+		for _, f := range filters {
+			if f.Field == "classification_id" && f.Value != nil {
+				hasClassification = true
+			}
+			if f.Field == "location_id" && f.Value != nil {
+				hasLocation = true
+			}
+		}
+
+		if !hasClassification {
+			classIDs := make([]interface{}, 0, len(user.Classifications))
+			for _, cls := range user.Classifications {
+				classIDs = append(classIDs, cls.ID.String())
+			}
+			if len(classIDs) == 0 {
+				classIDs = noAccessSentinel
+			}
+			filters = append(filters, models.ReportFilterConfig{
+				Field:    "classification_id",
+				Operator: "in",
+				Value:    classIDs,
+			})
+		}
+
+		if !hasLocation {
+			locIDs := make([]interface{}, 0, len(user.Locations))
+			for _, loc := range user.Locations {
+				locIDs = append(locIDs, loc.ID.String())
+			}
+			if len(locIDs) == 0 {
+				locIDs = noAccessSentinel
+			}
+			filters = append(filters, models.ReportFilterConfig{
+				Field:    "location_id",
+				Operator: "in",
+				Value:    locIDs,
+			})
+		}
 	}
 
-	return filters
+	roleIDs := make([]uuid.UUID, 0, len(user.Roles))
+	for _, r := range user.Roles {
+		roleIDs = append(roleIDs, r.ID)
+	}
+	scope.RoleIDs = roleIDs
+
+	return filters, cstmContext.WithReportAccessScope(ctx, scope)
 }
 
 // Report CRUD
@@ -299,9 +331,9 @@ func (h *ReportHandler) ExecuteReport(c *fiber.Ctx) error {
 	if len(req.Filters) > 0 {
 		filters = req.Filters
 	}
-	req.Filters = h.injectAccessScope(c, report.DataSource, filters)
-
-	result, err := h.service.ExecuteReport(c.UserContext(), id, &req, userID)
+	scopedFilters, ctx := h.injectReportScope(c, c.UserContext(), report.DataSource, filters)
+	req.Filters = scopedFilters
+	result, err := h.service.ExecuteReport(ctx, id, &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -319,9 +351,9 @@ func (h *ReportHandler) PreviewReport(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "data_source_required"))
 	}
 
-	req.Config.Filters = h.injectAccessScope(c, req.DataSource, req.Config.Filters)
-
-	result, err := h.service.PreviewReport(c.UserContext(), &req)
+	scopedFilters, ctx := h.injectReportScope(c, c.UserContext(), req.DataSource, req.Config.Filters)
+	req.Config.Filters = scopedFilters
+	result, err := h.service.PreviewReport(ctx, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -351,9 +383,9 @@ func (h *ReportHandler) QueryReport(c *fiber.Ctx) error {
 		req.Limit = 50
 	}
 
-	req.Filters = h.injectAccessScope(c, req.DataSource, req.Filters)
-
-	ctx := cstmContext.WithReportDataSource(c.UserContext(), req.DataSource)
+	scopedFilters, ctx := h.injectReportScope(c, c.UserContext(), req.DataSource, req.Filters)
+	req.Filters = scopedFilters
+	ctx = cstmContext.WithReportDataSource(ctx, req.DataSource)
 	ctx = cstmContext.WithReportColumns(ctx, req.Columns)
 	ctx = cstmContext.WithReportTimezone(ctx, req.Timezone)
 	result, err := h.service.QueryReport(ctx, &req)
@@ -377,14 +409,14 @@ func (h *ReportHandler) ExportReport(c *fiber.Ctx) error {
 		})
 	}
 
-	req.Filters = h.injectAccessScope(c, req.DataSource, req.Filters)
-
 	// Use timezone from top-level field, fall back to options.timezone
 	tz := req.Timezone
 	if tz == "" && req.Options != nil {
 		tz = req.Options.Timezone
 	}
-	ctx := cstmContext.WithReportDataSource(c.UserContext(), req.DataSource)
+	scopedFilters, ctx := h.injectReportScope(c, c.UserContext(), req.DataSource, req.Filters)
+	req.Filters = scopedFilters
+	ctx = cstmContext.WithReportDataSource(ctx, req.DataSource)
 	ctx = cstmContext.WithReportColumns(ctx, req.Columns)
 	ctx = cstmContext.WithReportTimezone(ctx, tz)
 	data, filename, contentType, err := h.service.ExportReport(ctx, &req)

@@ -77,6 +77,17 @@ type ReportFilterConfig struct {
 	Value    interface{} `json:"value"`
 }
 
+// ReportAccessScope carries user-level visibility rules so report queries can
+// mirror the same scoping that the incident list endpoint applies.
+// Set via RESTRICT_REPORT_SCOPE=true.
+type ReportAccessScope struct {
+	UserID             uuid.UUID
+	RoleIDs            []uuid.UUID
+	DepartmentIDs      []uuid.UUID // non-empty when view_department_only applies
+	ViewDepartmentOnly bool
+	ViewAll            bool // true ⇒ skip my_record / viewable_roles scoping
+}
+
 type ReportSortConfig struct {
 	Field     string `json:"field"`
 	Direction string `json:"direction"` // asc, desc
