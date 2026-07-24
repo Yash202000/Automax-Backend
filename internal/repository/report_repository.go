@@ -611,6 +611,12 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 			}
 		}
 	}
+
+	// Access scope — my_record + viewable_roles + department scoping.
+	// Only active when the handler sets a ReportAccessScope in context
+	// (i.e. RESTRICT_REPORT_SCOPE=true for incident data sources).
+	query = r.applyReportAccessScope(ctx, query)
+
 	return query
 }
 
@@ -669,6 +675,40 @@ func (r *reportRepository) applySorting(query *gorm.DB, sorting *models.ReportSo
 			direction = "DESC"
 		}
 		query = query.Order(sorting.Field + " " + direction)
+	}
+	return query
+}
+
+// applyReportAccessScope reads a ReportAccessScope from ctx and adds WHERE
+// clauses that mirror the incident list handler's my_record + viewable_roles
+// + view_department_only scoping. Enabled by RESTRICT_REPORT_SCOPE=true.
+func (r *reportRepository) applyReportAccessScope(ctx context.Context, query *gorm.DB) *gorm.DB {
+	scope, ok := ctx.Value(constants.ContextKeys.REPORT_ACCESS_SCOPE).(*models.ReportAccessScope)
+	if !ok || scope == nil {
+		return query
+	}
+
+	// Department scoping (mirrors incidents:view_department_only)
+	if scope.ViewDepartmentOnly && len(scope.DepartmentIDs) > 0 {
+		query = query.Where("incidents.department_id IN ?", scope.DepartmentIDs)
+	}
+
+	// my_record + viewable_roles scoping (mirrors !incidents:view_all)
+	if !scope.ViewAll {
+		if len(scope.RoleIDs) > 0 {
+			query = query.Where(
+				`(incidents.reporter_id = ? OR incidents.assignee_id = ?
+				OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)
+				OR incidents.current_state_id IN (SELECT workflow_state_id FROM state_viewable_roles WHERE role_id IN ?))`,
+				scope.UserID, scope.UserID, scope.UserID, scope.RoleIDs,
+			)
+		} else {
+			query = query.Where(
+				`(incidents.reporter_id = ? OR incidents.assignee_id = ?
+				OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?))`,
+				scope.UserID, scope.UserID, scope.UserID,
+			)
+		}
 	}
 	return query
 }

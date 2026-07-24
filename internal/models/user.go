@@ -131,6 +131,22 @@ func (u *User) ScopeDepartmentID() *uuid.UUID {
 	return nil
 }
 
+// ScopeDepartmentIDs returns all department IDs the user is scoped to.
+// Priority: DeptManagerDepartmentID > DepartmentID > all M2M departments.
+func (u *User) ScopeDepartmentIDs() []uuid.UUID {
+	if u.DeptManagerDepartmentID != nil {
+		return []uuid.UUID{*u.DeptManagerDepartmentID}
+	}
+	if u.DepartmentID != nil {
+		return []uuid.UUID{*u.DepartmentID}
+	}
+	ids := make([]uuid.UUID, 0, len(u.Departments))
+	for _, d := range u.Departments {
+		ids = append(ids, d.ID)
+	}
+	return ids
+}
+
 // GetPermissions returns all unique permission codes for the user
 func (u *User) GetPermissions() []string {
 	if u.IsSuperAdmin {
