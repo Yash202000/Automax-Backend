@@ -421,6 +421,10 @@ func (h *KpiMasterDataHandler) CreateDomain(c *fiber.Ctx) error {
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
+	var existing models.Domain
+	if err := h.db.WithContext(c.UserContext()).Where("name_en = ?", req.NameEn).First(&existing).Error; err == nil {
+		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "domain_already_exists"))
+	}
 	item := &models.Domain{NameEn: req.NameEn, NameAr: req.NameAr, Type: req.Type}
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
@@ -439,6 +443,10 @@ func (h *KpiMasterDataHandler) UpdateDomain(c *fiber.Ctx) error {
 	}
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+	var existing models.Domain
+	if err := h.db.WithContext(c.UserContext()).Where("name_en = ? AND id != ?", req.NameEn, id).First(&existing).Error; err == nil {
+		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "domain_already_exists"))
 	}
 	result := h.db.WithContext(c.UserContext()).Model(&models.Domain{ID: id}).Updates(map[string]interface{}{
 		"name_en": req.NameEn,
@@ -636,6 +644,10 @@ func (h *KpiMasterDataHandler) CreateDataSource(c *fiber.Ctx) error {
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
+	var existing models.KpiDataSource
+	if err := h.db.WithContext(c.UserContext()).Where("name_en = ?", req.NameEn).First(&existing).Error; err == nil {
+		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "data_source_already_exists"))
+	}
 	item := &models.KpiDataSource{NameEn: req.NameEn, NameAr: req.NameAr}
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
@@ -654,6 +666,10 @@ func (h *KpiMasterDataHandler) UpdateDataSource(c *fiber.Ctx) error {
 	}
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+	var existing models.KpiDataSource
+	if err := h.db.WithContext(c.UserContext()).Where("name_en = ? AND id != ?", req.NameEn, id).First(&existing).Error; err == nil {
+		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "data_source_already_exists"))
 	}
 	result := h.db.WithContext(c.UserContext()).Model(&models.KpiDataSource{ID: id}).Updates(map[string]interface{}{
 		"name_en": req.NameEn,

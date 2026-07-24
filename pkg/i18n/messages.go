@@ -837,6 +837,8 @@ var messages = map[string][2]string{
 	"transition_invalid_from_state":    {"Transition is not valid from current state", "الانتقال غير صالح من الحالة الحالية"},
 	"no_l1_reviewer":                   {"No L1 reviewer assigned to the primary goal", "لم يتم تعيين مراجع L1 للهدف الرئيسي"},
 	"batch_no_workflow":                {"Batch has no workflow assigned", "الدُفعة ليس لها سير عمل معيّن"},
+	"domain_already_exists":            {"A domain with this name already exists", "يوجد مجال بهذا الاسم مسبقاً"},
+	"data_source_already_exists":       {"A data source with this name already exists", "يوجد مصدر بيانات بهذا الاسم مسبقاً"},
 
 	// Presence
 	"failed_to_set_presence":        {"Failed to set presence", "فشل تعيين الحضور"},
