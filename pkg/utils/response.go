@@ -35,6 +35,10 @@ func SuccessResponse(c *fiber.Ctx, statusCode int, message string, data interfac
 }
 
 func ErrorResponse(c *fiber.Ctx, statusCode int, message string) error {
+	if statusCode >= 500 {
+		// Log the error message for internal server errors
+		fmt.Printf("Internal Server Error: %s\n", message)
+	}
 	return c.Status(statusCode).JSON(Response{
 		Success: false,
 		Error:   message,

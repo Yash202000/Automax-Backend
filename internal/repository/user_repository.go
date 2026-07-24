@@ -58,6 +58,7 @@ type UserRepository interface {
 	ExistsByNationalID(ctx context.Context, nationalID string) (bool, error)
 	FindByNationalIDForLogin(ctx context.Context, nationalID string) (*models.User, error)
 	ExistsByPhoneAndName(ctx context.Context, phone string, name ...string) (bool, error)
+	CountAssignedIncidents(ctx context.Context, userID uuid.UUID) (int64, error)
 }
 
 type userRepository struct {
@@ -223,18 +224,18 @@ func (r *userRepository) Update(ctx context.Context, user *models.User) error {
 	// Use Updates() with specific fields instead of Save() to avoid saving all loaded relations
 	// This prevents the "extended protocol limited to 65535 parameters" error
 	return r.db.WithContext(ctx).Model(&models.User{}).Where("id = ?", user.ID).Updates(map[string]interface{}{
-		"username":                        user.Username,
-		"first_name":                      user.FirstName,
-		"last_name":                       user.LastName,
-		"phone":                           user.Phone,
-		"password":                        user.Password,
-		"mobile_verified":                 user.MobileVerified,
-		"is_active":                       user.IsActive,
-		"department_id":                   user.DepartmentID,
-		"location_id":                     user.LocationID,
-		"dept_manager_department_id":      user.DeptManagerDepartmentID,
-		"dept_manager_classification_id":  user.DeptManagerClassificationID,
-		"dept_manager_location_id":        user.DeptManagerLocationID,
+		"username":                       user.Username,
+		"first_name":                     user.FirstName,
+		"last_name":                      user.LastName,
+		"phone":                          user.Phone,
+		"password":                       user.Password,
+		"mobile_verified":                user.MobileVerified,
+		"is_active":                      user.IsActive,
+		"department_id":                  user.DepartmentID,
+		"location_id":                    user.LocationID,
+		"dept_manager_department_id":     user.DeptManagerDepartmentID,
+		"dept_manager_classification_id": user.DeptManagerClassificationID,
+		"dept_manager_location_id":       user.DeptManagerLocationID,
 	}).Error
 }
 
@@ -898,6 +899,17 @@ func (r *userRepository) ExistsByNationalID(ctx context.Context, nationalID stri
 	var count int64
 	err := r.db.WithContext(ctx).Model(&models.User{}).Where("national_id = ?", nationalID).Count(&count).Error
 	return count > 0, err
+}
+
+// CountAssignedIncidents returns how many live (non-deleted) incidents the user is
+// currently assigned to — either as the single assignee (incidents.assignee_id) or via
+// the many-to-many incident_assignees join. Used to block deletion of an assigned user.
+func (r *userRepository) CountAssignedIncidents(ctx context.Context, userID uuid.UUID) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&models.Incident{}).
+		Where("assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", userID, userID).
+		Count(&count).Error
+	return count, err
 }
 
 func (r *userRepository) FindByNationalIDForLogin(ctx context.Context, nationalID string) (*models.User, error) {

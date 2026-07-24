@@ -1590,7 +1590,7 @@ func (s *reportService) GetDataSources(ctx context.Context) []models.DataSourceI
 			Label: "Departments",
 			Fields: []models.DataSourceField{
 				{Field: "name", Label: "Name", Type: "string", Filterable: true, Sortable: true},
-				{Field: "code", Label: "Code", Type: "string", Filterable: true, Sortable: true},
+				{Field: "code", Label: "Organization Code", Type: "string", Filterable: true, Sortable: true},
 				{Field: "description", Label: "Description", Type: "string", Filterable: true, Sortable: false},
 				{Field: "parent_name", Label: "Parent Department", Type: "string", Filterable: true, Sortable: true},
 				{Field: "is_active", Label: "Active", Type: "boolean", Filterable: true, Sortable: true},
