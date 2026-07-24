@@ -1490,17 +1490,6 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 }
 
 func (s *userService) AdminResetPassword(ctx context.Context, adminID, targetUserID uuid.UUID, newPassword string) error {
-
-	// Check admin permission
-	admin, err := s.userRepo.FindByID(ctx, adminID)
-	if err != nil {
-		return err
-	}
-
-	if !admin.IsSuperAdmin {
-		return errors.New(i18n.T(ctx, "only_admin_reset_password"))
-	}
-
 	// Get target user
 	user, err := s.userRepo.FindByID(ctx, targetUserID)
 	if err != nil {
@@ -1665,7 +1654,7 @@ func (s *userService) DeleteUser(ctx context.Context) error {
 
 	// Deactivate instead of soft-deleting: keep the row alive (IsActive=false).
 	// Avatar file is preserved so a re-activated account keeps it.
-	_ = s.sessionStore.DeleteUserSession(ctx, userID.String())
+	_ = s.sessionStore.DeleteAllUserSessions(ctx, userID.String())
 
 	err = s.userRepo.UpdateProfile(ctx, map[string]interface{}{
 		"id":        userID,
@@ -1729,7 +1718,7 @@ func (s *userService) AdminDeleteUser(ctx context.Context, userID uuid.UUID) err
 
 	// Deactivate instead of soft-deleting: keep the row alive (IsActive=false).
 	// Avatar file is preserved so a re-activated account keeps it.
-	_ = s.sessionStore.DeleteUserSession(ctx, userID.String())
+	_ = s.sessionStore.DeleteAllUserSessions(ctx, userID.String())
 
 	err = s.userRepo.UpdateProfile(ctx, map[string]interface{}{
 		"id":        userID,
