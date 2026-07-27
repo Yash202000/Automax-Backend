@@ -30,15 +30,17 @@ type UserHandler struct {
 	validator   *validator.Validate
 	redisClient *redis.Client
 	cfg         *config.Config
+	wsHub       *services.WSHub
 }
 
-func NewUserHandler(userService services.UserService, storage *storage.MinIOStorage, redisClient *redis.Client, cfg *config.Config) *UserHandler {
+func NewUserHandler(userService services.UserService, storage *storage.MinIOStorage, redisClient *redis.Client, cfg *config.Config, wsHub *services.WSHub) *UserHandler {
 	return &UserHandler{
 		userService: userService,
 		storage:     storage,
 		validator:   validator.New(),
 		redisClient: redisClient,
 		cfg:         cfg,
+		wsHub:       wsHub,
 	}
 }
 
@@ -526,6 +528,12 @@ func (h *UserHandler) AdminUpdateUser(c *fiber.Ctx) error {
 	response, err := h.userService.UpdateAdminProfile(c.UserContext(), userID, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	// If the admin changed this user's roles, nudge their live clients to refresh
+	// permissions so the UI reflects the new access without a manual re-login.
+	if req.RoleIDs != nil && h.wsHub != nil {
+		h.wsHub.BroadcastToUser(userID, "permissions_changed", fiber.Map{"reason": "roles_updated"})
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "user_updated"), response)

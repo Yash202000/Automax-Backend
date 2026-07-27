@@ -543,6 +543,13 @@ func (s *reportService) generateExcel(
 		Font:      &excelize.Font{Color: "0000EE", Underline: "single"},
 	})
 
+	// ── Wrap style — used when a cell lists multiple attachment URLs on separate
+	// lines. Excel allows only one hyperlink per cell, so instead of dropping the
+	// URLs we show them as wrapped, copyable text (Excel auto-linkifies on edit).
+	attachmentWrapStyleId, _ := f.NewStyle(&excelize.Style{
+		Alignment: &excelize.Alignment{Horizontal: "left", Vertical: "top", WrapText: true},
+	})
+
 	// ── Write headers ─────────────────────────────────────────────────────
 	headerRowStr := strconv.Itoa(headerRow)
 	f.SetCellValue(sheet, "A"+headerRowStr, "#")
@@ -571,11 +578,10 @@ func (s *reportService) generateExcel(
 					f.SetCellHyperLink(sheet, cell, urls[0], "External")
 					f.SetCellStyle(sheet, cell, cell, hyperlinkStyleId)
 				} else if len(urls) > 1 {
-					labels := make([]string, len(urls))
-					for i := range urls {
-						labels[i] = fmt.Sprintf("Attachment %d", i+1)
-					}
-					f.SetCellValue(sheet, cell, strings.Join(labels, " | "))
+					// One hyperlink max per cell — list the raw URLs on separate
+					// lines (wrapped) so all remain visible and copyable.
+					f.SetCellValue(sheet, cell, strings.Join(urls, "\n"))
+					f.SetCellStyle(sheet, cell, cell, attachmentWrapStyleId)
 				} else {
 					f.SetCellValue(sheet, cell, "-")
 				}

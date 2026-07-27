@@ -210,7 +210,7 @@ func main() {
 	validate := validator.New()
 
 	// Initialize handlers
-	userHandler := handlers.NewUserHandler(userService, minioStorage, redisClient, cfg)
+	userHandler := handlers.NewUserHandler(userService, minioStorage, redisClient, cfg, wsHub)
 	healthHandler := handlers.NewHealthHandler()
 
 	// Initialize LDAP handler
@@ -222,7 +222,7 @@ func main() {
 	locationHandler := handlers.NewLocationHandler(locationRepo)
 	departmentHandler := handlers.NewDepartmentHandler(departmentRepo, userRepo)
 	extensionHandler := handlers.NewExtensionHandler(extensionService)
-	roleHandler := handlers.NewRoleHandler(roleRepo, permissionRepo)
+	roleHandler := handlers.NewRoleHandler(roleRepo, permissionRepo, userRepo, wsHub)
 	actionLogHandler := handlers.NewActionLogHandler(actionLogService, validate)
 	callLogHandler := handlers.NewCallLogHandler(callLogService, validate, userService, minioStorage)
 	workflowHandler := handlers.NewWorkflowHandler(workflowService, actionLogService)

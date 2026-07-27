@@ -260,6 +260,41 @@ func (h *WSHub) BroadcastToAll(messageType string, data interface{}) {
 	}
 }
 
+// BroadcastToUser sends a message to every live connection belonging to a single
+// user, regardless of which page/subscription the connection is on. Used to nudge a
+// logged-in user to refresh after their roles/permissions change.
+func (h *WSHub) BroadcastToUser(userID uuid.UUID, messageType string, data interface{}) {
+	h.mu.RLock()
+	targets := make([]*WSClient, 0)
+	for _, client := range h.clients {
+		if client.UserID == userID {
+			targets = append(targets, client)
+		}
+	}
+	h.mu.RUnlock()
+
+	if len(targets) == 0 {
+		return
+	}
+
+	message := WSMessage{
+		Type:      messageType,
+		Data:      data,
+		UserID:    userID,
+		Timestamp: time.Now().Unix(),
+	}
+
+	for _, client := range targets {
+		select {
+		case client.Send <- message:
+			// Message sent successfully
+		default:
+			// Client send buffer full, skip
+			fmt.Printf("[WSHub] User client %s send buffer full, skipping message\n", client.ID)
+		}
+	}
+}
+
 // BroadcastToGoal sends a message to all clients subscribed to a goal
 func (h *WSHub) BroadcastToGoal(goalID uuid.UUID, messageType string, data interface{}, userID uuid.UUID) {
 	h.mu.RLock()
