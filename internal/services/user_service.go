@@ -1495,6 +1495,10 @@ func (s *userService) AdminResetPassword(ctx context.Context, adminID, targetUse
 	if err != nil {
 		return err
 	}
+	// Block password reset for Super Admins
+	if user.IsSuperAdmin && adminID != user.ID {
+		return errors.New(i18n.T(ctx, "cannot_reset_super_admin_password"))
+	}
 
 	// Block password reset for AD users
 	if user.IsADUser {
