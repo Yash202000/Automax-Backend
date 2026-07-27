@@ -954,11 +954,18 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 		}
 	}
 
+	// EPM940 auto-generates the State Code (STE-######) in the repository, so leave
+	// it empty here; other clients (e.g. VD2) keep supplying their own code.
+	code := req.Code
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+		code = ""
+	}
+
 	state := &models.WorkflowState{
 		WorkflowID:                   workflowID,
 		Name:                         req.Name,
 		NameAr:                       req.NameAr,
-		Code:                         req.Code,
+		Code:                         code,
 		Description:                  req.Description,
 		DescriptionAr:                req.DescriptionAr,
 		StateType:                    req.StateType,
@@ -1253,11 +1260,18 @@ func (s *workflowService) CreateTransition(ctx context.Context, workflowID uuid.
 		return nil, errors.New("invalid to_state_id")
 	}
 
+	// EPM940 auto-generates the Transition Code (TRN-######) in the repository, so
+	// leave it empty here; other clients (e.g. VD2) keep supplying their own code.
+	code := req.Code
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+		code = ""
+	}
+
 	transition := &models.WorkflowTransition{
 		WorkflowID:           workflowID,
 		Name:                 req.Name,
 		NameAr:               req.NameAr,
-		Code:                 req.Code,
+		Code:                 code,
 		Description:          req.Description,
 		DescriptionAr:        req.DescriptionAr,
 		FromStateID:          fromStateID,
