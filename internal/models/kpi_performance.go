@@ -99,6 +99,11 @@ type KpiAnnualTargetRequest struct {
 	SegmentationValues  []KpiTargetSegmentationValue `json:"segmentation_values"`
 	EffectiveFrom    string                     `json:"effective_from"`
 	EffectiveTo      string                     `json:"effective_to"`
+	// TargetStatus lets the frontend's Save Draft / Submit Target buttons
+	// actually set the resulting status — previously absent, so every
+	// created target silently defaulted to "draft" regardless of which
+	// button was clicked. Omitted (nil) still defaults to "draft".
+	TargetStatus     *string                    `json:"target_status" validate:"omitempty,oneof=draft submitted approved returned rejected locked superseded"`
 }
 
 // ToModel hydrates a KpiAnnualTarget from the request, applying
@@ -115,6 +120,9 @@ func (r *KpiAnnualTargetRequest) ToModel(db *gorm.DB) *KpiAnnualTarget {
 		TargetRationale: r.TargetRationale,
 		ThresholdMode:  r.ThresholdMode,
 		TargetStatus:   "draft",
+	}
+	if r.TargetStatus != nil && *r.TargetStatus != "" {
+		item.TargetStatus = *r.TargetStatus
 	}
 	if r.TargetValue != nil {
 		item.TargetValue = *r.TargetValue
