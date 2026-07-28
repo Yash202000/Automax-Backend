@@ -80,6 +80,8 @@ type KpiEntryRequest struct {
 	MetricID            string                  `json:"metric_id" validate:"required,uuid"`
 	ReportingYear       int                     `json:"reporting_year" validate:"required,min=2020,max=2040"`
 	PeriodCode          string                  `json:"period_code" validate:"required,max=50"`
+	PeriodStartDate     string                  `json:"period_start_date"`
+	PeriodEndDate       string                  `json:"period_end_date"`
 	DirectActualValue   *float64                `json:"direct_actual_value"`
 	NumeratorValue      *float64                `json:"numerator_value"`
 	DenominatorValue    *float64                `json:"denominator_value"`
@@ -122,6 +124,16 @@ func (r *KpiEntryRequest) ToModel(db *gorm.DB, kpiID uuid.UUID, kpiType string, 
 	if r.DataCutoffDate != "" {
 		if t, err := time.Parse("2006-01-02", r.DataCutoffDate); err == nil {
 			entry.DataCutoffDate = &t
+		}
+	}
+	if r.PeriodStartDate != "" {
+		if t, err := time.Parse("2006-01-02", r.PeriodStartDate); err == nil {
+			entry.PeriodStart = &t
+		}
+	}
+	if r.PeriodEndDate != "" {
+		if t, err := time.Parse("2006-01-02", r.PeriodEndDate); err == nil {
+			entry.PeriodEnd = &t
 		}
 	}
 
