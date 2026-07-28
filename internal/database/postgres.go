@@ -195,8 +195,17 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			&models.KpiEntry{},
 			&models.KpiEntryEvidence{},
 			&models.KpiCollaboratorAssignment{},
+			&models.KpiOrganization{},
+			&models.KpiSegmentationAxis{},
+			&models.KpiAdministrativeUnit{},
 		); err != nil {
 			return fmt.Errorf("failed to run goal management migrations: %w", err)
+		}
+
+		// Seed a default kpi_entry approval workflow so KpiEntry submissions
+		// have somewhere to go without requiring manual admin setup first.
+		if err := migrations.SeedKpiEntryWorkflow(migrationDB); err != nil {
+			log.Printf("Warning: kpi_entry workflow seed failed: %v", err)
 		}
 
 		// Recompute achievement_pct for existing KPI performance rows now that the

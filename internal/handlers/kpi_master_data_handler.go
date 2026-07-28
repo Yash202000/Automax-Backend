@@ -763,3 +763,195 @@ func (h *KpiMasterDataHandler) DeleteSegmentationDimension(c *fiber.Ctx) error {
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
 }
+
+// ─── Organizations (external KPI owners) ─────────────────────────────────────
+
+func (h *KpiMasterDataHandler) ListOrganizations(c *fiber.Ctx) error {
+	var items []models.KpiOrganization
+	if err := h.db.WithContext(c.UserContext()).Order("name_en ASC").Find(&items).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+	resp := make([]models.KpiOrganizationResponse, len(items))
+	for i, item := range items {
+		resp[i] = item.ToResponse()
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
+}
+
+func (h *KpiMasterDataHandler) CreateOrganization(c *fiber.Ctx) error {
+	var req models.KpiOrganizationRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+	item := &models.KpiOrganization{NameEn: req.NameEn, NameAr: req.NameAr, ContactInfo: req.ContactInfo}
+	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusCreated, "", item.ToResponse())
+}
+
+func (h *KpiMasterDataHandler) UpdateOrganization(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	var req models.KpiOrganizationRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+	result := h.db.WithContext(c.UserContext()).Model(&models.KpiOrganization{ID: id}).Updates(map[string]interface{}{
+		"name_en":      req.NameEn,
+		"name_ar":      req.NameAr,
+		"contact_info": req.ContactInfo,
+	})
+	if result.RowsAffected == 0 {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	var item models.KpiOrganization
+	if err := h.db.WithContext(c.UserContext()).First(&item, id).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", item.ToResponse())
+}
+
+func (h *KpiMasterDataHandler) DeleteOrganization(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	result := h.db.WithContext(c.UserContext()).Delete(&models.KpiOrganization{}, id)
+	if result.RowsAffected == 0 {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
+}
+
+// ─── Segmentation Axes (structured, per-KPI) ─────────────────────────────────
+// Links a KPI dictionary row to one or more governed segmentation dimensions.
+// GET/POST /kpi/:type/:id/segmentation-axes, DELETE /kpi/segmentation-axes/:id
+
+func (h *KpiMasterDataHandler) ListSegmentationAxes(c *fiber.Ctx) error {
+	kpiType := c.Params("type")
+	if !isValidKpiType(kpiType) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	kpiID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	var items []models.KpiSegmentationAxis
+	if err := h.db.WithContext(c.UserContext()).Preload("Dimension").
+		Where("kpi_id = ? AND kpi_type = ?", kpiID, kpiType).
+		Find(&items).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+	resp := make([]models.KpiSegmentationAxisResponse, len(items))
+	for i, item := range items {
+		resp[i] = item.ToResponse()
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
+}
+
+func (h *KpiMasterDataHandler) AddSegmentationAxis(c *fiber.Ctx) error {
+	kpiType := c.Params("type")
+	if !isValidKpiType(kpiType) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	kpiID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	var req models.KpiSegmentationAxisRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+	item := &models.KpiSegmentationAxis{KpiID: kpiID, KpiType: kpiType, DimensionID: req.DimensionID}
+	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
+	}
+	h.db.WithContext(c.UserContext()).Preload("Dimension").First(item, item.ID)
+	return utils.SuccessResponse(c, fiber.StatusCreated, "", item.ToResponse())
+}
+
+func (h *KpiMasterDataHandler) DeleteSegmentationAxis(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	result := h.db.WithContext(c.UserContext()).Delete(&models.KpiSegmentationAxis{}, id)
+	if result.RowsAffected == 0 {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
+}
+
+// ─── Administrative Units (structured, per-KPI) ──────────────────────────────
+// Links a KPI dictionary row to one or more related Departments.
+// GET/POST /kpi/:type/:id/administrative-units, DELETE /kpi/administrative-units/:id
+
+func (h *KpiMasterDataHandler) ListAdministrativeUnits(c *fiber.Ctx) error {
+	kpiType := c.Params("type")
+	if !isValidKpiType(kpiType) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	kpiID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	var items []models.KpiAdministrativeUnit
+	if err := h.db.WithContext(c.UserContext()).Preload("Department").
+		Where("kpi_id = ? AND kpi_type = ?", kpiID, kpiType).
+		Find(&items).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+	resp := make([]models.KpiAdministrativeUnitResponse, len(items))
+	for i, item := range items {
+		resp[i] = item.ToResponse()
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
+}
+
+func (h *KpiMasterDataHandler) AddAdministrativeUnit(c *fiber.Ctx) error {
+	kpiType := c.Params("type")
+	if !isValidKpiType(kpiType) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	kpiID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	var req models.KpiAdministrativeUnitRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+	item := &models.KpiAdministrativeUnit{KpiID: kpiID, KpiType: kpiType, DepartmentID: req.DepartmentID}
+	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
+	}
+	h.db.WithContext(c.UserContext()).Preload("Department").First(item, item.ID)
+	return utils.SuccessResponse(c, fiber.StatusCreated, "", item.ToResponse())
+}
+
+func (h *KpiMasterDataHandler) DeleteAdministrativeUnit(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	result := h.db.WithContext(c.UserContext()).Delete(&models.KpiAdministrativeUnit{}, id)
+	if result.RowsAffected == 0 {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
+}
