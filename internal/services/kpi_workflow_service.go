@@ -8,7 +8,6 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
-	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -129,7 +128,7 @@ func (s *KpiWorkflowService) TransitionKpiPerformance(ctx context.Context, perfo
 	}
 
 	// Service-level permission check — not just route-level
-	if !s.userHasPermission(ctx, transitionPermissionCode(transition.Code)) {
+	if !s.userHasPermission(ctx, userID, transitionPermissionCode(transition.Code)) {
 		tx.Rollback()
 		return nil, fmt.Errorf("insufficient permissions for transition '%s'", transition.Code)
 	}
@@ -282,7 +281,7 @@ func (s *KpiWorkflowService) TransitionKpiEntry(ctx context.Context, entryID uui
 		return nil, fmt.Errorf("%s", i18n.T(ctx, "transition_invalid_from_state"))
 	}
 
-	if !s.userHasPermission(ctx, transitionPermissionCode(transition.Code)) {
+	if !s.userHasPermission(ctx, userID, transitionPermissionCode(transition.Code)) {
 		tx.Rollback()
 		return nil, fmt.Errorf("insufficient permissions for transition '%s'", transition.Code)
 	}
@@ -401,9 +400,19 @@ func transitionPermissionCode(code string) string {
 	}
 }
 
-func (s *KpiWorkflowService) userHasPermission(ctx context.Context, code string) bool {
-	user, ok := ctx.Value(constants.ContextKeys.User).(*models.User)
-	if !ok || user == nil {
+// userHasPermission loads the user directly by ID rather than reading
+// *models.User off ctx.Value(constants.ContextKeys.User): the RequirePermission
+// middleware only ever stores that on c.Locals(...), never on the
+// context.Context returned by c.UserContext() (which is what handlers pass in
+// here) — so reading it from ctx always silently returned false, meaning this
+// check failed for every user regardless of role or Super Admin status. Load
+// it fresh, with Roles.Permissions preloaded so HasPermission has real data.
+func (s *KpiWorkflowService) userHasPermission(ctx context.Context, userID uuid.UUID, code string) bool {
+	var user models.User
+	if err := s.db.WithContext(ctx).
+		Preload("Roles", "is_active = ?", true).
+		Preload("Roles.Permissions", "is_active = ?", true).
+		First(&user, "id = ?", userID).Error; err != nil {
 		return false
 	}
 	return user.HasPermission(code)
