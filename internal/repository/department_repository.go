@@ -32,8 +32,8 @@ type DepartmentRepository interface {
 	CheckDeleteDependencies(ctx context.Context, id uuid.UUID) (children, users, incidents int64, err error)
 }
 
-// orgCodePrefix is the fixed prefix for the auto-generated Organization Code (e.g. ORG-000001).
-const orgCodePrefix = "ORG-"
+// orgCodePrefix is the fixed prefix for the auto-generated Organization Code (e.g. org-000001).
+const orgCodePrefix = "org-"
 
 // Organization Code allocation. orgCodeSeq is an in-process counter, seeded once
 // (orgCodeLoaded) from the current DB maximum and incremented under orgCodeMu on

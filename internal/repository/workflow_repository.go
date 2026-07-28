@@ -100,11 +100,11 @@ func NewWorkflowRepository(db *gorm.DB) WorkflowRepository {
 }
 
 // stateCodePrefix / transitionCodePrefix are the fixed prefixes for the
-// auto-generated State (STE-000001) and Transition (TRN-000001) codes,
+// auto-generated State (ste-000001) and Transition (trn-000001) codes,
 // following the same convention as the department Organization Code (ORG-######).
 const (
-	stateCodePrefix      = "STE-"
-	transitionCodePrefix = "TRN-"
+	stateCodePrefix      = "ste-"
+	transitionCodePrefix = "trn-"
 )
 
 // State / Transition Code allocation. Each seq is an in-process counter, seeded
