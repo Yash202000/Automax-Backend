@@ -13,6 +13,13 @@ import (
 // A KPI Entry is a single data submission for a metric within a given period.
 // It follows the same (kpi_id, kpi_type) scoping as metrics/evidence/etc.
 
+const (
+	KpiEntryStatusDraft     = "draft"
+	KpiEntryStatusSubmitted = "submitted"
+	KpiEntryStatusApproved  = "approved"
+	KpiEntryStatusRejected  = "rejected"
+)
+
 type KpiEntry struct {
 	ID                        uuid.UUID              `gorm:"type:uuid;primary_key" json:"id"`
 	KpiID                     uuid.UUID              `gorm:"type:uuid;index:idx_kpi_entry_unique,unique;not null" json:"kpi_id"`
@@ -55,6 +62,7 @@ type KpiEntry struct {
 	SubmittedBy               *User                  `gorm:"foreignKey:SubmittedByID" json:"submitted_by,omitempty"`
 	ApprovedByID              *uuid.UUID             `gorm:"type:uuid;index" json:"approved_by_id"`
 	ApprovedBy                *User                  `gorm:"foreignKey:ApprovedByID" json:"approved_by,omitempty"`
+	WorkflowInstanceID        *uuid.UUID             `gorm:"type:uuid;index" json:"workflow_instance_id"`
 	EntryVersion              int                    `gorm:"default:1" json:"entry_version"`
 	SupersedesEntryID         *uuid.UUID             `gorm:"type:uuid" json:"supersedes_entry_id"`
 	CreatedAt                 time.Time              `json:"created_at"`
@@ -219,6 +227,52 @@ func (e *KpiEntry) computeActualValue() {
 			}
 		}
 	}
+}
+
+// KpiEntryUpdateRequest carries the editable fields of an existing draft
+// entry. MetricID/period cannot be changed after creation (that would change
+// the entry's identity) — to correct those, delete and re-create instead.
+type KpiEntryUpdateRequest struct {
+	DirectActualValue     *float64                 `json:"direct_actual_value"`
+	NumeratorValue        *float64                 `json:"numerator_value"`
+	DenominatorValue      *float64                 `json:"denominator_value"`
+	ComponentValues       []KpiEntryComponentValue `json:"component_values"`
+	DataSourceType        string                   `json:"data_source_type"`
+	SourceReference       string                   `json:"source_reference"`
+	DataCutoffDate        string                   `json:"data_cutoff_date"`
+	DataQualityStatus     string                   `json:"data_quality_status"`
+	DataQualityNotes      string                   `json:"data_quality_notes"`
+	PerformanceCommentary string                   `json:"performance_commentary"`
+	ImprovementAction     string                   `json:"improvement_action"`
+}
+
+// ApplyTo mutates an existing entry with the request's editable fields and
+// recomputes ActualValue from the (possibly changed) input values, using the
+// entry's already-snapshotted CalculationTypeSnapshot.
+func (r *KpiEntryUpdateRequest) ApplyTo(e *KpiEntry) {
+	e.DirectActualValue = r.DirectActualValue
+	e.NumeratorValue = r.NumeratorValue
+	e.DenominatorValue = r.DenominatorValue
+	if r.ComponentValues != nil {
+		data, _ := json.Marshal(r.ComponentValues)
+		e.ComponentValues = datatypes.JSON(data)
+	}
+	if r.DataSourceType != "" {
+		e.DataSourceType = r.DataSourceType
+	}
+	e.SourceReference = r.SourceReference
+	if r.DataCutoffDate != "" {
+		if t, err := time.Parse("2006-01-02", r.DataCutoffDate); err == nil {
+			e.DataCutoffDate = &t
+		}
+	}
+	if r.DataQualityStatus != "" {
+		e.DataQualityStatus = r.DataQualityStatus
+	}
+	e.DataQualityNotes = r.DataQualityNotes
+	e.PerformanceCommentary = r.PerformanceCommentary
+	e.ImprovementAction = r.ImprovementAction
+	e.computeActualValue()
 }
 
 // ─── KPI Entry Evidence ──────────────────────────────────────────────────

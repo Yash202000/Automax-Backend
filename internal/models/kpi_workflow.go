@@ -12,6 +12,7 @@ const (
 	KpiWFEntityTarget      = "kpi_target"
 	KpiWFEntityInitiative  = "initiative"
 	KpiWFEntityGoal        = "strategic_goal"
+	KpiWFEntityEntry       = "kpi_entry"
 )
 
 const (
@@ -51,7 +52,7 @@ func (k *KpiWorkflowInstance) BeforeCreate(tx *gorm.DB) error {
 
 type KpiWorkflowInstanceRequest struct {
 	WorkflowID     uuid.UUID `json:"workflow_id" validate:"required"`
-	EntityType     string    `json:"entity_type" validate:"required,oneof=kpi_performance kpi_target initiative strategic_goal"`
+	EntityType     string    `json:"entity_type" validate:"required,oneof=kpi_performance kpi_target initiative strategic_goal kpi_entry"`
 	EntityID       string    `json:"entity_id" validate:"required,max=100"`
 	CurrentStateID uuid.UUID `json:"current_state_id" validate:"required"`
 	InitiatedByID  uuid.UUID `json:"initiated_by_id" validate:"required"`

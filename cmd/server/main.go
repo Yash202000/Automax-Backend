@@ -296,10 +296,13 @@ func main() {
 	kpiCorrectiveActionHandler := handlers.NewKpiCorrectiveActionHandler(db)
 
 	// KPI Entry handler
-	kpiEntryHandler := handlers.NewKpiEntryHandler(db, actionLogService)
+	kpiEntryHandler := handlers.NewKpiEntryHandler(db, actionLogService, kpiWorkflowService)
 
 	// KPI Collaborator Assignment handler
 	kpiCollaboratorHandler := handlers.NewKpiCollaboratorHandler(db, actionLogService)
+
+	// KPI Composed views handler (Card / per-KPI Dashboard / annual rollup)
+	kpiComposedHandler := handlers.NewKpiComposedHandler(db)
 
 	// Integration handler
 	integrationHandler := handlers.NewIntegrationHandler(integrationService, integrationExecutor, integrationRepo, incidentRepo)
@@ -1211,6 +1214,19 @@ func main() {
 	kpi.Put("/segmentation-dimensions/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateSegmentationDimension)
 	kpi.Delete("/segmentation-dimensions/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteSegmentationDimension)
 
+	kpi.Get("/organizations", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListOrganizations)
+	kpi.Post("/organizations", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateOrganization)
+	kpi.Put("/organizations/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateOrganization)
+	kpi.Delete("/organizations/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteOrganization)
+
+	kpi.Get("/:type/:id/segmentation-axes", authMiddleware.RequirePermission("kpi:view"), kpiMasterDataHandler.ListSegmentationAxes)
+	kpi.Post("/:type/:id/segmentation-axes", authMiddleware.RequirePermission("kpi:update"), kpiMasterDataHandler.AddSegmentationAxis)
+	kpi.Delete("/segmentation-axes/:id", authMiddleware.RequirePermission("kpi:update"), kpiMasterDataHandler.DeleteSegmentationAxis)
+
+	kpi.Get("/:type/:id/administrative-units", authMiddleware.RequirePermission("kpi:view"), kpiMasterDataHandler.ListAdministrativeUnits)
+	kpi.Post("/:type/:id/administrative-units", authMiddleware.RequirePermission("kpi:update"), kpiMasterDataHandler.AddAdministrativeUnit)
+	kpi.Delete("/administrative-units/:id", authMiddleware.RequirePermission("kpi:update"), kpiMasterDataHandler.DeleteAdministrativeUnit)
+
 	// ---- KPI DICTIONARY ROUTES ----
 	kpi.Get("/strategic", authMiddleware.RequirePermission("kpi:view"), kpiDictionaryHandler.ListStrategic)
 	kpi.Get("/strategic/:id", authMiddleware.RequirePermission("kpi:view"), kpiDictionaryHandler.GetStrategic)
@@ -1249,6 +1265,10 @@ func main() {
 
 	kpi.Post("/:type/:id/transition", authMiddleware.RequirePermission("kpi:update"), kpiDictionaryHandler.TransitionKpiStatus)
 
+	kpi.Get("/:type/:id/card", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetKpiCard)
+	kpi.Get("/:type/:id/dashboard", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetKpiDashboard)
+	kpi.Get("/:type/:id/annual-rollup", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetKpiAnnualRollup)
+
 	// KPI engagement features — metrics, evidence, collaborators, check-ins, comments, activity
 	kpi.Get("/metrics-by-code/:code", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListMetricsByCode)
 
@@ -1256,7 +1276,12 @@ func main() {
 	kpi.Get("/entries", authMiddleware.RequirePermission("kpi:view"), kpiEntryHandler.ListAllEntries)
 	kpi.Get("/:type/:id/entries", authMiddleware.RequirePermission("kpi:view"), kpiEntryHandler.ListEntries)
 	kpi.Post("/:type/:id/entries", authMiddleware.RequirePermission("kpi:update"), kpiEntryHandler.CreateEntry)
+	kpi.Put("/:type/:id/entries/:entryId", authMiddleware.RequirePermission("kpi:update"), kpiEntryHandler.UpdateEntry)
+	kpi.Delete("/:type/:id/entries/:entryId", authMiddleware.RequirePermission("kpi:update"), kpiEntryHandler.DeleteEntry)
 	kpi.Get("/entries/:entryId/evidence", authMiddleware.RequirePermission("kpi:view"), kpiEntryHandler.ListEntryEvidence)
+	kpi.Post("/entries/:entryId/transition", authMiddleware.RequirePermission("perf:review"), kpiEntryHandler.TransitionEntry)
+	kpi.Get("/entries/:entryId/transitions", authMiddleware.RequirePermission("kpi:view"), kpiEntryHandler.GetAvailableEntryTransitions)
+	kpi.Get("/entries/:entryId/history", authMiddleware.RequirePermission("kpi:view"), kpiEntryHandler.GetEntryHistory)
 
 	kpi.Get("/:type/:id/metrics", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListMetrics)
 	kpi.Post("/:type/:id/metrics", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.CreateMetric)

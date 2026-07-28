@@ -203,6 +203,184 @@ func (s *KpiWorkflowService) TransitionKpiPerformance(ctx context.Context, perfo
 	return &resp, nil
 }
 
+func (s *KpiWorkflowService) ensureEntryWorkflowInstance(ctx context.Context, tx *gorm.DB, entry *models.KpiEntry, userID uuid.UUID) error {
+	if entry.WorkflowInstanceID != nil {
+		return nil
+	}
+	var wf models.Workflow
+	if err := tx.WithContext(ctx).Where("record_type = ? AND is_active = ?", "kpi_entry", true).First(&wf).Error; err != nil {
+		return fmt.Errorf("no active kpi_entry workflow found: %w", err)
+	}
+	initialState, err := s.workflowRepo.GetInitialState(ctx, wf.ID)
+	if err != nil {
+		return fmt.Errorf("workflow has no initial state: %w", err)
+	}
+	instance := &models.KpiWorkflowInstance{
+		WorkflowID:     wf.ID,
+		EntityType:     models.KpiWFEntityEntry,
+		EntityID:       entry.ID.String(),
+		CurrentStateID: initialState.ID,
+		InitiatedByID:  userID,
+		Status:         models.KpiWFStatusActive,
+	}
+	if err := tx.WithContext(ctx).Create(instance).Error; err != nil {
+		return fmt.Errorf("failed to create workflow instance: %w", err)
+	}
+	entry.WorkflowInstanceID = &instance.ID
+	return tx.WithContext(ctx).Model(entry).Update("workflow_instance_id", instance.ID).Error
+}
+
+// TransitionKpiEntry moves a KpiEntry through the kpi_entry workflow, mirroring
+// TransitionKpiPerformance: row-locks the entry, auto-creates a workflow
+// instance on first use, validates the transition against the current state,
+// enforces mandatory-comment requirements, checks permissions, and records an
+// audit action. Reuses the same perf:* permission codes as KpiPerformance
+// (submit/review/approve/reject/publish/request_changes) so approvers don't
+// need a second set of permissions provisioned for entries.
+func (s *KpiWorkflowService) TransitionKpiEntry(ctx context.Context, entryID uuid.UUID, req *models.MetricTransitionRequest, userID uuid.UUID) (*models.KpiEntry, error) {
+	transitionID, err := uuid.Parse(req.TransitionID)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "invalid_transition_id_svc"), err)
+	}
+
+	tx := s.db.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	var entry models.KpiEntry
+	if err := tx.WithContext(ctx).Set("gorm:query_option", "FOR UPDATE").First(&entry, entryID).Error; err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("entry not found: %w", err)
+	}
+
+	if err := s.ensureEntryWorkflowInstance(ctx, tx, &entry, userID); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	var wfInstance models.KpiWorkflowInstance
+	if err := tx.WithContext(ctx).First(&wfInstance, *entry.WorkflowInstanceID).Error; err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("workflow instance not found: %w", err)
+	}
+
+	transition, err := s.workflowRepo.FindTransitionByIDWithRelations(ctx, transitionID)
+	if err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "transition_not_found"), err)
+	}
+
+	if transition.WorkflowID != wfInstance.WorkflowID {
+		tx.Rollback()
+		return nil, fmt.Errorf("transition does not belong to the entry's workflow")
+	}
+	if transition.FromStateID != wfInstance.CurrentStateID {
+		tx.Rollback()
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "transition_invalid_from_state"))
+	}
+
+	if !s.userHasPermission(ctx, transitionPermissionCode(transition.Code)) {
+		tx.Rollback()
+		return nil, fmt.Errorf("insufficient permissions for transition '%s'", transition.Code)
+	}
+
+	fromStateID := wfInstance.CurrentStateID
+
+	requirements, _ := s.workflowRepo.GetTransitionRequirements(ctx, transitionID)
+	for _, r := range requirements {
+		if r.RequirementType == "comment" && r.IsMandatory != nil && *r.IsMandatory {
+			if strings.TrimSpace(req.Comment) == "" {
+				tx.Rollback()
+				errMsg := r.ErrorMessage
+				if errMsg == "" {
+					errMsg = "Comment is required for this transition"
+				}
+				return nil, fmt.Errorf("%s", errMsg)
+			}
+		}
+	}
+
+	action := &models.KpiWorkflowAction{
+		WorkflowInstanceID: wfInstance.ID,
+		TransitionID:       transitionID,
+		FromStateID:        fromStateID,
+		ToStateID:          transition.ToStateID,
+		PerformedByID:      userID,
+		Comment:            req.Comment,
+		PerformedAt:        time.Now(),
+	}
+	if err := tx.WithContext(ctx).Create(action).Error; err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("failed to create workflow action: %w", err)
+	}
+
+	wfInstance.CurrentStateID = transition.ToStateID
+	if err := tx.WithContext(ctx).Save(&wfInstance).Error; err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("failed to update workflow instance state: %w", err)
+	}
+
+	entry.Status = transition.ToState.Code
+	updateFields := map[string]interface{}{"status": entry.Status}
+	switch transition.Code {
+	case "submit":
+		entry.SubmittedByID = &userID
+		updateFields["submitted_by_id"] = userID
+	case "approve", "approve_l1", "approve_l2", "approve_l1_final":
+		entry.ApprovedByID = &userID
+		updateFields["approved_by_id"] = userID
+	}
+	if err := tx.WithContext(ctx).Model(&entry).Updates(updateFields).Error; err != nil {
+		tx.Rollback()
+		return nil, fmt.Errorf("failed to update entry: %w", err)
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	var reloaded models.KpiEntry
+	s.db.WithContext(ctx).Preload("Metric").Preload("SubmittedBy").Preload("ApprovedBy").First(&reloaded, entryID)
+	return &reloaded, nil
+}
+
+// GetAvailableKpiEntryTransitions lists the transitions available from an
+// entry's current workflow state, auto-initiating the workflow instance (in
+// its own transaction) if the entry hasn't entered one yet.
+func (s *KpiWorkflowService) GetAvailableKpiEntryTransitions(ctx context.Context, entryID uuid.UUID, userID uuid.UUID) ([]models.WorkflowTransition, error) {
+	var entry models.KpiEntry
+	if err := s.db.WithContext(ctx).First(&entry, entryID).Error; err != nil {
+		return nil, fmt.Errorf("entry not found: %w", err)
+	}
+
+	if entry.WorkflowInstanceID == nil {
+		if err := s.ensureEntryWorkflowInstance(ctx, s.db, &entry, userID); err != nil {
+			return nil, err
+		}
+	}
+
+	var wfInstance models.KpiWorkflowInstance
+	if err := s.db.WithContext(ctx).First(&wfInstance, *entry.WorkflowInstanceID).Error; err != nil {
+		return nil, fmt.Errorf("workflow instance not found: %w", err)
+	}
+
+	var transitions []models.WorkflowTransition
+	if err := s.db.WithContext(ctx).
+		Preload("FromState").
+		Preload("ToState").
+		Preload("Requirements").
+		Where("from_state_id = ? AND workflow_id = ? AND is_active = ?", wfInstance.CurrentStateID, wfInstance.WorkflowID, true).
+		Order("sort_order, name").
+		Find(&transitions).Error; err != nil {
+		return nil, err
+	}
+
+	return transitions, nil
+}
+
 // transitionPermissionCode maps a workflow transition code to a granular permission
 func transitionPermissionCode(code string) string {
 	switch code {
