@@ -213,6 +213,20 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 		s.userRepo.AssignDepartments(ctx, user.ID, req.DepartmentIDs)
 	}
 
+	// No manual role provided: inherit the roles associated with the user's department,
+	// unless a different (manual) role is explicitly assigned in this request. Falls back to
+	// the first many-to-many department when no primary DepartmentID is set, since the
+	// create-user UI only ever populates department_ids, never the singular department_id.
+	if len(req.RoleIDs) == 0 {
+		inheritDeptID := user.DepartmentID
+		if inheritDeptID == nil && len(req.DepartmentIDs) > 0 {
+			inheritDeptID = &req.DepartmentIDs[0]
+		}
+		if inheritDeptID != nil {
+			s.ApplyDepartmentDefaultRoles(ctx, user.ID, *inheritDeptID, actorID)
+		}
+	}
+
 	// Assign manually selected locations/classifications only (don't auto-sync from departments during creation)
 	// This respects the user's explicit selections/deselections from the frontend
 	if len(req.LocationIDs) > 0 {
@@ -1081,6 +1095,21 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 	oldDepartmentIDs := make([]uuid.UUID, len(oldUser.DepartmentIDs))
 	copy(oldDepartmentIDs, oldUser.DepartmentIDs)
 	s.userRepo.AssignDepartments(ctx, user.ID, req.DepartmentIDs)
+
+	// If the user had no role before this update and none was explicitly requested,
+	// inherit the roles associated with their department. A manually assigned role
+	// (before or in this request) always takes priority and is never overridden.
+	// Falls back to the first many-to-many department when no primary DepartmentID is
+	// set, since the department_ids (M2M) field is what the frontend actually populates.
+	if len(req.RoleIDs) == 0 && len(oldUser.RoleIDs) == 0 {
+		inheritDeptID := user.DepartmentID
+		if inheritDeptID == nil && len(req.DepartmentIDs) > 0 {
+			inheritDeptID = &req.DepartmentIDs[0]
+		}
+		if inheritDeptID != nil {
+			s.ApplyDepartmentDefaultRoles(ctx, user.ID, *inheritDeptID, actorID)
+		}
+	}
 
 	// Sync classifications and locations from departments if departments changed
 	// This appends department-mapped items without removing manually selected ones
@@ -1956,6 +1985,50 @@ func (s *userService) syncDepartmentAttributesToUser(ctx context.Context, userID
 	}
 
 	return nil
+}
+
+// ApplyDepartmentDefaultRoles assigns the roles associated with a department (department_roles)
+// to a user, but only ever called from paths that have already confirmed the user has no
+// manually assigned role. It never overrides an existing/explicit role assignment.
+// A department-scoped actor (non-super-admin with "users:view_department_only") can never
+// cause a role that grants department-manager scope to be inherited, mirroring the same
+// restriction already enforced for explicit/manual role assignment.
+func (s *userService) ApplyDepartmentDefaultRoles(ctx context.Context, userID uuid.UUID, departmentID uuid.UUID, actorID uuid.UUID) {
+	dept, err := s.departmentRepo.FindByID(ctx, departmentID)
+	if err != nil || len(dept.Roles) == 0 {
+		return
+	}
+
+	actor, _ := s.userRepo.FindByIDWithRelations(ctx, actorID)
+	restrictScope := actor != nil && !actor.IsSuperAdmin && actor.HasPermission("users:view_department_only")
+
+	roleIDs := make([]uuid.UUID, 0, len(dept.Roles))
+	for _, role := range dept.Roles {
+		if restrictScope {
+			var fullRole models.Role
+			if err := s.db.Preload("Permissions").First(&fullRole, "id = ?", role.ID).Error; err == nil {
+				grantsDeptScope := false
+				for _, perm := range fullRole.Permissions {
+					if perm.Code == "users:view_department_only" {
+						grantsDeptScope = true
+						break
+					}
+				}
+				if grantsDeptScope {
+					continue
+				}
+			}
+		}
+		roleIDs = append(roleIDs, role.ID)
+	}
+
+	if len(roleIDs) == 0 {
+		return
+	}
+
+	if err := s.userRepo.AssignRoles(ctx, userID, roleIDs); err != nil {
+		fmt.Printf("Warning: failed to inherit department default roles: %v\n", err)
+	}
 }
 
 // Helper function to compare UUID slices
