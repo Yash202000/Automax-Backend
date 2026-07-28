@@ -1513,6 +1513,9 @@ func (h *IncidentHandler) CreateComplaint(c *fiber.Ctx) error {
 		if sourceIncident.RecordType == "complaint" {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "source_incident_cannot_be_complaint"))
 		}
+		if sourceIncident.CurrentState.Code == "closed" || sourceIncident.CurrentState.StateType == "terminal" {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "source_incident_closed"))
+		}
 	}
 
 	complaint, err := h.service.CreateComplaint(c.UserContext(), &req, userID)
