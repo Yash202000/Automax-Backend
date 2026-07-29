@@ -320,7 +320,7 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 			Preload("DeptManagerClassification").
 			Preload("DeptManagerLocation").
 			Offset(offset).Limit(limit).
-			Order("users.created_at DESC").
+			Order("(CASE WHEN LOWER(users.email) LIKE 'ivr_email_%' THEN 1 ELSE 0 END) ASC, users.created_at DESC").
 			Find(&users).Error
 		return users, total, err
 	}
@@ -337,7 +337,7 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 	var userIDs []uuid.UUID
 	if err := base.
 		Group("users.id").
-		Order("users.created_at DESC").
+		Order("(CASE WHEN LOWER(users.email) LIKE 'ivr_email_%' THEN 1 ELSE 0 END) ASC, users.created_at DESC").
 		Offset(offset).Limit(limit).
 		Pluck("users.id", &userIDs).Error; err != nil {
 		return nil, 0, err
@@ -360,7 +360,7 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 		Preload("DeptManagerClassification").
 		Preload("DeptManagerLocation").
 		Where("id IN ?", userIDs).
-		Order("created_at DESC").
+		Order("(CASE WHEN LOWER(email) LIKE 'ivr_email_%' THEN 1 ELSE 0 END) ASC, created_at DESC").
 		Find(&users).Error; err != nil {
 		return nil, 0, err
 	}
