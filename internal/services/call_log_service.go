@@ -193,6 +193,10 @@ func (s *callLogService) ListCallLogsSummary(ctx context.Context, filter *models
 		currentUserExt = u.Extension
 	}
 
+	// A nil ParticipantID means the caller asked for the unscoped list (super
+	// admin ?all=true): rows are not tied to currentUserID's perspective.
+	unscoped := filter.ParticipantID == nil
+
 	items := make([]models.CallLogListItem, len(callLogs))
 	for i, cl := range callLogs {
 		var recordingURL string
@@ -250,8 +254,24 @@ func (s *callLogService) ListCallLogsSummary(ctx context.Context, filter *models
 		item.Duration = duration
 
 		// Direction: outgoing if the current user is the initiator.
+		//
+		// The unscoped admin view (?all=true) has no "current user" whose phone
+		// could answer that, so fall back to the direction Cintrix recorded in
+		// meta, then to whether the initiator resolves to a known Automax user.
 		isInitiator := initiatorParticipant != nil &&
 			(initiatorParticipant.PhoneNumber == currentUserExt || initiatorParticipant.PhoneNumber == currentUserPhone)
+		if unscoped && !isInitiator {
+			switch strings.ToLower(models.DirectionFromMeta(cl.Meta)) {
+			case "outbound", "outgoing":
+				isInitiator = true
+			case "inbound", "incoming":
+				// leave as incoming
+			default:
+				if initiatorParticipant != nil && nameMap[initiatorParticipant.PhoneNumber] != "" {
+					isInitiator = true
+				}
+			}
+		}
 		if isInitiator {
 			item.Direction = "outgoing"
 		} else {
