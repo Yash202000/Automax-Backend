@@ -156,30 +156,65 @@ func (h *CallLogHandler) ListCallLogs(c *fiber.Ctx) error {
 		})
 	}
 
-	if filter.Limit == 0 {
-		filter.Limit = 10
+	// QueryParser cannot parse plain YYYY-MM-DD into *time.Time; do it manually.
+	// Use time.Local so date-only strings cover the entire local day, not UTC midnight.
+	if startStr := c.Query("start_date"); startStr != "" {
+		if t, err := time.Parse("2006-01-02", startStr); err == nil {
+			localStart := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.Local)
+			filter.StartDate = &localStart
+		} else if t, err := time.Parse(time.RFC3339, startStr); err == nil {
+			filter.StartDate = &t
+		}
 	}
-	if filter.Page == 0 {
-		filter.Page = 1
+	if endStr := c.Query("end_date"); endStr != "" {
+		if t, err := time.Parse("2006-01-02", endStr); err == nil {
+			localEnd := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, time.Local)
+			filter.EndDate = &localEnd
+		} else if t, err := time.Parse(time.RFC3339, endStr); err == nil {
+			filter.EndDate = &t
+		}
 	}
 
-	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-	if !ok {
+	user, ok := c.Locals(constants.ContextKeys.User).(*models.User)
+	if !ok || user == nil || user.ID == uuid.Nil {
 		return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "user_not_authenticated"))
 	}
 
-	filter.ParticipantID = &userID
+	// Super admins may widen the scope with ?agent_id= or ?all=true. Both params
+	// are silently ignored for everyone else, who always stays scoped to their
+	// own calls.
+	scope := "self"
+	perspectiveID := user.ID        // whose phone/ext drives direction + duration
+	filter.ParticipantID = &user.ID // whose calls are returned
 
-	items, total, err := h.service.ListCallLogsSummary(c.UserContext(), &filter, userID)
+	if user.IsSuperAdmin {
+		switch {
+		case filter.AgentID != nil: // agent_id wins over all
+			filter.ParticipantID = filter.AgentID
+			perspectiveID = *filter.AgentID
+			scope = "agent"
+		case filter.All:
+			filter.ParticipantID = nil // unscoped: every call log
+			scope = "all"
+		}
+	}
+
+	items, total, err := h.service.ListCallLogsSummary(c.UserContext(), &filter, perspectiveID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
-	totalPages := (int(total) + filter.Limit - 1) / filter.Limit
+	// ListCallLogsSummary clamps Page/Limit on the filter it was handed, so these
+	// are populated by now; guard the division anyway.
+	totalPages := 0
+	if filter.Limit > 0 {
+		totalPages = (int(total) + filter.Limit - 1) / filter.Limit
+	}
 
 	return c.JSON(fiber.Map{
 		"success":     true,
 		"data":        items,
+		"scope":       scope,
 		"total_items": total,
 		"total_pages": totalPages,
 		"page":        filter.Page,

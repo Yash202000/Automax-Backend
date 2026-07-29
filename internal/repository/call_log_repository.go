@@ -161,20 +161,34 @@ func (r *callLogRepository) ListSummary(ctx context.Context, filter *models.Call
 	if filter.EndDate != nil {
 		query = query.Where("created_at <= ?", *filter.EndDate)
 	}
-	if filter.ParticipantID != nil {
-		// Cintrix PBX calls are company call-centre history: their participants
-		// are external callers and PBX extensions, not Automax user ids, so a
-		// participant join can never match (and missed calls have no agent at
-		// all). Show them to everyone this admin endpoint already gates;
-		// personal direct/group calls stay participant-scoped.
+	if filter.Search != "" {
+		searchPattern := "%" + filter.Search + "%"
 		query = query.Where(
-			`(call_type = 'cintrix' OR id IN (
+			`(call_uuid ILIKE ? OR EXISTS (
+				SELECT 1 FROM call_participants cp
+				WHERE cp.call_log_id = call_logs.id AND cp.phone_number ILIKE ?
+			))`,
+			searchPattern, searchPattern,
+		)
+	}
+
+	// A nil ParticipantID means an unscoped list — only super admins can reach
+	// this (via ?all=true), and it is the only way to see Cintrix rows whose
+	// agent_email never resolved to a user (including missed calls with no
+	// agent at all), since those have no participant row to match on.
+	//
+	// Cintrix PBX rows are NOT special-cased here: the webhook stores the
+	// resolved agent's extension/phone as a participant, so they match this
+	// subquery for their real agent like any other call.
+	if filter.ParticipantID != nil {
+		query = query.Where(
+			`id IN (
 				SELECT cp.call_log_id FROM call_participants cp
 				JOIN users u ON cp.phone_number = u.phone OR cp.phone_number IN (
 					SELECT ea.extension FROM extension_assignments ea WHERE ea.user_id = u.id
 				)
 				WHERE u.id = ?
-			))`,
+			)`,
 			*filter.ParticipantID,
 		)
 	}
