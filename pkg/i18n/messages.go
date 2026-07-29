@@ -789,6 +789,8 @@ var messages = map[string][2]string{
 	"incident_conflict":                    {"Conflict: incident was modified by another user", "تعارض: تم تعديل البلاغ من قِبل مستخدم آخر"},
 	"incident_locked":                      {"Incident not found or locked by another transaction", "البلاغ غير موجود أو محجوز من عملية أخرى"},
 	"workflow_no_initial_state":            {"Workflow has no initial state configured", "سير العمل ليس لديه حالة ابتدائية مُعينة"},
+	"source_incident_closed":               {"Source incident is already closed", "البلاغ المصدر مغلق بالفعل"},
+	"source_incident_cannot_be_complaint":  {"Source incident cannot be a complaint", "لا يمكن أن يكون البلاغ المصدر شكوى"},
 	"no_permission_transition":             {"You do not have permission to execute this transition", "ليس لديك صلاحية تنفيذ هذا الانتقال"},
 	"only_assigned_user_transition":        {"Only the assigned user can perform this transition", "يستطيع المستخدم المعيّن فقط تنفيذ هذا الانتقال"},
 	"department_required_transition":       {"Department selection is required for this transition", "تحديد القسم مطلوب لهذا الانتقال"},

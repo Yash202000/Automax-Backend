@@ -1499,6 +1499,25 @@ func (h *IncidentHandler) CreateComplaint(c *fiber.Ctx) error {
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
+	if req.SourceIncidentID != nil {
+		incidentID, err := uuid.Parse(*req.SourceIncidentID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_source_incident_id"))
+		}
+
+		// Validate that the source incident exists and is not a complaint
+		sourceIncident, err := h.service.GetIncident(c.UserContext(), incidentID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "source_incident_not_found"))
+		}
+		if sourceIncident.RecordType == "complaint" {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "source_incident_cannot_be_complaint"))
+		}
+		if sourceIncident.CurrentState.Code == "closed" || sourceIncident.CurrentState.StateType == "terminal" {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "source_incident_closed"))
+		}
+	}
+
 	complaint, err := h.service.CreateComplaint(c.UserContext(), &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
