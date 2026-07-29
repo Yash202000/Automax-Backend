@@ -261,7 +261,8 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 	isStrict := len(strictDepartment) > 0 && strictDepartment[0]
 
 	// Build base query with search + join filters
-	base := r.db.WithContext(ctx).Model(&models.User{})
+	base := r.db.WithContext(ctx).Model(&models.User{}).
+		Where("LOWER(users.email) NOT LIKE 'ivr_email_%'")
 
 	if search != "" {
 		like := "%" + strings.ToLower(search) + "%"
@@ -320,7 +321,7 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 			Preload("DeptManagerClassification").
 			Preload("DeptManagerLocation").
 			Offset(offset).Limit(limit).
-			Order("(CASE WHEN LOWER(users.email) LIKE 'ivr_email_%' THEN 1 ELSE 0 END) ASC, users.created_at DESC").
+			Order("users.created_at DESC").
 			Find(&users).Error
 		return users, total, err
 	}
@@ -337,7 +338,7 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 	var userIDs []uuid.UUID
 	if err := base.
 		Group("users.id").
-		Order("(CASE WHEN LOWER(users.email) LIKE 'ivr_email_%' THEN 1 ELSE 0 END) ASC, users.created_at DESC").
+		Order("users.created_at DESC").
 		Offset(offset).Limit(limit).
 		Pluck("users.id", &userIDs).Error; err != nil {
 		return nil, 0, err
@@ -360,7 +361,7 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 		Preload("DeptManagerClassification").
 		Preload("DeptManagerLocation").
 		Where("id IN ?", userIDs).
-		Order("(CASE WHEN LOWER(email) LIKE 'ivr_email_%' THEN 1 ELSE 0 END) ASC, created_at DESC").
+		Order("created_at DESC").
 		Find(&users).Error; err != nil {
 		return nil, 0, err
 	}
