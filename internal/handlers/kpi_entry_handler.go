@@ -228,6 +228,12 @@ func (h *KpiEntryHandler) CreateEntry(c *fiber.Ctx) error {
 		}
 	}
 
+	// Compute achievement/variance/status now that TargetValueSnapshot is in
+	// its final form (metric-config fallback, possibly overwritten above by
+	// a real approved target) — previously this was never computed at all,
+	// so every entry's achievement_percentage stayed null forever.
+	item.ComputeAchievement()
+
 	if err := db.Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
 	}

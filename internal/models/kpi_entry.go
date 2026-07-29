@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -161,11 +162,66 @@ func (r *KpiEntryRequest) ToModel(db *gorm.DB, kpiID uuid.UUID, kpiType string, 
 
 				// Calculate actual value based on metric type
 				entry.computeActualValue()
+
+				// Fallback target snapshot from the metric's own configured
+				// target_value. The handler overwrites this afterward with a
+				// real approved KpiAnnualTarget's value if one exists for
+				// this period — this just ensures achievement is still
+				// calculable even when no formal target has been approved.
+				if metric.TargetValue != 0 {
+					tv := metric.TargetValue
+					entry.TargetValueSnapshot = &tv
+				}
 			}
 		}
 	}
 
 	return entry
+}
+
+// computeAchievement derives AchievementPercentage, VarianceValue and
+// PerformanceStatus from ActualValue against TargetValueSnapshot, honoring
+// DirectionSnapshot the same way the frontend's live preview does. Must be
+// called after TargetValueSnapshot is in its final form (i.e. after any
+// approved-target lookup has had a chance to override the metric-fallback
+// value ToModel sets).
+func (e *KpiEntry) ComputeAchievement() {
+	if e.TargetValueSnapshot == nil || *e.TargetValueSnapshot == 0 {
+		e.AchievementPercentage = nil
+		e.VarianceValue = nil
+		e.PerformanceStatus = "Not Calculable"
+		return
+	}
+
+	target := *e.TargetValueSnapshot
+	variance := e.ActualValue - target
+	e.VarianceValue = &variance
+
+	var pct float64
+	if e.DirectionSnapshot == "Lower is Better" {
+		pct = ((target - e.ActualValue) / target) * 100
+	} else {
+		pct = (e.ActualValue / target) * 100
+	}
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	pct = math.Round(pct*100) / 100
+	e.AchievementPercentage = &pct
+
+	switch {
+	case pct >= 100:
+		e.PerformanceStatus = "Exceeded"
+	case pct >= 80:
+		e.PerformanceStatus = "Achieved"
+	case pct >= 50:
+		e.PerformanceStatus = "Warning"
+	default:
+		e.PerformanceStatus = "Below Target"
+	}
 }
 
 // computeActualValue calculates the actual_value based on the calculation
@@ -273,6 +329,7 @@ func (r *KpiEntryUpdateRequest) ApplyTo(e *KpiEntry) {
 	e.PerformanceCommentary = r.PerformanceCommentary
 	e.ImprovementAction = r.ImprovementAction
 	e.computeActualValue()
+	e.ComputeAchievement()
 }
 
 // ─── KPI Entry Evidence ──────────────────────────────────────────────────
