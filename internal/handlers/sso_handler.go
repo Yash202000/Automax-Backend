@@ -118,8 +118,15 @@ func (h *SSOHandler) Launch(c *fiber.Ctx) error {
 		fullName = user.Username
 	}
 
+	// Super-admin is a flag, not a role row — a super-admin often has no role
+	// coded "admin", so keying the SSO claim purely on Roles[0].Code sent
+	// role="" and the receiver (Cintrix) rejected it with "SSO token does not
+	// grant admin access". Mirror the rest of the codebase (HasPermission,
+	// user_service): IsSuperAdmin ⇒ admin.
 	role := ""
-	if len(user.Roles) > 0 {
+	if user.IsSuperAdmin {
+		role = "admin"
+	} else if len(user.Roles) > 0 {
 		role = user.Roles[0].Code
 	}
 
