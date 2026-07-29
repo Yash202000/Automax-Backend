@@ -3,6 +3,7 @@ package handlers
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/automax/backend/internal/middleware"
 	"github.com/automax/backend/internal/models"
@@ -228,6 +229,77 @@ func (h *KpiPerformanceHandler) UpdateTarget(c *fiber.Ctx) error {
 		Module:      "kpi",
 		ResourceID:  reloaded.ID.String(),
 		Description: fmt.Sprintf("Updated target for %s period %s/%d", reloaded.KpiCode, reloaded.PeriodCode, reloaded.TargetYear),
+		Status:      "success",
+	})
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "", reloaded.ToResponse())
+}
+
+type targetTransitionRequest struct {
+	Action string `json:"action" validate:"required,oneof=approve reject return"`
+}
+
+// TransitionTarget moves a target between submitted/approved/rejected/draft.
+// There was previously no way at all to approve a target — target_status
+// could only ever be set to whatever the create/update form sent directly
+// (draft/submitted), with no gated approval step, even though the
+// "targets:approve" permission already existed and the Targets page's own
+// mockup assumes an Approved state is reachable.
+func (h *KpiPerformanceHandler) TransitionTarget(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	var req targetTransitionRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+
+	db := h.db.WithContext(c.UserContext())
+
+	var target models.KpiAnnualTarget
+	if err := db.First(&target, id).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+
+	if target.TargetStatus != "submitted" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest,
+			fmt.Sprintf("Only submitted targets can be %sd — this target is %s", req.Action, target.TargetStatus))
+	}
+
+	var newStatus string
+	switch req.Action {
+	case "approve":
+		newStatus = "approved"
+	case "reject":
+		newStatus = "rejected"
+	case "return":
+		newStatus = "returned"
+	}
+
+	updates := map[string]interface{}{"target_status": newStatus}
+	if req.Action == "approve" {
+		userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+		now := time.Now()
+		updates["approved_by_id"] = userID
+		updates["approved_at"] = now
+	}
+	if err := db.Model(&target).Updates(updates).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
+	}
+
+	var reloaded models.KpiAnnualTarget
+	db.Preload("Metric").Preload("ApprovedBy").First(&reloaded, id)
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "transition",
+		Module:      "kpi",
+		ResourceID:  id.String(),
+		Description: fmt.Sprintf("%s target %s (status -> %s)", req.Action, reloaded.KpiCode, newStatus),
 		Status:      "success",
 	})
 

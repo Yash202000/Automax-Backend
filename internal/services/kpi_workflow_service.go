@@ -324,6 +324,7 @@ func (s *KpiWorkflowService) TransitionKpiEntry(ctx context.Context, entryID uui
 
 	entry.Status = transition.ToState.Code
 	updateFields := map[string]interface{}{"status": entry.Status}
+	isApprove := false
 	switch transition.Code {
 	case "submit":
 		entry.SubmittedByID = &userID
@@ -331,10 +332,23 @@ func (s *KpiWorkflowService) TransitionKpiEntry(ctx context.Context, entryID uui
 	case "approve", "approve_l1", "approve_l2", "approve_l1_final":
 		entry.ApprovedByID = &userID
 		updateFields["approved_by_id"] = userID
+		isApprove = true
 	}
 	if err := tx.WithContext(ctx).Model(&entry).Updates(updateFields).Error; err != nil {
 		tx.Rollback()
 		return nil, fmt.Errorf("failed to update entry: %w", err)
+	}
+
+	// Push the approved entry's actual value onto the metric it belongs to —
+	// otherwise the Metric Card's Baseline/Current/Target tiles and
+	// achievement bar never move no matter how many entries get approved,
+	// since they read the metric's own current_value, not the entry itself.
+	if isApprove {
+		if err := tx.WithContext(ctx).Model(&models.KpiMetric{}).Where("id = ?", entry.MetricID).
+			Update("current_value", entry.ActualValue).Error; err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("failed to update metric current value: %w", err)
+		}
 	}
 
 	if err := tx.Commit().Error; err != nil {

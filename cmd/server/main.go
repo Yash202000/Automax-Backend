@@ -1244,6 +1244,7 @@ func main() {
 	kpi.Get("/targets", authMiddleware.RequirePermission("targets:view"), kpiPerformanceHandler.ListTargets)
 	kpi.Post("/targets", authMiddleware.RequirePermission("targets:set"), kpiPerformanceHandler.SetTarget)
 	kpi.Put("/targets/:id", authMiddleware.RequirePermission("targets:set"), kpiPerformanceHandler.UpdateTarget)
+	kpi.Post("/targets/:id/transition", authMiddleware.RequirePermission("targets:approve"), kpiPerformanceHandler.TransitionTarget)
 	kpi.Delete("/targets/:id", authMiddleware.RequirePermission("targets:set"), kpiPerformanceHandler.DeleteTarget)
 
 	kpi.Get("/performance", authMiddleware.RequirePermission("perf:view"), kpiPerformanceHandler.ListPerformance)
