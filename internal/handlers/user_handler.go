@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -700,6 +701,37 @@ func (h *UserHandler) Export(c *fiber.Ctx) error {
 	return c.JSON(exportData)
 }
 
+// defaultImportPassword is assigned to every user created through Import; the import payload
+// carries no credentials.
+const defaultImportPassword = "DefaultPassword123!"
+
+// parseImportUUIDs converts import-payload string IDs to UUIDs, dropping malformed values.
+func parseImportUUIDs(values []string) []uuid.UUID {
+	ids := make([]uuid.UUID, 0, len(values))
+	for _, v := range values {
+		if id, err := uuid.Parse(strings.TrimSpace(v)); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// formatValidationErrors flattens the field->message map from validation.ValidateStruct into a
+// single line. Fields are sorted so the same bad row always produces the same message.
+func formatValidationErrors(validationErrors map[string]string) string {
+	fields := make([]string, 0, len(validationErrors))
+	for field := range validationErrors {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+
+	parts := make([]string, 0, len(fields))
+	for _, field := range fields {
+		parts = append(parts, field+": "+validationErrors[field])
+	}
+	return strings.Join(parts, "; ")
+}
+
 // Import imports users from JSON
 func (h *UserHandler) Import(c *fiber.Ctx) error {
 	file, err := c.FormFile("file")
@@ -716,22 +748,21 @@ func (h *UserHandler) Import(c *fiber.Ctx) error {
 
 	// Read file content
 	var importData []struct {
-		ID                uuid.UUID  `json:"id"`
-		Username          string     `json:"username"`
-		Email             string     `json:"email"`
-		Password          string     `json:"password"`
-		FirstName         string     `json:"first_name"`
-		LastName          string     `json:"last_name"`
-		Phone             string     `json:"phone"`
-		Extension         string     `json:"extension"`
-		DepartmentID      *uuid.UUID `json:"department_id"`
-		LocationID        *uuid.UUID `json:"location_id"`
-		RoleIDs           []string   `json:"role_ids"`
-		DepartmentIDs     []string   `json:"department_ids"`
-		LocationIDs       []string   `json:"location_ids"`
-		ClassificationIDs []string   `json:"classification_ids"`
-		IsActive          bool       `json:"is_active"`
-		IsSuperAdmin      bool       `json:"is_super_admin"`
+		// ID        uuid.UUID `json:"id"`
+		Username  string `json:"username"`
+		Email     string `json:"email"`
+		FirstName string `json:"first_name"`
+		LastName  string `json:"last_name"`
+		Phone     string `json:"phone"`
+		Extension string `json:"extension"`
+		// DepartmentID      *uuid.UUID `json:"department_id"`
+		// LocationID        *uuid.UUID `json:"location_id"`
+		// RoleIDs           []string   `json:"role_ids"`
+		// DepartmentIDs     []string   `json:"department_ids"`
+		// LocationIDs       []string   `json:"location_ids"`
+		// ClassificationIDs []string   `json:"classification_ids"`
+		// IsActive          bool       `json:"is_active"`
+		// IsSuperAdmin      bool       `json:"is_super_admin"`
 	}
 
 	// Parse JSON from file
@@ -740,89 +771,96 @@ func (h *UserHandler) Import(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "invalid_json_format_detail", err.Error()))
 	}
 
+	// Normalise the rows and collect their identifiers so every duplicate in the file can be
+	// resolved with one narrow query instead of two full-row lookups per row.
+	emails := make([]string, 0, len(importData))
+	usernames := make([]string, 0, len(importData))
+	phones := make([]string, 0, len(importData))
+	for i := range importData {
+		importData[i].Email = strings.ToLower(strings.TrimSpace(importData[i].Email))
+		importData[i].Username = strings.TrimSpace(importData[i].Username)
+		importData[i].Phone = strings.TrimSpace(importData[i].Phone)
+
+		if importData[i].Email != "" {
+			emails = append(emails, importData[i].Email)
+		}
+		if importData[i].Username != "" {
+			usernames = append(usernames, importData[i].Username)
+		}
+		if importData[i].Phone != "" {
+			phones = append(phones, importData[i].Phone)
+		}
+	}
+
+	existing, err := h.userService.CheckExistingIdentifiers(c.UserContext(), emails, usernames, phones)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
 	imported := 0
 	skipped := 0
 	errors := []string{}
 
 	// Import all users
 	for _, data := range importData {
-		// Check if user already exists by email or username
-		existingUser, _ := h.userService.GetUserByEmail(c.UserContext(), data.Email)
-		if existingUser != nil {
+		if existing.HasEmail(data.Email) {
 			skipped++
 			errors = append(errors, data.Email+" - User already exists with this email, skipped")
 			continue
 		}
 
-		existingUser, _ = h.userService.GetUserByUsername(c.UserContext(), data.Username)
-		if existingUser != nil {
+		if existing.HasUsername(data.Username) {
 			skipped++
 			errors = append(errors, data.Username+" - User already exists with this username, skipped")
 			continue
 		}
 
-		// Parse role IDs
-		roleIDs := make([]uuid.UUID, 0)
-		for _, roleIDStr := range data.RoleIDs {
-			if roleID, err := uuid.Parse(roleIDStr); err == nil {
-				roleIDs = append(roleIDs, roleID)
-			}
+		// Phone is optional, so a malformed or already-taken number is dropped and the user is
+		// imported without it - never lose a whole row over an optional field.
+		phone := data.Phone
+		switch {
+		case phone == "":
+			// nothing to check
+		case !validation.IsValidMobile(phone):
+			errors = append(errors, data.Email+" - Phone "+phone+" is not a valid mobile number, imported without phone")
+			phone = ""
+		case existing.HasPhone(phone):
+			errors = append(errors, data.Email+" - Phone "+phone+" already in use, imported without phone")
+			phone = ""
 		}
 
-		// Parse department IDs
-		departmentIDs := make([]uuid.UUID, 0)
-		for _, deptIDStr := range data.DepartmentIDs {
-			if deptID, err := uuid.Parse(deptIDStr); err == nil {
-				departmentIDs = append(departmentIDs, deptID)
-			}
-		}
-
-		// Parse location IDs
-		locationIDs := make([]uuid.UUID, 0)
-		for _, locIDStr := range data.LocationIDs {
-			if locID, err := uuid.Parse(locIDStr); err == nil {
-				locationIDs = append(locationIDs, locID)
-			}
-		}
-
-		// Parse classification IDs
-		classificationIDs := make([]uuid.UUID, 0)
-		for _, clsIDStr := range data.ClassificationIDs {
-			if clsID, err := uuid.Parse(clsIDStr); err == nil {
-				classificationIDs = append(classificationIDs, clsID)
-			}
-		}
-
-		// Create user registration request
-		if data.Password == "" {
-			skipped++
-			errors = append(errors, data.Email+" - Password is required, skipped")
-			continue
-		}
 		req := &models.UserRegisterRequest{
-			Username:          data.Username,
-			Email:             data.Email,
-			Password:          data.Password,
-			FirstName:         data.FirstName,
-			LastName:          data.LastName,
-			Phone:             data.Phone,
-			Extension:         data.Extension,
-			DepartmentID:      data.DepartmentID,
-			LocationID:        data.LocationID,
-			RoleIDs:           roleIDs,
-			DepartmentIDs:     departmentIDs,
-			LocationIDs:       locationIDs,
-			ClassificationIDs: classificationIDs,
+			Username:  data.Username,
+			Email:     data.Email,
+			Password:  defaultImportPassword,
+			FirstName: data.FirstName,
+			LastName:  data.LastName,
+			Phone:     phone,
+			// Extension: data.Extension,
+			// DepartmentID:      data.DepartmentID,
+			// LocationID:        data.LocationID,
+			// RoleIDs:           parseImportUUIDs(data.RoleIDs),
+			// DepartmentIDs:     parseImportUUIDs(data.DepartmentIDs),
+			// LocationIDs:       parseImportUUIDs(data.LocationIDs),
+			// ClassificationIDs: parseImportUUIDs(data.ClassificationIDs),
+		}
+
+		if validationErrors := validation.ValidateStruct(c.UserContext(), req); len(validationErrors) != 0 {
+			skipped++
+			errors = append(errors, data.Email+" - "+formatValidationErrors(validationErrors))
+			continue
 		}
 
 		// Register user
-		_, err := h.userService.Register(c.UserContext(), req)
-		if err != nil {
+		if _, err := h.userService.Register(c.UserContext(), req); err != nil {
 			skipped++
 			errors = append(errors, data.Email+" - "+err.Error())
-		} else {
-			imported++
+			continue
 		}
+
+		// Claim these identifiers so a later row in the same file cannot reuse them
+		existing.Add(data.Email, data.Username, phone)
+		imported++
 	}
 
 	result := map[string]interface{}{

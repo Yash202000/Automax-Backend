@@ -334,6 +334,12 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		log.Printf("Warning: user national_id migration failed: %v", err)
 	}
 
+	// Enforce phone uniqueness at the DB level — phone stays optional, but a
+	// non-blank number may only belong to one live user
+	if err := migrations.MigrateUserPhoneUnique(db); err != nil {
+		log.Printf("Warning: user phone unique index migration failed: %v", err)
+	}
+
 	// Drop recording_url from call_logs — URLs are now generated from call_log_attachments
 	if err := migrations.MigrateCallLogRecordingURL(db); err != nil {
 		log.Printf("Warning: call_log recording_url migration failed: %v", err)

@@ -22,6 +22,7 @@ var messages = map[string]map[string]string{
 		"title":        "{0} must be a valid title (letters, numbers, spaces, and basic punctuation only)",
 		"name":         "{0} can only contain letters, numbers, spaces, and basic punctuation (- ' . , & ( ) /)",
 		"startswith12": "{0} must start with 1 or 2",
+		"mobile":       "{0} must be a valid mobile number of 8 to 15 digits, with or without a country code (e.g. +966559461101 or 0559461101)",
 	},
 	"fr": {
 		"slug":         "{0} doit être un slug valide (lettres minuscules, chiffres et tirets uniquement)",
@@ -33,6 +34,7 @@ var messages = map[string]map[string]string{
 		"email":        "{0} doit être une adresse e-mail valide",
 		"min":          "{0} doit contenir au moins {1} caractères",
 		"max":          "{0} doit contenir au plus {1} caractères",
+		"mobile":       "{0} doit être un numéro de mobile valide de 8 à 15 chiffres, avec ou sans indicatif pays (ex. +966559461101 ou 0559461101)",
 	},
 	"ar": {
 		"slug":         "{0} يجب أن يكون slug صالحاً (أحرف صغيرة وأرقام وشرطات فقط)",
@@ -48,6 +50,7 @@ var messages = map[string]map[string]string{
 		"title":        "{0} يجب أن يكون عنواناً صالحاً (أحرف وأرقام ومسافات وعلامات ترقيم أساسية فقط)",
 		"name":         "{0} يمكن أن يحتوي على أحرف وأرقام ومسافات وعلامات ترقيم أساسية فقط (- ' . , & ( ) /)",
 		"startswith12": "{0} يجب أن يبدأ بـ 1 أو 2",
+		"mobile":       "{0} يجب أن يكون رقم جوال صالحاً من 8 إلى 15 رقماً، مع أو بدون رمز الدولة (مثال +966559461101 أو 0559461101)",
 	},
 }
 
@@ -81,6 +84,7 @@ func registerCustomValidators(validate *validator.Validate, trans ut.Translator,
 	registerCustom("title", validateTitle, false)
 	registerCustom("name", validateName, false)
 	registerCustom("startswith12", validateStartswith12, false)
+	registerCustom("mobile", validateMobile, false)
 
 	// Override default validator translations
 	for _, tag := range []string{"required", "email", "min", "max"} {
