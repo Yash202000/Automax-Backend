@@ -8,11 +8,17 @@ import (
 	"gorm.io/gorm"
 )
 
+// Each pattern accepts two conventions: the older year-embedded period key
+// (e.g. "2027-01", "2027-Q1", "2027-H1", "2027" — still used by the legacy
+// Performance "Period Key" manual entry field) and the newer bare label
+// (e.g. "jan", "q1", "h1", "annual" — what the KPI Target/Entry period
+// pickers send, since target_year/reporting_year already carries the year
+// as its own field). Both are valid; a bare label isn't a lesser format.
 var periodKeyPatterns = map[string]*regexp.Regexp{
-	"month":       regexp.MustCompile(`^\d{4}-(0[1-9]|1[0-2])$`),
-	"quarter":     regexp.MustCompile(`^\d{4}-Q[1-4]$`),
-	"semi_annual": regexp.MustCompile(`^\d{4}-H[12]$`),
-	"annual":      regexp.MustCompile(`^\d{4}$`),
+	"month":       regexp.MustCompile(`(?i)^(\d{4}-(0[1-9]|1[0-2])|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)$`),
+	"quarter":     regexp.MustCompile(`(?i)^(\d{4}-Q[1-4]|q[1-4])$`),
+	"semi_annual": regexp.MustCompile(`(?i)^(\d{4}-H[12]|h[12])$`),
+	"annual":      regexp.MustCompile(`(?i)^(\d{4}|annual)$`),
 }
 
 // frequencyPeriodType maps a KPI's configured reporting frequency to the

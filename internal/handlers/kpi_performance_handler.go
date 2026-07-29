@@ -91,11 +91,11 @@ func (h *KpiPerformanceHandler) SetTarget(c *fiber.Ctx) error {
 	// REL-05: Validate period against KPI's reporting frequency
 	freq := services.GetKPIReportingFrequency(db, req.KpiCode, req.KpiType)
 	periodType := "annual"
-	if freq == "monthly" {
+	if freq == models.KPIFrequencyMonthly {
 		periodType = "month"
-	} else if freq == "quarterly" {
+	} else if freq == models.KPIFrequencyQuarterly {
 		periodType = "quarter"
-	} else if freq == "semiannual" {
+	} else if freq == models.KPIFrequencySemiAnnual {
 		periodType = "semi_annual"
 	}
 	if err := services.ValidatePeriod(freq, periodType, req.PeriodCode); err != nil {
@@ -141,6 +141,97 @@ func (h *KpiPerformanceHandler) SetTarget(c *fiber.Ctx) error {
 	})
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, "", reloaded.ToResponse())
+}
+
+// UpdateTarget edits an existing target in place. There was previously no
+// update endpoint at all — the frontend's "Edit" action called the same
+// create endpoint as "Add Target", which always inserted a brand new row
+// instead of changing the one being edited.
+func (h *KpiPerformanceHandler) UpdateTarget(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	var req models.KpiAnnualTargetRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+
+	db := h.db.WithContext(c.UserContext())
+
+	var existing models.KpiAnnualTarget
+	if err := db.First(&existing, id).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+
+	// Only draft/returned/rejected targets can be edited — matches the
+	// frontend's Actions column, which only ever offers "Edit" for those
+	// statuses (approved/submitted/superseded/locked targets are locked).
+	if existing.TargetStatus != "draft" && existing.TargetStatus != "returned" && existing.TargetStatus != "rejected" && !isAdminOverride(c) {
+		return utils.ErrorResponse(c, fiber.StatusForbidden, "Only draft targets can be edited.")
+	}
+
+	if !kpiExistsByCode(db, req.KpiCode, req.KpiType) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "KPI not found in dictionary")
+	}
+
+	freq := services.GetKPIReportingFrequency(db, req.KpiCode, req.KpiType)
+	periodType := "annual"
+	if freq == models.KPIFrequencyMonthly {
+		periodType = "month"
+	} else if freq == models.KPIFrequencyQuarterly {
+		periodType = "quarter"
+	} else if freq == models.KPIFrequencySemiAnnual {
+		periodType = "semi_annual"
+	}
+	if err := services.ValidatePeriod(freq, periodType, req.PeriodCode); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	if req.MetricID != nil && *req.MetricID != "" {
+		var metric models.KpiMetric
+		if err := db.Where("id = ?", *req.MetricID).First(&metric).Error; err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Metric not found")
+		}
+	}
+
+	// Duplicate check, excluding this record itself — editing a target's own
+	// unchanged period/metric must not trip over its own existing row.
+	var dupCount int64
+	db.Model(&models.KpiAnnualTarget{}).Where(
+		"kpi_code = ? AND kpi_type = ? AND target_year = ? AND period_code = ? AND id != ?",
+		req.KpiCode, req.KpiType, req.TargetYear, req.PeriodCode, id,
+	).Count(&dupCount)
+	if dupCount > 0 {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest,
+			fmt.Sprintf("a target for %s already exists for period %s/%d", req.KpiCode, req.PeriodCode, req.TargetYear))
+	}
+
+	updated := req.ToModel(db)
+	updated.ID = existing.ID
+	updated.CreatedAt = existing.CreatedAt
+	updated.ApprovedByID = existing.ApprovedByID
+	updated.ApprovedAt = existing.ApprovedAt
+	if err := db.Save(updated).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
+	}
+
+	var reloaded models.KpiAnnualTarget
+	db.Preload("Metric").Preload("ApprovedBy").First(&reloaded, id)
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "update",
+		Module:      "kpi",
+		ResourceID:  reloaded.ID.String(),
+		Description: fmt.Sprintf("Updated target for %s period %s/%d", reloaded.KpiCode, reloaded.PeriodCode, reloaded.TargetYear),
+		Status:      "success",
+	})
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "", reloaded.ToResponse())
 }
 
 func (h *KpiPerformanceHandler) DeleteTarget(c *fiber.Ctx) error {
