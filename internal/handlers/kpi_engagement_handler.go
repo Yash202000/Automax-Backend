@@ -80,11 +80,18 @@ func (h *KpiEngagementHandler) ListMetrics(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
+	db := h.db.WithContext(c.UserContext())
 	var items []models.KpiMetric
-	if err := h.db.WithContext(c.UserContext()).
+	if err := db.
 		Where("kpi_id = ? AND kpi_type = ?", id, kpiType).
 		Order("created_at ASC").Find(&items).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+	if kpiCode, err := getKPICode(db, kpiType, id); err == nil && kpiCode != "" {
+		for i := range items {
+			items[i].EffectiveTargetValue, items[i].EffectiveTargetPeriod =
+				services.GetEffectiveTarget(db, kpiCode, kpiType, items[i].ID)
+		}
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, "", items)
 }
@@ -127,11 +134,16 @@ func (h *KpiEngagementHandler) ListMetricsByCode(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 
+	db := h.db.WithContext(c.UserContext())
 	var items []models.KpiMetric
-	if err := h.db.WithContext(c.UserContext()).
+	if err := db.
 		Where("kpi_id = ? AND kpi_type = ?", found.ID, found.Type).
 		Order("created_at ASC").Find(&items).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+	for i := range items {
+		items[i].EffectiveTargetValue, items[i].EffectiveTargetPeriod =
+			services.GetEffectiveTarget(db, kpiCode, found.Type, items[i].ID)
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, "", items)
 }
@@ -196,7 +208,6 @@ func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
 		CustomUnitLabel:          req.CustomUnitLabel,
 		BaselineValue:            req.BaselineValue,
 		CurrentValue:             req.BaselineValue,
-		TargetValue:              req.TargetValue,
 		Weight:                   req.Weight,
 		Formula:                  req.Formula,
 		CalculationType:          calcType,
@@ -325,7 +336,6 @@ func (h *KpiEngagementHandler) UpdateMetric(c *fiber.Ctx) error {
 		"unit":                        req.Unit,
 		"custom_unit_label":           req.CustomUnitLabel,
 		"baseline_value":              req.BaselineValue,
-		"target_value":                req.TargetValue,
 		"weight":                      req.Weight,
 		"formula":                     req.Formula,
 		"calculation_type":            calcType,

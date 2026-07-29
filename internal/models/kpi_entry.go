@@ -163,15 +163,14 @@ func (r *KpiEntryRequest) ToModel(db *gorm.DB, kpiID uuid.UUID, kpiType string, 
 				// Calculate actual value based on metric type
 				entry.computeActualValue()
 
-				// Fallback target snapshot from the metric's own configured
-				// target_value. The handler overwrites this afterward with a
-				// real approved KpiAnnualTarget's value if one exists for
-				// this period — this just ensures achievement is still
-				// calculable even when no formal target has been approved.
-				if metric.TargetValue != 0 {
-					tv := metric.TargetValue
-					entry.TargetValueSnapshot = &tv
-				}
+				// No target snapshot yet — the handler sets this afterward
+				// if a real approved KpiAnnualTarget exists for this period.
+				// There's deliberately no fallback to a metric-level static
+				// target here: a single timeless number can't represent a
+				// target meant to progress period over period, so achievement
+				// correctly comes back "Not Calculable" (see
+				// ComputeAchievement) rather than being measured against an
+				// unrelated number just because one happened to be set once.
 			}
 		}
 	}

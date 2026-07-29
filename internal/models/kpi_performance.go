@@ -27,13 +27,23 @@ type KpiTargetSegmentationValue struct {
 	Value     string `json:"value"`
 }
 
+// The real uniqueness constraint — one target per (kpi_code, kpi_type,
+// metric_id, target_year, period_code) among non-deleted rows — is a partial
+// unique index created via migrations.MigrateKpiTargetUniqueIndex, not a
+// GORM struct tag: it needs to exclude soft-deleted rows (a plain unique
+// index would let an old deleted target permanently block recreating one for
+// the same period) and needs to key on metric_id/target_year, which the
+// original idx_kpi_target_period_unique (kpi_code+kpi_type+period_type+
+// period_key) never did — period_type is hardcoded to "annual" for every
+// target regardless of actual frequency, so that index provided no real
+// per-metric or per-year uniqueness at all.
 type KpiAnnualTarget struct {
 	ID                         uuid.UUID                  `gorm:"type:uuid;primary_key" json:"id"`
-	KpiCode                    string                     `gorm:"size:50;not null;index:idx_kpi_target_period_unique,unique" json:"kpi_code"`
-	KpiType                    string                     `gorm:"size:20;not null;index:idx_kpi_target_period_unique,unique" json:"kpi_type"`
+	KpiCode                    string                     `gorm:"size:50;not null;index" json:"kpi_code"`
+	KpiType                    string                     `gorm:"size:20;not null;index" json:"kpi_type"`
 	Year                       int                        `gorm:"not null;index" json:"year"`
-	PeriodType                 string                     `gorm:"size:20;not null;default:'annual';index:idx_kpi_target_period_unique,unique" json:"period_type"`
-	PeriodKey                  string                     `gorm:"size:20;index:idx_kpi_target_period_unique,unique" json:"period_key"`
+	PeriodType                 string                     `gorm:"size:20;not null;default:'annual'" json:"period_type"`
+	PeriodKey                  string                     `gorm:"size:20" json:"period_key"`
 	TargetValue                float64                    `gorm:"default:0" json:"target_value"`
 
 	// Phase 1 extended fields
