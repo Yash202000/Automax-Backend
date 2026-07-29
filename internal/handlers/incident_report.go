@@ -73,6 +73,7 @@ type reportLabels struct {
 	ColDate           string
 	ColName           string
 	ColAction         string
+	ColTransition     string
 	ColComment        string
 	ColFeedback       string
 	ColField          string
@@ -145,6 +146,7 @@ var labelsAR = reportLabels{
 	ColDate:           "التاريخ",
 	ColName:           "الاسم",
 	ColAction:         "الإجراء",
+	ColTransition:     "الانتقال",
 	ColComment:        "التعليقات",
 	ColFeedback:       "التغذية الراجعة",
 	ColField:          "الحقل",
@@ -217,6 +219,7 @@ var labelsEN = reportLabels{
 	ColDate:           "Date",
 	ColName:           "Name",
 	ColAction:         "Action",
+	ColTransition:     "Transition",
 	ColComment:        "Comment",
 	ColFeedback:       "Feedback",
 	ColField:          "Field",
@@ -820,20 +823,22 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 		if l.Dir == "rtl" {
 			txtAlign = "right"
 		}
-		fmt.Fprintf(&b, `<td style="width:17%%">%s</td><td style="width:18%%">%s</td><td style="width:15%%">%s</td><td style="width:25%%;text-align:%s">%s</td><td style="width:25%%;text-align:%s">%s</td>`,
+		fmt.Fprintf(&b, `<td style="width:15%%">%s</td><td style="width:17%%">%s</td><td style="width:16%%">%s</td><td style="width:14%%">%s</td><td style="width:19%%;text-align:%s">%s</td><td style="width:19%%;text-align:%s">%s</td>`,
 			html.EscapeString(l.ColDate), html.EscapeString(l.ColName),
-			html.EscapeString(l.ColAction),
+			html.EscapeString(l.ColTransition), html.EscapeString(l.Status),
 			txtAlign, html.EscapeString(l.ColComment),
 			txtAlign, html.EscapeString(l.ColFeedback),
 		)
 		b.WriteString(`</tr></thead><tbody>`)
 		for _, tr := range reportTransitions {
 			byName := strings.TrimSpace(tr.PerformedByFirstName + " " + tr.PerformedByLastName)
-			action := localName(tr.ToStateName, tr.ToStateNameAr)
-			fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td>%s</td><td class="cmt">%s</td><td class="cmt">%s</td></tr>`,
+			transitionName := localName(tr.TransitionName, tr.TransitionNameAr)
+			status := localName(tr.ToStateName, tr.ToStateNameAr)
+			fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td class="cmt">%s</td><td class="cmt">%s</td></tr>`,
 				html.EscapeString(ts(tr.TransitionedAt)),
 				html.EscapeString(byName),
-				html.EscapeString(action),
+				html.EscapeString(transitionName),
+				html.EscapeString(status),
 				html.EscapeString(tr.Comment),
 				html.EscapeString(tr.FeedbackComment),
 			)

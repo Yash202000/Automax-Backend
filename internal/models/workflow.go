@@ -366,9 +366,13 @@ type WorkflowUpdateRequest struct {
 }
 
 type WorkflowStateCreateRequest struct {
-	Name               string   `json:"name" validate:"required,min=2,max=100"`
-	NameAr             string   `json:"name_ar" validate:"max=100"`
-	Code               string   `json:"code" validate:"required,min=2,max=50"`
+	Name   string `json:"name" validate:"required,min=2,max=100"`
+	NameAr string `json:"name_ar" validate:"max=100"`
+	// Code is only used for non-EPM940 clients (e.g. VD2); EPM940 auto-generates
+	// the code (STE-######) and ignores whatever is sent here. Kept omitempty at
+	// the struct level so EPM940 callers can omit it — the handler enforces
+	// "required for VD2" manually since that rule is client-specific.
+	Code               string   `json:"code" validate:"omitempty,min=2,max=50"`
 	Description        string   `json:"description" validate:"max=500"`
 	DescriptionAr      string   `json:"description_ar" validate:"max=500"`
 	StateType          string   `json:"state_type" validate:"omitempty,oneof=initial normal terminal"`
@@ -429,9 +433,13 @@ type WorkflowStateUpdateRequest struct {
 }
 
 type WorkflowTransitionCreateRequest struct {
-	Name            string   `json:"name" validate:"required,min=2,max=100"`
-	NameAr          string   `json:"name_ar" validate:"max=100"`
-	Code            string   `json:"code" validate:"required,min=2,max=50"`
+	Name   string `json:"name" validate:"required,min=2,max=100"`
+	NameAr string `json:"name_ar" validate:"max=100"`
+	// Code is only used for non-EPM940 clients (e.g. VD2); EPM940 auto-generates
+	// the code (TRN-######) and ignores whatever is sent here. Kept omitempty at
+	// the struct level so EPM940 callers can omit it — the handler enforces
+	// "required for VD2" manually since that rule is client-specific.
+	Code            string   `json:"code" validate:"omitempty,min=2,max=50"`
 	Description     string   `json:"description" validate:"max=500"`
 	DescriptionAr   string   `json:"description_ar" validate:"max=500"`
 	FromStateID     string   `json:"from_state_id" validate:"required,uuid"`
