@@ -261,7 +261,8 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 	isStrict := len(strictDepartment) > 0 && strictDepartment[0]
 
 	// Build base query with search + join filters
-	base := r.db.WithContext(ctx).Model(&models.User{})
+	base := r.db.WithContext(ctx).Model(&models.User{}).
+		Where("LOWER(users.email) NOT LIKE 'ivr_email_%'")
 
 	if search != "" {
 		like := "%" + strings.ToLower(search) + "%"
