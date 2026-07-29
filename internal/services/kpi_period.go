@@ -3,8 +3,11 @@ package services
 import (
 	"fmt"
 	"regexp"
+	"strings"
+	"time"
 
 	"github.com/automax/backend/internal/models"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -69,4 +72,72 @@ func GetKPIReportingFrequency(db *gorm.DB, kpiCode, kpiType string) string {
 		}
 	}
 	return ""
+}
+
+var monthPeriodCodes = []string{"jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"}
+var monthLabels = []string{"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
+
+// CurrentPeriodCode derives the bare period-code label ("jan".."dec",
+// "q1".."q4", "h1"/"h2", "annual") that `now` falls into for a given KPI
+// reporting frequency — the same bare-label convention the frontend's period
+// pickers already use (see getPeriodOptionsByFrequency on the client).
+func CurrentPeriodCode(reportingFrequency string, now time.Time) string {
+	switch reportingFrequency {
+	case models.KPIFrequencyMonthly:
+		return monthPeriodCodes[int(now.Month())-1]
+	case models.KPIFrequencyQuarterly:
+		return fmt.Sprintf("q%d", (int(now.Month())-1)/3+1)
+	case models.KPIFrequencySemiAnnual:
+		if now.Month() <= 6 {
+			return "h1"
+		}
+		return "h2"
+	default:
+		return "annual"
+	}
+}
+
+// FormatPeriodLabel renders a bare period code + year as a human label (e.g.
+// "Jul 2026", "Q3 2026", "H2 2026", "Annual 2026"), mirroring the frontend's
+// formatPeriodLabel helper so the same period reads identically everywhere.
+func FormatPeriodLabel(periodCode string, year int) string {
+	code := strings.ToLower(periodCode)
+	for i, m := range monthPeriodCodes {
+		if m == code {
+			return fmt.Sprintf("%s %d", monthLabels[i], year)
+		}
+	}
+	switch code {
+	case "q1", "q2", "q3", "q4", "h1", "h2":
+		return fmt.Sprintf("%s %d", strings.ToUpper(code), year)
+	case "annual":
+		return fmt.Sprintf("Annual %d", year)
+	}
+	return fmt.Sprintf("%s %d", periodCode, year)
+}
+
+// GetEffectiveTarget finds the approved KpiAnnualTarget for a metric's KPI in
+// the current reporting period — the same period-matching lookup CreateEntry
+// already uses to snapshot a target onto a new entry — so a display (like the
+// Metric Card's Target tile) can show exactly the number a new entry
+// submitted right now would actually be measured against, instead of a
+// static metric-config value that can silently disagree with it. Returns
+// (nil, "") if no approved target exists for the current period, letting the
+// caller fall back to the metric's own configured target_value.
+func GetEffectiveTarget(db *gorm.DB, kpiCode, kpiType string, metricID uuid.UUID) (*float64, string) {
+	freq := GetKPIReportingFrequency(db, kpiCode, kpiType)
+	now := time.Now()
+	year := now.Year()
+	periodCode := CurrentPeriodCode(freq, now)
+
+	var target models.KpiAnnualTarget
+	err := db.Where(
+		"kpi_code = ? AND kpi_type = ? AND metric_id = ? AND target_year = ? AND period_code = ? AND target_status = 'approved'",
+		kpiCode, kpiType, metricID, year, periodCode,
+	).First(&target).Error
+	if err != nil {
+		return nil, ""
+	}
+	value := target.TargetValue
+	return &value, FormatPeriodLabel(periodCode, year)
 }

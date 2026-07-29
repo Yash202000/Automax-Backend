@@ -33,7 +33,15 @@ type KpiMetric struct {
 	CustomUnitLabel          string         `gorm:"size:255" json:"custom_unit_label"`
 	BaselineValue            float64        `gorm:"default:0" json:"baseline_value"`
 	CurrentValue             float64        `gorm:"default:0" json:"current_value"`
-	TargetValue              float64        `gorm:"not null" json:"target_value"`
+	// TargetValue is legacy/unused: achievement now only ever uses the
+	// current period's approved KpiAnnualTarget (see EffectiveTargetValue
+	// below) — a single timeless number here couldn't represent a target
+	// that's meant to progress period over period, and silently substituting
+	// it when no period target existed yet was misleading, not a sensible
+	// fallback. Column kept (not dropped) to avoid a destructive migration;
+	// it's no longer collected via the Metric Configuration form or read by
+	// any calculation/display.
+	TargetValue              float64        `gorm:"default:0" json:"-"`
 	Weight                   float64        `gorm:"default:1.0" json:"weight"`
 	Formula                  string         `gorm:"type:text" json:"formula"`
 	CalculationType          string         `gorm:"size:50;default:'Direct Value'" json:"calculation_type"`
@@ -63,6 +71,17 @@ type KpiMetric struct {
 	CreatedAt                time.Time      `json:"created_at"`
 	UpdatedAt                time.Time      `json:"updated_at"`
 	DeletedAt                gorm.DeletedAt `gorm:"index" json:"-"`
+
+	// EffectiveTargetValue/Period are computed, not stored — the current
+	// reporting period's APPROVED KpiAnnualTarget for this metric, if one
+	// exists. Nil means no approved target exists for the current period —
+	// callers should show that honestly ("No target set for this period"),
+	// not substitute an unrelated static number. Populated by handlers via
+	// services.GetEffectiveTarget so the Metric Card's Target tile shows the
+	// same number an entry submitted right now would actually be measured
+	// against.
+	EffectiveTargetValue  *float64 `gorm:"-" json:"effective_target_value,omitempty"`
+	EffectiveTargetPeriod string   `gorm:"-" json:"effective_target_period,omitempty"`
 }
 
 func (m *KpiMetric) BeforeCreate(tx *gorm.DB) error {
@@ -82,7 +101,6 @@ type KpiMetricRequest struct {
 	Unit                     string     `json:"unit"`
 	CustomUnitLabel          string     `json:"custom_unit_label"`
 	BaselineValue            float64    `json:"baseline_value"`
-	TargetValue              float64    `json:"target_value" validate:"required"`
 	Weight                   float64    `json:"weight"`
 	Formula                  string     `json:"formula"`
 	CalculationType          string     `json:"calculation_type"`

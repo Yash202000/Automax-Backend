@@ -219,6 +219,12 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			log.Printf("Warning: KPI period backfill migration failed: %v", err)
 		}
 
+		// Replace the broken kpi_annual_targets unique index (missing
+		// metric_id/target_year, not scoped past soft-deletes) with a correct one.
+		if err := migrations.MigrateKpiTargetUniqueIndex(migrationDB); err != nil {
+			log.Printf("Warning: KPI target unique index migration failed: %v", err)
+		}
+
 		// Enforce unique domain names (excluding soft-deleted records).
 		db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_domains_name_en ON domains(name_en) WHERE deleted_at IS NULL`)
 

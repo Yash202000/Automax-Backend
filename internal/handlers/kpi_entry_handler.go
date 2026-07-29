@@ -215,23 +215,29 @@ func (h *KpiEntryHandler) CreateEntry(c *fiber.Ctx) error {
 
 	item := req.ToModel(db, kpiID, kpiType, userID)
 
-	// REL-09: Look up matching approved target to populate TargetID and TargetValueSnapshot
+	// REL-09: Require a matching approved target for this exact KPI+metric+
+	// period before an entry can even be created — recording actuals with no
+	// target to measure them against just produces entries permanently stuck
+	// at "Not Calculable", which is more confusing than helpful. Also now
+	// scoped by metric_id (previously omitted here, same bug fixed on the
+	// Targets endpoints), so a different metric's approved target for the
+	// same KPI+period is never mistakenly attached to this one.
 	kpiCode, kpiErr := getKPICode(db, kpiType, kpiID)
-	if kpiErr == nil && kpiCode != "" {
-		var target models.KpiAnnualTarget
-		if err := db.Where("kpi_code = ? AND kpi_type = ? AND target_year = ? AND period_code = ? AND target_status = 'approved'",
-			kpiCode, kpiType, req.ReportingYear, req.PeriodCode,
-		).First(&target).Error; err == nil {
-			item.TargetID = &target.ID
-			item.TargetValueSnapshot = &target.TargetValue
-			item.ThresholdModeSnapshot = target.ThresholdMode
-		}
+	if kpiErr != nil || kpiCode == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "KPI not found")
 	}
+	var target models.KpiAnnualTarget
+	if err := db.Where("kpi_code = ? AND kpi_type = ? AND metric_id = ? AND target_year = ? AND period_code = ? AND target_status = 'approved'",
+		kpiCode, kpiType, mid, req.ReportingYear, req.PeriodCode,
+	).First(&target).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest,
+			fmt.Sprintf("No approved target exists for this metric in period %s/%d — create and approve a target first.", req.PeriodCode, req.ReportingYear))
+	}
+	item.TargetID = &target.ID
+	item.TargetValueSnapshot = &target.TargetValue
+	item.ThresholdModeSnapshot = target.ThresholdMode
 
-	// Compute achievement/variance/status now that TargetValueSnapshot is in
-	// its final form (metric-config fallback, possibly overwritten above by
-	// a real approved target) — previously this was never computed at all,
-	// so every entry's achievement_percentage stayed null forever.
+	// Compute achievement/variance/status now that TargetValueSnapshot is set.
 	item.ComputeAchievement()
 
 	if err := db.Create(item).Error; err != nil {
