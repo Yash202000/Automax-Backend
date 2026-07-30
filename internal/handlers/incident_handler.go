@@ -1517,8 +1517,12 @@ func (h *IncidentHandler) CreateComplaint(c *fiber.Ctx) error {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "source_incident_closed"))
 		}
 
-		if sourceIncident.CreatedAt.Add(30 * 24 * time.Hour).Before(time.Now()) {
+		if sourceIncident.CreatedAt.Add(3 * 30 * 24 * time.Hour).Before(time.Now()) {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "source_incident_too_old"))
+		}
+
+		if sourceIncident.ReporterPhone != req.ReporterPhone {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "reporter_phone_mismatch"))
 		}
 	}
 
