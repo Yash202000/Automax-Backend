@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -197,6 +198,9 @@ func (h *KpiCollaboratorHandler) UpdateAssignment(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
@@ -229,25 +233,39 @@ func (h *KpiCollaboratorHandler) UpdateAssignment(c *fiber.Ctx) error {
 		isActive = *req.IsActive
 	}
 
+	// Map-based Updates() bypasses the model's `serializer:json` handling for
+	// []string fields — GORM only runs the serializer on struct-based writes,
+	// so a raw Go slice reaches the driver here and gets encoded as a
+	// Postgres composite/record literal instead of JSON, which the `json`
+	// columns reject (SQLSTATE 42804). Marshal these fields to JSON text
+	// ourselves so the column always receives a valid JSON literal.
+	orgScopeJSON, _ := json.Marshal(req.OrganizationScope)
+	metricScopeIDsJSON, _ := json.Marshal(req.MetricScopeIDs)
+	periodScopePeriodsJSON, _ := json.Marshal(req.PeriodScopePeriods)
+	notificationPrefsJSON, _ := json.Marshal(req.NotificationPrefs)
+
 	updates := map[string]interface{}{
 		"user_category":        req.UserCategory,
 		"collaborator_type":    req.CollaboratorType,
-		"organization_scope":   req.OrganizationScope,
+		"organization_scope":   string(orgScopeJSON),
 		"metric_scope":         metricScope,
-		"metric_scope_ids":     req.MetricScopeIDs,
+		"metric_scope_ids":     string(metricScopeIDsJSON),
 		"period_scope":         periodScope,
 		"period_scope_year":    req.PeriodScopeYear,
-		"period_scope_periods": req.PeriodScopePeriods,
+		"period_scope_periods": string(periodScopePeriodsJSON),
 		"effective_from":       effectiveFrom,
 		"effective_to":         effectiveTo,
 		"is_active":            isActive,
 		"delegate_for_user_id": req.DelegateForUserID,
 		"delegation_reason":    req.DelegationReason,
-		"notification_prefs":   req.NotificationPrefs,
+		"notification_prefs":   string(notificationPrefsJSON),
 		"updated_by_id":        userID,
 	}
 
 	result := h.db.WithContext(c.UserContext()).Model(&item).Updates(updates)
+	if result.Error != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
+	}
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
