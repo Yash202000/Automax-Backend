@@ -180,22 +180,27 @@ func (h *CallLogHandler) ListCallLogs(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "user_not_authenticated"))
 	}
 
-	// Super admins may widen the scope with ?agent_id= or ?all=true. Both params
-	// are silently ignored for everyone else, who always stays scoped to their
-	// own calls.
+	// Super admins, and users granted call-logs:view_all, may widen the scope with
+	// ?agent_id= or ?all=true. Both params are silently ignored for everyone else,
+	// who always stays scoped to their own calls.
 	scope := "self"
 	perspectiveID := user.ID        // whose phone/ext drives direction + duration
 	filter.ParticipantID = &user.ID // whose calls are returned
 
-	if user.IsSuperAdmin {
-		switch {
-		case filter.AgentID != nil: // agent_id wins over all
-			filter.ParticipantID = filter.AgentID
-			perspectiveID = *filter.AgentID
-			scope = "agent"
-		case filter.All:
-			filter.ParticipantID = nil // unscoped: every call log
-			scope = "all"
+	// HasPermission short-circuits to true for super admins, so this covers both.
+	if filter.AgentID != nil || filter.All {
+		if user.HasPermission("call-logs:view_all") {
+			switch {
+			case filter.AgentID != nil: // agent_id wins over all
+				filter.ParticipantID = filter.AgentID
+				perspectiveID = *filter.AgentID
+				scope = "agent"
+			case filter.All:
+				filter.ParticipantID = nil // unscoped: every call log
+				scope = "all"
+			}
+		} else {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "insufficient_permissions"))
 		}
 	}
 

@@ -337,6 +337,10 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	if filter.TaskID != "" {
 		query = query.Where("NULLIF(custom_fields, '')::jsonb -> 'lookup:TASK ID' ->> 'value' ILIKE ?", "%"+filter.TaskID+"%")
 	}
+	// momra_ref searches the flat momra_incident_no key written by the EPM insert path.
+	if filter.MomraRef != "" {
+		query = query.Where("NULLIF(custom_fields, '')::jsonb ->> 'momra_incident_no' ILIKE ?", "%"+filter.MomraRef+"%")
+	}
 	// Flat custom_fields filters: cf=key:value (AND-ed)
 	for _, cf := range filter.CustomFieldFilters {
 		query = query.Where("NULLIF(custom_fields, '')::jsonb ->> ? ILIKE ?", cf.Key, "%"+cf.Value+"%")

@@ -632,6 +632,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Create Call Logs", Code: "call-logs:create", Module: "call-logs", Action: "create", Description: "Create call logs"},
 		{Name: "Update Call Logs", Code: "call-logs:update", Module: "call-logs", Action: "update", Description: "Update call logs"},
 		{Name: "Delete Call Logs", Code: "call-logs:delete", Module: "call-logs", Action: "delete", Description: "Delete call logs"},
+		{Name: "View All Call Logs", Code: "call-logs:view_all", Module: "call-logs", Action: "view_all", Description: "View call logs of other agents regardless of participation"},
 
 		// Lookup permissions
 		{Name: "View Lookups", Code: "lookups:view", Module: "lookups", Action: "view", Description: "View lookup categories and values"},
