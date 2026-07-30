@@ -16,8 +16,6 @@ import (
 	"gorm.io/gorm"
 )
 
-const feedbackTokenDuration = 72 * time.Hour
-
 type IncidentPublicFeedbackService interface {
 	Create(ctx context.Context, incidentID uuid.UUID, req *models.IncidentPublicFeedbackCreateRequest) (*models.IncidentPublicFeedbackResponse, error)
 	// Init validates a 3-part incident signed token, creates or finds the pending feedback record,
@@ -77,13 +75,13 @@ func (s *incidentPublicFeedbackService) Create(ctx context.Context, incidentID u
 		return nil, fmt.Errorf("failed to create public feedback: %w", err)
 	}
 
-	token := utils.GenerateFeedbackToken(f.ID.String(), incidentID.String(), feedbackTokenDuration)
+	token := utils.GenerateFeedbackToken(f.ID.String(), incidentID.String(), getFeedbackTokenDuration())
 
 	// Send SMS asynchronously — a delivery failure must not block the API response.
 	go func() {
 		smsBody := req.Message
 		if smsBody == "" {
-			link := utils.BuildFeedbackLink(ctx, incidentID.String(), f.ID.String(), feedbackTokenDuration)
+			link := utils.BuildFeedbackLink(ctx, incidentID.String(), f.ID.String(), getFeedbackTokenDuration())
 			smsBody = fmt.Sprintf("Please rate your experience. Submit your feedback here: %s", link)
 		}
 		result, err := s.notification.SendNotification(
@@ -135,7 +133,7 @@ func (s *incidentPublicFeedbackService) Init(ctx context.Context, incidentID uui
 		}
 	}
 
-	token := utils.GenerateFeedbackToken(f.ID.String(), incidentID.String(), feedbackTokenDuration)
+	token := utils.GenerateFeedbackToken(f.ID.String(), incidentID.String(), getFeedbackTokenDuration())
 	return &models.IncidentPublicFeedbackInitResponse{
 		FeedbackID:  f.ID,
 		SignedToken: token,
