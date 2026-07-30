@@ -75,13 +75,13 @@ func (s *incidentPublicFeedbackService) Create(ctx context.Context, incidentID u
 		return nil, fmt.Errorf("failed to create public feedback: %w", err)
 	}
 
-	token := utils.GenerateFeedbackToken(f.ID.String(), incidentID.String(), getFeedbackTokenDuration())
+	token := utils.GenerateFeedbackToken(f.ID.String(), incidentID.String(), GetFeedbackTokenDuration())
 
 	// Send SMS asynchronously — a delivery failure must not block the API response.
 	go func() {
 		smsBody := req.Message
 		if smsBody == "" {
-			link := utils.BuildFeedbackLink(ctx, incidentID.String(), f.ID.String(), getFeedbackTokenDuration())
+			link := utils.BuildFeedbackLink(ctx, incidentID.String(), f.ID.String(), GetFeedbackTokenDuration())
 			smsBody = fmt.Sprintf("Please rate your experience. Submit your feedback here: %s", link)
 		}
 		result, err := s.notification.SendNotification(
@@ -133,7 +133,7 @@ func (s *incidentPublicFeedbackService) Init(ctx context.Context, incidentID uui
 		}
 	}
 
-	token := utils.GenerateFeedbackToken(f.ID.String(), incidentID.String(), getFeedbackTokenDuration())
+	token := utils.GenerateFeedbackToken(f.ID.String(), incidentID.String(), GetFeedbackTokenDuration())
 	return &models.IncidentPublicFeedbackInitResponse{
 		FeedbackID:  f.ID,
 		SignedToken: token,

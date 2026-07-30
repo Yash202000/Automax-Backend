@@ -18,16 +18,16 @@ import (
 
 const smsFeedbackMaxRetries = 3
 
-// GetFeedbackTokenDuration returns the feedback link TTL from SMS_FEEDBACK_TOKEN_EXPIRY_HOURS,
-// defaulting to 24 hours if unset or invalid.
+// GetFeedbackTokenDuration returns the feedback link TTL from SMS_FEEDBACK_TOKEN_EXPIRY_MINUTES,
+// defaulting to 1440 minutes (24 hours) if unset or invalid.
 func GetFeedbackTokenDuration() time.Duration {
-	hours := 24
-	if v := os.Getenv("SMS_FEEDBACK_TOKEN_EXPIRY_HOURS"); v != "" {
+	minutes := 1440
+	if v := os.Getenv("SMS_FEEDBACK_TOKEN_EXPIRY_MINUTES"); v != "" {
 		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
-			hours = parsed
+			minutes = parsed
 		}
 	}
-	return time.Duration(hours) * time.Hour
+	return time.Duration(minutes) * time.Minute
 }
 
 // SmsFeedbackService processes deferred SMS feedback notifications.

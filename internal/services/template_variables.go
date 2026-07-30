@@ -125,7 +125,7 @@ func BuildIncidentVariables(
 			vars["feedback_url"] = fmt.Sprintf("%s/feedback/%s?signed_token=%s",
 				smsPortalBase, incident.ID.String(), incident.FeedbackID.String())
 		} else {
-			feedbackToken := pkgutils.GenerateIncidentToken(incident.ID.String(), getFeedbackTokenDuration())
+			feedbackToken := pkgutils.GenerateIncidentToken(incident.ID.String(), GetFeedbackTokenDuration())
 			vars["feedback_url"] = fmt.Sprintf("%s/feedback/%s?signed_token=%s",
 				smsPortalBase, incident.ID.String(), feedbackToken)
 		}
