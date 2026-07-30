@@ -116,8 +116,8 @@ func (a *KpiCollaboratorAssignment) BeforeCreate(tx *gorm.DB) error {
 
 type KpiCollaboratorAssignmentRequest struct {
 	UserID             uuid.UUID  `json:"user_id" validate:"required"`
-	UserCategory       string     `json:"user_category" validate:"required,oneof=Internal Employee External Consultant Contractor Service Provider System / Integration Account"`
-	CollaboratorType   string     `json:"collaborator_type" validate:"required,oneof=KPI Owner Data Contributor Data Submitter Reviewer Approver Viewer"`
+	UserCategory       string     `json:"user_category" validate:"required,oneof='Internal Employee' 'External Consultant' Contractor 'Service Provider' 'System / Integration Account'"`
+	CollaboratorType   string     `json:"collaborator_type" validate:"required,oneof='KPI Owner' 'Data Contributor' 'Data Submitter' Reviewer Approver Viewer"`
 	OrganizationScope  []string   `json:"organization_scope"`
 	MetricScope        string     `json:"metric_scope"`
 	MetricScopeIDs     []string   `json:"metric_scope_ids"`
