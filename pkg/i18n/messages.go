@@ -791,6 +791,7 @@ var messages = map[string][2]string{
 	"workflow_no_initial_state":            {"Workflow has no initial state configured", "سير العمل ليس لديه حالة ابتدائية مُعينة"},
 	"source_incident_closed":               {"Source incident is already closed", "البلاغ المصدر مغلق بالفعل"},
 	"source_incident_cannot_be_complaint":  {"Source incident cannot be a complaint", "لا يمكن أن يكون البلاغ المصدر شكوى"},
+	"source_incident_too_old":              {"Source incident is too old to be converted to a complaint", "البلاغ المصدر قديم جداً ليتم تحويله إلى شكوى"},
 	"no_permission_transition":             {"You do not have permission to execute this transition", "ليس لديك صلاحية تنفيذ هذا الانتقال"},
 	"only_assigned_user_transition":        {"Only the assigned user can perform this transition", "يستطيع المستخدم المعيّن فقط تنفيذ هذا الانتقال"},
 	"department_required_transition":       {"Department selection is required for this transition", "تحديد القسم مطلوب لهذا الانتقال"},

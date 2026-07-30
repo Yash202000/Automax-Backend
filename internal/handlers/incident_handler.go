@@ -1516,6 +1516,10 @@ func (h *IncidentHandler) CreateComplaint(c *fiber.Ctx) error {
 		if sourceIncident.CurrentState.Code == "closed" || sourceIncident.CurrentState.StateType == "terminal" {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "source_incident_closed"))
 		}
+
+		if sourceIncident.CreatedAt.Add(30 * 24 * time.Hour).Before(time.Now()) {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "source_incident_too_old"))
+		}
 	}
 
 	complaint, err := h.service.CreateComplaint(c.UserContext(), &req, userID)
