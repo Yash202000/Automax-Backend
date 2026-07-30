@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,8 +16,19 @@ import (
 	"github.com/google/uuid"
 )
 
-const smsFeedbackTokenDuration = 72 * time.Hour
 const smsFeedbackMaxRetries = 3
+
+// GetFeedbackTokenDuration returns the feedback link TTL from SMS_FEEDBACK_TOKEN_EXPIRY_MINUTES,
+// defaulting to 1440 minutes (24 hours) if unset or invalid.
+func GetFeedbackTokenDuration() time.Duration {
+	minutes := 1440
+	if v := os.Getenv("SMS_FEEDBACK_TOKEN_EXPIRY_MINUTES"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			minutes = parsed
+		}
+	}
+	return time.Duration(minutes) * time.Minute
+}
 
 // SmsFeedbackService processes deferred SMS feedback notifications.
 // On a final-close transition the SMS is not sent immediately; instead a pending
@@ -129,7 +141,7 @@ func (s *SmsFeedbackService) processOne(ctx context.Context, p *models.SmsFeedba
 		smsPortalBase = strings.TrimRight(os.Getenv("FRONTEND_URL"), "/")
 	}
 	if smsPortalBase != "" {
-		feedbackToken := pkgutils.GenerateFeedbackToken(p.FeedbackID.String(), p.IncidentID.String(), smsFeedbackTokenDuration)
+		feedbackToken := pkgutils.GenerateFeedbackToken(p.FeedbackID.String(), p.IncidentID.String(), GetFeedbackTokenDuration())
 		vars["feedback_url"] = fmt.Sprintf("%s/feedback/%s?signed_token=%s",
 			smsPortalBase, p.IncidentID.String(), url.QueryEscape(feedbackToken))
 		vars["feedback_link"] = fmt.Sprintf(`<a href="%s">تقييم الخدمة</a>`, vars["feedback_url"])
