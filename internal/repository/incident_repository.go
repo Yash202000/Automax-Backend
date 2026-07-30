@@ -979,6 +979,94 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 			q = q.Where("incidents.location_id IN ?", filter.LocationID)
 		}
 
+		// Extended list-table filters, kept in sync with List()'s filtering so
+		// stats reflect exactly what the incident list table shows.
+		if len(filter.CurrentStateID) > 0 {
+			q = q.Where("incidents.current_state_id IN ?", filter.CurrentStateID)
+		}
+		if filter.Priority != nil {
+			q = q.Where(`incidents.id IN (
+				SELECT ilv.incident_id FROM incident_lookup_values ilv
+				INNER JOIN lookup_values lv ON lv.id = ilv.lookup_value_id
+				INNER JOIN lookup_categories lc ON lc.id = lv.category_id
+				WHERE lc.code = 'PRIORITY' AND lv.sort_order = ?
+			)`, *filter.Priority)
+		}
+		if len(filter.ReporterID) > 0 {
+			q = q.Where("incidents.reporter_id IN ?", filter.ReporterID)
+		}
+		if filter.ReporterPhone != "" {
+			phone := filter.ReporterPhone
+			phoneWithPlus := "+" + phone
+			if strings.HasPrefix(phone, "+") {
+				phoneWithPlus = phone
+				phone = strings.TrimPrefix(phone, "+")
+			}
+			q = q.Where(
+				"incidents.reporter_phone IN (?, ?) OR incidents.reporter_id IN (SELECT id FROM users WHERE phone IN (?, ?) OR id IN (SELECT user_id FROM extension_assignments WHERE extension IN (?, ?)))",
+				phone, phoneWithPlus,
+				phone, phoneWithPlus,
+				phone, phoneWithPlus,
+			)
+		}
+		if filter.ReporterPhoneSearch != "" {
+			phone := filter.ReporterPhoneSearch
+			phoneWithPlus := "+" + phone
+			if strings.HasPrefix(phone, "+") {
+				phoneWithPlus = phone
+				phone = strings.TrimPrefix(phone, "+")
+			}
+			phonePattern := "%" + phone + "%"
+			phoneWithPlusPattern := "%" + phoneWithPlus + "%"
+			q = q.Where(
+				"incidents.reporter_phone ILIKE ? OR incidents.reporter_phone ILIKE ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone ILIKE ? OR phone ILIKE ? OR id IN (SELECT user_id FROM extension_assignments WHERE extension ILIKE ? OR extension ILIKE ?))",
+				phonePattern, phoneWithPlusPattern,
+				phonePattern, phoneWithPlusPattern,
+				phonePattern, phoneWithPlusPattern,
+			)
+		}
+		if filter.SLABreached != nil {
+			q = q.Where("incidents.sla_breached = ?", *filter.SLABreached)
+		}
+		if filter.Source != nil && *filter.Source != "" {
+			q = q.Where("LOWER(incidents.source) = LOWER(?)", *filter.Source)
+		}
+		if filter.ConvertedToRequest != nil {
+			if *filter.ConvertedToRequest {
+				q = q.Where("incidents.converted_request_id IS NOT NULL")
+			} else {
+				q = q.Where("incidents.converted_request_id IS NULL")
+			}
+		}
+		if filter.StartDate != nil {
+			q = q.Where("incidents.created_at >= ?", *filter.StartDate)
+		}
+		if filter.EndDate != nil {
+			q = q.Where("incidents.created_at <= ?", *filter.EndDate)
+		}
+		if filter.Search != "" {
+			searchPattern := "%" + filter.Search + "%"
+			q = q.Where("incidents.incident_number ILIKE ? OR incidents.title ILIKE ? OR incidents.description ILIKE ?", searchPattern, searchPattern, searchPattern)
+		}
+		if filter.TransitionID != nil || filter.FromStateID != nil || filter.ToStateID != nil {
+			subQuery := r.db.WithContext(ctx).
+				Table("incident_transition_histories ith").
+				Select("DISTINCT ith.incident_id").
+				Joins("JOIN workflow_transitions wt ON wt.id = ith.transition_id")
+
+			if filter.TransitionID != nil {
+				subQuery = subQuery.Where("wt.id = ?", *filter.TransitionID)
+			}
+			if filter.FromStateID != nil {
+				subQuery = subQuery.Where("wt.from_state_id = ?", *filter.FromStateID)
+			}
+			if filter.ToStateID != nil {
+				subQuery = subQuery.Where("wt.to_state_id = ?", *filter.ToStateID)
+			}
+
+			q = q.Where("incidents.id IN (?)", subQuery)
+		}
+
 		return q
 	}
 
