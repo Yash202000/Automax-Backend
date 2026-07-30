@@ -1762,6 +1762,12 @@ func (s *userService) UpdateUserCallStatus(ctx context.Context, extension string
 	if strings.EqualFold(status, "available") {
 		status = string(models.CallStatusOnline) // "online"
 	}
+	// Likewise the Cintrix widget's "away": a declared not-ready state, stored
+	// as 'busy' so it is visibly distinct from offline while staying out of
+	// FindMatchingOnline.
+	if strings.EqualFold(status, "away") {
+		status = string(models.CallStatusBusy) // "busy"
+	}
 
 	//Setup cache key
 	cacheKey := fmt.Sprintf("USER_CALL_STATUS:%s", extension)

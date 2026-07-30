@@ -560,6 +560,11 @@ func (h *UserHandler) UpdateUserCallStatus(c *fiber.Ctx) error {
 		"in_call":   true,
 		"online":    true,
 		"offline":   true,
+		// The embedded Cintrix CTI widget's third availability state. Accepted
+		// here so an agent who picks "Away" doesn't get a 400 and silently keep
+		// their previous (possibly routable) status.
+		"away": true,
+		"busy": true,
 	}
 	if !validStatuses[req.Status] {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "invalid_status", req.Status))
@@ -567,6 +572,9 @@ func (h *UserHandler) UpdateUserCallStatus(c *fiber.Ctx) error {
 
 	if strings.EqualFold(req.Status, "available") {
 		req.Status = string(models.CallStatusOnline) // "online"
+	}
+	if strings.EqualFold(req.Status, "away") {
+		req.Status = string(models.CallStatusBusy) // "busy" — not routable
 	}
 	// Call Service
 	resp, err := h.userService.UpdateUserCallStatus(c.UserContext(), userExt, req.Status)
