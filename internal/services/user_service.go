@@ -51,6 +51,7 @@ type UserService interface {
 	GetUserByEmail(ctx context.Context, email string) (*models.User, error)
 	GetUserByMobile(ctx context.Context, phone string) (*models.User, error)
 	GetUserByUsername(ctx context.Context, username string) (*models.User, error)
+	CheckExistingIdentifiers(ctx context.Context, emails, usernames, phones []string) (*models.ExistingUserIdentifiers, error)
 	FindMatchingUsers(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.UserResponse, error)
 	UpdateUserCallStatus(ctx context.Context, extension string, status string) (interface{}, error)
 	FindByExtension(ctx context.Context, extension string) (*models.User, error)
@@ -1922,6 +1923,21 @@ func (s *userService) GetUserByMobile(ctx context.Context, phone string) (*model
 }
 func (s *userService) GetUserByUsername(ctx context.Context, username string) (*models.User, error) {
 	return s.userRepo.FindByUsername(ctx, username)
+}
+
+// CheckExistingIdentifiers reports, in a single query, which of the supplied emails, usernames and
+// phones already belong to a user. Intended for bulk paths that would otherwise probe one row at a time.
+func (s *userService) CheckExistingIdentifiers(ctx context.Context, emails, usernames, phones []string) (*models.ExistingUserIdentifiers, error) {
+	rows, err := s.userRepo.FindExistingIdentifiers(ctx, emails, usernames, phones)
+	if err != nil {
+		return nil, err
+	}
+
+	existing := models.NewExistingUserIdentifiers(len(rows))
+	for _, row := range rows {
+		existing.Add(row.Email, row.Username, row.Phone)
+	}
+	return existing, nil
 }
 
 // syncDepartmentAttributesToUser automatically inherits classifications and locations from user's departments

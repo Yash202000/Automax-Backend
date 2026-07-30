@@ -28,6 +28,7 @@ type UserRepository interface {
 	ListByDepartment(ctx context.Context, departmentID uuid.UUID, page, limit int) ([]models.User, int64, error)
 	ExistsByEmail(ctx context.Context, email string) (bool, error)
 	ExistsByUsername(ctx context.Context, username string) (bool, error)
+	FindExistingIdentifiers(ctx context.Context, emails, usernames, phones []string) ([]models.UserIdentifier, error)
 	AssignRoles(ctx context.Context, userID uuid.UUID, roleIDs []uuid.UUID) error
 	AssignDepartments(ctx context.Context, userID uuid.UUID, departmentIDs []uuid.UUID) error
 	AssignLocations(ctx context.Context, userID uuid.UUID, locationIDs []uuid.UUID) error
@@ -447,6 +448,38 @@ func (r *userRepository) ExistsByUsername(ctx context.Context, username string) 
 	var count int64
 	err := r.db.WithContext(ctx).Model(&models.User{}).Where("username = ?", username).Count(&count).Error
 	return count > 0, err
+}
+
+// FindExistingIdentifiers returns the email/username/phone of every user matching any of the supplied
+// values. One query, three columns, no preloads - built for bulk-import duplicate pre-checks.
+// Emails are compared case-insensitively, like ExistsByEmail, so pass lower-cased emails.
+func (r *userRepository) FindExistingIdentifiers(ctx context.Context, emails, usernames, phones []string) ([]models.UserIdentifier, error) {
+	if len(emails) == 0 && len(usernames) == 0 && len(phones) == 0 {
+		return []models.UserIdentifier{}, nil
+	}
+
+	conditions := make([]string, 0, 3)
+	args := make([]interface{}, 0, 3)
+	if len(emails) > 0 {
+		conditions = append(conditions, "LOWER(email) IN ?")
+		args = append(args, emails)
+	}
+	if len(usernames) > 0 {
+		conditions = append(conditions, "username IN ?")
+		args = append(args, usernames)
+	}
+	if len(phones) > 0 {
+		conditions = append(conditions, "phone IN ?")
+		args = append(args, phones)
+	}
+
+	var identifiers []models.UserIdentifier
+	err := r.db.WithContext(ctx).
+		Model(&models.User{}).
+		Select("email", "username", "phone").
+		Where(strings.Join(conditions, " OR "), args...).
+		Find(&identifiers).Error
+	return identifiers, err
 }
 
 func (r *userRepository) AssignRoles(ctx context.Context, userID uuid.UUID, roleIDs []uuid.UUID) error {
