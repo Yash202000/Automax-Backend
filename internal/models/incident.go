@@ -589,7 +589,8 @@ type IncidentFilter struct {
 	TransitionID *uuid.UUID `query:"transition_id" json:"transition_id" validate:"omitempty,uuid"`
 	FromStateID  *uuid.UUID `query:"from_state_id" json:"from_state_id" validate:"omitempty"`
 	ToStateID    *uuid.UUID `query:"to_state_id" json:"to_state_id" validate:"omitempty"`
-	TaskID       string     `query:"task_id" json:"task_id" validate:"omitempty"` // filter by task ID in custom_fields
+	TaskID       string     `query:"task_id" json:"task_id" validate:"omitempty"`             // filter by task ID in custom_fields
+	MomraRef     string     `query:"momra_ref" json:"momra_ref" validate:"omitempty,max=100"` // filter by momra_incident_no in custom_fields
 	// CustomFieldFilters holds repeatable cf=key:value filters. Parsed manually in handler.
 	// Each filter does: custom_fields::jsonb ->> 'key' ILIKE '%value%'. Multiple are AND-ed.
 	CustomFieldFilters []CustomFieldFilter `json:"-"`
