@@ -790,6 +790,7 @@ var messages = map[string][2]string{
 	"incident_locked":                      {"Incident not found or locked by another transaction", "البلاغ غير موجود أو محجوز من عملية أخرى"},
 	"workflow_no_initial_state":            {"Workflow has no initial state configured", "سير العمل ليس لديه حالة ابتدائية مُعينة"},
 	"source_incident_closed":               {"Source incident is already closed", "البلاغ المصدر مغلق بالفعل"},
+	"source_incident_not_closed":           {"Source incident is not closed", "البلاغ المصدر غير مغلق"},
 	"source_incident_cannot_be_complaint":  {"Source incident cannot be a complaint", "لا يمكن أن يكون البلاغ المصدر شكوى"},
 	"source_incident_too_old":              {"Source incident is too old to be converted to a complaint", "البلاغ المصدر قديم جداً ليتم تحويله إلى شكوى"},
 	"reporter_phone_mismatch":              {"Reporter phone number does not match the source incident", "رقم هاتف المُبلغ لا يتطابق مع البلاغ المصدر"},
