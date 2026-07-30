@@ -1161,6 +1161,24 @@ func (h *IncidentHandler) GetStatsV2(c *fiber.Ctx) error {
 		filter.Limit = 20
 	}
 
+	// QueryParser cannot parse plain YYYY-MM-DD into *time.Time; do it manually
+	// (mirrors ListIncidents) so stats respect the same date-range filter as the list.
+	if startStr := c.Query("start_date"); startStr != "" {
+		if t, err := time.Parse("2006-01-02", startStr); err == nil {
+			filter.StartDate = &t
+		} else if t, err := time.Parse(time.RFC3339, startStr); err == nil {
+			filter.StartDate = &t
+		}
+	}
+	if endStr := c.Query("end_date"); endStr != "" {
+		if t, err := time.Parse("2006-01-02", endStr); err == nil {
+			endOfDay := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, t.Location())
+			filter.EndDate = &endOfDay
+		} else if t, err := time.Parse(time.RFC3339, endStr); err == nil {
+			filter.EndDate = &t
+		}
+	}
+
 	// Super admins: IsAdmin=true (no role-visibility restriction on WorkflowStats),
 	// except when RESTRICT_ADMIN_SCOPE=true, where super admins must also be scoped
 	// by classification/location like regular users.
