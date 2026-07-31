@@ -1554,7 +1554,7 @@ func (h *IncidentHandler) CreateComplaint(c *fiber.Ctx) error {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "reporter_phone_mismatch"))
 		}
 
-		if source.DuplicateComplaintExists {
+		if source.OpenComplaintExists {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "complaint_already_exists_for_source"))
 		}
 

@@ -1334,11 +1334,12 @@ type ComplaintSourceValidation struct {
 	ClassificationID *uuid.UUID `db:"classification_id"`
 	LocationID       *uuid.UUID `db:"location_id"`
 
-	// PhoneMatches compares the source incident's reporter phone against the caller's,
-	// ignoring formatting. DuplicateComplaintExists reports whether this source incident
-	// already has a complaint from the requested reporter phone.
-	PhoneMatches             bool `db:"phone_matches"`
-	DuplicateComplaintExists bool `db:"duplicate_complaint_exists"`
+	// PhoneMatches reports whether the source incident's reporter phone equals the requested
+	// one, ignoring formatting. OpenComplaintExists reports whether this source incident
+	// already has a complaint from that phone which is not yet closed — a closed complaint
+	// does not block a new one, so the reporter can complain again after resolution.
+	PhoneMatches        bool `db:"phone_matches"`
+	OpenComplaintExists bool `db:"open_complaint_exists"`
 }
 
 // IncidentReportData is a flat result for the main incident header/details section of the report.

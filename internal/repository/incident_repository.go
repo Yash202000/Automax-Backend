@@ -1690,6 +1690,11 @@ func (r *incidentRepository) IncrementEvaluationCount(ctx context.Context, id uu
 // value is deliberate — checking the match against the logged-in user's phone instead would let a
 // caller vary reporter_phone freely and file unlimited complaints on one incident.
 //
+// Only an unclosed prior complaint blocks: once the earlier one reaches the 'closed' state the
+// reporter may complain again about the same incident. A complaint whose state does not resolve
+// counts as open, so a broken state reference fails safe by blocking rather than letting a
+// duplicate through.
+//
 // Phone comparison is digits-only, because the same number is stored in several formats
 // (e.g. "+966 123456789" and "+966123456789"). The non-empty guard on the duplicate subquery is
 // required: without it a blank stored phone would normalise to the empty string and match every
@@ -1707,15 +1712,17 @@ func (r *incidentRepository) GetComplaintSourceValidation(ctx context.Context, s
 		       EXISTS (
 		           SELECT 1
 		           FROM incidents c
+		           LEFT JOIN workflow_states cws ON cws.id = c.current_state_id AND cws.deleted_at IS NULL
 		           WHERE c.source_incident_id = i.id
 		             AND c.record_type = 'complaint'
 		             AND c.deleted_at IS NULL
+		             AND COALESCE(cws.code, '') <> 'closed'
 		             AND regexp_replace(COALESCE(c.reporter_phone, ''), '[^0-9]', '', 'g') <> ''
 		             AND regexp_replace(COALESCE(c.reporter_phone, ''), '[^0-9]', '', 'g')
 		                 = regexp_replace(COALESCE(?, ''), '[^0-9]', '', 'g')
-		       ) AS duplicate_complaint_exists
+		       ) AS open_complaint_exists
 		FROM incidents i
-		LEFT JOIN workflow_states ws ON ws.id = i.current_state_id
+		LEFT JOIN workflow_states ws ON ws.id = i.current_state_id AND ws.deleted_at IS NULL
 		WHERE i.id = ?
 		  AND i.deleted_at IS NULL`
 
