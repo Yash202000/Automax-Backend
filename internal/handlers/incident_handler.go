@@ -1515,7 +1515,10 @@ func (h *IncidentHandler) CreateComplaint(c *fiber.Ctx) error {
 		})
 	}
 
-	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	user, ok := c.Locals(constants.ContextKeys.User).(*models.User)
+	if !ok || user == nil {
+		return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "unauthorized"))
+	}
 
 	if req.SourceIncidentID != nil {
 		incidentID, err := uuid.Parse(*req.SourceIncidentID)
@@ -1523,28 +1526,50 @@ func (h *IncidentHandler) CreateComplaint(c *fiber.Ctx) error {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_source_incident_id"))
 		}
 
-		// Validate that the source incident exists and is not a complaint
-		sourceIncident, err := h.service.GetIncident(c.UserContext(), incidentID)
+		// A source incident makes reporter_phone mandatory: it is the key the duplicate-complaint
+		// check below is keyed on, so a blank or malformed value would silently defeat that check.
+		// The struct tag enforces this too; repeating it here keeps the rule true for any caller
+		// that reaches this handler without the tag path.
+		if !validation.IsValidMobile(req.ReporterPhone) {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "reporter_phone_required_for_source"))
+		}
+
+		// One query covers every source-incident rule below, instead of a fully-preloaded read.
+		source, err := h.incidentRepo.GetComplaintSourceValidation(c.UserContext(), incidentID, req.ReporterPhone)
 		if err != nil {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "source_incident_not_found"))
 		}
-		if sourceIncident.RecordType == "complaint" {
+		if source.RecordType == "complaint" {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "source_incident_cannot_be_complaint"))
 		}
-		if sourceIncident.CurrentState.Code != "closed" {
+		if source.StateCode == nil || *source.StateCode != "closed" {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "source_incident_not_closed"))
 		}
 
-		if sourceIncident.CreatedAt.Add(3 * 30 * 24 * time.Hour).Before(time.Now()) {
+		if source.CreatedAt.Add(3 * 30 * 24 * time.Hour).Before(time.Now()) {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "source_incident_too_old"))
 		}
 
-		if sourceIncident.ReporterPhone != req.ReporterPhone {
+		if !source.PhoneMatches {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "reporter_phone_mismatch"))
 		}
+
+		if source.OpenComplaintExists {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "complaint_already_exists_for_source"))
+		}
+
+		if source.ClassificationID != nil && *source.ClassificationID != uuid.Nil {
+			req.ClassificationID = source.ClassificationID.String()
+		}
+
+		if source.LocationID != nil && *source.LocationID != uuid.Nil {
+			locationID := source.LocationID.String()
+			req.LocationID = &locationID
+		}
+
 	}
 
-	complaint, err := h.service.CreateComplaint(c.UserContext(), &req, userID)
+	complaint, err := h.service.CreateComplaint(c.UserContext(), &req, user.ID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
