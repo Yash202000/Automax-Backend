@@ -794,6 +794,8 @@ var messages = map[string][2]string{
 	"source_incident_cannot_be_complaint":  {"Source incident cannot be a complaint", "لا يمكن أن يكون البلاغ المصدر شكوى"},
 	"source_incident_too_old":              {"Source incident is too old to be converted to a complaint", "البلاغ المصدر قديم جداً ليتم تحويله إلى شكوى"},
 	"reporter_phone_mismatch":              {"Reporter phone number does not match the source incident", "رقم هاتف المُبلغ لا يتطابق مع البلاغ المصدر"},
+	"complaint_already_exists_for_source":  {"A complaint already exists for this incident from the same phone number", "توجد شكوى بالفعل لهذا البلاغ من نفس رقم الهاتف"},
+	"reporter_phone_required_for_source":   {"A valid reporter phone number is required when a source incident is provided", "رقم هاتف مُبلغ صالح مطلوب عند تحديد البلاغ المصدر"},
 	"insufficient_permissions":             {"Insufficient permissions to perform this action", "صلاحيات غير كافية لتنفيذ هذا الإجراء"},
 	"no_permission_transition":             {"You do not have permission to execute this transition", "ليس لديك صلاحية تنفيذ هذا الانتقال"},
 	"only_assigned_user_transition":        {"Only the assigned user can perform this transition", "يستطيع المستخدم المعيّن فقط تنفيذ هذا الانتقال"},
