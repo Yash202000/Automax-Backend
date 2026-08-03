@@ -1230,6 +1230,15 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		// Convert back to JSON
 		customFieldsBytes, err := json.Marshal(customFields)
 		if err == nil {
+			// Only audit when the merged result actually differs - the merge above is additive, so
+			// re-submitting identical values is a no-op and must not produce a revision.
+			if string(customFieldsBytes) != incident.CustomFields {
+				changes = append(changes, models.IncidentFieldChange{
+					FieldName:  "custom_fields",
+					FieldLabel: "Custom Fields",
+				})
+				descriptions = append(descriptions, "Custom fields updated")
+			}
 			incident.CustomFields = string(customFieldsBytes)
 		}
 	}
@@ -1244,11 +1253,36 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 
 	// Parse optional UUIDs
 	if req.ClassificationID != nil {
+		oldName := ""
+		if incident.Classification != nil {
+			oldName = incident.Classification.Name
+		} else if incident.ClassificationID != nil {
+			oldName = incident.ClassificationID.String()
+		}
 		if *req.ClassificationID == "" {
+			if incident.ClassificationID != nil {
+				changes = append(changes, models.IncidentFieldChange{
+					FieldName:  "classification_id",
+					FieldLabel: "Classification",
+					OldValue:   &oldName,
+					NewValue:   nil,
+				})
+				descriptions = append(descriptions, fmt.Sprintf("Classification cleared (was %s)", oldName))
+			}
 			incident.ClassificationID = nil
 		} else {
 			classID, err := uuid.Parse(*req.ClassificationID)
 			if err == nil {
+				if incident.ClassificationID == nil || *incident.ClassificationID != classID {
+					newVal := *req.ClassificationID
+					changes = append(changes, models.IncidentFieldChange{
+						FieldName:  "classification_id",
+						FieldLabel: "Classification",
+						OldValue:   &oldName,
+						NewValue:   &newVal,
+					})
+					descriptions = append(descriptions, fmt.Sprintf("Classification changed from %s", oldName))
+				}
 				incident.ClassificationID = &classID
 			}
 		}
@@ -1290,22 +1324,72 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	}
 
 	if req.DepartmentID != nil {
+		oldName := ""
+		if incident.Department != nil {
+			oldName = incident.Department.Name
+		} else if incident.DepartmentID != nil {
+			oldName = incident.DepartmentID.String()
+		}
 		if *req.DepartmentID == "" {
+			if incident.DepartmentID != nil {
+				changes = append(changes, models.IncidentFieldChange{
+					FieldName:  "department_id",
+					FieldLabel: "Department",
+					OldValue:   &oldName,
+					NewValue:   nil,
+				})
+				descriptions = append(descriptions, fmt.Sprintf("Department cleared (was %s)", oldName))
+			}
 			incident.DepartmentID = nil
 		} else {
 			deptID, err := uuid.Parse(*req.DepartmentID)
 			if err == nil {
+				if incident.DepartmentID == nil || *incident.DepartmentID != deptID {
+					newVal := *req.DepartmentID
+					changes = append(changes, models.IncidentFieldChange{
+						FieldName:  "department_id",
+						FieldLabel: "Department",
+						OldValue:   &oldName,
+						NewValue:   &newVal,
+					})
+					descriptions = append(descriptions, fmt.Sprintf("Department changed from %s", oldName))
+				}
 				incident.DepartmentID = &deptID
 			}
 		}
 	}
 
 	if req.LocationID != nil {
+		oldName := ""
+		if incident.Location != nil {
+			oldName = incident.Location.Name
+		} else if incident.LocationID != nil {
+			oldName = incident.LocationID.String()
+		}
 		if *req.LocationID == "" {
+			if incident.LocationID != nil {
+				changes = append(changes, models.IncidentFieldChange{
+					FieldName:  "location_id",
+					FieldLabel: "Location",
+					OldValue:   &oldName,
+					NewValue:   nil,
+				})
+				descriptions = append(descriptions, fmt.Sprintf("Location cleared (was %s)", oldName))
+			}
 			incident.LocationID = nil
 		} else {
 			locID, err := uuid.Parse(*req.LocationID)
 			if err == nil {
+				if incident.LocationID == nil || *incident.LocationID != locID {
+					newVal := *req.LocationID
+					changes = append(changes, models.IncidentFieldChange{
+						FieldName:  "location_id",
+						FieldLabel: "Location",
+						OldValue:   &oldName,
+						NewValue:   &newVal,
+					})
+					descriptions = append(descriptions, fmt.Sprintf("Location changed from %s", oldName))
+				}
 				incident.LocationID = &locID
 			}
 		}
@@ -1334,28 +1418,59 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		incident.Longitude = req.Longitude
 	}
 
-	if req.Address != "" {
-		incident.Address = req.Address
-	}
-	if req.City != "" {
-		incident.City = req.City
-	}
-	if req.State != "" {
-		incident.State = req.State
-	}
-	if req.Country != "" {
-		incident.Country = req.Country
-	}
-	if req.PostalCode != "" {
-		incident.PostalCode = req.PostalCode
+	// trackAddressField records an address-component edit. These were persisted without any
+	// revision entry, so an address-only edit produced no audit row - and was rejected outright by
+	// the len(changes)==0 guard below.
+	trackAddressField := func(name, label, newValue string, target *string) {
+		if newValue == "" || newValue == *target {
+			return
+		}
+		oldVal := *target
+		changes = append(changes, models.IncidentFieldChange{
+			FieldName:  name,
+			FieldLabel: label,
+			OldValue:   &oldVal,
+			NewValue:   &newValue,
+		})
+		descriptions = append(descriptions, fmt.Sprintf("%s changed from %s to %s", label, oldVal, newValue))
+		*target = newValue
 	}
 
+	trackAddressField("address", "Address", req.Address, &incident.Address)
+	trackAddressField("city", "City", req.City, &incident.City)
+	trackAddressField("state", "State", req.State, &incident.State)
+	trackAddressField("country", "Country", req.Country, &incident.Country)
+	trackAddressField("postal_code", "Postal Code", req.PostalCode, &incident.PostalCode)
+
 	if req.DueDate != nil {
+		oldVal := ""
+		if incident.DueDate != nil {
+			oldVal = incident.DueDate.Format(time.RFC3339)
+		}
 		if *req.DueDate == "" {
+			if incident.DueDate != nil {
+				changes = append(changes, models.IncidentFieldChange{
+					FieldName:  "due_date",
+					FieldLabel: "Due Date",
+					OldValue:   &oldVal,
+					NewValue:   nil,
+				})
+				descriptions = append(descriptions, fmt.Sprintf("Due Date cleared (was %s)", oldVal))
+			}
 			incident.DueDate = nil
 		} else {
 			dueDate, err := time.Parse(time.RFC3339, *req.DueDate)
 			if err == nil {
+				if incident.DueDate == nil || !incident.DueDate.Equal(dueDate) {
+					newVal := dueDate.Format(time.RFC3339)
+					changes = append(changes, models.IncidentFieldChange{
+						FieldName:  "due_date",
+						FieldLabel: "Due Date",
+						OldValue:   &oldVal,
+						NewValue:   &newVal,
+					})
+					descriptions = append(descriptions, fmt.Sprintf("Due Date changed from %s to %s", oldVal, newVal))
+				}
 				incident.DueDate = &dueDate
 			}
 		}

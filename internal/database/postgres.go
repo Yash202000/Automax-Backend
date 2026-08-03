@@ -279,6 +279,11 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_notification_templates_action_type ON notification_templates(action_type)")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_notification_templates_transition_id ON notification_templates(transition_id)")
 
+	// First Response Time is computed on read: the incident report query scans incident_revisions
+	// per incident to find the earliest qualifying staff action. This composite index serves that
+	// DISTINCT ON directly; without it the query degrades to a full scan as revisions accumulate.
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_incident_revisions_frt ON incident_revisions (incident_id, created_at, revision_number) INCLUDE (action_type, performed_by_id)`)
+
 	// Bilingual redesign: add new columns, migrate existing data, drop old single-language columns.
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS subject_en TEXT")
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS body_en    TEXT")

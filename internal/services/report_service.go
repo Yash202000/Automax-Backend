@@ -1561,6 +1561,19 @@ func (s *reportService) GetDataSources(ctx context.Context) []models.DataSourceI
 				{Field: "updated_at", Label: "Updated At", Type: "date", Filterable: true, Sortable: true},
 				{Field: "resolved_at", Label: "Resolved At", Type: "date", Filterable: true, Sortable: true},
 				{Field: "closed_at", Label: "Closed At", Type: "date", Filterable: true, Sortable: true},
+				// First Response Time. Derived from the incident_revisions audit trail at read
+				// time, so it can never drift from it. first_responder_name and
+				// responded_by_creator are projection-only, hence not filterable/sortable.
+				{Field: "first_response_at", Label: "First Response At", Type: "date", Filterable: true, Sortable: true},
+				{Field: "first_response_minutes", Label: "First Response Time (Minutes)", Type: "number", Filterable: true, Sortable: true},
+				{Field: "first_response_action", Label: "First Response Action", Type: "string", Filterable: true, Sortable: true},
+				{Field: "first_response_description", Label: "First Response Description", Type: "string", Filterable: true, Sortable: false},
+				{Field: "first_responder_username", Label: "First Responding User", Type: "string", Filterable: true, Sortable: true},
+				{Field: "first_responder_name", Label: "First Responding User (Name)", Type: "string", Filterable: false, Sortable: false},
+				{Field: "responded_by_creator", Label: "Responded By Creator", Type: "boolean", Filterable: false, Sortable: false},
+				// Resolution and closure elapsed time, for comparison against response time.
+				{Field: "resolution_minutes", Label: "Resolution Time (Minutes)", Type: "number", Filterable: true, Sortable: true},
+				{Field: "closure_minutes", Label: "Closure Time (Minutes)", Type: "number", Filterable: true, Sortable: true},
 			},
 		},
 		{
