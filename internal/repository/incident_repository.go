@@ -208,6 +208,33 @@ func (r *incidentRepository) FindByIDs(ctx context.Context, ids []uuid.UUID) ([]
 	return incidents, err
 }
 
+// normalizeStateCodes trims and lower-cases incoming workflow-state codes, dropping blanks.
+// Comparison is case-insensitive because workflow_states carries inconsistent casing - both 'cl'
+// and 'Cl' exist across different workflows - so an exact match would silently return incomplete
+// results for those states.
+func normalizeStateCodes(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, c := range in {
+		if c = strings.TrimSpace(c); c != "" {
+			out = append(out, strings.ToLower(c))
+		}
+	}
+	return out
+}
+
+// stateCodeSubquery matches incidents whose current state carries one of the given codes. Written as
+// an IN-subquery rather than a JOIN on purpose: List shares one *gorm.DB between Count and Find, and
+// several stats queries already join workflow_states, so an added join would either duplicate theirs
+// or change the count.
+//
+// Soft-deleted states are deliberately NOT excluded. Live incidents do sit in soft-deleted states
+// (6 of them today, across 2 states, including a deleted 'new'), and an incident's current state is
+// that state whether or not an admin has since removed it. Filtering them out would make those
+// incidents unmatchable by any code, and would also make this filter behave differently from
+// `current_state_id IN ?`, which matches by id regardless of state deletion.
+const stateCodeSubquery = `current_state_id IN (
+	SELECT id FROM workflow_states WHERE LOWER(code) IN ?)`
+
 func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFilter) ([]models.Incident, int64, error) {
 	var incidents []models.Incident
 	var total int64
@@ -220,6 +247,9 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	}
 	if len(filter.CurrentStateID) != 0 {
 		query = query.Where("current_state_id IN ?", filter.CurrentStateID)
+	}
+	if codes := normalizeStateCodes(filter.CurrentStateCode); len(codes) != 0 {
+		query = query.Where(stateCodeSubquery, codes)
 	}
 	if len(filter.ClassificationID) != 0 {
 		query = query.Where("classification_id IN ?", filter.ClassificationID)
@@ -987,6 +1017,9 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 		// stats reflect exactly what the incident list table shows.
 		if len(filter.CurrentStateID) > 0 {
 			q = q.Where("incidents.current_state_id IN ?", filter.CurrentStateID)
+		}
+		if codes := normalizeStateCodes(filter.CurrentStateCode); len(codes) != 0 {
+			q = q.Where("incidents."+stateCodeSubquery, codes)
 		}
 		if filter.Priority != nil {
 			q = q.Where(`incidents.id IN (

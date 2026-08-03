@@ -567,6 +567,7 @@ type IncidentFilter struct {
 	Search              string     `query:"search" json:"search" validate:"omitempty"`
 	WorkflowID          []string   `query:"workflow_id" json:"workflow_id" validate:"omitempty,dive,uuid"`
 	CurrentStateID      []string   `query:"current_state_id" json:"current_state_id" validate:"omitempty,dive,uuid"`
+	CurrentStateCode    []string   `query:"current_state_code" json:"current_state_code" validate:"omitempty,dive,max=50"` // matches every workflow's state with this code; see normalizeStateCodes
 	ClassificationID    []string   `query:"classification_id" json:"classification_id" validate:"omitempty,dive,uuid"`
 	Priority            *int       `query:"priority" json:"priority" validate:"omitempty,min=1,max=5"`
 	AssigneeID          []string   `query:"assignee_id" json:"assignee_id" validate:"omitempty,dive,uuid"`
