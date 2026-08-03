@@ -141,6 +141,26 @@ func (h *CallLogHandler) DeleteCallLog(c *fiber.Ctx) error {
 	})
 }
 
+// resolveScope decides call-log visibility from the caller's permissions.
+// Holders of call-logs:view-all (incl. super admins) see all calls, and may
+// filter to one agent via userIDParam. Everyone else is locked to their own
+// calls regardless of userIDParam.
+func resolveScope(user *models.User, userIDParam string) (*uuid.UUID, bool, error) {
+	viewAll := user.IsSuperAdmin || user.HasPermission("call-logs:view-all")
+	if !viewAll {
+		id := user.ID
+		return &id, false, nil
+	}
+	if userIDParam != "" {
+		id, err := uuid.Parse(userIDParam)
+		if err != nil {
+			return nil, false, err
+		}
+		return &id, true, nil
+	}
+	return nil, true, nil
+}
+
 // ListCallLogs handles GET /admin/call-logs
 func (h *CallLogHandler) ListCallLogs(c *fiber.Ctx) error {
 	var filter models.CallLogFilter
@@ -163,14 +183,18 @@ func (h *CallLogHandler) ListCallLogs(c *fiber.Ctx) error {
 		filter.Page = 1
 	}
 
-	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-	if !ok {
+	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
+	if user == nil {
 		return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "user_not_authenticated"))
 	}
+	pid, viewAll, err := resolveScope(user, c.Query("user_id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_query_parameters"))
+	}
+	filter.ParticipantID = pid
+	filter.ViewAll = viewAll
 
-	filter.ParticipantID = &userID
-
-	items, total, err := h.service.ListCallLogsSummary(c.UserContext(), &filter, userID)
+	items, total, err := h.service.ListCallLogsSummary(c.UserContext(), &filter, user.ID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}

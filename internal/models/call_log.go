@@ -216,6 +216,10 @@ type CallLogFilter struct {
 	ParticipantID *uuid.UUID `json:"participant_id" validate:"omitempty,uuid4"`
 	Page          int        `json:"page" validate:"omitempty,gte=1,lte=1000"`
 	Limit         int        `json:"limit" validate:"omitempty,gte=10,lte=100"`
+	// ViewAll indicates the caller holds call-logs:view-all (or is a super
+	// admin), resolved server-side by resolveScope. Never bound from request
+	// input.
+	ViewAll bool `json:"-"`
 }
 
 // CallLogStats represents statistics for call logs
