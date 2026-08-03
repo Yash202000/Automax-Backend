@@ -27,6 +27,7 @@ type CallLogRepository interface {
 	FindParticipant(ctx context.Context, callLogID uuid.UUID, phone string) (*models.CallParticipant, error)
 	UpdateParticipant(ctx context.Context, p *models.CallParticipant) error
 	UpdateParticipantsLeftAt(ctx context.Context, callLogID uuid.UUID, leftAt time.Time) error
+	UpdateParticipantJoin(ctx context.Context, callLogID uuid.UUID, phone, joinStatus string, joinedAt *time.Time) error
 	CreateAttachment(ctx context.Context, attachment *models.CallLogAttachment) error
 	FindAttachmentByID(ctx context.Context, id uuid.UUID) (*models.CallLogAttachment, error)
 }
@@ -302,6 +303,15 @@ func (r *callLogRepository) UpdateParticipantsLeftAt(ctx context.Context, callLo
 		Where("call_log_id = ? AND join_status = ?", callLogID, "joined").
 		Update("left_at", leftAt).
 		Error
+}
+
+// UpdateParticipantJoin marks a participant (by call_log_id + phone) joined at
+// the given time. Idempotent: re-running with the same values is a no-op write.
+func (r *callLogRepository) UpdateParticipantJoin(ctx context.Context, callLogID uuid.UUID, phone, joinStatus string, joinedAt *time.Time) error {
+	return r.db.WithContext(ctx).
+		Model(&models.CallParticipant{}).
+		Where("call_log_id = ? AND phone_number = ?", callLogID, phone).
+		Updates(map[string]interface{}{"join_status": joinStatus, "joined_at": joinedAt}).Error
 }
 
 // Attachments
