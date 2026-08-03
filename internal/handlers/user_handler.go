@@ -732,6 +732,20 @@ func formatValidationErrors(validationErrors map[string]string) string {
 	return strings.Join(parts, "; ")
 }
 
+// importRowLabel identifies a row in the Import error list. Email is the natural identifier, but a
+// row can fail precisely because its email is blank, so fall back to the username and then to the
+// row's 1-based position in the file - an error nobody can trace back to a row is not actionable.
+func importRowLabel(email, username string, index int) string {
+	switch {
+	case email != "":
+		return email
+	case username != "":
+		return username
+	default:
+		return "row " + strconv.Itoa(index+1)
+	}
+}
+
 // Import imports users from JSON
 func (h *UserHandler) Import(c *fiber.Ctx) error {
 	file, err := c.FormFile("file")
@@ -802,32 +816,8 @@ func (h *UserHandler) Import(c *fiber.Ctx) error {
 	errors := []string{}
 
 	// Import all users
-	for _, data := range importData {
-		if existing.HasEmail(data.Email) {
-			skipped++
-			errors = append(errors, data.Email+" - User already exists with this email, skipped")
-			continue
-		}
-
-		if existing.HasUsername(data.Username) {
-			skipped++
-			errors = append(errors, data.Username+" - User already exists with this username, skipped")
-			continue
-		}
-
-		// Phone is optional, so a malformed or already-taken number is dropped and the user is
-		// imported without it - never lose a whole row over an optional field.
-		phone := data.Phone
-		switch {
-		case phone == "":
-			// nothing to check
-		case !validation.IsValidMobile(phone):
-			errors = append(errors, data.Email+" - Phone "+phone+" is not a valid mobile number, imported without phone")
-			phone = ""
-		case existing.HasPhone(phone):
-			errors = append(errors, data.Email+" - Phone "+phone+" already in use, imported without phone")
-			phone = ""
-		}
+	for i, data := range importData {
+		label := importRowLabel(data.Email, data.Username, i)
 
 		req := &models.UserRegisterRequest{
 			Username:  data.Username,
@@ -835,7 +825,7 @@ func (h *UserHandler) Import(c *fiber.Ctx) error {
 			Password:  defaultImportPassword,
 			FirstName: data.FirstName,
 			LastName:  data.LastName,
-			Phone:     phone,
+			Phone:     data.Phone,
 			// Extension: data.Extension,
 			// DepartmentID:      data.DepartmentID,
 			// LocationID:        data.LocationID,
@@ -845,21 +835,59 @@ func (h *UserHandler) Import(c *fiber.Ctx) error {
 			// ClassificationIDs: parseImportUUIDs(data.ClassificationIDs),
 		}
 
+		// Import is deliberately stricter than UserRegisterRequest, which tags Phone `omitempty`:
+		// every imported row must carry a valid mobile number, so a blank one fails the row here
+		// rather than passing the struct tags. IsValidMobile is the same function backing the
+		// `mobile` tag, so checking it directly cannot diverge from what Register will accept - it
+		// just lets the message name the number that was rejected.
+		switch {
+		case data.Phone == "":
+			skipped++
+			errors = append(errors, label+" - Phone is required.")
+			continue
+		case !validation.IsValidMobile(data.Phone):
+			skipped++
+			errors = append(errors, label+" - Phone "+data.Phone+" is not a valid mobile number.")
+			continue
+		}
+
+		// Format is checked before the duplicate lookups: a malformed email that happens to collide
+		// with an existing user has to be reported as malformed, not as "already exists". The struct
+		// tags own the email and username rules, so an import accepts exactly what
+		// POST /admin/users accepts.
 		if validationErrors := validation.ValidateStruct(c.UserContext(), req); len(validationErrors) != 0 {
 			skipped++
-			errors = append(errors, data.Email+" - "+formatValidationErrors(validationErrors))
+			errors = append(errors, label+" - "+formatValidationErrors(validationErrors))
+			continue
+		}
+
+		if existing.HasEmail(data.Email) {
+			skipped++
+			errors = append(errors, label+" - User already exists with this email, skipped")
+			continue
+		}
+
+		if existing.HasUsername(data.Username) {
+			skipped++
+			errors = append(errors, label+" - User already exists with this username, skipped")
+			continue
+		}
+
+		if existing.HasPhone(data.Phone) {
+			skipped++
+			errors = append(errors, label+" - Phone "+data.Phone+" already in use.")
 			continue
 		}
 
 		// Register user
 		if _, err := h.userService.Register(c.UserContext(), req); err != nil {
 			skipped++
-			errors = append(errors, data.Email+" - "+err.Error())
+			errors = append(errors, label+" - "+err.Error())
 			continue
 		}
 
 		// Claim these identifiers so a later row in the same file cannot reuse them
-		existing.Add(data.Email, data.Username, phone)
+		existing.Add(data.Email, data.Username, data.Phone)
 		imported++
 	}
 
