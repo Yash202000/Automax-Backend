@@ -359,7 +359,7 @@ func (s *reportService) PreviewReport(ctx context.Context, req *models.ReportCre
 }
 
 func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExportRequest) ([]byte, string, string, error) {
-	const exportLimit = 10000
+	const exportLimit = int(math.MaxInt32)
 	data, _, err := s.dispatchQuery(ctx,
 		req.DataSource, req.Filters, firstSorting(req.Sorting), 1, exportLimit,
 	)
