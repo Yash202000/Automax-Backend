@@ -122,6 +122,11 @@ func (h *CintrixWebhookHandler) HandleCallEvent(c *fiber.Ctx) error {
 		startAt = payload.EndedAt
 	}
 
+	callerName := ""
+	if payload.Contact != nil {
+		callerName = payload.Contact.Name
+	}
+
 	existing, err := h.callLogRepo.FindByCallUUID(ctx, payload.CallUuid)
 	if err != nil && err != gorm.ErrRecordNotFound {
 		log.Printf("[cintrix-webhook] lookup failed for call_uuid %s: %v", payload.CallUuid, err)
@@ -136,7 +141,7 @@ func (h *CintrixWebhookHandler) HandleCallEvent(c *fiber.Ctx) error {
 			CreatedBy: agentUserID,
 			CallUuid:  payload.CallUuid,
 			CallType:  "cintrix",
-			Status:    payload.Outcome,
+			Status:    normalizeOutcome(payload.Outcome),
 			StartAt:   startAt,
 			EndAt:     payload.EndedAt,
 			Meta:      meta,
@@ -147,13 +152,16 @@ func (h *CintrixWebhookHandler) HandleCallEvent(c *fiber.Ctx) error {
 			participants = append(participants, &models.CallParticipant{
 				PhoneNumber: payload.CallerNumber,
 				Role:        "initiator",
+				DisplayName: callerName,
 			})
 		}
 		if agentIdentifier != "" {
-			participants = append(participants, &models.CallParticipant{
-				PhoneNumber: agentIdentifier,
-				Role:        "recipient",
-			})
+			rp := &models.CallParticipant{PhoneNumber: agentIdentifier, Role: "recipient"}
+			if payload.Event == "call.answered" && payload.AnsweredAt != nil {
+				rp.JoinStatus = "joined"
+				rp.JoinedAt = payload.AnsweredAt
+			}
+			participants = append(participants, rp)
 		}
 
 		if err := h.callLogRepo.CreateWithParticipants(ctx, callLog, participants); err != nil {
@@ -174,7 +182,7 @@ func (h *CintrixWebhookHandler) HandleCallEvent(c *fiber.Ctx) error {
 		fields["created_by"] = agentUserID
 	}
 	if payload.Outcome != "" {
-		fields["status"] = payload.Outcome
+		fields["status"] = normalizeOutcome(payload.Outcome)
 	}
 	if payload.EndedAt != nil {
 		fields["end_at"] = payload.EndedAt
@@ -197,6 +205,7 @@ func (h *CintrixWebhookHandler) HandleCallEvent(c *fiber.Ctx) error {
 				CallLogID:   existing.ID,
 				PhoneNumber: payload.CallerNumber,
 				Role:        "initiator",
+				DisplayName: callerName,
 			}); cerr != nil {
 				log.Printf("[cintrix-webhook] failed to add caller participant for %s: %v", payload.CallUuid, cerr)
 			}
@@ -215,6 +224,19 @@ func (h *CintrixWebhookHandler) HandleCallEvent(c *fiber.Ctx) error {
 			}
 		} else if err != nil {
 			log.Printf("[cintrix-webhook] agent participant lookup failed for %s: %v", payload.CallUuid, err)
+		}
+	}
+
+	// Join/leave fields: event ordering isn't guaranteed for fire-and-forget
+	// pushes, so handle either call.answered or call.ended arriving first.
+	if payload.Event == "call.answered" && payload.AnsweredAt != nil && agentIdentifier != "" {
+		if err := h.callLogRepo.UpdateParticipantJoin(ctx, existing.ID, agentIdentifier, "joined", payload.AnsweredAt); err != nil {
+			log.Printf("[cintrix-webhook] join update failed for %s: %v", payload.CallUuid, err)
+		}
+	}
+	if payload.Event == "call.ended" && payload.EndedAt != nil {
+		if err := h.callLogRepo.UpdateParticipantsLeftAt(ctx, existing.ID, *payload.EndedAt); err != nil {
+			log.Printf("[cintrix-webhook] left_at update failed for %s: %v", payload.CallUuid, err)
 		}
 	}
 

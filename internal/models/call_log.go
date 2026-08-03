@@ -55,8 +55,9 @@ type CallParticipant struct {
 	ID          uuid.UUID  `gorm:"type:uuid;primary_key" json:"id"`
 	CallLogID   uuid.UUID  `gorm:"type:uuid;index" json:"call_log_id"`
 	PhoneNumber string     `gorm:"size:50;not null" json:"phone_number"`
-	Role        string     `gorm:"size:20" json:"role"`        // "initiator", "recipient", "participant"
-	JoinStatus  string     `gorm:"size:20" json:"join_status"` // "invited", "joined", "declined", "missed"
+	Role        string     `gorm:"size:20" json:"role"`                    // "initiator", "recipient", "participant"
+	DisplayName string     `gorm:"size:255" json:"display_name,omitempty"` // caller/contact name from the CTI payload
+	JoinStatus  string     `gorm:"size:20" json:"join_status"`             // "invited", "joined", "declined", "missed"
 	JoinedAt    *time.Time `json:"joined_at,omitempty"`
 	LeftAt      *time.Time `json:"left_at,omitempty"`
 }
