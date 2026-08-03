@@ -264,17 +264,28 @@ func (s *callLogService) ListCallLogsSummary(ctx context.Context, filter *models
 		}
 		if otherP != nil {
 			item.OtherPartyPhone = otherP.PhoneNumber
-			item.OtherPartyName = nameMap[otherP.PhoneNumber]
 			item.OtherPartyExtension = extMap[otherP.PhoneNumber]
-			if item.OtherPartyName == "" {
-				item.OtherPartyName = otherP.PhoneNumber
-			}
+			item.OtherPartyName = otherPartyName(otherP.DisplayName, nameMap[otherP.PhoneNumber], otherP.PhoneNumber)
 		}
 
 		items[i] = item
 	}
 
 	return items, total, nil
+}
+
+// otherPartyName picks the best display name for the non-current participant:
+// the CTI-provided contact/display name, else a name resolved from the users
+// table, else the raw phone number (frontend renders "Unknown" only when all
+// are empty).
+func otherPartyName(displayName, nameFromUsers, phone string) string {
+	if displayName != "" {
+		return displayName
+	}
+	if nameFromUsers != "" {
+		return nameFromUsers
+	}
+	return phone
 }
 
 func (s *callLogService) GetStats(ctx context.Context) (*models.CallLogStats, error) {
