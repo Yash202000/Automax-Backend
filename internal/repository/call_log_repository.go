@@ -162,35 +162,23 @@ func (r *callLogRepository) ListSummary(ctx context.Context, filter *models.Call
 	if filter.EndDate != nil {
 		query = query.Where("created_at <= ?", *filter.EndDate)
 	}
-	if !filter.ViewAll && filter.ParticipantID != nil {
-		// Scope to this agent's calls: personal SIP calls (participant match)
-		// OR cintrix calls attributed to them (created_by = the resolved agent,
-		// set by the webhook), OR a cintrix participant whose extension is
-		// theirs.
+	if filter.ParticipantID != nil {
+		// Cintrix PBX calls are company call-centre history: their participants
+		// are external callers and PBX extensions, not Automax user ids, so a
+		// participant join can never match (and missed calls have no agent at
+		// all). Show them to everyone this admin endpoint already gates;
+		// personal direct/group calls stay participant-scoped.
 		query = query.Where(
-			`(created_by = ? OR id IN (
+			`(call_type = 'cintrix' OR id IN (
 				SELECT cp.call_log_id FROM call_participants cp
 				JOIN users u ON cp.phone_number = u.phone OR cp.phone_number IN (
 					SELECT ea.extension FROM extension_assignments ea WHERE ea.user_id = u.id
 				)
 				WHERE u.id = ?
 			))`,
-			*filter.ParticipantID, *filter.ParticipantID,
-		)
-	} else if filter.ViewAll && filter.ParticipantID != nil {
-		// Admin filtering to one agent: same attribution, no cintrix bypass.
-		query = query.Where(
-			`(created_by = ? OR id IN (
-				SELECT cp.call_log_id FROM call_participants cp
-				JOIN users u ON cp.phone_number = u.phone OR cp.phone_number IN (
-					SELECT ea.extension FROM extension_assignments ea WHERE ea.user_id = u.id
-				)
-				WHERE u.id = ?
-			))`,
-			*filter.ParticipantID, *filter.ParticipantID,
+			*filter.ParticipantID,
 		)
 	}
-	// filter.ViewAll && ParticipantID == nil  → no scoping (admin sees everything)
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
