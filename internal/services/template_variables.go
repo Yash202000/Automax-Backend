@@ -122,12 +122,11 @@ func BuildIncidentVariables(
 		vars["sms_link"] = fmt.Sprintf("%s/ivr/incident/sms-link/%s?signed_token=%s",
 			smsPortalBase, incident.ID.String(), url.QueryEscape(token))
 		if incident.FeedbackID != nil {
+			feedbackToken := pkgutils.GenerateFeedbackToken(incident.FeedbackID.String(), incident.ID.String(), GetFeedbackTokenDuration())
 			vars["feedback_url"] = fmt.Sprintf("%s/feedback/%s?signed_token=%s",
-				smsPortalBase, incident.ID.String(), incident.FeedbackID.String())
+				smsPortalBase, incident.ID.String(), url.QueryEscape(feedbackToken))
 		} else {
-			feedbackToken := pkgutils.GenerateIncidentToken(incident.ID.String(), GetFeedbackTokenDuration())
-			vars["feedback_url"] = fmt.Sprintf("%s/feedback/%s?signed_token=%s",
-				smsPortalBase, incident.ID.String(), feedbackToken)
+			vars["feedback_url"] = ""
 		}
 		vars["feedback_link"] = fmt.Sprintf(`<a href="%s">تقييم الخدمة</a>`, vars["feedback_url"])
 	} else {
