@@ -882,10 +882,12 @@ const frtDerived = `LEFT JOIN (
 	       ir.action_type        AS first_response_action,
 	       ir.action_description AS first_response_description,
 	       ir.performed_by_id    AS first_responder_id,
+	       CONCAT(fu.first_name, ' ', fu.last_name) AS first_responder_name,
 	       ROUND(EXTRACT(EPOCH FROM (ir.created_at - fi.created_at)) / 60.0)::bigint
 	                          AS first_response_minutes
 	FROM incident_revisions ir
 	JOIN incidents fi ON fi.id = ir.incident_id
+	JOIN users fu ON fu.id = ir.performed_by_id
 	WHERE ir.action_type IN (?)
 	  -- system actors: the uuid.Nil performer, plus the raw-SQL writes in ready_to_close_service
 	  -- that stamp performed_by_roles = ["system"]
