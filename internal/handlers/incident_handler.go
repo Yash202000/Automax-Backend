@@ -226,17 +226,19 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 	}
 
 	// QueryParser cannot parse plain YYYY-MM-DD into *time.Time; do it manually.
+	// Use the caller's timezone so date boundaries align with the user's local day.
+	loc := utils.ResolveTimezone(c.Query("timezone"))
 	if startStr := c.Query("start_date"); startStr != "" {
-		if t, err := time.Parse("2006-01-02", startStr); err == nil {
+		if t, err := time.ParseInLocation("2006-01-02", startStr, loc); err == nil {
 			filter.StartDate = &t
 		} else if t, err := time.Parse(time.RFC3339, startStr); err == nil {
 			filter.StartDate = &t
 		}
 	}
 	if endStr := c.Query("end_date"); endStr != "" {
-		if t, err := time.Parse("2006-01-02", endStr); err == nil {
-			// Include the full end day up to 23:59:59.
-			endOfDay := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, t.Location())
+		if t, err := time.ParseInLocation("2006-01-02", endStr, loc); err == nil {
+			// Include the full end day up to 23:59:59 in the user's timezone.
+			endOfDay := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, loc)
 			filter.EndDate = &endOfDay
 		} else if t, err := time.Parse(time.RFC3339, endStr); err == nil {
 			filter.EndDate = &t
@@ -1163,16 +1165,17 @@ func (h *IncidentHandler) GetStatsV2(c *fiber.Ctx) error {
 
 	// QueryParser cannot parse plain YYYY-MM-DD into *time.Time; do it manually
 	// (mirrors ListIncidents) so stats respect the same date-range filter as the list.
+	statsLoc := utils.ResolveTimezone(c.Query("timezone"))
 	if startStr := c.Query("start_date"); startStr != "" {
-		if t, err := time.Parse("2006-01-02", startStr); err == nil {
+		if t, err := time.ParseInLocation("2006-01-02", startStr, statsLoc); err == nil {
 			filter.StartDate = &t
 		} else if t, err := time.Parse(time.RFC3339, startStr); err == nil {
 			filter.StartDate = &t
 		}
 	}
 	if endStr := c.Query("end_date"); endStr != "" {
-		if t, err := time.Parse("2006-01-02", endStr); err == nil {
-			endOfDay := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, t.Location())
+		if t, err := time.ParseInLocation("2006-01-02", endStr, statsLoc); err == nil {
+			endOfDay := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, statsLoc)
 			filter.EndDate = &endOfDay
 		} else if t, err := time.Parse(time.RFC3339, endStr); err == nil {
 			filter.EndDate = &t

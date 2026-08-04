@@ -2,12 +2,16 @@ package utils
 
 import (
 	"fmt"
+	"os"
 	"time"
 )
 
 // ResolveTimezone returns the *time.Location for the given IANA timezone name.
-// Falls back to UTC if the timezone is empty or invalid.
+// Fallback chain: tz param → APP_TIMEZONE env var → UTC.
 func ResolveTimezone(tz string) *time.Location {
+	if tz == "" {
+		tz = os.Getenv("APP_TIMEZONE")
+	}
 	if tz == "" {
 		return time.UTC
 	}

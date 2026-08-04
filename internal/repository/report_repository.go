@@ -605,7 +605,7 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 		case "gte":
 			query = query.Where(col+" >= ?", parseDateOrPassthrough(f.Value, loc))
 		case "lte":
-			query = query.Where(col+" <= ?", parseDateOrPassthrough(f.Value, loc))
+			query = query.Where(col+" <= ?", parseDateEndOfDayOrPassthrough(f.Value, loc))
 		case "in":
 			query = query.Where(col+" IN ?", f.Value)
 		case "is_null":
@@ -619,6 +619,10 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 				from, err1 := parseDateFlexible(fromStr, loc)
 				to, err2 := parseDateFlexible(toStr, loc)
 				if err1 == nil && err2 == nil {
+					// Expand date-only "to" value to end-of-day so the full day is included.
+					if isDateOnly(toStr) {
+						to = time.Date(to.Year(), to.Month(), to.Day(), 23, 59, 59, 999999999, to.Location())
+					}
 					query = query.Where(col+" BETWEEN ? AND ?", from, to)
 				}
 			}
@@ -645,6 +649,29 @@ func parseDateOrPassthrough(v interface{}, loc *time.Location) interface{} {
 		return t
 	}
 	return v
+}
+
+// parseDateEndOfDayOrPassthrough is like parseDateOrPassthrough but expands
+// date-only values (YYYY-MM-DD) to end-of-day (23:59:59.999999999) so that
+// an "lte" filter includes the entire day — matching the incident listing behaviour.
+func parseDateEndOfDayOrPassthrough(v interface{}, loc *time.Location) interface{} {
+	s, ok := v.(string)
+	if !ok {
+		return v
+	}
+	if t, err := parseDateFlexible(s, loc); err == nil {
+		if isDateOnly(s) {
+			return time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, t.Location())
+		}
+		return t
+	}
+	return v
+}
+
+// isDateOnly returns true when s is exactly "YYYY-MM-DD" with no time component.
+func isDateOnly(s string) bool {
+	_, err := time.Parse("2006-01-02", s)
+	return err == nil && len(s) == 10
 }
 
 // parseDateFlexible parses date strings in multiple formats:
