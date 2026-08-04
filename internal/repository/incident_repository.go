@@ -415,6 +415,14 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	}
 	offset := (filter.Page - 1) * filter.Limit
 
+	// Defaults to created_at (unchanged existing behavior for callers that
+	// don't pass sort_by). Restricted to this allow-list regardless of the
+	// model-level validation, since it's interpolated directly into ORDER BY.
+	sortColumn := "created_at"
+	if filter.SortBy == "updated_at" {
+		sortColumn = "updated_at"
+	}
+
 	err := query.
 		Preload("Classification").
 		Preload("TransitionHistory").
@@ -427,7 +435,7 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		Preload("Location").
 		Preload("LookupValues.Category").
 		Preload("TransitionHistory.Transition").
-		Order("created_at DESC").
+		Order(sortColumn + " DESC").
 		Offset(offset).
 		Limit(filter.Limit).
 		Find(&incidents).Error
