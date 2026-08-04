@@ -111,16 +111,25 @@ func (h *KpiPerformanceHandler) SetTarget(c *fiber.Ctx) error {
 		}
 	}
 
-	// Check for duplicate: same KPI + metric + period. The comment always
-	// said "+ metric" but the query never actually filtered on metric_id, so
-	// creating a second metric's target for a KPI+period that already had
-	// one for a DIFFERENT metric was incorrectly rejected as a duplicate.
-	dupQuery := db.Where("kpi_code = ? AND kpi_type = ? AND target_year = ? AND period_code = ?",
-		req.KpiCode, req.KpiType, req.TargetYear, req.PeriodCode)
+	item := req.ToModel(db)
+
+	// Check for duplicate: same KPI + metric + period + Organization + Version
+	// (BR-01). The comment always said "+ metric" but the query never
+	// actually filtered on metric_id, so creating a second metric's target
+	// for a KPI+period that already had one for a DIFFERENT metric was
+	// incorrectly rejected as a duplicate. Organization/Version are compared
+	// NULL-safely / exactly, mirroring idx_kpi_target_unique_v3.
+	dupQuery := db.Where("kpi_code = ? AND kpi_type = ? AND target_year = ? AND period_code = ? AND version = ?",
+		req.KpiCode, req.KpiType, req.TargetYear, req.PeriodCode, item.Version)
 	if req.MetricID != nil && *req.MetricID != "" {
 		dupQuery = dupQuery.Where("metric_id = ?", *req.MetricID)
 	} else {
 		dupQuery = dupQuery.Where("metric_id IS NULL")
+	}
+	if item.OrganizationID != nil {
+		dupQuery = dupQuery.Where("organization_id = ?", *item.OrganizationID)
+	} else {
+		dupQuery = dupQuery.Where("organization_id IS NULL")
 	}
 	dupErr := dupQuery.First(&models.KpiAnnualTarget{}).Error
 	if dupErr == nil {
@@ -129,8 +138,6 @@ func (h *KpiPerformanceHandler) SetTarget(c *fiber.Ctx) error {
 	} else if dupErr != gorm.ErrRecordNotFound {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
 	}
-
-	item := req.ToModel(db)
 
 	if err := db.Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
@@ -207,19 +214,26 @@ func (h *KpiPerformanceHandler) UpdateTarget(c *fiber.Ctx) error {
 		}
 	}
 
+	updated := req.ToModel(db)
+
 	// Duplicate check, excluding this record itself — editing a target's own
 	// unchanged period/metric must not trip over its own existing row. Also
-	// scoped to metric_id (previously omitted, same bug as SetTarget above),
-	// so editing one metric's target didn't get blocked by a different
-	// metric's target for the same KPI+period.
+	// scoped to metric_id + organization_id + version (previously omitted
+	// metric_id, same bug as SetTarget above; org/version mirror
+	// idx_kpi_target_unique_v3 / BR-01).
 	dupQuery := db.Model(&models.KpiAnnualTarget{}).Where(
-		"kpi_code = ? AND kpi_type = ? AND target_year = ? AND period_code = ? AND id != ?",
-		req.KpiCode, req.KpiType, req.TargetYear, req.PeriodCode, id,
+		"kpi_code = ? AND kpi_type = ? AND target_year = ? AND period_code = ? AND version = ? AND id != ?",
+		req.KpiCode, req.KpiType, req.TargetYear, req.PeriodCode, updated.Version, id,
 	)
 	if req.MetricID != nil && *req.MetricID != "" {
 		dupQuery = dupQuery.Where("metric_id = ?", *req.MetricID)
 	} else {
 		dupQuery = dupQuery.Where("metric_id IS NULL")
+	}
+	if updated.OrganizationID != nil {
+		dupQuery = dupQuery.Where("organization_id = ?", *updated.OrganizationID)
+	} else {
+		dupQuery = dupQuery.Where("organization_id IS NULL")
 	}
 	var dupCount int64
 	dupQuery.Count(&dupCount)
@@ -227,8 +241,6 @@ func (h *KpiPerformanceHandler) UpdateTarget(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest,
 			fmt.Sprintf("a target for %s already exists for this metric in period %s/%d", req.KpiCode, req.PeriodCode, req.TargetYear))
 	}
-
-	updated := req.ToModel(db)
 	updated.ID = existing.ID
 	updated.CreatedAt = existing.CreatedAt
 	updated.ApprovedByID = existing.ApprovedByID

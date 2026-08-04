@@ -69,6 +69,15 @@ type KpiAnnualTarget struct {
 	TargetRangeMin              *float64                   `json:"target_range_min"`
 	TargetRangeMax              *float64                   `json:"target_range_max"`
 	SegmentationValues          datatypes.JSON             `gorm:"type:jsonb" json:"segmentation_values"`
+	// OrganizationID + SegmentationValues + Version together form the
+	// uniqueness key required by BR-01 (Metric+Year+Period+Organization+
+	// Segment+Version) — enforced by the partial unique index
+	// idx_kpi_target_unique_v3 (migrations.MigrateKpiEntryMultiOrgScope),
+	// not a GORM struct tag, for the same NULL-safety/soft-delete reasons
+	// documented on KpiCode/KpiType/PeriodType/PeriodKey above.
+	OrganizationID              *uuid.UUID                 `gorm:"type:uuid;index" json:"organization_id"`
+	Organization                *KpiOrganization           `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
+	Version                     int                        `gorm:"not null;default:1" json:"version"`
 	TargetStatus                string                     `gorm:"size:30;not null;default:'draft'" json:"target_status"`
 	EffectiveFrom               *time.Time                 `json:"effective_from"`
 	EffectiveTo                 *time.Time                 `json:"effective_to"`
@@ -107,6 +116,12 @@ type KpiAnnualTargetRequest struct {
 	TargetRangeMin      *float64                `json:"target_range_min"`
 	TargetRangeMax      *float64                `json:"target_range_max"`
 	SegmentationValues  []KpiTargetSegmentationValue `json:"segmentation_values"`
+	OrganizationID   *string                    `json:"organization_id"`
+	// Version supports BR-08 (approved Targets are immutable; corrections
+	// use a revision) — a new Version for the same Metric+Year+Period+Org+
+	// Segment is a distinct row under the v3 unique index, not a collision.
+	// Omitted/zero defaults to 1 (the first version).
+	Version          int                        `json:"version"`
 	EffectiveFrom    string                     `json:"effective_from"`
 	EffectiveTo      string                     `json:"effective_to"`
 	// TargetStatus lets the frontend's Save Draft / Submit Target buttons
@@ -198,6 +213,15 @@ func (r *KpiAnnualTargetRequest) ToModel(db *gorm.DB) *KpiAnnualTarget {
 	if len(r.SegmentationValues) > 0 {
 		data, _ := json.Marshal(r.SegmentationValues)
 		item.SegmentationValues = datatypes.JSON(data)
+	}
+	if r.OrganizationID != nil && *r.OrganizationID != "" {
+		if oid, err := uuid.Parse(*r.OrganizationID); err == nil {
+			item.OrganizationID = &oid
+		}
+	}
+	item.Version = r.Version
+	if item.Version == 0 {
+		item.Version = 1
 	}
 	// Backward compat: set legacy fields
 	item.Year = r.TargetYear

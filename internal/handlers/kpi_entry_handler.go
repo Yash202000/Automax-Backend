@@ -196,16 +196,10 @@ func (h *KpiEntryHandler) CreateEntry(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Formula (Phase 2) metrics are not supported yet")
 	}
 
-	// REL-07: Check for duplicate entry (same KPI + metric + period)
-	var dupCount int64
-	db.Model(&models.KpiEntry{}).
-		Where("kpi_id = ? AND kpi_type = ? AND metric_id = ? AND reporting_year = ? AND period_code = ?",
-			kpiID, kpiType, mid, req.ReportingYear, req.PeriodCode).
-		Count(&dupCount)
-	if dupCount > 0 {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest,
-			fmt.Sprintf("An entry already exists for this metric in period %s/%d", req.PeriodCode, req.ReportingYear))
-	}
+	// Multiple approved Entries are allowed for the same metric+period — the
+	// period's Actual is an aggregate across all of them (see
+	// services.AggregateMetricPeriod), so there is deliberately no
+	// duplicate-entry rejection here anymore.
 
 	// REL-07: Validate denominator is not zero for ratio types
 	if (metric.CalculationType == "Percentage - Ratio" || metric.CalculationType == "Ratio") &&
@@ -226,10 +220,18 @@ func (h *KpiEntryHandler) CreateEntry(c *fiber.Ctx) error {
 	if kpiErr != nil || kpiCode == "" {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "KPI not found")
 	}
+	// BR-12 "scope consistency": the Entry's Organization must match the
+	// Target scope it's measured against — compared NULL-safely since most
+	// KPIs use neither Organization nor Segment scoping at all.
 	var target models.KpiAnnualTarget
-	if err := db.Where("kpi_code = ? AND kpi_type = ? AND metric_id = ? AND target_year = ? AND period_code = ? AND target_status = 'approved'",
-		kpiCode, kpiType, mid, req.ReportingYear, req.PeriodCode,
-	).First(&target).Error; err != nil {
+	targetQuery := db.Where("kpi_code = ? AND kpi_type = ? AND metric_id = ? AND target_year = ? AND period_code = ? AND target_status = 'approved'",
+		kpiCode, kpiType, mid, req.ReportingYear, req.PeriodCode)
+	if item.OrganizationID != nil {
+		targetQuery = targetQuery.Where("organization_id = ?", *item.OrganizationID)
+	} else {
+		targetQuery = targetQuery.Where("organization_id IS NULL")
+	}
+	if err := targetQuery.Order("version DESC").First(&target).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest,
 			fmt.Sprintf("No approved target exists for this metric in period %s/%d — create and approve a target first.", req.PeriodCode, req.ReportingYear))
 	}

@@ -225,6 +225,14 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			log.Printf("Warning: KPI target unique index migration failed: %v", err)
 		}
 
+		// Multiple approved Entries per metric+period are now allowed
+		// (aggregated, not treated as one final value) — drop the old
+		// per-period uniqueness on kpi_entries and add Organization/Segment/
+		// Version scope columns to entries and targets.
+		if err := migrations.MigrateKpiEntryMultiOrgScope(migrationDB); err != nil {
+			log.Printf("Warning: KPI entry multi-org-scope migration failed: %v", err)
+		}
+
 		// Enforce unique domain names (excluding soft-deleted records).
 		db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_domains_name_en ON domains(name_en) WHERE deleted_at IS NULL`)
 
