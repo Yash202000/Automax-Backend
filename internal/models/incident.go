@@ -595,6 +595,10 @@ type IncidentFilter struct {
 	// CustomFieldFilters holds repeatable cf=key:value filters. Parsed manually in handler.
 	// Each filter does: custom_fields::jsonb ->> 'key' ILIKE '%value%'. Multiple are AND-ed.
 	CustomFieldFilters []CustomFieldFilter `json:"-"`
+	// SortBy controls the list's ordering (always descending — newest first
+	// by whichever field). Restricted to a small allow-list so it's safe to
+	// interpolate directly into an ORDER BY clause.
+	SortBy             string              `query:"sort_by" json:"sort_by" validate:"omitempty,oneof=created_at updated_at"`
 	Page               int                 `query:"page" json:"page" validate:"omitempty,min=1"`
 	Limit              int                 `query:"limit" json:"limit" validate:"omitempty,min=1,max=100"`
 	UserRoleIDs        []uuid.UUID         `json:"-"`     // For filtering stats by user's roles
