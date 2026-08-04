@@ -97,6 +97,28 @@ func CurrentPeriodCode(reportingFrequency string, now time.Time) string {
 	}
 }
 
+// PeriodCodesForFrequency lists every bare period code within one year for a
+// given reporting frequency, in calendar order — used to build a full-year
+// Baseline/Target/Actual trend series (doc Figure 1) without the caller
+// needing to know the month/quarter/half-year layout itself. Accepts both
+// the KPI-level lowercase convention ("monthly", "semi_annual") and the
+// KpiMetric-level capitalized convention its own Reporting Frequency
+// dropdown sends ("Monthly", "Semiannual") — the two have never agreed on
+// casing/spelling, so this normalizes rather than silently defaulting to
+// "annual" for a metric that's actually monthly.
+func PeriodCodesForFrequency(frequency string) []string {
+	switch strings.ToLower(strings.ReplaceAll(frequency, " ", "")) {
+	case models.KPIFrequencyMonthly:
+		return append([]string{}, monthPeriodCodes...)
+	case models.KPIFrequencyQuarterly:
+		return []string{"q1", "q2", "q3", "q4"}
+	case models.KPIFrequencySemiAnnual, "semiannual":
+		return []string{"h1", "h2"}
+	default:
+		return []string{"annual"}
+	}
+}
+
 // FormatPeriodLabel renders a bare period code + year as a human label (e.g.
 // "Jul 2026", "Q3 2026", "H2 2026", "Annual 2026"), mirroring the frontend's
 // formatPeriodLabel helper so the same period reads identically everywhere.

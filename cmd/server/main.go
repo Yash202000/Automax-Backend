@@ -1277,6 +1277,11 @@ func main() {
 	kpi.Get("/:type/:id/card", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetKpiCard)
 	kpi.Get("/:type/:id/dashboard", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetKpiDashboard)
 	kpi.Get("/:type/:id/annual-rollup", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetKpiAnnualRollup)
+	kpi.Get("/:type/:id/metrics/:metricId/period-rollup", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetMetricPeriodRollup)
+	kpi.Get("/:type/:id/metrics/:metricId/display-rollup", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetMetricDisplayRollup)
+	kpi.Get("/:type/:id/metrics/:metricId/period-series", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetMetricPeriodSeries)
+	kpi.Get("/:type/:id/composite-score", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetCompositeScore)
+	kpi.Get("/:type/:id/composite-score-latest", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetCompositeScoreLatest)
 
 	// KPI engagement features — metrics, evidence, collaborators, check-ins, comments, activity
 	kpi.Get("/metrics-by-code/:code", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListMetricsByCode)

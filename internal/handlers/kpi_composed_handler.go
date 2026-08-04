@@ -417,3 +417,263 @@ func (h *KpiComposedHandler) GetKpiDashboard(c *fiber.Ctx) error {
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
 }
+
+// parseRollupQuery reads the year/period_code/organization_id query params
+// shared by GetMetricPeriodRollup and GetCompositeScore.
+func parseRollupQuery(c *fiber.Ctx) (year int, periodCode string, organizationID *uuid.UUID, err error) {
+	periodCode = c.Query("period_code")
+	if periodCode == "" {
+		return 0, "", nil, fiber.NewError(fiber.StatusBadRequest, "period_code is required")
+	}
+	year = c.QueryInt("year", 0)
+	if year == 0 {
+		return 0, "", nil, fiber.NewError(fiber.StatusBadRequest, "year is required")
+	}
+	if orgStr := c.Query("organization_id"); orgStr != "" {
+		oid, parseErr := uuid.Parse(orgStr)
+		if parseErr != nil {
+			return 0, "", nil, fiber.NewError(fiber.StatusBadRequest, "invalid organization_id")
+		}
+		organizationID = &oid
+	}
+	return year, periodCode, organizationID, nil
+}
+
+// GetMetricPeriodRollup returns one metric's aggregated period Actual —
+// Baseline, Target, Actual, Achievement (raw + capped), entry count, and an
+// explicit HasData flag — the calculation the doc's "Monthly Calculation
+// Method" (section 4.3) and BR-09/BR-10 describe. Approved Entries are
+// aggregated (sum-numerator/sum-denominator for ratio metrics, recalculating
+// the ratio; AggregationMethod-driven otherwise) rather than any single
+// Entry being treated as the period's value.
+func (h *KpiComposedHandler) GetMetricPeriodRollup(c *fiber.Ctx) error {
+	kpiType := c.Params("type")
+	if !isValidKpiType(kpiType) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	kpiID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	metricID, err := uuid.Parse(c.Params("metricId"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	year, periodCode, organizationID, qErr := parseRollupQuery(c)
+	if qErr != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, qErr.Error())
+	}
+
+	db := h.db.WithContext(c.UserContext())
+
+	var metric models.KpiMetric
+	if err := db.Where("id = ? AND kpi_id = ? AND kpi_type = ?", metricID, kpiID, kpiType).First(&metric).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+
+	kpiCode, err := getKPICode(db, kpiType, kpiID)
+	if err != nil || kpiCode == "" {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+
+	resp := buildMetricPeriodRollupMap(db, &metric, kpiID, kpiCode, kpiType, year, periodCode, organizationID)
+	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
+}
+
+// buildMetricPeriodRollupMap assembles the period-rollup response shape
+// (Baseline/Actual/Target/Achievement raw+capped/entry count) shared by
+// GetMetricPeriodRollup (caller-specified period) and GetMetricDisplayRollup
+// (server-resolved period).
+func buildMetricPeriodRollupMap(db *gorm.DB, metric *models.KpiMetric, kpiID uuid.UUID, kpiCode, kpiType string, year int, periodCode string, organizationID *uuid.UUID) fiber.Map {
+	rollup := services.AggregateMetricPeriod(db, metric, kpiID, kpiType, year, periodCode, organizationID)
+
+	resp := fiber.Map{
+		"metric_id":       metric.ID,
+		"metric_name":     metric.Name,
+		"period_code":     periodCode,
+		"year":            year,
+		"baseline":        metric.BaselineValue,
+		"has_data":        rollup.HasData,
+		"entry_count":     rollup.EntryCount,
+		"actual":          rollup.Actual,
+		"sum_numerator":   rollup.SumNumerator,
+		"sum_denominator": rollup.SumDenominator,
+	}
+
+	targetQuery := db.Where(
+		"kpi_code = ? AND kpi_type = ? AND metric_id = ? AND target_year = ? AND period_code = ? AND target_status = 'approved'",
+		kpiCode, kpiType, metric.ID, year, periodCode,
+	)
+	if organizationID != nil {
+		targetQuery = targetQuery.Where("organization_id = ?", *organizationID)
+	} else {
+		targetQuery = targetQuery.Where("organization_id IS NULL")
+	}
+	var target models.KpiAnnualTarget
+	if err := targetQuery.Order("version DESC").First(&target).Error; err == nil {
+		resp["target"] = target.TargetValue
+		if rollup.HasData {
+			achievement := services.ComputeAchievementRawCapped(*rollup.Actual, target.TargetValue, metric.Direction, 100)
+			if achievement != nil {
+				resp["achievement_raw"] = achievement.Raw
+				resp["achievement_capped"] = achievement.Capped
+				resp["performance_status"] = services.PerformanceStatusFor(achievement.Capped)
+			}
+		}
+	}
+
+	return resp
+}
+
+// GetMetricDisplayRollup is what the Metric Card actually calls: it resolves
+// which period to show (the real current period if it has data, otherwise
+// the most recent period that does — services.ResolveDisplayPeriod) instead
+// of requiring the caller to already know the right period. Without this, a
+// metric populated for a period other than "right now" (testing next month,
+// backfilling a past one) would read as a misleading "No Data" purely
+// because the calendar hasn't caught up to it yet.
+func (h *KpiComposedHandler) GetMetricDisplayRollup(c *fiber.Ctx) error {
+	kpiType := c.Params("type")
+	if !isValidKpiType(kpiType) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	kpiID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	metricID, err := uuid.Parse(c.Params("metricId"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	db := h.db.WithContext(c.UserContext())
+
+	var metric models.KpiMetric
+	if err := db.Where("id = ? AND kpi_id = ? AND kpi_type = ?", metricID, kpiID, kpiType).First(&metric).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	kpiCode, err := getKPICode(db, kpiType, kpiID)
+	if err != nil || kpiCode == "" {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+
+	year, periodCode, isFallback := services.ResolveDisplayPeriod(db, &metric, kpiID, kpiCode, kpiType)
+
+	resp := buildMetricPeriodRollupMap(db, &metric, kpiID, kpiCode, kpiType, year, periodCode, nil)
+	resp["is_fallback_period"] = isFallback
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
+}
+
+// GetMetricPeriodSeries returns one metric's Baseline/Target/Actual/
+// Achievement across every period of a year in a single call — the doc's
+// Figure 1 trend chart (section 5), letting the frontend render the whole
+// year without one round trip per period.
+func (h *KpiComposedHandler) GetMetricPeriodSeries(c *fiber.Ctx) error {
+	kpiType := c.Params("type")
+	if !isValidKpiType(kpiType) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	kpiID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	metricID, err := uuid.Parse(c.Params("metricId"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	year := c.QueryInt("year", 0)
+	if year == 0 {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "year is required")
+	}
+	var organizationID *uuid.UUID
+	if orgStr := c.Query("organization_id"); orgStr != "" {
+		oid, parseErr := uuid.Parse(orgStr)
+		if parseErr != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, "invalid organization_id")
+		}
+		organizationID = &oid
+	}
+
+	db := h.db.WithContext(c.UserContext())
+
+	var metric models.KpiMetric
+	if err := db.Where("id = ? AND kpi_id = ? AND kpi_type = ?", metricID, kpiID, kpiType).First(&metric).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	kpiCode, err := getKPICode(db, kpiType, kpiID)
+	if err != nil || kpiCode == "" {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+
+	points := services.BuildMetricPeriodSeries(db, &metric, kpiID, kpiCode, kpiType, year, organizationID, 100)
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "", fiber.Map{
+		"metric_id":   metric.ID,
+		"metric_name": metric.Name,
+		"year":        year,
+		"points":      points,
+	})
+}
+
+// GetCompositeScore returns the overall weighted KPI score for one period —
+// doc section 8's "Composite KPI Calculation" table plus the Raw Overall KPI
+// Score, with an optional capped display score (BR-11) alongside it.
+func (h *KpiComposedHandler) GetCompositeScore(c *fiber.Ctx) error {
+	kpiType := c.Params("type")
+	if !isValidKpiType(kpiType) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	kpiID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	year, periodCode, organizationID, qErr := parseRollupQuery(c)
+	if qErr != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, qErr.Error())
+	}
+
+	db := h.db.WithContext(c.UserContext())
+	kpiCode, err := getKPICode(db, kpiType, kpiID)
+	if err != nil || kpiCode == "" {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+
+	result, err := services.ComputeCompositeScore(db, kpiID, kpiCode, kpiType, year, periodCode, organizationID, 100)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "", result)
+}
+
+// GetCompositeScoreLatest is what the KPI Overview page actually calls: each
+// metric contributes its own most-recent period with data (same resolution
+// as GetMetricDisplayRollup) instead of requiring every metric to already
+// have data for one identical shared period. Two metrics on different
+// cadences (one last updated in August, another in September) both show up
+// in the list instead of the whole composite reading "No Data" purely
+// because they don't line up on the same period.
+func (h *KpiComposedHandler) GetCompositeScoreLatest(c *fiber.Ctx) error {
+	kpiType := c.Params("type")
+	if !isValidKpiType(kpiType) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	kpiID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	db := h.db.WithContext(c.UserContext())
+	kpiCode, err := getKPICode(db, kpiType, kpiID)
+	if err != nil || kpiCode == "" {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+
+	result, err := services.ComputeCompositeScoreLatest(db, kpiID, kpiCode, kpiType, 100)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "", result)
+}

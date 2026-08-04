@@ -23,14 +23,26 @@ const (
 
 type KpiEntry struct {
 	ID                        uuid.UUID              `gorm:"type:uuid;primary_key" json:"id"`
-	KpiID                     uuid.UUID              `gorm:"type:uuid;index:idx_kpi_entry_unique,unique;not null" json:"kpi_id"`
-	KpiType                   string                 `gorm:"size:20;index:idx_kpi_entry_unique,unique;not null" json:"kpi_type"`
-	MetricID                  uuid.UUID              `gorm:"type:uuid;index:idx_kpi_entry_unique,unique;not null" json:"metric_id"`
+	KpiID                     uuid.UUID              `gorm:"type:uuid;index;not null" json:"kpi_id"`
+	KpiType                   string                 `gorm:"size:20;index;not null" json:"kpi_type"`
+	MetricID                  uuid.UUID              `gorm:"type:uuid;index;not null" json:"metric_id"`
 	Metric                    *KpiMetric             `gorm:"foreignKey:MetricID" json:"metric,omitempty"`
-	ReportingYear             int                    `gorm:"not null;index:idx_kpi_entry_unique,unique" json:"reporting_year"`
-	PeriodCode                string                 `gorm:"size:50;not null;index:idx_kpi_entry_unique,unique" json:"period_code"`
+	// Multiple approved Entries are allowed for the same metric+period —
+	// the period's Actual is an aggregate across all of them (see
+	// services.AggregateMetricPeriod), not any single Entry's own value.
+	// There is deliberately no unique index on
+	// (kpi_id, kpi_type, metric_id, reporting_year, period_code) anymore.
+	ReportingYear             int                    `gorm:"not null;index" json:"reporting_year"`
+	PeriodCode                string                 `gorm:"size:50;not null;index" json:"period_code"`
 	PeriodStart               *time.Time             `json:"period_start"`
 	PeriodEnd                 *time.Time             `json:"period_end"`
+	// OrganizationID/SegmentationValues scope this Entry the same way a
+	// Target can be scoped (BR-12 "scope consistency") — nil means
+	// unscoped/global, matching the vast majority of KPIs that don't use
+	// Organization or Segment dimensions at all.
+	OrganizationID            *uuid.UUID             `gorm:"type:uuid;index" json:"organization_id"`
+	Organization              *KpiOrganization       `gorm:"foreignKey:OrganizationID" json:"organization,omitempty"`
+	SegmentationValues        datatypes.JSON         `gorm:"type:jsonb" json:"segmentation_values"`
 	CalculationTypeSnapshot   string                 `gorm:"size:50" json:"calculation_type_snapshot"`
 	DirectionSnapshot         string                 `gorm:"size:50" json:"direction_snapshot"`
 	UnitSnapshot              string                 `gorm:"size:50" json:"unit_snapshot"`
@@ -91,6 +103,8 @@ type KpiEntryRequest struct {
 	PeriodCode          string                  `json:"period_code" validate:"required,max=50"`
 	PeriodStartDate     string                  `json:"period_start_date"`
 	PeriodEndDate       string                  `json:"period_end_date"`
+	OrganizationID      *string                 `json:"organization_id"`
+	SegmentationValues  []KpiTargetSegmentationValue `json:"segmentation_values"`
 	DirectActualValue   *float64                `json:"direct_actual_value"`
 	NumeratorValue      *float64                `json:"numerator_value"`
 	DenominatorValue    *float64                `json:"denominator_value"`
@@ -143,6 +157,16 @@ func (r *KpiEntryRequest) ToModel(db *gorm.DB, kpiID uuid.UUID, kpiType string, 
 	if r.PeriodEndDate != "" {
 		if t, err := time.Parse("2006-01-02", r.PeriodEndDate); err == nil {
 			entry.PeriodEnd = &t
+		}
+	}
+	if r.OrganizationID != nil && *r.OrganizationID != "" {
+		if oid, err := uuid.Parse(*r.OrganizationID); err == nil {
+			entry.OrganizationID = &oid
+		}
+	}
+	if len(r.SegmentationValues) > 0 {
+		if b, err := json.Marshal(r.SegmentationValues); err == nil {
+			entry.SegmentationValues = datatypes.JSON(b)
 		}
 	}
 

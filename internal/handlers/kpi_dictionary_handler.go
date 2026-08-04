@@ -691,6 +691,21 @@ func (h *KpiDictionaryHandler) TransitionKpiStatus(c *fiber.Ctx) error {
 	db := h.db.WithContext(c.UserContext())
 	var result *gorm.DB
 
+	// BR-07: the sum of an Active composite KPI's metric weights must equal
+	// 100% before it can be (re)activated — otherwise achievement*weight
+	// contributions silently under- or over-count instead of forming one
+	// proper composite score.
+	if newStatus == models.KPIStatusActive {
+		valid, sum, err := services.MetricWeightSumValid(db, id, kpiType)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+		}
+		if !valid {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest,
+				fmt.Sprintf("Metric weights must sum to 100%% before activation (currently %.2f%%)", sum))
+		}
+	}
+
 	switch kpiType {
 	case "strategic":
 		var item models.StrategicKPI
