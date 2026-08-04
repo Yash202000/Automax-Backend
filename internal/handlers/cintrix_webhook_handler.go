@@ -121,6 +121,7 @@ func (h *CintrixWebhookHandler) HandleCallEvent(c *fiber.Ctx) error {
 	// DID is a service/queue number that resolves to no user, so this is a no-op
 	// there (an unanswered IVR call has no per-agent significance — correct).
 	var dialedIdentifier string
+	var dialedUserID *uuid.UUID
 	if payload.DID != "" {
 		if du, derr := h.userRepo.FindByExtension(ctx, payload.DID); derr == nil && du != nil {
 			if du.Extension != "" {
@@ -128,8 +129,13 @@ func (h *CintrixWebhookHandler) HandleCallEvent(c *fiber.Ctx) error {
 			} else {
 				dialedIdentifier = du.Phone
 			}
+			dialedUserID = &du.ID
 		}
 	}
+
+	agentIdentifier, agentUserID = reconcileDirectCallAgent(
+		agentIdentifier, payload.CallerNumber, dialedIdentifier, agentUserID, dialedUserID,
+	)
 
 	meta := datatypes.JSON(append([]byte{}, rawBody...))
 
