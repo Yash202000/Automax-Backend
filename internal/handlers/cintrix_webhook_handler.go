@@ -113,6 +113,24 @@ func (h *CintrixWebhookHandler) HandleCallEvent(c *fiber.Ctx) error {
 		}
 	}
 
+	// Also attribute the DIALED target (payload.DID) when it resolves to an
+	// internal extension — so an UNANSWERED agent-to-agent call still records
+	// the callee as a participant and appears in *their* call history. An
+	// unanswered call carries no agent_email, so without this the callee has no
+	// participant row and never sees a call they missed. For IVR/queue calls the
+	// DID is a service/queue number that resolves to no user, so this is a no-op
+	// there (an unanswered IVR call has no per-agent significance — correct).
+	var dialedIdentifier string
+	if payload.DID != "" {
+		if du, derr := h.userRepo.FindByExtension(ctx, payload.DID); derr == nil && du != nil {
+			if du.Extension != "" {
+				dialedIdentifier = du.Extension
+			} else {
+				dialedIdentifier = du.Phone
+			}
+		}
+	}
+
 	meta := datatypes.JSON(append([]byte{}, rawBody...))
 
 	// StartAt prefers answered_at, falling back to ended_at (covers missed calls
@@ -162,6 +180,11 @@ func (h *CintrixWebhookHandler) HandleCallEvent(c *fiber.Ctx) error {
 				rp.JoinedAt = payload.AnsweredAt
 			}
 			participants = append(participants, rp)
+		}
+		// Dialed callee for an unanswered/direct call — dedup against the caller
+		// and the (already-added) answered agent.
+		if dialedIdentifier != "" && dialedIdentifier != agentIdentifier && dialedIdentifier != payload.CallerNumber {
+			participants = append(participants, &models.CallParticipant{PhoneNumber: dialedIdentifier, Role: "recipient"})
 		}
 
 		if err := h.callLogRepo.CreateWithParticipants(ctx, callLog, participants); err != nil {
@@ -224,6 +247,20 @@ func (h *CintrixWebhookHandler) HandleCallEvent(c *fiber.Ctx) error {
 			}
 		} else if err != nil {
 			log.Printf("[cintrix-webhook] agent participant lookup failed for %s: %v", payload.CallUuid, err)
+		}
+	}
+	// Dialed callee (unanswered/direct call) — same dedup as the create path.
+	if dialedIdentifier != "" && dialedIdentifier != agentIdentifier && dialedIdentifier != payload.CallerNumber {
+		if _, err := h.callLogRepo.FindParticipant(ctx, existing.ID, dialedIdentifier); err == gorm.ErrRecordNotFound {
+			if cerr := h.callLogRepo.CreateParticipant(ctx, &models.CallParticipant{
+				CallLogID:   existing.ID,
+				PhoneNumber: dialedIdentifier,
+				Role:        "recipient",
+			}); cerr != nil {
+				log.Printf("[cintrix-webhook] failed to add dialed participant for %s: %v", payload.CallUuid, cerr)
+			}
+		} else if err != nil {
+			log.Printf("[cintrix-webhook] dialed participant lookup failed for %s: %v", payload.CallUuid, err)
 		}
 	}
 
