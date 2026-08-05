@@ -787,6 +787,14 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		db.Model(&adminRole).Association("Permissions").Append(adminPerms)
 	}
 
+	// Remove department-scoping permissions from admin role on existing databases.
+	// These are restrictive and should never be on the Administrator role.
+	var deptScopePerms []models.Permission
+	db.Where("code LIKE ?", "%view_department_only").Find(&deptScopePerms)
+	if len(deptScopePerms) > 0 {
+		db.Model(&adminRole).Association("Permissions").Delete(deptScopePerms)
+	}
+
 	// User role with basic permissions
 	var userRole models.Role
 	result = db.Where("code = ?", "user").First(&userRole)
