@@ -203,26 +203,56 @@ func (h *IncidentHandler) GetIncident(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "incident_retrieved"), incident)
 }
 
+// SearchIncidents handles POST /incidents/search — reads filters from JSON body
+// instead of query parameters, avoiding URL length limits when many filter values
+// (e.g. dozens of location_ids) are selected.
+func (h *IncidentHandler) SearchIncidents(c *fiber.Ctx) error {
+	filter := &models.IncidentFilter{}
+	if err := c.BodyParser(filter); err != nil {
+		return ErrorResponseWithKey(c, fiber.StatusBadRequest, "invalid_request_body")
+	}
+
+	// Parse custom field filters from JSON body (same structure, just from body)
+	type searchBody struct {
+		Timezone           string                    `json:"timezone"`
+		StartDateStr       string                    `json:"start_date_str"`
+		EndDateStr         string                    `json:"end_date_str"`
+		CustomFieldFilters []models.CustomFieldFilter `json:"custom_field_filters"`
+	}
+	var body searchBody
+	// Ignore error — the filter fields were already parsed above, these are optional extras
+	_ = c.BodyParser(&body)
+
+	if len(body.CustomFieldFilters) > 0 {
+		filter.CustomFieldFilters = body.CustomFieldFilters
+	}
+
+	// Parse date strings from body (same logic as GET handler)
+	loc := utils.ResolveTimezone(body.Timezone)
+	if body.StartDateStr != "" && filter.StartDate == nil {
+		if t, err := time.ParseInLocation("2006-01-02", body.StartDateStr, loc); err == nil {
+			filter.StartDate = &t
+		} else if t, err := time.Parse(time.RFC3339, body.StartDateStr); err == nil {
+			filter.StartDate = &t
+		}
+	}
+	if body.EndDateStr != "" && filter.EndDate == nil {
+		if t, err := time.ParseInLocation("2006-01-02", body.EndDateStr, loc); err == nil {
+			endOfDay := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, loc)
+			filter.EndDate = &endOfDay
+		} else if t, err := time.Parse(time.RFC3339, body.EndDateStr); err == nil {
+			filter.EndDate = &t
+		}
+	}
+
+	return h.listIncidentsCore(c, filter)
+}
+
 func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 	filter := &models.IncidentFilter{}
 	// Parse query parameters
 	if err := c.QueryParser(filter); err != nil {
 		return ErrorResponseWithKey(c, fiber.StatusBadRequest, "invalid_query_parameters")
-	}
-
-	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"success": false,
-			"errors":  validationErrors,
-		})
-	}
-
-	if filter.Page < 1 {
-		filter.Page = 1
-	}
-
-	if filter.Limit < 1 || filter.Limit > 100 {
-		filter.Limit = 20
 	}
 
 	// QueryParser cannot parse plain YYYY-MM-DD into *time.Time; do it manually.
@@ -255,6 +285,26 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 				Value: raw[idx+1:],
 			})
 		}
+	}
+
+	return h.listIncidentsCore(c, filter)
+}
+
+// listIncidentsCore contains the shared logic for both ListIncidents (GET) and SearchIncidents (POST).
+func (h *IncidentHandler) listIncidentsCore(c *fiber.Ctx, filter *models.IncidentFilter) error {
+	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+
+	if filter.Limit < 1 || filter.Limit > 100 {
+		filter.Limit = 20
 	}
 
 	// Restrict incident list by the user's assigned classifications and locations.

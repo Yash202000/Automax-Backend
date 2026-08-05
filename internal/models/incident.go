@@ -559,8 +559,8 @@ type BulkConvertToRequestResponse struct {
 // CustomFieldFilter represents a single key=value filter on the custom_fields JSON column.
 // Multiple filters are AND-ed together. Supports flat values (e.g. {"caller_identity":"123"}).
 type CustomFieldFilter struct {
-	Key   string
-	Value string
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
 type IncidentFilter struct {
