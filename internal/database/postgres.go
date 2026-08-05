@@ -759,7 +759,17 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 	var allPerms []models.Permission
 	db.Find(&allPerms)
 
-	// Admin role gets all permissions
+	// Admin role gets all permissions EXCEPT department-scoping restrictions.
+	// "view_department_only" permissions are restrictive (they limit a user to their
+	// own department) and should only be on department-scoped roles like Department
+	// Manager and Supervisor — not on the Administrator role.
+	var adminPerms []models.Permission
+	for _, p := range allPerms {
+		if !strings.HasSuffix(p.Code, "view_department_only") {
+			adminPerms = append(adminPerms, p)
+		}
+	}
+
 	var adminRole models.Role
 	result := db.Where("code = ?", "admin").First(&adminRole)
 	if result.Error == gorm.ErrRecordNotFound {
@@ -769,12 +779,12 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			Description: "Full system access",
 			IsSystem:    true,
 			IsActive:    true,
-			Permissions: allPerms,
+			Permissions: adminPerms,
 		}
 		db.Create(&adminRole)
 	} else if db.Model(&adminRole).Association("Permissions").Count() == 0 {
 		// Only seed permissions if role has none (fresh DB); skip if already configured
-		db.Model(&adminRole).Association("Permissions").Append(allPerms)
+		db.Model(&adminRole).Association("Permissions").Append(adminPerms)
 	}
 
 	// User role with basic permissions
