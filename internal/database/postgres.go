@@ -409,6 +409,11 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	// FULL uses the entire row as identity — idempotent, safe to run repeatedly.
 	db.Exec("ALTER TABLE role_permissions REPLICA IDENTITY FULL")
 
+	// Serves the map markers endpoint, which filters to only geolocated
+	// incidents; partial so rows without coordinates (the common case) don't
+	// bloat the index.
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_incidents_geo ON incidents (latitude, longitude) WHERE latitude IS NOT NULL AND longitude IS NOT NULL`)
+
 	log.Println("Database migrations completed")
 	return nil
 }
