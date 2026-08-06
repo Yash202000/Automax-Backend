@@ -207,7 +207,7 @@ func main() {
 	validate := validator.New()
 
 	// Initialize handlers
-	userHandler := handlers.NewUserHandler(userService, minioStorage, redisClient, cfg)
+	userHandler := handlers.NewUserHandler(userService, minioStorage, redisClient, cfg, wsHub)
 	healthHandler := handlers.NewHealthHandler()
 
 	// Initialize LDAP handler

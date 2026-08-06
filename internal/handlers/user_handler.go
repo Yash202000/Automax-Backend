@@ -30,15 +30,17 @@ type UserHandler struct {
 	validator   *validator.Validate
 	redisClient *redis.Client
 	cfg         *config.Config
+	wsHub       *services.WSHub
 }
 
-func NewUserHandler(userService services.UserService, storage *storage.MinIOStorage, redisClient *redis.Client, cfg *config.Config) *UserHandler {
+func NewUserHandler(userService services.UserService, storage *storage.MinIOStorage, redisClient *redis.Client, cfg *config.Config, wsHub *services.WSHub) *UserHandler {
 	return &UserHandler{
 		userService: userService,
 		storage:     storage,
 		validator:   validator.New(),
 		redisClient: redisClient,
 		cfg:         cfg,
+		wsHub:       wsHub,
 	}
 }
 
@@ -563,6 +565,14 @@ func (h *UserHandler) UpdateUserCallStatus(c *fiber.Ctx) error {
 	resp, err := h.userService.UpdateUserCallStatus(c.UserContext(), userExt, req.Status)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	// Broadcast the availability change to all broadcast clients (e.g. incident
+	// assignee dropdowns) so they can reflect live agent status. The payload map
+	// returned by the service already contains id, extension, call_status and
+	// updated_at, matching the identifiers the ["admin","users"] list uses.
+	if h.wsHub != nil {
+		h.wsHub.BroadcastToAll("user_status_changed", resp)
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "user_call_status_updated"), resp)
