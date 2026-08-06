@@ -63,13 +63,13 @@ func (h *ReportHandler) injectReportScope(c *fiber.Ctx, ctx context.Context, dat
 		return filters, ctx
 	}
 
-	restrictSuperAdmins := strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_ADMIN_SCOPE")), "true")
+	restrictAdminRole := strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_ADMIN_SCOPE")), "true")
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
 	if err != nil || user == nil {
 		return filters, ctx
 	}
-	if (user.IsSuperAdmin || user.HasRole("admin")) && !restrictSuperAdmins {
+	if user.IsSuperAdmin || (!restrictAdminRole && user.HasRole("admin")) {
 		return filters, ctx
 	}
 
