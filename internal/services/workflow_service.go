@@ -945,6 +945,88 @@ func (s *workflowService) GetWorkflowByClassification(ctx context.Context, class
 
 // State management
 
+// SLAValidationError marks a business-rule SLA violation that should be surfaced to the
+// admin as a blocking 400/422 response rather than a generic 500.
+type SLAValidationError struct {
+	msg string
+}
+
+func (e *SLAValidationError) Error() string { return e.msg }
+
+// ValidateStateSLAAgainstClosureSLA blocks a state SLA that exceeds the largest maximum
+// incident closure SLA configured (Classification -> Criticality -> MaxClosingHours/Minutes)
+// across all classifications linked to this workflow. The largest configured max across all
+// linked classification/criticality combinations is used as the workflow-wide ceiling, so a
+// state's SLA is only blocked once it exceeds the most permissive limit available to it.
+func (s *workflowService) ValidateStateSLAAgainstClosureSLA(ctx context.Context, workflowID uuid.UUID, slaHours *int, slaUnit string) error {
+	if slaHours == nil || *slaHours <= 0 {
+		return nil
+	}
+
+	stateDuration := (&models.WorkflowState{SLAHours: slaHours, SLAUnit: slaUnit}).SLADuration()
+
+	workflow, err := s.repo.FindByIDWithRelations(ctx, workflowID)
+	if err != nil {
+		return err
+	}
+
+	var (
+		found                  bool
+		largestMaxDuration     time.Duration
+		largestClassification  string
+		largestCriticalityName string
+	)
+
+	for _, classification := range workflow.Classifications {
+		criticalities, err := s.classRepo.GetCriticalitiesByClassificationID(ctx, classification.ID)
+		if err != nil {
+			return err
+		}
+
+		for _, crit := range criticalities {
+			if !crit.IsActive {
+				continue
+			}
+			maxDuration := time.Duration(crit.MaxClosingHours)*time.Hour + time.Duration(crit.MaxClosingMinutes)*time.Minute
+			if maxDuration <= 0 {
+				continue
+			}
+			if !found || maxDuration > largestMaxDuration {
+				found = true
+				largestMaxDuration = maxDuration
+				largestClassification = classification.Name
+				largestCriticalityName = "this"
+				if crit.Criticality != nil && crit.Criticality.Name != "" {
+					largestCriticalityName = crit.Criticality.Name
+				}
+			}
+		}
+	}
+
+	if !found || stateDuration <= largestMaxDuration {
+		return nil
+	}
+
+	return &SLAValidationError{msg: fmt.Sprintf(
+		"The configured workflow SLA duration exceeds the maximum incident closure SLA of %s defined for classification %q (%s criticality). Please reduce the workflow duration before saving.",
+		FormatSLADuration(largestMaxDuration), largestClassification, largestCriticalityName,
+	)}
+}
+
+// FormatSLADuration renders a duration as "Xh Ym" (or just "Xh"/"Ym") for error messages.
+func FormatSLADuration(d time.Duration) string {
+	totalMinutes := int(d.Minutes())
+	hours := totalMinutes / 60
+	minutes := totalMinutes % 60
+	if minutes == 0 {
+		return fmt.Sprintf("%d hours", hours)
+	}
+	if hours == 0 {
+		return fmt.Sprintf("%d minutes", minutes)
+	}
+	return fmt.Sprintf("%dh %dm", hours, minutes)
+}
+
 func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID, req *models.WorkflowStateCreateRequest) (*models.WorkflowStateResponse, error) {
 	// Serialise DurationOptions to JSON if provided
 	var durationOptionsJSON string
@@ -1002,6 +1084,10 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 	}
 	if state.Color == "" {
 		state.Color = "#6366f1"
+	}
+
+	if err := s.ValidateStateSLAAgainstClosureSLA(ctx, workflowID, state.SLAHours, state.SLAUnit); err != nil {
+		return nil, err
 	}
 
 	if err := s.repo.CreateState(ctx, state); err != nil {
@@ -1182,6 +1268,10 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 	}
 	if req.NewIncidentSMSTemplateCode != nil {
 		state.NewIncidentSMSTemplateCode = *req.NewIncidentSMSTemplateCode
+	}
+
+	if err := s.ValidateStateSLAAgainstClosureSLA(ctx, state.WorkflowID, state.SLAHours, state.SLAUnit); err != nil {
+		return nil, err
 	}
 
 	if err := s.repo.UpdateState(ctx, state); err != nil {
