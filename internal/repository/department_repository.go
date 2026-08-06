@@ -21,7 +21,7 @@ type DepartmentRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context) ([]models.Department, error)
 	ListFiltered(ctx context.Context, filter models.DepartmentListFilter) ([]models.Department, int64, error)
-	GetTree(ctx context.Context) ([]models.Department, error)
+	GetTree(ctx context.Context, scopeDepartmentIDs []uuid.UUID) ([]models.Department, error)
 	GetChildren(ctx context.Context, parentID uuid.UUID) ([]models.Department, error)
 	GetByParentID(ctx context.Context, parentID *uuid.UUID) ([]models.Department, error)
 	AssignLocations(ctx context.Context, departmentID uuid.UUID, locationIDs []uuid.UUID) error
@@ -234,10 +234,18 @@ func (r *departmentRepository) ListFiltered(ctx context.Context, filter models.D
 	return departments, total, err
 }
 
-func (r *departmentRepository) GetTree(ctx context.Context) ([]models.Department, error) {
+// GetTree returns the department tree. When scopeDepartmentIDs is non-empty, only
+// those departments (and their descendants) are returned as roots, instead of the
+// full org tree — used to restrict department-manager users to their own department(s).
+func (r *departmentRepository) GetTree(ctx context.Context, scopeDepartmentIDs []uuid.UUID) ([]models.Department, error) {
 	var roots []models.Department
-	err := r.db.WithContext(ctx).
-		Where("parent_id IS NULL").
+	query := r.db.WithContext(ctx)
+	if len(scopeDepartmentIDs) > 0 {
+		query = query.Where("id IN ?", scopeDepartmentIDs)
+	} else {
+		query = query.Where("parent_id IS NULL")
+	}
+	err := query.
 		Preload("Children", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order, name")
 		}).
