@@ -1,6 +1,7 @@
 package models
 
 import (
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,33 +18,33 @@ const (
 )
 
 type User struct {
-	ID              uuid.UUID        `gorm:"type:uuid;primary_key" json:"id"`
-	NationalID      string           `gorm:"not null;default:''" json:"national_id"`
-	Email           string           `gorm:"uniqueIndex;not null" json:"email"`
-	Username        string           `gorm:"uniqueIndex;not null" json:"username"`
-	Password        string           `gorm:"not null" json:"-"`
-	FirstName       string           `gorm:"size:100" json:"first_name"`
-	LastName        string           `gorm:"size:100" json:"last_name"`
-	Phone           string           `gorm:"size:20" json:"phone"`
-	MobileVerified  bool             `gorm:"default:false" json:"mobile_verified"`
-	Avatar          string           `gorm:"size:500" json:"avatar"`
-	DepartmentID    *uuid.UUID       `gorm:"type:uuid;index" json:"department_id"`
-	Department      *Department      `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
-	Departments     []Department     `gorm:"many2many:user_departments;" json:"departments,omitempty"`
-	LocationID      *uuid.UUID       `gorm:"type:uuid;index" json:"location_id"`
-	Location        *Location        `gorm:"foreignKey:LocationID" json:"location,omitempty"`
-	Locations       []Location       `gorm:"many2many:user_locations;" json:"locations,omitempty"`
-	Classifications []Classification `gorm:"many2many:user_classifications;" json:"classifications,omitempty"`
-	Roles           []Role           `gorm:"many2many:user_roles;" json:"roles,omitempty"`
-	IsActive                      bool             `gorm:"default:true" json:"is_active"`
-	IsSuperAdmin                  bool             `gorm:"default:false" json:"is_super_admin"`
-	IsADUser                      bool             `gorm:"default:false" json:"is_ad_user"`
-	DeptManagerDepartmentID       *uuid.UUID       `gorm:"type:uuid;index" json:"dept_manager_department_id,omitempty"`
-	DeptManagerDepartment         *Department      `gorm:"foreignKey:DeptManagerDepartmentID" json:"dept_manager_department,omitempty"`
-	DeptManagerClassificationID   *uuid.UUID       `gorm:"type:uuid;index" json:"dept_manager_classification_id,omitempty"`
-	DeptManagerClassification     *Classification  `gorm:"foreignKey:DeptManagerClassificationID" json:"dept_manager_classification,omitempty"`
-	DeptManagerLocationID         *uuid.UUID       `gorm:"type:uuid;index" json:"dept_manager_location_id,omitempty"`
-	DeptManagerLocation           *Location        `gorm:"foreignKey:DeptManagerLocationID" json:"dept_manager_location,omitempty"`
+	ID                          uuid.UUID        `gorm:"type:uuid;primary_key" json:"id"`
+	NationalID                  string           `gorm:"not null;default:''" json:"national_id"`
+	Email                       string           `gorm:"uniqueIndex;not null" json:"email"`
+	Username                    string           `gorm:"uniqueIndex;not null" json:"username"`
+	Password                    string           `gorm:"not null" json:"-"`
+	FirstName                   string           `gorm:"size:100" json:"first_name"`
+	LastName                    string           `gorm:"size:100" json:"last_name"`
+	Phone                       string           `gorm:"size:20" json:"phone"`
+	MobileVerified              bool             `gorm:"default:false" json:"mobile_verified"`
+	Avatar                      string           `gorm:"size:500" json:"avatar"`
+	DepartmentID                *uuid.UUID       `gorm:"type:uuid;index" json:"department_id"`
+	Department                  *Department      `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
+	Departments                 []Department     `gorm:"many2many:user_departments;" json:"departments,omitempty"`
+	LocationID                  *uuid.UUID       `gorm:"type:uuid;index" json:"location_id"`
+	Location                    *Location        `gorm:"foreignKey:LocationID" json:"location,omitempty"`
+	Locations                   []Location       `gorm:"many2many:user_locations;" json:"locations,omitempty"`
+	Classifications             []Classification `gorm:"many2many:user_classifications;" json:"classifications,omitempty"`
+	Roles                       []Role           `gorm:"many2many:user_roles;" json:"roles,omitempty"`
+	IsActive                    bool             `gorm:"default:true" json:"is_active"`
+	IsSuperAdmin                bool             `gorm:"default:false" json:"is_super_admin"`
+	IsADUser                    bool             `gorm:"default:false" json:"is_ad_user"`
+	DeptManagerDepartmentID     *uuid.UUID       `gorm:"type:uuid;index" json:"dept_manager_department_id,omitempty"`
+	DeptManagerDepartment       *Department      `gorm:"foreignKey:DeptManagerDepartmentID" json:"dept_manager_department,omitempty"`
+	DeptManagerClassificationID *uuid.UUID       `gorm:"type:uuid;index" json:"dept_manager_classification_id,omitempty"`
+	DeptManagerClassification   *Classification  `gorm:"foreignKey:DeptManagerClassificationID" json:"dept_manager_classification,omitempty"`
+	DeptManagerLocationID       *uuid.UUID       `gorm:"type:uuid;index" json:"dept_manager_location_id,omitempty"`
+	DeptManagerLocation         *Location        `gorm:"foreignKey:DeptManagerLocationID" json:"dept_manager_location,omitempty"`
 	// Extension is transient (no DB column): the current PBX extension lives in the
 	// extension_assignments table. It is populated from CurrentExtension by AfterFind
 	// so API responses keep exposing it. Managed only via the extensions API.
@@ -131,6 +132,22 @@ func (u *User) ScopeDepartmentID() *uuid.UUID {
 	return nil
 }
 
+// ScopeDepartmentIDs returns all department IDs the user is scoped to.
+// Priority: DeptManagerDepartmentID > DepartmentID > all M2M departments.
+func (u *User) ScopeDepartmentIDs() []uuid.UUID {
+	if u.DeptManagerDepartmentID != nil {
+		return []uuid.UUID{*u.DeptManagerDepartmentID}
+	}
+	if u.DepartmentID != nil {
+		return []uuid.UUID{*u.DepartmentID}
+	}
+	ids := make([]uuid.UUID, 0, len(u.Departments))
+	for _, d := range u.Departments {
+		ids = append(ids, d.ID)
+	}
+	return ids
+}
+
 // GetPermissions returns all unique permission codes for the user
 func (u *User) GetPermissions() []string {
 	if u.IsSuperAdmin {
@@ -162,7 +179,7 @@ type UserRegisterRequest struct {
 	Password          string      `json:"password" validate:"required,min=6"`
 	FirstName         string      `json:"first_name" validate:"max=100"`
 	LastName          string      `json:"last_name" validate:"max=100"`
-	Phone             string      `json:"phone" validate:"max=20"`
+	Phone             string      `json:"phone" validate:"omitempty,mobile,max=20"`
 	Extension         string      `json:"extension" validate:"max=20"`
 	DepartmentID      *uuid.UUID  `json:"department_id"`
 	LocationID        *uuid.UUID  `json:"location_id"`
@@ -170,6 +187,80 @@ type UserRegisterRequest struct {
 	LocationIDs       []uuid.UUID `json:"location_ids"`
 	ClassificationIDs []uuid.UUID `json:"classification_ids"`
 	RoleIDs           []uuid.UUID `json:"role_ids"`
+}
+
+// UserIdentifier is the minimal projection of a user row needed for duplicate checks.
+type UserIdentifier struct {
+	Email    string `json:"email"`
+	Username string `json:"username"`
+	Phone    string `json:"phone"`
+}
+
+// ExistingUserIdentifiers tracks which emails, usernames and phones are already taken - both by
+// existing users and by rows already created earlier in the same bulk import. Emails are keyed
+// lower-cased to match how Register normalises them before writing.
+type ExistingUserIdentifiers struct {
+	Emails    map[string]struct{}
+	Usernames map[string]struct{}
+	Phones    map[string]struct{}
+}
+
+func NewExistingUserIdentifiers(size int) *ExistingUserIdentifiers {
+	return &ExistingUserIdentifiers{
+		Emails:    make(map[string]struct{}, size),
+		Usernames: make(map[string]struct{}, size),
+		Phones:    make(map[string]struct{}, size),
+	}
+}
+
+// Add marks the given identifiers as taken, ignoring empty values.
+func (e *ExistingUserIdentifiers) Add(email, username, phone string) {
+	if e == nil {
+		return
+	}
+	if email = normalizeEmail(email); email != "" {
+		e.Emails[email] = struct{}{}
+	}
+	if username = strings.TrimSpace(username); username != "" {
+		e.Usernames[username] = struct{}{}
+	}
+	if phone = strings.TrimSpace(phone); phone != "" {
+		e.Phones[phone] = struct{}{}
+	}
+}
+
+func (e *ExistingUserIdentifiers) HasEmail(email string) bool {
+	if e == nil {
+		return false
+	}
+	return isTaken(e.Emails, normalizeEmail(email))
+}
+
+func (e *ExistingUserIdentifiers) HasUsername(username string) bool {
+	if e == nil {
+		return false
+	}
+	return isTaken(e.Usernames, strings.TrimSpace(username))
+}
+
+func (e *ExistingUserIdentifiers) HasPhone(phone string) bool {
+	if e == nil {
+		return false
+	}
+	return isTaken(e.Phones, strings.TrimSpace(phone))
+}
+
+func isTaken(set map[string]struct{}, value string) bool {
+	if value == "" {
+		return false
+	}
+	_, ok := set[value]
+	return ok
+}
+
+// normalizeEmail matches the normalisation Register applies before persisting an email.
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
 }
 
 type UserLoginRequest struct {
@@ -225,7 +316,7 @@ type UserUpdateRequest struct {
 	FirstName                   string      `json:"first_name" validate:"max=100"`
 	LastName                    string      `json:"last_name" validate:"max=100"`
 	Username                    string      `json:"username" validate:"omitempty,min=3,max=50"`
-	Phone                       string      `json:"phone" validate:"max=20"`
+	Phone                       string      `json:"phone" validate:"omitempty,mobile,max=20"`
 	MobileVerified              *bool       `json:"mobile_verified"`
 	Extension                   *string     `json:"extension" validate:"omitempty,max=20"`
 	DepartmentID                *uuid.UUID  `json:"department_id"`

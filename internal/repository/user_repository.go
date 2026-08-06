@@ -28,6 +28,7 @@ type UserRepository interface {
 	ListByDepartment(ctx context.Context, departmentID uuid.UUID, page, limit int) ([]models.User, int64, error)
 	ExistsByEmail(ctx context.Context, email string) (bool, error)
 	ExistsByUsername(ctx context.Context, username string) (bool, error)
+	FindExistingIdentifiers(ctx context.Context, emails, usernames, phones []string) ([]models.UserIdentifier, error)
 	AssignRoles(ctx context.Context, userID uuid.UUID, roleIDs []uuid.UUID) error
 	AssignDepartments(ctx context.Context, userID uuid.UUID, departmentIDs []uuid.UUID) error
 	AssignLocations(ctx context.Context, userID uuid.UUID, locationIDs []uuid.UUID) error
@@ -58,6 +59,7 @@ type UserRepository interface {
 	ExistsByNationalID(ctx context.Context, nationalID string) (bool, error)
 	FindByNationalIDForLogin(ctx context.Context, nationalID string) (*models.User, error)
 	ExistsByPhoneAndName(ctx context.Context, phone string, name ...string) (bool, error)
+	CountAssignedIncidents(ctx context.Context, userID uuid.UUID) (int64, error)
 }
 
 type userRepository struct {
@@ -223,18 +225,18 @@ func (r *userRepository) Update(ctx context.Context, user *models.User) error {
 	// Use Updates() with specific fields instead of Save() to avoid saving all loaded relations
 	// This prevents the "extended protocol limited to 65535 parameters" error
 	return r.db.WithContext(ctx).Model(&models.User{}).Where("id = ?", user.ID).Updates(map[string]interface{}{
-		"username":                        user.Username,
-		"first_name":                      user.FirstName,
-		"last_name":                       user.LastName,
-		"phone":                           user.Phone,
-		"password":                        user.Password,
-		"mobile_verified":                 user.MobileVerified,
-		"is_active":                       user.IsActive,
-		"department_id":                   user.DepartmentID,
-		"location_id":                     user.LocationID,
-		"dept_manager_department_id":      user.DeptManagerDepartmentID,
-		"dept_manager_classification_id":  user.DeptManagerClassificationID,
-		"dept_manager_location_id":        user.DeptManagerLocationID,
+		"username":                       user.Username,
+		"first_name":                     user.FirstName,
+		"last_name":                      user.LastName,
+		"phone":                          user.Phone,
+		"password":                       user.Password,
+		"mobile_verified":                user.MobileVerified,
+		"is_active":                      user.IsActive,
+		"department_id":                  user.DepartmentID,
+		"location_id":                    user.LocationID,
+		"dept_manager_department_id":     user.DeptManagerDepartmentID,
+		"dept_manager_classification_id": user.DeptManagerClassificationID,
+		"dept_manager_location_id":       user.DeptManagerLocationID,
 	}).Error
 }
 
@@ -260,7 +262,8 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 	isStrict := len(strictDepartment) > 0 && strictDepartment[0]
 
 	// Build base query with search + join filters
-	base := r.db.WithContext(ctx).Model(&models.User{})
+	base := r.db.WithContext(ctx).Model(&models.User{}).
+		Where("LOWER(users.email) NOT LIKE 'ivr_email_%'")
 
 	if search != "" {
 		like := "%" + strings.ToLower(search) + "%"
@@ -445,6 +448,38 @@ func (r *userRepository) ExistsByUsername(ctx context.Context, username string) 
 	var count int64
 	err := r.db.WithContext(ctx).Model(&models.User{}).Where("username = ?", username).Count(&count).Error
 	return count > 0, err
+}
+
+// FindExistingIdentifiers returns the email/username/phone of every user matching any of the supplied
+// values. One query, three columns, no preloads - built for bulk-import duplicate pre-checks.
+// Emails are compared case-insensitively, like ExistsByEmail, so pass lower-cased emails.
+func (r *userRepository) FindExistingIdentifiers(ctx context.Context, emails, usernames, phones []string) ([]models.UserIdentifier, error) {
+	if len(emails) == 0 && len(usernames) == 0 && len(phones) == 0 {
+		return []models.UserIdentifier{}, nil
+	}
+
+	conditions := make([]string, 0, 3)
+	args := make([]interface{}, 0, 3)
+	if len(emails) > 0 {
+		conditions = append(conditions, "LOWER(email) IN ?")
+		args = append(args, emails)
+	}
+	if len(usernames) > 0 {
+		conditions = append(conditions, "username IN ?")
+		args = append(args, usernames)
+	}
+	if len(phones) > 0 {
+		conditions = append(conditions, "phone IN ?")
+		args = append(args, phones)
+	}
+
+	var identifiers []models.UserIdentifier
+	err := r.db.WithContext(ctx).
+		Model(&models.User{}).
+		Select("email", "username", "phone").
+		Where(strings.Join(conditions, " OR "), args...).
+		Find(&identifiers).Error
+	return identifiers, err
 }
 
 func (r *userRepository) AssignRoles(ctx context.Context, userID uuid.UUID, roleIDs []uuid.UUID) error {
@@ -898,6 +933,17 @@ func (r *userRepository) ExistsByNationalID(ctx context.Context, nationalID stri
 	var count int64
 	err := r.db.WithContext(ctx).Model(&models.User{}).Where("national_id = ?", nationalID).Count(&count).Error
 	return count > 0, err
+}
+
+// CountAssignedIncidents returns how many live (non-deleted) incidents the user is
+// currently assigned to — either as the single assignee (incidents.assignee_id) or via
+// the many-to-many incident_assignees join. Used to block deletion of an assigned user.
+func (r *userRepository) CountAssignedIncidents(ctx context.Context, userID uuid.UUID) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&models.Incident{}).
+		Where("assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", userID, userID).
+		Count(&count).Error
+	return count, err
 }
 
 func (r *userRepository) FindByNationalIDForLogin(ctx context.Context, nationalID string) (*models.User, error) {

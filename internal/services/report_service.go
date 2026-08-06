@@ -359,7 +359,7 @@ func (s *reportService) PreviewReport(ctx context.Context, req *models.ReportCre
 }
 
 func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExportRequest) ([]byte, string, string, error) {
-	const exportLimit = 10000
+	const exportLimit = int(math.MaxInt32)
 	data, _, err := s.dispatchQuery(ctx,
 		req.DataSource, req.Filters, firstSorting(req.Sorting), 1, exportLimit,
 	)
@@ -491,10 +491,15 @@ func (s *reportService) generateExcel(
 	sheet := "Report"
 	f.SetSheetName("Sheet1", sheet)
 
+	// Attachment columns expand to one physical column per attachment so every
+	// file gets its own cell and its own hyperlink. All layout below is driven
+	// by this expanded list, not by the requested columns.
+	expanded := expandExportColumns(columns, data)
+
 	// ── Column widths ─────────────────────────────────────────────────────
-	if len(columns) > 0 {
+	if len(expanded) > 0 {
 		f.SetColWidth(sheet, "A", "A", 8) // S.No. column
-		lastCol, _ := excelize.ColumnNumberToName(len(columns) + 1)
+		lastCol, _ := excelize.ColumnNumberToName(len(expanded) + 1)
 		f.SetColWidth(sheet, "B", lastCol, 27)
 	}
 
@@ -507,7 +512,7 @@ func (s *reportService) generateExcel(
 
 	// ── Title row ─────────────────────────────────────────────────────────
 	if title != "" {
-		lastCol, _ := excelize.ColumnNumberToName(len(columns) + 1)
+		lastCol, _ := excelize.ColumnNumberToName(len(expanded) + 1)
 		f.MergeCell(sheet, "A1", lastCol+"1")
 		titleStyle, _ := f.NewStyle(&excelize.Style{
 			Font:      &excelize.Font{Bold: true, Size: 14},
@@ -546,36 +551,38 @@ func (s *reportService) generateExcel(
 	// ── Write headers ─────────────────────────────────────────────────────
 	headerRowStr := strconv.Itoa(headerRow)
 	f.SetCellValue(sheet, "A"+headerRowStr, "#")
-	for i, col := range columns {
+	for i, ec := range expanded {
 		colName, _ := excelize.ColumnNumberToName(i + 2)
-		f.SetCellValue(sheet, colName+headerRowStr, resolveColumnLabel(col.Label, col.LabelAr, lang))
+		label := resolveColumnLabel(ec.field.Label, ec.field.LabelAr, lang)
+		// Only number the header when the field actually spans several columns,
+		// so single-attachment reports keep their plain label.
+		if ec.attachIdx >= 0 && ec.attachSpan > 1 {
+			label = fmt.Sprintf("%s %d", label, ec.attachIdx+1)
+		}
+		f.SetCellValue(sheet, colName+headerRowStr, label)
 	}
 
 	// ── Write data rows ───────────────────────────────────────────────────
 	for rowIdx, row := range data {
 		excelRow := strconv.Itoa(dataStartRow + rowIdx)
 		f.SetCellValue(sheet, "A"+excelRow, rowIdx+1)
-		for colIdx, col := range columns {
+		for colIdx, ec := range expanded {
 			colName, _ := excelize.ColumnNumberToName(colIdx + 2)
 			cell := colName + excelRow
+			col := ec.field
 			val := ""
 			if v, ok := row[col.Label]; ok && v != nil {
 				val = formatExportValue(col.Label, v)
 			}
 
 			switch {
-			case isAttachmentCol(col.Label) && val != "":
+			case ec.attachIdx >= 0:
+				// One attachment per cell, one hyperlink per cell.
 				urls := parseAttachmentURLs(val)
-				if len(urls) == 1 {
-					f.SetCellValue(sheet, cell, "Attachment 1")
-					f.SetCellHyperLink(sheet, cell, urls[0], "External")
+				if ec.attachIdx < len(urls) {
+					f.SetCellValue(sheet, cell, fmt.Sprintf("Attachment %d", ec.attachIdx+1))
+					f.SetCellHyperLink(sheet, cell, urls[ec.attachIdx], "External")
 					f.SetCellStyle(sheet, cell, cell, hyperlinkStyleId)
-				} else if len(urls) > 1 {
-					labels := make([]string, len(urls))
-					for i := range urls {
-						labels[i] = fmt.Sprintf("Attachment %d", i+1)
-					}
-					f.SetCellValue(sheet, cell, strings.Join(labels, " | "))
 				} else {
 					f.SetCellValue(sheet, cell, "-")
 				}
@@ -610,7 +617,7 @@ func (s *reportService) generateExcel(
 
 	// ── Filters & Stats ───────────────────────────────────────────────────
 	currentRow := dataStartRow + len(data) + 2 // one blank row after last data row
-	lastDataCol, _ := excelize.ColumnNumberToName(len(columns) + 1)
+	lastDataCol, _ := excelize.ColumnNumberToName(len(expanded) + 1)
 
 	if len(filterDisplay) > 0 {
 		filterKeys := make([]string, 0, len(filterDisplay))
@@ -1305,6 +1312,58 @@ func isAttachmentCol(label string) bool {
 	return strings.Contains(strings.ToLower(label), "attachment")
 }
 
+// exportColumn is one physical spreadsheet column. Most report columns map to
+// exactly one; an attachment column expands into one column per attachment so
+// each cell can carry its own hyperlink (Excel allows only one per cell).
+type exportColumn struct {
+	field      models.ColumnField
+	attachIdx  int // -1 for normal columns, else zero-based attachment slot
+	attachSpan int // total columns produced for this attachment field
+}
+
+// excelMaxColumns is the hard per-worksheet column limit; past it
+// excelize.ColumnNumberToName can no longer produce a valid cell reference.
+const excelMaxColumns = 16384
+
+// expandExportColumns widens every attachment column to the maximum number of
+// attachments present in the data, so each attachment gets its own cell.
+// Non-attachment columns pass through unchanged.
+func expandExportColumns(columns []models.ColumnField, data []map[string]interface{}) []exportColumn {
+	expanded := make([]exportColumn, 0, len(columns))
+	for _, col := range columns {
+		if len(expanded) >= excelMaxColumns-1 { // -1 for the leading S.No. column
+			break
+		}
+
+		if !isAttachmentCol(col.Label) {
+			expanded = append(expanded, exportColumn{field: col, attachIdx: -1})
+			continue
+		}
+
+		span := 0
+		for _, row := range data {
+			v, ok := row[col.Label]
+			if !ok || v == nil {
+				continue
+			}
+			if n := len(parseAttachmentURLs(formatExportValue(col.Label, v))); n > span {
+				span = n
+			}
+		}
+		if span < 1 {
+			span = 1 // keep a placeholder column so a requested field never vanishes
+		}
+
+		for i := 0; i < span; i++ {
+			if len(expanded) >= excelMaxColumns-1 {
+				break
+			}
+			expanded = append(expanded, exportColumn{field: col, attachIdx: i, attachSpan: span})
+		}
+	}
+	return expanded
+}
+
 func isTaskIdCol(label string) bool {
 	lower := strings.ToLower(label)
 	return strings.Contains(lower, "task_id") || strings.Contains(lower, "task id")
@@ -1555,6 +1614,19 @@ func (s *reportService) GetDataSources(ctx context.Context) []models.DataSourceI
 				{Field: "updated_at", Label: "Updated At", Type: "date", Filterable: true, Sortable: true},
 				{Field: "resolved_at", Label: "Resolved At", Type: "date", Filterable: true, Sortable: true},
 				{Field: "closed_at", Label: "Closed At", Type: "date", Filterable: true, Sortable: true},
+				// First Response Time. Derived from the incident_revisions audit trail at read
+				// time, so it can never drift from it. first_responder_name and
+				// responded_by_creator are projection-only, hence not filterable/sortable.
+				{Field: "first_response_at", Label: "First Response At", Type: "date", Filterable: true, Sortable: true},
+				{Field: "first_response_minutes", Label: "First Response Time (Minutes)", Type: "number", Filterable: true, Sortable: true},
+				{Field: "first_response_action", Label: "First Response Action", Type: "string", Filterable: true, Sortable: true},
+				{Field: "first_response_description", Label: "First Response Description", Type: "string", Filterable: true, Sortable: false},
+				{Field: "first_responder_username", Label: "First Responding User", Type: "string", Filterable: true, Sortable: true},
+				{Field: "first_responder_name", Label: "First Responding User (Name)", Type: "string", Filterable: false, Sortable: false},
+				{Field: "responded_by_creator", Label: "Responded By Creator", Type: "boolean", Filterable: false, Sortable: false},
+				// Resolution and closure elapsed time, for comparison against response time.
+				{Field: "resolution_minutes", Label: "Resolution Time (Minutes)", Type: "number", Filterable: true, Sortable: true},
+				{Field: "closure_minutes", Label: "Closure Time (Minutes)", Type: "number", Filterable: true, Sortable: true},
 			},
 		},
 		{
@@ -1590,7 +1662,7 @@ func (s *reportService) GetDataSources(ctx context.Context) []models.DataSourceI
 			Label: "Departments",
 			Fields: []models.DataSourceField{
 				{Field: "name", Label: "Name", Type: "string", Filterable: true, Sortable: true},
-				{Field: "code", Label: "Code", Type: "string", Filterable: true, Sortable: true},
+				{Field: "code", Label: "Organization Code", Type: "string", Filterable: true, Sortable: true},
 				{Field: "description", Label: "Description", Type: "string", Filterable: true, Sortable: false},
 				{Field: "parent_name", Label: "Parent Department", Type: "string", Filterable: true, Sortable: true},
 				{Field: "is_active", Label: "Active", Type: "boolean", Filterable: true, Sortable: true},

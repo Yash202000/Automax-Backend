@@ -596,7 +596,19 @@ func (h *WorkflowHandler) CreateState(c *fiber.Ctx) error {
 		req.AssignUserID = nil
 	}
 
-	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+	validationErrors := validation.ValidateStruct(c.UserContext(), &req)
+
+	// EPM940 auto-generates the State Code (STE-######); other clients (e.g. VD2)
+	// must supply it. The rule is client-specific, so fold it into validationErrors
+	// like CreateWorkflow does rather than a static "required" struct tag.
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) && req.Code == "" {
+		if validationErrors == nil {
+			validationErrors = map[string]string{}
+		}
+		validationErrors["Code"] = i18n.T(c.UserContext(), "workflow_code_required")
+	}
+
+	if len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
 			"errors":  validationErrors,
@@ -683,6 +695,12 @@ func (h *WorkflowHandler) UpdateState(c *fiber.Ctx) error {
 	var req models.WorkflowStateUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+
+	// State Code is system-generated and immutable for EPM940. Discard any
+	// client-supplied value so the service never overwrites the generated code.
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+		req.Code = ""
 	}
 
 	// Get old state for action logging
@@ -872,7 +890,19 @@ func (h *WorkflowHandler) CreateTransition(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
-	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+	validationErrors := validation.ValidateStruct(c.UserContext(), &req)
+
+	// EPM940 auto-generates the Transition Code (TRN-######); other clients (e.g. VD2)
+	// must supply it. The rule is client-specific, so fold it into validationErrors
+	// like CreateWorkflow does rather than a static "required" struct tag.
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) && req.Code == "" {
+		if validationErrors == nil {
+			validationErrors = map[string]string{}
+		}
+		validationErrors["Code"] = i18n.T(c.UserContext(), "workflow_code_required")
+	}
+
+	if len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
 			"errors":  validationErrors,
@@ -960,6 +990,12 @@ func (h *WorkflowHandler) UpdateTransition(c *fiber.Ctx) error {
 	var req models.WorkflowTransitionUpdateRequest
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+
+	// Transition Code is system-generated and immutable for EPM940. Discard any
+	// client-supplied value so the service never overwrites the generated code.
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+		req.Code = ""
 	}
 
 	// Get old transition for action logging

@@ -48,7 +48,7 @@ func (d *Department) BeforeCreate(tx *gorm.DB) error {
 type DepartmentCreateRequest struct {
 	Name              string      `json:"name" validate:"required,notblank,name,min=1,max=100"`
 	NameAr            string      `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
-	Code              string      `json:"code" validate:"required,min=1,max=50"`
+	Code              string      `json:"code" validate:"omitempty,min=1,max=50"`
 	Description       string      `json:"description" validate:"max=500"`
 	DescriptionAr     string      `json:"description_ar" validate:"max=500"`
 	Type              string      `json:"type" validate:"omitempty,oneof=internal external"`
@@ -80,6 +80,8 @@ type DepartmentUpdateRequest struct {
 
 // DepartmentListFilter holds query filters for the paginated department listing.
 type DepartmentListFilter struct {
+	Search         string     `query:"search"         json:"search"         validate:"omitempty,max=100"`
+	Code           string     `query:"code"           json:"code"           validate:"omitempty,max=50"`
 	Location       *uuid.UUID `query:"location"       json:"location"       validate:"omitempty,uuid4"`
 	Classification *uuid.UUID `query:"classification" json:"classification" validate:"omitempty,uuid4"`
 	Page           int        `query:"page"              json:"page"              validate:"omitempty,gte=1"`

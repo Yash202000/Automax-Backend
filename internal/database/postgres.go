@@ -3,12 +3,14 @@ package database
 import (
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/database/migrations"
 	"github.com/automax/backend/internal/models"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
@@ -285,6 +287,11 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_notification_templates_action_type ON notification_templates(action_type)")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_notification_templates_transition_id ON notification_templates(transition_id)")
 
+	// First Response Time is computed on read: the incident report query scans incident_revisions
+	// per incident to find the earliest qualifying staff action. This composite index serves that
+	// DISTINCT ON directly; without it the query degrades to a full scan as revisions accumulate.
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_incident_revisions_frt ON incident_revisions (incident_id, created_at, revision_number) INCLUDE (action_type, performed_by_id)`)
+
 	// Bilingual redesign: add new columns, migrate existing data, drop old single-language columns.
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS subject_en TEXT")
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS body_en    TEXT")
@@ -340,6 +347,12 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		log.Printf("Warning: user national_id migration failed: %v", err)
 	}
 
+	// Enforce phone uniqueness at the DB level — phone stays optional, but a
+	// non-blank number may only belong to one live user
+	if err := migrations.MigrateUserPhoneUnique(db); err != nil {
+		log.Printf("Warning: user phone unique index migration failed: %v", err)
+	}
+
 	// Drop recording_url from call_logs — URLs are now generated from call_log_attachments
 	if err := migrations.MigrateCallLogRecordingURL(db); err != nil {
 		log.Printf("Warning: call_log recording_url migration failed: %v", err)
@@ -362,6 +375,15 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	// Composite index for the incident communication history query (filter by incident_id, sort by created_at)
 	if err := migrations.MigrateNotificationLogIncidentIndex(db); err != nil {
 		log.Printf("Warning: notification_log incident index migration failed: %v", err)
+	}
+
+	// Assign a unique Organization Code (ORG-######) to any department missing one.
+	// EPM940 only — other clients supply department codes in the payload. Idempotent:
+	// only touches rows with an empty/NULL code.
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+		if err := migrations.MigrateDepartmentCodeBackfill(db); err != nil {
+			log.Printf("Warning: department code backfill failed: %v", err)
+		}
 	}
 
 	// Seed existing free-text goal categories as root Category rows
@@ -509,6 +531,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Create Users", Code: "users:create", Module: "users", Action: "create", Description: "Create new users"},
 		{Name: "Update Users", Code: "users:update", Module: "users", Action: "update", Description: "Update user information"},
 		{Name: "Delete Users", Code: "users:delete", Module: "users", Action: "delete", Description: "Delete users"},
+		{Name: "Reset User Password", Code: "users:reset_password", Module: "users", Action: "reset_password", Description: "Reset user password"},
 
 		// Role permissions
 		{Name: "View Roles", Code: "roles:view", Module: "roles", Action: "view", Description: "View roles list"},
@@ -622,6 +645,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Create Call Logs", Code: "call-logs:create", Module: "call-logs", Action: "create", Description: "Create call logs"},
 		{Name: "Update Call Logs", Code: "call-logs:update", Module: "call-logs", Action: "update", Description: "Update call logs"},
 		{Name: "Delete Call Logs", Code: "call-logs:delete", Module: "call-logs", Action: "delete", Description: "Delete call logs"},
+		{Name: "View All Call Logs", Code: "call-logs:view_all", Module: "call-logs", Action: "view_all", Description: "View call logs of other agents regardless of participation"},
 
 		// Lookup permissions
 		{Name: "View Lookups", Code: "lookups:view", Module: "lookups", Action: "view", Description: "View lookup categories and values"},
@@ -643,6 +667,10 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Update Draft Notifications", Code: "notifications:update", Module: "notifications", Action: "update", Description: "Update draft notifications"},
 		{Name: "Delete Notifications", Code: "notifications:delete", Module: "notifications", Action: "delete", Description: "Delete notification logs"},
 
+		// Communication Tracking Dashboard permissions (Call Center module)
+		{Name: "View Communication Tracking Dashboard", Code: "communication-tracking:view", Module: "communication-tracking", Action: "view", Description: "View the cross-channel communication tracking dashboard (SMS/Email/WhatsApp delivery status)"},
+		{Name: "Update Communication Tracking", Code: "communication-tracking:update", Module: "communication-tracking", Action: "update", Description: "Manually resend a failed/undeliverable/expired SMS, Email, or WhatsApp notification"},
+
 		// Template permissions
 		{Name: "View Templates", Code: "templates:read", Module: "templates", Action: "read", Description: "View notification templates"},
 		{Name: "Create Templates", Code: "templates:create", Module: "templates", Action: "create", Description: "Create notification templates"},
@@ -656,6 +684,9 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Delete Escalation Group", Code: "escalation-groups:delete", Module: "escalation-groups", Action: "delete", Description: "Delete escalation groups"},
 		{Name: "Assign Users to Escalation Group", Code: "escalation-groups:assign_users", Module: "escalation-groups", Action: "assign_users", Description: "Add or remove users from escalation groups"},
 		{Name: "Manage Escalation Rules", Code: "escalation-groups:manage_rules", Module: "escalation-groups", Action: "manage_rules", Description: "Configure escalation frequency, channel, and classification rules"},
+
+		// Escalation Policy permissions
+		{Name: "Create Escalation Policy", Code: "escalation-policies:create", Module: "escalation-policies", Action: "create", Description: "Create new escalation policies"},
 
 		// Caller Sentiment permissions
 		{Name: "Create Caller Sentiment", Code: "caller-sentiment:create", Module: "caller-sentiment", Action: "create", Description: "Record a sentiment entry after a call"},
@@ -730,7 +761,17 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 	var allPerms []models.Permission
 	db.Find(&allPerms)
 
-	// Admin role gets all permissions
+	// Admin role gets all permissions EXCEPT department-scoping restrictions.
+	// "view_department_only" permissions are restrictive (they limit a user to their
+	// own department) and should only be on department-scoped roles like Department
+	// Manager and Supervisor — not on the Administrator role.
+	var adminPerms []models.Permission
+	for _, p := range allPerms {
+		if !strings.HasSuffix(p.Code, "view_department_only") {
+			adminPerms = append(adminPerms, p)
+		}
+	}
+
 	var adminRole models.Role
 	result := db.Where("code = ?", "admin").First(&adminRole)
 	if result.Error == gorm.ErrRecordNotFound {
@@ -740,12 +781,20 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			Description: "Full system access",
 			IsSystem:    true,
 			IsActive:    true,
-			Permissions: allPerms,
+			Permissions: adminPerms,
 		}
 		db.Create(&adminRole)
-	} else {
-		// Update existing admin role to have all permissions
-		db.Model(&adminRole).Association("Permissions").Replace(allPerms)
+	} else if db.Model(&adminRole).Association("Permissions").Count() == 0 {
+		// Only seed permissions if role has none (fresh DB); skip if already configured
+		db.Model(&adminRole).Association("Permissions").Append(adminPerms)
+	}
+
+	// Remove department-scoping permissions from admin role on existing databases.
+	// These are restrictive and should never be on the Administrator role.
+	var deptScopePerms []models.Permission
+	db.Where("code LIKE ?", "%view_department_only").Find(&deptScopePerms)
+	if len(deptScopePerms) > 0 {
+		db.Model(&adminRole).Association("Permissions").Delete(deptScopePerms)
 	}
 
 	// User role with basic permissions
@@ -763,11 +812,10 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			Permissions: viewPerms,
 		}
 		db.Create(&userRole)
-	} else {
-		// Update existing user role to have all view permissions
+	} else if db.Model(&userRole).Association("Permissions").Count() == 0 {
 		var viewPerms []models.Permission
 		db.Where("action = ?", "view").Find(&viewPerms)
-		db.Model(&userRole).Association("Permissions").Replace(viewPerms)
+		db.Model(&userRole).Association("Permissions").Append(viewPerms)
 	}
 
 	// Manager role with broader permissions
@@ -793,8 +841,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			Permissions: managerPerms,
 		}
 		db.Create(&managerRole)
-	} else {
-		// Update existing manager role to have full management permissions
+	} else if db.Model(&managerRole).Association("Permissions").Count() == 0 {
 		var managerPerms []models.Permission
 		db.Where("action IN ?", []string{"view", "create", "update", "delete", "assign", "approve"}).Find(&managerPerms)
 		var managerRejectPerm models.Permission
@@ -828,16 +875,18 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		}
 		db.Create(&deptManagerRole)
 	} else {
-		var deptManagerPerms []models.Permission
-		db.Where("code IN ?", []string{
-			"users:view", "users:create", "users:update",
-			"incidents:view", "incidents:view_all", "incidents:transition", "incidents:assign", "incidents:comment",
-			"requests:view", "requests:view_all", "requests:transition", "requests:assign", "requests:comment",
-			"complaints:view", "complaints:view_all", "complaints:transition", "complaints:assign", "complaints:comment",
-			"queries:view", "queries:view_all", "queries:transition", "queries:assign", "queries:comment",
-			"incidents:view_department_only", "users:view_department_only",
-		}).Find(&deptManagerPerms)
-		db.Model(&deptManagerRole).Association("Permissions").Replace(deptManagerPerms)
+		if db.Model(&deptManagerRole).Association("Permissions").Count() == 0 {
+			var deptManagerPerms []models.Permission
+			db.Where("code IN ?", []string{
+				"users:view", "users:create", "users:update",
+				"incidents:view", "incidents:view_all", "incidents:transition", "incidents:assign", "incidents:comment",
+				"requests:view", "requests:view_all", "requests:transition", "requests:assign", "requests:comment",
+				"complaints:view", "complaints:view_all", "complaints:transition", "complaints:assign", "complaints:comment",
+				"queries:view", "queries:view_all", "queries:transition", "queries:assign", "queries:comment",
+				"incidents:view_department_only", "users:view_department_only",
+			}).Find(&deptManagerPerms)
+			db.Model(&deptManagerRole).Association("Permissions").Append(deptManagerPerms)
+		}
 		if !deptManagerRole.IsDepartmentManager {
 			db.Model(&deptManagerRole).Update("is_department_manager", true)
 		}
@@ -865,7 +914,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			Permissions: supervisorPerms,
 		}
 		db.Create(&supervisorRole)
-	} else {
+	} else if db.Model(&supervisorRole).Association("Permissions").Count() == 0 {
 		var supervisorPerms []models.Permission
 		db.Where("code IN ?", []string{
 			"incidents:view", "incidents:view_all", "incidents:transition", "incidents:assign", "incidents:comment",
@@ -875,7 +924,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			"users:view",
 			"incidents:view_department_only", "users:view_department_only",
 		}).Find(&supervisorPerms)
-		db.Model(&supervisorRole).Association("Permissions").Replace(supervisorPerms)
+		db.Model(&supervisorRole).Association("Permissions").Append(supervisorPerms)
 	}
 
 	// Grant extension-management permissions to the agent role (if it exists).
@@ -1043,75 +1092,75 @@ func seedDefaultIncidentWorkflow(db *gorm.DB, defaultDeptID, supportDeptID, admi
 		demoIncidents := []models.Incident{
 			{
 				IncidentNumber: "INC-2026-0001",
-				Title:         "Network outage in building A",
-				Description:   "Users in building A cannot access the network",
-				RecordType:    "incident",
-				WorkflowID:    workflow.ID,
+				Title:          "Network outage in building A",
+				Description:    "Users in building A cannot access the network",
+				RecordType:     "incident",
+				WorkflowID:     workflow.ID,
 				CurrentStateID: newState.ID,
-				DepartmentID:  &defaultDeptID,
-				Source:        "phone",
-				CreatedAt:     now,
-				UpdatedAt:     now,
+				DepartmentID:   &defaultDeptID,
+				Source:         "phone",
+				CreatedAt:      now,
+				UpdatedAt:      now,
 			},
 			{
 				IncidentNumber: "INC-2026-0002",
-				Title:         "Email server slow response",
-				Description:   "Email server taking more than 30 seconds to respond",
-				RecordType:    "incident",
-				WorkflowID:    workflow.ID,
+				Title:          "Email server slow response",
+				Description:    "Email server taking more than 30 seconds to respond",
+				RecordType:     "incident",
+				WorkflowID:     workflow.ID,
 				CurrentStateID: inProgressState.ID,
-				DepartmentID:  &supportDeptID,
-				Source:        "email",
-				CreatedAt:     now,
-				UpdatedAt:     now,
+				DepartmentID:   &supportDeptID,
+				Source:         "email",
+				CreatedAt:      now,
+				UpdatedAt:      now,
 			},
 			{
 				IncidentNumber: "REQ-2026-0001",
-				Title:         "New laptop request for onboarding",
-				Description:   "New employee needs a laptop for onboarding",
-				RecordType:    "request",
-				WorkflowID:    workflow.ID,
+				Title:          "New laptop request for onboarding",
+				Description:    "New employee needs a laptop for onboarding",
+				RecordType:     "request",
+				WorkflowID:     workflow.ID,
 				CurrentStateID: newState.ID,
-				DepartmentID:  &defaultDeptID,
-				Source:        "portal",
-				CreatedAt:     now,
-				UpdatedAt:     now,
+				DepartmentID:   &defaultDeptID,
+				Source:         "portal",
+				CreatedAt:      now,
+				UpdatedAt:      now,
 			},
 			{
 				IncidentNumber: "REQ-2026-0002",
-				Title:         "Software license renewal",
-				Description:   "Renew Adobe Creative Cloud license for design team",
-				RecordType:    "request",
-				WorkflowID:    workflow.ID,
+				Title:          "Software license renewal",
+				Description:    "Renew Adobe Creative Cloud license for design team",
+				RecordType:     "request",
+				WorkflowID:     workflow.ID,
 				CurrentStateID: resolvedState.ID,
-				DepartmentID:  &supportDeptID,
-				Source:        "email",
-				CreatedAt:     now,
-				UpdatedAt:     now,
+				DepartmentID:   &supportDeptID,
+				Source:         "email",
+				CreatedAt:      now,
+				UpdatedAt:      now,
 			},
 			{
 				IncidentNumber: "CMP-2026-0001",
-				Title:         "Rude behavior from support agent",
-				Description:   "Customer complained about rude behavior from support agent",
-				RecordType:    "complaint",
-				WorkflowID:    workflow.ID,
+				Title:          "Rude behavior from support agent",
+				Description:    "Customer complained about rude behavior from support agent",
+				RecordType:     "complaint",
+				WorkflowID:     workflow.ID,
 				CurrentStateID: closedState.ID,
-				DepartmentID:  &supportDeptID,
-				Source:        "phone",
-				CreatedAt:     now,
-				UpdatedAt:     now,
+				DepartmentID:   &supportDeptID,
+				Source:         "phone",
+				CreatedAt:      now,
+				UpdatedAt:      now,
 			},
 			{
 				IncidentNumber: "QRY-2026-0001",
-				Title:         "Inquiry about service hours",
-				Description:   "Customer asking about weekend service hours",
-				RecordType:    "query",
-				WorkflowID:    workflow.ID,
+				Title:          "Inquiry about service hours",
+				Description:    "Customer asking about weekend service hours",
+				RecordType:     "query",
+				WorkflowID:     workflow.ID,
 				CurrentStateID: newState.ID,
-				DepartmentID:  &defaultDeptID,
-				Source:        "portal",
-				CreatedAt:     now,
-				UpdatedAt:     now,
+				DepartmentID:   &defaultDeptID,
+				Source:         "portal",
+				CreatedAt:      now,
+				UpdatedAt:      now,
 			},
 		}
 

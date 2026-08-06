@@ -454,7 +454,7 @@ type CreateComplaintRequest struct {
 	ReporterID       *string  `json:"reporter_id" validate:"omitempty,uuid"` // link to user who created the complaint
 	ReporterEmail    string   `json:"reporter_email" validate:"omitempty,email"`
 	ReporterName     string   `json:"reporter_name" validate:"omitempty,max=200"`
-	ReporterPhone    string   `json:"reporter_phone" validate:"omitempty,max=50"`
+	ReporterPhone    string   `json:"reporter_phone" validate:"required_with=SourceIncidentID,omitempty,mobile,max=50"`
 	DepartmentID     *string  `json:"department_id" validate:"omitempty,uuid"`
 	AssigneeID       *string  `json:"assignee_id" validate:"omitempty,uuid"`
 	LocationID       *string  `json:"location_id" validate:"omitempty,uuid"`
@@ -559,14 +559,15 @@ type BulkConvertToRequestResponse struct {
 // CustomFieldFilter represents a single key=value filter on the custom_fields JSON column.
 // Multiple filters are AND-ed together. Supports flat values (e.g. {"caller_identity":"123"}).
 type CustomFieldFilter struct {
-	Key   string
-	Value string
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
 type IncidentFilter struct {
 	Search              string     `query:"search" json:"search" validate:"omitempty"`
 	WorkflowID          []string   `query:"workflow_id" json:"workflow_id" validate:"omitempty,dive,uuid"`
 	CurrentStateID      []string   `query:"current_state_id" json:"current_state_id" validate:"omitempty,dive,uuid"`
+	CurrentStateCode    []string   `query:"current_state_code" json:"current_state_code" validate:"omitempty,dive,max=50"` // matches every workflow's state with this code; see normalizeStateCodes
 	ClassificationID    []string   `query:"classification_id" json:"classification_id" validate:"omitempty,dive,uuid"`
 	Priority            *int       `query:"priority" json:"priority" validate:"omitempty,min=1,max=5"`
 	AssigneeID          []string   `query:"assignee_id" json:"assignee_id" validate:"omitempty,dive,uuid"`
@@ -589,10 +590,15 @@ type IncidentFilter struct {
 	TransitionID *uuid.UUID `query:"transition_id" json:"transition_id" validate:"omitempty,uuid"`
 	FromStateID  *uuid.UUID `query:"from_state_id" json:"from_state_id" validate:"omitempty"`
 	ToStateID    *uuid.UUID `query:"to_state_id" json:"to_state_id" validate:"omitempty"`
-	TaskID       string     `query:"task_id" json:"task_id" validate:"omitempty"` // filter by task ID in custom_fields
+	TaskID       string     `query:"task_id" json:"task_id" validate:"omitempty"`             // filter by task ID in custom_fields
+	MomraRef     string     `query:"momra_ref" json:"momra_ref" validate:"omitempty,max=100"` // filter by momra_incident_no in custom_fields
 	// CustomFieldFilters holds repeatable cf=key:value filters. Parsed manually in handler.
 	// Each filter does: custom_fields::jsonb ->> 'key' ILIKE '%value%'. Multiple are AND-ed.
 	CustomFieldFilters []CustomFieldFilter `json:"-"`
+	// SortBy controls the list's ordering (always descending — newest first
+	// by whichever field). Restricted to a small allow-list so it's safe to
+	// interpolate directly into an ORDER BY clause.
+	SortBy             string              `query:"sort_by" json:"sort_by" validate:"omitempty,oneof=created_at updated_at"`
 	Page               int                 `query:"page" json:"page" validate:"omitempty,min=1"`
 	Limit              int                 `query:"limit" json:"limit" validate:"omitempty,min=1,max=100"`
 	UserRoleIDs        []uuid.UUID         `json:"-"`     // For filtering stats by user's roles
@@ -1317,6 +1323,28 @@ type IncidentReportRevision struct {
 	PerformedByFirstName string     `db:"performed_by_first_name"`
 	PerformedByLastName  string     `db:"performed_by_last_name"`
 	CreatedAt            time.Time  `db:"created_at"`
+}
+
+// ComplaintSourceValidation is a flat result carrying every fact CreateComplaint needs
+// about a candidate source incident, so the validation costs one query instead of a
+// fully-preloaded incident read.
+//
+// StateCode is a pointer because the workflow_states join is a LEFT JOIN: an incident
+// whose current_state_id resolves to no row yields NULL rather than failing the read.
+type ComplaintSourceValidation struct {
+	RecordType       string     `db:"record_type"`
+	StateCode        *string    `db:"state_code"`
+	CreatedAt        time.Time  `db:"created_at"`
+	ReporterPhone    string     `db:"reporter_phone"`
+	ClassificationID *uuid.UUID `db:"classification_id"`
+	LocationID       *uuid.UUID `db:"location_id"`
+
+	// PhoneMatches reports whether the source incident's reporter phone equals the requested
+	// one, ignoring formatting. OpenComplaintExists reports whether this source incident
+	// already has a complaint from that phone which is not yet closed — a closed complaint
+	// does not block a new one, so the reporter can complain again after resolution.
+	PhoneMatches        bool `db:"phone_matches"`
+	OpenComplaintExists bool `db:"open_complaint_exists"`
 }
 
 // IncidentReportData is a flat result for the main incident header/details section of the report.

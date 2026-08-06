@@ -210,7 +210,7 @@ func main() {
 	validate := validator.New()
 
 	// Initialize handlers
-	userHandler := handlers.NewUserHandler(userService, minioStorage, redisClient, cfg)
+	userHandler := handlers.NewUserHandler(userService, minioStorage, redisClient, cfg, wsHub)
 	healthHandler := handlers.NewHealthHandler()
 
 	// Initialize LDAP handler
@@ -222,7 +222,7 @@ func main() {
 	locationHandler := handlers.NewLocationHandler(locationRepo)
 	departmentHandler := handlers.NewDepartmentHandler(departmentRepo, userRepo)
 	extensionHandler := handlers.NewExtensionHandler(extensionService)
-	roleHandler := handlers.NewRoleHandler(roleRepo, permissionRepo)
+	roleHandler := handlers.NewRoleHandler(roleRepo, permissionRepo, userRepo, wsHub)
 	actionLogHandler := handlers.NewActionLogHandler(actionLogService, validate)
 	callLogHandler := handlers.NewCallLogHandler(callLogService, validate, userService, minioStorage)
 	workflowHandler := handlers.NewWorkflowHandler(workflowService, actionLogService)
@@ -241,7 +241,7 @@ func main() {
 	jwksHandler := handlers.NewJWKSHandler(ssoJWTManager)
 	ssoHandler := handlers.NewSSOHandler(ssoJWTManager, jwtManager, sessionStore, userRepo, applicationLinkRepo, userService, otpService, cfg.SSOFrontendURL, cfg.NafathAPIBaseURL)
 	notificationTemplateService := services.NewNotificationTemplateService(notificationTemplateRepo, db)
-	notificationHandler := handlers.NewNotificationHandler(notificationService, minioStorage, userRepo, incidentRepo)
+	notificationHandler := handlers.NewNotificationHandler(notificationService, minioStorage, userRepo, incidentRepo, actionLogService)
 	templateHandler := handlers.NewNotificationTemplateHandler(notificationTemplateService)
 	attachmentHandler := handlers.NewAttachmentHandler(incidentService, notificationService, minioStorage)
 	otpHandler := handlers.NewOTPHandler(otpService, userService)
@@ -445,12 +445,13 @@ func main() {
 	users.Put("/me/password", authMiddleware.Authenticate(), userHandler.ChangePassword)
 	users.Delete("/me", authMiddleware.Authenticate(), userHandler.DeleteAccount)
 	users.Put("/:userExtID/status", userHandler.UpdateUserCallStatus)
-	users.Put("/:userID/password", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:update"), userHandler.AdminResetPassword)
+	users.Put("/:userID/password", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:reset_password"), userHandler.AdminResetPassword)
 
 	// Incident routes (authenticated users)
 	incidents := v1.Group("/incidents", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureIncidents)))
 	incidents.Post("/", authMiddleware.RequirePermission("incidents:create"), incidentHandler.CreateIncident)
 	incidents.Get("/", authMiddleware.RequirePermission("incidents:view"), incidentHandler.ListIncidents)
+	incidents.Post("/search", authMiddleware.RequirePermission("incidents:view"), incidentHandler.SearchIncidents)
 	incidents.Get("/stats", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetStats)
 	incidents.Get("/stats/v2", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetStatsV2)
 	incidents.Get("/priority-counts", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetPriorityCounts)
@@ -993,6 +994,12 @@ func main() {
 	// GET /api/v1/escalation— list all SLA breach notification records
 	escalation.Get("/", escalationHandler.List)
 	escalation.Get("/incident/:incident_id", escalationHandler.ListByIncident)
+
+	// Communication Tracking Dashboard (admin, Call Center module) — cross-user delivery tracking, search & filter
+	notificationMonitoring := admin.Group("/notification-monitoring", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureCommunication)))
+	notificationMonitoring.Get("/", authMiddleware.RequirePermission("communication-tracking:view"), notificationHandler.ListMonitoring)
+	notificationMonitoring.Get("/:id", authMiddleware.RequirePermission("communication-tracking:view"), notificationHandler.Get)
+	notificationMonitoring.Post("/:id/resend", authMiddleware.RequirePermission("communication-tracking:update"), notificationHandler.ResendNotification)
 
 	// Custom Escalation Groups (admin)
 	escalationGroups := admin.Group("/escalation-groups", authMiddleware.Authenticate(), authMiddleware.RequirePermission("escalation-groups:manage_rules"), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureEscalation)))

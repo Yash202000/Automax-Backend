@@ -275,6 +275,16 @@ var incidentFilterFields = map[string]string{
 	"assignee_username":   "assignees.username",
 	"assignee_first_name": "assignees.first_name",
 	"assignee_last_name":  "assignees.last_name",
+	// ── Via JOIN: first response (derived table, see frtDerived) ──────────────
+	"first_response_at":          "frt.first_response_at",
+	"first_response_minutes":     "frt.first_response_minutes",
+	"first_response_action":      "frt.first_response_action",
+	"first_response_description": "frt.first_response_description",
+	"first_responder_id":         "frt.first_responder_id",
+	"first_responder_username":   "responder.username",
+	// ── Derived durations: full expressions, since WHERE cannot see a select alias ──
+	"resolution_minutes": "ROUND(EXTRACT(EPOCH FROM (incidents.resolved_at - incidents.created_at)) / 60.0)",
+	"closure_minutes":    "ROUND(EXTRACT(EPOCH FROM (incidents.closed_at - incidents.created_at)) / 60.0)",
 	// ── Subquery-handled (empty col = silently skipped by applyFilters) ───────
 	"workflow_transition_id": "", // handled via IN-subquery in ExecuteIncidentQuery
 	"workflow_transition_at": "", // handled via IN-subquery in ExecuteIncidentQuery
@@ -566,7 +576,10 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 		if col == "" {
 			continue // silently skip; handled by the query function directly (e.g. subquery filters)
 		}
-		if f.Value == nil {
+		// is_null / is_not_null are the only operators that legitimately carry no value, so they
+		// must be exempt from the nil-value guard below - otherwise they are silently dropped and
+		// the filter is a no-op.
+		if f.Value == nil && f.Operator != "is_null" && f.Operator != "is_not_null" {
 			log.Println("skipping filter with nil value for field:", f.Field)
 			continue
 		}
@@ -592,7 +605,7 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 		case "gte":
 			query = query.Where(col+" >= ?", parseDateOrPassthrough(f.Value, loc))
 		case "lte":
-			query = query.Where(col+" <= ?", parseDateOrPassthrough(f.Value, loc))
+			query = query.Where(col+" <= ?", parseDateEndOfDayOrPassthrough(f.Value, loc))
 		case "in":
 			query = query.Where(col+" IN ?", f.Value)
 		case "is_null":
@@ -606,11 +619,21 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 				from, err1 := parseDateFlexible(fromStr, loc)
 				to, err2 := parseDateFlexible(toStr, loc)
 				if err1 == nil && err2 == nil {
+					// Expand date-only "to" value to end-of-day so the full day is included.
+					if isDateOnly(toStr) {
+						to = time.Date(to.Year(), to.Month(), to.Day(), 23, 59, 59, 999999999, to.Location())
+					}
 					query = query.Where(col+" BETWEEN ? AND ?", from, to)
 				}
 			}
 		}
 	}
+
+	// Access scope — my_record + viewable_roles + department scoping.
+	// Only active when the handler sets a ReportAccessScope in context
+	// (i.e. RESTRICT_REPORT_SCOPE=true for incident data sources).
+	query = r.applyReportAccessScope(ctx, query)
+
 	return query
 }
 
@@ -626,6 +649,29 @@ func parseDateOrPassthrough(v interface{}, loc *time.Location) interface{} {
 		return t
 	}
 	return v
+}
+
+// parseDateEndOfDayOrPassthrough is like parseDateOrPassthrough but expands
+// date-only values (YYYY-MM-DD) to end-of-day (23:59:59.999999999) so that
+// an "lte" filter includes the entire day — matching the incident listing behaviour.
+func parseDateEndOfDayOrPassthrough(v interface{}, loc *time.Location) interface{} {
+	s, ok := v.(string)
+	if !ok {
+		return v
+	}
+	if t, err := parseDateFlexible(s, loc); err == nil {
+		if isDateOnly(s) {
+			return time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, t.Location())
+		}
+		return t
+	}
+	return v
+}
+
+// isDateOnly returns true when s is exactly "YYYY-MM-DD" with no time component.
+func isDateOnly(s string) bool {
+	_, err := time.Parse("2006-01-02", s)
+	return err == nil && len(s) == 10
 }
 
 // parseDateFlexible parses date strings in multiple formats:
@@ -669,6 +715,40 @@ func (r *reportRepository) applySorting(query *gorm.DB, sorting *models.ReportSo
 			direction = "DESC"
 		}
 		query = query.Order(sorting.Field + " " + direction)
+	}
+	return query
+}
+
+// applyReportAccessScope reads a ReportAccessScope from ctx and adds WHERE
+// clauses that mirror the incident list handler's my_record + viewable_roles
+// + view_department_only scoping. Enabled by RESTRICT_REPORT_SCOPE=true.
+func (r *reportRepository) applyReportAccessScope(ctx context.Context, query *gorm.DB) *gorm.DB {
+	scope, ok := ctx.Value(constants.ContextKeys.REPORT_ACCESS_SCOPE).(*models.ReportAccessScope)
+	if !ok || scope == nil {
+		return query
+	}
+
+	// Department scoping (mirrors incidents:view_department_only)
+	if scope.ViewDepartmentOnly && len(scope.DepartmentIDs) > 0 {
+		query = query.Where("incidents.department_id IN ?", scope.DepartmentIDs)
+	}
+
+	// my_record + viewable_roles scoping (mirrors !incidents:view_all)
+	if !scope.ViewAll {
+		if len(scope.RoleIDs) > 0 {
+			query = query.Where(
+				`(incidents.reporter_id = ? OR incidents.assignee_id = ?
+				OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)
+				OR incidents.current_state_id IN (SELECT workflow_state_id FROM state_viewable_roles WHERE role_id IN ?))`,
+				scope.UserID, scope.UserID, scope.UserID, scope.RoleIDs,
+			)
+		} else {
+			query = query.Where(
+				`(incidents.reporter_id = ? OR incidents.assignee_id = ?
+				OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?))`,
+				scope.UserID, scope.UserID, scope.UserID,
+			)
+		}
 	}
 	return query
 }
@@ -772,6 +852,63 @@ func (r *reportRepository) ExecuteRequestQuery(ctx context.Context, filters []mo
 	return results, total, nil
 }
 
+// frtQualifyingActions is the action set that stops the first-response clock. Kept as one named
+// list because the requirement anticipates making it business-configurable later; when that lands,
+// this is the only thing that has to become a lookup.
+//
+// Deliberately excluded: 'created' (that is the clock start itself), comments and attachments
+// (intake attaches files while logging the call, which collapses the metric to zero), and
+// 'ivr_sms_submitted' (that is the citizen replying via the SMS link, not staff responding).
+var frtQualifyingActions = []string{
+	string(models.RevisionActionStatusChanged),
+	string(models.RevisionActionAssigneeChanged),
+	string(models.RevisionActionFieldChange),
+	string(models.RevisionActionIVRSmsSent),
+}
+
+// frtDerived is the first-response derived table joined into the incident report query.
+//
+// DISTINCT ON (incident_id) makes it strictly 1:1 with incidents, which is what lets it be a LEFT
+// JOIN inside buildBase() without changing the COUNT - the workflow_transition_id filter has to use
+// an IN-subquery instead precisely because its join would fan out.
+//
+// first_response_minutes is computed in here (via the join back to incidents) rather than in the
+// outer SELECT so that it is a real column: Postgres cannot reference a select alias in WHERE, and
+// filtering on it is what the future SLA-threshold work needs.
+const frtDerived = `LEFT JOIN (
+	SELECT DISTINCT ON (ir.incident_id)
+	       ir.incident_id,
+	       ir.created_at         AS first_response_at,
+	       ir.action_type        AS first_response_action,
+	       ir.action_description AS first_response_description,
+	       ir.performed_by_id    AS first_responder_id,
+	       CONCAT(fu.first_name, ' ', fu.last_name) AS first_responder_name,
+	       ROUND(EXTRACT(EPOCH FROM (ir.created_at - fi.created_at)) / 60.0)::bigint
+	                          AS first_response_minutes
+	FROM incident_revisions ir
+	JOIN incidents fi ON fi.id = ir.incident_id
+	JOIN users fu ON fu.id = ir.performed_by_id
+	WHERE ir.action_type IN (?)
+	  -- system actors: the uuid.Nil performer, plus the raw-SQL writes in ready_to_close_service
+	  -- that stamp performed_by_roles = ["system"]
+	  AND ir.performed_by_id <> '00000000-0000-0000-0000-000000000000'::uuid
+	  AND COALESCE(ir.performed_by_roles, '') <> '["system"]'
+	  -- staff only: must hold a role, and must hold no citizen/contractor role. The looser
+	  -- "has any non-citizen role" test is wrong on this data - IVR-provisioned citizen accounts
+	  -- that were later granted staff roles leak in as false first-responders.
+	  AND EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = ir.performed_by_id)
+	  AND NOT EXISTS (
+	      SELECT 1 FROM user_roles ur
+	      JOIN roles r ON r.id = ur.role_id
+	      WHERE ur.user_id = ir.performed_by_id AND r.code IN ('citizen', 'contractor'))
+	-- revision_number breaks ties: a partial-close transition writes two status_changed rows with
+	-- the same created_at (see the two CreateRevision calls in ExecuteTransition)
+	ORDER BY ir.incident_id, ir.created_at, ir.revision_number
+) frt ON frt.incident_id = incidents.id
+	-- clock-skew guard: a "response" recorded before creation is not a response. Kept in the ON
+	-- clause so a skewed row yields a NULL first response instead of dropping the incident.
+	AND frt.first_response_at >= incidents.created_at`
+
 // Data queries for report execution
 func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
 	var total int64
@@ -782,13 +919,19 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 	// (b) GORM statement accumulation does not duplicate JOINs across Count + Rows calls.
 	buildBase := func() *gorm.DB {
 		q := r.db.WithContext(ctx).Model(&models.Incident{}).Debug().
+			// Restrict to actual incidents, matching how ExecuteRequestQuery scopes itself. The
+			// workflows join below filters on the *workflow's* record_type, which is not the same
+			// thing: some records carry a record_type that disagrees with their workflow's.
+			Where("incidents.record_type = ?", "incident").
 			Joins("LEFT JOIN users as creator ON incidents.reporter_id = creator.id AND creator.deleted_at IS NULL").
 			Joins("LEFT JOIN users as assignees ON incidents.assignee_id = assignees.id AND assignees.deleted_at IS NULL").
 			Joins("INNER JOIN workflows ON incidents.workflow_id = workflows.id AND workflows.record_type = ? AND workflows.deleted_at IS NULL", "incident").
 			Joins("LEFT JOIN workflow_states ON incidents.current_state_id = workflow_states.id AND workflow_states.deleted_at IS NULL").
 			Joins("LEFT JOIN classifications ON incidents.classification_id = classifications.id AND classifications.deleted_at IS NULL").
 			Joins("LEFT JOIN departments ON incidents.department_id = departments.id AND departments.deleted_at IS NULL").
-			Joins("LEFT JOIN locations ON incidents.location_id = locations.id AND locations.deleted_at IS NULL")
+			Joins("LEFT JOIN locations ON incidents.location_id = locations.id AND locations.deleted_at IS NULL").
+			Joins(frtDerived, frtQualifyingActions).
+			Joins("LEFT JOIN users as responder ON responder.id = frt.first_responder_id AND responder.deleted_at IS NULL")
 
 		// workflow_transition_id: optional filter — restricts to incidents that have
 		// passed through at least one matching transition (name or code match).
@@ -877,7 +1020,27 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			"classifications.name as classification_name, " +
 			"departments.name as department_name, " +
 			"locations.name as location_name, " +
-			"workflows.name as workflow_name").
+			"workflows.name as workflow_name, " +
+			// First Response Time and the responding agent. Aliases must match the logical field
+			// names exactly - row assembly keys rawRow on the SQL alias.
+			"frt.first_response_at as first_response_at, " +
+			"frt.first_response_minutes as first_response_minutes, " +
+			"frt.first_response_action as first_response_action, " +
+			// The human-readable audit line for the qualifying action, e.g.
+			// "Status changed from New to In Progress" or the request-info SMS text.
+			"NULLIF(frt.first_response_description, '') as first_response_description, " +
+			"frt.first_responder_id as first_responder_id, " +
+			"responder.username as first_responder_username, " +
+			// NULLIF keeps this NULL rather than '' when there is no responder, so all eight FRT
+			// columns agree on how "no first response" is represented.
+			"NULLIF(TRIM(COALESCE(responder.first_name, '') || ' ' || COALESCE(responder.last_name, '')), '') as first_responder_name, " +
+			"(frt.first_responder_id = incidents.reporter_id) as responded_by_creator, " +
+			// Resolution and closure elapsed time, for comparison against response time. Both read
+			// NULL wherever the underlying timestamp is NULL, which is common: resolved_at is only
+			// set for a terminal state literally coded 'resolved', and closed_at was added
+			// retroactively so historic rows have none.
+			"ROUND(EXTRACT(EPOCH FROM (incidents.resolved_at - incidents.created_at)) / 60.0)::bigint as resolution_minutes, " +
+			"ROUND(EXTRACT(EPOCH FROM (incidents.closed_at - incidents.created_at)) / 60.0)::bigint as closure_minutes").
 		Offset(offset).
 		Limit(limit).
 		Rows()

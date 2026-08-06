@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
@@ -40,7 +42,20 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 	req.Name = strings.TrimSpace(req.Name)
 	req.NameAr = strings.TrimSpace(req.NameAr)
 
-	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+	// EPM940 auto-generates the Organization Code (ORG-######) and ignores any
+	// supplied value; other clients (e.g. VD2) must supply the code in the payload.
+	// The requirement is client-specific, so it can't be a static "required" struct
+	// tag — fold it into the same validationErrors map like workflow_handler does.
+	isEPM940 := strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940)
+
+	validationErrors := validation.ValidateStruct(c.UserContext(), &req)
+	if !isEPM940 && strings.TrimSpace(req.Code) == "" {
+		if validationErrors == nil {
+			validationErrors = map[string]string{}
+		}
+		validationErrors["code"] = i18n.T(c.UserContext(), "department_code_required")
+	}
+	if len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
 			"errors":  validationErrors,
@@ -60,7 +75,6 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 	department := &models.Department{
 		Name:          req.Name,
 		NameAr:        req.NameAr,
-		Code:          req.Code,
 		Description:   req.Description,
 		DescriptionAr: req.DescriptionAr,
 		Type:          deptType,
@@ -69,6 +83,12 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 		SupervisorID:  req.SupervisorID,
 		SortOrder:     req.SortOrder,
 		IsActive:      true,
+	}
+
+	// Non-EPM940: use the payload code verbatim. EPM940: leave empty so the
+	// repository generates the next ORG-###### code.
+	if !isEPM940 {
+		department.Code = strings.TrimSpace(req.Code)
 	}
 
 	if err := h.repo.Create(c.UserContext(), department); err != nil {
@@ -201,8 +221,11 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 	if req.NameAr != "" {
 		department.NameAr = req.NameAr
 	}
-	if req.Code != "" {
-		department.Code = req.Code
+	// Code is a permanent, system-generated identifier for EPM940 and must never
+	// change on update; other clients (e.g. VD2) may edit the payload-supplied code.
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) &&
+		strings.TrimSpace(req.Code) != "" {
+		department.Code = strings.TrimSpace(req.Code)
 	}
 	if req.Description != "" {
 		department.Description = req.Description
@@ -554,9 +577,12 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 		// Create new department
 		newID := uuid.New()
 		department := &models.Department{
-			ID:          newID,
+			ID: newID,
+			// EPM940: Code omitted so the repository generates a fresh unique ORG-######
+			// code (imports/integrations can never introduce duplicates). Other clients:
+			// keep the code from the import file.
+			Code:        importDeptCode(data.Code),
 			Name:        data.Name,
-			Code:        data.Code,
 			Description: data.Description,
 			ParentID:    newParentID,
 			ManagerID:   data.ManagerID,
@@ -580,4 +606,14 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "import_completed"), result)
+}
+
+// importDeptCode returns the code to persist for an imported department: empty for
+// EPM940 (the repository generates a unique ORG-###### code), otherwise the code
+// from the import file.
+func importDeptCode(code string) string {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+		return ""
+	}
+	return code
 }

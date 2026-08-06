@@ -28,6 +28,10 @@ import (
 	"gorm.io/gorm"
 )
 
+// ErrUserAssigned is returned when a user cannot be deleted because they are still
+// assigned to one or more incidents. Handlers map it to HTTP 409 with a localized message.
+var ErrUserAssigned = errors.New("user is currently assigned")
+
 type UserService interface {
 	Register(ctx context.Context, req *models.UserRegisterRequest) (*models.AuthResponse, error)
 	SSORegister(ctx context.Context, req *models.SSORegisterRequest) (*models.AuthResponse, error)
@@ -47,6 +51,7 @@ type UserService interface {
 	GetUserByEmail(ctx context.Context, email string) (*models.User, error)
 	GetUserByMobile(ctx context.Context, phone string) (*models.User, error)
 	GetUserByUsername(ctx context.Context, username string) (*models.User, error)
+	CheckExistingIdentifiers(ctx context.Context, emails, usernames, phones []string) (*models.ExistingUserIdentifiers, error)
 	FindMatchingUsers(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.UserResponse, error)
 	UpdateUserCallStatus(ctx context.Context, extension string, status string) (interface{}, error)
 	FindByExtension(ctx context.Context, extension string) (*models.User, error)
@@ -207,6 +212,20 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 	// Assign departments if provided
 	if len(req.DepartmentIDs) > 0 {
 		s.userRepo.AssignDepartments(ctx, user.ID, req.DepartmentIDs)
+	}
+
+	// No manual role provided: inherit the roles associated with the user's department,
+	// unless a different (manual) role is explicitly assigned in this request. Falls back to
+	// the first many-to-many department when no primary DepartmentID is set, since the
+	// create-user UI only ever populates department_ids, never the singular department_id.
+	if len(req.RoleIDs) == 0 {
+		inheritDeptID := user.DepartmentID
+		if inheritDeptID == nil && len(req.DepartmentIDs) > 0 {
+			inheritDeptID = &req.DepartmentIDs[0]
+		}
+		if inheritDeptID != nil {
+			s.ApplyDepartmentDefaultRoles(ctx, user.ID, *inheritDeptID, actorID)
+		}
 	}
 
 	// Assign manually selected locations/classifications only (don't auto-sync from departments during creation)
@@ -786,7 +805,7 @@ func (s *userService) Logout(ctx context.Context) error {
 					Action:      "logout",
 					Module:      "users",
 					ResourceID:  userID.String(),
-					Description: fmt.Sprintf("User logged out"),
+					Description: "User logged out",
 					OldValue:    nil,
 					NewValue:    nil,
 					IPAddress:   ipAddress,
@@ -1077,6 +1096,21 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 	oldDepartmentIDs := make([]uuid.UUID, len(oldUser.DepartmentIDs))
 	copy(oldDepartmentIDs, oldUser.DepartmentIDs)
 	s.userRepo.AssignDepartments(ctx, user.ID, req.DepartmentIDs)
+
+	// If the user had no role before this update and none was explicitly requested,
+	// inherit the roles associated with their department. A manually assigned role
+	// (before or in this request) always takes priority and is never overridden.
+	// Falls back to the first many-to-many department when no primary DepartmentID is
+	// set, since the department_ids (M2M) field is what the frontend actually populates.
+	if len(req.RoleIDs) == 0 && len(oldUser.RoleIDs) == 0 {
+		inheritDeptID := user.DepartmentID
+		if inheritDeptID == nil && len(req.DepartmentIDs) > 0 {
+			inheritDeptID = &req.DepartmentIDs[0]
+		}
+		if inheritDeptID != nil {
+			s.ApplyDepartmentDefaultRoles(ctx, user.ID, *inheritDeptID, actorID)
+		}
+	}
 
 	// Sync classifications and locations from departments if departments changed
 	// This appends department-mapped items without removing manually selected ones
@@ -1490,21 +1524,14 @@ func (s *userService) ChangePassword(ctx context.Context, userID uuid.UUID, req 
 }
 
 func (s *userService) AdminResetPassword(ctx context.Context, adminID, targetUserID uuid.UUID, newPassword string) error {
-
-	// Check admin permission
-	admin, err := s.userRepo.FindByID(ctx, adminID)
-	if err != nil {
-		return err
-	}
-
-	if !admin.IsSuperAdmin {
-		return errors.New(i18n.T(ctx, "only_admin_reset_password"))
-	}
-
 	// Get target user
 	user, err := s.userRepo.FindByID(ctx, targetUserID)
 	if err != nil {
 		return err
+	}
+	// Block password reset for Super Admins
+	if user.IsSuperAdmin && adminID != user.ID {
+		return errors.New(i18n.T(ctx, "cannot_reset_super_admin_password"))
 	}
 
 	// Block password reset for AD users
@@ -1663,13 +1690,21 @@ func (s *userService) DeleteUser(ctx context.Context) error {
 		return err
 	}
 
-	if user.Avatar != "" {
-		_ = s.storage.DeleteFile(ctx, user.Avatar)
+	// Block deletion while the user is still assigned to any live incident.
+	if n, err := s.userRepo.CountAssignedIncidents(ctx, userID); err != nil {
+		return err
+	} else if n > 0 {
+		return ErrUserAssigned
 	}
 
-	_ = s.sessionStore.DeleteUserSession(ctx, userID.String())
+	// Deactivate instead of soft-deleting: keep the row alive (IsActive=false).
+	// Avatar file is preserved so a re-activated account keeps it.
+	_ = s.sessionStore.DeleteAllUserSessions(ctx, userID.String())
 
-	err = s.userRepo.Delete(ctx, userID)
+	err = s.userRepo.UpdateProfile(ctx, map[string]interface{}{
+		"id":        userID,
+		"is_active": false,
+	})
 
 	if err == nil {
 		// Log successful user deletion
@@ -1722,18 +1757,25 @@ func (s *userService) AdminDeleteUser(ctx context.Context, userID uuid.UUID) err
 		return err
 	}
 
-	// Store user info for logging before deletion
-	username := user.Username
-	email := user.Email
-	avatar := user.Avatar
-
-	if avatar != "" {
-		_ = s.storage.DeleteFile(ctx, avatar)
+	// Block deletion while the user is still assigned to any live incident.
+	if n, err := s.userRepo.CountAssignedIncidents(ctx, userID); err != nil {
+		return err
+	} else if n > 0 {
+		return ErrUserAssigned
 	}
 
-	_ = s.sessionStore.DeleteUserSession(ctx, userID.String())
+	// Store user info for logging before deactivation
+	username := user.Username
+	email := user.Email
 
-	err = s.userRepo.Delete(ctx, userID)
+	// Deactivate instead of soft-deleting: keep the row alive (IsActive=false).
+	// Avatar file is preserved so a re-activated account keeps it.
+	_ = s.sessionStore.DeleteAllUserSessions(ctx, userID.String())
+
+	err = s.userRepo.UpdateProfile(ctx, map[string]interface{}{
+		"id":        userID,
+		"is_active": false,
+	})
 
 	if err == nil {
 		// Log successful admin user deletion with complete details
@@ -1883,6 +1925,21 @@ func (s *userService) GetUserByUsername(ctx context.Context, username string) (*
 	return s.userRepo.FindByUsername(ctx, username)
 }
 
+// CheckExistingIdentifiers reports, in a single query, which of the supplied emails, usernames and
+// phones already belong to a user. Intended for bulk paths that would otherwise probe one row at a time.
+func (s *userService) CheckExistingIdentifiers(ctx context.Context, emails, usernames, phones []string) (*models.ExistingUserIdentifiers, error) {
+	rows, err := s.userRepo.FindExistingIdentifiers(ctx, emails, usernames, phones)
+	if err != nil {
+		return nil, err
+	}
+
+	existing := models.NewExistingUserIdentifiers(len(rows))
+	for _, row := range rows {
+		existing.Add(row.Email, row.Username, row.Phone)
+	}
+	return existing, nil
+}
+
 // syncDepartmentAttributesToUser automatically inherits classifications and locations from user's departments
 func (s *userService) syncDepartmentAttributesToUser(ctx context.Context, userID uuid.UUID) error {
 	// Get user with all department relationships
@@ -1944,6 +2001,50 @@ func (s *userService) syncDepartmentAttributesToUser(ctx context.Context, userID
 	}
 
 	return nil
+}
+
+// ApplyDepartmentDefaultRoles assigns the roles associated with a department (department_roles)
+// to a user, but only ever called from paths that have already confirmed the user has no
+// manually assigned role. It never overrides an existing/explicit role assignment.
+// A department-scoped actor (non-super-admin with "users:view_department_only") can never
+// cause a role that grants department-manager scope to be inherited, mirroring the same
+// restriction already enforced for explicit/manual role assignment.
+func (s *userService) ApplyDepartmentDefaultRoles(ctx context.Context, userID uuid.UUID, departmentID uuid.UUID, actorID uuid.UUID) {
+	dept, err := s.departmentRepo.FindByID(ctx, departmentID)
+	if err != nil || len(dept.Roles) == 0 {
+		return
+	}
+
+	actor, _ := s.userRepo.FindByIDWithRelations(ctx, actorID)
+	restrictScope := actor != nil && !actor.IsSuperAdmin && actor.HasPermission("users:view_department_only")
+
+	roleIDs := make([]uuid.UUID, 0, len(dept.Roles))
+	for _, role := range dept.Roles {
+		if restrictScope {
+			var fullRole models.Role
+			if err := s.db.Preload("Permissions").First(&fullRole, "id = ?", role.ID).Error; err == nil {
+				grantsDeptScope := false
+				for _, perm := range fullRole.Permissions {
+					if perm.Code == "users:view_department_only" {
+						grantsDeptScope = true
+						break
+					}
+				}
+				if grantsDeptScope {
+					continue
+				}
+			}
+		}
+		roleIDs = append(roleIDs, role.ID)
+	}
+
+	if len(roleIDs) == 0 {
+		return
+	}
+
+	if err := s.userRepo.AssignRoles(ctx, userID, roleIDs); err != nil {
+		fmt.Printf("Warning: failed to inherit department default roles: %v\n", err)
+	}
 }
 
 // Helper function to compare UUID slices
@@ -2047,7 +2148,63 @@ func (s *userService) SendSMSOTP(phone, otp string) error {
 		return fmt.Errorf("phone must include country code")
 	}
 	message := fmt.Sprintf("Your OTP is %s. It is valid for 5 minutes.", otp)
-	return intutils.SendSMS(phone, message)
+	sid, err := intutils.SendSMS(phone, message)
+	s.logOTPNotification("sms", "twilio", phone, message, sid, err)
+	return err
+}
+
+// logOTPNotification persists an OTP send attempt (success or failure) to
+// notification_logs so it shows up in the Notification Monitoring Dashboard.
+// This does not alter the OTP send/verify flow in any way: it runs after the
+// send already happened, and a failure here is only logged to stdout — it is
+// never returned to the caller, so it cannot affect password reset/login.
+func (s *userService) logOTPNotification(channel, provider, recipient, body, providerMessageID string, sendErr error) {
+	if s.db == nil {
+		return
+	}
+
+	status := "sent"
+	recipientStatus := "success"
+	errorMessage := ""
+	failureCode := ""
+	if sendErr != nil {
+		status = "failed"
+		recipientStatus = "failed"
+		errorMessage = sendErr.Error()
+		failureCode = ClassifyFailureCode(sendErr)
+	}
+
+	now := time.Now()
+	notification := &models.NotificationLog{
+		Channel:      channel,
+		Direction:    models.DirectionOutbound,
+		Category:     models.CategorySent,
+		TemplateCode: "OTP",
+		Language:     "en",
+		Recipients: models.RecipientArray{{
+			Email:             recipient,
+			Channel:           recipient,
+			Type:              "to",
+			Status:            recipientStatus,
+			Error:             errorMessage,
+			ErrorMessage:      errorMessage,
+			FailureCode:       failureCode,
+			ProviderMessageID: providerMessageID,
+		}},
+		Subject:      "OTP",
+		Body:         body,
+		Status:       status,
+		Provider:     provider,
+		FailureCode:  failureCode,
+		ErrorMessage: errorMessage,
+		SentAt:       &now,
+		CreatedAt:    now,
+		UpdatedAt:    &now,
+	}
+
+	if err := s.db.Create(notification).Error; err != nil {
+		log.Printf("[UserService] failed to persist OTP notification log: %v", err)
+	}
 }
 
 func (s *userService) SendEmailOTP(toEmail, otp string) error {
@@ -2074,6 +2231,7 @@ func (s *userService) SendEmailOTP(toEmail, otp string) error {
 	to := []string{toEmail}
 
 	_, err := intutils.SendSMTPWithCCBCC(to, nil, nil, subject, body, nil)
+	s.logOTPNotification("email", "smtp", toEmail, body, "", err)
 	// Logging
 	if err != nil {
 		log.Println("SMTP ERROR:", err)

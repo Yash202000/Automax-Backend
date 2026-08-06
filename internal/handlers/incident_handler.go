@@ -203,6 +203,51 @@ func (h *IncidentHandler) GetIncident(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "incident_retrieved"), incident)
 }
 
+// SearchIncidents handles POST /incidents/search — reads filters from JSON body
+// instead of query parameters, avoiding URL length limits when many filter values
+// (e.g. dozens of location_ids) are selected.
+func (h *IncidentHandler) SearchIncidents(c *fiber.Ctx) error {
+	filter := &models.IncidentFilter{}
+	if err := c.BodyParser(filter); err != nil {
+		return ErrorResponseWithKey(c, fiber.StatusBadRequest, "invalid_request_body")
+	}
+
+	// Parse custom field filters from JSON body (same structure, just from body)
+	type searchBody struct {
+		Timezone           string                    `json:"timezone"`
+		StartDateStr       string                    `json:"start_date_str"`
+		EndDateStr         string                    `json:"end_date_str"`
+		CustomFieldFilters []models.CustomFieldFilter `json:"custom_field_filters"`
+	}
+	var body searchBody
+	// Ignore error — the filter fields were already parsed above, these are optional extras
+	_ = c.BodyParser(&body)
+
+	if len(body.CustomFieldFilters) > 0 {
+		filter.CustomFieldFilters = body.CustomFieldFilters
+	}
+
+	// Parse date strings from body (same logic as GET handler)
+	loc := utils.ResolveTimezone(body.Timezone)
+	if body.StartDateStr != "" && filter.StartDate == nil {
+		if t, err := time.ParseInLocation("2006-01-02", body.StartDateStr, loc); err == nil {
+			filter.StartDate = &t
+		} else if t, err := time.Parse(time.RFC3339, body.StartDateStr); err == nil {
+			filter.StartDate = &t
+		}
+	}
+	if body.EndDateStr != "" && filter.EndDate == nil {
+		if t, err := time.ParseInLocation("2006-01-02", body.EndDateStr, loc); err == nil {
+			endOfDay := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, loc)
+			filter.EndDate = &endOfDay
+		} else if t, err := time.Parse(time.RFC3339, body.EndDateStr); err == nil {
+			filter.EndDate = &t
+		}
+	}
+
+	return h.listIncidentsCore(c, filter)
+}
+
 func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 	filter := &models.IncidentFilter{}
 	// Parse query parameters
@@ -210,33 +255,20 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 		return ErrorResponseWithKey(c, fiber.StatusBadRequest, "invalid_query_parameters")
 	}
 
-	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"success": false,
-			"errors":  validationErrors,
-		})
-	}
-
-	if filter.Page < 1 {
-		filter.Page = 1
-	}
-
-	if filter.Limit < 1 || filter.Limit > 100 {
-		filter.Limit = 20
-	}
-
 	// QueryParser cannot parse plain YYYY-MM-DD into *time.Time; do it manually.
+	// Use the caller's timezone so date boundaries align with the user's local day.
+	loc := utils.ResolveTimezone(c.Query("timezone"))
 	if startStr := c.Query("start_date"); startStr != "" {
-		if t, err := time.Parse("2006-01-02", startStr); err == nil {
+		if t, err := time.ParseInLocation("2006-01-02", startStr, loc); err == nil {
 			filter.StartDate = &t
 		} else if t, err := time.Parse(time.RFC3339, startStr); err == nil {
 			filter.StartDate = &t
 		}
 	}
 	if endStr := c.Query("end_date"); endStr != "" {
-		if t, err := time.Parse("2006-01-02", endStr); err == nil {
-			// Include the full end day up to 23:59:59.
-			endOfDay := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, t.Location())
+		if t, err := time.ParseInLocation("2006-01-02", endStr, loc); err == nil {
+			// Include the full end day up to 23:59:59 in the user's timezone.
+			endOfDay := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, loc)
 			filter.EndDate = &endOfDay
 		} else if t, err := time.Parse(time.RFC3339, endStr); err == nil {
 			filter.EndDate = &t
@@ -255,38 +287,67 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 		}
 	}
 
+	return h.listIncidentsCore(c, filter)
+}
+
+// listIncidentsCore contains the shared logic for both ListIncidents (GET) and SearchIncidents (POST).
+func (h *IncidentHandler) listIncidentsCore(c *fiber.Ctx, filter *models.IncidentFilter) error {
+	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+
+	if filter.Limit < 1 || filter.Limit > 100 {
+		filter.Limit = 20
+	}
+
 	// Restrict incident list by the user's assigned classifications and locations.
-	// Super admins are exempt from this scoping unless RESTRICT_ADMIN_SCOPE=true,
-	// where admins must also be restricted like regular users.
+	// Super admins always bypass scoping. Users with the system Administrator role
+	// (code: "admin") are also exempt unless RESTRICT_ADMIN_SCOPE=true.
 	noAccessSentinel := []string{"00000000-0000-0000-0000-000000000000"}
-	restrictSuperAdmins := strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_ADMIN_SCOPE")), "true")
+	restrictAdminRole := strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_ADMIN_SCOPE")), "true")
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
+
+	isUnscoped := user != nil && (user.IsSuperAdmin || (!restrictAdminRole && user.HasRole("admin")))
 
 	if filter.ReporterPhoneSearch != "" && user != nil && !user.IsSuperAdmin && !user.HasPermission("incidents:filter_reporter_phone") {
 		return utils.ErrorResponse(c, fiber.StatusForbidden, "Insufficient permissions to filter by reporter phone")
 	}
 
-	if err == nil && user != nil && (!user.IsSuperAdmin || restrictSuperAdmins) {
+	if err == nil && user != nil && !isUnscoped {
 		// Department-scoped: users with view_department_only see only their department's incidents.
 		// Uses DeptManagerDepartmentID if set, otherwise falls back to DepartmentID.
 		if user.HasPermission("incidents:view_department_only") {
-			scopeDeptID := user.ScopeDepartmentID()
-			if scopeDeptID != nil {
-				deptIDStr := scopeDeptID.String()
+			scopeDeptIDs := user.ScopeDepartmentIDs()
+			if len(scopeDeptIDs) > 0 {
+				allowedDepts := make(map[string]bool, len(scopeDeptIDs))
+				deptStrs := make([]string, 0, len(scopeDeptIDs))
+				for _, id := range scopeDeptIDs {
+					s := id.String()
+					allowedDepts[s] = true
+					deptStrs = append(deptStrs, s)
+				}
 				if len(filter.DepartmentID) > 0 {
-					hasMatch := false
+					var intersected []string
 					for _, d := range filter.DepartmentID {
-						if d == deptIDStr {
-							hasMatch = true
-							break
+						if allowedDepts[d] {
+							intersected = append(intersected, d)
 						}
 					}
-					if !hasMatch {
+					if len(intersected) == 0 {
 						filter.DepartmentID = noAccessSentinel
+					} else {
+						filter.DepartmentID = intersected
 					}
 				} else {
-					filter.DepartmentID = []string{deptIDStr}
+					filter.DepartmentID = deptStrs
 				}
 			}
 			// Also restrict by classification/location if DeptManager scope fields are set
@@ -1154,75 +1215,131 @@ func (h *IncidentHandler) GetStatsV2(c *fiber.Ctx) error {
 		filter.Limit = 20
 	}
 
-	// Super admins: IsAdmin=true (no role-visibility restriction on WorkflowStats),
-	// except when RESTRICT_ADMIN_SCOPE=true, where super admins must also be scoped
-	// by classification/location like regular users.
-	restrictSuperAdmins := strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_ADMIN_SCOPE")), "true")
-	isSuperAdmin := false
-	if user, ok := c.Locals(constants.ContextKeys.User).(*models.User); ok && user != nil && user.IsSuperAdmin {
-		isSuperAdmin = true
-		filter.IsAdmin = true
-	} else {
+	// QueryParser cannot parse plain YYYY-MM-DD into *time.Time; do it manually
+	// (mirrors ListIncidents) so stats respect the same date-range filter as the list.
+	statsLoc := utils.ResolveTimezone(c.Query("timezone"))
+	if startStr := c.Query("start_date"); startStr != "" {
+		if t, err := time.ParseInLocation("2006-01-02", startStr, statsLoc); err == nil {
+			filter.StartDate = &t
+		} else if t, err := time.Parse(time.RFC3339, startStr); err == nil {
+			filter.StartDate = &t
+		}
+	}
+	if endStr := c.Query("end_date"); endStr != "" {
+		if t, err := time.ParseInLocation("2006-01-02", endStr, statsLoc); err == nil {
+			endOfDay := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, statsLoc)
+			filter.EndDate = &endOfDay
+		} else if t, err := time.Parse(time.RFC3339, endStr); err == nil {
+			filter.EndDate = &t
+		}
+	}
+
+	// Super admins always bypass scoping. Administrator-role users bypass unless
+	// RESTRICT_ADMIN_SCOPE=true.
+	restrictAdminRole := strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_ADMIN_SCOPE")), "true")
+	isStatsUnscoped := false
+	if user, ok := c.Locals(constants.ContextKeys.User).(*models.User); ok && user != nil {
+		if user.IsSuperAdmin || (!restrictAdminRole && user.HasRole("admin")) {
+			isStatsUnscoped = true
+			filter.IsAdmin = true
+		}
+	}
+	if !isStatsUnscoped {
 		filter.UserRoleIDs = h.getUserRoleIDs(c)
 	}
 
-	if !isSuperAdmin || restrictSuperAdmins {
-		// Restrict stats to the user's assigned classifications and locations (mirrors ListIncidents scoping)
+	if !isStatsUnscoped {
+		// Restrict stats to the user's scope — mirrors ListIncidents scoping exactly.
 		noAccessSentinel := []string{"00000000-0000-0000-0000-000000000000"}
 		statsUserID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 		if u, err := h.userRepo.FindByIDWithRelations(c.UserContext(), statsUserID); err == nil && u != nil {
-			userClassIDs := make([]string, 0, len(u.Classifications))
-			for _, cls := range u.Classifications {
-				userClassIDs = append(userClassIDs, cls.ID.String())
-			}
-			if len(userClassIDs) > 0 {
-				if len(filter.ClassificationID) > 0 {
-					requested := make(map[string]bool, len(filter.ClassificationID))
-					for _, id := range filter.ClassificationID {
-						requested[id] = true
+			if u.HasPermission("incidents:view_department_only") {
+				// Department-scoped: restrict to user's departments + DeptManager classification/location
+				scopeDeptIDs := u.ScopeDepartmentIDs()
+				if len(scopeDeptIDs) > 0 {
+					allowedDepts := make(map[string]bool, len(scopeDeptIDs))
+					deptStrs := make([]string, 0, len(scopeDeptIDs))
+					for _, id := range scopeDeptIDs {
+						s := id.String()
+						allowedDepts[s] = true
+						deptStrs = append(deptStrs, s)
 					}
-					var intersected []string
-					for _, id := range userClassIDs {
-						if requested[id] {
-							intersected = append(intersected, id)
+					if len(filter.DepartmentID) > 0 {
+						var intersected []string
+						for _, d := range filter.DepartmentID {
+							if allowedDepts[d] {
+								intersected = append(intersected, d)
+							}
 						}
+						if len(intersected) == 0 {
+							filter.DepartmentID = noAccessSentinel
+						} else {
+							filter.DepartmentID = intersected
+						}
+					} else {
+						filter.DepartmentID = deptStrs
 					}
-					if len(intersected) == 0 {
-						intersected = noAccessSentinel
-					}
-					filter.ClassificationID = intersected
-				} else {
-					filter.ClassificationID = userClassIDs
+				}
+				if u.DeptManagerClassificationID != nil {
+					filter.ClassificationID = []string{u.DeptManagerClassificationID.String()}
+				}
+				if u.DeptManagerLocationID != nil {
+					filter.LocationID = []string{u.DeptManagerLocationID.String()}
 				}
 			} else {
-				filter.ClassificationID = noAccessSentinel
-			}
+				userClassIDs := make([]string, 0, len(u.Classifications))
+				for _, cls := range u.Classifications {
+					userClassIDs = append(userClassIDs, cls.ID.String())
+				}
+				if len(userClassIDs) > 0 {
+					if len(filter.ClassificationID) > 0 {
+						requested := make(map[string]bool, len(filter.ClassificationID))
+						for _, id := range filter.ClassificationID {
+							requested[id] = true
+						}
+						var intersected []string
+						for _, id := range userClassIDs {
+							if requested[id] {
+								intersected = append(intersected, id)
+							}
+						}
+						if len(intersected) == 0 {
+							intersected = noAccessSentinel
+						}
+						filter.ClassificationID = intersected
+					} else {
+						filter.ClassificationID = userClassIDs
+					}
+				} else {
+					filter.ClassificationID = noAccessSentinel
+				}
 
-			userLocIDs := make([]string, 0, len(u.Locations))
-			for _, loc := range u.Locations {
-				userLocIDs = append(userLocIDs, loc.ID.String())
-			}
-			if len(userLocIDs) > 0 {
-				if len(filter.LocationID) > 0 {
-					requested := make(map[string]bool, len(filter.LocationID))
-					for _, id := range filter.LocationID {
-						requested[id] = true
-					}
-					var intersected []string
-					for _, id := range userLocIDs {
-						if requested[id] {
-							intersected = append(intersected, id)
-						}
-					}
-					if len(intersected) == 0 {
-						intersected = noAccessSentinel
-					}
-					filter.LocationID = intersected
-				} else {
-					filter.LocationID = userLocIDs
+				userLocIDs := make([]string, 0, len(u.Locations))
+				for _, loc := range u.Locations {
+					userLocIDs = append(userLocIDs, loc.ID.String())
 				}
-			} else {
-				filter.LocationID = noAccessSentinel
+				if len(userLocIDs) > 0 {
+					if len(filter.LocationID) > 0 {
+						requested := make(map[string]bool, len(filter.LocationID))
+						for _, id := range filter.LocationID {
+							requested[id] = true
+						}
+						var intersected []string
+						for _, id := range userLocIDs {
+							if requested[id] {
+								intersected = append(intersected, id)
+							}
+						}
+						if len(intersected) == 0 {
+							intersected = noAccessSentinel
+						}
+						filter.LocationID = intersected
+					} else {
+						filter.LocationID = userLocIDs
+					}
+				} else {
+					filter.LocationID = noAccessSentinel
+				}
 			}
 		}
 	}
@@ -1408,22 +1525,29 @@ func (h *IncidentHandler) applyDepartmentScope(c *fiber.Ctx, filter *models.Inci
 	if user.IsSuperAdmin || !user.HasPermission("incidents:view_department_only") {
 		return
 	}
-	scopeDeptID := user.ScopeDepartmentID()
-	if scopeDeptID != nil {
-		deptIDStr := scopeDeptID.String()
+	scopeDeptIDs := user.ScopeDepartmentIDs()
+	if len(scopeDeptIDs) > 0 {
+		allowedDepts := make(map[string]bool, len(scopeDeptIDs))
+		deptStrs := make([]string, 0, len(scopeDeptIDs))
+		for _, id := range scopeDeptIDs {
+			s := id.String()
+			allowedDepts[s] = true
+			deptStrs = append(deptStrs, s)
+		}
 		if len(filter.DepartmentID) > 0 {
-			hasMatch := false
+			var intersected []string
 			for _, d := range filter.DepartmentID {
-				if d == deptIDStr {
-					hasMatch = true
-					break
+				if allowedDepts[d] {
+					intersected = append(intersected, d)
 				}
 			}
-			if !hasMatch {
+			if len(intersected) == 0 {
 				filter.DepartmentID = noAccessSentinel
+			} else {
+				filter.DepartmentID = intersected
 			}
 		} else {
-			filter.DepartmentID = []string{deptIDStr}
+			filter.DepartmentID = deptStrs
 		}
 	}
 	if user.DeptManagerClassificationID != nil {
@@ -1448,9 +1572,61 @@ func (h *IncidentHandler) CreateComplaint(c *fiber.Ctx) error {
 		})
 	}
 
-	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	user, ok := c.Locals(constants.ContextKeys.User).(*models.User)
+	if !ok || user == nil {
+		return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "unauthorized"))
+	}
 
-	complaint, err := h.service.CreateComplaint(c.UserContext(), &req, userID)
+	if req.SourceIncidentID != nil {
+		incidentID, err := uuid.Parse(*req.SourceIncidentID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_source_incident_id"))
+		}
+
+		// A source incident makes reporter_phone mandatory: it is the key the duplicate-complaint
+		// check below is keyed on, so a blank or malformed value would silently defeat that check.
+		// The struct tag enforces this too; repeating it here keeps the rule true for any caller
+		// that reaches this handler without the tag path.
+		if !validation.IsValidMobile(req.ReporterPhone) {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "reporter_phone_required_for_source"))
+		}
+
+		// One query covers every source-incident rule below, instead of a fully-preloaded read.
+		source, err := h.incidentRepo.GetComplaintSourceValidation(c.UserContext(), incidentID, req.ReporterPhone)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "source_incident_not_found"))
+		}
+		if source.RecordType == "complaint" {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "source_incident_cannot_be_complaint"))
+		}
+		if source.StateCode == nil || *source.StateCode != "closed" {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "source_incident_not_closed"))
+		}
+
+		if source.CreatedAt.Add(3 * 30 * 24 * time.Hour).Before(time.Now()) {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "source_incident_too_old"))
+		}
+
+		if !source.PhoneMatches {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "reporter_phone_mismatch"))
+		}
+
+		if source.OpenComplaintExists {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "complaint_already_exists_for_source"))
+		}
+
+		if source.ClassificationID != nil && *source.ClassificationID != uuid.Nil {
+			req.ClassificationID = source.ClassificationID.String()
+		}
+
+		if source.LocationID != nil && *source.LocationID != uuid.Nil {
+			locationID := source.LocationID.String()
+			req.LocationID = &locationID
+		}
+
+	}
+
+	complaint, err := h.service.CreateComplaint(c.UserContext(), &req, user.ID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -1822,7 +1998,7 @@ func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
 	)
 
 	now := time.Now()
-	smsErr := internalUtils.SendSMS(mobile, smsMessage)
+	_, smsErr := internalUtils.SendSMS(mobile, smsMessage)
 	status := "sent"
 	if smsErr != nil {
 		status = "failed"
@@ -1866,6 +2042,7 @@ func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
 	}
 	if smsErr != nil {
 		notification.ErrorMessage = smsErr.Error()
+		notification.FailureCode = services.ClassifyFailureCode(smsErr)
 	}
 	if err := h.incidentRepo.CreateNotification(c.UserContext(), notification); err != nil {
 		log.Printf("REQUEST-INFO-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
