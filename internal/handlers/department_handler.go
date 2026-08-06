@@ -376,7 +376,15 @@ func (h *DepartmentHandler) List(c *fiber.Ctx) error {
 }
 
 func (h *DepartmentHandler) GetTree(c *fiber.Ctx) error {
-	tree, err := h.repo.GetTree(c.UserContext())
+	// Department-scoped: users with view_department_only see only their own department(s).
+	// Super admins bypass this restriction entirely.
+	var scopeDepartmentIDs []uuid.UUID
+	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
+	if user != nil && !user.IsSuperAdmin && user.HasPermission("users:view_department_only") {
+		scopeDepartmentIDs = user.ScopeDepartmentIDs()
+	}
+
+	tree, err := h.repo.GetTree(c.UserContext(), scopeDepartmentIDs)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}

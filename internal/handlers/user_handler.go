@@ -645,8 +645,19 @@ func (h *UserHandler) UpdateUserCallStatus(c *fiber.Ctx) error {
 
 // Export exports all users as JSON
 func (h *UserHandler) Export(c *fiber.Ctx) error {
+	// Department-scoped: users with view_department_only can only export their own department's users.
+	// Mirrors the same restriction applied in ListUsers.
+	var departmentIDs []uuid.UUID
+	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
+	if user != nil && !user.IsSuperAdmin && user.HasPermission("users:view_department_only") {
+		scopeDeptID := user.ScopeDepartmentID()
+		if scopeDeptID != nil {
+			departmentIDs = []uuid.UUID{*scopeDeptID}
+		}
+	}
+
 	// Get all users without pagination
-	users, _, err := h.userService.ListUsers(c.UserContext(), 1, 10000, "", "", "", "", nil, nil, nil, nil)
+	users, _, err := h.userService.ListUsers(c.UserContext(), 1, 10000, "", "", "", "", nil, departmentIDs, nil, nil)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}

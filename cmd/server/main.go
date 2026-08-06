@@ -641,7 +641,7 @@ func main() {
 	}))
 	departments.Post("/", authMiddleware.RequirePermission("departments:create"), departmentHandler.Create)
 	departments.Get("/", authMiddleware.RequirePermission("departments:view"), departmentHandler.List)
-	departments.Get("/tree", authMiddleware.RequirePermission("departments:view"), departmentHandler.GetTree)
+	departments.Get("/tree", authMiddleware.RequirePermission("departments:view", "users:view_department_only"), departmentHandler.GetTree)
 	departments.Get("/children", authMiddleware.RequirePermission("departments:view"), departmentHandler.GetChildren)
 	departments.Post("/match", authMiddleware.RequirePermission("departments:view"), departmentHandler.MatchDepartment)
 	departments.Get("/export", authMiddleware.RequirePermission("departments:view"), departmentHandler.Export)
