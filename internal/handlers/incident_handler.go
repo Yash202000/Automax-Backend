@@ -258,18 +258,20 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 	}
 
 	// Restrict incident list by the user's assigned classifications and locations.
-	// Super admins are exempt from this scoping unless RESTRICT_ADMIN_SCOPE=true,
-	// where admins must also be restricted like regular users.
+	// Super admins and users with the system Administrator role (code: "admin") are
+	// exempt from this scoping unless RESTRICT_ADMIN_SCOPE=true.
 	noAccessSentinel := []string{"00000000-0000-0000-0000-000000000000"}
 	restrictSuperAdmins := strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_ADMIN_SCOPE")), "true")
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
 
+	isAdminUser := user != nil && (user.IsSuperAdmin || user.HasRole("admin"))
+
 	if filter.ReporterPhoneSearch != "" && user != nil && !user.IsSuperAdmin && !user.HasPermission("incidents:filter_reporter_phone") {
 		return utils.ErrorResponse(c, fiber.StatusForbidden, "Insufficient permissions to filter by reporter phone")
 	}
 
-	if err == nil && user != nil && (!user.IsSuperAdmin || restrictSuperAdmins) {
+	if err == nil && user != nil && (!isAdminUser || restrictSuperAdmins) {
 		// Department-scoped: users with view_department_only see only their department's incidents.
 		// Uses DeptManagerDepartmentID if set, otherwise falls back to DepartmentID.
 		if user.HasPermission("incidents:view_department_only") {
@@ -1182,19 +1184,18 @@ func (h *IncidentHandler) GetStatsV2(c *fiber.Ctx) error {
 		}
 	}
 
-	// Super admins: IsAdmin=true (no role-visibility restriction on WorkflowStats),
-	// except when RESTRICT_ADMIN_SCOPE=true, where super admins must also be scoped
-	// by classification/location like regular users.
+	// Super admins and Administrator-role users: IsAdmin=true (no role-visibility
+	// restriction on WorkflowStats), except when RESTRICT_ADMIN_SCOPE=true.
 	restrictSuperAdmins := strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_ADMIN_SCOPE")), "true")
-	isSuperAdmin := false
-	if user, ok := c.Locals(constants.ContextKeys.User).(*models.User); ok && user != nil && user.IsSuperAdmin {
-		isSuperAdmin = true
+	isStatsAdmin := false
+	if user, ok := c.Locals(constants.ContextKeys.User).(*models.User); ok && user != nil && (user.IsSuperAdmin || user.HasRole("admin")) {
+		isStatsAdmin = true
 		filter.IsAdmin = true
 	} else {
 		filter.UserRoleIDs = h.getUserRoleIDs(c)
 	}
 
-	if !isSuperAdmin || restrictSuperAdmins {
+	if !isStatsAdmin || restrictSuperAdmins {
 		// Restrict stats to the user's scope — mirrors ListIncidents scoping exactly.
 		noAccessSentinel := []string{"00000000-0000-0000-0000-000000000000"}
 		statsUserID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)

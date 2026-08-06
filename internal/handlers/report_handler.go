@@ -69,7 +69,7 @@ func (h *ReportHandler) injectReportScope(c *fiber.Ctx, ctx context.Context, dat
 	if err != nil || user == nil {
 		return filters, ctx
 	}
-	if user.IsSuperAdmin && !restrictSuperAdmins {
+	if (user.IsSuperAdmin || user.HasRole("admin")) && !restrictSuperAdmins {
 		return filters, ctx
 	}
 
