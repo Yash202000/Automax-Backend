@@ -707,7 +707,9 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			models.Permission{Name: "Override Approval Lock", Code: "perf:override_lock", Module: "perf", Action: "override", Description: "Edit or delete an already-approved performance entry"},
 			models.Permission{Name: "View Targets", Code: "targets:view", Module: "targets", Action: "view", Description: "View annual KPI targets"},
 			models.Permission{Name: "Set Targets", Code: "targets:set", Module: "targets", Action: "set", Description: "Create/update annual targets"},
-			models.Permission{Name: "Approve Targets", Code: "targets:approve", Module: "targets", Action: "approve", Description: "Approve target submissions"},
+			models.Permission{Name: "Delete Targets", Code: "targets:delete", Module: "targets", Action: "delete", Description: "Delete draft/returned/rejected annual targets"},
+			models.Permission{Name: "Approve Targets", Code: "targets:approve", Module: "targets", Action: "approve", Description: "Approve submitted target submissions"},
+			models.Permission{Name: "Reject Targets", Code: "targets:reject", Module: "targets", Action: "reject", Description: "Reject submitted target submissions"},
 			models.Permission{Name: "Manage Benchmarks", Code: "benchmark:manage", Module: "benchmark", Action: "manage", Description: "Create/update KPI benchmarks"},
 			models.Permission{Name: "Manage Segment Data", Code: "segment:manage", Module: "segment", Action: "manage", Description: "Create/update KPI segmentation data"},
 			models.Permission{Name: "Manage Corrective Actions", Code: "corrective_action:manage", Module: "corrective_action", Action: "manage", Description: "Create and close KPI corrective actions"},
@@ -774,6 +776,14 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 	if result.Error == gorm.ErrRecordNotFound {
 		var managerPerms []models.Permission
 		db.Where("action IN ?", []string{"view", "create", "update", "delete", "assign", "approve"}).Find(&managerPerms)
+		// targets:reject uses action "reject" (mirroring perf:reject), which
+		// isn't in the action list above — without this, splitting Reject out
+		// of targets:approve into its own permission would silently take away
+		// Manager's existing ability to reject a submitted target.
+		var managerRejectPerm models.Permission
+		if db.Where("code = ?", "targets:reject").First(&managerRejectPerm).Error == nil {
+			managerPerms = append(managerPerms, managerRejectPerm)
+		}
 		managerRole = models.Role{
 			Name:        "Manager",
 			Code:        "manager",
@@ -787,6 +797,10 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		// Update existing manager role to have full management permissions
 		var managerPerms []models.Permission
 		db.Where("action IN ?", []string{"view", "create", "update", "delete", "assign", "approve"}).Find(&managerPerms)
+		var managerRejectPerm models.Permission
+		if db.Where("code = ?", "targets:reject").First(&managerRejectPerm).Error == nil {
+			managerPerms = append(managerPerms, managerRejectPerm)
+		}
 		db.Model(&managerRole).Association("Permissions").Replace(managerPerms)
 	}
 
