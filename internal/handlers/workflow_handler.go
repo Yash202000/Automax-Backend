@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -617,6 +618,10 @@ func (h *WorkflowHandler) CreateState(c *fiber.Ctx) error {
 
 	state, err := h.service.CreateState(c.UserContext(), workflowID, &req)
 	if err != nil {
+		var slaErr *services.SLAValidationError
+		if errors.As(err, &slaErr) {
+			return utils.ErrorResponse(c, fiber.StatusUnprocessableEntity, err.Error())
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -711,6 +716,10 @@ func (h *WorkflowHandler) UpdateState(c *fiber.Ctx) error {
 
 	state, err := h.service.UpdateState(c.UserContext(), stateID, &req)
 	if err != nil {
+		var slaErr *services.SLAValidationError
+		if errors.As(err, &slaErr) {
+			return utils.ErrorResponse(c, fiber.StatusUnprocessableEntity, err.Error())
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
