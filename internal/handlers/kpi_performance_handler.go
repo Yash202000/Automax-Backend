@@ -287,6 +287,19 @@ func (h *KpiPerformanceHandler) TransitionTarget(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
 
+	// The route only requires targets:approve OR targets:reject (either
+	// grants access to this endpoint at all, since the action isn't known
+	// until the body is parsed) — reject specifically requires targets:reject
+	// and approve/return require targets:approve, so a user with only one of
+	// the two can't perform the other action just by changing the request.
+	requiredPerm := "targets:approve"
+	if req.Action == "reject" {
+		requiredPerm = "targets:reject"
+	}
+	if !hasTargetPermission(c, requiredPerm) {
+		return utils.ErrorResponse(c, fiber.StatusForbidden, "Insufficient permissions")
+	}
+
 	db := h.db.WithContext(c.UserContext())
 
 	var target models.KpiAnnualTarget
@@ -859,6 +872,18 @@ func isAdminOverride(c *fiber.Ctx) bool {
 		return false
 	}
 	return user.IsSuperAdmin || user.HasPermission("perf:override_lock")
+}
+
+// hasTargetPermission checks a specific permission for the current request's
+// user — used where the route-level RequirePermission only narrows down to
+// "one of several" permissions (e.g. approve OR reject) and the handler
+// needs to know exactly which one applies once it knows the actual action.
+func hasTargetPermission(c *fiber.Ctx, permission string) bool {
+	user, ok := c.Locals(constants.ContextKeys.User).(*models.User)
+	if !ok || user == nil {
+		return false
+	}
+	return user.IsSuperAdmin || user.HasPermission(permission)
 }
 
 // ─── Update / Delete (approval-lock enforced) ──────────────────────────────────
