@@ -563,6 +563,18 @@ type CustomFieldFilter struct {
 	Value string `json:"value"`
 }
 
+// IncidentMapMarker is the minimal per-incident shape returned by the map
+// markers endpoint — deliberately excludes everything List's full Incident
+// payload carries (classification, department, assignee, comments, ...) so
+// tens of thousands of rows can be fetched in one request.
+type IncidentMapMarker struct {
+	ID             uuid.UUID `json:"id"`
+	Latitude       float64   `json:"latitude"`
+	Longitude      float64   `json:"longitude"`
+	CurrentStateID uuid.UUID `json:"current_state_id"`
+	StateColor     string    `json:"state_color"`
+}
+
 type IncidentFilter struct {
 	Search              string     `query:"search" json:"search" validate:"omitempty"`
 	WorkflowID          []string   `query:"workflow_id" json:"workflow_id" validate:"omitempty,dive,uuid"`

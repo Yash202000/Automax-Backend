@@ -211,8 +211,16 @@ func (h *IncidentHandler) SearchIncidents(c *fiber.Ctx) error {
 	if err := c.BodyParser(filter); err != nil {
 		return ErrorResponseWithKey(c, fiber.StatusBadRequest, "invalid_request_body")
 	}
+	parseIncidentSearchBodyExtras(c, filter)
 
-	// Parse custom field filters from JSON body (same structure, just from body)
+	return h.listIncidentsCore(c, filter)
+}
+
+// parseIncidentSearchBodyExtras parses the JSON-body-only fields IncidentFilter
+// can't bind via struct tags — custom field filters and the start_date_str/
+// end_date_str manual date parsing — mutating filter in place. Shared by
+// SearchIncidents and SearchIncidentMarkers so both accept the same body shape.
+func parseIncidentSearchBodyExtras(c *fiber.Ctx, filter *models.IncidentFilter) {
 	type searchBody struct {
 		Timezone           string                    `json:"timezone"`
 		StartDateStr       string                    `json:"start_date_str"`
@@ -220,14 +228,13 @@ func (h *IncidentHandler) SearchIncidents(c *fiber.Ctx) error {
 		CustomFieldFilters []models.CustomFieldFilter `json:"custom_field_filters"`
 	}
 	var body searchBody
-	// Ignore error — the filter fields were already parsed above, these are optional extras
+	// Ignore error — the filter fields were already parsed by the caller, these are optional extras
 	_ = c.BodyParser(&body)
 
 	if len(body.CustomFieldFilters) > 0 {
 		filter.CustomFieldFilters = body.CustomFieldFilters
 	}
 
-	// Parse date strings from body (same logic as GET handler)
 	loc := utils.ResolveTimezone(body.Timezone)
 	if body.StartDateStr != "" && filter.StartDate == nil {
 		if t, err := time.ParseInLocation("2006-01-02", body.StartDateStr, loc); err == nil {
@@ -244,8 +251,48 @@ func (h *IncidentHandler) SearchIncidents(c *fiber.Ctx) error {
 			filter.EndDate = &t
 		}
 	}
+}
 
-	return h.listIncidentsCore(c, filter)
+// maxMapMarkers caps how many markers a single /incidents/search/markers
+// response returns. Protects the DB/response size if a broad filter (or no
+// filter) matches far more geolocated incidents than a map can usefully show.
+const maxMapMarkers = 40000
+
+// SearchIncidentMarkers handles POST /incidents/search/markers. It accepts
+// the same filters as /incidents/search but returns only minimal per-incident
+// fields (id/lat/lng/state color/priority) for every matching geolocated
+// incident in one response instead of paginating — fetch full details for a
+// specific incident via GET /incidents/:id when its marker is tapped.
+func (h *IncidentHandler) SearchIncidentMarkers(c *fiber.Ctx) error {
+	filter := &models.IncidentFilter{}
+	if err := c.BodyParser(filter); err != nil {
+		return ErrorResponseWithKey(c, fiber.StatusBadRequest, "invalid_request_body")
+	}
+	parseIncidentSearchBodyExtras(c, filter)
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	if handled, err := h.scopeIncidentFilterToUser(c, filter); handled {
+		return err
+	}
+
+	markers, total, err := h.incidentRepo.ListMapMarkers(c.UserContext(), filter, maxMapMarkers)
+	if err != nil {
+		return ErrorResponseWithKey(c, fiber.StatusInternalServerError, "internal_server_error")
+	}
+
+	return c.JSON(fiber.Map{
+		"success":        true,
+		"data":           markers,
+		"total_matching": total,
+		"returned_count": len(markers),
+		"capped":         total > int64(len(markers)),
+	})
 }
 
 func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
@@ -290,38 +337,28 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 	return h.listIncidentsCore(c, filter)
 }
 
-// listIncidentsCore contains the shared logic for both ListIncidents (GET) and SearchIncidents (POST).
-func (h *IncidentHandler) listIncidentsCore(c *fiber.Ctx, filter *models.IncidentFilter) error {
-	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"success": false,
-			"errors":  validationErrors,
-		})
-	}
-
-	if filter.Page < 1 {
-		filter.Page = 1
-	}
-
-	if filter.Limit < 1 || filter.Limit > 100 {
-		filter.Limit = 20
-	}
-
-	// Restrict incident list by the user's assigned classifications and locations.
-	// Super admins always bypass scoping. Users with the system Administrator role
-	// (code: "admin") are also exempt unless RESTRICT_ADMIN_SCOPE=true.
+// scopeIncidentFilterToUser restricts filter in place to the current user's
+// assigned classifications/departments/locations. Super admins and (unless
+// RESTRICT_ADMIN_SCOPE=true) the system Administrator role bypass scoping.
+// Shared by listIncidentsCore and the map markers endpoint so both enforce
+// the same visibility rules — a user who can't see a department's incidents
+// in the list must not see its markers on the map either.
+//
+// If handled is true, the fiber response has already been written (a
+// permission error) and the caller must return err immediately.
+func (h *IncidentHandler) scopeIncidentFilterToUser(c *fiber.Ctx, filter *models.IncidentFilter) (handled bool, err error) {
 	noAccessSentinel := []string{"00000000-0000-0000-0000-000000000000"}
 	restrictAdminRole := strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_ADMIN_SCOPE")), "true")
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
+	user, findErr := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
 
 	isUnscoped := user != nil && (user.IsSuperAdmin || (!restrictAdminRole && user.HasRole("admin")))
 
 	if filter.ReporterPhoneSearch != "" && user != nil && !user.IsSuperAdmin && !user.HasPermission("incidents:filter_reporter_phone") {
-		return utils.ErrorResponse(c, fiber.StatusForbidden, "Insufficient permissions to filter by reporter phone")
+		return true, utils.ErrorResponse(c, fiber.StatusForbidden, "Insufficient permissions to filter by reporter phone")
 	}
 
-	if err == nil && user != nil && !isUnscoped {
+	if findErr == nil && user != nil && !isUnscoped {
 		// Department-scoped: users with view_department_only see only their department's incidents.
 		// Uses DeptManagerDepartmentID if set, otherwise falls back to DepartmentID.
 		if user.HasPermission("incidents:view_department_only") {
@@ -425,6 +462,30 @@ func (h *IncidentHandler) listIncidentsCore(c *fiber.Ctx, filter *models.Inciden
 			roleIDs = append(roleIDs, r.ID)
 		}
 		filter.UserRoleIDs = roleIDs
+	}
+
+	return false, nil
+}
+
+// listIncidentsCore contains the shared logic for both ListIncidents (GET) and SearchIncidents (POST).
+func (h *IncidentHandler) listIncidentsCore(c *fiber.Ctx, filter *models.IncidentFilter) error {
+	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+
+	if filter.Limit < 1 || filter.Limit > 100 {
+		filter.Limit = 20
+	}
+
+	if handled, err := h.scopeIncidentFilterToUser(c, filter); handled {
+		return err
 	}
 
 	incidents, total, err := h.service.ListIncidents(c.UserContext(), filter)

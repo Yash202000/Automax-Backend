@@ -24,6 +24,7 @@ type IncidentRepository interface {
 	FindByIncidentNumber(ctx context.Context, number string) (*models.Incident, error)
 	FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.Incident, error)
 	List(ctx context.Context, filter *models.IncidentFilter) ([]models.Incident, int64, error)
+	ListMapMarkers(ctx context.Context, filter *models.IncidentFilter, maxMarkers int) ([]models.IncidentMapMarker, int64, error)
 	Update(ctx context.Context, incident *models.Incident) error
 	UpdateFields(ctx context.Context, id uuid.UUID, updates map[string]interface{}) error
 	UpdateFieldsWithVersion(ctx context.Context, id uuid.UUID, updates map[string]interface{}, expectedVersion int) error
@@ -235,12 +236,10 @@ func normalizeStateCodes(in []string) []string {
 const stateCodeSubquery = `current_state_id IN (
 	SELECT id FROM workflow_states WHERE LOWER(code) IN ?)`
 
-func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFilter) ([]models.Incident, int64, error) {
-	var incidents []models.Incident
-	var total int64
-
-	query := r.db.WithContext(ctx).Model(&models.Incident{})
-
+// applyIncidentFilters applies the full IncidentFilter WHERE-clause set to
+// query. Shared by List and ListMapMarkers so the two stay in sync — a filter
+// added to one automatically applies to the other.
+func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *gorm.DB, filter *models.IncidentFilter) *gorm.DB {
 	// Apply filters
 	if len(filter.WorkflowID) != 0 {
 		query = query.Where("workflow_id IN ?", filter.WorkflowID)
@@ -399,13 +398,21 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		query = query.Where("incidents.id IN (?)", subQuery)
 	}
 
+	return query
+}
+
+func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFilter) ([]models.Incident, int64, error) {
+	var incidents []models.Incident
+	var total int64
+
+	query := r.applyIncidentFilters(ctx, r.db.WithContext(ctx).Model(&models.Incident{}), filter)
+
 	// Single unified count — works for all cases
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	log.Printf("[List] total=%d classification_id=%v location_id=%v my_record=%v record_type=%v user_role_ids=%v",
 		total, filter.ClassificationID, filter.LocationID, filter.MyRecord, filter.RecordType, filter.UserRoleIDs)
-	// Apply pagination
 	// Apply pagination
 	if filter.Page < 1 {
 		filter.Page = 1
@@ -444,6 +451,35 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	}
 
 	return incidents, total, nil
+}
+
+// ListMapMarkers returns minimal per-incident fields for map plotting instead
+// of full Incident rows — no Preloads, just id/coords/state color/priority.
+// This keeps the payload small enough to fetch every matching marker in one
+// request instead of paginating. maxMarkers caps the result defensively; the
+// caller is told via the returned total whether the cap was hit.
+func (r *incidentRepository) ListMapMarkers(ctx context.Context, filter *models.IncidentFilter, maxMarkers int) ([]models.IncidentMapMarker, int64, error) {
+	var total int64
+
+	base := r.applyIncidentFilters(ctx, r.db.WithContext(ctx).Model(&models.Incident{}), filter).
+		Where("incidents.latitude IS NOT NULL AND incidents.longitude IS NOT NULL")
+
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var markers []models.IncidentMapMarker
+	err := base.
+		Select(`incidents.id, incidents.latitude, incidents.longitude, incidents.current_state_id,
+			workflow_states.color AS state_color`).
+		Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
+		Limit(maxMarkers).
+		Find(&markers).Error
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return markers, total, nil
 }
 
 func (r *incidentRepository) FindByIDWithLast6DigitValidation(
