@@ -154,6 +154,15 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 		case errors.Is(err, services.ErrInvalidLocation):
 			return ErrorResponseWithKey(c, fiber.StatusBadRequest, "invalid_location_class", req.Source)
 
+		// The location/classification hierarchy rules. Each of these sentinels carries
+		// its own i18n key as its message, so the specific reason reaches the caller
+		// instead of one generic "invalid location or classification".
+		case errors.Is(err, services.ErrLocationNotFound),
+			errors.Is(err, services.ErrClassificationNotFound),
+			errors.Is(err, services.ErrLocationNotSelectable),
+			errors.Is(err, services.ErrClassificationNotSelectable):
+			return ErrorResponseWithKey(c, fiber.StatusBadRequest, err.Error(), req.Source)
+
 		default:
 			return ErrorResponseWithKey(c, fiber.StatusInternalServerError, "internal_server_error", req.Source)
 		}
@@ -222,9 +231,9 @@ func (h *IncidentHandler) SearchIncidents(c *fiber.Ctx) error {
 // SearchIncidents and SearchIncidentMarkers so both accept the same body shape.
 func parseIncidentSearchBodyExtras(c *fiber.Ctx, filter *models.IncidentFilter) {
 	type searchBody struct {
-		Timezone           string                    `json:"timezone"`
-		StartDateStr       string                    `json:"start_date_str"`
-		EndDateStr         string                    `json:"end_date_str"`
+		Timezone           string                     `json:"timezone"`
+		StartDateStr       string                     `json:"start_date_str"`
+		EndDateStr         string                     `json:"end_date_str"`
 		CustomFieldFilters []models.CustomFieldFilter `json:"custom_field_filters"`
 	}
 	var body searchBody
@@ -746,6 +755,15 @@ func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 	if err != nil {
 		if errors.Is(err, services.ErrEditNotAllowed) {
 			return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "forbidden_no_edit"))
+		}
+		// Hierarchy rejections are the caller's mistake, not a server fault. Each
+		// sentinel's message is its i18n key.
+		switch {
+		case errors.Is(err, services.ErrLocationNotFound),
+			errors.Is(err, services.ErrClassificationNotFound),
+			errors.Is(err, services.ErrLocationNotSelectable),
+			errors.Is(err, services.ErrClassificationNotSelectable):
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), err.Error()))
 		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}

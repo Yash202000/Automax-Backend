@@ -330,7 +330,10 @@ var messages = map[string][2]string{
 	"failed_to_retrieve_feedback_template": {"Failed to retrieve feedback template", "فشل استرجاع قالب التقييم"},
 
 	// ── Classifications ───────────────────────────────────────────────────────
-	"classification_not_found":               {"Classification not found", "التصنيف غير موجود"},
+	"classification_not_found": {"Classification not found", "التصنيف غير موجود"},
+	// Mirrors location_not_selectable: a category with active sub-categories is an
+	// umbrella, not something an incident can be filed against.
+	"classification_not_selectable":          {"This classification has sub-classifications. Please select a specific sub-classification.", "لهذا التصنيف تصنيفات فرعية. الرجاء اختيار تصنيف فرعي محدد."},
 	"classification_created":                 {"Classification created", "تم إنشاء التصنيف"},
 	"classification_updated":                 {"Classification updated", "تم تحديث التصنيف"},
 	"classification_deleted":                 {"Classification deleted", "تم حذف التصنيف"},
@@ -370,6 +373,9 @@ var messages = map[string][2]string{
 	"invalid_location_id":       {"Invalid location_id", "معرّف الموقع غير صالح"},
 	"failed_to_fetch_locations": {"Failed to fetch locations", "فشل جلب المواقع"},
 	"children_retrieved":        {"Children retrieved", "تم استرجاع العناصر الفرعية"},
+	// An incident must name a specific place, so a location with active sub-locations
+	// cannot be selected — the caller has to pick one of those sub-locations.
+	"location_not_selectable": {"This location has sub-locations. Please select a specific sub-location.", "لهذا الموقع مواقع فرعية. الرجاء اختيار موقع فرعي محدد."},
 
 	// ── Departments ───────────────────────────────────────────────────────────
 	"department_not_found":        {"Department not found", "القسم غير موجود"},

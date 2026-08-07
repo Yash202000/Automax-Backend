@@ -32,6 +32,15 @@ var ErrInvalidLocation = errors.New("invalid_location")
 var ErrEmptyWorkflow = errors.New("empty_workflow")
 var ErrEditNotAllowed = errors.New("edit_not_allowed_in_current_state")
 
+// An incident must be filed against a specific place and category, not an umbrella
+// one, so its location and classification have to be leaves of their hierarchies.
+// Following the convention above, each sentinel's message is its i18n key, which is
+// what lets the handlers translate them without a per-error mapping table.
+var ErrLocationNotFound = errors.New("location_not_found")
+var ErrClassificationNotFound = errors.New("classification_not_found")
+var ErrLocationNotSelectable = errors.New("location_not_selectable")
+var ErrClassificationNotSelectable = errors.New("classification_not_selectable")
+
 type IncidentService interface {
 	// Incident CRUD
 	CreateIncident(ctx context.Context, req *models.IncidentCreateRequest, reporterID uuid.UUID) (*models.IncidentResponse, error)
@@ -129,6 +138,7 @@ type incidentService struct {
 	deptRepo                repository.DepartmentRepository
 	rejectionLogRepo        repository.RejectionLogRepository
 	classificationRepo      repository.ClassificationRepository
+	locationRepo            repository.LocationRepository
 	roleRepo                repository.RoleRepository
 	storage                 *storage.MinIOStorage
 	db                      *gorm.DB
@@ -155,6 +165,7 @@ func NewIncidentService(
 	userRepo repository.UserRepository,
 	deptRepo repository.DepartmentRepository,
 	classificationRepo repository.ClassificationRepository,
+	locationRepo repository.LocationRepository,
 	rejectionLogRepo repository.RejectionLogRepository,
 	roleRepo repository.RoleRepository,
 	storage *storage.MinIOStorage,
@@ -170,6 +181,7 @@ func NewIncidentService(
 		deptRepo:           deptRepo,
 		rejectionLogRepo:   rejectionLogRepo,
 		classificationRepo: classificationRepo,
+		locationRepo:       locationRepo,
 		roleRepo:           roleRepo,
 		storage:            storage,
 		db:                 db,
@@ -374,6 +386,13 @@ func (s *incidentService) getNextRoundRobinAssignee(ctx context.Context, roleIDs
 // Incident CRUD
 
 func (s *incidentService) CreateIncident(ctx context.Context, req *models.IncidentCreateRequest, reporterID uuid.UUID) (*models.IncidentResponse, error) {
+	// Validated first, before anything with a side effect: the IVR branch below can
+	// register a brand-new citizen user, and a request we are going to reject must not
+	// leave one behind.
+	if err := s.validateIncidentHierarchySelection(ctx, req.LocationID, req.ClassificationID); err != nil {
+		return nil, err
+	}
+
 	creatorID := reporterID // preserve before IVR block may overwrite reporterID
 	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
 	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.IVR) && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
@@ -1274,6 +1293,12 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 			classID, err := uuid.Parse(*req.ClassificationID)
 			if err == nil {
 				if incident.ClassificationID == nil || *incident.ClassificationID != classID {
+					// Only a genuinely new value is validated. Incidents created before
+					// this rule may sit on a non-leaf classification, and resubmitting
+					// the unchanged value must not make them uneditable.
+					if _, err := s.validateSelectableClassification(ctx, *req.ClassificationID); err != nil {
+						return nil, err
+					}
 					newVal := *req.ClassificationID
 					changes = append(changes, models.IncidentFieldChange{
 						FieldName:  "classification_id",
@@ -1381,6 +1406,10 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 			locID, err := uuid.Parse(*req.LocationID)
 			if err == nil {
 				if incident.LocationID == nil || *incident.LocationID != locID {
+					// Changed values only — see the classification block above.
+					if _, err := s.validateSelectableLocation(ctx, *req.LocationID); err != nil {
+						return nil, err
+					}
 					newVal := *req.LocationID
 					changes = append(changes, models.IncidentFieldChange{
 						FieldName:  "location_id",
