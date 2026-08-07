@@ -29,7 +29,7 @@ import (
 type ReportService interface {
 	// Report CRUD
 	CreateReport(ctx context.Context, req *models.ReportCreateRequest, userID uuid.UUID) (*models.ReportResponse, error)
-	GetReport(ctx context.Context, id uuid.UUID) (*models.ReportResponse, error)
+	GetReport(ctx context.Context, id uuid.UUID, userID uuid.UUID) (*models.ReportResponse, error)
 	ListReports(ctx context.Context, filter *models.ReportFilter) ([]models.ReportResponse, int64, error)
 	UpdateReport(ctx context.Context, id uuid.UUID, req *models.ReportUpdateRequest, userID uuid.UUID) (*models.ReportResponse, error)
 	DeleteReport(ctx context.Context, id uuid.UUID, userID uuid.UUID) error
@@ -131,12 +131,28 @@ func (s *reportService) CreateReport(ctx context.Context, req *models.ReportCrea
 		return nil, err
 	}
 
-	return s.GetReport(ctx, report.ID)
+	return s.GetReport(ctx, report.ID, userID)
 }
 
-func (s *reportService) GetReport(ctx context.Context, id uuid.UUID) (*models.ReportResponse, error) {
+// ErrReportAccessDenied is returned when a caller is neither the report's
+// creator nor allowed by its public flag.
+var ErrReportAccessDenied = errors.New("you do not have access to this report")
+
+// assertReportVisible allows access only to the report's creator, or to anyone
+// once the report has been marked public.
+func assertReportVisible(report *models.Report, userID uuid.UUID) error {
+	if report.CreatedByID == userID || report.IsPublic {
+		return nil
+	}
+	return ErrReportAccessDenied
+}
+
+func (s *reportService) GetReport(ctx context.Context, id uuid.UUID, userID uuid.UUID) (*models.ReportResponse, error) {
 	report, err := s.reportRepo.FindByIDWithRelations(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	if err := assertReportVisible(report, userID); err != nil {
 		return nil, err
 	}
 
@@ -205,7 +221,7 @@ func (s *reportService) UpdateReport(ctx context.Context, id uuid.UUID, req *mod
 		return nil, err
 	}
 
-	return s.GetReport(ctx, id)
+	return s.GetReport(ctx, id, userID)
 }
 
 func (s *reportService) DeleteReport(ctx context.Context, id uuid.UUID, userID uuid.UUID) error {
@@ -225,6 +241,9 @@ func (s *reportService) DeleteReport(ctx context.Context, id uuid.UUID, userID u
 func (s *reportService) DuplicateReport(ctx context.Context, id uuid.UUID, userID uuid.UUID) (*models.ReportResponse, error) {
 	original, err := s.reportRepo.FindByID(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	if err := assertReportVisible(original, userID); err != nil {
 		return nil, err
 	}
 
@@ -247,7 +266,7 @@ func (s *reportService) DuplicateReport(ctx context.Context, id uuid.UUID, userI
 		return nil, err
 	}
 
-	return s.GetReport(ctx, duplicate.ID)
+	return s.GetReport(ctx, duplicate.ID, userID)
 }
 
 // dispatchQuery resolves the handler for dataSource and runs it.
@@ -420,6 +439,9 @@ func (s *reportService) ExecuteReport(
 ) (*models.ReportResultResponse, error) {
 	report, err := s.reportRepo.FindByID(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	if err := assertReportVisible(report, userID); err != nil {
 		return nil, err
 	}
 
