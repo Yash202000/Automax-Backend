@@ -61,9 +61,9 @@ func (s *reportTemplateService) CreateTemplate(ctx context.Context, req *models.
 		NameAr:        req.NameAr,
 		Description:   req.Description,
 		DescriptionAr: req.DescriptionAr,
-		Template:    string(templateJSON),
-		IsPublic:    req.IsPublic,
-		CreatedByID: userID,
+		Template:      string(templateJSON),
+		IsPublic:      req.IsPublic,
+		CreatedByID:   userID,
 	}
 
 	if err := s.templateRepo.Create(ctx, template); err != nil {
@@ -1297,27 +1297,10 @@ func formatCellValue(field, format string, v interface{}) string {
 		}
 	}
 
-	// Default formatting
-	switch val := v.(type) {
-	case string:
-		return val
-	case float64:
-		if val == float64(int64(val)) {
-			return strconv.FormatInt(int64(val), 10)
-		}
-		return strconv.FormatFloat(val, 'f', 2, 64)
-	case int:
-		return strconv.Itoa(val)
-	case int64:
-		return strconv.FormatInt(val, 10)
-	case bool:
-		if val {
-			return "Yes"
-		}
-		return "No"
-	default:
-		return fmt.Sprintf("%v", val)
-	}
+	// Default formatting — shared with the report exporters so slice-valued columns
+	// (attachment URL lists, feedback/comment arrays) render as a joined list rather
+	// than Go syntax like "[https://a https://b]".
+	return formatValue(v)
 }
 
 func toInt(v interface{}) (int, bool) {
@@ -1342,11 +1325,11 @@ func toReportTemplateResponse(t *models.ReportTemplate) *models.ReportTemplateRe
 		NameAr:        t.NameAr,
 		Description:   t.Description,
 		DescriptionAr: t.DescriptionAr,
-		Template:    templateConfig,
-		IsDefault:   t.IsDefault,
-		IsPublic:    t.IsPublic,
-		CreatedAt:   t.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:   t.UpdatedAt.Format(time.RFC3339),
+		Template:      templateConfig,
+		IsDefault:     t.IsDefault,
+		IsPublic:      t.IsPublic,
+		CreatedAt:     t.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:     t.UpdatedAt.Format(time.RFC3339),
 	}
 
 	if t.CreatedBy != nil {
