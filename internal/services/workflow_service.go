@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -945,19 +946,36 @@ func (s *workflowService) GetWorkflowByClassification(ctx context.Context, class
 
 // State management
 
+// SLAViolationGroup collects the classifications that share the same criticality and the same
+// configured maximum incident closure SLA, so the UI can render one row per distinct
+// (criticality, max SLA) combination instead of one row per classification.
+type SLAViolationGroup struct {
+	CriticalityID        uuid.UUID `json:"criticality_id"`
+	CriticalityName      string    `json:"criticality_name"`
+	MaxAllowedSLAMinutes int       `json:"max_allowed_sla_minutes"`
+	MaxAllowedSLALabel   string    `json:"max_allowed_sla_label"`
+	ClassificationCount  int       `json:"classification_count"`
+	Classifications      []string  `json:"classifications"`
+}
+
 // SLAValidationError marks a business-rule SLA violation that should be surfaced to the
-// admin as a blocking 400/422 response rather than a generic 500.
+// admin as a blocking 400/422 response rather than a generic 500. It carries the full set of
+// classification/criticality violations (grouped) so the UI can render a details view instead
+// of just a single offending classification.
 type SLAValidationError struct {
-	msg string
+	msg                  string
+	WorkflowSLALabel     string               `json:"workflow_sla_label"`
+	TotalClassifications int                  `json:"total_classification_count"`
+	Groups               []SLAViolationGroup  `json:"violations"`
 }
 
 func (e *SLAValidationError) Error() string { return e.msg }
 
-// ValidateStateSLAAgainstClosureSLA blocks a state SLA that exceeds the largest maximum
-// incident closure SLA configured (Classification -> Criticality -> MaxClosingHours/Minutes)
-// across all classifications linked to this workflow. The largest configured max across all
-// linked classification/criticality combinations is used as the workflow-wide ceiling, so a
-// state's SLA is only blocked once it exceeds the most permissive limit available to it.
+// ValidateStateSLAAgainstClosureSLA blocks a state SLA that exceeds the maximum incident closure
+// SLA configured (Classification -> Criticality -> MaxClosingHours/Minutes) for ANY classification
+// linked to this workflow. Every classification+criticality combination the state SLA exceeds is
+// collected and grouped by (criticality, max allowed SLA) so the caller can report the full set of
+// affected classifications rather than just the single worst offender.
 func (s *workflowService) ValidateStateSLAAgainstClosureSLA(ctx context.Context, workflowID uuid.UUID, slaHours *int, slaUnit string) error {
 	if slaHours == nil || *slaHours <= 0 {
 		return nil
@@ -970,12 +988,12 @@ func (s *workflowService) ValidateStateSLAAgainstClosureSLA(ctx context.Context,
 		return err
 	}
 
-	var (
-		found                  bool
-		largestMaxDuration     time.Duration
-		largestClassification  string
-		largestCriticalityName string
-	)
+	type groupKey struct {
+		criticalityID uuid.UUID
+		maxDuration   time.Duration
+	}
+	groups := map[groupKey]*SLAViolationGroup{}
+	var order []groupKey
 
 	for _, classification := range workflow.Classifications {
 		criticalities, err := s.classRepo.GetCriticalitiesByClassificationID(ctx, classification.ID)
@@ -988,29 +1006,55 @@ func (s *workflowService) ValidateStateSLAAgainstClosureSLA(ctx context.Context,
 				continue
 			}
 			maxDuration := time.Duration(crit.MaxClosingHours)*time.Hour + time.Duration(crit.MaxClosingMinutes)*time.Minute
-			if maxDuration <= 0 {
+			if maxDuration <= 0 || stateDuration <= maxDuration {
 				continue
 			}
-			if !found || maxDuration > largestMaxDuration {
-				found = true
-				largestMaxDuration = maxDuration
-				largestClassification = classification.Name
-				largestCriticalityName = "this"
-				if crit.Criticality != nil && crit.Criticality.Name != "" {
-					largestCriticalityName = crit.Criticality.Name
-				}
+
+			criticalityName := "Unspecified"
+			if crit.Criticality != nil && crit.Criticality.Name != "" {
+				criticalityName = crit.Criticality.Name
 			}
+
+			key := groupKey{criticalityID: crit.CriticalityID, maxDuration: maxDuration}
+			g, exists := groups[key]
+			if !exists {
+				g = &SLAViolationGroup{
+					CriticalityID:        crit.CriticalityID,
+					CriticalityName:      criticalityName,
+					MaxAllowedSLAMinutes: int(maxDuration.Minutes()),
+					MaxAllowedSLALabel:   FormatSLADuration(maxDuration),
+				}
+				groups[key] = g
+				order = append(order, key)
+			}
+			g.Classifications = append(g.Classifications, classification.Name)
+			g.ClassificationCount = len(g.Classifications)
 		}
 	}
 
-	if !found || stateDuration <= largestMaxDuration {
+	if len(groups) == 0 {
 		return nil
 	}
 
-	return &SLAValidationError{msg: fmt.Sprintf(
-		"The configured workflow SLA duration exceeds the maximum incident closure SLA of %s defined for classification %q (%s criticality). Please reduce the workflow duration before saving.",
-		FormatSLADuration(largestMaxDuration), largestClassification, largestCriticalityName,
-	)}
+	result := make([]SLAViolationGroup, 0, len(order))
+	total := 0
+	for _, key := range order {
+		result = append(result, *groups[key])
+		total += groups[key].ClassificationCount
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].MaxAllowedSLAMinutes < result[j].MaxAllowedSLAMinutes
+	})
+
+	return &SLAValidationError{
+		msg: fmt.Sprintf(
+			"The configured workflow SLA duration (%s) exceeds the maximum incident closure SLA for %d classification(s). Please reduce the workflow duration before saving.",
+			FormatSLADuration(stateDuration), total,
+		),
+		WorkflowSLALabel:     FormatSLADuration(stateDuration),
+		TotalClassifications: total,
+		Groups:               result,
+	}
 }
 
 // FormatSLADuration renders a duration as "Xh Ym" (or just "Xh"/"Ym") for error messages.
