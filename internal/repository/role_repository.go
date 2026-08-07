@@ -88,19 +88,13 @@ func (r *roleRepository) List(ctx context.Context) ([]models.Role, error) {
 	return roles, err
 }
 
+// ListByDepartment returns the roles assignable to users in a department. Roles are not
+// owned by a department, so this returns the full role list rather than filtering by which
+// roles are already held by existing users there — the previous "roles already in use in
+// this department" filter meant a department with no (or newly added) users produced an
+// empty list, breaking the role dropdown on the create/edit-user form.
 func (r *roleRepository) ListByDepartment(ctx context.Context, departmentID uuid.UUID) ([]models.Role, error) {
-	var roles []models.Role
-	err := r.db.WithContext(ctx).
-		Preload("Permissions").
-		Joins("JOIN user_roles ON user_roles.role_id = roles.id").
-		Joins("JOIN users ON users.id = user_roles.user_id").
-		Joins("LEFT JOIN user_departments ON user_departments.user_id = users.id").
-		Where("users.is_active = ?", true).
-		Where("users.department_id = ? OR user_departments.department_id = ?", departmentID, departmentID).
-		Group("roles.id").
-		Order("roles.name").
-		Find(&roles).Error
-	return roles, err
+	return r.List(ctx)
 }
 
 func (r *roleRepository) AssignPermissions(ctx context.Context, roleID uuid.UUID, permissionIDs []uuid.UUID) error {
