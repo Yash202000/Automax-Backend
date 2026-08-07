@@ -126,6 +126,9 @@ func (r *reportRepository) List(ctx context.Context, filter *models.ReportFilter
 	if filter.DataSource != nil && *filter.DataSource != "" {
 		query = query.Where("data_source = ?", *filter.DataSource)
 	}
+	if filter.VisibleToUserID != nil {
+		query = query.Where("(created_by_id = ? OR is_public = ?)", *filter.VisibleToUserID, true)
+	}
 	if filter.CreatedByID != nil {
 		query = query.Where("created_by_id = ?", *filter.CreatedByID)
 	}

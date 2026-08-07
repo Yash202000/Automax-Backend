@@ -182,9 +182,12 @@ type ReportFilter struct {
 	DataSource  *string    `json:"data_source"`
 	CreatedByID *uuid.UUID `json:"created_by_id"`
 	IsPublic    *bool      `json:"is_public"`
-	Search      string     `json:"search"`
-	Page        int        `json:"page"`
-	Limit       int        `json:"limit"`
+	// VisibleToUserID scopes results to reports this user may see:
+	// their own reports plus any report marked public.
+	VisibleToUserID *uuid.UUID `json:"visible_to_user_id"`
+	Search          string     `json:"search"`
+	Page            int        `json:"page"`
+	Limit           int        `json:"limit"`
 }
 
 // Response types

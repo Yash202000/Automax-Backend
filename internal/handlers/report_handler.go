@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strconv"
 	"strings"
@@ -185,8 +186,13 @@ func (h *ReportHandler) GetReport(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_report_id"))
 	}
 
-	report, err := h.service.GetReport(c.UserContext(), id)
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+
+	report, err := h.service.GetReport(c.UserContext(), id, userID)
 	if err != nil {
+		if errors.Is(err, services.ErrReportAccessDenied) {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "access_denied"))
+		}
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "report_not_found"))
 	}
 
@@ -226,11 +232,10 @@ func (h *ReportHandler) ListReports(c *fiber.Ctx) error {
 		filter.IsPublic = &pub
 	}
 
-	// Get own reports or all if admin
-	if mine := c.Query("mine"); mine == "true" {
-		userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-		filter.CreatedByID = &userID
-	}
+	// Reports are visible to their creator, plus anyone once marked public.
+	// This applies to every user, including super admins.
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	filter.VisibleToUserID = &userID
 
 	reports, total, err := h.service.ListReports(c.UserContext(), filter)
 	if err != nil {
@@ -298,6 +303,9 @@ func (h *ReportHandler) DuplicateReport(c *fiber.Ctx) error {
 
 	report, err := h.service.DuplicateReport(c.UserContext(), id, userID)
 	if err != nil {
+		if errors.Is(err, services.ErrReportAccessDenied) {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "access_denied"))
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
@@ -322,8 +330,11 @@ func (h *ReportHandler) ExecuteReport(c *fiber.Ctx) error {
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
 	// Fetch the saved report to get DataSource and stored filters for access scoping.
-	report, err := h.service.GetReport(c.UserContext(), id)
+	report, err := h.service.GetReport(c.UserContext(), id, userID)
 	if err != nil {
+		if errors.Is(err, services.ErrReportAccessDenied) {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "access_denied"))
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 	// Mirror the service's filter resolution: use request filters if provided, else stored.
