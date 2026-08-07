@@ -620,7 +620,11 @@ func (h *WorkflowHandler) CreateState(c *fiber.Ctx) error {
 	if err != nil {
 		var slaErr *services.SLAValidationError
 		if errors.As(err, &slaErr) {
-			return utils.ErrorResponse(c, fiber.StatusUnprocessableEntity, err.Error())
+			return c.Status(fiber.StatusUnprocessableEntity).JSON(utils.Response{
+				Success: false,
+				Error:   slaErr.Error(),
+				Data:    slaErr,
+			})
 		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -718,7 +722,11 @@ func (h *WorkflowHandler) UpdateState(c *fiber.Ctx) error {
 	if err != nil {
 		var slaErr *services.SLAValidationError
 		if errors.As(err, &slaErr) {
-			return utils.ErrorResponse(c, fiber.StatusUnprocessableEntity, err.Error())
+			return c.Status(fiber.StatusUnprocessableEntity).JSON(utils.Response{
+				Success: false,
+				Error:   slaErr.Error(),
+				Data:    slaErr,
+			})
 		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
