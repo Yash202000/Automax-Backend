@@ -640,6 +640,14 @@ func (h *UserHandler) UpdateUserCallStatus(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
+	// Broadcast the availability change to all broadcast clients (e.g. incident
+	// assignee dropdowns) so they can reflect live agent status. The payload map
+	// returned by the service already contains id, extension, call_status and
+	// updated_at, matching the identifiers the ["admin","users"] list uses.
+	if h.wsHub != nil {
+		h.wsHub.BroadcastToAll("user_status_changed", resp)
+	}
+
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "user_call_status_updated"), resp)
 }
 
