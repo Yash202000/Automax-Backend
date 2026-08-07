@@ -489,7 +489,17 @@ func (s *reportService) generateExcel(
 
 	f := excelize.NewFile()
 	sheet := "Report"
-	f.SetSheetName("Sheet1", sheet)
+
+	// logErr reports a failed layout call instead of discarding it. These are one-off
+	// setup calls, so a log line per failure is proportionate; per-cell writes are
+	// counted and summarised once at the end of the row loop.
+	logErr := func(op string, err error) {
+		if err != nil {
+			log.Printf("report export: %s failed: %v", op, err)
+		}
+	}
+
+	logErr("SetSheetName", f.SetSheetName("Sheet1", sheet))
 
 	// Attachment columns expand to one physical column per attachment so every
 	// file gets its own cell and its own hyperlink. All layout below is driven
@@ -498,9 +508,9 @@ func (s *reportService) generateExcel(
 
 	// ── Column widths ─────────────────────────────────────────────────────
 	if len(expanded) > 0 {
-		f.SetColWidth(sheet, "A", "A", 8) // S.No. column
+		logErr("SetColWidth(A)", f.SetColWidth(sheet, "A", "A", 8)) // S.No. column
 		lastCol, _ := excelize.ColumnNumberToName(len(expanded) + 1)
-		f.SetColWidth(sheet, "B", lastCol, 27)
+		logErr("SetColWidth(body)", f.SetColWidth(sheet, "B", lastCol, 27))
 	}
 
 	// Determine starting row
@@ -513,14 +523,15 @@ func (s *reportService) generateExcel(
 	// ── Title row ─────────────────────────────────────────────────────────
 	if title != "" {
 		lastCol, _ := excelize.ColumnNumberToName(len(expanded) + 1)
-		f.MergeCell(sheet, "A1", lastCol+"1")
-		titleStyle, _ := f.NewStyle(&excelize.Style{
+		logErr("MergeCell(title)", f.MergeCell(sheet, "A1", lastCol+"1"))
+		titleStyle, err := f.NewStyle(&excelize.Style{
 			Font:      &excelize.Font{Bold: true, Size: 14},
 			Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
 		})
-		f.SetCellValue(sheet, "A1", title)
-		f.SetCellStyle(sheet, "A1", "A1", titleStyle)
-		f.SetRowHeight(sheet, 1, 32)
+		logErr("NewStyle(title)", err)
+		logErr("SetCellValue(title)", f.SetCellValue(sheet, "A1", title))
+		logErr("SetCellStyle(title)", f.SetCellStyle(sheet, "A1", "A1", titleStyle))
+		logErr("SetRowHeight(title)", f.SetRowHeight(sheet, 1, 32))
 	}
 
 	// ── Header style — same as working version ────────────────────────────
@@ -530,16 +541,26 @@ func (s *reportService) generateExcel(
 		Fill:      excelize.Fill{Type: "pattern", Color: []string{"3B82F6"}, Pattern: 1},
 	})
 	if err == nil {
-		f.SetRowStyle(sheet, headerRow, headerRow, headerStyleId)
+		logErr("SetRowStyle(header)", f.SetRowStyle(sheet, headerRow, headerRow, headerStyleId))
+	} else {
+		logErr("NewStyle(header)", err)
 	}
-	f.SetRowHeight(sheet, headerRow, 30)
+	logErr("SetRowHeight(header)", f.SetRowHeight(sheet, headerRow, 30))
 
-	// ── Body style — bulk apply to 1000 rows, same as working version ─────
+	// ── Body style ────────────────────────────────────────────────────────
+	// Applied to exactly the rows that hold data. It used to be a hardcoded 1000,
+	// which left every row past ~1001 of a larger export unformatted.
 	bodyStyleId, err := f.NewStyle(&excelize.Style{
 		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
 	})
-	if err == nil {
-		f.SetRowStyle(sheet, dataStartRow, dataStartRow+1000, bodyStyleId)
+	if err == nil && len(data) > 0 {
+		lastDataRow := dataStartRow + len(data) - 1
+		if lastDataRow > excelize.TotalRows {
+			lastDataRow = excelize.TotalRows
+		}
+		logErr("SetRowStyle(body)", f.SetRowStyle(sheet, dataStartRow, lastDataRow, bodyStyleId))
+	} else {
+		logErr("NewStyle(body)", err)
 	}
 
 	// ── Hyperlink style — applied per-cell for attachment/task-id columns ──
@@ -548,9 +569,57 @@ func (s *reportService) generateExcel(
 		Font:      &excelize.Font{Color: "0000EE", Underline: "single"},
 	})
 
+	// ── Plain-URL style — for cells past the worksheet hyperlink budget.
+	// Deliberately not blue/underlined: a cell that is not a link must not look
+	// like one.
+	plainURLStyleId, _ := f.NewStyle(&excelize.Style{
+		Alignment: &excelize.Alignment{Horizontal: "left", Vertical: "center"},
+	})
+
+	// excelize stores at most TotalSheetHyperlinks (65529) hyperlinks per worksheet
+	// and returns ErrTotalSheetHyperlinks beyond that. That error used to be
+	// discarded, so over-cap cells kept their "Attachment N" label and the
+	// hyperlink styling while carrying no link at all — on a 90k-row export that
+	// silently affected 109k cells. Past the budget we now write the raw URL as
+	// plain text instead, so nothing is lost and nothing looks clickable in error.
+	linkBudget := excelize.TotalSheetHyperlinks
+	linkCount, degradedLinks := 0, 0
+
+	// ── Overflow style — for the last attachment cell of a row that carries more
+	// attachments than the sheet is wide. Wrapped so the spilled URLs stay readable.
+	overflowStyleId, _ := f.NewStyle(&excelize.Style{
+		Alignment: &excelize.Alignment{Horizontal: "left", Vertical: "top", WrapText: true},
+		Font:      &excelize.Font{Color: "0000EE", Underline: "single"},
+	})
+
+	// failedWrites counts per-cell write errors. Logging each one on a 90k-row export
+	// would flood the log, so they are summarised once after the row loop.
+	failedWrites := 0
+	setCell := func(cell string, v interface{}) {
+		if err := f.SetCellValue(sheet, cell, v); err != nil {
+			failedWrites++
+		}
+	}
+
+	// writeLink writes a labelled hyperlink under the given style, falling back to
+	// the raw URL as plain text once the budget is spent or if excelize rejects it.
+	writeLink := func(cell, label, url string, styleID int) {
+		if linkCount < linkBudget {
+			setCell(cell, label)
+			if err := f.SetCellHyperLink(sheet, cell, url, "External"); err == nil {
+				f.SetCellStyle(sheet, cell, cell, styleID)
+				linkCount++
+				return
+			}
+		}
+		setCell(cell, url)
+		f.SetCellStyle(sheet, cell, cell, plainURLStyleId)
+		degradedLinks++
+	}
+
 	// ── Write headers ─────────────────────────────────────────────────────
 	headerRowStr := strconv.Itoa(headerRow)
-	f.SetCellValue(sheet, "A"+headerRowStr, "#")
+	setCell("A"+headerRowStr, "#")
 	for i, ec := range expanded {
 		colName, _ := excelize.ColumnNumberToName(i + 2)
 		label := resolveColumnLabel(ec.field.Label, ec.field.LabelAr, lang)
@@ -559,61 +628,85 @@ func (s *reportService) generateExcel(
 		if ec.attachIdx >= 0 && ec.attachSpan > 1 {
 			label = fmt.Sprintf("%s %d", label, ec.attachIdx+1)
 		}
-		f.SetCellValue(sheet, colName+headerRowStr, label)
+		setCell(colName+headerRowStr, label)
 	}
 
 	// ── Write data rows ───────────────────────────────────────────────────
 	for rowIdx, row := range data {
-		excelRow := strconv.Itoa(dataStartRow + rowIdx)
-		f.SetCellValue(sheet, "A"+excelRow, rowIdx+1)
+		rowNum := dataStartRow + rowIdx
+		excelRow := strconv.Itoa(rowNum)
+		setCell("A"+excelRow, rowIdx+1)
 		for colIdx, ec := range expanded {
 			colName, _ := excelize.ColumnNumberToName(colIdx + 2)
 			cell := colName + excelRow
 			col := ec.field
-			val := ""
-			if v, ok := row[col.Label]; ok && v != nil {
-				val = formatExportValue(col.Label, v)
-			}
+			raw := row[col.Label]
 
 			switch {
 			case ec.attachIdx >= 0:
-				// One attachment per cell, one hyperlink per cell.
-				urls := parseAttachmentURLs(val)
-				if ec.attachIdx < len(urls) {
-					f.SetCellValue(sheet, cell, fmt.Sprintf("Attachment %d", ec.attachIdx+1))
-					f.SetCellHyperLink(sheet, cell, urls[ec.attachIdx], "External")
-					f.SetCellStyle(sheet, cell, cell, hyperlinkStyleId)
-				} else {
-					f.SetCellValue(sheet, cell, "-")
-				}
+				// One attachment per cell, one hyperlink per cell. Read the raw value —
+				// formatting the slice first would collapse it to a single token.
+				urls := attachmentURLs(raw)
+				switch {
+				case ec.attachIdx >= len(urls):
+					setCell(cell, "-")
 
-			case isTaskIdCol(col.Label) && val != "":
-				isURL := strings.HasPrefix(val, "http://") || strings.HasPrefix(val, "https://")
-				if isURL {
-					f.SetCellValue(sheet, cell, extractTaskLabel(val))
-					f.SetCellHyperLink(sheet, cell, val, "External")
-					f.SetCellStyle(sheet, cell, cell, hyperlinkStyleId)
-				} else {
-					f.SetCellValue(sheet, cell, val)
+				case ec.attachIdx == ec.attachSpan-1 && len(urls) > ec.attachSpan:
+					// Safety net only. attachmentColumnSpan uses the exact maximum, so
+					// no row should exceed the width; this can fire only if the span was
+					// clamped by excelMaxColumns. Keep a working link to this one and
+					// spill the rest into the same cell so no URL is ever dropped.
+					extra := urls[ec.attachIdx+1:]
+					label, spilled := spillLabel(ec.attachIdx+1, extra)
+					writeLink(cell, label, urls[ec.attachIdx], overflowStyleId)
+					// Without an explicit height the wrapped URLs are invisible.
+					h := float64(spilled+1) * 14
+					if h > excelize.MaxRowHeight {
+						h = excelize.MaxRowHeight
+					}
+					logErr("SetRowHeight(spill)", f.SetRowHeight(sheet, rowNum, h))
+
+				default:
+					writeLink(cell, fmt.Sprintf("Attachment %d", ec.attachIdx+1),
+						urls[ec.attachIdx], hyperlinkStyleId)
 				}
 
 			default:
-				if val == "" {
-					val = "-"
+				val := ""
+				if raw != nil {
+					val = formatExportValue(col.Label, raw)
 				}
-				f.SetCellValue(sheet, cell, val)
+				switch {
+				case isTaskIdCol(col.Label) && val != "" &&
+					(strings.HasPrefix(val, "http://") || strings.HasPrefix(val, "https://")):
+					// Task-id links draw on the same per-worksheet budget.
+					writeLink(cell, extractTaskLabel(val), val, hyperlinkStyleId)
+				default:
+					if val == "" {
+						val = "-"
+					}
+					setCell(cell, val)
+				}
 			}
 		}
 	}
 
+	if degradedLinks > 0 {
+		log.Printf("report export: worksheet hyperlink cap (%d) reached — %d cell(s) written as plain-text URLs instead of links",
+			linkBudget, degradedLinks)
+	}
+	if failedWrites > 0 {
+		log.Printf("report export: %d cell write(s) were rejected by excelize and are missing from the sheet", failedWrites)
+	}
+
 	// ── Freeze pane ───────────────────────────────────────────────────────
 	freezeCell := "A" + strconv.Itoa(dataStartRow)
-	f.SetPanes(sheet, &excelize.Panes{
+	logErr("SetPanes", f.SetPanes(sheet, &excelize.Panes{
 		Freeze:      true,
 		YSplit:      headerRow,
 		TopLeftCell: freezeCell,
 		ActivePane:  "bottomLeft",
-	})
+	}))
 
 	// ── Filters & Stats ───────────────────────────────────────────────────
 	currentRow := dataStartRow + len(data) + 2 // one blank row after last data row
@@ -631,8 +724,8 @@ func (s *reportService) generateExcel(
 			Fill: excelize.Fill{Type: "pattern", Color: []string{"E8EDF5"}, Pattern: 1},
 		})
 		rowStr := strconv.Itoa(currentRow)
-		f.MergeCell(sheet, "A"+rowStr, lastDataCol+rowStr)
-		f.SetCellValue(sheet, "A"+rowStr, "Filters:")
+		logErr("MergeCell(filters)", f.MergeCell(sheet, "A"+rowStr, lastDataCol+rowStr))
+		setCell("A"+rowStr, "Filters:")
 		f.SetCellStyle(sheet, "A"+rowStr, lastDataCol+rowStr, filterHeaderStyle)
 		currentRow++
 
@@ -644,8 +737,8 @@ func (s *reportService) generateExcel(
 			rawKey := stripSortPrefix(k)
 			label := cases.Title(language.English).String(strings.ReplaceAll(rawKey, "_", " "))
 			rowStr = strconv.Itoa(currentRow)
-			f.SetCellValue(sheet, "A"+rowStr, label+":")
-			f.SetCellValue(sheet, "B"+rowStr, formatFilterValue("", v))
+			setCell("A"+rowStr, label+":")
+			setCell("B"+rowStr, formatFilterValue("", v))
 			f.SetCellStyle(sheet, "A"+rowStr, "B"+rowStr, filterRowStyle)
 			currentRow++
 		}
@@ -655,7 +748,7 @@ func (s *reportService) generateExcel(
 			Fill: excelize.Fill{Type: "pattern", Color: []string{"E8EDF5"}, Pattern: 1},
 		})
 		rowStr = strconv.Itoa(currentRow)
-		f.SetCellValue(sheet, "A"+rowStr, fmt.Sprintf("Total Rows: %d", len(data)))
+		setCell("A"+rowStr, fmt.Sprintf("Total Rows: %d", len(data)))
 		f.SetCellStyle(sheet, "A"+rowStr, "A"+rowStr, statsStyle)
 		currentRow += 2 // blank row before timestamp
 	}
@@ -663,7 +756,7 @@ func (s *reportService) generateExcel(
 	// ── Timestamp (uses user timezone) ────────────────────────────────────
 	if options != nil && options.IncludeTimestamp {
 		loc := utils.ResolveTimezone(options.Timezone)
-		f.SetCellValue(sheet, "A"+strconv.Itoa(currentRow),
+		setCell("A"+strconv.Itoa(currentRow),
 			fmt.Sprintf("Generated: %s", time.Now().In(loc).Format("2006-01-02 15:04:05")))
 	}
 
@@ -718,8 +811,20 @@ func computeActualPageCount(
 
 	for _, row := range data {
 		vals := make([]string, colCount)
+		// attachLines mirrors the per-URL row-height rule generatePDF applies to
+		// attachment columns. Without it this pre-pass measured attachment cells as
+		// ordinary text and the page count drifted from what actually got rendered.
+		attachLines := make([]int, colCount)
 		for i, col := range columns {
 			v := row[col.Label]
+			if isAttachmentCol(col.Label) {
+				if n := len(attachmentURLs(v)); n > 0 {
+					attachLines[i] = n
+				} else {
+					attachLines[i] = 1
+				}
+				continue
+			}
 			if v == nil {
 				vals[i] = ""
 			} else {
@@ -728,10 +833,17 @@ func computeActualPageCount(
 		}
 		if rtlMode {
 			vals = reverseStrings(vals)
+			attachLines = reverseInts(attachLines)
 		}
 
 		rowH := minRowH
 		for i := range columns {
+			if attachLines[i] > 0 {
+				if needed := float64(attachLines[i])*lineH + 2; needed > rowH {
+					rowH = needed
+				}
+				continue
+			}
 			setFont("", baseFontSize, vals[i])
 			nb := len(pdf.SplitLines([]byte(vals[i]), renderWidths[i]-2))
 			if nb < 1 {
@@ -807,6 +919,22 @@ func reverseWidths(w []float64) []float64 {
 
 func reverseStrings(s []string) []string {
 	out := make([]string, len(s))
+	for i, v := range s {
+		out[len(s)-1-i] = v
+	}
+	return out
+}
+
+func reverseInts(s []int) []int {
+	out := make([]int, len(s))
+	for i, v := range s {
+		out[len(s)-1-i] = v
+	}
+	return out
+}
+
+func reverseStringSlices(s [][]string) [][]string {
+	out := make([][]string, len(s))
 	for i, v := range s {
 		out[len(s)-1-i] = v
 	}
@@ -984,8 +1112,15 @@ func (s *reportService) generatePDF(
 	for rowIdx, row := range data {
 		// Build values without truncation — MultiCell will wrap long text
 		vals := make([]string, colCount)
+		// Attachment columns are read from the raw row value: they hold a []string, and
+		// formatting it first would collapse the list into a single unusable token.
+		attachVals := make([][]string, colCount)
 		for i, col := range columns {
 			v := row[col.Label]
+			if isAttachmentCol(col.Label) {
+				attachVals[i] = attachmentURLs(v)
+				continue
+			}
 			if v == nil {
 				vals[i] = ""
 			} else {
@@ -996,18 +1131,19 @@ func (s *reportService) generatePDF(
 		renderCols := columns
 		renderWidths := colWidths
 		renderVals := vals
+		renderAttach := attachVals
 		if rtlMode {
 			renderCols = reverseColumns(columns)
 			renderWidths = reverseWidths(colWidths)
 			renderVals = reverseStrings(vals)
+			renderAttach = reverseStringSlices(attachVals)
 		}
 
 		// Calculate the tallest cell in this row to fix uniform row height
 		rowH := minRowH
 		for i := range renderCols {
 			if isAttachmentCol(renderCols[i].Label) {
-				urls := parseAttachmentURLs(renderVals[i])
-				n := len(urls)
+				n := len(renderAttach[i])
 				if n < 1 {
 					n = 1
 				}
@@ -1067,7 +1203,7 @@ func (s *reportService) generatePDF(
 			pdf.Rect(curX, startY, renderWidths[i], rowH, "D")
 
 			if isAttachmentCol(renderCols[i].Label) {
-				urls := parseAttachmentURLs(val)
+				urls := renderAttach[i]
 				pdf.SetFont("Arial", "U", baseFontSize)
 				pdf.SetTextColor(0, 0, 238)
 				for j, u := range urls {
@@ -1259,6 +1395,14 @@ func formatValue(v interface{}) string {
 		return "No"
 	case nil:
 		return ""
+	// Slice-valued columns (attachment URL lists, feedback and comment arrays) used to
+	// fall through to %v and render as Go syntax — "[https://a https://b]". Join them
+	// instead. Attachment columns never reach here: the exporters read the raw slice so
+	// each URL gets its own cell and hyperlink.
+	case []string:
+		return strings.Join(val, ", ")
+	case []interface{}:
+		return strings.Join(toStringSlice(val), ", ")
 	default:
 		return fmt.Sprintf("%v", val)
 	}
@@ -1312,6 +1456,36 @@ func isAttachmentCol(label string) bool {
 	return strings.Contains(strings.ToLower(label), "attachment")
 }
 
+// spillLabel builds the label for an attachment cell that has to carry the URLs which
+// did not get a column of their own, and returns how many of them fit.
+//
+// Excel rejects any cell longer than TotalCellChars (32767). That error used to be
+// discarded, so a cell spilling a few hundred URLs was silently written as nothing at
+// all; here the list is truncated to fit and the shortfall is stated in the cell.
+func spillLabel(attachNo int, extra []string) (string, int) {
+	var b strings.Builder
+	head := fmt.Sprintf("Attachment %d (+%d more)", attachNo, len(extra))
+	b.WriteString(head)
+
+	// Leave room for the "N URL(s) omitted" tail we may have to append.
+	const tailReserve = 64
+	fit := 0
+	for _, u := range extra {
+		if b.Len()+len(u)+1+tailReserve > excelize.TotalCellChars {
+			break
+		}
+		b.WriteString("\n")
+		b.WriteString(u)
+		fit++
+	}
+	if omitted := len(extra) - fit; omitted > 0 {
+		log.Printf("report export: attachment cell exceeds the %d-character limit — %d URL(s) omitted from the spill list",
+			excelize.TotalCellChars, omitted)
+		b.WriteString(fmt.Sprintf("\n… %d more URL(s) omitted (cell character limit)", omitted))
+	}
+	return b.String(), fit
+}
+
 // exportColumn is one physical spreadsheet column. Most report columns map to
 // exactly one; an attachment column expands into one column per attachment so
 // each cell can carry its own hyperlink (Excel allows only one per cell).
@@ -1325,13 +1499,41 @@ type exportColumn struct {
 // excelize.ColumnNumberToName can no longer produce a valid cell reference.
 const excelMaxColumns = 16384
 
-// expandExportColumns widens every attachment column to the maximum number of
-// attachments present in the data, so each attachment gets its own cell.
-// Non-attachment columns pass through unchanged.
+// attachmentColumnSpan returns how many physical columns one attachment column
+// should occupy: the exact largest attachment count across the exported rows.
+//
+// `data` is the complete exported set (ExportReport queries with no practical row
+// limit), so this maximum is exact for the sheet being written — every column it
+// creates is used by at least one row, and no row has an attachment without a
+// column to put it in. A spreadsheet grid cannot be ragged, so rows holding fewer
+// than the maximum still show "-" in the trailing cells; that is unavoidable, not
+// overfilling.
+func attachmentColumnSpan(label string, data []map[string]interface{}) int {
+	span := 0
+	for _, row := range data {
+		v, ok := row[label]
+		if !ok || v == nil {
+			continue
+		}
+		if n := len(attachmentURLs(v)); n > span {
+			span = n
+		}
+	}
+	if span > 0 {
+		return span
+	}
+	return 1 // keep one column so a requested field never vanishes
+}
+
+// expandExportColumns widens every attachment column so each attachment gets its
+// own cell and its own hyperlink. Non-attachment columns pass through unchanged.
 func expandExportColumns(columns []models.ColumnField, data []map[string]interface{}) []exportColumn {
 	expanded := make([]exportColumn, 0, len(columns))
-	for _, col := range columns {
-		if len(expanded) >= excelMaxColumns-1 { // -1 for the leading S.No. column
+	dropped := 0
+	for ci, col := range columns {
+		remaining := excelMaxColumns - 1 - len(expanded) // -1 for the leading S.No. column
+		if remaining <= 0 {
+			dropped = len(columns) - ci
 			break
 		}
 
@@ -1340,26 +1542,22 @@ func expandExportColumns(columns []models.ColumnField, data []map[string]interfa
 			continue
 		}
 
-		span := 0
-		for _, row := range data {
-			v, ok := row[col.Label]
-			if !ok || v == nil {
-				continue
-			}
-			if n := len(parseAttachmentURLs(formatExportValue(col.Label, v))); n > span {
-				span = n
-			}
+		// Clamp the span to the columns actually available BEFORE emitting, so attachSpan
+		// always equals the number of columns written. Clamping inside the loop instead
+		// left attachSpan at the unclamped value, so the last emitted cell never matched
+		// the attachIdx == attachSpan-1 spill branch and its trailing URLs were dropped.
+		span := attachmentColumnSpan(col.Label, data)
+		if span > remaining {
+			log.Printf("report export: attachment column %q needs %d columns, only %d left on the sheet — the last cell will carry the remaining URLs",
+				col.Label, span, remaining)
+			span = remaining
 		}
-		if span < 1 {
-			span = 1 // keep a placeholder column so a requested field never vanishes
-		}
-
 		for i := 0; i < span; i++ {
-			if len(expanded) >= excelMaxColumns-1 {
-				break
-			}
 			expanded = append(expanded, exportColumn{field: col, attachIdx: i, attachSpan: span})
 		}
+	}
+	if dropped > 0 {
+		log.Printf("report export: worksheet column limit (%d) reached — %d requested column(s) omitted", excelMaxColumns, dropped)
 	}
 	return expanded
 }
@@ -1379,11 +1577,28 @@ func extractTaskLabel(val string) string {
 	return val
 }
 
-func parseAttachmentURLs(val string) []string {
+// attachmentURLs normalizes a raw report-row value into its list of attachment URLs.
+//
+// The repository always writes attachment fields as a []string. Taking the raw value
+// rather than a formatted string is what makes the count reliable: formatting a slice
+// collapses it to one "[a b c]" token, which is why attachment columns used to expand
+// to a single cell no matter how many files an incident had.
+//
+// A plain string is treated as one URL. It is deliberately not split on "|" — the
+// joined form no longer exists, and splitting would corrupt any URL containing a pipe.
+func attachmentURLs(v interface{}) []string {
+	if v == nil {
+		return nil
+	}
+	if s, ok := v.(string); ok {
+		if s = strings.TrimSpace(s); s != "" {
+			return []string{s}
+		}
+		return nil
+	}
 	var urls []string
-	for _, u := range strings.Split(val, "|") {
-		u = strings.TrimSpace(u)
-		if u != "" {
+	for _, u := range toStringSlice(v) {
+		if u = strings.TrimSpace(u); u != "" {
 			urls = append(urls, u)
 		}
 	}
@@ -1619,6 +1834,10 @@ func (s *reportService) GetDataSources(ctx context.Context) []models.DataSourceI
 				// responded_by_creator are projection-only, hence not filterable/sortable.
 				{Field: "first_response_at", Label: "First Response At", Type: "date", Filterable: true, Sortable: true},
 				{Field: "first_response_minutes", Label: "First Response Time (Minutes)", Type: "number", Filterable: true, Sortable: true},
+				// Humanized form of first_response_minutes ("3 hours 20 minutes"), derived
+				// in the repository. Projection-only: filter and sort on the numeric
+				// column above, which is what the SQL actually holds.
+				{Field: "first_response_time", Label: "First Response Time", Type: "string", Filterable: false, Sortable: false},
 				{Field: "first_response_action", Label: "First Response Action", Type: "string", Filterable: true, Sortable: true},
 				{Field: "first_response_description", Label: "First Response Description", Type: "string", Filterable: true, Sortable: false},
 				{Field: "first_responder_username", Label: "First Responding User", Type: "string", Filterable: true, Sortable: true},
