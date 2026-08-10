@@ -1330,7 +1330,7 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 
 		var readyToCloseNames, readyToCloseDates map[string]string
 		if hasCol("ready_to_close_by", "ready_to_close_date") {
-			readyToCloseNames, readyToCloseDates, _ = r.fetchMultiPairTransitionData(ctx, dynPairs["Ready To Close"], incidentIDs)
+			readyToCloseNames, readyToCloseDates, _ = r.fetchMultiPairTransitionData(ctx, dynPairs["Ready to Close"], incidentIDs)
 		}
 
 		var closedNames, closedDates map[string]string
@@ -1420,7 +1420,7 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 		// Ready To Close feedback
 		var readyToCloseFeedbackMap map[string][]TransitionLinkedResult
 		if hasCol("ready_to_close_feedback") {
-			readyToCloseFeedbackMap, _ = r.fetchFeedbackDataByState(ctx, "Ready To Close", incidentIDs)
+			readyToCloseFeedbackMap, _ = r.fetchFeedbackDataByState(ctx, "Ready to Close", incidentIDs)
 		}
 		// 10. Comment
 		// in the bulk enrichment block, alongside other hasCol checks
@@ -1457,7 +1457,7 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 		// Ready To Close comment
 		var readyToCloseCommentMap map[string][]TransitionLinkedResult
 		if hasCol("ready_to_close_comment") {
-			readyToCloseCommentMap, _ = r.fetchCommentDataByState(ctx, "Ready To Close", incidentIDs)
+			readyToCloseCommentMap, _ = r.fetchCommentDataByState(ctx, "Ready to Close", incidentIDs)
 		}
 
 		// @todo urgent update the incident id to location/classification id
@@ -2247,7 +2247,7 @@ func (r *reportRepository) fetchAfterAttachments(ctx context.Context, incidentID
 		JOIN incident_transition_histories th ON th.id = ia.transition_history_id
 		INNER JOIN workflow_states fws ON fws.id = th.from_state_id
 		INNER JOIN workflow_states tws ON tws.id = th.to_state_id
-		WHERE tws.name = 'Ready To Close'
+		WHERE tws.name = 'Ready to Close'
 			AND fws.name = 'Under Resolution'
 		  	AND ia.incident_id IN (?)
 		  	AND ia.deleted_at IS NULL
