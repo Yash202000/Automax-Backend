@@ -625,7 +625,6 @@ func (h *UserHandler) UpdateUserCallStatus(c *fiber.Ctx) error {
 		"available": true,
 		"online":    true,
 		"in_call":   true,
-		"online":    true,
 		"offline":   true,
 	}
 	if !validStatuses[req.Status] {
