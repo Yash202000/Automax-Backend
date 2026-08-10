@@ -55,6 +55,10 @@ type cintrixCallEventPayload struct {
 	DurationSeconds int        `json:"duration_seconds"`
 	Outcome         string     `json:"outcome"`
 	RecordingURL    *string    `json:"recording_url"`
+	// Extensions the queue rang for an unanswered call (see Cintrix _rung_agents).
+	// Persisted as recipient participants so the missed queue call shows for every
+	// agent it offered, not just supervisors.
+	RungAgents []string `json:"rung_agents"`
 }
 
 // HandleCallEvent processes inbound call.answered / call.ended webhooks from Cintrix.
@@ -216,6 +220,19 @@ func (h *CintrixWebhookHandler) HandleCallEvent(c *fiber.Ctx) error {
 				PhoneNumber: externalDID, Role: "recipient", DisplayName: externalDID,
 			})
 		}
+		// Agents the queue rang for an unanswered call — each a recipient so the
+		// missed queue call shows in their log. Dedup against parties already added.
+		seenRung := map[string]bool{
+			payload.CallerNumber: true, agentIdentifier: true,
+			dialedIdentifier: true, externalDID: true, "": true,
+		}
+		for _, ext := range payload.RungAgents {
+			if seenRung[ext] {
+				continue
+			}
+			seenRung[ext] = true
+			participants = append(participants, &models.CallParticipant{PhoneNumber: ext, Role: "recipient"})
+		}
 
 		if err := h.callLogRepo.CreateWithParticipants(ctx, callLog, participants); err != nil {
 			log.Printf("[cintrix-webhook] failed to create call log for %s: %v", payload.CallUuid, err)
@@ -306,6 +323,28 @@ func (h *CintrixWebhookHandler) HandleCallEvent(c *fiber.Ctx) error {
 			}
 		} else if err != nil {
 			log.Printf("[cintrix-webhook] external dialed participant lookup failed for %s: %v", payload.CallUuid, err)
+		}
+	}
+	// Agents the queue rang for an unanswered call — persist any not already present.
+	seenRung := map[string]bool{
+		payload.CallerNumber: true, agentIdentifier: true,
+		dialedIdentifier: true, externalDID: true, "": true,
+	}
+	for _, ext := range payload.RungAgents {
+		if seenRung[ext] {
+			continue
+		}
+		seenRung[ext] = true
+		if _, err := h.callLogRepo.FindParticipant(ctx, existing.ID, ext); err == gorm.ErrRecordNotFound {
+			if cerr := h.callLogRepo.CreateParticipant(ctx, &models.CallParticipant{
+				CallLogID:   existing.ID,
+				PhoneNumber: ext,
+				Role:        "recipient",
+			}); cerr != nil {
+				log.Printf("[cintrix-webhook] failed to add rung participant %s for %s: %v", ext, payload.CallUuid, cerr)
+			}
+		} else if err != nil {
+			log.Printf("[cintrix-webhook] rung participant lookup failed for %s: %v", payload.CallUuid, err)
 		}
 	}
 
