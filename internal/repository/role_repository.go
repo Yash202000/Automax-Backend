@@ -11,11 +11,13 @@ import (
 type RoleRepository interface {
 	Create(ctx context.Context, role *models.Role) error
 	FindByID(ctx context.Context, id uuid.UUID) (*models.Role, error)
+	FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.Role, error)
 	FindByCode(ctx context.Context, code string) (*models.Role, error)
 	FindByName(ctx context.Context, name string) (*models.Role, error)
 	Update(ctx context.Context, role *models.Role) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context) ([]models.Role, error)
+	ListByDepartment(ctx context.Context, departmentID uuid.UUID) ([]models.Role, error)
 	AssignPermissions(ctx context.Context, roleID uuid.UUID, permissionIDs []uuid.UUID) error
 	GetPermissions(ctx context.Context, roleID uuid.UUID) ([]models.Permission, error)
 }
@@ -50,6 +52,12 @@ func (r *roleRepository) FindByCode(ctx context.Context, code string) (*models.R
 	return &role, nil
 }
 
+func (r *roleRepository) FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.Role, error) {
+	var roles []models.Role
+	err := r.db.WithContext(ctx).Preload("Permissions").Where("id IN ?", ids).Find(&roles).Error
+	return roles, err
+}
+
 func (r *roleRepository) FindByName(ctx context.Context, name string) (*models.Role, error) {
 	var role models.Role
 	err := r.db.WithContext(ctx).First(&role, "LOWER(name) = LOWER(?)", name).Error
@@ -78,6 +86,15 @@ func (r *roleRepository) List(ctx context.Context) ([]models.Role, error) {
 	var roles []models.Role
 	err := r.db.WithContext(ctx).Preload("Permissions").Order("name").Find(&roles).Error
 	return roles, err
+}
+
+// ListByDepartment returns the roles assignable to users in a department. Roles are not
+// owned by a department, so this returns the full role list rather than filtering by which
+// roles are already held by existing users there — the previous "roles already in use in
+// this department" filter meant a department with no (or newly added) users produced an
+// empty list, breaking the role dropdown on the create/edit-user form.
+func (r *roleRepository) ListByDepartment(ctx context.Context, departmentID uuid.UUID) ([]models.Role, error) {
+	return r.List(ctx)
 }
 
 func (r *roleRepository) AssignPermissions(ctx context.Context, roleID uuid.UUID, permissionIDs []uuid.UUID) error {

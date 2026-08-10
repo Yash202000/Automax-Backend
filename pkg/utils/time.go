@@ -2,12 +2,17 @@ package utils
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 	"time"
 )
 
 // ResolveTimezone returns the *time.Location for the given IANA timezone name.
-// Falls back to UTC if the timezone is empty or invalid.
+// Fallback chain: tz param → APP_TIMEZONE env var → UTC.
 func ResolveTimezone(tz string) *time.Location {
+	if tz == "" {
+		tz = os.Getenv("APP_TIMEZONE")
+	}
 	if tz == "" {
 		return time.UTC
 	}
@@ -18,7 +23,10 @@ func ResolveTimezone(tz string) *time.Location {
 	return loc
 }
 
-func parseTimeFlexible(t string) (time.Time, error) {
+// ParseTimeFlexible parses a timestamp written in any of the layouts this codebase
+// hands around - RFC3339, the several PostgreSQL text renderings, Go's time.Time
+// String(), and the custom 12-hour form.
+func ParseTimeFlexible(t string) (time.Time, error) {
 	formats := []string{
 		time.RFC3339,                              // 2006-01-02T15:04:05Z07:00
 		"2006-01-02T15:04:05.999999999Z07:00",     // RFC3339 with nanoseconds
@@ -39,19 +47,100 @@ func parseTimeFlexible(t string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("unsupported time format: %s", t)
 }
 
+// pluralize renders "1 hour" / "3 hours" — full words, since these strings are
+// read by humans in a report cell rather than parsed.
+func pluralize(n int64, unit string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, unit)
+	}
+	return fmt.Sprintf("%d %ss", n, unit)
+}
+
+// FormatMinutesDuration renders an elapsed-minute count in the largest unit that
+// fits, with the remainder in the next unit down:
+//
+//	45   -> "45 minutes"
+//	60   -> "1 hour"
+//	200  -> "3 hours 20 minutes"
+//	2880 -> "2 days"
+//	5000 -> "3 days 11 hours"
+//
+// Anything under an hour stays in minutes, and 48 hours is where it switches to
+// days. A negative count returns "" — the frtDerived clock-skew guard already
+// prevents one, so it would mean the data is wrong, not that the duration is.
+func FormatMinutesDuration(minutes int64) string {
+	const (
+		minutesPerHour = 60
+		minutesPerDay  = 24 * minutesPerHour
+		dayThreshold   = 48 * minutesPerHour
+	)
+
+	switch {
+	case minutes < 0:
+		return ""
+
+	case minutes < minutesPerHour:
+		return pluralize(minutes, "minute")
+
+	case minutes < dayThreshold:
+		hours, rem := minutes/minutesPerHour, minutes%minutesPerHour
+		if rem == 0 {
+			return pluralize(hours, "hour")
+		}
+		return pluralize(hours, "hour") + " " + pluralize(rem, "minute")
+
+	default:
+		days, rem := minutes/minutesPerDay, (minutes%minutesPerDay)/minutesPerHour
+		if rem == 0 {
+			return pluralize(days, "day")
+		}
+		return pluralize(days, "day") + " " + pluralize(rem, "hour")
+	}
+}
+
+// FormatMinutesValue is the interface{} front door to FormatMinutesDuration, for
+// callers holding a value scanned out of a database row. A NULL minute count
+// yields "" rather than "0 minutes": "no first response yet" and "responded to
+// instantly" are not the same thing.
+func FormatMinutesValue(v interface{}) string {
+	switch n := v.(type) {
+	case nil:
+		return ""
+	case int64:
+		return FormatMinutesDuration(n)
+	case int:
+		return FormatMinutesDuration(int64(n))
+	case int32:
+		return FormatMinutesDuration(int64(n))
+	case float64:
+		return FormatMinutesDuration(int64(n))
+	case string:
+		if n == "" {
+			return ""
+		}
+		parsed, err := strconv.ParseInt(n, 10, 64)
+		if err != nil {
+			return ""
+		}
+		return FormatMinutesDuration(parsed)
+	default:
+		return ""
+	}
+}
+
 func CalculateDuration(start, end string) (string, error) {
 	if start == "" {
 		return "", fmt.Errorf("start time is empty")
 	}
 
-	startTime, err := parseTimeFlexible(start)
+	startTime, err := ParseTimeFlexible(start)
 	if err != nil {
 		return "", fmt.Errorf("invalid start time format: %v", err)
 	}
 
 	var endTime time.Time
 	if end != "" {
-		endTime, err = parseTimeFlexible(end)
+		endTime, err = ParseTimeFlexible(end)
 		if err != nil {
 			return "", fmt.Errorf("invalid end time format: %v", err)
 		}

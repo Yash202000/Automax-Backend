@@ -6,37 +6,55 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	pkgutils "github.com/automax/backend/pkg/utils"
+	"github.com/google/uuid"
 )
 
-const smsFeedbackTokenDuration = 72 * time.Hour
 const smsFeedbackMaxRetries = 3
+
+// GetFeedbackTokenDuration returns the feedback link TTL from SMS_FEEDBACK_TOKEN_EXPIRY_MINUTES,
+// defaulting to 1440 minutes (24 hours) if unset or invalid.
+func GetFeedbackTokenDuration() time.Duration {
+	minutes := 1440
+	if v := os.Getenv("SMS_FEEDBACK_TOKEN_EXPIRY_MINUTES"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			minutes = parsed
+		}
+	}
+	return time.Duration(minutes) * time.Minute
+}
 
 // SmsFeedbackService processes deferred SMS feedback notifications.
 // On a final-close transition the SMS is not sent immediately; instead a pending
 // record is created. This service (called every SLA monitor tick) checks whether
-// the WhatsApp chatbot received a response within the configured window.
-// If yes → skip SMS. If no → send SMS with the feedback link.
+// the WhatsApp feedback session is still pending (via the feedback-session API)
+// once the configured delay window has elapsed.
+// If the session is gone (feedback already submitted) → skip SMS. If it's still
+// PENDING → send SMS with the feedback link.
 type SmsFeedbackService struct {
-	pendingRepo  repository.SmsFeedbackPendingRepository
-	incidentRepo repository.IncidentRepository
-	notification *NotificationService
+	pendingRepo    repository.SmsFeedbackPendingRepository
+	incidentRepo   repository.IncidentRepository
+	notification   *NotificationService
+	sessionService *FinalCloseWhatsAppFeedbackSessionService
 }
 
 func NewSmsFeedbackService(
 	pendingRepo repository.SmsFeedbackPendingRepository,
 	incidentRepo repository.IncidentRepository,
 	notification *NotificationService,
+	sessionService *FinalCloseWhatsAppFeedbackSessionService,
 ) *SmsFeedbackService {
 	return &SmsFeedbackService{
-		pendingRepo:  pendingRepo,
-		incidentRepo: incidentRepo,
-		notification: notification,
+		pendingRepo:    pendingRepo,
+		incidentRepo:   incidentRepo,
+		notification:   notification,
+		sessionService: sessionService,
 	}
 }
 
@@ -59,40 +77,12 @@ func (s *SmsFeedbackService) ProcessPending(ctx context.Context) error {
 }
 
 func (s *SmsFeedbackService) processOne(ctx context.Context, p *models.SmsFeedbackPending) {
-	// Check if WhatsApp chatbot already received a response for this incident.
-	hasWhatsApp, err := s.pendingRepo.HasWhatsAppFeedback(ctx, p.IncidentID, p.ClosedAt)
-	if err != nil {
-		log.Printf("[SmsFeedback] incident=%s — error checking WhatsApp feedback: %v", p.IncidentID, err)
-		p.RetryCount++
-		p.Log = fmt.Sprintf("error checking WhatsApp feedback: %v", err)
-		s.save(ctx, p)
-		return
-	}
-
-	now := time.Now()
-	p.ProcessedAt = &now
-
-	if hasWhatsApp {
-		p.Skipped = true
-		p.Log = "WhatsApp chatbot received feedback — SMS not sent"
-		log.Printf("[SmsFeedback] incident=%s — WhatsApp feedback found, SMS skipped", p.IncidentID)
-		s.save(ctx, p)
-		return
-	}
-
-	// No WhatsApp response — send SMS fallback.
 	if p.MobileNo == "" {
+		now := time.Now()
+		p.ProcessedAt = &now
 		p.Skipped = true
 		p.Log = "SMS skipped — no mobile number on record"
 		log.Printf("[SmsFeedback] incident=%s — no mobile number, SMS skipped", p.IncidentID)
-		s.save(ctx, p)
-		return
-	}
-
-	if p.TemplateCode == "" {
-		p.Skipped = true
-		p.Log = "SMS skipped — no template_code configured on the final-close SMS action"
-		log.Printf("[SmsFeedback] incident=%s — no template_code, SMS skipped", p.IncidentID)
 		s.save(ctx, p)
 		return
 	}
@@ -106,6 +96,43 @@ func (s *SmsFeedbackService) processOne(ctx context.Context, p *models.SmsFeedba
 		return
 	}
 
+	// Check the WhatsApp feedback-session API to see whether the reporter's
+	// session is still pending. No active session (feedback already submitted,
+	// or session never existed) → skip. Still PENDING after the delay window → send SMS.
+	status, err := s.sessionService.GetSessionStatus(ctx, incident.IncidentNumber, p.MobileNo)
+	if err != nil {
+		p.RetryCount++
+		p.Log = fmt.Sprintf("error checking WhatsApp feedback session (attempt %d): %v", p.RetryCount, err)
+		log.Printf("[SmsFeedback] incident=%s — error checking WhatsApp feedback session (attempt %d/%d): %v",
+			p.IncidentID, p.RetryCount, smsFeedbackMaxRetries, err)
+		if p.RetryCount >= smsFeedbackMaxRetries {
+			p.Skipped = true
+			p.Log = fmt.Sprintf("SMS skipped after %d failed session checks: %v", smsFeedbackMaxRetries, err)
+			log.Printf("[SmsFeedback] incident=%s — max retries reached checking session status, marking skipped", p.IncidentID)
+		}
+		s.save(ctx, p)
+		return
+	}
+
+	now := time.Now()
+	p.ProcessedAt = &now
+
+	if status == nil || !strings.EqualFold(status.FeedbackStatus, "PENDING") {
+		p.Skipped = true
+		p.Log = "WhatsApp feedback session resolved (no longer pending) — SMS not sent"
+		log.Printf("[SmsFeedback] incident=%s — WhatsApp feedback session not pending, SMS skipped", p.IncidentID)
+		s.save(ctx, p)
+		return
+	}
+
+	if p.TemplateCode == "" {
+		p.Skipped = true
+		p.Log = "SMS skipped — no template_code configured on the final-close SMS action"
+		log.Printf("[SmsFeedback] incident=%s — no template_code, SMS skipped", p.IncidentID)
+		s.save(ctx, p)
+		return
+	}
+
 	vars := BuildIncidentVariables(incident, nil, nil)
 
 	// Override feedback_url with a properly signed token tied to the pre-created feedback record.
@@ -114,7 +141,7 @@ func (s *SmsFeedbackService) processOne(ctx context.Context, p *models.SmsFeedba
 		smsPortalBase = strings.TrimRight(os.Getenv("FRONTEND_URL"), "/")
 	}
 	if smsPortalBase != "" {
-		feedbackToken := pkgutils.GenerateFeedbackToken(p.FeedbackID.String(), p.IncidentID.String(), smsFeedbackTokenDuration)
+		feedbackToken := pkgutils.GenerateFeedbackToken(p.FeedbackID.String(), p.IncidentID.String(), GetFeedbackTokenDuration())
 		vars["feedback_url"] = fmt.Sprintf("%s/feedback/%s?signed_token=%s",
 			smsPortalBase, p.IncidentID.String(), url.QueryEscape(feedbackToken))
 		vars["feedback_link"] = fmt.Sprintf(`<a href="%s">تقييم الخدمة</a>`, vars["feedback_url"])
@@ -126,13 +153,16 @@ func (s *SmsFeedbackService) processOne(ctx context.Context, p *models.SmsFeedba
 	}
 	templateCode := p.TemplateCode
 
-	log.Printf("[SmsFeedback] incident=%s — no WhatsApp feedback after delay, sending SMS to %s (template=%s)", p.IncidentID, p.MobileNo, templateCode)
+	log.Printf("[SmsFeedback] incident=%s — WhatsApp feedback session still pending after delay, sending SMS to %s (template=%s)", p.IncidentID, p.MobileNo, templateCode)
 
-	_, sendErr := s.notification.SendNotification(
+	sendResult, sendErr := s.notification.SendNotification(
 		ctx, "sms", &templateCode, lang,
 		[]string{p.MobileNo}, nil, nil,
 		"", "", vars, nil, nil, nil,
 	)
+	if sendResult != nil && sendResult.SentLog != nil {
+		_ = s.notification.SetIncidentIDOnLogs(ctx, []uuid.UUID{sendResult.SentLog.ID}, incident.ID)
+	}
 	if sendErr != nil {
 		p.RetryCount++
 		p.Log = fmt.Sprintf("SMS send failed (attempt %d): %v", p.RetryCount, sendErr)
@@ -148,7 +178,7 @@ func (s *SmsFeedbackService) processOne(ctx context.Context, p *models.SmsFeedba
 	}
 
 	p.Sent = true
-	p.Log = "SMS sent — no WhatsApp feedback received within delay window"
+	p.Log = "SMS sent — WhatsApp feedback session still pending within delay window"
 	log.Printf("[SmsFeedback] incident=%s — SMS sent successfully to %s", p.IncidentID, p.MobileNo)
 	s.save(ctx, p)
 }

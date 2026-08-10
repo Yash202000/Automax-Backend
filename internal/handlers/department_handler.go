@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
@@ -40,7 +42,20 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 	req.Name = strings.TrimSpace(req.Name)
 	req.NameAr = strings.TrimSpace(req.NameAr)
 
-	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+	// EPM940 auto-generates the Organization Code (ORG-######) and ignores any
+	// supplied value; other clients (e.g. VD2) must supply the code in the payload.
+	// The requirement is client-specific, so it can't be a static "required" struct
+	// tag — fold it into the same validationErrors map like workflow_handler does.
+	isEPM940 := strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940)
+
+	validationErrors := validation.ValidateStruct(c.UserContext(), &req)
+	if !isEPM940 && strings.TrimSpace(req.Code) == "" {
+		if validationErrors == nil {
+			validationErrors = map[string]string{}
+		}
+		validationErrors["code"] = i18n.T(c.UserContext(), "department_code_required")
+	}
+	if len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
 			"errors":  validationErrors,
@@ -60,14 +75,20 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 	department := &models.Department{
 		Name:          req.Name,
 		NameAr:        req.NameAr,
-		Code:          req.Code,
 		Description:   req.Description,
 		DescriptionAr: req.DescriptionAr,
 		Type:          deptType,
 		ParentID:      req.ParentID,
 		ManagerID:     req.ManagerID,
+		SupervisorID:  req.SupervisorID,
 		SortOrder:     req.SortOrder,
 		IsActive:      true,
+	}
+
+	// Non-EPM940: use the payload code verbatim. EPM940: leave empty so the
+	// repository generates the next ORG-###### code.
+	if !isEPM940 {
+		department.Code = strings.TrimSpace(req.Code)
 	}
 
 	if err := h.repo.Create(c.UserContext(), department); err != nil {
@@ -94,7 +115,7 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "department_created"), models.ToDepartmentResponse(department))
 }
 
-// cascadeToUsers syncs department location/classification/role assignments to all users in this department
+// cascadeToUsers syncs department location/classification assignments to all users in this department
 func (h *DepartmentHandler) cascadeToUsers(ctx context.Context, departmentID uuid.UUID) {
 	users, err := h.userRepo.FindByDepartmentID(ctx, departmentID)
 	if err != nil || len(users) == 0 {
@@ -102,10 +123,11 @@ func (h *DepartmentHandler) cascadeToUsers(ctx context.Context, departmentID uui
 	}
 
 	for _, user := range users {
-		// Collect classifications from all user's departments
+		// Collect classifications and locations from all user's departments
+		// NOTE: Roles are intentionally NOT synced here — they are managed
+		// independently per-user and must not be overwritten by department edits.
 		classIDMap := make(map[uuid.UUID]bool)
 		locIDMap := make(map[uuid.UUID]bool)
-		roleIDMap := make(map[uuid.UUID]bool)
 
 		for _, dept := range user.Departments {
 			fullDept, err := h.repo.FindByID(ctx, dept.ID)
@@ -118,9 +140,6 @@ func (h *DepartmentHandler) cascadeToUsers(ctx context.Context, departmentID uui
 			for _, l := range fullDept.Locations {
 				locIDMap[l.ID] = true
 			}
-			for _, r := range fullDept.Roles {
-				roleIDMap[r.ID] = true
-			}
 		}
 
 		classIDs := make([]uuid.UUID, 0, len(classIDMap))
@@ -131,14 +150,9 @@ func (h *DepartmentHandler) cascadeToUsers(ctx context.Context, departmentID uui
 		for id := range locIDMap {
 			locIDs = append(locIDs, id)
 		}
-		roleIDs := make([]uuid.UUID, 0, len(roleIDMap))
-		for id := range roleIDMap {
-			roleIDs = append(roleIDs, id)
-		}
 
 		_ = h.userRepo.AssignClassifications(ctx, user.ID, classIDs)
 		_ = h.userRepo.AssignLocations(ctx, user.ID, locIDs)
-		_ = h.userRepo.AssignRoles(ctx, user.ID, roleIDs)
 	}
 }
 
@@ -207,8 +221,11 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 	if req.NameAr != "" {
 		department.NameAr = req.NameAr
 	}
-	if req.Code != "" {
-		department.Code = req.Code
+	// Code is a permanent, system-generated identifier for EPM940 and must never
+	// change on update; other clients (e.g. VD2) may edit the payload-supplied code.
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) &&
+		strings.TrimSpace(req.Code) != "" {
+		department.Code = strings.TrimSpace(req.Code)
 	}
 	if req.Description != "" {
 		department.Description = req.Description
@@ -221,6 +238,9 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 	}
 	if req.ManagerID != nil {
 		department.ManagerID = req.ManagerID
+	}
+	if req.SupervisorID != nil {
+		department.SupervisorID = req.SupervisorID
 	}
 	if req.IsActive != nil {
 		if !*req.IsActive && department.IsActive {
@@ -283,18 +303,35 @@ func (h *DepartmentHandler) Delete(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
+	isAr := strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.Get("Accept-Language"))), "ar")
+
 	var reasons []string
-	if children > 0 {
-		reasons = append(reasons, "it has sub-departments")
-	}
-	if users > 0 {
-		reasons = append(reasons, "it is assigned to one or more users")
-	}
-	if incidents > 0 {
-		reasons = append(reasons, fmt.Sprintf("%d incident(s) are associated with this department", incidents))
-	}
-	if len(reasons) > 0 {
-		return utils.ErrorResponse(c, fiber.StatusConflict, "Cannot delete this department: "+strings.Join(reasons, "; "))
+	if isAr {
+		if children > 0 {
+			reasons = append(reasons, "له أقسام فرعية")
+		}
+		if users > 0 {
+			reasons = append(reasons, "مرتبط بمستخدم أو أكثر")
+		}
+		if incidents > 0 {
+			reasons = append(reasons, fmt.Sprintf("مرتبط بـ%d بلاغ", incidents))
+		}
+		if len(reasons) > 0 {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "لا يمكن حذف هذا القسم لأنه "+strings.Join(reasons, "، و"))
+		}
+	} else {
+		if children > 0 {
+			reasons = append(reasons, "it has sub-departments")
+		}
+		if users > 0 {
+			reasons = append(reasons, "it is assigned to one or more users")
+		}
+		if incidents > 0 {
+			reasons = append(reasons, fmt.Sprintf("%d incident(s) are associated with this department", incidents))
+		}
+		if len(reasons) > 0 {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "Cannot delete this department: "+strings.Join(reasons, "; "))
+		}
 	}
 
 	if err := h.repo.Delete(c.UserContext(), id); err != nil {
@@ -305,7 +342,27 @@ func (h *DepartmentHandler) Delete(c *fiber.Ctx) error {
 }
 
 func (h *DepartmentHandler) List(c *fiber.Ctx) error {
-	departments, err := h.repo.List(c.UserContext())
+	var filter models.DepartmentListFilter
+	if err := c.QueryParser(&filter); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_query_parameters"))
+	}
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &filter); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	// Apply defaults for pagination.
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.Limit < 1 {
+		filter.Limit = 20
+	}
+
+	departments, total, err := h.repo.ListFiltered(c.UserContext(), filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -315,11 +372,19 @@ func (h *DepartmentHandler) List(c *fiber.Ctx) error {
 		responses[i] = models.ToDepartmentResponse(&dept)
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "departments_retrieved"), responses)
+	return utils.PaginatedSuccessResponse(c, responses, filter.Page, filter.Limit, total)
 }
 
 func (h *DepartmentHandler) GetTree(c *fiber.Ctx) error {
-	tree, err := h.repo.GetTree(c.UserContext())
+	// Department-scoped: users with view_department_only see only their own department(s).
+	// Super admins bypass this restriction entirely.
+	var scopeDepartmentIDs []uuid.UUID
+	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
+	if user != nil && !user.IsSuperAdmin && user.HasPermission("users:view_department_only") {
+		scopeDepartmentIDs = user.ScopeDepartmentIDs()
+	}
+
+	tree, err := h.repo.GetTree(c.UserContext(), scopeDepartmentIDs)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -520,9 +585,12 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 		// Create new department
 		newID := uuid.New()
 		department := &models.Department{
-			ID:          newID,
+			ID: newID,
+			// EPM940: Code omitted so the repository generates a fresh unique ORG-######
+			// code (imports/integrations can never introduce duplicates). Other clients:
+			// keep the code from the import file.
+			Code:        importDeptCode(data.Code),
 			Name:        data.Name,
-			Code:        data.Code,
 			Description: data.Description,
 			ParentID:    newParentID,
 			ManagerID:   data.ManagerID,
@@ -546,4 +614,14 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "import_completed"), result)
+}
+
+// importDeptCode returns the code to persist for an imported department: empty for
+// EPM940 (the repository generates a unique ORG-###### code), otherwise the code
+// from the import file.
+func importDeptCode(code string) string {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+		return ""
+	}
+	return code
 }

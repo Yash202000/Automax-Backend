@@ -15,9 +15,20 @@ import (
 	"time"
 
 	"github.com/automax/backend/internal/models"
+	pkgUtils "github.com/automax/backend/pkg/utils"
 	"github.com/twilio/twilio-go"
 	openapi "github.com/twilio/twilio-go/rest/api/v2010"
 )
+
+// systemCountryCode returns the COUNTRY_CODE env var (e.g. "+966"), matching
+// the default in internal/config.Config.CountryCode, for callers that don't
+// go through config.Config (this package only reads env vars directly).
+func systemCountryCode() string {
+	if cc := os.Getenv("COUNTRY_CODE"); cc != "" {
+		return cc
+	}
+	return "+966"
+}
 
 // smtpPool holds one reusable authenticated SMTP connection so that every
 // outgoing email does NOT trigger a new SMTP AUTH handshake. Gmail counts
@@ -103,16 +114,28 @@ func sendViaPool(fromEmail string, recipients []string, msg []byte) error {
 	return nil
 }
 
-func SendOTPWithMetaTemplate(phone string, otp string) error {
+// metaSendResponse is the subset of Meta's Graph API send-message response we
+// care about — just enough to correlate a later delivery/read webhook event
+// back to the NotificationLog recipient that triggered the send.
+type metaSendResponse struct {
+	Messages []struct {
+		ID string `json:"id"`
+	} `json:"messages"`
+}
+
+// SendOTPWithMetaTemplate sends a WhatsApp OTP template message and returns the
+// Meta-assigned message ID (messages[0].id) alongside any error, so callers can
+// persist it and later match delivery/read status webhook callbacks to it.
+func SendOTPWithMetaTemplate(phone string, otp string) (string, error) {
 	metaURL := os.Getenv("OTP_TEMPLATE_URL")
 	accessToken := os.Getenv("OTP_TEMPLATE_ACCESS_TOKEN")
 
 	if metaURL == "" {
-		return fmt.Errorf("whatsapp config error: OTP_TEMPLATE_URL not set")
+		return "", fmt.Errorf("whatsapp config error: OTP_TEMPLATE_URL not set")
 	}
 
 	if accessToken == "" {
-		return fmt.Errorf("whatsapp config error: OTP_TEMPLATE_ACCESS_TOKEN not set")
+		return "", fmt.Errorf("whatsapp config error: OTP_TEMPLATE_ACCESS_TOKEN not set")
 	}
 
 	// Template payload
@@ -153,12 +176,12 @@ func SendOTPWithMetaTemplate(phone string, otp string) error {
 
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("whatsapp payload marshal failed: %w", err)
+		return "", fmt.Errorf("whatsapp payload marshal failed: %w", err)
 	}
 
 	req, err := http.NewRequest("POST", metaURL, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return fmt.Errorf("whatsapp request creation failed: %w", err)
+		return "", fmt.Errorf("whatsapp request creation failed: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -170,17 +193,22 @@ func SendOTPWithMetaTemplate(phone string, otp string) error {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("whatsapp network error: %w", err)
+		return "", fmt.Errorf("whatsapp network error: %w", err)
 	}
 	defer resp.Body.Close()
 
 	bodyBytes, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return nil
+		var parsed metaSendResponse
+		messageID := ""
+		if err := json.Unmarshal(bodyBytes, &parsed); err == nil && len(parsed.Messages) > 0 {
+			messageID = parsed.Messages[0].ID
+		}
+		return messageID, nil
 	}
 
-	return fmt.Errorf(
+	return "", fmt.Errorf(
 		"whatsapp http error (%d): %s",
 		resp.StatusCode,
 		string(bodyBytes),
@@ -411,7 +439,10 @@ func SendSMTPWithCCBCC(to []string, cc []string, bcc []string, subject, body str
 	return recipientStatuses, nil
 }
 
-func SendSMS(to, message string) error {
+// SendSMS sends an SMS via Twilio and returns the Twilio message SID alongside
+// any error, so callers can persist it and later match delivery status webhook
+// callbacks (queued/sent/delivered/undelivered/failed) back to it.
+func SendSMS(to, message string) (string, error) {
 
 	accountSID := os.Getenv("TWILIO_ACCOUNT_SID")
 	authToken := os.Getenv("TWILIO_AUTH_TOKEN")
@@ -419,14 +450,16 @@ func SendSMS(to, message string) error {
 
 	if accountSID == "" || authToken == "" || from == "" {
 		fmt.Println("[DEBUG-SMS] ERROR: Twilio env vars missing")
-		return fmt.Errorf("twilio env vars missing: TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_PHONE_NUMBER")
+		return "", fmt.Errorf("twilio env vars missing: TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_PHONE_NUMBER")
 	}
+
+	to = pkgUtils.NormalizeMobile(to, systemCountryCode())
 
 	// Normalize whitespace: trim each line, drop blank lines, collapse to single newlines.
 	// Templates often contain indentation and extra blank lines that inflate UCS-2 segment count.
 	if strings.TrimSpace(message) == "" {
 		fmt.Printf("[DEBUG-SMS] ERROR: empty message body for recipient %s — skipping send\n", to)
-		return fmt.Errorf("sms body is empty")
+		return "", fmt.Errorf("sms body is empty")
 	}
 	fmt.Printf("[DEBUG-SMS] Sending to=%s from=%s body_len=%d body=%q\n", to, from, len(message), message)
 
@@ -443,19 +476,21 @@ func SendSMS(to, message string) error {
 	resp, err := client.Api.CreateMessage(params)
 	if err != nil {
 		fmt.Printf("[DEBUG-SMS] Twilio API error to=%s: %v\n", to, err)
-		return fmt.Errorf("twilio send sms error: %w", err)
+		return "", fmt.Errorf("twilio send sms error: %w", err)
 	}
 
+	sid := ""
 	if resp != nil && resp.Sid != nil {
+		sid = *resp.Sid
 		status := ""
 		if resp.Status != nil {
 			status = *resp.Status
 		}
-		fmt.Printf("[DEBUG-SMS] Accepted by Twilio: SID=%s status=%s to=%s\n", *resp.Sid, status, to)
+		fmt.Printf("[DEBUG-SMS] Accepted by Twilio: SID=%s status=%s to=%s\n", sid, status, to)
 	} else {
 		fmt.Println("[DEBUG-SMS] SMS sent successfully! (No SID in response)")
 	}
-	return nil
+	return sid, nil
 }
 
 // normalizeSMSBody trims each line, drops blank lines, and strips leading/trailing

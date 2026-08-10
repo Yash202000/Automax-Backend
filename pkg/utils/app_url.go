@@ -56,3 +56,16 @@ func GenerateAttachmentAppURL(ctx context.Context, attachmentID uuid.UUID) strin
 	url := protocol + "://" + hostname + "/api/v1/calls/" + fmt.Sprint(attachmentID) + "/preview?token=" + token
 	return url
 }
+
+// GenerateCTIRecordingAppURL builds the token-bearing URL the frontend uses to
+// play/download a Cintrix-recorded call's audio, proxied via
+// GET /api/v1/cti/recording. Same "?token=" query-param auth pattern as
+// GenerateAttachmentAppURL, so it works directly in <audio src> / <a href>.
+func GenerateCTIRecordingAppURL(ctx context.Context, callUuid string) string {
+	hostname, _ := ctx.Value(constants.ContextKeys.HOSTNAME).(string)
+	protocol, _ := ctx.Value(constants.ContextKeys.PROTOCOL).(string)
+	token, _ := ctx.Value(constants.ContextKeys.Token).(string)
+
+	return protocol + "://" + hostname + "/api/v1/cti/recording?call_uuid=" +
+		url.QueryEscape(callUuid) + "&token=" + url.QueryEscape(token)
+}

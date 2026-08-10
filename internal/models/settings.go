@@ -1,15 +1,32 @@
 package models
 
 import (
+	"errors"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
+// GetSMSMaxLength reads SMS_MAX_LENGTH from the environment.
+// Returns an error if the variable is missing or invalid — no hardcoded fallback.
+func GetSMSMaxLength() (int, error) {
+	v := os.Getenv("SMS_MAX_LENGTH")
+	if v == "" {
+		return 0, errors.New("SMS_MAX_LENGTH is not set in environment")
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return 0, errors.New("SMS_MAX_LENGTH must be a positive integer")
+	}
+	return n, nil
+}
+
 // Settings represents application-wide configuration and branding
 type Settings struct {
-	ID        uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
+	ID uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
 
 	// Application Branding
 	AppName        string `gorm:"size:100;default:'Automax'" json:"app_name"`
@@ -17,10 +34,10 @@ type Settings struct {
 	AppDescription string `gorm:"size:500" json:"app_description"`
 
 	// Logo Configuration
-	LogoURL        string `gorm:"size:500" json:"logo_url"`         // Main logo URL
-	LogoSmallURL   string `gorm:"size:500" json:"logo_small_url"`   // Small/compact logo
-	FaviconURL     string `gorm:"size:500" json:"favicon_url"`      // Favicon URL
-	LogoAltText    string `gorm:"size:100" json:"logo_alt_text"`    // Alt text for accessibility
+	LogoURL      string `gorm:"size:500" json:"logo_url"`       // Main logo URL
+	LogoSmallURL string `gorm:"size:500" json:"logo_small_url"` // Small/compact logo
+	FaviconURL   string `gorm:"size:500" json:"favicon_url"`    // Favicon URL
+	LogoAltText  string `gorm:"size:100" json:"logo_alt_text"`  // Alt text for accessibility
 
 	// Theme Colors
 	PrimaryColor   string `gorm:"size:50;default:'#2563eb'" json:"primary_color"`   // Blue-600
@@ -28,9 +45,9 @@ type Settings struct {
 	AccentColor    string `gorm:"size:50;default:'#059669'" json:"accent_color"`    // Emerald-600
 
 	// Footer Information
-	CopyrightText  string `gorm:"size:200" json:"copyright_text"`
-	ContactEmail   string `gorm:"size:100" json:"contact_email"`
-	ContactPhone   string `gorm:"size:50" json:"contact_phone"`
+	CopyrightText string `gorm:"size:200" json:"copyright_text"`
+	ContactEmail  string `gorm:"size:100" json:"contact_email"`
+	ContactPhone  string `gorm:"size:50" json:"contact_phone"`
 
 	// Feature Descriptions (for auth/landing pages)
 	Feature1Title       string `gorm:"size:100" json:"feature1_title"`
@@ -71,10 +88,10 @@ type SettingsUpdateRequest struct {
 	AppDescription *string `json:"app_description" validate:"omitempty,max=500"`
 
 	// Logo Configuration
-	LogoURL        *string `json:"logo_url" validate:"omitempty,url,max=500"`
-	LogoSmallURL   *string `json:"logo_small_url" validate:"omitempty,url,max=500"`
-	FaviconURL     *string `json:"favicon_url" validate:"omitempty,url,max=500"`
-	LogoAltText    *string `json:"logo_alt_text" validate:"omitempty,max=100"`
+	LogoURL      *string `json:"logo_url" validate:"omitempty,url,max=500"`
+	LogoSmallURL *string `json:"logo_small_url" validate:"omitempty,url,max=500"`
+	FaviconURL   *string `json:"favicon_url" validate:"omitempty,url,max=500"`
+	LogoAltText  *string `json:"logo_alt_text" validate:"omitempty,max=100"`
 
 	// Theme Colors
 	PrimaryColor   *string `json:"primary_color" validate:"omitempty,hexcolor"`
@@ -82,9 +99,9 @@ type SettingsUpdateRequest struct {
 	AccentColor    *string `json:"accent_color" validate:"omitempty,hexcolor"`
 
 	// Footer Information
-	CopyrightText  *string `json:"copyright_text" validate:"omitempty,max=200"`
-	ContactEmail   *string `json:"contact_email" validate:"omitempty,email,max=100"`
-	ContactPhone   *string `json:"contact_phone" validate:"omitempty,max=50"`
+	CopyrightText *string `json:"copyright_text" validate:"omitempty,max=200"`
+	ContactEmail  *string `json:"contact_email" validate:"omitempty,email,max=100"`
+	ContactPhone  *string `json:"contact_phone" validate:"omitempty,max=50"`
 
 	// Feature Descriptions
 	Feature1Title       *string `json:"feature1_title" validate:"omitempty,max=100"`
@@ -106,7 +123,7 @@ type SettingsUpdateRequest struct {
 
 // SettingsResponse represents the public settings response
 type SettingsResponse struct {
-	ID        string `json:"id"`
+	ID string `json:"id"`
 
 	// Application Branding
 	AppName        string `json:"app_name"`
@@ -114,10 +131,10 @@ type SettingsResponse struct {
 	AppDescription string `json:"app_description"`
 
 	// Logo Configuration
-	LogoURL        string `json:"logo_url"`
-	LogoSmallURL   string `json:"logo_small_url"`
-	FaviconURL     string `json:"favicon_url"`
-	LogoAltText    string `json:"logo_alt_text"`
+	LogoURL      string `json:"logo_url"`
+	LogoSmallURL string `json:"logo_small_url"`
+	FaviconURL   string `json:"favicon_url"`
+	LogoAltText  string `json:"logo_alt_text"`
 
 	// Theme Colors
 	PrimaryColor   string `json:"primary_color"`
@@ -125,9 +142,9 @@ type SettingsResponse struct {
 	AccentColor    string `json:"accent_color"`
 
 	// Footer Information
-	CopyrightText  string `json:"copyright_text"`
-	ContactEmail   string `json:"contact_email"`
-	ContactPhone   string `json:"contact_phone"`
+	CopyrightText string `json:"copyright_text"`
+	ContactEmail  string `json:"contact_email"`
+	ContactPhone  string `json:"contact_phone"`
 
 	// Feature Descriptions
 	Feature1Title       string `json:"feature1_title"`
@@ -145,6 +162,9 @@ type SettingsResponse struct {
 
 	// Feature Toggles
 	ShowEvaluateButton bool `json:"show_evaluate_button"`
+
+	// SMS Configuration (env-driven, not stored in DB)
+	SmsMaxLength int `json:"sms_max_length"`
 
 	// Timestamps
 	UpdatedAt string `json:"updated_at"`
@@ -178,6 +198,7 @@ func (s *Settings) ToSettingsResponse() *SettingsResponse {
 		DefaultLanguage:     s.DefaultLanguage,
 		SupportedLanguages:  s.SupportedLanguages,
 		ShowEvaluateButton:  s.ShowEvaluateButton,
+		SmsMaxLength:        func() int { n, _ := GetSMSMaxLength(); return n }(),
 		UpdatedAt:           s.UpdatedAt.Format(time.RFC3339),
 	}
 }

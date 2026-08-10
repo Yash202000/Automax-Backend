@@ -62,6 +62,26 @@ func (w *Workflow) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
+// WorkflowFilter defines the search and filter criteria for the Workflow List page.
+// Search matches Workflow Name; RecordType doubles as the Module/Category filter.
+type WorkflowFilter struct {
+	Search      string `query:"search" json:"search" validate:"omitempty"`
+	RecordType  string `query:"record_type" json:"record_type" validate:"omitempty"`
+	CreatedByID string `query:"created_by" json:"created_by" validate:"omitempty,uuid"`
+
+	// IsActive and the date-range fields are parsed manually by the handler
+	// (from "status", "created_from", "created_to", "modified_from", "modified_to")
+	// because QueryParser cannot map them directly.
+	IsActive     *bool      `json:"is_active"`
+	CreatedFrom  *time.Time `json:"created_from"`
+	CreatedTo    *time.Time `json:"created_to"`
+	ModifiedFrom *time.Time `json:"modified_from"`
+	ModifiedTo   *time.Time `json:"modified_to"`
+
+	Page  int `query:"page" json:"page" validate:"omitempty,min=1"`
+	Limit int `query:"limit" json:"limit" validate:"omitempty,min=1,max=100"`
+}
+
 // WorkflowState represents a state/node within a workflow
 type WorkflowState struct {
 	ID            uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
@@ -234,6 +254,7 @@ type TransitionRequirement struct {
 	FieldName       string `gorm:"size:100" json:"field_name"`               // for field_value type
 	FieldValue      string `gorm:"size:500" json:"field_value"`              // expected value or validation rule
 	IsMandatory     *bool  `gorm:"default:true" json:"is_mandatory"`
+	IsMultiple      *bool  `gorm:"default:false" json:"is_multiple"`
 	ErrorMessage    string `gorm:"size:200" json:"error_message"`
 
 	CreatedAt time.Time `json:"created_at"`
@@ -303,9 +324,13 @@ func (f *TransitionFieldChange) BeforeCreate(tx *gorm.DB) error {
 // Request/Response types
 
 type WorkflowCreateRequest struct {
-	Name              string   `json:"name" validate:"required,min=2,max=100"`
-	NameAr            string   `json:"name_ar" validate:"max=100"`
-	Code              string   `json:"code" validate:"required,min=2,max=50"`
+	Name   string `json:"name" validate:"required,min=2,max=100"`
+	NameAr string `json:"name_ar" validate:"max=100"`
+	// Code is only used for non-EPM940 clients (e.g. VD2); EPM940 auto-generates
+	// the code from Name and ignores whatever is sent here. Kept omitempty at
+	// the struct level so EPM940 callers can omit it — the handler enforces
+	// "required for VD2" manually since that rule is client-specific.
+	Code              string   `json:"code" validate:"omitempty,min=2,max=50"`
 	Description       string   `json:"description" validate:"max=500"`
 	DescriptionAr     string   `json:"description_ar" validate:"max=500"`
 	RecordType        string   `json:"record_type" validate:"omitempty,oneof=incident request complaint query evidence both all"`
@@ -318,8 +343,11 @@ type WorkflowCreateRequest struct {
 }
 
 type WorkflowUpdateRequest struct {
-	Name                    string   `json:"name" validate:"omitempty,min=2,max=100"`
-	NameAr                  string   `json:"name_ar" validate:"max=100"`
+	Name   string `json:"name" validate:"omitempty,min=2,max=100"`
+	NameAr string `json:"name_ar" validate:"max=100"`
+	// Code is immutable for EPM940 (system-generated at creation) and is
+	// ignored by the service for that client. Non-EPM940 clients (e.g. VD2)
+	// may still update it.
 	Code                    string   `json:"code" validate:"omitempty,min=2,max=100"`
 	Description             string   `json:"description" validate:"max=500"`
 	DescriptionAr           string   `json:"description_ar" validate:"max=500"`
@@ -338,9 +366,13 @@ type WorkflowUpdateRequest struct {
 }
 
 type WorkflowStateCreateRequest struct {
-	Name               string   `json:"name" validate:"required,min=2,max=100"`
-	NameAr             string   `json:"name_ar" validate:"max=100"`
-	Code               string   `json:"code" validate:"required,min=2,max=50"`
+	Name   string `json:"name" validate:"required,min=2,max=100"`
+	NameAr string `json:"name_ar" validate:"max=100"`
+	// Code is only used for non-EPM940 clients (e.g. VD2); EPM940 auto-generates
+	// the code (STE-######) and ignores whatever is sent here. Kept omitempty at
+	// the struct level so EPM940 callers can omit it — the handler enforces
+	// "required for VD2" manually since that rule is client-specific.
+	Code               string   `json:"code" validate:"omitempty,min=2,max=50"`
 	Description        string   `json:"description" validate:"max=500"`
 	DescriptionAr      string   `json:"description_ar" validate:"max=500"`
 	StateType          string   `json:"state_type" validate:"omitempty,oneof=initial normal terminal"`
@@ -401,9 +433,13 @@ type WorkflowStateUpdateRequest struct {
 }
 
 type WorkflowTransitionCreateRequest struct {
-	Name            string   `json:"name" validate:"required,min=2,max=100"`
-	NameAr          string   `json:"name_ar" validate:"max=100"`
-	Code            string   `json:"code" validate:"required,min=2,max=50"`
+	Name   string `json:"name" validate:"required,min=2,max=100"`
+	NameAr string `json:"name_ar" validate:"max=100"`
+	// Code is only used for non-EPM940 clients (e.g. VD2); EPM940 auto-generates
+	// the code (TRN-######) and ignores whatever is sent here. Kept omitempty at
+	// the struct level so EPM940 callers can omit it — the handler enforces
+	// "required for VD2" manually since that rule is client-specific.
+	Code            string   `json:"code" validate:"omitempty,min=2,max=50"`
 	Description     string   `json:"description" validate:"max=500"`
 	DescriptionAr   string   `json:"description_ar" validate:"max=500"`
 	FromStateID     string   `json:"from_state_id" validate:"required,uuid"`
@@ -464,6 +500,7 @@ type TransitionRequirementRequest struct {
 	FieldName       string `json:"field_name"`
 	FieldValue      string `json:"field_value"`
 	IsMandatory     *bool  `json:"is_mandatory"`
+	IsMultiple      *bool  `json:"is_multiple"`
 	ErrorMessage    string `json:"error_message"`
 }
 
@@ -630,6 +667,7 @@ type TransitionRequirementResponse struct {
 	RequirementType string    `json:"requirement_type"`
 	FieldName       string    `json:"field_name,omitempty"`
 	FieldValue      string    `json:"field_value,omitempty"`
+	IsMultiple      *bool     `json:"is_multiple"`
 	IsMandatory     *bool     `json:"is_mandatory"`
 	ErrorMessage    string    `json:"error_message,omitempty"`
 }
@@ -933,6 +971,7 @@ func ToTransitionRequirementResponse(r *TransitionRequirement) TransitionRequire
 		FieldName:       r.FieldName,
 		FieldValue:      r.FieldValue,
 		IsMandatory:     r.IsMandatory,
+		IsMultiple:      r.IsMultiple,
 		ErrorMessage:    r.ErrorMessage,
 	}
 }

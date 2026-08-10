@@ -92,6 +92,39 @@ func validateName(fl validator.FieldLevel) bool {
 	return false
 }
 
+var (
+	mobileSeparators = regexp.MustCompile(`[\s\-()]`)
+	mobileDigits     = regexp.MustCompile(`^[0-9]{8,15}$`)
+)
+
+// IsValidMobile reports whether s is a mobile number written with or without an
+// international country code. A single leading "+" is allowed, digits may be grouped
+// with spaces, hyphens or parentheses, and what is left must be 8-15 digits — 15 being
+// the E.164 ceiling for a full number. A "+" introduces a country code, and no country
+// code starts with 0, whereas a bare national number often does.
+//
+// A blank value is not a valid mobile number. Callers that treat phone as optional must
+// handle blank themselves; struct tags do that with omitempty.
+func IsValidMobile(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+
+	hasCountryCode := strings.HasPrefix(s, "+")
+	digits := mobileSeparators.ReplaceAllString(strings.TrimPrefix(s, "+"), "")
+	if !mobileDigits.MatchString(digits) {
+		return false
+	}
+
+	return !hasCountryCode || digits[0] != '0'
+}
+
+// validateMobile backs the `mobile` struct tag.
+func validateMobile(fl validator.FieldLevel) bool {
+	return IsValidMobile(fl.Field().String())
+}
+
 func GetTranslator(lang string) ut.Translator {
 	// Normalize: "en-US" -> "en", "fr-FR" -> "fr"
 	lang = strings.ToLower(strings.Split(lang, "-")[0])

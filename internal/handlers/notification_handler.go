@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/automax/backend/internal/models"
+	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/pkg/constants"
@@ -20,15 +22,62 @@ import (
 )
 
 type NotificationHandler struct {
-	service *services.NotificationService
-	storage *storage.MinIOStorage
+	service          *services.NotificationService
+	storage          *storage.MinIOStorage
+	userRepo         repository.UserRepository
+	incidentRepo     repository.IncidentRepository
+	actionLogService services.ActionLogService
 }
 
-func NewNotificationHandler(service *services.NotificationService, storage *storage.MinIOStorage) *NotificationHandler {
+func NewNotificationHandler(
+	service *services.NotificationService,
+	storage *storage.MinIOStorage,
+	userRepo repository.UserRepository,
+	incidentRepo repository.IncidentRepository,
+	actionLogService services.ActionLogService,
+) *NotificationHandler {
 	return &NotificationHandler{
-		service: service,
-		storage: storage,
+		service:          service,
+		storage:          storage,
+		userRepo:         userRepo,
+		incidentRepo:     incidentRepo,
+		actionLogService: actionLogService,
 	}
+}
+
+// canViewIncident checks whether the user has visibility into the given incident,
+// mirroring the classification/location scoping used in IncidentHandler.ListIncidents.
+func (h *NotificationHandler) canViewIncident(ctx context.Context, userID uuid.UUID, incidentID uuid.UUID) (bool, error) {
+	user, err := h.userRepo.FindByIDWithRelations(ctx, userID)
+	if err != nil || user == nil {
+		return false, err
+	}
+	if user.IsSuperAdmin {
+		return true, nil
+	}
+
+	incident, err := h.incidentRepo.FindByID(ctx, incidentID)
+	if err != nil || incident == nil {
+		return false, err
+	}
+
+	classOK := incident.ClassificationID == nil
+	for _, cls := range user.Classifications {
+		if incident.ClassificationID != nil && cls.ID == *incident.ClassificationID {
+			classOK = true
+			break
+		}
+	}
+
+	locOK := incident.LocationID == nil
+	for _, loc := range user.Locations {
+		if incident.LocationID != nil && loc.ID == *incident.LocationID {
+			locOK = true
+			break
+		}
+	}
+
+	return classOK && locOK, nil
 }
 
 // SendGridInboundWebhook handles incoming emails from SendGrid Inbound Parse
@@ -419,6 +468,19 @@ func (h *NotificationHandler) List(c *fiber.Ctx) error {
 		filter.Limit = 20
 	}
 
+	if filter.IncidentID != nil {
+		// Incident communication history request: this is not "my inbox" any more,
+		// so drop the personal sent_by/received_by scoping and instead require that
+		filter.UserID = nil
+		allowed, err := h.canViewIncident(c.UserContext(), userID, *filter.IncidentID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		}
+		if !allowed {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, "Insufficient permissions")
+		}
+	}
+
 	if endDate := c.Query("end_date"); endDate != "" {
 		if t, err := time.Parse("2006-01-02", endDate); err == nil {
 			// Set to end of day
@@ -433,6 +495,127 @@ func (h *NotificationHandler) List(c *fiber.Ctx) error {
 	}
 
 	applyAcceptLanguage(c.Get("Accept-Language"), notifications)
+
+	totalPages := (int(total) + filter.Limit - 1) / filter.Limit
+
+	return c.JSON(fiber.Map{
+		"success":     true,
+		"data":        notifications,
+		"total_items": total,
+		"total_pages": totalPages,
+		"page":        filter.Page,
+		"limit":       filter.Limit,
+	})
+}
+
+// ResendNotification handles POST /api/v1/admin/notification-monitoring/:id/resend
+// — manually re-sends a failed/undeliverable/expired notification using its
+// stored subject/body/recipients, and records the action in the audit log.
+// This is always an explicit user action; there is no automatic retry.
+func (h *NotificationHandler) ResendNotification(c *fiber.Ctx) error {
+	idStr := c.Params("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_notification_id"))
+	}
+
+	var actorID uuid.UUID
+	if userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID); ok {
+		actorID = userID
+	}
+
+	resendResult, err := h.service.ResendNotification(c.UserContext(), id, &actorID)
+
+	logStatus := "success"
+	description := fmt.Sprintf("Resent notification %s", idStr)
+	if err != nil {
+		logStatus = "failed"
+		description = fmt.Sprintf("Failed to resend notification %s: %s", idStr, err.Error())
+	}
+	if h.actionLogService != nil {
+		_ = h.actionLogService.LogAction(c.UserContext(), &services.LogActionParams{
+			UserID:      actorID,
+			Action:      "resend",
+			Module:      "notifications",
+			ResourceID:  idStr,
+			Description: description,
+			IPAddress:   c.IP(),
+			UserAgent:   c.Get("User-Agent"),
+			Status:      logStatus,
+			ErrorMsg:    errString(err),
+		})
+	}
+
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"success": true,
+		"data":    resendResult,
+	})
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// ListMonitoring handles GET /api/v1/admin/notification-monitoring — the
+// admin-wide dashboard view (search/filter across every user's notifications,
+// unlike List which is scoped to the requesting user's inbox).
+func (h *NotificationHandler) ListMonitoring(c *fiber.Ctx) error {
+	filter := &models.NotificationMonitoringFilter{
+		Page:  1,
+		Limit: 20,
+	}
+
+	if err := c.QueryParser(filter); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_query_parameters"))
+	}
+
+	if err := validation.ValidateStruct(c.UserContext(), filter); len(err) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  err,
+		})
+	}
+
+	if filter.Channel != "" {
+		validChannels := map[string]bool{
+			"email": true, "sms": true, "whatsapp": true, "notification": true, "push-notification": true,
+		}
+		for _, ch := range strings.Split(filter.Channel, ",") {
+			ch = strings.TrimSpace(ch)
+			if ch != "" && !validChannels[ch] {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+					"success": false,
+					"error":   fmt.Sprintf("invalid channel %q — must be one of email, sms, whatsapp, notification, push-notification", ch),
+				})
+			}
+		}
+	}
+
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.Limit < 1 || filter.Limit > 100 {
+		filter.Limit = 20
+	}
+
+	if endDate := c.Query("end_date"); endDate != "" {
+		if t, err := time.Parse("2006-01-02", endDate); err == nil {
+			t = t.Add(24*time.Hour - time.Second)
+			filter.EndDate = &t
+		}
+	}
+
+	notifications, total, err := h.service.ListMonitoring(c.UserContext(), filter)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
 
 	totalPages := (int(total) + filter.Limit - 1) / filter.Limit
 
@@ -995,7 +1178,6 @@ func (h *NotificationHandler) PreviewNotificationAttachmentByID(c *fiber.Ctx) er
 
 	return c.Send(fileData)
 }
-
 
 // applyAcceptLanguage replaces subject/body with Arabic versions in-place when
 // Accept-Language is "ar" and Arabic content is available.

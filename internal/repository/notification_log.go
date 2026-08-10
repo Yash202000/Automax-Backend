@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/models"
@@ -16,6 +17,9 @@ type NotificationLogRepository interface {
 	FindByID(ctx context.Context, id uuid.UUID) (*models.NotificationLog, error)
 	FindByAttachmentID(ctx context.Context, attachmentID string) ([]*models.NotificationLog, error)
 	List(ctx context.Context, filter *models.NotificationLogFilter) ([]models.NotificationLog, int64, error)
+	ListForMonitoring(ctx context.Context, filter *models.NotificationMonitoringFilter) ([]models.NotificationLog, int64, error)
+	FindByRecipientProviderMessageID(ctx context.Context, providerMessageID string) (*models.NotificationLog, error)
+	UpdateRecipientDeliveryStatus(ctx context.Context, logID uuid.UUID, providerMessageID, status, failureCode, errorMessage string) error
 	GetStats(ctx context.Context, channel string, sentBy *uuid.UUID, receivedBy *uuid.UUID) ([]models.NotificationChannelStat, error)
 	GetStatsBySentBy(ctx context.Context, channel string, sentBy *uuid.UUID, receivedBy *uuid.UUID) ([]models.NotificationUserStatRow, error)
 	GetStatsByReceivedBy(ctx context.Context, channel string, sentBy *uuid.UUID, receivedBy *uuid.UUID) ([]models.NotificationUserStatRow, error)
@@ -30,6 +34,7 @@ type NotificationLogRepository interface {
 	MarkOTPVerified(ctx context.Context, sessionID string, verifiedAt time.Time) error
 	SetMeta(ctx context.Context, ids []uuid.UUID, meta *models.NotificationMeta) error
 	SetArContent(ctx context.Context, ids []uuid.UUID, subjectAr, bodyAr string) error
+	SetIncidentID(ctx context.Context, ids []uuid.UUID, incidentID uuid.UUID) error
 }
 
 type notificationLogRepository struct {
@@ -59,6 +64,62 @@ func (r *notificationLogRepository) FindByID(ctx context.Context, id uuid.UUID) 
 	return &log, nil
 }
 
+// FindByRecipientProviderMessageID locates the NotificationLog containing a
+// recipient whose ProviderMessageID matches (Twilio SID / Meta message id),
+// so a provider delivery-status webhook can be matched back to the send.
+func (r *notificationLogRepository) FindByRecipientProviderMessageID(ctx context.Context, providerMessageID string) (*models.NotificationLog, error) {
+	var log models.NotificationLog
+	err := r.db.WithContext(ctx).
+		Where("recipients @> ?", fmt.Sprintf(`[{"provider_message_id":"%s"}]`, providerMessageID)).
+		First(&log).Error
+	if err != nil {
+		return nil, err
+	}
+	return &log, nil
+}
+
+// UpdateRecipientDeliveryStatus updates the matching recipient's Status/FailureCode/
+// ErrorMessage inside the Recipients JSONB array, keyed by ProviderMessageID. For
+// single-recipient sends (the common case for SMS/WhatsApp) it also mirrors the
+// new status onto the parent log's top-level Status so list/filter views pick it
+// up without inspecting each recipient individually.
+func (r *notificationLogRepository) UpdateRecipientDeliveryStatus(ctx context.Context, logID uuid.UUID, providerMessageID, status, failureCode, errorMessage string) error {
+	var notifLog models.NotificationLog
+	if err := r.db.WithContext(ctx).First(&notifLog, "id = ?", logID).Error; err != nil {
+		return err
+	}
+
+	found := false
+	for i := range notifLog.Recipients {
+		if notifLog.Recipients[i].ProviderMessageID == providerMessageID {
+			notifLog.Recipients[i].Status = status
+			if failureCode != "" {
+				notifLog.Recipients[i].FailureCode = failureCode
+			}
+			if errorMessage != "" {
+				notifLog.Recipients[i].ErrorMessage = errorMessage
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("recipient with provider_message_id %s not found on notification log %s", providerMessageID, logID)
+	}
+
+	updates := map[string]interface{}{"recipients": notifLog.Recipients}
+	if len(notifLog.Recipients) == 1 {
+		updates["status"] = status
+		if failureCode != "" {
+			updates["failure_code"] = failureCode
+		}
+	}
+
+	return r.db.WithContext(ctx).Model(&models.NotificationLog{}).
+		Where("id = ?", logID).
+		Updates(updates).Error
+}
+
 func (r *notificationLogRepository) FindByAttachmentID(ctx context.Context, attachmentID string) ([]*models.NotificationLog, error) {
 	var logs []*models.NotificationLog
 	// Query JSONB field for attachment with matching ID
@@ -75,13 +136,27 @@ func (r *notificationLogRepository) List(ctx context.Context, filter *models.Not
 	var logs []models.NotificationLog
 	var total int64
 
-	query := r.db.WithContext(ctx).Model(&models.NotificationLog{}).
-		Where("NOT (channel IN ('sms', 'email') AND status = 'failed')")
+	query := r.db.WithContext(ctx).Model(&models.NotificationLog{})
 
-	// Apply user filtering - show emails where user is either sender OR receiver
-	if filter.UserID != nil {
-		log.Printf("[Notifications Repository] Filtering by user_id: %s (sent_by OR received_by)", filter.UserID.String())
-		query = query.Where("sent_by = ? OR received_by = ?", *filter.UserID, *filter.UserID)
+	if filter.IncidentID != nil {
+		// Incident communication history: keep failed sends visible (audit trail requires it)
+		// and do not apply the personal inbox sent_by/received_by scoping below.
+		// Default to SMS/Email only (the requirement covers those two channels), but if the
+		// caller explicitly asked for a specific channel (e.g. ?channel=notification), trust
+		// that instead of overriding it — the `filter.Channel` check further below applies it.
+		log.Printf("[Notifications Repository] Filtering by incident_id: %s", filter.IncidentID.String())
+		query = query.Where("incident_id = ?", *filter.IncidentID)
+		if filter.Channel == "" {
+			query = query.Where("channel IN ('sms', 'email')")
+		}
+	} else {
+		query = query.Where("NOT (channel IN ('sms', 'email') AND status = 'failed')")
+
+		// Apply user filtering - show emails where user is either sender OR receiver
+		if filter.UserID != nil {
+			log.Printf("[Notifications Repository] Filtering by user_id: %s (sent_by OR received_by)", filter.UserID.String())
+			query = query.Where("sent_by = ? OR received_by = ?", *filter.UserID, *filter.UserID)
+		}
 	}
 
 	// Apply filters
@@ -149,10 +224,14 @@ func (r *notificationLogRepository) List(ctx context.Context, filter *models.Not
 
 	// Apply pagination
 	offset := (filter.Page - 1) * filter.Limit
+	order := "created_at DESC"
+	if filter.IncidentID != nil {
+		order = "created_at ASC" // audit trail: chronological order
+	}
 	err := query.
 		Preload("SentByUser").
 		Preload("ReceivedByUser").
-		Order("created_at DESC").
+		Order(order).
 		Offset(offset).
 		Limit(filter.Limit).
 		Find(&logs).Error
@@ -161,6 +240,86 @@ func (r *notificationLogRepository) List(ctx context.Context, filter *models.Not
 	}
 
 	log.Printf("[Notifications Repository] Found %d notifications (total: %d) for user filter", len(logs), total)
+
+	return logs, total, nil
+}
+
+// ListForMonitoring is the admin-wide equivalent of List: no sent_by/received_by
+// scoping and no exclusion of failed sms/email rows, since the monitoring
+// dashboard's whole purpose is to surface delivery failures across every user.
+// Unlike List, it does not restrict to outbound-only — the Communication
+// Tracking UI offers Inbox/Sent/Draft/etc. tabs (via the category filter)
+// spanning both directions, so direction filtering is optional here.
+func (r *notificationLogRepository) ListForMonitoring(ctx context.Context, filter *models.NotificationMonitoringFilter) ([]models.NotificationLog, int64, error) {
+	var logs []models.NotificationLog
+	var total int64
+
+	query := r.db.WithContext(ctx).Model(&models.NotificationLog{})
+
+	if filter.Direction != "" {
+		query = query.Where("direction = ?", filter.Direction)
+	}
+
+	if filter.Channel != "" {
+		rawChannels := strings.Split(filter.Channel, ",")
+		channels := make([]string, 0, len(rawChannels))
+		for _, ch := range rawChannels {
+			if ch = strings.TrimSpace(ch); ch != "" {
+				channels = append(channels, ch)
+			}
+		}
+		if len(channels) == 1 {
+			query = query.Where("channel = ?", channels[0])
+		} else if len(channels) > 1 {
+			query = query.Where("channel IN ?", channels)
+		}
+	}
+	if filter.Category != "" {
+		query = query.Where("category = ?", filter.Category)
+	}
+	if filter.Status != "" {
+		query = query.Where("status = ?", filter.Status)
+	}
+	if filter.FailureCode != "" {
+		query = query.Where("failure_code = ?", filter.FailureCode)
+	}
+	if filter.Recipient != "" {
+		query = query.Where("recipients::text ILIKE ?", "%"+filter.Recipient+"%")
+	}
+	if filter.RecordType != "" {
+		query = query.Where(
+			"template_code IN (SELECT code FROM notification_templates WHERE module_type = ?)",
+			filter.RecordType,
+		)
+	}
+	if filter.StartDate != nil {
+		query = query.Where("created_at >= ?", *filter.StartDate)
+	}
+	if filter.EndDate != nil {
+		query = query.Where("created_at <= ?", *filter.EndDate)
+	}
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if filter.Page <= 0 {
+		filter.Page = 1
+	}
+	if filter.Limit <= 0 || filter.Limit > 100 {
+		filter.Limit = 20
+	}
+	offset := (filter.Page - 1) * filter.Limit
+
+	err := query.
+		Preload("SentByUser").
+		Order("created_at DESC").
+		Offset(offset).
+		Limit(filter.Limit).
+		Find(&logs).Error
+	if err != nil {
+		return nil, 0, err
+	}
 
 	return logs, total, nil
 }
@@ -232,6 +391,16 @@ func (r *notificationLogRepository) SetMeta(ctx context.Context, ids []uuid.UUID
 		Model(&models.NotificationLog{}).
 		Where("id IN ?", ids).
 		Update("meta", meta).Error
+}
+
+func (r *notificationLogRepository) SetIncidentID(ctx context.Context, ids []uuid.UUID, incidentID uuid.UUID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).
+		Model(&models.NotificationLog{}).
+		Where("id IN ?", ids).
+		Update("incident_id", incidentID).Error
 }
 
 func (r *notificationLogRepository) SetArContent(ctx context.Context, ids []uuid.UUID, subjectAr, bodyAr string) error {

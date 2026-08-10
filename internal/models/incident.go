@@ -454,7 +454,7 @@ type CreateComplaintRequest struct {
 	ReporterID       *string  `json:"reporter_id" validate:"omitempty,uuid"` // link to user who created the complaint
 	ReporterEmail    string   `json:"reporter_email" validate:"omitempty,email"`
 	ReporterName     string   `json:"reporter_name" validate:"omitempty,max=200"`
-	ReporterPhone    string   `json:"reporter_phone" validate:"omitempty,max=50"`
+	ReporterPhone    string   `json:"reporter_phone" validate:"required_with=SourceIncidentID,omitempty,mobile,max=50"`
 	DepartmentID     *string  `json:"department_id" validate:"omitempty,uuid"`
 	AssigneeID       *string  `json:"assignee_id" validate:"omitempty,uuid"`
 	LocationID       *string  `json:"location_id" validate:"omitempty,uuid"`
@@ -559,39 +559,58 @@ type BulkConvertToRequestResponse struct {
 // CustomFieldFilter represents a single key=value filter on the custom_fields JSON column.
 // Multiple filters are AND-ed together. Supports flat values (e.g. {"caller_identity":"123"}).
 type CustomFieldFilter struct {
-	Key   string
-	Value string
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// IncidentMapMarker is the minimal per-incident shape returned by the map
+// markers endpoint — deliberately excludes everything List's full Incident
+// payload carries (classification, department, assignee, comments, ...) so
+// tens of thousands of rows can be fetched in one request.
+type IncidentMapMarker struct {
+	ID             uuid.UUID `json:"id"`
+	Latitude       float64   `json:"latitude"`
+	Longitude      float64   `json:"longitude"`
+	CurrentStateID uuid.UUID `json:"current_state_id"`
+	StateColor     string    `json:"state_color"`
 }
 
 type IncidentFilter struct {
-	Search             string     `query:"search" json:"search" validate:"omitempty"`
-	WorkflowID         []string   `query:"workflow_id" json:"workflow_id" validate:"omitempty,dive,uuid"`
-	CurrentStateID     []string   `query:"current_state_id" json:"current_state_id" validate:"omitempty,dive,uuid"`
-	ClassificationID   []string   `query:"classification_id" json:"classification_id" validate:"omitempty,dive,uuid"`
-	Priority           *int       `query:"priority" json:"priority" validate:"omitempty,min=1,max=5"`
-	AssigneeID         []string   `query:"assignee_id" json:"assignee_id" validate:"omitempty,dive,uuid"`
-	DepartmentID       []string   `query:"department_id" json:"department_id" validate:"omitempty,dive,uuid"`
-	LocationID         []string   `query:"location_id" json:"location_id" validate:"omitempty,dive,uuid"`
-	ReporterID         []string   `query:"reporter_id" json:"reporter_id" validate:"omitempty,dive,uuid"`
-	ReporterPhone      string     `query:"reporter_phone" json:"reporter_phone" validate:"omitempty"`
-	CallerIdentity     string     `query:"caller_identity" json:"caller_identity" validate:"omitempty,number"`
-	SLABreached        *bool      `query:"sla_breached" json:"sla_breached" validate:"omitempty"`
-	RecordType         *string    `query:"record_type" json:"record_type" validate:"omitempty,oneof=incident request complaint query"` // 'incident', 'request', 'complaint', or 'query'
-	Channel            *string    `query:"channel" json:"channel" validate:"omitempty"`                                                // for complaints
-	Source             *string    `query:"source" json:"source" validate:"omitempty"`
-	MyRecord           *string    `query:"my_record" json:"my_record" validate:"omitempty,uuid"`
-	ConvertedToRequest *bool      `query:"converted_to_request" json:"converted_to_request" validate:"omitempty"`
-	SourceIncidentID   *string    `query:"source_incident_id" json:"source_incident_id" validate:"omitempty,uuid"`
-	StartDate          *time.Time `json:"start_date"` // filter by created_at >= start_date; parsed manually in handler (not via QueryParser)
-	EndDate            *time.Time `json:"end_date"`   // filter by created_at <= end_date; parsed manually in handler (not via QueryParser)
+	Search              string     `query:"search" json:"search" validate:"omitempty"`
+	WorkflowID          []string   `query:"workflow_id" json:"workflow_id" validate:"omitempty,dive,uuid"`
+	CurrentStateID      []string   `query:"current_state_id" json:"current_state_id" validate:"omitempty,dive,uuid"`
+	CurrentStateCode    []string   `query:"current_state_code" json:"current_state_code" validate:"omitempty,dive,max=50"` // matches every workflow's state with this code; see normalizeStateCodes
+	ClassificationID    []string   `query:"classification_id" json:"classification_id" validate:"omitempty,dive,uuid"`
+	Priority            *int       `query:"priority" json:"priority" validate:"omitempty,min=1,max=5"`
+	AssigneeID          []string   `query:"assignee_id" json:"assignee_id" validate:"omitempty,dive,uuid"`
+	DepartmentID        []string   `query:"department_id" json:"department_id" validate:"omitempty,dive,uuid"`
+	LocationID          []string   `query:"location_id" json:"location_id" validate:"omitempty,dive,uuid"`
+	ReporterID          []string   `query:"reporter_id" json:"reporter_id" validate:"omitempty,dive,uuid"`
+	ReporterPhone       string     `query:"reporter_phone" json:"reporter_phone" validate:"omitempty"`
+	ReporterPhoneSearch string     `query:"reporter_phone_search" json:"reporter_phone_search" validate:"omitempty,max=50"`
+	CallerIdentity      string     `query:"caller_identity" json:"caller_identity" validate:"omitempty,number"`
+	SLABreached         *bool      `query:"sla_breached" json:"sla_breached" validate:"omitempty"`
+	RecordType          *string    `query:"record_type" json:"record_type" validate:"omitempty,oneof=incident request complaint query"` // 'incident', 'request', 'complaint', or 'query'
+	Channel             *string    `query:"channel" json:"channel" validate:"omitempty"`                                                // for complaints
+	Source              *string    `query:"source" json:"source" validate:"omitempty"`
+	MyRecord            *string    `query:"my_record" json:"my_record" validate:"omitempty,uuid"`
+	ConvertedToRequest  *bool      `query:"converted_to_request" json:"converted_to_request" validate:"omitempty"`
+	SourceIncidentID    *string    `query:"source_incident_id" json:"source_incident_id" validate:"omitempty,uuid"`
+	StartDate           *time.Time `json:"start_date"` // filter by created_at >= start_date; parsed manually in handler (not via QueryParser)
+	EndDate             *time.Time `json:"end_date"`   // filter by created_at <= end_date; parsed manually in handler (not via QueryParser)
 	// Transition filters
 	TransitionID *uuid.UUID `query:"transition_id" json:"transition_id" validate:"omitempty,uuid"`
 	FromStateID  *uuid.UUID `query:"from_state_id" json:"from_state_id" validate:"omitempty"`
 	ToStateID    *uuid.UUID `query:"to_state_id" json:"to_state_id" validate:"omitempty"`
-	TaskID       string     `query:"task_id" json:"task_id" validate:"omitempty"` // filter by task ID in custom_fields
+	TaskID       string     `query:"task_id" json:"task_id" validate:"omitempty"`             // filter by task ID in custom_fields
+	MomraRef     string     `query:"momra_ref" json:"momra_ref" validate:"omitempty,max=100"` // filter by momra_incident_no in custom_fields
 	// CustomFieldFilters holds repeatable cf=key:value filters. Parsed manually in handler.
 	// Each filter does: custom_fields::jsonb ->> 'key' ILIKE '%value%'. Multiple are AND-ed.
 	CustomFieldFilters []CustomFieldFilter `json:"-"`
+	// SortBy controls the list's ordering (always descending — newest first
+	// by whichever field). Restricted to a small allow-list so it's safe to
+	// interpolate directly into an ORDER BY clause.
+	SortBy             string              `query:"sort_by" json:"sort_by" validate:"omitempty,oneof=created_at updated_at"`
 	Page               int                 `query:"page" json:"page" validate:"omitempty,min=1"`
 	Limit              int                 `query:"limit" json:"limit" validate:"omitempty,min=1,max=100"`
 	UserRoleIDs        []uuid.UUID         `json:"-"`     // For filtering stats by user's roles
@@ -672,19 +691,19 @@ type IncidentUnmergeResponse struct {
 
 // EpmPortalHierarchyNode is a single node in a nested classification or location chain.
 type EpmPortalHierarchyNode struct {
-	Name   string                   `json:"name"`
-	NameAr string                   `json:"name_ar"`
-	Level  int                      `json:"level"`
-	Child  *EpmPortalHierarchyNode  `json:"child"`
+	Name   string                  `json:"name"`
+	NameAr string                  `json:"name_ar"`
+	Level  int                     `json:"level"`
+	Child  *EpmPortalHierarchyNode `json:"child"`
 }
 
 // EpmPortalTreeNode is a node in the portal-specific classification/location tree.
 type EpmPortalTreeNode struct {
-	ID       uuid.UUID            `json:"id"`
-	Name     string               `json:"name"`
-	NameAr   string               `json:"name_ar"`
-	Level    int                  `json:"level"`
-	Children []EpmPortalTreeNode  `json:"children,omitempty"`
+	ID       uuid.UUID           `json:"id"`
+	Name     string              `json:"name"`
+	NameAr   string              `json:"name_ar"`
+	Level    int                 `json:"level"`
+	Children []EpmPortalTreeNode `json:"children,omitempty"`
 }
 
 // EpmPortalStateInfo carries the state name fields needed by the EPM portal.
@@ -1288,6 +1307,7 @@ type IncidentReportAttachment struct {
 	UploadedByID        *uuid.UUID `db:"uploaded_by_id"`
 	UploadedByFirstName string     `db:"uploaded_by_first_name"`
 	UploadedByLastName  string     `db:"uploaded_by_last_name"`
+	UploadedByRole      string     `db:"uploaded_by_role"`
 	CreatedAt           time.Time  `db:"created_at"`
 	DeletedAt           *time.Time `db:"deleted_at"`
 	TransitionName      *string    `db:"transition_name"`
@@ -1315,6 +1335,28 @@ type IncidentReportRevision struct {
 	PerformedByFirstName string     `db:"performed_by_first_name"`
 	PerformedByLastName  string     `db:"performed_by_last_name"`
 	CreatedAt            time.Time  `db:"created_at"`
+}
+
+// ComplaintSourceValidation is a flat result carrying every fact CreateComplaint needs
+// about a candidate source incident, so the validation costs one query instead of a
+// fully-preloaded incident read.
+//
+// StateCode is a pointer because the workflow_states join is a LEFT JOIN: an incident
+// whose current_state_id resolves to no row yields NULL rather than failing the read.
+type ComplaintSourceValidation struct {
+	RecordType       string     `db:"record_type"`
+	StateCode        *string    `db:"state_code"`
+	CreatedAt        time.Time  `db:"created_at"`
+	ReporterPhone    string     `db:"reporter_phone"`
+	ClassificationID *uuid.UUID `db:"classification_id"`
+	LocationID       *uuid.UUID `db:"location_id"`
+
+	// PhoneMatches reports whether the source incident's reporter phone equals the requested
+	// one, ignoring formatting. OpenComplaintExists reports whether this source incident
+	// already has a complaint from that phone which is not yet closed — a closed complaint
+	// does not block a new one, so the reporter can complain again after resolution.
+	PhoneMatches        bool `db:"phone_matches"`
+	OpenComplaintExists bool `db:"open_complaint_exists"`
 }
 
 // IncidentReportData is a flat result for the main incident header/details section of the report.
@@ -1346,6 +1388,7 @@ type IncidentReportData struct {
 	CreatorPhone         string     `db:"creator_phone"`
 	CallerPhone          string     `db:"caller_phone"`
 	CallerName           string     `db:"caller_name"`
+	ReporterEmail        string     `db:"reporter_email"`
 	CreatedByMobile      string     `db:"created_by_mobile"`
 	CreatedByName        string     `db:"created_by_name"`
 	AssigneeFirstName    string     `db:"assignee_first_name"`

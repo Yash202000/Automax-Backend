@@ -27,3 +27,10 @@ func WithReportDataSource(ctx context.Context, dataSource string) context.Contex
 func WithReportTimezone(ctx context.Context, timezone string) context.Context {
 	return context.WithValue(ctx, constants.ContextKeys.REPORT_TIMEZONE, timezone)
 }
+
+// WithReportAccessScope returns a derived context that carries user-level
+// visibility rules (my_record, viewable_roles, department scoping) so
+// incident-based report queries can mirror the incident list endpoint.
+func WithReportAccessScope(ctx context.Context, scope *models.ReportAccessScope) context.Context {
+	return context.WithValue(ctx, constants.ContextKeys.REPORT_ACCESS_SCOPE, scope)
+}

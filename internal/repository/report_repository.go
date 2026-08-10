@@ -126,6 +126,9 @@ func (r *reportRepository) List(ctx context.Context, filter *models.ReportFilter
 	if filter.DataSource != nil && *filter.DataSource != "" {
 		query = query.Where("data_source = ?", *filter.DataSource)
 	}
+	if filter.VisibleToUserID != nil {
+		query = query.Where("(created_by_id = ? OR is_public = ?)", *filter.VisibleToUserID, true)
+	}
 	if filter.CreatedByID != nil {
 		query = query.Where("created_by_id = ?", *filter.CreatedByID)
 	}
@@ -275,6 +278,16 @@ var incidentFilterFields = map[string]string{
 	"assignee_username":   "assignees.username",
 	"assignee_first_name": "assignees.first_name",
 	"assignee_last_name":  "assignees.last_name",
+	// ── Via JOIN: first response (derived table, see frtDerived) ──────────────
+	"first_response_at":          "frt.first_response_at",
+	"first_response_minutes":     "frt.first_response_minutes",
+	"first_response_action":      "frt.first_response_action",
+	"first_response_description": "frt.first_response_description",
+	"first_responder_id":         "frt.first_responder_id",
+	"first_responder_username":   "responder.username",
+	// ── Derived durations: full expressions, since WHERE cannot see a select alias ──
+	"resolution_minutes": "ROUND(EXTRACT(EPOCH FROM (incidents.resolved_at - incidents.created_at)) / 60.0)",
+	"closure_minutes":    "ROUND(EXTRACT(EPOCH FROM (incidents.closed_at - incidents.created_at)) / 60.0)",
 	// ── Subquery-handled (empty col = silently skipped by applyFilters) ───────
 	"workflow_transition_id": "", // handled via IN-subquery in ExecuteIncidentQuery
 	"workflow_transition_at": "", // handled via IN-subquery in ExecuteIncidentQuery
@@ -566,7 +579,10 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 		if col == "" {
 			continue // silently skip; handled by the query function directly (e.g. subquery filters)
 		}
-		if f.Value == nil {
+		// is_null / is_not_null are the only operators that legitimately carry no value, so they
+		// must be exempt from the nil-value guard below - otherwise they are silently dropped and
+		// the filter is a no-op.
+		if f.Value == nil && f.Operator != "is_null" && f.Operator != "is_not_null" {
 			log.Println("skipping filter with nil value for field:", f.Field)
 			continue
 		}
@@ -592,7 +608,7 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 		case "gte":
 			query = query.Where(col+" >= ?", parseDateOrPassthrough(f.Value, loc))
 		case "lte":
-			query = query.Where(col+" <= ?", parseDateOrPassthrough(f.Value, loc))
+			query = query.Where(col+" <= ?", parseDateEndOfDayOrPassthrough(f.Value, loc))
 		case "in":
 			query = query.Where(col+" IN ?", f.Value)
 		case "is_null":
@@ -606,11 +622,21 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 				from, err1 := parseDateFlexible(fromStr, loc)
 				to, err2 := parseDateFlexible(toStr, loc)
 				if err1 == nil && err2 == nil {
+					// Expand date-only "to" value to end-of-day so the full day is included.
+					if isDateOnly(toStr) {
+						to = time.Date(to.Year(), to.Month(), to.Day(), 23, 59, 59, 999999999, to.Location())
+					}
 					query = query.Where(col+" BETWEEN ? AND ?", from, to)
 				}
 			}
 		}
 	}
+
+	// Access scope — my_record + viewable_roles + department scoping.
+	// Only active when the handler sets a ReportAccessScope in context
+	// (i.e. RESTRICT_REPORT_SCOPE=true for incident data sources).
+	query = r.applyReportAccessScope(ctx, query)
+
 	return query
 }
 
@@ -626,6 +652,29 @@ func parseDateOrPassthrough(v interface{}, loc *time.Location) interface{} {
 		return t
 	}
 	return v
+}
+
+// parseDateEndOfDayOrPassthrough is like parseDateOrPassthrough but expands
+// date-only values (YYYY-MM-DD) to end-of-day (23:59:59.999999999) so that
+// an "lte" filter includes the entire day — matching the incident listing behaviour.
+func parseDateEndOfDayOrPassthrough(v interface{}, loc *time.Location) interface{} {
+	s, ok := v.(string)
+	if !ok {
+		return v
+	}
+	if t, err := parseDateFlexible(s, loc); err == nil {
+		if isDateOnly(s) {
+			return time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, t.Location())
+		}
+		return t
+	}
+	return v
+}
+
+// isDateOnly returns true when s is exactly "YYYY-MM-DD" with no time component.
+func isDateOnly(s string) bool {
+	_, err := time.Parse("2006-01-02", s)
+	return err == nil && len(s) == 10
 }
 
 // parseDateFlexible parses date strings in multiple formats:
@@ -669,6 +718,40 @@ func (r *reportRepository) applySorting(query *gorm.DB, sorting *models.ReportSo
 			direction = "DESC"
 		}
 		query = query.Order(sorting.Field + " " + direction)
+	}
+	return query
+}
+
+// applyReportAccessScope reads a ReportAccessScope from ctx and adds WHERE
+// clauses that mirror the incident list handler's my_record + viewable_roles
+// + view_department_only scoping. Enabled by RESTRICT_REPORT_SCOPE=true.
+func (r *reportRepository) applyReportAccessScope(ctx context.Context, query *gorm.DB) *gorm.DB {
+	scope, ok := ctx.Value(constants.ContextKeys.REPORT_ACCESS_SCOPE).(*models.ReportAccessScope)
+	if !ok || scope == nil {
+		return query
+	}
+
+	// Department scoping (mirrors incidents:view_department_only)
+	if scope.ViewDepartmentOnly && len(scope.DepartmentIDs) > 0 {
+		query = query.Where("incidents.department_id IN ?", scope.DepartmentIDs)
+	}
+
+	// my_record + viewable_roles scoping (mirrors !incidents:view_all)
+	if !scope.ViewAll {
+		if len(scope.RoleIDs) > 0 {
+			query = query.Where(
+				`(incidents.reporter_id = ? OR incidents.assignee_id = ?
+				OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)
+				OR incidents.current_state_id IN (SELECT workflow_state_id FROM state_viewable_roles WHERE role_id IN ?))`,
+				scope.UserID, scope.UserID, scope.UserID, scope.RoleIDs,
+			)
+		} else {
+			query = query.Where(
+				`(incidents.reporter_id = ? OR incidents.assignee_id = ?
+				OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?))`,
+				scope.UserID, scope.UserID, scope.UserID,
+			)
+		}
 	}
 	return query
 }
@@ -772,6 +855,93 @@ func (r *reportRepository) ExecuteRequestQuery(ctx context.Context, filters []mo
 	return results, total, nil
 }
 
+// frtQualifyingActions is the action set that stops the first-response clock. Kept as one named
+// list because the requirement anticipates making it business-configurable later; when that lands,
+// this is the only thing that has to become a lookup.
+//
+// Deliberately excluded: 'created' (that is the clock start itself), comments and attachments
+// (intake attaches files while logging the call, which collapses the metric to zero), and
+// 'ivr_sms_submitted' (that is the citizen replying via the SMS link, not staff responding).
+var frtQualifyingActions = []string{
+	string(models.RevisionActionStatusChanged),
+	string(models.RevisionActionAssigneeChanged),
+	string(models.RevisionActionFieldChange),
+	string(models.RevisionActionIVRSmsSent),
+}
+
+// frtDerived is the first-response derived table joined into the incident report query.
+//
+// DISTINCT ON (incident_id) makes it strictly 1:1 with incidents, which is what lets it be a LEFT
+// JOIN inside buildBase() without changing the COUNT - the workflow_transition_id filter has to use
+// an IN-subquery instead precisely because its join would fan out.
+//
+// first_response_minutes is computed in here (via the join back to incidents) rather than in the
+// outer SELECT so that it is a real column: Postgres cannot reference a select alias in WHERE, and
+// filtering on it is what the future SLA-threshold work needs.
+const frtDerived = `LEFT JOIN (
+	SELECT DISTINCT ON (ir.incident_id)
+	       ir.incident_id,
+	       ir.created_at         AS first_response_at,
+	       ir.action_type        AS first_response_action,
+	       ir.action_description AS first_response_description,
+	       ir.performed_by_id    AS first_responder_id,
+	       CONCAT(fu.first_name, ' ', fu.last_name) AS first_responder_name,
+	       ROUND(EXTRACT(EPOCH FROM (ir.created_at - fi.created_at)) / 60.0)::bigint
+	                          AS first_response_minutes
+	FROM incident_revisions ir
+	JOIN incidents fi ON fi.id = ir.incident_id
+	JOIN users fu ON fu.id = ir.performed_by_id
+	WHERE ir.action_type IN (?)
+	  -- system actors: the uuid.Nil performer, plus the raw-SQL writes in ready_to_close_service
+	  -- that stamp performed_by_roles = ["system"]
+	  AND ir.performed_by_id <> '00000000-0000-0000-0000-000000000000'::uuid
+	  AND COALESCE(ir.performed_by_roles, '') <> '["system"]'
+	  -- staff only: must hold a role, and must hold no citizen/contractor role. The looser
+	  -- "has any non-citizen role" test is wrong on this data - IVR-provisioned citizen accounts
+	  -- that were later granted staff roles leak in as false first-responders.
+	  AND EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = ir.performed_by_id)
+	  AND NOT EXISTS (
+	      SELECT 1 FROM user_roles ur
+	      JOIN roles r ON r.id = ur.role_id
+	      WHERE ur.user_id = ir.performed_by_id AND r.code IN ('citizen', 'contractor'))
+	-- revision_number breaks ties: a partial-close transition writes two status_changed rows with
+	-- the same created_at (see the two CreateRevision calls in ExecuteTransition)
+	ORDER BY ir.incident_id, ir.created_at, ir.revision_number
+) frt ON frt.incident_id = incidents.id
+	-- clock-skew guard: a "response" recorded before creation is not a response. Kept in the ON
+	-- clause so a skewed row yields a NULL first response instead of dropping the incident.
+	AND frt.first_response_at >= incidents.created_at`
+
+// reportTimestampLayout is how report cells render a date and time for a reader:
+// day-first with a 12-hour clock, e.g. "06-08-2026 02:35 PM".
+const reportTimestampLayout = "02-01-2006 03:04 PM"
+
+// formatReportTimestamp renders a scanned timestamp in loc using reportTimestampLayout.
+// A NULL, zero, or unparseable value yields "" - a report cell that says nothing is
+// correct for "this never happened", whereas a fabricated date is not.
+func formatReportTimestamp(v interface{}, loc *time.Location) string {
+	switch t := v.(type) {
+	case time.Time:
+		if t.IsZero() {
+			return ""
+		}
+		return t.In(loc).Format(reportTimestampLayout)
+	case string:
+		// Defensive: pgx hands back time.Time for timestamptz, but a driver or query
+		// change that starts returning text should not silently drop the column.
+		if t == "" {
+			return ""
+		}
+		parsed, err := utils.ParseTimeFlexible(t)
+		if err != nil {
+			return t
+		}
+		return parsed.In(loc).Format(reportTimestampLayout)
+	default:
+		return ""
+	}
+}
+
 // Data queries for report execution
 func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
 	var total int64
@@ -782,13 +952,19 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 	// (b) GORM statement accumulation does not duplicate JOINs across Count + Rows calls.
 	buildBase := func() *gorm.DB {
 		q := r.db.WithContext(ctx).Model(&models.Incident{}).Debug().
-			Joins("LEFT JOIN users as creator ON incidents.reporter_id = creator.id").
-			Joins("LEFT JOIN users as assignees ON incidents.assignee_id = assignees.id").
-			Joins("LEFT JOIN workflow_states ON incidents.current_state_id = workflow_states.id").
-			Joins("LEFT JOIN classifications ON incidents.classification_id = classifications.id").
-			Joins("LEFT JOIN departments ON incidents.department_id = departments.id").
-			Joins("LEFT JOIN locations ON incidents.location_id = locations.id").
-			Joins("LEFT JOIN workflows ON incidents.workflow_id = workflows.id")
+			// Restrict to actual incidents, matching how ExecuteRequestQuery scopes itself. The
+			// workflows join below filters on the *workflow's* record_type, which is not the same
+			// thing: some records carry a record_type that disagrees with their workflow's.
+			Where("incidents.record_type = ?", "incident").
+			Joins("LEFT JOIN users as creator ON incidents.reporter_id = creator.id AND creator.deleted_at IS NULL").
+			Joins("LEFT JOIN users as assignees ON incidents.assignee_id = assignees.id AND assignees.deleted_at IS NULL").
+			Joins("INNER JOIN workflows ON incidents.workflow_id = workflows.id AND workflows.record_type = ? AND workflows.deleted_at IS NULL", "incident").
+			Joins("LEFT JOIN workflow_states ON incidents.current_state_id = workflow_states.id AND workflow_states.deleted_at IS NULL").
+			Joins("LEFT JOIN classifications ON incidents.classification_id = classifications.id AND classifications.deleted_at IS NULL").
+			Joins("LEFT JOIN departments ON incidents.department_id = departments.id AND departments.deleted_at IS NULL").
+			Joins("LEFT JOIN locations ON incidents.location_id = locations.id AND locations.deleted_at IS NULL").
+			Joins(frtDerived, frtQualifyingActions).
+			Joins("LEFT JOIN users as responder ON responder.id = frt.first_responder_id AND responder.deleted_at IS NULL")
 
 		// workflow_transition_id: optional filter — restricts to incidents that have
 		// passed through at least one matching transition (name or code match).
@@ -856,7 +1032,7 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 		return r.applyFilters(ctx, q, filters)
 	}
 
-	if err := buildBase().Count(&total).Error; err != nil {
+	if err := buildBase().Count(&total).Debug().Error; err != nil {
 		return nil, 0, err
 	}
 
@@ -877,7 +1053,27 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			"classifications.name as classification_name, " +
 			"departments.name as department_name, " +
 			"locations.name as location_name, " +
-			"workflows.name as workflow_name").
+			"workflows.name as workflow_name, " +
+			// First Response Time and the responding agent. Aliases must match the logical field
+			// names exactly - row assembly keys rawRow on the SQL alias.
+			"frt.first_response_at as first_response_at, " +
+			"frt.first_response_minutes as first_response_minutes, " +
+			"frt.first_response_action as first_response_action, " +
+			// The human-readable audit line for the qualifying action, e.g.
+			// "Status changed from New to In Progress" or the request-info SMS text.
+			"NULLIF(frt.first_response_description, '') as first_response_description, " +
+			"frt.first_responder_id as first_responder_id, " +
+			"responder.username as first_responder_username, " +
+			// NULLIF keeps this NULL rather than '' when there is no responder, so all eight FRT
+			// columns agree on how "no first response" is represented.
+			"NULLIF(TRIM(COALESCE(responder.first_name, '') || ' ' || COALESCE(responder.last_name, '')), '') as first_responder_name, " +
+			"(frt.first_responder_id = incidents.reporter_id) as responded_by_creator, " +
+			// Resolution and closure elapsed time, for comparison against response time. Both read
+			// NULL wherever the underlying timestamp is NULL, which is common: resolved_at is only
+			// set for a terminal state literally coded 'resolved', and closed_at was added
+			// retroactively so historic rows have none.
+			"ROUND(EXTRACT(EPOCH FROM (incidents.resolved_at - incidents.created_at)) / 60.0)::bigint as resolution_minutes, " +
+			"ROUND(EXTRACT(EPOCH FROM (incidents.closed_at - incidents.created_at)) / 60.0)::bigint as closure_minutes").
 		Offset(offset).
 		Limit(limit).
 		Rows()
@@ -891,6 +1087,13 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 	protocol, _ := ctx.Value(constants.ContextKeys.PROTOCOL).(string)
 	token, _ := ctx.Value(constants.ContextKeys.Token).(string)
 
+	// Resolve the user's timezone for the timestamps this function formats itself.
+	// convertDataTimezone in the service only shifts time.Time values, so once a
+	// timestamp is rendered to a string here it is this function's job to have put
+	// it in the right zone first.
+	tzStr, _ := ctx.Value(constants.ContextKeys.REPORT_TIMEZONE).(string)
+	loc := utils.ResolveTimezone(tzStr)
+
 	// Extract requested columns for dynamic row construction and enrichment filtering.
 	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
 	// colFieldSet: keyed by col.Field — used by hasCol to detect which enrichments to run.
@@ -898,9 +1101,18 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 	// caller-supplied label rather than a hardcoded display name.
 	colFieldSet := make(map[string]bool, len(reqColumns))
 	fieldToLabel := make(map[string]string, len(reqColumns))
+	// labelOwner tracks which field claimed each label. Rows are keyed by label, so two
+	// requested fields sharing one label silently overwrite each other and both columns
+	// end up rendering the same value — worth a warning rather than a silent collision.
+	labelOwner := make(map[string]string, len(reqColumns))
 	for _, col := range reqColumns {
 		colFieldSet[col.Field] = true
 		fieldToLabel[col.Field] = col.Label
+		if prev, dup := labelOwner[col.Label]; dup {
+			log.Printf("report columns: label %q requested by both %q and %q — the later value wins and both columns will show it",
+				col.Label, prev, col.Field)
+		}
+		labelOwner[col.Label] = col.Field
 	}
 
 	cols, _ := rows.Columns()
@@ -936,7 +1148,17 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 		if len(reqColumns) > 0 {
 
 			for _, col := range reqColumns {
-				row[col.Label] = rawRow[col.Field]
+				switch col.Field {
+				case "first_response_at":
+					row[col.Label] = formatReportTimestamp(rawRow[col.Field], loc)
+				case "first_response_time":
+					// Derived in Go only - there is no SQL alias for it. The minutes it
+					// reads are always selected, whether or not the caller also asked for
+					// the numeric column, so this works standalone.
+					row[col.Label] = utils.FormatMinutesValue(rawRow["first_response_minutes"])
+				default:
+					row[col.Label] = rawRow[col.Field]
+				}
 			}
 			// Always carry the internal "id" field so enrichment can key results.
 			if _, ok := row["id"]; !ok {
@@ -1003,6 +1225,10 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 			for k, v := range rawRow {
 				row[k] = v
 			}
+			// Same two derivations as the requested-columns branch above, so a caller
+			// that supplies no column list sees the identical shape.
+			row["first_response_at"] = formatReportTimestamp(rawRow["first_response_at"], loc)
+			row["first_response_time"] = utils.FormatMinutesValue(rawRow["first_response_minutes"])
 		}
 
 		results = append(results, row)
@@ -1139,19 +1365,30 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 		// 6. Before attachments
 		var beforeAttachMap map[string][]string
 		if hasCol("before_attachments", "before_attachment_array") {
-			beforeAttachMap, _ = r.fetchBeforeAttachments(ctx, incidentIDs, protocol, hostname, token)
+			var err error
+			if beforeAttachMap, err = r.fetchBeforeAttachments(ctx, incidentIDs, protocol, hostname, token); err != nil {
+				// Continue with an empty map: the export still renders, but without this
+				// log a failed fetch is indistinguishable from "no attachments exist".
+				log.Printf("report export: before_attachments fetch failed for %d incident(s), column will be empty: %v", len(incidentIDs), err)
+			}
 		}
 
 		// 7. After attachments
 		var afterAttachMap map[string][]string
 		if hasCol("after_attachments", "after_attachment_array") {
-			afterAttachMap, _ = r.fetchAfterAttachments(ctx, incidentIDs, protocol, hostname, token)
+			var err error
+			if afterAttachMap, err = r.fetchAfterAttachments(ctx, incidentIDs, protocol, hostname, token); err != nil {
+				log.Printf("report export: after_attachments fetch failed for %d incident(s), column will be empty: %v", len(incidentIDs), err)
+			}
 		}
 
 		// 8. All attachments
 		var allAttachMap map[string][]string
 		if hasCol("attachments") {
-			allAttachMap, _ = r.fetchAllAttachments(ctx, incidentIDs, protocol, hostname, token)
+			var err error
+			if allAttachMap, err = r.fetchAllAttachments(ctx, incidentIDs, protocol, hostname, token); err != nil {
+				log.Printf("report export: attachments fetch failed for %d incident(s), column will be empty: %v", len(incidentIDs), err)
+			}
 		}
 
 		// 9. Feedback
@@ -1353,21 +1590,27 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 				setField(results[i], "contractor_comment", cc)
 			}
 
+			// Attachment fields always carry the URL list as a []string. There is no
+			// joined-string form: the exporters expand one attachment per cell, which
+			// needs the real count, and a "a | b" string cannot be counted reliably.
+			// The *_attachment_array names are kept as aliases carrying the identical
+			// slice, so report templates saved against the old names keep working.
+
 			// Before attachments (creator/agent uploads)
 			if urls := beforeAttachMap[incidentID]; len(urls) > 0 {
-				setField(results[i], "before_attachments", strings.Join(urls, " | "))
+				setField(results[i], "before_attachments", urls)
 				setField(results[i], "before_attachment_array", urls)
 			}
 
 			// After attachments (contractor uploads during transitions)
 			if urls := afterAttachMap[incidentID]; len(urls) > 0 {
-				setField(results[i], "after_attachments", strings.Join(urls, " | "))
+				setField(results[i], "after_attachments", urls)
 				setField(results[i], "after_attachment_array", urls)
 			}
 
 			// All attachments
 			if urls := allAttachMap[incidentID]; len(urls) > 0 {
-				setField(results[i], "attachments", strings.Join(urls, " | "))
+				setField(results[i], "attachments", urls)
 			}
 
 			// Closed feedback
@@ -1506,8 +1749,11 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 							log.Println("code for feedback ", code, enrich.Feedback)
 							setField(results[i], code+"_feedback", enrich.Feedback)
 						}
+						// Singular and plural names both carry the same []string; the
+						// singular used to hold a joined string, which broke per-cell
+						// attachment expansion in the exporters.
 						if len(enrich.Attachments) > 0 {
-							setField(results[i], code+"_attachment", strings.Join(enrich.Attachments, " | "))
+							setField(results[i], code+"_attachment", enrich.Attachments)
 							setField(results[i], code+"_attachments", enrich.Attachments)
 						}
 					}
@@ -2011,6 +2257,29 @@ func (r *reportRepository) fetchAfterAttachments(ctx context.Context, incidentID
 	return r.scanAttachmentURLs(ctx, query, incidentIDs, protocol, hostname, token)
 }
 
+// idBatchSize bounds how many IDs go into a single `IN (?)` clause. PostgreSQL's
+// extended protocol allows at most 65535 bind parameters per statement, and each
+// ID costs one, so anything approaching that ceiling must be batched. 20000 keeps
+// a wide margin for the other parameters a query may carry.
+const idBatchSize = 20000
+
+// chunkIDs splits ids into batches of at most size. It returns a single batch for
+// short lists, so the common case allocates nothing extra.
+func chunkIDs(ids []string, size int) [][]string {
+	if len(ids) <= size {
+		return [][]string{ids}
+	}
+	batches := make([][]string, 0, (len(ids)+size-1)/size)
+	for start := 0; start < len(ids); start += size {
+		end := start + size
+		if end > len(ids) {
+			end = len(ids)
+		}
+		batches = append(batches, ids[start:end])
+	}
+	return batches
+}
+
 // fetchAllAttachments returns preview URLs for ALL non-deleted attachments,
 // grouped by incident ID.
 func (r *reportRepository) fetchAllAttachments(ctx context.Context, incidentIDs []string, protocol, hostname, token string) (map[string][]string, error) {
@@ -2030,24 +2299,33 @@ func (r *reportRepository) fetchAllAttachments(ctx context.Context, incidentIDs 
 
 // scanAttachmentURLs is a shared scanner used by the three attachment fetchers.
 func (r *reportRepository) scanAttachmentURLs(ctx context.Context, query string, incidentIDs []string, protocol, hostname, token string) (map[string][]string, error) {
-	rows, err := r.db.WithContext(ctx).Raw(query, incidentIDs).Rows()
-	if err != nil {
-		return nil, fmt.Errorf("scanAttachmentURLs query failed: %w", err)
+	apiPrefix := "/api/v1/attachments/"
+	if path := os.Getenv("VD2_STAGING_API_PREFIX"); path != "" {
+		apiPrefix = fmt.Sprintf("/%s%s", path, apiPrefix)
 	}
-	defer rows.Close()
 
 	result := make(map[string][]string)
-	for rows.Next() {
-		var incidentID, attachID string
-		if err := rows.Scan(&incidentID, &attachID); err != nil {
-			continue
+
+	// One bind parameter per ID, so the full list must be batched: PostgreSQL's
+	// extended protocol rejects a statement carrying more than 65535 parameters.
+	// A 90k-row export used to blow past that, and because every caller assigns
+	// this function's error to _, the whole export silently rendered "-" in every
+	// attachment cell instead of failing.
+	for _, batch := range chunkIDs(incidentIDs, idBatchSize) {
+		rows, err := r.db.WithContext(ctx).Raw(query, batch).Rows()
+		if err != nil {
+			log.Printf("scanAttachmentURLs: batch of %d ids failed: %v", len(batch), err)
+			return nil, fmt.Errorf("scanAttachmentURLs query failed: %w", err)
 		}
-		apiPrefix := "/api/v1/attachments/"
-		if path := os.Getenv("VD2_STAGING_API_PREFIX"); path != "" {
-			apiPrefix = fmt.Sprintf("/%s%s", path, apiPrefix)
+		for rows.Next() {
+			var incidentID, attachID string
+			if err := rows.Scan(&incidentID, &attachID); err != nil {
+				continue
+			}
+			url := protocol + "://" + hostname + apiPrefix + attachID + "/preview?token=" + token
+			result[incidentID] = append(result[incidentID], url)
 		}
-		url := protocol + "://" + hostname + apiPrefix + attachID + "/preview?token=" + token
-		result[incidentID] = append(result[incidentID], url)
+		rows.Close()
 	}
 	return result, nil
 }
@@ -2589,8 +2867,8 @@ func (r *reportRepository) ExecuteUserPerformanceQuery(ctx context.Context, filt
 	results := make([]map[string]interface{}, 0, len(entries))
 	for _, e := range entries {
 		commentStr := commentsMap[e.transitionID]
+		// []string, not a joined string — see the attachment note in ExecuteIncidentQuery.
 		attachURLs := attachMap[e.transitionID]
-		attachStr := strings.Join(attachURLs, " | ")
 		log.Println(e.locationName)
 		rawRow := map[string]interface{}{
 			"incident_number": e.incidentNumber,
@@ -2603,8 +2881,8 @@ func (r *reportRepository) ExecuteUserPerformanceQuery(ctx context.Context, filt
 			"location_name":   e.locationName,
 			"location":        e.locationName,
 			"classification":  e.classificationName,
-			"attachment":      attachStr,
-			"attachments":     attachStr,
+			"attachment":      attachURLs,
+			"attachments":     attachURLs,
 		}
 
 		row := make(map[string]interface{})
@@ -2664,28 +2942,34 @@ func (r *reportRepository) fetchAttachmentsByTransition(ctx context.Context, tra
 	if len(transitionIDs) == 0 || hostname == "" {
 		return result, nil
 	}
-	rows, err := r.db.WithContext(ctx).Raw(`
-		SELECT ia.transition_history_id::text, ia.id::text
-		FROM incident_attachments ia
-		WHERE ia.transition_history_id::text IN (?)
-		  AND ia.deleted_at IS NULL
-		ORDER BY ia.transition_history_id, ia.created_at ASC
-	`, transitionIDs).Rows()
-	if err != nil {
-		return result, err
+	apiPrefix := "/api/v1/attachments/"
+	if path := os.Getenv("VD2_STAGING_API_PREFIX"); path != "" {
+		apiPrefix = fmt.Sprintf("/%s%s", path, apiPrefix)
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var tid, attachID string
-		if err := rows.Scan(&tid, &attachID); err != nil {
-			continue
+
+	// Batched for the same reason as scanAttachmentURLs: one bind parameter per ID
+	// against PostgreSQL's 65535-parameter ceiling.
+	for _, batch := range chunkIDs(transitionIDs, idBatchSize) {
+		rows, err := r.db.WithContext(ctx).Raw(`
+			SELECT ia.transition_history_id::text, ia.id::text
+			FROM incident_attachments ia
+			WHERE ia.transition_history_id::text IN (?)
+			  AND ia.deleted_at IS NULL
+			ORDER BY ia.transition_history_id, ia.created_at ASC
+		`, batch).Rows()
+		if err != nil {
+			log.Printf("fetchAttachmentsByTransition: batch of %d ids failed: %v", len(batch), err)
+			return result, err
 		}
-		apiPrefix := "/api/v1/attachments/"
-		if path := os.Getenv("VD2_STAGING_API_PREFIX"); path != "" {
-			apiPrefix = fmt.Sprintf("/%s%s", path, apiPrefix)
+		for rows.Next() {
+			var tid, attachID string
+			if err := rows.Scan(&tid, &attachID); err != nil {
+				continue
+			}
+			url := protocol + "://" + hostname + apiPrefix + attachID + "/preview?token=" + token
+			result[tid] = append(result[tid], url)
 		}
-		url := protocol + "://" + hostname + apiPrefix + attachID + "/preview?token=" + token
-		result[tid] = append(result[tid], url)
+		rows.Close()
 	}
 	return result, nil
 }

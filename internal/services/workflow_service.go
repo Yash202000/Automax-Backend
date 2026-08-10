@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -20,6 +23,7 @@ type WorkflowService interface {
 	GetWorkflow(ctx context.Context, id uuid.UUID) (*models.WorkflowResponse, error)
 	ListWorkflows(ctx context.Context, activeOnly bool) ([]models.WorkflowResponse, error)
 	ListWorkflowsByRecordType(ctx context.Context, recordType string, activeOnly bool) ([]models.WorkflowResponse, error)
+	ListWorkflowsFiltered(ctx context.Context, filter *models.WorkflowFilter) ([]models.WorkflowResponse, int64, error)
 	UpdateWorkflow(ctx context.Context, id uuid.UUID, req *models.WorkflowUpdateRequest) (*models.WorkflowResponse, error)
 	DeleteWorkflow(ctx context.Context, id uuid.UUID) error
 	PermanentDeleteWorkflow(ctx context.Context, id uuid.UUID) error
@@ -40,6 +44,7 @@ type WorkflowService interface {
 
 	// Check Workflow Existence by Code or Name
 	WorkflowExistsByCodeOrName(ctx context.Context, codeOrName []string) error
+	WorkflowExistsByName(ctx context.Context, name string) error
 
 	// Transition management
 	CreateTransition(ctx context.Context, workflowID uuid.UUID, req *models.WorkflowTransitionCreateRequest) (*models.WorkflowTransitionResponse, error)
@@ -272,6 +277,58 @@ func (s *workflowService) checkForDuplicateRules(
 
 // Workflow CRUD
 
+// slugifyWorkflowName converts a workflow name into a lowercase, underscore-
+// separated code, e.g. "Incident Management" -> "incident_management".
+// Runs of non-alphanumeric characters collapse to a single underscore, and
+// leading/trailing underscores are trimmed.
+func slugifyWorkflowName(name string) string {
+	var b strings.Builder
+	prevUnderscore := true // treat start-of-string as "just wrote a separator" to skip leading underscores
+	for _, r := range strings.ToLower(name) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevUnderscore = false
+		default:
+			if !prevUnderscore {
+				b.WriteByte('_')
+				prevUnderscore = true
+			}
+		}
+	}
+	return strings.TrimSuffix(b.String(), "_")
+}
+
+// generateUniqueWorkflowCode derives a Workflow Code from the given name and
+// guarantees it doesn't collide with an existing code by appending a numeric
+// suffix (_2, _3, ...) when needed. The Workflow Code is always
+// system-generated and is never accepted from the client.
+func (s *workflowService) generateUniqueWorkflowCode(ctx context.Context, name string) (string, error) {
+	base := slugifyWorkflowName(name)
+	if base == "" {
+		base = "workflow"
+	}
+	const maxBaseLen = 90 // leave room for a "_<n>" suffix within the 100-char column
+	if len(base) > maxBaseLen {
+		base = strings.TrimSuffix(base[:maxBaseLen], "_")
+	}
+
+	code := base
+	for attempt := 1; attempt <= 1000; attempt++ {
+		if attempt > 1 {
+			code = fmt.Sprintf("%s_%d", base, attempt)
+		}
+		_, err := s.repo.FindByCode(ctx, code)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return code, nil
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("unable to generate a unique workflow code for %q", name)
+}
+
 func (s *workflowService) CreateWorkflow(ctx context.Context, req *models.WorkflowCreateRequest, createdByID uuid.UUID) (*models.WorkflowResponse, error) {
 	// Convert RequiredFields array to JSON string
 	requiredFieldsJSON := "[]"
@@ -352,10 +409,21 @@ func (s *workflowService) CreateWorkflow(ctx context.Context, req *models.Workfl
 		}
 	}
 
+	// Workflow Code is system-generated only for EPM940; other clients (e.g.
+	// VD2) keep supplying their own code, as before.
+	code := req.Code
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+		generated, err := s.generateUniqueWorkflowCode(ctx, req.Name)
+		if err != nil {
+			return nil, err
+		}
+		code = generated
+	}
+
 	workflow := &models.Workflow{
 		Name:           req.Name,
 		NameAr:         req.NameAr,
-		Code:           req.Code,
+		Code:           code,
 		Description:    req.Description,
 		DescriptionAr:  req.DescriptionAr,
 		RecordType:     recordType,
@@ -445,6 +513,20 @@ func (s *workflowService) ListWorkflowsByRecordType(ctx context.Context, recordT
 	}
 
 	return responses, nil
+}
+
+func (s *workflowService) ListWorkflowsFiltered(ctx context.Context, filter *models.WorkflowFilter) ([]models.WorkflowResponse, int64, error) {
+	workflows, total, err := s.repo.ListFiltered(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	responses := make([]models.WorkflowResponse, len(workflows))
+	for i, w := range workflows {
+		responses[i] = models.ToWorkflowResponse(&w)
+	}
+
+	return responses, total, nil
 }
 
 func (s *workflowService) UpdateWorkflow(ctx context.Context, id uuid.UUID, req *models.WorkflowUpdateRequest) (*models.WorkflowResponse, error) {
@@ -544,7 +626,9 @@ func (s *workflowService) UpdateWorkflow(ctx context.Context, id uuid.UUID, req 
 	if req.NameAr != "" {
 		workflow.NameAr = req.NameAr
 	}
-	if req.Code != "" {
+	// Workflow Code is system-generated at creation and is non-editable for
+	// EPM940. Other clients (e.g. VD2) may still update it.
+	if req.Code != "" && !strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
 		workflow.Code = req.Code
 	}
 	if req.Description != "" {
@@ -662,6 +746,20 @@ func (s *workflowService) WorkflowExistsByCodeOrName(ctx context.Context, codeOr
 	return nil
 }
 
+// WorkflowExistsByName reports whether a workflow with this name already
+// exists. The Workflow Code is system-generated, so callers creating or
+// renaming a workflow only need to pre-check the name for uniqueness.
+func (s *workflowService) WorkflowExistsByName(ctx context.Context, name string) error {
+	exists, err := s.repo.ExistsByName(ctx, name)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("workflow with name '%s' already exists", name)
+	}
+	return nil
+}
+
 func (s *workflowService) DeleteWorkflow(ctx context.Context, id uuid.UUID) error {
 	// Soft delete - marks workflow as deleted but keeps in database
 	return s.repo.Delete(ctx, id)
@@ -696,9 +794,20 @@ func (s *workflowService) DuplicateWorkflow(ctx context.Context, id uuid.UUID, c
 	}
 
 	// Create new workflow
+	newName := fmt.Sprintf("%s (Copy)", original.Name)
+	var newCode string
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+		generated, err := s.generateUniqueWorkflowCode(ctx, newName)
+		if err != nil {
+			return nil, err
+		}
+		newCode = generated
+	} else {
+		newCode = fmt.Sprintf("%s_copy_%s", original.Code, uuid.New().String()[:8])
+	}
 	newWorkflow := &models.Workflow{
-		Name:         fmt.Sprintf("%s (Copy)", original.Name),
-		Code:         fmt.Sprintf("%s_copy_%s", original.Code, uuid.New().String()[:8]),
+		Name:         newName,
+		Code:         newCode,
 		Description:  original.Description,
 		CanvasLayout: original.CanvasLayout,
 		CreatedByID:  &createdByID,
@@ -837,6 +946,131 @@ func (s *workflowService) GetWorkflowByClassification(ctx context.Context, class
 
 // State management
 
+// SLAViolationGroup collects the classifications that share the same criticality and the same
+// configured maximum incident closure SLA, so the UI can render one row per distinct
+// (criticality, max SLA) combination instead of one row per classification.
+type SLAViolationGroup struct {
+	CriticalityID        uuid.UUID `json:"criticality_id"`
+	CriticalityName      string    `json:"criticality_name"`
+	MaxAllowedSLAMinutes int       `json:"max_allowed_sla_minutes"`
+	MaxAllowedSLALabel   string    `json:"max_allowed_sla_label"`
+	ClassificationCount  int       `json:"classification_count"`
+	Classifications      []string  `json:"classifications"`
+}
+
+// SLAValidationError marks a business-rule SLA violation that should be surfaced to the
+// admin as a blocking 400/422 response rather than a generic 500. It carries the full set of
+// classification/criticality violations (grouped) so the UI can render a details view instead
+// of just a single offending classification.
+type SLAValidationError struct {
+	msg                  string
+	WorkflowSLALabel     string               `json:"workflow_sla_label"`
+	TotalClassifications int                  `json:"total_classification_count"`
+	Groups               []SLAViolationGroup  `json:"violations"`
+}
+
+func (e *SLAValidationError) Error() string { return e.msg }
+
+// ValidateStateSLAAgainstClosureSLA blocks a state SLA that exceeds the maximum incident closure
+// SLA configured (Classification -> Criticality -> MaxClosingHours/Minutes) for ANY classification
+// linked to this workflow. Every classification+criticality combination the state SLA exceeds is
+// collected and grouped by (criticality, max allowed SLA) so the caller can report the full set of
+// affected classifications rather than just the single worst offender.
+func (s *workflowService) ValidateStateSLAAgainstClosureSLA(ctx context.Context, workflowID uuid.UUID, slaHours *int, slaUnit string) error {
+	if slaHours == nil || *slaHours <= 0 {
+		return nil
+	}
+
+	stateDuration := (&models.WorkflowState{SLAHours: slaHours, SLAUnit: slaUnit}).SLADuration()
+
+	workflow, err := s.repo.FindByIDWithRelations(ctx, workflowID)
+	if err != nil {
+		return err
+	}
+
+	type groupKey struct {
+		criticalityID uuid.UUID
+		maxDuration   time.Duration
+	}
+	groups := map[groupKey]*SLAViolationGroup{}
+	var order []groupKey
+
+	for _, classification := range workflow.Classifications {
+		criticalities, err := s.classRepo.GetCriticalitiesByClassificationID(ctx, classification.ID)
+		if err != nil {
+			return err
+		}
+
+		for _, crit := range criticalities {
+			if !crit.IsActive {
+				continue
+			}
+			maxDuration := time.Duration(crit.MaxClosingHours)*time.Hour + time.Duration(crit.MaxClosingMinutes)*time.Minute
+			if maxDuration <= 0 || stateDuration <= maxDuration {
+				continue
+			}
+
+			criticalityName := "Unspecified"
+			if crit.Criticality != nil && crit.Criticality.Name != "" {
+				criticalityName = crit.Criticality.Name
+			}
+
+			key := groupKey{criticalityID: crit.CriticalityID, maxDuration: maxDuration}
+			g, exists := groups[key]
+			if !exists {
+				g = &SLAViolationGroup{
+					CriticalityID:        crit.CriticalityID,
+					CriticalityName:      criticalityName,
+					MaxAllowedSLAMinutes: int(maxDuration.Minutes()),
+					MaxAllowedSLALabel:   FormatSLADuration(maxDuration),
+				}
+				groups[key] = g
+				order = append(order, key)
+			}
+			g.Classifications = append(g.Classifications, classification.Name)
+			g.ClassificationCount = len(g.Classifications)
+		}
+	}
+
+	if len(groups) == 0 {
+		return nil
+	}
+
+	result := make([]SLAViolationGroup, 0, len(order))
+	total := 0
+	for _, key := range order {
+		result = append(result, *groups[key])
+		total += groups[key].ClassificationCount
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].MaxAllowedSLAMinutes < result[j].MaxAllowedSLAMinutes
+	})
+
+	return &SLAValidationError{
+		msg: fmt.Sprintf(
+			"The configured workflow SLA duration (%s) exceeds the maximum incident closure SLA for %d classification(s). Please reduce the workflow duration before saving.",
+			FormatSLADuration(stateDuration), total,
+		),
+		WorkflowSLALabel:     FormatSLADuration(stateDuration),
+		TotalClassifications: total,
+		Groups:               result,
+	}
+}
+
+// FormatSLADuration renders a duration as "Xh Ym" (or just "Xh"/"Ym") for error messages.
+func FormatSLADuration(d time.Duration) string {
+	totalMinutes := int(d.Minutes())
+	hours := totalMinutes / 60
+	minutes := totalMinutes % 60
+	if minutes == 0 {
+		return fmt.Sprintf("%d hours", hours)
+	}
+	if hours == 0 {
+		return fmt.Sprintf("%d minutes", minutes)
+	}
+	return fmt.Sprintf("%dh %dm", hours, minutes)
+}
+
 func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID, req *models.WorkflowStateCreateRequest) (*models.WorkflowStateResponse, error) {
 	// Serialise DurationOptions to JSON if provided
 	var durationOptionsJSON string
@@ -846,11 +1080,18 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 		}
 	}
 
+	// EPM940 auto-generates the State Code (STE-######) in the repository, so leave
+	// it empty here; other clients (e.g. VD2) keep supplying their own code.
+	code := req.Code
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+		code = ""
+	}
+
 	state := &models.WorkflowState{
 		WorkflowID:                   workflowID,
 		Name:                         req.Name,
 		NameAr:                       req.NameAr,
-		Code:                         req.Code,
+		Code:                         code,
 		Description:                  req.Description,
 		DescriptionAr:                req.DescriptionAr,
 		StateType:                    req.StateType,
@@ -887,6 +1128,10 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 	}
 	if state.Color == "" {
 		state.Color = "#6366f1"
+	}
+
+	if err := s.ValidateStateSLAAgainstClosureSLA(ctx, workflowID, state.SLAHours, state.SLAUnit); err != nil {
+		return nil, err
 	}
 
 	if err := s.repo.CreateState(ctx, state); err != nil {
@@ -1069,6 +1314,10 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 		state.NewIncidentSMSTemplateCode = *req.NewIncidentSMSTemplateCode
 	}
 
+	if err := s.ValidateStateSLAAgainstClosureSLA(ctx, state.WorkflowID, state.SLAHours, state.SLAUnit); err != nil {
+		return nil, err
+	}
+
 	if err := s.repo.UpdateState(ctx, state); err != nil {
 		return nil, err
 	}
@@ -1145,11 +1394,18 @@ func (s *workflowService) CreateTransition(ctx context.Context, workflowID uuid.
 		return nil, errors.New("invalid to_state_id")
 	}
 
+	// EPM940 auto-generates the Transition Code (TRN-######) in the repository, so
+	// leave it empty here; other clients (e.g. VD2) keep supplying their own code.
+	code := req.Code
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+		code = ""
+	}
+
 	transition := &models.WorkflowTransition{
 		WorkflowID:           workflowID,
 		Name:                 req.Name,
 		NameAr:               req.NameAr,
-		Code:                 req.Code,
+		Code:                 code,
 		Description:          req.Description,
 		DescriptionAr:        req.DescriptionAr,
 		FromStateID:          fromStateID,
@@ -1405,6 +1661,7 @@ func (s *workflowService) SetTransitionRequirements(ctx context.Context, transit
 			FieldName:       req.FieldName,
 			FieldValue:      req.FieldValue,
 			IsMandatory:     req.IsMandatory,
+			IsMultiple:      req.IsMultiple,
 			ErrorMessage:    req.ErrorMessage,
 		}
 	}

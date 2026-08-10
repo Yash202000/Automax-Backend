@@ -24,6 +24,7 @@ type IncidentRepository interface {
 	FindByIncidentNumber(ctx context.Context, number string) (*models.Incident, error)
 	FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.Incident, error)
 	List(ctx context.Context, filter *models.IncidentFilter) ([]models.Incident, int64, error)
+	ListMapMarkers(ctx context.Context, filter *models.IncidentFilter, maxMarkers int) ([]models.IncidentMapMarker, int64, error)
 	Update(ctx context.Context, incident *models.Incident) error
 	UpdateFields(ctx context.Context, id uuid.UUID, updates map[string]interface{}) error
 	UpdateFieldsWithVersion(ctx context.Context, id uuid.UUID, updates map[string]interface{}, expectedVersion int) error
@@ -31,6 +32,7 @@ type IncidentRepository interface {
 	WithTx(tx *gorm.DB) IncidentRepository
 	LockForUpdate(ctx context.Context, tx *gorm.DB, id uuid.UUID) (*models.Incident, error)
 	FindUserOpenIncidentsForDuplicateCheck(ctx context.Context, reporterID uuid.UUID) ([]models.Incident, error)
+	FindOpenIncidentsForDuplicateCheckByCaller(ctx context.Context, reporterPhone string) ([]models.Incident, error)
 	FindByIDWithLast6DigitValidation(ctx context.Context, req *models.IncidentUpdateIVRRequest) (*models.Incident, error)
 	// Incident number generation
 	GenerateIncidentNumber(ctx context.Context) (string, error)
@@ -100,6 +102,7 @@ type IncidentRepository interface {
 
 	// Complaint-specific
 	IncrementEvaluationCount(ctx context.Context, id uuid.UUID) error
+	GetComplaintSourceValidation(ctx context.Context, sourceID uuid.UUID, reporterPhone string) (*models.ComplaintSourceValidation, error)
 
 	// Report section queries
 	GetReportIncidentData(ctx context.Context, incidentID uuid.UUID) (*models.IncidentReportData, error)
@@ -147,6 +150,8 @@ func (r *incidentRepository) FindByIDWithRelations(ctx context.Context, id uuid.
 		Preload("Workflow.Transitions.AllowedRoles").
 		Preload("CurrentState").
 		Preload("CurrentState.EditableRoles").
+		Preload("CurrentState.ViewableRoles").
+		Preload("CurrentState.AssignmentRoles").
 		Preload("Assignee").
 		Preload("Assignees").
 		Preload("Department").
@@ -204,18 +209,46 @@ func (r *incidentRepository) FindByIDs(ctx context.Context, ids []uuid.UUID) ([]
 	return incidents, err
 }
 
-func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFilter) ([]models.Incident, int64, error) {
-	var incidents []models.Incident
-	var total int64
+// normalizeStateCodes trims and lower-cases incoming workflow-state codes, dropping blanks.
+// Comparison is case-insensitive because workflow_states carries inconsistent casing - both 'cl'
+// and 'Cl' exist across different workflows - so an exact match would silently return incomplete
+// results for those states.
+func normalizeStateCodes(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, c := range in {
+		if c = strings.TrimSpace(c); c != "" {
+			out = append(out, strings.ToLower(c))
+		}
+	}
+	return out
+}
 
-	query := r.db.WithContext(ctx).Model(&models.Incident{})
+// stateCodeSubquery matches incidents whose current state carries one of the given codes. Written as
+// an IN-subquery rather than a JOIN on purpose: List shares one *gorm.DB between Count and Find, and
+// several stats queries already join workflow_states, so an added join would either duplicate theirs
+// or change the count.
+//
+// Soft-deleted states are deliberately NOT excluded. Live incidents do sit in soft-deleted states
+// (6 of them today, across 2 states, including a deleted 'new'), and an incident's current state is
+// that state whether or not an admin has since removed it. Filtering them out would make those
+// incidents unmatchable by any code, and would also make this filter behave differently from
+// `current_state_id IN ?`, which matches by id regardless of state deletion.
+const stateCodeSubquery = `current_state_id IN (
+	SELECT id FROM workflow_states WHERE LOWER(code) IN ?)`
 
+// applyIncidentFilters applies the full IncidentFilter WHERE-clause set to
+// query. Shared by List and ListMapMarkers so the two stay in sync — a filter
+// added to one automatically applies to the other.
+func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *gorm.DB, filter *models.IncidentFilter) *gorm.DB {
 	// Apply filters
 	if len(filter.WorkflowID) != 0 {
 		query = query.Where("workflow_id IN ?", filter.WorkflowID)
 	}
 	if len(filter.CurrentStateID) != 0 {
 		query = query.Where("current_state_id IN ?", filter.CurrentStateID)
+	}
+	if codes := normalizeStateCodes(filter.CurrentStateCode); len(codes) != 0 {
+		query = query.Where(stateCodeSubquery, codes)
 	}
 	if len(filter.ClassificationID) != 0 {
 		query = query.Where("classification_id IN ?", filter.ClassificationID)
@@ -249,7 +282,17 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		query = query.Where("reporter_id IN ?", filter.ReporterID)
 	}
 	if filter.MyRecord != nil {
-		query = query.Where("reporter_id = ? OR assignee_id = ? OR id IN (Select incident_id from incident_assignees where user_id = ?)", filter.MyRecord, filter.MyRecord, filter.MyRecord)
+		if len(filter.UserRoleIDs) > 0 {
+			// Expand to include incidents in states where the user's role has viewable access
+			query = query.Where(
+				`reporter_id = ? OR assignee_id = ?
+				OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)
+				OR current_state_id IN (SELECT workflow_state_id FROM state_viewable_roles WHERE role_id IN ?)`,
+				filter.MyRecord, filter.MyRecord, filter.MyRecord, filter.UserRoleIDs,
+			)
+		} else {
+			query = query.Where("reporter_id = ? OR assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", filter.MyRecord, filter.MyRecord, filter.MyRecord)
+		}
 	}
 
 	if filter.ReporterPhone != "" {
@@ -260,10 +303,27 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 			phone = strings.TrimPrefix(phone, "+")
 		}
 		query = query.Where(
-			"reporter_phone IN (?, ?) OR reporter_id IN (SELECT id FROM users WHERE phone IN (?, ?) OR extension IN (?, ?))",
+			"reporter_phone IN (?, ?) OR reporter_id IN (SELECT id FROM users WHERE phone IN (?, ?) OR id IN (SELECT user_id FROM extension_assignments WHERE extension IN (?, ?)))",
 			phone, phoneWithPlus,
 			phone, phoneWithPlus,
 			phone, phoneWithPlus,
+		)
+	}
+	// this to avoid EPM Citizen Portal security boundary
+	if filter.ReporterPhoneSearch != "" {
+		phone := filter.ReporterPhoneSearch
+		phoneWithPlus := "+" + phone
+		if strings.HasPrefix(phone, "+") {
+			phoneWithPlus = phone
+			phone = strings.TrimPrefix(phone, "+")
+		}
+		phonePattern := "%" + phone + "%"
+		phoneWithPlusPattern := "%" + phoneWithPlus + "%"
+		query = query.Where(
+			"reporter_phone ILIKE ? OR reporter_phone ILIKE ? OR reporter_id IN (SELECT id FROM users WHERE phone ILIKE ? OR phone ILIKE ? OR id IN (SELECT user_id FROM extension_assignments WHERE extension ILIKE ? OR extension ILIKE ?))",
+			phonePattern, phoneWithPlusPattern,
+			phonePattern, phoneWithPlusPattern,
+			phonePattern, phoneWithPlusPattern,
 		)
 	}
 	if filter.CallerIdentity != "" {
@@ -273,13 +333,16 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		query = query.Where("sla_breached = ?", *filter.SLABreached)
 	}
 	if filter.RecordType != nil {
-		query = query.Where("record_type = ?", *filter.RecordType)
+		query = query.Where(
+			"incidents.record_type = ? AND incidents.workflow_id IN (SELECT id FROM workflows WHERE record_type = ? AND deleted_at IS NULL)",
+			*filter.RecordType, *filter.RecordType)
 	}
+
 	if filter.Channel != nil && *filter.Channel != "" {
 		query = query.Where("channel = ?", *filter.Channel)
 	}
 	if filter.Source != nil && *filter.Source != "" {
-		query = query.Where("source = ?", *filter.Source)
+		query = query.Where("LOWER(source) = LOWER(?)", *filter.Source)
 	}
 	if filter.SourceIncidentID != nil && *filter.SourceIncidentID != "" {
 		query = query.Where("source_incident_id = ?", *filter.SourceIncidentID)
@@ -303,6 +366,10 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	}
 	if filter.TaskID != "" {
 		query = query.Where("NULLIF(custom_fields, '')::jsonb -> 'lookup:TASK ID' ->> 'value' ILIKE ?", "%"+filter.TaskID+"%")
+	}
+	// momra_ref searches the flat momra_incident_no key written by the EPM insert path.
+	if filter.MomraRef != "" {
+		query = query.Where("NULLIF(custom_fields, '')::jsonb ->> 'momra_incident_no' ILIKE ?", "%"+filter.MomraRef+"%")
 	}
 	// Flat custom_fields filters: cf=key:value (AND-ed)
 	for _, cf := range filter.CustomFieldFilters {
@@ -331,11 +398,21 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		query = query.Where("incidents.id IN (?)", subQuery)
 	}
 
+	return query
+}
+
+func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFilter) ([]models.Incident, int64, error) {
+	var incidents []models.Incident
+	var total int64
+
+	query := r.applyIncidentFilters(ctx, r.db.WithContext(ctx).Model(&models.Incident{}), filter)
+
 	// Single unified count — works for all cases
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	// Apply pagination
+	log.Printf("[List] total=%d classification_id=%v location_id=%v my_record=%v record_type=%v user_role_ids=%v",
+		total, filter.ClassificationID, filter.LocationID, filter.MyRecord, filter.RecordType, filter.UserRoleIDs)
 	// Apply pagination
 	if filter.Page < 1 {
 		filter.Page = 1
@@ -344,6 +421,14 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		filter.Limit = 20
 	}
 	offset := (filter.Page - 1) * filter.Limit
+
+	// Defaults to created_at (unchanged existing behavior for callers that
+	// don't pass sort_by). Restricted to this allow-list regardless of the
+	// model-level validation, since it's interpolated directly into ORDER BY.
+	sortColumn := "created_at"
+	if filter.SortBy == "updated_at" {
+		sortColumn = "updated_at"
+	}
 
 	err := query.
 		Preload("Classification").
@@ -357,7 +442,7 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		Preload("Location").
 		Preload("LookupValues.Category").
 		Preload("TransitionHistory.Transition").
-		Order("created_at DESC").
+		Order(sortColumn + " DESC").
 		Offset(offset).
 		Limit(filter.Limit).
 		Find(&incidents).Error
@@ -366,6 +451,35 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	}
 
 	return incidents, total, nil
+}
+
+// ListMapMarkers returns minimal per-incident fields for map plotting instead
+// of full Incident rows — no Preloads, just id/coords/state color/priority.
+// This keeps the payload small enough to fetch every matching marker in one
+// request instead of paginating. maxMarkers caps the result defensively; the
+// caller is told via the returned total whether the cap was hit.
+func (r *incidentRepository) ListMapMarkers(ctx context.Context, filter *models.IncidentFilter, maxMarkers int) ([]models.IncidentMapMarker, int64, error) {
+	var total int64
+
+	base := r.applyIncidentFilters(ctx, r.db.WithContext(ctx).Model(&models.Incident{}), filter).
+		Where("incidents.latitude IS NOT NULL AND incidents.longitude IS NOT NULL")
+
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var markers []models.IncidentMapMarker
+	err := base.
+		Select(`incidents.id, incidents.latitude, incidents.longitude, incidents.current_state_id,
+			workflow_states.color AS state_color`).
+		Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
+		Limit(maxMarkers).
+		Find(&markers).Error
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return markers, total, nil
 }
 
 func (r *incidentRepository) FindByIDWithLast6DigitValidation(
@@ -801,15 +915,17 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 		if len(filter.UserRoleIDs) > 0 {
 			stateQuery = stateQuery.Where(`
 				NOT EXISTS (
-					SELECT 1 FROM state_viewable_roles 
+					SELECT 1 FROM state_viewable_roles
 					WHERE workflow_state_id = workflow_states.id
 				)
 				OR EXISTS (
 					SELECT 1 FROM state_viewable_roles
-					WHERE workflow_state_id = workflow_states.id 
+					WHERE workflow_state_id = workflow_states.id
 					AND role_id IN ?
 				)
-			`, filter.UserRoleIDs)
+				OR incidents.reporter_id = ? OR incidents.assignee_id = ?
+				OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)
+			`, filter.UserRoleIDs, filter.UserID, filter.UserID, filter.UserID)
 		}
 	}
 
@@ -920,10 +1036,116 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 				filter.AssigneeID, filter.AssigneeID)
 		}
 		if filter.MyRecord != nil {
-			q = q.Where("incidents.reporter_id = ? OR incidents.assignee_id = ? OR incidents.id IN (Select incident_id from incident_assignees where user_id = ?)", filter.MyRecord, filter.MyRecord, filter.MyRecord)
+			if len(filter.UserRoleIDs) > 0 {
+				q = q.Where(
+					`incidents.reporter_id = ? OR incidents.assignee_id = ?
+					OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)
+					OR incidents.current_state_id IN (SELECT workflow_state_id FROM state_viewable_roles WHERE role_id IN ?)`,
+					filter.MyRecord, filter.MyRecord, filter.MyRecord, filter.UserRoleIDs,
+				)
+			} else {
+				q = q.Where("incidents.reporter_id = ? OR incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", filter.MyRecord, filter.MyRecord, filter.MyRecord)
+			}
 		}
 		if len(filter.ClassificationID) > 0 {
 			q = q.Where("incidents.classification_id IN ?", filter.ClassificationID)
+		}
+		if filter.MomraRef != "" {
+			q = q.Where("NULLIF(custom_fields, '')::jsonb ->> 'momra_incident_no' ILIKE ?", "%"+filter.MomraRef+"%")
+		}
+		if len(filter.LocationID) > 0 {
+			q = q.Where("incidents.location_id IN ?", filter.LocationID)
+		}
+
+		// Extended list-table filters, kept in sync with List()'s filtering so
+		// stats reflect exactly what the incident list table shows.
+		if len(filter.CurrentStateID) > 0 {
+			q = q.Where("incidents.current_state_id IN ?", filter.CurrentStateID)
+		}
+		if codes := normalizeStateCodes(filter.CurrentStateCode); len(codes) != 0 {
+			q = q.Where("incidents."+stateCodeSubquery, codes)
+		}
+		if filter.Priority != nil {
+			q = q.Where(`incidents.id IN (
+				SELECT ilv.incident_id FROM incident_lookup_values ilv
+				INNER JOIN lookup_values lv ON lv.id = ilv.lookup_value_id
+				INNER JOIN lookup_categories lc ON lc.id = lv.category_id
+				WHERE lc.code = 'PRIORITY' AND lv.sort_order = ?
+			)`, *filter.Priority)
+		}
+		if len(filter.ReporterID) > 0 {
+			q = q.Where("incidents.reporter_id IN ?", filter.ReporterID)
+		}
+		if filter.ReporterPhone != "" {
+			phone := filter.ReporterPhone
+			phoneWithPlus := "+" + phone
+			if strings.HasPrefix(phone, "+") {
+				phoneWithPlus = phone
+				phone = strings.TrimPrefix(phone, "+")
+			}
+			q = q.Where(
+				"incidents.reporter_phone IN (?, ?) OR incidents.reporter_id IN (SELECT id FROM users WHERE phone IN (?, ?) OR id IN (SELECT user_id FROM extension_assignments WHERE extension IN (?, ?)))",
+				phone, phoneWithPlus,
+				phone, phoneWithPlus,
+				phone, phoneWithPlus,
+			)
+		}
+		if filter.ReporterPhoneSearch != "" {
+			phone := filter.ReporterPhoneSearch
+			phoneWithPlus := "+" + phone
+			if strings.HasPrefix(phone, "+") {
+				phoneWithPlus = phone
+				phone = strings.TrimPrefix(phone, "+")
+			}
+			phonePattern := "%" + phone + "%"
+			phoneWithPlusPattern := "%" + phoneWithPlus + "%"
+			q = q.Where(
+				"incidents.reporter_phone ILIKE ? OR incidents.reporter_phone ILIKE ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone ILIKE ? OR phone ILIKE ? OR id IN (SELECT user_id FROM extension_assignments WHERE extension ILIKE ? OR extension ILIKE ?))",
+				phonePattern, phoneWithPlusPattern,
+				phonePattern, phoneWithPlusPattern,
+				phonePattern, phoneWithPlusPattern,
+			)
+		}
+		if filter.SLABreached != nil {
+			q = q.Where("incidents.sla_breached = ?", *filter.SLABreached)
+		}
+		if filter.Source != nil && *filter.Source != "" {
+			q = q.Where("LOWER(incidents.source) = LOWER(?)", *filter.Source)
+		}
+		if filter.ConvertedToRequest != nil {
+			if *filter.ConvertedToRequest {
+				q = q.Where("incidents.converted_request_id IS NOT NULL")
+			} else {
+				q = q.Where("incidents.converted_request_id IS NULL")
+			}
+		}
+		if filter.StartDate != nil {
+			q = q.Where("incidents.created_at >= ?", *filter.StartDate)
+		}
+		if filter.EndDate != nil {
+			q = q.Where("incidents.created_at <= ?", *filter.EndDate)
+		}
+		if filter.Search != "" {
+			searchPattern := "%" + filter.Search + "%"
+			q = q.Where("incidents.incident_number ILIKE ? OR incidents.title ILIKE ? OR incidents.description ILIKE ?", searchPattern, searchPattern, searchPattern)
+		}
+		if filter.TransitionID != nil || filter.FromStateID != nil || filter.ToStateID != nil {
+			subQuery := r.db.WithContext(ctx).
+				Table("incident_transition_histories ith").
+				Select("DISTINCT ith.incident_id").
+				Joins("JOIN workflow_transitions wt ON wt.id = ith.transition_id")
+
+			if filter.TransitionID != nil {
+				subQuery = subQuery.Where("wt.id = ?", *filter.TransitionID)
+			}
+			if filter.FromStateID != nil {
+				subQuery = subQuery.Where("wt.from_state_id = ?", *filter.FromStateID)
+			}
+			if filter.ToStateID != nil {
+				subQuery = subQuery.Where("wt.to_state_id = ?", *filter.ToStateID)
+			}
+
+			q = q.Where("incidents.id IN (?)", subQuery)
 		}
 
 		return q
@@ -965,7 +1187,9 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 				q = q.Where(`
 					NOT EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = incidents.current_state_id)
 					OR EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = incidents.current_state_id AND role_id IN ?)
-				`, filter.UserRoleIDs)
+					OR incidents.reporter_id = ? OR incidents.assignee_id = ?
+					OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)
+				`, filter.UserRoleIDs, filter.UserID, filter.UserID, filter.UserID)
 			}
 		}
 		return q
@@ -973,12 +1197,14 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 
 	//  Total
 	baseQuery := applyBaseFilters(
-		r.db.WithContext(ctx).Model(&models.Incident{}).Debug().
+		r.db.WithContext(ctx).Model(&models.Incident{}).
 			Where("incidents.workflow_id IN (SELECT id FROM workflows WHERE deleted_at IS NULL)"),
 	)
 	if err := baseQuery.Count(&stats.Total).Error; err != nil {
 		return nil, err
 	}
+	log.Printf("[GetStatsV2] total=%d is_admin=%v classification_id=%v location_id=%v my_record=%v record_type=%v user_role_ids=%v",
+		stats.Total, isAdmin, filter.ClassificationID, filter.LocationID, filter.MyRecord, filter.RecordType, filter.UserRoleIDs)
 
 	// SLA Breached
 	slaQuery := applyBaseFilters(
@@ -991,7 +1217,7 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 
 	// Partial Close (incidents currently in a partial_close state)
 	pcQuery := applyBaseFilters(
-		r.db.WithContext(ctx).Model(&models.Incident{}).Debug().
+		r.db.WithContext(ctx).Model(&models.Incident{}).
 			Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
 			Where("workflow_states.is_partial_close = ? AND incidents.workflow_id IN (SELECT id FROM workflows WHERE deleted_at IS NULL)", true),
 	)
@@ -1050,7 +1276,9 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 				stateQuery = stateQuery.Where(`
 					NOT EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = ws.id)
 					OR EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = ws.id AND role_id IN ?)
-				`, filter.UserRoleIDs)
+					OR EXISTS (SELECT 1 FROM incidents WHERE current_state_id = ws.id AND deleted_at IS NULL
+						AND (reporter_id = ? OR assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))
+				`, filter.UserRoleIDs, filter.UserID, filter.UserID, filter.UserID)
 			}
 		}
 	}
@@ -1180,7 +1408,9 @@ func (r *incidentRepository) GetPriorityCounts(ctx context.Context, filter *mode
 					NOT EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = workflow_states.id)
 					OR EXISTS (SELECT 1 FROM state_viewable_roles
 					           WHERE workflow_state_id = workflow_states.id AND role_id IN ?)
-				`, filter.UserRoleIDs)
+					OR incidents.reporter_id = ? OR incidents.assignee_id = ?
+					OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)
+				`, filter.UserRoleIDs, filter.UserID, filter.UserID, filter.UserID)
 		}
 	}
 
@@ -1527,6 +1757,65 @@ func (r *incidentRepository) IncrementEvaluationCount(ctx context.Context, id uu
 		Update("evaluation_count", gorm.Expr("evaluation_count + 1")).Error
 }
 
+// GetComplaintSourceValidation reads, in a single query, everything CreateComplaint needs to
+// validate a candidate source incident: its type, current state code, age, reporter phone and
+// the classification/location to inherit, plus two derived booleans.
+//
+// reporterPhone is the phone on the incoming request, and it drives both booleans: the complaint
+// is only allowed when it matches the source incident's own reporter phone, and it is the key for
+// detecting a complaint already filed against the same source incident. Keying both on the same
+// value is deliberate — checking the match against the logged-in user's phone instead would let a
+// caller vary reporter_phone freely and file unlimited complaints on one incident.
+//
+// Only an unclosed prior complaint blocks: once the earlier one reaches the 'closed' state the
+// reporter may complain again about the same incident. A complaint whose state does not resolve
+// counts as open, so a broken state reference fails safe by blocking rather than letting a
+// duplicate through.
+//
+// Phone comparison is digits-only, because the same number is stored in several formats
+// (e.g. "+966 123456789" and "+966123456789"). The non-empty guard on the duplicate subquery is
+// required: without it a blank stored phone would normalise to the empty string and match every
+// legacy complaint that has no phone recorded.
+func (r *incidentRepository) GetComplaintSourceValidation(ctx context.Context, sourceID uuid.UUID, reporterPhone string) (*models.ComplaintSourceValidation, error) {
+	const query = `
+		SELECT i.record_type,
+		       ws.code AS state_code,
+		       i.created_at,
+		       COALESCE(i.reporter_phone, '') AS reporter_phone,
+		       i.classification_id,
+		       i.location_id,
+		       (regexp_replace(COALESCE(i.reporter_phone, ''), '[^0-9]', '', 'g')
+		        = regexp_replace(COALESCE(?, ''), '[^0-9]', '', 'g')) AS phone_matches,
+		       EXISTS (
+		           SELECT 1
+		           FROM incidents c
+		           LEFT JOIN workflow_states cws ON cws.id = c.current_state_id AND cws.deleted_at IS NULL
+		           WHERE c.source_incident_id = i.id
+		             AND c.record_type = 'complaint'
+		             AND c.deleted_at IS NULL
+		             AND COALESCE(cws.code, '') <> 'closed'
+		             AND regexp_replace(COALESCE(c.reporter_phone, ''), '[^0-9]', '', 'g') <> ''
+		             AND regexp_replace(COALESCE(c.reporter_phone, ''), '[^0-9]', '', 'g')
+		                 = regexp_replace(COALESCE(?, ''), '[^0-9]', '', 'g')
+		       ) AS open_complaint_exists
+		FROM incidents i
+		LEFT JOIN workflow_states ws ON ws.id = i.current_state_id AND ws.deleted_at IS NULL
+		WHERE i.id = ?
+		  AND i.deleted_at IS NULL`
+
+	var result models.ComplaintSourceValidation
+	err := r.db.WithContext(ctx).Raw(query, reporterPhone, reporterPhone, sourceID).Scan(&result).Error
+	if err != nil {
+		return nil, err
+	}
+	// Scan leaves the struct zeroed when no row matched; record_type is NOT NULL in the
+	// schema, so an empty value means the incident does not exist.
+	if result.RecordType == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &result, nil
+}
+
 func (r *incidentRepository) FindUnassignedByStateCode(ctx context.Context, stateCode string) ([]models.Incident, error) {
 	var incidents []models.Incident
 	err := r.db.WithContext(ctx).
@@ -1606,6 +1895,31 @@ func (r *incidentRepository) FindUserOpenIncidentsForDuplicateCheck(ctx context.
 		Where("longitude IS NOT NULL").
 		Find(&incidents).Error
 
+	return incidents, err
+}
+
+func (r *incidentRepository) FindOpenIncidentsForDuplicateCheckByCaller(ctx context.Context, reporterPhone string) ([]models.Incident, error) {
+	if reporterPhone == "" {
+		return []models.Incident{}, nil
+	}
+
+	query := r.db.WithContext(ctx).
+		Where("closed_at IS NULL").
+		Where("latitude IS NOT NULL").
+		Where("longitude IS NOT NULL")
+
+	if reporterPhone != "" {
+		phone := reporterPhone
+		phoneWithPlus := "+" + phone
+		if strings.HasPrefix(phone, "+") {
+			phoneWithPlus = phone
+			phone = strings.TrimPrefix(phone, "+")
+		}
+		query = query.Where("reporter_phone IN (?, ?)", phone, phoneWithPlus)
+	}
+
+	var incidents []models.Incident
+	err := query.Find(&incidents).Error
 	return incidents, err
 }
 
@@ -1723,6 +2037,12 @@ SELECT
     ia.uploaded_by_id, ia.created_at, ia.deleted_at,
     COALESCE(u.first_name, '')  AS uploaded_by_first_name,
     COALESCE(u.last_name, '')   AS uploaded_by_last_name,
+    COALESCE((
+        SELECT STRING_AGG(DISTINCT r.name, ', ' ORDER BY r.name)
+        FROM user_roles ur
+        JOIN roles r ON r.id = ur.role_id AND r.deleted_at IS NULL AND r.is_active = true
+        WHERE ur.user_id = ia.uploaded_by_id
+    ), '')                       AS uploaded_by_role,
     wt.name                     AS transition_name,
     wt.name_ar                  AS transition_name_ar,
     fs.name                     AS from_state_name,
@@ -1795,6 +2115,7 @@ SELECT
     COALESCE(creator.phone, '')  AS creator_phone,
     reporter_phone AS caller_phone,
     reporter_name AS caller_name,
+    COALESCE(i.reporter_email, '') AS reporter_email,
     COALESCE(asn.first_name, '') AS assignee_first_name,
     COALESCE(asn.last_name, '')  AS assignee_last_name,
     COALESCE(dep.name, '')       AS department_name,

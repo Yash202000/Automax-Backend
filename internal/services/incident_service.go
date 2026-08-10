@@ -32,6 +32,15 @@ var ErrInvalidLocation = errors.New("invalid_location")
 var ErrEmptyWorkflow = errors.New("empty_workflow")
 var ErrEditNotAllowed = errors.New("edit_not_allowed_in_current_state")
 
+// An incident must be filed against a specific place and category, not an umbrella
+// one, so its location and classification have to be leaves of their hierarchies.
+// Following the convention above, each sentinel's message is its i18n key, which is
+// what lets the handlers translate them without a per-error mapping table.
+var ErrLocationNotFound = errors.New("location_not_found")
+var ErrClassificationNotFound = errors.New("classification_not_found")
+var ErrLocationNotSelectable = errors.New("location_not_selectable")
+var ErrClassificationNotSelectable = errors.New("classification_not_selectable")
+
 type IncidentService interface {
 	// Incident CRUD
 	CreateIncident(ctx context.Context, req *models.IncidentCreateRequest, reporterID uuid.UUID) (*models.IncidentResponse, error)
@@ -129,6 +138,7 @@ type incidentService struct {
 	deptRepo                repository.DepartmentRepository
 	rejectionLogRepo        repository.RejectionLogRepository
 	classificationRepo      repository.ClassificationRepository
+	locationRepo            repository.LocationRepository
 	roleRepo                repository.RoleRepository
 	storage                 *storage.MinIOStorage
 	db                      *gorm.DB
@@ -155,6 +165,7 @@ func NewIncidentService(
 	userRepo repository.UserRepository,
 	deptRepo repository.DepartmentRepository,
 	classificationRepo repository.ClassificationRepository,
+	locationRepo repository.LocationRepository,
 	rejectionLogRepo repository.RejectionLogRepository,
 	roleRepo repository.RoleRepository,
 	storage *storage.MinIOStorage,
@@ -170,6 +181,7 @@ func NewIncidentService(
 		deptRepo:           deptRepo,
 		rejectionLogRepo:   rejectionLogRepo,
 		classificationRepo: classificationRepo,
+		locationRepo:       locationRepo,
 		roleRepo:           roleRepo,
 		storage:            storage,
 		db:                 db,
@@ -220,6 +232,22 @@ func (s *incidentService) SetPublicFeedbackRepo(repo repository.IncidentPublicFe
 func (s *incidentService) SetSmsFeedbackPendingRepo(repo repository.SmsFeedbackPendingRepository, delayMinutes int) {
 	s.smsFeedbackPendingRepo = repo
 	s.smsFeedbackDelayMinutes = delayMinutes
+}
+
+// convertibleStateCode returns the workflow state code an incident must be in
+// to be eligible for conversion to a request. Configurable via
+// CONVERT_TO_REQUEST_STATE_CODE (default "under_resolution").
+func (s *incidentService) convertibleStateCode() string {
+	if code := os.Getenv("CONVERT_TO_REQUEST_STATE_CODE"); code != "" {
+		return code
+	}
+	return "under_resolution"
+}
+
+// isInConvertibleState reports whether the incident's current state permits
+// conversion to a request.
+func (s *incidentService) isInConvertibleState(inc *models.Incident) bool {
+	return inc.CurrentState != nil && inc.CurrentState.Code == s.convertibleStateCode()
 }
 
 // calculateSLADeadline calculates the SLA deadline based on classification criticality.
@@ -358,6 +386,14 @@ func (s *incidentService) getNextRoundRobinAssignee(ctx context.Context, roleIDs
 // Incident CRUD
 
 func (s *incidentService) CreateIncident(ctx context.Context, req *models.IncidentCreateRequest, reporterID uuid.UUID) (*models.IncidentResponse, error) {
+	// Validated first, before anything with a side effect: the IVR branch below can
+	// register a brand-new citizen user, and a request we are going to reject must not
+	// leave one behind.
+	if err := s.validateIncidentHierarchySelection(ctx, req.LocationID, req.ClassificationID); err != nil {
+		return nil, err
+	}
+
+	creatorID := reporterID // preserve before IVR block may overwrite reporterID
 	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
 	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.IVR) && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
 		// For EPM940, if source is IVR, then fetch user based on mobile no. of citizen
@@ -448,9 +484,35 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 				return nil, ErrInvalidLocation
 			}
 
-			// Find user's open incidents that have location coordinates
-			openIncidents, err := s.incidentRepo.FindUserOpenIncidentsForDuplicateCheck(ctx, reporterID)
+			// Determine whether the original creating user is a Call Center Agent.
+			// If the role lookup fails we fall through to the reporter-based check (safe default).
+			isAgent := false
+			if creatorRoles, err := s.userRepo.GetUserRoles(ctx, creatorID); err == nil {
+				for _, r := range creatorRoles {
+					if strings.EqualFold(r.Code, constants.ROLES.AGENT) {
+						isAgent = true
+						break
+					}
+				}
+			}
+
+			// WHATSAPP_SOURCE holds the chatbot's source string (e.g. "WhatsApp Chatbot").
+			whatsappSource := strings.TrimSpace(os.Getenv("WHATSAPP_SOURCE"))
+			isWhatsApp := whatsappSource != "" && strings.EqualFold(strings.TrimSpace(req.Source), whatsappSource)
+
+			// For agents (and the WhatsApp chatbot) acting on behalf of citizens, scope the
+			// duplicate check to the citizen's identity rather than the agent's reporterID, so
+			// incidents filed for different citizens are never incorrectly blocked.
+			var openIncidents []models.Incident
+			if (isAgent || isWhatsApp) && req.ReporterPhone != "" {
+				openIncidents, err = s.incidentRepo.FindOpenIncidentsForDuplicateCheckByCaller(
+					ctx, req.ReporterPhone,
+				)
+			} else {
+				openIncidents, err = s.incidentRepo.FindUserOpenIncidentsForDuplicateCheck(ctx, reporterID)
+			}
 			if err != nil {
+				log.Printf("[IncidentService] Error occurred while fetching open incidents: %v", err)
 				return nil, err
 			}
 
@@ -776,7 +838,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		}
 		if req.ReporterPhone != "" {
 			smsBody := fmt.Sprintf("Thank you for contacting Eastern Province Municipality. Your incident %s has been created.", incident.IncidentNumber)
-			_, err := s.notificationService.SendNotification(
+			result, err := s.notificationService.SendNotification(
 				ctx,
 				"sms",
 				nil,
@@ -791,6 +853,9 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 				&reporterID,
 				nil,
 			)
+			if result != nil && result.SentLog != nil {
+				_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
+			}
 			if err != nil {
 				log.Printf("[IncidentService] SMS failed for %s: %v", req.ReporterPhone, err)
 			} else {
@@ -830,12 +895,16 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 				}
 				if len(emails) > 0 {
 					code := capturedInitialState.NewIncidentEmailTemplateCode
-					if _, err := s.notificationService.SendNotification(
+					result, err := s.notificationService.SendNotification(
 						bgCtx, "email", &code, "en",
 						emails, nil, nil,
 						"", "",
 						vars, nil, &capturedReporterID, nil,
-					); err != nil {
+					)
+					if result != nil && result.SentLog != nil {
+						_ = s.notificationService.SetIncidentIDOnLogs(bgCtx, []uuid.UUID{result.SentLog.ID}, capturedCreated.ID)
+					}
+					if err != nil {
 						log.Printf("NEW-INCIDENT-EMAIL: Failed for incident %s: %v", capturedCreated.IncidentNumber, err)
 					} else {
 						log.Printf("NEW-INCIDENT-EMAIL: Sent to %v for incident %s", emails, capturedCreated.IncidentNumber)
@@ -852,12 +921,16 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 				}
 				if len(phones) > 0 {
 					code := capturedInitialState.NewIncidentSMSTemplateCode
-					if _, err := s.notificationService.SendNotification(
+					result, err := s.notificationService.SendNotification(
 						bgCtx, "sms", &code, "en",
 						phones, nil, nil,
 						"", "",
 						vars, nil, &capturedReporterID, nil,
-					); err != nil {
+					)
+					if result != nil && result.SentLog != nil {
+						_ = s.notificationService.SetIncidentIDOnLogs(bgCtx, []uuid.UUID{result.SentLog.ID}, capturedCreated.ID)
+					}
+					if err != nil {
 						log.Printf("NEW-INCIDENT-SMS: Failed for incident %s: %v", capturedCreated.IncidentNumber, err)
 					} else {
 						log.Printf("NEW-INCIDENT-SMS: Sent to %v for incident %s", phones, capturedCreated.IncidentNumber)
@@ -1176,6 +1249,15 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		// Convert back to JSON
 		customFieldsBytes, err := json.Marshal(customFields)
 		if err == nil {
+			// Only audit when the merged result actually differs - the merge above is additive, so
+			// re-submitting identical values is a no-op and must not produce a revision.
+			if string(customFieldsBytes) != incident.CustomFields {
+				changes = append(changes, models.IncidentFieldChange{
+					FieldName:  "custom_fields",
+					FieldLabel: "Custom Fields",
+				})
+				descriptions = append(descriptions, "Custom fields updated")
+			}
 			incident.CustomFields = string(customFieldsBytes)
 		}
 	}
@@ -1190,11 +1272,42 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 
 	// Parse optional UUIDs
 	if req.ClassificationID != nil {
+		oldName := ""
+		if incident.Classification != nil {
+			oldName = incident.Classification.Name
+		} else if incident.ClassificationID != nil {
+			oldName = incident.ClassificationID.String()
+		}
 		if *req.ClassificationID == "" {
+			if incident.ClassificationID != nil {
+				changes = append(changes, models.IncidentFieldChange{
+					FieldName:  "classification_id",
+					FieldLabel: "Classification",
+					OldValue:   &oldName,
+					NewValue:   nil,
+				})
+				descriptions = append(descriptions, fmt.Sprintf("Classification cleared (was %s)", oldName))
+			}
 			incident.ClassificationID = nil
 		} else {
 			classID, err := uuid.Parse(*req.ClassificationID)
 			if err == nil {
+				if incident.ClassificationID == nil || *incident.ClassificationID != classID {
+					// Only a genuinely new value is validated. Incidents created before
+					// this rule may sit on a non-leaf classification, and resubmitting
+					// the unchanged value must not make them uneditable.
+					if _, err := s.validateSelectableClassification(ctx, *req.ClassificationID); err != nil {
+						return nil, err
+					}
+					newVal := *req.ClassificationID
+					changes = append(changes, models.IncidentFieldChange{
+						FieldName:  "classification_id",
+						FieldLabel: "Classification",
+						OldValue:   &oldName,
+						NewValue:   &newVal,
+					})
+					descriptions = append(descriptions, fmt.Sprintf("Classification changed from %s", oldName))
+				}
 				incident.ClassificationID = &classID
 			}
 		}
@@ -1236,22 +1349,76 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	}
 
 	if req.DepartmentID != nil {
+		oldName := ""
+		if incident.Department != nil {
+			oldName = incident.Department.Name
+		} else if incident.DepartmentID != nil {
+			oldName = incident.DepartmentID.String()
+		}
 		if *req.DepartmentID == "" {
+			if incident.DepartmentID != nil {
+				changes = append(changes, models.IncidentFieldChange{
+					FieldName:  "department_id",
+					FieldLabel: "Department",
+					OldValue:   &oldName,
+					NewValue:   nil,
+				})
+				descriptions = append(descriptions, fmt.Sprintf("Department cleared (was %s)", oldName))
+			}
 			incident.DepartmentID = nil
 		} else {
 			deptID, err := uuid.Parse(*req.DepartmentID)
 			if err == nil {
+				if incident.DepartmentID == nil || *incident.DepartmentID != deptID {
+					newVal := *req.DepartmentID
+					changes = append(changes, models.IncidentFieldChange{
+						FieldName:  "department_id",
+						FieldLabel: "Department",
+						OldValue:   &oldName,
+						NewValue:   &newVal,
+					})
+					descriptions = append(descriptions, fmt.Sprintf("Department changed from %s", oldName))
+				}
 				incident.DepartmentID = &deptID
 			}
 		}
 	}
 
 	if req.LocationID != nil {
+		oldName := ""
+		if incident.Location != nil {
+			oldName = incident.Location.Name
+		} else if incident.LocationID != nil {
+			oldName = incident.LocationID.String()
+		}
 		if *req.LocationID == "" {
+			if incident.LocationID != nil {
+				changes = append(changes, models.IncidentFieldChange{
+					FieldName:  "location_id",
+					FieldLabel: "Location",
+					OldValue:   &oldName,
+					NewValue:   nil,
+				})
+				descriptions = append(descriptions, fmt.Sprintf("Location cleared (was %s)", oldName))
+			}
 			incident.LocationID = nil
 		} else {
 			locID, err := uuid.Parse(*req.LocationID)
 			if err == nil {
+				if incident.LocationID == nil || *incident.LocationID != locID {
+					// Changed values only — see the classification block above.
+					if _, err := s.validateSelectableLocation(ctx, *req.LocationID); err != nil {
+						return nil, err
+					}
+					newVal := *req.LocationID
+					changes = append(changes, models.IncidentFieldChange{
+						FieldName:  "location_id",
+						FieldLabel: "Location",
+						OldValue:   &oldName,
+						NewValue:   &newVal,
+					})
+					descriptions = append(descriptions, fmt.Sprintf("Location changed from %s", oldName))
+				}
 				incident.LocationID = &locID
 			}
 		}
@@ -1280,28 +1447,59 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		incident.Longitude = req.Longitude
 	}
 
-	if req.Address != "" {
-		incident.Address = req.Address
-	}
-	if req.City != "" {
-		incident.City = req.City
-	}
-	if req.State != "" {
-		incident.State = req.State
-	}
-	if req.Country != "" {
-		incident.Country = req.Country
-	}
-	if req.PostalCode != "" {
-		incident.PostalCode = req.PostalCode
+	// trackAddressField records an address-component edit. These were persisted without any
+	// revision entry, so an address-only edit produced no audit row - and was rejected outright by
+	// the len(changes)==0 guard below.
+	trackAddressField := func(name, label, newValue string, target *string) {
+		if newValue == "" || newValue == *target {
+			return
+		}
+		oldVal := *target
+		changes = append(changes, models.IncidentFieldChange{
+			FieldName:  name,
+			FieldLabel: label,
+			OldValue:   &oldVal,
+			NewValue:   &newValue,
+		})
+		descriptions = append(descriptions, fmt.Sprintf("%s changed from %s to %s", label, oldVal, newValue))
+		*target = newValue
 	}
 
+	trackAddressField("address", "Address", req.Address, &incident.Address)
+	trackAddressField("city", "City", req.City, &incident.City)
+	trackAddressField("state", "State", req.State, &incident.State)
+	trackAddressField("country", "Country", req.Country, &incident.Country)
+	trackAddressField("postal_code", "Postal Code", req.PostalCode, &incident.PostalCode)
+
 	if req.DueDate != nil {
+		oldVal := ""
+		if incident.DueDate != nil {
+			oldVal = incident.DueDate.Format(time.RFC3339)
+		}
 		if *req.DueDate == "" {
+			if incident.DueDate != nil {
+				changes = append(changes, models.IncidentFieldChange{
+					FieldName:  "due_date",
+					FieldLabel: "Due Date",
+					OldValue:   &oldVal,
+					NewValue:   nil,
+				})
+				descriptions = append(descriptions, fmt.Sprintf("Due Date cleared (was %s)", oldVal))
+			}
 			incident.DueDate = nil
 		} else {
 			dueDate, err := time.Parse(time.RFC3339, *req.DueDate)
 			if err == nil {
+				if incident.DueDate == nil || !incident.DueDate.Equal(dueDate) {
+					newVal := dueDate.Format(time.RFC3339)
+					changes = append(changes, models.IncidentFieldChange{
+						FieldName:  "due_date",
+						FieldLabel: "Due Date",
+						OldValue:   &oldVal,
+						NewValue:   &newVal,
+					})
+					descriptions = append(descriptions, fmt.Sprintf("Due Date changed from %s to %s", oldVal, newVal))
+				}
 				incident.DueDate = &dueDate
 			}
 		}
@@ -1607,6 +1805,11 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 	// Check if already converted
 	if sourceIncident.ConvertedRequestID != nil {
 		return nil, errors.New(i18n.T(ctx, "already_converted_to_request"))
+	}
+
+	// Only allow conversion while the incident is in the configured state (e.g. "Under Resolution")
+	if !s.isInConvertibleState(sourceIncident) {
+		return nil, errors.New(i18n.T(ctx, "convert_requires_resolution_state"))
 	}
 
 	// Handle existing request linking
@@ -2055,17 +2258,22 @@ func (s *incidentService) CanConvertToRequest(ctx context.Context, incidentID uu
 	// Get the source incident
 	sourceIncident, err := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
 	if err != nil {
-		return false, "", errors.New(i18n.T(ctx, "incident_not_found"))
+		return false, "", err
 	}
 
 	// Check if it's already a request
 	if sourceIncident.RecordType == "request" {
-		return false, "This is already a request", nil
+		return false, i18n.T(ctx, "cannot_convert_request"), nil
 	}
 
 	// Check if it has already been converted
 	if sourceIncident.ConvertedRequestID != nil {
-		return false, "This incident has already been converted to a request", nil
+		return false, i18n.T(ctx, "already_converted_to_request"), nil
+	}
+
+	// Only allow conversion while the incident is in the configured state (e.g. "Under Resolution")
+	if !s.isInConvertibleState(sourceIncident) {
+		return false, i18n.T(ctx, "convert_requires_resolution_state"), nil
 	}
 
 	// Get the workflow with ConvertToRequestRoles
@@ -2088,7 +2296,7 @@ func (s *incidentService) CanConvertToRequest(ctx context.Context, incidentID uu
 		}
 	}
 
-	return false, "You do not have permission to convert this incident to a request", nil
+	return false, i18n.T(ctx, "no_permission_convert"), nil
 }
 
 // getTerminalStateForWorkflow finds a terminal state for the given workflow
@@ -2864,6 +3072,10 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				tx.Rollback()
 				return nil, errors.New(errMsg)
 			}
+			if (requirement.IsMultiple == nil || !*requirement.IsMultiple) && len(req.Attachments) > 1 {
+				tx.Rollback()
+				return nil, errors.New("Only one attachment is allowed for this transition")
+			}
 		case "feedback":
 			if req.Feedback == nil {
 				errMsg := requirement.ErrorMessage
@@ -2940,9 +3152,17 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	}
 
 	// Validate duration when transitioning INTO a partial_close state
-	if newState.IsPartialClose && req.ReadyToCloseDuration == "" {
-		tx.Rollback()
-		return nil, errors.New(i18n.T(ctx, "partial_close_duration_required"))
+	if newState.IsPartialClose {
+		if req.ReadyToCloseDuration == "" {
+			tx.Rollback()
+			return nil, errors.New(i18n.T(ctx, "partial_close_duration_required"))
+		}
+		if s.readyToCloseService != nil {
+			if _, err := s.readyToCloseService.ParseDuration(req.ReadyToCloseDuration); err != nil {
+				tx.Rollback()
+				return nil, errors.New(i18n.T(ctx, "partial_close_duration_invalid"))
+			}
+		}
 	}
 
 	// Prepare updates map for all fields that need to change
@@ -3674,9 +3894,6 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			// Schedule delayed SMS fallback.
 			if s.smsFeedbackPendingRepo != nil {
 				delayMinutes := s.smsFeedbackDelayMinutes
-				if delayMinutes <= 0 {
-					delayMinutes = 2880
-				}
 				closedAt := time.Now()
 				pending := &models.SmsFeedbackPending{
 					IncidentID:  incidentID,
@@ -4745,7 +4962,7 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 
 			// Send actual SMS via Twilio
 			fmt.Println("[DEBUG] Calling utils.SendSMS...")
-			smsErr := utils.SendSMS(merged.Reporter.Phone, smsMessage)
+			_, smsErr := utils.SendSMS(merged.Reporter.Phone, smsMessage)
 			if smsErr != nil {
 				fmt.Printf("[DEBUG] SMS send failed: %v\n", smsErr)
 			} else {
@@ -4759,6 +4976,7 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 				Category:   "sent",
 				Language:   "en",
 				Recipients: models.RecipientArray{{Email: merged.Reporter.Phone, Type: "to", Status: "sent"}},
+				IncidentID: &merged.ID,
 				Subject:    "Incident Closed",
 				Body:       smsMessage,
 				Status:     "sent",
@@ -4770,6 +4988,7 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 			if smsErr != nil {
 				notification.Status = "failed"
 				notification.ErrorMessage = smsErr.Error()
+				notification.FailureCode = ClassifyFailureCode(smsErr)
 			}
 
 			fmt.Println("[DEBUG] Creating notification log...")
@@ -4866,7 +5085,7 @@ func (s *incidentService) notifyStatusChangeToMergedIncidents(ctx context.Contex
 
 			// Send actual SMS via Twilio
 			fmt.Println("[DEBUG] Calling utils.SendSMS...")
-			smsErr := utils.SendSMS(merged.Reporter.Phone, smsMessage)
+			_, smsErr := utils.SendSMS(merged.Reporter.Phone, smsMessage)
 			if smsErr != nil {
 				fmt.Printf("[DEBUG] SMS send failed: %v\n", smsErr)
 			} else {
@@ -4880,6 +5099,7 @@ func (s *incidentService) notifyStatusChangeToMergedIncidents(ctx context.Contex
 				Category:   "sent",
 				Language:   "en",
 				Recipients: models.RecipientArray{{Email: merged.Reporter.Phone, Type: "to", Status: "sent"}},
+				IncidentID: &merged.ID,
 				Subject:    "Incident Status Updated",
 				Body:       smsMessage,
 				Status:     "sent",
@@ -4891,6 +5111,7 @@ func (s *incidentService) notifyStatusChangeToMergedIncidents(ctx context.Contex
 			if smsErr != nil {
 				notification.Status = "failed"
 				notification.ErrorMessage = smsErr.Error()
+				notification.FailureCode = ClassifyFailureCode(smsErr)
 			}
 
 			fmt.Println("[DEBUG] Creating notification log...")
@@ -5018,7 +5239,14 @@ func (s *incidentService) CreateRevision(ctx context.Context, incidentID uuid.UU
 func (s *incidentService) applyCreationTimeAssignment(ctx context.Context, incident *models.Incident, initialState *models.WorkflowState, creatorID uuid.UUID, source string) {
 	distributeAssign := strings.TrimSpace(os.Getenv("DISTRIBUTE_INCIDENT_ASSIGN"))
 	if strings.EqualFold(distributeAssign, "true") {
-		if strings.EqualFold(source, constants.INCIDENT_SOURCE.WEB) &&
+		// VD2: distribute every source (incl. web) uniformly via round-robin,
+		// so a web incident is not self-assigned to its creator.
+		clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+		uniformRoundRobin := strings.EqualFold(clientCode, constants.CLIENT_CODE.VD2) &&
+			strings.EqualFold(incident.RecordType, "incident")
+
+		if !uniformRoundRobin &&
+			strings.EqualFold(source, constants.INCIDENT_SOURCE.WEB) &&
 			s.UserHasAssignmentRole(ctx, creatorID, initialState.AssignmentRoles) {
 			if err := s.incidentRepo.AssignIncident(ctx, incident.ID, creatorID); err != nil {
 				fmt.Printf("Warning: creation assignment (self-assign for web) failed: %v\n", err)
@@ -5604,11 +5832,14 @@ func (s *incidentService) SendNotBelongClosureSMS(
 		vars["department_name"] = deptName
 
 		templateCode := "INCIDENT_CLOSURE_NOT_BELONG_SMS"
-		_, err := s.notificationService.SendNotification(
+		result, err := s.notificationService.SendNotification(
 			ctx, "sms", &templateCode, "ar",
 			[]string{mobile}, nil, nil,
 			"", "", vars, nil, &userID, nil,
 		)
+		if result != nil && result.SentLog != nil {
+			_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
+		}
 		if err != nil {
 			log.Printf("NOT-BELONG-SMS: Template send failed for incident %s: %v", incident.IncidentNumber, err)
 		} else {
@@ -5625,7 +5856,7 @@ func (s *incidentService) SendNotBelongClosureSMS(
 	)
 
 	now := time.Now()
-	smsErr := utils.SendSMS(mobile, smsMessage)
+	_, smsErr := utils.SendSMS(mobile, smsMessage)
 	status := "sent"
 	if smsErr != nil {
 		status = "failed"
@@ -5640,6 +5871,7 @@ func (s *incidentService) SendNotBelongClosureSMS(
 		Category:   "sent",
 		Language:   "en",
 		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
+		IncidentID: &incident.ID,
 		Subject:    "Incident Not Belong Closure",
 		Body:       smsMessage,
 		Status:     status,
@@ -5650,6 +5882,7 @@ func (s *incidentService) SendNotBelongClosureSMS(
 	}
 	if smsErr != nil {
 		notification.ErrorMessage = smsErr.Error()
+		notification.FailureCode = ClassifyFailureCode(smsErr)
 	}
 	if err := s.incidentRepo.CreateNotification(ctx, notification); err != nil {
 		log.Printf("NOT-BELONG-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
@@ -5686,9 +5919,9 @@ func (s *incidentService) sendConvertToRequestSMS(ctx context.Context, incident 
 	vars["request_number"] = requestNumber
 
 	if s.notificationService != nil {
-		err := s.notificationService.SendByActionType(
+		err := s.notificationService.SendByActionTypeForIncident(
 			ctx, models.TemplateActionConvertToRequest, "sms", "ar",
-			[]string{mobile}, vars, &userID,
+			[]string{mobile}, vars, &userID, incident.ID,
 		)
 		if err != nil {
 			log.Printf("CONVERT-TO-REQUEST-SMS: No active templates found for incident %s, falling back to hardcoded: %v", incident.IncidentNumber, err)
@@ -5701,7 +5934,7 @@ func (s *incidentService) sendConvertToRequestSMS(ctx context.Context, incident 
 	// Hardcoded Arabic fallback
 	smsMessage := fmt.Sprintf("تم تحويل بلاغك رقم %s إلى طلب رقم %s", incident.IncidentNumber, requestNumber)
 	now := time.Now()
-	smsErr := utils.SendSMS(mobile, smsMessage)
+	_, smsErr := utils.SendSMS(mobile, smsMessage)
 	status := "sent"
 	if smsErr != nil {
 		status = "failed"
@@ -5716,6 +5949,7 @@ func (s *incidentService) sendConvertToRequestSMS(ctx context.Context, incident 
 		Category:   "sent",
 		Language:   "ar",
 		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
+		IncidentID: &incident.ID,
 		Subject:    "Incident Converted to Request",
 		Body:       smsMessage,
 		Status:     status,
@@ -5726,6 +5960,7 @@ func (s *incidentService) sendConvertToRequestSMS(ctx context.Context, incident 
 	}
 	if smsErr != nil {
 		notification.ErrorMessage = smsErr.Error()
+		notification.FailureCode = ClassifyFailureCode(smsErr)
 	}
 	if err := s.incidentRepo.CreateNotification(ctx, notification); err != nil {
 		log.Printf("CONVERT-TO-REQUEST-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
@@ -5772,9 +6007,9 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 	vars := BuildIncidentVariables(incident, nil, nil)
 
 	if s.notificationService != nil {
-		err := s.notificationService.SendByActionType(
+		err := s.notificationService.SendByActionTypeForIncident(
 			ctx, models.TemplateActionMissingInfo, "sms", "ar",
-			[]string{mobile}, vars, &userID,
+			[]string{mobile}, vars, &userID, incident.ID,
 		)
 		if err != nil {
 			log.Printf("MISSING-INFO-SMS: No active templates for incident %s, falling back to hardcoded: %v", incident.IncidentNumber, err)
@@ -5790,7 +6025,7 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 		incident.IncidentNumber,
 	)
 	now := time.Now()
-	smsErr := utils.SendSMS(mobile, smsMessage)
+	_, smsErr := utils.SendSMS(mobile, smsMessage)
 	status := "sent"
 	if smsErr != nil {
 		status = "failed"
@@ -5805,6 +6040,7 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 		Category:   "sent",
 		Language:   "en",
 		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
+		IncidentID: &incident.ID,
 		Subject:    "Incident Closed - Missing Information",
 		Body:       smsMessage,
 		Status:     status,
@@ -5815,6 +6051,7 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 	}
 	if smsErr != nil {
 		notification.ErrorMessage = smsErr.Error()
+		notification.FailureCode = ClassifyFailureCode(smsErr)
 	}
 	if err := s.incidentRepo.CreateNotification(ctx, notification); err != nil {
 		log.Printf("MISSING-INFO-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)

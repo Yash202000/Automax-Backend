@@ -9,30 +9,32 @@ import (
 
 // Department represents a hierarchical department structure
 type Department struct {
-	ID              uuid.UUID        `gorm:"type:uuid;primary_key" json:"id"`
-	Name            string           `gorm:"not null;size:100" json:"name"`
-	NameAr          string           `gorm:"size:100" json:"name_ar"`
-	Code            string           `gorm:"size:50;uniqueIndex" json:"code"`
-	Description     string           `gorm:"size:500" json:"description"`
-	DescriptionAr   string           `gorm:"size:500" json:"description_ar"`
-	Type            string           `gorm:"size:20;default:internal" json:"type"` // internal | external
-	ParentID        *uuid.UUID       `gorm:"type:uuid;index" json:"parent_id"`
-	Parent          *Department      `gorm:"foreignKey:ParentID" json:"parent,omitempty"`
-	Children        []Department     `gorm:"foreignKey:ParentID" json:"children,omitempty"`
-	Level           int              `gorm:"default:0" json:"level"`
-	Path            string           `gorm:"size:1000" json:"path"`
-	ManagerID       *uuid.UUID       `gorm:"type:uuid" json:"manager_id"`
-	IsActive        bool             `gorm:"default:true" json:"is_active"`
-	SortOrder       int              `gorm:"default:0" json:"sort_order"`
+	ID            uuid.UUID    `gorm:"type:uuid;primary_key" json:"id"`
+	Name          string       `gorm:"not null;size:100" json:"name"`
+	NameAr        string       `gorm:"size:100" json:"name_ar"`
+	Code          string       `gorm:"size:50;uniqueIndex" json:"code"`
+	Description   string       `gorm:"size:500" json:"description"`
+	DescriptionAr string       `gorm:"size:500" json:"description_ar"`
+	Type          string       `gorm:"size:20;default:internal" json:"type"` // internal | external
+	ParentID      *uuid.UUID   `gorm:"type:uuid;index" json:"parent_id"`
+	Parent        *Department  `gorm:"foreignKey:ParentID" json:"parent,omitempty"`
+	Children      []Department `gorm:"foreignKey:ParentID" json:"children,omitempty"`
+	Level         int          `gorm:"default:0" json:"level"`
+	Path          string       `gorm:"size:1000" json:"path"`
+	ManagerID     *uuid.UUID   `gorm:"type:uuid" json:"manager_id"`
+	SupervisorID  *uuid.UUID   `gorm:"type:uuid" json:"supervisor_id"`
+	Supervisor    *User        `gorm:"foreignKey:SupervisorID" json:"supervisor,omitempty"`
+	IsActive      bool         `gorm:"default:true" json:"is_active"`
+	SortOrder     int          `gorm:"default:0" json:"sort_order"`
 
 	// Many-to-many relationships
 	Locations       []Location       `gorm:"many2many:department_locations;" json:"locations,omitempty"`
 	Classifications []Classification `gorm:"many2many:department_classifications;" json:"classifications,omitempty"`
 	Roles           []Role           `gorm:"many2many:department_roles;" json:"roles,omitempty"`
 
-	CreatedAt       time.Time        `json:"created_at"`
-	UpdatedAt       time.Time        `json:"updated_at"`
-	DeletedAt       gorm.DeletedAt   `gorm:"index" json:"-"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (d *Department) BeforeCreate(tx *gorm.DB) error {
@@ -46,12 +48,13 @@ func (d *Department) BeforeCreate(tx *gorm.DB) error {
 type DepartmentCreateRequest struct {
 	Name              string      `json:"name" validate:"required,notblank,name,min=1,max=100"`
 	NameAr            string      `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
-	Code              string      `json:"code" validate:"required,min=1,max=50"`
+	Code              string      `json:"code" validate:"omitempty,min=1,max=50"`
 	Description       string      `json:"description" validate:"max=500"`
 	DescriptionAr     string      `json:"description_ar" validate:"max=500"`
 	Type              string      `json:"type" validate:"omitempty,oneof=internal external"`
 	ParentID          *uuid.UUID  `json:"parent_id"`
 	ManagerID         *uuid.UUID  `json:"manager_id"`
+	SupervisorID      *uuid.UUID  `json:"supervisor_id"`
 	LocationIDs       []uuid.UUID `json:"location_ids"`
 	ClassificationIDs []uuid.UUID `json:"classification_ids"`
 	RoleIDs           []uuid.UUID `json:"role_ids"`
@@ -67,11 +70,22 @@ type DepartmentUpdateRequest struct {
 	DescriptionAr     string      `json:"description_ar" validate:"max=500"`
 	Type              string      `json:"type" validate:"omitempty,oneof=internal external"`
 	ManagerID         *uuid.UUID  `json:"manager_id"`
+	SupervisorID      *uuid.UUID  `json:"supervisor_id"`
 	LocationIDs       []uuid.UUID `json:"location_ids"`
 	ClassificationIDs []uuid.UUID `json:"classification_ids"`
 	RoleIDs           []uuid.UUID `json:"role_ids"`
 	IsActive          *bool       `json:"is_active"`
 	SortOrder         *int        `json:"sort_order"`
+}
+
+// DepartmentListFilter holds query filters for the paginated department listing.
+type DepartmentListFilter struct {
+	Search         string     `query:"search"         json:"search"         validate:"omitempty,max=100"`
+	Code           string     `query:"code"           json:"code"           validate:"omitempty,max=50"`
+	Location       *uuid.UUID `query:"location"       json:"location"       validate:"omitempty,uuid4"`
+	Classification *uuid.UUID `query:"classification" json:"classification" validate:"omitempty,uuid4"`
+	Page           int        `query:"page"              json:"page"              validate:"omitempty,gte=1"`
+	Limit          int        `query:"limit"             json:"limit"             validate:"omitempty,gte=1,lte=100"`
 }
 
 // DepartmentResponse for API responses
@@ -87,6 +101,7 @@ type DepartmentResponse struct {
 	Level           int                      `json:"level"`
 	Path            string                   `json:"path"`
 	ManagerID       *uuid.UUID               `json:"manager_id"`
+	SupervisorID    *uuid.UUID               `json:"supervisor_id"`
 	IsActive        bool                     `json:"is_active"`
 	SortOrder       int                      `json:"sort_order"`
 	Children        []DepartmentResponse     `json:"children,omitempty"`
@@ -127,6 +142,7 @@ func ToDepartmentResponse(d *Department) DepartmentResponse {
 		Level:         d.Level,
 		Path:          d.Path,
 		ManagerID:     d.ManagerID,
+		SupervisorID:  d.SupervisorID,
 		IsActive:      d.IsActive,
 		SortOrder:     d.SortOrder,
 		CreatedAt:     d.CreatedAt,

@@ -35,6 +35,16 @@ const (
 	StatusPartial   = "partial"
 	StatusMockSent  = "mock-sent"
 	StatusScheduled = "scheduled"
+
+	// Delivery-status values reported by provider webhooks after the initial
+	// send accepted/failed outcome above. Applied to RecipientInfo.Status
+	// (per-recipient) and, for single-recipient sends, mirrored onto the
+	// parent NotificationLog.Status.
+	StatusQueued        = "queued"
+	StatusDelivered     = "delivered"
+	StatusRead          = "read"
+	StatusExpired       = "expired"
+	StatusUndeliverable = "undeliverable"
 )
 
 // NotificationMeta stores metadata for in-app notifications
@@ -65,14 +75,27 @@ func (m *NotificationMeta) Scan(value interface{}) error {
 	return json.Unmarshal(bytes, m)
 }
 
+// Normalized failure reason codes for notification delivery, used for
+// filtering/reporting independent of each provider's raw error text.
+const (
+	FailureCodeInvalidRecipient = "invalid_recipient"
+	FailureCodeTimeout          = "timeout"
+	FailureCodeProviderRejected = "provider_rejected"
+	FailureCodeNetworkError     = "network_error"
+	FailureCodeAuthError        = "auth_error"
+	FailureCodeUnknown          = "unknown_error"
+)
+
 // RecipientInfo stores individual recipient delivery status
 type RecipientInfo struct {
-	Email        string `json:"email"`
-	Channel      string `json:"channel"`
-	Type         string `json:"type"`   // "to" | "cc" | "bcc"
-	Status       string `json:"status"` // "success" | "failed"
-	Error        string `json:"error,omitempty"`
-	ErrorMessage string `json:"error_message,omitempty"`
+	Email             string `json:"email"`
+	Channel           string `json:"channel"`
+	Type              string `json:"type"`   // "to" | "cc" | "bcc"
+	Status            string `json:"status"` // "success" | "failed", later refined to queued/delivered/read/expired/undeliverable by provider webhooks
+	Error             string `json:"error,omitempty"`
+	ErrorMessage      string `json:"error_message,omitempty"`
+	FailureCode       string `json:"failure_code,omitempty"`        // normalized reason, see FailureCode* constants
+	ProviderMessageID string `json:"provider_message_id,omitempty"` // Twilio SID / Meta message id — used to match delivery status webhook callbacks back to this recipient
 }
 
 type MetaErrorResponse struct {
@@ -191,7 +214,7 @@ type NotificationLog struct {
 	Subject   string `gorm:"type:text;index" json:"subject,omitempty"`
 	SubjectAr string `gorm:"type:text" json:"subject_ar,omitempty"` // Arabic translation of subject
 	Body      string `gorm:"type:text;not null" json:"body"`
-	BodyAr    string `gorm:"type:text" json:"body_ar,omitempty"` // Arabic translation of body
+	BodyAr    string `gorm:"type:text" json:"body_ar,omitempty"`   // Arabic translation of body
 	BodyHTML  string `gorm:"type:text" json:"body_html,omitempty"` // HTML version of body
 	Status    string `gorm:"size:20;not null;index" json:"status"` // sent | failed | mock-sent | partial | draft | pending
 
@@ -203,12 +226,14 @@ type NotificationLog struct {
 	BCC            StringArray       `gorm:"type:jsonb" json:"bcc,omitempty"`
 	From           string            `gorm:"size:255;index" json:"from,omitempty"` // Sender email (for inbound)
 	ErrorMessage   string            `gorm:"type:text" json:"error_message,omitempty"`
+	FailureCode    string            `gorm:"size:30;index" json:"failure_code,omitempty"` // normalized reason, see FailureCode* constants; set when status=failed
 	Attachments    AttachmentArray   `gorm:"type:jsonb" json:"attachments,omitempty"`
 	IsRead         bool              `gorm:"default:false;index" json:"is_read"`           // For inbox emails
 	IsStarred      bool              `gorm:"default:false;index" json:"is_starred"`        // Star/flag important emails
 	ThreadID       *uuid.UUID        `gorm:"type:uuid;index" json:"thread_id,omitempty"`   // For email threading
 	InReplyTo      *uuid.UUID        `gorm:"type:uuid;index" json:"in_reply_to,omitempty"` // Reply to which email
 	Meta           *NotificationMeta `gorm:"type:jsonb" json:"meta,omitempty"`             // Contextual metadata (record id, type)
+	IncidentID     *uuid.UUID        `gorm:"type:uuid;index" json:"incident_id,omitempty"` // Incident this communication belongs to, if any
 	SentBy         *uuid.UUID        `gorm:"type:uuid;index" json:"sent_by,omitempty"`     // User who sent it (outbound)
 	ReceivedBy     *uuid.UUID        `gorm:"type:uuid;index" json:"received_by,omitempty"` // User who received it (inbound)
 	ScheduledAt    *time.Time        `json:"scheduled_at,omitempty"`                       // For scheduled sending (outbox)
@@ -257,8 +282,10 @@ type NotificationLogResponse struct {
 	Status         string            `json:"status"`
 	Provider       string            `json:"provider"`
 	ErrorMessage   string            `json:"error_message,omitempty"`
+	FailureCode    string            `json:"failure_code,omitempty"`
 	Attachments    []AttachmentInfo  `json:"attachments,omitempty"`
 	Meta           *NotificationMeta `json:"meta,omitempty"`
+	IncidentID     *uuid.UUID        `json:"incident_id,omitempty"`
 	IsRead         bool              `json:"is_read"`
 	IsStarred      bool              `json:"is_starred"`
 	ThreadID       *uuid.UUID        `json:"thread_id,omitempty"`
@@ -275,22 +302,42 @@ type NotificationLogResponse struct {
 
 // NotificationLogFilter for filtering and searching notifications
 type NotificationLogFilter struct {
-	Channel      string     `query:"channel" json:"channel" validate:"omitempty,oneof=email sms notification push-notification"`            // email | sms | notification | push-notification
-	Direction    string     `query:"direction" json:"direction" validate:"omitempty,oneof=inbound outbound"`                                // inbound | outbound
-	Category     string     `query:"category" json:"category" validate:"omitempty,oneof=inbox sent draft outbox trash spam"`                // inbox | sent | draft | outbox | trash | spam
-	Status       string     `query:"status" json:"status" validate:"omitempty,oneof=sent failed mock-sent partial draft pending scheduled"` // sent | failed | mock-sent | partial | draft | pending | scheduled
-	IsRead       *bool      `query:"is_read" json:"is_read" validate:"omitempty"`                                                           // Filter by read/unread
-	IsStarred    *bool      `query:"is_starred" json:"is_starred" validate:"omitempty"`                                                     // Filter by starred
-	Search       string     `query:"search" json:"search" validate:"omitempty,max=255"`                                                     // Search across subject, body, from, recipients
-	UserID       *uuid.UUID `json:"user_id"`                                                                                                // Filter by current user (sent_by OR received_by)
-	SentBy       *uuid.UUID `query:"sent_by" json:"sent_by" validate:"omitempty"`                                                           // Filter by sender (outbound)
-	ReceivedBy   *uuid.UUID `query:"received_by" json:"received_by" validate:"omitempty"`                                                   // Filter by receiver (inbound)
-	StartDate    *time.Time `query:"start_date" json:"start_date" validate:"omitempty"`                                                     // Filter by sent_at >= start_date
+	Channel      string     `query:"channel" json:"channel" validate:"omitempty,oneof=email sms notification push-notification"`                                                        // email | sms | notification | push-notification
+	Direction    string     `query:"direction" json:"direction" validate:"omitempty,oneof=inbound outbound"`                                                                            // inbound | outbound
+	Category     string     `query:"category" json:"category" validate:"omitempty,oneof=inbox sent draft outbox trash spam"`                                                            // inbox | sent | draft | outbox | trash | spam
+	Status       string     `query:"status" json:"status" validate:"omitempty,oneof=sent failed mock-sent partial draft pending scheduled queued delivered read expired undeliverable"` // sent | failed | mock-sent | partial | draft | pending | scheduled
+	IsRead       *bool      `query:"is_read" json:"is_read" validate:"omitempty"`                                                                                                       // Filter by read/unread
+	IsStarred    *bool      `query:"is_starred" json:"is_starred" validate:"omitempty"`                                                                                                 // Filter by starred
+	Search       string     `query:"search" json:"search" validate:"omitempty,max=255"`                                                                                                 // Search across subject, body, from, recipients
+	UserID       *uuid.UUID `json:"user_id"`                                                                                                                                            // Filter by current user (sent_by OR received_by)
+	IncidentID   *uuid.UUID `query:"incident_id" json:"incident_id" validate:"omitempty"`                                                                                               // Filter by incident (bypasses UserID scoping — see handler)
+	SentBy       *uuid.UUID `query:"sent_by" json:"sent_by" validate:"omitempty"`                                                                                                       // Filter by sender (outbound)
+	ReceivedBy   *uuid.UUID `query:"received_by" json:"received_by" validate:"omitempty"`                                                                                               // Filter by receiver (inbound)
+	StartDate    *time.Time `query:"start_date" json:"start_date" validate:"omitempty"`                                                                                                 // Filter by sent_at >= start_date
 	EndDate      *time.Time `query:"end_date" json:"end_date" validate:"omitempty"`
 	TemplateCode string     `query:"template_code" json:"template_code" validate:"omitempty,max=100"` // Filter by template code
 	ThreadID     *uuid.UUID `query:"thread_id" json:"thread_id" validate:"omitempty"`                 // Get all emails in a thread
 	Page         int        `query:"page" json:"page" validate:"omitempty,min=1"`                     // Pagination page number
 	Limit        int        `query:"limit" json:"limit" validate:"omitempty,min=1,max=100"`           // Pagination page size
+}
+
+// NotificationMonitoringFilter is the admin-wide (not user-scoped) filter used by the
+// Communication Tracking Dashboard: search/filter across ALL notifications (both
+// inbound and outbound) by channel, recipient, category, status, date range, and
+// record type — independent of the personal inbox scoping NotificationLogFilter/List
+// applies.
+type NotificationMonitoringFilter struct {
+	Channel     string     `query:"channel" json:"channel" validate:"omitempty,max=255"`                                    // comma-separated list of channels, e.g. "sms,email,whatsapp" — each validated individually in the handler
+	Recipient   string     `query:"recipient" json:"recipient" validate:"omitempty,max=255"`                                // substring match against recipient email/phone
+	Direction   string     `query:"direction" json:"direction" validate:"omitempty,oneof=inbound outbound"`                 // inbound | outbound — optional; omit to see both
+	Category    string     `query:"category" json:"category" validate:"omitempty,oneof=inbox sent draft outbox trash spam"` // inbox | sent | draft | outbox | trash | spam
+	Status      string     `query:"status" json:"status" validate:"omitempty,oneof=sent failed mock-sent partial draft pending scheduled queued delivered read expired undeliverable"`
+	FailureCode string     `query:"failure_code" json:"failure_code" validate:"omitempty,max=30"`
+	RecordType  string     `query:"record_type" json:"record_type" validate:"omitempty,oneof=incident complaint request query global"` // which record type this notification relates to; matches notification_templates.module_type
+	StartDate   *time.Time `query:"start_date" json:"start_date" validate:"omitempty"`
+	EndDate     *time.Time `query:"end_date" json:"end_date" validate:"omitempty"`
+	Page        int        `query:"page" json:"page" validate:"omitempty,min=1"`
+	Limit       int        `query:"limit" json:"limit" validate:"omitempty,min=1,max=100"`
 }
 
 // ToNotificationLogResponse converts NotificationLog to response
@@ -352,8 +399,10 @@ func ToNotificationLogResponse(log *NotificationLog) NotificationLogResponse {
 		Status:         log.Status,
 		Provider:       log.Provider,
 		ErrorMessage:   log.ErrorMessage,
+		FailureCode:    log.FailureCode,
 		Attachments:    responseAttachments,
 		Meta:           log.Meta,
+		IncidentID:     log.IncidentID,
 		IsRead:         log.IsRead,
 		IsStarred:      log.IsStarred,
 		ThreadID:       log.ThreadID,

@@ -8,10 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/internal/utils"
+	pkgUtils "github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 )
 
@@ -21,6 +23,7 @@ type NotificationService struct {
 	userRepo     repository.UserRepository
 
 	storage *storage.MinIOStorage
+	cfg     *config.Config
 }
 
 type SendNotificationResult struct {
@@ -28,15 +31,41 @@ type SendNotificationResult struct {
 	InboxLogIDs []uuid.UUID // IDs of inbox copies created for internal recipients
 }
 
+// ClassifyFailureCode maps a raw provider/SDK error into one of the normalized
+// models.FailureCode* reason codes, so failures can be filtered/reported on
+// independent of each provider's specific error wording.
+func ClassifyFailureCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "invalid") && (strings.Contains(msg, "recipient") || strings.Contains(msg, "number") || strings.Contains(msg, "email") || strings.Contains(msg, "address") || strings.Contains(msg, "phone")):
+		return models.FailureCodeInvalidRecipient
+	case strings.Contains(msg, "timeout") || strings.Contains(msg, "timed out") || strings.Contains(msg, "deadline exceeded"):
+		return models.FailureCodeTimeout
+	case strings.Contains(msg, "unauthorized") || strings.Contains(msg, "authentication") || strings.Contains(msg, "forbidden") || strings.Contains(msg, "401") || strings.Contains(msg, "403"):
+		return models.FailureCodeAuthError
+	case strings.Contains(msg, "rejected") || strings.Contains(msg, "blocked") || strings.Contains(msg, "spam") || strings.Contains(msg, "denied"):
+		return models.FailureCodeProviderRejected
+	case strings.Contains(msg, "connection") || strings.Contains(msg, "network") || strings.Contains(msg, "dial") || strings.Contains(msg, "eof"):
+		return models.FailureCodeNetworkError
+	default:
+		return models.FailureCodeUnknown
+	}
+}
+
 func NewNotificationService(
 	templateRepo repository.NotificationTemplateRepository,
 	logRepo repository.NotificationLogRepository, userRepo repository.UserRepository, storage *storage.MinIOStorage,
+	cfg *config.Config,
 ) *NotificationService {
 	return &NotificationService{
 		templateRepo: templateRepo,
 		logRepo:      logRepo,
 		userRepo:     userRepo,
 		storage:      storage,
+		cfg:          cfg,
 	}
 }
 
@@ -44,6 +73,12 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 	// REQUIRED: at least one recipient
 	if len(to) == 0 && len(cc) == 0 && len(bcc) == 0 {
 		return nil, fmt.Errorf("at least one recipient (to, cc, or bcc) is required")
+	}
+
+	if channel == "sms" {
+		for i, phone := range to {
+			to[i] = pkgUtils.NormalizeMobile(phone, s.cfg.CountryCode)
+		}
 	}
 
 	// When a template code is provided the template itself supplies subject/body,
@@ -154,11 +189,12 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 
 			for _, r := range allRecipients {
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-					Email:   r,
-					Channel: r,
-					Type:    utils.GetRecipientType(r, to, cc, bcc),
-					Status:  "failed",
-					Error:   err.Error(),
+					Email:       r,
+					Channel:     r,
+					Type:        utils.GetRecipientType(r, to, cc, bcc),
+					Status:      "failed",
+					Error:       err.Error(),
+					FailureCode: ClassifyFailureCode(err),
 				})
 			}
 
@@ -184,22 +220,24 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 			}
 		}
 		for _, phone := range to {
-			err := utils.SendSMS(phone, body)
+			sid, err := utils.SendSMS(phone, body)
 			if err != nil {
 				status = "failed"
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-					Email:   phone,
-					Channel: phone,
-					Type:    "to",
-					Status:  "failed",
-					Error:   err.Error(),
+					Email:       phone,
+					Channel:     phone,
+					Type:        "to",
+					Status:      "failed",
+					Error:       err.Error(),
+					FailureCode: ClassifyFailureCode(err),
 				})
 			} else {
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-					Email:   phone,
-					Channel: phone,
-					Type:    "to",
-					Status:  "success",
+					Email:             phone,
+					Channel:           phone,
+					Type:              "to",
+					Status:            "success",
+					ProviderMessageID: sid,
 				})
 			}
 		}
@@ -207,7 +245,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 	case "whatsapp":
 		status = "sent"
 		for _, phone := range to {
-			err := utils.SendOTPWithMetaTemplate(phone, body)
+			messageID, err := utils.SendOTPWithMetaTemplate(phone, body)
 			if err != nil {
 				status = "failed"
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
@@ -216,13 +254,15 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 					Status:       "failed",
 					Error:        err.Error(),
 					ErrorMessage: err.Error(),
+					FailureCode:  ClassifyFailureCode(err),
 				})
 
 			} else {
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-					Channel: phone,
-					Type:    "to",
-					Status:  "success",
+					Channel:           phone,
+					Type:              "to",
+					Status:            "success",
+					ProviderMessageID: messageID,
 				})
 			}
 		}
@@ -245,6 +285,31 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		return nil, fmt.Errorf("unsupported channel: %s", channel)
 	}
 
+	// Top-level failure code/message mirror the first failed recipient's
+	// normalized reason and raw error, so a failed log can be filtered/reported
+	// on without inspecting each recipient individually.
+	var failureCode, topLevelErrorMessage string
+	if status == "failed" {
+		for _, r := range recipientStatuses {
+			if r.Status != "failed" {
+				continue
+			}
+			if failureCode == "" && r.FailureCode != "" {
+				failureCode = r.FailureCode
+			}
+			if topLevelErrorMessage == "" {
+				if r.ErrorMessage != "" {
+					topLevelErrorMessage = r.ErrorMessage
+				} else if r.Error != "" {
+					topLevelErrorMessage = r.Error
+				}
+			}
+			if failureCode != "" && topLevelErrorMessage != "" {
+				break
+			}
+		}
+	}
+
 	now := time.Now()
 	log := &models.NotificationLog{
 		ID:           uuid.New(),
@@ -263,6 +328,8 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		OTPVerified:  false,
 		Status:       status,
 		Provider:     provider,
+		FailureCode:  failureCode,
+		ErrorMessage: topLevelErrorMessage,
 		Attachments:  attachmentInfo,
 		SentBy:       sentBy,
 		SentAt:       &now,
@@ -302,6 +369,8 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 			Body:         body,
 			Status:       status,
 			Provider:     provider,
+			FailureCode:  failureCode,
+			ErrorMessage: topLevelErrorMessage,
 			Attachments:  attachmentInfo,
 			SentBy:       sentBy,
 			ReceivedBy:   &user.ID, // this makes it appear in inbox
@@ -315,7 +384,14 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 	}
 
 	if status == "failed" {
-		return nil, fmt.Errorf("notification delivery failed")
+		// Still return the result alongside the error: the log row above was already
+		// persisted with status "failed", and callers that want to tag it (e.g. with
+		// an incident_id for the communication history) need SentLog.ID even on failure.
+		// Existing callers that only check `err != nil` before returning are unaffected.
+		return &SendNotificationResult{
+			SentLog:     log,
+			InboxLogIDs: inboxLogIDs,
+		}, fmt.Errorf("notification delivery failed")
 	}
 
 	return &SendNotificationResult{
@@ -463,6 +539,85 @@ func (s *NotificationService) ListNotifications(ctx context.Context, filter *mod
 	}
 
 	return responses, total, nil
+}
+
+// ListMonitoring retrieves notifications for the admin-wide Notification
+// Monitoring Dashboard: filterable by channel, recipient, status, failure
+// code, source module, and date range — not scoped to any single user.
+func (s *NotificationService) ListMonitoring(ctx context.Context, filter *models.NotificationMonitoringFilter) ([]models.NotificationLogResponse, int64, error) {
+	logs, total, err := s.logRepo.ListForMonitoring(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	responses := make([]models.NotificationLogResponse, len(logs))
+	for i, log := range logs {
+		responses[i] = models.ToNotificationLogResponse(&log)
+	}
+
+	return responses, total, nil
+}
+
+// UpdateDeliveryStatusByProviderMessageID applies a delivery-status update
+// (queued/delivered/read/expired/undeliverable/failed) reported by a provider
+// webhook (Twilio status callback, Meta WhatsApp status webhook) to the
+// recipient matching the given provider message ID.
+func (s *NotificationService) UpdateDeliveryStatusByProviderMessageID(ctx context.Context, providerMessageID, status, failureCode, errorMessage string) error {
+	notifLog, err := s.logRepo.FindByRecipientProviderMessageID(ctx, providerMessageID)
+	if err != nil {
+		return err
+	}
+	return s.logRepo.UpdateRecipientDeliveryStatus(ctx, notifLog.ID, providerMessageID, status, failureCode, errorMessage)
+}
+
+// ResendNotification re-sends a previously failed/undeliverable notification
+// using its already-stored subject/body/recipients, and returns the newly
+// created log alongside a reference to the original one. Only failed-state
+// notifications may be resent — there is no automatic retry, this is always
+// an explicit user action.
+func (s *NotificationService) ResendNotification(ctx context.Context, id uuid.UUID, resentBy *uuid.UUID) (*models.NotificationLogResponse, error) {
+	original, err := s.logRepo.FindByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	resendableStatuses := map[string]bool{
+		models.StatusFailed:        true,
+		models.StatusUndeliverable: true,
+		models.StatusExpired:       true,
+	}
+	if !resendableStatuses[original.Status] {
+		return nil, fmt.Errorf("only failed, undeliverable, or expired notifications can be resent (current status: %s)", original.Status)
+	}
+
+	var to, cc, bcc []string
+	for _, r := range original.Recipients {
+		recipient := r.Channel
+		if recipient == "" {
+			recipient = r.Email
+		}
+		switch r.Type {
+		case "cc":
+			cc = append(cc, recipient)
+		case "bcc":
+			bcc = append(bcc, recipient)
+		default:
+			to = append(to, recipient)
+		}
+	}
+
+	// Mirrors SendNotification's existing error contract (used by the /send
+	// endpoint): a delivery failure returns both a non-nil result (already
+	// persisted as a new log row) and a non-nil error. Callers that only
+	// check `err != nil` are unaffected; ResendNotification propagates the
+	// error the same way Send does today.
+	result, sendErr := s.SendNotification(ctx, original.Channel, nil, original.Language, to, cc, bcc, original.Subject, original.Body, nil, nil, resentBy, nil)
+	if sendErr != nil {
+		return nil, sendErr
+	}
+
+	response := models.ToNotificationLogResponse(result.SentLog)
+	return &response, nil
 }
 
 // GetNotification retrieves a single notification by ID
@@ -817,6 +972,12 @@ func (s *NotificationService) SetArContentOnLogs(ctx context.Context, ids []uuid
 	return s.logRepo.SetArContent(ctx, ids, subjectAr, bodyAr)
 }
 
+// SetIncidentIDOnLogs tags notification log rows with the incident they belong to,
+// so they can be surfaced in the incident's Communication history tab.
+func (s *NotificationService) SetIncidentIDOnLogs(ctx context.Context, ids []uuid.UUID, incidentID uuid.UUID) error {
+	return s.logRepo.SetIncidentID(ctx, ids, incidentID)
+}
+
 // placeholderRe matches {{key}} and {{.key}} patterns (key may contain letters, digits, underscores).
 var placeholderRe = regexp.MustCompile(`\{\{\.?([A-Za-z0-9_]+)\}\}`)
 
@@ -831,6 +992,30 @@ func (s *NotificationService) SendByActionType(
 	variables map[string]string,
 	sentBy *uuid.UUID,
 ) error {
+	return s.sendByActionType(ctx, actionType, channel, language, to, variables, sentBy, nil)
+}
+
+// SendByActionTypeForIncident behaves like SendByActionType but additionally tags every
+// resulting notification log with incidentID, so it surfaces in the incident's communication history.
+func (s *NotificationService) SendByActionTypeForIncident(
+	ctx context.Context,
+	actionType, channel, language string,
+	to []string,
+	variables map[string]string,
+	sentBy *uuid.UUID,
+	incidentID uuid.UUID,
+) error {
+	return s.sendByActionType(ctx, actionType, channel, language, to, variables, sentBy, &incidentID)
+}
+
+func (s *NotificationService) sendByActionType(
+	ctx context.Context,
+	actionType, channel, language string,
+	to []string,
+	variables map[string]string,
+	sentBy *uuid.UUID,
+	incidentID *uuid.UUID,
+) error {
 	templates, err := s.templateRepo.FindActiveByActionTypeAndChannel(ctx, actionType, channel)
 	if err != nil || len(templates) == 0 {
 		return fmt.Errorf("no active %s templates found for channel %s", actionType, channel)
@@ -840,11 +1025,14 @@ func (s *NotificationService) SendByActionType(
 	for _, tpl := range templates {
 		code := tpl.Code
 		log.Printf("[SendByActionType] sending template code=%s body_en_len=%d body_ar_len=%d", code, len(tpl.BodyEN), len(tpl.BodyAR))
-		_, sendErr := s.SendNotification(
+		result, sendErr := s.SendNotification(
 			ctx, channel, &code, language,
 			to, nil, nil,
 			"", "", variables, nil, sentBy, nil,
 		)
+		if incidentID != nil && result != nil && result.SentLog != nil {
+			_ = s.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, *incidentID)
+		}
 		if sendErr != nil {
 			log.Printf("[SendByActionType] template %s send failed: %v", code, sendErr)
 			lastErr = sendErr

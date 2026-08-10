@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -9,7 +10,11 @@ import (
 )
 
 type CallLog struct {
-	ID           uuid.UUID           `gorm:"type:uuid;primary_key" json:"id"`
+	ID uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
+	// CreatedBy is nil for system/machine-ingested rows (e.g. the Cintrix
+	// webhook) — no user acted to create them. Column is nullable; do not
+	// backfill with a fabricated user, that would misrepresent the audit trail.
+	CreatedBy    *uuid.UUID          `gorm:"type:uuid;column:created_by" json:"created_by,omitempty"`
 	CallUuid     string              `gorm:"size:36;uniqueIndex" json:"call_uuid,omitempty"`
 	CallType     string              `gorm:"size:20" json:"call_type"`
 	Status       string              `gorm:"size:20;not null" json:"status"`
@@ -30,12 +35,47 @@ func (c *CallLog) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
+// RecordingURLFromMeta extracts the "recording_url" field from a CallLog's Meta
+// JSON (as stored verbatim by CintrixWebhookHandler from the call.ended payload).
+// Returns "" when Meta is empty, the field is absent/null, or Meta isn't valid JSON.
+func RecordingURLFromMeta(meta datatypes.JSON) string {
+	if len(meta) == 0 {
+		return ""
+	}
+	var m struct {
+		RecordingURL *string `json:"recording_url"`
+	}
+	if err := json.Unmarshal(meta, &m); err != nil || m.RecordingURL == nil {
+		return ""
+	}
+	return *m.RecordingURL
+}
+
+// DirectionFromMeta extracts the "direction" field from a CallLog's Meta JSON
+// (stored verbatim by CintrixWebhookHandler from the call event payload).
+// Used for the unscoped admin list view, where there is no "current user" whose
+// phone could tell incoming from outgoing. Returns "" when Meta is empty, the
+// field is absent/null, or Meta isn't valid JSON.
+func DirectionFromMeta(meta datatypes.JSON) string {
+	if len(meta) == 0 {
+		return ""
+	}
+	var m struct {
+		Direction *string `json:"direction"`
+	}
+	if err := json.Unmarshal(meta, &m); err != nil || m.Direction == nil {
+		return ""
+	}
+	return *m.Direction
+}
+
 type CallParticipant struct {
 	ID          uuid.UUID  `gorm:"type:uuid;primary_key" json:"id"`
 	CallLogID   uuid.UUID  `gorm:"type:uuid;index" json:"call_log_id"`
 	PhoneNumber string     `gorm:"size:50;not null" json:"phone_number"`
-	Role        string     `gorm:"size:20" json:"role"`        // "initiator", "recipient", "participant"
-	JoinStatus  string     `gorm:"size:20" json:"join_status"` // "invited", "joined", "declined", "missed"
+	Role        string     `gorm:"size:20" json:"role"`                    // "initiator", "recipient", "participant"
+	DisplayName string     `gorm:"size:255" json:"display_name,omitempty"` // caller/contact name from the CTI payload
+	JoinStatus  string     `gorm:"size:20" json:"join_status"`             // "invited", "joined", "declined", "missed"
 	JoinedAt    *time.Time `json:"joined_at,omitempty"`
 	LeftAt      *time.Time `json:"left_at,omitempty"`
 }
@@ -187,13 +227,26 @@ type CallLogListItem struct {
 
 // CallLogFilter for filtering call logs
 type CallLogFilter struct {
-	Status        string     `json:"status" validate:"omitempty,oneof=initiated ongoing ended missed in_call cancelled complete completed"`
-	StartDate     *time.Time `json:"start_date" validate:"omitempty"`
-	EndDate       *time.Time `json:"end_date" validate:"omitempty"`
-	Search        string     `json:"search" validate:"omitempty,max=255"`
-	ParticipantID *uuid.UUID `json:"participant_id" validate:"omitempty,uuid4"`
-	Page          int        `json:"page" validate:"omitempty,gte=1,lte=1000"`
-	Limit         int        `json:"limit" validate:"omitempty,gte=10,lte=100"`
+	Status string `query:"status" json:"status" validate:"omitempty,oneof=initiated ongoing ended missed in_call cancelled complete completed"`
+	Search string `query:"search" json:"search" validate:"omitempty,max=255"`
+
+	// Dates are query:"-" and parsed by hand in the handler: QueryParser errors
+	// outright on anything time.Time's UnmarshalText rejects, so leaving these
+	// bindable would 400 the whole request for a plain YYYY-MM-DD.
+	StartDate *time.Time `query:"-" json:"start_date" validate:"omitempty"`
+	EndDate   *time.Time `query:"-" json:"end_date"   validate:"omitempty"`
+
+	// Super-admin-only scope overrides; silently ignored for everyone else.
+	// AgentID wins over All when both are supplied.
+	AgentID *uuid.UUID `query:"agent_id" json:"agent_id" validate:"omitempty,uuid4"`
+	All     bool       `query:"all"      json:"all"`
+
+	// ParticipantID is set by the handler from the resolved caller, never from the
+	// query string — binding it would let any caller read another user's calls.
+	ParticipantID *uuid.UUID `query:"-" json:"participant_id" validate:"omitempty,uuid4"`
+
+	Page  int `query:"page"  json:"page"  validate:"omitempty,gte=1,lte=1000"`
+	Limit int `query:"limit" json:"limit" validate:"omitempty,gte=1,lte=100"`
 }
 
 // CallLogStats represents statistics for call logs

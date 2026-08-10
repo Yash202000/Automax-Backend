@@ -2,6 +2,9 @@ package repository
 
 import (
 	"context"
+	"fmt"
+	"strings"
+	"sync"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/google/uuid"
@@ -16,12 +19,14 @@ type WorkflowRepository interface {
 	FindByCode(ctx context.Context, code string) (*models.Workflow, error)
 	List(ctx context.Context, activeOnly bool) ([]models.Workflow, error)
 	ListByRecordType(ctx context.Context, recordType string, activeOnly bool) ([]models.Workflow, error)
+	ListFiltered(ctx context.Context, filter *models.WorkflowFilter) ([]models.Workflow, int64, error)
 	Update(ctx context.Context, workflow *models.Workflow) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	HardDelete(ctx context.Context, id uuid.UUID) error         // Permanently delete with cascading
 	ListDeleted(ctx context.Context) ([]models.Workflow, error) // List soft-deleted workflows
 	Restore(ctx context.Context, id uuid.UUID) error            // Restore a soft-deleted workflow
 	ExistsByCodeOrName(ctx context.Context, codeOrName []string) (bool, error)
+	ExistsByName(ctx context.Context, name string) (bool, error)
 	// Workflow-Classification assignments
 	AssignClassifications(ctx context.Context, workflowID uuid.UUID, classificationIDs []uuid.UUID) error
 	GetByClassificationID(ctx context.Context, classificationID uuid.UUID) (*models.Workflow, error)
@@ -94,6 +99,30 @@ func NewWorkflowRepository(db *gorm.DB) WorkflowRepository {
 	return &workflowRepository{db: db}
 }
 
+// stateCodePrefix / transitionCodePrefix are the fixed prefixes for the
+// auto-generated State (ste-000001) and Transition (trn-000001) codes,
+// following the same convention as the department Organization Code (ORG-######).
+const (
+	stateCodePrefix      = "ste-"
+	transitionCodePrefix = "trn-"
+)
+
+// State / Transition Code allocation. Each seq is an in-process counter, seeded
+// once (loaded flag) from the current DB maximum and incremented under its mutex
+// on every create. The counter is global per entity type (across all workflows).
+// This assumes a single backend instance; there is no unique index on
+// workflow_states.code / workflow_transitions.code, so the counter is the sole
+// collision guard (same caveat as the department Organization Code).
+var (
+	stateCodeMu     sync.Mutex
+	stateCodeSeq    int64
+	stateCodeLoaded bool
+
+	transitionCodeMu     sync.Mutex
+	transitionCodeSeq    int64
+	transitionCodeLoaded bool
+)
+
 // Workflow CRUD
 
 func (r *workflowRepository) Create(ctx context.Context, workflow *models.Workflow) error {
@@ -163,6 +192,18 @@ func (r *workflowRepository) ExistsByCodeOrName(ctx context.Context, codeOrName 
 	return count > 0, nil
 }
 
+func (r *workflowRepository) ExistsByName(ctx context.Context, name string) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&models.Workflow{}).
+		Where("name = ?", name).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (r *workflowRepository) List(ctx context.Context, activeOnly bool) ([]models.Workflow, error) {
 	var workflows []models.Workflow
 	query := r.db.WithContext(ctx).
@@ -205,6 +246,75 @@ func (r *workflowRepository) ListByRecordType(ctx context.Context, recordType st
 
 	err := query.Order("name").Find(&workflows).Error
 	return workflows, err
+}
+
+func (r *workflowRepository) ListFiltered(ctx context.Context, filter *models.WorkflowFilter) ([]models.Workflow, int64, error) {
+	var workflows []models.Workflow
+	var total int64
+
+	query := r.db.WithContext(ctx).Model(&models.Workflow{})
+
+	if filter.Search != "" {
+		searchPattern := "%" + filter.Search + "%"
+		query = query.Where("name ILIKE ?", searchPattern)
+	}
+
+	if filter.IsActive != nil {
+		query = query.Where("is_active = ?", *filter.IsActive)
+	}
+
+	if filter.RecordType != "" {
+		// Support 'all' type which matches any type, 'both' matches incident/request
+		query = query.Where("(record_type = ? OR record_type = 'both' OR record_type = 'all')", filter.RecordType)
+	}
+
+	if filter.CreatedByID != "" {
+		query = query.Where("created_by_id = ?", filter.CreatedByID)
+	}
+
+	if filter.CreatedFrom != nil {
+		query = query.Where("created_at >= ?", *filter.CreatedFrom)
+	}
+	if filter.CreatedTo != nil {
+		query = query.Where("created_at <= ?", *filter.CreatedTo)
+	}
+	if filter.ModifiedFrom != nil {
+		query = query.Where("updated_at >= ?", *filter.ModifiedFrom)
+	}
+	if filter.ModifiedTo != nil {
+		query = query.Where("updated_at <= ?", *filter.ModifiedTo)
+	}
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	query = query.
+		Preload("States").
+		Preload("Transitions").
+		Preload("Classifications").
+		Preload("Locations").
+		Preload("CreatedBy").
+		Preload("ConvertToRequestRoles").
+		Preload("MergeAllowedRoles").
+		Order("name")
+
+	// Limit <= 0 means the caller didn't ask for pagination (page/limit not
+	// supplied) — return every matching row, as this endpoint always did
+	// before search/filter support was added.
+	if filter.Limit > 0 {
+		if filter.Page < 1 {
+			filter.Page = 1
+		}
+		offset := (filter.Page - 1) * filter.Limit
+		query = query.Offset(offset).Limit(filter.Limit)
+	}
+
+	if err := query.Find(&workflows).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return workflows, total, nil
 }
 
 func (r *workflowRepository) Update(ctx context.Context, workflow *models.Workflow) error {
@@ -375,7 +485,45 @@ func (r *workflowRepository) GetDefaultWorkflow(ctx context.Context) (*models.Wo
 // WorkflowState CRUD
 
 func (r *workflowRepository) CreateState(ctx context.Context, state *models.WorkflowState) error {
+	// The State Code is system-generated for EPM940 (the service leaves it empty).
+	// When empty, allocate the next unique STE-###### code from the in-process counter.
+	if strings.TrimSpace(state.Code) == "" {
+		code, err := r.nextStateCode(ctx)
+		if err != nil {
+			return err
+		}
+		state.Code = code
+	}
 	return r.db.WithContext(ctx).Create(state).Error
+}
+
+// nextStateCode returns the next unique State Code (e.g. STE-000001). It seeds an
+// in-process counter once from the current DB maximum — Unscoped() so soft-deleted
+// states keep their number reserved — then increments in memory under the mutex,
+// so there is no per-create DB round-trip and no collision within this process.
+func (r *workflowRepository) nextStateCode(ctx context.Context) (string, error) {
+	stateCodeMu.Lock()
+	defer stateCodeMu.Unlock()
+
+	if !stateCodeLoaded {
+		var maxCode *string
+		if err := r.db.WithContext(ctx).Unscoped().Model(&models.WorkflowState{}).
+			Select("MAX(code)").
+			Where("code LIKE ?", stateCodePrefix+"%").
+			Scan(&maxCode).Error; err != nil {
+			return "", err
+		}
+		if maxCode != nil && *maxCode != "" {
+			var n int64
+			if _, err := fmt.Sscanf(*maxCode, stateCodePrefix+"%d", &n); err == nil {
+				stateCodeSeq = n
+			}
+		}
+		stateCodeLoaded = true
+	}
+
+	stateCodeSeq++
+	return fmt.Sprintf("%s%06d", stateCodePrefix, stateCodeSeq), nil
 }
 
 func (r *workflowRepository) FindStateByID(ctx context.Context, id uuid.UUID) (*models.WorkflowState, error) {
@@ -447,7 +595,46 @@ func (r *workflowRepository) GetInitialState(ctx context.Context, workflowID uui
 // WorkflowTransition CRUD
 
 func (r *workflowRepository) CreateTransition(ctx context.Context, transition *models.WorkflowTransition) error {
+	// The Transition Code is system-generated for EPM940 (the service leaves it empty).
+	// When empty, allocate the next unique TRN-###### code from the in-process counter.
+	if strings.TrimSpace(transition.Code) == "" {
+		code, err := r.nextTransitionCode(ctx)
+		if err != nil {
+			return err
+		}
+		transition.Code = code
+	}
 	return r.db.WithContext(ctx).Create(transition).Error
+}
+
+// nextTransitionCode returns the next unique Transition Code (e.g. TRN-000001).
+// It seeds an in-process counter once from the current DB maximum — Unscoped() so
+// soft-deleted transitions keep their number reserved — then increments in memory
+// under the mutex, so there is no per-create DB round-trip and no collision within
+// this process.
+func (r *workflowRepository) nextTransitionCode(ctx context.Context) (string, error) {
+	transitionCodeMu.Lock()
+	defer transitionCodeMu.Unlock()
+
+	if !transitionCodeLoaded {
+		var maxCode *string
+		if err := r.db.WithContext(ctx).Unscoped().Model(&models.WorkflowTransition{}).
+			Select("MAX(code)").
+			Where("code LIKE ?", transitionCodePrefix+"%").
+			Scan(&maxCode).Error; err != nil {
+			return "", err
+		}
+		if maxCode != nil && *maxCode != "" {
+			var n int64
+			if _, err := fmt.Sscanf(*maxCode, transitionCodePrefix+"%d", &n); err == nil {
+				transitionCodeSeq = n
+			}
+		}
+		transitionCodeLoaded = true
+	}
+
+	transitionCodeSeq++
+	return fmt.Sprintf("%s%06d", transitionCodePrefix, transitionCodeSeq), nil
 }
 
 func (r *workflowRepository) FindTransitionByID(ctx context.Context, id uuid.UUID) (*models.WorkflowTransition, error) {

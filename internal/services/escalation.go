@@ -122,104 +122,104 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 		continue
 
 		// ── Legacy path (disabled — states must have an escalation policy) ───
-		transitions, err := s.workflowRepo.ListTransitionsFromState(ctx, state.ID)
-		if err != nil {
-			log.Printf("[EscalationService] Failed to list transitions from state '%s': %v", state.Name, err)
-			continue
-		}
+		// transitions, err := s.workflowRepo.ListTransitionsFromState(ctx, state.ID)
+		// if err != nil {
+		// 	log.Printf("[EscalationService] Failed to list transitions from state '%s': %v", state.Name, err)
+		// 	continue
+		// }
 
-		if len(transitions) == 0 {
-			log.Printf("[EscalationService] No outgoing transitions from state '%s' — nothing to notify", state.Name)
-			continue
-		}
-		log.Printf("[EscalationService] Found %d outgoing transition(s) from state '%s'", len(transitions), state.Name)
+		// if len(transitions) == 0 {
+		// 	log.Printf("[EscalationService] No outgoing transitions from state '%s' — nothing to notify", state.Name)
+		// 	continue
+		// }
+		// log.Printf("[EscalationService] Found %d outgoing transition(s) from state '%s'", len(transitions), state.Name)
 
-		notifiedUsers := make(map[uuid.UUID]bool)
+		// notifiedUsers := make(map[uuid.UUID]bool)
 
-		for _, transition := range transitions {
-			if len(transition.AllowedRoles) == 0 {
-				log.Printf("[EscalationService] Transition '%s' has no AllowedRoles — skipping targeted notify", transition.Name)
-				continue
-			}
+		// for _, transition := range transitions {
+		// 	if len(transition.AllowedRoles) == 0 {
+		// 		log.Printf("[EscalationService] Transition '%s' has no AllowedRoles — skipping targeted notify", transition.Name)
+		// 		continue
+		// 	}
 
-			roleIDs := make([]uuid.UUID, 0, len(transition.AllowedRoles))
-			for _, role := range transition.AllowedRoles {
-				roleIDs = append(roleIDs, role.ID)
-			}
+		// 	roleIDs := make([]uuid.UUID, 0, len(transition.AllowedRoles))
+		// 	for _, role := range transition.AllowedRoles {
+		// 		roleIDs = append(roleIDs, role.ID)
+		// 	}
 
-			users, err := s.userRepo.FindByRoleAndContext(
-				ctx, roleIDs,
-				incident.ClassificationID, incident.LocationID, incident.DepartmentID,
-			)
-			if err != nil {
-				log.Printf("[EscalationService] FindByRoleAndContext error for transition '%s': %v", transition.Name, err)
-				continue
-			}
-			if len(users) == 0 {
-				users, err = s.userRepo.FindByRoleAndContext(ctx, roleIDs, nil, nil, nil)
-				if err != nil {
-					log.Printf("[EscalationService] FindByRoleAndContext (role-only) error for transition '%s': %v", transition.Name, err)
-					continue
-				}
-				log.Printf("[EscalationService] Transition '%s': role-only fallback found %d user(s)", transition.Name, len(users))
-			}
-			if len(users) == 0 {
-				continue
-			}
+		// 	users, err := s.userRepo.FindByRoleAndContext(
+		// 		ctx, roleIDs,
+		// 		incident.ClassificationID, incident.LocationID, incident.DepartmentID,
+		// 	)
+		// 	if err != nil {
+		// 		log.Printf("[EscalationService] FindByRoleAndContext error for transition '%s': %v", transition.Name, err)
+		// 		continue
+		// 	}
+		// 	if len(users) == 0 {
+		// 		users, err = s.userRepo.FindByRoleAndContext(ctx, roleIDs, nil, nil, nil)
+		// 		if err != nil {
+		// 			log.Printf("[EscalationService] FindByRoleAndContext (role-only) error for transition '%s': %v", transition.Name, err)
+		// 			continue
+		// 		}
+		// 		log.Printf("[EscalationService] Transition '%s': role-only fallback found %d user(s)", transition.Name, len(users))
+		// 	}
+		// 	if len(users) == 0 {
+		// 		continue
+		// 	}
 
-			transitionID := transition.ID
-			for _, user := range users {
-				if notifiedUsers[user.ID] {
-					continue
-				}
-				alreadyNotified, err := s.repo.HasBeenNotified(ctx, incident.ID, state.ID, user.ID)
-				if err != nil {
-					log.Printf("[EscalationService] HasBeenNotified check failed for user %s: %v", user.Email, err)
-					continue
-				}
-				if alreadyNotified {
-					notifiedUsers[user.ID] = true
-					continue
-				}
+		// 	transitionID := transition.ID
+		// 	for _, user := range users {
+		// 		if notifiedUsers[user.ID] {
+		// 			continue
+		// 		}
+		// 		alreadyNotified, err := s.repo.HasBeenNotified(ctx, incident.ID, state.ID, user.ID)
+		// 		if err != nil {
+		// 			log.Printf("[EscalationService] HasBeenNotified check failed for user %s: %v", user.Email, err)
+		// 			continue
+		// 		}
+		// 		if alreadyNotified {
+		// 			notifiedUsers[user.ID] = true
+		// 			continue
+		// 		}
 
-				// Create breach log BEFORE sending so deduplication always works,
-				// even if the notification send fails.
-				now := time.Now()
-				breach := &models.EscalationSLA{
-					IncidentID:      &incident.ID,
-					StateID:         &state.ID,
-					TransitionID:    &transitionID,
-					NotifiedUserID:  &user.ID,
-					Email:           user.Email,
-					Phone:           user.Phone,
-					Actions:         models.TextArray{},
-					SLAHoursAllowed: int(state.SLAAsHours()),
-					HoursInState:    hoursInState,
-					EscalationType:  "state_sla",
-					NotifiedAt:      &now,
-				}
-				if err := s.repo.Create(ctx, breach); err != nil {
-					log.Printf("[EscalationService] Failed to persist breach log for user %s / incident %s: %v — skipping send",
-						user.Email, incident.IncidentNumber, err)
-					continue
-				}
+		// 		// Create breach log BEFORE sending so deduplication always works,
+		// 		// even if the notification send fails.
+		// 		now := time.Now()
+		// 		breach := &models.EscalationSLA{
+		// 			IncidentID:      &incident.ID,
+		// 			StateID:         &state.ID,
+		// 			TransitionID:    &transitionID,
+		// 			NotifiedUserID:  &user.ID,
+		// 			Email:           user.Email,
+		// 			Phone:           user.Phone,
+		// 			Actions:         models.TextArray{},
+		// 			SLAHoursAllowed: int(state.SLAAsHours()),
+		// 			HoursInState:    hoursInState,
+		// 			EscalationType:  "state_sla",
+		// 			NotifiedAt:      &now,
+		// 		}
+		// 		if err := s.repo.Create(ctx, breach); err != nil {
+		// 			log.Printf("[EscalationService] Failed to persist breach log for user %s / incident %s: %v — skipping send",
+		// 				user.Email, incident.IncidentNumber, err)
+		// 			continue
+		// 		}
 
-				sentChannels := s.sendNotifications(ctx, incident, state, transition.Name, user, hoursInState)
-				if sentChannels == nil {
-					sentChannels = []string{}
-				}
+		// 		sentChannels := s.sendNotifications(ctx, incident, state, transition.Name, user, hoursInState)
+		// 		if sentChannels == nil {
+		// 			sentChannels = []string{}
+		// 		}
 
-				// Update breach log with actual channels sent
-				breach.Actions = sentChannels
-				if err := s.repo.Update(ctx, breach); err != nil {
-					log.Printf("[EscalationService] Failed to update breach log actions for user %s: %v", user.Email, err)
-				} else {
-					log.Printf("[EscalationService] Breach log stored — incident %s, state '%s', user %s, channels %v",
-						incident.IncidentNumber, state.Name, user.Email, sentChannels)
-				}
-				notifiedUsers[user.ID] = true
-			}
-		}
+		// 		// Update breach log with actual channels sent
+		// 		breach.Actions = sentChannels
+		// 		if err := s.repo.Update(ctx, breach); err != nil {
+		// 			log.Printf("[EscalationService] Failed to update breach log actions for user %s: %v", user.Email, err)
+		// 		} else {
+		// 			log.Printf("[EscalationService] Breach log stored — incident %s, state '%s', user %s, channels %v",
+		// 				incident.IncidentNumber, state.Name, user.Email, sentChannels)
+		// 		}
+		// 		notifiedUsers[user.ID] = true
+		// 	}
+		// }
 	}
 
 	log.Printf("[EscalationService] Done — processed: %d, skipped (no policy): %d, skipped (other): %d",
@@ -384,22 +384,34 @@ func (s *EscalationService) sendPolicyNotification(
 	sendSMS := step.Channel == "sms" || step.Channel == "both"
 
 	if sendEmail && user.Email != "" {
-		if _, err := s.notificationService.SendNotification(ctx, "email", emailCodePtr, "en",
+		if result, err := s.notificationService.SendNotification(ctx, "email", emailCodePtr, "en",
 			[]string{user.Email}, nil, nil, subject, emailBody, vars, nil, &user.ID, nil,
 		); err != nil {
 			log.Printf("[EscalationService] Policy EMAIL failed for %s: %v", user.Email, err)
+			if result != nil && result.SentLog != nil {
+				_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
+			}
 		} else {
 			sent = append(sent, "EMAIL")
+			if result != nil && result.SentLog != nil {
+				_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
+			}
 		}
 	}
 
 	if sendSMS && user.Phone != "" {
-		if _, err := s.notificationService.SendNotification(ctx, "sms", smsCodePtr, "en",
+		if result, err := s.notificationService.SendNotification(ctx, "sms", smsCodePtr, "en",
 			[]string{user.Phone}, nil, nil, "", smsBody, vars, nil, &user.ID, nil,
 		); err != nil {
 			log.Printf("[EscalationService] Policy SMS failed for %s: %v", user.Phone, err)
+			if result != nil && result.SentLog != nil {
+				_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
+			}
 		} else {
 			sent = append(sent, "SMS")
+			if result != nil && result.SentLog != nil {
+				_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
+			}
 		}
 	}
 
@@ -434,9 +446,9 @@ func (s *EscalationService) sendNotifications(
 
 	// Templates configured from admin UI (action_type = "escalation") — no hardcoded codes.
 	if user.Email != "" {
-		if err := s.notificationService.SendByActionType(
+		if err := s.notificationService.SendByActionTypeForIncident(
 			ctx, models.TemplateActionEscalation, "email", "ar",
-			[]string{user.Email}, vars, nil,
+			[]string{user.Email}, vars, nil, incident.ID,
 		); err != nil {
 			log.Printf("[EscalationService] EMAIL failed for %s: %v", user.Email, err)
 		} else {
@@ -445,9 +457,9 @@ func (s *EscalationService) sendNotifications(
 	}
 
 	if user.Phone != "" {
-		if err := s.notificationService.SendByActionType(
+		if err := s.notificationService.SendByActionTypeForIncident(
 			ctx, models.TemplateActionEscalation, "sms", "ar",
-			[]string{user.Phone}, vars, nil,
+			[]string{user.Phone}, vars, nil, incident.ID,
 		); err != nil {
 			log.Printf("[EscalationService] SMS failed for %s: %v", user.Phone, err)
 		} else {
@@ -615,12 +627,15 @@ func (s *EscalationService) sendGlobalBreachNotification(
 	smsCode := "SLA_GLOBAL_BREACH_SMS"
 
 	if user.Email != "" {
-		_, err := s.notificationService.SendNotification(
+		result, err := s.notificationService.SendNotification(
 			ctx, "email", &emailCode, "en",
 			[]string{user.Email}, nil, nil,
 			subject, emailBody,
 			vars, nil, &user.ID, nil,
 		)
+		if result != nil && result.SentLog != nil {
+			_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
+		}
 		if err != nil {
 			log.Printf("[EscalationService] Global breach EMAIL failed for %s: %v", user.Email, err)
 		} else {
@@ -629,12 +644,15 @@ func (s *EscalationService) sendGlobalBreachNotification(
 	}
 
 	if user.Phone != "" {
-		_, err := s.notificationService.SendNotification(
+		result, err := s.notificationService.SendNotification(
 			ctx, "sms", &smsCode, "en",
 			[]string{user.Phone}, nil, nil,
 			"", smsBody,
 			vars, nil, &user.ID, nil,
 		)
+		if result != nil && result.SentLog != nil {
+			_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
+		}
 		if err != nil {
 			log.Printf("[EscalationService] Global breach SMS failed for %s: %v", user.Phone, err)
 		} else {

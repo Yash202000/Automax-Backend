@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/google/uuid"
@@ -18,7 +20,8 @@ type DepartmentRepository interface {
 	Update(ctx context.Context, department *models.Department) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context) ([]models.Department, error)
-	GetTree(ctx context.Context) ([]models.Department, error)
+	ListFiltered(ctx context.Context, filter models.DepartmentListFilter) ([]models.Department, int64, error)
+	GetTree(ctx context.Context, scopeDepartmentIDs []uuid.UUID) ([]models.Department, error)
 	GetChildren(ctx context.Context, parentID uuid.UUID) ([]models.Department, error)
 	GetByParentID(ctx context.Context, parentID *uuid.UUID) ([]models.Department, error)
 	AssignLocations(ctx context.Context, departmentID uuid.UUID, locationIDs []uuid.UUID) error
@@ -28,6 +31,19 @@ type DepartmentRepository interface {
 	HasActiveChildren(ctx context.Context, id uuid.UUID) (bool, error)
 	CheckDeleteDependencies(ctx context.Context, id uuid.UUID) (children, users, incidents int64, err error)
 }
+
+// orgCodePrefix is the fixed prefix for the auto-generated Organization Code (e.g. org-000001).
+const orgCodePrefix = "org-"
+
+// Organization Code allocation. orgCodeSeq is an in-process counter, seeded once
+// (orgCodeLoaded) from the current DB maximum and incremented under orgCodeMu on
+// every create. This assumes a single backend instance; the unique index on
+// departments.code is the last-resort guard if that assumption is ever violated.
+var (
+	orgCodeMu     sync.Mutex
+	orgCodeSeq    int64
+	orgCodeLoaded bool
+)
 
 type departmentRepository struct {
 	db *gorm.DB
@@ -49,7 +65,47 @@ func (r *departmentRepository) Create(ctx context.Context, department *models.De
 		department.Level = 0
 		department.Path = department.ID.String()
 	}
+
+	// The Organization Code is system-generated and never supplied by the caller.
+	// When empty, allocate the next unique ORG-###### code from the in-process counter.
+	if strings.TrimSpace(department.Code) == "" {
+		code, err := r.nextOrgCode(ctx)
+		if err != nil {
+			return err
+		}
+		department.Code = code
+	}
+
 	return r.db.WithContext(ctx).Create(department).Error
+}
+
+// nextOrgCode returns the next unique Organization Code (e.g. ORG-000001). It seeds
+// an in-process counter once from the current DB maximum — Unscoped() so soft-deleted
+// departments keep their number reserved — then just increments in memory under the
+// mutex, so there is no per-create DB round-trip and no collision within this process.
+func (r *departmentRepository) nextOrgCode(ctx context.Context) (string, error) {
+	orgCodeMu.Lock()
+	defer orgCodeMu.Unlock()
+
+	if !orgCodeLoaded {
+		var maxCode *string
+		if err := r.db.WithContext(ctx).Unscoped().Model(&models.Department{}).
+			Select("MAX(code)").
+			Where("code LIKE ?", orgCodePrefix+"%").
+			Scan(&maxCode).Error; err != nil {
+			return "", err
+		}
+		if maxCode != nil && *maxCode != "" {
+			var n int64
+			if _, err := fmt.Sscanf(*maxCode, orgCodePrefix+"%d", &n); err == nil {
+				orgCodeSeq = n
+			}
+		}
+		orgCodeLoaded = true
+	}
+
+	orgCodeSeq++
+	return fmt.Sprintf("%s%06d", orgCodePrefix, orgCodeSeq), nil
 }
 
 func (r *departmentRepository) FindByID(ctx context.Context, id uuid.UUID) (*models.Department, error) {
@@ -59,6 +115,7 @@ func (r *departmentRepository) FindByID(ctx context.Context, id uuid.UUID) (*mod
 		Preload("Locations").
 		Preload("Classifications").
 		Preload("Roles").
+		Preload("Supervisor").
 		First(&department, "id = ?", id).Error
 	if err != nil {
 		return nil, err
@@ -119,15 +176,76 @@ func (r *departmentRepository) List(ctx context.Context) ([]models.Department, e
 		Preload("Locations").
 		Preload("Classifications").
 		Preload("Roles").
+		Preload("Supervisor").
 		Order("sort_order, name").
 		Find(&departments).Error
 	return departments, err
 }
 
-func (r *departmentRepository) GetTree(ctx context.Context) ([]models.Department, error) {
+// ListFiltered returns a paginated list of departments, optionally filtered by
+// location and/or classification. It returns the page of departments plus the
+// total count of departments matching the filters.
+func (r *departmentRepository) ListFiltered(ctx context.Context, filter models.DepartmentListFilter) ([]models.Department, int64, error) {
+	var departments []models.Department
+	var total int64
+
+	base := r.db.WithContext(ctx).Model(&models.Department{})
+
+	if s := strings.TrimSpace(filter.Search); s != "" {
+		like := "%" + s + "%"
+		base = base.Where(
+			"departments.name ILIKE ? OR departments.name_ar ILIKE ? OR departments.code ILIKE ?",
+			like, like, like,
+		)
+	}
+	if code := strings.TrimSpace(filter.Code); code != "" {
+		base = base.Where("departments.code ILIKE ?", "%"+code+"%")
+	}
+
+	if filter.Classification != nil {
+		base = base.
+			Joins("JOIN department_classifications dc ON dc.department_id = departments.id").
+			Where("dc.classification_id = ?", filter.Classification)
+	}
+	if filter.Location != nil {
+		base = base.
+			Joins("JOIN department_locations dl ON dl.department_id = departments.id").
+			Where("dl.location_id = ?", filter.Location)
+	}
+
+	// Count distinct departments matching the filters (joins can duplicate rows).
+	if err := base.Session(&gorm.Session{}).
+		Distinct("departments.id").
+		Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	offset := (filter.Page - 1) * filter.Limit
+	err := base.
+		Preload("Locations").
+		Preload("Classifications").
+		Preload("Roles").
+		Preload("Supervisor").
+		Group("departments.id"). // deduplicate rows produced by the joins
+		Order("departments.sort_order, departments.name").
+		Offset(offset).
+		Limit(filter.Limit).
+		Find(&departments).Error
+	return departments, total, err
+}
+
+// GetTree returns the department tree. When scopeDepartmentIDs is non-empty, only
+// those departments (and their descendants) are returned as roots, instead of the
+// full org tree — used to restrict department-manager users to their own department(s).
+func (r *departmentRepository) GetTree(ctx context.Context, scopeDepartmentIDs []uuid.UUID) ([]models.Department, error) {
 	var roots []models.Department
-	err := r.db.WithContext(ctx).
-		Where("parent_id IS NULL").
+	query := r.db.WithContext(ctx)
+	if len(scopeDepartmentIDs) > 0 {
+		query = query.Where("id IN ?", scopeDepartmentIDs)
+	} else {
+		query = query.Where("parent_id IS NULL")
+	}
+	err := query.
 		Preload("Children", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order, name")
 		}).
@@ -138,6 +256,7 @@ func (r *departmentRepository) GetTree(ctx context.Context) ([]models.Department
 		Preload("Locations").
 		Preload("Classifications").
 		Preload("Roles").
+		Preload("Supervisor").
 		Order("sort_order, name").
 		Find(&roots).Error
 	return roots, err
@@ -242,6 +361,7 @@ func (r *departmentRepository) FindMatching(ctx context.Context, classificationI
 		Preload("Locations").
 		Preload("Classifications").
 		Preload("Roles").
+		Preload("Supervisor").
 		Where("departments.is_active = ?", true)
 
 	if departmentType != nil && *departmentType != "" {

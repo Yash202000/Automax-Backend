@@ -1,11 +1,14 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/internal/services"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
@@ -17,15 +20,42 @@ import (
 type RoleHandler struct {
 	roleRepo       repository.RoleRepository
 	permissionRepo repository.PermissionRepository
+	userRepo       repository.UserRepository
+	wsHub          *services.WSHub
 	validator      *validator.Validate
 }
 
-func NewRoleHandler(roleRepo repository.RoleRepository, permissionRepo repository.PermissionRepository) *RoleHandler {
+func NewRoleHandler(roleRepo repository.RoleRepository, permissionRepo repository.PermissionRepository, userRepo repository.UserRepository, wsHub *services.WSHub) *RoleHandler {
 	return &RoleHandler{
 		roleRepo:       roleRepo,
 		permissionRepo: permissionRepo,
+		userRepo:       userRepo,
+		wsHub:          wsHub,
 		validator:      validator.New(),
 	}
+}
+
+// notifyUsersPermissionsChanged pushes a real-time "permissions_changed" event to each
+// given user so their client re-fetches its permission set and refreshes the UI.
+func (h *RoleHandler) notifyUsersPermissionsChanged(users []models.User, reason string) {
+	if h.wsHub == nil {
+		return
+	}
+	for _, u := range users {
+		h.wsHub.BroadcastToUser(u.ID, "permissions_changed", fiber.Map{"reason": reason})
+	}
+}
+
+// notifyRolePermissionsChanged notifies every active user holding the given role.
+func (h *RoleHandler) notifyRolePermissionsChanged(ctx context.Context, roleID uuid.UUID, reason string) {
+	if h.wsHub == nil || h.userRepo == nil {
+		return
+	}
+	users, err := h.userRepo.FindByRoleAndContext(ctx, []uuid.UUID{roleID}, nil, nil, nil)
+	if err != nil {
+		return
+	}
+	h.notifyUsersPermissionsChanged(users, reason)
 }
 
 // Role endpoints
@@ -138,6 +168,8 @@ func (h *RoleHandler) UpdateRole(c *fiber.Ctx) error {
 	// Update permissions if provided
 	if req.PermissionIDs != nil {
 		h.roleRepo.AssignPermissions(c.UserContext(), role.ID, req.PermissionIDs)
+		// Notify live users of this role so their clients refresh permissions.
+		h.notifyRolePermissionsChanged(c.UserContext(), role.ID, "role_permissions_updated")
 	}
 
 	// Reload with permissions
@@ -170,6 +202,41 @@ func (h *RoleHandler) DeleteRole(c *fiber.Ctx) error {
 }
 
 func (h *RoleHandler) ListRoles(c *fiber.Ctx) error {
+	// If department_id query param is provided, scope to that department's roles
+	deptIDStr := c.Query("department_id")
+	if deptIDStr != "" {
+		deptID, err := uuid.Parse(deptIDStr)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_department_id"))
+		}
+		roles, err := h.roleRepo.ListByDepartment(c.UserContext(), deptID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		}
+		responses := make([]models.RoleResponse, len(roles))
+		for i, role := range roles {
+			responses[i] = models.ToRoleResponse(&role)
+		}
+		return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "roles_retrieved"), responses)
+	}
+
+	// Department-scoped users only see roles within their department
+	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
+	if user != nil && !user.IsSuperAdmin && user.HasPermission("users:view_department_only") {
+		scopeDeptID := user.ScopeDepartmentID()
+		if scopeDeptID != nil {
+			roles, err := h.roleRepo.ListByDepartment(c.UserContext(), *scopeDeptID)
+			if err != nil {
+				return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+			}
+			responses := make([]models.RoleResponse, len(roles))
+			for i, role := range roles {
+				responses[i] = models.ToRoleResponse(&role)
+			}
+			return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "roles_retrieved"), responses)
+		}
+	}
+
 	roles, err := h.roleRepo.List(c.UserContext())
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
@@ -200,6 +267,9 @@ func (h *RoleHandler) AssignPermissions(c *fiber.Ctx) error {
 	if err := h.roleRepo.AssignPermissions(c.UserContext(), id, req.PermissionIDs); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
+
+	// Notify live users of this role so their clients refresh permissions.
+	h.notifyRolePermissionsChanged(c.UserContext(), id, "role_permissions_updated")
 
 	role, _ := h.roleRepo.FindByID(c.UserContext(), id)
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "permissions_assigned"), models.ToRoleResponse(role))
@@ -265,6 +335,13 @@ func (h *RoleHandler) UpdatePermission(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
 	permission, err := h.permissionRepo.FindByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "permission_not_found"))
@@ -276,12 +353,30 @@ func (h *RoleHandler) UpdatePermission(c *fiber.Ctx) error {
 	if req.Description != "" {
 		permission.Description = req.Description
 	}
+
+	// Toggling IsActive grants/revokes the permission for everyone holding it, so their
+	// live clients must refresh. FindByPermissionCode only returns holders while the
+	// permission is active, so capture them BEFORE deactivating (and after activating).
+	wasActive := permission.IsActive
+	activeChanged := req.IsActive != nil && *req.IsActive != wasActive
+	var affectedUsers []models.User
+	if activeChanged && wasActive && h.userRepo != nil {
+		affectedUsers, _ = h.userRepo.FindByPermissionCode(c.UserContext(), permission.Code)
+	}
+
 	if req.IsActive != nil {
 		permission.IsActive = *req.IsActive
 	}
 
 	if err := h.permissionRepo.Update(c.UserContext(), permission); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
+	if activeChanged && h.userRepo != nil {
+		if !wasActive { // activating: holders are resolvable now that it's active
+			affectedUsers, _ = h.userRepo.FindByPermissionCode(c.UserContext(), permission.Code)
+		}
+		h.notifyUsersPermissionsChanged(affectedUsers, "permission_updated")
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "permission_updated"), models.ToPermissionResponse(permission))

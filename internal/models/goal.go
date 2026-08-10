@@ -697,6 +697,7 @@ type UserBriefResponse struct {
 	Email     string    `json:"email"`
 	FirstName string    `json:"first_name"`
 	LastName  string    `json:"last_name"`
+	Name      string    `json:"name"`
 	Avatar    string    `json:"avatar"`
 }
 
@@ -990,11 +991,16 @@ func ToUserBriefResponse(u *User) *UserBriefResponse {
 	if u == nil {
 		return nil
 	}
+	name := u.FirstName
+	if u.LastName != "" {
+		name += " " + u.LastName
+	}
 	return &UserBriefResponse{
 		ID:        u.ID,
 		Email:     u.Email,
 		FirstName: u.FirstName,
 		LastName:  u.LastName,
+		Name:      name,
 		Avatar:    u.Avatar,
 	}
 }

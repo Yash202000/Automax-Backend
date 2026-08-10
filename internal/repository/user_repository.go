@@ -24,10 +24,11 @@ type UserRepository interface {
 	Update(ctx context.Context, user *models.User) error
 	UpdateLastLogin(ctx context.Context, id uuid.UUID) error
 	Delete(ctx context.Context, id uuid.UUID) error
-	List(ctx context.Context, page, limit int, search string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.User, int64, error)
+	List(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID, strictDepartment ...bool) ([]models.User, int64, error)
 	ListByDepartment(ctx context.Context, departmentID uuid.UUID, page, limit int) ([]models.User, int64, error)
 	ExistsByEmail(ctx context.Context, email string) (bool, error)
 	ExistsByUsername(ctx context.Context, username string) (bool, error)
+	FindExistingIdentifiers(ctx context.Context, emails, usernames, phones []string) ([]models.UserIdentifier, error)
 	AssignRoles(ctx context.Context, userID uuid.UUID, roleIDs []uuid.UUID) error
 	AssignDepartments(ctx context.Context, userID uuid.UUID, departmentIDs []uuid.UUID) error
 	AssignLocations(ctx context.Context, userID uuid.UUID, locationIDs []uuid.UUID) error
@@ -58,6 +59,7 @@ type UserRepository interface {
 	ExistsByNationalID(ctx context.Context, nationalID string) (bool, error)
 	FindByNationalIDForLogin(ctx context.Context, nationalID string) (*models.User, error)
 	ExistsByPhoneAndName(ctx context.Context, phone string, name ...string) (bool, error)
+	CountAssignedIncidents(ctx context.Context, userID uuid.UUID) (int64, error)
 }
 
 type userRepository struct {
@@ -74,7 +76,7 @@ func (r *userRepository) Create(ctx context.Context, user *models.User) error {
 
 func (r *userRepository) FindByID(ctx context.Context, id uuid.UUID) (*models.User, error) {
 	var user models.User
-	err := r.db.WithContext(ctx).First(&user, "id = ?", id).Error
+	err := r.db.WithContext(ctx).Preload("CurrentExtension").First(&user, "id = ?", id).Error
 	if err != nil {
 		return nil, err
 	}
@@ -84,6 +86,7 @@ func (r *userRepository) FindByID(ctx context.Context, id uuid.UUID) (*models.Us
 func (r *userRepository) FindByIDWithRelations(ctx context.Context, id uuid.UUID) (*models.User, error) {
 	var user models.User
 	err := r.db.WithContext(ctx).
+		Preload("CurrentExtension").
 		Preload("Department").
 		Preload("Location").
 		Preload("Departments").
@@ -91,6 +94,9 @@ func (r *userRepository) FindByIDWithRelations(ctx context.Context, id uuid.UUID
 		Preload("Classifications").
 		Preload("Roles").
 		Preload("Roles.Permissions").
+		Preload("DeptManagerDepartment").
+		Preload("DeptManagerClassification").
+		Preload("DeptManagerLocation").
 		First(&user, "id = ?", id).Error
 	if err != nil {
 		return nil, err
@@ -104,6 +110,7 @@ func (r *userRepository) FindByIDWithPermissions(ctx context.Context, id uuid.UU
 	err := r.db.WithContext(ctx).
 		Preload("Roles", "is_active = ?", true).
 		Preload("Roles.Permissions", "is_active = ?", true).
+		Preload("Departments").
 		First(&user, "id = ?", id).Error
 	if err != nil {
 		return nil, err
@@ -113,7 +120,7 @@ func (r *userRepository) FindByIDWithPermissions(ctx context.Context, id uuid.UU
 
 func (r *userRepository) FindByEmail(ctx context.Context, email string) (*models.User, error) {
 	var user models.User
-	err := r.db.WithContext(ctx).First(&user, "email = ?", email).Error
+	err := r.db.WithContext(ctx).Preload("CurrentExtension").First(&user, "email = ?", email).Error
 	if err != nil {
 		return nil, err
 	}
@@ -123,6 +130,7 @@ func (r *userRepository) FindByEmail(ctx context.Context, email string) (*models
 func (r *userRepository) FindByEmailWithRelations(ctx context.Context, email string) (*models.User, error) {
 	var user models.User
 	err := r.db.WithContext(ctx).
+		Preload("CurrentExtension").
 		Preload("Department").
 		Preload("Location").
 		Preload("Departments").
@@ -141,6 +149,7 @@ func (r *userRepository) FindByEmailWithRelations(ctx context.Context, email str
 func (r *userRepository) FindByEmailForLogin(ctx context.Context, email string) (*models.User, error) {
 	var user models.User
 	err := r.db.WithContext(ctx).
+		Preload("CurrentExtension").
 		Preload("Roles", "is_active = ?", true).
 		Preload("Roles.Permissions", "is_active = ?", true).
 		First(&user, "email = ?", email).Error
@@ -154,6 +163,7 @@ func (r *userRepository) FindByEmailForLogin(ctx context.Context, email string) 
 func (r *userRepository) FindByPhoneForLogin(ctx context.Context, phone string) (*models.User, error) {
 	var user models.User
 	err := r.db.WithContext(ctx).
+		Preload("CurrentExtension").
 		Preload("Roles", "is_active = ?", true).
 		Preload("Roles.Permissions", "is_active = ?", true).
 		First(&user, "phone = ?", phone).Error
@@ -165,7 +175,7 @@ func (r *userRepository) FindByPhoneForLogin(ctx context.Context, phone string) 
 
 func (r *userRepository) FindByUsername(ctx context.Context, username string) (*models.User, error) {
 	var user models.User
-	err := r.db.WithContext(ctx).First(&user, "username = ?", username).Error
+	err := r.db.WithContext(ctx).Preload("CurrentExtension").First(&user, "username = ?", username).Error
 	if err != nil {
 		return nil, err
 	}
@@ -186,6 +196,7 @@ func (r *userRepository) FindByMobile(ctx context.Context, phone string) (*model
 func (r *userRepository) FindByPhoneWithRelations(ctx context.Context, phone string) (*models.User, error) {
 	var user models.User
 	err := r.db.WithContext(ctx).
+		Preload("CurrentExtension").
 		Preload("Department").
 		Preload("Location").
 		Preload("Departments").
@@ -214,16 +225,18 @@ func (r *userRepository) Update(ctx context.Context, user *models.User) error {
 	// Use Updates() with specific fields instead of Save() to avoid saving all loaded relations
 	// This prevents the "extended protocol limited to 65535 parameters" error
 	return r.db.WithContext(ctx).Model(&models.User{}).Where("id = ?", user.ID).Updates(map[string]interface{}{
-		"username":        user.Username,
-		"first_name":      user.FirstName,
-		"last_name":       user.LastName,
-		"phone":           user.Phone,
-		"extension":       user.Extension,
-		"password":        user.Password,
-		"mobile_verified": user.MobileVerified,
-		"is_active":       user.IsActive,
-		"department_id":   user.DepartmentID,
-		"location_id":     user.LocationID,
+		"username":                       user.Username,
+		"first_name":                     user.FirstName,
+		"last_name":                      user.LastName,
+		"phone":                          user.Phone,
+		"password":                       user.Password,
+		"mobile_verified":                user.MobileVerified,
+		"is_active":                      user.IsActive,
+		"department_id":                  user.DepartmentID,
+		"location_id":                    user.LocationID,
+		"dept_manager_department_id":     user.DeptManagerDepartmentID,
+		"dept_manager_classification_id": user.DeptManagerClassificationID,
+		"dept_manager_location_id":       user.DeptManagerLocationID,
 	}).Error
 }
 
@@ -240,22 +253,35 @@ func (r *userRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return r.db.WithContext(ctx).Delete(&models.User{}, "id = ?", id).Error
 }
 
-func (r *userRepository) List(ctx context.Context, page, limit int, search string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID) ([]models.User, int64, error) {
+func (r *userRepository) List(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID, strictDepartment ...bool) ([]models.User, int64, error) {
 	var users []models.User
 	var total int64
 
 	offset := (page - 1) * limit
 	hasFilters := len(roleIDs) > 0 || len(departmentIDs) > 0 || len(locationIDs) > 0 || len(classificationIDs) > 0
+	isStrict := len(strictDepartment) > 0 && strictDepartment[0]
 
 	// Build base query with search + join filters
-	base := r.db.WithContext(ctx).Model(&models.User{})
+	base := r.db.WithContext(ctx).Model(&models.User{}).
+		Where("LOWER(users.email) NOT LIKE 'ivr_email_%'")
 
 	if search != "" {
 		like := "%" + strings.ToLower(search) + "%"
+		phoneLike := "%" + strings.TrimPrefix(search, "+") + "%"
 		base = base.Where(
-			"LOWER(users.username) LIKE ? OR LOWER(users.email) LIKE ? OR LOWER(users.first_name) LIKE ? OR LOWER(users.last_name) LIKE ?",
-			like, like, like, like,
+			"LOWER(users.username) LIKE ? OR LOWER(users.email) LIKE ? OR LOWER(users.first_name) LIKE ? OR LOWER(users.last_name) LIKE ? OR users.phone LIKE ? OR users.id IN (SELECT user_id FROM extension_assignments WHERE extension LIKE ?)",
+			like, like, like, like, phoneLike, phoneLike,
 		)
+	}
+
+	if phone != "" {
+		base = base.Where("users.phone LIKE ?", "%"+strings.TrimPrefix(phone, "+")+"%")
+	}
+	if extension != "" {
+		base = base.Where("users.id IN (SELECT user_id FROM extension_assignments WHERE extension LIKE ?)", "%"+extension+"%")
+	}
+	if callStatus != "" {
+		base = base.Where("users.call_status = ?", callStatus)
 	}
 
 	if len(roleIDs) > 0 {
@@ -263,8 +289,12 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search strin
 			Where("ur.role_id IN ?", roleIDs)
 	}
 	if len(departmentIDs) > 0 {
-		base = base.Joins("LEFT JOIN user_departments ud ON ud.user_id = users.id").
-			Where("users.department_id IN ? OR ud.department_id IN ?", departmentIDs, departmentIDs)
+		if isStrict {
+			base = base.Where("users.department_id IN ?", departmentIDs)
+		} else {
+			base = base.Joins("LEFT JOIN user_departments ud ON ud.user_id = users.id").
+				Where("users.department_id IN ? OR ud.department_id IN ?", departmentIDs, departmentIDs)
+		}
 	}
 	if len(locationIDs) > 0 {
 		base = base.Joins("LEFT JOIN user_locations ul ON ul.user_id = users.id").
@@ -281,12 +311,16 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search strin
 			return nil, 0, err
 		}
 		err := base.
+			Preload("CurrentExtension").
 			Preload("Department").
 			Preload("Location").
 			Preload("Departments").
 			Preload("Locations").
 			Preload("Classifications").
 			Preload("Roles").
+			Preload("DeptManagerDepartment").
+			Preload("DeptManagerClassification").
+			Preload("DeptManagerLocation").
 			Offset(offset).Limit(limit).
 			Order("users.created_at DESC").
 			Find(&users).Error
@@ -317,12 +351,16 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search strin
 
 	// Load full user records with all relations, preserving page order.
 	if err := r.db.WithContext(ctx).
+		Preload("CurrentExtension").
 		Preload("Department").
 		Preload("Location").
 		Preload("Departments").
 		Preload("Locations").
 		Preload("Classifications").
 		Preload("Roles").
+		Preload("DeptManagerDepartment").
+		Preload("DeptManagerClassification").
+		Preload("DeptManagerLocation").
 		Where("id IN ?", userIDs).
 		Order("created_at DESC").
 		Find(&users).Error; err != nil {
@@ -410,6 +448,38 @@ func (r *userRepository) ExistsByUsername(ctx context.Context, username string) 
 	var count int64
 	err := r.db.WithContext(ctx).Model(&models.User{}).Where("username = ?", username).Count(&count).Error
 	return count > 0, err
+}
+
+// FindExistingIdentifiers returns the email/username/phone of every user matching any of the supplied
+// values. One query, three columns, no preloads - built for bulk-import duplicate pre-checks.
+// Emails are compared case-insensitively, like ExistsByEmail, so pass lower-cased emails.
+func (r *userRepository) FindExistingIdentifiers(ctx context.Context, emails, usernames, phones []string) ([]models.UserIdentifier, error) {
+	if len(emails) == 0 && len(usernames) == 0 && len(phones) == 0 {
+		return []models.UserIdentifier{}, nil
+	}
+
+	conditions := make([]string, 0, 3)
+	args := make([]interface{}, 0, 3)
+	if len(emails) > 0 {
+		conditions = append(conditions, "LOWER(email) IN ?")
+		args = append(args, emails)
+	}
+	if len(usernames) > 0 {
+		conditions = append(conditions, "username IN ?")
+		args = append(args, usernames)
+	}
+	if len(phones) > 0 {
+		conditions = append(conditions, "phone IN ?")
+		args = append(args, phones)
+	}
+
+	var identifiers []models.UserIdentifier
+	err := r.db.WithContext(ctx).
+		Model(&models.User{}).
+		Select("email", "username", "phone").
+		Where(strings.Join(conditions, " OR "), args...).
+		Find(&identifiers).Error
+	return identifiers, err
 }
 
 func (r *userRepository) AssignRoles(ctx context.Context, userID uuid.UUID, roleIDs []uuid.UUID) error {
@@ -681,15 +751,23 @@ func (r *userRepository) IsUserOnline(ctx context.Context, userID uuid.UUID) (bo
 	return count > 0, err
 }
 
+// FindByExtension resolves the user currently holding an extension via the
+// extension_assignments table (extension is no longer a column on users).
 func (r *userRepository) FindByExtension(ctx context.Context, extension string) (*models.User, error) {
 	var user models.User
-	err := r.db.WithContext(ctx).Where("extension = ?", extension).First(&user).Error
+	err := r.db.WithContext(ctx).
+		Preload("CurrentExtension").
+		Where("users.id IN (SELECT user_id FROM extension_assignments WHERE extension = ?)", extension).
+		First(&user).Error
 	return &user, err
 }
 
 func (r *userRepository) FindByExtOrPhone(ctx context.Context, phone string) (*models.User, error) {
 	var user models.User
-	err := r.db.WithContext(ctx).Where("extension = ? OR phone = ?", phone, phone).First(&user).Error
+	err := r.db.WithContext(ctx).
+		Preload("CurrentExtension").
+		Where("users.phone = ? OR users.id IN (SELECT user_id FROM extension_assignments WHERE extension = ?)", phone, phone).
+		First(&user).Error
 	if err != nil {
 		return nil, err
 	}
@@ -702,7 +780,8 @@ func (r *userRepository) FindByExtOrPhoneList(ctx context.Context, phones []stri
 	}
 	var users []models.User
 	err := r.db.WithContext(ctx).
-		Where("extension IN ? OR phone IN ?", phones, phones).
+		Preload("CurrentExtension").
+		Where("users.phone IN ? OR users.id IN (SELECT user_id FROM extension_assignments WHERE extension IN ?)", phones, phones).
 		Find(&users).Error
 	return users, err
 }
@@ -854,6 +933,17 @@ func (r *userRepository) ExistsByNationalID(ctx context.Context, nationalID stri
 	var count int64
 	err := r.db.WithContext(ctx).Model(&models.User{}).Where("national_id = ?", nationalID).Count(&count).Error
 	return count > 0, err
+}
+
+// CountAssignedIncidents returns how many live (non-deleted) incidents the user is
+// currently assigned to — either as the single assignee (incidents.assignee_id) or via
+// the many-to-many incident_assignees join. Used to block deletion of an assigned user.
+func (r *userRepository) CountAssignedIncidents(ctx context.Context, userID uuid.UUID) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&models.Incident{}).
+		Where("assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", userID, userID).
+		Count(&count).Error
+	return count, err
 }
 
 func (r *userRepository) FindByNationalIDForLogin(ctx context.Context, nationalID string) (*models.User, error) {

@@ -3,11 +3,14 @@ package database
 import (
 	"fmt"
 	"log"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/database/migrations"
 	"github.com/automax/backend/internal/models"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
@@ -73,6 +76,8 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		&models.Department{},
 		&models.User{},
 		&models.ActionLog{},
+		&models.ExtensionAssignment{},
+		&models.ExtensionAssignmentHistory{},
 		&models.CallLog{},
 		&models.CallParticipant{},
 		&models.CallLogAttachment{},
@@ -160,9 +165,81 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			&models.ReviewCycle{},
 			&models.ReviewAssignment{},
 			&models.GoalScore{},
+
+			// KPI / Goal Management models
+			&models.Pillar{},
+			&models.Enabler{},
+			&models.OperationalObjective{},
+			&models.Process{},
+			&models.Initiative{},
+			&models.Domain{},
+			&models.AwardCriterion{},
+			&models.AwardSubCriterion{},
+			&models.StrategicKPI{},
+			&models.OperationalKPI{},
+			&models.AwardKPI{},
+			&models.KpiAnnualTarget{},
+			&models.KpiPerformance{},
+			&models.KpiBenchmark{},
+			&models.KpiSegmentation{},
+			&models.KpiWorkflowInstance{},
+			&models.KpiWorkflowAction{},
+			&models.KpiPerformanceBand{},
+			&models.KpiCorrectiveAction{},
+			&models.KpiDataSource{},
+			&models.KpiSegmentationDimension{},
+			&models.KpiPerformanceEvidence{},
+			&models.KpiMetric{},
+			&models.KpiEvidence{},
+			&models.KpiCollaborator{},
+			&models.KpiCheckIn{},
+			&models.KpiComment{},
+			&models.KpiEntry{},
+			&models.KpiEntryEvidence{},
+			&models.KpiCollaboratorAssignment{},
+			&models.KpiOrganization{},
+			&models.KpiSegmentationAxis{},
+			&models.KpiAdministrativeUnit{},
 		); err != nil {
 			return fmt.Errorf("failed to run goal management migrations: %w", err)
 		}
+
+		// Seed a default kpi_entry approval workflow so KpiEntry submissions
+		// have somewhere to go without requiring manual admin setup first.
+		if err := migrations.SeedKpiEntryWorkflow(migrationDB); err != nil {
+			log.Printf("Warning: kpi_entry workflow seed failed: %v", err)
+		}
+
+		// Recompute achievement_pct for existing KPI performance rows now that the
+		// calculation respects each KPI's polarity instead of always using actual/target.
+		if err := migrations.MigrateKpiAchievementBackfill(migrationDB); err != nil {
+			log.Printf("Warning: KPI achievement backfill migration failed: %v", err)
+		}
+
+		// Backfill period_type/period_key on existing target/performance rows.
+		if err := migrations.MigrateKpiPeriodBackfill(migrationDB); err != nil {
+			log.Printf("Warning: KPI period backfill migration failed: %v", err)
+		}
+
+		// Replace the broken kpi_annual_targets unique index (missing
+		// metric_id/target_year, not scoped past soft-deletes) with a correct one.
+		if err := migrations.MigrateKpiTargetUniqueIndex(migrationDB); err != nil {
+			log.Printf("Warning: KPI target unique index migration failed: %v", err)
+		}
+
+		// Multiple approved Entries per metric+period are now allowed
+		// (aggregated, not treated as one final value) — drop the old
+		// per-period uniqueness on kpi_entries and add Organization/Segment/
+		// Version scope columns to entries and targets.
+		if err := migrations.MigrateKpiEntryMultiOrgScope(migrationDB); err != nil {
+			log.Printf("Warning: KPI entry multi-org-scope migration failed: %v", err)
+		}
+
+		// Enforce unique domain names (excluding soft-deleted records).
+		db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_domains_name_en ON domains(name_en) WHERE deleted_at IS NULL`)
+
+		// Enforce unique data source names (excluding soft-deleted records).
+		db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_kpi_data_sources_name_en ON kpi_data_sources(name_en) WHERE deleted_at IS NULL`)
 	}
 
 	// Drop problematic foreign key constraints on incidents table
@@ -186,6 +263,17 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	db.Exec("ALTER TABLE metric_transition_histories DROP CONSTRAINT IF EXISTS metric_transition_histories_performed_by_id_fkey")
 	db.Exec("ALTER TABLE metric_value_change_transition_histories DROP CONSTRAINT IF EXISTS fk_metric_value_change_transition_histories_performed_by")
 	db.Exec("ALTER TABLE metric_value_change_transition_histories DROP CONSTRAINT IF EXISTS metric_value_change_transition_histories_performed_by_id_fkey")
+	db.Exec("ALTER TABLE kpi_workflow_actions DROP CONSTRAINT IF EXISTS fk_kpi_workflow_actions_performed_by")
+	db.Exec("ALTER TABLE kpi_workflow_actions DROP CONSTRAINT IF EXISTS kpi_workflow_actions_performed_by_id_fkey")
+
+	// Legacy strategic_goal_id columns predate the StrategicGoal→Goal model rename.
+	// AutoMigrate never drops old columns, so on databases created before that
+	// rename these can still exist with a NOT NULL constraint (nothing populates
+	// them anymore), blocking every insert with a not-null violation. Drop them
+	// wherever they're still present; no-op on schemas that never had them.
+	for _, table := range []string{"operational_objectives", "processes", "initiatives", "strategic_kpis", "operational_kpis", "award_kpis"} {
+		db.Exec(fmt.Sprintf(`ALTER TABLE IF EXISTS %s DROP COLUMN IF EXISTS strategic_goal_id`, table))
+	}
 
 	db.Exec("ALTER TABLE lookup_categories ADD COLUMN IF NOT EXISTS redirect_url VARCHAR(500)")
 
@@ -198,6 +286,11 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_notification_templates_module_type ON notification_templates(module_type)")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_notification_templates_action_type ON notification_templates(action_type)")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_notification_templates_transition_id ON notification_templates(transition_id)")
+
+	// First Response Time is computed on read: the incident report query scans incident_revisions
+	// per incident to find the earliest qualifying staff action. This composite index serves that
+	// DISTINCT ON directly; without it the query degrades to a full scan as revisions accumulate.
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_incident_revisions_frt ON incident_revisions (incident_id, created_at, revision_number) INCLUDE (action_type, performed_by_id)`)
 
 	// Bilingual redesign: add new columns, migrate existing data, drop old single-language columns.
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS subject_en TEXT")
@@ -254,6 +347,12 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		log.Printf("Warning: user national_id migration failed: %v", err)
 	}
 
+	// Enforce phone uniqueness at the DB level — phone stays optional, but a
+	// non-blank number may only belong to one live user
+	if err := migrations.MigrateUserPhoneUnique(db); err != nil {
+		log.Printf("Warning: user phone unique index migration failed: %v", err)
+	}
+
 	// Drop recording_url from call_logs — URLs are now generated from call_log_attachments
 	if err := migrations.MigrateCallLogRecordingURL(db); err != nil {
 		log.Printf("Warning: call_log recording_url migration failed: %v", err)
@@ -262,6 +361,29 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	// Drop user_id from call_participants — participants are identified by phone_number only
 	if err := migrations.MigrateCallParticipantPhone(db); err != nil {
 		log.Printf("Warning: call_participant phone migration failed: %v", err)
+	}
+
+	// call_logs.created_by must accept NULL: system/machine-ingested rows (e.g.
+	// the Cintrix call-event webhook) have no acting user. Idempotent.
+	db.Exec("ALTER TABLE call_logs ALTER COLUMN created_by DROP NOT NULL")
+
+	// Decouple extension from users: backfill into extension_assignments, drop users.extension
+	if err := migrations.MigrateExtensionDecouple(db); err != nil {
+		log.Printf("Warning: extension decouple migration failed: %v", err)
+	}
+
+	// Composite index for the incident communication history query (filter by incident_id, sort by created_at)
+	if err := migrations.MigrateNotificationLogIncidentIndex(db); err != nil {
+		log.Printf("Warning: notification_log incident index migration failed: %v", err)
+	}
+
+	// Assign a unique Organization Code (ORG-######) to any department missing one.
+	// EPM940 only — other clients supply department codes in the payload. Idempotent:
+	// only touches rows with an empty/NULL code.
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+		if err := migrations.MigrateDepartmentCodeBackfill(db); err != nil {
+			log.Printf("Warning: department code backfill failed: %v", err)
+		}
 	}
 
 	// Seed existing free-text goal categories as root Category rows
@@ -286,6 +408,11 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	// that are part of a logical replication publication (SQLSTATE 55000).
 	// FULL uses the entire row as identity — idempotent, safe to run repeatedly.
 	db.Exec("ALTER TABLE role_permissions REPLICA IDENTITY FULL")
+
+	// Serves the map markers endpoint, which filters to only geolocated
+	// incidents; partial so rows without coordinates (the common case) don't
+	// bloat the index.
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_incidents_geo ON incidents (latitude, longitude) WHERE latitude IS NOT NULL AND longitude IS NOT NULL`)
 
 	log.Println("Database migrations completed")
 	return nil
@@ -409,6 +536,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Create Users", Code: "users:create", Module: "users", Action: "create", Description: "Create new users"},
 		{Name: "Update Users", Code: "users:update", Module: "users", Action: "update", Description: "Update user information"},
 		{Name: "Delete Users", Code: "users:delete", Module: "users", Action: "delete", Description: "Delete users"},
+		{Name: "Reset User Password", Code: "users:reset_password", Module: "users", Action: "reset_password", Description: "Reset user password"},
 
 		// Role permissions
 		{Name: "View Roles", Code: "roles:view", Module: "roles", Action: "view", Description: "View roles list"},
@@ -425,6 +553,12 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Create Departments", Code: "departments:create", Module: "departments", Action: "create", Description: "Create departments"},
 		{Name: "Update Departments", Code: "departments:update", Module: "departments", Action: "update", Description: "Update departments"},
 		{Name: "Delete Departments", Code: "departments:delete", Module: "departments", Action: "delete", Description: "Delete departments"},
+
+		// Extension assignment permissions (EPM940 telephony feature)
+		{Name: "View Extensions", Code: "extensions:view", Module: "extensions", Action: "view", Description: "View PBX extensions and assignment status"},
+		{Name: "Assign Extensions", Code: "extensions:assign", Module: "extensions", Action: "assign", Description: "Assign/reassign PBX extensions to users"},
+		{Name: "Release Extensions", Code: "extensions:release", Module: "extensions", Action: "release", Description: "Release PBX extensions from users"},
+		{Name: "Create Extensions", Code: "extensions:create", Module: "extensions", Action: "create", Description: "Create new PBX extensions on the switch"},
 
 		// Location permissions
 		{Name: "View Locations", Code: "locations:view", Module: "locations", Action: "view", Description: "View locations"},
@@ -469,6 +603,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Edit Closed Incidents", Code: "incidents:edit-closed", Module: "incidents", Action: "edit_closed", Description: "Edit summary/description of closed incidents"},
 		{Name: "Request Info on Incidents", Code: "incidents:request-info", Module: "incidents", Action: "request_info", Description: "Request additional information from citizens"},
 		{Name: "Share Incidents", Code: "incidents:share", Module: "incidents", Action: "share", Description: "Share incident details with external parties"},
+		{Name: "Filter Incidents by Reporter Phone", Code: "incidents:filter_reporter_phone", Module: "incidents", Action: "filter_reporter_phone", Description: "Filter incidents by reporter phone number"},
 
 		// Request permissions
 		{Name: "View Requests", Code: "requests:view", Module: "requests", Action: "view", Description: "View requests"},
@@ -515,6 +650,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Create Call Logs", Code: "call-logs:create", Module: "call-logs", Action: "create", Description: "Create call logs"},
 		{Name: "Update Call Logs", Code: "call-logs:update", Module: "call-logs", Action: "update", Description: "Update call logs"},
 		{Name: "Delete Call Logs", Code: "call-logs:delete", Module: "call-logs", Action: "delete", Description: "Delete call logs"},
+		{Name: "View All Call Logs", Code: "call-logs:view_all", Module: "call-logs", Action: "view_all", Description: "View call logs of other agents regardless of participation"},
 
 		// Lookup permissions
 		{Name: "View Lookups", Code: "lookups:view", Module: "lookups", Action: "view", Description: "View lookup categories and values"},
@@ -536,6 +672,10 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Update Draft Notifications", Code: "notifications:update", Module: "notifications", Action: "update", Description: "Update draft notifications"},
 		{Name: "Delete Notifications", Code: "notifications:delete", Module: "notifications", Action: "delete", Description: "Delete notification logs"},
 
+		// Communication Tracking Dashboard permissions (Call Center module)
+		{Name: "View Communication Tracking Dashboard", Code: "communication-tracking:view", Module: "communication-tracking", Action: "view", Description: "View the cross-channel communication tracking dashboard (SMS/Email/WhatsApp delivery status)"},
+		{Name: "Update Communication Tracking", Code: "communication-tracking:update", Module: "communication-tracking", Action: "update", Description: "Manually resend a failed/undeliverable/expired SMS, Email, or WhatsApp notification"},
+
 		// Template permissions
 		{Name: "View Templates", Code: "templates:read", Module: "templates", Action: "read", Description: "View notification templates"},
 		{Name: "Create Templates", Code: "templates:create", Module: "templates", Action: "create", Description: "Create notification templates"},
@@ -549,6 +689,9 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Delete Escalation Group", Code: "escalation-groups:delete", Module: "escalation-groups", Action: "delete", Description: "Delete escalation groups"},
 		{Name: "Assign Users to Escalation Group", Code: "escalation-groups:assign_users", Module: "escalation-groups", Action: "assign_users", Description: "Add or remove users from escalation groups"},
 		{Name: "Manage Escalation Rules", Code: "escalation-groups:manage_rules", Module: "escalation-groups", Action: "manage_rules", Description: "Configure escalation frequency, channel, and classification rules"},
+
+		// Escalation Policy permissions
+		{Name: "Create Escalation Policy", Code: "escalation-policies:create", Module: "escalation-policies", Action: "create", Description: "Create new escalation policies"},
 
 		// Caller Sentiment permissions
 		{Name: "Create Caller Sentiment", Code: "caller-sentiment:create", Module: "caller-sentiment", Action: "create", Description: "Record a sentiment entry after a call"},
@@ -566,6 +709,10 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Queries Dashboard", Code: "dashboard:queries", Module: "dashboard", Action: "queries", Description: "Access query cards on dashboard"},
 		{Name: "Workflows Dashboard", Code: "dashboard:workflows", Module: "dashboard", Action: "workflows", Description: "Access workflow cards on dashboard"},
 		{Name: "CCM Dashboard", Code: "dashboard:ccm", Module: "dashboard", Action: "ccm", Description: "Access ccm cards on dashboard"},
+
+		// Department-scoped permissions (configurable scoping)
+		{Name: "View Only Department Incidents", Code: "incidents:view_department_only", Module: "incidents", Action: "view_department_only", Description: "Restrict incident view to own department"},
+		{Name: "View Only Department Users", Code: "users:view_department_only", Module: "users", Action: "view_department_only", Description: "Restrict user view to own department"},
 	}
 
 	if cfg.GoalManagement.Enabled {
@@ -577,6 +724,31 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			models.Permission{Name: "Assign Goals", Code: "goals:assign", Module: "goals", Action: "assign", Description: "Assign goal collaborators"},
 			models.Permission{Name: "Approve Goals", Code: "goals:approve", Module: "goals", Action: "approve", Description: "Approve/reject goal evidence"},
 			models.Permission{Name: "Goals Dashboard", Code: "dashboard:goals", Module: "dashboard", Action: "goals", Description: "Access goal cards on dashboard"},
+
+			// KPI / Goal Management permissions
+			models.Permission{Name: "Manage Goal Hierarchy", Code: "goals:manage", Module: "goals", Action: "manage", Description: "Create/update/delete goal hierarchy master data"},
+			models.Permission{Name: "View KPI Dictionary", Code: "kpi:view", Module: "kpi", Action: "view", Description: "View KPI definitions"},
+			models.Permission{Name: "Create KPI Definitions", Code: "kpi:create", Module: "kpi", Action: "create", Description: "Create new KPI definitions"},
+			models.Permission{Name: "Update KPI Definitions", Code: "kpi:update", Module: "kpi", Action: "update", Description: "Edit KPI metadata, formula, targets"},
+			models.Permission{Name: "Delete KPI Definitions", Code: "kpi:delete", Module: "kpi", Action: "delete", Description: "Soft-delete KPI records"},
+			models.Permission{Name: "Approve KPI Performance", Code: "kpi:approve", Module: "kpi", Action: "approve", Description: "Approve/reject KPI performance submissions from the approvals inbox"},
+			models.Permission{Name: "Assign KPI Collaborators", Code: "kpi:assign", Module: "kpi", Action: "assign", Description: "Add/remove collaborators on a KPI definition"},
+			models.Permission{Name: "View Performance Data", Code: "perf:view", Module: "perf", Action: "view", Description: "View KPI performance data"},
+			models.Permission{Name: "Submit Performance", Code: "perf:submit", Module: "perf", Action: "submit", Description: "Submit quarterly actuals for review"},
+			models.Permission{Name: "Review Performance", Code: "perf:review", Module: "perf", Action: "review", Description: "Start performance review process"},
+			models.Permission{Name: "Approve Performance", Code: "perf:approve", Module: "perf", Action: "approve", Description: "Approve reviewed performance entries"},
+			models.Permission{Name: "Reject Performance", Code: "perf:reject", Module: "perf", Action: "reject", Description: "Reject and return for revision"},
+			models.Permission{Name: "Publish Performance", Code: "perf:publish", Module: "perf", Action: "publish", Description: "Publish approved performance to dashboards"},
+			models.Permission{Name: "Request Performance Changes", Code: "perf:request_changes", Module: "perf", Action: "request_changes", Description: "Send a submitted performance entry back for changes"},
+			models.Permission{Name: "Override Approval Lock", Code: "perf:override_lock", Module: "perf", Action: "override", Description: "Edit or delete an already-approved performance entry"},
+			models.Permission{Name: "View Targets", Code: "targets:view", Module: "targets", Action: "view", Description: "View annual KPI targets"},
+			models.Permission{Name: "Set Targets", Code: "targets:set", Module: "targets", Action: "set", Description: "Create/update annual targets"},
+			models.Permission{Name: "Delete Targets", Code: "targets:delete", Module: "targets", Action: "delete", Description: "Delete draft/returned/rejected annual targets"},
+			models.Permission{Name: "Approve Targets", Code: "targets:approve", Module: "targets", Action: "approve", Description: "Approve submitted target submissions"},
+			models.Permission{Name: "Reject Targets", Code: "targets:reject", Module: "targets", Action: "reject", Description: "Reject submitted target submissions"},
+			models.Permission{Name: "Manage Benchmarks", Code: "benchmark:manage", Module: "benchmark", Action: "manage", Description: "Create/update KPI benchmarks"},
+			models.Permission{Name: "Manage Segment Data", Code: "segment:manage", Module: "segment", Action: "manage", Description: "Create/update KPI segmentation data"},
+			models.Permission{Name: "Manage Corrective Actions", Code: "corrective_action:manage", Module: "corrective_action", Action: "manage", Description: "Create and close KPI corrective actions"},
 		)
 	}
 
@@ -594,7 +766,17 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 	var allPerms []models.Permission
 	db.Find(&allPerms)
 
-	// Admin role gets all permissions
+	// Admin role gets all permissions EXCEPT department-scoping restrictions.
+	// "view_department_only" permissions are restrictive (they limit a user to their
+	// own department) and should only be on department-scoped roles like Department
+	// Manager and Supervisor — not on the Administrator role.
+	var adminPerms []models.Permission
+	for _, p := range allPerms {
+		if !strings.HasSuffix(p.Code, "view_department_only") {
+			adminPerms = append(adminPerms, p)
+		}
+	}
+
 	var adminRole models.Role
 	result := db.Where("code = ?", "admin").First(&adminRole)
 	if result.Error == gorm.ErrRecordNotFound {
@@ -604,12 +786,20 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			Description: "Full system access",
 			IsSystem:    true,
 			IsActive:    true,
-			Permissions: allPerms,
+			Permissions: adminPerms,
 		}
 		db.Create(&adminRole)
-	} else {
-		// Update existing admin role to have all permissions
-		db.Model(&adminRole).Association("Permissions").Replace(allPerms)
+	} else if db.Model(&adminRole).Association("Permissions").Count() == 0 {
+		// Only seed permissions if role has none (fresh DB); skip if already configured
+		db.Model(&adminRole).Association("Permissions").Append(adminPerms)
+	}
+
+	// Remove department-scoping permissions from admin role on existing databases.
+	// These are restrictive and should never be on the Administrator role.
+	var deptScopePerms []models.Permission
+	db.Where("code LIKE ?", "%view_department_only").Find(&deptScopePerms)
+	if len(deptScopePerms) > 0 {
+		db.Model(&adminRole).Association("Permissions").Delete(deptScopePerms)
 	}
 
 	// User role with basic permissions
@@ -627,11 +817,10 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			Permissions: viewPerms,
 		}
 		db.Create(&userRole)
-	} else {
-		// Update existing user role to have all view permissions
+	} else if db.Model(&userRole).Association("Permissions").Count() == 0 {
 		var viewPerms []models.Permission
 		db.Where("action = ?", "view").Find(&viewPerms)
-		db.Model(&userRole).Association("Permissions").Replace(viewPerms)
+		db.Model(&userRole).Association("Permissions").Append(viewPerms)
 	}
 
 	// Manager role with broader permissions
@@ -640,6 +829,14 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 	if result.Error == gorm.ErrRecordNotFound {
 		var managerPerms []models.Permission
 		db.Where("action IN ?", []string{"view", "create", "update", "delete", "assign", "approve"}).Find(&managerPerms)
+		// targets:reject uses action "reject" (mirroring perf:reject), which
+		// isn't in the action list above — without this, splitting Reject out
+		// of targets:approve into its own permission would silently take away
+		// Manager's existing ability to reject a submitted target.
+		var managerRejectPerm models.Permission
+		if db.Where("code = ?", "targets:reject").First(&managerRejectPerm).Error == nil {
+			managerPerms = append(managerPerms, managerRejectPerm)
+		}
 		managerRole = models.Role{
 			Name:        "Manager",
 			Code:        "manager",
@@ -649,11 +846,114 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			Permissions: managerPerms,
 		}
 		db.Create(&managerRole)
-	} else {
-		// Update existing manager role to have full management permissions
+	} else if db.Model(&managerRole).Association("Permissions").Count() == 0 {
 		var managerPerms []models.Permission
 		db.Where("action IN ?", []string{"view", "create", "update", "delete", "assign", "approve"}).Find(&managerPerms)
+		var managerRejectPerm models.Permission
+		if db.Where("code = ?", "targets:reject").First(&managerRejectPerm).Error == nil {
+			managerPerms = append(managerPerms, managerRejectPerm)
+		}
 		db.Model(&managerRole).Association("Permissions").Replace(managerPerms)
+	}
+
+	// Department Manager role — manages users within assigned scope
+	var deptManagerRole models.Role
+	result = db.Where("code = ?", "department_manager").First(&deptManagerRole)
+	if result.Error == gorm.ErrRecordNotFound {
+		var deptManagerPerms []models.Permission
+		db.Where("code IN ?", []string{
+			"users:view", "users:create", "users:update",
+			"incidents:view", "incidents:view_all", "incidents:transition", "incidents:assign", "incidents:comment",
+			"requests:view", "requests:view_all", "requests:transition", "requests:assign", "requests:comment",
+			"complaints:view", "complaints:view_all", "complaints:transition", "complaints:assign", "complaints:comment",
+			"queries:view", "queries:view_all", "queries:transition", "queries:assign", "queries:comment",
+			"incidents:view_department_only", "users:view_department_only",
+		}).Find(&deptManagerPerms)
+		deptManagerRole = models.Role{
+			Name:                "Department Manager",
+			Code:                "department_manager",
+			Description:         "Department manager with restricted scope to assigned department, classification, and location",
+			IsSystem:            true,
+			IsActive:            true,
+			IsDepartmentManager: true,
+			Permissions:         deptManagerPerms,
+		}
+		db.Create(&deptManagerRole)
+	} else {
+		if db.Model(&deptManagerRole).Association("Permissions").Count() == 0 {
+			var deptManagerPerms []models.Permission
+			db.Where("code IN ?", []string{
+				"users:view", "users:create", "users:update",
+				"incidents:view", "incidents:view_all", "incidents:transition", "incidents:assign", "incidents:comment",
+				"requests:view", "requests:view_all", "requests:transition", "requests:assign", "requests:comment",
+				"complaints:view", "complaints:view_all", "complaints:transition", "complaints:assign", "complaints:comment",
+				"queries:view", "queries:view_all", "queries:transition", "queries:assign", "queries:comment",
+				"incidents:view_department_only", "users:view_department_only",
+			}).Find(&deptManagerPerms)
+			db.Model(&deptManagerRole).Association("Permissions").Append(deptManagerPerms)
+		}
+		if !deptManagerRole.IsDepartmentManager {
+			db.Model(&deptManagerRole).Update("is_department_manager", true)
+		}
+	}
+
+	// Supervisor role with view permissions for department scoping
+	var supervisorRole models.Role
+	result = db.Where("code = ?", "supervisor").First(&supervisorRole)
+	if result.Error == gorm.ErrRecordNotFound {
+		var supervisorPerms []models.Permission
+		db.Where("code IN ?", []string{
+			"incidents:view", "incidents:view_all", "incidents:transition", "incidents:assign", "incidents:comment",
+			"requests:view", "requests:view_all", "requests:transition", "requests:assign", "requests:comment",
+			"complaints:view", "complaints:view_all", "complaints:transition", "complaints:assign", "complaints:comment",
+			"queries:view", "queries:view_all", "queries:transition", "queries:assign", "queries:comment",
+			"users:view",
+			"incidents:view_department_only", "users:view_department_only",
+		}).Find(&supervisorPerms)
+		supervisorRole = models.Role{
+			Name:        "Supervisor",
+			Code:        "supervisor",
+			Description: "Department supervisor with scoped access to tickets and personnel",
+			IsSystem:    true,
+			IsActive:    true,
+			Permissions: supervisorPerms,
+		}
+		db.Create(&supervisorRole)
+	} else if db.Model(&supervisorRole).Association("Permissions").Count() == 0 {
+		var supervisorPerms []models.Permission
+		db.Where("code IN ?", []string{
+			"incidents:view", "incidents:view_all", "incidents:transition", "incidents:assign", "incidents:comment",
+			"requests:view", "requests:view_all", "requests:transition", "requests:assign", "requests:comment",
+			"complaints:view", "complaints:view_all", "complaints:transition", "complaints:assign", "complaints:comment",
+			"queries:view", "queries:view_all", "queries:transition", "queries:assign", "queries:comment",
+			"users:view",
+			"incidents:view_department_only", "users:view_department_only",
+		}).Find(&supervisorPerms)
+		db.Model(&supervisorRole).Association("Permissions").Append(supervisorPerms)
+	}
+
+	// Grant extension-management permissions to the agent role (if it exists).
+	// Admin already receives all permissions above; super admins bypass permission
+	// checks entirely. We append (not replace) so any other agent permissions stay intact.
+	var agentRole models.Role
+	if err := db.Where("code = ?", "agent").Preload("Permissions").First(&agentRole).Error; err == nil {
+		existing := make(map[uuid.UUID]bool, len(agentRole.Permissions))
+		for _, p := range agentRole.Permissions {
+			existing[p.ID] = true
+		}
+		var extPerms []models.Permission
+		db.Where("module = ?", "extensions").Find(&extPerms)
+		var toAdd []models.Permission
+		for _, p := range extPerms {
+			if !existing[p.ID] {
+				toAdd = append(toAdd, p)
+			}
+		}
+		if len(toAdd) > 0 {
+			if err := db.Model(&agentRole).Association("Permissions").Append(toAdd); err != nil {
+				log.Printf("Failed to grant extension permissions to agent role: %v", err)
+			}
+		}
 	}
 
 	// Create default super admin user
@@ -674,6 +974,61 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		db.Model(&adminUser).Association("Roles").Append(&adminRole)
 	}
 
+	// Create default departments for supervisor seeding
+	var defaultDept models.Department
+	if err := db.Where("name = ?", "General").First(&defaultDept).Error; err == gorm.ErrRecordNotFound {
+		defaultDept = models.Department{
+			Name:     "General",
+			Code:     "GEN",
+			IsActive: true,
+		}
+		db.Create(&defaultDept)
+	}
+
+	var supportDept models.Department
+	if err := db.Where("name = ?", "Support").First(&supportDept).Error; err == gorm.ErrRecordNotFound {
+		supportDept = models.Department{
+			Name:     "Support",
+			Code:     "SUP",
+			IsActive: true,
+		}
+		db.Create(&supportDept)
+	}
+
+	// Create supervisor users with department assignments
+	type supervisorSeed struct {
+		Email        string
+		Username     string
+		FirstName    string
+		LastName     string
+		DepartmentID *uuid.UUID
+	}
+	supervisors := []supervisorSeed{
+		{"supervisor1@automax.com", "supervisor1", "Ahmed", "Ali", &defaultDept.ID},
+		{"supervisor2@automax.com", "supervisor2", "Sara", "Mohammed", &supportDept.ID},
+	}
+	for _, su := range supervisors {
+		var existing models.User
+		if db.Where("email = ?", su.Email).First(&existing).Error == gorm.ErrRecordNotFound {
+			hashedPwd, _ := utils.HashPassword("supervisor123")
+			user := models.User{
+				Email:        su.Email,
+				Username:     su.Username,
+				Password:     hashedPwd,
+				FirstName:    su.FirstName,
+				LastName:     su.LastName,
+				IsActive:     true,
+				DepartmentID: su.DepartmentID,
+			}
+			db.Create(&user)
+			db.Model(&user).Association("Roles").Append(&supervisorRole)
+			db.Model(&models.Department{}).Where("id = ?", su.DepartmentID).Update("supervisor_id", user.ID)
+		}
+	}
+
+	// Seed a default incident workflow for demo/test incidents
+	seedDefaultIncidentWorkflow(db, defaultDept.ID, supportDept.ID, adminUser.ID)
+
 	// Seed default lookup categories
 	seedLookupCategories(db)
 
@@ -683,11 +1038,142 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 
 		// Seed default metric & metric_value_change approval workflows
 		seedMetricApprovalWorkflows(db)
+
+		// Seed default KPI performance approval workflow
+		seedKpiPerformanceWorkflow(db)
+
+		// Seed default global RAG performance band (green >= 80, amber >= 60)
+		seedDefaultPerformanceBand(db)
+
+		// Seed starter data sources and segmentation dimensions
+		seedKpiDataSources(db)
+		seedKpiSegmentationDimensions(db)
+
+		// Seed a small, idempotent demo dataset for Master Data, Goal
+		// Management, and KPI Management so a fresh environment isn't empty
+		seedGoalManagementDemoData(db, adminUser.ID)
+		seedKpiEngagementDemoData(db, adminUser.ID)
 	} else {
 		unseedGoalManagement(db)
 	}
 	log.Println("Database seeding completed")
 	return nil
+}
+
+// seedDefaultIncidentWorkflow creates a minimal incident workflow and demo tickets
+// for the seeded departments so supervisors have data to view.
+func seedDefaultIncidentWorkflow(db *gorm.DB, defaultDeptID, supportDeptID, adminUserID uuid.UUID) {
+	var workflow models.Workflow
+	if err := db.Where("code = ?", "incident_default").First(&workflow).Error; err == gorm.ErrRecordNotFound {
+		workflow = models.Workflow{
+			Name:       "Default Incident Workflow",
+			Code:       "incident_default",
+			RecordType: "incident",
+			IsDefault:  true,
+			IsActive:   true,
+		}
+		db.Create(&workflow)
+
+		states := []models.WorkflowState{
+			{WorkflowID: workflow.ID, Name: "New", Code: "new", StateType: "initial", Color: "#6366f1"},
+			{WorkflowID: workflow.ID, Name: "In Progress", Code: "in_progress", StateType: "normal", Color: "#f59e0b"},
+			{WorkflowID: workflow.ID, Name: "Resolved", Code: "resolved", StateType: "normal", Color: "#10b981"},
+			{WorkflowID: workflow.ID, Name: "Closed", Code: "closed", StateType: "terminal", Color: "#6b7280"},
+			{WorkflowID: workflow.ID, Name: "Rejected", Code: "rejected", StateType: "terminal", Color: "#ef4444"},
+		}
+		for i := range states {
+			states[i].ID = uuid.New()
+			db.Create(&states[i])
+		}
+
+		newState := states[0]
+		inProgressState := states[1]
+		resolvedState := states[2]
+		closedState := states[3]
+
+		now := time.Now()
+
+		// Create demo incidents for each department
+		demoIncidents := []models.Incident{
+			{
+				IncidentNumber: "INC-2026-0001",
+				Title:          "Network outage in building A",
+				Description:    "Users in building A cannot access the network",
+				RecordType:     "incident",
+				WorkflowID:     workflow.ID,
+				CurrentStateID: newState.ID,
+				DepartmentID:   &defaultDeptID,
+				Source:         "phone",
+				CreatedAt:      now,
+				UpdatedAt:      now,
+			},
+			{
+				IncidentNumber: "INC-2026-0002",
+				Title:          "Email server slow response",
+				Description:    "Email server taking more than 30 seconds to respond",
+				RecordType:     "incident",
+				WorkflowID:     workflow.ID,
+				CurrentStateID: inProgressState.ID,
+				DepartmentID:   &supportDeptID,
+				Source:         "email",
+				CreatedAt:      now,
+				UpdatedAt:      now,
+			},
+			{
+				IncidentNumber: "REQ-2026-0001",
+				Title:          "New laptop request for onboarding",
+				Description:    "New employee needs a laptop for onboarding",
+				RecordType:     "request",
+				WorkflowID:     workflow.ID,
+				CurrentStateID: newState.ID,
+				DepartmentID:   &defaultDeptID,
+				Source:         "portal",
+				CreatedAt:      now,
+				UpdatedAt:      now,
+			},
+			{
+				IncidentNumber: "REQ-2026-0002",
+				Title:          "Software license renewal",
+				Description:    "Renew Adobe Creative Cloud license for design team",
+				RecordType:     "request",
+				WorkflowID:     workflow.ID,
+				CurrentStateID: resolvedState.ID,
+				DepartmentID:   &supportDeptID,
+				Source:         "email",
+				CreatedAt:      now,
+				UpdatedAt:      now,
+			},
+			{
+				IncidentNumber: "CMP-2026-0001",
+				Title:          "Rude behavior from support agent",
+				Description:    "Customer complained about rude behavior from support agent",
+				RecordType:     "complaint",
+				WorkflowID:     workflow.ID,
+				CurrentStateID: closedState.ID,
+				DepartmentID:   &supportDeptID,
+				Source:         "phone",
+				CreatedAt:      now,
+				UpdatedAt:      now,
+			},
+			{
+				IncidentNumber: "QRY-2026-0001",
+				Title:          "Inquiry about service hours",
+				Description:    "Customer asking about weekend service hours",
+				RecordType:     "query",
+				WorkflowID:     workflow.ID,
+				CurrentStateID: newState.ID,
+				DepartmentID:   &defaultDeptID,
+				Source:         "portal",
+				CreatedAt:      now,
+				UpdatedAt:      now,
+			},
+		}
+
+		for _, inc := range demoIncidents {
+			inc.ID = uuid.New()
+			db.Create(&inc)
+		}
+	}
 }
 
 // unseedGoalManagement hard-deletes all goal-related rows from the DB.
@@ -762,6 +1248,40 @@ func unseedGoalManagement(db *gorm.DB) {
 	permSub := "SELECT id FROM permissions WHERE module = 'goals' OR code = 'dashboard:goals'"
 	exec("role_permissions (goals)", "DELETE FROM role_permissions WHERE permission_id IN ("+permSub+")")
 	exec("permissions (goals)", "DELETE FROM permissions WHERE module = 'goals' OR code = 'dashboard:goals'")
+
+	// Step 3.5: delete KPI/goal management tables (children before parents)
+	log.Println("  WARNING: About to drop 27 KPI/goal tables — this IRREVERSIBLY deletes all KPI configuration and user-entered performance/target data!")
+	for _, table := range []string{
+		"kpi_comments",
+		"kpi_check_ins",
+		"kpi_collaborators",
+		"kpi_evidences",
+		"kpi_metrics",
+		"kpi_data_sources",
+		"kpi_segmentation_dimensions",
+		"kpi_corrective_actions",
+		"kpi_workflow_actions",
+		"kpi_workflow_instances",
+		"kpi_performance_bands",
+		"kpi_performance_evidences",
+		"kpi_segmentations",
+		"kpi_benchmarks",
+		"kpi_performances",
+		"kpi_annual_targets",
+		"award_kpis",
+		"operational_kpis",
+		"strategic_kpis",
+		"award_sub_criteria",
+		"award_criteria",
+		"domains",
+		"initiatives",
+		"processes",
+		"operational_objectives",
+		"enablers",
+		"pillars",
+	} {
+		exec(table, "DROP TABLE IF EXISTS "+table+" CASCADE")
+	}
 
 	// Step 4: delete goal-specific roles and all their join-table associations
 	roleSub := "SELECT id FROM roles WHERE code IN ('goal_manager','goal_collaborator')"
@@ -1097,6 +1617,218 @@ func seedMetricApprovalWorkflows(db *gorm.DB) {
 		}
 
 		log.Printf("%s workflow seeded successfully", s.Code)
+	}
+}
+
+// seedDefaultPerformanceBand ensures exactly one global RAG default band row exists.
+func seedDefaultPerformanceBand(db *gorm.DB) {
+	var existing models.KpiPerformanceBand
+	if err := db.Where("kpi_code IS NULL").First(&existing).Error; err == nil {
+		return
+	}
+	band := models.KpiPerformanceBand{GreenMin: 80, AmberMin: 60}
+	if err := db.Create(&band).Error; err != nil {
+		log.Printf("Failed to seed default performance band: %v", err)
+	}
+}
+
+// seedKpiDataSources seeds a starter list of governed data source names so
+// the KPI dictionary forms' data source select isn't empty on a fresh install.
+func seedKpiDataSources(db *gorm.DB) {
+	names := []string{
+		"Municipal Data Dashboard",
+		"Infrastructure Asset System",
+		"GIS Planning System",
+		"Waste Operations System",
+		"Inspection Platform",
+		"Financial ERP",
+		"Digital Services Platform",
+		"Survey Platform",
+		"Engagement Platform",
+		"Quality of Life Dashboard",
+		"Manual Entry",
+		"System Integration",
+	}
+	for _, name := range names {
+		var existing models.KpiDataSource
+		if db.Where("name_en = ?", name).First(&existing).Error == gorm.ErrRecordNotFound {
+			db.Create(&models.KpiDataSource{NameEn: name})
+		}
+	}
+}
+
+// seedKpiSegmentationDimensions seeds a starter list of governed segmentation
+// dimension names so the segmentation form's dimension select isn't empty.
+func seedKpiSegmentationDimensions(db *gorm.DB) {
+	names := []string{
+		"Municipality",
+		"District",
+		"City",
+		"Road Segment",
+		"Service Zone",
+		"Contractor",
+		"Department",
+		"Customer Type",
+		"Channel",
+	}
+	for _, name := range names {
+		var existing models.KpiSegmentationDimension
+		if db.Where("name_en = ?", name).First(&existing).Error == gorm.ErrRecordNotFound {
+			db.Create(&models.KpiSegmentationDimension{NameEn: name})
+		}
+	}
+}
+
+func seedKpiPerformanceWorkflow(db *gorm.DB) {
+	var wf models.Workflow
+	exists := db.Where("code = ?", "kpi_performance_approval").First(&wf).Error == nil
+
+	if !exists {
+		log.Println("Seeding default KPI performance approval workflow...")
+
+		wf = models.Workflow{
+			Name:        "KPI Performance Approval",
+			Code:        "kpi_performance_approval",
+			Description: "Default approval workflow for KPI performance entries. Supports submit, review, approve, reject, and publish.",
+			RecordType:  "kpi_performance",
+			IsActive:    true,
+			IsDefault:   true,
+		}
+		if err := db.Create(&wf).Error; err != nil {
+			log.Printf("Failed to create KPI performance workflow: %v", err)
+			return
+		}
+
+		type stateSpec struct {
+			Name      string
+			Code      string
+			StateType string
+			Color     string
+			SortOrder int
+			PosX      int
+			PosY      int
+		}
+
+		stateSpecs := []stateSpec{
+			{"Draft", "draft", "initial", "#94a3b8", 1, 100, 200},
+			{"Submitted", "submitted", "normal", "#3b82f6", 2, 300, 200},
+			{"Under Review", "under_review", "normal", "#f59e0b", 3, 500, 200},
+			{"Approved", "approved", "terminal", "#22c55e", 4, 700, 200},
+			{"Rejected", "rejected", "terminal", "#ef4444", 5, 700, 400},
+			{"Published", "published", "terminal", "#8b5cf6", 6, 300, 400},
+		}
+
+		for _, sp := range stateSpecs {
+			state := models.WorkflowState{
+				WorkflowID: wf.ID,
+				Name:       sp.Name,
+				Code:       sp.Code,
+				StateType:  sp.StateType,
+				Color:      sp.Color,
+				SortOrder:  sp.SortOrder,
+				PositionX:  sp.PosX,
+				PositionY:  sp.PosY,
+				IsActive:   true,
+			}
+			if err := db.Create(&state).Error; err != nil {
+				log.Printf("Failed to create state %s: %v", sp.Code, err)
+				return
+			}
+		}
+	}
+
+	// Ensure transitions exist (even if the workflow was already seeded). Some
+	// codes (approve/reject/request_changes) now have two rows apiece — one
+	// from "submitted" and one from "under_review" — so dedup must key off
+	// (code, from_state), not code alone.
+	{
+		stateMap := make(map[string]models.WorkflowState)
+		var states []models.WorkflowState
+		db.Where("workflow_id = ?", wf.ID).Find(&states)
+		for _, s := range states {
+			stateMap[s.Code] = s
+		}
+
+		type transSpec struct {
+			Name        string
+			Code        string
+			From        string
+			To          string
+			IsRejection bool
+			CommentReq  bool
+			SortOrder   int
+		}
+
+		allTransSpecs := []transSpec{
+			{"Submit for Review", "submit", "draft", "submitted", false, false, 1},
+			{"Start Review", "review", "submitted", "under_review", false, false, 2},
+			{"Approve", "approve", "under_review", "approved", false, false, 3},
+			{"Reject", "reject", "under_review", "rejected", true, true, 4},
+			{"Publish", "publish", "approved", "published", false, false, 5},
+			{"Resubmit", "resubmit", "rejected", "submitted", false, false, 6},
+			{"Request Changes", "request_changes", "under_review", "draft", false, true, 7},
+			// Reviewers may act directly on a Submitted entry without first
+			// clicking "Start Review" — these mirror the under_review→* transitions
+			// above but from submitted, so approve/reject/request_changes work
+			// immediately after submission as well as after an explicit review step.
+			{"Approve", "approve", "submitted", "approved", false, false, 8},
+			{"Reject", "reject", "submitted", "rejected", true, true, 9},
+			{"Request Changes", "request_changes", "submitted", "draft", false, true, 10},
+		}
+
+		boolTrue := true
+		for _, sp := range allTransSpecs {
+			fromState, fromOk := stateMap[sp.From]
+			toState, toOk := stateMap[sp.To]
+			if !fromOk || !toOk {
+				log.Printf("Skipping transition %s: missing state %s or %s", sp.Code, sp.From, sp.To)
+				continue
+			}
+
+			var count int64
+			db.Model(&models.WorkflowTransition{}).Where("workflow_id = ? AND code = ? AND from_state_id = ?", wf.ID, sp.Code, fromState.ID).Count(&count)
+			if count > 0 {
+				continue
+			}
+
+			transition := models.WorkflowTransition{
+				WorkflowID:  wf.ID,
+				Name:        sp.Name,
+				Code:        sp.Code,
+				FromStateID: fromState.ID,
+				ToStateID:   toState.ID,
+				IsRejection: sp.IsRejection,
+				IsActive:    true,
+				SortOrder:   sp.SortOrder,
+			}
+
+			if err := db.Create(&transition).Error; err != nil {
+				log.Printf("Failed to create transition %s: %v", sp.Code, err)
+				continue
+			}
+
+			if sp.CommentReq {
+				errMsg := "Comment is required for this transition"
+				if sp.IsRejection {
+					errMsg = "Comment is required for rejection"
+				} else if sp.Code == "request_changes" {
+					errMsg = "Comment is required when requesting changes"
+				}
+				requirement := models.TransitionRequirement{
+					TransitionID:    transition.ID,
+					RequirementType: "comment",
+					IsMandatory:     &boolTrue,
+					ErrorMessage:    errMsg,
+				}
+				if err := db.Create(&requirement).Error; err != nil {
+					log.Printf("Failed to create requirement for %s: %v", sp.Code, err)
+				}
+			}
+		}
+	}
+
+	if !exists {
+		log.Println("KPI performance approval workflow seeded successfully")
 	}
 }
 

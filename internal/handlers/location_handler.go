@@ -204,18 +204,35 @@ func (h *LocationHandler) Delete(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
+	isAr := strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.Get("Accept-Language"))), "ar")
+
 	var reasons []string
-	if children > 0 {
-		reasons = append(reasons, "it has sub-locations")
-	}
-	if users > 0 {
-		reasons = append(reasons, "it is assigned to one or more users")
-	}
-	if incidents > 0 {
-		reasons = append(reasons, fmt.Sprintf("%d incident(s) are associated with this location", incidents))
-	}
-	if len(reasons) > 0 {
-		return utils.ErrorResponse(c, fiber.StatusConflict, "Cannot delete this location: "+strings.Join(reasons, "; "))
+	if isAr {
+		if children > 0 {
+			reasons = append(reasons, "له مواقع فرعية")
+		}
+		if users > 0 {
+			reasons = append(reasons, "مرتبط بمستخدم أو أكثر")
+		}
+		if incidents > 0 {
+			reasons = append(reasons, fmt.Sprintf("مرتبط بـ%d بلاغ", incidents))
+		}
+		if len(reasons) > 0 {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "لا يمكن حذف هذا الموقع لأنه "+strings.Join(reasons, "، و"))
+		}
+	} else {
+		if children > 0 {
+			reasons = append(reasons, "it has sub-locations")
+		}
+		if users > 0 {
+			reasons = append(reasons, "it is assigned to one or more users")
+		}
+		if incidents > 0 {
+			reasons = append(reasons, fmt.Sprintf("%d incident(s) are associated with this location", incidents))
+		}
+		if len(reasons) > 0 {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "Cannot delete this location: "+strings.Join(reasons, "; "))
+		}
 	}
 
 	if err := h.repo.Delete(c.UserContext(), id); err != nil {

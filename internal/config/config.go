@@ -7,28 +7,58 @@ import (
 )
 
 type Config struct {
-	Env              string // env: APP_ENV ("development" | "staging" | "production"). Default: "production".
-	Server           ServerConfig
-	Database         DatabaseConfig
-	Redis            RedisConfig
-	MinIO            MinIOConfig
-	JWT              JWTConfig
-	LDAP             LDAPConfig
-	LoginRateLimit   LoginRateLimitConfig
-	FrontendURL      string // env: FRONTEND_URL — base URL of the frontend app, used in notification links
-	SSOPrivateKey    string // env: SSO_RSA_PRIVATE_KEY (PEM, optional — auto-gen if empty)
-	SSOIssuerURL     string // env: SSO_ISSUER_URL (e.g. https://automax.example.com — embedded in iss claim)
-	SSOFrontendURL   string // env: SSO_FRONTEND_URL (e.g. https://automax.example.com — where /sso-complete lives)
-	NafathAPIBaseURL string // env: NAFATH_API_BASE_URL (e.g. https://nafath.amanathail.gov.sa)
-	Escalation       EscalationConfig
-	ReadyToClose     ReadyToCloseConfig
-	SmsFeedback      SmsFeedbackConfig
-	Documenta        DocumentaConfig
-	AIQuality        AIQualityConfig
-	AutoAssign       AutoAssignConfig
-	GoalManagement   GoalManagementConfig
-	License          LicenseConfig
-	Integration      IntegrationConfig
+	Env                        string // env: APP_ENV ("development" | "staging" | "production"). Default: "production".
+	Server                     ServerConfig
+	Database                   DatabaseConfig
+	Redis                      RedisConfig
+	MinIO                      MinIOConfig
+	JWT                        JWTConfig
+	LDAP                       LDAPConfig
+	LoginRateLimit             LoginRateLimitConfig
+	FrontendURL                string // env: FRONTEND_URL — base URL of the frontend app, used in notification links
+	SSOPrivateKey              string // env: SSO_RSA_PRIVATE_KEY (PEM, optional — auto-gen if empty)
+	SSOIssuerURL               string // env: SSO_ISSUER_URL (e.g. https://automax.example.com — embedded in iss claim)
+	SSOFrontendURL             string // env: SSO_FRONTEND_URL (e.g. https://automax.example.com — where /sso-complete lives)
+	NafathAPIBaseURL           string // env: NAFATH_API_BASE_URL (e.g. https://nafath.amanathail.gov.sa)
+	CountryCode                string // env: COUNTRY_CODE (e.g. +966, +91)
+	Escalation                 EscalationConfig
+	ReadyToClose               ReadyToCloseConfig
+	SmsFeedback                SmsFeedbackConfig
+	Documenta                  DocumentaConfig
+	AIQuality                  AIQualityConfig
+	AutoAssign                 AutoAssignConfig
+	GoalManagement             GoalManagementConfig
+	License                    LicenseConfig
+	Integration                IntegrationConfig
+	FinalCloseWhatsAppFeedback FinalCloseWhatsAppFeedbackConfig
+	Cintrix                    CintrixConfig
+	PBX                        PBXConfig
+}
+
+// PBXConfig holds settings for the external PBX used by the extension-assignment
+// feature. The extension pool is fetched from BaseURL with "?action=list".
+type PBXConfig struct {
+	// BaseURL is the PBX endpoint that lists/creates extensions, e.g.
+	// https://zkff.automaxsw.com/create_user.php. The extension pool is read from
+	// BaseURL + "?action=list"; a single extension from + "&username=<ext>".
+	// env: PBX_BASE_URL
+	BaseURL string
+	// InsecureSkipVerify disables PBX TLS certificate validation. Dev/staging
+	// escape hatch only; defaults to false. env: PBX_INSECURE_SKIP_VERIFY
+	InsecureSkipVerify bool
+}
+
+// FinalCloseWhatsAppFeedbackConfig holds settings for deleting a still-active
+// WhatsApp feedback session once the final-close feedback has already been
+// submitted via another channel (e.g. the SMS fallback link), so the WhatsApp
+// feedback link stops working for the reporter.
+type FinalCloseWhatsAppFeedbackConfig struct {
+	// SessionBaseURL is the full session endpoint of the WhatsApp feedback API,
+	// including the "/session" path segment, e.g.
+	// https://unicam.discretal.com/automax3-feedback/session. The mobile number
+	// is appended directly to this value to form the DELETE URL.
+	// env: FINAL_CLOSE_WHATSAPP_FEEDBACK_SESSION_BASE_URL
+	SessionBaseURL string
 }
 
 type IntegrationConfig struct {
@@ -83,6 +113,23 @@ type DocumentaConfig struct {
 	ClientSecret  string
 	WorkspaceName string
 	Enabled       bool
+}
+
+// CintrixConfig holds settings for the Cintrix CTI integration (contact-center
+// softphone widget). env: CINTRIX_URL, CINTRIX_API_KEY_ID, CINTRIX_API_KEY_SECRET,
+// CINTRIX_WEBHOOK_SECRET.
+// CINTRIX_URL must be the Cintrix FRONTEND origin (its nginx serves
+// cti-widget.js and proxies /api to the backend) — NOT the bare backend port;
+// the widget script 404s there and the widget never renders.
+// — leaving these unset disables the CTI routes.
+// WebhookSecret authenticates inbound call-event webhooks from Cintrix
+// (Authorization: Bearer + X-Cintrix-Signature HMAC); leaving it unset
+// disables the webhook route (503).
+type CintrixConfig struct {
+	URL           string
+	APIKeyID      string
+	APIKeySecret  string
+	WebhookSecret string
 }
 
 type EscalationConfig struct {
@@ -229,6 +276,7 @@ func Load() *Config {
 		FrontendURL:      getEnv("FRONTEND_URL", ""),
 		SSOFrontendURL:   getEnv("SSO_FRONTEND_URL", ""),
 		NafathAPIBaseURL: getEnv("NAFATH_API_BASE_URL", ""),
+		CountryCode:      getEnv("COUNTRY_CODE", "+966"),
 		Escalation: EscalationConfig{
 			DailyHour:    getEnvAsInt("ESCALATION_DAILY_HOUR", 18),
 			DailyMinute:  getEnvAsInt("ESCALATION_DAILY_MINUTE", 0),
@@ -256,6 +304,9 @@ func Load() *Config {
 			AppHost:              getEnv("APP_HOST", "localhost:8080"),
 			AppToken:             getEnv("APP_TOKEN", ""),
 		},
+		FinalCloseWhatsAppFeedback: FinalCloseWhatsAppFeedbackConfig{
+			SessionBaseURL: getEnv("FINAL_CLOSE_WHATSAPP_FEEDBACK_SESSION_BASE_URL", ""),
+		},
 		AutoAssign: AutoAssignConfig{
 			StateCode:       getEnv("AUTO_ASSIGN_STATE_CODE", ""),
 			IntervalMinutes: getEnvAsInt("AUTO_ASSIGN_INTERVAL_MINUTES", 5),
@@ -274,7 +325,17 @@ func Load() *Config {
 			SecretsKey: getEnv("INTEGRATION_SECRETS_KEY", ""),
 		},
 		SmsFeedback: SmsFeedbackConfig{
-			DelayMinutes: getEnvAsInt("SMS_FEEDBACK_DELAY_MINUTES", 2880),
+			DelayMinutes: getEnvAsInt("SMS_FEEDBACK_DELAY_MINUTES", 0),
+		},
+		Cintrix: CintrixConfig{
+			URL:           getEnv("CINTRIX_URL", ""),
+			APIKeyID:      getEnv("CINTRIX_API_KEY_ID", ""),
+			APIKeySecret:  getEnv("CINTRIX_API_KEY_SECRET", ""),
+			WebhookSecret: getEnv("CINTRIX_WEBHOOK_SECRET", ""),
+		},
+		PBX: PBXConfig{
+			BaseURL:            getEnv("PBX_BASE_URL", "https://zkff.automaxsw.com/create_user.php"),
+			InsecureSkipVerify: getEnvAsBool("PBX_INSECURE_SKIP_VERIFY", false),
 		},
 	}
 }

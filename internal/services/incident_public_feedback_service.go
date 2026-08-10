@@ -16,8 +16,6 @@ import (
 	"gorm.io/gorm"
 )
 
-const feedbackTokenDuration = 72 * time.Hour
-
 type IncidentPublicFeedbackService interface {
 	Create(ctx context.Context, incidentID uuid.UUID, req *models.IncidentPublicFeedbackCreateRequest) (*models.IncidentPublicFeedbackResponse, error)
 	// Init validates a 3-part incident signed token, creates or finds the pending feedback record,
@@ -29,12 +27,13 @@ type IncidentPublicFeedbackService interface {
 }
 
 type incidentPublicFeedbackService struct {
-	repo               repository.IncidentPublicFeedbackRepository
-	incidentRepo       repository.IncidentRepository
-	notification       *NotificationService
-	incidentService    IncidentService
-	workflowRepo       repository.WorkflowRepository
-	classificationRepo repository.ClassificationRepository
+	repo                   repository.IncidentPublicFeedbackRepository
+	incidentRepo           repository.IncidentRepository
+	notification           *NotificationService
+	incidentService        IncidentService
+	workflowRepo           repository.WorkflowRepository
+	classificationRepo     repository.ClassificationRepository
+	whatsappSessionCleanup *FinalCloseWhatsAppFeedbackSessionService
 }
 
 func NewIncidentPublicFeedbackService(
@@ -44,14 +43,16 @@ func NewIncidentPublicFeedbackService(
 	incidentService IncidentService,
 	workflowRepo repository.WorkflowRepository,
 	classificationRepo repository.ClassificationRepository,
+	whatsappSessionCleanup *FinalCloseWhatsAppFeedbackSessionService,
 ) IncidentPublicFeedbackService {
 	return &incidentPublicFeedbackService{
-		repo:               repo,
-		incidentRepo:       incidentRepo,
-		notification:       notification,
-		incidentService:    incidentService,
-		workflowRepo:       workflowRepo,
-		classificationRepo: classificationRepo,
+		repo:                   repo,
+		incidentRepo:           incidentRepo,
+		notification:           notification,
+		incidentService:        incidentService,
+		workflowRepo:           workflowRepo,
+		classificationRepo:     classificationRepo,
+		whatsappSessionCleanup: whatsappSessionCleanup,
 	}
 }
 
@@ -74,20 +75,24 @@ func (s *incidentPublicFeedbackService) Create(ctx context.Context, incidentID u
 		return nil, fmt.Errorf("failed to create public feedback: %w", err)
 	}
 
-	token := utils.GenerateFeedbackToken(f.ID.String(), incidentID.String(), feedbackTokenDuration)
+	token := utils.GenerateFeedbackToken(f.ID.String(), incidentID.String(), GetFeedbackTokenDuration())
 
 	// Send SMS asynchronously — a delivery failure must not block the API response.
 	go func() {
 		smsBody := req.Message
 		if smsBody == "" {
-			link := utils.BuildFeedbackLink(ctx, incidentID.String(), f.ID.String(), feedbackTokenDuration)
+			link := utils.BuildFeedbackLink(ctx, incidentID.String(), f.ID.String(), GetFeedbackTokenDuration())
 			smsBody = fmt.Sprintf("Please rate your experience. Submit your feedback here: %s", link)
 		}
-		if _, err := s.notification.SendNotification(
+		result, err := s.notification.SendNotification(
 			context.Background(), "sms", nil, "en",
 			[]string{f.MobileNo}, nil, nil,
 			"", smsBody, nil, nil, &createdByID, nil,
-		); err != nil {
+		)
+		if result != nil && result.SentLog != nil {
+			_ = s.notification.SetIncidentIDOnLogs(context.Background(), []uuid.UUID{result.SentLog.ID}, incidentID)
+		}
+		if err != nil {
 			log.Printf("[IncidentPublicFeedback] SMS send failed for feedback %s: %v", f.ID, err)
 		}
 	}()
@@ -128,7 +133,7 @@ func (s *incidentPublicFeedbackService) Init(ctx context.Context, incidentID uui
 		}
 	}
 
-	token := utils.GenerateFeedbackToken(f.ID.String(), incidentID.String(), feedbackTokenDuration)
+	token := utils.GenerateFeedbackToken(f.ID.String(), incidentID.String(), GetFeedbackTokenDuration())
 	return &models.IncidentPublicFeedbackInitResponse{
 		FeedbackID:  f.ID,
 		SignedToken: token,
@@ -183,6 +188,29 @@ func (s *incidentPublicFeedbackService) Submit(ctx context.Context, incidentID u
 
 	if err := s.repo.Update(ctx, f); err != nil {
 		return nil, fmt.Errorf("failed to submit feedback: %w", err)
+	}
+
+	// Feedback was just submitted via this channel (typically the SMS fallback
+	// link) — a WhatsApp feedback session for the same reporter may still be
+	// active. Delete it so that link stops working. Best-effort: log and move
+	// on, never fail the submission because of this cleanup step.
+	if s.whatsappSessionCleanup != nil && f.MobileNo != "" && s.incidentRepo != nil {
+		mobileNo := f.MobileNo
+		feedbackID := f.ID
+		go func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			inc, incErr := s.incidentRepo.FindByID(cleanupCtx, incidentID)
+			if incErr != nil || inc == nil || inc.IncidentNumber == "" {
+				log.Printf("[IncidentPublicFeedback] WhatsApp session cleanup skipped for feedback %s: failed to resolve incident number (incident=%s): %v", feedbackID, incidentID, incErr)
+				return
+			}
+			if cleanupErr := s.whatsappSessionCleanup.DeleteSession(cleanupCtx, inc.IncidentNumber, mobileNo); cleanupErr != nil {
+				log.Printf("[IncidentPublicFeedback] WhatsApp session cleanup failed for feedback %s (incident=%s, mobile=%s): %v", feedbackID, inc.IncidentNumber, mobileNo, cleanupErr)
+			} else {
+				log.Printf("[IncidentPublicFeedback] WhatsApp session cleanup completed for feedback %s (incident=%s, mobile=%s)", feedbackID, inc.IncidentNumber, mobileNo)
+			}
+		}()
 	}
 
 	resp := models.ToIncidentPublicFeedbackResponse(f)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -248,6 +249,9 @@ func (h *UserHandler) UploadAvatar(c *fiber.Ctx) error {
 
 func (h *UserHandler) DeleteAccount(c *fiber.Ctx) error {
 	if err := h.userService.DeleteUser(c.UserContext()); err != nil {
+		if errors.Is(err, services.ErrUserAssigned) {
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "cannot_delete_user_assigned"))
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_delete_account"))
 	}
 
@@ -263,6 +267,9 @@ func (h *UserHandler) AdminDeleteUser(c *fiber.Ctx) error {
 	}
 
 	if err := h.userService.AdminDeleteUser(c.UserContext(), userID); err != nil {
+		if errors.Is(err, services.ErrUserAssigned) {
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "cannot_delete_user_assigned"))
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_delete_user"))
 	}
 
@@ -288,18 +295,39 @@ func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit, _ := strconv.Atoi(c.Query("limit", "10"))
 	search := c.Query("search", "")
+	phone := strings.TrimSpace(c.Query("phone", ""))
+	extension := strings.TrimSpace(c.Query("extension", ""))
+	callStatus := strings.TrimSpace(c.Query("call_status", ""))
 
 	roleIDs := parseUUIDList(c.Query("role_ids", ""))
 	departmentIDs := parseUUIDList(c.Query("department_ids", ""))
 	locationIDs := parseUUIDList(c.Query("location_ids", ""))
 	classificationIDs := parseUUIDList(c.Query("classification_ids", ""))
 
-	page = max(page, 1)
-	if limit < 1 || limit > 100 {
-		limit = 10
+	// Department-scoped: users with view_department_only see only their department's users.
+	// Uses ScopeDepartmentID() which checks DeptManagerDepartmentID > DepartmentID > M2M departments.
+	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
+	if user != nil && !user.IsSuperAdmin && user.HasPermission("users:view_department_only") {
+		scopeDeptID := user.ScopeDepartmentID()
+		if scopeDeptID != nil {
+			departmentIDs = []uuid.UUID{*scopeDeptID}
+		}
+		if user.DeptManagerClassificationID != nil {
+			classificationIDs = []uuid.UUID{*user.DeptManagerClassificationID}
+		}
+		if user.DeptManagerLocationID != nil {
+			locationIDs = []uuid.UUID{*user.DeptManagerLocationID}
+		}
 	}
 
-	users, total, err := h.userService.ListUsers(c.UserContext(), page, limit, search, roleIDs, departmentIDs, locationIDs, classificationIDs)
+	page = max(page, 1)
+	if limit < 1 {
+		limit = 10
+	} else if limit > 1000 {
+		limit = 1000
+	}
+
+	users, total, err := h.userService.ListUsers(c.UserContext(), page, limit, search, phone, extension, callStatus, roleIDs, departmentIDs, locationIDs, classificationIDs, false)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_users"))
 	}
@@ -320,6 +348,41 @@ func (h *UserHandler) GetUser(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "user_retrieved"), response)
+}
+
+func (h *UserHandler) GetManagerScope(c *fiber.Ctx) error {
+	userLocal, _ := c.Locals(constants.ContextKeys.User).(*models.User)
+	if userLocal == nil {
+		return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "unauthorized"))
+	}
+
+	// Reload with all scope relations for complete response
+	user, err := h.userService.GetUserByID(c.UserContext(), userLocal.ID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "user_not_found"))
+	}
+
+	if !userLocal.HasPermission("users:view_department_only") {
+		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "not_department_manager"))
+	}
+
+	scope := map[string]interface{}{
+		"is_department_scoped": true,
+	}
+	if user.DeptManagerDepartmentID != nil {
+		scope["department_id"] = user.DeptManagerDepartmentID
+		scope["department"] = user.DeptManagerDepartment
+	}
+	if user.DeptManagerClassificationID != nil {
+		scope["classification_id"] = user.DeptManagerClassificationID
+		scope["classification"] = user.DeptManagerClassification
+	}
+	if user.DeptManagerLocationID != nil {
+		scope["location_id"] = user.DeptManagerLocationID
+		scope["location"] = user.DeptManagerLocation
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "scope_retrieved"), scope)
 }
 
 func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
@@ -468,6 +531,12 @@ func (h *UserHandler) AdminUpdateUser(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
+	// If the admin changed this user's roles, nudge their live clients to refresh
+	// permissions so the UI reflects the new access without a manual re-login.
+	if req.RoleIDs != nil && h.wsHub != nil {
+		h.wsHub.BroadcastToUser(userID, "permissions_changed", fiber.Map{"reason": "roles_updated"})
+	}
+
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "user_updated"), response)
 }
 
@@ -556,12 +625,16 @@ func (h *UserHandler) UpdateUserCallStatus(c *fiber.Ctx) error {
 		"available": true,
 		"online":    true,
 		"in_call":   true,
+		"online":    true,
 		"offline":   true,
 	}
 	if !validStatuses[req.Status] {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "invalid_status", req.Status))
 	}
 
+	if strings.EqualFold(req.Status, "available") {
+		req.Status = string(models.CallStatusOnline) // "online"
+	}
 	// Call Service
 	resp, err := h.userService.UpdateUserCallStatus(c.UserContext(), userExt, req.Status)
 	if err != nil {
@@ -581,8 +654,19 @@ func (h *UserHandler) UpdateUserCallStatus(c *fiber.Ctx) error {
 
 // Export exports all users as JSON
 func (h *UserHandler) Export(c *fiber.Ctx) error {
+	// Department-scoped: users with view_department_only can only export their own department's users.
+	// Mirrors the same restriction applied in ListUsers.
+	var departmentIDs []uuid.UUID
+	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
+	if user != nil && !user.IsSuperAdmin && user.HasPermission("users:view_department_only") {
+		scopeDeptID := user.ScopeDepartmentID()
+		if scopeDeptID != nil {
+			departmentIDs = []uuid.UUID{*scopeDeptID}
+		}
+	}
+
 	// Get all users without pagination
-	users, _, err := h.userService.ListUsers(c.UserContext(), 1, 10000, "", nil, nil, nil, nil)
+	users, _, err := h.userService.ListUsers(c.UserContext(), 1, 10000, "", "", "", "", nil, departmentIDs, nil, nil)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
@@ -637,6 +721,51 @@ func (h *UserHandler) Export(c *fiber.Ctx) error {
 	return c.JSON(exportData)
 }
 
+// defaultImportPassword is assigned to every user created through Import; the import payload
+// carries no credentials.
+const defaultImportPassword = "DefaultPassword123!"
+
+// parseImportUUIDs converts import-payload string IDs to UUIDs, dropping malformed values.
+func parseImportUUIDs(values []string) []uuid.UUID {
+	ids := make([]uuid.UUID, 0, len(values))
+	for _, v := range values {
+		if id, err := uuid.Parse(strings.TrimSpace(v)); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// formatValidationErrors flattens the field->message map from validation.ValidateStruct into a
+// single line. Fields are sorted so the same bad row always produces the same message.
+func formatValidationErrors(validationErrors map[string]string) string {
+	fields := make([]string, 0, len(validationErrors))
+	for field := range validationErrors {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+
+	parts := make([]string, 0, len(fields))
+	for _, field := range fields {
+		parts = append(parts, field+": "+validationErrors[field])
+	}
+	return strings.Join(parts, "; ")
+}
+
+// importRowLabel identifies a row in the Import error list. Email is the natural identifier, but a
+// row can fail precisely because its email is blank, so fall back to the username and then to the
+// row's 1-based position in the file - an error nobody can trace back to a row is not actionable.
+func importRowLabel(email, username string, index int) string {
+	switch {
+	case email != "":
+		return email
+	case username != "":
+		return username
+	default:
+		return "row " + strconv.Itoa(index+1)
+	}
+}
+
 // Import imports users from JSON
 func (h *UserHandler) Import(c *fiber.Ctx) error {
 	file, err := c.FormFile("file")
@@ -653,20 +782,21 @@ func (h *UserHandler) Import(c *fiber.Ctx) error {
 
 	// Read file content
 	var importData []struct {
-		ID                uuid.UUID  `json:"id"`
-		Username          string     `json:"username"`
-		Email             string     `json:"email"`
-		FirstName         string     `json:"first_name"`
-		LastName          string     `json:"last_name"`
-		Phone             string     `json:"phone"`
-		DepartmentID      *uuid.UUID `json:"department_id"`
-		LocationID        *uuid.UUID `json:"location_id"`
-		RoleIDs           []string   `json:"role_ids"`
-		DepartmentIDs     []string   `json:"department_ids"`
-		LocationIDs       []string   `json:"location_ids"`
-		ClassificationIDs []string   `json:"classification_ids"`
-		IsActive          bool       `json:"is_active"`
-		IsSuperAdmin      bool       `json:"is_super_admin"`
+		// ID        uuid.UUID `json:"id"`
+		Username  string `json:"username"`
+		Email     string `json:"email"`
+		FirstName string `json:"first_name"`
+		LastName  string `json:"last_name"`
+		Phone     string `json:"phone"`
+		Extension string `json:"extension"`
+		// DepartmentID      *uuid.UUID `json:"department_id"`
+		// LocationID        *uuid.UUID `json:"location_id"`
+		// RoleIDs           []string   `json:"role_ids"`
+		// DepartmentIDs     []string   `json:"department_ids"`
+		// LocationIDs       []string   `json:"location_ids"`
+		// ClassificationIDs []string   `json:"classification_ids"`
+		// IsActive          bool       `json:"is_active"`
+		// IsSuperAdmin      bool       `json:"is_super_admin"`
 	}
 
 	// Parse JSON from file
@@ -675,90 +805,116 @@ func (h *UserHandler) Import(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "invalid_json_format_detail", err.Error()))
 	}
 
+	// Normalise the rows and collect their identifiers so every duplicate in the file can be
+	// resolved with one narrow query instead of two full-row lookups per row.
+	emails := make([]string, 0, len(importData))
+	usernames := make([]string, 0, len(importData))
+	phones := make([]string, 0, len(importData))
+	for i := range importData {
+		importData[i].Email = strings.ToLower(strings.TrimSpace(importData[i].Email))
+		importData[i].Username = strings.TrimSpace(importData[i].Username)
+		importData[i].Phone = strings.TrimSpace(importData[i].Phone)
+
+		if importData[i].Email != "" {
+			emails = append(emails, importData[i].Email)
+		}
+		if importData[i].Username != "" {
+			usernames = append(usernames, importData[i].Username)
+		}
+		if importData[i].Phone != "" {
+			phones = append(phones, importData[i].Phone)
+		}
+	}
+
+	existing, err := h.userService.CheckExistingIdentifiers(c.UserContext(), emails, usernames, phones)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+	}
+
 	imported := 0
 	skipped := 0
 	errors := []string{}
 
 	// Import all users
-	for _, data := range importData {
-		// Check if user already exists by email or username
-		existingUser, _ := h.userService.GetUserByEmail(c.UserContext(), data.Email)
-		if existingUser != nil {
-			skipped++
-			errors = append(errors, data.Email+" - User already exists with this email, skipped")
-			continue
-		}
+	for i, data := range importData {
+		label := importRowLabel(data.Email, data.Username, i)
 
-		existingUser, _ = h.userService.GetUserByUsername(c.UserContext(), data.Username)
-		if existingUser != nil {
-			skipped++
-			errors = append(errors, data.Username+" - User already exists with this username, skipped")
-			continue
-		}
-
-		// Parse role IDs
-		roleIDs := make([]uuid.UUID, 0)
-		for _, roleIDStr := range data.RoleIDs {
-			if roleID, err := uuid.Parse(roleIDStr); err == nil {
-				roleIDs = append(roleIDs, roleID)
-			}
-		}
-
-		// Parse department IDs
-		departmentIDs := make([]uuid.UUID, 0)
-		for _, deptIDStr := range data.DepartmentIDs {
-			if deptID, err := uuid.Parse(deptIDStr); err == nil {
-				departmentIDs = append(departmentIDs, deptID)
-			}
-		}
-
-		// Parse location IDs
-		locationIDs := make([]uuid.UUID, 0)
-		for _, locIDStr := range data.LocationIDs {
-			if locID, err := uuid.Parse(locIDStr); err == nil {
-				locationIDs = append(locationIDs, locID)
-			}
-		}
-
-		// Parse classification IDs
-		classificationIDs := make([]uuid.UUID, 0)
-		for _, clsIDStr := range data.ClassificationIDs {
-			if clsID, err := uuid.Parse(clsIDStr); err == nil {
-				classificationIDs = append(classificationIDs, clsID)
-			}
-		}
-
-		// Create user registration request
 		req := &models.UserRegisterRequest{
-			Username:          data.Username,
-			Email:             data.Email,
-			Password:          "ChangeMe123!", // Default password, user should change
-			FirstName:         data.FirstName,
-			LastName:          data.LastName,
-			Phone:             data.Phone,
-			DepartmentID:      data.DepartmentID,
-			LocationID:        data.LocationID,
-			RoleIDs:           roleIDs,
-			DepartmentIDs:     departmentIDs,
-			LocationIDs:       locationIDs,
-			ClassificationIDs: classificationIDs,
+			Username:  data.Username,
+			Email:     data.Email,
+			Password:  defaultImportPassword,
+			FirstName: data.FirstName,
+			LastName:  data.LastName,
+			Phone:     data.Phone,
+			// Extension: data.Extension,
+			// DepartmentID:      data.DepartmentID,
+			// LocationID:        data.LocationID,
+			// RoleIDs:           parseImportUUIDs(data.RoleIDs),
+			// DepartmentIDs:     parseImportUUIDs(data.DepartmentIDs),
+			// LocationIDs:       parseImportUUIDs(data.LocationIDs),
+			// ClassificationIDs: parseImportUUIDs(data.ClassificationIDs),
+		}
+
+		// Import is deliberately stricter than UserRegisterRequest, which tags Phone `omitempty`:
+		// every imported row must carry a valid mobile number, so a blank one fails the row here
+		// rather than passing the struct tags. IsValidMobile is the same function backing the
+		// `mobile` tag, so checking it directly cannot diverge from what Register will accept - it
+		// just lets the message name the number that was rejected.
+		switch {
+		case data.Phone == "":
+			skipped++
+			errors = append(errors, label+" - Phone is required.")
+			continue
+		case !validation.IsValidMobile(data.Phone):
+			skipped++
+			errors = append(errors, label+" - Phone "+data.Phone+" is not a valid mobile number.")
+			continue
+		}
+
+		// Format is checked before the duplicate lookups: a malformed email that happens to collide
+		// with an existing user has to be reported as malformed, not as "already exists". The struct
+		// tags own the email and username rules, so an import accepts exactly what
+		// POST /admin/users accepts.
+		if validationErrors := validation.ValidateStruct(c.UserContext(), req); len(validationErrors) != 0 {
+			skipped++
+			errors = append(errors, label+" - "+formatValidationErrors(validationErrors))
+			continue
+		}
+
+		if existing.HasEmail(data.Email) {
+			skipped++
+			errors = append(errors, label+" - User already exists with this email, skipped")
+			continue
+		}
+
+		if existing.HasUsername(data.Username) {
+			skipped++
+			errors = append(errors, label+" - User already exists with this username, skipped")
+			continue
+		}
+
+		if existing.HasPhone(data.Phone) {
+			skipped++
+			errors = append(errors, label+" - Phone "+data.Phone+" already in use.")
+			continue
 		}
 
 		// Register user
-		_, err := h.userService.Register(c.UserContext(), req)
-		if err != nil {
+		if _, err := h.userService.Register(c.UserContext(), req); err != nil {
 			skipped++
-			errors = append(errors, data.Email+" - "+err.Error())
-		} else {
-			imported++
+			errors = append(errors, label+" - "+err.Error())
+			continue
 		}
+
+		// Claim these identifiers so a later row in the same file cannot reuse them
+		existing.Add(data.Email, data.Username, data.Phone)
+		imported++
 	}
 
 	result := map[string]interface{}{
 		"imported": imported,
 		"skipped":  skipped,
 		"errors":   errors,
-		"note":     "Imported users have default password: ChangeMe123! - Please ask users to change it",
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "import_completed"), result)

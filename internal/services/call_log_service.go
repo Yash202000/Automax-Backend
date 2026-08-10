@@ -193,11 +193,19 @@ func (s *callLogService) ListCallLogsSummary(ctx context.Context, filter *models
 		currentUserExt = u.Extension
 	}
 
+	// A nil ParticipantID means the caller asked for the unscoped list (super
+	// admin ?all=true): rows are not tied to currentUserID's perspective.
+	unscoped := filter.ParticipantID == nil
+
 	items := make([]models.CallLogListItem, len(callLogs))
 	for i, cl := range callLogs {
 		var recordingURL string
 		if len(cl.Attachments) > 0 {
 			recordingURL = pkgUtils.GenerateAttachmentAppURL(ctx, cl.Attachments[0].ID)
+		} else if cl.CallUuid != "" && models.RecordingURLFromMeta(cl.Meta) != "" {
+			// Cintrix-originated call with a recording — proxy through the CTI
+			// endpoint rather than exposing the raw (HMAC-gated) Cintrix URL.
+			recordingURL = pkgUtils.GenerateCTIRecordingAppURL(ctx, cl.CallUuid)
 		}
 		item := models.CallLogListItem{
 			ID:           cl.ID,
@@ -246,8 +254,24 @@ func (s *callLogService) ListCallLogsSummary(ctx context.Context, filter *models
 		item.Duration = duration
 
 		// Direction: outgoing if the current user is the initiator.
+		//
+		// The unscoped admin view (?all=true) has no "current user" whose phone
+		// could answer that, so fall back to the direction Cintrix recorded in
+		// meta, then to whether the initiator resolves to a known Automax user.
 		isInitiator := initiatorParticipant != nil &&
 			(initiatorParticipant.PhoneNumber == currentUserExt || initiatorParticipant.PhoneNumber == currentUserPhone)
+		if unscoped && !isInitiator {
+			switch strings.ToLower(models.DirectionFromMeta(cl.Meta)) {
+			case "outbound", "outgoing":
+				isInitiator = true
+			case "inbound", "incoming":
+				// leave as incoming
+			default:
+				if initiatorParticipant != nil && nameMap[initiatorParticipant.PhoneNumber] != "" {
+					isInitiator = true
+				}
+			}
+		}
 		if isInitiator {
 			item.Direction = "outgoing"
 		} else {
@@ -260,17 +284,28 @@ func (s *callLogService) ListCallLogsSummary(ctx context.Context, filter *models
 		}
 		if otherP != nil {
 			item.OtherPartyPhone = otherP.PhoneNumber
-			item.OtherPartyName = nameMap[otherP.PhoneNumber]
 			item.OtherPartyExtension = extMap[otherP.PhoneNumber]
-			if item.OtherPartyName == "" {
-				item.OtherPartyName = otherP.PhoneNumber
-			}
+			item.OtherPartyName = otherPartyName(otherP.DisplayName, nameMap[otherP.PhoneNumber], otherP.PhoneNumber)
 		}
 
 		items[i] = item
 	}
 
 	return items, total, nil
+}
+
+// otherPartyName picks the best display name for the non-current participant:
+// the CTI-provided contact/display name, else a name resolved from the users
+// table, else the raw phone number (frontend renders "Unknown" only when all
+// are empty).
+func otherPartyName(displayName, nameFromUsers, phone string) string {
+	if displayName != "" {
+		return displayName
+	}
+	if nameFromUsers != "" {
+		return nameFromUsers
+	}
+	return phone
 }
 
 func (s *callLogService) GetStats(ctx context.Context) (*models.CallLogStats, error) {
@@ -516,6 +551,8 @@ func (s *callLogService) toCallLogResponse(ctx context.Context, callLog *models.
 	var recordingURL string
 	if len(callLog.Attachments) > 0 {
 		recordingURL = pkgUtils.GenerateAttachmentAppURL(ctx, callLog.Attachments[0].ID)
+	} else if callLog.CallUuid != "" && models.RecordingURLFromMeta(callLog.Meta) != "" {
+		recordingURL = pkgUtils.GenerateCTIRecordingAppURL(ctx, callLog.CallUuid)
 	}
 	resp := models.CallLogResponse{
 		ID:           callLog.ID,
