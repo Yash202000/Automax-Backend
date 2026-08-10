@@ -1,6 +1,22 @@
 package handlers
 
-import "github.com/google/uuid"
+import (
+	"strings"
+
+	"github.com/google/uuid"
+)
+
+// isOutboundDirection reports whether a Cintrix call-event `direction` denotes an
+// agent-originated (outbound) call, for which the dialed party — not the caller —
+// is the "other party" shown to the agent.
+func isOutboundDirection(direction string) bool {
+	switch strings.ToLower(strings.TrimSpace(direction)) {
+	case "outbound", "outgoing":
+		return true
+	default:
+		return false
+	}
+}
 
 // reconcileDirectCallAgent corrects Cintrix's wrong-leg agent resolution on
 // direct softphone-to-softphone calls. Cintrix resolves the answering leg from

@@ -140,15 +140,33 @@ func (h *CintrixWebhookHandler) HandleCallEvent(c *fiber.Ctx) error {
 	meta := datatypes.JSON(append([]byte{}, rawBody...))
 
 	// StartAt prefers answered_at, falling back to ended_at (covers missed calls
-	// that arrive only via call.ended, with no answered_at at all).
+	// that arrive only via call.ended, with no answered_at at all). Outbound legs
+	// never emit call.answered (answered_at is null), so synthesize the start from
+	// the reported talk duration — otherwise an answered outbound call shows a 0
+	// duration in the summary (which computes end_at − start_at).
 	startAt := payload.AnsweredAt
 	if startAt == nil {
-		startAt = payload.EndedAt
+		if payload.EndedAt != nil && payload.DurationSeconds > 0 {
+			s := payload.EndedAt.Add(-time.Duration(payload.DurationSeconds) * time.Second)
+			startAt = &s
+		} else {
+			startAt = payload.EndedAt
+		}
 	}
 
 	callerName := ""
 	if payload.Contact != nil {
 		callerName = payload.Contact.Name
+	}
+
+	// Outbound to an EXTERNAL number: the dialed party doesn't resolve to an
+	// internal user (dialedIdentifier stays empty), so persist the raw DID as a
+	// display-only recipient — otherwise the agent's outbound row has no
+	// non-initiator participant and shows "Unknown" as the other party.
+	externalDID := ""
+	if isOutboundDirection(payload.Direction) && dialedIdentifier == "" &&
+		payload.DID != "" && payload.DID != payload.CallerNumber {
+		externalDID = payload.DID
 	}
 
 	existing, err := h.callLogRepo.FindByCallUUID(ctx, payload.CallUuid)
@@ -191,6 +209,12 @@ func (h *CintrixWebhookHandler) HandleCallEvent(c *fiber.Ctx) error {
 		// and the (already-added) answered agent.
 		if dialedIdentifier != "" && dialedIdentifier != agentIdentifier && dialedIdentifier != payload.CallerNumber {
 			participants = append(participants, &models.CallParticipant{PhoneNumber: dialedIdentifier, Role: "recipient"})
+		}
+		// External dialed party on an outbound call — display-only "other party".
+		if externalDID != "" {
+			participants = append(participants, &models.CallParticipant{
+				PhoneNumber: externalDID, Role: "recipient", DisplayName: externalDID,
+			})
 		}
 
 		if err := h.callLogRepo.CreateWithParticipants(ctx, callLog, participants); err != nil {
@@ -267,6 +291,21 @@ func (h *CintrixWebhookHandler) HandleCallEvent(c *fiber.Ctx) error {
 			}
 		} else if err != nil {
 			log.Printf("[cintrix-webhook] dialed participant lookup failed for %s: %v", payload.CallUuid, err)
+		}
+	}
+	// External dialed party on an outbound call — display-only "other party".
+	if externalDID != "" {
+		if _, err := h.callLogRepo.FindParticipant(ctx, existing.ID, externalDID); err == gorm.ErrRecordNotFound {
+			if cerr := h.callLogRepo.CreateParticipant(ctx, &models.CallParticipant{
+				CallLogID:   existing.ID,
+				PhoneNumber: externalDID,
+				Role:        "recipient",
+				DisplayName: externalDID,
+			}); cerr != nil {
+				log.Printf("[cintrix-webhook] failed to add external dialed participant for %s: %v", payload.CallUuid, cerr)
+			}
+		} else if err != nil {
+			log.Printf("[cintrix-webhook] external dialed participant lookup failed for %s: %v", payload.CallUuid, err)
 		}
 	}
 
