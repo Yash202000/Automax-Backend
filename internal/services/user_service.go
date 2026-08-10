@@ -2092,8 +2092,8 @@ func (s *userService) ForgotPassword(ctx context.Context, req *models.ForgotPass
 		user, err = s.userRepo.FindByMobile(ctx, value)
 	}
 
-	if err != nil {
-		return "", fmt.Errorf("failed to fetch user: %w", err)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", fmt.Errorf("%s", i18n.T(ctx, "failed_to_fetch_user"))
 	}
 
 	if user == nil {
