@@ -42,7 +42,7 @@ func (h *LocationHandler) Create(c *fiber.Ctx) error {
 		})
 	}
 
-	existing, err := h.repo.FindByNameOrNameAr(c.UserContext(), req.Name, req.NameAr)
+	existing, err := h.repo.FindByNameOrNameArAndParent(c.UserContext(), req.Name, req.NameAr, req.ParentID)
 	if err == nil && existing != nil {
 		existingPath, _ := h.repo.FetchLocationFullPathByID(c.UserContext(), existing.ID)
 		msg := fmt.Sprintf("Location '%s' already exists", existing.Name)
