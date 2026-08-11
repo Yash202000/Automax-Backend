@@ -76,14 +76,63 @@ func (h *ReportHandler) injectReportScope(c *fiber.Ctx, ctx context.Context, dat
 
 	// ── Classification / location / department scoping ─────────────────
 	noAccessSentinel := []interface{}{"00000000-0000-0000-0000-000000000000"}
+	enforceAccessScope := strings.EqualFold(strings.TrimSpace(os.Getenv("ENFORCE_USER_ACCESS_SCOPE")), "true")
 
 	scope := &models.ReportAccessScope{
 		UserID:  userID,
 		ViewAll: user.HasPermission("incidents:view_all"),
 	}
 
-	if user.HasPermission("incidents:view_department_only") {
-		// Department-scoped: use DeptManager fields (mirrors ListIncidents lines 273-298)
+	if enforceAccessScope {
+		// Unified scoping: dept + classification + location via M2M
+		// Mirrors applyUserAccessScope() in incident_handler.go
+
+		// Departments
+		var deptIDs []interface{}
+		if user.HasPermission("incidents:view_department_only") {
+			for _, id := range user.ScopeDepartmentIDs() {
+				deptIDs = append(deptIDs, id.String())
+			}
+		} else {
+			for _, d := range user.Departments {
+				deptIDs = append(deptIDs, d.ID.String())
+			}
+		}
+		if len(deptIDs) > 0 {
+			filters = append(filters, models.ReportFilterConfig{
+				Field:    "department_id",
+				Operator: "in",
+				Value:    deptIDs,
+			})
+		}
+
+		// Classifications — always from M2M (empty = no restriction)
+		if len(user.Classifications) > 0 {
+			classIDs := make([]interface{}, 0, len(user.Classifications))
+			for _, cls := range user.Classifications {
+				classIDs = append(classIDs, cls.ID.String())
+			}
+			filters = append(filters, models.ReportFilterConfig{
+				Field:    "classification_id",
+				Operator: "in",
+				Value:    classIDs,
+			})
+		}
+
+		// Locations — always from M2M (empty = no restriction)
+		if len(user.Locations) > 0 {
+			locIDs := make([]interface{}, 0, len(user.Locations))
+			for _, loc := range user.Locations {
+				locIDs = append(locIDs, loc.ID.String())
+			}
+			filters = append(filters, models.ReportFilterConfig{
+				Field:    "location_id",
+				Operator: "in",
+				Value:    locIDs,
+			})
+		}
+	} else if user.HasPermission("incidents:view_department_only") {
+		// Legacy: Department-scoped via DeptManager fields
 		scope.ViewDepartmentOnly = true
 		scope.DepartmentIDs = user.ScopeDepartmentIDs()
 
@@ -102,7 +151,7 @@ func (h *ReportHandler) injectReportScope(c *fiber.Ctx, ctx context.Context, dat
 			})
 		}
 	} else {
-		// Regular user: use M2M classification/location assignments
+		// Legacy: Regular user — M2M classification/location, no department filter
 		hasClassification := false
 		hasLocation := false
 		for _, f := range filters {
