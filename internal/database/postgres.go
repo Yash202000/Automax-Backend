@@ -363,6 +363,13 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		log.Printf("Warning: call_participant phone migration failed: %v", err)
 	}
 
+	// Backfill Arabic name/description/module on permissions. The Seed loop below
+	// only inserts missing permissions, so existing rows would otherwise never get
+	// translations. Idempotent and self-skipping once nothing is blank.
+	if err := migrations.MigratePermissionArabic(db); err != nil {
+		log.Printf("Warning: permission Arabic backfill failed: %v", err)
+	}
+
 	// call_logs.created_by must accept NULL: system/machine-ingested rows (e.g.
 	// the Cintrix call-event webhook) have no acting user. Idempotent.
 	db.Exec("ALTER TABLE call_logs ALTER COLUMN created_by DROP NOT NULL")

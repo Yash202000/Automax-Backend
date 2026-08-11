@@ -413,8 +413,8 @@ func (h *RoleHandler) ListPermissions(c *fiber.Ctx) error {
 	}
 
 	responses := make([]models.PermissionResponse, len(permissions))
-	for i, perm := range permissions {
-		responses[i] = models.ToPermissionResponse(&perm)
+	for i := range permissions {
+		responses[i] = models.ToPermissionResponse(&permissions[i])
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "permissions_retrieved"), responses)
