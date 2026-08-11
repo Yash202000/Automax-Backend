@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -202,15 +203,15 @@ func (h *IncidentHandler) GetIncident(c *fiber.Ctx) error {
 	}
 
 	if isEpmPortalRequest(c) {
-		// Phone-number scoping: if reporter_phone is provided, verify ownership
+		// Phone-number scoping: if reporter_phone is provided, verify ownership.
+		//
+		// The portal may send the number in any of the shapes the column holds
+		// — bare, with a country code, or with the national trunk zero — so
+		// compare against every equivalent form rather than the one form the
+		// caller happened to type. Uses the same helper as the repository filters
+		// so this security boundary cannot drift from them.
 		if phone := c.Query("reporter_phone"); phone != "" {
-			phoneWithPlus := "+" + phone
-			if strings.HasPrefix(phone, "+") {
-				phoneWithPlus = phone
-				phone = strings.TrimPrefix(phone, "+")
-			}
-			incPhone := incident.ReporterPhone
-			if incPhone != phone && incPhone != phoneWithPlus {
+			if !slices.Contains(utils.MobileMatchVariants(phone), incident.ReporterPhone) {
 				return ErrorResponseWithKey(c, fiber.StatusNotFound, "incident_not_found")
 			}
 		}

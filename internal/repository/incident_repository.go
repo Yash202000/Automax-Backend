@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/automax/backend/internal/models"
+	"github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -223,6 +224,18 @@ func normalizeStateCodes(in []string) []string {
 	return out
 }
 
+// reporterPhoneVariants returns every shape a phone number may have been stored
+// in, so a caller-supplied value matches regardless of the channel that captured
+// it: bare, with a country code, with the national trunk zero, and the historic
+// country-code-plus-trunk-zero form.
+//
+// Used for exact matching only. The ILIKE search filters below do not need it,
+// because a substring pattern built from the bare number already matches the
+// stored trunk and country-code forms.
+func reporterPhoneVariants(supplied string) []string {
+	return utils.MobileMatchVariants(supplied)
+}
+
 // stateCodeSubquery matches incidents whose current state carries one of the given codes. Written as
 // an IN-subquery rather than a JOIN on purpose: List shares one *gorm.DB between Count and Find, and
 // several stats queries already join workflow_states, so an added join would either duplicate theirs
@@ -296,17 +309,10 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 	}
 
 	if filter.ReporterPhone != "" {
-		phone := filter.ReporterPhone
-		phoneWithPlus := "+" + phone
-		if strings.HasPrefix(phone, "+") {
-			phoneWithPlus = phone
-			phone = strings.TrimPrefix(phone, "+")
-		}
+		phones := reporterPhoneVariants(filter.ReporterPhone)
 		query = query.Where(
-			"reporter_phone IN (?, ?) OR reporter_id IN (SELECT id FROM users WHERE phone IN (?, ?) OR id IN (SELECT user_id FROM extension_assignments WHERE extension IN (?, ?)))",
-			phone, phoneWithPlus,
-			phone, phoneWithPlus,
-			phone, phoneWithPlus,
+			"reporter_phone IN ? OR reporter_id IN (SELECT id FROM users WHERE phone IN ? OR id IN (SELECT user_id FROM extension_assignments WHERE extension IN ?))",
+			phones, phones, phones,
 		)
 	}
 	// this to avoid EPM Citizen Portal security boundary
@@ -1077,17 +1083,10 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 			q = q.Where("incidents.reporter_id IN ?", filter.ReporterID)
 		}
 		if filter.ReporterPhone != "" {
-			phone := filter.ReporterPhone
-			phoneWithPlus := "+" + phone
-			if strings.HasPrefix(phone, "+") {
-				phoneWithPlus = phone
-				phone = strings.TrimPrefix(phone, "+")
-			}
+			phones := reporterPhoneVariants(filter.ReporterPhone)
 			q = q.Where(
-				"incidents.reporter_phone IN (?, ?) OR incidents.reporter_id IN (SELECT id FROM users WHERE phone IN (?, ?) OR id IN (SELECT user_id FROM extension_assignments WHERE extension IN (?, ?)))",
-				phone, phoneWithPlus,
-				phone, phoneWithPlus,
-				phone, phoneWithPlus,
+				"incidents.reporter_phone IN ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone IN ? OR id IN (SELECT user_id FROM extension_assignments WHERE extension IN ?))",
+				phones, phones, phones,
 			)
 		}
 		if filter.ReporterPhoneSearch != "" {
@@ -1908,15 +1907,7 @@ func (r *incidentRepository) FindOpenIncidentsForDuplicateCheckByCaller(ctx cont
 		Where("latitude IS NOT NULL").
 		Where("longitude IS NOT NULL")
 
-	if reporterPhone != "" {
-		phone := reporterPhone
-		phoneWithPlus := "+" + phone
-		if strings.HasPrefix(phone, "+") {
-			phoneWithPlus = phone
-			phone = strings.TrimPrefix(phone, "+")
-		}
-		query = query.Where("reporter_phone IN (?, ?)", phone, phoneWithPlus)
-	}
+	query = query.Where("reporter_phone IN ?", reporterPhoneVariants(reporterPhone))
 
 	var incidents []models.Incident
 	err := query.Find(&incidents).Error
