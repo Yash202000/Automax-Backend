@@ -209,8 +209,15 @@ func (h *IncidentHandler) GetIncident(c *fiber.Ctx) error {
 				phoneWithPlus = phone
 				phone = strings.TrimPrefix(phone, "+")
 			}
+			// The portal may send a bare national number ("501234567") while the
+			// incident stores it in trunk form ("0501234567"). Prepending the
+			// leading zero when the value carries neither a country code nor a
+			// zero adds that third form to the comparison, so an owner is not told
+			// their own incident does not exist.
+			phoneWithZero := utils.LocalMobileWithLeadingZero(phone)
+
 			incPhone := incident.ReporterPhone
-			if incPhone != phone && incPhone != phoneWithPlus {
+			if incPhone != phone && incPhone != phoneWithPlus && incPhone != phoneWithZero {
 				return ErrorResponseWithKey(c, fiber.StatusNotFound, "incident_not_found")
 			}
 		}
