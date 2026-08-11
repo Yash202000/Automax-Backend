@@ -188,6 +188,14 @@ func (h *IncidentHandler) GetIncident(c *fiber.Ctx) error {
 	}
 
 	log.Printf("Generate Signed url: %s", utils.GenerateIncidentToken(id.String(), 24*time.Hour))
+
+	// User access scope check (gated by ENFORCE_USER_ACCESS_SCOPE)
+	if rawInc, findErr := h.incidentRepo.FindByID(c.UserContext(), id); findErr == nil && rawInc != nil {
+		if !h.checkUserAccessToIncident(c, rawInc) {
+			return ErrorResponseWithKey(c, fiber.StatusForbidden, "forbidden_no_access")
+		}
+	}
+
 	incident, err := h.service.GetIncident(c.UserContext(), id)
 	if err != nil {
 		return ErrorResponseWithKey(c, fiber.StatusNotFound, "incident_not_found")
@@ -346,6 +354,140 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 	return h.listIncidentsCore(c, filter)
 }
 
+// intersectScope intersects a user's allowed IDs with the filter's requested IDs.
+// If userIDs is empty, the dimension is unrestricted (returns filterIDs unchanged).
+// If filterIDs is empty, it means "all" — restrict to userIDs.
+// If both are non-empty, return the intersection; empty intersection → noAccessSentinel.
+func intersectScope(userIDs, filterIDs []string) []string {
+	noAccessSentinel := []string{"00000000-0000-0000-0000-000000000000"}
+	if len(userIDs) == 0 {
+		return filterIDs
+	}
+	if len(filterIDs) == 0 {
+		return userIDs
+	}
+	allowed := make(map[string]bool, len(userIDs))
+	for _, id := range userIDs {
+		allowed[id] = true
+	}
+	var intersected []string
+	for _, id := range filterIDs {
+		if allowed[id] {
+			intersected = append(intersected, id)
+		}
+	}
+	if len(intersected) == 0 {
+		return noAccessSentinel
+	}
+	return intersected
+}
+
+// applyUserAccessScope applies unified department + classification + location
+// scoping to the filter based on the user's M2M assignments.
+// Gated by ENFORCE_USER_ACCESS_SCOPE=true env var.
+//
+// For department managers (incidents:view_department_only): uses ScopeDepartmentIDs()
+// for departments, M2M for classifications and locations.
+// For regular users: uses M2M for all three dimensions.
+// Empty M2M = no restriction on that dimension.
+func (h *IncidentHandler) applyUserAccessScope(filter *models.IncidentFilter, user *models.User) {
+	var userDeptStrs []string
+	if user.HasPermission("incidents:view_department_only") {
+		for _, id := range user.ScopeDepartmentIDs() {
+			userDeptStrs = append(userDeptStrs, id.String())
+		}
+	} else {
+		for _, d := range user.Departments {
+			userDeptStrs = append(userDeptStrs, d.ID.String())
+		}
+	}
+	filter.DepartmentID = intersectScope(userDeptStrs, filter.DepartmentID)
+
+	var userClassStrs []string
+	for _, c := range user.Classifications {
+		userClassStrs = append(userClassStrs, c.ID.String())
+	}
+	filter.ClassificationID = intersectScope(userClassStrs, filter.ClassificationID)
+
+	var userLocStrs []string
+	for _, l := range user.Locations {
+		userLocStrs = append(userLocStrs, l.ID.String())
+	}
+	filter.LocationID = intersectScope(userLocStrs, filter.LocationID)
+}
+
+// checkUserAccessToIncident verifies a user can access a specific incident
+// based on their department/classification/location scope.
+// Returns true if access is allowed.
+// Gated by ENFORCE_USER_ACCESS_SCOPE=true env var; returns true when disabled.
+func (h *IncidentHandler) checkUserAccessToIncident(c *fiber.Ctx, incident *models.Incident) bool {
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("ENFORCE_USER_ACCESS_SCOPE")), "true") {
+		return true
+	}
+	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	if !ok {
+		return false
+	}
+	user, err := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
+	if err != nil || user == nil {
+		return false
+	}
+	restrictAdminRole := strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_ADMIN_SCOPE")), "true")
+	if user.IsSuperAdmin || (!restrictAdminRole && user.HasRole("admin")) {
+		return true
+	}
+
+	var userDeptIDs []uuid.UUID
+	if user.HasPermission("incidents:view_department_only") {
+		userDeptIDs = user.ScopeDepartmentIDs()
+	} else {
+		for _, d := range user.Departments {
+			userDeptIDs = append(userDeptIDs, d.ID)
+		}
+	}
+
+	if len(userDeptIDs) > 0 && incident.DepartmentID != nil {
+		found := false
+		for _, id := range userDeptIDs {
+			if id == *incident.DepartmentID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+
+	if len(user.Classifications) > 0 && incident.ClassificationID != nil {
+		found := false
+		for _, c := range user.Classifications {
+			if c.ID == *incident.ClassificationID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+
+	if len(user.Locations) > 0 && incident.LocationID != nil {
+		found := false
+		for _, l := range user.Locations {
+			if l.ID == *incident.LocationID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+
+	return true
+}
+
 // scopeIncidentFilterToUser restricts filter in place to the current user's
 // assigned classifications/departments/locations. Super admins and (unless
 // RESTRICT_ADMIN_SCOPE=true) the system Administrator role bypass scoping.
@@ -358,6 +500,7 @@ func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 func (h *IncidentHandler) scopeIncidentFilterToUser(c *fiber.Ctx, filter *models.IncidentFilter) (handled bool, err error) {
 	noAccessSentinel := []string{"00000000-0000-0000-0000-000000000000"}
 	restrictAdminRole := strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_ADMIN_SCOPE")), "true")
+	enforceAccessScope := strings.EqualFold(strings.TrimSpace(os.Getenv("ENFORCE_USER_ACCESS_SCOPE")), "true")
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	user, findErr := h.userRepo.FindByIDWithRelations(c.UserContext(), userID)
 
@@ -368,100 +511,96 @@ func (h *IncidentHandler) scopeIncidentFilterToUser(c *fiber.Ctx, filter *models
 	}
 
 	if findErr == nil && user != nil && !isUnscoped {
-		// Department-scoped: users with view_department_only see only their department's incidents.
-		// Uses DeptManagerDepartmentID if set, otherwise falls back to DepartmentID.
-		if user.HasPermission("incidents:view_department_only") {
-			scopeDeptIDs := user.ScopeDepartmentIDs()
-			if len(scopeDeptIDs) > 0 {
-				allowedDepts := make(map[string]bool, len(scopeDeptIDs))
-				deptStrs := make([]string, 0, len(scopeDeptIDs))
-				for _, id := range scopeDeptIDs {
-					s := id.String()
-					allowedDepts[s] = true
-					deptStrs = append(deptStrs, s)
-				}
-				if len(filter.DepartmentID) > 0 {
-					var intersected []string
-					for _, d := range filter.DepartmentID {
-						if allowedDepts[d] {
-							intersected = append(intersected, d)
-						}
-					}
-					if len(intersected) == 0 {
-						filter.DepartmentID = noAccessSentinel
-					} else {
-						filter.DepartmentID = intersected
-					}
-				} else {
-					filter.DepartmentID = deptStrs
-				}
-			}
-			// Also restrict by classification/location if DeptManager scope fields are set
-			if user.DeptManagerClassificationID != nil {
-				filter.ClassificationID = []string{user.DeptManagerClassificationID.String()}
-			}
-			if user.DeptManagerLocationID != nil {
-				filter.LocationID = []string{user.DeptManagerLocationID.String()}
-			}
+		if enforceAccessScope {
+			h.applyUserAccessScope(filter, user)
 		} else {
-			userClassIDs := make([]string, 0, len(user.Classifications))
-			for _, cls := range user.Classifications {
-				userClassIDs = append(userClassIDs, cls.ID.String())
-			}
-			if len(userClassIDs) > 0 {
-				if len(filter.ClassificationID) > 0 {
-					// Intersect with request's classification filter
-					requested := make(map[string]bool, len(filter.ClassificationID))
-					for _, id := range filter.ClassificationID {
-						requested[id] = true
+			// Legacy scoping logic
+			if user.HasPermission("incidents:view_department_only") {
+				scopeDeptIDs := user.ScopeDepartmentIDs()
+				if len(scopeDeptIDs) > 0 {
+					allowedDepts := make(map[string]bool, len(scopeDeptIDs))
+					deptStrs := make([]string, 0, len(scopeDeptIDs))
+					for _, id := range scopeDeptIDs {
+						s := id.String()
+						allowedDepts[s] = true
+						deptStrs = append(deptStrs, s)
 					}
-					var intersected []string
-					for _, id := range userClassIDs {
-						if requested[id] {
-							intersected = append(intersected, id)
+					if len(filter.DepartmentID) > 0 {
+						var intersected []string
+						for _, d := range filter.DepartmentID {
+							if allowedDepts[d] {
+								intersected = append(intersected, d)
+							}
 						}
+						if len(intersected) == 0 {
+							filter.DepartmentID = noAccessSentinel
+						} else {
+							filter.DepartmentID = intersected
+						}
+					} else {
+						filter.DepartmentID = deptStrs
 					}
-					if len(intersected) == 0 {
-						// Requested classification(s) not among the user's own — no access, show nothing
-						intersected = noAccessSentinel
-					}
-					filter.ClassificationID = intersected
-				} else {
-					filter.ClassificationID = userClassIDs
+				}
+				if user.DeptManagerClassificationID != nil {
+					filter.ClassificationID = []string{user.DeptManagerClassificationID.String()}
+				}
+				if user.DeptManagerLocationID != nil {
+					filter.LocationID = []string{user.DeptManagerLocationID.String()}
 				}
 			} else {
-				// User has no classifications assigned — nothing should be visible
-				filter.ClassificationID = noAccessSentinel
-			}
+				userClassIDs := make([]string, 0, len(user.Classifications))
+				for _, cls := range user.Classifications {
+					userClassIDs = append(userClassIDs, cls.ID.String())
+				}
+				if len(userClassIDs) > 0 {
+					if len(filter.ClassificationID) > 0 {
+						requested := make(map[string]bool, len(filter.ClassificationID))
+						for _, id := range filter.ClassificationID {
+							requested[id] = true
+						}
+						var intersected []string
+						for _, id := range userClassIDs {
+							if requested[id] {
+								intersected = append(intersected, id)
+							}
+						}
+						if len(intersected) == 0 {
+							intersected = noAccessSentinel
+						}
+						filter.ClassificationID = intersected
+					} else {
+						filter.ClassificationID = userClassIDs
+					}
+				} else {
+					filter.ClassificationID = noAccessSentinel
+				}
 
-			userLocIDs := make([]string, 0, len(user.Locations))
-			for _, loc := range user.Locations {
-				userLocIDs = append(userLocIDs, loc.ID.String())
-			}
-			if len(userLocIDs) > 0 {
-				if len(filter.LocationID) > 0 {
-					// Intersect with request's location filter
-					requested := make(map[string]bool, len(filter.LocationID))
-					for _, id := range filter.LocationID {
-						requested[id] = true
-					}
-					var intersected []string
-					for _, id := range userLocIDs {
-						if requested[id] {
-							intersected = append(intersected, id)
-						}
-					}
-					if len(intersected) == 0 {
-						// Requested location(s) not among the user's own — no access, show nothing
-						intersected = noAccessSentinel
-					}
-					filter.LocationID = intersected
-				} else {
-					filter.LocationID = userLocIDs
+				userLocIDs := make([]string, 0, len(user.Locations))
+				for _, loc := range user.Locations {
+					userLocIDs = append(userLocIDs, loc.ID.String())
 				}
-			} else {
-				// User has no locations assigned — nothing should be visible
-				filter.LocationID = noAccessSentinel
+				if len(userLocIDs) > 0 {
+					if len(filter.LocationID) > 0 {
+						requested := make(map[string]bool, len(filter.LocationID))
+						for _, id := range filter.LocationID {
+							requested[id] = true
+						}
+						var intersected []string
+						for _, id := range userLocIDs {
+							if requested[id] {
+								intersected = append(intersected, id)
+							}
+						}
+						if len(intersected) == 0 {
+							intersected = noAccessSentinel
+						}
+						filter.LocationID = intersected
+					} else {
+						filter.LocationID = userLocIDs
+					}
+				} else {
+					filter.LocationID = noAccessSentinel
+				}
 			}
 		}
 
@@ -717,6 +856,13 @@ func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
+	// User access scope check (gated by ENFORCE_USER_ACCESS_SCOPE)
+	if rawInc, findErr := h.incidentRepo.FindByID(c.UserContext(), id); findErr == nil && rawInc != nil {
+		if !h.checkUserAccessToIncident(c, rawInc) {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "forbidden_no_access"))
+		}
+	}
+
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	roleIDs := h.getUserRoleIDs(c)
 
@@ -786,6 +932,11 @@ func (h *IncidentHandler) DeleteIncident(c *fiber.Ctx) error {
 	record, err := h.incidentRepo.FindByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "incident_not_found"))
+	}
+
+	// User access scope check (gated by ENFORCE_USER_ACCESS_SCOPE)
+	if !h.checkUserAccessToIncident(c, record) {
+		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "forbidden_no_access"))
 	}
 
 	requiredPerm := "incidents:delete"
@@ -1328,96 +1479,100 @@ func (h *IncidentHandler) GetStatsV2(c *fiber.Ctx) error {
 	}
 
 	if !isStatsUnscoped {
-		// Restrict stats to the user's scope — mirrors ListIncidents scoping exactly.
-		noAccessSentinel := []string{"00000000-0000-0000-0000-000000000000"}
+		enforceAccessScope := strings.EqualFold(strings.TrimSpace(os.Getenv("ENFORCE_USER_ACCESS_SCOPE")), "true")
 		statsUserID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 		if u, err := h.userRepo.FindByIDWithRelations(c.UserContext(), statsUserID); err == nil && u != nil {
-			if u.HasPermission("incidents:view_department_only") {
-				// Department-scoped: restrict to user's departments + DeptManager classification/location
-				scopeDeptIDs := u.ScopeDepartmentIDs()
-				if len(scopeDeptIDs) > 0 {
-					allowedDepts := make(map[string]bool, len(scopeDeptIDs))
-					deptStrs := make([]string, 0, len(scopeDeptIDs))
-					for _, id := range scopeDeptIDs {
-						s := id.String()
-						allowedDepts[s] = true
-						deptStrs = append(deptStrs, s)
-					}
-					if len(filter.DepartmentID) > 0 {
-						var intersected []string
-						for _, d := range filter.DepartmentID {
-							if allowedDepts[d] {
-								intersected = append(intersected, d)
-							}
-						}
-						if len(intersected) == 0 {
-							filter.DepartmentID = noAccessSentinel
-						} else {
-							filter.DepartmentID = intersected
-						}
-					} else {
-						filter.DepartmentID = deptStrs
-					}
-				}
-				if u.DeptManagerClassificationID != nil {
-					filter.ClassificationID = []string{u.DeptManagerClassificationID.String()}
-				}
-				if u.DeptManagerLocationID != nil {
-					filter.LocationID = []string{u.DeptManagerLocationID.String()}
-				}
+			if enforceAccessScope {
+				h.applyUserAccessScope(filter, u)
 			} else {
-				userClassIDs := make([]string, 0, len(u.Classifications))
-				for _, cls := range u.Classifications {
-					userClassIDs = append(userClassIDs, cls.ID.String())
-				}
-				if len(userClassIDs) > 0 {
-					if len(filter.ClassificationID) > 0 {
-						requested := make(map[string]bool, len(filter.ClassificationID))
-						for _, id := range filter.ClassificationID {
-							requested[id] = true
+				// Legacy scoping logic
+				noAccessSentinel := []string{"00000000-0000-0000-0000-000000000000"}
+				if u.HasPermission("incidents:view_department_only") {
+					scopeDeptIDs := u.ScopeDepartmentIDs()
+					if len(scopeDeptIDs) > 0 {
+						allowedDepts := make(map[string]bool, len(scopeDeptIDs))
+						deptStrs := make([]string, 0, len(scopeDeptIDs))
+						for _, id := range scopeDeptIDs {
+							s := id.String()
+							allowedDepts[s] = true
+							deptStrs = append(deptStrs, s)
 						}
-						var intersected []string
-						for _, id := range userClassIDs {
-							if requested[id] {
-								intersected = append(intersected, id)
+						if len(filter.DepartmentID) > 0 {
+							var intersected []string
+							for _, d := range filter.DepartmentID {
+								if allowedDepts[d] {
+									intersected = append(intersected, d)
+								}
 							}
+							if len(intersected) == 0 {
+								filter.DepartmentID = noAccessSentinel
+							} else {
+								filter.DepartmentID = intersected
+							}
+						} else {
+							filter.DepartmentID = deptStrs
 						}
-						if len(intersected) == 0 {
-							intersected = noAccessSentinel
-						}
-						filter.ClassificationID = intersected
-					} else {
-						filter.ClassificationID = userClassIDs
+					}
+					if u.DeptManagerClassificationID != nil {
+						filter.ClassificationID = []string{u.DeptManagerClassificationID.String()}
+					}
+					if u.DeptManagerLocationID != nil {
+						filter.LocationID = []string{u.DeptManagerLocationID.String()}
 					}
 				} else {
-					filter.ClassificationID = noAccessSentinel
-				}
+					userClassIDs := make([]string, 0, len(u.Classifications))
+					for _, cls := range u.Classifications {
+						userClassIDs = append(userClassIDs, cls.ID.String())
+					}
+					if len(userClassIDs) > 0 {
+						if len(filter.ClassificationID) > 0 {
+							requested := make(map[string]bool, len(filter.ClassificationID))
+							for _, id := range filter.ClassificationID {
+								requested[id] = true
+							}
+							var intersected []string
+							for _, id := range userClassIDs {
+								if requested[id] {
+									intersected = append(intersected, id)
+								}
+							}
+							if len(intersected) == 0 {
+								intersected = noAccessSentinel
+							}
+							filter.ClassificationID = intersected
+						} else {
+							filter.ClassificationID = userClassIDs
+						}
+					} else {
+						filter.ClassificationID = noAccessSentinel
+					}
 
-				userLocIDs := make([]string, 0, len(u.Locations))
-				for _, loc := range u.Locations {
-					userLocIDs = append(userLocIDs, loc.ID.String())
-				}
-				if len(userLocIDs) > 0 {
-					if len(filter.LocationID) > 0 {
-						requested := make(map[string]bool, len(filter.LocationID))
-						for _, id := range filter.LocationID {
-							requested[id] = true
-						}
-						var intersected []string
-						for _, id := range userLocIDs {
-							if requested[id] {
-								intersected = append(intersected, id)
-							}
-						}
-						if len(intersected) == 0 {
-							intersected = noAccessSentinel
-						}
-						filter.LocationID = intersected
-					} else {
-						filter.LocationID = userLocIDs
+					userLocIDs := make([]string, 0, len(u.Locations))
+					for _, loc := range u.Locations {
+						userLocIDs = append(userLocIDs, loc.ID.String())
 					}
-				} else {
-					filter.LocationID = noAccessSentinel
+					if len(userLocIDs) > 0 {
+						if len(filter.LocationID) > 0 {
+							requested := make(map[string]bool, len(filter.LocationID))
+							for _, id := range filter.LocationID {
+								requested[id] = true
+							}
+							var intersected []string
+							for _, id := range userLocIDs {
+								if requested[id] {
+									intersected = append(intersected, id)
+								}
+							}
+							if len(intersected) == 0 {
+								intersected = noAccessSentinel
+							}
+							filter.LocationID = intersected
+						} else {
+							filter.LocationID = userLocIDs
+						}
+					} else {
+						filter.LocationID = noAccessSentinel
+					}
 				}
 			}
 		}

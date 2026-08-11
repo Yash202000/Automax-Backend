@@ -156,6 +156,7 @@ var messages = map[string][2]string{
 	"invalid_assignee_id":         {"Invalid assignee ID", "معرّف المُعيَّن غير صالح"},
 	"forbidden_edit_closed":       {"You don't have permission to edit closed incidents", "ليس لديك صلاحية تعديل البلاغات المغلقة"},
 	"forbidden_no_edit":           {"Your role does not have edit access for this incident at its current stage", "دورك لا يملك صلاحية التعديل على هذا البلاغ في مرحلته الحالية"},
+	"forbidden_no_access":         {"You do not have access to this record based on your department, classification, or location assignments", "ليس لديك صلاحية الوصول لهذا السجل بناءً على تعيينات الإدارة أو التصنيف أو الموقع الخاصة بك"},
 	"no_mobile_number":            {"No citizen mobile number found for this incident", "لا يوجد رقم جوال للمواطن لهذا البلاغ"},
 	"sms_sent_citizen":            {"SMS sent successfully to citizen", "تم إرسال الرسالة النصية للمواطن بنجاح"},
 	"failed_to_send_sms":          {"Failed to send SMS: %s", "فشل إرسال الرسالة النصية: %s"},
