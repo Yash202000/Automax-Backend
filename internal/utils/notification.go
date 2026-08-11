@@ -20,14 +20,13 @@ import (
 	openapi "github.com/twilio/twilio-go/rest/api/v2010"
 )
 
-// systemCountryCode returns the COUNTRY_CODE env var (e.g. "+966"), matching
-// the default in internal/config.Config.CountryCode, for callers that don't
-// go through config.Config (this package only reads env vars directly).
+// systemCountryCode returns the COUNTRY_CODE env var (e.g. "+966"), for callers
+// that don't go through config.Config (this package only reads env vars
+// directly). Delegates so the value and its default live in exactly one place —
+// two independent copies could disagree, and SendSMS normalizes numbers that
+// NotificationService has already normalized with config.Config.CountryCode.
 func systemCountryCode() string {
-	if cc := os.Getenv("COUNTRY_CODE"); cc != "" {
-		return cc
-	}
-	return "+966"
+	return pkgUtils.SystemCountryCode()
 }
 
 // smtpPool holds one reusable authenticated SMTP connection so that every

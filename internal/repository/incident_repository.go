@@ -226,27 +226,14 @@ func normalizeStateCodes(in []string) []string {
 
 // reporterPhoneVariants returns every shape a phone number may have been stored
 // in, so a caller-supplied value matches regardless of the channel that captured
-// it: bare ("501234567"), international ("+966501234567"), and national trunk
-// form ("0501234567"). The trunk variant is only added when the supplied value
-// carries neither a country code nor a leading zero, so it never duplicates one
-// of the others.
+// it: bare, with a country code, with the national trunk zero, and the historic
+// country-code-plus-trunk-zero form.
 //
-// Used for exact matching. The ILIKE search filters do not need it, because a
-// substring pattern built from the bare number already matches the stored trunk
-// form.
+// Used for exact matching only. The ILIKE search filters below do not need it,
+// because a substring pattern built from the bare number already matches the
+// stored trunk and country-code forms.
 func reporterPhoneVariants(supplied string) []string {
-	phone := strings.TrimSpace(supplied)
-	phoneWithPlus := "+" + phone
-	if strings.HasPrefix(phone, "+") {
-		phoneWithPlus = phone
-		phone = strings.TrimPrefix(phone, "+")
-	}
-
-	variants := []string{phone, phoneWithPlus}
-	if withZero := utils.LocalMobileWithLeadingZero(phone); withZero != phone {
-		variants = append(variants, withZero)
-	}
-	return variants
+	return utils.MobileMatchVariants(supplied)
 }
 
 // stateCodeSubquery matches incidents whose current state carries one of the given codes. Written as

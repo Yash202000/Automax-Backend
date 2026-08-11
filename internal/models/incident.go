@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -610,13 +611,13 @@ type IncidentFilter struct {
 	// SortBy controls the list's ordering (always descending — newest first
 	// by whichever field). Restricted to a small allow-list so it's safe to
 	// interpolate directly into an ORDER BY clause.
-	SortBy             string              `query:"sort_by" json:"sort_by" validate:"omitempty,oneof=created_at updated_at"`
-	Page               int                 `query:"page" json:"page" validate:"omitempty,min=1"`
-	Limit              int                 `query:"limit" json:"limit" validate:"omitempty,min=1,max=100"`
-	UserRoleIDs        []uuid.UUID         `json:"-"`     // For filtering stats by user's roles
-	FilterType         string              `query:"type"` // created | assigned
-	UserID             uuid.UUID           `json:"-"`
-	IsAdmin            bool                `json:"-"` // Super admin bypasses user-scoped assigned filter
+	SortBy      string      `query:"sort_by" json:"sort_by" validate:"omitempty,oneof=created_at updated_at"`
+	Page        int         `query:"page" json:"page" validate:"omitempty,min=1"`
+	Limit       int         `query:"limit" json:"limit" validate:"omitempty,min=1,max=100"`
+	UserRoleIDs []uuid.UUID `json:"-"`     // For filtering stats by user's roles
+	FilterType  string      `query:"type"` // created | assigned
+	UserID      uuid.UUID   `json:"-"`
+	IsAdmin     bool        `json:"-"` // Super admin bypasses user-scoped assigned filter
 }
 
 // Merge Incident Types
@@ -1077,6 +1078,13 @@ func ToIncidentDetailResponse(i *Incident) IncidentDetailResponse {
 	resp := IncidentDetailResponse{
 		IncidentResponse: ToIncidentResponse(i),
 	}
+
+	// The column holds the same number in several shapes depending on the channel
+	// that captured it — with a country code, with the national trunk zero, or
+	// both. Present it the way it is dialled domestically: country code (Saudi or
+	// Indian) removed, single leading zero. Values with no digits, such as the
+	// "N/A" placeholder, are left as they are.
+	resp.ReporterPhone = utils.NationalMobile(i.ReporterPhone)
 
 	if len(i.Comments) > 0 {
 		resp.Comments = make([]IncidentCommentResponse, len(i.Comments))
