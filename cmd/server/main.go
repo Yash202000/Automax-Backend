@@ -346,6 +346,9 @@ func main() {
 	})
 
 	app.Use(recover.New())
+	// Before everything else that can write a response, so error and panic
+	// responses carry the headers too.
+	app.Use(middleware.SecurityHeaders(cfg.Security))
 	app.Use(logger.New(logger.Config{
 		Format: "[${time}] ${status} - ${latency} ${method} ${path}\n",
 	}))

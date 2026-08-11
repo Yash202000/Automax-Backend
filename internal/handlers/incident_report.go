@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/automax/backend/internal/middleware"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/i18n"
@@ -339,6 +340,20 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 
 	switch format {
 	case "html":
+		// Page-specific policy, stricter than the API-wide default: the report is
+		// entirely self-contained, so it needs no external origin at all. It has
+		// no scripts, which is why script-src is absent and inherits
+		// default-src 'none'. 'unsafe-inline' is unavoidable for styles because
+		// the page carries an inline <style> block and inline style attributes,
+		// which a nonce cannot cover; without script execution the residual risk
+		// is limited to CSS-based exfiltration.
+		middleware.SetCSP(c, "default-src 'none'; "+
+			"img-src data:; "+
+			"style-src 'unsafe-inline'; "+
+			"font-src data:; "+
+			"base-uri 'none'; "+
+			"form-action 'none'; "+
+			"frame-ancestors 'none'")
 		c.Set("Content-Type", "text/html; charset=utf-8")
 		return c.Send(htmlBytes)
 

@@ -33,7 +33,74 @@ type Config struct {
 	FinalCloseWhatsAppFeedback FinalCloseWhatsAppFeedbackConfig
 	Cintrix                    CintrixConfig
 	PBX                        PBXConfig
+	Security                   SecurityConfig
 }
+
+// SecurityConfig holds the HTTP response security headers applied to every
+// response by middleware.SecurityHeaders. Each value is env-overridable, and
+// setting one to an empty string omits that header entirely, so a deployment
+// whose reverse proxy already injects a header can turn the app-level one off
+// rather than emitting a conflicting duplicate.
+type SecurityConfig struct {
+	// ContentSecurityPolicy is the default policy for API responses. The API
+	// serves JSON, so the default grants no resource origins beyond 'self' and
+	// blocks framing, plugins, base-tag hijacking and cross-origin form posts.
+	// Handlers that return HTML override it per-response via middleware.SetCSP.
+	// env: CONTENT_SECURITY_POLICY
+	ContentSecurityPolicy string
+	// CSPReportOnly sends the policy as Content-Security-Policy-Report-Only
+	// instead of enforcing it. Use it for a staged rollout: deploy with
+	// CSP_REPORT_ONLY=true, collect violations, then switch to false to enforce.
+	// env: CSP_REPORT_ONLY
+	CSPReportOnly bool
+	// CSPReportURI, when non-empty, is appended to the policy as a report-uri
+	// directive so violations are posted to a collector. env: CSP_REPORT_URI
+	CSPReportURI string
+	// PermissionsPolicy disables browser features the app never uses.
+	// env: PERMISSIONS_POLICY
+	PermissionsPolicy string
+	// FrameOptions is the legacy clickjacking defence for browsers that predate
+	// CSP frame-ancestors. env: X_FRAME_OPTIONS
+	FrameOptions string
+	// ReferrerPolicy controls what is leaked in the Referer header when the HTML
+	// incident report links out to a third-party URL. env: REFERRER_POLICY
+	ReferrerPolicy string
+	// HSTSMaxAgeSeconds is the Strict-Transport-Security max-age. The header is
+	// only emitted on requests that arrived over HTTPS; 0 disables it entirely.
+	// env: HSTS_MAX_AGE_SECONDS
+	HSTSMaxAgeSeconds int
+	// HSTSIncludeSubdomains adds includeSubDomains to the HSTS header. Leave it
+	// off unless every subdomain of the deployment is HTTPS-only.
+	// env: HSTS_INCLUDE_SUBDOMAINS
+	HSTSIncludeSubdomains bool
+}
+
+const (
+	// DefaultContentSecurityPolicy is the restrictive baseline applied to every
+	// response. The backend serves JSON to a separately-hosted frontend, so no
+	// third-party origin needs to be trusted here; 'self' only ever matters for
+	// the handful of endpoints a browser navigates to directly. data: is allowed
+	// for images because the HTML incident report embeds its logos and image
+	// attachments as data: URIs (internal/handlers/incident_report.go).
+	DefaultContentSecurityPolicy = "default-src 'self'; " +
+		"script-src 'self'; " +
+		"style-src 'self'; " +
+		"img-src 'self' data:; " +
+		"font-src 'self' data:; " +
+		"connect-src 'self'; " +
+		"object-src 'none'; " +
+		"base-uri 'none'; " +
+		"form-action 'self'; " +
+		"frame-ancestors 'none'; " +
+		"upgrade-insecure-requests"
+
+	// DefaultPermissionsPolicy switches off the browser features this app has no
+	// use for. An empty allowlist "()" denies the feature to every origin,
+	// including this one.
+	DefaultPermissionsPolicy = "accelerometer=(), autoplay=(), camera=(), display-capture=(), " +
+		"encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), " +
+		"microphone=(), midi=(), payment=(), usb=(), xr-spatial-tracking=()"
+)
 
 // PBXConfig holds settings for the external PBX used by the extension-assignment
 // feature. The extension pool is fetched from BaseURL with "?action=list".
@@ -336,6 +403,16 @@ func Load() *Config {
 		PBX: PBXConfig{
 			BaseURL:            getEnv("PBX_BASE_URL", "https://zkff.automaxsw.com/create_user.php"),
 			InsecureSkipVerify: getEnvAsBool("PBX_INSECURE_SKIP_VERIFY", false),
+		},
+		Security: SecurityConfig{
+			ContentSecurityPolicy: getEnv("CONTENT_SECURITY_POLICY", DefaultContentSecurityPolicy),
+			CSPReportOnly:         getEnvAsBool("CSP_REPORT_ONLY", false),
+			CSPReportURI:          getEnv("CSP_REPORT_URI", ""),
+			PermissionsPolicy:     getEnv("PERMISSIONS_POLICY", DefaultPermissionsPolicy),
+			FrameOptions:          getEnv("X_FRAME_OPTIONS", "DENY"),
+			ReferrerPolicy:        getEnv("REFERRER_POLICY", "no-referrer"),
+			HSTSMaxAgeSeconds:     getEnvAsInt("HSTS_MAX_AGE_SECONDS", 31536000),
+			HSTSIncludeSubdomains: getEnvAsBool("HSTS_INCLUDE_SUBDOMAINS", false),
 		},
 	}
 }
