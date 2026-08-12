@@ -421,7 +421,10 @@ func (h *RoleHandler) ListPermissions(c *fiber.Ctx) error {
 }
 
 func (h *RoleHandler) GetModules(c *fiber.Ctx) error {
-	modules, err := h.permissionRepo.GetModules(c.UserContext())
+
+	lang, _ := c.UserContext().Value(constants.ContextKeys.ACCEPT_LANGUAGE).(string)
+	arabic := lang == "ar"
+	modules, err := h.permissionRepo.GetModules(c.UserContext(), arabic)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
