@@ -1746,9 +1746,14 @@ func (h *IncidentHandler) ListRevisions(c *fiber.Ctx) error {
 }
 
 // applyDepartmentScope restricts the filter to the user's department scope.
-// Uses DeptManagerDepartmentID if set, otherwise falls back to DepartmentID.
+// When ENFORCE_USER_ACCESS_SCOPE=true, delegates to applyUserAccessScope for
+// unified dept+classification+location filtering via M2M relationships.
+// Otherwise falls back to legacy logic using single DeptManager fields.
 func (h *IncidentHandler) applyDepartmentScope(c *fiber.Ctx, filter *models.IncidentFilter) {
 	noAccessSentinel := []string{"00000000-0000-0000-0000-000000000000"}
+	enforceAccessScope := strings.EqualFold(strings.TrimSpace(os.Getenv("ENFORCE_USER_ACCESS_SCOPE")), "true")
+	restrictAdminRole := strings.EqualFold(strings.TrimSpace(os.Getenv("RESTRICT_ADMIN_SCOPE")), "true")
+
 	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if !ok {
 		return
@@ -1757,7 +1762,19 @@ func (h *IncidentHandler) applyDepartmentScope(c *fiber.Ctx, filter *models.Inci
 	if err != nil || user == nil {
 		return
 	}
-	if user.IsSuperAdmin || !user.HasPermission("incidents:view_department_only") {
+
+	// Super admins and (unless RESTRICT_ADMIN_SCOPE) admins bypass scoping
+	if user.IsSuperAdmin || (!restrictAdminRole && user.HasRole("admin")) {
+		return
+	}
+
+	if enforceAccessScope {
+		h.applyUserAccessScope(filter, user)
+		return
+	}
+
+	// Legacy logic: only dept managers get scoped, regular users see all
+	if !user.HasPermission("incidents:view_department_only") {
 		return
 	}
 	scopeDeptIDs := user.ScopeDepartmentIDs()

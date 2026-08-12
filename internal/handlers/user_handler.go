@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -305,18 +306,50 @@ func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 	classificationIDs := parseUUIDList(c.Query("classification_ids", ""))
 
 	// Department-scoped: users with view_department_only see only their department's users.
-	// Uses ScopeDepartmentID() which checks DeptManagerDepartmentID > DepartmentID > M2M departments.
+	// When ENFORCE_USER_ACCESS_SCOPE=true, uses M2M relationships for all three dimensions.
+	// Otherwise falls back to legacy single DeptManager fields.
 	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
 	if user != nil && !user.IsSuperAdmin && user.HasPermission("users:view_department_only") {
-		scopeDeptID := user.ScopeDepartmentID()
-		if scopeDeptID != nil {
-			departmentIDs = []uuid.UUID{*scopeDeptID}
-		}
-		if user.DeptManagerClassificationID != nil {
-			classificationIDs = []uuid.UUID{*user.DeptManagerClassificationID}
-		}
-		if user.DeptManagerLocationID != nil {
-			locationIDs = []uuid.UUID{*user.DeptManagerLocationID}
+		enforceAccessScope := strings.EqualFold(strings.TrimSpace(os.Getenv("ENFORCE_USER_ACCESS_SCOPE")), "true")
+
+		if enforceAccessScope {
+			// Load full user with M2M relations
+			fullUser, err := h.userService.FindByIDWithRelations(c.UserContext(), user.ID)
+			if err == nil && fullUser != nil {
+				// Departments: use ScopeDepartmentIDs (priority chain)
+				scopeDeptIDs := fullUser.ScopeDepartmentIDs()
+				if len(scopeDeptIDs) > 0 {
+					departmentIDs = scopeDeptIDs
+				}
+				// Classifications: M2M (empty = no restriction)
+				if len(fullUser.Classifications) > 0 {
+					classIDs := make([]uuid.UUID, 0, len(fullUser.Classifications))
+					for _, c := range fullUser.Classifications {
+						classIDs = append(classIDs, c.ID)
+					}
+					classificationIDs = classIDs
+				}
+				// Locations: M2M (empty = no restriction)
+				if len(fullUser.Locations) > 0 {
+					locIDs := make([]uuid.UUID, 0, len(fullUser.Locations))
+					for _, l := range fullUser.Locations {
+						locIDs = append(locIDs, l.ID)
+					}
+					locationIDs = locIDs
+				}
+			}
+		} else {
+			// Legacy: single DeptManager fields
+			scopeDeptID := user.ScopeDepartmentID()
+			if scopeDeptID != nil {
+				departmentIDs = []uuid.UUID{*scopeDeptID}
+			}
+			if user.DeptManagerClassificationID != nil {
+				classificationIDs = []uuid.UUID{*user.DeptManagerClassificationID}
+			}
+			if user.DeptManagerLocationID != nil {
+				locationIDs = []uuid.UUID{*user.DeptManagerLocationID}
+			}
 		}
 	}
 

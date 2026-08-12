@@ -66,6 +66,7 @@ type UserService interface {
 	VerifyOTPForReset(ctx context.Context, req *models.VerifyOTPRequest) (string, error)
 	ResetPassword(ctx context.Context, resetToken, newPassword string) error
 	ExistsByPhoneAndName(ctx context.Context, phone string, name ...string) (bool, error)
+	FindByIDWithRelations(ctx context.Context, userID uuid.UUID) (*models.User, error)
 }
 
 type userService struct {
@@ -1664,6 +1665,10 @@ func (s *userService) UpdateAvatar(ctx context.Context, userID uuid.UUID, avatar
 
 func (s *userService) ExistsByPhoneAndName(ctx context.Context, phone string, name ...string) (bool, error) {
 	return s.userRepo.ExistsByPhoneAndName(ctx, phone, name...)
+}
+
+func (s *userService) FindByIDWithRelations(ctx context.Context, userID uuid.UUID) (*models.User, error) {
+	return s.userRepo.FindByIDWithRelations(ctx, userID)
 }
 
 func (s *userService) DeleteUser(ctx context.Context) error {
