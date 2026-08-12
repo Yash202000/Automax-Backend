@@ -9,16 +9,26 @@ import (
 
 // Permission represents a granular permission for accessing features
 type Permission struct {
-	ID          uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
-	Name        string         `gorm:"not null;size:100;uniqueIndex" json:"name"`
-	Code        string         `gorm:"not null;size:100;uniqueIndex" json:"code"` // e.g., "users.create", "tickets.view"
-	Description string         `gorm:"size:500" json:"description"`
-	Module      string         `gorm:"size:50;index" json:"module"` // e.g., "users", "tickets", "reports"
-	Action      string         `gorm:"size:50" json:"action"`       // e.g., "create", "read", "update", "delete"
-	IsActive    bool           `gorm:"default:true" json:"is_active"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+	ID          uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
+	Name        string    `gorm:"not null;size:100;uniqueIndex" json:"name"`
+	Code        string    `gorm:"not null;size:100;uniqueIndex" json:"code"` // e.g., "users.create", "tickets.view"
+	Description string    `gorm:"size:500" json:"description"`
+	Module      string    `gorm:"size:50;index" json:"module"` // e.g., "users", "tickets", "reports"
+	Action      string    `gorm:"size:50" json:"action"`       // e.g., "create", "read", "update", "delete"
+	// Arabic counterparts of Name/Description/Module. Returned alongside the
+	// English values rather than replacing them — the API serves both languages
+	// unconditionally and the client picks which to render.
+	//
+	// Not unique-indexed (unlike Name) because they are optional and may
+	// legitimately be blank on permissions that have not been translated yet.
+	// Backfilled by migrations.MigratePermissionArabic.
+	NameAr        string         `gorm:"size:100" json:"name_ar"`
+	DescriptionAr string         `gorm:"size:500" json:"description_ar"`
+	ModuleAr      string         `gorm:"size:50" json:"module_ar"`
+	IsActive      bool           `gorm:"default:true" json:"is_active"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (p *Permission) BeforeCreate(tx *gorm.DB) error {
@@ -38,9 +48,9 @@ type Role struct {
 	IsActive            bool           `gorm:"default:true" json:"is_active"`
 	IsDepartmentManager bool           `gorm:"default:false" json:"is_department_manager"`
 	Permissions         []Permission   `gorm:"many2many:role_permissions;" json:"permissions,omitempty"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+	CreatedAt           time.Time      `json:"created_at"`
+	UpdatedAt           time.Time      `json:"updated_at"`
+	DeletedAt           gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (r *Role) BeforeCreate(tx *gorm.DB) error {
@@ -66,28 +76,39 @@ type PermissionUpdateRequest struct {
 	IsActive    *bool  `json:"is_active"`
 }
 
-// PermissionResponse for API responses
+// PermissionResponse for API responses.
+//
+// Both languages are always returned: Name/Description/Module hold the English
+// values and the *Ar fields hold the Arabic ones. The response does not vary with
+// Accept-Language — every field is emitted unconditionally (no omitempty) so the
+// key set is identical for every request and the client chooses what to render.
 type PermissionResponse struct {
-	ID          uuid.UUID `json:"id"`
-	Name        string    `json:"name"`
-	Code        string    `json:"code"`
-	Description string    `json:"description"`
-	Module      string    `json:"module"`
-	Action      string    `json:"action"`
-	IsActive    bool      `json:"is_active"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID            uuid.UUID `json:"id"`
+	Name          string    `json:"name"`
+	NameAr        string    `json:"name_ar"`
+	Code          string    `json:"code"`
+	Description   string    `json:"description"`
+	DescriptionAr string    `json:"description_ar"`
+	Module        string    `json:"module"`
+	ModuleAr      string    `json:"module_ar"`
+	Action        string    `json:"action"`
+	IsActive      bool      `json:"is_active"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 func ToPermissionResponse(p *Permission) PermissionResponse {
 	return PermissionResponse{
-		ID:          p.ID,
-		Name:        p.Name,
-		Code:        p.Code,
-		Description: p.Description,
-		Module:      p.Module,
-		Action:      p.Action,
-		IsActive:    p.IsActive,
-		CreatedAt:   p.CreatedAt,
+		ID:            p.ID,
+		Name:          p.Name,
+		NameAr:        p.NameAr,
+		Code:          p.Code,
+		Description:   p.Description,
+		DescriptionAr: p.DescriptionAr,
+		Module:        p.Module,
+		ModuleAr:      p.ModuleAr,
+		Action:        p.Action,
+		IsActive:      p.IsActive,
+		CreatedAt:     p.CreatedAt,
 	}
 }
 
@@ -144,8 +165,8 @@ func ToRoleResponse(r *Role) RoleResponse {
 
 // UserRole represents the many-to-many relationship between users and roles
 type UserRole struct {
-	UserID    uuid.UUID `gorm:"type:uuid;primaryKey" json:"user_id"`
-	RoleID    uuid.UUID `gorm:"type:uuid;primaryKey" json:"role_id"`
-	AssignedAt time.Time `gorm:"autoCreateTime" json:"assigned_at"`
+	UserID     uuid.UUID  `gorm:"type:uuid;primaryKey" json:"user_id"`
+	RoleID     uuid.UUID  `gorm:"type:uuid;primaryKey" json:"role_id"`
+	AssignedAt time.Time  `gorm:"autoCreateTime" json:"assigned_at"`
 	AssignedBy *uuid.UUID `gorm:"type:uuid" json:"assigned_by"`
 }
