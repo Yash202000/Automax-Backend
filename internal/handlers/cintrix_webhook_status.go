@@ -47,7 +47,17 @@ func normalizeOutcome(raw string) string {
 	switch raw {
 	case "answered", "completed":
 		return "completed"
+	case "failed":
+		// An agent-originated dial the far end never answered. Kept distinct from
+		// "missed": missed means a call came IN and the agent didn't take it, so
+		// labelling a failed OUTGOING dial "Missed" (with the incoming
+		// missed-call icon) misreads who didn't answer whom. The call-history UI
+		// already styles "failed" separately (red, PhoneOff icon).
+		return "failed"
 	default:
+		// missed / abandoned / voicemail / transferred / unknown: an inbound call
+		// nobody took. "abandoned" deliberately lands here — the UI has no style
+		// for it and would render it unstyled.
 		return "missed"
 	}
 }
