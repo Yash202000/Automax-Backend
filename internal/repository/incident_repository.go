@@ -255,7 +255,7 @@ const stateCodeSubquery = `current_state_id IN (
 func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *gorm.DB, filter *models.IncidentFilter) *gorm.DB {
 	// Apply filters
 	if len(filter.WorkflowID) != 0 {
-		query = query.Where("workflow_id IN ?", filter.WorkflowID)
+		query = query.Where("incidents.workflow_id IN ?", filter.WorkflowID)
 	}
 	if len(filter.CurrentStateID) != 0 {
 		query = query.Where("current_state_id IN ?", filter.CurrentStateID)
@@ -361,14 +361,14 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 		}
 	}
 	if filter.StartDate != nil {
-		query = query.Where("created_at >= ?", *filter.StartDate)
+		query = query.Where("incidents.created_at >= ?", *filter.StartDate)
 	}
 	if filter.EndDate != nil {
-		query = query.Where("created_at <= ?", *filter.EndDate)
+		query = query.Where("incidents.created_at <= ?", *filter.EndDate)
 	}
 	if filter.Search != "" {
 		searchPattern := "%" + filter.Search + "%"
-		query = query.Where("incident_number ILIKE ? OR title ILIKE ? OR description ILIKE ?", searchPattern, searchPattern, searchPattern)
+		query = query.Where("incidents.incident_number ILIKE ? OR incidents.title ILIKE ? OR incidents.description ILIKE ?", searchPattern, searchPattern, searchPattern)
 	}
 	if filter.TaskID != "" {
 		query = query.Where("NULLIF(custom_fields, '')::jsonb -> 'lookup:TASK ID' ->> 'value' ILIKE ?", "%"+filter.TaskID+"%")
