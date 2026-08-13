@@ -21,6 +21,20 @@ func NewWebSocketHandler(hub *services.WSHub) *WebSocketHandler {
 	}
 }
 
+// rejectConnection closes a freshly upgraded connection with a well-formed close
+// frame explaining why.
+//
+// A close frame's payload must be a 2-byte big-endian status code followed by
+// the UTF-8 reason. Writing the bare reason string makes clients decode its
+// first two bytes as the status code — "Missing required parameters" surfaces in
+// wscat as "invalid status code 19817" (0x4D69, the bytes 'M' and 'i') and hides
+// the actual reason. FormatCloseMessage prepends the code correctly.
+func rejectConnection(c *websocket.Conn, reason string) {
+	_ = c.WriteMessage(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.ClosePolicyViolation, reason))
+	_ = c.Close()
+}
+
 // HandleWebSocket handles WebSocket upgrade and connection
 // Expected query params: incident_id, user_id
 func (h *WebSocketHandler) HandleWebSocket(c *websocket.Conn) {
@@ -30,24 +44,21 @@ func (h *WebSocketHandler) HandleWebSocket(c *websocket.Conn) {
 
 	if incidentIDStr == "" || userIDStr == "" {
 		fmt.Println("[WebSocket] Missing incident_id or user_id")
-		c.WriteMessage(websocket.CloseMessage, []byte("Missing required parameters"))
-		c.Close()
+		rejectConnection(c, "Missing required parameters")
 		return
 	}
 
 	incidentID, err := uuid.Parse(incidentIDStr)
 	if err != nil {
 		fmt.Printf("[WebSocket] Invalid incident_id: %s\n", incidentIDStr)
-		c.WriteMessage(websocket.CloseMessage, []byte("Invalid incident_id"))
-		c.Close()
+		rejectConnection(c, "Invalid incident_id")
 		return
 	}
 
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
 		fmt.Printf("[WebSocket] Invalid user_id: %s\n", userIDStr)
-		c.WriteMessage(websocket.CloseMessage, []byte("Invalid user_id"))
-		c.Close()
+		rejectConnection(c, "Invalid user_id")
 		return
 	}
 
@@ -135,24 +146,21 @@ func (h *WebSocketHandler) HandleGoalWebSocket(c *websocket.Conn) {
 
 	if goalIDStr == "" || userIDStr == "" {
 		fmt.Println("[WebSocket] Missing goal_id or user_id")
-		c.WriteMessage(websocket.CloseMessage, []byte("Missing required parameters"))
-		c.Close()
+		rejectConnection(c, "Missing required parameters")
 		return
 	}
 
 	goalID, err := uuid.Parse(goalIDStr)
 	if err != nil {
 		fmt.Printf("[WebSocket] Invalid goal_id: %s\n", goalIDStr)
-		c.WriteMessage(websocket.CloseMessage, []byte("Invalid goal_id"))
-		c.Close()
+		rejectConnection(c, "Invalid goal_id")
 		return
 	}
 
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
 		fmt.Printf("[WebSocket] Invalid user_id: %s\n", userIDStr)
-		c.WriteMessage(websocket.CloseMessage, []byte("Invalid user_id"))
-		c.Close()
+		rejectConnection(c, "Invalid user_id")
 		return
 	}
 
