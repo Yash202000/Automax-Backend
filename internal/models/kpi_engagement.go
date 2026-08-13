@@ -148,18 +148,25 @@ type KpiEvidence struct {
 	// evidence for the KPI as a whole.
 	MetricID *uuid.UUID `gorm:"type:uuid;index" json:"metric_id"`
 	Metric   *KpiMetric `gorm:"foreignKey:MetricID" json:"metric,omitempty"`
-	// FileURL holds either a storage object key (files uploaded via
-	// POST /kpi/:type/:id/attachment, downloaded via the dedicated download
-	// route) or, for evidence created the legacy way, a plain external URL.
-	// FileName/FileSize/MimeType are only populated for real uploads.
-	FileURL      string         `gorm:"size:500" json:"file_url"`
-	FileName     string         `gorm:"size:255" json:"file_name"`
-	FileSize     int64          `json:"file_size"`
-	MimeType     string         `gorm:"size:100" json:"mime_type"`
-	UploadedByID uuid.UUID      `gorm:"type:uuid;not null" json:"uploaded_by_id"`
-	UploadedBy   *User          `gorm:"foreignKey:UploadedByID" json:"uploaded_by,omitempty"`
-	CreatedAt    time.Time      `json:"created_at"`
-	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
+	// FileURL holds either a storage object key (legacy files uploaded via
+	// POST /kpi/:type/:id/attachment before the Documenta integration,
+	// downloaded via the dedicated download route's MinIO fallback) or, for
+	// evidence created the legacy way, a plain external URL. FileName/
+	// FileSize/MimeType are only populated for real uploads.
+	FileURL string `gorm:"size:500" json:"file_url"`
+	// DocumentaFileID is the file reference returned by the KPI Documenta
+	// client (see storage.DocumentaClient) for evidence uploaded after the
+	// Documenta integration — mirrors Evidence.DocumentaFileID on the Goal
+	// module exactly. Empty for pre-integration rows, which keep using
+	// FileURL/MinIO instead (no migration of historical files).
+	DocumentaFileID string         `gorm:"size:255" json:"documenta_file_id"`
+	FileName        string         `gorm:"size:255" json:"file_name"`
+	FileSize        int64          `json:"file_size"`
+	MimeType        string         `gorm:"size:100" json:"mime_type"`
+	UploadedByID    uuid.UUID      `gorm:"type:uuid;not null" json:"uploaded_by_id"`
+	UploadedBy      *User          `gorm:"foreignKey:UploadedByID" json:"uploaded_by,omitempty"`
+	CreatedAt       time.Time      `json:"created_at"`
+	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (e *KpiEvidence) BeforeCreate(tx *gorm.DB) error {
@@ -170,14 +177,15 @@ func (e *KpiEvidence) BeforeCreate(tx *gorm.DB) error {
 }
 
 type KpiEvidenceRequest struct {
-	Title        string     `json:"title" validate:"required"`
-	EvidenceType string     `json:"evidence_type"`
-	Description  string     `json:"description"`
-	MetricID     *uuid.UUID `json:"metric_id"`
-	FileURL      string     `json:"file_url"`
-	FileName     string     `json:"file_name"`
-	FileSize     int64      `json:"file_size"`
-	MimeType     string     `json:"mime_type"`
+	Title           string     `json:"title" validate:"required"`
+	EvidenceType    string     `json:"evidence_type"`
+	Description     string     `json:"description"`
+	MetricID        *uuid.UUID `json:"metric_id"`
+	FileURL         string     `json:"file_url"`
+	DocumentaFileID string     `json:"documenta_file_id"`
+	FileName        string     `json:"file_name"`
+	FileSize        int64      `json:"file_size"`
+	MimeType        string     `json:"mime_type"`
 }
 
 // ─── KPI Collaborators ──────────────────────────────────────────────────────

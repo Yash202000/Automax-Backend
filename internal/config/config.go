@@ -25,6 +25,7 @@ type Config struct {
 	ReadyToClose               ReadyToCloseConfig
 	SmsFeedback                SmsFeedbackConfig
 	Documenta                  DocumentaConfig
+	KpiDocumenta               DocumentaConfig
 	AIQuality                  AIQualityConfig
 	AutoAssign                 AutoAssignConfig
 	GoalManagement             GoalManagementConfig
@@ -289,6 +290,18 @@ func Load() *Config {
 			ClientSecret:  getEnv("DOCUMENTA_CLIENT_SECRET", ""),
 			WorkspaceName: getEnv("DOCUMENTA_WORKSPACE_NAME", "automax"),
 			Enabled:       getEnvAsBool("DOCUMENTA_ENABLED", false),
+		},
+		// KpiDocumenta is a SEPARATE OAuth client/config from Documenta above —
+		// KPI evidence uploads intentionally use their own Documenta client
+		// (own credentials, own workspace) rather than sharing Goal
+		// Management's, per explicit product decision. Defaults to disabled
+		// (stub client, see cmd/server/main.go) until real credentials exist.
+		KpiDocumenta: DocumentaConfig{
+			BaseURL:       getEnv("KPI_DOCUMENTA_BASE_URL", "https://mydocs.axionic.io"),
+			ClientID:      getEnv("KPI_DOCUMENTA_CLIENT_ID", ""),
+			ClientSecret:  getEnv("KPI_DOCUMENTA_CLIENT_SECRET", ""),
+			WorkspaceName: getEnv("KPI_DOCUMENTA_WORKSPACE_NAME", "automax"),
+			Enabled:       getEnvAsBool("KPI_DOCUMENTA_ENABLED", false),
 		},
 		ReadyToClose: ReadyToCloseConfig{
 			DefaultDurationOptions:     getEnvAsStringSlice("READY_TO_CLOSE_DURATION_OPTIONS", []string{"1 Day", "2 Days", "1 Week", "2 Weeks", "1 Month", "3 Months"}),
