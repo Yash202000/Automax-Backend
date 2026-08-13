@@ -110,6 +110,9 @@ func (s *settingsService) UpdateSettings(ctx context.Context, req *models.Settin
 	if req.ShowEvaluateButton != nil {
 		settings.ShowEvaluateButton = *req.ShowEvaluateButton
 	}
+	if req.AuthSetting != nil {
+		settings.TotpEnabled = req.AuthSetting.TotpEnabled
+	}
 
 	// Save updated settings
 	if err := s.settingsRepo.Update(ctx, settings); err != nil {

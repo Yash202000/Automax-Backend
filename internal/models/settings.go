@@ -66,6 +66,9 @@ type Settings struct {
 	// Feature Toggles
 	ShowEvaluateButton bool `gorm:"default:false" json:"show_evaluate_button"` // Manual feedback trigger button on complaint/query detail pages
 
+	// Auth Settings
+	TotpEnabled bool `gorm:"column:totp_enabled;default:false" json:"-"` // Whether TOTP/OTP-based 2FA login is enforced; exposed nested as auth_setting.totp_enabled
+
 	// Timestamps
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -78,6 +81,12 @@ func (s *Settings) BeforeCreate(tx *gorm.DB) error {
 		s.ID = uuid.New()
 	}
 	return nil
+}
+
+// AuthSetting represents authentication-related feature toggles, nested under
+// the "auth_setting" key in settings update/response payloads.
+type AuthSetting struct {
+	TotpEnabled bool `json:"totp_enabled"`
 }
 
 // SettingsUpdateRequest represents the request to update settings
@@ -119,6 +128,9 @@ type SettingsUpdateRequest struct {
 
 	// Feature Toggles
 	ShowEvaluateButton *bool `json:"show_evaluate_button"`
+
+	// Auth Settings
+	AuthSetting *AuthSetting `json:"auth_setting"`
 }
 
 // SettingsResponse represents the public settings response
@@ -163,6 +175,9 @@ type SettingsResponse struct {
 	// Feature Toggles
 	ShowEvaluateButton bool `json:"show_evaluate_button"`
 
+	// Auth Settings
+	AuthSetting AuthSetting `json:"auth_setting"`
+
 	// SMS Configuration (env-driven, not stored in DB)
 	SmsMaxLength int `json:"sms_max_length"`
 
@@ -198,6 +213,7 @@ func (s *Settings) ToSettingsResponse() *SettingsResponse {
 		DefaultLanguage:     s.DefaultLanguage,
 		SupportedLanguages:  s.SupportedLanguages,
 		ShowEvaluateButton:  s.ShowEvaluateButton,
+		AuthSetting:         AuthSetting{TotpEnabled: s.TotpEnabled},
 		SmsMaxLength:        func() int { n, _ := GetSMSMaxLength(); return n }(),
 		UpdatedAt:           s.UpdatedAt.Format(time.RFC3339),
 	}
