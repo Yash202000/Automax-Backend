@@ -156,6 +156,18 @@ func main() {
 	documentService := services.NewDocumentService(documentaClient, cfg.Documenta)
 	documentAuthzService := services.NewDocumentAuthzService(db, documentaClient, cfg.Documenta)
 
+	// KPI evidence uploads use a SEPARATE Documenta client/config from Goal
+	// Management's (own OAuth credentials, own workspace) — an explicit
+	// product decision, not shared with documentaClient above.
+	var kpiDocumentaClient storage.DocumentaClient
+	if cfg.KpiDocumenta.Enabled {
+		kpiDocumentaClient = storage.NewHTTPDocumentaClient(cfg.KpiDocumenta, redisClient)
+		log.Println("KPI Documenta HTTP client enabled")
+	} else {
+		kpiDocumentaClient = storage.NewStubDocumentaClient()
+		log.Println("KPI Documenta stub client (KPI_DOCUMENTA_ENABLED=false)")
+	}
+
 	// Ready-to-Close service
 	readyToCloseRepo := repository.NewReadyToCloseRepository(db)
 	readyToCloseService := services.NewReadyToCloseService(readyToCloseRepo, incidentRepo, workflowRepo, notificationService, cfg.ReadyToClose, db)
@@ -284,7 +296,7 @@ func main() {
 	kpiPerformanceHandler := handlers.NewKpiPerformanceHandler(db, kpiWorkflowService, actionLogService)
 
 	// KPI Engagement handler (metrics, evidence, collaborators, check-ins, comments, activity)
-	kpiEngagementHandler := handlers.NewKpiEngagementHandler(db, actionLogService, minioStorage)
+	kpiEngagementHandler := handlers.NewKpiEngagementHandler(db, actionLogService, minioStorage, kpiDocumentaClient, cfg.KpiDocumenta)
 
 	// KPI Dashboard handler
 	kpiDashboardHandler := handlers.NewKpiDashboardHandler(db)
