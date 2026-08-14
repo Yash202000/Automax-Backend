@@ -1281,7 +1281,7 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	if len(req.ReporterPhone) > 0 {
 		incident.ReporterPhone = req.ReporterPhone
 		changes = append(changes, models.IncidentFieldChange{
-			FieldName:  "reporter_Phone",
+			FieldName:  "reporter_phone",
 			FieldLabel: "Reporter Phone",
 		})
 	}
@@ -1289,7 +1289,7 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	if len(req.ReporterName) > 0 {
 		incident.ReporterName = req.ReporterName
 		changes = append(changes, models.IncidentFieldChange{
-			FieldName:  "reporter_Name",
+			FieldName:  "reporter_name",
 			FieldLabel: "Reporter Name",
 		})
 	}
