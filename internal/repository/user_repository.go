@@ -33,10 +33,8 @@ type UserRepository interface {
 	AssignDepartments(ctx context.Context, userID uuid.UUID, departmentIDs []uuid.UUID) error
 	AssignLocations(ctx context.Context, userID uuid.UUID, locationIDs []uuid.UUID) error
 	AppendLocations(ctx context.Context, userID uuid.UUID, locationIDs []uuid.UUID) error
-	RemoveLocations(ctx context.Context, userID uuid.UUID, locationIDs []uuid.UUID) error
 	AssignClassifications(ctx context.Context, userID uuid.UUID, classificationIDs []uuid.UUID) error
 	AppendClassifications(ctx context.Context, userID uuid.UUID, classificationIDs []uuid.UUID) error
-	RemoveClassifications(ctx context.Context, userID uuid.UUID, classificationIDs []uuid.UUID) error
 	GetUserRoles(ctx context.Context, userID uuid.UUID) ([]models.Role, error)
 	GetUserPermissions(ctx context.Context, userID uuid.UUID) ([]string, error)
 	FindMatching(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID, excludeUserID *uuid.UUID) ([]models.User, error)
@@ -575,24 +573,6 @@ func (r *userRepository) AppendLocations(ctx context.Context, userID uuid.UUID, 
 	return nil
 }
 
-func (r *userRepository) RemoveLocations(ctx context.Context, userID uuid.UUID, locationIDs []uuid.UUID) error {
-	if len(locationIDs) == 0 {
-		return nil
-	}
-	var user models.User
-	if err := r.db.WithContext(ctx).First(&user, "id = ?", userID).Error; err != nil {
-		return err
-	}
-	var locations []models.Location
-	if err := r.db.WithContext(ctx).Where("id IN ?", locationIDs).Find(&locations).Error; err != nil {
-		return err
-	}
-	if len(locations) == 0 {
-		return nil
-	}
-	return r.db.WithContext(ctx).Model(&user).Association("Locations").Delete(locations)
-}
-
 func (r *userRepository) AssignClassifications(ctx context.Context, userID uuid.UUID, classificationIDs []uuid.UUID) error {
 	var user models.User
 	if err := r.db.WithContext(ctx).First(&user, "id = ?", userID).Error; err != nil {
@@ -650,24 +630,6 @@ func (r *userRepository) AppendClassifications(ctx context.Context, userID uuid.
 	}
 
 	return nil
-}
-
-func (r *userRepository) RemoveClassifications(ctx context.Context, userID uuid.UUID, classificationIDs []uuid.UUID) error {
-	if len(classificationIDs) == 0 {
-		return nil
-	}
-	var user models.User
-	if err := r.db.WithContext(ctx).First(&user, "id = ?", userID).Error; err != nil {
-		return err
-	}
-	var classifications []models.Classification
-	if err := r.db.WithContext(ctx).Where("id IN ?", classificationIDs).Find(&classifications).Error; err != nil {
-		return err
-	}
-	if len(classifications) == 0 {
-		return nil
-	}
-	return r.db.WithContext(ctx).Model(&user).Association("Classifications").Delete(classifications)
 }
 
 func (r *userRepository) GetUserRoles(ctx context.Context, userID uuid.UUID) ([]models.Role, error) {
