@@ -2206,7 +2206,6 @@ func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-
 	// Fetch incident with relations to get attachments, reporter info
 	incident, err := h.incidentRepo.FindByIDWithRelations(c.UserContext(), incidentID)
 	if err != nil {
@@ -2243,11 +2242,25 @@ func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
 	rawToken := utils.GenerateIncidentToken(incidentID.String(), ivrSmsDuration)
 	smsLink := utils.BuildSMSLinkFromToken(c.UserContext(), incidentID.String(), rawToken)
 
+	subject := i18n.T(c.UserContext(), "request_additional_info")
 	smsMessage := fmt.Sprintf(
-		"Dear Citizen, please provide additional details for your reported incident (%s) using the following secure link: %s",
-		incident.IncidentNumber,
+		"Dear Beneficiary,\nPlease complete your incident details through the link below and fill in the required information to proceed with your request:\n%s\nThank you for your cooperation.",
 		smsLink,
 	)
+
+	lang, ok := c.Locals(constants.ContextKeys.ACCEPT_LANGUAGE).(string)
+	if !ok || lang == "" {
+		lang = "en" // Default language
+	}
+
+	if lang == "ar" {
+		// subject = i18n.T(c.UserContext(), "request_additional_info_ar")
+		smsMessage = fmt.Sprintf(
+			"عزيزي المستفيد،\nنأمل استكمال بيانات البلاغ عبر الرابط أدناه وتعبئة الحقول المطلوبة، وذلك لاستكمال معالجة البلاغ:\n%s\nشكرًا لتعاونكم.",
+			smsLink,
+		)
+	}
+	fmt.Printf("REQUEST-INFO-SMS: lang %s, subject: %s, message: %s", lang, subject, smsMessage)
 
 	now := time.Now()
 	_, smsErr := internalUtils.SendSMS(mobile, smsMessage)
@@ -2282,9 +2295,9 @@ func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
 		Channel:    "sms",
 		Direction:  "outbound",
 		Category:   "sent",
-		Language:   "en",
+		Language:   lang,
 		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
-		Subject:    "Request Additional Information",
+		Subject:    subject,
 		Body:       smsMessage,
 		Status:     status,
 		Provider:   "twilio",
