@@ -15,6 +15,7 @@ type Permission struct {
 	Description string    `gorm:"size:500" json:"description"`
 	Module      string    `gorm:"size:50;index" json:"module"` // e.g., "users", "tickets", "reports"
 	Action      string    `gorm:"size:50" json:"action"`       // e.g., "create", "read", "update", "delete"
+	ActionAr    string    `gorm:"size:50" json:"action_ar"`    // Arabic translation of Action
 	// Arabic counterparts of Name/Description/Module. Returned alongside the
 	// English values rather than replacing them — the API serves both languages
 	// unconditionally and the client picks which to render.
