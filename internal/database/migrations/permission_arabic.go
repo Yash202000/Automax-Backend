@@ -270,7 +270,56 @@ var permissionNameArabic = map[string]struct{ Name, Description string }{
 	"workflows:design": {"تصميم مسارات العمل", "الوصول إلى مصمم مسارات العمل"},
 }
 
-// MigratePermissionArabic backfills the Arabic columns on the permissions table.
+// permissionActionArabic maps a permission's action code to its Arabic label.
+// Keyed by the raw `action` column value stored on the row — note this is not always
+// the code suffix after the colon (e.g. code "perf:override_lock" stores action
+// "override", and code "incidents:edit-closed" stores action "edit_closed") — so
+// these pairs are copied verbatim from the seed data in postgres.go.
+var permissionActionArabic = map[string]string{
+	"admin":                 "مسؤول",
+	"approve":               "موافقة",
+	"assign":                "تعيين",
+	"assign_users":          "تعيين المستخدمين",
+	"ccm":                   "إدارة علاقات المواطنين",
+	"comment":               "تعليق",
+	"complaints":            "الشكاوى",
+	"create":                "إنشاء",
+	"dashboard":             "لوحة التحكم",
+	"delete":                "حذف",
+	"design":                "تصميم",
+	"edit_closed":           "تعديل المغلق",
+	"filter_reporter_phone": "تصفية حسب هاتف المبلغ",
+	"goals":                 "الأهداف",
+	"incidents":             "البلاغات",
+	"manage":                "إدارة",
+	"manage_rules":          "إدارة القواعد",
+	"manage_sla":            "إدارة اتفاقية مستوى الخدمة",
+	"merge":                 "دمج",
+	"override":              "تجاوز",
+	"publish":               "نشر",
+	"queries":               "الاستفسارات",
+	"read":                  "قراءة",
+	"reject":                "رفض",
+	"release":               "تحرير",
+	"request_changes":       "طلب تعديلات",
+	"request_info":          "طلب معلومات",
+	"requests":              "الطلبات",
+	"reset_password":        "إعادة تعيين كلمة المرور",
+	"review":                "مراجعة",
+	"send":                  "إرسال",
+	"set":                   "تحديد",
+	"share":                 "مشاركة",
+	"submit":                "تقديم",
+	"transition":            "انتقال الحالة",
+	"update":                "تحديث",
+	"view":                  "عرض",
+	"view_all":              "عرض الكل",
+	"view_department_only":  "عرض القسم فقط",
+	"workflows":             "سير العمل",
+}
+
+// MigratePermissionArabic backfills the Arabic columns (name_ar, description_ar,
+// module_ar, action_ar) on the permissions table.
 //
 // The seed in postgres.go only inserts permissions that do not exist yet — it has
 // no update branch — so every database created before these columns existed holds
@@ -283,7 +332,7 @@ var permissionNameArabic = map[string]struct{ Name, Description string }{
 func MigratePermissionArabic(db *gorm.DB) error {
 	var pending int64
 	if err := db.Table("permissions").
-		Where("COALESCE(name_ar, '') = '' OR COALESCE(description_ar, '') = '' OR COALESCE(module_ar, '') = ''").
+		Where("COALESCE(name_ar, '') = '' OR COALESCE(description_ar, '') = '' OR COALESCE(module_ar, '') = '' OR COALESCE(action_ar, '') = ''").
 		Count(&pending).Error; err != nil {
 		return err
 	}
@@ -298,6 +347,17 @@ func MigratePermissionArabic(db *gorm.DB) error {
 			if err := tx.Exec(
 				`UPDATE permissions SET module_ar = ? WHERE module = ? AND COALESCE(module_ar, '') = ''`,
 				moduleAr, module,
+			).Error; err != nil {
+				return err
+			}
+		}
+
+		// Action labels are shared across modules the same way, so one statement
+		// per action covers every permission using it.
+		for action, actionAr := range permissionActionArabic {
+			if err := tx.Exec(
+				`UPDATE permissions SET action_ar = ? WHERE action = ? AND COALESCE(action_ar, '') = ''`,
+				actionAr, action,
 			).Error; err != nil {
 				return err
 			}

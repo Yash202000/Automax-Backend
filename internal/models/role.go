@@ -93,6 +93,7 @@ type PermissionResponse struct {
 	Module        string    `json:"module"`
 	ModuleAr      string    `json:"module_ar"`
 	Action        string    `json:"action"`
+	ActionAr      string    `json:"action_ar"`
 	IsActive      bool      `json:"is_active"`
 	CreatedAt     time.Time `json:"created_at"`
 }
@@ -108,6 +109,7 @@ func ToPermissionResponse(p *Permission) PermissionResponse {
 		Module:        p.Module,
 		ModuleAr:      p.ModuleAr,
 		Action:        p.Action,
+		ActionAr:      p.ActionAr,
 		IsActive:      p.IsActive,
 		CreatedAt:     p.CreatedAt,
 	}
