@@ -964,9 +964,9 @@ type SLAViolationGroup struct {
 // of just a single offending classification.
 type SLAValidationError struct {
 	msg                  string
-	WorkflowSLALabel     string               `json:"workflow_sla_label"`
-	TotalClassifications int                  `json:"total_classification_count"`
-	Groups               []SLAViolationGroup  `json:"violations"`
+	WorkflowSLALabel     string              `json:"workflow_sla_label"`
+	TotalClassifications int                 `json:"total_classification_count"`
+	Groups               []SLAViolationGroup `json:"violations"`
 }
 
 func (e *SLAValidationError) Error() string { return e.msg }
@@ -1422,6 +1422,7 @@ func (s *workflowService) CreateTransition(ctx context.Context, workflowID uuid.
 		DepartmentTypeFilter: req.DepartmentTypeFilter,
 		AutoMatchUser:        req.AutoMatchUser,
 		ManualSelectUser:     req.ManualSelectUser,
+		ViewAssigneUserList:  req.ViewAssigneUserList,
 	}
 
 	// Department Assignment
@@ -1589,6 +1590,9 @@ func (s *workflowService) UpdateTransition(ctx context.Context, transitionID uui
 	}
 	if req.ManualSelectUser != nil {
 		transition.ManualSelectUser = *req.ManualSelectUser
+	}
+	if req.ViewAssigneUserList != nil {
+		transition.ViewAssigneUserList = *req.ViewAssigneUserList
 	}
 	if req.AssignUserID != nil {
 		if *req.AssignUserID == "" {
@@ -2163,6 +2167,7 @@ func (s *workflowService) ExportWorkflow(ctx context.Context, id uuid.UUID) ([]b
 			AssignmentRoles:      assignmentRoles,
 			AutoMatchUser:        trans.AutoMatchUser,
 			ManualSelectUser:     trans.ManualSelectUser,
+			ViewAssigneUserList:  trans.ViewAssigneUserList,
 			Requirements:         requirements,
 			Actions:              actions,
 			SortOrder:            trans.SortOrder,
@@ -2459,6 +2464,7 @@ func (s *workflowService) ImportWorkflow(ctx context.Context, data *models.Workf
 			AutoDetectDepartment: transData.AutoDetectDepartment,
 			AutoMatchUser:        transData.AutoMatchUser,
 			ManualSelectUser:     transData.ManualSelectUser,
+			ViewAssigneUserList:  transData.ViewAssigneUserList,
 			SortOrder:            transData.SortOrder,
 			IsActive:             true,
 		}

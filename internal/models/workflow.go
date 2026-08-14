@@ -216,6 +216,8 @@ type WorkflowTransition struct {
 	//   If multiple match: assign to ALL matched users
 	ManualSelectUser bool `gorm:"default:false" json:"manual_select_user"`
 	// If manual_select_user=true: user performing transition manually selects the assignee from dropdown
+	ViewAssigneUserList bool `gorm:"default:false" json:"view_assigne_user_list"`
+	// If auto_match_user=true and view_assigne_user_list=true: expose the list of matched users in the transition response
 
 	// Requirements, Actions and Field Changes
 	Requirements []TransitionRequirement `gorm:"foreignKey:TransitionID" json:"requirements,omitempty"`
@@ -459,10 +461,11 @@ type WorkflowTransitionCreateRequest struct {
 	DepartmentTypeFilter string  `json:"department_type_filter" validate:"omitempty,oneof=internal external"`
 
 	// User Assignment
-	AssignUserID      *string  `json:"assign_user_id" validate:"omitempty,uuid"`
-	AssignmentRoleIDs []string `json:"assignment_role_ids"`
-	AutoMatchUser     bool     `json:"auto_match_user"`
-	ManualSelectUser  bool     `json:"manual_select_user"`
+	AssignUserID        *string  `json:"assign_user_id" validate:"omitempty,uuid"`
+	AssignmentRoleIDs   []string `json:"assignment_role_ids"`
+	AutoMatchUser       bool     `json:"auto_match_user"`
+	ManualSelectUser    bool     `json:"manual_select_user"`
+	ViewAssigneUserList bool     `json:"view_assigne_user_list"`
 }
 
 type WorkflowTransitionUpdateRequest struct {
@@ -489,10 +492,11 @@ type WorkflowTransitionUpdateRequest struct {
 	DepartmentTypeFilter *string `json:"department_type_filter" validate:"omitempty,oneof=internal external"`
 
 	// User Assignment
-	AssignUserID      *string  `json:"assign_user_id" validate:"omitempty,uuid"`
-	AssignmentRoleIDs []string `json:"assignment_role_ids"`
-	AutoMatchUser     *bool    `json:"auto_match_user"`
-	ManualSelectUser  *bool    `json:"manual_select_user"`
+	AssignUserID        *string  `json:"assign_user_id" validate:"omitempty,uuid"`
+	AssignmentRoleIDs   []string `json:"assignment_role_ids"`
+	AutoMatchUser       *bool    `json:"auto_match_user"`
+	ManualSelectUser    *bool    `json:"manual_select_user"`
+	ViewAssigneUserList *bool    `json:"view_assigne_user_list"`
 }
 
 type TransitionRequirementRequest struct {
@@ -641,11 +645,12 @@ type WorkflowTransitionResponse struct {
 	AutoDetectDepartment bool                `json:"auto_detect_department"`
 
 	// User Assignment
-	AssignUserID     *uuid.UUID     `json:"assign_user_id,omitempty"`
-	AssignUser       *UserResponse  `json:"assign_user,omitempty"`
-	AssignmentRoles  []RoleResponse `json:"assignment_roles,omitempty"`
-	AutoMatchUser    bool           `json:"auto_match_user"`
-	ManualSelectUser bool           `json:"manual_select_user"`
+	AssignUserID        *uuid.UUID     `json:"assign_user_id,omitempty"`
+	AssignUser          *UserResponse  `json:"assign_user,omitempty"`
+	AssignmentRoles     []RoleResponse `json:"assignment_roles,omitempty"`
+	AutoMatchUser       bool           `json:"auto_match_user"`
+	ManualSelectUser    bool           `json:"manual_select_user"`
+	ViewAssigneUserList bool           `json:"view_assigne_user_list"`
 
 	Requirements    []TransitionRequirementResponse `json:"requirements,omitempty"`
 	Actions         []TransitionActionResponse      `json:"actions,omitempty"`
@@ -892,6 +897,7 @@ func ToWorkflowTransitionResponse(t *WorkflowTransition) WorkflowTransitionRespo
 		AssignUserID:         t.AssignUserID,
 		AutoMatchUser:        t.AutoMatchUser,
 		ManualSelectUser:     t.ManualSelectUser,
+		ViewAssigneUserList:  t.ViewAssigneUserList,
 		IsRejection:          t.IsRejection,
 		IsNotBelong:          t.IsNotBelong,
 		IsMissingInfo:        t.IsMissingInfo,
@@ -1069,6 +1075,7 @@ type WorkflowTransitionExport struct {
 	AssignmentRoles      []CodeNamePair                `json:"assignment_roles,omitempty"`
 	AutoMatchUser        bool                          `json:"auto_match_user"`
 	ManualSelectUser     bool                          `json:"manual_select_user"`
+	ViewAssigneUserList  bool                          `json:"view_assigne_user_list"`
 	Requirements         []TransitionRequirementExport `json:"requirements,omitempty"`
 	Actions              []TransitionActionExport      `json:"actions,omitempty"`
 	SortOrder            int                           `json:"sort_order"`
