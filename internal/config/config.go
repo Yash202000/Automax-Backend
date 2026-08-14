@@ -34,6 +34,7 @@ type Config struct {
 	FinalCloseWhatsAppFeedback FinalCloseWhatsAppFeedbackConfig
 	Cintrix                    CintrixConfig
 	PBX                        PBXConfig
+	SyncDeptAttributesToUser   bool // env: SYNC_DEPT_ATTRIBUTES_TO_USER — when true, assigning a department to a user auto-appends the department's locations/classifications to that user. Default: false.
 }
 
 // PBXConfig holds settings for the external PBX used by the extension-assignment
@@ -350,6 +351,7 @@ func Load() *Config {
 			BaseURL:            getEnv("PBX_BASE_URL", "https://zkff.automaxsw.com/create_user.php"),
 			InsecureSkipVerify: getEnvAsBool("PBX_INSECURE_SKIP_VERIFY", false),
 		},
+		SyncDeptAttributesToUser: getEnvAsBool("SYNC_DEPT_ATTRIBUTES_TO_USER", false),
 	}
 }
 

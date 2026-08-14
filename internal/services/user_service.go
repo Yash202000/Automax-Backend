@@ -229,14 +229,20 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 		}
 	}
 
-	// Assign manually selected locations/classifications only (don't auto-sync from departments during creation)
-	// This respects the user's explicit selections/deselections from the frontend
+	// Assign manually selected locations/classifications from the frontend
 	if len(req.LocationIDs) > 0 {
 		s.userRepo.AssignLocations(ctx, user.ID, req.LocationIDs)
 	}
 
 	if len(req.ClassificationIDs) > 0 {
 		s.userRepo.AssignClassifications(ctx, user.ID, req.ClassificationIDs)
+	}
+
+	// When enabled, append department-derived locations/classifications.
+	// For creation all departments are "added" (oldDeptIDs is empty), so the sync
+	// appends their locations/classifications — covers the fast-save race condition.
+	if len(req.DepartmentIDs) > 0 && s.config.SyncDeptAttributesToUser {
+		_ = s.syncDepartmentAttributesToUser(ctx, user.ID, nil, req.DepartmentIDs)
 	}
 
 	// Assign extension if provided
@@ -1113,22 +1119,25 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		}
 	}
 
-	// Sync classifications and locations from departments if departments changed
-	// This appends department-mapped items without removing manually selected ones
-	if departmentsChanged {
-		_ = s.syncDepartmentAttributesToUser(ctx, user.ID)
-	}
-
-	// Update manually selected locations/classifications (replace to allow removal)
-	// Track old values before updating
+	// Track old values before updating (needed for audit logging below)
 	oldLocationIDs := make([]uuid.UUID, len(oldUser.LocationIDs))
 	copy(oldLocationIDs, oldUser.LocationIDs)
-	s.userRepo.AssignLocations(ctx, user.ID, req.LocationIDs)
-
-	// Track old values before updating
 	oldClassificationIDs := make([]uuid.UUID, len(oldUser.ClassificationIDs))
 	copy(oldClassificationIDs, oldUser.ClassificationIDs)
-	s.userRepo.AssignClassifications(ctx, user.ID, req.ClassificationIDs)
+
+	if departmentsChanged && s.config.SyncDeptAttributesToUser {
+		// Diff-based sync: the backend is the sole authority for department-derived changes.
+		// We intentionally SKIP AssignLocations/AssignClassifications (frontend data) here because:
+		//  - Fast-save race condition: frontend may send empty/stale location_ids
+		//  - Scope filtering: dept-scoped admins may not see all department locations
+		// The diff sync only touches items from ADDED/REMOVED departments — unchanged
+		// departments are not re-synced, so prior manual edits are preserved.
+		_ = s.syncDepartmentAttributesToUser(ctx, user.ID, oldDepartmentIDs, req.DepartmentIDs)
+	} else {
+		// No department change (or sync disabled): save frontend's manual selections as-is.
+		s.userRepo.AssignLocations(ctx, user.ID, req.LocationIDs)
+		s.userRepo.AssignClassifications(ctx, user.ID, req.ClassificationIDs)
+	}
 
 	// Reload with relations
 	user, _ = s.userRepo.FindByIDWithRelations(ctx, user.ID)
@@ -1945,64 +1954,136 @@ func (s *userService) CheckExistingIdentifiers(ctx context.Context, emails, user
 	return existing, nil
 }
 
-// syncDepartmentAttributesToUser automatically inherits classifications and locations from user's departments
-func (s *userService) syncDepartmentAttributesToUser(ctx context.Context, userID uuid.UUID) error {
-	// Get user with all department relationships
-	user, err := s.userRepo.FindByIDWithRelations(ctx, userID)
+// collectDeptAttributes fetches a department by ID and returns its location and classification IDs.
+func (s *userService) collectDeptAttributes(ctx context.Context, deptID uuid.UUID) (locIDs, clsIDs []uuid.UUID) {
+	dept, err := s.departmentRepo.FindByID(ctx, deptID)
 	if err != nil {
-		return err
+		return nil, nil
+	}
+	for _, l := range dept.Locations {
+		locIDs = append(locIDs, l.ID)
+	}
+	for _, c := range dept.Classifications {
+		clsIDs = append(clsIDs, c.ID)
+	}
+	return
+}
+
+// syncDepartmentAttributesToUser performs a diff-based sync of locations and classifications
+// when a user's department assignments change.
+//
+//   - Added departments:   their locations/classifications are appended to the user.
+//   - Removed departments: locations/classifications that were exclusive to the removed
+//     departments (not covered by any remaining department) are removed from the user.
+//   - Unchanged departments: not touched — manual edits to their locations are preserved.
+func (s *userService) syncDepartmentAttributesToUser(ctx context.Context, userID uuid.UUID, oldDeptIDs, newDeptIDs []uuid.UUID) error {
+	oldSet := make(map[uuid.UUID]bool, len(oldDeptIDs))
+	for _, id := range oldDeptIDs {
+		oldSet[id] = true
+	}
+	newSet := make(map[uuid.UUID]bool, len(newDeptIDs))
+	for _, id := range newDeptIDs {
+		newSet[id] = true
 	}
 
-	// Collect all unique classification and location IDs from all departments
-	classificationIDMap := make(map[uuid.UUID]bool)
-	locationIDMap := make(map[uuid.UUID]bool)
+	// Compute added and removed departments
+	var addedDeptIDs, removedDeptIDs []uuid.UUID
+	for _, id := range newDeptIDs {
+		if !oldSet[id] {
+			addedDeptIDs = append(addedDeptIDs, id)
+		}
+	}
+	for _, id := range oldDeptIDs {
+		if !newSet[id] {
+			removedDeptIDs = append(removedDeptIDs, id)
+		}
+	}
 
-	// Collect from primary department if set
-	if user.DepartmentID != nil {
-		dept, err := s.departmentRepo.FindByID(ctx, *user.DepartmentID)
-		if err == nil {
-			for _, classification := range dept.Classifications {
-				classificationIDMap[classification.ID] = true
+	// --- Handle added departments: append their locations/classifications ---
+	if len(addedDeptIDs) > 0 {
+		addedLocs := make(map[uuid.UUID]bool)
+		addedCls := make(map[uuid.UUID]bool)
+		for _, deptID := range addedDeptIDs {
+			locs, cls := s.collectDeptAttributes(ctx, deptID)
+			for _, id := range locs {
+				addedLocs[id] = true
 			}
-			for _, location := range dept.Locations {
-				locationIDMap[location.ID] = true
+			for _, id := range cls {
+				addedCls[id] = true
+			}
+		}
+		if len(addedLocs) > 0 {
+			ids := make([]uuid.UUID, 0, len(addedLocs))
+			for id := range addedLocs {
+				ids = append(ids, id)
+			}
+			if err := s.userRepo.AppendLocations(ctx, userID, ids); err != nil {
+				fmt.Printf("Warning: failed to append locations from added departments: %v\n", err)
+			}
+		}
+		if len(addedCls) > 0 {
+			ids := make([]uuid.UUID, 0, len(addedCls))
+			for id := range addedCls {
+				ids = append(ids, id)
+			}
+			if err := s.userRepo.AppendClassifications(ctx, userID, ids); err != nil {
+				fmt.Printf("Warning: failed to append classifications from added departments: %v\n", err)
 			}
 		}
 	}
 
-	// Collect from many-to-many departments
-	for _, dept := range user.Departments {
-		// Load department with relations
-		fullDept, err := s.departmentRepo.FindByID(ctx, dept.ID)
-		if err != nil {
-			continue
+	// --- Handle removed departments: remove their exclusive locations/classifications ---
+	if len(removedDeptIDs) > 0 {
+		// Collect locations/classifications from removed departments
+		removedLocs := make(map[uuid.UUID]bool)
+		removedCls := make(map[uuid.UUID]bool)
+		for _, deptID := range removedDeptIDs {
+			locs, cls := s.collectDeptAttributes(ctx, deptID)
+			for _, id := range locs {
+				removedLocs[id] = true
+			}
+			for _, id := range cls {
+				removedCls[id] = true
+			}
 		}
-		for _, classification := range fullDept.Classifications {
-			classificationIDMap[classification.ID] = true
+
+		// Collect locations/classifications from remaining departments (newDeptIDs)
+		// to avoid removing items that are still covered by another department
+		remainingLocs := make(map[uuid.UUID]bool)
+		remainingCls := make(map[uuid.UUID]bool)
+		for _, deptID := range newDeptIDs {
+			locs, cls := s.collectDeptAttributes(ctx, deptID)
+			for _, id := range locs {
+				remainingLocs[id] = true
+			}
+			for _, id := range cls {
+				remainingCls[id] = true
+			}
 		}
-		for _, location := range fullDept.Locations {
-			locationIDMap[location.ID] = true
+
+		// Exclusive = in removed depts but NOT in any remaining dept
+		var exclusiveLocs, exclusiveCls []uuid.UUID
+		for id := range removedLocs {
+			if !remainingLocs[id] {
+				exclusiveLocs = append(exclusiveLocs, id)
+			}
 		}
-	}
+		for id := range removedCls {
+			if !remainingCls[id] {
+				exclusiveCls = append(exclusiveCls, id)
+			}
+		}
 
-	// Convert maps to slices
-	var classificationIDs []uuid.UUID
-	for id := range classificationIDMap {
-		classificationIDs = append(classificationIDs, id)
-	}
-
-	var locationIDs []uuid.UUID
-	for id := range locationIDMap {
-		locationIDs = append(locationIDs, id)
-	}
-
-	// Assign to user (replace with department-derived values)
-	if err := s.userRepo.AssignClassifications(ctx, userID, classificationIDs); err != nil {
-		fmt.Printf("Warning: failed to sync classifications from departments: %v\n", err)
-	}
-
-	if err := s.userRepo.AssignLocations(ctx, userID, locationIDs); err != nil {
-		fmt.Printf("Warning: failed to sync locations from departments: %v\n", err)
+		if len(exclusiveLocs) > 0 {
+			if err := s.userRepo.RemoveLocations(ctx, userID, exclusiveLocs); err != nil {
+				fmt.Printf("Warning: failed to remove locations from removed departments: %v\n", err)
+			}
+		}
+		if len(exclusiveCls) > 0 {
+			if err := s.userRepo.RemoveClassifications(ctx, userID, exclusiveCls); err != nil {
+				fmt.Printf("Warning: failed to remove classifications from removed departments: %v\n", err)
+			}
+		}
 	}
 
 	return nil
