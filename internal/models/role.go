@@ -15,6 +15,7 @@ type Permission struct {
 	Description string    `gorm:"size:500" json:"description"`
 	Module      string    `gorm:"size:50;index" json:"module"` // e.g., "users", "tickets", "reports"
 	Action      string    `gorm:"size:50" json:"action"`       // e.g., "create", "read", "update", "delete"
+	ActionAr    string    `gorm:"size:50" json:"action_ar"`    // Arabic translation of Action
 	// Arabic counterparts of Name/Description/Module. Returned alongside the
 	// English values rather than replacing them — the API serves both languages
 	// unconditionally and the client picks which to render.
@@ -92,6 +93,7 @@ type PermissionResponse struct {
 	Module        string    `json:"module"`
 	ModuleAr      string    `json:"module_ar"`
 	Action        string    `json:"action"`
+	ActionAr      string    `json:"action_ar"`
 	IsActive      bool      `json:"is_active"`
 	CreatedAt     time.Time `json:"created_at"`
 }
@@ -107,6 +109,7 @@ func ToPermissionResponse(p *Permission) PermissionResponse {
 		Module:        p.Module,
 		ModuleAr:      p.ModuleAr,
 		Action:        p.Action,
+		ActionAr:      p.ActionAr,
 		IsActive:      p.IsActive,
 		CreatedAt:     p.CreatedAt,
 	}
