@@ -182,6 +182,7 @@ var messages = map[string][2]string{
 	"merged_incidents_retrieved":  {"Merged incidents retrieved", "تم استرجاع البلاغات المدمجة"},
 	"merge_validation_completed":  {"Merge validation completed", "تم التحقق من صحة الدمج"},
 	"token_incident_mismatch":     {"Token does not match this incident", "الرمز لا يتطابق مع هذا البلاغ"},
+	"request_additional_info":     {"Request Additional Information", "طلب معلومات إضافية"},
 
 	// ── Complaints / Queries ──────────────────────────────────────────────────
 	"complaint_not_found": {"Complaint not found", "الشكوى غير موجودة"},
