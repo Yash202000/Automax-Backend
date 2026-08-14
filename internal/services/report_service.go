@@ -410,7 +410,6 @@ func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExpo
 		filename = cases.Title(language.English).String(req.DataSource) + "_Report"
 	}
 	filename += "_" + time.Now().In(loc).Format("2006-01-02_150405")
-	log.Printf("Exporting report with title: %s, filename: %s", title, filename)
 	filters := s.buildFilterDisplay(ctx, req.Filters)
 	if req.Format == "xlsx" {
 		xlsxData, err := s.generateExcel(data, req.Columns, title, req.Options, filters, lang)
@@ -420,12 +419,9 @@ func (s *reportService) ExportReport(ctx context.Context, req *models.ReportExpo
 		return xlsxData, filename + ".xlsx",
 			"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", nil
 	}
-	log.Println(req.Filters)
 	// in ExportReport, change the generatePDF call:
 	pdfData, err := s.generatePDF(ctx, data, req.Columns, title, req.Options, filters)
-	log.Println("pdf generation started ")
 	if err != nil {
-		log.Println(err)
 		return nil, "", "", err
 	}
 	return pdfData, filename + ".pdf", "application/pdf", nil
@@ -964,7 +960,6 @@ func reverseStringSlices(s [][]string) [][]string {
 }
 
 func setupArabicFont(pdf *gofpdf.Fpdf) {
-	log.Printf("NotoArabicRegular size: %d bytes", len(fonts.NotoArabicRegular))
 	if len(fonts.NotoArabicRegular) == 0 {
 		log.Println("WARNING: Arabic font not loaded, will fall back to Arial")
 		return
@@ -985,7 +980,7 @@ func (s *reportService) generatePDF(
 	lang, _ := ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE).(string)
 	rtlMode := lang == "ar" || lang == "he" || isRTL(title)
 	arabicLoaded := len(fonts.NotoArabicRegular) > 0
-	log.Println("RTL Mode: ", rtlMode)
+	// log.Println("RTL Mode: ", rtlMode)
 	pdf := gofpdf.New("L", "mm", "A4", "")
 	pdf.SetMargins(16, 16, 16) // match HTML template: @page { margin: 16mm }
 	pdf.SetAutoPageBreak(true, 16)
@@ -2126,7 +2121,6 @@ func resolveTitle(title, dataSource, lang string) string {
 	if title != "" {
 		return title
 	}
-	log.Print("Language", lang)
 	// Fallback titles per data source
 	titles := map[string]map[string]string{
 		"incidents": {
