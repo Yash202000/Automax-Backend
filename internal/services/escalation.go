@@ -116,8 +116,8 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 		}
 
 		// No escalation policy attached to this state — skip to avoid unintended notifications.
-		log.Printf("[EscalationService] Incident %s / state '%s' has no escalation policy attached — assign one to enable SLA notifications",
-			incident.IncidentNumber, state.Name)
+		// log.Printf("[EscalationService] Incident %s / state '%s' has no escalation policy attached — assign one to enable SLA notifications",
+		// 	incident.IncidentNumber, state.Name)
 		skippedNoPolicy++
 		continue
 
@@ -222,8 +222,8 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 		// }
 	}
 
-	log.Printf("[EscalationService] Done — processed: %d, skipped (no policy): %d, skipped (other): %d",
-		processed, skippedNoPolicy, skippedOther)
+	// log.Printf("[EscalationService] Done — processed: %d, skipped (no policy): %d, skipped (other): %d",
+	// 	processed, skippedNoPolicy, skippedOther)
 	return nil
 }
 
