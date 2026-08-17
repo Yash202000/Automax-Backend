@@ -1445,6 +1445,7 @@ func (r *incidentRepository) GetBreachedByFilter(ctx context.Context, locationID
 
 	query := r.db.WithContext(ctx).
 		Where("sla_breached = ?", true).
+		Where("record_type = ?", "incident").
 		Where("current_state_id NOT IN (SELECT id FROM workflow_states WHERE state_type = 'terminal')")
 
 	// Only filter by location if a non-zero UUID is provided

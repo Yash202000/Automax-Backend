@@ -302,6 +302,18 @@ func (s *EscalationGroupService) ProcessGroupEscalations(ctx context.Context) er
 			continue
 		}
 
+		// Re-fetch recipients with Locations/Classifications preloaded so each
+		// user's own assignment scope can filter their personalized incident list.
+		recipientIDs := make([]uuid.UUID, 0, len(recipients))
+		for _, u := range recipients {
+			recipientIDs = append(recipientIDs, u.ID)
+		}
+		recipients, err = s.userRepo.FindByIDsWithAssignments(ctx, recipientIDs)
+		if err != nil {
+			log.Printf("[EscalationGroupService] FindByIDsWithAssignments error for group '%s': %v", group.Name, err)
+			continue
+		}
+
 		// Collect classification IDs to query (prefer many2many list, fall back to legacy single)
 		var classificationIDs []uuid.UUID
 		for _, c := range group.Classifications {
@@ -312,27 +324,29 @@ func (s *EscalationGroupService) ProcessGroupEscalations(ctx context.Context) er
 		}
 
 		// Fetch open SLA-breached incidents for all of the group's classifications.
-		var incidents []models.Incident
+		// This is the group-level candidate pool; each recipient's own Location +
+		// Classification assignments narrow it further below.
+		var groupIncidents []models.Incident
 		for _, classID := range classificationIDs {
 			batch, err := s.incidentRepo.GetBreachedByFilter(ctx, uuid.UUID{}, classID)
 			if err != nil {
 				log.Printf("[EscalationGroupService] GetBreachedByFilter error for group '%s', classification %s: %v", group.Name, classID, err)
 				continue
 			}
-			incidents = append(incidents, batch...)
+			groupIncidents = append(groupIncidents, batch...)
 		}
 		// Deduplicate by incident ID
 		seenIncidents := make(map[uuid.UUID]struct{})
-		deduped := incidents[:0]
-		for _, inc := range incidents {
+		deduped := groupIncidents[:0]
+		for _, inc := range groupIncidents {
 			if _, ok := seenIncidents[inc.ID]; !ok {
 				seenIncidents[inc.ID] = struct{}{}
 				deduped = append(deduped, inc)
 			}
 		}
-		incidents = deduped
+		groupIncidents = deduped
 
-		if len(incidents) == 0 {
+		if len(groupIncidents) == 0 {
 			log.Printf("[EscalationGroupService] Group '%s' — no breached incidents for classifications, skipping.", group.Name)
 			continue
 		}
@@ -349,16 +363,54 @@ func (s *EscalationGroupService) ProcessGroupEscalations(ctx context.Context) er
 			classificationName = group.Classification.Name
 		}
 
-		log.Printf("[EscalationGroupService] Group '%s' — %d breached incident(s), notifying %d recipient(s) via %s.",
-			group.Name, len(incidents), len(recipients), group.Channel)
+		log.Printf("[EscalationGroupService] Group '%s' — %d breached incident(s) in scope, personalizing for %d recipient(s) via %s.",
+			group.Name, len(groupIncidents), len(recipients), group.Channel)
 
 		slaPageURL := fmt.Sprintf("%s/incidents?sla_breached=true", s.frontendURL)
 
-		// CSV report built once and shared across every recipient in this group
-		csvData := buildGroupCSVReport(incidents, classificationName)
-
 		for _, user := range recipients {
-			s.sendGroupNotification(ctx, group, user, classificationName, slaPageURL, csvData, incidents)
+			var userIncidents []models.Incident
+
+			if user.IsSuperAdmin {
+				// Super admins are unrestricted — they see every breached incident
+				// in the group regardless of their own location/classification assignment.
+				userIncidents = groupIncidents
+			} else if len(user.Locations) == 0 || len(user.Classifications) == 0 {
+				// A non-superadmin recipient with no Location or no Classification
+				// assigned is not scoped to anything — send nothing rather than guessing.
+				log.Printf("[EscalationGroupService] Group '%s' — skipping user %s: no location and/or classification assignment.", group.Name, user.Email)
+				continue
+			} else {
+				userLocationIDs := make(map[uuid.UUID]struct{}, len(user.Locations))
+				for _, loc := range user.Locations {
+					userLocationIDs[loc.ID] = struct{}{}
+				}
+				userClassificationIDs := make(map[uuid.UUID]struct{}, len(user.Classifications))
+				for _, c := range user.Classifications {
+					userClassificationIDs[c.ID] = struct{}{}
+				}
+
+				for _, inc := range groupIncidents {
+					if inc.LocationID == nil || inc.ClassificationID == nil {
+						continue
+					}
+					if _, ok := userLocationIDs[*inc.LocationID]; !ok {
+						continue
+					}
+					if _, ok := userClassificationIDs[*inc.ClassificationID]; !ok {
+						continue
+					}
+					userIncidents = append(userIncidents, inc)
+				}
+			}
+
+			if len(userIncidents) == 0 {
+				log.Printf("[EscalationGroupService] Group '%s' — skipping user %s: no breached incidents match their location+classification scope.", group.Name, user.Email)
+				continue
+			}
+
+			csvData := buildGroupCSVReport(userIncidents, classificationName)
+			s.sendGroupNotification(ctx, group, user, classificationName, slaPageURL, csvData, userIncidents)
 		}
 
 		// Stamp last_notified_at so this window is not fired again
