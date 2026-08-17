@@ -1270,6 +1270,30 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		})
 	}
 
+	if len(req.ReporterEmail) > 0 {
+		incident.ReporterEmail = req.ReporterEmail
+		changes = append(changes, models.IncidentFieldChange{
+			FieldName:  "reporter_email",
+			FieldLabel: "Reporter Email",
+		})
+	}
+
+	if len(req.ReporterPhone) > 0 {
+		incident.ReporterPhone = req.ReporterPhone
+		changes = append(changes, models.IncidentFieldChange{
+			FieldName:  "reporter_phone",
+			FieldLabel: "Reporter Phone",
+		})
+	}
+
+	if len(req.ReporterName) > 0 {
+		incident.ReporterName = req.ReporterName
+		changes = append(changes, models.IncidentFieldChange{
+			FieldName:  "reporter_name",
+			FieldLabel: "Reporter Name",
+		})
+	}
+
 	// Parse optional UUIDs
 	if req.ClassificationID != nil {
 		oldName := ""
@@ -1533,9 +1557,16 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	} else if req.LocationID != nil && *req.LocationID == "" {
 		updates["location_id"] = nil
 	}
-
-	log.Println("req", req.Latitude, req.Longitude)
-	log.Println(req)
+	// Newly added Reporter Phone,Reporter Email, Reporter Name
+	if req.ReporterEmail != "" {
+		updates["reporter_email"] = incident.ReporterEmail
+	}
+	if req.ReporterPhone != "" {
+		updates["reporter_phone"] = incident.ReporterPhone
+	}
+	if req.ReporterName != "" {
+		updates["reporter_name"] = incident.ReporterName
+	}
 
 	if req.Latitude != nil {
 		updates["latitude"] = *req.Latitude

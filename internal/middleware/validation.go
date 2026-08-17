@@ -23,6 +23,7 @@ func ValidationMiddleware() fiber.Handler {
 
 		// Create a new context with validator and translator
 		ctx := context.WithValue(c.UserContext(), constants.ContextKeys.ACCEPT_LANGUAGE, lang)
+		c.Locals(constants.ContextKeys.ACCEPT_LANGUAGE, lang)
 
 		// Store the updated context back in Fiber
 		c.SetUserContext(ctx)

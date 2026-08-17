@@ -255,7 +255,7 @@ const stateCodeSubquery = `current_state_id IN (
 func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *gorm.DB, filter *models.IncidentFilter) *gorm.DB {
 	// Apply filters
 	if len(filter.WorkflowID) != 0 {
-		query = query.Where("workflow_id IN ?", filter.WorkflowID)
+		query = query.Where("incidents.workflow_id IN ?", filter.WorkflowID)
 	}
 	if len(filter.CurrentStateID) != 0 {
 		query = query.Where("current_state_id IN ?", filter.CurrentStateID)
@@ -277,7 +277,7 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 	if len(filter.AssigneeID) != 0 {
 		if len(filter.AssigneeID) == 1 {
 			// Check both primary assignee and multiple assignees
-			query = query.Where("assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", filter.AssigneeID[0], filter.AssigneeID[0])
+			query = query.Where("incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", filter.AssigneeID[0], filter.AssigneeID[0])
 		} else {
 			// Multiple assignees
 			query = query.Where("assignee_id IN ? ", filter.AssigneeID)
@@ -298,13 +298,13 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 		if len(filter.UserRoleIDs) > 0 {
 			// Expand to include incidents in states where the user's role has viewable access
 			query = query.Where(
-				`reporter_id = ? OR assignee_id = ?
-				OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)
-				OR current_state_id IN (SELECT workflow_state_id FROM state_viewable_roles WHERE role_id IN ?)`,
+				`incidents.reporter_id = ? OR incidents.assignee_id = ?
+				OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)
+				OR incidents.current_state_id IN (SELECT workflow_state_id FROM state_viewable_roles WHERE role_id IN ?)`,
 				filter.MyRecord, filter.MyRecord, filter.MyRecord, filter.UserRoleIDs,
 			)
 		} else {
-			query = query.Where("reporter_id = ? OR assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", filter.MyRecord, filter.MyRecord, filter.MyRecord)
+			query = query.Where("incidents.reporter_id = ? OR incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", filter.MyRecord, filter.MyRecord, filter.MyRecord)
 		}
 	}
 
@@ -361,14 +361,14 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 		}
 	}
 	if filter.StartDate != nil {
-		query = query.Where("created_at >= ?", *filter.StartDate)
+		query = query.Where("incidents.created_at >= ?", *filter.StartDate)
 	}
 	if filter.EndDate != nil {
-		query = query.Where("created_at <= ?", *filter.EndDate)
+		query = query.Where("incidents.created_at <= ?", *filter.EndDate)
 	}
 	if filter.Search != "" {
 		searchPattern := "%" + filter.Search + "%"
-		query = query.Where("incident_number ILIKE ? OR title ILIKE ? OR description ILIKE ?", searchPattern, searchPattern, searchPattern)
+		query = query.Where("incidents.incident_number ILIKE ? OR incidents.title ILIKE ? OR incidents.description ILIKE ?", searchPattern, searchPattern, searchPattern)
 	}
 	if filter.TaskID != "" {
 		query = query.Where("NULLIF(custom_fields, '')::jsonb -> 'lookup:TASK ID' ->> 'value' ILIKE ?", "%"+filter.TaskID+"%")
@@ -1445,6 +1445,7 @@ func (r *incidentRepository) GetBreachedByFilter(ctx context.Context, locationID
 
 	query := r.db.WithContext(ctx).
 		Where("sla_breached = ?", true).
+		Where("record_type = ?", "incident").
 		Where("current_state_id NOT IN (SELECT id FROM workflow_states WHERE state_type = 'terminal')")
 
 	// Only filter by location if a non-zero UUID is provided

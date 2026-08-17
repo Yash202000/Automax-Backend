@@ -392,14 +392,40 @@ func (c *httpDocumentaClient) UploadFile(ctx context.Context, folderID, fileName
 		return "", fmt.Errorf("documenta: upload request: %w", err)
 	}
 
+	// MyDocs' real /files/upload response does NOT match this endpoint's own
+	// documented example ({"data":{"uuid":"..."}}). Verified live against
+	// mydocs.axionic.io, it returns one of two different shapes depending on
+	// whether a same-named file already exists in the target folder:
+	//   - brand-new file:  {"data":{"file":{"uuid":"...", ...}, "ocr_status":...}}
+	//   - same name exists: {"data":{"action":"versioned","version":{"uuid":"<version id>","nodeUuid":"<stable file id>",...}}}
+	// nodeUuid is the correct stable file reference in the versioned case —
+	// version.uuid identifies that specific version, not the file itself, and
+	// would silently break DownloadFile/DeleteFile/GetFileInfo (which expect
+	// a file/node UUID) on the very next upload of the same filename.
 	type uploadResp struct {
-		UUID string `json:"uuid"`
+		UUID    string `json:"uuid"`
+		File    *struct {
+			UUID string `json:"uuid"`
+		} `json:"file"`
+		Version *struct {
+			UUID     string `json:"uuid"`
+			NodeUUID string `json:"nodeUuid"`
+		} `json:"version"`
 	}
 	result, parseErr := parseResponse[uploadResp](resp)
 	if parseErr != nil {
 		return "", parseErr
 	}
-	return result.UUID, nil
+	switch {
+	case result.File != nil && result.File.UUID != "":
+		return result.File.UUID, nil
+	case result.Version != nil && result.Version.NodeUUID != "":
+		return result.Version.NodeUUID, nil
+	case result.UUID != "":
+		return result.UUID, nil
+	default:
+		return "", fmt.Errorf("documenta: upload response contained no recognizable file UUID")
+	}
 }
 
 func (c *httpDocumentaClient) GetPreviewURL(ctx context.Context, fileID string) (string, error) {

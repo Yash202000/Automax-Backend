@@ -56,10 +56,12 @@ func TestNormalizeOutcome(t *testing.T) {
 		"answered":  "completed",
 		"completed": "completed",
 		"missed":    "missed",
-		"abandoned": "missed",
-		"failed":    "missed",
-		"":          "missed",
-		"weird":     "missed",
+		"abandoned": "missed", // inbound queue call nobody took; UI has no "abandoned" style
+		// An agent's own dial that was never answered stays distinct from "missed",
+		// which would render an OUTGOING failure as an incoming missed call.
+		"failed": "failed",
+		"":       "missed",
+		"weird":  "missed",
 	}
 	for in, want := range cases {
 		if got := normalizeOutcome(in); got != want {

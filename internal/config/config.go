@@ -25,6 +25,7 @@ type Config struct {
 	ReadyToClose               ReadyToCloseConfig
 	SmsFeedback                SmsFeedbackConfig
 	Documenta                  DocumentaConfig
+	KpiDocumenta               DocumentaConfig
 	AIQuality                  AIQualityConfig
 	AutoAssign                 AutoAssignConfig
 	GoalManagement             GoalManagementConfig
@@ -33,6 +34,7 @@ type Config struct {
 	FinalCloseWhatsAppFeedback FinalCloseWhatsAppFeedbackConfig
 	Cintrix                    CintrixConfig
 	PBX                        PBXConfig
+	SyncDeptAttributesToUser   bool // env: SYNC_DEPT_ATTRIBUTES_TO_USER — when true, assigning a department to a user auto-appends the department's locations/classifications to that user. Default: false.
 }
 
 // PBXConfig holds settings for the external PBX used by the extension-assignment
@@ -290,6 +292,18 @@ func Load() *Config {
 			WorkspaceName: getEnv("DOCUMENTA_WORKSPACE_NAME", "automax"),
 			Enabled:       getEnvAsBool("DOCUMENTA_ENABLED", false),
 		},
+		// KpiDocumenta is a SEPARATE OAuth client/config from Documenta above —
+		// KPI evidence uploads intentionally use their own Documenta client
+		// (own credentials, own workspace) rather than sharing Goal
+		// Management's, per explicit product decision. Defaults to disabled
+		// (stub client, see cmd/server/main.go) until real credentials exist.
+		KpiDocumenta: DocumentaConfig{
+			BaseURL:       getEnv("KPI_DOCUMENTA_BASE_URL", "https://mydocs.axionic.io"),
+			ClientID:      getEnv("KPI_DOCUMENTA_CLIENT_ID", ""),
+			ClientSecret:  getEnv("KPI_DOCUMENTA_CLIENT_SECRET", ""),
+			WorkspaceName: getEnv("KPI_DOCUMENTA_WORKSPACE_NAME", "automax"),
+			Enabled:       getEnvAsBool("KPI_DOCUMENTA_ENABLED", false),
+		},
 		ReadyToClose: ReadyToCloseConfig{
 			DefaultDurationOptions:     getEnvAsStringSlice("READY_TO_CLOSE_DURATION_OPTIONS", []string{"1 Day", "2 Days", "1 Week", "2 Weeks", "1 Month", "3 Months"}),
 			PreExpiryNotificationHours: getEnvAsInt("READY_TO_CLOSE_PRE_EXPIRY_HOURS", 24),
@@ -337,6 +351,7 @@ func Load() *Config {
 			BaseURL:            getEnv("PBX_BASE_URL", "https://zkff.automaxsw.com/create_user.php"),
 			InsecureSkipVerify: getEnvAsBool("PBX_INSECURE_SKIP_VERIFY", false),
 		},
+		SyncDeptAttributesToUser: getEnvAsBool("SYNC_DEPT_ATTRIBUTES_TO_USER", false),
 	}
 }
 

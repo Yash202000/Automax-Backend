@@ -404,6 +404,9 @@ type IncidentUpdateRequest struct {
 	CustomLookupFields map[string]interface{} `json:"custom_lookup_fields"`
 	Comment            string                 `json:"comment"` // optional comment attached to the update
 	Version            int                    `json:"version" validate:"required,min=1"`
+	ReporterEmail      string                 `json:"reporter_email" validate:"omitempty,email"`
+	ReporterPhone      string                 `json:"reporter_phone" validate:"omitempty,max=20"`
+	ReporterName       string                 `json:"reporter_name" validate:"omitempty,max=200"`
 	// IvrLinkToken is the raw signed token from the SMS URL. When present, the update is
 	// attributed to the citizen's IVR SMS link submission (exact link lookup by token hash).
 	IvrLinkToken string `json:"ivr_link_token"`

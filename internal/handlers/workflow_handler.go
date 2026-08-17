@@ -964,6 +964,7 @@ func (h *WorkflowHandler) CreateTransition(c *fiber.Ctx) error {
 			"assignment_role_ids":    assignmentRoleIDs,
 			"auto_match_user":        transition.AutoMatchUser,
 			"manual_select_user":     transition.ManualSelectUser,
+			"view_assigne_user_list": transition.ViewAssigneUserList,
 		}
 
 		_ = h.actionLogService.LogAction(ctx, &services.LogActionParams{
@@ -1067,6 +1068,7 @@ func (h *WorkflowHandler) UpdateTransition(c *fiber.Ctx) error {
 			"assignment_role_ids":    oldAssignmentRoleIDs,
 			"auto_match_user":        oldTransition.AutoMatchUser,
 			"manual_select_user":     oldTransition.ManualSelectUser,
+			"view_assigne_user_list": oldTransition.ViewAssigneUserList,
 		}
 		newValue := map[string]interface{}{
 			"name":                   transition.Name,
@@ -1083,6 +1085,7 @@ func (h *WorkflowHandler) UpdateTransition(c *fiber.Ctx) error {
 			"assignment_role_ids":    newAssignmentRoleIDs,
 			"auto_match_user":        transition.AutoMatchUser,
 			"manual_select_user":     transition.ManualSelectUser,
+			"view_assigne_user_list": transition.ViewAssigneUserList,
 		}
 
 		// Build detailed change description
@@ -1094,6 +1097,7 @@ func (h *WorkflowHandler) UpdateTransition(c *fiber.Ctx) error {
 			"assign_department_id": "Assign Department", "auto_detect_department": "Auto Detect Dept",
 			"assign_user_id": "Assign User", "assignment_role_ids": "Assignment Roles",
 			"auto_match_user": "Auto Match User", "manual_select_user": "Manual Select User",
+			"view_assigne_user_list": "View Assignee User List",
 		}
 
 		for key, label := range fieldLabels {
@@ -1174,6 +1178,7 @@ func (h *WorkflowHandler) DeleteTransition(c *fiber.Ctx) error {
 			"assignment_role_ids":    assignmentRoleIDs,
 			"auto_match_user":        oldTransition.AutoMatchUser,
 			"manual_select_user":     oldTransition.ManualSelectUser,
+			"view_assigne_user_list": oldTransition.ViewAssigneUserList,
 		}
 
 		_ = h.actionLogService.LogAction(ctx, &services.LogActionParams{

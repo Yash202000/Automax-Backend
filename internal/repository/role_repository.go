@@ -129,7 +129,7 @@ type PermissionRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context) ([]models.Permission, error)
 	ListByModule(ctx context.Context, module string) ([]models.Permission, error)
-	GetModules(ctx context.Context) ([]string, error)
+	GetModules(ctx context.Context, arabic bool) ([]string, error)
 }
 
 type permissionRepository struct {
@@ -178,12 +178,16 @@ func (r *permissionRepository) List(ctx context.Context) ([]models.Permission, e
 
 func (r *permissionRepository) ListByModule(ctx context.Context, module string) ([]models.Permission, error) {
 	var permissions []models.Permission
-	err := r.db.WithContext(ctx).Where("module = ?", module).Order("name").Find(&permissions).Error
+	err := r.db.WithContext(ctx).Where("module = ? OR module_ar = ?", module, module).Order("name").Find(&permissions).Error
 	return permissions, err
 }
 
-func (r *permissionRepository) GetModules(ctx context.Context) ([]string, error) {
+func (r *permissionRepository) GetModules(ctx context.Context, isArabic bool) ([]string, error) {
 	var modules []string
+	if isArabic {
+		err := r.db.WithContext(ctx).Model(&models.Permission{}).Distinct("module_ar").Pluck("module_ar", &modules).Error
+		return modules, err
+	}
 	err := r.db.WithContext(ctx).Model(&models.Permission{}).Distinct("module").Pluck("module", &modules).Error
 	return modules, err
 }

@@ -47,6 +47,9 @@ type UserRepository interface {
 	FindByPhoneWithRelations(ctx context.Context, phone string) (*models.User, error)
 	FindByPhoneForLogin(ctx context.Context, phone string) (*models.User, error)
 	FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.User, error)
+	// FindByIDsWithAssignments returns users by ID with Locations and Classifications preloaded,
+	// for callers that need to filter/route by a user's own location+classification scope.
+	FindByIDsWithAssignments(ctx context.Context, ids []uuid.UUID) ([]models.User, error)
 	FindByRoleAndContext(ctx context.Context, roleIDs []uuid.UUID, classificationID, locationID, departmentID *uuid.UUID) ([]models.User, error)
 	// FindByDepartmentAndRole returns active users belonging to departmentID AND holding roleID.
 	// Either filter can be nil to skip it.
@@ -793,6 +796,20 @@ func (r *userRepository) FindByIDs(ctx context.Context, ids []uuid.UUID) ([]mode
 
 	var users []models.User
 	err := r.db.WithContext(ctx).Where("id IN ?", ids).Find(&users).Error
+	return users, err
+}
+
+func (r *userRepository) FindByIDsWithAssignments(ctx context.Context, ids []uuid.UUID) ([]models.User, error) {
+	if len(ids) == 0 {
+		return []models.User{}, nil
+	}
+
+	var users []models.User
+	err := r.db.WithContext(ctx).
+		Preload("Locations").
+		Preload("Classifications").
+		Where("id IN ?", ids).
+		Find(&users).Error
 	return users, err
 }
 
