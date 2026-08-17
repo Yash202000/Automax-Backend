@@ -369,34 +369,39 @@ func (s *EscalationGroupService) ProcessGroupEscalations(ctx context.Context) er
 		slaPageURL := fmt.Sprintf("%s/incidents?sla_breached=true", s.frontendURL)
 
 		for _, user := range recipients {
-			// A recipient with no Location or no Classification assigned is not
-			// scoped to anything — send nothing rather than guessing.
-			if len(user.Locations) == 0 || len(user.Classifications) == 0 {
+			var userIncidents []models.Incident
+
+			if user.IsSuperAdmin {
+				// Super admins are unrestricted — they see every breached incident
+				// in the group regardless of their own location/classification assignment.
+				userIncidents = groupIncidents
+			} else if len(user.Locations) == 0 || len(user.Classifications) == 0 {
+				// A non-superadmin recipient with no Location or no Classification
+				// assigned is not scoped to anything — send nothing rather than guessing.
 				log.Printf("[EscalationGroupService] Group '%s' — skipping user %s: no location and/or classification assignment.", group.Name, user.Email)
 				continue
-			}
+			} else {
+				userLocationIDs := make(map[uuid.UUID]struct{}, len(user.Locations))
+				for _, loc := range user.Locations {
+					userLocationIDs[loc.ID] = struct{}{}
+				}
+				userClassificationIDs := make(map[uuid.UUID]struct{}, len(user.Classifications))
+				for _, c := range user.Classifications {
+					userClassificationIDs[c.ID] = struct{}{}
+				}
 
-			userLocationIDs := make(map[uuid.UUID]struct{}, len(user.Locations))
-			for _, loc := range user.Locations {
-				userLocationIDs[loc.ID] = struct{}{}
-			}
-			userClassificationIDs := make(map[uuid.UUID]struct{}, len(user.Classifications))
-			for _, c := range user.Classifications {
-				userClassificationIDs[c.ID] = struct{}{}
-			}
-
-			var userIncidents []models.Incident
-			for _, inc := range groupIncidents {
-				if inc.LocationID == nil || inc.ClassificationID == nil {
-					continue
+				for _, inc := range groupIncidents {
+					if inc.LocationID == nil || inc.ClassificationID == nil {
+						continue
+					}
+					if _, ok := userLocationIDs[*inc.LocationID]; !ok {
+						continue
+					}
+					if _, ok := userClassificationIDs[*inc.ClassificationID]; !ok {
+						continue
+					}
+					userIncidents = append(userIncidents, inc)
 				}
-				if _, ok := userLocationIDs[*inc.LocationID]; !ok {
-					continue
-				}
-				if _, ok := userClassificationIDs[*inc.ClassificationID]; !ok {
-					continue
-				}
-				userIncidents = append(userIncidents, inc)
 			}
 
 			if len(userIncidents) == 0 {
