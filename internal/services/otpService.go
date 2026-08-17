@@ -110,14 +110,34 @@ type OTPData struct {
 // [Citizen Auto-Register] Added citizenName parameter — stored in Redis alongside OTP
 // so it can be used to auto-create the citizen user upon successful OTP verification.
 // Pass empty string for non-citizen flows (e.g. authenticated OTP sends).
-func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode string, sentBy *uuid.UUID, citizenName ...string) (string, error) {
+//
+// userType is "citizen" or "employee":
+//   - "citizen" or blank → OTP_DATA_EXPIRATION_TIME (existing behavior, unchanged)
+//   - "employee"         → LOGIN_OTP_EXPIRY_SECONDS (default 60s)
+//
+// Super Admins skip OTP entirely regardless of userType: bypassResp is non-nil and
+// sessionID is empty in that case, since tokens are issued immediately with no code sent.
+func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode string, userType string, sentBy *uuid.UUID, citizenName ...string) (sessionID string, bypassResp *models.LoginResponse, err error) {
+
+	if user, lookupErr := s.userRepo.FindByMobile(ctx, phone); lookupErr == nil && user != nil && user.IsSuperAdmin {
+		authResp, tokenErr := s.userService.GenerateTokenViaUserID(ctx, user.ID)
+		if tokenErr != nil {
+			return "", nil, fmt.Errorf("failed to generate token: %w", tokenErr)
+		}
+		return "", &models.LoginResponse{
+			Token:        authResp.Token,
+			RefreshToken: authResp.RefreshToken,
+			ExpiresIn:    authResp.ExpiresIn,
+			User:         user,
+		}, nil
+	}
 
 	// - RATE LIMIT COUNTER
 	counterKey := "otp_counter:" + phone
 
 	count, err := s.redis.Incr(ctx, counterKey).Result()
 	if err != nil {
-		return "", fmt.Errorf("failed to increment otp counter: %w", err)
+		return "", nil, fmt.Errorf("failed to increment otp counter: %w", err)
 	}
 
 	// Load env values
@@ -141,29 +161,42 @@ func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode strin
 
 	// Check max send attempts
 	if count > int64(maxAttempts) {
-		return "", fmt.Errorf("max otp send attempts reached")
+		return "", nil, fmt.Errorf("max otp send attempts reached")
 	}
 
 	//GENERATE OTP
 	otp, err := s.GenerateOTP()
 	fmt.Println("Generated OTP:", otp)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate otp: %w", err)
+		return "", nil, fmt.Errorf("failed to generate otp: %w", err)
 	}
 
-	sessionID := uuid.New()
-	key := "otp:" + phone + "--" + sessionID.String()
+	otpSessionID := uuid.New()
+	key := "otp:" + phone + "--" + otpSessionID.String()
 
-	otpExpStr := os.Getenv("OTP_DATA_EXPIRATION_TIME")
-	otpExp, _ := strconv.Atoi(otpExpStr)
-	if otpExp == 0 {
-		otpExp = 15
+	// Expiry: "employee" gets a short, .env-configurable window (LOGIN_OTP_EXPIRY_SECONDS,
+	// default 60s); "citizen" or blank keeps the existing default (OTP_DATA_EXPIRATION_TIME).
+	var ttl time.Duration
+	if userType == "employee" {
+		loginOtpExpStr := os.Getenv("LOGIN_OTP_EXPIRY_SECONDS")
+		loginOtpExp, _ := strconv.Atoi(loginOtpExpStr)
+		if loginOtpExp == 0 {
+			loginOtpExp = 60
+		}
+		ttl = time.Duration(loginOtpExp) * time.Second
+	} else {
+		otpExpStr := os.Getenv("OTP_DATA_EXPIRATION_TIME")
+		otpExpMin, _ := strconv.Atoi(otpExpStr)
+		if otpExpMin == 0 {
+			otpExpMin = 15
+		}
+		ttl = time.Duration(otpExpMin) * time.Minute
 	}
 
-	err = s.sendOTPNotification(ctx, senderMode, phone, otp, &sessionID)
+	err = s.sendOTPNotification(ctx, senderMode, phone, otp, &otpSessionID)
 	if err != nil {
 		s.redis.Del(ctx, key)
-		return "", fmt.Errorf("failed to send otp: %w", err)
+		return "", nil, fmt.Errorf("failed to send otp: %w", err)
 	}
 
 	// [Citizen Auto-Register] Store citizen name in OTP data for auto-registration on verify
@@ -177,7 +210,7 @@ func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode strin
 		Hash:       HashOTP(otp),
 		SenderMode: senderMode,
 		Attempts:   0,
-		SessionID:  sessionID.String(),
+		SessionID:  otpSessionID.String(),
 		Status:     "sent",
 		SentAt:     time.Now(),
 		SentBy:     sentBy,
@@ -191,14 +224,20 @@ func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode strin
 		ctx,
 		key,
 		jsonData,
-		time.Duration(otpExp)*time.Minute,
+		ttl,
 	).Err()
 
 	if err != nil {
-		return "", fmt.Errorf("failed to store otp: %w", err)
+		return "", nil, fmt.Errorf("failed to store otp: %w", err)
 	}
 
-	return sessionID.String(), nil
+	// Tombstone: outlives the main OTP key so VerifyOTP can tell "this session existed
+	// and timed out" apart from "this session_id was never valid" once the main key
+	// (and thus data.Hash/data.Attempts) is gone. Value is unused — only presence matters.
+	tombstoneKey := "otp_seen:" + phone + "--" + otpSessionID.String()
+	s.redis.Set(ctx, tombstoneKey, "1", ttl+10*time.Minute)
+
+	return otpSessionID.String(), nil, nil
 }
 
 func (s *OTPService) sendOTPNotification(ctx context.Context, channel, phone, otp string, sessionID *uuid.UUID) error {
@@ -218,10 +257,17 @@ func (s *OTPService) sendOTPNotification(ctx context.Context, channel, phone, ot
 func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID string, inputOTP string) (*models.LoginResponse, error) {
 
 	key := "otp:" + phone + "--" + sessionID
+	tombstoneKey := "otp_seen:" + phone + "--" + sessionID
 
 	val, err := s.redis.Get(ctx, key).Result()
 	if err != nil {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "otp_expired_invalid_session"))
+		// Main key is gone — check the tombstone to tell "this OTP existed and timed
+		// out" (clear "expired" message) apart from "this session_id was never valid"
+		// (clear "invalid session" message), instead of one combined message for both.
+		if seen, _ := s.redis.Exists(ctx, tombstoneKey).Result(); seen == 1 {
+			return nil, fmt.Errorf("%s", i18n.T(ctx, "otp_expired"))
+		}
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "invalid_otp_session"))
 	}
 
 	var data models.OTPData
@@ -237,7 +283,7 @@ func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID stri
 	}
 
 	if data.Attempts >= maxVerify {
-		s.redis.Del(ctx, key)
+		s.redis.Del(ctx, key, tombstoneKey)
 		return nil, fmt.Errorf("%s", i18n.T(ctx, "max_verify_attempts_exceeded"))
 	}
 
@@ -285,7 +331,7 @@ func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID stri
 		return nil, fmt.Errorf("failed to update otp status: %w", err)
 	}
 	//SUCCESS  then DELETE OTP FROM REDIS
-	s.redis.Del(ctx, key)
+	s.redis.Del(ctx, key, tombstoneKey)
 
 	return resp, nil
 }

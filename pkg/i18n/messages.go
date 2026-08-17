@@ -777,6 +777,8 @@ var messages = map[string][2]string{
 	"otp_service_unavailable":           {"OTP service not available", "خدمة رمز التحقق غير متاحة"},
 	"current_password_incorrect":        {"Current password is incorrect", "كلمة المرور الحالية غير صحيحة"},
 	"otp_expired_invalid_session":       {"OTP expired or invalid session", "انتهت صلاحية رمز التحقق أو الجلسة غير صالحة"},
+	"otp_expired":                       {"Your OTP has expired. Please request a new one.", "انتهت صلاحية رمز التحقق. يرجى طلب رمز تحقق جديد."},
+	"invalid_otp_session":               {"Invalid OTP session. Please request a new OTP.", "جلسة رمز التحقق غير صالحة. يرجى طلب رمز تحقق جديد."},
 	"max_verify_attempts_exceeded":      {"Maximum verification attempts exceeded", "تم تجاوز الحد الأقصى لمحاولات التحقق"},
 	"invalid_stored_otp":                {"Invalid stored OTP data", "بيانات رمز التحقق المخزنة غير صالحة"},
 	"phone_must_include_country_code":   {"Phone must include country code", "يجب أن يتضمن رقم الجوال رمز الدولة"},

@@ -31,6 +31,7 @@ func (h *OTPHandler) SendOTP(c *fiber.Ctx) error {
 		Phone   string `json:"phone"   validate:"required,e164|numeric,max=20"`
 		Name    string `json:"name"    validate:"omitempty,min=3,max=100"`
 		Channel string `json:"channel" validate:"required,oneof=sms whatsapp voice email wa"`
+		Type    string `json:"type"    validate:"omitempty,oneof=citizen employee"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -58,10 +59,11 @@ func (h *OTPHandler) SendOTP(c *fiber.Ctx) error {
 
 	// [Citizen Auto-Register] Pass citizen name to SendOTP so it's stored in Redis
 	// and available for auto-creating the user record during OTP verification.
-	sessionID, err := h.otpService.SendOTP(
+	sessionID, _, err := h.otpService.SendOTP(
 		c.UserContext(),
 		req.Phone,
 		req.Channel,
+		req.Type,
 		sentBy,
 		req.Name,
 	)
