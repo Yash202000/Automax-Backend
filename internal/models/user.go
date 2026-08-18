@@ -412,7 +412,7 @@ type UserLoginResponse struct {
 // AuthLoginResponse is the response for POST /auth/login.
 type AuthLoginResponse struct {
 	User          UserLoginResponse `json:"user"`
-	Token         string            `json:"token"`
+	Token         string            `json:"token,omitempty"`
 	RefreshToken  string            `json:"refresh_token,omitempty"`
 	ExpiresIn     int64             `json:"expires_in,omitempty"`
 	ValidationURL string            `json:"validation_url,omitempty"` // 3rd party validation URL for SSO flow
