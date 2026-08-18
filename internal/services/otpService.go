@@ -114,23 +114,7 @@ type OTPData struct {
 // userType is "citizen" or "employee":
 //   - "citizen" or blank → OTP_DATA_EXPIRATION_TIME (existing behavior, unchanged)
 //   - "employee"         → LOGIN_OTP_EXPIRY_SECONDS (default 60s)
-//
-// Super Admins skip OTP entirely regardless of userType: bypassResp is non-nil and
-// sessionID is empty in that case, since tokens are issued immediately with no code sent.
 func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode string, userType string, sentBy *uuid.UUID, citizenName ...string) (sessionID string, bypassResp *models.LoginResponse, err error) {
-
-	if user, lookupErr := s.userRepo.FindByMobile(ctx, phone); lookupErr == nil && user != nil && user.IsSuperAdmin {
-		authResp, tokenErr := s.userService.GenerateTokenViaUserID(ctx, user.ID)
-		if tokenErr != nil {
-			return "", nil, fmt.Errorf("failed to generate token: %w", tokenErr)
-		}
-		return "", &models.LoginResponse{
-			Token:        authResp.Token,
-			RefreshToken: authResp.RefreshToken,
-			ExpiresIn:    authResp.ExpiresIn,
-			User:         user,
-		}, nil
-	}
 
 	// - RATE LIMIT COUNTER
 	counterKey := "otp_counter:" + phone

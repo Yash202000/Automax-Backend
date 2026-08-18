@@ -704,8 +704,10 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 
 	totpEnabled := false
 	if s.settingsRepo != nil {
-		if settings, sErr := s.settingsRepo.Get(ctx); sErr == nil && settings != nil {
+		if settings, sErr := s.settingsRepo.GetOrCreate(ctx); sErr == nil && settings != nil {
 			totpEnabled = settings.TotpEnabled
+		} else if sErr != nil {
+			log.Println("Login: failed to load settings for totp_enabled check:", sErr)
 		}
 	}
 
