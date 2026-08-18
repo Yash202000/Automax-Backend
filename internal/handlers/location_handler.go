@@ -3,11 +3,13 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
@@ -35,7 +37,20 @@ func (h *LocationHandler) Create(c *fiber.Ctx) error {
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	req.NameAr = strings.TrimSpace(req.NameAr)
-	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+	req.Code = strings.TrimSpace(req.Code)
+
+	// EPM940 auto-generates the Location Code (loc-######) and ignores any
+	// supplied value; other clients must supply the code in the payload.
+	isEPM940 := strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940)
+
+	validationErrors := validation.ValidateStruct(c.UserContext(), &req)
+	if !isEPM940 && req.Code == "" {
+		if validationErrors == nil {
+			validationErrors = map[string]string{}
+		}
+		validationErrors["code"] = i18n.T(c.UserContext(), "location_code_required")
+	}
+	if len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
 			"errors":  validationErrors,
@@ -60,7 +75,6 @@ func (h *LocationHandler) Create(c *fiber.Ctx) error {
 	location := &models.Location{
 		Name:          req.Name,
 		NameAr:        req.NameAr,
-		Code:          req.Code,
 		Description:   req.Description,
 		DescriptionAr: req.DescriptionAr,
 		Type:          req.Type,
@@ -71,6 +85,12 @@ func (h *LocationHandler) Create(c *fiber.Ctx) error {
 		SortOrder:     req.SortOrder,
 		Source:        source,
 		IsActive:      true,
+	}
+
+	// Non-EPM940: use the payload code verbatim. EPM940: leave empty so the
+	// repository generates the next loc-###### code.
+	if !isEPM940 {
+		location.Code = req.Code
 	}
 
 	if err := h.repo.Create(c.UserContext(), location); err != nil {
@@ -112,11 +132,16 @@ func (h *LocationHandler) Update(c *fiber.Ctx) error {
 
 	req.Name = strings.TrimSpace(req.Name)
 	req.NameAr = strings.TrimSpace(req.NameAr)
+	req.Code = strings.TrimSpace(req.Code)
 
 	location, err := h.repo.FindByID(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "location_not_found"))
 	}
+
+	// EPM940's code is system-generated and immutable; other clients may edit it,
+	// subject to a uniqueness check.
+	isEPM940 := strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940)
 
 	checkName := req.Name
 	if checkName == "" {
@@ -145,7 +170,10 @@ func (h *LocationHandler) Update(c *fiber.Ctx) error {
 	if req.NameAr != "" {
 		location.NameAr = req.NameAr
 	}
-	if req.Code != "" {
+	if !isEPM940 && req.Code != "" && req.Code != location.Code {
+		if existing, err := h.repo.FindByCode(c.UserContext(), req.Code); err == nil && existing != nil && existing.ID != id {
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "location_code_exists"))
+		}
 		location.Code = req.Code
 	}
 	if req.Description != "" {
@@ -406,6 +434,8 @@ func (h *LocationHandler) Import(c *fiber.Ctx) error {
 	skipped := 0
 	errors := []string{}
 
+	isEPM940 := strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940)
+
 	// Import all locations in level order
 	for _, data := range importData {
 		var newParentID *uuid.UUID
@@ -426,7 +456,6 @@ func (h *LocationHandler) Import(c *fiber.Ctx) error {
 		location := &models.Location{
 			ID:          newID,
 			Name:        data.Name,
-			Code:        data.Code,
 			Description: data.Description,
 			Type:        data.Type,
 			ParentID:    newParentID,
@@ -435,6 +464,9 @@ func (h *LocationHandler) Import(c *fiber.Ctx) error {
 			Longitude:   data.Longitude,
 			IsActive:    data.IsActive,
 			SortOrder:   data.SortOrder,
+		}
+		if !isEPM940 {
+			location.Code = strings.TrimSpace(data.Code)
 		}
 
 		if err := h.repo.Create(c.UserContext(), location); err != nil {

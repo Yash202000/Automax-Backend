@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 
 	"github.com/automax/backend/internal/models"
@@ -66,7 +67,20 @@ func (h *RoleHandler) CreateRole(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 	req.Name = strings.TrimSpace(req.Name)
-	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+	req.Code = strings.TrimSpace(req.Code)
+
+	// EPM940 auto-generates the Role Code (role-######) and ignores any supplied
+	// value; other clients must supply the code in the payload.
+	isEPM940 := strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940)
+
+	validationErrors := validation.ValidateStruct(c.UserContext(), &req)
+	if !isEPM940 && req.Code == "" {
+		if validationErrors == nil {
+			validationErrors = map[string]string{}
+		}
+		validationErrors["code"] = i18n.T(c.UserContext(), "role_code_required")
+	}
+	if len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
 			"errors":  validationErrors,
@@ -76,20 +90,30 @@ func (h *RoleHandler) CreateRole(c *fiber.Ctx) error {
 	if existing, _ := h.roleRepo.FindByName(c.UserContext(), req.Name); existing != nil {
 		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "role_already_exists"))
 	}
-	if existing, _ := h.roleRepo.FindByCode(c.UserContext(), req.Code); existing != nil {
-		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "role_already_exists"))
+	if req.Code != "" {
+		if existing, _ := h.roleRepo.FindByCode(c.UserContext(), req.Code); existing != nil {
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "role_already_exists"))
+		}
 	}
 
 	role := &models.Role{
 		Name:        req.Name,
-		Code:        req.Code,
 		Description: req.Description,
 		IsActive:    true,
 		IsSystem:    false,
 	}
 
+	// Non-EPM940: use the payload code verbatim. EPM940: leave empty so the
+	// repository generates the next role-###### code.
+	if !isEPM940 {
+		role.Code = req.Code
+	}
+
 	if err := h.roleRepo.Create(c.UserContext(), role); err != nil {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
+			if strings.Contains(err.Error(), "code") {
+				return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "role_code_exists"))
+			}
 			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "role_already_exists"))
 		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
@@ -505,26 +529,21 @@ func (h *RoleHandler) Import(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_json_format"))
 	}
 
+	isEPM940 := strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940)
+
 	imported := 0
 	skipped := 0
 	var errors []string
-
 	for _, data := range importData {
-		// Check if role with same code already exists
-		existingRole, err := h.roleRepo.FindByCode(c.UserContext(), data.Code)
-		if err == nil && existingRole != nil {
-			skipped++
-			errors = append(errors, data.Name+" - Role with code "+data.Code+" already exists, skipped")
-			continue
-		}
-
 		// Create new role
 		role := &models.Role{
 			Name:        data.Name,
-			Code:        data.Code,
 			Description: data.Description,
 			IsActive:    data.IsActive,
 			IsSystem:    false, // Always set imported roles as non-system
+		}
+		if !isEPM940 {
+			role.Code = strings.TrimSpace(data.Code)
 		}
 
 		if err := h.roleRepo.Create(c.UserContext(), role); err != nil {

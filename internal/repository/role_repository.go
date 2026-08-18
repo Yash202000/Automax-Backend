@@ -2,6 +2,9 @@ package repository
 
 import (
 	"context"
+	"fmt"
+	"strings"
+	"sync"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/google/uuid"
@@ -22,6 +25,17 @@ type RoleRepository interface {
 	GetPermissions(ctx context.Context, roleID uuid.UUID) ([]models.Permission, error)
 }
 
+// roleCodePrefix is the fixed prefix for the auto-generated Role Code (e.g. role-000001).
+const roleCodePrefix = "role-"
+
+// Role Code allocation. Mirrors department's orgCodeSeq: an in-process counter,
+// seeded once from the current DB maximum and incremented under a mutex on every create.
+var (
+	roleCodeMu     sync.Mutex
+	roleCodeSeq    int64
+	roleCodeLoaded bool
+)
+
 type roleRepository struct {
 	db *gorm.DB
 }
@@ -31,7 +45,42 @@ func NewRoleRepository(db *gorm.DB) RoleRepository {
 }
 
 func (r *roleRepository) Create(ctx context.Context, role *models.Role) error {
+	role.Code = strings.ToLower(strings.TrimSpace(role.Code))
+	if role.Code == "" {
+		code, err := r.nextRoleCode(ctx)
+		if err != nil {
+			return err
+		}
+		role.Code = code
+	}
 	return r.db.WithContext(ctx).Create(role).Error
+}
+
+// nextRoleCode returns the next unique Role Code (e.g. role-000001). See
+// departmentRepository.nextOrgCode for the seeding/locking rationale.
+func (r *roleRepository) nextRoleCode(ctx context.Context) (string, error) {
+	roleCodeMu.Lock()
+	defer roleCodeMu.Unlock()
+
+	if !roleCodeLoaded {
+		var maxCode *string
+		if err := r.db.WithContext(ctx).Unscoped().Model(&models.Role{}).
+			Select("MAX(code)").
+			Where("code LIKE ?", roleCodePrefix+"%").
+			Scan(&maxCode).Error; err != nil {
+			return "", err
+		}
+		if maxCode != nil && *maxCode != "" {
+			var n int64
+			if _, err := fmt.Sscanf(*maxCode, roleCodePrefix+"%d", &n); err == nil {
+				roleCodeSeq = n
+			}
+		}
+		roleCodeLoaded = true
+	}
+
+	roleCodeSeq++
+	return fmt.Sprintf("%s%06d", roleCodePrefix, roleCodeSeq), nil
 }
 
 func (r *roleRepository) FindByID(ctx context.Context, id uuid.UUID) (*models.Role, error) {
@@ -45,7 +94,7 @@ func (r *roleRepository) FindByID(ctx context.Context, id uuid.UUID) (*models.Ro
 
 func (r *roleRepository) FindByCode(ctx context.Context, code string) (*models.Role, error) {
 	var role models.Role
-	err := r.db.WithContext(ctx).Preload("Permissions").First(&role, "code = ?", code).Error
+	err := r.db.WithContext(ctx).Preload("Permissions").First(&role, "LOWER(code) = LOWER(?)", code).Error
 	if err != nil {
 		return nil, err
 	}
@@ -68,6 +117,7 @@ func (r *roleRepository) FindByName(ctx context.Context, name string) (*models.R
 }
 
 func (r *roleRepository) Update(ctx context.Context, role *models.Role) error {
+	role.Code = strings.ToLower(strings.TrimSpace(role.Code))
 	return r.db.WithContext(ctx).Save(role).Error
 }
 
@@ -155,7 +205,7 @@ func (r *permissionRepository) FindByID(ctx context.Context, id uuid.UUID) (*mod
 
 func (r *permissionRepository) FindByCode(ctx context.Context, code string) (*models.Permission, error) {
 	var permission models.Permission
-	err := r.db.WithContext(ctx).First(&permission, "code = ?", code).Error
+	err := r.db.WithContext(ctx).First(&permission, "LOWER(code) = LOWER(?)", code).Error
 	if err != nil {
 		return nil, err
 	}

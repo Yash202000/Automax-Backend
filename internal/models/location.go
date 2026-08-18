@@ -12,25 +12,25 @@ type Location struct {
 	ID            uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
 	Name          string         `gorm:"not null;size:100" json:"name"`
 	NameAr        string         `gorm:"size:100" json:"name_ar"`
-	Code          string         `gorm:"size:50;index" json:"code"` // Short code like "US", "NY", "NYC-HQ"
+	Code          string         `gorm:"size:50;uniqueIndex" json:"code"` // Short code like "US", "NY", "NYC-HQ"
 	Description   string         `gorm:"size:500" json:"description"`
 	DescriptionAr string         `gorm:"size:500" json:"description_ar"`
-	Type        string         `gorm:"size:50" json:"type"` // country, state, city, building, floor, room
-	ParentID    *uuid.UUID     `gorm:"type:uuid;index" json:"parent_id"`
-	Parent      *Location      `gorm:"foreignKey:ParentID" json:"parent,omitempty"`
-	Children    []Location     `gorm:"foreignKey:ParentID" json:"children,omitempty"`
-	Level       int            `gorm:"default:0" json:"level"`
-	Path        string         `gorm:"size:1000" json:"path"`
-	Address     string         `gorm:"size:500" json:"address"`
-	Latitude    *float64       `gorm:"type:decimal(10,8)" json:"latitude"`
-	Longitude   *float64       `gorm:"type:decimal(11,8)" json:"longitude"`
-	IsActive    bool           `gorm:"default:true" json:"is_active"`
-	SortOrder   int            `gorm:"default:0" json:"sort_order"`
-	Source      string         `gorm:"size:20;default:'master'" json:"source"` // "master" or "map"
-	ExternalID  string         `gorm:"size:100" json:"external_id"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+	Type          string         `gorm:"size:50" json:"type"` // country, state, city, building, floor, room
+	ParentID      *uuid.UUID     `gorm:"type:uuid;index" json:"parent_id"`
+	Parent        *Location      `gorm:"foreignKey:ParentID" json:"parent,omitempty"`
+	Children      []Location     `gorm:"foreignKey:ParentID" json:"children,omitempty"`
+	Level         int            `gorm:"default:0" json:"level"`
+	Path          string         `gorm:"size:1000" json:"path"`
+	Address       string         `gorm:"size:500" json:"address"`
+	Latitude      *float64       `gorm:"type:decimal(10,8)" json:"latitude"`
+	Longitude     *float64       `gorm:"type:decimal(11,8)" json:"longitude"`
+	IsActive      bool           `gorm:"default:true" json:"is_active"`
+	SortOrder     int            `gorm:"default:0" json:"sort_order"`
+	Source        string         `gorm:"size:20;default:'master'" json:"source"` // "master" or "map"
+	ExternalID    string         `gorm:"size:100" json:"external_id"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 func (l *Location) BeforeCreate(tx *gorm.DB) error {
@@ -47,13 +47,13 @@ type LocationCreateRequest struct {
 	Code          string     `json:"code" validate:"max=50"`
 	Description   string     `json:"description" validate:"max=500"`
 	DescriptionAr string     `json:"description_ar" validate:"max=500"`
-	Type        string     `json:"type" validate:"max=50"`
-	ParentID    *uuid.UUID `json:"parent_id"`
-	Address     string     `json:"address" validate:"max=500"`
-	Latitude    *float64   `json:"latitude" validate:"omitempty,min=-90,max=90"`
-	Longitude   *float64   `json:"longitude" validate:"omitempty,min=-180,max=180"`
-	SortOrder   int        `json:"sort_order"`
-	Source    string     `json:"source"`                  // "master" or "map" (reverse geocoding)
+	Type          string     `json:"type" validate:"max=50"`
+	ParentID      *uuid.UUID `json:"parent_id"`
+	Address       string     `json:"address" validate:"max=500"`
+	Latitude      *float64   `json:"latitude" validate:"omitempty,min=-90,max=90"`
+	Longitude     *float64   `json:"longitude" validate:"omitempty,min=-180,max=180"`
+	SortOrder     int        `json:"sort_order"`
+	Source        string     `json:"source"` // "master" or "map" (reverse geocoding)
 }
 
 // LocationUpdateRequest for updating a location
@@ -63,12 +63,12 @@ type LocationUpdateRequest struct {
 	Code          string   `json:"code" validate:"max=50"`
 	Description   string   `json:"description" validate:"max=500"`
 	DescriptionAr string   `json:"description_ar" validate:"max=500"`
-	Type        string   `json:"type" validate:"max=50"`
-	Address     string   `json:"address" validate:"max=500"`
-	Latitude    *float64 `json:"latitude" validate:"omitempty,min=-90,max=90"`
-	Longitude   *float64 `json:"longitude" validate:"omitempty,min=-180,max=180"`
-	IsActive    *bool    `json:"is_active"`
-	SortOrder   *int     `json:"sort_order"`
+	Type          string   `json:"type" validate:"max=50"`
+	Address       string   `json:"address" validate:"max=500"`
+	Latitude      *float64 `json:"latitude" validate:"omitempty,min=-90,max=90"`
+	Longitude     *float64 `json:"longitude" validate:"omitempty,min=-180,max=180"`
+	IsActive      *bool    `json:"is_active"`
+	SortOrder     *int     `json:"sort_order"`
 }
 
 // LocationResponse for API responses
@@ -79,18 +79,18 @@ type LocationResponse struct {
 	Code          string             `json:"code"`
 	Description   string             `json:"description"`
 	DescriptionAr string             `json:"description_ar"`
-	Type        string             `json:"type"`
-	ParentID    *uuid.UUID         `json:"parent_id"`
-	Level       int                `json:"level"`
-	Path        string             `json:"path"`
-	Address     string             `json:"address"`
-	Latitude    *float64           `json:"latitude,omitempty"`
-	Longitude   *float64           `json:"longitude,omitempty"`
-	IsActive    bool               `json:"is_active"`
-	SortOrder   int                `json:"sort_order"`
-	Source      string             `json:"source"`
-	Children    []LocationResponse `json:"children,omitempty"`
-	CreatedAt   time.Time          `json:"created_at"`
+	Type          string             `json:"type"`
+	ParentID      *uuid.UUID         `json:"parent_id"`
+	Level         int                `json:"level"`
+	Path          string             `json:"path"`
+	Address       string             `json:"address"`
+	Latitude      *float64           `json:"latitude,omitempty"`
+	Longitude     *float64           `json:"longitude,omitempty"`
+	IsActive      bool               `json:"is_active"`
+	SortOrder     int                `json:"sort_order"`
+	Source        string             `json:"source"`
+	Children      []LocationResponse `json:"children,omitempty"`
+	CreatedAt     time.Time          `json:"created_at"`
 }
 
 func ToLocationResponse(l *Location) LocationResponse {

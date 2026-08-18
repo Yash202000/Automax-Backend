@@ -26,6 +26,7 @@ type Classification struct {
 	ID            uuid.UUID                   `gorm:"type:uuid;primary_key" json:"id"`
 	Name          string                      `gorm:"not null;size:100" json:"name"`
 	NameAr        string                      `gorm:"size:100" json:"name_ar"`
+	Code          string                      `gorm:"size:50;uniqueIndex" json:"code"`
 	Description   string                      `gorm:"size:500" json:"description"`
 	DescriptionAr string                      `gorm:"size:500" json:"description_ar"`
 	Types         []ClassificationType        `gorm:"foreignKey:ClassificationID" json:"types,omitempty"`
@@ -56,9 +57,9 @@ type ClassificationCriticality struct {
 	// EscalationPolicyID links the escalation policy to fire when this classification+criticality SLA is breached.
 	EscalationPolicyID *uuid.UUID        `gorm:"type:uuid;index" json:"escalation_policy_id,omitempty"`
 	EscalationPolicy   *EscalationPolicy `gorm:"foreignKey:EscalationPolicyID" json:"escalation_policy,omitempty"`
-	CreatedAt         time.Time       `json:"created_at"`
-	UpdatedAt         time.Time       `json:"updated_at"`
-	DeletedAt         gorm.DeletedAt  `gorm:"index" json:"-"`
+	CreatedAt          time.Time         `json:"created_at"`
+	UpdatedAt          time.Time         `json:"updated_at"`
+	DeletedAt          gorm.DeletedAt    `gorm:"index" json:"-"`
 }
 
 func (c *Classification) BeforeCreate(tx *gorm.DB) error {
@@ -81,9 +82,9 @@ type ClassificationCreateRequest struct {
 	NameAr        string     `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
 	Description   string     `json:"description" validate:"max=500"`
 	DescriptionAr string     `json:"description_ar" validate:"max=500"`
-	Types       []string   `json:"types" validate:"omitempty,dive,oneof=incident request complaint query mobile ivr"`
-	ParentID    *uuid.UUID `json:"parent_id"`
-	SortOrder   int        `json:"sort_order"`
+	Types         []string   `json:"types" validate:"omitempty,dive,oneof=incident request complaint query mobile ivr"`
+	ParentID      *uuid.UUID `json:"parent_id"`
+	SortOrder     int        `json:"sort_order"`
 }
 
 // ClassificationUpdateRequest for updating a classification
@@ -92,9 +93,9 @@ type ClassificationUpdateRequest struct {
 	NameAr        string   `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
 	Description   string   `json:"description" validate:"max=500"`
 	DescriptionAr string   `json:"description_ar" validate:"max=500"`
-	Types       []string `json:"types" validate:"omitempty,dive,oneof=incident request complaint query mobile ivr"`
-	IsActive    *bool    `json:"is_active"`
-	SortOrder   *int     `json:"sort_order"`
+	Types         []string `json:"types" validate:"omitempty,dive,oneof=incident request complaint query mobile ivr"`
+	IsActive      *bool    `json:"is_active"`
+	SortOrder     *int     `json:"sort_order"`
 }
 
 // ClassificationResponse for API responses
@@ -102,6 +103,7 @@ type ClassificationResponse struct {
 	ID            uuid.UUID                           `json:"id"`
 	Name          string                              `json:"name"`
 	NameAr        string                              `json:"name_ar"`
+	Code          string                              `json:"code"`
 	Description   string                              `json:"description"`
 	DescriptionAr string                              `json:"description_ar"`
 	Types         []string                            `json:"types"`
@@ -129,6 +131,7 @@ func ToClassificationResponse(c *Classification) ClassificationResponse {
 		ID:            c.ID,
 		Name:          c.Name,
 		NameAr:        c.NameAr,
+		Code:          c.Code,
 		Description:   c.Description,
 		DescriptionAr: c.DescriptionAr,
 		Types:         extractTypeStrings(c.Types),
@@ -164,62 +167,62 @@ type ClassificationWithStats struct {
 	NameAr        string                    `json:"name_ar"`
 	Description   string                    `json:"description"`
 	DescriptionAr string                    `json:"description_ar"`
-	Types       []string                  `json:"types"`
-	ParentID    *uuid.UUID                `json:"parent_id"`
-	Level       int                       `json:"level"`
-	Path        string                    `json:"path"`
-	IsActive    bool                      `json:"is_active"`
-	SortOrder   int                       `json:"sort_order"`
-	Count       int64                     `json:"count"`
-	Children    []ClassificationWithStats `json:"children,omitempty"`
-	CreatedAt   time.Time                 `json:"created_at"`
+	Types         []string                  `json:"types"`
+	ParentID      *uuid.UUID                `json:"parent_id"`
+	Level         int                       `json:"level"`
+	Path          string                    `json:"path"`
+	IsActive      bool                      `json:"is_active"`
+	SortOrder     int                       `json:"sort_order"`
+	Count         int64                     `json:"count"`
+	Children      []ClassificationWithStats `json:"children,omitempty"`
+	CreatedAt     time.Time                 `json:"created_at"`
 }
 
 // ClassificationCriticalityCreateRequest for creating classification criticality settings
 // MaxClosingHours: 5 weeks = 840 hours maximum
 type ClassificationCriticalityCreateRequest struct {
-	CriticalityID        string  `json:"criticality_id" validate:"required,uuid"`
-	MaxClosingHours      int     `json:"max_closing_hours" validate:"required,min=0,max=840"` // Max 35 days
-	MaxClosingMinutes    int     `json:"max_closing_minutes" validate:"required,min=0,max=59"`
-	EscalationPolicyID   *string `json:"escalation_policy_id" validate:"omitempty,uuid"`
+	CriticalityID      string  `json:"criticality_id" validate:"required,uuid"`
+	MaxClosingHours    int     `json:"max_closing_hours" validate:"required,min=0,max=840"` // Max 35 days
+	MaxClosingMinutes  int     `json:"max_closing_minutes" validate:"required,min=0,max=59"`
+	EscalationPolicyID *string `json:"escalation_policy_id" validate:"omitempty,uuid"`
 }
 
 // ClassificationCriticalityUpdateRequest for updating classification criticality settings
 // MaxClosingHours: 5 weeks = 840 hours maximum
 type ClassificationCriticalityUpdateRequest struct {
-	MaxClosingHours      *int    `json:"max_closing_hours" validate:"omitempty,min=0,max=840"`
-	MaxClosingMinutes    *int    `json:"max_closing_minutes" validate:"omitempty,min=0,max=59"`
-	IsActive             *bool   `json:"is_active"`
-	EscalationPolicyID   *string `json:"escalation_policy_id" validate:"omitempty,uuid"`
+	MaxClosingHours    *int    `json:"max_closing_hours" validate:"omitempty,min=0,max=840"`
+	MaxClosingMinutes  *int    `json:"max_closing_minutes" validate:"omitempty,min=0,max=59"`
+	IsActive           *bool   `json:"is_active"`
+	EscalationPolicyID *string `json:"escalation_policy_id" validate:"omitempty,uuid"`
 }
 
 // ClassificationCriticalityResponse for API responses
 type ClassificationCriticalityResponse struct {
-	ID                   uuid.UUID                  `json:"id"`
-	ClassificationID     uuid.UUID                  `json:"classification_id"`
-	CriticalityID        uuid.UUID                  `json:"criticality_id"`
-	Criticality          *LookupValueResponse       `json:"criticality,omitempty"`
-	MaxClosingHours      int                        `json:"max_closing_hours"`
-	MaxClosingMinutes    int                        `json:"max_closing_minutes"`
-	IsActive             bool                       `json:"is_active"`
-	EscalationPolicyID   *uuid.UUID                 `json:"escalation_policy_id,omitempty"`
-	EscalationPolicy     *EscalationPolicyResponse  `json:"escalation_policy,omitempty"`
-	CreatedAt            time.Time                  `json:"created_at"`
-	UpdatedAt            time.Time                  `json:"updated_at"`
+	ID                 uuid.UUID                 `json:"id"`
+	ClassificationID   uuid.UUID                 `json:"classification_id"`
+	CriticalityID      uuid.UUID                 `json:"criticality_id"`
+	Criticality        *LookupValueResponse      `json:"criticality,omitempty"`
+	MaxClosingHours    int                       `json:"max_closing_hours"`
+	MaxClosingMinutes  int                       `json:"max_closing_minutes"`
+	IsActive           bool                      `json:"is_active"`
+	EscalationPolicyID *uuid.UUID                `json:"escalation_policy_id,omitempty"`
+	EscalationPolicy   *EscalationPolicyResponse `json:"escalation_policy,omitempty"`
+	CreatedAt          time.Time                 `json:"created_at"`
+	UpdatedAt          time.Time                 `json:"updated_at"`
 }
 
 // ToClassificationCriticalityResponse converts ClassificationCriticality to response
 func ToClassificationCriticalityResponse(cc *ClassificationCriticality) ClassificationCriticalityResponse {
 	resp := ClassificationCriticalityResponse{
-		ID:                   cc.ID,
-		ClassificationID:     cc.ClassificationID,
-		CriticalityID:        cc.CriticalityID,
-		MaxClosingHours:      cc.MaxClosingHours,
-		MaxClosingMinutes:    cc.MaxClosingMinutes,
-		IsActive:             cc.IsActive,
-		EscalationPolicyID:   cc.EscalationPolicyID,
-		CreatedAt:            cc.CreatedAt,
-		UpdatedAt:            cc.UpdatedAt,
+		ID:                 cc.ID,
+		ClassificationID:   cc.ClassificationID,
+		CriticalityID:      cc.CriticalityID,
+		MaxClosingHours:    cc.MaxClosingHours,
+		MaxClosingMinutes:  cc.MaxClosingMinutes,
+		IsActive:           cc.IsActive,
+		EscalationPolicyID: cc.EscalationPolicyID,
+		CreatedAt:          cc.CreatedAt,
+		UpdatedAt:          cc.UpdatedAt,
 	}
 	if cc.EscalationPolicy != nil {
 		r := ToEscalationPolicyResponse(cc.EscalationPolicy)

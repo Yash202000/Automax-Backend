@@ -391,6 +391,15 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		if err := migrations.MigrateDepartmentCodeBackfill(db); err != nil {
 			log.Printf("Warning: department code backfill failed: %v", err)
 		}
+		if err := migrations.MigrateClassificationCodeBackfill(db); err != nil {
+			log.Printf("Warning: classification code backfill failed: %v", err)
+		}
+		if err := migrations.MigrateRoleCodeBackfill(db); err != nil {
+			log.Printf("Warning: role code backfill failed: %v", err)
+		}
+		if err := migrations.MigrateLocationCodeBackfill(db); err != nil {
+			log.Printf("Warning: location code backfill failed: %v", err)
+		}
 	}
 
 	// Seed existing free-text goal categories as root Category rows
