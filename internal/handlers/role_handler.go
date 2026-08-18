@@ -517,6 +517,7 @@ func (h *RoleHandler) Import(c *fiber.Ctx) error {
 	type ImportRole struct {
 		ID            uuid.UUID   `json:"id"`
 		Name          string      `json:"name"`
+		Code          string      `json:"code"`
 		Description   string      `json:"description"`
 		IsSystem      bool        `json:"is_system"`
 		IsActive      bool        `json:"is_active"`
@@ -528,6 +529,8 @@ func (h *RoleHandler) Import(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_json_format"))
 	}
 
+	isEPM940 := strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940)
+
 	imported := 0
 	skipped := 0
 	var errors []string
@@ -538,6 +541,9 @@ func (h *RoleHandler) Import(c *fiber.Ctx) error {
 			Description: data.Description,
 			IsActive:    data.IsActive,
 			IsSystem:    false, // Always set imported roles as non-system
+		}
+		if !isEPM940 {
+			role.Code = strings.TrimSpace(data.Code)
 		}
 
 		if err := h.roleRepo.Create(c.UserContext(), role); err != nil {
