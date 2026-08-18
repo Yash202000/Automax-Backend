@@ -157,11 +157,15 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 
 	for _, att := range attachments {
 
-		// Upload to MinIO using bytes
+		// Upload to MinIO using bytes. Prefix with AttachmentID so concurrent
+		// attachments with the same display filename (e.g. same-day SLA
+		// reports for different recipients) don't overwrite each other at
+		// the same object key.
+		uniqueStorageName := fmt.Sprintf("%s_%s", att.AttachmentID.String(), att.Filename)
 		objectName, err := storage.Storage.UploadBytes(
 			ctx,
 			att.Data,
-			att.Filename,
+			uniqueStorageName,
 			att.ContentType,
 			"sla_breach-notifications",
 		)
