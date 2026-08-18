@@ -150,7 +150,6 @@ func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode strin
 
 	//GENERATE OTP
 	otp, err := s.GenerateOTP()
-	fmt.Println("Generated OTP:", otp)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to generate otp: %w", err)
 	}
@@ -358,58 +357,3 @@ func (s *OTPService) autoCreateCitizenUser(ctx context.Context, phone string, na
 
 	return newUser, nil
 }
-
-// func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID string, inputOTP string) error {
-// 	key := "otp:" + phone + "--" + sessionID
-// 	val, err := s.redis.Get(ctx, key).Result()
-// 	if err != nil {
-// 		return fmt.Errorf("%s", i18n.T(ctx, "otp_expired_invalid_session"))
-// 	}
-
-// 	var data struct {
-// 		Phone      string `json:"phone"`
-// 		Hash       string `json:"hash"`
-// 		SenderMode string `json:"senderMode"`
-// 		Attempts   int    `json:"attempts"`
-// 	}
-
-// 	err = json.Unmarshal([]byte(val), &data)
-// 	if err != nil {
-// 		return fmt.Errorf("%s", i18n.T(ctx, "invalid_stored_otp"))
-// 	}
-
-// 	// Load verify max attempt
-// 	maxVerifyStr := os.Getenv("VERIFY_OTP_MAX_ATTEMPT")
-// 	maxVerify, _ := strconv.Atoi(maxVerifyStr)
-// 	if maxVerify == 0 {
-// 		maxVerify = 3
-// 	}
-
-// 	// Check max verify attempts
-// 	if data.Attempts >= maxVerify {
-// 		s.redis.Del(ctx, key)
-// 		return fmt.Errorf("%s", i18n.T(ctx, "max_verify_attempts_exceeded"))
-// 	}
-
-// 	// Check OTP match
-// 	if data.Hash != HashOTP(inputOTP) {
-// 		data.Attempts++
-// 		updatedData, _ := json.Marshal(data)
-// 		ttl, _ := s.redis.TTL(ctx, key).Result()
-
-// 		// Update attempts but keep original TTL
-// 		s.redis.Set(ctx, key, updatedData, ttl)
-
-// 		return fmt.Errorf("%s", i18n.T(ctx, "invalid_otp"))
-// 	}
-// 	// UPDATE DB
-// 	err = s.notificationLogRepo.MarkOTPVerified(ctx, sessionID, time.Now())
-// 	if err != nil {
-// 		return errors.New("failed to update otp status")
-// 	}
-
-// 	//SUCCESS  then DELETE OTP FROM REDIS
-// 	s.redis.Del(ctx, key)
-
-// 	return nil
-// }
