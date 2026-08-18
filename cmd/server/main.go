@@ -337,6 +337,9 @@ func main() {
 	// Wire license service into user service for user limit enforcement
 	userService.SetLicenseService(licenseService, licenseRepo)
 
+	// Wire settings repo into user service to gate login token issuance on totp_enabled
+	userService.SetSettingsRepo(settingsRepo)
+
 	// Initialize GIS handler
 	gisService := services.NewGISService()
 	gisHandler := handlers.NewGISHandler(gisService)

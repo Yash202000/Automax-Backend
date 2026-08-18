@@ -61,6 +61,7 @@ type UserService interface {
 	GenerateTokenViaUserID(ctx context.Context, mobile uuid.UUID) (*models.AuthResponse, error)
 	ValidateMobileForLogin(ctx context.Context, phone string) (*models.UserResponse, error)
 	SetLicenseService(ls LicenseService, lr repository.LicenseRepository)
+	SetSettingsRepo(sr repository.SettingsRepository)
 	AdminResetPassword(ctx context.Context, adminID, targetUserID uuid.UUID, newPassword string) error
 	ForgotPassword(ctx context.Context, req *models.ForgotPasswordRequest) (string, error)
 	VerifyOTPForReset(ctx context.Context, req *models.VerifyOTPRequest) (string, error)
@@ -82,12 +83,18 @@ type userService struct {
 	licenseRepo      repository.LicenseRepository
 	db               *gorm.DB
 	redis            *redis.Client
+	settingsRepo     repository.SettingsRepository
 }
 
 // SetLicenseService injects the license service (post-construction to avoid circular deps).
 func (s *userService) SetLicenseService(ls LicenseService, lr repository.LicenseRepository) {
 	s.licenseService = ls
 	s.licenseRepo = lr
+}
+
+// SetSettingsRepo injects the settings repository (post-construction to avoid touching the constructor everywhere it's called).
+func (s *userService) SetSettingsRepo(sr repository.SettingsRepository) {
+	s.settingsRepo = sr
 }
 
 func NewUserService(
@@ -691,12 +698,26 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 		_ = database.ResetLoginAttempts(context.Background(), database.RedisClient, "ip:"+ipAddress)
 	}()
 
-	return &models.AuthLoginResponse{
-		User:         models.ToUserLoginResponse(user),
-		Token:        tokenPair.AccessToken,
-		RefreshToken: tokenPair.RefreshToken,
-		ExpiresIn:    tokenPair.ExpiresIn,
-	}, nil
+	resp := &models.AuthLoginResponse{
+		User: models.ToUserLoginResponse(user),
+	}
+
+	totpEnabled := false
+	if s.settingsRepo != nil {
+		if settings, sErr := s.settingsRepo.GetOrCreate(ctx); sErr == nil && settings != nil {
+			totpEnabled = settings.TotpEnabled
+		} else if sErr != nil {
+			log.Println("Login: failed to load settings for totp_enabled check:", sErr)
+		}
+	}
+
+	if !totpEnabled || user.IsSuperAdmin {
+		resp.Token = tokenPair.AccessToken
+		resp.RefreshToken = tokenPair.RefreshToken
+		resp.ExpiresIn = tokenPair.ExpiresIn
+	}
+
+	return resp, nil
 }
 
 func (s *userService) ValidateMobileForLogin(ctx context.Context, phone string) (*models.UserResponse, error) {

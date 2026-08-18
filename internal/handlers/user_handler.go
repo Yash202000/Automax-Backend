@@ -420,7 +420,6 @@ func (h *UserHandler) GetManagerScope(c *fiber.Ctx) error {
 
 func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 	var req models.UserRegisterRequest
-
 	contentType := string(c.Request().Header.ContentType())
 
 	// Check if it's multipart form data (with file attachment)
@@ -499,6 +498,13 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
 			"errors":  validationErrors,
+		})
+	}
+
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) && strings.TrimSpace(req.Phone) == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  fiber.Map{"phone": i18n.T(c.UserContext(), "phone_required")},
 		})
 	}
 
