@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/google/uuid"
@@ -17,6 +19,7 @@ type LocationRepository interface {
 	FindByNameOrNameArAndParent(ctx context.Context, name string, nameAr string, parentID *uuid.UUID) (*models.Location, error)
 	FindByNameOrNameAr(ctx context.Context, name string, nameAr string) (*models.Location, error)
 	FindByExternalID(ctx context.Context, externalID string) (*models.Location, error)
+	FindByCode(ctx context.Context, code string) (*models.Location, error)
 	Update(ctx context.Context, location *models.Location) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context) ([]models.Location, error)
@@ -31,6 +34,17 @@ type LocationRepository interface {
 	HasActiveChildren(ctx context.Context, id uuid.UUID) (bool, error)
 	CheckDeleteDependencies(ctx context.Context, id uuid.UUID) (children, users, incidents int64, err error)
 }
+
+// locCodePrefix is the fixed prefix for the auto-generated Location Code (e.g. loc-000001).
+const locCodePrefix = "loc-"
+
+// Location Code allocation. Mirrors department's orgCodeSeq: an in-process counter,
+// seeded once from the current DB maximum and incremented under a mutex on every create.
+var (
+	locCodeMu     sync.Mutex
+	locCodeSeq    int64
+	locCodeLoaded bool
+)
 
 type locationRepository struct {
 	db *gorm.DB
@@ -52,7 +66,53 @@ func (r *locationRepository) Create(ctx context.Context, location *models.Locati
 		location.Level = 0
 		location.Path = location.ID.String()
 	}
+
+	location.Code = strings.ToLower(strings.TrimSpace(location.Code))
+	if location.Code == "" {
+		code, err := r.nextLocCode(ctx)
+		if err != nil {
+			return err
+		}
+		location.Code = code
+	}
+
 	return r.db.WithContext(ctx).Create(location).Error
+}
+
+// nextLocCode returns the next unique Location Code (e.g. loc-000001). See
+// departmentRepository.nextOrgCode for the seeding/locking rationale.
+func (r *locationRepository) nextLocCode(ctx context.Context) (string, error) {
+	locCodeMu.Lock()
+	defer locCodeMu.Unlock()
+
+	if !locCodeLoaded {
+		var maxCode *string
+		if err := r.db.WithContext(ctx).Unscoped().Model(&models.Location{}).
+			Select("MAX(code)").
+			Where("code LIKE ?", locCodePrefix+"%").
+			Scan(&maxCode).Error; err != nil {
+			return "", err
+		}
+		if maxCode != nil && *maxCode != "" {
+			var n int64
+			if _, err := fmt.Sscanf(*maxCode, locCodePrefix+"%d", &n); err == nil {
+				locCodeSeq = n
+			}
+		}
+		locCodeLoaded = true
+	}
+
+	locCodeSeq++
+	return fmt.Sprintf("%s%06d", locCodePrefix, locCodeSeq), nil
+}
+
+func (r *locationRepository) FindByCode(ctx context.Context, code string) (*models.Location, error) {
+	var location models.Location
+	err := r.db.WithContext(ctx).First(&location, "LOWER(code) = LOWER(?)", code).Error
+	if err != nil {
+		return nil, err
+	}
+	return &location, nil
 }
 
 func (r *locationRepository) FindByID(ctx context.Context, id uuid.UUID) (*models.Location, error) {
@@ -132,6 +192,7 @@ func (r *locationRepository) FindByExternalID(ctx context.Context, externalID st
 }
 
 func (r *locationRepository) Update(ctx context.Context, location *models.Location) error {
+	location.Code = strings.ToLower(strings.TrimSpace(location.Code))
 	return r.db.WithContext(ctx).Save(location).Error
 }
 

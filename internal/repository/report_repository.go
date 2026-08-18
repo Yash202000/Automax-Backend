@@ -570,7 +570,6 @@ func (r *reportRepository) applyFilters(ctx context.Context, query *gorm.DB, fil
 	loc := utils.ResolveTimezone(tzStr)
 
 	for _, f := range filters {
-		log.Printf("field %s datasource %s value %s", f.Field, dataSource, f.Value)
 		col, ok := fieldMap[f.Field]
 		if !ok {
 			log.Println("skipping unknown filter field:", f.Field, "for data source:", dataSource)
@@ -1032,7 +1031,7 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 		return r.applyFilters(ctx, q, filters)
 	}
 
-	if err := buildBase().Count(&total).Debug().Error; err != nil {
+	if err := buildBase().Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
@@ -1297,15 +1296,12 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 				}
 			}
 		}
-		log.Println("Code found : ", byCode)
 		dynSuffixes := []string{"_at", "_by", "_comment", "_feedback", "_attachment", "_attachments"}
 		neededCodes := map[string]bool{}
 		for _, col := range reqColumns {
-			log.Println("column:", col.Field)
 			for code := range byCode {
 				for _, suf := range dynSuffixes {
 					if col.Field == code+suf {
-						log.Println("MATCH", code)
 						neededCodes[code] = true
 					}
 				}
@@ -1742,11 +1738,9 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 							setField(results[i], code+"_date", enrich.TransitionedAt)
 						}
 						if enrich.Comment != "" {
-							log.Println("code for comment", code, enrich.Comment)
 							setField(results[i], code+"_comment", enrich.Comment)
 						}
 						if enrich.Feedback != "" {
-							log.Println("code for feedback ", code, enrich.Feedback)
 							setField(results[i], code+"_feedback", enrich.Feedback)
 						}
 						// Singular and plural names both carry the same []string; the
@@ -2869,7 +2863,7 @@ func (r *reportRepository) ExecuteUserPerformanceQuery(ctx context.Context, filt
 		commentStr := commentsMap[e.transitionID]
 		// []string, not a joined string — see the attachment note in ExecuteIncidentQuery.
 		attachURLs := attachMap[e.transitionID]
-		log.Println(e.locationName)
+
 		rawRow := map[string]interface{}{
 			"incident_number": e.incidentNumber,
 			"resource_id":     e.incidentNumber,
@@ -3394,7 +3388,7 @@ func buildCountRow(rawRow map[string]interface{}, reqColumns []models.ColumnFiel
 func (r *reportRepository) ExecuteLocationCountQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
 	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
 	buildBase := func() *gorm.DB {
-		q := r.db.WithContext(ctx).Debug().
+		q := r.db.WithContext(ctx).
 			Table("locations").
 			Joins("LEFT JOIN locations parent_loc ON parent_loc.id = locations.parent_id").
 			Joins("LEFT JOIN incidents ON incidents.location_id = locations.id AND incidents.deleted_at IS NULL").
@@ -3419,7 +3413,7 @@ func (r *reportRepository) ExecuteLocationCountQuery(ctx context.Context, filter
 		}
 	}
 	offset := (page - 1) * limit
-	rows, err := buildBase().Debug().
+	rows, err := buildBase().
 		Select("locations.id::text AS location_id, locations.name AS location_name, COALESCE(parent_loc.name, '') AS parent_location_name, COUNT(incidents.id) AS incident_count").
 		Group("locations.id, locations.name, parent_loc.name").
 		Order(orderClause).Offset(offset).Limit(limit).Rows()
@@ -3498,7 +3492,7 @@ func (r *reportRepository) ExecuteLocationCountByStatusQuery(ctx context.Context
 	}
 
 	buildBase := func() *gorm.DB {
-		q := r.db.WithContext(ctx).Debug().
+		q := r.db.WithContext(ctx).
 			Table("locations").
 			Joins("LEFT JOIN locations parent_loc ON parent_loc.id = locations.parent_id").
 			Joins("LEFT JOIN incidents ON incidents.location_id = locations.id AND incidents.deleted_at IS NULL").
@@ -3509,7 +3503,7 @@ func (r *reportRepository) ExecuteLocationCountByStatusQuery(ctx context.Context
 	}
 
 	buildBaseForPaging := func() *gorm.DB {
-		q := r.db.WithContext(ctx).Debug().
+		q := r.db.WithContext(ctx).
 			Table("locations").
 			Joins("LEFT JOIN locations parent_loc ON parent_loc.id = locations.parent_id").
 			Joins("LEFT JOIN incidents ON incidents.location_id = locations.id AND incidents.deleted_at IS NULL").
@@ -3732,7 +3726,7 @@ func (r *reportRepository) ExecuteClassificationCountByStatusQuery(ctx context.C
 
 	// buildBase includes workflow_states for the status breakdown query
 	buildBase := func() *gorm.DB {
-		q := r.db.WithContext(ctx).Debug().
+		q := r.db.WithContext(ctx).
 			Table("classifications").
 			Joins("LEFT JOIN classifications parent_cls ON parent_cls.id = classifications.parent_id").
 			Joins("LEFT JOIN incidents ON incidents.classification_id = classifications.id AND incidents.deleted_at IS NULL").
@@ -3742,7 +3736,7 @@ func (r *reportRepository) ExecuteClassificationCountByStatusQuery(ctx context.C
 		return r.applyFilters(ctx, q, filters)
 	}
 	buildBaseForPaging := func() *gorm.DB {
-		q := r.db.WithContext(ctx).Debug().
+		q := r.db.WithContext(ctx).
 			Table("classifications").
 			Joins("LEFT JOIN classifications parent_cls ON parent_cls.id = classifications.parent_id").
 			Joins("LEFT JOIN incidents ON incidents.classification_id = classifications.id AND incidents.deleted_at IS NULL").

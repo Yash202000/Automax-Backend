@@ -8,11 +8,11 @@ import (
 )
 
 // orgCodePrefix mirrors repository.orgCodePrefix — the fixed prefix for the
-// auto-generated Organization Code (e.g. ORG-000001).
-const orgCodePrefix = "ORG-"
+// auto-generated Organization Code (e.g. org-000001).
+const orgCodePrefix = "org-"
 
 // MigrateDepartmentCodeBackfill assigns a unique, sequential Organization Code
-// (ORG-000001, ORG-000002, …) to every department row that currently has no code.
+// (org-000001, org-000002, …) to every department row that currently has no code.
 // It continues numbering from the current maximum so it composes with codes created
 // at runtime. Idempotent: it only touches rows with a NULL/empty code, so re-running
 // once every row has a code is a no-op.
@@ -35,7 +35,7 @@ func MigrateDepartmentCodeBackfill(db *gorm.DB) error {
 		return nil
 	}
 
-	// Continue numbering from the current maximum ORG- code (including soft-deleted
+	// Continue numbering from the current maximum org- code (including soft-deleted
 	// rows via a plain scan of the whole table) so codes are never reused.
 	var maxCode *string
 	if err := db.Raw(

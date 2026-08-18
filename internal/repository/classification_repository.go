@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/google/uuid"
@@ -65,6 +67,7 @@ type ClassificationRepository interface {
 	FindByNameOrNameArAndParent(ctx context.Context, name string, nameAr string, parentID *uuid.UUID) (*models.Classification, error)
 	FindByNameOrNameAr(ctx context.Context, name string, nameAr string) (*models.Classification, error)
 	FindByExternalID(ctx context.Context, externalID string) (*models.Classification, error)
+	FindByCode(ctx context.Context, code string) (*models.Classification, error)
 	Update(ctx context.Context, classification *models.Classification) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	CheckDependencies(ctx context.Context, id uuid.UUID) (incidents, workflows, users, departments int64, err error)
@@ -92,6 +95,17 @@ type ClassificationRepository interface {
 	CountChildren(ctx context.Context, id uuid.UUID) (int64, error)
 }
 
+// clsCodePrefix is the fixed prefix for the auto-generated Classification Code (e.g. cls-000001).
+const clsCodePrefix = "cls-"
+
+// Classification Code allocation. Mirrors department's orgCodeSeq: an in-process counter,
+// seeded once from the current DB maximum and incremented under a mutex on every create.
+var (
+	clsCodeMu     sync.Mutex
+	clsCodeSeq    int64
+	clsCodeLoaded bool
+)
+
 type classificationRepository struct {
 	db *gorm.DB
 }
@@ -112,7 +126,53 @@ func (r *classificationRepository) Create(ctx context.Context, classification *m
 		classification.Level = 0
 		classification.Path = classification.ID.String()
 	}
+
+	classification.Code = strings.ToLower(strings.TrimSpace(classification.Code))
+	if classification.Code == "" {
+		code, err := r.nextClsCode(ctx)
+		if err != nil {
+			return err
+		}
+		classification.Code = code
+	}
+
 	return r.db.WithContext(ctx).Create(classification).Error
+}
+
+// nextClsCode returns the next unique Classification Code (e.g. cls-000001). See
+// departmentRepository.nextOrgCode for the seeding/locking rationale.
+func (r *classificationRepository) nextClsCode(ctx context.Context) (string, error) {
+	clsCodeMu.Lock()
+	defer clsCodeMu.Unlock()
+
+	if !clsCodeLoaded {
+		var maxCode *string
+		if err := r.db.WithContext(ctx).Unscoped().Model(&models.Classification{}).
+			Select("MAX(code)").
+			Where("code LIKE ?", clsCodePrefix+"%").
+			Scan(&maxCode).Error; err != nil {
+			return "", err
+		}
+		if maxCode != nil && *maxCode != "" {
+			var n int64
+			if _, err := fmt.Sscanf(*maxCode, clsCodePrefix+"%d", &n); err == nil {
+				clsCodeSeq = n
+			}
+		}
+		clsCodeLoaded = true
+	}
+
+	clsCodeSeq++
+	return fmt.Sprintf("%s%06d", clsCodePrefix, clsCodeSeq), nil
+}
+
+func (r *classificationRepository) FindByCode(ctx context.Context, code string) (*models.Classification, error) {
+	var classification models.Classification
+	err := r.db.WithContext(ctx).First(&classification, "LOWER(code) = LOWER(?)", code).Error
+	if err != nil {
+		return nil, err
+	}
+	return &classification, nil
 }
 
 func (r *classificationRepository) FindByID(ctx context.Context, id uuid.UUID) (*models.Classification, error) {
@@ -197,6 +257,7 @@ func (r *classificationRepository) FindByExternalID(ctx context.Context, externa
 }
 
 func (r *classificationRepository) Update(ctx context.Context, classification *models.Classification) error {
+	classification.Code = strings.ToLower(strings.TrimSpace(classification.Code))
 	return r.db.WithContext(ctx).Save(classification).Error
 }
 

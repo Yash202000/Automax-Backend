@@ -66,9 +66,10 @@ func (r *departmentRepository) Create(ctx context.Context, department *models.De
 		department.Path = department.ID.String()
 	}
 
-	// The Organization Code is system-generated and never supplied by the caller.
-	// When empty, allocate the next unique ORG-###### code from the in-process counter.
-	if strings.TrimSpace(department.Code) == "" {
+	// The Organization Code is normally system-generated, but callers may also supply
+	// one explicitly (e.g. EPM940 imports); normalize to lowercase either way.
+	department.Code = strings.ToLower(strings.TrimSpace(department.Code))
+	if department.Code == "" {
 		code, err := r.nextOrgCode(ctx)
 		if err != nil {
 			return err
@@ -125,7 +126,7 @@ func (r *departmentRepository) FindByID(ctx context.Context, id uuid.UUID) (*mod
 
 func (r *departmentRepository) FindByCode(ctx context.Context, code string) (*models.Department, error) {
 	var department models.Department
-	err := r.db.WithContext(ctx).First(&department, "code = ?", code).Error
+	err := r.db.WithContext(ctx).First(&department, "LOWER(code) = LOWER(?)", code).Error
 	if err != nil {
 		return nil, err
 	}
@@ -163,6 +164,7 @@ func (r *departmentRepository) FindByNameOrNameAr(ctx context.Context, name stri
 }
 
 func (r *departmentRepository) Update(ctx context.Context, department *models.Department) error {
+	department.Code = strings.ToLower(strings.TrimSpace(department.Code))
 	return r.db.WithContext(ctx).Save(department).Error
 }
 
