@@ -36,6 +36,7 @@ type Config struct {
 	PBX                        PBXConfig
 	SyncDeptAttributesToUser   bool   // env: SYNC_DEPT_ATTRIBUTES_TO_USER — when true, assigning a department to a user auto-appends the department's locations/classifications to that user. Default: false.
 	MaxUploadAttachmentCount   int    // env: MAX_UPLOAD_ATTACHMENT_COUNT — max attachments allowed per incident for EPM940 clients. Default: 5.
+	MaxDescriptionLength       int    // env: MAX_DESCRIPTION_LENGTH — max description length allowed for incident creation for EPM940 clients. Default: 500.
 	ClientCode                 string // env: CLIENT_CODE — client identifier, e.g. "EPM940".
 	Report                     ReportConfig
 }
@@ -368,6 +369,7 @@ func Load() *Config {
 		},
 		SyncDeptAttributesToUser: getEnvAsBool("SYNC_DEPT_ATTRIBUTES_TO_USER", false),
 		MaxUploadAttachmentCount: getEnvAsInt("MAX_UPLOAD_ATTACHMENT_COUNT", 5),
+		MaxDescriptionLength:     getEnvAsInt("MAX_DESCRIPTION_LENGTH", 500),
 		ClientCode:               getEnv("CLIENT_CODE", ""),
 		Report: ReportConfig{
 			LogoLeftURL:  getEnv("LOGO_LEFT_URL", ""),

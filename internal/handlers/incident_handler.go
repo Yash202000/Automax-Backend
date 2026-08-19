@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/models"
@@ -126,7 +127,18 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 	}
 
 	// Parse query parameters
-	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+	validationErrors := validation.ValidateStruct(c.UserContext(), &req)
+
+	if strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940) {
+		if utf8.RuneCountInString(req.Description) > h.cfg.MaxDescriptionLength {
+			if validationErrors == nil {
+				validationErrors = map[string]string{}
+			}
+			validationErrors["Description"] = i18n.T(c.UserContext(), "max_description_length_exceeded")
+		}
+	}
+
+	if len(validationErrors) != 0 {
 		if h.isEpmPortalSource(req.Source) {
 			var summaryParts []string
 			for field, msg := range validationErrors {
