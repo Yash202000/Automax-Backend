@@ -3,9 +3,9 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"strings"
 
+	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
@@ -24,15 +24,17 @@ type RoleHandler struct {
 	userRepo       repository.UserRepository
 	wsHub          *services.WSHub
 	validator      *validator.Validate
+	cfg            *config.Config
 }
 
-func NewRoleHandler(roleRepo repository.RoleRepository, permissionRepo repository.PermissionRepository, userRepo repository.UserRepository, wsHub *services.WSHub) *RoleHandler {
+func NewRoleHandler(roleRepo repository.RoleRepository, permissionRepo repository.PermissionRepository, userRepo repository.UserRepository, wsHub *services.WSHub, cfg *config.Config) *RoleHandler {
 	return &RoleHandler{
 		roleRepo:       roleRepo,
 		permissionRepo: permissionRepo,
 		userRepo:       userRepo,
 		wsHub:          wsHub,
 		validator:      validator.New(),
+		cfg:            cfg,
 	}
 }
 
@@ -71,7 +73,7 @@ func (h *RoleHandler) CreateRole(c *fiber.Ctx) error {
 
 	// EPM940 auto-generates the Role Code (role-######) and ignores any supplied
 	// value; other clients must supply the code in the payload.
-	isEPM940 := strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940)
+	isEPM940 := strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940)
 
 	validationErrors := validation.ValidateStruct(c.UserContext(), &req)
 	if !isEPM940 && req.Code == "" {
@@ -529,7 +531,7 @@ func (h *RoleHandler) Import(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_json_format"))
 	}
 
-	isEPM940 := strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940)
+	isEPM940 := strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940)
 
 	imported := 0
 	skipped := 0

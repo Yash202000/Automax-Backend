@@ -34,7 +34,10 @@ type Config struct {
 	FinalCloseWhatsAppFeedback FinalCloseWhatsAppFeedbackConfig
 	Cintrix                    CintrixConfig
 	PBX                        PBXConfig
-	SyncDeptAttributesToUser   bool // env: SYNC_DEPT_ATTRIBUTES_TO_USER — when true, assigning a department to a user auto-appends the department's locations/classifications to that user. Default: false.
+	SyncDeptAttributesToUser   bool   // env: SYNC_DEPT_ATTRIBUTES_TO_USER — when true, assigning a department to a user auto-appends the department's locations/classifications to that user. Default: false.
+	MaxUploadAttachmentCount   int    // env: MAX_UPLOAD_ATTACHMENT_COUNT — max attachments allowed per incident for EPM940 clients. Default: 5.
+	ClientCode                 string // env: CLIENT_CODE — client identifier, e.g. "EPM940".
+	Report                     ReportConfig
 }
 
 // PBXConfig holds settings for the external PBX used by the extension-assignment
@@ -78,6 +81,18 @@ type LicenseConfig struct {
 	// env: LICENSE_DEV_EXPIRY_DAYS (default: 90). Kept short so developers exercise
 	// the expiry and renewal flow rather than running against a never-expiring license.
 	DevSeedExpiryDays int
+}
+
+// ReportConfig holds settings for the incident PDF/HTML report generator.
+type ReportConfig struct {
+	// LogoLeftURL is the left-side logo image URL embedded in the report header. env: LOGO_LEFT_URL
+	LogoLeftURL string
+	// LogoRightURL is the right-side logo image URL embedded in the report header. env: LOGO_RIGHT_URL
+	LogoRightURL string
+	// ChromeBin is the headless Chrome/Chromium binary used to render the report to PDF. env: CHROME_BIN (default: google-chrome)
+	ChromeBin string
+	// AppRegion controls the report timezone: "SA" -> Arabia Standard Time (UTC+3), anything else -> IST (UTC+5:30). env: APP_REGION
+	AppRegion string
 }
 
 // AIQualityConfig holds settings for the AI Quality Monitor.
@@ -352,6 +367,14 @@ func Load() *Config {
 			InsecureSkipVerify: getEnvAsBool("PBX_INSECURE_SKIP_VERIFY", false),
 		},
 		SyncDeptAttributesToUser: getEnvAsBool("SYNC_DEPT_ATTRIBUTES_TO_USER", false),
+		MaxUploadAttachmentCount: getEnvAsInt("MAX_UPLOAD_ATTACHMENT_COUNT", 5),
+		ClientCode:               getEnv("CLIENT_CODE", ""),
+		Report: ReportConfig{
+			LogoLeftURL:  getEnv("LOGO_LEFT_URL", ""),
+			LogoRightURL: getEnv("LOGO_RIGHT_URL", ""),
+			ChromeBin:    getEnv("CHROME_BIN", "google-chrome"),
+			AppRegion:    getEnv("APP_REGION", ""),
+		},
 	}
 }
 

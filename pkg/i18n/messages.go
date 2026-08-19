@@ -300,6 +300,7 @@ var messages = map[string][2]string{
 	"failed_to_fetch_attachments":   {"Failed to fetch attachments", "فشل جلب المرفقات"},
 	"failed_to_read_attachment":     {"Failed to read attachment", "فشل قراءة المرفق"},
 	"failed_to_retrieve_attachment": {"Failed to retrieve attachment", "فشل استرجاع المرفق"},
+	"max_attachment_limit_reached":  {"Maximum attachment limit reached", "تم الوصول للحد الأقصى للمرفقات"},
 
 	// ── Feedback ──────────────────────────────────────────────────────────────
 	"feedback_created":                    {"Feedback created", "تم إنشاء التقييم"},

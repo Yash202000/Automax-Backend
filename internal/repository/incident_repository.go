@@ -35,6 +35,7 @@ type IncidentRepository interface {
 	FindUserOpenIncidentsForDuplicateCheck(ctx context.Context, reporterID uuid.UUID) ([]models.Incident, error)
 	FindOpenIncidentsForDuplicateCheckByCaller(ctx context.Context, reporterPhone string) ([]models.Incident, error)
 	FindByIDWithLast6DigitValidation(ctx context.Context, req *models.IncidentUpdateIVRRequest) (*models.Incident, error)
+	CountAttachments(ctx context.Context, incidentID uuid.UUID) (int64, error)
 	// Incident number generation
 	GenerateIncidentNumber(ctx context.Context) (string, error)
 	GenerateRequestNumber(ctx context.Context) (string, error)
@@ -695,6 +696,15 @@ func (r *incidentRepository) ListAttachments(ctx context.Context, incidentID uui
 		Order("created_at DESC").
 		Find(&attachments).Error
 	return attachments, err
+}
+
+func (r *incidentRepository) CountAttachments(ctx context.Context, incidentID uuid.UUID) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&models.IncidentAttachment{}).
+		Where("incident_id = ?", incidentID).
+		Count(&count).Error
+	return count, err
 }
 
 func (r *incidentRepository) DeleteAttachment(ctx context.Context, id uuid.UUID) error {

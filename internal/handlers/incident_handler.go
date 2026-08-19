@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
@@ -41,9 +42,10 @@ type IncidentHandler struct {
 	publicFeedbackRepo  repository.IncidentPublicFeedbackRepository
 	lookupRepo          repository.LookupRepository
 	validator           *validator.Validate
+	cfg                 *config.Config
 }
 
-func NewIncidentHandler(service services.IncidentService, userService services.UserService, userRepo repository.UserRepository, incidentRepo repository.IncidentRepository, workflowRepo repository.WorkflowRepository, locationRepo repository.LocationRepository, classificationRepo repository.ClassificationRepository, storage *storage.MinIOStorage, presenceService services.PresenceService) *IncidentHandler {
+func NewIncidentHandler(service services.IncidentService, userService services.UserService, userRepo repository.UserRepository, incidentRepo repository.IncidentRepository, workflowRepo repository.WorkflowRepository, locationRepo repository.LocationRepository, classificationRepo repository.ClassificationRepository, storage *storage.MinIOStorage, presenceService services.PresenceService, cfg *config.Config) *IncidentHandler {
 	return &IncidentHandler{
 		service:            service,
 		userService:        userService,
@@ -55,6 +57,7 @@ func NewIncidentHandler(service services.IncidentService, userService services.U
 		storage:            storage,
 		presenceService:    presenceService,
 		validator:          validator.New(),
+		cfg:                cfg,
 	}
 }
 
@@ -124,7 +127,7 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 
 	// Parse query parameters
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
-		if isEpmPortalSource(req.Source) {
+		if h.isEpmPortalSource(req.Source) {
 			var summaryParts []string
 			for field, msg := range validationErrors {
 				summaryParts = append(summaryParts, fmt.Sprintf("%s: %v", field, msg))
@@ -169,7 +172,7 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 		}
 	}
 
-	if isEpmPortalRequest(c) || isEpmPortalSource(req.Source) {
+	if h.isEpmPortalRequest(c) || h.isEpmPortalSource(req.Source) {
 		return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "incident_created"), h.buildEpmPortalResponse(c, incident, true))
 	}
 
@@ -202,7 +205,7 @@ func (h *IncidentHandler) GetIncident(c *fiber.Ctx) error {
 		return ErrorResponseWithKey(c, fiber.StatusNotFound, "incident_not_found")
 	}
 
-	if isEpmPortalRequest(c) {
+	if h.isEpmPortalRequest(c) {
 		// Phone-number scoping: if reporter_phone is provided, verify ownership.
 		//
 		// The portal may send the number in any of the shapes the column holds
@@ -644,7 +647,7 @@ func (h *IncidentHandler) listIncidentsCore(c *fiber.Ctx, filter *models.Inciden
 
 	totalPages := (int(total) + filter.Limit - 1) / filter.Limit
 
-	if isEpmPortalRequest(c) {
+	if h.isEpmPortalRequest(c) {
 		// @NOEDIT: this is not a bug this is a client requirement please dont touch
 		// Portal requests must be scoped to a specific caller identity
 		if filter.CallerIdentity == "" && filter.ReporterPhone == "" {
@@ -682,7 +685,7 @@ func (h *IncidentHandler) listIncidentsCore(c *fiber.Ctx, filter *models.Inciden
 	})
 }
 func (h *IncidentHandler) FindByIDWithLast6DigitValidation(c *fiber.Ctx) error {
-	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+	clientCode := strings.TrimSpace(h.cfg.ClientCode)
 	if !strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "service_unavailable_client"))
 	}
@@ -878,7 +881,7 @@ func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 			"errors":  validationErrors,
 		})
 	}
-	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+	clientCode := strings.TrimSpace(h.cfg.ClientCode)
 	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.IVR) && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
 		if req.Source == "" || req.Source != constants.INCIDENT_SOURCE.IVR {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -1204,6 +1207,16 @@ func (h *IncidentHandler) UploadAttachment(c *fiber.Ctx) error {
 	incidentID, err := uuid.Parse(incidentIDStr)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_incident_id"))
+	}
+
+	if strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940) {
+		count, err := h.incidentRepo.CountAttachments(c.UserContext(), incidentID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_attachments"))
+		}
+		if count >= int64(h.cfg.MaxUploadAttachmentCount) {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "max_attachment_limit_reached"))
+		}
 	}
 
 	file, err := c.FormFile("file")
@@ -2395,15 +2408,15 @@ func (h *IncidentHandler) ForceState(c *fiber.Ctx) error {
 
 // ---- EPM Portal helpers ----
 
-func isEpmPortalRequest(c *fiber.Ctx) bool {
-	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+func (h *IncidentHandler) isEpmPortalRequest(c *fiber.Ctx) bool {
+	clientCode := strings.TrimSpace(h.cfg.ClientCode)
 	return strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) &&
 		strings.EqualFold(c.Query("source"), constants.INCIDENT_SOURCE.EPMPORTAL)
 }
 
 // isEpmPortalSource checks the request body source field (for POST endpoints where source is in the body, not query string).
-func isEpmPortalSource(source string) bool {
-	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+func (h *IncidentHandler) isEpmPortalSource(source string) bool {
+	clientCode := strings.TrimSpace(h.cfg.ClientCode)
 	return strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) &&
 		strings.EqualFold(source, constants.INCIDENT_SOURCE.EPMPORTAL)
 }

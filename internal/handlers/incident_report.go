@@ -331,8 +331,8 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 		}
 	}
 
-	leftLogoB64 := fetchLogoBase64(os.Getenv("LOGO_LEFT_URL"))
-	rightLogoB64 := fetchLogoBase64(os.Getenv("LOGO_RIGHT_URL"))
+	leftLogoB64 := fetchLogoBase64(h.cfg.Report.LogoLeftURL)
+	rightLogoB64 := fetchLogoBase64(h.cfg.Report.LogoRightURL)
 
 	format := c.Query("format", "pdf")
 	htmlBytes := buildReportHTML(c, h, reportData, reportLookupValues, leftLogoB64, rightLogoB64, lbl, reportTransitions, reportAttachments, reportRevisions, reportCustomFields)
@@ -361,10 +361,7 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 		tmpPDF.Close()
 		defer os.Remove(pdfPath)
 
-		chromeBin := "google-chrome"
-		if bin := os.Getenv("CHROME_BIN"); bin != "" {
-			chromeBin = bin
-		}
+		chromeBin := h.cfg.Report.ChromeBin
 
 		var stderr bytes.Buffer
 		cmd := exec.CommandContext(c.UserContext(),
@@ -389,25 +386,25 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 		c.Set("Content-Type", "application/pdf")
 		c.Set("Content-Disposition", fmt.Sprintf(
 			`attachment; filename="incident_%s_%s.pdf"`,
-			reportData.IncidentNumber, time.Now().In(appTimezone()).Format("20060102"),
+			reportData.IncidentNumber, time.Now().In(appTimezone(h.cfg.Report.AppRegion)).Format("20060102"),
 		))
 		return c.Send(pdfData)
 
 	case "json":
 		c.Set("Content-Type", "application/json")
 		c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename=incident_%s_%s.json`,
-			reportData.IncidentNumber, time.Now().In(appTimezone()).Format("20060102")))
-		return c.JSON(map[string]interface{}{"generated_at": time.Now().In(appTimezone()).Format(time.RFC3339), "incident": reportData})
+			reportData.IncidentNumber, time.Now().In(appTimezone(h.cfg.Report.AppRegion)).Format("20060102")))
+		return c.JSON(map[string]interface{}{"generated_at": time.Now().In(appTimezone(h.cfg.Report.AppRegion)).Format(time.RFC3339), "incident": reportData})
 
 	default:
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "use_format_pdf_html_json"))
 	}
 }
 
-// appTimezone returns the report timezone based on APP_REGION env var.
-// APP_REGION=SA → Arabia Standard Time (UTC+3); anything else → IST (UTC+5:30).
-func appTimezone() *time.Location {
-	if strings.ToUpper(os.Getenv("APP_REGION")) == "SA" {
+// appTimezone returns the report timezone based on the configured app region.
+// appRegion=SA → Arabia Standard Time (UTC+3); anything else → IST (UTC+5:30).
+func appTimezone(appRegion string) *time.Location {
+	if strings.ToUpper(appRegion) == "SA" {
 		return time.FixedZone("AST", 3*60*60)
 	}
 	return time.FixedZone("IST", 5*60*60+30*60)
@@ -449,7 +446,7 @@ func buildReportHTML(
 	var b bytes.Buffer
 
 	// helpers
-	tz := appTimezone()
+	tz := appTimezone(h.cfg.Report.AppRegion)
 	ts := func(t time.Time) string { return t.In(tz).Format("02/01/2006 03:04 PM") }
 	tsp := func(t *time.Time) string {
 		if t == nil {
@@ -700,7 +697,7 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 	//   VD2 client: the "Caller Details" section is hidden.
 	//   'visional' source: the incident's own reporter (name/phone/email) replaces
 	//   the internal creator's details inside the Reporter section.
-	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+	clientCode := strings.TrimSpace(h.cfg.ClientCode)
 	isVD2 := strings.EqualFold(clientCode, constants.CLIENT_CODE.VD2)
 	isVisionalSource := strings.EqualFold(strings.TrimSpace(data.Source), constants.INCIDENT_SOURCE.VIUSIONAL)
 
@@ -895,7 +892,7 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 		secHeader(&b, l.SectionAttach)
 		b.WriteString(`<div>`)
 
-		clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+		clientCode := strings.TrimSpace(h.cfg.ClientCode)
 		if strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
 			// EPM940: group attachments by workflow state. Creation-time uploads
 			// (no transition) sit under "Incident Creation"; transition uploads
@@ -991,7 +988,7 @@ func row2(b *bytes.Buffer, label1, value1, label2, value2 string) {
 
 // ── template-based PDF helpers ─────────────────────────────────────────────
 
-func renderIncidentHTMLToPDF(htmlData []byte) ([]byte, error) {
+func renderIncidentHTMLToPDF(htmlData []byte, chromeBin string) ([]byte, error) {
 	tmpHTML, err := os.CreateTemp("", "inc-report-*.html")
 	if err != nil {
 		return nil, err
@@ -1010,11 +1007,6 @@ func renderIncidentHTMLToPDF(htmlData []byte) ([]byte, error) {
 	tmpPDF.Close()
 	os.Remove(pdfPath) // let Chromium write fresh
 	defer os.Remove(pdfPath)
-
-	chromeBin := "google-chrome"
-	if bin := os.Getenv("CHROME_BIN"); bin != "" {
-		chromeBin = bin
-	}
 
 	var stderr bytes.Buffer
 	cmd := exec.Command(
@@ -1044,7 +1036,7 @@ func buildIncidentTmplData(
 	raw *models.Incident,
 	l reportLabels,
 ) map[string]interface{} {
-	tz := appTimezone()
+	tz := appTimezone(h.cfg.Report.AppRegion)
 	ts := func(t time.Time) string { return t.In(tz).Format("02/01/2006 03:04 PM") }
 	tsp := func(t *time.Time) string {
 		if t == nil {

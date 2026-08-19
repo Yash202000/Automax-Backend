@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/storage"
@@ -121,6 +122,8 @@ type IncidentService interface {
 	SetSmsFeedbackPendingRepo(repo repository.SmsFeedbackPendingRepository, delayHours int)
 	// SetIvrSmsLinkRepo wires in the IvrSmsLinkRepository (called post-construction).
 	SetIvrSmsLinkRepo(repo repository.IvrSmsLinkRepository)
+	// SetConfig wires in the app config (called post-construction).
+	SetConfig(cfg *config.Config)
 
 	// Closed incident editing
 	UpdateClosedIncidentSummary(ctx context.Context, incidentID uuid.UUID, userID uuid.UUID, newDescription string, reason string) (*models.IncidentResponse, error)
@@ -155,6 +158,7 @@ type incidentService struct {
 	ivrSmsLinkRepo          repository.IvrSmsLinkRepository
 	rrCounters              map[string]int64
 	rrMu                    sync.Mutex
+	cfg                     *config.Config
 }
 
 func NewIncidentService(
@@ -204,6 +208,11 @@ func (s *incidentService) SetNotificationService(ns *NotificationService) {
 // SetUserService wires the UserService into the incident service.
 func (s *incidentService) SetUserService(us UserService) {
 	s.userService = us
+}
+
+// SetConfig wires the app config into the incident service.
+func (s *incidentService) SetConfig(cfg *config.Config) {
+	s.cfg = cfg
 }
 
 // SetIvrSmsLinkRepo wires the IvrSmsLinkRepository into the incident service.
@@ -394,7 +403,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 	}
 
 	creatorID := reporterID // preserve before IVR block may overwrite reporterID
-	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+	clientCode := strings.TrimSpace(s.cfg.ClientCode)
 	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.IVR) && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
 		// For EPM940, if source is IVR, then fetch user based on mobile no. of citizen
 		user, err := s.userRepo.FindByMobile(ctx, req.ReporterPhone)
@@ -1069,7 +1078,7 @@ func (s *incidentService) ListIncidents(ctx context.Context, filter *models.Inci
 
 	// For EPM940: enrich IVR incidents with SMS link submission state.
 	// Collect IVR incident IDs, do a single batch lookup, then stamp each response.
-	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+	clientCode := strings.TrimSpace(s.cfg.ClientCode)
 	if strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) && s.ivrSmsLinkRepo != nil {
 		var ivrIDs []uuid.UUID
 		ivrIdx := make(map[uuid.UUID]int, len(incidents))
@@ -1141,7 +1150,7 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	}
 
 	// // Source validation: for IVR calls from EPM940, source must be provided.
-	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+	clientCode := strings.TrimSpace(s.cfg.ClientCode)
 	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.IVR) && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
 		if req.Source == "" || req.Source != constants.INCIDENT_SOURCE.IVR || incident.Comments == nil {
 			tx.Rollback()
@@ -5272,7 +5281,7 @@ func (s *incidentService) applyCreationTimeAssignment(ctx context.Context, incid
 	if strings.EqualFold(distributeAssign, "true") {
 		// VD2: distribute every source (incl. web) uniformly via round-robin,
 		// so a web incident is not self-assigned to its creator.
-		clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+		clientCode := strings.TrimSpace(s.cfg.ClientCode)
 		uniformRoundRobin := strings.EqualFold(clientCode, constants.CLIENT_CODE.VD2) &&
 			strings.EqualFold(incident.RecordType, "incident")
 
