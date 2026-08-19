@@ -144,7 +144,7 @@ func SendOTPWithMetaTemplate(phone string, otp string) (string, error) {
 		"to":                phone,
 		"type":              "template",
 		"template": map[string]interface{}{
-			"name": "otp_code",
+			"name": "otp_en_template",
 			"language": map[string]interface{}{
 				"code": "en_US",
 			},
