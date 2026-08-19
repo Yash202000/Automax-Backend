@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -152,6 +153,16 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 	var recipientStatuses models.RecipientArray
 	var attachmentInfo models.AttachmentArray
 
+	// Dev-only OTP bypass: skip the real Twilio/Meta call and log the body
+	// (which contains the OTP) instead, so local testing isn't blocked by
+	// provider issues. Scoped to sessionID != nil so it can only ever affect
+	// OTP sends (the only caller that passes a session ID), never arbitrary
+	// email/SMS notifications. Requires BOTH APP_ENV=development AND explicit
+	// OTP_BYPASS_SEND=true.
+	otpDevBypass := sessionID != nil &&
+		strings.EqualFold(s.cfg.Env, "development") &&
+		strings.EqualFold(strings.TrimSpace(os.Getenv("OTP_BYPASS_SEND")), "true")
+
 	allRecipients := append(append([]string{}, to...), cc...)
 	allRecipients = append(allRecipients, bcc...)
 
@@ -224,7 +235,14 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 			}
 		}
 		for _, phone := range to {
-			sid, err := utils.SendSMS(phone, body)
+			var sid string
+			var err error
+			if otpDevBypass {
+				log.Printf("[OTP-DEV-BYPASS] Not sending SMS — phone=%s body=%q session=%s", phone, body, sessionID)
+				sid = "dev-bypass"
+			} else {
+				sid, err = utils.SendSMS(phone, body)
+			}
 			if err != nil {
 				status = "failed"
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
@@ -249,7 +267,14 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 	case "whatsapp":
 		status = "sent"
 		for _, phone := range to {
-			messageID, err := utils.SendOTPWithMetaTemplate(phone, body)
+			var messageID string
+			var err error
+			if otpDevBypass {
+				log.Printf("[OTP-DEV-BYPASS] Not sending WhatsApp — phone=%s body=%q session=%s", phone, body, sessionID)
+				messageID = "dev-bypass"
+			} else {
+				messageID, err = utils.SendOTPWithMetaTemplate(phone, body)
+			}
 			if err != nil {
 				status = "failed"
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
