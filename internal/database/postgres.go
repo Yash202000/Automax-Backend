@@ -3,7 +3,6 @@ package database
 import (
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"time"
 
@@ -387,7 +386,7 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	// Assign a unique Organization Code (ORG-######) to any department missing one.
 	// EPM940 only — other clients supply department codes in the payload. Idempotent:
 	// only touches rows with an empty/NULL code.
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+	if strings.EqualFold(strings.TrimSpace(cfg.ClientCode), constants.CLIENT_CODE.EPM940) {
 		if err := migrations.MigrateDepartmentCodeBackfill(db); err != nil {
 			log.Printf("Warning: department code backfill failed: %v", err)
 		}

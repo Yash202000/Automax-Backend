@@ -34,6 +34,7 @@ import (
 func main() {
 	godotenv.Load() // must be before config.Load() so .env values are in the environment
 	cfg := config.Load()
+	handlers.SetClientCode(cfg.ClientCode)
 
 	log.Printf("GOAL_MANAGEMENT enabled: %v", cfg.GoalManagement.Enabled)
 	validation.InitValidatorRegistry()
@@ -121,7 +122,7 @@ func main() {
 	defer ldapService.Close()
 
 	callLogService := services.NewCallLogService(callLogRepo, userRepo, minioStorage)
-	workflowService := services.NewWorkflowService(workflowRepo, roleRepo, departmentRepo, classificationRepo, userRepo, db)
+	workflowService := services.NewWorkflowService(workflowRepo, roleRepo, departmentRepo, classificationRepo, userRepo, db, cfg)
 	incidentService := services.NewIncidentService(incidentRepo, incidentMergeRepo, workflowRepo, workflowService, userRepo, departmentRepo, classificationRepo, locationRepo, rejectionLogRepo, roleRepo, minioStorage, db, wsHub)
 	incidentMergeService := services.NewIncidentMergeService(incidentMergeRepo, incidentRepo, workflowRepo, roleRepo, locationRepo, classificationRepo, db, wsHub)
 	reportService := services.NewReportService(reportRepo, rejectionLogRepo, locationRepo, classificationRepo, workflowRepo)
@@ -178,6 +179,7 @@ func main() {
 	incidentService.SetUserService(userService)
 	incidentService.SetFCMService(fcmService)
 	incidentService.SetIvrSmsLinkRepo(ivrSmsLinkRepo)
+	incidentService.SetConfig(cfg)
 	smsFeedbackPendingRepo := repository.NewSmsFeedbackPendingRepository(db)
 	incidentService.SetActionExecutor(services.NewActionExecutor(incidentRepo, userRepo, notificationService, smsFeedbackPendingRepo))
 	incidentService.SetPublicFeedbackRepo(publicFeedbackRepo)
@@ -211,7 +213,7 @@ func main() {
 	aiQualityMonitor.Start(ctx)
 	defer aiQualityMonitor.Stop()
 
-	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+	clientCode := strings.TrimSpace(cfg.ClientCode)
 	if strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
 		// Initialize and start Auto-Assign Monitor
 		autoAssignMonitor := services.NewAutoAssignMonitor(incidentService, cfg.AutoAssign)
@@ -231,14 +233,14 @@ func main() {
 	categoryService := services.NewCategoryService(categoryRepo)
 	categoryHandler := handlers.NewCategoryHandler(categoryService)
 	classificationHandler := handlers.NewClassificationHandler(classificationRepo)
-	locationHandler := handlers.NewLocationHandler(locationRepo)
-	departmentHandler := handlers.NewDepartmentHandler(departmentRepo, userRepo)
-	extensionHandler := handlers.NewExtensionHandler(extensionService)
-	roleHandler := handlers.NewRoleHandler(roleRepo, permissionRepo, userRepo, wsHub)
+	locationHandler := handlers.NewLocationHandler(locationRepo, cfg)
+	departmentHandler := handlers.NewDepartmentHandler(departmentRepo, userRepo, cfg)
+	extensionHandler := handlers.NewExtensionHandler(extensionService, cfg)
+	roleHandler := handlers.NewRoleHandler(roleRepo, permissionRepo, userRepo, wsHub, cfg)
 	actionLogHandler := handlers.NewActionLogHandler(actionLogService, validate)
 	callLogHandler := handlers.NewCallLogHandler(callLogService, validate, userService, minioStorage)
-	workflowHandler := handlers.NewWorkflowHandler(workflowService, actionLogService)
-	incidentHandler := handlers.NewIncidentHandler(incidentService, userService, userRepo, incidentRepo, workflowRepo, locationRepo, classificationRepo, minioStorage, presenceService)
+	workflowHandler := handlers.NewWorkflowHandler(workflowService, actionLogService, cfg)
+	incidentHandler := handlers.NewIncidentHandler(incidentService, userService, userRepo, incidentRepo, workflowRepo, locationRepo, classificationRepo, minioStorage, presenceService, cfg)
 	incidentHandler.SetReadyToCloseService(readyToCloseService)
 	incidentHandler.SetIvrSmsLinkRepo(ivrSmsLinkRepo)
 	incidentHandler.SetPublicFeedbackRepo(publicFeedbackRepo)

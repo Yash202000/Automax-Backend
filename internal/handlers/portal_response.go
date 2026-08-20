@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"os"
 	"strings"
 
 	"github.com/automax/backend/pkg/constants"
@@ -10,10 +9,20 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
+// configuredClientCode is set once from main.go after config.Load(), so free
+// functions like isPortalContext (no handler receiver to carry *config.Config
+// through) can read it without touching os.Getenv directly.
+var configuredClientCode string
+
+// SetClientCode wires the configured client code into this package.
+func SetClientCode(code string) {
+	configuredClientCode = code
+}
+
 // isPortalContext returns true when the request originates from the EPM portal.
 // Checks both the query string (?source=epmportal) and an optional body-level source value.
 func isPortalContext(c *fiber.Ctx, bodySource ...string) bool {
-	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+	clientCode := strings.TrimSpace(configuredClientCode)
 	if !strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
 		return false
 	}
