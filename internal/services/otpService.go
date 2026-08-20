@@ -154,6 +154,15 @@ func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode strin
 		return "", nil, fmt.Errorf("failed to generate otp: %w", err)
 	}
 
+	// Invalidate any previously issued, still-live OTP for this phone immediately —
+	// otherwise the old session's key just sits in Redis until its own original TTL
+	// runs out, so a superseded ("expired" from the user's point of view, since a
+	// newer code was requested) code can still be used to log in.
+	activeKey := "otp_active:" + phone
+	if prevSessionID, err := s.redis.Get(ctx, activeKey).Result(); err == nil && prevSessionID != "" {
+		s.redis.Del(ctx, "otp:"+phone+"--"+prevSessionID)
+	}
+
 	otpSessionID := uuid.New()
 	key := "otp:" + phone + "--" + otpSessionID.String()
 
@@ -220,6 +229,10 @@ func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode strin
 	tombstoneKey := "otp_seen:" + phone + "--" + otpSessionID.String()
 	s.redis.Set(ctx, tombstoneKey, "1", ttl+10*time.Minute)
 
+	// Track this session as the current active one for the phone, so the next
+	// SendOTP call can immediately evict it if it's still unused/unexpired.
+	s.redis.Set(ctx, activeKey, otpSessionID.String(), ttl)
+
 	return otpSessionID.String(), nil, nil
 }
 
@@ -281,6 +294,13 @@ func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID stri
 		return nil, fmt.Errorf("%s", i18n.T(ctx, "invalid_otp"))
 	}
 
+	// Code matched — invalidate it immediately so it becomes single-use right away,
+	// instead of staying valid (and replayable) in Redis until GenerateTokenViaUserID
+	// and MarkOTPVerified below finish, one of which can fail and previously left the
+	// key untouched.
+	s.redis.Del(ctx, key, tombstoneKey)
+	s.redis.Del(ctx, "otp_active:"+phone)
+
 	// Fetch user by phone — if not found, auto-create as citizen
 	user, err := s.userRepo.FindByMobile(ctx, phone)
 	if err != nil {
@@ -313,8 +333,6 @@ func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID stri
 	if err != nil {
 		return nil, fmt.Errorf("failed to update otp status: %w", err)
 	}
-	//SUCCESS  then DELETE OTP FROM REDIS
-	s.redis.Del(ctx, key, tombstoneKey)
 
 	return resp, nil
 }
