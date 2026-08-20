@@ -619,6 +619,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Request Info on Incidents", Code: "incidents:request-info", Module: "incidents", Action: "request_info", ActionAr: "طلب معلومات", Description: "Request additional information from citizens"},
 		{Name: "Share Incidents", Code: "incidents:share", Module: "incidents", Action: "share", ActionAr: "مشاركة", Description: "Share incident details with external parties"},
 		{Name: "Filter Incidents by Reporter Phone", Code: "incidents:filter_reporter_phone", Module: "incidents", Action: "filter_reporter_phone", ActionAr: "تصفية حسب هاتف المبلغ", Description: "Filter incidents by reporter phone number"},
+		{Name: "Upload Attachment Gallery", Code: "incidents:upload-attachment-gallery", Module: "incidents", Action: "upload_attachment_gallery", ActionAr: "رفع معرض المرفقات", Description: "Upload attachments to the incident attachment gallery"},
 
 		// Request permissions
 		{Name: "View Requests", Code: "requests:view", Module: "requests", Action: "view", ActionAr: "عرض", Description: "View requests"},
