@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/pkg/constants"
@@ -86,9 +86,10 @@ type workflowService struct {
 	classRepo repository.ClassificationRepository
 	userRepo  repository.UserRepository
 	db        *gorm.DB
+	cfg       *config.Config
 }
 
-func NewWorkflowService(repo repository.WorkflowRepository, roleRepo repository.RoleRepository, deptRepo repository.DepartmentRepository, classRepo repository.ClassificationRepository, userRepo repository.UserRepository, db *gorm.DB) WorkflowService {
+func NewWorkflowService(repo repository.WorkflowRepository, roleRepo repository.RoleRepository, deptRepo repository.DepartmentRepository, classRepo repository.ClassificationRepository, userRepo repository.UserRepository, db *gorm.DB, cfg *config.Config) WorkflowService {
 	return &workflowService{
 		repo:      repo,
 		roleRepo:  roleRepo,
@@ -96,6 +97,7 @@ func NewWorkflowService(repo repository.WorkflowRepository, roleRepo repository.
 		classRepo: classRepo,
 		userRepo:  userRepo,
 		db:        db,
+		cfg:       cfg,
 	}
 }
 
@@ -412,7 +414,7 @@ func (s *workflowService) CreateWorkflow(ctx context.Context, req *models.Workfl
 	// Workflow Code is system-generated only for EPM940; other clients (e.g.
 	// VD2) keep supplying their own code, as before.
 	code := req.Code
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+	if strings.EqualFold(strings.TrimSpace(s.cfg.ClientCode), constants.CLIENT_CODE.EPM940) {
 		generated, err := s.generateUniqueWorkflowCode(ctx, req.Name)
 		if err != nil {
 			return nil, err
@@ -628,7 +630,7 @@ func (s *workflowService) UpdateWorkflow(ctx context.Context, id uuid.UUID, req 
 	}
 	// Workflow Code is system-generated at creation and is non-editable for
 	// EPM940. Other clients (e.g. VD2) may still update it.
-	if req.Code != "" && !strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+	if req.Code != "" && !strings.EqualFold(strings.TrimSpace(s.cfg.ClientCode), constants.CLIENT_CODE.EPM940) {
 		workflow.Code = req.Code
 	}
 	if req.Description != "" {
@@ -796,7 +798,7 @@ func (s *workflowService) DuplicateWorkflow(ctx context.Context, id uuid.UUID, c
 	// Create new workflow
 	newName := fmt.Sprintf("%s (Copy)", original.Name)
 	var newCode string
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+	if strings.EqualFold(strings.TrimSpace(s.cfg.ClientCode), constants.CLIENT_CODE.EPM940) {
 		generated, err := s.generateUniqueWorkflowCode(ctx, newName)
 		if err != nil {
 			return nil, err
@@ -1083,7 +1085,7 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 	// EPM940 auto-generates the State Code (STE-######) in the repository, so leave
 	// it empty here; other clients (e.g. VD2) keep supplying their own code.
 	code := req.Code
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+	if strings.EqualFold(strings.TrimSpace(s.cfg.ClientCode), constants.CLIENT_CODE.EPM940) {
 		code = ""
 	}
 
@@ -1397,7 +1399,7 @@ func (s *workflowService) CreateTransition(ctx context.Context, workflowID uuid.
 	// EPM940 auto-generates the Transition Code (TRN-######) in the repository, so
 	// leave it empty here; other clients (e.g. VD2) keep supplying their own code.
 	code := req.Code
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+	if strings.EqualFold(strings.TrimSpace(s.cfg.ClientCode), constants.CLIENT_CODE.EPM940) {
 		code = ""
 	}
 

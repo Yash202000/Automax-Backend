@@ -290,16 +290,17 @@ var messages = map[string][2]string{
 	"failed_to_retrieve_comment_template": {"Failed to retrieve comment template", "فشل استرجاع قالب التعليق"},
 
 	// ── Attachments ───────────────────────────────────────────────────────────
-	"attachment_uploaded":           {"Attachment uploaded", "تم رفع المرفق"},
-	"attachments_retrieved":         {"Attachments retrieved", "تم استرجاع المرفقات"},
-	"attachment_deleted":            {"Attachment deleted", "تم حذف المرفق"},
-	"attachment_not_found":          {"Attachment not found", "المرفق غير موجود"},
-	"attachment_id_required":        {"Attachment ID is required", "معرّف المرفق مطلوب"},
-	"attachment_storage_missing":    {"Attachment storage path not found", "مسار تخزين المرفق غير موجود"},
-	"invalid_attachment_id":         {"Invalid attachment ID", "معرّف المرفق غير صالح"},
-	"failed_to_fetch_attachments":   {"Failed to fetch attachments", "فشل جلب المرفقات"},
-	"failed_to_read_attachment":     {"Failed to read attachment", "فشل قراءة المرفق"},
-	"failed_to_retrieve_attachment": {"Failed to retrieve attachment", "فشل استرجاع المرفق"},
+	"attachment_uploaded":             {"Attachment uploaded", "تم رفع المرفق"},
+	"attachments_retrieved":           {"Attachments retrieved", "تم استرجاع المرفقات"},
+	"attachment_deleted":              {"Attachment deleted", "تم حذف المرفق"},
+	"attachment_not_found":            {"Attachment not found", "المرفق غير موجود"},
+	"attachment_id_required":          {"Attachment ID is required", "معرّف المرفق مطلوب"},
+	"attachment_storage_missing":      {"Attachment storage path not found", "مسار تخزين المرفق غير موجود"},
+	"invalid_attachment_id":           {"Invalid attachment ID", "معرّف المرفق غير صالح"},
+	"failed_to_fetch_attachments":     {"Failed to fetch attachments", "فشل جلب المرفقات"},
+	"failed_to_read_attachment":       {"Failed to read attachment", "فشل قراءة المرفق"},
+	"failed_to_retrieve_attachment":   {"Failed to retrieve attachment", "فشل استرجاع المرفق"},
+	"max_description_length_exceeded": {"Description exceeds the maximum allowed length", "يتجاوز الوصف الحد الأقصى المسموح به للطول"},
 
 	// ── Feedback ──────────────────────────────────────────────────────────────
 	"feedback_created":                    {"Feedback created", "تم إنشاء التقييم"},

@@ -3,10 +3,10 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
+	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/pkg/constants"
@@ -21,12 +21,14 @@ import (
 type LocationHandler struct {
 	repo      repository.LocationRepository
 	validator *validator.Validate
+	cfg       *config.Config
 }
 
-func NewLocationHandler(repo repository.LocationRepository) *LocationHandler {
+func NewLocationHandler(repo repository.LocationRepository, cfg *config.Config) *LocationHandler {
 	return &LocationHandler{
 		repo:      repo,
 		validator: validator.New(),
+		cfg:       cfg,
 	}
 }
 
@@ -41,7 +43,7 @@ func (h *LocationHandler) Create(c *fiber.Ctx) error {
 
 	// EPM940 auto-generates the Location Code (loc-######) and ignores any
 	// supplied value; other clients must supply the code in the payload.
-	isEPM940 := strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940)
+	isEPM940 := strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940)
 
 	validationErrors := validation.ValidateStruct(c.UserContext(), &req)
 	if !isEPM940 && req.Code == "" {
@@ -141,7 +143,7 @@ func (h *LocationHandler) Update(c *fiber.Ctx) error {
 
 	// EPM940's code is system-generated and immutable; other clients may edit it,
 	// subject to a uniqueness check.
-	isEPM940 := strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940)
+	isEPM940 := strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940)
 
 	checkName := req.Name
 	if checkName == "" {
@@ -434,7 +436,7 @@ func (h *LocationHandler) Import(c *fiber.Ctx) error {
 	skipped := 0
 	errors := []string{}
 
-	isEPM940 := strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940)
+	isEPM940 := strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940)
 
 	// Import all locations in level order
 	for _, data := range importData {

@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"os"
 	"strings"
 	"time"
 
+	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
@@ -26,13 +26,15 @@ type WorkflowHandler struct {
 	service          services.WorkflowService
 	actionLogService services.ActionLogService
 	validator        *validator.Validate
+	cfg              *config.Config
 }
 
-func NewWorkflowHandler(service services.WorkflowService, actionLogService services.ActionLogService) *WorkflowHandler {
+func NewWorkflowHandler(service services.WorkflowService, actionLogService services.ActionLogService, cfg *config.Config) *WorkflowHandler {
 	return &WorkflowHandler{
 		service:          service,
 		actionLogService: actionLogService,
 		validator:        validator.New(),
+		cfg:              cfg,
 	}
 }
 
@@ -52,7 +54,7 @@ func (h *WorkflowHandler) CreateWorkflow(c *fiber.Ctx) error {
 	// be a static "required" struct tag since that rule is client-specific,
 	// so fold it into the same validationErrors map (same key/format as
 	// every other field) instead of a bespoke response shape.
-	clientCode := strings.TrimSpace(os.Getenv("CLIENT_CODE"))
+	clientCode := strings.TrimSpace(h.cfg.ClientCode)
 	isEPM940 := strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940)
 
 	if !isEPM940 && req.Code == "" {
@@ -273,7 +275,7 @@ func (h *WorkflowHandler) UpdateWorkflow(c *fiber.Ctx) error {
 	// client-supplied value up front so the duplicate-check below and the
 	// service layer both see it as "not provided", regardless of what a
 	// stale client or direct API call sends.
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+	if strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940) {
 		req.Code = ""
 	}
 
@@ -602,7 +604,7 @@ func (h *WorkflowHandler) CreateState(c *fiber.Ctx) error {
 	// EPM940 auto-generates the State Code (STE-######); other clients (e.g. VD2)
 	// must supply it. The rule is client-specific, so fold it into validationErrors
 	// like CreateWorkflow does rather than a static "required" struct tag.
-	if !strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) && req.Code == "" {
+	if !strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940) && req.Code == "" {
 		if validationErrors == nil {
 			validationErrors = map[string]string{}
 		}
@@ -708,7 +710,7 @@ func (h *WorkflowHandler) UpdateState(c *fiber.Ctx) error {
 
 	// State Code is system-generated and immutable for EPM940. Discard any
 	// client-supplied value so the service never overwrites the generated code.
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+	if strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940) {
 		req.Code = ""
 	}
 
@@ -912,7 +914,7 @@ func (h *WorkflowHandler) CreateTransition(c *fiber.Ctx) error {
 	// EPM940 auto-generates the Transition Code (TRN-######); other clients (e.g. VD2)
 	// must supply it. The rule is client-specific, so fold it into validationErrors
 	// like CreateWorkflow does rather than a static "required" struct tag.
-	if !strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) && req.Code == "" {
+	if !strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940) && req.Code == "" {
 		if validationErrors == nil {
 			validationErrors = map[string]string{}
 		}
@@ -1012,7 +1014,7 @@ func (h *WorkflowHandler) UpdateTransition(c *fiber.Ctx) error {
 
 	// Transition Code is system-generated and immutable for EPM940. Discard any
 	// client-supplied value so the service never overwrites the generated code.
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+	if strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940) {
 		req.Code = ""
 	}
 

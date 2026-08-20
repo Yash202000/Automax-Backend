@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
+	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/pkg/constants"
@@ -23,13 +23,15 @@ type DepartmentHandler struct {
 	repo      repository.DepartmentRepository
 	userRepo  repository.UserRepository
 	validator *validator.Validate
+	cfg       *config.Config
 }
 
-func NewDepartmentHandler(repo repository.DepartmentRepository, userRepo repository.UserRepository) *DepartmentHandler {
+func NewDepartmentHandler(repo repository.DepartmentRepository, userRepo repository.UserRepository, cfg *config.Config) *DepartmentHandler {
 	return &DepartmentHandler{
 		repo:      repo,
 		userRepo:  userRepo,
 		validator: validator.New(),
+		cfg:       cfg,
 	}
 }
 
@@ -46,7 +48,7 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 	// supplied value; other clients (e.g. VD2) must supply the code in the payload.
 	// The requirement is client-specific, so it can't be a static "required" struct
 	// tag — fold it into the same validationErrors map like workflow_handler does.
-	isEPM940 := strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940)
+	isEPM940 := strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940)
 
 	validationErrors := validation.ValidateStruct(c.UserContext(), &req)
 	if !isEPM940 && strings.TrimSpace(req.Code) == "" {
@@ -223,7 +225,7 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 	}
 	// Code is a permanent, system-generated identifier for EPM940 and must never
 	// change on update; other clients (e.g. VD2) may edit the payload-supplied code.
-	if !strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) &&
+	if !strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940) &&
 		strings.TrimSpace(req.Code) != "" {
 		department.Code = strings.TrimSpace(req.Code)
 	}
@@ -589,7 +591,7 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 			// EPM940: Code omitted so the repository generates a fresh unique ORG-######
 			// code (imports/integrations can never introduce duplicates). Other clients:
 			// keep the code from the import file.
-			Code:        importDeptCode(data.Code),
+			Code:        h.importDeptCode(data.Code),
 			Name:        data.Name,
 			Description: data.Description,
 			ParentID:    newParentID,
@@ -619,8 +621,8 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 // importDeptCode returns the code to persist for an imported department: empty for
 // EPM940 (the repository generates a unique ORG-###### code), otherwise the code
 // from the import file.
-func importDeptCode(code string) string {
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("CLIENT_CODE")), constants.CLIENT_CODE.EPM940) {
+func (h *DepartmentHandler) importDeptCode(code string) string {
+	if strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940) {
 		return ""
 	}
 	return code
