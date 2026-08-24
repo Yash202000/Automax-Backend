@@ -311,8 +311,8 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 	if filter.ReporterPhone != "" {
 		phones := reporterPhoneVariants(filter.ReporterPhone)
 		query = query.Where(
-			"reporter_phone IN ? OR reporter_id IN (SELECT id FROM users WHERE phone IN ? OR id IN (SELECT user_id FROM extension_assignments WHERE extension IN ?))",
-			phones, phones, phones,
+			"reporter_phone IN ? OR reporter_phone LIKE ?",
+			phones, "%"+filter.ReporterPhone+"%",
 		)
 	}
 	// this to avoid EPM Citizen Portal security boundary
@@ -326,9 +326,7 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 		phonePattern := "%" + phone + "%"
 		phoneWithPlusPattern := "%" + phoneWithPlus + "%"
 		query = query.Where(
-			"reporter_phone ILIKE ? OR reporter_phone ILIKE ? OR reporter_id IN (SELECT id FROM users WHERE phone ILIKE ? OR phone ILIKE ? OR id IN (SELECT user_id FROM extension_assignments WHERE extension ILIKE ? OR extension ILIKE ?))",
-			phonePattern, phoneWithPlusPattern,
-			phonePattern, phoneWithPlusPattern,
+			"reporter_phone ILIKE ? OR reporter_phone ILIKE ?",
 			phonePattern, phoneWithPlusPattern,
 		)
 	}
@@ -453,6 +451,7 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		Limit(filter.Limit).
 		Find(&incidents).Error
 	if err != nil {
+		log.Print(err)
 		return nil, 0, err
 	}
 
@@ -1085,8 +1084,8 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 		if filter.ReporterPhone != "" {
 			phones := reporterPhoneVariants(filter.ReporterPhone)
 			q = q.Where(
-				"incidents.reporter_phone IN ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone IN ? OR id IN (SELECT user_id FROM extension_assignments WHERE extension IN ?))",
-				phones, phones, phones,
+				"incidents.reporter_phone IN ?",
+				phones,
 			)
 		}
 		if filter.ReporterPhoneSearch != "" {
@@ -1099,7 +1098,7 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 			phonePattern := "%" + phone + "%"
 			phoneWithPlusPattern := "%" + phoneWithPlus + "%"
 			q = q.Where(
-				"incidents.reporter_phone ILIKE ? OR incidents.reporter_phone ILIKE ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone ILIKE ? OR phone ILIKE ? OR id IN (SELECT user_id FROM extension_assignments WHERE extension ILIKE ? OR extension ILIKE ?))",
+				"incidents.reporter_phone ILIKE ? OR incidents.reporter_phone ILIKE ?",
 				phonePattern, phoneWithPlusPattern,
 				phonePattern, phoneWithPlusPattern,
 				phonePattern, phoneWithPlusPattern,
@@ -1196,7 +1195,7 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 
 	//  Total
 	baseQuery := applyBaseFilters(
-		r.db.WithContext(ctx).Model(&models.Incident{}).
+		r.db.WithContext(ctx).Model(&models.Incident{}).Debug().
 			Where("incidents.workflow_id IN (SELECT id FROM workflows WHERE deleted_at IS NULL)"),
 	)
 	if err := baseQuery.Count(&stats.Total).Error; err != nil {
