@@ -311,8 +311,8 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 	if filter.ReporterPhone != "" {
 		phones := reporterPhoneVariants(filter.ReporterPhone)
 		query = query.Where(
-			"reporter_phone IN ?",
-			phones,
+			"reporter_phone IN ? OR reporter_phone LIKE ?",
+			phones, "%"+filter.ReporterPhone+"%",
 		)
 	}
 	// this to avoid EPM Citizen Portal security boundary
@@ -1195,7 +1195,7 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 
 	//  Total
 	baseQuery := applyBaseFilters(
-		r.db.WithContext(ctx).Model(&models.Incident{}).
+		r.db.WithContext(ctx).Model(&models.Incident{}).Debug().
 			Where("incidents.workflow_id IN (SELECT id FROM workflows WHERE deleted_at IS NULL)"),
 	)
 	if err := baseQuery.Count(&stats.Total).Error; err != nil {
