@@ -317,18 +317,9 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 	}
 	// this to avoid EPM Citizen Portal security boundary
 	if filter.ReporterPhoneSearch != "" {
-		phone := filter.ReporterPhoneSearch
-		phoneWithPlus := "+" + phone
-		if strings.HasPrefix(phone, "+") {
-			phoneWithPlus = phone
-			phone = strings.TrimPrefix(phone, "+")
-		}
+		phone := strings.TrimPrefix(filter.ReporterPhoneSearch, "+")
 		phonePattern := "%" + phone + "%"
-		phoneWithPlusPattern := "%" + phoneWithPlus + "%"
-		query = query.Where(
-			"reporter_phone ILIKE ? OR reporter_phone ILIKE ?",
-			phonePattern, phoneWithPlusPattern,
-		)
+		query = query.Where("reporter_phone ILIKE ?", phonePattern)
 	}
 	if filter.CallerIdentity != "" {
 		query = query.Where("caller_identity = ?", filter.CallerIdentity)
