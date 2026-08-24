@@ -317,18 +317,14 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 	}
 	// this to avoid EPM Citizen Portal security boundary
 	if filter.ReporterPhoneSearch != "" {
-		phone := filter.ReporterPhoneSearch
-		phoneWithPlus := "+" + phone
-		if strings.HasPrefix(phone, "+") {
-			phoneWithPlus = phone
-			phone = strings.TrimPrefix(phone, "+")
-		}
+		// A literal "+" in a query string is decoded as a space by
+		// form-encoding rules (e.g. ?reporter_phone_search=+919120912012
+		// arrives here as " 919120912012"), so trim before stripping the
+		// "+" prefix or the leading space stays embedded in the pattern
+		// and silently matches nothing.
+		phone := strings.TrimPrefix(strings.TrimSpace(filter.ReporterPhoneSearch), "+")
 		phonePattern := "%" + phone + "%"
-		phoneWithPlusPattern := "%" + phoneWithPlus + "%"
-		query = query.Where(
-			"reporter_phone ILIKE ? OR reporter_phone ILIKE ?",
-			phonePattern, phoneWithPlusPattern,
-		)
+		query = query.Where("reporter_phone ILIKE ?", phonePattern)
 	}
 	if filter.CallerIdentity != "" {
 		query = query.Where("caller_identity = ?", filter.CallerIdentity)
@@ -1089,20 +1085,15 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 			)
 		}
 		if filter.ReporterPhoneSearch != "" {
-			phone := filter.ReporterPhoneSearch
-			phoneWithPlus := "+" + phone
-			if strings.HasPrefix(phone, "+") {
-				phoneWithPlus = phone
-				phone = strings.TrimPrefix(phone, "+")
-			}
+			// A literal "+" in a query string is decoded as a space by
+			// form-encoding rules (e.g. ?reporter_phone_search=+919120912012
+			// arrives here as " 919120912012"), so trim before stripping the
+			// "+" prefix or the leading space stays embedded in the pattern
+			// and silently matches nothing. Kept in sync with the single-ILIKE
+			// pattern in applyIncidentFilters.
+			phone := strings.TrimPrefix(strings.TrimSpace(filter.ReporterPhoneSearch), "+")
 			phonePattern := "%" + phone + "%"
-			phoneWithPlusPattern := "%" + phoneWithPlus + "%"
-			q = q.Where(
-				"incidents.reporter_phone ILIKE ? OR incidents.reporter_phone ILIKE ?",
-				phonePattern, phoneWithPlusPattern,
-				phonePattern, phoneWithPlusPattern,
-				phonePattern, phoneWithPlusPattern,
-			)
+			q = q.Where("incidents.reporter_phone ILIKE ?", phonePattern)
 		}
 		if filter.SLABreached != nil {
 			q = q.Where("incidents.sla_breached = ?", *filter.SLABreached)
