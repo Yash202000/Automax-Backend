@@ -1100,8 +1100,6 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 			q = q.Where(
 				"incidents.reporter_phone ILIKE ? OR incidents.reporter_phone ILIKE ?",
 				phonePattern, phoneWithPlusPattern,
-				phonePattern, phoneWithPlusPattern,
-				phonePattern, phoneWithPlusPattern,
 			)
 		}
 		if filter.SLABreached != nil {
