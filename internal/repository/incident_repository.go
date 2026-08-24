@@ -434,7 +434,7 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 		sortColumn = "updated_at"
 	}
 
-	err := query.Debug().
+	err := query.
 		Preload("Classification").
 		Preload("TransitionHistory").
 		Preload("TransitionHistory.PerformedBy").
