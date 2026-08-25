@@ -62,6 +62,7 @@ type IncidentRepository interface {
 
 	// Assignment
 	AssignIncident(ctx context.Context, incidentID, assigneeID uuid.UUID) error
+	IsUserAssignee(ctx context.Context, incidentID, userID uuid.UUID) (bool, error)
 	SetAssignees(ctx context.Context, incidentID uuid.UUID, userIDs []uuid.UUID) error
 	ClearAssignees(ctx context.Context, incidentID uuid.UUID) error
 	SetLookupValues(ctx context.Context, incidentID uuid.UUID, lookupValues []models.LookupValue) error
@@ -284,7 +285,12 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 		}
 	}
 	if len(filter.DepartmentID) != 0 {
-		query = query.Where("department_id IN ?", filter.DepartmentID)
+		if filter.IncludeUnassignedDepartment {
+			query = query.Where("department_id IN ? OR (department_id IS NULL AND current_state_id IN (SELECT id FROM workflow_states WHERE state_type = 'initial') AND (assignee_id = ? OR reporter_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
+				filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID)
+		} else {
+			query = query.Where("department_id IN ?", filter.DepartmentID)
+		}
 	}
 	// fix bleow filter for location and reporter to handle multiple values
 
@@ -712,6 +718,15 @@ func (r *incidentRepository) AssignIncident(ctx context.Context, incidentID, ass
 		Update("assignee_id", assigneeID).Error
 }
 
+func (r *incidentRepository) IsUserAssignee(ctx context.Context, incidentID, userID uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&models.Incident{}).
+		Where("id = ? AND (assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?))", incidentID, userID, userID).
+		Count(&count).Error
+	return count > 0, err
+}
+
 func (r *incidentRepository) SetAssignees(ctx context.Context, incidentID uuid.UUID, userIDs []uuid.UUID) error {
 	// Get the incident
 	var incident models.Incident
@@ -817,7 +832,12 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 		}
 
 		if len(filter.DepartmentID) != 0 {
-			baseQuery = baseQuery.Where("department_id IN ?", filter.DepartmentID)
+			if filter.IncludeUnassignedDepartment {
+				baseQuery = baseQuery.Where("department_id IN ? OR (department_id IS NULL AND current_state_id IN (SELECT id FROM workflow_states WHERE state_type = 'initial') AND (assignee_id = ? OR reporter_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
+					filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID)
+			} else {
+				baseQuery = baseQuery.Where("department_id IN ?", filter.DepartmentID)
+			}
 		}
 
 		if len(filter.AssigneeID) != 0 {
@@ -1030,7 +1050,12 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 			q = q.Where("incidents.workflow_id IN ?", filter.WorkflowID)
 		}
 		if len(filter.DepartmentID) > 0 {
-			q = q.Where("incidents.department_id IN ?", filter.DepartmentID)
+			if filter.IncludeUnassignedDepartment {
+				q = q.Where("incidents.department_id IN ? OR (incidents.department_id IS NULL AND incidents.current_state_id IN (SELECT id FROM workflow_states WHERE state_type = 'initial') AND (incidents.assignee_id = ? OR incidents.reporter_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
+					filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID)
+			} else {
+				q = q.Where("incidents.department_id IN ?", filter.DepartmentID)
+			}
 		}
 		if len(filter.AssigneeID) > 0 {
 			q = q.Where(`incidents.assignee_id IN ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id IN ?)`,
@@ -1377,7 +1402,12 @@ func (r *incidentRepository) GetPriorityCounts(ctx context.Context, filter *mode
 		}
 
 		if len(filter.DepartmentID) != 0 {
-			query = query.Where("incidents.department_id IN ?", filter.DepartmentID)
+			if filter.IncludeUnassignedDepartment {
+				query = query.Where("incidents.department_id IN ? OR (incidents.department_id IS NULL AND incidents.current_state_id IN (SELECT id FROM workflow_states WHERE state_type = 'initial') AND (incidents.assignee_id = ? OR incidents.reporter_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
+					filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID)
+			} else {
+				query = query.Where("incidents.department_id IN ?", filter.DepartmentID)
+			}
 		}
 
 		if len(filter.AssigneeID) != 0 {

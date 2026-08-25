@@ -417,7 +417,16 @@ func (h *IncidentHandler) applyUserAccessScope(filter *models.IncidentFilter, us
 			userDeptStrs = append(userDeptStrs, d.ID.String())
 		}
 	}
+	// No explicit department filter requested -> the resulting DepartmentID
+	// comes purely from the user's scope, so this user's own incidents still
+	// in their workflow's initial state (not yet triaged to a department)
+	// should still be visible. Gated on state_type='initial' in the repo query.
+	noExplicitDeptFilter := len(filter.DepartmentID) == 0
 	filter.DepartmentID = intersectScope(userDeptStrs, filter.DepartmentID)
+	if noExplicitDeptFilter && len(userDeptStrs) > 0 {
+		filter.IncludeUnassignedDepartment = true
+		filter.UserID = user.ID
+	}
 
 	var userClassStrs []string
 	for _, c := range user.Classifications {
@@ -462,16 +471,34 @@ func (h *IncidentHandler) checkUserAccessToIncident(c *fiber.Ctx, incident *mode
 		}
 	}
 
-	if len(userDeptIDs) > 0 && incident.DepartmentID != nil {
-		found := false
-		for _, id := range userDeptIDs {
-			if id == *incident.DepartmentID {
-				found = true
-				break
+	// Incidents still in their workflow's initial state haven't been triaged
+	// to a department yet, so department scope can't be evaluated against
+	// them. Let the reporter/assignee through in that window; once the
+	// incident leaves its initial state, department scoping applies as usual
+	// (including denying access if department_id is still nil by then).
+	isInitialState := incident.CurrentState != nil && incident.CurrentState.StateType == "initial"
+
+	if len(userDeptIDs) > 0 {
+		if incident.DepartmentID != nil {
+			found := false
+			for _, id := range userDeptIDs {
+				if id == *incident.DepartmentID {
+					found = true
+					break
+				}
 			}
-		}
-		if !found {
+			if !found {
+				return false
+			}
+		} else if !isInitialState {
 			return false
+		} else {
+			isReporter := incident.ReporterID != nil && *incident.ReporterID == userID
+			isPrimaryAssignee := incident.AssigneeID != nil && *incident.AssigneeID == userID
+			isAssignee, _ := h.incidentRepo.IsUserAssignee(c.UserContext(), incident.ID, userID)
+			if !isReporter && !isPrimaryAssignee && !isAssignee {
+				return false
+			}
 		}
 	}
 
@@ -555,6 +582,8 @@ func (h *IncidentHandler) scopeIncidentFilterToUser(c *fiber.Ctx, filter *models
 						}
 					} else {
 						filter.DepartmentID = deptStrs
+						filter.IncludeUnassignedDepartment = true
+						filter.UserID = userID
 					}
 				}
 				if user.DeptManagerClassificationID != nil {
@@ -1527,6 +1556,8 @@ func (h *IncidentHandler) GetStatsV2(c *fiber.Ctx) error {
 							}
 						} else {
 							filter.DepartmentID = deptStrs
+							filter.IncludeUnassignedDepartment = true
+							filter.UserID = statsUserID
 						}
 					}
 					if u.DeptManagerClassificationID != nil {
@@ -1815,6 +1846,8 @@ func (h *IncidentHandler) applyDepartmentScope(c *fiber.Ctx, filter *models.Inci
 			}
 		} else {
 			filter.DepartmentID = deptStrs
+			filter.IncludeUnassignedDepartment = true
+			filter.UserID = userID
 		}
 	}
 	if user.DeptManagerClassificationID != nil {
