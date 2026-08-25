@@ -48,6 +48,7 @@ type Role struct {
 	IsSystem            bool           `gorm:"default:false" json:"is_system"` // System roles cannot be deleted
 	IsActive            bool           `gorm:"default:true" json:"is_active"`
 	IsDepartmentManager bool           `gorm:"default:false" json:"is_department_manager"`
+	BypassLoginTotp bool           `gorm:"default:false" json:"bypass_login_totp"`
 	Permissions         []Permission   `gorm:"many2many:role_permissions;" json:"permissions,omitempty"`
 	CreatedAt           time.Time      `json:"created_at"`
 	UpdatedAt           time.Time      `json:"updated_at"`
@@ -121,6 +122,7 @@ type RoleCreateRequest struct {
 	Code          string      `json:"code" validate:"omitempty,min=1,max=50"`
 	Description   string      `json:"description" validate:"max=500"`
 	PermissionIDs []uuid.UUID `json:"permission_ids"`
+	BypassLoginTotp bool `json:"bypass_login_totp"`
 }
 
 // RoleUpdateRequest for updating a role
@@ -129,6 +131,7 @@ type RoleUpdateRequest struct {
 	Description   string      `json:"description" validate:"max=500"`
 	PermissionIDs []uuid.UUID `json:"permission_ids"`
 	IsActive      *bool       `json:"is_active"`
+	BypassLoginTotp *bool `json:"bypass_login_totp"`
 }
 
 // RoleResponse for API responses
@@ -140,6 +143,7 @@ type RoleResponse struct {
 	IsSystem            bool                 `json:"is_system"`
 	IsActive            bool                 `json:"is_active"`
 	IsDepartmentManager bool                 `json:"is_department_manager"`
+	BypassLoginTotp bool `json:"bypass_login_totp"`
 	Permissions         []PermissionResponse `json:"permissions,omitempty"`
 	CreatedAt           time.Time            `json:"created_at"`
 }
@@ -153,6 +157,7 @@ func ToRoleResponse(r *Role) RoleResponse {
 		IsSystem:            r.IsSystem,
 		IsActive:            r.IsActive,
 		IsDepartmentManager: r.IsDepartmentManager,
+		BypassLoginTotp: r.BypassLoginTotp,
 		CreatedAt:           r.CreatedAt,
 	}
 

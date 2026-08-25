@@ -164,16 +164,17 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 	}
 
 	user := &models.User{
-		Email:        req.Email,
-		Username:     req.Username,
-		Password:     hashedPassword,
-		FirstName:    req.FirstName,
-		LastName:     req.LastName,
-		Phone:        req.Phone,
-		Extension:    req.Extension,
-		DepartmentID: req.DepartmentID,
-		LocationID:   req.LocationID,
-		IsActive:     true,
+		Email:           req.Email,
+		Username:        req.Username,
+		Password:        hashedPassword,
+		FirstName:       req.FirstName,
+		LastName:        req.LastName,
+		Phone:           req.Phone,
+		Extension:       req.Extension,
+		DepartmentID:    req.DepartmentID,
+		LocationID:      req.LocationID,
+		IsActive:        true,
+		BypassLoginTotp: req.BypassLoginTotp,
 	}
 
 	// Check license user limit before creating
@@ -711,13 +712,27 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 		}
 	}
 
-	if !totpEnabled || user.IsSuperAdmin {
+	if !totpEnabled || user.IsSuperAdmin || IsTotpBypassed(user) {
 		resp.Token = tokenPair.AccessToken
 		resp.RefreshToken = tokenPair.RefreshToken
 		resp.ExpiresIn = tokenPair.ExpiresIn
 	}
 
 	return resp, nil
+}
+
+// IsTotpBypassed reports whether the user is exempt from the totp_enabled login gate,
+// either directly or via any of their assigned (active) roles.
+func IsTotpBypassed(user *models.User) bool {
+	if user.BypassLoginTotp {
+		return true
+	}
+	for _, role := range user.Roles {
+		if role.BypassLoginTotp {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *userService) ValidateMobileForLogin(ctx context.Context, phone string) (*models.UserResponse, error) {
@@ -1091,6 +1106,9 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 
 	if req.Extension != nil {
 		user.Extension = *req.Extension
+	}
+	if req.BypassLoginTotp != nil {
+		user.BypassLoginTotp = *req.BypassLoginTotp
 	}
 
 	if err := s.userRepo.Update(ctx, user); err != nil {

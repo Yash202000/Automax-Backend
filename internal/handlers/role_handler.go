@@ -103,6 +103,7 @@ func (h *RoleHandler) CreateRole(c *fiber.Ctx) error {
 		Description: req.Description,
 		IsActive:    true,
 		IsSystem:    false,
+		BypassLoginTotp: req.BypassLoginTotp,
 	}
 
 	// Non-EPM940: use the payload code verbatim. EPM940: leave empty so the
@@ -182,6 +183,9 @@ func (h *RoleHandler) UpdateRole(c *fiber.Ctx) error {
 	}
 	if req.IsActive != nil {
 		role.IsActive = *req.IsActive
+	}
+	if req.BypassLoginTotp != nil {
+		role.BypassLoginTotp = *req.BypassLoginTotp
 	}
 
 	if err := h.roleRepo.Update(c.UserContext(), role); err != nil {
