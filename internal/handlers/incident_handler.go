@@ -1456,6 +1456,11 @@ func (h *IncidentHandler) GetStats(c *fiber.Ctx) error {
 	// Add user role IDs for state visibility filtering
 	filter.UserRoleIDs = h.getUserRoleIDs(c)
 
+	// Enforce the same department/classification/location scoping as the
+	// list and v2-stats endpoints — previously missing here, which let any
+	// user with incidents:view see global, unscoped stats.
+	h.applyDepartmentScope(c, filter)
+
 	stats, err := h.service.GetStats(c.UserContext(), filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
