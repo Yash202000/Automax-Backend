@@ -175,6 +175,7 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 		LocationID:      req.LocationID,
 		IsActive:        true,
 		BypassLoginTotp: req.BypassLoginTotp,
+		EnableLoginTotp: req.EnableLoginTotp,
 	}
 
 	// Check license user limit before creating
@@ -712,7 +713,7 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 		}
 	}
 
-	if !totpEnabled || user.IsSuperAdmin || IsTotpBypassed(user) {
+	if !totpEnabled || user.IsSuperAdmin || !IsTotpRequired(user) {
 		resp.Token = tokenPair.AccessToken
 		resp.RefreshToken = tokenPair.RefreshToken
 		resp.ExpiresIn = tokenPair.ExpiresIn
@@ -721,18 +722,30 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 	return resp, nil
 }
 
-// IsTotpBypassed reports whether the user is exempt from the totp_enabled login gate,
-// either directly or via any of their assigned (active) roles.
-func IsTotpBypassed(user *models.User) bool {
-	if user.BypassLoginTotp {
-		return true
+// IsTotpRequired decides whether a user must complete TOTP at login, given their
+// (and their roles') bypass_login_totp / enable_login_totp flags. This runs only
+// when the global totp_enabled setting is on and the user isn't a super admin -
+// both are checked separately by the caller.
+//
+// Role assigned   Role.BypassLoginTotp   User.BypassLoginTotp   Result
+// No              -                      false                  required
+// No              -                      true                   bypass (not required)
+// Yes             any                    any (not full bypass)  required = user.EnableLoginTotp
+// Yes             true                   true                   bypass (not required)
+//
+// "Full bypass" means at least one of the user's assigned roles has BypassLoginTotp=true
+// AND the user's own BypassLoginTotp is also true. When a role is assigned but full bypass
+// isn't granted, EnableLoginTotp decides whether TOTP actually applies.
+func IsTotpRequired(user *models.User) bool {
+	if len(user.Roles) == 0 {
+		return !user.BypassLoginTotp
 	}
 	for _, role := range user.Roles {
-		if role.BypassLoginTotp {
-			return true
+		if role.BypassLoginTotp && user.BypassLoginTotp {
+			return false
 		}
 	}
-	return false
+	return user.EnableLoginTotp
 }
 
 func (s *userService) ValidateMobileForLogin(ctx context.Context, phone string) (*models.UserResponse, error) {
@@ -1109,6 +1122,9 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 	}
 	if req.BypassLoginTotp != nil {
 		user.BypassLoginTotp = *req.BypassLoginTotp
+	}
+	if req.EnableLoginTotp != nil {
+		user.EnableLoginTotp = *req.EnableLoginTotp
 	}
 
 	if err := s.userRepo.Update(ctx, user); err != nil {
