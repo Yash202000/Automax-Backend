@@ -621,6 +621,12 @@ type IncidentFilter struct {
 	FilterType  string      `query:"type"` // created | assigned
 	UserID      uuid.UUID   `json:"-"`
 	IsAdmin     bool        `json:"-"` // Super admin bypasses user-scoped assigned filter
+	// IncludeUnassignedDepartment: when true, the DepartmentID filter also
+	// matches incidents that are still in their workflow's initial state
+	// (no department triaged yet), but only when UserID is their reporter
+	// or assignee. Set by the handler when DepartmentID was derived purely
+	// from the user's scope (no explicit department filter requested).
+	IncludeUnassignedDepartment bool `json:"-"`
 }
 
 // Merge Incident Types
