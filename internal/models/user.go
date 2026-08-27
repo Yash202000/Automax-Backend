@@ -39,6 +39,8 @@ type User struct {
 	IsActive                    bool             `gorm:"default:true" json:"is_active"`
 	IsSuperAdmin                bool             `gorm:"default:false" json:"is_super_admin"`
 	IsADUser                    bool             `gorm:"default:false" json:"is_ad_user"`
+	BypassLoginTotp             bool             `gorm:"default:false" json:"bypass_login_totp"`
+	EnableLoginTotp             bool             `gorm:"default:false" json:"enable_login_totp"`
 	DeptManagerDepartmentID     *uuid.UUID       `gorm:"type:uuid;index" json:"dept_manager_department_id,omitempty"`
 	DeptManagerDepartment       *Department      `gorm:"foreignKey:DeptManagerDepartmentID" json:"dept_manager_department,omitempty"`
 	DeptManagerClassificationID *uuid.UUID       `gorm:"type:uuid;index" json:"dept_manager_classification_id,omitempty"`
@@ -187,6 +189,8 @@ type UserRegisterRequest struct {
 	LocationIDs       []uuid.UUID `json:"location_ids"`
 	ClassificationIDs []uuid.UUID `json:"classification_ids"`
 	RoleIDs           []uuid.UUID `json:"role_ids"`
+	BypassLoginTotp   bool        `json:"bypass_login_totp"`
+	EnableLoginTotp   bool        `json:"enable_login_totp"`
 }
 
 // UserIdentifier is the minimal projection of a user row needed for duplicate checks.
@@ -329,6 +333,8 @@ type UserUpdateRequest struct {
 	DeptManagerDepartmentID     *uuid.UUID  `json:"dept_manager_department_id"`
 	DeptManagerClassificationID *uuid.UUID  `json:"dept_manager_classification_id"`
 	DeptManagerLocationID       *uuid.UUID  `json:"dept_manager_location_id"`
+	BypassLoginTotp             *bool       `json:"bypass_login_totp"`
+	EnableLoginTotp             *bool       `json:"enable_login_totp"`
 }
 
 type UserResponse struct {
@@ -353,6 +359,8 @@ type UserResponse struct {
 	IsActive                    bool                     `json:"is_active"`
 	IsSuperAdmin                bool                     `json:"is_super_admin"`
 	IsADUser                    bool                     `json:"is_ad_user"`
+	BypassLoginTotp             bool                     `json:"bypass_login_totp"`
+	EnableLoginTotp             bool                     `json:"enable_login_totp"`
 	DeptManagerDepartmentID     *uuid.UUID               `json:"dept_manager_department_id,omitempty"`
 	DeptManagerDepartment       *DepartmentResponse      `json:"dept_manager_department,omitempty"`
 	DeptManagerClassificationID *uuid.UUID               `json:"dept_manager_classification_id,omitempty"`
@@ -488,25 +496,27 @@ func ToUserLoginResponse(user *User) UserLoginResponse {
 
 func ToUserResponse(user *User) UserResponse {
 	resp := UserResponse{
-		ID:             user.ID,
-		NationalID:     user.NationalID,
-		Email:          user.Email,
-		Username:       user.Username,
-		FirstName:      user.FirstName,
-		LastName:       user.LastName,
-		Phone:          user.Phone,
-		MobileVerified: user.MobileVerified,
-		Avatar:         user.Avatar,
-		DepartmentID:   user.DepartmentID,
-		LocationID:     user.LocationID,
-		IsActive:       user.IsActive,
-		IsSuperAdmin:   user.IsSuperAdmin,
-		IsADUser:       user.IsADUser,
-		Extension:      user.Extension,
-		CallStatus:     string(user.CallStatus),
-		LastLoginAt:    user.LastLoginAt,
-		CreatedAt:      user.CreatedAt,
-		Permissions:    user.GetPermissions(),
+		ID:              user.ID,
+		NationalID:      user.NationalID,
+		Email:           user.Email,
+		Username:        user.Username,
+		FirstName:       user.FirstName,
+		LastName:        user.LastName,
+		Phone:           user.Phone,
+		MobileVerified:  user.MobileVerified,
+		Avatar:          user.Avatar,
+		DepartmentID:    user.DepartmentID,
+		LocationID:      user.LocationID,
+		IsActive:        user.IsActive,
+		IsSuperAdmin:    user.IsSuperAdmin,
+		IsADUser:        user.IsADUser,
+		BypassLoginTotp: user.BypassLoginTotp,
+		EnableLoginTotp: user.EnableLoginTotp,
+		Extension:       user.Extension,
+		CallStatus:      string(user.CallStatus),
+		LastLoginAt:     user.LastLoginAt,
+		CreatedAt:       user.CreatedAt,
+		Permissions:     user.GetPermissions(),
 	}
 
 	if user.Department != nil {
