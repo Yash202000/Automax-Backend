@@ -56,7 +56,7 @@ type ImageValidationConfig struct {
 	WhiteMeanThreshold int
 	// LowDetailStdDevThreshold: per-tile luminance standard deviation at or below which a tile is considered flat/featureless. env: IMAGE_VALIDATION_LOW_DETAIL_STDDEV_THRESHOLD (default: 12)
 	LowDetailStdDevThreshold float64
-	// BlurVarianceThreshold: per-tile variance-of-Laplacian sharpness score (measured on the image resized to 400px on its longer side, see image_validation_service.go's analysisMaxDim) at or below which a tile is considered blurry. Calibrated against real sample photos: a genuinely blurry photo scored ~78 overall, ordinary sharp photos scored 980-14864 — re-check against your own sample set if you see false positives/negatives. env: IMAGE_VALIDATION_BLUR_VARIANCE_THRESHOLD (default: 250)
+	// BlurVarianceThreshold: per-tile variance-of-Laplacian sharpness score (measured on the image resized to 1600px on its longer side, see image_validation_service.go's analysisMaxDim) at or below which a tile is considered blurry. Calibrated against a synthetic sharp-vs-blurred test pattern at typical phone-camera resolution (4000x3000): mild/moderate blur (box-blur radius 5-20px) scored ~8-133, the sharp original scored ~4495 — re-check against your own real sample set if you see false positives/negatives. env: IMAGE_VALIDATION_BLUR_VARIANCE_THRESHOLD (default: 250)
 	BlurVarianceThreshold float64
 	// The image is divided into a TileGridSize x TileGridSize grid of regions; each tile is independently classified as black/white/low-detail/blurry using the thresholds above, and the image is rejected once the FRACTION of bad tiles reaches the matching *CoverageFraction below. This is what lets "half the frame is black" get caught even though the whole-image average would look fine.
 

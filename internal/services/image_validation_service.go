@@ -29,7 +29,19 @@ const (
 // every image is compared on the same scale regardless of its original
 // resolution. Changing this shifts what a given BlurVarianceThreshold means
 // — the two are calibrated together (see ImageValidationConfig).
-const analysisMaxDim = 400
+//
+// Was 400, which made real-world blur detection ineffective: a modern phone
+// photo (~3000-4000px wide) that is genuinely, visibly blurred (motion blur
+// or missed focus) gets down-averaged 10x before the Laplacian ever sees
+// it, which smooths away most of the blur signal along with the noise —
+// only extreme, unmistakable blur cleared the BlurVarianceThreshold. Raised
+// to 1600 so the sharpness check runs on a much less-diluted image; a
+// checkerboard test pattern at 4000x3000 with a mild/moderate blur (box
+// blur radius 5-20px) scores sharpness ~8-133 at this size, comfortably
+// under BlurVarianceThreshold=250, while the same pattern sharp scores
+// ~4495 — re-check against your own sample set if you see false
+// positives/negatives.
+const analysisMaxDim = 1600
 
 // maxDecodePixels caps the pixel count of an image this service will fully
 // decode/analyze, as a defense against decompression-bomb-style uploads (a
