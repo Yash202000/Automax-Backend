@@ -722,30 +722,21 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 	return resp, nil
 }
 
-// IsTotpRequired decides whether a user must complete TOTP at login, given their
-// (and their roles') bypass_login_totp / enable_login_totp flags. This runs only
+// IsTotpRequired decides whether a user must complete TOTP at login. This runs only
 // when the global totp_enabled setting is on and the user isn't a super admin -
-// both are checked separately by the caller.
-//
-// Role assigned   Role.BypassLoginTotp   User.BypassLoginTotp   Result
-// No              -                      false                  required
-// No              -                      true                   bypass (not required)
-// Yes             any                    any (not full bypass)  required = user.EnableLoginTotp
-// Yes             true                   true                   bypass (not required)
-//
-// "Full bypass" means at least one of the user's assigned roles has BypassLoginTotp=true
-// AND the user's own BypassLoginTotp is also true. When a role is assigned but full bypass
-// isn't granted, EnableLoginTotp decides whether TOTP actually applies.
+// both are checked separately by the caller. When the global setting is on, TOTP is
+// required for everyone by default; a user is exempted only if they, or any role
+// assigned to them, is explicitly marked BypassLoginTotp.
 func IsTotpRequired(user *models.User) bool {
-	if len(user.Roles) == 0 {
-		return !user.BypassLoginTotp
+	if user.BypassLoginTotp {
+		return false
 	}
 	for _, role := range user.Roles {
-		if role.BypassLoginTotp && user.BypassLoginTotp {
+		if role.BypassLoginTotp {
 			return false
 		}
 	}
-	return user.EnableLoginTotp
+	return true
 }
 
 func (s *userService) ValidateMobileForLogin(ctx context.Context, phone string) (*models.UserResponse, error) {
