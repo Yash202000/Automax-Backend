@@ -725,11 +725,16 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 // IsTotpRequired decides whether a user must complete TOTP at login. This runs only
 // when the global totp_enabled setting is on and the user isn't a super admin -
 // both are checked separately by the caller. When the global setting is on, TOTP is
-// required for everyone by default; a user is exempted only if they, or any role
-// assigned to them, is explicitly marked BypassLoginTotp.
+// required for everyone by default; a user is exempted if they, or any role
+// assigned to them, is explicitly marked BypassLoginTotp - unless the user has an
+// explicit per-user EnableLoginTotp override, which takes precedence over any
+// role-level bypass.
 func IsTotpRequired(user *models.User) bool {
 	if user.BypassLoginTotp {
 		return false
+	}
+	if user.EnableLoginTotp {
+		return true
 	}
 	for _, role := range user.Roles {
 		if role.BypassLoginTotp {
