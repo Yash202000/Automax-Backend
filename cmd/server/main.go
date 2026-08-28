@@ -348,7 +348,7 @@ func main() {
 
 	// Initialize EPM handler
 	epmHandler := handlers.NewEPMHandler(userRepo, jwtManager, sessionStore)
-	epmIncidentHandler := handlers.NewEPMIncidentHandler(userRepo, locationRepo, classificationRepo, incidentRepo, workflowRepo, lookupRepo, jwtManager, sessionStore, minioStorage, db)
+	epmIncidentHandler := handlers.NewEPMIncidentHandler(userRepo, locationRepo, classificationRepo, incidentRepo, workflowRepo, lookupRepo, departmentRepo, jwtManager, sessionStore, minioStorage, db)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore, userRepo)
@@ -387,6 +387,8 @@ func main() {
 	app.Post("/Momra/API/EPM/Login", epmHandler.Login)
 	app.Post("/Momra/API/EPM/InsertIncidents", epmIncidentHandler.InsertIncidents)
 	app.Get("/Momra/API/EPM/GetMomraIncidentStatusDetails", epmIncidentHandler.GetMomraIncidentStatusDetails)
+	app.Post("/Momra/API/EPM/UpdateIncident", epmIncidentHandler.UpdateIncident)
+	app.Post("/Momra/API/EPM/ReopenIncident", epmIncidentHandler.ReopenIncident)
 
 	api := app.Group("/api")
 	v1 := api.Group("/v1")

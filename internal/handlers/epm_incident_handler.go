@@ -29,6 +29,7 @@ type EPMIncidentHandler struct {
 	incidentRepo       repository.IncidentRepository
 	workflowRepo       repository.WorkflowRepository
 	lookupRepo         repository.LookupRepository
+	departmentRepo     repository.DepartmentRepository
 	jwtManager         *utils.JWTManager
 	sessionStore       *database.SessionStore
 	storage            *storage.MinIOStorage
@@ -42,6 +43,7 @@ func NewEPMIncidentHandler(
 	incidentRepo repository.IncidentRepository,
 	workflowRepo repository.WorkflowRepository,
 	lookupRepo repository.LookupRepository,
+	departmentRepo repository.DepartmentRepository,
 	jwtManager *utils.JWTManager,
 	sessionStore *database.SessionStore,
 	minioStorage *storage.MinIOStorage,
@@ -54,6 +56,7 @@ func NewEPMIncidentHandler(
 		incidentRepo:       incidentRepo,
 		workflowRepo:       workflowRepo,
 		lookupRepo:         lookupRepo,
+		departmentRepo:     departmentRepo,
 		jwtManager:         jwtManager,
 		sessionStore:       sessionStore,
 		storage:            minioStorage,
@@ -61,11 +64,37 @@ func NewEPMIncidentHandler(
 	}
 }
 
+// externalEntityDepartmentType is the Department.Type value used for External Entities (EE).
+const externalEntityDepartmentType = "external"
+
+// resolveEERoutingDepartment looks up the department an incident must be assigned to when
+// EEFlag is true. eeName is matched against Department.Name / Department.NameAr and must
+// resolve to an active, external-type department, mirroring TFIS rule IF01-V06 / ERR-003
+// (an EE that is not defined or not active must reject the request, not silently proceed).
+func (h *EPMIncidentHandler) resolveEERoutingDepartment(ctx context.Context, eeName string) (*uuid.UUID, error) {
+	trimmed := strings.TrimSpace(eeName)
+	if trimmed == "" {
+		return nil, fmt.Errorf("eeName is required when eeFlag is true")
+	}
+
+	dept, err := h.departmentRepo.FindByNameOrNameAr(ctx, trimmed, trimmed)
+	if err != nil || dept == nil {
+		return nil, fmt.Errorf("this EE is not defined: %s", eeName)
+	}
+	if dept.Type != externalEntityDepartmentType || !dept.IsActive {
+		return nil, fmt.Errorf("this EE is not defined or not active: %s", eeName)
+	}
+
+	return &dept.ID, nil
+}
+
 type EPMInsertIncidentRequest struct {
 	Address              string `json:"address"`
 	BeneficiaryInfo      string `json:"beneficiaryInfo"`
 	DistrictCode         int    `json:"districtCode"`
 	DistrictName         string `json:"districtName"`
+	EEFlag               bool   `json:"eeFlag"`
+	EEName               string `json:"eeName"`
 	Email                string `json:"email"`
 	FileKey              string `json:"fileKey"`
 	FirstName            string `json:"firstName"`
@@ -451,6 +480,21 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 		})
 	}
 
+	// EE routing: when EEFlag is true, EEName must resolve to an active, external-type
+	// department or the incident is rejected outright (no ticket is created). When EEFlag
+	// is false, the incident is created unassigned — no department matching is attempted.
+	var eeDepartmentID *uuid.UUID
+	if req.EEFlag {
+		eeDepartmentID, err = h.resolveEERoutingDepartment(c.UserContext(), req.EEName)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+				HTTPStatusCode: fiber.StatusBadRequest,
+				Message:        err.Error(),
+				Result:         false,
+			})
+		}
+	}
+
 	// get incident workflow and initial state
 	workflow, err := h.workflowRepo.GetDefaultWorkflow(c.UserContext())
 	if err != nil || workflow.RecordType != "incident" {
@@ -532,6 +576,7 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 		WorkflowID:       workflow.ID,
 		CurrentStateID:   initialState.ID,
 		LocationID:       locationID,
+		DepartmentID:     eeDepartmentID,
 		Latitude:         lat,
 		Longitude:        lng,
 		Address:          req.Address,
@@ -710,6 +755,229 @@ func (h *EPMIncidentHandler) GetMomraIncidentStatusDetails(c *fiber.Ctx) error {
 		Attachements:   attachmentItems,
 		Result:         true,
 		HTTPStatusCode: fiber.StatusOK,
+	})
+}
+
+// EPMPushOutcomeRequest is the shared payload for UpdateIncident (TFIS IF-03 status 002 -
+// Resolved) and ReopenIncident (TFIS IF-03 status 003 - Rejected/Returned by EE).
+type EPMPushOutcomeRequest struct {
+	IncidentNo        string `json:"incidentNo"`
+	AmanaIncidentNo   string `json:"amanaIncidentNo"`
+	ActionDate        string `json:"actionDate"`
+	ActionDescription string `json:"actionDescription"`
+	EEName            string `json:"eeName"`
+	EECode            string `json:"eeCode"`
+}
+
+// UpdateIncident handles TFIS IF-03 status 002 (Resolved): the EE component completed the
+// incident and CRM pushes the outcome so AutoMax can move it to its terminal state.
+func (h *EPMIncidentHandler) UpdateIncident(c *fiber.Ctx) error {
+	return h.handleEEOutcome(c, true)
+}
+
+// ReopenIncident handles TFIS IF-03 status 003 (Rejected/Returned by EE): CRM pushes the
+// outcome so AutoMax returns the incident to municipality processing (its initial state).
+func (h *EPMIncidentHandler) ReopenIncident(c *fiber.Ctx) error {
+	return h.handleEEOutcome(c, false)
+}
+
+// handleEEOutcome implements the shared logic behind UpdateIncident/ReopenIncident. resolve
+// selects the target state: true moves the incident to its workflow's terminal state
+// (Resolved), false moves it back to the workflow's initial state (Rejected/Returned,
+// i.e. reopened for municipality processing), per TFIS §12.2.
+//
+// State changes are applied directly (UpdateFields + a system-triggered
+// IncidentTransitionHistory row) rather than through incidentService.ExecuteTransition,
+// since that engine requires a specific pre-configured WorkflowTransition ID and a
+// permissioned human actor — neither of which applies to this system-to-system callback.
+// IncidentTransitionHistory.TransitionID is nullable specifically for this case.
+func (h *EPMIncidentHandler) handleEEOutcome(c *fiber.Ctx, resolve bool) error {
+	authHeader := c.Get("Authorization")
+	if authHeader == "" {
+		return c.Status(fiber.StatusUnauthorized).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusUnauthorized,
+			Message:        "Missing Authorization header",
+			Result:         false,
+		})
+	}
+
+	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+	if tokenString == authHeader {
+		return c.Status(fiber.StatusUnauthorized).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusUnauthorized,
+			Message:        "Invalid Authorization header format, use Bearer token",
+			Result:         false,
+		})
+	}
+
+	claims, err := h.jwtManager.ValidateToken(tokenString)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusUnauthorized,
+			Message:        i18n.T(c.UserContext(), "invalid_or_expired_token"),
+			Result:         false,
+		})
+	}
+
+	var sessionData map[string]interface{}
+	if err := h.sessionStore.GetUserSession(c.UserContext(), claims.SessionID, &sessionData); err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusUnauthorized,
+			Message:        "Session expired or invalid",
+			Result:         false,
+		})
+	}
+
+	var req EPMPushOutcomeRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "Invalid request body: " + err.Error(),
+			Result:         false,
+		})
+	}
+
+	if req.IncidentNo == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "incidentNo is required",
+			Result:         false,
+		})
+	}
+	if req.AmanaIncidentNo == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "amanaIncidentNo is required",
+			Result:         false,
+		})
+	}
+	if req.ActionDate == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "actionDate is required",
+			Result:         false,
+		})
+	}
+	if req.EEName == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "eeName is required",
+			Result:         false,
+		})
+	}
+	if req.EECode == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "eeCode is required",
+			Result:         false,
+		})
+	}
+	// TFIS IF03-R05: ActionDescription is required for status 003 (Reject/Reopen) so the
+	// rejection reason reaches AutoMax; optional for status 002 (Resolved).
+	if !resolve && req.ActionDescription == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "actionDescription is required when rejecting/returning an incident",
+			Result:         false,
+		})
+	}
+
+	incident, err := h.incidentRepo.FindByIncidentNumber(c.UserContext(), req.AmanaIncidentNo)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusNotFound,
+			Message:        "Incident not found: " + req.AmanaIncidentNo,
+			Result:         false,
+		})
+	}
+
+	// TFIS IF03-R02: validate both incident identifiers correlate before applying the transition.
+	var custFields map[string]interface{}
+	_ = json.Unmarshal([]byte(incident.CustomFields), &custFields)
+	if momraNo, _ := custFields["momra_incident_no"].(string); momraNo != req.IncidentNo {
+		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusBadRequest,
+			Message:        "incidentNo does not correlate with amanaIncidentNo: " + req.AmanaIncidentNo,
+			Result:         false,
+		})
+	}
+
+	var targetState models.WorkflowState
+	if resolve {
+		err = h.db.WithContext(c.UserContext()).
+			Where("workflow_id = ? AND state_type = ? AND is_active = ?", incident.WorkflowID, "terminal", true).
+			Order("sort_order, id").
+			First(&targetState).Error
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(EPMInsertIncidentResponse{
+				HTTPStatusCode: fiber.StatusInternalServerError,
+				Message:        "No terminal state configured for incident workflow",
+				Result:         false,
+			})
+		}
+	} else {
+		state, err := h.workflowRepo.GetInitialState(c.UserContext(), incident.WorkflowID)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(EPMInsertIncidentResponse{
+				HTTPStatusCode: fiber.StatusInternalServerError,
+				Message:        "No initial state configured for incident workflow",
+				Result:         false,
+			})
+		}
+		targetState = *state
+	}
+
+	// TFIS IF03-R06: a duplicate identical outcome is acknowledged without reapplying the state change.
+	if incident.CurrentStateID == targetState.ID {
+		return c.Status(fiber.StatusOK).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusOK,
+			Message:        "Outcome already applied",
+			Result:         true,
+			TicketNumber:   incident.IncidentNumber,
+		})
+	}
+
+	now := time.Now()
+	updates := map[string]interface{}{
+		"current_state_id": targetState.ID,
+		"updated_at":       now,
+	}
+	if resolve {
+		updates["resolved_at"] = now
+	} else {
+		updates["resolved_at"] = nil
+		updates["closed_at"] = nil
+	}
+	if err := h.incidentRepo.UpdateFields(c.UserContext(), incident.ID, updates); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(EPMInsertIncidentResponse{
+			HTTPStatusCode: fiber.StatusInternalServerError,
+			Message:        "Failed to update incident: " + err.Error(),
+			Result:         false,
+		})
+	}
+
+	history := &models.IncidentTransitionHistory{
+		ID:             uuid.New(),
+		IncidentID:     incident.ID,
+		TransitionID:   nil,
+		FromStateID:    incident.CurrentStateID,
+		ToStateID:      targetState.ID,
+		PerformedByID:  claims.UserID,
+		Comment:        req.ActionDescription,
+		IsSystemAction: true,
+		TransitionedAt: now,
+		CreatedAt:      now,
+	}
+	if err := h.incidentRepo.CreateTransitionHistory(c.UserContext(), history); err != nil {
+		fmt.Printf("Warning: failed to record EE outcome transition history for incident %s: %v\n", incident.IncidentNumber, err)
+	}
+
+	message := "Incident outcome received successfully"
+	return c.Status(fiber.StatusOK).JSON(EPMInsertIncidentResponse{
+		HTTPStatusCode: fiber.StatusOK,
+		Message:        message,
+		Result:         true,
+		TicketNumber:   incident.IncidentNumber,
 	})
 }
 
