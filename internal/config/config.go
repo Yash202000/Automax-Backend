@@ -38,6 +38,38 @@ type Config struct {
 	MaxDescriptionLength       int    // env: MAX_DESCRIPTION_LENGTH — max description length allowed for incident creation for EPM940 clients. Default: 500.
 	ClientCode                 string // env: CLIENT_CODE — client identifier, e.g. "EPM940".
 	Report                     ReportConfig
+	ImageValidation            ImageValidationConfig
+}
+
+// ImageValidationConfig holds settings for the standalone image-quality
+// validation endpoint (POST /api/v1/images/validate), used by Mobile App and
+// Chatbot to reject mostly-black/mostly-white/no-detail photos before an
+// incident is submitted.
+type ImageValidationConfig struct {
+	// MaxSizeBytes caps the accepted upload size. env: IMAGE_VALIDATION_MAX_SIZE_BYTES (default: 5MB)
+	MaxSizeBytes int
+	// AllowedMimeTypes is the whitelist of accepted content types. env: IMAGE_VALIDATION_ALLOWED_TYPES (comma-separated)
+	AllowedMimeTypes []string
+	// BlackMeanThreshold: mean grayscale luminance (0-255) at or below which an image is a mostly-black candidate. env: IMAGE_VALIDATION_BLACK_MEAN_THRESHOLD (default: 20)
+	BlackMeanThreshold int
+	// WhiteMeanThreshold: mean grayscale luminance (0-255) at or above which an image is a mostly-white candidate. env: IMAGE_VALIDATION_WHITE_MEAN_THRESHOLD (default: 235)
+	WhiteMeanThreshold int
+	// LowDetailStdDevThreshold: per-tile luminance standard deviation at or below which a tile is considered flat/featureless. env: IMAGE_VALIDATION_LOW_DETAIL_STDDEV_THRESHOLD (default: 12)
+	LowDetailStdDevThreshold float64
+	// BlurVarianceThreshold: per-tile variance-of-Laplacian sharpness score (measured on the image resized to 400px on its longer side, see image_validation_service.go's analysisMaxDim) at or below which a tile is considered blurry. Calibrated against real sample photos: a genuinely blurry photo scored ~78 overall, ordinary sharp photos scored 980-14864 — re-check against your own sample set if you see false positives/negatives. env: IMAGE_VALIDATION_BLUR_VARIANCE_THRESHOLD (default: 250)
+	BlurVarianceThreshold float64
+	// The image is divided into a TileGridSize x TileGridSize grid of regions; each tile is independently classified as black/white/low-detail/blurry using the thresholds above, and the image is rejected once the FRACTION of bad tiles reaches the matching *CoverageFraction below. This is what lets "half the frame is black" get caught even though the whole-image average would look fine.
+
+	// TileGridSize: number of tiles per side (e.g. 8 => 64 tiles). env: IMAGE_VALIDATION_TILE_GRID_SIZE (default: 8)
+	TileGridSize int
+	// BlackCoverageFraction: fraction of tiles that must be black for the whole image to be rejected as mostly_black. env: IMAGE_VALIDATION_BLACK_COVERAGE_FRACTION (default: 0.5)
+	BlackCoverageFraction float64
+	// WhiteCoverageFraction: fraction of tiles that must be white for the whole image to be rejected as mostly_white. env: IMAGE_VALIDATION_WHITE_COVERAGE_FRACTION (default: 0.5)
+	WhiteCoverageFraction float64
+	// LowDetailCoverageFraction: fraction of tiles that must be flat/featureless for the whole image to be rejected as low_detail. env: IMAGE_VALIDATION_LOW_DETAIL_COVERAGE_FRACTION (default: 0.6)
+	LowDetailCoverageFraction float64
+	// BlurCoverageFraction: fraction of tiles that must be blurry for the whole image to be rejected as blurry. env: IMAGE_VALIDATION_BLUR_COVERAGE_FRACTION (default: 0.6)
+	BlurCoverageFraction float64
 }
 
 // PBXConfig holds settings for the external PBX used by the extension-assignment
@@ -374,6 +406,19 @@ func Load() *Config {
 			LogoRightURL: getEnv("LOGO_RIGHT_URL", ""),
 			ChromeBin:    getEnv("CHROME_BIN", "google-chrome"),
 			AppRegion:    getEnv("APP_REGION", ""),
+		},
+		ImageValidation: ImageValidationConfig{
+			MaxSizeBytes:              getEnvAsInt("IMAGE_VALIDATION_MAX_SIZE_BYTES", 5*1024*1024),
+			AllowedMimeTypes:          getEnvAsStringSlice("IMAGE_VALIDATION_ALLOWED_TYPES", []string{"image/jpeg", "image/png", "image/gif", "image/webp"}),
+			BlackMeanThreshold:        getEnvAsInt("IMAGE_VALIDATION_BLACK_MEAN_THRESHOLD", 20),
+			WhiteMeanThreshold:        getEnvAsInt("IMAGE_VALIDATION_WHITE_MEAN_THRESHOLD", 235),
+			LowDetailStdDevThreshold:  getEnvAsFloat("IMAGE_VALIDATION_LOW_DETAIL_STDDEV_THRESHOLD", 12),
+			BlurVarianceThreshold:     getEnvAsFloat("IMAGE_VALIDATION_BLUR_VARIANCE_THRESHOLD", 250),
+			TileGridSize:              getEnvAsInt("IMAGE_VALIDATION_TILE_GRID_SIZE", 8),
+			BlackCoverageFraction:     getEnvAsFloat("IMAGE_VALIDATION_BLACK_COVERAGE_FRACTION", 0.5),
+			WhiteCoverageFraction:     getEnvAsFloat("IMAGE_VALIDATION_WHITE_COVERAGE_FRACTION", 0.5),
+			LowDetailCoverageFraction: getEnvAsFloat("IMAGE_VALIDATION_LOW_DETAIL_COVERAGE_FRACTION", 0.6),
+			BlurCoverageFraction:      getEnvAsFloat("IMAGE_VALIDATION_BLUR_COVERAGE_FRACTION", 0.6),
 		},
 	}
 }
