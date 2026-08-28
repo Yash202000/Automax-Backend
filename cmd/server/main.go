@@ -390,6 +390,11 @@ func main() {
 	app.Post("/Momra/API/EPM/UpdateIncident", epmIncidentHandler.UpdateIncident)
 	app.Post("/Momra/API/EPM/ReopenIncident", epmIncidentHandler.ReopenIncident)
 
+	// EPM v2 routes - newer MOMRA contract (PATCH, meta/json request envelope, response
+	// envelope). Left alongside the v1 routes above.
+	app.Patch("/Momra/API/EPM/UpdateIncidentV2", epmIncidentHandler.UpdateIncidentV2)
+	app.Patch("/Momra/API/EPM/ReOpenIncidentV2", epmIncidentHandler.ReopenIncidentV2)
+
 	api := app.Group("/api")
 	v1 := api.Group("/v1")
 

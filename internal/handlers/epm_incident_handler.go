@@ -981,6 +981,309 @@ func (h *EPMIncidentHandler) handleEEOutcome(c *fiber.Ctx, resolve bool) error {
 	})
 }
 
+// ---- V2 (compose) interface ----
+//
+// These implement MOMRA's newer contract: PATCH methods, a flat JSON request body (no
+// envelope), a flat JSON response body (no envelope), and a single UpdateIncidentV2
+// endpoint that handles both resolve (IncidentStatusID "002") and reject (IncidentStatusID
+// "003") instead of two separate endpoints. The V1 endpoints above (UpdateIncident/
+// ReopenIncident) are left in place alongside these.
+
+type momraV2ResponseBody struct {
+	Ex      string `json:"ex"`
+	Message string `json:"message"`
+	Result  bool   `json:"result"`
+	Status  int    `json:"status"`
+}
+
+func momraV2Response(c *fiber.Ctx, status int, message string, result bool) error {
+	return c.Status(status).JSON(momraV2ResponseBody{
+		Message: message,
+		Result:  result,
+		Status:  status,
+	})
+}
+
+type EPMUpdateIncidentV2Request struct {
+	EENotes           string `json:"EENotes"`
+	AmanaIncidentNo   string `json:"AmanaIncidentNo"`
+	IncidentNo        string `json:"IncidentNO"`
+	ActionDate        string `json:"ActionDate"`
+	EECode            string `json:"EECode"`
+	EEName            string `json:"EEName"`
+	IncidentStatusID  string `json:"IncidentStatusID"`
+	ActionDescription string `json:"ActionDescription"`
+}
+
+// UpdateIncidentV2 implements PATCH /api/compose/MomraAPI/UpdateIncidentV2.
+// IncidentStatusID "002" resolves the incident (terminal state); "003" rejects it back
+// to its initial state - the same two outcomes the V1 UpdateIncident/ReopenIncident
+// endpoints handled as separate calls.
+func (h *EPMIncidentHandler) UpdateIncidentV2(c *fiber.Ctx) error {
+	authHeader := c.Get("Authorization")
+	if authHeader == "" {
+		return momraV2Response(c, fiber.StatusUnauthorized, "Missing Authorization header", false)
+	}
+	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+	if tokenString == authHeader {
+		return momraV2Response(c, fiber.StatusUnauthorized, "Invalid Authorization header format, use Bearer token", false)
+	}
+	claims, err := h.jwtManager.ValidateToken(tokenString)
+	if err != nil {
+		return momraV2Response(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "invalid_or_expired_token"), false)
+	}
+	var sessionData map[string]interface{}
+	if err := h.sessionStore.GetUserSession(c.UserContext(), claims.SessionID, &sessionData); err != nil {
+		return momraV2Response(c, fiber.StatusUnauthorized, "Session expired or invalid", false)
+	}
+
+	var req EPMUpdateIncidentV2Request
+	if err := c.BodyParser(&req); err != nil {
+		return momraV2Response(c, fiber.StatusBadRequest, "Invalid request body: "+err.Error(), false)
+	}
+
+	if req.IncidentNo == "" {
+		return momraV2Response(c, fiber.StatusBadRequest, "IncidentNO is required", false)
+	}
+	if req.AmanaIncidentNo == "" {
+		return momraV2Response(c, fiber.StatusBadRequest, "AmanaIncidentNo is required", false)
+	}
+	if req.ActionDate == "" {
+		return momraV2Response(c, fiber.StatusBadRequest, "ActionDate is required", false)
+	}
+	if req.EEName == "" {
+		return momraV2Response(c, fiber.StatusBadRequest, "EEName is required", false)
+	}
+	if req.EECode == "" {
+		return momraV2Response(c, fiber.StatusBadRequest, "EECode is required", false)
+	}
+	var resolve bool
+	switch req.IncidentStatusID {
+	case "002":
+		resolve = true
+	case "003":
+		resolve = false
+	default:
+		return momraV2Response(c, fiber.StatusBadRequest, "IncidentStatusID must be 002 (Approved) or 003 (Rejected)", false)
+	}
+	// TFIS IF03-R05: a rejection reason is required for status 003.
+	if !resolve && req.ActionDescription == "" {
+		return momraV2Response(c, fiber.StatusBadRequest, "ActionDescription is required when IncidentStatusID is 003", false)
+	}
+
+	incident, err := h.incidentRepo.FindByIncidentNumber(c.UserContext(), req.AmanaIncidentNo)
+	if err != nil {
+		return momraV2Response(c, fiber.StatusNotFound, "Incident not found: "+req.AmanaIncidentNo, false)
+	}
+
+	var custFields map[string]interface{}
+	_ = json.Unmarshal([]byte(incident.CustomFields), &custFields)
+	if custFields == nil {
+		custFields = map[string]interface{}{}
+	}
+	if momraNo, _ := custFields["momra_incident_no"].(string); momraNo != req.IncidentNo {
+		return momraV2Response(c, fiber.StatusBadRequest, "IncidentNO does not correlate with AmanaIncidentNo: "+req.AmanaIncidentNo, false)
+	}
+
+	var targetState models.WorkflowState
+	if resolve {
+		err = h.db.WithContext(c.UserContext()).
+			Where("workflow_id = ? AND state_type = ? AND is_active = ?", incident.WorkflowID, "terminal", true).
+			Order("sort_order, id").
+			First(&targetState).Error
+		if err != nil {
+			return momraV2Response(c, fiber.StatusInternalServerError, "No terminal state configured for incident workflow", false)
+		}
+	} else {
+		state, err := h.workflowRepo.GetInitialState(c.UserContext(), incident.WorkflowID)
+		if err != nil {
+			return momraV2Response(c, fiber.StatusInternalServerError, "No initial state configured for incident workflow", false)
+		}
+		targetState = *state
+	}
+
+	if req.EENotes != "" {
+		custFields["ee_notes"] = req.EENotes
+	}
+	custFieldBytes, _ := json.Marshal(custFields)
+
+	if incident.CurrentStateID == targetState.ID {
+		return momraV2Response(c, fiber.StatusOK, "Incident status updated successfully", true)
+	}
+
+	now := time.Now()
+	updates := map[string]interface{}{
+		"current_state_id": targetState.ID,
+		"custom_fields":    string(custFieldBytes),
+		"updated_at":       now,
+	}
+	if resolve {
+		updates["resolved_at"] = now
+	} else {
+		updates["resolved_at"] = nil
+		updates["closed_at"] = nil
+	}
+	if err := h.incidentRepo.UpdateFields(c.UserContext(), incident.ID, updates); err != nil {
+		return momraV2Response(c, fiber.StatusInternalServerError, "Failed to update incident: "+err.Error(), false)
+	}
+
+	history := &models.IncidentTransitionHistory{
+		ID:             uuid.New(),
+		IncidentID:     incident.ID,
+		TransitionID:   nil,
+		FromStateID:    incident.CurrentStateID,
+		ToStateID:      targetState.ID,
+		PerformedByID:  claims.UserID,
+		Comment:        req.ActionDescription,
+		IsSystemAction: true,
+		TransitionedAt: now,
+		CreatedAt:      now,
+	}
+	if err := h.incidentRepo.CreateTransitionHistory(c.UserContext(), history); err != nil {
+		fmt.Printf("Warning: failed to record EE outcome transition history for incident %s: %v\n", incident.IncidentNumber, err)
+	}
+
+	return momraV2Response(c, fiber.StatusOK, "Incident status updated successfully", true)
+}
+
+type EPMReopenIncidentV2Request struct {
+	AmanaIncidentNo  string `json:"amanaincidentno"`
+	IncidentNo       string `json:"incident_no"`
+	EvaluationStatus string `json:"evaluation_status"`
+}
+
+// dissatisfiedEvaluationStatus reports whether an evaluation_status value indicates the
+// beneficiary was NOT satisfied with the resolution. MOMRA's spec gives only one example
+// value ("not satisfied"), so this matches on the presence of a negation ("not"/"un"/"dis"
+// combined with "satisf...") rather than an exact string, case- and spacing-insensitive.
+func dissatisfiedEvaluationStatus(status string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(status))
+	normalized = strings.Join(strings.Fields(normalized), " ")
+	if !strings.Contains(normalized, "satisf") {
+		return false
+	}
+	return strings.Contains(normalized, "not satisf") ||
+		strings.Contains(normalized, "unsatisf") ||
+		strings.Contains(normalized, "dissatisf")
+}
+
+// ReopenIncidentV2 implements PATCH /api/compose/MomraAPI/ReOpenIncidentV2. It is driven
+// by the beneficiary's post-resolution satisfaction survey: when evaluation_status
+// indicates dissatisfaction (e.g. "not satisfied"), the incident is sent back to its
+// workflow's initial state for reprocessing. Any other value (e.g. "satisfied") is
+// recorded on the incident and the evaluation count is still incremented, but the
+// incident's state is left untouched - the survey result is stored, not a rejection.
+func (h *EPMIncidentHandler) ReopenIncidentV2(c *fiber.Ctx) error {
+	authHeader := c.Get("Authorization")
+	if authHeader == "" {
+		return momraV2Response(c, fiber.StatusUnauthorized, "Missing Authorization header", false)
+	}
+	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+	if tokenString == authHeader {
+		return momraV2Response(c, fiber.StatusUnauthorized, "Invalid Authorization header format, use Bearer token", false)
+	}
+	claims, err := h.jwtManager.ValidateToken(tokenString)
+	if err != nil {
+		return momraV2Response(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "invalid_or_expired_token"), false)
+	}
+	var sessionData map[string]interface{}
+	if err := h.sessionStore.GetUserSession(c.UserContext(), claims.SessionID, &sessionData); err != nil {
+		return momraV2Response(c, fiber.StatusUnauthorized, "Session expired or invalid", false)
+	}
+
+	var req EPMReopenIncidentV2Request
+	if err := c.BodyParser(&req); err != nil {
+		return momraV2Response(c, fiber.StatusBadRequest, "Invalid request body: "+err.Error(), false)
+	}
+
+	if req.AmanaIncidentNo == "" {
+		return momraV2Response(c, fiber.StatusBadRequest, "amanaincidentno is required", false)
+	}
+	if req.IncidentNo == "" {
+		return momraV2Response(c, fiber.StatusBadRequest, "incident_no is required", false)
+	}
+	if req.EvaluationStatus == "" {
+		return momraV2Response(c, fiber.StatusBadRequest, "evaluation_status is required", false)
+	}
+
+	incident, err := h.incidentRepo.FindByIncidentNumber(c.UserContext(), req.AmanaIncidentNo)
+	if err != nil {
+		return momraV2Response(c, fiber.StatusNotFound, "Incident not found: "+req.AmanaIncidentNo, false)
+	}
+
+	var custFields map[string]interface{}
+	_ = json.Unmarshal([]byte(incident.CustomFields), &custFields)
+	if custFields == nil {
+		custFields = map[string]interface{}{}
+	}
+	if momraNo, _ := custFields["momra_incident_no"].(string); momraNo != req.IncidentNo {
+		return momraV2Response(c, fiber.StatusBadRequest, "incident_no does not correlate with amanaincidentno: "+req.AmanaIncidentNo, false)
+	}
+
+	custFields["evaluation_status"] = req.EvaluationStatus
+	custFieldBytes, _ := json.Marshal(custFields)
+	now := time.Now()
+
+	// incidentRepo.IncrementEvaluationCount is scoped to record_type='complaint' and would
+	// silently no-op here - MOMRA incidents have record_type='incident' - so increment
+	// directly instead.
+	if err := h.db.WithContext(c.UserContext()).Model(&models.Incident{}).
+		Where("id = ?", incident.ID).
+		Update("evaluation_count", gorm.Expr("evaluation_count + 1")).Error; err != nil {
+		fmt.Printf("Warning: failed to increment evaluation count for incident %s: %v\n", incident.IncidentNumber, err)
+	}
+
+	if !dissatisfiedEvaluationStatus(req.EvaluationStatus) {
+		// Beneficiary is satisfied (or the value is neither): record the survey result,
+		// but the resolution stands - no state transition.
+		if err := h.incidentRepo.UpdateFields(c.UserContext(), incident.ID, map[string]interface{}{
+			"custom_fields": string(custFieldBytes),
+			"updated_at":    now,
+		}); err != nil {
+			return momraV2Response(c, fiber.StatusInternalServerError, "Failed to record evaluation: "+err.Error(), false)
+		}
+		return momraV2Response(c, fiber.StatusOK, "Evaluation recorded; incident remains resolved", true)
+	}
+
+	initialState, err := h.workflowRepo.GetInitialState(c.UserContext(), incident.WorkflowID)
+	if err != nil {
+		return momraV2Response(c, fiber.StatusInternalServerError, "No initial state configured for incident workflow", false)
+	}
+
+	if incident.CurrentStateID == initialState.ID {
+		return momraV2Response(c, fiber.StatusOK, "Incident has been reopened successfully", true)
+	}
+
+	updates := map[string]interface{}{
+		"current_state_id": initialState.ID,
+		"custom_fields":    string(custFieldBytes),
+		"resolved_at":      nil,
+		"closed_at":        nil,
+		"updated_at":       now,
+	}
+	if err := h.incidentRepo.UpdateFields(c.UserContext(), incident.ID, updates); err != nil {
+		return momraV2Response(c, fiber.StatusInternalServerError, "Failed to reopen incident: "+err.Error(), false)
+	}
+
+	history := &models.IncidentTransitionHistory{
+		ID:             uuid.New(),
+		IncidentID:     incident.ID,
+		TransitionID:   nil,
+		FromStateID:    incident.CurrentStateID,
+		ToStateID:      initialState.ID,
+		PerformedByID:  claims.UserID,
+		Comment:        "Reopened - beneficiary evaluation: " + req.EvaluationStatus,
+		IsSystemAction: true,
+		TransitionedAt: now,
+		CreatedAt:      now,
+	}
+	if err := h.incidentRepo.CreateTransitionHistory(c.UserContext(), history); err != nil {
+		fmt.Printf("Warning: failed to record reopen transition history for incident %s: %v\n", incident.IncidentNumber, err)
+	}
+
+	return momraV2Response(c, fiber.StatusOK, "Incident has been reopened successfully", true)
+}
+
 func (h *EPMIncidentHandler) validateAndResolveLocation(ctx context.Context, externalID string) (*uuid.UUID, error) {
 	if externalID == "" {
 		return nil, nil
