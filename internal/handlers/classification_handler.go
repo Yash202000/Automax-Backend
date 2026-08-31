@@ -521,21 +521,21 @@ func (h *ClassificationHandler) Import(c *fiber.Ctx) error {
 	errors := []string{}
 
 	for _, data := range importData {
-		var newParentID *uuid.UUID
+		// var newParentID *uuid.UUID
 
-		if data.ParentID != nil {
-			mappedParentID, exists := idMapping[*data.ParentID]
-			if exists {
-				newParentID = &mappedParentID
-			} else {
-				// Parent was skipped/failed (or hasn't been processed yet due to
-				// bad level ordering) - do NOT silently create this as a root
-				// classification. Skip it and cascade the failure to its children.
-				skipped++
-				errors = append(errors, data.Name+" (Level "+fmt.Sprintf("%d", data.Level)+") - parent classification failed to import")
-				continue
-			}
-		}
+		// if data.ParentID != nil {
+		// 	mappedParentID, exists := idMapping[*data.ParentID]
+		// 	if exists {
+		// 		newParentID = &mappedParentID
+		// 	} else {
+		// 		// Parent was skipped/failed (or hasn't been processed yet due to
+		// 		// bad level ordering) - do NOT silently create this as a root
+		// 		// classification. Skip it and cascade the failure to its children.
+		// 		skipped++
+		// 		errors = append(errors, data.Name+" (Level "+fmt.Sprintf("%d", data.Level)+") - parent classification failed to import")
+		// 		continue
+		// 	}
+		// }
 
 		// Default types if none provided in import file
 		importTypes := data.Types
@@ -550,7 +550,7 @@ func (h *ClassificationHandler) Import(c *fiber.Ctx) error {
 		// Skip classifications that already exist under the same parent instead
 		// of creating a duplicate, and reuse the existing ID so children still
 		// attach to the right place.
-		if existing, err := h.repo.FindByNameOrNameArAndParent(c.UserContext(), data.Name, "", newParentID); err == nil && existing != nil {
+		if existing, err := h.repo.FindByNameOrNameArAndParent(c.UserContext(), data.Name, "", data.ParentID); err == nil && existing != nil {
 			skipped++
 			idMapping[data.ID] = existing.ID
 			errors = append(errors, data.Name+" (Level "+fmt.Sprintf("%d", data.Level)+") - already exists, skipped")
@@ -563,7 +563,7 @@ func (h *ClassificationHandler) Import(c *fiber.Ctx) error {
 			Name:        data.Name,
 			Description: data.Description,
 			Types:       typeRecords,
-			ParentID:    newParentID,
+			ParentID:    data.ParentID,
 			IsActive:    data.IsActive,
 			SortOrder:   data.SortOrder,
 		}
