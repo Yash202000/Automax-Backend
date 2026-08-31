@@ -569,8 +569,11 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 			if exists {
 				newParentID = &mappedParentID
 			} else {
-				// Parent not found in import data, import as root node
-				newParentID = nil
+				// Parent was skipped/failed - do NOT silently create this as a
+				// root department. Skip it and cascade the failure to its children.
+				skipped++
+				errors = append(errors, data.Name+" (Level "+fmt.Sprintf("%d", data.Level)+") - parent department failed to import")
+				continue
 			}
 		}
 

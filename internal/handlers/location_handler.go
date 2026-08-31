@@ -448,12 +448,25 @@ func (h *LocationHandler) Import(c *fiber.Ctx) error {
 			if exists {
 				newParentID = &mappedParentID
 			} else {
-				// Parent not found in import data, import as root node
-				newParentID = nil
+				// Parent was skipped/failed - do NOT silently create this as a
+				// root location. Skip it and cascade the failure to its children.
+				skipped++
+				errors = append(errors, data.Name+" (Level "+fmt.Sprintf("%d", data.Level)+") - parent location failed to import")
+				continue
 			}
 		}
 
-		// Create new location (no duplicate check)
+		// Skip locations that already exist under the same parent instead of
+		// creating a duplicate, and reuse the existing ID so children still
+		// attach to the right place.
+		if existing, err := h.repo.FindByNameAndParent(c.UserContext(), data.Name, newParentID); err == nil && existing != nil {
+			skipped++
+			idMapping[data.ID] = existing.ID
+			errors = append(errors, data.Name+" (Level "+fmt.Sprintf("%d", data.Level)+") - already exists, skipped")
+			continue
+		}
+
+		// Create new location
 		newID := uuid.New()
 		location := &models.Location{
 			ID:          newID,
