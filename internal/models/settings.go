@@ -3,6 +3,7 @@ package models
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"strconv"
 	"time"
@@ -219,7 +220,9 @@ type SettingsResponse struct {
 func (s *Settings) ToSettingsResponse() *SettingsResponse {
 	var fieldSettings FieldSettings
 	if s.FieldSettings != "" {
-		_ = json.Unmarshal([]byte(s.FieldSettings), &fieldSettings)
+		if err := json.Unmarshal([]byte(s.FieldSettings), &fieldSettings); err != nil {
+			log.Printf("[Settings] ERROR: failed to unmarshal field_settings for settings id %s: %v | raw: %s", s.ID, err, s.FieldSettings)
+		}
 	}
 
 	return &SettingsResponse{
