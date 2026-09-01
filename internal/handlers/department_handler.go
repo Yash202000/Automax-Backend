@@ -561,21 +561,24 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 
 	// Import all departments in level order
 	for _, data := range importData {
-		var newParentID *uuid.UUID
+		// var newParentID *uuid.UUID
 
-		// If has parent, get the new parent ID from mapping
-		if data.ParentID != nil {
-			mappedParentID, exists := idMapping[*data.ParentID]
-			if exists {
-				newParentID = &mappedParentID
-			} else {
-				// Parent not found in import data, import as root node
-				newParentID = nil
-			}
-		}
+		// // If has parent, get the new parent ID from mapping
+		// if data.ParentID != nil {
+		// 	mappedParentID, exists := idMapping[*data.ParentID]
+		// 	if exists {
+		// 		newParentID = &mappedParentID
+		// 	} else {
+		// 		// Parent was skipped/failed - do NOT silently create this as a
+		// 		// root department. Skip it and cascade the failure to its children.
+		// 		skipped++
+		// 		errors = append(errors, data.Name+" (Level "+fmt.Sprintf("%d", data.Level)+") - parent department failed to import")
+		// 		continue
+		// 	}
+		// }
 
 		// Check if department already exists with same name and parent
-		existingDepartment, err := h.repo.FindByNameAndParent(c.UserContext(), data.Name, newParentID)
+		existingDepartment, err := h.repo.FindByNameAndParent(c.UserContext(), data.Name, data.ParentID)
 		if err == nil && existingDepartment != nil {
 			// Department already exists, use existing ID
 			skipped++
@@ -594,7 +597,7 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 			Code:        h.importDeptCode(data.Code),
 			Name:        data.Name,
 			Description: data.Description,
-			ParentID:    newParentID,
+			ParentID:    data.ParentID,
 			ManagerID:   data.ManagerID,
 			IsActive:    data.IsActive,
 			SortOrder:   data.SortOrder,

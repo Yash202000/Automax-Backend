@@ -1792,11 +1792,23 @@ func (r *incidentRepository) IncrementEvaluationCount(ctx context.Context, id uu
 // counts as open, so a broken state reference fails safe by blocking rather than letting a
 // duplicate through.
 //
-// Phone comparison is digits-only, because the same number is stored in several formats
-// (e.g. "+966 123456789" and "+966123456789"). The non-empty guard on the duplicate subquery is
-// required: without it a blank stored phone would normalise to the empty string and match every
-// legacy complaint that has no phone recorded.
+// Phone comparison matches on every shape the number may be stored in (see
+// utils.MobileMatchVariants): the "+" and any known country code prefix are stripped from
+// both sides before comparing, along with the trunk zero, so "+966501234567", "966501234567"
+// and "0501234567" are all treated as the same number regardless of which side supplied which
+// format. Variants of a real number are never blank, so a blank stored phone can never match.
+//
+// phone_matches also accepts the mobile number of the user who created the incident, joined live
+// from users.phone via incidents.created_by_id: some channels (e.g. a citizen filing via the
+// mobile app) record the creator as the reporter without necessarily duplicating that number into
+// reporter_phone, so the creator's mobile is an equally valid proof that this caller is the same
+// person who filed the source incident. Joining live rather than reading a snapshot column means
+// this stays correct even if the user's phone number changes after the incident was created. A
+// blank/NULL users.phone never matches for the same reason a blank reporter_phone never matches -
+// it simply isn't a value produced by MobileMatchVariants.
 func (r *incidentRepository) GetComplaintSourceValidation(ctx context.Context, sourceID uuid.UUID, reporterPhone string) (*models.ComplaintSourceValidation, error) {
+	variants := utils.MobileMatchVariants(reporterPhone)
+
 	const query = `
 		SELECT i.record_type,
 		       ws.code AS state_code,
@@ -1804,8 +1816,7 @@ func (r *incidentRepository) GetComplaintSourceValidation(ctx context.Context, s
 		       COALESCE(i.reporter_phone, '') AS reporter_phone,
 		       i.classification_id,
 		       i.location_id,
-		       (regexp_replace(COALESCE(i.reporter_phone, ''), '[^0-9]', '', 'g')
-		        = regexp_replace(COALESCE(?, ''), '[^0-9]', '', 'g')) AS phone_matches,
+		       (i.reporter_phone IN (?) OR u.phone IN (?)) AS phone_matches,
 		       EXISTS (
 		           SELECT 1
 		           FROM incidents c
@@ -1814,17 +1825,16 @@ func (r *incidentRepository) GetComplaintSourceValidation(ctx context.Context, s
 		             AND c.record_type = 'complaint'
 		             AND c.deleted_at IS NULL
 		             AND COALESCE(cws.code, '') <> 'closed'
-		             AND regexp_replace(COALESCE(c.reporter_phone, ''), '[^0-9]', '', 'g') <> ''
-		             AND regexp_replace(COALESCE(c.reporter_phone, ''), '[^0-9]', '', 'g')
-		                 = regexp_replace(COALESCE(?, ''), '[^0-9]', '', 'g')
+		             AND c.reporter_phone IN (?)
 		       ) AS open_complaint_exists
 		FROM incidents i
 		LEFT JOIN workflow_states ws ON ws.id = i.current_state_id AND ws.deleted_at IS NULL
+		LEFT JOIN users u ON u.id = i.reporter_id
 		WHERE i.id = ?
 		  AND i.deleted_at IS NULL`
 
 	var result models.ComplaintSourceValidation
-	err := r.db.WithContext(ctx).Raw(query, reporterPhone, reporterPhone, sourceID).Scan(&result).Error
+	err := r.db.WithContext(ctx).Raw(query, variants, variants, variants, sourceID).Scan(&result).Error
 	if err != nil {
 		return nil, err
 	}
