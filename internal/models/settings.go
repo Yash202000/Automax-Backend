@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"strconv"
@@ -69,6 +70,10 @@ type Settings struct {
 	// Auth Settings
 	TotpEnabled bool `gorm:"column:totp_enabled;default:false" json:"-"` // Whether TOTP/OTP-based 2FA login is enforced; exposed nested as auth_setting.totp_enabled
 
+	// Field Settings (per-entity, per-field configuration such as attachment limits),
+	// stored as a JSON string and exposed nested as field_settings.*
+	FieldSettings string `gorm:"column:field_settings;type:text;default:'{\"incident\":{\"attachment\":[]}}'" json:"-"`
+
 	// Timestamps
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -87,6 +92,25 @@ func (s *Settings) BeforeCreate(tx *gorm.DB) error {
 // the "auth_setting" key in settings update/response payloads.
 type AuthSetting struct {
 	TotpEnabled bool `json:"totp_enabled"`
+}
+
+// AttachmentFieldSetting configures attachment limits for one user type on an
+// entity (e.g. incident attachments allowed for citizens vs employees).
+type AttachmentFieldSetting struct {
+	UserType     string `json:"user_type" validate:"required,oneof=citizen emp"`
+	AllowedCount int    `json:"allowed_count" validate:"required,min=1"`
+	MaxSize      int    `json:"max_size" validate:"required,min=1"` // in MB
+}
+
+// IncidentFieldSettings holds field-level settings for the incident entity.
+type IncidentFieldSettings struct {
+	Attachment []AttachmentFieldSetting `json:"attachment" validate:"omitempty,dive"`
+}
+
+// FieldSettings represents per-entity, per-field configuration, nested under
+// the "field_settings" key in settings update/response payloads.
+type FieldSettings struct {
+	Incident IncidentFieldSettings `json:"incident"`
 }
 
 // SettingsUpdateRequest represents the request to update settings
@@ -131,6 +155,9 @@ type SettingsUpdateRequest struct {
 
 	// Auth Settings
 	AuthSetting *AuthSetting `json:"auth_setting"`
+
+	// Field Settings
+	FieldSettings *FieldSettings `json:"field_settings" validate:"omitempty"`
 }
 
 // SettingsResponse represents the public settings response
@@ -178,6 +205,9 @@ type SettingsResponse struct {
 	// Auth Settings
 	AuthSetting AuthSetting `json:"auth_setting"`
 
+	// Field Settings
+	FieldSettings FieldSettings `json:"field_settings"`
+
 	// SMS Configuration (env-driven, not stored in DB)
 	SmsMaxLength int `json:"sms_max_length"`
 
@@ -187,6 +217,11 @@ type SettingsResponse struct {
 
 // ToSettingsResponse converts Settings model to response DTO
 func (s *Settings) ToSettingsResponse() *SettingsResponse {
+	var fieldSettings FieldSettings
+	if s.FieldSettings != "" {
+		_ = json.Unmarshal([]byte(s.FieldSettings), &fieldSettings)
+	}
+
 	return &SettingsResponse{
 		ID:                  s.ID.String(),
 		AppName:             s.AppName,
@@ -214,6 +249,7 @@ func (s *Settings) ToSettingsResponse() *SettingsResponse {
 		SupportedLanguages:  s.SupportedLanguages,
 		ShowEvaluateButton:  s.ShowEvaluateButton,
 		AuthSetting:         AuthSetting{TotpEnabled: s.TotpEnabled},
+		FieldSettings:       fieldSettings,
 		SmsMaxLength:        func() int { n, _ := GetSMSMaxLength(); return n }(),
 		UpdatedAt:           s.UpdatedAt.Format(time.RFC3339),
 	}
