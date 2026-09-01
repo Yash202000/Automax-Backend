@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/go-playground/validator/v10"
@@ -43,6 +44,15 @@ func ErrorResponse(c *fiber.Ctx, statusCode int, message string) error {
 		Success: false,
 		Error:   message,
 	})
+}
+
+// InternalErrorResponse logs the real underlying error server-side and returns
+// a translated, generic message to the client. Use this for 5xx responses so
+// internal error details (SQL errors, stack-ish text, package/file names)
+// never leak into the API response body.
+func InternalErrorResponse(c *fiber.Ctx, err error, userMessage string) error {
+	log.Printf("[%s %s] internal error: %v", c.Method(), c.Path(), err)
+	return ErrorResponse(c, fiber.StatusInternalServerError, userMessage)
 }
 
 // ErrorCodeResponse is the error response shape that includes an error_code field.

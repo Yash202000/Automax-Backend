@@ -69,6 +69,7 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 	incidents, err := s.incidentRepo.
 		GetIncidentsExceedingStateSLA(ctx)
 	if err != nil {
+		// Log-only: sole caller is sla_monitor.go's cron loop, never returned to an HTTP response — no i18n needed.
 		return fmt.Errorf("GetIncidentsExceedingStateSLA: %w", err)
 	}
 
@@ -94,7 +95,7 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 		}
 
 		// Calculate actual hours spent in the current state
-		hoursInState := s.hoursInCurrentState(ctx, incident)
+		// hoursInState := s.hoursInCurrentState(ctx, incident)
 		slaUnit := state.SLAUnit
 		if slaUnit == "" {
 			slaUnit = "hours"
@@ -103,17 +104,17 @@ func (s *EscalationService) ProcessTransitionSLAAlerts(ctx context.Context) erro
 		// 	incident.IncidentNumber, state.Name, hoursInState, *state.SLAHours, slaUnit)
 
 		// ── Policy-driven path ──────────────────────────────────────────────
-		if state.EscalationPolicyID != nil {
-			if s.policyService != nil {
-				s.processPolicySteps(ctx, incident, state, hoursInState)
-				processed++
-			} else {
-				log.Printf("[EscalationService] Incident %s / state '%s' has escalation_policy_id set but policyService is nil — skipping",
-					incident.IncidentNumber, state.Name)
-				skippedOther++
-			}
-			continue
-		}
+		// if state.EscalationPolicyID != nil {
+		// 	if s.policyService != nil {
+		// 		s.processPolicySteps(ctx, incident, state, hoursInState)
+		// 		processed++
+		// 	} else {
+		// 		log.Printf("[EscalationService] Incident %s / state '%s' has escalation_policy_id set but policyService is nil — skipping",
+		// 			incident.IncidentNumber, state.Name)
+		// 		skippedOther++
+		// 	}
+		// 	continue
+		// }
 
 		// No escalation policy attached to this state — skip to avoid unintended notifications.
 		log.Printf("[EscalationService] Incident %s / state '%s' has no escalation policy attached — assign one to enable SLA notifications",
@@ -479,6 +480,7 @@ func (s *EscalationService) ProcessGlobalSLABreaches(ctx context.Context) error 
 
 	incidents, err := s.incidentRepo.GetNewlyBreachedIncidents(ctx)
 	if err != nil {
+		// Log-only: sole caller is sla_monitor.go's cron loop, never returned to an HTTP response — no i18n needed.
 		return fmt.Errorf("GetNewlyBreachedIncidents: %w", err)
 	}
 

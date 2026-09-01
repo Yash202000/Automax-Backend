@@ -881,7 +881,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 
 	// Send template-based email/SMS notifications for the initial state (if configured)
 	if s.notificationService != nil && (initialState.NewIncidentEmailTemplateCode != "" || initialState.NewIncidentSMSTemplateCode != "") {
-		bgCtx := context.Background()
+		bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		capturedCreated := created
 		capturedInitialState := initialState
 		capturedReporterID := reporterID
@@ -951,7 +951,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 
 	// Send FCM push notification to the initial assignee (employee)
 	if s.fcmService != nil && incident.AssigneeID != nil {
-		bgCtx := context.Background()
+		bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		capturedAssignee := *incident.AssigneeID
 		capturedID := incident.ID
 		capturedNumber := incident.IncidentNumber
@@ -1884,7 +1884,7 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		}
 		sourceIncidentIDsJSON, err := json.Marshal(sourceIncidentIDStrs)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal source incident IDs: %w", err)
+			return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_marshal_source_incident_ids"), err)
 		}
 
 		// Update existing request with new source incident
@@ -1922,7 +1922,7 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		}
 
 		if err := s.incidentRepo.UpdateFields(ctx, incidentID, updateFields); err != nil {
-			return nil, fmt.Errorf("failed to update source incident: %w", err)
+			return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_update_source_incident"), err)
 		}
 
 		// Create transition history
@@ -1990,7 +1990,7 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		}
 
 		// Send SMS to citizen
-		bgCtxExist := context.Background()
+		bgCtxExist := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		existReqNum := existingRequest.IncidentNumber
 		go func(inc *models.Incident) {
 			defer func() {
@@ -2273,7 +2273,7 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 	}
 
 	// Send SMS to citizen
-	bgCtxNew := context.Background()
+	bgCtxNew := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 	go func(inc *models.Incident) {
 		defer func() {
 			if r := recover(); r != nil {
@@ -2899,7 +2899,7 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 		}
 
 		// Send SMS to citizen for each converted incident
-		bgCtxBulk := context.Background()
+		bgCtxBulk := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		bulkReqNum := requestNumber
 		go func(inc *models.Incident) {
 			defer func() {
@@ -3663,7 +3663,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 					_ = s.syncTransitionToMergedIncidents(ctx, incidentID, transition, history, userID)
 
 					// Run feedback/attachment copy and SMS in background
-					bgCtx := context.Background()
+					bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 					fmt.Println("[DEBUG] Starting goroutine: autoCloseMergedIncidents")
 					go func() {
 						_ = s.autoCloseMergedIncidents(bgCtx, incidentID, req, userID)
@@ -3677,7 +3677,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 					_ = s.syncTransitionToMergedIncidents(ctx, incidentID, transition, history, userID)
 
 					// Send SMS notifications in background
-					bgCtx := context.Background()
+					bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 					fmt.Println("[DEBUG] Starting goroutine: notifyStatusChangeToMergedIncidents")
 					go func() {
 						_ = s.notifyStatusChangeToMergedIncidents(bgCtx, incidentID, newStateName, req.Comment, userID)
@@ -3722,7 +3722,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	// Send FCM push notification to next assignee(s) only on the "approve" transition
 	if s.fcmService != nil && transition.Code == "approve" && len(assigneeUserIDs) > 0 {
 		log.Printf("FCM-ASSIGN: assignee user %s:, transition_code: %s", assigneeUserIDs, transition.Code)
-		bgCtx := context.Background()
+		bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		capturedID := incidentID
 		capturedNumber := incident.IncidentNumber
 		capturedTitle := incident.Title
@@ -3751,7 +3751,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 
 	// Send FCM push notification + in-app notification to the citizen reporter on incident closure
 	if (s.fcmService != nil || s.notificationService != nil) && newState.StateType == "terminal" && incident.ReporterID != nil {
-		bgCtx := context.Background()
+		bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		reporterID := *incident.ReporterID
 		closedAt := time.Now()
 		comment := req.Comment
@@ -3853,7 +3853,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	// Create rejection log asynchronously if this is a rejection transition.
 	// Run in background so a log creation failure never blocks the response.
 	if transition.IsRejection && s.rejectionLogRepo != nil {
-		bgCtx := context.Background()
+		bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		go s.createRejectionLog(bgCtx, incidentID, incident, transition, history, userID, userRoleIDs)
 	}
 
@@ -3866,7 +3866,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				assignedDeptID = &deptID
 			}
 		}
-		bgCtx := context.Background()
+		bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -3884,7 +3884,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 
 	if transition.IsMissingInfo {
 		log.Printf("MISSING-INFO-SMS: Triggered for incident %s and transition.IsMissingInfo: %v", incident.IncidentNumber, transition.IsMissingInfo)
-		bgCtx := context.Background()
+		bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		//go s.SendMissingInfoClosureSMS(bgCtx, incident.IncidentNumber, incident.CreatedByMobile, incident.ReporterID, userID)
 		go func() {
 			defer func() {
@@ -3960,7 +3960,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		capturedTransition := transition
 		capturedIncident := updated
 		capturedUserID := userID
-		bgCtx := context.Background()
+		bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		go func() {
 			var performer *models.User
 			if u, err := s.userRepo.FindByID(bgCtx, capturedUserID); err == nil {
@@ -4306,7 +4306,7 @@ func (s *incidentService) ListComments(ctx context.Context, incidentID uuid.UUID
 func (s *incidentService) UpdateComment(ctx context.Context, commentID uuid.UUID, req *models.IncidentCommentRequest, userID uuid.UUID) (*models.IncidentCommentResponse, error) {
 	comment, err := s.incidentRepo.FindCommentByID(ctx, commentID)
 	if err != nil {
-		return nil, err
+		return nil, errors.New(i18n.T(ctx, "comment_not_found"))
 	}
 
 	// Only author can update their comment
@@ -4321,7 +4321,7 @@ func (s *incidentService) UpdateComment(ctx context.Context, commentID uuid.UUID
 	comment.IsInternal = req.IsInternal
 
 	if err := s.incidentRepo.UpdateComment(ctx, comment); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_update_comment"), err)
 	}
 
 	// Create revision for comment modified
@@ -4343,7 +4343,7 @@ func (s *incidentService) UpdateComment(ctx context.Context, commentID uuid.UUID
 func (s *incidentService) DeleteComment(ctx context.Context, commentID uuid.UUID, userID uuid.UUID) error {
 	comment, err := s.incidentRepo.FindCommentByID(ctx, commentID)
 	if err != nil {
-		return err
+		return errors.New(i18n.T(ctx, "comment_not_found"))
 	}
 
 	// Only author can delete their comment
@@ -4355,7 +4355,7 @@ func (s *incidentService) DeleteComment(ctx context.Context, commentID uuid.UUID
 	oldContent := comment.Content
 
 	if err := s.incidentRepo.DeleteComment(ctx, commentID); err != nil {
-		return err
+		return fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_delete_comment"), err)
 	}
 
 	// Create revision for comment deleted
@@ -4563,7 +4563,7 @@ func (s *incidentService) ListAttachments(ctx context.Context, incidentID uuid.U
 func (s *incidentService) DeleteAttachment(ctx context.Context, attachmentID uuid.UUID, userID uuid.UUID) error {
 	attachment, err := s.incidentRepo.FindAttachmentByID(ctx, attachmentID)
 	if err != nil {
-		return err
+		return errors.New(i18n.T(ctx, "attachment_not_found"))
 	}
 
 	// Only uploader can delete their attachment
@@ -4577,7 +4577,7 @@ func (s *incidentService) DeleteAttachment(ctx context.Context, attachmentID uui
 	// TODO: Delete file from storage
 
 	if err := s.incidentRepo.DeleteAttachment(ctx, attachmentID); err != nil {
-		return err
+		return fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_delete_attachment"), err)
 	}
 
 	// Create revision for attachment removed
@@ -4669,7 +4669,7 @@ func (s *incidentService) AssignIncident(ctx context.Context, incidentID, assign
 			}
 		}
 		if s.fcmService != nil {
-			bgCtx := context.Background()
+			bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 			capturedAssignee := assigneeID
 			capturedID := incidentID
 			capturedNumber := updated.IncidentNumber
@@ -5002,7 +5002,7 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 
 			// Send actual SMS via Twilio
 			fmt.Println("[DEBUG] Calling utils.SendSMS...")
-			_, smsErr := utils.SendSMS(merged.Reporter.Phone, smsMessage)
+			_, smsErr := utils.SendSMS(ctx, merged.Reporter.Phone, smsMessage)
 			if smsErr != nil {
 				fmt.Printf("[DEBUG] SMS send failed: %v\n", smsErr)
 			} else {
@@ -5125,7 +5125,7 @@ func (s *incidentService) notifyStatusChangeToMergedIncidents(ctx context.Contex
 
 			// Send actual SMS via Twilio
 			fmt.Println("[DEBUG] Calling utils.SendSMS...")
-			_, smsErr := utils.SendSMS(merged.Reporter.Phone, smsMessage)
+			_, smsErr := utils.SendSMS(ctx, merged.Reporter.Phone, smsMessage)
 			if smsErr != nil {
 				fmt.Printf("[DEBUG] SMS send failed: %v\n", smsErr)
 			} else {
@@ -5594,7 +5594,7 @@ func (s *incidentService) TriggerEvaluation(ctx context.Context, id uuid.UUID) e
 
 	// All checks passed — increment evaluation count
 	if err := s.incidentRepo.IncrementEvaluationCount(ctx, id); err != nil {
-		return fmt.Errorf("failed to increment evaluation count: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_increment_evaluation_count"), err)
 	}
 
 	transitionName := ""
@@ -5896,7 +5896,7 @@ func (s *incidentService) SendNotBelongClosureSMS(
 	)
 
 	now := time.Now()
-	_, smsErr := utils.SendSMS(mobile, smsMessage)
+	_, smsErr := utils.SendSMS(ctx, mobile, smsMessage)
 	status := "sent"
 	if smsErr != nil {
 		status = "failed"
@@ -5974,7 +5974,7 @@ func (s *incidentService) sendConvertToRequestSMS(ctx context.Context, incident 
 	// Hardcoded Arabic fallback
 	smsMessage := fmt.Sprintf("تم تحويل بلاغك رقم %s إلى طلب رقم %s", incident.IncidentNumber, requestNumber)
 	now := time.Now()
-	_, smsErr := utils.SendSMS(mobile, smsMessage)
+	_, smsErr := utils.SendSMS(ctx, mobile, smsMessage)
 	status := "sent"
 	if smsErr != nil {
 		status = "failed"
@@ -6065,7 +6065,7 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 		incident.IncidentNumber,
 	)
 	now := time.Now()
-	_, smsErr := utils.SendSMS(mobile, smsMessage)
+	_, smsErr := utils.SendSMS(ctx, mobile, smsMessage)
 	status := "sent"
 	if smsErr != nil {
 		status = "failed"

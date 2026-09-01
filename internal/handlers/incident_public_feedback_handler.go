@@ -48,7 +48,7 @@ func (h *IncidentPublicFeedbackHandler) Create(c *fiber.Ctx) error {
 
 	resp, err := h.service.Create(c.UserContext(), incidentID, &req)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
@@ -80,11 +80,11 @@ func (h *IncidentPublicFeedbackHandler) Init(c *fiber.Ctx) error {
 	if err != nil {
 		switch err.Error() {
 		case "token has expired":
-			return utils.ErrorResponse(c, fiber.StatusUnauthorized, err.Error())
+			return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "token_expired"))
 		case "token does not match this incident", "invalid token":
-			return utils.ErrorResponse(c, fiber.StatusUnauthorized, err.Error())
+			return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "invalid_token"))
 		default:
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+			return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 		}
 	}
 
@@ -128,7 +128,7 @@ func (h *IncidentPublicFeedbackHandler) Submit(c *fiber.Ctx) error {
 				case errors.Is(err, utils.ErrIDMismatch):
 					return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "token_incident_mismatch"))
 				default:
-					return utils.ErrorResponse(c, fiber.StatusUnauthorized, "Invalid token")
+					return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "invalid_token"))
 				}
 			}
 		}
@@ -157,13 +157,15 @@ func (h *IncidentPublicFeedbackHandler) Submit(c *fiber.Ctx) error {
 	if err != nil {
 		switch err.Error() {
 		case "feedback record not found":
-			return utils.ErrorResponse(c, fiber.StatusNotFound, err.Error())
-		case "feedback has already been submitted",
-			"feedback has already been submitted for this incident",
-			"feedback has already been submitted for this incident via WhatsApp":
-			return utils.ErrorResponse(c, fiber.StatusConflict, err.Error())
+			return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "feedback_record_not_found"))
+		case "feedback has already been submitted":
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "feedback_already_submitted"))
+		case "feedback has already been submitted for this incident":
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "feedback_already_submitted_incident"))
+		case "feedback has already been submitted for this incident via WhatsApp":
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "feedback_already_submitted_whatsapp"))
 		default:
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+			return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 		}
 	}
 
@@ -184,7 +186,7 @@ func (h *IncidentPublicFeedbackHandler) Submit(c *fiber.Ctx) error {
 func (h *IncidentPublicFeedbackHandler) ListAll(c *fiber.Ctx) error {
 	items, err := h.service.List(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "public_feedback_retrieved"), items)
 }
@@ -198,7 +200,7 @@ func (h *IncidentPublicFeedbackHandler) ListByIncident(c *fiber.Ctx) error {
 
 	items, err := h.service.ListByIncident(c.UserContext(), incidentID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "public_feedback_retrieved"), items)
 }
