@@ -1,3 +1,7 @@
+// i18n note: this file's fmt.Errorf calls are internal-only — callers (document_service.go,
+// document_authz.go) already wrap/log these and never forward err.Error() raw to an HTTP
+// response (document_handler.go routes failures through utils.InternalErrorResponse with a
+// translated generic message instead).
 package storage
 
 import (
@@ -403,8 +407,8 @@ func (c *httpDocumentaClient) UploadFile(ctx context.Context, folderID, fileName
 	// would silently break DownloadFile/DeleteFile/GetFileInfo (which expect
 	// a file/node UUID) on the very next upload of the same filename.
 	type uploadResp struct {
-		UUID    string `json:"uuid"`
-		File    *struct {
+		UUID string `json:"uuid"`
+		File *struct {
 			UUID string `json:"uuid"`
 		} `json:"file"`
 		Version *struct {

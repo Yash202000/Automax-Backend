@@ -222,7 +222,7 @@ func (h *ReportHandler) CreateReport(c *fiber.Ctx) error {
 
 	report, err := h.service.CreateReport(c.UserContext(), &req, userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "report_created"), report)
@@ -288,7 +288,7 @@ func (h *ReportHandler) ListReports(c *fiber.Ctx) error {
 
 	reports, total, err := h.service.ListReports(c.UserContext(), filter)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	totalPages := (int(total) + filter.Limit - 1) / filter.Limit
@@ -355,7 +355,7 @@ func (h *ReportHandler) DuplicateReport(c *fiber.Ctx) error {
 		if errors.Is(err, services.ErrReportAccessDenied) {
 			return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "access_denied"))
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "report_duplicated"), report)
@@ -384,7 +384,7 @@ func (h *ReportHandler) ExecuteReport(c *fiber.Ctx) error {
 		if errors.Is(err, services.ErrReportAccessDenied) {
 			return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "access_denied"))
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	// Mirror the service's filter resolution: use request filters if provided, else stored.
 	filters := report.Config.Filters
@@ -395,7 +395,7 @@ func (h *ReportHandler) ExecuteReport(c *fiber.Ctx) error {
 	req.Filters = scopedFilters
 	result, err := h.service.ExecuteReport(ctx, id, &req, userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "report_executed"), result)
@@ -415,7 +415,7 @@ func (h *ReportHandler) PreviewReport(c *fiber.Ctx) error {
 	req.Config.Filters = scopedFilters
 	result, err := h.service.PreviewReport(ctx, &req)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "preview_generated"), result)
@@ -450,7 +450,7 @@ func (h *ReportHandler) QueryReport(c *fiber.Ctx) error {
 	ctx = cstmContext.WithReportTimezone(ctx, req.Timezone)
 	result, err := h.service.QueryReport(ctx, &req)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.JSON(result)
@@ -481,7 +481,7 @@ func (h *ReportHandler) ExportReport(c *fiber.Ctx) error {
 	ctx = cstmContext.WithReportTimezone(ctx, tz)
 	data, filename, contentType, err := h.service.ExportReport(ctx, &req)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	c.Set("Content-Type", contentType)
@@ -506,7 +506,7 @@ func (h *ReportHandler) GetExecutionHistory(c *fiber.Ctx) error {
 
 	executions, total, err := h.service.GetExecutionHistory(c.UserContext(), id, page, limit)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	totalPages := (int(total) + limit - 1) / limit

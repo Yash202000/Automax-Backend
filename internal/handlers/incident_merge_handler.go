@@ -59,7 +59,7 @@ func (h *IncidentMergeHandler) ValidateMerge(c *fiber.Ctx) error {
 
 	response, err := h.service.ValidateMerge(c.UserContext(), req.IncidentIDs)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// If validation found errors, return 400 with proper message
@@ -150,7 +150,7 @@ func (h *IncidentMergeHandler) GetMergedIncidents(c *fiber.Ctx) error {
 
 	incidents, err := h.service.GetMergedIncidents(c.UserContext(), masterIncidentID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "merged_incidents_retrieved"), incidents)
@@ -171,7 +171,7 @@ func (h *IncidentMergeHandler) CanMerge(c *fiber.Ctx) error {
 	roleIDs := h.getUserRoleIDs(c)
 	canMerge, err := h.service.CanUserMerge(c.UserContext(), workflowID, roleIDs)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "permission_check_completed"), fiber.Map{

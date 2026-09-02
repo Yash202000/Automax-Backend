@@ -66,8 +66,7 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 
 	existing, err := h.repo.FindByNameOrNameAr(c.UserContext(), req.Name, req.NameAr)
 	if err == nil && existing != nil {
-		msg := fmt.Sprintf("Department '%s' already exists", existing.Name)
-		return utils.ErrorResponse(c, fiber.StatusConflict, msg)
+		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.Tf(c.UserContext(), "department_already_exists_named", existing.Name))
 	}
 
 	deptType := req.Type
@@ -97,7 +96,7 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
 			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "department_code_exists"))
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Assign locations, classifications, and roles if provided
@@ -212,8 +211,7 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 	if (req.Name != "" && req.Name != department.Name) || (req.NameAr != "" && req.NameAr != department.NameAr) {
 		existing, err := h.repo.FindByNameOrNameAr(c.UserContext(), checkName, checkNameAr)
 		if err == nil && existing != nil && existing.ID != id {
-			msg := fmt.Sprintf("Department '%s' already exists", existing.Name)
-			return utils.ErrorResponse(c, fiber.StatusConflict, msg)
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.Tf(c.UserContext(), "department_already_exists_named", existing.Name))
 		}
 	}
 
@@ -248,10 +246,10 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 		if !*req.IsActive && department.IsActive {
 			hasActive, err := h.repo.HasActiveChildren(c.UserContext(), id)
 			if err != nil {
-				return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+				return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 			}
 			if hasActive {
-				return utils.ErrorResponse(c, fiber.StatusConflict, "Cannot deactivate this department because it has active sub-departments. Please deactivate all child departments first.")
+				return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "department_has_active_children"))
 			}
 		}
 		department.IsActive = *req.IsActive
@@ -264,7 +262,7 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
 			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "department_code_exists"))
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Update associations if provided
@@ -302,7 +300,7 @@ func (h *DepartmentHandler) Delete(c *fiber.Ctx) error {
 
 	children, users, incidents, err := h.repo.CheckDeleteDependencies(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	isAr := strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.Get("Accept-Language"))), "ar")
@@ -337,7 +335,7 @@ func (h *DepartmentHandler) Delete(c *fiber.Ctx) error {
 	}
 
 	if err := h.repo.Delete(c.UserContext(), id); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "department_deleted"), nil)
@@ -366,7 +364,7 @@ func (h *DepartmentHandler) List(c *fiber.Ctx) error {
 
 	departments, total, err := h.repo.ListFiltered(c.UserContext(), filter)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	responses := make([]models.DepartmentResponse, len(departments))
@@ -388,7 +386,7 @@ func (h *DepartmentHandler) GetTree(c *fiber.Ctx) error {
 
 	tree, err := h.repo.GetTree(c.UserContext(), scopeDepartmentIDs)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	responses := make([]models.DepartmentResponse, len(tree))
@@ -416,7 +414,7 @@ func (h *DepartmentHandler) GetChildren(c *fiber.Ctx) error {
 	}
 
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	responses := make([]models.DepartmentResponse, len(children))
@@ -454,7 +452,7 @@ func (h *DepartmentHandler) MatchDepartment(c *fiber.Ctx) error {
 
 	departments, err := h.repo.FindMatching(c.UserContext(), classificationID, locationID, req.DepartmentType)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	responses := make([]models.DepartmentResponse, len(departments))
@@ -480,7 +478,7 @@ func (h *DepartmentHandler) MatchDepartment(c *fiber.Ctx) error {
 func (h *DepartmentHandler) Export(c *fiber.Ctx) error {
 	departments, err := h.repo.List(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Filter out invalid records (with corrupted paths or invalid UUIDs)
