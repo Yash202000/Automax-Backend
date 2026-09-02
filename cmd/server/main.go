@@ -258,6 +258,7 @@ func main() {
 	notificationHandler := handlers.NewNotificationHandler(notificationService, minioStorage, userRepo, incidentRepo, actionLogService)
 	templateHandler := handlers.NewNotificationTemplateHandler(notificationTemplateService)
 	attachmentHandler := handlers.NewAttachmentHandler(incidentService, notificationService, minioStorage)
+	imageValidationHandler := handlers.NewImageValidationHandler(services.NewImageValidationService(), cfg.ImageValidation)
 	otpHandler := handlers.NewOTPHandler(otpService, userService)
 	escalationHandler := handlers.NewEscalationHandler(escalationService)
 	escalationGroupHandler := handlers.NewEscalationGroupHandler(escalationGroupService)
@@ -544,6 +545,11 @@ func main() {
 	attachments := v1.Group("/attachments", authMiddleware.Authenticate())
 	attachments.Get("/:attachment_id", attachmentHandler.DownloadAttachment)
 	attachments.Get("/:attachment_id/preview", attachmentHandler.PreviewAttachment)
+
+	// Standalone image-quality validation, called by Mobile App / Chatbot
+	// before incident submission to reject mostly-black/mostly-white/no-detail photos.
+	images := v1.Group("/images", authMiddleware.Authenticate())
+	images.Post("/validate", imageValidationHandler.ValidateImage)
 
 	// Complaint routes (authenticated users)
 	complaints := v1.Group("/complaints", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureComplaints)))
