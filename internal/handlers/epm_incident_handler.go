@@ -459,19 +459,31 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 		}
 	}
 
-	// prefer the most specific classification that was provided
+	// Attach the incident to whichever provided classification is an actual leaf node
+	// (no children) — not just the field name that "sounds" most specific. This handles
+	// hierarchies of variable depth correctly (e.g. a branch with no Special level, where
+	// Sub is genuinely the leaf) instead of assuming SPL > Sub > Main always applies.
+	// Checked deepest-field-first since that's the most likely leaf when all three exist.
 	var classificationID *uuid.UUID
-	switch {
-	case subCls != nil:
-		classificationID = subCls
-	case mainCls != nil:
-		classificationID = mainCls
-	case splCls != nil:
-		classificationID = splCls
-	default:
+	for _, candidate := range []*uuid.UUID{splCls, subCls, mainCls} {
+		if candidate == nil {
+			continue
+		}
+		children, err := h.classificationRepo.GetChildren(c.UserContext(), *candidate)
+		if err == nil && len(children) == 0 {
+			classificationID = candidate
+			break
+		}
+	}
+	if classificationID == nil {
 		msg := "Main classification ID is missing"
-		if req.MainClassificationID != "" {
+		switch {
+		case req.MainClassificationID == "":
+			// keep default message
+		case req.SubClassificationID == "":
 			msg = "Sub classification ID is missing"
+		default:
+			msg = "None of the provided classification IDs resolve to a leaf classification"
 		}
 		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
 			HTTPStatusCode: fiber.StatusBadRequest,
@@ -1282,6 +1294,102 @@ func (h *EPMIncidentHandler) ReopenIncidentV2(c *fiber.Ctx) error {
 	}
 
 	return momraV2Response(c, fiber.StatusOK, "Incident has been reopened successfully", true)
+}
+
+// EPMAssignExternalEntityRequest is a best-guess shape for the still-unconfirmed
+// MOMRA->Automax external-entity assignment notification (docs/MOMRA_Outbound_Integration_Spec_v1.0.md
+// §7, OD-N2). Field names/casing mirror the sibling V2 endpoints' conventions
+// (EPMUpdateIncidentV2Request above) since MOMRA hasn't published this contract yet —
+// expect to adjust field names once confirmed; the underlying Incident schema
+// (ExternalEntityID/ExternalAssignmentStatus/ExternalAssignedAt) is not expected to
+// need rework.
+type EPMAssignExternalEntityRequest struct {
+	AmanaIncidentNo  string `json:"AmanaIncidentNo"`
+	IncidentNo       string `json:"IncidentNO"`
+	EECode           string `json:"EECode"`
+	EEName           string `json:"EEName"`
+	AssignmentStatus string `json:"AssignmentStatus"` // e.g. "assigned"
+	ActionDate       string `json:"ActionDate"`
+}
+
+// AssignExternalEntity is a STUB implementing the not-yet-confirmed MOMRA->Automax
+// assignment-notification interface (Story D / OD-N2). It exists so backend + UI are
+// ready to wire in as soon as MOMRA confirms the mechanism, without a data-model
+// change — see the Incident model fields it writes. Registered at
+// PATCH /Momra/API/EPM/AssignExternalEntity, mirroring UpdateIncidentV2/ReOpenIncidentV2's
+// route family and auth pattern.
+func (h *EPMIncidentHandler) AssignExternalEntity(c *fiber.Ctx) error {
+	authHeader := c.Get("Authorization")
+	if authHeader == "" {
+		return momraV2Response(c, fiber.StatusUnauthorized, "Missing Authorization header", false)
+	}
+	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+	if tokenString == authHeader {
+		return momraV2Response(c, fiber.StatusUnauthorized, "Invalid Authorization header format, use Bearer token", false)
+	}
+	claims, err := h.jwtManager.ValidateToken(tokenString)
+	if err != nil {
+		return momraV2Response(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "invalid_or_expired_token"), false)
+	}
+	var sessionData map[string]interface{}
+	if err := h.sessionStore.GetUserSession(c.UserContext(), claims.SessionID, &sessionData); err != nil {
+		return momraV2Response(c, fiber.StatusUnauthorized, "Session expired or invalid", false)
+	}
+
+	var req EPMAssignExternalEntityRequest
+	if err := c.BodyParser(&req); err != nil {
+		return momraV2Response(c, fiber.StatusBadRequest, "Invalid request body: "+err.Error(), false)
+	}
+	if req.IncidentNo == "" {
+		return momraV2Response(c, fiber.StatusBadRequest, "IncidentNO is required", false)
+	}
+	if req.AmanaIncidentNo == "" {
+		return momraV2Response(c, fiber.StatusBadRequest, "AmanaIncidentNo is required", false)
+	}
+	if req.EECode == "" {
+		return momraV2Response(c, fiber.StatusBadRequest, "EECode is required", false)
+	}
+
+	incident, err := h.incidentRepo.FindByIncidentNumber(c.UserContext(), req.AmanaIncidentNo)
+	if err != nil {
+		return momraV2Response(c, fiber.StatusNotFound, "Incident not found: "+req.AmanaIncidentNo, false)
+	}
+
+	var custFields map[string]interface{}
+	_ = json.Unmarshal([]byte(incident.CustomFields), &custFields)
+	if momraNo, _ := custFields["momra_incident_no"].(string); momraNo != req.IncidentNo {
+		return momraV2Response(c, fiber.StatusBadRequest, "IncidentNO does not correlate with AmanaIncidentNo: "+req.AmanaIncidentNo, false)
+	}
+
+	// EECode resolves against Department{Type:"external"}, the same model used
+	// throughout the MOMRA integration (internal/services/momra_sync_service.go).
+	ee, err := h.departmentRepo.FindByCode(c.UserContext(), req.EECode)
+	if err != nil || ee.Type != externalEntityDepartmentType {
+		return momraV2Response(c, fiber.StatusBadRequest, "This EE is not defined or not active: "+req.EECode, false)
+	}
+
+	assignedAt := time.Now()
+	if req.ActionDate != "" {
+		if parsed, parseErr := time.Parse(time.RFC3339, req.ActionDate); parseErr == nil {
+			assignedAt = parsed
+		}
+	}
+	assignmentStatus := req.AssignmentStatus
+	if assignmentStatus == "" {
+		assignmentStatus = "assigned"
+	}
+
+	updates := map[string]interface{}{
+		"external_entity_id":         ee.ID,
+		"external_assignment_status": assignmentStatus,
+		"external_assigned_at":       assignedAt,
+		"updated_at":                 time.Now(),
+	}
+	if err := h.incidentRepo.UpdateFields(c.UserContext(), incident.ID, updates); err != nil {
+		return momraV2Response(c, fiber.StatusInternalServerError, "Failed to record external entity assignment: "+err.Error(), false)
+	}
+
+	return momraV2Response(c, fiber.StatusOK, "External entity assignment recorded successfully", true)
 }
 
 func (h *EPMIncidentHandler) validateAndResolveLocation(ctx context.Context, externalID string) (*uuid.UUID, error) {
