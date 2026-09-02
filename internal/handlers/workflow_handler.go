@@ -86,7 +86,7 @@ func (h *WorkflowHandler) CreateWorkflow(c *fiber.Ctx) error {
 
 	workflow, err := h.service.CreateWorkflow(c.UserContext(), &req, userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Log the creation with workflow details
@@ -226,7 +226,7 @@ func (h *WorkflowHandler) ListWorkflows(c *fiber.Ctx) error {
 
 	workflows, total, err := h.service.ListWorkflowsFiltered(c.UserContext(), filter)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	message := i18n.T(c.UserContext(), "workflows_retrieved")
@@ -282,7 +282,7 @@ func (h *WorkflowHandler) UpdateWorkflow(c *fiber.Ctx) error {
 	// Get old workflow for action logging
 	oldWorkflow, err := h.service.GetWorkflow(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	search := []string{}
@@ -302,7 +302,7 @@ func (h *WorkflowHandler) UpdateWorkflow(c *fiber.Ctx) error {
 
 	workflow, err := h.service.UpdateWorkflow(c.UserContext(), id, &req)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Capture values before async logging
@@ -402,11 +402,11 @@ func (h *WorkflowHandler) DeleteWorkflow(c *fiber.Ctx) error {
 	// Get workflow details for action logging
 	oldWorkflow, err := h.service.GetWorkflow(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	if err := h.service.DeleteWorkflow(c.UserContext(), id); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Log the deletion
@@ -442,7 +442,7 @@ func (h *WorkflowHandler) DeleteWorkflow(c *fiber.Ctx) error {
 func (h *WorkflowHandler) ListDeletedWorkflows(c *fiber.Ctx) error {
 	workflows, err := h.service.ListDeletedWorkflows(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "deleted_workflows_retrieved"), workflows)
@@ -456,7 +456,7 @@ func (h *WorkflowHandler) PermanentDeleteWorkflow(c *fiber.Ctx) error {
 	}
 
 	if err := h.service.PermanentDeleteWorkflow(c.UserContext(), id); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "workflow_permanently_deleted"), nil)
@@ -470,7 +470,7 @@ func (h *WorkflowHandler) RestoreWorkflow(c *fiber.Ctx) error {
 	}
 
 	if err := h.service.RestoreWorkflow(c.UserContext(), id); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "workflow_restored"), nil)
@@ -487,7 +487,7 @@ func (h *WorkflowHandler) DuplicateWorkflow(c *fiber.Ctx) error {
 
 	workflow, err := h.service.DuplicateWorkflow(c.UserContext(), id, userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "workflow_duplicated"), workflow)
@@ -519,13 +519,13 @@ func (h *WorkflowHandler) AssignClassifications(c *fiber.Ctx) error {
 	}
 
 	if err := h.service.AssignClassifications(c.UserContext(), id, classIDs); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Fetch updated workflow
 	workflow, err := h.service.GetWorkflow(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Log the classification assignment
@@ -571,7 +571,7 @@ func (h *WorkflowHandler) GetWorkflowByClassification(c *fiber.Ctx) error {
 
 	workflow, err := h.service.GetWorkflowByClassification(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, err.Error())
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "workflow_not_found"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "workflow_retrieved"), workflow)
@@ -628,7 +628,7 @@ func (h *WorkflowHandler) CreateState(c *fiber.Ctx) error {
 				Data:    slaErr,
 			})
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Log the creation
@@ -690,7 +690,7 @@ func (h *WorkflowHandler) ListStates(c *fiber.Ctx) error {
 
 	states, err := h.service.ListStates(c.UserContext(), workflowID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "states_retrieved"), states)
@@ -717,7 +717,7 @@ func (h *WorkflowHandler) UpdateState(c *fiber.Ctx) error {
 	// Get old state for action logging
 	oldState, err := h.service.GetState(c.UserContext(), stateID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	state, err := h.service.UpdateState(c.UserContext(), stateID, &req)
@@ -730,7 +730,7 @@ func (h *WorkflowHandler) UpdateState(c *fiber.Ctx) error {
 				Data:    slaErr,
 			})
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Capture values before async logging
@@ -838,11 +838,11 @@ func (h *WorkflowHandler) DeleteState(c *fiber.Ctx) error {
 	// Get state details for action logging
 	oldState, err := h.service.GetState(c.UserContext(), stateID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	if err := h.service.DeleteState(c.UserContext(), stateID); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Log the deletion
@@ -930,7 +930,7 @@ func (h *WorkflowHandler) CreateTransition(c *fiber.Ctx) error {
 
 	transition, err := h.service.CreateTransition(c.UserContext(), workflowID, &req)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Log the creation
@@ -994,7 +994,7 @@ func (h *WorkflowHandler) ListTransitions(c *fiber.Ctx) error {
 
 	transitions, err := h.service.ListTransitions(c.UserContext(), workflowID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "transitions_retrieved"), transitions)
@@ -1021,12 +1021,12 @@ func (h *WorkflowHandler) UpdateTransition(c *fiber.Ctx) error {
 	// Get old transition for action logging
 	oldTransition, err := h.service.GetTransition(c.UserContext(), transitionID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	transition, err := h.service.UpdateTransition(c.UserContext(), transitionID, &req)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Capture values before async logging
@@ -1140,11 +1140,11 @@ func (h *WorkflowHandler) DeleteTransition(c *fiber.Ctx) error {
 	// Get transition details for action logging
 	oldTransition, err := h.service.GetTransition(c.UserContext(), transitionID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	if err := h.service.DeleteTransition(c.UserContext(), transitionID); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Log the deletion
@@ -1225,7 +1225,7 @@ func (h *WorkflowHandler) SetTransitionRoles(c *fiber.Ctx) error {
 	}
 
 	if err := h.service.SetTransitionRoles(c.UserContext(), transitionID, roleIDs); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Log the role assignment
@@ -1267,7 +1267,7 @@ func (h *WorkflowHandler) SetTransitionRequirements(c *fiber.Ctx) error {
 	}
 
 	if err := h.service.SetTransitionRequirements(c.UserContext(), transitionID, req.Requirements); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Log the requirements update
@@ -1309,7 +1309,7 @@ func (h *WorkflowHandler) SetTransitionActions(c *fiber.Ctx) error {
 	}
 
 	if err := h.service.SetTransitionActions(c.UserContext(), transitionID, req.Actions); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Log the actions update
@@ -1351,7 +1351,7 @@ func (h *WorkflowHandler) SetTransitionFieldChanges(c *fiber.Ctx) error {
 	}
 
 	if err := h.service.SetTransitionFieldChanges(c.UserContext(), transitionID, req.FieldChanges); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Log the field changes update
@@ -1389,7 +1389,7 @@ func (h *WorkflowHandler) GetTransitionsToState(c *fiber.Ctx) error {
 
 	transitions, err := h.service.GetTransitionsToState(c.UserContext(), stateID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "transitions_retrieved"), transitions)
@@ -1436,7 +1436,7 @@ func (h *WorkflowHandler) GetInitialStateMatchingUsers(c *fiber.Ctx) error {
 
 	users, err := h.service.GetInitialStateMatchingUsers(c.UserContext(), workflowID, classificationID, locationID, departmentID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "matching_users_retrieved"), users)
@@ -1456,7 +1456,7 @@ func (h *WorkflowHandler) MatchWorkflow(c *fiber.Ctx) error {
 
 	result, err := h.service.MatchWorkflow(c.UserContext(), &req)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "workflow_matched"), result)
@@ -1472,7 +1472,7 @@ func (h *WorkflowHandler) ExportWorkflow(c *fiber.Ctx) error {
 
 	jsonBytes, filename, err := h.service.ExportWorkflow(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Set headers for file download
@@ -1514,7 +1514,7 @@ func (h *WorkflowHandler) ImportWorkflow(c *fiber.Ctx) error {
 	// Parse JSON
 	var importData models.WorkflowImportData
 	if err := json.Unmarshal(buf, &importData); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid JSON format: "+err.Error())
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_json_format"))
 	}
 	log.Println("Parsed import data:", importData)
 
@@ -1533,7 +1533,7 @@ func (h *WorkflowHandler) ImportWorkflow(c *fiber.Ctx) error {
 	workflow, warnings, err := h.service.ImportWorkflow(c.UserContext(), &importData, userID)
 	if err != nil {
 		log.Println(err)
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Build response

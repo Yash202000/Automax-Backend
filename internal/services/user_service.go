@@ -263,7 +263,7 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 			AssignedBy: actorID,
 		}
 		if err := s.db.WithContext(ctx).Create(assignment).Error; err != nil {
-			return nil, fmt.Errorf("failed to assign extension: %w", err)
+			return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_assign_extension"), err)
 		}
 		s.db.WithContext(ctx).Create(&models.ExtensionAssignmentHistory{
 			Extension:  req.Extension,
@@ -1922,7 +1922,7 @@ func (s *userService) UpdateUserCallStatus(ctx context.Context, extension string
 	// Fetch User from DB
 	user, err := s.userRepo.FindByExtension(ctx, extension)
 	if err != nil {
-		return nil, fmt.Errorf("user with extension %s not found: %w", extension, err)
+		return nil, fmt.Errorf("%s: %w", i18n.Tf(ctx, "user_extension_not_found", extension), err)
 	}
 
 	// Update DB if status is different. Use UpdateProfile (targeted map update)
@@ -2189,12 +2189,12 @@ func (s *userService) ForgotPassword(ctx context.Context, req *models.ForgotPass
 	sessionID := uuid.New().String()
 	//Send OTP
 	if channel == "email" {
-		err = s.SendEmailOTP(value, otp)
+		err = s.SendEmailOTP(ctx, value, otp)
 	} else {
-		err = s.SendSMSOTP(value, otp)
+		err = s.SendSMSOTP(ctx, value, otp)
 	}
 	if err != nil {
-		return "", fmt.Errorf("failed to send OTP: %w", err)
+		return "", fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_send_otp"), err)
 	}
 
 	if err != nil {
@@ -2218,13 +2218,13 @@ func (s *userService) ForgotPassword(ctx context.Context, req *models.ForgotPass
 	return sessionID, nil
 }
 
-func (s *userService) SendSMSOTP(phone, otp string) error {
+func (s *userService) SendSMSOTP(ctx context.Context, phone, otp string) error {
 
 	if !strings.HasPrefix(phone, "+") {
-		return fmt.Errorf("phone must include country code")
+		return errors.New(i18n.T(ctx, "phone_country_code_required"))
 	}
 	message := fmt.Sprintf("Your OTP is %s. It is valid for 5 minutes.", otp)
-	sid, err := intutils.SendSMS(phone, message)
+	sid, err := intutils.SendSMS(ctx, phone, message)
 	s.logOTPNotification("sms", "twilio", phone, message, sid, err)
 	return err
 }
@@ -2283,14 +2283,14 @@ func (s *userService) logOTPNotification(channel, provider, recipient, body, pro
 	}
 }
 
-func (s *userService) SendEmailOTP(toEmail, otp string) error {
+func (s *userService) SendEmailOTP(ctx context.Context, toEmail, otp string) error {
 	toEmail = strings.TrimSpace(toEmail)
 	if toEmail == "" {
-		return fmt.Errorf("empty email address")
+		return errors.New(i18n.T(ctx, "email_address_required"))
 	}
 
 	if !strings.Contains(toEmail, "@") {
-		return fmt.Errorf("invalid email format: %s", toEmail)
+		return errors.New(i18n.Tf(ctx, "invalid_email_format", toEmail))
 	}
 	subject := "Your OTP for Password Reset"
 	// HTML body (avoid leading spaces/newlines issues)
@@ -2306,7 +2306,7 @@ func (s *userService) SendEmailOTP(toEmail, otp string) error {
 
 	to := []string{toEmail}
 
-	_, err := intutils.SendSMTPWithCCBCC(to, nil, nil, subject, body, nil)
+	_, err := intutils.SendSMTPWithCCBCC(ctx, to, nil, nil, subject, body, nil)
 	s.logOTPNotification("email", "smtp", toEmail, body, "", err)
 	// Logging
 	if err != nil {
