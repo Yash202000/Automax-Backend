@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
@@ -112,6 +114,13 @@ func (s *settingsService) UpdateSettings(ctx context.Context, req *models.Settin
 	}
 	if req.AuthSetting != nil {
 		settings.TotpEnabled = req.AuthSetting.TotpEnabled
+	}
+	if req.FieldSettings != nil {
+		fieldSettingsJSON, err := json.Marshal(req.FieldSettings)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal field settings: %w", err)
+		}
+		settings.FieldSettings = string(fieldSettingsJSON)
 	}
 
 	// Save updated settings
