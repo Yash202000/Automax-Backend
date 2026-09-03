@@ -34,14 +34,15 @@ type Config struct {
 	FinalCloseWhatsAppFeedback  FinalCloseWhatsAppFeedbackConfig
 	Cintrix                     CintrixConfig
 	PBX                         PBXConfig
+	MOMRA                       MOMRAConfig
 	SyncDeptAttributesToUser    bool   // env: SYNC_DEPT_ATTRIBUTES_TO_USER — when true, assigning a department to a user auto-appends the department's locations/classifications to that user. Default: false.
 	MaxDescriptionLength        int    // env: MAX_DESCRIPTION_LENGTH — max description length allowed for incident creation for EPM940 clients. Default: 500.
 	ClientCode                  string // env: CLIENT_CODE — client identifier, e.g. "EPM940".
+	Report                      ReportConfig
+	ImageValidation             ImageValidationConfig
 	CitizenAttachmentSizeLimit  string // env: CITIZEN_ATTACHMENT_SIZE_LIMIT — max attachment size in bytes for citizen-submitted incidents (EPM940 ENV_CONFIGURATION lookup value). Default: 5242880 (5MB).
 	InternalAttachmentSizeLimit string // env: INTERNAL_ATTACHMENT_SIZE_LIMIT — max attachment size in bytes for internally-created incidents (EPM940 ENV_CONFIGURATION lookup value). Default: 10485760 (10MB).
 	ChatbotURL                  string // env: CHATBOT_URL — URL of the chatbot (EPM940 ENV_CONFIGURATION lookup value). Default: placeholder — override in .env.
-	Report                      ReportConfig
-	ImageValidation             ImageValidationConfig
 }
 
 // ImageValidationConfig holds settings for the standalone image-quality
@@ -182,6 +183,26 @@ type CintrixConfig struct {
 	APIKeyID      string
 	APIKeySecret  string
 	WebhookSecret string
+}
+
+// MOMRAConfig holds settings for the outbound MOMRA CRM integration (Automax acting as
+// a client of MOMRA's CRM services — status sync, classification/EE master sync).
+// This is the reverse direction from the existing inbound EPM routes in
+// epm_incident_handler.go, which is MOMRA/EPM pushing incidents into Automax.
+// env: MOMRA_BASE_URL, MOMRA_CONSUMER_KEY, MOMRA_CONSUMER_SECRET, MOMRA_MUNICIPALITY_ID.
+// Leaving BaseURL unset disables outbound MOMRA sync/status calls.
+type MOMRAConfig struct {
+	BaseURL        string
+	ConsumerKey    string
+	ConsumerSecret string
+	// MunicipalityID is the default municipality scope for classification and
+	// EE-classification sync (3.21's municipalityID, 3.36's mandatory MunicipalityID).
+	MunicipalityID string
+	// ClassificationType is 3.21's mandatory "type" query parameter. The integration
+	// guide's own sample is the only documented value ("CRM") — see OD-N3 in
+	// docs/MOMRA_Outbound_Integration_Spec_v1.0.md; confirm with MOMRA before relying
+	// on this being the only valid value.
+	ClassificationType string
 }
 
 type EscalationConfig struct {
@@ -400,6 +421,13 @@ func Load() *Config {
 		PBX: PBXConfig{
 			BaseURL:            getEnv("PBX_BASE_URL", "https://zkff.automaxsw.com/create_user.php"),
 			InsecureSkipVerify: getEnvAsBool("PBX_INSECURE_SKIP_VERIFY", false),
+		},
+		MOMRA: MOMRAConfig{
+			BaseURL:            getEnv("MOMRA_BASE_URL", ""),
+			ConsumerKey:        getEnv("MOMRA_CONSUMER_KEY", ""),
+			ConsumerSecret:     getEnv("MOMRA_CONSUMER_SECRET", ""),
+			MunicipalityID:     getEnv("MOMRA_MUNICIPALITY_ID", "003"),
+			ClassificationType: getEnv("MOMRA_CLASSIFICATION_TYPE", "CRM"),
 		},
 		SyncDeptAttributesToUser:    getEnvAsBool("SYNC_DEPT_ATTRIBUTES_TO_USER", false),
 		MaxDescriptionLength:        getEnvAsInt("MAX_DESCRIPTION_LENGTH", 500),
