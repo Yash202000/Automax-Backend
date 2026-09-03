@@ -116,6 +116,11 @@ type DepartmentMatchRequest struct {
 	ClassificationID *string `json:"classification_id" validate:"omitempty,uuid"`
 	LocationID       *string `json:"location_id" validate:"omitempty,uuid"`
 	DepartmentType   *string `json:"department_type" validate:"omitempty,oneof=internal external"`
+	// IncidentID is optional. When provided and the incident is MOMRA-sourced
+	// (Source == "MOMRA"), external-type matches are resolved from that incident's own
+	// AvailableEEList (the exact entities MOMRA declared eligible for it) rather than
+	// purely from classification/location linkage — see MatchDepartment's doc comment.
+	IncidentID *string `json:"incident_id" validate:"omitempty,uuid"`
 }
 
 // DepartmentMatchResponse for returning matched departments

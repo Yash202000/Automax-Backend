@@ -35,8 +35,12 @@ type MOMRAStatusSyncService interface {
 	// SyncIncidentStatus looks up the mapping for newStateID and, if found, pushes the
 	// status change to MOMRA with retry/backoff, logging the attempt. Safe to call in
 	// a goroutine — it never returns an error to a caller that can't act on it; all
-	// outcomes are recorded via IntegrationExecutionLog instead.
-	SyncIncidentStatus(ctx context.Context, incident *models.Incident, newStateID uuid.UUID)
+	// outcomes are recorded via IntegrationExecutionLog instead. operatorName/operatorID
+	// identify the AutoMax user who performed the transition (TFIS v1.0 §11.3's
+	// OperatorName/OperatorID, marked M/As-Is); eeNotesFromMUN is the transition's
+	// comment, sent as EENotesFromMUN (§11.3: "C when status 004") — both are ignored
+	// unless the resolved mapping's CaseStatusID is "004" (EE routing).
+	SyncIncidentStatus(ctx context.Context, incident *models.Incident, newStateID uuid.UUID, operatorName, operatorID, eeNotesFromMUN string)
 	// RetryFailedSync re-attempts a previously failed sync from its logged request
 	// payload, for the manual-retry acceptance criterion in Story C.
 	RetryFailedSync(ctx context.Context, logID uuid.UUID) error
@@ -97,7 +101,7 @@ func findOrCreateMOMRALogScript(ctx context.Context, integrationRepo repository.
 	return script.ID, nil
 }
 
-func (s *momraStatusSyncService) SyncIncidentStatus(ctx context.Context, incident *models.Incident, newStateID uuid.UUID) {
+func (s *momraStatusSyncService) SyncIncidentStatus(ctx context.Context, incident *models.Incident, newStateID uuid.UUID, operatorName, operatorID, eeNotesFromMUN string) {
 	mapping, err := s.mappingRepo.FindActiveByState(ctx, newStateID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -114,7 +118,7 @@ func (s *momraStatusSyncService) SyncIncidentStatus(ctx context.Context, inciden
 		return
 	}
 
-	req := buildMOMRAStatusUpdateRequest(incident, mapping)
+	req := buildMOMRAStatusUpdateRequest(incident, mapping, crmID, operatorName, operatorID, eeNotesFromMUN)
 	s.attemptWithRetry(ctx, incident, crmID, req)
 }
 
@@ -122,17 +126,24 @@ func (s *momraStatusSyncService) SyncIncidentStatus(ctx context.Context, inciden
 // incident's current external-entity assignment. EECode/EEName/EENotesFromMUN are only
 // populated for CaseStatusID "004" (EE routing), matching the field's "Conditional if
 // code=004" contract — see docs/MOMRA_Outbound_Integration_Spec_v1.0.md §3.1.
-func buildMOMRAStatusUpdateRequest(incident *models.Incident, mapping *models.MOMRAStatusMapping) MOMRAStatusUpdateRequest {
+// OperatorName/OperatorID are sent on every call, per TFIS v1.0 §11.3 (not conditional
+// on CaseStatusID) — they identify who performed the AutoMax-side action. crmID is the
+// same value used as the URL's {CRMID} path segment, echoed into the body as
+// CRMCaseID (see MOMRAStatusUpdateRequest's doc comment for why).
+func buildMOMRAStatusUpdateRequest(incident *models.Incident, mapping *models.MOMRAStatusMapping, crmID, operatorName, operatorID, eeNotesFromMUN string) MOMRAStatusUpdateRequest {
 	closureFlag := "No"
 	if mapping.IsClosureStatus {
 		closureFlag = "Yes"
 	}
 
 	req := MOMRAStatusUpdateRequest{
+		CRMCaseID:       crmID,
 		CaseStatusID:    mapping.CaseStatusID,
 		ClosureFlag:     closureFlag,
 		AmanaIncidentID: incident.IncidentNumber,
-		CompletionTime:  time.Now().Format(time.RFC3339),
+		CompletionTime:  time.Now().Format(momraCompletionTimeLayout),
+		OperatorName:    operatorName,
+		OperatorID:      operatorID,
 	}
 
 	// Department{Type:"external"} is Automax's model for MOMRA External Entities
@@ -140,6 +151,7 @@ func buildMOMRAStatusUpdateRequest(incident *models.Incident, mapping *models.MO
 	if mapping.CaseStatusID == "004" && incident.Department != nil && incident.Department.Type == externalEntityDepartmentType {
 		req.EECode = incident.Department.Code
 		req.EEName = incident.Department.Name
+		req.EENotesFromMUN = eeNotesFromMUN
 	}
 
 	return req

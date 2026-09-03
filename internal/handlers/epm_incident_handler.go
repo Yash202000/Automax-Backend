@@ -20,21 +20,23 @@ import (
 	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
 type EPMIncidentHandler struct {
-	userRepo           repository.UserRepository
-	locationRepo       repository.LocationRepository
-	classificationRepo repository.ClassificationRepository
-	incidentRepo       repository.IncidentRepository
-	workflowRepo       repository.WorkflowRepository
-	lookupRepo         repository.LookupRepository
-	departmentRepo     repository.DepartmentRepository
-	jwtManager         *utils.JWTManager
-	sessionStore       *database.SessionStore
-	storage            *storage.MinIOStorage
-	db                 *gorm.DB
+	userRepo               repository.UserRepository
+	locationRepo           repository.LocationRepository
+	classificationRepo     repository.ClassificationRepository
+	incidentRepo           repository.IncidentRepository
+	workflowRepo           repository.WorkflowRepository
+	lookupRepo             repository.LookupRepository
+	departmentRepo         repository.DepartmentRepository
+	momraStatusMappingRepo repository.MOMRAStatusMappingRepository
+	jwtManager             *utils.JWTManager
+	sessionStore           *database.SessionStore
+	storage                *storage.MinIOStorage
+	db                     *gorm.DB
 }
 
 func NewEPMIncidentHandler(
@@ -45,23 +47,25 @@ func NewEPMIncidentHandler(
 	workflowRepo repository.WorkflowRepository,
 	lookupRepo repository.LookupRepository,
 	departmentRepo repository.DepartmentRepository,
+	momraStatusMappingRepo repository.MOMRAStatusMappingRepository,
 	jwtManager *utils.JWTManager,
 	sessionStore *database.SessionStore,
 	minioStorage *storage.MinIOStorage,
 	db *gorm.DB,
 ) *EPMIncidentHandler {
 	return &EPMIncidentHandler{
-		userRepo:           userRepo,
-		locationRepo:       locationRepo,
-		classificationRepo: classificationRepo,
-		incidentRepo:       incidentRepo,
-		workflowRepo:       workflowRepo,
-		lookupRepo:         lookupRepo,
-		departmentRepo:     departmentRepo,
-		jwtManager:         jwtManager,
-		sessionStore:       sessionStore,
-		storage:            minioStorage,
-		db:                 db,
+		userRepo:               userRepo,
+		locationRepo:           locationRepo,
+		classificationRepo:     classificationRepo,
+		incidentRepo:           incidentRepo,
+		workflowRepo:           workflowRepo,
+		lookupRepo:             lookupRepo,
+		departmentRepo:         departmentRepo,
+		momraStatusMappingRepo: momraStatusMappingRepo,
+		jwtManager:             jwtManager,
+		sessionStore:           sessionStore,
+		storage:                minioStorage,
+		db:                     db,
 	}
 }
 
@@ -89,26 +93,113 @@ func (h *EPMIncidentHandler) resolveEERoutingDepartment(ctx context.Context, eeN
 	return &dept.ID, nil
 }
 
+// resolveEERoutingDepartmentByCodeOrName is the EEList-aware counterpart of
+// resolveEERoutingDepartment: TFIS v1.0's IF-01 payloads carry an EEList array (each
+// entry an EntityID/EEName pair, per Table 30/32 — see EPMExternalEntity) rather than a
+// single eeFlag/eeName. The identifier (EntityID, or EECode as a fallback) is tried first
+// since it's the same stable key synced from MOMRA's EE master (3.35, see
+// momra_sync_service.go) into Department.Code; eeName is a fallback for entries that omit
+// both. Same reject-if-undefined-or-inactive rule as resolveEERoutingDepartment.
+func (h *EPMIncidentHandler) resolveEERoutingDepartmentByCodeOrName(ctx context.Context, eeCode, eeName string) (*uuid.UUID, error) {
+	code := strings.TrimSpace(eeCode)
+	name := strings.TrimSpace(eeName)
+	if code == "" && name == "" {
+		return nil, fmt.Errorf("EEList entry requires EECode or EEName")
+	}
+
+	identifier := code
+	if identifier == "" {
+		identifier = name
+	}
+
+	var dept *models.Department
+	if code != "" {
+		if d, err := h.departmentRepo.FindByCode(ctx, code); err == nil {
+			dept = d
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+	}
+	if dept == nil && name != "" {
+		if d, err := h.departmentRepo.FindByNameOrNameAr(ctx, name, name); err == nil {
+			dept = d
+		}
+	}
+	if dept == nil {
+		return nil, fmt.Errorf("this EE is not defined: %s", identifier)
+	}
+	if dept.Type != externalEntityDepartmentType || !dept.IsActive {
+		return nil, fmt.Errorf("this EE is not defined or not active: %s", identifier)
+	}
+
+	return &dept.ID, nil
+}
+
+// EPMIncidentPhoto is one entry of IncidentPhotos, matching TFIS v1.0's
+// IncidentPhotos[].IncidentImage array shape. Unlike TFIS's description (a downloadable
+// URL), AutoMax's deployed contract expects base64-encoded image content directly, same
+// as the legacy singular fileKey field.
+type EPMIncidentPhoto struct {
+	IncidentImage string `json:"IncidentImage"`
+}
+
+// EPMExternalEntity is one entry of EEList, per TFIS v1.0 Table 30 (IF-01 field
+// dictionary) and its Table 32 sample payload: EEList[].EntityID + EEList[].EEName.
+// EntityID's value is the same identifier as EECode used by IF-02 through IF-05 (Table
+// 30 row 11: "It must map exactly to EECode used by IF-02 to IF-05") — only the field
+// *name* differs for this interface. EECode is also accepted as a fallback key since the
+// spec itself documents this exact naming inconsistency across interfaces (CL-003: "EE
+// identifier appears as EntityID, EECode and EE_Code").
+type EPMExternalEntity struct {
+	EntityID string `json:"EntityID"`
+	EECode   string `json:"EECode"`
+	EEName   string `json:"EEName"`
+}
+
+// code returns whichever EE identifier field is populated — EntityID (TFIS v1.0's
+// documented IF-01 field name) takes priority over EECode (the fallback alias).
+func (e EPMExternalEntity) code() string {
+	if strings.TrimSpace(e.EntityID) != "" {
+		return e.EntityID
+	}
+	return e.EECode
+}
+
 type EPMInsertIncidentRequest struct {
-	Address              string `json:"address"`
-	BeneficiaryInfo      string `json:"beneficiaryInfo"`
-	DistrictCode         int    `json:"districtCode"`
-	DistrictName         string `json:"districtName"`
-	EEFlag               bool   `json:"eeFlag"`
-	EEName               string `json:"eeName"`
-	Email                string `json:"email"`
-	FileKey              string `json:"fileKey"`
-	FirstName            string `json:"firstName"`
-	IncidentNo           string `json:"incidentNo"`
-	IncidentStartDate    string `json:"incidentStartDate"`
-	IncidentStatusID     int    `json:"incidentStatusID"`
-	IqamaID              string `json:"iqamaID"`
-	IssueDiscription     string `json:"issueDiscription"`
-	Language             string `json:"language"`
-	LastName             string `json:"lastName"`
-	Latitude             string `json:"latitude"`
-	LocationDirection    string `json:"locationDirection"`
-	Longitude            string `json:"longitude"`
+	Address         string `json:"address"`
+	BeneficiaryInfo string `json:"beneficiaryInfo"`
+	DistrictCode    int    `json:"districtCode"`
+	DistrictName    string `json:"districtName"`
+	EEFlag          bool   `json:"eeFlag"`
+	EEName          string `json:"eeName"`
+	// EEList is the array shape MOMRA's real payloads send instead of the single
+	// eeFlag/eeName pair — see resolveEERoutingDepartmentByCodeOrName. Kept alongside
+	// eeFlag/eeName rather than replacing them, since the legacy pair may still arrive
+	// from other callers/test fixtures.
+	EEList []EPMExternalEntity `json:"EEList"`
+	Email  string              `json:"email"`
+	// FileKey is the legacy single-attachment field (base64-encoded image). Kept for
+	// backward compatibility; new callers should use IncidentPhotos instead, which
+	// matches TFIS v1.0's array shape and supports more than one attachment.
+	FileKey        string             `json:"fileKey"`
+	IncidentPhotos []EPMIncidentPhoto `json:"incidentPhotos"`
+	// IncidentImage is a third accepted shape: a top-level array of base64-encoded
+	// image strings directly (no wrapping object), which is what MOMRA's actual test
+	// payloads send — distinct from EPMIncidentPhoto.IncidentImage, which is the same
+	// field name nested one level down inside IncidentPhotos.
+	IncidentImage     []string `json:"IncidentImage"`
+	FirstName         string   `json:"firstName"`
+	IncidentNo        string   `json:"incidentNo"`
+	IncidentStartDate string   `json:"incidentStartDate"`
+	IncidentStatusID  int      `json:"incidentStatusID"`
+	IqamaID           string   `json:"iqamaID"`
+	IssueDiscription  string   `json:"issueDiscription"`
+	Language          string   `json:"language"`
+	LastName          string   `json:"lastName"`
+	Latitude          string   `json:"latitude"`
+	Longitude         string   `json:"longitude"`
+	// LocationDirections is the key MOMRA's real payloads use.
+	LocationDirections   string `json:"LocationDirections"`
 	MainClassificationID string `json:"mainClassificationID"`
 	MiddleName           string `json:"middleName"`
 	MobileNumber         string `json:"mobileNumber"`
@@ -116,18 +207,67 @@ type EPMInsertIncidentRequest struct {
 	NationalID           string `json:"nationalID"`
 	Priority             string `json:"priority"`
 	SPLClassificationID  string `json:"splClassificationID"`
-	SubBaladyaName       string `json:"subBaladyaName"`
+	// SubBaladiyaName is the key MOMRA's real payloads use ("Baladiya" — the
+	// correct transliteration); TFIS v1.0 Table 30's own field dictionary spells it
+	// "SubBaladyaName" (no "i"), but its own Table 32 sample and every real payload
+	// tested use "SubBaladiyaName" — another instance of the spec's own internal
+	// inconsistency (see CL-0xx catalog), resolved here in favor of what MOMRA
+	// actually sends.
+	SubBaladiyaName      string `json:"subBaladiyaName"`
 	SubClassificationID  string `json:"subClassificationID"`
 	SubMunicipalityID    string `json:"subMunicipalityID"`
 	SubSubMunicipalityID string `json:"sub_SubMunicipalityID"`
 }
 
+// EPMInsertIncidentResponse is IF-01's documented response contract (TFIS v1.0 Table
+// 33). SuccessfullySubmited is a legacy String "Yes"/"No" — not a JSON boolean — per
+// the spec's own CL-004 callout: MOMRA's actual system expects the string, this isn't
+// a typo to "fix" into a bool. EAmanaIncidentNo is not a separately generated ID: Table
+// 33's rule ("unique AutoMax/Amana incident number") and Para 118 (MOMRA reuses this
+// exact value in later IF-02/IF-03 calls as AmanaIncidentNo) both confirm it's the same
+// value as Incident.IncidentNumber, already reused that way by UpdateIncident/
+// UpdateIncidentV2 today. ErrorCode/RequestID are marked "Proposed" in Table 33 (OD-004,
+// still an open decision) rather than mandatory — they're always present in the JSON
+// (never omitted) but null/empty when unused, matching the documented sample where a
+// EPMInsertIncidentResponse is the shared response envelope for InsertIncidents and
+// the V1 UpdateIncident/ReopenIncident (handleEEOutcome) endpoints. InsertIncidents'
+// response briefly used TFIS v1.0 Table 33's SuccessfullySubmited/ResponseDescription/
+// EAmanaIncidentNo/ErrorCode shape, then reverted back to this
+// ex/httpStatusCode/message/result/ticketNumber shape after confirming the actual
+// caller exercising this endpoint expects the legacy shape, not the documented CRM
+// contract — the same divergence-from-docs pattern seen everywhere else in this
+// integration. Consolidated with the V1 outcome endpoints' identical
+// EPMOutcomeResponse type once both shapes matched again — split them back apart if
+// either contract diverges in the future.
 type EPMInsertIncidentResponse struct {
 	Ex             string `json:"ex"`
 	HTTPStatusCode int    `json:"httpStatusCode"`
 	Message        string `json:"message"`
 	Result         bool   `json:"result"`
 	TicketNumber   string `json:"ticketNumber"`
+}
+
+// epmInsertErrorResponse sends the failure shape: Result false, Message set to the
+// failure summary, httpStatusCode echoed in both the actual HTTP status and the body.
+func epmInsertErrorResponse(c *fiber.Ctx, status int, description string) error {
+	return c.Status(status).JSON(EPMInsertIncidentResponse{
+		HTTPStatusCode: status,
+		Message:        description,
+		Result:         false,
+	})
+}
+
+// epmInsertSuccessResponse sends the success shape: Result true, Message, and
+// TicketNumber set to AutoMax's own generated incident number (unchanged numbering
+// scheme — "INC-YYYY-NNNNNN" — this only affects the response envelope, not what
+// number gets generated).
+func epmInsertSuccessResponse(c *fiber.Ctx, description, ticketNumber string) error {
+	return c.Status(fiber.StatusOK).JSON(EPMInsertIncidentResponse{
+		HTTPStatusCode: fiber.StatusOK,
+		Message:        description,
+		Result:         true,
+		TicketNumber:   ticketNumber,
+	})
 }
 
 type EPMIncidentStatusItems struct {
@@ -160,146 +300,104 @@ type EPMGetMomraIncidentStatusDetailsResponse struct {
 func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 	authHeader := c.Get("Authorization")
 	if authHeader == "" {
-		return c.Status(fiber.StatusUnauthorized).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusUnauthorized,
-			Message:        "Missing Authorization header",
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusUnauthorized, "Missing Authorization header")
 	}
 
 	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 	if tokenString == authHeader {
-		return c.Status(fiber.StatusUnauthorized).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusUnauthorized,
-			Message:        "Invalid Authorization header format, use Bearer token",
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusUnauthorized, "Invalid Authorization header format, use Bearer token")
 	}
 
 	claims, err := h.jwtManager.ValidateToken(tokenString)
 	if err != nil {
-		return c.Status(fiber.StatusUnauthorized).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusUnauthorized,
-			Message:        i18n.T(c.UserContext(), "invalid_or_expired_token"),
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "invalid_or_expired_token"))
 	}
 
 	var sessionData map[string]interface{}
 	if err := h.sessionStore.GetUserSession(c.UserContext(), claims.SessionID, &sessionData); err != nil {
-		return c.Status(fiber.StatusUnauthorized).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusUnauthorized,
-			Message:        i18n.T(c.UserContext(), "session_expired_or_invalid"),
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusUnauthorized, "Session expired or invalid")
 	}
 
 	var req EPMInsertIncidentRequest
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        i18n.T(c.UserContext(), "invalid_request_body"),
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "Invalid request body: "+err.Error())
 	}
 
 	if req.IncidentNo == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "incidentNo is required",
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "incidentNo is required")
 	}
 	if req.FirstName == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "firstName is required",
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "firstName is required")
 	}
 	if req.IssueDiscription == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "issueDiscription is required",
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "issueDiscription is required")
 	}
 	if len(req.IssueDiscription) > 250 {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "issueDiscription exceeds maximum length of 250 characters",
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "issueDiscription exceeds maximum length of 250 characters")
 	}
 	if req.Priority == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "priority is required",
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "priority is required")
 	}
-	if parsePriorityLevel(req.Priority) == 0 {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "priority must be valid value",
-			Result:         false,
-		})
+	// Resolved once here and reused after incident creation below (see
+	// resolvePriorityValue) — MOMRA's real test payloads have sent Priority as a
+	// leading numeral, an English word (TFIS v1.0's documented High/Medium/Low —
+	// OD-011 flags this as an open, never-resolved inconsistency in the spec
+	// itself), and a diacritic-marked Arabic word (e.g. "حَرَج" = Critical), so a
+	// plain leading-digit check is no longer sufficient to validate this field. If
+	// the lookup query itself fails (infra issue, not a bad value), validation is
+	// skipped rather than hard-rejecting the incident.
+	priorityValues, priorityLookupErr := h.lookupRepo.ListValuesByCategoryCode(c.UserContext(), "PRIORITY")
+	var resolvedPriority *models.LookupValue
+	if priorityLookupErr == nil {
+		resolvedPriority = resolvePriorityValue(priorityValues, req.Priority)
+		if resolvedPriority == nil {
+			return epmInsertErrorResponse(c, fiber.StatusBadRequest, "priority must be valid value")
+		}
 	}
-	if req.FileKey == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "fileKey is required",
-			Result:         false,
-		})
+	// Accept any of three shapes — the legacy singular fileKey, the IncidentPhotos
+	// array of {IncidentImage} objects (TFIS v1.0's documented shape), or a top-level
+	// IncidentImage array of base64 strings directly (what MOMRA's actual payloads
+	// send) — at least one photo is required, and every one provided must be valid
+	// base64. photoKeys drives the actual attachment upload loop further below.
+	var photoKeys []string
+	if req.FileKey != "" {
+		photoKeys = append(photoKeys, req.FileKey)
 	}
-	if _, err := base64.StdEncoding.DecodeString(req.FileKey); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "fileKey must be a valid base64 encoded string",
-			Result:         false,
-		})
+	for _, p := range req.IncidentPhotos {
+		if p.IncidentImage != "" {
+			photoKeys = append(photoKeys, p.IncidentImage)
+		}
+	}
+	for _, img := range req.IncidentImage {
+		if img != "" {
+			photoKeys = append(photoKeys, img)
+		}
+	}
+	if len(photoKeys) == 0 {
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "fileKey or incidentPhotos or IncidentImage is required")
+	}
+	for _, key := range photoKeys {
+		if _, err := base64.StdEncoding.DecodeString(key); err != nil {
+			return epmInsertErrorResponse(c, fiber.StatusBadRequest, "fileKey, incidentPhotos, and IncidentImage entries must be valid base64 encoded strings")
+		}
 	}
 	if req.Latitude == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "latitude is required",
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "latitude is required")
 	}
 	if req.Longitude == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "longitude is required",
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "longitude is required")
 	}
 	if _, err := strconv.ParseFloat(req.Latitude, 64); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "latitude must be a valid number",
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "latitude must be a valid number")
 	}
 	if _, err := strconv.ParseFloat(req.Longitude, 64); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "longitude must be a valid number",
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "longitude must be a valid number")
 	}
 	if req.MobileNumber == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "mobileNumber is required",
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "mobileNumber is required")
 	}
 	if !regexp.MustCompile(`^\+?[0-9\-\(\)\s]+$`).MatchString(req.MobileNumber) {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "mobileNumber must contain only digits and valid phone characters (+, -, (, ))",
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "mobileNumber must contain only digits and valid phone characters (+, -, (, ))")
 	}
 
 	// check for duplicate momra incident number
@@ -308,11 +406,7 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 		Where("source = ? AND custom_fields LIKE ?", "MOMRA", "%\"momra_incident_no\":\""+req.IncidentNo+"\"%").
 		Count(&duplicateCount)
 	if duplicateCount > 0 {
-		return c.Status(fiber.StatusConflict).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusConflict,
-			Message:        "Duplicate incident number: " + req.IncidentNo,
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusConflict, "Duplicate incident number: "+req.IncidentNo)
 	}
 
 	custFields := map[string]interface{}{
@@ -331,11 +425,11 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 	if req.NationalID != "" {
 		custFields["nationalID"] = req.NationalID
 	}
-	if req.LocationDirection != "" {
-		custFields["locationDirection"] = req.LocationDirection
+	if req.LocationDirections != "" {
+		custFields["locationDirection"] = req.LocationDirections
 	}
-	if req.SubBaladyaName != "" {
-		custFields["subBaladyaName"] = req.SubBaladyaName
+	if req.SubBaladiyaName != "" {
+		custFields["subBaladiyaName"] = req.SubBaladiyaName
 	}
 	if req.SubClassificationID != "" {
 		custFields["subClassificationID"] = req.SubClassificationID
@@ -348,53 +442,39 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 	}
 	custFieldBytes, _ := json.Marshal(custFields)
 
+	// req.EEList is stored on the dedicated Incident.AvailableEEList jsonb column
+	// (models/incident.go), not folded into custFields — see that field's doc comment
+	// for why. Always marshaled (even when empty) so an incident deliberately submitted
+	// with no eligible EEs is distinguishable from one where this was never populated.
+	eeListToStore := req.EEList
+	if eeListToStore == nil {
+		eeListToStore = []EPMExternalEntity{}
+	}
+	availableEEListBytes, _ := json.Marshal(eeListToStore)
+
 	// validate all locations are provided and exist in DB
 	if req.MunicipalityID == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "municipalityID is required",
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "municipalityID is required")
 	}
 	if req.SubMunicipalityID == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "subMunicipalityID is required",
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "subMunicipalityID is required")
 	}
 	if req.SubSubMunicipalityID == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "sub_SubMunicipalityID is required",
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "sub_SubMunicipalityID is required")
 	}
 	municipalityLoc, err := h.validateAndResolveLocation(c.UserContext(), req.MunicipalityID)
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "Municipality not found: " + req.MunicipalityID,
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "Municipality not found: "+req.MunicipalityID)
 	}
 
 	subMunicipalityLoc, err := h.validateAndResolveLocation(c.UserContext(), req.SubMunicipalityID)
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "Sub municipality not found: " + req.SubMunicipalityID,
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "Sub municipality not found: "+req.SubMunicipalityID)
 	}
 
 	subSubMunicipalityLoc, err := h.validateAndResolveLocation(c.UserContext(), req.SubSubMunicipalityID)
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "Sub sub municipality not found: " + req.SubSubMunicipalityID,
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "Sub sub municipality not found: "+req.SubSubMunicipalityID)
 	}
 
 	// prefer the most specific location that was provided
@@ -410,53 +490,29 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 
 	// validate all classifications are provided and exist in DB
 	if req.MainClassificationID == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "mainClassificationID is required",
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "mainClassificationID is required")
 	}
 	if req.SubClassificationID == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "subClassificationID is required",
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "subClassificationID is required")
 	}
 	if req.SPLClassificationID == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "splClassificationID is required",
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "splClassificationID is required")
 	}
 	subCls, err := h.validateAndResolveClassification(c.UserContext(), req.SubClassificationID)
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "Sub classification not found: " + req.SubClassificationID,
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "Sub classification not found: "+req.SubClassificationID)
 	}
 
 	mainCls, err := h.validateAndResolveClassification(c.UserContext(), req.MainClassificationID)
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "Main classification not found: " + req.MainClassificationID,
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "Main classification not found: "+req.MainClassificationID)
 	}
 
 	var splCls *uuid.UUID
 	if req.SPLClassificationID != "" {
 		splCls, err = h.validateAndResolveClassification(c.UserContext(), req.SPLClassificationID)
 		if err != nil {
-			return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-				HTTPStatusCode: fiber.StatusBadRequest,
-				Message:        "Special classification not found: " + req.SPLClassificationID,
-				Result:         false,
-			})
+			return epmInsertErrorResponse(c, fiber.StatusBadRequest, "Special classification not found: "+req.SPLClassificationID)
 		}
 	}
 
@@ -486,25 +542,38 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 		default:
 			msg = "None of the provided classification IDs resolve to a leaf classification"
 		}
-		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        msg,
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, msg)
 	}
 
-	// EE routing: when EEFlag is true, EEName must resolve to an active, external-type
-	// department or the incident is rejected outright (no ticket is created). When EEFlag
-	// is false, the incident is created unassigned — no department matching is attempted.
+	// EE routing: when EEList is populated (this handler is MOMRA-only, so Source is
+	// always "MOMRA"), department assignment happens exclusively through the "EE
+	// Assign" workflow transition (validateExternalDepartmentAssignment /
+	// ExecuteTransition's EEList-aware auto-detect merge, incident_service.go) — NOT
+	// here at creation time. Previously this pre-picked EEList[0] and wrote it
+	// straight to DepartmentID, which silently pre-assigned an EE before any agent (or
+	// the transition's own auto-detect) ever got to choose among the incident's actual
+	// eligible candidates (AvailableEEList, set below) — defeating the point of that
+	// transition. The primary entry is still validated here (reject outright per
+	// IF01-V06/ERR-003 if it's undefined/inactive), just not wired into DepartmentID.
+	// The legacy single-value EEFlag/EEName path is untouched: with no list to defer a
+	// choice on, resolving and assigning immediately is still correct there.
 	var eeDepartmentID *uuid.UUID
-	if req.EEFlag {
+	var primaryEE *EPMExternalEntity
+	for i := range req.EEList {
+		if req.EEList[i].code() != "" || strings.TrimSpace(req.EEList[i].EEName) != "" {
+			primaryEE = &req.EEList[i]
+			break
+		}
+	}
+	switch {
+	case primaryEE != nil:
+		if _, err = h.resolveEERoutingDepartmentByCodeOrName(c.UserContext(), primaryEE.code(), primaryEE.EEName); err != nil {
+			return epmInsertErrorResponse(c, fiber.StatusBadRequest, err.Error())
+		}
+	case req.EEFlag:
 		eeDepartmentID, err = h.resolveEERoutingDepartment(c.UserContext(), req.EEName)
 		if err != nil {
-			return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
-				HTTPStatusCode: fiber.StatusBadRequest,
-				Message:        err.Error(),
-				Result:         false,
-			})
+			return epmInsertErrorResponse(c, fiber.StatusBadRequest, err.Error())
 		}
 	}
 
@@ -513,22 +582,14 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 	if err != nil || workflow.RecordType != "incident" {
 		workflows, listErr := h.workflowRepo.ListByRecordType(c.UserContext(), "incident", true)
 		if listErr != nil || len(workflows) == 0 {
-			return c.Status(fiber.StatusInternalServerError).JSON(EPMInsertIncidentResponse{
-				HTTPStatusCode: fiber.StatusInternalServerError,
-				Message:        "No incident workflow configured",
-				Result:         false,
-			})
+			return epmInsertErrorResponse(c, fiber.StatusInternalServerError, "No incident workflow configured")
 		}
 		workflow = &workflows[0]
 	}
 
 	initialState, err := h.workflowRepo.GetInitialState(c.UserContext(), workflow.ID)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusInternalServerError,
-			Message:        "No initial state found for incident workflow",
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusInternalServerError, "No initial state found for incident workflow")
 	}
 
 	title := req.IssueDiscription
@@ -571,11 +632,7 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 
 	incidentNumber, err := h.incidentRepo.GenerateIncidentNumber(c.UserContext())
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusInternalServerError,
-			Message:        "Failed to generate incident number",
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusInternalServerError, "Failed to generate incident number")
 	}
 
 	now := time.Now()
@@ -600,64 +657,51 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 		CreatedByName:    reporterName,
 		CreatedByMobile:  req.MobileNumber,
 		CustomFields:     string(custFieldBytes),
+		AvailableEEList:  datatypes.JSON(availableEEListBytes),
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
 
 	if err := h.incidentRepo.Create(c.UserContext(), incident); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(EPMInsertIncidentResponse{
-			HTTPStatusCode: fiber.StatusInternalServerError,
-			Message:        i18n.T(c.UserContext(), "failed_to_create_incident_epm"),
-			Result:         false,
-		})
+		return epmInsertErrorResponse(c, fiber.StatusInternalServerError, "Failed to create incident: "+err.Error())
 	}
 
-	if req.Priority != "" {
-		priorityValues, err := h.lookupRepo.ListValuesByCategoryCode(c.UserContext(), "PRIORITY")
-		if err == nil {
-			level := parsePriorityLevel(req.Priority)
-			for _, v := range priorityValues {
-				if v.SortOrder == level {
-					h.incidentRepo.SetLookupValues(c.UserContext(), incident.ID, []models.LookupValue{v})
-					break
-				}
-			}
+	if resolvedPriority != nil {
+		h.incidentRepo.SetLookupValues(c.UserContext(), incident.ID, []models.LookupValue{*resolvedPriority})
+	}
+
+	// Upload every provided photo (legacy singular fileKey plus any IncidentPhotos
+	// entries, collected into photoKeys above) as its own attachment.
+	for _, key := range photoKeys {
+		decoded, err := base64.StdEncoding.DecodeString(key)
+		if err != nil || len(decoded) == 0 {
+			continue
 		}
-	}
-
-	if req.FileKey != "" {
-		decoded, err := base64.StdEncoding.DecodeString(req.FileKey)
-		if err == nil && len(decoded) > 0 {
-			ext := detectImageExt(decoded)
-			mimeType := "image/" + ext
-			if ext == "jpeg" {
-				mimeType = "image/jpeg"
-			}
-			filename := fmt.Sprintf("momra_%s_%s.%s", req.IncidentNo, uuid.New().String()[:8], ext)
-			folder := fmt.Sprintf("incidents/%s", incident.ID.String())
-
-			filePath, err := h.storage.UploadBytes(c.UserContext(), decoded, filename, mimeType, folder)
-			if err == nil {
-				attachment := &models.IncidentAttachment{
-					ID:           uuid.New(),
-					IncidentID:   incident.ID,
-					FileName:     filename,
-					FileSize:     int64(len(decoded)),
-					MimeType:     mimeType,
-					FilePath:     filePath,
-					UploadedByID: claims.UserID,
-				}
-				_ = h.incidentRepo.CreateAttachment(c.UserContext(), attachment)
-			}
+		ext := detectImageExt(decoded)
+		mimeType := "image/" + ext
+		if ext == "jpeg" {
+			mimeType = "image/jpeg"
 		}
+		filename := fmt.Sprintf("momra_%s_%s.%s", req.IncidentNo, uuid.New().String()[:8], ext)
+		folder := fmt.Sprintf("incidents/%s", incident.ID.String())
+
+		filePath, err := h.storage.UploadBytes(c.UserContext(), decoded, filename, mimeType, folder)
+		if err != nil {
+			continue
+		}
+		attachment := &models.IncidentAttachment{
+			ID:           uuid.New(),
+			IncidentID:   incident.ID,
+			FileName:     filename,
+			FileSize:     int64(len(decoded)),
+			MimeType:     mimeType,
+			FilePath:     filePath,
+			UploadedByID: claims.UserID,
+		}
+		_ = h.incidentRepo.CreateAttachment(c.UserContext(), attachment)
 	}
 
-	return c.Status(fiber.StatusOK).JSON(EPMInsertIncidentResponse{
-		HTTPStatusCode: fiber.StatusOK,
-		Message:        "Successful call with all required parameters",
-		Result:         true,
-		TicketNumber:   incident.IncidentNumber,
-	})
+	return epmInsertSuccessResponse(c, "Incident submitted successfully", incident.IncidentNumber)
 }
 
 func (h *EPMIncidentHandler) GetMomraIncidentStatusDetails(c *fiber.Ctx) error {
@@ -1028,10 +1072,13 @@ type EPMUpdateIncidentV2Request struct {
 	ActionDescription string `json:"ActionDescription"`
 }
 
-// UpdateIncidentV2 implements PATCH /api/compose/MomraAPI/UpdateIncidentV2.
-// IncidentStatusID "002" resolves the incident (terminal state); "003" rejects it back
-// to its initial state - the same two outcomes the V1 UpdateIncident/ReopenIncident
-// endpoints handled as separate calls.
+// UpdateIncidentV2 implements PATCH /Momra/API/EPM/UpdateIncidentV2. The target workflow
+// state is resolved from the admin-configured WorkflowState -> CaseStatusID mapping
+// (momra_status_mappings) for the incident's workflow, so any mapped IncidentStatusID is
+// accepted, not just the historical 002 (resolve)/003 (reject) pair. EECode/EEName are
+// persisted into Incident.ExternalEntityID/ExternalAssignmentStatus/ExternalAssignedAt on
+// every call, independent of whether the status actually changed, so a MOMRA-side EE
+// reassignment is recorded even without a status transition.
 func (h *EPMIncidentHandler) UpdateIncidentV2(c *fiber.Ctx) error {
 	authHeader := c.Get("Authorization")
 	if authHeader == "" {
@@ -1070,18 +1117,8 @@ func (h *EPMIncidentHandler) UpdateIncidentV2(c *fiber.Ctx) error {
 	if req.EECode == "" {
 		return momraV2Response(c, fiber.StatusBadRequest, "EECode is required", false)
 	}
-	var resolve bool
-	switch req.IncidentStatusID {
-	case "002":
-		resolve = true
-	case "003":
-		resolve = false
-	default:
-		return momraV2Response(c, fiber.StatusBadRequest, "IncidentStatusID must be 002 (Approved) or 003 (Rejected)", false)
-	}
-	// TFIS IF03-R05: a rejection reason is required for status 003.
-	if !resolve && req.ActionDescription == "" {
-		return momraV2Response(c, fiber.StatusBadRequest, "ActionDescription is required when IncidentStatusID is 003", false)
+	if req.IncidentStatusID == "" {
+		return momraV2Response(c, fiber.StatusBadRequest, "IncidentStatusID is required", false)
 	}
 
 	incident, err := h.incidentRepo.FindByIncidentNumber(c.UserContext(), req.AmanaIncidentNo)
@@ -1098,21 +1135,26 @@ func (h *EPMIncidentHandler) UpdateIncidentV2(c *fiber.Ctx) error {
 		return momraV2Response(c, fiber.StatusBadRequest, "IncidentNO does not correlate with AmanaIncidentNo: "+req.AmanaIncidentNo, false)
 	}
 
+	// Resolve the target state from the admin-configured WorkflowState -> CaseStatusID
+	// mapping (the same table that drives the outbound status sync, used here in
+	// reverse) instead of hardcoding recognition of only 002/003 — whatever statuses
+	// are mapped for this workflow are accepted.
+	mapping, err := h.momraStatusMappingRepo.FindActiveByWorkflowAndCaseStatusID(c.UserContext(), incident.WorkflowID, req.IncidentStatusID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return momraV2Response(c, fiber.StatusBadRequest, "No workflow state is mapped to IncidentStatusID "+req.IncidentStatusID+" for this incident's workflow", false)
+		}
+		return momraV2Response(c, fiber.StatusInternalServerError, "Failed to resolve status mapping: "+err.Error(), false)
+	}
 	var targetState models.WorkflowState
-	if resolve {
-		err = h.db.WithContext(c.UserContext()).
-			Where("workflow_id = ? AND state_type = ? AND is_active = ?", incident.WorkflowID, "terminal", true).
-			Order("sort_order, id").
-			First(&targetState).Error
-		if err != nil {
-			return momraV2Response(c, fiber.StatusInternalServerError, "No terminal state configured for incident workflow", false)
-		}
-	} else {
-		state, err := h.workflowRepo.GetInitialState(c.UserContext(), incident.WorkflowID)
-		if err != nil {
-			return momraV2Response(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "no_initial_state_epm"), false)
-		}
-		targetState = *state
+	if err := h.db.WithContext(c.UserContext()).First(&targetState, "id = ?", mapping.StateID).Error; err != nil {
+		return momraV2Response(c, fiber.StatusInternalServerError, "Mapped workflow state not found", false)
+	}
+
+	// A reason is required for any non-closure transition (e.g. rejection/return),
+	// generalizing TFIS IF03-R05's "required for status 003" rule.
+	if !mapping.IsClosureStatus && req.ActionDescription == "" {
+		return momraV2Response(c, fiber.StatusBadRequest, "ActionDescription is required for this status", false)
 	}
 
 	if req.EENotes != "" {
@@ -1120,40 +1162,63 @@ func (h *EPMIncidentHandler) UpdateIncidentV2(c *fiber.Ctx) error {
 	}
 	custFieldBytes, _ := json.Marshal(custFields)
 
-	if incident.CurrentStateID == targetState.ID {
-		return momraV2Response(c, fiber.StatusOK, "Incident status updated successfully", true)
+	now := time.Now()
+	assignedAt := now
+	if parsed, parseErr := time.Parse(time.RFC3339, req.ActionDate); parseErr == nil {
+		assignedAt = parsed
+	}
+	assignmentStatus := "rejected"
+	if mapping.IsClosureStatus {
+		assignmentStatus = "resolved"
 	}
 
-	now := time.Now()
+	// Persist the external-entity assignment on every call, not just when the status
+	// changes — MOMRA may report a reassignment to a different EE independently of a
+	// state transition. EECode resolves against Department{Type:"external"}, the same
+	// model the outbound sync uses.
 	updates := map[string]interface{}{
-		"current_state_id": targetState.ID,
-		"custom_fields":    string(custFieldBytes),
-		"updated_at":       now,
+		"custom_fields":              string(custFieldBytes),
+		"updated_at":                 now,
+		"external_assignment_status": assignmentStatus,
+		"external_assigned_at":       assignedAt,
 	}
-	if resolve {
-		updates["resolved_at"] = now
+	if ee, eeErr := h.departmentRepo.FindByCode(c.UserContext(), req.EECode); eeErr == nil && ee.Type == externalEntityDepartmentType {
+		updates["external_entity_id"] = ee.ID
 	} else {
-		updates["resolved_at"] = nil
-		updates["closed_at"] = nil
+		fmt.Printf("Warning: EECode %s on incident %s did not resolve to a known external entity; ExternalEntityID left unchanged\n", req.EECode, incident.IncidentNumber)
 	}
+
+	stateChanged := incident.CurrentStateID != targetState.ID
+	if stateChanged {
+		updates["current_state_id"] = targetState.ID
+		if mapping.IsClosureStatus {
+			updates["resolved_at"] = now
+		} else {
+			updates["resolved_at"] = nil
+			updates["closed_at"] = nil
+		}
+	}
+
 	if err := h.incidentRepo.UpdateFields(c.UserContext(), incident.ID, updates); err != nil {
 		return momraV2Response(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update_incident_epm"), false)
 	}
 
-	history := &models.IncidentTransitionHistory{
-		ID:             uuid.New(),
-		IncidentID:     incident.ID,
-		TransitionID:   nil,
-		FromStateID:    incident.CurrentStateID,
-		ToStateID:      targetState.ID,
-		PerformedByID:  claims.UserID,
-		Comment:        req.ActionDescription,
-		IsSystemAction: true,
-		TransitionedAt: now,
-		CreatedAt:      now,
-	}
-	if err := h.incidentRepo.CreateTransitionHistory(c.UserContext(), history); err != nil {
-		fmt.Printf("Warning: failed to record EE outcome transition history for incident %s: %v\n", incident.IncidentNumber, err)
+	if stateChanged {
+		history := &models.IncidentTransitionHistory{
+			ID:             uuid.New(),
+			IncidentID:     incident.ID,
+			TransitionID:   nil,
+			FromStateID:    incident.CurrentStateID,
+			ToStateID:      targetState.ID,
+			PerformedByID:  claims.UserID,
+			Comment:        req.ActionDescription,
+			IsSystemAction: true,
+			TransitionedAt: now,
+			CreatedAt:      now,
+		}
+		if err := h.incidentRepo.CreateTransitionHistory(c.UserContext(), history); err != nil {
+			fmt.Printf("Warning: failed to record EE outcome transition history for incident %s: %v\n", incident.IncidentNumber, err)
+		}
 	}
 
 	return momraV2Response(c, fiber.StatusOK, "Incident status updated successfully", true)
@@ -1297,13 +1362,13 @@ func (h *EPMIncidentHandler) ReopenIncidentV2(c *fiber.Ctx) error {
 	return momraV2Response(c, fiber.StatusOK, "Incident has been reopened successfully", true)
 }
 
-// EPMAssignExternalEntityRequest is a best-guess shape for the still-unconfirmed
-// MOMRA->Automax external-entity assignment notification (docs/MOMRA_Outbound_Integration_Spec_v1.0.md
-// §7, OD-N2). Field names/casing mirror the sibling V2 endpoints' conventions
-// (EPMUpdateIncidentV2Request above) since MOMRA hasn't published this contract yet —
-// expect to adjust field names once confirmed; the underlying Incident schema
-// (ExternalEntityID/ExternalAssignmentStatus/ExternalAssignedAt) is not expected to
-// need rework.
+// EPMAssignExternalEntityRequest is a best-guess shape for a dedicated MOMRA->Automax
+// external-entity assignment notification (docs/MOMRA_Outbound_Integration_Spec_v1.0.md
+// §7, OD-N2). Field names/casing mirror the sibling V2 endpoints' conventions since
+// MOMRA hasn't published this contract yet. Kept alongside UpdateIncidentV2 (which now
+// also persists EECode/EEName on every call) as a separate, explicit path for MOMRA to
+// report an EE assignment/reassignment on its own, independent of any status change —
+// expect to adjust field names once MOMRA confirms the real mechanism.
 type EPMAssignExternalEntityRequest struct {
 	AmanaIncidentNo  string `json:"AmanaIncidentNo"`
 	IncidentNo       string `json:"IncidentNO"`
@@ -1472,4 +1537,59 @@ func parsePriorityLevel(priority string) int {
 		return int(first)
 	}
 	return 0
+}
+
+// stripArabicDiacritics removes Arabic harakat/tashkeel marks (fatha, damma, kasra,
+// shadda, sukun, tanwin, superscript alef, and Quranic annotation marks) so a value
+// like "حَرَج" (with diacritics) matches a stored lookup name like "حرج" (without).
+// MOMRA's real InsertIncidents test payloads have sent Priority as a diacritic-marked
+// Arabic word rather than the numeric code parsePriorityLevel originally assumed.
+func stripArabicDiacritics(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 0x064B && r <= 0x065F) || r == 0x0670 || (r >= 0x06D6 && r <= 0x06ED) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// normalizePriorityText trims, lowercases, and strips Arabic diacritics so priority
+// values can be matched against LookupValue.Code/Name/NameAr regardless of case or
+// optional tashkeel marks.
+func normalizePriorityText(s string) string {
+	return strings.ToLower(strings.TrimSpace(stripArabicDiacritics(s)))
+}
+
+// resolvePriorityValue finds the PRIORITY lookup value matching the incoming MOMRA
+// priority string. MOMRA's real payloads have used at least three different shapes for
+// this field across testing: a leading numeral (e.g. "1"), an English word (TFIS
+// v1.0's documented "High"/"Medium"/"Low" — see OD-011, an open decision the spec
+// itself never resolved), and a diacritic-marked Arabic word (e.g. "حَرَج" = Critical,
+// matching the seeded LookupValue.NameAr "حرج"). All three are matched here rather
+// than picking one, since MOMRA has not committed to a single wire format; the
+// leading-digit scheme is kept as a last-resort fallback for backward compatibility.
+func resolvePriorityValue(priorityValues []models.LookupValue, priority string) *models.LookupValue {
+	trimmed := strings.TrimSpace(priority)
+	if trimmed == "" {
+		return nil
+	}
+	normalized := normalizePriorityText(trimmed)
+	for i := range priorityValues {
+		v := &priorityValues[i]
+		if normalizePriorityText(v.Code) == normalized ||
+			normalizePriorityText(v.Name) == normalized ||
+			normalizePriorityText(v.NameAr) == normalized {
+			return v
+		}
+	}
+	if level := parsePriorityLevel(trimmed); level != 0 {
+		for i := range priorityValues {
+			if priorityValues[i].SortOrder == level {
+				return &priorityValues[i]
+			}
+		}
+	}
+	return nil
 }

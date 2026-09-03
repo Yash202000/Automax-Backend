@@ -48,6 +48,12 @@ type MOMRAExternalEntityClassifications struct {
 // MOMRAStatusUpdateRequest is 3.14's request body. EECode/EEName/EENotesFromMUN are
 // only meaningful (and, per MOMRA's contract, required) when CaseStatusID == "004".
 type MOMRAStatusUpdateRequest struct {
+	// CRMCaseID isn't listed in the Integration Guide's own §3.14.3 Fields Description
+	// table, but it is present in that same section's §3.14.4 sample request body —
+	// another instance of MOMRA's docs disagreeing with themselves. Set to the same
+	// value as the URL's {CRMID} path segment (MOMRA's own incident number), matching
+	// the field's literal name.
+	CRMCaseID        string                  `json:"CRMCaseID,omitempty"`
 	CaseStatusID     string                  `json:"CaseStatusID,omitempty"`
 	ClosureFlag      string                  `json:"ClosureFlag,omitempty"`
 	AmanaID          string                  `json:"AmanaID,omitempty"`
@@ -61,6 +67,13 @@ type MOMRAStatusUpdateRequest struct {
 	EEName           string                  `json:"EEName,omitempty"`
 	EENotesFromMUN   string                  `json:"EENotesFromMUN,omitempty"`
 }
+
+// momraCompletionTimeLayout matches the Integration Guide §3.14.4 sample's
+// CompletionTime value exactly ("9/26/2023 4:23:09 PM" — legacy US-style, no leading
+// zeros on month/day/hour), not ISO 8601/RFC3339. TFIS v1.0 itself flags this exact
+// field as an unresolved format question (OD-014), but the real captured example from
+// MOMRA's own Integration Guide is the more authoritative source here.
+const momraCompletionTimeLayout = "1/2/2006 3:04:05 PM"
 
 type MOMRAStatusAttachment struct {
 	AttachmentCategory string `json:"AttachmentCategory,omitempty"`

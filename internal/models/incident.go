@@ -64,6 +64,18 @@ type Incident struct {
 	ExternalAssignmentStatus string      `gorm:"size:20" json:"external_assignment_status"` // "", "assigned", "resolved", "rejected"
 	ExternalAssignedAt       *time.Time  `json:"external_assigned_at"`
 
+	// AvailableEEList is the exact array of External Entities MOMRA declared eligible
+	// for THIS incident at submission time (InsertIncidents' EEList — see
+	// epm_incident_handler.go's EPMExternalEntity), stored as a dedicated jsonb column
+	// rather than folded into CustomFields below (which is plain text, not queryable) —
+	// following the same GisLocation precedent for structured per-incident JSON that
+	// doesn't warrant its own join table. This is the authoritative allow-list
+	// validateExternalDepartmentAssignment (incident_service.go) checks against when
+	// assigning ExternalEntityID/DepartmentID on a MOMRA-sourced incident: it can be a
+	// strict subset of the classification-wide EE-classification links, so it must be
+	// read from here, not re-derived from classification alone.
+	AvailableEEList datatypes.JSON `gorm:"type:jsonb" json:"available_ee_list"`
+
 	// Location
 	LocationID *uuid.UUID `gorm:"type:uuid;index" json:"location_id"`
 	Location   *Location  `gorm:"foreignKey:LocationID" json:"location,omitempty"`
@@ -850,6 +862,7 @@ type IncidentResponse struct {
 	EvaluationCount       int                         `json:"evaluation_count,omitempty"`
 	GisLocation           json.RawMessage             `json:"gis_location,omitempty"`
 	CustomFields          string                      `json:"custom_fields,omitempty"`
+	AvailableEEList       json.RawMessage             `json:"available_ee_list,omitempty"`
 	CommentsCount         int                         `json:"comments_count"`
 	AttachmentsCount      int                         `json:"attachments_count"`
 	CreatedAt             time.Time                   `json:"created_at"`
@@ -1008,6 +1021,7 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 		// TransitionHistory:     i.TransitionHistory, // Include transition history for stats on frontend
 		GisLocation:      json.RawMessage(i.GisLocation),
 		CustomFields:     i.CustomFields,
+		AvailableEEList:  json.RawMessage(i.AvailableEEList),
 		CommentsCount:    len(i.Comments),
 		AttachmentsCount: len(i.Attachments),
 		CreatedAt:        i.CreatedAt,

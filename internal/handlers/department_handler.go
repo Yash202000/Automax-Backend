@@ -20,18 +20,20 @@ import (
 )
 
 type DepartmentHandler struct {
-	repo      repository.DepartmentRepository
-	userRepo  repository.UserRepository
-	validator *validator.Validate
-	cfg       *config.Config
+	repo         repository.DepartmentRepository
+	userRepo     repository.UserRepository
+	incidentRepo repository.IncidentRepository
+	validator    *validator.Validate
+	cfg          *config.Config
 }
 
-func NewDepartmentHandler(repo repository.DepartmentRepository, userRepo repository.UserRepository, cfg *config.Config) *DepartmentHandler {
+func NewDepartmentHandler(repo repository.DepartmentRepository, userRepo repository.UserRepository, incidentRepo repository.IncidentRepository, cfg *config.Config) *DepartmentHandler {
 	return &DepartmentHandler{
-		repo:      repo,
-		userRepo:  userRepo,
-		validator: validator.New(),
-		cfg:       cfg,
+		repo:         repo,
+		userRepo:     userRepo,
+		incidentRepo: incidentRepo,
+		validator:    validator.New(),
+		cfg:          cfg,
 	}
 }
 
@@ -455,6 +457,43 @@ func (h *DepartmentHandler) MatchDepartment(c *fiber.Ctx) error {
 		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
+	// For a MOMRA-sourced incident, classification/location-linked matching above is
+	// NOT the authoritative source of eligible External Entities: MOMRA declares a
+	// specific, possibly narrower, set per incident at submission time
+	// (Incident.AvailableEEList — see incident_service.go's
+	// validateExternalDepartmentAssignment, which enforces this same rule server-side
+	// when the assignment is actually submitted). When incident_id is given and
+	// qualifies, external-type entries here are REPLACED — not merely filtered — by
+	// that incident's own EEList-resolved departments, so this endpoint's result
+	// matches what the server will actually accept. Internal-type entries are
+	// untouched; non-MOMRA incidents and requests without incident_id keep today's
+	// pure classification/location matching.
+	if req.IncidentID != nil && *req.IncidentID != "" {
+		incidentID, err := uuid.Parse(*req.IncidentID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_incident_id"))
+		}
+		incident, err := h.incidentRepo.FindByID(c.UserContext(), incidentID)
+		wantsExternal := req.DepartmentType == nil || *req.DepartmentType == externalEntityDepartmentType
+		if err == nil && incident.Source == "MOMRA" && wantsExternal && len(incident.AvailableEEList) > 0 {
+			eeDepartments := h.resolveIncidentEEDepartments(c.UserContext(), incident)
+			merged := make([]models.Department, 0, len(departments)+len(eeDepartments))
+			for _, d := range departments {
+				if d.Type != externalEntityDepartmentType {
+					merged = append(merged, d)
+				}
+			}
+			seen := make(map[uuid.UUID]bool, len(eeDepartments))
+			for _, d := range eeDepartments {
+				if !seen[d.ID] {
+					seen[d.ID] = true
+					merged = append(merged, d)
+				}
+			}
+			departments = merged
+		}
+	}
+
 	responses := make([]models.DepartmentResponse, len(departments))
 	for i, dept := range departments {
 		responses[i] = models.ToDepartmentResponse(&dept)
@@ -472,6 +511,40 @@ func (h *DepartmentHandler) MatchDepartment(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "departments_matched"), matchResponse)
+}
+
+// resolveIncidentEEDepartments resolves the incident's AvailableEEList (models/incident.go)
+// into the actual, active, external-type Department records MOMRA declared eligible for
+// it. Mirrors incident_service.go's resolveIncidentEEDepartmentIDs (duplicated rather
+// than shared since handlers and services don't depend on each other), but returns full
+// records since MatchDepartment's response needs Name/Code/Type, not just IDs. Reuses
+// EPMExternalEntity/its code() helper from epm_incident_handler.go — same package.
+func (h *DepartmentHandler) resolveIncidentEEDepartments(ctx context.Context, incident *models.Incident) []models.Department {
+	var entries []EPMExternalEntity
+	if err := json.Unmarshal(incident.AvailableEEList, &entries); err != nil {
+		return nil
+	}
+	var result []models.Department
+	seen := make(map[uuid.UUID]bool, len(entries))
+	for _, e := range entries {
+		var dept *models.Department
+		code := strings.TrimSpace(e.code())
+		if code != "" {
+			if d, err := h.repo.FindByCode(ctx, code); err == nil {
+				dept = d
+			}
+		}
+		if dept == nil && strings.TrimSpace(e.EEName) != "" {
+			if d, err := h.repo.FindByNameOrNameAr(ctx, e.EEName, e.EEName); err == nil {
+				dept = d
+			}
+		}
+		if dept != nil && dept.Type == externalEntityDepartmentType && dept.IsActive && !seen[dept.ID] {
+			seen[dept.ID] = true
+			result = append(result, *dept)
+		}
+	}
+	return result
 }
 
 // Export exports all departments as JSON
