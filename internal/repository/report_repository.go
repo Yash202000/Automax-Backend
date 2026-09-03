@@ -87,6 +87,10 @@ type ReportRepository interface {
 	ExecuteClassificationCountByStatusQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 	ExecuteDepartmentCountQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 	ExecuteDepartmentCountByStatusQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
+	// FetchLocationPaths returns location_id -> full hierarchical path (e.g. "Region > City > District > Area > Location") for the given location IDs.
+	FetchLocationPaths(ctx context.Context, locationIDs []string) (map[string]string, error)
+	// FetchClassificationPaths returns classification_id -> full hierarchical path (e.g. "Roads > Road Damage > Pothole") for the given classification IDs.
+	FetchClassificationPaths(ctx context.Context, classificationIDs []string) (map[string]string, error)
 }
 
 type reportRepository struct {
@@ -1460,7 +1464,7 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 		// 11. Location Full path
 		var locationFullPathMap map[string]string
 		if hasCol("full_location") {
-			locationFullPathMap, err = r.fetchLocationPaths(ctx, locationIDs)
+			locationFullPathMap, err = r.FetchLocationPaths(ctx, locationIDs)
 			if err != nil {
 				log.Print("error fetching location full name", locationFullPathMap)
 			}
@@ -1469,7 +1473,7 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 		// 11. Classification Full path
 		var classificationFullPathMap map[string]string
 		if hasCol("full_classification") {
-			classificationFullPathMap, err = r.fetchClassificationPaths(ctx, classificationIDs)
+			classificationFullPathMap, err = r.FetchClassificationPaths(ctx, classificationIDs)
 			if err != nil {
 				log.Print("error fetching classification full name", classificationFullPathMap)
 			}
@@ -1933,7 +1937,7 @@ func (r *reportRepository) fetchMultiPairTransitionData(
 }
 
 // ── full path queries ───────────────────────────────────────────────────
-func (r *reportRepository) fetchLocationPaths(
+func (r *reportRepository) FetchLocationPaths(
 	ctx context.Context,
 	locationIDs []string,
 ) (paths map[string]string, err error) {
@@ -1971,7 +1975,7 @@ func (r *reportRepository) fetchLocationPaths(
 
 	rows, qerr := r.db.WithContext(ctx).Raw(query, locationIDs).Rows()
 	if qerr != nil {
-		err = fmt.Errorf("fetchLocationPaths: %w", qerr)
+		err = fmt.Errorf("FetchLocationPaths: %w", qerr)
 		return
 	}
 	defer rows.Close()
@@ -1986,7 +1990,7 @@ func (r *reportRepository) fetchLocationPaths(
 	return
 }
 
-func (r *reportRepository) fetchClassificationPaths(
+func (r *reportRepository) FetchClassificationPaths(
 	ctx context.Context,
 	classificationIDs []string,
 ) (paths map[string]string, err error) {
@@ -2020,7 +2024,7 @@ func (r *reportRepository) fetchClassificationPaths(
 
 	rows, qerr := r.db.WithContext(ctx).Raw(query, classificationIDs).Rows()
 	if qerr != nil {
-		err = fmt.Errorf("fetchClassificationPaths: %w", qerr)
+		err = fmt.Errorf("FetchClassificationPaths: %w", qerr)
 		return
 	}
 	defer rows.Close()
@@ -3437,7 +3441,7 @@ func (r *reportRepository) ExecuteLocationCountQuery(ctx context.Context, filter
 		allIDs = append(allIDs, r.id)
 	}
 
-	pathMap, _ := r.fetchLocationPaths(ctx, allIDs)
+	pathMap, _ := r.FetchLocationPaths(ctx, allIDs)
 	defaults := map[string]string{"location_name": "Location", "parent_location_name": "Parent Location", "incident_count": "No. of Incidents"}
 	var results []map[string]interface{}
 	for _, loc := range raw {
@@ -3615,7 +3619,7 @@ func (r *reportRepository) ExecuteLocationCountByStatusQuery(ctx context.Context
 		"percentage":           "Percentage",
 	}
 
-	pathMap, _ := r.fetchLocationPaths(ctx, locIDs)
+	pathMap, _ := r.FetchLocationPaths(ctx, locIDs)
 
 	// Step 9: Build results in correct paginated order
 	var results []map[string]interface{}
@@ -3706,7 +3710,7 @@ func (r *reportRepository) ExecuteClassificationCountQuery(ctx context.Context, 
 		allIDs = append(allIDs, c.id)
 	}
 
-	pathMap, _ := r.fetchClassificationPaths(ctx, allIDs)
+	pathMap, _ := r.FetchClassificationPaths(ctx, allIDs)
 	defaults := map[string]string{"classification_name": "Classification", "parent_classification_name": "Parent Classification", "incident_count": "No. of Incidents"}
 	var results []map[string]interface{}
 	for _, cls := range raw {
@@ -3831,7 +3835,7 @@ func (r *reportRepository) ExecuteClassificationCountByStatusQuery(ctx context.C
 	sort.Strings(sortedStatuses)
 
 	// Phase F: build results using full classification path
-	pathMap, _ := r.fetchClassificationPaths(ctx, clsIDs)
+	pathMap, _ := r.FetchClassificationPaths(ctx, clsIDs)
 	defaults := map[string]string{
 		"classification_name":        "Classification",
 		"parent_classification_name": "Parent Classification",

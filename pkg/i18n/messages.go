@@ -499,8 +499,20 @@ var messages = map[string][2]string{
 	"escalation_policy_deleted":     {"Escalation policy deleted", "تم حذف سياسة التصعيد"},
 	"escalation_policy_retrieved":   {"Escalation policy retrieved", "تم استرجاع سياسة التصعيد"},
 	"escalation_policies_retrieved": {"Escalation policies retrieved", "تم استرجاع سياسات التصعيد"},
-	"invalid_escalation_policy_id":  {"Invalid escalation_policy_id", "معرّف سياسة التصعيد غير صالح"},
-	"excluded_users_updated":        {"Excluded users updated", "تم تحديث المستخدمين المستثنين"},
+
+	// ── Bulk Escalation Report (Incident Report CSV attached to escalation notifications) ──
+	"escalation_report_title":                        {"SLA Breach Report", "تقرير تجاوز اتفاقية مستوى الخدمة"},
+	"escalation_report_total_incidents":              {"Total Incidents: %d", "إجمالي البلاغات: %d"},
+	"escalation_report_col_incident_number":          {"Incident Number", "رقم البلاغ"},
+	"escalation_report_col_current_state":            {"Current State", "الحالة الحالية"},
+	"escalation_report_col_department":               {"Department", "الإدارة"},
+	"escalation_report_col_created_at":               {"Created At", "تاريخ الإنشاء"},
+	"escalation_report_col_full_classification_path": {"Full Classification Path", "المسار الكامل للتصنيف"},
+	"escalation_report_col_full_location_path":       {"Full Location Path", "المسار الكامل للموقع"},
+	"escalation_report_col_assignee":                 {"Assignee", "المُكلَّف"},
+	"escalation_report_unassigned":                   {"Unassigned", "غير مُكلَّف"},
+	"invalid_escalation_policy_id":                   {"Invalid escalation_policy_id", "معرّف سياسة التصعيد غير صالح"},
+	"excluded_users_updated":                         {"Excluded users updated", "تم تحديث المستخدمين المستثنين"},
 
 	// ── Documents ─────────────────────────────────────────────────────────────
 	"evidence_not_found":                   {"Evidence not found", "الدليل غير موجود"},

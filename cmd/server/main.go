@@ -134,7 +134,7 @@ func main() {
 	escalationService := services.NewEscalationService(escalationRepo, escalationPolicyRepo, incidentRepo, workflowRepo, userRepo, notificationService)
 	escalationService.SetPolicyService(escalationPolicyService)
 	escalationService.SetFrontendURL(cfg.FrontendURL)
-	escalationGroupService := services.NewEscalationGroupService(escalationGroupRepo, incidentRepo, userRepo, notificationService, cfg.Escalation)
+	escalationGroupService := services.NewEscalationGroupService(escalationGroupRepo, incidentRepo, userRepo, reportRepo, notificationService, cfg.Escalation)
 	escalationGroupService.SetFrontendURL(cfg.FrontendURL)
 	escalationGroupService.SetPolicyService(escalationPolicyService)
 	fcmService := services.NewFCMService(repository.NewDeviceTokenRepository(db), notificationLogRepo)

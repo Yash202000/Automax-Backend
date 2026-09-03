@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -1460,6 +1461,15 @@ func (r *incidentRepository) GetSLABreachedIncidents(ctx context.Context) ([]mod
 	return incidents, err
 }
 
+// bulkEscalationEligibleStateCode returns the workflow state code whose resolved ID incidents must currently sit in to be eligible for bulk escalation. Configurable via BULK_ESCALATION_ELIGIBLE_STATE_CODE (default "under_resolution").
+func BulkEscalationEligibleStateCode() string {
+	if code := os.Getenv("BULK_ESCALATION_ELIGIBLE_STATE_CODE"); code != "" {
+		return code
+	}
+	return "under_resolution"
+}
+
+// GetBreachedByFilter returns SLA-breached incidents eligible for bulk escalation. Only incidents whose current_state_id matches the resolved ID of the eligible state (see bulkEscalationEligibleStateCode, default "Under Resolution")
 func (r *incidentRepository) GetBreachedByFilter(ctx context.Context, locationID uuid.UUID, classificationID uuid.UUID) ([]models.Incident, error) {
 
 	var incidents []models.Incident
@@ -1467,7 +1477,7 @@ func (r *incidentRepository) GetBreachedByFilter(ctx context.Context, locationID
 	query := r.db.WithContext(ctx).
 		Where("sla_breached = ?", true).
 		Where("record_type = ?", "incident").
-		Where("current_state_id NOT IN (SELECT id FROM workflow_states WHERE state_type = 'terminal')")
+		Where("current_state_id IN (SELECT id FROM workflow_states WHERE code = ?)", BulkEscalationEligibleStateCode())
 
 	// Only filter by location if a non-zero UUID is provided
 	if locationID != (uuid.UUID{}) {
@@ -1479,7 +1489,7 @@ func (r *incidentRepository) GetBreachedByFilter(ctx context.Context, locationID
 		query = query.Where("classification_id = ?", classificationID)
 	}
 
-	err := query.Preload("Location").Preload("Classification").Preload("CurrentState").Preload("Assignee").Find(&incidents).Error
+	err := query.Preload("Location").Preload("Classification").Preload("CurrentState").Preload("Assignee").Preload("Department").Find(&incidents).Error
 	return incidents, err
 }
 
