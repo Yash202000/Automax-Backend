@@ -124,7 +124,7 @@ func (h *LDAPHandler) Login(c *fiber.Ctx) error {
 	// Authenticate against LDAP
 	ldapUser, err := h.ldapService.Authenticate(c.UserContext(), req.Username, req.Password)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusUnauthorized, "LDAP authentication failed: "+err.Error())
+		return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "ldap_auth_failed"))
 	}
 
 	// Check if user is enabled
@@ -139,16 +139,16 @@ func (h *LDAPHandler) Login(c *fiber.Ctx) error {
 			// Auto-create user
 			user, err = h.createOrUpdateUserFromLDAP(c.UserContext(), ldapUser)
 			if err != nil {
-				return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create user from LDAP: "+err.Error())
+				return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_create_from_ldap"))
 			}
 		} else {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to look up user: "+err.Error())
+			return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_look_up_user"))
 		}
 	} else {
 		// Update existing user with LDAP data
 		user, err = h.updateUserFromLDAP(c.UserContext(), user, ldapUser)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to update user from LDAP: "+err.Error())
+			return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_update_from_ldap"))
 		}
 	}
 
@@ -173,13 +173,13 @@ func (h *LDAPHandler) Login(c *fiber.Ctx) error {
 		"auth_source": "ldap",
 	}, h.jwtManager.GetTokenExpiration())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_store_session"))
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_store_session"))
 	}
 
 	// Generate JWT tokens
 	tokenPair, err := h.jwtManager.GenerateTokenPair(user.ID, user.Email, role, sessionID, false)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_generate_tokens"))
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_generate_tokens"))
 	}
 
 	// Update last login timestamp
@@ -212,7 +212,7 @@ func (h *LDAPHandler) TestConnection(c *fiber.Ctx) error {
 	// Test the connection
 	err := h.ldapService.TestConnection(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "LDAP connection test failed: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "ldap_connection_failed"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -255,7 +255,7 @@ func (h *LDAPHandler) SearchUser(c *fiber.Ctx) error {
 				},
 			})
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "LDAP search failed: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "ldap_search_failed"))
 	}
 
 	// Search for user's groups
@@ -314,7 +314,7 @@ func (h *LDAPHandler) SyncUser(c *fiber.Ctx) error {
 	// Search for user in LDAP
 	ldapUser, err := h.ldapService.SearchUser(c.UserContext(), req.Username)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "User not found in LDAP: "+err.Error())
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "ldap_user_not_found"))
 	}
 
 	// Look up or create user in local database
@@ -323,15 +323,15 @@ func (h *LDAPHandler) SyncUser(c *fiber.Ctx) error {
 		if err == gorm.ErrRecordNotFound {
 			user, err = h.createOrUpdateUserFromLDAP(c.UserContext(), ldapUser)
 			if err != nil {
-				return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create user from LDAP: "+err.Error())
+				return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_create_from_ldap"))
 			}
 		} else {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to look up user: "+err.Error())
+			return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_look_up_user"))
 		}
 	} else {
 		user, err = h.updateUserFromLDAP(c.UserContext(), user, ldapUser)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to update user from LDAP: "+err.Error())
+			return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_update_from_ldap"))
 		}
 	}
 
@@ -387,7 +387,7 @@ func (h *LDAPHandler) ListADUsers(c *fiber.Ctx) error {
 
 	users, err := h.ldapService.FetchUserList(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch AD users: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_fetch_ad_users"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -419,7 +419,7 @@ func (h *LDAPHandler) RegisterADUser(c *fiber.Ctx) error {
 	// Search for user in LDAP
 	ldapUser, err := h.ldapService.SearchUser(c.UserContext(), req.Username)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "User not found in LDAP: "+err.Error())
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "ldap_user_not_found"))
 	}
 
 	// Normalize email to lowercase
@@ -459,7 +459,7 @@ func (h *LDAPHandler) RegisterADUser(c *fiber.Ctx) error {
 				return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "username_already_exists"))
 			}
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create_user"))
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_create_user"))
 	}
 
 	// Reload with relations

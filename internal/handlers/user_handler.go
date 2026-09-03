@@ -514,7 +514,7 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
 				"success": false,
 				"error":   "user_limit_reached",
-				"message": err.Error(),
+				"message": i18n.T(c.UserContext(), "user_limit_reached"),
 			})
 		}
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
@@ -634,7 +634,7 @@ func (h *UserHandler) MatchUsers(c *fiber.Ctx) error {
 
 	users, err := h.userService.FindMatchingUsers(c.UserContext(), roleIDs, classificationID, locationID, departmentID, excludeUserID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Build match response
@@ -676,7 +676,7 @@ func (h *UserHandler) UpdateUserCallStatus(c *fiber.Ctx) error {
 	// Call Service
 	resp, err := h.userService.UpdateUserCallStatus(c.UserContext(), userExt, req.Status)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Broadcast the availability change to all broadcast clients (e.g. incident
@@ -706,7 +706,7 @@ func (h *UserHandler) Export(c *fiber.Ctx) error {
 	// Get all users without pagination
 	users, _, err := h.userService.ListUsers(c.UserContext(), 1, 10000, "", "", "", "", nil, departmentIDs, nil, nil)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Convert to export format
@@ -866,7 +866,7 @@ func (h *UserHandler) Import(c *fiber.Ctx) error {
 
 	existing, err := h.userService.CheckExistingIdentifiers(c.UserContext(), emails, usernames, phones)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	imported := 0

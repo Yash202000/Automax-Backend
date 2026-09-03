@@ -29,8 +29,8 @@ const (
 )
 
 var (
-	ErrExtensionNotInPool   = errors.New("extension does not exist in the PBX pool")
-	ErrExtensionNotAssigned = errors.New("extension is not currently assigned to anyone")
+	ErrExtensionNotInPool   = errors.New("extension_not_in_pool")
+	ErrExtensionNotAssigned = errors.New("extension_not_assigned")
 )
 
 // ExtensionService manages PBX extension assignment. The current assignment and its

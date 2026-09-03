@@ -79,15 +79,15 @@ const externalEntityDepartmentType = "external"
 func (h *EPMIncidentHandler) resolveEERoutingDepartment(ctx context.Context, eeName string) (*uuid.UUID, error) {
 	trimmed := strings.TrimSpace(eeName)
 	if trimmed == "" {
-		return nil, fmt.Errorf("eeName is required when eeFlag is true")
+		return nil, errors.New(i18n.T(ctx, "ee_name_required"))
 	}
 
 	dept, err := h.departmentRepo.FindByNameOrNameAr(ctx, trimmed, trimmed)
 	if err != nil || dept == nil {
-		return nil, fmt.Errorf("this EE is not defined: %s", eeName)
+		return nil, fmt.Errorf(i18n.T(ctx, "ee_not_defined"), eeName)
 	}
 	if dept.Type != externalEntityDepartmentType || !dept.IsActive {
-		return nil, fmt.Errorf("this EE is not defined or not active: %s", eeName)
+		return nil, fmt.Errorf(i18n.T(ctx, "ee_not_defined_or_inactive"), eeName)
 	}
 
 	return &dept.ID, nil
@@ -880,7 +880,7 @@ func (h *EPMIncidentHandler) handleEEOutcome(c *fiber.Ctx, resolve bool) error {
 	if err := h.sessionStore.GetUserSession(c.UserContext(), claims.SessionID, &sessionData); err != nil {
 		return c.Status(fiber.StatusUnauthorized).JSON(EPMInsertIncidentResponse{
 			HTTPStatusCode: fiber.StatusUnauthorized,
-			Message:        "Session expired or invalid",
+			Message:        i18n.T(c.UserContext(), "session_expired_or_invalid"),
 			Result:         false,
 		})
 	}
@@ -889,7 +889,7 @@ func (h *EPMIncidentHandler) handleEEOutcome(c *fiber.Ctx, resolve bool) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
 			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "Invalid request body: " + err.Error(),
+			Message:        i18n.T(c.UserContext(), "invalid_request_body"),
 			Result:         false,
 		})
 	}
@@ -1008,7 +1008,7 @@ func (h *EPMIncidentHandler) handleEEOutcome(c *fiber.Ctx, resolve bool) error {
 	if err := h.incidentRepo.UpdateFields(c.UserContext(), incident.ID, updates); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(EPMInsertIncidentResponse{
 			HTTPStatusCode: fiber.StatusInternalServerError,
-			Message:        "Failed to update incident: " + err.Error(),
+			Message:        i18n.T(c.UserContext(), "failed_to_update_incident_epm"),
 			Result:         false,
 		})
 	}
@@ -1094,19 +1094,19 @@ func (h *EPMIncidentHandler) UpdateIncidentV2(c *fiber.Ctx) error {
 	}
 	var sessionData map[string]interface{}
 	if err := h.sessionStore.GetUserSession(c.UserContext(), claims.SessionID, &sessionData); err != nil {
-		return momraV2Response(c, fiber.StatusUnauthorized, "Session expired or invalid", false)
+		return momraV2Response(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "session_expired_or_invalid"), false)
 	}
 
 	var req EPMUpdateIncidentV2Request
 	if err := c.BodyParser(&req); err != nil {
-		return momraV2Response(c, fiber.StatusBadRequest, "Invalid request body: "+err.Error(), false)
+		return momraV2Response(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"), false)
 	}
 
 	if req.IncidentNo == "" {
-		return momraV2Response(c, fiber.StatusBadRequest, "IncidentNO is required", false)
+		return momraV2Response(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "incident_no_required"), false)
 	}
 	if req.AmanaIncidentNo == "" {
-		return momraV2Response(c, fiber.StatusBadRequest, "AmanaIncidentNo is required", false)
+		return momraV2Response(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "amana_incident_no_required"), false)
 	}
 	if req.ActionDate == "" {
 		return momraV2Response(c, fiber.StatusBadRequest, "ActionDate is required", false)
@@ -1200,7 +1200,7 @@ func (h *EPMIncidentHandler) UpdateIncidentV2(c *fiber.Ctx) error {
 	}
 
 	if err := h.incidentRepo.UpdateFields(c.UserContext(), incident.ID, updates); err != nil {
-		return momraV2Response(c, fiber.StatusInternalServerError, "Failed to update incident: "+err.Error(), false)
+		return momraV2Response(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update_incident_epm"), false)
 	}
 
 	if stateChanged {
@@ -1266,16 +1266,16 @@ func (h *EPMIncidentHandler) ReopenIncidentV2(c *fiber.Ctx) error {
 	}
 	var sessionData map[string]interface{}
 	if err := h.sessionStore.GetUserSession(c.UserContext(), claims.SessionID, &sessionData); err != nil {
-		return momraV2Response(c, fiber.StatusUnauthorized, "Session expired or invalid", false)
+		return momraV2Response(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "session_expired_or_invalid"), false)
 	}
 
 	var req EPMReopenIncidentV2Request
 	if err := c.BodyParser(&req); err != nil {
-		return momraV2Response(c, fiber.StatusBadRequest, "Invalid request body: "+err.Error(), false)
+		return momraV2Response(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"), false)
 	}
 
 	if req.AmanaIncidentNo == "" {
-		return momraV2Response(c, fiber.StatusBadRequest, "amanaincidentno is required", false)
+		return momraV2Response(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "amana_incident_no_required"), false)
 	}
 	if req.IncidentNo == "" {
 		return momraV2Response(c, fiber.StatusBadRequest, "incident_no is required", false)
@@ -1318,14 +1318,14 @@ func (h *EPMIncidentHandler) ReopenIncidentV2(c *fiber.Ctx) error {
 			"custom_fields": string(custFieldBytes),
 			"updated_at":    now,
 		}); err != nil {
-			return momraV2Response(c, fiber.StatusInternalServerError, "Failed to record evaluation: "+err.Error(), false)
+			return momraV2Response(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_record_evaluation"), false)
 		}
 		return momraV2Response(c, fiber.StatusOK, "Evaluation recorded; incident remains resolved", true)
 	}
 
 	initialState, err := h.workflowRepo.GetInitialState(c.UserContext(), incident.WorkflowID)
 	if err != nil {
-		return momraV2Response(c, fiber.StatusInternalServerError, "No initial state configured for incident workflow", false)
+		return momraV2Response(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "no_initial_state_epm"), false)
 	}
 
 	if incident.CurrentStateID == initialState.ID {
@@ -1340,7 +1340,7 @@ func (h *EPMIncidentHandler) ReopenIncidentV2(c *fiber.Ctx) error {
 		"updated_at":       now,
 	}
 	if err := h.incidentRepo.UpdateFields(c.UserContext(), incident.ID, updates); err != nil {
-		return momraV2Response(c, fiber.StatusInternalServerError, "Failed to reopen incident: "+err.Error(), false)
+		return momraV2Response(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_reopen_incident_epm"), false)
 	}
 
 	history := &models.IncidentTransitionHistory{

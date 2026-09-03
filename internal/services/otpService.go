@@ -80,7 +80,7 @@ func (s *OTPService) CheckRateLimit(ctx context.Context, phone string) error {
 	}
 
 	if count > 3 {
-		return fmt.Errorf("too many otp requests")
+		return fmt.Errorf("%s", i18n.T(ctx, "too_many_otp_requests"))
 	}
 
 	return nil
@@ -121,7 +121,7 @@ func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode strin
 
 	count, err := s.redis.Incr(ctx, counterKey).Result()
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to increment otp counter: %w", err)
+		return "", nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_increment_otp_counter"), err)
 	}
 
 	// Load env values
@@ -145,13 +145,13 @@ func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode strin
 
 	// Check max send attempts
 	if count > int64(maxAttempts) {
-		return "", nil, fmt.Errorf("max otp send attempts reached")
+		return "", nil, fmt.Errorf("%s", i18n.T(ctx, "max_otp_send_attempts_reached"))
 	}
 
 	//GENERATE OTP
 	otp, err := s.GenerateOTP()
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to generate otp: %w", err)
+		return "", nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_generate_otp"), err)
 	}
 
 	// Invalidate any previously issued, still-live OTP for this phone immediately —
@@ -188,7 +188,7 @@ func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode strin
 	err = s.sendOTPNotification(ctx, senderMode, phone, otp, &otpSessionID)
 	if err != nil {
 		s.redis.Del(ctx, key)
-		return "", nil, fmt.Errorf("failed to send otp: %w", err)
+		return "", nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_send_otp_notification"), err)
 	}
 
 	// [Citizen Auto-Register] Store citizen name in OTP data for auto-registration on verify
@@ -220,7 +220,7 @@ func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode strin
 	).Err()
 
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to store otp: %w", err)
+		return "", nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_store_otp"), err)
 	}
 
 	// Tombstone: outlives the main OTP key so VerifyOTP can tell "this session existed
@@ -245,7 +245,7 @@ func (s *OTPService) sendOTPNotification(ctx context.Context, channel, phone, ot
 	}
 	_, err := s.notificationService.SendNotification(ctx, channel, nil, "en", []string{phone}, nil, nil, "", body, nil, nil, nil, sessionID)
 	if err != nil {
-		return fmt.Errorf("Err Into Send Notification Service: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_send_otp_notification"), err)
 	}
 	return err
 }
@@ -311,14 +311,14 @@ func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID stri
 		// original line: return nil, fmt.Errorf("%s", i18n.T(ctx, "user_not_found"))
 		user, err = s.autoCreateCitizenUser(ctx, phone, data.Name)
 		if err != nil {
-			return nil, fmt.Errorf("failed to register citizen: %w", err)
+			return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_register_citizen"), err)
 		}
 	}
 
 	// GenerateTokenViaUserID creates its own session internally; no separate session needed here.
 	authResp, err := s.userService.GenerateTokenViaUserID(ctx, user.ID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate token: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_generate_token"), err)
 	}
 	// Response
 	resp := &models.LoginResponse{
@@ -331,7 +331,7 @@ func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID stri
 	// update notification log
 	err = s.notificationLogRepo.MarkOTPVerified(ctx, sessionID, time.Now())
 	if err != nil {
-		return nil, fmt.Errorf("failed to update otp status: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_update_otp_status"), err)
 	}
 
 	return resp, nil
@@ -355,7 +355,7 @@ func (s *OTPService) autoCreateCitizenUser(ctx context.Context, phone string, na
 	// Find the "citizen" role
 	citizenRole, err := s.roleRepo.FindByCode(ctx, "citizen")
 	if err != nil {
-		return nil, fmt.Errorf("citizen role not found in database — please create a role with code 'citizen'")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "citizen_role_not_found"))
 	}
 
 	newUser := &models.User{
@@ -370,7 +370,7 @@ func (s *OTPService) autoCreateCitizenUser(ctx context.Context, phone string, na
 	}
 
 	if err := s.userRepo.Create(ctx, newUser); err != nil {
-		return nil, fmt.Errorf("failed to create citizen user: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_create_citizen_user"), err)
 	}
 
 	return newUser, nil

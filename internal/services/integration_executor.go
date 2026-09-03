@@ -1,3 +1,7 @@
+// i18n note: this file's fmt.Errorf messages surface only in IntegrationExecutionLog.ErrorMessage
+// (admin-only script-test/execution-log diagnostics, e.g. "external API returned 500: <raw body>")
+// and are not translated — the raw upstream response/protocol detail is the useful part for an
+// admin debugging an integration script, and is itself untranslatable (external API text).
 package services
 
 import (
@@ -276,7 +280,7 @@ func (e *integrationExecutor) buildIncidentContext(incident *models.Incident, fi
 		"postal_code":     incident.PostalCode,
 		"custom_fields":   incident.CustomFields,
 		// Direct reporter fields (always present even without a linked user)
-		"reporter_email":     incident.ReporterEmail,
+		"reporter_email": incident.ReporterEmail,
 		"reporter_name":  incident.ReporterName,
 		"reporter_phone": incident.ReporterPhone,
 		"sla_breached":   incident.SLABreached,

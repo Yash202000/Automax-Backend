@@ -153,7 +153,7 @@ func (h *DocumentHandler) ListFiles(c *fiber.Ctx) error {
 	}
 	result, err := h.service.ListFiles(c.UserContext(), parentID, email)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to list files: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "files_listed"), result)
 }
@@ -247,7 +247,7 @@ func (h *DocumentHandler) GetFileInfo(c *fiber.Ctx) error {
 	email := h.getUserEmail(c)
 	result, err := h.service.GetFileInfo(c.UserContext(), fileID, email)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to get file info: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "file_info"), result)
 }
@@ -267,7 +267,7 @@ func (h *DocumentHandler) GetFileBreadcrumb(c *fiber.Ctx) error {
 	email := h.getUserEmail(c)
 	chain, err := h.service.GetFileBreadcrumb(c.UserContext(), fileID, email)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to resolve breadcrumb: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	if chain == nil {
 		chain = []storage.DmsBreadcrumbEntry{}
@@ -290,7 +290,7 @@ func (h *DocumentHandler) GetPreviewURL(c *fiber.Ctx) error {
 	email := h.getUserEmail(c)
 	url, err := h.service.GetPreviewURL(c.UserContext(), fileID, email)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to get preview URL: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "preview_url"), fiber.Map{"url": url})
 }
@@ -313,7 +313,7 @@ func (h *DocumentHandler) DownloadFile(c *fiber.Ctx) error {
 	email := h.getUserEmail(c)
 	reader, info, err := h.service.DownloadFile(c.UserContext(), fileID, email)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to download file: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Read the full body before returning. Fiber's SendStream runs after the
@@ -323,7 +323,7 @@ func (h *DocumentHandler) DownloadFile(c *fiber.Ctx) error {
 	payload, readErr := io.ReadAll(reader)
 	reader.Close()
 	if readErr != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read file bytes: "+readErr.Error())
+		return utils.InternalErrorResponse(c, readErr, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Pull a human-friendly filename from either the download headers or the
@@ -367,7 +367,7 @@ func (h *DocumentHandler) GetComments(c *fiber.Ctx) error {
 	email := h.getUserEmail(c)
 	comments, err := h.service.GetComments(c.UserContext(), fileID, email)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to get comments: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "comments"), comments)
 }
@@ -396,7 +396,7 @@ func (h *DocumentHandler) AddComment(c *fiber.Ctx) error {
 
 	email := h.getUserEmail(c)
 	if err := h.service.AddComment(c.UserContext(), fileID, body.Content, email); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to add comment: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "comment_added"), nil)
 }
@@ -416,7 +416,7 @@ func (h *DocumentHandler) GetTags(c *fiber.Ctx) error {
 	email := h.getUserEmail(c)
 	tags, err := h.service.GetTags(c.UserContext(), fileID, email)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to get tags: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "tags"), tags)
 }
@@ -442,7 +442,7 @@ func (h *DocumentHandler) SetTags(c *fiber.Ctx) error {
 
 	email := h.getUserEmail(c)
 	if err := h.service.SetTags(c.UserContext(), fileID, body.Tags, email); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to set tags: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "tags_updated"), nil)
 }
@@ -462,7 +462,7 @@ func (h *DocumentHandler) ListVersions(c *fiber.Ctx) error {
 	email := h.getUserEmail(c)
 	versions, err := h.service.ListVersions(c.UserContext(), fileID, email)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to list versions: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "versions_listed"), versions)
 }
@@ -494,7 +494,7 @@ func (h *DocumentHandler) UploadVersion(c *fiber.Ctx) error {
 	email := h.getUserEmail(c)
 	version, err := h.service.UploadVersion(c.UserContext(), fileID, fileHeader.Filename, file, fileHeader.Size, description, email)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to upload version: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "version_uploaded"), version)
 }
@@ -526,7 +526,7 @@ func (h *DocumentHandler) DownloadVersion(c *fiber.Ctx) error {
 
 	reader, contentType, err := h.service.DownloadVersion(c.UserContext(), versionUUID, email)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to download version: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	defer reader.Close()
 
@@ -560,7 +560,7 @@ func (h *DocumentHandler) RollbackVersion(c *fiber.Ctx) error {
 	email := h.getUserEmail(c)
 	version, err := h.service.RollbackVersion(c.UserContext(), fileID, body.VersionUUID, email)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to rollback version: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "version_rolled_back"), version)
 }

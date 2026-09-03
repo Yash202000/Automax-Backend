@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"path/filepath"
@@ -86,7 +87,7 @@ func (h *GoalHandler) CloneGoal(c *fiber.Ctx) error {
 
 	goal, err := h.service.CloneGoal(c.UserContext(), id, &req, userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to clone goal: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_clone_goal"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "goal_cloned"), goal)
@@ -123,7 +124,7 @@ func (h *GoalHandler) ImportGoals(c *fiber.Ctx) error {
 
 	result, err := h.service.ImportGoals(c.UserContext(), fileData, file.Filename, dryRun, userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Import failed: "+err.Error())
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "import_failed_detail", err.Error()))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "import_processed"), result)
@@ -143,7 +144,7 @@ func (h *GoalHandler) BulkAction(c *fiber.Ctx) error {
 
 	result, err := h.service.BulkAction(c.UserContext(), &req, userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Bulk operation failed: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "bulk_operation_failed"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "bulk_operation_completed"), result)
@@ -169,21 +170,20 @@ func (h *GoalHandler) CreateGoal(c *fiber.Ctx) error {
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	goal, err := h.service.CreateGoal(c.UserContext(), &req, userID)
 	if err != nil {
-		if strings.Contains(err.Error(), "parent goal not found") || strings.Contains(err.Error(), "maximum goal hierarchy depth") || strings.Contains(err.Error(), "already exists") {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"success": false,
-				"message": err.Error(),
-			})
+		switch {
+		case errors.Is(err, services.ErrParentGoalNotFound):
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "parent_goal_not_found"))
+		case errors.Is(err, services.ErrGoalHierarchyDepthExceeded):
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "max_goal_hierarchy_depth_exceeded"))
+		case errors.Is(err, services.ErrGoalAlreadyExists):
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "goal_already_exists"))
 		}
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"success": false,
-			"message": err.Error(),
-		})
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_create_goal"))
 	}
 	// Success response
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"success": true,
-		"message": "Goal created",
+		"message": i18n.T(c.UserContext(), "goal_created"),
 		"data":    goal,
 	})
 }
@@ -284,10 +284,10 @@ func (h *GoalHandler) DeleteGoal(c *fiber.Ctx) error {
 		if strings.Contains(err.Error(), i18n.T(c.UserContext(), "access_denied")) {
 			return utils.ErrorResponse(c, fiber.StatusForbidden, err.Error())
 		}
-		if strings.Contains(err.Error(), "not found") {
+		if strings.Contains(err.Error(), i18n.T(c.UserContext(), "goal_not_found")) {
 			return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "goal_not_found"))
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to delete goal: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_delete_goal"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "goal_deleted"), nil)
@@ -669,7 +669,7 @@ func (h *GoalHandler) DownloadEvidence(c *fiber.Ctx) error {
 	payload, readErr := io.ReadAll(reader)
 	reader.Close()
 	if readErr != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to read evidence bytes: "+readErr.Error())
+		return utils.InternalErrorResponse(c, readErr, i18n.T(c.UserContext(), "failed_to_read_evidence_bytes"))
 	}
 
 	if contentType == "" {
@@ -702,7 +702,7 @@ func (h *GoalHandler) DeleteEvidence(c *fiber.Ctx) error {
 	ctx := userContext(c)
 
 	if err := h.service.DeleteEvidence(ctx, id, userID); err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if strings.Contains(err.Error(), i18n.T(c.UserContext(), "evidence_not_found")) {
 			return utils.ErrorResponse(c, fiber.StatusNotFound, err.Error())
 		}
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
@@ -914,7 +914,7 @@ func (h *GoalHandler) ListMetricValueChanges(c *fiber.Ctx) error {
 		if strings.Contains(err.Error(), i18n.T(c.UserContext(), "access_denied")) {
 			return utils.ErrorResponse(c, fiber.StatusForbidden, err.Error())
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_list_value_changes"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -1071,8 +1071,7 @@ func (h *GoalHandler) CreateCheckIn(c *fiber.Ctx) error {
 
 	checkIn, err := h.service.CreateCheckIn(ctx, goalID, &req, userID)
 	if err != nil {
-		log.Printf("Failed to create check-in: %v", err)
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_create_check_in"))
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
@@ -1114,7 +1113,7 @@ func (h *GoalHandler) DeleteCheckIn(c *fiber.Ctx) error {
 	ctx := userContext(c)
 
 	if err := h.service.DeleteCheckIn(ctx, id, userID); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_delete_check_in"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -1137,7 +1136,7 @@ func (h *GoalHandler) ExportMetricsTemplate(c *fiber.Ctx) error {
 
 	data, err := h.service.ExportMetricsTemplate(c.UserContext(), &filter, format)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to export metrics template: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_export_metrics_template"))
 	}
 
 	switch format {
@@ -1180,7 +1179,7 @@ func (h *GoalHandler) ImportMetrics(c *fiber.Ctx) error {
 	if dryRun {
 		result, err := h.service.ImportMetricsDryRun(c.UserContext(), fileData, file.Filename, userID)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Validation failed: "+err.Error())
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "validation_failed_detail", err.Error()))
 		}
 		return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "dry_run_completed"), result)
 	}
@@ -1202,7 +1201,7 @@ func (h *GoalHandler) ImportMetrics(c *fiber.Ctx) error {
 
 	result, err := h.service.ImportMetricsCommit(c.UserContext(), fileData, file.Filename, title, comment, primaryGoalID, userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Import failed: "+err.Error())
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "import_failed_detail", err.Error()))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "metric_import_batch_created"), result)
@@ -1408,7 +1407,7 @@ func (h *GoalHandler) ListGoalComments(c *fiber.Ctx) error {
 func (h *GoalHandler) DeleteGoalComment(c *fiber.Ctx) error {
 	commentID, err := uuid.Parse(c.Params("cid"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid comment ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_comment_id"))
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
@@ -1418,7 +1417,7 @@ func (h *GoalHandler) DeleteGoalComment(c *fiber.Ctx) error {
 		if strings.Contains(err.Error(), i18n.T(c.UserContext(), "access_denied")) {
 			return utils.ErrorResponse(c, fiber.StatusForbidden, err.Error())
 		}
-		if strings.Contains(err.Error(), "not found") {
+		if strings.Contains(err.Error(), i18n.T(c.UserContext(), "comment_not_found")) {
 			return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "comment_not_found"))
 		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_delete_comment"))

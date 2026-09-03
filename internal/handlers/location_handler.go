@@ -62,9 +62,11 @@ func (h *LocationHandler) Create(c *fiber.Ctx) error {
 	existing, err := h.repo.FindByNameOrNameArAndParent(c.UserContext(), req.Name, req.NameAr, req.ParentID)
 	if err == nil && existing != nil {
 		existingPath, _ := h.repo.FetchLocationFullPathByID(c.UserContext(), existing.ID)
-		msg := fmt.Sprintf("Location '%s' already exists", existing.Name)
+		var msg string
 		if existingPath != "" {
-			msg += fmt.Sprintf(" at '%s'", existingPath)
+			msg = i18n.Tf(c.UserContext(), "location_already_exists_named_at", existing.Name, existingPath)
+		} else {
+			msg = i18n.Tf(c.UserContext(), "location_already_exists_named", existing.Name)
 		}
 		return utils.ErrorResponse(c, fiber.StatusConflict, msg)
 	}
@@ -100,7 +102,7 @@ func (h *LocationHandler) Create(c *fiber.Ctx) error {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
 			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "location_code_exists"))
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "location_created"), models.ToLocationResponse(location))
@@ -159,9 +161,11 @@ func (h *LocationHandler) Update(c *fiber.Ctx) error {
 		existing, err := h.repo.FindByNameOrNameAr(c.UserContext(), checkName, checkNameAr)
 		if err == nil && existing != nil && existing.ID != id {
 			existingPath, _ := h.repo.FetchLocationFullPathByID(c.UserContext(), existing.ID)
-			msg := fmt.Sprintf("Location '%s' already exists", existing.Name)
+			var msg string
 			if existingPath != "" {
-				msg += fmt.Sprintf(" at '%s'", existingPath)
+				msg = i18n.Tf(c.UserContext(), "location_already_exists_named_at", existing.Name, existingPath)
+			} else {
+				msg = i18n.Tf(c.UserContext(), "location_already_exists_named", existing.Name)
 			}
 			return utils.ErrorResponse(c, fiber.StatusConflict, msg)
 		}
@@ -201,10 +205,10 @@ func (h *LocationHandler) Update(c *fiber.Ctx) error {
 		if !*req.IsActive && location.IsActive {
 			hasActive, err := h.repo.HasActiveChildren(c.UserContext(), id)
 			if err != nil {
-				return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+				return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 			}
 			if hasActive {
-				return utils.ErrorResponse(c, fiber.StatusConflict, "Cannot deactivate this location because it has active sub-locations. Please deactivate all child locations first.")
+				return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "location_has_active_children"))
 			}
 		}
 		location.IsActive = *req.IsActive
@@ -220,7 +224,7 @@ func (h *LocationHandler) Update(c *fiber.Ctx) error {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
 			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "location_code_exists"))
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "location_updated"), models.ToLocationResponse(location))
@@ -235,7 +239,7 @@ func (h *LocationHandler) Delete(c *fiber.Ctx) error {
 
 	children, users, incidents, err := h.repo.CheckDeleteDependencies(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	isAr := strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.Get("Accept-Language"))), "ar")
@@ -270,7 +274,7 @@ func (h *LocationHandler) Delete(c *fiber.Ctx) error {
 	}
 
 	if err := h.repo.Delete(c.UserContext(), id); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "location_deleted"), nil)
@@ -279,7 +283,7 @@ func (h *LocationHandler) Delete(c *fiber.Ctx) error {
 func (h *LocationHandler) List(c *fiber.Ctx) error {
 	locations, err := h.repo.List(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	responses := make([]models.LocationResponse, len(locations))
@@ -330,7 +334,7 @@ func (h *LocationHandler) GetChildren(c *fiber.Ctx) error {
 	}
 
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	responses := make([]models.LocationResponse, len(children))
@@ -349,7 +353,7 @@ func (h *LocationHandler) GetByType(c *fiber.Ctx) error {
 
 	locations, err := h.repo.GetByType(c.UserContext(), locationType)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	responses := make([]models.LocationResponse, len(locations))
@@ -364,7 +368,7 @@ func (h *LocationHandler) GetByType(c *fiber.Ctx) error {
 func (h *LocationHandler) Export(c *fiber.Ctx) error {
 	locations, err := h.repo.List(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Convert to export format - NO FILTERING to match classification behavior
@@ -512,7 +516,7 @@ func (h *LocationHandler) GetTreeWithStats(c *fiber.Ctx) error {
 
 	tree, err := h.repo.GetTreeWithStats(c.UserContext(), recordType)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "location_tree_stats"), tree)

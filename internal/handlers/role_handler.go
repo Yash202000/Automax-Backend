@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"strings"
 
 	"github.com/automax/backend/internal/config"
@@ -99,10 +100,10 @@ func (h *RoleHandler) CreateRole(c *fiber.Ctx) error {
 	}
 
 	role := &models.Role{
-		Name:        req.Name,
-		Description: req.Description,
-		IsActive:    true,
-		IsSystem:    false,
+		Name:            req.Name,
+		Description:     req.Description,
+		IsActive:        true,
+		IsSystem:        false,
 		BypassLoginTotp: req.BypassLoginTotp,
 	}
 
@@ -119,7 +120,7 @@ func (h *RoleHandler) CreateRole(c *fiber.Ctx) error {
 			}
 			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "role_already_exists"))
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Assign permissions if provided
@@ -192,7 +193,7 @@ func (h *RoleHandler) UpdateRole(c *fiber.Ctx) error {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
 			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "role_already_exists"))
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Update permissions if provided
@@ -225,7 +226,7 @@ func (h *RoleHandler) DeleteRole(c *fiber.Ctx) error {
 	}
 
 	if err := h.roleRepo.Delete(c.UserContext(), id); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "role_deleted"), nil)
@@ -241,7 +242,7 @@ func (h *RoleHandler) ListRoles(c *fiber.Ctx) error {
 		}
 		roles, err := h.roleRepo.ListByDepartment(c.UserContext(), deptID)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+			return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 		}
 		responses := make([]models.RoleResponse, len(roles))
 		for i, role := range roles {
@@ -257,7 +258,7 @@ func (h *RoleHandler) ListRoles(c *fiber.Ctx) error {
 		if scopeDeptID != nil {
 			roles, err := h.roleRepo.ListByDepartment(c.UserContext(), *scopeDeptID)
 			if err != nil {
-				return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+				return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 			}
 			responses := make([]models.RoleResponse, len(roles))
 			for i, role := range roles {
@@ -269,7 +270,7 @@ func (h *RoleHandler) ListRoles(c *fiber.Ctx) error {
 
 	roles, err := h.roleRepo.List(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	responses := make([]models.RoleResponse, len(roles))
@@ -295,7 +296,7 @@ func (h *RoleHandler) AssignPermissions(c *fiber.Ctx) error {
 	}
 
 	if err := h.roleRepo.AssignPermissions(c.UserContext(), id, req.PermissionIDs); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Notify live users of this role so their clients refresh permissions.
@@ -332,7 +333,7 @@ func (h *RoleHandler) CreatePermission(c *fiber.Ctx) error {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
 			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "permission_already_exists"))
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "permission_created"), models.ToPermissionResponse(permission))
@@ -399,7 +400,7 @@ func (h *RoleHandler) UpdatePermission(c *fiber.Ctx) error {
 	}
 
 	if err := h.permissionRepo.Update(c.UserContext(), permission); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	if activeChanged && h.userRepo != nil {
@@ -420,7 +421,7 @@ func (h *RoleHandler) DeletePermission(c *fiber.Ctx) error {
 	}
 
 	if err := h.permissionRepo.Delete(c.UserContext(), id); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "permission_deleted"), nil)
@@ -439,7 +440,7 @@ func (h *RoleHandler) ListPermissions(c *fiber.Ctx) error {
 	}
 
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	responses := make([]models.PermissionResponse, len(permissions))
@@ -456,7 +457,7 @@ func (h *RoleHandler) GetModules(c *fiber.Ctx) error {
 	arabic := lang == "ar"
 	modules, err := h.permissionRepo.GetModules(c.UserContext(), arabic)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "modules_retrieved"), modules)
@@ -466,7 +467,7 @@ func (h *RoleHandler) GetModules(c *fiber.Ctx) error {
 func (h *RoleHandler) Export(c *fiber.Ctx) error {
 	roles, err := h.roleRepo.List(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	type ExportRole struct {
@@ -540,10 +541,29 @@ func (h *RoleHandler) Import(c *fiber.Ctx) error {
 	imported := 0
 	skipped := 0
 	var errors []string
+	seenNames := make(map[string]bool, len(importData))
 	for _, data := range importData {
+		name := strings.TrimSpace(data.Name)
+
+		// Unique-name validation: skip roles already present in the system, and
+		// duplicate names within the same import file (checked case-insensitively,
+		// matching CreateRole's FindByName/EqualFold behavior).
+		if existing, _ := h.roleRepo.FindByName(c.UserContext(), name); existing != nil {
+			skipped++
+			errors = append(errors, i18n.Tf(c.UserContext(), "role_import_duplicate_name", name))
+			continue
+		}
+		lowerName := strings.ToLower(name)
+		if seenNames[lowerName] {
+			skipped++
+			errors = append(errors, i18n.Tf(c.UserContext(), "role_import_duplicate_name", name))
+			continue
+		}
+		seenNames[lowerName] = true
+
 		// Create new role
 		role := &models.Role{
-			Name:        data.Name,
+			Name:        name,
 			Description: data.Description,
 			IsActive:    data.IsActive,
 			IsSystem:    false, // Always set imported roles as non-system
@@ -553,14 +573,16 @@ func (h *RoleHandler) Import(c *fiber.Ctx) error {
 		}
 
 		if err := h.roleRepo.Create(c.UserContext(), role); err != nil {
-			errors = append(errors, data.Name+" - Failed to create: "+err.Error())
+			log.Printf("[RoleHandler] import: failed to create role %q: %v", data.Name, err)
+			errors = append(errors, i18n.Tf(c.UserContext(), "role_import_failed_to_create", data.Name))
 			continue
 		}
 
 		// Assign permissions if provided
 		if len(data.PermissionIDs) > 0 {
 			if err := h.roleRepo.AssignPermissions(c.UserContext(), role.ID, data.PermissionIDs); err != nil {
-				errors = append(errors, data.Name+" - Role created but failed to assign permissions: "+err.Error())
+				log.Printf("[RoleHandler] import: failed to assign permissions for role %q: %v", data.Name, err)
+				errors = append(errors, i18n.Tf(c.UserContext(), "role_import_created_permissions_failed", data.Name))
 			}
 		}
 

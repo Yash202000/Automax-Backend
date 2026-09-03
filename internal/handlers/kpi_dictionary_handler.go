@@ -126,6 +126,7 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 		SegmentationAxes:   req.SegmentationAxes,
 		RelatedUnits:       req.RelatedUnits,
 		Notes:              req.Notes,
+		DocumentaFolderID:  req.DocumentaFolderID,
 	}
 	if item.Polarity == "" {
 		item.Polarity = models.KPIPolarityAscending
@@ -195,6 +196,7 @@ func (h *KpiDictionaryHandler) UpdateStrategic(c *fiber.Ctx) error {
 		"segmentation_axes":   req.SegmentationAxes,
 		"related_units":       req.RelatedUnits,
 		"notes":               req.Notes,
+		"documenta_folder_id": req.DocumentaFolderID,
 	}
 	if req.OwnerType == "" {
 		updates["owner_type"] = models.KPIOwnerTypeInternal
@@ -316,6 +318,7 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 		Lifecycle:              req.Lifecycle,
 		DataSource:             req.DataSource,
 		Notes:                  req.Notes,
+		DocumentaFolderID:      req.DocumentaFolderID,
 	}
 	if item.Polarity == "" {
 		item.Polarity = models.KPIPolarityAscending
@@ -401,6 +404,7 @@ func (h *KpiDictionaryHandler) UpdateOperational(c *fiber.Ctx) error {
 		"lifecycle":                req.Lifecycle,
 		"data_source":              req.DataSource,
 		"notes":                    req.Notes,
+		"documenta_folder_id":      req.DocumentaFolderID,
 	}
 	if req.OwnerType == "" {
 		updates["owner_type"] = models.KPIOwnerTypeInternal
@@ -516,6 +520,7 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 		Lifecycle:           req.Lifecycle,
 		DataSource:          req.DataSource,
 		Notes:               req.Notes,
+		DocumentaFolderID:   req.DocumentaFolderID,
 	}
 	if item.Polarity == "" {
 		item.Polarity = models.KPIPolarityAscending
@@ -621,6 +626,7 @@ func (h *KpiDictionaryHandler) UpdateAward(c *fiber.Ctx) error {
 		"lifecycle":              req.Lifecycle,
 		"data_source":            req.DataSource,
 		"notes":                  req.Notes,
+		"documenta_folder_id":    req.DocumentaFolderID,
 	}
 	if req.OwnerType == "" {
 		updates["owner_type"] = models.KPIOwnerTypeInternal

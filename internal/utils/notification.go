@@ -1,10 +1,16 @@
+// i18n note: this file's fmt.Errorf calls are SMTP/Twilio/WhatsApp transport-protocol errors.
+// They ARE bilingual (EN/AR) — RecipientInfo.Error (populated from these errors) is returned
+// directly in the admin Notification Monitoring API response (notification_handler.go's
+// Get/List/ListMonitoring), consumed by the frontend dashboard, so it's genuinely user-facing.
 package utils
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +21,7 @@ import (
 	"time"
 
 	"github.com/automax/backend/internal/models"
+	"github.com/automax/backend/pkg/i18n"
 	pkgUtils "github.com/automax/backend/pkg/utils"
 	"github.com/twilio/twilio-go"
 	openapi "github.com/twilio/twilio-go/rest/api/v2010"
@@ -40,7 +47,7 @@ var smtpPool = struct {
 
 // getOrCreateSMTPClient returns the live pooled client, or dials+authenticates
 // a fresh one if the connection is absent or has gone stale (NOOP check).
-func getOrCreateSMTPClient() (*smtp.Client, error) {
+func getOrCreateSMTPClient(ctx context.Context) (*smtp.Client, error) {
 	smtpPool.mu.Lock()
 	defer smtpPool.mu.Unlock()
 
@@ -59,15 +66,15 @@ func getOrCreateSMTPClient() (*smtp.Client, error) {
 
 	c, err := smtp.Dial(fmt.Sprintf("%s:%s", host, port))
 	if err != nil {
-		return nil, fmt.Errorf("smtp dial: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "smtp_dial_failed"), err)
 	}
 	if err = c.StartTLS(&tls.Config{ServerName: host}); err != nil {
 		c.Close()
-		return nil, fmt.Errorf("smtp starttls: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "smtp_starttls_failed"), err)
 	}
 	if err = c.Auth(smtp.PlainAuth("", user, pass, host)); err != nil {
 		c.Close()
-		return nil, fmt.Errorf("smtp auth: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "smtp_auth_failed"), err)
 	}
 
 	smtpPool.client = c
@@ -76,13 +83,13 @@ func getOrCreateSMTPClient() (*smtp.Client, error) {
 
 // sendViaPool delivers msg using the persistent client.
 // On any mid-send error the connection is discarded so the next call reconnects.
-func sendViaPool(fromEmail string, recipients []string, msg []byte) error {
+func sendViaPool(ctx context.Context, fromEmail string, recipients []string, msg []byte) error {
 	smtpPool.mu.Lock()
 	defer smtpPool.mu.Unlock()
 
 	c := smtpPool.client
 	if c == nil {
-		return fmt.Errorf("smtp client not initialised")
+		return errors.New(i18n.T(ctx, "smtp_client_not_initialized"))
 	}
 
 	reset := func(err error) error {
@@ -92,22 +99,22 @@ func sendViaPool(fromEmail string, recipients []string, msg []byte) error {
 	}
 
 	if err := c.Mail(fromEmail); err != nil {
-		return reset(fmt.Errorf("smtp MAIL FROM: %w", err))
+		return reset(fmt.Errorf("%s: %w", i18n.T(ctx, "smtp_mail_from_failed"), err))
 	}
 	for _, r := range recipients {
 		if err := c.Rcpt(r); err != nil {
-			return reset(fmt.Errorf("smtp RCPT TO %s: %w", r, err))
+			return reset(fmt.Errorf("%s: %w", i18n.Tf(ctx, "smtp_rcpt_to_failed", r), err))
 		}
 	}
 	w, err := c.Data()
 	if err != nil {
-		return reset(fmt.Errorf("smtp DATA: %w", err))
+		return reset(fmt.Errorf("%s: %w", i18n.T(ctx, "smtp_data_failed"), err))
 	}
 	if _, err = w.Write(msg); err != nil {
-		return reset(fmt.Errorf("smtp write: %w", err))
+		return reset(fmt.Errorf("%s: %w", i18n.T(ctx, "smtp_write_failed"), err))
 	}
 	if err = w.Close(); err != nil {
-		return reset(fmt.Errorf("smtp close data: %w", err))
+		return reset(fmt.Errorf("%s: %w", i18n.T(ctx, "smtp_close_data_failed"), err))
 	}
 	_ = c.Reset() // prepare connection for the next message
 	return nil
@@ -125,16 +132,16 @@ type metaSendResponse struct {
 // SendOTPWithMetaTemplate sends a WhatsApp OTP template message and returns the
 // Meta-assigned message ID (messages[0].id) alongside any error, so callers can
 // persist it and later match delivery/read status webhook callbacks to it.
-func SendOTPWithMetaTemplate(phone string, otp string) (string, error) {
+func SendOTPWithMetaTemplate(ctx context.Context, phone string, otp string) (string, error) {
 	metaURL := os.Getenv("OTP_TEMPLATE_URL")
 	accessToken := os.Getenv("OTP_TEMPLATE_ACCESS_TOKEN")
 
 	if metaURL == "" {
-		return "", fmt.Errorf("whatsapp config error: OTP_TEMPLATE_URL not set")
+		return "", errors.New(i18n.Tf(ctx, "whatsapp_config_missing", "OTP_TEMPLATE_URL"))
 	}
 
 	if accessToken == "" {
-		return "", fmt.Errorf("whatsapp config error: OTP_TEMPLATE_ACCESS_TOKEN not set")
+		return "", errors.New(i18n.Tf(ctx, "whatsapp_config_missing", "OTP_TEMPLATE_ACCESS_TOKEN"))
 	}
 
 	// Template payload
@@ -175,12 +182,12 @@ func SendOTPWithMetaTemplate(phone string, otp string) (string, error) {
 
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("whatsapp payload marshal failed: %w", err)
+		return "", fmt.Errorf("%s: %w", i18n.T(ctx, "whatsapp_payload_marshal_failed"), err)
 	}
 
 	req, err := http.NewRequest("POST", metaURL, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return "", fmt.Errorf("whatsapp request creation failed: %w", err)
+		return "", fmt.Errorf("%s: %w", i18n.T(ctx, "whatsapp_request_creation_failed"), err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -192,7 +199,7 @@ func SendOTPWithMetaTemplate(phone string, otp string) (string, error) {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("whatsapp network error: %w", err)
+		return "", fmt.Errorf("%s: %w", i18n.T(ctx, "whatsapp_network_error"), err)
 	}
 	defer resp.Body.Close()
 
@@ -208,24 +215,24 @@ func SendOTPWithMetaTemplate(phone string, otp string) (string, error) {
 	}
 
 	return "", fmt.Errorf(
-		"whatsapp http error (%d): %s",
-		resp.StatusCode,
+		"%s: %s",
+		i18n.Tf(ctx, "whatsapp_http_error", resp.StatusCode),
 		string(bodyBytes),
 	)
 }
 
-func SendWhatsApp(phone string, message string) error {
+func SendWhatsApp(ctx context.Context, phone string, message string) error {
 
 	metaURL := os.Getenv("METAURL")
 	accessToken := os.Getenv("META_ACCESS_TOKEN")
 
 	// Keys validation
 	if metaURL == "" {
-		return fmt.Errorf("whatsapp config error: METAURL not set")
+		return errors.New(i18n.Tf(ctx, "whatsapp_config_missing", "METAURL"))
 	}
 
 	if accessToken == "" {
-		return fmt.Errorf("whatsapp config error: META_ACCESS_TOKEN not set")
+		return errors.New(i18n.Tf(ctx, "whatsapp_config_missing", "META_ACCESS_TOKEN"))
 	}
 
 	// Request payload
@@ -242,12 +249,12 @@ func SendWhatsApp(phone string, message string) error {
 
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("whatsapp payload marshal failed: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T(ctx, "whatsapp_payload_marshal_failed"), err)
 	}
 
 	req, err := http.NewRequest("POST", metaURL, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return fmt.Errorf("whatsapp request creation failed: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T(ctx, "whatsapp_request_creation_failed"), err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -259,7 +266,7 @@ func SendWhatsApp(phone string, message string) error {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("whatsapp network error: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T(ctx, "whatsapp_network_error"), err)
 	}
 	defer resp.Body.Close()
 
@@ -277,21 +284,21 @@ func SendWhatsApp(phone string, message string) error {
 		switch metaErr.Error.Code {
 
 		case 100:
-			return fmt.Errorf("whatsapp invalid parameter (code 100): %s", metaErr.Error.Message)
+			return fmt.Errorf("%s: %s", i18n.T(ctx, "whatsapp_invalid_parameter"), metaErr.Error.Message)
 
 		case 190:
-			return fmt.Errorf("whatsapp access token expired (code 190)")
+			return errors.New(i18n.T(ctx, "whatsapp_token_expired"))
 
 		case 200:
-			return fmt.Errorf("whatsapp permission denied (code 200)")
+			return errors.New(i18n.T(ctx, "whatsapp_permission_denied"))
 
 		case 2500:
-			return fmt.Errorf("whatsapp invalid endpoint (code 2500): %s", metaErr.Error.Message)
+			return fmt.Errorf("%s: %s", i18n.T(ctx, "whatsapp_invalid_endpoint"), metaErr.Error.Message)
 
 		default:
 			return fmt.Errorf(
-				"whatsapp api error (code %d): %s | trace: %s",
-				metaErr.Error.Code,
+				"%s: %s | trace: %s",
+				i18n.Tf(ctx, "whatsapp_api_error", metaErr.Error.Code),
 				metaErr.Error.Message,
 				metaErr.Error.FBTraceID,
 			)
@@ -300,8 +307,8 @@ func SendWhatsApp(phone string, message string) error {
 
 	//If response is not structured JSON
 	return fmt.Errorf(
-		"whatsapp http error (%d): %s",
-		resp.StatusCode,
+		"%s: %s",
+		i18n.Tf(ctx, "whatsapp_http_error", resp.StatusCode),
 		string(bodyBytes),
 	)
 }
@@ -309,7 +316,7 @@ func SendWhatsApp(phone string, message string) error {
 // SendSMTPWithCCBCC sends email with TO, CC, BCC, and attachments support.
 // It reuses a persistent SMTP connection (authenticated once) to avoid Gmail's
 // "too many login attempts" rate limit.
-func SendSMTPWithCCBCC(to []string, cc []string, bcc []string, subject, body string, attachments []models.AttachmentData) (models.RecipientArray, error) {
+func SendSMTPWithCCBCC(ctx context.Context, to []string, cc []string, bcc []string, subject, body string, attachments []models.AttachmentData) (models.RecipientArray, error) {
 	fromEmail := os.Getenv("SMTP_FROM")
 	fromName := os.Getenv("SMTP_FROM_NAME")
 
@@ -321,7 +328,7 @@ func SendSMTPWithCCBCC(to []string, cc []string, bcc []string, subject, body str
 	}
 
 	// Ensure the pooled connection is alive before building the message.
-	if _, err := getOrCreateSMTPClient(); err != nil {
+	if _, err := getOrCreateSMTPClient(ctx); err != nil {
 		var recipientStatuses models.RecipientArray
 		for _, r := range append(append([]string{}, to...), append(cc, bcc...)...) {
 			recipientStatuses = append(recipientStatuses, models.RecipientInfo{
@@ -407,7 +414,7 @@ func SendSMTPWithCCBCC(to []string, cc []string, bcc []string, subject, body str
 	msg.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
 
 	// Send via persistent connection — no new AUTH handshake per email.
-	err := sendViaPool(fromEmail, allRecipients, msg.Bytes())
+	err := sendViaPool(ctx, fromEmail, allRecipients, msg.Bytes())
 
 	// Build recipient status array
 	var recipientStatuses models.RecipientArray
@@ -441,7 +448,7 @@ func SendSMTPWithCCBCC(to []string, cc []string, bcc []string, subject, body str
 // SendSMS sends an SMS via Twilio and returns the Twilio message SID alongside
 // any error, so callers can persist it and later match delivery status webhook
 // callbacks (queued/sent/delivered/undelivered/failed) back to it.
-func SendSMS(to, message string) (string, error) {
+func SendSMS(ctx context.Context, to, message string) (string, error) {
 
 	accountSID := os.Getenv("TWILIO_ACCOUNT_SID")
 	authToken := os.Getenv("TWILIO_AUTH_TOKEN")
@@ -449,7 +456,7 @@ func SendSMS(to, message string) (string, error) {
 
 	if accountSID == "" || authToken == "" || from == "" {
 		fmt.Println("[DEBUG-SMS] ERROR: Twilio env vars missing")
-		return "", fmt.Errorf("twilio env vars missing: TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_PHONE_NUMBER")
+		return "", errors.New(i18n.T(ctx, "twilio_env_vars_missing"))
 	}
 
 	to = pkgUtils.NormalizeMobile(to, systemCountryCode())
@@ -458,7 +465,7 @@ func SendSMS(to, message string) (string, error) {
 	// Templates often contain indentation and extra blank lines that inflate UCS-2 segment count.
 	if strings.TrimSpace(message) == "" {
 		fmt.Printf("[DEBUG-SMS] ERROR: empty message body for recipient %s — skipping send\n", to)
-		return "", fmt.Errorf("sms body is empty")
+		return "", errors.New(i18n.T(ctx, "sms_body_empty"))
 	}
 	fmt.Printf("[DEBUG-SMS] Sending to=%s from=%s body_len=%d body=%q\n", to, from, len(message), message)
 
@@ -475,7 +482,7 @@ func SendSMS(to, message string) (string, error) {
 	resp, err := client.Api.CreateMessage(params)
 	if err != nil {
 		fmt.Printf("[DEBUG-SMS] Twilio API error to=%s: %v\n", to, err)
-		return "", fmt.Errorf("twilio send sms error: %w", err)
+		return "", fmt.Errorf("%s: %w", i18n.T(ctx, "twilio_send_error"), err)
 	}
 
 	sid := ""

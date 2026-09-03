@@ -404,7 +404,7 @@ func (h *KpiEntryHandler) GetAvailableEntryTransitions(c *fiber.Ctx) error {
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	transitions, err := h.workflowSvc.GetAvailableKpiEntryTransitions(c.UserContext(), entryID, userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, "", transitions)
 }

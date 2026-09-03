@@ -258,6 +258,7 @@ func main() {
 	notificationHandler := handlers.NewNotificationHandler(notificationService, minioStorage, userRepo, incidentRepo, actionLogService)
 	templateHandler := handlers.NewNotificationTemplateHandler(notificationTemplateService)
 	attachmentHandler := handlers.NewAttachmentHandler(incidentService, notificationService, minioStorage)
+	imageValidationHandler := handlers.NewImageValidationHandler(services.NewImageValidationService(), cfg.ImageValidation)
 	otpHandler := handlers.NewOTPHandler(otpService, userService)
 	escalationHandler := handlers.NewEscalationHandler(escalationService)
 	escalationGroupHandler := handlers.NewEscalationGroupHandler(escalationGroupService)
@@ -299,6 +300,9 @@ func main() {
 
 	// KPI Engagement handler (metrics, evidence, collaborators, check-ins, comments, activity)
 	kpiEngagementHandler := handlers.NewKpiEngagementHandler(db, actionLogService, minioStorage, kpiDocumentaClient, cfg.KpiDocumenta)
+
+	// KPI Evidence Folder Configuration handler (resolve/browse/create Documenta folders by taxonomy)
+	kpiDocumentaHandler := handlers.NewKpiDocumentaHandler(kpiDocumentaClient, cfg.KpiDocumenta)
 
 	// KPI Dashboard handler
 	kpiDashboardHandler := handlers.NewKpiDashboardHandler(db)
@@ -567,6 +571,11 @@ func main() {
 	attachments := v1.Group("/attachments", authMiddleware.Authenticate())
 	attachments.Get("/:attachment_id", attachmentHandler.DownloadAttachment)
 	attachments.Get("/:attachment_id/preview", attachmentHandler.PreviewAttachment)
+
+	// Standalone image-quality validation, called by Mobile App / Chatbot
+	// before incident submission to reject mostly-black/mostly-white/no-detail photos.
+	images := v1.Group("/images", authMiddleware.Authenticate())
+	images.Post("/validate", imageValidationHandler.ValidateImage)
 
 	// Complaint routes (authenticated users)
 	complaints := v1.Group("/complaints", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureComplaints)))
@@ -1291,6 +1300,14 @@ func main() {
 	kpi.Get("/:type/:id/administrative-units", authMiddleware.RequirePermission("kpi:view"), kpiMasterDataHandler.ListAdministrativeUnits)
 	kpi.Post("/:type/:id/administrative-units", authMiddleware.RequirePermission("kpi:update"), kpiMasterDataHandler.AddAdministrativeUnit)
 	kpi.Delete("/administrative-units/:id", authMiddleware.RequirePermission("kpi:update"), kpiMasterDataHandler.DeleteAdministrativeUnit)
+
+	// ---- KPI EVIDENCE FOLDER CONFIGURATION ROUTES ----
+	// Taxonomy-parameterized (not KPI-id-parameterized) so they work from the
+	// create form before a KPI is ever saved.
+	kpi.Get("/documenta/anchor", authMiddleware.RequirePermission("kpi:create", "kpi:update"), kpiDocumentaHandler.ResolveAnchor)
+	kpi.Get("/documenta/folders", authMiddleware.RequirePermission("kpi:create", "kpi:update"), kpiDocumentaHandler.ListFolders)
+	kpi.Post("/documenta/folders", authMiddleware.RequirePermission("kpi:create", "kpi:update"), kpiDocumentaHandler.CreateFolder)
+	kpi.Get("/documenta/folders/:id", authMiddleware.RequirePermission("kpi:view"), kpiDocumentaHandler.GetFolderInfo)
 
 	// ---- KPI DICTIONARY ROUTES ----
 	kpi.Get("/strategic", authMiddleware.RequirePermission("kpi:view"), kpiDictionaryHandler.ListStrategic)
