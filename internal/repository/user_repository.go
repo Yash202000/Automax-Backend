@@ -24,7 +24,7 @@ type UserRepository interface {
 	Update(ctx context.Context, user *models.User) error
 	UpdateLastLogin(ctx context.Context, id uuid.UUID) error
 	Delete(ctx context.Context, id uuid.UUID) error
-	List(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID, strictDepartment ...bool) ([]models.User, int64, error)
+	List(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID, withIncident bool, strictDepartment ...bool) ([]models.User, int64, error)
 	ListByDepartment(ctx context.Context, departmentID uuid.UUID, page, limit int) ([]models.User, int64, error)
 	ExistsByEmail(ctx context.Context, email string) (bool, error)
 	ExistsByUsername(ctx context.Context, username string) (bool, error)
@@ -258,7 +258,7 @@ func (r *userRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return r.db.WithContext(ctx).Delete(&models.User{}, "id = ?", id).Error
 }
 
-func (r *userRepository) List(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID, strictDepartment ...bool) ([]models.User, int64, error) {
+func (r *userRepository) List(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID, withIncident bool, strictDepartment ...bool) ([]models.User, int64, error) {
 	var users []models.User
 	var total int64
 
@@ -287,6 +287,9 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 	}
 	if callStatus != "" {
 		base = base.Where("users.call_status = ?", callStatus)
+	}
+	if withIncident {
+		base = base.Where("users.id IN (SELECT reporter_id FROM incidents WHERE reporter_id IS NOT NULL)")
 	}
 
 	if len(roleIDs) > 0 {
