@@ -35,6 +35,12 @@ type EscalationGroup struct {
 	EmailTemplateCode string `gorm:"size:100" json:"email_template_code"`
 	SMSTemplateCode   string `gorm:"size:100" json:"sms_template_code"`
 
+	// Language selects which side of a bilingual NotificationTemplate (EN/AR)
+	// is rendered when EmailTemplateCode/SMSTemplateCode is set. It has no
+	// effect on the built-in fallback message (templates.BuildSLABreachSMS/
+	// BuildSLABreachEmail), which is always English.
+	Language string `gorm:"size:5;not null;default:'en'" json:"language"`
+
 	IsActive bool `gorm:"default:true" json:"is_active"`
 
 	// Tracks when the last notification batch was sent (used for schedule enforcement)
@@ -61,35 +67,39 @@ func (e *EscalationGroup) BeforeCreate(_ *gorm.DB) error {
 //Request types ---
 
 type CreateEscalationGroupRequest struct {
-	Name              string                         `json:"name" validate:"required,min=1,max=200"`
+	Name string `json:"name" validate:"required,min=1,max=200"`
 	// ClassificationIDs supports selecting multiple classifications.
-	ClassificationIDs []string                       `json:"classification_ids" validate:"omitempty,dive,uuid"`
+	ClassificationIDs []string `json:"classification_ids" validate:"omitempty,dive,uuid"`
 	// ClassificationID is kept for backward compatibility (single).
-	ClassificationID  string                         `json:"classification_id" validate:"omitempty,uuid"`
-	Frequency         string                         `json:"frequency" validate:"required,oneof=hourly every_6_hours every_12_hours daily weekly bi_weekly monthly"`
-	ScheduledTime     string                         `json:"scheduled_time" validate:"required,datetime=15:04"`
-	Channel           string                         `json:"channel" validate:"required,oneof=sms email both"`
-	EmailTemplateCode string                         `json:"email_template_code"`
-	SMSTemplateCode   string                         `json:"sms_template_code"`
-	IsActive          *bool                          `json:"is_active"`
-	Targets           []EscalationGroupTargetRequest `json:"targets"`
+	ClassificationID  string `json:"classification_id" validate:"omitempty,uuid"`
+	Frequency         string `json:"frequency" validate:"required,oneof=hourly every_6_hours every_12_hours daily weekly bi_weekly monthly"`
+	ScheduledTime     string `json:"scheduled_time" validate:"required,datetime=15:04"`
+	Channel           string `json:"channel" validate:"required,oneof=sms email both"`
+	EmailTemplateCode string `json:"email_template_code"`
+	SMSTemplateCode   string `json:"sms_template_code"`
+	// Language selects EN/AR when a template code is set (default "en").
+	Language string                         `json:"language" validate:"omitempty,oneof=en ar"`
+	IsActive *bool                          `json:"is_active"`
+	Targets  []EscalationGroupTargetRequest `json:"targets"`
 	// Deprecated: use Targets instead
 	UserIDs []string `json:"user_ids" validate:"omitempty,dive,uuid"`
 }
 
 type UpdateEscalationGroupRequest struct {
-	Name              *string                        `json:"name" validate:"omitempty,min=1,max=200"`
+	Name *string `json:"name" validate:"omitempty,min=1,max=200"`
 	// ClassificationIDs replaces all classifications when non-nil.
-	ClassificationIDs []string                       `json:"classification_ids" validate:"omitempty,dive,uuid"`
+	ClassificationIDs []string `json:"classification_ids" validate:"omitempty,dive,uuid"`
 	// ClassificationID is kept for backward compatibility (single).
-	ClassificationID  *string                        `json:"classification_id" validate:"omitempty,uuid"`
-	Frequency         *string                        `json:"frequency" validate:"omitempty,oneof=hourly every_6_hours every_12_hours daily weekly bi_weekly monthly"`
-	ScheduledTime     *string                        `json:"scheduled_time" validate:"omitempty,datetime=15:04"`
-	Channel           *string                        `json:"channel" validate:"omitempty,oneof=sms email both"`
-	EmailTemplateCode *string                        `json:"email_template_code"`
-	SMSTemplateCode   *string                        `json:"sms_template_code"`
-	IsActive          *bool                          `json:"is_active"`
-	Targets           []EscalationGroupTargetRequest `json:"targets"` // nil = no change; non-nil = full replacement
+	ClassificationID  *string `json:"classification_id" validate:"omitempty,uuid"`
+	Frequency         *string `json:"frequency" validate:"omitempty,oneof=hourly every_6_hours every_12_hours daily weekly bi_weekly monthly"`
+	ScheduledTime     *string `json:"scheduled_time" validate:"omitempty,datetime=15:04"`
+	Channel           *string `json:"channel" validate:"omitempty,oneof=sms email both"`
+	EmailTemplateCode *string `json:"email_template_code"`
+	SMSTemplateCode   *string `json:"sms_template_code"`
+	// Language selects EN/AR when a template code is set.
+	Language *string                        `json:"language" validate:"omitempty,oneof=en ar"`
+	IsActive *bool                          `json:"is_active"`
+	Targets  []EscalationGroupTargetRequest `json:"targets"` // nil = no change; non-nil = full replacement
 	// Deprecated: use Targets instead
 	UserIDs []string `json:"user_ids" validate:"omitempty,dive,uuid"`
 }
@@ -107,6 +117,7 @@ type EscalationGroupResponse struct {
 	Channel           string                          `json:"channel"`
 	EmailTemplateCode string                          `json:"email_template_code"`
 	SMSTemplateCode   string                          `json:"sms_template_code"`
+	Language          string                          `json:"language"`
 	IsActive          bool                            `json:"is_active"`
 	LastNotifiedAt    *time.Time                      `json:"last_notified_at,omitempty"`
 	Targets           []EscalationGroupTargetResponse `json:"targets"`
@@ -125,6 +136,7 @@ func ToEscalationGroupResponse(g *EscalationGroup) EscalationGroupResponse {
 		Channel:           g.Channel,
 		EmailTemplateCode: g.EmailTemplateCode,
 		SMSTemplateCode:   g.SMSTemplateCode,
+		Language:          g.Language,
 		IsActive:          g.IsActive,
 		LastNotifiedAt:    g.LastNotifiedAt,
 		Classifications:   []ClassificationResponse{},

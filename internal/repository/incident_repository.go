@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -1459,6 +1460,28 @@ func (r *incidentRepository) GetSLABreachedIncidents(ctx context.Context) ([]mod
 	return incidents, err
 }
 
+// bulkEscalationEligibleStateCode returns the workflow state code whose
+// resolved ID incidents must currently sit in to be eligible for bulk
+// escalation. Configurable via BULK_ESCALATION_ELIGIBLE_STATE_CODE (default
+// "under_resolution"). The Code — not the display Name — is the stable
+// identifier used to resolve the state's actual ID, mirroring the existing
+// convention (CONVERT_TO_REQUEST_STATE_CODE, READY_TO_CLOSE_REVERT_STATE_CODE):
+// this way a display-label rename (e.g. "Under Resolution" -> "In Review")
+// does not silently break eligibility, and nothing is hardcoded per-environment.
+func bulkEscalationEligibleStateCode() string {
+	if code := os.Getenv("BULK_ESCALATION_ELIGIBLE_STATE_CODE"); code != "" {
+		return code
+	}
+	return "under_resolution"
+}
+
+// GetBreachedByFilter returns SLA-breached incidents eligible for bulk
+// escalation. Only incidents whose current_state_id matches the resolved ID
+// of the eligible state (see bulkEscalationEligibleStateCode, default
+// "Under Resolution") are returned — enforced here in the query itself, not
+// left to callers, so it cannot be bypassed via a direct API call. Incidents
+// in states such as "New Incident", "Rejected", or "Ready to Close" resolve
+// to a different state ID and are never included.
 func (r *incidentRepository) GetBreachedByFilter(ctx context.Context, locationID uuid.UUID, classificationID uuid.UUID) ([]models.Incident, error) {
 
 	var incidents []models.Incident
@@ -1466,7 +1489,7 @@ func (r *incidentRepository) GetBreachedByFilter(ctx context.Context, locationID
 	query := r.db.WithContext(ctx).
 		Where("sla_breached = ?", true).
 		Where("record_type = ?", "incident").
-		Where("current_state_id NOT IN (SELECT id FROM workflow_states WHERE state_type = 'terminal')")
+		Where("current_state_id IN (SELECT id FROM workflow_states WHERE code = ?)", bulkEscalationEligibleStateCode())
 
 	// Only filter by location if a non-zero UUID is provided
 	if locationID != (uuid.UUID{}) {
@@ -1478,7 +1501,7 @@ func (r *incidentRepository) GetBreachedByFilter(ctx context.Context, locationID
 		query = query.Where("classification_id = ?", classificationID)
 	}
 
-	err := query.Preload("Location").Preload("Classification").Preload("CurrentState").Preload("Assignee").Find(&incidents).Error
+	err := query.Preload("Location").Preload("Classification").Preload("CurrentState").Preload("Assignee").Preload("Department").Find(&incidents).Error
 	return incidents, err
 }
 
