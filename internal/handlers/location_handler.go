@@ -89,6 +89,7 @@ func (h *LocationHandler) Create(c *fiber.Ctx) error {
 		SortOrder:     req.SortOrder,
 		Source:        source,
 		IsActive:      true,
+		ExternalID:    req.ExternalID,
 	}
 
 	// Non-EPM940: use the payload code verbatim. EPM940: leave empty so the
@@ -214,6 +215,9 @@ func (h *LocationHandler) Update(c *fiber.Ctx) error {
 	}
 	if req.SortOrder != nil {
 		location.SortOrder = *req.SortOrder
+	}
+	if req.ExternalID != nil {
+		location.ExternalID = *req.ExternalID
 	}
 
 	if err := h.repo.Update(c.UserContext(), location); err != nil {

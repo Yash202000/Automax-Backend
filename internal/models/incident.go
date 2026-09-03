@@ -49,6 +49,21 @@ type Incident struct {
 	DepartmentID *uuid.UUID  `gorm:"type:uuid;index" json:"department_id"`
 	Department   *Department `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
 
+	// MOMRA external-entity assignment (docs/MOMRA_Outbound_Integration_Spec_v1.0.md §7,
+	// Story D). Distinct from DepartmentID/Department above: DepartmentID is Automax's
+	// general internal routing/queue assignment (also used when *Automax* itself routes
+	// to an EE via resolveEERoutingDepartment); ExternalEntityID specifically means "the
+	// external entity MOMRA currently considers responsible for this incident," which can
+	// in principle diverge from DepartmentID if MOMRA reassigns on its own side. The
+	// receiving mechanism for MOMRA->Automax assignment notifications is not yet defined
+	// by MOMRA (open dependency OD-N2) — this schema ships ahead of that so backend/UI are
+	// ready to wire in once confirmed; ExternalEntityID references the same
+	// Department{Type:"external"} rows used elsewhere in the MOMRA integration.
+	ExternalEntityID         *uuid.UUID  `gorm:"type:uuid;index" json:"external_entity_id"`
+	ExternalEntity           *Department `gorm:"foreignKey:ExternalEntityID" json:"external_entity,omitempty"`
+	ExternalAssignmentStatus string      `gorm:"size:20" json:"external_assignment_status"` // "", "assigned", "resolved", "rejected"
+	ExternalAssignedAt       *time.Time  `json:"external_assigned_at"`
+
 	// Location
 	LocationID *uuid.UUID `gorm:"type:uuid;index" json:"location_id"`
 	Location   *Location  `gorm:"foreignKey:LocationID" json:"location,omitempty"`

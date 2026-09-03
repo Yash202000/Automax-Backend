@@ -157,6 +157,7 @@ func (r *incidentRepository) FindByIDWithRelations(ctx context.Context, id uuid.
 		Preload("Assignee").
 		Preload("Assignees").
 		Preload("Department").
+		Preload("ExternalEntity").
 		Preload("Location").
 		Preload("LookupValues.Category").
 		Preload("Reporter").
