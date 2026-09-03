@@ -301,6 +301,9 @@ func main() {
 	// KPI Engagement handler (metrics, evidence, collaborators, check-ins, comments, activity)
 	kpiEngagementHandler := handlers.NewKpiEngagementHandler(db, actionLogService, minioStorage, kpiDocumentaClient, cfg.KpiDocumenta)
 
+	// KPI Evidence Folder Configuration handler (resolve/browse/create Documenta folders by taxonomy)
+	kpiDocumentaHandler := handlers.NewKpiDocumentaHandler(kpiDocumentaClient, cfg.KpiDocumenta)
+
 	// KPI Dashboard handler
 	kpiDashboardHandler := handlers.NewKpiDashboardHandler(db)
 
@@ -1258,6 +1261,14 @@ func main() {
 	kpi.Get("/:type/:id/administrative-units", authMiddleware.RequirePermission("kpi:view"), kpiMasterDataHandler.ListAdministrativeUnits)
 	kpi.Post("/:type/:id/administrative-units", authMiddleware.RequirePermission("kpi:update"), kpiMasterDataHandler.AddAdministrativeUnit)
 	kpi.Delete("/administrative-units/:id", authMiddleware.RequirePermission("kpi:update"), kpiMasterDataHandler.DeleteAdministrativeUnit)
+
+	// ---- KPI EVIDENCE FOLDER CONFIGURATION ROUTES ----
+	// Taxonomy-parameterized (not KPI-id-parameterized) so they work from the
+	// create form before a KPI is ever saved.
+	kpi.Get("/documenta/anchor", authMiddleware.RequirePermission("kpi:create", "kpi:update"), kpiDocumentaHandler.ResolveAnchor)
+	kpi.Get("/documenta/folders", authMiddleware.RequirePermission("kpi:create", "kpi:update"), kpiDocumentaHandler.ListFolders)
+	kpi.Post("/documenta/folders", authMiddleware.RequirePermission("kpi:create", "kpi:update"), kpiDocumentaHandler.CreateFolder)
+	kpi.Get("/documenta/folders/:id", authMiddleware.RequirePermission("kpi:view"), kpiDocumentaHandler.GetFolderInfo)
 
 	// ---- KPI DICTIONARY ROUTES ----
 	kpi.Get("/strategic", authMiddleware.RequirePermission("kpi:view"), kpiDictionaryHandler.ListStrategic)

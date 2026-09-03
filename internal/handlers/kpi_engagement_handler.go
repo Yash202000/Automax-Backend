@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -295,26 +296,20 @@ func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
 // row itself, callers pass the returned fields through to
 // CreateMetric/CreateEvidence.
 //
-// Files land under the approved organisational hierarchy:
+// The base folder is the KPI's own configured DocumentaFolderID (set once,
+// during KPI creation/edit, via the "KPI Evidence Folder Configuration"
+// feature — see kpi_documenta_handler.go) — every evidence upload for a KPI
+// goes straight into that one folder, nested one level by Evidence Type
+// (Report/Photo/Certificate/Invoice/Other):
 //
-//	{Pillar Name} / {KPI Code} - {KPI Name} / {Evidence Type} / file
+//	{Configured Folder} / {Evidence Type} / file
 //
-// The "sub-pillar" level in the original ask has no corresponding concept
-// anywhere in Automax's data model (Pillar has no parent/child
-// self-reference — Domain and Enabler are siblings of Pillar, not
-// children), so it's omitted rather than invented. "Supporting Folder"
-// maps to the evidence's Evidence Type (Report/Photo/Certificate/Invoice/
-// Other) since that's the closest existing classification, not a new
-// field. Metric linkage is preserved as metadata/tags only — it's no
-// longer its own folder level (the approved hierarchy has no metric
-// level at all).
-//
-// Only Strategic KPIs have a direct Pillar. Operational KPIs resolve one
-// indirectly via their Operational Objective or Process (both merely
-// optional PillarID fields — Enabler is a parallel, not nested, concept).
-// Award KPIs have no path to Pillar anywhere in the schema. Per explicit
-// product decision, a KPI with no resolvable Pillar hard-blocks evidence
-// upload entirely — there is no fallback root folder.
+// KPIs that predate this feature (DocumentaFolderID not yet set) fall back
+// to deriving one on the fly — same rule as before (Pillar → "{Code} -
+// {Name}" for Strategic/Operational; NEW: Criterion → Sub-Criterion →
+// "{Code} - {Name}" for Award, which used to hard-block entirely) — and
+// persist the result, mirroring goal_service.go's CreateEvidence self-healing
+// backfill for goals that predate Documenta.
 func (h *KpiEngagementHandler) UploadAttachment(c *fiber.Ctx) error {
 	kpiType, id, err := h.parseTypeAndID(c)
 	if err != nil || !h.kpiExists(kpiType, id) {
@@ -337,13 +332,9 @@ func (h *KpiEngagementHandler) UploadAttachment(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(ctx, "not_found"))
 	}
 
-	pillar, err := services.ResolvePillarForKPI(h.db, kpiType, id)
-	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(ctx, "failed_to_upload_file"))
-	}
-	if pillar == nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest,
-			fmt.Sprintf("%s (%s) is not linked to a Pillar — evidence cannot be uploaded until it is assigned one. Award KPIs have no Pillar concept; Operational KPIs need a Pillar set on their Operational Objective or Process.", kpiName, kpiCode))
+	baseFolderID, resolveErr := h.resolveOrBackfillEvidenceFolder(ctx, kpiType, id, kpiCode, kpiName)
+	if resolveErr != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, resolveErr.Error())
 	}
 
 	evidenceType := c.FormValue("evidence_type")
@@ -351,25 +342,13 @@ func (h *KpiEngagementHandler) UploadAttachment(c *fiber.Ctx) error {
 		evidenceType = "Report"
 	}
 
-	pillarFolderID, err := h.documentaClient.EnsureFolder(ctx, h.documentaCfg.WorkspaceName, "", pillar.NameEn)
-	if err != nil {
-		log.Printf("[kpi_engagement] UploadAttachment: EnsureFolder(%s) failed: %v", pillar.NameEn, err)
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_upload_file"))
-	}
-	kpiFolderID, err := h.documentaClient.EnsureFolder(ctx, h.documentaCfg.WorkspaceName, pillarFolderID, fmt.Sprintf("%s - %s", kpiCode, kpiName))
-	if err != nil {
-		log.Printf("[kpi_engagement] UploadAttachment: EnsureFolder(%s - %s) failed: %v", kpiCode, kpiName, err)
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_upload_file"))
-	}
-	uploadFolderID, err := h.documentaClient.EnsureFolder(ctx, h.documentaCfg.WorkspaceName, kpiFolderID, evidenceType)
+	uploadFolderID, err := h.documentaClient.EnsureFolder(ctx, h.documentaCfg.WorkspaceName, baseFolderID, evidenceType)
 	if err != nil {
 		log.Printf("[kpi_engagement] UploadAttachment: EnsureFolder(%s) failed: %v", evidenceType, err)
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_upload_file"))
 	}
 
 	metadata := map[string]string{
-		"pillar_id":     pillar.ID.String(),
-		"pillar_name":   pillar.NameEn,
 		"kpi_id":        id.String(),
 		"kpi_code":      kpiCode,
 		"kpi_type":      kpiType,
@@ -418,6 +397,88 @@ func (h *KpiEngagementHandler) UploadAttachment(c *fiber.Ctx) error {
 		"file_size":         file.Size,
 		"mime_type":         file.Header.Get("Content-Type"),
 	})
+}
+
+// resolveOrBackfillEvidenceFolder returns the KPI's configured evidence
+// folder (DocumentaFolderID), deriving and persisting one on the fly if it
+// doesn't have one yet — self-healing backfill for KPIs that predate the
+// "KPI Evidence Folder Configuration" feature, mirroring goal_service.go's
+// CreateEvidence pattern for Goal.DocumentaFolderID.
+func (h *KpiEngagementHandler) resolveOrBackfillEvidenceFolder(ctx context.Context, kpiType string, id uuid.UUID, kpiCode, kpiName string) (string, error) {
+	folderID, pillarID, objectiveID, processID, awardSubCriterionID, err := h.loadFolderAndTaxonomy(kpiType, id)
+	if err != nil {
+		return "", fmt.Errorf("failed to load KPI")
+	}
+	if folderID != "" {
+		return folderID, nil
+	}
+
+	anchor, err := services.ResolveTaxonomyAnchor(ctx, h.db, h.documentaClient, h.documentaCfg.WorkspaceName, kpiType, pillarID, objectiveID, processID, awardSubCriterionID)
+	if err != nil {
+		log.Printf("[kpi_engagement] resolveOrBackfillEvidenceFolder: ResolveTaxonomyAnchor failed: %v", err)
+		return "", fmt.Errorf("failed to resolve an evidence folder")
+	}
+	if anchor == nil {
+		return "", fmt.Errorf("%s (%s) has no Evidence Folder configured, and its taxonomy doesn't resolve to one automatically — configure an Evidence Folder for this KPI first", kpiName, kpiCode)
+	}
+
+	kpiFolderID, err := h.documentaClient.EnsureFolder(ctx, h.documentaCfg.WorkspaceName, anchor.FolderID, fmt.Sprintf("%s - %s", kpiCode, kpiName))
+	if err != nil {
+		log.Printf("[kpi_engagement] resolveOrBackfillEvidenceFolder: EnsureFolder(%s - %s) failed: %v", kpiCode, kpiName, err)
+		return "", fmt.Errorf("failed to create an evidence folder")
+	}
+
+	h.persistDocumentaFolderID(kpiType, id, kpiFolderID)
+	return kpiFolderID, nil
+}
+
+// loadFolderAndTaxonomy loads a KPI's configured folder id plus whichever
+// taxonomy IDs its type carries, for use by resolveOrBackfillEvidenceFolder.
+func (h *KpiEngagementHandler) loadFolderAndTaxonomy(kpiType string, id uuid.UUID) (folderID string, pillarID, objectiveID, processID, awardSubCriterionID *uuid.UUID, err error) {
+	switch kpiType {
+	case models.KPITypeOperational:
+		var k models.OperationalKPI
+		if err = h.db.Select("documenta_folder_id, operational_objective_id, process_id").Where("id = ?", id).First(&k).Error; err != nil {
+			return
+		}
+		folderID = k.DocumentaFolderID
+		objectiveID = &k.OperationalObjectiveID
+		processID = &k.ProcessID
+	case models.KPITypeAward:
+		var k models.AwardKPI
+		if err = h.db.Select("documenta_folder_id, award_sub_criterion_id").Where("id = ?", id).First(&k).Error; err != nil {
+			return
+		}
+		folderID = k.DocumentaFolderID
+		awardSubCriterionID = &k.AwardSubCriterionID
+	default:
+		var k models.StrategicKPI
+		if err = h.db.Select("documenta_folder_id, pillar_id").Where("id = ?", id).First(&k).Error; err != nil {
+			return
+		}
+		folderID = k.DocumentaFolderID
+		pillarID = k.PillarID
+	}
+	return
+}
+
+// persistDocumentaFolderID writes a freshly-derived folder id back onto the
+// KPI row so subsequent uploads take the fast (already-configured) path.
+// KPI dictionary handlers access the DB directly rather than through a
+// repository layer, so this does too.
+func (h *KpiEngagementHandler) persistDocumentaFolderID(kpiType string, id uuid.UUID, folderID string) {
+	var result *gorm.DB
+	switch kpiType {
+	case models.KPITypeOperational:
+		result = h.db.Model(&models.OperationalKPI{}).Where("id = ?", id).Update("documenta_folder_id", folderID)
+	case models.KPITypeAward:
+		result = h.db.Model(&models.AwardKPI{}).Where("id = ?", id).Update("documenta_folder_id", folderID)
+	default:
+		result = h.db.Model(&models.StrategicKPI{}).Where("id = ?", id).Update("documenta_folder_id", folderID)
+	}
+	if result.Error != nil {
+		log.Printf("[kpi_engagement] persistDocumentaFolderID: failed to persist folder for %s %s: %v", kpiType, id, result.Error)
+	}
 }
 
 func (h *KpiEngagementHandler) UpdateMetric(c *fiber.Ctx) error {

@@ -75,6 +75,7 @@ type StrategicKPI struct {
 	SegmentationAxes   string           `gorm:"type:text" json:"segmentation_axes"`
 	RelatedUnits       string           `gorm:"type:text" json:"related_units"`
 	Notes              string           `gorm:"type:text" json:"notes"`
+	DocumentaFolderID  string           `gorm:"size:255" json:"documenta_folder_id"`
 	CreatedAt          time.Time        `json:"created_at"`
 	UpdatedAt          time.Time        `json:"updated_at"`
 	DeletedAt          gorm.DeletedAt   `gorm:"index" json:"-"`
@@ -112,6 +113,7 @@ type StrategicKPIRequest struct {
 	SegmentationAxes   string     `json:"segmentation_axes"`
 	RelatedUnits       string     `json:"related_units"`
 	Notes              string     `json:"notes"`
+	DocumentaFolderID  string     `json:"documenta_folder_id"`
 }
 
 type StrategicKPIResponse struct {
@@ -147,6 +149,7 @@ type StrategicKPIResponse struct {
 	SegmentationAxes   string                   `json:"segmentation_axes"`
 	RelatedUnits       string                   `json:"related_units"`
 	Notes              string                   `json:"notes"`
+	DocumentaFolderID  string                   `json:"documenta_folder_id"`
 	CreatedAt          time.Time                `json:"created_at"`
 	UpdatedAt          time.Time                `json:"updated_at"`
 }
@@ -178,6 +181,7 @@ func (k *StrategicKPI) ToResponse() StrategicKPIResponse {
 		SegmentationAxes:   k.SegmentationAxes,
 		RelatedUnits:       k.RelatedUnits,
 		Notes:              k.Notes,
+		DocumentaFolderID:  k.DocumentaFolderID,
 		CreatedAt:          k.CreatedAt,
 		UpdatedAt:          k.UpdatedAt,
 	}
@@ -246,6 +250,7 @@ type OperationalKPI struct {
 	Lifecycle              string                `gorm:"size:100" json:"lifecycle"`
 	DataSource             string                `gorm:"size:255" json:"data_source"`
 	Notes                  string                `gorm:"type:text" json:"notes"`
+	DocumentaFolderID      string                `gorm:"size:255" json:"documenta_folder_id"`
 	CreatedAt              time.Time             `json:"created_at"`
 	UpdatedAt              time.Time             `json:"updated_at"`
 	DeletedAt              gorm.DeletedAt        `gorm:"index" json:"-"`
@@ -281,6 +286,7 @@ type OperationalKPIRequest struct {
 	Lifecycle              string     `json:"lifecycle" validate:"max=100"`
 	DataSource             string     `json:"data_source" validate:"max=255"`
 	Notes                  string     `json:"notes"`
+	DocumentaFolderID      string     `json:"documenta_folder_id"`
 }
 
 type OperationalKPIResponse struct {
@@ -314,6 +320,7 @@ type OperationalKPIResponse struct {
 	Lifecycle              string                        `json:"lifecycle"`
 	DataSource             string                        `json:"data_source"`
 	Notes                  string                        `json:"notes"`
+	DocumentaFolderID      string                        `json:"documenta_folder_id"`
 	CreatedAt              time.Time                     `json:"created_at"`
 	UpdatedAt              time.Time                     `json:"updated_at"`
 }
@@ -343,6 +350,7 @@ func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 		Lifecycle:              k.Lifecycle,
 		DataSource:             k.DataSource,
 		Notes:                  k.Notes,
+		DocumentaFolderID:      k.DocumentaFolderID,
 		CreatedAt:              k.CreatedAt,
 		UpdatedAt:              k.UpdatedAt,
 	}
@@ -406,6 +414,7 @@ type AwardKPI struct {
 	Lifecycle           string             `gorm:"size:100" json:"lifecycle"`
 	DataSource          string             `gorm:"size:255" json:"data_source"`
 	Notes               string             `gorm:"type:text" json:"notes"`
+	DocumentaFolderID   string             `gorm:"size:255" json:"documenta_folder_id"`
 	CreatedAt           time.Time          `json:"created_at"`
 	UpdatedAt           time.Time          `json:"updated_at"`
 	DeletedAt           gorm.DeletedAt     `gorm:"index" json:"-"`
@@ -439,6 +448,7 @@ type AwardKPIRequest struct {
 	Lifecycle           string     `json:"lifecycle" validate:"max=100"`
 	DataSource          string     `json:"data_source" validate:"max=255"`
 	Notes               string     `json:"notes"`
+	DocumentaFolderID   string     `json:"documenta_folder_id"`
 }
 
 type AwardKPIResponse struct {
@@ -468,6 +478,7 @@ type AwardKPIResponse struct {
 	Lifecycle           string                     `json:"lifecycle"`
 	DataSource          string                     `json:"data_source"`
 	Notes               string                     `json:"notes"`
+	DocumentaFolderID   string                     `json:"documenta_folder_id"`
 	CreatedAt           time.Time                  `json:"created_at"`
 	UpdatedAt           time.Time                  `json:"updated_at"`
 }
@@ -495,6 +506,7 @@ func (k *AwardKPI) ToResponse() AwardKPIResponse {
 		Lifecycle:           k.Lifecycle,
 		DataSource:          k.DataSource,
 		Notes:               k.Notes,
+		DocumentaFolderID:   k.DocumentaFolderID,
 		CreatedAt:           k.CreatedAt,
 		UpdatedAt:           k.UpdatedAt,
 	}
