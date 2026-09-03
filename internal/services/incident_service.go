@@ -1113,6 +1113,98 @@ func (s *incidentService) ListIncidents(ctx context.Context, filter *models.Inci
 	return responses, total, nil
 }
 
+// momraEEListEntry mirrors epm_incident_handler.go's EPMExternalEntity JSON shape
+// (EntityID/EECode/EEName) for unmarshaling Incident.AvailableEEList (a jsonb column,
+// see models/incident.go). Duplicated here rather than imported since this services
+// package doesn't depend on the handlers package.
+type momraEEListEntry struct {
+	EntityID string `json:"EntityID"`
+	EECode   string `json:"EECode"`
+	EEName   string `json:"EEName"`
+}
+
+// resolveIncidentEEDepartmentIDs resolves the set of Department IDs that MOMRA
+// declared eligible for THIS specific incident at submission time
+// (Incident.AvailableEEList — see epm_incident_handler.go's EEList/EPMExternalEntity
+// handling). This is narrower than the classification-wide EE-classification links
+// (deptRepo.FindMatching): MOMRA may name fewer EEs eligible for a given incident than
+// are generally linked to its special classification, so this incident-specific list
+// is the authoritative source for validateExternalDepartmentAssignment. Entries are
+// resolved the same way epm_incident_handler.go's resolveEERoutingDepartmentByCodeOrName
+// does: EntityID/EECode first (the stable key synced from MOMRA's EE master into
+// Department.Code), EEName as a fallback.
+func (s *incidentService) resolveIncidentEEDepartmentIDs(ctx context.Context, incident *models.Incident) map[uuid.UUID]bool {
+	allowed := map[uuid.UUID]bool{}
+	for _, d := range s.resolveIncidentEEDepartments(ctx, incident) {
+		allowed[d.ID] = true
+	}
+	return allowed
+}
+
+// resolveIncidentEEDepartments is the full-record counterpart of
+// resolveIncidentEEDepartmentIDs: same resolution (EntityID/EECode first, EEName
+// fallback), but returns the actual Department records rather than just a
+// membership set. Used by ExecuteTransition's auto-detect block below to merge these
+// incident-specific EEs into the classification/location-matched candidate list —
+// mirrors department_handler.go's MatchDepartment, which the frontend's picker uses,
+// so both stay in agreement about which departments are actually selectable.
+func (s *incidentService) resolveIncidentEEDepartments(ctx context.Context, incident *models.Incident) []models.Department {
+	if len(incident.AvailableEEList) == 0 {
+		return nil
+	}
+	var entries []momraEEListEntry
+	if err := json.Unmarshal(incident.AvailableEEList, &entries); err != nil {
+		return nil
+	}
+	var result []models.Department
+	seen := make(map[uuid.UUID]bool, len(entries))
+	for _, e := range entries {
+		var dept *models.Department
+		code := strings.TrimSpace(e.EntityID)
+		if code == "" {
+			code = strings.TrimSpace(e.EECode)
+		}
+		if code != "" {
+			if d, err := s.deptRepo.FindByCode(ctx, code); err == nil {
+				dept = d
+			}
+		}
+		if dept == nil && strings.TrimSpace(e.EEName) != "" {
+			if d, err := s.deptRepo.FindByNameOrNameAr(ctx, e.EEName, e.EEName); err == nil {
+				dept = d
+			}
+		}
+		if dept != nil && dept.Type == externalEntityDepartmentType && dept.IsActive && !seen[dept.ID] {
+			seen[dept.ID] = true
+			result = append(result, *dept)
+		}
+	}
+	return result
+}
+
+// validateExternalDepartmentAssignment enforces that, for an incident originally
+// submitted by MOMRA (Source == "MOMRA"), assigning an external-type department only
+// succeeds if that department is one of the External Entities MOMRA declared eligible
+// for this specific incident at submission time (see resolveIncidentEEDepartmentIDs).
+// Internal-type departments and non-MOMRA incidents are unrestricted — this rule only
+// protects MOMRA-sourced external-entity assignment.
+func (s *incidentService) validateExternalDepartmentAssignment(ctx context.Context, incident *models.Incident, departmentID uuid.UUID) error {
+	if incident.Source != "MOMRA" {
+		return nil
+	}
+	dept, err := s.deptRepo.FindByID(ctx, departmentID)
+	if err != nil {
+		return fmt.Errorf("department not found: %w", err)
+	}
+	if dept.Type != externalEntityDepartmentType {
+		return nil
+	}
+	if !s.resolveIncidentEEDepartmentIDs(ctx, incident)[departmentID] {
+		return fmt.Errorf("external entity %s is not in this incident's MOMRA-provided EE list", dept.Name)
+	}
+	return nil
+}
+
 func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req *models.IncidentUpdateRequest, userID uuid.UUID, userRoleIDs []uuid.UUID) (*models.IncidentResponse, error) {
 	// Begin transaction
 	tx := s.db.Begin()
@@ -1411,6 +1503,10 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		} else {
 			deptID, err := uuid.Parse(*req.DepartmentID)
 			if err == nil {
+				if err := s.validateExternalDepartmentAssignment(ctx, incident, deptID); err != nil {
+					tx.Rollback()
+					return nil, err
+				}
 				if incident.DepartmentID == nil || *incident.DepartmentID != deptID {
 					newVal := *req.DepartmentID
 					changes = append(changes, models.IncidentFieldChange{
@@ -3246,6 +3342,36 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		}
 		matchedDepts, _ := s.deptRepo.FindMatching(ctx, classID, locID, deptTypeFilter)
 
+		// For a MOMRA-sourced incident, auto-detect candidates must include this
+		// incident's own EEList-resolved departments (Incident.AvailableEEList), not
+		// just classification/location linkage — MOMRA can declare an EE eligible for
+		// a specific incident with no general classification link at all. Without
+		// this merge, a classification-linked EE and an EEList-only EE would produce
+		// len(matchedDepts)==1 (only the classification-linked one visible here),
+		// causing the "single match — auto-assign" branch below to silently override
+		// whatever the user actually selected in the frontend picker — which already
+		// shows both, since department_handler.go's MatchDepartment does this same
+		// merge. Kept in sync with that handler rather than sharing code directly,
+		// since handlers and services don't depend on each other.
+		wantsExternalMatch := deptTypeFilter == nil || *deptTypeFilter == externalEntityDepartmentType
+		if incident.Source == "MOMRA" && wantsExternalMatch && len(incident.AvailableEEList) > 0 {
+			eeDepartments := s.resolveIncidentEEDepartments(ctx, incident)
+			merged := make([]models.Department, 0, len(matchedDepts)+len(eeDepartments))
+			for _, d := range matchedDepts {
+				if d.Type != externalEntityDepartmentType {
+					merged = append(merged, d)
+				}
+			}
+			seen := make(map[uuid.UUID]bool, len(eeDepartments))
+			for _, d := range eeDepartments {
+				if !seen[d.ID] {
+					seen[d.ID] = true
+					merged = append(merged, d)
+				}
+			}
+			matchedDepts = merged
+		}
+
 		if len(matchedDepts) == 1 {
 			// Single match — auto-assign
 			updates["department_id"] = matchedDepts[0].ID
@@ -3260,9 +3386,32 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				tx.Rollback()
 				return nil, errors.New(i18n.T(ctx, "invalid_department_id"))
 			}
+			isMatched := false
+			for _, d := range matchedDepts {
+				if d.ID == deptID {
+					isMatched = true
+					break
+				}
+			}
+			if !isMatched {
+				tx.Rollback()
+				return nil, errors.New(i18n.T(ctx, "invalid_department_id"))
+			}
 			updates["department_id"] = deptID
 		}
 		// If no departments match, keep current department (graceful fallback)
+	}
+
+	// For a MOMRA-sourced incident, an external-type department assigned here (from
+	// any of the three branches above) must be one of the External Entities MOMRA
+	// declared eligible for THIS specific incident at submission time — see
+	// validateExternalDepartmentAssignment. Checked once here rather than in each
+	// branch since all three write the same "department_id" key into updates.
+	if deptID, ok := updates["department_id"].(uuid.UUID); ok {
+		if err := s.validateExternalDepartmentAssignment(ctx, incident, deptID); err != nil {
+			tx.Rollback()
+			return nil, err
+		}
 	}
 
 	// Handle user assignment from transition settings
@@ -3383,6 +3532,10 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				}
 			case "department_id":
 				if id, err := uuid.Parse(fieldValue); err == nil {
+					if err := s.validateExternalDepartmentAssignment(ctx, incident, id); err != nil {
+						tx.Rollback()
+						return nil, err
+					}
 					updates["department_id"] = id
 				}
 			case "location_id":
@@ -3635,8 +3788,20 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			// MOMRA outbound status sync (docs/MOMRA_Outbound_Integration_Spec_v1.0.md
 			// §3 Story B) — async so an outbound MOMRA call/retry never adds latency to
 			// this request. No-ops internally if no mapping exists for the new state.
+			// operatorName/operatorID/eeNotesFromMUN (TFIS v1.0 §11.3) are resolved
+			// synchronously here — before the goroutine, which uses context.Background()
+			// and so can't read the request-scoped ctx/req itself — then closed over.
 			if s.momraStatusSyncService != nil {
-				go s.momraStatusSyncService.SyncIncidentStatus(context.Background(), updatedForExec, transition.ToStateID)
+				var operatorName, operatorID string
+				if actor, actorErr := s.userRepo.FindByID(ctx, userID); actorErr == nil && actor != nil {
+					operatorName = strings.TrimSpace(actor.FirstName + " " + actor.LastName)
+					if operatorName == "" {
+						operatorName = actor.Username
+					}
+					operatorID = actor.Username
+				}
+				eeNotesFromMUN := req.Comment
+				go s.momraStatusSyncService.SyncIncidentStatus(context.Background(), updatedForExec, transition.ToStateID, operatorName, operatorID, eeNotesFromMUN)
 			}
 		}
 	}

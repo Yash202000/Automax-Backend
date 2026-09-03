@@ -17,6 +17,10 @@ type MOMRAStatusMappingRepository interface {
 	// gorm.ErrRecordNotFound if none is configured — callers must treat a missing
 	// mapping as a loggable gap, not a silent no-op (Story A acceptance criterion).
 	FindActiveByState(ctx context.Context, stateID uuid.UUID) (*models.MOMRAStatusMapping, error)
+	// FindActiveByWorkflowAndCaseStatusID is the reverse lookup used by inbound
+	// MOMRA->AutoMax status pushes (e.g. UpdateIncidentV2): given the incident's
+	// workflow and the CaseStatusID MOMRA sent, find which state that maps to.
+	FindActiveByWorkflowAndCaseStatusID(ctx context.Context, workflowID uuid.UUID, caseStatusID string) (*models.MOMRAStatusMapping, error)
 	ListByWorkflow(ctx context.Context, workflowID uuid.UUID) ([]models.MOMRAStatusMapping, error)
 }
 
@@ -51,6 +55,14 @@ func (r *momraStatusMappingRepository) FindByID(ctx context.Context, id uuid.UUI
 func (r *momraStatusMappingRepository) FindActiveByState(ctx context.Context, stateID uuid.UUID) (*models.MOMRAStatusMapping, error) {
 	var m models.MOMRAStatusMapping
 	if err := r.db.WithContext(ctx).First(&m, "state_id = ? AND is_active = ?", stateID, true).Error; err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+func (r *momraStatusMappingRepository) FindActiveByWorkflowAndCaseStatusID(ctx context.Context, workflowID uuid.UUID, caseStatusID string) (*models.MOMRAStatusMapping, error) {
+	var m models.MOMRAStatusMapping
+	if err := r.db.WithContext(ctx).First(&m, "workflow_id = ? AND case_status_id = ? AND is_active = ?", workflowID, caseStatusID, true).Error; err != nil {
 		return nil, err
 	}
 	return &m, nil

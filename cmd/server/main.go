@@ -234,7 +234,7 @@ func main() {
 	categoryHandler := handlers.NewCategoryHandler(categoryService)
 	classificationHandler := handlers.NewClassificationHandler(classificationRepo)
 	locationHandler := handlers.NewLocationHandler(locationRepo, cfg)
-	departmentHandler := handlers.NewDepartmentHandler(departmentRepo, userRepo, cfg)
+	departmentHandler := handlers.NewDepartmentHandler(departmentRepo, userRepo, incidentRepo, cfg)
 	extensionHandler := handlers.NewExtensionHandler(extensionService, cfg)
 	roleHandler := handlers.NewRoleHandler(roleRepo, permissionRepo, userRepo, wsHub, cfg)
 	actionLogHandler := handlers.NewActionLogHandler(actionLogService, validate)
@@ -367,7 +367,7 @@ func main() {
 
 	// Initialize EPM handler
 	epmHandler := handlers.NewEPMHandler(userRepo, jwtManager, sessionStore)
-	epmIncidentHandler := handlers.NewEPMIncidentHandler(userRepo, locationRepo, classificationRepo, incidentRepo, workflowRepo, lookupRepo, departmentRepo, jwtManager, sessionStore, minioStorage, db)
+	epmIncidentHandler := handlers.NewEPMIncidentHandler(userRepo, locationRepo, classificationRepo, incidentRepo, workflowRepo, lookupRepo, departmentRepo, momraStatusMappingRepo, jwtManager, sessionStore, minioStorage, db)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore, userRepo)
@@ -414,7 +414,8 @@ func main() {
 	app.Patch("/Momra/API/EPM/UpdateIncidentV2", epmIncidentHandler.UpdateIncidentV2)
 	app.Patch("/Momra/API/EPM/ReOpenIncidentV2", epmIncidentHandler.ReopenIncidentV2)
 	// STUB: MOMRA->Automax external-entity assignment notification. Mechanism/contract
-	// not yet confirmed by MOMRA (OD-N2) — see AssignExternalEntity's doc comment.
+	// not yet confirmed by MOMRA (OD-N2) — see AssignExternalEntity's doc comment. Kept
+	// alongside UpdateIncidentV2, which now also persists EE fields on every call.
 	app.Patch("/Momra/API/EPM/AssignExternalEntity", epmIncidentHandler.AssignExternalEntity)
 
 	api := app.Group("/api")
