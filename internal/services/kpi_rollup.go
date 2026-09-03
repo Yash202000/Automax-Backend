@@ -238,12 +238,18 @@ func BuildMetricPeriodSeries(db *gorm.DB, metric *models.KpiMetric, kpiID uuid.U
 
 // ResolveDisplayPeriod picks which period the Metric Card should show: the
 // actual current calendar period if it has approved data (entries or a
-// target), otherwise the most recently created approved entry's period, or
-// failing that the most recently created approved target's period — so a
-// metric someone just populated for a different period (e.g. testing next
-// month, or backfilling a past one) doesn't silently read as "No Data" just
-// because it isn't literally "now". isFallback tells the caller whether the
-// returned period differs from the real current one, so the UI can label it.
+// target), otherwise the chronologically latest period with an approved
+// entry, or failing that the chronologically latest period with an approved
+// target — so a metric someone just populated for a different period (e.g.
+// testing next month, or backfilling a past one) doesn't silently read as
+// "No Data" just because it isn't literally "now". The fallback ranks
+// candidates by their own (year, period) position rather than by when the row
+// was created/approved — a metric can have several approved Targets and
+// several approved Entries across periods, and approving/backfilling them out
+// of chronological order (e.g. an earlier month entered after a later one is
+// already approved) must not make an older period look "latest" just because
+// it was the most recently touched row. isFallback tells the caller whether
+// the returned period differs from the real current one, so the UI can label it.
 func ResolveDisplayPeriod(db *gorm.DB, metric *models.KpiMetric, kpiID uuid.UUID, kpiCode, kpiType string) (year int, periodCode string, isFallback bool) {
 	frequency := metric.ReportingFrequency
 	if frequency == "" {
@@ -265,16 +271,32 @@ func ResolveDisplayPeriod(db *gorm.DB, metric *models.KpiMetric, kpiID uuid.UUID
 		return currentYear, currentPeriod, false
 	}
 
-	var latestEntry models.KpiEntry
-	if db.Where("kpi_id = ? AND kpi_type = ? AND metric_id = ? AND status = ?", kpiID, kpiType, metric.ID, models.KpiEntryStatusApproved).
-		Order("created_at DESC").First(&latestEntry).Error == nil {
-		return latestEntry.ReportingYear, latestEntry.PeriodCode, true
+	var approvedEntries []models.KpiEntry
+	db.Select("reporting_year", "period_code").
+		Where("kpi_id = ? AND kpi_type = ? AND metric_id = ? AND status = ?", kpiID, kpiType, metric.ID, models.KpiEntryStatusApproved).
+		Find(&approvedEntries)
+	if len(approvedEntries) > 0 {
+		latest := approvedEntries[0]
+		for _, e := range approvedEntries[1:] {
+			if PeriodSortKey(e.ReportingYear, e.PeriodCode) > PeriodSortKey(latest.ReportingYear, latest.PeriodCode) {
+				latest = e
+			}
+		}
+		return latest.ReportingYear, latest.PeriodCode, true
 	}
 
-	var latestTarget models.KpiAnnualTarget
-	if db.Where("kpi_code = ? AND kpi_type = ? AND metric_id = ? AND target_status = 'approved'", kpiCode, kpiType, metric.ID).
-		Order("created_at DESC").First(&latestTarget).Error == nil {
-		return latestTarget.TargetYear, latestTarget.PeriodCode, true
+	var approvedTargets []models.KpiAnnualTarget
+	db.Select("target_year", "period_code").
+		Where("kpi_code = ? AND kpi_type = ? AND metric_id = ? AND target_status = 'approved'", kpiCode, kpiType, metric.ID).
+		Find(&approvedTargets)
+	if len(approvedTargets) > 0 {
+		latest := approvedTargets[0]
+		for _, t := range approvedTargets[1:] {
+			if PeriodSortKey(t.TargetYear, t.PeriodCode) > PeriodSortKey(latest.TargetYear, latest.PeriodCode) {
+				latest = t
+			}
+		}
+		return latest.TargetYear, latest.PeriodCode, true
 	}
 
 	return currentYear, currentPeriod, false

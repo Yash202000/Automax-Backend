@@ -112,6 +112,9 @@ type IncidentService interface {
 	SetFCMService(fcm *FCMService)
 	// SetIntegrationExecutor wires in the IntegrationExecutor (called post-construction).
 	SetIntegrationExecutor(exec IntegrationExecutor)
+	// SetMOMRAStatusSyncService wires in the MOMRA outbound status sync (called
+	// post-construction, same pattern as SetIntegrationExecutor).
+	SetMOMRAStatusSyncService(svc MOMRAStatusSyncService)
 	// SetActionExecutor wires in the ActionExecutor (called post-construction).
 	SetActionExecutor(ae ActionExecutor)
 	// SetPublicFeedbackRepo wires in the feedback repo so IsFinalClose transitions can
@@ -151,6 +154,7 @@ type incidentService struct {
 	userService             UserService
 	fcmService              *FCMService
 	integrationExecutor     IntegrationExecutor
+	momraStatusSyncService  MOMRAStatusSyncService
 	actionExecutor          ActionExecutor
 	publicFeedbackRepo      repository.IncidentPublicFeedbackRepository
 	smsFeedbackPendingRepo  repository.SmsFeedbackPendingRepository
@@ -223,6 +227,11 @@ func (s *incidentService) SetIvrSmsLinkRepo(repo repository.IvrSmsLinkRepository
 // SetFCMService wires the FCMService into the incident service.
 func (s *incidentService) SetFCMService(fcm *FCMService) {
 	s.fcmService = fcm
+}
+
+// SetMOMRAStatusSyncService wires the MOMRA outbound status sync into the incident service.
+func (s *incidentService) SetMOMRAStatusSyncService(svc MOMRAStatusSyncService) {
+	s.momraStatusSyncService = svc
 }
 
 // SetIntegrationExecutor wires the IntegrationExecutor into the incident service.
@@ -3622,6 +3631,13 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			s.integrationExecutor.RunStateTriggers(ctx, updatedForExec, transition.ToStateID, newState.Name, "enter")
 			// State-exit triggers on the source state
 			s.integrationExecutor.RunStateTriggers(ctx, updatedForExec, transition.FromStateID, transition.FromState.Name, "exit")
+
+			// MOMRA outbound status sync (docs/MOMRA_Outbound_Integration_Spec_v1.0.md
+			// §3 Story B) — async so an outbound MOMRA call/retry never adds latency to
+			// this request. No-ops internally if no mapping exists for the new state.
+			if s.momraStatusSyncService != nil {
+				go s.momraStatusSyncService.SyncIncidentStatus(context.Background(), updatedForExec, transition.ToStateID)
+			}
 		}
 	}
 

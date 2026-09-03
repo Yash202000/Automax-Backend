@@ -140,6 +140,8 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		&models.IntegrationExecutionLog{},
 		&models.IncidentBridge{},
 		&models.WebhookCallbackConfig{},
+		// MOMRA CRM outbound integration
+		&models.MOMRAStatusMapping{},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)

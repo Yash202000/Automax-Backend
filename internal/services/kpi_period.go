@@ -138,6 +138,18 @@ func FormatPeriodLabel(periodCode string, year int) string {
 	return fmt.Sprintf("%s %d", periodCode, year)
 }
 
+var periodOrdinals = map[string]int{
+	"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+	"jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+	"q1": 1, "q2": 2, "q3": 3, "q4": 4,
+	"h1": 1, "h2": 2,
+	"annual": 1,
+}
+
+func PeriodSortKey(year int, periodCode string) int {
+	return year*100 + periodOrdinals[strings.ToLower(periodCode)]
+}
+
 // GetEffectiveTarget finds the approved KpiAnnualTarget for a metric's KPI in
 // the current reporting period — the same period-matching lookup CreateEntry
 // already uses to snapshot a target onto a new entry — so a display (like the
