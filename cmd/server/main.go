@@ -371,7 +371,7 @@ func main() {
 
 	// Initialize EPM handler
 	epmHandler := handlers.NewEPMHandler(userRepo, jwtManager, sessionStore)
-	epmIncidentHandler := handlers.NewEPMIncidentHandler(userRepo, locationRepo, classificationRepo, incidentRepo, workflowRepo, lookupRepo, departmentRepo, momraStatusMappingRepo, jwtManager, sessionStore, minioStorage, db)
+	epmIncidentHandler := handlers.NewEPMIncidentHandler(userRepo, locationRepo, classificationRepo, incidentRepo, workflowRepo, lookupRepo, departmentRepo, momraStatusMappingRepo, jwtManager, sessionStore, minioStorage, db, wsHub)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore, userRepo)
