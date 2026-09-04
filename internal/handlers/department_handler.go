@@ -601,16 +601,19 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 
 	// Read file content
 	var importData []struct {
-		ID          uuid.UUID  `json:"id"`
-		Name        string     `json:"name"`
-		Code        string     `json:"code"`
-		Description string     `json:"description"`
-		ParentID    *uuid.UUID `json:"parent_id"`
-		Level       int        `json:"level"`
-		Path        string     `json:"path"`
-		ManagerID   *uuid.UUID `json:"manager_id"`
-		IsActive    bool       `json:"is_active"`
-		SortOrder   int        `json:"sort_order"`
+		ID                uuid.UUID  `json:"id"`
+		Name              string     `json:"name"`
+		Code              string     `json:"code"`
+		Description       string     `json:"description"`
+		ParentID          *uuid.UUID `json:"parent_id"`
+		Level             int        `json:"level"`
+		Path              string     `json:"path"`
+		ManagerID         *uuid.UUID `json:"manager_id"`
+		IsActive          bool       `json:"is_active"`
+		SortOrder         int        `json:"sort_order"`
+		LocationIDs       string     `json:"location_ids"`
+		ClassificationIDs string     `json:"classification_ids"`
+		RoleIDs           string     `json:"role_ids"`
 	}
 
 	// Parse JSON from file
@@ -680,6 +683,17 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 		} else {
 			imported++
 			idMapping[data.ID] = newID
+
+			// Assign locations, classifications, and roles if provided
+			if locationIDs := parseUUIDList(data.LocationIDs); len(locationIDs) > 0 {
+				h.repo.AssignLocations(c.UserContext(), newID, locationIDs)
+			}
+			if classificationIDs := parseUUIDList(data.ClassificationIDs); len(classificationIDs) > 0 {
+				h.repo.AssignClassifications(c.UserContext(), newID, classificationIDs)
+			}
+			if roleIDs := parseUUIDList(data.RoleIDs); len(roleIDs) > 0 {
+				h.repo.AssignRoles(c.UserContext(), newID, roleIDs)
+			}
 		}
 	}
 
@@ -700,4 +714,20 @@ func (h *DepartmentHandler) importDeptCode(code string) string {
 		return ""
 	}
 	return code
+}
+
+// parseUUIDList parses a comma-separated list of UUIDs (e.g. "id1, id2, id3"),
+// skipping blank entries and any that fail to parse as a UUID.
+func parseUUIDList(s string) []uuid.UUID {
+	var ids []uuid.UUID
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if id, err := uuid.Parse(part); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
