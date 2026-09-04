@@ -277,21 +277,6 @@ func (h *UserHandler) AdminDeleteUser(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "user_deleted"), nil)
 }
 
-func parseUUIDList(raw string) []uuid.UUID {
-	if raw == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	result := make([]uuid.UUID, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if id, err := uuid.Parse(p); err == nil {
-			result = append(result, id)
-		}
-	}
-	return result
-}
-
 func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit, _ := strconv.Atoi(c.Query("limit", "10"))
@@ -299,11 +284,12 @@ func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 	phone := strings.TrimSpace(c.Query("phone", ""))
 	extension := strings.TrimSpace(c.Query("extension", ""))
 	callStatus := strings.TrimSpace(c.Query("call_status", ""))
+	withIncident, _ := strconv.ParseBool(c.Query("with_incident", "false"))
 
-	roleIDs := parseUUIDList(c.Query("role_ids", ""))
-	departmentIDs := parseUUIDList(c.Query("department_ids", ""))
-	locationIDs := parseUUIDList(c.Query("location_ids", ""))
-	classificationIDs := parseUUIDList(c.Query("classification_ids", ""))
+	roleIDs := utils.ParseUUIDList(c.Query("role_ids", ""))
+	departmentIDs := utils.ParseUUIDList(c.Query("department_ids", ""))
+	locationIDs := utils.ParseUUIDList(c.Query("location_ids", ""))
+	classificationIDs := utils.ParseUUIDList(c.Query("classification_ids", ""))
 
 	// Department-scoped: users with view_department_only see only their department's users.
 	// When ENFORCE_USER_ACCESS_SCOPE=true, uses M2M relationships for all three dimensions.
@@ -360,7 +346,7 @@ func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 		limit = 1000
 	}
 
-	users, total, err := h.userService.ListUsers(c.UserContext(), page, limit, search, phone, extension, callStatus, roleIDs, departmentIDs, locationIDs, classificationIDs, false)
+	users, total, err := h.userService.ListUsers(c.UserContext(), page, limit, search, phone, extension, callStatus, roleIDs, departmentIDs, locationIDs, classificationIDs, withIncident, false)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_users"))
 	}
@@ -704,7 +690,7 @@ func (h *UserHandler) Export(c *fiber.Ctx) error {
 	}
 
 	// Get all users without pagination
-	users, _, err := h.userService.ListUsers(c.UserContext(), 1, 10000, "", "", "", "", nil, departmentIDs, nil, nil)
+	users, _, err := h.userService.ListUsers(c.UserContext(), 1, 10000, "", "", "", "", nil, departmentIDs, nil, nil, false)
 	if err != nil {
 		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}

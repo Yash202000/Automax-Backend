@@ -34,17 +34,18 @@ func (a *ActionLog) BeforeCreate(tx *gorm.DB) error {
 
 // ActionLogFilter holds filter parameters for querying action logs
 type ActionLogFilter struct {
-	UserID     *uuid.UUID `query:"user_id"    json:"user_id"    validate:"omitempty,uuid4"`
-	Action     string     `query:"action"     json:"action"`
-	Module     string     `query:"module"     json:"module"     validate:"omitempty"`
-	Status     string     `query:"status"     json:"status"     validate:"omitempty,oneof=success failed"`
-	ResourceID string     `query:"resource_id" json:"resource_id" validate:"omitempty"`
-	StartDate  *time.Time `query:"-"          json:"start_date" validate:"omitempty"`
-	EndDate    *time.Time `query:"-"          json:"end_date"   validate:"omitempty"`
-	Search     string     `query:"search"     json:"search"     validate:"omitempty"`
-	Sort       string     `query:"sort"       json:"sort"       validate:"omitempty,oneof=asc desc"`
-	Page       int        `query:"page"       json:"page"       validate:"omitempty,gte=1"`
-	Limit      int        `query:"limit"      json:"limit"      validate:"omitempty,gte=1,lte=100"`
+	UserID     *uuid.UUID  `query:"user_id"    json:"user_id"    validate:"omitempty,uuid4"`
+	Action     string      `query:"action"     json:"action"`
+	Module     string      `query:"module"     json:"module"     validate:"omitempty"`
+	Status     string      `query:"status"     json:"status"     validate:"omitempty,oneof=success failed"`
+	ResourceID string      `query:"resource_id" json:"resource_id" validate:"omitempty"`
+	RoleIDs    []uuid.UUID `query:"-"          json:"role_ids"`
+	StartDate  *time.Time  `query:"-"          json:"start_date" validate:"omitempty"`
+	EndDate    *time.Time  `query:"-"          json:"end_date"   validate:"omitempty"`
+	Search     string      `query:"search"     json:"search"     validate:"omitempty"`
+	Sort       string      `query:"sort"       json:"sort"       validate:"omitempty,oneof=asc desc"`
+	Page       int         `query:"page"       json:"page"       validate:"omitempty,gte=1"`
+	Limit      int         `query:"limit"      json:"limit"      validate:"omitempty,gte=1,lte=100"`
 }
 
 // ActionLogResponse is the response structure for action logs

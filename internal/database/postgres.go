@@ -3,6 +3,7 @@ package database
 import (
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1048,7 +1049,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 	seedDefaultIncidentWorkflow(db, defaultDept.ID, supportDept.ID, adminUser.ID)
 
 	// Seed default lookup categories
-	seedLookupCategories(db)
+	seedLookupCategories(db, cfg)
 
 	if cfg.GoalManagement.Enabled {
 		// Seed default evidence approval workflow
@@ -1329,7 +1330,7 @@ func unseedGoalManagement(db *gorm.DB) {
 	log.Println("  [unseed] done")
 }
 
-func seedLookupCategories(db *gorm.DB) {
+func seedLookupCategories(db *gorm.DB, cfg *config.Config) {
 	// Priority category
 	var priorityCategory models.LookupCategory
 	result := db.Where("code = ?", "PRIORITY").First(&priorityCategory)
@@ -1356,6 +1357,38 @@ func seedLookupCategories(db *gorm.DB) {
 			for _, v := range priorityValues {
 				if err := db.Create(&v).Error; err != nil {
 					log.Printf("Failed to create priority value %s: %v", v.Code, err)
+				}
+			}
+		}
+	}
+
+	// Environment configuration category — EPM940 only
+	if strings.EqualFold(strings.TrimSpace(cfg.ClientCode), constants.CLIENT_CODE.EPM940) {
+		var categoryTypeCategory models.LookupCategory
+		result = db.Where("code = ?", "ENV_CONFIGURATION").First(&categoryTypeCategory)
+		if result.Error == gorm.ErrRecordNotFound {
+			categoryTypeCategory = models.LookupCategory{
+				Code:        "ENV_CONFIGURATION",
+				Name:        "ENV CONFIGURATION",
+				NameAr:      "إعدادات البيئة",
+				Description: "System environment configuration",
+				IsSystem:    true,
+				IsActive:    true,
+			}
+			if err := db.Create(&categoryTypeCategory).Error; err != nil {
+				log.Printf("Failed to create category type category: %v", err)
+			} else {
+				// Create category type values
+				categoryTypeValues := []models.LookupValue{
+					{CategoryID: categoryTypeCategory.ID, Code: "CITIZEN_ATTACHMENT_SIZE_LIMIT", Name: cfg.CitizenAttachmentSizeLimit, SortOrder: 1, Description: "Maximum size of citizen attachment", Color: "#EF4444", IsDefault: false, IsActive: true},
+					{CategoryID: categoryTypeCategory.ID, Code: "INTERNAL_ATTACHMENT_SIZE_LIMIT", Name: cfg.InternalAttachmentSizeLimit, SortOrder: 2, Description: "Maximum size of internal attachment", Color: "#F97316", IsDefault: false, IsActive: true},
+					{CategoryID: categoryTypeCategory.ID, Code: "MAX_DESCRIPTION_LENGTH", Name: strconv.Itoa(cfg.MaxDescriptionLength), SortOrder: 3, Description: "Maximum description length", Color: "#EAB308", IsDefault: false, IsActive: true},
+					{CategoryID: categoryTypeCategory.ID, Code: "CHATBOT_URL", Name: cfg.ChatbotURL, SortOrder: 4, Description: "URL of the chatbot", Color: "#3B82F6", IsDefault: false, IsActive: true},
+				}
+				for _, v := range categoryTypeValues {
+					if err := db.Create(&v).Error; err != nil {
+						log.Printf("Failed to create category type value %s: %v", v.Code, err)
+					}
 				}
 			}
 		}
