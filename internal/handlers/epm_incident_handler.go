@@ -15,6 +15,7 @@ import (
 	"github.com/automax/backend/internal/database"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
@@ -37,6 +38,7 @@ type EPMIncidentHandler struct {
 	sessionStore           *database.SessionStore
 	storage                *storage.MinIOStorage
 	db                     *gorm.DB
+	wsHub                  *services.WSHub
 }
 
 func NewEPMIncidentHandler(
@@ -52,6 +54,7 @@ func NewEPMIncidentHandler(
 	sessionStore *database.SessionStore,
 	minioStorage *storage.MinIOStorage,
 	db *gorm.DB,
+	wsHub *services.WSHub,
 ) *EPMIncidentHandler {
 	return &EPMIncidentHandler{
 		userRepo:               userRepo,
@@ -66,7 +69,60 @@ func NewEPMIncidentHandler(
 		sessionStore:           sessionStore,
 		storage:                minioStorage,
 		db:                     db,
+		wsHub:                  wsHub,
 	}
+}
+
+// broadcastIncidentCreated notifies all connected clients (incident list/dashboard
+// pages) that a new incident was created via MOMRA, mirroring
+// incidentService.CreateIncident's own "incident_created" broadcast
+// (internal/services/incident_service.go) so MOMRA-sourced incidents show up live
+// the same way incidents created through the normal app flow do. transition_role_ids
+// is left empty (unlike the app-flow broadcast) since computing "who can act on this"
+// requires the workflow's transitions/roles preloaded, which this handler doesn't
+// load — an empty slice means "all users can see it" per the frontend's own contract.
+func (h *EPMIncidentHandler) broadcastIncidentCreated(incident *models.Incident) {
+	if h.wsHub == nil {
+		return
+	}
+	resp := models.ToIncidentResponse(incident)
+	h.wsHub.BroadcastToAll("incident_created", map[string]interface{}{
+		"incident":            resp,
+		"transition_role_ids": []string{},
+	})
+}
+
+// broadcastStateChanged notifies subscribers of a specific incident that MOMRA moved
+// it to a new workflow state, mirroring incidentService.ExecuteTransition's own
+// "state_changed" broadcast shape (internal/services/incident_service.go) so the
+// incident detail page updates live regardless of whether the transition came from a
+// human agent or a MOMRA system callback.
+func (h *EPMIncidentHandler) broadcastStateChanged(incidentID uuid.UUID, fromStateName, toStateName string, performedBy uuid.UUID, comment string) {
+	if h.wsHub == nil {
+		return
+	}
+	h.wsHub.BroadcastToIncident(incidentID, "state_changed", map[string]interface{}{
+		"incident_id":   incidentID,
+		"from_state":    fromStateName,
+		"to_state":      toStateName,
+		"transition_id": nil,
+		"comment":       comment,
+		"performed_by":  performedBy,
+	}, performedBy)
+}
+
+// broadcastIncidentUpdated notifies subscribers of a specific incident that MOMRA
+// changed one of its fields (e.g. external-entity assignment, evaluation survey
+// result) without a workflow state transition — used where handleEEOutcome/
+// UpdateIncidentV2/ReopenIncidentV2 update the record but don't move it to a new
+// state.
+func (h *EPMIncidentHandler) broadcastIncidentUpdated(incidentID uuid.UUID, performedBy uuid.UUID) {
+	if h.wsHub == nil {
+		return
+	}
+	h.wsHub.BroadcastToIncident(incidentID, "incident_updated", map[string]interface{}{
+		"incident_id": incidentID,
+	}, performedBy)
 }
 
 // externalEntityDepartmentType is the Department.Type value used for External Entities (EE).
@@ -193,11 +249,15 @@ type EPMInsertIncidentRequest struct {
 	IncidentStartDate string   `json:"incidentStartDate"`
 	IncidentStatusID  int      `json:"incidentStatusID"`
 	IqamaID           string   `json:"iqamaID"`
-	IssueDiscription  string   `json:"issueDiscription"`
-	Language          string   `json:"language"`
-	LastName          string   `json:"lastName"`
-	Latitude          string   `json:"latitude"`
-	Longitude         string   `json:"longitude"`
+	// IssueDescription matches TFIS v1.0 Table 30's field dictionary. The prior
+	// "issueDiscription" (misspelled) key was AutoMax's own typo, not a MOMRA contract
+	// quirk (unlike SubBaladiyaName/EntityID below, which do have spec/payload evidence
+	// justifying their naming) — dropped rather than kept as an alias.
+	IssueDescription string `json:"issueDescription"`
+	Language         string `json:"language"`
+	LastName         string `json:"lastName"`
+	Latitude         string `json:"latitude"`
+	Longitude        string `json:"longitude"`
 	// LocationDirections is the key MOMRA's real payloads use.
 	LocationDirections   string `json:"LocationDirections"`
 	MainClassificationID string `json:"mainClassificationID"`
@@ -329,11 +389,11 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 	if req.FirstName == "" {
 		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "firstName is required")
 	}
-	if req.IssueDiscription == "" {
-		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "issueDiscription is required")
+	if req.IssueDescription == "" {
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "issueDescription is required")
 	}
-	if len(req.IssueDiscription) > 250 {
-		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "issueDiscription exceeds maximum length of 250 characters")
+	if len(req.IssueDescription) > 250 {
+		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "issueDescription exceeds maximum length of 250 characters")
 	}
 	if req.Priority == "" {
 		return epmInsertErrorResponse(c, fiber.StatusBadRequest, "priority is required")
@@ -587,12 +647,34 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 		workflow = &workflows[0]
 	}
 
-	initialState, err := h.workflowRepo.GetInitialState(c.UserContext(), workflow.ID)
-	if err != nil {
-		return epmInsertErrorResponse(c, fiber.StatusInternalServerError, "No initial state found for incident workflow")
+	// If MOMRA sent an incidentStatusID that has an admin-configured WorkflowState
+	// mapping (momra_status_mappings — the same table UpdateIncidentV2 consults in
+	// reverse), create the incident directly in that mapped state instead of always
+	// forcing the workflow's default initial state. Falls back to the workflow's
+	// initial state when no mapping exists for this code (or none was sent), rather
+	// than rejecting the incident outright — the mapping table isn't guaranteed to be
+	// fully populated yet.
+	var initialState *models.WorkflowState
+	if req.IncidentStatusID != 0 {
+		mapping, mapErr := h.momraStatusMappingRepo.FindActiveByWorkflowAndCaseStatusID(c.UserContext(), workflow.ID, strconv.Itoa(req.IncidentStatusID))
+		switch {
+		case mapErr == nil:
+			var mappedState models.WorkflowState
+			if err := h.db.WithContext(c.UserContext()).First(&mappedState, "id = ?", mapping.StateID).Error; err == nil {
+				initialState = &mappedState
+			}
+		case !errors.Is(mapErr, gorm.ErrRecordNotFound):
+			return epmInsertErrorResponse(c, fiber.StatusInternalServerError, "Failed to resolve status mapping: "+mapErr.Error())
+		}
+	}
+	if initialState == nil {
+		initialState, err = h.workflowRepo.GetInitialState(c.UserContext(), workflow.ID)
+		if err != nil {
+			return epmInsertErrorResponse(c, fiber.StatusInternalServerError, "No initial state found for incident workflow")
+		}
 	}
 
-	title := req.IssueDiscription
+	title := req.IssueDescription
 	if title == "" {
 		title = fmt.Sprintf("MOMRA Incident - %s", req.IncidentNo)
 	}
@@ -600,11 +682,11 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 		title = title[:200]
 	}
 
-	description := req.IssueDiscription
+	description := req.IssueDescription
 	if req.BeneficiaryInfo != "" {
 		description = req.BeneficiaryInfo
-		if req.IssueDiscription != "" {
-			description += "\n" + req.IssueDiscription
+		if req.IssueDescription != "" {
+			description += "\n" + req.IssueDescription
 		}
 	}
 	if len(description) > 1000 {
@@ -665,6 +747,7 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 	if err := h.incidentRepo.Create(c.UserContext(), incident); err != nil {
 		return epmInsertErrorResponse(c, fiber.StatusInternalServerError, "Failed to create incident: "+err.Error())
 	}
+	h.broadcastIncidentCreated(incident)
 
 	if resolvedPriority != nil {
 		h.incidentRepo.SetLookupValues(c.UserContext(), incident.ID, []models.LookupValue{*resolvedPriority})
@@ -1013,6 +1096,12 @@ func (h *EPMIncidentHandler) handleEEOutcome(c *fiber.Ctx, resolve bool) error {
 		})
 	}
 
+	oldStateName := ""
+	if incident.CurrentState != nil {
+		oldStateName = incident.CurrentState.Name
+	}
+	h.broadcastStateChanged(incident.ID, oldStateName, targetState.Name, claims.UserID, req.ActionDescription)
+
 	history := &models.IncidentTransitionHistory{
 		ID:             uuid.New(),
 		IncidentID:     incident.ID,
@@ -1204,6 +1293,12 @@ func (h *EPMIncidentHandler) UpdateIncidentV2(c *fiber.Ctx) error {
 	}
 
 	if stateChanged {
+		oldStateName := ""
+		if incident.CurrentState != nil {
+			oldStateName = incident.CurrentState.Name
+		}
+		h.broadcastStateChanged(incident.ID, oldStateName, targetState.Name, claims.UserID, req.ActionDescription)
+
 		history := &models.IncidentTransitionHistory{
 			ID:             uuid.New(),
 			IncidentID:     incident.ID,
@@ -1320,6 +1415,7 @@ func (h *EPMIncidentHandler) ReopenIncidentV2(c *fiber.Ctx) error {
 		}); err != nil {
 			return momraV2Response(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_record_evaluation"), false)
 		}
+		h.broadcastIncidentUpdated(incident.ID, claims.UserID)
 		return momraV2Response(c, fiber.StatusOK, "Evaluation recorded; incident remains resolved", true)
 	}
 
@@ -1342,6 +1438,12 @@ func (h *EPMIncidentHandler) ReopenIncidentV2(c *fiber.Ctx) error {
 	if err := h.incidentRepo.UpdateFields(c.UserContext(), incident.ID, updates); err != nil {
 		return momraV2Response(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_reopen_incident_epm"), false)
 	}
+
+	oldStateName := ""
+	if incident.CurrentState != nil {
+		oldStateName = incident.CurrentState.Name
+	}
+	h.broadcastStateChanged(incident.ID, oldStateName, initialState.Name, claims.UserID, "Reopened - beneficiary evaluation: "+req.EvaluationStatus)
 
 	history := &models.IncidentTransitionHistory{
 		ID:             uuid.New(),
@@ -1454,6 +1556,7 @@ func (h *EPMIncidentHandler) AssignExternalEntity(c *fiber.Ctx) error {
 	if err := h.incidentRepo.UpdateFields(c.UserContext(), incident.ID, updates); err != nil {
 		return momraV2Response(c, fiber.StatusInternalServerError, "Failed to record external entity assignment: "+err.Error(), false)
 	}
+	h.broadcastIncidentUpdated(incident.ID, claims.UserID)
 
 	return momraV2Response(c, fiber.StatusOK, "External entity assignment recorded successfully", true)
 }
