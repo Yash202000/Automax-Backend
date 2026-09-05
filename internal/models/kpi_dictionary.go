@@ -18,10 +18,18 @@ const (
 	KPIPolarityDescending = "descending"
 )
 
+// KPI Workflow states — the KPI dictionary's activation_status column now
+// mirrors the KPI Workflow's current state (see kpi_dictionary_workflow_service.go),
+// widened from the old 3-value draft/active/inactive domain to these 5 codes.
+// KPIStatusInactive is retained only for reading pre-existing rows; nothing
+// new writes it.
 const (
-	KPIStatusActive   = "active"
-	KPIStatusInactive = "inactive"
 	KPIStatusDraft    = "draft"
+	KPIStatusReviewed = "reviewed"
+	KPIStatusApproved = "approved"
+	KPIStatusActive   = "active"
+	KPIStatusClosed   = "closed"
+	KPIStatusInactive = "inactive"
 )
 
 const (
@@ -76,6 +84,7 @@ type StrategicKPI struct {
 	RelatedUnits       string           `gorm:"type:text" json:"related_units"`
 	Notes              string           `gorm:"type:text" json:"notes"`
 	DocumentaFolderID  string           `gorm:"size:255" json:"documenta_folder_id"`
+	WorkflowInstanceID *uuid.UUID       `gorm:"type:uuid;index" json:"workflow_instance_id"`
 	CreatedAt          time.Time        `json:"created_at"`
 	UpdatedAt          time.Time        `json:"updated_at"`
 	DeletedAt          gorm.DeletedAt   `gorm:"index" json:"-"`
@@ -101,7 +110,6 @@ type StrategicKPIRequest struct {
 	GoalID             uuid.UUID  `json:"goal_id" validate:"required"`
 	ProcessID          uuid.UUID  `json:"process_id" validate:"required"`
 	Polarity           string     `json:"polarity" validate:"omitempty,oneof=ascending descending"`
-	ActivationStatus   string     `json:"activation_status" validate:"omitempty,oneof=draft active inactive"`
 	DescriptionEn      string     `json:"description_en"`
 	DescriptionAr      string     `json:"description_ar"`
 	Formula            string     `json:"formula"`
@@ -150,6 +158,7 @@ type StrategicKPIResponse struct {
 	RelatedUnits       string                   `json:"related_units"`
 	Notes              string                   `json:"notes"`
 	DocumentaFolderID  string                   `json:"documenta_folder_id"`
+	WorkflowInstanceID *uuid.UUID               `json:"workflow_instance_id"`
 	CreatedAt          time.Time                `json:"created_at"`
 	UpdatedAt          time.Time                `json:"updated_at"`
 }
@@ -182,6 +191,7 @@ func (k *StrategicKPI) ToResponse() StrategicKPIResponse {
 		RelatedUnits:       k.RelatedUnits,
 		Notes:              k.Notes,
 		DocumentaFolderID:  k.DocumentaFolderID,
+		WorkflowInstanceID: k.WorkflowInstanceID,
 		CreatedAt:          k.CreatedAt,
 		UpdatedAt:          k.UpdatedAt,
 	}
@@ -251,6 +261,7 @@ type OperationalKPI struct {
 	DataSource             string                `gorm:"size:255" json:"data_source"`
 	Notes                  string                `gorm:"type:text" json:"notes"`
 	DocumentaFolderID      string                `gorm:"size:255" json:"documenta_folder_id"`
+	WorkflowInstanceID     *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
 	CreatedAt              time.Time             `json:"created_at"`
 	UpdatedAt              time.Time             `json:"updated_at"`
 	DeletedAt              gorm.DeletedAt        `gorm:"index" json:"-"`
@@ -276,7 +287,6 @@ type OperationalKPIRequest struct {
 	OwnerOrgID             *uuid.UUID `json:"owner_org_id"`
 	OwningAgencyID         *uuid.UUID `json:"owning_agency_id"`
 	Polarity               string     `json:"polarity" validate:"omitempty,oneof=ascending descending"`
-	ActivationStatus       string     `json:"activation_status" validate:"omitempty,oneof=draft active inactive"`
 	DescriptionEn          string     `json:"description_en"`
 	DescriptionAr          string     `json:"description_ar"`
 	Formula                string     `json:"formula"`
@@ -321,6 +331,7 @@ type OperationalKPIResponse struct {
 	DataSource             string                        `json:"data_source"`
 	Notes                  string                        `json:"notes"`
 	DocumentaFolderID      string                        `json:"documenta_folder_id"`
+	WorkflowInstanceID     *uuid.UUID                    `json:"workflow_instance_id"`
 	CreatedAt              time.Time                     `json:"created_at"`
 	UpdatedAt              time.Time                     `json:"updated_at"`
 }
@@ -351,6 +362,7 @@ func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 		DataSource:             k.DataSource,
 		Notes:                  k.Notes,
 		DocumentaFolderID:      k.DocumentaFolderID,
+		WorkflowInstanceID:     k.WorkflowInstanceID,
 		CreatedAt:              k.CreatedAt,
 		UpdatedAt:              k.UpdatedAt,
 	}
@@ -415,6 +427,7 @@ type AwardKPI struct {
 	DataSource          string             `gorm:"size:255" json:"data_source"`
 	Notes               string             `gorm:"type:text" json:"notes"`
 	DocumentaFolderID   string             `gorm:"size:255" json:"documenta_folder_id"`
+	WorkflowInstanceID  *uuid.UUID         `gorm:"type:uuid;index" json:"workflow_instance_id"`
 	CreatedAt           time.Time          `json:"created_at"`
 	UpdatedAt           time.Time          `json:"updated_at"`
 	DeletedAt           gorm.DeletedAt     `gorm:"index" json:"-"`
@@ -438,7 +451,6 @@ type AwardKPIRequest struct {
 	OwnerOrgID          *uuid.UUID `json:"owner_org_id"`
 	OwningAgencyID      *uuid.UUID `json:"owning_agency_id"`
 	Polarity            string     `json:"polarity" validate:"omitempty,oneof=ascending descending"`
-	ActivationStatus    string     `json:"activation_status" validate:"omitempty,oneof=draft active inactive"`
 	DescriptionEn       string     `json:"description_en"`
 	DescriptionAr       string     `json:"description_ar"`
 	Formula             string     `json:"formula"`
@@ -479,6 +491,7 @@ type AwardKPIResponse struct {
 	DataSource          string                     `json:"data_source"`
 	Notes               string                     `json:"notes"`
 	DocumentaFolderID   string                     `json:"documenta_folder_id"`
+	WorkflowInstanceID  *uuid.UUID                 `json:"workflow_instance_id"`
 	CreatedAt           time.Time                  `json:"created_at"`
 	UpdatedAt           time.Time                  `json:"updated_at"`
 }
@@ -507,6 +520,7 @@ func (k *AwardKPI) ToResponse() AwardKPIResponse {
 		DataSource:          k.DataSource,
 		Notes:               k.Notes,
 		DocumentaFolderID:   k.DocumentaFolderID,
+		WorkflowInstanceID:  k.WorkflowInstanceID,
 		CreatedAt:           k.CreatedAt,
 		UpdatedAt:           k.UpdatedAt,
 	}

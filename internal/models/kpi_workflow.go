@@ -13,6 +13,7 @@ const (
 	KpiWFEntityInitiative  = "initiative"
 	KpiWFEntityGoal        = "strategic_goal"
 	KpiWFEntityEntry       = "kpi_entry"
+	KpiWFEntityDictionary  = "kpi_dictionary"
 )
 
 const (

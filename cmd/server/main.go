@@ -289,11 +289,11 @@ func main() {
 	// KPI Master Data handler
 	kpiMasterDataHandler := handlers.NewKpiMasterDataHandler(db)
 
-	// KPI Dictionary handler
-	kpiDictionaryHandler := handlers.NewKpiDictionaryHandler(db, actionLogService)
-
 	// KPI Workflow service
 	kpiWorkflowService := services.NewKpiWorkflowService(db, workflowRepo)
+
+	// KPI Dictionary handler
+	kpiDictionaryHandler := handlers.NewKpiDictionaryHandler(db, actionLogService, kpiWorkflowService)
 
 	// KPI Performance handler
 	kpiPerformanceHandler := handlers.NewKpiPerformanceHandler(db, kpiWorkflowService, actionLogService)
@@ -1319,7 +1319,8 @@ func main() {
 	kpi.Get("/entries/:entryId/transitions", authMiddleware.RequirePermission("kpi:view"), kpiEntryHandler.GetAvailableEntryTransitions)
 	kpi.Get("/entries/:entryId/history", authMiddleware.RequirePermission("kpi:view"), kpiEntryHandler.GetEntryHistory)
 
-	kpi.Post("/:type/:id/transition", authMiddleware.RequirePermission("kpi:update"), kpiDictionaryHandler.TransitionKpiStatus)
+	kpi.Get("/:type/:id/transitions", authMiddleware.RequirePermission("kpi:view"), kpiDictionaryHandler.GetAvailableTransitions)
+	kpi.Post("/:type/:id/transition", authMiddleware.RequirePermission("kpi:update"), kpiDictionaryHandler.TransitionKpi)
 
 	kpi.Get("/:type/:id/card", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetKpiCard)
 	kpi.Get("/:type/:id/dashboard", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetKpiDashboard)

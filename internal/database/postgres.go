@@ -948,6 +948,53 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		db.Model(&supervisorRole).Association("Permissions").Append(supervisorPerms)
 	}
 
+	// KPI Owner and L1 Reviewer — global roles used by the KPI Workflow's
+	// Draft→Reviewed→Approved→Active→Closed lifecycle transitions
+	// (kpi_dictionary_workflow_seed.go's AllowedRoles). Granted kpi:view/
+	// kpi:update so route-level permission checks admit them; the specific
+	// "which transition" gating happens via each transition's AllowedRoles.
+	kpiWorkflowRolePermCodes := []string{"kpi:view", "kpi:update"}
+
+	var kpiOwnerRole models.Role
+	result = db.Where("code = ?", "kpi_owner").First(&kpiOwnerRole)
+	if result.Error == gorm.ErrRecordNotFound {
+		var kpiOwnerPerms []models.Permission
+		db.Where("code IN ?", kpiWorkflowRolePermCodes).Find(&kpiOwnerPerms)
+		kpiOwnerRole = models.Role{
+			Name:        "KPI Owner",
+			Code:        "kpi_owner",
+			Description: "Owns KPI records and drives their KPI Workflow lifecycle",
+			IsSystem:    true,
+			IsActive:    true,
+			Permissions: kpiOwnerPerms,
+		}
+		db.Create(&kpiOwnerRole)
+	} else if db.Model(&kpiOwnerRole).Association("Permissions").Count() == 0 {
+		var kpiOwnerPerms []models.Permission
+		db.Where("code IN ?", kpiWorkflowRolePermCodes).Find(&kpiOwnerPerms)
+		db.Model(&kpiOwnerRole).Association("Permissions").Append(kpiOwnerPerms)
+	}
+
+	var l1ReviewerRole models.Role
+	result = db.Where("code = ?", "l1_reviewer").First(&l1ReviewerRole)
+	if result.Error == gorm.ErrRecordNotFound {
+		var l1ReviewerPerms []models.Permission
+		db.Where("code IN ?", kpiWorkflowRolePermCodes).Find(&l1ReviewerPerms)
+		l1ReviewerRole = models.Role{
+			Name:        "L1 Reviewer",
+			Code:        "l1_reviewer",
+			Description: "First-line reviewer for the KPI Workflow's Draft->Reviewed and Reviewed->Approved transitions",
+			IsSystem:    true,
+			IsActive:    true,
+			Permissions: l1ReviewerPerms,
+		}
+		db.Create(&l1ReviewerRole)
+	} else if db.Model(&l1ReviewerRole).Association("Permissions").Count() == 0 {
+		var l1ReviewerPerms []models.Permission
+		db.Where("code IN ?", kpiWorkflowRolePermCodes).Find(&l1ReviewerPerms)
+		db.Model(&l1ReviewerRole).Association("Permissions").Append(l1ReviewerPerms)
+	}
+
 	// Grant extension-management permissions to the agent role (if it exists).
 	// Admin already receives all permissions above; super admins bypass permission
 	// checks entirely. We append (not replace) so any other agent permissions stay intact.
@@ -1057,6 +1104,12 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 
 		// Seed default KPI performance approval workflow
 		seedKpiPerformanceWorkflow(db)
+
+		// Seed default KPI Workflow (Draft->Reviewed->Approved->Active->Closed),
+		// auto-assigned to every KPI dictionary row at creation time. Must run
+		// after role seeding above (kpi_owner/l1_reviewer) since it attaches
+		// those roles to states/transitions.
+		seedKpiDictionaryWorkflow(db)
 
 		// Seed default global RAG performance band (green >= 80, amber >= 60)
 		seedDefaultPerformanceBand(db)
