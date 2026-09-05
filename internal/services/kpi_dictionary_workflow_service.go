@@ -35,6 +35,16 @@ func loadDictionaryKpiState(db *gorm.DB, kpiType string, kpiID uuid.UUID) (activ
 	}
 }
 
+// GetKpiActivationStatus returns a KPI dictionary row's current
+// activation_status (its KPI Workflow state code) — exported for callers
+// outside this package (e.g. metric-entry creation) that need to gate an
+// action on the KPI's current lifecycle state without pulling in the rest of
+// the workflow-transition machinery.
+func GetKpiActivationStatus(db *gorm.DB, kpiType string, kpiID uuid.UUID) (string, error) {
+	status, _, err := loadDictionaryKpiState(db, kpiType, kpiID)
+	return status, err
+}
+
 // updateDictionaryKpiWorkflow writes the workflow_instance_id + activation_status
 // (denormalized mirror of the workflow instance's current state) back onto
 // the KPI dictionary row.
@@ -202,11 +212,14 @@ func (s *KpiWorkflowService) GetAvailableKpiDictionaryTransitions(ctx context.Co
 
 // TransitionKpiDictionary executes a KPI Workflow transition on a KPI
 // dictionary row (Strategic/Operational/Award), enforcing: no skipping
-// states, role authorization via the transition's configured AllowedRoles,
-// and (for the Approved→Active transition specifically, matched by the
-// resolved target state's code rather than a hardcoded transition code) the
-// existing BR-07 metric-weight-sum gate. Returns the new activation_status
-// (= the target state's code) on success.
+// states, and role authorization via the transition's configured
+// AllowedRoles. Returns the new activation_status (= the target state's
+// code) on success.
+//
+// Deliberately does NOT gate on metric-weight-sum (BR-07) — the old
+// activation_status-based TransitionKpiStatus mechanism did, but that check
+// was removed by product decision so a KPI can move Approved→Active
+// regardless of what its metrics' weights currently sum to.
 func (s *KpiWorkflowService) TransitionKpiDictionary(ctx context.Context, kpiType string, kpiID uuid.UUID, req *models.MetricTransitionRequest, userID uuid.UUID) (string, error) {
 	transitionID, err := uuid.Parse(req.TransitionID)
 	if err != nil {
@@ -249,24 +262,6 @@ func (s *KpiWorkflowService) TransitionKpiDictionary(ctx context.Context, kpiTyp
 	if !userHasAnyAllowedRole(user, transition.AllowedRoles) {
 		tx.Rollback()
 		return "", fmt.Errorf("you do not have a role authorized to perform the '%s' transition", transition.Name)
-	}
-
-	// BR-07: the sum of an Active composite KPI's metric weights must equal
-	// 100% before it can move into the Active state — otherwise
-	// achievement*weight contributions silently under- or over-count instead
-	// of forming one proper composite score. Matched by the resolved TO
-	// state's code, not a hardcoded transition code, so it stays correct even
-	// if the "Activate" transition is ever renamed.
-	if transition.ToState != nil && transition.ToState.Code == models.KPIStatusActive {
-		valid, sum, err := MetricWeightSumValid(tx, kpiID, kpiType)
-		if err != nil {
-			tx.Rollback()
-			return "", fmt.Errorf("failed to validate metric weights: %w", err)
-		}
-		if !valid {
-			tx.Rollback()
-			return "", fmt.Errorf("metric weights must sum to 100%% before activation (currently %.2f%%)", sum)
-		}
 	}
 
 	action := &models.KpiWorkflowAction{
