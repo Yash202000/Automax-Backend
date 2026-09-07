@@ -184,6 +184,19 @@ func (h *KpiEntryHandler) CreateEntry(c *fiber.Ctx) error {
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	db := h.db.WithContext(c.UserContext())
 
+	// Metric entries may only be created while the KPI Workflow is in the
+	// Active state (Draft/Reviewed/Approved/Closed all reject) — enforced
+	// here rather than only in the UI, since the create endpoint is the only
+	// insertion point for a KpiEntry row.
+	kpiStatus, err := services.GetKpiActivationStatus(db, kpiType, kpiID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "KPI not found")
+	}
+	if kpiStatus != models.KPIStatusActive {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest,
+			fmt.Sprintf("Metric entries can only be created while the KPI is Active (current status: %s)", kpiStatus))
+	}
+
 	// REL-08: Validate metric exists and get its configuration
 	mid, _ := uuid.Parse(req.MetricID)
 	var metric models.KpiMetric

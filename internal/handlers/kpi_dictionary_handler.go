@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"log"
 	"strconv"
 
 	"github.com/automax/backend/internal/middleware"
@@ -21,13 +22,15 @@ type KpiDictionaryHandler struct {
 	db           *gorm.DB
 	validator    *validator.Validate
 	actionLogSvc services.ActionLogService
+	workflowSvc  *services.KpiWorkflowService
 }
 
-func NewKpiDictionaryHandler(db *gorm.DB, actionLogSvc services.ActionLogService) *KpiDictionaryHandler {
+func NewKpiDictionaryHandler(db *gorm.DB, actionLogSvc services.ActionLogService, workflowSvc *services.KpiWorkflowService) *KpiDictionaryHandler {
 	return &KpiDictionaryHandler{
 		db:           db,
 		validator:    validator.New(),
 		actionLogSvc: actionLogSvc,
+		workflowSvc:  workflowSvc,
 	}
 }
 
@@ -114,7 +117,6 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 		OwnerOrgID:         req.OwnerOrgID,
 		OwningAgencyID:     req.OwningAgencyID,
 		Polarity:           req.Polarity,
-		ActivationStatus:   req.ActivationStatus,
 		DescriptionEn:      req.DescriptionEn,
 		DescriptionAr:      req.DescriptionAr,
 		Formula:            req.Formula,
@@ -140,6 +142,11 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	if err := h.workflowSvc.InitiateKpiDictionaryWorkflow(c.UserContext(), models.KPITypeStrategic, item.ID, userID); err != nil {
+		log.Printf("[kpi_dictionary] CreateStrategic: InitiateKpiDictionaryWorkflow failed for %s: %v", item.ID, err)
 	}
 
 	h.db.WithContext(c.UserContext()).
@@ -184,7 +191,6 @@ func (h *KpiDictionaryHandler) UpdateStrategic(c *fiber.Ctx) error {
 		"owner_org_id":        req.OwnerOrgID,
 		"owning_agency_id":    req.OwningAgencyID,
 		"polarity":            req.Polarity,
-		"activation_status":   req.ActivationStatus,
 		"description_en":      req.DescriptionEn,
 		"description_ar":      req.DescriptionAr,
 		"formula":             req.Formula,
@@ -308,7 +314,6 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 		OwnerOrgID:             req.OwnerOrgID,
 		OwningAgencyID:         req.OwningAgencyID,
 		Polarity:               req.Polarity,
-		ActivationStatus:       req.ActivationStatus,
 		DescriptionEn:          req.DescriptionEn,
 		DescriptionAr:          req.DescriptionAr,
 		Formula:                req.Formula,
@@ -332,6 +337,11 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	if err := h.workflowSvc.InitiateKpiDictionaryWorkflow(c.UserContext(), models.KPITypeOperational, item.ID, userID); err != nil {
+		log.Printf("[kpi_dictionary] CreateOperational: InitiateKpiDictionaryWorkflow failed for %s: %v", item.ID, err)
 	}
 
 	h.db.WithContext(c.UserContext()).
@@ -394,7 +404,6 @@ func (h *KpiDictionaryHandler) UpdateOperational(c *fiber.Ctx) error {
 		"owner_org_id":             req.OwnerOrgID,
 		"owning_agency_id":         req.OwningAgencyID,
 		"polarity":                 req.Polarity,
-		"activation_status":        req.ActivationStatus,
 		"description_en":           req.DescriptionEn,
 		"description_ar":           req.DescriptionAr,
 		"formula":                  req.Formula,
@@ -510,7 +519,6 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 		OwnerOrgID:          req.OwnerOrgID,
 		OwningAgencyID:      req.OwningAgencyID,
 		Polarity:            req.Polarity,
-		ActivationStatus:    req.ActivationStatus,
 		DescriptionEn:       req.DescriptionEn,
 		DescriptionAr:       req.DescriptionAr,
 		Formula:             req.Formula,
@@ -534,6 +542,11 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	if err := h.workflowSvc.InitiateKpiDictionaryWorkflow(c.UserContext(), models.KPITypeAward, item.ID, userID); err != nil {
+		log.Printf("[kpi_dictionary] CreateAward: InitiateKpiDictionaryWorkflow failed for %s: %v", item.ID, err)
 	}
 
 	h.db.WithContext(c.UserContext()).
@@ -616,7 +629,6 @@ func (h *KpiDictionaryHandler) UpdateAward(c *fiber.Ctx) error {
 		"owner_org_id":           req.OwnerOrgID,
 		"owning_agency_id":       req.OwningAgencyID,
 		"polarity":               req.Polarity,
-		"activation_status":      req.ActivationStatus,
 		"description_en":         req.DescriptionEn,
 		"description_ar":         req.DescriptionAr,
 		"formula":                req.Formula,
@@ -657,21 +669,41 @@ func (h *KpiDictionaryHandler) UpdateAward(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "", item.ToResponse())
 }
 
-// ─── KPI Status Transition ────────────────────────────────────────────────────
+// ─── KPI Workflow Transitions ──────────────────────────────────────────────
+// Replaces the old hardcoded activate/deactivate/reactivate mechanism with
+// the generic Workflow/WorkflowState/WorkflowTransition engine's "KPI
+// Workflow" (Draft→Reviewed→Approved→Active→Closed), auto-assigned to every
+// KPI at creation (see CreateStrategic/CreateOperational/CreateAward) — see
+// services.KpiDictionaryWorkflowService for the state machine, role
+// (AllowedRoles) gating, and BR-07 weight-sum check.
 
-type kpiTransitionRequest struct {
-	Action  string `json:"action" validate:"required,oneof=activate deactivate reactivate"`
-	Comment string `json:"comment"`
-}
-
-func (h *KpiDictionaryHandler) TransitionKpiStatus(c *fiber.Ctx) error {
+// GetAvailableTransitions lists the transitions the calling user may
+// currently execute on this KPI (already role-filtered server-side).
+func (h *KpiDictionaryHandler) GetAvailableTransitions(c *fiber.Ctx) error {
 	kpiType := c.Params("type")
 	id, err := uuid.Parse(c.Params("id"))
+	if err != nil || !isValidKpiType(kpiType) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+
+	transitions, err := h.workflowSvc.GetAvailableKpiDictionaryTransitions(c.UserContext(), kpiType, id, userID)
 	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", transitions)
+}
+
+// TransitionKpi executes a workflow transition on this KPI's own lifecycle
+// (as opposed to /entries or /performance, which transition nested records).
+func (h *KpiDictionaryHandler) TransitionKpi(c *fiber.Ctx) error {
+	kpiType := c.Params("type")
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil || !isValidKpiType(kpiType) {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
-	var req kpiTransitionRequest
+	var req models.MetricTransitionRequest
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
@@ -679,86 +711,21 @@ func (h *KpiDictionaryHandler) TransitionKpiStatus(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
 
-	var newStatus string
-	switch req.Action {
-	case "activate":
-		newStatus = models.KPIStatusActive
-	case "deactivate":
-		newStatus = models.KPIStatusInactive
-	case "reactivate":
-		newStatus = models.KPIStatusActive
-	}
-
-	allowedTypes := map[string]bool{"strategic": true, "operational": true, "award": true}
-	if !allowedTypes[kpiType] {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
-	}
-
-	db := h.db.WithContext(c.UserContext())
-	var result *gorm.DB
-
-	// BR-07: the sum of an Active composite KPI's metric weights must equal
-	// 100% before it can be (re)activated — otherwise achievement*weight
-	// contributions silently under- or over-count instead of forming one
-	// proper composite score.
-	if newStatus == models.KPIStatusActive {
-		valid, sum, err := services.MetricWeightSumValid(db, id, kpiType)
-		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
-		}
-		if !valid {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest,
-				fmt.Sprintf("Metric weights must sum to 100%% before activation (currently %.2f%%)", sum))
-		}
-	}
-
-	switch kpiType {
-	case "strategic":
-		var item models.StrategicKPI
-		if err := db.First(&item, id).Error; err != nil {
-			return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
-		}
-		if !isValidTransition(item.ActivationStatus, req.Action) {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid transition for current status")
-		}
-		result = db.Model(&models.StrategicKPI{ID: id}).Update("activation_status", newStatus)
-	case "operational":
-		var item models.OperationalKPI
-		if err := db.First(&item, id).Error; err != nil {
-			return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
-		}
-		if !isValidTransition(item.ActivationStatus, req.Action) {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid transition for current status")
-		}
-		result = db.Model(&models.OperationalKPI{ID: id}).Update("activation_status", newStatus)
-	case "award":
-		var item models.AwardKPI
-		if err := db.First(&item, id).Error; err != nil {
-			return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
-		}
-		if !isValidTransition(item.ActivationStatus, req.Action) {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid transition for current status")
-		}
-		result = db.Model(&models.AwardKPI{ID: id}).Update("activation_status", newStatus)
-	}
-
-	if result.Error != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
-	}
-	if result.RowsAffected == 0 {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	newStatus, err := h.workflowSvc.TransitionKpiDictionary(c.UserContext(), kpiType, id, &req, userID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
 		Action:      "transition",
 		Module:      "kpi",
 		ResourceID:  id.String(),
-		Description: fmt.Sprintf("%s %s KPI %s (status -> %s)", req.Action, kpiType, id, newStatus),
+		Description: fmt.Sprintf("Transitioned %s KPI %s (status -> %s)", kpiType, id, newStatus),
 		Status:      "success",
 	})
 
 	if req.Comment != "" {
-		userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 		h.db.WithContext(c.UserContext()).Create(&models.KpiComment{
 			KpiID:    id,
 			KpiType:  kpiType,
@@ -767,17 +734,5 @@ func (h *KpiDictionaryHandler) TransitionKpiStatus(c *fiber.Ctx) error {
 		})
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "Status updated successfully", nil)
-}
-
-func isValidTransition(currentStatus, action string) bool {
-	switch action {
-	case "activate":
-		return currentStatus == models.KPIStatusDraft
-	case "deactivate":
-		return currentStatus == models.KPIStatusActive
-	case "reactivate":
-		return currentStatus == models.KPIStatusInactive
-	}
-	return false
+	return utils.SuccessResponse(c, fiber.StatusOK, "Status updated successfully", fiber.Map{"activation_status": newStatus})
 }
