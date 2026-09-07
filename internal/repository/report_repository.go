@@ -91,6 +91,12 @@ type ReportRepository interface {
 	FetchLocationPaths(ctx context.Context, locationIDs []string) (map[string]string, error)
 	// FetchClassificationPaths returns classification_id -> full hierarchical path (e.g. "Roads > Road Damage > Pothole") for the given classification IDs.
 	FetchClassificationPaths(ctx context.Context, classificationIDs []string) (map[string]string, error)
+	// FetchLocationPathsLocalized is FetchLocationPaths built from name_ar (falling
+	// back to name where name_ar is blank) when lang == "ar", else from name.
+	FetchLocationPathsLocalized(ctx context.Context, locationIDs []string, lang string) (map[string]string, error)
+	// FetchClassificationPathsLocalized is FetchClassificationPaths built from name_ar
+	// (falling back to name where name_ar is blank) when lang == "ar", else from name.
+	FetchClassificationPathsLocalized(ctx context.Context, classificationIDs []string, lang string) (map[string]string, error)
 }
 
 type reportRepository struct {
@@ -2025,6 +2031,126 @@ func (r *reportRepository) FetchClassificationPaths(
 	rows, qerr := r.db.WithContext(ctx).Raw(query, classificationIDs).Rows()
 	if qerr != nil {
 		err = fmt.Errorf("FetchClassificationPaths: %w", qerr)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var classificationID, fullPath string
+		if serr := rows.Scan(&classificationID, &fullPath); serr != nil {
+			continue
+		}
+		paths[classificationID] = fullPath
+	}
+	return
+}
+
+// FetchLocationPathsLocalized mirrors FetchLocationPaths but builds the
+// hierarchical path from name_ar (COALESCE'd to name where name_ar is blank)
+// when lang == "ar", so Arabic-language reports show localized path segments.
+func (r *reportRepository) FetchLocationPathsLocalized(
+	ctx context.Context,
+	locationIDs []string,
+	lang string,
+) (paths map[string]string, err error) {
+	paths = map[string]string{}
+	if len(locationIDs) == 0 {
+		return
+	}
+
+	baseName, recName := "name", "l.name"
+	if lang == "ar" {
+		baseName = "COALESCE(NULLIF(name_ar, ''), name)"
+		recName = "COALESCE(NULLIF(l.name_ar, ''), l.name)"
+	}
+
+	query := fmt.Sprintf(`
+		WITH RECURSIVE location_hierarchy AS (
+			SELECT
+				id,
+				parent_id,
+				%s::TEXT AS full_path
+			FROM locations
+			WHERE parent_id IS NULL
+
+			UNION ALL
+
+			SELECT
+				l.id,
+				l.parent_id,
+				lh.full_path || ' > ' || %s
+			FROM locations l
+			INNER JOIN location_hierarchy lh ON l.parent_id = lh.id
+		)
+		SELECT
+			id::text,
+			full_path
+		FROM location_hierarchy
+		WHERE id::text IN (?)
+	`, baseName, recName)
+
+	rows, qerr := r.db.WithContext(ctx).Raw(query, locationIDs).Rows()
+	if qerr != nil {
+		err = fmt.Errorf("FetchLocationPathsLocalized: %w", qerr)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var locationID, fullPath string
+		if serr := rows.Scan(&locationID, &fullPath); serr != nil {
+			continue
+		}
+		paths[locationID] = fullPath
+	}
+	return
+}
+
+// FetchClassificationPathsLocalized mirrors FetchClassificationPaths but builds
+// the hierarchical path from name_ar (COALESCE'd to name where name_ar is
+// blank) when lang == "ar", so Arabic-language reports show localized segments.
+func (r *reportRepository) FetchClassificationPathsLocalized(
+	ctx context.Context,
+	classificationIDs []string,
+	lang string,
+) (paths map[string]string, err error) {
+	paths = map[string]string{}
+	if len(classificationIDs) == 0 {
+		return
+	}
+
+	baseName, recName := "name", "c.name"
+	if lang == "ar" {
+		baseName = "COALESCE(NULLIF(name_ar, ''), name)"
+		recName = "COALESCE(NULLIF(c.name_ar, ''), c.name)"
+	}
+
+	query := fmt.Sprintf(`
+		WITH RECURSIVE classification_hierarchy AS (
+			SELECT
+				id,
+				%s::TEXT AS full_path
+			FROM classifications
+			WHERE parent_id IS NULL
+
+			UNION ALL
+
+			SELECT
+				c.id,
+				ch.full_path || ' > ' || %s
+			FROM classifications c
+			INNER JOIN classification_hierarchy ch ON c.parent_id = ch.id
+		)
+		SELECT
+			id::text,
+			full_path
+		FROM classification_hierarchy
+		WHERE id::text IN (?)
+	`, baseName, recName)
+
+	rows, qerr := r.db.WithContext(ctx).Raw(query, classificationIDs).Rows()
+	if qerr != nil {
+		err = fmt.Errorf("FetchClassificationPathsLocalized: %w", qerr)
 		return
 	}
 	defer rows.Close()

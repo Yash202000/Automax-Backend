@@ -402,20 +402,6 @@ func (s *EscalationGroupService) ProcessGroupEscalations(ctx context.Context) er
 			classificationIDs2 = append(classificationIDs2, id)
 		}
 
-		var locationPaths, classificationPaths map[string]string
-		if s.reportRepo != nil {
-			if m, err := s.reportRepo.FetchLocationPaths(ctx, locationIDs); err == nil {
-				locationPaths = m
-			} else {
-				log.Printf("[EscalationGroupService] FetchLocationPaths error for group '%s': %v", group.Name, err)
-			}
-			if m, err := s.reportRepo.FetchClassificationPaths(ctx, classificationIDs2); err == nil {
-				classificationPaths = m
-			} else {
-				log.Printf("[EscalationGroupService] FetchClassificationPaths error for group '%s': %v", group.Name, err)
-			}
-		}
-
 		// Background SLA-monitor tick has no HTTP Accept-Language header, so the
 		// report is localized against an explicit context built from the group's
 		// own Language setting (same pattern used elsewhere for background work,
@@ -425,6 +411,20 @@ func (s *EscalationGroupService) ProcessGroupEscalations(ctx context.Context) er
 			reportLanguage = "en"
 		}
 		reportCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, reportLanguage)
+
+		var locationPaths, classificationPaths map[string]string
+		if s.reportRepo != nil {
+			if m, err := s.reportRepo.FetchLocationPathsLocalized(ctx, locationIDs, reportLanguage); err == nil {
+				locationPaths = m
+			} else {
+				log.Printf("[EscalationGroupService] FetchLocationPathsLocalized error for group '%s': %v", group.Name, err)
+			}
+			if m, err := s.reportRepo.FetchClassificationPathsLocalized(ctx, classificationIDs2, reportLanguage); err == nil {
+				classificationPaths = m
+			} else {
+				log.Printf("[EscalationGroupService] FetchClassificationPathsLocalized error for group '%s': %v", group.Name, err)
+			}
+		}
 
 		for _, user := range recipients {
 			var userIncidents []models.Incident
@@ -604,6 +604,8 @@ func (s *EscalationGroupService) sendGroupNotification(
 // (as returned by ReportRepository.FetchClassificationPaths/FetchLocationPaths)
 // and are looked up per row; a missing entry renders as an empty cell.
 func buildGroupCSVReport(ctx context.Context, incidents []models.Incident, classificationPaths, locationPaths map[string]string) []byte {
+	lang, _ := ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE).(string)
+
 	var buf bytes.Buffer
 	buf.Write([]byte{0xEF, 0xBB, 0xBF})
 	w := csv.NewWriter(&buf)
@@ -630,11 +632,17 @@ func buildGroupCSVReport(ctx context.Context, incidents []models.Incident, class
 		stateName := ""
 		if inc.CurrentState != nil {
 			stateName = inc.CurrentState.Name
+			if lang == "ar" && inc.CurrentState.NameAr != "" {
+				stateName = inc.CurrentState.NameAr
+			}
 		}
 
 		departmentName := ""
 		if inc.Department != nil {
 			departmentName = inc.Department.Name
+			if lang == "ar" && inc.Department.NameAr != "" {
+				departmentName = inc.Department.NameAr
+			}
 		}
 
 		fullClassification := ""
