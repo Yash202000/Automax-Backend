@@ -107,7 +107,7 @@ func (h *LookupHandler) CreateCategory(c *fiber.Ctx) error {
 		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "unique") {
 			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "category_code_exists"))
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "category_created"), models.ToLookupCategoryResponse(category))
@@ -226,7 +226,7 @@ func (h *LookupHandler) UpdateCategory(c *fiber.Ctx) error {
 	}
 
 	if err := h.repo.UpdateCategory(c.UserContext(), category); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "category_updated"), models.ToLookupCategoryResponse(category))
@@ -250,7 +250,7 @@ func (h *LookupHandler) DeleteCategory(c *fiber.Ctx) error {
 	}
 
 	if err := h.repo.DeleteCategory(c.UserContext(), id); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "category_deleted"), nil)
@@ -259,7 +259,7 @@ func (h *LookupHandler) DeleteCategory(c *fiber.Ctx) error {
 func (h *LookupHandler) ListCategories(c *fiber.Ctx) error {
 	categories, err := h.repo.ListCategories(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	responses := make([]models.LookupCategoryResponse, len(categories))
@@ -324,7 +324,7 @@ func (h *LookupHandler) CreateValue(c *fiber.Ctx) error {
 	}
 
 	if err := h.repo.CreateValue(c.UserContext(), value); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Reload to get the updated category values count
@@ -397,7 +397,7 @@ func (h *LookupHandler) UpdateValue(c *fiber.Ctx) error {
 	}
 
 	if err := h.repo.UpdateValue(c.UserContext(), value); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "value_updated"), models.ToLookupValueResponse(value))
@@ -416,7 +416,7 @@ func (h *LookupHandler) DeleteValue(c *fiber.Ctx) error {
 	}
 
 	if err := h.repo.DeleteValue(c.UserContext(), id); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "value_deleted"), nil)
@@ -431,7 +431,7 @@ func (h *LookupHandler) ListValuesByCategory(c *fiber.Ctx) error {
 
 	values, err := h.repo.ListValuesByCategory(c.UserContext(), categoryID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	responses := make([]models.LookupValueResponse, len(values))
@@ -448,7 +448,7 @@ func (h *LookupHandler) GetValuesByCategoryCode(c *fiber.Ctx) error {
 
 	values, err := h.repo.ListValuesByCategoryCode(c.UserContext(), code)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	responses := make([]models.LookupValueResponse, len(values))

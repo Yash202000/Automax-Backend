@@ -46,6 +46,7 @@ type IntegrationRepository interface {
 	// Execution logs
 	CreateExecutionLog(ctx context.Context, l *models.IntegrationExecutionLog) error
 	UpdateExecutionLog(ctx context.Context, l *models.IntegrationExecutionLog) error
+	FindExecutionLogByID(ctx context.Context, id uuid.UUID) (*models.IntegrationExecutionLog, error)
 	ListExecutionLogsByScript(ctx context.Context, scriptID uuid.UUID, limit, offset int) ([]models.IntegrationExecutionLog, int64, error)
 	ListExecutionLogsByIncident(ctx context.Context, incidentID uuid.UUID, limit, offset int) ([]models.IntegrationExecutionLog, int64, error)
 
@@ -269,6 +270,14 @@ func (r *integrationRepository) CreateExecutionLog(ctx context.Context, l *model
 
 func (r *integrationRepository) UpdateExecutionLog(ctx context.Context, l *models.IntegrationExecutionLog) error {
 	return r.db.WithContext(ctx).Save(l).Error
+}
+
+func (r *integrationRepository) FindExecutionLogByID(ctx context.Context, id uuid.UUID) (*models.IntegrationExecutionLog, error) {
+	var l models.IntegrationExecutionLog
+	if err := r.db.WithContext(ctx).First(&l, "id = ?", id).Error; err != nil {
+		return nil, err
+	}
+	return &l, nil
 }
 
 func (r *integrationRepository) ListExecutionLogsByScript(ctx context.Context, scriptID uuid.UUID, limit, offset int) ([]models.IntegrationExecutionLog, int64, error) {

@@ -285,7 +285,7 @@ func (h *SSOHandler) SSORegister(c *fiber.Ctx) error {
 
 	sessionID, _, err := h.otpService.SendOTP(c.UserContext(), req.Phone, "sms", "", nil)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to send OTP: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "otp_sent_mobile"), fiber.Map{

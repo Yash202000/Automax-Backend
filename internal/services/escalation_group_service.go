@@ -15,6 +15,8 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/templates"
+	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/google/uuid"
 )
 
@@ -25,16 +27,18 @@ type EscalationGroupService struct {
 	groupRepo           repository.EscalationGroupRepository
 	incidentRepo        repository.IncidentRepository
 	userRepo            repository.UserRepository
+	reportRepo          repository.ReportRepository
 	policyService       *EscalationPolicyService
 	notificationService *NotificationService
 	frontendURL         string
 }
 
-func NewEscalationGroupService(groupRepo repository.EscalationGroupRepository, incidentRepo repository.IncidentRepository, userRepo repository.UserRepository, notificationService *NotificationService, cfg config.EscalationConfig) *EscalationGroupService {
+func NewEscalationGroupService(groupRepo repository.EscalationGroupRepository, incidentRepo repository.IncidentRepository, userRepo repository.UserRepository, reportRepo repository.ReportRepository, notificationService *NotificationService, cfg config.EscalationConfig) *EscalationGroupService {
 	return &EscalationGroupService{
 		groupRepo:           groupRepo,
 		incidentRepo:        incidentRepo,
 		userRepo:            userRepo,
+		reportRepo:          reportRepo,
 		notificationService: notificationService,
 	}
 }
@@ -62,6 +66,10 @@ func (s *EscalationGroupService) Create(ctx context.Context, req *models.CreateE
 	if scheduledTime == "" {
 		scheduledTime = "09:00"
 	}
+	language := req.Language
+	if language == "" {
+		language = "en"
+	}
 	group := &models.EscalationGroup{
 		Name:              req.Name,
 		Frequency:         req.Frequency,
@@ -69,6 +77,7 @@ func (s *EscalationGroupService) Create(ctx context.Context, req *models.CreateE
 		Channel:           req.Channel,
 		EmailTemplateCode: req.EmailTemplateCode,
 		SMSTemplateCode:   req.SMSTemplateCode,
+		Language:          language,
 		IsActive:          isActive,
 	}
 
@@ -157,6 +166,9 @@ func (s *EscalationGroupService) Update(ctx context.Context, id uuid.UUID, req *
 	}
 	if req.SMSTemplateCode != nil {
 		group.SMSTemplateCode = *req.SMSTemplateCode
+	}
+	if req.Language != nil {
+		group.Language = *req.Language
 	}
 	if req.IsActive != nil {
 		group.IsActive = *req.IsActive
@@ -368,6 +380,52 @@ func (s *EscalationGroupService) ProcessGroupEscalations(ctx context.Context) er
 
 		slaPageURL := fmt.Sprintf("%s/incidents?sla_breached=true", s.frontendURL)
 
+		// Resolve full classification/location hierarchy paths once for the whole
+		// group (not per recipient) by reusing the existing report-repository
+		// path-lookup logic (internal/repository/report_repository.go).
+		locationIDSet := make(map[string]struct{})
+		classificationIDSet := make(map[string]struct{})
+		for _, inc := range groupIncidents {
+			if inc.LocationID != nil {
+				locationIDSet[inc.LocationID.String()] = struct{}{}
+			}
+			if inc.ClassificationID != nil {
+				classificationIDSet[inc.ClassificationID.String()] = struct{}{}
+			}
+		}
+		locationIDs := make([]string, 0, len(locationIDSet))
+		for id := range locationIDSet {
+			locationIDs = append(locationIDs, id)
+		}
+		classificationIDs2 := make([]string, 0, len(classificationIDSet))
+		for id := range classificationIDSet {
+			classificationIDs2 = append(classificationIDs2, id)
+		}
+
+		var locationPaths, classificationPaths map[string]string
+		if s.reportRepo != nil {
+			if m, err := s.reportRepo.FetchLocationPaths(ctx, locationIDs); err == nil {
+				locationPaths = m
+			} else {
+				log.Printf("[EscalationGroupService] FetchLocationPaths error for group '%s': %v", group.Name, err)
+			}
+			if m, err := s.reportRepo.FetchClassificationPaths(ctx, classificationIDs2); err == nil {
+				classificationPaths = m
+			} else {
+				log.Printf("[EscalationGroupService] FetchClassificationPaths error for group '%s': %v", group.Name, err)
+			}
+		}
+
+		// Background SLA-monitor tick has no HTTP Accept-Language header, so the
+		// report is localized against an explicit context built from the group's
+		// own Language setting (same pattern used elsewhere for background work,
+		// e.g. incident_service.go's bgCtx construction).
+		reportLanguage := group.Language
+		if reportLanguage == "" {
+			reportLanguage = "en"
+		}
+		reportCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, reportLanguage)
+
 		for _, user := range recipients {
 			var userIncidents []models.Incident
 
@@ -409,7 +467,7 @@ func (s *EscalationGroupService) ProcessGroupEscalations(ctx context.Context) er
 				continue
 			}
 
-			csvData := buildGroupCSVReport(userIncidents, classificationName)
+			csvData := buildGroupCSVReport(reportCtx, userIncidents, classificationPaths, locationPaths)
 			s.sendGroupNotification(ctx, group, user, classificationName, slaPageURL, csvData, userIncidents)
 		}
 
@@ -472,13 +530,19 @@ func (s *EscalationGroupService) sendGroupNotification(
 
 		var templateCode *string
 		var smsVars map[string]string
+		// The hardcoded fallback body above is English-only by design; language
+		// selection only applies when a bilingual DB template is configured.
+		smsLanguage := "en"
 		if group.SMSTemplateCode != "" {
 			templateCode = &group.SMSTemplateCode
 			smsVars = vars
+			if group.Language != "" {
+				smsLanguage = group.Language
+			}
 		}
 
 		_, err := s.notificationService.SendNotification(
-			ctx, "sms", templateCode, "en",
+			ctx, "sms", templateCode, smsLanguage,
 			[]string{user.Phone}, nil, nil,
 			"", smsBody, smsVars, nil, sentBy, nil,
 		)
@@ -496,9 +560,15 @@ func (s *EscalationGroupService) sendGroupNotification(
 
 		var templateCode *string
 		var emailVars map[string]string
+		// The hardcoded fallback subject/body above is English-only by design;
+		// language selection only applies when a bilingual DB template is configured.
+		emailLanguage := "en"
 		if group.EmailTemplateCode != "" {
 			templateCode = &group.EmailTemplateCode
 			emailVars = vars
+			if group.Language != "" {
+				emailLanguage = group.Language
+			}
 		}
 
 		attachments := []models.AttachmentData{
@@ -510,7 +580,7 @@ func (s *EscalationGroupService) sendGroupNotification(
 			},
 		}
 		_, err := s.notificationService.SendNotification(
-			ctx, "email", templateCode, "en",
+			ctx, "email", templateCode, emailLanguage,
 			[]string{user.Email}, nil, nil,
 			emailSubject, emailBody,
 			emailVars, attachments, sentBy, nil,
@@ -523,32 +593,36 @@ func (s *EscalationGroupService) sendGroupNotification(
 	}
 }
 
-// buildGroupCSVReport generates a CSV report of all breached incidents.
-
-func buildGroupCSVReport(incidents []models.Incident, classificationName string) []byte {
+// buildGroupCSVReport generates the bulk-escalation Incident Report: a CSV of
+// all breached (Under Resolution) incidents in scope for one recipient.
+//
+// Columns, in order: Incident Number, Current State, Department, Created At,
+// Full Classification Path, Full Location Path, Assignee. All labels are
+// localized via the existing pkg/i18n mechanism (i18n.T/Tf against ctx).
+//
+// classificationPaths/locationPaths are keyed by classification_id/location_id
+// (as returned by ReportRepository.FetchClassificationPaths/FetchLocationPaths)
+// and are looked up per row; a missing entry renders as an empty cell.
+func buildGroupCSVReport(ctx context.Context, incidents []models.Incident, classificationPaths, locationPaths map[string]string) []byte {
 	var buf bytes.Buffer
 	buf.Write([]byte{0xEF, 0xBB, 0xBF})
 	w := csv.NewWriter(&buf)
 
-	now := time.Now()
-
-	// Summary header rows (two metadata rows, then a blank separator)
-	_ = w.Write([]string{fmt.Sprintf("SLA Breach Report — %s", classificationName)})
-	_ = w.Write([]string{
-		fmt.Sprintf("Generated: %s", now.Format("2006-01-02 15:04")),
-		fmt.Sprintf("Total Breached: %d", len(incidents)),
-	})
+	// Report header: title + total incidents (reflects exactly what was
+	// returned to this recipient by the existing escalation filters).
+	_ = w.Write([]string{i18n.T(ctx, "escalation_report_title")})
+	_ = w.Write([]string{i18n.Tf(ctx, "escalation_report_total_incidents", len(incidents))})
 	_ = w.Write([]string{}) // blank separator row
 
 	// Column headers
 	_ = w.Write([]string{
-		"Incident Number",
-		"Title",
-		"Current State",
-		"Assignee",
-		"Created At",
-		"SLA Deadline",
-		"Hours Overdue",
+		i18n.T(ctx, "escalation_report_col_incident_number"),
+		i18n.T(ctx, "escalation_report_col_current_state"),
+		i18n.T(ctx, "escalation_report_col_department"),
+		i18n.T(ctx, "escalation_report_col_created_at"),
+		i18n.T(ctx, "escalation_report_col_full_classification_path"),
+		i18n.T(ctx, "escalation_report_col_full_location_path"),
+		i18n.T(ctx, "escalation_report_col_assignee"),
 	})
 
 	// Data rows
@@ -558,28 +632,34 @@ func buildGroupCSVReport(incidents []models.Incident, classificationName string)
 			stateName = inc.CurrentState.Name
 		}
 
-		assigneeName := "Unassigned"
+		departmentName := ""
+		if inc.Department != nil {
+			departmentName = inc.Department.Name
+		}
+
+		fullClassification := ""
+		if inc.ClassificationID != nil {
+			fullClassification = classificationPaths[inc.ClassificationID.String()]
+		}
+
+		fullLocation := ""
+		if inc.LocationID != nil {
+			fullLocation = locationPaths[inc.LocationID.String()]
+		}
+
+		assigneeName := i18n.T(ctx, "escalation_report_unassigned")
 		if inc.Assignee != nil {
 			assigneeName = fmt.Sprintf("%s %s", inc.Assignee.FirstName, inc.Assignee.LastName)
 		}
 
-		slaDeadline := ""
-		hoursOverdue := ""
-		if inc.SLADeadline != nil {
-			slaDeadline = inc.SLADeadline.Format("2006-01-02 15:04")
-			if now.After(*inc.SLADeadline) {
-				hoursOverdue = fmt.Sprintf("%.1f", now.Sub(*inc.SLADeadline).Hours())
-			}
-		}
-
 		_ = w.Write([]string{
 			inc.IncidentNumber,
-			inc.Title,
 			stateName,
-			assigneeName,
+			departmentName,
 			inc.CreatedAt.Format("2006-01-02 15:04"),
-			slaDeadline,
-			hoursOverdue,
+			fullClassification,
+			fullLocation,
+			assigneeName,
 		})
 	}
 

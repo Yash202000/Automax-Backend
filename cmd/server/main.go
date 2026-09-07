@@ -134,7 +134,7 @@ func main() {
 	escalationService := services.NewEscalationService(escalationRepo, escalationPolicyRepo, incidentRepo, workflowRepo, userRepo, notificationService)
 	escalationService.SetPolicyService(escalationPolicyService)
 	escalationService.SetFrontendURL(cfg.FrontendURL)
-	escalationGroupService := services.NewEscalationGroupService(escalationGroupRepo, incidentRepo, userRepo, notificationService, cfg.Escalation)
+	escalationGroupService := services.NewEscalationGroupService(escalationGroupRepo, incidentRepo, userRepo, reportRepo, notificationService, cfg.Escalation)
 	escalationGroupService.SetFrontendURL(cfg.FrontendURL)
 	escalationGroupService.SetPolicyService(escalationPolicyService)
 	fcmService := services.NewFCMService(repository.NewDeviceTokenRepository(db), notificationLogRepo)
@@ -234,7 +234,7 @@ func main() {
 	categoryHandler := handlers.NewCategoryHandler(categoryService)
 	classificationHandler := handlers.NewClassificationHandler(classificationRepo)
 	locationHandler := handlers.NewLocationHandler(locationRepo, cfg)
-	departmentHandler := handlers.NewDepartmentHandler(departmentRepo, userRepo, cfg)
+	departmentHandler := handlers.NewDepartmentHandler(departmentRepo, userRepo, incidentRepo, cfg)
 	extensionHandler := handlers.NewExtensionHandler(extensionService, cfg)
 	roleHandler := handlers.NewRoleHandler(roleRepo, permissionRepo, userRepo, wsHub, cfg)
 	actionLogHandler := handlers.NewActionLogHandler(actionLogService, validate)
@@ -327,6 +327,25 @@ func main() {
 	webhookHandler := handlers.NewWebhookHandler(integrationService, incidentService)
 	cintrixWebhookHandler := handlers.NewCintrixWebhookHandler(cfg.Cintrix.WebhookSecret, callLogRepo, userRepo)
 
+	// MOMRA CRM outbound integration (Automax -> MOMRA: classification/EE master sync,
+	// status sync). Reverse direction from the existing inbound EPM routes below.
+	// Leaving MOMRA_BASE_URL unset still wires the routes but every call will fail
+	// against an empty base URL — acceptable for now since this is behind admin-only,
+	// manually-triggered endpoints, not something that runs unprompted.
+	momraClient := services.NewMOMRAClient(cfg.MOMRA)
+	momraSyncService := services.NewMOMRASyncService(momraClient, classificationRepo, departmentRepo, cfg.MOMRA)
+	momraSyncHandler := handlers.NewMOMRASyncHandler(momraSyncService)
+
+	// MOMRA status sync (Story A/B/C: WorkflowState -> CaseStatusID mapping, outbound
+	// call on status change reusing the integration execution-log infra, retry/backoff).
+	momraStatusMappingRepo := repository.NewMOMRAStatusMappingRepository(db)
+	momraStatusSyncService, err := services.NewMOMRAStatusSyncService(ctx, momraClient, momraStatusMappingRepo, integrationRepo)
+	if err != nil {
+		log.Fatalf("failed to initialize MOMRA status sync service: %v", err)
+	}
+	incidentService.SetMOMRAStatusSyncService(momraStatusSyncService)
+	momraStatusMappingHandler := handlers.NewMOMRAStatusMappingHandler(momraStatusMappingRepo, momraStatusSyncService, integrationRepo)
+
 	// License management
 	licenseRepo := repository.NewLicenseRepository(db)
 	licenseService := services.NewLicenseService(licenseRepo, cfg.License)
@@ -352,7 +371,7 @@ func main() {
 
 	// Initialize EPM handler
 	epmHandler := handlers.NewEPMHandler(userRepo, jwtManager, sessionStore)
-	epmIncidentHandler := handlers.NewEPMIncidentHandler(userRepo, locationRepo, classificationRepo, incidentRepo, workflowRepo, lookupRepo, departmentRepo, jwtManager, sessionStore, minioStorage, db)
+	epmIncidentHandler := handlers.NewEPMIncidentHandler(userRepo, locationRepo, classificationRepo, incidentRepo, workflowRepo, lookupRepo, departmentRepo, momraStatusMappingRepo, jwtManager, sessionStore, minioStorage, db, wsHub)
 
 	// Initialize middleware
 	authMiddleware := middleware.NewAuthMiddleware(jwtManager, sessionStore, userRepo)
@@ -398,6 +417,10 @@ func main() {
 	// envelope). Left alongside the v1 routes above.
 	app.Patch("/Momra/API/EPM/UpdateIncidentV2", epmIncidentHandler.UpdateIncidentV2)
 	app.Patch("/Momra/API/EPM/ReOpenIncidentV2", epmIncidentHandler.ReopenIncidentV2)
+	// STUB: MOMRA->Automax external-entity assignment notification. Mechanism/contract
+	// not yet confirmed by MOMRA (OD-N2) — see AssignExternalEntity's doc comment. Kept
+	// alongside UpdateIncidentV2, which now also persists EE fields on every call.
+	app.Patch("/Momra/API/EPM/AssignExternalEntity", epmIncidentHandler.AssignExternalEntity)
 
 	api := app.Group("/api")
 	v1 := api.Group("/v1")
@@ -833,6 +856,22 @@ func main() {
 	integrationScripts.Delete("/:id", authMiddleware.RequirePermission("admin:integration"), integrationHandler.DeleteScript)
 	integrationScripts.Post("/:id/test", authMiddleware.RequirePermission("admin:integration"), integrationHandler.TestScript)
 	integrationScripts.Get("/:id/logs", authMiddleware.RequirePermission("admin:integration"), integrationHandler.ListLogsByScript)
+
+	// MOMRA CRM outbound sync — manual admin trigger for classification / external
+	// entity / EE-classification master data (docs/MOMRA_Outbound_Integration_Spec_v1.0.md).
+	momraSync := admin.Group("/momra")
+	momraSync.Post("/sync/classifications", authMiddleware.RequirePermission("admin:integration"), momraSyncHandler.SyncClassifications)
+	momraSync.Post("/sync/external-entities", authMiddleware.RequirePermission("admin:integration"), momraSyncHandler.SyncExternalEntities)
+	momraSync.Post("/sync/external-entity-classifications", authMiddleware.RequirePermission("admin:integration"), momraSyncHandler.SyncExternalEntityClassifications)
+	momraSync.Post("/sync/all", authMiddleware.RequirePermission("admin:integration"), momraSyncHandler.SyncAll)
+
+	momraStatusMappings := admin.Group("/momra/status-mappings")
+	momraStatusMappings.Post("/", authMiddleware.RequirePermission("admin:integration"), momraStatusMappingHandler.Create)
+	momraStatusMappings.Get("/", authMiddleware.RequirePermission("admin:integration"), momraStatusMappingHandler.ListByWorkflow)
+	momraStatusMappings.Put("/:id", authMiddleware.RequirePermission("admin:integration"), momraStatusMappingHandler.Update)
+	momraStatusMappings.Delete("/:id", authMiddleware.RequirePermission("admin:integration"), momraStatusMappingHandler.Delete)
+	momraSync.Get("/status-sync/logs", authMiddleware.RequirePermission("admin:integration"), momraStatusMappingHandler.ListStatusSyncLogs)
+	momraSync.Post("/status-sync/logs/:logId/retry", authMiddleware.RequirePermission("admin:integration"), momraStatusMappingHandler.RetryFailedSync)
 
 	stateIntegrations := admin.Group("/workflow-states")
 	stateIntegrations.Post("/:stateId/triggers", authMiddleware.RequirePermission("admin:integration"), integrationHandler.CreateStateTrigger)

@@ -102,7 +102,7 @@ func (h *ClassificationHandler) Create(c *fiber.Ctx) error {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
 			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "classification_name_exists"))
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Create criticalities if provided
@@ -214,10 +214,10 @@ func (h *ClassificationHandler) Update(c *fiber.Ctx) error {
 		if !*req.IsActive && classification.IsActive {
 			hasActive, err := h.repo.HasActiveChildren(c.UserContext(), id)
 			if err != nil {
-				return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+				return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 			}
 			if hasActive {
-				return utils.ErrorResponse(c, fiber.StatusConflict, "Cannot deactivate this classification because it has active sub-classifications. Please deactivate all child classifications first.")
+				return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "classification_has_active_children"))
 			}
 		}
 		classification.IsActive = *req.IsActive
@@ -231,13 +231,13 @@ func (h *ClassificationHandler) Update(c *fiber.Ctx) error {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
 			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "classification_name_exists"))
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Update types if provided
 	if len(req.Types) > 0 {
 		if err := h.repo.SetTypes(c.UserContext(), id, req.Types); err != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update_types")+": "+err.Error())
+			return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_update_types"))
 		}
 	}
 
@@ -351,7 +351,7 @@ func (h *ClassificationHandler) Delete(c *fiber.Ctx) error {
 	}
 
 	if err := h.repo.Delete(c.UserContext(), id); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "classification_deleted"), nil)
@@ -368,7 +368,7 @@ func (h *ClassificationHandler) List(c *fiber.Ctx) error {
 		classifications, err = h.repo.List(c.UserContext())
 	}
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	responses := make([]models.ClassificationResponse, len(classifications))
@@ -421,13 +421,13 @@ func (h *ClassificationHandler) GetChildren(c *fiber.Ctx) error {
 	} else {
 		parentID, parseErr := uuid.Parse(parentIDStr)
 		if parseErr != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid parent ID")
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_parent_id"))
 		}
 		children, err = h.repo.GetByParentID(c.UserContext(), &parentID)
 	}
 
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	responses := make([]models.ClassificationResponse, len(children))
@@ -442,7 +442,7 @@ func (h *ClassificationHandler) GetChildren(c *fiber.Ctx) error {
 func (h *ClassificationHandler) Export(c *fiber.Ctx) error {
 	classifications, err := h.repo.List(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Filter out invalid records (with corrupted paths or invalid UUIDs)
@@ -592,7 +592,7 @@ func (h *ClassificationHandler) GetTreeWithStats(c *fiber.Ctx) error {
 
 	tree, err := h.repo.GetTreeWithStats(c.UserContext(), types)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "classification_tree_stats"), tree)
@@ -608,7 +608,7 @@ func (h *ClassificationHandler) GetCriticalities(c *fiber.Ctx) error {
 
 	criticalities, err := h.repo.GetCriticalitiesByClassificationID(c.UserContext(), classificationID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	responses := make([]models.ClassificationCriticalityResponse, len(criticalities))
@@ -728,7 +728,7 @@ func (h *ClassificationHandler) UpdateCriticality(c *fiber.Ctx) error {
 	}
 
 	if err := h.repo.UpdateCriticality(c.UserContext(), criticality); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "classification_criticality_updated"), models.ToClassificationCriticalityResponse(criticality))
@@ -743,7 +743,7 @@ func (h *ClassificationHandler) DeleteCriticality(c *fiber.Ctx) error {
 	}
 
 	if err := h.repo.DeleteCriticality(c.UserContext(), id); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "classification_criticality_deleted"), nil)

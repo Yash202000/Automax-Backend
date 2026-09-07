@@ -76,7 +76,7 @@ func (s *reviewService) CreateCycle(ctx context.Context, req *models.ReviewCycle
 	}
 
 	if err := s.reviewRepo.CreateCycle(ctx, cycle); err != nil {
-		return nil, fmt.Errorf("failed to create review cycle: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_create_review_cycle"), err)
 	}
 
 	// Reload with relations
@@ -143,7 +143,7 @@ func (s *reviewService) UpdateCycle(ctx context.Context, id uuid.UUID, req *mode
 	}
 
 	if err := s.reviewRepo.UpdateCycle(ctx, cycle); err != nil {
-		return nil, fmt.Errorf("failed to update review cycle: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_update_review_cycle"), err)
 	}
 
 	cycle, err = s.reviewRepo.FindCycleByIDWithRelations(ctx, cycle.ID)
@@ -184,12 +184,12 @@ func (s *reviewService) ActivateCycle(ctx context.Context, id uuid.UUID) (*model
 	}
 
 	if cycle.Status != models.ReviewCycleStatusDraft {
-		return nil, fmt.Errorf("can only activate cycles in draft status")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "can_only_activate_draft_cycles"))
 	}
 
 	cycle.Status = models.ReviewCycleStatusActive
 	if err := s.reviewRepo.UpdateCycle(ctx, cycle); err != nil {
-		return nil, fmt.Errorf("failed to activate cycle: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_activate_cycle"), err)
 	}
 
 	cycle, err = s.reviewRepo.FindCycleByIDWithRelations(ctx, cycle.ID)
@@ -210,12 +210,12 @@ func (s *reviewService) CompleteCycle(ctx context.Context, id uuid.UUID) (*model
 	}
 
 	if cycle.Status != models.ReviewCycleStatusActive {
-		return nil, fmt.Errorf("can only complete active cycles")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "can_only_complete_active_cycles"))
 	}
 
 	cycle.Status = models.ReviewCycleStatusCompleted
 	if err := s.reviewRepo.UpdateCycle(ctx, cycle); err != nil {
-		return nil, fmt.Errorf("failed to complete cycle: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_complete_cycle"), err)
 	}
 
 	cycle, err = s.reviewRepo.FindCycleByIDWithRelations(ctx, cycle.ID)
@@ -240,7 +240,7 @@ func (s *reviewService) AssignReviewees(ctx context.Context, cycleID uuid.UUID, 
 	}
 
 	if cycle.Status != models.ReviewCycleStatusDraft && cycle.Status != models.ReviewCycleStatusActive {
-		return nil, fmt.Errorf("can only assign reviewees to draft or active cycles")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "can_only_assign_draft_or_active"))
 	}
 
 	assignments := make([]models.ReviewAssignment, len(req.Assignments))
@@ -254,7 +254,7 @@ func (s *reviewService) AssignReviewees(ctx context.Context, cycleID uuid.UUID, 
 	}
 
 	if err := s.reviewRepo.CreateAssignmentsBulk(ctx, assignments); err != nil {
-		return nil, fmt.Errorf("failed to create assignments: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_create_assignments"), err)
 	}
 
 	// Reload assignments for this cycle
@@ -287,7 +287,7 @@ func (s *reviewService) GetAssignment(ctx context.Context, id uuid.UUID) (*model
 	assignment, err := s.reviewRepo.FindAssignmentByIDWithRelations(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("review assignment not found")
+			return nil, fmt.Errorf("%s", i18n.T(ctx, "review_assignment_not_found"))
 		}
 		return nil, err
 	}
@@ -299,13 +299,13 @@ func (s *reviewService) RemoveAssignment(ctx context.Context, id uuid.UUID) erro
 	assignment, err := s.reviewRepo.FindAssignmentByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return fmt.Errorf("review assignment not found")
+			return fmt.Errorf("%s", i18n.T(ctx, "review_assignment_not_found"))
 		}
 		return err
 	}
 
 	if assignment.Status == models.ReviewAssignmentStatusCompleted {
-		return fmt.Errorf("cannot remove completed assignments")
+		return fmt.Errorf("%s", i18n.T(ctx, "cannot_remove_completed_assignment"))
 	}
 
 	return s.reviewRepo.DeleteAssignment(ctx, id)
@@ -349,24 +349,24 @@ func (s *reviewService) ScoreGoals(ctx context.Context, assignmentID uuid.UUID, 
 	assignment, err := s.reviewRepo.FindAssignmentByID(ctx, assignmentID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("review assignment not found")
+			return nil, fmt.Errorf("%s", i18n.T(ctx, "review_assignment_not_found"))
 		}
 		return nil, err
 	}
 
 	if assignment.ReviewerID != userID {
-		return nil, fmt.Errorf("only the assigned reviewer can score goals")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "only_assigned_reviewer_score"))
 	}
 
 	if assignment.Status == models.ReviewAssignmentStatusCompleted {
-		return nil, fmt.Errorf("cannot modify a completed review")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "cannot_modify_completed_review"))
 	}
 
 	// Set status to in_progress if pending
 	if assignment.Status == models.ReviewAssignmentStatusPending {
 		assignment.Status = models.ReviewAssignmentStatusInProgress
 		if err := s.reviewRepo.UpdateAssignment(ctx, assignment); err != nil {
-			return nil, fmt.Errorf("failed to update assignment status: %w", err)
+			return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_update_assignment_status"), err)
 		}
 	}
 
@@ -389,7 +389,7 @@ func (s *reviewService) ScoreGoals(ctx context.Context, assignmentID uuid.UUID, 
 	}
 
 	if err := s.reviewRepo.UpsertGoalScores(ctx, assignmentID, scores); err != nil {
-		return nil, fmt.Errorf("failed to save goal scores: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_save_goal_scores"), err)
 	}
 
 	// Reload with relations
@@ -405,17 +405,17 @@ func (s *reviewService) SubmitReview(ctx context.Context, assignmentID uuid.UUID
 	assignment, err := s.reviewRepo.FindAssignmentByID(ctx, assignmentID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("review assignment not found")
+			return nil, fmt.Errorf("%s", i18n.T(ctx, "review_assignment_not_found"))
 		}
 		return nil, err
 	}
 
 	if assignment.ReviewerID != userID {
-		return nil, fmt.Errorf("only the assigned reviewer can submit the review")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "only_assigned_reviewer_submit"))
 	}
 
 	if assignment.Status == models.ReviewAssignmentStatusCompleted {
-		return nil, fmt.Errorf("review already submitted")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "review_already_submitted"))
 	}
 
 	// Save goal scores if provided
@@ -438,7 +438,7 @@ func (s *reviewService) SubmitReview(ctx context.Context, assignmentID uuid.UUID
 		}
 
 		if err := s.reviewRepo.UpsertGoalScores(ctx, assignmentID, scores); err != nil {
-			return nil, fmt.Errorf("failed to save goal scores: %w", err)
+			return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_save_goal_scores"), err)
 		}
 	}
 
@@ -451,7 +451,7 @@ func (s *reviewService) SubmitReview(ctx context.Context, assignmentID uuid.UUID
 	assignment.CompletedAt = &now
 
 	if err := s.reviewRepo.UpdateAssignment(ctx, assignment); err != nil {
-		return nil, fmt.Errorf("failed to submit review: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_submit_review"), err)
 	}
 
 	// Reload with relations

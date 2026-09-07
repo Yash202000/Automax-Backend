@@ -186,7 +186,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 
 	switch channel {
 	case "email":
-		_, err := utils.SendSMTPWithCCBCC(to, cc, bcc, subject, body, attachments)
+		_, err := utils.SendSMTPWithCCBCC(ctx, to, cc, bcc, subject, body, attachments)
 		if err != nil {
 
 			status = "failed"
@@ -224,7 +224,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 			}
 		}
 		for _, phone := range to {
-			sid, err := utils.SendSMS(phone, body)
+			sid, err := utils.SendSMS(ctx, phone, body)
 			if err != nil {
 				status = "failed"
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
@@ -249,7 +249,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 	case "whatsapp":
 		status = "sent"
 		for _, phone := range to {
-			messageID, err := utils.SendOTPWithMetaTemplate(phone, body)
+			messageID, err := utils.SendOTPWithMetaTemplate(ctx, phone, body)
 			if err != nil {
 				status = "failed"
 				recipientStatuses = append(recipientStatuses, models.RecipientInfo{

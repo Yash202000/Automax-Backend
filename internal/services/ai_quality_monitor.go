@@ -1,3 +1,6 @@
+// i18n note: this file's fmt.Errorf calls are internal-only — the monitor is a background
+// ticker started once in cmd/server/main.go (aiQualityMonitor.Start(ctx)) and has no HTTP
+// caller; errors only ever reach log.Printf, never an API response.
 package services
 
 import (

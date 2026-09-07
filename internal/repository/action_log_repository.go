@@ -65,6 +65,9 @@ func (r *actionLogRepository) List(ctx context.Context, filter *models.ActionLog
 	if filter.ResourceID != "" {
 		query = query.Where("resource_id = ?", filter.ResourceID)
 	}
+	if len(filter.RoleIDs) > 0 {
+		query = query.Where("user_id IN (SELECT user_id FROM user_roles WHERE role_id IN ?)", filter.RoleIDs)
+	}
 	if filter.StartDate != nil {
 		query = query.Where("created_at >= ?", *filter.StartDate)
 	}

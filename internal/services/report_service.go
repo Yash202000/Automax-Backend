@@ -18,6 +18,7 @@ import (
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/fonts"
+	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 	"github.com/jung-kurt/gofpdf"
@@ -181,7 +182,7 @@ func (s *reportService) UpdateReport(ctx context.Context, id uuid.UUID, req *mod
 
 	// Only creator can update (or implement permission check)
 	if report.CreatedByID != userID {
-		return nil, errors.New("you can only update your own reports")
+		return nil, errors.New(i18n.T(ctx, "only_update_own_reports"))
 	}
 
 	if req.Name != "" {
@@ -232,7 +233,7 @@ func (s *reportService) DeleteReport(ctx context.Context, id uuid.UUID, userID u
 
 	// Only creator can delete
 	if report.CreatedByID != userID {
-		return errors.New("you can only delete your own reports")
+		return errors.New(i18n.T(ctx, "only_delete_own_reports"))
 	}
 
 	return s.reportRepo.Delete(ctx, id)

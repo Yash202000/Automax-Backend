@@ -64,7 +64,7 @@ func (h *CallLogHandler) CreateCallLog(c *fiber.Ctx) error {
 
 	callLog, err := h.service.CreateCallLog(c.UserContext(), &req, resolved)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
@@ -114,7 +114,7 @@ func (h *CallLogHandler) UpdateCallLog(c *fiber.Ctx) error {
 
 	callLog, err := h.service.UpdateCallLog(c.UserContext(), id, &req)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -132,7 +132,7 @@ func (h *CallLogHandler) DeleteCallLog(c *fiber.Ctx) error {
 	}
 
 	if err := h.service.DeleteCallLog(c.UserContext(), id); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -206,7 +206,7 @@ func (h *CallLogHandler) ListCallLogs(c *fiber.Ctx) error {
 
 	items, total, err := h.service.ListCallLogsSummary(c.UserContext(), &filter, perspectiveID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// ListCallLogsSummary clamps Page/Limit on the filter it was handed, so these
@@ -231,7 +231,7 @@ func (h *CallLogHandler) ListCallLogs(c *fiber.Ctx) error {
 func (h *CallLogHandler) GetStats(c *fiber.Ctx) error {
 	stats, err := h.service.GetStats(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -299,7 +299,7 @@ func (h *CallLogHandler) StartCall(c *fiber.Ctx) error {
 
 	callLog, err := h.service.StartCall(c.UserContext(), req.CallUUID, req.CallType, initiator, recipients)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
@@ -333,7 +333,7 @@ func (h *CallLogHandler) EndCall(c *fiber.Ctx) error {
 
 	callLog, err := h.service.EndCall(c.UserContext(), callUUID, req.EndAt, req.Status)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -362,7 +362,7 @@ func (h *CallLogHandler) JoinCall(c *fiber.Ctx) error {
 	}
 
 	if err := h.service.JoinCall(c.UserContext(), callUUID, req.Phone); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -388,7 +388,7 @@ func (h *CallLogHandler) GetCallLogsByExtension(c *fiber.Ctx) error {
 
 	callLogs, total, err := h.service.GetCallLogsByPhone(c.UserContext(), extension, page, limit)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	totalPages := (int(total) + limit - 1) / limit
@@ -450,7 +450,7 @@ func (h *CallLogHandler) UploadAttachment(c *fiber.Ctx) error {
 	}
 
 	if err := h.service.AddAttachment(c.UserContext(), callUUID, attachment); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "attachment_uploaded"), map[string]interface{}{"success": true})
@@ -495,7 +495,7 @@ func (h *CallLogHandler) PreviewAttachment(c *fiber.Ctx) error {
 func (h *CallLogHandler) GetSipInfo(c *fiber.Ctx) error {
 	sipInfo, err := h.service.GetSipInfo(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.JSON(fiber.Map{

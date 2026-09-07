@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"log"
 	"strconv"
 	"strings"
 
@@ -32,7 +33,7 @@ func (h *ExtensionHandler) clientCodeAllowed() bool {
 }
 
 func (h *ExtensionHandler) forbiddenClient(c *fiber.Ctx) error {
-	return utils.ErrorResponse(c, fiber.StatusForbidden, "Extension management is not enabled for this client")
+	return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "extension_mgmt_disabled"))
 }
 
 func (h *ExtensionHandler) actorID(c *fiber.Ctx) (uuid.UUID, bool) {
@@ -48,7 +49,8 @@ func (h *ExtensionHandler) List(c *fiber.Ctx) error {
 	}
 	result, err := h.service.ListExtensions(c.UserContext(), c.Query("status"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadGateway, err.Error())
+		log.Printf("[ExtensionHandler] PBX request failed: %v", err)
+		return utils.ErrorResponse(c, fiber.StatusBadGateway, i18n.T(c.UserContext(), "pbx_request_failed"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, "Extensions retrieved", result)
 }
@@ -64,7 +66,7 @@ func (h *ExtensionHandler) Mine(c *fiber.Ctx) error {
 	}
 	result, err := h.service.MyExtension(c.UserContext(), actor)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, "Current extension retrieved", result)
 }
@@ -76,7 +78,7 @@ func (h *ExtensionHandler) History(c *fiber.Ctx) error {
 	}
 	extension := strings.TrimSpace(c.Params("extension"))
 	if extension == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "extension is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "extension_required"))
 	}
 	limit := 100
 	if v := c.Query("limit"); v != "" {
@@ -86,7 +88,7 @@ func (h *ExtensionHandler) History(c *fiber.Ctx) error {
 	}
 	result, err := h.service.GetHistory(c.UserContext(), extension, limit)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, "Extension history retrieved", result)
 }
@@ -111,9 +113,9 @@ func (h *ExtensionHandler) Assign(c *fiber.Ctx) error {
 	resp, err := h.service.AssignExtension(c.UserContext(), req, actor)
 	if err != nil {
 		if errors.Is(err, services.ErrExtensionNotInPool) {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), err.Error()))
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	if resp == nil {
 		return utils.SuccessResponse(c, fiber.StatusOK, "Extension already assigned to this user", nil)
@@ -132,13 +134,13 @@ func (h *ExtensionHandler) Release(c *fiber.Ctx) error {
 	}
 	extension := strings.TrimSpace(c.Params("extension"))
 	if extension == "" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "extension is required")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "extension_required"))
 	}
 	if err := h.service.ReleaseExtension(c.UserContext(), extension, actor); err != nil {
 		if errors.Is(err, services.ErrExtensionNotAssigned) {
-			return utils.ErrorResponse(c, fiber.StatusNotFound, err.Error())
+			return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), err.Error()))
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, "Extension released", nil)
 }
@@ -160,7 +162,8 @@ func (h *ExtensionHandler) Create(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
 	if err := h.service.CreateExtension(c.UserContext(), req, actor); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadGateway, err.Error())
+		log.Printf("[ExtensionHandler] PBX request failed: %v", err)
+		return utils.ErrorResponse(c, fiber.StatusBadGateway, i18n.T(c.UserContext(), "pbx_request_failed"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusCreated, "Extension created", fiber.Map{"extension": strings.TrimSpace(req.Extension)})
 }

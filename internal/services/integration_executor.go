@@ -1,3 +1,7 @@
+// i18n note: this file's fmt.Errorf messages surface only in IntegrationExecutionLog.ErrorMessage
+// (admin-only script-test/execution-log diagnostics, e.g. "external API returned 500: <raw body>")
+// and are not translated — the raw upstream response/protocol detail is the useful part for an
+// admin debugging an integration script, and is itself untranslatable (external API text).
 package services
 
 import (
@@ -16,6 +20,7 @@ import (
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	pkgUtils "github.com/automax/backend/pkg/utils"
 	"github.com/dop251/goja"
 	"github.com/google/uuid"
 )
@@ -276,9 +281,9 @@ func (e *integrationExecutor) buildIncidentContext(incident *models.Incident, fi
 		"postal_code":     incident.PostalCode,
 		"custom_fields":   incident.CustomFields,
 		// Direct reporter fields (always present even without a linked user)
-		"reporter_email":     incident.ReporterEmail,
+		"reporter_email": incident.ReporterEmail,
 		"reporter_name":  incident.ReporterName,
-		"reporter_phone": incident.ReporterPhone,
+		"reporter_phone": pkgUtils.NormalizeMobile(incident.ReporterPhone, pkgUtils.SystemCountryCode()),
 		"sla_breached":   incident.SLABreached,
 		"created_at":     incident.CreatedAt.Format(time.RFC3339),
 		"updated_at":     incident.UpdatedAt.Format(time.RFC3339),
@@ -332,7 +337,7 @@ func (e *integrationExecutor) buildIncidentContext(incident *models.Incident, fi
 			ctx["reporter_name"] = fullName
 		}
 		if ctx["reporter_phone"] == "" && incident.Reporter.Phone != "" {
-			ctx["reporter_phone"] = incident.Reporter.Phone
+			ctx["reporter_phone"] = pkgUtils.NormalizeMobile(incident.Reporter.Phone, pkgUtils.SystemCountryCode())
 		}
 		ctx["reporter_id"] = incident.Reporter.ID.String()
 		ctx["reporter_username"] = incident.Reporter.Username

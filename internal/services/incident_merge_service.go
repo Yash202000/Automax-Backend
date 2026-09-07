@@ -280,13 +280,13 @@ func (s *incidentMergeService) MergeIncidents(ctx context.Context, req *models.I
 
 	firstIncidentID, err := uuid.Parse(req.IncidentIDs[0])
 	if err != nil {
-		return nil, fmt.Errorf("invalid incident ID: %s", req.IncidentIDs[0])
+		return nil, fmt.Errorf("%s", i18n.Tf(ctx, "invalid_incident_id_fmt", req.IncidentIDs[0]))
 	}
 
 	// Get the incident to determine its workflow
 	firstIncident, err := s.incidentRepo.FindByID(ctx, firstIncidentID)
 	if err != nil {
-		return nil, fmt.Errorf("error fetching incident: %v", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "error_fetching_incident"), err)
 	}
 
 	// Check user permission for this workflow
@@ -327,14 +327,14 @@ func (s *incidentMergeService) MergeIncidents(ctx context.Context, req *models.I
 	// Parse IDs
 	masterID, err := uuid.Parse(req.MasterIncidentID)
 	if err != nil {
-		return nil, fmt.Errorf("invalid master incident ID: %s", req.MasterIncidentID)
+		return nil, fmt.Errorf("%s", i18n.Tf(ctx, "invalid_master_incident_id_fmt", req.MasterIncidentID))
 	}
 
 	incidentIDs := make([]uuid.UUID, 0, len(req.IncidentIDs))
 	for _, idStr := range req.IncidentIDs {
 		id, err := uuid.Parse(idStr)
 		if err != nil {
-			return nil, fmt.Errorf("invalid incident ID: %s", idStr)
+			return nil, fmt.Errorf("%s", i18n.Tf(ctx, "invalid_incident_id_fmt", idStr))
 		}
 		incidentIDs = append(incidentIDs, id)
 	}
@@ -353,7 +353,7 @@ func (s *incidentMergeService) MergeIncidents(ctx context.Context, req *models.I
 	// Link all non-master incidents to the chosen master
 	if err := txMergeRepo.LinkIncidentsToMaster(ctx, masterID, incidentIDs, userID, req.Comment); err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("failed to merge incidents: %v", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_merge_incidents"), err)
 	}
 
 	// Build list of related incident numbers for the revision
@@ -371,7 +371,7 @@ func (s *incidentMergeService) MergeIncidents(ctx context.Context, req *models.I
 	masterIncident, err := txIncidentRepo.FindByID(ctx, masterID)
 	if err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("failed to fetch master incident: %v", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_fetch_master_incident"), err)
 	}
 	masterIncidentNumber := masterIncident.IncidentNumber
 
@@ -462,13 +462,13 @@ func (s *incidentMergeService) MergeIncidents(ctx context.Context, req *models.I
 func (s *incidentMergeService) UnmergeIncident(ctx context.Context, req *models.IncidentUnmergeRequest, userID uuid.UUID, userRoleIDs []uuid.UUID) (*models.IncidentUnmergeResponse, error) {
 	incidentID, err := uuid.Parse(req.IncidentID)
 	if err != nil {
-		return nil, fmt.Errorf("invalid incident ID: %s", req.IncidentID)
+		return nil, fmt.Errorf("%s", i18n.Tf(ctx, "invalid_incident_id_fmt", req.IncidentID))
 	}
 
 	// Get incident to determine workflow
 	incident, err := s.incidentRepo.FindByID(ctx, incidentID)
 	if err != nil {
-		return nil, fmt.Errorf("error fetching incident: %v", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "error_fetching_incident"), err)
 	}
 
 	// Check user permission for this workflow
@@ -482,7 +482,7 @@ func (s *incidentMergeService) UnmergeIncident(ctx context.Context, req *models.
 
 	isMerged, err := s.mergeRepo.IsIncidentMerged(ctx, incidentID)
 	if err != nil {
-		return nil, fmt.Errorf("error checking merge status: %v", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "error_checking_merge_status"), err)
 	}
 	if !isMerged {
 		return nil, errors.New(i18n.T(ctx, "incident_not_merged"))
@@ -510,7 +510,7 @@ func (s *incidentMergeService) UnmergeIncident(ctx context.Context, req *models.
 
 	if err := txMergeRepo.UnmergeIncident(ctx, incidentID, userID, req.Comment); err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("failed to unmerge incident: %v", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_unmerge_incident"), err)
 	}
 
 	// Create revision
@@ -537,7 +537,7 @@ func (s *incidentMergeService) UnmergeIncident(ctx context.Context, req *models.
 	txIncidentRepo.CreateRevision(ctx, revision)
 
 	if err := tx.Commit().Error; err != nil {
-		return nil, fmt.Errorf("failed to commit unmerge: %v", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_commit_unmerge"), err)
 	}
 
 	updatedIncident, _ := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
@@ -564,7 +564,7 @@ func (s *incidentMergeService) BulkUnmergeIncidents(ctx context.Context, req *mo
 	for _, idStr := range req.IncidentIDs {
 		id, err := uuid.Parse(idStr)
 		if err != nil {
-			return nil, fmt.Errorf("invalid incident ID: %s", idStr)
+			return nil, fmt.Errorf("%s", i18n.Tf(ctx, "invalid_incident_id_fmt", idStr))
 		}
 		incidentIDs = append(incidentIDs, id)
 	}
@@ -574,7 +574,7 @@ func (s *incidentMergeService) BulkUnmergeIncidents(ctx context.Context, req *mo
 	for _, id := range incidentIDs {
 		incident, err := s.incidentRepo.FindByID(ctx, id)
 		if err != nil {
-			return nil, fmt.Errorf("error fetching incident %s: %v", id, err)
+			return nil, fmt.Errorf("%s", i18n.Tf(ctx, "error_fetching_incident_id_fmt", id, err))
 		}
 		incidents = append(incidents, incident)
 	}
@@ -658,7 +658,7 @@ func (s *incidentMergeService) BulkUnmergeIncidents(ctx context.Context, req *mo
 	}
 
 	if err := tx.Commit().Error; err != nil {
-		return nil, fmt.Errorf("failed to commit bulk unmerge: %v", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_commit_bulk_unmerge"), err)
 	}
 
 	// Fetch updated incidents for WS broadcast

@@ -41,9 +41,9 @@ func (h *ReviewHandler) CreateCycle(c *fiber.Ctx) error {
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	resp, err := h.service.CreateCycle(c.Context(), &req, userID)
+	resp, err := h.service.CreateCycle(c.UserContext(), &req, userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "review_cycle_created"), resp)
@@ -63,9 +63,9 @@ func (h *ReviewHandler) ListCycles(c *fiber.Ctx) error {
 		departmentID = &id
 	}
 
-	cycles, total, err := h.service.ListCycles(c.Context(), status, departmentID, page, limit)
+	cycles, total, err := h.service.ListCycles(c.UserContext(), status, departmentID, page, limit)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.PaginatedSuccessResponse(c, cycles, page, limit, total)
@@ -77,7 +77,7 @@ func (h *ReviewHandler) GetCycle(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_cycle_id"))
 	}
 
-	resp, err := h.service.GetCycle(c.Context(), id)
+	resp, err := h.service.GetCycle(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, err.Error())
 	}
@@ -96,7 +96,7 @@ func (h *ReviewHandler) UpdateCycle(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
-	resp, err := h.service.UpdateCycle(c.Context(), id, &req)
+	resp, err := h.service.UpdateCycle(c.UserContext(), id, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -110,7 +110,7 @@ func (h *ReviewHandler) DeleteCycle(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_cycle_id"))
 	}
 
-	if err := h.service.DeleteCycle(c.Context(), id); err != nil {
+	if err := h.service.DeleteCycle(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
@@ -127,7 +127,7 @@ func (h *ReviewHandler) ActivateCycle(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_cycle_id"))
 	}
 
-	resp, err := h.service.ActivateCycle(c.Context(), id)
+	resp, err := h.service.ActivateCycle(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -141,7 +141,7 @@ func (h *ReviewHandler) CompleteCycle(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_cycle_id"))
 	}
 
-	resp, err := h.service.CompleteCycle(c.Context(), id)
+	resp, err := h.service.CompleteCycle(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -168,7 +168,7 @@ func (h *ReviewHandler) AssignReviewees(c *fiber.Ctx) error {
 		return utils.FormatValidationError(c, err)
 	}
 
-	assignments, err := h.service.AssignReviewees(c.Context(), cycleID, &req)
+	assignments, err := h.service.AssignReviewees(c.UserContext(), cycleID, &req)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -182,9 +182,9 @@ func (h *ReviewHandler) ListCycleAssignments(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_cycle_id"))
 	}
 
-	assignments, err := h.service.ListCycleAssignments(c.Context(), cycleID)
+	assignments, err := h.service.ListCycleAssignments(c.UserContext(), cycleID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -200,7 +200,7 @@ func (h *ReviewHandler) GetAssignment(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_assignment_id"))
 	}
 
-	resp, err := h.service.GetAssignment(c.Context(), id)
+	resp, err := h.service.GetAssignment(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, err.Error())
 	}
@@ -214,7 +214,7 @@ func (h *ReviewHandler) RemoveAssignment(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_assignment_id"))
 	}
 
-	if err := h.service.RemoveAssignment(c.Context(), id); err != nil {
+	if err := h.service.RemoveAssignment(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
@@ -230,9 +230,9 @@ func (h *ReviewHandler) ListMyReviews(c *fiber.Ctx) error {
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit, _ := strconv.Atoi(c.Query("limit", "20"))
 
-	reviews, total, err := h.service.ListMyReviews(c.Context(), userID, page, limit)
+	reviews, total, err := h.service.ListMyReviews(c.UserContext(), userID, page, limit)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.PaginatedSuccessResponse(c, reviews, page, limit, total)
@@ -243,9 +243,9 @@ func (h *ReviewHandler) ListMyReviewTasks(c *fiber.Ctx) error {
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit, _ := strconv.Atoi(c.Query("limit", "20"))
 
-	tasks, total, err := h.service.ListMyReviewTasks(c.Context(), userID, page, limit)
+	tasks, total, err := h.service.ListMyReviewTasks(c.UserContext(), userID, page, limit)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.PaginatedSuccessResponse(c, tasks, page, limit, total)
@@ -268,7 +268,7 @@ func (h *ReviewHandler) ScoreGoals(c *fiber.Ctx) error {
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	resp, err := h.service.ScoreGoals(c.Context(), assignmentID, scores, userID)
+	resp, err := h.service.ScoreGoals(c.UserContext(), assignmentID, scores, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -293,7 +293,7 @@ func (h *ReviewHandler) SubmitReview(c *fiber.Ctx) error {
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	resp, err := h.service.SubmitReview(c.Context(), assignmentID, &req, userID)
+	resp, err := h.service.SubmitReview(c.UserContext(), assignmentID, &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}

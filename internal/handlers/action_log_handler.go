@@ -51,6 +51,8 @@ func (h *ActionLogHandler) ListActionLogs(c *fiber.Ctx) error {
 		filter.Limit = 20
 	}
 
+	filter.RoleIDs = utils.ParseUUIDList(c.Query("roles", ""))
+
 	// QueryParser cannot parse plain YYYY-MM-DD into *time.Time; do it manually.
 	// Use time.Local so date-only strings cover the entire local day, not UTC midnight.
 	if startStr := c.Query("start_date"); startStr != "" {
@@ -183,6 +185,8 @@ func (h *ActionLogHandler) ExportActionLogs(c *fiber.Ctx) error {
 			"errors":  validationErrors,
 		})
 	}
+
+	filter.RoleIDs = utils.ParseUUIDList(c.Query("roles", ""))
 
 	// QueryParser cannot parse plain YYYY-MM-DD into *time.Time; do it manually.
 	// Use time.Local so date-only strings cover the entire local day, not UTC midnight.

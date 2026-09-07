@@ -86,7 +86,7 @@ func (h *NotificationHandler) SendGridInboundWebhook(c *fiber.Ctx) error {
 	// Parse multipart form data
 	form, err := c.MultipartForm()
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Failed to parse multipart form")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "failed_to_parse_multipart_form"))
 	}
 
 	// Extract email fields from SendGrid webhook
@@ -209,7 +209,7 @@ func (h *NotificationHandler) SendGridInboundWebhook(c *fiber.Ctx) error {
 
 	// Save to database using the service
 	if err := h.service.SaveInboundNotification(c.UserContext(), inboundLog); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to save inbound email: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_save_inbound_email"))
 	}
 
 	// Log for debugging (optional)
@@ -273,13 +273,13 @@ func (h *NotificationHandler) Send(c *fiber.Ctx) error {
 		// Try JSON fallback
 		var req SendNotificationRequest
 		if jsonErr := c.BodyParser(&req); jsonErr != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid request format")
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 		}
 
 		// Send without attachments
 		result, err := h.service.SendNotification(c.UserContext(), req.Channel, req.TemplateCode, req.Language, req.To, req.CC, req.BCC, req.Subject, req.Body, req.Variables, nil, sentBy, nil)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+			return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 		}
 
 		res := SendNotificationResponse{
@@ -324,13 +324,13 @@ func (h *NotificationHandler) Send(c *fiber.Ctx) error {
 		for _, fileHeader := range files {
 			file, err := fileHeader.Open()
 			if err != nil {
-				return utils.ErrorResponse(c, fiber.StatusBadRequest, "Failed to read attachment: "+fileHeader.Filename)
+				return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "failed_to_read_attachment"))
 			}
 			defer file.Close()
 
 			data, err := io.ReadAll(file)
 			if err != nil {
-				return utils.ErrorResponse(c, fiber.StatusBadRequest, "Failed to read attachment data: "+fileHeader.Filename)
+				return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "failed_to_read_attachment_data"))
 			}
 
 			contentType := fileHeader.Header.Get("Content-Type")
@@ -379,7 +379,7 @@ func (h *NotificationHandler) Send(c *fiber.Ctx) error {
 	// Send notification with attachments
 	result, err := h.service.SendNotification(c.UserContext(), channel, templateCodePtr, language, to, cc, bcc, subject, body, variables, attachments, sentBy, nil)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Update attachment URLs if attachments were uploaded
@@ -474,10 +474,10 @@ func (h *NotificationHandler) List(c *fiber.Ctx) error {
 		filter.UserID = nil
 		allowed, err := h.canViewIncident(c.UserContext(), userID, *filter.IncidentID)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+			return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 		}
 		if !allowed {
-			return utils.ErrorResponse(c, fiber.StatusForbidden, "Insufficient permissions")
+			return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "insufficient_permissions"))
 		}
 	}
 
@@ -491,7 +491,7 @@ func (h *NotificationHandler) List(c *fiber.Ctx) error {
 
 	notifications, total, err := h.service.ListNotifications(c.UserContext(), filter)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	applyAcceptLanguage(c.Get("Accept-Language"), notifications)
@@ -547,7 +547,7 @@ func (h *NotificationHandler) ResendNotification(c *fiber.Ctx) error {
 	}
 
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
@@ -614,7 +614,7 @@ func (h *NotificationHandler) ListMonitoring(c *fiber.Ctx) error {
 
 	notifications, total, err := h.service.ListMonitoring(c.UserContext(), filter)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	totalPages := (int(total) + filter.Limit - 1) / filter.Limit
@@ -666,7 +666,7 @@ func (h *NotificationHandler) Delete(c *fiber.Ctx) error {
 	}
 
 	if err := h.service.DeleteNotification(c.UserContext(), id); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -684,7 +684,7 @@ func (h *NotificationHandler) PermanentDelete(c *fiber.Ctx) error {
 	}
 
 	if err := h.service.PermanentDelete(c.UserContext(), id); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -708,7 +708,7 @@ func (h *NotificationHandler) CreateDraft(c *fiber.Ctx) error {
 
 	draft, err := h.service.CreateDraft(c.UserContext(), &req, userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
@@ -722,7 +722,7 @@ func (h *NotificationHandler) UpdateDraft(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid draft ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_draft_id"))
 	}
 
 	var req models.UpdateDraftRequest
@@ -732,7 +732,7 @@ func (h *NotificationHandler) UpdateDraft(c *fiber.Ctx) error {
 
 	draft, err := h.service.UpdateDraft(c.UserContext(), id, &req)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -746,12 +746,12 @@ func (h *NotificationHandler) SendDraft(c *fiber.Ctx) error {
 	idStr := c.Params("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid draft ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_draft_id"))
 	}
 
 	result, err := h.service.SendDraft(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -779,7 +779,7 @@ func (h *NotificationHandler) MarkAsRead(c *fiber.Ctx) error {
 	}
 
 	if err := h.service.MarkAsRead(c.UserContext(), id, req.IsRead); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -806,7 +806,7 @@ func (h *NotificationHandler) ToggleStar(c *fiber.Ctx) error {
 	}
 
 	if err := h.service.ToggleStar(c.UserContext(), id, req.IsStarred); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -833,7 +833,7 @@ func (h *NotificationHandler) MoveToCategory(c *fiber.Ctx) error {
 	}
 
 	if err := h.service.MoveToCategory(c.UserContext(), id, req.Category); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -859,13 +859,13 @@ func (h *NotificationHandler) BulkMoveToCategory(c *fiber.Ctx) error {
 	for i, idStr := range req.IDs {
 		id, err := uuid.Parse(idStr)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid notification ID: "+idStr)
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_notification_id"))
 		}
 		ids[i] = id
 	}
 
 	if err := h.service.BulkMoveToCategory(c.UserContext(), ids, req.Category); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -890,13 +890,13 @@ func (h *NotificationHandler) BulkDelete(c *fiber.Ctx) error {
 	for i, idStr := range req.IDs {
 		id, err := uuid.Parse(idStr)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid notification ID: "+idStr)
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_notification_id"))
 		}
 		ids[i] = id
 	}
 
 	if err := h.service.BulkDelete(c.UserContext(), ids); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -937,7 +937,7 @@ func (h *NotificationHandler) Reply(c *fiber.Ctx) error {
 	// Send reply with threading
 	reply, err := h.service.ReplyToNotification(c.UserContext(), originalID, req.To, req.CC, req.BCC, req.Subject, req.Body, req.BodyHTML, sentBy)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
@@ -952,7 +952,7 @@ func (h *NotificationHandler) GetThread(c *fiber.Ctx) error {
 	threadIDStr := c.Params("thread_id")
 	threadID, err := uuid.Parse(threadIDStr)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid thread ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_thread_id"))
 	}
 
 	// Get all emails in this thread
@@ -964,7 +964,7 @@ func (h *NotificationHandler) GetThread(c *fiber.Ctx) error {
 
 	notifications, total, err := h.service.ListNotifications(c.UserContext(), filter)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	applyAcceptLanguage(c.Get("Accept-Language"), notifications)
@@ -1021,7 +1021,7 @@ func (h *NotificationHandler) DownloadAttachment(c *fiber.Ctx) error {
 
 	fileReader, err := h.storage.GetFile(c.UserContext(), storagePath)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Failed to retrieve attachment: "+err.Error())
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "failed_to_retrieve_attachment"))
 	}
 	defer fileReader.Close()
 
@@ -1081,7 +1081,7 @@ func (h *NotificationHandler) GetAttachmentURL(c *fiber.Ctx) error {
 
 	presignedURL, err := h.storage.GetFileURL(c.UserContext(), storagePath)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to generate download URL: "+err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_generate_download_url"))
 	}
 
 	return c.JSON(fiber.Map{
@@ -1118,7 +1118,7 @@ func (h *NotificationHandler) DownloadNotificationAttachmentByID(c *fiber.Ctx) e
 
 	fileReader, err := h.storage.GetFile(c.UserContext(), attachment.StoragePath)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Failed to retrieve attachment: "+err.Error())
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "failed_to_retrieve_attachment"))
 	}
 	defer fileReader.Close()
 
@@ -1161,7 +1161,7 @@ func (h *NotificationHandler) PreviewNotificationAttachmentByID(c *fiber.Ctx) er
 
 	fileReader, err := h.storage.GetFile(c.UserContext(), attachment.StoragePath)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, "Failed to retrieve attachment: "+err.Error())
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "failed_to_retrieve_attachment"))
 	}
 	defer fileReader.Close()
 

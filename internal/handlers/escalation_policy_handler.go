@@ -25,7 +25,7 @@ func NewEscalationPolicyHandler(service *services.EscalationPolicyService, userR
 func (h *EscalationPolicyHandler) List(c *fiber.Ctx) error {
 	policies, err := h.service.List(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "escalation_policies_retrieved"), policies)
 }
@@ -55,7 +55,7 @@ func (h *EscalationPolicyHandler) Create(c *fiber.Ctx) error {
 
 	policy, err := h.service.Create(c.UserContext(), &req)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "escalation_policy_created"), policy)
 }
@@ -77,7 +77,7 @@ func (h *EscalationPolicyHandler) Update(c *fiber.Ctx) error {
 
 	policy, err := h.service.Update(c.UserContext(), id, &req)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "escalation_policy_updated"), policy)
 }
@@ -101,11 +101,11 @@ func (h *EscalationPolicyHandler) Delete(c *fiber.Ctx) error {
 func (h *EscalationPolicyHandler) UpdateTargetExcludedUsers(c *fiber.Ctx) error {
 	policyID, err := uuid.Parse(c.Params("id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid policy ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_policy_id"))
 	}
 	targetID, err := uuid.Parse(c.Params("target_id"))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid target ID")
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_target_id"))
 	}
 
 	var req struct {
@@ -155,7 +155,7 @@ func (h *EscalationPolicyHandler) ResolveTargetUsers(c *fiber.Ctx) error {
 
 	users, err := h.service.ResolveUsers(c.UserContext(), deptID, roleID, req.ExcludedUserIDs)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	responses := make([]models.UserResponse, len(users))

@@ -112,6 +112,9 @@ type IncidentService interface {
 	SetFCMService(fcm *FCMService)
 	// SetIntegrationExecutor wires in the IntegrationExecutor (called post-construction).
 	SetIntegrationExecutor(exec IntegrationExecutor)
+	// SetMOMRAStatusSyncService wires in the MOMRA outbound status sync (called
+	// post-construction, same pattern as SetIntegrationExecutor).
+	SetMOMRAStatusSyncService(svc MOMRAStatusSyncService)
 	// SetActionExecutor wires in the ActionExecutor (called post-construction).
 	SetActionExecutor(ae ActionExecutor)
 	// SetPublicFeedbackRepo wires in the feedback repo so IsFinalClose transitions can
@@ -151,6 +154,7 @@ type incidentService struct {
 	userService             UserService
 	fcmService              *FCMService
 	integrationExecutor     IntegrationExecutor
+	momraStatusSyncService  MOMRAStatusSyncService
 	actionExecutor          ActionExecutor
 	publicFeedbackRepo      repository.IncidentPublicFeedbackRepository
 	smsFeedbackPendingRepo  repository.SmsFeedbackPendingRepository
@@ -223,6 +227,11 @@ func (s *incidentService) SetIvrSmsLinkRepo(repo repository.IvrSmsLinkRepository
 // SetFCMService wires the FCMService into the incident service.
 func (s *incidentService) SetFCMService(fcm *FCMService) {
 	s.fcmService = fcm
+}
+
+// SetMOMRAStatusSyncService wires the MOMRA outbound status sync into the incident service.
+func (s *incidentService) SetMOMRAStatusSyncService(svc MOMRAStatusSyncService) {
+	s.momraStatusSyncService = svc
 }
 
 // SetIntegrationExecutor wires the IntegrationExecutor into the incident service.
@@ -881,7 +890,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 
 	// Send template-based email/SMS notifications for the initial state (if configured)
 	if s.notificationService != nil && (initialState.NewIncidentEmailTemplateCode != "" || initialState.NewIncidentSMSTemplateCode != "") {
-		bgCtx := context.Background()
+		bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		capturedCreated := created
 		capturedInitialState := initialState
 		capturedReporterID := reporterID
@@ -951,7 +960,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 
 	// Send FCM push notification to the initial assignee (employee)
 	if s.fcmService != nil && incident.AssigneeID != nil {
-		bgCtx := context.Background()
+		bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		capturedAssignee := *incident.AssigneeID
 		capturedID := incident.ID
 		capturedNumber := incident.IncidentNumber
@@ -1102,6 +1111,98 @@ func (s *incidentService) ListIncidents(ctx context.Context, filter *models.Inci
 	}
 
 	return responses, total, nil
+}
+
+// momraEEListEntry mirrors epm_incident_handler.go's EPMExternalEntity JSON shape
+// (EntityID/EECode/EEName) for unmarshaling Incident.AvailableEEList (a jsonb column,
+// see models/incident.go). Duplicated here rather than imported since this services
+// package doesn't depend on the handlers package.
+type momraEEListEntry struct {
+	EntityID string `json:"EntityID"`
+	EECode   string `json:"EECode"`
+	EEName   string `json:"EEName"`
+}
+
+// resolveIncidentEEDepartmentIDs resolves the set of Department IDs that MOMRA
+// declared eligible for THIS specific incident at submission time
+// (Incident.AvailableEEList — see epm_incident_handler.go's EEList/EPMExternalEntity
+// handling). This is narrower than the classification-wide EE-classification links
+// (deptRepo.FindMatching): MOMRA may name fewer EEs eligible for a given incident than
+// are generally linked to its special classification, so this incident-specific list
+// is the authoritative source for validateExternalDepartmentAssignment. Entries are
+// resolved the same way epm_incident_handler.go's resolveEERoutingDepartmentByCodeOrName
+// does: EntityID/EECode first (the stable key synced from MOMRA's EE master into
+// Department.Code), EEName as a fallback.
+func (s *incidentService) resolveIncidentEEDepartmentIDs(ctx context.Context, incident *models.Incident) map[uuid.UUID]bool {
+	allowed := map[uuid.UUID]bool{}
+	for _, d := range s.resolveIncidentEEDepartments(ctx, incident) {
+		allowed[d.ID] = true
+	}
+	return allowed
+}
+
+// resolveIncidentEEDepartments is the full-record counterpart of
+// resolveIncidentEEDepartmentIDs: same resolution (EntityID/EECode first, EEName
+// fallback), but returns the actual Department records rather than just a
+// membership set. Used by ExecuteTransition's auto-detect block below to merge these
+// incident-specific EEs into the classification/location-matched candidate list —
+// mirrors department_handler.go's MatchDepartment, which the frontend's picker uses,
+// so both stay in agreement about which departments are actually selectable.
+func (s *incidentService) resolveIncidentEEDepartments(ctx context.Context, incident *models.Incident) []models.Department {
+	if len(incident.AvailableEEList) == 0 {
+		return nil
+	}
+	var entries []momraEEListEntry
+	if err := json.Unmarshal(incident.AvailableEEList, &entries); err != nil {
+		return nil
+	}
+	var result []models.Department
+	seen := make(map[uuid.UUID]bool, len(entries))
+	for _, e := range entries {
+		var dept *models.Department
+		code := strings.TrimSpace(e.EntityID)
+		if code == "" {
+			code = strings.TrimSpace(e.EECode)
+		}
+		if code != "" {
+			if d, err := s.deptRepo.FindByCode(ctx, code); err == nil {
+				dept = d
+			}
+		}
+		if dept == nil && strings.TrimSpace(e.EEName) != "" {
+			if d, err := s.deptRepo.FindByNameOrNameAr(ctx, e.EEName, e.EEName); err == nil {
+				dept = d
+			}
+		}
+		if dept != nil && dept.Type == externalEntityDepartmentType && dept.IsActive && !seen[dept.ID] {
+			seen[dept.ID] = true
+			result = append(result, *dept)
+		}
+	}
+	return result
+}
+
+// validateExternalDepartmentAssignment enforces that, for an incident originally
+// submitted by MOMRA (Source == "MOMRA"), assigning an external-type department only
+// succeeds if that department is one of the External Entities MOMRA declared eligible
+// for this specific incident at submission time (see resolveIncidentEEDepartmentIDs).
+// Internal-type departments and non-MOMRA incidents are unrestricted — this rule only
+// protects MOMRA-sourced external-entity assignment.
+func (s *incidentService) validateExternalDepartmentAssignment(ctx context.Context, incident *models.Incident, departmentID uuid.UUID) error {
+	if incident.Source != "MOMRA" {
+		return nil
+	}
+	dept, err := s.deptRepo.FindByID(ctx, departmentID)
+	if err != nil {
+		return fmt.Errorf("department not found: %w", err)
+	}
+	if dept.Type != externalEntityDepartmentType {
+		return nil
+	}
+	if !s.resolveIncidentEEDepartmentIDs(ctx, incident)[departmentID] {
+		return fmt.Errorf("external entity %s is not in this incident's MOMRA-provided EE list", dept.Name)
+	}
+	return nil
 }
 
 func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req *models.IncidentUpdateRequest, userID uuid.UUID, userRoleIDs []uuid.UUID) (*models.IncidentResponse, error) {
@@ -1402,6 +1503,10 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		} else {
 			deptID, err := uuid.Parse(*req.DepartmentID)
 			if err == nil {
+				if err := s.validateExternalDepartmentAssignment(ctx, incident, deptID); err != nil {
+					tx.Rollback()
+					return nil, err
+				}
 				if incident.DepartmentID == nil || *incident.DepartmentID != deptID {
 					newVal := *req.DepartmentID
 					changes = append(changes, models.IncidentFieldChange{
@@ -1884,7 +1989,7 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		}
 		sourceIncidentIDsJSON, err := json.Marshal(sourceIncidentIDStrs)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal source incident IDs: %w", err)
+			return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_marshal_source_incident_ids"), err)
 		}
 
 		// Update existing request with new source incident
@@ -1922,7 +2027,7 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		}
 
 		if err := s.incidentRepo.UpdateFields(ctx, incidentID, updateFields); err != nil {
-			return nil, fmt.Errorf("failed to update source incident: %w", err)
+			return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_update_source_incident"), err)
 		}
 
 		// Create transition history
@@ -1990,7 +2095,7 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		}
 
 		// Send SMS to citizen
-		bgCtxExist := context.Background()
+		bgCtxExist := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		existReqNum := existingRequest.IncidentNumber
 		go func(inc *models.Incident) {
 			defer func() {
@@ -2273,7 +2378,7 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 	}
 
 	// Send SMS to citizen
-	bgCtxNew := context.Background()
+	bgCtxNew := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 	go func(inc *models.Incident) {
 		defer func() {
 			if r := recover(); r != nil {
@@ -2899,7 +3004,7 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 		}
 
 		// Send SMS to citizen for each converted incident
-		bgCtxBulk := context.Background()
+		bgCtxBulk := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		bulkReqNum := requestNumber
 		go func(inc *models.Incident) {
 			defer func() {
@@ -3237,6 +3342,36 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		}
 		matchedDepts, _ := s.deptRepo.FindMatching(ctx, classID, locID, deptTypeFilter)
 
+		// For a MOMRA-sourced incident, auto-detect candidates must include this
+		// incident's own EEList-resolved departments (Incident.AvailableEEList), not
+		// just classification/location linkage — MOMRA can declare an EE eligible for
+		// a specific incident with no general classification link at all. Without
+		// this merge, a classification-linked EE and an EEList-only EE would produce
+		// len(matchedDepts)==1 (only the classification-linked one visible here),
+		// causing the "single match — auto-assign" branch below to silently override
+		// whatever the user actually selected in the frontend picker — which already
+		// shows both, since department_handler.go's MatchDepartment does this same
+		// merge. Kept in sync with that handler rather than sharing code directly,
+		// since handlers and services don't depend on each other.
+		wantsExternalMatch := deptTypeFilter == nil || *deptTypeFilter == externalEntityDepartmentType
+		if incident.Source == "MOMRA" && wantsExternalMatch && len(incident.AvailableEEList) > 0 {
+			eeDepartments := s.resolveIncidentEEDepartments(ctx, incident)
+			merged := make([]models.Department, 0, len(matchedDepts)+len(eeDepartments))
+			for _, d := range matchedDepts {
+				if d.Type != externalEntityDepartmentType {
+					merged = append(merged, d)
+				}
+			}
+			seen := make(map[uuid.UUID]bool, len(eeDepartments))
+			for _, d := range eeDepartments {
+				if !seen[d.ID] {
+					seen[d.ID] = true
+					merged = append(merged, d)
+				}
+			}
+			matchedDepts = merged
+		}
+
 		if len(matchedDepts) == 1 {
 			// Single match — auto-assign
 			updates["department_id"] = matchedDepts[0].ID
@@ -3251,9 +3386,32 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				tx.Rollback()
 				return nil, errors.New(i18n.T(ctx, "invalid_department_id"))
 			}
+			isMatched := false
+			for _, d := range matchedDepts {
+				if d.ID == deptID {
+					isMatched = true
+					break
+				}
+			}
+			if !isMatched {
+				tx.Rollback()
+				return nil, errors.New(i18n.T(ctx, "invalid_department_id"))
+			}
 			updates["department_id"] = deptID
 		}
 		// If no departments match, keep current department (graceful fallback)
+	}
+
+	// For a MOMRA-sourced incident, an external-type department assigned here (from
+	// any of the three branches above) must be one of the External Entities MOMRA
+	// declared eligible for THIS specific incident at submission time — see
+	// validateExternalDepartmentAssignment. Checked once here rather than in each
+	// branch since all three write the same "department_id" key into updates.
+	if deptID, ok := updates["department_id"].(uuid.UUID); ok {
+		if err := s.validateExternalDepartmentAssignment(ctx, incident, deptID); err != nil {
+			tx.Rollback()
+			return nil, err
+		}
 	}
 
 	// Handle user assignment from transition settings
@@ -3374,6 +3532,10 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				}
 			case "department_id":
 				if id, err := uuid.Parse(fieldValue); err == nil {
+					if err := s.validateExternalDepartmentAssignment(ctx, incident, id); err != nil {
+						tx.Rollback()
+						return nil, err
+					}
 					updates["department_id"] = id
 				}
 			case "location_id":
@@ -3622,6 +3784,25 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			s.integrationExecutor.RunStateTriggers(ctx, updatedForExec, transition.ToStateID, newState.Name, "enter")
 			// State-exit triggers on the source state
 			s.integrationExecutor.RunStateTriggers(ctx, updatedForExec, transition.FromStateID, transition.FromState.Name, "exit")
+
+			// MOMRA outbound status sync (docs/MOMRA_Outbound_Integration_Spec_v1.0.md
+			// §3 Story B) — async so an outbound MOMRA call/retry never adds latency to
+			// this request. No-ops internally if no mapping exists for the new state.
+			// operatorName/operatorID/eeNotesFromMUN (TFIS v1.0 §11.3) are resolved
+			// synchronously here — before the goroutine, which uses context.Background()
+			// and so can't read the request-scoped ctx/req itself — then closed over.
+			if s.momraStatusSyncService != nil {
+				var operatorName, operatorID string
+				if actor, actorErr := s.userRepo.FindByID(ctx, userID); actorErr == nil && actor != nil {
+					operatorName = strings.TrimSpace(actor.FirstName + " " + actor.LastName)
+					if operatorName == "" {
+						operatorName = actor.Username
+					}
+					operatorID = actor.Username
+				}
+				eeNotesFromMUN := req.Comment
+				go s.momraStatusSyncService.SyncIncidentStatus(context.Background(), updatedForExec, transition.ToStateID, operatorName, operatorID, eeNotesFromMUN)
+			}
 		}
 	}
 
@@ -3663,7 +3844,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 					_ = s.syncTransitionToMergedIncidents(ctx, incidentID, transition, history, userID)
 
 					// Run feedback/attachment copy and SMS in background
-					bgCtx := context.Background()
+					bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 					fmt.Println("[DEBUG] Starting goroutine: autoCloseMergedIncidents")
 					go func() {
 						_ = s.autoCloseMergedIncidents(bgCtx, incidentID, req, userID)
@@ -3677,7 +3858,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 					_ = s.syncTransitionToMergedIncidents(ctx, incidentID, transition, history, userID)
 
 					// Send SMS notifications in background
-					bgCtx := context.Background()
+					bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 					fmt.Println("[DEBUG] Starting goroutine: notifyStatusChangeToMergedIncidents")
 					go func() {
 						_ = s.notifyStatusChangeToMergedIncidents(bgCtx, incidentID, newStateName, req.Comment, userID)
@@ -3722,7 +3903,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	// Send FCM push notification to next assignee(s) only on the "approve" transition
 	if s.fcmService != nil && transition.Code == "approve" && len(assigneeUserIDs) > 0 {
 		log.Printf("FCM-ASSIGN: assignee user %s:, transition_code: %s", assigneeUserIDs, transition.Code)
-		bgCtx := context.Background()
+		bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		capturedID := incidentID
 		capturedNumber := incident.IncidentNumber
 		capturedTitle := incident.Title
@@ -3751,7 +3932,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 
 	// Send FCM push notification + in-app notification to the citizen reporter on incident closure
 	if (s.fcmService != nil || s.notificationService != nil) && newState.StateType == "terminal" && incident.ReporterID != nil {
-		bgCtx := context.Background()
+		bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		reporterID := *incident.ReporterID
 		closedAt := time.Now()
 		comment := req.Comment
@@ -3853,7 +4034,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	// Create rejection log asynchronously if this is a rejection transition.
 	// Run in background so a log creation failure never blocks the response.
 	if transition.IsRejection && s.rejectionLogRepo != nil {
-		bgCtx := context.Background()
+		bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		go s.createRejectionLog(bgCtx, incidentID, incident, transition, history, userID, userRoleIDs)
 	}
 
@@ -3866,7 +4047,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 				assignedDeptID = &deptID
 			}
 		}
-		bgCtx := context.Background()
+		bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -3884,7 +4065,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 
 	if transition.IsMissingInfo {
 		log.Printf("MISSING-INFO-SMS: Triggered for incident %s and transition.IsMissingInfo: %v", incident.IncidentNumber, transition.IsMissingInfo)
-		bgCtx := context.Background()
+		bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		//go s.SendMissingInfoClosureSMS(bgCtx, incident.IncidentNumber, incident.CreatedByMobile, incident.ReporterID, userID)
 		go func() {
 			defer func() {
@@ -3960,7 +4141,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		capturedTransition := transition
 		capturedIncident := updated
 		capturedUserID := userID
-		bgCtx := context.Background()
+		bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		go func() {
 			var performer *models.User
 			if u, err := s.userRepo.FindByID(bgCtx, capturedUserID); err == nil {
@@ -4306,7 +4487,7 @@ func (s *incidentService) ListComments(ctx context.Context, incidentID uuid.UUID
 func (s *incidentService) UpdateComment(ctx context.Context, commentID uuid.UUID, req *models.IncidentCommentRequest, userID uuid.UUID) (*models.IncidentCommentResponse, error) {
 	comment, err := s.incidentRepo.FindCommentByID(ctx, commentID)
 	if err != nil {
-		return nil, err
+		return nil, errors.New(i18n.T(ctx, "comment_not_found"))
 	}
 
 	// Only author can update their comment
@@ -4321,7 +4502,7 @@ func (s *incidentService) UpdateComment(ctx context.Context, commentID uuid.UUID
 	comment.IsInternal = req.IsInternal
 
 	if err := s.incidentRepo.UpdateComment(ctx, comment); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_update_comment"), err)
 	}
 
 	// Create revision for comment modified
@@ -4343,7 +4524,7 @@ func (s *incidentService) UpdateComment(ctx context.Context, commentID uuid.UUID
 func (s *incidentService) DeleteComment(ctx context.Context, commentID uuid.UUID, userID uuid.UUID) error {
 	comment, err := s.incidentRepo.FindCommentByID(ctx, commentID)
 	if err != nil {
-		return err
+		return errors.New(i18n.T(ctx, "comment_not_found"))
 	}
 
 	// Only author can delete their comment
@@ -4355,7 +4536,7 @@ func (s *incidentService) DeleteComment(ctx context.Context, commentID uuid.UUID
 	oldContent := comment.Content
 
 	if err := s.incidentRepo.DeleteComment(ctx, commentID); err != nil {
-		return err
+		return fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_delete_comment"), err)
 	}
 
 	// Create revision for comment deleted
@@ -4563,7 +4744,7 @@ func (s *incidentService) ListAttachments(ctx context.Context, incidentID uuid.U
 func (s *incidentService) DeleteAttachment(ctx context.Context, attachmentID uuid.UUID, userID uuid.UUID) error {
 	attachment, err := s.incidentRepo.FindAttachmentByID(ctx, attachmentID)
 	if err != nil {
-		return err
+		return errors.New(i18n.T(ctx, "attachment_not_found"))
 	}
 
 	// Only uploader can delete their attachment
@@ -4577,7 +4758,7 @@ func (s *incidentService) DeleteAttachment(ctx context.Context, attachmentID uui
 	// TODO: Delete file from storage
 
 	if err := s.incidentRepo.DeleteAttachment(ctx, attachmentID); err != nil {
-		return err
+		return fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_delete_attachment"), err)
 	}
 
 	// Create revision for attachment removed
@@ -4669,7 +4850,7 @@ func (s *incidentService) AssignIncident(ctx context.Context, incidentID, assign
 			}
 		}
 		if s.fcmService != nil {
-			bgCtx := context.Background()
+			bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 			capturedAssignee := assigneeID
 			capturedID := incidentID
 			capturedNumber := updated.IncidentNumber
@@ -5002,7 +5183,7 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 
 			// Send actual SMS via Twilio
 			fmt.Println("[DEBUG] Calling utils.SendSMS...")
-			_, smsErr := utils.SendSMS(merged.Reporter.Phone, smsMessage)
+			_, smsErr := utils.SendSMS(ctx, merged.Reporter.Phone, smsMessage)
 			if smsErr != nil {
 				fmt.Printf("[DEBUG] SMS send failed: %v\n", smsErr)
 			} else {
@@ -5125,7 +5306,7 @@ func (s *incidentService) notifyStatusChangeToMergedIncidents(ctx context.Contex
 
 			// Send actual SMS via Twilio
 			fmt.Println("[DEBUG] Calling utils.SendSMS...")
-			_, smsErr := utils.SendSMS(merged.Reporter.Phone, smsMessage)
+			_, smsErr := utils.SendSMS(ctx, merged.Reporter.Phone, smsMessage)
 			if smsErr != nil {
 				fmt.Printf("[DEBUG] SMS send failed: %v\n", smsErr)
 			} else {
@@ -5594,7 +5775,7 @@ func (s *incidentService) TriggerEvaluation(ctx context.Context, id uuid.UUID) e
 
 	// All checks passed — increment evaluation count
 	if err := s.incidentRepo.IncrementEvaluationCount(ctx, id); err != nil {
-		return fmt.Errorf("failed to increment evaluation count: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_increment_evaluation_count"), err)
 	}
 
 	transitionName := ""
@@ -5896,7 +6077,7 @@ func (s *incidentService) SendNotBelongClosureSMS(
 	)
 
 	now := time.Now()
-	_, smsErr := utils.SendSMS(mobile, smsMessage)
+	_, smsErr := utils.SendSMS(ctx, mobile, smsMessage)
 	status := "sent"
 	if smsErr != nil {
 		status = "failed"
@@ -5974,7 +6155,7 @@ func (s *incidentService) sendConvertToRequestSMS(ctx context.Context, incident 
 	// Hardcoded Arabic fallback
 	smsMessage := fmt.Sprintf("تم تحويل بلاغك رقم %s إلى طلب رقم %s", incident.IncidentNumber, requestNumber)
 	now := time.Now()
-	_, smsErr := utils.SendSMS(mobile, smsMessage)
+	_, smsErr := utils.SendSMS(ctx, mobile, smsMessage)
 	status := "sent"
 	if smsErr != nil {
 		status = "failed"
@@ -6065,7 +6246,7 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 		incident.IncidentNumber,
 	)
 	now := time.Now()
-	_, smsErr := utils.SendSMS(mobile, smsMessage)
+	_, smsErr := utils.SendSMS(ctx, mobile, smsMessage)
 	status := "sent"
 	if smsErr != nil {
 		status = "failed"

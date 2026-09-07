@@ -89,7 +89,7 @@ func (h *IncidentHandler) GetReadyToCloseDurationOptions(c *fiber.Ctx) error {
 	if h.readyToCloseService == nil {
 		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
 			"success": false,
-			"error":   "ReadyToClose service not available",
+			"error":   i18n.T(c.UserContext(), "ready_to_close_service_unavailable"),
 		})
 	}
 	options := h.readyToCloseService.GetDurationOptionsForState(nil)
@@ -550,7 +550,7 @@ func (h *IncidentHandler) scopeIncidentFilterToUser(c *fiber.Ctx, filter *models
 	isUnscoped := user != nil && (user.IsSuperAdmin || (!restrictAdminRole && user.HasRole("admin")))
 
 	if filter.ReporterPhoneSearch != "" && user != nil && !user.IsSuperAdmin && !user.HasPermission("incidents:filter_reporter_phone") {
-		return true, utils.ErrorResponse(c, fiber.StatusForbidden, "Insufficient permissions to filter by reporter phone")
+		return true, utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "insufficient_permissions_reporter_phone"))
 	}
 
 	if findErr == nil && user != nil && !isUnscoped {
@@ -777,8 +777,7 @@ func (h *IncidentHandler) FindByIDWithLast6DigitValidation(c *fiber.Ctx) error {
 				"data": map[string]interface{}{
 					"success":           false,
 					"already_submitted": true,
-					"error":             "You have already submitted your information for this incident.",
-					// "error":             "You have already submitted your information for this incident.",
+					"error":             i18n.T(c.UserContext(), "citizen_already_submitted"),
 				},
 			})
 		}
@@ -928,7 +927,7 @@ func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"success": false,
 				"errors": map[string]string{
-					"source": "Source is required and should be 'ivr' for IVR updates",
+					"source": i18n.T(c.UserContext(), "source_required_ivr"),
 				},
 			})
 		}
@@ -937,7 +936,7 @@ func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"success": false,
 				"errors": map[string]string{
-					"comment": "Comment is required for IVR updates",
+					"comment": i18n.T(c.UserContext(), "comment_required_ivr"),
 				},
 			})
 		}
@@ -956,7 +955,7 @@ func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 			errors.Is(err, services.ErrClassificationNotSelectable):
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), err.Error()))
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "incident_updated"), incident)
@@ -971,7 +970,7 @@ func (h *IncidentHandler) DeleteIncident(c *fiber.Ctx) error {
 
 	user, ok := c.Locals(constants.ContextKeys.User).(*models.User)
 	if !ok || user == nil {
-		return utils.ErrorResponse(c, fiber.StatusForbidden, "Insufficient permissions")
+		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "insufficient_permissions"))
 	}
 
 	record, err := h.incidentRepo.FindByID(c.UserContext(), id)
@@ -989,11 +988,11 @@ func (h *IncidentHandler) DeleteIncident(c *fiber.Ctx) error {
 		requiredPerm = "requests:delete"
 	}
 	if !user.IsSuperAdmin && !user.HasPermission(requiredPerm) {
-		return utils.ErrorResponse(c, fiber.StatusForbidden, "Insufficient permissions")
+		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "insufficient_permissions"))
 	}
 
 	if err := h.service.DeleteIncident(c.UserContext(), id); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "incident_deleted"), nil)
@@ -1044,7 +1043,7 @@ func (h *IncidentHandler) CanConvertToRequest(c *fiber.Ctx) error {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "incident_not_found"))
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "permission_check_completed"), fiber.Map{
@@ -1120,7 +1119,7 @@ func (h *IncidentHandler) GetAvailableTransitions(c *fiber.Ctx) error {
 
 	transitions, err := h.service.GetAvailableTransitions(c.UserContext(), id, userID, roleIDs)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "available_transitions_retrieved"), transitions)
@@ -1135,7 +1134,7 @@ func (h *IncidentHandler) GetTransitionHistory(c *fiber.Ctx) error {
 
 	history, err := h.service.GetTransitionHistory(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "transition_history_retrieved"), history)
@@ -1165,7 +1164,7 @@ func (h *IncidentHandler) AddComment(c *fiber.Ctx) error {
 
 	comment, err := h.service.AddComment(c.UserContext(), incidentID, &req, userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "comment_added"), comment)
@@ -1180,7 +1179,7 @@ func (h *IncidentHandler) ListComments(c *fiber.Ctx) error {
 
 	comments, err := h.service.ListComments(c.UserContext(), incidentID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "comments_retrieved"), comments)
@@ -1235,7 +1234,7 @@ func (h *IncidentHandler) ListFeedbacks(c *fiber.Ctx) error {
 
 	feedbacks, err := h.service.ListFeedbacks(c.UserContext(), incidentID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "feedbacks_retrieved"), feedbacks)
@@ -1281,7 +1280,7 @@ func (h *IncidentHandler) UploadAttachment(c *fiber.Ctx) error {
 
 	result, err := h.service.AddAttachment(c.UserContext(), incidentID, attachment)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "attachment_uploaded"), result)
@@ -1335,7 +1334,7 @@ func (h *IncidentHandler) UploadAttachmentIvrSms(c *fiber.Ctx) error {
 
 	result, err := h.service.AddAttachment(c.UserContext(), incidentID, attachment)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "attachment_uploaded"), result)
@@ -1350,7 +1349,7 @@ func (h *IncidentHandler) ListAttachments(c *fiber.Ctx) error {
 
 	attachments, err := h.service.ListAttachments(c.UserContext(), incidentID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "attachments_retrieved"), attachments)
@@ -1419,7 +1418,7 @@ func (h *IncidentHandler) AssignIncident(c *fiber.Ctx) error {
 
 	incident, err := h.service.AssignIncident(c.UserContext(), incidentID, assigneeID, userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "incident_assigned"), incident)
@@ -1463,7 +1462,7 @@ func (h *IncidentHandler) GetStats(c *fiber.Ctx) error {
 
 	stats, err := h.service.GetStats(c.UserContext(), filter)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "stats_retrieved"), stats)
@@ -1632,7 +1631,7 @@ func (h *IncidentHandler) GetStatsV2(c *fiber.Ctx) error {
 
 	stats, err := h.service.GetStatsV2(c.UserContext(), filter)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "stats_retrieved"), stats)
@@ -1669,7 +1668,7 @@ func (h *IncidentHandler) GetPriorityCounts(c *fiber.Ctx) error {
 
 	counts, err := h.service.GetPriorityCounts(c.UserContext(), filter)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "priority_counts_retrieved"), counts)
@@ -1686,7 +1685,7 @@ func (h *IncidentHandler) GetMyAssigned(c *fiber.Ctx) error {
 
 	incidents, total, err := h.service.GetMyAssigned(c.UserContext(), userID, recordType, page, limit)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	totalPages := (int(total) + limit - 1) / limit
@@ -1710,7 +1709,7 @@ func (h *IncidentHandler) GetMyReported(c *fiber.Ctx) error {
 
 	incidents, total, err := h.service.GetMyReported(c.UserContext(), userID, recordType, page, limit)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	totalPages := (int(total) + limit - 1) / limit
@@ -1728,7 +1727,7 @@ func (h *IncidentHandler) GetMyReported(c *fiber.Ctx) error {
 func (h *IncidentHandler) GetSLABreached(c *fiber.Ctx) error {
 	incidents, err := h.service.GetSLABreached(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "sla_breached_retrieved"), incidents)
@@ -1781,7 +1780,7 @@ func (h *IncidentHandler) ListRevisions(c *fiber.Ctx) error {
 
 	revisions, total, err := h.service.ListRevisions(c.UserContext(), incidentID, filter)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	totalPages := (int(total) + limit - 1) / limit
@@ -1899,6 +1898,7 @@ func (h *IncidentHandler) CreateComplaint(c *fiber.Ctx) error {
 		// One query covers every source-incident rule below, instead of a fully-preloaded read.
 		source, err := h.incidentRepo.GetComplaintSourceValidation(c.UserContext(), incidentID, req.ReporterPhone)
 		if err != nil {
+			log.Print(err)
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "source_incident_not_found"))
 		}
 		if source.RecordType == "complaint" {
@@ -1933,7 +1933,7 @@ func (h *IncidentHandler) CreateComplaint(c *fiber.Ctx) error {
 
 	complaint, err := h.service.CreateComplaint(c.UserContext(), &req, user.ID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "complaint_created"), complaint)
@@ -1970,7 +1970,7 @@ func (h *IncidentHandler) ListComplaints(c *fiber.Ctx) error {
 	h.applyDepartmentScope(c, filter)
 	complaints, total, err := h.service.ListIncidents(c.UserContext(), filter)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	totalPages := (int(total) + filter.Limit - 1) / filter.Limit
@@ -2021,7 +2021,7 @@ func (h *IncidentHandler) IncrementEvaluation(c *fiber.Ctx) error {
 	// Return updated complaint
 	complaint, err := h.service.GetIncident(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "evaluation_triggered"), complaint)
@@ -2045,7 +2045,7 @@ func (h *IncidentHandler) CreateQuery(c *fiber.Ctx) error {
 
 	query, err := h.service.CreateQuery(c.UserContext(), &req, userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "query_created"), query)
@@ -2083,7 +2083,7 @@ func (h *IncidentHandler) ListQueries(c *fiber.Ctx) error {
 
 	queries, total, err := h.service.ListIncidents(c.UserContext(), filter)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	totalPages := (int(total) + filter.Limit - 1) / filter.Limit
@@ -2243,7 +2243,7 @@ func (h *IncidentHandler) UpdateClosedIncidentSummary(c *fiber.Ctx) error {
 		req.Reason,
 	)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "closed_summary_updated"), updatedIncident)
@@ -2316,7 +2316,7 @@ func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
 	fmt.Printf("REQUEST-INFO-SMS: lang %s, subject: %s, message: %s", lang, subject, smsMessage)
 
 	now := time.Now()
-	_, smsErr := internalUtils.SendSMS(mobile, smsMessage)
+	_, smsErr := internalUtils.SendSMS(c.UserContext(), mobile, smsMessage)
 	status := "sent"
 	if smsErr != nil {
 		status = "failed"

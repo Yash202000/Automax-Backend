@@ -34,7 +34,7 @@ func (h *ReportTemplateHandler) CreateTemplate(c *fiber.Ctx) error {
 
 	template, err := h.templateService.CreateTemplate(c.UserContext(), &req, userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "report_template_created"), template)
@@ -70,7 +70,7 @@ func (h *ReportTemplateHandler) ListTemplates(c *fiber.Ctx) error {
 
 	templates, total, err := h.templateService.ListTemplates(c.UserContext(), filter)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.PaginatedSuccessResponse(c, templates, filter.Page, filter.Limit, total)
@@ -92,7 +92,7 @@ func (h *ReportTemplateHandler) UpdateTemplate(c *fiber.Ctx) error {
 
 	template, err := h.templateService.UpdateTemplate(c.UserContext(), id, &req, userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "report_template_updated"), template)
@@ -108,7 +108,7 @@ func (h *ReportTemplateHandler) DeleteTemplate(c *fiber.Ctx) error {
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
 	if err := h.templateService.DeleteTemplate(c.UserContext(), id, userID); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "report_template_deleted"), nil)
@@ -125,7 +125,7 @@ func (h *ReportTemplateHandler) DuplicateTemplate(c *fiber.Ctx) error {
 
 	template, err := h.templateService.DuplicateTemplate(c.UserContext(), id, userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "report_template_duplicated"), template)
@@ -139,7 +139,7 @@ func (h *ReportTemplateHandler) SetDefaultTemplate(c *fiber.Ctx) error {
 	}
 
 	if err := h.templateService.SetDefaultTemplate(c.UserContext(), id); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "default_template_set"), nil)
@@ -167,7 +167,7 @@ func (h *ReportTemplateHandler) GenerateReport(c *fiber.Ctx) error {
 	ctx := cstmContext.WithReportTimezone(c.UserContext(), req.Timezone)
 	data, filename, contentType, err := h.templateService.GenerateReport(ctx, &req, userID)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	c.Set("Content-Type", contentType)
@@ -195,7 +195,7 @@ func (h *ReportTemplateHandler) PreviewTemplate(c *fiber.Ctx) error {
 
 	data, err := h.templateService.PreviewTemplate(c.UserContext(), &req.Template, req.DataSource, req.Limit)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	c.Set("Content-Type", "application/pdf")

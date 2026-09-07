@@ -20,18 +20,20 @@ import (
 )
 
 type DepartmentHandler struct {
-	repo      repository.DepartmentRepository
-	userRepo  repository.UserRepository
-	validator *validator.Validate
-	cfg       *config.Config
+	repo         repository.DepartmentRepository
+	userRepo     repository.UserRepository
+	incidentRepo repository.IncidentRepository
+	validator    *validator.Validate
+	cfg          *config.Config
 }
 
-func NewDepartmentHandler(repo repository.DepartmentRepository, userRepo repository.UserRepository, cfg *config.Config) *DepartmentHandler {
+func NewDepartmentHandler(repo repository.DepartmentRepository, userRepo repository.UserRepository, incidentRepo repository.IncidentRepository, cfg *config.Config) *DepartmentHandler {
 	return &DepartmentHandler{
-		repo:      repo,
-		userRepo:  userRepo,
-		validator: validator.New(),
-		cfg:       cfg,
+		repo:         repo,
+		userRepo:     userRepo,
+		incidentRepo: incidentRepo,
+		validator:    validator.New(),
+		cfg:          cfg,
 	}
 }
 
@@ -66,8 +68,7 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 
 	existing, err := h.repo.FindByNameOrNameAr(c.UserContext(), req.Name, req.NameAr)
 	if err == nil && existing != nil {
-		msg := fmt.Sprintf("Department '%s' already exists", existing.Name)
-		return utils.ErrorResponse(c, fiber.StatusConflict, msg)
+		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.Tf(c.UserContext(), "department_already_exists_named", existing.Name))
 	}
 
 	deptType := req.Type
@@ -97,7 +98,7 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
 			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "department_code_exists"))
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Assign locations, classifications, and roles if provided
@@ -212,8 +213,7 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 	if (req.Name != "" && req.Name != department.Name) || (req.NameAr != "" && req.NameAr != department.NameAr) {
 		existing, err := h.repo.FindByNameOrNameAr(c.UserContext(), checkName, checkNameAr)
 		if err == nil && existing != nil && existing.ID != id {
-			msg := fmt.Sprintf("Department '%s' already exists", existing.Name)
-			return utils.ErrorResponse(c, fiber.StatusConflict, msg)
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.Tf(c.UserContext(), "department_already_exists_named", existing.Name))
 		}
 	}
 
@@ -248,10 +248,10 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 		if !*req.IsActive && department.IsActive {
 			hasActive, err := h.repo.HasActiveChildren(c.UserContext(), id)
 			if err != nil {
-				return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+				return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 			}
 			if hasActive {
-				return utils.ErrorResponse(c, fiber.StatusConflict, "Cannot deactivate this department because it has active sub-departments. Please deactivate all child departments first.")
+				return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "department_has_active_children"))
 			}
 		}
 		department.IsActive = *req.IsActive
@@ -264,7 +264,7 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
 			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "department_code_exists"))
 		}
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Update associations if provided
@@ -302,7 +302,7 @@ func (h *DepartmentHandler) Delete(c *fiber.Ctx) error {
 
 	children, users, incidents, err := h.repo.CheckDeleteDependencies(c.UserContext(), id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	isAr := strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.Get("Accept-Language"))), "ar")
@@ -337,7 +337,7 @@ func (h *DepartmentHandler) Delete(c *fiber.Ctx) error {
 	}
 
 	if err := h.repo.Delete(c.UserContext(), id); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "department_deleted"), nil)
@@ -366,7 +366,7 @@ func (h *DepartmentHandler) List(c *fiber.Ctx) error {
 
 	departments, total, err := h.repo.ListFiltered(c.UserContext(), filter)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	responses := make([]models.DepartmentResponse, len(departments))
@@ -388,7 +388,7 @@ func (h *DepartmentHandler) GetTree(c *fiber.Ctx) error {
 
 	tree, err := h.repo.GetTree(c.UserContext(), scopeDepartmentIDs)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	responses := make([]models.DepartmentResponse, len(tree))
@@ -416,7 +416,7 @@ func (h *DepartmentHandler) GetChildren(c *fiber.Ctx) error {
 	}
 
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	responses := make([]models.DepartmentResponse, len(children))
@@ -454,7 +454,44 @@ func (h *DepartmentHandler) MatchDepartment(c *fiber.Ctx) error {
 
 	departments, err := h.repo.FindMatching(c.UserContext(), classificationID, locationID, req.DepartmentType)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
+	}
+
+	// For a MOMRA-sourced incident, classification/location-linked matching above is
+	// NOT the authoritative source of eligible External Entities: MOMRA declares a
+	// specific, possibly narrower, set per incident at submission time
+	// (Incident.AvailableEEList — see incident_service.go's
+	// validateExternalDepartmentAssignment, which enforces this same rule server-side
+	// when the assignment is actually submitted). When incident_id is given and
+	// qualifies, external-type entries here are REPLACED — not merely filtered — by
+	// that incident's own EEList-resolved departments, so this endpoint's result
+	// matches what the server will actually accept. Internal-type entries are
+	// untouched; non-MOMRA incidents and requests without incident_id keep today's
+	// pure classification/location matching.
+	if req.IncidentID != nil && *req.IncidentID != "" {
+		incidentID, err := uuid.Parse(*req.IncidentID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_incident_id"))
+		}
+		incident, err := h.incidentRepo.FindByID(c.UserContext(), incidentID)
+		wantsExternal := req.DepartmentType == nil || *req.DepartmentType == externalEntityDepartmentType
+		if err == nil && incident.Source == "MOMRA" && wantsExternal && len(incident.AvailableEEList) > 0 {
+			eeDepartments := h.resolveIncidentEEDepartments(c.UserContext(), incident)
+			merged := make([]models.Department, 0, len(departments)+len(eeDepartments))
+			for _, d := range departments {
+				if d.Type != externalEntityDepartmentType {
+					merged = append(merged, d)
+				}
+			}
+			seen := make(map[uuid.UUID]bool, len(eeDepartments))
+			for _, d := range eeDepartments {
+				if !seen[d.ID] {
+					seen[d.ID] = true
+					merged = append(merged, d)
+				}
+			}
+			departments = merged
+		}
 	}
 
 	responses := make([]models.DepartmentResponse, len(departments))
@@ -476,11 +513,45 @@ func (h *DepartmentHandler) MatchDepartment(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "departments_matched"), matchResponse)
 }
 
+// resolveIncidentEEDepartments resolves the incident's AvailableEEList (models/incident.go)
+// into the actual, active, external-type Department records MOMRA declared eligible for
+// it. Mirrors incident_service.go's resolveIncidentEEDepartmentIDs (duplicated rather
+// than shared since handlers and services don't depend on each other), but returns full
+// records since MatchDepartment's response needs Name/Code/Type, not just IDs. Reuses
+// EPMExternalEntity/its code() helper from epm_incident_handler.go — same package.
+func (h *DepartmentHandler) resolveIncidentEEDepartments(ctx context.Context, incident *models.Incident) []models.Department {
+	var entries []EPMExternalEntity
+	if err := json.Unmarshal(incident.AvailableEEList, &entries); err != nil {
+		return nil
+	}
+	var result []models.Department
+	seen := make(map[uuid.UUID]bool, len(entries))
+	for _, e := range entries {
+		var dept *models.Department
+		code := strings.TrimSpace(e.code())
+		if code != "" {
+			if d, err := h.repo.FindByCode(ctx, code); err == nil {
+				dept = d
+			}
+		}
+		if dept == nil && strings.TrimSpace(e.EEName) != "" {
+			if d, err := h.repo.FindByNameOrNameAr(ctx, e.EEName, e.EEName); err == nil {
+				dept = d
+			}
+		}
+		if dept != nil && dept.Type == externalEntityDepartmentType && dept.IsActive && !seen[dept.ID] {
+			seen[dept.ID] = true
+			result = append(result, *dept)
+		}
+	}
+	return result
+}
+
 // Export exports all departments as JSON
 func (h *DepartmentHandler) Export(c *fiber.Ctx) error {
 	departments, err := h.repo.List(c.UserContext())
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
 	// Filter out invalid records (with corrupted paths or invalid UUIDs)
@@ -530,16 +601,19 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 
 	// Read file content
 	var importData []struct {
-		ID          uuid.UUID  `json:"id"`
-		Name        string     `json:"name"`
-		Code        string     `json:"code"`
-		Description string     `json:"description"`
-		ParentID    *uuid.UUID `json:"parent_id"`
-		Level       int        `json:"level"`
-		Path        string     `json:"path"`
-		ManagerID   *uuid.UUID `json:"manager_id"`
-		IsActive    bool       `json:"is_active"`
-		SortOrder   int        `json:"sort_order"`
+		ID                uuid.UUID  `json:"id"`
+		Name              string     `json:"name"`
+		Code              string     `json:"code"`
+		Description       string     `json:"description"`
+		ParentID          *uuid.UUID `json:"parent_id"`
+		Level             int        `json:"level"`
+		Path              string     `json:"path"`
+		ManagerID         *uuid.UUID `json:"manager_id"`
+		IsActive          bool       `json:"is_active"`
+		SortOrder         int        `json:"sort_order"`
+		LocationIDs       string     `json:"location_ids"`
+		ClassificationIDs string     `json:"classification_ids"`
+		RoleIDs           string     `json:"role_ids"`
 	}
 
 	// Parse JSON from file
@@ -609,6 +683,17 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 		} else {
 			imported++
 			idMapping[data.ID] = newID
+
+			// Assign locations, classifications, and roles if provided
+			if locationIDs := parseUUIDList(data.LocationIDs); len(locationIDs) > 0 {
+				h.repo.AssignLocations(c.UserContext(), newID, locationIDs)
+			}
+			if classificationIDs := parseUUIDList(data.ClassificationIDs); len(classificationIDs) > 0 {
+				h.repo.AssignClassifications(c.UserContext(), newID, classificationIDs)
+			}
+			if roleIDs := parseUUIDList(data.RoleIDs); len(roleIDs) > 0 {
+				h.repo.AssignRoles(c.UserContext(), newID, roleIDs)
+			}
 		}
 	}
 
@@ -629,4 +714,20 @@ func (h *DepartmentHandler) importDeptCode(code string) string {
 		return ""
 	}
 	return code
+}
+
+// parseUUIDList parses a comma-separated list of UUIDs (e.g. "id1, id2, id3"),
+// skipping blank entries and any that fail to parse as a UUID.
+func parseUUIDList(s string) []uuid.UUID {
+	var ids []uuid.UUID
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if id, err := uuid.Parse(part); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }

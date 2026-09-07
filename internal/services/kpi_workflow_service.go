@@ -38,12 +38,12 @@ func NewKpiWorkflowService(db *gorm.DB, workflowRepo repository.WorkflowReposito
 func (s *KpiWorkflowService) InitiateKpiPerformanceWorkflow(ctx context.Context, performanceID uuid.UUID, userID uuid.UUID) (*models.KpiWorkflowInstance, error) {
 	var wf models.Workflow
 	if err := s.db.WithContext(ctx).Where("record_type = ? AND is_active = ?", "kpi_performance", true).First(&wf).Error; err != nil {
-		return nil, fmt.Errorf("no active kpi_performance workflow found: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "no_active_kpi_performance_workflow"), err)
 	}
 
 	initialState, err := s.workflowRepo.GetInitialState(ctx, wf.ID)
 	if err != nil {
-		return nil, fmt.Errorf("workflow has no initial state: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "workflow_no_initial_state"), err)
 	}
 
 	instance := &models.KpiWorkflowInstance{
@@ -56,12 +56,12 @@ func (s *KpiWorkflowService) InitiateKpiPerformanceWorkflow(ctx context.Context,
 	}
 
 	if err := s.db.WithContext(ctx).Create(instance).Error; err != nil {
-		return nil, fmt.Errorf("failed to create workflow instance: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_create_workflow_instance"), err)
 	}
 
 	if err := s.db.WithContext(ctx).Model(&models.KpiPerformance{}).Where("id = ?", performanceID).
 		Update("workflow_instance_id", instance.ID).Error; err != nil {
-		return nil, fmt.Errorf("failed to link workflow instance to performance: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_link_workflow_instance"), err)
 	}
 
 	return instance, nil
@@ -83,19 +83,19 @@ func (s *KpiWorkflowService) TransitionKpiPerformance(ctx context.Context, perfo
 	var perf models.KpiPerformance
 	if err := tx.WithContext(ctx).Set("gorm:query_option", "FOR UPDATE").First(&perf, performanceID).Error; err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("performance not found: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "kpi_performance_not_found"), err)
 	}
 
 	if perf.WorkflowInstanceID == nil {
 		var wf models.Workflow
 		if err := tx.WithContext(ctx).Where("record_type = ? AND is_active = ?", "kpi_performance", true).First(&wf).Error; err != nil {
 			tx.Rollback()
-			return nil, fmt.Errorf("no active kpi_performance workflow found: %w", err)
+			return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "no_active_kpi_performance_workflow"), err)
 		}
 		initialState, err := s.workflowRepo.GetInitialState(ctx, wf.ID)
 		if err != nil {
 			tx.Rollback()
-			return nil, fmt.Errorf("workflow has no initial state: %w", err)
+			return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "workflow_no_initial_state"), err)
 		}
 		instance := &models.KpiWorkflowInstance{
 			WorkflowID:     wf.ID,
@@ -107,19 +107,19 @@ func (s *KpiWorkflowService) TransitionKpiPerformance(ctx context.Context, perfo
 		}
 		if err := tx.WithContext(ctx).Create(instance).Error; err != nil {
 			tx.Rollback()
-			return nil, fmt.Errorf("failed to create workflow instance: %w", err)
+			return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_create_workflow_instance"), err)
 		}
 		perf.WorkflowInstanceID = &instance.ID
 		if err := tx.WithContext(ctx).Model(&perf).Update("workflow_instance_id", instance.ID).Error; err != nil {
 			tx.Rollback()
-			return nil, fmt.Errorf("failed to link workflow instance: %w", err)
+			return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_link_workflow_instance"), err)
 		}
 	}
 
 	var wfInstance models.KpiWorkflowInstance
 	if err := tx.WithContext(ctx).First(&wfInstance, *perf.WorkflowInstanceID).Error; err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("workflow instance not found: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "kpi_workflow_instance_not_found"), err)
 	}
 
 	transition, err := s.workflowRepo.FindTransitionByIDWithRelations(ctx, transitionID)
@@ -130,7 +130,7 @@ func (s *KpiWorkflowService) TransitionKpiPerformance(ctx context.Context, perfo
 
 	if transition.WorkflowID != wfInstance.WorkflowID {
 		tx.Rollback()
-		return nil, fmt.Errorf("transition does not belong to the performance's workflow")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "transition_not_in_performance_workflow"))
 	}
 	if transition.FromStateID != wfInstance.CurrentStateID {
 		tx.Rollback()
@@ -140,7 +140,7 @@ func (s *KpiWorkflowService) TransitionKpiPerformance(ctx context.Context, perfo
 	// Service-level permission check — not just route-level
 	if !s.userHasPermission(ctx, userID, transitionPermissionCode(transition.Code)) {
 		tx.Rollback()
-		return nil, fmt.Errorf("insufficient permissions for transition '%s'", transition.Code)
+		return nil, fmt.Errorf("%s", i18n.Tf(ctx, "insufficient_permissions_for_transition", transition.Code))
 	}
 
 	fromStateID := wfInstance.CurrentStateID
@@ -152,7 +152,7 @@ func (s *KpiWorkflowService) TransitionKpiPerformance(ctx context.Context, perfo
 				tx.Rollback()
 				errMsg := r.ErrorMessage
 				if errMsg == "" {
-					errMsg = "Comment is required for this transition"
+					errMsg = i18n.T(ctx, "comment_required_transition")
 				}
 				return nil, fmt.Errorf("%s", errMsg)
 			}
@@ -170,13 +170,13 @@ func (s *KpiWorkflowService) TransitionKpiPerformance(ctx context.Context, perfo
 	}
 	if err := tx.WithContext(ctx).Create(action).Error; err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("failed to create workflow action: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_create_workflow_action"), err)
 	}
 
 	wfInstance.CurrentStateID = transition.ToStateID
 	if err := tx.WithContext(ctx).Save(&wfInstance).Error; err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("failed to update workflow instance state: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_update_workflow_instance_state"), err)
 	}
 
 	perf.Status = transition.ToState.Code
@@ -199,11 +199,11 @@ func (s *KpiWorkflowService) TransitionKpiPerformance(ctx context.Context, perfo
 	}
 	if err := tx.WithContext(ctx).Model(&perf).Updates(updateFields).Error; err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("failed to update performance: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_update_kpi_performance"), err)
 	}
 
 	if err := tx.Commit().Error; err != nil {
-		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_commit_transaction"), err)
 	}
 
 	var reloaded models.KpiPerformance
@@ -218,11 +218,11 @@ func (s *KpiWorkflowService) ensureEntryWorkflowInstance(ctx context.Context, tx
 	}
 	var wf models.Workflow
 	if err := tx.WithContext(ctx).Where("record_type = ? AND is_active = ?", "kpi_entry", true).First(&wf).Error; err != nil {
-		return fmt.Errorf("no active kpi_entry workflow found: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T(ctx, "no_active_kpi_entry_workflow"), err)
 	}
 	initialState, err := s.workflowRepo.GetInitialState(ctx, wf.ID)
 	if err != nil {
-		return fmt.Errorf("workflow has no initial state: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T(ctx, "workflow_no_initial_state"), err)
 	}
 	instance := &models.KpiWorkflowInstance{
 		WorkflowID:     wf.ID,
@@ -233,7 +233,7 @@ func (s *KpiWorkflowService) ensureEntryWorkflowInstance(ctx context.Context, tx
 		Status:         models.KpiWFStatusActive,
 	}
 	if err := tx.WithContext(ctx).Create(instance).Error; err != nil {
-		return fmt.Errorf("failed to create workflow instance: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_create_workflow_instance"), err)
 	}
 	entry.WorkflowInstanceID = &instance.ID
 	return tx.WithContext(ctx).Model(entry).Update("workflow_instance_id", instance.ID).Error
@@ -262,7 +262,7 @@ func (s *KpiWorkflowService) TransitionKpiEntry(ctx context.Context, entryID uui
 	var entry models.KpiEntry
 	if err := tx.WithContext(ctx).Set("gorm:query_option", "FOR UPDATE").First(&entry, entryID).Error; err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("entry not found: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "kpi_entry_not_found"), err)
 	}
 
 	if err := s.ensureEntryWorkflowInstance(ctx, tx, &entry, userID); err != nil {
@@ -273,7 +273,7 @@ func (s *KpiWorkflowService) TransitionKpiEntry(ctx context.Context, entryID uui
 	var wfInstance models.KpiWorkflowInstance
 	if err := tx.WithContext(ctx).First(&wfInstance, *entry.WorkflowInstanceID).Error; err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("workflow instance not found: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "kpi_workflow_instance_not_found"), err)
 	}
 
 	transition, err := s.workflowRepo.FindTransitionByIDWithRelations(ctx, transitionID)
@@ -284,7 +284,7 @@ func (s *KpiWorkflowService) TransitionKpiEntry(ctx context.Context, entryID uui
 
 	if transition.WorkflowID != wfInstance.WorkflowID {
 		tx.Rollback()
-		return nil, fmt.Errorf("transition does not belong to the entry's workflow")
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "transition_not_in_entry_workflow"))
 	}
 	if transition.FromStateID != wfInstance.CurrentStateID {
 		tx.Rollback()
@@ -293,7 +293,7 @@ func (s *KpiWorkflowService) TransitionKpiEntry(ctx context.Context, entryID uui
 
 	if !s.userHasPermission(ctx, userID, transitionPermissionCode(transition.Code)) {
 		tx.Rollback()
-		return nil, fmt.Errorf("insufficient permissions for transition '%s'", transition.Code)
+		return nil, fmt.Errorf("%s", i18n.Tf(ctx, "insufficient_permissions_for_transition", transition.Code))
 	}
 
 	fromStateID := wfInstance.CurrentStateID
@@ -305,7 +305,7 @@ func (s *KpiWorkflowService) TransitionKpiEntry(ctx context.Context, entryID uui
 				tx.Rollback()
 				errMsg := r.ErrorMessage
 				if errMsg == "" {
-					errMsg = "Comment is required for this transition"
+					errMsg = i18n.T(ctx, "comment_required_transition")
 				}
 				return nil, fmt.Errorf("%s", errMsg)
 			}
@@ -323,13 +323,13 @@ func (s *KpiWorkflowService) TransitionKpiEntry(ctx context.Context, entryID uui
 	}
 	if err := tx.WithContext(ctx).Create(action).Error; err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("failed to create workflow action: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_create_workflow_action"), err)
 	}
 
 	wfInstance.CurrentStateID = transition.ToStateID
 	if err := tx.WithContext(ctx).Save(&wfInstance).Error; err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("failed to update workflow instance state: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_update_workflow_instance_state"), err)
 	}
 
 	entry.Status = transition.ToState.Code
@@ -346,7 +346,7 @@ func (s *KpiWorkflowService) TransitionKpiEntry(ctx context.Context, entryID uui
 	}
 	if err := tx.WithContext(ctx).Model(&entry).Updates(updateFields).Error; err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("failed to update entry: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_update_kpi_entry"), err)
 	}
 
 	// Push the approved entry's actual value onto the metric it belongs to —
@@ -357,12 +357,12 @@ func (s *KpiWorkflowService) TransitionKpiEntry(ctx context.Context, entryID uui
 		if err := tx.WithContext(ctx).Model(&models.KpiMetric{}).Where("id = ?", entry.MetricID).
 			Update("current_value", entry.ActualValue).Error; err != nil {
 			tx.Rollback()
-			return nil, fmt.Errorf("failed to update metric current value: %w", err)
+			return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_update_metric_current_value"), err)
 		}
 	}
 
 	if err := tx.Commit().Error; err != nil {
-		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_commit_transaction"), err)
 	}
 
 	var reloaded models.KpiEntry
@@ -376,7 +376,7 @@ func (s *KpiWorkflowService) TransitionKpiEntry(ctx context.Context, entryID uui
 func (s *KpiWorkflowService) GetAvailableKpiEntryTransitions(ctx context.Context, entryID uuid.UUID, userID uuid.UUID) ([]models.WorkflowTransition, error) {
 	var entry models.KpiEntry
 	if err := s.db.WithContext(ctx).First(&entry, entryID).Error; err != nil {
-		return nil, fmt.Errorf("entry not found: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "kpi_entry_not_found"), err)
 	}
 
 	if entry.WorkflowInstanceID == nil {
@@ -387,7 +387,7 @@ func (s *KpiWorkflowService) GetAvailableKpiEntryTransitions(ctx context.Context
 
 	var wfInstance models.KpiWorkflowInstance
 	if err := s.db.WithContext(ctx).First(&wfInstance, *entry.WorkflowInstanceID).Error; err != nil {
-		return nil, fmt.Errorf("workflow instance not found: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "kpi_workflow_instance_not_found"), err)
 	}
 
 	var transitions []models.WorkflowTransition
@@ -457,7 +457,7 @@ func (s *KpiWorkflowService) ensureWorkflowInstance(ctx context.Context, perf *m
 func (s *KpiWorkflowService) GetAvailableKpiPerformanceTransitions(ctx context.Context, performanceID uuid.UUID, userID uuid.UUID) ([]models.WorkflowTransition, error) {
 	var perf models.KpiPerformance
 	if err := s.db.WithContext(ctx).First(&perf, performanceID).Error; err != nil {
-		return nil, fmt.Errorf("performance not found: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "kpi_performance_not_found"), err)
 	}
 
 	if err := s.ensureWorkflowInstance(ctx, &perf, userID); err != nil {
@@ -466,7 +466,7 @@ func (s *KpiWorkflowService) GetAvailableKpiPerformanceTransitions(ctx context.C
 
 	var wfInstance models.KpiWorkflowInstance
 	if err := s.db.WithContext(ctx).First(&wfInstance, *perf.WorkflowInstanceID).Error; err != nil {
-		return nil, fmt.Errorf("workflow instance not found: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "kpi_workflow_instance_not_found"), err)
 	}
 
 	var transitions []models.WorkflowTransition

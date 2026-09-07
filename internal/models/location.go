@@ -54,6 +54,10 @@ type LocationCreateRequest struct {
 	Longitude     *float64   `json:"longitude" validate:"omitempty,min=-180,max=180"`
 	SortOrder     int        `json:"sort_order"`
 	Source        string     `json:"source"` // "master" or "map" (reverse geocoding)
+	// ExternalID is a free-form reference to an external system's ID for this location
+	// (e.g. MOMRA's MunicipalityID/SubMunicipalityID) — same pattern as Classification
+	// and Department's ExternalID fields used elsewhere in the MOMRA integration.
+	ExternalID string `json:"external_id" validate:"max=100"`
 }
 
 // LocationUpdateRequest for updating a location
@@ -69,6 +73,7 @@ type LocationUpdateRequest struct {
 	Longitude     *float64 `json:"longitude" validate:"omitempty,min=-180,max=180"`
 	IsActive      *bool    `json:"is_active"`
 	SortOrder     *int     `json:"sort_order"`
+	ExternalID    *string  `json:"external_id" validate:"omitempty,max=100"`
 }
 
 // LocationResponse for API responses
@@ -89,6 +94,7 @@ type LocationResponse struct {
 	IsActive      bool               `json:"is_active"`
 	SortOrder     int                `json:"sort_order"`
 	Source        string             `json:"source"`
+	ExternalID    string             `json:"external_id"`
 	Children      []LocationResponse `json:"children,omitempty"`
 	CreatedAt     time.Time          `json:"created_at"`
 }
@@ -111,6 +117,7 @@ func ToLocationResponse(l *Location) LocationResponse {
 		IsActive:      l.IsActive,
 		SortOrder:     l.SortOrder,
 		Source:        l.Source,
+		ExternalID:    l.ExternalID,
 		CreatedAt:     l.CreatedAt,
 	}
 

@@ -88,7 +88,7 @@ func (h *OTPHandler) VerifyOTP(c *fiber.Ctx) error {
 	}
 
 	if req.Phone == "" || req.OTP == "" || req.SessionID == "" {
-		return fiber.NewError(fiber.StatusBadRequest, "phone, session_id and otp required")
+		return fiber.NewError(fiber.StatusBadRequest, i18n.T(c.UserContext(), "phone_session_otp_required"))
 	}
 
 	resp, err := h.otpService.VerifyOTP(c.UserContext(), req.Phone, req.SessionID, req.OTP)

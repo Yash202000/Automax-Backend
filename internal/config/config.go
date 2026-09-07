@@ -7,39 +7,43 @@ import (
 )
 
 type Config struct {
-	Env                        string // env: APP_ENV ("development" | "staging" | "production"). Default: "production".
-	Server                     ServerConfig
-	Database                   DatabaseConfig
-	Redis                      RedisConfig
-	MinIO                      MinIOConfig
-	JWT                        JWTConfig
-	LDAP                       LDAPConfig
-	LoginRateLimit             LoginRateLimitConfig
-	FrontendURL                string // env: FRONTEND_URL — base URL of the frontend app, used in notification links
-	SSOPrivateKey              string // env: SSO_RSA_PRIVATE_KEY (PEM, optional — auto-gen if empty)
-	SSOIssuerURL               string // env: SSO_ISSUER_URL (e.g. https://automax.example.com — embedded in iss claim)
-	SSOFrontendURL             string // env: SSO_FRONTEND_URL (e.g. https://automax.example.com — where /sso-complete lives)
-	NafathAPIBaseURL           string // env: NAFATH_API_BASE_URL (e.g. https://nafath.amanathail.gov.sa)
-	CountryCode                string // env: COUNTRY_CODE (e.g. +966, +91)
-	Escalation                 EscalationConfig
-	ReadyToClose               ReadyToCloseConfig
-	SmsFeedback                SmsFeedbackConfig
-	Documenta                  DocumentaConfig
-	KpiDocumenta               DocumentaConfig
-	AIQuality                  AIQualityConfig
-	AutoAssign                 AutoAssignConfig
-	GoalManagement             GoalManagementConfig
-	License                    LicenseConfig
-	Integration                IntegrationConfig
-	FinalCloseWhatsAppFeedback FinalCloseWhatsAppFeedbackConfig
-	Cintrix                    CintrixConfig
-	PBX                        PBXConfig
-	SyncDeptAttributesToUser   bool   // env: SYNC_DEPT_ATTRIBUTES_TO_USER — when true, assigning a department to a user auto-appends the department's locations/classifications to that user. Default: false.
-	MaxDescriptionLength       int    // env: MAX_DESCRIPTION_LENGTH — max description length allowed for incident creation for EPM940 clients. Default: 500.
-	ClientCode                 string // env: CLIENT_CODE — client identifier, e.g. "EPM940".
-	KpiDictionaryWorkflowCode  string // env: KPI_DICTIONARY_WORKFLOW_CODE — Workflow.Code the KPI Workflow (Draft->Reviewed->Approved->Active->Closed) is looked up by. Default: "kpi_dictionary_workflow" — must match the Code seeded in seed_kpi_dictionary_workflow.go, or nothing will resolve.
-	Report                     ReportConfig
-	ImageValidation            ImageValidationConfig
+	Env                         string // env: APP_ENV ("development" | "staging" | "production"). Default: "production".
+	Server                      ServerConfig
+	Database                    DatabaseConfig
+	Redis                       RedisConfig
+	MinIO                       MinIOConfig
+	JWT                         JWTConfig
+	LDAP                        LDAPConfig
+	LoginRateLimit              LoginRateLimitConfig
+	FrontendURL                 string // env: FRONTEND_URL — base URL of the frontend app, used in notification links
+	SSOPrivateKey               string // env: SSO_RSA_PRIVATE_KEY (PEM, optional — auto-gen if empty)
+	SSOIssuerURL                string // env: SSO_ISSUER_URL (e.g. https://automax.example.com — embedded in iss claim)
+	SSOFrontendURL              string // env: SSO_FRONTEND_URL (e.g. https://automax.example.com — where /sso-complete lives)
+	NafathAPIBaseURL            string // env: NAFATH_API_BASE_URL (e.g. https://nafath.amanathail.gov.sa)
+	CountryCode                 string // env: COUNTRY_CODE (e.g. +966, +91)
+	Escalation                  EscalationConfig
+	ReadyToClose                ReadyToCloseConfig
+	SmsFeedback                 SmsFeedbackConfig
+	Documenta                   DocumentaConfig
+	KpiDocumenta                DocumentaConfig
+	AIQuality                   AIQualityConfig
+	AutoAssign                  AutoAssignConfig
+	GoalManagement              GoalManagementConfig
+	License                     LicenseConfig
+	Integration                 IntegrationConfig
+	FinalCloseWhatsAppFeedback  FinalCloseWhatsAppFeedbackConfig
+	Cintrix                     CintrixConfig
+	PBX                         PBXConfig
+	MOMRA                       MOMRAConfig
+	SyncDeptAttributesToUser    bool   // env: SYNC_DEPT_ATTRIBUTES_TO_USER — when true, assigning a department to a user auto-appends the department's locations/classifications to that user. Default: false.
+	MaxDescriptionLength        int    // env: MAX_DESCRIPTION_LENGTH — max description length allowed for incident creation for EPM940 clients. Default: 500.
+	ClientCode                  string // env: CLIENT_CODE — client identifier, e.g. "EPM940".
+	Report                      ReportConfig
+	ImageValidation             ImageValidationConfig
+	CitizenAttachmentSizeLimit  string // env: CITIZEN_ATTACHMENT_SIZE_LIMIT — max attachment size in bytes for citizen-submitted incidents (EPM940 ENV_CONFIGURATION lookup value). Default: 5242880 (5MB).
+	InternalAttachmentSizeLimit string // env: INTERNAL_ATTACHMENT_SIZE_LIMIT — max attachment size in bytes for internally-created incidents (EPM940 ENV_CONFIGURATION lookup value). Default: 10485760 (10MB).
+	ChatbotURL                  string // env: CHATBOT_URL — URL of the chatbot (EPM940 ENV_CONFIGURATION lookup value). Default: placeholder — override in .env.
+  KpiDictionaryWorkflowCode  string // env: KPI_DICTIONARY_WORKFLOW_CODE — Workflow.Code the KPI Workflow (Draft->Reviewed->Approved->Active->Closed) is looked up by. Default: "kpi_dictionary_workflow" — must match the Code seeded in seed_kpi_dictionary_workflow.go, or nothing will resolve.
 }
 
 // ImageValidationConfig holds settings for the standalone image-quality
@@ -180,6 +184,26 @@ type CintrixConfig struct {
 	APIKeyID      string
 	APIKeySecret  string
 	WebhookSecret string
+}
+
+// MOMRAConfig holds settings for the outbound MOMRA CRM integration (Automax acting as
+// a client of MOMRA's CRM services — status sync, classification/EE master sync).
+// This is the reverse direction from the existing inbound EPM routes in
+// epm_incident_handler.go, which is MOMRA/EPM pushing incidents into Automax.
+// env: MOMRA_BASE_URL, MOMRA_CONSUMER_KEY, MOMRA_CONSUMER_SECRET, MOMRA_MUNICIPALITY_ID.
+// Leaving BaseURL unset disables outbound MOMRA sync/status calls.
+type MOMRAConfig struct {
+	BaseURL        string
+	ConsumerKey    string
+	ConsumerSecret string
+	// MunicipalityID is the default municipality scope for classification and
+	// EE-classification sync (3.21's municipalityID, 3.36's mandatory MunicipalityID).
+	MunicipalityID string
+	// ClassificationType is 3.21's mandatory "type" query parameter. The integration
+	// guide's own sample is the only documented value ("CRM") — see OD-N3 in
+	// docs/MOMRA_Outbound_Integration_Spec_v1.0.md; confirm with MOMRA before relying
+	// on this being the only valid value.
+	ClassificationType string
 }
 
 type EscalationConfig struct {
@@ -399,10 +423,20 @@ func Load() *Config {
 			BaseURL:            getEnv("PBX_BASE_URL", "https://zkff.automaxsw.com/create_user.php"),
 			InsecureSkipVerify: getEnvAsBool("PBX_INSECURE_SKIP_VERIFY", false),
 		},
-		SyncDeptAttributesToUser:  getEnvAsBool("SYNC_DEPT_ATTRIBUTES_TO_USER", false),
-		MaxDescriptionLength:      getEnvAsInt("MAX_DESCRIPTION_LENGTH", 500),
-		ClientCode:                getEnv("CLIENT_CODE", ""),
-		KpiDictionaryWorkflowCode: getEnv("KPI_DICTIONARY_WORKFLOW_CODE", "kpi_dictionary_workflow"),
+		MOMRA: MOMRAConfig{
+			BaseURL:            getEnv("MOMRA_BASE_URL", ""),
+			ConsumerKey:        getEnv("MOMRA_CONSUMER_KEY", ""),
+			ConsumerSecret:     getEnv("MOMRA_CONSUMER_SECRET", ""),
+			MunicipalityID:     getEnv("MOMRA_MUNICIPALITY_ID", "003"),
+			ClassificationType: getEnv("MOMRA_CLASSIFICATION_TYPE", "CRM"),
+		},
+		SyncDeptAttributesToUser:    getEnvAsBool("SYNC_DEPT_ATTRIBUTES_TO_USER", false),
+		MaxDescriptionLength:        getEnvAsInt("MAX_DESCRIPTION_LENGTH", 500),
+		ClientCode:                  getEnv("CLIENT_CODE", ""),
+		CitizenAttachmentSizeLimit:  getEnv("CITIZEN_ATTACHMENT_SIZE_LIMIT", "5242880"),
+		InternalAttachmentSizeLimit: getEnv("INTERNAL_ATTACHMENT_SIZE_LIMIT", "10485760"),
+		ChatbotURL:                  getEnv("CHATBOT_URL", "https://chatbot.automax.example.com"),
+    KpiDictionaryWorkflowCode: getEnv("KPI_DICTIONARY_WORKFLOW_CODE", "kpi_dictionary_workflow"),
 		Report: ReportConfig{
 			LogoLeftURL:  getEnv("LOGO_LEFT_URL", ""),
 			LogoRightURL: getEnv("LOGO_RIGHT_URL", ""),
