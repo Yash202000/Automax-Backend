@@ -16,12 +16,22 @@ import (
 type KpiWorkflowService struct {
 	db           *gorm.DB
 	workflowRepo repository.WorkflowRepository
+	// kpiDictionaryWorkflowCode is the Workflow.Code the KPI Workflow
+	// (Draft->Reviewed->Approved->Active->Closed) is looked up by — set from
+	// config.KpiDictionaryWorkflowCode (env: KPI_DICTIONARY_WORKFLOW_CODE) so
+	// it's changeable without a code deploy if the seeded workflow's Code
+	// ever needs to differ from the default.
+	kpiDictionaryWorkflowCode string
 }
 
-func NewKpiWorkflowService(db *gorm.DB, workflowRepo repository.WorkflowRepository) *KpiWorkflowService {
+func NewKpiWorkflowService(db *gorm.DB, workflowRepo repository.WorkflowRepository, kpiDictionaryWorkflowCode string) *KpiWorkflowService {
+	if kpiDictionaryWorkflowCode == "" {
+		kpiDictionaryWorkflowCode = "kpi_dictionary_workflow"
+	}
 	return &KpiWorkflowService{
-		db:           db,
-		workflowRepo: workflowRepo,
+		db:                        db,
+		workflowRepo:              workflowRepo,
+		kpiDictionaryWorkflowCode: kpiDictionaryWorkflowCode,
 	}
 }
 

@@ -43,6 +43,7 @@ type Config struct {
 	CitizenAttachmentSizeLimit  string // env: CITIZEN_ATTACHMENT_SIZE_LIMIT — max attachment size in bytes for citizen-submitted incidents (EPM940 ENV_CONFIGURATION lookup value). Default: 5242880 (5MB).
 	InternalAttachmentSizeLimit string // env: INTERNAL_ATTACHMENT_SIZE_LIMIT — max attachment size in bytes for internally-created incidents (EPM940 ENV_CONFIGURATION lookup value). Default: 10485760 (10MB).
 	ChatbotURL                  string // env: CHATBOT_URL — URL of the chatbot (EPM940 ENV_CONFIGURATION lookup value). Default: placeholder — override in .env.
+  KpiDictionaryWorkflowCode  string // env: KPI_DICTIONARY_WORKFLOW_CODE — Workflow.Code the KPI Workflow (Draft->Reviewed->Approved->Active->Closed) is looked up by. Default: "kpi_dictionary_workflow" — must match the Code seeded in seed_kpi_dictionary_workflow.go, or nothing will resolve.
 }
 
 // ImageValidationConfig holds settings for the standalone image-quality
@@ -435,6 +436,7 @@ func Load() *Config {
 		CitizenAttachmentSizeLimit:  getEnv("CITIZEN_ATTACHMENT_SIZE_LIMIT", "5242880"),
 		InternalAttachmentSizeLimit: getEnv("INTERNAL_ATTACHMENT_SIZE_LIMIT", "10485760"),
 		ChatbotURL:                  getEnv("CHATBOT_URL", "https://chatbot.automax.example.com"),
+    KpiDictionaryWorkflowCode: getEnv("KPI_DICTIONARY_WORKFLOW_CODE", "kpi_dictionary_workflow"),
 		Report: ReportConfig{
 			LogoLeftURL:  getEnv("LOGO_LEFT_URL", ""),
 			LogoRightURL: getEnv("LOGO_RIGHT_URL", ""),

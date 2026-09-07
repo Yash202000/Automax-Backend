@@ -290,7 +290,7 @@ func main() {
 	kpiMasterDataHandler := handlers.NewKpiMasterDataHandler(db)
 
 	// KPI Workflow service
-	kpiWorkflowService := services.NewKpiWorkflowService(db, workflowRepo)
+	kpiWorkflowService := services.NewKpiWorkflowService(db, workflowRepo, cfg.KpiDictionaryWorkflowCode)
 
 	// KPI Dictionary handler
 	kpiDictionaryHandler := handlers.NewKpiDictionaryHandler(db, actionLogService, kpiWorkflowService)

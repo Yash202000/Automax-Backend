@@ -229,6 +229,13 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			log.Printf("Warning: KPI target unique index migration failed: %v", err)
 		}
 
+		// Scope strategic_kpis/operational_kpis/award_kpis' unique code index
+		// to non-deleted rows — otherwise a soft-deleted KPI permanently
+		// reserves its code and blocks ever recreating it.
+		if err := migrations.MigrateKpiDictionaryCodeUniqueIndex(migrationDB); err != nil {
+			log.Printf("Warning: KPI dictionary code unique index migration failed: %v", err)
+		}
+
 		// Multiple approved Entries per metric+period are now allowed
 		// (aggregated, not treated as one final value) — drop the old
 		// per-period uniqueness on kpi_entries and add Organization/Segment/
@@ -1112,7 +1119,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		// auto-assigned to every KPI dictionary row at creation time. Must run
 		// after role seeding above (kpi_owner/l1_reviewer) since it attaches
 		// those roles to states/transitions.
-		seedKpiDictionaryWorkflow(db)
+		seedKpiDictionaryWorkflow(db, cfg.KpiDictionaryWorkflowCode)
 
 		// Seed default global RAG performance band (green >= 80, amber >= 60)
 		seedDefaultPerformanceBand(db)
