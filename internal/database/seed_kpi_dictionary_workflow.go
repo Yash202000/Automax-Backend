@@ -14,16 +14,21 @@ import (
 // seedKpiPerformanceWorkflow's shape (plain slug codes, db.Create directly,
 // idempotent). Must run after role seeding (kpi_owner/l1_reviewer roles),
 // since it attaches those roles as ViewableRoles/EditableRoles/AllowedRoles.
-func seedKpiDictionaryWorkflow(db *gorm.DB) {
+//
+// workflowCode comes from config.KpiDictionaryWorkflowCode (env:
+// KPI_DICTIONARY_WORKFLOW_CODE) — kept in sync with
+// KpiWorkflowService.kpiDictionaryWorkflowCode so the workflow this seeds and
+// the one the service looks up are always the same row.
+func seedKpiDictionaryWorkflow(db *gorm.DB, workflowCode string) {
 	var wf models.Workflow
-	exists := db.Where("code = ?", "kpi_dictionary_workflow").First(&wf).Error == nil
+	exists := db.Where("code = ?", workflowCode).First(&wf).Error == nil
 
 	if !exists {
 		log.Println("Seeding default KPI Workflow...")
 
 		wf = models.Workflow{
 			Name:        "KPI Workflow",
-			Code:        "kpi_dictionary_workflow",
+			Code:        workflowCode,
 			Description: "Default lifecycle workflow for KPI dictionary records (Strategic/Operational/Award): Draft -> Reviewed -> Approved -> Active -> Closed.",
 			RecordType:  "kpi_dictionary",
 			IsActive:    true,

@@ -11,9 +11,15 @@ import (
 	"gorm.io/gorm"
 )
 
-// kpiDictionaryWorkflowRecordType is the Workflow.RecordType this service
-// looks up ("KPI Workflow" in the seed, kpi_dictionary_workflow_seed.go).
-const kpiDictionaryWorkflowRecordType = "kpi_dictionary"
+// The KPI Workflow ("Draft->Reviewed->Approved->Active->Closed") is looked
+// up by KpiWorkflowService.kpiDictionaryWorkflowCode (a Workflow.Code,
+// configurable via KPI_DICTIONARY_WORKFLOW_CODE — see config.go), not by
+// RecordType. RecordType is a plain editable field on the generic Workflow
+// admin designer, whose own record-type dropdown doesn't offer
+// "kpi_dictionary" as an option, so opening and saving this workflow there
+// silently resets RecordType to whatever that UI's default is (observed in
+// practice: "all") and breaks a record_type-based lookup — Code isn't
+// exposed to that same reset.
 
 // loadDictionaryKpiState reads just the two columns this service needs
 // (activation_status, workflow_instance_id) from whichever KPI dictionary
@@ -67,7 +73,7 @@ func updateDictionaryKpiWorkflow(db *gorm.DB, kpiType string, kpiID uuid.UUID, i
 // first transition attempt.
 func (s *KpiWorkflowService) InitiateKpiDictionaryWorkflow(ctx context.Context, kpiType string, kpiID uuid.UUID, userID uuid.UUID) error {
 	var wf models.Workflow
-	if err := s.db.WithContext(ctx).Where("record_type = ? AND is_active = ?", kpiDictionaryWorkflowRecordType, true).First(&wf).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("code = ? AND is_active = ?", s.kpiDictionaryWorkflowCode, true).First(&wf).Error; err != nil {
 		return fmt.Errorf("no active kpi_dictionary workflow found: %w", err)
 	}
 	initialState, err := s.workflowRepo.GetInitialState(ctx, wf.ID)
@@ -110,7 +116,7 @@ func (s *KpiWorkflowService) ensureDictionaryWorkflowInstance(ctx context.Contex
 	}
 
 	var wf models.Workflow
-	if err := tx.WithContext(ctx).Where("record_type = ? AND is_active = ?", kpiDictionaryWorkflowRecordType, true).First(&wf).Error; err != nil {
+	if err := tx.WithContext(ctx).Where("code = ? AND is_active = ?", s.kpiDictionaryWorkflowCode, true).First(&wf).Error; err != nil {
 		return nil, fmt.Errorf("no active kpi_dictionary workflow found: %w", err)
 	}
 

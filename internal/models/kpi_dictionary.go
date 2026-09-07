@@ -52,7 +52,7 @@ const (
 
 type StrategicKPI struct {
 	ID                 uuid.UUID        `gorm:"type:uuid;primary_key" json:"id"`
-	Code               string           `gorm:"size:50;uniqueIndex;not null" json:"code"`
+	Code               string           `gorm:"size:50;index;not null" json:"code"`
 	NameEn             string           `gorm:"size:255;not null" json:"name_en"`
 	NameAr             string           `gorm:"size:255;not null;default:''" json:"name_ar"`
 	PillarID           *uuid.UUID       `gorm:"type:uuid;index" json:"pillar_id"`
@@ -231,7 +231,7 @@ func (k *StrategicKPI) ToResponse() StrategicKPIResponse {
 
 type OperationalKPI struct {
 	ID                     uuid.UUID             `gorm:"type:uuid;primary_key" json:"id"`
-	Code                   string                `gorm:"size:50;uniqueIndex;not null" json:"code"`
+	Code                   string                `gorm:"size:50;index;not null" json:"code"`
 	NameEn                 string                `gorm:"size:255;not null" json:"name_en"`
 	NameAr                 string                `gorm:"size:255;not null;default:''" json:"name_ar"`
 	GoalID                 *uuid.UUID            `gorm:"type:uuid;index" json:"goal_id"`
@@ -401,7 +401,7 @@ func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 
 type AwardKPI struct {
 	ID                  uuid.UUID          `gorm:"type:uuid;primary_key" json:"id"`
-	Code                string             `gorm:"size:50;uniqueIndex;not null" json:"code"`
+	Code                string             `gorm:"size:50;index;not null" json:"code"`
 	NameEn              string             `gorm:"size:255;not null" json:"name_en"`
 	NameAr              string             `gorm:"size:255;not null;default:''" json:"name_ar"`
 	AwardSubCriterionID uuid.UUID          `gorm:"type:uuid;not null;index" json:"award_sub_criterion_id"`

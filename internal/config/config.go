@@ -37,6 +37,7 @@ type Config struct {
 	SyncDeptAttributesToUser   bool   // env: SYNC_DEPT_ATTRIBUTES_TO_USER — when true, assigning a department to a user auto-appends the department's locations/classifications to that user. Default: false.
 	MaxDescriptionLength       int    // env: MAX_DESCRIPTION_LENGTH — max description length allowed for incident creation for EPM940 clients. Default: 500.
 	ClientCode                 string // env: CLIENT_CODE — client identifier, e.g. "EPM940".
+	KpiDictionaryWorkflowCode  string // env: KPI_DICTIONARY_WORKFLOW_CODE — Workflow.Code the KPI Workflow (Draft->Reviewed->Approved->Active->Closed) is looked up by. Default: "kpi_dictionary_workflow" — must match the Code seeded in seed_kpi_dictionary_workflow.go, or nothing will resolve.
 	Report                     ReportConfig
 	ImageValidation            ImageValidationConfig
 }
@@ -398,9 +399,10 @@ func Load() *Config {
 			BaseURL:            getEnv("PBX_BASE_URL", "https://zkff.automaxsw.com/create_user.php"),
 			InsecureSkipVerify: getEnvAsBool("PBX_INSECURE_SKIP_VERIFY", false),
 		},
-		SyncDeptAttributesToUser: getEnvAsBool("SYNC_DEPT_ATTRIBUTES_TO_USER", false),
-		MaxDescriptionLength:     getEnvAsInt("MAX_DESCRIPTION_LENGTH", 500),
-		ClientCode:               getEnv("CLIENT_CODE", ""),
+		SyncDeptAttributesToUser:  getEnvAsBool("SYNC_DEPT_ATTRIBUTES_TO_USER", false),
+		MaxDescriptionLength:      getEnvAsInt("MAX_DESCRIPTION_LENGTH", 500),
+		ClientCode:                getEnv("CLIENT_CODE", ""),
+		KpiDictionaryWorkflowCode: getEnv("KPI_DICTIONARY_WORKFLOW_CODE", "kpi_dictionary_workflow"),
 		Report: ReportConfig{
 			LogoLeftURL:  getEnv("LOGO_LEFT_URL", ""),
 			LogoRightURL: getEnv("LOGO_RIGHT_URL", ""),
