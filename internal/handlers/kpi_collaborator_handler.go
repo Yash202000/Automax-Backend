@@ -52,7 +52,7 @@ func (h *KpiCollaboratorHandler) ListAssignments(c *fiber.Ctx) error {
 
 	var items []models.KpiCollaboratorAssignment
 	q := h.db.WithContext(c.UserContext()).
-		Preload("User").
+		Preload("User.Department").
 		Preload("DelegateForUser").
 		Preload("CreatedBy").
 		Preload("UpdatedBy").
@@ -84,7 +84,7 @@ func (h *KpiCollaboratorHandler) GetAssignment(c *fiber.Ctx) error {
 
 	var item models.KpiCollaboratorAssignment
 	if err := h.db.WithContext(c.UserContext()).
-		Preload("User").
+		Preload("User.Department").
 		Preload("DelegateForUser").
 		Preload("CreatedBy").
 		Preload("UpdatedBy").
@@ -166,7 +166,7 @@ func (h *KpiCollaboratorHandler) CreateAssignment(c *fiber.Ctx) error {
 	}
 
 	h.db.WithContext(c.UserContext()).
-		Preload("User").
+		Preload("User.Department").
 		Preload("DelegateForUser").
 		Preload("CreatedBy").
 		Preload("UpdatedBy").
@@ -271,7 +271,7 @@ func (h *KpiCollaboratorHandler) UpdateAssignment(c *fiber.Ctx) error {
 	}
 
 	h.db.WithContext(c.UserContext()).
-		Preload("User").
+		Preload("User.Department").
 		Preload("DelegateForUser").
 		Preload("CreatedBy").
 		Preload("UpdatedBy").
@@ -446,32 +446,32 @@ func toAssignmentResponse(item *models.KpiCollaboratorAssignment) models.KpiColl
 		CreatedAt:          item.CreatedAt,
 		UpdatedAt:          item.UpdatedAt,
 	}
-	if item.User != nil {
-		resp.User = &models.UserBrief{
-			ID:        item.User.ID,
-			FirstName: item.User.FirstName,
-			LastName:  item.User.LastName,
-			Email:     item.User.Email,
-			IsActive:  item.User.IsActive,
-		}
-	}
-	if item.DelegateForUser != nil {
-		resp.DelegateForUser = &models.UserBrief{
-			ID:        item.DelegateForUser.ID,
-			FirstName: item.DelegateForUser.FirstName,
-			LastName:  item.DelegateForUser.LastName,
-			Email:     item.DelegateForUser.Email,
-			IsActive:  item.DelegateForUser.IsActive,
-		}
-	}
-	if item.CreatedBy != nil {
-		resp.CreatedBy = &models.UserBrief{
-			ID:        item.CreatedBy.ID,
-			FirstName: item.CreatedBy.FirstName,
-			LastName:  item.CreatedBy.LastName,
-			Email:     item.CreatedBy.Email,
-			IsActive:  item.CreatedBy.IsActive,
-		}
-	}
+	resp.User = toUserBrief(item.User)
+	resp.DelegateForUser = toUserBrief(item.DelegateForUser)
+	resp.CreatedBy = toUserBrief(item.CreatedBy)
 	return resp
+}
+
+// toUserBrief maps a User to the trimmed UserBrief shape, including its
+// Department when preloaded (nil otherwise — callers that don't
+// Preload("User.Department") simply get no department, not an error).
+func toUserBrief(u *models.User) *models.UserBrief {
+	if u == nil {
+		return nil
+	}
+	brief := &models.UserBrief{
+		ID:        u.ID,
+		FirstName: u.FirstName,
+		LastName:  u.LastName,
+		Email:     u.Email,
+		IsActive:  u.IsActive,
+	}
+	if u.Department != nil {
+		brief.Department = &models.DepartmentBriefResponse{
+			ID:   u.Department.ID,
+			Name: u.Department.Name,
+			Code: u.Department.Code,
+		}
+	}
+	return brief
 }

@@ -400,37 +400,38 @@ func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 // ──────────────────────────────────────────────────────────
 
 type AwardKPI struct {
-	ID                  uuid.UUID          `gorm:"type:uuid;primary_key" json:"id"`
-	Code                string             `gorm:"size:50;index;not null" json:"code"`
-	NameEn              string             `gorm:"size:255;not null" json:"name_en"`
-	NameAr              string             `gorm:"size:255;not null;default:''" json:"name_ar"`
-	AwardSubCriterionID uuid.UUID          `gorm:"type:uuid;not null;index" json:"award_sub_criterion_id"`
-	AwardSubCriterion   *AwardSubCriterion `gorm:"foreignKey:AwardSubCriterionID" json:"award_sub_criterion,omitempty"`
-	DomainID            *uuid.UUID         `gorm:"type:uuid;index" json:"domain_id"`
-	Domain              *Domain            `gorm:"foreignKey:DomainID" json:"domain,omitempty"`
-	OwnerType           string             `gorm:"size:20;not null;default:'internal'" json:"owner_type"`
-	OwnerDeptID         *uuid.UUID         `gorm:"type:uuid;index" json:"owner_dept_id"`
-	OwnerDept           *Department        `gorm:"foreignKey:OwnerDeptID" json:"owner_dept,omitempty"`
-	OwnerOrgID          *uuid.UUID         `gorm:"type:uuid;index" json:"owner_org_id"`
-	OwnerOrg            *KpiOrganization   `gorm:"foreignKey:OwnerOrgID" json:"owner_org,omitempty"`
-	OwningAgencyID      *uuid.UUID         `gorm:"type:uuid;index" json:"owning_agency_id"`
-	OwningAgency        *Department        `gorm:"foreignKey:OwningAgencyID" json:"owning_agency,omitempty"`
-	Polarity            string             `gorm:"size:20;not null;default:'ascending'" json:"polarity"`
-	ActivationStatus    string             `gorm:"size:20;not null;default:'draft'" json:"activation_status"`
-	DescriptionEn       string             `gorm:"type:text" json:"description_en"`
-	DescriptionAr       string             `gorm:"type:text" json:"description_ar"`
-	Formula             string             `gorm:"type:text" json:"formula"`
-	Baseline            float64            `gorm:"default:0" json:"baseline"`
-	UnitOfMeasure       string             `gorm:"size:50" json:"unit_of_measure"`
-	ReportingFrequency  string             `gorm:"size:50" json:"reporting_frequency"`
-	Lifecycle           string             `gorm:"size:100" json:"lifecycle"`
-	DataSource          string             `gorm:"size:255" json:"data_source"`
-	Notes               string             `gorm:"type:text" json:"notes"`
-	DocumentaFolderID   string             `gorm:"size:255" json:"documenta_folder_id"`
-	WorkflowInstanceID  *uuid.UUID         `gorm:"type:uuid;index" json:"workflow_instance_id"`
-	CreatedAt           time.Time          `json:"created_at"`
-	UpdatedAt           time.Time          `json:"updated_at"`
-	DeletedAt           gorm.DeletedAt     `gorm:"index" json:"-"`
+	ID                  uuid.UUID            `gorm:"type:uuid;primary_key" json:"id"`
+	Code                string               `gorm:"size:50;index;not null" json:"code"`
+	NameEn              string               `gorm:"size:255;not null" json:"name_en"`
+	NameAr              string               `gorm:"size:255;not null;default:''" json:"name_ar"`
+	AwardSubCriterionID uuid.UUID            `gorm:"type:uuid;not null;index" json:"award_sub_criterion_id"`
+	AwardSubCriterion   *AwardSubCriterion   `gorm:"foreignKey:AwardSubCriterionID" json:"award_sub_criterion,omitempty"`
+	DomainID            *uuid.UUID           `gorm:"type:uuid;index" json:"domain_id"`
+	Domain              *Domain              `gorm:"foreignKey:DomainID" json:"domain,omitempty"`
+	OwnerType           string               `gorm:"size:20;not null;default:'internal'" json:"owner_type"`
+	OwnerDeptID         *uuid.UUID           `gorm:"type:uuid;index" json:"owner_dept_id"`
+	OwnerDept           *Department          `gorm:"foreignKey:OwnerDeptID" json:"owner_dept,omitempty"`
+	OwnerOrgID          *uuid.UUID           `gorm:"type:uuid;index" json:"owner_org_id"`
+	OwnerOrg            *KpiOrganization     `gorm:"foreignKey:OwnerOrgID" json:"owner_org,omitempty"`
+	OwningAgencyID      *uuid.UUID           `gorm:"type:uuid;index" json:"owning_agency_id"`
+	OwningAgency        *Department          `gorm:"foreignKey:OwningAgencyID" json:"owning_agency,omitempty"`
+	Polarity            string               `gorm:"size:20;not null;default:'ascending'" json:"polarity"`
+	ActivationStatus    string               `gorm:"size:20;not null;default:'draft'" json:"activation_status"`
+	DescriptionEn       string               `gorm:"type:text" json:"description_en"`
+	DescriptionAr       string               `gorm:"type:text" json:"description_ar"`
+	Formula             string               `gorm:"type:text" json:"formula"`
+	Baseline            float64              `gorm:"default:0" json:"baseline"`
+	UnitOfMeasure       string               `gorm:"size:50" json:"unit_of_measure"`
+	ReportingFrequency  string               `gorm:"size:50" json:"reporting_frequency"`
+	Lifecycle           string               `gorm:"size:100" json:"lifecycle"`
+	DataSource          string               `gorm:"size:255" json:"data_source"`
+	Notes               string               `gorm:"type:text" json:"notes"`
+	DocumentaFolderID   string               `gorm:"size:255" json:"documenta_folder_id"`
+	WorkflowInstanceID  *uuid.UUID           `gorm:"type:uuid;index" json:"workflow_instance_id"`
+	WorkflowInstance    *KpiWorkflowInstance `gorm:"foreignKey:WorkflowInstanceID" json:"-"`
+	CreatedAt           time.Time            `json:"created_at"`
+	UpdatedAt           time.Time            `json:"updated_at"`
+	DeletedAt           gorm.DeletedAt       `gorm:"index" json:"-"`
 }
 
 func (k *AwardKPI) BeforeCreate(tx *gorm.DB) error {
@@ -492,6 +493,7 @@ type AwardKPIResponse struct {
 	Notes               string                     `json:"notes"`
 	DocumentaFolderID   string                     `json:"documenta_folder_id"`
 	WorkflowInstanceID  *uuid.UUID                 `json:"workflow_instance_id"`
+	CreatedBy           *UserBrief                 `json:"created_by,omitempty"`
 	CreatedAt           time.Time                  `json:"created_at"`
 	UpdatedAt           time.Time                  `json:"updated_at"`
 }
@@ -541,6 +543,16 @@ func (k *AwardKPI) ToResponse() AwardKPIResponse {
 	}
 	if k.OwningAgency != nil {
 		resp.OwningAgency = ToDepartmentBriefResponse(k.OwningAgency)
+	}
+	if k.WorkflowInstance != nil && k.WorkflowInstance.InitiatedBy != nil {
+		u := k.WorkflowInstance.InitiatedBy
+		resp.CreatedBy = &UserBrief{
+			ID:        u.ID,
+			FirstName: u.FirstName,
+			LastName:  u.LastName,
+			Email:     u.Email,
+			IsActive:  u.IsActive,
+		}
 	}
 	return resp
 }

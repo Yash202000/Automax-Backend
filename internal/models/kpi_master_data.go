@@ -464,6 +464,8 @@ type AwardCriterionResponse struct {
 	NameEn      string    `json:"name_en"`
 	NameAr      string    `json:"name_ar"`
 	IsActive    bool      `json:"is_active"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 func (a *AwardCriterion) ToResponse() AwardCriterionResponse {
@@ -473,6 +475,8 @@ func (a *AwardCriterion) ToResponse() AwardCriterionResponse {
 		NameEn:      a.NameEn,
 		NameAr:      a.NameAr,
 		IsActive:    a.IsActive,
+		CreatedAt:   a.CreatedAt,
+		UpdatedAt:   a.UpdatedAt,
 	}
 }
 
@@ -515,6 +519,8 @@ type AwardSubCriterionResponse struct {
 	NameEn           string                  `json:"name_en"`
 	NameAr           string                  `json:"name_ar"`
 	IsActive         bool                    `json:"is_active"`
+	CreatedAt        time.Time               `json:"created_at"`
+	UpdatedAt        time.Time               `json:"updated_at"`
 }
 
 func (a *AwardSubCriterion) ToResponse() AwardSubCriterionResponse {
@@ -525,6 +531,8 @@ func (a *AwardSubCriterion) ToResponse() AwardSubCriterionResponse {
 		NameEn:           a.NameEn,
 		NameAr:           a.NameAr,
 		IsActive:         a.IsActive,
+		CreatedAt:        a.CreatedAt,
+		UpdatedAt:        a.UpdatedAt,
 	}
 	if a.AwardCriterion != nil {
 		r := a.AwardCriterion.ToResponse()
