@@ -235,42 +235,42 @@ func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
 		}
 	}
 	item := &models.KpiMetric{
-		KpiID:                    id,
-		KpiType:                  kpiType,
-		Name:                     req.Name,
-		MetricCode:               req.MetricCode,
-		MetricDescription:        req.MetricDescription,
-		MetricStatus:             metricStatus,
-		DisplayOrder:             req.DisplayOrder,
-		MetricType:               metricType,
-		Unit:                     req.Unit,
-		CustomUnitLabel:          req.CustomUnitLabel,
-		BaselineValue:            req.BaselineValue,
-		CurrentValue:             req.BaselineValue,
-		Weight:                   req.Weight,
-		Formula:                  req.Formula,
-		CalculationType:          calcType,
-		Direction:                direction,
-		DecimalPrecision:         req.DecimalPrecision,
-		AggregationMethod:        aggMethod,
-		ReportingFrequency:       req.ReportingFrequency,
-		NumeratorLabel:           req.NumeratorLabel,
-		NumeratorVariableCode:    req.NumeratorVariableCode,
-		DenominatorLabel:         req.DenominatorLabel,
-		DenominatorVariableCode:  req.DenominatorVariableCode,
-		DirectActualLabel:        req.DirectActualLabel,
+		KpiID:                     id,
+		KpiType:                   kpiType,
+		Name:                      req.Name,
+		MetricCode:                req.MetricCode,
+		MetricDescription:         req.MetricDescription,
+		MetricStatus:              metricStatus,
+		DisplayOrder:              req.DisplayOrder,
+		MetricType:                metricType,
+		Unit:                      req.Unit,
+		CustomUnitLabel:           req.CustomUnitLabel,
+		BaselineValue:             req.BaselineValue,
+		CurrentValue:              req.BaselineValue,
+		Weight:                    req.Weight,
+		Formula:                   req.Formula,
+		CalculationType:           calcType,
+		Direction:                 direction,
+		DecimalPrecision:          req.DecimalPrecision,
+		AggregationMethod:         aggMethod,
+		ReportingFrequency:        req.ReportingFrequency,
+		NumeratorLabel:            req.NumeratorLabel,
+		NumeratorVariableCode:     req.NumeratorVariableCode,
+		DenominatorLabel:          req.DenominatorLabel,
+		DenominatorVariableCode:   req.DenominatorVariableCode,
+		DirectActualLabel:         req.DirectActualLabel,
 		AllowManualActualOverride: req.AllowManualActualOverride,
-		AdvancedFormulaEnabled:   req.AdvancedFormulaEnabled,
-		FormulaCode:              req.FormulaCode,
-		DivideByZeroHandling:     divideByZero,
-		RoundingRule:             roundingRule,
-		CalculationTraceRequired: req.CalculationTraceRequired,
-		MetricOwnerID:            metricOwnerID,
-		DataSource:               req.DataSource,
-		EvidenceRequired:         req.EvidenceRequired,
-		StartDate:                req.StartDate,
-		DueDate:                  req.DueDate,
-		CreatedByID:              userID,
+		AdvancedFormulaEnabled:    req.AdvancedFormulaEnabled,
+		FormulaCode:               req.FormulaCode,
+		DivideByZeroHandling:      divideByZero,
+		RoundingRule:              roundingRule,
+		CalculationTraceRequired:  req.CalculationTraceRequired,
+		MetricOwnerID:             metricOwnerID,
+		DataSource:                req.DataSource,
+		EvidenceRequired:          req.EvidenceRequired,
+		StartDate:                 req.StartDate,
+		DueDate:                   req.DueDate,
+		CreatedByID:               userID,
 	}
 	if item.Weight == 0 {
 		item.Weight = 1
@@ -524,38 +524,38 @@ func (h *KpiEngagementHandler) UpdateMetric(c *fiber.Ctx) error {
 		}
 	}
 	result := h.db.WithContext(c.UserContext()).Model(&models.KpiMetric{ID: id}).Updates(map[string]interface{}{
-		"name":                        req.Name,
-		"metric_code":                 req.MetricCode,
-		"metric_description":          req.MetricDescription,
-		"metric_status":               metricStatus,
-		"display_order":               req.DisplayOrder,
-		"metric_type":                 req.MetricType,
-		"unit":                        req.Unit,
-		"custom_unit_label":           req.CustomUnitLabel,
-		"baseline_value":              req.BaselineValue,
-		"weight":                      req.Weight,
-		"formula":                     req.Formula,
-		"calculation_type":            calcType,
-		"direction":                   direction,
-		"decimal_precision":           req.DecimalPrecision,
-		"aggregation_method":          aggMethod,
-		"reporting_frequency":         req.ReportingFrequency,
-		"numerator_label":             req.NumeratorLabel,
-		"numerator_variable_code":     req.NumeratorVariableCode,
-		"denominator_label":           req.DenominatorLabel,
-		"denominator_variable_code":   req.DenominatorVariableCode,
-		"direct_actual_label":         req.DirectActualLabel,
+		"name":                         req.Name,
+		"metric_code":                  req.MetricCode,
+		"metric_description":           req.MetricDescription,
+		"metric_status":                metricStatus,
+		"display_order":                req.DisplayOrder,
+		"metric_type":                  req.MetricType,
+		"unit":                         req.Unit,
+		"custom_unit_label":            req.CustomUnitLabel,
+		"baseline_value":               req.BaselineValue,
+		"weight":                       req.Weight,
+		"formula":                      req.Formula,
+		"calculation_type":             calcType,
+		"direction":                    direction,
+		"decimal_precision":            req.DecimalPrecision,
+		"aggregation_method":           aggMethod,
+		"reporting_frequency":          req.ReportingFrequency,
+		"numerator_label":              req.NumeratorLabel,
+		"numerator_variable_code":      req.NumeratorVariableCode,
+		"denominator_label":            req.DenominatorLabel,
+		"denominator_variable_code":    req.DenominatorVariableCode,
+		"direct_actual_label":          req.DirectActualLabel,
 		"allow_manual_actual_override": req.AllowManualActualOverride,
-		"advanced_formula_enabled":    req.AdvancedFormulaEnabled,
-		"formula_code":                req.FormulaCode,
-		"divide_by_zero_handling":     divideByZero,
-		"rounding_rule":               roundingRule,
-		"calculation_trace_required":  req.CalculationTraceRequired,
-		"metric_owner_id":             metricOwnerID,
-		"data_source":                 req.DataSource,
-		"evidence_required":           req.EvidenceRequired,
-		"start_date":                  req.StartDate,
-		"due_date":                    req.DueDate,
+		"advanced_formula_enabled":     req.AdvancedFormulaEnabled,
+		"formula_code":                 req.FormulaCode,
+		"divide_by_zero_handling":      divideByZero,
+		"rounding_rule":                roundingRule,
+		"calculation_trace_required":   req.CalculationTraceRequired,
+		"metric_owner_id":              metricOwnerID,
+		"data_source":                  req.DataSource,
+		"evidence_required":            req.EvidenceRequired,
+		"start_date":                   req.StartDate,
+		"due_date":                     req.DueDate,
 	})
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
@@ -674,6 +674,19 @@ func (h *KpiEngagementHandler) CreateEvidence(c *fiber.Ctx) error {
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
+
+	// A client-supplied documenta_file_id is otherwise never verified to
+	// exist — the normal upload flow (UploadAttachment) always sets this
+	// from a real Documenta upload response, but nothing stops a direct API
+	// call from passing an arbitrary/stale ID, which produces evidence rows
+	// that can never be viewed or downloaded. Reject those up front instead
+	// of silently persisting a dangling reference.
+	if req.DocumentaFileID != "" {
+		if _, err := h.documentaClient.GetFileInfo(c.UserContext(), req.DocumentaFileID); err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "documenta_file_not_found"))
+		}
+	}
+
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	evidenceType := req.EvidenceType
 	if evidenceType == "" {

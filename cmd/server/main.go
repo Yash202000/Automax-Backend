@@ -1271,12 +1271,18 @@ func main() {
 	kpi.Post("/award-criteria", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateAwardCriterion)
 	kpi.Put("/award-criteria/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateAwardCriterion)
 	kpi.Delete("/award-criteria/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteAwardCriterion)
+	kpi.Get("/award-criteria/:id/kpis", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListKpisForAwardCriterion)
+	kpi.Get("/award-criteria/:id/collaborators", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListCollaboratorsForAwardCriterion)
+	kpi.Get("/award-criteria/:id/evidence", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListEvidenceForAwardCriterion)
 
 	kpi.Get("/award-criteria/:criterionId/sub-criteria", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListAwardSubCriteria)
 	kpi.Post("/award-criteria/:criterionId/sub-criteria", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateAwardSubCriterion)
 	kpi.Get("/award-sub-criteria", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListAwardSubCriteria)
 	kpi.Put("/award-sub-criteria/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateAwardSubCriterion)
 	kpi.Delete("/award-sub-criteria/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteAwardSubCriterion)
+	kpi.Get("/award-sub-criteria/:id/kpis", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListKpisForAwardSubCriterion)
+	kpi.Get("/award-sub-criteria/:id/collaborators", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListCollaboratorsForAwardSubCriterion)
+	kpi.Get("/award-sub-criteria/:id/evidence", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListEvidenceForAwardSubCriterion)
 
 	kpi.Get("/data-sources", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListDataSources)
 	kpi.Post("/data-sources", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateDataSource)

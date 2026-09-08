@@ -541,6 +541,211 @@ func (h *KpiMasterDataHandler) DeleteAwardCriterion(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
 }
 
+// awardKpiIDsForCriterion resolves the IDs of every Award KPI linked to the
+// given Award Criterion, via its child Award Sub-Criteria (AwardKPI only
+// stores AwardSubCriterionID; the parent criterion is reached transitively).
+func (h *KpiMasterDataHandler) awardKpiIDsForCriterion(c *fiber.Ctx, criterionID uuid.UUID) ([]uuid.UUID, error) {
+	var subCriteriaIDs []uuid.UUID
+	if err := h.db.WithContext(c.UserContext()).Model(&models.AwardSubCriterion{}).
+		Where("award_criterion_id = ?", criterionID).Pluck("id", &subCriteriaIDs).Error; err != nil {
+		return nil, err
+	}
+	if len(subCriteriaIDs) == 0 {
+		return nil, nil
+	}
+	var kpiIDs []uuid.UUID
+	if err := h.db.WithContext(c.UserContext()).Model(&models.AwardKPI{}).
+		Where("award_sub_criterion_id IN ?", subCriteriaIDs).Pluck("id", &kpiIDs).Error; err != nil {
+		return nil, err
+	}
+	return kpiIDs, nil
+}
+
+// ListKpisForAwardCriterion returns every Award KPI linked to the given Award Criterion.
+func (h *KpiMasterDataHandler) ListKpisForAwardCriterion(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	kpiIDs, err := h.awardKpiIDsForCriterion(c, id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+
+	var kpis []models.AwardKPI
+	if len(kpiIDs) > 0 {
+		if err := h.db.WithContext(c.UserContext()).
+			Preload("AwardSubCriterion.AwardCriterion").Preload("Domain").
+			Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+			Preload("WorkflowInstance.InitiatedBy").
+			Where("id IN ?", kpiIDs).Find(&kpis).Error; err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+		}
+	}
+
+	resp := make([]models.AwardKPIResponse, len(kpis))
+	for i, k := range kpis {
+		resp[i] = k.ToResponse()
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
+}
+
+// ListCollaboratorsForAwardCriterion returns every collaborator across all
+// Award KPIs linked to the given Award Criterion.
+func (h *KpiMasterDataHandler) ListCollaboratorsForAwardCriterion(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	kpiIDs, err := h.awardKpiIDsForCriterion(c, id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+
+	// KpiCollaboratorAssignment (kpi_collaborator_assignments) is the table the
+	// real "Add Collaborator" UI flow (CollaboratorsTab.tsx) actually writes to
+	// and reads from — the simpler KpiCollaborator model has no live producer.
+	var items []models.KpiCollaboratorAssignment
+	if len(kpiIDs) > 0 {
+		if err := h.db.WithContext(c.UserContext()).
+			Preload("User.Department").
+			Where("kpi_type = ? AND kpi_id IN ?", "award", kpiIDs).
+			Order("created_at ASC").Find(&items).Error; err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+		}
+	}
+	resp := make([]models.KpiCollaboratorAssignmentResponse, len(items))
+	for i := range items {
+		resp[i] = toAssignmentResponse(&items[i])
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
+}
+
+// ListEvidenceForAwardCriterion returns every evidence item across all
+// Award KPIs linked to the given Award Criterion.
+func (h *KpiMasterDataHandler) ListEvidenceForAwardCriterion(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	kpiIDs, err := h.awardKpiIDsForCriterion(c, id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+
+	var items []models.KpiEvidence
+	if len(kpiIDs) > 0 {
+		if err := h.db.WithContext(c.UserContext()).
+			Preload("UploadedBy").
+			Preload("Metric").
+			Where("kpi_type = ? AND kpi_id IN ?", "award", kpiIDs).
+			Order("created_at DESC").Find(&items).Error; err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+		}
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", items)
+}
+
+// awardKpiIDsForSubCriterion resolves the IDs of every Award KPI linked
+// directly to the given Award Sub-Criterion (AwardKPI.AwardSubCriterionID
+// is a direct FK here, unlike the criterion-level rollup above).
+func (h *KpiMasterDataHandler) awardKpiIDsForSubCriterion(c *fiber.Ctx, subCriterionID uuid.UUID) ([]uuid.UUID, error) {
+	var kpiIDs []uuid.UUID
+	if err := h.db.WithContext(c.UserContext()).Model(&models.AwardKPI{}).
+		Where("award_sub_criterion_id = ?", subCriterionID).Pluck("id", &kpiIDs).Error; err != nil {
+		return nil, err
+	}
+	return kpiIDs, nil
+}
+
+// ListKpisForAwardSubCriterion returns every Award KPI linked to the given Award Sub-Criterion.
+func (h *KpiMasterDataHandler) ListKpisForAwardSubCriterion(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	kpiIDs, err := h.awardKpiIDsForSubCriterion(c, id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+
+	var kpis []models.AwardKPI
+	if len(kpiIDs) > 0 {
+		if err := h.db.WithContext(c.UserContext()).
+			Preload("AwardSubCriterion.AwardCriterion").Preload("Domain").
+			Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+			Preload("WorkflowInstance.InitiatedBy").
+			Where("id IN ?", kpiIDs).Find(&kpis).Error; err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+		}
+	}
+
+	resp := make([]models.AwardKPIResponse, len(kpis))
+	for i, k := range kpis {
+		resp[i] = k.ToResponse()
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
+}
+
+// ListCollaboratorsForAwardSubCriterion returns every collaborator across all
+// Award KPIs linked to the given Award Sub-Criterion.
+func (h *KpiMasterDataHandler) ListCollaboratorsForAwardSubCriterion(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	kpiIDs, err := h.awardKpiIDsForSubCriterion(c, id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+
+	var items []models.KpiCollaboratorAssignment
+	if len(kpiIDs) > 0 {
+		if err := h.db.WithContext(c.UserContext()).
+			Preload("User.Department").
+			Where("kpi_type = ? AND kpi_id IN ?", "award", kpiIDs).
+			Order("created_at ASC").Find(&items).Error; err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+		}
+	}
+	resp := make([]models.KpiCollaboratorAssignmentResponse, len(items))
+	for i := range items {
+		resp[i] = toAssignmentResponse(&items[i])
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
+}
+
+// ListEvidenceForAwardSubCriterion returns every evidence item across all
+// Award KPIs linked to the given Award Sub-Criterion.
+func (h *KpiMasterDataHandler) ListEvidenceForAwardSubCriterion(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	kpiIDs, err := h.awardKpiIDsForSubCriterion(c, id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+
+	var items []models.KpiEvidence
+	if len(kpiIDs) > 0 {
+		if err := h.db.WithContext(c.UserContext()).
+			Preload("UploadedBy").
+			Preload("Metric").
+			Where("kpi_type = ? AND kpi_id IN ?", "award", kpiIDs).
+			Order("created_at DESC").Find(&items).Error; err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+		}
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", items)
+}
+
 // ─── Award Sub Criteria ───────────────────────────────────────────────────────
 
 func (h *KpiMasterDataHandler) ListAwardSubCriteria(c *fiber.Ctx) error {
