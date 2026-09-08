@@ -657,7 +657,18 @@ func buildGroupCSVReport(ctx context.Context, incidents []models.Incident, class
 
 		assigneeName := i18n.T(ctx, "escalation_report_unassigned")
 		if inc.Assignee != nil {
-			assigneeName = fmt.Sprintf("%s %s", inc.Assignee.FirstName, inc.Assignee.LastName)
+			// FirstName/LastName can both be blank for accounts created with only a
+			// username/email (e.g. "leo"), which would otherwise render as an empty
+			// (whitespace-only) cell despite the incident having a real assignee.
+			name := strings.TrimSpace(fmt.Sprintf("%s %s", inc.Assignee.FirstName, inc.Assignee.LastName))
+			if name == "" {
+				if inc.Assignee.Username != "" {
+					name = inc.Assignee.Username
+				} else {
+					name = inc.Assignee.Email
+				}
+			}
+			assigneeName = name
 		}
 
 		_ = w.Write([]string{
