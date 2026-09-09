@@ -675,18 +675,6 @@ func (h *KpiEngagementHandler) CreateEvidence(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
 
-	// A client-supplied documenta_file_id is otherwise never verified to
-	// exist — the normal upload flow (UploadAttachment) always sets this
-	// from a real Documenta upload response, but nothing stops a direct API
-	// call from passing an arbitrary/stale ID, which produces evidence rows
-	// that can never be viewed or downloaded. Reject those up front instead
-	// of silently persisting a dangling reference.
-	if req.DocumentaFileID != "" {
-		if _, err := h.documentaClient.GetFileInfo(c.UserContext(), req.DocumentaFileID); err != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "documenta_file_not_found"))
-		}
-	}
-
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	evidenceType := req.EvidenceType
 	if evidenceType == "" {

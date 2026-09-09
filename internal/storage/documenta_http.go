@@ -223,7 +223,6 @@ func (c *httpDocumentaClient) doRequest(ctx context.Context, method, path string
 	if err != nil {
 		return nil, err
 	}
-
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
 		return nil, fmt.Errorf("documenta: create request: %w", err)

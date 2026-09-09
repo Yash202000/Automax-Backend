@@ -34,7 +34,6 @@ var messages = map[string][2]string{
 	"failed_to_upload_file":           {"Failed to upload file", "فشل رفع الملف"},
 	"failed_to_read_file":             {"Failed to read file", "فشل قراءة الملف"},
 	"failed_to_retrieve_file":         {"Failed to retrieve file", "فشل استرجاع الملف"},
-	"documenta_file_not_found":        {"The referenced file could not be found in Documenta", "تعذر العثور على الملف المشار إليه في نظام الوثائق"},
 	"failed_to_open_file":             {"Failed to open file", "فشل فتح الملف"},
 	"failed_to_open_uploaded_file":    {"Failed to open uploaded file", "فشل فتح الملف المرفوع"},
 	"failed_to_read_file_content":     {"Failed to read file content", "فشل قراءة محتوى الملف"},
