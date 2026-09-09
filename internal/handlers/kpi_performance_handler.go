@@ -131,16 +131,18 @@ func (h *KpiPerformanceHandler) SetTarget(c *fiber.Ctx) error {
 	} else {
 		dupQuery = dupQuery.Where("organization_id IS NULL")
 	}
-	dupErr := dupQuery.First(&models.KpiAnnualTarget{}).Error
+	var existing models.KpiAnnualTarget
+	dupErr := dupQuery.First(&existing).Error
 	if dupErr == nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest,
-			fmt.Sprintf("a target for %s already exists for this metric in period %s/%d", req.KpiCode, req.PeriodCode, req.TargetYear))
+			fmt.Sprintf("A target with status '%s' already exists for %s in period %s/%d — edit or supersede it instead of creating a new one",
+				existing.TargetStatus, req.KpiCode, req.PeriodCode, req.TargetYear))
 	} else if dupErr != gorm.ErrRecordNotFound {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to check for an existing target")
 	}
 
 	if err := db.Create(item).Error; err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create target")
 	}
 
 	// Reload with preloads
@@ -235,11 +237,13 @@ func (h *KpiPerformanceHandler) UpdateTarget(c *fiber.Ctx) error {
 	} else {
 		dupQuery = dupQuery.Where("organization_id IS NULL")
 	}
-	var dupCount int64
-	dupQuery.Count(&dupCount)
-	if dupCount > 0 {
+	var conflicting models.KpiAnnualTarget
+	if dupErr := dupQuery.First(&conflicting).Error; dupErr == nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest,
-			fmt.Sprintf("a target for %s already exists for this metric in period %s/%d", req.KpiCode, req.PeriodCode, req.TargetYear))
+			fmt.Sprintf("A target with status '%s' already exists for %s in period %s/%d — edit or supersede it instead of creating a new one",
+				conflicting.TargetStatus, req.KpiCode, req.PeriodCode, req.TargetYear))
+	} else if dupErr != gorm.ErrRecordNotFound {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to check for an existing target")
 	}
 	updated.ID = existing.ID
 	updated.CreatedAt = existing.CreatedAt
