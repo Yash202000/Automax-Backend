@@ -177,6 +177,7 @@ type OperationalObjectiveResponse struct {
 	Enabler   *EnablerResponse   `json:"enabler,omitempty"`
 	IsActive  bool               `json:"is_active"`
 	CreatedAt time.Time          `json:"created_at"`
+	UpdatedAt time.Time          `json:"updated_at"`
 }
 
 func (o *OperationalObjective) ToResponse() OperationalObjectiveResponse {
@@ -189,6 +190,7 @@ func (o *OperationalObjective) ToResponse() OperationalObjectiveResponse {
 		EnablerID: o.EnablerID,
 		IsActive:  o.IsActive,
 		CreatedAt: o.CreatedAt,
+		UpdatedAt: o.UpdatedAt,
 	}
 	if o.Goal != nil {
 		resp.Goal = ToGoalBriefResponse(o.Goal)

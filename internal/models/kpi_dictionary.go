@@ -262,6 +262,7 @@ type OperationalKPI struct {
 	Notes                  string                `gorm:"type:text" json:"notes"`
 	DocumentaFolderID      string                `gorm:"size:255" json:"documenta_folder_id"`
 	WorkflowInstanceID     *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
+	WorkflowInstance       *KpiWorkflowInstance  `gorm:"foreignKey:WorkflowInstanceID" json:"-"`
 	CreatedAt              time.Time             `json:"created_at"`
 	UpdatedAt              time.Time             `json:"updated_at"`
 	DeletedAt              gorm.DeletedAt        `gorm:"index" json:"-"`
@@ -332,6 +333,7 @@ type OperationalKPIResponse struct {
 	Notes                  string                        `json:"notes"`
 	DocumentaFolderID      string                        `json:"documenta_folder_id"`
 	WorkflowInstanceID     *uuid.UUID                    `json:"workflow_instance_id"`
+	CreatedBy              *UserBrief                    `json:"created_by,omitempty"`
 	CreatedAt              time.Time                     `json:"created_at"`
 	UpdatedAt              time.Time                     `json:"updated_at"`
 }
@@ -390,6 +392,16 @@ func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 	}
 	if k.OwningAgency != nil {
 		resp.OwningAgency = ToDepartmentBriefResponse(k.OwningAgency)
+	}
+	if k.WorkflowInstance != nil && k.WorkflowInstance.InitiatedBy != nil {
+		u := k.WorkflowInstance.InitiatedBy
+		resp.CreatedBy = &UserBrief{
+			ID:        u.ID,
+			FirstName: u.FirstName,
+			LastName:  u.LastName,
+			Email:     u.Email,
+			IsActive:  u.IsActive,
+		}
 	}
 	return resp
 }
