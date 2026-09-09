@@ -59,16 +59,16 @@ func (h *LocationHandler) Create(c *fiber.Ctx) error {
 		})
 	}
 
-	existing, err := h.repo.FindByNameOrNameArAndParent(c.UserContext(), req.Name, req.NameAr, req.ParentID)
-	if err == nil && existing != nil {
+	checkCode := ""
+	if !isEPM940 {
+		checkCode = req.Code
+	}
+
+	existing, fields, err := h.repo.CheckDuplicate(c.UserContext(), req.Name, req.NameAr, checkCode, req.ParentID, nil)
+	if err == nil && existing != nil && fields.Any() {
 		existingPath, _ := h.repo.FetchLocationFullPathByID(c.UserContext(), existing.ID)
-		var msg string
-		if existingPath != "" {
-			msg = i18n.Tf(c.UserContext(), "location_already_exists_named_at", existing.Name, existingPath)
-		} else {
-			msg = i18n.Tf(c.UserContext(), "location_already_exists_named", existing.Name)
-		}
-		return utils.ErrorResponse(c, fiber.StatusConflict, msg)
+		return utils.ErrorResponse(c, fiber.StatusConflict, duplicateConflictMessage(c.UserContext(), fields, existing.Name, existing.NameAr, existingPath,
+			"location_code_exists", "location_already_exists_named", "location_already_exists_named_at"))
 	}
 
 	source := req.Source
@@ -157,18 +157,16 @@ func (h *LocationHandler) Update(c *fiber.Ctx) error {
 		checkNameAr = location.NameAr
 	}
 
-	if (req.Name != "" && req.Name != location.Name) || (req.NameAr != "" && req.NameAr != location.NameAr) {
-		existing, err := h.repo.FindByNameOrNameAr(c.UserContext(), checkName, checkNameAr)
-		if err == nil && existing != nil && existing.ID != id {
-			existingPath, _ := h.repo.FetchLocationFullPathByID(c.UserContext(), existing.ID)
-			var msg string
-			if existingPath != "" {
-				msg = i18n.Tf(c.UserContext(), "location_already_exists_named_at", existing.Name, existingPath)
-			} else {
-				msg = i18n.Tf(c.UserContext(), "location_already_exists_named", existing.Name)
-			}
-			return utils.ErrorResponse(c, fiber.StatusConflict, msg)
-		}
+	checkCode := ""
+	if !isEPM940 {
+		checkCode = req.Code
+	}
+
+	existing, fields, err := h.repo.CheckDuplicate(c.UserContext(), checkName, checkNameAr, checkCode, location.ParentID, &id)
+	if err == nil && existing != nil && fields.Any() {
+		existingPath, _ := h.repo.FetchLocationFullPathByID(c.UserContext(), existing.ID)
+		return utils.ErrorResponse(c, fiber.StatusConflict, duplicateConflictMessage(c.UserContext(), fields, existing.Name, existing.NameAr, existingPath,
+			"location_code_exists", "location_already_exists_named", "location_already_exists_named_at"))
 	}
 
 	if req.Name != "" {
@@ -178,9 +176,6 @@ func (h *LocationHandler) Update(c *fiber.Ctx) error {
 		location.NameAr = req.NameAr
 	}
 	if !isEPM940 && req.Code != "" && req.Code != location.Code {
-		if existing, err := h.repo.FindByCode(c.UserContext(), req.Code); err == nil && existing != nil && existing.ID != id {
-			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "location_code_exists"))
-		}
 		location.Code = req.Code
 	}
 	if req.Description != "" {
@@ -412,19 +407,21 @@ func (h *LocationHandler) Import(c *fiber.Ctx) error {
 
 	// Read file content
 	var importData []struct {
-		ID          uuid.UUID  `json:"id"`
-		Name        string     `json:"name"`
-		Code        string     `json:"code"`
-		Description string     `json:"description"`
-		Type        string     `json:"type"`
-		ParentID    *uuid.UUID `json:"parent_id"`
-		Level       int        `json:"level"`
-		Path        string     `json:"path"`
-		Address     string     `json:"address"`
-		Latitude    *float64   `json:"latitude"`
-		Longitude   *float64   `json:"longitude"`
-		IsActive    bool       `json:"is_active"`
-		SortOrder   int        `json:"sort_order"`
+		ID            uuid.UUID  `json:"id"`
+		Name          string     `json:"name"`
+		NameAr        string     `json:"name_ar"`
+		Code          string     `json:"code"`
+		Description   string     `json:"description"`
+		DescriptionAr string     `json:"description_ar"`
+		Type          string     `json:"type"`
+		ParentID      *uuid.UUID `json:"parent_id"`
+		Level         int        `json:"level"`
+		Path          string     `json:"path"`
+		Address       string     `json:"address"`
+		Latitude      *float64   `json:"latitude"`
+		Longitude     *float64   `json:"longitude"`
+		IsActive      bool       `json:"is_active"`
+		SortOrder     int        `json:"sort_order"`
 	}
 
 	// Parse JSON from file
@@ -477,16 +474,18 @@ func (h *LocationHandler) Import(c *fiber.Ctx) error {
 		// Create new location
 		newID := uuid.New()
 		location := &models.Location{
-			ID:          newID,
-			Name:        data.Name,
-			Description: data.Description,
-			Type:        data.Type,
-			ParentID:    data.ParentID,
-			Address:     data.Address,
-			Latitude:    data.Latitude,
-			Longitude:   data.Longitude,
-			IsActive:    data.IsActive,
-			SortOrder:   data.SortOrder,
+			ID:            newID,
+			Name:          data.Name,
+			NameAr:        data.NameAr,
+			Description:   data.Description,
+			DescriptionAr: data.DescriptionAr,
+			Type:          data.Type,
+			ParentID:      data.ParentID,
+			Address:       data.Address,
+			Latitude:      data.Latitude,
+			Longitude:     data.Longitude,
+			IsActive:      data.IsActive,
+			SortOrder:     data.SortOrder,
 		}
 		if !isEPM940 {
 			location.Code = strings.TrimSpace(data.Code)

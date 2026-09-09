@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -93,6 +94,12 @@ type ClassificationRepository interface {
 	GetAncestors(ctx context.Context, id uuid.UUID) ([]models.Classification, error)
 	HasActiveChildren(ctx context.Context, id uuid.UUID) (bool, error)
 	CountChildren(ctx context.Context, id uuid.UUID) (int64, error)
+	// CheckDuplicate looks for a classification whose name/name_ar collide under the given
+	// parent (matching FindByNameOrNameArAndParent's scoping) or whose code collides
+	// classification-wide, and reports exactly which field(s) matched so the caller can
+	// give a precise conflict message. excludeID skips a specific row (the record being
+	// updated). Returns (nil, zero DuplicateFields, nil) when nothing collides.
+	CheckDuplicate(ctx context.Context, name, nameAr, code string, parentID *uuid.UUID, excludeID *uuid.UUID) (*models.Classification, DuplicateFields, error)
 }
 
 // clsCodePrefix is the fixed prefix for the auto-generated Classification Code (e.g. cls-000001).
@@ -245,6 +252,64 @@ func (r *classificationRepository) FindByNameOrNameAr(ctx context.Context, name 
 		return nil, err
 	}
 	return &classification, nil
+}
+
+// CheckDuplicate implements ClassificationRepository.CheckDuplicate. Name/name_ar
+// uniqueness is checked among siblings under the given parent, same shape as
+// FindByNameOrNameArAndParent; code is checked separately, classification-wide, and only
+// when no name/name_ar conflict was already found.
+func (r *classificationRepository) CheckDuplicate(ctx context.Context, name, nameAr, code string, parentID *uuid.UUID, excludeID *uuid.UUID) (*models.Classification, DuplicateFields, error) {
+	name = strings.TrimSpace(name)
+	nameAr = strings.TrimSpace(nameAr)
+	code = strings.ToLower(strings.TrimSpace(code))
+
+	if name != "" || nameAr != "" {
+		query := r.db.WithContext(ctx)
+		if nameAr != "" && nameAr != name {
+			query = query.Where("name = ? OR name_ar = ?", name, nameAr)
+		} else {
+			query = query.Where("name = ?", name)
+		}
+		if parentID == nil {
+			query = query.Where("parent_id IS NULL")
+		} else {
+			query = query.Where("parent_id = ?", parentID)
+		}
+		if excludeID != nil {
+			query = query.Where("id != ?", *excludeID)
+		}
+
+		var match models.Classification
+		err := query.First(&match).Error
+		if err == nil {
+			return &match, DuplicateFields{
+				Name:   name != "" && match.Name == name,
+				NameAr: nameAr != "" && match.NameAr == nameAr,
+			}, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, DuplicateFields{}, err
+		}
+	}
+
+	if code == "" {
+		return nil, DuplicateFields{}, nil
+	}
+
+	codeQuery := r.db.WithContext(ctx).Where("LOWER(code) = ?", code)
+	if excludeID != nil {
+		codeQuery = codeQuery.Where("id != ?", *excludeID)
+	}
+
+	var byCode models.Classification
+	err := codeQuery.First(&byCode).Error
+	if err == nil {
+		return &byCode, DuplicateFields{Code: true}, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, DuplicateFields{}, err
+	}
+	return nil, DuplicateFields{}, nil
 }
 
 func (r *classificationRepository) FindByExternalID(ctx context.Context, externalID string) (*models.Classification, error) {

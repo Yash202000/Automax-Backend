@@ -232,7 +232,7 @@ func main() {
 
 	categoryService := services.NewCategoryService(categoryRepo)
 	categoryHandler := handlers.NewCategoryHandler(categoryService)
-	classificationHandler := handlers.NewClassificationHandler(classificationRepo)
+	classificationHandler := handlers.NewClassificationHandler(classificationRepo, cfg)
 	locationHandler := handlers.NewLocationHandler(locationRepo, cfg)
 	departmentHandler := handlers.NewDepartmentHandler(departmentRepo, userRepo, incidentRepo, cfg)
 	extensionHandler := handlers.NewExtensionHandler(extensionService, cfg)

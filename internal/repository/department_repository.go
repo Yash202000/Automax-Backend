@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -30,6 +31,13 @@ type DepartmentRepository interface {
 	FindMatching(ctx context.Context, classificationID, locationID *uuid.UUID, departmentType *string) ([]models.Department, error)
 	HasActiveChildren(ctx context.Context, id uuid.UUID) (bool, error)
 	CheckDeleteDependencies(ctx context.Context, id uuid.UUID) (children, users, incidents int64, err error)
+	FetchDepartmentFullPathByID(ctx context.Context, departmentID uuid.UUID) (string, error)
+	// CheckDuplicate looks for a department whose name/name_ar collide under the given
+	// parent, or whose code collides department-wide, and reports exactly which field(s)
+	// matched so the caller can give a precise conflict message instead of a generic one.
+	// excludeID skips a specific row (the record being updated). Returns (nil, zero
+	// DuplicateFields, nil) when nothing collides.
+	CheckDuplicate(ctx context.Context, name, nameAr, code string, parentID *uuid.UUID, excludeID *uuid.UUID) (*models.Department, DuplicateFields, error)
 }
 
 // orgCodePrefix is the fixed prefix for the auto-generated Organization Code (e.g. org-000001).
@@ -353,6 +361,104 @@ func (r *departmentRepository) CheckDeleteDependencies(ctx context.Context, id u
 		return
 	}
 	return
+}
+
+// FetchDepartmentFullPathByID returns the human-readable "Parent > Child" name path
+// for a department, mirroring classificationRepository.FetchClassificationFullPathByID.
+func (r *departmentRepository) FetchDepartmentFullPathByID(ctx context.Context, departmentID uuid.UUID) (string, error) {
+	const query = `
+		WITH RECURSIVE department_hierarchy AS (
+			SELECT
+				id,
+				name,
+				parent_id,
+				name::TEXT AS full_path
+			FROM departments
+			WHERE parent_id IS NULL
+
+			UNION ALL
+
+			SELECT
+				d.id,
+				d.name,
+				d.parent_id,
+				dh.full_path || ' > ' || d.name
+			FROM departments d
+			INNER JOIN department_hierarchy dh ON d.parent_id = dh.id
+		)
+		SELECT full_path
+		FROM department_hierarchy
+		WHERE id = $1
+	`
+
+	var fullPath string
+	err := r.db.WithContext(ctx).Raw(query, departmentID).Scan(&fullPath).Error
+	if err != nil {
+		return "", fmt.Errorf("fetchDepartmentFullPathByID: %w", err)
+	}
+	if fullPath == "" {
+		return "", fmt.Errorf("fetchDepartmentFullPathByID: department %s not found", departmentID)
+	}
+
+	return fullPath, nil
+}
+
+// CheckDuplicate implements DepartmentRepository.CheckDuplicate. Name/name_ar uniqueness
+// is checked among siblings under the given parent, same shape as
+// FindByNameOrNameArAndParent; code is checked separately, department-wide, and only
+// when no name/name_ar conflict was already found.
+func (r *departmentRepository) CheckDuplicate(ctx context.Context, name, nameAr, code string, parentID *uuid.UUID, excludeID *uuid.UUID) (*models.Department, DuplicateFields, error) {
+	name = strings.TrimSpace(name)
+	nameAr = strings.TrimSpace(nameAr)
+	code = strings.ToLower(strings.TrimSpace(code))
+
+	if name != "" || nameAr != "" {
+		query := r.db.WithContext(ctx)
+		if nameAr != "" && nameAr != name {
+			query = query.Where("name = ? OR name_ar = ?", name, nameAr)
+		} else {
+			query = query.Where("name = ?", name)
+		}
+		if parentID == nil {
+			query = query.Where("parent_id IS NULL")
+		} else {
+			query = query.Where("parent_id = ?", parentID)
+		}
+		if excludeID != nil {
+			query = query.Where("id != ?", *excludeID)
+		}
+
+		var match models.Department
+		err := query.First(&match).Error
+		if err == nil {
+			return &match, DuplicateFields{
+				Name:   name != "" && match.Name == name,
+				NameAr: nameAr != "" && match.NameAr == nameAr,
+			}, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, DuplicateFields{}, err
+		}
+	}
+
+	if code == "" {
+		return nil, DuplicateFields{}, nil
+	}
+
+	codeQuery := r.db.WithContext(ctx).Where("LOWER(code) = ?", code)
+	if excludeID != nil {
+		codeQuery = codeQuery.Where("id != ?", *excludeID)
+	}
+
+	var byCode models.Department
+	err := codeQuery.First(&byCode).Error
+	if err == nil {
+		return &byCode, DuplicateFields{Code: true}, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, DuplicateFields{}, err
+	}
+	return nil, DuplicateFields{}, nil
 }
 
 // FindMatching returns departments that match the given classification and/or location criteria
