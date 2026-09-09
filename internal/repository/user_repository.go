@@ -24,7 +24,7 @@ type UserRepository interface {
 	Update(ctx context.Context, user *models.User) error
 	UpdateLastLogin(ctx context.Context, id uuid.UUID) error
 	Delete(ctx context.Context, id uuid.UUID) error
-	List(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID, withIncident bool, strictDepartment ...bool) ([]models.User, int64, error)
+	List(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID, withIncident, withIVR bool, strictDepartment ...bool) ([]models.User, int64, error)
 	ListByDepartment(ctx context.Context, departmentID uuid.UUID, page, limit int) ([]models.User, int64, error)
 	ExistsByEmail(ctx context.Context, email string) (bool, error)
 	ExistsByUsername(ctx context.Context, username string) (bool, error)
@@ -258,7 +258,7 @@ func (r *userRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return r.db.WithContext(ctx).Delete(&models.User{}, "id = ?", id).Error
 }
 
-func (r *userRepository) List(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID, withIncident bool, strictDepartment ...bool) ([]models.User, int64, error) {
+func (r *userRepository) List(ctx context.Context, page, limit int, search, phone, extension, callStatus string, roleIDs, departmentIDs, locationIDs, classificationIDs []uuid.UUID, withIncident, withIVR bool, strictDepartment ...bool) ([]models.User, int64, error) {
 	var users []models.User
 	var total int64
 
@@ -267,8 +267,11 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 	isStrict := len(strictDepartment) > 0 && strictDepartment[0]
 
 	// Build base query with search + join filters
-	base := r.db.WithContext(ctx).Model(&models.User{}).
-		Where("LOWER(users.email) NOT LIKE 'ivr_email_%'")
+	base := r.db.WithContext(ctx).Model(&models.User{})
+
+	if !withIVR {
+		base = base.Where("LOWER(users.email) NOT LIKE 'ivr_email_%'")
+	}
 
 	if search != "" {
 		like := "%" + strings.ToLower(search) + "%"
