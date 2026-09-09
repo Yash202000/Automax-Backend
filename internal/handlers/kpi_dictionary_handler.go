@@ -34,6 +34,25 @@ func NewKpiDictionaryHandler(db *gorm.DB, actionLogSvc services.ActionLogService
 	}
 }
 
+// kpiCode resolves a KPI dictionary row's code by (kpiType, id) — used to
+// make activity-log Description strings read "KPI-XYZ" instead of a bare
+// UUID (mirrors KpiEngagementHandler.kpiCodeAndName's dispatch pattern).
+func (h *KpiDictionaryHandler) kpiCode(kpiType string, id uuid.UUID) string {
+	var code string
+	switch kpiType {
+	case models.KPITypeOperational:
+		h.db.Model(&models.OperationalKPI{}).Where("id = ?", id).Pluck("code", &code)
+	case models.KPITypeAward:
+		h.db.Model(&models.AwardKPI{}).Where("id = ?", id).Pluck("code", &code)
+	default:
+		h.db.Model(&models.StrategicKPI{}).Where("id = ?", id).Pluck("code", &code)
+	}
+	if code == "" {
+		return id.String()
+	}
+	return code
+}
+
 // ─── Strategic KPI ────────────────────────────────────────────────────────────
 
 func (h *KpiDictionaryHandler) ListStrategic(c *fiber.Ctx) error {
@@ -104,6 +123,12 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
 
+	var codeCount int64
+	h.db.WithContext(c.UserContext()).Model(&models.StrategicKPI{}).Where("code = ?", req.Code).Count(&codeCount)
+	if codeCount > 0 {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, fmt.Sprintf("A KPI with code '%s' already exists", req.Code))
+	}
+
 	item := &models.StrategicKPI{
 		Code:               req.Code,
 		NameEn:             req.NameEn,
@@ -141,7 +166,7 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 	}
 
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create KPI")
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
@@ -238,6 +263,7 @@ func (h *KpiDictionaryHandler) DeleteStrategic(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
+	code := h.kpiCode(models.KPITypeStrategic, id)
 	result := h.db.WithContext(c.UserContext()).Delete(&models.StrategicKPI{}, id)
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
@@ -247,7 +273,7 @@ func (h *KpiDictionaryHandler) DeleteStrategic(c *fiber.Ctx) error {
 		Action:      "delete",
 		Module:      "kpi",
 		ResourceID:  id.String(),
-		Description: fmt.Sprintf("Deleted strategic KPI %s", id),
+		Description: fmt.Sprintf("Deleted strategic KPI %s", code),
 		Status:      "success",
 	})
 
@@ -301,6 +327,12 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
 
+	var codeCount int64
+	h.db.WithContext(c.UserContext()).Model(&models.OperationalKPI{}).Where("code = ?", req.Code).Count(&codeCount)
+	if codeCount > 0 {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, fmt.Sprintf("A KPI with code '%s' already exists", req.Code))
+	}
+
 	item := &models.OperationalKPI{
 		Code:                   req.Code,
 		NameEn:                 req.NameEn,
@@ -336,7 +368,7 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 	}
 
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create KPI")
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
@@ -450,6 +482,7 @@ func (h *KpiDictionaryHandler) DeleteOperational(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
+	code := h.kpiCode(models.KPITypeOperational, id)
 	result := h.db.WithContext(c.UserContext()).Delete(&models.OperationalKPI{}, id)
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
@@ -459,7 +492,7 @@ func (h *KpiDictionaryHandler) DeleteOperational(c *fiber.Ctx) error {
 		Action:      "delete",
 		Module:      "kpi",
 		ResourceID:  id.String(),
-		Description: fmt.Sprintf("Deleted operational KPI %s", id),
+		Description: fmt.Sprintf("Deleted operational KPI %s", code),
 		Status:      "success",
 	})
 
@@ -508,6 +541,12 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
 
+	var codeCount int64
+	h.db.WithContext(c.UserContext()).Model(&models.AwardKPI{}).Where("code = ?", req.Code).Count(&codeCount)
+	if codeCount > 0 {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, fmt.Sprintf("A KPI with code '%s' already exists", req.Code))
+	}
+
 	item := &models.AwardKPI{
 		Code:                req.Code,
 		NameEn:              req.NameEn,
@@ -541,7 +580,7 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 	}
 
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create KPI")
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
@@ -571,6 +610,7 @@ func (h *KpiDictionaryHandler) DeleteAward(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
+	code := h.kpiCode(models.KPITypeAward, id)
 	result := h.db.WithContext(c.UserContext()).Delete(&models.AwardKPI{}, id)
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
@@ -580,7 +620,7 @@ func (h *KpiDictionaryHandler) DeleteAward(c *fiber.Ctx) error {
 		Action:      "delete",
 		Module:      "kpi",
 		ResourceID:  id.String(),
-		Description: fmt.Sprintf("Deleted award KPI %s", id),
+		Description: fmt.Sprintf("Deleted award KPI %s", code),
 		Status:      "success",
 	})
 
@@ -721,7 +761,7 @@ func (h *KpiDictionaryHandler) TransitionKpi(c *fiber.Ctx) error {
 		Action:      "transition",
 		Module:      "kpi",
 		ResourceID:  id.String(),
-		Description: fmt.Sprintf("Transitioned %s KPI %s (status -> %s)", kpiType, id, newStatus),
+		Description: fmt.Sprintf("Transitioned %s KPI %s (status -> %s)", kpiType, h.kpiCode(kpiType, id), newStatus),
 		Status:      "success",
 	})
 
