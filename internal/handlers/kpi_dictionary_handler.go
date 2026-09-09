@@ -104,6 +104,12 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
 
+	var codeCount int64
+	h.db.WithContext(c.UserContext()).Model(&models.StrategicKPI{}).Where("code = ?", req.Code).Count(&codeCount)
+	if codeCount > 0 {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, fmt.Sprintf("A KPI with code '%s' already exists", req.Code))
+	}
+
 	item := &models.StrategicKPI{
 		Code:               req.Code,
 		NameEn:             req.NameEn,
@@ -141,7 +147,7 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 	}
 
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create KPI")
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
@@ -301,6 +307,12 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
 
+	var codeCount int64
+	h.db.WithContext(c.UserContext()).Model(&models.OperationalKPI{}).Where("code = ?", req.Code).Count(&codeCount)
+	if codeCount > 0 {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, fmt.Sprintf("A KPI with code '%s' already exists", req.Code))
+	}
+
 	item := &models.OperationalKPI{
 		Code:                   req.Code,
 		NameEn:                 req.NameEn,
@@ -336,7 +348,7 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 	}
 
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create KPI")
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
@@ -508,6 +520,12 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
 
+	var codeCount int64
+	h.db.WithContext(c.UserContext()).Model(&models.AwardKPI{}).Where("code = ?", req.Code).Count(&codeCount)
+	if codeCount > 0 {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, fmt.Sprintf("A KPI with code '%s' already exists", req.Code))
+	}
+
 	item := &models.AwardKPI{
 		Code:                req.Code,
 		NameEn:              req.NameEn,
@@ -541,7 +559,7 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 	}
 
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create KPI")
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
