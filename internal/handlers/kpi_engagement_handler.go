@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -98,6 +99,28 @@ func (h *KpiEngagementHandler) kpiCodeAndName(kpiType string, id uuid.UUID) (cod
 		}
 		return k.Code, k.NameEn, nil
 	}
+}
+
+// userOnBehalfContext threads the current request's authenticated user email
+// into ctx as Documenta's X-On-Behalf-Of identity. Without this, every KPI
+// evidence Documenta call fell back to the synthetic default identity
+// ("system@automax.local"), which — verified live against mydocs.axionic.io
+// — has no real membership/read access in the Documenta workspace: it
+// returns 404 "file not found" for files that download fine for a real
+// workspace member (e.g. admin@automax.com), which looked exactly like
+// random data loss. Goal/Documents (document_authz.go, document_service.go)
+// already do this; KPI evidence never did.
+func (h *KpiEngagementHandler) userOnBehalfContext(c *fiber.Ctx) context.Context {
+	ctx := c.UserContext()
+	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	if !ok {
+		return ctx
+	}
+	var user models.User
+	if err := h.db.Select("email").Where("id = ?", userID).First(&user).Error; err != nil || user.Email == "" {
+		return ctx
+	}
+	return storage.ContextWithOnBehalf(ctx, user.Email)
 }
 
 func (h *KpiEngagementHandler) parseTypeAndID(c *fiber.Ctx) (string, uuid.UUID, error) {
@@ -325,7 +348,7 @@ func (h *KpiEngagementHandler) UploadAttachment(c *fiber.Ctx) error {
 	}
 	defer src.Close()
 
-	ctx := c.UserContext()
+	ctx := h.userOnBehalfContext(c)
 
 	kpiCode, kpiName, err := h.kpiCodeAndName(kpiType, id)
 	if err != nil {
@@ -723,7 +746,7 @@ func (h *KpiEngagementHandler) DeleteEvidence(c *fiber.Ctx) error {
 	// logged (matches models.Evidence's DocumentaFileID handling in
 	// goal_service.go DeleteEvidence).
 	if item.DocumentaFileID != "" {
-		if delErr := h.documentaClient.DeleteFile(c.UserContext(), item.DocumentaFileID); delErr != nil {
+		if delErr := h.documentaClient.DeleteFile(h.userOnBehalfContext(c), item.DocumentaFileID); delErr != nil {
 			log.Printf("[kpi_engagement] DeleteEvidence: failed to delete file from Documenta: %v", delErr)
 		}
 	}
@@ -765,9 +788,12 @@ func (h *KpiEngagementHandler) DownloadEvidence(c *fiber.Ctx) error {
 	}
 
 	if item.DocumentaFileID != "" {
-		reader, info, err := h.documentaClient.DownloadFile(c.UserContext(), item.DocumentaFileID)
+		reader, info, err := h.documentaClient.DownloadFile(h.userOnBehalfContext(c), item.DocumentaFileID)
 		if err != nil {
 			log.Printf("[kpi_engagement] DownloadEvidence: DownloadFile failed: %v", err)
+			if errors.Is(err, storage.ErrFileNotFound) {
+				return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+			}
 			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_retrieve_file"))
 		}
 		defer reader.Close()
