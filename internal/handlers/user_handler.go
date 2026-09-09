@@ -290,6 +290,10 @@ func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 	departmentIDs := utils.ParseUUIDList(c.Query("department_ids", ""))
 	locationIDs := utils.ParseUUIDList(c.Query("location_ids", ""))
 	classificationIDs := utils.ParseUUIDList(c.Query("classification_ids", ""))
+	withIVR, err := strconv.ParseBool(c.Query("with_ivr", "false"))
+	if err != nil {
+		withIVR = false
+	}
 
 	// Department-scoped: users with view_department_only see only their department's users.
 	// When ENFORCE_USER_ACCESS_SCOPE=true, uses M2M relationships for all three dimensions.
@@ -346,7 +350,7 @@ func (h *UserHandler) ListUsers(c *fiber.Ctx) error {
 		limit = 1000
 	}
 
-	users, total, err := h.userService.ListUsers(c.UserContext(), page, limit, search, phone, extension, callStatus, roleIDs, departmentIDs, locationIDs, classificationIDs, withIncident, false)
+	users, total, err := h.userService.ListUsers(c.UserContext(), page, limit, search, phone, extension, callStatus, roleIDs, departmentIDs, locationIDs, classificationIDs, withIncident, withIVR, false)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_users"))
 	}
@@ -690,7 +694,7 @@ func (h *UserHandler) Export(c *fiber.Ctx) error {
 	}
 
 	// Get all users without pagination
-	users, _, err := h.userService.ListUsers(c.UserContext(), 1, 10000, "", "", "", "", nil, departmentIDs, nil, nil, false)
+	users, _, err := h.userService.ListUsers(c.UserContext(), 1, 10000, "", "", "", "", nil, departmentIDs, nil, nil, false, false)
 	if err != nil {
 		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
