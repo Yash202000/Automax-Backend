@@ -411,10 +411,14 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		return nil, err
 	}
 
-	creatorID := reporterID // preserve before IVR block may overwrite reporterID
+	creatorID := reporterID // preserve before auto-registration block may overwrite reporterID
 	clientCode := strings.TrimSpace(s.cfg.ClientCode)
-	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.IVR) && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
-		// For EPM940, if source is IVR, then fetch user based on mobile no. of citizen
+	// For EPM940, any source other than web/mobile (IVR, WhatsApp, Facebook, Twitter,
+	// email, etc.) is an unauthenticated channel where the citizen has no account yet,
+	// so fetch or auto-register a user based on their mobile number.
+	isWebOrMobileSource := strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.WEB) ||
+		strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.MOBILE)
+	if req.Source != "" && !isWebOrMobileSource && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
 		user, err := s.userRepo.FindByMobile(ctx, req.ReporterPhone)
 		if err != nil && err != gorm.ErrRecordNotFound {
 			fmt.Printf("CreateIncident: Error fetching user by mobile: %v\n", err)
@@ -427,9 +431,10 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 				return nil, err
 			}
 
+			sourceSlug := strings.ToLower(strings.TrimSpace(req.Source))
 			registerReq := &models.UserRegisterRequest{
 				Phone:     req.ReporterPhone,
-				Email:     fmt.Sprintf("%s_%s@%s", constants.PREFIX.IVR_EMAIL, req.ReporterPhone, constants.APP.DOMAIN),
+				Email:     fmt.Sprintf("%s_%s@%s", sourceSlug, req.ReporterPhone, constants.APP.DOMAIN),
 				FirstName: constants.ROLES.CITIZEN,
 				LastName:  req.ReporterName,
 				Username:  fmt.Sprintf("%s_%s", constants.ROLES.CITIZEN, req.ReporterPhone),
@@ -442,7 +447,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 
 			authResp, err := s.userService.Register(ctx, registerReq)
 			if err != nil {
-				fmt.Printf("CreateIncident: Error registering IVR citizen user: %v\n", err)
+				fmt.Printf("CreateIncident: Error registering %s citizen user: %v\n", sourceSlug, err)
 				return nil, err
 			}
 
