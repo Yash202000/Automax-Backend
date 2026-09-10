@@ -2,8 +2,15 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"io"
 )
+
+// ErrFileNotFound is returned by DownloadFile (and wrapped via %w) when
+// Documenta reports the file doesn't exist, so callers can distinguish "not
+// found" from a genuine upstream/network failure and respond with 404
+// instead of 500.
+var ErrFileNotFound = errors.New("documenta: file not found")
 
 // ════════════════════════════════════════════════════
 // DMS Response Types

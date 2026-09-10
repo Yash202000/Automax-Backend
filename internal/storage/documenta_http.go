@@ -452,6 +452,11 @@ func (c *httpDocumentaClient) DownloadFile(ctx context.Context, fileID string) (
 	if err != nil {
 		return nil, nil, err
 	}
+	if resp.StatusCode == http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, nil, fmt.Errorf("documenta: file %s not found: %s: %w", fileID, string(body), ErrFileNotFound)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
