@@ -1259,6 +1259,9 @@ func main() {
 	kpi.Post("/processes", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateProcess)
 	kpi.Put("/processes/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateProcess)
 	kpi.Delete("/processes/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteProcess)
+	kpi.Get("/processes/:id/kpis", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListKpisForProcess)
+	kpi.Get("/processes/:id/collaborators", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListCollaboratorsForProcess)
+	kpi.Get("/processes/:id/evidence", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListEvidenceForProcess)
 
 	kpi.Get("/initiatives", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListInitiatives)
 	kpi.Post("/initiatives", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateInitiative)
