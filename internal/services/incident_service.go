@@ -418,7 +418,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 	// so fetch or auto-register a user based on their mobile number.
 	isWebOrMobileSource := strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.WEB) ||
 		strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.MOBILE)
-	if req.Source != "" && !isWebOrMobileSource && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
+	if req.Source != "" && req.ReporterPhone != "" && !isWebOrMobileSource && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
 		user, err := s.userRepo.FindByMobile(ctx, req.ReporterPhone)
 		if err != nil && err != gorm.ErrRecordNotFound {
 			fmt.Printf("CreateIncident: Error fetching user by mobile: %v\n", err)
