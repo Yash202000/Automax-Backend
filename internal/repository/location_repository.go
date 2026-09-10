@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -33,6 +34,12 @@ type LocationRepository interface {
 	GetAncestors(ctx context.Context, id uuid.UUID) ([]models.Location, error)
 	HasActiveChildren(ctx context.Context, id uuid.UUID) (bool, error)
 	CheckDeleteDependencies(ctx context.Context, id uuid.UUID) (children, users, incidents int64, err error)
+	// CheckDuplicate looks for a location whose name/name_ar collide under the given
+	// parent (matching FindByNameOrNameArAndParent's scoping) or whose code collides
+	// location-wide, and reports exactly which field(s) matched so the caller can give a
+	// precise conflict message. excludeID skips a specific row (the record being updated).
+	// Returns (nil, zero DuplicateFields, nil) when nothing collides.
+	CheckDuplicate(ctx context.Context, name, nameAr, code string, parentID *uuid.UUID, excludeID *uuid.UUID) (*models.Location, DuplicateFields, error)
 }
 
 // locCodePrefix is the fixed prefix for the auto-generated Location Code (e.g. loc-000001).
@@ -464,6 +471,64 @@ func (r *locationRepository) CheckDeleteDependencies(ctx context.Context, id uui
 		return
 	}
 	return
+}
+
+// CheckDuplicate implements LocationRepository.CheckDuplicate. Name/name_ar uniqueness is
+// checked among siblings under the given parent, same shape as
+// FindByNameOrNameArAndParent; code is checked separately, location-wide, and only when
+// no name/name_ar conflict was already found.
+func (r *locationRepository) CheckDuplicate(ctx context.Context, name, nameAr, code string, parentID *uuid.UUID, excludeID *uuid.UUID) (*models.Location, DuplicateFields, error) {
+	name = strings.TrimSpace(name)
+	nameAr = strings.TrimSpace(nameAr)
+	code = strings.ToLower(strings.TrimSpace(code))
+
+	if name != "" || nameAr != "" {
+		query := r.db.WithContext(ctx)
+		if nameAr != "" && nameAr != name {
+			query = query.Where("name = ? OR name_ar = ?", name, nameAr)
+		} else {
+			query = query.Where("name = ?", name)
+		}
+		if parentID == nil {
+			query = query.Where("parent_id IS NULL")
+		} else {
+			query = query.Where("parent_id = ?", parentID)
+		}
+		if excludeID != nil {
+			query = query.Where("id != ?", *excludeID)
+		}
+
+		var match models.Location
+		err := query.First(&match).Error
+		if err == nil {
+			return &match, DuplicateFields{
+				Name:   name != "" && match.Name == name,
+				NameAr: nameAr != "" && match.NameAr == nameAr,
+			}, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, DuplicateFields{}, err
+		}
+	}
+
+	if code == "" {
+		return nil, DuplicateFields{}, nil
+	}
+
+	codeQuery := r.db.WithContext(ctx).Where("LOWER(code) = ?", code)
+	if excludeID != nil {
+		codeQuery = codeQuery.Where("id != ?", *excludeID)
+	}
+
+	var byCode models.Location
+	err := codeQuery.First(&byCode).Error
+	if err == nil {
+		return &byCode, DuplicateFields{Code: true}, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, DuplicateFields{}, err
+	}
+	return nil, DuplicateFields{}, nil
 }
 
 // GetAncestors returns the node and all its ancestors ordered from root (lowest level) to the

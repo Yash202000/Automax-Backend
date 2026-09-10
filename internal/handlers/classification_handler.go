@@ -6,8 +6,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
@@ -19,12 +21,14 @@ import (
 type ClassificationHandler struct {
 	repo      repository.ClassificationRepository
 	validator *validator.Validate
+	cfg       *config.Config
 }
 
-func NewClassificationHandler(repo repository.ClassificationRepository) *ClassificationHandler {
+func NewClassificationHandler(repo repository.ClassificationRepository, cfg *config.Config) *ClassificationHandler {
 	return &ClassificationHandler{
 		repo:      repo,
 		validator: validator.New(),
+		cfg:       cfg,
 	}
 }
 
@@ -69,16 +73,11 @@ func (h *ClassificationHandler) Create(c *fiber.Ctx) error {
 		classTypes = []string{"incident", "request"}
 	}
 
-	existing, err := h.repo.FindByNameOrNameAr(c.UserContext(), req.Name, req.NameAr)
-	if err == nil && existing != nil {
+	existing, fields, err := h.repo.CheckDuplicate(c.UserContext(), req.Name, req.NameAr, "", req.ParentID, nil)
+	if err == nil && existing != nil && fields.Any() {
 		existingPath, _ := h.repo.FetchClassificationFullPathByID(c.UserContext(), existing.ID)
-		var msg string
-		if existingPath != "" {
-			msg = i18n.Tf(c.UserContext(), "classification_exists_at", existing.Name, existingPath)
-		} else {
-			msg = i18n.Tf(c.UserContext(), "classification_exists", existing.Name)
-		}
-		return utils.ErrorResponse(c, fiber.StatusConflict, msg)
+		return utils.ErrorResponse(c, fiber.StatusConflict, duplicateConflictMessage(c.UserContext(), fields, existing.Name, existing.NameAr, existingPath,
+			"classification_code_exists", "classification_exists", "classification_exists_at"))
 	}
 
 	// Build ClassificationType associations so GORM creates them with the classification
@@ -184,18 +183,11 @@ func (h *ClassificationHandler) Update(c *fiber.Ctx) error {
 		checkNameAr = classification.NameAr
 	}
 
-	if (req.Name != "" && req.Name != classification.Name) || (req.NameAr != "" && req.NameAr != classification.NameAr) {
-		existing, err := h.repo.FindByNameOrNameAr(c.UserContext(), checkName, checkNameAr)
-		if err == nil && existing != nil && existing.ID != id {
-			existingPath, _ := h.repo.FetchClassificationFullPathByID(c.UserContext(), existing.ID)
-			var msg string
-			if existingPath != "" {
-				msg = i18n.Tf(c.UserContext(), "classification_exists_at", existing.Name, existingPath)
-			} else {
-				msg = i18n.Tf(c.UserContext(), "classification_exists", existing.Name)
-			}
-			return utils.ErrorResponse(c, fiber.StatusConflict, msg)
-		}
+	existing, fields, err := h.repo.CheckDuplicate(c.UserContext(), checkName, checkNameAr, "", classification.ParentID, &id)
+	if err == nil && existing != nil && fields.Any() {
+		existingPath, _ := h.repo.FetchClassificationFullPathByID(c.UserContext(), existing.ID)
+		return utils.ErrorResponse(c, fiber.StatusConflict, duplicateConflictMessage(c.UserContext(), fields, existing.Name, existing.NameAr, existingPath,
+			"classification_code_exists", "classification_exists", "classification_exists_at"))
 	}
 
 	if req.Name != "" {
@@ -494,15 +486,24 @@ func (h *ClassificationHandler) Import(c *fiber.Ctx) error {
 	defer fileContent.Close()
 
 	var importData []struct {
-		ID          uuid.UUID  `json:"id"`
-		Name        string     `json:"name"`
-		Description string     `json:"description"`
-		Types       []string   `json:"types"`
-		ParentID    *uuid.UUID `json:"parent_id"`
-		Level       int        `json:"level"`
-		Path        string     `json:"path"`
-		IsActive    bool       `json:"is_active"`
-		SortOrder   int        `json:"sort_order"`
+		ID            uuid.UUID  `json:"id"`
+		Name          string     `json:"name"`
+		NameAr        string     `json:"name_ar"`
+		Code          string     `json:"code"`
+		Description   string     `json:"description"`
+		DescriptionAr string     `json:"description_ar"`
+		Types         []string   `json:"types"`
+		ParentID      *uuid.UUID `json:"parent_id"`
+		Level         int        `json:"level"`
+		Path          string     `json:"path"`
+		IsActive      bool       `json:"is_active"`
+		SortOrder     int        `json:"sort_order"`
+		Criticalities []struct {
+			CriticalityID      uuid.UUID  `json:"criticality_id"`
+			MaxClosingHours    int        `json:"max_closing_hours"`
+			MaxClosingMinutes  int        `json:"max_closing_minutes"`
+			EscalationPolicyID *uuid.UUID `json:"escalation_policy_id"`
+		} `json:"criticalities"`
 	}
 
 	decoder := json.NewDecoder(fileContent)
@@ -519,6 +520,8 @@ func (h *ClassificationHandler) Import(c *fiber.Ctx) error {
 	imported := 0
 	skipped := 0
 	errors := []string{}
+
+	isEPM940 := strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940)
 
 	for _, data := range importData {
 		// var newParentID *uuid.UUID
@@ -547,10 +550,19 @@ func (h *ClassificationHandler) Import(c *fiber.Ctx) error {
 			typeRecords[i] = models.ClassificationType{Type: t}
 		}
 
+		// VD2 (non-EPM940) has no auto-generated code, so the import file must supply
+		// one; EPM940 always ignores the file's code and lets the repository generate
+		// a fresh one.
+		if !isEPM940 && strings.TrimSpace(data.Code) == "" {
+			skipped++
+			errors = append(errors, data.Name+" (Level "+fmt.Sprintf("%d", data.Level)+") - code is required, skipped")
+			continue
+		}
+
 		// Skip classifications that already exist under the same parent instead
 		// of creating a duplicate, and reuse the existing ID so children still
 		// attach to the right place.
-		if existing, err := h.repo.FindByNameOrNameArAndParent(c.UserContext(), data.Name, "", data.ParentID); err == nil && existing != nil {
+		if existing, err := h.repo.FindByNameOrNameArAndParent(c.UserContext(), data.Name, data.NameAr, data.ParentID); err == nil && existing != nil {
 			skipped++
 			idMapping[data.ID] = existing.ID
 			errors = append(errors, data.Name+" (Level "+fmt.Sprintf("%d", data.Level)+") - already exists, skipped")
@@ -559,21 +571,50 @@ func (h *ClassificationHandler) Import(c *fiber.Ctx) error {
 
 		newID := uuid.New()
 		classification := &models.Classification{
-			ID:          newID,
-			Name:        data.Name,
-			Description: data.Description,
-			Types:       typeRecords,
-			ParentID:    data.ParentID,
-			IsActive:    data.IsActive,
-			SortOrder:   data.SortOrder,
+			ID:            newID,
+			Name:          data.Name,
+			NameAr:        data.NameAr,
+			Description:   data.Description,
+			DescriptionAr: data.DescriptionAr,
+			Types:         typeRecords,
+			ParentID:      data.ParentID,
+			IsActive:      data.IsActive,
+			SortOrder:     data.SortOrder,
+		}
+		if !isEPM940 {
+			classification.Code = strings.TrimSpace(data.Code)
 		}
 
 		if err := h.repo.Create(c.UserContext(), classification); err != nil {
 			skipped++
-			errors = append(errors, data.Name+" (Level "+fmt.Sprintf("%d", data.Level)+") - "+err.Error())
+			if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
+				// Lost a race with a concurrent/duplicate import of the same row: the
+				// pre-check above passed, but another request inserted it first.
+				if existing, findErr := h.repo.FindByNameOrNameArAndParent(c.UserContext(), data.Name, data.NameAr, data.ParentID); findErr == nil && existing != nil {
+					idMapping[data.ID] = existing.ID
+				}
+				errors = append(errors, data.Name+" (Level "+fmt.Sprintf("%d", data.Level)+") - already exists (concurrent import), skipped")
+			} else {
+				errors = append(errors, data.Name+" (Level "+fmt.Sprintf("%d", data.Level)+") - "+err.Error())
+			}
 		} else {
 			imported++
 			idMapping[data.ID] = newID
+
+			// Create criticalities if provided
+			for _, critData := range data.Criticalities {
+				criticality := &models.ClassificationCriticality{
+					ClassificationID:   newID,
+					CriticalityID:      critData.CriticalityID,
+					MaxClosingHours:    critData.MaxClosingHours,
+					MaxClosingMinutes:  critData.MaxClosingMinutes,
+					EscalationPolicyID: critData.EscalationPolicyID,
+					IsActive:           true,
+				}
+				if err := h.repo.CreateCriticality(c.UserContext(), criticality); err != nil {
+					errors = append(errors, data.Name+" (Level "+fmt.Sprintf("%d", data.Level)+") - failed to create criticality: "+err.Error())
+				}
+			}
 		}
 	}
 

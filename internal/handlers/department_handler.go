@@ -66,9 +66,16 @@ func (h *DepartmentHandler) Create(c *fiber.Ctx) error {
 		})
 	}
 
-	existing, err := h.repo.FindByNameOrNameAr(c.UserContext(), req.Name, req.NameAr)
-	if err == nil && existing != nil {
-		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.Tf(c.UserContext(), "department_already_exists_named", existing.Name))
+	checkCode := ""
+	if !isEPM940 {
+		checkCode = strings.TrimSpace(req.Code)
+	}
+
+	existing, fields, err := h.repo.CheckDuplicate(c.UserContext(), req.Name, req.NameAr, checkCode, req.ParentID, nil)
+	if err == nil && existing != nil && fields.Any() {
+		existingPath, _ := h.repo.FetchDepartmentFullPathByID(c.UserContext(), existing.ID)
+		return utils.ErrorResponse(c, fiber.StatusConflict, duplicateConflictMessage(c.UserContext(), fields, existing.Name, existing.NameAr, existingPath,
+			"department_code_exists", "department_already_exists_named", "department_already_exists_named_at"))
 	}
 
 	deptType := req.Type
@@ -210,11 +217,18 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 		checkNameAr = department.NameAr
 	}
 
-	if (req.Name != "" && req.Name != department.Name) || (req.NameAr != "" && req.NameAr != department.NameAr) {
-		existing, err := h.repo.FindByNameOrNameAr(c.UserContext(), checkName, checkNameAr)
-		if err == nil && existing != nil && existing.ID != id {
-			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.Tf(c.UserContext(), "department_already_exists_named", existing.Name))
-		}
+	// Code is a permanent, system-generated identifier for EPM940 and is never editable
+	// there (see below), so an EPM940 caller's code isn't checked for collisions either.
+	checkCode := ""
+	if !strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940) {
+		checkCode = strings.TrimSpace(req.Code)
+	}
+
+	existing, fields, err := h.repo.CheckDuplicate(c.UserContext(), checkName, checkNameAr, checkCode, department.ParentID, &id)
+	if err == nil && existing != nil && fields.Any() {
+		existingPath, _ := h.repo.FetchDepartmentFullPathByID(c.UserContext(), existing.ID)
+		return utils.ErrorResponse(c, fiber.StatusConflict, duplicateConflictMessage(c.UserContext(), fields, existing.Name, existing.NameAr, existingPath,
+			"department_code_exists", "department_already_exists_named", "department_already_exists_named_at"))
 	}
 
 	if req.Name != "" {
@@ -601,19 +615,21 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 
 	// Read file content
 	var importData []struct {
-		ID                uuid.UUID  `json:"id"`
-		Name              string     `json:"name"`
-		Code              string     `json:"code"`
-		Description       string     `json:"description"`
-		ParentID          *uuid.UUID `json:"parent_id"`
-		Level             int        `json:"level"`
-		Path              string     `json:"path"`
-		ManagerID         *uuid.UUID `json:"manager_id"`
-		IsActive          bool       `json:"is_active"`
-		SortOrder         int        `json:"sort_order"`
-		LocationIDs       string     `json:"location_ids"`
-		ClassificationIDs string     `json:"classification_ids"`
-		RoleIDs           string     `json:"role_ids"`
+		ID                uuid.UUID   `json:"id"`
+		Name              string      `json:"name"`
+		NameAr            string      `json:"name_ar"`
+		Code              string      `json:"code"`
+		Description       string      `json:"description"`
+		DescriptionAr     string      `json:"description_ar"`
+		ParentID          *uuid.UUID  `json:"parent_id"`
+		Level             int         `json:"level"`
+		Path              string      `json:"path"`
+		ManagerID         *uuid.UUID  `json:"manager_id"`
+		IsActive          bool        `json:"is_active"`
+		SortOrder         int         `json:"sort_order"`
+		LocationIDs       []uuid.UUID `json:"location_ids"`
+		ClassificationIDs []uuid.UUID `json:"classification_ids"`
+		RoleIDs           []uuid.UUID `json:"role_ids"`
 	}
 
 	// Parse JSON from file
@@ -633,6 +649,8 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 	skipped := 0
 	errors := []string{}
 
+	isEPM940 := strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940)
+
 	// Import all departments in level order
 	for _, data := range importData {
 		// var newParentID *uuid.UUID
@@ -651,6 +669,15 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 		// 	}
 		// }
 
+		// VD2 (non-EPM940) has no auto-generated code, so the import file must supply
+		// one; EPM940 always ignores the file's code and lets the repository generate
+		// a fresh ORG-###### one.
+		if !isEPM940 && strings.TrimSpace(data.Code) == "" {
+			skipped++
+			errors = append(errors, data.Name+" (Level "+fmt.Sprintf("%d", data.Level)+") - code is required, skipped")
+			continue
+		}
+
 		// Check if department already exists with same name and parent
 		existingDepartment, err := h.repo.FindByNameAndParent(c.UserContext(), data.Name, data.ParentID)
 		if err == nil && existingDepartment != nil {
@@ -666,15 +693,19 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 		department := &models.Department{
 			ID: newID,
 			// EPM940: Code omitted so the repository generates a fresh unique ORG-######
-			// code (imports/integrations can never introduce duplicates). Other clients:
-			// keep the code from the import file.
-			Code:        h.importDeptCode(data.Code),
-			Name:        data.Name,
-			Description: data.Description,
-			ParentID:    data.ParentID,
-			ManagerID:   data.ManagerID,
-			IsActive:    data.IsActive,
-			SortOrder:   data.SortOrder,
+			// code. VD2 (non-EPM940): keep the code from the import file (validated
+			// non-empty above).
+			Name:          data.Name,
+			NameAr:        data.NameAr,
+			Description:   data.Description,
+			DescriptionAr: data.DescriptionAr,
+			ParentID:      data.ParentID,
+			ManagerID:     data.ManagerID,
+			IsActive:      data.IsActive,
+			SortOrder:     data.SortOrder,
+		}
+		if !isEPM940 {
+			department.Code = strings.TrimSpace(data.Code)
 		}
 
 		if err := h.repo.Create(c.UserContext(), department); err != nil {
@@ -685,14 +716,14 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 			idMapping[data.ID] = newID
 
 			// Assign locations, classifications, and roles if provided
-			if locationIDs := parseUUIDList(data.LocationIDs); len(locationIDs) > 0 {
-				h.repo.AssignLocations(c.UserContext(), newID, locationIDs)
+			if len(data.LocationIDs) > 0 {
+				h.repo.AssignLocations(c.UserContext(), newID, data.LocationIDs)
 			}
-			if classificationIDs := parseUUIDList(data.ClassificationIDs); len(classificationIDs) > 0 {
-				h.repo.AssignClassifications(c.UserContext(), newID, classificationIDs)
+			if len(data.ClassificationIDs) > 0 {
+				h.repo.AssignClassifications(c.UserContext(), newID, data.ClassificationIDs)
 			}
-			if roleIDs := parseUUIDList(data.RoleIDs); len(roleIDs) > 0 {
-				h.repo.AssignRoles(c.UserContext(), newID, roleIDs)
+			if len(data.RoleIDs) > 0 {
+				h.repo.AssignRoles(c.UserContext(), newID, data.RoleIDs)
 			}
 		}
 	}
@@ -704,16 +735,6 @@ func (h *DepartmentHandler) Import(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "import_completed"), result)
-}
-
-// importDeptCode returns the code to persist for an imported department: empty for
-// EPM940 (the repository generates a unique ORG-###### code), otherwise the code
-// from the import file.
-func (h *DepartmentHandler) importDeptCode(code string) string {
-	if strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940) {
-		return ""
-	}
-	return code
 }
 
 // parseUUIDList parses a comma-separated list of UUIDs (e.g. "id1, id2, id3"),
