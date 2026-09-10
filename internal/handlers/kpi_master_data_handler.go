@@ -234,13 +234,124 @@ func (h *KpiMasterDataHandler) DeleteOperationalObjective(c *fiber.Ctx) error {
 
 // operationalKpiIDsForObjective resolves the IDs of every Operational KPI
 // linked to the given Operational Objective (a direct FK on OperationalKPI).
+// operationalKpiIDsForObjective returns every Operational KPI linked to the
+// given Objective — directly (operational_objective_id) OR indirectly, via
+// any of the Objective's child Processes (process_id). A KPI's
+// operational_objective_id is expected to always match its Process's own
+// parent, but the create/edit form lets the two be picked independently, so
+// this can't assume they agree — it has to check both to avoid silently
+// missing KPIs that are only reachable via their Process.
 func (h *KpiMasterDataHandler) operationalKpiIDsForObjective(c *fiber.Ctx, objectiveID uuid.UUID) ([]uuid.UUID, error) {
+	var childProcessIDs []uuid.UUID
+	if err := h.db.WithContext(c.UserContext()).Model(&models.Process{}).
+		Where("operational_objective_id = ?", objectiveID).Pluck("id", &childProcessIDs).Error; err != nil {
+		return nil, err
+	}
+
+	query := h.db.WithContext(c.UserContext()).Model(&models.OperationalKPI{}).
+		Where("operational_objective_id = ?", objectiveID)
+	if len(childProcessIDs) > 0 {
+		query = h.db.WithContext(c.UserContext()).Model(&models.OperationalKPI{}).
+			Where("operational_objective_id = ? OR process_id IN ?", objectiveID, childProcessIDs)
+	}
+
 	var kpiIDs []uuid.UUID
-	if err := h.db.WithContext(c.UserContext()).Model(&models.OperationalKPI{}).
-		Where("operational_objective_id = ?", objectiveID).Pluck("id", &kpiIDs).Error; err != nil {
+	if err := query.Pluck("id", &kpiIDs).Error; err != nil {
 		return nil, err
 	}
 	return kpiIDs, nil
+}
+
+// processKpiIDsForProcess returns every Operational KPI linked directly to
+// the given Process (the "Child Objective" card's own KPI tab).
+func (h *KpiMasterDataHandler) processKpiIDsForProcess(c *fiber.Ctx, processID uuid.UUID) ([]uuid.UUID, error) {
+	var kpiIDs []uuid.UUID
+	if err := h.db.WithContext(c.UserContext()).Model(&models.OperationalKPI{}).
+		Where("process_id = ?", processID).Pluck("id", &kpiIDs).Error; err != nil {
+		return nil, err
+	}
+	return kpiIDs, nil
+}
+
+// ListKpisForProcess returns every Operational KPI linked to the given Process.
+func (h *KpiMasterDataHandler) ListKpisForProcess(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	kpiIDs, err := h.processKpiIDsForProcess(c, id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+
+	var kpis []models.OperationalKPI
+	if len(kpiIDs) > 0 {
+		if err := h.db.WithContext(c.UserContext()).
+			Preload("Process").Preload("Domain").
+			Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+			Preload("WorkflowInstance.InitiatedBy").
+			Where("id IN ?", kpiIDs).Find(&kpis).Error; err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+		}
+	}
+
+	resp := make([]models.OperationalKPIResponse, len(kpis))
+	for i, k := range kpis {
+		resp[i] = k.ToResponse()
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
+}
+
+func (h *KpiMasterDataHandler) ListCollaboratorsForProcess(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	kpiIDs, err := h.processKpiIDsForProcess(c, id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+
+	var items []models.KpiCollaboratorAssignment
+	if len(kpiIDs) > 0 {
+		if err := h.db.WithContext(c.UserContext()).
+			Preload("User.Department").
+			Where("kpi_type = ? AND kpi_id IN ?", "operational", kpiIDs).
+			Order("created_at ASC").Find(&items).Error; err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+		}
+	}
+	resp := make([]models.KpiCollaboratorAssignmentResponse, len(items))
+	for i := range items {
+		resp[i] = toAssignmentResponse(&items[i])
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
+}
+
+func (h *KpiMasterDataHandler) ListEvidenceForProcess(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	kpiIDs, err := h.processKpiIDsForProcess(c, id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+
+	var items []models.KpiEvidence
+	if len(kpiIDs) > 0 {
+		if err := h.db.WithContext(c.UserContext()).
+			Preload("UploadedBy").
+			Preload("Metric").
+			Where("kpi_type = ? AND kpi_id IN ?", "operational", kpiIDs).
+			Order("created_at DESC").Find(&items).Error; err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+		}
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", items)
 }
 
 // ListKpisForOperationalObjective returns every Operational KPI linked to the given Objective.
