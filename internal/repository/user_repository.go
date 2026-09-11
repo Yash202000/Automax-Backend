@@ -234,6 +234,7 @@ func (r *userRepository) Update(ctx context.Context, user *models.User) error {
 	return r.db.WithContext(ctx).Model(&models.User{}).Where("id = ?", user.ID).Updates(map[string]interface{}{
 		"username":                       user.Username,
 		"first_name":                     user.FirstName,
+		"middle_name":                    user.MiddleName,
 		"last_name":                      user.LastName,
 		"phone":                          user.Phone,
 		"password":                       user.Password,
