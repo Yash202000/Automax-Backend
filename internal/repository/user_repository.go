@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/automax/backend/internal/models"
+	"github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -187,9 +188,12 @@ func (r *userRepository) FindByUsername(ctx context.Context, username string) (*
 
 // find by mobile
 
+// FindByMobile matches phone against every stored shape of the number (bare, with country
+// code, with the national trunk zero, etc. — see utils.MobileMatchVariants), the same way
+// incident_repository's reporterPhoneVariants matches reporter_phone.
 func (r *userRepository) FindByMobile(ctx context.Context, phone string) (*models.User, error) {
 	var user models.User
-	err := r.db.WithContext(ctx).First(&user, "phone = ?", phone).Error
+	err := r.db.WithContext(ctx).First(&user, "phone IN ?", utils.MobileMatchVariants(phone)).Error
 	if err != nil {
 		return nil, err
 	}

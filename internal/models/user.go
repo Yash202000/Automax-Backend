@@ -24,6 +24,7 @@ type User struct {
 	Username                    string           `gorm:"uniqueIndex;not null" json:"username"`
 	Password                    string           `gorm:"not null" json:"-"`
 	FirstName                   string           `gorm:"size:100" json:"first_name"`
+	MiddleName                  string           `gorm:"size:100" json:"middle_name"`
 	LastName                    string           `gorm:"size:100" json:"last_name"`
 	Phone                       string           `gorm:"size:20" json:"phone"`
 	MobileVerified              bool             `gorm:"default:false" json:"mobile_verified"`
@@ -180,6 +181,7 @@ type UserRegisterRequest struct {
 	Username          string      `json:"username" validate:"required,min=3,max=50"`
 	Password          string      `json:"password" validate:"required,min=6"`
 	FirstName         string      `json:"first_name" validate:"max=100"`
+	MiddleName        string      `json:"middle_name" validate:"max=100"`
 	LastName          string      `json:"last_name" validate:"max=100"`
 	Phone             string      `json:"phone" validate:"omitempty,mobile,max=20"`
 	Extension         string      `json:"extension" validate:"max=20"`
@@ -301,6 +303,7 @@ type SSORegisterRequest struct {
 	Username          string      `json:"username" validate:"required,min=3,max=50"`
 	NationalID        string      `json:"national_id" validate:"required"`
 	FirstName         string      `json:"first_name" validate:"max=100"`
+	MiddleName        string      `json:"middle_name" validate:"max=100"`
 	LastName          string      `json:"last_name" validate:"max=100"`
 	Phone             string      `json:"phone" validate:"required,max=20"`
 	Extension         string      `json:"extension" validate:"max=20"`
@@ -318,6 +321,7 @@ type SSOLoginRequest struct {
 
 type UserUpdateRequest struct {
 	FirstName                   string      `json:"first_name" validate:"max=100"`
+	MiddleName                  string      `json:"middle_name" validate:"max=100"`
 	LastName                    string      `json:"last_name" validate:"max=100"`
 	Username                    string      `json:"username" validate:"omitempty,min=3,max=50"`
 	Phone                       string      `json:"phone" validate:"omitempty,mobile,max=20"`
@@ -343,6 +347,7 @@ type UserResponse struct {
 	Email                       string                   `json:"email"`
 	Username                    string                   `json:"username"`
 	FirstName                   string                   `json:"first_name"`
+	MiddleName                  string                   `json:"middle_name"`
 	LastName                    string                   `json:"last_name"`
 	Phone                       string                   `json:"phone"`
 	MobileVerified              bool                     `json:"mobile_verified"`
@@ -400,6 +405,7 @@ type UserLoginResponse struct {
 	Email          string              `json:"email"`
 	Username       string              `json:"username"`
 	FirstName      string              `json:"first_name"`
+	MiddleName     string              `json:"middle_name"`
 	LastName       string              `json:"last_name"`
 	Phone          string              `json:"phone"`
 	MobileVerified bool                `json:"mobile_verified"`
@@ -470,6 +476,7 @@ func ToUserLoginResponse(user *User) UserLoginResponse {
 		Email:          user.Email,
 		Username:       user.Username,
 		FirstName:      user.FirstName,
+		MiddleName:     user.MiddleName,
 		LastName:       user.LastName,
 		Phone:          user.Phone,
 		MobileVerified: user.MobileVerified,
@@ -501,6 +508,7 @@ func ToUserResponse(user *User) UserResponse {
 		Email:           user.Email,
 		Username:        user.Username,
 		FirstName:       user.FirstName,
+		MiddleName:      user.MiddleName,
 		LastName:        user.LastName,
 		Phone:           user.Phone,
 		MobileVerified:  user.MobileVerified,

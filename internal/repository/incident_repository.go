@@ -30,6 +30,7 @@ type IncidentRepository interface {
 	Update(ctx context.Context, incident *models.Incident) error
 	UpdateFields(ctx context.Context, id uuid.UUID, updates map[string]interface{}) error
 	UpdateFieldsWithVersion(ctx context.Context, id uuid.UUID, updates map[string]interface{}, expectedVersion int) error
+	UpdateReporterNameByPhone(ctx context.Context, phone, reporterName string) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	WithTx(tx *gorm.DB) IncidentRepository
 	LockForUpdate(ctx context.Context, tx *gorm.DB, id uuid.UUID) (*models.Incident, error)
@@ -518,6 +519,17 @@ func (r *incidentRepository) Update(ctx context.Context, incident *models.Incide
 
 func (r *incidentRepository) UpdateFields(ctx context.Context, id uuid.UUID, updates map[string]interface{}) error {
 	return r.db.WithContext(ctx).Model(&models.Incident{}).Where("id = ?", id).Updates(updates).Error
+}
+
+// UpdateReporterNameByPhone overwrites reporter_name on every incident whose reporter_phone
+// matches the given phone, keeping a citizen's name consistent across their incident history
+// once it's known to have changed. Matches every stored shape of the number (bare, with
+// country code, with the national trunk zero, etc.) via reporterPhoneVariants, the same way
+// List/ListMapMarkers match reporter_phone.
+func (r *incidentRepository) UpdateReporterNameByPhone(ctx context.Context, phone, reporterName string) error {
+	return r.db.WithContext(ctx).Model(&models.Incident{}).
+		Where("reporter_phone IN ?", reporterPhoneVariants(phone)).
+		Update("reporter_name", reporterName).Error
 }
 
 func (r *incidentRepository) Delete(ctx context.Context, id uuid.UUID) error {
