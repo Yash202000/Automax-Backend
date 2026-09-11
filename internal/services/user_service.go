@@ -168,6 +168,7 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 		Username:        req.Username,
 		Password:        hashedPassword,
 		FirstName:       req.FirstName,
+		MiddleName:      req.MiddleName,
 		LastName:        req.LastName,
 		Phone:           req.Phone,
 		Extension:       req.Extension,
@@ -367,6 +368,7 @@ func (s *userService) SSORegister(ctx context.Context, req *models.SSORegisterRe
 		Password:     hashedPassword,
 		NationalID:   req.NationalID,
 		FirstName:    req.FirstName,
+		MiddleName:   req.MiddleName,
 		LastName:     req.LastName,
 		Phone:        req.Phone,
 		Extension:    req.Extension,
@@ -1362,6 +1364,7 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 
 	oldUser := &models.UserUpdateRequest{
 		FirstName:      user.FirstName,
+		MiddleName:     user.MiddleName,
 		LastName:       user.LastName,
 		Phone:          user.Phone,
 		Extension:      &oldExtension,      // Pointer to the copy
@@ -1373,6 +1376,10 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 	if req.FirstName != "" && req.FirstName != user.FirstName {
 		user.FirstName = req.FirstName
 		update["first_name"] = req.FirstName
+	}
+	if req.MiddleName != user.MiddleName {
+		user.MiddleName = req.MiddleName
+		update["middle_name"] = req.MiddleName
 	}
 	if req.LastName != user.LastName {
 		user.LastName = req.LastName
@@ -1419,13 +1426,14 @@ func (s *userService) UpdateProfile(ctx context.Context, req *models.UserUpdateR
 
 	if len(update) == 0 {
 		return &models.UserResponse{
-			ID:        user.ID,
-			Username:  user.Username,
-			Email:     user.Email,
-			FirstName: user.FirstName,
-			LastName:  user.LastName,
-			Phone:     user.Phone,
-			Avatar:    user.Avatar,
+			ID:         user.ID,
+			Username:   user.Username,
+			Email:      user.Email,
+			FirstName:  user.FirstName,
+			MiddleName: user.MiddleName,
+			LastName:   user.LastName,
+			Phone:      user.Phone,
+			Avatar:     user.Avatar,
 		}, nil
 	}
 

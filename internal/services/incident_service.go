@@ -403,6 +403,23 @@ func (s *incidentService) getNextRoundRobinAssignee(ctx context.Context, roleIDs
 
 // Incident CRUD
 
+// splitReporterName splits a full name on whitespace into first/middle/last parts:
+// the first word is the first name, the last word (if more than one word) is the
+// last name, and anything in between is the middle name.
+func splitReporterName(name string) (first, middle, last string) {
+	parts := strings.Fields(name)
+	switch len(parts) {
+	case 0:
+		return "", "", ""
+	case 1:
+		return parts[0], "", ""
+	case 2:
+		return parts[0], "", parts[1]
+	default:
+		return parts[0], strings.Join(parts[1:len(parts)-1], " "), parts[len(parts)-1]
+	}
+}
+
 func (s *incidentService) CreateIncident(ctx context.Context, req *models.IncidentCreateRequest, reporterID uuid.UUID) (*models.IncidentResponse, error) {
 	// Validated first, before anything with a side effect: the IVR branch below can
 	// register a brand-new citizen user, and a request we are going to reject must not
@@ -413,12 +430,11 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 
 	creatorID := reporterID // preserve before auto-registration block may overwrite reporterID
 	clientCode := strings.TrimSpace(s.cfg.ClientCode)
-	// For EPM940, any source other than web/mobile (IVR, WhatsApp, Facebook, Twitter,
-	// email, etc.) is an unauthenticated channel where the citizen has no account yet,
+	// For EPM940, any source other than web (IVR, WhatsApp, Mobile, etc.)
+	// is an unauthenticated channel where the citizen has no account yet,
 	// so fetch or auto-register a user based on their mobile number.
-	isWebOrMobileSource := strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.WEB) ||
-		strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.MOBILE)
-	if req.Source != "" && req.ReporterPhone != "" && !isWebOrMobileSource && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
+	isWebSource := strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.WEB)
+	if req.Source != "" && req.ReporterName != "" && req.ReporterPhone != "" && !isWebSource && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
 		user, err := s.userRepo.FindByMobile(ctx, req.ReporterPhone)
 		if err != nil && err != gorm.ErrRecordNotFound {
 			fmt.Printf("CreateIncident: Error fetching user by mobile: %v\n", err)
@@ -433,13 +449,12 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 
 			sourceSlug := strings.ToLower(strings.TrimSpace(req.Source))
 			registerReq := &models.UserRegisterRequest{
-				Phone:     req.ReporterPhone,
-				Email:     fmt.Sprintf("%s_%s@%s", sourceSlug, req.ReporterPhone, constants.APP.DOMAIN),
-				FirstName: constants.ROLES.CITIZEN,
-				LastName:  req.ReporterName,
-				Username:  fmt.Sprintf("%s_%s", constants.ROLES.CITIZEN, req.ReporterPhone),
-				Password:  pkgutils.GenerateRandomPassword(12),
+				Phone:    req.ReporterPhone,
+				Email:    fmt.Sprintf("%s_%s@%s", sourceSlug, req.ReporterPhone, constants.APP.DOMAIN),
+				Username: fmt.Sprintf("%s_%s", constants.ROLES.CITIZEN, req.ReporterPhone),
+				Password: pkgutils.GenerateRandomPassword(12),
 			}
+			registerReq.FirstName, registerReq.MiddleName, registerReq.LastName = splitReporterName(req.ReporterName)
 
 			if role != nil && role.ID != uuid.Nil {
 				registerReq.RoleIDs = []uuid.UUID{role.ID}
@@ -454,8 +469,23 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 			reporterID = authResp.User.ID
 		} else {
 			reporterID = user.ID
+			first, middle, last := splitReporterName(req.ReporterName)
+			if first != user.FirstName || middle != user.MiddleName || last != user.LastName {
+				if err := s.userRepo.UpdateProfile(ctx, map[string]interface{}{
+					"id":          user.ID,
+					"first_name":  first,
+					"middle_name": middle,
+					"last_name":   last,
+				}); err != nil {
+					fmt.Printf("CreateIncident: Error updating reporter name for user %s: %v\n", user.ID, err)
+					return nil, err
+				}
+			}
 		}
-
+		if err := s.incidentRepo.UpdateReporterNameByPhone(ctx, req.ReporterPhone, req.ReporterName); err != nil {
+			fmt.Printf("CreateIncident: Error backfilling reporter name for phone %s: %v\n", req.ReporterPhone, err)
+			return nil, err
+		}
 	}
 	// Sources that bypass the 500m duplicate check, configurable via SKIP_DUPLICATE_CHECK_SOURCES (comma-separated)
 	skipSourcesEnv := os.Getenv("SKIP_DUPLICATE_CHECK_SOURCES")
