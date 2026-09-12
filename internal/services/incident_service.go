@@ -448,10 +448,12 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 			}
 
 			sourceSlug := strings.ToLower(strings.TrimSpace(req.Source))
+			epoch := time.Now().Unix()
+			normalizedPhone := pkgutils.NormalizeMobile(req.ReporterPhone, pkgutils.SystemCountryCode())
 			registerReq := &models.UserRegisterRequest{
-				Phone:    req.ReporterPhone,
-				Email:    fmt.Sprintf("%s_%s@%s", sourceSlug, req.ReporterPhone, constants.APP.DOMAIN),
-				Username: fmt.Sprintf("%s_%s", constants.ROLES.CITIZEN, req.ReporterPhone),
+				Phone:    normalizedPhone,
+				Email:    fmt.Sprintf("%s_%s_%d@%s", sourceSlug, strings.TrimPrefix(normalizedPhone, "+"), epoch, constants.APP.DOMAIN),
+				Username: fmt.Sprintf("%s_%s_%d", constants.ROLES.CITIZEN, strings.TrimPrefix(normalizedPhone, "+"), epoch),
 				Password: pkgutils.GenerateRandomPassword(12),
 			}
 			registerReq.FirstName, registerReq.MiddleName, registerReq.LastName = splitReporterName(req.ReporterName)

@@ -17,7 +17,7 @@ type OTPData struct {
 }
 
 type OTPReq struct {
-	Phone     string `json:"phone"`
-	SessionID string `json:"session_id"`
-	OTP       string `json:"otp"`
+	Phone     string `json:"phone" validate:"required,e164|numeric,max=20"`
+	SessionID string `json:"session_id" validate:"required"`
+	OTP       string `json:"otp" validate:"required"`
 }
