@@ -87,8 +87,11 @@ func (h *OTPHandler) VerifyOTP(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request"))
 	}
 
-	if req.Phone == "" || req.OTP == "" || req.SessionID == "" {
-		return fiber.NewError(fiber.StatusBadRequest, i18n.T(c.UserContext(), "phone_session_otp_required"))
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
 	}
 
 	resp, err := h.otpService.VerifyOTP(c.UserContext(), req.Phone, req.SessionID, req.OTP)
