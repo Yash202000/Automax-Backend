@@ -10,11 +10,13 @@ import (
 	"math/big"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/database"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
@@ -352,17 +354,25 @@ func (s *OTPService) autoCreateCitizenUser(ctx context.Context, phone string, na
 		name = "Citizen"
 	}
 
+	// Normalize to a canonical E.164-ish form so the synthetic email/username (and the
+	// stored Phone) are consistent regardless of the shape the phone arrived in (with or
+	// without a country code, a leading trunk zero, etc.) — matching how the rest of the
+	// codebase (e.g. reporter_phone) normalizes before persisting.
+	normalizedPhone := utils.NormalizeMobile(phone, utils.SystemCountryCode())
+
 	// Find the "citizen" role
 	citizenRole, err := s.roleRepo.FindByCode(ctx, "citizen")
 	if err != nil {
 		return nil, fmt.Errorf("%s", i18n.T(ctx, "citizen_role_not_found"))
 	}
-
+	prefix := "otp"
+	epoch := time.Now().Unix()
+	// suffix := strings.ToLower(strings.TrimSpace(constants.APP.DOMAIN))
 	newUser := &models.User{
 		FirstName:      name,
-		Phone:          phone,
-		Email:          fmt.Sprintf("citizen_%s@automax.local", phone),
-		Username:       fmt.Sprintf("citizen_%s", phone),
+		Phone:          normalizedPhone,
+		Email:          fmt.Sprintf("%s_%s_%d@%s", prefix, strings.TrimPrefix(normalizedPhone, "+"), epoch, constants.APP.DOMAIN),
+		Username:       fmt.Sprintf("%s_%s_%d", constants.ROLES.CITIZEN, strings.TrimPrefix(normalizedPhone, "+"), epoch),
 		Password:       uuid.New().String(), // random password — citizen logs in via OTP only
 		MobileVerified: true,
 		IsActive:       true,

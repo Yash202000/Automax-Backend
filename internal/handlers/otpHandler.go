@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"log"
+
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
@@ -87,7 +89,13 @@ func (h *OTPHandler) VerifyOTP(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request"))
 	}
 
-	if req.Phone == "" || req.OTP == "" || req.SessionID == "" {
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		// @Todo Ask UI to update the format
+		// return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+		// 	"success": false,
+		// 	"errors":  validationErrors,
+		// })
+		log.Println(validationErrors)
 		return fiber.NewError(fiber.StatusBadRequest, i18n.T(c.UserContext(), "phone_session_otp_required"))
 	}
 
