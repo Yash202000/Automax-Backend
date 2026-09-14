@@ -508,12 +508,14 @@ var userPerformanceFilterFields = map[string]string{
 	"record_type":       "incidents.record_type",
 	// joined tables
 	"classification_name": "classifications.name",
-	"to_state_name":       "workflow_states.name",
-	"status":              "workflow_states.name",
+	"to_state_name":       "tws.name",
+	"from_state_name":     "fws.name",
+	"status":              "tws.name",
 	"location_name":       "locations.name",
 	"user_email":          "perf_users.email",
 	"user_first_name":     "perf_users.first_name",
 	"user_last_name":      "perf_users.last_name",
+	"created_at":          "incidents.created_at",
 }
 
 // dataSourceFilterFields maps a data source name to its allowed filter fields.
@@ -2898,7 +2900,8 @@ func (r *reportRepository) ExecuteUserPerformanceQuery(ctx context.Context, filt
 		q := r.db.WithContext(ctx).
 			Table("incident_transition_histories").
 			Joins("INNER JOIN incidents ON incidents.id = incident_transition_histories.incident_id").
-			Joins("LEFT JOIN workflow_states ON workflow_states.id = incident_transition_histories.to_state_id").
+			Joins("LEFT JOIN workflow_states tws ON tws.id = incident_transition_histories.to_state_id").
+			Joins("LEFT JOIN workflow_states fws ON fws.id = incident_transition_histories.from_state_id").
 			Joins("LEFT JOIN users perf_users ON perf_users.id = incident_transition_histories.performed_by_id").
 			Joins("LEFT JOIN locations ON locations.id = incidents.location_id").
 			Joins("LEFT JOIN classifications ON classifications.id = incidents.classification_id")
@@ -2926,8 +2929,10 @@ func (r *reportRepository) ExecuteUserPerformanceQuery(ctx context.Context, filt
 		Select(
 			"incident_transition_histories.id::text AS transition_id, " +
 				"incident_transition_histories.transitioned_at, " +
+				"incidents.id::text AS incident_id, " +
 				"incidents.incident_number, " +
-				"COALESCE(workflow_states.name, '') AS to_state_name, " +
+				"COALESCE(tws.name, '') AS to_state_name, " +
+				"COALESCE(fws.name, '') AS from_state_name, " +
 				"COALESCE(perf_users.first_name, '') AS user_first_name, " +
 				"COALESCE(perf_users.last_name, '') AS user_last_name, " +
 				"COALESCE(perf_users.email, '') AS user_email, " +
@@ -2946,8 +2951,10 @@ func (r *reportRepository) ExecuteUserPerformanceQuery(ctx context.Context, filt
 	type transEntry struct {
 		transitionID       string
 		transitionedAt     time.Time
+		incidentID         string
 		incidentNumber     string
 		toStateName        string
+		fromStateName      string
 		userFullName       string
 		locationName       string
 		classificationName string
@@ -2955,14 +2962,15 @@ func (r *reportRepository) ExecuteUserPerformanceQuery(ctx context.Context, filt
 
 	var entries []transEntry
 	transitionIDs := make([]string, 0)
+	openFromIncidentIDs := make([]string, 0)
 
 	for dataRows.Next() {
 		var (
-			transID, incNumber, stateName, firstName, lastName, email string
-			locationName, classificationName                          string
-			transitionedAt                                            time.Time
+			transID, incID, incNumber, stateName, fromStateName, firstName, lastName, email string
+			locationName, classificationName                                                string
+			transitionedAt                                                                  time.Time
 		)
-		if err := dataRows.Scan(&transID, &transitionedAt, &incNumber, &stateName, &firstName, &lastName, &email, &locationName, &classificationName); err != nil {
+		if err := dataRows.Scan(&transID, &transitionedAt, &incID, &incNumber, &stateName, &fromStateName, &firstName, &lastName, &email, &locationName, &classificationName); err != nil {
 			continue
 		}
 		fullName := strings.TrimSpace(firstName + " " + lastName)
@@ -2972,27 +2980,38 @@ func (r *reportRepository) ExecuteUserPerformanceQuery(ctx context.Context, filt
 		entries = append(entries, transEntry{
 			transitionID:       transID,
 			transitionedAt:     transitionedAt,
+			incidentID:         incID,
 			incidentNumber:     incNumber,
 			toStateName:        stateName,
+			fromStateName:      fromStateName,
 			userFullName:       fullName,
 			locationName:       locationName,
 			classificationName: classificationName,
 		})
+
+		log.Printf("entries: %d, transitionID: %s, incID: %s", len(entries), transID, incID)
+		if strings.ToLower(fromStateName) == "open" {
+			log.Printf("openFromIncidentIDs: %d, incID: %s", len(openFromIncidentIDs), incID)
+			openFromIncidentIDs = append(openFromIncidentIDs, incID)
+		}
 		transitionIDs = append(transitionIDs, transID)
 	}
-
 	if len(entries) == 0 {
 		return []map[string]interface{}{}, total, nil
 	}
 
 	commentsMap, _ := r.fetchCommentsByTransition(ctx, transitionIDs)
 	attachMap, _ := r.fetchAttachmentsByTransition(ctx, transitionIDs, protocol, hostname, token)
-
+	orphanAttachMap, _ := r.fetchOrphanAttachmentsByIncident(ctx, openFromIncidentIDs, protocol, hostname, token)
+	log.Printf("commentsMap: %d, attachMap: %d, orphanAttachMap: %d", len(commentsMap), len(attachMap), len(orphanAttachMap))
 	results := make([]map[string]interface{}, 0, len(entries))
 	for _, e := range entries {
 		commentStr := commentsMap[e.transitionID]
 		// []string, not a joined string — see the attachment note in ExecuteIncidentQuery.
 		attachURLs := attachMap[e.transitionID]
+		if strings.ToLower(e.fromStateName) == "open" {
+			attachURLs = append(attachURLs, orphanAttachMap[e.incidentID]...)
+		}
 
 		rawRow := map[string]interface{}{
 			"incident_number": e.incidentNumber,
@@ -3092,6 +3111,45 @@ func (r *reportRepository) fetchAttachmentsByTransition(ctx context.Context, tra
 			}
 			url := protocol + "://" + hostname + apiPrefix + attachID + "/preview?token=" + token
 			result[tid] = append(result[tid], url)
+		}
+		rows.Close()
+	}
+	return result, nil
+}
+
+// fetchOrphanAttachmentsByIncident returns signed preview URLs, grouped by incident ID, for
+// attachments that were uploaded before any transition existed (transition_history_id IS NULL) —
+// e.g. attached at incident creation.
+func (r *reportRepository) fetchOrphanAttachmentsByIncident(ctx context.Context, incidentIDs []string, protocol, hostname, token string) (map[string][]string, error) {
+	result := make(map[string][]string)
+	if len(incidentIDs) == 0 || hostname == "" {
+		return result, nil
+	}
+	apiPrefix := "/api/v1/attachments/"
+	if path := os.Getenv("VD2_STAGING_API_PREFIX"); path != "" {
+		apiPrefix = fmt.Sprintf("/%s%s", path, apiPrefix)
+	}
+
+	for _, batch := range chunkIDs(incidentIDs, idBatchSize) {
+		rows, err := r.db.WithContext(ctx).Raw(`
+			SELECT ia.incident_id::text, ia.id::text
+			FROM incident_attachments ia
+			WHERE ia.incident_id::text IN (?)
+			  AND ia.transition_history_id IS NULL
+			  AND ia.deleted_at IS NULL
+			ORDER BY ia.incident_id, ia.created_at ASC
+		`, batch).Debug().Rows()
+		if err != nil {
+			log.Printf("fetchOrphanAttachmentsByIncident: batch of %d ids failed: %v", len(batch), err)
+			return result, err
+		}
+		for rows.Next() {
+			var incID, attachID string
+			if err := rows.Scan(&incID, &attachID); err != nil {
+				continue
+			}
+			url := protocol + "://" + hostname + apiPrefix + attachID + "/preview?token=" + token
+			result[incID] = append(result[incID], url)
 		}
 		rows.Close()
 	}
@@ -3592,7 +3650,7 @@ func (r *reportRepository) ExecuteLocationCountByStatusQuery(ctx context.Context
 	var pathRows []pathRow
 	err := r.db.WithContext(ctx).Raw(`
     WITH RECURSIVE location_tree AS (
-        SELECT 
+        SELECT
             id,
             parent_id,
             name::text AS full_path
@@ -3601,7 +3659,7 @@ func (r *reportRepository) ExecuteLocationCountByStatusQuery(ctx context.Context
 
         UNION ALL
 
-        SELECT 
+        SELECT
             l.id,
             l.parent_id,
             lt.full_path || ' > ' || l.name
