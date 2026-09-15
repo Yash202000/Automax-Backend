@@ -1257,7 +1257,7 @@ func (h *IncidentHandler) UploadAttachment(c *fiber.Ctx) error {
 	if version := c.QueryInt("version"); version != 0 {
 		if inc.Version != version {
 			// Dont update this error message. Dont create a localised version for this
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "Conflict: incident was modified by another user"))
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "Conflict: incident was modified by another user"))
 		}
 	}
 
