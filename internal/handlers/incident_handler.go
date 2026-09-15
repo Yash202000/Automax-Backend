@@ -1249,6 +1249,18 @@ func (h *IncidentHandler) UploadAttachment(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_incident_id"))
 	}
 
+	inc, err := h.service.GetIncident(c.UserContext(), incidentID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_incident_id"))
+	}
+
+	if version := c.QueryInt("version"); version != 0 {
+		if inc.Version != version {
+			// Dont update this error message. Dont create a localised version for this
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "Conflict: incident was modified by another user"))
+		}
+	}
+
 	file, err := c.FormFile("file")
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "no_file_uploaded"))
