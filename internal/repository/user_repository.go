@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/automax/backend/internal/models"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -273,9 +274,17 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 
 	// Build base query with search + join filters
 	base := r.db.WithContext(ctx).Model(&models.User{})
-
 	if !withIVR {
-		base = base.Where("LOWER(users.email) NOT LIKE 'ivr_email_%'")
+		// CreateIncident (incident_service.go) auto-registers a citizen user for
+		// unauthenticated channels, generating email as "<sourceSlug>_<phone>_<epoch>@domain"
+		// and username as "citizen_<phone>_<epoch>". Match those exact prefixes so these
+		// auto-registered accounts stay hidden unless with_ivr=true is requested.
+		base = base.Where("LOWER(users.email) NOT LIKE ?", constants.INCIDENT_SOURCE.IVR+"\\_%")
+		base = base.Where("LOWER(users.email) NOT LIKE ?", constants.INCIDENT_SOURCE.MOBILE+"\\_%")
+		base = base.Where("LOWER(users.email) NOT LIKE ?", constants.INCIDENT_SOURCE.WHATSAPP+"\\_%")
+		base = base.Where("LOWER(users.email) NOT LIKE ?", "%chatbot\\_%")
+		base = base.Where("LOWER(users.email) NOT LIKE ?", "otp\\_%")
+		base = base.Where("LOWER(users.username) NOT LIKE ?", strings.ToLower(constants.ROLES.CITIZEN)+"\\_%")
 	}
 
 	if search != "" {
