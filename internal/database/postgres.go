@@ -428,6 +428,10 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	// AD/LDAP user flag — idempotent
 	db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_ad_user BOOLEAN NOT NULL DEFAULT false")
 
+	// NASAQ flag on classifications — only leaf classifications may have this set to
+	// true; enforced in the classification handler/repository. Idempotent.
+	db.Exec("ALTER TABLE classifications ADD COLUMN IF NOT EXISTS is_nasaq BOOLEAN NOT NULL DEFAULT false")
+
 	// role_permissions is a GORM many2many join table with no primary key.
 	// Without a replica identity PostgreSQL refuses DELETE operations on tables
 	// that are part of a logical replication publication (SQLSTATE 55000).

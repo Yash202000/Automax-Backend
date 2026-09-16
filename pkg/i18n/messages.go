@@ -367,6 +367,7 @@ var messages = map[string][2]string{
 	"classification_deleted":                 {"Classification deleted", "تم حذف التصنيف"},
 	"classification_retrieved":               {"Classification retrieved", "تم استرجاع التصنيف"},
 	"classification_has_active_children":     {"Cannot deactivate this classification because it has active sub-classifications. Please deactivate all child classifications first.", "لا يمكن إلغاء تفعيل هذا التصنيف لأنه يحتوي على تصنيفات فرعية نشطة. الرجاء إلغاء تفعيل جميع التصنيفات الفرعية أولاً."},
+	"classification_nasaq_requires_leaf":     {"This is not a child classification. Please mark is_nasaq = true only on a child classification (one with no sub-classifications).", "هذا ليس تصنيفاً فرعياً. الرجاء تعليم is_nasaq = true فقط على تصنيف فرعي (لا يحتوي على تصنيفات فرعية)."},
 	"classifications_retrieved":              {"Classifications retrieved", "تم استرجاع التصنيفات"},
 	"classifications_assigned":               {"Classifications assigned", "تم تعيين التصنيفات"},
 	"classification_tree_retrieved":          {"Classification tree retrieved", "تم استرجاع شجرة التصنيف"},

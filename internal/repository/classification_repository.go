@@ -122,9 +122,10 @@ func NewClassificationRepository(db *gorm.DB) ClassificationRepository {
 }
 
 func (r *classificationRepository) Create(ctx context.Context, classification *models.Classification) error {
+	var parent *models.Classification
 	if classification.ParentID != nil {
-		var parent models.Classification
-		if err := r.db.WithContext(ctx).First(&parent, "id = ?", classification.ParentID).Error; err != nil {
+		parent = &models.Classification{}
+		if err := r.db.WithContext(ctx).First(parent, "id = ?", classification.ParentID).Error; err != nil {
 			return fmt.Errorf("parent classification not found")
 		}
 		classification.Level = parent.Level + 1
@@ -143,7 +144,19 @@ func (r *classificationRepository) Create(ctx context.Context, classification *m
 		classification.Code = code
 	}
 
-	return r.db.WithContext(ctx).Create(classification).Error
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(classification).Error; err != nil {
+			return err
+		}
+		// A classification that gains a child can no longer be a leaf, so it can no
+		// longer be marked NASAQ - clear it here regardless of its prior value.
+		if parent != nil && parent.IsNasaq {
+			if err := tx.Model(&models.Classification{}).Where("id = ?", parent.ID).Update("is_nasaq", false).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // nextClsCode returns the next unique Classification Code (e.g. cls-000001). See
@@ -323,6 +336,17 @@ func (r *classificationRepository) FindByExternalID(ctx context.Context, externa
 
 func (r *classificationRepository) Update(ctx context.Context, classification *models.Classification) error {
 	classification.Code = strings.ToLower(strings.TrimSpace(classification.Code))
+	if classification.Code == "" {
+		// A NULL code scans into this Go string field as "", which Save() would
+		// otherwise write back literally - colliding with any other row that already
+		// has code = '' under the unique index. Assign a real code instead, same as
+		// Create() already does for a blank code.
+		code, err := r.nextClsCode(ctx)
+		if err != nil {
+			return err
+		}
+		classification.Code = code
+	}
 	return r.db.WithContext(ctx).Save(classification).Error
 }
 
@@ -539,6 +563,7 @@ countDone:
 			Level:       cls.Level,
 			Path:        cls.Path,
 			IsActive:    cls.IsActive,
+			IsNasaq:     cls.IsNasaq,
 			SortOrder:   cls.SortOrder,
 			Count:       countMap[cls.ID],
 			Children:    []models.ClassificationWithStats{},
