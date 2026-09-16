@@ -94,29 +94,14 @@ func (s *OTPService) IsBlocked(ctx context.Context, phone string) bool {
 	return exists == 1
 }
 
-type OTPData struct {
-	Phone      string `json:"phone"`
-	Hash       string `json:"hash"`
-	SenderMode string `json:"senderMode"`
-	Attempts   int    `json:"attempts"`
-	Status     string `json:"status"`
-	SessionID  string `json:"session_id"`
-
-	SentAt     time.Time  `json:"sentAt"`
-	VerifiedAt *time.Time `json:"verifiedAt,omitempty"`
-	SentBy     *uuid.UUID `json:"sentBy"`
-	// [Citizen Auto-Register] Citizen name stored during SendOTP, used for auto-creating user on VerifyOTP
-	Name string `json:"name,omitempty"`
-}
-
-// [Citizen Auto-Register] Added citizenName parameter — stored in Redis alongside OTP
-// so it can be used to auto-create the citizen user upon successful OTP verification.
-// Pass empty string for non-citizen flows (e.g. authenticated OTP sends).
+// [Citizen Auto-Register] Added firstName/middleName/lastName parameters — stored in Redis
+// alongside OTP so they can be used to auto-create the citizen user upon successful OTP
+// verification. Pass empty strings for non-citizen flows (e.g. authenticated OTP sends).
 //
 // userType is "citizen" or "employee":
 //   - "citizen" or blank → OTP_DATA_EXPIRATION_TIME (existing behavior, unchanged)
 //   - "employee"         → LOGIN_OTP_EXPIRY_SECONDS (default 60s)
-func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode string, userType string, sentBy *uuid.UUID, citizenName ...string) (sessionID string, bypassResp *models.LoginResponse, err error) {
+func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode string, userType string, sentBy *uuid.UUID, firstName string, middleName string, lastName string) (sessionID string, bypassResp *models.LoginResponse, err error) {
 
 	// - RATE LIMIT COUNTER
 	counterKey := "otp_counter:" + phone
@@ -194,12 +179,7 @@ func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode strin
 	}
 
 	// [Citizen Auto-Register] Store citizen name in OTP data for auto-registration on verify
-	name := ""
-	if len(citizenName) > 0 {
-		name = citizenName[0]
-	}
-
-	otpData := OTPData{
+	otpData := models.OTPData{
 		Phone:      phone,
 		Hash:       HashOTP(otp),
 		SenderMode: senderMode,
@@ -208,7 +188,9 @@ func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode strin
 		Status:     "sent",
 		SentAt:     time.Now(),
 		SentBy:     sentBy,
-		Name:       name,
+		FirstName:  firstName,
+		MiddleName: middleName,
+		LastName:   lastName,
 	}
 
 	jsonData, _ := json.Marshal(otpData)
@@ -311,7 +293,7 @@ func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID stri
 		// is generated from the phone number since these fields are required (DB unique constraints).
 		// The "citizen" role is assigned automatically. To revert this feature, restore the
 		// original line: return nil, fmt.Errorf("%s", i18n.T(ctx, "user_not_found"))
-		user, err = s.autoCreateCitizenUser(ctx, phone, data.Name)
+		user, err = s.autoCreateCitizenUser(ctx, phone, data.FirstName, data.MiddleName, data.LastName)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_register_citizen"), err)
 		}
@@ -349,9 +331,9 @@ func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID stri
 //   - Role = "citizen" (looked up by code from roles table)
 //
 // To revert this feature: remove this method and restore "user not found" error in VerifyOTP.
-func (s *OTPService) autoCreateCitizenUser(ctx context.Context, phone string, name string) (*models.User, error) {
-	if name == "" {
-		name = "Citizen"
+func (s *OTPService) autoCreateCitizenUser(ctx context.Context, phone string, firstName string, middleName string, lastName string) (*models.User, error) {
+	if firstName == "" {
+		firstName = "Citizen"
 	}
 
 	// Normalize to a canonical E.164-ish form so the synthetic email/username (and the
@@ -369,7 +351,9 @@ func (s *OTPService) autoCreateCitizenUser(ctx context.Context, phone string, na
 	epoch := time.Now().Unix()
 	// suffix := strings.ToLower(strings.TrimSpace(constants.APP.DOMAIN))
 	newUser := &models.User{
-		FirstName:      name,
+		FirstName:      firstName,
+		MiddleName:     middleName,
+		LastName:       lastName,
 		Phone:          normalizedPhone,
 		Email:          fmt.Sprintf("%s_%s_%d@%s", prefix, strings.TrimPrefix(normalizedPhone, "+"), epoch, constants.APP.DOMAIN),
 		Username:       fmt.Sprintf("%s_%s_%d", constants.ROLES.CITIZEN, strings.TrimPrefix(normalizedPhone, "+"), epoch),
