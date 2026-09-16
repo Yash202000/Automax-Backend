@@ -103,6 +103,21 @@ func (s *OTPService) IsBlocked(ctx context.Context, phone string) bool {
 //   - "employee"         → LOGIN_OTP_EXPIRY_SECONDS (default 60s)
 func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode string, userType string, sentBy *uuid.UUID, firstName string, middleName string, lastName string) (sessionID string, bypassResp *models.LoginResponse, err error) {
 
+	// If a user already exists for this phone and the caller supplied any name field,
+	// make sure it matches what's on record — catches sending an OTP under someone else's
+	// identity for an already-registered phone number. Fields the caller left blank are
+	// not checked, so callers can still send an OTP with e.g. just first_name.
+	if firstName != "" || middleName != "" || lastName != "" {
+		if existingUser, findErr := s.userRepo.FindByMobile(ctx, phone); findErr == nil && existingUser != nil {
+			mismatch := (firstName != "" && !strings.EqualFold(strings.TrimSpace(existingUser.FirstName), strings.TrimSpace(firstName))) ||
+				(middleName != "" && !strings.EqualFold(strings.TrimSpace(existingUser.MiddleName), strings.TrimSpace(middleName))) ||
+				(lastName != "" && !strings.EqualFold(strings.TrimSpace(existingUser.LastName), strings.TrimSpace(lastName)))
+			if mismatch {
+				return "", nil, fmt.Errorf("%s", i18n.T(ctx, "otp_name_mismatch"))
+			}
+		}
+	}
+
 	// - RATE LIMIT COUNTER
 	counterKey := "otp_counter:" + phone
 

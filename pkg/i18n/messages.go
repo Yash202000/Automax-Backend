@@ -947,6 +947,7 @@ var messages = map[string][2]string{
 	"failed_to_update_otp_status":       {"Failed to update OTP status", "فشل تحديث حالة رمز التحقق"},
 	"citizen_role_not_found":            {"Citizen role not found in database — please create a role with code 'citizen'", "دور المواطن غير موجود في قاعدة البيانات — يرجى إنشاء دور برمز 'citizen'"},
 	"failed_to_create_citizen_user":     {"Failed to create citizen user", "فشل إنشاء حساب المواطن"},
+	"otp_name_mismatch":                 {"Provided name does not match the existing user's records", "الاسم المقدم لا يتطابق مع سجلات المستخدم الحالي"},
 
 	// Incidents – business logic
 	"child_incidents_locked":                  {"Child incidents cannot be edited - they are locked after merging", "لا يمكن تعديل البلاغات الفرعية - تم قفلها بعد الدمج"},
