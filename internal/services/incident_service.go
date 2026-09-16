@@ -447,7 +447,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 				return nil, err
 			}
 
-			sourceSlug := strings.ToLower(strings.TrimSpace(req.Source))
+			sourceSlug := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(req.Source)), " ", "")
 			epoch := time.Now().Unix()
 			normalizedPhone := pkgutils.NormalizeMobile(req.ReporterPhone, pkgutils.SystemCountryCode())
 			registerReq := &models.UserRegisterRequest{
