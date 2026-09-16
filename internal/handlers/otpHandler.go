@@ -30,10 +30,12 @@ func NewOTPHandler(otpService *services.OTPService,
 func (h *OTPHandler) SendOTP(c *fiber.Ctx) error {
 
 	var req struct {
-		Phone   string `json:"phone"   validate:"required,e164|numeric,max=20"`
-		Name    string `json:"name"    validate:"omitempty,min=3,max=100"`
-		Channel string `json:"channel" validate:"required,oneof=sms whatsapp voice email wa"`
-		Type    string `json:"type"    validate:"omitempty,oneof=citizen employee"`
+		Phone      string `json:"phone"       validate:"required,e164|numeric,max=20"`
+		FirstName  string `json:"first_name"  validate:"omitempty,min=2,max=100"`
+		MiddleName string `json:"middle_name" validate:"omitempty,max=100"`
+		LastName   string `json:"last_name"   validate:"omitempty,max=100"`
+		Channel    string `json:"channel"     validate:"required,oneof=sms whatsapp voice email wa"`
+		Type       string `json:"type"        validate:"omitempty,oneof=citizen employee"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -67,7 +69,9 @@ func (h *OTPHandler) SendOTP(c *fiber.Ctx) error {
 		req.Channel,
 		req.Type,
 		sentBy,
-		req.Name,
+		req.FirstName,
+		req.MiddleName,
+		req.LastName,
 	)
 
 	if err != nil {
