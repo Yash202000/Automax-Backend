@@ -157,6 +157,7 @@ var permissionNameArabic = map[string]struct{ Name, Description string }{
 	"incidents:share":                     {"مشاركة الحوادث", "مشاركة تفاصيل الحادث مع أطراف خارجية"},
 	"incidents:edit-closed":               {"تعديل الحوادث المغلقة", "تعديل ملخص ووصف الحوادث المغلقة"},
 	"incidents:request-info":              {"طلب معلومات عن الحوادث", "طلب معلومات إضافية من المواطنين"},
+	"incidents:verify-nasaq":              {"التحقق من نساق", "تشغيل التحقق اليدوي من تصريح حفر نساق لبلاغ"},
 	"incidents:manage_sla":                {"إدارة اتفاقية مستوى الخدمة", "تجاوز إعدادات اتفاقية مستوى الخدمة"},
 	"incidents:filter_reporter_phone":     {"تصفية الحوادث برقم هاتف المُبلِّغ", "تصفية الحوادث حسب رقم هاتف المُبلِّغ"},
 	"incidents:upload-attachment-gallery": {"رفع معرض المرفقات", "رفع مرفقات إلى معرض مرفقات الحادث"},

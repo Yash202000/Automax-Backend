@@ -27,6 +27,7 @@ type Config struct {
 	Documenta                   DocumentaConfig
 	KpiDocumenta                DocumentaConfig
 	AIQuality                   AIQualityConfig
+	Nasaq                       NasaqConfig
 	AutoAssign                  AutoAssignConfig
 	GoalManagement              GoalManagementConfig
 	License                     LicenseConfig
@@ -43,7 +44,7 @@ type Config struct {
 	CitizenAttachmentSizeLimit  string // env: CITIZEN_ATTACHMENT_SIZE_LIMIT — max attachment size in bytes for citizen-submitted incidents (EPM940 ENV_CONFIGURATION lookup value). Default: 5242880 (5MB).
 	InternalAttachmentSizeLimit string // env: INTERNAL_ATTACHMENT_SIZE_LIMIT — max attachment size in bytes for internally-created incidents (EPM940 ENV_CONFIGURATION lookup value). Default: 10485760 (10MB).
 	ChatbotURL                  string // env: CHATBOT_URL — URL of the chatbot (EPM940 ENV_CONFIGURATION lookup value). Default: placeholder — override in .env.
-  KpiDictionaryWorkflowCode  string // env: KPI_DICTIONARY_WORKFLOW_CODE — Workflow.Code the KPI Workflow (Draft->Reviewed->Approved->Active->Closed) is looked up by. Default: "kpi_dictionary_workflow" — must match the Code seeded in seed_kpi_dictionary_workflow.go, or nothing will resolve.
+	KpiDictionaryWorkflowCode   string // env: KPI_DICTIONARY_WORKFLOW_CODE — Workflow.Code the KPI Workflow (Draft->Reviewed->Approved->Active->Closed) is looked up by. Default: "kpi_dictionary_workflow" — must match the Code seeded in seed_kpi_dictionary_workflow.go, or nothing will resolve.
 }
 
 // ImageValidationConfig holds settings for the standalone image-quality
@@ -146,6 +147,18 @@ type AIQualityConfig struct {
 	AppHost string
 	// AppToken is an internal bearer token used when downloading attachments via the API fallback. env: APP_TOKEN
 	AppToken string
+}
+
+// NasaqConfig points at the standalone Nasaq Integration Microservice (see
+// Nasaq-Integration-Service repo) - this backend never calls Nasaq's own
+// APIs directly, only this internal service.
+type NasaqConfig struct {
+	// BaseURL is the Nasaq Integration Microservice's base URL. env: NASAQ_SERVICE_BASE_URL
+	BaseURL string
+	// APIKey is sent as the X-Api-Key header on every call. env: NASAQ_SERVICE_API_KEY
+	APIKey string
+	// TimeoutSeconds bounds each call to the microservice (default 20). env: NASAQ_SERVICE_TIMEOUT_SECONDS
+	TimeoutSeconds int
 }
 
 // AutoAssignConfig holds settings for the Auto-Assign Monitor.
@@ -390,6 +403,11 @@ func Load() *Config {
 			AppHost:              getEnv("APP_HOST", "localhost:8080"),
 			AppToken:             getEnv("APP_TOKEN", ""),
 		},
+		Nasaq: NasaqConfig{
+			BaseURL:        getEnv("NASAQ_SERVICE_BASE_URL", ""),
+			APIKey:         getEnv("NASAQ_SERVICE_API_KEY", ""),
+			TimeoutSeconds: getEnvAsInt("NASAQ_SERVICE_TIMEOUT_SECONDS", 20),
+		},
 		FinalCloseWhatsAppFeedback: FinalCloseWhatsAppFeedbackConfig{
 			SessionBaseURL: getEnv("FINAL_CLOSE_WHATSAPP_FEEDBACK_SESSION_BASE_URL", ""),
 		},
@@ -436,7 +454,7 @@ func Load() *Config {
 		CitizenAttachmentSizeLimit:  getEnv("CITIZEN_ATTACHMENT_SIZE_LIMIT", "5242880"),
 		InternalAttachmentSizeLimit: getEnv("INTERNAL_ATTACHMENT_SIZE_LIMIT", "10485760"),
 		ChatbotURL:                  getEnv("CHATBOT_URL", "https://chatbot.automax.example.com"),
-    KpiDictionaryWorkflowCode: getEnv("KPI_DICTIONARY_WORKFLOW_CODE", "kpi_dictionary_workflow"),
+		KpiDictionaryWorkflowCode:   getEnv("KPI_DICTIONARY_WORKFLOW_CODE", "kpi_dictionary_workflow"),
 		Report: ReportConfig{
 			LogoLeftURL:  getEnv("LOGO_LEFT_URL", ""),
 			LogoRightURL: getEnv("LOGO_RIGHT_URL", ""),
