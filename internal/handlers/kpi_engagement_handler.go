@@ -473,7 +473,7 @@ func (h *KpiEngagementHandler) loadFolderAndTaxonomy(kpiType string, id uuid.UUI
 			return
 		}
 		folderID = k.DocumentaFolderID
-		awardSubCriterionID = &k.AwardSubCriterionID
+		awardSubCriterionID = k.AwardSubCriterionID
 	default:
 		var k models.StrategicKPI
 		if err = h.db.Select("documenta_folder_id, pillar_id").Where("id = ?", id).First(&k).Error; err != nil {

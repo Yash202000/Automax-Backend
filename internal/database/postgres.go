@@ -245,6 +245,14 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			log.Printf("Warning: KPI entry multi-org-scope migration failed: %v", err)
 		}
 
+		// Strategic/Operational/Award KPIs now share one create form: Objective
+		// is the one universal required taxonomy field, and Award Criteria/
+		// Sub-Criteria becomes an optional supplementary tag on every type —
+		// including Award KPIs, which previously required it.
+		if err := migrations.MigrateKpiDictionaryUnifyTaxonomy(migrationDB); err != nil {
+			log.Printf("Warning: KPI dictionary taxonomy unification migration failed: %v", err)
+		}
+
 		// Enforce unique domain names (excluding soft-deleted records).
 		db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_domains_name_en ON domains(name_en) WHERE deleted_at IS NULL`)
 
