@@ -36,6 +36,7 @@ type Classification struct {
 	Level         int                         `gorm:"default:0" json:"level"`
 	Path          string                      `gorm:"size:1000" json:"path"` // Materialized path for efficient queries
 	IsActive      bool                        `gorm:"default:true" json:"is_active"`
+	IsNasaq       bool                        `gorm:"not null;default:false" json:"is_nasaq"` // only leaf classifications may be true
 	SortOrder     int                         `gorm:"default:0" json:"sort_order"`
 	ExternalID    string                      `gorm:"size:100" json:"external_id"`
 	Criticalities []ClassificationCriticality `gorm:"foreignKey:ClassificationID" json:"criticalities,omitempty"`
@@ -95,6 +96,7 @@ type ClassificationUpdateRequest struct {
 	DescriptionAr string   `json:"description_ar" validate:"max=500"`
 	Types         []string `json:"types" validate:"omitempty,dive,oneof=incident request complaint query mobile ivr"`
 	IsActive      *bool    `json:"is_active"`
+	IsNasaq       *bool    `json:"is_nasaq"`
 	SortOrder     *int     `json:"sort_order"`
 }
 
@@ -111,6 +113,7 @@ type ClassificationResponse struct {
 	Level         int                                 `json:"level"`
 	Path          string                              `json:"path"`
 	IsActive      bool                                `json:"is_active"`
+	IsNasaq       bool                                `json:"is_nasaq"`
 	SortOrder     int                                 `json:"sort_order"`
 	Criticalities []ClassificationCriticalityResponse `json:"criticalities,omitempty"`
 	Children      []ClassificationResponse            `json:"children,omitempty"`
@@ -139,6 +142,7 @@ func ToClassificationResponse(c *Classification) ClassificationResponse {
 		Level:         c.Level,
 		Path:          c.Path,
 		IsActive:      c.IsActive,
+		IsNasaq:       c.IsNasaq,
 		SortOrder:     c.SortOrder,
 		CreatedAt:     c.CreatedAt,
 	}
@@ -172,6 +176,7 @@ type ClassificationWithStats struct {
 	Level         int                       `json:"level"`
 	Path          string                    `json:"path"`
 	IsActive      bool                      `json:"is_active"`
+	IsNasaq       bool                      `json:"is_nasaq"`
 	SortOrder     int                       `json:"sort_order"`
 	Count         int64                     `json:"count"`
 	Children      []ClassificationWithStats `json:"children,omitempty"`
@@ -256,6 +261,7 @@ type ClassificationCreateRequestWithCriticalities struct {
 	Types         []string                                 `json:"types" validate:"omitempty,dive,oneof=incident request complaint query mobile ivr"`
 	ParentID      *uuid.UUID                               `json:"parent_id"`
 	IsActive      *bool                                    `json:"is_active"`
+	IsNasaq       *bool                                    `json:"is_nasaq"`
 	SortOrder     int                                      `json:"sort_order"`
 	Criticalities []ClassificationCriticalityCreateRequest `json:"criticalities,omitempty"`
 }

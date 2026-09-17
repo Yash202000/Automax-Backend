@@ -109,6 +109,7 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		&models.IncidentRevision{},
 		&models.IncidentRejectionLog{},
 		&models.IvrSmsLink{},
+		&models.NasaqVerification{},
 		// Report models
 		&models.Report{},
 		&models.ReportExecution{},
@@ -428,6 +429,10 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	// AD/LDAP user flag — idempotent
 	db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_ad_user BOOLEAN NOT NULL DEFAULT false")
 
+	// NASAQ flag on classifications — only leaf classifications may have this set to
+	// true; enforced in the classification handler/repository. Idempotent.
+	db.Exec("ALTER TABLE classifications ADD COLUMN IF NOT EXISTS is_nasaq BOOLEAN NOT NULL DEFAULT false")
+
 	// role_permissions is a GORM many2many join table with no primary key.
 	// Without a replica identity PostgreSQL refuses DELETE operations on tables
 	// that are part of a logical replication publication (SQLSTATE 55000).
@@ -627,6 +632,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Merge Incidents", Code: "incidents:merge", Module: "incidents", Action: "merge", ActionAr: "دمج", Description: "Merge multiple incidents into one"},
 		{Name: "Edit Closed Incidents", Code: "incidents:edit-closed", Module: "incidents", Action: "edit_closed", ActionAr: "تعديل المغلق", Description: "Edit summary/description of closed incidents"},
 		{Name: "Request Info on Incidents", Code: "incidents:request-info", Module: "incidents", Action: "request_info", ActionAr: "طلب معلومات", Description: "Request additional information from citizens"},
+		{Name: "Verify Nasaq", Code: "incidents:verify-nasaq", Module: "incidents", Action: "verify_nasaq", ActionAr: "التحقق من نساق", Description: "Trigger manual Nasaq excavation permit verification for an incident"},
 		{Name: "Share Incidents", Code: "incidents:share", Module: "incidents", Action: "share", ActionAr: "مشاركة", Description: "Share incident details with external parties"},
 		{Name: "Filter Incidents by Reporter Phone", Code: "incidents:filter_reporter_phone", Module: "incidents", Action: "filter_reporter_phone", ActionAr: "تصفية حسب هاتف المبلغ", Description: "Filter incidents by reporter phone number"},
 		{Name: "Upload Attachment Gallery", Code: "incidents:upload-attachment-gallery", Module: "incidents", Action: "upload_attachment_gallery", ActionAr: "رفع معرض المرفقات", Description: "Upload attachments to the incident attachment gallery"},
