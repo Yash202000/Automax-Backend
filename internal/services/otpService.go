@@ -21,6 +21,7 @@ import (
 	"github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
 )
 
 type OTPService struct {
@@ -102,22 +103,6 @@ func (s *OTPService) IsBlocked(ctx context.Context, phone string) bool {
 //   - "citizen" or blank → OTP_DATA_EXPIRATION_TIME (existing behavior, unchanged)
 //   - "employee"         → LOGIN_OTP_EXPIRY_SECONDS (default 60s)
 func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode string, userType string, sentBy *uuid.UUID, firstName string, middleName string, lastName string) (sessionID string, bypassResp *models.LoginResponse, err error) {
-
-	// If a user already exists for this phone and the caller supplied any name field,
-	// make sure it matches what's on record — catches sending an OTP under someone else's
-	// identity for an already-registered phone number. Fields the caller left blank are
-	// not checked, so callers can still send an OTP with e.g. just first_name.
-	if firstName != "" || middleName != "" || lastName != "" {
-		if existingUser, findErr := s.userRepo.FindByMobile(ctx, phone); findErr == nil && existingUser != nil {
-			mismatch := (firstName != "" && !strings.EqualFold(strings.TrimSpace(existingUser.FirstName), strings.TrimSpace(firstName))) ||
-				(middleName != "" && !strings.EqualFold(strings.TrimSpace(existingUser.MiddleName), strings.TrimSpace(middleName))) ||
-				(lastName != "" && !strings.EqualFold(strings.TrimSpace(existingUser.LastName), strings.TrimSpace(lastName)))
-			if mismatch {
-				return "", nil, fmt.Errorf("%s", i18n.T(ctx, "otp_name_mismatch"))
-			}
-		}
-	}
-
 	// - RATE LIMIT COUNTER
 	counterKey := "otp_counter:" + phone
 
@@ -302,15 +287,36 @@ func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID stri
 
 	// Fetch user by phone — if not found, auto-create as citizen
 	user, err := s.userRepo.FindByMobile(ctx, phone)
-	if err != nil {
-		// [Citizen Auto-Register] Auto-create citizen user on first OTP-verified login.
-		// The citizen name was stored in Redis during SendOTP. A unique email/username
-		// is generated from the phone number since these fields are required (DB unique constraints).
-		// The "citizen" role is assigned automatically. To revert this feature, restore the
-		// original line: return nil, fmt.Errorf("%s", i18n.T(ctx, "user_not_found"))
+	if err != nil && err != gorm.ErrRecordNotFound {
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_fetch_user"), err)
+	}
+	// [Citizen Auto-Register] Auto-create citizen user on first OTP-verified login.
+	// The citizen name was stored in Redis during SendOTP. A unique email/username
+	// is generated from the phone number since these fields are required (DB unique constraints).
+	// The "citizen" role is assigned automatically. To revert this feature, restore the
+	// original line: return nil, fmt.Errorf("%s", i18n.T(ctx, "user_not_found"))
+	if user == nil || user.ID == uuid.Nil {
 		user, err = s.autoCreateCitizenUser(ctx, phone, data.FirstName, data.MiddleName, data.LastName)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_register_citizen"), err)
+		}
+	} else {
+
+		if data.FirstName != "" || data.MiddleName != "" || data.LastName != "" {
+
+			mismatch := (data.FirstName != "" && !strings.EqualFold(strings.TrimSpace(user.FirstName), strings.TrimSpace(data.FirstName))) ||
+				(data.MiddleName != "" && !strings.EqualFold(strings.TrimSpace(user.MiddleName), strings.TrimSpace(data.MiddleName))) ||
+				(data.LastName != "" && !strings.EqualFold(strings.TrimSpace(user.LastName), strings.TrimSpace(data.LastName)))
+			if mismatch {
+				// Update user complete name
+				user.FirstName = data.FirstName
+				user.MiddleName = data.MiddleName
+				user.LastName = data.LastName
+				if updateErr := s.userRepo.Update(ctx, user); updateErr != nil {
+					return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_update_user"), updateErr)
+				}
+
+			}
 		}
 	}
 
