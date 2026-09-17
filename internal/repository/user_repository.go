@@ -279,9 +279,9 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 		// unauthenticated channels, generating email as "<sourceSlug>_<phone>_<epoch>@domain"
 		// and username as "citizen_<phone>_<epoch>". Match those exact prefixes so these
 		// auto-registered accounts stay hidden unless with_ivr=true is requested.
-		base = base.Where("LOWER(users.email) NOT LIKE ?", constants.INCIDENT_SOURCE.IVR+"\\_%")
-		base = base.Where("LOWER(users.email) NOT LIKE ?", constants.INCIDENT_SOURCE.MOBILE+"\\_%")
-		base = base.Where("LOWER(users.email) NOT LIKE ?", constants.INCIDENT_SOURCE.WHATSAPP+"\\_%")
+		base = base.Where("LOWER(users.email) NOT LIKE ?", strings.ToLower(constants.INCIDENT_SOURCE.IVR)+"\\_%")
+		base = base.Where("LOWER(users.email) NOT LIKE ?", strings.ToLower(constants.INCIDENT_SOURCE.MOBILE)+"\\_%")
+		base = base.Where("LOWER(users.email) NOT LIKE ?", strings.ToLower(constants.INCIDENT_SOURCE.WHATSAPP)+"\\_%")
 		base = base.Where("LOWER(users.email) NOT LIKE ?", "%chatbot\\_%")
 		base = base.Where("LOWER(users.email) NOT LIKE ?", "otp\\_%")
 		base = base.Where("LOWER(users.username) NOT LIKE ?", strings.ToLower(constants.ROLES.CITIZEN)+"\\_%")
@@ -289,7 +289,7 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 
 	if search != "" {
 		like := "%" + strings.ToLower(search) + "%"
-		phoneLike := "%" + strings.TrimPrefix(search, "+") + "%"
+		phoneLike := "%" + strings.TrimLeft(strings.TrimPrefix(strings.TrimSpace(search), "+"), "0") + "%"
 		base = base.Where(
 			"LOWER(users.username) LIKE ? OR LOWER(users.email) LIKE ? OR LOWER(users.first_name) LIKE ? OR LOWER(users.last_name) LIKE ? OR users.phone LIKE ? OR users.id IN (SELECT user_id FROM extension_assignments WHERE extension LIKE ?)",
 			like, like, like, like, phoneLike, phoneLike,
@@ -297,7 +297,9 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 	}
 
 	if phone != "" {
-		base = base.Where("users.phone LIKE ?", "%"+strings.TrimPrefix(phone, "+")+"%")
+		phone = strings.TrimPrefix(strings.TrimSpace(phone), "+")
+		phone = strings.TrimLeft(phone, "0")
+		base = base.Where("users.phone ILIKE ?", "%"+phone+"%")
 	}
 	if extension != "" {
 		base = base.Where("users.id IN (SELECT user_id FROM extension_assignments WHERE extension LIKE ?)", "%"+extension+"%")
