@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"strconv"
@@ -114,6 +115,18 @@ func (h *KpiDictionaryHandler) GetStrategic(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "", item.ToResponse())
 }
 
+// deriveGoalID resolves the Goal a KPI should be filed under from its
+// selected Objective, rather than trusting a client-supplied goal_id — Goal
+// is a read-only value on the KPI create/edit form, always shown as the
+// selected Objective's own Goal.
+func (h *KpiDictionaryHandler) deriveGoalID(ctx context.Context, objectiveID uuid.UUID) *uuid.UUID {
+	var objective models.OperationalObjective
+	if err := h.db.WithContext(ctx).Select("goal_id").Where("id = ?", objectiveID).First(&objective).Error; err != nil {
+		return nil
+	}
+	return objective.GoalID
+}
+
 func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 	var req models.StrategicKPIRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -130,30 +143,32 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 	}
 
 	item := &models.StrategicKPI{
-		Code:               req.Code,
-		NameEn:             req.NameEn,
-		NameAr:             req.NameAr,
-		GoalID:             &req.GoalID,
-		ProcessID:          &req.ProcessID,
-		PillarID:           req.PillarID,
-		DomainID:           req.DomainID,
-		OwnerType:          req.OwnerType,
-		OwnerDeptID:        req.OwnerDeptID,
-		OwnerOrgID:         req.OwnerOrgID,
-		OwningAgencyID:     req.OwningAgencyID,
-		Polarity:           req.Polarity,
-		DescriptionEn:      req.DescriptionEn,
-		DescriptionAr:      req.DescriptionAr,
-		Formula:            req.Formula,
-		Baseline:           req.Baseline,
-		UnitOfMeasure:      req.UnitOfMeasure,
-		ReportingFrequency: req.ReportingFrequency,
-		Lifecycle:          req.Lifecycle,
-		DataSource:         req.DataSource,
-		SegmentationAxes:   req.SegmentationAxes,
-		RelatedUnits:       req.RelatedUnits,
-		Notes:              req.Notes,
-		DocumentaFolderID:  req.DocumentaFolderID,
+		Code:                   req.Code,
+		NameEn:                 req.NameEn,
+		NameAr:                 req.NameAr,
+		GoalID:                 h.deriveGoalID(c.UserContext(), req.OperationalObjectiveID),
+		OperationalObjectiveID: &req.OperationalObjectiveID,
+		ProcessID:              &req.ProcessID,
+		AwardSubCriterionID:    req.AwardSubCriterionID,
+		PillarID:               req.PillarID,
+		DomainID:               req.DomainID,
+		OwnerType:              req.OwnerType,
+		OwnerDeptID:            req.OwnerDeptID,
+		OwnerOrgID:             req.OwnerOrgID,
+		OwningAgencyID:         req.OwningAgencyID,
+		Polarity:               req.Polarity,
+		DescriptionEn:          req.DescriptionEn,
+		DescriptionAr:          req.DescriptionAr,
+		Formula:                req.Formula,
+		Baseline:               req.Baseline,
+		UnitOfMeasure:          req.UnitOfMeasure,
+		ReportingFrequency:     req.ReportingFrequency,
+		Lifecycle:              req.Lifecycle,
+		DataSource:             req.DataSource,
+		SegmentationAxes:       req.SegmentationAxes,
+		RelatedUnits:           req.RelatedUnits,
+		Notes:                  req.Notes,
+		DocumentaFolderID:      req.DocumentaFolderID,
 	}
 	if item.Polarity == "" {
 		item.Polarity = models.KPIPolarityAscending
@@ -175,7 +190,8 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 	}
 
 	h.db.WithContext(c.UserContext()).
-		Preload("Goal").Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("Process").
+		Preload("Goal").Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+		Preload("OperationalObjective").Preload("Process").Preload("AwardSubCriterion.AwardCriterion").
 		First(item, item.ID)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
@@ -204,30 +220,32 @@ func (h *KpiDictionaryHandler) UpdateStrategic(c *fiber.Ctx) error {
 	}
 
 	updates := map[string]interface{}{
-		"code":                req.Code,
-		"name_en":             req.NameEn,
-		"name_ar":             req.NameAr,
-		"goal_id":             req.GoalID,
-		"process_id":          req.ProcessID,
-		"pillar_id":           req.PillarID,
-		"domain_id":           req.DomainID,
-		"owner_type":          req.OwnerType,
-		"owner_dept_id":       req.OwnerDeptID,
-		"owner_org_id":        req.OwnerOrgID,
-		"owning_agency_id":    req.OwningAgencyID,
-		"polarity":            req.Polarity,
-		"description_en":      req.DescriptionEn,
-		"description_ar":      req.DescriptionAr,
-		"formula":             req.Formula,
-		"baseline":            req.Baseline,
-		"unit_of_measure":     req.UnitOfMeasure,
-		"reporting_frequency": req.ReportingFrequency,
-		"lifecycle":           req.Lifecycle,
-		"data_source":         req.DataSource,
-		"segmentation_axes":   req.SegmentationAxes,
-		"related_units":       req.RelatedUnits,
-		"notes":               req.Notes,
-		"documenta_folder_id": req.DocumentaFolderID,
+		"code":                     req.Code,
+		"name_en":                  req.NameEn,
+		"name_ar":                  req.NameAr,
+		"goal_id":                  h.deriveGoalID(c.UserContext(), req.OperationalObjectiveID),
+		"operational_objective_id": req.OperationalObjectiveID,
+		"process_id":               req.ProcessID,
+		"award_sub_criterion_id":   req.AwardSubCriterionID,
+		"pillar_id":                req.PillarID,
+		"domain_id":                req.DomainID,
+		"owner_type":               req.OwnerType,
+		"owner_dept_id":            req.OwnerDeptID,
+		"owner_org_id":             req.OwnerOrgID,
+		"owning_agency_id":         req.OwningAgencyID,
+		"polarity":                 req.Polarity,
+		"description_en":           req.DescriptionEn,
+		"description_ar":           req.DescriptionAr,
+		"formula":                  req.Formula,
+		"baseline":                 req.Baseline,
+		"unit_of_measure":          req.UnitOfMeasure,
+		"reporting_frequency":      req.ReportingFrequency,
+		"lifecycle":                req.Lifecycle,
+		"data_source":              req.DataSource,
+		"segmentation_axes":        req.SegmentationAxes,
+		"related_units":            req.RelatedUnits,
+		"notes":                    req.Notes,
+		"documenta_folder_id":      req.DocumentaFolderID,
 	}
 	if req.OwnerType == "" {
 		updates["owner_type"] = models.KPIOwnerTypeInternal
@@ -243,7 +261,8 @@ func (h *KpiDictionaryHandler) UpdateStrategic(c *fiber.Ctx) error {
 
 	var item models.StrategicKPI
 	h.db.WithContext(c.UserContext()).
-		Preload("Goal").Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("Process").
+		Preload("Goal").Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+		Preload("OperationalObjective").Preload("Process").Preload("AwardSubCriterion.AwardCriterion").
 		First(&item, id)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
@@ -337,9 +356,12 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 		Code:                   req.Code,
 		NameEn:                 req.NameEn,
 		NameAr:                 req.NameAr,
-		GoalID:                 &req.GoalID,
+		GoalID:                 h.deriveGoalID(c.UserContext(), req.OperationalObjectiveID),
 		OperationalObjectiveID: req.OperationalObjectiveID,
 		ProcessID:              req.ProcessID,
+		PillarID:               req.PillarID,
+		AwardSubCriterionID:    req.AwardSubCriterionID,
+		RelatedUnits:           req.RelatedUnits,
 		DomainID:               req.DomainID,
 		OwnerType:              req.OwnerType,
 		OwnerDeptID:            req.OwnerDeptID,
@@ -379,6 +401,7 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 	h.db.WithContext(c.UserContext()).
 		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Domain").
 		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+		Preload("Pillar").Preload("AwardSubCriterion.AwardCriterion").
 		First(item, item.ID)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
@@ -427,9 +450,12 @@ func (h *KpiDictionaryHandler) UpdateOperational(c *fiber.Ctx) error {
 		"code":                     req.Code,
 		"name_en":                  req.NameEn,
 		"name_ar":                  req.NameAr,
-		"goal_id":                  req.GoalID,
+		"goal_id":                  h.deriveGoalID(c.UserContext(), req.OperationalObjectiveID),
 		"operational_objective_id": req.OperationalObjectiveID,
 		"process_id":               req.ProcessID,
+		"pillar_id":                req.PillarID,
+		"award_sub_criterion_id":   req.AwardSubCriterionID,
+		"related_units":            req.RelatedUnits,
 		"domain_id":                req.DomainID,
 		"owner_type":               req.OwnerType,
 		"owner_dept_id":            req.OwnerDeptID,
@@ -463,6 +489,7 @@ func (h *KpiDictionaryHandler) UpdateOperational(c *fiber.Ctx) error {
 	h.db.WithContext(c.UserContext()).
 		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Domain").
 		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+		Preload("Pillar").Preload("AwardSubCriterion.AwardCriterion").
 		First(&item, id)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
@@ -548,26 +575,31 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 	}
 
 	item := &models.AwardKPI{
-		Code:                req.Code,
-		NameEn:              req.NameEn,
-		NameAr:              req.NameAr,
-		AwardSubCriterionID: req.AwardSubCriterionID,
-		DomainID:            req.DomainID,
-		OwnerType:           req.OwnerType,
-		OwnerDeptID:         req.OwnerDeptID,
-		OwnerOrgID:          req.OwnerOrgID,
-		OwningAgencyID:      req.OwningAgencyID,
-		Polarity:            req.Polarity,
-		DescriptionEn:       req.DescriptionEn,
-		DescriptionAr:       req.DescriptionAr,
-		Formula:             req.Formula,
-		Baseline:            req.Baseline,
-		UnitOfMeasure:       req.UnitOfMeasure,
-		ReportingFrequency:  req.ReportingFrequency,
-		Lifecycle:           req.Lifecycle,
-		DataSource:          req.DataSource,
-		Notes:               req.Notes,
-		DocumentaFolderID:   req.DocumentaFolderID,
+		Code:                   req.Code,
+		NameEn:                 req.NameEn,
+		NameAr:                 req.NameAr,
+		GoalID:                 h.deriveGoalID(c.UserContext(), req.OperationalObjectiveID),
+		OperationalObjectiveID: &req.OperationalObjectiveID,
+		ProcessID:              &req.ProcessID,
+		AwardSubCriterionID:    req.AwardSubCriterionID,
+		PillarID:               req.PillarID,
+		RelatedUnits:           req.RelatedUnits,
+		DomainID:               req.DomainID,
+		OwnerType:              req.OwnerType,
+		OwnerDeptID:            req.OwnerDeptID,
+		OwnerOrgID:             req.OwnerOrgID,
+		OwningAgencyID:         req.OwningAgencyID,
+		Polarity:               req.Polarity,
+		DescriptionEn:          req.DescriptionEn,
+		DescriptionAr:          req.DescriptionAr,
+		Formula:                req.Formula,
+		Baseline:               req.Baseline,
+		UnitOfMeasure:          req.UnitOfMeasure,
+		ReportingFrequency:     req.ReportingFrequency,
+		Lifecycle:              req.Lifecycle,
+		DataSource:             req.DataSource,
+		Notes:                  req.Notes,
+		DocumentaFolderID:      req.DocumentaFolderID,
 	}
 	if item.Polarity == "" {
 		item.Polarity = models.KPIPolarityAscending
@@ -591,6 +623,7 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 	h.db.WithContext(c.UserContext()).
 		Preload("AwardSubCriterion.AwardCriterion").Preload("Domain").
 		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Pillar").
 		First(item, item.ID)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
@@ -637,6 +670,7 @@ func (h *KpiDictionaryHandler) GetAward(c *fiber.Ctx) error {
 	if err := h.db.WithContext(c.UserContext()).
 		Preload("AwardSubCriterion.AwardCriterion").Preload("Domain").
 		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Pillar").
 		First(&item, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
@@ -659,26 +693,31 @@ func (h *KpiDictionaryHandler) UpdateAward(c *fiber.Ctx) error {
 	}
 
 	updates := map[string]interface{}{
-		"code":                   req.Code,
-		"name_en":                req.NameEn,
-		"name_ar":                req.NameAr,
-		"award_sub_criterion_id": req.AwardSubCriterionID,
-		"domain_id":              req.DomainID,
-		"owner_type":             req.OwnerType,
-		"owner_dept_id":          req.OwnerDeptID,
-		"owner_org_id":           req.OwnerOrgID,
-		"owning_agency_id":       req.OwningAgencyID,
-		"polarity":               req.Polarity,
-		"description_en":         req.DescriptionEn,
-		"description_ar":         req.DescriptionAr,
-		"formula":                req.Formula,
-		"baseline":               req.Baseline,
-		"unit_of_measure":        req.UnitOfMeasure,
-		"reporting_frequency":    req.ReportingFrequency,
-		"lifecycle":              req.Lifecycle,
-		"data_source":            req.DataSource,
-		"notes":                  req.Notes,
-		"documenta_folder_id":    req.DocumentaFolderID,
+		"code":                     req.Code,
+		"name_en":                  req.NameEn,
+		"name_ar":                  req.NameAr,
+		"goal_id":                  h.deriveGoalID(c.UserContext(), req.OperationalObjectiveID),
+		"operational_objective_id": req.OperationalObjectiveID,
+		"process_id":               req.ProcessID,
+		"award_sub_criterion_id":   req.AwardSubCriterionID,
+		"pillar_id":                req.PillarID,
+		"related_units":            req.RelatedUnits,
+		"domain_id":                req.DomainID,
+		"owner_type":               req.OwnerType,
+		"owner_dept_id":            req.OwnerDeptID,
+		"owner_org_id":             req.OwnerOrgID,
+		"owning_agency_id":         req.OwningAgencyID,
+		"polarity":                 req.Polarity,
+		"description_en":           req.DescriptionEn,
+		"description_ar":           req.DescriptionAr,
+		"formula":                  req.Formula,
+		"baseline":                 req.Baseline,
+		"unit_of_measure":          req.UnitOfMeasure,
+		"reporting_frequency":      req.ReportingFrequency,
+		"lifecycle":                req.Lifecycle,
+		"data_source":              req.DataSource,
+		"notes":                    req.Notes,
+		"documenta_folder_id":      req.DocumentaFolderID,
 	}
 	if req.OwnerType == "" {
 		updates["owner_type"] = models.KPIOwnerTypeInternal
@@ -696,6 +735,7 @@ func (h *KpiDictionaryHandler) UpdateAward(c *fiber.Ctx) error {
 	h.db.WithContext(c.UserContext()).
 		Preload("AwardSubCriterion.AwardCriterion").Preload("Domain").
 		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Pillar").
 		First(&item, id)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{

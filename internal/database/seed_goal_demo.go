@@ -215,7 +215,7 @@ func seedGoalManagementDemoData(db *gorm.DB, ownerID uuid.UUID) {
 	// ── Award KPI (Award Criteria/Sub-Criteria lineage) ─────────────────
 	db.Create(&models.AwardKPI{
 		Code: "KPI-AW-001", NameEn: "Governance Maturity Score",
-		AwardSubCriterionID: subStrategicDirection.ID,
+		AwardSubCriterionID: &subStrategicDirection.ID,
 		Polarity:            models.KPIPolarityAscending, ActivationStatus: models.KPIStatusActive,
 		Baseline: 3, UnitOfMeasure: "score (1-5)", ReportingFrequency: models.KPIFrequencyAnnually,
 		DescriptionEn: "Self-assessed maturity of strategic governance practices.",
