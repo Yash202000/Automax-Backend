@@ -303,20 +303,19 @@ func (s *OTPService) VerifyOTP(ctx context.Context, phone string, sessionID stri
 	} else {
 
 		if data.FirstName != "" || data.MiddleName != "" || data.LastName != "" {
-			if existingUser, findErr := s.userRepo.FindByMobile(ctx, phone); findErr == nil && existingUser != nil {
-				mismatch := (data.FirstName != "" && !strings.EqualFold(strings.TrimSpace(existingUser.FirstName), strings.TrimSpace(data.FirstName))) ||
-					(data.MiddleName != "" && !strings.EqualFold(strings.TrimSpace(existingUser.MiddleName), strings.TrimSpace(data.MiddleName))) ||
-					(data.LastName != "" && !strings.EqualFold(strings.TrimSpace(existingUser.LastName), strings.TrimSpace(data.LastName)))
-				if mismatch {
-					// Update user complete name
-					existingUser.FirstName = data.FirstName
-					existingUser.MiddleName = data.MiddleName
-					existingUser.LastName = data.LastName
-					if updateErr := s.userRepo.Update(ctx, existingUser); updateErr != nil {
-						return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_update_user"), updateErr)
-					}
-					user = existingUser
+
+			mismatch := (data.FirstName != "" && !strings.EqualFold(strings.TrimSpace(user.FirstName), strings.TrimSpace(data.FirstName))) ||
+				(data.MiddleName != "" && !strings.EqualFold(strings.TrimSpace(user.MiddleName), strings.TrimSpace(data.MiddleName))) ||
+				(data.LastName != "" && !strings.EqualFold(strings.TrimSpace(user.LastName), strings.TrimSpace(data.LastName)))
+			if mismatch {
+				// Update user complete name
+				user.FirstName = data.FirstName
+				user.MiddleName = data.MiddleName
+				user.LastName = data.LastName
+				if updateErr := s.userRepo.Update(ctx, user); updateErr != nil {
+					return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_update_user"), updateErr)
 				}
+
 			}
 		}
 	}
