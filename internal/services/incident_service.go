@@ -714,7 +714,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		Source:         req.Source,
 	}
 
-	if strings.EqualFold(strings.ToLower(req.Source), strings.ToLower(constants.INCIDENT_SOURCE.WEB)) ||
+	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.WEB) ||
 		!strings.EqualFold(s.cfg.ClientCode, constants.CLIENT_CODE.EPM940) {
 		incident.ReporterName = req.ReporterName
 		incident.ReporterEmail = req.ReporterEmail
