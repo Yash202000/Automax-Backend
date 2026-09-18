@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/pkg/utils"
@@ -95,10 +97,91 @@ type EnhancedKpiDashboardData struct {
 	LowPerformers         []KpiPerformanceSummary `json:"low_performers"`
 }
 
+// taxonomyFilterSQL builds a WHERE-clause fragment (with its args, in order)
+// that restricts a kpi_performances query to rows whose underlying KPI
+// dictionary record matches the given Objective/Criteria/Sub-Criteria
+// filters. Returns ("", nil) when all three are empty — callers should only
+// apply the fragment when it's non-empty, exactly like the existing
+// kpi_type/year/quarter conditions in perfQuery().
+//
+// kpi_performances only carries kpi_code + kpi_type (no FK to the dictionary
+// tables), so each condition is wrapped per type and reaches back into
+// strategic_kpis/operational_kpis/award_kpis via kpi_code — all three tables
+// share the same taxonomy columns (operational_objective_id, process_id,
+// award_sub_criterion_id), so the inner condition is identical per branch.
+//
+// objectiveIDs, criteriaIDs, and subCriteriaIDs each support multiple
+// values, combined with OR within the same filter (any of several selected
+// ids matches) and AND across the three filters (when more than one is set,
+// a row must match at least one selected value in *each* of them — an
+// inconsistent combination, e.g. a Sub-Criteria that doesn't belong to any
+// selected Criteria, simply yields no rows, which is correct AND-semantics).
+//
+// Each objective id matches either a parent Objective (broad — every KPI
+// under any of its child Processes) or one specific child Process (exact),
+// using the same id list for both columns: the two id spaces never collide,
+// so a given id only ever matches its own branch.
+func taxonomyFilterSQL(objectiveIDs, criteriaIDs, subCriteriaIDs []string) (string, []interface{}) {
+	if len(objectiveIDs) == 0 && len(criteriaIDs) == 0 && len(subCriteriaIDs) == 0 {
+		return "", nil
+	}
+
+	var conditions []string
+	var innerArgs []interface{}
+	if len(objectiveIDs) > 0 {
+		conditions = append(conditions, "(operational_objective_id IN (?) OR process_id IN (?))")
+		innerArgs = append(innerArgs, objectiveIDs, objectiveIDs)
+	}
+	if len(criteriaIDs) > 0 {
+		conditions = append(conditions, "award_sub_criterion_id IN (SELECT id FROM award_sub_criterions WHERE award_criterion_id IN (?))")
+		innerArgs = append(innerArgs, criteriaIDs)
+	}
+	if len(subCriteriaIDs) > 0 {
+		conditions = append(conditions, "award_sub_criterion_id IN (?)")
+		innerArgs = append(innerArgs, subCriteriaIDs)
+	}
+	innerWhere := strings.Join(conditions, " AND ")
+
+	tables := []struct{ name, typeLiteral string }{
+		{"strategic_kpis", "strategic"},
+		{"operational_kpis", "operational"},
+		{"award_kpis", "award"},
+	}
+	var branches []string
+	var args []interface{}
+	for _, t := range tables {
+		branches = append(branches, fmt.Sprintf(
+			"(kpi_type = '%s' AND kpi_code IN (SELECT code FROM %s WHERE %s))",
+			t.typeLiteral, t.name, innerWhere,
+		))
+		args = append(args, innerArgs...)
+	}
+	return "(" + strings.Join(branches, " OR ") + ")", args
+}
+
+// splitFilterIDs parses a comma-separated multi-value filter query param
+// (e.g. "criteria_id=a,b,c") into a clean slice, dropping empty entries so a
+// trailing/stray comma or an empty param never turns into a spurious "" id.
+func splitFilterIDs(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var ids []string
+	for _, id := range strings.Split(raw, ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 	var data EnhancedKpiDashboardData
 
 	kpiType := c.Query("kpi_type") // strategic|operational|award — empty means all types
+	objectiveIDs := splitFilterIDs(c.Query("objective_id"))
+	criteriaIDs := splitFilterIDs(c.Query("criteria_id"))
+	subCriteriaIDs := splitFilterIDs(c.Query("sub_criteria_id"))
 	var year, quarter int
 	if v, err := strconv.Atoi(c.Query("year")); err == nil {
 		year = v
@@ -131,6 +214,9 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 		}
 		if quarter != 0 {
 			q = q.Where("quarter = ?", quarter)
+		}
+		if sql, args := taxonomyFilterSQL(objectiveIDs, criteriaIDs, subCriteriaIDs); sql != "" {
+			q = q.Where(sql, args...)
 		}
 		return q
 	}
