@@ -318,11 +318,13 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 	}
 
 	if filter.ReporterPhone != "" {
-		phones := reporterPhoneVariants(filter.ReporterPhone)
-		query = query.Where(
-			"reporter_phone IN ? OR reporter_phone LIKE ?",
-			phones, "%"+filter.ReporterPhone+"%",
-		)
+		phone := strings.TrimPrefix(strings.TrimSpace(filter.ReporterPhone), "+")
+		phone = strings.TrimLeft(phone, "0")
+		if phone != "" {
+			phonePattern := "%" + phone + "%"
+			query = query.Where("incidents.reporter_phone ILIKE ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone ILIKE ?)",
+				phonePattern, phonePattern)
+		}
 	}
 	// this to avoid EPM Citizen Portal security boundary
 	if filter.ReporterPhoneSearch != "" {
@@ -332,9 +334,14 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 		// "+" prefix or the leading space stays embedded in the pattern
 		// and silently matches nothing.
 		phone := strings.TrimPrefix(strings.TrimSpace(filter.ReporterPhoneSearch), "+")
-		phonePattern := "%" + phone + "%"
-		query = query.Where("reporter_phone ILIKE ?", phonePattern)
+		phone = strings.TrimLeft(phone, "0")
+		if phone != "" {
+			phonePattern := "%" + phone + "%"
+			query = query.Where("incidents.reporter_phone ILIKE ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone ILIKE ?)",
+				phonePattern, phonePattern)
+		}
 	}
+
 	if filter.CallerIdentity != "" {
 		query = query.Where("caller_identity = ?", filter.CallerIdentity)
 	}
@@ -1117,11 +1124,13 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 			q = q.Where("incidents.reporter_id IN ?", filter.ReporterID)
 		}
 		if filter.ReporterPhone != "" {
-			phones := reporterPhoneVariants(filter.ReporterPhone)
-			q = q.Where(
-				"incidents.reporter_phone IN ?",
-				phones,
-			)
+			phone := strings.TrimPrefix(strings.TrimSpace(filter.ReporterPhone), "+")
+			phone = strings.TrimLeft(phone, "0")
+			if phone != "" {
+				phonePattern := "%" + phone + "%"
+				q = q.Where("incidents.reporter_phone ILIKE ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone ILIKE ?)",
+					phonePattern, phonePattern)
+			}
 		}
 		if filter.ReporterPhoneSearch != "" {
 			// A literal "+" in a query string is decoded as a space by
@@ -1131,8 +1140,12 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 			// and silently matches nothing. Kept in sync with the single-ILIKE
 			// pattern in applyIncidentFilters.
 			phone := strings.TrimPrefix(strings.TrimSpace(filter.ReporterPhoneSearch), "+")
-			phonePattern := "%" + phone + "%"
-			q = q.Where("incidents.reporter_phone ILIKE ?", phonePattern)
+			phone = strings.TrimLeft(phone, "0")
+			if phone != "" {
+				phonePattern := "%" + phone + "%"
+				q = q.Where("incidents.reporter_phone ILIKE ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone ILIKE ?)",
+					phonePattern, phonePattern)
+			}
 		}
 		if filter.SLABreached != nil {
 			q = q.Where("incidents.sla_breached = ?", *filter.SLABreached)

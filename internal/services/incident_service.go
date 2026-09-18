@@ -697,9 +697,9 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		WorkflowID:     workflowID,
 		CurrentStateID: initialState.ID,
 		ReporterID:     &reporterID,
-		ReporterEmail:  req.ReporterEmail,
-		ReporterName:   req.ReporterName,
-		ReporterPhone:  req.ReporterPhone,
+		// ReporterEmail:  req.ReporterEmail,
+		// ReporterName:   req.ReporterName,
+		// ReporterPhone:  req.ReporterPhone,
 		CallerIdentity: req.CallerIdentity,
 		CustomFields:   customFieldsJSON,
 		GisLocation:    datatypes.JSON(req.GisLocation),
@@ -712,6 +712,13 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		PostalCode:     req.PostalCode,
 		RecordType:     recordType,
 		Source:         req.Source,
+	}
+
+	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.WEB) ||
+		!strings.EqualFold(s.cfg.ClientCode, constants.CLIENT_CODE.EPM940) {
+		incident.ReporterName = req.ReporterName
+		incident.ReporterEmail = req.ReporterEmail
+		incident.ReporterPhone = req.ReporterPhone
 	}
 
 	// Parse optional UUIDs

@@ -279,25 +279,37 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 		// unauthenticated channels, generating email as "<sourceSlug>_<phone>_<epoch>@domain"
 		// and username as "citizen_<phone>_<epoch>". Match those exact prefixes so these
 		// auto-registered accounts stay hidden unless with_ivr=true is requested.
-		base = base.Where("LOWER(users.email) NOT LIKE ?", constants.INCIDENT_SOURCE.IVR+"\\_%")
-		base = base.Where("LOWER(users.email) NOT LIKE ?", constants.INCIDENT_SOURCE.MOBILE+"\\_%")
-		base = base.Where("LOWER(users.email) NOT LIKE ?", constants.INCIDENT_SOURCE.WHATSAPP+"\\_%")
+		base = base.Where("LOWER(users.email) NOT LIKE ?", strings.ToLower(constants.INCIDENT_SOURCE.IVR)+"\\_%")
+		base = base.Where("LOWER(users.email) NOT LIKE ?", strings.ToLower(constants.INCIDENT_SOURCE.MOBILE)+"\\_%")
+		base = base.Where("LOWER(users.email) NOT LIKE ?", strings.ToLower(constants.INCIDENT_SOURCE.WHATSAPP)+"\\_%")
 		base = base.Where("LOWER(users.email) NOT LIKE ?", "%chatbot\\_%")
 		base = base.Where("LOWER(users.email) NOT LIKE ?", "otp\\_%")
 		base = base.Where("LOWER(users.username) NOT LIKE ?", strings.ToLower(constants.ROLES.CITIZEN)+"\\_%")
 	}
 
-	if search != "" {
+	if strings.TrimSpace(search) != "" {
+		search = strings.TrimSpace(search)
 		like := "%" + strings.ToLower(search) + "%"
-		phoneLike := "%" + strings.TrimPrefix(search, "+") + "%"
-		base = base.Where(
-			"LOWER(users.username) LIKE ? OR LOWER(users.email) LIKE ? OR LOWER(users.first_name) LIKE ? OR LOWER(users.last_name) LIKE ? OR users.phone LIKE ? OR users.id IN (SELECT user_id FROM extension_assignments WHERE extension LIKE ?)",
-			like, like, like, like, phoneLike, phoneLike,
-		)
+		phoneLike := strings.TrimLeft(strings.TrimPrefix(search, "+"), "0")
+		if phoneLike != "" {
+			base = base.Where(
+				"LOWER(users.username) LIKE ? OR LOWER(users.email) LIKE ? OR LOWER(users.first_name) LIKE ? OR LOWER(users.last_name) LIKE ? OR users.phone LIKE ?",
+				like, like, like, like, "%"+phoneLike+"%",
+			)
+		} else {
+			base = base.Where(
+				"LOWER(users.username) LIKE ? OR LOWER(users.email) LIKE ? OR LOWER(users.first_name) LIKE ? OR LOWER(users.last_name) LIKE ?",
+				like, like, like, like,
+			)
+		}
 	}
 
-	if phone != "" {
-		base = base.Where("users.phone LIKE ?", "%"+strings.TrimPrefix(phone, "+")+"%")
+	if strings.TrimSpace(phone) != "" {
+		phone = strings.TrimPrefix(strings.TrimSpace(phone), "+")
+		phone = strings.TrimLeft(phone, "0")
+		if phone != "" {
+			base = base.Where("users.phone ILIKE ?", "%"+phone+"%")
+		}
 	}
 	if extension != "" {
 		base = base.Where("users.id IN (SELECT user_id FROM extension_assignments WHERE extension LIKE ?)", "%"+extension+"%")
