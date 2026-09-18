@@ -287,16 +287,24 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 		base = base.Where("LOWER(users.username) NOT LIKE ?", strings.ToLower(constants.ROLES.CITIZEN)+"\\_%")
 	}
 
-	if search != "" {
+	if strings.TrimSpace(search) != "" {
+		search = strings.TrimSpace(search)
 		like := "%" + strings.ToLower(search) + "%"
-		phoneLike := "%" + strings.TrimLeft(strings.TrimPrefix(strings.TrimSpace(search), "+"), "0") + "%"
-		base = base.Where(
-			"LOWER(users.username) LIKE ? OR LOWER(users.email) LIKE ? OR LOWER(users.first_name) LIKE ? OR LOWER(users.last_name) LIKE ? OR users.phone LIKE ? OR users.id IN (SELECT user_id FROM extension_assignments WHERE extension LIKE ?)",
-			like, like, like, like, phoneLike, phoneLike,
-		)
+		phoneLike := strings.TrimLeft(strings.TrimPrefix(search, "+"), "0")
+		if phoneLike != "" {
+			base = base.Where(
+				"LOWER(users.username) LIKE ? OR LOWER(users.email) LIKE ? OR LOWER(users.first_name) LIKE ? OR LOWER(users.last_name) LIKE ? OR users.phone LIKE ?",
+				like, like, like, like, "%"+phoneLike+"%",
+			)
+		} else {
+			base = base.Where(
+				"LOWER(users.username) LIKE ? OR LOWER(users.email) LIKE ? OR LOWER(users.first_name) LIKE ? OR LOWER(users.last_name) LIKE ?",
+				like, like, like, like,
+			)
+		}
 	}
 
-	if phone != "" {
+	if strings.TrimSpace(phone) != "" {
 		phone = strings.TrimPrefix(strings.TrimSpace(phone), "+")
 		phone = strings.TrimLeft(phone, "0")
 		if phone != "" {
