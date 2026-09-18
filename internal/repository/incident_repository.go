@@ -320,9 +320,11 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 	if filter.ReporterPhone != "" {
 		phone := strings.TrimPrefix(strings.TrimSpace(filter.ReporterPhone), "+")
 		phone = strings.TrimLeft(phone, "0")
-		phonePattern := "%" + phone + "%"
-		query = query.Where("incidents.reporter_phone ILIKE ? OR reporter_id IN (SELECT id FROM users WHERE phone ILIKE ?)",
-			phonePattern, phonePattern)
+		if phone != "" {
+			phonePattern := "%" + phone + "%"
+			query = query.Where("incidents.reporter_phone ILIKE ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone ILIKE ?)",
+				phonePattern, phonePattern)
+		}
 	}
 	// this to avoid EPM Citizen Portal security boundary
 	if filter.ReporterPhoneSearch != "" {
@@ -333,10 +335,11 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 		// and silently matches nothing.
 		phone := strings.TrimPrefix(strings.TrimSpace(filter.ReporterPhoneSearch), "+")
 		phone = strings.TrimLeft(phone, "0")
-		phonePattern := "%" + phone + "%"
-		query = query.Where("incidents.reporter_phone ILIKE ? OR reporter_id IN (SELECT id FROM users WHERE phone ILIKE ?)",
-			phonePattern, phonePattern)
-
+		if phone != "" {
+			phonePattern := "%" + phone + "%"
+			query = query.Where("incidents.reporter_phone ILIKE ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone ILIKE ?)",
+				phonePattern, phonePattern)
+		}
 	}
 
 	if filter.CallerIdentity != "" {
@@ -1121,18 +1124,13 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 			q = q.Where("incidents.reporter_id IN ?", filter.ReporterID)
 		}
 		if filter.ReporterPhone != "" {
-			// In future this comment will be removed
-			// phones := reporterPhoneVariants(filter.ReporterPhone)
-			// q = q.Where(
-			// 	"incidents.reporter_phone IN ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone IN ?)",
-			// 	phones, phones,
-			// )
 			phone := strings.TrimPrefix(strings.TrimSpace(filter.ReporterPhone), "+")
 			phone = strings.TrimLeft(phone, "0")
-			phonePattern := "%" + phone + "%"
-			q = q.Where("incidents.reporter_phone ILIKE ? OR reporter_id IN (SELECT id FROM users WHERE phone ILIKE ?)",
-				phonePattern, phonePattern)
-
+			if phone != "" {
+				phonePattern := "%" + phone + "%"
+				q = q.Where("incidents.reporter_phone ILIKE ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone ILIKE ?)",
+					phonePattern, phonePattern)
+			}
 		}
 		if filter.ReporterPhoneSearch != "" {
 			// A literal "+" in a query string is decoded as a space by
@@ -1143,10 +1141,11 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 			// pattern in applyIncidentFilters.
 			phone := strings.TrimPrefix(strings.TrimSpace(filter.ReporterPhoneSearch), "+")
 			phone = strings.TrimLeft(phone, "0")
-			phonePattern := "%" + phone + "%"
-			q = q.Where("incidents.reporter_phone ILIKE ? OR reporter_id IN (SELECT id FROM users WHERE phone ILIKE ?)",
-				phonePattern, phonePattern)
-
+			if phone != "" {
+				phonePattern := "%" + phone + "%"
+				q = q.Where("incidents.reporter_phone ILIKE ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone ILIKE ?)",
+					phonePattern, phonePattern)
+			}
 		}
 		if filter.SLABreached != nil {
 			q = q.Where("incidents.sla_breached = ?", *filter.SLABreached)
