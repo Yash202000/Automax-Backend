@@ -299,7 +299,9 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 	if phone != "" {
 		phone = strings.TrimPrefix(strings.TrimSpace(phone), "+")
 		phone = strings.TrimLeft(phone, "0")
-		base = base.Where("users.phone ILIKE ?", "%"+phone+"%")
+		if phone != "" {
+			base = base.Where("users.phone ILIKE ?", "%"+phone+"%")
+		}
 	}
 	if extension != "" {
 		base = base.Where("users.id IN (SELECT user_id FROM extension_assignments WHERE extension LIKE ?)", "%"+extension+"%")
