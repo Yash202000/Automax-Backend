@@ -205,6 +205,8 @@ var AvailableVariablesByActionType = map[string][]string{
 		"incident_url", "sla_page_url", "sla_page_link",
 		// Citizen-facing feedback link
 		"sms_link", "feedback_url", "feedback_link",
+		//report PDF link (Normal Closure)
+		"report_url", "report_link",
 	},
 	// ── Incident converted to request ────────────────────────────────────────
 	TemplateActionConvertToRequest: {
