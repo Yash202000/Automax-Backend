@@ -43,12 +43,13 @@ func (p *Permission) BeforeCreate(tx *gorm.DB) error {
 type Role struct {
 	ID                  uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
 	Name                string         `gorm:"not null;size:100;uniqueIndex" json:"name"`
+	NameAr              string         `gorm:"size:100" json:"name_ar"`
 	Code                string         `gorm:"not null;size:50;uniqueIndex" json:"code"`
 	Description         string         `gorm:"size:500" json:"description"`
 	IsSystem            bool           `gorm:"default:false" json:"is_system"` // System roles cannot be deleted
 	IsActive            bool           `gorm:"default:true" json:"is_active"`
 	IsDepartmentManager bool           `gorm:"default:false" json:"is_department_manager"`
-	BypassLoginTotp bool           `gorm:"default:false" json:"bypass_login_totp"`
+	BypassLoginTotp     bool           `gorm:"default:false" json:"bypass_login_totp"`
 	Permissions         []Permission   `gorm:"many2many:role_permissions;" json:"permissions,omitempty"`
 	CreatedAt           time.Time      `json:"created_at"`
 	UpdatedAt           time.Time      `json:"updated_at"`
@@ -118,32 +119,35 @@ func ToPermissionResponse(p *Permission) PermissionResponse {
 
 // RoleCreateRequest for creating a new role
 type RoleCreateRequest struct {
-	Name          string      `json:"name" validate:"required,notblank,name,min=1,max=100"`
-	Code          string      `json:"code" validate:"omitempty,min=1,max=50"`
-	Description   string      `json:"description" validate:"max=500"`
-	PermissionIDs []uuid.UUID `json:"permission_ids"`
-	BypassLoginTotp bool `json:"bypass_login_totp"`
+	Name            string      `json:"name" validate:"required,notblank,name,min=1,max=100"`
+	NameAr          string      `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
+	Code            string      `json:"code" validate:"omitempty,min=1,max=50"`
+	Description     string      `json:"description" validate:"max=500"`
+	PermissionIDs   []uuid.UUID `json:"permission_ids"`
+	BypassLoginTotp bool        `json:"bypass_login_totp"`
 }
 
 // RoleUpdateRequest for updating a role
 type RoleUpdateRequest struct {
-	Name          string      `json:"name" validate:"omitempty,notblank,name,min=1,max=100"`
-	Description   string      `json:"description" validate:"max=500"`
-	PermissionIDs []uuid.UUID `json:"permission_ids"`
-	IsActive      *bool       `json:"is_active"`
-	BypassLoginTotp *bool `json:"bypass_login_totp"`
+	Name            string      `json:"name" validate:"omitempty,notblank,name,min=1,max=100"`
+	NameAr          string      `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
+	Description     string      `json:"description" validate:"max=500"`
+	PermissionIDs   []uuid.UUID `json:"permission_ids"`
+	IsActive        *bool       `json:"is_active"`
+	BypassLoginTotp *bool       `json:"bypass_login_totp"`
 }
 
 // RoleResponse for API responses
 type RoleResponse struct {
 	ID                  uuid.UUID            `json:"id"`
 	Name                string               `json:"name"`
+	NameAr              string               `json:"name_ar"`
 	Code                string               `json:"code"`
 	Description         string               `json:"description"`
 	IsSystem            bool                 `json:"is_system"`
 	IsActive            bool                 `json:"is_active"`
 	IsDepartmentManager bool                 `json:"is_department_manager"`
-	BypassLoginTotp bool `json:"bypass_login_totp"`
+	BypassLoginTotp     bool                 `json:"bypass_login_totp"`
 	Permissions         []PermissionResponse `json:"permissions,omitempty"`
 	CreatedAt           time.Time            `json:"created_at"`
 }
@@ -152,12 +156,13 @@ func ToRoleResponse(r *Role) RoleResponse {
 	resp := RoleResponse{
 		ID:                  r.ID,
 		Name:                r.Name,
+		NameAr:              r.NameAr,
 		Code:                r.Code,
 		Description:         r.Description,
 		IsSystem:            r.IsSystem,
 		IsActive:            r.IsActive,
 		IsDepartmentManager: r.IsDepartmentManager,
-		BypassLoginTotp: r.BypassLoginTotp,
+		BypassLoginTotp:     r.BypassLoginTotp,
 		CreatedAt:           r.CreatedAt,
 	}
 

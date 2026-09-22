@@ -70,6 +70,7 @@ func (h *RoleHandler) CreateRole(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 	req.Name = strings.TrimSpace(req.Name)
+	req.NameAr = strings.TrimSpace(req.NameAr)
 	req.Code = strings.TrimSpace(req.Code)
 
 	// EPM940 auto-generates the Role Code (role-######) and ignores any supplied
@@ -101,6 +102,7 @@ func (h *RoleHandler) CreateRole(c *fiber.Ctx) error {
 
 	role := &models.Role{
 		Name:            req.Name,
+		NameAr:          req.NameAr,
 		Description:     req.Description,
 		IsActive:        true,
 		IsSystem:        false,
@@ -161,6 +163,7 @@ func (h *RoleHandler) UpdateRole(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 	req.Name = strings.TrimSpace(req.Name)
+	req.NameAr = strings.TrimSpace(req.NameAr)
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
@@ -178,6 +181,9 @@ func (h *RoleHandler) UpdateRole(c *fiber.Ctx) error {
 			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "role_already_exists"))
 		}
 		role.Name = req.Name
+	}
+	if req.NameAr != "" {
+		role.NameAr = req.NameAr
 	}
 	if req.Description != "" {
 		role.Description = req.Description
@@ -473,6 +479,7 @@ func (h *RoleHandler) Export(c *fiber.Ctx) error {
 	type ExportRole struct {
 		ID            uuid.UUID   `json:"id"`
 		Name          string      `json:"name"`
+		NameAr        string      `json:"name_ar"`
 		Code          string      `json:"code"`
 		Description   string      `json:"description"`
 		IsSystem      bool        `json:"is_system"`
@@ -490,6 +497,7 @@ func (h *RoleHandler) Export(c *fiber.Ctx) error {
 		exportData[i] = ExportRole{
 			ID:            role.ID,
 			Name:          role.Name,
+			NameAr:        role.NameAr,
 			Code:          role.Code,
 			Description:   role.Description,
 			IsSystem:      role.IsSystem,
@@ -524,6 +532,7 @@ func (h *RoleHandler) Import(c *fiber.Ctx) error {
 	type ImportRole struct {
 		ID            uuid.UUID   `json:"id"`
 		Name          string      `json:"name"`
+		NameAr        string      `json:"name_ar"`
 		Code          string      `json:"code"`
 		Description   string      `json:"description"`
 		IsSystem      bool        `json:"is_system"`
@@ -564,6 +573,7 @@ func (h *RoleHandler) Import(c *fiber.Ctx) error {
 		// Create new role
 		role := &models.Role{
 			Name:        name,
+			NameAr:      strings.TrimSpace(data.NameAr),
 			Description: data.Description,
 			IsActive:    data.IsActive,
 			IsSystem:    false, // Always set imported roles as non-system
