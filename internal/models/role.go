@@ -46,6 +46,7 @@ type Role struct {
 	NameAr              string         `gorm:"size:100" json:"name_ar"`
 	Code                string         `gorm:"not null;size:50;uniqueIndex" json:"code"`
 	Description         string         `gorm:"size:500" json:"description"`
+	DescriptionAr       string         `gorm:"size:500" json:"description_ar"`
 	IsSystem            bool           `gorm:"default:false" json:"is_system"` // System roles cannot be deleted
 	IsActive            bool           `gorm:"default:true" json:"is_active"`
 	IsDepartmentManager bool           `gorm:"default:false" json:"is_department_manager"`
@@ -123,6 +124,7 @@ type RoleCreateRequest struct {
 	NameAr          string      `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
 	Code            string      `json:"code" validate:"omitempty,min=1,max=50"`
 	Description     string      `json:"description" validate:"max=500"`
+	DescriptionAr   string      `json:"description_ar" validate:"max=500"`
 	PermissionIDs   []uuid.UUID `json:"permission_ids"`
 	BypassLoginTotp bool        `json:"bypass_login_totp"`
 }
@@ -132,6 +134,7 @@ type RoleUpdateRequest struct {
 	Name            string      `json:"name" validate:"omitempty,notblank,name,min=1,max=100"`
 	NameAr          string      `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
 	Description     string      `json:"description" validate:"max=500"`
+	DescriptionAr   string      `json:"description_ar" validate:"max=500"`
 	PermissionIDs   []uuid.UUID `json:"permission_ids"`
 	IsActive        *bool       `json:"is_active"`
 	BypassLoginTotp *bool       `json:"bypass_login_totp"`
@@ -144,6 +147,7 @@ type RoleResponse struct {
 	NameAr              string               `json:"name_ar"`
 	Code                string               `json:"code"`
 	Description         string               `json:"description"`
+	DescriptionAr       string               `json:"description_ar"`
 	IsSystem            bool                 `json:"is_system"`
 	IsActive            bool                 `json:"is_active"`
 	IsDepartmentManager bool                 `json:"is_department_manager"`
@@ -159,6 +163,7 @@ func ToRoleResponse(r *Role) RoleResponse {
 		NameAr:              r.NameAr,
 		Code:                r.Code,
 		Description:         r.Description,
+		DescriptionAr:       r.DescriptionAr,
 		IsSystem:            r.IsSystem,
 		IsActive:            r.IsActive,
 		IsDepartmentManager: r.IsDepartmentManager,

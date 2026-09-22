@@ -72,6 +72,7 @@ func (h *RoleHandler) CreateRole(c *fiber.Ctx) error {
 	req.Name = strings.TrimSpace(req.Name)
 	req.NameAr = strings.TrimSpace(req.NameAr)
 	req.Code = strings.TrimSpace(req.Code)
+	req.DescriptionAr = strings.TrimSpace(req.DescriptionAr)
 
 	// EPM940 auto-generates the Role Code (role-######) and ignores any supplied
 	// value; other clients must supply the code in the payload.
@@ -104,6 +105,7 @@ func (h *RoleHandler) CreateRole(c *fiber.Ctx) error {
 		Name:            req.Name,
 		NameAr:          req.NameAr,
 		Description:     req.Description,
+		DescriptionAr:   req.DescriptionAr,
 		IsActive:        true,
 		IsSystem:        false,
 		BypassLoginTotp: req.BypassLoginTotp,
@@ -187,6 +189,9 @@ func (h *RoleHandler) UpdateRole(c *fiber.Ctx) error {
 	}
 	if req.Description != "" {
 		role.Description = req.Description
+	}
+	if req.DescriptionAr != "" {
+		role.DescriptionAr = req.DescriptionAr
 	}
 	if req.IsActive != nil {
 		role.IsActive = *req.IsActive
@@ -482,6 +487,7 @@ func (h *RoleHandler) Export(c *fiber.Ctx) error {
 		NameAr        string      `json:"name_ar"`
 		Code          string      `json:"code"`
 		Description   string      `json:"description"`
+		DescriptionAr string      `json:"description_ar"`
 		IsSystem      bool        `json:"is_system"`
 		IsActive      bool        `json:"is_active"`
 		PermissionIDs []uuid.UUID `json:"permission_ids"`
@@ -500,6 +506,7 @@ func (h *RoleHandler) Export(c *fiber.Ctx) error {
 			NameAr:        role.NameAr,
 			Code:          role.Code,
 			Description:   role.Description,
+			DescriptionAr: role.DescriptionAr,
 			IsSystem:      role.IsSystem,
 			IsActive:      role.IsActive,
 			PermissionIDs: permissionIDs,
@@ -535,6 +542,7 @@ func (h *RoleHandler) Import(c *fiber.Ctx) error {
 		NameAr        string      `json:"name_ar"`
 		Code          string      `json:"code"`
 		Description   string      `json:"description"`
+		DescriptionAr string      `json:"description_ar"`
 		IsSystem      bool        `json:"is_system"`
 		IsActive      bool        `json:"is_active"`
 		PermissionIDs []uuid.UUID `json:"permission_ids"`
@@ -572,11 +580,12 @@ func (h *RoleHandler) Import(c *fiber.Ctx) error {
 
 		// Create new role
 		role := &models.Role{
-			Name:        name,
-			NameAr:      strings.TrimSpace(data.NameAr),
-			Description: data.Description,
-			IsActive:    data.IsActive,
-			IsSystem:    false, // Always set imported roles as non-system
+			Name:          name,
+			NameAr:        strings.TrimSpace(data.NameAr),
+			Description:   data.Description,
+			DescriptionAr: strings.TrimSpace(data.DescriptionAr),
+			IsActive:      data.IsActive,
+			IsSystem:      false, // Always set imported roles as non-system
 		}
 		if !isEPM940 {
 			role.Code = strings.TrimSpace(data.Code)
