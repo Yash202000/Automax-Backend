@@ -478,8 +478,8 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 func (r *incidentRepository) ListMapMarkers(ctx context.Context, filter *models.IncidentFilter, maxMarkers int) ([]models.IncidentMapMarker, int64, error) {
 	var total int64
 
-	base := r.applyIncidentFilters(ctx, r.db.WithContext(ctx).Model(&models.Incident{}), filter).
-		Where("incidents.latitude IS NOT NULL AND incidents.longitude IS NOT NULL")
+	base := r.applyIncidentFilters(ctx, r.db.WithContext(ctx).Model(&models.Incident{}), filter)
+	// Where("incidents.latitude IS NOT NULL AND incidents.longitude IS NOT NULL")
 
 	if err := base.Count(&total).Error; err != nil {
 		return nil, 0, err
