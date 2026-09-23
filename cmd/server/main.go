@@ -1252,7 +1252,7 @@ func main() {
 	kpi.Put("/enablers/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateEnabler)
 	kpi.Delete("/enablers/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteEnabler)
 
-	kpi.Get("/operational-objectives", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListOperationalObjectives)
+	kpi.Get("/operational-objectives", authMiddleware.RequirePermission("goals:manage", "kpi:view"), kpiMasterDataHandler.ListOperationalObjectives)
 	kpi.Post("/operational-objectives", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateOperationalObjective)
 	kpi.Put("/operational-objectives/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateOperationalObjective)
 	kpi.Delete("/operational-objectives/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteOperationalObjective)
@@ -1260,7 +1260,7 @@ func main() {
 	kpi.Get("/operational-objectives/:id/collaborators", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListCollaboratorsForOperationalObjective)
 	kpi.Get("/operational-objectives/:id/evidence", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListEvidenceForOperationalObjective)
 
-	kpi.Get("/processes", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListProcesses)
+	kpi.Get("/processes", authMiddleware.RequirePermission("goals:manage", "kpi:view"), kpiMasterDataHandler.ListProcesses)
 	kpi.Post("/processes", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateProcess)
 	kpi.Put("/processes/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateProcess)
 	kpi.Delete("/processes/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteProcess)
@@ -1278,7 +1278,7 @@ func main() {
 	kpi.Put("/domains/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateDomain)
 	kpi.Delete("/domains/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteDomain)
 
-	kpi.Get("/award-criteria", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListAwardCriteria)
+	kpi.Get("/award-criteria", authMiddleware.RequirePermission("goals:manage", "kpi:view"), kpiMasterDataHandler.ListAwardCriteria)
 	kpi.Post("/award-criteria", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateAwardCriterion)
 	kpi.Put("/award-criteria/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateAwardCriterion)
 	kpi.Delete("/award-criteria/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteAwardCriterion)
@@ -1288,7 +1288,7 @@ func main() {
 
 	kpi.Get("/award-criteria/:criterionId/sub-criteria", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListAwardSubCriteria)
 	kpi.Post("/award-criteria/:criterionId/sub-criteria", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateAwardSubCriterion)
-	kpi.Get("/award-sub-criteria", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListAwardSubCriteria)
+	kpi.Get("/award-sub-criteria", authMiddleware.RequirePermission("goals:manage", "kpi:view"), kpiMasterDataHandler.ListAwardSubCriteria)
 	kpi.Put("/award-sub-criteria/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateAwardSubCriterion)
 	kpi.Delete("/award-sub-criteria/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteAwardSubCriterion)
 	kpi.Get("/award-sub-criteria/:id/kpis", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListKpisForAwardSubCriterion)
