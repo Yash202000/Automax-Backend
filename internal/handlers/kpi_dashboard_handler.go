@@ -129,8 +129,15 @@ func taxonomyFilterSQL(objectiveIDs, criteriaIDs, subCriteriaIDs []string) (stri
 	var conditions []string
 	var innerArgs []interface{}
 	if len(objectiveIDs) > 0 {
-		conditions = append(conditions, "(operational_objective_id IN (?) OR process_id IN (?))")
-		innerArgs = append(innerArgs, objectiveIDs, objectiveIDs)
+		// Matches a row tagged directly with a selected parent Objective, one
+		// tagged with a selected child Process, OR one tagged with ANY
+		// Process whose own parent is a selected Objective — this last leg
+		// makes a parent selection broadly match every KPI under any of its
+		// children even when a row's operational_objective_id wasn't kept in
+		// sync with its process_id (e.g. older data seeded before that
+		// derivation existed).
+		conditions = append(conditions, "(operational_objective_id IN (?) OR process_id IN (?) OR process_id IN (SELECT id FROM processes WHERE operational_objective_id IN (?)))")
+		innerArgs = append(innerArgs, objectiveIDs, objectiveIDs, objectiveIDs)
 	}
 	if len(criteriaIDs) > 0 {
 		conditions = append(conditions, "award_sub_criterion_id IN (SELECT id FROM award_sub_criterions WHERE award_criterion_id IN (?))")
@@ -157,6 +164,37 @@ func taxonomyFilterSQL(objectiveIDs, criteriaIDs, subCriteriaIDs []string) (stri
 		args = append(args, innerArgs...)
 	}
 	return "(" + strings.Join(branches, " OR ") + ")", args
+}
+
+// dictionaryTaxonomyWhere builds the same Objective/Criteria/Sub-Criteria
+// condition as taxonomyFilterSQL's inner per-table clause, but for direct
+// use against a KPI dictionary table (strategic_kpis/operational_kpis/
+// award_kpis) — these carry operational_objective_id/process_id/
+// award_sub_criterion_id columns directly, so no kpi_code/kpi_type
+// reach-back is needed. Returns ("", nil) when all three are empty.
+func dictionaryTaxonomyWhere(objectiveIDs, criteriaIDs, subCriteriaIDs []string) (string, []interface{}) {
+	if len(objectiveIDs) == 0 && len(criteriaIDs) == 0 && len(subCriteriaIDs) == 0 {
+		return "", nil
+	}
+	var conditions []string
+	var args []interface{}
+	if len(objectiveIDs) > 0 {
+		// See the matching comment in taxonomyFilterSQL — the third leg makes
+		// a parent Objective selection broadly match every KPI under any of
+		// its children even when a row's own operational_objective_id wasn't
+		// kept in sync with its process_id.
+		conditions = append(conditions, "(operational_objective_id IN (?) OR process_id IN (?) OR process_id IN (SELECT id FROM processes WHERE operational_objective_id IN (?)))")
+		args = append(args, objectiveIDs, objectiveIDs, objectiveIDs)
+	}
+	if len(criteriaIDs) > 0 {
+		conditions = append(conditions, "award_sub_criterion_id IN (SELECT id FROM award_sub_criterions WHERE award_criterion_id IN (?))")
+		args = append(args, criteriaIDs)
+	}
+	if len(subCriteriaIDs) > 0 {
+		conditions = append(conditions, "award_sub_criterion_id IN (?)")
+		args = append(args, subCriteriaIDs)
+	}
+	return strings.Join(conditions, " AND "), args
 }
 
 // splitFilterIDs parses a comma-separated multi-value filter query param
@@ -190,22 +228,75 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 		quarter = v
 	}
 
-	h.db.WithContext(c.UserContext()).Model(&models.StrategicKPI{}).Count(&data.TotalStrategic)
-	h.db.WithContext(c.UserContext()).Model(&models.OperationalKPI{}).Count(&data.TotalOperational)
-	h.db.WithContext(c.UserContext()).Model(&models.AwardKPI{}).Count(&data.TotalAward)
-	h.db.WithContext(c.UserContext()).Model(&models.KpiPerformance{}).Where("status = ?", "draft").Count(&data.PendingReviews)
+	// dictQuery scopes a KPI dictionary table (Strategic/Operational/Award)
+	// query to the selected Objective/Criteria/Sub-Criteria filters, using
+	// its own direct taxonomy columns.
+	dictQuery := func(model interface{}) *gorm.DB {
+		q := h.db.WithContext(c.UserContext()).Model(model)
+		if sql, args := dictionaryTaxonomyWhere(objectiveIDs, criteriaIDs, subCriteriaIDs); sql != "" {
+			q = q.Where(sql, args...)
+		}
+		return q
+	}
 
-	h.db.WithContext(c.UserContext()).Model(&models.StrategicKPI{}).
-		Select("activation_status as status, count(*) as count").
-		Group("activation_status").Scan(&data.KpisByStatus)
+	// The Total Strategic/Operational/Award cards, and the Strategic-only
+	// status/goal breakdowns below, are each scoped to one KPI type — when
+	// kpiType filters to a different type, that section has nothing in
+	// scope and is left at its zero value rather than showing unfiltered
+	// counts.
+	if kpiType == "" || kpiType == "strategic" {
+		dictQuery(&models.StrategicKPI{}).Count(&data.TotalStrategic)
+	}
+	if kpiType == "" || kpiType == "operational" {
+		dictQuery(&models.OperationalKPI{}).Count(&data.TotalOperational)
+	}
+	if kpiType == "" || kpiType == "award" {
+		dictQuery(&models.AwardKPI{}).Count(&data.TotalAward)
+	}
 
-	h.db.WithContext(c.UserContext()).Model(&models.StrategicKPI{}).
-		Select("g.title as goal, count(*) as count").
-		Joins("left join goals g on g.id = strategic_kpis.goal_id").
-		Group("g.title").Scan(&data.KpisByGoal)
+	if kpiType == "" || kpiType == "strategic" {
+		dictQuery(&models.StrategicKPI{}).
+			Select("activation_status as status, count(*) as count").
+			Group("activation_status").Scan(&data.KpisByStatus)
 
-	perfQuery := func() *gorm.DB {
-		q := h.db.WithContext(c.UserContext()).Model(&models.KpiPerformance{}).Where("status = ?", "published")
+		dictQuery(&models.StrategicKPI{}).
+			Select("g.title as goal, count(*) as count").
+			Joins("left join goals g on g.id = strategic_kpis.goal_id").
+			Group("g.title").Scan(&data.KpisByGoal)
+	}
+
+	// perfQuery/statusQuery scope kpi_performances (and, via the same
+	// kpi_type+kpi_code columns, KpiBenchmark/KpiSegmentation) to the
+	// selected Type/Year/Quarter/Objective/Criteria/Sub-Criteria filters.
+	statusQuery := func(status string) *gorm.DB {
+		q := h.db.WithContext(c.UserContext()).Model(&models.KpiPerformance{}).Where("status = ?", status)
+		if kpiType != "" {
+			q = q.Where("kpi_type = ?", kpiType)
+		}
+		if year != 0 {
+			q = q.Where("year = ?", year)
+		}
+		if quarter != 0 {
+			q = q.Where("quarter = ?", quarter)
+		}
+		if sql, args := taxonomyFilterSQL(objectiveIDs, criteriaIDs, subCriteriaIDs); sql != "" {
+			q = q.Where(sql, args...)
+		}
+		return q
+	}
+	perfQuery := func() *gorm.DB { return statusQuery("published") }
+
+	statusQuery("draft").Count(&data.PendingReviews)
+
+	perfQuery().
+		Select("year, quarter, AVG(achievement_pct) as avg_achievement, count(*) as kpi_count").
+		Group("year, quarter").
+		Order("year DESC, quarter DESC").
+		Limit(8).
+		Scan(&data.PerformanceTrends)
+
+	periodicQuery := func(model interface{}) *gorm.DB {
+		q := h.db.WithContext(c.UserContext()).Model(model)
 		if kpiType != "" {
 			q = q.Where("kpi_type = ?", kpiType)
 		}
@@ -221,14 +312,7 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 		return q
 	}
 
-	perfQuery().
-		Select("year, quarter, AVG(achievement_pct) as avg_achievement, count(*) as kpi_count").
-		Group("year, quarter").
-		Order("year DESC, quarter DESC").
-		Limit(8).
-		Scan(&data.PerformanceTrends)
-
-	h.db.WithContext(c.UserContext()).Model(&models.KpiBenchmark{}).
+	periodicQuery(&models.KpiBenchmark{}).
 		Select("kpi_code, zone, benchmark_entity, " +
 			"AVG(internal_achievement) as avg_internal, " +
 			"AVG(benchmark_achievement) as avg_benchmark, " +
@@ -238,7 +322,7 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 		Limit(10).
 		Scan(&data.BenchmarkSummaries)
 
-	h.db.WithContext(c.UserContext()).Model(&models.KpiSegmentation{}).
+	periodicQuery(&models.KpiSegmentation{}).
 		Select("dimension_name, segment_name, " +
 			"AVG(achievement) as avg_achievement, " +
 			"CASE WHEN AVG(target) > 0 THEN (AVG(achievement) / AVG(target)) * 100 ELSE 0 END as avg_pct").
@@ -249,7 +333,7 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 
 	cardQuery := func(model interface{}, typeLiteral string) []KpiCardDef {
 		var cards []KpiCardDef
-		h.db.WithContext(c.UserContext()).Model(model).
+		dictQuery(model).
 			Select("code, '" + typeLiteral + "' as type, name_en, name_ar, formula, baseline, unit_of_measure, polarity, reporting_frequency as reporting_freq, data_source, activation_status").
 			Limit(10).
 			Order("created_at DESC").
