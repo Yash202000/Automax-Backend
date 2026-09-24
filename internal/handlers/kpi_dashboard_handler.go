@@ -19,9 +19,9 @@ func NewKpiDashboardHandler(db *gorm.DB) *KpiDashboardHandler {
 	return &KpiDashboardHandler{db: db}
 }
 
-type StatusCount struct {
-	Status string `json:"status"`
-	Count  int64  `json:"count"`
+type TypeCount struct {
+	Type  string `json:"type"`
+	Count int64  `json:"count"`
 }
 
 type GoalCount struct {
@@ -87,7 +87,7 @@ type EnhancedKpiDashboardData struct {
 	TotalOperational      int64                   `json:"total_operational"`
 	TotalAward            int64                   `json:"total_award"`
 	PendingReviews        int64                   `json:"pending_reviews"`
-	KpisByStatus          []StatusCount           `json:"kpis_by_status"`
+	ActiveKpisByType      []TypeCount             `json:"active_kpis_by_type"`
 	KpisByGoal            []GoalCount             `json:"kpis_by_goal"`
 	PerformanceTrends     []PerformanceTrend      `json:"performance_trends"`
 	BenchmarkSummaries    []BenchmarkSummary      `json:"benchmark_summaries"`
@@ -256,14 +256,34 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 
 	if kpiType == "" || kpiType == "strategic" {
 		dictQuery(&models.StrategicKPI{}).
-			Select("activation_status as status, count(*) as count").
-			Group("activation_status").Scan(&data.KpisByStatus)
-
-		dictQuery(&models.StrategicKPI{}).
 			Select("g.title as goal, count(*) as count").
 			Joins("left join goals g on g.id = strategic_kpis.goal_id").
 			Group("g.title").Scan(&data.KpisByGoal)
 	}
+
+	// Active KPIs by Type: for the donut chart, each KPI type's count of
+	// currently-active KPIs (activation_status = 'active'), across all
+	// three dictionary tables — not just Strategic. Respects the same
+	// kpiType gating and Objective/Criteria/Sub-Criteria taxonomy filters
+	// as the Total cards above, so a type filter narrows this to a single
+	// slice rather than showing every type unfiltered.
+	var activeByType []TypeCount
+	if kpiType == "" || kpiType == "strategic" {
+		var count int64
+		dictQuery(&models.StrategicKPI{}).Where("activation_status = ?", "active").Count(&count)
+		activeByType = append(activeByType, TypeCount{Type: "strategic", Count: count})
+	}
+	if kpiType == "" || kpiType == "operational" {
+		var count int64
+		dictQuery(&models.OperationalKPI{}).Where("activation_status = ?", "active").Count(&count)
+		activeByType = append(activeByType, TypeCount{Type: "operational", Count: count})
+	}
+	if kpiType == "" || kpiType == "award" {
+		var count int64
+		dictQuery(&models.AwardKPI{}).Where("activation_status = ?", "active").Count(&count)
+		activeByType = append(activeByType, TypeCount{Type: "award", Count: count})
+	}
+	data.ActiveKpisByType = activeByType
 
 	// perfQuery/statusQuery scope kpi_performances (and, via the same
 	// kpi_type+kpi_code columns, KpiBenchmark/KpiSegmentation) to the
