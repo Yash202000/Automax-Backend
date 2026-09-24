@@ -244,6 +244,88 @@ var labelsEN = reportLabels{
 	PriorityLabels:    [6]string{"", "Critical", "High", "Medium", "Low", "Very Low"},
 }
 
+// ── citizen report handler ──────────────────────────────────────────────────
+
+// GenerateCitizenReport is the public endpoint behind the Normal Closure
+// SMS/Email report link ({{report_url}}/{{report_link}}). It re-validates the
+// signed incident token and requires the last 6 digits of the citizen's
+// registered mobile number before returning the citizen-facing PDF (built by
+// buildCitizenReportHTML, a standalone renderer that never shares code with the
+// internal report). Stateless and repeatable: no session/rate-limit state is
+// kept, so the citizen can re-open the link and re-verify any time before the
+// token itself expires.
+func (h *IncidentHandler) GenerateCitizenReport(c *fiber.Ctx) error {
+	idStr := c.Params("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	var req struct {
+		SignedToken string `json:"signed_token"`
+		Last6Digits string `json:"last6digits"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request"))
+	}
+	if req.SignedToken == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "token_required"))
+	}
+	if req.Last6Digits == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "last_6_digits_required"))
+	}
+
+	if err := utils.ValidateIncidentToken(req.SignedToken, idStr); err != nil {
+		switch err {
+		case utils.ErrExpired:
+			return utils.ErrorResponse(c, fiber.StatusGone, i18n.T(c.UserContext(), "link_expired"))
+		case utils.ErrInvalid, utils.ErrIDMismatch:
+			return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "invalid_token"))
+		default:
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "malformed_token"))
+		}
+	}
+
+	if _, err := h.service.FindByIDWithLast6DigitValidation(c.UserContext(), id, req.Last6Digits); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "phone_not_recognized"))
+	}
+
+	reportData, err := h.incidentRepo.GetReportIncidentData(c.UserContext(), id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "incident_not_found"))
+	}
+	if reportData.LocationID != nil {
+		reportData.LocationName, _ = h.locationRepo.FetchLocationFullPathByID(c.UserContext(), *reportData.LocationID)
+	}
+	if reportData.ClassificationID != nil {
+		reportData.ClassificationName, _ = h.classificationRepo.FetchClassificationFullPathByID(c.UserContext(), *reportData.ClassificationID)
+	}
+
+	reportAttachments, err := h.incidentRepo.GetReportAttachments(c.UserContext(), id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_attachments"))
+	}
+
+	lbl := labelsAR
+	if c.Query("lang", "ar") == "en" {
+		lbl = labelsEN
+	}
+
+	leftLogoB64 := fetchLogoBase64(h.cfg.Report.LogoLeftURL)
+	rightLogoB64 := fetchLogoBase64(h.cfg.Report.LogoRightURL)
+
+	htmlBytes := buildCitizenReportHTML(c, h, reportData, leftLogoB64, rightLogoB64, lbl, reportAttachments)
+
+	pdfData, err := renderIncidentHTMLToPDF(htmlBytes, h.cfg.Report.ChromeBin)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_read_pdf"))
+	}
+
+	c.Set("Content-Type", "application/pdf")
+	c.Set("Content-Disposition", fmt.Sprintf(`inline; filename="incident_%s.pdf"`, reportData.IncidentNumber))
+	return c.Send(pdfData)
+}
+
 // ── handler ───────────────────────────────────────────────────────────────────
 
 func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
@@ -962,6 +1044,185 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 	}
 
 	// ── Footer ────────────────────────────────────────────────────────────────
+	fmt.Fprintf(&b,
+		`<div class="footer"><span>%s</span><span>%s: %s</span></div>`,
+		html.EscapeString(data.IncidentNumber),
+		html.EscapeString(l.PrintDate),
+		html.EscapeString(ts(time.Now())),
+	)
+
+	b.WriteString(`</div></body></html>`)
+	return b.Bytes()
+}
+
+// buildCitizenReportHTML renders the citizen-facing incident report PDF, reachable
+// via the report link in the Normal Closure SMS/Email after mobile verification.
+// It is a standalone renderer — deliberately NOT a shared code path with
+// buildReportHTML — so the internal/staff report is never affected by citizen-view
+// changes. It only ever includes: incident number/type/classification/description,
+// location, created/closed dates, reporter's own contact details, and attachments
+// (without uploader identity). It never includes internal creator/assignee/
+// department details, revision history, or transition history.
+func buildCitizenReportHTML(
+	c *fiber.Ctx,
+	h *IncidentHandler,
+	data *models.IncidentReportData,
+	leftLogoB64 string,
+	rightLogoB64 string,
+	l reportLabels,
+	reportAttachments []models.IncidentReportAttachment,
+) []byte {
+	var b bytes.Buffer
+
+	tz := appTimezone(h.cfg.Report.AppRegion)
+	ts := func(t time.Time) string { return t.In(tz).Format("02/01/2006 03:04 PM") }
+	tsp := func(t *time.Time) string {
+		if t == nil {
+			return ""
+		}
+		return ts(*t)
+	}
+	localName := func(en, ar string) string {
+		if l.Dir == "rtl" && ar != "" {
+			return ar
+		}
+		return en
+	}
+
+	langAttr := "en"
+	textAlign := "left"
+	if l.Dir == "rtl" {
+		langAttr = "ar"
+		textAlign = "right"
+	}
+
+	fmt.Fprintf(&b, `<!DOCTYPE html>
+<html dir="%s" lang="%s">
+<head><meta charset="UTF-8"><title>%s</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;background:#fff;direction:%s}
+.page{max-width:780px;margin:0 auto;padding:14px}
+.logo-bar{display:flex;justify-content:space-between;align-items:center;padding:6px 0 8px 0}
+.logo-bar img{height:56px;width:auto;object-fit:contain}
+.main-header{background:#375a6e;color:#fff;text-align:center;padding:10px 8px;font-size:12pt;font-weight:bold;letter-spacing:0.5px}
+.section-header{background:#6491a5;color:#fff;text-align:center;padding:5px 8px;font-size:11pt;font-weight:bold}
+.grid{width:100%%;border-collapse:collapse}
+.grid tr:nth-child(even) td{background:#e8f4fa}
+.grid tr:nth-child(odd) td{background:#fff}
+.grid td{padding:4px 7px;border-bottom:1px solid #c8dce4;font-size:9.5pt;vertical-align:middle}
+.grid td.lbl{color:#505050;width:22%%;text-align:%s;border-%s:1px solid #c8dce4;white-space:nowrap}
+.grid td.val{color:#b41e1e;font-weight:bold;width:28%%;text-align:%s}
+.att-card{border:1px solid #c8dce4;margin:6px 0;overflow:hidden}
+.att-name{padding:5px 8px;font-weight:bold;font-size:9.5pt;color:#375a6e;border-bottom:1px solid #c8dce4}
+.att-img{display:block;max-width:100%%;max-height:280px;object-fit:contain;margin:0 auto;padding:6px}
+.att-meta{display:flex;flex-wrap:wrap;gap:12px;padding:5px 8px;font-size:8.5pt;background:#f0f8fc;border-top:1px solid #c8dce4}
+.att-card:nth-child(even){background:#f7fbfd}
+.att-deleted{padding:10px 12px;color:#c0392b;background:#fdf3f2;border:1px dashed #c0392b;margin:8px;border-radius:4px;font-size:9pt;text-align:center;font-weight:bold}
+.badge-breached{color:#fff;background:#c0392b;padding:1px 5px;border-radius:3px;font-size:8pt}
+.badge-ok{color:#fff;background:#27ae60;padding:1px 5px;border-radius:3px;font-size:8pt}
+.footer{margin-top:14px;display:flex;justify-content:space-between;font-size:8pt;color:#888;border-top:1px solid #c8dce4;padding-top:5px}
+</style></head><body><div class="page">`,
+		l.Dir, langAttr, html.EscapeString(l.Title), l.Dir, textAlign, textAlign, textAlign,
+	)
+
+	b.WriteString(`<div class="logo-bar">`)
+	if leftLogoB64 != "" {
+		fmt.Fprintf(&b, `<img src="data:image/png;base64,%s" alt="logo">`, leftLogoB64)
+	} else {
+		b.WriteString(`<span></span>`)
+	}
+	if rightLogoB64 != "" {
+		fmt.Fprintf(&b, `<img src="data:image/png;base64,%s" alt="logo">`, rightLogoB64)
+	} else {
+		b.WriteString(`<span></span>`)
+	}
+	b.WriteString(`</div>`)
+
+	fmt.Fprintf(&b, `<div class="main-header">%s</div>`, html.EscapeString(l.Title))
+
+	statusName := localName(data.StatusName, data.StatusNameAr)
+	classDisplay := localName(data.ClassificationName, data.ClassificationNameAr)
+	locationDisplay := localName(data.LocationName, data.LocationNameAr)
+
+	// ── Section: Incident Details ───────────────────────────────────────────
+	secHeader(&b, l.SectionIncident)
+	b.WriteString(`<table class="grid">`)
+	row2(&b, l.IncidentNo, html.EscapeString(data.IncidentNumber), l.Date, html.EscapeString(ts(data.CreatedAt)))
+	row2(&b, l.Source, html.EscapeString(data.Source), l.RecordTypeLbl, html.EscapeString(data.RecordType))
+	row1(&b, l.Status, html.EscapeString(statusName))
+	row1(&b, l.Title2, html.EscapeString(data.Title))
+	row1(&b, l.Classification, html.EscapeString(classDisplay))
+	row1(&b, l.LocationLbl, html.EscapeString(locationDisplay))
+	if data.Description != "" {
+		row1(&b, l.Description, html.EscapeString(data.Description))
+	}
+	if data.ResolvedAt != nil {
+		row1(&b, l.ResolvedAt, html.EscapeString(tsp(data.ResolvedAt)))
+	}
+	if data.ClosedAt != nil {
+		row1(&b, l.ClosedAt, html.EscapeString(tsp(data.ClosedAt)))
+	}
+	b.WriteString(`</table>`)
+
+	// ── Section: Location ───────────────────────────────────────────────────
+	hasLocation := data.Address != "" || data.City != "" || data.State != "" || data.Country != ""
+	if hasLocation {
+		secHeader(&b, l.SectionLocation)
+		b.WriteString(`<table class="grid">`)
+		if data.Address != "" {
+			row1(&b, l.Address, html.EscapeString(data.Address))
+		}
+		if data.City != "" || data.State != "" {
+			row2(&b, l.City, html.EscapeString(data.City), l.State, html.EscapeString(data.State))
+		}
+		if data.Country != "" {
+			row1(&b, l.Country, html.EscapeString(data.Country))
+		}
+		b.WriteString(`</table>`)
+	}
+
+	// ── Section: Reporter — citizen's own contact details only ─────────────
+	secHeader(&b, l.SectionReporter)
+	b.WriteString(`<table class="grid">`)
+	row1(&b, l.ReporterName, html.EscapeString(data.CallerName))
+	row2(&b, l.ReporterEmail, html.EscapeString(data.ReporterEmail), l.ReporterMobile, html.EscapeString(data.CallerPhone))
+	b.WriteString(`</table>`)
+
+	// ── Section: Attachments — no uploader identity ─────────────────────────
+	if len(reportAttachments) > 0 {
+		secHeader(&b, l.SectionAttach)
+		b.WriteString(`<div>`)
+		for _, att := range reportAttachments {
+			b.WriteString(`<div class="att-card">`)
+			fmt.Fprintf(&b, `<div class="att-name">%s</div>`, html.EscapeString(att.FileName))
+			if att.DeletedAt != nil {
+				fmt.Fprintf(&b, `<div class="att-deleted">%s</div>`, html.EscapeString(l.AttDeleted))
+			} else if strings.HasPrefix(att.MimeType, "image/") && att.FilePath != "" {
+				if fr, ferr := h.storage.GetFile(c.UserContext(), att.FilePath); ferr == nil {
+					if imgData, rerr := io.ReadAll(fr); rerr == nil && len(imgData) > 0 {
+						encoded := base64.StdEncoding.EncodeToString(imgData)
+						fmt.Fprintf(&b, `<img class="att-img" src="data:%s;base64,%s" alt="%s">`,
+							att.MimeType, encoded, html.EscapeString(att.FileName))
+					}
+					fr.Close()
+				}
+			}
+			sizeStr := fmt.Sprintf("%.1f KB", float64(att.FileSize)/1024)
+			if att.FileSize < 1024 {
+				sizeStr = fmt.Sprintf("%d bytes", att.FileSize)
+			}
+			fmt.Fprintf(&b,
+				`<div class="att-meta"><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span></div>`,
+				html.EscapeString(l.AttType), html.EscapeString(att.MimeType),
+				html.EscapeString(l.AttSize), sizeStr,
+			)
+			b.WriteString(`</div>`)
+		}
+		b.WriteString(`</div>`)
+	}
+
+	// ── Footer ───────────────────────────────────────────────────────────────
 	fmt.Fprintf(&b,
 		`<div class="footer"><span>%s</span><span>%s: %s</span></div>`,
 		html.EscapeString(data.IncidentNumber),
