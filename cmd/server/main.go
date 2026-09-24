@@ -459,6 +459,8 @@ func main() {
 	ivr.Get("/sms-link/:id", incidentHandler.FindByIDWithLast6DigitValidation)
 	// Public: validates signed URL from normal closure SMS, returns incident info for feedback page
 	ivr.Get("/feedback/:id", incidentHandler.FindByIDForFeedback)
+	// Public: validates signed report URL + last 6 digits, returns the citizen-facing incident report PDF
+	ivr.Post("/report/:id/verify", incidentHandler.GenerateCitizenReport)
 	// Protected: require valid IVR session token issued by the GET route above
 	// ivr.Put("/sms-link/update/:id", authMiddleware.ValidateIvrSmsToken(), incidentHandler.UpdateIncidentViaIvrSms)
 	// ivr.Post("/sms-link/attachment/:id", authMiddleware.ValidateIvrSmsToken(), incidentHandler.UploadAttachmentIvrSms)
