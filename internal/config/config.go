@@ -45,6 +45,22 @@ type Config struct {
 	InternalAttachmentSizeLimit string // env: INTERNAL_ATTACHMENT_SIZE_LIMIT — max attachment size in bytes for internally-created incidents (EPM940 ENV_CONFIGURATION lookup value). Default: 10485760 (10MB).
 	ChatbotURL                  string // env: CHATBOT_URL — URL of the chatbot (EPM940 ENV_CONFIGURATION lookup value). Default: placeholder — override in .env.
 	KpiDictionaryWorkflowCode   string // env: KPI_DICTIONARY_WORKFLOW_CODE — Workflow.Code the KPI Workflow (Draft->Reviewed->Approved->Active->Closed) is looked up by. Default: "kpi_dictionary_workflow" — must match the Code seeded in seed_kpi_dictionary_workflow.go, or nothing will resolve.
+	Geo                         GeoConfig
+}
+
+// GeoConfig holds settings for geolocation-based queries (e.g. radius search
+// on incidents).
+type GeoConfig struct {
+	// PostGISEnabled switches radius-based incident filtering from an inline
+	// haversine WHERE clause to PostGIS's ST_DWithin. Only turn this on after
+	// CREATE EXTENSION postgis has been applied via a migration — enabling it
+	// without the extension present will make radius-filtered queries fail.
+	// env: POSTGIS_ENABLED (default: false)
+	PostGISEnabled bool
+	// NearbyIncidentRadiusMeters is the default search radius (in meters) for
+	// the "Nearby Incidents" feature when the caller doesn't supply its own
+	// radius. env: NEARBY_INCIDENT_RADIUS_METERS (default: 500)
+	NearbyIncidentRadiusMeters float64
 }
 
 // ImageValidationConfig holds settings for the standalone image-quality
@@ -455,6 +471,10 @@ func Load() *Config {
 		InternalAttachmentSizeLimit: getEnv("INTERNAL_ATTACHMENT_SIZE_LIMIT", "10485760"),
 		ChatbotURL:                  getEnv("CHATBOT_URL", "https://chatbot.automax.example.com"),
 		KpiDictionaryWorkflowCode:   getEnv("KPI_DICTIONARY_WORKFLOW_CODE", "kpi_dictionary_workflow"),
+		Geo: GeoConfig{
+			PostGISEnabled:             getEnvAsBool("POSTGIS_ENABLED", false),
+			NearbyIncidentRadiusMeters: getEnvAsFloat("NEARBY_INCIDENT_RADIUS_METERS", 500),
+		},
 		Report: ReportConfig{
 			LogoLeftURL:  getEnv("LOGO_LEFT_URL", ""),
 			LogoRightURL: getEnv("LOGO_RIGHT_URL", ""),

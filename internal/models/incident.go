@@ -606,6 +606,22 @@ type IncidentMapMarker struct {
 	StateColor     string    `json:"state_color"`
 }
 
+// IncidentSummary is a minimal per-incident shape for lightweight
+// location/classification-based lookups — id, number, coordinates,
+// classification/location names, and created_at only.
+type IncidentSummary struct {
+	ID                 uuid.UUID `json:"id"`
+	IncidentNumber     string    `json:"incident_number"`
+	Latitude           *float64  `json:"latitude"`
+	Longitude          *float64  `json:"longitude"`
+	ClassificationName string    `json:"classification_name"`
+	LocationName       string    `json:"location_name"`
+	CurrentStateID     uuid.UUID `json:"current_state_id"`
+	Status             string    `json:"status"`
+	StatusColor        string    `json:"status_color"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+
 type IncidentFilter struct {
 	Search              string     `query:"search" json:"search" validate:"omitempty"`
 	WorkflowID          []string   `query:"workflow_id" json:"workflow_id" validate:"omitempty,dive,uuid"`
@@ -629,6 +645,15 @@ type IncidentFilter struct {
 	SourceIncidentID    *string    `query:"source_incident_id" json:"source_incident_id" validate:"omitempty,uuid"`
 	StartDate           *time.Time `json:"start_date"` // filter by created_at >= start_date; parsed manually in handler (not via QueryParser)
 	EndDate             *time.Time `json:"end_date"`   // filter by created_at <= end_date; parsed manually in handler (not via QueryParser)
+	// Radius filter: matches incidents within RadiusMeters of (CenterLatitude, CenterLongitude).
+	// All three must be set together to activate.
+	CenterLatitude  *float64 `query:"latitude" json:"latitude" validate:"omitempty,latitude"`
+	CenterLongitude *float64 `query:"longitude" json:"longitude" validate:"omitempty,longitude"`
+	RadiusMeters    *float64 `query:"radius" json:"radius" validate:"omitempty,gt=0"`
+	// ExcludeIncidentID excludes a single incident (e.g. the one currently
+	// being viewed) from the results — used by "Nearby Incidents" so the
+	// selected incident never appears in its own results list.
+	ExcludeIncidentID *uuid.UUID `query:"exclude_incident_id" json:"exclude_incident_id" validate:"omitempty,uuid"`
 	// Transition filters
 	TransitionID *uuid.UUID `query:"transition_id" json:"transition_id" validate:"omitempty,uuid"`
 	FromStateID  *uuid.UUID `query:"from_state_id" json:"from_state_id" validate:"omitempty"`
