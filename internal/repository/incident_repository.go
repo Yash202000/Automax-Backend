@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
@@ -27,6 +28,7 @@ type IncidentRepository interface {
 	FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.Incident, error)
 	List(ctx context.Context, filter *models.IncidentFilter) ([]models.Incident, int64, error)
 	ListMapMarkers(ctx context.Context, filter *models.IncidentFilter, maxMarkers int) ([]models.IncidentMapMarker, int64, error)
+	ListSummaries(ctx context.Context, filter *models.IncidentFilter) ([]models.IncidentSummary, int64, error)
 	Update(ctx context.Context, incident *models.Incident) error
 	UpdateFields(ctx context.Context, id uuid.UUID, updates map[string]interface{}) error
 	UpdateFieldsWithVersion(ctx context.Context, id uuid.UUID, updates map[string]interface{}, expectedVersion int) error
@@ -117,11 +119,12 @@ type IncidentRepository interface {
 }
 
 type incidentRepository struct {
-	db *gorm.DB
+	db  *gorm.DB
+	cfg *config.Config
 }
 
-func NewIncidentRepository(db *gorm.DB) IncidentRepository {
-	return &incidentRepository{db: db}
+func NewIncidentRepository(db *gorm.DB, cfg *config.Config) IncidentRepository {
+	return &incidentRepository{db: db, cfg: cfg}
 }
 
 // Incident CRUD
@@ -300,6 +303,9 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 	if len(filter.LocationID) != 0 {
 		query = query.Where("location_id IN ?", filter.LocationID)
 	}
+	if filter.ExcludeIncidentID != nil {
+		query = query.Where("incidents.id != ?", *filter.ExcludeIncidentID)
+	}
 	if len(filter.ReporterID) != 0 {
 		query = query.Where("reporter_id IN ?", filter.ReporterID)
 	}
@@ -375,6 +381,30 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 	}
 	if filter.EndDate != nil {
 		query = query.Where("incidents.created_at <= ?", *filter.EndDate)
+	}
+	if filter.CenterLatitude != nil && filter.CenterLongitude != nil && filter.RadiusMeters != nil {
+		if r.cfg.Geo.PostGISEnabled {
+			query = query.Where(
+				`incidents.latitude IS NOT NULL AND incidents.longitude IS NOT NULL AND
+				ST_DWithin(
+					ST_MakePoint(incidents.longitude, incidents.latitude)::geography,
+					ST_MakePoint(?, ?)::geography,
+					?
+				)`,
+				*filter.CenterLongitude, *filter.CenterLatitude, *filter.RadiusMeters)
+		} else {
+			// Standard haversine formula (Earth radius 6,371,000m, matching
+			// utils.CalculateDistance's constant), inlined so it needs no extension.
+			query = query.Where(`incidents.latitude IS NOT NULL AND incidents.longitude IS NOT NULL AND
+				6371000 * acos(
+					LEAST(1, GREATEST(-1,
+						cos(radians(?)) * cos(radians(incidents.latitude)) *
+						cos(radians(incidents.longitude) - radians(?)) +
+						sin(radians(?)) * sin(radians(incidents.latitude))
+					))
+				) <= ?`,
+				*filter.CenterLatitude, *filter.CenterLongitude, *filter.CenterLatitude, *filter.RadiusMeters)
+		}
 	}
 	if filter.Search != "" {
 		searchPattern := "%" + filter.Search + "%"
@@ -497,6 +527,52 @@ func (r *incidentRepository) ListMapMarkers(ctx context.Context, filter *models.
 	}
 
 	return markers, total, nil
+}
+
+// ListSummaries returns minimal per-incident fields (id/number/coords/
+// classification name/location name/status/created_at) for lightweight
+// lookups — no Preloads, plus LEFT JOINs for classification/location names
+// since both are nullable FKs on Incident (workflow_states is a plain JOIN,
+// same as ListMapMarkers, since current_state_id is non-nullable). Paginated
+// via filter.Page/filter.Limit, same defaulting as List.
+func (r *incidentRepository) ListSummaries(ctx context.Context, filter *models.IncidentFilter) ([]models.IncidentSummary, int64, error) {
+	var total int64
+
+	base := r.applyIncidentFilters(ctx, r.db.WithContext(ctx).Model(&models.Incident{}), filter)
+
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.Limit < 1 || filter.Limit > 100 {
+		filter.Limit = 20
+	}
+	offset := (filter.Page - 1) * filter.Limit
+
+	var summaries []models.IncidentSummary
+	err := base.
+		Select(`incidents.id, incidents.incident_number, incidents.latitude, incidents.longitude,
+			COALESCE(classifications.name, '') AS classification_name,
+			COALESCE(locations.name, '') AS location_name,
+			incidents.current_state_id,
+			workflow_states.name AS status,
+			workflow_states.color AS status_color,
+			incidents.created_at`).
+		Joins("LEFT JOIN classifications ON classifications.id = incidents.classification_id").
+		Joins("LEFT JOIN locations ON locations.id = incidents.location_id").
+		Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
+		Order("incidents.created_at DESC").
+		Offset(offset).
+		Limit(filter.Limit).
+		Find(&summaries).Error
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return summaries, total, nil
 }
 
 func (r *incidentRepository) FindByIDWithLast6DigitValidation(
@@ -1923,7 +1999,7 @@ func (r *incidentRepository) UpdateFieldsWithVersion(ctx context.Context, id uui
 
 // WithTx returns repository instance using the provided transaction
 func (r *incidentRepository) WithTx(tx *gorm.DB) IncidentRepository {
-	return &incidentRepository{db: tx}
+	return &incidentRepository{db: tx, cfg: r.cfg}
 }
 
 // LockForUpdate acquires a pessimistic lock (SELECT FOR UPDATE)

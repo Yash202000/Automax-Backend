@@ -328,6 +328,52 @@ func (h *IncidentHandler) SearchIncidentMarkers(c *fiber.Ctx) error {
 	})
 }
 
+// SearchIncidentSummaries handles POST /incidents/search/summary. It accepts
+// the same filters as /incidents/search but returns only minimal per-incident
+// fields (id/incident_number/lat/long/classification name/location name/
+// status/created_at), paginated via page/limit like ListIncidents.
+func (h *IncidentHandler) SearchIncidentSummaries(c *fiber.Ctx) error {
+	filter := &models.IncidentFilter{}
+	if err := c.BodyParser(filter); err != nil {
+		return ErrorResponseWithKey(c, fiber.StatusBadRequest, "invalid_request_body")
+	}
+	parseIncidentSearchBodyExtras(c, filter)
+
+	// When coordinates are given but no radius, fall back to the backend's
+	// configured default rather than skipping the radius filter entirely.
+	if filter.CenterLatitude != nil && filter.CenterLongitude != nil && filter.RadiusMeters == nil {
+		radius := h.cfg.Geo.NearbyIncidentRadiusMeters
+		filter.RadiusMeters = &radius
+	}
+
+	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+
+	if handled, err := h.scopeIncidentFilterToUser(c, filter); handled {
+		return err
+	}
+
+	summaries, total, err := h.incidentRepo.ListSummaries(c.UserContext(), filter)
+	if err != nil {
+		return ErrorResponseWithKey(c, fiber.StatusInternalServerError, "internal_server_error")
+	}
+
+	totalPages := (int(total) + filter.Limit - 1) / filter.Limit
+
+	return c.JSON(fiber.Map{
+		"success":     true,
+		"data":        summaries,
+		"page":        filter.Page,
+		"limit":       filter.Limit,
+		"total_items": total,
+		"total_pages": totalPages,
+	})
+}
+
 func (h *IncidentHandler) ListIncidents(c *fiber.Ctx) error {
 	filter := &models.IncidentFilter{}
 	// Parse query parameters
