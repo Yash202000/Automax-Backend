@@ -19,6 +19,13 @@ type DepartmentRepository interface {
 	FindByNameAndParent(ctx context.Context, name string, parentID *uuid.UUID) (*models.Department, error)
 	FindByNameOrNameAr(ctx context.Context, name string, nameAr string) (*models.Department, error)
 	Update(ctx context.Context, department *models.Department) error
+	// IsDescendantOf reports whether candidateID is ancestorID itself or one of
+	// ancestorID's descendants — walked live via parent_id (the Level/Path
+	// columns are denormalized display-only fields nothing else in this
+	// codebase queries by; GetTree and FetchDepartmentFullPathByID both derive
+	// the hierarchy live from parent_id too). Used by the handler's parent-move
+	// cycle check: a department can't be moved under its own descendant.
+	IsDescendantOf(ctx context.Context, candidateID, ancestorID uuid.UUID) (bool, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context) ([]models.Department, error)
 	ListFiltered(ctx context.Context, filter models.DepartmentListFilter) ([]models.Department, int64, error)
@@ -174,6 +181,29 @@ func (r *departmentRepository) FindByNameOrNameAr(ctx context.Context, name stri
 func (r *departmentRepository) Update(ctx context.Context, department *models.Department) error {
 	department.Code = strings.ToLower(strings.TrimSpace(department.Code))
 	return r.db.WithContext(ctx).Save(department).Error
+}
+
+// IsDescendantOf walks live up the parent_id chain from candidateID (not the
+// denormalized Level/Path columns, which nothing else here relies on) and
+// reports whether it hits ancestorID — i.e. candidateID is ancestorID itself
+// or one of its descendants.
+func (r *departmentRepository) IsDescendantOf(ctx context.Context, candidateID, ancestorID uuid.UUID) (bool, error) {
+	if candidateID == ancestorID {
+		return true, nil
+	}
+	const query = `
+		WITH RECURSIVE ancestors AS (
+			SELECT id, parent_id FROM departments WHERE id = ? AND deleted_at IS NULL
+			UNION ALL
+			SELECT d.id, d.parent_id FROM departments d
+			INNER JOIN ancestors a ON d.id = a.parent_id
+			WHERE d.deleted_at IS NULL
+		)
+		SELECT EXISTS (SELECT 1 FROM ancestors WHERE id = ?)
+	`
+	var exists bool
+	err := r.db.WithContext(ctx).Raw(query, candidateID, ancestorID).Scan(&exists).Error
+	return exists, err
 }
 
 func (r *departmentRepository) Delete(ctx context.Context, id uuid.UUID) error {
