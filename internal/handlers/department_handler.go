@@ -208,6 +208,28 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "department_not_found"))
 	}
 
+	// Parent reassignment: nil means "unchanged" (see DepartmentUpdateRequest.ParentID
+	// doc comment); otherwise validate before anything else so duplicate-name checking
+	// below can use the destination parent.
+	parentChanged := req.ParentID != nil && (department.ParentID == nil || *req.ParentID != *department.ParentID)
+	effectiveParentID := department.ParentID
+	if parentChanged {
+		if *req.ParentID == department.ID {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "department_cannot_be_own_parent"))
+		}
+		if _, err := h.repo.FindByID(c.UserContext(), *req.ParentID); err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "department_parent_not_found"))
+		}
+		// Moving there would create a cycle if the new parent is this department's
+		// own descendant, walked live via parent_id (see IsDescendantOf).
+		if isDescendant, err := h.repo.IsDescendantOf(c.UserContext(), *req.ParentID, department.ID); err != nil {
+			return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
+		} else if isDescendant {
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "department_parent_is_descendant"))
+		}
+		effectiveParentID = req.ParentID
+	}
+
 	checkName := req.Name
 	if checkName == "" {
 		checkName = department.Name
@@ -224,7 +246,7 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 		checkCode = strings.TrimSpace(req.Code)
 	}
 
-	existing, fields, err := h.repo.CheckDuplicate(c.UserContext(), checkName, checkNameAr, checkCode, department.ParentID, &id)
+	existing, fields, err := h.repo.CheckDuplicate(c.UserContext(), checkName, checkNameAr, checkCode, effectiveParentID, &id)
 	if err == nil && existing != nil && fields.Any() {
 		existingPath, _ := h.repo.FetchDepartmentFullPathByID(c.UserContext(), existing.ID)
 		return utils.ErrorResponse(c, fiber.StatusConflict, duplicateConflictMessage(c.UserContext(), fields, existing.Name, existing.NameAr, existingPath,
@@ -251,6 +273,9 @@ func (h *DepartmentHandler) Update(c *fiber.Ctx) error {
 	}
 	if req.Type != "" {
 		department.Type = req.Type
+	}
+	if parentChanged {
+		department.ParentID = req.ParentID
 	}
 	if req.ManagerID != nil {
 		department.ManagerID = req.ManagerID

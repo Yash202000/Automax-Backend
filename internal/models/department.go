@@ -63,12 +63,16 @@ type DepartmentCreateRequest struct {
 
 // DepartmentUpdateRequest for updating a department
 type DepartmentUpdateRequest struct {
-	Name              string      `json:"name" validate:"omitempty,notblank,name,min=1,max=100"`
-	NameAr            string      `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
-	Code              string      `json:"code" validate:"omitempty,min=1,max=50"`
-	Description       string      `json:"description" validate:"max=500"`
-	DescriptionAr     string      `json:"description_ar" validate:"max=500"`
-	Type              string      `json:"type" validate:"omitempty,oneof=internal external"`
+	Name          string `json:"name" validate:"omitempty,notblank,name,min=1,max=100"`
+	NameAr        string `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
+	Code          string `json:"code" validate:"omitempty,min=1,max=50"`
+	Description   string `json:"description" validate:"max=500"`
+	DescriptionAr string `json:"description_ar" validate:"max=500"`
+	Type          string `json:"type" validate:"omitempty,oneof=internal external"`
+	// ParentID moves the department under a new parent when set. Like ManagerID/
+	// SupervisorID below, a nil value (omitted or explicit JSON null) means "leave
+	// unchanged" — it cannot be used to move a department to the root level.
+	ParentID          *uuid.UUID  `json:"parent_id"`
 	ManagerID         *uuid.UUID  `json:"manager_id"`
 	SupervisorID      *uuid.UUID  `json:"supervisor_id"`
 	LocationIDs       []uuid.UUID `json:"location_ids"`
