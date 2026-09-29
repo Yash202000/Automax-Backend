@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -13,22 +14,19 @@ import (
 	"time"
 )
 
-const (
-	gisTokenURL    = "https://webgis.eamana.gov.sa/arcgisnew/tokens/generateToken"
-	gisIdentifyURL = "https://webgis.eamana.gov.sa/arcgisnew/rest/services/940BaseMap/MapServer/identify"
-)
-
 type GISService interface {
 	Identify(ctx context.Context, x, y float64) (json.RawMessage, error)
 }
 
 type gisService struct {
-	mu         sync.Mutex
-	token      string
-	tokenExpAt time.Time
-	username   string
-	password   string
-	client     *http.Client
+	mu          sync.Mutex
+	token       string
+	tokenExpAt  time.Time
+	username    string
+	password    string
+	tokenURL    string
+	identifyURL string
+	client      *http.Client
 }
 
 type gisTokenResponse struct {
@@ -41,14 +39,30 @@ type gisTokenResponse struct {
 }
 
 func NewGISService() GISService {
+	tokenURL := os.Getenv("GIS_TOKEN_URL")
+	if tokenURL == "" {
+		log.Printf("[GISService] WARNING: GIS_TOKEN_URL not set in environment — GIS token requests will fail")
+	}
+
+	identifyURL := os.Getenv("GIS_IDENTIFY_URL")
+	if identifyURL == "" {
+		log.Printf("[GISService] WARNING: GIS_IDENTIFY_URL not set in environment — GIS identify requests will fail")
+	}
+
 	return &gisService{
-		username: os.Getenv("GIS_USERNAME"),
-		password: os.Getenv("GIS_PASSWORD"),
-		client:   &http.Client{Timeout: 30 * time.Second},
+		username:    os.Getenv("GIS_USERNAME"),
+		password:    os.Getenv("GIS_PASSWORD"),
+		tokenURL:    tokenURL,
+		identifyURL: identifyURL,
+		client:      &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
 func (s *gisService) fetchToken(ctx context.Context) (string, error) {
+	if s.tokenURL == "" {
+		return "", fmt.Errorf("GIS_TOKEN_URL not configured")
+	}
+
 	form := url.Values{}
 	form.Set("username", s.username)
 	form.Set("password", s.password)
@@ -59,7 +73,7 @@ func (s *gisService) fetchToken(ctx context.Context) (string, error) {
 	form.Set("encrypted", "false")
 	form.Set("f", "json")
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, gisTokenURL, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.tokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", err
 	}
@@ -106,6 +120,10 @@ func (s *gisService) Identify(ctx context.Context, x, y float64) (json.RawMessag
 		return gisMockResponse, nil
 	}
 
+	if s.identifyURL == "" {
+		return nil, fmt.Errorf("GIS_IDENTIFY_URL not configured")
+	}
+
 	token, err := s.getToken(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("GIS auth failed: %w", err)
@@ -142,7 +160,7 @@ func (s *gisService) Identify(ctx context.Context, x, y float64) (json.RawMessag
 	form.Set("f", "pjson")
 	form.Set("token", token)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, gisIdentifyURL, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.identifyURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, err
 	}
