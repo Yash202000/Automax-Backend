@@ -45,13 +45,15 @@ func (r *aiQualityFeedbackRepository) Create(ctx context.Context, feedback *mode
 		Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "incident_id"}},
 			DoUpdates: clause.Assignments(map[string]interface{}{
-				"changed_summary":   feedback.ChangedSummary,
-				"resolution_status": feedback.ResolutionStatus,
-				"distance_meters":   feedback.DistanceMeters,
-				"raw_response":      feedback.RawResponse,
-				"is_reopened":       false,
-				"deleted_at":        nil,
-				"updated_at":        time.Now(),
+				"changed_summary":      feedback.ChangedSummary,
+				"changed_summary_ar":   feedback.ChangedSummaryAr,
+				"resolution_status":    feedback.ResolutionStatus,
+				"resolution_status_ar": feedback.ResolutionStatusAr,
+				"distance_meters":      feedback.DistanceMeters,
+				"raw_response":         feedback.RawResponse,
+				"is_reopened":          false,
+				"deleted_at":           nil,
+				"updated_at":           time.Now(),
 			}),
 		}).
 		Create(feedback).Error

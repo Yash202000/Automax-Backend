@@ -17,10 +17,12 @@ type AIQualityFeedback struct {
 	Incident   *Incident `gorm:"foreignKey:IncidentID" json:"incident,omitempty"`
 
 	// ChangedSummary holds a textual summary of what the AI determined changed in this incident.
-	ChangedSummary string `gorm:"type:text" json:"changed_summary"`
+	ChangedSummary   string `gorm:"type:text" json:"changed_summary"`
+	ChangedSummaryAr string `gorm:"type:text" json:"changed_summary_ar"`
 
 	// ResolutionStatus is the AI-assessed resolution status of the incident.
-	ResolutionStatus string `gorm:"size:100" json:"resolution_status"`
+	ResolutionStatus   string `gorm:"size:100" json:"resolution_status"`
+	ResolutionStatusAr string `gorm:"size:100" json:"resolution_status_ar"`
 
 	// DistanceMeters is the geographic distance (in metres) reported by the AI analysis.
 	DistanceMeters float64 `gorm:"type:decimal(12,4)" json:"distance_meters"`

@@ -152,9 +152,20 @@ type coordinatesCheck struct {
 	Note              string          `json:"note"`
 }
 
+// latLon is a plain {lat, lon} pair used in coordinateDiff.
+type latLon struct {
+	Lat float64 `json:"lat"`
+	Lon float64 `json:"lon"`
+}
+
 // coordinateDiff captures the coordinate comparison block returned by the API.
 type coordinateDiff struct {
-	Verdict string `json:"verdict"`
+	Available            bool    `json:"available"`
+	Reason               *string `json:"reason"`
+	BeforeLocation       latLon  `json:"before_location"`
+	AfterLocation        latLon  `json:"after_location"`
+	BeforeLocationSource string  `json:"before_location_source"`
+	AfterLocationSource  string  `json:"after_location_source"`
 }
 
 // sameSceneCheck captures the same-location analysis block returned by the API.
@@ -178,17 +189,19 @@ type incidentAssessment struct {
 // values — they auto-detect the format and return the correct field.
 type aiQualityAPIResponse struct {
 	// ── v1 (legacy) fields ────────────────────────────────────────────────────
-	ChangeSummary    string             `json:"change_summary"`
-	ResolutionStatus string             `json:"resolution_status"`
-	Confidence       float64            `json:"confidence"`
-	ReasoningPoints  []string           `json:"reasoning_points"`
-	RiskFlags        []string           `json:"risk_flags"`
-	CoordinatesCheck coordinatesCheck   `json:"coordinates_check"`
-	CoordinateDiff   coordinateDiff     `json:"coordinate_diff"`
-	IncidentType     string             `json:"incident_type"`
-	SameScene        sameSceneCheck     `json:"same_scene"`
-	BeforeAssessment incidentAssessment `json:"before_assessment"`
-	AfterAssessment  incidentAssessment `json:"after_assessment"`
+	ChangeSummary      string             `json:"change_summary"`
+	ChangeSummaryAr    string             `json:"change_summary_ar"`
+	ResolutionStatus   string             `json:"resolution_status"`
+	ResolutionStatusAr string             `json:"resolution_status_ar"`
+	Confidence         float64            `json:"confidence"`
+	ReasoningPoints    []string           `json:"reasoning_points"`
+	RiskFlags          []string           `json:"risk_flags"`
+	CoordinatesCheck   coordinatesCheck   `json:"coordinates_check"`
+	CoordinateDiff     coordinateDiff     `json:"coordinate_diff"`
+	IncidentType       string             `json:"incident_type"`
+	SameScene          sameSceneCheck     `json:"same_scene"`
+	BeforeAssessment   incidentAssessment `json:"before_assessment"`
+	AfterAssessment    incidentAssessment `json:"after_assessment"`
 
 	// ── v2 (new) fields ───────────────────────────────────────────────────────
 	AuditID          string             `json:"audit_id"`
@@ -215,6 +228,15 @@ func (r *aiQualityAPIResponse) resolvedResolutionStatus() string {
 	return r.ResolutionStatus // v1
 }
 
+// resolvedResolutionStatusAr returns the Arabic resolution status text when
+// the AI API provided one. Only the v1 format carries this field today.
+func (r *aiQualityAPIResponse) resolvedResolutionStatusAr() string {
+	if r.isV2() {
+		return ""
+	}
+	return r.ResolutionStatusAr
+}
+
 // resolvedChangeSummary returns the human-readable change summary from
 // whichever response format is present.
 //
@@ -225,10 +247,16 @@ func (r *aiQualityAPIResponse) resolvedChangeSummary() string {
 	if r.isV2() {
 		summary = r.RiskFindings.SecondOpinion.Summary
 	}
-	if verdict := r.CoordinateDiff.Verdict; verdict != "" {
-		summary = summary + " | " + verdict
-	}
 	return summary
+}
+
+// resolvedChangeSummaryAr returns the Arabic change summary text when the AI
+// API provided one. Only the v1 format carries this field today.
+func (r *aiQualityAPIResponse) resolvedChangeSummaryAr() string {
+	if r.isV2() {
+		return ""
+	}
+	return r.ChangeSummaryAr
 }
 
 // resolvedDistanceMeters returns the GPS drift distance from whichever
@@ -320,8 +348,10 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 	}
 
 	// Format coordinates as "lat,lng" strings (empty string when not set).
-	// beforeCoords := formatCoords(incident.Latitude, incident.Longitude)
-	// afterCoords := beforeCoords // same location reference; override if resolver coords are stored elsewhere
+	// The incident only tracks a single location, so before/after both use it;
+	// the AI API cross-checks this against coordinates it extracts from the images.
+	beforeCoords := formatCoords(incident.Latitude, incident.Longitude)
+	afterCoords := beforeCoords
 
 	// Build multipart body.
 	body := &bytes.Buffer{}
@@ -329,10 +359,10 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 
 	// Text fields.
 	for field, value := range map[string]string{
-		"user_comment":     userComment,
-		"resolver_comment": resolverComment,
-		// "before_coordinates": "beforeCoords",
-		// "after_coordinates":  "afterCoords",
+		"user_comment":       userComment,
+		"resolver_comment":   resolverComment,
+		"before_coordinates": beforeCoords,
+		"after_coordinates":  afterCoords,
 	} {
 		if err := writer.WriteField(field, value); err != nil {
 			writer.Close()
@@ -340,23 +370,24 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 		}
 	}
 
-	// before_image — oldest image attachment.
+	// before_images — oldest image attachment. The AI API expects this as a
+	// list field ("before_images"), even though we only ever send one file.
 	beforeAtt := imageAttachments[0]
-	if err := m.writeFileField(ctx, writer, "before_image", beforeAtt); err != nil {
+	if err := m.writeFileField(ctx, writer, "before_images", beforeAtt); err != nil {
 		writer.Close()
-		return fmt.Errorf("before_image (%s): %w", beforeAtt.FileName, err)
+		return fmt.Errorf("before_images (%s): %w", beforeAtt.FileName, err)
 	}
 
-	// after_image — newest image attachment (only when there are at least two images).
+	// after_images — newest image attachment (only when there are at least two images).
 	if len(imageAttachments) >= 2 {
 		afterAtt := imageAttachments[len(imageAttachments)-1]
-		if err := m.writeFileField(ctx, writer, "after_image", afterAtt); err != nil {
+		if err := m.writeFileField(ctx, writer, "after_images", afterAtt); err != nil {
 			writer.Close()
-			return fmt.Errorf("after_image (%s): %w", afterAtt.FileName, err)
+			return fmt.Errorf("after_images (%s): %w", afterAtt.FileName, err)
 		}
 
 	} else {
-		log.Printf("[AIQualityMonitor] incident=%s only one image attachment — after_image not sent", incident.IncidentNumber)
+		log.Printf("[AIQualityMonitor] incident=%s only one image attachment — after_images not sent", incident.IncidentNumber)
 	}
 
 	writer.Close() // must close before reading body
@@ -405,16 +436,20 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 	//   changeSummary    = apiResp.ChangeSummary
 	//   distanceMeters   = 0.0; if apiResp.CoordinatesCheck.DistanceMeters != nil { distanceMeters = *apiResp.CoordinatesCheck.DistanceMeters }
 	resolutionStatus := apiResp.resolvedResolutionStatus()
+	resolutionStatusAr := apiResp.resolvedResolutionStatusAr()
 	changeSummary := apiResp.resolvedChangeSummary()
+	changeSummaryAr := apiResp.resolvedChangeSummaryAr()
 	distanceMeters := apiResp.resolvedDistanceMeters()
 
 	// Persist AIQualityFeedback.
 	feedback := &models.AIQualityFeedback{
-		IncidentID:       incident.ID,
-		ChangedSummary:   changeSummary,
-		ResolutionStatus: resolutionStatus,
-		DistanceMeters:   distanceMeters,
-		RawResponse:      rawBody,
+		IncidentID:         incident.ID,
+		ChangedSummary:     changeSummary,
+		ChangedSummaryAr:   changeSummaryAr,
+		ResolutionStatus:   resolutionStatus,
+		ResolutionStatusAr: resolutionStatusAr,
+		DistanceMeters:     distanceMeters,
+		RawResponse:        rawBody,
 	}
 	if err := m.feedbackRepo.Create(ctx, feedback); err != nil {
 		return fmt.Errorf("save AIQualityFeedback: %w", err)
