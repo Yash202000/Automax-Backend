@@ -3637,12 +3637,19 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 						continue
 					}
 				}
-				// Replace any existing value from this category on the incident, then append the new one
-				if err := tx.WithContext(ctx).Exec(
-					"DELETE FROM incident_lookup_values WHERE incident_id = ? AND lookup_value_id IN (SELECT id FROM lookup_values WHERE category_id = ?)",
-					incidentID, category.ID,
-				).Error; err != nil {
-					fmt.Printf("Warning: failed to clear old lookup values for category %s: %v\n", categoryCode, err)
+				// Categories marked "allow multiple values" in Master Data (e.g.
+				// Visit Number) accumulate a new linked value on every transition
+				// instead of replacing the previous one — skip the clear-out below
+				// so earlier values stay linked (and keep showing up in the
+				// incident's lookup value list) alongside the new one.
+				if !categoryAllowsMultipleValues(category) {
+					// Replace any existing value from this category on the incident, then append the new one
+					if err := tx.WithContext(ctx).Exec(
+						"DELETE FROM incident_lookup_values WHERE incident_id = ? AND lookup_value_id IN (SELECT id FROM lookup_values WHERE category_id = ?)",
+						incidentID, category.ID,
+					).Error; err != nil {
+						fmt.Printf("Warning: failed to clear old lookup values for category %s: %v\n", categoryCode, err)
+					}
 				}
 				incRef := models.Incident{}
 				incRef.ID = incidentID
@@ -5976,6 +5983,24 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// categoryAllowsMultipleValues checks a lookup category's validation_rules
+// JSON for the "allowMultiple" flag (set from Automax-Client's Master Data
+// "Allow multiple values" checkbox). Free-entry text/number categories with
+// this flag on — e.g. Visit Number — accumulate a new linked lookup value on
+// every transition instead of replacing the previous one.
+func categoryAllowsMultipleValues(category models.LookupCategory) bool {
+	if category.ValidationRules == "" {
+		return false
+	}
+	var rules struct {
+		AllowMultiple bool `json:"allowMultiple"`
+	}
+	if err := json.Unmarshal([]byte(category.ValidationRules), &rules); err != nil {
+		return false
+	}
+	return rules.AllowMultiple
 }
 
 // UpdateClosedIncidentSummary allows editing the description of a closed incident
