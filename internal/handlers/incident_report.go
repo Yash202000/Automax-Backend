@@ -300,9 +300,9 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 	var reportCustomFields []reportCustomField
 	if reportData.CustomFields != "" && h.lookupRepo != nil {
 		var cf map[string]struct {
-			CategoryID string `json:"category_id"`
-			FieldType  string `json:"field_type"`
-			Value      string `json:"value"`
+			CategoryID string          `json:"category_id"`
+			FieldType  string          `json:"field_type"`
+			Value      json.RawMessage `json:"value"`
 		}
 		if json.Unmarshal([]byte(reportData.CustomFields), &cf) == nil {
 			for _, entry := range cf {
@@ -318,13 +318,14 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 				if lbl.Dir == "rtl" && cat.NameAr != "" {
 					label = cat.NameAr
 				}
+				valueStr := formatReportCustomFieldValue(entry.Value)
 				link := ""
 				if cat.RedirectURL != "" {
-					link = strings.ReplaceAll(cat.RedirectURL, ":id", entry.Value)
+					link = strings.ReplaceAll(cat.RedirectURL, ":id", valueStr)
 				}
 				reportCustomFields = append(reportCustomFields, reportCustomField{
 					Label: label,
-					Value: entry.Value,
+					Value: valueStr,
 					URL:   link,
 				})
 			}
@@ -428,6 +429,35 @@ type reportCustomField struct {
 	Label string
 	Value string
 	URL   string
+}
+
+// formatReportCustomFieldValue renders a custom lookup field's raw JSON
+// value for display in the incident report. Most field types store a plain
+// string, but "number"/"checkbox" store a JSON number/bool, "multiselect"
+// and "allow multiple values" text/number fields (e.g. Visit Number) store a
+// JSON array — handle all of these instead of assuming a string, which
+// would fail json.Unmarshal for the whole custom_fields map.
+func formatReportCustomFieldValue(raw json.RawMessage) string {
+	var asString string
+	if json.Unmarshal(raw, &asString) == nil {
+		return asString
+	}
+
+	var asArray []interface{}
+	if json.Unmarshal(raw, &asArray) == nil {
+		parts := make([]string, 0, len(asArray))
+		for _, v := range asArray {
+			parts = append(parts, fmt.Sprintf("%v", v))
+		}
+		return strings.Join(parts, ", ")
+	}
+
+	var asGeneric interface{}
+	if json.Unmarshal(raw, &asGeneric) == nil && asGeneric != nil {
+		return fmt.Sprintf("%v", asGeneric)
+	}
+
+	return string(raw)
 }
 
 func buildReportHTML(
