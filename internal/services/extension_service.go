@@ -494,13 +494,26 @@ func (s *extensionService) notify(ctx context.Context, action, extension string,
 
 	if len(recipients) > 0 {
 		sentBy := actorID
-		if _, err := s.notifService.SendNotification(
+		result, err := s.notifService.SendNotification(
 			ctx, "notification", nil, "en",
 			recipients, nil, nil,
 			subject, body, nil, nil,
 			&sentBy, nil,
-		); err != nil {
+		)
+		if err != nil {
 			log.Printf("[ExtensionService] in-app notification failed for %s: %v", extension, err)
+		}
+		// Store the Arabic text on the recipients' inbox copies and the sender's copy;
+		// it is returned when Accept-Language: ar.
+		if result != nil {
+			ids := append([]uuid.UUID{}, result.InboxLogIDs...)
+			if result.SentLog != nil {
+				ids = append(ids, result.SentLog.ID)
+			}
+			if len(ids) > 0 {
+				subjectAr, bodyAr := extensionNotificationContentAr(action, extension, displayName(target), displayName(prev))
+				_ = s.notifService.SetArContentOnLogs(ctx, ids, subjectAr, bodyAr)
+			}
 		}
 	}
 
