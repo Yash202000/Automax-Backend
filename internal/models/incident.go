@@ -614,6 +614,8 @@ type IncidentSummary struct {
 	IncidentNumber     string    `json:"incident_number"`
 	Latitude           *float64  `json:"latitude"`
 	Longitude          *float64  `json:"longitude"`
+	Distance           string    `json:"distance,omitempty"`        // human-readable distance_meters, e.g. "0.4km"
+	DistanceMeters     *float64  `json:"distance_meters,omitempty"` // from the search center; only set when latitude/longitude are given
 	ClassificationName string    `json:"classification_name"`
 	LocationName       string    `json:"location_name"`
 	CurrentStateID     uuid.UUID `json:"current_state_id"`

@@ -538,7 +538,7 @@ func (r *incidentRepository) ListMapMarkers(ctx context.Context, filter *models.
 func (r *incidentRepository) ListSummaries(ctx context.Context, filter *models.IncidentFilter) ([]models.IncidentSummary, int64, error) {
 	var total int64
 
-	base := r.applyIncidentFilters(ctx, r.db.WithContext(ctx).Model(&models.Incident{}), filter)
+	base := r.applyIncidentFilters(ctx, r.db.WithContext(ctx).Model(&models.Incident{}), filter).Debug()
 
 	if err := base.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -552,24 +552,49 @@ func (r *incidentRepository) ListSummaries(ctx context.Context, filter *models.I
 	}
 	offset := (filter.Page - 1) * filter.Limit
 
-	var summaries []models.IncidentSummary
-	err := base.
-		Select(`incidents.id, incidents.incident_number, incidents.latitude, incidents.longitude,
+	selectCols := `incidents.id, incidents.incident_number, incidents.latitude, incidents.longitude,
 			COALESCE(classifications.name, '') AS classification_name,
 			COALESCE(locations.name, '') AS location_name,
 			incidents.current_state_id,
 			workflow_states.name AS status,
 			workflow_states.color AS status_color,
-			incidents.created_at`).
+			incidents.created_at`
+	args := []interface{}{}
+	order := "incidents.created_at DESC"
+	if filter.CenterLatitude != nil && filter.CenterLongitude != nil {
+		// Haversine distance in meters (same constant/formula as the radius filter);
+		// NULL when the incident has no coordinates.
+		selectCols += `,
+			CASE WHEN incidents.latitude IS NULL OR incidents.longitude IS NULL THEN NULL ELSE
+				6371000 * acos(
+					LEAST(1, GREATEST(-1,
+						cos(radians(?)) * cos(radians(incidents.latitude)) *
+						cos(radians(incidents.longitude) - radians(?)) +
+						sin(radians(?)) * sin(radians(incidents.latitude))
+					))
+				) END AS distance_meters`
+		args = append(args, *filter.CenterLatitude, *filter.CenterLongitude, *filter.CenterLatitude)
+		order = "distance_meters ASC NULLS LAST, incidents.created_at DESC"
+	}
+
+	var summaries []models.IncidentSummary
+	err := base.
+		Select(selectCols, args...).
 		Joins("LEFT JOIN classifications ON classifications.id = incidents.classification_id").
 		Joins("LEFT JOIN locations ON locations.id = incidents.location_id").
 		Joins("JOIN workflow_states ON workflow_states.id = incidents.current_state_id").
-		Order("incidents.created_at DESC").
+		Order(order).
 		Offset(offset).
 		Limit(filter.Limit).
 		Find(&summaries).Error
 	if err != nil {
 		return nil, 0, err
+	}
+
+	for i := range summaries {
+		if summaries[i].DistanceMeters != nil {
+			summaries[i].Distance = fmt.Sprintf("%.1fkm", *summaries[i].DistanceMeters/1000)
+		}
 	}
 
 	return summaries, total, nil
