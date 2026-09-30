@@ -297,6 +297,7 @@ func main() {
 
 	// KPI Dictionary handler
 	kpiDictionaryHandler := handlers.NewKpiDictionaryHandler(db, actionLogService, kpiWorkflowService)
+	kpiImportHandler := handlers.NewKpiImportHandler(db, actionLogService, kpiWorkflowService)
 
 	// KPI Performance handler
 	kpiPerformanceHandler := handlers.NewKpiPerformanceHandler(db, kpiWorkflowService, actionLogService)
@@ -1328,6 +1329,10 @@ func main() {
 	kpi.Get("/documenta/folders/:id", authMiddleware.RequirePermission("kpi:view"), kpiDocumentaHandler.GetFolderInfo)
 
 	// ---- KPI DICTIONARY ROUTES ----
+	// Bulk import from the KPI Dictionary workbook: validate = dry run
+	// (validation report + preview), commit = re-validate and apply.
+	kpi.Post("/dictionary-import/validate", authMiddleware.RequirePermission("kpi:create"), kpiImportHandler.Validate)
+	kpi.Post("/dictionary-import/commit", authMiddleware.RequirePermission("kpi:create"), kpiImportHandler.Commit)
 	kpi.Get("/strategic", authMiddleware.RequirePermission("kpi:view"), kpiDictionaryHandler.ListStrategic)
 	kpi.Get("/strategic/:id", authMiddleware.RequirePermission("kpi:view"), kpiDictionaryHandler.GetStrategic)
 	kpi.Post("/strategic", authMiddleware.RequirePermission("kpi:create"), kpiDictionaryHandler.CreateStrategic)
