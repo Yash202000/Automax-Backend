@@ -433,6 +433,9 @@ var messages = map[string][2]string{
 	"department_already_exists_named":    {"Department '%s' already exists", "القسم '%s' موجود بالفعل"},
 	"department_already_exists_named_at": {"Department '%s' already exists at '%s'", "القسم '%s' موجود بالفعل في '%s'"},
 	"department_has_active_children":     {"Cannot deactivate this department because it has active sub-departments. Please deactivate all child departments first.", "لا يمكن إلغاء تفعيل هذا القسم لأنه يحتوي على أقسام فرعية نشطة. الرجاء إلغاء تفعيل جميع الأقسام الفرعية أولاً."},
+	"department_parent_not_found":        {"Parent department not found", "القسم الأصل غير موجود"},
+	"department_cannot_be_own_parent":    {"A department cannot be its own parent", "لا يمكن أن يكون القسم أصلاً لنفسه"},
+	"department_parent_is_descendant":    {"Cannot move a department under one of its own sub-departments", "لا يمكن نقل القسم إلى أحد أقسامه الفرعية"},
 
 	// ── Categories / Lookup ───────────────────────────────────────────────────
 	"category_not_found":          {"Category not found", "الفئة غير موجودة"},
