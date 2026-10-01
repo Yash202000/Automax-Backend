@@ -87,6 +87,9 @@ func BuildIncidentVariables(
 		"feedback_url":  "",
 		"feedback_link": "",
 		"sla_page_link": "",
+		// incident report PDF link (same signed-token pattern as sms_link)
+		"report_url":  "",
+		"report_link": "",
 		// Escalation-specific — empty by default; callers override
 		"hours_in_state":    "",
 		"sla_hours":         "",
@@ -129,10 +132,17 @@ func BuildIncidentVariables(
 			vars["feedback_url"] = ""
 		}
 		vars["feedback_link"] = fmt.Sprintf(`<a href="%s">تقييم الخدمة</a>`, vars["feedback_url"])
+
+		reportToken := pkgutils.GenerateIncidentToken(incident.ID.String(), 30*24*time.Hour)
+		vars["report_url"] = fmt.Sprintf("%s/ivr/incident/report/%s?signed_token=%s",
+			smsPortalBase, incident.ID.String(), url.QueryEscape(reportToken))
+		vars["report_link"] = fmt.Sprintf(`<a href="%s">عرض تقرير البلاغ</a>`, vars["report_url"])
 	} else {
 		vars["sms_link"] = ""
 		vars["feedback_url"] = ""
 		vars["feedback_link"] = ""
+		vars["report_url"] = ""
+		vars["report_link"] = ""
 	}
 
 	// Dates
