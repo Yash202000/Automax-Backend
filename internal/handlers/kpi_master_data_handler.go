@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"fmt"
+
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
@@ -704,6 +706,9 @@ func (h *KpiMasterDataHandler) CreateAwardCriterion(c *fiber.Ctx) error {
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
+	if msg := h.awardCriterionNoConflict(c, req.CriterionNo, uuid.Nil); msg != "" {
+		return utils.ErrorResponse(c, fiber.StatusConflict, msg)
+	}
 	item := &models.AwardCriterion{CriterionNo: req.CriterionNo, NameEn: req.NameEn, NameAr: req.NameAr}
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
@@ -723,17 +728,39 @@ func (h *KpiMasterDataHandler) UpdateAwardCriterion(c *fiber.Ctx) error {
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
+	if msg := h.awardCriterionNoConflict(c, req.CriterionNo, id); msg != "" {
+		return utils.ErrorResponse(c, fiber.StatusConflict, msg)
+	}
 	result := h.db.WithContext(c.UserContext()).Model(&models.AwardCriterion{ID: id}).Updates(map[string]interface{}{
 		"criterion_no": req.CriterionNo,
 		"name_en":      req.NameEn,
 		"name_ar":      req.NameAr,
 	})
+	if result.Error != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
+	}
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 	var item models.AwardCriterion
 	h.db.WithContext(c.UserContext()).First(&item, id)
 	return utils.SuccessResponse(c, fiber.StatusOK, "", item.ToResponse())
+}
+
+// awardCriterionNoConflict reports a human-readable conflict when another
+// award criterion already uses criterionNo. criterion_no is unique across
+// soft-deleted rows too (plain unique index), so those are checked as well.
+func (h *KpiMasterDataHandler) awardCriterionNoConflict(c *fiber.Ctx, criterionNo int, selfID uuid.UUID) string {
+	var existing models.AwardCriterion
+	err := h.db.WithContext(c.UserContext()).Unscoped().
+		Where("criterion_no = ? AND id <> ?", criterionNo, selfID).First(&existing).Error
+	if err != nil {
+		return ""
+	}
+	if existing.DeletedAt.Valid {
+		return fmt.Sprintf("Criterion No. %d is still reserved by a deleted award criterion (%q)", criterionNo, existing.NameEn)
+	}
+	return fmt.Sprintf("Criterion No. %d already exists (%q)", criterionNo, existing.NameEn)
 }
 
 func (h *KpiMasterDataHandler) DeleteAwardCriterion(c *fiber.Ctx) error {
