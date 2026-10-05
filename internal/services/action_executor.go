@@ -238,6 +238,14 @@ func (e *actionExecutor) executeEmail(ctx context.Context, action *models.Transi
 		sentByID = &performedBy.ID
 	}
 
+	// Report link is sent once per closure per channel.
+	sendsReportLink := e.sendsReportLink(ctx, config.TemplateCode, "email", subject, body)
+	if sendsReportLink && incident.ReportLinkEmailSentAt != nil {
+		log.Printf("[EMAIL-ACTION] transition=%q incident=%s — report link email already sent at %s, skipping",
+			transitionName, incident.IncidentNumber, incident.ReportLinkEmailSentAt.Format(time.RFC3339))
+		return nil
+	}
+
 	result, err := e.notificationService.SendNotification(
 		ctx, "email", templateCode, lang,
 		emails, nil, nil,
@@ -254,6 +262,11 @@ func (e *actionExecutor) executeEmail(ctx context.Context, action *models.Transi
 	}
 	log.Printf("[EMAIL-ACTION] transition=%q incident=%s emails=%v template=%q — SENT OK",
 		transitionName, incident.IncidentNumber, emails, config.TemplateCode)
+	if sendsReportLink {
+		if err := e.incidentRepo.UpdateFields(ctx, incident.ID, map[string]interface{}{"report_link_email_sent_at": time.Now()}); err != nil {
+			log.Printf("[EMAIL-ACTION] incident=%s — failed to record report link email sent: %v", incident.IncidentNumber, err)
+		}
+	}
 	return nil
 }
 
@@ -329,6 +342,14 @@ func (e *actionExecutor) executeSms(ctx context.Context, action *models.Transiti
 		smsSentByID = &performedBy.ID
 	}
 
+	// Report link is sent once per closure per channel.
+	sendsReportLink := e.sendsReportLink(ctx, config.TemplateCode, "sms", message)
+	if sendsReportLink && incident.ReportLinkSMSSentAt != nil {
+		log.Printf("[SMS-ACTION] transition=%q incident=%s — report link SMS already sent at %s, skipping",
+			transitionName, incident.IncidentNumber, incident.ReportLinkSMSSentAt.Format(time.RFC3339))
+		return nil
+	}
+
 	result, err := e.notificationService.SendNotification(
 		ctx, "sms", templateCode, lang,
 		phones, nil, nil,
@@ -345,6 +366,11 @@ func (e *actionExecutor) executeSms(ctx context.Context, action *models.Transiti
 	}
 	log.Printf("[SMS-ACTION] transition=%q incident=%s phones=%v template=%q — SENT OK",
 		transitionName, incident.IncidentNumber, phones, config.TemplateCode)
+	if sendsReportLink {
+		if err := e.incidentRepo.UpdateFields(ctx, incident.ID, map[string]interface{}{"report_link_sms_sent_at": time.Now()}); err != nil {
+			log.Printf("[SMS-ACTION] incident=%s — failed to record report link SMS sent: %v", incident.IncidentNumber, err)
+		}
+	}
 	return nil
 }
 
@@ -724,4 +750,13 @@ func extractPreviousAssigneeID(history []models.IncidentTransitionHistory) uuid.
 		}
 	}
 	return uuid.Nil
+}
+
+// sendsReportLink reports whether the notification carries the citizen report link: the
+// template's text when a template is used, otherwise the inline texts.
+func (e *actionExecutor) sendsReportLink(ctx context.Context, templateCode, channel string, inlineTexts ...string) bool {
+	if templateCode != "" {
+		return e.notificationService.TemplateUsesReportLink(ctx, templateCode, channel)
+	}
+	return containsReportVar(inlineTexts...)
 }

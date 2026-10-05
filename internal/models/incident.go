@@ -103,6 +103,12 @@ type Incident struct {
 	ReadyToCloseDuration  string     `gorm:"size:100" json:"ready_to_close_duration"`
 	ReadyToCloseNotified  bool       `gorm:"default:false" json:"ready_to_close_notified"`
 
+	// Citizen report link delivery tracking (per channel). Set once the closure SMS/email
+	// carrying {{report_url}}/{{report_link}} was sent successfully, so it is not re-sent;
+	// cleared when the incident leaves its terminal state so a re-closure sends a fresh link.
+	ReportLinkSMSSentAt   *time.Time `json:"report_link_sms_sent_at,omitempty"`
+	ReportLinkEmailSentAt *time.Time `json:"report_link_email_sent_at,omitempty"`
+
 	// Partial-Close tracking (set when incident enters a partial_close state)
 	PartialCloseExpiresAt *time.Time `gorm:"index" json:"partial_close_expires_at"`
 	PartialCloseDuration  string     `gorm:"size:100" json:"partial_close_duration"`

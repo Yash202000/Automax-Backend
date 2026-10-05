@@ -99,20 +99,29 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 			// Use whichever body is set. When the requested language has content, prefer it;
 			// otherwise use whichever variant is non-empty so the template always sends.
 			var tplBody, tplSubject string
+			tplLang := "ar"
 			if language == "ar" && tpl.BodyAR != "" {
 				tplBody = tpl.BodyAR
 				tplSubject = tpl.SubjectAR
 			} else if language != "ar" && tpl.BodyEN != "" {
 				tplBody = tpl.BodyEN
 				tplSubject = tpl.SubjectEN
+				tplLang = "en"
 			} else if tpl.BodyEN != "" {
 				tplBody = tpl.BodyEN
 				tplSubject = tpl.SubjectEN
+				tplLang = "en"
 			} else if tpl.BodyAR != "" {
 				tplBody = tpl.BodyAR
 				tplSubject = tpl.SubjectAR
 			} else {
 				log.Printf("[NotificationService] Template '%s': both EN and AR bodies are empty — skipping send", *templateCode)
+			}
+
+			// The citizen report link follows the language of the template body actually used
+			// (not the action's language setting, which may differ when a body is missing).
+			if (channel == "sms" || channel == "email") && variables != nil {
+				LocalizeReportVars(variables, tplLang)
 			}
 
 			if len(variables) > 0 {
@@ -1083,4 +1092,24 @@ func RenderTemplate(tpl string, vars map[string]string) (string, error) {
 	}
 
 	return result, nil
+}
+
+// TemplateUsesReportLink reports whether the template (any language, subject or body)
+// contains the citizen report variables {{report_url}} / {{report_link}}.
+func (s *NotificationService) TemplateUsesReportLink(ctx context.Context, templateCode, channel string) bool {
+	tpl, err := s.templateRepo.FindByCode(ctx, templateCode, channel)
+	if err != nil || tpl == nil {
+		return false
+	}
+	return containsReportVar(tpl.BodyEN, tpl.BodyAR, tpl.SubjectEN, tpl.SubjectAR)
+}
+
+func containsReportVar(texts ...string) bool {
+	for _, t := range texts {
+		l := strings.ToLower(t)
+		if strings.Contains(l, "{{report_url}}") || strings.Contains(l, "{{report_link}}") {
+			return true
+		}
+	}
+	return false
 }

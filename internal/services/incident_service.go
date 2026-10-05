@@ -3560,6 +3560,10 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			updates["resolved_at"] = now
 		}
 		updates["closed_at"] = now
+	} else {
+		// Left (or never in) a terminal state: a future closure must send a fresh report link.
+		updates["report_link_sms_sent_at"] = nil
+		updates["report_link_email_sent_at"] = nil
 	}
 
 	// Apply user-provided field changes configured on the transition

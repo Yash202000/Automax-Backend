@@ -185,6 +185,7 @@ var messages = map[string][2]string{
 	"no_mobile_number":             {"No citizen mobile number found for this incident", "لا يوجد رقم جوال للمواطن لهذا البلاغ"},
 	"sms_sent_citizen":             {"SMS sent successfully to citizen", "تم إرسال الرسالة النصية للمواطن بنجاح"},
 	"failed_to_send_sms":           {"Failed to send SMS: %s", "فشل إرسال الرسالة النصية: %s"},
+	"incident_report_not_available": {"The incident report is not available yet", "تقرير البلاغ غير متاح بعد"},
 	"phone_not_recognized":         {"Phone number is not recognized", "رقم الجوال غير معروف"},
 	"last_6_digits_required":       {"Last 6 digits of phone number are required", "الأرقام الستة الأخيرة من رقم الجوال مطلوبة"},
 	"newer_link_sent":              {"A newer link has been sent. Please use the latest SMS link.", "تم إرسال رابط أحدث. يرجى استخدام أحدث رابط SMS."},
