@@ -264,6 +264,7 @@ func (h *IncidentHandler) GenerateCitizenReport(c *fiber.Ctx) error {
 	var req struct {
 		SignedToken string `json:"signed_token"`
 		Last6Digits string `json:"last6digits"`
+		Lang        string `json:"lang"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request"))
@@ -287,7 +288,18 @@ func (h *IncidentHandler) GenerateCitizenReport(c *fiber.Ctx) error {
 	}
 
 	if _, err := h.service.FindByIDWithLast6DigitValidation(c.UserContext(), id, req.Last6Digits); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "phone_not_recognized"))
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "phone_not_recognized"))
+	}
+
+	// Closed-state check (after identity verification so open incidents don't leak status).
+	incident, err := h.incidentRepo.FindByID(c.UserContext(), id)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "incident_not_found"))
+	}
+	isClosed := incident.ClosedAt != nil ||
+		(incident.CurrentState != nil && incident.CurrentState.StateType == "terminal")
+	if !isClosed {
+		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "incident_report_not_available"))
 	}
 
 	reportData, err := h.incidentRepo.GetReportIncidentData(c.UserContext(), id)
@@ -306,8 +318,12 @@ func (h *IncidentHandler) GenerateCitizenReport(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_attachments"))
 	}
 
+	reportLang := req.Lang
+	if reportLang == "" {
+		reportLang = c.Query("lang", "ar")
+	}
 	lbl := labelsAR
-	if c.Query("lang", "ar") == "en" {
+	if reportLang == "en" {
 		lbl = labelsEN
 	}
 

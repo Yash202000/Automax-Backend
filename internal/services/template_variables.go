@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -133,7 +134,7 @@ func BuildIncidentVariables(
 		}
 		vars["feedback_link"] = fmt.Sprintf(`<a href="%s">تقييم الخدمة</a>`, vars["feedback_url"])
 
-		reportToken := pkgutils.GenerateIncidentToken(incident.ID.String(), 30*24*time.Hour)
+		reportToken := pkgutils.GenerateIncidentToken(incident.ID.String(), citizenReportLinkValidity())
 		vars["report_url"] = fmt.Sprintf("%s/ivr/incident/report/%s?signed_token=%s",
 			smsPortalBase, incident.ID.String(), url.QueryEscape(reportToken))
 		vars["report_link"] = fmt.Sprintf(`<a href="%s">عرض تقرير البلاغ</a>`, vars["report_url"])
@@ -266,4 +267,48 @@ func BuildIncidentVariables(
 	}
 
 	return vars
+}
+
+// LocalizeReportVars adapts the citizen-facing link variables to the template language
+// ("ar" or "en"):
+//   - report_url gets a &lang= param (so the report opens in the same language as the
+//     SMS/email) and report_link's anchor text is translated;
+//   - feedback_link's anchor text is translated (feedback_url itself is unchanged).
+//
+// Safe to call repeatedly: the last call wins.
+func LocalizeReportVars(vars map[string]string, lang string) {
+	if lang != "en" {
+		lang = "ar"
+	}
+
+	if u := vars["report_url"]; u != "" {
+		if i := strings.Index(u, "&lang="); i >= 0 {
+			u = u[:i] // re-localize: the last caller (template language) wins
+		}
+		u += "&lang=" + lang
+		vars["report_url"] = u
+		text := "عرض تقرير البلاغ"
+		if lang == "en" {
+			text = "View Incident Report"
+		}
+		vars["report_link"] = fmt.Sprintf(`<a href="%s">%s</a>`, u, text)
+	}
+
+	if fu := vars["feedback_url"]; fu != "" {
+		text := "تقييم الخدمة"
+		if lang == "en" {
+			text = "Rate the Service"
+		}
+		vars["feedback_link"] = fmt.Sprintf(`<a href="%s">%s</a>`, fu, text)
+	}
+}
+
+// citizenReportLinkValidity is how long the citizen report link stays valid.
+// Configurable via CITIZEN_REPORT_LINK_MINUTES; defaults to 120 minutes (2 hours).
+func citizenReportLinkValidity() time.Duration {
+	minutes := 120
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv("CITIZEN_REPORT_LINK_MINUTES"))); err == nil && v > 0 {
+		minutes = v
+	}
+	return time.Duration(minutes) * time.Minute
 }
