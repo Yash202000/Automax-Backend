@@ -2182,7 +2182,8 @@ SELECT
     fs.name                     AS from_state_name,
     fs.name_ar                  AS from_state_name_ar,
     ts.name                     AS to_state_name,
-    ts.name_ar                  AS to_state_name_ar
+    ts.name_ar                  AS to_state_name_ar,
+    (COALESCE(ts.state_type, '') = 'terminal' OR COALESCE(ts.is_ready_to_close, false) OR COALESCE(wt.is_final_close, false)) AS is_closure
 FROM incident_attachments ia
 LEFT JOIN users u                            ON u.id  = ia.uploaded_by_id
 LEFT JOIN incident_transition_histories ith  ON ith.id = ia.transition_history_id
@@ -2258,8 +2259,35 @@ SELECT
         FROM incident_assignees ia2
         JOIN users u2 ON u2.id = ia2.user_id
         WHERE ia2.incident_id = i.id
-    ), '') AS assignees_name
+    ), '') AS assignees_name,
+    COALESCE(apv.by_name, '')  AS approved_by_name,  apv.at AS approved_at,
+    COALESCE(rtc.by_name, '')  AS ready_to_close_by_name, rtc.at AS ready_to_close_at,
+    COALESCE(fcl.by_name, '')  AS closed_by_name
 FROM incidents i
+LEFT JOIN LATERAL (
+    SELECT TRIM(CONCAT_WS(' ', pu.first_name, pu.last_name)) AS by_name, h.transitioned_at AS at
+    FROM incident_transition_histories h
+    LEFT JOIN workflow_transitions t ON t.id = h.transition_id
+    LEFT JOIN users pu               ON pu.id = h.performed_by_id
+    WHERE h.incident_id = i.id AND LOWER(t.code) = 'approve'
+    ORDER BY h.transitioned_at DESC LIMIT 1
+) apv ON true
+LEFT JOIN LATERAL (
+    SELECT TRIM(CONCAT_WS(' ', pu.first_name, pu.last_name)) AS by_name, h.transitioned_at AS at
+    FROM incident_transition_histories h
+    JOIN workflow_states s ON s.id = h.to_state_id AND s.is_ready_to_close = true
+    LEFT JOIN users pu     ON pu.id = h.performed_by_id
+    WHERE h.incident_id = i.id
+    ORDER BY h.transitioned_at DESC LIMIT 1
+) rtc ON true
+LEFT JOIN LATERAL (
+    SELECT TRIM(CONCAT_WS(' ', pu.first_name, pu.last_name)) AS by_name
+    FROM incident_transition_histories h
+    JOIN workflow_transitions t ON t.id = h.transition_id AND t.is_final_close = true
+    LEFT JOIN users pu          ON pu.id = h.performed_by_id
+    WHERE h.incident_id = i.id
+    ORDER BY h.transitioned_at DESC LIMIT 1
+) fcl ON true
 LEFT JOIN workflow_states ws ON ws.id  = i.current_state_id
 LEFT JOIN classifications cl  ON cl.id  = i.classification_id
 LEFT JOIN locations loc        ON loc.id = i.location_id

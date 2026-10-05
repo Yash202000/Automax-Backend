@@ -93,6 +93,17 @@ type reportLabels struct {
 	AttBeforeImage    string
 	AttAfterImage     string
 	PrintDate         string
+	NA                string
+	ApprovedBy        string
+	ApprovedAt        string
+	ReadyToCloseBy    string
+	ReadyToCloseAt    string
+	ClosedBy          string
+	AttCreation       string
+	AttClosure        string
+	AttOther          string
+	NoAttachments     string
+	NoLogs            string
 	Yes               string
 	No                string
 	PriorityLabels    [6]string // index 1-5
@@ -166,6 +177,17 @@ var labelsAR = reportLabels{
 	AttBeforeImage:    "قبل",
 	AttAfterImage:     "بعد",
 	PrintDate:         "تاريخ الطباعة",
+	NA:                "غير متوفر",
+	ApprovedBy:        "المعتمد بواسطة",
+	ApprovedAt:        "تاريخ الاعتماد",
+	ReadyToCloseBy:    "جاهز للإغلاق بواسطة",
+	ReadyToCloseAt:    "تاريخ الجاهزية للإغلاق",
+	ClosedBy:          "أغلق بواسطة",
+	AttCreation:       "مرفقات الإنشاء",
+	AttClosure:        "مرفقات الإغلاق",
+	AttOther:          "مرفقات أخرى",
+	NoAttachments:     "لا توجد مرفقات",
+	NoLogs:            "لا توجد سجلات",
 	Yes:               "نعم",
 	No:                "لا",
 	PriorityLabels:    [6]string{"", "حرجة", "عالية", "متوسطة", "منخفضة", "منخفضة جداً"},
@@ -239,6 +261,17 @@ var labelsEN = reportLabels{
 	AttBeforeImage:    "Before Image",
 	AttAfterImage:     "After Image",
 	PrintDate:         "Print Date",
+	NA:                "N/A",
+	ApprovedBy:        "Approved By",
+	ApprovedAt:        "Approved At",
+	ReadyToCloseBy:    "Ready to Close By",
+	ReadyToCloseAt:    "Ready to Close At",
+	ClosedBy:          "Closed By",
+	AttCreation:       "Creation Attachments",
+	AttClosure:        "Closure Attachments",
+	AttOther:          "Other Attachments",
+	NoAttachments:     "No attachments",
+	NoLogs:            "No logs available",
 	Yes:               "Yes",
 	No:                "No",
 	PriorityLabels:    [6]string{"", "Critical", "High", "Medium", "Low", "Very Low"},
@@ -352,6 +385,15 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
+	// "Include Logs" is opt-in (default off) and requires log-view access.
+	includeLogs := c.QueryBool("include_logs", false)
+	if includeLogs {
+		user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
+		if user == nil || !(user.IsSuperAdmin || user.HasPermission("action-logs:view")) {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, "Insufficient permissions")
+		}
+	}
+
 	reportData, err := h.incidentRepo.GetReportIncidentData(c.UserContext(), id)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "incident_not_found"))
@@ -376,9 +418,12 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 		reportLookupValues = nil
 	}
 
-	reportTransitions, err := h.incidentRepo.GetReportTransitions(c.UserContext(), id)
-	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_transitions"))
+	var reportTransitions []models.IncidentReportTransition
+	if includeLogs {
+		reportTransitions, err = h.incidentRepo.GetReportTransitions(c.UserContext(), id)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_transitions"))
+		}
 	}
 
 	reportAttachments, err := h.incidentRepo.GetReportAttachments(c.UserContext(), id)
@@ -386,9 +431,12 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_attachments"))
 	}
 
-	reportRevisions, err := h.incidentRepo.GetReportRevisions(c.UserContext(), id)
-	if err != nil {
-		reportRevisions = nil
+	var reportRevisions []models.IncidentReportRevision
+	if includeLogs {
+		reportRevisions, err = h.incidentRepo.GetReportRevisions(c.UserContext(), id)
+		if err != nil {
+			reportRevisions = nil
+		}
 	}
 
 	lbl := labelsAR
@@ -435,7 +483,7 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 	rightLogoB64 := fetchLogoBase64(h.cfg.Report.LogoRightURL)
 
 	format := c.Query("format", "pdf")
-	htmlBytes := buildReportHTML(c, h, reportData, reportLookupValues, leftLogoB64, rightLogoB64, lbl, reportTransitions, reportAttachments, reportRevisions, reportCustomFields)
+	htmlBytes := buildReportHTML(c, h, reportData, reportLookupValues, leftLogoB64, rightLogoB64, lbl, reportTransitions, reportAttachments, reportRevisions, reportCustomFields, includeLogs)
 
 	switch format {
 	case "html":
@@ -571,6 +619,7 @@ func buildReportHTML(
 	reportAttachments []models.IncidentReportAttachment,
 	reportRevisions []models.IncidentReportRevision,
 	customFields []reportCustomField,
+	includeLogs bool,
 ) []byte {
 	var b bytes.Buffer
 
@@ -590,12 +639,18 @@ func buildReportHTML(
 		return en
 	}
 
-	// helper: safely dereference *string
-	ptrStr := func(p *string) string {
-		if p == nil {
-			return ""
+	// na renders a value escaped, or the localized N/A placeholder when empty.
+	na := func(v string) string {
+		if strings.TrimSpace(v) == "" {
+			return html.EscapeString(l.NA)
 		}
-		return *p
+		return html.EscapeString(v)
+	}
+	naT := func(t *time.Time) string {
+		if t == nil {
+			return html.EscapeString(l.NA)
+		}
+		return html.EscapeString(ts(*t))
 	}
 
 	b.WriteString(fmt.Sprintf(`<!DOCTYPE html>
@@ -716,8 +771,8 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 	b.WriteString(`<table class="grid">`)
 	row2(&b, l.IncidentNo, html.EscapeString(data.IncidentNumber), l.Date, html.EscapeString(ts(data.CreatedAt)))
 	row2(&b, l.Source, html.EscapeString(data.Source), l.RecordTypeLbl, html.EscapeString(data.RecordType))
-	row1(&b, l.Status, html.EscapeString(statusName))
-	row1(&b, l.Title2, html.EscapeString(data.Title))
+	row1(&b, l.Status, na(statusName))
+	row1(&b, l.Title2, na(data.Title))
 
 	// lookup values — group by category, one row per category
 	if len(lookupValues) > 0 {
@@ -754,36 +809,20 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 		}
 	}
 
-	row1(&b, l.Classification, html.EscapeString(classDisplay))
-	row1(&b, l.LocationLbl, html.EscapeString(locationDisplay))
-	if data.Description != "" {
-		row1(&b, l.Description, html.EscapeString(data.Description))
-	}
+	row1(&b, l.Classification, na(classDisplay))
+	row1(&b, l.LocationLbl, na(locationDisplay))
+	row1(&b, l.Description, na(data.Description))
 	if data.SLADeadline != nil {
 		row2(&b, l.SLABreached, fmt.Sprintf(`<span class="%s">%s</span>`, slaClass, html.EscapeString(slaStatus)),
 			l.SLADeadline, html.EscapeString(tsp(data.SLADeadline)))
 	} else {
 		row1(&b, l.SLABreached, fmt.Sprintf(`<span class="%s">%s</span>`, slaClass, html.EscapeString(slaStatus)))
 	}
-	var dateFields [][2]string
-
-	if data.DueDate != nil {
-		dateFields = append(dateFields, [2]string{l.DueDate, html.EscapeString(tsp(data.DueDate))})
-	}
-	if data.ResolvedAt != nil {
-		dateFields = append(dateFields, [2]string{l.ResolvedAt, html.EscapeString(tsp(data.ResolvedAt))})
-	}
-	if data.ClosedAt != nil {
-		dateFields = append(dateFields, [2]string{l.ClosedAt, html.EscapeString(tsp(data.ClosedAt))})
-	}
-
-	// pair them: row2 for pairs, row1 for leftover
-	for i := 0; i < len(dateFields); i += 2 {
-		if i+1 < len(dateFields) {
-			row2(&b, dateFields[i][0], dateFields[i][1], dateFields[i+1][0], dateFields[i+1][1])
-		} else {
-			row1(&b, dateFields[i][0], dateFields[i][1])
-		}
+	row2(&b, l.ApprovedBy, na(data.ApprovedByName), l.ApprovedAt, naT(data.ApprovedAt))
+	row2(&b, l.ReadyToCloseBy, na(data.ReadyToCloseByName), l.ReadyToCloseAt, naT(data.ReadyToCloseAt))
+	row2(&b, l.ClosedBy, na(data.ClosedByName), l.ClosedAt, naT(data.ClosedAt))
+	if data.DueDate != nil || data.ResolvedAt != nil {
+		row2(&b, l.DueDate, naT(data.DueDate), l.ResolvedAt, naT(data.ResolvedAt))
 	}
 	b.WriteString(`</table>`)
 
@@ -839,44 +878,38 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 		row2(&b, l.ReporterName, html.EscapeString(data.CallerName), l.Assignee, html.EscapeString(assigneeName))
 		row2(&b, l.ReporterEmail, html.EscapeString(data.ReporterEmail), l.ReporterMobile, html.EscapeString(data.CallerPhone))
 	} else {
-		row2(&b, l.Reporter, html.EscapeString(data.CreatorFullName), l.Assignee, html.EscapeString(assigneeName))
-		row2(&b, l.ReporterEmail, html.EscapeString(data.CreatorEmail), l.ReporterMobile, html.EscapeString(data.CreatorPhone))
+		row2(&b, l.Reporter, na(data.CreatorFullName), l.Assignee, na(assigneeName))
+		row2(&b, l.ReporterEmail, na(data.CreatorEmail), l.ReporterMobile, na(data.CreatorPhone))
 	}
-	row1(&b, l.Department, html.EscapeString(data.DepartmentName))
+	row1(&b, l.Department, na(data.DepartmentName))
 	b.WriteString(`</table>`)
 
 	// ── Section: Caller Details ─────────────────────────
-	if data.CallerPhone != "" && !isVD2 && !isVisionalSource {
+	if !isVD2 && !isVisionalSource {
 		secHeader(&b, l.SectionCaller)
 		b.WriteString(`<table class="grid">`)
-		row2(&b, l.CallerName, html.EscapeString(data.CallerName), l.CallerMobile, html.EscapeString(data.CallerPhone))
+		row2(&b, l.CallerName, na(data.CallerName), l.CallerMobile, na(data.CallerPhone))
 		b.WriteString(`</table>`)
 	}
 
 	// ── Section: Location ─────────────────────────────────────────────────────
-	hasLocation := data.Latitude != nil || data.Longitude != nil || data.Address != "" ||
-		data.City != "" || data.State != "" || data.Country != "" || data.PostalCode != ""
-	if hasLocation {
+	{
 		secHeader(&b, l.SectionLocation)
 		b.WriteString(`<table class="grid">`)
-		if data.Latitude != nil || data.Longitude != nil {
-			lat, lon := "", ""
-			if data.Latitude != nil {
-				lat = fmt.Sprintf("%.8f", *data.Latitude)
-			}
-			if data.Longitude != nil {
-				lon = fmt.Sprintf("%.8f", *data.Longitude)
-			}
-			row2(&b, l.Latitude, html.EscapeString(lat), l.Longitude, html.EscapeString(lon))
+		lat, lon := "", ""
+		if data.Latitude != nil {
+			lat = fmt.Sprintf("%.8f", *data.Latitude)
 		}
-		if data.Address != "" {
-			row1(&b, l.Address, html.EscapeString(data.Address))
+		if data.Longitude != nil {
+			lon = fmt.Sprintf("%.8f", *data.Longitude)
 		}
+		row2(&b, l.Latitude, na(lat), l.Longitude, na(lon))
+		row1(&b, l.Address, na(data.Address))
 		if data.City != "" || data.State != "" {
-			row2(&b, l.City, html.EscapeString(data.City), l.State, html.EscapeString(data.State))
+			row2(&b, l.City, na(data.City), l.State, na(data.State))
 		}
 		if data.Country != "" || data.PostalCode != "" {
-			row2(&b, l.Country, html.EscapeString(data.Country), l.PostalCode, html.EscapeString(data.PostalCode))
+			row2(&b, l.Country, na(data.Country), l.PostalCode, na(data.PostalCode))
 		}
 		b.WriteString(`</table>`)
 	}
@@ -1017,77 +1050,43 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 		b.WriteString(`</div>`)
 	}
 
-	if len(reportAttachments) > 0 {
-		secHeader(&b, l.SectionAttach)
-		b.WriteString(`<div>`)
-
-		clientCode := strings.TrimSpace(h.cfg.ClientCode)
-		if strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
-			// EPM940: group attachments by workflow state. Creation-time uploads
-			// (no transition) sit under "Incident Creation"; transition uploads
-			// sit under "Incident <to-state name>". Groups keep first-seen order.
-			prefixLabel := "Incident"
-			creationLabel := "Incident Creation"
-			if l.Dir == "rtl" {
-				prefixLabel = "البلاغ"
-				creationLabel = "إنشاء البلاغ"
-			}
-			type attGroup struct {
-				label string
-				atts  []models.IncidentReportAttachment
-			}
-			seen := make(map[string]int)
-			var groups []attGroup
-			for _, att := range reportAttachments {
-				var label string
-				if att.TransitionHistoryID == nil {
-					label = creationLabel
-				} else if trName := localName(ptrStr(att.TransitionName), ptrStr(att.TransitionNameAr)); trName != "" {
-					label = prefixLabel + " " + trName
-				} else {
-					label = prefixLabel
-				}
-				if idx, ok := seen[label]; ok {
-					groups[idx].atts = append(groups[idx].atts, att)
-				} else {
-					seen[label] = len(groups)
-					groups = append(groups, attGroup{label: label, atts: []models.IncidentReportAttachment{att}})
-				}
-			}
-			for _, g := range groups {
-				fmt.Fprintf(&b, `<div class="att-group-header">%s</div>`, html.EscapeString(g.label))
-				for _, att := range g.atts {
-					renderAttCard(att, "")
-				}
-			}
-		} else {
-			for _, att := range reportAttachments {
-				// Resolve transition context; no transition → show as incident creation upload
-				var attTransitionLabel string
-				if att.TransitionHistoryID == nil {
-					attTransitionLabel = `<div class="att-transition"><span>Uploaded at: <b>Incident Creation</b></span></div>`
-				} else {
-					transName := localName(ptrStr(att.TransitionName), ptrStr(att.TransitionNameAr))
-					fromName := localName(ptrStr(att.FromStateName), ptrStr(att.FromStateNameAr))
-					toName := localName(ptrStr(att.ToStateName), ptrStr(att.ToStateNameAr))
-					if transName == "" {
-						transName = "NA"
-					}
-					if fromName == "" {
-						fromName = "NA"
-					}
-					if toName == "" {
-						toName = "NA"
-					}
-					attTransitionLabel = fmt.Sprintf(
-						`<div class="att-transition"><span>Transition: <b>%s</b></span><span>From: <b>%s</b></span><span>To: <b>%s</b></span></div>`,
-						html.EscapeString(transName), html.EscapeString(fromName), html.EscapeString(toName),
-					)
-				}
-				renderAttCard(att, attTransitionLabel)
-			}
+	// Attachments are always shown, split into creation / closure (and any
+	// other transition uploads) with an empty-state message per group.
+	secHeader(&b, l.SectionAttach)
+	b.WriteString(`<div>`)
+	var creationAtts, closureAtts, otherAtts []models.IncidentReportAttachment
+	for _, att := range reportAttachments {
+		switch {
+		case att.TransitionHistoryID == nil:
+			creationAtts = append(creationAtts, att)
+		case att.IsClosure:
+			closureAtts = append(closureAtts, att)
+		default:
+			otherAtts = append(otherAtts, att)
 		}
-		b.WriteString(`</div>`)
+	}
+	renderAttGroup := func(label string, atts []models.IncidentReportAttachment, always bool) {
+		if len(atts) == 0 && !always {
+			return
+		}
+		fmt.Fprintf(&b, `<div class="att-group-header">%s</div>`, html.EscapeString(label))
+		if len(atts) == 0 {
+			fmt.Fprintf(&b, `<div class="comment-block">%s</div>`, html.EscapeString(l.NoAttachments))
+			return
+		}
+		for _, att := range atts {
+			renderAttCard(att, "")
+		}
+	}
+	renderAttGroup(l.AttCreation, creationAtts, true)
+	renderAttGroup(l.AttClosure, closureAtts, true)
+	renderAttGroup(l.AttOther, otherAtts, false)
+	b.WriteString(`</div>`)
+
+	// ── Logs empty state ──────────────────────────────────────────────────────
+	if includeLogs && len(reportRevisions) == 0 && len(reportTransitions) == 0 {
+		secHeader(&b, l.SectionHistory)
+		fmt.Fprintf(&b, `<div class="comment-block">%s</div>`, html.EscapeString(l.NoLogs))
 	}
 
 	// ── Footer ────────────────────────────────────────────────────────────────
