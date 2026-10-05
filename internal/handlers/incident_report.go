@@ -334,6 +334,7 @@ func (h *IncidentHandler) GenerateCitizenReport(c *fiber.Ctx) error {
 
 	pdfData, err := renderIncidentHTMLToPDF(htmlBytes, h.cfg.Report.ChromeBin)
 	if err != nil {
+		log.Printf("citizen report pdf render err: %v", err)
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_read_pdf"))
 	}
 
@@ -478,7 +479,7 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 
 		pdfData, terr := os.ReadFile(pdfPath)
 		if terr != nil || len(pdfData) == 0 {
-			log.Println("report pdf data err", err)
+			log.Printf("report pdf data err: %v (bytes read: %d)", terr, len(pdfData))
 			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_read_pdf"))
 		}
 
@@ -1330,7 +1331,7 @@ func renderIncidentHTMLToPDF(htmlData []byte, chromeBin string) ([]byte, error) 
 
 	data, err := os.ReadFile(pdfPath)
 	if err != nil || len(data) == 0 {
-		log.Print("reprt render err:", err)
+		log.Printf("report render err: %v (bytes read: %d)", err, len(data))
 		return nil, fmt.Errorf("failed to read PDF output")
 	}
 	return data, nil
