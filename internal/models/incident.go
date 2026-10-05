@@ -1393,6 +1393,7 @@ type IncidentReportAttachment struct {
 	FromStateNameAr     *string    `db:"from_state_name_ar"`
 	ToStateName         *string    `db:"to_state_name"`
 	ToStateNameAr       *string    `db:"to_state_name_ar"`
+	IsClosure           bool       `db:"is_closure"`
 }
 
 // IncidentReportRevision is a flat result for the Revisions report section.
@@ -1480,6 +1481,12 @@ type IncidentReportData struct {
 	Country              string     `db:"country"`
 	PostalCode           string     `db:"postal_code"`
 	CustomFields         string     `db:"custom_fields"`
+	// Milestones derived from incident_transition_histories (latest match).
+	ApprovedByName     string     `db:"approved_by_name"`
+	ApprovedAt         *time.Time `db:"approved_at"`
+	ReadyToCloseByName string     `db:"ready_to_close_by_name"`
+	ReadyToCloseAt     *time.Time `db:"ready_to_close_at"`
+	ClosedByName       string     `db:"closed_by_name"`
 }
 
 // IncidentReportLookupValue is a flat result for lookup (dynamic attribute) values in the report.
