@@ -129,6 +129,13 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 	// Parse query parameters
 	validationErrors := validation.ValidateStruct(c.UserContext(), &req)
 
+	if req.AlternateMobile != "" && utils.SameMobile(req.AlternateMobile, req.ReporterPhone) {
+		if validationErrors == nil {
+			validationErrors = map[string]string{}
+		}
+		validationErrors["alternate_mobile"] = i18n.T(c.UserContext(), "alternate_mobile_same_as_primary")
+	}
+
 	if strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940) {
 		if utf8.RuneCountInString(req.Description) > h.cfg.MaxDescriptionLength {
 			if validationErrors == nil {

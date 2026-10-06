@@ -27,6 +27,7 @@ type User struct {
 	MiddleName                  string           `gorm:"size:100" json:"middle_name"`
 	LastName                    string           `gorm:"size:100" json:"last_name"`
 	Phone                       string           `gorm:"size:20" json:"phone"`
+	AlternateMobile             string           `gorm:"size:50;index" json:"alternate_mobile"`
 	MobileVerified              bool             `gorm:"default:false" json:"mobile_verified"`
 	Avatar                      string           `gorm:"size:500" json:"avatar"`
 	DepartmentID                *uuid.UUID       `gorm:"type:uuid;index" json:"department_id"`
@@ -184,6 +185,7 @@ type UserRegisterRequest struct {
 	MiddleName        string      `json:"middle_name" validate:"max=100"`
 	LastName          string      `json:"last_name" validate:"max=100"`
 	Phone             string      `json:"phone" validate:"omitempty,mobile,max=20"`
+	AlternateMobile   string      `json:"alternate_mobile" validate:"omitempty,mobile,max=20"`
 	Extension         string      `json:"extension" validate:"max=20"`
 	DepartmentID      *uuid.UUID  `json:"department_id"`
 	LocationID        *uuid.UUID  `json:"location_id"`
@@ -325,6 +327,7 @@ type UserUpdateRequest struct {
 	LastName                    string      `json:"last_name" validate:"max=100"`
 	Username                    string      `json:"username" validate:"omitempty,min=3,max=50"`
 	Phone                       string      `json:"phone" validate:"omitempty,mobile,max=20"`
+	AlternateMobile             string      `json:"alternate_mobile" validate:"omitempty,mobile,max=20"`
 	MobileVerified              *bool       `json:"mobile_verified"`
 	Extension                   *string     `json:"extension" validate:"omitempty,max=20"`
 	DepartmentID                *uuid.UUID  `json:"department_id"`
@@ -350,6 +353,7 @@ type UserResponse struct {
 	MiddleName                  string                   `json:"middle_name"`
 	LastName                    string                   `json:"last_name"`
 	Phone                       string                   `json:"phone"`
+	AlternateMobile             string                   `json:"alternate_mobile"`
 	MobileVerified              bool                     `json:"mobile_verified"`
 	Avatar                      string                   `json:"avatar"`
 	DepartmentID                *uuid.UUID               `json:"department_id"`
@@ -511,6 +515,7 @@ func ToUserResponse(user *User) UserResponse {
 		MiddleName:      user.MiddleName,
 		LastName:        user.LastName,
 		Phone:           user.Phone,
+		AlternateMobile: user.AlternateMobile,
 		MobileVerified:  user.MobileVerified,
 		Avatar:          user.Avatar,
 		DepartmentID:    user.DepartmentID,
