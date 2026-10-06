@@ -484,7 +484,15 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 		}
 	}
 
-	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+	validationErrors := validation.ValidateStruct(c.UserContext(), &req)
+	if req.AlternateMobile != "" && utils.SameMobile(req.AlternateMobile, req.Phone) {
+		if validationErrors == nil {
+			validationErrors = map[string]string{}
+		}
+		validationErrors["alternate_mobile"] = i18n.T(c.UserContext(), "alternate_mobile_same_as_primary")
+	}
+
+	if len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
 			"errors":  validationErrors,
@@ -548,7 +556,15 @@ func (h *UserHandler) AdminUpdateUser(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
-	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+	validationErrors := validation.ValidateStruct(c.UserContext(), &req)
+	if req.AlternateMobile != "" && utils.SameMobile(req.AlternateMobile, req.Phone) {
+		if validationErrors == nil {
+			validationErrors = map[string]string{}
+		}
+		validationErrors["alternate_mobile"] = i18n.T(c.UserContext(), "alternate_mobile_same_as_primary")
+	}
+
+	if len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
 			"errors":  validationErrors,

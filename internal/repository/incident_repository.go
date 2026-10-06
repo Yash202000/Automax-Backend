@@ -328,8 +328,8 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 		phone = strings.TrimLeft(phone, "0")
 		if phone != "" {
 			phonePattern := "%" + phone + "%"
-			query = query.Where("incidents.reporter_phone ILIKE ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone ILIKE ?)",
-				phonePattern, phonePattern)
+			query = query.Where("incidents.reporter_phone ILIKE ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone ILIKE ? OR alternate_mobile ILIKE ?)",
+				phonePattern, phonePattern, phonePattern)
 		}
 	}
 	// this to avoid EPM Citizen Portal security boundary
@@ -343,8 +343,8 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 		phone = strings.TrimLeft(phone, "0")
 		if phone != "" {
 			phonePattern := "%" + phone + "%"
-			query = query.Where("incidents.reporter_phone ILIKE ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone ILIKE ?)",
-				phonePattern, phonePattern)
+			query = query.Where("incidents.reporter_phone ILIKE ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone ILIKE ? OR alternate_mobile ILIKE ?)",
+				phonePattern, phonePattern, phonePattern)
 		}
 	}
 
@@ -1204,8 +1204,8 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 			phone = strings.TrimLeft(phone, "0")
 			if phone != "" {
 				phonePattern := "%" + phone + "%"
-				q = q.Where("incidents.reporter_phone ILIKE ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone ILIKE ?)",
-					phonePattern, phonePattern)
+				q = q.Where("incidents.reporter_phone ILIKE ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone ILIKE ? OR alternate_mobile ILIKE ?)",
+					phonePattern, phonePattern, phonePattern)
 			}
 		}
 		if filter.ReporterPhoneSearch != "" {
@@ -1219,8 +1219,8 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 			phone = strings.TrimLeft(phone, "0")
 			if phone != "" {
 				phonePattern := "%" + phone + "%"
-				q = q.Where("incidents.reporter_phone ILIKE ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone ILIKE ?)",
-					phonePattern, phonePattern)
+				q = q.Where("incidents.reporter_phone ILIKE ? OR incidents.reporter_id IN (SELECT id FROM users WHERE phone ILIKE ? OR alternate_mobile ILIKE ?)",
+					phonePattern, phonePattern, phonePattern)
 			}
 		}
 		if filter.SLABreached != nil {

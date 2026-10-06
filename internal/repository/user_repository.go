@@ -238,6 +238,7 @@ func (r *userRepository) Update(ctx context.Context, user *models.User) error {
 		"middle_name":                    user.MiddleName,
 		"last_name":                      user.LastName,
 		"phone":                          user.Phone,
+		"alternate_mobile":               user.AlternateMobile,
 		"password":                       user.Password,
 		"mobile_verified":                user.MobileVerified,
 		"is_active":                      user.IsActive,
@@ -293,8 +294,8 @@ func (r *userRepository) List(ctx context.Context, page, limit int, search, phon
 		phoneLike := strings.TrimLeft(strings.TrimPrefix(search, "+"), "0")
 		if phoneLike != "" {
 			base = base.Where(
-				"LOWER(users.username) LIKE ? OR LOWER(users.email) LIKE ? OR LOWER(users.first_name) LIKE ? OR LOWER(users.last_name) LIKE ? OR users.phone LIKE ?",
-				like, like, like, like, "%"+phoneLike+"%",
+				"LOWER(users.username) LIKE ? OR LOWER(users.email) LIKE ? OR LOWER(users.first_name) LIKE ? OR LOWER(users.last_name) LIKE ? OR users.phone LIKE ? OR users.alternate_mobile LIKE ?",
+				like, like, like, like, "%"+phoneLike+"%", "%"+phoneLike+"%",
 			)
 		} else {
 			base = base.Where(

@@ -429,12 +429,14 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 	}
 
 	creatorID := reporterID // preserve before auto-registration block may overwrite reporterID
+	// Changes to an existing citizen user (name, alternate mobile) are applied only once the
+	// incident is saved, so a rejected incident (e.g. duplicate) leaves the user untouched.
+	var pendingUserUpdates map[string]interface{}
 	clientCode := strings.TrimSpace(s.cfg.ClientCode)
-	// For EPM940, any source other than web (IVR, WhatsApp, Mobile, etc.)
-	// is an unauthenticated channel where the citizen has no account yet,
+	// For EPM940
+	//  is an unauthenticated channel where the citizen has no account yet,
 	// so fetch or auto-register a user based on their mobile number.
-	isWebSource := strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.WEB)
-	if req.Source != "" && req.ReporterName != "" && req.ReporterPhone != "" && !isWebSource && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
+	if req.Source != "" && req.ReporterName != "" && req.ReporterPhone != "" && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
 		user, err := s.userRepo.FindByMobile(ctx, req.ReporterPhone)
 		if err != nil && err != gorm.ErrRecordNotFound {
 			fmt.Printf("CreateIncident: Error fetching user by mobile: %v\n", err)
@@ -456,6 +458,9 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 				Username: fmt.Sprintf("%s_%s_%d", constants.ROLES.CITIZEN, strings.TrimPrefix(normalizedPhone, "+"), epoch),
 				Password: pkgutils.GenerateRandomPassword(12),
 			}
+			if req.AlternateMobile != "" {
+				registerReq.AlternateMobile = pkgutils.NormalizeMobile(req.AlternateMobile, pkgutils.SystemCountryCode())
+			}
 			registerReq.FirstName, registerReq.MiddleName, registerReq.LastName = splitReporterName(req.ReporterName)
 
 			if role != nil && role.ID != uuid.Nil {
@@ -472,16 +477,22 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		} else {
 			reporterID = user.ID
 			first, middle, last := splitReporterName(req.ReporterName)
+			updates := make(map[string]interface{})
 			if first != user.FirstName || middle != user.MiddleName || last != user.LastName {
-				if err := s.userRepo.UpdateProfile(ctx, map[string]interface{}{
-					"id":          user.ID,
-					"first_name":  first,
-					"middle_name": middle,
-					"last_name":   last,
-				}); err != nil {
-					fmt.Printf("CreateIncident: Error updating reporter name for user %s: %v\n", user.ID, err)
-					return nil, err
+				updates["first_name"] = first
+				updates["middle_name"] = middle
+				updates["last_name"] = last
+			}
+			// An empty alternate never clears the one already saved on the user.
+			if req.AlternateMobile != "" {
+				alt := pkgutils.NormalizeMobile(req.AlternateMobile, pkgutils.SystemCountryCode())
+				if alt != user.AlternateMobile {
+					updates["alternate_mobile"] = alt
 				}
+			}
+			if len(updates) != 0 {
+				updates["id"] = user.ID
+				pendingUserUpdates = updates
 			}
 		}
 		if err := s.incidentRepo.UpdateReporterNameByPhone(ctx, req.ReporterPhone, req.ReporterName); err != nil {
@@ -697,9 +708,6 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		WorkflowID:     workflowID,
 		CurrentStateID: initialState.ID,
 		ReporterID:     &reporterID,
-		// ReporterEmail:  req.ReporterEmail,
-		// ReporterName:   req.ReporterName,
-		// ReporterPhone:  req.ReporterPhone,
 		CallerIdentity: req.CallerIdentity,
 		CustomFields:   customFieldsJSON,
 		GisLocation:    datatypes.JSON(req.GisLocation),
@@ -714,8 +722,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		Source:         req.Source,
 	}
 
-	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.WEB) ||
-		!strings.EqualFold(s.cfg.ClientCode, constants.CLIENT_CODE.EPM940) {
+	if !strings.EqualFold(s.cfg.ClientCode, constants.CLIENT_CODE.EPM940) {
 		incident.ReporterName = req.ReporterName
 		incident.ReporterEmail = req.ReporterEmail
 		incident.ReporterPhone = req.ReporterPhone
@@ -834,7 +841,11 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 	// Create initial revision to log incident creation
 	description := fmt.Sprintf("%s %s created", recordType, incidentNumber)
 	_ = s.CreateRevision(ctx, incident.ID, models.RevisionActionCreated, description, nil, reporterID)
-
+	if pendingUserUpdates != nil {
+		if err := s.userRepo.UpdateProfile(ctx, pendingUserUpdates); err != nil {
+			log.Printf("[IncidentService] failed to update reporter user %v after incident create: %v", pendingUserUpdates["id"], err)
+		}
+	}
 	resp := models.ToIncidentResponse(created)
 
 	// Broadcast incident creation to all broadcast clients

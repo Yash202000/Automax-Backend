@@ -407,6 +407,7 @@ type IncidentCreateRequest struct {
 	ReporterEmail      string                 `json:"reporter_email" validate:"omitempty,email"`
 	ReporterName       string                 `json:"reporter_name" validate:"omitempty,max=200"`
 	ReporterPhone      string                 `json:"reporter_phone" validate:"omitempty,max=20"`
+	AlternateMobile    string                 `json:"alternate_mobile" validate:"omitempty,mobile,max=20"`
 	CallerIdentity     string                 `json:"caller_identity" validate:"omitempty,len=10,numeric,startswith12"`
 	GisLocation        json.RawMessage        `json:"gis_location" validate:"omitempty"`
 	CustomFields       json.RawMessage        `json:"custom_fields"`

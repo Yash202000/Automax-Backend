@@ -171,6 +171,7 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 		MiddleName:      req.MiddleName,
 		LastName:        req.LastName,
 		Phone:           req.Phone,
+		AlternateMobile: req.AlternateMobile,
 		Extension:       req.Extension,
 		DepartmentID:    req.DepartmentID,
 		LocationID:      req.LocationID,
@@ -990,6 +991,7 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		LastName:          user.LastName,
 		Username:          user.Username,
 		Phone:             user.Phone,
+		AlternateMobile:   user.AlternateMobile,
 		Extension:         &oldExtension, // Pointer to the copy, not the original
 		DepartmentID:      user.DepartmentID,
 		LocationID:        user.LocationID,
@@ -1003,14 +1005,15 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 
 	// Build old value with names for better audit trail
 	oldUserForLogging := map[string]interface{}{
-		"first_name":      user.FirstName,
-		"middle_name":     user.MiddleName,
-		"last_name":       user.LastName,
-		"username":        user.Username,
-		"phone":           user.Phone,
-		"extension":       user.Extension,
-		"mobile_verified": user.MobileVerified,
-		"is_active":       oldIsActive,
+		"first_name":       user.FirstName,
+		"middle_name":      user.MiddleName,
+		"last_name":        user.LastName,
+		"username":         user.Username,
+		"phone":            user.Phone,
+		"alternate_mobile": user.AlternateMobile,
+		"extension":        user.Extension,
+		"mobile_verified":  user.MobileVerified,
+		"is_active":        oldIsActive,
 	}
 
 	// Add department names
@@ -1100,7 +1103,10 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 			user.Phone = req.Phone
 		}
 	}
-
+	log.Print(req.AlternateMobile)
+	if req.AlternateMobile != user.AlternateMobile {
+		user.AlternateMobile = req.AlternateMobile
+	}
 	if req.DepartmentID != nil {
 		user.DepartmentID = req.DepartmentID
 	}
@@ -1228,11 +1234,12 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 
 	// Build new value with names for better audit trail
 	newUserForLogging := map[string]interface{}{
-		"first_name":  req.FirstName,
-		"middle_name": req.MiddleName,
-		"last_name":   req.LastName,
-		"username":    req.Username,
-		"phone":       req.Phone,
+		"first_name":       req.FirstName,
+		"middle_name":      req.MiddleName,
+		"last_name":        req.LastName,
+		"username":         req.Username,
+		"phone":            req.Phone,
+		"alternate_mobile": req.AlternateMobile,
 	}
 
 	if req.Extension != nil {
@@ -1313,6 +1320,9 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		}
 		if req.Phone != "" && req.Phone != user.Phone {
 			changedFields = append(changedFields, "phone")
+		}
+		if req.AlternateMobile != "" && req.AlternateMobile != user.AlternateMobile {
+			changedFields = append(changedFields, "alternate_mobile")
 		}
 		if req.Extension != nil && *req.Extension != user.Extension {
 			changedFields = append(changedFields, "extension")

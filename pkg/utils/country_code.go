@@ -228,3 +228,16 @@ func HasCountryCode(mobile string) bool {
 	_, _, ok := splitCountryCode(trimmed)
 	return ok
 }
+
+// SameMobile reports whether two mobile numbers are the same subscriber once both are
+// normalized, so "+966 50 000 0000" and "0500000000" compare equal. Blank values never match.
+func SameMobile(a, b string) bool {
+	if strings.TrimSpace(a) == "" || strings.TrimSpace(b) == "" {
+		return false
+	}
+	cc := SystemCountryCode()
+	clean := func(s string) string {
+		return strings.NewReplacer(" ", "", "-", "", "(", "", ")", "").Replace(NormalizeMobile(s, cc))
+	}
+	return clean(a) == clean(b)
+}
