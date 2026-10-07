@@ -669,7 +669,7 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 .grid tr:nth-child(odd) td{background:#fff}
 .grid td{padding:4px 7px;border-bottom:1px solid #c8dce4;font-size:9.5pt;vertical-align:middle}
 .grid td.lbl{color:#505050;width:22%%;text-align:%s;border-%s:1px solid #c8dce4;white-space:nowrap}
-.grid td.val{color:#b41e1e;font-weight:bold;width:28%%;text-align:%s}
+.grid td.val{color:#1f4e79;font-weight:bold;width:28%%;text-align:%s}
 .tbl{width:100%%;border-collapse:collapse}
 .tbl thead tr{background:#375a6e;color:#fff}
 .tbl thead td{padding:5px 7px;font-size:9.5pt;font-weight:bold;text-align:center}
@@ -914,6 +914,84 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 		b.WriteString(`</table>`)
 	}
 
+	// ── Section: Attachments ──────────────────────────────────────────────────
+	// renderAttCard renders one attachment's card body (name/image/meta); prefixHTML,
+	// when non-empty, is written before the file name (used for the per-card
+	// transition context line on the default, non-grouped layout).
+	renderAttCard := func(att models.IncidentReportAttachment, prefixHTML string) {
+		b.WriteString(`<div class="att-card">`)
+		if prefixHTML != "" {
+			b.WriteString(prefixHTML)
+		}
+		fmt.Fprintf(&b, `<div class="att-name">%s</div>`, html.EscapeString(att.FileName))
+
+		if att.DeletedAt != nil {
+			fmt.Fprintf(&b, `<div class="att-deleted">&#x1F5D1; %s</div>`, html.EscapeString(l.AttDeleted))
+		} else if strings.HasPrefix(att.MimeType, "image/") && att.FilePath != "" {
+			if fr, ferr := h.storage.GetFile(c.UserContext(), att.FilePath); ferr == nil {
+				if imgData, rerr := io.ReadAll(fr); rerr == nil && len(imgData) > 0 {
+					encoded := base64.StdEncoding.EncodeToString(imgData)
+					fmt.Fprintf(&b, `<img class="att-img" src="data:%s;base64,%s" alt="%s">`,
+						att.MimeType, encoded, html.EscapeString(att.FileName))
+				}
+				fr.Close()
+			}
+		}
+
+		uploadedBy := strings.TrimSpace(att.UploadedByFirstName + " " + att.UploadedByLastName)
+		sizeStr := fmt.Sprintf("%.1f KB", float64(att.FileSize)/1024)
+		if att.FileSize < 1024 {
+			sizeStr = fmt.Sprintf("%d bytes", att.FileSize)
+		}
+		fmt.Fprintf(&b,
+			`<div class="att-meta"><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span>`,
+			html.EscapeString(l.AttType), html.EscapeString(att.MimeType),
+			html.EscapeString(l.AttSize), sizeStr,
+			html.EscapeString(l.AttUploadedBy), html.EscapeString(uploadedBy),
+			html.EscapeString(l.AttUploadedByRole), html.EscapeString(att.UploadedByRole),
+			html.EscapeString(l.AttUploadedAt), html.EscapeString(ts(att.CreatedAt)),
+		)
+		if att.DeletedAt != nil {
+			fmt.Fprintf(&b, `<span style="color:#c0392b">%s: <b>%s</b></span>`,
+				html.EscapeString(l.AttDeletedAt), html.EscapeString(ts(*att.DeletedAt)))
+		}
+		b.WriteString(`</div>`)
+		b.WriteString(`</div>`)
+	}
+
+	// Attachments are always shown, split into creation / closure (and any
+	// other transition uploads) with an empty-state message per group.
+	secHeader(&b, l.SectionAttach)
+	b.WriteString(`<div>`)
+	var creationAtts, closureAtts, otherAtts []models.IncidentReportAttachment
+	for _, att := range reportAttachments {
+		switch {
+		case att.TransitionHistoryID == nil:
+			creationAtts = append(creationAtts, att)
+		case att.IsClosure:
+			closureAtts = append(closureAtts, att)
+		default:
+			otherAtts = append(otherAtts, att)
+		}
+	}
+	renderAttGroup := func(label string, atts []models.IncidentReportAttachment, always bool) {
+		if len(atts) == 0 && !always {
+			return
+		}
+		fmt.Fprintf(&b, `<div class="att-group-header">%s</div>`, html.EscapeString(label))
+		if len(atts) == 0 {
+			fmt.Fprintf(&b, `<div class="comment-block">%s</div>`, html.EscapeString(l.NoAttachments))
+			return
+		}
+		for _, att := range atts {
+			renderAttCard(att, "")
+		}
+	}
+	renderAttGroup(l.AttCreation, creationAtts, true)
+	renderAttGroup(l.AttClosure, closureAtts, true)
+	renderAttGroup(l.AttOther, otherAtts, false)
+	b.WriteString(`</div>`)
+
 	// ── Section: Revision History ─────────────────────────────────────────────
 	if len(reportRevisions) > 0 {
 		textAlign := "left"
@@ -1005,84 +1083,6 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 		b.WriteString(`</tbody></table>`)
 	}
 
-	// ── Section: Attachments ──────────────────────────────────────────────────
-	// renderAttCard renders one attachment's card body (name/image/meta); prefixHTML,
-	// when non-empty, is written before the file name (used for the per-card
-	// transition context line on the default, non-grouped layout).
-	renderAttCard := func(att models.IncidentReportAttachment, prefixHTML string) {
-		b.WriteString(`<div class="att-card">`)
-		if prefixHTML != "" {
-			b.WriteString(prefixHTML)
-		}
-		fmt.Fprintf(&b, `<div class="att-name">%s</div>`, html.EscapeString(att.FileName))
-
-		if att.DeletedAt != nil {
-			fmt.Fprintf(&b, `<div class="att-deleted">&#x1F5D1; %s</div>`, html.EscapeString(l.AttDeleted))
-		} else if strings.HasPrefix(att.MimeType, "image/") && att.FilePath != "" {
-			if fr, ferr := h.storage.GetFile(c.UserContext(), att.FilePath); ferr == nil {
-				if imgData, rerr := io.ReadAll(fr); rerr == nil && len(imgData) > 0 {
-					encoded := base64.StdEncoding.EncodeToString(imgData)
-					fmt.Fprintf(&b, `<img class="att-img" src="data:%s;base64,%s" alt="%s">`,
-						att.MimeType, encoded, html.EscapeString(att.FileName))
-				}
-				fr.Close()
-			}
-		}
-
-		uploadedBy := strings.TrimSpace(att.UploadedByFirstName + " " + att.UploadedByLastName)
-		sizeStr := fmt.Sprintf("%.1f KB", float64(att.FileSize)/1024)
-		if att.FileSize < 1024 {
-			sizeStr = fmt.Sprintf("%d bytes", att.FileSize)
-		}
-		fmt.Fprintf(&b,
-			`<div class="att-meta"><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span>`,
-			html.EscapeString(l.AttType), html.EscapeString(att.MimeType),
-			html.EscapeString(l.AttSize), sizeStr,
-			html.EscapeString(l.AttUploadedBy), html.EscapeString(uploadedBy),
-			html.EscapeString(l.AttUploadedByRole), html.EscapeString(att.UploadedByRole),
-			html.EscapeString(l.AttUploadedAt), html.EscapeString(ts(att.CreatedAt)),
-		)
-		if att.DeletedAt != nil {
-			fmt.Fprintf(&b, `<span style="color:#c0392b">%s: <b>%s</b></span>`,
-				html.EscapeString(l.AttDeletedAt), html.EscapeString(ts(*att.DeletedAt)))
-		}
-		b.WriteString(`</div>`)
-		b.WriteString(`</div>`)
-	}
-
-	// Attachments are always shown, split into creation / closure (and any
-	// other transition uploads) with an empty-state message per group.
-	secHeader(&b, l.SectionAttach)
-	b.WriteString(`<div>`)
-	var creationAtts, closureAtts, otherAtts []models.IncidentReportAttachment
-	for _, att := range reportAttachments {
-		switch {
-		case att.TransitionHistoryID == nil:
-			creationAtts = append(creationAtts, att)
-		case att.IsClosure:
-			closureAtts = append(closureAtts, att)
-		default:
-			otherAtts = append(otherAtts, att)
-		}
-	}
-	renderAttGroup := func(label string, atts []models.IncidentReportAttachment, always bool) {
-		if len(atts) == 0 && !always {
-			return
-		}
-		fmt.Fprintf(&b, `<div class="att-group-header">%s</div>`, html.EscapeString(label))
-		if len(atts) == 0 {
-			fmt.Fprintf(&b, `<div class="comment-block">%s</div>`, html.EscapeString(l.NoAttachments))
-			return
-		}
-		for _, att := range atts {
-			renderAttCard(att, "")
-		}
-	}
-	renderAttGroup(l.AttCreation, creationAtts, true)
-	renderAttGroup(l.AttClosure, closureAtts, true)
-	renderAttGroup(l.AttOther, otherAtts, false)
-	b.WriteString(`</div>`)
-
 	// ── Logs empty state ──────────────────────────────────────────────────────
 	if includeLogs && len(reportRevisions) == 0 && len(reportTransitions) == 0 {
 		secHeader(&b, l.SectionHistory)
@@ -1158,7 +1158,7 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 .grid tr:nth-child(odd) td{background:#fff}
 .grid td{padding:4px 7px;border-bottom:1px solid #c8dce4;font-size:9.5pt;vertical-align:middle}
 .grid td.lbl{color:#505050;width:22%%;text-align:%s;border-%s:1px solid #c8dce4;white-space:nowrap}
-.grid td.val{color:#b41e1e;font-weight:bold;width:28%%;text-align:%s}
+.grid td.val{color:#1f4e79;font-weight:bold;width:28%%;text-align:%s}
 .att-card{border:1px solid #c8dce4;margin:6px 0;overflow:hidden}
 .att-name{padding:5px 8px;font-weight:bold;font-size:9.5pt;color:#375a6e;border-bottom:1px solid #c8dce4}
 .att-img{display:block;max-width:100%%;max-height:280px;object-fit:contain;margin:0 auto;padding:6px}
