@@ -903,6 +903,10 @@ type IncidentResponse struct {
 	Version               int                         `json:"version"`
 	ActiveViewers         int                         `json:"active_viewers,omitempty"` // Number of users currently viewing this incident
 
+	// Recurrence: latest earlier incident with the same classification near this one.
+	RecurrenceIncidentNumber *string `json:"recurrence_incident_number"`
+	RecurrenceCount          int     `json:"recurrence_count"`
+
 	// IVR SMS link submission state (EPM940 only, populated for source=ivr incidents).
 	IvrSubmitted   bool       `json:"ivr_submitted,omitempty"`
 	IvrSubmittedAt *time.Time `json:"ivr_submitted_at,omitempty"`

@@ -433,8 +433,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 	// incident is saved, so a rejected incident (e.g. duplicate) leaves the user untouched.
 	var pendingUserUpdates map[string]interface{}
 	clientCode := strings.TrimSpace(s.cfg.ClientCode)
-	// For EPM940
-	//  is an unauthenticated channel where the citizen has no account yet,
+	// For EPM940, all sources is an unauthenticated channel where the citizen has no account yet,
 	// so fetch or auto-register a user based on their mobile number.
 	if req.Source != "" && req.ReporterName != "" && req.ReporterPhone != "" && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
 		user, err := s.userRepo.FindByMobile(ctx, req.ReporterPhone)
@@ -1140,9 +1139,12 @@ func (s *incidentService) ListIncidents(ctx context.Context, filter *models.Inci
 		}
 	}
 
+	clientCode := strings.TrimSpace(s.cfg.ClientCode)
+	if strings.EqualFold(clientCode, constants.CLIENT_CODE.VD2) {
+		s.stampRecurrences(ctx, filter, incidents, responses)
+	}
 	// For EPM940: enrich IVR incidents with SMS link submission state.
 	// Collect IVR incident IDs, do a single batch lookup, then stamp each response.
-	clientCode := strings.TrimSpace(s.cfg.ClientCode)
 	if strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) && s.ivrSmsLinkRepo != nil {
 		var ivrIDs []uuid.UUID
 		ivrIdx := make(map[uuid.UUID]int, len(incidents))
@@ -6469,4 +6471,35 @@ func (s *incidentService) AutoAssignUnassigned(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// defaultRecurrenceRadiusMeters is used when the list request carries no radius.
+const defaultRecurrenceRadiusMeters = 1000
+
+// stampRecurrences flags listed incidents that have an earlier same-classification
+// incident nearby. One batched query per page; failures never break the listing.
+func (s *incidentService) stampRecurrences(ctx context.Context, filter *models.IncidentFilter, incidents []models.Incident, responses []models.IncidentResponse) {
+	if len(incidents) == 0 {
+		return
+	}
+	radius := float64(defaultRecurrenceRadiusMeters)
+	if filter.RadiusMeters != nil {
+		radius = *filter.RadiusMeters
+	}
+	ids := make([]uuid.UUID, len(incidents))
+	for i := range incidents {
+		ids[i] = incidents[i].ID
+	}
+	found, err := s.incidentRepo.FindRecurrences(ctx, ids, radius)
+	if err != nil {
+		log.Printf("ListIncidents: recurrence lookup failed: %v", err)
+		return
+	}
+	for i := range incidents {
+		if info, ok := found[incidents[i].ID]; ok {
+			number := info.IncidentNumber
+			responses[i].RecurrenceIncidentNumber = &number
+			responses[i].RecurrenceCount = info.Count
+		}
+	}
 }
