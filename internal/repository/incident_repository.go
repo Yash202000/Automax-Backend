@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -26,6 +27,9 @@ type IncidentRepository interface {
 	FindByIDWithRelations(ctx context.Context, id uuid.UUID) (*models.Incident, error)
 	FindByIncidentNumber(ctx context.Context, number string) (*models.Incident, error)
 	FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.Incident, error)
+	// FindRecurrences returns, per incident ID, the latest earlier incident with the same
+	// classification and record type within radiusMeters; Count is the total number of such earlier incidents.
+	FindRecurrences(ctx context.Context, ids []uuid.UUID, radiusMeters float64) (map[uuid.UUID]RecurrenceInfo, error)
 	List(ctx context.Context, filter *models.IncidentFilter) ([]models.Incident, int64, error)
 	ListMapMarkers(ctx context.Context, filter *models.IncidentFilter, maxMarkers int) ([]models.IncidentMapMarker, int64, error)
 	ListSummaries(ctx context.Context, filter *models.IncidentFilter) ([]models.IncidentSummary, int64, error)
@@ -2316,4 +2320,66 @@ WHERE ilv.incident_id = ?
 ORDER BY lc.name, lv.sort_order`
 	err := r.db.WithContext(ctx).Raw(sql, incidentID).Scan(&results).Error
 	return results, err
+}
+
+// RecurrenceInfo is the earlier-incident match for a listed incident.
+type RecurrenceInfo struct {
+	IncidentNumber string
+	Count          int
+}
+
+func (r *incidentRepository) FindRecurrences(ctx context.Context, ids []uuid.UUID, radiusMeters float64) (map[uuid.UUID]RecurrenceInfo, error) {
+	result := make(map[uuid.UUID]RecurrenceInfo)
+	if len(ids) == 0 {
+		return result, nil
+	}
+	// Distance condition: PostGIS uses the gist index idx_incidents_geog (same expression as
+	// the list radius filter). Otherwise a lat/long bounding box lets idx_incidents_geo prune
+	// before the exact haversine check (Earth radius 6,371,000 m).
+	distanceCond := `prev.latitude BETWEEN cur.latitude - @radius / 111320.0 AND cur.latitude + @radius / 111320.0
+				  AND prev.longitude BETWEEN cur.longitude - @radius / (111320.0 * GREATEST(cos(radians(cur.latitude)), 0.01))
+				                         AND cur.longitude + @radius / (111320.0 * GREATEST(cos(radians(cur.latitude)), 0.01))
+				  AND 6371000 * acos(LEAST(1, GREATEST(-1,
+						cos(radians(cur.latitude)) * cos(radians(prev.latitude)) *
+						cos(radians(prev.longitude) - radians(cur.longitude)) +
+						sin(radians(cur.latitude)) * sin(radians(prev.latitude))))) <= @radius`
+	if r.cfg.Geo.PostGISEnabled {
+		distanceCond = `ST_DWithin(
+					ST_MakePoint(prev.longitude, prev.latitude)::geography,
+					ST_MakePoint(cur.longitude, cur.latitude)::geography,
+					@radius)`
+	}
+	rows, err := r.db.WithContext(ctx).Raw(`
+		SELECT cur.id, p.incident_number, p.cnt
+		FROM incidents cur
+		JOIN LATERAL (
+			SELECT (array_agg(x.incident_number ORDER BY x.created_at DESC))[1] AS incident_number, COUNT(*) AS cnt
+			FROM (
+				SELECT prev.incident_number, prev.created_at
+				FROM incidents prev
+				WHERE prev.deleted_at IS NULL
+				  AND prev.id <> cur.id
+				  AND prev.classification_id = cur.classification_id
+				  AND prev.record_type = cur.record_type
+				  AND prev.created_at < cur.created_at
+				  AND `+distanceCond+`
+			) x
+			HAVING COUNT(*) > 0
+		) p ON true
+		WHERE cur.id IN @ids AND cur.latitude IS NOT NULL AND cur.longitude IS NOT NULL
+		  AND cur.classification_id IS NOT NULL
+	`, sql.Named("radius", radiusMeters), sql.Named("ids", ids)).Rows()
+	if err != nil {
+		return result, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var info RecurrenceInfo
+		if err := rows.Scan(&id, &info.IncidentNumber, &info.Count); err != nil {
+			continue
+		}
+		result[id] = info
+	}
+	return result, nil
 }

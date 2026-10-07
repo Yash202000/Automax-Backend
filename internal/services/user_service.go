@@ -1103,7 +1103,6 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 			user.Phone = req.Phone
 		}
 	}
-	log.Print(req.AlternateMobile)
 	if req.AlternateMobile != user.AlternateMobile {
 		user.AlternateMobile = req.AlternateMobile
 	}
