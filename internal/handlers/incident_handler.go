@@ -346,6 +346,34 @@ func (h *IncidentHandler) SearchIncidentSummaries(c *fiber.Ctx) error {
 	}
 	parseIncidentSearchBodyExtras(c, filter)
 
+	// Recurrence lookup: reuse the list recurrence rules (earlier, same classification and
+	// record type, within the recurrence radius) so the count matches the list badge.
+	if filter.RecurrenceOfIncidentID != nil {
+		if filter.Page < 1 {
+			filter.Page = 1
+		}
+		if filter.Limit < 1 || filter.Limit > 100 {
+			filter.Limit = 20
+		}
+		current, err := h.incidentRepo.FindByID(c.UserContext(), *filter.RecurrenceOfIncidentID)
+		if err != nil {
+			return ErrorResponseWithKey(c, fiber.StatusNotFound, "incident_not_found")
+		}
+		if current.Latitude == nil || current.Longitude == nil || current.ClassificationID == nil {
+			return c.JSON(fiber.Map{"success": true, "data": []models.IncidentSummary{}, "page": 1, "limit": filter.Limit, "total_items": 0, "total_pages": 0})
+		}
+		filter.CenterLatitude = current.Latitude
+		filter.CenterLongitude = current.Longitude
+		filter.ClassificationID = []string{current.ClassificationID.String()}
+		filter.ExactRecordType = &current.RecordType
+		filter.ExcludeIncidentID = &current.ID
+		filter.CreatedBefore = &current.CreatedAt
+		if filter.RadiusMeters == nil {
+			radius := h.cfg.Geo.RecurrenceIncidentRadiusMeters
+			filter.RadiusMeters = &radius
+		}
+	}
+
 	// When coordinates are given but no radius, fall back to the backend's
 	// configured default rather than skipping the radius filter entirely.
 	if filter.CenterLatitude != nil && filter.CenterLongitude != nil && filter.RadiusMeters == nil {

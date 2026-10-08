@@ -661,6 +661,15 @@ type IncidentFilter struct {
 	// being viewed) from the results — used by "Nearby Incidents" so the
 	// selected incident never appears in its own results list.
 	ExcludeIncidentID *uuid.UUID `query:"exclude_incident_id" json:"exclude_incident_id" validate:"omitempty,uuid"`
+	// RecurrenceOfIncidentID narrows the results to that incident's recurrences: earlier incidents
+	// with the same classification and record type within the configured recurrence radius (or
+	// RadiusMeters). Used by the summary search so its total matches the list recurrence badge.
+	RecurrenceOfIncidentID *uuid.UUID `query:"recurrence_of_incident_id" json:"recurrence_of_incident_id" validate:"omitempty,uuid"`
+	// CreatedBefore keeps only incidents created strictly before this time (set by the handler).
+	CreatedBefore *time.Time `json:"-"`
+	// ExactRecordType matches incidents.record_type only (set by the handler); unlike RecordType
+	// it does not also require the incident's workflow to be of that record type.
+	ExactRecordType *string `json:"-"`
 	// Transition filters
 	TransitionID *uuid.UUID `query:"transition_id" json:"transition_id" validate:"omitempty,uuid"`
 	FromStateID  *uuid.UUID `query:"from_state_id" json:"from_state_id" validate:"omitempty"`
