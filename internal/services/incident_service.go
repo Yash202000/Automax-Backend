@@ -3297,7 +3297,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		FromStateID:    incident.CurrentStateID,
 		ToStateID:      transition.ToStateID,
 		PerformedByID:  userID,
-		Comment:        req.Comment,
+		Comment:        strings.TrimSpace(req.Comment),
 		TransitionedAt: time.Now(),
 	}
 
@@ -3321,23 +3321,24 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	}
 
 	// If comment was provided, also create a comment record
-	if req.Comment != "" {
+	if strings.TrimSpace(req.Comment) != "" {
 		comment := &models.IncidentComment{
 			IncidentID:          incidentID,
 			AuthorID:            userID,
-			Content:             req.Comment,
+			Content:             strings.TrimSpace(req.Comment),
 			IsInternal:          true,
 			TransitionHistoryID: &history.ID,
 		}
 		txRepo.CreateComment(ctx, comment)
 	}
 
-	// If feedback was provided, create a feedback record
-	if req.Feedback != nil {
+	// If feedback was provided, create a feedback record (skip empty ones — they
+	// would show up as blank entries in the incident's comments tab)
+	if req.Feedback != nil && (req.Feedback.Rating > 0 || strings.TrimSpace(req.Feedback.Comment) != "") {
 		feedback := &models.IncidentFeedback{
 			IncidentID:          incidentID,
 			Rating:              req.Feedback.Rating,
-			Comment:             req.Feedback.Comment,
+			Comment:             strings.TrimSpace(req.Feedback.Comment),
 			CreatedByID:         userID,
 			TransitionHistoryID: &history.ID,
 		}
