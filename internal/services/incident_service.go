@@ -3297,7 +3297,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		FromStateID:    incident.CurrentStateID,
 		ToStateID:      transition.ToStateID,
 		PerformedByID:  userID,
-		Comment:        req.Comment,
+		Comment:        strings.TrimSpace(req.Comment),
 		TransitionedAt: time.Now(),
 	}
 
@@ -3321,23 +3321,32 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	}
 
 	// If comment was provided, also create a comment record
-	if req.Comment != "" {
+	if strings.TrimSpace(req.Comment) != "" {
 		comment := &models.IncidentComment{
 			IncidentID:          incidentID,
 			AuthorID:            userID,
-			Content:             req.Comment,
+			Content:             strings.TrimSpace(req.Comment),
 			IsInternal:          true,
 			TransitionHistoryID: &history.ID,
 		}
 		txRepo.CreateComment(ctx, comment)
 	}
 
-	// If feedback was provided, create a feedback record
-	if req.Feedback != nil {
+	// If feedback was provided, create a feedback record. A rating with no comment
+	// is only kept when the transition actually asks for a rating; otherwise it is
+	// the client's default rating and would show up as a blank entry in the comments tab.
+	transitionWantsRating := false
+	for _, requirement := range transition.Requirements {
+		if requirement.RequirementType == "rating" {
+			transitionWantsRating = true
+			break
+		}
+	}
+	if req.Feedback != nil && (strings.TrimSpace(req.Feedback.Comment) != "" || (req.Feedback.Rating > 0 && transitionWantsRating)) {
 		feedback := &models.IncidentFeedback{
 			IncidentID:          incidentID,
 			Rating:              req.Feedback.Rating,
-			Comment:             req.Feedback.Comment,
+			Comment:             strings.TrimSpace(req.Feedback.Comment),
 			CreatedByID:         userID,
 			TransitionHistoryID: &history.ID,
 		}
