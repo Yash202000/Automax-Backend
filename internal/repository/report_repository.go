@@ -75,6 +75,10 @@ type ReportRepository interface {
 	// GetTransitionUserNames(ctx context.Context, newStateName string, incidentIDs []string) (map[string]string, error)
 	ExecuteUserQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 	ExecuteUserPerformanceQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
+	ExecuteDepartmentPerformanceQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
+	ExecuteClosurePerformanceQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
+	ExecuteSLAPerformanceQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
+	ExecuteChannelPerformanceQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 	ExecuteWorkflowQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 	ExecuteDepartmentQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
 	ExecuteLocationQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error)
@@ -518,6 +522,24 @@ var userPerformanceFilterFields = map[string]string{
 	"created_at":          "incidents.created_at",
 }
 
+// performanceFilterFields covers the incident-level filters shared by all performance_* data sources.
+var performanceFilterFields = map[string]string{
+	"department_id":       "incidents.department_id",
+	"classification_id":   "incidents.classification_id",
+	"location_id":         "incidents.location_id",
+	"workflow_id":         "incidents.workflow_id",
+	"assignee_id":         "incidents.assignee_id",
+	"reporter_id":         "incidents.reporter_id",
+	"record_type":         "incidents.record_type",
+	"channel":             "incidents.source",
+	"source":              "incidents.source",
+	"sla_breached":        "incidents.sla_breached",
+	"current_state_id":    "incidents.current_state_id",
+	"state_name":          "ws.name",
+	"created_at":          "incidents.created_at",
+	"incident_created_at": "incidents.created_at",
+}
+
 // dataSourceFilterFields maps a data source name to its allowed filter fields.
 var dataSourceFilterFields = map[string]map[string]string{
 	"incidents":                 incidentFilterFields,
@@ -530,6 +552,10 @@ var dataSourceFilterFields = map[string]map[string]string{
 	"classifications":           classificationFilterFields,
 	"action_logs":               actionLogFilterFields,
 	"users_performance":         userPerformanceFilterFields,
+	"performance_department":    performanceFilterFields,
+	"performance_closure":       performanceFilterFields,
+	"performance_sla":           performanceFilterFields,
+	"performance_channel":       performanceFilterFields,
 	"locations_by_count":        locationCountFilterFields,
 	"locations_by_status":       locationCountByStatusFilterFields,
 	"classifications_by_count":  classificationCountFilterFields,
@@ -4155,6 +4181,226 @@ func (r *reportRepository) ExecuteDepartmentCountByStatusQuery(ctx context.Conte
 			continue
 		}
 		results = append(results, buildCountRow(map[string]interface{}{"department_name": departmentName, "parent_department_name": parentName, "status_name": statusName, "incident_count": count}, reqColumns, defaults))
+	}
+	return results, total, nil
+}
+
+// ── Incident performance reports ─────────────────────────────────────────────
+// Closed / Under Resolution = current workflow state code. SLA breach = closed AND sla_breached.
+// Reopened / not belong / missing info = incident has a transition flagged
+// is_reopen / is_not_belong / is_missing_info. Percentages are rounded to 1 decimal.
+
+// performanceOrder returns the ORDER BY clause for the requested sort field, or fallback.
+func performanceOrder(sorting *models.ReportSortConfig, sortable map[string]bool, fallback string) string {
+	if sorting != nil && sortable[sorting.Field] {
+		dir := "ASC"
+		if strings.EqualFold(sorting.Direction, "desc") {
+			dir = "DESC"
+		}
+		return sorting.Field + " " + dir
+	}
+	return fallback
+}
+
+// ── Department performance ───────────────────────────────────────────────────
+// Output col.Field names: department_name | total | closed | under_resolution | closed_pct |
+// satisfaction_pct | sla_breach_count | sla_breach_pct | speed_pct
+func (r *reportRepository) ExecuteDepartmentPerformanceQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
+	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
+	buildBase := func() *gorm.DB {
+		q := r.db.WithContext(ctx).
+			Table("incidents").
+			Joins("LEFT JOIN departments ON departments.id = incidents.department_id").
+			Joins("LEFT JOIN workflow_states ws ON ws.id = incidents.current_state_id").
+			// One row per rated incident, so the satisfaction columns don't need per-row subqueries.
+			Joins("LEFT JOIN (SELECT incident_id, MAX(rating) AS max_rating FROM incident_feedbacks GROUP BY incident_id) fb ON fb.incident_id = incidents.id").
+			Where("incidents.deleted_at IS NULL")
+		return r.applyFilters(ctx, q, filters)
+	}
+	var total int64
+	if err := buildBase().Select("COUNT(DISTINCT COALESCE(incidents.department_id::text, ''))").Scan(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	sortable := map[string]bool{"department_name": true, "total": true, "closed": true, "under_resolution": true, "closed_pct": true, "satisfaction_pct": true, "sla_breach_count": true, "sla_breach_pct": true, "speed_pct": true}
+	orderClause := performanceOrder(sorting, sortable, "total DESC")
+	var rows []map[string]interface{}
+	if err := buildBase().
+		Select(`COALESCE(departments.name, 'Unassigned') AS department_name,
+			COUNT(*) AS total,
+			COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed') AS closed,
+			COUNT(*) FILTER (WHERE LOWER(ws.code) = 'under_resolution') AS under_resolution,
+			COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed') / NULLIF(COUNT(*), 0), 1), 0)::float8 AS closed_pct,
+			COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE fb.max_rating >= 4)
+				/ NULLIF(COUNT(*) FILTER (WHERE fb.max_rating > 0), 0), 1), 0)::float8 AS satisfaction_pct,
+			COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed' AND incidents.sla_breached) AS sla_breach_count,
+			COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed' AND incidents.sla_breached)
+				/ NULLIF(COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed'), 0), 1), 0)::float8 AS sla_breach_pct,
+			COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed' AND NOT incidents.sla_breached)
+				/ NULLIF(COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed'), 0), 1), 0)::float8 AS speed_pct`).
+		Group("incidents.department_id, departments.name").
+		Order(orderClause).Offset((page - 1) * limit).Limit(limit).
+		Scan(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	defaults := map[string]string{
+		"department_name": "Department", "total": "Total Incidents", "closed": "Closed", "under_resolution": "Under Resolution",
+		"closed_pct": "Closed %", "satisfaction_pct": "Satisfaction %", "sla_breach_count": "No. SLA Breach",
+		"sla_breach_pct": "SLA Breach %", "speed_pct": "Speed of Performance %",
+	}
+	results := make([]map[string]interface{}, 0, len(rows))
+	for _, row := range rows {
+		results = append(results, buildCountRow(row, reqColumns, defaults))
+	}
+	return results, total, nil
+}
+
+// ── Closure performance ──────────────────────────────────────────────────────
+// Output col.Field names: department_name | total | closed | reopened_count | reopened_pct |
+// converted_count | converted_pct | not_belong_count | not_belong_pct | missing_info_count | missing_info_pct
+func (r *reportRepository) ExecuteClosurePerformanceQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
+	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
+	buildBase := func() *gorm.DB {
+		q := r.db.WithContext(ctx).
+			Table("incidents").
+			Joins("LEFT JOIN departments ON departments.id = incidents.department_id").
+			Joins("LEFT JOIN workflow_states ws ON ws.id = incidents.current_state_id").
+			// One row per incident that has a flagged transition (scans the history once).
+			Joins(`LEFT JOIN (
+				SELECT h.incident_id,
+					BOOL_OR(t.is_reopen) AS reopened,
+					BOOL_OR(t.is_not_belong) AS not_belong,
+					BOOL_OR(t.is_missing_info) AS missing_info
+				FROM incident_transition_histories h
+				JOIN workflow_transitions t ON t.id = h.transition_id
+				WHERE t.is_reopen OR t.is_not_belong OR t.is_missing_info
+				GROUP BY h.incident_id
+			) flags ON flags.incident_id = incidents.id`).
+			Where("incidents.deleted_at IS NULL")
+		return r.applyFilters(ctx, q, filters)
+	}
+	var total int64
+	if err := buildBase().Select("COUNT(DISTINCT COALESCE(incidents.department_id::text, ''))").Scan(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	sortable := map[string]bool{"department_name": true, "total": true, "closed": true, "reopened_count": true, "reopened_pct": true, "converted_count": true, "converted_pct": true, "not_belong_count": true, "not_belong_pct": true, "missing_info_count": true, "missing_info_pct": true}
+	orderClause := performanceOrder(sorting, sortable, "total DESC")
+	var rows []map[string]interface{}
+	if err := buildBase().
+		Select(`COALESCE(departments.name, 'Unassigned') AS department_name,
+			COUNT(*) AS total,
+			COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed') AS closed,
+			COUNT(*) FILTER (WHERE flags.reopened) AS reopened_count,
+			COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE flags.reopened)
+				/ NULLIF(COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed'), 0), 1), 0)::float8 AS reopened_pct,
+			COUNT(*) FILTER (WHERE incidents.converted_request_id IS NOT NULL) AS converted_count,
+			COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE incidents.converted_request_id IS NOT NULL) / NULLIF(COUNT(*), 0), 1), 0)::float8 AS converted_pct,
+			COUNT(*) FILTER (WHERE flags.not_belong) AS not_belong_count,
+			COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE flags.not_belong) / NULLIF(COUNT(*), 0), 1), 0)::float8 AS not_belong_pct,
+			COUNT(*) FILTER (WHERE flags.missing_info) AS missing_info_count,
+			COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE flags.missing_info) / NULLIF(COUNT(*), 0), 1), 0)::float8 AS missing_info_pct`).
+		Group("incidents.department_id, departments.name").
+		Order(orderClause).Offset((page - 1) * limit).Limit(limit).
+		Scan(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	defaults := map[string]string{
+		"department_name": "Department", "total": "Total", "closed": "Closed",
+		"reopened_count": "No. Reopened", "reopened_pct": "Reopened %",
+		"converted_count": "No. Converted to Request", "converted_pct": "Converted to Request %",
+		"not_belong_count": "No. Not Belong", "not_belong_pct": "Not Belong %",
+		"missing_info_count": "No. Missing Information", "missing_info_pct": "Missing Information %",
+	}
+	results := make([]map[string]interface{}, 0, len(rows))
+	for _, row := range rows {
+		results = append(results, buildCountRow(row, reqColumns, defaults))
+	}
+	return results, total, nil
+}
+
+// ── SLA performance ──────────────────────────────────────────────────────────
+// Output col.Field names: department_name | total_closed | closed_within_sla | sla_breach_count | speed_pct | sla_breach_pct
+func (r *reportRepository) ExecuteSLAPerformanceQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
+	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
+	buildBase := func() *gorm.DB {
+		q := r.db.WithContext(ctx).
+			Table("incidents").
+			Joins("LEFT JOIN departments ON departments.id = incidents.department_id").
+			Joins("LEFT JOIN workflow_states ws ON ws.id = incidents.current_state_id").
+			Where("incidents.deleted_at IS NULL")
+		return r.applyFilters(ctx, q, filters)
+	}
+	var total int64
+	if err := buildBase().Select("COUNT(DISTINCT COALESCE(incidents.department_id::text, ''))").Scan(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	sortable := map[string]bool{"department_name": true, "total_closed": true, "closed_within_sla": true, "sla_breach_count": true, "speed_pct": true, "sla_breach_pct": true}
+	orderClause := performanceOrder(sorting, sortable, "total_closed DESC")
+	var rows []map[string]interface{}
+	if err := buildBase().
+		Select(`COALESCE(departments.name, 'Unassigned') AS department_name,
+			COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed') AS total_closed,
+			COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed' AND NOT incidents.sla_breached) AS closed_within_sla,
+			COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed' AND incidents.sla_breached) AS sla_breach_count,
+			COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed' AND NOT incidents.sla_breached)
+				/ NULLIF(COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed'), 0), 1), 0)::float8 AS speed_pct,
+			COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed' AND incidents.sla_breached)
+				/ NULLIF(COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed'), 0), 1), 0)::float8 AS sla_breach_pct`).
+		Group("incidents.department_id, departments.name").
+		Order(orderClause).Offset((page - 1) * limit).Limit(limit).
+		Scan(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	defaults := map[string]string{
+		"department_name": "Department", "total_closed": "Total Closed", "closed_within_sla": "Closed Within SLA",
+		"sla_breach_count": "SLA Breach No.", "speed_pct": "Performance % (SLA)", "sla_breach_pct": "Breach %",
+	}
+	results := make([]map[string]interface{}, 0, len(rows))
+	for _, row := range rows {
+		results = append(results, buildCountRow(row, reqColumns, defaults))
+	}
+	return results, total, nil
+}
+
+// ── Channel performance ──────────────────────────────────────────────────────
+// One row per channel (incidents.source), plus a Total row on the last page.
+// Output col.Field names: channel | total_incidents | incidents_pct
+func (r *reportRepository) ExecuteChannelPerformanceQuery(ctx context.Context, filters []models.ReportFilterConfig, sorting *models.ReportSortConfig, page, limit int) ([]map[string]interface{}, int64, error) {
+	reqColumns, _ := ctx.Value(constants.ContextKeys.REPORT_COLUMNS).([]models.ColumnField)
+	const channelExpr = "COALESCE(NULLIF(TRIM(incidents.source), ''), 'Unknown')"
+	buildBase := func() *gorm.DB {
+		q := r.db.WithContext(ctx).
+			Table("incidents").
+			Joins("LEFT JOIN workflow_states ws ON ws.id = incidents.current_state_id").
+			Where("incidents.deleted_at IS NULL")
+		return r.applyFilters(ctx, q, filters)
+	}
+	var total int64
+	if err := buildBase().Select("COUNT(DISTINCT " + channelExpr + ")").Scan(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	sortable := map[string]bool{"channel": true, "total_incidents": true, "incidents_pct": true}
+	orderClause := performanceOrder(sorting, sortable, "total_incidents DESC, channel ASC")
+	var rows []map[string]interface{}
+	if err := buildBase().
+		Select(channelExpr + ` AS channel,
+			COUNT(*) AS total_incidents,
+			COALESCE(ROUND(100.0 * COUNT(*) / NULLIF(SUM(COUNT(*)) OVER (), 0), 1), 0)::float8 AS incidents_pct`).
+		Group(channelExpr).
+		Order(orderClause).Offset((page - 1) * limit).Limit(limit).
+		Scan(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	defaults := map[string]string{"channel": "Channel", "total_incidents": "Total Incidents", "incidents_pct": "Incidents %"}
+	results := make([]map[string]interface{}, 0, len(rows)+1)
+	for _, row := range rows {
+		results = append(results, buildCountRow(row, reqColumns, defaults))
+	}
+	// Grand total row on the last page.
+	if int64(page*limit) >= total {
+		var grand int64
+		if err := buildBase().Select("COUNT(*)").Scan(&grand).Error; err == nil {
+			results = append(results, buildCountRow(map[string]interface{}{"channel": "Total", "total_incidents": grand, "incidents_pct": float64(100)}, reqColumns, defaults))
+		}
 	}
 	return results, total, nil
 }
