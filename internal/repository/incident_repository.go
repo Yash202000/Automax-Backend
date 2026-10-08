@@ -120,6 +120,8 @@ type IncidentRepository interface {
 	GetReportTransitions(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentReportTransition, error)
 	GetReportAttachments(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentReportAttachment, error)
 	GetReportRevisions(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentReportRevision, error)
+	GetReportStateNameMap(ctx context.Context) (map[string]string, error)
+	GetReportHierarchyPathAr(ctx context.Context, table string, id uuid.UUID) (string, error)
 }
 
 type incidentRepository struct {
@@ -2188,6 +2190,12 @@ SELECT
         JOIN roles r ON r.id = ur.role_id AND r.deleted_at IS NULL AND r.is_active = true
         WHERE ur.user_id = ia.uploaded_by_id
     ), '')                       AS uploaded_by_role,
+    COALESCE((
+        SELECT STRING_AGG(DISTINCT COALESCE(NULLIF(r.name_ar, ''), r.name), ', ')
+        FROM user_roles ur
+        JOIN roles r ON r.id = ur.role_id AND r.deleted_at IS NULL AND r.is_active = true
+        WHERE ur.user_id = ia.uploaded_by_id
+    ), '')                       AS uploaded_by_role_ar,
     wt.name                     AS transition_name,
     wt.name_ar                  AS transition_name_ar,
     fs.name                     AS from_state_name,
@@ -2228,6 +2236,52 @@ ORDER BY ir.created_at ASC`
 	return results, err
 }
 
+// GetReportStateNameMap returns English name -> Arabic name for workflow states,
+// classifications, departments and locations (first match wins, states first),
+// used to localize names stored as plain English text in revision logs.
+func (r *incidentRepository) GetReportStateNameMap(ctx context.Context) (map[string]string, error) {
+	var rows []struct {
+		Name   string
+		NameAr string
+	}
+	err := r.db.WithContext(ctx).Raw(`
+SELECT name, name_ar FROM (
+    SELECT name, COALESCE(name_ar, '') AS name_ar, 1 AS pri FROM workflow_states
+    UNION ALL SELECT name, COALESCE(name_ar, ''), 2 FROM classifications
+    UNION ALL SELECT name, COALESCE(name_ar, ''), 3 FROM departments
+    UNION ALL SELECT name, COALESCE(name_ar, ''), 4 FROM locations
+    UNION ALL SELECT name, COALESCE(name_ar, ''), 5 FROM lookup_values
+) x WHERE name <> '' AND name_ar <> '' ORDER BY pri`).Scan(&rows).Error
+	m := make(map[string]string, len(rows))
+	for _, row := range rows {
+		if _, exists := m[row.Name]; !exists {
+			m[row.Name] = row.NameAr
+		}
+	}
+	return m, err
+}
+
+// GetReportHierarchyPathAr returns the full "A > B > C" path of a classification or
+// location using Arabic names, falling back to the English name per level when
+// the Arabic one is empty. table must be "classifications" or "locations".
+func (r *incidentRepository) GetReportHierarchyPathAr(ctx context.Context, table string, id uuid.UUID) (string, error) {
+	if table != "classifications" && table != "locations" {
+		return "", fmt.Errorf("unsupported hierarchy table %q", table)
+	}
+	query := fmt.Sprintf(`
+WITH RECURSIVE up AS (
+    SELECT id, parent_id, COALESCE(NULLIF(name_ar, ''), name) AS label, 0 AS depth
+    FROM %[1]s WHERE id = ?
+    UNION ALL
+    SELECT t.id, t.parent_id, COALESCE(NULLIF(t.name_ar, ''), t.name), up.depth + 1
+    FROM %[1]s t JOIN up ON t.id = up.parent_id
+)
+SELECT COALESCE(string_agg(label, ' > ' ORDER BY depth DESC), '') FROM up`, table)
+	var path string
+	err := r.db.WithContext(ctx).Raw(query, id).Scan(&path).Error
+	return path, err
+}
+
 func (r *incidentRepository) GetReportIncidentData(ctx context.Context, incidentID uuid.UUID) (*models.IncidentReportData, error) {
 	var result models.IncidentReportData
 	sql := `
@@ -2265,6 +2319,7 @@ SELECT
     COALESCE(asn.first_name, '') AS assignee_first_name,
     COALESCE(asn.last_name, '')  AS assignee_last_name,
     COALESCE(dep.name, '')       AS department_name,
+    COALESCE(dep.name_ar, '')    AS department_name_ar,
     COALESCE((
         SELECT string_agg(u2.first_name || ' ' || u2.last_name, ', ')
         FROM incident_assignees ia2
