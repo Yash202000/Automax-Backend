@@ -386,29 +386,11 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 	if filter.EndDate != nil {
 		query = query.Where("incidents.created_at <= ?", *filter.EndDate)
 	}
-	if filter.CenterLatitude != nil && filter.CenterLongitude != nil && filter.RadiusMeters != nil {
-		if r.cfg.Geo.PostGISEnabled {
-			query = query.Where(
-				`incidents.latitude IS NOT NULL AND incidents.longitude IS NOT NULL AND
-				ST_DWithin(
-					ST_MakePoint(incidents.longitude, incidents.latitude)::geography,
-					ST_MakePoint(?, ?)::geography,
-					?
-				)`,
-				*filter.CenterLongitude, *filter.CenterLatitude, *filter.RadiusMeters)
-		} else {
-			// Standard haversine formula (Earth radius 6,371,000m, matching
-			// utils.CalculateDistance's constant), inlined so it needs no extension.
-			query = query.Where(`incidents.latitude IS NOT NULL AND incidents.longitude IS NOT NULL AND
-				6371000 * acos(
-					LEAST(1, GREATEST(-1,
-						cos(radians(?)) * cos(radians(incidents.latitude)) *
-						cos(radians(incidents.longitude) - radians(?)) +
-						sin(radians(?)) * sin(radians(incidents.latitude))
-					))
-				) <= ?`,
-				*filter.CenterLatitude, *filter.CenterLongitude, *filter.CenterLatitude, *filter.RadiusMeters)
-		}
+	if filter.ExactRecordType != nil {
+		query = query.Where("incidents.record_type = ?", *filter.ExactRecordType)
+	}
+	if filter.CreatedBefore != nil {
+		query = query.Where("incidents.created_at < ?", *filter.CreatedBefore)
 	}
 	if filter.Search != "" {
 		searchPattern := "%" + filter.Search + "%"
@@ -543,6 +525,31 @@ func (r *incidentRepository) ListSummaries(ctx context.Context, filter *models.I
 	var total int64
 
 	base := r.applyIncidentFilters(ctx, r.db.WithContext(ctx).Model(&models.Incident{}), filter)
+
+	if filter.CenterLatitude != nil && filter.CenterLongitude != nil && filter.RadiusMeters != nil {
+		if r.cfg.Geo.PostGISEnabled {
+			base = base.Where(
+				`incidents.latitude IS NOT NULL AND incidents.longitude IS NOT NULL AND
+				ST_DWithin(
+					ST_MakePoint(incidents.longitude, incidents.latitude)::geography,
+					ST_MakePoint(?, ?)::geography,
+					?
+				)`,
+				*filter.CenterLongitude, *filter.CenterLatitude, *filter.RadiusMeters)
+		} else {
+			// Standard haversine formula (Earth radius 6,371,000m, matching
+			// utils.CalculateDistance's constant), inlined so it needs no extension.
+			base = base.Where(`incidents.latitude IS NOT NULL AND incidents.longitude IS NOT NULL AND
+				6371000 * acos(
+					LEAST(1, GREATEST(-1,
+						cos(radians(?)) * cos(radians(incidents.latitude)) *
+						cos(radians(incidents.longitude) - radians(?)) +
+						sin(radians(?)) * sin(radians(incidents.latitude))
+					))
+				) <= ?`,
+				*filter.CenterLatitude, *filter.CenterLongitude, *filter.CenterLatitude, *filter.RadiusMeters)
+		}
+	}
 
 	if err := base.Count(&total).Error; err != nil {
 		return nil, 0, err

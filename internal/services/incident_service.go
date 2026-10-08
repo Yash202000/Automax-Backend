@@ -6473,16 +6473,16 @@ func (s *incidentService) AutoAssignUnassigned(ctx context.Context) error {
 	return nil
 }
 
-// defaultRecurrenceRadiusMeters is used when the list request carries no radius.
-const defaultRecurrenceRadiusMeters = 1000
-
 // stampRecurrences flags listed incidents that have an earlier same-classification
 // incident nearby. One batched query per page; failures never break the listing.
 func (s *incidentService) stampRecurrences(ctx context.Context, filter *models.IncidentFilter, incidents []models.Incident, responses []models.IncidentResponse) {
 	if len(incidents) == 0 {
 		return
 	}
-	radius := float64(defaultRecurrenceRadiusMeters)
+	// Fixed radius, not filter.RadiusMeters: the list's search radius can be huge (e.g. 10,000 km),
+	// which would make every earlier incident a "recurrence" and slow the query. Must stay in
+	// step with the summary search's recurrence lookup (recurrence_of_incident_id).
+	radius := s.cfg.Geo.RecurrenceIncidentRadiusMeters
 	if filter.RadiusMeters != nil {
 		radius = *filter.RadiusMeters
 	}

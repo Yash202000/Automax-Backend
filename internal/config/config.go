@@ -61,6 +61,10 @@ type GeoConfig struct {
 	// the "Nearby Incidents" feature when the caller doesn't supply its own
 	// radius. env: NEARBY_INCIDENT_RADIUS_METERS (default: 500)
 	NearbyIncidentRadiusMeters float64
+	// RecurrenceIncidentRadiusMeters is the radius (in meters) within which an earlier
+	// same-classification incident counts as a recurrence.
+	// env: RECURRENCE_INCIDENT_RADIUS_METERS (default: 1000)
+	RecurrenceIncidentRadiusMeters float64
 }
 
 // ImageValidationConfig holds settings for the standalone image-quality
@@ -472,8 +476,9 @@ func Load() *Config {
 		ChatbotURL:                  getEnv("CHATBOT_URL", "https://chatbot.automax.example.com"),
 		KpiDictionaryWorkflowCode:   getEnv("KPI_DICTIONARY_WORKFLOW_CODE", "kpi_dictionary_workflow"),
 		Geo: GeoConfig{
-			PostGISEnabled:             getEnvAsBool("POSTGIS_ENABLED", false),
-			NearbyIncidentRadiusMeters: getEnvAsFloat("NEARBY_INCIDENT_RADIUS_METERS", 500),
+			PostGISEnabled:                 getEnvAsBool("POSTGIS_ENABLED", false),
+			NearbyIncidentRadiusMeters:     getEnvAsFloat("NEARBY_INCIDENT_RADIUS_METERS", 1000),
+			RecurrenceIncidentRadiusMeters: getEnvAsFloat("RECURRENCE_INCIDENT_RADIUS_METERS", 1000),
 		},
 		Report: ReportConfig{
 			LogoLeftURL:  getEnv("LOGO_LEFT_URL", ""),
