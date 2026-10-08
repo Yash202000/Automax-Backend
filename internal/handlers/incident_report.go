@@ -339,11 +339,22 @@ func (h *IncidentHandler) GenerateCitizenReport(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "incident_not_found"))
 	}
+	citizenLangAr := req.Lang == "ar" || (req.Lang == "" && c.Query("lang", "ar") != "en")
 	if reportData.LocationID != nil {
 		reportData.LocationName, _ = h.locationRepo.FetchLocationFullPathByID(c.UserContext(), *reportData.LocationID)
+		if citizenLangAr {
+			if p, perr := h.incidentRepo.GetReportHierarchyPathAr(c.UserContext(), "locations", *reportData.LocationID); perr == nil && p != "" {
+				reportData.LocationNameAr = p
+			}
+		}
 	}
 	if reportData.ClassificationID != nil {
 		reportData.ClassificationName, _ = h.classificationRepo.FetchClassificationFullPathByID(c.UserContext(), *reportData.ClassificationID)
+		if citizenLangAr {
+			if p, perr := h.incidentRepo.GetReportHierarchyPathAr(c.UserContext(), "classifications", *reportData.ClassificationID); perr == nil && p != "" {
+				reportData.ClassificationNameAr = p
+			}
+		}
 	}
 
 	reportAttachments, err := h.incidentRepo.GetReportAttachments(c.UserContext(), id)
@@ -385,12 +396,16 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
-	// "Include Logs" is opt-in (default off) and requires log-view access.
-	includeLogs := c.QueryBool("include_logs", false)
-	if includeLogs {
-		user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
-		if user == nil || !(user.IsSuperAdmin || user.HasPermission("action-logs:view")) {
-			return utils.ErrorResponse(c, fiber.StatusForbidden, "Insufficient permissions")
+	// "Include Logs" exists only for the EPM940 client: opt-in (default off) and
+	// requires log-view access. Every other client always gets the full report.
+	includeLogs := true
+	if strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940) {
+		includeLogs = c.QueryBool("include_logs", false)
+		if includeLogs {
+			user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
+			if user == nil || !(user.IsSuperAdmin || user.HasPermission("action-logs:view")) {
+				return utils.ErrorResponse(c, fiber.StatusForbidden, "Insufficient permissions")
+			}
 		}
 	}
 
@@ -399,10 +414,19 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "incident_not_found"))
 	}
 
+	isArabic := c.Query("lang", "ar") != "en"
+
 	if reportData.LocationID != nil {
 		reportData.LocationName, err = h.locationRepo.FetchLocationFullPathByID(c.UserContext(), *reportData.LocationID)
 		if err != nil {
 			log.Printf("Location err: %v", err)
+		}
+		if isArabic {
+			// The full path is built from English names only; rebuild it in Arabic so
+			// every level (including the last one) is localized.
+			if p, perr := h.incidentRepo.GetReportHierarchyPathAr(c.UserContext(), "locations", *reportData.LocationID); perr == nil && p != "" {
+				reportData.LocationNameAr = p
+			}
 		}
 	}
 
@@ -410,6 +434,11 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 		reportData.ClassificationName, err = h.classificationRepo.FetchClassificationFullPathByID(c.UserContext(), *reportData.ClassificationID)
 		if err != nil {
 			log.Printf("Classification err: %v", err)
+		}
+		if isArabic {
+			if p, perr := h.incidentRepo.GetReportHierarchyPathAr(c.UserContext(), "classifications", *reportData.ClassificationID); perr == nil && p != "" {
+				reportData.ClassificationNameAr = p
+			}
 		}
 	}
 
@@ -440,8 +469,13 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 	}
 
 	lbl := labelsAR
-	if c.Query("lang", "ar") == "en" {
+	if !isArabic {
 		lbl = labelsEN
+	}
+
+	if isArabic && includeLogs {
+		nameMap, _ := h.incidentRepo.GetReportStateNameMap(c.UserContext())
+		localizeReportLogsAr(nameMap, reportRevisions, reportTransitions)
 	}
 
 	var reportCustomFields []reportCustomField
@@ -625,7 +659,13 @@ func buildReportHTML(
 
 	// helpers
 	tz := appTimezone(h.cfg.Report.AppRegion)
-	ts := func(t time.Time) string { return t.In(tz).Format("02/01/2006 03:04 PM") }
+	ts := func(t time.Time) string {
+		out := t.In(tz).Format("02/01/2006 03:04 PM")
+		if l.Dir == "rtl" {
+			out = strings.NewReplacer(" AM", " ص", " PM", " م").Replace(out)
+		}
+		return out
+	}
 	tsp := func(t *time.Time) string {
 		if t == nil {
 			return ""
@@ -770,7 +810,7 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 	secHeader(&b, l.SectionIncident)
 	b.WriteString(`<table class="grid">`)
 	row2(&b, l.IncidentNo, html.EscapeString(data.IncidentNumber), l.Date, html.EscapeString(ts(data.CreatedAt)))
-	row2(&b, l.Source, html.EscapeString(data.Source), l.RecordTypeLbl, html.EscapeString(data.RecordType))
+	row2(&b, l.Source, html.EscapeString(localizeEnum(l.Dir == "rtl", sourceLabelsAr, data.Source)), l.RecordTypeLbl, html.EscapeString(localizeEnum(l.Dir == "rtl", recordTypeLabelsAr, data.RecordType)))
 	row1(&b, l.Status, na(statusName))
 	row1(&b, l.Title2, na(data.Title))
 
@@ -881,7 +921,7 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 		row2(&b, l.Reporter, na(data.CreatorFullName), l.Assignee, na(assigneeName))
 		row2(&b, l.ReporterEmail, na(data.CreatorEmail), l.ReporterMobile, na(data.CreatorPhone))
 	}
-	row1(&b, l.Department, na(data.DepartmentName))
+	row1(&b, l.Department, na(localName(data.DepartmentName, data.DepartmentNameAr)))
 	b.WriteString(`</table>`)
 
 	// ── Section: Caller Details ─────────────────────────
@@ -939,16 +979,20 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 		}
 
 		uploadedBy := strings.TrimSpace(att.UploadedByFirstName + " " + att.UploadedByLastName)
-		sizeStr := fmt.Sprintf("%.1f KB", float64(att.FileSize)/1024)
+		kbUnit, byteUnit := "KB", "bytes"
+		if l.Dir == "rtl" {
+			kbUnit, byteUnit = "ك.ب", "بايت"
+		}
+		sizeStr := fmt.Sprintf("%.1f %s", float64(att.FileSize)/1024, kbUnit)
 		if att.FileSize < 1024 {
-			sizeStr = fmt.Sprintf("%d bytes", att.FileSize)
+			sizeStr = fmt.Sprintf("%d %s", att.FileSize, byteUnit)
 		}
 		fmt.Fprintf(&b,
 			`<div class="att-meta"><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span>`,
 			html.EscapeString(l.AttType), html.EscapeString(att.MimeType),
 			html.EscapeString(l.AttSize), sizeStr,
 			html.EscapeString(l.AttUploadedBy), html.EscapeString(uploadedBy),
-			html.EscapeString(l.AttUploadedByRole), html.EscapeString(att.UploadedByRole),
+			html.EscapeString(l.AttUploadedByRole), html.EscapeString(localName(att.UploadedByRole, att.UploadedByRoleAr)),
 			html.EscapeString(l.AttUploadedAt), html.EscapeString(ts(att.CreatedAt)),
 		)
 		if att.DeletedAt != nil {

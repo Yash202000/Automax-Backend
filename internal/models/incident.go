@@ -1390,6 +1390,7 @@ type IncidentReportAttachment struct {
 	UploadedByFirstName string     `db:"uploaded_by_first_name"`
 	UploadedByLastName  string     `db:"uploaded_by_last_name"`
 	UploadedByRole      string     `db:"uploaded_by_role"`
+	UploadedByRoleAr    string     `db:"uploaded_by_role_ar"`
 	CreatedAt           time.Time  `db:"created_at"`
 	DeletedAt           *time.Time `db:"deleted_at"`
 	TransitionName      *string    `db:"transition_name"`
@@ -1478,6 +1479,7 @@ type IncidentReportData struct {
 	AssigneeLastName     string     `db:"assignee_last_name"`
 	AssigneesName        string     `db:"assignees_name"`
 	DepartmentName       string     `db:"department_name"`
+	DepartmentNameAr     string     `db:"department_name_ar"`
 	Latitude             *float64   `db:"latitude"`
 	Longitude            *float64   `db:"longitude"`
 	Address              string     `db:"address"`
