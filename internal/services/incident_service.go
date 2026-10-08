@@ -3332,9 +3332,17 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		txRepo.CreateComment(ctx, comment)
 	}
 
-	// If feedback was provided, create a feedback record (skip empty ones — they
-	// would show up as blank entries in the incident's comments tab)
-	if req.Feedback != nil && (req.Feedback.Rating > 0 || strings.TrimSpace(req.Feedback.Comment) != "") {
+	// If feedback was provided, create a feedback record. A rating with no comment
+	// is only kept when the transition actually asks for a rating; otherwise it is
+	// the client's default rating and would show up as a blank entry in the comments tab.
+	transitionWantsRating := false
+	for _, requirement := range transition.Requirements {
+		if requirement.RequirementType == "rating" {
+			transitionWantsRating = true
+			break
+		}
+	}
+	if req.Feedback != nil && (strings.TrimSpace(req.Feedback.Comment) != "" || (req.Feedback.Rating > 0 && transitionWantsRating)) {
 		feedback := &models.IncidentFeedback{
 			IncidentID:          incidentID,
 			Rating:              req.Feedback.Rating,
