@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/config"
@@ -210,6 +211,20 @@ func (h *KpiEngagementHandler) ListMetricsByCode(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "", items)
 }
 
+const duplicateMetricNameMsg = "Metric name already exists under this KPI. Please use a unique metric name."
+
+// metricNameTaken reports whether another (non-deleted) metric of the same
+// KPI already uses name — compared trimmed and case-insensitively, so
+// "Roads Resurfaced" and " roads resurfaced" count as the same name. The
+// same name under a different KPI is allowed.
+func (h *KpiEngagementHandler) metricNameTaken(c *fiber.Ctx, kpiType string, kpiID uuid.UUID, name string, excludeID uuid.UUID) bool {
+	var count int64
+	h.db.WithContext(c.UserContext()).Model(&models.KpiMetric{}).
+		Where("kpi_type = ? AND kpi_id = ? AND id <> ? AND lower(trim(name)) = lower(trim(?))", kpiType, kpiID, excludeID, name).
+		Count(&count)
+	return count > 0
+}
+
 func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
 	kpiType, id, err := h.parseTypeAndID(c)
 	if err != nil || !h.kpiExists(kpiType, id) {
@@ -219,6 +234,7 @@ func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
+	req.Name = strings.TrimSpace(req.Name)
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
@@ -297,6 +313,9 @@ func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
 	}
 	if item.Weight == 0 {
 		item.Weight = 1
+	}
+	if h.metricNameTaken(c, kpiType, id, req.Name, uuid.Nil) {
+		return utils.ErrorResponse(c, fiber.StatusConflict, duplicateMetricNameMsg)
 	}
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
@@ -513,8 +532,16 @@ func (h *KpiEngagementHandler) UpdateMetric(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
+	req.Name = strings.TrimSpace(req.Name)
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+	var current models.KpiMetric
+	if err := h.db.WithContext(c.UserContext()).Select("id, kpi_id, kpi_type").First(&current, id).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	if h.metricNameTaken(c, current.KpiType, current.KpiID, req.Name, id) {
+		return utils.ErrorResponse(c, fiber.StatusConflict, duplicateMetricNameMsg)
 	}
 	calcType := req.CalculationType
 	if calcType == "" {
