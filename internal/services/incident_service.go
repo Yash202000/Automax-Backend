@@ -845,6 +845,8 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 			log.Printf("[IncidentService] failed to update reporter user %v after incident create: %v", pendingUserUpdates["id"], err)
 		}
 	}
+	s.notifySimilarPreviousIncident(ctx, incident, creatorID)
+
 	resp := models.ToIncidentResponse(created)
 
 	// Broadcast incident creation to all broadcast clients
@@ -1278,6 +1280,8 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		tx.Rollback()
 		return nil, err
 	}
+	// Snapshot geo/classification before the edit mutates them (VD2 similar-incident check).
+	oldLat, oldLng, oldClassID := copyFloatPtr(incident.Latitude), copyFloatPtr(incident.Longitude), incident.ClassificationID
 
 	// Enforce state-level edit restriction: if the current state has editable_roles configured,
 	// the calling user must have one of those roles.
@@ -1851,6 +1855,10 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 			}
 			_ = s.SyncLocationToMergedIncidents(ctx, id, updated.LocationID, newLocationName, userID)
 		}
+	}
+
+	if !floatPtrEqual(oldLat, updated.Latitude) || !floatPtrEqual(oldLng, updated.Longitude) || !uuidPtrEqual(oldClassID, updated.ClassificationID) {
+		s.notifySimilarPreviousIncident(ctx, updated, userID)
 	}
 
 	resp := models.ToIncidentResponse(updated)
@@ -6488,9 +6496,9 @@ func (s *incidentService) stampRecurrences(ctx context.Context, filter *models.I
 	if len(incidents) == 0 {
 		return
 	}
-	// Fixed radius, not filter.RadiusMeters: the list's search radius can be huge (e.g. 10,000 km),
-	// which would make every earlier incident a "recurrence" and slow the query. Must stay in
-	// step with the summary search's recurrence lookup (recurrence_of_incident_id).
+	// Radius: use filter.RadiusMeters when the frontend provides one, otherwise fall back to the
+	// backend's RecurrenceIncidentRadiusMeters config. Must stay in step with the summary search's
+	// recurrence lookup (recurrence_of_incident_id), which applies the same rule.
 	radius := s.cfg.Geo.RecurrenceIncidentRadiusMeters
 	if filter.RadiusMeters != nil {
 		radius = *filter.RadiusMeters
@@ -6511,4 +6519,93 @@ func (s *incidentService) stampRecurrences(ctx context.Context, filter *models.I
 			responses[i].RecurrenceCount = info.Count
 		}
 	}
+}
+
+// notifySimilarPreviousIncident (VD2 only) sends the recipient (creator on create, editor on edit) an in-app notification
+// when an earlier incident exists with the same classification within the recurrence
+// radius of the new incident's coordinates.
+// Best effort: runs in the background and never affects incident creation.
+func (s *incidentService) notifySimilarPreviousIncident(ctx context.Context, incident *models.Incident, recipientID uuid.UUID) {
+	if !shouldNotifySimilarIncident(s.cfg.ClientCode, incident.Latitude, incident.Longitude, incident.ClassificationID, incident.CurrentStateID) ||
+		s.notificationService == nil {
+		return
+	}
+	bgCtx := context.WithoutCancel(ctx)
+	incidentID, recordType, createdAt := incident.ID, incident.RecordType, incident.CreatedAt
+	lat, lng := *incident.Latitude, *incident.Longitude
+	classificationID := incident.ClassificationID.String()
+	radius := s.cfg.Geo.RecurrenceIncidentRadiusMeters
+
+	go func() {
+		prev, _, err := s.incidentRepo.ListSummaries(bgCtx, &models.IncidentFilter{
+			ClassificationID:  []string{classificationID},
+			CenterLatitude:    &lat,
+			CenterLongitude:   &lng,
+			RadiusMeters:      &radius,
+			ExactRecordType:   &recordType,
+			ExcludeIncidentID: &incidentID,
+			CreatedBefore:     &createdAt,
+			Page:              1,
+			Limit:             1,
+		})
+		if err != nil {
+			log.Printf("[IncidentService] similar-incident lookup failed for %s: %v", incidentID, err)
+			return
+		}
+		if len(prev) == 0 {
+			return
+		}
+		creator, err := s.userRepo.FindByID(bgCtx, recipientID)
+		if err != nil || creator == nil || creator.Email == "" {
+			return
+		}
+		subject, body, subjectAr, bodyAr := SimilarIncidentTexts(prev[0].IncidentNumber, prev[0].Status, prev[0].StatusAr)
+		result, err := s.notificationService.SendNotification(
+			bgCtx, "notification", nil, "en",
+			[]string{creator.Email}, nil, nil,
+			subject, body,
+			nil, nil, &recipientID, nil,
+		)
+		if err != nil || len(result.InboxLogIDs) == 0 {
+			if err != nil {
+				log.Printf("[IncidentService] similar-incident notification failed for %s: %v", incidentID, err)
+			}
+			return
+		}
+		_ = s.notificationService.SetMetaOnLogs(bgCtx, result.InboxLogIDs, &models.NotificationMeta{
+			ID:   incidentID.String(),
+			Type: strings.ToUpper(recordType),
+		})
+		_ = s.notificationService.SetIncidentIDOnLogs(bgCtx, result.InboxLogIDs, incidentID)
+		_ = s.notificationService.SetArContentOnLogs(bgCtx, result.InboxLogIDs, subjectAr, bodyAr)
+	}()
+}
+
+// shouldNotifySimilarIncident gates the similar-incident notification to VD2 incidents
+// that have coordinates, a classification and an assigned state.
+func shouldNotifySimilarIncident(clientCode string, lat, lng *float64, classificationID *uuid.UUID, stateID uuid.UUID) bool {
+	return strings.EqualFold(strings.TrimSpace(clientCode), constants.CLIENT_CODE.VD2) &&
+		lat != nil && lng != nil && classificationID != nil && stateID != uuid.Nil
+}
+
+func copyFloatPtr(p *float64) *float64 {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
+func floatPtrEqual(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func uuidPtrEqual(a, b *uuid.UUID) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
