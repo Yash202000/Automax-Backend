@@ -627,7 +627,7 @@ type IncidentSummary struct {
 	LocationAr         string    `json:"location_name_ar"`
 	CurrentStateID     uuid.UUID `json:"current_state_id"`
 	Status             string    `json:"status"`
-	StatusAr           string    `json:"status_name_ar"`
+	StatusAr           string    `json:"status_ar"`
 	StatusColor        string    `json:"status_color"`
 	CreatedAt          time.Time `json:"created_at"`
 }
