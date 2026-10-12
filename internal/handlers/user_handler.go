@@ -757,6 +757,9 @@ func (h *UserHandler) Export(c *fiber.Ctx) error {
 			"classification_ids": classificationIDs,
 			"is_active":          user.IsActive,
 			"is_super_admin":     user.IsSuperAdmin,
+			"extension":          user.Extension,
+			"last_login_at":      user.LastLoginAt,
+			"created_at":         user.CreatedAt,
 		}
 	}
 

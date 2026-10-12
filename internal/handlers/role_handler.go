@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"sort"
 	"strings"
 
 	"github.com/automax/backend/internal/config"
@@ -491,6 +492,26 @@ func (h *RoleHandler) Export(c *fiber.Ctx) error {
 		IsSystem      bool        `json:"is_system"`
 		IsActive      bool        `json:"is_active"`
 		PermissionIDs []uuid.UUID `json:"permission_ids"`
+		// Users holding the role (display name, or username when no name
+		// is set) — informational; ignored by Import.
+		Users []string `json:"users"`
+	}
+
+	// One query for all users (with their roles), grouped by role — the
+	// same listing the user export uses.
+	allUsers, _, err := h.userRepo.List(c.UserContext(), 1, 10000, "", "", "", "", nil, nil, nil, nil, false, false)
+	if err != nil {
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
+	}
+	usersByRole := map[uuid.UUID][]string{}
+	for _, u := range allUsers {
+		label := strings.Join(strings.Fields(u.FirstName+" "+u.LastName), " ")
+		if label == "" {
+			label = u.Username
+		}
+		for _, r := range u.Roles {
+			usersByRole[r.ID] = append(usersByRole[r.ID], label)
+		}
 	}
 
 	exportData := make([]ExportRole, len(roles))
@@ -510,6 +531,7 @@ func (h *RoleHandler) Export(c *fiber.Ctx) error {
 			IsSystem:      role.IsSystem,
 			IsActive:      role.IsActive,
 			PermissionIDs: permissionIDs,
+			Users:         sortedOrEmpty(usersByRole[role.ID]),
 		}
 	}
 
@@ -521,6 +543,14 @@ func (h *RoleHandler) Export(c *fiber.Ctx) error {
 	c.Set("Content-Type", "application/json")
 	c.Set("Content-Disposition", "attachment; filename=roles_export.json")
 	return c.Send(jsonData)
+}
+
+func sortedOrEmpty(v []string) []string {
+	if v == nil {
+		return []string{}
+	}
+	sort.Strings(v)
+	return v
 }
 
 // Import roles from JSON
