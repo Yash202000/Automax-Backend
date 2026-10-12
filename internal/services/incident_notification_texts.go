@@ -52,3 +52,16 @@ func extensionNotificationContentAr(action, extension, targetName, prevName stri
 			fmt.Sprintf("تم إسناد التحويلة %s إلى %s.", extension, targetName)
 	}
 }
+
+// SimilarIncidentTexts builds the EN and AR in-app notification shown to the creator of a
+// new incident when an earlier incident exists with the same location and classification.
+func SimilarIncidentTexts(prevNumber, status, statusAr string) (subject, body, subjectAr, bodyAr string) {
+	subject = "Similar incident previously detected"
+	body = fmt.Sprintf("This incident was also identified during the previous scan. Previous Incident: %s - %s.", prevNumber, status)
+	if statusAr == "" {
+		statusAr = status
+	}
+	subjectAr = "تم اكتشاف بلاغ مماثل سابقاً"
+	bodyAr = fmt.Sprintf("تم تحديد هذا البلاغ أيضاً خلال الفحص السابق. البلاغ السابق: %s - %s.", prevNumber, statusAr)
+	return
+}

@@ -1696,6 +1696,7 @@ func (s *workflowService) SetTransitionFieldChanges(ctx context.Context, transit
 		fieldChanges[i] = models.TransitionFieldChange{
 			FieldName:            fc.FieldName,
 			Label:                fc.Label,
+			LabelAr:              fc.LabelAr,
 			IsRequired:           fc.IsRequired,
 			DepartmentTypeFilter: fc.DepartmentTypeFilter,
 			SortOrder:            fc.SortOrder,

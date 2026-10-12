@@ -308,6 +308,7 @@ type TransitionFieldChange struct {
 	// "classification_id", "title", "description"
 	FieldName            string `gorm:"size:100;not null" json:"field_name"`
 	Label                string `gorm:"size:100" json:"label"`                 // Display label shown in the transition modal
+	LabelAr              string `gorm:"size:100" json:"label_ar"`              // Arabic display label
 	IsRequired           bool   `gorm:"default:false" json:"is_required"`      // Whether the field must be filled
 	DepartmentTypeFilter string `gorm:"size:20" json:"department_type_filter"` // For department_id fields: "internal" | "external" | ""
 	SortOrder            int    `gorm:"default:0" json:"sort_order"`
@@ -521,6 +522,7 @@ type TransitionActionRequest struct {
 type TransitionFieldChangeRequest struct {
 	FieldName            string `json:"field_name" validate:"required"`
 	Label                string `json:"label"`
+	LabelAr              string `json:"label_ar"`
 	IsRequired           bool   `json:"is_required"`
 	DepartmentTypeFilter string `json:"department_type_filter" validate:"omitempty,oneof=internal external"`
 	SortOrder            int    `json:"sort_order"`
@@ -694,6 +696,7 @@ type TransitionFieldChangeResponse struct {
 	TransitionID         uuid.UUID `json:"transition_id"`
 	FieldName            string    `json:"field_name"`
 	Label                string    `json:"label"`
+	LabelAr              string    `json:"label_ar"`
 	IsRequired           bool      `json:"is_required"`
 	DepartmentTypeFilter string    `json:"department_type_filter"`
 	SortOrder            int       `json:"sort_order"`
@@ -1002,6 +1005,7 @@ func ToTransitionFieldChangeResponse(f *TransitionFieldChange) TransitionFieldCh
 		TransitionID:         f.TransitionID,
 		FieldName:            f.FieldName,
 		Label:                f.Label,
+		LabelAr:              f.LabelAr,
 		IsRequired:           f.IsRequired,
 		DepartmentTypeFilter: f.DepartmentTypeFilter,
 		SortOrder:            f.SortOrder,

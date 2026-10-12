@@ -569,9 +569,12 @@ func (r *incidentRepository) ListSummaries(ctx context.Context, filter *models.I
 	err := base.
 		Select(`incidents.id, incidents.incident_number, incidents.latitude, incidents.longitude,
 			COALESCE(classifications.name, '') AS classification_name,
+			COALESCE(classifications.name_ar, '') AS classification_ar,
 			COALESCE(locations.name, '') AS location_name,
+			COALESCE(locations.name_ar, '') AS location_ar,
 			incidents.current_state_id,
 			workflow_states.name AS status,
+			COALESCE(workflow_states.name_ar, '') AS status_ar,
 			workflow_states.color AS status_color,
 			incidents.created_at`).
 		Joins("LEFT JOIN classifications ON classifications.id = incidents.classification_id").

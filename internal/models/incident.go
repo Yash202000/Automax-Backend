@@ -622,9 +622,12 @@ type IncidentSummary struct {
 	Latitude           *float64  `json:"latitude"`
 	Longitude          *float64  `json:"longitude"`
 	ClassificationName string    `json:"classification_name"`
+	ClassificationAr   string    `json:"classification_ar"`
 	LocationName       string    `json:"location_name"`
+	LocationAr         string    `json:"location_ar"`
 	CurrentStateID     uuid.UUID `json:"current_state_id"`
 	Status             string    `json:"status"`
+	StatusAr           string    `json:"status_ar"`
 	StatusColor        string    `json:"status_color"`
 	CreatedAt          time.Time `json:"created_at"`
 }
