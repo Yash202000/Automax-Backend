@@ -28,6 +28,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 )
 
@@ -65,6 +66,13 @@ func main() {
 	}
 
 	jwtManager := utils.NewJWTManager(cfg.JWT.Secret, cfg.JWT.ExpireHour, cfg.JWT.RefreshExpireHour, cfg.JWT.RememberExpireHour)
+	middleware.ErrorLogTokenReader = func(token string) (uuid.UUID, string, bool) {
+		claims, err := jwtManager.ValidateToken(token)
+		if err != nil {
+			return uuid.Nil, "", false
+		}
+		return claims.UserID, claims.Email, true
+	}
 	ssoJWTManager := utils.NewSSOJWTManager(cfg.SSOPrivateKey, cfg.SSOIssuerURL)
 	sessionStore := database.NewSessionStore(redisClient)
 
@@ -90,6 +98,8 @@ func main() {
 	settingsRepo := repository.NewSettingsRepository(db)
 	escalationRepo := repository.NewEscalationRepository(db)
 	escalationGroupRepo := repository.NewEscalationGroupRepository(db)
+	errorLogService := services.NewErrorLogService(repository.NewErrorLogRepository(db))
+	services.DefaultErrorLog = errorLogService
 	escalationPolicyRepo := repository.NewEscalationPolicyRepository(db)
 	callerSentimentRepo := repository.NewCallerSentimentRepo(db)
 	goalRepo := repository.NewGoalRepository(db)
@@ -209,6 +219,27 @@ func main() {
 	slaMonitor.Start(ctx)
 	defer slaMonitor.Stop()
 
+	// Error Log alerts: Critical errors notify admins in-app; repeats inside the window are grouped.
+	errorLogAlertWindowMinutes := 10
+	if v := os.Getenv("ERROR_LOG_ALERT_WINDOW_MINUTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			errorLogAlertWindowMinutes = n
+		}
+	}
+	errorLogService.SetAlerter(services.NewErrorLogAlerter(notificationService, userRepo, time.Duration(errorLogAlertWindowMinutes)*time.Minute))
+
+	// Error Log retention: deletes logs older than the System Settings retention period.
+	// Interval is controlled by ERROR_LOG_RETENTION_INTERVAL_MINUTES (default 1440 = daily).
+	errorLogRetentionMinutes := 1440
+	if v := os.Getenv("ERROR_LOG_RETENTION_INTERVAL_MINUTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			errorLogRetentionMinutes = n
+		}
+	}
+	errorLogRetentionMonitor := services.NewErrorLogRetentionMonitor(errorLogService, settingsRepo, time.Duration(errorLogRetentionMinutes)*time.Minute)
+	errorLogRetentionMonitor.Start(ctx)
+	defer errorLogRetentionMonitor.Stop()
+
 	// Initialize and start AI Quality Monitor
 	aiQualityMonitor := services.NewAIQualityMonitor(aiQualityFeedbackRepo, incidentRepo, minioStorage, cfg.AIQuality)
 	aiQualityMonitor.Start(ctx)
@@ -263,6 +294,7 @@ func main() {
 	otpHandler := handlers.NewOTPHandler(otpService, userService)
 	escalationHandler := handlers.NewEscalationHandler(escalationService)
 	escalationGroupHandler := handlers.NewEscalationGroupHandler(escalationGroupService)
+	errorLogHandler := handlers.NewErrorLogHandler(errorLogService)
 	escalationPolicyHandler := handlers.NewEscalationPolicyHandler(escalationPolicyService, userRepo, departmentRepo)
 	feedbackTemplateHandler := handlers.NewFeedbackTemplateHandler(feedbackTemplateService)
 	commentTemplateHandler := handlers.NewCommentTemplateHandler(commentTemplateService)
@@ -390,6 +422,7 @@ func main() {
 	})
 
 	app.Use(recover.New())
+	app.Use(middleware.ErrorLog())
 	app.Use(logger.New(logger.Config{
 		Format: "[${time}] ${status} - ${latency} ${method} ${path}\n",
 	}))
@@ -1091,6 +1124,15 @@ func main() {
 	escalationGroups.Put("/:id", escalationGroupHandler.Update)
 	escalationGroups.Delete("/:id", escalationGroupHandler.Delete)
 
+	// Error Log (permission-based)
+	errorLogs := v1.Group("/error-logs", authMiddleware.Authenticate())
+	errorLogs.Get("/", authMiddleware.RequirePermission("error-logs:view"), errorLogHandler.List)
+	errorLogs.Post("/report", errorLogHandler.Report) // any logged-in user: the web app reports browser-side errors
+	errorLogs.Get("/users", authMiddleware.RequirePermission("error-logs:view"), errorLogHandler.ListUsers)
+	errorLogs.Get("/export", authMiddleware.RequirePermission("error-logs:export"), errorLogHandler.Export)
+	errorLogs.Get("/:id", authMiddleware.RequirePermission("error-logs:view"), errorLogHandler.GetByID)
+	errorLogs.Put("/:id/status", authMiddleware.RequirePermission("error-logs:update"), errorLogHandler.UpdateStatus)
+
 	// Escalation Policies (admin)
 	escalationPolicies := admin.Group("/escalation-policies", authMiddleware.Authenticate(), authMiddleware.RequirePermission("escalation-groups:manage_rules"), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureEscalation)))
 	escalationPolicies.Post("/resolve-users", escalationPolicyHandler.ResolveTargetUsers)
@@ -1488,6 +1530,12 @@ func customErrorHandler(c *fiber.Ctx, err error) error {
 	if e, ok := err.(*fiber.Error); ok {
 		code = e.Code
 		message = e.Message
+	}
+
+	// Errors raised before the Error Log middleware runs (for example a request body over
+	// the size limit) are only visible here.
+	if recorded, _ := c.Locals(utils.LocalErrorRecorded).(bool); !recorded {
+		middleware.RecordRequestError(c, code, message, "")
 	}
 
 	return c.Status(code).JSON(fiber.Map{
