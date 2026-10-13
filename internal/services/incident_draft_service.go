@@ -319,9 +319,12 @@ func (s *incidentDraftService) Publish(ctx context.Context, id, ownerID uuid.UUI
 
 func (s *incidentDraftService) PruneExpired(ctx context.Context) (int64, error) {
 	cutoff := time.Now().Add(-time.Duration(s.cfg.TTLDays) * 24 * time.Hour)
-	n, paths, err := s.repo.PruneExpired(ctx, cutoff)
+	n, ids, paths, err := s.repo.PruneExpired(ctx, cutoff)
 	if err != nil {
 		return 0, err
+	}
+	for _, id := range ids {
+		s.invalidate(ctx, id)
 	}
 	s.removeObjects(ctx, paths)
 	return n, nil
@@ -358,11 +361,23 @@ func (s *incidentDraftService) moveAttachments(ctx context.Context, tx repositor
 }
 
 // removeObjects deletes stored files best-effort; a leftover object is only wasted space.
+// A key an incident attachment still references is never deleted: publish hands the same
+// object to the incident, so a draft row that outlived a failed hand-over (or a rolled-back
+// publish) must not take the incident's file with it. If the lookup fails nothing is
+// deleted, because a stray file costs less than a lost one.
 func (s *incidentDraftService) removeObjects(ctx context.Context, paths []string) {
-	if s.fileStorage == nil {
+	if s.fileStorage == nil || len(paths) == 0 {
+		return
+	}
+	referenced, err := s.repo.ReferencedPaths(ctx, paths)
+	if err != nil {
+		log.Printf("[IncidentDraft] skipping delete of %d objects, reference check failed: %v", len(paths), err)
 		return
 	}
 	for _, p := range paths {
+		if referenced[p] {
+			continue
+		}
 		if err := s.fileStorage.DeleteFile(ctx, p); err != nil {
 			log.Printf("[IncidentDraft] delete object %q failed: %v", p, err)
 		}
@@ -390,7 +405,20 @@ func (s *incidentDraftService) AddAttachment(ctx context.Context, draftID, owner
 		FilePath:     key,
 		UploadedByID: ownerID,
 	}
-	if err := s.repo.CreateAttachment(ctx, att); err != nil {
+	// Insert under the draft's row lock. Publish and delete take the same lock, so a draft
+	// that was published or removed while the file uploaded is caught here instead of
+	// receiving an attachment nobody will move or clean up.
+	err = s.repo.Transaction(ctx, func(tx repository.IncidentDraftRepository) error {
+		current, ferr := tx.FindByIDForUpdate(ctx, draftID, ownerID)
+		if ferr != nil {
+			return ferr
+		}
+		if current.PublishedAt != nil {
+			return ErrDraftPublished
+		}
+		return tx.CreateAttachment(ctx, att)
+	})
+	if err != nil {
 		s.removeObjects(ctx, []string{key})
 		return nil, err
 	}
@@ -597,6 +625,7 @@ func (s *incidentDraftService) toResponse(d *models.IncidentDraft) *models.Incid
 		Keep:                 d.Keep,
 		CreatedAt:            d.CreatedAt,
 		UpdatedAt:            d.UpdatedAt,
+		PublishedAt:          d.PublishedAt,
 		FilledFields:         filled,
 		RequiredFields:       required,
 		DaysToExpiry:         s.daysToExpiry(d),

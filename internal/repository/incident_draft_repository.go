@@ -41,10 +41,15 @@ type IncidentDraftRepository interface {
 	// MarkPublished stamps published_at on a draft that became an incident. It also clears
 	// keep so the row is pruned with the others once it ages out.
 	MarkPublished(ctx context.Context, id, ownerID uuid.UUID) error
+	// ReferencedPaths returns which of the storage keys an incident attachment (including a
+	// soft-deleted one) still points at, so their objects must not be removed.
+	ReferencedPaths(ctx context.Context, paths []string) (map[string]bool, error)
+
 	// PruneExpired permanently deletes drafts (including published ones)
 	// last updated before cutoff, except those flagged keep, together with their attachment
-	// rows. It returns how many drafts went and the storage keys left to remove.
-	PruneExpired(ctx context.Context, cutoff time.Time) (int64, []string, error)
+	// rows. It returns how many drafts went, their ids (for cache invalidation) and the storage
+	// keys left to remove.
+	PruneExpired(ctx context.Context, cutoff time.Time) (int64, []uuid.UUID, []string, error)
 
 	// Touch bumps updated_at (resetting expiry) without changing version.
 	Touch(ctx context.Context, id, ownerID uuid.UUID) error
@@ -228,15 +233,15 @@ func (r *incidentDraftRepository) MarkPublished(ctx context.Context, id, ownerID
 	return nil
 }
 
-func (r *incidentDraftRepository) PruneExpired(ctx context.Context, cutoff time.Time) (int64, []string, error) {
+func (r *incidentDraftRepository) PruneExpired(ctx context.Context, cutoff time.Time) (int64, []uuid.UUID, []string, error) {
 	var (
 		count int64
+		ids   []uuid.UUID
 		paths []string
 	)
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Lock the expired rows first so a concurrent edit or publish cannot slip between
 		// reading the attachment keys and deleting the drafts.
-		var ids []uuid.UUID
 		if err := tx.Model(&models.IncidentDraft{}).Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("keep = ? AND updated_at < ?", false, cutoff).Pluck("id", &ids).Error; err != nil {
 			return err
@@ -251,7 +256,26 @@ func (r *incidentDraftRepository) PruneExpired(ctx context.Context, cutoff time.
 		count = res.RowsAffected
 		return res.Error
 	})
-	return count, paths, err
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	return count, ids, paths, nil
+}
+
+func (r *incidentDraftRepository) ReferencedPaths(ctx context.Context, paths []string) (map[string]bool, error) {
+	out := make(map[string]bool, len(paths))
+	if len(paths) == 0 {
+		return out, nil
+	}
+	var used []string
+	if err := r.db.WithContext(ctx).Unscoped().Model(&models.IncidentAttachment{}).
+		Where("file_path IN ?", paths).Distinct().Pluck("file_path", &used).Error; err != nil {
+		return nil, err
+	}
+	for _, p := range used {
+		out[p] = true
+	}
+	return out, nil
 }
 
 func (r *incidentDraftRepository) Touch(ctx context.Context, id, ownerID uuid.UUID) error {
