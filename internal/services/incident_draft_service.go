@@ -86,7 +86,10 @@ type IncidentDraftService interface {
 	List(ctx context.Context, ownerID uuid.UUID, filter *models.IncidentDraftFilter) ([]models.IncidentDraftListItem, int64, error)
 	Count(ctx context.Context, ownerID uuid.UUID) (int64, error)
 	Delete(ctx context.Context, id, ownerID uuid.UUID) error
-	Publish(ctx context.Context, id, ownerID uuid.UUID) (*models.IncidentResponse, error)
+	// Publish creates the incident (once) and moves the draft's attachments to it. If some
+	// attachments could not be moved the draft stays unpublished with its incident id saved,
+	// FailedAttachments lists them, and calling Publish again retries only those.
+	Publish(ctx context.Context, id, ownerID uuid.UUID) (*PublishResult, error)
 	// PruneExpired hard-deletes drafts past the configured TTL (except keep=true),
 	// including their attachment rows and stored files.
 	PruneExpired(ctx context.Context) (int64, error)
@@ -96,6 +99,12 @@ type IncidentDraftService interface {
 	DeleteAttachment(ctx context.Context, draftID, attachmentID, ownerID uuid.UUID) error
 	// OpenAttachment returns the attachment and its file; the caller must close the reader.
 	OpenAttachment(ctx context.Context, draftID, attachmentID, ownerID uuid.UUID) (*models.IncidentDraftAttachment, io.ReadCloser, error)
+}
+
+// PublishResult is what Publish returns.
+type PublishResult struct {
+	Incident          *models.IncidentResponse
+	FailedAttachments []string
 }
 
 // DraftFileStorage is the part of object storage that draft attachments use.
@@ -266,12 +275,12 @@ func (s *incidentDraftService) Delete(ctx context.Context, id, ownerID uuid.UUID
 	return nil
 }
 
-func (s *incidentDraftService) Publish(ctx context.Context, id, ownerID uuid.UUID) (*models.IncidentResponse, error) {
-	var incident *models.IncidentResponse
+func (s *incidentDraftService) Publish(ctx context.Context, id, ownerID uuid.UUID) (*PublishResult, error) {
+	var result PublishResult
 
 	err := s.repo.Transaction(ctx, func(tx repository.IncidentDraftRepository) error {
-		// The row lock serialises concurrent publishes: the second one waits, then finds
-		// the draft gone and gets ErrDraftNotFound.
+		// The row lock serialises concurrent publishes and uploads: the second publish waits,
+		// then sees the draft published (or its incident id) and does not create another.
 		draft, err := tx.FindByIDForUpdate(ctx, id, ownerID)
 		if err != nil {
 			return err
@@ -280,41 +289,62 @@ func (s *incidentDraftService) Publish(ctx context.Context, id, ownerID uuid.UUI
 			return ErrDraftPublished
 		}
 
-		createReq, err := draftToCreateRequest(draft.ToPayload())
-		if err != nil {
-			return err
-		}
-		if verr := s.validateForPublish(ctx, draft, createReq); verr != nil {
-			return verr
+		if draft.PublishedIncidentID != nil {
+			// Retry: the incident already exists, only attachments are left to move.
+			detail, gerr := s.incidentService.GetIncident(ctx, *draft.PublishedIncidentID)
+			if gerr != nil {
+				return gerr
+			}
+			result.Incident = &detail.IncidentResponse
+		} else {
+			createReq, cerr := draftToCreateRequest(draft.ToPayload())
+			if cerr != nil {
+				return cerr
+			}
+			if verr := s.validateForPublish(ctx, draft, createReq); verr != nil {
+				return verr
+			}
+
+			// Drafts carry no workflow; pick it the way the portal create path does.
+			workflowID, werr := s.resolveWorkflow(ctx, createReq)
+			if werr != nil {
+				return werr
+			}
+			createReq.WorkflowID = workflowID.String()
+
+			incident, ierr := s.incidentService.CreateIncident(ctx, createReq, ownerID)
+			if ierr != nil {
+				return ierr
+			}
+			result.Incident = incident
+
+			// CreateIncident is not part of this transaction. If the process dies or the commit
+			// fails before the id below is saved, the incident exists but the draft does not
+			// know it. That window is accepted; it cannot be closed without a tx-aware create.
+			if serr := tx.SetPublishedIncident(ctx, id, ownerID, incident.ID); serr != nil {
+				return serr
+			}
+			// From here the incident exists, so a failure must not undo it: log and carry on.
+			if rerr := s.incidentService.CreateRevision(ctx, incident.ID, models.RevisionActionCreated,
+				fmt.Sprintf("Created from draft %s (version %d, last updated %s)",
+					draft.DraftNumber, draft.Version, draft.UpdatedAt.UTC().Format("2006-01-02 15:04:05 UTC")),
+				draftRevisionChanges(draft), ownerID); rerr != nil {
+				log.Printf("[IncidentDraft] revision for draft %s failed: %v", draft.DraftNumber, rerr)
+			}
 		}
 
-		// Drafts carry no workflow; pick it the way the portal create path does.
-		workflowID, err := s.resolveWorkflow(ctx, createReq)
-		if err != nil {
-			return err
+		result.FailedAttachments = s.moveAttachments(ctx, tx, draft, result.Incident.ID)
+		if len(result.FailedAttachments) > 0 {
+			// Keep the draft open (unpublished) so Publish can be called again for the rest.
+			return nil
 		}
-		createReq.WorkflowID = workflowID.String()
-
-		incident, err = s.incidentService.CreateIncident(ctx, createReq, ownerID)
-		if err != nil {
-			return err
-		}
-
-		// From here the incident exists, so a failure must not undo it: log and carry on.
-		if rerr := s.incidentService.CreateRevision(ctx, incident.ID, models.RevisionActionCreated,
-			fmt.Sprintf("Created from draft %s (version %d, last updated %s)",
-				draft.DraftNumber, draft.Version, draft.UpdatedAt.UTC().Format("2006-01-02 15:04:05 UTC")),
-			draftRevisionChanges(draft), ownerID); rerr != nil {
-			log.Printf("[IncidentDraft] revision for draft %s failed: %v", draft.DraftNumber, rerr)
-		}
-		s.moveAttachments(ctx, tx, draft, incident.ID)
 		return tx.MarkPublished(ctx, id, ownerID)
 	})
 	if err != nil {
 		return nil, err
 	}
 	s.invalidate(ctx, id)
-	return incident, nil
+	return &result, nil
 }
 
 func (s *incidentDraftService) PruneExpired(ctx context.Context) (int64, error) {
@@ -330,15 +360,17 @@ func (s *incidentDraftService) PruneExpired(ctx context.Context) (int64, error) 
 	return n, nil
 }
 
-// moveAttachments hands the draft's files to the new incident: each becomes an
-// IncidentAttachment pointing at the same stored object, then the draft row goes. Only
-// rows that moved are removed, so a failure never orphans a file that is still wanted.
-func (s *incidentDraftService) moveAttachments(ctx context.Context, tx repository.IncidentDraftRepository, draft *models.IncidentDraft, incidentID uuid.UUID) {
+// moveAttachments hands the draft's files to the incident: each becomes an
+// IncidentAttachment pointing at the same stored object, then the draft row goes. Only rows
+// that moved are removed, so a failure never orphans a file that is still wanted. It returns
+// the file names that could not be moved (empty means everything moved).
+func (s *incidentDraftService) moveAttachments(ctx context.Context, tx repository.IncidentDraftRepository, draft *models.IncidentDraft, incidentID uuid.UUID) []string {
 	atts, err := tx.ListAttachments(ctx, draft.ID)
 	if err != nil {
 		log.Printf("[IncidentDraft] list attachments of %s failed: %v", draft.DraftNumber, err)
-		return
+		return []string{"unknown"} // names are unknown, but a retry will list them again
 	}
+	var failed []string
 	moved := make([]uuid.UUID, 0, len(atts))
 	for i := range atts {
 		a := &atts[i]
@@ -351,6 +383,7 @@ func (s *incidentDraftService) moveAttachments(ctx context.Context, tx repositor
 		})
 		if aerr != nil {
 			log.Printf("[IncidentDraft] move attachment %s of %s failed: %v", a.ID, draft.DraftNumber, aerr)
+			failed = append(failed, a.FileName)
 			continue
 		}
 		moved = append(moved, a.ID)
@@ -358,6 +391,7 @@ func (s *incidentDraftService) moveAttachments(ctx context.Context, tx repositor
 	if err := tx.DeleteAttachmentsByID(ctx, moved); err != nil {
 		log.Printf("[IncidentDraft] remove moved attachment rows of %s failed: %v", draft.DraftNumber, err)
 	}
+	return failed
 }
 
 // removeObjects deletes stored files best-effort; a leftover object is only wasted space.
@@ -389,7 +423,7 @@ func (s *incidentDraftService) AddAttachment(ctx context.Context, draftID, owner
 	if err != nil {
 		return nil, err
 	}
-	if draft.PublishedAt != nil {
+	if draft.PublishedAt != nil || draft.PublishedIncidentID != nil {
 		return nil, ErrDraftPublished
 	}
 	key, err := s.fileStorage.UploadFile(ctx, file, header, "incident-drafts/"+draftID.String())
@@ -413,7 +447,7 @@ func (s *incidentDraftService) AddAttachment(ctx context.Context, draftID, owner
 		if ferr != nil {
 			return ferr
 		}
-		if current.PublishedAt != nil {
+		if current.PublishedAt != nil || current.PublishedIncidentID != nil {
 			return ErrDraftPublished
 		}
 		return tx.CreateAttachment(ctx, att)
@@ -442,14 +476,26 @@ func (s *incidentDraftService) ListAttachments(ctx context.Context, draftID, own
 }
 
 func (s *incidentDraftService) DeleteAttachment(ctx context.Context, draftID, attachmentID, ownerID uuid.UUID) error {
-	if _, err := s.repo.FindByID(ctx, draftID, ownerID); err != nil {
-		return err
-	}
-	att, err := s.repo.FindAttachment(ctx, draftID, attachmentID)
+	var att *models.IncidentDraftAttachment
+	// Delete the row under the draft's lock. Publish holds the same lock while it lists and
+	// moves the attachments, so a delete can no longer slip in between its read and the
+	// hand-over, and the file is only removed once the row deletion is committed.
+	err := s.repo.Transaction(ctx, func(tx repository.IncidentDraftRepository) error {
+		draft, ferr := tx.FindByIDForUpdate(ctx, draftID, ownerID)
+		if ferr != nil {
+			return ferr
+		}
+		if draft.PublishedAt != nil {
+			return ErrDraftPublished
+		}
+		found, aerr := tx.FindAttachment(ctx, draftID, attachmentID)
+		if aerr != nil {
+			return aerr
+		}
+		att = found
+		return tx.DeleteAttachment(ctx, draftID, attachmentID)
+	})
 	if err != nil {
-		return err
-	}
-	if err := s.repo.DeleteAttachment(ctx, draftID, attachmentID); err != nil {
 		return err
 	}
 	s.removeObjects(ctx, []string{att.FilePath})
@@ -626,6 +672,7 @@ func (s *incidentDraftService) toResponse(d *models.IncidentDraft) *models.Incid
 		CreatedAt:            d.CreatedAt,
 		UpdatedAt:            d.UpdatedAt,
 		PublishedAt:          d.PublishedAt,
+		PublishedIncidentID:  d.PublishedIncidentID,
 		FilledFields:         filled,
 		RequiredFields:       required,
 		DaysToExpiry:         s.daysToExpiry(d),

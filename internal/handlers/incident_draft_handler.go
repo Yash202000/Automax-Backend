@@ -186,11 +186,19 @@ func (h *IncidentDraftHandler) Publish(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	incident, err := h.service.Publish(c.UserContext(), id, draftOwner(c))
+	result, err := h.service.Publish(c.UserContext(), id, draftOwner(c))
 	if err != nil {
 		return h.draftError(c, err)
 	}
-	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "incident_draft_published"), incident)
+	if len(result.FailedAttachments) > 0 {
+		// The incident exists but some files did not move; the draft stays open and calling
+		// publish again retries only those files.
+		return utils.SuccessResponse(c, fiber.StatusAccepted, i18n.T(c.UserContext(), "incident_draft_publish_partial"), fiber.Map{
+			"incident":           result.Incident,
+			"failed_attachments": result.FailedAttachments,
+		})
+	}
+	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "incident_draft_published"), result.Incident)
 }
 
 // UploadAttachment handles POST /incident-drafts/:id/attachments (multipart field "file").

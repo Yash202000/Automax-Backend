@@ -40,6 +40,9 @@ type IncidentDraftRepository interface {
 	// Delete removes the owner's draft and its attachment rows permanently and returns the
 	// storage keys of the files so the caller can remove the objects.
 	Delete(ctx context.Context, id, ownerID uuid.UUID) ([]string, error)
+	// SetPublishedIncident records the incident a publish created. Call it on the repository
+	// of the publish transaction, which already holds the row lock.
+	SetPublishedIncident(ctx context.Context, id, ownerID, incidentID uuid.UUID) error
 	// MarkPublished stamps published_at on a draft that became an incident. It also clears
 	// keep so the row is pruned with the others once it ages out.
 	MarkPublished(ctx context.Context, id, ownerID uuid.UUID) error
@@ -173,7 +176,7 @@ func (r *incidentDraftRepository) UpdateWithVersion(ctx context.Context, d *mode
 	}
 
 	res := r.db.WithContext(ctx).Model(&models.IncidentDraft{}).
-		Where("id = ? AND created_by = ? AND version = ? AND published_at IS NULL", d.ID, d.CreatedBy, expectedVersion).
+		Where("id = ? AND created_by = ? AND version = ? AND published_at IS NULL AND published_incident_id IS NULL", d.ID, d.CreatedBy, expectedVersion).
 		Updates(updates)
 	if res.Error != nil {
 		return res.Error
@@ -181,14 +184,14 @@ func (r *incidentDraftRepository) UpdateWithVersion(ctx context.Context, d *mode
 	if res.RowsAffected == 0 {
 		// Tell a missing/foreign draft, a published one and a stale version apart.
 		var cur models.IncidentDraft
-		if err := r.db.WithContext(ctx).Select("id", "published_at").
+		if err := r.db.WithContext(ctx).Select("id", "published_at", "published_incident_id").
 			Where("id = ? AND created_by = ?", d.ID, d.CreatedBy).First(&cur).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrDraftNotFound
 			}
 			return err
 		}
-		if cur.PublishedAt != nil {
+		if cur.PublishedAt != nil || cur.PublishedIncidentID != nil {
 			return ErrDraftPublished
 		}
 		return ErrDraftVersionConflict
@@ -222,6 +225,19 @@ func deleteAttachmentsForDrafts(tx *gorm.DB, draftIDs []uuid.UUID, paths *[]stri
 		return err
 	}
 	return tx.Where("draft_id IN ?", draftIDs).Delete(&models.IncidentDraftAttachment{}).Error
+}
+
+func (r *incidentDraftRepository) SetPublishedIncident(ctx context.Context, id, ownerID, incidentID uuid.UUID) error {
+	res := r.db.WithContext(ctx).Model(&models.IncidentDraft{}).
+		Where("id = ? AND created_by = ?", id, ownerID).
+		Update("published_incident_id", incidentID)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrDraftNotFound
+	}
+	return nil
 }
 
 func (r *incidentDraftRepository) MarkPublished(ctx context.Context, id, ownerID uuid.UUID) error {

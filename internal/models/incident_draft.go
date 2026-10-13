@@ -44,6 +44,10 @@ type IncidentDraft struct {
 	// (no update, no attachment upload) and drops out of the list and badge count until the
 	// prune removes it. Delete and prune always remove the row for good.
 	PublishedAt *time.Time `gorm:"index" json:"published_at"`
+	// PublishedIncidentID is saved the moment publish creates the incident. While it is set
+	// the draft is locked against edits, and a second publish only moves the attachments
+	// that are still on the draft instead of creating another incident.
+	PublishedIncidentID *uuid.UUID `gorm:"type:uuid;index" json:"published_incident_id"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `gorm:"index;index:idx_incident_drafts_owner_updated,priority:2,sort:desc" json:"updated_at"`
@@ -156,6 +160,9 @@ type IncidentDraftResponse struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 	// PublishedAt is non-nil once the draft became an incident; it can no longer be edited.
 	PublishedAt *time.Time `json:"published_at"`
+	// PublishedIncidentID is set once an incident exists; the draft stays listed until every
+	// attachment has moved to it.
+	PublishedIncidentID *uuid.UUID `json:"published_incident_id"`
 
 	// The form fields, flattened into the response so the UI can refill the form.
 	IncidentDraftPayload
