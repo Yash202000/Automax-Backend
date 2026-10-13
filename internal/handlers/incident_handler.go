@@ -639,6 +639,20 @@ func (h *IncidentHandler) scopeIncidentFilterToUser(c *fiber.Ctx, filter *models
 		return true, utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "insufficient_permissions_reporter_phone"))
 	}
 
+	// AMAX-4262: Citizens should only see incidents they created (reporter_id = their user ID).
+	// Skip department/classification/location scoping entirely for Citizen role — those scopes
+	// are designed for internal staff and would incorrectly exclude incidents that were triaged
+	// to departments/classifications the citizen is not assigned to.
+	if findErr == nil && user != nil && user.HasRole(constants.USER_ROLE.CITIZEN) {
+		filter.ReporterID = []string{userID.String()}
+		roleIDs := make([]uuid.UUID, 0, len(user.Roles))
+		for _, r := range user.Roles {
+			roleIDs = append(roleIDs, r.ID)
+		}
+		filter.UserRoleIDs = roleIDs
+		return false, nil
+	}
+
 	if findErr == nil && user != nil && !isUnscoped {
 		if enforceAccessScope {
 			h.applyUserAccessScope(filter, user)
@@ -1629,7 +1643,15 @@ func (h *IncidentHandler) GetStatsV2(c *fiber.Ctx) error {
 		enforceAccessScope := strings.EqualFold(strings.TrimSpace(os.Getenv("ENFORCE_USER_ACCESS_SCOPE")), "true")
 		statsUserID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 		if u, err := h.userRepo.FindByIDWithRelations(c.UserContext(), statsUserID); err == nil && u != nil {
-			if enforceAccessScope {
+			// AMAX-4262: Citizens should only see stats for incidents they created.
+			// Skip department/classification/location scoping — same rationale as
+			// scopeIncidentFilterToUser above.
+			if u.HasRole(constants.USER_ROLE.CITIZEN) {
+				filter.ReporterID = []string{statsUserID.String()}
+				for _, r := range u.Roles {
+					filter.UserRoleIDs = append(filter.UserRoleIDs, r.ID)
+				}
+			} else if enforceAccessScope {
 				h.applyUserAccessScope(filter, u)
 			} else {
 				// Legacy scoping logic
