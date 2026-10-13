@@ -68,6 +68,10 @@ type Settings struct {
 	// Feature Toggles
 	ShowEvaluateButton bool `gorm:"default:false" json:"show_evaluate_button"` // Manual feedback trigger button on complaint/query detail pages
 
+	// Error Log retention: logs older than value+unit are deleted by the retention job
+	ErrorLogRetentionValue int    `gorm:"default:12" json:"-"`
+	ErrorLogRetentionUnit  string `gorm:"size:10;default:'months'" json:"-"` // days | months
+
 	// Auth Settings
 	TotpEnabled bool `gorm:"column:totp_enabled;default:false" json:"-"` // Whether TOTP/OTP-based 2FA login is enforced; exposed nested as auth_setting.totp_enabled
 
@@ -154,6 +158,10 @@ type SettingsUpdateRequest struct {
 	// Feature Toggles
 	ShowEvaluateButton *bool `json:"show_evaluate_button"`
 
+	// Error Log retention
+	ErrorLogRetentionValue *int    `json:"error_log_retention_value" validate:"omitempty,min=1,max=3650"`
+	ErrorLogRetentionUnit  *string `json:"error_log_retention_unit" validate:"omitempty,oneof=days months"`
+
 	// Auth Settings
 	AuthSetting *AuthSetting `json:"auth_setting"`
 
@@ -203,6 +211,10 @@ type SettingsResponse struct {
 	// Feature Toggles
 	ShowEvaluateButton bool `json:"show_evaluate_button"`
 
+	// Error Log retention
+	ErrorLogRetentionValue int    `json:"error_log_retention_value"`
+	ErrorLogRetentionUnit  string `json:"error_log_retention_unit"`
+
 	// Auth Settings
 	AuthSetting AuthSetting `json:"auth_setting"`
 
@@ -251,7 +263,9 @@ func (s *Settings) ToSettingsResponse() *SettingsResponse {
 		DefaultLanguage:     s.DefaultLanguage,
 		SupportedLanguages:  s.SupportedLanguages,
 		ShowEvaluateButton:  s.ShowEvaluateButton,
-		AuthSetting:         AuthSetting{TotpEnabled: s.TotpEnabled},
+		ErrorLogRetentionValue: s.ErrorLogRetentionValue,
+		ErrorLogRetentionUnit:  s.ErrorLogRetentionUnit,
+		AuthSetting:        AuthSetting{TotpEnabled: s.TotpEnabled},
 		FieldSettings:       fieldSettings,
 		SmsMaxLength:        func() int { n, _ := GetSMSMaxLength(); return n }(),
 		UpdatedAt:           s.UpdatedAt.Format(time.RFC3339),

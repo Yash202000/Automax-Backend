@@ -112,6 +112,12 @@ func (s *settingsService) UpdateSettings(ctx context.Context, req *models.Settin
 	if req.ShowEvaluateButton != nil {
 		settings.ShowEvaluateButton = *req.ShowEvaluateButton
 	}
+	if req.ErrorLogRetentionValue != nil {
+		settings.ErrorLogRetentionValue = *req.ErrorLogRetentionValue
+	}
+	if req.ErrorLogRetentionUnit != nil {
+		settings.ErrorLogRetentionUnit = *req.ErrorLogRetentionUnit
+	}
 	if req.AuthSetting != nil {
 		settings.TotpEnabled = req.AuthSetting.TotpEnabled
 	}

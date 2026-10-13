@@ -439,12 +439,14 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		user, err := s.userRepo.FindByMobile(ctx, req.ReporterPhone)
 		if err != nil && err != gorm.ErrRecordNotFound {
 			fmt.Printf("CreateIncident: Error fetching user by mobile: %v\n", err)
+			LogContactFailure("Find contact from incident", "", req.ReporterPhone, err)
 			return nil, err
 		}
 
 		if user == nil || user.ID == uuid.Nil {
 			role, err := s.roleRepo.FindByCode(ctx, constants.ROLES.CITIZEN)
 			if err != nil {
+				LogContactFailure("Create contact from incident", "", req.ReporterPhone, err)
 				return nil, err
 			}
 
@@ -469,6 +471,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 			authResp, err := s.userService.Register(ctx, registerReq)
 			if err != nil {
 				fmt.Printf("CreateIncident: Error registering %s citizen user: %v\n", sourceSlug, err)
+				LogContactFailure("Create contact from incident", "", req.ReporterPhone, err)
 				return nil, err
 			}
 
@@ -496,6 +499,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		}
 		if err := s.incidentRepo.UpdateReporterNameByPhone(ctx, req.ReporterPhone, req.ReporterName); err != nil {
 			fmt.Printf("CreateIncident: Error backfilling reporter name for phone %s: %v\n", req.ReporterPhone, err)
+			LogContactFailure("Update contact from incident", reporterID.String(), req.ReporterPhone, err)
 			return nil, err
 		}
 	}
@@ -843,6 +847,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 	if pendingUserUpdates != nil {
 		if err := s.userRepo.UpdateProfile(ctx, pendingUserUpdates); err != nil {
 			log.Printf("[IncidentService] failed to update reporter user %v after incident create: %v", pendingUserUpdates["id"], err)
+			LogContactFailure("Update contact from incident", fmt.Sprint(pendingUserUpdates["id"]), req.ReporterPhone, err)
 		}
 	}
 	s.notifySimilarPreviousIncident(ctx, incident, creatorID)
@@ -5556,6 +5561,7 @@ func (s *incidentService) applyCreationTimeAssignment(ctx context.Context, incid
 			s.UserHasAssignmentRole(ctx, creatorID, initialState.AssignmentRoles) {
 			if err := s.incidentRepo.AssignIncident(ctx, incident.ID, creatorID); err != nil {
 				fmt.Printf("Warning: creation assignment (self-assign for web) failed: %v\n", err)
+				LogAssignmentFailure(incident.ID, incident.IncidentNumber, err)
 			} else {
 				if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{creatorID}); err != nil {
 					fmt.Printf("Warning: SetAssignees (self-assign for web) failed: %v\n", err)
@@ -5585,6 +5591,7 @@ func (s *incidentService) applyCreationTimeAssignment(ctx context.Context, incid
 			if err == nil && nextAssigneeID != nil {
 				if err := s.incidentRepo.AssignIncident(ctx, incident.ID, *nextAssigneeID); err != nil {
 					fmt.Printf("Warning: creation assignment (round-robin) failed: %v\n", err)
+					LogAssignmentFailure(incident.ID, incident.IncidentNumber, err)
 				} else {
 					if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{*nextAssigneeID}); err != nil {
 						fmt.Printf("Warning: SetAssignees (round-robin) failed: %v\n", err)
@@ -5598,6 +5605,7 @@ func (s *incidentService) applyCreationTimeAssignment(ctx context.Context, incid
 		if initialState.AssignUserID != nil {
 			if err := s.incidentRepo.AssignIncident(ctx, incident.ID, *initialState.AssignUserID); err != nil {
 				fmt.Printf("Warning: creation assignment (assign_user_id) failed: %v\n", err)
+				LogAssignmentFailure(incident.ID, incident.IncidentNumber, err)
 			} else {
 				if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{*initialState.AssignUserID}); err != nil {
 					fmt.Printf("Warning: SetAssignees (assign_user_id) failed: %v\n", err)
@@ -6462,6 +6470,7 @@ func (s *incidentService) AutoAssignUnassigned(ctx context.Context) error {
 				}
 				if err := s.incidentRepo.AssignIncident(ctx, incident.ID, *assigneeID); err != nil {
 					log.Printf("[AutoAssign] %s: AssignIncident failed: %v", incident.IncidentNumber, err)
+					LogAssignmentFailure(incident.ID, incident.IncidentNumber, err)
 					continue
 				}
 				if err := s.incidentRepo.SetAssignees(ctx, incident.ID, allIDs); err != nil {
@@ -6478,6 +6487,7 @@ func (s *incidentService) AutoAssignUnassigned(ctx context.Context) error {
 
 		if err := s.incidentRepo.AssignIncident(ctx, incident.ID, *assigneeID); err != nil {
 			log.Printf("[AutoAssign] %s: AssignIncident failed: %v", incident.IncidentNumber, err)
+			LogAssignmentFailure(incident.ID, incident.IncidentNumber, err)
 			continue
 		}
 		if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{*assigneeID}); err != nil {
