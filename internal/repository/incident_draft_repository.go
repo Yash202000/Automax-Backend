@@ -26,9 +26,11 @@ const DraftNumberSequence = "incident_draft_seq"
 
 type IncidentDraftRepository interface {
 	Create(ctx context.Context, draft *models.IncidentDraft) error
-	// FindByID returns the owner's draft, or ErrDraftNotFound (also for other users' drafts).
+	// FindByID returns the owner's unpublished draft, or ErrDraftNotFound (also for other
+	// users' drafts and for published ones).
 	FindByID(ctx context.Context, id, ownerID uuid.UUID) (*models.IncidentDraft, error)
-	// FindByIDForUpdate takes a row lock; call it on a repository obtained from Transaction.
+	// FindByIDForUpdate takes a row lock and also returns published drafts, so publish, upload and
+	// delete can tell "already published" (409) from "gone" (404); call it on a repository obtained from Transaction.
 	FindByIDForUpdate(ctx context.Context, id, ownerID uuid.UUID) (*models.IncidentDraft, error)
 	List(ctx context.Context, ownerID uuid.UUID, filter *models.IncidentDraftFilter) ([]models.IncidentDraft, int64, error)
 	Count(ctx context.Context, ownerID uuid.UUID) (int64, error)
@@ -83,8 +85,11 @@ func (r *incidentDraftRepository) Create(ctx context.Context, draft *models.Inci
 	return r.db.WithContext(ctx).Create(draft).Error
 }
 
-func (r *incidentDraftRepository) find(ctx context.Context, id, ownerID uuid.UUID, lock bool) (*models.IncidentDraft, error) {
+func (r *incidentDraftRepository) find(ctx context.Context, id, ownerID uuid.UUID, lock, unpublishedOnly bool) (*models.IncidentDraft, error) {
 	q := r.db.WithContext(ctx)
+	if unpublishedOnly {
+		q = q.Where("published_at IS NULL")
+	}
 	if lock {
 		q = q.Clauses(clause.Locking{Strength: "UPDATE"})
 	}
@@ -99,11 +104,11 @@ func (r *incidentDraftRepository) find(ctx context.Context, id, ownerID uuid.UUI
 }
 
 func (r *incidentDraftRepository) FindByID(ctx context.Context, id, ownerID uuid.UUID) (*models.IncidentDraft, error) {
-	return r.find(ctx, id, ownerID, false)
+	return r.find(ctx, id, ownerID, false, true)
 }
 
 func (r *incidentDraftRepository) FindByIDForUpdate(ctx context.Context, id, ownerID uuid.UUID) (*models.IncidentDraft, error) {
-	return r.find(ctx, id, ownerID, true)
+	return r.find(ctx, id, ownerID, true, false)
 }
 
 func (r *incidentDraftRepository) List(ctx context.Context, ownerID uuid.UUID, f *models.IncidentDraftFilter) ([]models.IncidentDraft, int64, error) {
