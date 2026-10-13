@@ -69,7 +69,8 @@ type Settings struct {
 	ShowEvaluateButton bool `gorm:"default:false" json:"show_evaluate_button"` // Manual feedback trigger button on complaint/query detail pages
 
 	// Auth Settings
-	TotpEnabled bool `gorm:"column:totp_enabled;default:false" json:"-"` // Whether TOTP/OTP-based 2FA login is enforced; exposed nested as auth_setting.totp_enabled
+	TotpEnabled        bool `gorm:"column:totp_enabled;default:false" json:"-"`         // Whether TOTP/OTP-based 2FA login is enforced; exposed nested as auth_setting.totp_enabled
+	ShowForgotPassword bool `gorm:"column:show_forgot_password;default:true" json:"-"` // Whether to show the forgot-password link on login; exposed nested as auth_setting.show_forgot_password
 
 	// Field Settings (per-entity, per-field configuration such as attachment limits),
 	// stored as a JSON string and exposed nested as field_settings.*
@@ -92,7 +93,8 @@ func (s *Settings) BeforeCreate(tx *gorm.DB) error {
 // AuthSetting represents authentication-related feature toggles, nested under
 // the "auth_setting" key in settings update/response payloads.
 type AuthSetting struct {
-	TotpEnabled bool `json:"totp_enabled"`
+	TotpEnabled        bool `json:"totp_enabled"`
+	ShowForgotPassword bool `json:"show_forgot_password"`
 }
 
 // AttachmentFieldSetting configures attachment limits for one user type on an
@@ -251,7 +253,7 @@ func (s *Settings) ToSettingsResponse() *SettingsResponse {
 		DefaultLanguage:     s.DefaultLanguage,
 		SupportedLanguages:  s.SupportedLanguages,
 		ShowEvaluateButton:  s.ShowEvaluateButton,
-		AuthSetting:         AuthSetting{TotpEnabled: s.TotpEnabled},
+		AuthSetting:         AuthSetting{TotpEnabled: s.TotpEnabled, ShowForgotPassword: s.ShowForgotPassword},
 		FieldSettings:       fieldSettings,
 		SmsMaxLength:        func() int { n, _ := GetSMSMaxLength(); return n }(),
 		UpdatedAt:           s.UpdatedAt.Format(time.RFC3339),

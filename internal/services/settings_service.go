@@ -114,6 +114,7 @@ func (s *settingsService) UpdateSettings(ctx context.Context, req *models.Settin
 	}
 	if req.AuthSetting != nil {
 		settings.TotpEnabled = req.AuthSetting.TotpEnabled
+		settings.ShowForgotPassword = req.AuthSetting.ShowForgotPassword
 	}
 	if req.FieldSettings != nil {
 		fieldSettingsJSON, err := json.Marshal(req.FieldSettings)
