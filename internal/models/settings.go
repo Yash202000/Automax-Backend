@@ -97,6 +97,14 @@ type AuthSetting struct {
 	ShowForgotPassword bool `json:"show_forgot_password"`
 }
 
+// AuthSettingUpdateRequest represents a partial update to auth settings.
+// Pointer fields distinguish omitted vs explicit false, so updating one
+// toggle (e.g. totp_enabled) doesn't reset the other.
+type AuthSettingUpdateRequest struct {
+	TotpEnabled        *bool `json:"totp_enabled"`
+	ShowForgotPassword *bool `json:"show_forgot_password"`
+}
+
 // AttachmentFieldSetting configures attachment limits for one user type on an
 // entity (e.g. incident attachments allowed for citizens vs employees).
 type AttachmentFieldSetting struct {
@@ -157,7 +165,7 @@ type SettingsUpdateRequest struct {
 	ShowEvaluateButton *bool `json:"show_evaluate_button"`
 
 	// Auth Settings
-	AuthSetting *AuthSetting `json:"auth_setting"`
+	AuthSetting *AuthSettingUpdateRequest `json:"auth_setting"`
 
 	// Field Settings
 	FieldSettings *FieldSettings `json:"field_settings" validate:"omitempty"`
