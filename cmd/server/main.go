@@ -98,6 +98,7 @@ func main() {
 	publicFeedbackRepo := repository.NewIncidentPublicFeedbackRepository(db)
 	ivrSmsLinkRepo := repository.NewIvrSmsLinkRepository(db)
 	commentTemplateRepo := repository.NewCommentTemplateRepository(db)
+	incidentDraftRepo := repository.NewIncidentDraftRepository(db)
 
 	// Initialize WebSocket hub and start it
 	wsHub := services.NewWSHub()
@@ -144,6 +145,7 @@ func main() {
 	finalCloseWhatsAppFeedbackSessionService := services.NewFinalCloseWhatsAppFeedbackSessionService(cfg.FinalCloseWhatsAppFeedback.SessionBaseURL)
 	publicFeedbackService := services.NewIncidentPublicFeedbackService(publicFeedbackRepo, incidentRepo, notificationService, incidentService, workflowRepo, classificationRepo, finalCloseWhatsAppFeedbackSessionService)
 	commentTemplateService := services.NewCommentTemplateService(commentTemplateRepo)
+	incidentDraftService := services.NewIncidentDraftService(incidentDraftRepo, incidentService, workflowService, minioStorage, redisClient, cfg.IncidentDraft)
 
 	// Goal management services
 	var documentaClient storage.DocumentaClient
@@ -214,6 +216,10 @@ func main() {
 	aiQualityMonitor.Start(ctx)
 	defer aiQualityMonitor.Stop()
 
+	incidentDraftMonitor := services.NewIncidentDraftMonitor(incidentDraftService, cfg.IncidentDraft)
+	incidentDraftMonitor.Start(ctx)
+	defer incidentDraftMonitor.Stop()
+
 	clientCode := strings.TrimSpace(cfg.ClientCode)
 	if strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
 		// Initialize and start Auto-Assign Monitor
@@ -266,6 +272,7 @@ func main() {
 	escalationPolicyHandler := handlers.NewEscalationPolicyHandler(escalationPolicyService, userRepo, departmentRepo)
 	feedbackTemplateHandler := handlers.NewFeedbackTemplateHandler(feedbackTemplateService)
 	commentTemplateHandler := handlers.NewCommentTemplateHandler(commentTemplateService)
+	incidentDraftHandler := handlers.NewIncidentDraftHandler(incidentDraftService)
 	rejectionLogHandler := handlers.NewRejectionLogHandler(rejectionLogRepo)
 	nasaqClient := services.NewNasaqClient(cfg.Nasaq)
 	nasaqVerificationHandler := handlers.NewNasaqVerificationHandler(incidentRepo, nasaqVerificationRepo, nasaqClient)
@@ -503,6 +510,21 @@ func main() {
 	users.Delete("/me", authMiddleware.Authenticate(), userHandler.DeleteAccount)
 	users.Put("/:userExtID/status", userHandler.UpdateUserCallStatus)
 	users.Put("/:userID/password", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:reset_password"), userHandler.AdminResetPassword)
+
+	// Incident drafts: owner-only, so a creator permission is enough. Own group, not under
+	// /incidents, to keep drafts away from incident list/stat routes.
+	incidentDrafts := v1.Group("/incident-drafts", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureIncidents)))
+	incidentDrafts.Post("/", authMiddleware.RequirePermission("incidents:create"), incidentDraftHandler.Create)
+	incidentDrafts.Get("/", authMiddleware.RequirePermission("incidents:create"), incidentDraftHandler.List)
+	incidentDrafts.Get("/count", authMiddleware.RequirePermission("incidents:create"), incidentDraftHandler.Count)
+	incidentDrafts.Get("/:id", authMiddleware.RequirePermission("incidents:create"), incidentDraftHandler.GetByID)
+	incidentDrafts.Put("/:id", authMiddleware.RequirePermission("incidents:create"), incidentDraftHandler.Update)
+	incidentDrafts.Delete("/:id", authMiddleware.RequirePermission("incidents:create"), incidentDraftHandler.Delete)
+	incidentDrafts.Post("/:id/attachments", authMiddleware.RequirePermission("incidents:create"), incidentDraftHandler.UploadAttachment)
+	incidentDrafts.Get("/:id/attachments", authMiddleware.RequirePermission("incidents:create"), incidentDraftHandler.ListAttachments)
+	incidentDrafts.Get("/:id/attachments/:attachment_id", authMiddleware.RequirePermission("incidents:create"), incidentDraftHandler.DownloadAttachment)
+	incidentDrafts.Delete("/:id/attachments/:attachment_id", authMiddleware.RequirePermission("incidents:create"), incidentDraftHandler.DeleteAttachment)
+	incidentDrafts.Post("/:id/publish", authMiddleware.RequirePermission("incidents:create"), incidentDraftHandler.Publish)
 
 	// Incident routes (authenticated users)
 	incidents := v1.Group("/incidents", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureIncidents)))
