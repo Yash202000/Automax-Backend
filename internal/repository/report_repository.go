@@ -4202,6 +4202,17 @@ func performanceOrder(sorting *models.ReportSortConfig, sortable map[string]bool
 	return fallback
 }
 
+// scopePerformanceRecords restricts a performance report to actual incidents, using the same
+// condition as POST /incidents/search with record_type=incident (record_type plus the workflow's
+// record_type), so report totals reconcile with the incident list. An explicit record_type
+// filter from the caller takes over.
+func scopePerformanceRecords(q *gorm.DB, filters []models.ReportFilterConfig) *gorm.DB {
+	if hasFilter(filters, "record_type") {
+		return q
+	}
+	return q.Where("incidents.record_type = ? AND incidents.workflow_id IN (SELECT id FROM workflows WHERE record_type = ? AND deleted_at IS NULL)", "incident", "incident")
+}
+
 // ── Department performance ───────────────────────────────────────────────────
 // Output col.Field names: department_name | total | closed | under_resolution | closed_pct |
 // satisfaction_pct | sla_breach_count | sla_breach_pct | speed_pct
@@ -4215,7 +4226,7 @@ func (r *reportRepository) ExecuteDepartmentPerformanceQuery(ctx context.Context
 			// One row per rated incident, so the satisfaction columns don't need per-row subqueries.
 			Joins("LEFT JOIN (SELECT incident_id, MAX(rating) AS max_rating FROM incident_feedbacks GROUP BY incident_id) fb ON fb.incident_id = incidents.id").
 			Where("incidents.deleted_at IS NULL")
-		return r.applyFilters(ctx, q, filters)
+		return r.applyFilters(ctx, scopePerformanceRecords(q, filters), filters)
 	}
 	var total int64
 	if err := buildBase().Select("COUNT(DISTINCT COALESCE(incidents.department_id::text, ''))").Scan(&total).Error; err != nil {
@@ -4276,7 +4287,7 @@ func (r *reportRepository) ExecuteClosurePerformanceQuery(ctx context.Context, f
 				GROUP BY h.incident_id
 			) flags ON flags.incident_id = incidents.id`).
 			Where("incidents.deleted_at IS NULL")
-		return r.applyFilters(ctx, q, filters)
+		return r.applyFilters(ctx, scopePerformanceRecords(q, filters), filters)
 	}
 	var total int64
 	if err := buildBase().Select("COUNT(DISTINCT COALESCE(incidents.department_id::text, ''))").Scan(&total).Error; err != nil {
@@ -4327,7 +4338,7 @@ func (r *reportRepository) ExecuteSLAPerformanceQuery(ctx context.Context, filte
 			Joins("LEFT JOIN departments ON departments.id = incidents.department_id").
 			Joins("LEFT JOIN workflow_states ws ON ws.id = incidents.current_state_id").
 			Where("incidents.deleted_at IS NULL")
-		return r.applyFilters(ctx, q, filters)
+		return r.applyFilters(ctx, scopePerformanceRecords(q, filters), filters)
 	}
 	var total int64
 	if err := buildBase().Select("COUNT(DISTINCT COALESCE(incidents.department_id::text, ''))").Scan(&total).Error; err != nil {
@@ -4372,7 +4383,7 @@ func (r *reportRepository) ExecuteChannelPerformanceQuery(ctx context.Context, f
 			Table("incidents").
 			Joins("LEFT JOIN workflow_states ws ON ws.id = incidents.current_state_id").
 			Where("incidents.deleted_at IS NULL")
-		return r.applyFilters(ctx, q, filters)
+		return r.applyFilters(ctx, scopePerformanceRecords(q, filters), filters)
 	}
 	var total int64
 	if err := buildBase().Select("COUNT(DISTINCT " + channelExpr + ")").Scan(&total).Error; err != nil {
