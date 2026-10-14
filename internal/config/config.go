@@ -29,6 +29,7 @@ type Config struct {
 	AIQuality                   AIQualityConfig
 	Nasaq                       NasaqConfig
 	AutoAssign                  AutoAssignConfig
+	IncidentDraft               IncidentDraftConfig
 	GoalManagement              GoalManagementConfig
 	License                     LicenseConfig
 	Integration                 IntegrationConfig
@@ -188,6 +189,20 @@ type AutoAssignConfig struct {
 	StateCode string
 	// IntervalMinutes controls how often the monitor sweeps (default 5). env: AUTO_ASSIGN_INTERVAL_MINUTES
 	IntervalMinutes int
+}
+
+// IncidentDraftConfig holds settings for incident drafts.
+type IncidentDraftConfig struct {
+	// TTLDays is how long an untouched draft lives before it is pruned (default 30). env: INCIDENT_DRAFT_TTL_DAYS
+	TTLDays int
+	// ExpiryWarnDays is the window in which the list reports days_to_expiry (default 7). env: INCIDENT_DRAFT_EXPIRY_WARN_DAYS
+	ExpiryWarnDays int
+	// RequiredFields are the draft fields counted as "x of y required" and enforced on publish,
+	// comma separated in env. env: INCIDENT_DRAFT_REQUIRED_FIELDS
+	// (default: title,classification_id,location_id,latitude,longitude)
+	RequiredFields []string
+	// PruneIntervalMinutes controls how often the prune runs (default 1440 = daily). env: INCIDENT_DRAFT_PRUNE_INTERVAL_MINUTES
+	PruneIntervalMinutes int
 }
 
 type GoalManagementConfig struct {
@@ -434,6 +449,12 @@ func Load() *Config {
 		AutoAssign: AutoAssignConfig{
 			StateCode:       getEnv("AUTO_ASSIGN_STATE_CODE", ""),
 			IntervalMinutes: getEnvAsInt("AUTO_ASSIGN_INTERVAL_MINUTES", 5),
+		},
+		IncidentDraft: IncidentDraftConfig{
+			TTLDays:              getEnvAsInt("INCIDENT_DRAFT_TTL_DAYS", 30),
+			ExpiryWarnDays:       getEnvAsInt("INCIDENT_DRAFT_EXPIRY_WARN_DAYS", 7),
+			RequiredFields:       getEnvAsStringSlice("INCIDENT_DRAFT_REQUIRED_FIELDS", []string{"title", "classification_id", "location_id", "latitude", "longitude"}),
+			PruneIntervalMinutes: getEnvAsInt("INCIDENT_DRAFT_PRUNE_INTERVAL_MINUTES", 1440),
 		},
 		GoalManagement: GoalManagementConfig{
 			Enabled: getEnvAsBool("GOAL_MANAGEMENT", false),
