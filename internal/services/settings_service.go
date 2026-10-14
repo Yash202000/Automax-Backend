@@ -113,7 +113,12 @@ func (s *settingsService) UpdateSettings(ctx context.Context, req *models.Settin
 		settings.ShowEvaluateButton = *req.ShowEvaluateButton
 	}
 	if req.AuthSetting != nil {
-		settings.TotpEnabled = req.AuthSetting.TotpEnabled
+		if req.AuthSetting.TotpEnabled != nil {
+			settings.TotpEnabled = *req.AuthSetting.TotpEnabled
+		}
+		if req.AuthSetting.ShowForgotPassword != nil {
+			settings.ShowForgotPassword = *req.AuthSetting.ShowForgotPassword
+		}
 	}
 	if req.FieldSettings != nil {
 		fieldSettingsJSON, err := json.Marshal(req.FieldSettings)

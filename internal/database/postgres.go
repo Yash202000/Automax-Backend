@@ -295,6 +295,12 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 
 	db.Exec("ALTER TABLE lookup_categories ADD COLUMN IF NOT EXISTS redirect_url VARCHAR(500)")
 
+	// Auth settings: show_forgot_password toggle (default true). AutoMigrate adds
+	// the column, but ensure the default/backfill explicitly for existing DBs.
+	db.Exec("ALTER TABLE settings ADD COLUMN IF NOT EXISTS show_forgot_password BOOLEAN DEFAULT TRUE")
+	db.Exec("ALTER TABLE settings ALTER COLUMN show_forgot_password SET DEFAULT TRUE")
+	db.Exec("UPDATE settings SET show_forgot_password = TRUE WHERE show_forgot_password IS NULL")
+
 	// Notification template enhancements: add categorisation and bilingual-linking columns.
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS name VARCHAR(200)")
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS module_type VARCHAR(50)")
