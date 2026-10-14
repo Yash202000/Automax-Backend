@@ -298,8 +298,8 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 	}
 	if len(filter.DepartmentID) != 0 {
 		if filter.IncludeUnassignedDepartment {
-			query = query.Where("department_id IN ? OR (department_id IS NULL AND current_state_id IN (SELECT id FROM workflow_states WHERE state_type = 'initial') AND (assignee_id = ? OR reporter_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
-				filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID)
+			query = query.Where("department_id IN ? OR (department_id IS NULL AND current_state_id IN (SELECT id FROM workflow_states WHERE state_type = 'initial') AND (assignee_id = ? OR reporter_id = ? OR created_by_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
+				filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID, filter.UserID)
 		} else {
 			query = query.Where("department_id IN ?", filter.DepartmentID)
 		}
@@ -313,19 +313,19 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 		query = query.Where("incidents.id != ?", *filter.ExcludeIncidentID)
 	}
 	if len(filter.ReporterID) != 0 {
-		query = query.Where("reporter_id IN ?", filter.ReporterID)
+		query = query.Where("incidents.reporter_id IN ? OR incidents.created_by_id IN ?", filter.ReporterID, filter.ReporterID)
 	}
 	if filter.MyRecord != nil {
 		if len(filter.UserRoleIDs) > 0 {
 			// Expand to include incidents in states where the user's role has viewable access
 			query = query.Where(
-				`incidents.reporter_id = ? OR incidents.assignee_id = ?
+				`incidents.reporter_id = ? OR incidents.created_by_id = ? OR incidents.assignee_id = ?
 				OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)
 				OR incidents.current_state_id IN (SELECT workflow_state_id FROM state_viewable_roles WHERE role_id IN ?)`,
-				filter.MyRecord, filter.MyRecord, filter.MyRecord, filter.UserRoleIDs,
+				filter.MyRecord, filter.MyRecord, filter.MyRecord, filter.MyRecord, filter.UserRoleIDs,
 			)
 		} else {
-			query = query.Where("incidents.reporter_id = ? OR incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", filter.MyRecord, filter.MyRecord, filter.MyRecord)
+			query = query.Where("incidents.reporter_id = ? OR incidents.created_by_id = ? OR incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", filter.MyRecord, filter.MyRecord, filter.MyRecord, filter.MyRecord)
 		}
 	}
 
@@ -1164,8 +1164,8 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 		}
 		if len(filter.DepartmentID) > 0 {
 			if filter.IncludeUnassignedDepartment {
-				q = q.Where("incidents.department_id IN ? OR (incidents.department_id IS NULL AND incidents.current_state_id IN (SELECT id FROM workflow_states WHERE state_type = 'initial') AND (incidents.assignee_id = ? OR incidents.reporter_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
-					filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID)
+				q = q.Where("incidents.department_id IN ? OR (incidents.department_id IS NULL AND incidents.current_state_id IN (SELECT id FROM workflow_states WHERE state_type = 'initial') AND (incidents.assignee_id = ? OR incidents.reporter_id = ? OR incidents.created_by_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
+					filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID, filter.UserID)
 			} else {
 				q = q.Where("incidents.department_id IN ?", filter.DepartmentID)
 			}
@@ -1177,13 +1177,13 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 		if filter.MyRecord != nil {
 			if len(filter.UserRoleIDs) > 0 {
 				q = q.Where(
-					`incidents.reporter_id = ? OR incidents.assignee_id = ?
+					`incidents.reporter_id = ? OR incidents.created_by_id = ? OR incidents.assignee_id = ?
 					OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)
 					OR incidents.current_state_id IN (SELECT workflow_state_id FROM state_viewable_roles WHERE role_id IN ?)`,
-					filter.MyRecord, filter.MyRecord, filter.MyRecord, filter.UserRoleIDs,
+					filter.MyRecord, filter.MyRecord, filter.MyRecord, filter.MyRecord, filter.UserRoleIDs,
 				)
 			} else {
-				q = q.Where("incidents.reporter_id = ? OR incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", filter.MyRecord, filter.MyRecord, filter.MyRecord)
+				q = q.Where("incidents.reporter_id = ? OR incidents.created_by_id = ? OR incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", filter.MyRecord, filter.MyRecord, filter.MyRecord, filter.MyRecord)
 			}
 		}
 		if len(filter.ClassificationID) > 0 {
@@ -1213,7 +1213,7 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 			)`, *filter.Priority)
 		}
 		if len(filter.ReporterID) > 0 {
-			q = q.Where("incidents.reporter_id IN ?", filter.ReporterID)
+			q = q.Where("incidents.reporter_id IN ? OR incidents.created_by_id IN ?", filter.ReporterID, filter.ReporterID)
 		}
 		if filter.ReporterPhone != "" {
 			phone := strings.TrimPrefix(strings.TrimSpace(filter.ReporterPhone), "+")
@@ -1291,7 +1291,7 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 			return q
 		}
 		if filter.FilterType == "created" {
-			q = q.Where("incidents.reporter_id = ?", filter.UserID)
+			q = q.Where("incidents.reporter_id = ? OR incidents.created_by_id = ?", filter.UserID, filter.UserID)
 		}
 		if filter.FilterType == "assigned" {
 			q = q.Where(`incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)`,
@@ -1309,7 +1309,7 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 		}
 		if !isAdmin {
 			if filter.FilterType == "created" {
-				q = q.Where("incidents.reporter_id = ?", filter.UserID)
+				q = q.Where("incidents.reporter_id = ? OR incidents.created_by_id = ?", filter.UserID, filter.UserID)
 			}
 			if filter.FilterType == "assigned" {
 				q = q.Where(`incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)`,
@@ -1320,9 +1320,9 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 				q = q.Where(`
 					NOT EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = incidents.current_state_id)
 					OR EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = incidents.current_state_id AND role_id IN ?)
-					OR incidents.reporter_id = ? OR incidents.assignee_id = ?
+					OR incidents.reporter_id = ? OR incidents.created_by_id = ? OR incidents.assignee_id = ?
 					OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)
-				`, filter.UserRoleIDs, filter.UserID, filter.UserID, filter.UserID)
+				`, filter.UserRoleIDs, filter.UserID, filter.UserID, filter.UserID, filter.UserID)
 			}
 		}
 		return q
@@ -1410,8 +1410,8 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 					NOT EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = ws.id)
 					OR EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = ws.id AND role_id IN ?)
 					OR EXISTS (SELECT 1 FROM incidents WHERE current_state_id = ws.id AND deleted_at IS NULL
-						AND (reporter_id = ? OR assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))
-				`, filter.UserRoleIDs, filter.UserID, filter.UserID, filter.UserID)
+						AND (reporter_id = ? OR created_by_id = ? OR assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))
+				`, filter.UserRoleIDs, filter.UserID, filter.UserID, filter.UserID, filter.UserID)
 			}
 		}
 	}

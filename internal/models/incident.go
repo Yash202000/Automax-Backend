@@ -122,6 +122,10 @@ type Incident struct {
 	ReporterPhone  string     `gorm:"size:50" json:"reporter_phone"`
 	CallerIdentity string     `gorm:"size:50;column:caller_identity" json:"caller_identity"`
 
+	// CreatedByID is the ID of the authenticated user who created the record
+	// (differs from ReporterID when an agent creates it on behalf of a citizen).
+	CreatedByID *uuid.UUID `gorm:"type:uuid;index;column:created_by_id" json:"created_by_id"`
+
 	// Source (origin of the record)
 	Source string `gorm:"size:100" json:"source"`
 
@@ -901,6 +905,7 @@ type IncidentResponse struct {
 	CallerIdentity        string                      `json:"caller_identity,omitempty"`
 	Channel               string                      `json:"channel,omitempty"`
 	TransitionHistory     []TransitionHistoryResponse `json:"transition_history,omitempty"`
+	CreatedByID           *uuid.UUID                  `json:"created_by_id,omitempty"`
 	CreatedByName         string                      `json:"created_by_name,omitempty"`
 	CreatedByMobile       string                      `json:"created_by_mobile,omitempty"`
 	EvaluationCount       int                         `json:"evaluation_count,omitempty"`
@@ -1063,6 +1068,7 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 		ReporterPhone:         i.ReporterPhone,
 		CallerIdentity:        i.CallerIdentity,
 		Channel:               i.Channel,
+		CreatedByID:           i.CreatedByID,
 		CreatedByName:         i.CreatedByName,
 		CreatedByMobile:       i.CreatedByMobile,
 		EvaluationCount:       i.EvaluationCount,
