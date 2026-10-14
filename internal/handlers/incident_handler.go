@@ -579,7 +579,8 @@ func (h *IncidentHandler) checkUserAccessToIncident(c *fiber.Ctx, incident *mode
 		} else if !isInitialState {
 			return false
 		} else {
-			isReporter := incident.ReporterID != nil && *incident.ReporterID == userID
+			isReporter := (incident.ReporterID != nil && *incident.ReporterID == userID) ||
+				(incident.CreatedByID != nil && *incident.CreatedByID == userID)
 			isPrimaryAssignee := incident.AssigneeID != nil && *incident.AssigneeID == userID
 			isAssignee, _ := h.incidentRepo.IsUserAssignee(c.UserContext(), incident.ID, userID)
 			if !isReporter && !isPrimaryAssignee && !isAssignee {

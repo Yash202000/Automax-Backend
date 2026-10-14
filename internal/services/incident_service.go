@@ -707,6 +707,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		WorkflowID:     workflowID,
 		CurrentStateID: initialState.ID,
 		ReporterID:     &reporterID,
+		CreatedByID:    &creatorID,
 		CallerIdentity: req.CallerIdentity,
 		CustomFields:   customFieldsJSON,
 		GisLocation:    datatypes.JSON(req.GisLocation),
@@ -5700,6 +5701,7 @@ func (s *incidentService) CreateComplaint(ctx context.Context, req *models.Creat
 		ReporterName:     req.ReporterName,
 		ReporterEmail:    req.ReporterEmail,
 		ReporterPhone:    req.ReporterPhone,
+		CreatedByID:      &creatorID,
 	}
 
 	// Set reporter - use provided reporter_id or fall back to creator
@@ -5908,6 +5910,7 @@ func (s *incidentService) CreateQuery(ctx context.Context, req *models.CreateQue
 		CurrentStateID:   initialState.ID,
 		Channel:          req.Channel,
 		ReporterID:       &creatorID,
+		CreatedByID:      &creatorID,
 		// Geolocation fields
 		Latitude:   req.Latitude,
 		Longitude:  req.Longitude,
