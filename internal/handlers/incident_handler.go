@@ -643,7 +643,7 @@ func (h *IncidentHandler) scopeIncidentFilterToUser(c *fiber.Ctx, filter *models
 	// Skip department/classification/location scoping entirely for Citizen role — those scopes
 	// are designed for internal staff and would incorrectly exclude incidents that were triaged
 	// to departments/classifications the citizen is not assigned to.
-	if findErr == nil && user != nil && user.HasRole(constants.USER_ROLE.CITIZEN) {
+	if findErr == nil && user != nil && !user.IsSuperAdmin && user.HasRole(constants.USER_ROLE.CITIZEN) {
 		filter.ReporterID = []string{userID.String()}
 		roleIDs := make([]uuid.UUID, 0, len(user.Roles))
 		for _, r := range user.Roles {
