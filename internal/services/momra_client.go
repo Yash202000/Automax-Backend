@@ -155,9 +155,35 @@ func NewMOMRAClient(cfg config.MOMRAConfig) MOMRAClient {
 	}
 }
 
-// getToken returns a cached Bearer token, refreshing it via 3.1 (OAuth2
-// client-credentials, Basic auth per MOMRA's documented contract) when missing or
-// within 60s of expiry. See docs/MOMRA_Outbound_Integration_Spec_v1.0.md §2 / OD-N5.
+// momraTokenPath is the Amana token API's path, used when MOMRAConfig.AuthURL
+// isn't set explicitly.
+const momraTokenPath = "/API/Authentication/GetToken"
+
+// momraDefaultTokenTTL applies only when the token response omits expiresIn
+// (or sends a non-positive value). 1800s matches the expiresIn in the client's
+// sample GetToken response; erring short just means an earlier refresh.
+const momraDefaultTokenTTL = 1800 * time.Second
+
+// momraTokenResponse is the Amana GetToken response. expiresIn is a JSON
+// number in the client's sample; json.Number also accepts a numeric string.
+type momraTokenResponse struct {
+	AccessToken  string      `json:"accessToken"`
+	TokenType    string      `json:"tokenType"`
+	ExpiresIn    json.Number `json:"expiresIn"`
+	ErrorMessage *string     `json:"errorMessage"`
+}
+
+func (c *momraClient) tokenURL() string {
+	if c.cfg.AuthURL != "" {
+		return c.cfg.AuthURL
+	}
+	return strings.TrimRight(c.cfg.BaseURL, "/") + momraTokenPath
+}
+
+// getToken returns a cached Bearer token, refreshing it via the Amana token
+// API (POST {AuthURL} with JSON {"Service","Key"}) when missing or within 60s
+// of expiry. tokenMu is held across the refresh so concurrent callers wait for
+// the one in-flight request and then share its token.
 func (c *momraClient) getToken(ctx context.Context) (string, error) {
 	c.tokenMu.Lock()
 	defer c.tokenMu.Unlock()
@@ -166,43 +192,113 @@ func (c *momraClient) getToken(ctx context.Context) (string, error) {
 		return c.cachedToken, nil
 	}
 
-	form := url.Values{}
-	form.Set("grant_type", "client_credentials")
+	if c.cfg.AuthService == "" || c.cfg.AuthKey == "" {
+		return "", fmt.Errorf("momra token request not attempted: MOMRA_AUTH_SERVICE / MOMRA_AUTH_KEY not configured")
+	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL+"/oauth/v1/token", strings.NewReader(form.Encode()))
+	payload, err := json.Marshal(struct {
+		Service string `json:"Service"`
+		Key     string `json:"Key"`
+	}{Service: c.cfg.AuthService, Key: c.cfg.AuthKey})
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetBasicAuth(c.cfg.ConsumerKey, c.cfg.ConsumerSecret)
+
+	tokenURL := c.tokenURL()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("momra token request failed: %w", err)
+		return "", fmt.Errorf("momra token request to %s failed: %w", tokenURL, err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
-	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("momra token request returned %d: %s", resp.StatusCode, string(body))
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return "", fmt.Errorf("momra token request to %s returned %d: %s",
+			tokenURL, resp.StatusCode, c.safeExcerpt(body))
 	}
 
-	var tokenResp struct {
-		AccessToken string `json:"access_token"`
-		ExpiresIn   string `json:"expires_in"`
+	// An HTML body (login page, proxy/WAF error, IIS default page) means the
+	// URL or request shape is wrong even when the status is 200 — report that
+	// rather than a bare "invalid character '<'" JSON error.
+	if isNonJSONBody(resp.Header.Get("Content-Type"), body) {
+		return "", fmt.Errorf("momra token request to %s returned non-JSON response (status %d, content-type %q) — check MOMRA_AUTH_URL: %s",
+			tokenURL, resp.StatusCode, resp.Header.Get("Content-Type"), c.safeExcerpt(body))
 	}
+
+	var tokenResp momraTokenResponse
 	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		return "", fmt.Errorf("momra token response parse failed: %w", err)
+		return "", fmt.Errorf("momra token response parse failed (status %d): %w: %s",
+			resp.StatusCode, err, c.safeExcerpt(body))
+	}
+	if tokenResp.ErrorMessage != nil && strings.TrimSpace(*tokenResp.ErrorMessage) != "" {
+		return "", fmt.Errorf("momra token request rejected: %s", c.redact(*tokenResp.ErrorMessage))
+	}
+	if tokenResp.AccessToken == "" {
+		return "", fmt.Errorf("momra token response contained no accessToken")
+	}
+	// Downstream CRM calls send "Authorization: Bearer <token>"; fail loudly if
+	// the API ever issues a different token type rather than send a wrong header.
+	if tokenResp.TokenType != "" && !strings.EqualFold(tokenResp.TokenType, "Bearer") {
+		return "", fmt.Errorf("momra token response has unsupported tokenType %q", tokenResp.TokenType)
 	}
 
-	var expiresSeconds int64 = 17999 // MOMRA's documented default
+	ttl := momraDefaultTokenTTL
 	if tokenResp.ExpiresIn != "" {
-		fmt.Sscanf(tokenResp.ExpiresIn, "%d", &expiresSeconds)
+		secs, err := tokenResp.ExpiresIn.Int64()
+		if err != nil {
+			return "", fmt.Errorf("momra token response has invalid expiresIn %q", tokenResp.ExpiresIn)
+		}
+		if secs > 0 {
+			ttl = time.Duration(secs) * time.Second
+		}
 	}
 
 	c.cachedToken = tokenResp.AccessToken
-	c.tokenExpiry = time.Now().Add(time.Duration(expiresSeconds) * time.Second)
+	c.tokenExpiry = time.Now().Add(ttl)
 	return c.cachedToken, nil
+}
+
+// isNonJSONBody reports whether a response is clearly not JSON: an HTML/XML
+// content type, or a body that starts with '<'.
+func isNonJSONBody(contentType string, body []byte) bool {
+	ct := strings.ToLower(contentType)
+	if strings.Contains(ct, "html") || strings.Contains(ct, "xml") {
+		return true
+	}
+	trimmed := bytes.TrimSpace(body)
+	return len(trimmed) > 0 && trimmed[0] == '<'
+}
+
+// safeExcerpt returns a short, single-line, credential-redacted excerpt of a
+// response body for error messages.
+func (c *momraClient) safeExcerpt(body []byte) string {
+	const maxRunes = 300
+	text := strings.Join(strings.Fields(string(body)), " ")
+	if r := []rune(text); len(r) > maxRunes {
+		text = string(r[:maxRunes]) + "…"
+	}
+	if text == "" {
+		return "<empty body>"
+	}
+	return c.redact(text)
+}
+
+// redact masks the configured GetToken credentials in case a response echoes
+// them back.
+func (c *momraClient) redact(s string) string {
+	for _, secret := range []string{c.cfg.AuthKey, c.cfg.AuthService} {
+		if secret != "" {
+			s = strings.ReplaceAll(s, secret, "[redacted]")
+		}
+	}
+	return s
 }
 
 // doGet performs an authenticated GET against MOMRA and unmarshals the common envelope.
