@@ -3149,6 +3149,38 @@ func stringPtr(s string) *string {
 
 // State transitions
 
+// momraTransitionAttachments resolves the attachments added on a transition
+// into UpdateStatusV2 Attachments. AttachmentURL is a pre-signed storage URL
+// (valid 24h) so MOMRA can download the file without an Automax login.
+// Attachments that can't be resolved are skipped rather than failing the sync.
+func (s *incidentService) momraTransitionAttachments(ctx context.Context, attachmentIDs []string) []MOMRAStatusAttachment {
+	if s.storage == nil || len(attachmentIDs) == 0 {
+		return nil
+	}
+	var out []MOMRAStatusAttachment
+	for _, idStr := range attachmentIDs {
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			continue
+		}
+		attachment, err := s.incidentRepo.FindAttachmentByID(ctx, id)
+		if err != nil || attachment == nil {
+			continue
+		}
+		url, err := s.storage.GetFileURL(ctx, attachment.FilePath)
+		if err != nil {
+			log.Printf("[momra-status-sync] attachment %s: presigned URL failed: %v", id, err)
+			continue
+		}
+		out = append(out, MOMRAStatusAttachment{
+			AttachmentCategory: momraAttachmentCategory,
+			AttachmentName:     attachment.FilePath,
+			AttachmentURL:      url,
+		})
+	}
+	return out
+}
+
 func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid.UUID, req *models.IncidentTransitionRequest, userID uuid.UUID, userRoleIDs []uuid.UUID) (*models.IncidentResponse, error) {
 	// Begin transaction
 	tx := s.db.Begin()
@@ -3878,16 +3910,16 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			// synchronously here — before the goroutine, which uses context.Background()
 			// and so can't read the request-scoped ctx/req itself — then closed over.
 			if s.momraStatusSyncService != nil {
-				var operatorName, operatorID string
+				input := MOMRAStatusSyncInput{Comment: strings.TrimSpace(req.Comment)}
 				if actor, actorErr := s.userRepo.FindByID(ctx, userID); actorErr == nil && actor != nil {
-					operatorName = strings.TrimSpace(actor.FirstName + " " + actor.LastName)
-					if operatorName == "" {
-						operatorName = actor.Username
+					input.OperatorName = strings.TrimSpace(actor.FirstName + " " + actor.LastName)
+					if input.OperatorName == "" {
+						input.OperatorName = actor.Username
 					}
-					operatorID = actor.Username
+					input.OperatorID = actor.Username
 				}
-				eeNotesFromMUN := req.Comment
-				go s.momraStatusSyncService.SyncIncidentStatus(context.Background(), updatedForExec, transition.ToStateID, operatorName, operatorID, eeNotesFromMUN)
+				input.Attachments = s.momraTransitionAttachments(ctx, req.Attachments)
+				go s.momraStatusSyncService.SyncIncidentStatus(context.Background(), updatedForExec, transition.ToStateID, input)
 			}
 		}
 	}

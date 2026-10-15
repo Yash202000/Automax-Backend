@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/models"
@@ -50,8 +49,8 @@ type EEClassificationSyncResult struct {
 // docs/MOMRA_Outbound_Integration_Spec_v1.0.md §4-6.
 type MOMRASyncService interface {
 	SyncClassifications(ctx context.Context) (*ClassificationSyncResult, error)
-	SyncExternalEntities(ctx context.Context) (*ExternalEntitySyncResult, error)
-	SyncExternalEntityClassifications(ctx context.Context) (*EEClassificationSyncResult, error)
+	SyncExternalEntities(ctx context.Context, requestID string) (*ExternalEntitySyncResult, error)
+	SyncExternalEntityClassifications(ctx context.Context, requestID string) (*EEClassificationSyncResult, error)
 }
 
 type momraSyncService struct {
@@ -84,7 +83,7 @@ func NewMOMRASyncService(
 func (s *momraSyncService) SyncClassifications(ctx context.Context) (*ClassificationSyncResult, error) {
 	result := &ClassificationSyncResult{}
 
-	mains, err := s.client.GetMainClassifications(ctx, s.cfg.ClassificationType, s.cfg.MunicipalityID)
+	mains, err := s.client.GetMainClassifications(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("fetch main classifications: %w", err)
 	}
@@ -199,10 +198,12 @@ func (s *momraSyncService) upsertClassification(ctx context.Context, externalID,
 // (e.g. the future status-sync EE fields) must not assume original MOMRA casing is
 // preserved — flagged as a known caveat, not fixed here, since Code normalization is
 // shared with unrelated Department behavior.
-func (s *momraSyncService) SyncExternalEntities(ctx context.Context) (*ExternalEntitySyncResult, error) {
+func (s *momraSyncService) SyncExternalEntities(ctx context.Context, requestID string) (*ExternalEntitySyncResult, error) {
 	result := &ExternalEntitySyncResult{}
 
-	requestID := fmt.Sprintf("AUTOMAX-EE-SYNC-%d", time.Now().Unix())
+	if requestID == "" {
+		requestID = MOMRADefaultRequestID
+	}
 	entities, err := s.client.GetExternalEntities(ctx, requestID)
 	if err != nil {
 		return nil, fmt.Errorf("fetch external entities: %w", err)
@@ -249,11 +250,18 @@ func (s *momraSyncService) SyncExternalEntities(ctx context.Context) (*ExternalE
 // Replace) — matching MOMRA's "active links only" semantics: a link no longer returned
 // is removed, not left stale. Depends on SyncClassifications and SyncExternalEntities
 // having already run at least once.
-func (s *momraSyncService) SyncExternalEntityClassifications(ctx context.Context) (*EEClassificationSyncResult, error) {
+// MOMRADefaultRequestID is the CRM940 requestid sent by GetExternalEntities
+// and GetExternalEntitiesClassifications when the caller doesn't supply one
+// (matches the client's sample calls).
+const MOMRADefaultRequestID = "12323"
+
+func (s *momraSyncService) SyncExternalEntityClassifications(ctx context.Context, requestID string) (*EEClassificationSyncResult, error) {
 	result := &EEClassificationSyncResult{}
 
-	requestID := fmt.Sprintf("AUTOMAX-EECLS-SYNC-%d", time.Now().Unix())
-	entities, err := s.client.GetExternalEntityClassifications(ctx, requestID, s.cfg.MunicipalityID, "")
+	if requestID == "" {
+		requestID = MOMRADefaultRequestID
+	}
+	entities, err := s.client.GetExternalEntityClassifications(ctx, requestID)
 	if err != nil {
 		return nil, fmt.Errorf("fetch external entity classifications: %w", err)
 	}

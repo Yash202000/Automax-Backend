@@ -343,7 +343,7 @@ func main() {
 	// MOMRA status sync (Story A/B/C: WorkflowState -> CaseStatusID mapping, outbound
 	// call on status change reusing the integration execution-log infra, retry/backoff).
 	momraStatusMappingRepo := repository.NewMOMRAStatusMappingRepository(db)
-	momraStatusSyncService, err := services.NewMOMRAStatusSyncService(ctx, momraClient, momraStatusMappingRepo, integrationRepo)
+	momraStatusSyncService, err := services.NewMOMRAStatusSyncService(ctx, momraClient, momraStatusMappingRepo, integrationRepo, cfg.MOMRA.AmanaID)
 	if err != nil {
 		log.Fatalf("failed to initialize MOMRA status sync service: %v", err)
 	}
