@@ -5,7 +5,6 @@ import (
 	"log"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/database/migrations"
@@ -1130,9 +1129,6 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		}
 	}
 
-	// Seed a default incident workflow for demo/test incidents
-	seedDefaultIncidentWorkflow(db, defaultDept.ID, supportDept.ID, adminUser.ID)
-
 	// Seed default lookup categories
 	seedLookupCategories(db, cfg)
 
@@ -1168,122 +1164,6 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 	}
 	log.Println("Database seeding completed")
 	return nil
-}
-
-// seedDefaultIncidentWorkflow creates a minimal incident workflow and demo tickets
-// for the seeded departments so supervisors have data to view.
-func seedDefaultIncidentWorkflow(db *gorm.DB, defaultDeptID, supportDeptID, adminUserID uuid.UUID) {
-	var workflow models.Workflow
-	if err := db.Where("code = ?", "incident_default").First(&workflow).Error; err == gorm.ErrRecordNotFound {
-		workflow = models.Workflow{
-			Name:       "Default Incident Workflow",
-			Code:       "incident_default",
-			RecordType: "incident",
-			IsDefault:  true,
-			IsActive:   true,
-		}
-		db.Create(&workflow)
-
-		states := []models.WorkflowState{
-			{WorkflowID: workflow.ID, Name: "New", Code: "new", StateType: "initial", Color: "#6366f1"},
-			{WorkflowID: workflow.ID, Name: "In Progress", Code: "in_progress", StateType: "normal", Color: "#f59e0b"},
-			{WorkflowID: workflow.ID, Name: "Resolved", Code: "resolved", StateType: "normal", Color: "#10b981"},
-			{WorkflowID: workflow.ID, Name: "Closed", Code: "closed", StateType: "terminal", Color: "#6b7280"},
-			{WorkflowID: workflow.ID, Name: "Rejected", Code: "rejected", StateType: "terminal", Color: "#ef4444"},
-		}
-		for i := range states {
-			states[i].ID = uuid.New()
-			db.Create(&states[i])
-		}
-
-		newState := states[0]
-		inProgressState := states[1]
-		resolvedState := states[2]
-		closedState := states[3]
-
-		now := time.Now()
-
-		// Create demo incidents for each department
-		demoIncidents := []models.Incident{
-			{
-				IncidentNumber: "INC-2026-0001",
-				Title:          "Network outage in building A",
-				Description:    "Users in building A cannot access the network",
-				RecordType:     "incident",
-				WorkflowID:     workflow.ID,
-				CurrentStateID: newState.ID,
-				DepartmentID:   &defaultDeptID,
-				Source:         "phone",
-				CreatedAt:      now,
-				UpdatedAt:      now,
-			},
-			{
-				IncidentNumber: "INC-2026-0002",
-				Title:          "Email server slow response",
-				Description:    "Email server taking more than 30 seconds to respond",
-				RecordType:     "incident",
-				WorkflowID:     workflow.ID,
-				CurrentStateID: inProgressState.ID,
-				DepartmentID:   &supportDeptID,
-				Source:         "email",
-				CreatedAt:      now,
-				UpdatedAt:      now,
-			},
-			{
-				IncidentNumber: "REQ-2026-0001",
-				Title:          "New laptop request for onboarding",
-				Description:    "New employee needs a laptop for onboarding",
-				RecordType:     "request",
-				WorkflowID:     workflow.ID,
-				CurrentStateID: newState.ID,
-				DepartmentID:   &defaultDeptID,
-				Source:         "portal",
-				CreatedAt:      now,
-				UpdatedAt:      now,
-			},
-			{
-				IncidentNumber: "REQ-2026-0002",
-				Title:          "Software license renewal",
-				Description:    "Renew Adobe Creative Cloud license for design team",
-				RecordType:     "request",
-				WorkflowID:     workflow.ID,
-				CurrentStateID: resolvedState.ID,
-				DepartmentID:   &supportDeptID,
-				Source:         "email",
-				CreatedAt:      now,
-				UpdatedAt:      now,
-			},
-			{
-				IncidentNumber: "CMP-2026-0001",
-				Title:          "Rude behavior from support agent",
-				Description:    "Customer complained about rude behavior from support agent",
-				RecordType:     "complaint",
-				WorkflowID:     workflow.ID,
-				CurrentStateID: closedState.ID,
-				DepartmentID:   &supportDeptID,
-				Source:         "phone",
-				CreatedAt:      now,
-				UpdatedAt:      now,
-			},
-			{
-				IncidentNumber: "QRY-2026-0001",
-				Title:          "Inquiry about service hours",
-				Description:    "Customer asking about weekend service hours",
-				RecordType:     "query",
-				WorkflowID:     workflow.ID,
-				CurrentStateID: newState.ID,
-				DepartmentID:   &defaultDeptID,
-				Source:         "portal",
-				CreatedAt:      now,
-				UpdatedAt:      now,
-			},
-		}
-
-		for _, inc := range demoIncidents {
-			inc.ID = uuid.New()
-			db.Create(&inc)
-		}
-	}
 }
 
 // unseedGoalManagement hard-deletes all goal-related rows from the DB.
