@@ -223,18 +223,14 @@ type CintrixConfig struct {
 // a client of MOMRA's CRM services — status sync, classification/EE master sync).
 // This is the reverse direction from the existing inbound EPM routes in
 // epm_incident_handler.go, which is MOMRA/EPM pushing incidents into Automax.
-// env: MOMRA_BASE_URL, MOMRA_AUTH_URL, MOMRA_AUTH_SERVICE, MOMRA_AUTH_KEY,
+// env: MOMRA_BASE_URL, MOMRA_AUTH_SERVICE, MOMRA_AUTH_KEY,
 // MOMRA_MUNICIPALITY_ID, MOMRA_CLASSIFICATION_TYPE.
 // Leaving BaseURL unset disables outbound MOMRA sync/status calls.
 type MOMRAConfig struct {
-	// BaseURL is the host of MOMRA's CRM services (/v1/crm-services/...).
+	// BaseURL is the MOMRA host (scheme + host + port), shared by the token API
+	// (BaseURL + /API/Authentication/GetToken) and the CRM services
+	// (BaseURL + /v1/crm-services/...), e.g. https://eservicestest.eamana.gov.sa:450
 	BaseURL string
-	// AuthURL is the full URL of the Amana token API
-	// (POST .../API/Authentication/GetToken, JSON {"Service","Key"}), e.g.
-	// https://eservicestest.eamana.gov.sa:450/API/Authentication/GetToken.
-	// It lives on a different host from the CRM services, hence its own
-	// setting; when empty it defaults to BaseURL + "/API/Authentication/GetToken".
-	AuthURL string
 	// AuthService and AuthKey are the GetToken request's "Service" and "Key"
 	// credentials issued by the client. Secrets — set via env, never commit.
 	AuthService string
@@ -473,7 +469,6 @@ func Load() *Config {
 		},
 		MOMRA: MOMRAConfig{
 			BaseURL:            getEnv("MOMRA_BASE_URL", ""),
-			AuthURL:            getEnv("MOMRA_AUTH_URL", ""),
 			AuthService:        getEnv("MOMRA_AUTH_SERVICE", ""),
 			AuthKey:            getEnv("MOMRA_AUTH_KEY", ""),
 			MunicipalityID:     getEnv("MOMRA_MUNICIPALITY_ID", "003"),

@@ -155,8 +155,7 @@ func NewMOMRAClient(cfg config.MOMRAConfig) MOMRAClient {
 	}
 }
 
-// momraTokenPath is the Amana token API's path, used when MOMRAConfig.AuthURL
-// isn't set explicitly.
+// momraTokenPath is the Amana token API's path on MOMRAConfig.BaseURL.
 const momraTokenPath = "/API/Authentication/GetToken"
 
 // momraDefaultTokenTTL applies only when the token response omits expiresIn
@@ -174,14 +173,11 @@ type momraTokenResponse struct {
 }
 
 func (c *momraClient) tokenURL() string {
-	if c.cfg.AuthURL != "" {
-		return c.cfg.AuthURL
-	}
 	return strings.TrimRight(c.cfg.BaseURL, "/") + momraTokenPath
 }
 
 // getToken returns a cached Bearer token, refreshing it via the Amana token
-// API (POST {AuthURL} with JSON {"Service","Key"}) when missing or within 60s
+// API (POST {BaseURL}/API/Authentication/GetToken with JSON {"Service","Key"}) when missing or within 60s
 // of expiry. tokenMu is held across the refresh so concurrent callers wait for
 // the one in-flight request and then share its token.
 func (c *momraClient) getToken(ctx context.Context) (string, error) {
@@ -228,7 +224,7 @@ func (c *momraClient) getToken(ctx context.Context) (string, error) {
 	// URL or request shape is wrong even when the status is 200 — report that
 	// rather than a bare "invalid character '<'" JSON error.
 	if isNonJSONBody(resp.Header.Get("Content-Type"), body) {
-		return "", fmt.Errorf("momra token request to %s returned non-JSON response (status %d, content-type %q) — check MOMRA_AUTH_URL: %s",
+		return "", fmt.Errorf("momra token request to %s returned non-JSON response (status %d, content-type %q) — check MOMRA_BASE_URL: %s",
 			tokenURL, resp.StatusCode, resp.Header.Get("Content-Type"), c.safeExcerpt(body))
 	}
 
