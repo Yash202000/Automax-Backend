@@ -276,6 +276,9 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 	if codes := normalizeStateCodes(filter.CurrentStateCode); len(codes) != 0 {
 		query = query.Where(stateCodeSubquery, codes)
 	}
+	if filter.ExcludeClosed != nil && *filter.ExcludeClosed {
+		query = query.Where("incidents.current_state_id NOT IN (SELECT id FROM workflow_states WHERE state_type = 'terminal')")
+	}
 	if len(filter.ClassificationID) != 0 {
 		query = query.Where("classification_id IN ?", filter.ClassificationID)
 	}

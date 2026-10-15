@@ -656,6 +656,7 @@ type IncidentFilter struct {
 	Source              *string    `query:"source" json:"source" validate:"omitempty"`
 	MyRecord            *string    `query:"my_record" json:"my_record" validate:"omitempty,uuid"`
 	ConvertedToRequest  *bool      `query:"converted_to_request" json:"converted_to_request" validate:"omitempty"`
+	ExcludeClosed       *bool      `query:"exclude_closed" json:"exclude_closed" validate:"omitempty"` // true hides records whose current state is terminal
 	SourceIncidentID    *string    `query:"source_incident_id" json:"source_incident_id" validate:"omitempty,uuid"`
 	StartDate           *time.Time `json:"start_date"` // filter by created_at >= start_date; parsed manually in handler (not via QueryParser)
 	EndDate             *time.Time `json:"end_date"`   // filter by created_at <= end_date; parsed manually in handler (not via QueryParser)
