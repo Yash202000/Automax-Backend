@@ -269,20 +269,27 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 
 	// Drop FK constraints on performed_by_id so system-triggered actions (uuid.Nil) are allowed.
 	// System actions (e.g. Ready-to-Close auto-revert) do not have a real user performer.
-	db.Exec("ALTER TABLE incident_transition_histories DROP CONSTRAINT IF EXISTS fk_incident_transition_histories_performed_by")
-	db.Exec("ALTER TABLE incident_transition_histories DROP CONSTRAINT IF EXISTS incident_transition_histories_performed_by_id_fkey")
-	db.Exec("ALTER TABLE incident_revisions DROP CONSTRAINT IF EXISTS fk_incident_revisions_performed_by")
-	db.Exec("ALTER TABLE incident_revisions DROP CONSTRAINT IF EXISTS incident_revisions_performed_by_id_fkey")
-	db.Exec("ALTER TABLE evidence_transition_histories DROP CONSTRAINT IF EXISTS fk_evidence_transition_histories_performed_by")
-	db.Exec("ALTER TABLE evidence_transition_histories DROP CONSTRAINT IF EXISTS evidence_transition_histories_performed_by_id_fkey")
-	db.Exec("ALTER TABLE metric_import_batch_transition_histories DROP CONSTRAINT IF EXISTS fk_metric_import_batch_transition_histories_performed_by")
-	db.Exec("ALTER TABLE metric_import_batch_transition_histories DROP CONSTRAINT IF EXISTS metric_import_batch_transition_histories_performed_by_id_fkey")
-	db.Exec("ALTER TABLE metric_transition_histories DROP CONSTRAINT IF EXISTS fk_metric_transition_histories_performed_by")
-	db.Exec("ALTER TABLE metric_transition_histories DROP CONSTRAINT IF EXISTS metric_transition_histories_performed_by_id_fkey")
-	db.Exec("ALTER TABLE metric_value_change_transition_histories DROP CONSTRAINT IF EXISTS fk_metric_value_change_transition_histories_performed_by")
-	db.Exec("ALTER TABLE metric_value_change_transition_histories DROP CONSTRAINT IF EXISTS metric_value_change_transition_histories_performed_by_id_fkey")
-	db.Exec("ALTER TABLE kpi_workflow_actions DROP CONSTRAINT IF EXISTS fk_kpi_workflow_actions_performed_by")
-	db.Exec("ALTER TABLE kpi_workflow_actions DROP CONSTRAINT IF EXISTS kpi_workflow_actions_performed_by_id_fkey")
+	// Tables created later in this run (or only in some deployments) don't exist yet on a fresh DB.
+	for _, c := range [][2]string{
+		{"incident_transition_histories", "fk_incident_transition_histories_performed_by"},
+		{"incident_transition_histories", "incident_transition_histories_performed_by_id_fkey"},
+		{"incident_revisions", "fk_incident_revisions_performed_by"},
+		{"incident_revisions", "incident_revisions_performed_by_id_fkey"},
+		{"evidence_transition_histories", "fk_evidence_transition_histories_performed_by"},
+		{"evidence_transition_histories", "evidence_transition_histories_performed_by_id_fkey"},
+		{"metric_import_batch_transition_histories", "fk_metric_import_batch_transition_histories_performed_by"},
+		{"metric_import_batch_transition_histories", "metric_import_batch_transition_histories_performed_by_id_fkey"},
+		{"metric_transition_histories", "fk_metric_transition_histories_performed_by"},
+		{"metric_transition_histories", "metric_transition_histories_performed_by_id_fkey"},
+		{"metric_value_change_transition_histories", "fk_metric_value_change_transition_histories_performed_by"},
+		{"metric_value_change_transition_histories", "metric_value_change_transition_histories_performed_by_id_fkey"},
+		{"kpi_workflow_actions", "fk_kpi_workflow_actions_performed_by"},
+		{"kpi_workflow_actions", "kpi_workflow_actions_performed_by_id_fkey"},
+	} {
+		if db.Migrator().HasTable(c[0]) {
+			db.Exec("ALTER TABLE " + c[0] + " DROP CONSTRAINT IF EXISTS " + c[1])
+		}
+	}
 
 	// Legacy strategic_goal_id columns predate the StrategicGoal→Goal model rename.
 	// AutoMigrate never drops old columns, so on databases created before that
@@ -321,9 +328,12 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS body_en    TEXT")
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS subject_ar TEXT")
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS body_ar    TEXT")
-	db.Exec("UPDATE notification_templates SET subject_en = subject, body_en = body WHERE language = 'en' AND body_en IS NULL")
-	db.Exec(`UPDATE notification_templates t SET subject_ar = ar.subject, body_ar = ar.body FROM notification_templates ar WHERE ar.language = 'ar' AND ar.code = t.code AND ar.channel = t.channel AND t.language = 'en'`)
-	db.Exec("DELETE FROM notification_templates WHERE language = 'ar'")
+	// The legacy single-language column only exists until this migration has run once.
+	if db.Migrator().HasColumn("notification_templates", "language") {
+		db.Exec("UPDATE notification_templates SET subject_en = subject, body_en = body WHERE language = 'en' AND body_en IS NULL")
+		db.Exec(`UPDATE notification_templates t SET subject_ar = ar.subject, body_ar = ar.body FROM notification_templates ar WHERE ar.language = 'ar' AND ar.code = t.code AND ar.channel = t.channel AND t.language = 'en'`)
+		db.Exec("DELETE FROM notification_templates WHERE language = 'ar'")
+	}
 	db.Exec("ALTER TABLE notification_templates DROP COLUMN IF EXISTS language")
 	db.Exec("ALTER TABLE notification_templates DROP COLUMN IF EXISTS subject")
 	db.Exec("ALTER TABLE notification_templates DROP COLUMN IF EXISTS body")
@@ -334,7 +344,8 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 
 	// Workflow code column was previously VARCHAR(50) which is too short for some existing workflows. Increase to 100 chars. Note: MySQL syntax is ALTER TABLE workflows MODIFY code VARCHAR(100) NOT NULL but Postgres is ALTER TABLE workflows ALTER COLUMN code TYPE VARCHAR(100). GORM's AutoMigrate doesn't handle this edge case, so we run raw SQL. Idempotent: safe to run repeatedly.
 	db.Exec("ALTER TABLE workflows ALTER COLUMN code TYPE VARCHAR(100)")
-	db.Exec("ALTER TABLE reports ALTER COLUMN timestamp_key TYPE VARCHAR(100) Default 'created_at'")
+	db.Exec("ALTER TABLE reports ALTER COLUMN timestamp_key TYPE VARCHAR(100)")
+	db.Exec("ALTER TABLE reports ALTER COLUMN timestamp_key SET DEFAULT 'created_at'")
 
 	// Migrate transition assignment roles (single → many-to-many)
 	if err := migrations.MigrateTransitionAssignmentRoles(db); err != nil {
