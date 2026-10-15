@@ -564,6 +564,24 @@ func (h *UserHandler) AdminUpdateUser(c *fiber.Ctx) error {
 		validationErrors["alternate_mobile"] = i18n.T(c.UserContext(), "alternate_mobile_same_as_primary")
 	}
 
+	// Contact-center updates require the name and mobile fields.
+	if req.ContactCenter != nil && *req.ContactCenter {
+		if validationErrors == nil {
+			validationErrors = map[string]string{}
+		}
+		required := []struct{ field, value, key string }{
+			{"first_name", req.FirstName, "first_name_required"},
+			{"middle_name", req.MiddleName, "middle_name_required"},
+			{"last_name", req.LastName, "last_name_required"},
+			{"phone", req.Phone, "phone_required"},
+		}
+		for _, r := range required {
+			if strings.TrimSpace(r.value) == "" {
+				validationErrors[r.field] = i18n.T(c.UserContext(), r.key)
+			}
+		}
+	}
+
 	if len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,

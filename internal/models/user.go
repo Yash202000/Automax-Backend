@@ -342,6 +342,7 @@ type UserUpdateRequest struct {
 	DeptManagerLocationID       *uuid.UUID  `json:"dept_manager_location_id"`
 	BypassLoginTotp             *bool       `json:"bypass_login_totp"`
 	EnableLoginTotp             *bool       `json:"enable_login_totp"`
+	ContactCenter               *bool       `json:"contact_center"`
 }
 
 type UserResponse struct {
