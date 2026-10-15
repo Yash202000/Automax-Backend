@@ -4243,9 +4243,9 @@ func (r *reportRepository) ExecuteDepartmentPerformanceQuery(ctx context.Context
 			COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed') / NULLIF(COUNT(*), 0), 1), 0)::float8 AS closed_pct,
 			COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE fb.max_rating >= 4)
 				/ NULLIF(COUNT(*) FILTER (WHERE fb.max_rating > 0), 0), 1), 0)::float8 AS satisfaction_pct,
-			COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed' AND incidents.sla_breached) AS sla_breach_count,
-			COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed' AND incidents.sla_breached)
-				/ NULLIF(COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed'), 0), 1), 0)::float8 AS sla_breach_pct,
+			COUNT(*) FILTER (WHERE incidents.sla_breached) AS sla_breach_count,
+			COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE incidents.sla_breached)
+				/ NULLIF(COUNT(*), 0), 1), 0)::float8 AS sla_breach_pct,
 			COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed' AND NOT incidents.sla_breached)
 				/ NULLIF(COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed'), 0), 1), 0)::float8 AS speed_pct`).
 		Group("incidents.department_id, departments.name").
