@@ -108,6 +108,7 @@ func (h *KpiDictionaryHandler) GetStrategic(c *fiber.Ctx) error {
 	var item models.StrategicKPI
 	if err := h.db.WithContext(c.UserContext()).
 		Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("Goal").Preload("Process").
+		Preload("OperationalObjective").Preload("AwardSubCriterion.AwardCriterion").
 		First(&item, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
@@ -425,6 +426,7 @@ func (h *KpiDictionaryHandler) GetOperational(c *fiber.Ctx) error {
 	if err := h.db.WithContext(c.UserContext()).
 		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Domain").
 		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+		Preload("Pillar").Preload("AwardSubCriterion.AwardCriterion").
 		First(&item, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
