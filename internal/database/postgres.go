@@ -1077,58 +1077,6 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		db.Model(&adminUser).Association("Roles").Append(&adminRole)
 	}
 
-	// Create default departments for supervisor seeding
-	var defaultDept models.Department
-	if err := db.Where("name = ?", "General").First(&defaultDept).Error; err == gorm.ErrRecordNotFound {
-		defaultDept = models.Department{
-			Name:     "General",
-			Code:     "GEN",
-			IsActive: true,
-		}
-		db.Create(&defaultDept)
-	}
-
-	var supportDept models.Department
-	if err := db.Where("name = ?", "Support").First(&supportDept).Error; err == gorm.ErrRecordNotFound {
-		supportDept = models.Department{
-			Name:     "Support",
-			Code:     "SUP",
-			IsActive: true,
-		}
-		db.Create(&supportDept)
-	}
-
-	// Create supervisor users with department assignments
-	type supervisorSeed struct {
-		Email        string
-		Username     string
-		FirstName    string
-		LastName     string
-		DepartmentID *uuid.UUID
-	}
-	supervisors := []supervisorSeed{
-		{"supervisor1@automax.com", "supervisor1", "Ahmed", "Ali", &defaultDept.ID},
-		{"supervisor2@automax.com", "supervisor2", "Sara", "Mohammed", &supportDept.ID},
-	}
-	for _, su := range supervisors {
-		var existing models.User
-		if db.Where("email = ?", su.Email).First(&existing).Error == gorm.ErrRecordNotFound {
-			hashedPwd, _ := utils.HashPassword("supervisor123")
-			user := models.User{
-				Email:        su.Email,
-				Username:     su.Username,
-				Password:     hashedPwd,
-				FirstName:    su.FirstName,
-				LastName:     su.LastName,
-				IsActive:     true,
-				DepartmentID: su.DepartmentID,
-			}
-			db.Create(&user)
-			db.Model(&user).Association("Roles").Append(&supervisorRole)
-			db.Model(&models.Department{}).Where("id = ?", su.DepartmentID).Update("supervisor_id", user.ID)
-		}
-	}
-
 	// Seed default lookup categories
 	seedLookupCategories(db, cfg)
 
