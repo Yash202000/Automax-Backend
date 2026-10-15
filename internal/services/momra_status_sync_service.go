@@ -35,12 +35,9 @@ type MOMRAStatusSyncService interface {
 	// SyncIncidentStatus looks up the mapping for newStateID and, if found, pushes the
 	// status change to MOMRA with retry/backoff, logging the attempt. Safe to call in
 	// a goroutine — it never returns an error to a caller that can't act on it; all
-	// outcomes are recorded via IntegrationExecutionLog instead. operatorName/operatorID
-	// identify the AutoMax user who performed the transition (TFIS v1.0 §11.3's
-	// OperatorName/OperatorID, marked M/As-Is); eeNotesFromMUN is the transition's
-	// comment, sent as EENotesFromMUN (§11.3: "C when status 004") — both are ignored
-	// unless the resolved mapping's CaseStatusID is "004" (EE routing).
-	SyncIncidentStatus(ctx context.Context, incident *models.Incident, newStateID uuid.UUID, operatorName, operatorID, eeNotesFromMUN string)
+	// outcomes are recorded via IntegrationExecutionLog instead. input carries the
+	// transition's actor, comment and attachments (see MOMRAStatusSyncInput).
+	SyncIncidentStatus(ctx context.Context, incident *models.Incident, newStateID uuid.UUID, input MOMRAStatusSyncInput)
 	// RetryFailedSync re-attempts a previously failed sync from its logged request
 	// payload, for the manual-retry acceptance criterion in Story C.
 	RetryFailedSync(ctx context.Context, logID uuid.UUID) error
@@ -49,10 +46,24 @@ type MOMRAStatusSyncService interface {
 	LogScriptID() uuid.UUID
 }
 
+// MOMRAStatusSyncInput is the transition-time data UpdateStatusV2 needs that
+// isn't on the incident itself. Resolved by the caller before the async sync.
+type MOMRAStatusSyncInput struct {
+	OperatorName string // user who performed the transition
+	OperatorID   string
+	// Comment is the transition comment, sent as both OperatorComments and
+	// EENotesFromMUN.
+	Comment string
+	// Attachments are the files added on this transition, with URLs MOMRA can
+	// download.
+	Attachments []MOMRAStatusAttachment
+}
+
 type momraStatusSyncService struct {
 	client          MOMRAClient
 	mappingRepo     repository.MOMRAStatusMappingRepository
 	integrationRepo repository.IntegrationRepository
+	amanaID         string
 
 	logScriptID uuid.UUID
 }
@@ -64,6 +75,7 @@ func NewMOMRAStatusSyncService(
 	client MOMRAClient,
 	mappingRepo repository.MOMRAStatusMappingRepository,
 	integrationRepo repository.IntegrationRepository,
+	amanaID string,
 ) (MOMRAStatusSyncService, error) {
 	scriptID, err := findOrCreateMOMRALogScript(ctx, integrationRepo)
 	if err != nil {
@@ -73,6 +85,7 @@ func NewMOMRAStatusSyncService(
 		client:          client,
 		mappingRepo:     mappingRepo,
 		integrationRepo: integrationRepo,
+		amanaID:         amanaID,
 		logScriptID:     scriptID,
 	}, nil
 }
@@ -101,7 +114,7 @@ func findOrCreateMOMRALogScript(ctx context.Context, integrationRepo repository.
 	return script.ID, nil
 }
 
-func (s *momraStatusSyncService) SyncIncidentStatus(ctx context.Context, incident *models.Incident, newStateID uuid.UUID, operatorName, operatorID, eeNotesFromMUN string) {
+func (s *momraStatusSyncService) SyncIncidentStatus(ctx context.Context, incident *models.Incident, newStateID uuid.UUID, input MOMRAStatusSyncInput) {
 	mapping, err := s.mappingRepo.FindActiveByState(ctx, newStateID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -118,40 +131,41 @@ func (s *momraStatusSyncService) SyncIncidentStatus(ctx context.Context, inciden
 		return
 	}
 
-	req := buildMOMRAStatusUpdateRequest(incident, mapping, crmID, operatorName, operatorID, eeNotesFromMUN)
+	req := buildMOMRAStatusUpdateRequest(incident, mapping, crmID, s.amanaID, input)
 	s.attemptWithRetry(ctx, incident, crmID, req)
 }
 
-// buildMOMRAStatusUpdateRequest builds 3.14's payload from the mapping and the
-// incident's current external-entity assignment. EECode/EEName/EENotesFromMUN are only
-// populated for CaseStatusID "004" (EE routing), matching the field's "Conditional if
-// code=004" contract — see docs/MOMRA_Outbound_Integration_Spec_v1.0.md §3.1.
-// OperatorName/OperatorID are sent on every call, per TFIS v1.0 §11.3 (not conditional
-// on CaseStatusID) — they identify who performed the AutoMax-side action. crmID is the
-// same value used as the URL's {CRMID} path segment, echoed into the body as
-// CRMCaseID (see MOMRAStatusUpdateRequest's doc comment for why).
-func buildMOMRAStatusUpdateRequest(incident *models.Incident, mapping *models.MOMRAStatusMapping, crmID, operatorName, operatorID, eeNotesFromMUN string) MOMRAStatusUpdateRequest {
+// buildMOMRAStatusUpdateRequest builds the UpdateStatusV2 body with every field
+// of the client's request contract: case status/closure from the mapping, the
+// MOMRA incident number (also the URL's {CRMID}) as CRMCaseID, AmanaID, the
+// Automax incident number, the acting operator, completion time, the
+// transition comment and attachments, and the incident's external entity when
+// it is assigned to one.
+func buildMOMRAStatusUpdateRequest(incident *models.Incident, mapping *models.MOMRAStatusMapping, crmID, amanaID string, input MOMRAStatusSyncInput) MOMRAStatusUpdateRequest {
 	closureFlag := "No"
 	if mapping.IsClosureStatus {
 		closureFlag = "Yes"
 	}
 
 	req := MOMRAStatusUpdateRequest{
-		CRMCaseID:       crmID,
-		CaseStatusID:    mapping.CaseStatusID,
-		ClosureFlag:     closureFlag,
-		AmanaIncidentID: incident.IncidentNumber,
-		CompletionTime:  time.Now().Format(momraCompletionTimeLayout),
-		OperatorName:    operatorName,
-		OperatorID:      operatorID,
+		CRMCaseID:        crmID,
+		CaseStatusID:     mapping.CaseStatusID,
+		ClosureFlag:      closureFlag,
+		AmanaID:          amanaID,
+		AmanaIncidentID:  incident.IncidentNumber,
+		CompletionTime:   time.Now().Format(momraCompletionTimeLayout),
+		OperatorName:     input.OperatorName,
+		OperatorID:       input.OperatorID,
+		OperatorComments: input.Comment,
+		Attachments:      input.Attachments,
 	}
 
 	// Department{Type:"external"} is Automax's model for MOMRA External Entities
 	// (see internal/services/momra_sync_service.go) — Department.Code stores EECode.
-	if mapping.CaseStatusID == "004" && incident.Department != nil && incident.Department.Type == externalEntityDepartmentType {
+	if incident.Department != nil && incident.Department.Type == externalEntityDepartmentType {
 		req.EECode = incident.Department.Code
 		req.EEName = incident.Department.Name
-		req.EENotesFromMUN = eeNotesFromMUN
+		req.EENotesFromMUN = input.Comment
 	}
 
 	return req

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -75,27 +76,106 @@ type MOMRAStatusUpdateRequest struct {
 // MOMRA's own Integration Guide is the more authoritative source here.
 const momraCompletionTimeLayout = "1/2/2006 3:04:05 PM"
 
+// momraAttachmentCategory is UpdateStatusV2's AttachmentCategory, as in the
+// client's sample request ("0").
+const momraAttachmentCategory = "0"
+
 type MOMRAStatusAttachment struct {
 	AttachmentCategory string `json:"AttachmentCategory,omitempty"`
 	AttachmentName     string `json:"AttachmentName,omitempty"`
 	AttachmentURL      string `json:"AttachmentURL,omitempty"`
 }
 
-// MOMRAResponseEnvelope is the common {statusDetails, data} shape every MOMRA CRM
-// service returns (see docs/MOMRA_Outbound_Integration_Spec_v1.0.md §3.1's note that
-// MOMRA only ever distinguishes success/business-error via data.responseCode "1"/"2" —
-// richer error handling must key off the HTTP status code instead).
+// MOMRAResponseEnvelope is the common {statusDetails, data} shape of a MOMRA CRM
+// service result. MOMRA only distinguishes success/business-error via
+// data.responseCode "1"/"2" — richer error handling keys off the HTTP status code.
 type MOMRAResponseEnvelope struct {
 	StatusDetails struct {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
 	} `json:"statusDetails"`
 	Data struct {
-		ResponseCode    string          `json:"responseCode"`
-		ResponseMessage string          `json:"responseMessage"`
-		ResponseID      string          `json:"responseId"`
-		Result          json.RawMessage `json:"result"`
+		ResponseCode    string `json:"responseCode"`
+		ResponseMessage string `json:"responseMessage"`
+		// responseId is null in CRM940 responses and its type isn't documented,
+		// so it is kept raw rather than forced to a string.
+		ResponseID json.RawMessage `json:"responseId"`
+		Result     json.RawMessage `json:"result"`
 	} `json:"data"`
+}
+
+// momraGatewayResponse is the CRM940 (/api/crm940/...) wrapper around the
+// envelope:
+//
+//	{"responseData": {statusDetails, data}, "detailedCodeID": 0,
+//	 "detailedCode": null, "businessErrorMessage": null,
+//	 "exceptionMessage": null, "itemsCount": 0}
+type momraGatewayResponse struct {
+	ResponseData         *MOMRAResponseEnvelope `json:"responseData"`
+	DetailedCodeID       int                    `json:"detailedCodeID"`
+	DetailedCode         json.RawMessage        `json:"detailedCode"`
+	BusinessErrorMessage json.RawMessage        `json:"businessErrorMessage"`
+	ExceptionMessage     json.RawMessage        `json:"exceptionMessage"`
+	ItemsCount           int                    `json:"itemsCount"`
+}
+
+// rawMessageText renders a JSON value that is normally null or a string as
+// plain text; "" for null/absent.
+func rawMessageText(raw json.RawMessage) string {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return ""
+	}
+	var str string
+	if err := json.Unmarshal(trimmed, &str); err == nil {
+		return strings.TrimSpace(str)
+	}
+	return string(trimmed)
+}
+
+// parseMOMRAResponse decodes a CRM service response body into the envelope.
+// It accepts the CRM940 gateway wrapper (envelope under "responseData") and,
+// for endpoints that don't wrap, the bare {statusDetails, data} envelope.
+// Gateway-level exceptionMessage / businessErrorMessage and data.responseCode
+// "2" are returned as errors; the envelope is still returned for a business
+// error so callers can inspect it.
+func parseMOMRAResponse(body []byte) (*MOMRAResponseEnvelope, error) {
+	if isNonJSONBody("", body) {
+		return nil, fmt.Errorf("momra returned non-JSON response: %s", strings.Join(strings.Fields(string(body[:min(len(body), 300)])), " "))
+	}
+
+	var gateway momraGatewayResponse
+	if err := json.Unmarshal(body, &gateway); err != nil {
+		return nil, err
+	}
+	if msg := rawMessageText(gateway.ExceptionMessage); msg != "" {
+		return nil, fmt.Errorf("momra exception (detailedCodeID %d): %s", gateway.DetailedCodeID, msg)
+	}
+
+	envelope := gateway.ResponseData
+	if envelope == nil {
+		envelope = &MOMRAResponseEnvelope{}
+		if err := json.Unmarshal(body, envelope); err != nil {
+			return nil, err
+		}
+	}
+	// A null/absent result means "nothing"; normalise so callers' unmarshal
+	// into a slice yields empty instead of "unexpected end of JSON input".
+	if r := bytes.TrimSpace(envelope.Data.Result); len(r) == 0 || bytes.Equal(r, []byte("null")) {
+		envelope.Data.Result = json.RawMessage("[]")
+	}
+
+	if msg := rawMessageText(gateway.BusinessErrorMessage); msg != "" {
+		code := envelope.Data.ResponseCode
+		if code == "" {
+			code = fmt.Sprintf("%d", gateway.DetailedCodeID)
+		}
+		return envelope, &MOMRABusinessError{ResponseCode: code, ResponseMessage: msg}
+	}
+	if envelope.Data.ResponseCode == "2" {
+		return envelope, &MOMRABusinessError{ResponseCode: envelope.Data.ResponseCode, ResponseMessage: envelope.Data.ResponseMessage}
+	}
+	return envelope, nil
 }
 
 // MOMRABusinessError is returned when MOMRA's HTTP call succeeds but
@@ -131,11 +211,11 @@ func (e *MOMRAHTTPError) Retryable() bool {
 // call (3.1 auth, 3.14 status sync, 3.21-3.23 classifications, 3.35/3.36 external
 // entities). This is the reverse direction from epm_incident_handler.go.
 type MOMRAClient interface {
-	GetMainClassifications(ctx context.Context, classType, municipalityID string) ([]MOMRAClassificationItem, error)
+	GetMainClassifications(ctx context.Context) ([]MOMRAClassificationItem, error)
 	GetSubClassifications(ctx context.Context, mainClassificationID string) ([]MOMRAClassificationItem, error)
 	GetSpecialClassifications(ctx context.Context, subClassificationID string) ([]MOMRAClassificationItem, error)
 	GetExternalEntities(ctx context.Context, requestID string) ([]MOMRAExternalEntity, error)
-	GetExternalEntityClassifications(ctx context.Context, requestID, municipalityID, eeCode string) ([]MOMRAExternalEntityClassifications, error)
+	GetExternalEntityClassifications(ctx context.Context, requestID string) ([]MOMRAExternalEntityClassifications, error)
 	UpdateIncidentStatus(ctx context.Context, crmID string, req MOMRAStatusUpdateRequest) error
 }
 
@@ -321,29 +401,27 @@ func (c *momraClient) doGet(ctx context.Context, relativeURL string) (*MOMRAResp
 		return nil, fmt.Errorf("momra request to %s returned %d: %s", relativeURL, resp.StatusCode, string(body))
 	}
 
-	var envelope MOMRAResponseEnvelope
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, fmt.Errorf("momra response parse failed: %w", err)
+	envelope, err := parseMOMRAResponse(body)
+	if err != nil {
+		var businessErr *MOMRABusinessError
+		if errors.As(err, &businessErr) {
+			return envelope, err
+		}
+		return nil, fmt.Errorf("momra request to %s failed: %w", relativeURL, err)
 	}
-	if envelope.Data.ResponseCode == "2" {
-		return &envelope, &MOMRABusinessError{ResponseCode: envelope.Data.ResponseCode, ResponseMessage: envelope.Data.ResponseMessage}
-	}
-	return &envelope, nil
+	return envelope, nil
 }
 
-func (c *momraClient) GetMainClassifications(ctx context.Context, classType, municipalityID string) ([]MOMRAClassificationItem, error) {
-	q := url.Values{}
-	q.Set("type", classType)
-	if municipalityID != "" {
-		q.Set("municipalityID", municipalityID)
-	}
-	envelope, err := c.doGet(ctx, "/v1/crm-services/mobile/main-classifications?"+q.Encode())
+// GetMainClassifications calls CRM940's GetMainClassifications, which takes no
+// parameters (the old §3.21 endpoint's type/municipalityID were dropped).
+func (c *momraClient) GetMainClassifications(ctx context.Context) ([]MOMRAClassificationItem, error) {
+	envelope, err := c.doGet(ctx, "/api/crm940/GetMainClassifications")
 	if err != nil {
 		return nil, err
 	}
 	var raw []struct {
-		ID   string `json:"ID"`
-		Name string `json:"Name"`
+		ID   string `json:"id"`
+		Name string `json:"name"`
 	}
 	if err := json.Unmarshal(envelope.Data.Result, &raw); err != nil {
 		return nil, fmt.Errorf("momra main-classifications result parse failed: %w", err)
@@ -356,16 +434,14 @@ func (c *momraClient) GetMainClassifications(ctx context.Context, classType, mun
 }
 
 func (c *momraClient) GetSubClassifications(ctx context.Context, mainClassificationID string) ([]MOMRAClassificationItem, error) {
-	q := url.Values{}
-	q.Set("mainClassificationID", mainClassificationID)
-	envelope, err := c.doGet(ctx, "/v1/crm-services/mobile/sub-classifications?"+q.Encode())
+	envelope, err := c.doGet(ctx, "/api/crm940/GetSubClassifications/"+url.PathEscape(mainClassificationID))
 	if err != nil {
 		return nil, err
 	}
 	var raw []struct {
-		ID               string `json:"ID"`
-		Name             string `json:"Name"`
-		ClassificationID string `json:"ClassificationID"`
+		ID               string `json:"id"`
+		Name             string `json:"name"`
+		ClassificationID string `json:"classificationID"`
 	}
 	if err := json.Unmarshal(envelope.Data.Result, &raw); err != nil {
 		return nil, fmt.Errorf("momra sub-classifications result parse failed: %w", err)
@@ -378,16 +454,14 @@ func (c *momraClient) GetSubClassifications(ctx context.Context, mainClassificat
 }
 
 func (c *momraClient) GetSpecialClassifications(ctx context.Context, subClassificationID string) ([]MOMRAClassificationItem, error) {
-	q := url.Values{}
-	q.Set("subClassificationID", subClassificationID)
-	envelope, err := c.doGet(ctx, "/v1/crm-services/mobile/get-special-classifications?"+q.Encode())
+	envelope, err := c.doGet(ctx, "/api/crm940/GetSpecialClassifications/"+url.PathEscape(subClassificationID))
 	if err != nil {
 		return nil, err
 	}
 	var raw []struct {
-		ID                  string `json:"ID"`
-		Name                string `json:"Name"`
-		SubClassificationID string `json:"SubClassificationID"`
+		ID                  string `json:"id"`
+		Name                string `json:"name"`
+		SubClassificationID string `json:"subClassificationID"`
 	}
 	if err := json.Unmarshal(envelope.Data.Result, &raw); err != nil {
 		return nil, fmt.Errorf("momra special-classifications result parse failed: %w", err)
@@ -401,8 +475,8 @@ func (c *momraClient) GetSpecialClassifications(ctx context.Context, subClassifi
 
 func (c *momraClient) GetExternalEntities(ctx context.Context, requestID string) ([]MOMRAExternalEntity, error) {
 	q := url.Values{}
-	q.Set("RequestID", requestID)
-	envelope, err := c.doGet(ctx, "/v1/crm-services/external-entities?"+q.Encode())
+	q.Set("requestid", requestID)
+	envelope, err := c.doGet(ctx, "/api/crm940/GetExternalEntities?"+q.Encode())
 	if err != nil {
 		return nil, err
 	}
@@ -413,19 +487,13 @@ func (c *momraClient) GetExternalEntities(ctx context.Context, requestID string)
 	return items, nil
 }
 
-func (c *momraClient) GetExternalEntityClassifications(ctx context.Context, requestID, municipalityID, eeCode string) ([]MOMRAExternalEntityClassifications, error) {
+// GetExternalEntityClassifications calls CRM940's GetExternalEntitiesClassifications,
+// which takes only requestid; results are already scoped to the caller's Amana.
+func (c *momraClient) GetExternalEntityClassifications(ctx context.Context, requestID string) ([]MOMRAExternalEntityClassifications, error) {
 	q := url.Values{}
-	q.Set("RequestID", requestID)
-	q.Set("MunicipalityID", municipalityID)
-	if eeCode != "" {
-		q.Set("EECode", eeCode)
-	}
-	envelope, err := c.doGet(ctx, "/v1/crm-services/external-entity-classifications?"+q.Encode())
+	q.Set("requestid", requestID)
+	envelope, err := c.doGet(ctx, "/api/crm940/GetExternalEntitiesClassifications?"+q.Encode())
 	if err != nil {
-		// When eeCode is set and MOMRA doesn't recognize it, this comes back as a
-		// *MOMRABusinessError (responseCode "2") rather than an empty result — callers
-		// syncing a single EE should check errors.As(err, &MOMRABusinessError{}) and
-		// treat that as "skip this EE," not a fatal sync failure.
 		return nil, err
 	}
 	var items []MOMRAExternalEntityClassifications
@@ -446,7 +514,7 @@ func (c *momraClient) UpdateIncidentStatus(ctx context.Context, crmID string, st
 		return err
 	}
 
-	relativeURL := fmt.Sprintf("/v1/crm-services/incidents/%s/status", url.PathEscape(crmID))
+	relativeURL := fmt.Sprintf("/api/crm940/UpdateStatusV2/%s", url.PathEscape(crmID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.cfg.BaseURL+relativeURL, bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -465,12 +533,12 @@ func (c *momraClient) UpdateIncidentStatus(ctx context.Context, crmID string, st
 		return &MOMRAHTTPError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 
-	var envelope MOMRAResponseEnvelope
-	if err := json.Unmarshal(respBody, &envelope); err != nil {
-		return fmt.Errorf("momra status update response parse failed: %w", err)
-	}
-	if envelope.Data.ResponseCode == "2" {
-		return &MOMRABusinessError{ResponseCode: envelope.Data.ResponseCode, ResponseMessage: envelope.Data.ResponseMessage}
+	if _, err := parseMOMRAResponse(respBody); err != nil {
+		var businessErr *MOMRABusinessError
+		if errors.As(err, &businessErr) {
+			return err
+		}
+		return fmt.Errorf("momra status update failed: %w", err)
 	}
 	return nil
 }
