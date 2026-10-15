@@ -980,6 +980,11 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		return nil, err
 	}
 
+	// Contact-center updates are limited to name and mobile fields only.
+	if req.ContactCenter != nil && *req.ContactCenter {
+		return s.updateContactCenterFields(ctx, user, req, actorID, ipAddress, userAgent)
+	}
+
 	// Store old values for audit logging
 	// IMPORTANT: Create COPIES of values, not pointers to mutable fields
 	oldIsActive := user.IsActive
@@ -1361,6 +1366,77 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		})
 	}()
 
+	return &response, nil
+}
+
+// updateContactCenterFields updates only first/middle/last name, phone and alternate mobile,
+// ignoring every other field in the request, and logs the changes.
+func (s *userService) updateContactCenterFields(ctx context.Context, user *models.User, req *models.UserUpdateRequest, actorID uuid.UUID, ipAddress, userAgent string) (*models.UserResponse, error) {
+	oldValue := map[string]any{
+		"first_name":       user.FirstName,
+		"middle_name":      user.MiddleName,
+		"last_name":        user.LastName,
+		"phone":            user.Phone,
+		"alternate_mobile": user.AlternateMobile,
+	}
+
+	if req.Phone != user.Phone && req.Phone != "" {
+		exists, err := s.userRepo.ExistsByPhone(ctx, req.Phone, user.ID)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			return nil, errors.New(i18n.T(ctx, "phone_number_in_use"))
+		}
+	}
+
+	user.FirstName = req.FirstName
+	user.MiddleName = req.MiddleName
+	user.LastName = req.LastName
+	user.Phone = req.Phone
+	user.AlternateMobile = req.AlternateMobile
+
+	if err := s.userRepo.Update(ctx, user); err != nil {
+		return nil, err
+	}
+
+	newValue := map[string]interface{}{
+		"first_name":       user.FirstName,
+		"middle_name":      user.MiddleName,
+		"last_name":        user.LastName,
+		"phone":            user.Phone,
+		"alternate_mobile": user.AlternateMobile,
+	}
+
+	changedFields := []string{}
+	for _, f := range []string{"first_name", "middle_name", "last_name", "phone", "alternate_mobile"} {
+		if oldValue[f] != newValue[f] {
+			changedFields = append(changedFields, f)
+		}
+	}
+	description := fmt.Sprintf("User profile updated for user: %s (%s)", user.Username, user.Email)
+	if len(changedFields) > 0 {
+		description = fmt.Sprintf("Updated %s for user: %s (%s)",
+			strings.Join(changedFields, ", "), user.Username, user.Email)
+	}
+
+	userID := user.ID
+	go func() {
+		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+			UserID:      actorID,
+			Action:      "update",
+			Module:      "users",
+			ResourceID:  userID.String(),
+			Description: description,
+			OldValue:    oldValue,
+			NewValue:    newValue,
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		})
+	}()
+
+	response := models.ToUserResponse(user)
 	return &response, nil
 }
 
