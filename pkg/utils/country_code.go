@@ -104,6 +104,23 @@ func NormalizeMobile(mobile, systemCountryCode string) string {
 		return systemCountryCode + local
 	}
 
+	// Not the system country's length: fall back to any other known country whose
+	// national numbers are exactly this long, so one deployment can accept numbers
+	// from every country in knownCountryCodes (e.g. Saudi 9 digits, India 10).
+	// Skipped when the length is ambiguous between countries.
+	match := ""
+	for _, cc := range knownCountryCodes {
+		if cc.LocalLen == len(local) {
+			if match != "" {
+				return trimmed
+			}
+			match = cc.Code
+		}
+	}
+	if match != "" {
+		return "+" + match + local
+	}
+
 	return trimmed
 }
 

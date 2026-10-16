@@ -75,7 +75,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		return nil, fmt.Errorf("at least one recipient (to, cc, or bcc) is required")
 	}
 
-	if channel == "sms" {
+	if channel == "sms" || channel == "whatsapp" {
 		for i, phone := range to {
 			to[i] = pkgUtils.NormalizeMobile(phone, s.cfg.CountryCode)
 		}
