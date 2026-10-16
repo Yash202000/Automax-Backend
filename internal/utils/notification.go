@@ -144,6 +144,10 @@ func SendOTPWithMetaTemplate(ctx context.Context, phone string, otp string) (str
 		return "", errors.New(i18n.Tf(ctx, "whatsapp_config_missing", "OTP_TEMPLATE_ACCESS_TOKEN"))
 	}
 
+	// Meta needs the full international number (digits, country code included) — a
+	// local "055…" is rejected. Normalize here too so every caller is covered.
+	phone = strings.TrimPrefix(pkgUtils.NormalizeMobile(phone, systemCountryCode()), "+")
+
 	// Template payload
 	payload := map[string]interface{}{
 		"messaging_product": "whatsapp",
