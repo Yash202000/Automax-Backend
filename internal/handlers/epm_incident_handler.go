@@ -330,6 +330,36 @@ func epmInsertSuccessResponse(c *fiber.Ctx, description, ticketNumber string) er
 	})
 }
 
+// epmInsertDuplicateResponse sends the 409 for an incidentNo MOMRA has already
+// submitted. TicketNumber is the existing incident's AutoMax ticket number (not
+// MOMRA's incidentNo), or empty when it couldn't be determined.
+func epmInsertDuplicateResponse(c *fiber.Ctx, momraIncidentNo, existingTicketNumber string) error {
+	return c.Status(fiber.StatusConflict).JSON(EPMInsertIncidentResponse{
+		HTTPStatusCode: fiber.StatusConflict,
+		Message:        "Duplicate incident number: " + momraIncidentNo,
+		Result:         false,
+		TicketNumber:   existingTicketNumber,
+	})
+}
+
+// existingMomraTicketNumber returns the AutoMax incident number of the first
+// candidate whose custom_fields.momra_incident_no exactly equals
+// momraIncidentNo. Candidates come from a LIKE match (where "_" and "%" in the
+// MOMRA number act as wildcards), so each is re-checked exactly; "" when none
+// matches or the match has no incident number, rather than a wrong identifier.
+func existingMomraTicketNumber(candidates []models.Incident, momraIncidentNo string) string {
+	for _, incident := range candidates {
+		var custFields map[string]interface{}
+		if err := json.Unmarshal([]byte(incident.CustomFields), &custFields); err != nil {
+			continue
+		}
+		if momraNo, _ := custFields["momra_incident_no"].(string); momraNo == momraIncidentNo && incident.IncidentNumber != "" {
+			return incident.IncidentNumber
+		}
+	}
+	return ""
+}
+
 type EPMIncidentStatusItems struct {
 	RequestID          string      `json:"requestID"`
 	Status             interface{} `json:"status"`
@@ -461,12 +491,16 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 	}
 
 	// check for duplicate momra incident number
-	var duplicateCount int64
-	h.db.WithContext(c.UserContext()).Model(&models.Incident{}).
+	var duplicates []models.Incident
+	if err := h.db.WithContext(c.UserContext()).Model(&models.Incident{}).
+		Select("incident_number", "custom_fields", "created_at").
 		Where("source = ? AND custom_fields LIKE ?", "MOMRA", "%\"momra_incident_no\":\""+req.IncidentNo+"\"%").
-		Count(&duplicateCount)
-	if duplicateCount > 0 {
-		return epmInsertErrorResponse(c, fiber.StatusConflict, "Duplicate incident number: "+req.IncidentNo)
+		Order("created_at ASC").
+		Find(&duplicates).Error; err != nil {
+		return epmInsertErrorResponse(c, fiber.StatusInternalServerError, "Failed to check for duplicate incident number")
+	}
+	if len(duplicates) > 0 {
+		return epmInsertDuplicateResponse(c, req.IncidentNo, existingMomraTicketNumber(duplicates, req.IncidentNo))
 	}
 
 	custFields := map[string]interface{}{
