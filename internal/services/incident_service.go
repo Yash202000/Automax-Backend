@@ -1142,6 +1142,9 @@ func (s *incidentService) ListIncidents(ctx context.Context, filter *models.Inci
 		}
 	}
 
+
+	s.stampCommentAndAttachmentCounts(ctx, incidents, responses)
+
 	clientCode := strings.TrimSpace(s.cfg.ClientCode)
 	if strings.EqualFold(clientCode, constants.CLIENT_CODE.VD2) {
 		s.stampRecurrences(ctx, filter, incidents, responses)
@@ -6523,6 +6526,38 @@ func (s *incidentService) AutoAssignUnassigned(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (s *incidentService) stampCommentAndAttachmentCounts(ctx context.Context, incidents []models.Incident, responses []models.IncidentResponse) {
+	if len(incidents) == 0 {
+		return
+	}
+	ids := make([]uuid.UUID, len(incidents))
+	for i := range incidents {
+		ids[i] = incidents[i].ID
+	}
+	commentCounts, commentErr := s.incidentRepo.GetCommentCounts(ctx, ids)
+	if commentErr != nil {
+		log.Printf("ListIncidents: comment count lookup failed: %v", commentErr)
+	}
+	feedbackCounts, feedbackErr := s.incidentRepo.GetFeedbackCounts(ctx, ids)
+	if feedbackErr != nil {
+		log.Printf("ListIncidents: feedback count lookup failed: %v", feedbackErr)
+	}
+	if commentErr == nil || feedbackErr == nil {
+		for i := range incidents {
+			responses[i].CommentsCount = commentCounts[incidents[i].ID] + feedbackCounts[incidents[i].ID]
+		}
+	}
+	if attachmentCounts, err := s.incidentRepo.GetAttachmentCounts(ctx, ids); err == nil {
+		for i := range incidents {
+			if c, ok := attachmentCounts[incidents[i].ID]; ok {
+				responses[i].AttachmentsCount = c
+			}
+		}
+	} else {
+		log.Printf("ListIncidents: attachment count lookup failed: %v", err)
+	}
 }
 
 // stampRecurrences flags listed incidents that have an earlier same-classification

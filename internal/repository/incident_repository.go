@@ -60,6 +60,7 @@ type IncidentRepository interface {
 	ListComments(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentComment, error)
 	UpdateComment(ctx context.Context, comment *models.IncidentComment) error
 	DeleteComment(ctx context.Context, id uuid.UUID) error
+	GetCommentCounts(ctx context.Context, incidentIDs []uuid.UUID) (map[uuid.UUID]int, error)
 
 	// Attachments
 	CreateAttachment(ctx context.Context, attachment *models.IncidentAttachment) error
@@ -67,6 +68,7 @@ type IncidentRepository interface {
 	ListAttachments(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentAttachment, error)
 	DeleteAttachment(ctx context.Context, id uuid.UUID) error
 	LinkAttachmentsToTransition(ctx context.Context, attachmentIDs []uuid.UUID, transitionHistoryID uuid.UUID) error
+	GetAttachmentCounts(ctx context.Context, incidentIDs []uuid.UUID) (map[uuid.UUID]int, error)
 
 	// Assignment
 	AssignIncident(ctx context.Context, incidentID, assigneeID uuid.UUID) error
@@ -103,6 +105,7 @@ type IncidentRepository interface {
 	ListAllFeedback(ctx context.Context) ([]models.IncidentFeedback, error)
 	LinkFeedbackToTransition(ctx context.Context, feedbackID uuid.UUID, transitionHistoryID uuid.UUID) error
 	HasWhatsAppFeedback(ctx context.Context, incidentID uuid.UUID) (bool, error)
+	GetFeedbackCounts(ctx context.Context, incidentIDs []uuid.UUID) (map[uuid.UUID]int, error)
 
 	// Notifications
 	CreateNotification(ctx context.Context, notification *models.NotificationLog) error
@@ -777,6 +780,31 @@ func (r *incidentRepository) ListComments(ctx context.Context, incidentID uuid.U
 	return comments, err
 }
 
+func (r *incidentRepository) GetCommentCounts(ctx context.Context, incidentIDs []uuid.UUID) (map[uuid.UUID]int, error) {
+	counts := make(map[uuid.UUID]int, len(incidentIDs))
+	if len(incidentIDs) == 0 {
+		return counts, nil
+	}
+	type row struct {
+		IncidentID uuid.UUID `gorm:"column:incident_id"`
+		Count      int       `gorm:"column:count"`
+	}
+	var rows []row
+	if err := r.db.WithContext(ctx).
+		Model(&models.IncidentComment{}).
+		Select("incident_id, COUNT(*) AS count").
+		Where("incident_id IN ?", incidentIDs).
+		Where("NULLIF(BTRIM(content), '') IS NOT NULL").
+		Group("incident_id").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		counts[row.IncidentID] = row.Count
+	}
+	return counts, nil
+}
+
 func (r *incidentRepository) UpdateComment(ctx context.Context, comment *models.IncidentComment) error {
 	return r.db.WithContext(ctx).Save(comment).Error
 }
@@ -823,6 +851,30 @@ func (r *incidentRepository) LinkAttachmentsToTransition(ctx context.Context, at
 		Model(&models.IncidentAttachment{}).
 		Where("id IN ?", attachmentIDs).
 		Update("transition_history_id", transitionHistoryID).Error
+}
+
+func (r *incidentRepository) GetAttachmentCounts(ctx context.Context, incidentIDs []uuid.UUID) (map[uuid.UUID]int, error) {
+	counts := make(map[uuid.UUID]int, len(incidentIDs))
+	if len(incidentIDs) == 0 {
+		return counts, nil
+	}
+	type row struct {
+		IncidentID uuid.UUID `gorm:"column:incident_id"`
+		Count      int       `gorm:"column:count"`
+	}
+	var rows []row
+	if err := r.db.WithContext(ctx).
+		Model(&models.IncidentAttachment{}).
+		Select("incident_id, COUNT(*) AS count").
+		Where("incident_id IN ?", incidentIDs).
+		Group("incident_id").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		counts[row.IncidentID] = row.Count
+	}
+	return counts, nil
 }
 
 // Assignment
@@ -1878,6 +1930,31 @@ func (r *incidentRepository) ListAllFeedback(ctx context.Context) ([]models.Inci
 		Order("created_at DESC").
 		Find(&feedback).Error
 	return feedback, err
+}
+
+func (r *incidentRepository) GetFeedbackCounts(ctx context.Context, incidentIDs []uuid.UUID) (map[uuid.UUID]int, error) {
+	counts := make(map[uuid.UUID]int, len(incidentIDs))
+	if len(incidentIDs) == 0 {
+		return counts, nil
+	}
+	type row struct {
+		IncidentID uuid.UUID `gorm:"column:incident_id"`
+		Count      int       `gorm:"column:count"`
+	}
+	var rows []row
+	if err := r.db.WithContext(ctx).
+		Model(&models.IncidentFeedback{}).
+		Select("incident_id, COUNT(*) AS count").
+		Where("incident_id IN ?", incidentIDs).
+		Where("NULLIF(BTRIM(comment), '') IS NOT NULL").
+		Group("incident_id").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		counts[row.IncidentID] = row.Count
+	}
+	return counts, nil
 }
 
 func (r *incidentRepository) LinkFeedbackToTransition(ctx context.Context, feedbackID uuid.UUID, transitionHistoryID uuid.UUID) error {
