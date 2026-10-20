@@ -4285,7 +4285,7 @@ func (r *reportRepository) ExecuteClosurePerformanceQuery(ctx context.Context, f
     				BOOL_OR(LOWER(t.code) = 'missing_incident_info') AS missing_info
 				FROM incident_transition_histories h
 				JOIN workflow_transitions t ON t.id = h.transition_id
-				WHERE t.code IN ('reopen', 'reopen1','not_belong', 'not_belong_1','missing_incident_info')
+				WHERE LOWER(t.code) IN ('reopen', 'reopen1','not_belong', 'not_belong_1','missing_incident_info')
 				GROUP BY h.incident_id
 			) flags ON flags.incident_id = incidents.id`).
 			Where("incidents.deleted_at IS NULL")
