@@ -536,6 +536,8 @@ var performanceFilterFields = map[string]string{
 	"sla_breached":        "incidents.sla_breached",
 	"current_state_id":    "incidents.current_state_id",
 	"state_name":          "ws.name",
+	"state_id":            "ws.id",
+	"state_code":          "ws.code",
 	"created_at":          "incidents.created_at",
 	"incident_created_at": "incidents.created_at",
 }
@@ -4278,12 +4280,11 @@ func (r *reportRepository) ExecuteClosurePerformanceQuery(ctx context.Context, f
 			// One row per incident that has a flagged transition (scans the history once).
 			Joins(`LEFT JOIN (
 				SELECT h.incident_id,
-					BOOL_OR(t.is_reopen) AS reopened,
-					BOOL_OR(t.is_not_belong) AS not_belong,
-					BOOL_OR(t.is_missing_info) AS missing_info
+					BOOL_OR(LOWER(t.code) IN ('reopen', 'reopen1')) AS reopened,
+    				BOOL_OR(LOWER(t.code) IN ('not_belong', 'not_belong_1')) AS not_belong,
+    				BOOL_OR(LOWER(t.code) = 'missing_incident_info') AS missing_info
 				FROM incident_transition_histories h
 				JOIN workflow_transitions t ON t.id = h.transition_id
-				WHERE t.is_reopen OR t.is_not_belong OR t.is_missing_info
 				GROUP BY h.incident_id
 			) flags ON flags.incident_id = incidents.id`).
 			Where("incidents.deleted_at IS NULL")
