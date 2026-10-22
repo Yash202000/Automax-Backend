@@ -840,7 +840,16 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 
 	// Create initial revision to log incident creation
 	description := fmt.Sprintf("%s %s created", recordType, incidentNumber)
-	descriptionAr := fmt.Sprintf("تم إنشاء %s %s", recordType, incidentNumber)
+	recordTypeAr := map[string]string{
+		"incident":  "حادث",
+		"request":   "طلب",
+		"complaint": "شكوى",
+		"query":     "استعلام",
+	}[recordType]
+	if recordTypeAr == "" {
+		recordTypeAr = recordType
+	}
+	descriptionAr := fmt.Sprintf("تم إنشاء %s %s", recordTypeAr, incidentNumber)
 	_ = s.CreateRevision(ctx, incident.ID, models.RevisionActionCreated, description, descriptionAr, nil, reporterID)
 	if pendingUserUpdates != nil {
 		if err := s.userRepo.UpdateProfile(ctx, pendingUserUpdates); err != nil {
