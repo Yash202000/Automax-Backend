@@ -338,8 +338,9 @@ type IncidentRevision struct {
 	Incident       *Incident `gorm:"foreignKey:IncidentID" json:"incident,omitempty"`
 	RevisionNumber int       `gorm:"not null" json:"revision_number"`
 
-	ActionType        IncidentRevisionActionType `gorm:"size:50;not null;index" json:"action_type"`
-	ActionDescription string                     `gorm:"type:text;not null" json:"action_description"`
+	ActionType          IncidentRevisionActionType `gorm:"size:50;not null;index" json:"action_type"`
+	ActionDescription   string                     `gorm:"type:text;not null" json:"action_description"`
+	ActionDescriptionAr string                     `gorm:"type:text" json:"action_description_ar"`
 
 	// JSON array of field changes
 	Changes string `gorm:"type:text" json:"changes"`
@@ -1306,6 +1307,7 @@ type IncidentRevisionResponse struct {
 	RevisionNumber      int                         `json:"revision_number"`
 	ActionType          IncidentRevisionActionType  `json:"action_type"`
 	ActionDescription   string                      `json:"action_description"`
+	ActionDescriptionAr string                      `json:"action_description_ar"`
 	Changes             []IncidentFieldChange       `json:"changes"`
 	PerformedByID       uuid.UUID                   `json:"performed_by_id"`
 	PerformedBy         *UserResponse               `json:"performed_by,omitempty"`
@@ -1337,6 +1339,7 @@ func ToIncidentRevisionResponse(r *IncidentRevision) IncidentRevisionResponse {
 		RevisionNumber:      r.RevisionNumber,
 		ActionType:          r.ActionType,
 		ActionDescription:   r.ActionDescription,
+		ActionDescriptionAr: r.ActionDescriptionAr,
 		Changes:             changes,
 		PerformedByID:       r.PerformedByID,
 		PerformedByRoles:    roles,

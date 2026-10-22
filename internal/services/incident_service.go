@@ -105,7 +105,7 @@ type IncidentService interface {
 
 	// Revisions
 	ListRevisions(ctx context.Context, incidentID uuid.UUID, filter *models.IncidentRevisionFilter) ([]models.IncidentRevisionResponse, int64, error)
-	CreateRevision(ctx context.Context, incidentID uuid.UUID, actionType models.IncidentRevisionActionType, description string, changes []models.IncidentFieldChange, userID uuid.UUID) error
+	CreateRevision(ctx context.Context, incidentID uuid.UUID, actionType models.IncidentRevisionActionType, description string, descriptionAr string, changes []models.IncidentFieldChange, userID uuid.UUID) error
 	// SetUserService wires in the UserService (called post-construction to avoid circular deps).
 	SetUserService(us UserService)
 	// SetFCMService wires in the FCMService (called post-construction).
@@ -840,7 +840,8 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 
 	// Create initial revision to log incident creation
 	description := fmt.Sprintf("%s %s created", recordType, incidentNumber)
-	_ = s.CreateRevision(ctx, incident.ID, models.RevisionActionCreated, description, nil, reporterID)
+	descriptionAr := fmt.Sprintf("تم إنشاء %s %s", recordType, incidentNumber)
+	_ = s.CreateRevision(ctx, incident.ID, models.RevisionActionCreated, description, descriptionAr, nil, reporterID)
 	if pendingUserUpdates != nil {
 		if err := s.userRepo.UpdateProfile(ctx, pendingUserUpdates); err != nil {
 			log.Printf("[IncidentService] failed to update reporter user %v after incident create: %v", pendingUserUpdates["id"], err)
@@ -942,7 +943,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 
 		// Log revision so agents can see when the initial SMS was sent.
 		_ = s.CreateRevision(ctx, incident.ID, models.RevisionActionIVRSmsSent,
-			"IVR SMS sent to citizen on incident creation", nil, reporterID)
+			"IVR SMS sent to citizen on incident creation", "تم إرسال رسالة SMS صوتية إلى المواطن عند إنشاء الحادث", nil, reporterID)
 	}
 
 	// Send template-based email/SMS notifications for the initial state (if configured)
@@ -1141,7 +1142,6 @@ func (s *incidentService) ListIncidents(ctx context.Context, filter *models.Inci
 			responses[i].MergedIncidentsCount = len(mergedIncidents)
 		}
 	}
-
 
 	s.stampCommentAndAttachmentCounts(ctx, incidents, responses)
 
@@ -1801,13 +1801,15 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	// Create revision if there were changes
 	if len(changes) > 0 {
 		description := "Fields updated"
+		descriptionAr := "تم تحديث الحقول"
 		if len(descriptions) > 0 {
 			description = descriptions[0]
 			if len(descriptions) > 1 {
 				description = fmt.Sprintf("%s and %d more changes", description, len(descriptions)-1)
+				descriptionAr = fmt.Sprintf("تم تحديث الحقول و %d تغييرات أخرى", len(descriptions)-1)
 			}
 		}
-		_ = s.CreateRevision(ctx, id, models.RevisionActionFieldChange, description, changes, userID)
+		_ = s.CreateRevision(ctx, id, models.RevisionActionFieldChange, description, descriptionAr, changes, userID)
 	}
 
 	// Commit transaction
@@ -1895,7 +1897,7 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 			log.Printf("[IVR] no active link found to mark as submitted for incident %s", id)
 		}
 		_ = s.CreateRevision(ctx, id, models.RevisionActionIVRSmsSubmitted,
-			"Citizen submitted additional information via IVR SMS link", changes, userID)
+			"Citizen submitted additional information via IVR SMS link", "قدم المواطن معلومات إضافية عبر رابط الرسائل القصيرة الصوتية", changes, userID)
 	}
 
 	// Send in-app notification and revision for IVR updates from EPM940.
@@ -2127,7 +2129,8 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 			},
 		}
 		description := fmt.Sprintf("Incident linked to existing request %s", existingRequest.IncidentNumber)
-		_ = s.CreateRevision(ctx, incidentID, models.RevisionActionFieldChange, description, changes, userID)
+		descriptionAr := fmt.Sprintf("تم ربط الحادث بالطلب الحالي %s", existingRequest.IncidentNumber)
+		_ = s.CreateRevision(ctx, incidentID, models.RevisionActionFieldChange, description, descriptionAr, changes, userID)
 
 		// Create revision for existing request
 		changes = []models.IncidentFieldChange{
@@ -2139,7 +2142,8 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 			},
 		}
 		description = fmt.Sprintf("Incident %s converted and linked to this request", sourceIncidentNumber)
-		_ = s.CreateRevision(ctx, existingRequest.ID, models.RevisionActionFieldChange, description, changes, userID)
+		descriptionAr = fmt.Sprintf("تم تحويل الحادث %s وربطه بهذا الطلب", sourceIncidentNumber)
+		_ = s.CreateRevision(ctx, existingRequest.ID, models.RevisionActionFieldChange, description, descriptionAr, changes, userID)
 
 		// Create comment on existing request with feedback
 		if req.Feedback != nil && req.Feedback.Comment != "" {
@@ -2410,7 +2414,8 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		},
 	}
 	description = fmt.Sprintf("Incident converted to request %s", requestNumber)
-	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionFieldChange, description, changes, userID)
+	descriptionAr := fmt.Sprintf("تم تحويل الحادث إلى طلب %s", requestNumber)
+	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionFieldChange, description, descriptionAr, changes, userID)
 
 	// Create revision for new request
 	changes = []models.IncidentFieldChange{
@@ -2422,7 +2427,8 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		},
 	}
 	description = fmt.Sprintf("Request created from incident %s", sourceIncidentNumber)
-	_ = s.CreateRevision(ctx, newRequest.ID, models.RevisionActionCreated, description, changes, userID)
+	descriptionAr = fmt.Sprintf("تم إنشاء طلب من الحادث %s", sourceIncidentNumber)
+	_ = s.CreateRevision(ctx, newRequest.ID, models.RevisionActionCreated, description, descriptionAr, changes, userID)
 
 	// Create comment on new request with feedback
 	if req.Feedback != nil && req.Feedback.Comment != "" {
@@ -3033,7 +3039,8 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 			},
 		}
 		desc := fmt.Sprintf("Incident converted to request %s (bulk conversion)", requestNumber)
-		_ = s.CreateRevision(ctx, sourceIncident.ID, models.RevisionActionFieldChange, desc, changes, userID)
+		descAr := fmt.Sprintf("تم تحويل الحادث إلى طلب %s (تحويل جماعي)", requestNumber)
+		_ = s.CreateRevision(ctx, sourceIncident.ID, models.RevisionActionFieldChange, desc, descAr, changes, userID)
 
 		// Apply feedback if provided for this incident
 		feedback, hasFeedback := feedbackMap[sourceIncident.ID.String()]
@@ -3069,7 +3076,8 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 				}
 			}
 			feedbackDesc := fmt.Sprintf("Feedback provided during conversion to request %s", requestNumber)
-			_ = s.CreateRevision(ctx, sourceIncident.ID, models.RevisionActionFieldChange, feedbackDesc, feedbackChanges, userID)
+			feedbackDescAr := fmt.Sprintf("تم تقديم ملاحظات أثناء التحويل إلى طلب %s", requestNumber)
+			_ = s.CreateRevision(ctx, sourceIncident.ID, models.RevisionActionFieldChange, feedbackDesc, feedbackDescAr, feedbackChanges, userID)
 		}
 
 		// Send SMS to citizen for each converted incident
@@ -3100,12 +3108,15 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 		},
 	}
 	var desc string
+	var descAr string
 	if existingRequestID != nil {
 		desc = fmt.Sprintf("%d incidents added to existing request via bulk conversion", len(validIncidents))
+		descAr = fmt.Sprintf("تمت إضافة %d حوادث إلى الطلب الحالي عبر التحويل الجماعي", len(validIncidents))
 	} else {
 		desc = fmt.Sprintf("Request created from %d incidents via bulk conversion", len(validIncidents))
+		descAr = fmt.Sprintf("تم إنشاء طلب من %d حوادث عبر التحويل الجماعي", len(validIncidents))
 	}
-	_ = s.CreateRevision(ctx, newRequest.ID, models.RevisionActionCreated, desc, changes, userID)
+	_ = s.CreateRevision(ctx, newRequest.ID, models.RevisionActionCreated, desc, descAr, changes, userID)
 
 	// Create comment on request with feedback if provided
 	if req.Feedback != nil && req.Feedback.Comment != "" {
@@ -3858,6 +3869,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		RevisionNumber:        revNum,
 		ActionType:            models.RevisionActionStatusChanged,
 		ActionDescription:     revDescription,
+		ActionDescriptionAr:   fmt.Sprintf("تم تغيير الحالة من %s إلى %s", transition.FromState.Name, newState.Name),
 		Changes:               string(changesBytes),
 		PerformedByID:         userID,
 		TransitionHistoryID:   &history.ID,
@@ -3883,6 +3895,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			RevisionNumber:        pcRevNum,
 			ActionType:            models.RevisionActionStatusChanged,
 			ActionDescription:     pcDescription,
+			ActionDescriptionAr:   fmt.Sprintf("تم تغيير الحالة من %s إلى %s — مدة الإغلاق الجزئي: %s", transition.FromState.Name, newState.Name, req.ReadyToCloseDuration),
 			Changes:               string(pcChangesBytes),
 			PerformedByID:         userID,
 			SyncedIncidentNumbers: syncedNumbersJSON,
@@ -4485,7 +4498,8 @@ func (s *incidentService) AddComment(ctx context.Context, incidentID uuid.UUID, 
 		authorName = created.Author.Email
 	}
 	description := fmt.Sprintf("Comment added by %s - %s", authorName, truncateString(req.Content, 50))
-	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionCommentAdded, description, nil, authorID)
+	descriptionAr := fmt.Sprintf("تم إضافة تعليق بواسطة %s - %s", authorName, truncateString(req.Content, 50))
+	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionCommentAdded, description, descriptionAr, nil, authorID)
 
 	resp := models.ToIncidentCommentResponse(created)
 	return &resp, nil
@@ -4636,7 +4650,8 @@ func (s *incidentService) UpdateComment(ctx context.Context, commentID uuid.UUID
 		},
 	}
 	description := fmt.Sprintf("Comment modified - %s", truncateString(req.Content, 50))
-	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionCommentModified, description, changes, userID)
+	descriptionAr := fmt.Sprintf("تم تعديل التعليق - %s", truncateString(req.Content, 50))
+	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionCommentModified, description, descriptionAr, changes, userID)
 
 	resp := models.ToIncidentCommentResponse(comment)
 	return &resp, nil
@@ -4662,7 +4677,8 @@ func (s *incidentService) DeleteComment(ctx context.Context, commentID uuid.UUID
 
 	// Create revision for comment deleted
 	description := fmt.Sprintf("Comment deleted - %s", truncateString(oldContent, 50))
-	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionCommentDeleted, description, nil, userID)
+	descriptionAr := fmt.Sprintf("تم حذف التعليق - %s", truncateString(oldContent, 50))
+	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionCommentDeleted, description, descriptionAr, nil, userID)
 
 	return nil
 }
@@ -4699,7 +4715,8 @@ func (s *incidentService) AddAttachment(ctx context.Context, incidentID uuid.UUI
 
 	// Create revision for attachment added
 	description := fmt.Sprintf("Attachment added - %s", attachment.FileName)
-	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionAttachmentAdded, description, nil, attachment.UploadedByID)
+	descriptionAr := fmt.Sprintf("تم إضافة مرفق - %s", attachment.FileName)
+	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionAttachmentAdded, description, descriptionAr, nil, attachment.UploadedByID)
 
 	// Sync attachment to merged child incidents if this is a master incident
 	if s.incidentMergeRepo != nil {
@@ -4760,8 +4777,13 @@ func (s *incidentService) syncAttachmentToMergedIncidents(ctx context.Context, m
 			masterIncident.IncidentNumber,
 			masterAttachment.FileName,
 		)
+		descriptionAr := fmt.Sprintf(
+			"تم إضافة مرفق إلى الحادث الرئيسي %s - %s",
+			masterIncident.IncidentNumber,
+			masterAttachment.FileName,
+		)
 
-		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionAttachmentAdded, description, nil, uploadedBy); revErr != nil {
+		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionAttachmentAdded, description, descriptionAr, nil, uploadedBy); revErr != nil {
 			fmt.Printf("[DEBUG] Failed to create revision for child %s: %v\n", merged.IncidentNumber, revErr)
 		}
 	}
@@ -4884,7 +4906,8 @@ func (s *incidentService) DeleteAttachment(ctx context.Context, attachmentID uui
 
 	// Create revision for attachment removed
 	description := fmt.Sprintf("Attachment removed - %s", fileName)
-	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionAttachmentRemoved, description, nil, userID)
+	descriptionAr := fmt.Sprintf("تم حذف المرفق - %s", fileName)
+	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionAttachmentRemoved, description, descriptionAr, nil, userID)
 
 	return nil
 }
@@ -4938,7 +4961,8 @@ func (s *incidentService) AssignIncident(ctx context.Context, incidentID, assign
 		},
 	}
 	description := fmt.Sprintf("AssignedTo changed from %s to %s", oldAssigneeName, newAssigneeName)
-	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionAssigneeChanged, description, changes, userID)
+	descriptionAr := fmt.Sprintf("تم تغيير المسند إليه من %s إلى %s", oldAssigneeName, newAssigneeName)
+	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionAssigneeChanged, description, descriptionAr, changes, userID)
 
 	// Sync assignee change to merged child incidents
 	if s.incidentMergeRepo != nil {
@@ -5051,8 +5075,13 @@ func (s *incidentService) syncAssigneeToMergedIncidents(ctx context.Context, mas
 			masterIncident.IncidentNumber,
 			newAssigneeName,
 		)
+		descriptionAr := fmt.Sprintf(
+			"تم تغيير مسند الحادث الرئيسي %s إلى %s",
+			masterIncident.IncidentNumber,
+			newAssigneeName,
+		)
 
-		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionAssigneeChanged, description, changes, userID); revErr != nil {
+		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionAssigneeChanged, description, descriptionAr, changes, userID); revErr != nil {
 			fmt.Printf("[DEBUG] Failed to create revision for child %s: %v\n", merged.IncidentNumber, revErr)
 		}
 	}
@@ -5103,7 +5132,11 @@ func (s *incidentService) SyncLocationToMergedIncidents(ctx context.Context, mas
 			"Location changed to '%s' (synced from master incident %s)",
 			newLocationName, masterIncident.IncidentNumber,
 		)
-		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionFieldChange, description, changes, userID); revErr != nil {
+		descriptionAr := fmt.Sprintf(
+			"تم تغيير الموقع إلى '%s' (مزامنة من الحادث الرئيسي %s)",
+			newLocationName, masterIncident.IncidentNumber,
+		)
+		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionFieldChange, description, descriptionAr, changes, userID); revErr != nil {
 			log.Printf("[SyncLocation] Failed to create revision for child %s: %v", merged.IncidentNumber, revErr)
 		}
 	}
@@ -5363,8 +5396,12 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 			"Automatically closed due to master incident %s being closed",
 			masterIncident.IncidentNumber,
 		)
+		descriptionAr := fmt.Sprintf(
+			"تم الإغلاق تلقائيًا نظرًا لأن الحادث الرئيسي %s مغلق",
+			masterIncident.IncidentNumber,
+		)
 
-		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionStatusChanged, description, changes, userID); revErr != nil {
+		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionStatusChanged, description, descriptionAr, changes, userID); revErr != nil {
 			fmt.Printf("[DEBUG] Failed to create revision: %v\n", revErr)
 		}
 	}
@@ -5522,8 +5559,14 @@ func (s *incidentService) syncTransitionToMergedIncidents(ctx context.Context, m
 			oldStateName,
 			newStateName,
 		)
+		descriptionAr := fmt.Sprintf(
+			"انتقل الحادث الرئيسي %s من %s إلى %s",
+			masterIncident.IncidentNumber,
+			oldStateName,
+			newStateName,
+		)
 
-		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionStatusChanged, description, changes, userID); revErr != nil {
+		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionStatusChanged, description, descriptionAr, changes, userID); revErr != nil {
 			fmt.Printf("[DEBUG] Failed to create revision for child %s: %v\n", merged.IncidentNumber, revErr)
 		}
 
@@ -5545,7 +5588,7 @@ func (s *incidentService) syncTransitionToMergedIncidents(ctx context.Context, m
 	return nil
 }
 
-func (s *incidentService) CreateRevision(ctx context.Context, incidentID uuid.UUID, actionType models.IncidentRevisionActionType, description string, changes []models.IncidentFieldChange, userID uuid.UUID) error {
+func (s *incidentService) CreateRevision(ctx context.Context, incidentID uuid.UUID, actionType models.IncidentRevisionActionType, description string, descriptionAr string, changes []models.IncidentFieldChange, userID uuid.UUID) error {
 	// Get the next revision number
 	revNum, err := s.incidentRepo.GetNextRevisionNumber(ctx, incidentID)
 	if err != nil {
@@ -5563,13 +5606,14 @@ func (s *incidentService) CreateRevision(ctx context.Context, incidentID uuid.UU
 	}
 
 	revision := &models.IncidentRevision{
-		IncidentID:        incidentID,
-		RevisionNumber:    revNum,
-		ActionType:        actionType,
-		ActionDescription: description,
-		Changes:           changesJSON,
-		PerformedByID:     userID,
-		CreatedAt:         time.Now(),
+		IncidentID:          incidentID,
+		RevisionNumber:      revNum,
+		ActionType:          actionType,
+		ActionDescription:   description,
+		ActionDescriptionAr: descriptionAr,
+		Changes:             changesJSON,
+		PerformedByID:       userID,
+		CreatedAt:           time.Now(),
 	}
 
 	return s.incidentRepo.CreateRevision(ctx, revision)
@@ -5828,7 +5872,8 @@ func (s *incidentService) CreateComplaint(ctx context.Context, req *models.Creat
 
 	// Create initial revision
 	description := fmt.Sprintf("Complaint %s created", complaintNumber)
-	_ = s.CreateRevision(ctx, complaint.ID, models.RevisionActionCreated, description, nil, creatorID)
+	descriptionAr := fmt.Sprintf("تم إنشاء الشكوى %s", complaintNumber)
+	_ = s.CreateRevision(ctx, complaint.ID, models.RevisionActionCreated, description, descriptionAr, nil, creatorID)
 
 	resp := models.ToIncidentResponse(created)
 	return &resp, nil
@@ -6043,7 +6088,8 @@ func (s *incidentService) CreateQuery(ctx context.Context, req *models.CreateQue
 
 	// Create initial revision
 	description := fmt.Sprintf("Query %s created", queryNumber)
-	_ = s.CreateRevision(ctx, query.ID, models.RevisionActionCreated, description, nil, creatorID)
+	descriptionAr := fmt.Sprintf("تم إنشاء الاستعلام %s", queryNumber)
+	_ = s.CreateRevision(ctx, query.ID, models.RevisionActionCreated, description, descriptionAr, nil, creatorID)
 
 	resp := models.ToIncidentResponse(created)
 	return &resp, nil

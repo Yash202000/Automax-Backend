@@ -386,12 +386,13 @@ func (s *incidentMergeService) MergeIncidents(ctx context.Context, req *models.I
 	}
 
 	revision := &models.IncidentRevision{
-		IncidentID:        masterID,
-		RevisionNumber:    0,
-		ActionType:        models.RevisionActionStatusChanged,
-		ActionDescription: fmt.Sprintf("%d ticket(s) merged into this master ticket: %s", len(incidentIDs)-1, strings.Join(relatedNumbers, ", ")),
-		Changes:           marshalJSON(changes),
-		PerformedByID:     userID,
+		IncidentID:          masterID,
+		RevisionNumber:      0,
+		ActionType:          models.RevisionActionStatusChanged,
+		ActionDescription:   fmt.Sprintf("%d ticket(s) merged into this master ticket: %s", len(incidentIDs)-1, strings.Join(relatedNumbers, ", ")),
+		ActionDescriptionAr: fmt.Sprintf("تم دمج %d تذكرة في هذه التذكرة الرئيسية: %s", len(incidentIDs)-1, strings.Join(relatedNumbers, ", ")),
+		Changes:             marshalJSON(changes),
+		PerformedByID:       userID,
 	}
 
 	nextRevNum, _ := txIncidentRepo.GetNextRevisionNumber(ctx, masterID)
@@ -411,12 +412,13 @@ func (s *incidentMergeService) MergeIncidents(ctx context.Context, req *models.I
 			}
 
 			childRevision := &models.IncidentRevision{
-				IncidentID:        id,
-				RevisionNumber:    0,
-				ActionType:        models.RevisionActionStatusChanged,
-				ActionDescription: fmt.Sprintf("This ticket is merged into the Master ticket %s", masterIncidentNumber),
-				Changes:           marshalJSON(childChanges),
-				PerformedByID:     userID,
+				IncidentID:          id,
+				RevisionNumber:      0,
+				ActionType:          models.RevisionActionStatusChanged,
+				ActionDescription:   fmt.Sprintf("This ticket is merged into the Master ticket %s", masterIncidentNumber),
+				ActionDescriptionAr: fmt.Sprintf("تم دمج هذه التذكرة في التذكرة الرئيسية %s", masterIncidentNumber),
+				Changes:             marshalJSON(childChanges),
+				PerformedByID:       userID,
 			}
 
 			childRevNum, _ := txIncidentRepo.GetNextRevisionNumber(ctx, id)
@@ -524,12 +526,13 @@ func (s *incidentMergeService) UnmergeIncident(ctx context.Context, req *models.
 	}
 
 	revision := &models.IncidentRevision{
-		IncidentID:        incidentID,
-		RevisionNumber:    0,
-		ActionType:        models.RevisionActionStatusChanged,
-		ActionDescription: "Incident unmerged from master",
-		Changes:           marshalJSON(changes),
-		PerformedByID:     userID,
+		IncidentID:          incidentID,
+		RevisionNumber:      0,
+		ActionType:          models.RevisionActionStatusChanged,
+		ActionDescription:   "Incident unmerged from master",
+		ActionDescriptionAr: "تم إلغاء دمج الحادث من الرئيسي",
+		Changes:             marshalJSON(changes),
+		PerformedByID:       userID,
 	}
 
 	nextRevNum, _ := txIncidentRepo.GetNextRevisionNumber(ctx, incidentID)
@@ -642,12 +645,13 @@ func (s *incidentMergeService) BulkUnmergeIncidents(ctx context.Context, req *mo
 		}
 
 		revision := &models.IncidentRevision{
-			IncidentID:        incidentID,
-			RevisionNumber:    0,
-			ActionType:        models.RevisionActionStatusChanged,
-			ActionDescription: "Incident unmerged from master (bulk)",
-			Changes:           marshalJSON(changes),
-			PerformedByID:     userID,
+			IncidentID:          incidentID,
+			RevisionNumber:      0,
+			ActionType:          models.RevisionActionStatusChanged,
+			ActionDescription:   "Incident unmerged from master (bulk)",
+			ActionDescriptionAr: "تم إلغاء دمج الحادث من الرئيسي (مجموع)",
+			Changes:             marshalJSON(changes),
+			PerformedByID:       userID,
 		}
 
 		nextRevNum, _ := txIncidentRepo.GetNextRevisionNumber(ctx, incidentID)
