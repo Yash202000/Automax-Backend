@@ -649,7 +649,7 @@ func (s *incidentMergeService) BulkUnmergeIncidents(ctx context.Context, req *mo
 			RevisionNumber:      0,
 			ActionType:          models.RevisionActionStatusChanged,
 			ActionDescription:   "Incident unmerged from master (bulk)",
-			ActionDescriptionAr: "تم إلغاء دمج الحادث من الرئيسي (مجموع)",
+			ActionDescriptionAr: "تم إلغاء دمج الحادث من الرئيسي (جماعي)",
 			Changes:             marshalJSON(changes),
 			PerformedByID:       userID,
 		}
