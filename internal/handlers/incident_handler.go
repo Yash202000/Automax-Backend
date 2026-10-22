@@ -2461,6 +2461,7 @@ func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
 		_ = h.service.CreateRevision(c.UserContext(), incidentID,
 			models.RevisionActionIVRSmsSent,
 			fmt.Sprintf("Agent requested additional information from citizen via SMS to %s", mobile),
+			fmt.Sprintf("طلب الوكيل معلومات إضافية من المواطن عبر الرسائل القصيرة إلى %s", mobile),
 			nil, userID)
 	}
 
