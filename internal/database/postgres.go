@@ -344,6 +344,12 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	// Workflow code column was previously VARCHAR(50) which is too short for some existing workflows. Increase to 100 chars. Note: MySQL syntax is ALTER TABLE workflows MODIFY code VARCHAR(100) NOT NULL but Postgres is ALTER TABLE workflows ALTER COLUMN code TYPE VARCHAR(100). GORM's AutoMigrate doesn't handle this edge case, so we run raw SQL. Idempotent: safe to run repeatedly.
 	db.Exec("ALTER TABLE workflows ALTER COLUMN code TYPE VARCHAR(100)")
 	db.Exec("ALTER TABLE reports ALTER COLUMN timestamp_key TYPE VARCHAR(100)")
+
+	// Master data name/name_ar widened from 100 to 500 chars (classifications, locations, departments).
+	for _, t := range []string{"classifications", "locations", "departments"} {
+		db.Exec("ALTER TABLE " + t + " ALTER COLUMN name TYPE VARCHAR(500)")
+		db.Exec("ALTER TABLE " + t + " ALTER COLUMN name_ar TYPE VARCHAR(500)")
+	}
 	db.Exec("ALTER TABLE reports ALTER COLUMN timestamp_key SET DEFAULT 'created_at'")
 
 	// Migrate transition assignment roles (single → many-to-many)

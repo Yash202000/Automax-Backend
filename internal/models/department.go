@@ -10,8 +10,8 @@ import (
 // Department represents a hierarchical department structure
 type Department struct {
 	ID            uuid.UUID    `gorm:"type:uuid;primary_key" json:"id"`
-	Name          string       `gorm:"not null;size:100" json:"name"`
-	NameAr        string       `gorm:"size:100" json:"name_ar"`
+	Name          string       `gorm:"not null;size:500" json:"name"`
+	NameAr        string       `gorm:"size:500" json:"name_ar"`
 	Code          string       `gorm:"size:50;uniqueIndex" json:"code"`
 	Description   string       `gorm:"size:500" json:"description"`
 	DescriptionAr string       `gorm:"size:500" json:"description_ar"`
@@ -46,8 +46,8 @@ func (d *Department) BeforeCreate(tx *gorm.DB) error {
 
 // DepartmentCreateRequest for creating a new department
 type DepartmentCreateRequest struct {
-	Name              string      `json:"name" validate:"required,notblank,name,min=1,max=100"`
-	NameAr            string      `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
+	Name              string      `json:"name" validate:"required,notblank,name,min=1,max=500"`
+	NameAr            string      `json:"name_ar" validate:"omitempty,notblank,name,max=500"`
 	Code              string      `json:"code" validate:"omitempty,min=1,max=50"`
 	Description       string      `json:"description" validate:"max=500"`
 	DescriptionAr     string      `json:"description_ar" validate:"max=500"`
@@ -63,8 +63,8 @@ type DepartmentCreateRequest struct {
 
 // DepartmentUpdateRequest for updating a department
 type DepartmentUpdateRequest struct {
-	Name          string `json:"name" validate:"omitempty,notblank,name,min=1,max=100"`
-	NameAr        string `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
+	Name          string `json:"name" validate:"omitempty,notblank,name,min=1,max=500"`
+	NameAr        string `json:"name_ar" validate:"omitempty,notblank,name,max=500"`
 	Code          string `json:"code" validate:"omitempty,min=1,max=50"`
 	Description   string `json:"description" validate:"max=500"`
 	DescriptionAr string `json:"description_ar" validate:"max=500"`
