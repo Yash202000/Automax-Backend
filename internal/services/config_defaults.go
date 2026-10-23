@@ -36,8 +36,8 @@ func buildConfigDefaults(cfg *config.Config) []configDefault {
 		{"incident.sources", "array", "Allowed incident sources (origin of the record)", incidentSources()},
 		{"incident.max_description_length", "number", "Maximum incident description length", cfg.MaxDescriptionLength},
 
-		{"setting.citizen_attachmnet_enabled", "bool", "Allow citizens to attach files to incidents", true},
-		{"setting.internal_attachmnet_enabled", "bool", "Allow internal users to attach files to incidents", true},
+		{"setting.citizen_attachment_enabled", "bool", "Allow citizens to attach files to incidents", true},
+		{"setting.internal_attachment_enabled", "bool", "Allow internal users to attach files to incidents", true},
 		{"setting.citizen_size_limit_bytes", "number", "Max attachment size in bytes for citizen-submitted incidents", sizeLimit("CitizenAttachmentSizeLimit", cfg.CitizenAttachmentSizeLimit)},
 		{"setting.internal_size_limit_bytes", "number", "Max attachment size in bytes for internally-created incidents", sizeLimit("InternalAttachmentSizeLimit", cfg.InternalAttachmentSizeLimit)},
 		{"setting.citizen_max_files_per_upload", "number", "Max files a citizen can attach in one upload", 5},
