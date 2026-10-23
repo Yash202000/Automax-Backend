@@ -115,6 +115,7 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		&models.ReportTemplate{},
 		// Application Links
 		&models.ApplicationLink{},
+		&models.Config{},
 		// Settings
 		&models.Settings{},
 		// Escalation Policies
@@ -726,6 +727,12 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Update Application Links", Code: "application-links:update", Module: "application-links", Action: "update", ActionAr: "تحديث", Description: "Update application links"},
 		{Name: "Delete Application Links", Code: "application-links:delete", Module: "application-links", Action: "delete", ActionAr: "حذف", Description: "Delete application links"},
 		{Name: "Access Application Links on Dashboard", Code: "application-links:dashboard", Module: "application-links", Action: "dashboard", ActionAr: "لوحة التحكم", Description: "See and launch application links from the dashboard"},
+
+		// Config permissions
+		{Name: "View Configs", Code: "configs:view", Module: "configs", Action: "view", ActionAr: "عرض", Description: "View environment configs"},
+		{Name: "Create Configs", Code: "configs:create", Module: "configs", Action: "create", ActionAr: "إنشاء", Description: "Create environment configs"},
+		{Name: "Update Configs", Code: "configs:update", Module: "configs", Action: "update", ActionAr: "تحديث", Description: "Update environment configs"},
+		{Name: "Delete Configs", Code: "configs:delete", Module: "configs", Action: "delete", ActionAr: "حذف", Description: "Delete environment configs"},
 
 		// Notification permissions
 		{Name: "View Notifications", Code: "notifications:read", Module: "notifications", Action: "read", ActionAr: "قراءة", Description: "View notification logs"},
