@@ -1086,4 +1086,19 @@ var messages = map[string][2]string{
 	"ee_name_required":              {"eeName is required when eeFlag is true", "اسم الجهة الخارجية مطلوب عندما تكون eeFlag صحيحة"},
 	"ee_not_defined":                {"This EE is not defined: %s", "هذه الجهة الخارجية غير معرّفة: %s"},
 	"ee_not_defined_or_inactive":    {"This EE is not defined or not active: %s", "هذه الجهة الخارجية غير معرّفة أو غير نشطة: %s"},
+
+	// ── Configs ───────────────────────────────────────────────────────────────
+	"config_not_found":                {"Config not found", "الإعداد غير موجود"},
+	"config_exists":                   {"A config with this environment, module and name already exists", "يوجد إعداد بنفس البيئة والوحدة والاسم مسبقاً"},
+	"config_version_conflict":         {"This config was modified by someone else; reload and try again", "تم تعديل هذا الإعداد بواسطة مستخدم آخر؛ أعد التحميل وحاول مرة أخرى"},
+	"config_name_required":            {"Config module and name are required", "الوحدة واسم الإعداد مطلوبان"},
+	"config_name_invalid":             {"Module and name may only contain lowercase letters, numbers, underscore and hyphen", "يجب أن تحتوي الوحدة والاسم على أحرف إنجليزية صغيرة وأرقام وشرطة سفلية وشرطة فقط"},
+	"config_value_not_json":           {"Config value must be valid JSON", "يجب أن تكون قيمة الإعداد بصيغة JSON صالحة"},
+	"config_invalid_environment":      {"environment must be one of: dev, staging, prod", "يجب أن تكون البيئة إحدى القيم: dev أو staging أو prod"},
+	"config_invalid_environment_list": {"environment must be one of: dev, staging, prod, all", "يجب أن تكون البيئة إحدى القيم: dev أو staging أو prod أو all"},
+	"config_created":                  {"Config created", "تم إنشاء الإعداد"},
+	"config_updated":                  {"Config updated", "تم تحديث الإعداد"},
+	"config_deleted":                  {"Config deleted", "تم حذف الإعداد"},
+	"config_retrieved":                {"Config retrieved", "تم استرجاع الإعداد"},
+	"configs_retrieved":               {"Configs retrieved", "تم استرجاع الإعدادات"},
 }

@@ -18,6 +18,7 @@ var messages = map[string]map[string]string{
 		"email":        "{0} must be a valid email address",
 		"min":          "{0} must be at least {1} characters",
 		"max":          "{0} must be at most {1} characters",
+		"oneof":        "{0} must be one of: {1}",
 		"uuid":         "{0} must be a valid UUID",
 		"title":        "{0} must be a valid title (letters, numbers, spaces, and basic punctuation only)",
 		"name":         "{0} can only contain letters, numbers, spaces, and basic punctuation (- ' . , & ( ) /)",
@@ -34,6 +35,7 @@ var messages = map[string]map[string]string{
 		"email":        "{0} doit être une adresse e-mail valide",
 		"min":          "{0} doit contenir au moins {1} caractères",
 		"max":          "{0} doit contenir au plus {1} caractères",
+		"oneof":        "{0} doit être l'un des: {1}",
 		"mobile":       "{0} doit être un numéro de mobile valide de 8 à 15 chiffres, avec ou sans indicatif pays (ex. +966559461101 ou 0559461101)",
 	},
 	"ar": {
@@ -46,6 +48,7 @@ var messages = map[string]map[string]string{
 		"email":        "{0} يجب أن يكون بريداً إلكترونياً صالحاً",
 		"min":          "{0} يجب أن يحتوي على {1} أحرف على الأقل",
 		"max":          "{0} يجب أن لا يتجاوز {1} أحرف",
+		"oneof":        "{0} يجب أن يكون أحد: {1}",
 		"uuid":         "{0} يجب أن يكون UUID صالحاً",
 		"title":        "{0} يجب أن يكون عنواناً صالحاً (أحرف وأرقام ومسافات وعلامات ترقيم أساسية فقط)",
 		"name":         "{0} يمكن أن يحتوي على أحرف وأرقام ومسافات وعلامات ترقيم أساسية فقط (- ' . , & ( ) /)",
@@ -87,7 +90,7 @@ func registerCustomValidators(validate *validator.Validate, trans ut.Translator,
 	registerCustom("mobile", validateMobile, false)
 
 	// Override default validator translations
-	for _, tag := range []string{"required", "email", "min", "max"} {
+	for _, tag := range []string{"required", "email", "min", "max", "oneof"} {
 		msg := msgs[tag]
 		validate.RegisterTranslation(tag, trans,
 			func(ut ut.Translator) error {
