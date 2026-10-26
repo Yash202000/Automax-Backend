@@ -974,7 +974,7 @@ func main() {
 	appLinks.Post("/:id/upload-image", authMiddleware.RequirePermission("application-links:update"), applicationLinkHandler.UploadImage)
 	appLinks.Delete("/:id/image", authMiddleware.RequirePermission("application-links:update"), applicationLinkHandler.RemoveImage)
 
-	// Config routes (admin). The static /by-name route is registered before /:id.
+	// Config routes (admin).
 	configs := admin.Group("/configs")
 	configs.Post("/", authMiddleware.RequirePermission("configs:create"), configHandler.Create)
 	configs.Get("/", authMiddleware.RequirePermission("configs:view"), configHandler.List)
