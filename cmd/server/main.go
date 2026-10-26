@@ -87,6 +87,7 @@ func main() {
 	lookupRepo := repository.NewLookupRepository(db)
 	callLogRepo := repository.NewCallLogRepository(db)
 	applicationLinkRepo := repository.NewApplicationLinkRepository(db)
+	configRepo := repository.NewConfigRepository(db)
 	settingsRepo := repository.NewSettingsRepository(db)
 	escalationRepo := repository.NewEscalationRepository(db)
 	escalationGroupRepo := repository.NewEscalationGroupRepository(db)
@@ -129,6 +130,14 @@ func main() {
 	reportService := services.NewReportService(reportRepo, rejectionLogRepo, locationRepo, classificationRepo, workflowRepo)
 	reportTemplateService := services.NewReportTemplateService(reportTemplateRepo, reportRepo)
 	applicationLinkService := services.NewApplicationLinkService(applicationLinkRepo)
+	configService := services.NewConfigService(configRepo, cfg)
+	if err := configService.SeedDefaults(context.Background()); err != nil {
+		log.Printf("Warning: Failed to seed default configs: %v", err)
+	}
+	if err := configService.LoadCache(context.Background()); err != nil {
+		log.Printf("Warning: Failed to load config cache: %v", err)
+	}
+	configService.StartCacheRefresh(context.Background(), time.Minute)
 	settingsService := services.NewSettingsService(settingsRepo)
 	presenceService := services.NewPresenceService(redisClient)
 	escalationPolicyService := services.NewEscalationPolicyService(escalationPolicyRepo, userRepo)
@@ -252,6 +261,7 @@ func main() {
 	reportTemplateHandler := handlers.NewReportTemplateHandler(reportTemplateService)
 	lookupHandler := handlers.NewLookupHandler(lookupRepo)
 	applicationLinkHandler := handlers.NewApplicationLinkHandler(applicationLinkService, minioStorage)
+	configHandler := handlers.NewConfigHandler(configService, actionLogService)
 	settingsHandler := handlers.NewSettingsHandler(settingsService)
 	jwksHandler := handlers.NewJWKSHandler(ssoJWTManager)
 	ssoHandler := handlers.NewSSOHandler(ssoJWTManager, jwtManager, sessionStore, userRepo, applicationLinkRepo, userService, otpService, cfg.SSOFrontendURL, cfg.NafathAPIBaseURL)
@@ -963,6 +973,19 @@ func main() {
 	appLinks.Delete("/:id", authMiddleware.RequirePermission("application-links:delete"), applicationLinkHandler.DeleteLink)
 	appLinks.Post("/:id/upload-image", authMiddleware.RequirePermission("application-links:update"), applicationLinkHandler.UploadImage)
 	appLinks.Delete("/:id/image", authMiddleware.RequirePermission("application-links:update"), applicationLinkHandler.RemoveImage)
+
+	// Config routes (admin). The static /by-name route is registered before /:id.
+	configs := admin.Group("/configs")
+	configs.Post("/", authMiddleware.RequirePermission("configs:create"), configHandler.Create)
+	configs.Get("/", authMiddleware.RequirePermission("configs:view"), configHandler.List)
+	configs.Get("/:module/:name", authMiddleware.RequirePermission("configs:view"), configHandler.GetByName)
+	configs.Get("/:id", authMiddleware.RequirePermission("configs:view"), configHandler.Get)
+	configs.Put("/:id", authMiddleware.RequirePermission("configs:update"), configHandler.Update)
+	configs.Delete("/:id", authMiddleware.RequirePermission("configs:delete"), configHandler.Delete)
+
+	// Cache-backed config reads for clients (current environment, non-secret values only)
+	v1.Get("/configs", authMiddleware.Authenticate(), configHandler.ListCurrent)
+	v1.Get("/configs/:module/:name", authMiddleware.Authenticate(), configHandler.GetCurrent)
 
 	// Dashboard application links - requires explicit permission
 	v1.Get("/application-links", authMiddleware.Authenticate(), authMiddleware.RequirePermission("application-links:dashboard"), applicationLinkHandler.ListActiveLinks)
