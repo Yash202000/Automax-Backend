@@ -49,18 +49,19 @@ func (s *notificationTemplateService) Create(ctx context.Context, req *models.No
 	}
 
 	tpl := &models.NotificationTemplate{
-		Name:         req.Name,
-		Code:         req.Code,
-		Channel:      req.Channel,
-		ModuleType:   req.ModuleType,
-		ActionType:   req.ActionType,
-		SubjectEN:    req.SubjectEN,
-		BodyEN:       req.BodyEN,
-		SubjectAR:    req.SubjectAR,
-		BodyAR:       req.BodyAR,
-		Variables:    req.Variables,
-		TransitionID: req.TransitionID,
-		IsActive:     req.IsActive,
+		Name:               req.Name,
+		Code:               req.Code,
+		Channel:            req.Channel,
+		ModuleType:         req.ModuleType,
+		ActionType:         req.ActionType,
+		SubjectEN:          req.SubjectEN,
+		BodyEN:             req.BodyEN,
+		SubjectAR:          req.SubjectAR,
+		BodyAR:             req.BodyAR,
+		Variables:          req.Variables,
+		ProviderTemplateID: req.ProviderTemplateID,
+		TransitionID:       req.TransitionID,
+		IsActive:           req.IsActive,
 	}
 
 	if err := s.repo.Create(ctx, tpl); err != nil {
@@ -112,6 +113,9 @@ func (s *notificationTemplateService) Update(ctx context.Context, id uuid.UUID, 
 	}
 	if req.Variables != nil {
 		tpl.Variables = *req.Variables
+	}
+	if req.ProviderTemplateID != nil {
+		tpl.ProviderTemplateID = *req.ProviderTemplateID
 	}
 	if req.TransitionID != nil {
 		tpl.TransitionID = req.TransitionID
