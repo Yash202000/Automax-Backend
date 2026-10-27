@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"errors"
+	"strings"
 
+	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
@@ -30,7 +32,7 @@ func (h *AIQualityFeedbackHandler) GetAll(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_ai_feedback"))
 	}
-	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "ai_feedback_retrieved"), feedbacks)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "ai_feedback_retrieved"), toAIQualityFeedbackResponses(feedbacks))
 }
 
 // GetByIncident returns the AI quality feedback record for a given incident.
@@ -49,5 +51,43 @@ func (h *AIQualityFeedbackHandler) GetByIncident(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_ai_feedback"))
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "ai_feedback_retrieved"), feedback)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "ai_feedback_retrieved"), toAIQualityFeedbackResponse(feedback))
+}
+
+type aiQualityFeedbackResponse struct {
+	*models.AIQualityFeedback
+	ResolutionStatusAr string `json:"resolution_status_ar"`
+}
+
+var resolutionStatusArabic = map[string]string{
+	"resolved":           "تم الحل",
+	"not_resolved":       "لم يتم الحل",
+	"partially_resolved": "تم الحل جزئياً",
+	"cannot_verify":      "تعذر التحقق",
+	"mismatch":           "عدم تطابق",
+	"missing":            "مفقود",
+}
+
+func arabicResolutionStatus(status string) string {
+	normalized := strings.ToLower(strings.TrimSpace(status))
+	normalized = strings.NewReplacer(" ", "_", "-", "_").Replace(normalized)
+	if arabic, ok := resolutionStatusArabic[normalized]; ok {
+		return arabic
+	}
+	return status
+}
+
+func toAIQualityFeedbackResponse(feedback *models.AIQualityFeedback) aiQualityFeedbackResponse {
+	return aiQualityFeedbackResponse{
+		AIQualityFeedback:  feedback,
+		ResolutionStatusAr: arabicResolutionStatus(feedback.ResolutionStatus),
+	}
+}
+
+func toAIQualityFeedbackResponses(feedbacks []models.AIQualityFeedback) []aiQualityFeedbackResponse {
+	responses := make([]aiQualityFeedbackResponse, len(feedbacks))
+	for i := range feedbacks {
+		responses[i] = toAIQualityFeedbackResponse(&feedbacks[i])
+	}
+	return responses
 }
