@@ -19,6 +19,9 @@ type AIQualityFeedback struct {
 	// ChangedSummary holds a textual summary of what the AI determined changed in this incident.
 	ChangedSummary string `gorm:"type:text" json:"changed_summary"`
 
+	// ChangedSummaryAr holds the Arabic change summary returned by the AI.
+	ChangedSummaryAr string `gorm:"type:text" json:"changed_summary_ar"`
+
 	// ResolutionStatus is the AI-assessed resolution status of the incident.
 	ResolutionStatus string `gorm:"size:100" json:"resolution_status"`
 
