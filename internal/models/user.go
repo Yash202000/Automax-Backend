@@ -180,7 +180,8 @@ func (u *User) GetPermissions() []string {
 type UserRegisterRequest struct {
 	Email             string      `json:"email" validate:"required,email"`
 	Username          string      `json:"username" validate:"required,min=3,max=50"`
-	Password          string      `json:"password" validate:"required,min=6"`
+	Password          string      `json:"password" validate:"required_unless=IsADUser true,omitempty,min=6"`
+	IsADUser          bool        `json:"is_ad_user"` // signs in through Active Directory; no password stored
 	FirstName         string      `json:"first_name" validate:"max=100"`
 	MiddleName        string      `json:"middle_name" validate:"max=100"`
 	LastName          string      `json:"last_name" validate:"max=100"`
@@ -343,6 +344,7 @@ type UserUpdateRequest struct {
 	BypassLoginTotp             *bool       `json:"bypass_login_totp"`
 	EnableLoginTotp             *bool       `json:"enable_login_totp"`
 	ContactCenter               *bool       `json:"contact_center"`
+	IsADUser                    *bool       `json:"is_ad_user"`
 }
 
 type UserResponse struct {

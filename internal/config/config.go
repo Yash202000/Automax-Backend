@@ -14,6 +14,7 @@ type Config struct {
 	MinIO                       MinIOConfig
 	JWT                         JWTConfig
 	LDAP                        LDAPConfig
+	ADBaseer                    ADBaseerConfig
 	LoginRateLimit              LoginRateLimitConfig
 	FrontendURL                 string // env: FRONTEND_URL — base URL of the frontend app, used in notification links
 	SSOPrivateKey               string // env: SSO_RSA_PRIVATE_KEY (PEM, optional — auto-gen if empty)
@@ -314,6 +315,39 @@ type LDAPConfig struct {
 	InsecureSkipVerify bool
 }
 
+// ADBaseerConfig holds settings for AD login through the client's AD-Baseer
+// HTTPS APIs (GetToken -> ValidateCredentialsOTP -> IsValidOTP). When Enabled,
+// POST /api/v1/ldap/login validates credentials through AD-Baseer instead of an
+// LDAP bind and requires an OTP step; the LDAP admin endpoints are unaffected.
+// env: AD_BASEER_*. Mode "mock" (BaseURL pointing at the ad-baseer-simulator)
+// is refused when APP_ENV is production.
+type ADBaseerConfig struct {
+	Enabled bool
+	// Mode is "real" (BaseURL must be https) or "mock" (BaseURL is the
+	// ad-baseer-simulator; http allowed, refused in production).
+	Mode    string
+	BaseURL string
+	// Service / Key are GetToken's credentials; ModuleID is
+	// ValidateCredentialsOTP's ModuleID. Secrets — set via env, never commit.
+	Service  string
+	Key      string
+	ModuleID string
+	// TimeoutSeconds bounds each AD-Baseer HTTP call.
+	TimeoutSeconds int
+	// OTPTTLSeconds is how long a pending OTP challenge is kept by Automax.
+	OTPTTLSeconds int
+	// OTPMaxAttempts is how many OTP submissions one challenge allows.
+	OTPMaxAttempts int
+	// ActiveStatuses are the employeeInfo.status values allowed to log in.
+	ActiveStatuses []string
+	// InsecureSkipVerify disables TLS verification; refused in production.
+	InsecureSkipVerify bool
+}
+
+func (c ADBaseerConfig) IsMock() bool {
+	return strings.EqualFold(strings.TrimSpace(c.Mode), "mock")
+}
+
 type LoginRateLimitConfig struct {
 	Enabled         bool
 	MaxAttempts     int
@@ -369,6 +403,19 @@ func Load() *Config {
 			GroupSearchBase:    getEnv("LDAP_GROUP_SEARCH_BASE", "ou=groups,dc=example,dc=com"),
 			GroupSearchFilter:  getEnv("LDAP_GROUP_SEARCH_FILTER", "(member={{userDN}})"),
 			InsecureSkipVerify: getEnvAsBool("LDAP_INSECURE_SKIP_VERIFY", true),
+		},
+		ADBaseer: ADBaseerConfig{
+			Enabled:            getEnvAsBool("AD_BASEER_ENABLED", false),
+			Mode:               getEnv("AD_BASEER_MODE", "real"),
+			BaseURL:            getEnv("AD_BASEER_BASE_URL", ""),
+			Service:            getEnv("AD_BASEER_SERVICE", ""),
+			Key:                getEnv("AD_BASEER_KEY", ""),
+			ModuleID:           getEnv("AD_BASEER_MODULE_ID", ""),
+			TimeoutSeconds:     getEnvAsInt("AD_BASEER_TIMEOUT_SECONDS", 15),
+			OTPTTLSeconds:      getEnvAsInt("AD_BASEER_OTP_TTL_SECONDS", 300),
+			OTPMaxAttempts:     getEnvAsInt("AD_BASEER_OTP_MAX_ATTEMPTS", 3),
+			ActiveStatuses:     getEnvAsStringSlice("AD_BASEER_ACTIVE_STATUSES", []string{"1"}),
+			InsecureSkipVerify: getEnvAsBool("AD_BASEER_INSECURE_SKIP_VERIFY", false),
 		},
 		LoginRateLimit: LoginRateLimitConfig{
 			Enabled:         getEnvAsBool("LOGIN_RATE_LIMIT_ENABLED", true),

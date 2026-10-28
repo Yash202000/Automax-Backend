@@ -13,6 +13,7 @@ import (
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/gofiber/fiber/v2"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
@@ -24,6 +25,10 @@ type LDAPHandler struct {
 	jwtManager   *utils.JWTManager
 	sessionStore *database.SessionStore
 	config       *config.Config
+	// adBaseer is nil unless AD_BASEER_ENABLED; when set, Login authenticates
+	// through AD-Baseer + OTP instead of an LDAP bind (see ad_baseer_login.go).
+	adBaseer services.ADBaseerClient
+	redis    *redis.Client
 }
 
 func NewLDAPHandler(
@@ -33,6 +38,8 @@ func NewLDAPHandler(
 	jwtManager *utils.JWTManager,
 	sessionStore *database.SessionStore,
 	cfg *config.Config,
+	adBaseer services.ADBaseerClient,
+	redisClient *redis.Client,
 ) *LDAPHandler {
 	return &LDAPHandler{
 		ldapService:  ldapService,
@@ -41,6 +48,8 @@ func NewLDAPHandler(
 		jwtManager:   jwtManager,
 		sessionStore: sessionStore,
 		config:       cfg,
+		adBaseer:     adBaseer,
+		redis:        redisClient,
 	}
 }
 
@@ -99,11 +108,12 @@ type LDAPUserInfoResponse struct {
 	Groups     []string `json:"groups,omitempty"`
 }
 
-// Login handles LDAP authentication
+// Login handles AD authentication. With AD-Baseer enabled it is step 1 of the
+// AD-Baseer + OTP flow (see startADBaseerLogin); otherwise it binds to LDAP.
 // POST /api/v1/ldap/login
 func (h *LDAPHandler) Login(c *fiber.Ctx) error {
-	// Check if LDAP is enabled
-	if !h.config.LDAP.Enabled {
+	adBaseerEnabled := h.config.ADBaseer.Enabled && h.adBaseer != nil
+	if !h.config.LDAP.Enabled && !adBaseerEnabled {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "ldap_auth_not_enabled"))
 	}
 
@@ -121,29 +131,36 @@ func (h *LDAPHandler) Login(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, errMsg)
 	}
 
+	if adBaseerEnabled {
+		return h.startADBaseerLogin(c, req)
+	}
+
+	userKey, ipKey := adUserLimitKey(req.Username), adIPLimitKey(c.IP())
+	if h.adLimitBlocked(c.UserContext(), userKey, ipKey) {
+		return adErrorResponse(c, fiber.StatusTooManyRequests, adErrRateLimited, i18n.T(c.UserContext(), "too_many_login_attempts"))
+	}
+
 	// Authenticate against LDAP
 	ldapUser, err := h.ldapService.Authenticate(c.UserContext(), req.Username, req.Password)
 	if err != nil {
+		h.adLimitFail(c.UserContext(), userKey, ipKey)
 		return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "ldap_auth_failed"))
 	}
+	h.adLimitReset(c.UserContext(), userKey)
 
 	// Check if user is enabled
 	if !ldapUser.Enabled {
 		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "account_disabled_ad"))
 	}
 
-	// Look up or auto-create user in local database
+	// Look up user in local database. Login never creates users: AD users are
+	// registered by an admin, so an unregistered person is told to contact them.
 	user, err := h.userRepo.FindByEmail(c.UserContext(), ldapUser.Email)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			// Auto-create user
-			user, err = h.createOrUpdateUserFromLDAP(c.UserContext(), ldapUser)
-			if err != nil {
-				return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_create_from_ldap"))
-			}
-		} else {
-			return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_look_up_user"))
+			return adErrorResponse(c, fiber.StatusForbidden, adErrNotRegistered, i18n.T(c.UserContext(), "ad_user_not_registered"))
 		}
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_look_up_user"))
 	} else {
 		// Update existing user with LDAP data
 		user, err = h.updateUserFromLDAP(c.UserContext(), user, ldapUser)
@@ -157,6 +174,13 @@ func (h *LDAPHandler) Login(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "account_deactivated"))
 	}
 
+	return h.issueADLoginTokens(c, user)
+}
+
+// issueADLoginTokens signs an authenticated AD user in: Redis session with
+// auth_source "ldap", JWT pair, last-login update and the LDAPLoginResponse.
+// Shared by the LDAP and AD-Baseer login paths.
+func (h *LDAPHandler) issueADLoginTokens(c *fiber.Ctx, user *models.User) error {
 	// Determine role for JWT
 	role := "user"
 	if user.IsSuperAdmin {
@@ -469,6 +493,17 @@ func (h *LDAPHandler) RegisterADUser(c *fiber.Ctx) error {
 		"success": true,
 		"data":    models.ToUserResponse(user),
 		"message": "AD user registered successfully",
+	})
+}
+
+// GetDirectoryStatus tells the admin user screen whether the AD directory can
+// be browsed over LDAP (the "Add AD User" picker). AD-Baseer has no directory
+// API, so with LDAP off AD users are added through the normal user form.
+// GET /api/v1/ldap/directory-status
+func (h *LDAPHandler) GetDirectoryStatus(c *fiber.Ctx) error {
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data":    fiber.Map{"enabled": h.config.LDAP.Enabled},
 	})
 }
 

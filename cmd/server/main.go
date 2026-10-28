@@ -122,6 +122,16 @@ func main() {
 	}
 	defer ldapService.Close()
 
+	// AD-Baseer login (replaces the LDAP bind in /ldap/login when enabled)
+	var adBaseerClient services.ADBaseerClient
+	if cfg.ADBaseer.Enabled {
+		adBaseerClient, err = services.NewADBaseerClient(cfg.ADBaseer, cfg.Env)
+		if err != nil {
+			log.Fatalf("Failed to initialize AD-Baseer client: %v", err)
+		}
+		log.Printf("AD-Baseer login enabled (mode %s, %s)", cfg.ADBaseer.Mode, cfg.ADBaseer.BaseURL)
+	}
+
 	callLogService := services.NewCallLogService(callLogRepo, userRepo, minioStorage)
 	workflowService := services.NewWorkflowService(workflowRepo, roleRepo, departmentRepo, classificationRepo, userRepo, db, cfg)
 	incidentService := services.NewIncidentService(incidentRepo, incidentMergeRepo, workflowRepo, workflowService, userRepo, departmentRepo, classificationRepo, locationRepo, rejectionLogRepo, roleRepo, minioStorage, db, wsHub)
@@ -229,7 +239,7 @@ func main() {
 	healthHandler := handlers.NewHealthHandler()
 
 	// Initialize LDAP handler
-	ldapHandler := handlers.NewLDAPHandler(ldapService, userService, userRepo, jwtManager, sessionStore, cfg)
+	ldapHandler := handlers.NewLDAPHandler(ldapService, userService, userRepo, jwtManager, sessionStore, cfg, adBaseerClient, redisClient)
 
 	categoryService := services.NewCategoryService(categoryRepo)
 	categoryHandler := handlers.NewCategoryHandler(categoryService)
@@ -483,12 +493,14 @@ func main() {
 	// LDAP routes (public - for LDAP authentication)
 	ldap := v1.Group("/ldap")
 	ldap.Post("/login", ldapHandler.Login)
+	ldap.Post("/login/verify-otp", ldapHandler.VerifyADOTP)
 	ldap.Post("/test", authMiddleware.Authenticate(), authMiddleware.RequirePermission("admin:ldap"), ldapHandler.TestConnection)
 	ldap.Post("/search", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:view"), ldapHandler.SearchUser)
 	ldap.Post("/sync", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:update"), ldapHandler.SyncUser)
 	ldap.Post("/users", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:view"), ldapHandler.ListADUsers)
 	ldap.Post("/register", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:create"), ldapHandler.RegisterADUser)
 	ldap.Get("/status", authMiddleware.Authenticate(), authMiddleware.RequirePermission("admin:ldap"), ldapHandler.GetLDAPStatus)
+	ldap.Get("/directory-status", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:create"), ldapHandler.GetDirectoryStatus)
 
 	// SSO routes
 	sso := v1.Group("/sso", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureSSO)))

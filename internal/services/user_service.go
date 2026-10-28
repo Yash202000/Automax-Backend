@@ -158,15 +158,20 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 		return nil, errors.New(i18n.T(ctx, "username_already_exists"))
 	}
 
-	hashedPassword, err := utils.HashPassword(req.Password)
-	if err != nil {
-		return nil, err
+	// AD users authenticate against Active Directory: no local password.
+	hashedPassword := ""
+	if !req.IsADUser {
+		hashedPassword, err = utils.HashPassword(req.Password)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	user := &models.User{
 		Email:           req.Email,
 		Username:        req.Username,
 		Password:        hashedPassword,
+		IsADUser:        req.IsADUser,
 		FirstName:       req.FirstName,
 		MiddleName:      req.MiddleName,
 		LastName:        req.LastName,
@@ -1019,6 +1024,7 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		"extension":        user.Extension,
 		"mobile_verified":  user.MobileVerified,
 		"is_active":        oldIsActive,
+		"is_ad_user":       user.IsADUser,
 	}
 
 	// Add department names
@@ -1139,6 +1145,14 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 	if req.EnableLoginTotp != nil {
 		user.EnableLoginTotp = *req.EnableLoginTotp
 	}
+	// Switching to AD drops the local password; switching back leaves the
+	// user without one until an admin resets it.
+	if req.IsADUser != nil && *req.IsADUser != user.IsADUser {
+		user.IsADUser = *req.IsADUser
+		if user.IsADUser {
+			user.Password = ""
+		}
+	}
 
 	if err := s.userRepo.Update(ctx, user); err != nil {
 		return nil, err
@@ -1254,6 +1268,9 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 	}
 	if req.IsActive != nil {
 		newUserForLogging["is_active"] = *req.IsActive
+	}
+	if req.IsADUser != nil {
+		newUserForLogging["is_ad_user"] = *req.IsADUser
 	}
 
 	// Add department names from request
