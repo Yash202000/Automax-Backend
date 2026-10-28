@@ -51,6 +51,8 @@ func (h *UserHandler) Register(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
+	// Only admins may create AD users.
+	req.IsADUser = false
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -418,6 +420,7 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 		req.Email = c.FormValue("email")
 		req.Username = c.FormValue("username")
 		req.Password = c.FormValue("password")
+		req.IsADUser = c.FormValue("is_ad_user") == "true"
 		req.FirstName = c.FormValue("first_name")
 		req.LastName = c.FormValue("last_name")
 		req.Phone = c.FormValue("phone")
