@@ -51,11 +51,13 @@ func (h *AttachmentHandler) serve(c *fiber.Ctx, disposition string) error {
 	// Try as incident attachment first (UUID format)
 	if attachmentID, err := uuid.Parse(attachmentIDStr); err == nil {
 		if attachment, err := h.incidentService.GetAttachment(c.UserContext(), attachmentID); err == nil {
-			file, size, err := h.storage.GetFileSeeker(c.UserContext(), attachment.FilePath)
+			ctx, path := c.UserContext(), attachment.FilePath
+			size, err := h.storage.StatFile(ctx, path)
 			if err != nil {
-				return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_retrieve_file"))
+				return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(ctx, "failed_to_retrieve_file"))
 			}
-			return sendWithRange(c, file, size, attachment.MimeType, attachment.FileName, disposition)
+			fetch := func(start, end int64) (io.ReadCloser, error) { return h.storage.GetFileRange(ctx, path, start, end) }
+			return sendWithRange(c, fetch, size, attachment.MimeType, attachment.FileName, disposition)
 		}
 	}
 
@@ -69,23 +71,18 @@ func (h *AttachmentHandler) serve(c *fiber.Ctx, disposition string) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "attachment_storage_path_not_found"))
 	}
 
-	file, size, err := h.storage.GetFileSeeker(c.UserContext(), attachment.StoragePath)
+	ctx, path := c.UserContext(), attachment.StoragePath
+	size, err := h.storage.StatFile(ctx, path)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "failed_to_retrieve_attachment"))
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(ctx, "failed_to_retrieve_attachment"))
 	}
-	return sendWithRange(c, file, size, attachment.ContentType, attachment.Filename, disposition)
+	fetch := func(start, end int64) (io.ReadCloser, error) { return h.storage.GetFileRange(ctx, path, start, end) }
+	return sendWithRange(c, fetch, size, attachment.ContentType, attachment.Filename, disposition)
 }
 
-// limitedReadCloser bounds reads and closes the underlying reader when the
-// response has been written (fasthttp closes streams that implement io.Closer).
-type limitedReadCloser struct {
-	io.Reader
-	io.Closer
-}
-
-// sendWithRange streams file honouring a single-range Range header. It takes
-// ownership of file and closes it.
-func sendWithRange(c *fiber.Ctx, file io.ReadSeekCloser, size int64, contentType, filename, disposition string) error {
+// sendWithRange streams the requested bytes of an object, fetching only that
+// range from storage. fetch returns a reader for bytes start..end inclusive.
+func sendWithRange(c *fiber.Ctx, fetch func(start, end int64) (io.ReadCloser, error), size int64, contentType, filename, disposition string) error {
 	c.Set("Content-Type", contentType)
 	if cd := mime.FormatMediaType(disposition, map[string]string{"filename": filename}); cd != "" {
 		c.Set("Content-Disposition", cd)
@@ -94,26 +91,31 @@ func sendWithRange(c *fiber.Ctx, file io.ReadSeekCloser, size int64, contentType
 	}
 	c.Set("Accept-Ranges", "bytes")
 
-	rangeHeader := c.Get("Range")
-	if rangeHeader == "" {
-		return c.SendStream(file, int(size))
+	start, end, status := int64(0), size-1, fiber.StatusOK
+	if rangeHeader := c.Get("Range"); rangeHeader != "" {
+		var ok bool
+		start, end, ok = parseByteRange(rangeHeader, size)
+		if !ok {
+			c.Set("Content-Range", fmt.Sprintf("bytes */%d", size))
+			return c.SendStatus(fiber.StatusRequestedRangeNotSatisfiable)
+		}
+		status = fiber.StatusPartialContent
+	}
+	if size == 0 {
+		// Empty file: 200 with an empty body (SendStatus would add an "OK" body).
+		c.Status(fiber.StatusOK)
+		return nil
 	}
 
-	start, end, ok := parseByteRange(rangeHeader, size)
-	if !ok {
-		file.Close()
-		c.Set("Content-Range", fmt.Sprintf("bytes */%d", size))
-		return c.SendStatus(fiber.StatusRequestedRangeNotSatisfiable)
-	}
-	if _, err := file.Seek(start, io.SeekStart); err != nil {
-		file.Close()
+	body, err := fetch(start, end)
+	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_read_file"))
 	}
-
-	length := end - start + 1
-	c.Status(fiber.StatusPartialContent)
-	c.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, size))
-	return c.SendStream(limitedReadCloser{Reader: io.LimitReader(file, length), Closer: file}, int(length))
+	if status == fiber.StatusPartialContent {
+		c.Status(status)
+		c.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, size))
+	}
+	return c.SendStream(body, int(end-start+1))
 }
 
 // parseByteRange parses a single "bytes=a-b", "bytes=a-" or "bytes=-n" range

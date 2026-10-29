@@ -169,18 +169,26 @@ func (s *MinIOStorage) GetFile(ctx context.Context, objectName string) (io.ReadC
 	return object, nil
 }
 
-// GetFileSeeker returns a seekable reader and the object size, for serving byte ranges.
-func (s *MinIOStorage) GetFileSeeker(ctx context.Context, objectName string) (io.ReadSeekCloser, int64, error) {
-	object, err := s.client.GetObject(ctx, s.bucketName, objectName, minio.GetObjectOptions{})
+// StatFile returns the object size without downloading it.
+func (s *MinIOStorage) StatFile(ctx context.Context, objectName string) (int64, error) {
+	info, err := s.client.StatObject(ctx, s.bucketName, objectName, minio.StatObjectOptions{})
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to get file: %w", err)
+		return 0, fmt.Errorf("object not found in storage (key=%q): %w", objectName, err)
 	}
-	info, err := object.Stat()
+	return info.Size, nil
+}
+
+// GetFileRange streams only the bytes start..end (inclusive) of an object.
+func (s *MinIOStorage) GetFileRange(ctx context.Context, objectName string, start, end int64) (io.ReadCloser, error) {
+	opts := minio.GetObjectOptions{}
+	if err := opts.SetRange(start, end); err != nil {
+		return nil, fmt.Errorf("invalid range: %w", err)
+	}
+	object, err := s.client.GetObject(ctx, s.bucketName, objectName, opts)
 	if err != nil {
-		object.Close()
-		return nil, 0, fmt.Errorf("object not found in storage (key=%q): %w", objectName, err)
+		return nil, fmt.Errorf("failed to get file: %w", err)
 	}
-	return object, info.Size, nil
+	return object, nil
 }
 
 func (s *MinIOStorage) FileExists(ctx context.Context, objectName string) (bool, error) {
