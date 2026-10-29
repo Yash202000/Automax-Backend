@@ -982,3 +982,78 @@ func (h *KpiMasterDataHandler) DeleteAdministrativeUnit(c *fiber.Ctx) error {
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
 }
+
+// ─── Classifications ─────────────────────────────────────────────────────────
+
+func (h *KpiMasterDataHandler) ListClassifications(c *fiber.Ctx) error {
+	var items []models.KpiClassification
+	if err := h.db.WithContext(c.UserContext()).Order("name_en ASC").Find(&items).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+	resp := make([]models.KpiClassificationResponse, len(items))
+	for i, item := range items {
+		resp[i] = item.ToResponse()
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
+}
+
+func (h *KpiMasterDataHandler) CreateClassification(c *fiber.Ctx) error {
+	var req models.KpiClassificationRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+	var existing models.KpiClassification
+	if err := h.db.WithContext(c.UserContext()).Where("name_en = ?", req.NameEn).First(&existing).Error; err == nil {
+		return utils.ErrorResponse(c, fiber.StatusConflict, "Classification with this name already exists")
+	}
+	item := &models.KpiClassification{NameEn: req.NameEn, NameAr: req.NameAr}
+	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusCreated, "", item.ToResponse())
+}
+
+func (h *KpiMasterDataHandler) UpdateClassification(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	var req models.KpiClassificationRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+	var existing models.KpiClassification
+	if err := h.db.WithContext(c.UserContext()).Where("name_en = ? AND id != ?", req.NameEn, id).First(&existing).Error; err == nil {
+		return utils.ErrorResponse(c, fiber.StatusConflict, "Classification with this name already exists")
+	}
+	result := h.db.WithContext(c.UserContext()).Model(&models.KpiClassification{ID: id}).Updates(map[string]interface{}{
+		"name_en": req.NameEn,
+		"name_ar": req.NameAr,
+	})
+	if result.RowsAffected == 0 {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	var item models.KpiClassification
+	if err := h.db.WithContext(c.UserContext()).First(&item, id).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", item.ToResponse())
+}
+
+func (h *KpiMasterDataHandler) DeleteClassification(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	result := h.db.WithContext(c.UserContext()).Delete(&models.KpiClassification{}, id)
+	if result.RowsAffected == 0 {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
+}

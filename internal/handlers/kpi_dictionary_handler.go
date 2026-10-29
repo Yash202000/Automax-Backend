@@ -68,7 +68,8 @@ func (h *KpiDictionaryHandler) ListStrategic(c *fiber.Ctx) error {
 	}
 
 	q := h.db.WithContext(c.UserContext()).Model(&models.StrategicKPI{}).
-		Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("Goal").Preload("Process")
+		Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("Goal").Preload("Process").
+		Preload("Classification")
 
 	if search != "" {
 		q = q.Where("name_en ILIKE ? OR name_ar ILIKE ? OR code ILIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
@@ -108,7 +109,7 @@ func (h *KpiDictionaryHandler) GetStrategic(c *fiber.Ctx) error {
 	var item models.StrategicKPI
 	if err := h.db.WithContext(c.UserContext()).
 		Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("Goal").Preload("Process").
-		Preload("OperationalObjective").Preload("AwardSubCriterion.AwardCriterion").
+		Preload("OperationalObjective").Preload("AwardSubCriterion.AwardCriterion").Preload("Classification").
 		First(&item, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
@@ -151,6 +152,7 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 		OperationalObjectiveID: &req.OperationalObjectiveID,
 		ProcessID:              &req.ProcessID,
 		AwardSubCriterionID:    req.AwardSubCriterionID,
+		ClassificationID:       req.ClassificationID,
 		PillarID:               req.PillarID,
 		DomainID:               req.DomainID,
 		OwnerType:              req.OwnerType,
@@ -192,7 +194,7 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 
 	h.db.WithContext(c.UserContext()).
 		Preload("Goal").Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
-		Preload("OperationalObjective").Preload("Process").Preload("AwardSubCriterion.AwardCriterion").
+		Preload("OperationalObjective").Preload("Process").Preload("AwardSubCriterion.AwardCriterion").Preload("Classification").
 		First(item, item.ID)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
@@ -228,6 +230,7 @@ func (h *KpiDictionaryHandler) UpdateStrategic(c *fiber.Ctx) error {
 		"operational_objective_id": req.OperationalObjectiveID,
 		"process_id":               req.ProcessID,
 		"award_sub_criterion_id":   req.AwardSubCriterionID,
+		"classification_id":        req.ClassificationID,
 		"pillar_id":                req.PillarID,
 		"domain_id":                req.DomainID,
 		"owner_type":               req.OwnerType,
@@ -263,7 +266,7 @@ func (h *KpiDictionaryHandler) UpdateStrategic(c *fiber.Ctx) error {
 	var item models.StrategicKPI
 	h.db.WithContext(c.UserContext()).
 		Preload("Goal").Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
-		Preload("OperationalObjective").Preload("Process").Preload("AwardSubCriterion.AwardCriterion").
+		Preload("OperationalObjective").Preload("Process").Preload("AwardSubCriterion.AwardCriterion").Preload("Classification").
 		First(&item, id)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
@@ -314,7 +317,7 @@ func (h *KpiDictionaryHandler) ListOperational(c *fiber.Ctx) error {
 
 	q := h.db.WithContext(c.UserContext()).Model(&models.OperationalKPI{}).
 		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Domain").
-		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency")
+		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("Classification")
 
 	if search != "" {
 		q = q.Where("name_en ILIKE ? OR name_ar ILIKE ? OR code ILIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
@@ -362,6 +365,7 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 		ProcessID:              req.ProcessID,
 		PillarID:               req.PillarID,
 		AwardSubCriterionID:    req.AwardSubCriterionID,
+		ClassificationID:       req.ClassificationID,
 		RelatedUnits:           req.RelatedUnits,
 		DomainID:               req.DomainID,
 		OwnerType:              req.OwnerType,
@@ -402,7 +406,7 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 	h.db.WithContext(c.UserContext()).
 		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Domain").
 		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
-		Preload("Pillar").Preload("AwardSubCriterion.AwardCriterion").
+		Preload("Pillar").Preload("AwardSubCriterion.AwardCriterion").Preload("Classification").
 		First(item, item.ID)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
@@ -426,7 +430,7 @@ func (h *KpiDictionaryHandler) GetOperational(c *fiber.Ctx) error {
 	if err := h.db.WithContext(c.UserContext()).
 		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Domain").
 		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
-		Preload("Pillar").Preload("AwardSubCriterion.AwardCriterion").
+		Preload("Pillar").Preload("AwardSubCriterion.AwardCriterion").Preload("Classification").
 		First(&item, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
@@ -457,6 +461,7 @@ func (h *KpiDictionaryHandler) UpdateOperational(c *fiber.Ctx) error {
 		"process_id":               req.ProcessID,
 		"pillar_id":                req.PillarID,
 		"award_sub_criterion_id":   req.AwardSubCriterionID,
+		"classification_id":        req.ClassificationID,
 		"related_units":            req.RelatedUnits,
 		"domain_id":                req.DomainID,
 		"owner_type":               req.OwnerType,
@@ -491,7 +496,7 @@ func (h *KpiDictionaryHandler) UpdateOperational(c *fiber.Ctx) error {
 	h.db.WithContext(c.UserContext()).
 		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Domain").
 		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
-		Preload("Pillar").Preload("AwardSubCriterion.AwardCriterion").
+		Preload("Pillar").Preload("AwardSubCriterion.AwardCriterion").Preload("Classification").
 		First(&item, id)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
@@ -541,7 +546,7 @@ func (h *KpiDictionaryHandler) ListAward(c *fiber.Ctx) error {
 
 	q := h.db.WithContext(c.UserContext()).Model(&models.AwardKPI{}).
 		Preload("AwardSubCriterion.AwardCriterion").Preload("Domain").
-		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency")
+		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("Classification")
 
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
@@ -584,6 +589,7 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 		OperationalObjectiveID: &req.OperationalObjectiveID,
 		ProcessID:              &req.ProcessID,
 		AwardSubCriterionID:    req.AwardSubCriterionID,
+		ClassificationID:       req.ClassificationID,
 		PillarID:               req.PillarID,
 		RelatedUnits:           req.RelatedUnits,
 		DomainID:               req.DomainID,
@@ -625,7 +631,7 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 	h.db.WithContext(c.UserContext()).
 		Preload("AwardSubCriterion.AwardCriterion").Preload("Domain").
 		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
-		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Pillar").
+		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Pillar").Preload("Classification").
 		First(item, item.ID)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
@@ -672,7 +678,7 @@ func (h *KpiDictionaryHandler) GetAward(c *fiber.Ctx) error {
 	if err := h.db.WithContext(c.UserContext()).
 		Preload("AwardSubCriterion.AwardCriterion").Preload("Domain").
 		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
-		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Pillar").
+		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Pillar").Preload("Classification").
 		First(&item, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
@@ -702,6 +708,7 @@ func (h *KpiDictionaryHandler) UpdateAward(c *fiber.Ctx) error {
 		"operational_objective_id": req.OperationalObjectiveID,
 		"process_id":               req.ProcessID,
 		"award_sub_criterion_id":   req.AwardSubCriterionID,
+		"classification_id":        req.ClassificationID,
 		"pillar_id":                req.PillarID,
 		"related_units":            req.RelatedUnits,
 		"domain_id":                req.DomainID,
@@ -737,7 +744,7 @@ func (h *KpiDictionaryHandler) UpdateAward(c *fiber.Ctx) error {
 	h.db.WithContext(c.UserContext()).
 		Preload("AwardSubCriterion.AwardCriterion").Preload("Domain").
 		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
-		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Pillar").
+		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Pillar").Preload("Classification").
 		First(&item, id)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{

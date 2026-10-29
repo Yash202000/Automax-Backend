@@ -190,6 +190,7 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			&models.KpiPerformanceBand{},
 			&models.KpiCorrectiveAction{},
 			&models.KpiDataSource{},
+			&models.KpiClassification{},
 			&models.KpiSegmentationDimension{},
 			&models.KpiPerformanceEvidence{},
 			&models.KpiMetric{},

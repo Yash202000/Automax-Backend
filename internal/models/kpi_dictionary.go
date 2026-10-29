@@ -74,6 +74,8 @@ type StrategicKPI struct {
 	Process                *Process              `gorm:"foreignKey:ProcessID" json:"process,omitempty"`
 	AwardSubCriterionID    *uuid.UUID            `gorm:"type:uuid;index" json:"award_sub_criterion_id"`
 	AwardSubCriterion      *AwardSubCriterion    `gorm:"foreignKey:AwardSubCriterionID" json:"award_sub_criterion,omitempty"`
+	ClassificationID       *uuid.UUID            `gorm:"type:uuid;index" json:"classification_id"`
+	Classification         *KpiClassification    `gorm:"foreignKey:ClassificationID" json:"classification,omitempty"`
 	Polarity               string                `gorm:"size:20;not null;default:'ascending'" json:"polarity"`
 	ActivationStatus       string                `gorm:"size:20;not null;default:'draft'" json:"activation_status"`
 	DescriptionEn          string                `gorm:"type:text" json:"description_en"`
@@ -114,6 +116,7 @@ type StrategicKPIRequest struct {
 	OperationalObjectiveID uuid.UUID  `json:"operational_objective_id" validate:"required"`
 	ProcessID              uuid.UUID  `json:"process_id" validate:"required"`
 	AwardSubCriterionID    *uuid.UUID `json:"award_sub_criterion_id"`
+	ClassificationID       *uuid.UUID `json:"classification_id"`
 	Polarity               string     `json:"polarity" validate:"omitempty,oneof=ascending descending"`
 	DescriptionEn          string     `json:"description_en"`
 	DescriptionAr          string     `json:"description_ar"`
@@ -153,6 +156,8 @@ type StrategicKPIResponse struct {
 	Process                *ProcessResponse              `json:"process,omitempty"`
 	AwardSubCriterionID    *uuid.UUID                    `json:"award_sub_criterion_id"`
 	AwardSubCriterion      *AwardSubCriterionResponse    `json:"award_sub_criterion,omitempty"`
+	ClassificationID       *uuid.UUID                    `json:"classification_id"`
+	Classification         *KpiClassificationResponse    `json:"classification,omitempty"`
 	Polarity               string                        `json:"polarity"`
 	ActivationStatus       string                        `json:"activation_status"`
 	DescriptionEn          string                        `json:"description_en"`
@@ -188,6 +193,7 @@ func (k *StrategicKPI) ToResponse() StrategicKPIResponse {
 		OperationalObjectiveID: k.OperationalObjectiveID,
 		ProcessID:              k.ProcessID,
 		AwardSubCriterionID:    k.AwardSubCriterionID,
+		ClassificationID:       k.ClassificationID,
 		Polarity:               k.Polarity,
 		ActivationStatus:       k.ActivationStatus,
 		DescriptionEn:          k.DescriptionEn,
@@ -240,6 +246,10 @@ func (k *StrategicKPI) ToResponse() StrategicKPIResponse {
 		r := k.AwardSubCriterion.ToResponse()
 		resp.AwardSubCriterion = &r
 	}
+	if k.Classification != nil {
+		r := k.Classification.ToResponse()
+		resp.Classification = &r
+	}
 	return resp
 }
 
@@ -263,6 +273,8 @@ type OperationalKPI struct {
 	Pillar                 *Pillar               `gorm:"foreignKey:PillarID" json:"pillar,omitempty"`
 	AwardSubCriterionID    *uuid.UUID            `gorm:"type:uuid;index" json:"award_sub_criterion_id"`
 	AwardSubCriterion      *AwardSubCriterion    `gorm:"foreignKey:AwardSubCriterionID" json:"award_sub_criterion,omitempty"`
+	ClassificationID       *uuid.UUID            `gorm:"type:uuid;index" json:"classification_id"`
+	Classification         *KpiClassification    `gorm:"foreignKey:ClassificationID" json:"classification,omitempty"`
 	DomainID               *uuid.UUID            `gorm:"type:uuid;index" json:"domain_id"`
 	Domain                 *Domain               `gorm:"foreignKey:DomainID" json:"domain,omitempty"`
 	OwnerType              string                `gorm:"size:20;not null;default:'internal'" json:"owner_type"`
@@ -307,6 +319,7 @@ type OperationalKPIRequest struct {
 	ProcessID              uuid.UUID  `json:"process_id" validate:"required"`
 	PillarID               *uuid.UUID `json:"pillar_id"`
 	AwardSubCriterionID    *uuid.UUID `json:"award_sub_criterion_id"`
+	ClassificationID       *uuid.UUID `json:"classification_id"`
 	DomainID               *uuid.UUID `json:"domain_id"`
 	OwnerType              string     `json:"owner_type" validate:"omitempty,oneof=internal external"`
 	OwnerDeptID            *uuid.UUID `json:"owner_dept_id"`
@@ -341,6 +354,8 @@ type OperationalKPIResponse struct {
 	Pillar                 *PillarResponse               `json:"pillar,omitempty"`
 	AwardSubCriterionID    *uuid.UUID                    `json:"award_sub_criterion_id"`
 	AwardSubCriterion      *AwardSubCriterionResponse    `json:"award_sub_criterion,omitempty"`
+	ClassificationID       *uuid.UUID                    `json:"classification_id"`
+	Classification         *KpiClassificationResponse    `json:"classification,omitempty"`
 	DomainID               *uuid.UUID                    `json:"domain_id"`
 	Domain                 *DomainResponse               `json:"domain,omitempty"`
 	OwnerType              string                        `json:"owner_type"`
@@ -380,6 +395,7 @@ func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 		ProcessID:              k.ProcessID,
 		PillarID:               k.PillarID,
 		AwardSubCriterionID:    k.AwardSubCriterionID,
+		ClassificationID:       k.ClassificationID,
 		DomainID:               k.DomainID,
 		OwnerType:              k.OwnerType,
 		OwnerDeptID:            k.OwnerDeptID,
@@ -435,6 +451,10 @@ func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 	if k.OwningAgency != nil {
 		resp.OwningAgency = ToDepartmentBriefResponse(k.OwningAgency)
 	}
+	if k.Classification != nil {
+		r := k.Classification.ToResponse()
+		resp.Classification = &r
+	}
 	if k.WorkflowInstance != nil && k.WorkflowInstance.InitiatedBy != nil {
 		u := k.WorkflowInstance.InitiatedBy
 		resp.CreatedBy = &UserBrief{
@@ -466,6 +486,8 @@ type AwardKPI struct {
 	Process                *Process              `gorm:"foreignKey:ProcessID" json:"process,omitempty"`
 	AwardSubCriterionID    *uuid.UUID            `gorm:"type:uuid;index" json:"award_sub_criterion_id"`
 	AwardSubCriterion      *AwardSubCriterion    `gorm:"foreignKey:AwardSubCriterionID" json:"award_sub_criterion,omitempty"`
+	ClassificationID       *uuid.UUID            `gorm:"type:uuid;index" json:"classification_id"`
+	Classification         *KpiClassification    `gorm:"foreignKey:ClassificationID" json:"classification,omitempty"`
 	PillarID               *uuid.UUID            `gorm:"type:uuid;index" json:"pillar_id"`
 	Pillar                 *Pillar               `gorm:"foreignKey:PillarID" json:"pillar,omitempty"`
 	DomainID               *uuid.UUID            `gorm:"type:uuid;index" json:"domain_id"`
@@ -511,6 +533,7 @@ type AwardKPIRequest struct {
 	OperationalObjectiveID uuid.UUID  `json:"operational_objective_id" validate:"required"`
 	ProcessID              uuid.UUID  `json:"process_id" validate:"required"`
 	AwardSubCriterionID    *uuid.UUID `json:"award_sub_criterion_id"`
+	ClassificationID       *uuid.UUID `json:"classification_id"`
 	PillarID               *uuid.UUID `json:"pillar_id"`
 	DomainID               *uuid.UUID `json:"domain_id"`
 	OwnerType              string     `json:"owner_type" validate:"omitempty,oneof=internal external"`
@@ -544,6 +567,8 @@ type AwardKPIResponse struct {
 	Process                *ProcessResponse              `json:"process,omitempty"`
 	AwardSubCriterionID    *uuid.UUID                    `json:"award_sub_criterion_id"`
 	AwardSubCriterion      *AwardSubCriterionResponse    `json:"award_sub_criterion,omitempty"`
+	ClassificationID       *uuid.UUID                    `json:"classification_id"`
+	Classification         *KpiClassificationResponse    `json:"classification,omitempty"`
 	PillarID               *uuid.UUID                    `json:"pillar_id"`
 	Pillar                 *PillarResponse               `json:"pillar,omitempty"`
 	DomainID               *uuid.UUID                    `json:"domain_id"`
@@ -584,6 +609,7 @@ func (k *AwardKPI) ToResponse() AwardKPIResponse {
 		OperationalObjectiveID: k.OperationalObjectiveID,
 		ProcessID:              k.ProcessID,
 		AwardSubCriterionID:    k.AwardSubCriterionID,
+		ClassificationID:       k.ClassificationID,
 		PillarID:               k.PillarID,
 		DomainID:               k.DomainID,
 		OwnerType:              k.OwnerType,
@@ -639,6 +665,10 @@ func (k *AwardKPI) ToResponse() AwardKPIResponse {
 	}
 	if k.OwningAgency != nil {
 		resp.OwningAgency = ToDepartmentBriefResponse(k.OwningAgency)
+	}
+	if k.Classification != nil {
+		r := k.Classification.ToResponse()
+		resp.Classification = &r
 	}
 	if k.WorkflowInstance != nil && k.WorkflowInstance.InitiatedBy != nil {
 		u := k.WorkflowInstance.InitiatedBy
