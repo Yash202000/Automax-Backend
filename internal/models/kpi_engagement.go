@@ -101,7 +101,7 @@ type KpiMetricRequest struct {
 	Unit                     string     `json:"unit"`
 	CustomUnitLabel          string     `json:"custom_unit_label"`
 	BaselineValue            float64    `json:"baseline_value"`
-	Weight                   float64    `json:"weight"`
+	Weight                   float64    `json:"weight" validate:"gte=0,lte=100"`
 	Formula                  string     `json:"formula"`
 	CalculationType          string     `json:"calculation_type"`
 	Direction                string     `json:"direction"`

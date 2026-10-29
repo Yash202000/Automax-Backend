@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/automax/backend/internal/models"
@@ -219,13 +220,9 @@ func (s *KpiWorkflowService) GetAvailableKpiDictionaryTransitions(ctx context.Co
 // TransitionKpiDictionary executes a KPI Workflow transition on a KPI
 // dictionary row (Strategic/Operational/Award), enforcing: no skipping
 // states, and role authorization via the transition's configured
-// AllowedRoles. Returns the new activation_status (= the target state's
-// code) on success.
-//
-// Deliberately does NOT gate on metric-weight-sum (BR-07) — the old
-// activation_status-based TransitionKpiStatus mechanism did, but that check
-// was removed by product decision so a KPI can move Approved→Active
-// regardless of what its metrics' weights currently sum to.
+// AllowedRoles, and the BR-07 gate on entering Active (at least one Active
+// metric, weights summing to 100%). Returns the new activation_status
+// (= the target state's code) on success.
 func (s *KpiWorkflowService) TransitionKpiDictionary(ctx context.Context, kpiType string, kpiID uuid.UUID, req *models.MetricTransitionRequest, userID uuid.UUID) (string, error) {
 	transitionID, err := uuid.Parse(req.TransitionID)
 	if err != nil {
@@ -268,6 +265,24 @@ func (s *KpiWorkflowService) TransitionKpiDictionary(ctx context.Context, kpiTyp
 	if !userHasAnyAllowedRole(user, transition.AllowedRoles) {
 		tx.Rollback()
 		return "", fmt.Errorf("you do not have a role authorized to perform the '%s' transition", transition.Name)
+	}
+
+	// BR-07: matched by the resolved TO state's code, not a hardcoded
+	// transition code, so it stays correct if "Activate" is ever renamed.
+	if transition.ToState != nil && transition.ToState.Code == models.KPIStatusActive {
+		count, sum, err := ActiveMetricWeightSum(tx, kpiID, kpiType)
+		if err != nil {
+			tx.Rollback()
+			return "", fmt.Errorf("failed to validate metric weights: %w", err)
+		}
+		if count == 0 {
+			tx.Rollback()
+			return "", fmt.Errorf("%s", i18n.T(ctx, "kpi_activate_no_metrics"))
+		}
+		if math.Abs(sum-100) >= 0.01 {
+			tx.Rollback()
+			return "", fmt.Errorf("%s", i18n.Tf(ctx, "kpi_activate_weight_not_100", sum))
+		}
 	}
 
 	action := &models.KpiWorkflowAction{

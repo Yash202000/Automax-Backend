@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"strings"
 	"time"
 
@@ -225,6 +226,25 @@ func (h *KpiEngagementHandler) metricNameTaken(c *fiber.Ctx, kpiType string, kpi
 	return count > 0
 }
 
+// metricWeightExceeds reports whether saving an Active metric with this weight
+// would push the KPI's Active metric weights past 100% (BR-07). Inactive
+// metrics don't count, matching the activation gate. Returns the weight
+// already used by the KPI's other Active metrics, for the error message.
+func (h *KpiEngagementHandler) metricWeightExceeds(c *fiber.Ctx, kpiType string, kpiID, excludeID uuid.UUID, status string, weight float64) (float64, bool, error) {
+	if status != "Active" {
+		return 0, false, nil
+	}
+	var used float64
+	err := h.db.WithContext(c.UserContext()).Model(&models.KpiMetric{}).
+		Where("kpi_type = ? AND kpi_id = ? AND id <> ? AND metric_status = ?", kpiType, kpiID, excludeID, "Active").
+		Select("COALESCE(SUM(weight), 0)").Scan(&used).Error
+	if err != nil {
+		return 0, false, err
+	}
+	used = math.Round(used*100) / 100
+	return used, used+weight > 100.005, nil
+}
+
 func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
 	kpiType, id, err := h.parseTypeAndID(c)
 	if err != nil || !h.kpiExists(kpiType, id) {
@@ -316,6 +336,11 @@ func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
 	}
 	if h.metricNameTaken(c, kpiType, id, req.Name, uuid.Nil) {
 		return utils.ErrorResponse(c, fiber.StatusConflict, duplicateMetricNameMsg)
+	}
+	if used, over, err := h.metricWeightExceeds(c, kpiType, id, uuid.Nil, item.MetricStatus, item.Weight); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	} else if over {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "kpi_metric_weight_exceeds", used, 100-used))
 	}
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
@@ -543,6 +568,15 @@ func (h *KpiEngagementHandler) UpdateMetric(c *fiber.Ctx) error {
 	if h.metricNameTaken(c, current.KpiType, current.KpiID, req.Name, id) {
 		return utils.ErrorResponse(c, fiber.StatusConflict, duplicateMetricNameMsg)
 	}
+	metricStatus := req.MetricStatus
+	if metricStatus == "" {
+		metricStatus = "Active"
+	}
+	if used, over, err := h.metricWeightExceeds(c, current.KpiType, current.KpiID, id, metricStatus, req.Weight); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	} else if over {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "kpi_metric_weight_exceeds", used, 100-used))
+	}
 	calcType := req.CalculationType
 	if calcType == "" {
 		calcType = "Direct Value"
@@ -554,10 +588,6 @@ func (h *KpiEngagementHandler) UpdateMetric(c *fiber.Ctx) error {
 	aggMethod := req.AggregationMethod
 	if aggMethod == "" {
 		aggMethod = "Sum"
-	}
-	metricStatus := req.MetricStatus
-	if metricStatus == "" {
-		metricStatus = "Active"
 	}
 	divideByZero := req.DivideByZeroHandling
 	if divideByZero == "" {
