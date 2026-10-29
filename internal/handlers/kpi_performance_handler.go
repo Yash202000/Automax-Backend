@@ -73,6 +73,48 @@ func (h *KpiPerformanceHandler) ListTargets(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
 }
 
+// validateTargetPeriod checks a target's metric and period. With a metric,
+// REL-01 (the metric belongs to this KPI) and REL-05 (the period follows the
+// metric's own reporting frequency and falls within its start/due dates).
+// Without one, the period follows the KPI's reporting frequency.
+func validateTargetPeriod(db *gorm.DB, req *models.KpiAnnualTargetRequest) error {
+	freq := services.GetKPIReportingFrequency(db, req.KpiCode, req.KpiType)
+	if req.MetricID == nil || *req.MetricID == "" {
+		periodType := "annual"
+		if freq == models.KPIFrequencyMonthly {
+			periodType = "month"
+		} else if freq == models.KPIFrequencyQuarterly {
+			periodType = "quarter"
+		} else if freq == models.KPIFrequencySemiAnnual {
+			periodType = "semi_annual"
+		}
+		return services.ValidatePeriod(freq, periodType, req.PeriodCode)
+	}
+
+	var metric models.KpiMetric
+	if err := db.Where("id = ?", *req.MetricID).First(&metric).Error; err != nil {
+		return fmt.Errorf("Metric not found")
+	}
+	if metric.KpiType != req.KpiType || metric.KpiID != kpiIDByCode(db, req.KpiCode, req.KpiType) {
+		return fmt.Errorf("Metric %q does not belong to KPI %s", metric.Name, req.KpiCode)
+	}
+	return services.ValidateTargetPeriodForMetric(&metric, freq, req.TargetYear, req.PeriodCode)
+}
+
+// kpiIDByCode returns the dictionary row ID for a KPI code, or uuid.Nil.
+func kpiIDByCode(db *gorm.DB, kpiCode, kpiType string) uuid.UUID {
+	var row struct{ ID uuid.UUID }
+	switch kpiType {
+	case models.KPITypeOperational:
+		db.Model(&models.OperationalKPI{}).Where("code = ?", kpiCode).Select("id").Scan(&row)
+	case models.KPITypeAward:
+		db.Model(&models.AwardKPI{}).Where("code = ?", kpiCode).Select("id").Scan(&row)
+	default:
+		db.Model(&models.StrategicKPI{}).Where("code = ?", kpiCode).Select("id").Scan(&row)
+	}
+	return row.ID
+}
+
 func (h *KpiPerformanceHandler) SetTarget(c *fiber.Ctx) error {
 	var req models.KpiAnnualTargetRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -89,26 +131,8 @@ func (h *KpiPerformanceHandler) SetTarget(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "KPI not found in dictionary")
 	}
 
-	// REL-05: Validate period against KPI's reporting frequency
-	freq := services.GetKPIReportingFrequency(db, req.KpiCode, req.KpiType)
-	periodType := "annual"
-	if freq == models.KPIFrequencyMonthly {
-		periodType = "month"
-	} else if freq == models.KPIFrequencyQuarterly {
-		periodType = "quarter"
-	} else if freq == models.KPIFrequencySemiAnnual {
-		periodType = "semi_annual"
-	}
-	if err := services.ValidatePeriod(freq, periodType, req.PeriodCode); err != nil {
+	if err := validateTargetPeriod(db, &req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
-	}
-
-	// REL-02: Validate metric exists and belongs to this KPI
-	if req.MetricID != nil && *req.MetricID != "" {
-		var metric models.KpiMetric
-		if err := db.Where("id = ?", *req.MetricID).First(&metric).Error; err != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Metric not found")
-		}
 	}
 
 	item := req.ToModel(db)
@@ -196,24 +220,8 @@ func (h *KpiPerformanceHandler) UpdateTarget(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "KPI not found in dictionary")
 	}
 
-	freq := services.GetKPIReportingFrequency(db, req.KpiCode, req.KpiType)
-	periodType := "annual"
-	if freq == models.KPIFrequencyMonthly {
-		periodType = "month"
-	} else if freq == models.KPIFrequencyQuarterly {
-		periodType = "quarter"
-	} else if freq == models.KPIFrequencySemiAnnual {
-		periodType = "semi_annual"
-	}
-	if err := services.ValidatePeriod(freq, periodType, req.PeriodCode); err != nil {
+	if err := validateTargetPeriod(db, &req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
-	}
-
-	if req.MetricID != nil && *req.MetricID != "" {
-		var metric models.KpiMetric
-		if err := db.Where("id = ?", *req.MetricID).First(&metric).Error; err != nil {
-			return utils.ErrorResponse(c, fiber.StatusBadRequest, "Metric not found")
-		}
 	}
 
 	updated := req.ToModel(db)

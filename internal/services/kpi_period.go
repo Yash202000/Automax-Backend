@@ -3,6 +3,7 @@ package services
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -174,4 +175,133 @@ func GetEffectiveTarget(db *gorm.DB, kpiCode, kpiType string, metricID uuid.UUID
 	}
 	value := target.TargetValue
 	return &value, FormatPeriodLabel(periodCode, year)
+}
+
+// NormalizeFrequency maps both reporting-frequency spellings onto the KPI
+// constants: the KPI dictionary's ("monthly", "semi_annual", "annually") and
+// the Metric form's ("Monthly", "Semiannual", "Annual", "Ad Hoc"). Returns ""
+// for an empty or unknown value.
+func NormalizeFrequency(frequency string) string {
+	switch strings.ToLower(strings.NewReplacer(" ", "", "_", "", "-", "").Replace(frequency)) {
+	case "monthly":
+		return models.KPIFrequencyMonthly
+	case "quarterly":
+		return models.KPIFrequencyQuarterly
+	case "semiannual":
+		return models.KPIFrequencySemiAnnual
+	case "annual", "annually":
+		return models.KPIFrequencyAnnually
+	case "adhoc", "custom":
+		return models.KPIFrequencyCustom
+	}
+	return ""
+}
+
+var targetPeriodTypes = map[string]string{
+	models.KPIFrequencyMonthly:    "month",
+	models.KPIFrequencyQuarterly:  "quarter",
+	models.KPIFrequencySemiAnnual: "semi_annual",
+	models.KPIFrequencyAnnually:   "annual",
+}
+
+var yearEmbeddedPeriod = regexp.MustCompile(`(?i)^(\d{4})(?:-(0[1-9]|1[0-2]|Q[1-4]|H[12]))?$`)
+
+// PeriodDateRange returns the first and last calendar day (UTC) of a period
+// code within a year. Accepts the bare labels ("sep", "q2", "h1", "annual")
+// and the year-embedded keys ("2026-09", "2026-Q2", "2026-H1", "2026"), whose
+// own year wins over the year argument.
+func PeriodDateRange(year int, periodCode string) (time.Time, time.Time, bool) {
+	code := strings.ToLower(periodCode)
+	if m := yearEmbeddedPeriod.FindStringSubmatch(code); m != nil {
+		year, _ = strconv.Atoi(m[1])
+		switch month, err := strconv.Atoi(m[2]); {
+		case m[2] == "":
+			code = "annual"
+		case err == nil:
+			code = monthPeriodCodes[month-1]
+		default:
+			code = m[2]
+		}
+	}
+	firstMonth, months := 0, 0
+	switch {
+	case code == "annual":
+		firstMonth, months = 1, 12
+	case len(code) == 2 && code[0] == 'q' && code[1] >= '1' && code[1] <= '4':
+		firstMonth, months = int(code[1]-'1')*3+1, 3
+	case code == "h1" || code == "h2":
+		firstMonth, months = int(code[1]-'1')*6+1, 6
+	default:
+		for i, m := range monthPeriodCodes {
+			if m == code {
+				firstMonth, months = i+1, 1
+			}
+		}
+	}
+	if months == 0 {
+		return time.Time{}, time.Time{}, false
+	}
+	start := time.Date(year, time.Month(firstMonth), 1, 0, 0, 0, 0, time.UTC)
+	return start, start.AddDate(0, months, -1), true
+}
+
+// ValidateTargetPeriodForMetric enforces REL-05 for a target attached to a
+// metric: the period must belong to the metric's own reporting frequency
+// (falling back to the KPI's when the metric inherits it) and must overlap
+// the metric's validity window (start_date..due_date). Ad Hoc frequency skips
+// the frequency check; a metric with no dates has no window.
+func ValidateTargetPeriodForMetric(metric *models.KpiMetric, kpiFrequency string, year int, periodCode string) error {
+	frequency := NormalizeFrequency(metric.ReportingFrequency)
+	if frequency == "" {
+		frequency = NormalizeFrequency(kpiFrequency)
+	}
+	if periodType, ok := targetPeriodTypes[frequency]; ok {
+		if !periodKeyPatterns[periodType].MatchString(periodCode) {
+			return fmt.Errorf("Period %s does not match metric %q, which is reported %s. Choose a %s period.",
+				FormatPeriodLabel(periodCode, year), metric.Name, frequencyLabel(frequency), frequencyLabel(frequency))
+		}
+	}
+
+	if metric.StartDate == nil && metric.DueDate == nil {
+		return nil
+	}
+	periodStart, periodEnd, ok := PeriodDateRange(year, periodCode)
+	if !ok {
+		return nil
+	}
+	day := func(t *time.Time) time.Time {
+		u := t.UTC()
+		return time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC)
+	}
+	if (metric.StartDate != nil && periodEnd.Before(day(metric.StartDate))) ||
+		(metric.DueDate != nil && periodStart.After(day(metric.DueDate))) {
+		return fmt.Errorf("Period %s (%s to %s) is outside the validity period of metric %q (%s).",
+			FormatPeriodLabel(periodCode, year), periodStart.Format("2006-01-02"), periodEnd.Format("2006-01-02"),
+			metric.Name, validityLabel(metric.StartDate, metric.DueDate))
+	}
+	return nil
+}
+
+func frequencyLabel(frequency string) string {
+	switch frequency {
+	case models.KPIFrequencyMonthly:
+		return "monthly"
+	case models.KPIFrequencyQuarterly:
+		return "quarterly"
+	case models.KPIFrequencySemiAnnual:
+		return "semi-annual"
+	default:
+		return "annual"
+	}
+}
+
+func validityLabel(start, due *time.Time) string {
+	switch {
+	case start != nil && due != nil:
+		return start.UTC().Format("2006-01-02") + " to " + due.UTC().Format("2006-01-02")
+	case start != nil:
+		return "from " + start.UTC().Format("2006-01-02")
+	default:
+		return "until " + due.UTC().Format("2006-01-02")
+	}
 }
