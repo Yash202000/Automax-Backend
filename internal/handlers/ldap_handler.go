@@ -496,14 +496,18 @@ func (h *LDAPHandler) RegisterADUser(c *fiber.Ctx) error {
 	})
 }
 
-// GetDirectoryStatus tells the admin user screen whether the AD directory can
+// GetDirectoryStatus tells the admin user screen whether AD users can be
+// created here (ad_users: an AD login is configured) and whether the AD directory can
 // be browsed over LDAP (the "Add AD User" picker). AD-Baseer has no directory
 // API, so with LDAP off AD users are added through the normal user form.
 // GET /api/v1/ldap/directory-status
 func (h *LDAPHandler) GetDirectoryStatus(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"success": true,
-		"data":    fiber.Map{"enabled": h.config.LDAP.Enabled},
+		"data": fiber.Map{
+			"enabled":  h.config.LDAP.Enabled,
+			"ad_users": h.config.LDAP.Enabled || h.config.ADBaseer.Enabled,
+		},
 	})
 }
 

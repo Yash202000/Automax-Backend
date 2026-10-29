@@ -938,6 +938,7 @@ var messages = map[string][2]string{
 	"ad_otp_session_expired":            {"Your verification session has expired. Please sign in again", "انتهت صلاحية جلسة التحقق. يرجى تسجيل الدخول مجدداً"},
 	"ad_otp_attempts_exceeded":          {"Too many incorrect codes. Please sign in again", "تم إدخال رموز غير صحيحة عدة مرات. يرجى تسجيل الدخول مجدداً"},
 	"ad_login_not_registered":           {"You are not registered in Automax. Please contact your administrator", "أنت غير مسجل في Automax. يرجى التواصل مع مسؤول النظام"},
+	"ad_users_disabled":                 {"Active Directory users are not enabled in this environment", "مستخدمو الدليل النشط غير مفعّلين في هذه البيئة"},
 	"ad_user_not_registered":            {"Your Active Directory credentials are valid, but you are not registered in Automax. Please contact your administrator", "بيانات اعتماد Active Directory الخاصة بك صحيحة، لكنك غير مسجل في Automax. يرجى التواصل مع مسؤول النظام"},
 	"ad_account_no_email":               {"Your Active Directory account has no valid email address. Please contact your administrator", "لا يحتوي حسابك في Active Directory على بريد إلكتروني صالح. يرجى التواصل مع مسؤول النظام"},
 	"ad_account_conflict":               {"Your account cannot sign in with Active Directory. Please contact your administrator", "لا يمكن لحسابك تسجيل الدخول عبر Active Directory. يرجى التواصل مع مسؤول النظام"},

@@ -35,6 +35,13 @@ type UserHandler struct {
 	wsHub       *services.WSHub
 }
 
+// adUsersEnabled reports whether this environment has an AD login (LDAP or
+// AD-Baseer) configured; AD users can only be created when one is, because
+// they have no password and could not sign in otherwise.
+func (h *UserHandler) adUsersEnabled() bool {
+	return h.cfg.LDAP.Enabled || h.cfg.ADBaseer.Enabled
+}
+
 func NewUserHandler(userService services.UserService, storage *storage.MinIOStorage, redisClient *redis.Client, cfg *config.Config, wsHub *services.WSHub) *UserHandler {
 	return &UserHandler{
 		userService: userService,
@@ -502,6 +509,10 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 		})
 	}
 
+	if req.IsADUser && !h.adUsersEnabled() {
+		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "ad_users_disabled"))
+	}
+
 	if strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940) && strings.TrimSpace(req.Phone) == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
@@ -590,6 +601,16 @@ func (h *UserHandler) AdminUpdateUser(c *fiber.Ctx) error {
 			"success": false,
 			"errors":  validationErrors,
 		})
+	}
+
+	if req.IsADUser != nil && *req.IsADUser && !h.adUsersEnabled() {
+		current, err := h.userService.GetUserByID(c.UserContext(), userID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "user_not_found"))
+		}
+		if !current.IsADUser {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "ad_users_disabled"))
+		}
 	}
 
 	response, err := h.userService.UpdateAdminProfile(c.UserContext(), userID, &req)
