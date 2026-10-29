@@ -500,7 +500,7 @@ func main() {
 	ldap.Post("/users", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:view"), ldapHandler.ListADUsers)
 	ldap.Post("/register", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:create"), ldapHandler.RegisterADUser)
 	ldap.Get("/status", authMiddleware.Authenticate(), authMiddleware.RequirePermission("admin:ldap"), ldapHandler.GetLDAPStatus)
-	ldap.Get("/directory-status", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:create"), ldapHandler.GetDirectoryStatus)
+	ldap.Get("/directory-status", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:create", "users:update"), ldapHandler.GetDirectoryStatus)
 
 	// SSO routes
 	sso := v1.Group("/sso", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureSSO)))
