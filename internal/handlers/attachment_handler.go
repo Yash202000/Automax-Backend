@@ -102,7 +102,9 @@ func sendWithRange(c *fiber.Ctx, fetch func(start, end int64) (io.ReadCloser, er
 		status = fiber.StatusPartialContent
 	}
 	if size == 0 {
-		return c.SendStatus(fiber.StatusOK)
+		// Empty file: 200 with an empty body (SendStatus would add an "OK" body).
+		c.Status(fiber.StatusOK)
+		return nil
 	}
 
 	body, err := fetch(start, end)
