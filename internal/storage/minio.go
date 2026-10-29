@@ -169,6 +169,20 @@ func (s *MinIOStorage) GetFile(ctx context.Context, objectName string) (io.ReadC
 	return object, nil
 }
 
+// GetFileSeeker returns a seekable reader and the object size, for serving byte ranges.
+func (s *MinIOStorage) GetFileSeeker(ctx context.Context, objectName string) (io.ReadSeekCloser, int64, error) {
+	object, err := s.client.GetObject(ctx, s.bucketName, objectName, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get file: %w", err)
+	}
+	info, err := object.Stat()
+	if err != nil {
+		object.Close()
+		return nil, 0, fmt.Errorf("object not found in storage (key=%q): %w", objectName, err)
+	}
+	return object, info.Size, nil
+}
+
 func (s *MinIOStorage) FileExists(ctx context.Context, objectName string) (bool, error) {
 	_, err := s.client.StatObject(ctx, s.bucketName, objectName, minio.StatObjectOptions{})
 	if err != nil {
