@@ -1054,6 +1054,17 @@ func (h *KpiMasterDataHandler) DeleteClassification(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
+	var refCount int64
+	h.db.WithContext(c.UserContext()).Model(&models.StrategicKPI{}).Where("classification_id = ?", id).Count(&refCount)
+	if refCount == 0 {
+		h.db.WithContext(c.UserContext()).Model(&models.OperationalKPI{}).Where("classification_id = ?", id).Count(&refCount)
+	}
+	if refCount == 0 {
+		h.db.WithContext(c.UserContext()).Model(&models.AwardKPI{}).Where("classification_id = ?", id).Count(&refCount)
+	}
+	if refCount > 0 {
+		return utils.ErrorResponse(c, fiber.StatusConflict, "Cannot delete classification while it is assigned to KPI entries")
+	}
 	result := h.db.WithContext(c.UserContext()).Delete(&models.KpiClassification{}, id)
 	if result.Error != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
