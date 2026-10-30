@@ -26,16 +26,26 @@ type KpiDictionaryHandler struct {
 	workflowSvc  *services.KpiWorkflowService
 }
 
-func (h *KpiDictionaryHandler) validateClassificationID(ctx context.Context, classificationID *uuid.UUID) (int, string) {
+// validateClassificationID checks the classification exists and optionally locks the row
+// when called within a transaction (tx). Pass nil for tx to use default (no lock).
+func (h *KpiDictionaryHandler) validateClassificationID(ctx context.Context, classificationID *uuid.UUID, tx *gorm.DB) (int, string) {
 	if classificationID == nil {
 		return 0, ""
 	}
-	var count int64
-	if err := h.db.WithContext(ctx).Model(&models.KpiClassification{}).Where("id = ?", *classificationID).Count(&count).Error; err != nil {
-		return fiber.StatusInternalServerError, "failed to validate classification"
+	db := h.db
+	if tx != nil {
+		db = tx
 	}
-	if count == 0 {
-		return fiber.StatusBadRequest, "classification not found"
+	var cls models.KpiClassification
+	query := db.WithContext(ctx).Where("id = ?", *classificationID)
+	if tx != nil {
+		query = query.Set("gorm:query_option", "FOR SHARE")
+	}
+	if err := query.First(&cls).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return fiber.StatusBadRequest, "classification not found"
+		}
+		return fiber.StatusInternalServerError, "failed to validate classification"
 	}
 	return 0, ""
 }
@@ -157,7 +167,7 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 	if codeCount > 0 {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, fmt.Sprintf("A KPI with code '%s' already exists", req.Code))
 	}
-	if status, msg := h.validateClassificationID(c.UserContext(), req.ClassificationID); status != 0 {
+	if status, msg := h.validateClassificationID(c.UserContext(), req.ClassificationID, nil); status != 0 {
 		return utils.ErrorResponse(c, status, msg)
 	}
 
@@ -238,7 +248,7 @@ func (h *KpiDictionaryHandler) UpdateStrategic(c *fiber.Ctx) error {
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
-	if status, msg := h.validateClassificationID(c.UserContext(), req.ClassificationID); status != 0 {
+	if status, msg := h.validateClassificationID(c.UserContext(), req.ClassificationID, nil); status != 0 {
 		return utils.ErrorResponse(c, status, msg)
 	}
 
@@ -375,7 +385,7 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 	if codeCount > 0 {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, fmt.Sprintf("A KPI with code '%s' already exists", req.Code))
 	}
-	if status, msg := h.validateClassificationID(c.UserContext(), req.ClassificationID); status != 0 {
+	if status, msg := h.validateClassificationID(c.UserContext(), req.ClassificationID, nil); status != 0 {
 		return utils.ErrorResponse(c, status, msg)
 	}
 
@@ -474,7 +484,7 @@ func (h *KpiDictionaryHandler) UpdateOperational(c *fiber.Ctx) error {
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
-	if status, msg := h.validateClassificationID(c.UserContext(), req.ClassificationID); status != 0 {
+	if status, msg := h.validateClassificationID(c.UserContext(), req.ClassificationID, nil); status != 0 {
 		return utils.ErrorResponse(c, status, msg)
 	}
 
@@ -606,7 +616,7 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 	if codeCount > 0 {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, fmt.Sprintf("A KPI with code '%s' already exists", req.Code))
 	}
-	if status, msg := h.validateClassificationID(c.UserContext(), req.ClassificationID); status != 0 {
+	if status, msg := h.validateClassificationID(c.UserContext(), req.ClassificationID, nil); status != 0 {
 		return utils.ErrorResponse(c, status, msg)
 	}
 
@@ -728,7 +738,7 @@ func (h *KpiDictionaryHandler) UpdateAward(c *fiber.Ctx) error {
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
-	if status, msg := h.validateClassificationID(c.UserContext(), req.ClassificationID); status != 0 {
+	if status, msg := h.validateClassificationID(c.UserContext(), req.ClassificationID, nil); status != 0 {
 		return utils.ErrorResponse(c, status, msg)
 	}
 

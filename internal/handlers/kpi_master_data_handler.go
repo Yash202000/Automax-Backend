@@ -1058,23 +1058,50 @@ func (h *KpiMasterDataHandler) DeleteClassification(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
-	var refCount int64
-	h.db.WithContext(c.UserContext()).Model(&models.StrategicKPI{}).Where("classification_id = ?", id).Count(&refCount)
-	if refCount == 0 {
-		h.db.WithContext(c.UserContext()).Model(&models.OperationalKPI{}).Where("classification_id = ?", id).Count(&refCount)
+
+	var txStatus int
+	var txMsg string
+
+	err = h.db.WithContext(c.UserContext()).Transaction(func(tx *gorm.DB) error {
+		// Lock the classification row to prevent concurrent KPI creation referencing it
+		var cls models.KpiClassification
+		if err := tx.Set("gorm:query_option", "FOR UPDATE").First(&cls, id).Error; err != nil {
+			txStatus = fiber.StatusNotFound
+			txMsg = i18n.T(c.UserContext(), "not_found")
+			return err
+		}
+
+		var refCount int64
+		tx.Model(&models.StrategicKPI{}).Where("classification_id = ?", id).Count(&refCount)
+		if refCount == 0 {
+			tx.Model(&models.OperationalKPI{}).Where("classification_id = ?", id).Count(&refCount)
+		}
+		if refCount == 0 {
+			tx.Model(&models.AwardKPI{}).Where("classification_id = ?", id).Count(&refCount)
+		}
+		if refCount > 0 {
+			txStatus = fiber.StatusConflict
+			txMsg = "Cannot delete classification while it is assigned to KPI entries"
+			return fmt.Errorf(txMsg)
+		}
+
+		if err := tx.Delete(&models.KpiClassification{}, id).Error; err != nil {
+			txStatus = fiber.StatusInternalServerError
+			txMsg = i18n.T(c.UserContext(), "failed_to_load_data")
+			return err
+		}
+		return nil
+	})
+
+	if err != nil {
+		if txStatus == 0 {
+			txStatus = fiber.StatusInternalServerError
+		}
+		if txMsg == "" {
+			txMsg = i18n.T(c.UserContext(), "failed_to_load_data")
+		}
+		return utils.ErrorResponse(c, txStatus, txMsg)
 	}
-	if refCount == 0 {
-		h.db.WithContext(c.UserContext()).Model(&models.AwardKPI{}).Where("classification_id = ?", id).Count(&refCount)
-	}
-	if refCount > 0 {
-		return utils.ErrorResponse(c, fiber.StatusConflict, "Cannot delete classification while it is assigned to KPI entries")
-	}
-	result := h.db.WithContext(c.UserContext()).Delete(&models.KpiClassification{}, id)
-	if result.Error != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
-	}
-	if result.RowsAffected == 0 {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
-	}
+
 	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
 }
