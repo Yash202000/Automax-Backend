@@ -1417,6 +1417,7 @@ func main() {
 	kpi.Post("/entries/:entryId/transition", authMiddleware.RequirePermission("perf:review"), kpiEntryHandler.TransitionEntry)
 	kpi.Get("/entries/:entryId/transitions", authMiddleware.RequirePermission("kpi:view"), kpiEntryHandler.GetAvailableEntryTransitions)
 	kpi.Get("/entries/:entryId/history", authMiddleware.RequirePermission("kpi:view"), kpiEntryHandler.GetEntryHistory)
+	kpi.Post("/entries/:entryId/corrections", authMiddleware.RequirePermission("kpi:update"), kpiEntryHandler.CreateCorrection)
 
 	kpi.Get("/:type/:id/transitions", authMiddleware.RequirePermission("kpi:view"), kpiDictionaryHandler.GetAvailableTransitions)
 	kpi.Post("/:type/:id/transition", authMiddleware.RequirePermission("kpi:update"), kpiDictionaryHandler.TransitionKpi)
@@ -1446,6 +1447,9 @@ func main() {
 	kpi.Post("/:type/:id/attachment", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.UploadAttachment)
 	kpi.Put("/metrics/:id", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.UpdateMetric)
 	kpi.Put("/metrics/:id/value", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.UpdateMetricValue)
+	kpi.Get("/metrics/:id/baseline-revisions", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListBaselineRevisions)
+	kpi.Post("/metrics/:id/baseline-revisions", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.RequestBaselineRevision)
+	kpi.Post("/baseline-revisions/:revisionId/review", authMiddleware.RequirePermission("kpi:approve"), kpiEngagementHandler.ReviewBaselineRevision)
 	kpi.Delete("/metrics/:id", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.DeleteMetric)
 
 	kpi.Get("/:type/:id/evidence", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListEvidence)

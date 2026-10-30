@@ -3,6 +3,7 @@ package handlers
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/automax/backend/internal/middleware"
 	"github.com/automax/backend/internal/models"
@@ -316,6 +317,9 @@ func (h *KpiEntryHandler) UpdateEntry(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 
+	if entryIsFinal(entry.Status) {
+		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "kpi_entry_approved_locked"))
+	}
 	if entry.Status != models.KpiEntryStatusDraft && !isAdminOverride(c) {
 		return utils.ErrorResponse(c, fiber.StatusForbidden, "Only draft entries can be edited. Submit a correction request instead.")
 	}
@@ -354,6 +358,9 @@ func (h *KpiEntryHandler) DeleteEntry(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 
+	if entryIsFinal(entry.Status) {
+		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "kpi_entry_approved_locked"))
+	}
 	if entry.Status != models.KpiEntryStatusDraft && !isAdminOverride(c) {
 		return utils.ErrorResponse(c, fiber.StatusForbidden, "Only draft entries can be deleted.")
 	}
@@ -372,6 +379,81 @@ func (h *KpiEntryHandler) DeleteEntry(c *fiber.Ctx) error {
 	})
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
+}
+
+// entryIsFinal reports whether an entry is approved or already retired by a
+// correction. Such entries are the record of what was approved and can never
+// be edited or deleted directly — not even with the admin override — only
+// corrected through CreateCorrection.
+func entryIsFinal(status string) bool {
+	switch status {
+	case models.KpiEntryStatusApproved, models.KpiEntryStatusSuperseded,
+		models.KpiEntryStatusReversed, models.KpiEntryStatusReversal:
+		return true
+	}
+	return false
+}
+
+// CreateCorrection starts an adjustment or reversal of an approved entry. The
+// correction is a new draft entry (next version, linked to the original) that
+// goes through the normal submit/approve workflow; the original stays as it
+// is until the correction is approved (see TransitionKpiEntry).
+// POST /kpi/entries/:entryId/corrections
+func (h *KpiEntryHandler) CreateCorrection(c *fiber.Ctx) error {
+	entryID, err := uuid.Parse(c.Params("entryId"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	var req models.KpiEntryCorrectionRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+	req.Reason = strings.TrimSpace(req.Reason)
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	db := h.db.WithContext(c.UserContext())
+
+	var original models.KpiEntry
+	if err := db.First(&original, entryID).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	if original.Status != models.KpiEntryStatusApproved {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "kpi_entry_correction_not_approved"))
+	}
+	var open int64
+	db.Model(&models.KpiEntry{}).
+		Where("supersedes_entry_id = ? AND status IN ?", original.ID, []string{models.KpiEntryStatusDraft, models.KpiEntryStatusSubmitted}).
+		Count(&open)
+	if open > 0 {
+		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "kpi_entry_correction_open"))
+	}
+
+	if req.CorrectionType == models.KpiEntryCorrectionAdjustment &&
+		(original.CalculationTypeSnapshot == "Percentage - Ratio" || original.CalculationTypeSnapshot == "Ratio") &&
+		req.DenominatorValue != nil && *req.DenominatorValue == 0 {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Denominator cannot be zero for ratio-type metrics")
+	}
+
+	item := original.NewCorrection(&req, userID)
+	if err := db.Create(item).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "internal_server_error"))
+	}
+
+	var reloaded models.KpiEntry
+	db.Preload("Metric").Preload("SubmittedBy").Preload("ApprovedBy").First(&reloaded, item.ID)
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "create",
+		Module:      "kpi",
+		ResourceID:  original.KpiID.String(),
+		Description: fmt.Sprintf("Created %s (v%d) of KPI entry %s for period %s/%d", req.CorrectionType, item.EntryVersion, original.ID, original.PeriodCode, original.ReportingYear),
+		Status:      "success",
+	})
+
+	return utils.SuccessResponse(c, fiber.StatusCreated, "", reloaded)
 }
 
 // TransitionEntry moves an entry through the kpi_entry workflow
