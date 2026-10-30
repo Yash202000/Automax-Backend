@@ -76,6 +76,7 @@ type StrategicKPI struct {
 	AwardSubCriterion      *AwardSubCriterion    `gorm:"foreignKey:AwardSubCriterionID" json:"award_sub_criterion,omitempty"`
 	Classification         string                `gorm:"size:20" json:"classification"`
 	Polarity               string                `gorm:"size:20;not null;default:'ascending'" json:"polarity"`
+	TargetRequirement      string                `gorm:"size:20;not null;default:'mandatory'" json:"target_requirement"`
 	ActivationStatus       string                `gorm:"size:20;not null;default:'draft'" json:"activation_status"`
 	DescriptionEn          string                `gorm:"type:text" json:"description_en"`
 	DescriptionAr          string                `gorm:"type:text" json:"description_ar"`
@@ -117,6 +118,7 @@ type StrategicKPIRequest struct {
 	AwardSubCriterionID    *uuid.UUID `json:"award_sub_criterion_id"`
 	Classification         string     `json:"classification" validate:"omitempty,oneof=kpi measurement output"`
 	Polarity               string     `json:"polarity" validate:"omitempty,oneof=ascending descending"`
+	TargetRequirement      string     `json:"target_requirement" validate:"omitempty,oneof=mandatory optional"`
 	DescriptionEn          string     `json:"description_en"`
 	DescriptionAr          string     `json:"description_ar"`
 	Formula                string     `json:"formula"`
@@ -157,6 +159,7 @@ type StrategicKPIResponse struct {
 	AwardSubCriterion      *AwardSubCriterionResponse    `json:"award_sub_criterion,omitempty"`
 	Classification         string                        `json:"classification"`
 	Polarity               string                        `json:"polarity"`
+	TargetRequirement      string                        `json:"target_requirement"`
 	ActivationStatus       string                        `json:"activation_status"`
 	DescriptionEn          string                        `json:"description_en"`
 	DescriptionAr          string                        `json:"description_ar"`
@@ -193,6 +196,7 @@ func (k *StrategicKPI) ToResponse() StrategicKPIResponse {
 		AwardSubCriterionID:    k.AwardSubCriterionID,
 		Classification:         k.Classification,
 		Polarity:               k.Polarity,
+		TargetRequirement:      k.TargetRequirement,
 		ActivationStatus:       k.ActivationStatus,
 		DescriptionEn:          k.DescriptionEn,
 		DescriptionAr:          k.DescriptionAr,
@@ -278,6 +282,7 @@ type OperationalKPI struct {
 	OwningAgencyID         *uuid.UUID            `gorm:"type:uuid;index" json:"owning_agency_id"`
 	OwningAgency           *Department           `gorm:"foreignKey:OwningAgencyID" json:"owning_agency,omitempty"`
 	Polarity               string                `gorm:"size:20;not null;default:'ascending'" json:"polarity"`
+	TargetRequirement      string                `gorm:"size:20;not null;default:'mandatory'" json:"target_requirement"`
 	ActivationStatus       string                `gorm:"size:20;not null;default:'draft'" json:"activation_status"`
 	DescriptionEn          string                `gorm:"type:text" json:"description_en"`
 	DescriptionAr          string                `gorm:"type:text" json:"description_ar"`
@@ -319,6 +324,7 @@ type OperationalKPIRequest struct {
 	OwnerOrgID             *uuid.UUID `json:"owner_org_id"`
 	OwningAgencyID         *uuid.UUID `json:"owning_agency_id"`
 	Polarity               string     `json:"polarity" validate:"omitempty,oneof=ascending descending"`
+	TargetRequirement      string     `json:"target_requirement" validate:"omitempty,oneof=mandatory optional"`
 	DescriptionEn          string     `json:"description_en"`
 	DescriptionAr          string     `json:"description_ar"`
 	Formula                string     `json:"formula"`
@@ -358,6 +364,7 @@ type OperationalKPIResponse struct {
 	OwningAgencyID         *uuid.UUID                    `json:"owning_agency_id"`
 	OwningAgency           *DepartmentBriefResponse      `json:"owning_agency,omitempty"`
 	Polarity               string                        `json:"polarity"`
+	TargetRequirement      string                        `json:"target_requirement"`
 	ActivationStatus       string                        `json:"activation_status"`
 	DescriptionEn          string                        `json:"description_en"`
 	DescriptionAr          string                        `json:"description_ar"`
@@ -394,6 +401,7 @@ func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 		OwnerOrgID:             k.OwnerOrgID,
 		OwningAgencyID:         k.OwningAgencyID,
 		Polarity:               k.Polarity,
+		TargetRequirement:      k.TargetRequirement,
 		ActivationStatus:       k.ActivationStatus,
 		DescriptionEn:          k.DescriptionEn,
 		DescriptionAr:          k.DescriptionAr,
@@ -487,6 +495,7 @@ type AwardKPI struct {
 	OwningAgencyID         *uuid.UUID            `gorm:"type:uuid;index" json:"owning_agency_id"`
 	OwningAgency           *Department           `gorm:"foreignKey:OwningAgencyID" json:"owning_agency,omitempty"`
 	Polarity               string                `gorm:"size:20;not null;default:'ascending'" json:"polarity"`
+	TargetRequirement      string                `gorm:"size:20;not null;default:'mandatory'" json:"target_requirement"`
 	ActivationStatus       string                `gorm:"size:20;not null;default:'draft'" json:"activation_status"`
 	DescriptionEn          string                `gorm:"type:text" json:"description_en"`
 	DescriptionAr          string                `gorm:"type:text" json:"description_ar"`
@@ -528,6 +537,7 @@ type AwardKPIRequest struct {
 	OwnerOrgID             *uuid.UUID `json:"owner_org_id"`
 	OwningAgencyID         *uuid.UUID `json:"owning_agency_id"`
 	Polarity               string     `json:"polarity" validate:"omitempty,oneof=ascending descending"`
+	TargetRequirement      string     `json:"target_requirement" validate:"omitempty,oneof=mandatory optional"`
 	DescriptionEn          string     `json:"description_en"`
 	DescriptionAr          string     `json:"description_ar"`
 	Formula                string     `json:"formula"`
@@ -567,6 +577,7 @@ type AwardKPIResponse struct {
 	OwningAgencyID         *uuid.UUID                    `json:"owning_agency_id"`
 	OwningAgency           *DepartmentBriefResponse      `json:"owning_agency,omitempty"`
 	Polarity               string                        `json:"polarity"`
+	TargetRequirement      string                        `json:"target_requirement"`
 	ActivationStatus       string                        `json:"activation_status"`
 	DescriptionEn          string                        `json:"description_en"`
 	DescriptionAr          string                        `json:"description_ar"`
@@ -603,6 +614,7 @@ func (k *AwardKPI) ToResponse() AwardKPIResponse {
 		OwnerOrgID:             k.OwnerOrgID,
 		OwningAgencyID:         k.OwningAgencyID,
 		Polarity:               k.Polarity,
+		TargetRequirement:      k.TargetRequirement,
 		ActivationStatus:       k.ActivationStatus,
 		DescriptionEn:          k.DescriptionEn,
 		DescriptionAr:          k.DescriptionAr,

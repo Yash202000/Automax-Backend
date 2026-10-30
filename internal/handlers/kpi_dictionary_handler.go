@@ -158,6 +158,7 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 		OwnerOrgID:             req.OwnerOrgID,
 		OwningAgencyID:         req.OwningAgencyID,
 		Polarity:               req.Polarity,
+		TargetRequirement:      req.TargetRequirement,
 		DescriptionEn:          req.DescriptionEn,
 		DescriptionAr:          req.DescriptionAr,
 		Formula:                req.Formula,
@@ -179,6 +180,9 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 	}
 	if item.OwnerType == "" {
 		item.OwnerType = models.KPIOwnerTypeInternal
+	}
+	if item.TargetRequirement == "" {
+		item.TargetRequirement = "mandatory"
 	}
 
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
@@ -235,6 +239,7 @@ func (h *KpiDictionaryHandler) UpdateStrategic(c *fiber.Ctx) error {
 		"owner_org_id":             req.OwnerOrgID,
 		"owning_agency_id":         req.OwningAgencyID,
 		"polarity":                 req.Polarity,
+		"target_requirement":       req.TargetRequirement,
 		"description_en":           req.DescriptionEn,
 		"description_ar":           req.DescriptionAr,
 		"formula":                  req.Formula,
@@ -250,6 +255,9 @@ func (h *KpiDictionaryHandler) UpdateStrategic(c *fiber.Ctx) error {
 	}
 	if req.OwnerType == "" {
 		updates["owner_type"] = models.KPIOwnerTypeInternal
+	}
+	if req.TargetRequirement == "" {
+		delete(updates, "target_requirement")
 	}
 
 	result := h.db.WithContext(c.UserContext()).Model(&models.StrategicKPI{ID: id}).Updates(updates)
@@ -369,6 +377,7 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 		OwnerOrgID:             req.OwnerOrgID,
 		OwningAgencyID:         req.OwningAgencyID,
 		Polarity:               req.Polarity,
+		TargetRequirement:      req.TargetRequirement,
 		DescriptionEn:          req.DescriptionEn,
 		DescriptionAr:          req.DescriptionAr,
 		Formula:                req.Formula,
@@ -388,6 +397,9 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 	}
 	if item.OwnerType == "" {
 		item.OwnerType = models.KPIOwnerTypeInternal
+	}
+	if item.TargetRequirement == "" {
+		item.TargetRequirement = "mandatory"
 	}
 
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
@@ -463,6 +475,7 @@ func (h *KpiDictionaryHandler) UpdateOperational(c *fiber.Ctx) error {
 		"owner_org_id":             req.OwnerOrgID,
 		"owning_agency_id":         req.OwningAgencyID,
 		"polarity":                 req.Polarity,
+		"target_requirement":       req.TargetRequirement,
 		"description_en":           req.DescriptionEn,
 		"description_ar":           req.DescriptionAr,
 		"formula":                  req.Formula,
@@ -476,6 +489,9 @@ func (h *KpiDictionaryHandler) UpdateOperational(c *fiber.Ctx) error {
 	}
 	if req.OwnerType == "" {
 		updates["owner_type"] = models.KPIOwnerTypeInternal
+	}
+	if req.TargetRequirement == "" {
+		delete(updates, "target_requirement")
 	}
 
 	result := h.db.WithContext(c.UserContext()).Model(&models.OperationalKPI{ID: id}).Updates(updates)
@@ -591,6 +607,7 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 		OwnerOrgID:             req.OwnerOrgID,
 		OwningAgencyID:         req.OwningAgencyID,
 		Polarity:               req.Polarity,
+		TargetRequirement:      req.TargetRequirement,
 		DescriptionEn:          req.DescriptionEn,
 		DescriptionAr:          req.DescriptionAr,
 		Formula:                req.Formula,
@@ -610,6 +627,9 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 	}
 	if item.OwnerType == "" {
 		item.OwnerType = models.KPIOwnerTypeInternal
+	}
+	if item.TargetRequirement == "" {
+		item.TargetRequirement = "mandatory"
 	}
 
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
@@ -708,6 +728,7 @@ func (h *KpiDictionaryHandler) UpdateAward(c *fiber.Ctx) error {
 		"owner_org_id":             req.OwnerOrgID,
 		"owning_agency_id":         req.OwningAgencyID,
 		"polarity":                 req.Polarity,
+		"target_requirement":       req.TargetRequirement,
 		"description_en":           req.DescriptionEn,
 		"description_ar":           req.DescriptionAr,
 		"formula":                  req.Formula,
@@ -721,6 +742,9 @@ func (h *KpiDictionaryHandler) UpdateAward(c *fiber.Ctx) error {
 	}
 	if req.OwnerType == "" {
 		updates["owner_type"] = models.KPIOwnerTypeInternal
+	}
+	if req.TargetRequirement == "" {
+		delete(updates, "target_requirement")
 	}
 
 	result := h.db.WithContext(c.UserContext()).Model(&models.AwardKPI{ID: id}).Updates(updates)
