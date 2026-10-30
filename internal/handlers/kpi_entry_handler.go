@@ -58,20 +58,24 @@ func getKPICode(db *gorm.DB, kpiType string, id uuid.UUID) (string, error) {
 	}
 }
 
-func getKPITargetRequirement(db *gorm.DB, kpiType string, id uuid.UUID) string {
+func getKPITargetRequirement(db *gorm.DB, kpiType string, id uuid.UUID) (string, error) {
 	var val string
+	var err error
 	switch kpiType {
 	case models.KPITypeOperational:
-		db.Model(&models.OperationalKPI{}).Select("target_requirement").Where("id = ?", id).Scan(&val)
+		err = db.Model(&models.OperationalKPI{}).Select("target_requirement").Where("id = ?", id).Scan(&val).Error
 	case models.KPITypeAward:
-		db.Model(&models.AwardKPI{}).Select("target_requirement").Where("id = ?", id).Scan(&val)
+		err = db.Model(&models.AwardKPI{}).Select("target_requirement").Where("id = ?", id).Scan(&val).Error
 	default:
-		db.Model(&models.StrategicKPI{}).Select("target_requirement").Where("id = ?", id).Scan(&val)
+		err = db.Model(&models.StrategicKPI{}).Select("target_requirement").Where("id = ?", id).Scan(&val).Error
+	}
+	if err != nil {
+		return "", err
 	}
 	if val == "" {
-		return "mandatory"
+		return "mandatory", nil
 	}
-	return val
+	return val, nil
 }
 
 // ListEntries returns all entries for a KPI dictionary row, optionally filtered by metric_id.
@@ -245,7 +249,10 @@ func (h *KpiEntryHandler) CreateEntry(c *fiber.Ctx) error {
 	}
 
 	// Look up the KPI's target_requirement setting
-	targetReq := getKPITargetRequirement(db, kpiType, kpiID)
+	targetReq, trErr := getKPITargetRequirement(db, kpiType, kpiID)
+	if trErr != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
 
 	// REL-09: Require a matching approved target unless target is optional.
 	var target models.KpiAnnualTarget
