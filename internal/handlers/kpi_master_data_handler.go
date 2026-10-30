@@ -1036,6 +1036,9 @@ func (h *KpiMasterDataHandler) UpdateClassification(c *fiber.Ctx) error {
 		"name_en": req.NameEn,
 		"name_ar": req.NameAr,
 	})
+	if result.Error != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
@@ -1052,6 +1055,9 @@ func (h *KpiMasterDataHandler) DeleteClassification(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 	result := h.db.WithContext(c.UserContext()).Delete(&models.KpiClassification{}, id)
+	if result.Error != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
