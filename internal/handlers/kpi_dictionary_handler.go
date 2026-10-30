@@ -181,6 +181,9 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 	if item.OwnerType == "" {
 		item.OwnerType = models.KPIOwnerTypeInternal
 	}
+	if item.TargetRequirement == "" {
+		item.TargetRequirement = "mandatory"
+	}
 
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create KPI")
@@ -394,6 +397,9 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 	}
 	if item.OwnerType == "" {
 		item.OwnerType = models.KPIOwnerTypeInternal
+	}
+	if item.TargetRequirement == "" {
+		item.TargetRequirement = "mandatory"
 	}
 
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
@@ -622,6 +628,9 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 	}
 	if item.OwnerType == "" {
 		item.OwnerType = models.KPIOwnerTypeInternal
+	}
+	if item.TargetRequirement == "" {
+		item.TargetRequirement = "mandatory"
 	}
 
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
