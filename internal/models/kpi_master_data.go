@@ -639,7 +639,7 @@ func (d *KpiSegmentationDimension) ToResponse() KpiSegmentationDimensionResponse
 
 type KpiClassification struct {
 	ID        uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
-	NameEn    string         `gorm:"size:255;not null" json:"name_en"`
+	NameEn    string         `gorm:"size:255;not null;uniqueIndex" json:"name_en"`
 	NameAr    string         `gorm:"size:255;not null;default:''" json:"name_ar"`
 	IsActive  bool           `gorm:"default:true" json:"is_active"`
 	CreatedAt time.Time      `json:"created_at"`

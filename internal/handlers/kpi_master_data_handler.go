@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/pkg/i18n"
@@ -1011,6 +1012,9 @@ func (h *KpiMasterDataHandler) CreateClassification(c *fiber.Ctx) error {
 	}
 	item := &models.KpiClassification{NameEn: req.NameEn, NameAr: req.NameAr}
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
+		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "23505") {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "Classification with this name already exists")
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusCreated, "", item.ToResponse())
