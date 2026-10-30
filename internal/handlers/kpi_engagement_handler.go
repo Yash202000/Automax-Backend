@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"regexp"
 	"strings"
 	"time"
 
@@ -227,6 +228,13 @@ func (h *KpiEngagementHandler) metricNameTaken(c *fiber.Ctx, kpiType string, kpi
 	return count > 0
 }
 
+var baselinePeriodPattern = regexp.MustCompile(`^\d{4}-(0[1-9]|1[0-2])$`)
+
+// validBaselinePeriod accepts an empty period (not recorded) or "YYYY-MM".
+func validBaselinePeriod(p string) bool {
+	return p == "" || baselinePeriodPattern.MatchString(p)
+}
+
 // metricConfigLocked reports whether the KPI has passed approval (Approved,
 // Active or Closed), after which a metric's Weight and Baseline are fixed.
 func (h *KpiEngagementHandler) metricConfigLocked(c *fiber.Ctx, kpiType string, kpiID uuid.UUID) (bool, error) {
@@ -268,6 +276,10 @@ func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
 	req.Name = strings.TrimSpace(req.Name)
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+	req.BaselinePeriod = strings.TrimSpace(req.BaselinePeriod)
+	if !validBaselinePeriod(req.BaselinePeriod) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "kpi_baseline_period_invalid"))
 	}
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	metricType := req.MetricType
@@ -316,6 +328,7 @@ func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
 		Unit:                      req.Unit,
 		CustomUnitLabel:           req.CustomUnitLabel,
 		BaselineValue:             req.BaselineValue,
+		BaselinePeriod:            req.BaselinePeriod,
 		CurrentValue:              req.BaselineValue,
 		Weight:                    req.Weight,
 		Formula:                   req.Formula,
@@ -572,15 +585,20 @@ func (h *KpiEngagementHandler) UpdateMetric(c *fiber.Ctx) error {
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
+	req.BaselinePeriod = strings.TrimSpace(req.BaselinePeriod)
+	if !validBaselinePeriod(req.BaselinePeriod) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "kpi_baseline_period_invalid"))
+	}
 	var current models.KpiMetric
-	if err := h.db.WithContext(c.UserContext()).Select("id, kpi_id, kpi_type, weight, baseline_value").First(&current, id).Error; err != nil {
+	if err := h.db.WithContext(c.UserContext()).Select("id, kpi_id, kpi_type, weight, baseline_value, baseline_period").First(&current, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 	// Weight and Baseline are only editable before approval; once the KPI is
 	// Approved, Active or Closed they are what was signed off. Baseline then
 	// changes only through an approved baseline revision.
 	weightChanged := math.Abs(req.Weight-current.Weight) >= 0.005
-	baselineChanged := math.Abs(req.BaselineValue-current.BaselineValue) >= 0.00005
+	baselineChanged := math.Abs(req.BaselineValue-current.BaselineValue) >= 0.00005 ||
+		req.BaselinePeriod != current.BaselinePeriod
 	if weightChanged || baselineChanged {
 		locked, err := h.metricConfigLocked(c, current.KpiType, current.KpiID)
 		if err != nil {
@@ -641,6 +659,7 @@ func (h *KpiEngagementHandler) UpdateMetric(c *fiber.Ctx) error {
 		"unit":                         req.Unit,
 		"custom_unit_label":            req.CustomUnitLabel,
 		"baseline_value":               req.BaselineValue,
+		"baseline_period":              req.BaselinePeriod,
 		"weight":                       req.Weight,
 		"formula":                      req.Formula,
 		"calculation_type":             calcType,
@@ -718,7 +737,7 @@ func (h *KpiEngagementHandler) RequestBaselineRevision(c *fiber.Ctx) error {
 	db := h.db.WithContext(c.UserContext())
 
 	var metric models.KpiMetric
-	if err := db.Select("id, kpi_id, kpi_type, name, baseline_value").First(&metric, id).Error; err != nil {
+	if err := db.Select("id, kpi_id, kpi_type, name, baseline_value, baseline_period").First(&metric, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 	locked, err := h.metricConfigLocked(c, metric.KpiType, metric.KpiID)
@@ -728,7 +747,14 @@ func (h *KpiEngagementHandler) RequestBaselineRevision(c *fiber.Ctx) error {
 	if !locked {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "kpi_baseline_not_locked"))
 	}
-	if math.Abs(*req.NewValue-metric.BaselineValue) < 0.00005 {
+	req.NewPeriod = strings.TrimSpace(req.NewPeriod)
+	if req.NewPeriod == "" {
+		req.NewPeriod = metric.BaselinePeriod
+	}
+	if !validBaselinePeriod(req.NewPeriod) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "kpi_baseline_period_invalid"))
+	}
+	if math.Abs(*req.NewValue-metric.BaselineValue) < 0.00005 && req.NewPeriod == metric.BaselinePeriod {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "kpi_baseline_unchanged"))
 	}
 	var pending int64
@@ -744,6 +770,8 @@ func (h *KpiEngagementHandler) RequestBaselineRevision(c *fiber.Ctx) error {
 		KpiType:       metric.KpiType,
 		OldValue:      metric.BaselineValue,
 		NewValue:      *req.NewValue,
+		OldPeriod:     metric.BaselinePeriod,
+		NewPeriod:     req.NewPeriod,
 		Reason:        req.Reason,
 		Status:        models.BaselineRevisionPending,
 		RequestedByID: userID,
@@ -813,7 +841,7 @@ func (h *KpiEngagementHandler) ReviewBaselineRevision(c *fiber.Ctx) error {
 		if req.Decision == "approve" {
 			item.Status = models.BaselineRevisionApproved
 			if err := tx.Model(&models.KpiMetric{ID: item.MetricID}).
-				Update("baseline_value", item.NewValue).Error; err != nil {
+				Updates(map[string]interface{}{"baseline_value": item.NewValue, "baseline_period": item.NewPeriod}).Error; err != nil {
 				return err
 			}
 		}

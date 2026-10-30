@@ -32,6 +32,9 @@ type KpiMetric struct {
 	Unit                     string         `gorm:"size:50" json:"unit"`
 	CustomUnitLabel          string         `gorm:"size:255" json:"custom_unit_label"`
 	BaselineValue            float64        `gorm:"default:0" json:"baseline_value"`
+	// BaselinePeriod is the month the Baseline was measured in, "YYYY-MM"
+	// (e.g. "2025-12"); empty when not recorded.
+	BaselinePeriod           string         `gorm:"size:7" json:"baseline_period"`
 	CurrentValue             float64        `gorm:"default:0" json:"current_value"`
 	// TargetValue is legacy/unused: achievement now only ever uses the
 	// current period's approved KpiAnnualTarget (see EffectiveTargetValue
@@ -109,6 +112,8 @@ type KpiBaselineRevision struct {
 	KpiType       string     `gorm:"size:20;not null" json:"kpi_type"`
 	OldValue      float64    `json:"old_value"`
 	NewValue      float64    `json:"new_value"`
+	OldPeriod     string     `gorm:"size:7" json:"old_period"`
+	NewPeriod     string     `gorm:"size:7" json:"new_period"`
 	Reason        string     `gorm:"type:text;not null" json:"reason"`
 	Status        string     `gorm:"size:20;index;not null;default:'pending'" json:"status"`
 	RequestedByID uuid.UUID  `gorm:"type:uuid;not null" json:"requested_by_id"`
@@ -130,7 +135,10 @@ func (r *KpiBaselineRevision) BeforeCreate(tx *gorm.DB) error {
 
 type KpiBaselineRevisionRequest struct {
 	NewValue *float64 `json:"new_value" validate:"required"`
-	Reason   string   `json:"reason" validate:"required,max=2000"`
+	// NewPeriod is the revised Baseline Period ("YYYY-MM"); empty keeps the
+	// current one.
+	NewPeriod string `json:"new_period"`
+	Reason    string `json:"reason" validate:"required,max=2000"`
 }
 
 type KpiBaselineRevisionReview struct {
@@ -148,6 +156,7 @@ type KpiMetricRequest struct {
 	Unit                     string     `json:"unit"`
 	CustomUnitLabel          string     `json:"custom_unit_label"`
 	BaselineValue            float64    `json:"baseline_value"`
+	BaselinePeriod           string     `json:"baseline_period"`
 	Weight                   float64    `json:"weight" validate:"gte=0,lte=100"`
 	Formula                  string     `json:"formula"`
 	CalculationType          string     `json:"calculation_type"`
