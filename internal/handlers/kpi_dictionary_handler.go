@@ -68,8 +68,7 @@ func (h *KpiDictionaryHandler) ListStrategic(c *fiber.Ctx) error {
 	}
 
 	q := h.db.WithContext(c.UserContext()).Model(&models.StrategicKPI{}).
-		Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("Goal").Preload("Process").
-		Preload("Classification")
+		Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("Goal").Preload("Process")
 
 	if search != "" {
 		q = q.Where("name_en ILIKE ? OR name_ar ILIKE ? OR code ILIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
@@ -314,7 +313,7 @@ func (h *KpiDictionaryHandler) ListOperational(c *fiber.Ctx) error {
 
 	q := h.db.WithContext(c.UserContext()).Model(&models.OperationalKPI{}).
 		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Domain").
-		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("Classification")
+		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency")
 
 	if search != "" {
 		q = q.Where("name_en ILIKE ? OR name_ar ILIKE ? OR code ILIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
@@ -540,7 +539,7 @@ func (h *KpiDictionaryHandler) ListAward(c *fiber.Ctx) error {
 
 	q := h.db.WithContext(c.UserContext()).Model(&models.AwardKPI{}).
 		Preload("AwardSubCriterion.AwardCriterion").Preload("Domain").
-		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("Classification")
+		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency")
 
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
