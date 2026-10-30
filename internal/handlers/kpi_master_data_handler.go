@@ -982,3 +982,4 @@ func (h *KpiMasterDataHandler) DeleteAdministrativeUnit(c *fiber.Ctx) error {
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
 }
+

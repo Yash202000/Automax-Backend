@@ -74,6 +74,7 @@ type StrategicKPI struct {
 	Process                *Process              `gorm:"foreignKey:ProcessID" json:"process,omitempty"`
 	AwardSubCriterionID    *uuid.UUID            `gorm:"type:uuid;index" json:"award_sub_criterion_id"`
 	AwardSubCriterion      *AwardSubCriterion    `gorm:"foreignKey:AwardSubCriterionID" json:"award_sub_criterion,omitempty"`
+	Classification         string                `gorm:"size:20" json:"classification"`
 	Polarity               string                `gorm:"size:20;not null;default:'ascending'" json:"polarity"`
 	ActivationStatus       string                `gorm:"size:20;not null;default:'draft'" json:"activation_status"`
 	DescriptionEn          string                `gorm:"type:text" json:"description_en"`
@@ -114,6 +115,7 @@ type StrategicKPIRequest struct {
 	OperationalObjectiveID uuid.UUID  `json:"operational_objective_id" validate:"required"`
 	ProcessID              uuid.UUID  `json:"process_id" validate:"required"`
 	AwardSubCriterionID    *uuid.UUID `json:"award_sub_criterion_id"`
+	Classification         string     `json:"classification" validate:"omitempty,oneof=kpi measurement output"`
 	Polarity               string     `json:"polarity" validate:"omitempty,oneof=ascending descending"`
 	DescriptionEn          string     `json:"description_en"`
 	DescriptionAr          string     `json:"description_ar"`
@@ -153,6 +155,7 @@ type StrategicKPIResponse struct {
 	Process                *ProcessResponse              `json:"process,omitempty"`
 	AwardSubCriterionID    *uuid.UUID                    `json:"award_sub_criterion_id"`
 	AwardSubCriterion      *AwardSubCriterionResponse    `json:"award_sub_criterion,omitempty"`
+	Classification         string                        `json:"classification"`
 	Polarity               string                        `json:"polarity"`
 	ActivationStatus       string                        `json:"activation_status"`
 	DescriptionEn          string                        `json:"description_en"`
@@ -188,6 +191,7 @@ func (k *StrategicKPI) ToResponse() StrategicKPIResponse {
 		OperationalObjectiveID: k.OperationalObjectiveID,
 		ProcessID:              k.ProcessID,
 		AwardSubCriterionID:    k.AwardSubCriterionID,
+		Classification:         k.Classification,
 		Polarity:               k.Polarity,
 		ActivationStatus:       k.ActivationStatus,
 		DescriptionEn:          k.DescriptionEn,
@@ -263,6 +267,7 @@ type OperationalKPI struct {
 	Pillar                 *Pillar               `gorm:"foreignKey:PillarID" json:"pillar,omitempty"`
 	AwardSubCriterionID    *uuid.UUID            `gorm:"type:uuid;index" json:"award_sub_criterion_id"`
 	AwardSubCriterion      *AwardSubCriterion    `gorm:"foreignKey:AwardSubCriterionID" json:"award_sub_criterion,omitempty"`
+	Classification         string                `gorm:"size:20" json:"classification"`
 	DomainID               *uuid.UUID            `gorm:"type:uuid;index" json:"domain_id"`
 	Domain                 *Domain               `gorm:"foreignKey:DomainID" json:"domain,omitempty"`
 	OwnerType              string                `gorm:"size:20;not null;default:'internal'" json:"owner_type"`
@@ -307,6 +312,7 @@ type OperationalKPIRequest struct {
 	ProcessID              uuid.UUID  `json:"process_id" validate:"required"`
 	PillarID               *uuid.UUID `json:"pillar_id"`
 	AwardSubCriterionID    *uuid.UUID `json:"award_sub_criterion_id"`
+	Classification         string     `json:"classification" validate:"omitempty,oneof=kpi measurement output"`
 	DomainID               *uuid.UUID `json:"domain_id"`
 	OwnerType              string     `json:"owner_type" validate:"omitempty,oneof=internal external"`
 	OwnerDeptID            *uuid.UUID `json:"owner_dept_id"`
@@ -341,6 +347,7 @@ type OperationalKPIResponse struct {
 	Pillar                 *PillarResponse               `json:"pillar,omitempty"`
 	AwardSubCriterionID    *uuid.UUID                    `json:"award_sub_criterion_id"`
 	AwardSubCriterion      *AwardSubCriterionResponse    `json:"award_sub_criterion,omitempty"`
+	Classification         string                        `json:"classification"`
 	DomainID               *uuid.UUID                    `json:"domain_id"`
 	Domain                 *DomainResponse               `json:"domain,omitempty"`
 	OwnerType              string                        `json:"owner_type"`
@@ -380,6 +387,7 @@ func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 		ProcessID:              k.ProcessID,
 		PillarID:               k.PillarID,
 		AwardSubCriterionID:    k.AwardSubCriterionID,
+		Classification:         k.Classification,
 		DomainID:               k.DomainID,
 		OwnerType:              k.OwnerType,
 		OwnerDeptID:            k.OwnerDeptID,
@@ -466,6 +474,7 @@ type AwardKPI struct {
 	Process                *Process              `gorm:"foreignKey:ProcessID" json:"process,omitempty"`
 	AwardSubCriterionID    *uuid.UUID            `gorm:"type:uuid;index" json:"award_sub_criterion_id"`
 	AwardSubCriterion      *AwardSubCriterion    `gorm:"foreignKey:AwardSubCriterionID" json:"award_sub_criterion,omitempty"`
+	Classification         string                `gorm:"size:20" json:"classification"`
 	PillarID               *uuid.UUID            `gorm:"type:uuid;index" json:"pillar_id"`
 	Pillar                 *Pillar               `gorm:"foreignKey:PillarID" json:"pillar,omitempty"`
 	DomainID               *uuid.UUID            `gorm:"type:uuid;index" json:"domain_id"`
@@ -511,6 +520,7 @@ type AwardKPIRequest struct {
 	OperationalObjectiveID uuid.UUID  `json:"operational_objective_id" validate:"required"`
 	ProcessID              uuid.UUID  `json:"process_id" validate:"required"`
 	AwardSubCriterionID    *uuid.UUID `json:"award_sub_criterion_id"`
+	Classification         string     `json:"classification" validate:"omitempty,oneof=kpi measurement output"`
 	PillarID               *uuid.UUID `json:"pillar_id"`
 	DomainID               *uuid.UUID `json:"domain_id"`
 	OwnerType              string     `json:"owner_type" validate:"omitempty,oneof=internal external"`
@@ -544,6 +554,7 @@ type AwardKPIResponse struct {
 	Process                *ProcessResponse              `json:"process,omitempty"`
 	AwardSubCriterionID    *uuid.UUID                    `json:"award_sub_criterion_id"`
 	AwardSubCriterion      *AwardSubCriterionResponse    `json:"award_sub_criterion,omitempty"`
+	Classification         string                        `json:"classification"`
 	PillarID               *uuid.UUID                    `json:"pillar_id"`
 	Pillar                 *PillarResponse               `json:"pillar,omitempty"`
 	DomainID               *uuid.UUID                    `json:"domain_id"`
@@ -584,6 +595,7 @@ func (k *AwardKPI) ToResponse() AwardKPIResponse {
 		OperationalObjectiveID: k.OperationalObjectiveID,
 		ProcessID:              k.ProcessID,
 		AwardSubCriterionID:    k.AwardSubCriterionID,
+		Classification:         k.Classification,
 		PillarID:               k.PillarID,
 		DomainID:               k.DomainID,
 		OwnerType:              k.OwnerType,
