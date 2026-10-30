@@ -562,8 +562,19 @@ func (h *KpiEngagementHandler) UpdateMetric(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
 	var current models.KpiMetric
-	if err := h.db.WithContext(c.UserContext()).Select("id, kpi_id, kpi_type").First(&current, id).Error; err != nil {
+	if err := h.db.WithContext(c.UserContext()).Select("id, kpi_id, kpi_type, weight").First(&current, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	// Weight is only editable before approval; once the KPI is Approved,
+	// Active or Closed its weights are what was signed off.
+	if math.Abs(req.Weight-current.Weight) >= 0.005 {
+		status, err := services.GetKpiActivationStatus(h.db.WithContext(c.UserContext()), current.KpiType, current.KpiID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+		}
+		if status == "approved" || status == "active" || status == "closed" {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "kpi_metric_weight_locked"))
+		}
 	}
 	if h.metricNameTaken(c, current.KpiType, current.KpiID, req.Name, id) {
 		return utils.ErrorResponse(c, fiber.StatusConflict, duplicateMetricNameMsg)

@@ -1073,6 +1073,7 @@ var messages = map[string][2]string{
 	"kpi_activate_no_metrics":          {"Cannot activate this KPI: add at least one active metric with weights totalling 100%", "لا يمكن تفعيل هذا المؤشر: أضف مقياساً نشطاً واحداً على الأقل بأوزان مجموعها 100%"},
 	"kpi_activate_weight_not_100":      {"Cannot activate this KPI: active metric weights must total 100%% (currently %.2f%%)", "لا يمكن تفعيل هذا المؤشر: يجب أن يكون مجموع أوزان المقاييس النشطة 100%% (حالياً %.2f%%)"},
 	"kpi_metric_weight_exceeds":        {"Total weight of active metrics cannot exceed 100%%. Other active metrics already use %.2f%%, so this metric can be at most %.2f%%", "لا يمكن أن يتجاوز مجموع أوزان المقاييس النشطة 100%%. المقاييس النشطة الأخرى تستخدم %.2f%%، لذا يمكن أن يكون وزن هذا المقياس %.2f%% كحد أقصى"},
+	"kpi_metric_weight_locked":         {"Metric weight cannot be changed once the KPI is approved or active", "لا يمكن تغيير وزن المقياس بعد اعتماد المؤشر أو تفعيله"},
 	"no_l1_reviewer":                   {"No L1 reviewer assigned to the primary goal", "لم يتم تعيين مراجع L1 للهدف الرئيسي"},
 	"batch_no_workflow":                {"Batch has no workflow assigned", "الدُفعة ليس لها سير عمل معيّن"},
 	"domain_already_exists":            {"A domain with this name already exists", "يوجد مجال بهذا الاسم مسبقاً"},
