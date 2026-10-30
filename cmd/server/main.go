@@ -1339,11 +1339,6 @@ func main() {
 	kpi.Put("/data-sources/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateDataSource)
 	kpi.Delete("/data-sources/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteDataSource)
 
-	kpi.Get("/classifications", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListClassifications)
-	kpi.Post("/classifications", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateClassification)
-	kpi.Put("/classifications/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateClassification)
-	kpi.Delete("/classifications/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteClassification)
-
 	kpi.Get("/segmentation-dimensions", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.ListSegmentationDimensions)
 	kpi.Post("/segmentation-dimensions", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateSegmentationDimension)
 	kpi.Put("/segmentation-dimensions/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateSegmentationDimension)

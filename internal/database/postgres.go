@@ -190,7 +190,6 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			&models.KpiPerformanceBand{},
 			&models.KpiCorrectiveAction{},
 			&models.KpiDataSource{},
-			&models.KpiClassification{},
 			&models.KpiSegmentationDimension{},
 			&models.KpiPerformanceEvidence{},
 			&models.KpiMetric{},
@@ -207,12 +206,6 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		); err != nil {
 			return fmt.Errorf("failed to run goal management migrations: %w", err)
 		}
-
-		// Partial unique index: enforce unique name_en only for non-deleted classifications
-		migrationDB.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_kpi_classifications_name_en_active ON kpi_classifications (name_en) WHERE deleted_at IS NULL`)
-
-		// Drop the plain unique index if it was auto-created by a previous GORM tag
-		migrationDB.Exec(`DROP INDEX IF EXISTS idx_kpi_classifications_name_en`)
 
 		// Seed a default kpi_entry approval workflow so KpiEntry submissions
 		// have somewhere to go without requiring manual admin setup first.
