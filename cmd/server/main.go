@@ -1446,6 +1446,9 @@ func main() {
 	kpi.Post("/:type/:id/attachment", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.UploadAttachment)
 	kpi.Put("/metrics/:id", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.UpdateMetric)
 	kpi.Put("/metrics/:id/value", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.UpdateMetricValue)
+	kpi.Get("/metrics/:id/baseline-revisions", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListBaselineRevisions)
+	kpi.Post("/metrics/:id/baseline-revisions", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.RequestBaselineRevision)
+	kpi.Post("/baseline-revisions/:revisionId/review", authMiddleware.RequirePermission("kpi:approve"), kpiEngagementHandler.ReviewBaselineRevision)
 	kpi.Delete("/metrics/:id", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.DeleteMetric)
 
 	kpi.Get("/:type/:id/evidence", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListEvidence)

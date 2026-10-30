@@ -23,6 +23,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // KpiEngagementHandler covers the KPI-dictionary-item-level engagement
@@ -224,6 +225,16 @@ func (h *KpiEngagementHandler) metricNameTaken(c *fiber.Ctx, kpiType string, kpi
 		Where("kpi_type = ? AND kpi_id = ? AND id <> ? AND lower(trim(name)) = lower(trim(?))", kpiType, kpiID, excludeID, name).
 		Count(&count)
 	return count > 0
+}
+
+// metricConfigLocked reports whether the KPI has passed approval (Approved,
+// Active or Closed), after which a metric's Weight and Baseline are fixed.
+func (h *KpiEngagementHandler) metricConfigLocked(c *fiber.Ctx, kpiType string, kpiID uuid.UUID) (bool, error) {
+	status, err := services.GetKpiActivationStatus(h.db.WithContext(c.UserContext()), kpiType, kpiID)
+	if err != nil {
+		return false, err
+	}
+	return status == "approved" || status == "active" || status == "closed", nil
 }
 
 // metricWeightExceeds reports whether saving an Active metric with this weight
@@ -562,18 +573,24 @@ func (h *KpiEngagementHandler) UpdateMetric(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
 	var current models.KpiMetric
-	if err := h.db.WithContext(c.UserContext()).Select("id, kpi_id, kpi_type, weight").First(&current, id).Error; err != nil {
+	if err := h.db.WithContext(c.UserContext()).Select("id, kpi_id, kpi_type, weight, baseline_value").First(&current, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
-	// Weight is only editable before approval; once the KPI is Approved,
-	// Active or Closed its weights are what was signed off.
-	if math.Abs(req.Weight-current.Weight) >= 0.005 {
-		status, err := services.GetKpiActivationStatus(h.db.WithContext(c.UserContext()), current.KpiType, current.KpiID)
+	// Weight and Baseline are only editable before approval; once the KPI is
+	// Approved, Active or Closed they are what was signed off. Baseline then
+	// changes only through an approved baseline revision.
+	weightChanged := math.Abs(req.Weight-current.Weight) >= 0.005
+	baselineChanged := math.Abs(req.BaselineValue-current.BaselineValue) >= 0.00005
+	if weightChanged || baselineChanged {
+		locked, err := h.metricConfigLocked(c, current.KpiType, current.KpiID)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "internal_server_error"))
 		}
-		if status == "approved" || status == "active" || status == "closed" {
+		if locked && weightChanged {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "kpi_metric_weight_locked"))
+		}
+		if locked && baselineChanged {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "kpi_metric_baseline_locked"))
 		}
 	}
 	if h.metricNameTaken(c, current.KpiType, current.KpiID, req.Name, id) {
@@ -659,6 +676,161 @@ func (h *KpiEngagementHandler) UpdateMetric(c *fiber.Ctx) error {
 		Module:      "kpi",
 		ResourceID:  item.KpiID.String(),
 		Description: fmt.Sprintf("Updated metric %q", item.Name),
+		Status:      "success",
+	})
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "", item)
+}
+
+// ListBaselineRevisions returns a metric's baseline revision requests, newest
+// first. GET /kpi/metrics/:id/baseline-revisions
+func (h *KpiEngagementHandler) ListBaselineRevisions(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	var items []models.KpiBaselineRevision
+	if err := h.db.WithContext(c.UserContext()).
+		Preload("RequestedBy").Preload("ReviewedBy").
+		Where("metric_id = ?", id).Order("created_at DESC").Find(&items).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "internal_server_error"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", items)
+}
+
+// RequestBaselineRevision asks to change a locked metric's Baseline. Only one
+// request per metric can be pending at a time.
+// POST /kpi/metrics/:id/baseline-revisions
+func (h *KpiEngagementHandler) RequestBaselineRevision(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	var req models.KpiBaselineRevisionRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+	req.Reason = strings.TrimSpace(req.Reason)
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	db := h.db.WithContext(c.UserContext())
+
+	var metric models.KpiMetric
+	if err := db.Select("id, kpi_id, kpi_type, name, baseline_value").First(&metric, id).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	locked, err := h.metricConfigLocked(c, metric.KpiType, metric.KpiID)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "internal_server_error"))
+	}
+	if !locked {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "kpi_baseline_not_locked"))
+	}
+	if math.Abs(*req.NewValue-metric.BaselineValue) < 0.00005 {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "kpi_baseline_unchanged"))
+	}
+	var pending int64
+	db.Model(&models.KpiBaselineRevision{}).
+		Where("metric_id = ? AND status = ?", id, models.BaselineRevisionPending).Count(&pending)
+	if pending > 0 {
+		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "kpi_baseline_revision_pending"))
+	}
+
+	item := &models.KpiBaselineRevision{
+		MetricID:      metric.ID,
+		KpiID:         metric.KpiID,
+		KpiType:       metric.KpiType,
+		OldValue:      metric.BaselineValue,
+		NewValue:      *req.NewValue,
+		Reason:        req.Reason,
+		Status:        models.BaselineRevisionPending,
+		RequestedByID: userID,
+	}
+	if err := db.Create(item).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "internal_server_error"))
+	}
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "update",
+		Module:      "kpi",
+		ResourceID:  metric.KpiID.String(),
+		Description: fmt.Sprintf("Requested baseline revision for metric %q: %g -> %g", metric.Name, metric.BaselineValue, *req.NewValue),
+		Status:      "success",
+	})
+
+	return utils.SuccessResponse(c, fiber.StatusCreated, "", item)
+}
+
+// ReviewBaselineRevision approves or rejects a pending baseline revision.
+// Approving writes the new Baseline onto the metric in the same transaction.
+// The requester cannot review their own request.
+// POST /kpi/baseline-revisions/:revisionId/review
+func (h *KpiEngagementHandler) ReviewBaselineRevision(c *fiber.Ctx) error {
+	revisionID, err := uuid.Parse(c.Params("revisionId"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	var req models.KpiBaselineRevisionReview
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+	req.Comment = strings.TrimSpace(req.Comment)
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+
+	var item models.KpiBaselineRevision
+	var metricName string
+	errStatus, errKey := 0, ""
+	txErr := h.db.WithContext(c.UserContext()).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&item, revisionID).Error; err != nil {
+			errStatus, errKey = fiber.StatusNotFound, "not_found"
+			return err
+		}
+		if item.Status != models.BaselineRevisionPending {
+			errStatus, errKey = fiber.StatusConflict, "kpi_baseline_revision_reviewed"
+			return errors.New(errKey)
+		}
+		if item.RequestedByID == userID {
+			errStatus, errKey = fiber.StatusForbidden, "kpi_baseline_revision_self"
+			return errors.New(errKey)
+		}
+		var metric models.KpiMetric
+		if err := tx.Select("id, name").First(&metric, item.MetricID).Error; err != nil {
+			errStatus, errKey = fiber.StatusNotFound, "not_found"
+			return err
+		}
+		metricName = metric.Name
+
+		now := time.Now()
+		item.ReviewedByID = &userID
+		item.ReviewedAt = &now
+		item.ReviewComment = req.Comment
+		item.Status = models.BaselineRevisionRejected
+		if req.Decision == "approve" {
+			item.Status = models.BaselineRevisionApproved
+			if err := tx.Model(&models.KpiMetric{ID: item.MetricID}).
+				Update("baseline_value", item.NewValue).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Save(&item).Error
+	})
+	if txErr != nil {
+		if errStatus != 0 {
+			return utils.ErrorResponse(c, errStatus, i18n.T(c.UserContext(), errKey))
+		}
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "internal_server_error"))
+	}
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "update",
+		Module:      "kpi",
+		ResourceID:  item.KpiID.String(),
+		Description: fmt.Sprintf("Baseline revision for metric %q %s: %g -> %g", metricName, item.Status, item.OldValue, item.NewValue),
 		Status:      "success",
 	})
 

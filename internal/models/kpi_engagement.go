@@ -91,6 +91,53 @@ func (m *KpiMetric) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
+// ─── KPI Metric Baseline Revisions ──────────────────────────────────────────
+// A metric's Baseline is locked once its KPI is approved; changing it after
+// that needs a revision request that someone with kpi:approve signs off.
+// Approved/rejected rows stay as the audit trail of every baseline change.
+
+const (
+	BaselineRevisionPending  = "pending"
+	BaselineRevisionApproved = "approved"
+	BaselineRevisionRejected = "rejected"
+)
+
+type KpiBaselineRevision struct {
+	ID            uuid.UUID  `gorm:"type:uuid;primary_key" json:"id"`
+	MetricID      uuid.UUID  `gorm:"type:uuid;index;not null" json:"metric_id"`
+	KpiID         uuid.UUID  `gorm:"type:uuid;index;not null" json:"kpi_id"`
+	KpiType       string     `gorm:"size:20;not null" json:"kpi_type"`
+	OldValue      float64    `json:"old_value"`
+	NewValue      float64    `json:"new_value"`
+	Reason        string     `gorm:"type:text;not null" json:"reason"`
+	Status        string     `gorm:"size:20;index;not null;default:'pending'" json:"status"`
+	RequestedByID uuid.UUID  `gorm:"type:uuid;not null" json:"requested_by_id"`
+	RequestedBy   *User      `gorm:"foreignKey:RequestedByID" json:"requested_by,omitempty"`
+	ReviewedByID  *uuid.UUID `gorm:"type:uuid" json:"reviewed_by_id"`
+	ReviewedBy    *User      `gorm:"foreignKey:ReviewedByID" json:"reviewed_by,omitempty"`
+	ReviewedAt    *time.Time `json:"reviewed_at"`
+	ReviewComment string     `gorm:"type:text" json:"review_comment"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+}
+
+func (r *KpiBaselineRevision) BeforeCreate(tx *gorm.DB) error {
+	if r.ID == uuid.Nil {
+		r.ID = uuid.New()
+	}
+	return nil
+}
+
+type KpiBaselineRevisionRequest struct {
+	NewValue *float64 `json:"new_value" validate:"required"`
+	Reason   string   `json:"reason" validate:"required,max=2000"`
+}
+
+type KpiBaselineRevisionReview struct {
+	Decision string `json:"decision" validate:"required,oneof=approve reject"`
+	Comment  string `json:"comment" validate:"max=2000"`
+}
+
 type KpiMetricRequest struct {
 	Name                     string     `json:"name" validate:"required"`
 	MetricCode               string     `json:"metric_code"`
