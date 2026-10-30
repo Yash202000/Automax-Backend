@@ -19,6 +19,20 @@ const (
 	KpiEntryStatusSubmitted = "submitted"
 	KpiEntryStatusApproved  = "approved"
 	KpiEntryStatusRejected  = "rejected"
+	// An approved Entry is never edited. It is corrected by a new Entry
+	// (SupersedesEntryID -> original, EntryVersion+1) that goes through the
+	// normal approval workflow; when that correction is approved the
+	// original moves to Superseded (adjustment) or Reversed (reversal), and
+	// an approved reversal record itself ends as Reversal. Only "approved"
+	// entries count toward a period's Actual, so none of these do.
+	KpiEntryStatusSuperseded = "superseded"
+	KpiEntryStatusReversed   = "reversed"
+	KpiEntryStatusReversal   = "reversal"
+)
+
+const (
+	KpiEntryCorrectionAdjustment = "adjustment"
+	KpiEntryCorrectionReversal   = "reversal"
 )
 
 type KpiEntry struct {
@@ -77,7 +91,11 @@ type KpiEntry struct {
 	ApprovedBy                *User                  `gorm:"foreignKey:ApprovedByID" json:"approved_by,omitempty"`
 	WorkflowInstanceID        *uuid.UUID             `gorm:"type:uuid;index" json:"workflow_instance_id"`
 	EntryVersion              int                    `gorm:"default:1" json:"entry_version"`
-	SupersedesEntryID         *uuid.UUID             `gorm:"type:uuid" json:"supersedes_entry_id"`
+	SupersedesEntryID         *uuid.UUID             `gorm:"type:uuid;index" json:"supersedes_entry_id"`
+	// CorrectionType/CorrectionReason are set only on correction entries
+	// ("adjustment" or "reversal"); empty on an original entry.
+	CorrectionType            string                 `gorm:"size:20" json:"correction_type,omitempty"`
+	CorrectionReason          string                 `gorm:"type:text" json:"correction_reason,omitempty"`
 	CreatedAt                 time.Time              `json:"created_at"`
 	UpdatedAt                 time.Time              `json:"updated_at"`
 	DeletedAt                 gorm.DeletedAt         `gorm:"index" json:"-"`
@@ -353,6 +371,38 @@ func (r *KpiEntryUpdateRequest) ApplyTo(e *KpiEntry) {
 	e.ImprovementAction = r.ImprovementAction
 	e.computeActualValue()
 	e.ComputeAchievement()
+}
+
+// KpiEntryCorrectionRequest creates a correction of an approved entry. An
+// adjustment carries the corrected values (same fields as a draft edit); a
+// reversal cancels the original and ignores them.
+type KpiEntryCorrectionRequest struct {
+	KpiEntryUpdateRequest
+	CorrectionType string `json:"correction_type" validate:"required,oneof=adjustment reversal"`
+	Reason         string `json:"reason" validate:"required,max=2000"`
+}
+
+// NewCorrection builds the draft correction entry for an approved original:
+// same metric, period, scope, configuration and target snapshots, next
+// version, linked back via SupersedesEntryID. The original is not modified.
+func (e *KpiEntry) NewCorrection(req *KpiEntryCorrectionRequest, userID uuid.UUID) *KpiEntry {
+	c := *e
+	c.ID = uuid.Nil
+	c.Metric, c.Organization, c.SubmittedBy, c.ApprovedBy = nil, nil, nil, nil
+	c.Status = KpiEntryStatusDraft
+	c.SubmittedByID = &userID
+	c.ApprovedByID = nil
+	c.WorkflowInstanceID = nil
+	c.EntryVersion = e.EntryVersion + 1
+	c.SupersedesEntryID = &e.ID
+	c.CorrectionType = req.CorrectionType
+	c.CorrectionReason = req.Reason
+	c.CreatedAt, c.UpdatedAt = time.Time{}, time.Time{}
+	c.DeletedAt = gorm.DeletedAt{}
+	if req.CorrectionType == KpiEntryCorrectionAdjustment {
+		req.KpiEntryUpdateRequest.ApplyTo(&c)
+	}
+	return &c
 }
 
 // ─── KPI Entry Evidence ──────────────────────────────────────────────────

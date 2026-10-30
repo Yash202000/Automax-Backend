@@ -576,7 +576,8 @@ func (imp *kpiImporter) loadExisting() error {
 	}
 	var entries []entryRow
 	if err := db.Raw(`SELECT id, kpi_id, kpi_type, reporting_year, period_code FROM kpi_entries
-		WHERE deleted_at IS NULL AND status <> ? ORDER BY created_at`, models.KpiEntryStatusRejected).Scan(&entries).Error; err != nil {
+		WHERE deleted_at IS NULL AND status NOT IN ? ORDER BY created_at`,
+		[]string{models.KpiEntryStatusRejected, models.KpiEntryStatusSuperseded, models.KpiEntryStatusReversed, models.KpiEntryStatusReversal}).Scan(&entries).Error; err != nil {
 		return err
 	}
 	for _, e := range entries {

@@ -1080,10 +1080,15 @@ var messages = map[string][2]string{
 	"kpi_baseline_revision_pending":    {"A baseline revision for this metric is already awaiting approval", "يوجد طلب مراجعة لخط الأساس لهذا المقياس بانتظار الاعتماد"},
 	"kpi_baseline_revision_reviewed":   {"This baseline revision has already been reviewed", "تمت مراجعة طلب تعديل خط الأساس هذا مسبقاً"},
 	"kpi_baseline_revision_self":       {"You cannot approve or reject your own baseline revision request", "لا يمكنك اعتماد أو رفض طلب مراجعة خط الأساس الذي قدمته"},
-	"no_l1_reviewer":                   {"No L1 reviewer assigned to the primary goal", "لم يتم تعيين مراجع L1 للهدف الرئيسي"},
-	"batch_no_workflow":                {"Batch has no workflow assigned", "الدُفعة ليس لها سير عمل معيّن"},
-	"domain_already_exists":            {"A domain with this name already exists", "يوجد مجال بهذا الاسم مسبقاً"},
-	"data_source_already_exists":       {"A data source with this name already exists", "يوجد مصدر بيانات بهذا الاسم مسبقاً"},
+
+	"kpi_entry_approved_locked":             {"Approved entries cannot be edited or deleted; create an adjustment or reversal instead", "لا يمكن تعديل أو حذف الإدخالات المعتمدة؛ أنشئ تسوية أو عكساً بدلاً من ذلك"},
+	"kpi_entry_correction_not_approved":     {"Only approved entries can be adjusted or reversed", "لا يمكن تسوية أو عكس إلا الإدخالات المعتمدة"},
+	"kpi_entry_correction_open":             {"This entry already has an adjustment or reversal in progress", "يوجد بالفعل تسوية أو عكس قيد الإجراء لهذا الإدخال"},
+	"kpi_entry_correction_original_changed": {"The original entry is no longer approved, so this correction cannot be approved", "الإدخال الأصلي لم يعد معتمداً، لذا لا يمكن اعتماد هذا التصحيح"},
+	"no_l1_reviewer":                        {"No L1 reviewer assigned to the primary goal", "لم يتم تعيين مراجع L1 للهدف الرئيسي"},
+	"batch_no_workflow":                     {"Batch has no workflow assigned", "الدُفعة ليس لها سير عمل معيّن"},
+	"domain_already_exists":                 {"A domain with this name already exists", "يوجد مجال بهذا الاسم مسبقاً"},
+	"data_source_already_exists":            {"A data source with this name already exists", "يوجد مصدر بيانات بهذا الاسم مسبقاً"},
 
 	// Presence
 	"failed_to_set_presence":        {"Failed to set presence", "فشل تعيين الحضور"},
