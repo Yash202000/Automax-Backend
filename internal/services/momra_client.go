@@ -515,7 +515,7 @@ func (c *momraClient) UpdateIncidentStatus(ctx context.Context, crmID string, st
 	}
 
 	relativeURL := fmt.Sprintf("/api/crm940/UpdateStatusV2/%s", url.PathEscape(crmID))
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.cfg.BaseURL+relativeURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL+relativeURL, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
