@@ -253,6 +253,9 @@ func (h *KpiDictionaryHandler) UpdateStrategic(c *fiber.Ctx) error {
 	if req.OwnerType == "" {
 		updates["owner_type"] = models.KPIOwnerTypeInternal
 	}
+	if req.TargetRequirement == "" {
+		updates["target_requirement"] = "mandatory"
+	}
 
 	result := h.db.WithContext(c.UserContext()).Model(&models.StrategicKPI{ID: id}).Updates(updates)
 	if result.RowsAffected == 0 {
@@ -481,6 +484,9 @@ func (h *KpiDictionaryHandler) UpdateOperational(c *fiber.Ctx) error {
 	}
 	if req.OwnerType == "" {
 		updates["owner_type"] = models.KPIOwnerTypeInternal
+	}
+	if req.TargetRequirement == "" {
+		updates["target_requirement"] = "mandatory"
 	}
 
 	result := h.db.WithContext(c.UserContext()).Model(&models.OperationalKPI{ID: id}).Updates(updates)
@@ -729,6 +735,9 @@ func (h *KpiDictionaryHandler) UpdateAward(c *fiber.Ctx) error {
 	}
 	if req.OwnerType == "" {
 		updates["owner_type"] = models.KPIOwnerTypeInternal
+	}
+	if req.TargetRequirement == "" {
+		updates["target_requirement"] = "mandatory"
 	}
 
 	result := h.db.WithContext(c.UserContext()).Model(&models.AwardKPI{ID: id}).Updates(updates)

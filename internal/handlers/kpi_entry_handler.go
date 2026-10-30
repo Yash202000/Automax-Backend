@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -256,9 +257,13 @@ func (h *KpiEntryHandler) CreateEntry(c *fiber.Ctx) error {
 		targetQuery = targetQuery.Where("organization_id IS NULL")
 	}
 	if err := targetQuery.Order("version DESC").First(&target).Error; err != nil {
-		if targetReq != "optional" {
+		if errors.Is(err, gorm.ErrRecordNotFound) && targetReq == "optional" {
+			// Optional KPIs may proceed without an approved target.
+		} else if errors.Is(err, gorm.ErrRecordNotFound) {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest,
 				fmt.Sprintf("No approved target exists for this metric in period %s/%d — create and approve a target first.", req.PeriodCode, req.ReportingYear))
+		} else {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
 		}
 	} else {
 		item.TargetID = &target.ID
