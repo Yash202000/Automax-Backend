@@ -1080,6 +1080,7 @@ var messages = map[string][2]string{
 	"kpi_baseline_revision_pending":    {"A baseline revision for this metric is already awaiting approval", "يوجد طلب مراجعة لخط الأساس لهذا المقياس بانتظار الاعتماد"},
 	"kpi_baseline_revision_reviewed":   {"This baseline revision has already been reviewed", "تمت مراجعة طلب تعديل خط الأساس هذا مسبقاً"},
 	"kpi_baseline_revision_self":       {"You cannot approve or reject your own baseline revision request", "لا يمكنك اعتماد أو رفض طلب مراجعة خط الأساس الذي قدمته"},
+	"kpi_baseline_period_invalid":      {"Baseline Period must be a month in YYYY-MM format", "يجب أن تكون فترة خط الأساس شهراً بصيغة YYYY-MM"},
 
 	"kpi_entry_approved_locked":             {"Approved entries cannot be edited or deleted; create an adjustment or reversal instead", "لا يمكن تعديل أو حذف الإدخالات المعتمدة؛ أنشئ تسوية أو عكساً بدلاً من ذلك"},
 	"kpi_entry_correction_not_approved":     {"Only approved entries can be adjusted or reversed", "لا يمكن تسوية أو عكس إلا الإدخالات المعتمدة"},
