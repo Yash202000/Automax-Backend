@@ -26,6 +26,18 @@ type KpiDictionaryHandler struct {
 	workflowSvc  *services.KpiWorkflowService
 }
 
+func (h *KpiDictionaryHandler) validateClassificationID(ctx context.Context, classificationID *uuid.UUID) error {
+	if classificationID == nil {
+		return nil
+	}
+	var count int64
+	h.db.WithContext(ctx).Model(&models.KpiClassification{}).Where("id = ?", *classificationID).Count(&count)
+	if count == 0 {
+		return fmt.Errorf("classification not found")
+	}
+	return nil
+}
+
 func NewKpiDictionaryHandler(db *gorm.DB, actionLogSvc services.ActionLogService, workflowSvc *services.KpiWorkflowService) *KpiDictionaryHandler {
 	return &KpiDictionaryHandler{
 		db:           db,
@@ -143,6 +155,9 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 	if codeCount > 0 {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, fmt.Sprintf("A KPI with code '%s' already exists", req.Code))
 	}
+	if err := h.validateClassificationID(c.UserContext(), req.ClassificationID); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
 
 	item := &models.StrategicKPI{
 		Code:                   req.Code,
@@ -220,6 +235,9 @@ func (h *KpiDictionaryHandler) UpdateStrategic(c *fiber.Ctx) error {
 	}
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+	if err := h.validateClassificationID(c.UserContext(), req.ClassificationID); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
 	updates := map[string]interface{}{
@@ -355,6 +373,9 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 	if codeCount > 0 {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, fmt.Sprintf("A KPI with code '%s' already exists", req.Code))
 	}
+	if err := h.validateClassificationID(c.UserContext(), req.ClassificationID); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
 
 	item := &models.OperationalKPI{
 		Code:                   req.Code,
@@ -450,6 +471,9 @@ func (h *KpiDictionaryHandler) UpdateOperational(c *fiber.Ctx) error {
 	}
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+	if err := h.validateClassificationID(c.UserContext(), req.ClassificationID); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
 	updates := map[string]interface{}{
@@ -580,6 +604,9 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 	if codeCount > 0 {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, fmt.Sprintf("A KPI with code '%s' already exists", req.Code))
 	}
+	if err := h.validateClassificationID(c.UserContext(), req.ClassificationID); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
 
 	item := &models.AwardKPI{
 		Code:                   req.Code,
@@ -698,6 +725,9 @@ func (h *KpiDictionaryHandler) UpdateAward(c *fiber.Ctx) error {
 	}
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+	if err := h.validateClassificationID(c.UserContext(), req.ClassificationID); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
 	updates := map[string]interface{}{
