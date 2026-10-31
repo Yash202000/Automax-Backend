@@ -848,7 +848,7 @@ func (h *IncidentHandler) FindByIDWithLast6DigitValidation(c *fiber.Ctx) error {
 	if token == "" {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "token_required"))
 	}
-	log.Printf("Signed token recieved %s", token)
+	log.Printf("Signed token received %s", token)
 	if err := utils.ValidateIncidentToken(token, idStr); err != nil {
 		log.Printf("Token validation failed: %v", err)
 		switch err {
