@@ -1086,6 +1086,8 @@ var messages = map[string][2]string{
 	"kpi_entry_correction_not_approved":     {"Only approved entries can be adjusted or reversed", "لا يمكن تسوية أو عكس إلا الإدخالات المعتمدة"},
 	"kpi_entry_correction_open":             {"This entry already has an adjustment or reversal in progress", "يوجد بالفعل تسوية أو عكس قيد الإجراء لهذا الإدخال"},
 	"kpi_entry_correction_original_changed": {"The original entry is no longer approved, so this correction cannot be approved", "الإدخال الأصلي لم يعد معتمداً، لذا لا يمكن اعتماد هذا التصحيح"},
+	"kpi_entry_date_required":               {"Entry Date is required (YYYY-MM-DD)", "تاريخ الإدخال مطلوب (YYYY-MM-DD)"},
+	"kpi_entry_date_outside_period":         {"Entry Date must fall within the selected reporting period", "يجب أن يقع تاريخ الإدخال ضمن فترة التقرير المحددة"},
 	"no_l1_reviewer":                        {"No L1 reviewer assigned to the primary goal", "لم يتم تعيين مراجع L1 للهدف الرئيسي"},
 	"batch_no_workflow":                     {"Batch has no workflow assigned", "الدُفعة ليس لها سير عمل معيّن"},
 	"domain_already_exists":                 {"A domain with this name already exists", "يوجد مجال بهذا الاسم مسبقاً"},
