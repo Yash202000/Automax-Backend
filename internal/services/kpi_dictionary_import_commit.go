@@ -242,7 +242,7 @@ func (imp *kpiImporter) newKpiModel(k *kpiRec, idOf func(*mdNode) *uuid.UUID) in
 			OwnerType: k.OwnerType, OwnerDeptID: idOf(k.OwnerDept), OwningAgencyID: idOf(k.Agency),
 			Polarity: k.Polarity, ActivationStatus: models.KPIStatusDraft, DescriptionEn: k.DescriptionEn, DescriptionAr: k.DescriptionAr,
 			Formula: k.Formula, Baseline: k.Baseline, ReportingFrequency: k.Frequency, Lifecycle: k.Lifecycle, DataSource: k.DataSource,
-			RelatedUnits: k.RelatedUnits, Notes: k.Notes,
+			Notes: k.Notes,
 		}
 	case models.KPITypeAward:
 		return &models.AwardKPI{
@@ -251,7 +251,7 @@ func (imp *kpiImporter) newKpiModel(k *kpiRec, idOf func(*mdNode) *uuid.UUID) in
 			OwnerType: k.OwnerType, OwnerDeptID: idOf(k.OwnerDept), OwningAgencyID: idOf(k.Agency),
 			Polarity: k.Polarity, ActivationStatus: models.KPIStatusDraft, DescriptionEn: k.DescriptionEn, DescriptionAr: k.DescriptionAr,
 			Formula: k.Formula, Baseline: k.Baseline, ReportingFrequency: k.Frequency, Lifecycle: k.Lifecycle, DataSource: k.DataSource,
-			RelatedUnits: k.RelatedUnits, Notes: k.Notes,
+			Notes: k.Notes,
 		}
 	}
 	return &models.StrategicKPI{
@@ -260,7 +260,7 @@ func (imp *kpiImporter) newKpiModel(k *kpiRec, idOf func(*mdNode) *uuid.UUID) in
 		OwnerType: k.OwnerType, OwnerDeptID: idOf(k.OwnerDept), OwningAgencyID: idOf(k.Agency),
 		Polarity: k.Polarity, ActivationStatus: models.KPIStatusDraft, DescriptionEn: k.DescriptionEn, DescriptionAr: k.DescriptionAr,
 		Formula: k.Formula, Baseline: k.Baseline, ReportingFrequency: k.Frequency, Lifecycle: k.Lifecycle, DataSource: k.DataSource,
-		SegmentationAxes: k.SegAxes, RelatedUnits: k.RelatedUnits, Notes: k.Notes,
+		SegmentationAxes: k.SegAxes, Notes: k.Notes,
 	}
 }
 
@@ -272,7 +272,7 @@ func (imp *kpiImporter) kpiUpdates(k *kpiRec, idOf func(*mdNode) *uuid.UUID) map
 		"name_en": k.NameEn, "name_ar": k.NameAr, "pillar_id": idOf(k.Pillar), "goal_id": idOf(k.Goal), "domain_id": idOf(k.Domain),
 		"owner_type": k.OwnerType, "owner_dept_id": idOf(k.OwnerDept), "owning_agency_id": idOf(k.Agency), "polarity": k.Polarity,
 		"description_en": k.DescriptionEn, "description_ar": k.DescriptionAr, "formula": k.Formula, "baseline": k.Baseline,
-		"reporting_frequency": k.Frequency, "lifecycle": k.Lifecycle, "data_source": k.DataSource, "related_units": k.RelatedUnits,
+		"reporting_frequency": k.Frequency, "lifecycle": k.Lifecycle, "data_source": k.DataSource,
 		"notes": k.Notes, "updated_at": time.Now(),
 	}
 	switch k.Type {

@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"strings"
+
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/i18n"
@@ -40,7 +42,7 @@ type kpiCardBase struct {
 	CriterionLabel     string
 	ReportingFrequency string
 	DataSource         string
-	RelatedUnitsLabel  string
+	RelatedDepartmentsLabel string
 	Formula            string
 	Polarity           string
 	UnitOfMeasure      string
@@ -63,7 +65,7 @@ func (h *KpiComposedHandler) loadCardBase(ctx *fiber.Ctx, kpiType string, id uui
 	switch kpiType {
 	case models.KPITypeOperational:
 		var k models.OperationalKPI
-		if err := db.Preload("Goal").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+		if err := db.Preload("Goal").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments").
 			Preload("OperationalObjective.Pillar").Preload("OperationalObjective.Enabler").
 			First(&k, id).Error; err != nil {
 			return nil, err
@@ -100,13 +102,13 @@ func (h *KpiComposedHandler) loadCardBase(ctx *fiber.Ctx, kpiType string, id uui
 			ActivationStatus: k.ActivationStatus, Lifecycle: k.Lifecycle,
 			OwnerLabel: ownerLabel(k.OwnerType, deptName, orgName, agencyName), OwnerType: k.OwnerType,
 			PillarEnablerLabel: pillarEnabler, StrategicGoalLabel: goalTitle, CriterionLabel: criterion,
-			ReportingFrequency: k.ReportingFrequency, DataSource: k.DataSource,
+			ReportingFrequency: k.ReportingFrequency, DataSource: k.DataSource, RelatedDepartmentsLabel: relatedDeptLabel(k.RelatedDepartments),
 			Formula: k.Formula, Polarity: k.Polarity, UnitOfMeasure: k.UnitOfMeasure, Baseline: k.Baseline,
 		}, nil
 	case models.KPITypeAward:
 		var k models.AwardKPI
 		if err := db.Preload("AwardSubCriterion.AwardCriterion").Preload("Domain").
-			Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+			Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments").
 			First(&k, id).Error; err != nil {
 			return nil, err
 		}
@@ -132,13 +134,13 @@ func (h *KpiComposedHandler) loadCardBase(ctx *fiber.Ctx, kpiType string, id uui
 			ActivationStatus: k.ActivationStatus, Lifecycle: k.Lifecycle,
 			OwnerLabel: ownerLabel(k.OwnerType, deptName, orgName, agencyName), OwnerType: k.OwnerType,
 			CriterionLabel:     criterion,
-			ReportingFrequency: k.ReportingFrequency, DataSource: k.DataSource,
+			ReportingFrequency: k.ReportingFrequency, DataSource: k.DataSource, RelatedDepartmentsLabel: relatedDeptLabel(k.RelatedDepartments),
 			Formula: k.Formula, Polarity: k.Polarity, UnitOfMeasure: k.UnitOfMeasure, Baseline: k.Baseline,
 		}, nil
 	default:
 		var k models.StrategicKPI
 		if err := db.Preload("Goal").Preload("Pillar").Preload("Domain").
-			Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+			Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments").
 			First(&k, id).Error; err != nil {
 			return nil, err
 		}
@@ -170,10 +172,18 @@ func (h *KpiComposedHandler) loadCardBase(ctx *fiber.Ctx, kpiType string, id uui
 			ActivationStatus: k.ActivationStatus, Lifecycle: k.Lifecycle,
 			OwnerLabel: ownerLabel(k.OwnerType, deptName, orgName, agencyName), OwnerType: k.OwnerType,
 			PillarEnablerLabel: pillarEnabler, StrategicGoalLabel: goalTitle, CriterionLabel: criterion,
-			ReportingFrequency: k.ReportingFrequency, DataSource: k.DataSource, RelatedUnitsLabel: k.RelatedUnits,
+			ReportingFrequency: k.ReportingFrequency, DataSource: k.DataSource, RelatedDepartmentsLabel: relatedDeptLabel(k.RelatedDepartments),
 			Formula: k.Formula, Polarity: k.Polarity, UnitOfMeasure: k.UnitOfMeasure, Baseline: k.Baseline,
 		}, nil
 	}
+}
+
+func relatedDeptLabel(depts []models.Department) string {
+	names := make([]string, 0, len(depts))
+	for _, d := range depts {
+		names = append(names, d.Name)
+	}
+	return strings.Join(names, ", ")
 }
 
 func (h *KpiComposedHandler) effectiveBand(ctx *fiber.Ctx, kpiCode string) models.KpiPerformanceBandResponse {
@@ -216,7 +226,7 @@ type KpiCardResponse struct {
 	CriterionLabel     string                       `json:"criterion_label"`
 	ReportingFrequency string                       `json:"reporting_frequency"`
 	DataSource         string                       `json:"data_source"`
-	RelatedUnitsLabel  string                       `json:"related_units_label"`
+	RelatedDepartmentsLabel string                       `json:"related_departments_label"`
 	Formula            string                       `json:"formula"`
 	Polarity           string                       `json:"polarity"`
 	UnitOfMeasure      string                       `json:"unit_of_measure"`
@@ -262,7 +272,7 @@ func (h *KpiComposedHandler) GetKpiCard(c *fiber.Ctx) error {
 		OwnerLabel: base.OwnerLabel, OwnerType: base.OwnerType,
 		PillarEnablerLabel: base.PillarEnablerLabel, StrategicGoalLabel: base.StrategicGoalLabel,
 		CriterionLabel: base.CriterionLabel, ReportingFrequency: base.ReportingFrequency,
-		DataSource: base.DataSource, RelatedUnitsLabel: base.RelatedUnitsLabel,
+		DataSource: base.DataSource, RelatedDepartmentsLabel: base.RelatedDepartmentsLabel,
 		Formula: base.Formula, Polarity: base.Polarity, UnitOfMeasure: base.UnitOfMeasure, Baseline: base.Baseline,
 		TargetPlan: targetPlan, Bands: h.effectiveBand(c, base.Code),
 	}
@@ -386,7 +396,7 @@ func (h *KpiComposedHandler) GetKpiDashboard(c *fiber.Ctx) error {
 		OwnerLabel: base.OwnerLabel, OwnerType: base.OwnerType,
 		PillarEnablerLabel: base.PillarEnablerLabel, StrategicGoalLabel: base.StrategicGoalLabel,
 		CriterionLabel: base.CriterionLabel, ReportingFrequency: base.ReportingFrequency,
-		DataSource: base.DataSource, RelatedUnitsLabel: base.RelatedUnitsLabel,
+		DataSource: base.DataSource, RelatedDepartmentsLabel: base.RelatedDepartmentsLabel,
 		Formula: base.Formula, Polarity: base.Polarity, UnitOfMeasure: base.UnitOfMeasure, Baseline: base.Baseline,
 		TargetPlan: targetPlan, Bands: h.effectiveBand(c, base.Code),
 	}

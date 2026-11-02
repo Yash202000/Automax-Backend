@@ -87,7 +87,7 @@ type StrategicKPI struct {
 	Lifecycle              string                `gorm:"size:100" json:"lifecycle"`
 	DataSource             string                `gorm:"size:255" json:"data_source"`
 	SegmentationAxes       string                `gorm:"type:text" json:"segmentation_axes"`
-	RelatedUnits           string                `gorm:"type:text" json:"related_units"`
+	RelatedDepartments     []Department          `gorm:"many2many:strategic_kpi_related_departments" json:"related_departments,omitempty"`
 	Notes                  string                `gorm:"type:text" json:"notes"`
 	DocumentaFolderID      string                `gorm:"size:255" json:"documenta_folder_id"`
 	WorkflowInstanceID     *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
@@ -127,10 +127,10 @@ type StrategicKPIRequest struct {
 	ReportingFrequency     string     `json:"reporting_frequency" validate:"omitempty,oneof=monthly quarterly semi_annual annually custom"`
 	Lifecycle              string     `json:"lifecycle" validate:"max=100"`
 	DataSource             string     `json:"data_source" validate:"max=255"`
-	SegmentationAxes       string     `json:"segmentation_axes"`
-	RelatedUnits           string     `json:"related_units"`
-	Notes                  string     `json:"notes"`
-	DocumentaFolderID      string     `json:"documenta_folder_id"`
+	SegmentationAxes       string      `json:"segmentation_axes"`
+	RelatedDepartmentIDs   []uuid.UUID `json:"related_department_ids"`
+	Notes                  string      `json:"notes"`
+	DocumentaFolderID      string      `json:"documenta_folder_id"`
 }
 
 type StrategicKPIResponse struct {
@@ -170,7 +170,7 @@ type StrategicKPIResponse struct {
 	Lifecycle              string                        `json:"lifecycle"`
 	DataSource             string                        `json:"data_source"`
 	SegmentationAxes       string                        `json:"segmentation_axes"`
-	RelatedUnits           string                        `json:"related_units"`
+	RelatedDepartments     []DepartmentBriefResponse     `json:"related_departments"`
 	Notes                  string                        `json:"notes"`
 	DocumentaFolderID      string                        `json:"documenta_folder_id"`
 	WorkflowInstanceID     *uuid.UUID                    `json:"workflow_instance_id"`
@@ -207,12 +207,14 @@ func (k *StrategicKPI) ToResponse() StrategicKPIResponse {
 		Lifecycle:              k.Lifecycle,
 		DataSource:             k.DataSource,
 		SegmentationAxes:       k.SegmentationAxes,
-		RelatedUnits:           k.RelatedUnits,
 		Notes:                  k.Notes,
 		DocumentaFolderID:      k.DocumentaFolderID,
 		WorkflowInstanceID:     k.WorkflowInstanceID,
 		CreatedAt:              k.CreatedAt,
 		UpdatedAt:              k.UpdatedAt,
+	}
+	for _, d := range k.RelatedDepartments {
+		resp.RelatedDepartments = append(resp.RelatedDepartments, DepartmentBriefResponse{ID: d.ID, Name: d.Name, Code: d.Code})
 	}
 	if k.Pillar != nil {
 		r := k.Pillar.ToResponse()
@@ -292,7 +294,7 @@ type OperationalKPI struct {
 	ReportingFrequency     string                `gorm:"size:50" json:"reporting_frequency"`
 	Lifecycle              string                `gorm:"size:100" json:"lifecycle"`
 	DataSource             string                `gorm:"size:255" json:"data_source"`
-	RelatedUnits           string                `gorm:"type:text" json:"related_units"`
+	RelatedDepartments     []Department          `gorm:"many2many:operational_kpi_related_departments" json:"related_departments,omitempty"`
 	Notes                  string                `gorm:"type:text" json:"notes"`
 	DocumentaFolderID      string                `gorm:"size:255" json:"documenta_folder_id"`
 	WorkflowInstanceID     *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
@@ -332,10 +334,10 @@ type OperationalKPIRequest struct {
 	UnitOfMeasure          string     `json:"unit_of_measure" validate:"max=50"`
 	ReportingFrequency     string     `json:"reporting_frequency" validate:"omitempty,oneof=monthly quarterly semi_annual annually custom"`
 	Lifecycle              string     `json:"lifecycle" validate:"max=100"`
-	DataSource             string     `json:"data_source" validate:"max=255"`
-	RelatedUnits           string     `json:"related_units"`
-	Notes                  string     `json:"notes"`
-	DocumentaFolderID      string     `json:"documenta_folder_id"`
+	DataSource             string      `json:"data_source" validate:"max=255"`
+	RelatedDepartmentIDs   []uuid.UUID `json:"related_department_ids"`
+	Notes                  string      `json:"notes"`
+	DocumentaFolderID      string      `json:"documenta_folder_id"`
 }
 
 type OperationalKPIResponse struct {
@@ -374,7 +376,7 @@ type OperationalKPIResponse struct {
 	ReportingFrequency     string                        `json:"reporting_frequency"`
 	Lifecycle              string                        `json:"lifecycle"`
 	DataSource             string                        `json:"data_source"`
-	RelatedUnits           string                        `json:"related_units"`
+	RelatedDepartments     []DepartmentBriefResponse     `json:"related_departments"`
 	Notes                  string                        `json:"notes"`
 	DocumentaFolderID      string                        `json:"documenta_folder_id"`
 	WorkflowInstanceID     *uuid.UUID                    `json:"workflow_instance_id"`
@@ -411,12 +413,14 @@ func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 		ReportingFrequency:     k.ReportingFrequency,
 		Lifecycle:              k.Lifecycle,
 		DataSource:             k.DataSource,
-		RelatedUnits:           k.RelatedUnits,
 		Notes:                  k.Notes,
 		DocumentaFolderID:      k.DocumentaFolderID,
 		WorkflowInstanceID:     k.WorkflowInstanceID,
 		CreatedAt:              k.CreatedAt,
 		UpdatedAt:              k.UpdatedAt,
+	}
+	for _, d := range k.RelatedDepartments {
+		resp.RelatedDepartments = append(resp.RelatedDepartments, DepartmentBriefResponse{ID: d.ID, Name: d.Name, Code: d.Code})
 	}
 	if k.OperationalObjective != nil {
 		r := k.OperationalObjective.ToResponse()
@@ -505,7 +509,7 @@ type AwardKPI struct {
 	ReportingFrequency     string                `gorm:"size:50" json:"reporting_frequency"`
 	Lifecycle              string                `gorm:"size:100" json:"lifecycle"`
 	DataSource             string                `gorm:"size:255" json:"data_source"`
-	RelatedUnits           string                `gorm:"type:text" json:"related_units"`
+	RelatedDepartments     []Department          `gorm:"many2many:award_kpi_related_departments" json:"related_departments,omitempty"`
 	Notes                  string                `gorm:"type:text" json:"notes"`
 	DocumentaFolderID      string                `gorm:"size:255" json:"documenta_folder_id"`
 	WorkflowInstanceID     *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
@@ -545,10 +549,10 @@ type AwardKPIRequest struct {
 	UnitOfMeasure          string     `json:"unit_of_measure" validate:"max=50"`
 	ReportingFrequency     string     `json:"reporting_frequency" validate:"omitempty,oneof=monthly quarterly semi_annual annually custom"`
 	Lifecycle              string     `json:"lifecycle" validate:"max=100"`
-	DataSource             string     `json:"data_source" validate:"max=255"`
-	RelatedUnits           string     `json:"related_units"`
-	Notes                  string     `json:"notes"`
-	DocumentaFolderID      string     `json:"documenta_folder_id"`
+	DataSource             string      `json:"data_source" validate:"max=255"`
+	RelatedDepartmentIDs   []uuid.UUID `json:"related_department_ids"`
+	Notes                  string      `json:"notes"`
+	DocumentaFolderID      string      `json:"documenta_folder_id"`
 }
 
 type AwardKPIResponse struct {
@@ -587,7 +591,7 @@ type AwardKPIResponse struct {
 	ReportingFrequency     string                        `json:"reporting_frequency"`
 	Lifecycle              string                        `json:"lifecycle"`
 	DataSource             string                        `json:"data_source"`
-	RelatedUnits           string                        `json:"related_units"`
+	RelatedDepartments     []DepartmentBriefResponse     `json:"related_departments"`
 	Notes                  string                        `json:"notes"`
 	DocumentaFolderID      string                        `json:"documenta_folder_id"`
 	WorkflowInstanceID     *uuid.UUID                    `json:"workflow_instance_id"`
@@ -624,12 +628,14 @@ func (k *AwardKPI) ToResponse() AwardKPIResponse {
 		ReportingFrequency:     k.ReportingFrequency,
 		Lifecycle:              k.Lifecycle,
 		DataSource:             k.DataSource,
-		RelatedUnits:           k.RelatedUnits,
 		Notes:                  k.Notes,
 		DocumentaFolderID:      k.DocumentaFolderID,
 		WorkflowInstanceID:     k.WorkflowInstanceID,
 		CreatedAt:              k.CreatedAt,
 		UpdatedAt:              k.UpdatedAt,
+	}
+	for _, d := range k.RelatedDepartments {
+		resp.RelatedDepartments = append(resp.RelatedDepartments, DepartmentBriefResponse{ID: d.ID, Name: d.Name, Code: d.Code})
 	}
 	if k.Goal != nil {
 		resp.Goal = ToGoalBriefResponse(k.Goal)
