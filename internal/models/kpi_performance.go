@@ -133,6 +133,10 @@ type KpiAnnualTargetRequest struct {
 	// created target silently defaulted to "draft" regardless of which
 	// button was clicked. Omitted (nil) still defaults to "draft".
 	TargetStatus     *string                    `json:"target_status" validate:"omitempty,oneof=draft submitted approved returned rejected locked superseded"`
+	// SupersedesTargetID creates a revision of an approved target: a new
+	// Version of the same Metric+Year+Period+Org that replaces the original
+	// only once it is approved. The original is never modified otherwise.
+	SupersedesTargetID *string                  `json:"supersedes_target_id"`
 }
 
 // ToModel hydrates a KpiAnnualTarget from the request, applying
@@ -265,6 +269,7 @@ type KpiAnnualTargetResponse struct {
 	TargetRangeMax              *float64                     `json:"target_range_max"`
 	SegmentationValues          datatypes.JSON               `json:"segmentation_values"`
 	TargetStatus                string                       `json:"target_status"`
+	Version                     int                          `json:"version"`
 	EffectiveFrom               *time.Time                   `json:"effective_from"`
 	EffectiveTo                 *time.Time                   `json:"effective_to"`
 	ApprovedByID                *uuid.UUID                   `json:"approved_by_id"`
@@ -303,6 +308,7 @@ func (t *KpiAnnualTarget) ToResponse() KpiAnnualTargetResponse {
 		TargetRangeMax:             t.TargetRangeMax,
 		SegmentationValues:         t.SegmentationValues,
 		TargetStatus:               t.TargetStatus,
+		Version:                    t.Version,
 		EffectiveFrom:              t.EffectiveFrom,
 		EffectiveTo:                t.EffectiveTo,
 		ApprovedByID:               t.ApprovedByID,
