@@ -1319,6 +1319,11 @@ func main() {
 	kpi.Post("/domains", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateDomain)
 	kpi.Put("/domains/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateDomain)
 	kpi.Delete("/domains/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteDomain)
+	kpi.Get("/award-kpi-measures", authMiddleware.RequirePermission("goals:manage", "kpi:view"), kpiMasterDataHandler.ListAwardKpiMeasures)
+	kpi.Get("/award-kpi-measures/:id", authMiddleware.RequirePermission("goals:manage", "kpi:view"), kpiMasterDataHandler.GetAwardKpiMeasure)
+	kpi.Post("/award-kpi-measures", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateAwardKpiMeasure)
+	kpi.Put("/award-kpi-measures/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateAwardKpiMeasure)
+	kpi.Delete("/award-kpi-measures/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteAwardKpiMeasure)
 
 	kpi.Get("/award-criteria", authMiddleware.RequirePermission("goals:manage", "kpi:view"), kpiMasterDataHandler.ListAwardCriteria)
 	kpi.Post("/award-criteria", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateAwardCriterion)

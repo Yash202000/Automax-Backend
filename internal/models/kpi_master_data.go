@@ -391,6 +391,7 @@ func (i *Initiative) ToResponse() InitiativeResponse {
 
 type Domain struct {
 	ID        uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	Code      string         `gorm:"size:50;uniqueIndex;default:(-)" json:"code"` // assigned by Postgres (domain_code_seq); NOT NULL enforced by migration
 	NameEn    string         `gorm:"size:255;not null" json:"name_en"`
 	NameAr    string         `gorm:"size:255;not null;default:''" json:"name_ar"`
 	Type      string         `gorm:"size:50;not null" json:"type"`
@@ -415,6 +416,7 @@ type DomainRequest struct {
 
 type DomainResponse struct {
 	ID       uuid.UUID `json:"id"`
+	Code     string    `json:"code"`
 	NameEn   string    `json:"name_en"`
 	NameAr   string    `json:"name_ar"`
 	Type     string    `json:"type"`
@@ -424,11 +426,59 @@ type DomainResponse struct {
 func (d *Domain) ToResponse() DomainResponse {
 	return DomainResponse{
 		ID:       d.ID,
+		Code:     d.Code,
 		NameEn:   d.NameEn,
 		NameAr:   d.NameAr,
 		Type:     d.Type,
 		IsActive: d.IsActive,
 	}
+}
+
+// ──────────────────────────────────────────────────────────
+// AwardKpiMeasure
+// ──────────────────────────────────────────────────────────
+
+type AwardKpiMeasure struct {
+	ID        uuid.UUID      `gorm:"type:uuid;primary_key" json:"id"`
+	Code      string         `gorm:"size:50;not null;uniqueIndex;default:(-)" json:"code"` // assigned by Postgres (award_kpi_measure_code_seq)
+	NameEn    string         `gorm:"size:255;not null" json:"name_en"`
+	NameAr    string         `gorm:"size:255;not null;default:''" json:"name_ar"`
+	Version   int            `gorm:"not null;default:1" json:"version"`
+	CreatedAt time.Time      `json:"-"`
+	UpdatedAt time.Time      `json:"-"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func (m *AwardKpiMeasure) BeforeCreate(tx *gorm.DB) error {
+	if m.ID == uuid.Nil {
+		m.ID = uuid.New()
+	}
+	return nil
+}
+
+type AwardKpiMeasureRequest struct {
+	NameEn string `json:"name_en" validate:"required,max=255"`
+	NameAr string `json:"name_ar" validate:"max=255"`
+}
+
+// AwardKpiMeasureUpdateRequest adds the required version (optimistic locking):
+// the update only applies if it matches the stored version.
+type AwardKpiMeasureUpdateRequest struct {
+	NameEn  string `json:"name_en" validate:"required,max=255"`
+	NameAr  string `json:"name_ar" validate:"max=255"`
+	Version int    `json:"version" validate:"required,min=1"`
+}
+
+type AwardKpiMeasureResponse struct {
+	ID      uuid.UUID `json:"id"`
+	Code    string    `json:"code"`
+	NameEn  string    `json:"name_en"`
+	NameAr  string    `json:"name_ar"`
+	Version int       `json:"version"`
+}
+
+func (m *AwardKpiMeasure) ToResponse() AwardKpiMeasureResponse {
+	return AwardKpiMeasureResponse{ID: m.ID, Code: m.Code, NameEn: m.NameEn, NameAr: m.NameAr, Version: m.Version}
 }
 
 // ──────────────────────────────────────────────────────────
@@ -629,4 +679,3 @@ func (d *KpiSegmentationDimension) ToResponse() KpiSegmentationDimensionResponse
 		IsActive: d.IsActive,
 	}
 }
-

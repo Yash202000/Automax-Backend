@@ -1091,6 +1091,10 @@ var messages = map[string][2]string{
 	"no_l1_reviewer":                        {"No L1 reviewer assigned to the primary goal", "لم يتم تعيين مراجع L1 للهدف الرئيسي"},
 	"batch_no_workflow":                     {"Batch has no workflow assigned", "الدُفعة ليس لها سير عمل معيّن"},
 	"domain_already_exists":                 {"A domain with this name already exists", "يوجد مجال بهذا الاسم مسبقاً"},
+	"invalid_domain":                        {"Domain not found", "المجال غير موجود"},
+	"invalid_award_kpi_measure":             {"Award KPI measure not found", "مقياس مؤشر الجائزة غير موجود"},
+	"award_kpi_measure_already_exists":      {"An award KPI measure with this name already exists", "يوجد مقياس مؤشر جائزة بهذا الاسم مسبقاً"},
+	"award_kpi_measure_version_conflict":    {"This measure was modified by someone else; reload and try again", "تم تعديل هذا المقياس بواسطة مستخدم آخر؛ أعد التحميل وحاول مرة أخرى"},
 	"data_source_already_exists":            {"A data source with this name already exists", "يوجد مصدر بيانات بهذا الاسم مسبقاً"},
 
 	// Presence

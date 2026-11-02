@@ -176,6 +176,7 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			&models.Process{},
 			&models.Initiative{},
 			&models.Domain{},
+			&models.AwardKpiMeasure{},
 			&models.AwardCriterion{},
 			&models.AwardSubCriterion{},
 			&models.StrategicKPI{},
@@ -252,6 +253,16 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		// including Award KPIs, which previously required it.
 		if err := migrations.MigrateKpiDictionaryUnifyTaxonomy(migrationDB); err != nil {
 			log.Printf("Warning: KPI dictionary taxonomy unification migration failed: %v", err)
+		}
+
+		// award_kpi_measures.code (KPI-AWRD-MSR-NN) is assigned by a Postgres sequence.
+		if err := migrations.MigrateAwardKpiMeasureCodeSequence(migrationDB); err != nil {
+			log.Printf("Warning: award KPI measure code sequence migration failed: %v", err)
+		}
+
+		// domains.code (KPI-DOM-NN) is assigned by a Postgres sequence.
+		if err := migrations.MigrateDomainCodeSequence(migrationDB); err != nil {
+			log.Printf("Warning: domain code sequence migration failed: %v", err)
 		}
 
 		// Enforce unique domain names (excluding soft-deleted records).
@@ -1226,6 +1237,7 @@ func unseedGoalManagement(db *gorm.DB) {
 		"strategic_kpis",
 		"award_sub_criteria",
 		"award_criteria",
+		"award_kpi_measures",
 		"domains",
 		"initiatives",
 		"processes",

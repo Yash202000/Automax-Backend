@@ -59,6 +59,8 @@ type StrategicKPI struct {
 	Pillar                 *Pillar               `gorm:"foreignKey:PillarID" json:"pillar,omitempty"`
 	DomainID               *uuid.UUID            `gorm:"type:uuid;index" json:"domain_id"`
 	Domain                 *Domain               `gorm:"foreignKey:DomainID" json:"domain,omitempty"`
+	AwardKpiMeasureID      *uuid.UUID            `gorm:"type:uuid;index" json:"award_kpi_measure_id"`
+	AwardKpiMeasure        *AwardKpiMeasure      `gorm:"foreignKey:AwardKpiMeasureID" json:"award_kpi_measure,omitempty"`
 	OwnerType              string                `gorm:"size:20;not null;default:'internal'" json:"owner_type"`
 	OwnerDeptID            *uuid.UUID            `gorm:"type:uuid;index" json:"owner_dept_id"`
 	OwnerDept              *Department           `gorm:"foreignKey:OwnerDeptID" json:"owner_dept,omitempty"`
@@ -109,6 +111,7 @@ type StrategicKPIRequest struct {
 	NameAr                 string     `json:"name_ar" validate:"max=255"`
 	PillarID               *uuid.UUID `json:"pillar_id"`
 	DomainID               *uuid.UUID `json:"domain_id"`
+	AwardKpiMeasureID      *uuid.UUID `json:"award_kpi_measure_id"`
 	OwnerType              string     `json:"owner_type" validate:"omitempty,oneof=internal external"`
 	OwnerDeptID            *uuid.UUID `json:"owner_dept_id"`
 	OwnerOrgID             *uuid.UUID `json:"owner_org_id"`
@@ -142,6 +145,8 @@ type StrategicKPIResponse struct {
 	Pillar                 *PillarResponse               `json:"pillar,omitempty"`
 	DomainID               *uuid.UUID                    `json:"domain_id"`
 	Domain                 *DomainResponse               `json:"domain,omitempty"`
+	AwardKpiMeasureID      *uuid.UUID                    `json:"award_kpi_measure_id"`
+	AwardKpiMeasure        *AwardKpiMeasureResponse      `json:"award_kpi_measure,omitempty"`
 	OwnerType              string                        `json:"owner_type"`
 	OwnerDeptID            *uuid.UUID                    `json:"owner_dept_id"`
 	OwnerDept              *DepartmentBriefResponse      `json:"owner_dept,omitempty"`
@@ -186,6 +191,7 @@ func (k *StrategicKPI) ToResponse() StrategicKPIResponse {
 		NameAr:                 k.NameAr,
 		PillarID:               k.PillarID,
 		DomainID:               k.DomainID,
+		AwardKpiMeasureID:      k.AwardKpiMeasureID,
 		OwnerType:              k.OwnerType,
 		OwnerDeptID:            k.OwnerDeptID,
 		OwnerOrgID:             k.OwnerOrgID,
@@ -221,6 +227,10 @@ func (k *StrategicKPI) ToResponse() StrategicKPIResponse {
 	if k.Domain != nil {
 		r := k.Domain.ToResponse()
 		resp.Domain = &r
+	}
+	if k.AwardKpiMeasure != nil {
+		r := k.AwardKpiMeasure.ToResponse()
+		resp.AwardKpiMeasure = &r
 	}
 	if k.OwnerDept != nil {
 		resp.OwnerDept = ToDepartmentBriefResponse(k.OwnerDept)
@@ -274,6 +284,8 @@ type OperationalKPI struct {
 	Classification         string                `gorm:"size:20" json:"classification"`
 	DomainID               *uuid.UUID            `gorm:"type:uuid;index" json:"domain_id"`
 	Domain                 *Domain               `gorm:"foreignKey:DomainID" json:"domain,omitempty"`
+	AwardKpiMeasureID      *uuid.UUID            `gorm:"type:uuid;index" json:"award_kpi_measure_id"`
+	AwardKpiMeasure        *AwardKpiMeasure      `gorm:"foreignKey:AwardKpiMeasureID" json:"award_kpi_measure,omitempty"`
 	OwnerType              string                `gorm:"size:20;not null;default:'internal'" json:"owner_type"`
 	OwnerDeptID            *uuid.UUID            `gorm:"type:uuid;index" json:"owner_dept_id"`
 	OwnerDept              *Department           `gorm:"foreignKey:OwnerDeptID" json:"owner_dept,omitempty"`
@@ -319,6 +331,7 @@ type OperationalKPIRequest struct {
 	AwardSubCriterionID    *uuid.UUID `json:"award_sub_criterion_id"`
 	Classification         string     `json:"classification" validate:"omitempty,oneof=kpi measurement output"`
 	DomainID               *uuid.UUID `json:"domain_id"`
+	AwardKpiMeasureID      *uuid.UUID `json:"award_kpi_measure_id"`
 	OwnerType              string     `json:"owner_type" validate:"omitempty,oneof=internal external"`
 	OwnerDeptID            *uuid.UUID `json:"owner_dept_id"`
 	OwnerOrgID             *uuid.UUID `json:"owner_org_id"`
@@ -356,6 +369,8 @@ type OperationalKPIResponse struct {
 	Classification         string                        `json:"classification"`
 	DomainID               *uuid.UUID                    `json:"domain_id"`
 	Domain                 *DomainResponse               `json:"domain,omitempty"`
+	AwardKpiMeasureID      *uuid.UUID                    `json:"award_kpi_measure_id"`
+	AwardKpiMeasure        *AwardKpiMeasureResponse      `json:"award_kpi_measure,omitempty"`
 	OwnerType              string                        `json:"owner_type"`
 	OwnerDeptID            *uuid.UUID                    `json:"owner_dept_id"`
 	OwnerDept              *DepartmentBriefResponse      `json:"owner_dept,omitempty"`
@@ -396,6 +411,7 @@ func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 		AwardSubCriterionID:    k.AwardSubCriterionID,
 		Classification:         k.Classification,
 		DomainID:               k.DomainID,
+		AwardKpiMeasureID:      k.AwardKpiMeasureID,
 		OwnerType:              k.OwnerType,
 		OwnerDeptID:            k.OwnerDeptID,
 		OwnerOrgID:             k.OwnerOrgID,
@@ -437,6 +453,10 @@ func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 	if k.Domain != nil {
 		r := k.Domain.ToResponse()
 		resp.Domain = &r
+	}
+	if k.AwardKpiMeasure != nil {
+		r := k.AwardKpiMeasure.ToResponse()
+		resp.AwardKpiMeasure = &r
 	}
 	if k.Goal != nil {
 		resp.Goal = ToGoalBriefResponse(k.Goal)
@@ -487,6 +507,8 @@ type AwardKPI struct {
 	Pillar                 *Pillar               `gorm:"foreignKey:PillarID" json:"pillar,omitempty"`
 	DomainID               *uuid.UUID            `gorm:"type:uuid;index" json:"domain_id"`
 	Domain                 *Domain               `gorm:"foreignKey:DomainID" json:"domain,omitempty"`
+	AwardKpiMeasureID      *uuid.UUID            `gorm:"type:uuid;index" json:"award_kpi_measure_id"`
+	AwardKpiMeasure        *AwardKpiMeasure      `gorm:"foreignKey:AwardKpiMeasureID" json:"award_kpi_measure,omitempty"`
 	OwnerType              string                `gorm:"size:20;not null;default:'internal'" json:"owner_type"`
 	OwnerDeptID            *uuid.UUID            `gorm:"type:uuid;index" json:"owner_dept_id"`
 	OwnerDept              *Department           `gorm:"foreignKey:OwnerDeptID" json:"owner_dept,omitempty"`
@@ -532,6 +554,7 @@ type AwardKPIRequest struct {
 	Classification         string     `json:"classification" validate:"omitempty,oneof=kpi measurement output"`
 	PillarID               *uuid.UUID `json:"pillar_id"`
 	DomainID               *uuid.UUID `json:"domain_id"`
+	AwardKpiMeasureID      *uuid.UUID `json:"award_kpi_measure_id"`
 	OwnerType              string     `json:"owner_type" validate:"omitempty,oneof=internal external"`
 	OwnerDeptID            *uuid.UUID `json:"owner_dept_id"`
 	OwnerOrgID             *uuid.UUID `json:"owner_org_id"`
@@ -569,6 +592,8 @@ type AwardKPIResponse struct {
 	Pillar                 *PillarResponse               `json:"pillar,omitempty"`
 	DomainID               *uuid.UUID                    `json:"domain_id"`
 	Domain                 *DomainResponse               `json:"domain,omitempty"`
+	AwardKpiMeasureID      *uuid.UUID                    `json:"award_kpi_measure_id"`
+	AwardKpiMeasure        *AwardKpiMeasureResponse      `json:"award_kpi_measure,omitempty"`
 	OwnerType              string                        `json:"owner_type"`
 	OwnerDeptID            *uuid.UUID                    `json:"owner_dept_id"`
 	OwnerDept              *DepartmentBriefResponse      `json:"owner_dept,omitempty"`
@@ -609,6 +634,7 @@ func (k *AwardKPI) ToResponse() AwardKPIResponse {
 		Classification:         k.Classification,
 		PillarID:               k.PillarID,
 		DomainID:               k.DomainID,
+		AwardKpiMeasureID:      k.AwardKpiMeasureID,
 		OwnerType:              k.OwnerType,
 		OwnerDeptID:            k.OwnerDeptID,
 		OwnerOrgID:             k.OwnerOrgID,
@@ -653,6 +679,10 @@ func (k *AwardKPI) ToResponse() AwardKPIResponse {
 	if k.Domain != nil {
 		r := k.Domain.ToResponse()
 		resp.Domain = &r
+	}
+	if k.AwardKpiMeasure != nil {
+		r := k.AwardKpiMeasure.ToResponse()
+		resp.AwardKpiMeasure = &r
 	}
 	if k.OwnerDept != nil {
 		resp.OwnerDept = ToDepartmentBriefResponse(k.OwnerDept)
