@@ -173,7 +173,9 @@ func ParseTemplateVariables(raw string) []string {
 	return out
 }
 
-// BuildAmanaVariables orders values by the template's variable list and fails if any is missing or empty.
+// BuildAmanaVariables orders values by the template's variable list and fails if any variable is
+// missing (key absent). A key that is present with an empty value (e.g. an empty comment) is valid
+// and is passed through as an empty string.
 func BuildAmanaVariables(names []string, vars map[string]string) ([]string, error) {
 	lower := make(map[string]string, len(vars))
 	for k, v := range vars {
@@ -183,7 +185,7 @@ func BuildAmanaVariables(names []string, vars map[string]string) ([]string, erro
 	var missing []string
 	for _, n := range names {
 		v, ok := lower[strings.ToLower(n)]
-		if !ok || strings.TrimSpace(v) == "" {
+		if !ok {
 			missing = append(missing, n)
 			continue
 		}

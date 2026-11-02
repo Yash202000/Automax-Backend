@@ -133,7 +133,7 @@ func SeedDefaultSMSTemplates(db *gorm.DB) error {
 			log.Printf("[SMS-SEED] failed to seed %s: %v", t.Code, err)
 			return err
 		}
-		log.Printf("[SMS-SEED] seeded default SMS template %s", t.Code)
+		log.Printf("[SMS-SEED] seeded default SMS template %s — WARNING: no Amana provider_template_id yet; SMS using this template is refused until one is set in Notification Templates", t.Code)
 	}
 	return nil
 }

@@ -79,9 +79,10 @@ func (s *incidentPublicFeedbackService) Create(ctx context.Context, incidentID u
 
 	// Send SMS asynchronously — a delivery failure must not block the API response.
 	smsLang := SMSLanguageFromContext(ctx) // captured before the goroutine; the request ctx may be gone later
+	// Build the link before the goroutine: it reads the request ctx, which is cancelled once the response is sent.
+	link := utils.BuildFeedbackLink(ctx, incidentID.String(), f.ID.String(), GetFeedbackTokenDuration())
 	go func() {
 		// SMS is template-only: always the approved INCIDENT_FEEDBACK_REQUEST_SMS template.
-		link := utils.BuildFeedbackLink(ctx, incidentID.String(), f.ID.String(), GetFeedbackTokenDuration())
 		err := s.notification.SendSMSTemplate(
 			context.Background(), "INCIDENT_FEEDBACK_REQUEST_SMS", smsLang, f.MobileNo,
 			map[string]string{"feedback_link": link, "feedback_url": link},
