@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/automax/backend/internal/config"
@@ -13,6 +15,7 @@ import (
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/internal/utils"
+	"github.com/automax/backend/pkg/constants"
 	pkgUtils "github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 )
@@ -24,6 +27,98 @@ type NotificationService struct {
 
 	storage *storage.MinIOStorage
 	cfg     *config.Config
+
+	amanaOnce sync.Once
+	amana     SMSTemplateSender
+}
+
+// smsVariableOrder is the Amana Variables[] order: the template's variables column wins,
+// else the {{placeholders}} of the body in order of appearance.
+func smsVariableOrder(variablesColumn, body string) ([]string, string) {
+	if names := ParseTemplateVariables(variablesColumn); len(names) > 0 {
+		return names, "variables column"
+	}
+	return ExtractPlaceholders(body), "body placeholders"
+}
+
+// OTPSMSTemplateCode is the SMS template (seeded as a default, editable in Notification Templates)
+// used for one-time passcodes. Set its provider_template_id to the Amana TemplateID to send OTPs
+// through Amana; without one, OTPs go through Twilio. Variable: {{otp}}.
+const OTPSMSTemplateCode = "OTP_SMS"
+
+// SendOTPSMS sends a one-time passcode SMS from the OTP_SMS template through Amana.
+// Shared by login OTP and password-reset OTP.
+func (s *NotificationService) SendOTPSMS(ctx context.Context, phone, otp string, sessionID *uuid.UUID) error {
+	code := OTPSMSTemplateCode
+	_, err := s.SendNotification(ctx, "sms", &code, "en", []string{phone}, nil, nil, "", "", map[string]string{"otp": otp}, nil, nil, sessionID)
+	return err
+}
+
+// failSMS records an SMS that cannot be sent (no template, or no Amana mapping) as a failed
+// notification_logs row and returns the reason, so the problem is visible in the monitoring dashboard.
+func (s *NotificationService) failSMS(ctx context.Context, templateCode *string, language string, to []string, sentBy *uuid.UUID, reason string) (*SendNotificationResult, error) {
+	logID := uuid.New()
+	log.Printf("[SMS] stage=reject log_id=%s template=%q code=%s: %s", logID, deref(templateCode), models.FailureCodeTemplateNotConfigured, reason)
+
+	recipients := make(models.RecipientArray, 0, len(to))
+	for _, phone := range to {
+		recipients = append(recipients, models.RecipientInfo{
+			Email: phone, Channel: phone, Type: "to", Status: "failed",
+			Error: reason, ErrorMessage: reason, FailureCode: models.FailureCodeTemplateNotConfigured,
+		})
+	}
+	now := time.Now()
+	row := &models.NotificationLog{
+		ID: logID, Channel: "sms", Direction: models.DirectionOutbound, Category: models.CategorySent,
+		TemplateCode: deref(templateCode), Language: language, Recipients: recipients,
+		Status: models.StatusFailed, Provider: "amana",
+		FailureCode: models.FailureCodeTemplateNotConfigured, ErrorMessage: reason,
+		SentBy: sentBy, SentAt: &now, CreatedAt: now, UpdatedAt: &now,
+	}
+	if err := s.logRepo.Create(ctx, row); err != nil {
+		log.Printf("[SMS] stage=reject log_id=%s could not save failure log: %v", logID, err)
+		return nil, fmt.Errorf("%s", reason)
+	}
+	return &SendNotificationResult{SentLog: row}, fmt.Errorf("%s", reason)
+}
+
+// smsAudit is the Amana request/response detail persisted on the recipient row of notification_logs.
+type smsAudit struct {
+	TemplateID string
+	Variables  []string
+	StatusCode int
+	Response   string
+}
+
+// sendAmanaSMS validates and sends one template-based SMS through Amana.
+// The audit is filled as far as the call got, also on failure.
+func (s *NotificationService) sendAmanaSMS(ctx context.Context, phone, providerTemplateID string, varNames []string, variables map[string]string) (string, smsAudit, error) {
+	tag := smsLogTag(ctx)
+	audit := smsAudit{TemplateID: strings.TrimSpace(providerTemplateID)}
+	templateID, err := strconv.Atoi(audit.TemplateID)
+	if err != nil || templateID <= 0 {
+		log.Printf("[SMS] provider=amana stage=validate FAILED %s invalid provider_template_id %q: must be a positive number", tag, providerTemplateID)
+		return "", audit, fmt.Errorf("invalid SMS provider_template_id %q: must be a positive number", providerTemplateID)
+	}
+	mobile := pkgUtils.NationalMobile(phone)
+	if strings.Trim(mobile, "0123456789") != "" || len(strings.TrimLeft(mobile, "0")) < 8 {
+		log.Printf("[SMS] provider=amana stage=validate FAILED %s invalid mobile number to=%s template_id=%d", tag, maskMobile(phone), templateID)
+		return "", audit, fmt.Errorf("invalid mobile number %q", maskMobile(phone))
+	}
+	values, err := BuildAmanaVariables(varNames, variables)
+	if err != nil {
+		log.Printf("[SMS] provider=amana stage=validate FAILED %s to=%s template_id=%d variable build failed (expected %v): %v", tag, maskMobile(mobile), templateID, varNames, err)
+		return "", audit, err
+	}
+	audit.Variables = values
+	log.Printf("[SMS] provider=amana stage=validate OK %s to=%s template_id=%d variable_order=%v", tag, maskMobile(mobile), templateID, varNames)
+	s.amanaOnce.Do(func() { s.amana = NewAmanaSMSSender(s.cfg.MOMRA) })
+	res, err := s.amana.SendSMSByTemplateIDDetailed(ctx, mobile, templateID, values)
+	if res != nil {
+		audit.StatusCode, audit.Response = res.StatusCode, res.Response
+		return res.MessageID, audit, err
+	}
+	return "", audit, err
 }
 
 type SendNotificationResult struct {
@@ -76,9 +171,18 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 	}
 
 	if channel == "sms" || channel == "whatsapp" {
+		// Normalize into a copy so the caller's slice is never mutated.
+		normalized := make([]string, len(to))
 		for i, phone := range to {
-			to[i] = pkgUtils.NormalizeMobile(phone, s.cfg.CountryCode)
+			normalized[i] = pkgUtils.NormalizeMobile(phone, s.cfg.CountryCode)
 		}
+		to = normalized
+	}
+	tplCodeForLog := deref(templateCode)
+
+	// SMS is template-only (Amana): a template code is required.
+	if channel == "sms" && strings.TrimSpace(tplCodeForLog) == "" {
+		return s.failSMS(ctx, templateCode, language, to, sentBy, "SMS requires a template with an Amana provider_template_id; free-text SMS is not supported")
 	}
 
 	// When a template code is provided the template itself supplies subject/body,
@@ -88,12 +192,19 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		return nil, fmt.Errorf("either subject or body must be provided")
 	}
 
+	// Amana TemplateID and ordered variable names of the SMS template (set below, SMS only).
+	var smsProviderTplID string
+	var smsVarNames []string
+
 	//TEMPLATE LOGIC
 	if templateCode != nil && *templateCode != "" {
 
 		tpl, err := s.templateRepo.FindByCode(ctx, *templateCode, channel)
 		if err != nil {
-			// Template not found — fall through and use the provided subject/body as-is.
+			if channel == "sms" {
+				return s.failSMS(ctx, templateCode, language, to, sentBy, fmt.Sprintf("SMS template %q not found", *templateCode))
+			}
+			// Other channels: fall through and use the provided subject/body as-is.
 			log.Printf("[NotificationService] template '%s' not found for channel '%s', using fallback content: %v", *templateCode, channel, err)
 		} else {
 			// Use whichever body is set. When the requested language has content, prefer it;
@@ -115,7 +226,16 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 				tplBody = tpl.BodyAR
 				tplSubject = tpl.SubjectAR
 			} else {
-				log.Printf("[NotificationService] Template '%s': both EN and AR bodies are empty — skipping send", *templateCode)
+				log.Printf("[NotificationService] Template '%s': both EN and AR bodies are empty", *templateCode)
+			}
+
+			if channel == "sms" {
+				smsProviderTplID = strings.TrimSpace(tpl.ProviderTemplateID)
+				if smsProviderTplID == "" {
+					return s.failSMS(ctx, templateCode, language, to, sentBy, fmt.Sprintf("SMS template %q has no Amana provider_template_id configured", *templateCode))
+				}
+				smsVarNames, _ = smsVariableOrder(tpl.Variables, tplBody)
+				log.Printf("[SMS] stage=route template=%q → amana provider_template_id=%s variable_order=%v", *templateCode, smsProviderTplID, smsVarNames)
 			}
 
 			// The citizen report link follows the language of the template body actually used
@@ -160,6 +280,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 	fromPhone := ""
 	var recipientStatuses models.RecipientArray
 	var attachmentInfo models.AttachmentArray
+	var sendLogID uuid.UUID // set for SMS sends; reused as the notification_logs row id
 
 	allRecipients := append(append([]string{}, to...), cc...)
 	allRecipients = append(allRecipients, bcc...)
@@ -232,29 +353,27 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 				fromPhone = senderUser.Phone
 			}
 		}
+		provider = "amana"
+		// Correlation id: becomes the notification_logs row id, so every [SMS] line ties to that row.
+		sendLogID = uuid.New()
+		ctx = withSMSLogID(ctx, sendLogID)
+		log.Printf("[SMS] stage=start log_id=%s template=%q recipients=%d lang=%s", sendLogID, tplCodeForLog, len(to), language)
 		for _, phone := range to {
-			sid, err := utils.SendSMS(ctx, phone, body)
+			sid, audit, err := s.sendAmanaSMS(ctx, phone, smsProviderTplID, smsVarNames, variables)
+			info := models.RecipientInfo{
+				Email: phone, Channel: phone, Type: "to", Status: "success", ProviderMessageID: sid,
+				ProviderTemplateID: audit.TemplateID, ProviderVariables: audit.Variables,
+				ProviderStatusCode: audit.StatusCode, ProviderResponse: audit.Response,
+			}
 			if err != nil {
 				status = "failed"
-				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-					Email:       phone,
-					Channel:     phone,
-					Type:        "to",
-					Status:      "failed",
-					Error:       err.Error(),
-					FailureCode: ClassifyFailureCode(err),
-				})
+				info.Status, info.Error, info.FailureCode = "failed", err.Error(), ClassifyFailureCode(err)
+				log.Printf("[SMS] stage=done FAILED log_id=%s template=%q to=%s code=%s: %v", sendLogID, tplCodeForLog, maskMobile(phone), info.FailureCode, err)
 			} else {
-				recipientStatuses = append(recipientStatuses, models.RecipientInfo{
-					Email:             phone,
-					Channel:           phone,
-					Type:              "to",
-					Status:            "success",
-					ProviderMessageID: sid,
-				})
+				log.Printf("[SMS] stage=done SENT log_id=%s template=%q to=%s message_id=%q", sendLogID, tplCodeForLog, maskMobile(phone), sid)
 			}
+			recipientStatuses = append(recipientStatuses, info)
 		}
-		provider = "twilio"
 	case "whatsapp":
 		status = "sent"
 		for _, phone := range to {
@@ -324,8 +443,12 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 	}
 
 	now := time.Now()
-	log := &models.NotificationLog{
-		ID:           uuid.New(),
+	sentLogID := uuid.New()
+	if sendLogID != uuid.Nil {
+		sentLogID = sendLogID
+	}
+	sentLog := &models.NotificationLog{
+		ID:           sentLogID,
 		Channel:      channel,
 		Direction:    models.DirectionOutbound,
 		Category:     models.CategorySent,
@@ -350,8 +473,13 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		UpdatedAt:    &now,
 	}
 
-	if err := s.logRepo.Create(ctx, log); err != nil {
-		return nil, err
+	if err := s.logRepo.Create(ctx, sentLog); err != nil {
+		log.Printf("[NotificationService] failed to persist notification log (channel=%s template=%q status=%s): %v", channel, tplCodeForLog, status, err)
+		if status == "failed" {
+			// Delivery already failed; surface that rather than a secondary DB error.
+			return nil, fmt.Errorf("notification delivery failed (%s) and log could not be saved: %w", topLevelErrorMessage, err)
+		}
+		return nil, fmt.Errorf("notification sent but log could not be saved: %w", err)
 	}
 
 	// Always create inbox logs for internal recipients, even if delivery failed. This ensures escalation and system notifications always appear in the recipient's inbox.
@@ -391,7 +519,9 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 			UpdatedAt:    &now,
 		}
 
-		if err := s.logRepo.Create(ctx, inboxLog); err == nil {
+		if err := s.logRepo.Create(ctx, inboxLog); err != nil {
+			log.Printf("[NotificationService] failed to create inbox log for user=%s (channel=%s template=%q): %v", user.ID, channel, tplCodeForLog, err)
+		} else {
 			inboxLogIDs = append(inboxLogIDs, inboxLog.ID)
 		}
 	}
@@ -402,15 +532,56 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		// an incident_id for the communication history) need SentLog.ID even on failure.
 		// Existing callers that only check `err != nil` before returning are unaffected.
 		return &SendNotificationResult{
-			SentLog:     log,
+			SentLog:     sentLog,
 			InboxLogIDs: inboxLogIDs,
-		}, fmt.Errorf("notification delivery failed")
+		}, fmt.Errorf("notification delivery failed (channel=%s code=%s): %s", channel, failureCode, topLevelErrorMessage)
 	}
 
+	log.Printf("[NotificationService] delivered channel=%s template=%q provider=%s recipients=%d log_id=%s", channel, tplCodeForLog, provider, len(recipientStatuses), sentLog.ID)
 	return &SendNotificationResult{
-		SentLog:     log,
+		SentLog:     sentLog,
 		InboxLogIDs: inboxLogIDs,
 	}, nil
+}
+
+// SMSLanguageFromContext returns the language ("en" or "ar") of the user who triggered the
+// request, taken from the Accept-Language header stored in ctx by the validation middleware.
+// Anything other than "ar" (or a missing value) is treated as "en".
+func SMSLanguageFromContext(ctx context.Context) string {
+	if lang, _ := ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE).(string); lang == "ar" {
+		return "ar"
+	}
+	return "en"
+}
+
+// SendSMSTemplate sends one template-based SMS (no hardcoded body) and tags the resulting
+// log with incidentID when given. The error carries the reason (template missing, empty body,
+// provider failure) so callers only need to log it. Safe to call on a nil receiver.
+func (s *NotificationService) SendSMSTemplate(ctx context.Context, code, language, phone string, vars map[string]string, sentBy, incidentID *uuid.UUID) error {
+	if s == nil {
+		return fmt.Errorf("notification service unavailable: SMS template %q not sent", code)
+	}
+	if strings.TrimSpace(code) == "" {
+		return fmt.Errorf("SMS template code is empty")
+	}
+	if strings.TrimSpace(phone) == "" {
+		log.Printf("[SMS] stage=skip template=%q no recipient phone — SMS not sent, no log row", code)
+		return fmt.Errorf("no recipient phone for SMS template %q", code)
+	}
+	if language == "" {
+		language = "en"
+	}
+	result, err := s.SendNotification(ctx, "sms", &code, language, []string{phone}, nil, nil, "", "", vars, nil, sentBy, nil)
+	if incidentID != nil && result != nil && result.SentLog != nil {
+		if tagErr := s.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, *incidentID); tagErr != nil {
+			log.Printf("[SMS] stage=tag template=%q could not tag log %s with incident %s: %v", code, result.SentLog.ID, incidentID, tagErr)
+		}
+	}
+	if err != nil {
+		log.Printf("[SMS] stage=caller FAILED template=%q to=%s lang=%s: %v", code, maskMobile(phone), language, err)
+		return err
+	}
+	return nil
 }
 
 func deref(s *string) string {
@@ -603,6 +774,11 @@ func (s *NotificationService) ResendNotification(ctx context.Context, id uuid.UU
 		return nil, fmt.Errorf("only failed, undeliverable, or expired notifications can be resent (current status: %s)", original.Status)
 	}
 
+	// An OTP must not be re-sent (it may be stale): the user requests a new code instead.
+	if original.OTPSessionID != nil || strings.EqualFold(original.TemplateCode, OTPSMSTemplateCode) {
+		return nil, fmt.Errorf("OTP messages cannot be resent: request a new code")
+	}
+
 	var to, cc, bcc []string
 	for _, r := range original.Recipients {
 		recipient := r.Channel
@@ -624,13 +800,55 @@ func (s *NotificationService) ResendNotification(ctx context.Context, id uuid.UU
 	// persisted as a new log row) and a non-nil error. Callers that only
 	// check `err != nil` are unaffected; ResendNotification propagates the
 	// error the same way Send does today.
-	result, sendErr := s.SendNotification(ctx, original.Channel, nil, original.Language, to, cc, bcc, original.Subject, original.Body, nil, nil, resentBy, nil)
+	// SMS is template-only: re-send through the original template with the variable values stored on the log.
+	var templateCode *string
+	var resendVars map[string]string
+	if original.Channel == "sms" {
+		var err error
+		if templateCode, resendVars, err = s.smsResendInput(ctx, original); err != nil {
+			return nil, err
+		}
+	}
+	result, sendErr := s.SendNotification(ctx, original.Channel, templateCode, original.Language, to, cc, bcc, original.Subject, original.Body, resendVars, nil, resentBy, nil)
 	if sendErr != nil {
 		return nil, sendErr
 	}
 
 	response := models.ToNotificationLogResponse(result.SentLog)
 	return &response, nil
+}
+
+// smsResendInput returns the template code and named variables needed to re-send a logged SMS,
+// rebuilt from the values stored in provider_variables (in the template's variable order).
+func (s *NotificationService) smsResendInput(ctx context.Context, original *models.NotificationLog) (*string, map[string]string, error) {
+	if original.TemplateCode == "" {
+		return nil, nil, fmt.Errorf("SMS cannot be resent: the original has no template code")
+	}
+	var stored []string
+	for _, r := range original.Recipients {
+		if len(r.ProviderVariables) > 0 {
+			stored = r.ProviderVariables
+			break
+		}
+	}
+	tpl, err := s.templateRepo.FindByCode(ctx, original.TemplateCode, "sms")
+	if err != nil {
+		return nil, nil, fmt.Errorf("SMS cannot be resent: template %q not found", original.TemplateCode)
+	}
+	body := tpl.BodyEN
+	if body == "" || (original.Language == "ar" && tpl.BodyAR != "") {
+		body = tpl.BodyAR
+	}
+	names, _ := smsVariableOrder(tpl.Variables, body)
+	if len(names) != len(stored) {
+		return nil, nil, fmt.Errorf("SMS cannot be resent: template %q expects %d variable(s) but %d were stored (re-trigger it from the source action)", original.TemplateCode, len(names), len(stored))
+	}
+	vars := make(map[string]string, len(names))
+	for i, n := range names {
+		vars[n] = stored[i]
+	}
+	code := original.TemplateCode
+	return &code, vars, nil
 }
 
 // GetNotification retrieves a single notification by ID
@@ -1087,8 +1305,6 @@ func RenderTemplate(tpl string, vars map[string]string) (string, error) {
 	if len(unmapped) > 0 {
 		log.Printf("[RenderTemplate] WARNING: %d unmapped placeholder(s) remain: %v | substituted: %v",
 			len(unmapped), unmapped, substituted)
-	} else {
-		log.Printf("[RenderTemplate] OK: substituted variables: %v", substituted)
 	}
 
 	return result, nil

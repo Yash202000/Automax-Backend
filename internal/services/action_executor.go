@@ -89,12 +89,24 @@ func (e *actionExecutor) ExecuteAction(ctx context.Context, action *models.Trans
 	case "email":
 		return e.executeEmail(ctx, action, incident, transition, performedBy)
 	case "sms":
+		// Fail early (before any deferral) so a missing template_code shows in the transition's action log.
+		var smsCfg SmsConfig
+		if err := json.Unmarshal([]byte(action.Config), &smsCfg); err != nil {
+			return fmt.Errorf("invalid sms config: %w", err)
+		}
+		if strings.TrimSpace(smsCfg.TemplateCode) == "" {
+			log.Printf("[SMS] flow=action: incident=%s action=%q — no template_code configured, SMS not sent", incident.IncidentNumber, action.Name)
+			return fmt.Errorf("sms action %q has no template_code configured: SMS not sent", action.Name)
+		}
 		// On final-close, only "caller" recipient SMS is deferred to the SLA monitor
 		// (sent only if WhatsApp chatbot receives no response within the delay window).
 		// All other recipients (assignee, reporter, creator, custom, etc.) send immediately.
 		if transition != nil && transition.IsFinalClose && hasCallerRecipient(action) {
 			log.Printf("[ActionExecutor] incident=%s action=%q — caller SMS deferred (IsFinalClose), WhatsApp window active",
 				incident.IncidentNumber, action.Name)
+			if e.smsFeedbackPendingRepo == nil {
+				log.Printf("[SMS] flow=action: incident=%s action=%q — caller SMS deferred but smsFeedbackPendingRepo is nil, SMS will NOT be sent", incident.IncidentNumber, action.Name)
+			}
 			if e.smsFeedbackPendingRepo != nil {
 				var cfg SmsConfig
 				if err := json.Unmarshal([]byte(action.Config), &cfg); err == nil && cfg.TemplateCode != "" {
@@ -274,8 +286,7 @@ func (e *actionExecutor) executeEmail(ctx context.Context, action *models.Transi
 type SmsConfig struct {
 	Recipients      []string `json:"recipients"`              // "assignee", "reporter", "creator", "caller"
 	CustomPhones    []string `json:"custom_phones"`           // explicit phone numbers
-	TemplateCode    string   `json:"template_code,omitempty"` // notification template code — overrides message_template when set
-	MessageTemplate string   `json:"message_template"`
+	TemplateCode    string   `json:"template_code,omitempty"` // required: approved SMS template (with an Amana provider_template_id)
 	Language        string   `json:"language,omitempty"` // "ar" or "en"; defaults to "ar" when empty
 }
 
@@ -302,7 +313,7 @@ func (e *actionExecutor) executeSms(ctx context.Context, action *models.Transiti
 	}
 
 	if e.notificationService == nil {
-		log.Printf("[SMS-ACTION] NotificationService not available; skipping action %q", action.Name)
+		log.Printf("[SMS] flow=action: NotificationService not available; skipping action %q", action.Name)
 		return nil
 	}
 
@@ -312,25 +323,24 @@ func (e *actionExecutor) executeSms(ctx context.Context, action *models.Transiti
 	}
 
 	phones := e.resolveRecipientPhones(ctx, incident, config.Recipients, config.CustomPhones)
-	log.Printf("[SMS-ACTION] transition=%q incident=%s recipients_config=%v resolved_phones=%v template=%q",
-		transitionName, incident.IncidentNumber, config.Recipients, phones, config.TemplateCode)
+	log.Printf("[SMS] flow=action: transition=%q incident=%s recipients_config=%v resolved_phones=%v template=%q",
+		transitionName, incident.IncidentNumber, config.Recipients, maskPhones(phones), config.TemplateCode)
 
 	if len(phones) == 0 {
-		log.Printf("[SMS-ACTION] transition=%q incident=%s — no phone recipients resolved, skipping",
+		log.Printf("[SMS] flow=action: transition=%q incident=%s — no phone recipients resolved, skipping",
 			transitionName, incident.IncidentNumber)
 		return nil
 	}
 
 	vars := BuildIncidentVariables(incident, transition, performedBy)
 
-	var templateCode *string
-	var message string
-
-	if config.TemplateCode != "" {
-		templateCode = &config.TemplateCode
-	} else {
-		message = e.replacePlaceholders(config.MessageTemplate, incident, transition, performedBy)
+	// SMS is template-only (no free text): refuse an action that has no template_code.
+	if strings.TrimSpace(config.TemplateCode) == "" {
+		log.Printf("[SMS] flow=action: transition=%q incident=%s action=%q — no template_code configured, SMS not sent",
+			transitionName, incident.IncidentNumber, action.Name)
+		return fmt.Errorf("sms action %q has no template_code configured: SMS not sent", action.Name)
 	}
+	templateCode := &config.TemplateCode
 
 	lang := config.Language
 	if lang == "" {
@@ -343,9 +353,9 @@ func (e *actionExecutor) executeSms(ctx context.Context, action *models.Transiti
 	}
 
 	// Report link is sent once per closure per channel.
-	sendsReportLink := e.sendsReportLink(ctx, config.TemplateCode, "sms", message)
+	sendsReportLink := e.sendsReportLink(ctx, config.TemplateCode, "sms")
 	if sendsReportLink && incident.ReportLinkSMSSentAt != nil {
-		log.Printf("[SMS-ACTION] transition=%q incident=%s — report link SMS already sent at %s, skipping",
+		log.Printf("[SMS] flow=action: transition=%q incident=%s — report link SMS already sent at %s, skipping",
 			transitionName, incident.IncidentNumber, incident.ReportLinkSMSSentAt.Format(time.RFC3339))
 		return nil
 	}
@@ -353,22 +363,22 @@ func (e *actionExecutor) executeSms(ctx context.Context, action *models.Transiti
 	result, err := e.notificationService.SendNotification(
 		ctx, "sms", templateCode, lang,
 		phones, nil, nil,
-		"", message,
+		"", "",
 		vars, nil, smsSentByID, nil,
 	)
 	if result != nil && result.SentLog != nil && incident != nil {
 		_ = e.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
 	}
 	if err != nil {
-		log.Printf("[SMS-ACTION] transition=%q incident=%s phones=%v template=%q — FAILED: %v",
-			transitionName, incident.IncidentNumber, phones, config.TemplateCode, err)
+		log.Printf("[SMS] flow=action: transition=%q incident=%s phones=%v template=%q — FAILED: %v",
+			transitionName, incident.IncidentNumber, maskPhones(phones), config.TemplateCode, err)
 		return fmt.Errorf("sms send failed: %w", err)
 	}
-	log.Printf("[SMS-ACTION] transition=%q incident=%s phones=%v template=%q — SENT OK",
-		transitionName, incident.IncidentNumber, phones, config.TemplateCode)
+	log.Printf("[SMS] flow=action: transition=%q incident=%s phones=%v template=%q — SENT OK",
+		transitionName, incident.IncidentNumber, maskPhones(phones), config.TemplateCode)
 	if sendsReportLink {
 		if err := e.incidentRepo.UpdateFields(ctx, incident.ID, map[string]interface{}{"report_link_sms_sent_at": time.Now()}); err != nil {
-			log.Printf("[SMS-ACTION] incident=%s — failed to record report link SMS sent: %v", incident.IncidentNumber, err)
+			log.Printf("[SMS] flow=action: incident=%s — failed to record report link SMS sent: %v", incident.IncidentNumber, err)
 		}
 	}
 	return nil

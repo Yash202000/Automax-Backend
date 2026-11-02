@@ -350,11 +350,6 @@ func (s *EscalationService) sendPolicyNotification(
 		incident.IncidentNumber, incident.Title, state.Name,
 		hoursInState, slaHours, hoursInState-float64(slaHours), incidentURL,
 	)
-	smsBody := fmt.Sprintf(
-		"SLA ALERT [Step %d] — %s: Incident %s in '%s' for %.1fh (limit %dh). View: %s",
-		step.StepOrder, policyName, incident.IncidentNumber, state.Name, hoursInState, slaHours, incidentURL,
-	)
-
 	// Start from the full incident variable set, then override/add policy-step-specific values.
 	vars := BuildIncidentVariables(&incident, nil, nil)
 	vars["first_name"] = user.FirstName
@@ -375,10 +370,12 @@ func (s *EscalationService) sendPolicyNotification(
 	if step.EmailTemplateCode != "" {
 		emailCodePtr = &step.EmailTemplateCode
 	}
-	var smsCodePtr *string
-	if step.SMSTemplateCode != "" {
-		smsCodePtr = &step.SMSTemplateCode
+	// SMS is always template-based: the step's own template, else the seeded default.
+	smsCode := step.SMSTemplateCode
+	if smsCode == "" {
+		smsCode = "SLA_POLICY_STEP_SMS"
 	}
+	smsCodePtr := &smsCode
 
 	sendEmail := step.Channel == "email" || step.Channel == "both"
 	sendSMS := step.Channel == "sms" || step.Channel == "both"
@@ -401,9 +398,9 @@ func (s *EscalationService) sendPolicyNotification(
 
 	if sendSMS && user.Phone != "" {
 		if result, err := s.notificationService.SendNotification(ctx, "sms", smsCodePtr, "en",
-			[]string{user.Phone}, nil, nil, "", smsBody, vars, nil, &user.ID, nil,
+			[]string{user.Phone}, nil, nil, "", "", vars, nil, &user.ID, nil,
 		); err != nil {
-			log.Printf("[EscalationService] Policy SMS failed for %s: %v", user.Phone, err)
+			log.Printf("[SMS] flow=escalation_policy: SMS failed for %s: %v", maskMobile(user.Phone), err)
 			if result != nil && result.SentLog != nil {
 				_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
 			}
@@ -461,7 +458,7 @@ func (s *EscalationService) sendNotifications(
 			ctx, models.TemplateActionEscalation, "sms", "ar",
 			[]string{user.Phone}, vars, nil, incident.ID,
 		); err != nil {
-			log.Printf("[EscalationService] SMS failed for %s: %v", user.Phone, err)
+			log.Printf("[SMS] flow=escalation: SMS failed for %s: %v", maskMobile(user.Phone), err)
 		} else {
 			sent = append(sent, "SMS")
 		}
@@ -601,15 +598,6 @@ func (s *EscalationService) sendGlobalBreachNotification(
 		incidentURL,
 	)
 
-	smsBody := fmt.Sprintf(
-		"SLA BREACHED: Incident %s (\"%s\") has been open %.1fh (SLA: %dh). Immediate action required. View: %s",
-		incident.IncidentNumber,
-		incident.Title,
-		totalHoursOpen,
-		slaHoursAllowed,
-		incidentURL,
-	)
-
 	// Start from the full incident variable set, then override/add global-breach-specific values.
 	vars := BuildIncidentVariables(&incident, nil, nil)
 	vars["first_name"] = user.FirstName
@@ -647,14 +635,14 @@ func (s *EscalationService) sendGlobalBreachNotification(
 		result, err := s.notificationService.SendNotification(
 			ctx, "sms", &smsCode, "en",
 			[]string{user.Phone}, nil, nil,
-			"", smsBody,
+			"", "",
 			vars, nil, &user.ID, nil,
 		)
 		if result != nil && result.SentLog != nil {
 			_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
 		}
 		if err != nil {
-			log.Printf("[EscalationService] Global breach SMS failed for %s: %v", user.Phone, err)
+			log.Printf("[SMS] flow=global_breach: SMS failed for %s: %v", maskMobile(user.Phone), err)
 		} else {
 			sent = append(sent, "SMS")
 		}

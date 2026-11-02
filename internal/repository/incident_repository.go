@@ -1391,8 +1391,8 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 	if err := baseQuery.Count(&stats.Total).Error; err != nil {
 		return nil, err
 	}
-	log.Printf("[GetStatsV2] total=%d is_admin=%v classification_id=%v location_id=%v my_record=%v record_type=%v user_role_ids=%v",
-		stats.Total, isAdmin, filter.ClassificationID, filter.LocationID, filter.MyRecord, filter.RecordType, filter.UserRoleIDs)
+	// log.Printf("[GetStatsV2] total=%d is_admin=%v classification_id=%v location_id=%v my_record=%v record_type=%v user_role_ids=%v",
+	// 	stats.Total, isAdmin, filter.ClassificationID, filter.LocationID, filter.MyRecord, filter.RecordType, filter.UserRoleIDs)
 
 	// SLA Breached
 	slaQuery := applyBaseFilters(

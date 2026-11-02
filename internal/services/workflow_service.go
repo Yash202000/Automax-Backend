@@ -1674,7 +1674,31 @@ func (s *workflowService) SetTransitionRequirements(ctx context.Context, transit
 	return s.repo.SetTransitionRequirements(ctx, transitionID, requirements)
 }
 
+// ErrInvalidTransitionAction marks a transition action rejected at configuration time (maps to HTTP 400).
+var ErrInvalidTransitionAction = errors.New("invalid transition action")
+
+// validateTransitionActionConfig rejects an active SMS action that has no template_code:
+// SMS is template-only, so the problem must surface when the action is saved, not when it fires.
+func validateTransitionActionConfig(actionType, name, config string, isActive bool) error {
+	if actionType != "sms" || !isActive {
+		return nil
+	}
+	var cfg SmsConfig
+	if err := json.Unmarshal([]byte(config), &cfg); err != nil {
+		return fmt.Errorf("%w: SMS action %q has an invalid config: %v", ErrInvalidTransitionAction, name, err)
+	}
+	if strings.TrimSpace(cfg.TemplateCode) == "" {
+		return fmt.Errorf("%w: SMS action %q requires a template_code (free-text SMS is not supported)", ErrInvalidTransitionAction, name)
+	}
+	return nil
+}
+
 func (s *workflowService) SetTransitionActions(ctx context.Context, transitionID uuid.UUID, actionData []models.TransitionActionRequest) error {
+	for _, a := range actionData {
+		if err := validateTransitionActionConfig(a.ActionType, a.Name, a.Config, a.IsActive); err != nil {
+			return err
+		}
+	}
 	actions := make([]models.TransitionAction, len(actionData))
 	for i, action := range actionData {
 		actions[i] = models.TransitionAction{
@@ -2559,6 +2583,10 @@ func (s *workflowService) ImportWorkflow(ctx context.Context, data *models.Workf
 
 		// Create actions
 		for _, actionData := range transData.Actions {
+			if err := validateTransitionActionConfig(actionData.ActionType, actionData.Name, actionData.Config, actionData.IsActive); err != nil {
+				tx.Rollback()
+				return nil, nil, err
+			}
 			action := &models.TransitionAction{
 				ID:             uuid.New(),
 				TransitionID:   transition.ID,

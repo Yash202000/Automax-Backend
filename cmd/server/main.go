@@ -111,6 +111,7 @@ func main() {
 	actionLogService := services.NewActionLogService(actionLogRepo)
 	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo, userRepo, minioStorage, cfg)
 	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg, actionLogService, nil, redisClient, db)
+	userService.SetNotificationService(notificationService) // password-reset OTP SMS
 	extensionAssignmentRepo := repository.NewExtensionAssignmentRepository(db)
 	extensionService := services.NewExtensionService(db, extensionAssignmentRepo, userRepo, roleRepo, actionLogService, notificationService, wsHub, sessionStore, cfg)
 	otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo, userRepo, userService, sessionStore, jwtManager, roleRepo)
@@ -263,6 +264,7 @@ func main() {
 	incidentHandler := handlers.NewIncidentHandler(incidentService, userService, userRepo, incidentRepo, workflowRepo, locationRepo, classificationRepo, minioStorage, presenceService, cfg)
 	incidentHandler.SetReadyToCloseService(readyToCloseService)
 	incidentHandler.SetIvrSmsLinkRepo(ivrSmsLinkRepo)
+	incidentHandler.SetNotificationService(notificationService)
 	incidentHandler.SetPublicFeedbackRepo(publicFeedbackRepo)
 	incidentHandler.SetLookupRepo(lookupRepo)
 	incidentMergeHandler := handlers.NewIncidentMergeHandler(incidentMergeService, userRepo)

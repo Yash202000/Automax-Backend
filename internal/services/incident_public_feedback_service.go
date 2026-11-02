@@ -78,20 +78,15 @@ func (s *incidentPublicFeedbackService) Create(ctx context.Context, incidentID u
 	token := utils.GenerateFeedbackToken(f.ID.String(), incidentID.String(), GetFeedbackTokenDuration())
 
 	// Send SMS asynchronously — a delivery failure must not block the API response.
+	smsLang := SMSLanguageFromContext(ctx) // captured before the goroutine; the request ctx may be gone later
 	go func() {
-		smsBody := req.Message
-		if smsBody == "" {
-			link := utils.BuildFeedbackLink(ctx, incidentID.String(), f.ID.String(), GetFeedbackTokenDuration())
-			smsBody = fmt.Sprintf("Please rate your experience. Submit your feedback here: %s", link)
-		}
-		result, err := s.notification.SendNotification(
-			context.Background(), "sms", nil, "en",
-			[]string{f.MobileNo}, nil, nil,
-			"", smsBody, nil, nil, &createdByID, nil,
+		// SMS is template-only: always the approved INCIDENT_FEEDBACK_REQUEST_SMS template.
+		link := utils.BuildFeedbackLink(ctx, incidentID.String(), f.ID.String(), GetFeedbackTokenDuration())
+		err := s.notification.SendSMSTemplate(
+			context.Background(), "INCIDENT_FEEDBACK_REQUEST_SMS", smsLang, f.MobileNo,
+			map[string]string{"feedback_link": link, "feedback_url": link},
+			&createdByID, &incidentID,
 		)
-		if result != nil && result.SentLog != nil {
-			_ = s.notification.SetIncidentIDOnLogs(context.Background(), []uuid.UUID{result.SentLog.ID}, incidentID)
-		}
 		if err != nil {
 			log.Printf("[IncidentPublicFeedback] SMS send failed for feedback %s: %v", f.ID, err)
 		}

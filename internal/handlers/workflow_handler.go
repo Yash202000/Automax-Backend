@@ -1309,6 +1309,9 @@ func (h *WorkflowHandler) SetTransitionActions(c *fiber.Ctx) error {
 	}
 
 	if err := h.service.SetTransitionActions(c.UserContext(), transitionID, req.Actions); err != nil {
+		if errors.Is(err, services.ErrInvalidTransitionAction) {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+		}
 		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
