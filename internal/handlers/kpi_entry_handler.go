@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -79,7 +80,7 @@ func (h *KpiEntryHandler) ListEntries(c *fiber.Ctx) error {
 	}
 
 	var items []models.KpiEntry
-	if err := q.Order("reporting_year DESC, created_at DESC").Find(&items).Error; err != nil {
+	if err := q.Order("reporting_year DESC, entry_date DESC NULLS LAST, created_at DESC").Find(&items).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
 	}
 
@@ -134,7 +135,7 @@ func (h *KpiEntryHandler) ListAllEntries(c *fiber.Ctx) error {
 	offset := (page - 1) * limit
 
 	var items []models.KpiEntry
-	if err := q.Order("reporting_year DESC, created_at DESC").Offset(offset).Limit(limit).Find(&items).Error; err != nil {
+	if err := q.Order("reporting_year DESC, entry_date DESC NULLS LAST, created_at DESC").Offset(offset).Limit(limit).Find(&items).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
 	}
 
@@ -226,6 +227,9 @@ func (h *KpiEntryHandler) CreateEntry(c *fiber.Ctx) error {
 	if start, end, ok := services.ParseCustomPeriod(req.PeriodCode); ok {
 		item.PeriodStart, item.PeriodEnd = &start, &end
 	}
+	if err := validateEntryDate(c, item); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
 
 	// REL-09: Require a matching approved target for this exact KPI+metric+
 	// period before an entry can even be created — recording actuals with no
@@ -304,6 +308,28 @@ func (h *KpiEntryHandler) ListEntryEvidence(c *fiber.Ctx) error {
 // moved past draft (submitted/approved/rejected) it is locked to non-admins,
 // mirroring the approval-lock rule already enforced on KpiPerformance.
 // PUT /kpi/:type/:id/entries/:entryId
+// validateEntryDate checks that an entry has an Entry Date inside its
+// reporting period (the period's own dates, or the entry's stored
+// Period Start/End when the code isn't a known period).
+func validateEntryDate(c *fiber.Ctx, e *models.KpiEntry) error {
+	if e.EntryDate == nil {
+		return errors.New(i18n.T(c.UserContext(), "kpi_entry_date_required"))
+	}
+	start, end, ok := services.PeriodDateRange(e.ReportingYear, e.PeriodCode)
+	if !ok {
+		if e.PeriodStart == nil || e.PeriodEnd == nil {
+			return nil
+		}
+		start, end = *e.PeriodStart, *e.PeriodEnd
+	}
+	day := e.EntryDate.Format("2006-01-02")
+	if day < start.Format("2006-01-02") || day > end.Format("2006-01-02") {
+		return fmt.Errorf("%s (%s – %s)", i18n.T(c.UserContext(), "kpi_entry_date_outside_period"),
+			start.Format("02 Jan 2006"), end.Format("02 Jan 2006"))
+	}
+	return nil
+}
+
 func (h *KpiEntryHandler) UpdateEntry(c *fiber.Ctx) error {
 	entryID, err := uuid.Parse(c.Params("entryId"))
 	if err != nil {
@@ -329,6 +355,9 @@ func (h *KpiEntryHandler) UpdateEntry(c *fiber.Ctx) error {
 	}
 
 	req.ApplyTo(&entry)
+	if err := validateEntryDate(c, &entry); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
 	if err := db.Save(&entry).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
 	}
@@ -442,6 +471,13 @@ func (h *KpiEntryHandler) CreateCorrection(c *fiber.Ctx) error {
 	}
 
 	item := original.NewCorrection(&req, userID)
+	// An adjustment keeps the original's Entry Date unless it sends a new
+	// one; a reversal carries the original's as-is.
+	if req.CorrectionType == models.KpiEntryCorrectionAdjustment {
+		if err := validateEntryDate(c, item); err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+		}
+	}
 	if err := db.Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "internal_server_error"))
 	}

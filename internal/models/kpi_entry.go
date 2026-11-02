@@ -50,6 +50,10 @@ type KpiEntry struct {
 	PeriodCode                string                 `gorm:"size:50;not null;index" json:"period_code"`
 	PeriodStart               *time.Time             `json:"period_start"`
 	PeriodEnd                 *time.Time             `json:"period_end"`
+	// EntryDate is the date the value was actually recorded, chosen by the
+	// user and within the period. Separate from CreatedAt (the audit
+	// timestamp). Nil only on entries created before the field existed.
+	EntryDate                 *time.Time             `gorm:"type:date;index" json:"entry_date"`
 	// OrganizationID/SegmentationValues scope this Entry the same way a
 	// Target can be scoped (BR-12 "scope consistency") — nil means
 	// unscoped/global, matching the vast majority of KPIs that don't use
@@ -121,6 +125,7 @@ type KpiEntryRequest struct {
 	PeriodCode          string                  `json:"period_code" validate:"required,max=50"`
 	PeriodStartDate     string                  `json:"period_start_date"`
 	PeriodEndDate       string                  `json:"period_end_date"`
+	EntryDate           string                  `json:"entry_date"`
 	OrganizationID      *string                 `json:"organization_id"`
 	SegmentationValues  []KpiTargetSegmentationValue `json:"segmentation_values"`
 	DirectActualValue   *float64                `json:"direct_actual_value"`
@@ -172,6 +177,7 @@ func (r *KpiEntryRequest) ToModel(db *gorm.DB, kpiID uuid.UUID, kpiType string, 
 			entry.PeriodStart = &t
 		}
 	}
+	entry.EntryDate = parseEntryDate(r.EntryDate)
 	if r.PeriodEndDate != "" {
 		if t, err := time.Parse("2006-01-02", r.PeriodEndDate); err == nil {
 			entry.PeriodEnd = &t
@@ -326,10 +332,24 @@ func (e *KpiEntry) computeActualValue() {
 	}
 }
 
+// parseEntryDate parses a "YYYY-MM-DD" Entry Date; nil when empty or invalid
+// (the handler then rejects the entry as missing its date).
+func parseEntryDate(s string) *time.Time {
+	if len(s) > 10 {
+		s = s[:10]
+	}
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		return nil
+	}
+	return &t
+}
+
 // KpiEntryUpdateRequest carries the editable fields of an existing draft
 // entry. MetricID/period cannot be changed after creation (that would change
 // the entry's identity) — to correct those, delete and re-create instead.
 type KpiEntryUpdateRequest struct {
+	EntryDate             string                   `json:"entry_date"`
 	DirectActualValue     *float64                 `json:"direct_actual_value"`
 	NumeratorValue        *float64                 `json:"numerator_value"`
 	DenominatorValue      *float64                 `json:"denominator_value"`
@@ -347,6 +367,9 @@ type KpiEntryUpdateRequest struct {
 // recomputes ActualValue from the (possibly changed) input values, using the
 // entry's already-snapshotted CalculationTypeSnapshot.
 func (r *KpiEntryUpdateRequest) ApplyTo(e *KpiEntry) {
+	if d := parseEntryDate(r.EntryDate); d != nil {
+		e.EntryDate = d
+	}
 	e.DirectActualValue = r.DirectActualValue
 	e.NumeratorValue = r.NumeratorValue
 	e.DenominatorValue = r.DenominatorValue
