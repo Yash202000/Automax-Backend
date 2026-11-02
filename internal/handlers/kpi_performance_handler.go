@@ -3,6 +3,7 @@ package handlers
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/middleware"
@@ -78,6 +79,32 @@ func (h *KpiPerformanceHandler) ListTargets(c *fiber.Ctx) error {
 // metric's own reporting frequency and falls within its start/due dates).
 // Without one, the period follows the KPI's reporting frequency.
 func validateTargetPeriod(db *gorm.DB, req *models.KpiAnnualTargetRequest) error {
+	// Milestone / Ad Hoc targets cover the date range the user picked; the
+	// period code and year are derived from it here so they can't disagree.
+	// Every other target type uses a whole reporting period.
+	if req.TargetType == models.KpiTargetTypeMilestone {
+		// Accept a full timestamp too (the list's quick Submit resends the
+		// saved period_start/period_end as returned, e.g. "2026-02-15T00:00:00Z").
+		if len(req.PeriodStart) > 10 {
+			req.PeriodStart = req.PeriodStart[:10]
+		}
+		if len(req.PeriodEnd) > 10 {
+			req.PeriodEnd = req.PeriodEnd[:10]
+		}
+		start, errStart := time.Parse("2006-01-02", req.PeriodStart)
+		end, errEnd := time.Parse("2006-01-02", req.PeriodEnd)
+		if errStart != nil || errEnd != nil {
+			return fmt.Errorf("Period Start and Period End are required for a Milestone / Ad Hoc target")
+		}
+		if end.Before(start) {
+			return fmt.Errorf("Period End cannot be before Period Start")
+		}
+		req.PeriodCode = services.CustomPeriodCode(start, end)
+		req.TargetYear = start.Year()
+	} else if services.IsCustomPeriodCode(req.PeriodCode) {
+		return fmt.Errorf("Custom date ranges are only allowed for Milestone / Ad Hoc targets")
+	}
+
 	freq := services.GetKPIReportingFrequency(db, req.KpiCode, req.KpiType)
 	if req.MetricID == nil || *req.MetricID == "" {
 		periodType := "annual"
@@ -99,6 +126,115 @@ func validateTargetPeriod(db *gorm.DB, req *models.KpiAnnualTargetRequest) error
 		return fmt.Errorf("Metric %q does not belong to KPI %s", metric.Name, req.KpiCode)
 	}
 	return services.ValidateTargetPeriodForMetric(&metric, freq, req.TargetYear, req.PeriodCode)
+}
+
+// customTargetOverlap returns an existing Milestone / Ad Hoc target of the
+// same KPI, metric and organization whose date range overlaps item's, if any.
+// Rejected and superseded targets don't count. Regular period targets aren't
+// compared: a custom range is matched by its own period code, not by month.
+func customTargetOverlap(db *gorm.DB, item *models.KpiAnnualTarget, excludeIDs ...uuid.UUID) (*models.KpiAnnualTarget, error) {
+	if !services.IsCustomPeriodCode(item.PeriodCode) || item.PeriodStart == nil || item.PeriodEnd == nil {
+		return nil, nil
+	}
+	excludeIDs = append(excludeIDs, uuid.Nil)
+	q := db.Where("kpi_code = ? AND kpi_type = ? AND id NOT IN ? AND period_code LIKE ? AND target_status NOT IN ?",
+		item.KpiCode, item.KpiType, excludeIDs, services.CustomPeriodPrefix+"%", []string{"rejected", "superseded"}).
+		Where("period_start <= ? AND period_end >= ?", *item.PeriodEnd, *item.PeriodStart)
+	if item.MetricID != nil {
+		q = q.Where("metric_id = ?", *item.MetricID)
+	} else {
+		q = q.Where("metric_id IS NULL")
+	}
+	if item.OrganizationID != nil {
+		q = q.Where("organization_id = ?", *item.OrganizationID)
+	} else {
+		q = q.Where("organization_id IS NULL")
+	}
+	var other models.KpiAnnualTarget
+	if err := q.First(&other).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &other, nil
+}
+
+// openTargetRevisionStatuses are the statuses of a revision that is still in
+// progress; an approved target can have at most one at a time.
+var openTargetRevisionStatuses = []string{"draft", "submitted", "returned"}
+
+// loadSupersededTarget validates a revision of an approved target and returns
+// the original. The revision must cover the same KPI, metric, period and
+// organization; only its values may change. selfID is the revision's own ID
+// when it is being edited (uuid.Nil on create).
+func loadSupersededTarget(db *gorm.DB, req *models.KpiAnnualTargetRequest, originalID, selfID uuid.UUID) (*models.KpiAnnualTarget, error) {
+	var original models.KpiAnnualTarget
+	if err := db.First(&original, originalID).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, fmt.Errorf("The target being superseded was not found")
+		}
+		return nil, err
+	}
+	if original.TargetStatus != "approved" {
+		return nil, fmt.Errorf("Only an approved target can be superseded — this target is %s", original.TargetStatus)
+	}
+
+	// The form doesn't send an organization; a revision inherits the original's.
+	if (req.OrganizationID == nil || *req.OrganizationID == "") && original.OrganizationID != nil {
+		org := original.OrganizationID.String()
+		req.OrganizationID = &org
+	}
+	sameMetric := (req.MetricID == nil || *req.MetricID == "") == (original.MetricID == nil)
+	if sameMetric && original.MetricID != nil {
+		sameMetric = *req.MetricID == original.MetricID.String()
+	}
+	sameOrg := (req.OrganizationID == nil || *req.OrganizationID == "") == (original.OrganizationID == nil)
+	if sameOrg && original.OrganizationID != nil {
+		sameOrg = *req.OrganizationID == original.OrganizationID.String()
+	}
+	if req.KpiCode != original.KpiCode || req.KpiType != original.KpiType || !sameMetric || !sameOrg ||
+		req.TargetYear != original.TargetYear || !strings.EqualFold(req.PeriodCode, original.PeriodCode) {
+		return nil, fmt.Errorf("A revision must keep the KPI, Metric, Organization and Period of the target it supersedes")
+	}
+
+	var open models.KpiAnnualTarget
+	err := db.Where("supersedes_entry_id = ? AND id <> ? AND target_status IN ?", original.ID, selfID, openTargetRevisionStatuses).
+		First(&open).Error
+	if err == nil {
+		return nil, fmt.Errorf("This target already has a revision in progress (version %d, status '%s') — edit or submit that one instead", open.Version, open.TargetStatus)
+	} else if err != gorm.ErrRecordNotFound {
+		return nil, err
+	}
+	return &original, nil
+}
+
+// nextTargetVersion returns the next free Version for the target's
+// Metric+Year+Period+Org key, so a revision never collides with the original
+// (or an earlier, rejected revision) under idx_kpi_target_unique_v3.
+func nextTargetVersion(db *gorm.DB, t *models.KpiAnnualTarget) (int, error) {
+	q := db.Model(&models.KpiAnnualTarget{}).Where("kpi_code = ? AND kpi_type = ? AND target_year = ? AND period_code = ?",
+		t.KpiCode, t.KpiType, t.TargetYear, t.PeriodCode)
+	if t.MetricID != nil {
+		q = q.Where("metric_id = ?", *t.MetricID)
+	} else {
+		q = q.Where("metric_id IS NULL")
+	}
+	if t.OrganizationID != nil {
+		q = q.Where("organization_id = ?", *t.OrganizationID)
+	} else {
+		q = q.Where("organization_id IS NULL")
+	}
+	var maxVersion int
+	if err := q.Select("COALESCE(MAX(version), 0)").Scan(&maxVersion).Error; err != nil {
+		return 0, err
+	}
+	return maxVersion + 1, nil
+}
+
+func customOverlapMessage(other *models.KpiAnnualTarget) string {
+	return fmt.Sprintf("This date range overlaps an existing Milestone / Ad Hoc target (%s, status '%s')",
+		services.FormatPeriodLabel(other.PeriodCode, other.TargetYear), other.TargetStatus)
 }
 
 // kpiIDByCode returns the dictionary row ID for a KPI code, or uuid.Nil.
@@ -135,7 +271,38 @@ func (h *KpiPerformanceHandler) SetTarget(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
+	// Supersede: a new version of an approved target, linked back to it.
+	var superseded *models.KpiAnnualTarget
+	if req.SupersedesTargetID != nil && *req.SupersedesTargetID != "" {
+		originalID, err := uuid.Parse(*req.SupersedesTargetID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+		}
+		superseded, err = loadSupersededTarget(db, &req, originalID, uuid.Nil)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+		}
+	}
+
 	item := req.ToModel(db)
+	excludeIDs := []uuid.UUID{}
+	if superseded != nil {
+		if item.TargetStatus != "draft" && item.TargetStatus != "submitted" {
+			item.TargetStatus = "draft"
+		}
+		version, err := nextTargetVersion(db, item)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to check for an existing target")
+		}
+		item.Version = version
+		item.SupersedesEntryID = &superseded.ID
+		excludeIDs = append(excludeIDs, superseded.ID)
+	}
+	if other, err := customTargetOverlap(db, item, excludeIDs...); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to check for an existing target")
+	} else if other != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, customOverlapMessage(other))
+	}
 
 	// Check for duplicate: same KPI + metric + period + Organization + Version
 	// (BR-01). The comment always said "+ metric" but the query never
@@ -173,11 +340,16 @@ func (h *KpiPerformanceHandler) SetTarget(c *fiber.Ctx) error {
 	var reloaded models.KpiAnnualTarget
 	db.Preload("Metric").Preload("ApprovedBy").First(&reloaded, item.ID)
 
+	description := fmt.Sprintf("Set target for %s period %s/%d", reloaded.KpiCode, reloaded.PeriodCode, reloaded.TargetYear)
+	if superseded != nil {
+		description = fmt.Sprintf("Created version %d of target for %s period %s/%d, superseding %s",
+			reloaded.Version, reloaded.KpiCode, reloaded.PeriodCode, reloaded.TargetYear, superseded.ID)
+	}
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
 		Action:      "create",
 		Module:      "kpi",
 		ResourceID:  reloaded.ID.String(),
-		Description: fmt.Sprintf("Set target for %s period %s/%d", reloaded.KpiCode, reloaded.PeriodCode, reloaded.TargetYear),
+		Description: description,
 		Status:      "success",
 	})
 
@@ -225,6 +397,21 @@ func (h *KpiPerformanceHandler) UpdateTarget(c *fiber.Ctx) error {
 	}
 
 	updated := req.ToModel(db)
+	excludeIDs := []uuid.UUID{existing.ID}
+	if existing.SupersedesEntryID != nil {
+		// A revision keeps its version and link; only its values change.
+		if _, err := loadSupersededTarget(db, &req, *existing.SupersedesEntryID, existing.ID); err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+		}
+		updated.Version = existing.Version
+		updated.SupersedesEntryID = existing.SupersedesEntryID
+		excludeIDs = append(excludeIDs, *existing.SupersedesEntryID)
+	}
+	if other, err := customTargetOverlap(db, updated, excludeIDs...); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to check for an existing target")
+	} else if other != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, customOverlapMessage(other))
+	}
 
 	// Duplicate check, excluding this record itself — editing a target's own
 	// unchanged period/metric must not trip over its own existing row. Also
@@ -341,7 +528,28 @@ func (h *KpiPerformanceHandler) TransitionTarget(c *fiber.Ctx) error {
 		updates["approved_by_id"] = userID
 		updates["approved_at"] = now
 	}
-	if err := db.Model(&target).Updates(updates).Error; err != nil {
+	// Approving a revision retires the version it supersedes in the same
+	// transaction, so exactly one approved target exists for the period. The
+	// original row is only re-labelled Superseded; its values stay for audit.
+	errOriginalNotApproved := fmt.Errorf("the superseded target is no longer approved")
+	err = db.Transaction(func(tx *gorm.DB) error {
+		if req.Action == "approve" && target.SupersedesEntryID != nil {
+			res := tx.Model(&models.KpiAnnualTarget{}).
+				Where("id = ? AND target_status = ?", *target.SupersedesEntryID, "approved").
+				Update("target_status", "superseded")
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected == 0 {
+				return errOriginalNotApproved
+			}
+		}
+		return tx.Model(&target).Updates(updates).Error
+	})
+	if err == errOriginalNotApproved {
+		return utils.ErrorResponse(c, fiber.StatusConflict,
+			"The target this revision supersedes is no longer approved, so the revision can't be approved")
+	} else if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
 	}
 

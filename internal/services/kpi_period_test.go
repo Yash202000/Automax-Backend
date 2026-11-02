@@ -26,6 +26,7 @@ func TestPeriodDateRange(t *testing.T) {
 		{2020, "2027-03", "2027-03-01", "2027-03-31"},
 		{2020, "2027-Q4", "2027-10-01", "2027-12-31"},
 		{2020, "2027", "2027-01-01", "2027-12-31"},
+		{2026, "c:20260215-20260315", "2026-02-15", "2026-03-15"},
 	}
 	for _, tc := range cases {
 		start, end, ok := PeriodDateRange(tc.year, tc.code)
@@ -70,5 +71,29 @@ func TestValidateTargetPeriodForMetric(t *testing.T) {
 		if (err != nil) != tc.wantErr {
 			t.Errorf("%s: err = %v, wantErr %v", tc.name, err, tc.wantErr)
 		}
+	}
+}
+
+func TestCustomPeriod(t *testing.T) {
+	code := CustomPeriodCode(*date(2026, 2, 15), *date(2026, 3, 15))
+	if code != "c:20260215-20260315" {
+		t.Fatalf("CustomPeriodCode = %q", code)
+	}
+	if got := FormatPeriodLabel(code, 2026); got != "15 Feb – 15 Mar 2026" {
+		t.Errorf("FormatPeriodLabel = %q", got)
+	}
+	if got := FormatPeriodLabel("c:20261215-20270115", 2026); got != "15 Dec 2026 – 15 Jan 2027" {
+		t.Errorf("FormatPeriodLabel across years = %q", got)
+	}
+	if _, _, ok := ParseCustomPeriod("c:20260315-20260215"); ok {
+		t.Error("end before start should not parse")
+	}
+
+	metric := &models.KpiMetric{Name: "M", ReportingFrequency: "Monthly", StartDate: date(2026, 1, 1), DueDate: date(2026, 6, 30)}
+	if err := ValidateTargetPeriodForMetric(metric, "", 2026, code); err != nil {
+		t.Errorf("range inside validity, monthly metric: %v", err)
+	}
+	if err := ValidateTargetPeriodForMetric(metric, "", 2026, "c:20260615-20260715"); err == nil {
+		t.Error("range ending after due date should fail")
 	}
 }

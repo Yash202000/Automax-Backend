@@ -193,6 +193,7 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			&models.KpiSegmentationDimension{},
 			&models.KpiPerformanceEvidence{},
 			&models.KpiMetric{},
+			&models.KpiBaselineRevision{},
 			&models.KpiEvidence{},
 			&models.KpiCollaborator{},
 			&models.KpiCheckIn{},
