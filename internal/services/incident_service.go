@@ -3173,13 +3173,12 @@ func stringPtr(s string) *string {
 // State transitions
 
 // momraTransitionAttachments resolves the attachments added on a transition
-// into UpdateStatusV2 Attachments. AttachmentURL is a pre-signed storage URL
-// (valid 24h) so MOMRA can download the file without an Automax login.
+// into UpdateStatusV2 Attachments. AttachmentURL is the backend-relative path
+// /Momra/API/EPM/Attachments/{id} — MOMRA prefixes Automax's backend host and
+// downloads it with its EPM Bearer token (MinIO isn't reachable from outside).
+// The path is keyed on the permanent attachment ID, so it never expires.
 // Attachments that can't be resolved are skipped rather than failing the sync.
 func (s *incidentService) momraTransitionAttachments(ctx context.Context, attachmentIDs []string) []MOMRAStatusAttachment {
-	if s.storage == nil || len(attachmentIDs) == 0 {
-		return nil
-	}
 	var out []MOMRAStatusAttachment
 	for _, idStr := range attachmentIDs {
 		id, err := uuid.Parse(idStr)
@@ -3190,15 +3189,10 @@ func (s *incidentService) momraTransitionAttachments(ctx context.Context, attach
 		if err != nil || attachment == nil {
 			continue
 		}
-		url, err := s.storage.GetFileURL(ctx, attachment.FilePath)
-		if err != nil {
-			log.Printf("[momra-status-sync] attachment %s: presigned URL failed: %v", id, err)
-			continue
-		}
 		out = append(out, MOMRAStatusAttachment{
 			AttachmentCategory: momraAttachmentCategory,
-			AttachmentName:     attachment.FilePath,
-			AttachmentURL:      url,
+			AttachmentName:     attachment.FileName,
+			AttachmentURL:      "/Momra/API/EPM/Attachments/" + attachment.ID.String(),
 		})
 	}
 	return out

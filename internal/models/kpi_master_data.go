@@ -629,3 +629,4 @@ func (d *KpiSegmentationDimension) ToResponse() KpiSegmentationDimensionResponse
 		IsActive: d.IsActive,
 	}
 }
+

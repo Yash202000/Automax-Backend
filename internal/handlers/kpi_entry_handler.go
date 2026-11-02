@@ -59,6 +59,26 @@ func getKPICode(db *gorm.DB, kpiType string, id uuid.UUID) (string, error) {
 	}
 }
 
+func getKPITargetRequirement(db *gorm.DB, kpiType string, id uuid.UUID) (string, error) {
+	var val string
+	var err error
+	switch kpiType {
+	case models.KPITypeOperational:
+		err = db.Model(&models.OperationalKPI{}).Select("target_requirement").Where("id = ?", id).Scan(&val).Error
+	case models.KPITypeAward:
+		err = db.Model(&models.AwardKPI{}).Select("target_requirement").Where("id = ?", id).Scan(&val).Error
+	default:
+		err = db.Model(&models.StrategicKPI{}).Select("target_requirement").Where("id = ?", id).Scan(&val).Error
+	}
+	if err != nil {
+		return "", err
+	}
+	if val == "" {
+		return "mandatory", nil
+	}
+	return val, nil
+}
+
 // ListEntries returns all entries for a KPI dictionary row, optionally filtered by metric_id.
 // GET /kpi/:type/:id/entries?metric_id=...
 func (h *KpiEntryHandler) ListEntries(c *fiber.Ctx) error {
@@ -231,20 +251,18 @@ func (h *KpiEntryHandler) CreateEntry(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	// REL-09: Require a matching approved target for this exact KPI+metric+
-	// period before an entry can even be created — recording actuals with no
-	// target to measure them against just produces entries permanently stuck
-	// at "Not Calculable", which is more confusing than helpful. Also now
-	// scoped by metric_id (previously omitted here, same bug fixed on the
-	// Targets endpoints), so a different metric's approved target for the
-	// same KPI+period is never mistakenly attached to this one.
 	kpiCode, kpiErr := getKPICode(db, kpiType, kpiID)
 	if kpiErr != nil || kpiCode == "" {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "KPI not found")
 	}
-	// BR-12 "scope consistency": the Entry's Organization must match the
-	// Target scope it's measured against — compared NULL-safely since most
-	// KPIs use neither Organization nor Segment scoping at all.
+
+	// Look up the KPI's target_requirement setting
+	targetReq, trErr := getKPITargetRequirement(db, kpiType, kpiID)
+	if trErr != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+
+	// REL-09: Require a matching approved target unless target is optional.
 	var target models.KpiAnnualTarget
 	targetQuery := db.Where("kpi_code = ? AND kpi_type = ? AND metric_id = ? AND target_year = ? AND period_code = ? AND target_status = 'approved'",
 		kpiCode, kpiType, mid, req.ReportingYear, req.PeriodCode)
@@ -256,12 +274,20 @@ func (h *KpiEntryHandler) CreateEntry(c *fiber.Ctx) error {
 	if err := targetQuery.Order("version DESC").First(&target).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest,
 			fmt.Sprintf("No approved target exists for this metric in period %s — create and approve a target first.", services.FormatPeriodLabel(req.PeriodCode, req.ReportingYear)))
+		if errors.Is(err, gorm.ErrRecordNotFound) && targetReq == "optional" {
+			// Optional KPIs may proceed without an approved target.
+		} else if errors.Is(err, gorm.ErrRecordNotFound) {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest,
+				fmt.Sprintf("No approved target exists for this metric in period %s/%d — create and approve a target first.", req.PeriodCode, req.ReportingYear))
+		} else {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+		}
+	} else {
+		item.TargetID = &target.ID
+		item.TargetValueSnapshot = &target.TargetValue
+		item.ThresholdModeSnapshot = target.ThresholdMode
 	}
-	item.TargetID = &target.ID
-	item.TargetValueSnapshot = &target.TargetValue
-	item.ThresholdModeSnapshot = target.ThresholdMode
 
-	// Compute achievement/variance/status now that TargetValueSnapshot is set.
 	item.ComputeAchievement()
 
 	if err := db.Create(item).Error; err != nil {

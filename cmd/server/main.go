@@ -445,6 +445,9 @@ func main() {
 	// not yet confirmed by MOMRA (OD-N2) — see AssignExternalEntity's doc comment. Kept
 	// alongside UpdateIncidentV2, which now also persists EE fields on every call.
 	app.Patch("/Momra/API/EPM/AssignExternalEntity", epmIncidentHandler.AssignExternalEntity)
+	// AttachmentURLs sent in outbound UpdateStatusV2 calls point here — MinIO isn't
+	// reachable from MOMRA, so the file is streamed through the backend.
+	app.Get("/Momra/API/EPM/Attachments/:attachment_id", epmIncidentHandler.DownloadAttachment)
 
 	api := app.Group("/api")
 	v1 := api.Group("/v1")

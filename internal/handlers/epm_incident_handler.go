@@ -372,11 +372,15 @@ type EPMIncidentStatusItems struct {
 	IncidentImageAlert interface{} `json:"incidentImageAlert"`
 }
 
+// EPMIncidentAttachmentItem is one GetMomraIncidentStatusDetails attachment. The file
+// is not embedded (MOMRA doesn't accept base64 content): AttachmentURL is the
+// backend-relative /Momra/API/EPM/Attachments/{id} path, the same form sent in
+// outbound UpdateStatusV2 calls, downloaded with MOMRA's EPM Bearer token.
 type EPMIncidentAttachmentItem struct {
 	AttachmentID    int    `json:"attachmentID"`
 	TicketNumber    string `json:"ticketNumber"`
 	AttachmentsName string `json:"attachmentsName"`
-	Attachments     string `json:"attachments"`
+	AttachmentURL   string `json:"attachmentURL"`
 }
 
 type EPMGetMomraIncidentStatusDetailsResponse struct {
@@ -903,20 +907,11 @@ func (h *EPMIncidentHandler) GetMomraIncidentStatusDetails(c *fiber.Ctx) error {
 	var attachmentItems []EPMIncidentAttachmentItem
 	if err == nil {
 		for i, att := range attachments {
-			content, readErr := h.storage.GetFile(c.UserContext(), att.FilePath)
-			encoded := ""
-			if readErr == nil {
-				data, readErr := io.ReadAll(content)
-				content.Close()
-				if readErr == nil {
-					encoded = base64.StdEncoding.EncodeToString(data)
-				}
-			}
 			attachmentItems = append(attachmentItems, EPMIncidentAttachmentItem{
 				AttachmentID:    i + 1,
 				TicketNumber:    incident.IncidentNumber,
 				AttachmentsName: att.FileName,
-				Attachments:     encoded,
+				AttachmentURL:   momraAttachmentPath(att.ID),
 			})
 		}
 	}
@@ -1593,6 +1588,76 @@ func (h *EPMIncidentHandler) AssignExternalEntity(c *fiber.Ctx) error {
 	h.broadcastIncidentUpdated(incident.ID, claims.UserID)
 
 	return momraV2Response(c, fiber.StatusOK, "External entity assignment recorded successfully", true)
+}
+
+// momraAttachmentPath is the backend-relative download path for an attachment, served
+// by DownloadAttachment. MOMRA prefixes Automax's backend host itself.
+func momraAttachmentPath(attachmentID uuid.UUID) string {
+	return "/Momra/API/EPM/Attachments/" + attachmentID.String()
+}
+
+// DownloadAttachment implements GET /Momra/API/EPM/Attachments/:attachment_id — the
+// target of the AttachmentURLs Automax sends in outbound UpdateStatusV2 calls. MinIO
+// isn't reachable from MOMRA, so the file is streamed through the backend instead,
+// behind the same EPM Bearer token + session check as the other /Momra/API/EPM routes.
+// Only attachments on MOMRA-sourced incidents (custom_fields.momra_incident_no set)
+// are served, so the MOMRA account can't read arbitrary Automax attachments by ID.
+// The URL is keyed on the permanent attachment ID, so it never expires.
+func (h *EPMIncidentHandler) DownloadAttachment(c *fiber.Ctx) error {
+	authHeader := c.Get("Authorization")
+	if authHeader == "" {
+		return momraV2Response(c, fiber.StatusUnauthorized, "Missing Authorization header", false)
+	}
+	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+	if tokenString == authHeader {
+		return momraV2Response(c, fiber.StatusUnauthorized, "Invalid Authorization header format, use Bearer token", false)
+	}
+	claims, err := h.jwtManager.ValidateToken(tokenString)
+	if err != nil {
+		return momraV2Response(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "invalid_or_expired_token"), false)
+	}
+	var sessionData map[string]interface{}
+	if err := h.sessionStore.GetUserSession(c.UserContext(), claims.SessionID, &sessionData); err != nil {
+		return momraV2Response(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "session_expired_or_invalid"), false)
+	}
+
+	attachmentID, err := uuid.Parse(c.Params("attachment_id"))
+	if err != nil {
+		return momraV2Response(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "attachment_not_found"), false)
+	}
+	attachment, err := h.incidentRepo.FindAttachmentByID(c.UserContext(), attachmentID)
+	if err != nil {
+		return momraV2Response(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "attachment_not_found"), false)
+	}
+
+	// Same 404 as a missing attachment, so the response doesn't reveal that a
+	// non-MOMRA attachment with this ID exists.
+	var incident models.Incident
+	if err := h.db.WithContext(c.UserContext()).Select("id", "custom_fields").
+		First(&incident, "id = ?", attachment.IncidentID).Error; err != nil {
+		return momraV2Response(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "attachment_not_found"), false)
+	}
+	var custFields map[string]interface{}
+	_ = json.Unmarshal([]byte(incident.CustomFields), &custFields)
+	if momraNo, _ := custFields["momra_incident_no"].(string); momraNo == "" {
+		return momraV2Response(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "attachment_not_found"), false)
+	}
+
+	file, err := h.storage.GetFile(c.UserContext(), attachment.FilePath)
+	if err != nil {
+		return momraV2Response(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_retrieve_file"), false)
+	}
+	defer file.Close()
+
+	fileData, err := io.ReadAll(file)
+	if err != nil {
+		return momraV2Response(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_read_file"), false)
+	}
+
+	c.Set("Content-Type", attachment.MimeType)
+	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", attachment.FileName))
+	c.Set("Content-Length", fmt.Sprintf("%d", len(fileData)))
+	return c.Send(fileData)
 }
 
 func (h *EPMIncidentHandler) validateAndResolveLocation(ctx context.Context, externalID string) (*uuid.UUID, error) {

@@ -176,7 +176,7 @@ func SendOTPWithMetaTemplate(ctx context.Context, phone string, otp string) (str
 					"parameters": []map[string]interface{}{
 						{
 							"type": "text",
-							"text": "123456",
+							"text": otp,
 						},
 					},
 				},
