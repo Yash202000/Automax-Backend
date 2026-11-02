@@ -86,6 +86,7 @@ func (s *NotificationService) failSMS(ctx context.Context, templateCode *string,
 type smsAudit struct {
 	TemplateID string
 	Variables  []string
+	Names      []string // variable names in the same order as Variables
 	StatusCode int
 	Response   string
 }
@@ -111,6 +112,7 @@ func (s *NotificationService) sendAmanaSMS(ctx context.Context, phone, providerT
 		return "", audit, err
 	}
 	audit.Variables = values
+	audit.Names = append([]string(nil), varNames...)
 	log.Printf("[SMS] provider=amana stage=validate OK %s to=%s template_id=%d variable_order=%v", tag, maskMobile(mobile), templateID, varNames)
 	s.amanaOnce.Do(func() { s.amana = NewAmanaSMSSender(s.cfg.MOMRA) })
 	res, err := s.amana.SendSMSByTemplateIDDetailed(ctx, mobile, templateID, values)
@@ -362,7 +364,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 			sid, audit, err := s.sendAmanaSMS(ctx, phone, smsProviderTplID, smsVarNames, variables)
 			info := models.RecipientInfo{
 				Email: phone, Channel: phone, Type: "to", Status: "success", ProviderMessageID: sid,
-				ProviderTemplateID: audit.TemplateID, ProviderVariables: audit.Variables,
+				ProviderTemplateID: audit.TemplateID, ProviderVariables: audit.Variables, ProviderVariableNames: audit.Names,
 				ProviderStatusCode: audit.StatusCode, ProviderResponse: audit.Response,
 			}
 			if err != nil {
@@ -824,27 +826,24 @@ func (s *NotificationService) smsResendInput(ctx context.Context, original *mode
 	if original.TemplateCode == "" {
 		return nil, nil, fmt.Errorf("SMS cannot be resent: the original has no template code")
 	}
-	var stored []string
+	if original.TemplateCode == OTPSMSTemplateCode {
+		return nil, nil, fmt.Errorf("SMS cannot be resent: one-time passcodes are not stored and must be re-requested")
+	}
+	var stored, storedNames []string
 	for _, r := range original.Recipients {
 		if len(r.ProviderVariables) > 0 {
-			stored = r.ProviderVariables
+			stored, storedNames = r.ProviderVariables, r.ProviderVariableNames
 			break
 		}
 	}
-	tpl, err := s.templateRepo.FindByCode(ctx, original.TemplateCode, "sms")
-	if err != nil {
-		return nil, nil, fmt.Errorf("SMS cannot be resent: template %q not found", original.TemplateCode)
+	// Rebuild from the names saved at send time. Positional matching against the CURRENT template
+	// order could swap values if the template's variables were reordered since, so rows without
+	// saved names (sent before this was recorded) are refused rather than guessed.
+	if len(storedNames) == 0 || len(storedNames) != len(stored) {
+		return nil, nil, fmt.Errorf("SMS cannot be resent: the original has no saved variable names (re-trigger it from the source action)")
 	}
-	body := tpl.BodyEN
-	if body == "" || (original.Language == "ar" && tpl.BodyAR != "") {
-		body = tpl.BodyAR
-	}
-	names, _ := smsVariableOrder(tpl.Variables, body)
-	if len(names) != len(stored) {
-		return nil, nil, fmt.Errorf("SMS cannot be resent: template %q expects %d variable(s) but %d were stored (re-trigger it from the source action)", original.TemplateCode, len(names), len(stored))
-	}
-	vars := make(map[string]string, len(names))
-	for i, n := range names {
+	vars := make(map[string]string, len(storedNames))
+	for i, n := range storedNames {
 		vars[n] = stored[i]
 	}
 	code := original.TemplateCode

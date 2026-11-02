@@ -101,10 +101,11 @@ type RecipientInfo struct {
 	ProviderMessageID string `json:"provider_message_id,omitempty"` // Twilio SID / Meta message id — used to match delivery status webhook callbacks back to this recipient
 
 	// Amana template-SMS audit trail: exactly what was handed to SendSMSByTemplateID and what came back.
-	ProviderTemplateID string   `json:"provider_template_id,omitempty"` // Amana TemplateID sent
-	ProviderVariables  []string `json:"provider_variables,omitempty"`   // ordered Variables[] sent
-	ProviderStatusCode int      `json:"provider_status_code,omitempty"` // HTTP status returned by Amana
-	ProviderResponse   string   `json:"provider_response,omitempty"`    // trimmed response body
+	ProviderTemplateID    string   `json:"provider_template_id,omitempty"`    // Amana TemplateID sent
+	ProviderVariables     []string `json:"provider_variables,omitempty"`      // ordered Variables[] sent
+	ProviderVariableNames []string `json:"provider_variable_names,omitempty"` // variable names, same order as ProviderVariables (keeps key→value mapping for resends)
+	ProviderStatusCode    int      `json:"provider_status_code,omitempty"`    // HTTP status returned by Amana
+	ProviderResponse      string   `json:"provider_response,omitempty"`       // trimmed response body
 }
 
 type MetaErrorResponse struct {
