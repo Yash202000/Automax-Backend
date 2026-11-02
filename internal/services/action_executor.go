@@ -89,15 +89,6 @@ func (e *actionExecutor) ExecuteAction(ctx context.Context, action *models.Trans
 	case "email":
 		return e.executeEmail(ctx, action, incident, transition, performedBy)
 	case "sms":
-		// Fail early (before any deferral) so a missing template_code shows in the transition's action log.
-		var smsCfg SmsConfig
-		if err := json.Unmarshal([]byte(action.Config), &smsCfg); err != nil {
-			return fmt.Errorf("invalid sms config: %w", err)
-		}
-		if strings.TrimSpace(smsCfg.TemplateCode) == "" {
-			log.Printf("[SMS] flow=action: incident=%s action=%q — no template_code configured, SMS not sent", incident.IncidentNumber, action.Name)
-			return fmt.Errorf("sms action %q has no template_code configured: SMS not sent", action.Name)
-		}
 		// On final-close, only "caller" recipient SMS is deferred to the SLA monitor
 		// (sent only if WhatsApp chatbot receives no response within the delay window).
 		// All other recipients (assignee, reporter, creator, custom, etc.) send immediately.
@@ -180,7 +171,7 @@ type EmailConfig struct {
 	TemplateCode           string   `json:"template_code,omitempty"` // notification template code — overrides subject/body when set
 	SubjectTemplate        string   `json:"subject_template"`
 	BodyTemplate           string   `json:"body_template"`
-	Language               string   `json:"language,omitempty"`      // "ar" or "en"; defaults to "ar" when empty
+	Language               string   `json:"language,omitempty"` // "ar" or "en"; defaults to "ar" when empty
 	IncludeIncidentDetails bool     `json:"include_incident_details"`
 	IncludeTransitionInfo  bool     `json:"include_transition_info"`
 	IncludeComments        bool     `json:"include_comments"`
@@ -286,8 +277,9 @@ func (e *actionExecutor) executeEmail(ctx context.Context, action *models.Transi
 type SmsConfig struct {
 	Recipients      []string `json:"recipients"`              // "assignee", "reporter", "creator", "caller"
 	CustomPhones    []string `json:"custom_phones"`           // explicit phone numbers
-	TemplateCode    string   `json:"template_code,omitempty"` // required: approved SMS template (with an Amana provider_template_id)
-	Language        string   `json:"language,omitempty"` // "ar" or "en"; defaults to "ar" when empty
+	MessageTemplate string   `json:"message_template"`        // free-text message with {{placeholders}} (used when no template_code)
+	TemplateCode    string   `json:"template_code,omitempty"` // optional: notification template code
+	Language        string   `json:"language,omitempty"`      // "ar" or "en"; defaults to "ar" when empty
 }
 
 // hasCallerRecipient reports whether this SMS action targets the "caller" recipient.
@@ -334,11 +326,12 @@ func (e *actionExecutor) executeSms(ctx context.Context, action *models.Transiti
 
 	vars := BuildIncidentVariables(incident, transition, performedBy)
 
-	// SMS is template-only (no free text): refuse an action that has no template_code.
+	// The SMS provider only accepts approved templates (free-text is refused by NotificationService).
+	// Skip gracefully with a clear log instead of attempting a send that is guaranteed to fail.
 	if strings.TrimSpace(config.TemplateCode) == "" {
-		log.Printf("[SMS] flow=action: transition=%q incident=%s action=%q — no template_code configured, SMS not sent",
-			transitionName, incident.IncidentNumber, action.Name)
-		return fmt.Errorf("sms action %q has no template_code configured: SMS not sent", action.Name)
+		log.Printf("[SMS] flow=action: transition=%q incident=%s action=%q recipients=%d — SKIPPED: no template_code configured (free-text SMS is not supported); no SMS sent",
+			transitionName, incident.IncidentNumber, action.Name, len(phones))
+		return nil
 	}
 	templateCode := &config.TemplateCode
 
@@ -635,25 +628,24 @@ func (e *actionExecutor) resolveRecipientPhones(ctx context.Context, incident *m
 	return phones
 }
 
-
 // replacePlaceholders replaces template placeholders with actual values
 func (e *actionExecutor) replacePlaceholders(template string, incident *models.Incident, transition *models.WorkflowTransition, performedBy *models.User) string {
 	replacements := map[string]string{
 		"{{incident_number}}": incident.IncidentNumber,
 		"{{incident_title}}":  incident.Title,
 		"{{incident_id}}":     incident.ID.String(),
-		"{{description}}":    incident.Description,
-		"{{record_type}}":    incident.RecordType,
-		"{{source}}":         incident.Source,
-		"{{channel}}":        incident.Channel,
-		"{{reporter_name}}":  incident.ReporterName,
-		"{{reporter_email}}": incident.ReporterEmail,
-		"{{reporter_phone}}": incident.ReporterPhone,
+		"{{description}}":     incident.Description,
+		"{{record_type}}":     incident.RecordType,
+		"{{source}}":          incident.Source,
+		"{{channel}}":         incident.Channel,
+		"{{reporter_name}}":   incident.ReporterName,
+		"{{reporter_email}}":  incident.ReporterEmail,
+		"{{reporter_phone}}":  incident.ReporterPhone,
 		"{{created_by_name}}": incident.CreatedByName,
-		"{{sla_breached}}":   fmt.Sprintf("%t", incident.SLABreached),
-		"{{address}}":        incident.Address,
-		"{{city}}":           incident.City,
-		"{{country}}":        incident.Country,
+		"{{sla_breached}}":    fmt.Sprintf("%t", incident.SLABreached),
+		"{{address}}":         incident.Address,
+		"{{city}}":            incident.City,
+		"{{country}}":         incident.Country,
 	}
 
 	if incident.DueDate != nil {
