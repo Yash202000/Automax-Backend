@@ -78,6 +78,32 @@ func (h *KpiPerformanceHandler) ListTargets(c *fiber.Ctx) error {
 // metric's own reporting frequency and falls within its start/due dates).
 // Without one, the period follows the KPI's reporting frequency.
 func validateTargetPeriod(db *gorm.DB, req *models.KpiAnnualTargetRequest) error {
+	// Milestone / Ad Hoc targets cover the date range the user picked; the
+	// period code and year are derived from it here so they can't disagree.
+	// Every other target type uses a whole reporting period.
+	if req.TargetType == models.KpiTargetTypeMilestone {
+		// Accept a full timestamp too (the list's quick Submit resends the
+		// saved period_start/period_end as returned, e.g. "2026-02-15T00:00:00Z").
+		if len(req.PeriodStart) > 10 {
+			req.PeriodStart = req.PeriodStart[:10]
+		}
+		if len(req.PeriodEnd) > 10 {
+			req.PeriodEnd = req.PeriodEnd[:10]
+		}
+		start, errStart := time.Parse("2006-01-02", req.PeriodStart)
+		end, errEnd := time.Parse("2006-01-02", req.PeriodEnd)
+		if errStart != nil || errEnd != nil {
+			return fmt.Errorf("Period Start and Period End are required for a Milestone / Ad Hoc target")
+		}
+		if end.Before(start) {
+			return fmt.Errorf("Period End cannot be before Period Start")
+		}
+		req.PeriodCode = services.CustomPeriodCode(start, end)
+		req.TargetYear = start.Year()
+	} else if services.IsCustomPeriodCode(req.PeriodCode) {
+		return fmt.Errorf("Custom date ranges are only allowed for Milestone / Ad Hoc targets")
+	}
+
 	freq := services.GetKPIReportingFrequency(db, req.KpiCode, req.KpiType)
 	if req.MetricID == nil || *req.MetricID == "" {
 		periodType := "annual"
@@ -99,6 +125,42 @@ func validateTargetPeriod(db *gorm.DB, req *models.KpiAnnualTargetRequest) error
 		return fmt.Errorf("Metric %q does not belong to KPI %s", metric.Name, req.KpiCode)
 	}
 	return services.ValidateTargetPeriodForMetric(&metric, freq, req.TargetYear, req.PeriodCode)
+}
+
+// customTargetOverlap returns an existing Milestone / Ad Hoc target of the
+// same KPI, metric and organization whose date range overlaps item's, if any.
+// Rejected and superseded targets don't count. Regular period targets aren't
+// compared: a custom range is matched by its own period code, not by month.
+func customTargetOverlap(db *gorm.DB, item *models.KpiAnnualTarget, excludeID uuid.UUID) (*models.KpiAnnualTarget, error) {
+	if !services.IsCustomPeriodCode(item.PeriodCode) || item.PeriodStart == nil || item.PeriodEnd == nil {
+		return nil, nil
+	}
+	q := db.Where("kpi_code = ? AND kpi_type = ? AND id <> ? AND period_code LIKE ? AND target_status NOT IN ?",
+		item.KpiCode, item.KpiType, excludeID, services.CustomPeriodPrefix+"%", []string{"rejected", "superseded"}).
+		Where("period_start <= ? AND period_end >= ?", *item.PeriodEnd, *item.PeriodStart)
+	if item.MetricID != nil {
+		q = q.Where("metric_id = ?", *item.MetricID)
+	} else {
+		q = q.Where("metric_id IS NULL")
+	}
+	if item.OrganizationID != nil {
+		q = q.Where("organization_id = ?", *item.OrganizationID)
+	} else {
+		q = q.Where("organization_id IS NULL")
+	}
+	var other models.KpiAnnualTarget
+	if err := q.First(&other).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &other, nil
+}
+
+func customOverlapMessage(other *models.KpiAnnualTarget) string {
+	return fmt.Sprintf("This date range overlaps an existing Milestone / Ad Hoc target (%s, status '%s')",
+		services.FormatPeriodLabel(other.PeriodCode, other.TargetYear), other.TargetStatus)
 }
 
 // kpiIDByCode returns the dictionary row ID for a KPI code, or uuid.Nil.
@@ -136,6 +198,11 @@ func (h *KpiPerformanceHandler) SetTarget(c *fiber.Ctx) error {
 	}
 
 	item := req.ToModel(db)
+	if other, err := customTargetOverlap(db, item, uuid.Nil); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to check for an existing target")
+	} else if other != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, customOverlapMessage(other))
+	}
 
 	// Check for duplicate: same KPI + metric + period + Organization + Version
 	// (BR-01). The comment always said "+ metric" but the query never
@@ -225,6 +292,11 @@ func (h *KpiPerformanceHandler) UpdateTarget(c *fiber.Ctx) error {
 	}
 
 	updated := req.ToModel(db)
+	if other, err := customTargetOverlap(db, updated, existing.ID); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to check for an existing target")
+	} else if other != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, customOverlapMessage(other))
+	}
 
 	// Duplicate check, excluding this record itself — editing a target's own
 	// unchanged period/metric must not trip over its own existing row. Also

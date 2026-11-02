@@ -97,6 +97,10 @@ func (t *KpiAnnualTarget) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
+// KpiTargetTypeMilestone targets cover a custom date range (Period Start/End)
+// rather than a whole reporting period.
+const KpiTargetTypeMilestone = "Milestone / Ad Hoc"
+
 type KpiAnnualTargetRequest struct {
 	KpiCode          string                     `json:"kpi_code" validate:"required,max=50"`
 	KpiType          string                     `json:"kpi_type" validate:"required,oneof=strategic operational award"`

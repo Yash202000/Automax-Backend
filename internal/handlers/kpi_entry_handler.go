@@ -222,6 +222,10 @@ func (h *KpiEntryHandler) CreateEntry(c *fiber.Ctx) error {
 	}
 
 	item := req.ToModel(db, kpiID, kpiType, userID)
+	// A Milestone / Ad Hoc period carries its own dates in the code.
+	if start, end, ok := services.ParseCustomPeriod(req.PeriodCode); ok {
+		item.PeriodStart, item.PeriodEnd = &start, &end
+	}
 
 	// REL-09: Require a matching approved target for this exact KPI+metric+
 	// period before an entry can even be created — recording actuals with no
@@ -247,7 +251,7 @@ func (h *KpiEntryHandler) CreateEntry(c *fiber.Ctx) error {
 	}
 	if err := targetQuery.Order("version DESC").First(&target).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest,
-			fmt.Sprintf("No approved target exists for this metric in period %s/%d — create and approve a target first.", req.PeriodCode, req.ReportingYear))
+			fmt.Sprintf("No approved target exists for this metric in period %s — create and approve a target first.", services.FormatPeriodLabel(req.PeriodCode, req.ReportingYear)))
 	}
 	item.TargetID = &target.ID
 	item.TargetValueSnapshot = &target.TargetValue
