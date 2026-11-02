@@ -213,6 +213,7 @@ func (k *StrategicKPI) ToResponse() StrategicKPIResponse {
 		CreatedAt:              k.CreatedAt,
 		UpdatedAt:              k.UpdatedAt,
 	}
+	resp.RelatedDepartments = make([]DepartmentBriefResponse, 0, len(k.RelatedDepartments))
 	for _, d := range k.RelatedDepartments {
 		resp.RelatedDepartments = append(resp.RelatedDepartments, DepartmentBriefResponse{ID: d.ID, Name: d.Name, Code: d.Code})
 	}
@@ -419,6 +420,7 @@ func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 		CreatedAt:              k.CreatedAt,
 		UpdatedAt:              k.UpdatedAt,
 	}
+	resp.RelatedDepartments = make([]DepartmentBriefResponse, 0, len(k.RelatedDepartments))
 	for _, d := range k.RelatedDepartments {
 		resp.RelatedDepartments = append(resp.RelatedDepartments, DepartmentBriefResponse{ID: d.ID, Name: d.Name, Code: d.Code})
 	}
@@ -634,6 +636,7 @@ func (k *AwardKPI) ToResponse() AwardKPIResponse {
 		CreatedAt:              k.CreatedAt,
 		UpdatedAt:              k.UpdatedAt,
 	}
+	resp.RelatedDepartments = make([]DepartmentBriefResponse, 0, len(k.RelatedDepartments))
 	for _, d := range k.RelatedDepartments {
 		resp.RelatedDepartments = append(resp.RelatedDepartments, DepartmentBriefResponse{ID: d.ID, Name: d.Name, Code: d.Code})
 	}

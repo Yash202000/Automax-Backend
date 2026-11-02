@@ -36,14 +36,15 @@ func NewKpiDictionaryHandler(db *gorm.DB, actionLogSvc services.ActionLogService
 }
 
 // replaceRelatedDepartments replaces the M2M RelatedDepartments association on a KPI model.
-func (h *KpiDictionaryHandler) replaceRelatedDepartments(ctx context.Context, model interface{}, ids []uuid.UUID) {
+func (h *KpiDictionaryHandler) replaceRelatedDepartments(ctx context.Context, model interface{}, ids []uuid.UUID) error {
 	if len(ids) == 0 {
-		h.db.WithContext(ctx).Model(model).Association("RelatedDepartments").Clear()
-		return
+		return h.db.WithContext(ctx).Model(model).Association("RelatedDepartments").Clear()
 	}
 	var depts []models.Department
-	h.db.WithContext(ctx).Where("id IN ?", ids).Find(&depts)
-	h.db.WithContext(ctx).Model(model).Association("RelatedDepartments").Replace(depts)
+	if err := h.db.WithContext(ctx).Where("id IN ?", ids).Find(&depts).Error; err != nil {
+		return err
+	}
+	return h.db.WithContext(ctx).Model(model).Association("RelatedDepartments").Replace(depts)
 }
 
 // kpiCode resolves a KPI dictionary row's code by (kpiType, id) — used to
@@ -198,7 +199,9 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create KPI")
 	}
-	h.replaceRelatedDepartments(c.UserContext(), item, req.RelatedDepartmentIDs)
+	if err := h.replaceRelatedDepartments(c.UserContext(), item, req.RelatedDepartmentIDs); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to set related departments")
+	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if err := h.workflowSvc.InitiateKpiDictionaryWorkflow(c.UserContext(), models.KPITypeStrategic, item.ID, userID); err != nil {
@@ -277,7 +280,9 @@ func (h *KpiDictionaryHandler) UpdateStrategic(c *fiber.Ctx) error {
 	if result.Error != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
 	}
-	h.replaceRelatedDepartments(c.UserContext(), &models.StrategicKPI{ID: id}, req.RelatedDepartmentIDs)
+	if err := h.replaceRelatedDepartments(c.UserContext(), &models.StrategicKPI{ID: id}, req.RelatedDepartmentIDs); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to set related departments")
+	}
 
 	var item models.StrategicKPI
 	h.db.WithContext(c.UserContext()).
@@ -415,7 +420,9 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create KPI")
 	}
-	h.replaceRelatedDepartments(c.UserContext(), item, req.RelatedDepartmentIDs)
+	if err := h.replaceRelatedDepartments(c.UserContext(), item, req.RelatedDepartmentIDs); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to set related departments")
+	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if err := h.workflowSvc.InitiateKpiDictionaryWorkflow(c.UserContext(), models.KPITypeOperational, item.ID, userID); err != nil {
@@ -511,7 +518,9 @@ func (h *KpiDictionaryHandler) UpdateOperational(c *fiber.Ctx) error {
 	if result.Error != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
 	}
-	h.replaceRelatedDepartments(c.UserContext(), &models.OperationalKPI{ID: id}, req.RelatedDepartmentIDs)
+	if err := h.replaceRelatedDepartments(c.UserContext(), &models.OperationalKPI{ID: id}, req.RelatedDepartmentIDs); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to set related departments")
+	}
 
 	var item models.OperationalKPI
 	h.db.WithContext(c.UserContext()).
@@ -645,7 +654,9 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create KPI")
 	}
-	h.replaceRelatedDepartments(c.UserContext(), item, req.RelatedDepartmentIDs)
+	if err := h.replaceRelatedDepartments(c.UserContext(), item, req.RelatedDepartmentIDs); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to set related departments")
+	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if err := h.workflowSvc.InitiateKpiDictionaryWorkflow(c.UserContext(), models.KPITypeAward, item.ID, userID); err != nil {
@@ -764,7 +775,9 @@ func (h *KpiDictionaryHandler) UpdateAward(c *fiber.Ctx) error {
 	if result.Error != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
 	}
-	h.replaceRelatedDepartments(c.UserContext(), &models.AwardKPI{ID: id}, req.RelatedDepartmentIDs)
+	if err := h.replaceRelatedDepartments(c.UserContext(), &models.AwardKPI{ID: id}, req.RelatedDepartmentIDs); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to set related departments")
+	}
 
 	var item models.AwardKPI
 	h.db.WithContext(c.UserContext()).
