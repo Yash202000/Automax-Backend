@@ -91,11 +91,14 @@ type StrategicKPI struct {
 	SegmentationAxes       string                `gorm:"type:text" json:"segmentation_axes"`
 	RelatedDepartments     []Department          `gorm:"many2many:strategic_kpi_related_departments" json:"related_departments,omitempty"`
 	Notes                  string                `gorm:"type:text" json:"notes"`
-	DocumentaFolderID      string                `gorm:"size:255" json:"documenta_folder_id"`
-	WorkflowInstanceID     *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
-	CreatedAt              time.Time             `json:"created_at"`
-	UpdatedAt              time.Time             `json:"updated_at"`
-	DeletedAt              gorm.DeletedAt        `gorm:"index" json:"-"`
+	DocumentaFolderID         string                `gorm:"size:255" json:"documenta_folder_id"`
+	CurveDescription          string                `gorm:"type:text" json:"curve_description"`
+	ShortcomingsDescription   string                `gorm:"type:text" json:"shortcomings_description"`
+	ProposedImprovement       string                `gorm:"type:text" json:"proposed_improvement"`
+	WorkflowInstanceID        *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
+	CreatedAt                 time.Time             `json:"created_at"`
+	UpdatedAt                 time.Time             `json:"updated_at"`
+	DeletedAt                 gorm.DeletedAt        `gorm:"index" json:"-"`
 }
 
 func (k *StrategicKPI) BeforeCreate(tx *gorm.DB) error {
@@ -309,12 +312,15 @@ type OperationalKPI struct {
 	DataSource             string                `gorm:"size:255" json:"data_source"`
 	RelatedDepartments     []Department          `gorm:"many2many:operational_kpi_related_departments" json:"related_departments,omitempty"`
 	Notes                  string                `gorm:"type:text" json:"notes"`
-	DocumentaFolderID      string                `gorm:"size:255" json:"documenta_folder_id"`
-	WorkflowInstanceID     *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
-	WorkflowInstance       *KpiWorkflowInstance  `gorm:"foreignKey:WorkflowInstanceID" json:"-"`
-	CreatedAt              time.Time             `json:"created_at"`
-	UpdatedAt              time.Time             `json:"updated_at"`
-	DeletedAt              gorm.DeletedAt        `gorm:"index" json:"-"`
+	DocumentaFolderID         string                `gorm:"size:255" json:"documenta_folder_id"`
+	CurveDescription          string                `gorm:"type:text" json:"curve_description"`
+	ShortcomingsDescription   string                `gorm:"type:text" json:"shortcomings_description"`
+	ProposedImprovement       string                `gorm:"type:text" json:"proposed_improvement"`
+	WorkflowInstanceID        *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
+	WorkflowInstance          *KpiWorkflowInstance  `gorm:"foreignKey:WorkflowInstanceID" json:"-"`
+	CreatedAt                 time.Time             `json:"created_at"`
+	UpdatedAt                 time.Time             `json:"updated_at"`
+	DeletedAt                 gorm.DeletedAt        `gorm:"index" json:"-"`
 }
 
 func (k *OperationalKPI) BeforeCreate(tx *gorm.DB) error {
@@ -535,12 +541,15 @@ type AwardKPI struct {
 	DataSource             string                `gorm:"size:255" json:"data_source"`
 	RelatedDepartments     []Department          `gorm:"many2many:award_kpi_related_departments" json:"related_departments,omitempty"`
 	Notes                  string                `gorm:"type:text" json:"notes"`
-	DocumentaFolderID      string                `gorm:"size:255" json:"documenta_folder_id"`
-	WorkflowInstanceID     *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
-	WorkflowInstance       *KpiWorkflowInstance  `gorm:"foreignKey:WorkflowInstanceID" json:"-"`
-	CreatedAt              time.Time             `json:"created_at"`
-	UpdatedAt              time.Time             `json:"updated_at"`
-	DeletedAt              gorm.DeletedAt        `gorm:"index" json:"-"`
+	DocumentaFolderID         string                `gorm:"size:255" json:"documenta_folder_id"`
+	CurveDescription          string                `gorm:"type:text" json:"curve_description"`
+	ShortcomingsDescription   string                `gorm:"type:text" json:"shortcomings_description"`
+	ProposedImprovement       string                `gorm:"type:text" json:"proposed_improvement"`
+	WorkflowInstanceID        *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
+	WorkflowInstance          *KpiWorkflowInstance  `gorm:"foreignKey:WorkflowInstanceID" json:"-"`
+	CreatedAt                 time.Time             `json:"created_at"`
+	UpdatedAt                 time.Time             `json:"updated_at"`
+	DeletedAt                 gorm.DeletedAt        `gorm:"index" json:"-"`
 }
 
 func (k *AwardKPI) BeforeCreate(tx *gorm.DB) error {

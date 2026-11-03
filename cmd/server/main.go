@@ -1434,6 +1434,7 @@ func main() {
 
 	kpi.Get("/:type/:id/card", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetKpiCard)
 	kpi.Get("/:type/:id/dashboard", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetKpiDashboard)
+	kpi.Put("/:type/:id/narrative", authMiddleware.RequirePermission("perf:submit"), kpiComposedHandler.UpdateNarrative)
 	kpi.Get("/:type/:id/annual-rollup", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetKpiAnnualRollup)
 	kpi.Get("/:type/:id/metrics/:metricId/period-rollup", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetMetricPeriodRollup)
 	kpi.Get("/:type/:id/metrics/:metricId/display-rollup", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetMetricDisplayRollup)

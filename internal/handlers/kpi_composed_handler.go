@@ -44,9 +44,12 @@ type kpiCardBase struct {
 	DataSource         string
 	RelatedDepartmentsLabel string
 	Formula            string
-	Polarity           string
-	UnitOfMeasure      string
-	Baseline           float64
+	Polarity                string
+	UnitOfMeasure           string
+	Baseline                float64
+	CurveDescription        string
+	ShortcomingsDescription string
+	ProposedImprovement     string
 }
 
 func (h *KpiComposedHandler) loadCardBase(ctx *fiber.Ctx, kpiType string, id uuid.UUID) (*kpiCardBase, error) {
@@ -104,6 +107,7 @@ func (h *KpiComposedHandler) loadCardBase(ctx *fiber.Ctx, kpiType string, id uui
 			PillarEnablerLabel: pillarEnabler, StrategicGoalLabel: goalTitle, CriterionLabel: criterion,
 			ReportingFrequency: k.ReportingFrequency, DataSource: k.DataSource, RelatedDepartmentsLabel: relatedDeptLabel(k.RelatedDepartments),
 			Formula: k.Formula, Polarity: k.Polarity, UnitOfMeasure: k.UnitOfMeasure, Baseline: k.Baseline,
+			CurveDescription: k.CurveDescription, ShortcomingsDescription: k.ShortcomingsDescription, ProposedImprovement: k.ProposedImprovement,
 		}, nil
 	case models.KPITypeAward:
 		var k models.AwardKPI
@@ -136,6 +140,7 @@ func (h *KpiComposedHandler) loadCardBase(ctx *fiber.Ctx, kpiType string, id uui
 			CriterionLabel:     criterion,
 			ReportingFrequency: k.ReportingFrequency, DataSource: k.DataSource, RelatedDepartmentsLabel: relatedDeptLabel(k.RelatedDepartments),
 			Formula: k.Formula, Polarity: k.Polarity, UnitOfMeasure: k.UnitOfMeasure, Baseline: k.Baseline,
+			CurveDescription: k.CurveDescription, ShortcomingsDescription: k.ShortcomingsDescription, ProposedImprovement: k.ProposedImprovement,
 		}, nil
 	default:
 		var k models.StrategicKPI
@@ -174,6 +179,7 @@ func (h *KpiComposedHandler) loadCardBase(ctx *fiber.Ctx, kpiType string, id uui
 			PillarEnablerLabel: pillarEnabler, StrategicGoalLabel: goalTitle, CriterionLabel: criterion,
 			ReportingFrequency: k.ReportingFrequency, DataSource: k.DataSource, RelatedDepartmentsLabel: relatedDeptLabel(k.RelatedDepartments),
 			Formula: k.Formula, Polarity: k.Polarity, UnitOfMeasure: k.UnitOfMeasure, Baseline: k.Baseline,
+			CurveDescription: k.CurveDescription, ShortcomingsDescription: k.ShortcomingsDescription, ProposedImprovement: k.ProposedImprovement,
 		}, nil
 	}
 }
@@ -354,9 +360,9 @@ func (h *KpiComposedHandler) GetKpiAnnualRollup(c *fiber.Ctx) error {
 type KpiSingleDashboardResponse struct {
 	Card             KpiCardResponse      `json:"card"`
 	AnnualRollup     []KpiAnnualRollupRow `json:"annual_rollup"`
-	TrendDescription string               `json:"trend_description"`
-	Justification    string               `json:"justification"`
-	CorrectiveAction string               `json:"corrective_action"`
+	CurveDescription        string               `json:"curve_description"`
+	ShortcomingsDescription string               `json:"shortcomings_description"`
+	ProposedImprovement     string               `json:"proposed_improvement"`
 	Benchmarks       []models.KpiBenchmarkResponse `json:"benchmarks"`
 }
 
@@ -403,14 +409,6 @@ func (h *KpiComposedHandler) GetKpiDashboard(c *fiber.Ctx) error {
 
 	rollup := h.computeAnnualRollup(c, base.Code, kpiType, base.Polarity)
 
-	var latest models.KpiPerformance
-	trend, justification, corrective := "", "", ""
-	if err := h.db.WithContext(c.UserContext()).
-		Where("kpi_code = ? AND kpi_type = ?", base.Code, kpiType).
-		Order("year DESC, quarter DESC, created_at DESC").First(&latest).Error; err == nil {
-		trend, justification, corrective = latest.TrendDescription, latest.Justification, latest.CorrectiveAction
-	}
-
 	var benchmarks []models.KpiBenchmark
 	h.db.WithContext(c.UserContext()).
 		Where("kpi_code = ? AND kpi_type = ?", base.Code, kpiType).
@@ -422,10 +420,59 @@ func (h *KpiComposedHandler) GetKpiDashboard(c *fiber.Ctx) error {
 
 	resp := KpiSingleDashboardResponse{
 		Card: card, AnnualRollup: rollup,
-		TrendDescription: trend, Justification: justification, CorrectiveAction: corrective,
+		CurveDescription: base.CurveDescription, ShortcomingsDescription: base.ShortcomingsDescription, ProposedImprovement: base.ProposedImprovement,
 		Benchmarks: benchmarkResp,
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
+}
+
+// KpiNarrativeUpdateRequest carries the three narrative comment fields.
+type KpiNarrativeUpdateRequest struct {
+	CurveDescription        string `json:"curve_description"`
+	ShortcomingsDescription string `json:"shortcomings_description"`
+	ProposedImprovement     string `json:"proposed_improvement"`
+}
+
+// UpdateNarrative saves the three narrative fields on the KPI dictionary model.
+// PUT /kpi/:type/:id/narrative
+func (h *KpiComposedHandler) UpdateNarrative(c *fiber.Ctx) error {
+	kpiType := c.Params("type")
+	if !isValidKpiType(kpiType) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	var req KpiNarrativeUpdateRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+
+	db := h.db.WithContext(c.UserContext())
+	updates := map[string]interface{}{
+		"curve_description":        req.CurveDescription,
+		"shortcomings_description": req.ShortcomingsDescription,
+		"proposed_improvement":     req.ProposedImprovement,
+	}
+
+	switch kpiType {
+	case models.KPITypeOperational:
+		if err := db.Model(&models.OperationalKPI{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
+		}
+	case models.KPITypeAward:
+		if err := db.Model(&models.AwardKPI{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
+		}
+	default:
+		if err := db.Model(&models.StrategicKPI{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
+		}
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Narrative updated", nil)
 }
 
 // parseRollupQuery reads the year/period_code/organization_id query params
