@@ -221,13 +221,12 @@ func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode strin
 }
 
 func (s *OTPService) sendOTPNotification(ctx context.Context, channel, phone, otp string, sessionID *uuid.UUID) error {
-	var body string
+	var err error
 	if channel == "sms" {
-		body = fmt.Sprintf("Your OTP is %s", otp)
+		err = s.notificationService.SendOTPSMS(ctx, phone, otp, sessionID)
 	} else {
-		body = (otp)
+		_, err = s.notificationService.SendNotification(ctx, channel, nil, "en", []string{phone}, nil, nil, "", otp, nil, nil, nil, sessionID)
 	}
-	_, err := s.notificationService.SendNotification(ctx, channel, nil, "en", []string{phone}, nil, nil, "", body, nil, nil, nil, sessionID)
 	if err != nil {
 		return fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_send_otp_notification"), err)
 	}

@@ -17,7 +17,6 @@ import (
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
-	internalUtils "github.com/automax/backend/internal/utils"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
@@ -44,6 +43,7 @@ type IncidentHandler struct {
 	lookupRepo          repository.LookupRepository
 	validator           *validator.Validate
 	cfg                 *config.Config
+	notificationService *services.NotificationService
 }
 
 func NewIncidentHandler(service services.IncidentService, userService services.UserService, userRepo repository.UserRepository, incidentRepo repository.IncidentRepository, workflowRepo repository.WorkflowRepository, locationRepo repository.LocationRepository, classificationRepo repository.ClassificationRepository, storage *storage.MinIOStorage, presenceService services.PresenceService, cfg *config.Config) *IncidentHandler {
@@ -60,6 +60,19 @@ func NewIncidentHandler(service services.IncidentService, userService services.U
 		validator:          validator.New(),
 		cfg:                cfg,
 	}
+}
+
+// SetNotificationService wires in the notification service used for template-based SMS.
+func (h *IncidentHandler) SetNotificationService(svc *services.NotificationService) {
+	h.notificationService = svc
+}
+
+// maskMobileForLog keeps only the last 3 digits so logs never carry a full phone number.
+func maskMobileForLog(m string) string {
+	if len(m) <= 3 {
+		return "***"
+	}
+	return strings.Repeat("*", len(m)-3) + m[len(m)-3:]
 }
 
 // SetIvrSmsLinkRepo wires in the IvrSmsLinkRepository for SMS link lifecycle management.
@@ -2416,34 +2429,26 @@ func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
 	rawToken := utils.GenerateIncidentToken(incidentID.String(), ivrSmsDuration)
 	smsLink := utils.BuildSMSLinkFromToken(c.UserContext(), incidentID.String(), rawToken)
 
-	subject := i18n.T(c.UserContext(), "request_additional_info")
-	smsMessage := fmt.Sprintf(
-		"Dear Beneficiary,\nPlease complete your incident details through the link below and fill in the required information to proceed with your request:\n%s\nThank you for your cooperation.",
-		smsLink,
-	)
-
 	lang, ok := c.Locals(constants.ContextKeys.ACCEPT_LANGUAGE).(string)
 	if !ok || lang == "" {
 		lang = "en" // Default language
 	}
 
-	if lang == "ar" {
-		// subject = i18n.T(c.UserContext(), "request_additional_info_ar")
-		smsMessage = fmt.Sprintf(
-			"عزيزي المستفيد،\nنأمل استكمال بيانات البلاغ عبر الرابط أدناه وتعبئة الحقول المطلوبة، وذلك لاستكمال معالجة البلاغ:\n%s\nشكرًا لتعاونكم.",
-			smsLink,
-		)
-	}
-	fmt.Printf("REQUEST-INFO-SMS: lang %s, subject: %s, message: %s", lang, subject, smsMessage)
-
 	now := time.Now()
-	_, smsErr := internalUtils.SendSMS(c.UserContext(), mobile, smsMessage)
+	smsErr := h.notificationService.SendSMSTemplate(
+		c.UserContext(), "INCIDENT_REQUEST_INFO_SMS", lang, mobile,
+		map[string]string{
+			"sms_link":        smsLink,
+			"incident_number": incident.IncidentNumber,
+		},
+		&userID, &incidentID,
+	)
 	status := "sent"
 	if smsErr != nil {
 		status = "failed"
-		log.Printf("REQUEST-INFO-SMS: Failed for incident %s to %s: %v", incident.IncidentNumber, mobile, smsErr)
+		log.Printf("REQUEST-INFO-SMS: Failed for incident %s to %s: %v", incident.IncidentNumber, maskMobileForLog(mobile), smsErr)
 	} else {
-		log.Printf("REQUEST-INFO-SMS: Sent successfully to %s for incident %s", mobile, incident.IncidentNumber)
+		log.Printf("REQUEST-INFO-SMS: Sent via template to %s for incident %s", maskMobileForLog(mobile), incident.IncidentNumber)
 	}
 
 	// Track IVR SMS link: deactivate old links, create new record.
@@ -2463,29 +2468,6 @@ func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
 			fmt.Sprintf("Agent requested additional information from citizen via SMS to %s", mobile),
 			fmt.Sprintf("طلب الوكيل معلومات إضافية من المواطن عبر الرسائل القصيرة إلى %s", mobile),
 			nil, userID)
-	}
-
-	// Log notification
-	notification := &models.NotificationLog{
-		Channel:    "sms",
-		Direction:  "outbound",
-		Category:   "sent",
-		Language:   lang,
-		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
-		Subject:    subject,
-		Body:       smsMessage,
-		Status:     status,
-		Provider:   "twilio",
-		IsRead:     false,
-		SentBy:     &userID,
-		SentAt:     &now,
-	}
-	if smsErr != nil {
-		notification.ErrorMessage = smsErr.Error()
-		notification.FailureCode = services.ClassifyFailureCode(smsErr)
-	}
-	if err := h.incidentRepo.CreateNotification(c.UserContext(), notification); err != nil {
-		log.Printf("REQUEST-INFO-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
 	}
 
 	if smsErr != nil {
