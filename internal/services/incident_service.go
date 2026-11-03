@@ -922,27 +922,13 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 			log.Printf("[IncidentService] No reporter phone for IVR incident %s, skipping SMS", incident.ID)
 		}
 		if req.ReporterPhone != "" {
-			smsBody := fmt.Sprintf("Thank you for contacting Eastern Province Municipality. Your incident %s has been created.", incident.IncidentNumber)
-			result, err := s.notificationService.SendNotification(
-				ctx,
-				"sms",
-				nil,
-				"en",
-				[]string{req.ReporterPhone},
-				nil,
-				nil,
-				"",
-				smsBody,
-				nil,
-				nil,
-				&reporterID,
-				nil,
+			err := s.notificationService.SendSMSTemplate(
+				ctx, "IVR_INCIDENT_CREATED_SMS", SMSLanguageFromContext(ctx), req.ReporterPhone,
+				BuildIncidentVariables(incident, nil, nil),
+				&reporterID, &incident.ID,
 			)
-			if result != nil && result.SentLog != nil {
-				_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
-			}
 			if err != nil {
-				log.Printf("[IncidentService] SMS failed for %s: %v", req.ReporterPhone, err)
+				log.Printf("[IncidentService] IVR SMS failed for incident %s to %s: %v", incident.IncidentNumber, maskMobile(req.ReporterPhone), err)
 			} else {
 				sent = append(sent, "SMS")
 			}
@@ -1016,9 +1002,9 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 						_ = s.notificationService.SetIncidentIDOnLogs(bgCtx, []uuid.UUID{result.SentLog.ID}, capturedCreated.ID)
 					}
 					if err != nil {
-						log.Printf("NEW-INCIDENT-SMS: Failed for incident %s: %v", capturedCreated.IncidentNumber, err)
+						log.Printf("[SMS] flow=new_incident: Failed for incident %s: %v", capturedCreated.IncidentNumber, err)
 					} else {
-						log.Printf("NEW-INCIDENT-SMS: Sent to %v for incident %s", phones, capturedCreated.IncidentNumber)
+						log.Printf("[SMS] flow=new_incident: Sent to %v for incident %s", maskPhones(phones), capturedCreated.IncidentNumber)
 					}
 				}
 			}
@@ -2182,7 +2168,7 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		go func(inc *models.Incident) {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("CONVERT-TO-REQUEST-SMS: Panic recovered for incident %s: %v", inc.IncidentNumber, r)
+					log.Printf("[SMS] flow=convert_to_request: Panic recovered for incident %s: %v", inc.IncidentNumber, r)
 				}
 			}()
 			s.sendConvertToRequestSMS(bgCtxExist, inc, existReqNum, userID)
@@ -2466,7 +2452,7 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 	go func(inc *models.Incident) {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("CONVERT-TO-REQUEST-SMS: Panic recovered for incident %s: %v", inc.IncidentNumber, r)
+				log.Printf("[SMS] flow=convert_to_request: Panic recovered for incident %s: %v", inc.IncidentNumber, r)
 			}
 		}()
 		s.sendConvertToRequestSMS(bgCtxNew, inc, requestNumber, userID)
@@ -3095,7 +3081,7 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 		go func(inc *models.Incident) {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("CONVERT-TO-REQUEST-SMS: Panic recovered for incident %s: %v", inc.IncidentNumber, r)
+					log.Printf("[SMS] flow=convert_to_request: Panic recovered for incident %s: %v", inc.IncidentNumber, r)
 				}
 			}()
 			s.sendConvertToRequestSMS(bgCtxBulk, inc, bulkReqNum, userID)
@@ -4177,7 +4163,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 
 	// Send SMS to citizen when Not Belong transition closes the incident.
 	if transition.IsNotBelong {
-		log.Printf("NOT-BELONG-SMS: Triggered for incident %s and transition.IsNotBelong: %v", incident.IncidentNumber, transition.IsNotBelong)
+		log.Printf("[SMS] flow=not_belong: Triggered for incident %s and transition.IsNotBelong: %v", incident.IncidentNumber, transition.IsNotBelong)
 		var assignedDeptID *uuid.UUID
 		if deptIDVal, ok := updates["department_id"]; ok {
 			if deptID, ok := deptIDVal.(uuid.UUID); ok {
@@ -4188,32 +4174,32 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("NOT-BELONG-SMS: Panic recovered for incident %s: %v", incident.IncidentNumber, r)
+					log.Printf("[SMS] flow=not_belong: Panic recovered for incident %s: %v", incident.IncidentNumber, r)
 				}
 			}()
 
-			log.Printf("NOT-BELONG-SMS: Sending SMS for incident %s", incident.IncidentNumber)
+			log.Printf("[SMS] flow=not_belong: Sending SMS for incident %s", incident.IncidentNumber)
 			s.SendNotBelongClosureSMS(bgCtx, incident, incident.CreatedByMobile, incident.ReporterID, transition, assignedDeptID, userID)
-			log.Printf("NOT-BELONG-SMS: SMS process completed for incident %s", incident.IncidentNumber)
+			log.Printf("[SMS] flow=not_belong: SMS process completed for incident %s", incident.IncidentNumber)
 		}()
 	}
 
 	// Send SMS to citizen when Missing Incident Information transition closes the incident.
 
 	if transition.IsMissingInfo {
-		log.Printf("MISSING-INFO-SMS: Triggered for incident %s and transition.IsMissingInfo: %v", incident.IncidentNumber, transition.IsMissingInfo)
+		log.Printf("[SMS] flow=missing_info: Triggered for incident %s and transition.IsMissingInfo: %v", incident.IncidentNumber, transition.IsMissingInfo)
 		bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		//go s.SendMissingInfoClosureSMS(bgCtx, incident.IncidentNumber, incident.CreatedByMobile, incident.ReporterID, userID)
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("MISSING-INFO-SMS: Panic recovered for incident %s: %v", incident.IncidentNumber, r)
+					log.Printf("[SMS] flow=missing_info: Panic recovered for incident %s: %v", incident.IncidentNumber, r)
 				}
 			}()
 
-			log.Printf("MISSING-INFO-SMS: Sending SMS for incident %s", incident.IncidentNumber)
+			log.Printf("[SMS] flow=missing_info: Sending SMS for incident %s", incident.IncidentNumber)
 			s.SendMissingInfoClosureSMS(bgCtx, incident, incident.CreatedByMobile, incident.ReporterID, userID)
-			log.Printf("MISSING-INFO-SMS: SMS process completed for incident %s", incident.IncidentNumber)
+			log.Printf("[SMS] flow=missing_info: SMS process completed for incident %s", incident.IncidentNumber)
 		}()
 	}
 
@@ -5300,8 +5286,6 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 	// Get current user who performed the closure (for audit purposes)
 	_, _ = s.userRepo.FindByID(ctx, userID)
 
-	now := time.Now()
-
 	// Process each merged incident
 	for i, merged := range mergedIncidents {
 		fmt.Printf("\n[DEBUG] === Processing merged incident %d/%d: %s ===\n", i+1, len(mergedIncidents), merged.IncidentNumber)
@@ -5327,53 +5311,19 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 		// when uploaded via syncAttachmentToMergedIncidents(). Copying them again would cause duplicates.
 
 		// Send SMS notification to incident owner (reporter)
-		fmt.Printf("[DEBUG] Checking reporter for SMS - Reporter: %+v\n", merged.Reporter)
 		if merged.Reporter != nil && merged.Reporter.Phone != "" {
-			fmt.Printf("[DEBUG] Sending SMS to: %s\n", merged.Reporter.Phone)
-
-			smsMessage := fmt.Sprintf(
-				"Your incident %s has been automatically closed as it was merged with master incident %s. The master incident has been resolved.",
-				merged.IncidentNumber,
-				masterIncident.IncidentNumber,
+			smsErr := s.notificationService.SendSMSTemplate(
+				ctx, "INCIDENT_MERGE_CLOSED_SMS", SMSLanguageFromContext(ctx), merged.Reporter.Phone,
+				map[string]string{
+					"incident_number":        merged.IncidentNumber,
+					"master_incident_number": masterIncident.IncidentNumber,
+				},
+				&userID, &merged.ID,
 			)
-			fmt.Printf("[DEBUG] SMS Message: %s\n", smsMessage)
-
-			// Send actual SMS via Twilio
-			fmt.Println("[DEBUG] Calling utils.SendSMS...")
-			_, smsErr := utils.SendSMS(ctx, merged.Reporter.Phone, smsMessage)
 			if smsErr != nil {
-				fmt.Printf("[DEBUG] SMS send failed: %v\n", smsErr)
+				log.Printf("MERGE-CLOSE-SMS: failed for incident %s: %v", merged.IncidentNumber, smsErr)
 			} else {
-				fmt.Println("[DEBUG] SMS sent successfully!")
-			}
-
-			// Log notification regardless of SMS success
-			notification := &models.NotificationLog{
-				Channel:    "sms",
-				Direction:  "outbound",
-				Category:   "sent",
-				Language:   "en",
-				Recipients: models.RecipientArray{{Email: merged.Reporter.Phone, Type: "to", Status: "sent"}},
-				IncidentID: &merged.ID,
-				Subject:    "Incident Closed",
-				Body:       smsMessage,
-				Status:     "sent",
-				Provider:   "twilio",
-				IsRead:     false,
-				SentBy:     &userID,
-				SentAt:     &now,
-			}
-			if smsErr != nil {
-				notification.Status = "failed"
-				notification.ErrorMessage = smsErr.Error()
-				notification.FailureCode = ClassifyFailureCode(smsErr)
-			}
-
-			fmt.Println("[DEBUG] Creating notification log...")
-			if notifErr := s.incidentRepo.CreateNotification(ctx, notification); notifErr != nil {
-				fmt.Printf("[DEBUG] Failed to create notification log: %v\n", notifErr)
-			} else {
-				fmt.Printf("[DEBUG] Notification logged (status: %s)\n", notification.Status)
+				log.Printf("MERGE-CLOSE-SMS: sent via template for incident %s", merged.IncidentNumber)
 			}
 		} else {
 			fmt.Println("[DEBUG] SKIP SMS: No reporter or phone number")
@@ -5445,62 +5395,24 @@ func (s *incidentService) notifyStatusChangeToMergedIncidents(ctx context.Contex
 	}
 	fmt.Printf("[DEBUG] Master incident: %s, New state: %s\n", masterIncident.IncidentNumber, newStateName)
 
-	now := time.Now()
-
 	// Process each merged incident
 	for i, merged := range mergedIncidents {
 		fmt.Printf("\n[DEBUG] === Processing incident %d/%d: %s ===\n", i+1, len(mergedIncidents), merged.IncidentNumber)
-		fmt.Printf("[DEBUG] Reporter: %+v\n", merged.Reporter)
-		fmt.Println("under in loop")
-
 		if merged.Reporter != nil && merged.Reporter.Phone != "" {
-			fmt.Printf("[DEBUG] Sending SMS to: %s\n", merged.Reporter.Phone)
-
-			smsMessage := fmt.Sprintf(
-				"Your incident %s status has been updated to '%s' (master incident: %s). Comment: %s",
-				merged.IncidentNumber,
-				newStateName,
-				masterIncident.IncidentNumber,
-				comment,
+			smsErr := s.notificationService.SendSMSTemplate(
+				ctx, "INCIDENT_MERGE_STATUS_SMS", SMSLanguageFromContext(ctx), merged.Reporter.Phone,
+				map[string]string{
+					"incident_number":        merged.IncidentNumber,
+					"to_state":               newStateName,
+					"master_incident_number": masterIncident.IncidentNumber,
+					"comment":                comment,
+				},
+				&userID, &merged.ID,
 			)
-			fmt.Printf("[DEBUG] SMS Message: %s\n", smsMessage)
-
-			// Send actual SMS via Twilio
-			fmt.Println("[DEBUG] Calling utils.SendSMS...")
-			_, smsErr := utils.SendSMS(ctx, merged.Reporter.Phone, smsMessage)
 			if smsErr != nil {
-				fmt.Printf("[DEBUG] SMS send failed: %v\n", smsErr)
+				log.Printf("MERGE-STATUS-SMS: failed for incident %s: %v", merged.IncidentNumber, smsErr)
 			} else {
-				fmt.Println("[DEBUG] SMS sent successfully!")
-			}
-
-			// Log notification regardless of SMS success
-			notification := &models.NotificationLog{
-				Channel:    "sms",
-				Direction:  "outbound",
-				Category:   "sent",
-				Language:   "en",
-				Recipients: models.RecipientArray{{Email: merged.Reporter.Phone, Type: "to", Status: "sent"}},
-				IncidentID: &merged.ID,
-				Subject:    "Incident Status Updated",
-				Body:       smsMessage,
-				Status:     "sent",
-				Provider:   "twilio",
-				IsRead:     false,
-				SentBy:     &userID,
-				SentAt:     &now,
-			}
-			if smsErr != nil {
-				notification.Status = "failed"
-				notification.ErrorMessage = smsErr.Error()
-				notification.FailureCode = ClassifyFailureCode(smsErr)
-			}
-
-			fmt.Println("[DEBUG] Creating notification log...")
-			if notifErr := s.incidentRepo.CreateNotification(ctx, notification); notifErr != nil {
-				fmt.Printf("[DEBUG] Failed to create notification log: %v\n", notifErr)
-			} else {
-				fmt.Printf("[DEBUG] Notification logged (status: %s)\n", notification.Status)
+				log.Printf("MERGE-STATUS-SMS: sent via template for incident %s", merged.IncidentNumber)
 			}
 		} else {
 			fmt.Println("[DEBUG] SKIP SMS: No reporter or phone number")
@@ -6192,7 +6104,7 @@ func (s *incidentService) UpdateClosedIncidentSummary(
 }
 
 // SendNotBelongClosureSMS sends an SMS to the citizen when an incident is closed via a "Not Belong" transition.
-// It renders the DB template INCIDENT_CLOSURE_NOT_BELONG_SMS (AR language) when available,
+// It renders the DB template INCIDENT_CLOSURE_NOT_BELONG_SMS (language of the logged-in user) when available,
 // falling back to a hardcoded English message if the notification service is not wired in.
 func (s *incidentService) SendNotBelongClosureSMS(
 	ctx context.Context,
@@ -6223,7 +6135,7 @@ func (s *incidentService) SendNotBelongClosureSMS(
 		}
 	}
 	if mobile == "" {
-		log.Printf("NOT-BELONG-SMS: No citizen mobile for incident %s, skipping", incident.IncidentNumber)
+		log.Printf("[SMS] flow=not_belong: No citizen mobile for incident %s, skipping", incident.IncidentNumber)
 		return
 	}
 
@@ -6244,7 +6156,7 @@ func (s *incidentService) SendNotBelongClosureSMS(
 
 		templateCode := "INCIDENT_CLOSURE_NOT_BELONG_SMS"
 		result, err := s.notificationService.SendNotification(
-			ctx, "sms", &templateCode, "ar",
+			ctx, "sms", &templateCode, SMSLanguageFromContext(ctx),
 			[]string{mobile}, nil, nil,
 			"", "", vars, nil, &userID, nil,
 		)
@@ -6252,56 +6164,18 @@ func (s *incidentService) SendNotBelongClosureSMS(
 			_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
 		}
 		if err != nil {
-			log.Printf("NOT-BELONG-SMS: Template send failed for incident %s: %v", incident.IncidentNumber, err)
+			log.Printf("[SMS] flow=not_belong: Template send failed for incident %s: %v", incident.IncidentNumber, err)
 		} else {
-			log.Printf("NOT-BELONG-SMS: Sent via template to %s for incident %s", mobile, incident.IncidentNumber)
+			log.Printf("[SMS] flow=not_belong: Sent via template to %s for incident %s", maskMobile(mobile), incident.IncidentNumber)
 		}
 		return
 	}
 
-	// Fallback: hardcoded message when notification service is not available.
-	smsMessage := fmt.Sprintf(
-		"Dear Citizen, your incident (ID: %s) has been reviewed. The issue belongs to the %s department and does not fall under our department's scope for processing. Kindly contact the concerned department for further assistance. We appreciate your understanding.",
-		incident.IncidentNumber,
-		deptName,
-	)
-
-	now := time.Now()
-	_, smsErr := utils.SendSMS(ctx, mobile, smsMessage)
-	status := "sent"
-	if smsErr != nil {
-		status = "failed"
-		log.Printf("NOT-BELONG-SMS: Failed for incident %s to %s: %v", incident.IncidentNumber, mobile, smsErr)
-	} else {
-		log.Printf("NOT-BELONG-SMS: Sent successfully to %s for incident %s", mobile, incident.IncidentNumber)
-	}
-
-	notification := &models.NotificationLog{
-		Channel:    "sms",
-		Direction:  "outbound",
-		Category:   "sent",
-		Language:   "en",
-		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
-		IncidentID: &incident.ID,
-		Subject:    "Incident Not Belong Closure",
-		Body:       smsMessage,
-		Status:     status,
-		Provider:   "twilio",
-		IsRead:     false,
-		SentBy:     &userID,
-		SentAt:     &now,
-	}
-	if smsErr != nil {
-		notification.ErrorMessage = smsErr.Error()
-		notification.FailureCode = ClassifyFailureCode(smsErr)
-	}
-	if err := s.incidentRepo.CreateNotification(ctx, notification); err != nil {
-		log.Printf("NOT-BELONG-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
-	}
+	log.Printf("[SMS] flow=not_belong: notification service unavailable — SMS not sent for incident %s", incident.IncidentNumber)
 }
 
 // sendConvertToRequestSMS sends an SMS to the citizen when an incident is converted to a request.
-// It uses template INC_TO_REQ_SMS when available; falls back to a hardcoded Arabic message otherwise.
+// It sends via the active convert_to_request SMS template (seeded default: INC_TO_REQ_SMS).
 func (s *incidentService) sendConvertToRequestSMS(ctx context.Context, incident *models.Incident, requestNumber string, userID uuid.UUID) {
 	mobile := incident.CreatedByMobile
 	if mobile == "" && incident.ReporterID != nil {
@@ -6322,7 +6196,7 @@ func (s *incidentService) sendConvertToRequestSMS(ctx context.Context, incident 
 		}
 	}
 	if mobile == "" {
-		log.Printf("CONVERT-TO-REQUEST-SMS: No citizen mobile for incident %s, skipping", incident.IncidentNumber)
+		log.Printf("[SMS] flow=convert_to_request: No citizen mobile for incident %s, skipping", incident.IncidentNumber)
 		return
 	}
 
@@ -6331,55 +6205,21 @@ func (s *incidentService) sendConvertToRequestSMS(ctx context.Context, incident 
 
 	if s.notificationService != nil {
 		err := s.notificationService.SendByActionTypeForIncident(
-			ctx, models.TemplateActionConvertToRequest, "sms", "ar",
+			ctx, models.TemplateActionConvertToRequest, "sms", SMSLanguageFromContext(ctx),
 			[]string{mobile}, vars, &userID, incident.ID,
 		)
 		if err != nil {
-			log.Printf("CONVERT-TO-REQUEST-SMS: No active templates found for incident %s, falling back to hardcoded: %v", incident.IncidentNumber, err)
+			log.Printf("[SMS] flow=convert_to_request: No active templates found for incident %s, falling back to hardcoded: %v", incident.IncidentNumber, err)
 		} else {
-			log.Printf("CONVERT-TO-REQUEST-SMS: Sent via template(s) to %s for incident %s", mobile, incident.IncidentNumber)
+			log.Printf("[SMS] flow=convert_to_request: Sent via template(s) to %s for incident %s", maskMobile(mobile), incident.IncidentNumber)
 			return
 		}
 	}
-
-	// Hardcoded Arabic fallback
-	smsMessage := fmt.Sprintf("تم تحويل بلاغك رقم %s إلى طلب رقم %s", incident.IncidentNumber, requestNumber)
-	now := time.Now()
-	_, smsErr := utils.SendSMS(ctx, mobile, smsMessage)
-	status := "sent"
-	if smsErr != nil {
-		status = "failed"
-		log.Printf("CONVERT-TO-REQUEST-SMS: Fallback failed for incident %s to %s: %v", incident.IncidentNumber, mobile, smsErr)
-	} else {
-		log.Printf("CONVERT-TO-REQUEST-SMS: Fallback sent to %s for incident %s", mobile, incident.IncidentNumber)
-	}
-
-	notification := &models.NotificationLog{
-		Channel:    "sms",
-		Direction:  "outbound",
-		Category:   "sent",
-		Language:   "ar",
-		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
-		IncidentID: &incident.ID,
-		Subject:    "Incident Converted to Request",
-		Body:       smsMessage,
-		Status:     status,
-		Provider:   "twilio",
-		IsRead:     false,
-		SentBy:     &userID,
-		SentAt:     &now,
-	}
-	if smsErr != nil {
-		notification.ErrorMessage = smsErr.Error()
-		notification.FailureCode = ClassifyFailureCode(smsErr)
-	}
-	if err := s.incidentRepo.CreateNotification(ctx, notification); err != nil {
-		log.Printf("CONVERT-TO-REQUEST-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
-	}
+	log.Printf("[SMS] flow=convert_to_request: SMS not sent for incident %s (check that an active convert_to_request SMS template exists)", incident.IncidentNumber)
 }
 
 // SendMissingInfoClosureSMS sends an SMS to the citizen when an incident is closed via a "Missing Incident Information" transition.
-// Uses active templates with action_type=missing_info first; falls back to hardcoded Arabic message.
+// Sends via active templates with action_type=missing_info (seeded default: INCIDENT_MISSING_INFO_SMS).
 func (s *incidentService) SendMissingInfoClosureSMS(
 	ctx context.Context,
 	incident *models.Incident,
@@ -6388,7 +6228,7 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 	userID uuid.UUID,
 ) {
 	mobile := citizenMobile
-	log.Printf("MISSING-INFO-SMS: citizenMobile=%q reporterID=%v for incident %s", citizenMobile, reporterID, incident.IncidentNumber)
+	log.Printf("[SMS] flow=missing_info: citizenMobile=%s reporterID=%v for incident %s", maskMobile(citizenMobile), reporterID, incident.IncidentNumber)
 	if mobile == "" && reporterID != nil {
 		roles, err := s.userRepo.GetUserRoles(ctx, *reporterID)
 		if err == nil {
@@ -6402,71 +6242,34 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 			if isCitizen {
 				if reporter, err := s.userRepo.FindByID(ctx, *reporterID); err == nil {
 					mobile = reporter.Phone
-					log.Printf("MISSING-INFO-SMS: resolved citizen mobile from reporter: %q", mobile)
+					log.Printf("[SMS] flow=missing_info: resolved citizen mobile from reporter: %s", maskMobile(mobile))
 				}
 			} else {
-				log.Printf("MISSING-INFO-SMS: reporter is not a citizen, skipping phone lookup")
+				log.Printf("[SMS] flow=missing_info: reporter is not a citizen, skipping phone lookup")
 			}
 		}
 	}
 	if mobile == "" {
-		log.Printf("MISSING-INFO-SMS: No citizen mobile for incident %s, skipping", incident.IncidentNumber)
+		log.Printf("[SMS] flow=missing_info: No citizen mobile for incident %s, skipping", incident.IncidentNumber)
 		return
 	}
 
-	log.Printf("MISSING-INFO-SMS: targeting mobile=%q for incident %s", mobile, incident.IncidentNumber)
+	log.Printf("[SMS] flow=missing_info: targeting mobile=%s for incident %s", maskMobile(mobile), incident.IncidentNumber)
 	vars := BuildIncidentVariables(incident, nil, nil)
 
 	if s.notificationService != nil {
 		err := s.notificationService.SendByActionTypeForIncident(
-			ctx, models.TemplateActionMissingInfo, "sms", "ar",
+			ctx, models.TemplateActionMissingInfo, "sms", SMSLanguageFromContext(ctx),
 			[]string{mobile}, vars, &userID, incident.ID,
 		)
 		if err != nil {
-			log.Printf("MISSING-INFO-SMS: No active templates for incident %s, falling back to hardcoded: %v", incident.IncidentNumber, err)
+			log.Printf("[SMS] flow=missing_info: SMS not sent for incident %s (check that an active missing_info SMS template exists): %v", incident.IncidentNumber, err)
 		} else {
-			log.Printf("MISSING-INFO-SMS: Sent via template to %s for incident %s", mobile, incident.IncidentNumber)
-			return
+			log.Printf("[SMS] flow=missing_info: Sent via template to %s for incident %s", maskMobile(mobile), incident.IncidentNumber)
 		}
+		return
 	}
-
-	// Hardcoded fallback
-	smsMessage := fmt.Sprintf(
-		"Dear Citizen, your incident (ID: %s) has been closed due to insufficient information. We kindly request that you raise it again with all the required details so we can assist you better. Thank you!",
-		incident.IncidentNumber,
-	)
-	now := time.Now()
-	_, smsErr := utils.SendSMS(ctx, mobile, smsMessage)
-	status := "sent"
-	if smsErr != nil {
-		status = "failed"
-		log.Printf("MISSING-INFO-SMS: Fallback failed for incident %s to %s: %v", incident.IncidentNumber, mobile, smsErr)
-	} else {
-		log.Printf("MISSING-INFO-SMS: Fallback sent to %s for incident %s", mobile, incident.IncidentNumber)
-	}
-
-	notification := &models.NotificationLog{
-		Channel:    "sms",
-		Direction:  "outbound",
-		Category:   "sent",
-		Language:   "en",
-		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
-		IncidentID: &incident.ID,
-		Subject:    "Incident Closed - Missing Information",
-		Body:       smsMessage,
-		Status:     status,
-		Provider:   "twilio",
-		IsRead:     false,
-		SentBy:     &userID,
-		SentAt:     &now,
-	}
-	if smsErr != nil {
-		notification.ErrorMessage = smsErr.Error()
-		notification.FailureCode = ClassifyFailureCode(smsErr)
-	}
-	if err := s.incidentRepo.CreateNotification(ctx, notification); err != nil {
-		log.Printf("MISSING-INFO-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
-	}
+	log.Printf("[SMS] flow=missing_info: notification service unavailable — SMS not sent for incident %s", incident.IncidentNumber)
 }
 
 // AutoAssignUnassigned finds incidents in the state configured by AUTO_ASSIGN_STATE_CODE that

@@ -35,6 +35,18 @@ func NewKpiDictionaryHandler(db *gorm.DB, actionLogSvc services.ActionLogService
 	}
 }
 
+// replaceRelatedDepartments replaces the M2M RelatedDepartments association on a KPI model.
+func (h *KpiDictionaryHandler) replaceRelatedDepartments(ctx context.Context, model interface{}, ids []uuid.UUID) error {
+	if len(ids) == 0 {
+		return h.db.WithContext(ctx).Model(model).Association("RelatedDepartments").Clear()
+	}
+	var depts []models.Department
+	if err := h.db.WithContext(ctx).Where("id IN ?", ids).Find(&depts).Error; err != nil {
+		return err
+	}
+	return h.db.WithContext(ctx).Model(model).Association("RelatedDepartments").Replace(depts)
+}
+
 // kpiCode resolves a KPI dictionary row's code by (kpiType, id) — used to
 // make activity-log Description strings read "KPI-XYZ" instead of a bare
 // UUID (mirrors KpiEngagementHandler.kpiCodeAndName's dispatch pattern).
@@ -86,7 +98,7 @@ func (h *KpiDictionaryHandler) ListStrategic(c *fiber.Ctx) error {
 	}
 
 	q := h.db.WithContext(c.UserContext()).Model(&models.StrategicKPI{}).
-		Preload("Pillar").Preload("Domain").Preload("AwardKpiMeasure").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("Goal").Preload("Process")
+		Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments").Preload("Goal").Preload("Process")
 
 	if search != "" {
 		q = q.Where("name_en ILIKE ? OR name_ar ILIKE ? OR code ILIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
@@ -125,9 +137,8 @@ func (h *KpiDictionaryHandler) GetStrategic(c *fiber.Ctx) error {
 
 	var item models.StrategicKPI
 	if err := h.db.WithContext(c.UserContext()).
-		Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("Goal").Preload("Process").
-		Preload("OperationalObjective").Preload("AwardSubCriterion.AwardCriterion").
-		First(&item, id).Error; err != nil {
+		Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments").Preload("Goal").Preload("Process").
+		Preload("OperationalObjective").Preload("AwardSubCriterion.AwardCriterion").First(&item, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 
@@ -191,8 +202,7 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 		Lifecycle:              req.Lifecycle,
 		DataSource:             req.DataSource,
 		SegmentationAxes:       req.SegmentationAxes,
-		RelatedUnits:           req.RelatedUnits,
-		Notes:                  req.Notes,
+				Notes:                  req.Notes,
 		DocumentaFolderID:      req.DocumentaFolderID,
 	}
 	if item.Polarity == "" {
@@ -211,6 +221,9 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create KPI")
 	}
+	if err := h.replaceRelatedDepartments(c.UserContext(), item, req.RelatedDepartmentIDs); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to set related departments")
+	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if err := h.workflowSvc.InitiateKpiDictionaryWorkflow(c.UserContext(), models.KPITypeStrategic, item.ID, userID); err != nil {
@@ -218,9 +231,8 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 	}
 
 	h.db.WithContext(c.UserContext()).
-		Preload("Goal").Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
-		Preload("OperationalObjective").Preload("Process").Preload("AwardSubCriterion.AwardCriterion").
-		First(item, item.ID)
+		Preload("Goal").Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments").
+		Preload("OperationalObjective").Preload("Process").Preload("AwardSubCriterion.AwardCriterion").First(item, item.ID)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
 		Action:      "create",
@@ -277,7 +289,6 @@ func (h *KpiDictionaryHandler) UpdateStrategic(c *fiber.Ctx) error {
 		"lifecycle":                req.Lifecycle,
 		"data_source":              req.DataSource,
 		"segmentation_axes":        req.SegmentationAxes,
-		"related_units":            req.RelatedUnits,
 		"notes":                    req.Notes,
 		"documenta_folder_id":      req.DocumentaFolderID,
 	}
@@ -295,12 +306,14 @@ func (h *KpiDictionaryHandler) UpdateStrategic(c *fiber.Ctx) error {
 	if result.Error != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
 	}
+	if err := h.replaceRelatedDepartments(c.UserContext(), &models.StrategicKPI{ID: id}, req.RelatedDepartmentIDs); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to set related departments")
+	}
 
 	var item models.StrategicKPI
 	h.db.WithContext(c.UserContext()).
-		Preload("Goal").Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
-		Preload("OperationalObjective").Preload("Process").Preload("AwardSubCriterion.AwardCriterion").
-		First(&item, id)
+		Preload("Goal").Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments").
+		Preload("OperationalObjective").Preload("Process").Preload("AwardSubCriterion.AwardCriterion").First(&item, id)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
 		Action:      "update",
@@ -350,7 +363,7 @@ func (h *KpiDictionaryHandler) ListOperational(c *fiber.Ctx) error {
 
 	q := h.db.WithContext(c.UserContext()).Model(&models.OperationalKPI{}).
 		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Domain").Preload("AwardKpiMeasure").
-		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency")
+		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments")
 
 	if search != "" {
 		q = q.Where("name_en ILIKE ? OR name_ar ILIKE ? OR code ILIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
@@ -438,6 +451,9 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create KPI")
 	}
+	if err := h.replaceRelatedDepartments(c.UserContext(), item, req.RelatedDepartmentIDs); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to set related departments")
+	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if err := h.workflowSvc.InitiateKpiDictionaryWorkflow(c.UserContext(), models.KPITypeOperational, item.ID, userID); err != nil {
@@ -446,7 +462,7 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 
 	h.db.WithContext(c.UserContext()).
 		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Domain").Preload("AwardKpiMeasure").
-		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments").
 		Preload("Pillar").Preload("AwardSubCriterion.AwardCriterion").First(item, item.ID)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
@@ -469,7 +485,7 @@ func (h *KpiDictionaryHandler) GetOperational(c *fiber.Ctx) error {
 	var item models.OperationalKPI
 	if err := h.db.WithContext(c.UserContext()).
 		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Domain").Preload("AwardKpiMeasure").
-		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments").
 		Preload("Pillar").Preload("AwardSubCriterion.AwardCriterion").First(&item, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
@@ -504,7 +520,6 @@ func (h *KpiDictionaryHandler) UpdateOperational(c *fiber.Ctx) error {
 		"pillar_id":                req.PillarID,
 		"award_sub_criterion_id":   req.AwardSubCriterionID,
 		"classification":           req.Classification,
-		"related_units":            req.RelatedUnits,
 		"domain_id":                req.DomainID,
 		"award_kpi_measure_id":     req.AwardKpiMeasureID,
 		"owner_type":               req.OwnerType,
@@ -538,11 +553,14 @@ func (h *KpiDictionaryHandler) UpdateOperational(c *fiber.Ctx) error {
 	if result.Error != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
 	}
+	if err := h.replaceRelatedDepartments(c.UserContext(), &models.OperationalKPI{ID: id}, req.RelatedDepartmentIDs); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to set related departments")
+	}
 
 	var item models.OperationalKPI
 	h.db.WithContext(c.UserContext()).
 		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Domain").Preload("AwardKpiMeasure").
-		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments").
 		Preload("Pillar").Preload("AwardSubCriterion.AwardCriterion").First(&item, id)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
@@ -592,7 +610,7 @@ func (h *KpiDictionaryHandler) ListAward(c *fiber.Ctx) error {
 
 	q := h.db.WithContext(c.UserContext()).Model(&models.AwardKPI{}).
 		Preload("AwardSubCriterion.AwardCriterion").Preload("Domain").Preload("AwardKpiMeasure").
-		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency")
+		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments")
 
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
@@ -676,6 +694,9 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create KPI")
 	}
+	if err := h.replaceRelatedDepartments(c.UserContext(), item, req.RelatedDepartmentIDs); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to set related departments")
+	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if err := h.workflowSvc.InitiateKpiDictionaryWorkflow(c.UserContext(), models.KPITypeAward, item.ID, userID); err != nil {
@@ -684,7 +705,7 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 
 	h.db.WithContext(c.UserContext()).
 		Preload("AwardSubCriterion.AwardCriterion").Preload("Domain").Preload("AwardKpiMeasure").
-		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments").
 		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Pillar").First(item, item.ID)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
@@ -730,8 +751,9 @@ func (h *KpiDictionaryHandler) GetAward(c *fiber.Ctx) error {
 	var item models.AwardKPI
 	if err := h.db.WithContext(c.UserContext()).
 		Preload("AwardSubCriterion.AwardCriterion").Preload("Domain").Preload("AwardKpiMeasure").
-		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
-		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Pillar").First(&item, id).Error; err != nil {
+
+		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments").
+		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Pillar").		First(&item, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 
@@ -765,7 +787,6 @@ func (h *KpiDictionaryHandler) UpdateAward(c *fiber.Ctx) error {
 		"award_sub_criterion_id":   req.AwardSubCriterionID,
 		"classification":           req.Classification,
 		"pillar_id":                req.PillarID,
-		"related_units":            req.RelatedUnits,
 		"domain_id":                req.DomainID,
 		"award_kpi_measure_id":     req.AwardKpiMeasureID,
 		"owner_type":               req.OwnerType,
@@ -799,11 +820,14 @@ func (h *KpiDictionaryHandler) UpdateAward(c *fiber.Ctx) error {
 	if result.Error != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
 	}
+	if err := h.replaceRelatedDepartments(c.UserContext(), &models.AwardKPI{ID: id}, req.RelatedDepartmentIDs); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to set related departments")
+	}
 
 	var item models.AwardKPI
 	h.db.WithContext(c.UserContext()).
 		Preload("AwardSubCriterion.AwardCriterion").Preload("Domain").Preload("AwardKpiMeasure").
-		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments").
 		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Pillar").First(&item, id)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{

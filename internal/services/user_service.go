@@ -62,6 +62,7 @@ type UserService interface {
 	ValidateMobileForLogin(ctx context.Context, phone string) (*models.UserResponse, error)
 	SetLicenseService(ls LicenseService, lr repository.LicenseRepository)
 	SetSettingsRepo(sr repository.SettingsRepository)
+	SetNotificationService(ns *NotificationService)
 	AdminResetPassword(ctx context.Context, adminID, targetUserID uuid.UUID, newPassword string) error
 	ForgotPassword(ctx context.Context, req *models.ForgotPasswordRequest) (string, error)
 	VerifyOTPForReset(ctx context.Context, req *models.VerifyOTPRequest) (string, error)
@@ -79,6 +80,7 @@ type userService struct {
 	config           *config.Config
 	actionLogService ActionLogService
 	otpService       *OTPService
+	notificationSvc  *NotificationService
 	licenseService   LicenseService
 	licenseRepo      repository.LicenseRepository
 	db               *gorm.DB
@@ -90,6 +92,11 @@ type userService struct {
 func (s *userService) SetLicenseService(ls LicenseService, lr repository.LicenseRepository) {
 	s.licenseService = ls
 	s.licenseRepo = lr
+}
+
+// SetNotificationService injects the notification service used to send the password-reset OTP SMS.
+func (s *userService) SetNotificationService(ns *NotificationService) {
+	s.notificationSvc = ns
 }
 
 // SetSettingsRepo injects the settings repository (post-construction to avoid touching the constructor everywhere it's called).
@@ -2339,10 +2346,11 @@ func (s *userService) SendSMSOTP(ctx context.Context, phone, otp string) error {
 	if !strings.HasPrefix(phone, "+") {
 		return errors.New(i18n.T(ctx, "phone_country_code_required"))
 	}
-	message := fmt.Sprintf("Your OTP is %s. It is valid for 5 minutes.", otp)
-	sid, err := intutils.SendSMS(ctx, phone, message)
-	s.logOTPNotification("sms", "twilio", phone, message, sid, err)
-	return err
+	if s.notificationSvc == nil {
+		return errors.New("notification service is not configured: OTP SMS not sent")
+	}
+	// Same path as login OTP: OTP_SMS template → Amana (when mapped) or Twilio; it writes its own redacted log row.
+	return s.notificationSvc.SendOTPSMS(ctx, phone, otp, nil)
 }
 
 // logOTPNotification persists an OTP send attempt (success or failure) to

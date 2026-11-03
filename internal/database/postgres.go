@@ -438,6 +438,12 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		log.Printf("Warning: notification_log incident index migration failed: %v", err)
 	}
 
+	// Default SMS templates replacing formerly hardcoded SMS text (idempotent, never overwrites edits).
+	// can remove after successfull templates migartion.
+	if err := migrations.SeedDefaultSMSTemplates(db); err != nil {
+		log.Printf("Warning: default SMS template seed failed: %v", err)
+	}
+
 	// Assign a unique Organization Code (ORG-######) to any department missing one.
 	// EPM940 only — other clients supply department codes in the payload. Idempotent:
 	// only touches rows with an empty/NULL code.
