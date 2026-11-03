@@ -98,7 +98,7 @@ func (h *KpiDictionaryHandler) ListStrategic(c *fiber.Ctx) error {
 	}
 
 	q := h.db.WithContext(c.UserContext()).Model(&models.StrategicKPI{}).
-		Preload("Pillar").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments").Preload("Goal").Preload("Process")
+		Preload("Pillar").Preload("Domain").Preload("AwardKpiMeasure").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments").Preload("Goal").Preload("Process")
 
 	if search != "" {
 		q = q.Where("name_en ILIKE ? OR name_ar ILIKE ? OR code ILIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
@@ -202,7 +202,7 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 		Lifecycle:              req.Lifecycle,
 		DataSource:             req.DataSource,
 		SegmentationAxes:       req.SegmentationAxes,
-				Notes:                  req.Notes,
+		Notes:                  req.Notes,
 		DocumentaFolderID:      req.DocumentaFolderID,
 	}
 	if item.Polarity == "" {
@@ -415,7 +415,6 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 		PillarID:               req.PillarID,
 		AwardSubCriterionID:    req.AwardSubCriterionID,
 		Classification:         req.Classification,
-		RelatedUnits:           req.RelatedUnits,
 		DomainID:               req.DomainID,
 		AwardKpiMeasureID:      req.AwardKpiMeasureID,
 		OwnerType:              req.OwnerType,
@@ -658,7 +657,6 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 		AwardSubCriterionID:    req.AwardSubCriterionID,
 		Classification:         req.Classification,
 		PillarID:               req.PillarID,
-		RelatedUnits:           req.RelatedUnits,
 		DomainID:               req.DomainID,
 		AwardKpiMeasureID:      req.AwardKpiMeasureID,
 		OwnerType:              req.OwnerType,
@@ -751,9 +749,8 @@ func (h *KpiDictionaryHandler) GetAward(c *fiber.Ctx) error {
 	var item models.AwardKPI
 	if err := h.db.WithContext(c.UserContext()).
 		Preload("AwardSubCriterion.AwardCriterion").Preload("Domain").Preload("AwardKpiMeasure").
-
 		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments").
-		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Pillar").		First(&item, id).Error; err != nil {
+		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Pillar").First(&item, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 
