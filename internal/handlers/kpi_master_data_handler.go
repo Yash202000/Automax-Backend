@@ -983,3 +983,105 @@ func (h *KpiMasterDataHandler) DeleteAdministrativeUnit(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
 }
 
+// ─── Award KPIs and Measures ──────────────────────────────────────────────────
+
+func (h *KpiMasterDataHandler) ListAwardKpiMeasures(c *fiber.Ctx) error {
+	var items []models.AwardKpiMeasure
+	if err := h.db.WithContext(c.UserContext()).Select("id", "code", "name_en", "name_ar", "version").Order("code ASC").Find(&items).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+	resp := make([]models.AwardKpiMeasureResponse, len(items))
+	for i, item := range items {
+		resp[i] = item.ToResponse()
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
+}
+
+func (h *KpiMasterDataHandler) GetAwardKpiMeasure(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	var item models.AwardKpiMeasure
+	if err := h.db.WithContext(c.UserContext()).Select("id", "code", "name_en", "name_ar", "version").First(&item, "id = ?", id).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+		}
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", item.ToResponse())
+}
+
+func (h *KpiMasterDataHandler) CreateAwardKpiMeasure(c *fiber.Ctx) error {
+	var req models.AwardKpiMeasureRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+	var existing models.AwardKpiMeasure
+	if err := h.db.WithContext(c.UserContext()).Where("name_en = ?", req.NameEn).First(&existing).Error; err == nil {
+		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "award_kpi_measure_already_exists"))
+	}
+	// code is left empty so Postgres assigns it from award_kpi_measure_code_seq.
+	item := &models.AwardKpiMeasure{NameEn: req.NameEn, NameAr: req.NameAr}
+	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusCreated, "", item.ToResponse())
+}
+
+func (h *KpiMasterDataHandler) UpdateAwardKpiMeasure(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	var req models.AwardKpiMeasureUpdateRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+	var existing models.AwardKpiMeasure
+	if err := h.db.WithContext(c.UserContext()).Where("name_en = ? AND id != ?", req.NameEn, id).First(&existing).Error; err == nil {
+		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "award_kpi_measure_already_exists"))
+	}
+	result := h.db.WithContext(c.UserContext()).Model(&models.AwardKpiMeasure{}).
+		Where("id = ? AND version = ?", id, req.Version).
+		Updates(map[string]interface{}{
+			"name_en": req.NameEn,
+			"name_ar": req.NameAr,
+			"version": gorm.Expr("version + 1"),
+		})
+	if result.Error != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
+	}
+	if result.RowsAffected == 0 {
+		// Zero rows: either the record is gone (404) or the version is stale (409).
+		var n int64
+		h.db.WithContext(c.UserContext()).Model(&models.AwardKpiMeasure{}).Where("id = ?", id).Count(&n)
+		if n > 0 {
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "award_kpi_measure_version_conflict"))
+		}
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	var item models.AwardKpiMeasure
+	if err := h.db.WithContext(c.UserContext()).First(&item, "id = ?", id).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", item.ToResponse())
+}
+
+func (h *KpiMasterDataHandler) DeleteAwardKpiMeasure(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	result := h.db.WithContext(c.UserContext()).Delete(&models.AwardKpiMeasure{}, "id = ?", id)
+	if result.RowsAffected == 0 {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
+}
