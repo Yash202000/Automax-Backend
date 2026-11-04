@@ -91,11 +91,14 @@ type StrategicKPI struct {
 	SegmentationAxes       string                `gorm:"type:text" json:"segmentation_axes"`
 	RelatedDepartments     []Department          `gorm:"many2many:strategic_kpi_related_departments" json:"related_departments,omitempty"`
 	Notes                  string                `gorm:"type:text" json:"notes"`
-	DocumentaFolderID      string                `gorm:"size:255" json:"documenta_folder_id"`
-	WorkflowInstanceID     *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
-	CreatedAt              time.Time             `json:"created_at"`
-	UpdatedAt              time.Time             `json:"updated_at"`
-	DeletedAt              gorm.DeletedAt        `gorm:"index" json:"-"`
+	DocumentaFolderID         string                `gorm:"size:255" json:"documenta_folder_id"`
+	CurveDescription          string                `gorm:"type:text" json:"curve_description"`
+	ShortcomingsDescription   string                `gorm:"type:text" json:"shortcomings_description"`
+	ProposedImprovement       string                `gorm:"type:text" json:"proposed_improvement"`
+	WorkflowInstanceID        *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
+	CreatedAt                 time.Time             `json:"created_at"`
+	UpdatedAt                 time.Time             `json:"updated_at"`
+	DeletedAt                 gorm.DeletedAt        `gorm:"index" json:"-"`
 }
 
 func (k *StrategicKPI) BeforeCreate(tx *gorm.DB) error {
@@ -176,11 +179,14 @@ type StrategicKPIResponse struct {
 	DataSource             string                        `json:"data_source"`
 	SegmentationAxes       string                        `json:"segmentation_axes"`
 	RelatedDepartments     []DepartmentBriefResponse     `json:"related_departments"`
-	Notes                  string                        `json:"notes"`
-	DocumentaFolderID      string                        `json:"documenta_folder_id"`
-	WorkflowInstanceID     *uuid.UUID                    `json:"workflow_instance_id"`
-	CreatedAt              time.Time                     `json:"created_at"`
-	UpdatedAt              time.Time                     `json:"updated_at"`
+	Notes                   string                        `json:"notes"`
+	DocumentaFolderID       string                        `json:"documenta_folder_id"`
+	CurveDescription        string                        `json:"curve_description"`
+	ShortcomingsDescription string                        `json:"shortcomings_description"`
+	ProposedImprovement     string                        `json:"proposed_improvement"`
+	WorkflowInstanceID      *uuid.UUID                    `json:"workflow_instance_id"`
+	CreatedAt               time.Time                     `json:"created_at"`
+	UpdatedAt               time.Time                     `json:"updated_at"`
 }
 
 func (k *StrategicKPI) ToResponse() StrategicKPIResponse {
@@ -213,11 +219,14 @@ func (k *StrategicKPI) ToResponse() StrategicKPIResponse {
 		Lifecycle:              k.Lifecycle,
 		DataSource:             k.DataSource,
 		SegmentationAxes:       k.SegmentationAxes,
-		Notes:                  k.Notes,
-		DocumentaFolderID:      k.DocumentaFolderID,
-		WorkflowInstanceID:     k.WorkflowInstanceID,
-		CreatedAt:              k.CreatedAt,
-		UpdatedAt:              k.UpdatedAt,
+		Notes:                   k.Notes,
+		DocumentaFolderID:       k.DocumentaFolderID,
+		CurveDescription:        k.CurveDescription,
+		ShortcomingsDescription: k.ShortcomingsDescription,
+		ProposedImprovement:     k.ProposedImprovement,
+		WorkflowInstanceID:      k.WorkflowInstanceID,
+		CreatedAt:               k.CreatedAt,
+		UpdatedAt:               k.UpdatedAt,
 	}
 	resp.RelatedDepartments = make([]DepartmentBriefResponse, 0, len(k.RelatedDepartments))
 	for _, d := range k.RelatedDepartments {
@@ -309,12 +318,15 @@ type OperationalKPI struct {
 	DataSource             string                `gorm:"size:255" json:"data_source"`
 	RelatedDepartments     []Department          `gorm:"many2many:operational_kpi_related_departments" json:"related_departments,omitempty"`
 	Notes                  string                `gorm:"type:text" json:"notes"`
-	DocumentaFolderID      string                `gorm:"size:255" json:"documenta_folder_id"`
-	WorkflowInstanceID     *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
-	WorkflowInstance       *KpiWorkflowInstance  `gorm:"foreignKey:WorkflowInstanceID" json:"-"`
-	CreatedAt              time.Time             `json:"created_at"`
-	UpdatedAt              time.Time             `json:"updated_at"`
-	DeletedAt              gorm.DeletedAt        `gorm:"index" json:"-"`
+	DocumentaFolderID         string                `gorm:"size:255" json:"documenta_folder_id"`
+	CurveDescription          string                `gorm:"type:text" json:"curve_description"`
+	ShortcomingsDescription   string                `gorm:"type:text" json:"shortcomings_description"`
+	ProposedImprovement       string                `gorm:"type:text" json:"proposed_improvement"`
+	WorkflowInstanceID        *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
+	WorkflowInstance          *KpiWorkflowInstance  `gorm:"foreignKey:WorkflowInstanceID" json:"-"`
+	CreatedAt                 time.Time             `json:"created_at"`
+	UpdatedAt                 time.Time             `json:"updated_at"`
+	DeletedAt                 gorm.DeletedAt        `gorm:"index" json:"-"`
 }
 
 func (k *OperationalKPI) BeforeCreate(tx *gorm.DB) error {
@@ -393,12 +405,15 @@ type OperationalKPIResponse struct {
 	Lifecycle              string                        `json:"lifecycle"`
 	DataSource             string                        `json:"data_source"`
 	RelatedDepartments     []DepartmentBriefResponse     `json:"related_departments"`
-	Notes                  string                        `json:"notes"`
-	DocumentaFolderID      string                        `json:"documenta_folder_id"`
-	WorkflowInstanceID     *uuid.UUID                    `json:"workflow_instance_id"`
-	CreatedBy              *UserBrief                    `json:"created_by,omitempty"`
-	CreatedAt              time.Time                     `json:"created_at"`
-	UpdatedAt              time.Time                     `json:"updated_at"`
+	Notes                   string                        `json:"notes"`
+	DocumentaFolderID       string                        `json:"documenta_folder_id"`
+	CurveDescription        string                        `json:"curve_description"`
+	ShortcomingsDescription string                        `json:"shortcomings_description"`
+	ProposedImprovement     string                        `json:"proposed_improvement"`
+	WorkflowInstanceID      *uuid.UUID                    `json:"workflow_instance_id"`
+	CreatedBy               *UserBrief                    `json:"created_by,omitempty"`
+	CreatedAt               time.Time                     `json:"created_at"`
+	UpdatedAt               time.Time                     `json:"updated_at"`
 }
 
 func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
@@ -430,11 +445,14 @@ func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 		ReportingFrequency:     k.ReportingFrequency,
 		Lifecycle:              k.Lifecycle,
 		DataSource:             k.DataSource,
-		Notes:                  k.Notes,
-		DocumentaFolderID:      k.DocumentaFolderID,
-		WorkflowInstanceID:     k.WorkflowInstanceID,
-		CreatedAt:              k.CreatedAt,
-		UpdatedAt:              k.UpdatedAt,
+		Notes:                   k.Notes,
+		DocumentaFolderID:       k.DocumentaFolderID,
+		CurveDescription:        k.CurveDescription,
+		ShortcomingsDescription: k.ShortcomingsDescription,
+		ProposedImprovement:     k.ProposedImprovement,
+		WorkflowInstanceID:      k.WorkflowInstanceID,
+		CreatedAt:               k.CreatedAt,
+		UpdatedAt:               k.UpdatedAt,
 	}
 	resp.RelatedDepartments = make([]DepartmentBriefResponse, 0, len(k.RelatedDepartments))
 	for _, d := range k.RelatedDepartments {
@@ -535,12 +553,15 @@ type AwardKPI struct {
 	DataSource             string                `gorm:"size:255" json:"data_source"`
 	RelatedDepartments     []Department          `gorm:"many2many:award_kpi_related_departments" json:"related_departments,omitempty"`
 	Notes                  string                `gorm:"type:text" json:"notes"`
-	DocumentaFolderID      string                `gorm:"size:255" json:"documenta_folder_id"`
-	WorkflowInstanceID     *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
-	WorkflowInstance       *KpiWorkflowInstance  `gorm:"foreignKey:WorkflowInstanceID" json:"-"`
-	CreatedAt              time.Time             `json:"created_at"`
-	UpdatedAt              time.Time             `json:"updated_at"`
-	DeletedAt              gorm.DeletedAt        `gorm:"index" json:"-"`
+	DocumentaFolderID         string                `gorm:"size:255" json:"documenta_folder_id"`
+	CurveDescription          string                `gorm:"type:text" json:"curve_description"`
+	ShortcomingsDescription   string                `gorm:"type:text" json:"shortcomings_description"`
+	ProposedImprovement       string                `gorm:"type:text" json:"proposed_improvement"`
+	WorkflowInstanceID        *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
+	WorkflowInstance          *KpiWorkflowInstance  `gorm:"foreignKey:WorkflowInstanceID" json:"-"`
+	CreatedAt                 time.Time             `json:"created_at"`
+	UpdatedAt                 time.Time             `json:"updated_at"`
+	DeletedAt                 gorm.DeletedAt        `gorm:"index" json:"-"`
 }
 
 func (k *AwardKPI) BeforeCreate(tx *gorm.DB) error {
@@ -619,12 +640,15 @@ type AwardKPIResponse struct {
 	Lifecycle              string                        `json:"lifecycle"`
 	DataSource             string                        `json:"data_source"`
 	RelatedDepartments     []DepartmentBriefResponse     `json:"related_departments"`
-	Notes                  string                        `json:"notes"`
-	DocumentaFolderID      string                        `json:"documenta_folder_id"`
-	WorkflowInstanceID     *uuid.UUID                    `json:"workflow_instance_id"`
-	CreatedBy              *UserBrief                    `json:"created_by,omitempty"`
-	CreatedAt              time.Time                     `json:"created_at"`
-	UpdatedAt              time.Time                     `json:"updated_at"`
+	Notes                   string                        `json:"notes"`
+	DocumentaFolderID       string                        `json:"documenta_folder_id"`
+	CurveDescription        string                        `json:"curve_description"`
+	ShortcomingsDescription string                        `json:"shortcomings_description"`
+	ProposedImprovement     string                        `json:"proposed_improvement"`
+	WorkflowInstanceID      *uuid.UUID                    `json:"workflow_instance_id"`
+	CreatedBy               *UserBrief                    `json:"created_by,omitempty"`
+	CreatedAt               time.Time                     `json:"created_at"`
+	UpdatedAt               time.Time                     `json:"updated_at"`
 }
 
 func (k *AwardKPI) ToResponse() AwardKPIResponse {
@@ -656,11 +680,14 @@ func (k *AwardKPI) ToResponse() AwardKPIResponse {
 		ReportingFrequency:     k.ReportingFrequency,
 		Lifecycle:              k.Lifecycle,
 		DataSource:             k.DataSource,
-		Notes:                  k.Notes,
-		DocumentaFolderID:      k.DocumentaFolderID,
-		WorkflowInstanceID:     k.WorkflowInstanceID,
-		CreatedAt:              k.CreatedAt,
-		UpdatedAt:              k.UpdatedAt,
+		Notes:                   k.Notes,
+		DocumentaFolderID:       k.DocumentaFolderID,
+		CurveDescription:        k.CurveDescription,
+		ShortcomingsDescription: k.ShortcomingsDescription,
+		ProposedImprovement:     k.ProposedImprovement,
+		WorkflowInstanceID:      k.WorkflowInstanceID,
+		CreatedAt:               k.CreatedAt,
+		UpdatedAt:               k.UpdatedAt,
 	}
 	resp.RelatedDepartments = make([]DepartmentBriefResponse, 0, len(k.RelatedDepartments))
 	for _, d := range k.RelatedDepartments {
