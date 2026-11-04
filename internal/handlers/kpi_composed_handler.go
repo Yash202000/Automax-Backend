@@ -457,19 +457,20 @@ func (h *KpiComposedHandler) UpdateNarrative(c *fiber.Ctx) error {
 		"proposed_improvement":     req.ProposedImprovement,
 	}
 
+	var res *gorm.DB
 	switch kpiType {
 	case models.KPITypeOperational:
-		if err := db.Model(&models.OperationalKPI{}).Where("id = ?", id).Updates(updates).Error; err != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
-		}
+		res = db.Model(&models.OperationalKPI{}).Where("id = ?", id).Updates(updates)
 	case models.KPITypeAward:
-		if err := db.Model(&models.AwardKPI{}).Where("id = ?", id).Updates(updates).Error; err != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
-		}
+		res = db.Model(&models.AwardKPI{}).Where("id = ?", id).Updates(updates)
 	default:
-		if err := db.Model(&models.StrategicKPI{}).Where("id = ?", id).Updates(updates).Error; err != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
-		}
+		res = db.Model(&models.StrategicKPI{}).Where("id = ?", id).Updates(updates)
+	}
+	if res.Error != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
+	}
+	if res.RowsAffected == 0 {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "Narrative updated", nil)
