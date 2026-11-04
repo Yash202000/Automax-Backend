@@ -97,6 +97,7 @@ func (s *notificationTemplateService) Update(ctx context.Context, id uuid.UUID, 
 	}
 
 	oldProviderID := tpl.ProviderTemplateID
+	oldBodyEN, oldBodyAR := tpl.BodyEN, tpl.BodyAR
 	if req.Name != nil {
 		tpl.Name = *req.Name
 	}
@@ -126,7 +127,8 @@ func (s *notificationTemplateService) Update(ctx context.Context, id uuid.UUID, 
 	}
 	if req.Variables != nil {
 		tpl.Variables = *req.Variables
-	} else {
+	} else if tpl.BodyEN != oldBodyEN || tpl.BodyAR != oldBodyAR {
+		// Only a body edit re-syncs the list; saving other fields (name, active, ...) leaves it as is.
 		tpl.Variables = SyncTemplateVariables(tpl.Variables, tpl.BodyEN, tpl.BodyAR)
 	}
 	tpl.Variables = FillTemplateVariables(tpl.Variables, tpl.BodyEN, tpl.BodyAR)
