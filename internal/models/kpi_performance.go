@@ -466,6 +466,9 @@ type KpiBenchmark struct {
 	InternalAchievement  float64        `gorm:"default:0" json:"internal_achievement"`
 	BenchmarkAchievement float64        `gorm:"default:0" json:"benchmark_achievement"`
 	Variance             float64        `gorm:"-" json:"variance"`
+	Municipality1        *float64       `gorm:"type:double precision" json:"municipality1"`
+	Municipality2        *float64       `gorm:"type:double precision" json:"municipality2"`
+	Municipality3        *float64       `gorm:"type:double precision" json:"municipality3"`
 	Notes                string         `gorm:"type:text" json:"notes"`
 	CreatedAt            time.Time      `json:"created_at"`
 	UpdatedAt            time.Time      `json:"updated_at"`
@@ -489,6 +492,9 @@ type KpiBenchmarkRequest struct {
 	BenchmarkEntity      string  `json:"benchmark_entity" validate:"required,max=255"`
 	InternalAchievement  float64 `json:"internal_achievement"`
 	BenchmarkAchievement float64 `json:"benchmark_achievement"`
+	Municipality1        *float64 `json:"municipality1" validate:"omitempty,gte=0,lte=100"`
+	Municipality2        *float64 `json:"municipality2" validate:"omitempty,gte=0,lte=100"`
+	Municipality3        *float64 `json:"municipality3" validate:"omitempty,gte=0,lte=100"`
 	Notes                string  `json:"notes"`
 }
 
@@ -505,6 +511,9 @@ type KpiBenchmarkResponse struct {
 	InternalAchievement  float64                  `json:"internal_achievement"`
 	BenchmarkAchievement float64                  `json:"benchmark_achievement"`
 	Variance             float64                  `json:"variance"`
+	Municipality1        *float64                 `json:"municipality1"`
+	Municipality2        *float64                 `json:"municipality2"`
+	Municipality3        *float64                 `json:"municipality3"`
 	Notes                string                   `json:"notes"`
 	CreatedAt            time.Time                `json:"created_at"`
 }
@@ -524,6 +533,9 @@ func (b *KpiBenchmark) ToBenchmarkResponse() KpiBenchmarkResponse {
 		InternalAchievement:  b.InternalAchievement,
 		BenchmarkAchievement: b.BenchmarkAchievement,
 		Variance:             v,
+		Municipality1:        b.Municipality1,
+		Municipality2:        b.Municipality2,
+		Municipality3:        b.Municipality3,
 		Notes:                b.Notes,
 		CreatedAt:            b.CreatedAt,
 	}

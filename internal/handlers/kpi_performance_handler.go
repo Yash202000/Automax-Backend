@@ -844,6 +844,9 @@ func (h *KpiPerformanceHandler) CreateBenchmark(c *fiber.Ctx) error {
 		BenchmarkEntity:      req.BenchmarkEntity,
 		InternalAchievement:  req.InternalAchievement,
 		BenchmarkAchievement: req.BenchmarkAchievement,
+		Municipality1:        req.Municipality1,
+		Municipality2:        req.Municipality2,
+		Municipality3:        req.Municipality3,
 		Notes:                req.Notes,
 	}
 
