@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"strconv"
@@ -65,7 +66,7 @@ func (s *notificationTemplateService) Create(ctx context.Context, req *models.No
 		BodyEN:             req.BodyEN,
 		SubjectAR:          req.SubjectAR,
 		BodyAR:             req.BodyAR,
-		Variables:          req.Variables,
+		Variables:          ResolveTemplateVariables(req.Variables, req.BodyEN, req.BodyAR),
 		ProviderTemplateID: req.ProviderTemplateID,
 		TransitionID:       req.TransitionID,
 		IsActive:           req.IsActive,
@@ -126,6 +127,8 @@ func (s *notificationTemplateService) Update(ctx context.Context, id uuid.UUID, 
 	if req.Variables != nil {
 		tpl.Variables = *req.Variables
 	}
+	// Keep the variables column filled from the body when it is empty (never overrides an explicit list).
+	tpl.Variables = ResolveTemplateVariables(tpl.Variables, tpl.BodyEN, tpl.BodyAR)
 	if req.ProviderTemplateID != nil {
 		tpl.ProviderTemplateID = *req.ProviderTemplateID
 	}
@@ -241,6 +244,29 @@ func (s *notificationTemplateService) GetByCode(ctx context.Context, code, chann
 
 func (s *notificationTemplateService) GetByTransitionID(ctx context.Context, transitionID uuid.UUID) ([]models.NotificationTemplate, error) {
 	return s.repo.FindByTransitionID(ctx, transitionID)
+}
+
+// ResolveTemplateVariables returns the variables to store for a template.
+// An explicit, non-empty list is kept untouched. Otherwise the {{placeholders}} found in the body
+// (English first, Arabic as fallback) are stored as a JSON array in order of appearance, which is
+// the same order the SMS sender already falls back to, so sending behaviour does not change.
+func ResolveTemplateVariables(explicit, bodyEN, bodyAR string) string {
+	if strings.TrimSpace(explicit) != "" {
+		return explicit
+	}
+	body := bodyEN
+	if strings.TrimSpace(body) == "" {
+		body = bodyAR
+	}
+	names := ExtractPlaceholders(body)
+	if len(names) == 0 {
+		return explicit
+	}
+	encoded, err := json.Marshal(names)
+	if err != nil {
+		return explicit
+	}
+	return string(encoded)
 }
 
 // validateProviderTemplateID checks that an SMS template's provider (Amana) template id, when set, is a
