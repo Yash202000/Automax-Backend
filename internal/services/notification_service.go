@@ -50,7 +50,10 @@ const OTPSMSTemplateCode = "OTP_SMS"
 // Shared by login OTP and password-reset OTP.
 func (s *NotificationService) SendOTPSMS(ctx context.Context, phone, otp string, sessionID *uuid.UUID) error {
 	code := OTPSMSTemplateCode
-	_, err := s.SendNotification(ctx, "sms", &code, "en", []string{phone}, nil, nil, "", "", map[string]string{"otp": otp}, nil, nil, sessionID)
+	// Arabic request (Accept-Language: ar) sends the Arabic body of the OTP_SMS template;
+	// anything else, or no language, sends the English body.
+	language := SMSLanguageFromContext(ctx)
+	_, err := s.SendNotification(ctx, "sms", &code, language, []string{phone}, nil, nil, "", "", map[string]string{"otp": otp}, nil, nil, sessionID)
 	return err
 }
 

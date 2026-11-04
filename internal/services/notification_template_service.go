@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"strconv"
@@ -65,7 +66,7 @@ func (s *notificationTemplateService) Create(ctx context.Context, req *models.No
 		BodyEN:             req.BodyEN,
 		SubjectAR:          req.SubjectAR,
 		BodyAR:             req.BodyAR,
-		Variables:          req.Variables,
+		Variables:          FillTemplateVariables(req.Variables, req.BodyEN, req.BodyAR),
 		ProviderTemplateID: req.ProviderTemplateID,
 		TransitionID:       req.TransitionID,
 		IsActive:           req.IsActive,
@@ -96,6 +97,7 @@ func (s *notificationTemplateService) Update(ctx context.Context, id uuid.UUID, 
 	}
 
 	oldProviderID := tpl.ProviderTemplateID
+	oldBodyEN, oldBodyAR := tpl.BodyEN, tpl.BodyAR
 	if req.Name != nil {
 		tpl.Name = *req.Name
 	}
@@ -125,7 +127,11 @@ func (s *notificationTemplateService) Update(ctx context.Context, id uuid.UUID, 
 	}
 	if req.Variables != nil {
 		tpl.Variables = *req.Variables
+	} else if tpl.BodyEN != oldBodyEN || tpl.BodyAR != oldBodyAR {
+		// Only a body edit re-syncs the list; saving other fields (name, active, ...) leaves it as is.
+		tpl.Variables = SyncTemplateVariables(tpl.Variables, tpl.BodyEN, tpl.BodyAR)
 	}
+	tpl.Variables = FillTemplateVariables(tpl.Variables, tpl.BodyEN, tpl.BodyAR)
 	if req.ProviderTemplateID != nil {
 		tpl.ProviderTemplateID = *req.ProviderTemplateID
 	}
@@ -241,6 +247,72 @@ func (s *notificationTemplateService) GetByCode(ctx context.Context, code, chann
 
 func (s *notificationTemplateService) GetByTransitionID(ctx context.Context, transitionID uuid.UUID) ([]models.NotificationTemplate, error) {
 	return s.repo.FindByTransitionID(ctx, transitionID)
+}
+
+// FillTemplateVariables maps the {{placeholders}} of the bodies into the variables column.
+// A list that already has values is returned untouched; only an empty one is filled, as a JSON array
+// in order of appearance (English body first, then Arabic-only placeholders).
+func FillTemplateVariables(current, bodyEN, bodyAR string) string {
+	if strings.TrimSpace(current) != "" {
+		return current
+	}
+	names := ExtractPlaceholders(bodyEN)
+	seen := map[string]bool{}
+	for _, n := range names {
+		seen[strings.ToLower(n)] = true
+	}
+	for _, n := range ExtractPlaceholders(bodyAR) {
+		if !seen[strings.ToLower(n)] {
+			seen[strings.ToLower(n)] = true
+			names = append(names, n)
+		}
+	}
+	if len(names) == 0 {
+		return current
+	}
+	encoded, err := json.Marshal(names)
+	if err != nil {
+		return current
+	}
+	return string(encoded)
+}
+
+// SyncTemplateVariables makes the variables column mirror the placeholders of the bodies.
+// Entries used by neither body are dropped, placeholders missing from the list are appended, and the
+// remaining entries keep their order (Amana positions). When both bodies have no placeholders the
+// stored value is left alone. Returns the stored value unchanged when nothing differs.
+func SyncTemplateVariables(current, bodyEN, bodyAR string) string {
+	used := append(ExtractPlaceholders(bodyEN), ExtractPlaceholders(bodyAR)...)
+	if len(used) == 0 {
+		return current
+	}
+	inBody := map[string]bool{}
+	for _, n := range used {
+		inBody[strings.ToLower(n)] = true
+	}
+	names := ParseTemplateVariables(current)
+	kept := make([]string, 0, len(names))
+	seen := map[string]bool{}
+	for _, n := range names {
+		if inBody[strings.ToLower(n)] && !seen[strings.ToLower(n)] {
+			seen[strings.ToLower(n)] = true
+			kept = append(kept, n)
+		}
+	}
+	for _, n := range used {
+		if !seen[strings.ToLower(n)] {
+			seen[strings.ToLower(n)] = true
+			kept = append(kept, n)
+		}
+	}
+	if strings.Join(kept, "\x00") == strings.Join(names, "\x00") {
+		return current
+	}
+	encoded, err := json.Marshal(kept)
+	if err != nil {
+		return current
+	}
+	return string(encoded)
 }
 
 // validateProviderTemplateID checks that an SMS template's provider (Amana) template id, when set, is a
