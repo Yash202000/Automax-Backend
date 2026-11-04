@@ -66,7 +66,7 @@ func (s *notificationTemplateService) Create(ctx context.Context, req *models.No
 		BodyEN:             req.BodyEN,
 		SubjectAR:          req.SubjectAR,
 		BodyAR:             req.BodyAR,
-		Variables:          ResolveTemplateVariables(req.Variables, req.BodyEN, req.BodyAR),
+		Variables:          FillTemplateVariables(req.Variables, req.BodyEN, req.BodyAR),
 		ProviderTemplateID: req.ProviderTemplateID,
 		TransitionID:       req.TransitionID,
 		IsActive:           req.IsActive,
@@ -97,9 +97,6 @@ func (s *notificationTemplateService) Update(ctx context.Context, id uuid.UUID, 
 	}
 
 	oldProviderID := tpl.ProviderTemplateID
-	// Variables are "auto" when they are empty or equal to what the current body would infer.
-	// Such a list follows the body on edit; a list the user customised is left alone.
-	variablesAreAuto := IsInferredTemplateVariables(tpl.Variables, tpl.BodyEN, tpl.BodyAR)
 	if req.Name != nil {
 		tpl.Name = *req.Name
 	}
@@ -129,11 +126,10 @@ func (s *notificationTemplateService) Update(ctx context.Context, id uuid.UUID, 
 	}
 	if req.Variables != nil {
 		tpl.Variables = *req.Variables
-	} else if variablesAreAuto {
-		tpl.Variables = "" // re-infer from the edited body below
+	} else {
+		tpl.Variables = SyncTemplateVariables(tpl.Variables, tpl.BodyEN, tpl.BodyAR)
 	}
-	// Fill from the body when empty (never overrides an explicit list).
-	tpl.Variables = ResolveTemplateVariables(tpl.Variables, tpl.BodyEN, tpl.BodyAR)
+	tpl.Variables = FillTemplateVariables(tpl.Variables, tpl.BodyEN, tpl.BodyAR)
 	if req.ProviderTemplateID != nil {
 		tpl.ProviderTemplateID = *req.ProviderTemplateID
 	}
@@ -251,36 +247,70 @@ func (s *notificationTemplateService) GetByTransitionID(ctx context.Context, tra
 	return s.repo.FindByTransitionID(ctx, transitionID)
 }
 
-// ResolveTemplateVariables returns the variables to store for a template.
-// An explicit, non-empty list is kept untouched. Otherwise the {{placeholders}} found in the body
-// (English first, Arabic as fallback) are stored as a JSON array in order of appearance, which is
-// the same order the SMS sender already falls back to, so sending behaviour does not change.
-func ResolveTemplateVariables(explicit, bodyEN, bodyAR string) string {
-	if strings.TrimSpace(explicit) != "" {
-		return explicit
+// FillTemplateVariables maps the {{placeholders}} of the bodies into the variables column.
+// A list that already has values is returned untouched; only an empty one is filled, as a JSON array
+// in order of appearance (English body first, then Arabic-only placeholders).
+func FillTemplateVariables(current, bodyEN, bodyAR string) string {
+	if strings.TrimSpace(current) != "" {
+		return current
 	}
-	body := bodyEN
-	if strings.TrimSpace(body) == "" {
-		body = bodyAR
+	names := ExtractPlaceholders(bodyEN)
+	seen := map[string]bool{}
+	for _, n := range names {
+		seen[strings.ToLower(n)] = true
 	}
-	names := ExtractPlaceholders(body)
+	for _, n := range ExtractPlaceholders(bodyAR) {
+		if !seen[strings.ToLower(n)] {
+			seen[strings.ToLower(n)] = true
+			names = append(names, n)
+		}
+	}
 	if len(names) == 0 {
-		return explicit
+		return current
 	}
 	encoded, err := json.Marshal(names)
 	if err != nil {
-		return explicit
+		return current
 	}
 	return string(encoded)
 }
 
-// IsInferredTemplateVariables reports whether the stored variables are empty or exactly what
-// ResolveTemplateVariables would infer from the given body, i.e. they were not customised.
-func IsInferredTemplateVariables(stored, bodyEN, bodyAR string) bool {
-	if strings.TrimSpace(stored) == "" {
-		return true
+// SyncTemplateVariables makes the variables column mirror the placeholders of the bodies.
+// Entries used by neither body are dropped, placeholders missing from the list are appended, and the
+// remaining entries keep their order (Amana positions). When both bodies have no placeholders the
+// stored value is left alone. Returns the stored value unchanged when nothing differs.
+func SyncTemplateVariables(current, bodyEN, bodyAR string) string {
+	used := append(ExtractPlaceholders(bodyEN), ExtractPlaceholders(bodyAR)...)
+	if len(used) == 0 {
+		return current
 	}
-	return stored == ResolveTemplateVariables("", bodyEN, bodyAR)
+	inBody := map[string]bool{}
+	for _, n := range used {
+		inBody[strings.ToLower(n)] = true
+	}
+	names := ParseTemplateVariables(current)
+	kept := make([]string, 0, len(names))
+	seen := map[string]bool{}
+	for _, n := range names {
+		if inBody[strings.ToLower(n)] && !seen[strings.ToLower(n)] {
+			seen[strings.ToLower(n)] = true
+			kept = append(kept, n)
+		}
+	}
+	for _, n := range used {
+		if !seen[strings.ToLower(n)] {
+			seen[strings.ToLower(n)] = true
+			kept = append(kept, n)
+		}
+	}
+	if strings.Join(kept, "\x00") == strings.Join(names, "\x00") {
+		return current
+	}
+	encoded, err := json.Marshal(kept)
+	if err != nil {
+		return current
+	}
+	return string(encoded)
 }
 
 // validateProviderTemplateID checks that an SMS template's provider (Amana) template id, when set, is a
