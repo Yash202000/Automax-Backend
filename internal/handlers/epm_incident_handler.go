@@ -930,7 +930,11 @@ func (h *EPMIncidentHandler) GetMomraIncidentStatusDetails(c *fiber.Ctx) error {
 // EPMPushOutcomeRequest is the shared payload for UpdateIncident (TFIS IF-03 status 002 -
 // Resolved) and ReopenIncident (TFIS IF-03 status 003 - Rejected/Returned by EE).
 type EPMPushOutcomeRequest struct {
-	IncidentNo        string `json:"incidentNo"`
+	IncidentNo string `json:"incidentNo"`
+	// TicketNumber is the AutoMax incident number returned as ticketNumber by
+	// InsertIncidents. AmanaIncidentNo is the deprecated key for the same value,
+	// still accepted when ticketNumber is absent.
+	TicketNumber      string `json:"ticketNumber"`
 	AmanaIncidentNo   string `json:"amanaIncidentNo"`
 	ActionDate        string `json:"actionDate"`
 	ActionDescription string `json:"actionDescription"`
@@ -1005,6 +1009,9 @@ func (h *EPMIncidentHandler) handleEEOutcome(c *fiber.Ctx, resolve bool) error {
 			Result:         false,
 		})
 	}
+	if req.TicketNumber == "" {
+		req.TicketNumber = req.AmanaIncidentNo // legacy key fallback
+	}
 
 	if req.IncidentNo == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
@@ -1013,10 +1020,10 @@ func (h *EPMIncidentHandler) handleEEOutcome(c *fiber.Ctx, resolve bool) error {
 			Result:         false,
 		})
 	}
-	if req.AmanaIncidentNo == "" {
+	if req.TicketNumber == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
 			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "amanaIncidentNo is required",
+			Message:        "ticketNumber is required",
 			Result:         false,
 		})
 	}
@@ -1051,11 +1058,11 @@ func (h *EPMIncidentHandler) handleEEOutcome(c *fiber.Ctx, resolve bool) error {
 		})
 	}
 
-	incident, err := h.incidentRepo.FindByIncidentNumber(c.UserContext(), req.AmanaIncidentNo)
+	incident, err := h.incidentRepo.FindByIncidentNumber(c.UserContext(), req.TicketNumber)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(EPMInsertIncidentResponse{
 			HTTPStatusCode: fiber.StatusNotFound,
-			Message:        "Incident not found: " + req.AmanaIncidentNo,
+			Message:        "Incident not found: " + req.TicketNumber,
 			Result:         false,
 		})
 	}
@@ -1066,7 +1073,7 @@ func (h *EPMIncidentHandler) handleEEOutcome(c *fiber.Ctx, resolve bool) error {
 	if momraNo, _ := custFields["momra_incident_no"].(string); momraNo != req.IncidentNo {
 		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
 			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "incidentNo does not correlate with amanaIncidentNo: " + req.AmanaIncidentNo,
+			Message:        "incidentNo does not correlate with ticketNumber: " + req.TicketNumber,
 			Result:         false,
 		})
 	}
@@ -1180,7 +1187,11 @@ func momraV2Response(c *fiber.Ctx, status int, message string, result bool) erro
 }
 
 type EPMUpdateIncidentV2Request struct {
-	EENotes           string `json:"EENotes"`
+	EENotes string `json:"EENotes"`
+	// TicketNumber is the AutoMax incident number returned as ticketNumber by
+	// InsertIncidents. AmanaIncidentNo is the deprecated key for the same value,
+	// still accepted when ticketNumber is absent.
+	TicketNumber      string `json:"ticketNumber"`
 	AmanaIncidentNo   string `json:"AmanaIncidentNo"`
 	IncidentNo        string `json:"IncidentNO"`
 	ActionDate        string `json:"ActionDate"`
@@ -1219,11 +1230,14 @@ func (h *EPMIncidentHandler) UpdateIncidentV2(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return momraV2Response(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"), false)
 	}
+	if req.TicketNumber == "" {
+		req.TicketNumber = req.AmanaIncidentNo // legacy key fallback
+	}
 
 	if req.IncidentNo == "" {
 		return momraV2Response(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "incident_no_required"), false)
 	}
-	if req.AmanaIncidentNo == "" {
+	if req.TicketNumber == "" {
 		return momraV2Response(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "amana_incident_no_required"), false)
 	}
 	if req.ActionDate == "" {
@@ -1239,9 +1253,9 @@ func (h *EPMIncidentHandler) UpdateIncidentV2(c *fiber.Ctx) error {
 		return momraV2Response(c, fiber.StatusBadRequest, "IncidentStatusID is required", false)
 	}
 
-	incident, err := h.incidentRepo.FindByIncidentNumber(c.UserContext(), req.AmanaIncidentNo)
+	incident, err := h.incidentRepo.FindByIncidentNumber(c.UserContext(), req.TicketNumber)
 	if err != nil {
-		return momraV2Response(c, fiber.StatusNotFound, "Incident not found: "+req.AmanaIncidentNo, false)
+		return momraV2Response(c, fiber.StatusNotFound, "Incident not found: "+req.TicketNumber, false)
 	}
 
 	var custFields map[string]interface{}
@@ -1250,7 +1264,7 @@ func (h *EPMIncidentHandler) UpdateIncidentV2(c *fiber.Ctx) error {
 		custFields = map[string]interface{}{}
 	}
 	if momraNo, _ := custFields["momra_incident_no"].(string); momraNo != req.IncidentNo {
-		return momraV2Response(c, fiber.StatusBadRequest, "IncidentNO does not correlate with AmanaIncidentNo: "+req.AmanaIncidentNo, false)
+		return momraV2Response(c, fiber.StatusBadRequest, "IncidentNO does not correlate with ticketNumber: "+req.TicketNumber, false)
 	}
 
 	// Resolve the target state from the admin-configured WorkflowState -> CaseStatusID
@@ -1349,6 +1363,10 @@ func (h *EPMIncidentHandler) UpdateIncidentV2(c *fiber.Ctx) error {
 }
 
 type EPMReopenIncidentV2Request struct {
+	// TicketNumber is the AutoMax incident number returned as ticketNumber by
+	// InsertIncidents. AmanaIncidentNo is the deprecated key for the same value,
+	// still accepted when ticketNumber is absent.
+	TicketNumber     string `json:"ticketNumber"`
 	AmanaIncidentNo  string `json:"amanaincidentno"`
 	IncidentNo       string `json:"incident_no"`
 	EvaluationStatus string `json:"evaluation_status"`
@@ -1397,8 +1415,11 @@ func (h *EPMIncidentHandler) ReopenIncidentV2(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return momraV2Response(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"), false)
 	}
+	if req.TicketNumber == "" {
+		req.TicketNumber = req.AmanaIncidentNo // legacy key fallback
+	}
 
-	if req.AmanaIncidentNo == "" {
+	if req.TicketNumber == "" {
 		return momraV2Response(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "amana_incident_no_required"), false)
 	}
 	if req.IncidentNo == "" {
@@ -1408,9 +1429,9 @@ func (h *EPMIncidentHandler) ReopenIncidentV2(c *fiber.Ctx) error {
 		return momraV2Response(c, fiber.StatusBadRequest, "evaluation_status is required", false)
 	}
 
-	incident, err := h.incidentRepo.FindByIncidentNumber(c.UserContext(), req.AmanaIncidentNo)
+	incident, err := h.incidentRepo.FindByIncidentNumber(c.UserContext(), req.TicketNumber)
 	if err != nil {
-		return momraV2Response(c, fiber.StatusNotFound, "Incident not found: "+req.AmanaIncidentNo, false)
+		return momraV2Response(c, fiber.StatusNotFound, "Incident not found: "+req.TicketNumber, false)
 	}
 
 	var custFields map[string]interface{}
@@ -1419,7 +1440,7 @@ func (h *EPMIncidentHandler) ReopenIncidentV2(c *fiber.Ctx) error {
 		custFields = map[string]interface{}{}
 	}
 	if momraNo, _ := custFields["momra_incident_no"].(string); momraNo != req.IncidentNo {
-		return momraV2Response(c, fiber.StatusBadRequest, "incident_no does not correlate with amanaincidentno: "+req.AmanaIncidentNo, false)
+		return momraV2Response(c, fiber.StatusBadRequest, "incident_no does not correlate with ticketNumber: "+req.TicketNumber, false)
 	}
 
 	custFields["evaluation_status"] = req.EvaluationStatus

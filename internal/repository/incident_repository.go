@@ -68,6 +68,9 @@ type IncidentRepository interface {
 	ListAttachments(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentAttachment, error)
 	DeleteAttachment(ctx context.Context, id uuid.UUID) error
 	LinkAttachmentsToTransition(ctx context.Context, attachmentIDs []uuid.UUID, transitionHistoryID uuid.UUID) error
+	// FindLatestTransitionAttachments returns the attachments uploaded on the most
+	// recent transition of the incident that had any, or none if no transition did.
+	FindLatestTransitionAttachments(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentAttachment, error)
 	GetAttachmentCounts(ctx context.Context, incidentIDs []uuid.UUID) (map[uuid.UUID]int, error)
 
 	// Assignment
@@ -851,6 +854,27 @@ func (r *incidentRepository) LinkAttachmentsToTransition(ctx context.Context, at
 		Model(&models.IncidentAttachment{}).
 		Where("id IN ?", attachmentIDs).
 		Update("transition_history_id", transitionHistoryID).Error
+}
+
+func (r *incidentRepository) FindLatestTransitionAttachments(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentAttachment, error) {
+	var historyIDs []uuid.UUID
+	err := r.db.WithContext(ctx).
+		Table("incident_attachments AS a").
+		Joins("JOIN incident_transition_histories AS h ON h.id = a.transition_history_id").
+		Where("a.incident_id = ? AND a.deleted_at IS NULL", incidentID).
+		Order("h.transitioned_at DESC").
+		Limit(1).
+		Pluck("a.transition_history_id", &historyIDs).Error
+	if err != nil || len(historyIDs) == 0 {
+		return nil, err
+	}
+
+	var attachments []models.IncidentAttachment
+	err = r.db.WithContext(ctx).
+		Where("incident_id = ? AND transition_history_id = ?", incidentID, historyIDs[0]).
+		Order("created_at ASC").
+		Find(&attachments).Error
+	return attachments, err
 }
 
 func (r *incidentRepository) GetAttachmentCounts(ctx context.Context, incidentIDs []uuid.UUID) (map[uuid.UUID]int, error) {

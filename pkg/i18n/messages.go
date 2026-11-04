@@ -1089,7 +1089,7 @@ var messages = map[string][2]string{
 	// ── EPM / MOMRA integration ─────────────────────────────────────────────
 	"session_expired_or_invalid":    {"Session expired or invalid", "انتهت صلاحية الجلسة أو أنها غير صالحة"},
 	"incident_no_required":          {"IncidentNo is required", "رقم البلاغ مطلوب"},
-	"amana_incident_no_required":    {"AmanaIncidentNo is required", "رقم بلاغ أمانة مطلوب"},
+	"amana_incident_no_required":    {"ticketNumber is required", "رقم التذكرة مطلوب"},
 	"failed_to_create_incident_epm": {"Failed to create incident", "فشل إنشاء البلاغ"},
 	"failed_to_update_incident_epm": {"Failed to update incident", "فشل تحديث البلاغ"},
 	"failed_to_reopen_incident_epm": {"Failed to reopen incident", "فشل إعادة فتح البلاغ"},
