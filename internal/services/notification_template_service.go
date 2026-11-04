@@ -97,6 +97,9 @@ func (s *notificationTemplateService) Update(ctx context.Context, id uuid.UUID, 
 	}
 
 	oldProviderID := tpl.ProviderTemplateID
+	// Variables are "auto" when they are empty or equal to what the current body would infer.
+	// Such a list follows the body on edit; a list the user customised is left alone.
+	variablesAreAuto := IsInferredTemplateVariables(tpl.Variables, tpl.BodyEN, tpl.BodyAR)
 	if req.Name != nil {
 		tpl.Name = *req.Name
 	}
@@ -126,8 +129,10 @@ func (s *notificationTemplateService) Update(ctx context.Context, id uuid.UUID, 
 	}
 	if req.Variables != nil {
 		tpl.Variables = *req.Variables
+	} else if variablesAreAuto {
+		tpl.Variables = "" // re-infer from the edited body below
 	}
-	// Keep the variables column filled from the body when it is empty (never overrides an explicit list).
+	// Fill from the body when empty (never overrides an explicit list).
 	tpl.Variables = ResolveTemplateVariables(tpl.Variables, tpl.BodyEN, tpl.BodyAR)
 	if req.ProviderTemplateID != nil {
 		tpl.ProviderTemplateID = *req.ProviderTemplateID
@@ -267,6 +272,15 @@ func ResolveTemplateVariables(explicit, bodyEN, bodyAR string) string {
 		return explicit
 	}
 	return string(encoded)
+}
+
+// IsInferredTemplateVariables reports whether the stored variables are empty or exactly what
+// ResolveTemplateVariables would infer from the given body, i.e. they were not customised.
+func IsInferredTemplateVariables(stored, bodyEN, bodyAR string) bool {
+	if strings.TrimSpace(stored) == "" {
+		return true
+	}
+	return stored == ResolveTemplateVariables("", bodyEN, bodyAR)
 }
 
 // validateProviderTemplateID checks that an SMS template's provider (Amana) template id, when set, is a
