@@ -63,6 +63,7 @@ type momraStatusSyncService struct {
 	client          MOMRAClient
 	mappingRepo     repository.MOMRAStatusMappingRepository
 	integrationRepo repository.IntegrationRepository
+	incidentRepo    repository.IncidentRepository
 	amanaID         string
 
 	logScriptID uuid.UUID
@@ -75,6 +76,7 @@ func NewMOMRAStatusSyncService(
 	client MOMRAClient,
 	mappingRepo repository.MOMRAStatusMappingRepository,
 	integrationRepo repository.IntegrationRepository,
+	incidentRepo repository.IncidentRepository,
 	amanaID string,
 ) (MOMRAStatusSyncService, error) {
 	scriptID, err := findOrCreateMOMRALogScript(ctx, integrationRepo)
@@ -85,6 +87,7 @@ func NewMOMRAStatusSyncService(
 		client:          client,
 		mappingRepo:     mappingRepo,
 		integrationRepo: integrationRepo,
+		incidentRepo:    incidentRepo,
 		amanaID:         amanaID,
 		logScriptID:     scriptID,
 	}, nil
@@ -131,8 +134,38 @@ func (s *momraStatusSyncService) SyncIncidentStatus(ctx context.Context, inciden
 		return
 	}
 
+	// On a closure status, if this transition itself carried no files, send the
+	// files from the most recent transition that did (e.g. the resolution evidence
+	// uploaded one step before closing), so MOMRA receives them with the closure.
+	if mapping.IsClosureStatus && len(input.Attachments) == 0 {
+		input.Attachments = s.latestTransitionAttachments(ctx, incident)
+	}
+
 	req := buildMOMRAStatusUpdateRequest(incident, mapping, crmID, s.amanaID, input)
 	s.attemptWithRetry(ctx, incident, crmID, req)
+}
+
+func (s *momraStatusSyncService) latestTransitionAttachments(ctx context.Context, incident *models.Incident) []MOMRAStatusAttachment {
+	attachments, err := s.incidentRepo.FindLatestTransitionAttachments(ctx, incident.ID)
+	if err != nil {
+		log.Printf("[momra-status-sync] incident %s: failed to load latest transition attachments for closure: %v", incident.IncidentNumber, err)
+		return nil
+	}
+	out := make([]MOMRAStatusAttachment, 0, len(attachments))
+	for i := range attachments {
+		out = append(out, toMOMRAStatusAttachment(&attachments[i]))
+	}
+	return out
+}
+
+// toMOMRAStatusAttachment converts an incident attachment to UpdateStatusV2's
+// attachment shape; the URL is the backend route MOMRA downloads the file from.
+func toMOMRAStatusAttachment(a *models.IncidentAttachment) MOMRAStatusAttachment {
+	return MOMRAStatusAttachment{
+		AttachmentCategory: momraAttachmentCategory,
+		AttachmentName:     a.FileName,
+		AttachmentURL:      "/Momra/API/EPM/Attachments/" + a.ID.String(),
+	}
 }
 
 // buildMOMRAStatusUpdateRequest builds the UpdateStatusV2 body with every field

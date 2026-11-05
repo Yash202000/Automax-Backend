@@ -3175,11 +3175,7 @@ func (s *incidentService) momraTransitionAttachments(ctx context.Context, attach
 		if err != nil || attachment == nil {
 			continue
 		}
-		out = append(out, MOMRAStatusAttachment{
-			AttachmentCategory: momraAttachmentCategory,
-			AttachmentName:     attachment.FileName,
-			AttachmentURL:      "/Momra/API/EPM/Attachments/" + attachment.ID.String(),
-		})
+		out = append(out, toMOMRAStatusAttachment(attachment))
 	}
 	return out
 }
