@@ -735,6 +735,17 @@ func hdrPrefixAny(prefixes ...string) func(string) bool {
 	}
 }
 
+func hdrContainsAny(values ...string) func(string) bool {
+	return func(h string) bool {
+		for _, v := range values {
+			if strings.Contains(h, v) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 func dictColumns(kpiType string) []colSpec {
 	cols := []colSpec{
 		{"code", hdrAny("code", "الكود"), true},
@@ -746,8 +757,8 @@ func dictColumns(kpiType string) []colSpec {
 		{"activation", hdrPrefixAny("activation status", "حالة التفعيل"), true},
 		{"description", hdrAny("description", "الوصف"), false},
 		{"owner_type", hdrAny("owner type", "نوع المالك"), false},
-		{"owner_dept", hdrAny("owner department", "الإدارة المالكة", "المالك"), true},
-		{"agency", hdrAny("owning agency", "الوكالة / الإدارة المالكة"), false},
+		{"owner_dept", hdrPrefixAny("owner department", "الإدارة المالكة", "المالك"), true},
+		{"agency", hdrContainsAny("owning agency", "الوكالة / الإدارة المالكة"), false},
 		{"units", hdrPrefixAny("related administrative units", "الوحدات الإدارية"), false},
 		{"frequency", hdrPrefixAny("reporting frequency", "تكرار الإبلاغ"), true},
 		{"lifecycle", hdrPrefixAny("kpi lifecycle", "دورة حياة المؤشر"), false},
@@ -779,7 +790,7 @@ func dictColumns(kpiType string) []colSpec {
 func perfColumns(kpiType string) []colSpec {
 	cols := []colSpec{
 		{"code", hdrAny("code", "الكود"), true},
-		{"owner_dept", hdrAny("owner department", "الإدارة المالكة"), false},
+		{"owner_dept", hdrPrefixAny("owner department", "الإدارة المالكة", "المالك"), false},
 	}
 	switch kpiType {
 	case models.KPITypeStrategic:
