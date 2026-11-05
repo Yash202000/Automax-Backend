@@ -74,7 +74,7 @@ func (r *callerSentimentRepo) GetCallHistoryByCaller(ctx context.Context, caller
 
 	err := r.db.WithContext(ctx).
 		Table("caller_sentiments").
-		Select("call_uuid, sentiment, callee_id, feedback, created_at").
+		Select("call_uuid, sentiment, callee_id, feedback, evaluation, created_at").
 		Where("caller_id = ?", callerID).
 		Order("created_at DESC").
 		Scan(&result).Error
@@ -87,7 +87,7 @@ func (r *callerSentimentRepo) GetCallHistoryByCallerAndCallee(ctx context.Contex
 
 	err := r.db.WithContext(ctx).
 		Table("caller_sentiments").
-		Select("call_uuid, sentiment, callee_id, feedback, created_at").
+		Select("call_uuid, sentiment, callee_id, feedback, evaluation, created_at").
 		Where("caller_id = ? AND callee_id = ?", callerID, calleeID).
 		Order("created_at DESC").
 		Scan(&result).Error
