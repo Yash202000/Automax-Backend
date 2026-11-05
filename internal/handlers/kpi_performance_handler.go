@@ -865,6 +865,60 @@ func (h *KpiPerformanceHandler) CreateBenchmark(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusCreated, "", item.ToBenchmarkResponse())
 }
 
+func (h *KpiPerformanceHandler) UpdateBenchmark(c *fiber.Ctx) error {
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	var existing models.KpiBenchmark
+	if err := h.db.WithContext(c.UserContext()).First(&existing, id).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+
+	var req models.KpiBenchmarkRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+
+	existing.KpiCode = req.KpiCode
+	existing.KpiType = req.KpiType
+	existing.Year = req.Year
+	existing.Quarter = req.Quarter
+	existing.Zone = req.Zone
+	existing.BenchmarkEntity = req.BenchmarkEntity
+	existing.InternalAchievement = req.InternalAchievement
+	existing.BenchmarkAchievement = req.BenchmarkAchievement
+	existing.Municipality1 = req.Municipality1
+	existing.Municipality2 = req.Municipality2
+	existing.Municipality3 = req.Municipality3
+	existing.Notes = req.Notes
+
+	if req.DepartmentID != nil && *req.DepartmentID != "" {
+		pid, err := uuid.Parse(*req.DepartmentID)
+		if err == nil {
+			existing.DepartmentID = &pid
+		}
+	}
+
+	if err := h.db.WithContext(c.UserContext()).Save(&existing).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
+	}
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "update",
+		Module:      "kpi",
+		ResourceID:  id.String(),
+		Description: fmt.Sprintf("Updated benchmark for %s - %s", existing.KpiCode, existing.BenchmarkEntity),
+		Status:      "success",
+	})
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "", existing.ToBenchmarkResponse())
+}
+
 func (h *KpiPerformanceHandler) DeleteBenchmark(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
