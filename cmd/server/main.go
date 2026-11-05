@@ -1378,6 +1378,7 @@ func main() {
 	// ---- KPI DICTIONARY ROUTES ----
 	// Bulk import from the KPI Dictionary workbook: validate = dry run
 	// (validation report + preview), commit = re-validate and apply.
+	kpi.Get("/dictionary-import/template", authMiddleware.RequirePermission("kpi:create"), kpiImportHandler.Template)
 	kpi.Post("/dictionary-import/validate", authMiddleware.RequirePermission("kpi:create"), kpiImportHandler.Validate)
 	kpi.Post("/dictionary-import/commit", authMiddleware.RequirePermission("kpi:create"), kpiImportHandler.Commit)
 	kpi.Get("/strategic", authMiddleware.RequirePermission("kpi:view"), kpiDictionaryHandler.ListStrategic)

@@ -33,6 +33,7 @@ import (
 	"unicode"
 
 	"github.com/automax/backend/internal/models"
+	"github.com/automax/backend/internal/utils"
 	"github.com/google/uuid"
 	"github.com/xuri/excelize/v2"
 	"gorm.io/gorm"
@@ -54,7 +55,35 @@ const (
 	kpiImportActionReject = "reject"
 
 	kpiImportMaxFileSize = 20 << 20
+
+	// Template Related Constants
+	KpiDictionaryTemplateFileName = "kpi-dictionary-import-template.xlsx"
+
+	KpiTemplateLangEN = "en"
+	KpiTemplateLangAR = "ar"
+
+	kpiTemplateInstructionsSheet  = "Instructions"
+	kpiTemplateMasterSheet        = "Master Data"
+	kpiTemplateStrategicDictSheet = "Strategic Dictionary"
+	kpiTemplateOperationalDict    = "Operational Dictionary"
+	kpiTemplateAwardDictSheet     = "Award Dictionary"
+	kpiTemplateStrategicPerfSheet = "Strategic Performance"
+	kpiTemplateOperationalPerf    = "Operational Performance"
+	kpiTemplateAwardPerfSheet     = "Award Performance"
+
+	kpiTemplateMasterRows = 20
+	kpiTemplateYearSpan   = 5
 )
+
+type kpiTemplateColumn struct {
+	key      string
+	ar       string
+	en       string
+	width    float64
+	required bool     // mandatory, marked with a red (*) in the template
+	values   []string // optional English data-validation drop-down values
+	valuesAr []string // optional Arabic data-validation drop-down values
+}
 
 // Record categories reported in the preview/summary, in display order.
 var KpiImportCategories = []string{
@@ -200,6 +229,10 @@ type kpiRec struct {
 	OwnerType, Polarity, Frequency, Lifecycle, DataSource, Formula string
 	DescriptionEn, DescriptionAr, SegAxes, RelatedUnits, Notes     string
 	Baseline                                                       float64
+	// ownerDeptName is the KPI's owner department as text, used to
+	// cross-check the Owner Department column on Performance sheets
+	// (including KPIs that only exist in the database).
+	ownerDeptName string
 
 	Targets []*kpiTargetRec
 
@@ -223,14 +256,15 @@ type kpiPerfRec struct {
 }
 
 type existingKpi struct {
-	ID        uuid.UUID
-	Type      string
-	Code      string
-	NameEn    string
-	Polarity  string
-	Frequency string
-	Baseline  float64
-	MetricID  *uuid.UUID
+	ID            uuid.UUID
+	Type          string
+	Code          string
+	NameEn        string
+	Polarity      string
+	Frequency     string
+	Baseline      float64
+	MetricID      *uuid.UUID
+	OwnerDeptName string
 }
 
 type kpiImporter struct {
@@ -519,6 +553,7 @@ func (imp *kpiImporter) loadExisting() error {
 		Polarity           string
 		ReportingFrequency string
 		Baseline           float64
+		OwnerDeptID        *uuid.UUID
 	}
 	for _, t := range []struct {
 		kpiType string
@@ -529,12 +564,18 @@ func (imp *kpiImporter) loadExisting() error {
 		{models.KPITypeAward, &models.AwardKPI{}},
 	} {
 		var rows []kpiRow
-		if err := db.Model(t.model).Select("id, code, name_en, polarity, reporting_frequency, baseline").Scan(&rows).Error; err != nil {
+		if err := db.Model(t.model).Select("id, code, name_en, polarity, reporting_frequency, baseline, owner_dept_id").Scan(&rows).Error; err != nil {
 			return err
 		}
 		for _, r := range rows {
 			code := strings.ToUpper(strings.TrimSpace(r.Code))
-			imp.existingKpis[t.kpiType+"|"+code] = &existingKpi{ID: r.ID, Type: t.kpiType, Code: r.Code, NameEn: r.NameEn, Polarity: r.Polarity, Frequency: r.ReportingFrequency, Baseline: r.Baseline}
+			ownerName := ""
+			if r.OwnerDeptID != nil {
+				if d := deptByID[*r.OwnerDeptID]; d != nil {
+					ownerName = d.NameEn
+				}
+			}
+			imp.existingKpis[t.kpiType+"|"+code] = &existingKpi{ID: r.ID, Type: t.kpiType, Code: r.Code, NameEn: r.NameEn, Polarity: r.Polarity, Frequency: r.ReportingFrequency, Baseline: r.Baseline, OwnerDeptName: ownerName}
 			imp.existingCodeTyp[code] = t.kpiType
 		}
 	}
@@ -671,44 +712,77 @@ func hdrPrefix(s string) func(string) bool {
 	return func(h string) bool { return strings.HasPrefix(h, s) }
 }
 
+// hdrAny matches any of the given exact header labels. It lets one spec accept
+// both the English and Arabic template headers (the template is single-language).
+func hdrAny(values ...string) func(string) bool {
+	return func(h string) bool {
+		for _, v := range values {
+			if h == v {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func hdrPrefixAny(prefixes ...string) func(string) bool {
+	return func(h string) bool {
+		for _, p := range prefixes {
+			if strings.HasPrefix(h, p) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func hdrContainsAny(values ...string) func(string) bool {
+	return func(h string) bool {
+		for _, v := range values {
+			if strings.Contains(h, v) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 func dictColumns(kpiType string) []colSpec {
 	cols := []colSpec{
-		{"code", hdrEq("code"), true},
-		{"pillar", hdrPrefix("pillar"), true},
-		{"goal", hdrEq("strategic goal"), kpiType != models.KPITypeOperational},
-		{"domain", hdrPrefix("related domain"), false},
-		{"seg", hdrPrefix("segmentation axes"), false},
-		{"polarity", hdrPrefix("polarity"), true},
-		{"activation", hdrPrefix("activation status"), true},
-		{"description", hdrEq("description"), false},
-		{"owner_type", hdrEq("owner type"), false},
-		{"owner_dept", func(h string) bool { return strings.HasPrefix(h, "owner department") || h == "المالك" }, true},
-		{"agency", func(h string) bool {
-			return h == "الوكالة / الإدارة المالكة" || strings.Contains(h, "owning agency")
-		}, false},
-		{"units", hdrPrefix("related administrative units"), false},
-		{"frequency", hdrPrefix("reporting frequency"), true},
-		{"lifecycle", hdrPrefix("kpi lifecycle"), false},
-		{"data_source", hdrEq("data source"), false},
-		{"formula", hdrPrefix("calculation formula"), false},
-		{"baseline", hdrEq("baseline"), false},
-		{"notes", hdrEq("notes"), false},
+		{"code", hdrAny("code", "الكود"), true},
+		{"pillar", hdrPrefixAny("pillar", "الركيزة"), true},
+		{"goal", hdrAny("strategic goal", "الهدف الاستراتيجي"), kpiType != models.KPITypeOperational},
+		{"domain", hdrPrefixAny("related domain", "المجال المرتبط"), false},
+		{"seg", hdrPrefixAny("segmentation axes", "محاور التجزئة"), false},
+		{"polarity", hdrPrefixAny("polarity", "الاتجاه"), true},
+		{"activation", hdrPrefixAny("activation status", "حالة التفعيل"), true},
+		{"description", hdrAny("description", "الوصف"), false},
+		{"owner_type", hdrAny("owner type", "نوع المالك"), false},
+		{"owner_dept", hdrPrefixAny("owner department", "الإدارة المالكة", "المالك"), true},
+		{"agency", hdrContainsAny("owning agency", "الوكالة / الإدارة المالكة"), false},
+		{"units", hdrPrefixAny("related administrative units", "الوحدات الإدارية"), false},
+		{"frequency", hdrPrefixAny("reporting frequency", "تكرار الإبلاغ"), true},
+		{"lifecycle", hdrPrefixAny("kpi lifecycle", "دورة حياة المؤشر"), false},
+		{"data_source", hdrAny("data source", "مصدر البيانات"), false},
+		{"formula", hdrPrefixAny("calculation formula", "معادلة الحساب"), false},
+		{"baseline", hdrAny("baseline", "خط الأساس"), false},
+		{"notes", hdrAny("notes", "ملاحظات"), false},
 	}
 	switch kpiType {
 	case models.KPITypeStrategic:
-		cols = append(cols, colSpec{"name", hdrEq("strategic indicator"), true})
+		cols = append(cols, colSpec{"name", hdrAny("strategic indicator", "المؤشر الاستراتيجي"), true})
 	case models.KPITypeOperational:
 		cols = append(cols,
-			colSpec{"name", hdrEq("operational indicator"), true},
-			colSpec{"objective", hdrEq("operational objective"), true},
-			colSpec{"process", hdrPrefix("related process"), true},
+			colSpec{"name", hdrAny("operational indicator", "المؤشر التشغيلي"), true},
+			colSpec{"objective", hdrAny("operational objective", "الهدف التشغيلي"), true},
+			colSpec{"process", hdrPrefixAny("related process", "اسم العملية"), true},
 		)
 	case models.KPITypeAward:
 		cols = append(cols,
-			colSpec{"name", func(h string) bool { return h == "مؤشر / مقياس" || h == "indicator / measure" }, true},
-			colSpec{"criterion", func(h string) bool { return h == "criterion" || h == "المعيار" }, true},
-			colSpec{"sub_no", hdrEq("sub-criterion #"), true},
-			colSpec{"sub_name", hdrEq("sub-criterion"), false},
+			colSpec{"name", hdrAny("indicator / measure", "مؤشر / مقياس"), true},
+			colSpec{"criterion", hdrAny("criterion", "المعيار"), true},
+			colSpec{"sub_no", hdrAny("sub-criterion #", "رقم المعيار الفرعي"), true},
+			colSpec{"sub_name", hdrAny("sub-criterion", "المعيار الفرعي"), false},
 		)
 	}
 	return cols
@@ -716,23 +790,24 @@ func dictColumns(kpiType string) []colSpec {
 
 func perfColumns(kpiType string) []colSpec {
 	cols := []colSpec{
-		{"code", hdrEq("code"), true},
-		{"owner_dept", hdrPrefix("owner department"), false},
+		{"code", hdrAny("code", "الكود"), true},
+		{"owner_dept", hdrPrefixAny("owner department", "الإدارة المالكة", "المالك"), false},
 	}
 	switch kpiType {
 	case models.KPITypeStrategic:
-		cols = append(cols, colSpec{"name", hdrEq("strategic indicator"), false})
+		cols = append(cols, colSpec{"name", hdrAny("strategic indicator", "المؤشر الاستراتيجي"), false})
 	case models.KPITypeOperational:
-		cols = append(cols, colSpec{"name", hdrEq("operational indicator"), false})
+		cols = append(cols, colSpec{"name", hdrAny("operational indicator", "المؤشر التشغيلي"), false})
 	case models.KPITypeAward:
-		cols = append(cols, colSpec{"name", hdrPrefix("award indicators"), false})
+		cols = append(cols, colSpec{"name", hdrPrefixAny("award indicators", "مؤشرات الجائزة"), false})
 	}
 	return cols
 }
 
 var (
 	annualTargetHeaderRe = regexp.MustCompile(`^(?:target\S*|مستهدفات)\s*(\d{4})$`)
-	quarterHeaderRe      = regexp.MustCompile(`^(target|actual result|achievement)\s+(\d{4})\s+q([1-4])$`)
+	quarterHeaderRe      = regexp.MustCompile(`^(target|actual result|achievement|المستهدف|النتيجة الفعلية|نسبة الإنجاز)\s+(\d{4})\s+q([1-4])$`)
+	quarterHeaderPos     = map[string]int{"target": 0, "actual result": 1, "achievement": 2, "المستهدف": 0, "النتيجة الفعلية": 1, "نسبة الإنجاز": 2}
 )
 
 // readTable locates the header row (the row holding a "Code" column — the
@@ -747,7 +822,7 @@ func (imp *kpiImporter) readTable(sheet string, rows [][]string, specs []colSpec
 	}
 	for i := 0; i < len(rows) && i < 15; i++ {
 		for _, c := range rows[i] {
-			if normHeader(c) == "code" {
+			if h := normHeader(c); h == "code" || h == "الكود" {
 				t.headerRow = i
 				break
 			}
@@ -757,7 +832,7 @@ func (imp *kpiImporter) readTable(sheet string, rows [][]string, specs []colSpec
 		}
 	}
 	if t.headerRow < 0 {
-		imp.structural(sheet, "Header row not found — the sheet must have the template's header rows with a \"Code\" column.")
+		imp.structural(sheet, "Header row not found — the sheet must have the template's header row with a \"Code\" / \"الكود\" column.")
 		return t
 	}
 	eng := rows[t.headerRow]
@@ -781,7 +856,7 @@ func (imp *kpiImporter) readTable(sheet string, rows [][]string, specs []colSpec
 			}
 			if (e != "" && s.match(e)) || (a != "" && s.match(a)) {
 				t.cols[s.key] = j
-				t.colLabel[s.key] = label
+				t.colLabel[s.key] = inputHeaderText(label)
 				break
 			}
 		}
@@ -795,20 +870,30 @@ func (imp *kpiImporter) readTable(sheet string, rows [][]string, specs []colSpec
 					break
 				}
 			}
-		} else if m := quarterHeaderRe.FindStringSubmatch(e); m != nil {
-			key := m[2] + "-" + m[3]
-			idx, ok := t.quarters[key]
-			lbl := t.qLabels[key]
-			if !ok {
-				idx = [3]int{-1, -1, -1}
+		} else {
+			var m []string
+			for _, h := range []string{e, a} {
+				if h != "" {
+					if mm := quarterHeaderRe.FindStringSubmatch(h); mm != nil {
+						m = mm
+						break
+					}
+				}
 			}
-			pos := map[string]int{"target": 0, "actual result": 1, "achievement": 2}[m[1]]
-			if idx[pos] < 0 {
-				idx[pos] = j
-				lbl[pos] = label
+			if m != nil {
+				key := m[2] + "-" + m[3]
+				idx, ok := t.quarters[key]
+				lbl := t.qLabels[key]
+				if !ok {
+					idx = [3]int{-1, -1, -1}
+				}
+				if pos, ok := quarterHeaderPos[m[1]]; ok && idx[pos] < 0 {
+					idx[pos] = j
+					lbl[pos] = label
+				}
+				t.quarters[key] = idx
+				t.qLabels[key] = lbl
 			}
-			t.quarters[key] = idx
-			t.qLabels[key] = lbl
 		}
 	}
 	for _, s := range specs {
@@ -902,15 +987,15 @@ func (imp *kpiImporter) parseMasterData(sheet string, rows [][]string) {
 				numCol = j
 				title := normHeader(r[j+1])
 				switch {
-				case strings.HasPrefix(title, "pill"):
+				case strings.HasPrefix(title, "pill"), strings.HasPrefix(title, "الركائز"), strings.HasPrefix(title, "ركائز"):
 					section = mdPillar
-				case strings.HasPrefix(title, "enabler"):
+				case strings.HasPrefix(title, "enabler"), strings.HasPrefix(title, "الممكنات"), strings.HasPrefix(title, "ممكنات"):
 					section = mdEnabler
-				case strings.HasPrefix(title, "strategic goal"):
+				case strings.HasPrefix(title, "strategic goal"), strings.HasPrefix(title, "الأهداف الاستراتيجية"), strings.HasPrefix(title, "الهدف الاستراتيجي"):
 					section = mdGoal
-				case strings.HasPrefix(title, "operational objective"):
+				case strings.HasPrefix(title, "operational objective"), strings.HasPrefix(title, "الأهداف التشغيلية"), strings.HasPrefix(title, "الهدف التشغيلي"):
 					section = mdObjective
-				case strings.HasPrefix(title, "initiative"):
+				case strings.HasPrefix(title, "initiative"), strings.HasPrefix(title, "المبادرات"), strings.HasPrefix(title, "مبادرة"):
 					section = mdInitiative
 				default:
 					section = "" // reference-only lists (e.g. Strategic indicators) are not imported
@@ -952,23 +1037,25 @@ func (imp *kpiImporter) parseMasterData(sheet string, rows [][]string) {
 		p := pending{node: node, row: excelRow}
 		switch section {
 		case mdPillar, mdEnabler:
-			p.ownerName = findCol(func(h string) bool { return strings.Contains(h, "owner") })
+			p.ownerName = findCol(func(h string) bool {
+				return strings.Contains(h, "owner") || strings.Contains(h, "مالك") || strings.Contains(h, "المالكة")
+			})
 			if num != "" {
 				refs[section][num] = node
 			}
 		case mdGoal:
-			p.pillarRef = findCol(hdrPrefix("pillar ref"))
-			p.enablerRef = findCol(hdrPrefix("enabler ref"))
+			p.pillarRef = findCol(hdrPrefixAny("pillar ref", "مرجع الركيزة"))
+			p.enablerRef = findCol(hdrPrefixAny("enabler ref", "مرجع الممكن"))
 			if num != "" {
 				refs[mdGoal][num] = node
 			}
 		case mdObjective:
-			p.goalRef = findCol(hdrPrefix("strategic goal ref"))
+			p.goalRef = findCol(hdrPrefixAny("strategic goal ref", "مرجع الهدف الاستراتيجي"))
 		case mdInitiative:
-			p.ownerName = findCol(hdrPrefix("initiative owner"))
-			p.pillarRef = findCol(hdrPrefix("pillar ref"))
-			p.enablerRef = findCol(hdrPrefix("enabler ref"))
-			p.goalRef = findCol(hdrPrefix("strategic goal ref"))
+			p.ownerName = findCol(hdrPrefixAny("initiative owner", "مالك المبادرة"))
+			p.pillarRef = findCol(hdrPrefixAny("pillar ref", "مرجع الركيزة"))
+			p.enablerRef = findCol(hdrPrefixAny("enabler ref", "مرجع الممكن"))
+			p.goalRef = findCol(hdrPrefixAny("strategic goal ref", "مرجع الهدف الاستراتيجي"))
 		}
 		pend = append(pend, p)
 	}
@@ -1018,6 +1105,9 @@ func (imp *kpiImporter) parseMasterData(sheet string, rows [][]string) {
 				// link only when the name matches an existing department.
 				if d := imp.findExact(mdDepartment, p.ownerName, nil); d != nil {
 					n.Owner = d
+				} else {
+					imp.warn(sheet, p.row, n.NameEn, "Initiative Owner",
+						fmt.Sprintf("Initiative owner %q does not match an existing department; no owner will be linked.", p.ownerName))
 				}
 			}
 		}
@@ -1199,7 +1289,16 @@ func (imp *kpiImporter) parseDictionary(kpiType string, t *sheetTable) {
 			rec.DescriptionEn = desc
 		}
 		rec.Formula = t.get(r, "formula")
-		rec.SegAxes = t.get(r, "seg")
+		if seg := t.get(r, "seg"); seg != "" {
+			if kpiType == models.KPITypeStrategic {
+				rec.SegAxes = seg
+			} else {
+				// Segmentation axes only exist on StrategicKPI; do not drop
+				// the cell silently when an older workbook has the column.
+				imp.warn(t.sheet, excelRow, id, t.label("seg"),
+					fmt.Sprintf("Segmentation Axes is not supported for %s KPIs; the value is ignored.", kpiType))
+			}
+		}
 		rec.RelatedUnits = t.get(r, "units")
 		rec.Notes = t.get(r, "notes")
 		rec.Lifecycle = t.get(r, "lifecycle")
@@ -1221,8 +1320,14 @@ func (imp *kpiImporter) parseDictionary(kpiType string, t *sheetTable) {
 		}
 		if v := t.get(r, "activation"); v == "" {
 			fail("activation", "Activation Status is required.")
-		} else if _, ok := mapActivation(v); !ok {
+		} else if status, ok := mapActivation(v); !ok {
 			fail("activation", fmt.Sprintf("Invalid activation status %q — expected Active, Inactive, Draft, Reviewed, Approved or Closed.", v))
+		} else if status != models.KPIStatusDraft {
+			// Activation is workflow-managed: the import must not move a KPI
+			// through the workflow. Say so instead of silently ignoring the
+			// workbook value.
+			imp.warn(t.sheet, excelRow, id, t.label("activation"),
+				fmt.Sprintf("Activation Status %q is not applied on import — new KPIs start as Draft and existing KPIs keep their workflow status.", v))
 		}
 		if v := t.get(r, "frequency"); v == "" {
 			fail("frequency", "Reporting Frequency is required.")
@@ -1267,6 +1372,9 @@ func (imp *kpiImporter) parseDictionary(kpiType string, t *sheetTable) {
 				refFail("pillar", n)
 				if n.Kind == mdPillar {
 					rec.Pillar = n
+				} else {
+					imp.warn(t.sheet, excelRow, id, t.label("pillar"),
+						fmt.Sprintf("%q is an enabler — KPIs link to a pillar only, so no enabler link is stored.", n.NameEn))
 				}
 			}
 		}
@@ -1357,6 +1465,8 @@ func (imp *kpiImporter) parseDictionary(kpiType string, t *sheetTable) {
 			rec.OwnerDept = imp.department(ownerName, t.sheet, excelRow, id)
 			if rec.OwnerDept == nil {
 				fail("owner_dept", "Owner Department could not be resolved.")
+			} else {
+				rec.ownerDeptName = rec.OwnerDept.NameEn
 			}
 		}
 		if agency := t.get(r, "agency"); agency != "" {
@@ -1486,12 +1596,22 @@ func (imp *kpiImporter) parsePerformance(kpiType string, t *sheetTable) {
 			id = name
 		}
 		hasActual := false
+		hasPlanned := false
 		for _, k := range keys {
-			if j := t.quarters[k][1]; j >= 0 && strings.TrimSpace(cell(r, j)) != "" {
+			idx := t.quarters[k]
+			if idx[1] >= 0 && strings.TrimSpace(cell(r, idx[1])) != "" {
 				hasActual = true
+			}
+			if (idx[0] >= 0 && strings.TrimSpace(cell(r, idx[0])) != "") ||
+				(idx[2] >= 0 && strings.TrimSpace(cell(r, idx[2])) != "") {
+				hasPlanned = true
 			}
 		}
 		if !hasActual {
+			if hasPlanned {
+				imp.warn(t.sheet, excelRow, id, "Actual Result",
+					"Quarterly target/achievement is filled but Actual Result is empty — the row is not imported. Quarterly targets are only stored together with an actual result.")
+			}
 			continue // nothing to import on this row
 		}
 		if code == "" {
@@ -1509,7 +1629,7 @@ func (imp *kpiImporter) parsePerformance(kpiType string, t *sheetTable) {
 			if ek, ok := imp.existingKpis[kpiType+"|"+code]; ok {
 				eid := ek.ID
 				kpi = &kpiRec{Type: kpiType, Code: ek.Code, NameEn: ek.NameEn, DBOnly: true, ID: ek.ID, ExistingID: &eid,
-					MetricID: ek.MetricID, Polarity: ek.Polarity, Frequency: ek.Frequency, Baseline: ek.Baseline, DataSource: ""}
+					MetricID: ek.MetricID, Polarity: ek.Polarity, Frequency: ek.Frequency, Baseline: ek.Baseline, DataSource: "", ownerDeptName: ek.OwnerDeptName}
 				imp.kpiByTypeCode[kpiType+"|"+code] = kpi
 				imp.kpis = append(imp.kpis, kpi)
 			}
@@ -1524,6 +1644,16 @@ func (imp *kpiImporter) parsePerformance(kpiType string, t *sheetTable) {
 		}
 		if name != "" && kpi.NameEn != "" && normName(name) != normName(kpi.NameEn) && normName(name) != normName(kpi.NameAr) {
 			imp.warn(t.sheet, excelRow, code, t.label("name"), fmt.Sprintf("Indicator name %q differs from the dictionary name %q.", name, kpi.NameEn))
+		}
+		if ownerRaw := t.get(r, "owner_dept"); ownerRaw != "" {
+			expected := kpi.ownerDeptName
+			if kpi.OwnerDept != nil {
+				expected = kpi.OwnerDept.NameEn
+			}
+			if expected != "" && normName(ownerRaw) != normName(expected) {
+				imp.warn(t.sheet, excelRow, code, t.label("owner_dept"),
+					fmt.Sprintf("Owner Department %q differs from the KPI's owner department %q; the KPI's owner is used.", ownerRaw, expected))
+			}
 		}
 
 		for _, k := range keys {
@@ -1822,9 +1952,18 @@ func (imp *kpiImporter) markRolledBack() {
 
 var multiSpaceRe = regexp.MustCompile(`\s+`)
 
+// inputHeaderText strips the (*) marker and newlines for error messages.
+func inputHeaderText(s string) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	return strings.TrimSpace(strings.TrimRight(s, "*"))
+}
+
 func normHeader(s string) string {
 	s = strings.ToLower(strings.TrimSpace(multiSpaceRe.ReplaceAllString(s, " ")))
-	return strings.TrimSuffix(s, ":")
+	// A trailing ":" or (*) marker is decoration — strip before matching.
+	s = strings.TrimSuffix(s, ":")
+	s = strings.TrimRight(s, "*")
+	return strings.TrimSpace(s)
 }
 
 func normName(s string) string {
@@ -1899,7 +2038,7 @@ func mapActivation(s string) (string, bool) {
 		return models.KPIStatusInactive, true
 	case "draft", "مسودة":
 		return models.KPIStatusDraft, true
-	case "reviewed":
+	case "reviewed", "مراجَع", "مراجع", "مراجعة", "تمت المراجعة":
 		return models.KPIStatusReviewed, true
 	case "approved", "معتمد":
 		return models.KPIStatusApproved, true
@@ -1949,4 +2088,266 @@ func kindLabel(kind string) string {
 		mdObjective: "operational objective", mdProcess: "process", mdDomain: "domain",
 		mdCriterion: "award criterion", mdSubCriterion: "award sub-criterion", mdInitiative: "initiative",
 	}[kind]
+}
+
+// KpiDictionaryTemplateFileNameFor returns the download name for the selected
+// template language.
+func KpiDictionaryTemplateFileNameFor(lang string) string {
+	if lang == KpiTemplateLangAR {
+		return "kpi-dictionary-import-template-ar.xlsx"
+	}
+	return KpiDictionaryTemplateFileName
+}
+
+// BuildKpiDictionaryImportTemplate returns a ready-to-fill Excel workbook for
+// the KPI Dictionary bulk import. The target/performance year columns cover
+// the current year plus the next four. lang selects a single header language
+// (en or ar) — the workbook is not bilingual.
+func BuildKpiDictionaryImportTemplate(lang string) ([]byte, error) {
+	fromYear := time.Now().Year()
+	toYear := fromYear + kpiTemplateYearSpan - 1
+	language := utils.LanguageEnglish
+	if lang == KpiTemplateLangAR {
+		language = utils.LanguageArabic
+	}
+
+	cfg := utils.WorkbookConfig{
+		Language:     language,
+		Title:        "KPI Dictionary Import Template",
+		Subject:      "Bulk import of the KPI Dictionary workbook",
+		Creator:      "Automax",
+		ActiveSheet:  kpiTemplateInstructionsSheet,
+		Instructions: buildKpiDictionaryInstructions(fromYear, toYear),
+		Sheets: []utils.SheetConfig{
+			buildKpiMasterDataSheet(),
+			buildKpiDictionarySheet(kpiTemplateStrategicDictSheet, models.KPITypeStrategic, fromYear, toYear),
+			buildKpiDictionarySheet(kpiTemplateOperationalDict, models.KPITypeOperational, fromYear, toYear),
+			buildKpiDictionarySheet(kpiTemplateAwardDictSheet, models.KPITypeAward, fromYear, toYear),
+			buildKpiPerformanceSheet(kpiTemplateStrategicPerfSheet, models.KPITypeStrategic, fromYear, toYear),
+			buildKpiPerformanceSheet(kpiTemplateOperationalPerf, models.KPITypeOperational, fromYear, toYear),
+			buildKpiPerformanceSheet(kpiTemplateAwardPerfSheet, models.KPITypeAward, fromYear, toYear),
+		},
+	}
+	return utils.GenerateExcelTemplate(cfg)
+}
+
+func buildKpiMasterDataSheet() utils.SheetConfig {
+	text := func(en, ar string) utils.LocalizedText { return utils.LocalizedText{EN: en, AR: ar} }
+	return utils.SheetConfig{Name: kpiTemplateMasterSheet, NumberedSections: []utils.NumberedSectionConfig{
+		{Title: text("Pillars (name)", "الركائز (الاسم)"), HeaderColumns: []utils.LocalizedText{text("Owner Department", "الإدارة المالكة")}, Rows: kpiTemplateMasterRows},
+		{Title: text("Enablers (name)", "الممكنات (الاسم)"), HeaderColumns: []utils.LocalizedText{text("Owner Department", "الإدارة المالكة")}, Rows: kpiTemplateMasterRows},
+		{Title: text("Strategic Goals (name)", "الأهداف الاستراتيجية (الاسم)"), HeaderColumns: []utils.LocalizedText{text("Pillar Ref.", "مرجع الركيزة"), text("Enabler Ref.", "مرجع الممكن")}, Rows: kpiTemplateMasterRows},
+		{Title: text("Operational Objectives (name)", "الأهداف التشغيلية (الاسم)"), HeaderColumns: []utils.LocalizedText{text("Strategic Goal Ref.", "مرجع الهدف الاستراتيجي")}, Rows: kpiTemplateMasterRows},
+		{Title: text("Initiatives (name)", "المبادرات (الاسم)"), HeaderColumns: []utils.LocalizedText{text("Initiative Owner", "مالك المبادرة"), text("Pillar Ref.", "مرجع الركيزة"), text("Enabler Ref.", "مرجع الممكن"), text("Strategic Goal Ref.", "مرجع الهدف الاستراتيجي")}, Rows: kpiTemplateMasterRows},
+	}}
+}
+
+// templateRequiredKeys collects key→required flags from the importer specs.
+func templateRequiredKeys(kpiType string, dictionary bool) map[string]bool {
+	specs := dictColumns(kpiType)
+	if !dictionary {
+		specs = perfColumns(kpiType)
+	}
+	m := make(map[string]bool, len(specs))
+	for _, s := range specs {
+		m[s.key] = s.required
+	}
+	return m
+}
+
+// markTemplateRequired applies the importer's required flags to template columns.
+func markTemplateRequired(kpiType string, dictionary bool, cols []kpiTemplateColumn) []kpiTemplateColumn {
+	required := templateRequiredKeys(kpiType, dictionary)
+	for i := range cols {
+		cols[i].required = required[cols[i].key]
+	}
+	return cols
+}
+
+func buildKpiDictionarySheet(name, kpiType string, fromYear, toYear int) utils.SheetConfig {
+	cols := markTemplateRequired(kpiType, true,
+		append(kpiTemplateDictionaryColumns(kpiType), kpiTemplateAnnualTargetColumns(fromYear, toYear)...))
+	return utils.SheetConfig{Name: name, Columns: toExcelColumns(cols), DataRows: 4999, FreezeHeader: true}
+}
+
+func buildKpiPerformanceSheet(name, kpiType string, fromYear, toYear int) utils.SheetConfig {
+	cols := markTemplateRequired(kpiType, false, kpiTemplatePerformanceColumns(kpiType, fromYear, toYear))
+	return utils.SheetConfig{Name: name, Columns: toExcelColumns(cols), DataRows: 4999, FreezeHeader: true}
+}
+
+func toExcelColumns(columns []kpiTemplateColumn) []utils.ColumnConfig {
+	result := make([]utils.ColumnConfig, 0, len(columns))
+	for _, col := range columns {
+		converted := utils.ColumnConfig{
+			Key:      col.key,
+			Name:     utils.LocalizedText{EN: col.en, AR: col.ar},
+			Width:    col.width,
+			Required: col.required,
+		}
+		if len(col.values) > 0 || len(col.valuesAr) > 0 {
+			converted.Dropdown = &utils.DropdownConfig{
+				Values: col.values, ValuesAR: col.valuesAr,
+				PromptTitle: utils.LocalizedText{EN: "Allowed values", AR: "القيم المسموحة"},
+				Prompt:      utils.LocalizedText{EN: strings.Join(col.values, ", "), AR: strings.Join(col.valuesAr, ", ")},
+				ErrorTitle:  utils.LocalizedText{EN: "Invalid value", AR: "قيمة غير صالحة"},
+				Error:       utils.LocalizedText{EN: "Choose one of: " + strings.Join(col.values, ", "), AR: "اختر أحد الخيارات: " + strings.Join(col.valuesAr, ", ")},
+			}
+		}
+		result = append(result, converted)
+	}
+	return result
+}
+
+func buildKpiDictionaryInstructions(fromYear, toYear int) *utils.InstructionConfig {
+	text := func(en, ar string) utils.LocalizedText { return utils.LocalizedText{EN: en, AR: ar} }
+	item := func(labelEN, labelAR, bodyEN, bodyAR string) utils.InstructionItem {
+		return utils.InstructionItem{Label: text(labelEN, labelAR), Text: text(bodyEN, bodyAR)}
+	}
+	return &utils.InstructionConfig{LabelWidth: 30, TextWidth: 110, Sections: []utils.InstructionSection{
+		{Items: []utils.InstructionItem{item("Purpose", "الغرض", "This workbook is the input for the KPI Dictionary bulk import: summary/master data, the three KPI dictionaries, annual targets and historical quarterly performance are created or updated in one import.", "هذا المصنف هو مدخل الاستيراد المجمّع لدليل مؤشرات الأداء: البيانات الرئيسية، ودلائل المؤشرات الثلاثة، والمستهدفات السنوية، والأداء الربعي التاريخي تُنشأ أو تُحدّث في عملية استيراد واحدة.")}, BlankAfter: true},
+		{Title: text("How to use", "طريقة الاستخدام"), Items: []utils.InstructionItem{
+			item("1. Master Data", "1. البيانات الرئيسية", "List pillars, enablers, strategic goals, operational objectives and initiatives. Under each section title, column B is the record name. Use the # numbers in the \"... Ref.\" columns to link sections. Each section is pre-numbered for 20 rows; insert rows and keep the # numbers unique if you need more.", "اذكر الركائز والممكنات والأهداف الاستراتيجية والأهداف التشغيلية والمبادرات. تحت عنوان كل قسم، العمود B هو اسم السجل. استخدم أرقام # في أعمدة \"... Ref.\" لربط الأقسام. كل قسم مرقّم مسبقاً لعشرين صفاً؛ أضف صفوفاً وحافظ على تفرد أرقام # عند الحاجة."),
+			item("2. Dictionaries", "2. الدلائل", "Fill the Strategic, Operational and Award Dictionary sheets, one KPI per row. Required columns and allowed values are listed below.", "املأ أوراق الدليل الاستراتيجي والتشغيلي والجائزة، مؤشر واحد في كل صف. الأعمدة المطلوبة والقيم المسموحة مذكورة أدناه."),
+			item("3. Performance", "3. الأداء", "Fill the matching Performance sheet with quarterly targets and actual results. A row is imported only when at least one \"Actual Result YYYY Qn\" cell is filled. Owner Department is cross-checked against the KPI; a mismatch is reported.", "املأ ورقة الأداء المطابقة بالمستهدفات الربعية والنتائج الفعلية. لا يُستورد الصف إلا إذا تم تعبئة خلية واحدة على الأقل من \"النتيجة الفعلية YYYY Qn\". تتم مقارنة الإدارة المالكة بالمؤشر ويُبلّغ عن أي اختلاف."),
+			item("4. Import", "4. الاستيراد", "Save as .xlsx, upload it through KPI Dictionary Import, click Validate to review the report and preview, then Commit.", "احفظ الملف بصيغة .xlsx، وارفعه عبر استيراد دليل مؤشرات الأداء، ثم اضغط تحقق لمراجعة التقرير والمعاينة، ثم تنفيذ."),
+		}, BlankAfter: true},
+		{Title: text("Allowed values", "القيم المسموحة"), Items: []utils.InstructionItem{
+			item("Polarity / Direction", "الاتجاه", "Ascending, Descending (Arabic equivalents are accepted).", "تصاعدي، تنازلي (تُقبل المرادفات العربية)."),
+			item("Activation Status", "حالة التفعيل", "Active, Inactive, Draft, Reviewed, Approved, Closed. Validated but not applied: new KPIs start as Draft and existing KPIs keep their workflow status; another value is reported as a warning.", "نشط، غير نشط، مسودة، مراجَع، معتمد، مغلق. يتم التحقق منها دون تطبيقها: المؤشرات الجديدة تبدأ كمسودة والمؤشرات الحالية تحتفظ بحالة سير العمل؛ أي قيمة أخرى يُبلّغ عنها كتحذير."),
+			item("Segmentation Axes", "محاور التجزئة", "Strategic Dictionary only. The column is not present on Operational/Award sheets; a value there is ignored with a warning.", "للدليل الاستراتيجي فقط. العمود غير موجود في أوراق المؤشرات التشغيلية والجائزة؛ وأي قيمة هناك تُتجاهل مع تحذير."),
+			item("Reporting Frequency", "تكرار الإبلاغ", "Monthly, Quarterly, Semi-Annual, Annual, Custom.", "شهري، ربع سنوي، نصف سنوي، سنوي، مخصص."),
+			item("Owner Type", "نوع المالك", "Internal, External. Defaults from the owner department when omitted.", "داخلي، خارجي. يُستنتج من الإدارة المالكة عند تركه فارغاً."),
+			item("Numbers", "الأرقام", "Baseline, targets and actual results are numeric; commas and a trailing % are accepted. Negative values are rejected.", "خط الأساس والمستهدفات والنتائج الفعلية أرقام؛ تُقبل الفواصل والعلامة % في النهاية. تُرفض القيم السالبة."),
+		}, BlankAfter: true},
+		{Title: text("Rules", "القواعد"), Items: []utils.InstructionItem{
+			item("Mandatory columns", "الأعمدة المطلوبة", "Columns marked with a red * are mandatory and must be filled for every imported row. Keep the * in the header text.", "الأعمدة المميزة بعلامة * الحمراء مطلوبة ويجب تعبئتها في كل صف مستورد. حافظ على علامة * في نص الرأس."),
+			item("KPI code", "كود المؤشر", "Required and unique, e.g. KPI-P1-01-01 (strategic), OP-P1-01-01 (operational), KPI-AW-05-01 (award). Use uppercase letters/digits separated by hyphens.", "مطلوب وفريد، مثال KPI-P1-01-01 (استراتيجي)، OP-P1-01-01 (تشغيلي)، KPI-AW-05-01 (جائزة). استخدم أحرفاً كبيرة وأرقاماً مفصولة بشرطات."),
+			item("References", "المراجع", "Pillar/enabler and the strategic goal (strategic/award) or operational objective (operational) must exist in the system or be listed on the Master Data sheet.", "يجب أن تكون الركيزة/الممكن والهدف الاستراتيجي (للاستراتيجي/الجائزة) أو الهدف التشغيلي (للتشغيلي) موجودة في النظام أو مدرجة في ورقة البيانات الرئيسية."),
+			item("Auto-created", "الإنشاء التلقائي", "Missing departments, processes, domains and award criteria/sub-criteria are created automatically from the dictionary rows.", "الإدارات والعمليات والمجالات ومعايير الجائزة/المعايير الفرعية الناقصة تُنشأ تلقائياً من صفوف الدليل."),
+			item("Performance", "الأداء", "The KPI code must exist on the matching Dictionary sheet or in the system. A quarter that has not ended yet is rejected.", "يجب أن يكون كود المؤشر موجوداً في ورقة الدليل المطابقة أو في النظام. يُرفض أي ربع لم ينتهِ بعد."),
+			item("Headers", "رؤوس الأعمدة", "Do not rename the worksheets or change the header row. Row 1 is the header in the selected language.", "لا تغيّر أسماء أوراق العمل أو صف رؤوس الأعمدة. الصف 1 هو رأس الأعمدة باللغة المختارة."),
+			item("Existing records", "السجلات الحالية", "The import options decide whether existing KPIs, annual targets and performance entries are skipped or updated. Updating requires the kpi:update permission.", "تحدد خيارات الاستيراد ما إذا كانت المؤشرات والمستهدفات السنوية وسجلات الأداء الحالية تُتخطى أو تُحدّث. التحديث يتطلب صلاحية kpi:update."),
+		}, BlankAfter: true},
+		{Title: text("Year columns", "أعمدة السنوات"), Items: []utils.InstructionItem{
+			item("Annual targets", "المستهدفات السنوية", fmt.Sprintf("Dictionary sheets have one \"Targets YYYY\" column per year (%d–%d). Add or remove year columns if needed; the importer detects the headers.", fromYear, toYear), fmt.Sprintf("تحتوي أوراق الدليل على عمود \"مستهدفات YYYY\" لكل سنة (%d–%d). أضف أو أزل أعمدة السنوات حسب الحاجة؛ يتعرف المستورد على الرؤوس.", fromYear, toYear)),
+			item("Quarterly performance", "الأداء الربعي", fmt.Sprintf("Performance sheets have \"Target\", \"Actual Result\" and \"Achievement\" columns for every quarter (%d–%d). Achievement is recalculated by the system; filling it is optional.", fromYear, toYear), fmt.Sprintf("تحتوي أوراق الأداء على أعمدة \"المستهدف\" و\"النتيجة الفعلية\" و\"نسبة الإنجاز\" لكل ربع (%d–%d). يعيد النظام حساب نسبة الإنجاز؛ وتعبئتها اختيارية.", fromYear, toYear)),
+		}},
+	}}
+}
+
+func kpiTemplateDictionaryColumns(kpiType string) []kpiTemplateColumn {
+	cols := []kpiTemplateColumn{
+		{key: "code", ar: "الكود", en: "Code", width: 18},
+	}
+	switch kpiType {
+	case models.KPITypeStrategic:
+		cols = append(cols, kpiTemplateColumn{key: "name", ar: "المؤشر الاستراتيجي", en: "Strategic Indicator", width: 40})
+	case models.KPITypeOperational:
+		cols = append(cols, kpiTemplateColumn{key: "name", ar: "المؤشر التشغيلي", en: "Operational Indicator", width: 40})
+	case models.KPITypeAward:
+		cols = append(cols, kpiTemplateColumn{key: "name", ar: "مؤشر / مقياس", en: "Indicator / Measure", width: 40})
+	}
+
+	cols = append(cols,
+		kpiTemplateColumn{key: "pillar", ar: "الركيزة / الممكن", en: "Pillar / Enabler", width: 30},
+		kpiTemplateColumn{key: "goal", ar: "الهدف الاستراتيجي", en: "Strategic Goal", width: 30},
+	)
+
+	switch kpiType {
+	case models.KPITypeOperational:
+		cols = append(cols,
+			kpiTemplateColumn{key: "objective", ar: "الهدف التشغيلي", en: "Operational Objective", width: 30},
+			kpiTemplateColumn{key: "process", ar: "اسم العملية المرتبطة", en: "Related Process Name", width: 30},
+		)
+	case models.KPITypeAward:
+		cols = append(cols,
+			kpiTemplateColumn{key: "criterion", ar: "المعيار", en: "Criterion", width: 18},
+			kpiTemplateColumn{key: "sub_no", ar: "رقم المعيار الفرعي", en: "Sub-Criterion #", width: 20},
+			kpiTemplateColumn{key: "sub_name", ar: "المعيار الفرعي", en: "Sub-Criterion", width: 30},
+		)
+	}
+
+	cols = append(cols,
+		kpiTemplateColumn{key: "domain", ar: "المجال المرتبط / معيار الجائزة", en: "Related Domain / Award Criterion", width: 32},
+	)
+	if kpiType == models.KPITypeStrategic {
+		cols = append(cols,
+			kpiTemplateColumn{key: "seg", ar: "محاور التجزئة", en: "Segmentation Axes", width: 26},
+		)
+	}
+	cols = append(cols,
+		kpiTemplateColumn{key: "polarity", ar: "الاتجاه", en: "Polarity / Direction", width: 20,
+			values: []string{"Ascending", "Descending"}, valuesAr: []string{"تصاعدي", "تنازلي"}},
+		kpiTemplateColumn{key: "activation", ar: "حالة التفعيل", en: "Activation Status", width: 20,
+			values:   []string{"Active", "Inactive", "Draft", "Reviewed", "Approved", "Closed"},
+			valuesAr: []string{"نشط", "غير نشط", "مسودة", "مراجَع", "معتمد", "مغلق"}},
+		kpiTemplateColumn{key: "description", ar: "الوصف", en: "Description", width: 40},
+		kpiTemplateColumn{key: "owner_type", ar: "نوع المالك", en: "Owner Type", width: 16,
+			values: []string{"Internal", "External"}, valuesAr: []string{"داخلي", "خارجي"}},
+		kpiTemplateColumn{key: "owner_dept", ar: "الإدارة المالكة", en: "Owner Department", width: 30},
+		kpiTemplateColumn{key: "agency", ar: "الوكالة / الإدارة المالكة", en: "Owning Agency", width: 30},
+		kpiTemplateColumn{key: "units", ar: "الوحدات الإدارية المرتبطة", en: "Related Administrative Units", width: 30},
+		kpiTemplateColumn{key: "frequency", ar: "تكرار الإبلاغ", en: "Reporting Frequency", width: 18,
+			values:   []string{"Monthly", "Quarterly", "Semi-Annual", "Annual", "Custom"},
+			valuesAr: []string{"شهري", "ربع سنوي", "نصف سنوي", "سنوي", "مخصص"}},
+		kpiTemplateColumn{key: "lifecycle", ar: "دورة حياة المؤشر", en: "KPI Lifecycle", width: 22},
+		kpiTemplateColumn{key: "data_source", ar: "مصدر البيانات", en: "Data Source", width: 26},
+		kpiTemplateColumn{key: "formula", ar: "معادلة الحساب", en: "Calculation Formula", width: 30},
+		kpiTemplateColumn{key: "baseline", ar: "خط الأساس", en: "Baseline", width: 14},
+		kpiTemplateColumn{key: "notes", ar: "ملاحظات", en: "Notes", width: 32},
+	)
+	return cols
+}
+
+func kpiTemplateAnnualTargetColumns(fromYear, toYear int) []kpiTemplateColumn {
+	var cols []kpiTemplateColumn
+	for year := fromYear; year <= toYear; year++ {
+		cols = append(cols, kpiTemplateColumn{
+			key:   fmt.Sprintf("target_%d", year),
+			ar:    fmt.Sprintf("مستهدفات %d", year),
+			en:    fmt.Sprintf("Targets %d", year),
+			width: 14,
+		})
+	}
+	return cols
+}
+
+func kpiTemplatePerformanceColumns(kpiType string, fromYear, toYear int) []kpiTemplateColumn {
+	cols := []kpiTemplateColumn{
+		{key: "code", ar: "الكود", en: "Code", width: 18},
+		{key: "owner_dept", ar: "الإدارة المالكة", en: "Owner Department", width: 30},
+	}
+	switch kpiType {
+	case models.KPITypeStrategic:
+		cols = append(cols, kpiTemplateColumn{key: "name", ar: "المؤشر الاستراتيجي", en: "Strategic Indicator", width: 40})
+	case models.KPITypeOperational:
+		cols = append(cols, kpiTemplateColumn{key: "name", ar: "المؤشر التشغيلي", en: "Operational Indicator", width: 40})
+	case models.KPITypeAward:
+		cols = append(cols, kpiTemplateColumn{key: "name", ar: "مؤشرات الجائزة", en: "Award Indicators", width: 40})
+	}
+	for year := fromYear; year <= toYear; year++ {
+		for quarter := 1; quarter <= 4; quarter++ {
+			cols = append(cols,
+				kpiTemplateColumn{
+					key:   fmt.Sprintf("target_%d_q%d", year, quarter),
+					ar:    fmt.Sprintf("المستهدف %d Q%d", year, quarter),
+					en:    fmt.Sprintf("Target %d Q%d", year, quarter),
+					width: 13,
+				},
+				kpiTemplateColumn{
+					key:   fmt.Sprintf("actual_%d_q%d", year, quarter),
+					ar:    fmt.Sprintf("النتيجة الفعلية %d Q%d", year, quarter),
+					en:    fmt.Sprintf("Actual Result %d Q%d", year, quarter),
+					width: 13,
+				},
+				kpiTemplateColumn{
+					key:   fmt.Sprintf("achievement_%d_q%d", year, quarter),
+					ar:    fmt.Sprintf("نسبة الإنجاز %d Q%d", year, quarter),
+					en:    fmt.Sprintf("Achievement %d Q%d", year, quarter),
+					width: 13,
+				},
+			)
+		}
+	}
+	return cols
 }
