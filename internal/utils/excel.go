@@ -127,9 +127,15 @@ func GenerateExcelTemplate(cfg WorkbookConfig) ([]byte, error) {
 			return nil, err
 		}
 	}
-	for _, sheet := range cfg.Sheets {
+	for i, sheet := range cfg.Sheets {
 		if strings.TrimSpace(sheet.Name) == "" {
 			return nil, fmt.Errorf("sheet name cannot be empty")
+		}
+		if cfg.Instructions == nil && i == 0 {
+			if err := writeSheet(f, styles, cfg.Language, sheet); err != nil {
+				return nil, fmt.Errorf("writing sheet %q: %w", sheet.Name, err)
+			}
+			continue
 		}
 		if sheet.Name == firstName {
 			return nil, fmt.Errorf("sheet %q conflicts with the initial sheet", sheet.Name)
