@@ -897,9 +897,14 @@ func (h *KpiPerformanceHandler) UpdateBenchmark(c *fiber.Ctx) error {
 	existing.Municipality3 = req.Municipality3
 	existing.Notes = req.Notes
 
-	if req.DepartmentID != nil && *req.DepartmentID != "" {
-		pid, err := uuid.Parse(*req.DepartmentID)
-		if err == nil {
+	if req.DepartmentID != nil {
+		if *req.DepartmentID == "" {
+			existing.DepartmentID = nil
+		} else {
+			pid, err := uuid.Parse(*req.DepartmentID)
+			if err != nil {
+				return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_department_id"))
+			}
 			existing.DepartmentID = &pid
 		}
 	}
