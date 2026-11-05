@@ -79,6 +79,9 @@ func (c *momraClient) SendSMSByTemplateIDDetailed(ctx context.Context, mobile st
 
 	maskedMobile := maskMobile(mobile)
 	tag := smsLogTag(ctx)
+	// Same body as sent to Amana, only the mobile number is masked.
+	logPayload, _ := json.Marshal(map[string]any{"MobileNumber": maskedMobile, "TemplateID": templateID, "Variables": variables})
+	log.Printf("[SMS] provider=amana stage=payload %s body=%s", tag, logPayload)
 	for attempt := 0; attempt < 2; attempt++ {
 		token, err := c.getToken(ctx)
 		if err != nil {
@@ -91,7 +94,6 @@ func (c *momraClient) SendSMSByTemplateIDDetailed(ctx context.Context, mobile st
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+token)
-
 		log.Printf("[SMS] provider=amana stage=request %s POST %s to=%s template_id=%d variables=%d attempt=%d", tag, amanaSMSSendPath, maskedMobile, templateID, len(variables), attempt+1)
 		start := time.Now()
 		resp, err := c.httpClient.Do(req)
