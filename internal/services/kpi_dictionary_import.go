@@ -80,6 +80,7 @@ type kpiTemplateColumn struct {
 	ar       string
 	en       string
 	width    float64
+	required bool     // mandatory, marked with a red (*) in the template
 	values   []string // optional English data-validation drop-down values
 	valuesAr []string // optional Arabic data-validation drop-down values
 }
@@ -855,7 +856,7 @@ func (imp *kpiImporter) readTable(sheet string, rows [][]string, specs []colSpec
 			}
 			if (e != "" && s.match(e)) || (a != "" && s.match(a)) {
 				t.cols[s.key] = j
-				t.colLabel[s.key] = label
+				t.colLabel[s.key] = inputHeaderText(label)
 				break
 			}
 		}
@@ -1951,9 +1952,18 @@ func (imp *kpiImporter) markRolledBack() {
 
 var multiSpaceRe = regexp.MustCompile(`\s+`)
 
+// inputHeaderText strips the (*) marker and newlines for error messages.
+func inputHeaderText(s string) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	return strings.TrimSpace(strings.TrimRight(s, "*"))
+}
+
 func normHeader(s string) string {
 	s = strings.ToLower(strings.TrimSpace(multiSpaceRe.ReplaceAllString(s, " ")))
-	return strings.TrimSuffix(s, ":")
+	// A trailing ":" or (*) marker is decoration — strip before matching.
+	s = strings.TrimSuffix(s, ":")
+	s = strings.TrimRight(s, "*")
+	return strings.TrimSpace(s)
 }
 
 func normName(s string) string {
@@ -2132,19 +2142,48 @@ func buildKpiMasterDataSheet() utils.SheetConfig {
 	}}
 }
 
+// templateRequiredKeys collects key→required flags from the importer specs.
+func templateRequiredKeys(kpiType string, dictionary bool) map[string]bool {
+	specs := dictColumns(kpiType)
+	if !dictionary {
+		specs = perfColumns(kpiType)
+	}
+	m := make(map[string]bool, len(specs))
+	for _, s := range specs {
+		m[s.key] = s.required
+	}
+	return m
+}
+
+// markTemplateRequired applies the importer's required flags to template columns.
+func markTemplateRequired(kpiType string, dictionary bool, cols []kpiTemplateColumn) []kpiTemplateColumn {
+	required := templateRequiredKeys(kpiType, dictionary)
+	for i := range cols {
+		cols[i].required = required[cols[i].key]
+	}
+	return cols
+}
+
 func buildKpiDictionarySheet(name, kpiType string, fromYear, toYear int) utils.SheetConfig {
-	cols := append(kpiTemplateDictionaryColumns(kpiType), kpiTemplateAnnualTargetColumns(fromYear, toYear)...)
+	cols := markTemplateRequired(kpiType, true,
+		append(kpiTemplateDictionaryColumns(kpiType), kpiTemplateAnnualTargetColumns(fromYear, toYear)...))
 	return utils.SheetConfig{Name: name, Columns: toExcelColumns(cols), DataRows: 4999, FreezeHeader: true}
 }
 
 func buildKpiPerformanceSheet(name, kpiType string, fromYear, toYear int) utils.SheetConfig {
-	return utils.SheetConfig{Name: name, Columns: toExcelColumns(kpiTemplatePerformanceColumns(kpiType, fromYear, toYear)), DataRows: 4999, FreezeHeader: true}
+	cols := markTemplateRequired(kpiType, false, kpiTemplatePerformanceColumns(kpiType, fromYear, toYear))
+	return utils.SheetConfig{Name: name, Columns: toExcelColumns(cols), DataRows: 4999, FreezeHeader: true}
 }
 
 func toExcelColumns(columns []kpiTemplateColumn) []utils.ColumnConfig {
 	result := make([]utils.ColumnConfig, 0, len(columns))
 	for _, col := range columns {
-		converted := utils.ColumnConfig{Key: col.key, Name: utils.LocalizedText{EN: col.en, AR: col.ar}, Width: col.width}
+		converted := utils.ColumnConfig{
+			Key:      col.key,
+			Name:     utils.LocalizedText{EN: col.en, AR: col.ar},
+			Width:    col.width,
+			Required: col.required,
+		}
 		if len(col.values) > 0 || len(col.valuesAr) > 0 {
 			converted.Dropdown = &utils.DropdownConfig{
 				Values: col.values, ValuesAR: col.valuesAr,
@@ -2181,6 +2220,7 @@ func buildKpiDictionaryInstructions(fromYear, toYear int) *utils.InstructionConf
 			item("Numbers", "الأرقام", "Baseline, targets and actual results are numeric; commas and a trailing % are accepted. Negative values are rejected.", "خط الأساس والمستهدفات والنتائج الفعلية أرقام؛ تُقبل الفواصل والعلامة % في النهاية. تُرفض القيم السالبة."),
 		}, BlankAfter: true},
 		{Title: text("Rules", "القواعد"), Items: []utils.InstructionItem{
+			item("Mandatory columns", "الأعمدة المطلوبة", "Columns marked with a red * are mandatory and must be filled for every imported row. Keep the * in the header text.", "الأعمدة المميزة بعلامة * الحمراء مطلوبة ويجب تعبئتها في كل صف مستورد. حافظ على علامة * في نص الرأس."),
 			item("KPI code", "كود المؤشر", "Required and unique, e.g. KPI-P1-01-01 (strategic), OP-P1-01-01 (operational), KPI-AW-05-01 (award). Use uppercase letters/digits separated by hyphens.", "مطلوب وفريد، مثال KPI-P1-01-01 (استراتيجي)، OP-P1-01-01 (تشغيلي)، KPI-AW-05-01 (جائزة). استخدم أحرفاً كبيرة وأرقاماً مفصولة بشرطات."),
 			item("References", "المراجع", "Pillar/enabler and the strategic goal (strategic/award) or operational objective (operational) must exist in the system or be listed on the Master Data sheet.", "يجب أن تكون الركيزة/الممكن والهدف الاستراتيجي (للاستراتيجي/الجائزة) أو الهدف التشغيلي (للتشغيلي) موجودة في النظام أو مدرجة في ورقة البيانات الرئيسية."),
 			item("Auto-created", "الإنشاء التلقائي", "Missing departments, processes, domains and award criteria/sub-criteria are created automatically from the dictionary rows.", "الإدارات والعمليات والمجالات ومعايير الجائزة/المعايير الفرعية الناقصة تُنشأ تلقائياً من صفوف الدليل."),

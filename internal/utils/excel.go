@@ -49,6 +49,7 @@ type ColumnConfig struct {
 	Key      string
 	Name     LocalizedText
 	Width    float64
+	Required bool // required: header gets a red (*) marker
 	Dropdown *DropdownConfig
 }
 
@@ -248,11 +249,22 @@ func writeSheet(f *excelize.File, styles excelStyles, lang Language, cfg SheetCo
 		if err != nil {
 			return err
 		}
-		if err := f.SetCellValue(cfg.Name, cell, col.Name.For(lang)); err != nil {
+		label := col.Name.For(lang)
+		if err := f.SetCellValue(cfg.Name, cell, label); err != nil {
 			return err
 		}
 		if err := f.SetCellStyle(cfg.Name, cell, cell, styles.header); err != nil {
 			return err
+		}
+		if col.Required && label != "" {
+			// Mandatory marker: red asterisk on the normal header.
+			runs := []excelize.RichTextRun{
+				{Text: label},
+				{Text: " *", Font: &excelize.Font{Bold: true, Color: "FF0000"}},
+			}
+			if err := f.SetCellRichText(cfg.Name, cell, runs); err != nil {
+				return err
+			}
 		}
 		name, err := excelize.ColumnNumberToName(i + 1)
 		if err != nil {
