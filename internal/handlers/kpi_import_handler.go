@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 
 	"github.com/automax/backend/internal/middleware"
 	"github.com/automax/backend/internal/services"
@@ -14,9 +15,10 @@ import (
 	"gorm.io/gorm"
 )
 
-// KpiImportHandler serves the KPI Dictionary bulk import: Validate returns
-// the validation report + import preview without writing anything; Commit
-// re-validates the same file and applies it with the chosen options.
+// KpiImportHandler serves the KPI Dictionary bulk import: Template returns the
+// blank workbook; Validate returns the validation report + import preview
+// without writing anything; Commit re-validates the same file and applies it
+// with the chosen options.
 type KpiImportHandler struct {
 	db           *gorm.DB
 	actionLogSvc services.ActionLogService
@@ -46,6 +48,25 @@ func (h *KpiImportHandler) readRequest(c *fiber.Ctx) ([]byte, string, services.K
 		return nil, "", opts, fmt.Errorf("failed to read the uploaded file")
 	}
 	return data, file.Filename, opts, nil
+}
+
+// Template returns the blank KPI Dictionary workbook accepted by Validate and
+// Commit. The lang query value (en or ar) selects a single header language;
+// the mandatory sheets and year columns are pre-filled.
+func (h *KpiImportHandler) Template(c *fiber.Ctx) error {
+	lang := c.Query("lang", services.KpiTemplateLangEN)
+	if lang != services.KpiTemplateLangEN && lang != services.KpiTemplateLangAR {
+		lang = services.KpiTemplateLangEN
+	}
+	data, err := services.BuildKpiDictionaryImportTemplate(lang)
+	if err != nil {
+		log.Printf("[kpi_import] Template: BuildKpiDictionaryImportTemplate failed: %v", err)
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to build the KPI Dictionary import template")
+	}
+	c.Set(fiber.HeaderContentType, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	c.Set(fiber.HeaderContentDisposition, fmt.Sprintf(`attachment; filename="%s"`, services.KpiDictionaryTemplateFileNameFor(lang)))
+	c.Set(fiber.HeaderCacheControl, "no-store")
+	return c.Send(data)
 }
 
 func (h *KpiImportHandler) Validate(c *fiber.Ctx) error {
