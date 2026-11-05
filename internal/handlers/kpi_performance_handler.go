@@ -873,7 +873,10 @@ func (h *KpiPerformanceHandler) UpdateBenchmark(c *fiber.Ctx) error {
 
 	var existing models.KpiBenchmark
 	if err := h.db.WithContext(c.UserContext()).First(&existing, id).Error; err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+		if err == gorm.ErrRecordNotFound {
+			return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+		}
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "internal_error"))
 	}
 
 	var req models.KpiBenchmarkRequest
