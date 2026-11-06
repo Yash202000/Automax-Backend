@@ -32,7 +32,11 @@ func MaskPhone(phone string) string {
 	if strings.HasPrefix(strings.TrimSpace(phone), "+") {
 		prefix = "+"
 	}
-	return prefix + digits[:3] + " " + digits[3:5] + " *** " + digits[len(digits)-4:]
+	last4 := digits[len(digits)-4:]
+	if len(digits) < 12 { // short numbers (e.g. 9-digit IDs): hide at least 3 digits
+		return prefix + digits[:len(digits)-7] + " *** " + last4
+	}
+	return prefix + digits[:3] + " " + digits[3:5] + " *** " + last4
 }
 
 // SanitizeErrorText removes secrets (passwords, tokens) and masks phone / ID numbers
