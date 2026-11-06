@@ -24,6 +24,9 @@ var DefaultErrorLog *ErrorLogService
 
 // LogError records an error in the Error Log. It never blocks, never panics and is a
 // no-op if the service is not initialised, so it is always safe to call.
+// errorLogSlots limits how many error-log writes run at the same time.
+var errorLogSlots = make(chan struct{}, 50)
+
 func LogError(entry models.ErrorLogEntry) {
 	if DefaultErrorLog != nil {
 		DefaultErrorLog.Log(entry)
@@ -53,7 +56,15 @@ func (s *ErrorLogService) Log(entry models.ErrorLogEntry) {
 	entry.RelatedID, entry.RelatedLabel = strings.Clone(entry.RelatedID), strings.Clone(entry.RelatedLabel)
 	entry.Action, entry.TechnicalDetails = strings.Clone(entry.Action), strings.Clone(entry.TechnicalDetails)
 	entry.Message, entry.UserName = strings.Clone(entry.Message), strings.Clone(entry.UserName)
+	// Cap concurrent background writes so a slow database can't pile up goroutines.
+	select {
+	case errorLogSlots <- struct{}{}:
+	default:
+		log.Printf("[ErrorLog] write queue full, dropping entry: %s", entry.Action)
+		return
+	}
 	go func() {
+		defer func() { <-errorLogSlots }()
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("[ErrorLog] recovered while logging: %v", r)
