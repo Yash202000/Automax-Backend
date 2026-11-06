@@ -467,8 +467,11 @@ type KpiBenchmark struct {
 	BenchmarkAchievement float64        `gorm:"default:0" json:"benchmark_achievement"`
 	Variance             float64        `gorm:"-" json:"variance"`
 	Municipality1        *float64       `gorm:"type:double precision" json:"municipality1"`
+	Municipality1Label   string         `gorm:"size:100;default:''" json:"municipality1_label"`
 	Municipality2        *float64       `gorm:"type:double precision" json:"municipality2"`
+	Municipality2Label   string         `gorm:"size:100;default:''" json:"municipality2_label"`
 	Municipality3        *float64       `gorm:"type:double precision" json:"municipality3"`
+	Municipality3Label   string         `gorm:"size:100;default:''" json:"municipality3_label"`
 	Notes                string         `gorm:"type:text" json:"notes"`
 	CreatedAt            time.Time      `json:"created_at"`
 	UpdatedAt            time.Time      `json:"updated_at"`
@@ -493,9 +496,12 @@ type KpiBenchmarkRequest struct {
 	InternalAchievement  float64 `json:"internal_achievement"`
 	BenchmarkAchievement float64 `json:"benchmark_achievement"`
 	Municipality1        *float64 `json:"municipality1" validate:"omitempty,gte=0,lte=100"`
+	Municipality1Label   string   `json:"municipality1_label" validate:"omitempty,max=100"`
 	Municipality2        *float64 `json:"municipality2" validate:"omitempty,gte=0,lte=100"`
+	Municipality2Label   string   `json:"municipality2_label" validate:"omitempty,max=100"`
 	Municipality3        *float64 `json:"municipality3" validate:"omitempty,gte=0,lte=100"`
-	Notes                string  `json:"notes"`
+	Municipality3Label   string   `json:"municipality3_label" validate:"omitempty,max=100"`
+	Notes                string   `json:"notes"`
 }
 
 type KpiBenchmarkResponse struct {
@@ -512,8 +518,11 @@ type KpiBenchmarkResponse struct {
 	BenchmarkAchievement float64                  `json:"benchmark_achievement"`
 	Variance             float64                  `json:"variance"`
 	Municipality1        *float64                 `json:"municipality1"`
+	Municipality1Label   string                   `json:"municipality1_label"`
 	Municipality2        *float64                 `json:"municipality2"`
+	Municipality2Label   string                   `json:"municipality2_label"`
 	Municipality3        *float64                 `json:"municipality3"`
+	Municipality3Label   string                   `json:"municipality3_label"`
 	Notes                string                   `json:"notes"`
 	CreatedAt            time.Time                `json:"created_at"`
 }
@@ -534,8 +543,11 @@ func (b *KpiBenchmark) ToBenchmarkResponse() KpiBenchmarkResponse {
 		BenchmarkAchievement: b.BenchmarkAchievement,
 		Variance:             v,
 		Municipality1:        b.Municipality1,
+		Municipality1Label:   b.Municipality1Label,
 		Municipality2:        b.Municipality2,
+		Municipality2Label:   b.Municipality2Label,
 		Municipality3:        b.Municipality3,
+		Municipality3Label:   b.Municipality3Label,
 		Notes:                b.Notes,
 		CreatedAt:            b.CreatedAt,
 	}

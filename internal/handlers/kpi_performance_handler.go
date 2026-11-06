@@ -845,8 +845,11 @@ func (h *KpiPerformanceHandler) CreateBenchmark(c *fiber.Ctx) error {
 		InternalAchievement:  req.InternalAchievement,
 		BenchmarkAchievement: req.BenchmarkAchievement,
 		Municipality1:        req.Municipality1,
+		Municipality1Label:   req.Municipality1Label,
 		Municipality2:        req.Municipality2,
+		Municipality2Label:   req.Municipality2Label,
 		Municipality3:        req.Municipality3,
+		Municipality3Label:   req.Municipality3Label,
 		Notes:                req.Notes,
 	}
 
@@ -896,8 +899,11 @@ func (h *KpiPerformanceHandler) UpdateBenchmark(c *fiber.Ctx) error {
 	existing.InternalAchievement = req.InternalAchievement
 	existing.BenchmarkAchievement = req.BenchmarkAchievement
 	existing.Municipality1 = req.Municipality1
+	existing.Municipality1Label = req.Municipality1Label
 	existing.Municipality2 = req.Municipality2
+	existing.Municipality2Label = req.Municipality2Label
 	existing.Municipality3 = req.Municipality3
+	existing.Municipality3Label = req.Municipality3Label
 	existing.Notes = req.Notes
 
 	if req.DepartmentID != nil {
