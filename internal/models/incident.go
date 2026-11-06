@@ -122,6 +122,10 @@ type Incident struct {
 	ReporterPhone  string     `gorm:"size:50" json:"reporter_phone"`
 	CallerIdentity string     `gorm:"size:50;column:caller_identity" json:"caller_identity"`
 
+	// CreatedByID is the ID of the authenticated user who created the record
+	// (differs from ReporterID when an agent creates it on behalf of a citizen).
+	CreatedByID *uuid.UUID `gorm:"type:uuid;index;column:created_by_id" json:"created_by_id"`
+
 	// Source (origin of the record)
 	Source string `gorm:"size:100" json:"source"`
 
@@ -334,8 +338,9 @@ type IncidentRevision struct {
 	Incident       *Incident `gorm:"foreignKey:IncidentID" json:"incident,omitempty"`
 	RevisionNumber int       `gorm:"not null" json:"revision_number"`
 
-	ActionType        IncidentRevisionActionType `gorm:"size:50;not null;index" json:"action_type"`
-	ActionDescription string                     `gorm:"type:text;not null" json:"action_description"`
+	ActionType          IncidentRevisionActionType `gorm:"size:50;not null;index" json:"action_type"`
+	ActionDescription   string                     `gorm:"type:text;not null" json:"action_description"`
+	ActionDescriptionAr string                     `gorm:"type:text" json:"action_description_ar"`
 
 	// JSON array of field changes
 	Changes string `gorm:"type:text" json:"changes"`
@@ -639,6 +644,8 @@ type IncidentFilter struct {
 	CurrentStateCode    []string   `query:"current_state_code" json:"current_state_code" validate:"omitempty,dive,max=50"` // matches every workflow's state with this code; see normalizeStateCodes
 	ClassificationID    []string   `query:"classification_id" json:"classification_id" validate:"omitempty,dive,uuid"`
 	Priority            *int       `query:"priority" json:"priority" validate:"omitempty,min=1,max=5"`
+	Priorities          []int      `query:"-" json:"priorities" validate:"omitempty,dive,min=1,max=5"` // Priorities/Sources: POST /incidents/search body only; merged with Priority/Source
+	Sources             []string   `query:"-" json:"sources" validate:"omitempty,dive,max=50"`
 	AssigneeID          []string   `query:"assignee_id" json:"assignee_id" validate:"omitempty,dive,uuid"`
 	DepartmentID        []string   `query:"department_id" json:"department_id" validate:"omitempty,dive,uuid"`
 	LocationID          []string   `query:"location_id" json:"location_id" validate:"omitempty,dive,uuid"`
@@ -652,6 +659,7 @@ type IncidentFilter struct {
 	Source              *string    `query:"source" json:"source" validate:"omitempty"`
 	MyRecord            *string    `query:"my_record" json:"my_record" validate:"omitempty,uuid"`
 	ConvertedToRequest  *bool      `query:"converted_to_request" json:"converted_to_request" validate:"omitempty"`
+	ExcludeClosed       *bool      `query:"exclude_closed" json:"exclude_closed" validate:"omitempty"` // true hides records whose current state is terminal
 	SourceIncidentID    *string    `query:"source_incident_id" json:"source_incident_id" validate:"omitempty,uuid"`
 	StartDate           *time.Time `json:"start_date"` // filter by created_at >= start_date; parsed manually in handler (not via QueryParser)
 	EndDate             *time.Time `json:"end_date"`   // filter by created_at <= end_date; parsed manually in handler (not via QueryParser)
@@ -901,6 +909,7 @@ type IncidentResponse struct {
 	CallerIdentity        string                      `json:"caller_identity,omitempty"`
 	Channel               string                      `json:"channel,omitempty"`
 	TransitionHistory     []TransitionHistoryResponse `json:"transition_history,omitempty"`
+	CreatedByID           *uuid.UUID                  `json:"created_by_id,omitempty"`
 	CreatedByName         string                      `json:"created_by_name,omitempty"`
 	CreatedByMobile       string                      `json:"created_by_mobile,omitempty"`
 	EvaluationCount       int                         `json:"evaluation_count,omitempty"`
@@ -1063,6 +1072,7 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 		ReporterPhone:         i.ReporterPhone,
 		CallerIdentity:        i.CallerIdentity,
 		Channel:               i.Channel,
+		CreatedByID:           i.CreatedByID,
 		CreatedByName:         i.CreatedByName,
 		CreatedByMobile:       i.CreatedByMobile,
 		EvaluationCount:       i.EvaluationCount,
@@ -1299,6 +1309,7 @@ type IncidentRevisionResponse struct {
 	RevisionNumber      int                         `json:"revision_number"`
 	ActionType          IncidentRevisionActionType  `json:"action_type"`
 	ActionDescription   string                      `json:"action_description"`
+	ActionDescriptionAr string                      `json:"action_description_ar"`
 	Changes             []IncidentFieldChange       `json:"changes"`
 	PerformedByID       uuid.UUID                   `json:"performed_by_id"`
 	PerformedBy         *UserResponse               `json:"performed_by,omitempty"`
@@ -1330,6 +1341,7 @@ func ToIncidentRevisionResponse(r *IncidentRevision) IncidentRevisionResponse {
 		RevisionNumber:      r.RevisionNumber,
 		ActionType:          r.ActionType,
 		ActionDescription:   r.ActionDescription,
+		ActionDescriptionAr: r.ActionDescriptionAr,
 		Changes:             changes,
 		PerformedByID:       r.PerformedByID,
 		PerformedByRoles:    roles,

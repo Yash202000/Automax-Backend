@@ -169,6 +169,28 @@ func (s *MinIOStorage) GetFile(ctx context.Context, objectName string) (io.ReadC
 	return object, nil
 }
 
+// StatFile returns the object size without downloading it.
+func (s *MinIOStorage) StatFile(ctx context.Context, objectName string) (int64, error) {
+	info, err := s.client.StatObject(ctx, s.bucketName, objectName, minio.StatObjectOptions{})
+	if err != nil {
+		return 0, fmt.Errorf("object not found in storage (key=%q): %w", objectName, err)
+	}
+	return info.Size, nil
+}
+
+// GetFileRange streams only the bytes start..end (inclusive) of an object.
+func (s *MinIOStorage) GetFileRange(ctx context.Context, objectName string, start, end int64) (io.ReadCloser, error) {
+	opts := minio.GetObjectOptions{}
+	if err := opts.SetRange(start, end); err != nil {
+		return nil, fmt.Errorf("invalid range: %w", err)
+	}
+	object, err := s.client.GetObject(ctx, s.bucketName, objectName, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file: %w", err)
+	}
+	return object, nil
+}
+
 func (s *MinIOStorage) FileExists(ctx context.Context, objectName string) (bool, error) {
 	_, err := s.client.StatObject(ctx, s.bucketName, objectName, minio.StatObjectOptions{})
 	if err != nil {

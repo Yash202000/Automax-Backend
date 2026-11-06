@@ -19,7 +19,17 @@ func MigrateTransitionAssignmentRoles(db *gorm.DB) error {
 	-- Create indexes for performance
 	CREATE INDEX IF NOT EXISTS idx_transition_assignment_roles_transition ON transition_assignment_roles(workflow_transition_id);
 	CREATE INDEX IF NOT EXISTS idx_transition_assignment_roles_role ON transition_assignment_roles(role_id);
+	`
 
+	if err := db.Exec(migrationSQL).Error; err != nil {
+		return err
+	}
+
+	// The old single-role column is gone once this has run, so only copy and drop while it exists.
+	if !db.Migrator().HasColumn("workflow_transitions", "assignment_role_id") {
+		return nil
+	}
+	return db.Exec(`
 	-- Migrate existing single role assignments to the new join table
 	INSERT INTO transition_assignment_roles (workflow_transition_id, role_id)
 	SELECT id, assignment_role_id
@@ -29,7 +39,5 @@ func MigrateTransitionAssignmentRoles(db *gorm.DB) error {
 
 	-- Drop the old column
 	ALTER TABLE workflow_transitions DROP COLUMN IF EXISTS assignment_role_id;
-	`
-
-	return db.Exec(migrationSQL).Error
+	`).Error
 }

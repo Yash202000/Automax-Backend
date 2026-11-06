@@ -10,6 +10,7 @@ import (
 	"log"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
@@ -48,6 +49,10 @@ func (s *ErrorLogService) Log(entry models.ErrorLogEntry) {
 		return
 	}
 	occurredAt := time.Now()
+	// Fiber reuses request buffers after the handler returns; copy strings before the goroutine.
+	entry.RelatedID, entry.RelatedLabel = strings.Clone(entry.RelatedID), strings.Clone(entry.RelatedLabel)
+	entry.Action, entry.TechnicalDetails = strings.Clone(entry.Action), strings.Clone(entry.TechnicalDetails)
+	entry.Message, entry.UserName = strings.Clone(entry.Message), strings.Clone(entry.UserName)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -102,10 +107,13 @@ func BuildErrorLog(in models.ErrorLogEntry, occurredAt time.Time) *models.ErrorL
 }
 
 func Truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
+	if len(s) > n {
+		s = s[:n]
+		for !utf8.ValidString(s) { // don't cut a multi-byte (Arabic) character in half
+			s = s[:len(s)-1]
+		}
 	}
-	return s[:n]
+	return strings.ToValidUTF8(s, "")
 }
 
 func (s *ErrorLogService) GetByID(ctx context.Context, id uuid.UUID) (*models.ErrorLog, error) {
@@ -143,6 +151,9 @@ func (s *ErrorLogService) ExportCSV(ctx context.Context, f models.ErrorLogFilter
 		}
 		if withTechnical {
 			row = append(row, utils.SanitizeErrorText(e.TechnicalDetails))
+		}
+		for j := range row {
+			row[j] = utils.CSVSafe(row[j])
 		}
 		_ = w.Write(row)
 	}

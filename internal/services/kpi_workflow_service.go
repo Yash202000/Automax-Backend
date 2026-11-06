@@ -344,6 +344,31 @@ func (s *KpiWorkflowService) TransitionKpiEntry(ctx context.Context, entryID uui
 		updateFields["approved_by_id"] = userID
 		isApprove = true
 	}
+	// Approving a correction retires the original it corrects (left otherwise
+	// untouched): Superseded by an adjustment, Reversed by a reversal. An
+	// approved reversal record ends as Reversal so it never counts as data.
+	if isApprove && entry.SupersedesEntryID != nil {
+		var original models.KpiEntry
+		if err := tx.WithContext(ctx).Set("gorm:query_option", "FOR UPDATE").First(&original, *entry.SupersedesEntryID).Error; err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "kpi_entry_not_found"), err)
+		}
+		if original.Status != models.KpiEntryStatusApproved {
+			tx.Rollback()
+			return nil, fmt.Errorf("%s", i18n.T(ctx, "kpi_entry_correction_original_changed"))
+		}
+		originalStatus := models.KpiEntryStatusSuperseded
+		if entry.CorrectionType == models.KpiEntryCorrectionReversal {
+			originalStatus = models.KpiEntryStatusReversed
+			entry.Status = models.KpiEntryStatusReversal
+			updateFields["status"] = entry.Status
+		}
+		if err := tx.WithContext(ctx).Model(&original).Update("status", originalStatus).Error; err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_update_kpi_entry"), err)
+		}
+	}
+
 	if err := tx.WithContext(ctx).Model(&entry).Updates(updateFields).Error; err != nil {
 		tx.Rollback()
 		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_update_kpi_entry"), err)
@@ -353,9 +378,22 @@ func (s *KpiWorkflowService) TransitionKpiEntry(ctx context.Context, entryID uui
 	// otherwise the Metric Card's Baseline/Current/Target tiles and
 	// achievement bar never move no matter how many entries get approved,
 	// since they read the metric's own current_value, not the entry itself.
+	// A reversal instead falls back to the latest entry still approved.
 	if isApprove {
+		currentValue := entry.ActualValue
+		if entry.Status == models.KpiEntryStatusReversal {
+			var latest models.KpiEntry
+			if err := tx.WithContext(ctx).Where("metric_id = ? AND status = ?", entry.MetricID, models.KpiEntryStatusApproved).
+				Order("updated_at DESC").First(&latest).Error; err == nil {
+				currentValue = latest.ActualValue
+			} else {
+				var metric models.KpiMetric
+				tx.WithContext(ctx).Select("baseline_value").First(&metric, entry.MetricID)
+				currentValue = metric.BaselineValue
+			}
+		}
 		if err := tx.WithContext(ctx).Model(&models.KpiMetric{}).Where("id = ?", entry.MetricID).
-			Update("current_value", entry.ActualValue).Error; err != nil {
+			Update("current_value", currentValue).Error; err != nil {
 			tx.Rollback()
 			return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_update_metric_current_value"), err)
 		}

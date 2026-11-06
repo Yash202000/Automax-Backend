@@ -94,6 +94,8 @@ type ClassificationRepository interface {
 	GetAncestors(ctx context.Context, id uuid.UUID) ([]models.Classification, error)
 	HasActiveChildren(ctx context.Context, id uuid.UUID) (bool, error)
 	CountChildren(ctx context.Context, id uuid.UUID) (int64, error)
+	// IsChild reports whether the classification is a leaf, i.e. it has no children.
+	IsChild(ctx context.Context, id uuid.UUID) (bool, error)
 	// CheckDuplicate looks for a classification whose name/name_ar collide under the given
 	// parent (matching FindByNameOrNameArAndParent's scoping) or whose code collides
 	// classification-wide, and reports exactly which field(s) matched so the caller can
@@ -791,6 +793,11 @@ func (r *classificationRepository) CountChildren(ctx context.Context, id uuid.UU
 		Where("parent_id = ? AND deleted_at IS NULL", id).
 		Count(&count).Error
 	return count, err
+}
+
+func (r *classificationRepository) IsChild(ctx context.Context, id uuid.UUID) (bool, error) {
+	n, err := r.CountChildren(ctx, id)
+	return n == 0, err
 }
 
 // GetAncestors returns the node and all its ancestors ordered from root (lowest level) to the

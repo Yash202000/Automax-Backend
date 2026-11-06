@@ -154,13 +154,9 @@ func (r *goalRepository) FindByIDWithRelations(ctx context.Context, id uuid.UUID
 	return &goal, nil
 }
 
-func (r *goalRepository) List(ctx context.Context, filter *models.GoalFilter) ([]models.Goal, int64, error) {
-	var goals []models.Goal
-	var total int64
-
-	query := r.db.WithContext(ctx).Model(&models.Goal{})
-
-	// Apply filters
+// applyGoalFilters applies the user-facing GoalFilter criteria shared by the
+// paginated list and the export, so both always return the same set of goals.
+func applyGoalFilters(query *gorm.DB, filter *models.GoalFilter) *gorm.DB {
 	if filter.Status != "" {
 		query = query.Where("status = ?", filter.Status)
 	}
@@ -213,6 +209,16 @@ func (r *goalRepository) List(ctx context.Context, filter *models.GoalFilter) ([
 			*filter.UserID, *filter.UserID,
 		)
 	}
+	return query
+}
+
+func (r *goalRepository) List(ctx context.Context, filter *models.GoalFilter) ([]models.Goal, int64, error) {
+	var goals []models.Goal
+	var total int64
+
+	query := r.db.WithContext(ctx).Model(&models.Goal{})
+
+	query = applyGoalFilters(query, filter)
 
 	// Count total
 	if err := query.Count(&total).Error; err != nil {
@@ -257,25 +263,7 @@ func (r *goalRepository) ListForExport(ctx context.Context, filter *models.GoalF
 
 	query := r.db.WithContext(ctx).Model(&models.Goal{})
 
-	if filter.Status != "" {
-		query = query.Where("status = ?", filter.Status)
-	}
-	if filter.Priority != "" {
-		query = query.Where("priority = ?", filter.Priority)
-	}
-	if filter.OwnerID != nil {
-		query = query.Where("owner_id = ?", *filter.OwnerID)
-	}
-	if filter.DepartmentID != nil {
-		query = query.Where("department_id = ?", *filter.DepartmentID)
-	}
-	if filter.Category != "" {
-		query = query.Where("category = ?", filter.Category)
-	}
-	if filter.Search != "" {
-		searchPattern := "%" + filter.Search + "%"
-		query = query.Where("title ILIKE ? OR description ILIKE ?", searchPattern, searchPattern)
-	}
+	query = applyGoalFilters(query, filter)
 
 	err := query.
 		Preload("Owner").

@@ -62,6 +62,7 @@ type UserService interface {
 	ValidateMobileForLogin(ctx context.Context, phone string) (*models.UserResponse, error)
 	SetLicenseService(ls LicenseService, lr repository.LicenseRepository)
 	SetSettingsRepo(sr repository.SettingsRepository)
+	SetNotificationService(ns *NotificationService)
 	AdminResetPassword(ctx context.Context, adminID, targetUserID uuid.UUID, newPassword string) error
 	ForgotPassword(ctx context.Context, req *models.ForgotPasswordRequest) (string, error)
 	VerifyOTPForReset(ctx context.Context, req *models.VerifyOTPRequest) (string, error)
@@ -79,6 +80,7 @@ type userService struct {
 	config           *config.Config
 	actionLogService ActionLogService
 	otpService       *OTPService
+	notificationSvc  *NotificationService
 	licenseService   LicenseService
 	licenseRepo      repository.LicenseRepository
 	db               *gorm.DB
@@ -90,6 +92,11 @@ type userService struct {
 func (s *userService) SetLicenseService(ls LicenseService, lr repository.LicenseRepository) {
 	s.licenseService = ls
 	s.licenseRepo = lr
+}
+
+// SetNotificationService injects the notification service used to send the password-reset OTP SMS.
+func (s *userService) SetNotificationService(ns *NotificationService) {
+	s.notificationSvc = ns
 }
 
 // SetSettingsRepo injects the settings repository (post-construction to avoid touching the constructor everywhere it's called).
@@ -158,15 +165,20 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 		return nil, errors.New(i18n.T(ctx, "username_already_exists"))
 	}
 
-	hashedPassword, err := utils.HashPassword(req.Password)
-	if err != nil {
-		return nil, err
+	// AD users authenticate against Active Directory: no local password.
+	hashedPassword := ""
+	if !req.IsADUser {
+		hashedPassword, err = utils.HashPassword(req.Password)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	user := &models.User{
 		Email:           req.Email,
 		Username:        req.Username,
 		Password:        hashedPassword,
+		IsADUser:        req.IsADUser,
 		FirstName:       req.FirstName,
 		MiddleName:      req.MiddleName,
 		LastName:        req.LastName,
@@ -980,6 +992,11 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		return nil, err
 	}
 
+	// Contact-center updates are limited to name and mobile fields only.
+	if req.ContactCenter != nil && *req.ContactCenter {
+		return s.updateContactCenterFields(ctx, user, req, actorID, ipAddress, userAgent)
+	}
+
 	// Store old values for audit logging
 	// IMPORTANT: Create COPIES of values, not pointers to mutable fields
 	oldIsActive := user.IsActive
@@ -1014,6 +1031,7 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		"extension":        user.Extension,
 		"mobile_verified":  user.MobileVerified,
 		"is_active":        oldIsActive,
+		"is_ad_user":       user.IsADUser,
 	}
 
 	// Add department names
@@ -1134,6 +1152,14 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 	if req.EnableLoginTotp != nil {
 		user.EnableLoginTotp = *req.EnableLoginTotp
 	}
+	// Switching to AD drops the local password; switching back leaves the
+	// user without one until an admin resets it.
+	if req.IsADUser != nil && *req.IsADUser != user.IsADUser {
+		user.IsADUser = *req.IsADUser
+		if user.IsADUser {
+			user.Password = ""
+		}
+	}
 
 	if err := s.userRepo.Update(ctx, user); err != nil {
 		return nil, err
@@ -1250,6 +1276,9 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 	if req.IsActive != nil {
 		newUserForLogging["is_active"] = *req.IsActive
 	}
+	if req.IsADUser != nil {
+		newUserForLogging["is_ad_user"] = *req.IsADUser
+	}
 
 	// Add department names from request
 	if req.DepartmentIDs != nil {
@@ -1361,6 +1390,77 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		})
 	}()
 
+	return &response, nil
+}
+
+// updateContactCenterFields updates only first/middle/last name, phone and alternate mobile,
+// ignoring every other field in the request, and logs the changes.
+func (s *userService) updateContactCenterFields(ctx context.Context, user *models.User, req *models.UserUpdateRequest, actorID uuid.UUID, ipAddress, userAgent string) (*models.UserResponse, error) {
+	oldValue := map[string]any{
+		"first_name":       user.FirstName,
+		"middle_name":      user.MiddleName,
+		"last_name":        user.LastName,
+		"phone":            user.Phone,
+		"alternate_mobile": user.AlternateMobile,
+	}
+
+	if req.Phone != user.Phone && req.Phone != "" {
+		exists, err := s.userRepo.ExistsByPhone(ctx, req.Phone, user.ID)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			return nil, errors.New(i18n.T(ctx, "phone_number_in_use"))
+		}
+	}
+
+	user.FirstName = req.FirstName
+	user.MiddleName = req.MiddleName
+	user.LastName = req.LastName
+	user.Phone = req.Phone
+	user.AlternateMobile = req.AlternateMobile
+
+	if err := s.userRepo.Update(ctx, user); err != nil {
+		return nil, err
+	}
+
+	newValue := map[string]interface{}{
+		"first_name":       user.FirstName,
+		"middle_name":      user.MiddleName,
+		"last_name":        user.LastName,
+		"phone":            user.Phone,
+		"alternate_mobile": user.AlternateMobile,
+	}
+
+	changedFields := []string{}
+	for _, f := range []string{"first_name", "middle_name", "last_name", "phone", "alternate_mobile"} {
+		if oldValue[f] != newValue[f] {
+			changedFields = append(changedFields, f)
+		}
+	}
+	description := fmt.Sprintf("User profile updated for user: %s (%s)", user.Username, user.Email)
+	if len(changedFields) > 0 {
+		description = fmt.Sprintf("Updated %s for user: %s (%s)",
+			strings.Join(changedFields, ", "), user.Username, user.Email)
+	}
+
+	userID := user.ID
+	go func() {
+		_ = s.actionLogService.LogAction(context.Background(), &LogActionParams{
+			UserID:      actorID,
+			Action:      "update",
+			Module:      "users",
+			ResourceID:  userID.String(),
+			Description: description,
+			OldValue:    oldValue,
+			NewValue:    newValue,
+			IPAddress:   ipAddress,
+			UserAgent:   userAgent,
+			Status:      "success",
+		})
+	}()
+
+	response := models.ToUserResponse(user)
 	return &response, nil
 }
 
@@ -2246,10 +2346,11 @@ func (s *userService) SendSMSOTP(ctx context.Context, phone, otp string) error {
 	if !strings.HasPrefix(phone, "+") {
 		return errors.New(i18n.T(ctx, "phone_country_code_required"))
 	}
-	message := fmt.Sprintf("Your OTP is %s. It is valid for 5 minutes.", otp)
-	sid, err := intutils.SendSMS(ctx, phone, message)
-	s.logOTPNotification("sms", "twilio", phone, message, sid, err)
-	return err
+	if s.notificationSvc == nil {
+		return errors.New("notification service is not configured: OTP SMS not sent")
+	}
+	// Same path as login OTP: OTP_SMS template → Amana (when mapped) or Twilio; it writes its own redacted log row.
+	return s.notificationSvc.SendOTPSMS(ctx, phone, otp, nil)
 }
 
 // logOTPNotification persists an OTP send attempt (success or failure) to

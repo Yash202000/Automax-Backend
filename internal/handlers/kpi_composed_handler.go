@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"strings"
+
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/i18n"
@@ -40,11 +42,14 @@ type kpiCardBase struct {
 	CriterionLabel     string
 	ReportingFrequency string
 	DataSource         string
-	RelatedUnitsLabel  string
+	RelatedDepartmentsLabel string
 	Formula            string
-	Polarity           string
-	UnitOfMeasure      string
-	Baseline           float64
+	Polarity                string
+	UnitOfMeasure           string
+	Baseline                float64
+	CurveDescription        string
+	ShortcomingsDescription string
+	ProposedImprovement     string
 }
 
 func (h *KpiComposedHandler) loadCardBase(ctx *fiber.Ctx, kpiType string, id uuid.UUID) (*kpiCardBase, error) {
@@ -63,7 +68,7 @@ func (h *KpiComposedHandler) loadCardBase(ctx *fiber.Ctx, kpiType string, id uui
 	switch kpiType {
 	case models.KPITypeOperational:
 		var k models.OperationalKPI
-		if err := db.Preload("Goal").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+		if err := db.Preload("Goal").Preload("Domain").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments").
 			Preload("OperationalObjective.Pillar").Preload("OperationalObjective.Enabler").
 			First(&k, id).Error; err != nil {
 			return nil, err
@@ -100,13 +105,14 @@ func (h *KpiComposedHandler) loadCardBase(ctx *fiber.Ctx, kpiType string, id uui
 			ActivationStatus: k.ActivationStatus, Lifecycle: k.Lifecycle,
 			OwnerLabel: ownerLabel(k.OwnerType, deptName, orgName, agencyName), OwnerType: k.OwnerType,
 			PillarEnablerLabel: pillarEnabler, StrategicGoalLabel: goalTitle, CriterionLabel: criterion,
-			ReportingFrequency: k.ReportingFrequency, DataSource: k.DataSource,
+			ReportingFrequency: k.ReportingFrequency, DataSource: k.DataSource, RelatedDepartmentsLabel: relatedDeptLabel(k.RelatedDepartments),
 			Formula: k.Formula, Polarity: k.Polarity, UnitOfMeasure: k.UnitOfMeasure, Baseline: k.Baseline,
+			CurveDescription: k.CurveDescription, ShortcomingsDescription: k.ShortcomingsDescription, ProposedImprovement: k.ProposedImprovement,
 		}, nil
 	case models.KPITypeAward:
 		var k models.AwardKPI
 		if err := db.Preload("AwardSubCriterion.AwardCriterion").Preload("Domain").
-			Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+			Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments").
 			First(&k, id).Error; err != nil {
 			return nil, err
 		}
@@ -132,13 +138,14 @@ func (h *KpiComposedHandler) loadCardBase(ctx *fiber.Ctx, kpiType string, id uui
 			ActivationStatus: k.ActivationStatus, Lifecycle: k.Lifecycle,
 			OwnerLabel: ownerLabel(k.OwnerType, deptName, orgName, agencyName), OwnerType: k.OwnerType,
 			CriterionLabel:     criterion,
-			ReportingFrequency: k.ReportingFrequency, DataSource: k.DataSource,
+			ReportingFrequency: k.ReportingFrequency, DataSource: k.DataSource, RelatedDepartmentsLabel: relatedDeptLabel(k.RelatedDepartments),
 			Formula: k.Formula, Polarity: k.Polarity, UnitOfMeasure: k.UnitOfMeasure, Baseline: k.Baseline,
+			CurveDescription: k.CurveDescription, ShortcomingsDescription: k.ShortcomingsDescription, ProposedImprovement: k.ProposedImprovement,
 		}, nil
 	default:
 		var k models.StrategicKPI
 		if err := db.Preload("Goal").Preload("Pillar").Preload("Domain").
-			Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").
+			Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments").
 			First(&k, id).Error; err != nil {
 			return nil, err
 		}
@@ -170,10 +177,19 @@ func (h *KpiComposedHandler) loadCardBase(ctx *fiber.Ctx, kpiType string, id uui
 			ActivationStatus: k.ActivationStatus, Lifecycle: k.Lifecycle,
 			OwnerLabel: ownerLabel(k.OwnerType, deptName, orgName, agencyName), OwnerType: k.OwnerType,
 			PillarEnablerLabel: pillarEnabler, StrategicGoalLabel: goalTitle, CriterionLabel: criterion,
-			ReportingFrequency: k.ReportingFrequency, DataSource: k.DataSource, RelatedUnitsLabel: k.RelatedUnits,
+			ReportingFrequency: k.ReportingFrequency, DataSource: k.DataSource, RelatedDepartmentsLabel: relatedDeptLabel(k.RelatedDepartments),
 			Formula: k.Formula, Polarity: k.Polarity, UnitOfMeasure: k.UnitOfMeasure, Baseline: k.Baseline,
+			CurveDescription: k.CurveDescription, ShortcomingsDescription: k.ShortcomingsDescription, ProposedImprovement: k.ProposedImprovement,
 		}, nil
 	}
+}
+
+func relatedDeptLabel(depts []models.Department) string {
+	names := make([]string, 0, len(depts))
+	for _, d := range depts {
+		names = append(names, d.Name)
+	}
+	return strings.Join(names, ", ")
 }
 
 func (h *KpiComposedHandler) effectiveBand(ctx *fiber.Ctx, kpiCode string) models.KpiPerformanceBandResponse {
@@ -216,7 +232,7 @@ type KpiCardResponse struct {
 	CriterionLabel     string                       `json:"criterion_label"`
 	ReportingFrequency string                       `json:"reporting_frequency"`
 	DataSource         string                       `json:"data_source"`
-	RelatedUnitsLabel  string                       `json:"related_units_label"`
+	RelatedDepartmentsLabel string                       `json:"related_departments_label"`
 	Formula            string                       `json:"formula"`
 	Polarity           string                       `json:"polarity"`
 	UnitOfMeasure      string                       `json:"unit_of_measure"`
@@ -262,7 +278,7 @@ func (h *KpiComposedHandler) GetKpiCard(c *fiber.Ctx) error {
 		OwnerLabel: base.OwnerLabel, OwnerType: base.OwnerType,
 		PillarEnablerLabel: base.PillarEnablerLabel, StrategicGoalLabel: base.StrategicGoalLabel,
 		CriterionLabel: base.CriterionLabel, ReportingFrequency: base.ReportingFrequency,
-		DataSource: base.DataSource, RelatedUnitsLabel: base.RelatedUnitsLabel,
+		DataSource: base.DataSource, RelatedDepartmentsLabel: base.RelatedDepartmentsLabel,
 		Formula: base.Formula, Polarity: base.Polarity, UnitOfMeasure: base.UnitOfMeasure, Baseline: base.Baseline,
 		TargetPlan: targetPlan, Bands: h.effectiveBand(c, base.Code),
 	}
@@ -344,9 +360,9 @@ func (h *KpiComposedHandler) GetKpiAnnualRollup(c *fiber.Ctx) error {
 type KpiSingleDashboardResponse struct {
 	Card             KpiCardResponse      `json:"card"`
 	AnnualRollup     []KpiAnnualRollupRow `json:"annual_rollup"`
-	TrendDescription string               `json:"trend_description"`
-	Justification    string               `json:"justification"`
-	CorrectiveAction string               `json:"corrective_action"`
+	CurveDescription        string               `json:"curve_description"`
+	ShortcomingsDescription string               `json:"shortcomings_description"`
+	ProposedImprovement     string               `json:"proposed_improvement"`
 	Benchmarks       []models.KpiBenchmarkResponse `json:"benchmarks"`
 }
 
@@ -386,20 +402,12 @@ func (h *KpiComposedHandler) GetKpiDashboard(c *fiber.Ctx) error {
 		OwnerLabel: base.OwnerLabel, OwnerType: base.OwnerType,
 		PillarEnablerLabel: base.PillarEnablerLabel, StrategicGoalLabel: base.StrategicGoalLabel,
 		CriterionLabel: base.CriterionLabel, ReportingFrequency: base.ReportingFrequency,
-		DataSource: base.DataSource, RelatedUnitsLabel: base.RelatedUnitsLabel,
+		DataSource: base.DataSource, RelatedDepartmentsLabel: base.RelatedDepartmentsLabel,
 		Formula: base.Formula, Polarity: base.Polarity, UnitOfMeasure: base.UnitOfMeasure, Baseline: base.Baseline,
 		TargetPlan: targetPlan, Bands: h.effectiveBand(c, base.Code),
 	}
 
 	rollup := h.computeAnnualRollup(c, base.Code, kpiType, base.Polarity)
-
-	var latest models.KpiPerformance
-	trend, justification, corrective := "", "", ""
-	if err := h.db.WithContext(c.UserContext()).
-		Where("kpi_code = ? AND kpi_type = ?", base.Code, kpiType).
-		Order("year DESC, quarter DESC, created_at DESC").First(&latest).Error; err == nil {
-		trend, justification, corrective = latest.TrendDescription, latest.Justification, latest.CorrectiveAction
-	}
 
 	var benchmarks []models.KpiBenchmark
 	h.db.WithContext(c.UserContext()).
@@ -412,10 +420,60 @@ func (h *KpiComposedHandler) GetKpiDashboard(c *fiber.Ctx) error {
 
 	resp := KpiSingleDashboardResponse{
 		Card: card, AnnualRollup: rollup,
-		TrendDescription: trend, Justification: justification, CorrectiveAction: corrective,
+		CurveDescription: base.CurveDescription, ShortcomingsDescription: base.ShortcomingsDescription, ProposedImprovement: base.ProposedImprovement,
 		Benchmarks: benchmarkResp,
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
+}
+
+// KpiNarrativeUpdateRequest carries the three narrative comment fields.
+type KpiNarrativeUpdateRequest struct {
+	CurveDescription        string `json:"curve_description"`
+	ShortcomingsDescription string `json:"shortcomings_description"`
+	ProposedImprovement     string `json:"proposed_improvement"`
+}
+
+// UpdateNarrative saves the three narrative fields on the KPI dictionary model.
+// PUT /kpi/:type/:id/narrative
+func (h *KpiComposedHandler) UpdateNarrative(c *fiber.Ctx) error {
+	kpiType := c.Params("type")
+	if !isValidKpiType(kpiType) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	var req KpiNarrativeUpdateRequest
+	if err := c.BodyParser(&req); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
+	}
+
+	db := h.db.WithContext(c.UserContext())
+	updates := map[string]interface{}{
+		"curve_description":        req.CurveDescription,
+		"shortcomings_description": req.ShortcomingsDescription,
+		"proposed_improvement":     req.ProposedImprovement,
+	}
+
+	var res *gorm.DB
+	switch kpiType {
+	case models.KPITypeOperational:
+		res = db.Model(&models.OperationalKPI{}).Where("id = ?", id).Updates(updates)
+	case models.KPITypeAward:
+		res = db.Model(&models.AwardKPI{}).Where("id = ?", id).Updates(updates)
+	default:
+		res = db.Model(&models.StrategicKPI{}).Where("id = ?", id).Updates(updates)
+	}
+	if res.Error != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
+	}
+	if res.RowsAffected == 0 {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Narrative updated", nil)
 }
 
 // parseRollupQuery reads the year/period_code/organization_id query params

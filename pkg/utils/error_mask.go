@@ -41,3 +41,12 @@ func SanitizeErrorText(s string) string {
 	s = longNumberRe.ReplaceAllStringFunc(s, MaskPhone)
 	return s
 }
+
+// CSVSafe stops spreadsheet formula injection: cells starting with = + - @ (or tab/CR/LF)
+// get a leading single quote so they show as plain text.
+func CSVSafe(s string) string {
+	if t := strings.TrimLeft(s, " "); t != "" && strings.ContainsRune("=+-@\t\r\n", rune(t[0])) {
+		return "'" + s
+	}
+	return s
+}

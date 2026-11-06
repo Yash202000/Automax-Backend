@@ -38,11 +38,27 @@ func NewGoalHandler(service services.GoalService, actionLogService services.Acti
 // Export & Clone
 // ──────────────────────────────────────────────────
 
+// applyGoalUserScope sets filter.UserID so non-super-admins only see goals
+// they own, collaborate on, or that belong to their department.
+// scope=mine is a UX-level narrowing for the "My Goals" view; it must
+// apply to every caller including super admins, so set UserID unconditionally
+// when scope=mine is requested.
+func applyGoalUserScope(c *fiber.Ctx, filter *models.GoalFilter) {
+	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
+	if filter.Scope == "mine" || user == nil || !user.IsSuperAdmin {
+		userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+		filter.UserID = &userID
+	}
+}
+
 func (h *GoalHandler) ExportGoals(c *fiber.Ctx) error {
 	var filter models.GoalFilter
 	if err := c.QueryParser(&filter); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_query_parameters"))
 	}
+
+	// Export must return exactly what the list shows for the same filters.
+	applyGoalUserScope(c, &filter)
 
 	format := c.Query("format", "csv")
 
@@ -221,15 +237,7 @@ func (h *GoalHandler) ListGoals(c *fiber.Ctx) error {
 		filter.Limit = 20
 	}
 
-	// Apply user-scoped filtering (super admins see all by default).
-	// scope=mine is a UX-level narrowing for the "My Goals" view; it must
-	// apply to every caller including super admins, so set UserID unconditionally
-	// when scope=mine is requested.
-	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
-	if filter.Scope == "mine" || user == nil || !user.IsSuperAdmin {
-		userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-		filter.UserID = &userID
-	}
+	applyGoalUserScope(c, &filter)
 
 	goals, total, err := h.service.ListGoals(c.UserContext(), &filter)
 	if err != nil {

@@ -95,6 +95,7 @@ func main() {
 	lookupRepo := repository.NewLookupRepository(db)
 	callLogRepo := repository.NewCallLogRepository(db)
 	applicationLinkRepo := repository.NewApplicationLinkRepository(db)
+	configRepo := repository.NewConfigRepository(db)
 	settingsRepo := repository.NewSettingsRepository(db)
 	escalationRepo := repository.NewEscalationRepository(db)
 	escalationGroupRepo := repository.NewEscalationGroupRepository(db)
@@ -120,6 +121,7 @@ func main() {
 	actionLogService := services.NewActionLogService(actionLogRepo)
 	notificationService := services.NewNotificationService(notificationTemplateRepo, notificationLogRepo, userRepo, minioStorage, cfg)
 	userService := services.NewUserService(userRepo, departmentRepo, jwtManager, sessionStore, minioStorage, cfg, actionLogService, nil, redisClient, db)
+	userService.SetNotificationService(notificationService) // password-reset OTP SMS
 	extensionAssignmentRepo := repository.NewExtensionAssignmentRepository(db)
 	extensionService := services.NewExtensionService(db, extensionAssignmentRepo, userRepo, roleRepo, actionLogService, notificationService, wsHub, sessionStore, cfg)
 	otpService := services.NewOTPService(redisClient, notificationService, notificationLogRepo, userRepo, userService, sessionStore, jwtManager, roleRepo)
@@ -132,6 +134,16 @@ func main() {
 	}
 	defer ldapService.Close()
 
+	// AD-Baseer login (replaces the LDAP bind in /ldap/login when enabled)
+	var adBaseerClient services.ADBaseerClient
+	if cfg.ADBaseer.Enabled {
+		adBaseerClient, err = services.NewADBaseerClient(cfg.ADBaseer, cfg.Env)
+		if err != nil {
+			log.Fatalf("Failed to initialize AD-Baseer client: %v", err)
+		}
+		log.Printf("AD-Baseer login enabled (mode %s, %s)", cfg.ADBaseer.Mode, cfg.ADBaseer.BaseURL)
+	}
+
 	callLogService := services.NewCallLogService(callLogRepo, userRepo, minioStorage)
 	workflowService := services.NewWorkflowService(workflowRepo, roleRepo, departmentRepo, classificationRepo, userRepo, db, cfg)
 	incidentService := services.NewIncidentService(incidentRepo, incidentMergeRepo, workflowRepo, workflowService, userRepo, departmentRepo, classificationRepo, locationRepo, rejectionLogRepo, roleRepo, minioStorage, db, wsHub)
@@ -139,6 +151,14 @@ func main() {
 	reportService := services.NewReportService(reportRepo, rejectionLogRepo, locationRepo, classificationRepo, workflowRepo)
 	reportTemplateService := services.NewReportTemplateService(reportTemplateRepo, reportRepo)
 	applicationLinkService := services.NewApplicationLinkService(applicationLinkRepo)
+	configService := services.NewConfigService(configRepo, cfg)
+	if err := configService.SeedDefaults(context.Background()); err != nil {
+		log.Printf("Warning: Failed to seed default configs: %v", err)
+	}
+	if err := configService.LoadCache(context.Background()); err != nil {
+		log.Printf("Warning: Failed to load config cache: %v", err)
+	}
+	configService.StartCacheRefresh(context.Background(), time.Minute)
 	settingsService := services.NewSettingsService(settingsRepo)
 	presenceService := services.NewPresenceService(redisClient)
 	escalationPolicyService := services.NewEscalationPolicyService(escalationPolicyRepo, userRepo)
@@ -260,7 +280,7 @@ func main() {
 	healthHandler := handlers.NewHealthHandler()
 
 	// Initialize LDAP handler
-	ldapHandler := handlers.NewLDAPHandler(ldapService, userService, userRepo, jwtManager, sessionStore, cfg)
+	ldapHandler := handlers.NewLDAPHandler(ldapService, userService, userRepo, jwtManager, sessionStore, cfg, adBaseerClient, redisClient)
 
 	categoryService := services.NewCategoryService(categoryRepo)
 	categoryHandler := handlers.NewCategoryHandler(categoryService)
@@ -275,6 +295,7 @@ func main() {
 	incidentHandler := handlers.NewIncidentHandler(incidentService, userService, userRepo, incidentRepo, workflowRepo, locationRepo, classificationRepo, minioStorage, presenceService, cfg)
 	incidentHandler.SetReadyToCloseService(readyToCloseService)
 	incidentHandler.SetIvrSmsLinkRepo(ivrSmsLinkRepo)
+	incidentHandler.SetNotificationService(notificationService)
 	incidentHandler.SetPublicFeedbackRepo(publicFeedbackRepo)
 	incidentHandler.SetLookupRepo(lookupRepo)
 	incidentMergeHandler := handlers.NewIncidentMergeHandler(incidentMergeService, userRepo)
@@ -283,6 +304,7 @@ func main() {
 	reportTemplateHandler := handlers.NewReportTemplateHandler(reportTemplateService)
 	lookupHandler := handlers.NewLookupHandler(lookupRepo)
 	applicationLinkHandler := handlers.NewApplicationLinkHandler(applicationLinkService, minioStorage)
+	configHandler := handlers.NewConfigHandler(configService, actionLogService)
 	settingsHandler := handlers.NewSettingsHandler(settingsService)
 	jwksHandler := handlers.NewJWKSHandler(ssoJWTManager)
 	ssoHandler := handlers.NewSSOHandler(ssoJWTManager, jwtManager, sessionStore, userRepo, applicationLinkRepo, userService, otpService, cfg.SSOFrontendURL, cfg.NafathAPIBaseURL)
@@ -375,7 +397,7 @@ func main() {
 	// MOMRA status sync (Story A/B/C: WorkflowState -> CaseStatusID mapping, outbound
 	// call on status change reusing the integration execution-log infra, retry/backoff).
 	momraStatusMappingRepo := repository.NewMOMRAStatusMappingRepository(db)
-	momraStatusSyncService, err := services.NewMOMRAStatusSyncService(ctx, momraClient, momraStatusMappingRepo, integrationRepo)
+	momraStatusSyncService, err := services.NewMOMRAStatusSyncService(ctx, momraClient, momraStatusMappingRepo, integrationRepo, incidentRepo, cfg.MOMRA.AmanaID)
 	if err != nil {
 		log.Fatalf("failed to initialize MOMRA status sync service: %v", err)
 	}
@@ -458,6 +480,9 @@ func main() {
 	// not yet confirmed by MOMRA (OD-N2) — see AssignExternalEntity's doc comment. Kept
 	// alongside UpdateIncidentV2, which now also persists EE fields on every call.
 	app.Patch("/Momra/API/EPM/AssignExternalEntity", epmIncidentHandler.AssignExternalEntity)
+	// AttachmentURLs sent in outbound UpdateStatusV2 calls point here — MinIO isn't
+	// reachable from MOMRA, so the file is streamed through the backend.
+	app.Get("/Momra/API/EPM/Attachments/:attachment_id", epmIncidentHandler.DownloadAttachment)
 
 	api := app.Group("/api")
 	v1 := api.Group("/v1")
@@ -516,12 +541,14 @@ func main() {
 	// LDAP routes (public - for LDAP authentication)
 	ldap := v1.Group("/ldap")
 	ldap.Post("/login", ldapHandler.Login)
+	ldap.Post("/login/verify-otp", ldapHandler.VerifyADOTP)
 	ldap.Post("/test", authMiddleware.Authenticate(), authMiddleware.RequirePermission("admin:ldap"), ldapHandler.TestConnection)
 	ldap.Post("/search", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:view"), ldapHandler.SearchUser)
 	ldap.Post("/sync", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:update"), ldapHandler.SyncUser)
 	ldap.Post("/users", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:view"), ldapHandler.ListADUsers)
 	ldap.Post("/register", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:create"), ldapHandler.RegisterADUser)
 	ldap.Get("/status", authMiddleware.Authenticate(), authMiddleware.RequirePermission("admin:ldap"), ldapHandler.GetLDAPStatus)
+	ldap.Get("/directory-status", authMiddleware.Authenticate(), authMiddleware.RequirePermission("users:create", "users:update"), ldapHandler.GetDirectoryStatus)
 
 	// SSO routes
 	sso := v1.Group("/sso", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureSSO)))
@@ -997,6 +1024,19 @@ func main() {
 	appLinks.Post("/:id/upload-image", authMiddleware.RequirePermission("application-links:update"), applicationLinkHandler.UploadImage)
 	appLinks.Delete("/:id/image", authMiddleware.RequirePermission("application-links:update"), applicationLinkHandler.RemoveImage)
 
+	// Config routes (admin).
+	configs := admin.Group("/configs")
+	configs.Post("/", authMiddleware.RequirePermission("configs:create"), configHandler.Create)
+	configs.Get("/", authMiddleware.RequirePermission("configs:view"), configHandler.List)
+	configs.Get("/:module/:name", authMiddleware.RequirePermission("configs:view"), configHandler.GetByName)
+	configs.Get("/:id", authMiddleware.RequirePermission("configs:view"), configHandler.Get)
+	configs.Put("/:id", authMiddleware.RequirePermission("configs:update"), configHandler.Update)
+	configs.Delete("/:id", authMiddleware.RequirePermission("configs:delete"), configHandler.Delete)
+
+	// Cache-backed config reads for clients (current environment, non-secret values only)
+	v1.Get("/configs", authMiddleware.Authenticate(), configHandler.ListCurrent)
+	v1.Get("/configs/:module/:name", authMiddleware.Authenticate(), configHandler.GetCurrent)
+
 	// Dashboard application links - requires explicit permission
 	v1.Get("/application-links", authMiddleware.Authenticate(), authMiddleware.RequirePermission("application-links:dashboard"), applicationLinkHandler.ListActiveLinks)
 
@@ -1323,6 +1363,11 @@ func main() {
 	kpi.Post("/domains", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateDomain)
 	kpi.Put("/domains/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateDomain)
 	kpi.Delete("/domains/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteDomain)
+	kpi.Get("/award-kpi-measures", authMiddleware.RequirePermission("goals:manage", "kpi:view"), kpiMasterDataHandler.ListAwardKpiMeasures)
+	kpi.Get("/award-kpi-measures/:id", authMiddleware.RequirePermission("goals:manage", "kpi:view"), kpiMasterDataHandler.GetAwardKpiMeasure)
+	kpi.Post("/award-kpi-measures", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateAwardKpiMeasure)
+	kpi.Put("/award-kpi-measures/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.UpdateAwardKpiMeasure)
+	kpi.Delete("/award-kpi-measures/:id", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.DeleteAwardKpiMeasure)
 
 	kpi.Get("/award-criteria", authMiddleware.RequirePermission("goals:manage", "kpi:view"), kpiMasterDataHandler.ListAwardCriteria)
 	kpi.Post("/award-criteria", authMiddleware.RequirePermission("goals:manage"), kpiMasterDataHandler.CreateAwardCriterion)
@@ -1375,6 +1420,7 @@ func main() {
 	// ---- KPI DICTIONARY ROUTES ----
 	// Bulk import from the KPI Dictionary workbook: validate = dry run
 	// (validation report + preview), commit = re-validate and apply.
+	kpi.Get("/dictionary-import/template", authMiddleware.RequirePermission("kpi:create"), kpiImportHandler.Template)
 	kpi.Post("/dictionary-import/validate", authMiddleware.RequirePermission("kpi:create"), kpiImportHandler.Validate)
 	kpi.Post("/dictionary-import/commit", authMiddleware.RequirePermission("kpi:create"), kpiImportHandler.Commit)
 	kpi.Get("/strategic", authMiddleware.RequirePermission("kpi:view"), kpiDictionaryHandler.ListStrategic)
@@ -1424,12 +1470,14 @@ func main() {
 	kpi.Post("/entries/:entryId/transition", authMiddleware.RequirePermission("perf:review"), kpiEntryHandler.TransitionEntry)
 	kpi.Get("/entries/:entryId/transitions", authMiddleware.RequirePermission("kpi:view"), kpiEntryHandler.GetAvailableEntryTransitions)
 	kpi.Get("/entries/:entryId/history", authMiddleware.RequirePermission("kpi:view"), kpiEntryHandler.GetEntryHistory)
+	kpi.Post("/entries/:entryId/corrections", authMiddleware.RequirePermission("kpi:update"), kpiEntryHandler.CreateCorrection)
 
 	kpi.Get("/:type/:id/transitions", authMiddleware.RequirePermission("kpi:view"), kpiDictionaryHandler.GetAvailableTransitions)
 	kpi.Post("/:type/:id/transition", authMiddleware.RequirePermission("kpi:update"), kpiDictionaryHandler.TransitionKpi)
 
 	kpi.Get("/:type/:id/card", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetKpiCard)
 	kpi.Get("/:type/:id/dashboard", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetKpiDashboard)
+	kpi.Put("/:type/:id/narrative", authMiddleware.RequirePermission("perf:submit"), kpiComposedHandler.UpdateNarrative)
 	kpi.Get("/:type/:id/annual-rollup", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetKpiAnnualRollup)
 	kpi.Get("/:type/:id/metrics/:metricId/period-rollup", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetMetricPeriodRollup)
 	kpi.Get("/:type/:id/metrics/:metricId/display-rollup", authMiddleware.RequirePermission("kpi:view"), kpiComposedHandler.GetMetricDisplayRollup)
@@ -1453,6 +1501,9 @@ func main() {
 	kpi.Post("/:type/:id/attachment", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.UploadAttachment)
 	kpi.Put("/metrics/:id", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.UpdateMetric)
 	kpi.Put("/metrics/:id/value", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.UpdateMetricValue)
+	kpi.Get("/metrics/:id/baseline-revisions", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListBaselineRevisions)
+	kpi.Post("/metrics/:id/baseline-revisions", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.RequestBaselineRevision)
+	kpi.Post("/baseline-revisions/:revisionId/review", authMiddleware.RequirePermission("kpi:approve"), kpiEngagementHandler.ReviewBaselineRevision)
 	kpi.Delete("/metrics/:id", authMiddleware.RequirePermission("kpi:update"), kpiEngagementHandler.DeleteMetric)
 
 	kpi.Get("/:type/:id/evidence", authMiddleware.RequirePermission("kpi:view"), kpiEngagementHandler.ListEvidence)
@@ -1483,6 +1534,7 @@ func main() {
 
 	kpi.Get("/benchmarks", authMiddleware.RequirePermission("benchmark:manage"), kpiPerformanceHandler.ListBenchmarks)
 	kpi.Post("/benchmarks", authMiddleware.RequirePermission("benchmark:manage"), kpiPerformanceHandler.CreateBenchmark)
+	kpi.Put("/benchmarks/:id", authMiddleware.RequirePermission("benchmark:manage"), kpiPerformanceHandler.UpdateBenchmark)
 	kpi.Delete("/benchmarks/:id", authMiddleware.RequirePermission("benchmark:manage"), kpiPerformanceHandler.DeleteBenchmark)
 	kpi.Get("/benchmarks/summary", authMiddleware.RequirePermission("benchmark:manage"), kpiPerformanceHandler.ListBenchmarkSummary)
 

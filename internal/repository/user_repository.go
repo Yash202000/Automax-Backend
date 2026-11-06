@@ -249,6 +249,7 @@ func (r *userRepository) Update(ctx context.Context, user *models.User) error {
 		"dept_manager_location_id":       user.DeptManagerLocationID,
 		"bypass_login_totp":              user.BypassLoginTotp,
 		"enable_login_totp":              user.EnableLoginTotp,
+		"is_ad_user":                     user.IsADUser,
 	}).Error
 }
 

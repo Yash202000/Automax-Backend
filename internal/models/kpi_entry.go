@@ -19,6 +19,20 @@ const (
 	KpiEntryStatusSubmitted = "submitted"
 	KpiEntryStatusApproved  = "approved"
 	KpiEntryStatusRejected  = "rejected"
+	// An approved Entry is never edited. It is corrected by a new Entry
+	// (SupersedesEntryID -> original, EntryVersion+1) that goes through the
+	// normal approval workflow; when that correction is approved the
+	// original moves to Superseded (adjustment) or Reversed (reversal), and
+	// an approved reversal record itself ends as Reversal. Only "approved"
+	// entries count toward a period's Actual, so none of these do.
+	KpiEntryStatusSuperseded = "superseded"
+	KpiEntryStatusReversed   = "reversed"
+	KpiEntryStatusReversal   = "reversal"
+)
+
+const (
+	KpiEntryCorrectionAdjustment = "adjustment"
+	KpiEntryCorrectionReversal   = "reversal"
 )
 
 type KpiEntry struct {
@@ -36,6 +50,10 @@ type KpiEntry struct {
 	PeriodCode                string                 `gorm:"size:50;not null;index" json:"period_code"`
 	PeriodStart               *time.Time             `json:"period_start"`
 	PeriodEnd                 *time.Time             `json:"period_end"`
+	// EntryDate is the date the value was actually recorded, chosen by the
+	// user and within the period. Separate from CreatedAt (the audit
+	// timestamp). Nil only on entries created before the field existed.
+	EntryDate                 *time.Time             `gorm:"type:date;index" json:"entry_date"`
 	// OrganizationID/SegmentationValues scope this Entry the same way a
 	// Target can be scoped (BR-12 "scope consistency") — nil means
 	// unscoped/global, matching the vast majority of KPIs that don't use
@@ -77,7 +95,11 @@ type KpiEntry struct {
 	ApprovedBy                *User                  `gorm:"foreignKey:ApprovedByID" json:"approved_by,omitempty"`
 	WorkflowInstanceID        *uuid.UUID             `gorm:"type:uuid;index" json:"workflow_instance_id"`
 	EntryVersion              int                    `gorm:"default:1" json:"entry_version"`
-	SupersedesEntryID         *uuid.UUID             `gorm:"type:uuid" json:"supersedes_entry_id"`
+	SupersedesEntryID         *uuid.UUID             `gorm:"type:uuid;index" json:"supersedes_entry_id"`
+	// CorrectionType/CorrectionReason are set only on correction entries
+	// ("adjustment" or "reversal"); empty on an original entry.
+	CorrectionType            string                 `gorm:"size:20" json:"correction_type,omitempty"`
+	CorrectionReason          string                 `gorm:"type:text" json:"correction_reason,omitempty"`
 	CreatedAt                 time.Time              `json:"created_at"`
 	UpdatedAt                 time.Time              `json:"updated_at"`
 	DeletedAt                 gorm.DeletedAt         `gorm:"index" json:"-"`
@@ -103,6 +125,7 @@ type KpiEntryRequest struct {
 	PeriodCode          string                  `json:"period_code" validate:"required,max=50"`
 	PeriodStartDate     string                  `json:"period_start_date"`
 	PeriodEndDate       string                  `json:"period_end_date"`
+	EntryDate           string                  `json:"entry_date"`
 	OrganizationID      *string                 `json:"organization_id"`
 	SegmentationValues  []KpiTargetSegmentationValue `json:"segmentation_values"`
 	DirectActualValue   *float64                `json:"direct_actual_value"`
@@ -154,6 +177,7 @@ func (r *KpiEntryRequest) ToModel(db *gorm.DB, kpiID uuid.UUID, kpiType string, 
 			entry.PeriodStart = &t
 		}
 	}
+	entry.EntryDate = parseEntryDate(r.EntryDate)
 	if r.PeriodEndDate != "" {
 		if t, err := time.Parse("2006-01-02", r.PeriodEndDate); err == nil {
 			entry.PeriodEnd = &t
@@ -308,10 +332,24 @@ func (e *KpiEntry) computeActualValue() {
 	}
 }
 
+// parseEntryDate parses a "YYYY-MM-DD" Entry Date; nil when empty or invalid
+// (the handler then rejects the entry as missing its date).
+func parseEntryDate(s string) *time.Time {
+	if len(s) > 10 {
+		s = s[:10]
+	}
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		return nil
+	}
+	return &t
+}
+
 // KpiEntryUpdateRequest carries the editable fields of an existing draft
 // entry. MetricID/period cannot be changed after creation (that would change
 // the entry's identity) — to correct those, delete and re-create instead.
 type KpiEntryUpdateRequest struct {
+	EntryDate             string                   `json:"entry_date"`
 	DirectActualValue     *float64                 `json:"direct_actual_value"`
 	NumeratorValue        *float64                 `json:"numerator_value"`
 	DenominatorValue      *float64                 `json:"denominator_value"`
@@ -329,6 +367,9 @@ type KpiEntryUpdateRequest struct {
 // recomputes ActualValue from the (possibly changed) input values, using the
 // entry's already-snapshotted CalculationTypeSnapshot.
 func (r *KpiEntryUpdateRequest) ApplyTo(e *KpiEntry) {
+	if d := parseEntryDate(r.EntryDate); d != nil {
+		e.EntryDate = d
+	}
 	e.DirectActualValue = r.DirectActualValue
 	e.NumeratorValue = r.NumeratorValue
 	e.DenominatorValue = r.DenominatorValue
@@ -353,6 +394,38 @@ func (r *KpiEntryUpdateRequest) ApplyTo(e *KpiEntry) {
 	e.ImprovementAction = r.ImprovementAction
 	e.computeActualValue()
 	e.ComputeAchievement()
+}
+
+// KpiEntryCorrectionRequest creates a correction of an approved entry. An
+// adjustment carries the corrected values (same fields as a draft edit); a
+// reversal cancels the original and ignores them.
+type KpiEntryCorrectionRequest struct {
+	KpiEntryUpdateRequest
+	CorrectionType string `json:"correction_type" validate:"required,oneof=adjustment reversal"`
+	Reason         string `json:"reason" validate:"required,max=2000"`
+}
+
+// NewCorrection builds the draft correction entry for an approved original:
+// same metric, period, scope, configuration and target snapshots, next
+// version, linked back via SupersedesEntryID. The original is not modified.
+func (e *KpiEntry) NewCorrection(req *KpiEntryCorrectionRequest, userID uuid.UUID) *KpiEntry {
+	c := *e
+	c.ID = uuid.Nil
+	c.Metric, c.Organization, c.SubmittedBy, c.ApprovedBy = nil, nil, nil, nil
+	c.Status = KpiEntryStatusDraft
+	c.SubmittedByID = &userID
+	c.ApprovedByID = nil
+	c.WorkflowInstanceID = nil
+	c.EntryVersion = e.EntryVersion + 1
+	c.SupersedesEntryID = &e.ID
+	c.CorrectionType = req.CorrectionType
+	c.CorrectionReason = req.Reason
+	c.CreatedAt, c.UpdatedAt = time.Time{}, time.Time{}
+	c.DeletedAt = gorm.DeletedAt{}
+	if req.CorrectionType == KpiEntryCorrectionAdjustment {
+		req.KpiEntryUpdateRequest.ApplyTo(&c)
+	}
+	return &c
 }
 
 // ─── KPI Entry Evidence ──────────────────────────────────────────────────

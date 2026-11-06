@@ -330,6 +330,36 @@ func epmInsertSuccessResponse(c *fiber.Ctx, description, ticketNumber string) er
 	})
 }
 
+// epmInsertDuplicateResponse sends the 409 for an incidentNo MOMRA has already
+// submitted. TicketNumber is the existing incident's AutoMax ticket number (not
+// MOMRA's incidentNo), or empty when it couldn't be determined.
+func epmInsertDuplicateResponse(c *fiber.Ctx, momraIncidentNo, existingTicketNumber string) error {
+	return c.Status(fiber.StatusConflict).JSON(EPMInsertIncidentResponse{
+		HTTPStatusCode: fiber.StatusConflict,
+		Message:        "Duplicate incident number: " + momraIncidentNo,
+		Result:         false,
+		TicketNumber:   existingTicketNumber,
+	})
+}
+
+// existingMomraTicketNumber returns the AutoMax incident number of the first
+// candidate whose custom_fields.momra_incident_no exactly equals
+// momraIncidentNo. Candidates come from a LIKE match (where "_" and "%" in the
+// MOMRA number act as wildcards), so each is re-checked exactly; "" when none
+// matches or the match has no incident number, rather than a wrong identifier.
+func existingMomraTicketNumber(candidates []models.Incident, momraIncidentNo string) string {
+	for _, incident := range candidates {
+		var custFields map[string]interface{}
+		if err := json.Unmarshal([]byte(incident.CustomFields), &custFields); err != nil {
+			continue
+		}
+		if momraNo, _ := custFields["momra_incident_no"].(string); momraNo == momraIncidentNo && incident.IncidentNumber != "" {
+			return incident.IncidentNumber
+		}
+	}
+	return ""
+}
+
 type EPMIncidentStatusItems struct {
 	RequestID          string      `json:"requestID"`
 	Status             interface{} `json:"status"`
@@ -342,11 +372,15 @@ type EPMIncidentStatusItems struct {
 	IncidentImageAlert interface{} `json:"incidentImageAlert"`
 }
 
+// EPMIncidentAttachmentItem is one GetMomraIncidentStatusDetails attachment. The file
+// is not embedded (MOMRA doesn't accept base64 content): AttachmentURL is the
+// backend-relative /Momra/API/EPM/Attachments/{id} path, the same form sent in
+// outbound UpdateStatusV2 calls, downloaded with MOMRA's EPM Bearer token.
 type EPMIncidentAttachmentItem struct {
 	AttachmentID    int    `json:"attachmentID"`
 	TicketNumber    string `json:"ticketNumber"`
 	AttachmentsName string `json:"attachmentsName"`
-	Attachments     string `json:"attachments"`
+	AttachmentURL   string `json:"attachmentURL"`
 }
 
 type EPMGetMomraIncidentStatusDetailsResponse struct {
@@ -461,12 +495,16 @@ func (h *EPMIncidentHandler) InsertIncidents(c *fiber.Ctx) error {
 	}
 
 	// check for duplicate momra incident number
-	var duplicateCount int64
-	h.db.WithContext(c.UserContext()).Model(&models.Incident{}).
+	var duplicates []models.Incident
+	if err := h.db.WithContext(c.UserContext()).Model(&models.Incident{}).
+		Select("incident_number", "custom_fields", "created_at").
 		Where("source = ? AND custom_fields LIKE ?", "MOMRA", "%\"momra_incident_no\":\""+req.IncidentNo+"\"%").
-		Count(&duplicateCount)
-	if duplicateCount > 0 {
-		return epmInsertErrorResponse(c, fiber.StatusConflict, "Duplicate incident number: "+req.IncidentNo)
+		Order("created_at ASC").
+		Find(&duplicates).Error; err != nil {
+		return epmInsertErrorResponse(c, fiber.StatusInternalServerError, "Failed to check for duplicate incident number")
+	}
+	if len(duplicates) > 0 {
+		return epmInsertDuplicateResponse(c, req.IncidentNo, existingMomraTicketNumber(duplicates, req.IncidentNo))
 	}
 
 	custFields := map[string]interface{}{
@@ -869,20 +907,11 @@ func (h *EPMIncidentHandler) GetMomraIncidentStatusDetails(c *fiber.Ctx) error {
 	var attachmentItems []EPMIncidentAttachmentItem
 	if err == nil {
 		for i, att := range attachments {
-			content, readErr := h.storage.GetFile(c.UserContext(), att.FilePath)
-			encoded := ""
-			if readErr == nil {
-				data, readErr := io.ReadAll(content)
-				content.Close()
-				if readErr == nil {
-					encoded = base64.StdEncoding.EncodeToString(data)
-				}
-			}
 			attachmentItems = append(attachmentItems, EPMIncidentAttachmentItem{
 				AttachmentID:    i + 1,
 				TicketNumber:    incident.IncidentNumber,
 				AttachmentsName: att.FileName,
-				Attachments:     encoded,
+				AttachmentURL:   momraAttachmentPath(att.ID),
 			})
 		}
 	}
@@ -901,7 +930,11 @@ func (h *EPMIncidentHandler) GetMomraIncidentStatusDetails(c *fiber.Ctx) error {
 // EPMPushOutcomeRequest is the shared payload for UpdateIncident (TFIS IF-03 status 002 -
 // Resolved) and ReopenIncident (TFIS IF-03 status 003 - Rejected/Returned by EE).
 type EPMPushOutcomeRequest struct {
-	IncidentNo        string `json:"incidentNo"`
+	IncidentNo string `json:"incidentNo"`
+	// TicketNumber is the AutoMax incident number returned as ticketNumber by
+	// InsertIncidents. AmanaIncidentNo is the deprecated key for the same value,
+	// still accepted when ticketNumber is absent.
+	TicketNumber      string `json:"ticketNumber"`
 	AmanaIncidentNo   string `json:"amanaIncidentNo"`
 	ActionDate        string `json:"actionDate"`
 	ActionDescription string `json:"actionDescription"`
@@ -976,6 +1009,9 @@ func (h *EPMIncidentHandler) handleEEOutcome(c *fiber.Ctx, resolve bool) error {
 			Result:         false,
 		})
 	}
+	if req.TicketNumber == "" {
+		req.TicketNumber = req.AmanaIncidentNo // legacy key fallback
+	}
 
 	if req.IncidentNo == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
@@ -984,10 +1020,10 @@ func (h *EPMIncidentHandler) handleEEOutcome(c *fiber.Ctx, resolve bool) error {
 			Result:         false,
 		})
 	}
-	if req.AmanaIncidentNo == "" {
+	if req.TicketNumber == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
 			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "amanaIncidentNo is required",
+			Message:        "ticketNumber is required",
 			Result:         false,
 		})
 	}
@@ -1022,11 +1058,11 @@ func (h *EPMIncidentHandler) handleEEOutcome(c *fiber.Ctx, resolve bool) error {
 		})
 	}
 
-	incident, err := h.incidentRepo.FindByIncidentNumber(c.UserContext(), req.AmanaIncidentNo)
+	incident, err := h.incidentRepo.FindByIncidentNumber(c.UserContext(), req.TicketNumber)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(EPMInsertIncidentResponse{
 			HTTPStatusCode: fiber.StatusNotFound,
-			Message:        "Incident not found: " + req.AmanaIncidentNo,
+			Message:        "Incident not found: " + req.TicketNumber,
 			Result:         false,
 		})
 	}
@@ -1037,7 +1073,7 @@ func (h *EPMIncidentHandler) handleEEOutcome(c *fiber.Ctx, resolve bool) error {
 	if momraNo, _ := custFields["momra_incident_no"].(string); momraNo != req.IncidentNo {
 		return c.Status(fiber.StatusBadRequest).JSON(EPMInsertIncidentResponse{
 			HTTPStatusCode: fiber.StatusBadRequest,
-			Message:        "incidentNo does not correlate with amanaIncidentNo: " + req.AmanaIncidentNo,
+			Message:        "incidentNo does not correlate with ticketNumber: " + req.TicketNumber,
 			Result:         false,
 		})
 	}
@@ -1151,7 +1187,11 @@ func momraV2Response(c *fiber.Ctx, status int, message string, result bool) erro
 }
 
 type EPMUpdateIncidentV2Request struct {
-	EENotes           string `json:"EENotes"`
+	EENotes string `json:"EENotes"`
+	// TicketNumber is the AutoMax incident number returned as ticketNumber by
+	// InsertIncidents. AmanaIncidentNo is the deprecated key for the same value,
+	// still accepted when ticketNumber is absent.
+	TicketNumber      string `json:"ticketNumber"`
 	AmanaIncidentNo   string `json:"AmanaIncidentNo"`
 	IncidentNo        string `json:"IncidentNO"`
 	ActionDate        string `json:"ActionDate"`
@@ -1190,11 +1230,14 @@ func (h *EPMIncidentHandler) UpdateIncidentV2(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return momraV2Response(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"), false)
 	}
+	if req.TicketNumber == "" {
+		req.TicketNumber = req.AmanaIncidentNo // legacy key fallback
+	}
 
 	if req.IncidentNo == "" {
 		return momraV2Response(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "incident_no_required"), false)
 	}
-	if req.AmanaIncidentNo == "" {
+	if req.TicketNumber == "" {
 		return momraV2Response(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "amana_incident_no_required"), false)
 	}
 	if req.ActionDate == "" {
@@ -1210,9 +1253,9 @@ func (h *EPMIncidentHandler) UpdateIncidentV2(c *fiber.Ctx) error {
 		return momraV2Response(c, fiber.StatusBadRequest, "IncidentStatusID is required", false)
 	}
 
-	incident, err := h.incidentRepo.FindByIncidentNumber(c.UserContext(), req.AmanaIncidentNo)
+	incident, err := h.incidentRepo.FindByIncidentNumber(c.UserContext(), req.TicketNumber)
 	if err != nil {
-		return momraV2Response(c, fiber.StatusNotFound, "Incident not found: "+req.AmanaIncidentNo, false)
+		return momraV2Response(c, fiber.StatusNotFound, "Incident not found: "+req.TicketNumber, false)
 	}
 
 	var custFields map[string]interface{}
@@ -1221,7 +1264,7 @@ func (h *EPMIncidentHandler) UpdateIncidentV2(c *fiber.Ctx) error {
 		custFields = map[string]interface{}{}
 	}
 	if momraNo, _ := custFields["momra_incident_no"].(string); momraNo != req.IncidentNo {
-		return momraV2Response(c, fiber.StatusBadRequest, "IncidentNO does not correlate with AmanaIncidentNo: "+req.AmanaIncidentNo, false)
+		return momraV2Response(c, fiber.StatusBadRequest, "IncidentNO does not correlate with ticketNumber: "+req.TicketNumber, false)
 	}
 
 	// Resolve the target state from the admin-configured WorkflowState -> CaseStatusID
@@ -1320,6 +1363,10 @@ func (h *EPMIncidentHandler) UpdateIncidentV2(c *fiber.Ctx) error {
 }
 
 type EPMReopenIncidentV2Request struct {
+	// TicketNumber is the AutoMax incident number returned as ticketNumber by
+	// InsertIncidents. AmanaIncidentNo is the deprecated key for the same value,
+	// still accepted when ticketNumber is absent.
+	TicketNumber     string `json:"ticketNumber"`
 	AmanaIncidentNo  string `json:"amanaincidentno"`
 	IncidentNo       string `json:"incident_no"`
 	EvaluationStatus string `json:"evaluation_status"`
@@ -1368,8 +1415,11 @@ func (h *EPMIncidentHandler) ReopenIncidentV2(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return momraV2Response(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"), false)
 	}
+	if req.TicketNumber == "" {
+		req.TicketNumber = req.AmanaIncidentNo // legacy key fallback
+	}
 
-	if req.AmanaIncidentNo == "" {
+	if req.TicketNumber == "" {
 		return momraV2Response(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "amana_incident_no_required"), false)
 	}
 	if req.IncidentNo == "" {
@@ -1379,9 +1429,9 @@ func (h *EPMIncidentHandler) ReopenIncidentV2(c *fiber.Ctx) error {
 		return momraV2Response(c, fiber.StatusBadRequest, "evaluation_status is required", false)
 	}
 
-	incident, err := h.incidentRepo.FindByIncidentNumber(c.UserContext(), req.AmanaIncidentNo)
+	incident, err := h.incidentRepo.FindByIncidentNumber(c.UserContext(), req.TicketNumber)
 	if err != nil {
-		return momraV2Response(c, fiber.StatusNotFound, "Incident not found: "+req.AmanaIncidentNo, false)
+		return momraV2Response(c, fiber.StatusNotFound, "Incident not found: "+req.TicketNumber, false)
 	}
 
 	var custFields map[string]interface{}
@@ -1390,7 +1440,7 @@ func (h *EPMIncidentHandler) ReopenIncidentV2(c *fiber.Ctx) error {
 		custFields = map[string]interface{}{}
 	}
 	if momraNo, _ := custFields["momra_incident_no"].(string); momraNo != req.IncidentNo {
-		return momraV2Response(c, fiber.StatusBadRequest, "incident_no does not correlate with amanaincidentno: "+req.AmanaIncidentNo, false)
+		return momraV2Response(c, fiber.StatusBadRequest, "incident_no does not correlate with ticketNumber: "+req.TicketNumber, false)
 	}
 
 	custFields["evaluation_status"] = req.EvaluationStatus
@@ -1559,6 +1609,76 @@ func (h *EPMIncidentHandler) AssignExternalEntity(c *fiber.Ctx) error {
 	h.broadcastIncidentUpdated(incident.ID, claims.UserID)
 
 	return momraV2Response(c, fiber.StatusOK, "External entity assignment recorded successfully", true)
+}
+
+// momraAttachmentPath is the backend-relative download path for an attachment, served
+// by DownloadAttachment. MOMRA prefixes Automax's backend host itself.
+func momraAttachmentPath(attachmentID uuid.UUID) string {
+	return "/Momra/API/EPM/Attachments/" + attachmentID.String()
+}
+
+// DownloadAttachment implements GET /Momra/API/EPM/Attachments/:attachment_id — the
+// target of the AttachmentURLs Automax sends in outbound UpdateStatusV2 calls. MinIO
+// isn't reachable from MOMRA, so the file is streamed through the backend instead,
+// behind the same EPM Bearer token + session check as the other /Momra/API/EPM routes.
+// Only attachments on MOMRA-sourced incidents (custom_fields.momra_incident_no set)
+// are served, so the MOMRA account can't read arbitrary Automax attachments by ID.
+// The URL is keyed on the permanent attachment ID, so it never expires.
+func (h *EPMIncidentHandler) DownloadAttachment(c *fiber.Ctx) error {
+	authHeader := c.Get("Authorization")
+	if authHeader == "" {
+		return momraV2Response(c, fiber.StatusUnauthorized, "Missing Authorization header", false)
+	}
+	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+	if tokenString == authHeader {
+		return momraV2Response(c, fiber.StatusUnauthorized, "Invalid Authorization header format, use Bearer token", false)
+	}
+	claims, err := h.jwtManager.ValidateToken(tokenString)
+	if err != nil {
+		return momraV2Response(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "invalid_or_expired_token"), false)
+	}
+	var sessionData map[string]interface{}
+	if err := h.sessionStore.GetUserSession(c.UserContext(), claims.SessionID, &sessionData); err != nil {
+		return momraV2Response(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "session_expired_or_invalid"), false)
+	}
+
+	attachmentID, err := uuid.Parse(c.Params("attachment_id"))
+	if err != nil {
+		return momraV2Response(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "attachment_not_found"), false)
+	}
+	attachment, err := h.incidentRepo.FindAttachmentByID(c.UserContext(), attachmentID)
+	if err != nil {
+		return momraV2Response(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "attachment_not_found"), false)
+	}
+
+	// Same 404 as a missing attachment, so the response doesn't reveal that a
+	// non-MOMRA attachment with this ID exists.
+	var incident models.Incident
+	if err := h.db.WithContext(c.UserContext()).Select("id", "custom_fields").
+		First(&incident, "id = ?", attachment.IncidentID).Error; err != nil {
+		return momraV2Response(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "attachment_not_found"), false)
+	}
+	var custFields map[string]interface{}
+	_ = json.Unmarshal([]byte(incident.CustomFields), &custFields)
+	if momraNo, _ := custFields["momra_incident_no"].(string); momraNo == "" {
+		return momraV2Response(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "attachment_not_found"), false)
+	}
+
+	file, err := h.storage.GetFile(c.UserContext(), attachment.FilePath)
+	if err != nil {
+		return momraV2Response(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_retrieve_file"), false)
+	}
+	defer file.Close()
+
+	fileData, err := io.ReadAll(file)
+	if err != nil {
+		return momraV2Response(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_read_file"), false)
+	}
+
+	c.Set("Content-Type", attachment.MimeType)
+	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", attachment.FileName))
+	c.Set("Content-Length", fmt.Sprintf("%d", len(fileData)))
+	return c.Send(fileData)
 }
 
 func (h *EPMIncidentHandler) validateAndResolveLocation(ctx context.Context, externalID string) (*uuid.UUID, error) {

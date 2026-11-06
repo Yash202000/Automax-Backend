@@ -536,6 +536,8 @@ var performanceFilterFields = map[string]string{
 	"sla_breached":        "incidents.sla_breached",
 	"current_state_id":    "incidents.current_state_id",
 	"state_name":          "ws.name",
+	"state_id":            "ws.id",
+	"state_code":          "ws.code",
 	"created_at":          "incidents.created_at",
 	"incident_created_at": "incidents.created_at",
 }
@@ -4202,6 +4204,17 @@ func performanceOrder(sorting *models.ReportSortConfig, sortable map[string]bool
 	return fallback
 }
 
+// scopePerformanceRecords restricts a performance report to actual incidents, using the same
+// condition as POST /incidents/search with record_type=incident (record_type plus the workflow's
+// record_type), so report totals reconcile with the incident list. An explicit record_type
+// filter from the caller takes over.
+func scopePerformanceRecords(q *gorm.DB, filters []models.ReportFilterConfig) *gorm.DB {
+	if hasFilter(filters, "record_type") {
+		return q
+	}
+	return q.Where("incidents.record_type = ? AND incidents.workflow_id IN (SELECT id FROM workflows WHERE record_type = ? AND deleted_at IS NULL)", "incident", "incident")
+}
+
 // ── Department performance ───────────────────────────────────────────────────
 // Output col.Field names: department_name | total | closed | under_resolution | closed_pct |
 // satisfaction_pct | sla_breach_count | sla_breach_pct | speed_pct
@@ -4215,7 +4228,7 @@ func (r *reportRepository) ExecuteDepartmentPerformanceQuery(ctx context.Context
 			// One row per rated incident, so the satisfaction columns don't need per-row subqueries.
 			Joins("LEFT JOIN (SELECT incident_id, MAX(rating) AS max_rating FROM incident_feedbacks GROUP BY incident_id) fb ON fb.incident_id = incidents.id").
 			Where("incidents.deleted_at IS NULL")
-		return r.applyFilters(ctx, q, filters)
+		return r.applyFilters(ctx, scopePerformanceRecords(q, filters), filters)
 	}
 	var total int64
 	if err := buildBase().Select("COUNT(DISTINCT COALESCE(incidents.department_id::text, ''))").Scan(&total).Error; err != nil {
@@ -4232,9 +4245,9 @@ func (r *reportRepository) ExecuteDepartmentPerformanceQuery(ctx context.Context
 			COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed') / NULLIF(COUNT(*), 0), 1), 0)::float8 AS closed_pct,
 			COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE fb.max_rating >= 4)
 				/ NULLIF(COUNT(*) FILTER (WHERE fb.max_rating > 0), 0), 1), 0)::float8 AS satisfaction_pct,
-			COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed' AND incidents.sla_breached) AS sla_breach_count,
-			COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed' AND incidents.sla_breached)
-				/ NULLIF(COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed'), 0), 1), 0)::float8 AS sla_breach_pct,
+			COUNT(*) FILTER (WHERE incidents.sla_breached) AS sla_breach_count,
+			COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE incidents.sla_breached)
+				/ NULLIF(COUNT(*), 0), 1), 0)::float8 AS sla_breach_pct,
 			COALESCE(ROUND(100.0 * COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed' AND NOT incidents.sla_breached)
 				/ NULLIF(COUNT(*) FILTER (WHERE LOWER(ws.code) = 'closed'), 0), 1), 0)::float8 AS speed_pct`).
 		Group("incidents.department_id, departments.name").
@@ -4267,16 +4280,16 @@ func (r *reportRepository) ExecuteClosurePerformanceQuery(ctx context.Context, f
 			// One row per incident that has a flagged transition (scans the history once).
 			Joins(`LEFT JOIN (
 				SELECT h.incident_id,
-					BOOL_OR(t.is_reopen) AS reopened,
-					BOOL_OR(t.is_not_belong) AS not_belong,
-					BOOL_OR(t.is_missing_info) AS missing_info
+					BOOL_OR(LOWER(t.code) IN ('reopen', 'reopen1')) AS reopened,
+    				BOOL_OR(LOWER(t.code) IN ('not_belong', 'not_belong_1')) AS not_belong,
+    				BOOL_OR(LOWER(t.code) = 'missing_incident_info') AS missing_info
 				FROM incident_transition_histories h
 				JOIN workflow_transitions t ON t.id = h.transition_id
-				WHERE t.is_reopen OR t.is_not_belong OR t.is_missing_info
+				WHERE LOWER(t.code) IN ('reopen', 'reopen1','not_belong', 'not_belong_1','missing_incident_info')
 				GROUP BY h.incident_id
 			) flags ON flags.incident_id = incidents.id`).
 			Where("incidents.deleted_at IS NULL")
-		return r.applyFilters(ctx, q, filters)
+		return r.applyFilters(ctx, scopePerformanceRecords(q, filters), filters)
 	}
 	var total int64
 	if err := buildBase().Select("COUNT(DISTINCT COALESCE(incidents.department_id::text, ''))").Scan(&total).Error; err != nil {
@@ -4327,7 +4340,7 @@ func (r *reportRepository) ExecuteSLAPerformanceQuery(ctx context.Context, filte
 			Joins("LEFT JOIN departments ON departments.id = incidents.department_id").
 			Joins("LEFT JOIN workflow_states ws ON ws.id = incidents.current_state_id").
 			Where("incidents.deleted_at IS NULL")
-		return r.applyFilters(ctx, q, filters)
+		return r.applyFilters(ctx, scopePerformanceRecords(q, filters), filters)
 	}
 	var total int64
 	if err := buildBase().Select("COUNT(DISTINCT COALESCE(incidents.department_id::text, ''))").Scan(&total).Error; err != nil {
@@ -4372,7 +4385,7 @@ func (r *reportRepository) ExecuteChannelPerformanceQuery(ctx context.Context, f
 			Table("incidents").
 			Joins("LEFT JOIN workflow_states ws ON ws.id = incidents.current_state_id").
 			Where("incidents.deleted_at IS NULL")
-		return r.applyFilters(ctx, q, filters)
+		return r.applyFilters(ctx, scopePerformanceRecords(q, filters), filters)
 	}
 	var total int64
 	if err := buildBase().Select("COUNT(DISTINCT " + channelExpr + ")").Scan(&total).Error; err != nil {

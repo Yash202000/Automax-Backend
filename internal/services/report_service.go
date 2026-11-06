@@ -1305,25 +1305,25 @@ func (s *reportService) buildFilterDisplay(ctx context.Context, filters []models
 		}
 		switch f.Field {
 		case "location_id":
-			ids := toStringSlice(f.Value)
+			ids := leafIDs(ctx, toStringSlice(f.Value), s.locationRepo.IsChild)
 			if len(ids) > 1 {
 				display["1_Location"] = multipleLabel
 				continue
 			}
-			if id, err := uuid.Parse(ids[0]); err == nil {
-				if loc, err := s.locationRepo.FindByID(ctx, id); err == nil && loc != nil {
+			if len(ids) == 1 {
+				if loc, err := s.locationRepo.FindByID(ctx, ids[0]); err == nil && loc != nil {
 					display["1_Location"] = loc.Name
 				}
 			}
 
 		case "classification_id":
-			ids := toStringSlice(f.Value)
+			ids := leafIDs(ctx, toStringSlice(f.Value), s.classificationRepo.IsChild)
 			if len(ids) > 1 {
 				display["2_Classification"] = multipleLabel
 				continue
 			}
-			if id, err := uuid.Parse(ids[0]); err == nil {
-				if cls, err := s.classificationRepo.FindByID(ctx, id); err == nil && cls != nil {
+			if len(ids) == 1 {
+				if cls, err := s.classificationRepo.FindByID(ctx, ids[0]); err == nil && cls != nil {
 					display["2_Classification"] = cls.Name
 				}
 			}
@@ -1373,6 +1373,22 @@ func (s *reportService) buildFilterDisplay(ctx context.Context, filters []models
 	}
 
 	return display
+}
+
+// leafIDs keeps only the valid UUIDs that are leaves (no children); parents and ids
+// that fail the lookup are ignored.
+func leafIDs(ctx context.Context, raw []string, isLeaf func(context.Context, uuid.UUID) (bool, error)) []uuid.UUID {
+	out := make([]uuid.UUID, 0, len(raw))
+	for _, r := range raw {
+		id, err := uuid.Parse(r)
+		if err != nil {
+			continue
+		}
+		if leaf, err := isLeaf(ctx, id); err == nil && leaf {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func toStringSlice(v interface{}) []string {

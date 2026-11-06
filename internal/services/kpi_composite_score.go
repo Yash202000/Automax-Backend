@@ -28,9 +28,9 @@ type MetricScoreBreakdown struct {
 	// most-recent-with-data period rather than one shared period — so the
 	// breakdown list stays legible about which period each row is actually
 	// showing when they don't all line up.
-	PeriodCode      string `json:"period_code,omitempty"`
-	Year            int    `json:"year,omitempty"`
-	IsFallbackPeriod bool  `json:"is_fallback_period,omitempty"`
+	PeriodCode       string `json:"period_code,omitempty"`
+	Year             int    `json:"year,omitempty"`
+	IsFallbackPeriod bool   `json:"is_fallback_period,omitempty"`
 }
 
 // CompositeScoreResult is the overall weighted KPI score for one period
@@ -40,10 +40,10 @@ type MetricScoreBreakdown struct {
 // computed from a subset of metrics would understate the score exactly the
 // way BR-09 says a missing period must not be treated as zero.
 type CompositeScoreResult struct {
-	HasData    bool                   `json:"has_data"`
-	RawScore   *float64               `json:"raw_score"`
-	CappedScore *float64              `json:"capped_score"`
-	Metrics    []MetricScoreBreakdown `json:"metrics"`
+	HasData     bool                   `json:"has_data"`
+	RawScore    *float64               `json:"raw_score"`
+	CappedScore *float64               `json:"capped_score"`
+	Metrics     []MetricScoreBreakdown `json:"metrics"`
 }
 
 // ComputeCompositeScore combines every Active metric's Achievement (weighted)
@@ -218,22 +218,18 @@ func ComputeCompositeScoreLatest(db *gorm.DB, kpiID uuid.UUID, kpiCode, kpiType 
 	return result, nil
 }
 
-// MetricWeightSumValid checks BR-07: the sum of an Active composite KPI's
-// metric weights must equal 100% before it can be activated. A KPI with no
-// metrics yet is not blocked here — that's a separate "can't activate an
-// empty KPI" concern, not a weight-sum one.
-func MetricWeightSumValid(db *gorm.DB, kpiID uuid.UUID, kpiType string) (bool, float64, error) {
+// ActiveMetricWeightSum returns how many Active metrics a KPI has and the sum
+// of their weights (rounded to 2 decimals), for the BR-07 activation gate:
+// a KPI needs at least one Active metric and weights summing to 100%.
+// Inactive metrics are excluded because they never contribute to the score.
+func ActiveMetricWeightSum(db *gorm.DB, kpiID uuid.UUID, kpiType string) (int, float64, error) {
 	var metrics []models.KpiMetric
 	if err := db.Where("kpi_id = ? AND kpi_type = ? AND metric_status = ?", kpiID, kpiType, "Active").Find(&metrics).Error; err != nil {
-		return false, 0, err
-	}
-	if len(metrics) == 0 {
-		return true, 0, nil
+		return 0, 0, err
 	}
 	var sum float64
 	for _, m := range metrics {
 		sum += m.Weight
 	}
-	sum = math.Round(sum*100) / 100
-	return math.Abs(sum-100) < 0.01, sum, nil
+	return len(metrics), math.Round(sum*100) / 100, nil
 }

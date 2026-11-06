@@ -35,6 +35,13 @@ type UserHandler struct {
 	wsHub       *services.WSHub
 }
 
+// adUsersEnabled reports whether this environment has an AD login (LDAP or
+// AD-Baseer) configured; AD users can only be created when one is, because
+// they have no password and could not sign in otherwise.
+func (h *UserHandler) adUsersEnabled() bool {
+	return h.cfg.LDAP.Enabled || h.cfg.ADBaseer.Enabled
+}
+
 func NewUserHandler(userService services.UserService, storage *storage.MinIOStorage, redisClient *redis.Client, cfg *config.Config, wsHub *services.WSHub) *UserHandler {
 	return &UserHandler{
 		userService: userService,
@@ -51,6 +58,8 @@ func (h *UserHandler) Register(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
+	// Only admins may create AD users.
+	req.IsADUser = false
 
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -418,6 +427,7 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 		req.Email = c.FormValue("email")
 		req.Username = c.FormValue("username")
 		req.Password = c.FormValue("password")
+		req.IsADUser = c.FormValue("is_ad_user") == "true"
 		req.FirstName = c.FormValue("first_name")
 		req.LastName = c.FormValue("last_name")
 		req.Phone = c.FormValue("phone")
@@ -499,6 +509,10 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 		})
 	}
 
+	if req.IsADUser && !h.adUsersEnabled() {
+		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "ad_users_disabled"))
+	}
+
 	if strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940) && strings.TrimSpace(req.Phone) == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
@@ -564,11 +578,39 @@ func (h *UserHandler) AdminUpdateUser(c *fiber.Ctx) error {
 		validationErrors["alternate_mobile"] = i18n.T(c.UserContext(), "alternate_mobile_same_as_primary")
 	}
 
+	// Contact-center updates require the name and mobile fields.
+	if req.ContactCenter != nil && *req.ContactCenter {
+		if validationErrors == nil {
+			validationErrors = map[string]string{}
+		}
+		required := []struct{ field, value, key string }{
+			{"first_name", req.FirstName, "first_name_required"},
+			{"middle_name", req.MiddleName, "middle_name_required"},
+			{"last_name", req.LastName, "last_name_required"},
+			{"phone", req.Phone, "phone_required"},
+		}
+		for _, r := range required {
+			if strings.TrimSpace(r.value) == "" {
+				validationErrors[r.field] = i18n.T(c.UserContext(), r.key)
+			}
+		}
+	}
+
 	if len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
 			"errors":  validationErrors,
 		})
+	}
+
+	if req.IsADUser != nil && *req.IsADUser && !h.adUsersEnabled() {
+		current, err := h.userService.GetUserByID(c.UserContext(), userID)
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "user_not_found"))
+		}
+		if !current.IsADUser {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "ad_users_disabled"))
+		}
 	}
 
 	response, err := h.userService.UpdateAdminProfile(c.UserContext(), userID, &req)

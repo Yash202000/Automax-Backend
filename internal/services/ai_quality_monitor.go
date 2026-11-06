@@ -179,6 +179,7 @@ type incidentAssessment struct {
 type aiQualityAPIResponse struct {
 	// ── v1 (legacy) fields ────────────────────────────────────────────────────
 	ChangeSummary    string             `json:"change_summary"`
+	ChangeSummaryAr  string             `json:"change_summary_ar"`
 	ResolutionStatus string             `json:"resolution_status"`
 	Confidence       float64            `json:"confidence"`
 	ReasoningPoints  []string           `json:"reasoning_points"`
@@ -412,6 +413,7 @@ func (m *aiQualityMonitor) processIncident(ctx context.Context, incident *models
 	feedback := &models.AIQualityFeedback{
 		IncidentID:       incident.ID,
 		ChangedSummary:   changeSummary,
+		ChangedSummaryAr: apiResp.ChangeSummaryAr,
 		ResolutionStatus: resolutionStatus,
 		DistanceMeters:   distanceMeters,
 		RawResponse:      rawBody,

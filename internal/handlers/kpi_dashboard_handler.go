@@ -38,6 +38,7 @@ type PerformanceTrend struct {
 }
 
 type KpiCardDef struct {
+	ID               string  `json:"id"`
 	Code             string  `json:"code"`
 	Type             string  `json:"type"`
 	NameEn           string  `json:"name_en"`
@@ -100,6 +101,25 @@ type EnhancedKpiDashboardData struct {
 	// Targets or Entries, so the Year filter offers real data years rather
 	// than a hardcoded window around today.
 	AvailableYears []int `json:"available_years"`
+	// KpiOptions/MetricOptions feed the KPI and Metric filters. They follow
+	// the Type filter (and Metric options the KPI filter) but not their own
+	// selection, so the dropdowns keep every choice while one is selected.
+	KpiOptions    []DashboardKpiOption    `json:"kpi_options"`
+	MetricOptions []DashboardMetricOption `json:"metric_options"`
+}
+
+type DashboardKpiOption struct {
+	ID     string `json:"id"`
+	Code   string `json:"code"`
+	Type   string `json:"type"`
+	NameEn string `json:"name_en"`
+}
+
+type DashboardMetricOption struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	KpiCode string `json:"kpi_code"`
+	KpiType string `json:"kpi_type"`
 }
 
 // taxonomyFilterSQL builds a WHERE-clause fragment (with its args, in order)
@@ -244,24 +264,52 @@ func periodMonthRangeSQL(codeCol, startCol, endCol string) (string, string) {
 	return startExpr, endExpr
 }
 
-// periodFilterSQL builds the Year/Quarter condition for a KPI Target/Entry
+// dashboardPeriod is the dashboard's Period filter: a calendar month range
+// within the year — a whole quarter (Q1 = months 1-3 ... Q4 = 10-12) or a
+// single month. The zero value means no period filter.
+type dashboardPeriod struct {
+	FromMonth, ToMonth int
+}
+
+// parseDashboardPeriod reads the Period filter from the query: month (1-12)
+// wins over quarter (1-4).
+func parseDashboardPeriod(c *fiber.Ctx) dashboardPeriod {
+	if m, err := strconv.Atoi(c.Query("month")); err == nil && m >= 1 && m <= 12 {
+		return dashboardPeriod{m, m}
+	}
+	if q, err := strconv.Atoi(c.Query("quarter")); err == nil && q >= 1 && q <= 4 {
+		return dashboardPeriod{3*q - 2, 3 * q}
+	}
+	return dashboardPeriod{}
+}
+
+func (p dashboardPeriod) isSet() bool { return p.FromMonth != 0 }
+
+// quarter is the calendar quarter the period falls in (0 when unset).
+func (p dashboardPeriod) quarter() int {
+	if !p.isSet() {
+		return 0
+	}
+	return (p.FromMonth-1)/3 + 1
+}
+
+// periodFilterSQL builds the Year/Period condition for a KPI Target/Entry
 // table: the row's reporting year must equal year (when set), and its
-// period's months must overlap the selected calendar quarter (when set) —
-// Q1 = Jan-Mar ... Q4 = Oct-Dec. So a monthly "feb" row is Q1 only, a
-// quarterly "q2" row is Q2 only, a semi-annual "h1" row is Q1 and Q2, and
-// an annual row is in every quarter of its year. Returns ("", nil) when
+// period's months must overlap the selected month range (when set). So for
+// March, a monthly "mar" row, a quarterly "q1" row, a semi-annual "h1" row
+// and an annual row all match; for Q2, "feb" doesn't. Returns ("", nil) when
 // neither is set.
-func periodFilterSQL(yearExpr, codeCol, startCol, endCol string, year, quarter int) (string, []interface{}) {
+func periodFilterSQL(yearExpr, codeCol, startCol, endCol string, year int, period dashboardPeriod) (string, []interface{}) {
 	var conditions []string
 	var args []interface{}
 	if year != 0 {
 		conditions = append(conditions, yearExpr+" = ?")
 		args = append(args, year)
 	}
-	if quarter >= 1 && quarter <= 4 {
+	if period.isSet() {
 		startExpr, endExpr := periodMonthRangeSQL(codeCol, startCol, endCol)
 		conditions = append(conditions, fmt.Sprintf("%s <= ? AND %s >= ?", startExpr, endExpr))
-		args = append(args, 3*quarter, 3*quarter-2)
+		args = append(args, period.ToMonth, period.FromMonth)
 	}
 	return strings.Join(conditions, " AND "), args
 }
@@ -272,17 +320,17 @@ func periodFilterSQL(yearExpr, codeCol, startCol, endCol string, year, quarter i
 const targetYearExpr = "COALESCE(NULLIF(target_year, 0), year)"
 
 // kpiPeriodScopeSQL restricts a KPI dictionary table to KPIs that have a
-// Target or an Entry in the selected Year/Quarter — the dictionary records
+// Target or an Entry in the selected Year/Period — the dictionary records
 // carry no year of their own, so a KPI "belongs" to a year/quarter through
 // the periods it is actually planned (kpi_annual_targets, matched by
 // kpi_code) or measured (kpi_entries, matched by kpi_id) in. Returns
 // ("", nil) when neither filter is set.
-func kpiPeriodScopeSQL(table, typeLiteral string, year, quarter int) (string, []interface{}) {
-	entrySQL, entryArgs := periodFilterSQL("reporting_year", "period_code", "period_start", "period_end", year, quarter)
+func kpiPeriodScopeSQL(table, typeLiteral string, year int, period dashboardPeriod) (string, []interface{}) {
+	entrySQL, entryArgs := periodFilterSQL("reporting_year", "period_code", "period_start", "period_end", year, period)
 	if entrySQL == "" {
 		return "", nil
 	}
-	targetSQL, targetArgs := periodFilterSQL(targetYearExpr, "period_code", "period_start", "period_end", year, quarter)
+	targetSQL, targetArgs := periodFilterSQL(targetYearExpr, "period_code", "period_start", "period_end", year, period)
 	sql := fmt.Sprintf(
 		"(%[1]s.id IN (SELECT kpi_id FROM kpi_entries WHERE deleted_at IS NULL AND kpi_type = '%[2]s' AND %[3]s)"+
 			" OR %[1]s.code IN (SELECT kpi_code FROM kpi_annual_targets WHERE deleted_at IS NULL AND kpi_type = '%[2]s' AND %[4]s))",
@@ -297,38 +345,50 @@ func kpiPeriodScopeSQL(table, typeLiteral string, year, quarter int) (string, []
 // code and taxonomy in a single query. Entries whose KPI no longer exists
 // drop out of the join.
 const kpiDictionaryUnionSQL = `(
-	SELECT id, code, 'strategic' AS kpi_type, operational_objective_id, process_id, award_sub_criterion_id FROM strategic_kpis WHERE deleted_at IS NULL
+	SELECT id, code, name_en, 'strategic' AS kpi_type, operational_objective_id, process_id, award_sub_criterion_id FROM strategic_kpis WHERE deleted_at IS NULL
 	UNION ALL
-	SELECT id, code, 'operational', operational_objective_id, process_id, award_sub_criterion_id FROM operational_kpis WHERE deleted_at IS NULL
+	SELECT id, code, name_en, 'operational', operational_objective_id, process_id, award_sub_criterion_id FROM operational_kpis WHERE deleted_at IS NULL
 	UNION ALL
-	SELECT id, code, 'award', operational_objective_id, process_id, award_sub_criterion_id FROM award_kpis WHERE deleted_at IS NULL
+	SELECT id, code, name_en, 'award', operational_objective_id, process_id, award_sub_criterion_id FROM award_kpis WHERE deleted_at IS NULL
 ) d`
 
 func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 	var data EnhancedKpiDashboardData
 
 	kpiType := c.Query("kpi_type") // strategic|operational|award — empty means all types
+	// kpi selects one KPI as "type:code" (codes may repeat across types).
+	kpiCodeType, kpiCode, _ := strings.Cut(c.Query("kpi"), ":")
+	metricID := c.Query("metric_id")
 	objectiveIDs := splitFilterIDs(c.Query("objective_id"))
 	criteriaIDs := splitFilterIDs(c.Query("criteria_id"))
 	subCriteriaIDs := splitFilterIDs(c.Query("sub_criteria_id"))
-	var year, quarter int
+	var year int
 	if v, err := strconv.Atoi(c.Query("year")); err == nil {
 		year = v
 	}
-	if v, err := strconv.Atoi(c.Query("quarter")); err == nil && v >= 1 && v <= 4 {
-		quarter = v
-	}
+	period := parseDashboardPeriod(c)
+	quarter := period.quarter()
 
 	// dictQuery scopes a KPI dictionary table (Strategic/Operational/Award)
-	// query to the selected Objective/Criteria/Sub-Criteria filters, using
-	// its own direct taxonomy columns, and to the selected Year/Quarter via
-	// the KPI's own Targets/Entries (see kpiPeriodScopeSQL).
+	// query to the selected KPI/Metric, to the Objective/Criteria/
+	// Sub-Criteria filters using its own direct taxonomy columns, and to the
+	// selected Year/Period via the KPI's own Targets/Entries (see
+	// kpiPeriodScopeSQL).
 	dictQuery := func(model interface{}, table, typeLiteral string) *gorm.DB {
 		q := h.db.WithContext(c.UserContext()).Model(model)
+		if kpiCode != "" {
+			if typeLiteral != kpiCodeType {
+				q = q.Where("1 = 0")
+			}
+			q = q.Where(table+".code = ?", kpiCode)
+		}
+		if metricID != "" {
+			q = q.Where(table+".id IN (SELECT kpi_id FROM kpi_metrics WHERE id = ? AND kpi_type = ? AND deleted_at IS NULL)", metricID, typeLiteral)
+		}
 		if sql, args := dictionaryTaxonomyWhere(objectiveIDs, criteriaIDs, subCriteriaIDs); sql != "" {
 			q = q.Where(sql, args...)
 		}
-		if sql, args := kpiPeriodScopeSQL(table, typeLiteral, year, quarter); sql != "" {
+		if sql, args := kpiPeriodScopeSQL(table, typeLiteral, year, period); sql != "" {
 			q = q.Where(sql, args...)
 		}
 		return q
@@ -395,7 +455,13 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 		if kpiType != "" {
 			q = q.Where("e.kpi_type = ?", kpiType)
 		}
-		if sql, args := periodFilterSQL("e.reporting_year", "e.period_code", "e.period_start", "e.period_end", year, quarter); sql != "" {
+		if kpiCode != "" {
+			q = q.Where("d.kpi_type = ? AND d.code = ?", kpiCodeType, kpiCode)
+		}
+		if metricID != "" {
+			q = q.Where("e.metric_id = ?", metricID)
+		}
+		if sql, args := periodFilterSQL("e.reporting_year", "e.period_code", "e.period_start", "e.period_end", year, period); sql != "" {
 			q = q.Where(sql, args...)
 		}
 		if sql, args := dictionaryTaxonomyWhere(objectiveIDs, criteriaIDs, subCriteriaIDs); sql != "" {
@@ -411,8 +477,8 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 
 	// Performance trend buckets each approved entry by the calendar quarter
 	// its period ends in (a "feb" entry is Q1, "h1" is Q2, "annual" is Q4).
-	// When a Quarter filter is active every in-scope entry overlaps that
-	// quarter, so they are all bucketed under it instead.
+	// When a Period filter is active every in-scope entry overlaps it, so
+	// they are all bucketed under the quarter it falls in instead.
 	_, endMonth := periodMonthRangeSQL("e.period_code", "e.period_start", "e.period_end")
 	quarterExpr := fmt.Sprintf("((%s - 1) / 3 + 1)", endMonth)
 	if quarter != 0 {
@@ -429,6 +495,16 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 		q := h.db.WithContext(c.UserContext()).Model(model)
 		if kpiType != "" {
 			q = q.Where("kpi_type = ?", kpiType)
+		}
+		if kpiCode != "" {
+			q = q.Where("kpi_type = ? AND kpi_code = ?", kpiCodeType, kpiCode)
+		}
+		if metricID != "" {
+			// Benchmarks/segmentation are recorded per KPI, not per metric:
+			// keep the rows of the metric's own KPI.
+			q = q.Where("(kpi_type, kpi_code) IN ("+
+				"SELECT m.kpi_type, d.code FROM kpi_metrics m JOIN "+kpiDictionaryUnionSQL+
+				" ON d.id = m.kpi_id AND d.kpi_type = m.kpi_type WHERE m.id = ?)", metricID)
 		}
 		if year != 0 {
 			q = q.Where("year = ?", year)
@@ -463,7 +539,7 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 
 	cardQuery := func(q *gorm.DB, typeLiteral string) []KpiCardDef {
 		var cards []KpiCardDef
-		q.Select("code, '" + typeLiteral + "' as type, name_en, name_ar, formula, baseline, unit_of_measure, polarity, reporting_frequency as reporting_freq, data_source, activation_status").
+		q.Select("id, code, '" + typeLiteral + "' as type, name_en, name_ar, formula, baseline, unit_of_measure, polarity, reporting_frequency as reporting_freq, data_source, activation_status").
 			Limit(10).
 			Order("created_at DESC").
 			Scan(&cards)
@@ -518,6 +594,25 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 			") years WHERE y > 0 ORDER BY y",
 	).Scan(&data.AvailableYears)
 
+	kpiOpts := h.db.WithContext(c.UserContext()).Table(kpiDictionaryUnionSQL).
+		Select("d.id, d.code, d.kpi_type AS type, d.name_en")
+	if kpiType != "" {
+		kpiOpts = kpiOpts.Where("d.kpi_type = ?", kpiType)
+	}
+	kpiOpts.Order("d.code").Scan(&data.KpiOptions)
+
+	metricOpts := h.db.WithContext(c.UserContext()).Table("kpi_metrics m").
+		Joins("JOIN "+kpiDictionaryUnionSQL+" ON d.id = m.kpi_id AND d.kpi_type = m.kpi_type").
+		Select("m.id, m.name, d.code AS kpi_code, d.kpi_type").
+		Where("m.deleted_at IS NULL")
+	if kpiType != "" {
+		metricOpts = metricOpts.Where("d.kpi_type = ?", kpiType)
+	}
+	if kpiCode != "" {
+		metricOpts = metricOpts.Where("d.kpi_type = ? AND d.code = ?", kpiCodeType, kpiCode)
+	}
+	metricOpts.Order("d.code, m.name").Scan(&data.MetricOptions)
+
 	return utils.SuccessResponse(c, fiber.StatusOK, "", data)
 }
 
@@ -554,7 +649,7 @@ func (h *KpiDashboardHandler) GetKpiCardDefinitions(c *fiber.Ctx) error {
 
 	var strategicCards []KpiCardDef
 	q := h.db.WithContext(c.UserContext()).Model(&models.StrategicKPI{}).
-		Select("code, 'strategic' as type, name_en, name_ar, formula, baseline, unit_of_measure, polarity, reporting_frequency as reporting_freq, data_source, activation_status")
+		Select("id, code, 'strategic' as type, name_en, name_ar, formula, baseline, unit_of_measure, polarity, reporting_frequency as reporting_freq, data_source, activation_status")
 
 	if search != "" {
 		q = q.Where("(name_en ILIKE ? OR name_ar ILIKE ? OR code ILIKE ?)", "%"+search+"%", "%"+search+"%", "%"+search+"%")
@@ -568,7 +663,7 @@ func (h *KpiDashboardHandler) GetKpiCardDefinitions(c *fiber.Ctx) error {
 	var operationalCards []KpiCardDef
 	if kpiType == "operational" || kpiType == "" {
 		q2 := h.db.WithContext(c.UserContext()).Model(&models.OperationalKPI{}).
-			Select("code, 'operational' as type, name_en, name_ar, formula, baseline, unit_of_measure, polarity, reporting_frequency as reporting_freq, data_source, activation_status")
+			Select("id, code, 'operational' as type, name_en, name_ar, formula, baseline, unit_of_measure, polarity, reporting_frequency as reporting_freq, data_source, activation_status")
 		if search != "" {
 			q2 = q2.Where("(name_en ILIKE ? OR name_ar ILIKE ? OR code ILIKE ?)", "%"+search+"%", "%"+search+"%", "%"+search+"%")
 		}
@@ -580,7 +675,7 @@ func (h *KpiDashboardHandler) GetKpiCardDefinitions(c *fiber.Ctx) error {
 	var awardCards []KpiCardDef
 	if kpiType == "award" || kpiType == "" {
 		q3 := h.db.WithContext(c.UserContext()).Model(&models.AwardKPI{}).
-			Select("code, 'award' as type, name_en, name_ar, formula, baseline, unit_of_measure, polarity, reporting_frequency as reporting_freq, data_source, activation_status")
+			Select("id, code, 'award' as type, name_en, name_ar, formula, baseline, unit_of_measure, polarity, reporting_frequency as reporting_freq, data_source, activation_status")
 		if search != "" {
 			q3 = q3.Where("(name_en ILIKE ? OR name_ar ILIKE ? OR code ILIKE ?)", "%"+search+"%", "%"+search+"%", "%"+search+"%")
 		}

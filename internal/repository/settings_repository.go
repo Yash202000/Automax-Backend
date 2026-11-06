@@ -65,6 +65,8 @@ func (r *settingsRepository) GetOrCreate(ctx context.Context) (*models.Settings,
 			DateFormat:          "YYYY-MM-DD",
 			TimeFormat:          "HH:mm:ss",
 			DefaultLanguage:     "en",
+			TotpEnabled:         false,
+			ShowForgotPassword:  true,
 		}
 
 		if err := r.db.WithContext(ctx).Create(&settings).Error; err != nil {

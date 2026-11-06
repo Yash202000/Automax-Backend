@@ -5,7 +5,6 @@ import (
 	"log"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/database/migrations"
@@ -116,6 +115,7 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		&models.ReportTemplate{},
 		// Application Links
 		&models.ApplicationLink{},
+		&models.Config{},
 		// Settings
 		&models.Settings{},
 		// Escalation Policies
@@ -179,6 +179,7 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			&models.Process{},
 			&models.Initiative{},
 			&models.Domain{},
+			&models.AwardKpiMeasure{},
 			&models.AwardCriterion{},
 			&models.AwardSubCriterion{},
 			&models.StrategicKPI{},
@@ -196,6 +197,7 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			&models.KpiSegmentationDimension{},
 			&models.KpiPerformanceEvidence{},
 			&models.KpiMetric{},
+			&models.KpiBaselineRevision{},
 			&models.KpiEvidence{},
 			&models.KpiCollaborator{},
 			&models.KpiCheckIn{},
@@ -256,6 +258,16 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			log.Printf("Warning: KPI dictionary taxonomy unification migration failed: %v", err)
 		}
 
+		// award_kpi_measures.code (KPI-AWRD-MSR-NN) is assigned by a Postgres sequence.
+		if err := migrations.MigrateAwardKpiMeasureCodeSequence(migrationDB); err != nil {
+			log.Printf("Warning: award KPI measure code sequence migration failed: %v", err)
+		}
+
+		// domains.code (KPI-DOM-NN) is assigned by a Postgres sequence.
+		if err := migrations.MigrateDomainCodeSequence(migrationDB); err != nil {
+			log.Printf("Warning: domain code sequence migration failed: %v", err)
+		}
+
 		// Enforce unique domain names (excluding soft-deleted records).
 		db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_domains_name_en ON domains(name_en) WHERE deleted_at IS NULL`)
 
@@ -272,20 +284,27 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 
 	// Drop FK constraints on performed_by_id so system-triggered actions (uuid.Nil) are allowed.
 	// System actions (e.g. Ready-to-Close auto-revert) do not have a real user performer.
-	db.Exec("ALTER TABLE incident_transition_histories DROP CONSTRAINT IF EXISTS fk_incident_transition_histories_performed_by")
-	db.Exec("ALTER TABLE incident_transition_histories DROP CONSTRAINT IF EXISTS incident_transition_histories_performed_by_id_fkey")
-	db.Exec("ALTER TABLE incident_revisions DROP CONSTRAINT IF EXISTS fk_incident_revisions_performed_by")
-	db.Exec("ALTER TABLE incident_revisions DROP CONSTRAINT IF EXISTS incident_revisions_performed_by_id_fkey")
-	db.Exec("ALTER TABLE evidence_transition_histories DROP CONSTRAINT IF EXISTS fk_evidence_transition_histories_performed_by")
-	db.Exec("ALTER TABLE evidence_transition_histories DROP CONSTRAINT IF EXISTS evidence_transition_histories_performed_by_id_fkey")
-	db.Exec("ALTER TABLE metric_import_batch_transition_histories DROP CONSTRAINT IF EXISTS fk_metric_import_batch_transition_histories_performed_by")
-	db.Exec("ALTER TABLE metric_import_batch_transition_histories DROP CONSTRAINT IF EXISTS metric_import_batch_transition_histories_performed_by_id_fkey")
-	db.Exec("ALTER TABLE metric_transition_histories DROP CONSTRAINT IF EXISTS fk_metric_transition_histories_performed_by")
-	db.Exec("ALTER TABLE metric_transition_histories DROP CONSTRAINT IF EXISTS metric_transition_histories_performed_by_id_fkey")
-	db.Exec("ALTER TABLE metric_value_change_transition_histories DROP CONSTRAINT IF EXISTS fk_metric_value_change_transition_histories_performed_by")
-	db.Exec("ALTER TABLE metric_value_change_transition_histories DROP CONSTRAINT IF EXISTS metric_value_change_transition_histories_performed_by_id_fkey")
-	db.Exec("ALTER TABLE kpi_workflow_actions DROP CONSTRAINT IF EXISTS fk_kpi_workflow_actions_performed_by")
-	db.Exec("ALTER TABLE kpi_workflow_actions DROP CONSTRAINT IF EXISTS kpi_workflow_actions_performed_by_id_fkey")
+	// Tables created later in this run (or only in some deployments) don't exist yet on a fresh DB.
+	for _, c := range [][2]string{
+		{"incident_transition_histories", "fk_incident_transition_histories_performed_by"},
+		{"incident_transition_histories", "incident_transition_histories_performed_by_id_fkey"},
+		{"incident_revisions", "fk_incident_revisions_performed_by"},
+		{"incident_revisions", "incident_revisions_performed_by_id_fkey"},
+		{"evidence_transition_histories", "fk_evidence_transition_histories_performed_by"},
+		{"evidence_transition_histories", "evidence_transition_histories_performed_by_id_fkey"},
+		{"metric_import_batch_transition_histories", "fk_metric_import_batch_transition_histories_performed_by"},
+		{"metric_import_batch_transition_histories", "metric_import_batch_transition_histories_performed_by_id_fkey"},
+		{"metric_transition_histories", "fk_metric_transition_histories_performed_by"},
+		{"metric_transition_histories", "metric_transition_histories_performed_by_id_fkey"},
+		{"metric_value_change_transition_histories", "fk_metric_value_change_transition_histories_performed_by"},
+		{"metric_value_change_transition_histories", "metric_value_change_transition_histories_performed_by_id_fkey"},
+		{"kpi_workflow_actions", "fk_kpi_workflow_actions_performed_by"},
+		{"kpi_workflow_actions", "kpi_workflow_actions_performed_by_id_fkey"},
+	} {
+		if db.Migrator().HasTable(c[0]) {
+			db.Exec("ALTER TABLE " + c[0] + " DROP CONSTRAINT IF EXISTS " + c[1])
+		}
+	}
 
 	// Legacy strategic_goal_id columns predate the StrategicGoal→Goal model rename.
 	// AutoMigrate never drops old columns, so on databases created before that
@@ -298,11 +317,18 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 
 	db.Exec("ALTER TABLE lookup_categories ADD COLUMN IF NOT EXISTS redirect_url VARCHAR(500)")
 
+	// Auth settings: show_forgot_password toggle (default true). AutoMigrate adds
+	// the column, but ensure the default/backfill explicitly for existing DBs.
+	db.Exec("ALTER TABLE settings ADD COLUMN IF NOT EXISTS show_forgot_password BOOLEAN DEFAULT TRUE")
+	db.Exec("ALTER TABLE settings ALTER COLUMN show_forgot_password SET DEFAULT TRUE")
+	db.Exec("UPDATE settings SET show_forgot_password = TRUE WHERE show_forgot_password IS NULL")
+
 	// Notification template enhancements: add categorisation and bilingual-linking columns.
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS name VARCHAR(200)")
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS module_type VARCHAR(50)")
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS action_type VARCHAR(50)")
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS variables TEXT")
+	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS provider_template_id VARCHAR(100)")
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS transition_id UUID REFERENCES workflow_transitions(id) ON DELETE SET NULL")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_notification_templates_module_type ON notification_templates(module_type)")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_notification_templates_action_type ON notification_templates(action_type)")
@@ -318,9 +344,12 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS body_en    TEXT")
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS subject_ar TEXT")
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS body_ar    TEXT")
-	db.Exec("UPDATE notification_templates SET subject_en = subject, body_en = body WHERE language = 'en' AND body_en IS NULL")
-	db.Exec(`UPDATE notification_templates t SET subject_ar = ar.subject, body_ar = ar.body FROM notification_templates ar WHERE ar.language = 'ar' AND ar.code = t.code AND ar.channel = t.channel AND t.language = 'en'`)
-	db.Exec("DELETE FROM notification_templates WHERE language = 'ar'")
+	// The legacy single-language column only exists until this migration has run once.
+	if db.Migrator().HasColumn("notification_templates", "language") {
+		db.Exec("UPDATE notification_templates SET subject_en = subject, body_en = body WHERE language = 'en' AND body_en IS NULL")
+		db.Exec(`UPDATE notification_templates t SET subject_ar = ar.subject, body_ar = ar.body FROM notification_templates ar WHERE ar.language = 'ar' AND ar.code = t.code AND ar.channel = t.channel AND t.language = 'en'`)
+		db.Exec("DELETE FROM notification_templates WHERE language = 'ar'")
+	}
 	db.Exec("ALTER TABLE notification_templates DROP COLUMN IF EXISTS language")
 	db.Exec("ALTER TABLE notification_templates DROP COLUMN IF EXISTS subject")
 	db.Exec("ALTER TABLE notification_templates DROP COLUMN IF EXISTS body")
@@ -331,7 +360,14 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 
 	// Workflow code column was previously VARCHAR(50) which is too short for some existing workflows. Increase to 100 chars. Note: MySQL syntax is ALTER TABLE workflows MODIFY code VARCHAR(100) NOT NULL but Postgres is ALTER TABLE workflows ALTER COLUMN code TYPE VARCHAR(100). GORM's AutoMigrate doesn't handle this edge case, so we run raw SQL. Idempotent: safe to run repeatedly.
 	db.Exec("ALTER TABLE workflows ALTER COLUMN code TYPE VARCHAR(100)")
-	db.Exec("ALTER TABLE reports ALTER COLUMN timestamp_key TYPE VARCHAR(100) Default 'created_at'")
+	db.Exec("ALTER TABLE reports ALTER COLUMN timestamp_key TYPE VARCHAR(100)")
+
+	// Master data name/name_ar widened from 100 to 500 chars (classifications, locations, departments).
+	for _, t := range []string{"classifications", "locations", "departments"} {
+		db.Exec("ALTER TABLE " + t + " ALTER COLUMN name TYPE VARCHAR(500)")
+		db.Exec("ALTER TABLE " + t + " ALTER COLUMN name_ar TYPE VARCHAR(500)")
+	}
+	db.Exec("ALTER TABLE reports ALTER COLUMN timestamp_key SET DEFAULT 'created_at'")
 
 	// Error Log: sequence for ERR-000123 style codes
 	if err := migrations.MigrateErrorLogSequence(db); err != nil {
@@ -408,6 +444,12 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	// Composite index for the incident communication history query (filter by incident_id, sort by created_at)
 	if err := migrations.MigrateNotificationLogIncidentIndex(db); err != nil {
 		log.Printf("Warning: notification_log incident index migration failed: %v", err)
+	}
+
+	// Default SMS templates replacing formerly hardcoded SMS text (idempotent, never overwrites edits).
+	// can remove after successfull templates migartion.
+	if err := migrations.SeedDefaultSMSTemplates(db); err != nil {
+		log.Printf("Warning: default SMS template seed failed: %v", err)
 	}
 
 	// Assign a unique Organization Code (ORG-######) to any department missing one.
@@ -712,6 +754,12 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Update Application Links", Code: "application-links:update", Module: "application-links", Action: "update", ActionAr: "تحديث", Description: "Update application links"},
 		{Name: "Delete Application Links", Code: "application-links:delete", Module: "application-links", Action: "delete", ActionAr: "حذف", Description: "Delete application links"},
 		{Name: "Access Application Links on Dashboard", Code: "application-links:dashboard", Module: "application-links", Action: "dashboard", ActionAr: "لوحة التحكم", Description: "See and launch application links from the dashboard"},
+
+		// Config permissions
+		{Name: "View Configs", Code: "configs:view", Module: "configs", Action: "view", ActionAr: "عرض", Description: "View environment configs"},
+		{Name: "Create Configs", Code: "configs:create", Module: "configs", Action: "create", ActionAr: "إنشاء", Description: "Create environment configs"},
+		{Name: "Update Configs", Code: "configs:update", Module: "configs", Action: "update", ActionAr: "تحديث", Description: "Update environment configs"},
+		{Name: "Delete Configs", Code: "configs:delete", Module: "configs", Action: "delete", ActionAr: "حذف", Description: "Delete environment configs"},
 
 		// Notification permissions
 		{Name: "View Notifications", Code: "notifications:read", Module: "notifications", Action: "read", ActionAr: "قراءة", Description: "View notification logs"},
@@ -1082,61 +1130,6 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		db.Model(&adminUser).Association("Roles").Append(&adminRole)
 	}
 
-	// Create default departments for supervisor seeding
-	var defaultDept models.Department
-	if err := db.Where("name = ?", "General").First(&defaultDept).Error; err == gorm.ErrRecordNotFound {
-		defaultDept = models.Department{
-			Name:     "General",
-			Code:     "GEN",
-			IsActive: true,
-		}
-		db.Create(&defaultDept)
-	}
-
-	var supportDept models.Department
-	if err := db.Where("name = ?", "Support").First(&supportDept).Error; err == gorm.ErrRecordNotFound {
-		supportDept = models.Department{
-			Name:     "Support",
-			Code:     "SUP",
-			IsActive: true,
-		}
-		db.Create(&supportDept)
-	}
-
-	// Create supervisor users with department assignments
-	type supervisorSeed struct {
-		Email        string
-		Username     string
-		FirstName    string
-		LastName     string
-		DepartmentID *uuid.UUID
-	}
-	supervisors := []supervisorSeed{
-		{"supervisor1@automax.com", "supervisor1", "Ahmed", "Ali", &defaultDept.ID},
-		{"supervisor2@automax.com", "supervisor2", "Sara", "Mohammed", &supportDept.ID},
-	}
-	for _, su := range supervisors {
-		var existing models.User
-		if db.Where("email = ?", su.Email).First(&existing).Error == gorm.ErrRecordNotFound {
-			hashedPwd, _ := utils.HashPassword("supervisor123")
-			user := models.User{
-				Email:        su.Email,
-				Username:     su.Username,
-				Password:     hashedPwd,
-				FirstName:    su.FirstName,
-				LastName:     su.LastName,
-				IsActive:     true,
-				DepartmentID: su.DepartmentID,
-			}
-			db.Create(&user)
-			db.Model(&user).Association("Roles").Append(&supervisorRole)
-			db.Model(&models.Department{}).Where("id = ?", su.DepartmentID).Update("supervisor_id", user.ID)
-		}
-	}
-
-	// Seed a default incident workflow for demo/test incidents
-	seedDefaultIncidentWorkflow(db, defaultDept.ID, supportDept.ID, adminUser.ID)
-
 	// Seed default lookup categories
 	seedLookupCategories(db, cfg)
 
@@ -1172,122 +1165,6 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 	}
 	log.Println("Database seeding completed")
 	return nil
-}
-
-// seedDefaultIncidentWorkflow creates a minimal incident workflow and demo tickets
-// for the seeded departments so supervisors have data to view.
-func seedDefaultIncidentWorkflow(db *gorm.DB, defaultDeptID, supportDeptID, adminUserID uuid.UUID) {
-	var workflow models.Workflow
-	if err := db.Where("code = ?", "incident_default").First(&workflow).Error; err == gorm.ErrRecordNotFound {
-		workflow = models.Workflow{
-			Name:       "Default Incident Workflow",
-			Code:       "incident_default",
-			RecordType: "incident",
-			IsDefault:  true,
-			IsActive:   true,
-		}
-		db.Create(&workflow)
-
-		states := []models.WorkflowState{
-			{WorkflowID: workflow.ID, Name: "New", Code: "new", StateType: "initial", Color: "#6366f1"},
-			{WorkflowID: workflow.ID, Name: "In Progress", Code: "in_progress", StateType: "normal", Color: "#f59e0b"},
-			{WorkflowID: workflow.ID, Name: "Resolved", Code: "resolved", StateType: "normal", Color: "#10b981"},
-			{WorkflowID: workflow.ID, Name: "Closed", Code: "closed", StateType: "terminal", Color: "#6b7280"},
-			{WorkflowID: workflow.ID, Name: "Rejected", Code: "rejected", StateType: "terminal", Color: "#ef4444"},
-		}
-		for i := range states {
-			states[i].ID = uuid.New()
-			db.Create(&states[i])
-		}
-
-		newState := states[0]
-		inProgressState := states[1]
-		resolvedState := states[2]
-		closedState := states[3]
-
-		now := time.Now()
-
-		// Create demo incidents for each department
-		demoIncidents := []models.Incident{
-			{
-				IncidentNumber: "INC-2026-0001",
-				Title:          "Network outage in building A",
-				Description:    "Users in building A cannot access the network",
-				RecordType:     "incident",
-				WorkflowID:     workflow.ID,
-				CurrentStateID: newState.ID,
-				DepartmentID:   &defaultDeptID,
-				Source:         "phone",
-				CreatedAt:      now,
-				UpdatedAt:      now,
-			},
-			{
-				IncidentNumber: "INC-2026-0002",
-				Title:          "Email server slow response",
-				Description:    "Email server taking more than 30 seconds to respond",
-				RecordType:     "incident",
-				WorkflowID:     workflow.ID,
-				CurrentStateID: inProgressState.ID,
-				DepartmentID:   &supportDeptID,
-				Source:         "email",
-				CreatedAt:      now,
-				UpdatedAt:      now,
-			},
-			{
-				IncidentNumber: "REQ-2026-0001",
-				Title:          "New laptop request for onboarding",
-				Description:    "New employee needs a laptop for onboarding",
-				RecordType:     "request",
-				WorkflowID:     workflow.ID,
-				CurrentStateID: newState.ID,
-				DepartmentID:   &defaultDeptID,
-				Source:         "portal",
-				CreatedAt:      now,
-				UpdatedAt:      now,
-			},
-			{
-				IncidentNumber: "REQ-2026-0002",
-				Title:          "Software license renewal",
-				Description:    "Renew Adobe Creative Cloud license for design team",
-				RecordType:     "request",
-				WorkflowID:     workflow.ID,
-				CurrentStateID: resolvedState.ID,
-				DepartmentID:   &supportDeptID,
-				Source:         "email",
-				CreatedAt:      now,
-				UpdatedAt:      now,
-			},
-			{
-				IncidentNumber: "CMP-2026-0001",
-				Title:          "Rude behavior from support agent",
-				Description:    "Customer complained about rude behavior from support agent",
-				RecordType:     "complaint",
-				WorkflowID:     workflow.ID,
-				CurrentStateID: closedState.ID,
-				DepartmentID:   &supportDeptID,
-				Source:         "phone",
-				CreatedAt:      now,
-				UpdatedAt:      now,
-			},
-			{
-				IncidentNumber: "QRY-2026-0001",
-				Title:          "Inquiry about service hours",
-				Description:    "Customer asking about weekend service hours",
-				RecordType:     "query",
-				WorkflowID:     workflow.ID,
-				CurrentStateID: newState.ID,
-				DepartmentID:   &defaultDeptID,
-				Source:         "portal",
-				CreatedAt:      now,
-				UpdatedAt:      now,
-			},
-		}
-
-		for _, inc := range demoIncidents {
-			inc.ID = uuid.New()
-			db.Create(&inc)
-		}
-	}
 }
 
 // unseedGoalManagement hard-deletes all goal-related rows from the DB.
@@ -1387,6 +1264,7 @@ func unseedGoalManagement(db *gorm.DB) {
 		"strategic_kpis",
 		"award_sub_criteria",
 		"award_criteria",
+		"award_kpi_measures",
 		"domains",
 		"initiatives",
 		"processes",

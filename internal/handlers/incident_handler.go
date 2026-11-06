@@ -17,7 +17,6 @@ import (
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
-	internalUtils "github.com/automax/backend/internal/utils"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
@@ -44,6 +43,7 @@ type IncidentHandler struct {
 	lookupRepo          repository.LookupRepository
 	validator           *validator.Validate
 	cfg                 *config.Config
+	notificationService *services.NotificationService
 }
 
 func NewIncidentHandler(service services.IncidentService, userService services.UserService, userRepo repository.UserRepository, incidentRepo repository.IncidentRepository, workflowRepo repository.WorkflowRepository, locationRepo repository.LocationRepository, classificationRepo repository.ClassificationRepository, storage *storage.MinIOStorage, presenceService services.PresenceService, cfg *config.Config) *IncidentHandler {
@@ -60,6 +60,19 @@ func NewIncidentHandler(service services.IncidentService, userService services.U
 		validator:          validator.New(),
 		cfg:                cfg,
 	}
+}
+
+// SetNotificationService wires in the notification service used for template-based SMS.
+func (h *IncidentHandler) SetNotificationService(svc *services.NotificationService) {
+	h.notificationService = svc
+}
+
+// maskMobileForLog keeps only the last 3 digits so logs never carry a full phone number.
+func maskMobileForLog(m string) string {
+	if len(m) <= 3 {
+		return "***"
+	}
+	return strings.Repeat("*", len(m)-3) + m[len(m)-3:]
 }
 
 // SetIvrSmsLinkRepo wires in the IvrSmsLinkRepository for SMS link lifecycle management.
@@ -579,7 +592,8 @@ func (h *IncidentHandler) checkUserAccessToIncident(c *fiber.Ctx, incident *mode
 		} else if !isInitialState {
 			return false
 		} else {
-			isReporter := incident.ReporterID != nil && *incident.ReporterID == userID
+			isReporter := (incident.ReporterID != nil && *incident.ReporterID == userID) ||
+				(incident.CreatedByID != nil && *incident.CreatedByID == userID)
 			isPrimaryAssignee := incident.AssigneeID != nil && *incident.AssigneeID == userID
 			isAssignee, _ := h.incidentRepo.IsUserAssignee(c.UserContext(), incident.ID, userID)
 			if !isReporter && !isPrimaryAssignee && !isAssignee {
@@ -637,6 +651,20 @@ func (h *IncidentHandler) scopeIncidentFilterToUser(c *fiber.Ctx, filter *models
 
 	if filter.ReporterPhoneSearch != "" && user != nil && !user.IsSuperAdmin && !user.HasPermission("incidents:filter_reporter_phone") {
 		return true, utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "insufficient_permissions_reporter_phone"))
+	}
+
+	// AMAX-4262: Citizens should only see incidents they created (reporter_id = their user ID).
+	// Skip department/classification/location scoping entirely for Citizen role — those scopes
+	// are designed for internal staff and would incorrectly exclude incidents that were triaged
+	// to departments/classifications the citizen is not assigned to.
+	if findErr == nil && user != nil && !user.IsSuperAdmin && user.HasRole(constants.USER_ROLE.CITIZEN) {
+		filter.ReporterID = []string{userID.String()}
+		roleIDs := make([]uuid.UUID, 0, len(user.Roles))
+		for _, r := range user.Roles {
+			roleIDs = append(roleIDs, r.ID)
+		}
+		filter.UserRoleIDs = roleIDs
+		return false, nil
 	}
 
 	if findErr == nil && user != nil && !isUnscoped {
@@ -1629,7 +1657,15 @@ func (h *IncidentHandler) GetStatsV2(c *fiber.Ctx) error {
 		enforceAccessScope := strings.EqualFold(strings.TrimSpace(os.Getenv("ENFORCE_USER_ACCESS_SCOPE")), "true")
 		statsUserID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 		if u, err := h.userRepo.FindByIDWithRelations(c.UserContext(), statsUserID); err == nil && u != nil {
-			if enforceAccessScope {
+			// AMAX-4262: Citizens should only see stats for incidents they created.
+			// Skip department/classification/location scoping — same rationale as
+			// scopeIncidentFilterToUser above.
+			if u.HasRole(constants.USER_ROLE.CITIZEN) {
+				filter.ReporterID = []string{statsUserID.String()}
+				for _, r := range u.Roles {
+					filter.UserRoleIDs = append(filter.UserRoleIDs, r.ID)
+				}
+			} else if enforceAccessScope {
 				h.applyUserAccessScope(filter, u)
 			} else {
 				// Legacy scoping logic
@@ -2393,34 +2429,26 @@ func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
 	rawToken := utils.GenerateIncidentToken(incidentID.String(), ivrSmsDuration)
 	smsLink := utils.BuildSMSLinkFromToken(c.UserContext(), incidentID.String(), rawToken)
 
-	subject := i18n.T(c.UserContext(), "request_additional_info")
-	smsMessage := fmt.Sprintf(
-		"Dear Beneficiary,\nPlease complete your incident details through the link below and fill in the required information to proceed with your request:\n%s\nThank you for your cooperation.",
-		smsLink,
-	)
-
 	lang, ok := c.Locals(constants.ContextKeys.ACCEPT_LANGUAGE).(string)
 	if !ok || lang == "" {
 		lang = "en" // Default language
 	}
 
-	if lang == "ar" {
-		// subject = i18n.T(c.UserContext(), "request_additional_info_ar")
-		smsMessage = fmt.Sprintf(
-			"عزيزي المستفيد،\nنأمل استكمال بيانات البلاغ عبر الرابط أدناه وتعبئة الحقول المطلوبة، وذلك لاستكمال معالجة البلاغ:\n%s\nشكرًا لتعاونكم.",
-			smsLink,
-		)
-	}
-	fmt.Printf("REQUEST-INFO-SMS: lang %s, subject: %s, message: %s", lang, subject, smsMessage)
-
 	now := time.Now()
-	_, smsErr := internalUtils.SendSMS(c.UserContext(), mobile, smsMessage)
+	smsErr := h.notificationService.SendSMSTemplate(
+		c.UserContext(), "INCIDENT_REQUEST_INFO_SMS", lang, mobile,
+		map[string]string{
+			"sms_link":        smsLink,
+			"incident_number": incident.IncidentNumber,
+		},
+		&userID, &incidentID,
+	)
 	status := "sent"
 	if smsErr != nil {
 		status = "failed"
-		log.Printf("REQUEST-INFO-SMS: Failed for incident %s to %s: %v", incident.IncidentNumber, mobile, smsErr)
+		log.Printf("REQUEST-INFO-SMS: Failed for incident %s to %s: %v", incident.IncidentNumber, maskMobileForLog(mobile), smsErr)
 	} else {
-		log.Printf("REQUEST-INFO-SMS: Sent successfully to %s for incident %s", mobile, incident.IncidentNumber)
+		log.Printf("REQUEST-INFO-SMS: Sent via template to %s for incident %s", maskMobileForLog(mobile), incident.IncidentNumber)
 	}
 
 	// Track IVR SMS link: deactivate old links, create new record.
@@ -2438,30 +2466,8 @@ func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
 		_ = h.service.CreateRevision(c.UserContext(), incidentID,
 			models.RevisionActionIVRSmsSent,
 			fmt.Sprintf("Agent requested additional information from citizen via SMS to %s", mobile),
+			fmt.Sprintf("طلب الوكيل معلومات إضافية من المواطن عبر الرسائل القصيرة إلى %s", mobile),
 			nil, userID)
-	}
-
-	// Log notification
-	notification := &models.NotificationLog{
-		Channel:    "sms",
-		Direction:  "outbound",
-		Category:   "sent",
-		Language:   lang,
-		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
-		Subject:    subject,
-		Body:       smsMessage,
-		Status:     status,
-		Provider:   "twilio",
-		IsRead:     false,
-		SentBy:     &userID,
-		SentAt:     &now,
-	}
-	if smsErr != nil {
-		notification.ErrorMessage = smsErr.Error()
-		notification.FailureCode = services.ClassifyFailureCode(smsErr)
-	}
-	if err := h.incidentRepo.CreateNotification(c.UserContext(), notification); err != nil {
-		log.Printf("REQUEST-INFO-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
 	}
 
 	if smsErr != nil {

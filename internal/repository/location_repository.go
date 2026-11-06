@@ -33,6 +33,8 @@ type LocationRepository interface {
 	FetchLocationFullPathByID(ctx context.Context, locationID uuid.UUID) (string, error)
 	GetAncestors(ctx context.Context, id uuid.UUID) ([]models.Location, error)
 	HasActiveChildren(ctx context.Context, id uuid.UUID) (bool, error)
+	// IsChild reports whether the location is a leaf, i.e. it has no children.
+	IsChild(ctx context.Context, id uuid.UUID) (bool, error)
 	CheckDeleteDependencies(ctx context.Context, id uuid.UUID) (children, users, incidents int64, err error)
 	// CheckDuplicate looks for a location whose name/name_ar collide under the given
 	// parent (matching FindByNameOrNameArAndParent's scoping) or whose code collides
@@ -457,6 +459,14 @@ func (r *locationRepository) HasActiveChildren(ctx context.Context, id uuid.UUID
 		Where("parent_id = ? AND is_active = true AND deleted_at IS NULL", id).
 		Count(&count).Error
 	return count > 0, err
+}
+
+func (r *locationRepository) IsChild(ctx context.Context, id uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&models.Location{}).
+		Where("parent_id = ? AND deleted_at IS NULL", id).
+		Count(&count).Error
+	return count == 0, err
 }
 
 func (r *locationRepository) CheckDeleteDependencies(ctx context.Context, id uuid.UUID) (children, users, incidents int64, err error) {

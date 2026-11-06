@@ -8,6 +8,7 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type ErrorLogRepository interface {
@@ -101,7 +102,7 @@ func (r *errorLogRepository) ListForExport(ctx context.Context, f models.ErrorLo
 func (r *errorLogRepository) UpdateStatus(ctx context.Context, id uuid.UUID, toStatus, note string, userID *uuid.UUID, userName string) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var e models.ErrorLog
-		if err := tx.First(&e, "id = ?", id).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&e, "id = ?", id).Error; err != nil {
 			return err
 		}
 		history := models.ErrorLogHistory{

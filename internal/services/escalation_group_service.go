@@ -524,32 +524,27 @@ func (s *EscalationGroupService) sendGroupNotification(
 	sendEmail := group.Channel == "email" || group.Channel == "both"
 
 	if sendSMS && user.Phone != "" {
-		// Always build the hardcoded SMS as fallback content.
-		// If the group has a template code, SendNotification will override it with the DB template.
-		smsBody := templates.BuildSLABreachSMS(user.FirstName, user.LastName, incidentCount, classificationName, slaPageURL)
-
-		var templateCode *string
-		var smsVars map[string]string
-		// The hardcoded fallback body above is English-only by design; language
-		// selection only applies when a bilingual DB template is configured.
+		// SMS is always template-based: the group's own template, else the seeded default.
+		smsCode := group.SMSTemplateCode
+		if smsCode == "" {
+			smsCode = "SLA_GROUP_BREACH_SMS"
+		}
+		templateCode := &smsCode
+		smsVars := vars
 		smsLanguage := "en"
-		if group.SMSTemplateCode != "" {
-			templateCode = &group.SMSTemplateCode
-			smsVars = vars
-			if group.Language != "" {
-				smsLanguage = group.Language
-			}
+		if group.Language != "" {
+			smsLanguage = group.Language
 		}
 
 		_, err := s.notificationService.SendNotification(
 			ctx, "sms", templateCode, smsLanguage,
 			[]string{user.Phone}, nil, nil,
-			"", smsBody, smsVars, nil, sentBy, nil,
+			"", "", smsVars, nil, sentBy, nil,
 		)
 		if err != nil {
-			log.Printf("[EscalationGroupService] SMS failed for user %s (group '%s'): %v", user.Email, group.Name, err)
+			log.Printf("[SMS] flow=escalation_group: SMS failed for user %s (group '%s'): %v", user.Email, group.Name, err)
 		} else {
-			log.Printf("[EscalationGroupService] SMS sent to %s (group '%s')", user.Phone, group.Name)
+			log.Printf("[SMS] flow=escalation_group: SMS sent to %s (group '%s')", maskMobile(user.Phone), group.Name)
 		}
 	}
 
