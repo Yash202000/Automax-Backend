@@ -1000,6 +1000,7 @@ func (h *UserHandler) Import(c *fiber.Ctx) error {
 		imported++
 	}
 
+	utils.ReportImportErrors(c, errors)
 	result := map[string]interface{}{
 		"imported": imported,
 		"skipped":  skipped,

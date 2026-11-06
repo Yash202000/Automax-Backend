@@ -20,6 +20,7 @@ var permissionModuleArabic = map[string]string{
 	"corrective_action":      "الإجراءات التصحيحية",
 	"dashboard":              "لوحة المعلومات",
 	"departments":            "الإدارات",
+	"error-logs":             "سجل الأخطاء",
 	"escalation-groups":      "مجموعات التصعيد",
 	"escalation-policies":    "سياسات التصعيد",
 	"extensions":             "التحويلات الهاتفية",
@@ -120,6 +121,10 @@ var permissionNameArabic = map[string]struct{ Name, Description string }{
 	"departments:delete": {"حذف الإدارات", "حذف الإدارات"},
 
 	// Escalation
+	"error-logs:view":           {"عرض سجل الأخطاء", "عرض قائمة سجل الأخطاء وتفاصيلها"},
+	"error-logs:update":         {"تحديث حالة الخطأ", "تغيير حالة الخطأ وإضافة ملاحظات"},
+	"error-logs:export":         {"تصدير سجل الأخطاء", "تصدير قائمة سجل الأخطاء المصفاة"},
+	"error-logs:view_technical": {"عرض التفاصيل الفنية للأخطاء", "عرض التفاصيل الفنية لسجلات الأخطاء"},
 	"escalation-groups:view":         {"عرض مجموعات التصعيد", "عرض قائمة مجموعات التصعيد وتفاصيلها"},
 	"escalation-groups:create":       {"إنشاء مجموعة تصعيد", "إنشاء مجموعات تصعيد جديدة"},
 	"escalation-groups:update":       {"تحديث مجموعة التصعيد", "تحديث إعدادات مجموعة التصعيد"},
