@@ -1,6 +1,11 @@
 package utils
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
+	"errors"
+	"net"
 	"regexp"
 	"strings"
 )
@@ -49,4 +54,16 @@ func CSVSafe(s string) string {
 		return "'" + s
 	}
 	return s
+}
+
+// IsInfraError reports whether err is a backend failure (database/network down or
+// timed out) rather than a user mistake such as wrong credentials.
+func IsInfraError(err error) bool {
+	var ne net.Error
+	if errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone) || errors.Is(err, context.DeadlineExceeded) || errors.As(err, &ne) {
+		return true
+	}
+	m := strings.ToLower(err.Error())
+	return strings.Contains(m, "failed to connect") || strings.Contains(m, "connection refused") ||
+		strings.Contains(m, "database is closed") || strings.Contains(m, "bad connection") || strings.Contains(m, "conn closed")
 }

@@ -190,6 +190,7 @@ func ErrorLog() fiber.Handler {
 			// Panic: log it, then let the recover middleware turn it into a 500.
 			if r := recover(); r != nil {
 				RecordRequestError(c, http.StatusInternalServerError, "Internal Server Error", fmt.Sprintf("panic: %v", r))
+				c.Locals(utils.LocalErrorRecorded, true) // stop customErrorHandler logging it again
 				panic(r)
 			}
 		}()
