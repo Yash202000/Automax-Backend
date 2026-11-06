@@ -169,18 +169,21 @@ func (s *callLogService) ListCallLogsSummary(ctx context.Context, filter *models
 	for ph := range phoneSet {
 		phones = append(phones, ph)
 	}
-	nameMap := make(map[string]string) // phone/ext → full name
-	extMap := make(map[string]string)  // phone/ext → extension
+	nameMap := make(map[string]string)  // phone/ext → full name
+	extMap := make(map[string]string)   // phone/ext → extension
+	idMap := make(map[string]uuid.UUID) // phone/ext → user ID
 	if users, err := s.userRepo.FindByExtOrPhoneList(ctx, phones); err == nil {
 		for _, u := range users {
 			fullName := strings.TrimSpace(u.FirstName + " " + u.LastName)
 			if u.Extension != "" {
 				nameMap[u.Extension] = fullName
 				extMap[u.Extension] = u.Extension
+				idMap[u.Extension] = u.ID
 			}
 			if u.Phone != "" {
 				nameMap[u.Phone] = fullName
 				extMap[u.Phone] = u.Extension
+				idMap[u.Phone] = u.ID
 			}
 		}
 	}
@@ -286,6 +289,25 @@ func (s *callLogService) ListCallLogsSummary(ctx context.Context, filter *models
 			item.OtherPartyPhone = otherP.PhoneNumber
 			item.OtherPartyExtension = extMap[otherP.PhoneNumber]
 			item.OtherPartyName = otherPartyName(otherP.DisplayName, nameMap[otherP.PhoneNumber], otherP.PhoneNumber)
+		}
+
+		if unscoped {
+			fill := func(p *models.CallParticipant) (*uuid.UUID, string, string) {
+				if p == nil {
+					return nil, "", ""
+				}
+				var id *uuid.UUID
+				if v, ok := idMap[p.PhoneNumber]; ok {
+					id = &v
+				}
+				ext := extMap[p.PhoneNumber]
+				if ext == "" && id == nil {
+					ext = p.PhoneNumber // external party: surface the raw number
+				}
+				return id, otherPartyName(p.DisplayName, nameMap[p.PhoneNumber], p.PhoneNumber), ext
+			}
+			item.SenderID, item.SenderName, item.SenderExtension = fill(initiatorParticipant)
+			item.ReceiverID, item.ReceiverName, item.ReceiverExtension = fill(otherParticipant)
 		}
 
 		items[i] = item
