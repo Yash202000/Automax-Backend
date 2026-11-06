@@ -118,7 +118,9 @@ func (r *roleRepository) FindByName(ctx context.Context, name string) (*models.R
 
 func (r *roleRepository) Update(ctx context.Context, role *models.Role) error {
 	role.Code = strings.ToLower(strings.TrimSpace(role.Code))
-	return r.db.WithContext(ctx).Save(role).Error
+	// Omit Permissions: Save would otherwise re-insert every preloaded permission
+	// into role_permissions (which has no unique index) on each update.
+	return r.db.WithContext(ctx).Omit("Permissions").Save(role).Error
 }
 
 func (r *roleRepository) Delete(ctx context.Context, id uuid.UUID) error {
