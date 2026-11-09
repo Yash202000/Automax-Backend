@@ -369,6 +369,13 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 	period := parseDashboardPeriod(c)
 	quarter := period.quarter()
 
+	// Everything below only covers the KPIs the user may access.
+	scope := kpiScope(c)
+	dictUnion := kpiDictionaryUnionSQL
+	if !scope.All {
+		dictUnion = "(SELECT * FROM " + kpiDictionaryUnionSQL + " WHERE " + scope.TypedIDCondition("d.kpi_type", "d.id") + ") d"
+	}
+
 	// dictQuery scopes a KPI dictionary table (Strategic/Operational/Award)
 	// query to the selected KPI/Metric, to the Objective/Criteria/
 	// Sub-Criteria filters using its own direct taxonomy columns, and to the
@@ -376,6 +383,7 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 	// kpiPeriodScopeSQL).
 	dictQuery := func(model interface{}, table, typeLiteral string) *gorm.DB {
 		q := h.db.WithContext(c.UserContext()).Model(model)
+		q = scope.Apply(q, scope.IDCondition(typeLiteral, table+".id"))
 		if kpiCode != "" {
 			if typeLiteral != kpiCodeType {
 				q = q.Where("1 = 0")
@@ -450,7 +458,7 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 	// the same month-overlap rule as the dictionary scoping above.
 	entryQuery := func(status string) *gorm.DB {
 		q := h.db.WithContext(c.UserContext()).Table("kpi_entries e").
-			Joins("JOIN "+kpiDictionaryUnionSQL+" ON d.id = e.kpi_id AND d.kpi_type = e.kpi_type").
+			Joins("JOIN "+dictUnion+" ON d.id = e.kpi_id AND d.kpi_type = e.kpi_type").
 			Where("e.deleted_at IS NULL AND e.status = ?", status)
 		if kpiType != "" {
 			q = q.Where("e.kpi_type = ?", kpiType)
@@ -493,6 +501,7 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 
 	periodicQuery := func(model interface{}) *gorm.DB {
 		q := h.db.WithContext(c.UserContext()).Model(model)
+		q = scope.Apply(q, scope.CodeCondition("kpi_type", "kpi_code"))
 		if kpiType != "" {
 			q = q.Where("kpi_type = ?", kpiType)
 		}
@@ -503,7 +512,7 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 			// Benchmarks/segmentation are recorded per KPI, not per metric:
 			// keep the rows of the metric's own KPI.
 			q = q.Where("(kpi_type, kpi_code) IN ("+
-				"SELECT m.kpi_type, d.code FROM kpi_metrics m JOIN "+kpiDictionaryUnionSQL+
+				"SELECT m.kpi_type, d.code FROM kpi_metrics m JOIN "+dictUnion+
 				" ON d.id = m.kpi_id AND d.kpi_type = m.kpi_type WHERE m.id = ?)", metricID)
 		}
 		if year != 0 {
@@ -587,14 +596,14 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 	// nothing.
 	h.db.WithContext(c.UserContext()).Raw(
 		"SELECT DISTINCT y FROM (" +
-			"SELECT e.reporting_year AS y FROM kpi_entries e JOIN " + kpiDictionaryUnionSQL +
+			"SELECT e.reporting_year AS y FROM kpi_entries e JOIN " + dictUnion +
 			" ON d.id = e.kpi_id AND d.kpi_type = e.kpi_type WHERE e.deleted_at IS NULL" +
-			" UNION SELECT " + targetYearExpr + " FROM kpi_annual_targets t JOIN " + kpiDictionaryUnionSQL +
+			" UNION SELECT " + targetYearExpr + " FROM kpi_annual_targets t JOIN " + dictUnion +
 			" ON d.code = t.kpi_code AND d.kpi_type = t.kpi_type WHERE t.deleted_at IS NULL" +
 			") years WHERE y > 0 ORDER BY y",
 	).Scan(&data.AvailableYears)
 
-	kpiOpts := h.db.WithContext(c.UserContext()).Table(kpiDictionaryUnionSQL).
+	kpiOpts := h.db.WithContext(c.UserContext()).Table(dictUnion).
 		Select("d.id, d.code, d.kpi_type AS type, d.name_en")
 	if kpiType != "" {
 		kpiOpts = kpiOpts.Where("d.kpi_type = ?", kpiType)
@@ -602,7 +611,7 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 	kpiOpts.Order("d.code").Scan(&data.KpiOptions)
 
 	metricOpts := h.db.WithContext(c.UserContext()).Table("kpi_metrics m").
-		Joins("JOIN "+kpiDictionaryUnionSQL+" ON d.id = m.kpi_id AND d.kpi_type = m.kpi_type").
+		Joins("JOIN "+dictUnion+" ON d.id = m.kpi_id AND d.kpi_type = m.kpi_type").
 		Select("m.id, m.name, d.code AS kpi_code, d.kpi_type").
 		Where("m.deleted_at IS NULL")
 	if kpiType != "" {
@@ -622,6 +631,8 @@ func (h *KpiDashboardHandler) GetDashboardTrends(c *fiber.Ctx) error {
 
 	q := h.db.WithContext(c.UserContext()).Model(&models.KpiPerformance{}).
 		Select("year, quarter, AVG(achievement_pct) as avg_achievement, count(*) as kpi_count")
+	scope := kpiScope(c)
+	q = scope.Apply(q, scope.CodeCondition("kpi_type", "kpi_code"))
 
 	if kpiCode != "" {
 		q = q.Where("kpi_code = ?", kpiCode)
@@ -646,10 +657,12 @@ func (h *KpiDashboardHandler) GetDashboardTrends(c *fiber.Ctx) error {
 func (h *KpiDashboardHandler) GetKpiCardDefinitions(c *fiber.Ctx) error {
 	kpiType := c.Query("type")
 	search := c.Query("search")
+	scope := kpiScope(c)
 
 	var strategicCards []KpiCardDef
 	q := h.db.WithContext(c.UserContext()).Model(&models.StrategicKPI{}).
 		Select("id, code, 'strategic' as type, name_en, name_ar, formula, baseline, unit_of_measure, polarity, reporting_frequency as reporting_freq, data_source, activation_status")
+	q = scope.Apply(q, scope.IDCondition("strategic", "id"))
 
 	if search != "" {
 		q = q.Where("(name_en ILIKE ? OR name_ar ILIKE ? OR code ILIKE ?)", "%"+search+"%", "%"+search+"%", "%"+search+"%")
@@ -664,6 +677,7 @@ func (h *KpiDashboardHandler) GetKpiCardDefinitions(c *fiber.Ctx) error {
 	if kpiType == "operational" || kpiType == "" {
 		q2 := h.db.WithContext(c.UserContext()).Model(&models.OperationalKPI{}).
 			Select("id, code, 'operational' as type, name_en, name_ar, formula, baseline, unit_of_measure, polarity, reporting_frequency as reporting_freq, data_source, activation_status")
+		q2 = scope.Apply(q2, scope.IDCondition("operational", "id"))
 		if search != "" {
 			q2 = q2.Where("(name_en ILIKE ? OR name_ar ILIKE ? OR code ILIKE ?)", "%"+search+"%", "%"+search+"%", "%"+search+"%")
 		}
@@ -676,6 +690,7 @@ func (h *KpiDashboardHandler) GetKpiCardDefinitions(c *fiber.Ctx) error {
 	if kpiType == "award" || kpiType == "" {
 		q3 := h.db.WithContext(c.UserContext()).Model(&models.AwardKPI{}).
 			Select("id, code, 'award' as type, name_en, name_ar, formula, baseline, unit_of_measure, polarity, reporting_frequency as reporting_freq, data_source, activation_status")
+		q3 = scope.Apply(q3, scope.IDCondition("award", "id"))
 		if search != "" {
 			q3 = q3.Where("(name_en ILIKE ? OR name_ar ILIKE ? OR code ILIKE ?)", "%"+search+"%", "%"+search+"%", "%"+search+"%")
 		}

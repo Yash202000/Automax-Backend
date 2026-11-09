@@ -99,6 +99,9 @@ func (h *KpiDictionaryHandler) ListStrategic(c *fiber.Ctx) error {
 
 	q := h.db.WithContext(c.UserContext()).Model(&models.StrategicKPI{}).
 		Preload("Pillar").Preload("Domain").Preload("AwardKpiMeasure").Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments").Preload("Goal").Preload("Process")
+	// Only the Super Admin and the KPI's assigned collaborators see it.
+	scope := kpiScope(c)
+	q = scope.Apply(q, scope.IDCondition("strategic", "strategic_kpis.id"))
 
 	if search != "" {
 		q = q.Where("name_en ILIKE ? OR name_ar ILIKE ? OR code ILIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
@@ -228,6 +231,9 @@ func (h *KpiDictionaryHandler) CreateStrategic(c *fiber.Ctx) error {
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if err := h.workflowSvc.InitiateKpiDictionaryWorkflow(c.UserContext(), models.KPITypeStrategic, item.ID, userID); err != nil {
 		log.Printf("[kpi_dictionary] CreateStrategic: InitiateKpiDictionaryWorkflow failed for %s: %v", item.ID, err)
+	}
+	if err := assignKpiCreator(c, models.KPITypeStrategic, item.ID); err != nil {
+		log.Printf("[kpi_dictionary] CreateStrategic: assigning creator as KPI Owner failed for %s: %v", item.ID, err)
 	}
 
 	h.db.WithContext(c.UserContext()).
@@ -364,6 +370,9 @@ func (h *KpiDictionaryHandler) ListOperational(c *fiber.Ctx) error {
 	q := h.db.WithContext(c.UserContext()).Model(&models.OperationalKPI{}).
 		Preload("Goal").Preload("OperationalObjective").Preload("Process").Preload("Domain").Preload("AwardKpiMeasure").
 		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments")
+	// Only the Super Admin and the KPI's assigned collaborators see it.
+	scope := kpiScope(c)
+	q = scope.Apply(q, scope.IDCondition("operational", "operational_kpis.id"))
 
 	if search != "" {
 		q = q.Where("name_en ILIKE ? OR name_ar ILIKE ? OR code ILIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
@@ -457,6 +466,9 @@ func (h *KpiDictionaryHandler) CreateOperational(c *fiber.Ctx) error {
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if err := h.workflowSvc.InitiateKpiDictionaryWorkflow(c.UserContext(), models.KPITypeOperational, item.ID, userID); err != nil {
 		log.Printf("[kpi_dictionary] CreateOperational: InitiateKpiDictionaryWorkflow failed for %s: %v", item.ID, err)
+	}
+	if err := assignKpiCreator(c, models.KPITypeOperational, item.ID); err != nil {
+		log.Printf("[kpi_dictionary] CreateOperational: assigning creator as KPI Owner failed for %s: %v", item.ID, err)
 	}
 
 	h.db.WithContext(c.UserContext()).
@@ -610,6 +622,9 @@ func (h *KpiDictionaryHandler) ListAward(c *fiber.Ctx) error {
 	q := h.db.WithContext(c.UserContext()).Model(&models.AwardKPI{}).
 		Preload("AwardSubCriterion.AwardCriterion").Preload("Domain").Preload("AwardKpiMeasure").
 		Preload("OwnerDept").Preload("OwnerOrg").Preload("OwningAgency").Preload("RelatedDepartments")
+	// Only the Super Admin and the KPI's assigned collaborators see it.
+	scope := kpiScope(c)
+	q = scope.Apply(q, scope.IDCondition("award", "award_kpis.id"))
 
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
@@ -699,6 +714,9 @@ func (h *KpiDictionaryHandler) CreateAward(c *fiber.Ctx) error {
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	if err := h.workflowSvc.InitiateKpiDictionaryWorkflow(c.UserContext(), models.KPITypeAward, item.ID, userID); err != nil {
 		log.Printf("[kpi_dictionary] CreateAward: InitiateKpiDictionaryWorkflow failed for %s: %v", item.ID, err)
+	}
+	if err := assignKpiCreator(c, models.KPITypeAward, item.ID); err != nil {
+		log.Printf("[kpi_dictionary] CreateAward: assigning creator as KPI Owner failed for %s: %v", item.ID, err)
 	}
 
 	h.db.WithContext(c.UserContext()).
@@ -858,6 +876,9 @@ func (h *KpiDictionaryHandler) GetAvailableTransitions(c *fiber.Ctx) error {
 
 	transitions, err := h.workflowSvc.GetAvailableKpiDictionaryTransitions(c.UserContext(), kpiType, id, userID)
 	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
+	}
+	if transitions, err = allowedTransitions(c, kpiType, id, transitions); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, "", transitions)

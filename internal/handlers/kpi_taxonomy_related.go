@@ -76,10 +76,11 @@ func (h *KpiMasterDataHandler) findRelatedKpiIDs(c *fiber.Ctx, query string, arg
 		models.KPITypeAward:       &models.AwardKPI{},
 	}
 	ids := relatedKpiIDs{}
+	scope := kpiScope(c)
 	for kpiType, model := range tables {
 		var found []uuid.UUID
-		if err := h.db.WithContext(c.UserContext()).Model(model).
-			Where(query, args...).Pluck("id", &found).Error; err != nil {
+		q := h.db.WithContext(c.UserContext()).Model(model).Where(query, args...)
+		if err := scope.Apply(q, scope.IDCondition(kpiType, "id")).Pluck("id", &found).Error; err != nil {
 			return nil, err
 		}
 		ids[kpiType] = found

@@ -40,6 +40,8 @@ func NewKpiPerformanceHandler(db *gorm.DB, workflowSvc *services.KpiWorkflowServ
 func (h *KpiPerformanceHandler) ListTargets(c *fiber.Ctx) error {
 	q := h.db.WithContext(c.UserContext()).Model(&models.KpiAnnualTarget{}).
 		Preload("Metric").Preload("ApprovedBy")
+	scope := kpiScope(c)
+	q = scope.Apply(q, scope.CodeCondition("kpi_type", "kpi_code"))
 
 	if kpiCode := c.Query("kpi_code"); kpiCode != "" {
 		q = q.Where("kpi_code = ?", kpiCode)
@@ -616,6 +618,8 @@ func (h *KpiPerformanceHandler) ListPerformance(c *fiber.Ctx) error {
 
 	q := h.db.WithContext(c.UserContext()).Model(&models.KpiPerformance{}).
 		Preload("SubmittedBy").Preload("ApprovedBy")
+	scope := kpiScope(c)
+	q = scope.Apply(q, scope.CodeCondition("kpi_type", "kpi_code"))
 
 	if kpiCode := c.Query("kpi_code"); kpiCode != "" {
 		q = q.Where("kpi_code = ?", kpiCode)
@@ -787,6 +791,8 @@ func (h *KpiPerformanceHandler) GetAvailableTransitions(c *fiber.Ctx) error {
 func (h *KpiPerformanceHandler) ListBenchmarks(c *fiber.Ctx) error {
 	q := h.db.WithContext(c.UserContext()).Model(&models.KpiBenchmark{}).
 		Preload("Department")
+	scope := kpiScope(c)
+	q = scope.Apply(q, scope.CodeCondition("kpi_type", "kpi_code"))
 
 	if kpiCode := c.Query("kpi_code"); kpiCode != "" {
 		q = q.Where("kpi_code = ?", kpiCode)
@@ -967,7 +973,8 @@ func (h *KpiPerformanceHandler) ListBenchmarkSummary(c *fiber.Ctx) error {
 	}
 
 	var results []BenchSummary
-	if err := h.db.WithContext(c.UserContext()).Model(&models.KpiBenchmark{}).
+	scope := kpiScope(c)
+	if err := scope.Apply(h.db.WithContext(c.UserContext()).Model(&models.KpiBenchmark{}), scope.CodeCondition("kpi_type", "kpi_code")).
 		Select("kpi_code, zone, benchmark_entity, " +
 			"AVG(internal_achievement) as avg_internal, " +
 			"AVG(benchmark_achievement) as avg_benchmark, " +
@@ -987,6 +994,8 @@ func (h *KpiPerformanceHandler) ListBenchmarkSummary(c *fiber.Ctx) error {
 func (h *KpiPerformanceHandler) ListSegmentation(c *fiber.Ctx) error {
 	q := h.db.WithContext(c.UserContext()).Model(&models.KpiSegmentation{}).
 		Preload("Department")
+	scope := kpiScope(c)
+	q = scope.Apply(q, scope.CodeCondition("kpi_type", "kpi_code"))
 
 	if kpiCode := c.Query("kpi_code"); kpiCode != "" {
 		q = q.Where("kpi_code = ?", kpiCode)
@@ -1104,7 +1113,8 @@ func (h *KpiPerformanceHandler) ListSegmentationSummary(c *fiber.Ctx) error {
 	}
 
 	var results []SegSummary
-	if err := h.db.WithContext(c.UserContext()).Model(&models.KpiSegmentation{}).
+	scope := kpiScope(c)
+	if err := scope.Apply(h.db.WithContext(c.UserContext()).Model(&models.KpiSegmentation{}), scope.CodeCondition("kpi_type", "kpi_code")).
 		Select("dimension_name, segment_name, " +
 			"AVG(achievement) as avg_achievement, " +
 			"AVG(target) as avg_target, " +

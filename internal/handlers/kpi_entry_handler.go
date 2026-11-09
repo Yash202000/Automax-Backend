@@ -113,6 +113,8 @@ func (h *KpiEntryHandler) ListAllEntries(c *fiber.Ctx) error {
 	db := h.db.WithContext(c.UserContext())
 	q := db.Model(&models.KpiEntry{}).
 		Preload("Metric").Preload("SubmittedBy").Preload("ApprovedBy")
+	scope := kpiScope(c)
+	q = scope.Apply(q, scope.TypedIDCondition("kpi_type", "kpi_id"))
 
 	if code := c.Query("kpi_code"); code != "" {
 		like := "%" + code + "%"
@@ -304,7 +306,7 @@ func (h *KpiEntryHandler) CreateEntry(c *fiber.Ctx) error {
 		Action:      "create",
 		Module:      "kpi",
 		ResourceID:  kpiID.String(),
-		Description: fmt.Sprintf("Created KPI entry for metric %s period %s/%d", req.MetricID, req.PeriodCode, req.ReportingYear),
+		Description: fmt.Sprintf("Created KPI entry %s", kpiEntryLabel(db, item)),
 		Status:      "success",
 	})
 
@@ -395,7 +397,7 @@ func (h *KpiEntryHandler) UpdateEntry(c *fiber.Ctx) error {
 		Action:      "update",
 		Module:      "kpi",
 		ResourceID:  entry.ID.String(),
-		Description: fmt.Sprintf("Updated KPI entry %s", entry.ID),
+		Description: fmt.Sprintf("Updated KPI entry %s", kpiEntryLabel(db, &entry)),
 		Status:      "success",
 	})
 
@@ -433,7 +435,7 @@ func (h *KpiEntryHandler) DeleteEntry(c *fiber.Ctx) error {
 		Action:      "delete",
 		Module:      "kpi",
 		ResourceID:  entryID.String(),
-		Description: fmt.Sprintf("Deleted KPI entry %s", entryID),
+		Description: fmt.Sprintf("Deleted KPI entry %s", kpiEntryLabel(db, &entry)),
 		Status:      "success",
 	})
 
@@ -515,7 +517,7 @@ func (h *KpiEntryHandler) CreateCorrection(c *fiber.Ctx) error {
 		Action:      "create",
 		Module:      "kpi",
 		ResourceID:  original.KpiID.String(),
-		Description: fmt.Sprintf("Created %s (v%d) of KPI entry %s for period %s/%d", req.CorrectionType, item.EntryVersion, original.ID, original.PeriodCode, original.ReportingYear),
+		Description: fmt.Sprintf("Created %s (v%d) of KPI entry %s", req.CorrectionType, item.EntryVersion, kpiEntryLabel(db, &original)),
 		Status:      "success",
 	})
 
@@ -548,7 +550,7 @@ func (h *KpiEntryHandler) TransitionEntry(c *fiber.Ctx) error {
 		Action:      "transition",
 		Module:      "kpi",
 		ResourceID:  entryID.String(),
-		Description: fmt.Sprintf("Transitioned KPI entry %s (status -> %s)", entryID, entry.Status),
+		Description: fmt.Sprintf("Transitioned KPI entry %s (status -> %s)", kpiEntryLabel(h.db.WithContext(c.UserContext()), entry), entry.Status),
 		Status:      "success",
 	})
 
@@ -565,6 +567,13 @@ func (h *KpiEntryHandler) GetAvailableEntryTransitions(c *fiber.Ctx) error {
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	transitions, err := h.workflowSvc.GetAvailableKpiEntryTransitions(c.UserContext(), entryID, userID)
 	if err != nil {
+		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
+	}
+	var entry models.KpiEntry
+	if err := h.db.WithContext(c.UserContext()).Select("kpi_type, kpi_id").First(&entry, entryID).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	if transitions, err = allowedTransitions(c, entry.KpiType, entry.KpiID, transitions); err != nil {
 		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, "", transitions)
