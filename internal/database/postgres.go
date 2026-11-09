@@ -399,6 +399,11 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		log.Printf("Warning: AI quality migration failed: %v", err)
 	}
 
+	// Migrate workflow state lock_assignee column
+	if err := migrations.MigrateLockAssignee(db); err != nil {
+		log.Printf("Warning: lock assignee migration failed: %v", err)
+	}
+
 	// Migrate classification single-type column → classification_types join table
 	if err := migrations.MigrateClassificationTypes(db); err != nil {
 		log.Printf("Warning: classification types migration failed: %v", err)

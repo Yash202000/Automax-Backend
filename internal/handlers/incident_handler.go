@@ -1060,6 +1060,9 @@ func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 		if errors.Is(err, services.ErrEditNotAllowed) {
 			return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "forbidden_no_edit"))
 		}
+		if errors.Is(err, services.ErrAssigneeLocked) {
+			return assigneeLockedResponse(c, err)
+		}
 		// Hierarchy rejections are the caller's mistake, not a server fault. Each
 		// sentinel's message is its i18n key.
 		switch {
@@ -1521,6 +1524,16 @@ func (h *IncidentHandler) DownloadAttachment(c *fiber.Ctx) error {
 
 // Assignment
 
+// assigneeLockedResponse maps a lock_assignee rejection to 409 Conflict.
+func assigneeLockedResponse(c *fiber.Ctx, err error) error {
+	stateName := ""
+	var lockErr *services.AssigneeLockedError
+	if errors.As(err, &lockErr) {
+		stateName = lockErr.StateName
+	}
+	return utils.ErrorResponse(c, fiber.StatusConflict, i18n.Tf(c.UserContext(), services.ErrAssigneeLocked.Error(), stateName))
+}
+
 func (h *IncidentHandler) AssignIncident(c *fiber.Ctx) error {
 	incidentIDStr := c.Params("id")
 	incidentID, err := uuid.Parse(incidentIDStr)
@@ -1544,6 +1557,9 @@ func (h *IncidentHandler) AssignIncident(c *fiber.Ctx) error {
 
 	incident, err := h.service.AssignIncident(c.UserContext(), incidentID, assigneeID, userID)
 	if err != nil {
+		if errors.Is(err, services.ErrAssigneeLocked) {
+			return assigneeLockedResponse(c, err)
+		}
 		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 

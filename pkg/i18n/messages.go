@@ -969,6 +969,7 @@ var messages = map[string][2]string{
 	"otp_name_mismatch":                 {"Provided name does not match the existing user's records", "الاسم المقدم لا يتطابق مع سجلات المستخدم الحالي"},
 
 	// Incidents – business logic
+	"assignee_locked_in_current_state":        {"Assignee cannot be changed while the incident is in state %s", "لا يمكن تغيير المسند إليه أثناء وجود البلاغ في الحالة %s"},
 	"child_incidents_locked":                  {"Child incidents cannot be edited - they are locked after merging", "لا يمكن تعديل البلاغات الفرعية - تم قفلها بعد الدمج"},
 	"child_incidents_no_manual_transition":    {"Child incidents cannot be transitioned manually - they follow the master incident's status", "لا يمكن تغيير حالة البلاغات الفرعية يدوياً - تتبع حالة البلاغ الرئيسي"},
 	"user_not_in_scope":                       {"Selected user does not belong to the incident's assigned location, classification, or department", "المستخدم المحدد لا ينتمي إلى الموقع أو التصنيف أو القسم المعيّن للبلاغ"},

@@ -115,6 +115,11 @@ type WorkflowState struct {
 	// the AI quality monitor will process it.
 	IsAIQA bool `gorm:"column:is_ai_qa;default:false" json:"is_ai_qa"`
 
+	// LockAssignee makes the incident's assignee read-only while it is in this state.
+	// Manual edits/reassignments are rejected once the incident has an assignee;
+	// workflow transitions (and their auto-assignment) are not affected.
+	LockAssignee bool `gorm:"column:lock_assignee;default:false" json:"lock_assignee"`
+
 	// IsReadyToClose marks this state as a "Ready to Close" state that requires a
 	IsReadyToClose bool `gorm:"default:false" json:"is_ready_to_close"`
 	// IsPartialClose marks this state as a "Partial Close" state that requires a duration selection.
@@ -387,6 +392,7 @@ type WorkflowStateCreateRequest struct {
 	EscalationPolicyID *string  `json:"escalation_policy_id" validate:"omitempty,uuid"`
 	IsMergable         bool     `json:"is_mergable"`
 	IsAIQA             bool     `json:"is_ai_qa"`
+	LockAssignee       bool     `json:"lock_assignee"`
 	IsReadyToClose     bool     `json:"is_ready_to_close"`
 	IsPartialClose     bool     `json:"is_partial_close"`
 	DurationOptions    []string `json:"duration_options"`
@@ -418,6 +424,7 @@ type WorkflowStateUpdateRequest struct {
 	EscalationPolicyID *string  `json:"escalation_policy_id" validate:"omitempty,uuid"`
 	IsMergable         *bool    `json:"is_mergable"`
 	IsAIQA             *bool    `json:"is_ai_qa"`
+	LockAssignee       *bool    `json:"lock_assignee"`
 	IsReadyToClose     *bool    `json:"is_ready_to_close"`
 	IsPartialClose     *bool    `json:"is_partial_close"`
 	DurationOptions    []string `json:"duration_options"`
@@ -608,6 +615,7 @@ type WorkflowStateResponse struct {
 	EscalationPolicy   *EscalationPolicyResponse `json:"escalation_policy,omitempty"`
 	IsMergable         bool                      `json:"is_mergable"`
 	IsAIQA             bool                      `json:"is_ai_qa"`
+	LockAssignee       bool                      `json:"lock_assignee"`
 	IsReadyToClose     bool                      `json:"is_ready_to_close"`
 	IsPartialClose     bool                      `json:"is_partial_close"`
 	DurationOptions    []string                  `json:"duration_options,omitempty"`
@@ -831,6 +839,7 @@ func ToWorkflowStateResponse(s *WorkflowState) WorkflowStateResponse {
 		EscalationPolicyID: s.EscalationPolicyID,
 		IsMergable:         s.IsMergable,
 		IsAIQA:             s.IsAIQA,
+		LockAssignee:       s.LockAssignee,
 		IsReadyToClose:     s.IsReadyToClose,
 		IsPartialClose:     s.IsPartialClose,
 		SortOrder:          s.SortOrder,
@@ -1061,6 +1070,7 @@ type WorkflowStateExport struct {
 	SLAHours      *int           `json:"sla_hours,omitempty"`
 	SLAUnit       string         `json:"sla_unit,omitempty"`
 	SortOrder     int            `json:"sort_order"`
+	LockAssignee  bool           `json:"lock_assignee,omitempty"`
 	ViewableRoles []CodeNamePair `json:"viewable_roles,omitempty"`
 	EditableRoles []CodeNamePair `json:"editable_roles,omitempty"`
 }

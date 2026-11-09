@@ -33,6 +33,44 @@ var ErrInvalidLocation = errors.New("invalid_location")
 var ErrEmptyWorkflow = errors.New("empty_workflow")
 var ErrEditNotAllowed = errors.New("edit_not_allowed_in_current_state")
 
+// ErrAssigneeLocked is returned when a manual assignee change is attempted while the
+// incident's current workflow state has lock_assignee=true. Its message is its i18n key.
+var ErrAssigneeLocked = errors.New("assignee_locked_in_current_state")
+
+// AssigneeLockedError carries the locked state's name; errors.Is(err, ErrAssigneeLocked) matches it.
+type AssigneeLockedError struct {
+	StateName string
+}
+
+func (e *AssigneeLockedError) Error() string {
+	return fmt.Sprintf("assignee cannot be changed while the incident is in state %s", e.StateName)
+}
+
+func (e *AssigneeLockedError) Is(target error) bool { return target == ErrAssigneeLocked }
+
+// ensureAssigneeNotLocked rejects a manual assignee change when the state locks the
+// assignee and the incident already has one. A nil request (field omitted) or the
+// current assignee re-sent is allowed; anything else, including "" (unassign), is not.
+// Only manual edit/assign paths call this; workflow transitions are intentionally exempt.
+func ensureAssigneeNotLocked(incident *models.Incident, state *models.WorkflowState, requestedAssigneeID *string) error {
+	if state == nil || !state.LockAssignee || requestedAssigneeID == nil || !hasAssignee(incident) {
+		return nil
+	}
+	if requested, err := uuid.Parse(strings.TrimSpace(*requestedAssigneeID)); err == nil && requested == *incident.AssigneeID {
+		return nil
+	}
+	return &AssigneeLockedError{StateName: state.Name}
+}
+
+// isAssigneeLocked reports whether the incident's assignee is currently read-only.
+func isAssigneeLocked(incident *models.Incident, state *models.WorkflowState) bool {
+	return state != nil && state.LockAssignee && hasAssignee(incident)
+}
+
+func hasAssignee(incident *models.Incident) bool {
+	return incident != nil && incident.AssigneeID != nil && *incident.AssigneeID != uuid.Nil
+}
+
 // An incident must be filed against a specific place and category, not an umbrella
 // one, so its location and classification have to be leaves of their hierarchies.
 // Following the convention above, each sentinel's message is its i18n key, which is
@@ -1307,6 +1345,21 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 			tx.Rollback()
 			return nil, ErrEditNotAllowed
 		}
+	}
+
+	// Enforce lock_assignee: once assigned, the assignee is read-only in this state.
+	lockState := incident.CurrentState
+	if err == nil && currentState != nil {
+		lockState = currentState
+	}
+	if lockErr := ensureAssigneeNotLocked(incident, lockState, req.AssigneeID); lockErr != nil {
+		tx.Rollback()
+		return nil, lockErr
+	}
+	if isAssigneeLocked(incident, lockState) {
+		// Current assignee re-sent: drop it so the assignee and the
+		// incident_assignees junction table are left untouched.
+		req.AssigneeID = nil
 	}
 
 	// BLOCK: Prevent editing child incidents (merged into another)
@@ -4913,6 +4966,16 @@ func (s *incidentService) AssignIncident(ctx context.Context, incidentID, assign
 	incident, err := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Enforce lock_assignee: reject reassignment; re-assigning the same user is a no-op.
+	requested := assigneeID.String()
+	if err := ensureAssigneeNotLocked(incident, incident.CurrentState, &requested); err != nil {
+		return nil, err
+	}
+	if isAssigneeLocked(incident, incident.CurrentState) {
+		resp := models.ToIncidentResponse(incident)
+		return &resp, nil
 	}
 
 	oldAssigneeName := "Unassigned"
