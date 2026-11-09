@@ -125,8 +125,12 @@ func (imp *kpiImporter) commit(tx *gorm.DB) error {
 				return err
 			}
 		case kpiImportActionUpdate:
-			if err := tx.Model(kpiModelFor(k.Type)).Where("id = ?", k.ID).Updates(imp.kpiUpdates(k, idOf)).Error; err != nil {
-				return fmt.Errorf("updating KPI %s: %w", k.Code, err)
+			res := tx.Model(kpiModelFor(k.Type)).Where("id = ?", k.ID).Updates(imp.kpiUpdates(k, idOf))
+			if res.Error != nil {
+				return fmt.Errorf("updating KPI %s: %w", k.Code, res.Error)
+			}
+			if res.RowsAffected == 0 {
+				return fmt.Errorf("updating KPI %s: record no longer exists", k.Code)
 			}
 		}
 	}
@@ -170,9 +174,13 @@ func (imp *kpiImporter) commit(tx *gorm.DB) error {
 					return err
 				}
 			case kpiImportActionUpdate:
-				if err := tx.Model(&models.KpiAnnualTarget{}).Where("id = ?", *t.ExistingID).
-					Updates(map[string]interface{}{"target_value": t.Value, "updated_at": now}).Error; err != nil {
-					return fmt.Errorf("updating target %s %d: %w", k.Code, t.Year, err)
+				res := tx.Model(&models.KpiAnnualTarget{}).Where("id = ?", *t.ExistingID).
+					Updates(map[string]interface{}{"target_value": t.Value, "updated_at": now})
+				if res.Error != nil {
+					return fmt.Errorf("updating target %s %d: %w", k.Code, t.Year, res.Error)
+				}
+				if res.RowsAffected == 0 {
+					return fmt.Errorf("updating target %s %d: record no longer exists", k.Code, t.Year)
 				}
 			}
 		}
@@ -201,12 +209,16 @@ func (imp *kpiImporter) commit(tx *gorm.DB) error {
 		e.ComputeAchievement()
 
 		if p.action == kpiImportActionUpdate {
-			if err := tx.Model(&models.KpiEntry{}).Where("id = ?", *p.ExistingID).Updates(map[string]interface{}{
+			res := tx.Model(&models.KpiEntry{}).Where("id = ?", *p.ExistingID).Updates(map[string]interface{}{
 				"target_value_snapshot": e.TargetValueSnapshot, "direct_actual_value": e.DirectActualValue, "actual_value": e.ActualValue,
 				"achievement_percentage": e.AchievementPercentage, "variance_value": e.VarianceValue, "performance_status": e.PerformanceStatus,
 				"source_reference": e.SourceReference, "updated_at": now,
-			}).Error; err != nil {
-				return fmt.Errorf("updating performance %s %d Q%d: %w", k.Code, p.Year, p.Quarter, err)
+			})
+			if res.Error != nil {
+				return fmt.Errorf("updating performance %s %d Q%d: %w", k.Code, p.Year, p.Quarter, res.Error)
+			}
+			if res.RowsAffected == 0 {
+				return fmt.Errorf("updating performance %s %d Q%d: record no longer exists", k.Code, p.Year, p.Quarter)
 			}
 			continue
 		}

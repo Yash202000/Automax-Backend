@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/automax/backend/internal/models"
 	"gorm.io/gorm"
@@ -14,6 +15,9 @@ var kpiTargetEditableStatuses = []string{"draft", "returned", "rejected"}
 // commit writes the validated plan; updates keep the target ID so linked
 // entries stay valid.
 func (imp *kpiTargetsImporter) commit(tx *gorm.DB) error {
+	if err := imp.revalidateCommit(tx); err != nil {
+		return err
+	}
 	for _, r := range imp.recs {
 		switch r.action {
 		case kpiImportActionCreate:
@@ -63,6 +67,89 @@ func (imp *kpiTargetsImporter) commit(tx *gorm.DB) error {
 				return fmt.Errorf("updating target for KPI %s period %s/%d: target is no longer editable (only draft, returned or rejected targets can be updated)", r.KpiCode, r.Target.PeriodCode, r.Target.TargetYear)
 			}
 		}
+	}
+	return nil
+}
+
+// revalidateCommit serializes concurrent imports on the target identities and
+// KPI/metric scopes they write, then re-checks stored targets inside the
+// transaction: creates that now exist become skips or updates, and Milestone /
+// Ad Hoc ranges that now overlap are rejected instead of inserted.
+func (imp *kpiTargetsImporter) revalidateCommit(tx *gorm.DB) error {
+	keys := map[string]bool{}
+	for _, r := range imp.recs {
+		if r.Rejected || (r.action != kpiImportActionCreate && r.action != kpiImportActionUpdate) {
+			continue
+		}
+		keys["identity|"+kpiTargetIdentity(r.KpiType, r.KpiCode, r.Target.TargetYear, r.Target.PeriodCode, r.MetricID, nil)] = true
+		if r.Target.TargetType == models.KpiTargetTypeMilestone {
+			// Overlap can cross identities, so serialize the whole KPI/metric scope.
+			metric := ""
+			if r.MetricID != nil {
+				metric = r.MetricID.String()
+			}
+			keys["scope|"+r.KpiID.String()+"|"+metric] = true
+		}
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+
+	// Acquire advisory locks in a stable order so overlapping imports cannot deadlock.
+	ordered := make([]string, 0, len(keys))
+	for key := range keys {
+		ordered = append(ordered, key)
+	}
+	sort.Strings(ordered)
+	for _, key := range ordered {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", "kpi-target-import|"+key).Error; err != nil {
+			return fmt.Errorf("locking target %s for the commit: %w", key, err)
+		}
+	}
+
+	// Re-read now that the locks are held; concurrent writes become visible.
+	if err := imp.loadExisting(tx); err != nil {
+		return fmt.Errorf("re-reading targets for the commit: %w", err)
+	}
+	for _, r := range imp.recs {
+		if r.Rejected || (r.action != kpiImportActionCreate && r.action != kpiImportActionUpdate) {
+			continue
+		}
+		identity := kpiTargetIdentity(r.KpiType, r.KpiCode, r.Target.TargetYear, r.Target.PeriodCode, r.MetricID, nil)
+		existing := imp.existingTarget[identity]
+		if existing == nil && r.action == kpiImportActionUpdate {
+			r.reject("Target", "The target no longer exists; it may have been deleted after validation.")
+			continue
+		}
+		if existing != nil {
+			r.Existing = existing
+			if imp.opts.ExistingMode != KpiImportExistingUpdate {
+				// Skip mode leaves the existing target untouched.
+				continue
+			}
+			switch existing.TargetStatus {
+			case "draft", "returned", "rejected":
+				imp.preserveExisting(r, existing)
+			default:
+				r.reject("Target Status", fmt.Sprintf("The existing target is %s and cannot be updated through import. Only draft, returned or rejected targets are editable.", existing.TargetStatus))
+				continue
+			}
+		}
+		if r.Rejected || r.Target.TargetType != models.KpiTargetTypeMilestone {
+			continue
+		}
+		if other := imp.milestoneOverlap(r, r.Existing, nil); other != nil {
+			r.reject("Period Start", fmt.Sprintf("This date range overlaps an existing Milestone / Ad Hoc target (%s, status '%s').",
+				FormatPeriodLabel(other.Target.PeriodCode, other.Target.TargetYear), other.Target.TargetStatus))
+		}
+	}
+
+	// Rebuild actions: creates that now match become skips or updates.
+	imp.res.Items = []KpiImportItem{}
+	imp.res.Errors = []KpiImportIssue{}
+	imp.finalize()
+	if imp.opts.ErrorMode == KpiImportErrorsAbort && len(imp.res.Errors) > 0 {
+		return fmt.Errorf("the target re-check rejected rows; nothing was committed")
 	}
 	return nil
 }

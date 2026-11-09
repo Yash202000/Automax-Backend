@@ -150,7 +150,7 @@ func buildKpiTargetsPlan(ctx context.Context, db *gorm.DB, data []byte, fileName
 		return nil, err
 	}
 	if !imp.structuralError {
-		if err := imp.loadExisting(); err != nil {
+		if err := imp.loadExisting(imp.db.WithContext(imp.ctx)); err != nil {
 			return nil, err
 		}
 		imp.validateRows()
@@ -609,14 +609,14 @@ func (imp *kpiTargetsImporter) parseTargetRow(row int, raw func(string) string) 
 
 // ─── Existing data ──────────────────────────────────────────────────────────
 
-func (imp *kpiTargetsImporter) loadExisting() error {
-	db := imp.db.WithContext(imp.ctx)
+func (imp *kpiTargetsImporter) loadExisting(db *gorm.DB) error {
 	imp.existingKpis = map[string]*existingKpi{}
 	imp.kpiByCode = map[string]string{}
 	imp.metricsByKpi = map[string][]*models.KpiMetric{}
 	imp.metricByCode = map[string]*models.KpiMetric{}
 	imp.metricByName = map[string]*models.KpiMetric{}
 	imp.existingTarget = map[string]*models.KpiAnnualTarget{}
+	imp.allTargets = nil
 
 	for _, t := range []struct {
 		kpiType string

@@ -306,9 +306,12 @@ func ValidateKpiDictionaryImport(ctx context.Context, db *gorm.DB, data []byte, 
 
 // CommitKpiDictionaryImport re-validates the workbook and, when the chosen
 // options allow it, writes the whole plan in a single transaction — any
-// write failure rolls back every record. afterKpiCreated (optional) runs
-// after a successful commit for each newly created KPI (used to start its
-// dictionary workflow, which manages its own writes).
+// write failure rolls back every record. The commit serializes with a
+// transaction-scoped advisory lock and rebuilds the plan inside the
+// transaction, so rows created by a concurrent import are skipped/updated
+// instead of duplicated. afterKpiCreated (optional) runs after a successful
+// commit for each newly created KPI (used to start its dictionary workflow,
+// which manages its own writes).
 func CommitKpiDictionaryImport(ctx context.Context, db *gorm.DB, data []byte, fileName string, userID uuid.UUID, opts KpiImportOptions,
 	afterKpiCreated func(ctx context.Context, kpiType string, kpiID uuid.UUID) error) (*KpiImportResult, error) {
 	imp, err := buildKpiImportPlan(ctx, db, data, fileName, userID, opts)
@@ -320,9 +323,28 @@ func CommitKpiDictionaryImport(ctx context.Context, db *gorm.DB, data []byte, fi
 		return imp.res, nil
 	}
 
-	if err := db.WithContext(ctx).Transaction(imp.commit); err != nil {
+	// Serialize whole-workbook imports and rebuild the plan against the
+	// transaction so the committed decisions match the state being written.
+	if err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", "kpi-dictionary-import").Error; err != nil {
+			return fmt.Errorf("locking dictionary import: %w", err)
+		}
+		planned, err := buildKpiImportPlan(ctx, tx, data, fileName, userID, opts)
+		if err != nil {
+			return err
+		}
+		planned.finalize()
+		imp = planned
+		if !planned.res.CanCommit {
+			return nil
+		}
+		return planned.commit(tx)
+	}); err != nil {
 		imp.res.CommitError = err.Error()
 		imp.markRolledBack()
+		return imp.res, nil
+	}
+	if !imp.res.CanCommit {
 		return imp.res, nil
 	}
 	imp.res.Committed = true

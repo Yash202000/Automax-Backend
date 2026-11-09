@@ -15,7 +15,7 @@ import (
 )
 
 func (imp *masterDataImporter) commit(tx *gorm.DB) error {
-	if err := imp.revalidateCreates(tx); err != nil {
+	if err := imp.revalidateCommit(tx); err != nil {
 		return err
 	}
 	for _, r := range imp.recs {
@@ -39,13 +39,14 @@ func (imp *masterDataImporter) commit(tx *gorm.DB) error {
 	return nil
 }
 
-// revalidateCreates serializes concurrent imports on the identities they plan
-// to create, then re-resolves those rows inside the transaction so a record
-// created in the meantime is skipped or updated instead of duplicated.
-func (imp *masterDataImporter) revalidateCreates(tx *gorm.DB) error {
+// revalidateCommit serializes concurrent imports on the identities they write,
+// then re-checks stored records inside the transaction: creates that now exist
+// are skipped or updated, and updates whose identity was taken are rejected
+// instead of overwriting or duplicating another record.
+func (imp *masterDataImporter) revalidateCommit(tx *gorm.DB) error {
 	keys := map[string]bool{}
 	for _, r := range imp.recs {
-		if r.Rejected || r.action != kpiImportActionCreate {
+		if r.Rejected || (r.action != kpiImportActionCreate && r.action != kpiImportActionUpdate) {
 			continue
 		}
 		for _, key := range imp.identityKeys(r) {
@@ -68,23 +69,46 @@ func (imp *masterDataImporter) revalidateCreates(tx *gorm.DB) error {
 		}
 	}
 
-	// Re-read now that the locks are held; concurrent creates become visible.
+	// Re-read now that the locks are held; concurrent writes become visible.
 	if err := imp.loadExisting(tx); err != nil {
 		return fmt.Errorf("re-reading %s records for the commit: %w", imp.entityType, err)
 	}
+
+	claimed := map[uuid.UUID]int{}
+	for _, r := range imp.recs {
+		if r.Rejected || r.action != kpiImportActionUpdate || r.Existing == nil {
+			continue
+		}
+		claimed[r.Existing.ID] = r.Row
+	}
 	changed := false
 	for _, r := range imp.recs {
-		if r.Rejected || r.action != kpiImportActionCreate {
+		if r.Rejected || (r.action != kpiImportActionCreate && r.action != kpiImportActionUpdate) {
 			continue
 		}
 		found, conflict := imp.lookupExisting(r)
 		if conflict {
-			return fmt.Errorf("creating %s %q: name and code identify different existing records", imp.entityType, r.recordID())
-		}
-		if found != nil {
-			r.Existing = found
+			r.reject("Name (English)", "Name and Code identify different existing records. Correct one of them.")
 			changed = true
+			continue
 		}
+		if r.action == kpiImportActionUpdate {
+			if r.Existing == nil || (found != nil && found.ID != r.Existing.ID) {
+				r.reject("Name (English)", "Another record now uses this name or code. Reload and retry.")
+				changed = true
+			}
+			continue
+		}
+		if found == nil {
+			continue
+		}
+		if row, dup := claimed[found.ID]; dup {
+			r.reject("Name (English)", fmt.Sprintf("Duplicate record in this file — row %d already matches the same existing record.", row))
+		} else {
+			r.Existing = found
+			claimed[found.ID] = r.Row
+		}
+		changed = true
 	}
 	if !changed {
 		return nil
@@ -93,7 +117,6 @@ func (imp *masterDataImporter) revalidateCreates(tx *gorm.DB) error {
 	// Rebuild actions: creates that now match become skips or updates.
 	imp.res.Items = []KpiImportItem{}
 	imp.res.Errors = []KpiImportIssue{}
-	imp.res.Warnings = []KpiImportIssue{}
 	imp.finalize()
 	if imp.opts.ErrorMode == KpiImportErrorsAbort && len(imp.res.Errors) > 0 {
 		return fmt.Errorf("the master-data re-check rejected rows; nothing was committed")

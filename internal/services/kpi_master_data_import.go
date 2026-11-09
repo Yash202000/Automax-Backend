@@ -1177,6 +1177,13 @@ func (imp *masterDataImporter) errorf(sheet string, row int, recordID, field, me
 }
 
 func (imp *masterDataImporter) warn(sheet string, row int, recordID, field, message string) {
+	// finalize runs again after the commit re-check; keep the original
+	// parse warnings without appending the same finalize warning twice.
+	for _, w := range imp.res.Warnings {
+		if w.Sheet == sheet && w.Row == row && w.RecordID == recordID && w.Field == field && w.Message == message {
+			return
+		}
+	}
 	imp.res.Warnings = append(imp.res.Warnings, KpiImportIssue{
 		Severity: kpiImportSeverityWarning, Sheet: sheet, Row: row,
 		RecordID: recordID, Field: field, Message: message,
