@@ -161,6 +161,13 @@ func (h *KpiCollaboratorHandler) CreateAssignment(c *fiber.Ctx) error {
 		UpdatedByID:        userID,
 	}
 
+	// The (kpi, user) unique index also covers removed assignments: clear a
+	// removed one so the user can be assigned to this KPI again.
+	if err := h.db.WithContext(c.UserContext()).Unscoped().
+		Where("kpi_id = ? AND user_id = ? AND deleted_at IS NOT NULL", id, req.UserID).
+		Delete(&models.KpiCollaboratorAssignment{}).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
+	}
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
 	}
@@ -176,7 +183,7 @@ func (h *KpiCollaboratorHandler) CreateAssignment(c *fiber.Ctx) error {
 		Action:      "create",
 		Module:      "kpi",
 		ResourceID:  id.String(),
-		Description: fmt.Sprintf("Assigned user %s as %s for KPI", req.UserID.String(), req.CollaboratorType),
+		Description: fmt.Sprintf("Assigned %s as %s", kpiUserName(h.db.WithContext(c.UserContext()), req.UserID), req.CollaboratorType),
 		Status:      "success",
 	})
 
@@ -281,7 +288,7 @@ func (h *KpiCollaboratorHandler) UpdateAssignment(c *fiber.Ctx) error {
 		Action:      "update",
 		Module:      "kpi",
 		ResourceID:  item.KpiID.String(),
-		Description: fmt.Sprintf("Updated assignment for user %s", item.UserID.String()),
+		Description: fmt.Sprintf("Updated assignment for %s (%s)", kpiUserName(h.db.WithContext(c.UserContext()), item.UserID), item.CollaboratorType),
 		Status:      "success",
 	})
 
@@ -299,7 +306,6 @@ func (h *KpiCollaboratorHandler) DeleteAssignment(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 
-	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 	result := h.db.WithContext(c.UserContext()).Delete(&item)
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
@@ -309,7 +315,7 @@ func (h *KpiCollaboratorHandler) DeleteAssignment(c *fiber.Ctx) error {
 		Action:      "delete",
 		Module:      "kpi",
 		ResourceID:  item.KpiID.String(),
-		Description: fmt.Sprintf("Removed assignment for user %s (deleted by %s)", item.UserID.String(), userID.String()),
+		Description: fmt.Sprintf("Removed %s's %s assignment", kpiUserName(h.db.WithContext(c.UserContext()), item.UserID), item.CollaboratorType),
 		Status:      "success",
 	})
 

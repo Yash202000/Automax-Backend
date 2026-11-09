@@ -199,6 +199,9 @@ func (h *KpiEngagementHandler) ListMetricsByCode(c *fiber.Ctx) error {
 	if found == nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
+	if denied, err := kpiAccessDenied(c, found.Type, found.ID, services.KpiActionView); denied {
+		return err
+	}
 
 	db := h.db.WithContext(c.UserContext())
 	var items []models.KpiMetric
@@ -1356,5 +1359,6 @@ func (h *KpiEngagementHandler) GetActivity(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
 	}
+	humanizeKpiActivity(h.db.WithContext(c.UserContext()), logs)
 	return c.JSON(fiber.Map{"success": true, "data": logs, "total": total, "page": page, "limit": limit})
 }

@@ -95,7 +95,10 @@ func (h *KpiImportHandler) Commit(c *fiber.Ctx) error {
 
 	res, err := services.CommitKpiDictionaryImport(c.UserContext(), h.db, data, name, userID, opts,
 		func(ctx context.Context, kpiType string, kpiID uuid.UUID) error {
-			return h.workflowSvc.InitiateKpiDictionaryWorkflow(ctx, kpiType, kpiID, userID)
+			if err := h.workflowSvc.InitiateKpiDictionaryWorkflow(ctx, kpiType, kpiID, userID); err != nil {
+				return err
+			}
+			return assignKpiCreator(c, kpiType, kpiID)
 		})
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
