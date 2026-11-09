@@ -125,6 +125,9 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		// Custom Escalation Groups
 		&models.EscalationGroup{},
 		&models.EscalationGroupTarget{},
+		// Error Log
+		&models.ErrorLog{},
+		&models.ErrorLogHistory{},
 		// Ready-to-Close expiry tracking
 		&models.IncidentReadyToCloseEntry{},
 		&models.DeviceToken{},
@@ -365,6 +368,11 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		db.Exec("ALTER TABLE " + t + " ALTER COLUMN name_ar TYPE VARCHAR(500)")
 	}
 	db.Exec("ALTER TABLE reports ALTER COLUMN timestamp_key SET DEFAULT 'created_at'")
+
+	// Error Log: sequence for ERR-000123 style codes
+	if err := migrations.MigrateErrorLogSequence(db); err != nil {
+		return fmt.Errorf("failed to create error_log_seq: %w", err)
+	}
 
 	// Migrate transition assignment roles (single → many-to-many)
 	if err := migrations.MigrateTransitionAssignmentRoles(db); err != nil {
@@ -778,6 +786,12 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Assign Users to Escalation Group", Code: "escalation-groups:assign_users", Module: "escalation-groups", Action: "assign_users", ActionAr: "تعيين المستخدمين", Description: "Add or remove users from escalation groups"},
 		{Name: "Manage Escalation Rules", Code: "escalation-groups:manage_rules", Module: "escalation-groups", Action: "manage_rules", ActionAr: "إدارة القواعد", Description: "Configure escalation frequency, channel, and classification rules"},
 
+		// Error Log permissions
+		{Name: "View Error Logs", Code: "error-logs:view", Module: "error-logs", Action: "view", ActionAr: "عرض", Description: "View the error log list and details"},
+		{Name: "Update Error Log Status", Code: "error-logs:update", Module: "error-logs", Action: "update", ActionAr: "تحديث", Description: "Change error status and add notes"},
+		{Name: "Export Error Logs", Code: "error-logs:export", Module: "error-logs", Action: "export", ActionAr: "تصدير", Description: "Export the filtered error log list"},
+		{Name: "View Error Technical Details", Code: "error-logs:view_technical", Module: "error-logs", Action: "view_technical", ActionAr: "عرض التفاصيل الفنية", Description: "View technical details of error log entries"},
+
 		// Escalation Policy permissions
 		{Name: "Create Escalation Policy", Code: "escalation-policies:create", Module: "escalation-policies", Action: "create", ActionAr: "إنشاء", Description: "Create new escalation policies"},
 
@@ -882,6 +896,13 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		db.Model(&adminRole).Association("Permissions").Append(adminPerms)
 	}
 
+	// Ensure the admin role has the Error Log permissions on existing databases.
+	var errorLogPerms []models.Permission
+	db.Where("module = ?", "error-logs").Find(&errorLogPerms)
+	if len(errorLogPerms) > 0 {
+		db.Model(&adminRole).Association("Permissions").Append(errorLogPerms)
+	}
+
 	// Remove department-scoping permissions from admin role on existing databases.
 	// These are restrictive and should never be on the Administrator role.
 	var deptScopePerms []models.Permission
@@ -895,7 +916,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 	result = db.Where("code = ?", "user").First(&userRole)
 	if result.Error == gorm.ErrRecordNotFound {
 		var viewPerms []models.Permission
-		db.Where("action = ?", "view").Find(&viewPerms)
+		db.Where("action = ? AND module <> ?", "view", "error-logs").Find(&viewPerms) // Error Log is admin/support only
 		userRole = models.Role{
 			Name:        "User",
 			Code:        "user",
@@ -907,7 +928,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		db.Create(&userRole)
 	} else if db.Model(&userRole).Association("Permissions").Count() == 0 {
 		var viewPerms []models.Permission
-		db.Where("action = ?", "view").Find(&viewPerms)
+		db.Where("action = ? AND module <> ?", "view", "error-logs").Find(&viewPerms) // Error Log is admin/support only
 		db.Model(&userRole).Association("Permissions").Append(viewPerms)
 	}
 

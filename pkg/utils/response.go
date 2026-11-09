@@ -35,7 +35,28 @@ func SuccessResponse(c *fiber.Ctx, statusCode int, message string, data interfac
 	})
 }
 
+// Locals keys used by the Error Log middleware to read what the handler returned.
+const (
+	LocalErrorMessage = "errlog_message"
+	LocalErrorCause   = "errlog_cause"
+	// LocalErrorRecorded is set once the Error Log middleware has handled the request,
+	// so the global error handler does not record the same error twice.
+	LocalErrorRecorded = "errlog_recorded"
+)
+
+// LocalImportErrors holds the per-row failures of an import that still returned HTTP 200.
+const LocalImportErrors = "errlog_import_errors"
+
+// ReportImportErrors tells the Error Log which rows failed in an import. Call it
+// just before returning the import result. It does nothing when there are no errors.
+func ReportImportErrors(c *fiber.Ctx, rowErrors []string) {
+	if len(rowErrors) > 0 {
+		c.Locals(LocalImportErrors, rowErrors)
+	}
+}
+
 func ErrorResponse(c *fiber.Ctx, statusCode int, message string) error {
+	c.Locals(LocalErrorMessage, message)
 	if statusCode >= 500 {
 		// Log the error message for internal server errors
 		fmt.Printf("Internal Server Error: %s\n", message)
@@ -52,6 +73,9 @@ func ErrorResponse(c *fiber.Ctx, statusCode int, message string) error {
 // never leak into the API response body.
 func InternalErrorResponse(c *fiber.Ctx, err error, userMessage string) error {
 	log.Printf("[%s %s] internal error: %v", c.Method(), c.Path(), err)
+	if err != nil {
+		c.Locals(LocalErrorCause, err.Error())
+	}
 	return ErrorResponse(c, fiber.StatusInternalServerError, userMessage)
 }
 

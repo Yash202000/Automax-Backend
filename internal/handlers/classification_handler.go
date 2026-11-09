@@ -638,6 +638,7 @@ func (h *ClassificationHandler) Import(c *fiber.Ctx) error {
 		}
 	}
 
+	utils.ReportImportErrors(c, errors)
 	result := map[string]interface{}{
 		"imported": imported,
 		"skipped":  skipped,

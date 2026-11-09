@@ -198,6 +198,9 @@ func (e *integrationExecutor) execute(
 		logEntry.Status = "failed"
 		logEntry.ErrorMessage = execErr.Error()
 		log.Printf("[integration] script %s (%s) failed for incident %s: %v", script.Name, script.ID, incident.IncidentNumber, execErr)
+		if triggerType != "test" {
+			LogIntegrationFailure(script.Name, script.ID.String(), incident.ID, incident.IncidentNumber, statusCode, execErr)
+		}
 	} else {
 		logEntry.Status = "success"
 		// Auto-create bridge record if the script has bridge_config set (http_request only).

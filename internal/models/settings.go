@@ -73,8 +73,12 @@ type Settings struct {
 	// Feature Toggles
 	ShowEvaluateButton bool `gorm:"default:false" json:"show_evaluate_button"` // Manual feedback trigger button on complaint/query detail pages
 
+	// Error Log retention: logs older than value+unit are deleted by the retention job
+	ErrorLogRetentionValue int    `gorm:"default:12" json:"-"`
+	ErrorLogRetentionUnit  string `gorm:"size:10;default:'months'" json:"-"` // days | months
+
 	// Auth Settings
-	TotpEnabled        bool `gorm:"column:totp_enabled;default:false" json:"-"`         // Whether TOTP/OTP-based 2FA login is enforced; exposed nested as auth_setting.totp_enabled
+	TotpEnabled        bool `gorm:"column:totp_enabled;default:false" json:"-"`        // Whether TOTP/OTP-based 2FA login is enforced; exposed nested as auth_setting.totp_enabled
 	ShowForgotPassword bool `gorm:"column:show_forgot_password;default:true" json:"-"` // Whether to show the forgot-password link on login; exposed nested as auth_setting.show_forgot_password
 
 	// Field Settings (per-entity, per-field configuration such as attachment limits),
@@ -174,6 +178,10 @@ type SettingsUpdateRequest struct {
 	// Feature Toggles
 	ShowEvaluateButton *bool `json:"show_evaluate_button"`
 
+	// Error Log retention
+	ErrorLogRetentionValue *int    `json:"error_log_retention_value" validate:"omitempty,min=1,max=3650"`
+	ErrorLogRetentionUnit  *string `json:"error_log_retention_unit" validate:"omitempty,oneof=days months"`
+
 	// Auth Settings
 	AuthSetting *AuthSettingUpdateRequest `json:"auth_setting"`
 
@@ -228,6 +236,10 @@ type SettingsResponse struct {
 	// Feature Toggles
 	ShowEvaluateButton bool `json:"show_evaluate_button"`
 
+	// Error Log retention
+	ErrorLogRetentionValue int    `json:"error_log_retention_value"`
+	ErrorLogRetentionUnit  string `json:"error_log_retention_unit"`
+
 	// Auth Settings
 	AuthSetting AuthSetting `json:"auth_setting"`
 
@@ -251,37 +263,39 @@ func (s *Settings) ToSettingsResponse() *SettingsResponse {
 	}
 
 	return &SettingsResponse{
-		ID:                  s.ID.String(),
-		AppName:             s.AppName,
-		AppTagline:          s.AppTagline,
-		AppDescription:      s.AppDescription,
-		LogoURL:             s.LogoURL,
-		LogoSmallURL:        s.LogoSmallURL,
-		FaviconURL:          s.FaviconURL,
-		LogoAltText:         s.LogoAltText,
-		PrimaryColor:        s.PrimaryColor,
-		SecondaryColor:      s.SecondaryColor,
-		AccentColor:         s.AccentColor,
-		CopyrightText:       s.CopyrightText,
-		ContactEmail:        s.ContactEmail,
-		ContactPhone:        s.ContactPhone,
-		Feature1Title:       s.Feature1Title,
-		Feature1Description: s.Feature1Description,
-		Feature2Title:       s.Feature2Title,
-		Feature2Description: s.Feature2Description,
-		Feature3Title:       s.Feature3Title,
-		Feature3Description: s.Feature3Description,
-		DateFormat:          s.DateFormat,
-		TimeFormat:          s.TimeFormat,
-		DefaultLanguage:     s.DefaultLanguage,
-		SupportedLanguages:  s.SupportedLanguages,
-		Municipality1Name:   s.Municipality1Name,
-		Municipality2Name:   s.Municipality2Name,
-		Municipality3Name:   s.Municipality3Name,
-		ShowEvaluateButton:  s.ShowEvaluateButton,
-		AuthSetting:         AuthSetting{TotpEnabled: s.TotpEnabled, ShowForgotPassword: s.ShowForgotPassword},
-		FieldSettings:       fieldSettings,
-		SmsMaxLength:        func() int { n, _ := GetSMSMaxLength(); return n }(),
-		UpdatedAt:           s.UpdatedAt.Format(time.RFC3339),
+		ID:                     s.ID.String(),
+		AppName:                s.AppName,
+		AppTagline:             s.AppTagline,
+		AppDescription:         s.AppDescription,
+		LogoURL:                s.LogoURL,
+		LogoSmallURL:           s.LogoSmallURL,
+		FaviconURL:             s.FaviconURL,
+		LogoAltText:            s.LogoAltText,
+		PrimaryColor:           s.PrimaryColor,
+		SecondaryColor:         s.SecondaryColor,
+		AccentColor:            s.AccentColor,
+		CopyrightText:          s.CopyrightText,
+		ContactEmail:           s.ContactEmail,
+		ContactPhone:           s.ContactPhone,
+		Feature1Title:          s.Feature1Title,
+		Feature1Description:    s.Feature1Description,
+		Feature2Title:          s.Feature2Title,
+		Feature2Description:    s.Feature2Description,
+		Feature3Title:          s.Feature3Title,
+		Feature3Description:    s.Feature3Description,
+		DateFormat:             s.DateFormat,
+		TimeFormat:             s.TimeFormat,
+		DefaultLanguage:        s.DefaultLanguage,
+		SupportedLanguages:     s.SupportedLanguages,
+		Municipality1Name:      s.Municipality1Name,
+		Municipality2Name:      s.Municipality2Name,
+		Municipality3Name:      s.Municipality3Name,
+		ShowEvaluateButton:     s.ShowEvaluateButton,
+		ErrorLogRetentionValue: s.ErrorLogRetentionValue,
+		ErrorLogRetentionUnit:  s.ErrorLogRetentionUnit,
+		AuthSetting:            AuthSetting{TotpEnabled: s.TotpEnabled, ShowForgotPassword: s.ShowForgotPassword},
+		FieldSettings:          fieldSettings,
+		SmsMaxLength:           func() int { n, _ := GetSMSMaxLength(); return n }(),
+		UpdatedAt:              s.UpdatedAt.Format(time.RFC3339),
 	}
 }
