@@ -144,6 +144,17 @@ func main() {
 		log.Printf("AD-Baseer login enabled (mode %s, %s)", cfg.ADBaseer.Mode, cfg.ADBaseer.BaseURL)
 	}
 
+	// Nafath login (National ID + approval in the Nafath app). When enabled,
+	// the old National-ID-only /auth/sso/login is refused.
+	var nafathClient services.NafathClient
+	if cfg.Nafath.Enabled {
+		nafathClient, err = services.NewNafathClient(cfg.Nafath, cfg.Env)
+		if err != nil {
+			log.Fatalf("Failed to initialize Nafath client: %v", err)
+		}
+		log.Printf("Nafath login enabled (mode %s, %s)", cfg.Nafath.Mode, cfg.Nafath.BaseURL)
+	}
+
 	callLogService := services.NewCallLogService(callLogRepo, userRepo, minioStorage)
 	workflowService := services.NewWorkflowService(workflowRepo, roleRepo, departmentRepo, classificationRepo, userRepo, db, cfg)
 	incidentService := services.NewIncidentService(incidentRepo, incidentMergeRepo, workflowRepo, workflowService, userRepo, departmentRepo, classificationRepo, locationRepo, rejectionLogRepo, roleRepo, minioStorage, db, wsHub)
@@ -311,6 +322,7 @@ func main() {
 	settingsService.SetConfigService(configService)
 	settingsHandler := handlers.NewSettingsHandler(settingsService)
 	jwksHandler := handlers.NewJWKSHandler(ssoJWTManager)
+	nafathLoginHandler := handlers.NewNafathLoginHandler(cfg, nafathClient, userRepo, jwtManager, sessionStore, redisClient)
 	ssoHandler := handlers.NewSSOHandler(ssoJWTManager, jwtManager, sessionStore, userRepo, applicationLinkRepo, userService, otpService, cfg.SSOFrontendURL, cfg.NafathAPIBaseURL)
 	notificationTemplateService := services.NewNotificationTemplateService(notificationTemplateRepo, db)
 	notificationHandler := handlers.NewNotificationHandler(notificationService, minioStorage, userRepo, incidentRepo, actionLogService)
@@ -537,7 +549,10 @@ func main() {
 	auth.Post("/register", userHandler.Register)
 	auth.Post("/sso/register", ssoHandler.SSORegister)
 	auth.Post("/login", loginRateLimitMiddleware, userHandler.Login)
-	auth.Post("/sso/login", ssoHandler.SSOLogin)
+	auth.Post("/sso/login", nafathLoginHandler.BlockWhenEnabled(), ssoHandler.SSOLogin)
+	auth.Post("/nafath/start", nafathLoginHandler.Start)
+	auth.Post("/nafath/status", nafathLoginHandler.Status)
+	auth.Post("/nafath/cancel", nafathLoginHandler.Cancel)
 	auth.Get("/sso/validate", ssoHandler.SSOValidate)
 	auth.Post("/refresh", userHandler.RefreshToken)
 	auth.Post("/logout", authMiddleware.Authenticate(), userHandler.Logout)

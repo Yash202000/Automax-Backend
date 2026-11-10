@@ -42,6 +42,13 @@ func (h *UserHandler) adUsersEnabled() bool {
 	return h.cfg.LDAP.Enabled || h.cfg.ADBaseer.Enabled
 }
 
+// nafathUsersEnabled reports whether National IDs (Nafath login) may be set.
+// While Nafath is off, the old National-ID-only /auth/sso/login is open, so
+// real National IDs must not be stored then.
+func (h *UserHandler) nafathUsersEnabled() bool {
+	return h.cfg.Nafath.Enabled
+}
+
 func NewUserHandler(userService services.UserService, storage *storage.MinIOStorage, redisClient *redis.Client, cfg *config.Config, wsHub *services.WSHub) *UserHandler {
 	return &UserHandler{
 		userService: userService,
@@ -428,6 +435,7 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 		req.Username = c.FormValue("username")
 		req.Password = c.FormValue("password")
 		req.IsADUser = c.FormValue("is_ad_user") == "true"
+		req.NationalID = c.FormValue("national_id")
 		req.FirstName = c.FormValue("first_name")
 		req.LastName = c.FormValue("last_name")
 		req.Phone = c.FormValue("phone")
@@ -511,6 +519,10 @@ func (h *UserHandler) AdminCreateUser(c *fiber.Ctx) error {
 
 	if req.IsADUser && !h.adUsersEnabled() {
 		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "ad_users_disabled"))
+	}
+	req.NationalID = strings.TrimSpace(req.NationalID)
+	if req.NationalID != "" && !h.nafathUsersEnabled() {
+		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "nafath_users_disabled"))
 	}
 
 	if strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940) && strings.TrimSpace(req.Phone) == "" {
@@ -611,6 +623,10 @@ func (h *UserHandler) AdminUpdateUser(c *fiber.Ctx) error {
 		if !current.IsADUser {
 			return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "ad_users_disabled"))
 		}
+	}
+
+	if req.NationalID != nil && strings.TrimSpace(*req.NationalID) != "" && !h.nafathUsersEnabled() {
+		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "nafath_users_disabled"))
 	}
 
 	response, err := h.userService.UpdateAdminProfile(c.UserContext(), userID, &req)

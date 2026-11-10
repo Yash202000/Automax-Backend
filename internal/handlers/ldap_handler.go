@@ -507,6 +507,8 @@ func (h *LDAPHandler) GetDirectoryStatus(c *fiber.Ctx) error {
 		"data": fiber.Map{
 			"enabled":  h.config.LDAP.Enabled,
 			"ad_users": h.config.LDAP.Enabled || h.config.ADBaseer.Enabled,
+			// The user form shows the Nafath (National ID) option only then.
+			"nafath_users": h.config.Nafath.Enabled,
 		},
 	})
 }
