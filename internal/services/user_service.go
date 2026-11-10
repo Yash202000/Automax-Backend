@@ -165,6 +165,10 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 		return nil, errors.New(i18n.T(ctx, "username_already_exists"))
 	}
 
+	if err := s.checkNationalIDAvailable(ctx, req.NationalID, ""); err != nil {
+		return nil, err
+	}
+
 	// AD users authenticate against Active Directory: no local password.
 	hashedPassword := ""
 	if !req.IsADUser {
@@ -179,6 +183,7 @@ func (s *userService) Register(ctx context.Context, req *models.UserRegisterRequ
 		Username:        req.Username,
 		Password:        hashedPassword,
 		IsADUser:        req.IsADUser,
+		NationalID:      strings.TrimSpace(req.NationalID),
 		FirstName:       req.FirstName,
 		MiddleName:      req.MiddleName,
 		LastName:        req.LastName,
@@ -1032,6 +1037,7 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 		"mobile_verified":  user.MobileVerified,
 		"is_active":        oldIsActive,
 		"is_ad_user":       user.IsADUser,
+		"national_id":      MaskNationalID(user.NationalID),
 	}
 
 	// Add department names
@@ -1160,6 +1166,15 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 			user.Password = ""
 		}
 	}
+	if req.NationalID != nil {
+		newID := strings.TrimSpace(*req.NationalID)
+		if newID != user.NationalID && (newID != "" || IsNationalID(user.NationalID)) {
+			if err := s.checkNationalIDAvailable(ctx, newID, user.NationalID); err != nil {
+				return nil, err
+			}
+			user.NationalID = newID
+		}
+	}
 
 	if err := s.userRepo.Update(ctx, user); err != nil {
 		return nil, err
@@ -1278,6 +1293,9 @@ func (s *userService) UpdateAdminProfile(ctx context.Context, userID uuid.UUID, 
 	}
 	if req.IsADUser != nil {
 		newUserForLogging["is_ad_user"] = *req.IsADUser
+	}
+	if req.NationalID != nil {
+		newUserForLogging["national_id"] = MaskNationalID(strings.TrimSpace(*req.NationalID))
 	}
 
 	// Add department names from request
@@ -2525,5 +2543,50 @@ func (s *userService) ResetPassword(ctx context.Context, resetToken, newPassword
 	// delete reset token after use
 	s.redis.Del(ctx, "reset:"+resetToken)
 
+	return nil
+}
+
+// IsNationalID reports whether id is a real Saudi National ID (1…) or Iqama
+// (2…) number. users.national_id also holds random UUID placeholders written
+// by the national_id migration for users without one.
+func IsNationalID(id string) bool {
+	if len(id) != 10 || (id[0] != '1' && id[0] != '2') {
+		return false
+	}
+	for _, c := range id {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// MaskNationalID keeps the last 4 digits of a National ID for audit logs;
+// placeholders and empty values log as "".
+func MaskNationalID(id string) string {
+	if !IsNationalID(id) {
+		return ""
+	}
+	return "******" + id[6:]
+}
+
+// checkNationalIDAvailable validates a National ID being set on a user
+// (empty = none) and that no other user has it. current is the user's
+// present value, which is not a conflict.
+func (s *userService) checkNationalIDAvailable(ctx context.Context, id, current string) error {
+	id = strings.TrimSpace(id)
+	if id == "" || id == current {
+		return nil
+	}
+	if !IsNationalID(id) {
+		return errors.New(i18n.T(ctx, "national_id_invalid"))
+	}
+	exists, err := s.userRepo.ExistsByNationalID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return errors.New(i18n.T(ctx, "national_id_exists"))
+	}
 	return nil
 }

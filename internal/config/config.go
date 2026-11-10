@@ -15,6 +15,7 @@ type Config struct {
 	JWT                         JWTConfig
 	LDAP                        LDAPConfig
 	ADBaseer                    ADBaseerConfig
+	Nafath                      NafathConfig
 	LoginRateLimit              LoginRateLimitConfig
 	FrontendURL                 string // env: FRONTEND_URL — base URL of the frontend app, used in notification links
 	SSOPrivateKey               string // env: SSO_RSA_PRIVATE_KEY (PEM, optional — auto-gen if empty)
@@ -348,6 +349,44 @@ func (c ADBaseerConfig) IsMock() bool {
 	return strings.EqualFold(strings.TrimSpace(c.Mode), "mock")
 }
 
+// NafathConfig holds settings for National ID login through Nafath, called
+// via the client's Amana gateway (GetAccessTokenByIdNumber ->
+// NafathSendRequest -> NafathCheckRequest). When Enabled, POST
+// /api/v1/auth/nafath/start and /status sign users in only after the person
+// approves the request in the Nafath app, and the old National-ID-only
+// POST /auth/sso/login is refused. env: NAFATH_* (NAFATH_API_BASE_URL is the
+// unrelated old validation-app URL). Mode "mock" (BaseURL pointing at the
+// nafath-simulator) is refused when APP_ENV is production.
+type NafathConfig struct {
+	Enabled bool
+	// Mode is "real" (BaseURL must be https) or "mock" (BaseURL is the
+	// nafath-simulator; http allowed, refused in production).
+	Mode    string
+	BaseURL string
+	// Service / Key are GetAccessTokenByIdNumber's credentials (the same
+	// fixed platform values as AD-Baseer's; defaults to AD_BASEER_SERVICE /
+	// AD_BASEER_KEY). Secrets — set via env, never commit.
+	Service string
+	Key     string
+	// AppID is NafathSendRequest's appID; CheckAppID is NafathCheckRequest's
+	// (the client's document shows 13 and 17; defaults to AppID).
+	AppID      string
+	CheckAppID string
+	// TimeoutSeconds bounds each gateway HTTP call.
+	TimeoutSeconds int
+	// RotateSeconds is how long one request (random number) is shown before
+	// a new one is sent; the client said the number changes every 10 s.
+	RotateSeconds int
+	// LoginTimeoutSeconds is how long a login may wait for approval in total.
+	LoginTimeoutSeconds int
+	// InsecureSkipVerify disables TLS verification; refused in production.
+	InsecureSkipVerify bool
+}
+
+func (c NafathConfig) IsMock() bool {
+	return strings.EqualFold(strings.TrimSpace(c.Mode), "mock")
+}
+
 type LoginRateLimitConfig struct {
 	Enabled         bool
 	MaxAttempts     int
@@ -416,6 +455,19 @@ func Load() *Config {
 			OTPMaxAttempts:     getEnvAsInt("AD_BASEER_OTP_MAX_ATTEMPTS", 3),
 			ActiveStatuses:     getEnvAsStringSlice("AD_BASEER_ACTIVE_STATUSES", []string{"1"}),
 			InsecureSkipVerify: getEnvAsBool("AD_BASEER_INSECURE_SKIP_VERIFY", false),
+		},
+		Nafath: NafathConfig{
+			Enabled:             getEnvAsBool("NAFATH_ENABLED", false),
+			Mode:                getEnv("NAFATH_MODE", "real"),
+			BaseURL:             getEnv("NAFATH_BASE_URL", ""),
+			Service:             getEnv("NAFATH_SERVICE", getEnv("AD_BASEER_SERVICE", "")),
+			Key:                 getEnv("NAFATH_KEY", getEnv("AD_BASEER_KEY", "")),
+			AppID:               getEnv("NAFATH_APP_ID", "13"),
+			CheckAppID:          getEnv("NAFATH_CHECK_APP_ID", getEnv("NAFATH_APP_ID", "13")),
+			TimeoutSeconds:      getEnvAsInt("NAFATH_TIMEOUT_SECONDS", 15),
+			RotateSeconds:       getEnvAsInt("NAFATH_ROTATE_SECONDS", 10),
+			LoginTimeoutSeconds: getEnvAsInt("NAFATH_LOGIN_TIMEOUT_SECONDS", 180),
+			InsecureSkipVerify:  getEnvAsBool("NAFATH_INSECURE_SKIP_VERIFY", false),
 		},
 		LoginRateLimit: LoginRateLimitConfig{
 			Enabled:         getEnvAsBool("LOGIN_RATE_LIMIT_ENABLED", true),

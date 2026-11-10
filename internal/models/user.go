@@ -178,10 +178,13 @@ func (u *User) GetPermissions() []string {
 }
 
 type UserRegisterRequest struct {
-	Email             string      `json:"email" validate:"required,email"`
-	Username          string      `json:"username" validate:"required,min=3,max=50"`
-	Password          string      `json:"password" validate:"required_unless=IsADUser true,omitempty,min=6"`
-	IsADUser          bool        `json:"is_ad_user"` // signs in through Active Directory; no password stored
+	Email    string `json:"email" validate:"required,email"`
+	Username string `json:"username" validate:"required,min=3,max=50"`
+	Password string `json:"password" validate:"required_unless=IsADUser true,omitempty,min=6"`
+	IsADUser bool   `json:"is_ad_user"` // signs in through Active Directory; no password stored
+	// NationalID lets the user sign in with Nafath (10 digits, 1… citizen /
+	// 2… Iqama). Empty = no Nafath login. Only accepted while Nafath is enabled.
+	NationalID        string      `json:"national_id"`
 	FirstName         string      `json:"first_name" validate:"max=100"`
 	MiddleName        string      `json:"middle_name" validate:"max=100"`
 	LastName          string      `json:"last_name" validate:"max=100"`
@@ -345,6 +348,8 @@ type UserUpdateRequest struct {
 	EnableLoginTotp             *bool       `json:"enable_login_totp"`
 	ContactCenter               *bool       `json:"contact_center"`
 	IsADUser                    *bool       `json:"is_ad_user"`
+	// NationalID: nil = unchanged, "" = remove (no Nafath login).
+	NationalID *string `json:"national_id"`
 }
 
 type UserResponse struct {

@@ -250,6 +250,7 @@ func (r *userRepository) Update(ctx context.Context, user *models.User) error {
 		"bypass_login_totp":              user.BypassLoginTotp,
 		"enable_login_totp":              user.EnableLoginTotp,
 		"is_ad_user":                     user.IsADUser,
+		"national_id":                    user.NationalID,
 	}).Error
 }
 
