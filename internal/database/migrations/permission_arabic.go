@@ -22,6 +22,7 @@ var permissionModuleArabic = map[string]string{
 	"departments":            "الإدارات",
 	"error-logs":             "سجل الأخطاء",
 	"escalation-groups":      "مجموعات التصعيد",
+	"escalation-logs":        "سجل التصعيد",
 	"escalation-policies":    "سياسات التصعيد",
 	"extensions":             "التحويلات الهاتفية",
 	"goals":                  "الأهداف",
@@ -132,6 +133,8 @@ var permissionNameArabic = map[string]struct{ Name, Description string }{
 	"escalation-groups:assign_users": {"إسناد المستخدمين إلى مجموعة التصعيد", "إضافة المستخدمين إلى مجموعات التصعيد أو إزالتهم منها"},
 	"escalation-groups:manage_rules": {"إدارة قواعد التصعيد", "إعداد قواعد تكرار التصعيد والقناة والتصنيف"},
 	"escalation-policies:create":     {"إنشاء سياسة تصعيد", "إنشاء سياسات تصعيد جديدة"},
+	"escalation-logs:view":           {"عرض سجل التصعيد", "عرض سجل التصعيد وسجل التصعيد الخاص بكل بلاغ"},
+	"escalation-logs:export":         {"تصدير سجل التصعيد", "تصدير سجل التصعيد المصفى إلى ملف Excel"},
 
 	// Extensions
 	"extensions:view":    {"عرض التحويلات الهاتفية", "عرض التحويلات الهاتفية وحالة الإسناد"},

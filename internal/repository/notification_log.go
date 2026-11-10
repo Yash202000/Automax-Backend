@@ -35,6 +35,8 @@ type NotificationLogRepository interface {
 	SetMeta(ctx context.Context, ids []uuid.UUID, meta *models.NotificationMeta) error
 	SetArContent(ctx context.Context, ids []uuid.UUID, subjectAr, bodyAr string) error
 	SetIncidentID(ctx context.Context, ids []uuid.UUID, incidentID uuid.UUID) error
+	// FindByMetaIDs returns outbound logs tagged with the given metadata IDs.
+	FindByMetaIDs(ctx context.Context, ids []string) ([]models.NotificationLog, error)
 }
 
 type notificationLogRepository struct {
@@ -401,6 +403,18 @@ func (r *notificationLogRepository) SetIncidentID(ctx context.Context, ids []uui
 		Model(&models.NotificationLog{}).
 		Where("id IN ?", ids).
 		Update("incident_id", incidentID).Error
+}
+
+func (r *notificationLogRepository) FindByMetaIDs(ctx context.Context, ids []string) ([]models.NotificationLog, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var logs []models.NotificationLog
+	err := r.db.WithContext(ctx).
+		Where("direction = ?", models.DirectionOutbound).
+		Where("meta->>'id' IN ?", ids).
+		Find(&logs).Error
+	return logs, err
 }
 
 func (r *notificationLogRepository) SetArContent(ctx context.Context, ids []uuid.UUID, subjectAr, bodyAr string) error {

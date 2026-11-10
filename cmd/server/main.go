@@ -1149,6 +1149,10 @@ func main() {
 
 	escalation := v1.Group("/escalation", authMiddleware.Authenticate())
 
+	// Escalation log routes.
+	escalation.Get("/logs", authMiddleware.RequirePermission("escalation-logs:view"), escalationHandler.ListLogs)
+	escalation.Get("/logs/export", authMiddleware.RequirePermission("escalation-logs:export"), escalationHandler.ExportLogs)
+
 	// GET /api/v1/escalation— list all SLA breach notification records
 	escalation.Get("/", escalationHandler.List)
 	escalation.Get("/incident/:incident_id", escalationHandler.ListByIncident)
