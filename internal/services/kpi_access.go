@@ -262,15 +262,18 @@ func (s *KpiAccessService) KpiOfCodedRecord(ctx context.Context, table string, i
 
 // KpiByCode resolves a KPI from its type and code.
 func (s *KpiAccessService) KpiByCode(ctx context.Context, kpiType, code string) (KpiRef, error) {
-	var id uuid.UUID
+	// Scan into a struct, not a bare uuid.UUID: gorm treats a [16]byte
+	// destination as a collection and scans the column into a uint8, which
+	// fails for every KPI that exists ("converting ... to a uint8").
+	var row struct{ ID uuid.UUID }
 	if err := s.db.WithContext(ctx).Table(kpiCodeUnionSQL+" k").Select("k.id").
-		Where("k.kpi_type = ? AND k.code = ?", kpiType, code).Limit(1).Scan(&id).Error; err != nil {
+		Where("k.kpi_type = ? AND k.code = ?", kpiType, code).Limit(1).Scan(&row).Error; err != nil {
 		return KpiRef{}, err
 	}
-	if id == uuid.Nil {
+	if row.ID == uuid.Nil {
 		return KpiRef{}, ErrKpiNotFound
 	}
-	return KpiRef{KpiType: kpiType, KpiID: id}, nil
+	return KpiRef{KpiType: kpiType, KpiID: row.ID}, nil
 }
 
 // AssignCreatorAsOwner makes the creator of a new KPI its KPI Owner so they
@@ -339,13 +342,14 @@ func (s *KpiAccessService) Allowed(ctx context.Context, userID uuid.UUID, kpiTyp
 // CorrectiveActionPerformance returns the legacy performance record a
 // corrective action belongs to.
 func (s *KpiAccessService) CorrectiveActionPerformance(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
-	var perfID uuid.UUID
+	// Struct destination for the same reason as KpiByCode.
+	var row struct{ KpiPerformanceID uuid.UUID }
 	if err := s.db.WithContext(ctx).Table("kpi_corrective_actions").Select("kpi_performance_id").
-		Where("id = ?", id).Limit(1).Scan(&perfID).Error; err != nil {
+		Where("id = ?", id).Limit(1).Scan(&row).Error; err != nil {
 		return uuid.Nil, err
 	}
-	if perfID == uuid.Nil {
+	if row.KpiPerformanceID == uuid.Nil {
 		return uuid.Nil, ErrKpiNotFound
 	}
-	return perfID, nil
+	return row.KpiPerformanceID, nil
 }
