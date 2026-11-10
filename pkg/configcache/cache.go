@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/automax/backend/internal/models"
+	"github.com/google/uuid"
 	"gorm.io/datatypes"
 )
 
@@ -24,10 +25,17 @@ type Lister interface {
 	List(ctx context.Context, filter *models.ConfigListFilter) ([]models.Config, int64, error)
 }
 
+// AttachmentResolver turns attachment ids into displayable views (with generated URLs);
+// services.SystemAttachmentService satisfies it.
+type AttachmentResolver interface {
+	Resolve(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]models.ConfigAttachmentView, error)
+}
+
 // Cache is a snapshot of every config row, read for one environment (dev | staging | prod).
 type Cache struct {
-	lister Lister
-	env    string
+	lister   Lister
+	env      string
+	resolver AttachmentResolver // optional; expands attachment configs on Load
 
 	mu    sync.RWMutex
 	items map[string]models.Config
@@ -36,6 +44,14 @@ type Cache struct {
 // New creates an empty cache that reads env's configs. Call Load to fill it.
 func New(lister Lister, env string) *Cache {
 	return &Cache{lister: lister, env: env, items: map[string]models.Config{}}
+}
+
+// SetResolver makes Load expand the attachment ids of attachment configs into views, so
+// cached reads return ready-to-show values without touching the database. Call Load afterwards.
+func (c *Cache) SetResolver(r AttachmentResolver) {
+	c.mu.Lock()
+	c.resolver = r
+	c.mu.Unlock()
 }
 
 func cacheKey(env, key string) string { return env + "\x00" + key }
@@ -49,8 +65,32 @@ func (c *Cache) Load(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	c.mu.RLock()
+	resolver := c.resolver
+	c.mu.RUnlock()
+
+	// Attachment configs of the current environment store ids; resolve them all in one query and
+	// keep the expanded value in the snapshot (the database rows are not touched).
+	var views map[uuid.UUID]models.ConfigAttachmentView
+	if resolver != nil {
+		var ids []uuid.UUID
+		for i := range cfgs {
+			if cfgs[i].Environment == c.env && cfgs[i].IsAttachments() {
+				if got, ok := models.AttachmentIDs(cfgs[i].Value); ok {
+					ids = append(ids, got...)
+				}
+			}
+		}
+		if views, err = resolver.Resolve(ctx, ids); err != nil {
+			return err // keep the previous snapshot rather than serve raw ids
+		}
+	}
+
 	m := make(map[string]models.Config, len(cfgs))
 	for _, cfg := range cfgs {
+		if resolver != nil && cfg.Environment == c.env && cfg.IsAttachments() {
+			cfg.Value = models.ExpandAttachmentValue(cfg.Value, views)
+		}
 		m[cacheKey(cfg.Environment, cfg.CacheKey())] = cfg
 	}
 	c.mu.Lock()
@@ -134,19 +174,68 @@ func (c *Cache) decode(key string, out any) bool {
 // default or env-var fallback: a missing config is simply not found.
 func (c *Cache) Get(module, name string) (*models.ConfigResponse, bool) {
 	cfg, ok := c.get(models.ConfigCacheKey(strings.TrimSpace(module), strings.TrimSpace(name)))
-	if !ok || cfg.IsSecret {
+	if !ok || cfg.IsSecret || cfg.Visibility == models.ConfigVisibilityAdmin {
 		return nil, false
 	}
 	resp := models.ToConfigResponse(&cfg)
 	return &resp, true
 }
 
-// List returns every non-secret config of the current environment, sorted by module then name.
+// GetPublic returns the anonymous view of a config that is public and not secret. Anything
+// else (missing, admin/authenticated-only, secret) is reported as missing.
+func (c *Cache) GetPublic(module, name string) (*models.ConfigPublicResponse, bool) {
+	cfg, ok := c.get(models.ConfigCacheKey(strings.TrimSpace(module), strings.TrimSpace(name)))
+	if !ok || !cfg.IsPublic() {
+		return nil, false
+	}
+	resp := models.ToConfigPublicResponse(&cfg)
+	return &resp, true
+}
+
+// ListPublicByModule returns the public, non-secret configs of one module in the current
+// environment as brief entries (name, value, timestamps), sorted by name.
+func (c *Cache) ListPublicByModule(module string) []models.ConfigBriefResponse {
+	module = strings.ToLower(strings.TrimSpace(module))
+	c.mu.RLock()
+	out := make([]models.ConfigBriefResponse, 0)
+	for _, cfg := range c.items {
+		if cfg.Environment != c.env || cfg.Module != module || !cfg.IsPublic() {
+			continue
+		}
+		out = append(out, models.ConfigBriefResponse{ValueType: cfg.ValueType, Name: cfg.Name, Value: append(datatypes.JSON(nil), cfg.Value...), CreatedAt: cfg.CreatedAt, UpdatedAt: cfg.UpdatedAt})
+	}
+	c.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// ListPublic returns every public, non-secret config of the current environment, sorted by module then name.
+func (c *Cache) ListPublic() []models.ConfigPublicResponse {
+	c.mu.RLock()
+	out := make([]models.ConfigPublicResponse, 0, len(c.items))
+	for _, cfg := range c.items {
+		if cfg.Environment != c.env || !cfg.IsPublic() {
+			continue
+		}
+		cfg := cfg
+		out = append(out, models.ToConfigPublicResponse(&cfg))
+	}
+	c.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Module != out[j].Module {
+			return out[i].Module < out[j].Module
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+// List returns every non-secret, non-admin-only config of the current environment, sorted by module then name.
 func (c *Cache) List() []models.ConfigResponse {
 	c.mu.RLock()
 	out := make([]models.ConfigResponse, 0, len(c.items))
 	for _, cfg := range c.items {
-		if cfg.Environment != c.env || cfg.IsSecret {
+		if cfg.Environment != c.env || cfg.IsSecret || cfg.Visibility == models.ConfigVisibilityAdmin {
 			continue
 		}
 		cfg := cfg

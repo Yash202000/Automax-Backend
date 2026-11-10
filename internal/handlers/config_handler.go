@@ -9,6 +9,7 @@ import (
 	"github.com/automax/backend/internal/middleware"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
+	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
@@ -17,12 +18,13 @@ import (
 )
 
 type ConfigHandler struct {
-	service      services.ConfigService
-	actionLogSvc services.ActionLogService
+	service       services.ConfigService
+	actionLogSvc  services.ActionLogService
+	attachmentSvc *services.ConfigAttachmentService
 }
 
-func NewConfigHandler(service services.ConfigService, actionLogSvc services.ActionLogService) *ConfigHandler {
-	return &ConfigHandler{service: service, actionLogSvc: actionLogSvc}
+func NewConfigHandler(service services.ConfigService, actionLogSvc services.ActionLogService, attachmentSvc *services.ConfigAttachmentService) *ConfigHandler {
+	return &ConfigHandler{service: service, actionLogSvc: actionLogSvc, attachmentSvc: attachmentSvc}
 }
 
 const configLogModule = "configs"
@@ -47,13 +49,18 @@ func (h *ConfigHandler) audit(c *fiber.Ctx, action string, id uuid.UUID, descrip
 func (h *ConfigHandler) respondError(c *fiber.Ctx, err error) error {
 	ctx := c.UserContext()
 	switch {
-	case errors.Is(err, models.ErrConfigNotFound):
+	case errors.Is(err, models.ErrConfigNotFound), errors.Is(err, models.ErrConfigAttachmentNotFound):
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(ctx, err.Error()))
 	case errors.Is(err, models.ErrConfigExists), errors.Is(err, models.ErrConfigVersionConflict):
 		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(ctx, err.Error()))
 	case errors.Is(err, models.ErrConfigNameRequired), errors.Is(err, models.ErrConfigNameInvalid),
-		errors.Is(err, models.ErrConfigValueNotJSON), errors.Is(err, models.ErrConfigInvalidEnvironment):
+		errors.Is(err, models.ErrConfigValueNotJSON), errors.Is(err, models.ErrConfigInvalidEnvironment),
+		errors.Is(err, models.ErrConfigPublicSecret), errors.Is(err, models.ErrConfigAttachmentType),
+		errors.Is(err, models.ErrConfigAttachmentKeyBad), errors.Is(err, models.ErrConfigAttachmentModuleReserved),
+		errors.Is(err, models.ErrConfigAttachmentsManaged):
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(ctx, err.Error()))
+	case errors.As(err, new(*services.SystemAttachmentError)):
+		return writeSystemAttachmentError(c, err)
 	default:
 		return utils.InternalErrorResponse(c, err, i18n.T(ctx, "internal_server_error"))
 	}
@@ -156,6 +163,12 @@ func (h *ConfigHandler) Update(c *fiber.Ctx) error {
 		return h.respondError(c, err)
 	}
 
+	h.auditUpdate(c, resp, changes)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "config_updated"), resp)
+}
+
+// auditUpdate logs an "update" action with the field-level diff returned by the service.
+func (h *ConfigHandler) auditUpdate(c *fiber.Ctx, resp *models.ConfigResponse, changes []models.ConfigChange) {
 	fields := make([]string, len(changes))
 	oldVals := make(map[string]any, len(changes))
 	newVals := make(map[string]any, len(changes))
@@ -169,7 +182,6 @@ func (h *ConfigHandler) Update(c *fiber.Ctx) error {
 		desc = fmt.Sprintf("Config updated: %s/%s (v%d), no field changes", resp.Environment, resp.Module+"."+resp.Name, resp.Version)
 	}
 	h.audit(c, "update", resp.ID, desc, oldVals, newVals)
-	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "config_updated"), resp)
 }
 
 // Delete DELETE /admin/configs/:id
@@ -193,7 +205,7 @@ func (h *ConfigHandler) Delete(c *fiber.Ctx) error {
 // ListCurrent GET /configs
 // Served from the in-memory cache: all non-secret configs of the server's current environment.
 func (h *ConfigHandler) ListCurrent(c *fiber.Ctx) error {
-	items := h.service.ListCached()
+	items := h.service.ListCached(c.UserContext())
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "configs_retrieved"), fiber.Map{
 		"environment": h.service.Environment(),
 		"configs":     items,
@@ -204,9 +216,83 @@ func (h *ConfigHandler) ListCurrent(c *fiber.Ctx) error {
 // GetCurrent GET /configs/:module/:name
 // Served from the in-memory cache. A missing or secret config is a 404; no default is substituted.
 func (h *ConfigHandler) GetCurrent(c *fiber.Ctx) error {
-	resp, ok := h.service.GetCached(c.Params("module"), c.Params("name"))
+	resp, ok := h.service.GetCached(c.UserContext(), c.Params("module"), c.Params("name"))
 	if !ok {
 		return h.respondError(c, models.ErrConfigNotFound)
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "config_retrieved"), resp)
+}
+
+// ListPublic GET /public/configs (no authentication)
+// Public, non-secret configs of the server's current environment, from the in-memory cache.
+func (h *ConfigHandler) ListPublic(c *fiber.Ctx) error {
+	items := h.service.ListPublic(c.UserContext())
+	c.Set("Cache-Control", "public, max-age=60")
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "configs_retrieved"), fiber.Map{
+		"configs": items,
+		"total":   len(items),
+	})
+}
+
+// GetPublic GET /public/configs/:module/:name (no authentication)
+// A missing config, a non-public one and a secret one all answer 404.
+func (h *ConfigHandler) GetPublic(c *fiber.Ctx) error {
+	resp, ok := h.service.GetPublic(c.UserContext(), c.Params("module"), c.Params("name"))
+	if !ok {
+		return h.respondError(c, models.ErrConfigNotFound)
+	}
+	c.Set("Cache-Control", "public, max-age=60")
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "config_retrieved"), resp)
+}
+
+// UploadAttachments POST /admin/configs/:module/attachments/:name
+// Adds images (multipart field "files"; "file" is accepted too) to the attachment config
+// <module>-attachments/<name>, creating it on first use. module and name are lowercase letters
+// and digits only; the server adds the "-attachments" suffix.
+func (h *ConfigHandler) UploadAttachments(c *fiber.Ctx) error { return h.saveAttachments(c, false) }
+
+// ReplaceAttachments PUT /admin/configs/:module/attachments/:name
+// Same as UploadAttachments, but the uploaded images become the whole set (e.g. a single logo).
+func (h *ConfigHandler) ReplaceAttachments(c *fiber.Ctx) error { return h.saveAttachments(c, true) }
+
+func (h *ConfigHandler) saveAttachments(c *fiber.Ctx, replace bool) error {
+	ctx := c.UserContext()
+	userID, ok := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	if !ok {
+		return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(ctx, "unauthorized_not_authenticated"))
+	}
+	form, err := c.MultipartForm()
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(ctx, "pubatt_invalid_multipart"))
+	}
+	files := form.File["files"]
+	if len(files) == 0 {
+		files = form.File["file"] // a single image (e.g. a logo) is commonly sent as "file"
+	}
+	save := h.attachmentSvc.Add
+	if replace {
+		save = h.attachmentSvc.Replace
+	}
+	resp, changes, err := save(ctx, c.Params("module"), c.Params("name"), files, userID)
+	if err != nil {
+		return h.respondError(c, err)
+	}
+	h.auditUpdate(c, resp, changes)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(ctx, "config_attachments_updated"), resp)
+}
+
+// DeleteAttachment DELETE /admin/configs/:module/attachments/:name/:attachment_id
+// Removes one image from the attachment config and deletes its file.
+func (h *ConfigHandler) DeleteAttachment(c *fiber.Ctx) error {
+	ctx := c.UserContext()
+	attachmentID, err := uuid.Parse(c.Params("attachment_id"))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(ctx, "invalid_id"))
+	}
+	resp, changes, err := h.attachmentSvc.Remove(ctx, c.Params("module"), c.Params("name"), attachmentID)
+	if err != nil {
+		return h.respondError(c, err)
+	}
+	h.auditUpdate(c, resp, changes)
+	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(ctx, "config_attachments_updated"), resp)
 }

@@ -251,6 +251,36 @@ type SettingsResponse struct {
 
 	// Timestamps
 	UpdatedAt string `json:"updated_at"`
+
+	// SettingsAttachments maps the name of each public config in the "settings-attachments" module
+	// (current environment) to the preview URL of its image: a string for one image, an array of
+	// strings for several, e.g. {"logo": "https://host/.../preview", "gallery": ["...", "..."]}.
+	// Configs without images are left out. See SettingsAttachmentsMap.
+	SettingsAttachments map[string]any `json:"settings_attachments"`
+}
+
+// SettingsAttachmentsMap builds the settings_attachments value from the public attachment configs of
+// a module (expanded views, URLs already prefixed with the request host): config name -> preview URL
+// for one image, -> list of preview URLs for several. Configs with no images, or whose value isn't
+// an attachment list, are skipped. The result is never nil, so it encodes as {}.
+func SettingsAttachmentsMap(configs []ConfigBriefResponse) map[string]any {
+	out := make(map[string]any, len(configs))
+	for _, c := range configs {
+		var views []ConfigAttachmentView
+		if json.Unmarshal(c.Value, &views) != nil || len(views) == 0 {
+			continue
+		}
+		if len(views) == 1 {
+			out[c.Name] = views[0].PreviewURL
+			continue
+		}
+		urls := make([]string, len(views))
+		for i, v := range views {
+			urls[i] = v.PreviewURL
+		}
+		out[c.Name] = urls
+	}
+	return out
 }
 
 // ToSettingsResponse converts Settings model to response DTO

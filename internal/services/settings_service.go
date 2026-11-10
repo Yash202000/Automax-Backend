@@ -12,10 +12,26 @@ import (
 type SettingsService interface {
 	GetSettings(ctx context.Context) (*models.SettingsResponse, error)
 	UpdateSettings(ctx context.Context, req *models.SettingsUpdateRequest) (*models.SettingsResponse, error)
+	// SetConfigService lets settings responses include the public "settings-attachments" configs.
+	SetConfigService(cs ConfigService)
 }
 
 type settingsService struct {
 	settingsRepo repository.SettingsRepository
+	configs      ConfigService // optional; see SetConfigService
+}
+
+func (s *settingsService) SetConfigService(cs ConfigService) { s.configs = cs }
+
+// toResponse converts the settings row and adds settings_attachments: the preview URL(s) of each
+// public config in the "settings-attachments" module, keyed by config name.
+func (s *settingsService) toResponse(ctx context.Context, settings *models.Settings) *models.SettingsResponse {
+	resp := settings.ToSettingsResponse()
+	resp.SettingsAttachments = map[string]any{}
+	if s.configs != nil {
+		resp.SettingsAttachments = models.SettingsAttachmentsMap(s.configs.ListPublicByModule(ctx, models.ConfigSettingsAttachmentsModule))
+	}
+	return resp
 }
 
 func NewSettingsService(settingsRepo repository.SettingsRepository) SettingsService {
@@ -31,7 +47,7 @@ func (s *settingsService) GetSettings(ctx context.Context) (*models.SettingsResp
 		return nil, err
 	}
 
-	return settings.ToSettingsResponse(), nil
+	return s.toResponse(ctx, settings), nil
 }
 
 // UpdateSettings updates the application settings
@@ -148,5 +164,5 @@ func (s *settingsService) UpdateSettings(ctx context.Context, req *models.Settin
 		return nil, err
 	}
 
-	return settings.ToSettingsResponse(), nil
+	return s.toResponse(ctx, settings), nil
 }
