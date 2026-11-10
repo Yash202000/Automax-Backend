@@ -1430,6 +1430,19 @@ func main() {
 	kpi.Get("/dictionary-import/template", authMiddleware.RequirePermission("kpi:create"), kpiImportHandler.Template)
 	kpi.Post("/dictionary-import/validate", authMiddleware.RequirePermission("kpi:create"), kpiImportHandler.Validate)
 	kpi.Post("/dictionary-import/commit", authMiddleware.RequirePermission("kpi:create"), kpiImportHandler.Commit)
+
+	// Bulk import of KPI metrics (KpiMetric rows under existing KPIs).
+	kpi.Get("/metrics-import/template", authMiddleware.RequirePermission("kpi:create"), kpiImportHandler.MetricsTemplate)
+	kpi.Post("/metrics-import/validate", authMiddleware.RequirePermission("kpi:create"), kpiImportHandler.ValidateMetrics)
+	kpi.Post("/metrics-import/commit", authMiddleware.RequirePermission("kpi:create"), kpiImportHandler.CommitMetrics)
+
+	// Bulk import for every Master Data tab (pillars, enablers, objectives,
+	// processes, initiatives, domains, award criteria/sub-criteria/measures,
+	// data sources, segmentation dimensions, organizations). The type query
+	// parameter selects the entity and the workbook's matching sheet.
+	kpi.Get("/master-data-import/template", authMiddleware.RequirePermission("goals:manage"), kpiImportHandler.MasterDataTemplate)
+	kpi.Post("/master-data-import/validate", authMiddleware.RequirePermission("goals:manage"), kpiImportHandler.ValidateMasterData)
+	kpi.Post("/master-data-import/commit", authMiddleware.RequirePermission("goals:manage"), kpiImportHandler.CommitMasterData)
 	kpi.Get("/strategic", authMiddleware.RequirePermission("kpi:view"), kpiDictionaryHandler.ListStrategic)
 	kpi.Get("/strategic/:id", authMiddleware.RequirePermission("kpi:view"), kpiAccess.Require(services.KpiActionView, handlers.KpiOfType("strategic")), kpiDictionaryHandler.GetStrategic)
 	kpi.Post("/strategic", authMiddleware.RequirePermission("kpi:create"), kpiDictionaryHandler.CreateStrategic)
@@ -1449,6 +1462,10 @@ func main() {
 	kpi.Delete("/award/:id", authMiddleware.RequirePermission("kpi:delete"), kpiAccess.Require(services.KpiActionEditKpi, handlers.KpiOfType("award")), kpiDictionaryHandler.DeleteAward)
 
 	// ---- KPI PERFORMANCE ROUTES (must be before /:type/:id/transition to avoid route conflict) ----
+	// Bulk import of KPI targets (KpiAnnualTarget rows under existing KPIs).
+	kpi.Get("/targets-import/template", authMiddleware.RequirePermission("targets:set"), kpiImportHandler.TargetsTemplate)
+	kpi.Post("/targets-import/validate", authMiddleware.RequirePermission("targets:set"), kpiImportHandler.ValidateTargets)
+	kpi.Post("/targets-import/commit", authMiddleware.RequirePermission("targets:set"), kpiImportHandler.CommitTargets)
 	kpi.Get("/targets", authMiddleware.RequirePermission("targets:view"), kpiPerformanceHandler.ListTargets)
 	kpi.Post("/targets", authMiddleware.RequirePermission("targets:set"), kpiAccess.Require(services.KpiActionManageTargets, handlers.KpiFromBodyCode), kpiPerformanceHandler.SetTarget)
 	kpi.Put("/targets/:id", authMiddleware.RequirePermission("targets:set"), kpiAccess.Require(services.KpiActionManageTargets, handlers.KpiOfCodedRecord("kpi_annual_targets", "id")), kpiPerformanceHandler.UpdateTarget)
