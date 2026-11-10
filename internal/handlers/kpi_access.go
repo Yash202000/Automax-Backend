@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"log"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
@@ -68,6 +69,7 @@ func (h *KpiAccessHandler) Require(action services.KpiAction, resolve KpiResolve
 			return c.Next()
 		}
 		if err != nil {
+			log.Printf("[kpi-access] resolve KPI for %s %s: %v", c.Method(), c.Path(), err)
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 		}
 		if denied, err := kpiAccessDenied(c, ref.KpiType, ref.KpiID, action); denied {
@@ -87,6 +89,7 @@ func (h *KpiAccessHandler) RequireTransition(resolve KpiResolver) fiber.Handler 
 			return c.Next()
 		}
 		if err != nil {
+			log.Printf("[kpi-access] resolve KPI for %s %s: %v", c.Method(), c.Path(), err)
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 		}
 		var body struct {
