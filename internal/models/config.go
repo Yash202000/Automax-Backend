@@ -166,9 +166,37 @@ const (
 	ConfigValueTypeAttachments = "attachments"
 )
 
-// ConfigAttachmentKeyRe is what the module and name passed to the attachment endpoints may be:
-// lowercase letters and digits only. The server adds ConfigAttachmentsSuffix to the module itself.
-var ConfigAttachmentKeyRe = regexp.MustCompile(`^[a-z0-9]{1,50}$`)
+// Naming rules for configs, shared by ConfigService (normal configs) and ConfigAttachmentService
+// (attachment configs); callers trim and lowercase first:
+//   - module: lowercase letters and digits only (ConfigModuleRe)
+//   - name:   lowercase letters, digits and underscore (ConfigNameRe)
+//
+// The "-attachments" suffix the server adds to an attachment config's stored module is the only hyphen
+// that can appear in a module, and it is never typed by a caller.
+var (
+	ConfigModuleRe = regexp.MustCompile(`^[a-z0-9]+$`)
+	ConfigNameRe   = regexp.MustCompile(`^[a-z0-9_]+$`)
+)
+
+const (
+	// ConfigKeyMaxLen is the longest module or name (the columns are 100 characters).
+	ConfigKeyMaxLen = 100
+	// ConfigAttachmentBaseMaxLen is the longest module a caller may pass to the attachment
+	// endpoints: the stored module is that plus ConfigAttachmentsSuffix, which must still fit.
+	ConfigAttachmentBaseMaxLen = ConfigKeyMaxLen - len(ConfigAttachmentsSuffix)
+)
+
+// ValidConfigModule reports whether s (already trimmed and lowercased) is a valid module of at most
+// maxLen characters: lowercase letters and digits only.
+func ValidConfigModule(s string, maxLen int) bool {
+	return len(s) > 0 && len(s) <= maxLen && ConfigModuleRe.MatchString(s)
+}
+
+// ValidConfigName reports whether s (already trimmed and lowercased) is a valid name of at most
+// maxLen characters: lowercase letters, digits and underscore.
+func ValidConfigName(s string, maxLen int) bool {
+	return len(s) > 0 && len(s) <= maxLen && ConfigNameRe.MatchString(s)
+}
 
 // reservedAttachmentModules can't be used as the module of an attachment config: "system" tags
 // uploads that belong to no config module, and "attachment(s)" would only repeat the suffix.

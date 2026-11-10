@@ -7,7 +7,6 @@ import (
 	"errors"
 	"log"
 	"mime/multipart"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -71,9 +70,6 @@ type ConfigService interface {
 
 // configEnvAll is the list filter value that disables the environment filter.
 const configEnvAll = "all"
-
-// configPartRe is what a module or name may contain after trimming and lowercasing.
-var configPartRe = regexp.MustCompile(`^[a-z0-9_-]+$`)
 
 // normalizeConfigPart trims and lowercases a module or name.
 func normalizeConfigPart(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
@@ -173,11 +169,17 @@ func (s *configService) createConfig(ctx context.Context, req *models.ConfigCrea
 	if module == "" || name == "" {
 		return nil, models.ErrConfigNameRequired
 	}
-	if !configPartRe.MatchString(module) || !configPartRe.MatchString(name) {
-		return nil, models.ErrConfigNameInvalid
-	}
 	if !internal && (models.IsAttachmentsModule(module) || req.ValueType == models.ConfigValueTypeAttachments) {
 		return nil, models.ErrConfigAttachmentsManaged
+	}
+	// Same rules as the attachment endpoints. The one hyphen allowed is the "-attachments" suffix the
+	// server adds to an attachment config's module, so it is validated without it.
+	keyModule, maxModule := module, models.ConfigKeyMaxLen
+	if internal {
+		keyModule, maxModule = strings.TrimSuffix(module, models.ConfigAttachmentsSuffix), models.ConfigAttachmentBaseMaxLen
+	}
+	if !models.ValidConfigModule(keyModule, maxModule) || !models.ValidConfigName(name, models.ConfigKeyMaxLen) {
+		return nil, models.ErrConfigNameInvalid
 	}
 	if !json.Valid(req.Value) {
 		return nil, models.ErrConfigValueNotJSON

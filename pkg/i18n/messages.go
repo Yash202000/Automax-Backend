@@ -1127,7 +1127,7 @@ var messages = map[string][2]string{
 	"config_exists":                     {"A config with this environment, module and name already exists", "يوجد إعداد بنفس البيئة والوحدة والاسم مسبقاً"},
 	"config_version_conflict":           {"This config was modified by someone else; reload and try again", "تم تعديل هذا الإعداد بواسطة مستخدم آخر؛ أعد التحميل وحاول مرة أخرى"},
 	"config_name_required":              {"Config module and name are required", "الوحدة واسم الإعداد مطلوبان"},
-	"config_name_invalid":               {"Module and name may only contain lowercase letters, numbers, underscore and hyphen", "يجب أن تحتوي الوحدة والاسم على أحرف إنجليزية صغيرة وأرقام وشرطة سفلية وشرطة فقط"},
+	"config_name_invalid":               {"Module may only contain lowercase letters and numbers; name may also contain underscore (max 100 characters)", "يمكن أن تحتوي الوحدة على أحرف إنجليزية صغيرة وأرقام فقط، ويمكن أن يحتوي الاسم أيضًا على شرطة سفلية (100 حرف كحد أقصى)"},
 	"config_value_not_json":             {"Config value must be valid JSON", "يجب أن تكون قيمة الإعداد بصيغة JSON صالحة"},
 	"config_invalid_environment":        {"environment must be one of: dev, staging, prod", "يجب أن تكون البيئة إحدى القيم: dev أو staging أو prod"},
 	"config_invalid_environment_list":   {"environment must be one of: dev, staging, prod, all", "يجب أن تكون البيئة إحدى القيم: dev أو staging أو prod أو all"},
@@ -1150,7 +1150,7 @@ var messages = map[string][2]string{
 	"config_attachment_unsupported":     {"This config does not hold attachments", "هذا الإعداد لا يحتوي على مرفقات"},
 	"config_attachment_not_found":       {"Attachment not found in this config", "المرفق غير موجود في هذا الإعداد"},
 	"config_attachments_updated":        {"Config attachments updated", "تم تحديث مرفقات الإعداد"},
-	"config_attachment_key_invalid":     {"Module and name must be lowercase letters and digits only (max 50 characters)", "يجب أن يتكون الوحدة والاسم من أحرف إنجليزية صغيرة وأرقام فقط (50 حرفًا كحد أقصى)"},
+	"config_attachment_key_invalid":     {"Module may only contain lowercase letters and numbers (max 88); name may also contain underscore (max 100)", "يمكن أن تحتوي الوحدة على أحرف إنجليزية صغيرة وأرقام فقط (88 حرفًا كحد أقصى)، ويمكن أن يحتوي الاسم أيضًا على شرطة سفلية (100 حرف كحد أقصى)"},
 	"config_attachments_managed":        {"Attachment configs can only be changed through the attachment endpoints", "لا يمكن تغيير إعدادات المرفقات إلا من خلال واجهات المرفقات"},
 	"config_attachment_module_reserved": {"This module name is reserved (system, attachment, attachments); choose another", "اسم الوحدة هذا محجوز (system, attachment, attachments)، اختر اسمًا آخر"},
 }

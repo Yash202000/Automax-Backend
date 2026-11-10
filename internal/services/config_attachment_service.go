@@ -28,11 +28,12 @@ func NewConfigAttachmentService(configs ConfigService, store AttachmentStore) *C
 	return &ConfigAttachmentService{configs: configs, store: store}
 }
 
-// attachmentsKey validates the base module and name (lowercase letters and digits only) and
+// attachmentsKey validates the base module and name with the same rules as every other config
+// (module: lowercase letters and digits; name: lowercase letters, digits and underscore) and
 // returns the stored module and the name.
 func attachmentsKey(base, name string) (module, key string, err error) {
 	base, key = strings.ToLower(strings.TrimSpace(base)), strings.ToLower(strings.TrimSpace(name))
-	if !models.ConfigAttachmentKeyRe.MatchString(base) || !models.ConfigAttachmentKeyRe.MatchString(key) {
+	if !models.ValidConfigModule(base, models.ConfigAttachmentBaseMaxLen) || !models.ValidConfigName(key, models.ConfigKeyMaxLen) {
 		return "", "", models.ErrConfigAttachmentKeyBad
 	}
 	if models.IsReservedAttachmentModule(base) {
