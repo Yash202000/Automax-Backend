@@ -152,9 +152,6 @@ func main() {
 	reportTemplateService := services.NewReportTemplateService(reportTemplateRepo, reportRepo)
 	applicationLinkService := services.NewApplicationLinkService(applicationLinkRepo)
 	configService := services.NewConfigService(configRepo, cfg)
-	if err := configService.SeedDefaults(context.Background()); err != nil {
-		log.Printf("Warning: Failed to seed default configs: %v", err)
-	}
 	if err := configService.LoadCache(context.Background()); err != nil {
 		log.Printf("Warning: Failed to load config cache: %v", err)
 	}
@@ -304,7 +301,14 @@ func main() {
 	reportTemplateHandler := handlers.NewReportTemplateHandler(reportTemplateService)
 	lookupHandler := handlers.NewLookupHandler(lookupRepo)
 	applicationLinkHandler := handlers.NewApplicationLinkHandler(applicationLinkService, minioStorage)
-	configHandler := handlers.NewConfigHandler(configService, actionLogService)
+	systemAttachmentService := services.NewSystemAttachmentService(db, minioStorage)
+	configService.SetAttachmentStore(systemAttachmentService)
+	if err := configService.LoadCache(context.Background()); err != nil { // reload now that attachment ids can be expanded
+		log.Printf("Warning: Failed to reload config cache: %v", err)
+	}
+	configAttachmentService := services.NewConfigAttachmentService(configService, systemAttachmentService)
+	configHandler := handlers.NewConfigHandler(configService, actionLogService, configAttachmentService)
+	settingsService.SetConfigService(configService)
 	settingsHandler := handlers.NewSettingsHandler(settingsService)
 	jwksHandler := handlers.NewJWKSHandler(ssoJWTManager)
 	ssoHandler := handlers.NewSSOHandler(ssoJWTManager, jwtManager, sessionStore, userRepo, applicationLinkRepo, userService, otpService, cfg.SSOFrontendURL, cfg.NafathAPIBaseURL)
@@ -312,6 +316,7 @@ func main() {
 	notificationHandler := handlers.NewNotificationHandler(notificationService, minioStorage, userRepo, incidentRepo, actionLogService)
 	templateHandler := handlers.NewNotificationTemplateHandler(notificationTemplateService)
 	attachmentHandler := handlers.NewAttachmentHandler(incidentService, notificationService, minioStorage)
+	systemAttachmentHandler := handlers.NewSystemAttachmentHandler(db, minioStorage, systemAttachmentService)
 	imageValidationHandler := handlers.NewImageValidationHandler(services.NewImageValidationService(), cfg.ImageValidation)
 	otpHandler := handlers.NewOTPHandler(otpService, userService)
 	escalationHandler := handlers.NewEscalationHandler(escalationService)
@@ -643,6 +648,13 @@ func main() {
 	attachments := v1.Group("/attachments", authMiddleware.Authenticate())
 	attachments.Get("/:attachment_id", attachmentHandler.DownloadAttachment)
 	attachments.Get("/:attachment_id/preview", attachmentHandler.PreviewAttachment)
+
+	// Public attachments: upload requires auth; batch listing/preview/download are anonymous.
+	v1.Post("/system-attachments", authMiddleware.Authenticate(), systemAttachmentHandler.Upload)
+	systemAttachments := v1.Group("/system/attachments")
+	systemAttachments.Get("/batch/:batch_id", systemAttachmentHandler.ListByBatch)
+	systemAttachments.Get("/:id", systemAttachmentHandler.Download)
+	systemAttachments.Get("/:id/preview", systemAttachmentHandler.Preview)
 
 	// Standalone image-quality validation, called by Mobile App / Chatbot
 	// before incident submission to reject mostly-black/mostly-white/no-detail photos.
@@ -1032,11 +1044,19 @@ func main() {
 	configs.Post("/", authMiddleware.RequirePermission("configs:create"), configHandler.Create)
 	configs.Get("/", authMiddleware.RequirePermission("configs:view"), configHandler.List)
 	configs.Get("/:module/:name", authMiddleware.RequirePermission("configs:view"), configHandler.GetByName)
+	// Attachment configs (<module>-attachments, value = attachment ids): POST adds images, PUT replaces
+	// the set, DELETE removes one; multipart "files". The config is created on first use.
+	configs.Post("/:module/attachments/:name", authMiddleware.RequirePermission("configs:update"), configHandler.UploadAttachments)
+	configs.Put("/:module/attachments/:name", authMiddleware.RequirePermission("configs:update"), configHandler.ReplaceAttachments)
+	configs.Delete("/:module/attachments/:name/:attachment_id", authMiddleware.RequirePermission("configs:update"), configHandler.DeleteAttachment)
 	configs.Get("/:id", authMiddleware.RequirePermission("configs:view"), configHandler.Get)
 	configs.Put("/:id", authMiddleware.RequirePermission("configs:update"), configHandler.Update)
 	configs.Delete("/:id", authMiddleware.RequirePermission("configs:delete"), configHandler.Delete)
 
 	// Cache-backed config reads for clients (current environment, non-secret values only)
+	// Anonymous reads: only configs whose visibility is "public" (never secrets)
+	v1.Get("/public/configs", configHandler.ListPublic)
+	v1.Get("/public/configs/:module/:name", configHandler.GetPublic)
 	v1.Get("/configs", authMiddleware.Authenticate(), configHandler.ListCurrent)
 	v1.Get("/configs/:module/:name", authMiddleware.Authenticate(), configHandler.GetCurrent)
 

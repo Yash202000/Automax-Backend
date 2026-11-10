@@ -103,6 +103,7 @@ func (r *configRepository) Update(ctx context.Context, cfg *models.Config, expec
 			"value_type":  cfg.ValueType,
 			"description": cfg.Description,
 			"is_secret":   cfg.IsSecret,
+			"visibility":  cfg.Visibility,
 			"version":     gorm.Expr("version + 1"),
 			"updated_at":  gorm.Expr("now()"),
 		})

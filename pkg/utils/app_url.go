@@ -19,6 +19,18 @@ func GenerateAppURL(ctx context.Context) string {
 	return url
 }
 
+// RequestBaseURL returns "protocol://hostname" of the current request, taken from the context
+// the RequestContext middleware fills. It returns "" when the context has no request (background
+// jobs, tests), so callers fall back to relative paths instead of building "://".
+func RequestBaseURL(ctx context.Context) string {
+	hostname, _ := ctx.Value(constants.ContextKeys.HOSTNAME).(string)
+	protocol, _ := ctx.Value(constants.ContextKeys.PROTOCOL).(string)
+	if hostname == "" || protocol == "" {
+		return ""
+	}
+	return protocol + "://" + hostname
+}
+
 // When building the SMS link, encode the token
 func BuildSMSLink(ctx context.Context, incidentID string, t time.Duration) string {
 	rawToken := GenerateIncidentToken(incidentID, t)

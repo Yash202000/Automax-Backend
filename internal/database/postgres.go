@@ -80,6 +80,7 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		&models.CallLog{},
 		&models.CallParticipant{},
 		&models.CallLogAttachment{},
+		&models.SystemAttachment{},
 		&models.NotificationTemplate{},
 		&models.NotificationLog{},
 		&models.EscalationSLA{},
