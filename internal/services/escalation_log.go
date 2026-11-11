@@ -370,7 +370,8 @@ func escalationRecipientName(row *models.EscalationSLA) string {
 
 func normalizeDeliveryStatus(logStatus, recipientStatus string) string {
 	status := strings.ToLower(strings.TrimSpace(recipientStatus))
-	if status == "" || status == "success" {
+	if status == "" {
+		// Use the aggregate status only when the recipient has no status.
 		status = strings.ToLower(strings.TrimSpace(logStatus))
 	}
 	switch status {

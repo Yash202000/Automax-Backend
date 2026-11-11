@@ -92,24 +92,41 @@ func parseEscalationLogFilter(c *fiber.Ctx) (*models.EscalationLogFilter, error)
 		Limit:            q.Limit,
 	}
 
-	if q.DateFrom != "" {
-		if t, err := time.Parse("2006-01-02", q.DateFrom); err == nil {
-			localStart := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.Local)
-			filter.DateFrom = &localStart
-		} else if t, err := time.Parse(time.RFC3339, q.DateFrom); err == nil {
-			filter.DateFrom = &t
-		}
+	dateFrom, err := parseEscalationLogDate(q.DateFrom, false)
+	if err != nil {
+		return nil, fmt.Errorf("invalid date_from: %w", err)
 	}
-	if q.DateTo != "" {
-		if t, err := time.Parse("2006-01-02", q.DateTo); err == nil {
-			localEnd := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, time.Local)
-			filter.DateTo = &localEnd
-		} else if t, err := time.Parse(time.RFC3339, q.DateTo); err == nil {
-			filter.DateTo = &t
-		}
+	filter.DateFrom = dateFrom
+
+	dateTo, err := parseEscalationLogDate(q.DateTo, true)
+	if err != nil {
+		return nil, fmt.Errorf("invalid date_to: %w", err)
 	}
+	filter.DateTo = dateTo
 
 	return filter, nil
+}
+
+// parseEscalationLogDate parses YYYY-MM-DD or RFC3339; date-only values use local day bounds.
+func parseEscalationLogDate(value string, endOfDay bool) (*time.Time, error) {
+	if value == "" {
+		return nil, nil
+	}
+
+	if t, err := time.Parse("2006-01-02", value); err == nil {
+		if endOfDay {
+			localEnd := time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, time.Local)
+			return &localEnd, nil
+		}
+		localStart := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.Local)
+		return &localStart, nil
+	}
+
+	if t, err := time.Parse(time.RFC3339, value); err == nil {
+		return &t, nil
+	}
+
+	return nil, fmt.Errorf("unsupported date %q", value)
 }
 
 // ListLogs returns matching escalation entries, newest first.
