@@ -383,7 +383,7 @@ func normalizeDeliveryStatus(logStatus, recipientStatus string) string {
 		status = strings.ToLower(strings.TrimSpace(logStatus))
 	}
 	switch status {
-	case "sent", "mock-sent", "delivered", "read", "queued", "success":
+	case "sent", "mock-sent", "delivered", "read", "success":
 		return "sent"
 	case "failed", "undeliverable", "expired":
 		return "failed"
