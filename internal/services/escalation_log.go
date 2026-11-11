@@ -53,7 +53,7 @@ func (s *EscalationService) SearchLogs(ctx context.Context, filter *models.Escal
 
 // GetLogsByIncident returns newest-first escalation entries for an incident.
 func (s *EscalationService) GetLogsByIncident(ctx context.Context, incidentID uuid.UUID) ([]models.EscalationLogEntryResponse, error) {
-	records, err := s.repo.GetByIncidentID(ctx, incidentID)
+	records, err := s.repo.SearchLogsAll(ctx, &models.EscalationLogFilter{IncidentID: &incidentID})
 	if err != nil {
 		return nil, err
 	}
