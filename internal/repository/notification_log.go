@@ -406,15 +406,24 @@ func (r *notificationLogRepository) SetIncidentID(ctx context.Context, ids []uui
 }
 
 func (r *notificationLogRepository) FindByMetaIDs(ctx context.Context, ids []string) ([]models.NotificationLog, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
+	const batchSize = 1000
 	var logs []models.NotificationLog
-	err := r.db.WithContext(ctx).
-		Where("direction = ?", models.DirectionOutbound).
-		Where("meta->>'id' IN ?", ids).
-		Find(&logs).Error
-	return logs, err
+	for start := 0; start < len(ids); start += batchSize {
+		end := start + batchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		var batch []models.NotificationLog
+		err := r.db.WithContext(ctx).
+			Where("direction = ?", models.DirectionOutbound).
+			Where("meta->>'id' IN ?", ids[start:end]).
+			Find(&batch).Error
+		if err != nil {
+			return nil, err
+		}
+		logs = append(logs, batch...)
+	}
+	return logs, nil
 }
 
 func (r *notificationLogRepository) SetArContent(ctx context.Context, ids []uuid.UUID, subjectAr, bodyAr string) error {

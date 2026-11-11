@@ -232,6 +232,7 @@ func (r *escalationRepository) loadPreviousFiredLevels(ctx context.Context, rowI
 		             ON prev_step.id = prev.escalation_policy_step_id
 		           WHERE prev.incident_id = cur.incident_id
 		             AND prev.state_id IS NOT DISTINCT FROM cur.state_id
+		             AND prev_step.policy_id = cur_step.policy_id
 		             AND COALESCE(prev.notified_at, prev.created_at) < COALESCE(cur.notified_at, cur.created_at)
 		             AND prev_step.step_order < cur_step.step_order
 		       ) AS previous_step
