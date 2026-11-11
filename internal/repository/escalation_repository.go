@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/google/uuid"
@@ -28,8 +27,8 @@ type EscalationRepository interface {
 	// SearchLogsAll returns all filtered rows for export.
 	SearchLogsAll(ctx context.Context, filter *models.EscalationLogFilter) ([]models.EscalationSLA, error)
 
-	// GetPreviousFiredLevel returns the previous fired step for an incident and state.
-	GetPreviousFiredLevel(ctx context.Context, incidentID uuid.UUID, stateID *uuid.UUID, currentStepOrder int, before time.Time) (*int, error)
+	// GetPreviousFiredLevels returns the previous fired step for each escalation row.
+	GetPreviousFiredLevels(ctx context.Context, rowIDs []uuid.UUID) (map[uuid.UUID]*int, error)
 
 	// HasBeenNotified checks whether a user was already notified for the given incident+state
 	// combination (prevents duplicate notifications within the same SLA breach period)
@@ -200,30 +199,60 @@ func (r *escalationRepository) SearchLogsAll(ctx context.Context, filter *models
 	return records, err
 }
 
-func (r *escalationRepository) GetPreviousFiredLevel(ctx context.Context, incidentID uuid.UUID, stateID *uuid.UUID, currentStepOrder int, before time.Time) (*int, error) {
-	var maxLevel sql.NullInt64
-	q := r.db.WithContext(ctx).
-		Table("escalation_slas AS es").
-		Select("MAX(eps.step_order)").
-		Joins("JOIN escalation_policy_steps AS eps ON eps.id = es.escalation_policy_step_id").
-		Where("es.incident_id = ?", incidentID).
-		Where("eps.step_order < ?", currentStepOrder).
-		// Count only steps fired before this event.
-		Where("COALESCE(es.notified_at, es.created_at) < ?", before)
-	if stateID != nil {
-		q = q.Where("es.state_id = ?", *stateID)
-	} else {
-		q = q.Where("es.state_id IS NULL")
+func (r *escalationRepository) GetPreviousFiredLevels(ctx context.Context, rowIDs []uuid.UUID) (map[uuid.UUID]*int, error) {
+	levels := make(map[uuid.UUID]*int, len(rowIDs))
+	const batchSize = 1000
+	for start := 0; start < len(rowIDs); start += batchSize {
+		end := start + batchSize
+		if end > len(rowIDs) {
+			end = len(rowIDs)
+		}
+		if err := r.loadPreviousFiredLevels(ctx, rowIDs[start:end], levels); err != nil {
+			return nil, err
+		}
+	}
+	return levels, nil
+}
+
+func (r *escalationRepository) loadPreviousFiredLevels(ctx context.Context, rowIDs []uuid.UUID, levels map[uuid.UUID]*int) error {
+	if len(rowIDs) == 0 {
+		return nil
 	}
 
-	if err := q.Scan(&maxLevel).Error; err != nil {
-		return nil, err
+	var rows []struct {
+		ID           uuid.UUID     `gorm:"column:id"`
+		PreviousStep sql.NullInt64 `gorm:"column:previous_step"`
 	}
-	if !maxLevel.Valid {
-		return nil, nil
+	err := r.db.WithContext(ctx).Raw(`
+		SELECT cur.id AS id,
+		       (
+		           SELECT MAX(prev_step.step_order)
+		           FROM escalation_slas prev
+		           JOIN escalation_policy_steps prev_step
+		             ON prev_step.id = prev.escalation_policy_step_id
+		           WHERE prev.incident_id = cur.incident_id
+		             AND prev.state_id IS NOT DISTINCT FROM cur.state_id
+		             AND COALESCE(prev.notified_at, prev.created_at) < COALESCE(cur.notified_at, cur.created_at)
+		             AND prev_step.step_order < cur_step.step_order
+		       ) AS previous_step
+		FROM escalation_slas cur
+		JOIN escalation_policy_steps cur_step
+		  ON cur_step.id = cur.escalation_policy_step_id
+		WHERE cur.id IN ?
+		  AND cur.incident_id IS NOT NULL
+	`, rowIDs).Scan(&rows).Error
+	if err != nil {
+		return err
 	}
-	level := int(maxLevel.Int64)
-	return &level, nil
+
+	for _, row := range rows {
+		if !row.PreviousStep.Valid {
+			continue
+		}
+		level := int(row.PreviousStep.Int64)
+		levels[row.ID] = &level
+	}
+	return nil
 }
 
 func (r *escalationRepository) HasBeenNotified(ctx context.Context, incidentID, stateID, userID uuid.UUID) (bool, error) {

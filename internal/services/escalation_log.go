@@ -87,27 +87,22 @@ func (s *EscalationService) buildLogEntries(ctx context.Context, records []model
 		}
 	}
 
+	levelRowIDs := make([]uuid.UUID, 0, len(records))
+	for i := range records {
+		if records[i].IncidentID != nil && records[i].EscalationPolicyStep != nil {
+			levelRowIDs = append(levelRowIDs, records[i].ID)
+		}
+	}
+	previousLevels, err := s.repo.GetPreviousFiredLevels(ctx, levelRowIDs)
+	if err != nil {
+		log.Printf("[EscalationService] failed to resolve previous escalation levels: %v", err)
+		previousLevels = map[uuid.UUID]*int{}
+	}
+
 	entries := make([]models.EscalationLogEntryResponse, 0, len(records))
 	for i := range records {
 		row := &records[i]
-
-		var fromLevel *int
-		if row.EscalationPolicyStep != nil && row.IncidentID != nil {
-			previous, err := s.repo.GetPreviousFiredLevel(
-				ctx,
-				*row.IncidentID,
-				row.StateID,
-				row.EscalationPolicyStep.StepOrder,
-				escalationLogTime(row),
-			)
-			if err != nil {
-				log.Printf("[EscalationService] failed to resolve previous escalation level for incident %s: %v", row.IncidentID, err)
-			} else {
-				fromLevel = previous
-			}
-		}
-
-		entries = append(entries, buildEscalationLogEntry(row, logsByRow[row.ID.String()], fromLevel))
+		entries = append(entries, buildEscalationLogEntry(row, logsByRow[row.ID.String()], previousLevels[row.ID]))
 	}
 
 	sort.SliceStable(entries, func(i, j int) bool {
@@ -242,16 +237,20 @@ func noticeFromRecipientInfo(
 	if recipient == "" {
 		recipient = recipientContact(row, entry.Channel)
 	}
-	failureCode := info.FailureCode
-	if failureCode == "" {
-		failureCode = entry.FailureCode
-	}
-	errorMessage := info.ErrorMessage
-	if errorMessage == "" {
-		errorMessage = info.Error
-	}
-	if errorMessage == "" {
-		errorMessage = entry.ErrorMessage
+	failureCode := ""
+	errorMessage := ""
+	if info.Status == "" || isFailedRecipientStatus(info.Status) {
+		failureCode = info.FailureCode
+		if failureCode == "" {
+			failureCode = entry.FailureCode
+		}
+		errorMessage = info.ErrorMessage
+		if errorMessage == "" {
+			errorMessage = info.Error
+		}
+		if errorMessage == "" {
+			errorMessage = entry.ErrorMessage
+		}
 	}
 
 	return models.EscalationNoticeResultResponse{
@@ -366,6 +365,15 @@ func escalationRecipientName(row *models.EscalationSLA) string {
 		}
 	}
 	return row.Email
+}
+
+func isFailedRecipientStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "failed", "undeliverable", "expired", "partial":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeDeliveryStatus(logStatus, recipientStatus string) string {
