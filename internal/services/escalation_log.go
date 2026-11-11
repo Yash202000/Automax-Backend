@@ -328,7 +328,7 @@ func parseAction(action string) (channel, status string) {
 
 func expectedChannels(step *models.EscalationPolicyStep) []string {
 	if step == nil {
-		return []string{"EMAIL", "SMS"}
+		return nil
 	}
 	switch step.Channel {
 	case "email":
