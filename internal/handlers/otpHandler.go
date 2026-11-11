@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"log"
 
 	"github.com/automax/backend/internal/models"
@@ -75,6 +76,10 @@ func (h *OTPHandler) SendOTP(c *fiber.Ctx) error {
 	)
 
 	if err != nil {
+		var deliveryErr *services.OTPDeliveryError
+		if errors.As(err, &deliveryErr) {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
+		}
 		return utils.ErrorResponse(c, 400, err.Error())
 	}
 
