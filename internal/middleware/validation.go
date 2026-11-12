@@ -41,7 +41,7 @@ func ValidationMiddleware() fiber.Handler {
 	}
 }
 
-var durationOptionsRe = regexp.MustCompile(`"duration_options":\[[^\]]*\]`)
+var durationOptionsRe = regexp.MustCompile(`"duration_options":\[(?:[^\]"]|"(?:[^"\\]|\\.)*")*\]`)
 
 // localizeDurationOptions rewrites a "duration_options":[...] JSON fragment into Arabic labels.
 func localizeDurationOptions(frag []byte) []byte {

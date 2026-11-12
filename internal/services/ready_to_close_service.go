@@ -413,6 +413,8 @@ func (s *readyToCloseService) ParseDuration(label string) (time.Duration, error)
 		return time.Duration(n) * 24 * time.Hour, nil
 	case "week":
 		return time.Duration(n) * 7 * 24 * time.Hour, nil
+	case "year":
+		return time.Duration(n) * 365 * 24 * time.Hour, nil
 	case "month":
 		// Approximate month as 30 days
 		return time.Duration(n) * 30 * 24 * time.Hour, nil
