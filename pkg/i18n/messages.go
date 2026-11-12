@@ -581,6 +581,8 @@ var messages = map[string][2]string{
 	"collaborator_removed":                 {"Collaborator removed", "تم إزالة المتعاون"},
 	"failed_to_add_collaborator":           {"Failed to add collaborator", "فشل إضافة المتعاون"},
 	"failed_to_remove_collaborator":        {"Failed to remove collaborator", "فشل إزالة المتعاون"},
+	"collaborator_already_assigned":        {"This user is already assigned to this KPI.", "هذا المستخدم معيّن بالفعل لهذا المؤشر."},
+	"collaborator_date_in_past":            {"Effective From and Effective To cannot be in the past.", "لا يمكن أن يكون تاريخ السريان من أو إلى في الماضي."},
 	"failed_to_write_html":                 {"Failed to write HTML", "فشل كتابة HTML"},
 	"failed_to_read_pdf":                   {"Failed to read PDF output", "فشل قراءة مخرجات PDF"},
 	"failed_to_create_temp":                {"Failed to create temp file", "فشل إنشاء ملف مؤقت"},
