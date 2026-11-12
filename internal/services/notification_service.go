@@ -1201,6 +1201,11 @@ func (s *NotificationService) SetMetaOnLogs(ctx context.Context, ids []uuid.UUID
 	return s.logRepo.SetMeta(ctx, ids, meta)
 }
 
+// FindLogsByMetaIDs returns outbound logs tagged with the given metadata IDs.
+func (s *NotificationService) FindLogsByMetaIDs(ctx context.Context, ids []string) ([]models.NotificationLog, error) {
+	return s.logRepo.FindByMetaIDs(ctx, ids)
+}
+
 func (s *NotificationService) SetArContentOnLogs(ctx context.Context, ids []uuid.UUID, subjectAr, bodyAr string) error {
 	return s.logRepo.SetArContent(ctx, ids, subjectAr, bodyAr)
 }

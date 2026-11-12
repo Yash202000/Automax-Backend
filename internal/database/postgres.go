@@ -792,6 +792,10 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Assign Users to Escalation Group", Code: "escalation-groups:assign_users", Module: "escalation-groups", Action: "assign_users", ActionAr: "تعيين المستخدمين", Description: "Add or remove users from escalation groups"},
 		{Name: "Manage Escalation Rules", Code: "escalation-groups:manage_rules", Module: "escalation-groups", Action: "manage_rules", ActionAr: "إدارة القواعد", Description: "Configure escalation frequency, channel, and classification rules"},
 
+		// Escalation log permissions
+		{Name: "View Escalation Log", Code: "escalation-logs:view", Module: "escalation-logs", Action: "view", ActionAr: "عرض", Description: "View the escalation log and per-report escalation history"},
+		{Name: "Export Escalation Log", Code: "escalation-logs:export", Module: "escalation-logs", Action: "export", ActionAr: "تصدير", Description: "Export the filtered escalation log to Excel"},
+
 		// Error Log permissions
 		{Name: "View Error Logs", Code: "error-logs:view", Module: "error-logs", Action: "view", ActionAr: "عرض", Description: "View the error log list and details"},
 		{Name: "Update Error Log Status", Code: "error-logs:update", Module: "error-logs", Action: "update", ActionAr: "تحديث", Description: "Change error status and add notes"},
@@ -907,6 +911,13 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 	db.Where("module = ?", "error-logs").Find(&errorLogPerms)
 	if len(errorLogPerms) > 0 {
 		db.Model(&adminRole).Association("Permissions").Append(errorLogPerms)
+	}
+
+	// Ensure the admin role has the Escalation Log permissions on existing databases.
+	var escalationLogPerms []models.Permission
+	db.Where("module = ?", "escalation-logs").Find(&escalationLogPerms)
+	if len(escalationLogPerms) > 0 {
+		db.Model(&adminRole).Association("Permissions").Append(escalationLogPerms)
 	}
 
 	// Remove department-scoping permissions from admin role on existing databases.
