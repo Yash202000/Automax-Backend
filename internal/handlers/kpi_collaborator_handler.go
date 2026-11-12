@@ -125,6 +125,9 @@ func (h *KpiCollaboratorHandler) CreateAssignment(c *fiber.Ctx) error {
 	if effectiveTo != nil && effectiveTo.Before(effectiveFrom) {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "effective_to must be on or after effective_from")
 	}
+	if collabDateInPast(effectiveFrom) || (effectiveTo != nil && collabDateInPast(*effectiveTo)) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "collaborator_date_in_past"))
+	}
 
 	metricScope := req.MetricScope
 	if metricScope == "" {
@@ -226,6 +229,31 @@ func (h *KpiCollaboratorHandler) UpdateAssignment(c *fiber.Ctx) error {
 	if effectiveTo != nil && effectiveTo.Before(effectiveFrom) {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "effective_to must be on or after effective_from")
 	}
+	// An existing past date may be kept; a changed date must not be in the past.
+	fromChanged := req.EffectiveFrom != item.EffectiveFrom.UTC().Format("2006-01-02")
+	toChanged := item.EffectiveTo == nil || req.EffectiveTo != item.EffectiveTo.UTC().Format("2006-01-02")
+	if (fromChanged && collabDateInPast(effectiveFrom)) || (toChanged && effectiveTo != nil && collabDateInPast(*effectiveTo)) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "collaborator_date_in_past"))
+	}
+
+	// The (kpi, user) unique index: refuse a user who already has an
+	// assignment on this KPI, and clear a removed one so it doesn't block.
+	if req.UserID != uuid.Nil && req.UserID != item.UserID {
+		var taken int64
+		if err := h.db.WithContext(c.UserContext()).Model(&models.KpiCollaboratorAssignment{}).
+			Where("kpi_id = ? AND user_id = ?", item.KpiID, req.UserID).
+			Count(&taken).Error; err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
+		}
+		if taken > 0 {
+			return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "collaborator_already_assigned"))
+		}
+		if err := h.db.WithContext(c.UserContext()).Unscoped().
+			Where("kpi_id = ? AND user_id = ? AND deleted_at IS NOT NULL", item.KpiID, req.UserID).
+			Delete(&models.KpiCollaboratorAssignment{}).Error; err != nil {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
+		}
+	}
 
 	metricScope := req.MetricScope
 	if metricScope == "" {
@@ -252,6 +280,7 @@ func (h *KpiCollaboratorHandler) UpdateAssignment(c *fiber.Ctx) error {
 	notificationPrefsJSON, _ := json.Marshal(req.NotificationPrefs)
 
 	updates := map[string]interface{}{
+		"user_id":              req.UserID,
 		"user_category":        req.UserCategory,
 		"collaborator_type":    req.CollaboratorType,
 		"organization_scope":   string(orgScopeJSON),
@@ -293,6 +322,12 @@ func (h *KpiCollaboratorHandler) UpdateAssignment(c *fiber.Ctx) error {
 	})
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "", toAssignmentResponse(&item))
+}
+
+// collabDateInPast reports whether a YYYY-MM-DD date (parsed as UTC
+// midnight) is before today.
+func collabDateInPast(d time.Time) bool {
+	return d.UTC().Format("2006-01-02") < time.Now().Format("2006-01-02")
 }
 
 func (h *KpiCollaboratorHandler) DeleteAssignment(c *fiber.Ctx) error {
