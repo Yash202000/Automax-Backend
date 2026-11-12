@@ -2,8 +2,11 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
+	"regexp"
 	"strings"
 
+	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/gofiber/fiber/v2"
 )
@@ -28,6 +31,27 @@ func ValidationMiddleware() fiber.Handler {
 		// Store the updated context back in Fiber
 		c.SetUserContext(ctx)
 
-		return c.Next()
+		if err := c.Next(); err != nil {
+			return err
+		}
+		if lang == "ar" && c.Method() == fiber.MethodGet {
+			c.Response().SetBodyRaw(durationOptionsRe.ReplaceAllFunc(c.Response().Body(), localizeDurationOptions))
+		}
+		return nil
 	}
+}
+
+var durationOptionsRe = regexp.MustCompile(`"duration_options":\[[^\]]*\]`)
+
+// localizeDurationOptions rewrites a "duration_options":[...] JSON fragment into Arabic labels.
+func localizeDurationOptions(frag []byte) []byte {
+	var opts []string
+	if json.Unmarshal(frag[len(`"duration_options":`):], &opts) != nil {
+		return frag
+	}
+	for i, o := range opts {
+		opts[i] = models.LocalizeDurationLabelAr(o)
+	}
+	b, _ := json.Marshal(opts)
+	return append([]byte(`"duration_options":`), b...)
 }
