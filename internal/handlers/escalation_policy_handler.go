@@ -1,6 +1,9 @@
 package handlers
 
 import (
+	"fmt"
+
+	"github.com/automax/backend/internal/middleware"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
@@ -11,14 +14,31 @@ import (
 	"github.com/google/uuid"
 )
 
+const escalationPolicyLogModule = "escalation-policies"
+
 type EscalationPolicyHandler struct {
-	service  *services.EscalationPolicyService
-	userRepo repository.UserRepository
-	deptRepo repository.DepartmentRepository
+	service      *services.EscalationPolicyService
+	userRepo     repository.UserRepository
+	deptRepo     repository.DepartmentRepository
+	actionLogSvc services.ActionLogService
 }
 
-func NewEscalationPolicyHandler(service *services.EscalationPolicyService, userRepo repository.UserRepository, deptRepo repository.DepartmentRepository) *EscalationPolicyHandler {
-	return &EscalationPolicyHandler{service: service, userRepo: userRepo, deptRepo: deptRepo}
+func NewEscalationPolicyHandler(service *services.EscalationPolicyService, userRepo repository.UserRepository, deptRepo repository.DepartmentRepository, actionLogSvc services.ActionLogService) *EscalationPolicyHandler {
+	return &EscalationPolicyHandler{service: service, userRepo: userRepo, deptRepo: deptRepo, actionLogSvc: actionLogSvc}
+}
+
+func (h *EscalationPolicyHandler) audit(c *fiber.Ctx, action string, id uuid.UUID, description string, oldValue, newValue any) {
+	if h.actionLogSvc == nil {
+		return
+	}
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      action,
+		Module:      escalationPolicyLogModule,
+		ResourceID:  id.String(),
+		Description: description,
+		OldValue:    oldValue,
+		NewValue:    newValue,
+	})
 }
 
 // List — GET /api/v1/admin/escalation-policies
@@ -57,6 +77,7 @@ func (h *EscalationPolicyHandler) Create(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
+	h.audit(c, "create", policy.ID, fmt.Sprintf("Created escalation policy '%s'", policy.Name), nil, policy)
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "escalation_policy_created"), policy)
 }
 
@@ -75,10 +96,16 @@ func (h *EscalationPolicyHandler) Update(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": errs})
 	}
 
+	oldPolicy, _ := h.service.GetByID(c.UserContext(), id)
 	policy, err := h.service.Update(c.UserContext(), id, &req)
 	if err != nil {
 		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
+	var oldValue any
+	if oldPolicy != nil {
+		oldValue = oldPolicy
+	}
+	h.audit(c, "update", policy.ID, fmt.Sprintf("Updated escalation policy '%s'", policy.Name), oldValue, policy)
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "escalation_policy_updated"), policy)
 }
 
@@ -88,9 +115,17 @@ func (h *EscalationPolicyHandler) Delete(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
+	oldPolicy, _ := h.service.GetByID(c.UserContext(), id)
 	if err := h.service.Delete(c.UserContext(), id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, err.Error())
 	}
+	var oldValue any
+	name := id.String()
+	if oldPolicy != nil {
+		name = oldPolicy.Name
+		oldValue = oldPolicy
+	}
+	h.audit(c, "delete", id, fmt.Sprintf("Deleted escalation policy '%s'", name), oldValue, nil)
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "escalation_policy_deleted"), nil)
 }
 
@@ -118,9 +153,22 @@ func (h *EscalationPolicyHandler) UpdateTargetExcludedUsers(c *fiber.Ctx) error 
 		req.ExcludedUserIDs = []string{}
 	}
 
+	oldPolicy, _ := h.service.GetByID(c.UserContext(), policyID)
 	if err := h.service.UpdateTargetExcludedUsers(c.UserContext(), policyID, targetID, req.ExcludedUserIDs); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
+	newPolicy, _ := h.service.GetByID(c.UserContext(), policyID)
+
+	var oldValue, newValue any
+	name := policyID.String()
+	if oldPolicy != nil {
+		name = oldPolicy.Name
+		oldValue = oldPolicy
+	}
+	if newPolicy != nil {
+		newValue = newPolicy
+	}
+	h.audit(c, "update", policyID, fmt.Sprintf("Updated escalation policy target exclusions for '%s'", name), oldValue, newValue)
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "excluded_users_updated"), nil)
 }
 
