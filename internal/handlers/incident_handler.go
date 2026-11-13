@@ -657,7 +657,7 @@ func (h *IncidentHandler) scopeIncidentFilterToUser(c *fiber.Ctx, filter *models
 	// Skip department/classification/location scoping entirely for Citizen role — those scopes
 	// are designed for internal staff and would incorrectly exclude incidents that were triaged
 	// to departments/classifications the citizen is not assigned to.
-	if findErr == nil && user != nil && !user.IsSuperAdmin && user.HasRole(constants.USER_ROLE.CITIZEN) {
+	if findErr == nil && user != nil && user.IsCitizenOnly(constants.USER_ROLE.CITIZEN) {
 		filter.ReporterID = []string{userID.String()}
 		roleIDs := make([]uuid.UUID, 0, len(user.Roles))
 		for _, r := range user.Roles {
@@ -1676,7 +1676,7 @@ func (h *IncidentHandler) GetStatsV2(c *fiber.Ctx) error {
 			// AMAX-4262: Citizens should only see stats for incidents they created.
 			// Skip department/classification/location scoping — same rationale as
 			// scopeIncidentFilterToUser above.
-			if u.HasRole(constants.USER_ROLE.CITIZEN) {
+			if u.IsCitizenOnly(constants.USER_ROLE.CITIZEN) {
 				filter.ReporterID = []string{statsUserID.String()}
 				for _, r := range u.Roles {
 					filter.UserRoleIDs = append(filter.UserRoleIDs, r.ID)
