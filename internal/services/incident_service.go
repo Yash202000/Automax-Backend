@@ -729,13 +729,13 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		return nil, errors.New(i18n.T(ctx, "invalid_workflow_id_lower"))
 	}
 
-	// Enforce the per-workflow required state for the two fields whose
-	// server-side rules are implemented here. The workflow lookup is
-	// best-effort: GetInitialState below is the authoritative existence check.
-	if workflow, wfErr := s.workflowRepo.FindByID(ctx, workflowID); wfErr == nil {
-		if fieldErrors := validateIncidentFormRequiredFields(ctx, workflow, req.CallerIdentityText, req.CooperationStatus); len(fieldErrors) > 0 {
-			return nil, fieldErrors
-		}
+	// Enforce workflow-required caller/cooperation fields.
+	workflow, wfErr := s.workflowRepo.FindByID(ctx, workflowID)
+	if wfErr != nil {
+		return nil, wfErr
+	}
+	if fieldErrors := validateIncidentFormRequiredFields(ctx, workflow, req.CallerIdentityText, req.CooperationStatus); len(fieldErrors) > 0 {
+		return nil, fieldErrors
 	}
 
 	// Get the initial state of the workflow
@@ -1436,11 +1436,14 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		if req.CooperationStatus != nil {
 			effectiveCooperationStatus = strings.TrimSpace(*req.CooperationStatus)
 		}
-		if workflow, wfErr := s.workflowRepo.FindByID(ctx, incident.WorkflowID); wfErr == nil {
-			if fieldErrors := validateIncidentFormRequiredFields(ctx, workflow, effectiveCallerIdentity, effectiveCooperationStatus); len(fieldErrors) > 0 {
-				tx.Rollback()
-				return nil, fieldErrors
-			}
+		workflow, wfErr := s.workflowRepo.FindByID(ctx, incident.WorkflowID)
+		if wfErr != nil {
+			tx.Rollback()
+			return nil, wfErr
+		}
+		if fieldErrors := validateIncidentFormRequiredFields(ctx, workflow, effectiveCallerIdentity, effectiveCooperationStatus); len(fieldErrors) > 0 {
+			tx.Rollback()
+			return nil, fieldErrors
 		}
 	}
 
