@@ -393,7 +393,7 @@ func (s *readyToCloseService) GetDurationOptionsForState(state *models.WorkflowS
 // ParseDuration converts a human-readable duration label into a time.Duration.
 // Supported formats: "N Day(s)", "N Week(s)", "N Month(s)", "N Hour(s)".
 func (s *readyToCloseService) ParseDuration(label string) (time.Duration, error) {
-	label = strings.TrimSpace(label)
+	label = models.NormalizeDurationLabel(label) // accept Arabic labels too
 	lower := strings.ToLower(label)
 
 	var n int
@@ -413,6 +413,8 @@ func (s *readyToCloseService) ParseDuration(label string) (time.Duration, error)
 		return time.Duration(n) * 24 * time.Hour, nil
 	case "week":
 		return time.Duration(n) * 7 * 24 * time.Hour, nil
+	case "year":
+		return time.Duration(n) * 365 * 24 * time.Hour, nil
 	case "month":
 		// Approximate month as 30 days
 		return time.Duration(n) * 30 * 24 * time.Hour, nil
