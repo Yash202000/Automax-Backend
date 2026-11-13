@@ -701,9 +701,8 @@ type IncidentFilter struct {
 	UserID      uuid.UUID   `json:"-"`
 	IsAdmin     bool        `json:"-"` // Super admin bypasses user-scoped assigned filter
 	// IncludeUnassignedDepartment: when true, the DepartmentID filter also
-	// matches incidents that are still in their workflow's initial state
-	// (no department triaged yet), but only when UserID is their reporter
-	// or assignee. Set by the handler when DepartmentID was derived purely
+	// matches incidents with no department that are in an initial or
+	// terminal state (never triaged), but only when UserID is their reporter, creator or assignee. Set by the handler when DepartmentID was derived purely
 	// from the user's scope (no explicit department filter requested).
 	IncludeUnassignedDepartment bool `json:"-"`
 }
