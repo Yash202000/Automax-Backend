@@ -519,7 +519,7 @@ func (h *IncidentHandler) applyUserAccessScope(filter *models.IncidentFilter, us
 	// No explicit department filter requested -> the resulting DepartmentID
 	// comes purely from the user's scope, so this user's own incidents still
 	// in their workflow's initial state (not yet triaged to a department)
-	// should still be visible. Gated on state_type='initial' in the repo query.
+	// should still be visible (reporter/creator/assignee only, see repo query).
 	noExplicitDeptFilter := len(filter.DepartmentID) == 0
 	filter.DepartmentID = intersectScope(userDeptStrs, filter.DepartmentID)
 	if noExplicitDeptFilter && len(userDeptStrs) > 0 {
@@ -570,12 +570,12 @@ func (h *IncidentHandler) checkUserAccessToIncident(c *fiber.Ctx, incident *mode
 		}
 	}
 
-	// Incidents still in their workflow's initial state haven't been triaged
-	// to a department yet, so department scope can't be evaluated against
-	// them. Let the reporter/assignee through in that window; once the
-	// incident leaves its initial state, department scoping applies as usual
-	// (including denying access if department_id is still nil by then).
-	isInitialState := incident.CurrentState != nil && incident.CurrentState.StateType == "initial"
+	// Incidents with no department can't be evaluated against department scope.
+	// That is expected while still in the initial state, or once closed without
+	// ever being triaged (initial -> terminal). Let the reporter/creator/assignee
+	// through in those states; in a normal mid-workflow state it is still denied.
+	isInitialOrTerminal := incident.CurrentState != nil &&
+		(incident.CurrentState.StateType == "initial" || incident.CurrentState.StateType == "terminal")
 
 	if len(userDeptIDs) > 0 {
 		if incident.DepartmentID != nil {
@@ -589,7 +589,7 @@ func (h *IncidentHandler) checkUserAccessToIncident(c *fiber.Ctx, incident *mode
 			if !found {
 				return false
 			}
-		} else if !isInitialState {
+		} else if !isInitialOrTerminal {
 			return false
 		} else {
 			isReporter := (incident.ReporterID != nil && *incident.ReporterID == userID) ||
