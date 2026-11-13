@@ -1861,6 +1861,8 @@ func (s *reportService) GetDataSources(ctx context.Context) []models.DataSourceI
 				{Field: "department_name", Label: "Department", Type: "string", Filterable: true, Sortable: true},
 				{Field: "location_name", Label: "Location", Type: "string", Filterable: true, Sortable: true},
 				{Field: "reporter_email", Label: "Reporter Email", Type: "string", Filterable: true, Sortable: true},
+				{Field: "caller_identity_text", Label: "Caller Identity", Type: "string", Filterable: false, Sortable: false},
+				{Field: "cooperation_status", Label: "Cooperation Status", Type: "string", Filterable: false, Sortable: false},
 				{Field: "assignee_email", Label: "Assignee Email", Type: "string", Filterable: true, Sortable: true},
 				{Field: "sla_breached", Label: "SLA Breached", Type: "boolean", Filterable: true, Sortable: true},
 				{Field: "created_at", Label: "Created At", Type: "date", Filterable: true, Sortable: true},

@@ -390,6 +390,11 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		log.Printf("Warning: closed incident edit tracking migration failed: %v", err)
 	}
 
+	// Migrate caller identity text and cooperation status incident fields
+	if err := migrations.MigrateIncidentCallerCooperationFields(db); err != nil {
+		log.Printf("Warning: incident caller/cooperation fields migration failed: %v", err)
+	}
+
 	// Migrate user mobile verified
 	if err := migrations.MigrateUserMobileVerified(db); err != nil {
 		log.Printf("Warning: user mobile verified migration failed: %v", err)

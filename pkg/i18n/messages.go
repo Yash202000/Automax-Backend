@@ -39,6 +39,8 @@ var messages = map[string][2]string{
 	"failed_to_read_file_content":     {"Failed to read file content", "فشل قراءة محتوى الملف"},
 	"missing_required_fields":         {"Missing required fields", "الحقول المطلوبة مفقودة"},
 	"missing_required_from_to":        {"Missing required fields: from or to", "الحقول المطلوبة مفقودة: من أو إلى"},
+	"caller_identity_required":        {"Caller Identity is required", "هوية المتصل مطلوبة"},
+	"cooperation_status_required":     {"Cooperation Status is required", "حالة التعاون مطلوبة"},
 	"validation_failed":               {"Validation failed", "فشل التحقق"},
 	"success":                         {"success", "نجاح"},
 	"type_required":                   {"Type is required", "النوع مطلوب"},

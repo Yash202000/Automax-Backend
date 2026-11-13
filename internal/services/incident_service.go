@@ -33,6 +33,12 @@ var ErrInvalidLocation = errors.New("invalid_location")
 var ErrEmptyWorkflow = errors.New("empty_workflow")
 var ErrEditNotAllowed = errors.New("edit_not_allowed_in_current_state")
 
+// IncidentFieldErrors holds post-binding field validation errors (e.g. workflow-required fields)
+// returned as {"errors": {...}} by handlers.
+type IncidentFieldErrors map[string]string
+
+func (e IncidentFieldErrors) Error() string { return "incident field validation failed" }
+
 // ErrAssigneeLocked is returned when a manual assignee change is attempted while the
 // incident's current workflow state has lock_assignee=true. Its message is its i18n key.
 var ErrAssigneeLocked = errors.New("assignee_locked_in_current_state")
@@ -458,6 +464,38 @@ func splitReporterName(name string) (first, middle, last string) {
 	}
 }
 
+// workflowRequiredFieldSet parses a workflow's required_fields JSON into a set.
+// Invalid/empty JSON yields an empty set, matching MatchWorkflow's tolerance.
+func workflowRequiredFieldSet(workflow *models.Workflow) map[string]bool {
+	required := make(map[string]bool)
+	if workflow == nil || strings.TrimSpace(workflow.RequiredFields) == "" {
+		return required
+	}
+	var fields []string
+	if err := json.Unmarshal([]byte(workflow.RequiredFields), &fields); err != nil {
+		return required
+	}
+	for _, field := range fields {
+		if trimmed := strings.TrimSpace(field); trimmed != "" {
+			required[trimmed] = true
+		}
+	}
+	return required
+}
+
+// validateIncidentFormRequiredFields enforces workflow-required rules for caller/cooperation fields only.
+func validateIncidentFormRequiredFields(ctx context.Context, workflow *models.Workflow, callerIdentity, cooperationStatus string) IncidentFieldErrors {
+	required := workflowRequiredFieldSet(workflow)
+	fieldErrors := make(IncidentFieldErrors)
+	if required["caller_identity_text"] && strings.TrimSpace(callerIdentity) == "" {
+		fieldErrors["caller_identity_text"] = i18n.T(ctx, "caller_identity_required")
+	}
+	if required["cooperation_status"] && strings.TrimSpace(cooperationStatus) == "" {
+		fieldErrors["cooperation_status"] = i18n.T(ctx, "cooperation_status_required")
+	}
+	return fieldErrors
+}
+
 func (s *incidentService) CreateIncident(ctx context.Context, req *models.IncidentCreateRequest, reporterID uuid.UUID) (*models.IncidentResponse, error) {
 	// Validated first, before anything with a side effect: the IVR branch below can
 	// register a brand-new citizen user, and a request we are going to reject must not
@@ -691,6 +729,15 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		return nil, errors.New(i18n.T(ctx, "invalid_workflow_id_lower"))
 	}
 
+	// Enforce the per-workflow required state for the two fields whose
+	// server-side rules are implemented here. The workflow lookup is
+	// best-effort: GetInitialState below is the authoritative existence check.
+	if workflow, wfErr := s.workflowRepo.FindByID(ctx, workflowID); wfErr == nil {
+		if fieldErrors := validateIncidentFormRequiredFields(ctx, workflow, req.CallerIdentityText, req.CooperationStatus); len(fieldErrors) > 0 {
+			return nil, fieldErrors
+		}
+	}
+
 	// Get the initial state of the workflow
 	initialState, err := s.workflowRepo.GetInitialState(ctx, workflowID)
 	if err != nil {
@@ -743,25 +790,27 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 	}
 
 	incident := &models.Incident{
-		IncidentNumber: incidentNumber,
-		Title:          req.Title,
-		Description:    req.Description,
-		WorkflowID:     workflowID,
-		CurrentStateID: initialState.ID,
-		ReporterID:     &reporterID,
-		CreatedByID:    &creatorID,
-		CallerIdentity: req.CallerIdentity,
-		CustomFields:   customFieldsJSON,
-		GisLocation:    datatypes.JSON(req.GisLocation),
-		Latitude:       req.Latitude,
-		Longitude:      req.Longitude,
-		Address:        req.Address,
-		City:           req.City,
-		State:          req.State,
-		Country:        req.Country,
-		PostalCode:     req.PostalCode,
-		RecordType:     recordType,
-		Source:         req.Source,
+		IncidentNumber:     incidentNumber,
+		Title:              req.Title,
+		Description:        req.Description,
+		WorkflowID:         workflowID,
+		CurrentStateID:     initialState.ID,
+		ReporterID:         &reporterID,
+		CreatedByID:        &creatorID,
+		CallerIdentity:     req.CallerIdentity,
+		CallerIdentityText: strings.TrimSpace(req.CallerIdentityText),
+		CooperationStatus:  req.CooperationStatus,
+		CustomFields:       customFieldsJSON,
+		GisLocation:        datatypes.JSON(req.GisLocation),
+		Latitude:           req.Latitude,
+		Longitude:          req.Longitude,
+		Address:            req.Address,
+		City:               req.City,
+		State:              req.State,
+		Country:            req.Country,
+		PostalCode:         req.PostalCode,
+		RecordType:         recordType,
+		Source:             req.Source,
 	}
 
 	if !strings.EqualFold(s.cfg.ClientCode, constants.CLIENT_CODE.EPM940) {
@@ -1377,6 +1426,24 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		}
 	}
 
+	// Enforce workflow-required caller/cooperation fields when explicitly updated.
+	if req.CallerIdentityText != nil || req.CooperationStatus != nil {
+		effectiveCallerIdentity := incident.CallerIdentityText
+		effectiveCooperationStatus := incident.CooperationStatus
+		if req.CallerIdentityText != nil {
+			effectiveCallerIdentity = strings.TrimSpace(*req.CallerIdentityText)
+		}
+		if req.CooperationStatus != nil {
+			effectiveCooperationStatus = strings.TrimSpace(*req.CooperationStatus)
+		}
+		if workflow, wfErr := s.workflowRepo.FindByID(ctx, incident.WorkflowID); wfErr == nil {
+			if fieldErrors := validateIncidentFormRequiredFields(ctx, workflow, effectiveCallerIdentity, effectiveCooperationStatus); len(fieldErrors) > 0 {
+				tx.Rollback()
+				return nil, fieldErrors
+			}
+		}
+	}
+
 	// Track changes for revision
 	var changes []models.IncidentFieldChange
 	var descriptions []string
@@ -1520,6 +1587,46 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 			FieldName:  "reporter_name",
 			FieldLabel: "Reporter Name",
 		})
+	}
+
+	// Apply provided caller/cooperation updates (including clears).
+	if req.CallerIdentityText != nil {
+		newCallerIdentity := strings.TrimSpace(*req.CallerIdentityText)
+		if newCallerIdentity != incident.CallerIdentityText {
+			oldValue := incident.CallerIdentityText
+			newValue := newCallerIdentity
+			changes = append(changes, models.IncidentFieldChange{
+				FieldName:  "caller_identity_text",
+				FieldLabel: "Caller Identity",
+				OldValue:   &oldValue,
+				NewValue:   &newValue,
+			})
+			// Omit value from description; old/new are recorded in Changes.
+			descriptions = append(descriptions, "Caller Identity changed")
+			incident.CallerIdentityText = newValue
+		}
+	}
+
+	if req.CooperationStatus != nil {
+		newCooperationStatus := strings.TrimSpace(*req.CooperationStatus)
+		if newCooperationStatus != incident.CooperationStatus {
+			oldValue := incident.CooperationStatus
+			newValue := newCooperationStatus
+			changes = append(changes, models.IncidentFieldChange{
+				FieldName:  "cooperation_status",
+				FieldLabel: "Cooperation Status",
+				OldValue:   &oldValue,
+				NewValue:   &newValue,
+			})
+			if oldValue == "" {
+				descriptions = append(descriptions, fmt.Sprintf("Cooperation Status set to %s", newValue))
+			} else if newValue == "" {
+				descriptions = append(descriptions, fmt.Sprintf("Cooperation Status cleared (was %s)", oldValue))
+			} else {
+				descriptions = append(descriptions, fmt.Sprintf("Cooperation Status changed from %s to %s", oldValue, newValue))
+			}
+			incident.CooperationStatus = newValue
+		}
 	}
 
 	// Parse optional UUIDs
@@ -1798,6 +1905,12 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	}
 	if req.ReporterName != "" {
 		updates["reporter_name"] = incident.ReporterName
+	}
+	if req.CallerIdentityText != nil {
+		updates["caller_identity_text"] = incident.CallerIdentityText
+	}
+	if req.CooperationStatus != nil {
+		updates["cooperation_status"] = incident.CooperationStatus
 	}
 
 	if req.Latitude != nil {

@@ -1810,6 +1810,8 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 		{Field: "due_date", Label: "Due Date", Description: "Resolution deadline", IsRequired: false},
 		{Field: "reporter_name", Label: "Reporter Name", Description: "Name of person reporting", IsRequired: false},
 		{Field: "reporter_email", Label: "Reporter Email", Description: "Email of person reporting", IsRequired: false},
+		{Field: "caller_identity_text", Label: "Caller Identity", Description: "Who the caller is", IsRequired: false},
+		{Field: "cooperation_status", Label: "Cooperation Status", Description: "Cooperative or Uncooperative", IsRequired: false},
 	}
 
 	// Default response when no workflow matches

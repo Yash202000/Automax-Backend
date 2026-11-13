@@ -11,6 +11,12 @@ import (
 	"gorm.io/gorm"
 )
 
+// Cooperation status values for the incident form's two-option dropdown.
+const (
+	CooperationStatusCooperative   = "cooperative"
+	CooperationStatusUncooperative = "uncooperative"
+)
+
 // Incident represents an actual incident or request record
 type Incident struct {
 	ID             uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
@@ -121,6 +127,11 @@ type Incident struct {
 	ReporterName   string     `gorm:"size:200" json:"reporter_name"`
 	ReporterPhone  string     `gorm:"size:50" json:"reporter_phone"`
 	CallerIdentity string     `gorm:"size:50;column:caller_identity" json:"caller_identity"`
+
+	// CallerIdentityText: free-text caller identity (max 200), separate from legacy numeric CallerIdentity.
+	CallerIdentityText string `gorm:"size:200;not null;default:'';column:caller_identity_text" json:"caller_identity_text"`
+	// CooperationStatus: dropdown value (empty = not selected). DB flexible; app validates allowed values.
+	CooperationStatus string `gorm:"size:50;not null;default:'';column:cooperation_status" json:"cooperation_status"`
 
 	// CreatedByID is the ID of the authenticated user who created the record
 	// (differs from ReporterID when an agent creates it on behalf of a citizen).
@@ -414,6 +425,8 @@ type IncidentCreateRequest struct {
 	ReporterPhone      string                 `json:"reporter_phone" validate:"omitempty,max=20"`
 	AlternateMobile    string                 `json:"alternate_mobile" validate:"omitempty,mobile,max=20"`
 	CallerIdentity     string                 `json:"caller_identity" validate:"omitempty,len=10,numeric,startswith12"`
+	CallerIdentityText string                 `json:"caller_identity_text" validate:"omitempty,max=200"`
+	CooperationStatus  string                 `json:"cooperation_status" validate:"omitempty,oneof=cooperative uncooperative"`
 	GisLocation        json.RawMessage        `json:"gis_location" validate:"omitempty"`
 	CustomFields       json.RawMessage        `json:"custom_fields"`
 	LookupValueIDs     []string               `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
@@ -446,6 +459,8 @@ type IncidentUpdateRequest struct {
 	ReporterEmail      string                 `json:"reporter_email" validate:"omitempty,email"`
 	ReporterPhone      string                 `json:"reporter_phone" validate:"omitempty,max=20"`
 	ReporterName       string                 `json:"reporter_name" validate:"omitempty,max=200"`
+	CallerIdentityText *string                `json:"caller_identity_text,omitempty" validate:"omitempty,max=200"`
+	CooperationStatus  *string                `json:"cooperation_status,omitempty" validate:"omitempty,max=20"`
 	// IvrLinkToken is the raw signed token from the SMS URL. When present, the update is
 	// attributed to the citizen's IVR SMS link submission (exact link lookup by token hash).
 	IvrLinkToken string `json:"ivr_link_token"`
@@ -653,6 +668,7 @@ type IncidentFilter struct {
 	ReporterPhone       string     `query:"reporter_phone" json:"reporter_phone" validate:"omitempty"`
 	ReporterPhoneSearch string     `query:"reporter_phone_search" json:"reporter_phone_search" validate:"omitempty,max=50"`
 	CallerIdentity      string     `query:"caller_identity" json:"caller_identity" validate:"omitempty,number"`
+	CooperationStatus   string     `query:"cooperation_status" json:"cooperation_status" validate:"omitempty,oneof=cooperative uncooperative"`
 	SLABreached         *bool      `query:"sla_breached" json:"sla_breached" validate:"omitempty"`
 	RecordType          *string    `query:"record_type" json:"record_type" validate:"omitempty,oneof=incident request complaint query"` // 'incident', 'request', 'complaint', or 'query'
 	Channel             *string    `query:"channel" json:"channel" validate:"omitempty"`                                                // for complaints
@@ -907,6 +923,8 @@ type IncidentResponse struct {
 	ReporterName          string                      `json:"reporter_name"`
 	ReporterPhone         string                      `json:"reporter_phone"`
 	CallerIdentity        string                      `json:"caller_identity,omitempty"`
+	CallerIdentityText    string                      `json:"caller_identity_text,omitempty"`
+	CooperationStatus     string                      `json:"cooperation_status,omitempty"`
 	Channel               string                      `json:"channel,omitempty"`
 	TransitionHistory     []TransitionHistoryResponse `json:"transition_history,omitempty"`
 	CreatedByID           *uuid.UUID                  `json:"created_by_id,omitempty"`
@@ -1071,6 +1089,8 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 		ReporterName:          i.ReporterName,
 		ReporterPhone:         i.ReporterPhone,
 		CallerIdentity:        i.CallerIdentity,
+		CallerIdentityText:    i.CallerIdentityText,
+		CooperationStatus:     i.CooperationStatus,
 		Channel:               i.Channel,
 		CreatedByID:           i.CreatedByID,
 		CreatedByName:         i.CreatedByName,
@@ -1518,6 +1538,8 @@ type IncidentReportData struct {
 	ReadyToCloseByName string     `db:"ready_to_close_by_name"`
 	ReadyToCloseAt     *time.Time `db:"ready_to_close_at"`
 	ClosedByName       string     `db:"closed_by_name"`
+	CallerIdentityText string     `db:"caller_identity_text"`
+	CooperationStatus  string     `db:"cooperation_status"`
 }
 
 // IncidentReportLookupValue is a flat result for lookup (dynamic attribute) values in the report.
