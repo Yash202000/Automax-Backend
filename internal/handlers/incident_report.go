@@ -82,6 +82,10 @@ type reportLabels struct {
 	CallerName        string
 	CallerMobile      string
 	CallerEmail       string
+	CallerIdentity    string
+	CooperationStatus string
+	Cooperative       string
+	Uncooperative     string
 	AttName           string
 	AttType           string
 	AttSize           string
@@ -166,6 +170,10 @@ var labelsAR = reportLabels{
 	CallerName:        "اسم المتصل",
 	CallerMobile:      "رقم المتصل",
 	CallerEmail:       "بريد المتصل",
+	CallerIdentity:    "هوية المتصل",
+	CooperationStatus: "حالة التعاون",
+	Cooperative:       "متعاون",
+	Uncooperative:     "غير متعاون",
 	AttName:           "اسم الملف",
 	AttType:           "النوع",
 	AttSize:           "الحجم",
@@ -250,6 +258,10 @@ var labelsEN = reportLabels{
 	CallerName:        "Caller Name",
 	CallerMobile:      "Caller Mobile",
 	CallerEmail:       "Caller Email",
+	CallerIdentity:    "Caller Identity",
+	CooperationStatus: "Cooperation Status",
+	Cooperative:       "Cooperative",
+	Uncooperative:     "Uncooperative",
 	AttName:           "File Name",
 	AttType:           "Type",
 	AttSize:           "Size",
@@ -864,6 +876,19 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 	if data.DueDate != nil || data.ResolvedAt != nil {
 		row2(&b, l.DueDate, naT(data.DueDate), l.ResolvedAt, naT(data.ResolvedAt))
 	}
+	if strings.TrimSpace(data.CallerIdentityText) != "" {
+		row1(&b, l.CallerIdentity, html.EscapeString(data.CallerIdentityText))
+	}
+	if data.CooperationStatus != "" {
+		coopLabel := data.CooperationStatus
+		switch data.CooperationStatus {
+		case models.CooperationStatusCooperative:
+			coopLabel = l.Cooperative
+		case models.CooperationStatusUncooperative:
+			coopLabel = l.Uncooperative
+		}
+		row1(&b, l.CooperationStatus, html.EscapeString(coopLabel))
+	}
 	b.WriteString(`</table>`)
 
 	// ── Section: Custom Fields ────────────────────────────────────────────────
@@ -1252,6 +1277,19 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 	}
 	if data.ClosedAt != nil {
 		row1(&b, l.ClosedAt, html.EscapeString(tsp(data.ClosedAt)))
+	}
+	if strings.TrimSpace(data.CallerIdentityText) != "" {
+		row1(&b, l.CallerIdentity, html.EscapeString(data.CallerIdentityText))
+	}
+	if data.CooperationStatus != "" {
+		coopLabel := data.CooperationStatus
+		switch data.CooperationStatus {
+		case models.CooperationStatusCooperative:
+			coopLabel = l.Cooperative
+		case models.CooperationStatusUncooperative:
+			coopLabel = l.Uncooperative
+		}
+		row1(&b, l.CooperationStatus, html.EscapeString(coopLabel))
 	}
 	b.WriteString(`</table>`)
 

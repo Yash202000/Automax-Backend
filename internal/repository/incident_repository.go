@@ -404,6 +404,9 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 	if filter.CallerIdentity != "" {
 		query = query.Where("caller_identity = ?", filter.CallerIdentity)
 	}
+	if filter.CooperationStatus != "" {
+		query = query.Where("cooperation_status = ?", filter.CooperationStatus)
+	}
 	if filter.SLABreached != nil {
 		query = query.Where("sla_breached = ?", *filter.SLABreached)
 	}
@@ -2447,6 +2450,8 @@ SELECT
     COALESCE(i.country, '')     AS country,
     COALESCE(i.postal_code, '') AS postal_code,
     COALESCE(i.custom_fields, '') AS custom_fields,
+    COALESCE(i.caller_identity_text, '') AS caller_identity_text,
+    COALESCE(i.cooperation_status, '') AS cooperation_status,
     COALESCE(ws.name, '')       AS status_name,
     COALESCE(ws.name_ar, '')    AS status_name_ar,
     COALESCE(cl.name, '')       AS classification_name,

@@ -140,6 +140,8 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 	}
 
 	// Parse query parameters
+	req.CallerIdentityText = strings.TrimSpace(req.CallerIdentityText)
+	req.CooperationStatus = strings.ToLower(strings.TrimSpace(req.CooperationStatus))
 	validationErrors := validation.ValidateStruct(c.UserContext(), &req)
 
 	if req.AlternateMobile != "" && utils.SameMobile(req.AlternateMobile, req.ReporterPhone) {
@@ -199,7 +201,28 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 			errors.Is(err, services.ErrClassificationNotSelectable):
 			return ErrorResponseWithKey(c, fiber.StatusBadRequest, err.Error(), req.Source)
 
+		// Per-workflow required-field failures discovered after the workflow
+		// was resolved. Return the same {"errors": {...}} shape as struct
+		// validation so the create form can highlight the field.
 		default:
+			var fieldErrors services.IncidentFieldErrors
+			if errors.As(err, &fieldErrors) {
+				if h.isEpmPortalSource(req.Source) {
+					parts := make([]string, 0, len(fieldErrors))
+					for field, msg := range fieldErrors {
+						parts = append(parts, fmt.Sprintf("%s: %v", field, msg))
+					}
+					return c.Status(fiber.StatusBadRequest).JSON(utils.ErrorCodeResponse{
+						Success:   false,
+						ErrorCode: "VALIDATION_ERROR",
+						Error:     strings.Join(parts, "; "),
+					})
+				}
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+					"success": false,
+					"errors":  fieldErrors,
+				})
+			}
 			return ErrorResponseWithKey(c, fiber.StatusInternalServerError, "internal_server_error", req.Source)
 		}
 	}
@@ -287,6 +310,8 @@ func parseIncidentSearchBodyExtras(c *fiber.Ctx, filter *models.IncidentFilter) 
 	if len(body.CustomFieldFilters) > 0 {
 		filter.CustomFieldFilters = body.CustomFieldFilters
 	}
+
+	filter.CooperationStatus = strings.ToLower(strings.TrimSpace(filter.CooperationStatus))
 
 	loc := utils.ResolveTimezone(body.Timezone)
 	if body.StartDateStr != "" && filter.StartDate == nil {
@@ -776,6 +801,8 @@ func (h *IncidentHandler) scopeIncidentFilterToUser(c *fiber.Ctx, filter *models
 
 // listIncidentsCore contains the shared logic for both ListIncidents (GET) and SearchIncidents (POST).
 func (h *IncidentHandler) listIncidentsCore(c *fiber.Ctx, filter *models.IncidentFilter) error {
+	filter.CooperationStatus = strings.ToLower(strings.TrimSpace(filter.CooperationStatus))
+
 	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
@@ -1029,7 +1056,27 @@ func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
-	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+	if req.CallerIdentityText != nil {
+		v := strings.TrimSpace(*req.CallerIdentityText)
+		req.CallerIdentityText = &v
+	}
+	if req.CooperationStatus != nil {
+		v := strings.ToLower(strings.TrimSpace(*req.CooperationStatus))
+		req.CooperationStatus = &v
+	}
+
+	validationErrors := validation.ValidateStruct(c.UserContext(), &req)
+	if req.CooperationStatus != nil {
+		switch *req.CooperationStatus {
+		case "", "cooperative", "uncooperative":
+		default:
+			if validationErrors == nil {
+				validationErrors = map[string]string{}
+			}
+			validationErrors["cooperation_status"] = i18n.T(c.UserContext(), "invalid_cooperation_status")
+		}
+	}
+	if len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
 			"errors":  validationErrors,
