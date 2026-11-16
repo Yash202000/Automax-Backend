@@ -105,7 +105,12 @@ func (h *IncidentHandler) GetReadyToCloseDurationOptions(c *fiber.Ctx) error {
 			"error":   i18n.T(c.UserContext(), "ready_to_close_service_unavailable"),
 		})
 	}
-	options := h.readyToCloseService.GetDurationOptionsForState(nil)
+	options := append([]string(nil), h.readyToCloseService.GetDurationOptionsForState(nil)...)
+	if lang, _ := c.Locals(constants.ContextKeys.ACCEPT_LANGUAGE).(string); lang == "ar" {
+		for i, o := range options {
+			options[i] = models.LocalizeDurationLabelAr(o)
+		}
+	}
 	return c.JSON(fiber.Map{
 		"success": true,
 		"data":    options,

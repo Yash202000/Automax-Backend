@@ -68,6 +68,7 @@ func NewReadyToCloseService(
 
 // CreateEntry records a Ready-to-Close entry and updates the incident's expiry fields.
 func (s *readyToCloseService) CreateEntry(ctx context.Context, incidentID uuid.UUID, duration, comment string, enteredBy uuid.UUID) error {
+	duration = models.NormalizeDurationLabel(duration) // store canonical English label
 	dur, err := s.ParseDuration(duration)
 	if err != nil {
 		return fmt.Errorf("invalid ready_to_close duration %q: %w", duration, err)
@@ -393,7 +394,7 @@ func (s *readyToCloseService) GetDurationOptionsForState(state *models.WorkflowS
 // ParseDuration converts a human-readable duration label into a time.Duration.
 // Supported formats: "N Day(s)", "N Week(s)", "N Month(s)", "N Hour(s)".
 func (s *readyToCloseService) ParseDuration(label string) (time.Duration, error) {
-	label = strings.TrimSpace(label)
+	label = models.NormalizeDurationLabel(label) // accept Arabic labels too
 	lower := strings.ToLower(label)
 
 	var n int
@@ -413,6 +414,8 @@ func (s *readyToCloseService) ParseDuration(label string) (time.Duration, error)
 		return time.Duration(n) * 24 * time.Hour, nil
 	case "week":
 		return time.Duration(n) * 7 * 24 * time.Hour, nil
+	case "year":
+		return time.Duration(n) * 365 * 24 * time.Hour, nil
 	case "month":
 		// Approximate month as 30 days
 		return time.Duration(n) * 30 * 24 * time.Hour, nil

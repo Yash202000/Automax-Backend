@@ -1078,7 +1078,7 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 	// Serialise DurationOptions to JSON if provided
 	var durationOptionsJSON string
 	if len(req.DurationOptions) > 0 {
-		if b, err := json.Marshal(req.DurationOptions); err == nil {
+		if b, err := json.Marshal(models.NormalizeDurationLabels(req.DurationOptions)); err == nil {
 			durationOptionsJSON = string(b)
 		}
 	}
@@ -1286,7 +1286,7 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 	}
 	if req.DurationOptions != nil {
 		if len(req.DurationOptions) > 0 {
-			if b, err := json.Marshal(req.DurationOptions); err == nil {
+			if b, err := json.Marshal(models.NormalizeDurationLabels(req.DurationOptions)); err == nil {
 				state.DurationOptions = string(b)
 			}
 		} else {
