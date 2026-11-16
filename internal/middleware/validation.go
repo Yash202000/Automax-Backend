@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"regexp"
@@ -35,7 +36,11 @@ func ValidationMiddleware() fiber.Handler {
 			return err
 		}
 		if lang == "ar" && c.Method() == fiber.MethodGet {
-			c.Response().SetBodyRaw(durationOptionsRe.ReplaceAllFunc(c.Response().Body(), localizeDurationOptions))
+			// Cheap pre-check so the regex only runs on responses that contain duration options.
+			// Content-Length is recomputed by fasthttp when the response is written.
+			if body := c.Response().Body(); bytes.Contains(body, []byte(`"duration_options"`)) {
+				c.Response().SetBodyRaw(durationOptionsRe.ReplaceAllFunc(body, localizeDurationOptions))
+			}
 		}
 		return nil
 	}
