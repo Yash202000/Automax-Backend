@@ -2335,7 +2335,7 @@ func (s *userService) ForgotPassword(ctx context.Context, req *models.ForgotPass
 		err = s.SendSMSOTP(ctx, value, otp)
 	}
 	if err != nil {
-		return "", fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_send_otp"), err)
+		return "", &OTPDeliveryError{Msg: i18n.T(ctx, "failed_to_send_otp"), Err: err}
 	}
 
 	if err != nil {

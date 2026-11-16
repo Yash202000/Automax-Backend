@@ -977,6 +977,7 @@ var messages = map[string][2]string{
 	"max_otp_send_attempts_reached":     {"Maximum OTP send attempts reached", "تم تجاوز الحد الأقصى لمحاولات إرسال رمز التحقق"},
 	"failed_to_generate_otp":            {"Failed to generate OTP", "فشل إنشاء رمز التحقق"},
 	"failed_to_send_otp_notification":   {"Failed to send OTP notification", "فشل إرسال إشعار رمز التحقق"},
+	"notification_delivery_failed":      {"notification delivery failed", "فشل تسليم الإشعار"},
 	"failed_to_store_otp":               {"Failed to store OTP", "فشل حفظ رمز التحقق"},
 	"failed_to_register_citizen":        {"Failed to register citizen", "فشل تسجيل المواطن"},
 	"failed_to_generate_token":          {"Failed to generate token", "فشل إنشاء رمز الدخول"},
