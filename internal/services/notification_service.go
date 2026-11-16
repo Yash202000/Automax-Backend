@@ -16,6 +16,7 @@ import (
 	"github.com/automax/backend/internal/storage"
 	"github.com/automax/backend/internal/utils"
 	"github.com/automax/backend/pkg/constants"
+	"github.com/automax/backend/pkg/i18n"
 	pkgUtils "github.com/automax/backend/pkg/utils"
 	"github.com/google/uuid"
 )
@@ -482,7 +483,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		log.Printf("[NotificationService] failed to persist notification log (channel=%s template=%q status=%s): %v", channel, tplCodeForLog, status, err)
 		if status == "failed" {
 			// Delivery already failed; surface that rather than a secondary DB error.
-			return nil, fmt.Errorf("notification delivery failed (%s) and log could not be saved: %w", topLevelErrorMessage, err)
+			return nil, fmt.Errorf("%s (%s): %w", i18n.T(ctx, "notification_delivery_failed"), topLevelErrorMessage, err)
 		}
 		return nil, fmt.Errorf("notification sent but log could not be saved: %w", err)
 	}
@@ -539,7 +540,7 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		return &SendNotificationResult{
 			SentLog:     sentLog,
 			InboxLogIDs: inboxLogIDs,
-		}, fmt.Errorf("notification delivery failed (channel=%s code=%s): %s", channel, failureCode, topLevelErrorMessage)
+		}, fmt.Errorf("%s (channel=%s code=%s): %s", i18n.T(ctx, "notification_delivery_failed"), channel, failureCode, topLevelErrorMessage)
 	}
 
 	log.Printf("[NotificationService] delivered channel=%s template=%q provider=%s recipients=%d log_id=%s", channel, tplCodeForLog, provider, len(recipientStatuses), sentLog.ID)
