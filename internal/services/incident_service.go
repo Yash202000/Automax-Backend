@@ -3462,6 +3462,8 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 
 	// Validate duration when transitioning INTO a partial_close state
 	if newState.IsPartialClose {
+		// Persist the canonical English label even if the client sent an Arabic one.
+		req.ReadyToCloseDuration = models.NormalizeDurationLabel(req.ReadyToCloseDuration)
 		if req.ReadyToCloseDuration == "" {
 			tx.Rollback()
 			return nil, errors.New(i18n.T(ctx, "partial_close_duration_required"))

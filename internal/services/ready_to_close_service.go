@@ -68,6 +68,7 @@ func NewReadyToCloseService(
 
 // CreateEntry records a Ready-to-Close entry and updates the incident's expiry fields.
 func (s *readyToCloseService) CreateEntry(ctx context.Context, incidentID uuid.UUID, duration, comment string, enteredBy uuid.UUID) error {
+	duration = models.NormalizeDurationLabel(duration) // store canonical English label
 	dur, err := s.ParseDuration(duration)
 	if err != nil {
 		return fmt.Errorf("invalid ready_to_close duration %q: %w", duration, err)
