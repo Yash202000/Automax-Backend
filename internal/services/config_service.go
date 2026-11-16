@@ -80,6 +80,8 @@ type AttachmentStore interface {
 	UploadImages(ctx context.Context, module string, files []*multipart.FileHeader, userID uuid.UUID) (uuid.UUID, []models.SystemAttachment, error)
 	Resolve(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]models.ConfigAttachmentView, error)
 	DeleteByIDs(ctx context.Context, ids []uuid.UUID) error
+	// ReadFile returns the bytes and mime type of one public image attachment.
+	ReadFile(ctx context.Context, id uuid.UUID) ([]byte, string, error)
 }
 
 type configService struct {
