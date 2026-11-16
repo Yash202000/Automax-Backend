@@ -27,6 +27,7 @@ var (
 	ErrConfigAttachmentKeyBad         = errors.New("config_attachment_key_invalid")
 	ErrConfigAttachmentModuleReserved = errors.New("config_attachment_module_reserved")
 	ErrConfigAttachmentsManaged       = errors.New("config_attachments_managed")
+	ErrConfigAttachmentExists         = errors.New("config_attachment_exists")
 )
 
 const (

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,6 +44,8 @@ type IncidentHandler struct {
 	lookupRepo          repository.LookupRepository
 	validator           *validator.Validate
 	cfg                 *config.Config
+	configAttachments   *services.ConfigAttachmentService
+	actionLogSvc        services.ActionLogService
 	notificationService *services.NotificationService
 }
 
@@ -88,6 +91,22 @@ func (h *IncidentHandler) SetPublicFeedbackRepo(repo repository.IncidentPublicFe
 // SetReadyToCloseService wires in the ReadyToCloseService for duration-options endpoint.
 func (h *IncidentHandler) SetReadyToCloseService(svc services.ReadyToCloseService) {
 	h.readyToCloseService = svc
+}
+
+// SetActionLogService wires in the action log used to audit combined report generation.
+func (h *IncidentHandler) SetActionLogService(svc services.ActionLogService) { h.actionLogSvc = svc }
+
+// SetConfigAttachmentService wires in the attachment-config reader used for report logos.
+func (h *IncidentHandler) SetConfigAttachmentService(svc *services.ConfigAttachmentService) {
+	h.configAttachments = svc
+}
+
+// reportLogo returns the base64 logo stored in attachment config report-attachments/<name>, or "".
+func (h *IncidentHandler) reportLogo(ctx context.Context, name string) string {
+	if h.configAttachments == nil {
+		return ""
+	}
+	return h.configAttachments.FirstImageBase64(ctx, "report", name)
 }
 
 // SetLookupRepo wires in the LookupRepository for custom field category resolution.

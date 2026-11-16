@@ -51,7 +51,7 @@ func (h *ConfigHandler) respondError(c *fiber.Ctx, err error) error {
 	switch {
 	case errors.Is(err, models.ErrConfigNotFound), errors.Is(err, models.ErrConfigAttachmentNotFound):
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(ctx, err.Error()))
-	case errors.Is(err, models.ErrConfigExists), errors.Is(err, models.ErrConfigVersionConflict):
+	case errors.Is(err, models.ErrConfigExists), errors.Is(err, models.ErrConfigVersionConflict), errors.Is(err, models.ErrConfigAttachmentExists):
 		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(ctx, err.Error()))
 	case errors.Is(err, models.ErrConfigNameRequired), errors.Is(err, models.ErrConfigNameInvalid),
 		errors.Is(err, models.ErrConfigValueNotJSON), errors.Is(err, models.ErrConfigInvalidEnvironment),
@@ -246,7 +246,7 @@ func (h *ConfigHandler) GetPublic(c *fiber.Ctx) error {
 }
 
 // UploadAttachments POST /admin/configs/:module/attachments/:name
-// Adds images (multipart field "files"; "file" is accepted too) to the attachment config
+// Adds images (multipart field "files"; "file" is accepted too) to the attachment config; 409 if it already has attachments (use PUT)
 // <module>-attachments/<name>, creating it on first use. module and name are lowercase letters
 // and digits only; the server adds the "-attachments" suffix.
 func (h *ConfigHandler) UploadAttachments(c *fiber.Ctx) error { return h.saveAttachments(c, false) }

@@ -1147,6 +1147,10 @@ var messages = map[string][2]string{
 	"config_name_invalid":               {"Module may only contain lowercase letters and numbers; name may also contain underscore (max 100 characters)", "يمكن أن تحتوي الوحدة على أحرف إنجليزية صغيرة وأرقام فقط، ويمكن أن يحتوي الاسم أيضًا على شرطة سفلية (100 حرف كحد أقصى)"},
 	"config_value_not_json":             {"Config value must be valid JSON", "يجب أن تكون قيمة الإعداد بصيغة JSON صالحة"},
 	"config_invalid_environment":        {"environment must be one of: dev, staging, prod", "يجب أن تكون البيئة إحدى القيم: dev أو staging أو prod"},
+	"report_ids_invalid":                {"ids must contain between 1 and 50 incident ids", "يجب أن تحتوي ids على من 1 إلى 50 معرّف بلاغ"},
+	"report_format_pdf_html":            {"use format=pdf or html", "استخدم format=pdf أو html"},
+	"config_invalid_format":             {"format must be one of: list, map", "يجب أن يكون التنسيق إحدى القيم: list أو map"},
+	"config_map_requires_environment":   {"format=map cannot be combined with environment=all", "لا يمكن استخدام format=map مع environment=all"},
 	"config_invalid_environment_list":   {"environment must be one of: dev, staging, prod, all", "يجب أن تكون البيئة إحدى القيم: dev أو staging أو prod أو all"},
 	"config_created":                    {"Config created", "تم إنشاء الإعداد"},
 	"config_updated":                    {"Config updated", "تم تحديث الإعداد"},
@@ -1168,6 +1172,7 @@ var messages = map[string][2]string{
 	"config_attachment_not_found":       {"Attachment not found in this config", "المرفق غير موجود في هذا الإعداد"},
 	"config_attachments_updated":        {"Config attachments updated", "تم تحديث مرفقات الإعداد"},
 	"config_attachment_key_invalid":     {"Module may only contain lowercase letters and numbers (max 88); name may also contain underscore (max 100)", "يمكن أن تحتوي الوحدة على أحرف إنجليزية صغيرة وأرقام فقط (88 حرفًا كحد أقصى)، ويمكن أن يحتوي الاسم أيضًا على شرطة سفلية (100 حرف كحد أقصى)"},
+	"config_attachment_exists":          {"Attachments already exist for this module and name; use PUT to replace them or DELETE to remove one", "توجد مرفقات بالفعل لهذه الوحدة والاسم؛ استخدم PUT للاستبدال أو DELETE للحذف"},
 	"config_attachments_managed":        {"Attachment configs can only be changed through the attachment endpoints", "لا يمكن تغيير إعدادات المرفقات إلا من خلال واجهات المرفقات"},
 	"config_attachment_module_reserved": {"This module name is reserved (system, attachment, attachments); choose another", "اسم الوحدة هذا محجوز (system, attachment, attachments)، اختر اسمًا آخر"},
 }

@@ -319,6 +319,8 @@ func main() {
 	}
 	configAttachmentService := services.NewConfigAttachmentService(configService, systemAttachmentService)
 	configHandler := handlers.NewConfigHandler(configService, actionLogService, configAttachmentService)
+	incidentHandler.SetConfigAttachmentService(configAttachmentService)
+	incidentHandler.SetActionLogService(actionLogService)
 	settingsService.SetConfigService(configService)
 	settingsHandler := handlers.NewSettingsHandler(settingsService)
 	jwksHandler := handlers.NewJWKSHandler(ssoJWTManager)
@@ -602,6 +604,7 @@ func main() {
 	incidents.Get("/sla-breached", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetSLABreached)
 	incidents.Get("/ready-to-close/duration-options", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetReadyToCloseDurationOptions)
 	incidents.Post("/bulk/convert-to-request", authMiddleware.RequirePermission("incidents:update"), incidentHandler.BulkConvertToRequest)
+	incidents.Post("/report", authMiddleware.RequirePermission("reports:view"), incidentHandler.GenerateCombinedReport)
 	incidents.Get("/:id", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetIncident)
 	incidents.Get("/:id/report", authMiddleware.RequirePermission("reports:view"), incidentHandler.GenerateReport)
 	incidents.Put("/:id", authMiddleware.RequirePermission("incidents:update"), incidentHandler.UpdateIncident)
