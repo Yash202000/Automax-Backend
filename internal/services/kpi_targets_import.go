@@ -964,7 +964,7 @@ func (imp *kpiTargetsImporter) finalize() {
 			r.action = existingAction
 			item.Action = existingAction
 			if existingAction == kpiImportActionSkip {
-				item.Reason = "target already exists (existing_mode=skip)"
+				item.Reason = "target already exists"
 			} else {
 				item.Reason = "existing target will be updated"
 			}
