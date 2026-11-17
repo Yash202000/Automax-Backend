@@ -846,9 +846,7 @@ func (imp *masterDataImporter) loadExisting(db *gorm.DB) error {
 }
 
 func masterRefKey(s string) string {
-	// Normalize like display names so minor spacing/punctuation differences still match.
-	s = strings.ToLower(strings.TrimSpace(multiSpaceRe.ReplaceAllString(s, " ")))
-	return strings.TrimRight(s, ".")
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
 func (imp *masterDataImporter) validateRows() {
