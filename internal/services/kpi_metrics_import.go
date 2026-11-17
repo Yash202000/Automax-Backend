@@ -967,7 +967,7 @@ func (imp *kpiMetricsImporter) finalize() {
 			r.action = existingAction
 			item.Action = existingAction
 			if existingAction == kpiImportActionSkip {
-				item.Reason = "metric already exists (existing_mode=skip)"
+				item.Reason = "metric already exists"
 			} else {
 				item.Reason = "existing metric will be updated"
 			}

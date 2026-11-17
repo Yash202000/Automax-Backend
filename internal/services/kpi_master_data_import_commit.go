@@ -92,6 +92,15 @@ func (imp *masterDataImporter) revalidateCommit(tx *gorm.DB) error {
 			changed = true
 			continue
 		}
+		if found != nil && found.Deleted {
+			if r.EntityType == KpiMasterAwardCriterion {
+				r.reject("Criterion No.", fmt.Sprintf("Criterion %d was previously deleted. Please choose another number.", r.Payload.CriterionNo))
+			} else {
+				r.reject("Name (English)", fmt.Sprintf("%q was previously deleted. Please choose another name.", found.NameEn))
+			}
+			changed = true
+			continue
+		}
 		if r.action == kpiImportActionUpdate {
 			if r.Existing == nil || (found != nil && found.ID != r.Existing.ID) {
 				r.reject("Name (English)", "Another record now uses this name or code. Reload and retry.")
