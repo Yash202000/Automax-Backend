@@ -12,6 +12,7 @@ var permissionModuleArabic = map[string]string{
 	"application-links":      "روابط التطبيقات",
 	"benchmark":              "المعايير المرجعية",
 	"call-logs":              "سجلات المكالمات",
+	"call-recordings":        "تسجيلات المكالمات",
 	"caller-sentiment":       "مشاعر المتصلين",
 	"categories":             "الفئات",
 	"classifications":        "التصنيفات",
@@ -75,6 +76,9 @@ var permissionNameArabic = map[string]struct{ Name, Description string }{
 	"call-logs:create":   {"إنشاء سجلات المكالمات", "إنشاء سجلات المكالمات"},
 	"call-logs:update":   {"تحديث سجلات المكالمات", "تحديث سجلات المكالمات"},
 	"call-logs:delete":   {"حذف سجلات المكالمات", "حذف سجلات المكالمات"},
+
+	// Call recording history
+	"call-recordings:history": {"عرض سجل تسجيلات المكالمات", "عرض من استمع إلى تسجيلات المكالمات أو قام بتنزيلها"},
 
 	// Categories
 	"categories:view":   {"عرض الفئات", "عرض الفئات"},

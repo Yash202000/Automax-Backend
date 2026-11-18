@@ -801,6 +801,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		CallerIdentityText: strings.TrimSpace(req.CallerIdentityText),
 		CooperationStatus:  req.CooperationStatus,
 		CustomFields:       customFieldsJSON,
+		CallUuid:           nilIfBlank(req.CallUuid),
 		GisLocation:        datatypes.JSON(req.GisLocation),
 		Latitude:           req.Latitude,
 		Longitude:          req.Longitude,
