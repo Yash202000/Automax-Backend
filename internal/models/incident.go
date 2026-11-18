@@ -127,6 +127,9 @@ type Incident struct {
 	ReporterName   string     `gorm:"size:200" json:"reporter_name"`
 	ReporterPhone  string     `gorm:"size:50" json:"reporter_phone"`
 	CallerIdentity string     `gorm:"size:50;column:caller_identity" json:"caller_identity"`
+	// CallUuid links an incident to the call it was raised from (CTI prefill).
+	// Used by the Call Recording History to show the incident number per call.
+	CallUuid *string `gorm:"size:36;index" json:"call_uuid,omitempty"`
 
 	// CallerIdentityText: free-text caller identity (max 200), separate from legacy numeric CallerIdentity.
 	CallerIdentityText string `gorm:"size:200;not null;default:'';column:caller_identity_text" json:"caller_identity_text"`
@@ -432,6 +435,8 @@ type IncidentCreateRequest struct {
 	LookupValueIDs     []string               `json:"lookup_value_ids" validate:"omitempty,dive,uuid"`
 	CustomLookupFields map[string]interface{} `json:"custom_lookup_fields"`
 	RecordType         string                 `json:"record_type" validate:"omitempty,oneof=incident request complaint query"`
+	// CallUuid is the call this incident was raised from (CTI prefill), if any.
+	CallUuid string `json:"call_uuid" validate:"omitempty,max=36"`
 }
 
 type IncidentUpdateRequest struct {
@@ -905,6 +910,7 @@ type IncidentResponse struct {
 	State                 string                      `json:"state,omitempty"`
 	Country               string                      `json:"country,omitempty"`
 	PostalCode            string                      `json:"postal_code,omitempty"`
+	CallUuid              *string                     `json:"call_uuid,omitempty"`
 	DueDate               *time.Time                  `json:"due_date"`
 	ResolvedAt            *time.Time                  `json:"resolved_at"`
 	ClosedAt              *time.Time                  `json:"closed_at"`
@@ -1074,6 +1080,7 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 		State:                 i.State,
 		Country:               i.Country,
 		PostalCode:            i.PostalCode,
+		CallUuid:              i.CallUuid,
 		DueDate:               i.DueDate,
 		ResolvedAt:            i.ResolvedAt,
 		ClosedAt:              i.ClosedAt,

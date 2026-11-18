@@ -192,7 +192,7 @@ type CallLogResponse struct {
 	Status       string                    `json:"status"`
 	StartAt      *time.Time                `json:"start_at,omitempty"`
 	EndAt        *time.Time                `json:"end_at,omitempty"`
-	RecordingUrl string                    `json:"recording_url,omitempty"`
+	HasRecording bool                      `json:"has_recording"` // URLs are issued per play/download by POST /call-recordings/:id/access (audited)
 	Meta         datatypes.JSON            `json:"meta,omitempty"`
 	Participants []CallParticipantResponse `json:"participants"`
 	CreatedAt    time.Time                 `json:"created_at"`
@@ -221,7 +221,7 @@ type CallLogListItem struct {
 	OtherPartyExtension string    `json:"other_party_extension"`
 	OtherPartyPhone     string    `json:"other_party_phone,omitempty"`
 	Duration            int       `json:"duration"`
-	RecordingUrl        string    `json:"recording_url"`
+	HasRecording        bool      `json:"has_recording"` // see CallLogResponse.HasRecording
 	CreatedAt           time.Time `json:"created_at"`
 
 	// Sender/receiver keys are populated only for the unscoped admin view

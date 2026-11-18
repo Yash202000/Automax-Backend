@@ -80,6 +80,7 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		&models.CallLog{},
 		&models.CallParticipant{},
 		&models.CallLogAttachment{},
+		&models.CallRecordingAudit{},
 		&models.SystemAttachment{},
 		&models.NotificationTemplate{},
 		&models.NotificationLog{},
@@ -431,6 +432,11 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		log.Printf("Warning: call_log recording_url migration failed: %v", err)
 	}
 
+	// Call Recording History is append-only: block UPDATE/DELETE/TRUNCATE at the DB level
+	if err := migrations.MigrateCallRecordingAudit(db); err != nil {
+		log.Printf("Warning: call recording audit immutability migration failed: %v", err)
+	}
+
 	// Drop user_id from call_participants — participants are identified by phone_number only
 	if err := migrations.MigrateCallParticipantPhone(db); err != nil {
 		log.Printf("Warning: call_participant phone migration failed: %v", err)
@@ -752,6 +758,9 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Update Call Logs", Code: "call-logs:update", Module: "call-logs", Action: "update", ActionAr: "تحديث", Description: "Update call logs"},
 		{Name: "Delete Call Logs", Code: "call-logs:delete", Module: "call-logs", Action: "delete", ActionAr: "حذف", Description: "Delete call logs"},
 		{Name: "View All Call Logs", Code: "call-logs:view_all", Module: "call-logs", Action: "view_all", ActionAr: "عرض الكل", Description: "View call logs of other agents regardless of participation"},
+
+		// Call Recording History (audit of recording listens/downloads)
+		{Name: "View Call Recording History", Code: "call-recordings:history", Module: "call-recordings", Action: "history", ActionAr: "عرض السجل", Description: "View who listened to or downloaded call recordings"},
 
 		// Lookup permissions
 		{Name: "View Lookups", Code: "lookups:view", Module: "lookups", Action: "view", ActionAr: "عرض", Description: "View lookup categories and values"},

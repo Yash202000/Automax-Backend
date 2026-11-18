@@ -2,10 +2,12 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -23,7 +25,7 @@ import (
 )
 
 // CTIHandler exchanges the server-held Cintrix API key for a per-agent,
-// short-lived widget token, and proxies authenticated recording playback.
+// short-lived widget token, and fetches recordings for the audited stream endpoint.
 // The browser never sees the API secret.
 type CTIHandler struct {
 	cintrixURL       string
@@ -203,38 +205,33 @@ func (h *CTIHandler) syncUserExtension(c *fiber.Ctx, ext string) {
 	}
 }
 
-// GetRecording godoc: GET /api/v1/cti/recording?call_uuid=<uuid> (authenticated).
+// ErrCintrixNotConfigured / ErrCintrixRecordingNotFound are returned by
+// FetchRecording so callers can map them to HTTP statuses.
+var (
+	ErrCintrixNotConfigured     = errors.New("CTI integration is not configured")
+	ErrCintrixRecordingNotFound = errors.New("recording not found")
+)
+
+// FetchRecording retrieves a Cintrix-recorded call's audio server-to-server.
 //
-// Looks up the CallLog by call_uuid, reads recording_url out of its Meta JSON
-// (stored verbatim from the Cintrix call.ended webhook), and makes an
-// integration-signed request to that URL. Cintrix streams the recording bytes
-// back (200, audio/wav) — MinIO is never exposed publicly — and we relay those
-// bytes to the browser with the audio content type.
-func (h *CTIHandler) GetRecording(c *fiber.Ctx) error {
+// It reads recording_url out of the CallLog's Meta (stored verbatim from the
+// Cintrix call.ended webhook) and makes an integration-signed request to it.
+// Cintrix streams the bytes back (200, audio/wav) — MinIO is never exposed
+// publicly. The browser never reaches Cintrix directly: recordings are served
+// only through the audited GET /api/v1/call-recordings/stream endpoint.
+func (h *CTIHandler) FetchRecording(ctx context.Context, callLog *models.CallLog) ([]byte, string, error) {
 	if h.cintrixURL == "" || h.keyID == "" || h.keySecret == "" {
-		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
-			"error": "CTI integration is not configured",
-		})
-	}
-
-	callUUID := c.Query("call_uuid")
-	if callUUID == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "call_uuid is required"})
-	}
-
-	callLog, err := h.callLogRepo.FindByCallUUID(c.UserContext(), callUUID)
-	if err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "call log not found"})
+		return nil, "", ErrCintrixNotConfigured
 	}
 
 	recordingURL := models.RecordingURLFromMeta(callLog.Meta)
 	if recordingURL == "" {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "no recording for this call"})
+		return nil, "", ErrCintrixRecordingNotFound
 	}
 
 	cdrID, err := cdrIDFromRecordingURL(recordingURL)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "invalid recording url"})
+		return nil, "", fmt.Errorf("invalid recording url: %w", err)
 	}
 
 	// Sign the exact bytes "cdr_id=<id>" — same HMAC convention as the
@@ -245,41 +242,35 @@ func (h *CTIHandler) GetRecording(c *fiber.Ctx) error {
 	mac.Write([]byte(qs))
 	sig := hex.EncodeToString(mac.Sum(nil))
 
-	req, err := http.NewRequestWithContext(c.UserContext(), http.MethodGet, recordingURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, recordingURL, nil)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		return nil, "", err
 	}
 	req.Header.Set("X-Api-Key", h.keyID)
 	req.Header.Set("X-Signature", sig)
 
 	resp, err := h.noRedirectClient.Do(req)
 	if err != nil {
-		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "recording service unreachable"})
+		return nil, "", fmt.Errorf("recording service unreachable: %w", err)
 	}
 	defer resp.Body.Close()
 
-	switch {
-	case resp.StatusCode == http.StatusOK:
-		// Cintrix streams the recording bytes through (MinIO stays private);
-		// relay them to the browser with the audio content type. Recordings
-		// are small, so read fully rather than juggle a streaming body close.
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// Recordings are small, so read fully rather than juggle a streaming body close.
 		data, rerr := io.ReadAll(resp.Body)
 		if rerr != nil {
-			return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"error": "recording read failed"})
+			return nil, "", fmt.Errorf("recording read failed: %w", rerr)
 		}
 		ct := resp.Header.Get("Content-Type")
 		if ct == "" {
 			ct = "audio/wav"
 		}
-		c.Set("Content-Type", ct)
-		c.Set("Content-Disposition", `inline; filename="recording.wav"`)
-		return c.Send(data)
-	case resp.StatusCode == http.StatusNotFound:
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "recording not found"})
+		return data, ct, nil
+	case http.StatusNotFound:
+		return nil, "", ErrCintrixRecordingNotFound
 	default:
-		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{
-			"error": fmt.Sprintf("cintrix recording fetch failed (%d)", resp.StatusCode),
-		})
+		return nil, "", fmt.Errorf("cintrix recording fetch failed (%d)", resp.StatusCode)
 	}
 }
 
