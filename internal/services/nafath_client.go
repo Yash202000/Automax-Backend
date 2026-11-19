@@ -27,9 +27,6 @@ var (
 	// ErrNafathTokenRejected: the gateway access token was refused (401). A
 	// new token must be requested.
 	ErrNafathTokenRejected = errors.New("nafath: access token rejected")
-	// ErrNafathUnknownRequest: NafathCheckRequest no longer knows the
-	// transID (expired and forgotten by the gateway).
-	ErrNafathUnknownRequest = errors.New("nafath: request not found")
 	// ErrNafathUnavailable: timeout, transport failure, 5xx, non-JSON or an
 	// unexpected response. Not the user's fault.
 	ErrNafathUnavailable = errors.New("nafath: service unavailable")
@@ -39,10 +36,18 @@ var (
 type NafathRefusal struct {
 	Message string
 	Detail  string
+	// TokenRejected: the gateway answered 401 with this message, so the
+	// error also matches ErrNafathTokenRejected (get a new token, retry).
+	TokenRejected bool
 }
 
 func (e *NafathRefusal) Error() string { return "nafath: request refused: " + e.Detail }
-func (e *NafathRefusal) Unwrap() error { return ErrNafathRefused }
+func (e *NafathRefusal) Unwrap() []error {
+	if e.TokenRejected {
+		return []error{ErrNafathRefused, ErrNafathTokenRejected}
+	}
+	return []error{ErrNafathRefused}
+}
 
 // nafathMockHeader is set by nafath-simulator on every response.
 const nafathMockHeader = "X-Nafath-Mock"
@@ -82,7 +87,10 @@ type NafathPerson struct {
 type NafathCheckResult struct {
 	Status    string
 	RawStatus string
-	Person    *NafathPerson
+	// Message is the gateway's own text sent with the status (shown to the
+	// user for REJECTED / EXPIRED), empty if none.
+	Message string
+	Person  *NafathPerson
 }
 
 // NafathClient calls the Nafath APIs on the client's Amana gateway.
@@ -145,8 +153,8 @@ func NewNafathClient(cfg config.NafathConfig, appEnv string) (NafathClient, erro
 			return nil, fmt.Errorf("NAFATH_APP_ID / NAFATH_CHECK_APP_ID must be numbers, got %q", id)
 		}
 	}
-	if cfg.TimeoutSeconds < 1 || cfg.RotateSeconds < 5 || cfg.LoginTimeoutSeconds < cfg.RotateSeconds {
-		return nil, errors.New("NAFATH_TIMEOUT_SECONDS must be >= 1, NAFATH_ROTATE_SECONDS >= 5 and NAFATH_LOGIN_TIMEOUT_SECONDS >= NAFATH_ROTATE_SECONDS")
+	if cfg.TimeoutSeconds < 1 || cfg.PollSeconds < 1 {
+		return nil, errors.New("NAFATH_TIMEOUT_SECONDS and NAFATH_POLL_SECONDS must be >= 1")
 	}
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()
@@ -182,7 +190,7 @@ type nafathEnvelope struct {
 }
 
 func (e nafathEnvelope) errorText() string {
-	for _, raw := range []json.RawMessage{e.BusinessErrorMessage, e.ErrorMessage} {
+	for _, raw := range []json.RawMessage{e.BusinessErrorMessage, e.ErrorMessage, e.ExceptionMessage} {
 		if m := rawMessageText(raw); m != "" {
 			return m
 		}
@@ -234,13 +242,18 @@ func (c *nafathClient) post(ctx context.Context, path, bearer string, payload an
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
+	c.logAPIRequest(path, bearer != "", raw)
+	started := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		// url.Error includes the URL only — the body is never part of it.
-		return 0, nil, fmt.Errorf("%w: %s request failed: %v", ErrNafathUnavailable, path, err)
+		err = fmt.Errorf("%w: %s request failed: %v", ErrNafathUnavailable, path, err)
+		c.logAPIResponse(path, 0, time.Since(started), nil, err)
+		return 0, nil, err
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	c.logAPIResponse(path, resp.StatusCode, time.Since(started), body, nil)
 
 	if resp.Header.Get(nafathMockHeader) != "" && !c.cfg.IsMock() {
 		return 0, nil, fmt.Errorf("%w: %s answered by nafath-simulator but NAFATH_MODE=real — check NAFATH_BASE_URL", ErrNafathUnavailable, path)
@@ -280,12 +293,13 @@ func (c *nafathClient) GetToken(ctx context.Context, nationalID string) (string,
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return "", fmt.Errorf("%w: GetAccessTokenByIdNumber response parse failed (status %d): %v", ErrNafathUnavailable, status, err)
 	}
+	// The gateway's own message is shown to the user as it is.
+	if msg := rawMessageText(resp.ErrorMessage); msg != "" {
+		return "", &NafathRefusal{Message: c.redact(msg), Detail: fmt.Sprintf("GetAccessTokenByIdNumber returned %d: %s", status, c.redact(msg))}
+	}
 	if status == http.StatusUnauthorized {
 		// No reason is given: most likely a wrong Service/Key (configuration).
 		return "", fmt.Errorf("%w: GetAccessTokenByIdNumber returned 401 (check NAFATH_SERVICE/NAFATH_KEY)", ErrNafathUnavailable)
-	}
-	if msg := rawMessageText(resp.ErrorMessage); msg != "" {
-		return "", &NafathRefusal{Message: c.redact(msg), Detail: fmt.Sprintf("GetAccessTokenByIdNumber returned %d: %s", status, c.redact(msg))}
 	}
 	if status != http.StatusOK || resp.AccessToken == nil || strings.TrimSpace(*resp.AccessToken) == "" {
 		return "", fmt.Errorf("%w: GetAccessTokenByIdNumber returned %d with no accessToken", ErrNafathUnavailable, status)
@@ -300,10 +314,17 @@ func (c *nafathClient) nicCall(ctx context.Context, path, token string, payload 
 	if err != nil {
 		return nil, err
 	}
+	var env nafathEnvelope
 	if status == http.StatusUnauthorized {
+		// Keep the gateway's message (e.g. "token expired") so it can be
+		// shown if a new token does not help either.
+		if json.Unmarshal(body, &env) == nil {
+			if msg := env.errorText(); msg != "" {
+				return nil, &NafathRefusal{Message: c.redact(msg), Detail: fmt.Sprintf("%s returned 401, %s", path, c.redact(env.describe())), TokenRejected: true}
+			}
+		}
 		return nil, fmt.Errorf("%w: %s returned 401", ErrNafathTokenRejected, path)
 	}
-	var env nafathEnvelope
 	if err := json.Unmarshal(body, &env); err != nil {
 		return nil, fmt.Errorf("%w: %s response parse failed (status %d): %v", ErrNafathUnavailable, path, status, err)
 	}
@@ -373,18 +394,19 @@ func (c *nafathClient) CheckRequest(ctx context.Context, token, nationalID strin
 		"idNumber": id,
 		"appID":    json.Number(strings.TrimSpace(c.cfg.CheckAppID)),
 	})
+	// checkStatus decides. A message next to a status (e.g. WAITING with
+	// "request pending") is information, not a failure. A message with no
+	// status is Nafath's refusal and is returned as one.
+	var refusal *NafathRefusal
+	if errors.As(err, &refusal) && env != nil && strings.TrimSpace(string(env.CheckStatus)) != "" {
+		err = nil
+	}
 	if err != nil {
-		var refusal *NafathRefusal
-		if errors.As(err, &refusal) {
-			// A request the gateway no longer knows is not the person's
-			// refusal; the caller treats it as expired.
-			return nil, fmt.Errorf("%w: %s", ErrNafathUnknownRequest, refusal.Detail)
-		}
 		return nil, err
 	}
 
 	raw := strings.ToUpper(strings.TrimSpace(string(env.CheckStatus)))
-	result := &NafathCheckResult{RawStatus: raw}
+	result := &NafathCheckResult{RawStatus: raw, Message: c.redact(env.errorText())}
 	switch raw {
 	case NafathStatusCompleted, NafathStatusRejected, NafathStatusExpired:
 		result.Status = raw

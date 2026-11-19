@@ -27,8 +27,14 @@ import (
 //	                                 -> GetAccessTokenByIdNumber + NafathSendRequest
 //	                                 -> {challenge_id, random}
 //	POST /api/v1/auth/nafath/status  challenge_id -> NafathCheckRequest
-//	                                 -> waiting (a new random every NAFATH_ROTATE_SECONDS)
-//	                                 -> approved: the normal Automax tokens
+//	                                 (polled every NAFATH_POLL_SECONDS, default 10 s)
+//	                                 -> Nafath's checkStatus decides:
+//	                                    WAITING   -> waiting, same number
+//	                                    COMPLETED -> the normal Automax tokens
+//	                                    REJECTED  -> 403 nafath_rejected
+//	                                    EXPIRED   -> 410 nafath_timeout (start again)
+//	                                 Automax sends one request per login and adds no
+//	                                 timer of its own.
 //	POST /api/v1/auth/nafath/cancel  challenge_id -> forget the login
 //
 // The gateway token and transIDs stay server-side in Redis under the random
@@ -41,7 +47,6 @@ import (
 // translated messages.
 const (
 	nafathErrDisabled      = "nafath_disabled"
-	nafathErrRateLimited   = "rate_limited"
 	nafathErrInvalidID     = "nafath_invalid_id"
 	nafathErrNotRegistered = "nafath_user_not_registered"
 	nafathErrRestart       = "nafath_restart"
@@ -53,12 +58,12 @@ const (
 )
 
 const (
-	nafathChallengePrefix = "nafath_challenge:"
-	nafathLockSuffix      = ":lock"
-	// Per-IP limits are looser than per-ID so one office behind NAT isn't
-	// locked out by a few colleagues.
-	nafathIPAttemptMultiplier = 4
-	nafathDefaultPollSeconds  = 5
+	nafathChallengePrefix    = "nafath_challenge:"
+	nafathLockSuffix         = ":lock"
+	nafathDefaultPollSeconds = 10
+	// A login's Redis state is dropped this long after its last check (a
+	// closed browser tab), not as a time limit on the login itself.
+	nafathStateIdleTTL = 10 * time.Minute
 )
 
 var (
@@ -88,18 +93,13 @@ func (h *NafathLoginHandler) Enabled() bool {
 	return h != nil && h.cfg.Nafath.Enabled && h.client != nil && h.redis != nil
 }
 
-// nafathChallengeState is one login in progress. Previous is the request
-// replaced by the last rotation: the person may approve it just before the
-// number changes, so it is still checked once more.
+// nafathChallengeState is one login in progress: one Nafath request.
 type nafathChallengeState struct {
-	NationalID    string                  `json:"national_id"`
-	UserID        string                  `json:"user_id"`
-	Token         string                  `json:"token"`
-	Current       services.NafathRequest  `json:"current"`
-	CurrentSentAt int64                   `json:"current_sent_at"`
-	Previous      *services.NafathRequest `json:"previous,omitempty"`
-	LastCheckedAt int64                   `json:"last_checked_at"`
-	Deadline      int64                   `json:"deadline"`
+	NationalID    string                 `json:"national_id"`
+	UserID        string                 `json:"user_id"`
+	Token         string                 `json:"token"`
+	Current       services.NafathRequest `json:"current"`
+	LastCheckedAt int64                  `json:"last_checked_at"`
 }
 
 // NafathPendingResponse is the start / waiting status response.
@@ -107,8 +107,6 @@ type NafathPendingResponse struct {
 	Status       string `json:"status"`
 	ChallengeID  string `json:"challenge_id"`
 	Random       string `json:"random"`
-	RotateIn     int    `json:"rotate_in"`
-	ExpiresIn    int    `json:"expires_in"`
 	PollInterval int    `json:"poll_interval"`
 }
 
@@ -147,16 +145,6 @@ func (h *NafathLoginHandler) Start(c *fiber.Ctx) error {
 	if !nafathIDPattern.MatchString(nationalID) {
 		return nafathError(c, fiber.StatusBadRequest, nafathErrInvalidID, i18n.T(ctx, "nafath_invalid_id"))
 	}
-	idKey, ipKey := "id:"+nationalID, "ip:"+c.IP()
-	if h.limitBlocked(ctx, idKey, ipKey) {
-		log.Printf("[NAFATH] start rate-limited id=%s ip=%s", maskNationalID(nationalID), c.IP())
-		return nafathError(c, fiber.StatusTooManyRequests, nafathErrRateLimited, i18n.T(ctx, "too_many_login_attempts"))
-	}
-	// Every start counts: each one makes Nafath notify the person's phone,
-	// so repeated starts must not be usable to flood someone with requests.
-	// A successful login resets the counter.
-	h.limitCount(ctx, idKey, ipKey)
-
 	user, err := h.userRepo.FindByNationalIDForLogin(ctx, nationalID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		log.Printf("[NAFATH] start refused: id=%s not registered in Automax", maskNationalID(nationalID))
@@ -189,9 +177,7 @@ func (h *NafathLoginHandler) Start(c *fiber.Ctx) error {
 		UserID:        user.ID.String(),
 		Token:         token,
 		Current:       *nreq,
-		CurrentSentAt: now.UnixMilli(),
 		LastCheckedAt: now.UnixMilli(), // just sent: nothing to check yet
-		Deadline:      now.Add(time.Duration(h.cfg.Nafath.LoginTimeoutSeconds) * time.Second).UnixMilli(),
 	}
 	if err := h.saveState(ctx, challengeID, &state); err != nil {
 		return utils.InternalErrorResponse(c, fmt.Errorf("store Nafath challenge: %w", err), i18n.T(ctx, "internal_server_error"))
@@ -200,9 +186,8 @@ func (h *NafathLoginHandler) Start(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"success": true, "data": h.pending(challengeID, &state)})
 }
 
-// Status is step 2, polled by the login page: it checks the open requests,
-// sends a new one when the number's time is up, and signs the user in once
-// Nafath reports the request approved.
+// Status is step 2, polled by the login page: it runs NafathCheckRequest and
+// does what Nafath's checkStatus says (see the top of this file).
 // POST /api/v1/auth/nafath/status
 func (h *NafathLoginHandler) Status(c *fiber.Ctx) error {
 	ctx := c.UserContext()
@@ -234,66 +219,30 @@ func (h *NafathLoginHandler) Status(c *fiber.Ctx) error {
 	defer h.redis.Del(context.Background(), key+nafathLockSuffix)
 
 	now := h.now()
-	if now.UnixMilli() >= state.Deadline {
-		h.redis.Del(ctx, key)
-		log.Printf("[NAFATH] login timed out id=%s", maskNationalID(state.NationalID))
-		return nafathError(c, fiber.StatusGone, nafathErrTimeout, i18n.T(ctx, "nafath_timeout"))
-	}
 	// Polled faster than the poll interval: answer from the stored state.
 	if now.UnixMilli()-state.LastCheckedAt < int64(h.pollSeconds()-1)*1000 {
 		return c.JSON(fiber.Map{"success": true, "data": h.pending(challengeID, &state)})
 	}
 	state.LastCheckedAt = now.UnixMilli()
 
-	// Current request first, then the one the last rotation replaced.
-	currentStatus, err := h.check(ctx, &state, state.Current)
+	res, err := h.check(ctx, &state)
 	if err != nil {
 		return h.gatewayError(c, state.NationalID, "check", err)
 	}
-	if currentStatus.Status == services.NafathStatusCompleted {
-		return h.finish(c, key, &state, currentStatus)
-	}
-	if currentStatus.Status == services.NafathStatusRejected {
+	switch res.Status {
+	case services.NafathStatusCompleted:
+		return h.finish(c, key, &state, res)
+	case services.NafathStatusRejected:
 		h.redis.Del(ctx, key)
-		log.Printf("[NAFATH] request rejected in the Nafath app id=%s", maskNationalID(state.NationalID))
-		return nafathError(c, fiber.StatusForbidden, nafathErrRejected, i18n.T(ctx, "nafath_rejected"))
+		log.Printf("[NAFATH] request rejected in the Nafath app id=%s msg=%q", maskNationalID(state.NationalID), res.Message)
+		return nafathError(c, fiber.StatusForbidden, nafathErrRejected, gatewayMessageOr(res.Message, i18n.T(ctx, "nafath_rejected")))
+	case services.NafathStatusExpired:
+		h.redis.Del(ctx, key)
+		log.Printf("[NAFATH] request expired (Nafath) id=%s msg=%q", maskNationalID(state.NationalID), res.Message)
+		return nafathError(c, fiber.StatusGone, nafathErrTimeout, gatewayMessageOr(res.Message, i18n.T(ctx, "nafath_timeout")))
 	}
-	if state.Previous != nil {
-		prev, err := h.check(ctx, &state, *state.Previous)
-		if err != nil {
-			return h.gatewayError(c, state.NationalID, "check", err)
-		}
-		switch prev.Status {
-		case services.NafathStatusCompleted:
-			return h.finish(c, key, &state, prev)
-		case services.NafathStatusWaiting:
-			// Still open: keep checking it next time.
-		default:
-			state.Previous = nil
-		}
-	}
-	if currentStatus.RawStatus != services.NafathStatusWaiting && currentStatus.Status == services.NafathStatusWaiting {
-		log.Printf("[NAFATH] undocumented checkStatus %q treated as waiting id=%s", currentStatus.RawStatus, maskNationalID(state.NationalID))
-	}
-
-	// Time for a new number (or the gateway already expired this one).
-	rotateAfter := int64(h.cfg.Nafath.RotateSeconds) * 1000
-	if currentStatus.Status == services.NafathStatusExpired || now.UnixMilli()-state.CurrentSentAt >= rotateAfter {
-		nreq, err := h.client.SendRequest(ctx, state.Token, state.NationalID)
-		if errors.Is(err, services.ErrNafathTokenRejected) {
-			if err = h.refreshToken(ctx, &state); err == nil {
-				nreq, err = h.client.SendRequest(ctx, state.Token, state.NationalID)
-			}
-		}
-		if err != nil {
-			return h.gatewayError(c, state.NationalID, "send", err)
-		}
-		if currentStatus.Status == services.NafathStatusWaiting {
-			prev := state.Current
-			state.Previous = &prev
-		}
-		state.Current = *nreq
-		state.CurrentSentAt = now.UnixMilli()
+	if res.RawStatus != services.NafathStatusWaiting {
+		log.Printf("[NAFATH] undocumented checkStatus %q treated as waiting id=%s", res.RawStatus, maskNationalID(state.NationalID))
 	}
 
 	if err := h.saveState(ctx, challengeID, &state); err != nil {
@@ -313,19 +262,14 @@ func (h *NafathLoginHandler) Cancel(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"success": true})
 }
 
-// check runs NafathCheckRequest for one request, getting a new gateway token
-// once if the old one was refused. A request the gateway no longer knows
-// counts as expired.
-func (h *NafathLoginHandler) check(ctx context.Context, state *nafathChallengeState, req services.NafathRequest) (*services.NafathCheckResult, error) {
-	res, err := h.client.CheckRequest(ctx, state.Token, state.NationalID, req)
+// check runs NafathCheckRequest for the login's request, getting a new
+// gateway token once if the old one was refused.
+func (h *NafathLoginHandler) check(ctx context.Context, state *nafathChallengeState) (*services.NafathCheckResult, error) {
+	res, err := h.client.CheckRequest(ctx, state.Token, state.NationalID, state.Current)
 	if errors.Is(err, services.ErrNafathTokenRejected) {
 		if err = h.refreshToken(ctx, state); err == nil {
-			res, err = h.client.CheckRequest(ctx, state.Token, state.NationalID, req)
+			res, err = h.client.CheckRequest(ctx, state.Token, state.NationalID, state.Current)
 		}
-	}
-	if errors.Is(err, services.ErrNafathUnknownRequest) {
-		log.Printf("[NAFATH] gateway no longer knows request id=%s: %v", maskNationalID(state.NationalID), err)
-		return &services.NafathCheckResult{Status: services.NafathStatusExpired, RawStatus: "UNKNOWN_REQUEST"}, nil
 	}
 	return res, err
 }
@@ -369,7 +313,6 @@ func (h *NafathLoginHandler) finish(c *fiber.Ctx, key string, state *nafathChall
 		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(ctx, "account_deactivated"))
 	}
 
-	h.limitReset(ctx, "id:"+state.NationalID)
 	log.Printf("[NAFATH] login success id=%s user=%s", maskNationalID(state.NationalID), user.ID)
 	return h.issueTokens(c, user)
 }
@@ -418,10 +361,21 @@ func (h *NafathLoginHandler) gatewayError(c *fiber.Ctx, nationalID, step string,
 	var refusal *services.NafathRefusal
 	if errors.As(err, &refusal) {
 		log.Printf("[NAFATH] %s refused id=%s: %v", step, maskNationalID(nationalID), err)
-		return nafathError(c, fiber.StatusForbidden, nafathErrRefused, i18n.Tf(ctx, "nafath_refused", cleanGatewayMessage(refusal.Message)))
+		return nafathError(c, fiber.StatusForbidden, nafathErrRefused, gatewayMessageOr(refusal.Message, i18n.T(ctx, "nafath_unavailable")))
 	}
+	// No message from the gateway (no answer, timeout, unreadable reply):
+	// the only case where Automax's own text is shown.
 	log.Printf("[NAFATH] %s unavailable id=%s: %v", step, maskNationalID(nationalID), err)
 	return nafathError(c, fiber.StatusServiceUnavailable, nafathErrUnavailable, i18n.T(ctx, "nafath_unavailable"))
+}
+
+// gatewayMessageOr shows the gateway's own message when it sent one, else
+// the fallback.
+func gatewayMessageOr(msg, fallback string) string {
+	if m := cleanGatewayMessage(msg); m != "" {
+		return m
+	}
+	return fallback
 }
 
 // cleanGatewayMessage makes a gateway message safe to show: one line, at
@@ -444,88 +398,23 @@ func (h *NafathLoginHandler) challengeIDFrom(c *fiber.Ctx) (string, bool) {
 }
 
 func (h *NafathLoginHandler) pollSeconds() int {
-	return min(nafathDefaultPollSeconds, h.cfg.Nafath.RotateSeconds)
+	if h.cfg.Nafath.PollSeconds > 0 {
+		return h.cfg.Nafath.PollSeconds
+	}
+	return nafathDefaultPollSeconds
 }
 
 func (h *NafathLoginHandler) pending(challengeID string, state *nafathChallengeState) NafathPendingResponse {
-	now := h.now().UnixMilli()
-	rotateIn := (state.CurrentSentAt + int64(h.cfg.Nafath.RotateSeconds)*1000 - now + 999) / 1000
-	expiresIn := (state.Deadline - now + 999) / 1000
 	return NafathPendingResponse{
 		Status:       "waiting",
 		ChallengeID:  challengeID,
 		Random:       state.Current.Random,
-		RotateIn:     int(max(0, rotateIn)),
-		ExpiresIn:    int(max(0, expiresIn)),
 		PollInterval: h.pollSeconds(),
 	}
 }
 
 func (h *NafathLoginHandler) saveState(ctx context.Context, challengeID string, state *nafathChallengeState) error {
-	ttl := time.Duration(state.Deadline-h.now().UnixMilli())*time.Millisecond + time.Minute
-	return h.sessionStore.Set(ctx, nafathChallengePrefix+challengeID, state, ttl)
-}
-
-// ─── Rate limiting ────────────────────────────────────────────────────────────
-// Starts are counted per National ID and per IP in Redis using the
-// LOGIN_RATE_LIMIT_* settings (MAX_LOGIN_ATTEMPTS per RATE_LIMIT_WINDOW
-// minutes, then blocked for BLOCK_DURATION minutes). The IP limit is
-// nafathIPAttemptMultiplier times the ID limit. Redis errors fail open, like
-// the regular login rate limiter.
-
-func (h *NafathLoginHandler) limitMax(key string) int {
-	if strings.HasPrefix(key, "ip:") {
-		return h.cfg.LoginRateLimit.MaxAttempts * nafathIPAttemptMultiplier
-	}
-	return h.cfg.LoginRateLimit.MaxAttempts
-}
-
-func (h *NafathLoginHandler) limitBlocked(ctx context.Context, keys ...string) bool {
-	if !h.cfg.LoginRateLimit.Enabled {
-		return false
-	}
-	for _, k := range keys {
-		if n, _ := h.redis.Exists(ctx, "nafath_login_block:"+k).Result(); n > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func (h *NafathLoginHandler) limitCount(ctx context.Context, keys ...string) {
-	if !h.cfg.LoginRateLimit.Enabled {
-		return
-	}
-	window := time.Duration(h.cfg.LoginRateLimit.RateLimitWindow) * time.Minute
-	block := time.Duration(h.cfg.LoginRateLimit.BlockDuration) * time.Minute
-	for _, k := range keys {
-		attemptsKey := "nafath_login_attempts:" + k
-		n, err := h.redis.Incr(ctx, attemptsKey).Result()
-		if err != nil {
-			continue
-		}
-		if n == 1 {
-			h.redis.Expire(ctx, attemptsKey, window)
-		}
-		if int(n) >= h.limitMax(k) {
-			h.redis.Set(ctx, "nafath_login_block:"+k, "1", block)
-			h.redis.Del(ctx, attemptsKey)
-			log.Printf("[NAFATH] blocking %s for %s after %d login starts", maskLimitKey(k), block, n)
-		}
-	}
-}
-
-func (h *NafathLoginHandler) limitReset(ctx context.Context, keys ...string) {
-	for _, k := range keys {
-		h.redis.Del(ctx, "nafath_login_attempts:"+k, "nafath_login_block:"+k)
-	}
-}
-
-func maskLimitKey(k string) string {
-	if id, ok := strings.CutPrefix(k, "id:"); ok {
-		return "id:" + maskNationalID(id)
-	}
-	return k
+	return h.sessionStore.Set(ctx, nafathChallengePrefix+challengeID, state, nafathStateIdleTTL)
 }
 
 // BlockWhenEnabled refuses the old National-ID-only login

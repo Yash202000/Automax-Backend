@@ -374,11 +374,13 @@ type NafathConfig struct {
 	CheckAppID string
 	// TimeoutSeconds bounds each gateway HTTP call.
 	TimeoutSeconds int
-	// RotateSeconds is how long one request (random number) is shown before
-	// a new one is sent; the client said the number changes every 10 s.
-	RotateSeconds int
-	// LoginTimeoutSeconds is how long a login may wait for approval in total.
-	LoginTimeoutSeconds int
+	// PollSeconds is how often NafathCheckRequest runs while the request is
+	// waiting (default 10 s). Automax adds no timer of its own: the login
+	// lasts until Nafath reports the request COMPLETED, REJECTED or EXPIRED.
+	PollSeconds int
+	// LogAPI logs every gateway request and response (secrets and personal
+	// data masked) as [NAFATH-API] lines, as evidence. Default on.
+	LogAPI bool
 	// InsecureSkipVerify disables TLS verification; refused in production.
 	InsecureSkipVerify bool
 }
@@ -457,17 +459,17 @@ func Load() *Config {
 			InsecureSkipVerify: getEnvAsBool("AD_BASEER_INSECURE_SKIP_VERIFY", false),
 		},
 		Nafath: NafathConfig{
-			Enabled:             getEnvAsBool("NAFATH_ENABLED", false),
-			Mode:                getEnv("NAFATH_MODE", "real"),
-			BaseURL:             getEnv("NAFATH_BASE_URL", ""),
-			Service:             getEnv("NAFATH_SERVICE", getEnv("AD_BASEER_SERVICE", "")),
-			Key:                 getEnv("NAFATH_KEY", getEnv("AD_BASEER_KEY", "")),
-			AppID:               getEnv("NAFATH_APP_ID", "13"),
-			CheckAppID:          getEnv("NAFATH_CHECK_APP_ID", getEnv("NAFATH_APP_ID", "13")),
-			TimeoutSeconds:      getEnvAsInt("NAFATH_TIMEOUT_SECONDS", 15),
-			RotateSeconds:       getEnvAsInt("NAFATH_ROTATE_SECONDS", 10),
-			LoginTimeoutSeconds: getEnvAsInt("NAFATH_LOGIN_TIMEOUT_SECONDS", 180),
-			InsecureSkipVerify:  getEnvAsBool("NAFATH_INSECURE_SKIP_VERIFY", false),
+			Enabled:            getEnvAsBool("NAFATH_ENABLED", false),
+			Mode:               getEnv("NAFATH_MODE", "real"),
+			BaseURL:            getEnv("NAFATH_BASE_URL", ""),
+			Service:            getEnv("NAFATH_SERVICE", getEnv("AD_BASEER_SERVICE", "")),
+			Key:                getEnv("NAFATH_KEY", getEnv("AD_BASEER_KEY", "")),
+			AppID:              getEnv("NAFATH_APP_ID", "13"),
+			CheckAppID:         getEnv("NAFATH_CHECK_APP_ID", getEnv("NAFATH_APP_ID", "13")),
+			TimeoutSeconds:     getEnvAsInt("NAFATH_TIMEOUT_SECONDS", 15),
+			PollSeconds:        getEnvAsInt("NAFATH_POLL_SECONDS", 10),
+			LogAPI:             getEnvAsBool("NAFATH_LOG_API", true),
+			InsecureSkipVerify: getEnvAsBool("NAFATH_INSECURE_SKIP_VERIFY", false),
 		},
 		LoginRateLimit: LoginRateLimitConfig{
 			Enabled:         getEnvAsBool("LOGIN_RATE_LIMIT_ENABLED", true),
