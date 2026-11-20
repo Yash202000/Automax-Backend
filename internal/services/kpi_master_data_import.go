@@ -197,7 +197,10 @@ func kpiMasterDataFileSlug(entityType string) string {
 	}
 }
 
-func BuildKpiMasterDataImportTemplate(entityType, lang string) ([]byte, error) {
+// Reference columns are dropdowns of what exists in the system (Lists
+// sheet, filled from db at download time); a Strategic Goal fills in
+// automatically from the Parent Objective picked on the row.
+func BuildKpiMasterDataImportTemplate(ctx context.Context, db *gorm.DB, entityType, lang string) ([]byte, error) {
 	spec, ok := masterSpecFor(entityType)
 	if !ok {
 		return nil, fmt.Errorf("unknown master-data entity type %q", entityType)
@@ -205,6 +208,29 @@ func BuildKpiMasterDataImportTemplate(entityType, lang string) ([]byte, error) {
 	language := utils.LanguageEnglish
 	if lang == KpiTemplateLangAR {
 		language = utils.LanguageArabic
+	}
+	lists, err := kpiSystemLists(ctx, db, lang)
+	if err != nil {
+		return nil, fmt.Errorf("loading dropdown lists: %w", err)
+	}
+	cols := withLists(spec.cols, map[string]string{
+		"owner": listDepartments, "department": listDepartments, "goal": listGoals, "pillar": listPillars, "enabler": listEnablers,
+		"operational_objective": listObjectives, "objective": listObjectives, "award_criterion": listCriteriaNames,
+	})
+	// The strategic goal follows from the parent objective (Operational
+	// Objectives: "operational_objective"; Initiatives: "objective").
+	for _, parentKey := range []string{"operational_objective", "objective"} {
+		for _, c := range cols {
+			if c.key != parentKey {
+				continue
+			}
+			for i := range cols {
+				if cols[i].key == "goal" {
+					cols[i].formula = lookupFormula(templateColLetter(cols, parentKey), lookupParentName, lookupParentGoal)
+					cols[i].hintEn, cols[i].hintAr = "Filled automatically from the Parent Objective.", "يُعبأ تلقائياً من الهدف الرئيسي."
+				}
+			}
+		}
 	}
 	cfg := utils.WorkbookConfig{
 		Language:     language,
@@ -215,10 +241,12 @@ func BuildKpiMasterDataImportTemplate(entityType, lang string) ([]byte, error) {
 		Instructions: buildKpiMasterDataInstructions(spec),
 		Sheets: []utils.SheetConfig{{
 			Name:         spec.sheet,
-			Columns:      toExcelColumns(spec.cols),
+			Columns:      toExcelColumns(cols),
 			DataRows:     kpiMasterTemplateDataRows,
 			FreezeHeader: true,
 		}},
+		ListsSheet: kpiTemplateListsSheet,
+		Lists:      lists,
 	}
 	return utils.GenerateExcelTemplate(cfg)
 }
@@ -590,7 +618,7 @@ func (imp *masterDataImporter) locateSheet(xf *excelize.File) (string, [][]strin
 	var found []candidate
 	for _, name := range xf.GetSheetList() {
 		normalized := normHeader(name)
-		if normalized == normHeader("Instructions") || normalized == "تعليمات" {
+		if normalized == normHeader("Instructions") || normalized == "تعليمات" || normalized == normHeader(kpiTemplateListsSheet) || normalized == "القوائم" {
 			continue
 		}
 		if imp.onlySheet != "" && name != imp.onlySheet {

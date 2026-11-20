@@ -96,6 +96,9 @@ type kpiTemplateColumn struct {
 	color  string // header colour, groups related columns
 	hintEn string // input message for a column without a dropdown
 	hintAr string
+	// formula fills the column automatically from another cell of the row
+	// ("{row}" = row number); the user can type over it.
+	formula string
 }
 
 // Record categories reported in the preview/summary, in display order.

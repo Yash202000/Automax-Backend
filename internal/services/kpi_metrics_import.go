@@ -202,11 +202,19 @@ func KpiMetricsTemplateFileNameFor(lang string) string {
 }
 
 // BuildKpiMetricsImportTemplate returns the blank workbook for the given header language.
-func BuildKpiMetricsImportTemplate(lang string) ([]byte, error) {
+// KPI Code and Data Source are dropdowns of what exists in the system;
+// KPI Type fills in automatically from the KPI Code.
+func BuildKpiMetricsImportTemplate(ctx context.Context, db *gorm.DB, lang string) ([]byte, error) {
 	language := utils.LanguageEnglish
 	if lang == KpiTemplateLangAR {
 		language = utils.LanguageArabic
 	}
+	lists, err := kpiSystemLists(ctx, db, lang)
+	if err != nil {
+		return nil, fmt.Errorf("loading dropdown lists: %w", err)
+	}
+	cols := withKpiTypeFormula(withLists(markKpiMetricTemplateRequired(kpiMetricTemplateColumns()),
+		map[string]string{"kpi_code": listKpiCodes, "data_source": listDataSources}))
 	cfg := utils.WorkbookConfig{
 		Language:     language,
 		Title:        "KPI Metrics Import Template",
@@ -216,10 +224,12 @@ func BuildKpiMetricsImportTemplate(lang string) ([]byte, error) {
 		Instructions: buildKpiMetricsInstructions(),
 		Sheets: []utils.SheetConfig{{
 			Name:         kpiMetricsTemplateSheet,
-			Columns:      toExcelColumns(markKpiMetricTemplateRequired(kpiMetricTemplateColumns())),
+			Columns:      toExcelColumns(cols),
 			DataRows:     kpiMetricsTemplateDataRows,
 			FreezeHeader: true,
 		}},
+		ListsSheet: kpiTemplateListsSheet,
+		Lists:      lists,
 	}
 	return utils.GenerateExcelTemplate(cfg)
 }
@@ -469,7 +479,7 @@ func (imp *kpiMetricsImporter) locateSheet(xf *excelize.File) (string, [][]strin
 	var found []candidate
 	for _, name := range xf.GetSheetList() {
 		normalized := normHeader(name)
-		if normalized == normHeader(kpiMetricsInstructionsSheet) || normalized == "تعليمات" {
+		if normalized == normHeader(kpiMetricsInstructionsSheet) || normalized == "تعليمات" || normalized == normHeader(kpiTemplateListsSheet) || normalized == "القوائم" {
 			continue
 		}
 		if imp.onlySheet != "" && name != imp.onlySheet {

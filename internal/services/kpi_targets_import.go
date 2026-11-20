@@ -211,11 +211,19 @@ func KpiTargetsTemplateFileNameFor(lang string) string {
 	return KpiTargetsTemplateFileName
 }
 
-func BuildKpiTargetsImportTemplate(lang string) ([]byte, error) {
+// KPI Code, Metric Code and Period Code are dropdowns (KPIs and metrics
+// that exist in the system); KPI Type fills in automatically from the KPI Code.
+func BuildKpiTargetsImportTemplate(ctx context.Context, db *gorm.DB, lang string) ([]byte, error) {
 	language := utils.LanguageEnglish
 	if lang == KpiTemplateLangAR {
 		language = utils.LanguageArabic
 	}
+	lists, err := kpiSystemLists(ctx, db, lang)
+	if err != nil {
+		return nil, fmt.Errorf("loading dropdown lists: %w", err)
+	}
+	cols := withKpiTypeFormula(withLists(markKpiTargetTemplateRequired(kpiTargetTemplateColumns()),
+		map[string]string{"kpi_code": listKpiCodes, "metric_code": listMetricCodes, "period_code": listPeriodCodes}))
 	cfg := utils.WorkbookConfig{
 		Language:     language,
 		Title:        "KPI Targets Import Template",
@@ -225,10 +233,12 @@ func BuildKpiTargetsImportTemplate(lang string) ([]byte, error) {
 		Instructions: buildKpiTargetsInstructions(),
 		Sheets: []utils.SheetConfig{{
 			Name:         kpiTargetsTemplateSheet,
-			Columns:      toExcelColumns(markKpiTargetTemplateRequired(kpiTargetTemplateColumns())),
+			Columns:      toExcelColumns(cols),
 			DataRows:     kpiTargetsTemplateDataRows,
 			FreezeHeader: true,
 		}},
+		ListsSheet: kpiTemplateListsSheet,
+		Lists:      lists,
 	}
 	return utils.GenerateExcelTemplate(cfg)
 }
@@ -384,7 +394,7 @@ func (imp *kpiTargetsImporter) locateSheet(xf *excelize.File) (string, [][]strin
 	var found []candidate
 	for _, name := range xf.GetSheetList() {
 		normalized := normHeader(name)
-		if normalized == normHeader("Instructions") || normalized == "تعليمات" {
+		if normalized == normHeader("Instructions") || normalized == "تعليمات" || normalized == normHeader(kpiTemplateListsSheet) || normalized == "القوائم" {
 			continue
 		}
 		if imp.onlySheet != "" && name != imp.onlySheet {

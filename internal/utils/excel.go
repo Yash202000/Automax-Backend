@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/xuri/excelize/v2"
@@ -50,6 +51,10 @@ type ListConfig struct {
 	Title    LocalizedText
 	Values   []string
 	Formulas []string
+	// Lookup lists are columns of a lookup table read with INDEX/MATCH
+	// (several lists side by side, row for row). Their name covers every
+	// written row, blanks included, so the columns stay aligned.
+	Lookup bool
 }
 
 type SheetConfig struct {
@@ -73,6 +78,12 @@ type ColumnConfig struct {
 	// Hint is shown as an input message when a cell in the column is
 	// selected (columns without a dropdown).
 	Hint LocalizedText
+	// Formula, when set, is written into the column's data cells (rows 2 to
+	// FormulaRows+1, default all data rows); "{row}" is replaced by the row
+	// number. Used to fill a cell automatically from another one on the
+	// row; the user can still type over it.
+	Formula     string
+	FormulaRows int
 }
 
 type DropdownConfig struct {
@@ -342,6 +353,24 @@ func writeSheet(f *excelize.File, styles excelStyles, lang Language, cfg SheetCo
 		rows = 4999
 	}
 	for i, col := range cfg.Columns {
+		if col.Formula == "" {
+			continue
+		}
+		name, err := excelize.ColumnNumberToName(i + 1)
+		if err != nil {
+			return err
+		}
+		n := col.FormulaRows
+		if n <= 0 || n > rows {
+			n = rows
+		}
+		for r := 2; r <= n+1; r++ {
+			if err := f.SetCellFormula(cfg.Name, fmt.Sprintf("%s%d", name, r), strings.ReplaceAll(col.Formula, "{row}", strconv.Itoa(r))); err != nil {
+				return err
+			}
+		}
+	}
+	for i, col := range cfg.Columns {
 		name, err := excelize.ColumnNumberToName(i + 1)
 		if err != nil {
 			return err
@@ -598,6 +627,9 @@ func writeLists(f *excelize.File, styles excelStyles, cfg WorkbookConfig) error 
 		// COUNTIF "?*" counts text of at least one character, so formula
 		// results of "" are left out.
 		ref := fmt.Sprintf("OFFSET('%[1]s'!$%[2]s$2,0,0,MAX(1,COUNTIF('%[1]s'!$%[2]s$2:$%[2]s$%[3]d,\"?*\")),1)", sheet, col, last)
+		if list.Lookup {
+			ref = fmt.Sprintf("'%[1]s'!$%[2]s$2:$%[2]s$%[3]d", sheet, col, last)
+		}
 		if err := f.SetDefinedName(&excelize.DefinedName{Name: list.Name, RefersTo: ref}); err != nil {
 			return fmt.Errorf("defining list %q: %w", list.Name, err)
 		}

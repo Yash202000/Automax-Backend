@@ -141,7 +141,7 @@ func (h *KpiImportHandler) MetricsTemplate(c *fiber.Ctx) error {
 	if lang != services.KpiTemplateLangEN && lang != services.KpiTemplateLangAR {
 		lang = services.KpiTemplateLangEN
 	}
-	data, err := services.BuildKpiMetricsImportTemplate(lang)
+	data, err := services.BuildKpiMetricsImportTemplate(c.UserContext(), h.db, lang)
 	if err != nil {
 		log.Printf("[kpi_import] MetricsTemplate: BuildKpiMetricsImportTemplate failed: %v", err)
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to build the KPI Metrics import template")
@@ -203,7 +203,7 @@ func (h *KpiImportHandler) TargetsTemplate(c *fiber.Ctx) error {
 	if lang != services.KpiTemplateLangEN && lang != services.KpiTemplateLangAR {
 		lang = services.KpiTemplateLangEN
 	}
-	data, err := services.BuildKpiTargetsImportTemplate(lang)
+	data, err := services.BuildKpiTargetsImportTemplate(c.UserContext(), h.db, lang)
 	if err != nil {
 		log.Printf("[kpi_import] TargetsTemplate: BuildKpiTargetsImportTemplate failed: %v", err)
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to build the KPI Targets import template")
@@ -270,7 +270,7 @@ func (h *KpiImportHandler) MasterDataTemplate(c *fiber.Ctx) error {
 	if lang != services.KpiTemplateLangEN && lang != services.KpiTemplateLangAR {
 		lang = services.KpiTemplateLangEN
 	}
-	data, err := services.BuildKpiMasterDataImportTemplate(entityType, lang)
+	data, err := services.BuildKpiMasterDataImportTemplate(c.UserContext(), h.db, entityType, lang)
 	if err != nil {
 		log.Printf("[kpi_import] MasterDataTemplate: BuildKpiMasterDataImportTemplate(%q) failed: %v", entityType, err)
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to build the master-data import template")
