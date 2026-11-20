@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"fmt"
+	"math"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -9,6 +11,7 @@ import (
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -75,11 +78,18 @@ type TrendData struct {
 	Value  float64 `json:"value"`
 }
 
+// KpiPerformanceSummary is one KPI on the Top/Low performers lists.
+// AvgAchievement (name kept for the client) is the KPI's composite score —
+// the weighted metric achievements, capped at 100 — for its latest period
+// with a complete score in the filter (Year/PeriodCode), never an average of
+// per-entry percentages (BR-10). The former total_target/total_actual sums
+// added up unrelated metrics' values and were dropped.
 type KpiPerformanceSummary struct {
 	KpiCode        string      `json:"kpi_code"`
-	TotalTarget    float64     `json:"total_target"`
-	TotalActual    float64     `json:"total_actual"`
+	KpiType        string      `json:"kpi_type"`
 	AvgAchievement float64     `json:"avg_achievement"`
+	Year           int         `json:"year"`
+	PeriodCode     string      `json:"period_code"`
 	LastUpdated    string      `json:"last_updated"`
 	QuarterlyTrend []TrendData `json:"quarterly_trend" gorm:"-"`
 }
@@ -477,27 +487,26 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 		}
 		return q
 	}
-	approvedEntries := func() *gorm.DB {
-		return entryQuery(models.KpiEntryStatusApproved).Where("e.achievement_percentage IS NOT NULL")
-	}
-
 	entryQuery(models.KpiEntryStatusSubmitted).Count(&data.PendingReviews)
 
-	// Performance trend buckets each approved entry by the calendar quarter
-	// its period ends in (a "feb" entry is Q1, "h1" is Q2, "annual" is Q4).
-	// When a Period filter is active every in-scope entry overlaps it, so
-	// they are all bucketed under the quarter it falls in instead.
-	_, endMonth := periodMonthRangeSQL("e.period_code", "e.period_start", "e.period_end")
-	quarterExpr := fmt.Sprintf("((%s - 1) / 3 + 1)", endMonth)
-	if quarter != 0 {
-		quarterExpr = strconv.Itoa(quarter)
+	// KPI scores per period, from approved entries + approved targets via
+	// the composite score (or the selected metric's own rollup) — the same
+	// numbers the KPI pages show, not averages of stored entry percentages.
+	scores := h.kpiPeriodScores(c, entryQuery(models.KpiEntryStatusApproved), metricID)
+
+	// Performance trend buckets each KPI's score by the calendar quarter its
+	// period ends in (a "feb" period is Q1, "h1" is Q2, "annual" is Q4) and
+	// averages the KPIs' scores per bucket (one score per KPI: its latest
+	// period in the bucket). When a Period filter is active every in-scope
+	// period overlaps it, so they are all bucketed under its quarter.
+	data.PerformanceTrends = bucketTrends(scores, quarter)
+	sort.Slice(data.PerformanceTrends, func(i, j int) bool {
+		a, b := data.PerformanceTrends[i], data.PerformanceTrends[j]
+		return a.Year > b.Year || (a.Year == b.Year && a.Quarter > b.Quarter)
+	})
+	if len(data.PerformanceTrends) > 8 {
+		data.PerformanceTrends = data.PerformanceTrends[:8]
 	}
-	approvedEntries().
-		Select("e.reporting_year as year, " + quarterExpr + " as quarter, AVG(e.achievement_percentage) as avg_achievement, count(DISTINCT e.kpi_id) as kpi_count").
-		Group("1, 2").
-		Order("1 DESC, 2 DESC").
-		Limit(8).
-		Scan(&data.PerformanceTrends)
 
 	periodicQuery := func(model interface{}) *gorm.DB {
 		q := h.db.WithContext(c.UserContext()).Model(model)
@@ -566,28 +575,29 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 	}
 	data.RecentKpiCards = recentCards
 
-	perfSummarySelect := "d.code as kpi_code, " +
-		"SUM(COALESCE(e.target_value_snapshot, 0)) as total_target, " +
-		"SUM(COALESCE(e.actual_value, 0)) as total_actual, " +
-		"AVG(e.achievement_percentage) as avg_achievement, " +
-		"MAX(e.updated_at) as last_updated"
+	// Top/Low performers: each KPI's latest scored period in the filter;
+	// a KPI is a top performer when its score reaches its band's green
+	// minimum, a low performer otherwise.
 	var topPerfs, lowPerfs []KpiPerformanceSummary
-	approvedEntries().
-		Select(perfSummarySelect).
-		Group("d.code").
-		Having("AVG(e.achievement_percentage) >= ?", 80).
-		Order("avg_achievement DESC").
-		Limit(5).
-		Scan(&topPerfs)
-
-	approvedEntries().
-		Select(perfSummarySelect).
-		Group("d.code").
-		Having("AVG(e.achievement_percentage) < ?", 80).
-		Order("avg_achievement ASC").
-		Limit(5).
-		Scan(&lowPerfs)
-
+	for _, sc := range latestScorePerKpi(scores) {
+		summary := KpiPerformanceSummary{
+			KpiCode: sc.Code, KpiType: sc.KpiType, AvgAchievement: sc.Score,
+			Year: sc.Year, PeriodCode: sc.PeriodCode, LastUpdated: sc.LastUpdated,
+		}
+		if sc.Score >= services.EffectiveBand(h.db.WithContext(c.UserContext()), sc.Code).GreenMin {
+			topPerfs = append(topPerfs, summary)
+		} else {
+			lowPerfs = append(lowPerfs, summary)
+		}
+	}
+	sort.SliceStable(topPerfs, func(i, j int) bool { return topPerfs[i].AvgAchievement > topPerfs[j].AvgAchievement })
+	sort.SliceStable(lowPerfs, func(i, j int) bool { return lowPerfs[i].AvgAchievement < lowPerfs[j].AvgAchievement })
+	if len(topPerfs) > 5 {
+		topPerfs = topPerfs[:5]
+	}
+	if len(lowPerfs) > 5 {
+		lowPerfs = lowPerfs[:5]
+	}
 	data.TopPerformers = topPerfs
 	data.LowPerformers = lowPerfs
 
@@ -611,7 +621,7 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 	kpiOpts.Order("d.code").Scan(&data.KpiOptions)
 
 	metricOpts := h.db.WithContext(c.UserContext()).Table("kpi_metrics m").
-		Joins("JOIN "+dictUnion+" ON d.id = m.kpi_id AND d.kpi_type = m.kpi_type").
+		Joins("JOIN " + dictUnion + " ON d.id = m.kpi_id AND d.kpi_type = m.kpi_type").
 		Select("m.id, m.name, d.code AS kpi_code, d.kpi_type").
 		Where("m.deleted_at IS NULL")
 	if kpiType != "" {
@@ -625,33 +635,156 @@ func (h *KpiDashboardHandler) GetDashboard(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "", data)
 }
 
+// GetDashboardTrends returns the per-quarter KPI score trend (see
+// bucketTrends) from approved entries and approved targets, oldest first.
+// GET /kpi/dashboard/trends?kpi_code=&year=
 func (h *KpiDashboardHandler) GetDashboardTrends(c *fiber.Ctx) error {
-	kpiCode := c.Query("kpi_code")
-	yearStr := c.Query("year")
-
-	q := h.db.WithContext(c.UserContext()).Model(&models.KpiPerformance{}).
-		Select("year, quarter, AVG(achievement_pct) as avg_achievement, count(*) as kpi_count")
 	scope := kpiScope(c)
-	q = scope.Apply(q, scope.CodeCondition("kpi_type", "kpi_code"))
-
-	if kpiCode != "" {
-		q = q.Where("kpi_code = ?", kpiCode)
+	dictUnion := kpiDictionaryUnionSQL
+	if !scope.All {
+		dictUnion = "(SELECT * FROM " + kpiDictionaryUnionSQL + " WHERE " + scope.TypedIDCondition("d.kpi_type", "d.id") + ") d"
 	}
-	if yearStr != "" {
+	q := h.db.WithContext(c.UserContext()).Table("kpi_entries e").
+		Joins("JOIN "+dictUnion+" ON d.id = e.kpi_id AND d.kpi_type = e.kpi_type").
+		Where("e.deleted_at IS NULL AND e.status = ?", models.KpiEntryStatusApproved)
+	if kpiCode := c.Query("kpi_code"); kpiCode != "" {
+		q = q.Where("d.code = ?", kpiCode)
+	}
+	if yearStr := c.Query("year"); yearStr != "" {
 		if year, err := strconv.Atoi(yearStr); err == nil {
-			q = q.Where("year = ?", year)
+			q = q.Where("e.reporting_year = ?", year)
 		}
 	}
 
-	var trends []PerformanceTrend
-	if err := q.Where("status = ?", "published").
-		Group("year, quarter").
-		Order("year ASC, quarter ASC").
-		Scan(&trends).Error; err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to load trends")
+	trends := bucketTrends(h.kpiPeriodScores(c, q, ""), 0)
+	sort.Slice(trends, func(i, j int) bool {
+		a, b := trends[i], trends[j]
+		return a.Year < b.Year || (a.Year == b.Year && a.Quarter < b.Quarter)
+	})
+	if trends == nil {
+		trends = []PerformanceTrend{}
+	}
+	return utils.SuccessResponse(c, fiber.StatusOK, "", trends)
+}
+
+// kpiPeriodScore is one KPI's score for one reporting period.
+type kpiPeriodScore struct {
+	KpiID       string
+	KpiType     string
+	Code        string
+	Year        int
+	PeriodCode  string
+	LastUpdated string
+	Score       float64
+}
+
+// kpiPeriodScores scores every (KPI, period) that has approved entries in
+// entries (a kpi_entries e JOIN dictionary d query): the KPI's composite
+// score (services.ComputeCompositeScore, capped at 100) — or, when metricID
+// is set, that metric's own period achievement. Periods without a complete
+// score (a metric missing data or a target) are left out. Only unscoped
+// (organization-less) entries are scored, as on the KPI pages.
+func (h *KpiDashboardHandler) kpiPeriodScores(c *fiber.Ctx, entries *gorm.DB, metricID string) []kpiPeriodScore {
+	db := h.db.WithContext(c.UserContext())
+	var periods []kpiPeriodScore
+	entries.Select("e.kpi_id::text AS kpi_id, e.kpi_type, d.code, e.reporting_year AS year, e.period_code, MAX(e.updated_at)::text AS last_updated").
+		Group("e.kpi_id, e.kpi_type, d.code, e.reporting_year, e.period_code").
+		Scan(&periods)
+
+	var metric *models.KpiMetric
+	if metricID != "" {
+		var m models.KpiMetric
+		if err := db.Where("id = ?", metricID).First(&m).Error; err != nil {
+			return nil
+		}
+		metric = &m
 	}
 
-	return utils.SuccessResponse(c, fiber.StatusOK, "", trends)
+	scored := make([]kpiPeriodScore, 0, len(periods))
+	for _, p := range periods {
+		kpiID, err := uuid.Parse(p.KpiID)
+		if err != nil {
+			continue
+		}
+		if metric != nil {
+			rollup := services.AggregateMetricPeriod(db, metric, kpiID, p.KpiType, p.Year, p.PeriodCode, nil)
+			if !rollup.HasData {
+				continue
+			}
+			target, err := services.FindUsableTarget(db, p.Code, p.KpiType, metric.ID, p.Year, p.PeriodCode, nil)
+			if err != nil {
+				continue
+			}
+			res := services.EvaluateMetricActual(db, p.Code, metric.Direction, *rollup.Actual, target, 100)
+			if !res.Calculable {
+				continue
+			}
+			p.Score = res.Capped
+		} else {
+			result, err := services.ComputeCompositeScore(db, kpiID, p.Code, p.KpiType, p.Year, p.PeriodCode, nil, 100)
+			if err != nil || !result.HasData || result.CappedScore == nil {
+				continue
+			}
+			p.Score = *result.CappedScore
+		}
+		scored = append(scored, p)
+	}
+	return scored
+}
+
+// latestScorePerKpi keeps each KPI's chronologically latest scored period.
+func latestScorePerKpi(scores []kpiPeriodScore) []kpiPeriodScore {
+	latest := map[string]kpiPeriodScore{}
+	var order []string
+	for _, s := range scores {
+		key := s.KpiType + ":" + s.Code
+		cur, ok := latest[key]
+		if !ok {
+			order = append(order, key)
+		}
+		if !ok || services.PeriodSortKey(s.Year, s.PeriodCode) > services.PeriodSortKey(cur.Year, cur.PeriodCode) {
+			latest[key] = s
+		}
+	}
+	out := make([]kpiPeriodScore, 0, len(order))
+	for _, k := range order {
+		out = append(out, latest[k])
+	}
+	return out
+}
+
+// bucketTrends groups KPI period scores by (year, quarter its period ends
+// in) — or into fixedQuarter when non-zero — and averages one score per KPI
+// (its latest period in the bucket) across the KPIs in each bucket.
+func bucketTrends(scores []kpiPeriodScore, fixedQuarter int) []PerformanceTrend {
+	type bucket struct{ year, quarter int }
+	byBucket := map[bucket][]kpiPeriodScore{}
+	for _, s := range scores {
+		q := fixedQuarter
+		if q == 0 {
+			_, end, ok := services.PeriodDateRange(s.Year, s.PeriodCode)
+			if !ok {
+				continue
+			}
+			q = (int(end.Month())-1)/3 + 1
+		}
+		k := bucket{s.Year, q}
+		byBucket[k] = append(byBucket[k], s)
+	}
+	var trends []PerformanceTrend
+	for k, list := range byBucket {
+		perKpi := latestScorePerKpi(list)
+		var sum float64
+		for _, s := range perKpi {
+			sum += s.Score
+		}
+		trends = append(trends, PerformanceTrend{
+			Year: k.year, Quarter: k.quarter,
+			AvgAchievement: math.Round(sum/float64(len(perKpi))*100) / 100,
+			KpiCount:       int64(len(perKpi)),
+		})
+	}
+	return trends
 }
 
 func (h *KpiDashboardHandler) GetKpiCardDefinitions(c *fiber.Ctx) error {

@@ -93,6 +93,11 @@ func (imp *masterDataImporter) revalidateCommit(tx *gorm.DB) error {
 			continue
 		}
 		if r.action == kpiImportActionUpdate {
+			if n := imp.ambiguousCount(r); n > 1 {
+				r.reject("Name (English)", fmt.Sprintf("%d existing records now match this row; it cannot be updated unambiguously.", n))
+				changed = true
+				continue
+			}
 			if r.Existing == nil || (found != nil && found.ID != r.Existing.ID) {
 				r.reject("Name (English)", "Another record now uses this name or code. Reload and retry.")
 				changed = true
@@ -190,6 +195,12 @@ func (imp *masterDataImporter) createRec(tx *gorm.DB, r *masterImportRec) error 
 		}
 		return imp.forceInactive(tx, &models.Domain{}, item.ID, v.IsActive)
 	case KpiMasterAwardCriterion:
+		if id, ok := imp.deletedCriteria[v.CriterionNo]; ok {
+			// Restore the soft-deleted criterion that still holds this number.
+			return wrap("award criterion", imp.restore(tx, &models.AwardCriterion{}, id, map[string]interface{}{
+				"name_en": v.NameEn, "name_ar": v.NameAr, "is_active": v.IsActive,
+			}))
+		}
 		item := &models.AwardCriterion{
 			CriterionNo: v.CriterionNo, NameEn: v.NameEn, NameAr: v.NameAr, IsActive: v.IsActive,
 		}
@@ -216,6 +227,12 @@ func (imp *masterDataImporter) createRec(tx *gorm.DB, r *masterImportRec) error 
 		}
 		return imp.forceInactive(tx, &models.KpiDataSource{}, item.ID, v.IsActive)
 	case KpiMasterSegmentationDimension:
+		if id, ok := imp.deletedDims[v.NameEn]; ok {
+			// Restore the soft-deleted dimension that still holds this name.
+			return wrap("segmentation dimension", imp.restore(tx, &models.KpiSegmentationDimension{}, id, map[string]interface{}{
+				"name_ar": v.NameAr, "is_active": v.IsActive,
+			}))
+		}
 		item := &models.KpiSegmentationDimension{NameEn: v.NameEn, NameAr: v.NameAr, IsActive: v.IsActive}
 		if err := wrap("segmentation dimension", create.Create(item).Error); err != nil {
 			return err
@@ -231,6 +248,19 @@ func (imp *masterDataImporter) createRec(tx *gorm.DB, r *masterImportRec) error 
 		return imp.forceInactive(tx, &models.KpiOrganization{}, item.ID, v.IsActive)
 	}
 	return fmt.Errorf("unsupported master-data entity type %q", r.EntityType)
+}
+
+// restore un-deletes a soft-deleted row and applies updates to it.
+func (imp *masterDataImporter) restore(tx *gorm.DB, model interface{}, id uuid.UUID, updates map[string]interface{}) error {
+	updates["deleted_at"] = nil
+	res := tx.Unscoped().Model(model).Where("id = ?", id).Updates(updates)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return fmt.Errorf("the deleted record to restore no longer exists")
+	}
+	return nil
 }
 
 // forceInactive writes false explicitly because GORM treats a false zero value

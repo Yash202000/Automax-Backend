@@ -28,22 +28,22 @@ func NewKpiComposedHandler(db *gorm.DB) *KpiComposedHandler {
 // kpiCardBase is the common shape extracted from whichever of the three
 // dictionary tables the requested KPI lives in.
 type kpiCardBase struct {
-	Code               string
-	NameEn             string
-	NameAr             string
-	DescriptionEn      string
-	DescriptionAr      string
-	ActivationStatus   string
-	Lifecycle          string
-	OwnerLabel         string
-	OwnerType          string
-	PillarEnablerLabel string
-	StrategicGoalLabel string
-	CriterionLabel     string
-	ReportingFrequency string
-	DataSource         string
+	Code                    string
+	NameEn                  string
+	NameAr                  string
+	DescriptionEn           string
+	DescriptionAr           string
+	ActivationStatus        string
+	Lifecycle               string
+	OwnerLabel              string
+	OwnerType               string
+	PillarEnablerLabel      string
+	StrategicGoalLabel      string
+	CriterionLabel          string
+	ReportingFrequency      string
+	DataSource              string
 	RelatedDepartmentsLabel string
-	Formula            string
+	Formula                 string
 	Polarity                string
 	UnitOfMeasure           string
 	Baseline                float64
@@ -193,16 +193,7 @@ func relatedDeptLabel(depts []models.Department) string {
 }
 
 func (h *KpiComposedHandler) effectiveBand(ctx *fiber.Ctx, kpiCode string) models.KpiPerformanceBandResponse {
-	db := h.db.WithContext(ctx.UserContext())
-	var override models.KpiPerformanceBand
-	if err := db.Where("kpi_code = ?", kpiCode).First(&override).Error; err == nil {
-		return override.ToResponse()
-	}
-	var global models.KpiPerformanceBand
-	if err := db.Where("kpi_code IS NULL").Order("created_at ASC").First(&global).Error; err == nil {
-		return global.ToResponse()
-	}
-	return models.DefaultKpiPerformanceBand
+	return services.EffectiveBand(h.db.WithContext(ctx.UserContext()), kpiCode)
 }
 
 // KpiCardTargetRow is one row of the Card's "Target Plan" table.
@@ -217,28 +208,28 @@ type KpiCardTargetRow struct {
 // KpiCardResponse composes dictionary fields + target plan + performance
 // bands into the Excel's one-page "KPI Card" view.
 type KpiCardResponse struct {
-	Code               string                       `json:"code"`
-	Type               string                       `json:"type"`
-	NameEn             string                       `json:"name_en"`
-	NameAr             string                       `json:"name_ar"`
-	DescriptionEn      string                       `json:"description_en"`
-	DescriptionAr      string                       `json:"description_ar"`
-	ActivationStatus   string                       `json:"activation_status"`
-	Lifecycle          string                       `json:"lifecycle"`
-	OwnerLabel         string                       `json:"owner_label"`
-	OwnerType          string                       `json:"owner_type"`
-	PillarEnablerLabel string                       `json:"pillar_enabler_label"`
-	StrategicGoalLabel string                       `json:"strategic_goal_label"`
-	CriterionLabel     string                       `json:"criterion_label"`
-	ReportingFrequency string                       `json:"reporting_frequency"`
-	DataSource         string                       `json:"data_source"`
-	RelatedDepartmentsLabel string                       `json:"related_departments_label"`
-	Formula            string                       `json:"formula"`
-	Polarity           string                       `json:"polarity"`
-	UnitOfMeasure      string                       `json:"unit_of_measure"`
-	Baseline           float64                      `json:"baseline"`
-	TargetPlan         []KpiCardTargetRow           `json:"target_plan"`
-	Bands              models.KpiPerformanceBandResponse `json:"bands"`
+	Code                    string                            `json:"code"`
+	Type                    string                            `json:"type"`
+	NameEn                  string                            `json:"name_en"`
+	NameAr                  string                            `json:"name_ar"`
+	DescriptionEn           string                            `json:"description_en"`
+	DescriptionAr           string                            `json:"description_ar"`
+	ActivationStatus        string                            `json:"activation_status"`
+	Lifecycle               string                            `json:"lifecycle"`
+	OwnerLabel              string                            `json:"owner_label"`
+	OwnerType               string                            `json:"owner_type"`
+	PillarEnablerLabel      string                            `json:"pillar_enabler_label"`
+	StrategicGoalLabel      string                            `json:"strategic_goal_label"`
+	CriterionLabel          string                            `json:"criterion_label"`
+	ReportingFrequency      string                            `json:"reporting_frequency"`
+	DataSource              string                            `json:"data_source"`
+	RelatedDepartmentsLabel string                            `json:"related_departments_label"`
+	Formula                 string                            `json:"formula"`
+	Polarity                string                            `json:"polarity"`
+	UnitOfMeasure           string                            `json:"unit_of_measure"`
+	Baseline                float64                           `json:"baseline"`
+	TargetPlan              []KpiCardTargetRow                `json:"target_plan"`
+	Bands                   models.KpiPerformanceBandResponse `json:"bands"`
 }
 
 // GetKpiCard returns the composed one-pager for a single KPI.
@@ -287,53 +278,14 @@ func (h *KpiComposedHandler) GetKpiCard(c *fiber.Ctx) error {
 }
 
 // KpiAnnualRollupRow is one year's Target/Actual/Achievement rollup.
-type KpiAnnualRollupRow struct {
-	Year           int      `json:"year"`
-	Target         *float64 `json:"target"`
-	Actual         *float64 `json:"actual"`
-	AchievementPct *float64 `json:"achievement_pct"`
-	IsDerived      bool     `json:"is_derived"`
-}
+type KpiAnnualRollupRow = services.AnnualRollupRow
 
-// computeAnnualRollup builds one row per year that has any performance data,
-// preferring an explicit period_type='annual' KpiPerformance row for that
-// year; otherwise it averages the KPI's sub-annual entries for that year and
-// flags the row as derived.
-func (h *KpiComposedHandler) computeAnnualRollup(ctx *fiber.Ctx, kpiCode, kpiType, polarity string) []KpiAnnualRollupRow {
-	db := h.db.WithContext(ctx.UserContext())
-
-	var years []int
-	db.Model(&models.KpiPerformance{}).
-		Where("kpi_code = ? AND kpi_type = ?", kpiCode, kpiType).
-		Distinct().Order("year ASC").Pluck("year", &years)
-
-	rows := make([]KpiAnnualRollupRow, 0, len(years))
-	for _, year := range years {
-		var annual models.KpiPerformance
-		err := db.Where("kpi_code = ? AND kpi_type = ? AND year = ? AND period_type = ?", kpiCode, kpiType, year, "annual").
-			First(&annual).Error
-		if err == nil {
-			target, actual, pct := annual.Target, annual.Actual, annual.AchievementPct
-			rows = append(rows, KpiAnnualRollupRow{Year: year, Target: &target, Actual: &actual, AchievementPct: &pct, IsDerived: false})
-			continue
-		}
-
-		var subRows []models.KpiPerformance
-		db.Where("kpi_code = ? AND kpi_type = ? AND year = ? AND period_type != ?", kpiCode, kpiType, year, "annual").Find(&subRows)
-		if len(subRows) == 0 {
-			continue
-		}
-		var targetSum, actualSum float64
-		for _, r := range subRows {
-			targetSum += r.Target
-			actualSum += r.Actual
-		}
-		avgTarget := targetSum / float64(len(subRows))
-		avgActual := actualSum / float64(len(subRows))
-		pct := services.CalculateAchievement(avgActual, avgTarget, polarity)
-		rows = append(rows, KpiAnnualRollupRow{Year: year, Target: &avgTarget, Actual: &avgActual, AchievementPct: &pct, IsDerived: true})
-	}
-	return rows
+// computeAnnualRollup builds one row per year from the KPI's Approved
+// entries and approved/locked targets (services.ComputeAnnualRollups) — the
+// legacy kpi_performances table is no longer read, so draft/unpublished
+// legacy rows can't change the result.
+func (h *KpiComposedHandler) computeAnnualRollup(ctx *fiber.Ctx, kpiID uuid.UUID, kpiCode, kpiType string) []KpiAnnualRollupRow {
+	return services.ComputeAnnualRollups(h.db.WithContext(ctx.UserContext()), kpiID, kpiCode, kpiType)
 }
 
 // GetKpiAnnualRollup returns the per-year Target/Actual/Achievement rollup for
@@ -351,19 +303,19 @@ func (h *KpiComposedHandler) GetKpiAnnualRollup(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
-	rows := h.computeAnnualRollup(c, base.Code, kpiType, base.Polarity)
+	rows := h.computeAnnualRollup(c, id, base.Code, kpiType)
 	return utils.SuccessResponse(c, fiber.StatusOK, "", rows)
 }
 
 // KpiSingleDashboardResponse is the per-KPI dashboard view: header + annual
 // rollup + band legend + latest narrative + benchmark summary.
 type KpiSingleDashboardResponse struct {
-	Card             KpiCardResponse      `json:"card"`
-	AnnualRollup     []KpiAnnualRollupRow `json:"annual_rollup"`
-	CurveDescription        string               `json:"curve_description"`
-	ShortcomingsDescription string               `json:"shortcomings_description"`
-	ProposedImprovement     string               `json:"proposed_improvement"`
-	Benchmarks       []models.KpiBenchmarkResponse `json:"benchmarks"`
+	Card                    KpiCardResponse               `json:"card"`
+	AnnualRollup            []KpiAnnualRollupRow          `json:"annual_rollup"`
+	CurveDescription        string                        `json:"curve_description"`
+	ShortcomingsDescription string                        `json:"shortcomings_description"`
+	ProposedImprovement     string                        `json:"proposed_improvement"`
+	Benchmarks              []models.KpiBenchmarkResponse `json:"benchmarks"`
 }
 
 // GetKpiDashboard returns the composed per-KPI dashboard.
@@ -407,7 +359,7 @@ func (h *KpiComposedHandler) GetKpiDashboard(c *fiber.Ctx) error {
 		TargetPlan: targetPlan, Bands: h.effectiveBand(c, base.Code),
 	}
 
-	rollup := h.computeAnnualRollup(c, base.Code, kpiType, base.Polarity)
+	rollup := h.computeAnnualRollup(c, id, base.Code, kpiType)
 
 	var benchmarks []models.KpiBenchmark
 	h.db.WithContext(c.UserContext()).
@@ -558,25 +510,15 @@ func buildMetricPeriodRollupMap(db *gorm.DB, metric *models.KpiMetric, kpiID uui
 		"sum_denominator": rollup.SumDenominator,
 	}
 
-	targetQuery := db.Where(
-		"kpi_code = ? AND kpi_type = ? AND metric_id = ? AND target_year = ? AND period_code = ? AND target_status = 'approved'",
-		kpiCode, kpiType, metric.ID, year, periodCode,
-	)
-	if organizationID != nil {
-		targetQuery = targetQuery.Where("organization_id = ?", *organizationID)
-	} else {
-		targetQuery = targetQuery.Where("organization_id IS NULL")
-	}
-	var target models.KpiAnnualTarget
-	if err := targetQuery.Order("version DESC").First(&target).Error; err == nil {
+	if target, err := services.FindUsableTarget(db, kpiCode, kpiType, metric.ID, year, periodCode, organizationID); err == nil {
 		resp["target"] = target.TargetValue
 		if rollup.HasData {
-			achievement := services.ComputeAchievementRawCapped(*rollup.Actual, target.TargetValue, metric.Direction, 100)
-			if achievement != nil {
-				resp["achievement_raw"] = achievement.Raw
-				resp["achievement_capped"] = achievement.Capped
-				resp["performance_status"] = services.PerformanceStatusFor(achievement.Capped)
+			res := services.EvaluateMetricActual(db, kpiCode, metric.Direction, *rollup.Actual, target, 100)
+			if res.Calculable {
+				resp["achievement_raw"] = res.Raw
+				resp["achievement_capped"] = res.Capped
 			}
+			resp["performance_status"] = res.Status
 		}
 	}
 

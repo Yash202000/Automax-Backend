@@ -538,7 +538,7 @@ func (r *GoalCreateRequest) Validate() error {
 
 type GoalUpdateRequest struct {
 	Title        *string    `json:"title" validate:"omitempty,max=255"`
-	Description  *string    `json:"description"`
+	Description  *string    `json:"description" validate:"omitempty"`
 	Category     *string    `json:"category" validate:"omitempty,max=100"`
 	CategoryID   *uuid.UUID `json:"category_id"`
 	Priority     *string    `json:"priority" validate:"omitempty,oneof=Critical High Medium Low"`
@@ -593,9 +593,12 @@ type GoalMetricCreateRequest struct {
 	Unit          string  `json:"unit" validate:"max=50"`
 	BaselineValue float64 `json:"baseline_value"`
 	CurrentValue  float64 `json:"current_value"`
-	TargetValue   float64 `json:"target_value" validate:"required"`
-	Weight        float64 `json:"weight" validate:"gt=0"`
-	Formula       string  `json:"formula" validate:"max=500"`
+	// TargetValue is a pointer so an explicit 0 is accepted while a missing
+	// value is still rejected by "required".
+	TargetValue *float64 `json:"target_value" validate:"required"`
+	// Weight is optional (defaults to 1) but, when sent, must be > 0.
+	Weight  *float64 `json:"weight" validate:"omitempty,gt=0"`
+	Formula string   `json:"formula" validate:"max=500"`
 }
 
 type GoalMetricUpdateRequest struct {
@@ -609,7 +612,8 @@ type GoalMetricUpdateRequest struct {
 }
 
 type MetricValueUpdateRequest struct {
-	Value   float64 `json:"value" validate:"required"`
+	// Value is a pointer so 0 is a valid reading while a missing value is rejected.
+	Value   *float64 `json:"value" validate:"required"`
 	Comment string  `json:"comment"`
 }
 
@@ -838,6 +842,8 @@ type GoalImportResponse struct {
 	WarningCount   int               `json:"warning_count"`
 	Rows           []ImportRowResult `json:"rows"`
 	CreatedGoalIDs []string          `json:"created_goal_ids,omitempty"`
+	// UpdatedGoalIDs lists existing goals updated via the ID column.
+	UpdatedGoalIDs []string `json:"updated_goal_ids,omitempty"`
 }
 
 // ════════════════════════════════════════════════════
@@ -854,6 +860,10 @@ type MetricImportBatchFilter struct {
 	Page   int    `query:"page"`
 	Limit  int    `query:"limit"`
 	Status string `query:"status"`
+	// UserID restricts the listing to batches the user imported, is assigned
+	// to, or whose primary goal is visible to the user (same rule as the goal
+	// list). Set by the service layer for non-super-admins; never from query.
+	UserID *uuid.UUID `query:"-"`
 }
 
 type MetricImportValidationItem struct {
@@ -962,12 +972,12 @@ type BulkActionResponse struct {
 type CheckInCreateRequest struct {
 	Status        string                `json:"status" validate:"required,oneof=on_track at_risk behind blocked"`
 	Content       string                `json:"content" validate:"required,min=1"`
-	MetricUpdates []CheckInMetricUpdate `json:"metric_updates,omitempty"`
+	MetricUpdates []CheckInMetricUpdate `json:"metric_updates,omitempty" validate:"omitempty,dive"`
 }
 
 type CheckInMetricUpdate struct {
 	MetricID uuid.UUID `json:"metric_id" validate:"required"`
-	Value    float64   `json:"value"`
+	Value    *float64  `json:"value" validate:"required"`
 	Comment  string    `json:"comment"`
 }
 

@@ -7,7 +7,10 @@ package services
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +19,7 @@ import (
 	"github.com/automax/backend/internal/utils"
 	"github.com/google/uuid"
 	"github.com/xuri/excelize/v2"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -97,10 +101,20 @@ type kpiTargetsImporter struct {
 	existingKpis   map[string]*existingKpi // type|CODE
 	kpiByCode      map[string]string       // CODE -> type
 	metricsByKpi   map[string][]*models.KpiMetric
-	metricByCode   map[string]*models.KpiMetric // type|kpiID|lower(code)
-	metricByName   map[string]*models.KpiMetric // type|kpiID|lower(name)
-	existingTarget map[string]*models.KpiAnnualTarget
-	allTargets     []*models.KpiAnnualTarget // version-1 rows, for Milestone overlap checks
+	metricByCode   map[string]*models.KpiMetric       // type|kpiID|lower(code)
+	metricByName   map[string]*models.KpiMetric       // type|kpiID|lower(name)
+	existingTarget map[string]*models.KpiAnnualTarget // live version per identity
+	allTargets     []*models.KpiAnnualTarget          // every version, for Milestone overlap checks
+
+	access      *KpiAccessService
+	accessCache map[string]string // type|CODE -> "" when allowed, else the rejection reason
+
+	// onlySheet limits the import to one worksheet (the combined KPI
+	// workbook's Targets sheet); "" finds the targets sheet.
+	onlySheet string
+	// createdKpis (type|kpiID): KPIs created by the same workbook import —
+	// the importer may set their targets.
+	createdKpis map[string]bool
 }
 
 // ─── Entry points ───────────────────────────────────────────────────────────
@@ -130,11 +144,32 @@ func CommitKpiTargetsImport(ctx context.Context, db *gorm.DB, data []byte, fileN
 	return imp.res, nil
 }
 
+func validateKpiTargetImportOptions(opts KpiImportOptions) string {
+	var problems []string
+	switch opts.ExistingMode {
+	case "", KpiImportExistingSkip, KpiImportExistingUpdate:
+	default:
+		problems = append(problems, fmt.Sprintf("existing_mode %q is not valid (use %q or %q).", opts.ExistingMode, KpiImportExistingSkip, KpiImportExistingUpdate))
+	}
+	switch opts.ErrorMode {
+	case "", KpiImportErrorsSkipInvalid, KpiImportErrorsAbort:
+	default:
+		problems = append(problems, fmt.Sprintf("error_mode %q is not valid (use %q or %q).", opts.ErrorMode, KpiImportErrorsSkipInvalid, KpiImportErrorsAbort))
+	}
+	return strings.Join(problems, " ")
+}
+
 func buildKpiTargetsPlan(ctx context.Context, db *gorm.DB, data []byte, fileName string, userID uuid.UUID, opts KpiImportOptions) (*kpiTargetsImporter, error) {
+	return buildKpiTargetsPlanSheet(ctx, db, data, fileName, userID, opts, "", nil)
+}
+
+func buildKpiTargetsPlanSheet(ctx context.Context, db *gorm.DB, data []byte, fileName string, userID uuid.UUID, opts KpiImportOptions, onlySheet string, createdKpis map[string]bool) (*kpiTargetsImporter, error) {
 	imp := &kpiTargetsImporter{
-		db:     db,
-		ctx:    ctx,
-		userID: userID,
+		db:          db,
+		ctx:         ctx,
+		userID:      userID,
+		onlySheet:   onlySheet,
+		createdKpis: createdKpis,
 		res: &KpiImportResult{
 			FileName: fileName,
 			Errors:   []KpiImportIssue{},
@@ -142,9 +177,17 @@ func buildKpiTargetsPlan(ctx context.Context, db *gorm.DB, data []byte, fileName
 			Items:    []KpiImportItem{},
 		},
 	}
+	// An unknown mode must not silently fall back to a default: "update"
+	// mistyped as "updte" would otherwise quietly skip every existing row.
+	optsErr := validateKpiTargetImportOptions(opts)
 	imp.opts = opts
 	imp.opts.normalize()
 	imp.res.Options = imp.opts
+	if optsErr != "" {
+		imp.structural("", optsErr)
+		imp.finalize()
+		return imp, nil
+	}
 
 	if err := imp.parseWorkbook(data); err != nil {
 		return nil, err
@@ -300,7 +343,9 @@ func buildKpiTargetsInstructions() *utils.InstructionConfig {
 func (imp *kpiTargetsImporter) parseWorkbook(data []byte) error {
 	xf, err := excelize.OpenReader(bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("the file is not a valid .xlsx workbook: %w", err)
+		// Reported like any other structural problem, not as a server error.
+		imp.structural("", "The uploaded file is not a valid Excel (.xlsx) workbook — download the template, fill it in and save it as .xlsx.")
+		return nil
 	}
 	defer xf.Close()
 
@@ -340,6 +385,9 @@ func (imp *kpiTargetsImporter) locateSheet(xf *excelize.File) (string, [][]strin
 	for _, name := range xf.GetSheetList() {
 		normalized := normHeader(name)
 		if normalized == normHeader("Instructions") || normalized == "تعليمات" {
+			continue
+		}
+		if imp.onlySheet != "" && name != imp.onlySheet {
 			continue
 		}
 		rows, err := xf.GetRows(name, excelize.Options{RawCellValue: true})
@@ -502,10 +550,20 @@ func (imp *kpiTargetsImporter) parseTargetRow(row int, raw func(string) string) 
 	if periodRaw != "" && isMilestone {
 		r.reject("Period Code", "Period Code must be blank for a Milestone / Ad Hoc target — it is derived from Period Start and Period End.")
 	} else if periodRaw != "" {
-		periodRaw = strings.ToLower(strings.TrimSpace(periodRaw))
-		r.Target.PeriodCode = periodRaw
 		if IsCustomPeriodCode(periodRaw) {
 			r.reject("Period Code", "Custom period codes are only allowed for Milestone / Ad Hoc targets; fill Period Start and Period End instead.")
+		} else if code, year, err := CanonicalTargetPeriodCode(periodRaw, r.Target.TargetYear); err != nil {
+			r.reject("Period Code", err.Error()+".")
+		} else {
+			r.Target.PeriodCode = code
+			if r.Target.TargetYear == 0 && yearRaw == "" && year != 0 {
+				// A year-embedded code ("2026-Q3") carries its own year.
+				if err := ValidateKpiTargetYear(year); err != nil {
+					r.reject("Target Year", err.Error()+".")
+				} else {
+					r.Target.TargetYear = year
+				}
+			}
 		}
 	}
 
@@ -535,6 +593,9 @@ func (imp *kpiTargetsImporter) parseTargetRow(row int, raw func(string) string) 
 			r.Target.PeriodEnd = end
 			r.Target.PeriodCode = CustomPeriodCode(*start, *end)
 			r.Target.TargetYear = start.Year()
+			if err := validateMilestoneYears(*start, *end); err != nil {
+				r.reject("Period Start", err.Error()+".")
+			}
 		}
 	} else {
 		r.Target.PeriodStart = start
@@ -547,8 +608,9 @@ func (imp *kpiTargetsImporter) parseTargetRow(row int, raw func(string) string) 
 		}
 	}
 
+	// A blank Target Value is checked once the metric is known: only an
+	// Informational metric's target may omit it (see validateRows).
 	if rawValue := read("target_value"); rawValue == "" {
-		r.reject("Target Value", "Target Value is required.")
 	} else if v, ok := parseMetricFloat(rawValue); !ok {
 		r.reject("Target Value", fmt.Sprintf("Target Value %q must be a number.", rawValue))
 	} else {
@@ -579,10 +641,6 @@ func (imp *kpiTargetsImporter) parseTargetRow(row int, raw func(string) string) 
 			*f.target = &value
 		}
 	}
-	if r.Target.TargetRangeMin != nil && r.Target.TargetRangeMax != nil && *r.Target.TargetRangeMax < *r.Target.TargetRangeMin {
-		r.reject("Target Range Max", "Target Range Max cannot be lower than Target Range Min.")
-	}
-
 	if rawValue := read("effective_from"); rawValue != "" {
 		if v, ok := parseMetricDate(rawValue); !ok {
 			r.reject("Effective From", fmt.Sprintf("Effective From %q must be a date in YYYY-MM-DD format.", rawValue))
@@ -601,8 +659,8 @@ func (imp *kpiTargetsImporter) parseTargetRow(row int, raw func(string) string) 
 		r.reject("Effective To", "Effective To cannot be earlier than Effective From.")
 	}
 
-	if n := len([]rune(r.Target.TargetRationale)); n > 4000 {
-		r.reject("Target Rationale", fmt.Sprintf("Target Rationale must be at most 4000 characters (got %d).", n))
+	if n := len([]rune(r.Target.TargetRationale)); n > models.KpiTargetRationaleMaxLen {
+		r.reject("Target Rationale", fmt.Sprintf("Target Rationale must be at most %d characters (got %d).", models.KpiTargetRationaleMaxLen, n))
 	}
 	return r
 }
@@ -660,19 +718,50 @@ func (imp *kpiTargetsImporter) loadExisting(db *gorm.DB) error {
 		}
 	}
 
+	// Every version is loaded: a key whose v1 is superseded is represented
+	// by its live revision, not reported as missing or as the stale v1.
 	var targets []models.KpiAnnualTarget
-	if err := db.Where("version = ?", 1).Find(&targets).Error; err != nil {
+	if err := db.Order("version").Find(&targets).Error; err != nil {
 		return err
 	}
 	for i := range targets {
 		t := &targets[i]
 		imp.allTargets = append(imp.allTargets, t)
-		imp.existingTarget[kpiTargetIdentity(t.KpiType, t.KpiCode, t.TargetYear, t.PeriodCode, t.MetricID, t.OrganizationID)] = t
+		key := kpiTargetIdentity(t.KpiType, t.KpiCode, t.TargetYear, t.PeriodCode, t.MetricID, t.OrganizationID, KpiTargetSegmentationKey(t.SegmentationValues))
+		if cur, ok := imp.existingTarget[key]; !ok || liveTargetBefore(t, cur) {
+			imp.existingTarget[key] = t
+		}
 	}
 	return nil
 }
 
-func kpiTargetIdentity(kpiType, kpiCode string, year int, periodCode string, metricID, orgID *uuid.UUID) string {
+// liveTargetBefore reports whether a should represent its identity instead
+// of b: a non-superseded version wins, then the higher version.
+func liveTargetBefore(a, b *models.KpiAnnualTarget) bool {
+	aSup, bSup := a.TargetStatus == models.KpiTargetStatusSuperseded, b.TargetStatus == models.KpiTargetStatusSuperseded
+	if aSup != bSup {
+		return bSup
+	}
+	return a.Version > b.Version
+}
+
+// validateMilestoneYears keeps a Milestone's dates inside the target year range.
+func validateMilestoneYears(start, end time.Time) error {
+	if err := ValidateKpiTargetYear(start.Year()); err != nil {
+		return fmt.Errorf("Period Start year %d is outside %d–%d", start.Year(), KpiTargetMinYear, KpiTargetMaxYear)
+	}
+	if err := ValidateKpiTargetYear(end.Year()); err != nil {
+		return fmt.Errorf("Period End year %d is outside %d–%d", end.Year(), KpiTargetMinYear, KpiTargetMaxYear)
+	}
+	return nil
+}
+
+// ValidateMilestoneYears is validateMilestoneYears for the Targets API.
+func ValidateMilestoneYears(start, end time.Time) error { return validateMilestoneYears(start, end) }
+
+// kpiTargetIdentity is a target's BR-01 key without Version: KPI, year,
+// period, metric, organization and segment.
+func kpiTargetIdentity(kpiType, kpiCode string, year int, periodCode string, metricID, orgID *uuid.UUID, segment string) string {
 	metric := ""
 	if metricID != nil {
 		metric = metricID.String()
@@ -685,7 +774,34 @@ func kpiTargetIdentity(kpiType, kpiCode string, year int, periodCode string, met
 		strings.ToLower(strings.TrimSpace(kpiCode)) + "|" +
 		strconv.Itoa(year) + "|" +
 		strings.ToLower(strings.TrimSpace(periodCode)) + "|" +
-		metric + "|" + org
+		metric + "|" + org + "|" + segment
+}
+
+// canManageTargets checks the importing user's per-KPI access, the same rule
+// the Targets API route applies (KpiActionManageTargets; the Super Admin
+// passes). Returns "" when allowed, else the rejection message.
+func (imp *kpiTargetsImporter) canManageTargets(ek *existingKpi) string {
+	key := ek.Type + "|" + strings.ToUpper(ek.Code)
+	if imp.createdKpis[ek.Type+"|"+ek.ID.String()] {
+		return "" // created by this workbook import
+	}
+	if imp.access == nil {
+		imp.access = NewKpiAccessService(imp.db)
+		imp.accessCache = map[string]string{}
+	}
+	if why, ok := imp.accessCache[key]; ok {
+		return why
+	}
+	why := ""
+	allowed, err := imp.access.Can(imp.ctx, imp.userID, ek.Type, ek.ID, KpiActionManageTargets)
+	switch {
+	case err != nil:
+		why = fmt.Sprintf("Your access to KPI %s could not be checked; try again.", ek.Code)
+	case !allowed:
+		why = fmt.Sprintf("You are not allowed to manage targets of KPI %s — only its KPI Owner (or the Super Admin) can.", ek.Code)
+	}
+	imp.accessCache[key] = why
+	return why
 }
 
 // ─── Row validation ─────────────────────────────────────────────────────────
@@ -711,6 +827,10 @@ func (imp *kpiTargetsImporter) validateRows() {
 		r.KpiID = ek.ID
 		r.Target.KpiCode = ek.Code
 		r.Target.KpiType = ek.Type
+		if why := imp.canManageTargets(ek); why != "" {
+			r.reject("KPI Code", why)
+			continue
+		}
 
 		group := r.KpiType + "|" + r.KpiID.String()
 		metric, metricErr := imp.resolveMetric(r, group)
@@ -730,32 +850,26 @@ func (imp *kpiTargetsImporter) validateRows() {
 			r.Target.ReportingFrequencySnapshot = metric.ReportingFrequency
 		}
 
-		frequency := GetKPIReportingFrequency(imp.db.WithContext(imp.ctx), ek.Code, ek.Type)
-		var periodErr error
-		if r.Target.TargetType == "Milestone / Ad Hoc" {
-			if metric != nil {
-				periodErr = ValidateTargetPeriodForMetric(metric, frequency, r.Target.TargetYear, r.Target.PeriodCode)
-			}
-		} else if metric != nil {
-			periodErr = ValidateTargetPeriodForMetric(metric, frequency, r.Target.TargetYear, r.Target.PeriodCode)
-		} else {
-			periodType := "annual"
-			switch frequency {
-			case models.KPIFrequencyMonthly:
-				periodType = "month"
-			case models.KPIFrequencyQuarterly:
-				periodType = "quarter"
-			case models.KPIFrequencySemiAnnual:
-				periodType = "semi_annual"
-			}
-			periodErr = ValidatePeriod(frequency, periodType, r.Target.PeriodCode)
+		db := imp.db.WithContext(imp.ctx)
+		frequency := GetKPIReportingFrequency(db, ek.Code, ek.Type)
+		if err := ValidateKpiTargetPeriod(metric, frequency, r.Target.TargetType, r.Target.TargetYear, r.Target.PeriodCode); err != nil {
+			r.reject("Period Code", err.Error())
+			continue
 		}
-		if periodErr != nil {
-			r.reject("Period Code", periodErr.Error())
+		if r.Target.TargetType != models.KpiTargetTypeMilestone {
+			// Period dates always follow the period itself.
+			if start, end, ok := PeriodDateRange(r.Target.TargetYear, r.Target.PeriodCode); ok {
+				r.Target.PeriodStart, r.Target.PeriodEnd = &start, &end
+			}
+		}
+
+		direction := KpiTargetDirection(db, ek.Code, ek.Type, metric)
+		if !r.Set["target_value"] && KpiTargetValueRequired(direction) {
+			r.reject("Target Value", "Target Value is required.")
 			continue
 		}
 
-		identity := kpiTargetIdentity(ek.Type, ek.Code, r.Target.TargetYear, r.Target.PeriodCode, r.MetricID, nil)
+		identity := kpiTargetIdentity(ek.Type, ek.Code, r.Target.TargetYear, r.Target.PeriodCode, r.MetricID, nil, "")
 		if row, dup := accepted[identity]; dup {
 			r.reject("Period Code", fmt.Sprintf("Duplicate target in this file — row %d targets the same KPI, metric and period.", row))
 			continue
@@ -788,11 +902,40 @@ func (imp *kpiTargetsImporter) validateRows() {
 			}
 		}
 		if !r.Rejected {
+			imp.normalizeThresholds(r, direction)
+		}
+		if !r.Rejected {
 			accepted[identity] = r.Row
 			if r.Target.TargetType == models.KpiTargetTypeMilestone {
 				acceptedMilestones = append(acceptedMilestones, r)
 			}
 		}
+	}
+}
+
+// normalizeThresholds applies the shared threshold rules to the (merged) row
+// and warns about values its threshold mode does not use.
+func (imp *kpiTargetsImporter) normalizeThresholds(r *kpiTargetImportRec, direction string) {
+	fields := []string{"Excellent Threshold", "Achieved Threshold", "Warning Threshold", "Target Range Min", "Target Range Max"}
+	values := func() []*float64 {
+		return []*float64{r.Target.ExcellentThreshold, r.Target.AchievedThreshold, r.Target.WarningThreshold, r.Target.TargetRangeMin, r.Target.TargetRangeMax}
+	}
+	keys := []string{"excellent_threshold", "achieved_threshold", "warning_threshold", "target_range_min", "target_range_max"}
+	before := values()
+	if err := NormalizeKpiTargetThresholds(r.Target, direction); err != nil {
+		r.reject("Threshold Mode", err.Error()+".")
+		return
+	}
+	after := values()
+	var dropped []string
+	for i := range fields {
+		if before[i] != nil && after[i] == nil && r.Set[keys[i]] {
+			dropped = append(dropped, fields[i])
+		}
+	}
+	if len(dropped) > 0 {
+		imp.warn(imp.sheet, r.Row, r.recordID(), "Threshold Mode",
+			fmt.Sprintf("%s ignored: Threshold Mode %q does not use them.", strings.Join(dropped, ", "), r.Target.ThresholdMode))
 	}
 }
 
@@ -806,7 +949,8 @@ func (imp *kpiTargetsImporter) milestoneOverlap(r *kpiTargetImportRec, matched *
 		if matched != nil && other.ID == matched.ID {
 			continue
 		}
-		if other.OrganizationID != nil || !imp.sameTargetScope(r, other.KpiType, other.KpiCode, other.MetricID) {
+		if other.OrganizationID != nil || KpiTargetSegmentationKey(other.SegmentationValues) != "" ||
+			!imp.sameTargetScope(r, other.KpiType, other.KpiCode, other.MetricID) {
 			continue
 		}
 		if other.TargetStatus == "rejected" || other.TargetStatus == "superseded" {
@@ -1085,3 +1229,361 @@ var (
 		mc("submitted", "مقدم", "submitted for approval"),
 	}
 )
+
+// ─── Shared target rules (Targets API + import) ─────────────────────────────
+//
+// Everything below is used by both the Targets API (handlers.SetTarget /
+// UpdateTarget) and this import, so the two can never disagree on what a
+// valid target is.
+
+// Allowed Target Basis and Threshold Mode values.
+var (
+	KpiTargetBasisValues = []string{"Strategic Plan", "Previous Year", "Benchmark", "Regulatory Requirement",
+		"Contract / SLA", "Management Decision", "Forecast", "Other"}
+	KpiTargetThresholdModes = []string{kpiThresholdGlobal, kpiThresholdPercentage, kpiThresholdAbsolute,
+		kpiThresholdRange, kpiThresholdNone}
+)
+
+const (
+	kpiThresholdGlobal     = "Use Global KPI Rules"
+	kpiThresholdPercentage = "Percentage of Target"
+	kpiThresholdAbsolute   = "Absolute Values"
+	kpiThresholdRange      = "Target Range"
+	kpiThresholdNone       = "No Thresholds"
+
+	// KpiTargetMinYear / KpiTargetMaxYear bound every target's year,
+	// including one derived from a Milestone's dates.
+	KpiTargetMinYear = 2020
+	KpiTargetMaxYear = 2040
+
+	// kpiTargetMaxPercentThreshold caps a "Percentage of Target" threshold.
+	kpiTargetMaxPercentThreshold = 1000
+
+	kpiDirectionHigher        = "Higher is Better"
+	kpiDirectionLower         = "Lower is Better"
+	kpiDirectionInformational = "Informational"
+)
+
+// CanonicalChoice returns the allowed value matching v case-insensitively.
+func CanonicalChoice(v string, allowed []string) (string, bool) {
+	v = strings.TrimSpace(v)
+	for _, a := range allowed {
+		if strings.EqualFold(v, a) {
+			return a, true
+		}
+	}
+	return "", false
+}
+
+// ValidateKpiTargetYear checks the 2020–2040 range with a readable message.
+func ValidateKpiTargetYear(year int) error {
+	if year < KpiTargetMinYear || year > KpiTargetMaxYear {
+		if year == 0 {
+			return fmt.Errorf("Target Year is required")
+		}
+		return fmt.Errorf("Target Year must be between %d and %d (got %d)", KpiTargetMinYear, KpiTargetMaxYear, year)
+	}
+	return nil
+}
+
+var targetBarePeriodCodes = map[string]string{
+	"jan": "month", "feb": "month", "mar": "month", "apr": "month", "may": "month", "jun": "month",
+	"jul": "month", "aug": "month", "sep": "month", "oct": "month", "nov": "month", "dec": "month",
+	"q1": "quarter", "q2": "quarter", "q3": "quarter", "q4": "quarter",
+	"h1": "semi_annual", "h2": "semi_annual",
+	"annual": "annual",
+}
+
+// TargetPeriodKind returns the period type of a canonical period code
+// ("month", "quarter", "semi_annual", "annual", "custom"), or "" when it is
+// not a recognised code.
+func TargetPeriodKind(code string) string {
+	if _, _, ok := ParseCustomPeriod(code); ok {
+		return "custom"
+	}
+	return targetBarePeriodCodes[code]
+}
+
+// CanonicalTargetPeriodCode normalises a period code to the bare lowercase
+// label every downstream lookup uses ("jan".."dec", "q1".."q4", "h1"/"h2",
+// "annual", or a custom "c:YYYYMMDD-YYYYMMDD" range). Year-embedded forms
+// ("2026-Q3", "2026-07", "2026-H1", "2026") are reduced to their label and
+// their year is returned; it must agree with year when year is non-zero, and
+// is returned as the year to use when year is zero.
+func CanonicalTargetPeriodCode(code string, year int) (string, int, error) {
+	raw := strings.TrimSpace(code)
+	c := strings.ToLower(raw)
+	if c == "" {
+		return "", year, fmt.Errorf("Period Code is required")
+	}
+	if IsCustomPeriodCode(c) {
+		if _, _, ok := ParseCustomPeriod(c); !ok {
+			return "", year, fmt.Errorf("Period Code %q is not a valid date range", raw)
+		}
+		return c, year, nil
+	}
+	if _, ok := targetBarePeriodCodes[c]; ok {
+		return c, year, nil
+	}
+	m := yearEmbeddedPeriod.FindStringSubmatch(c)
+	if m == nil {
+		return "", year, fmt.Errorf("Period Code %q is not a recognised period (use jan..dec, q1..q4, h1/h2 or annual)", raw)
+	}
+	embedded, _ := strconv.Atoi(m[1])
+	label := m[2]
+	switch {
+	case label == "":
+		label = "annual"
+	case label[0] >= '0' && label[0] <= '9':
+		month, _ := strconv.Atoi(label)
+		label = monthPeriodCodes[month-1]
+	}
+	if year != 0 && year != embedded {
+		return "", year, fmt.Errorf("Period Code %q belongs to %d but Target Year is %d", raw, embedded, year)
+	}
+	return label, embedded, nil
+}
+
+// kpiTargetFrequency is the reporting frequency a target's periods follow:
+// the metric's own, else the KPI's; an unknown/empty frequency is annual.
+func kpiTargetFrequency(metric *models.KpiMetric, kpiFrequency string) string {
+	freq := ""
+	if metric != nil {
+		freq = NormalizeFrequency(metric.ReportingFrequency)
+	}
+	if freq == "" {
+		freq = NormalizeFrequency(kpiFrequency)
+	}
+	if freq == "" {
+		freq = models.KPIFrequencyAnnually
+	}
+	return freq
+}
+
+// ValidateKpiTargetPeriod enforces the period rules for a canonical period
+// code (see CanonicalTargetPeriodCode):
+//   - Milestone / Ad Hoc ⇒ a custom date range (within the metric's validity window);
+//   - Annual Target ⇒ the "annual" period, whatever the reporting frequency;
+//   - Period Target ⇒ a period of the metric's (else the KPI's) frequency.
+//     An Ad Hoc frequency has no reporting periods, so it only takes
+//     Milestone / Ad Hoc or Annual targets.
+//
+// kpiFrequency is the KPI's configured reporting frequency.
+func ValidateKpiTargetPeriod(metric *models.KpiMetric, kpiFrequency, targetType string, year int, periodCode string) error {
+	kind := TargetPeriodKind(periodCode)
+	switch targetType {
+	case models.KpiTargetTypeMilestone:
+		if kind != "custom" {
+			return fmt.Errorf("Period Start and Period End are required for a Milestone / Ad Hoc target")
+		}
+		if metric != nil {
+			return ValidateTargetPeriodForMetric(metric, kpiFrequency, year, periodCode)
+		}
+		return nil
+	case models.KpiTargetTypeAnnual:
+		if kind != "annual" {
+			return fmt.Errorf("An Annual Target covers the whole year — its period must be Annual, not %s", FormatPeriodLabel(periodCode, year))
+		}
+		if metric != nil {
+			// Only the validity window applies; the annual period is valid
+			// for every reporting frequency.
+			m := *metric
+			m.ReportingFrequency = "Annual"
+			return ValidateTargetPeriodForMetric(&m, models.KPIFrequencyAnnually, year, periodCode)
+		}
+		return nil
+	}
+
+	if kind == "custom" {
+		return fmt.Errorf("Custom date ranges are only allowed for Milestone / Ad Hoc targets")
+	}
+	freq := kpiTargetFrequency(metric, kpiFrequency)
+	subject := "This KPI"
+	if metric != nil {
+		subject = fmt.Sprintf("Metric %q", metric.Name)
+	}
+	if freq == models.KPIFrequencyCustom {
+		return fmt.Errorf("%s is reported Ad Hoc and has no reporting periods — use a Milestone / Ad Hoc target (a date range) or an Annual Target", subject)
+	}
+	if want := targetPeriodTypes[freq]; kind != want {
+		return fmt.Errorf("Period %s does not match %s, which is reported %s. Choose a %s period.",
+			FormatPeriodLabel(periodCode, year), strings.ToLower(subject[:1])+subject[1:], frequencyLabel(freq), frequencyLabel(freq))
+	}
+	if metric != nil {
+		return ValidateTargetPeriodForMetric(metric, kpiFrequency, year, periodCode)
+	}
+	return nil
+}
+
+// KpiTargetDirection is the direction thresholds are ordered by: the
+// metric's, else the KPI's polarity.
+func KpiTargetDirection(db *gorm.DB, kpiCode, kpiType string, metric *models.KpiMetric) string {
+	if metric != nil && metric.Direction != "" {
+		return metric.Direction
+	}
+	if GetKPIPolarity(db, kpiCode, kpiType) == models.KPIPolarityDescending {
+		return kpiDirectionLower
+	}
+	return kpiDirectionHigher
+}
+
+// KpiTargetValueRequired reports whether a target needs a Target Value — every
+// target except one for an Informational metric.
+func KpiTargetValueRequired(direction string) bool {
+	return direction != kpiDirectionInformational
+}
+
+// NormalizeKpiTargetThresholds validates the Target Basis, Threshold Mode and
+// threshold values of t, and clears the values its mode does not use (the
+// form hides them, so they can only be stale): Excellent/Achieved/Warning
+// belong to Percentage of Target and Absolute Values, Range Min/Max to Target
+// Range. Thresholds must be ordered by direction — Higher is Better:
+// Excellent ≥ Achieved ≥ Warning; Lower is Better: the reverse.
+func NormalizeKpiTargetThresholds(t *models.KpiAnnualTarget, direction string) error {
+	if t.TargetBasis == "" {
+		t.TargetBasis = "Management Decision"
+	} else if v, ok := CanonicalChoice(t.TargetBasis, KpiTargetBasisValues); ok {
+		t.TargetBasis = v
+	} else {
+		return fmt.Errorf("Target Basis %q is not valid. Allowed: %s", t.TargetBasis, strings.Join(KpiTargetBasisValues, ", "))
+	}
+	if t.ThresholdMode == "" {
+		t.ThresholdMode = kpiThresholdGlobal
+	} else if v, ok := CanonicalChoice(t.ThresholdMode, KpiTargetThresholdModes); ok {
+		t.ThresholdMode = v
+	} else {
+		return fmt.Errorf("Threshold Mode %q is not valid. Allowed: %s", t.ThresholdMode, strings.Join(KpiTargetThresholdModes, ", "))
+	}
+
+	switch t.ThresholdMode {
+	case kpiThresholdGlobal, kpiThresholdNone:
+		t.ExcellentThreshold, t.AchievedThreshold, t.WarningThreshold = nil, nil, nil
+		t.TargetRangeMin, t.TargetRangeMax = nil, nil
+		return nil
+	case kpiThresholdRange:
+		t.ExcellentThreshold, t.AchievedThreshold, t.WarningThreshold = nil, nil, nil
+		if t.TargetRangeMin == nil || t.TargetRangeMax == nil {
+			return fmt.Errorf("Target Range Min and Target Range Max are required when Threshold Mode is Target Range")
+		}
+		if *t.TargetRangeMax < *t.TargetRangeMin {
+			return fmt.Errorf("Target Range Max cannot be lower than Target Range Min")
+		}
+		if t.TargetValue < *t.TargetRangeMin || t.TargetValue > *t.TargetRangeMax {
+			return fmt.Errorf("Target Value %v must lie within the Target Range (%v to %v)", t.TargetValue, *t.TargetRangeMin, *t.TargetRangeMax)
+		}
+		return nil
+	}
+
+	// Percentage of Target / Absolute Values.
+	t.TargetRangeMin, t.TargetRangeMax = nil, nil
+	named := []struct {
+		name  string
+		value *float64
+	}{{"Excellent", t.ExcellentThreshold}, {"Achieved", t.AchievedThreshold}, {"Warning", t.WarningThreshold}}
+	if t.ThresholdMode == kpiThresholdPercentage {
+		for _, n := range named {
+			if n.value != nil && (*n.value < 0 || *n.value > kpiTargetMaxPercentThreshold) {
+				return fmt.Errorf("%s Threshold must be a percentage between 0 and %d (got %v)", n.name, kpiTargetMaxPercentThreshold, *n.value)
+			}
+		}
+	}
+	lower := direction == kpiDirectionLower
+	if !lower && direction != kpiDirectionHigher {
+		return nil // Target Range / Exact Target / Informational metrics have no single order
+	}
+	for i := 0; i < len(named); i++ {
+		for j := i + 1; j < len(named); j++ {
+			a, b := named[i], named[j]
+			if a.value == nil || b.value == nil {
+				continue
+			}
+			if !lower && *a.value < *b.value {
+				return fmt.Errorf("For a Higher is Better target the %s Threshold (%v) cannot be below the %s Threshold (%v)", a.name, *a.value, b.name, *b.value)
+			}
+			if lower && *a.value > *b.value {
+				return fmt.Errorf("For a Lower is Better target the %s Threshold (%v) cannot be above the %s Threshold (%v)", a.name, *a.value, b.name, *b.value)
+			}
+		}
+	}
+	return nil
+}
+
+// CanonicalKpiTargetSegmentation validates segmentation values (each needs a
+// dimension and a value, one value per dimension) and returns them in a
+// stable order as JSON — nil when there are none — so the same segment always
+// stores and compares identically.
+func CanonicalKpiTargetSegmentation(values []models.KpiTargetSegmentationValue) (datatypes.JSON, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	out := make([]models.KpiTargetSegmentationValue, 0, len(values))
+	seen := map[string]bool{}
+	for _, v := range values {
+		d, val := strings.TrimSpace(v.Dimension), strings.TrimSpace(v.Value)
+		if d == "" || val == "" {
+			return nil, fmt.Errorf("Each segmentation value needs a dimension and a value")
+		}
+		if seen[strings.ToLower(d)] {
+			return nil, fmt.Errorf("Segmentation dimension %q is listed more than once", d)
+		}
+		seen[strings.ToLower(d)] = true
+		out = append(out, models.KpiTargetSegmentationValue{Dimension: d, Value: val})
+	}
+	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Dimension) < strings.ToLower(out[j].Dimension) })
+	data, err := json.Marshal(out)
+	if err != nil {
+		return nil, err
+	}
+	return datatypes.JSON(data), nil
+}
+
+// KpiTargetSegmentationKey is a stable string for a stored segmentation
+// ("" when none), for comparing targets' segments in Go.
+func KpiTargetSegmentationKey(raw datatypes.JSON) string {
+	t := models.KpiAnnualTarget{SegmentationValues: raw}
+	canon, err := CanonicalKpiTargetSegmentation(t.Segmentation())
+	if err != nil || canon == nil {
+		s := strings.TrimSpace(string(raw))
+		if s == "" || s == "null" || s == "[]" {
+			return ""
+		}
+		return s
+	}
+	return string(canon)
+}
+
+// KpiTargetScope restricts q to targets with the same identity as t — KPI,
+// metric, year, period, organization and segment (BR-01 without Version) —
+// comparing NULLs as equal, like the unique indexes do.
+func KpiTargetScope(q *gorm.DB, t *models.KpiAnnualTarget) *gorm.DB {
+	q = q.Where("kpi_code = ? AND kpi_type = ? AND target_year = ? AND period_code = ?",
+		t.KpiCode, t.KpiType, t.TargetYear, t.PeriodCode)
+	if t.MetricID != nil {
+		q = q.Where("metric_id = ?", *t.MetricID)
+	} else {
+		q = q.Where("metric_id IS NULL")
+	}
+	if t.OrganizationID != nil {
+		q = q.Where("organization_id = ?", *t.OrganizationID)
+	} else {
+		q = q.Where("organization_id IS NULL")
+	}
+	if len(t.SegmentationValues) > 0 {
+		q = q.Where("segmentation_values = ?::jsonb", string(t.SegmentationValues))
+	} else {
+		q = q.Where("(segmentation_values IS NULL OR segmentation_values = 'null'::jsonb OR segmentation_values = '[]'::jsonb)")
+	}
+	return q
+}
+
+// IsUniqueViolation reports whether err is a Postgres unique-index violation.
+func IsUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "SQLSTATE 23505") || strings.Contains(msg, "duplicate key value")
+}

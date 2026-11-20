@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/google/uuid"
@@ -21,6 +22,15 @@ type GoalRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 	FindGoalByTitleAndOwner(ctx context.Context, title string, ownerID uuid.UUID) (*models.Goal, error)
 	UpdateDocumentaFolderID(ctx context.Context, goalID uuid.UUID, folderID string) error
+	UpdateProgress(ctx context.Context, goalID uuid.UUID, progress float64) error
+	// FindGoalReferences lists records outside the goal's own sub-records
+	// (child goals, KPI-module rows) that still reference the goal.
+	FindGoalReferences(ctx context.Context, goalID uuid.UUID) ([]GoalReference, error)
+	// DeleteGoalWithOwnedRecords soft-deletes the goal together with its own
+	// metrics, evidences, check-ins and comments in one transaction.
+	DeleteGoalWithOwnedRecords(ctx context.Context, goalID uuid.UUID) error
+	// IsGoalVisibleToUser applies the goal-list visibility rule to one goal.
+	IsGoalVisibleToUser(ctx context.Context, goalID uuid.UUID, userID uuid.UUID) (bool, error)
 
 	// Collaborators
 	AddCollaborator(ctx context.Context, collaborator *models.GoalCollaborator) error
@@ -107,6 +117,129 @@ type GoalRepository interface {
 
 type goalRepository struct {
 	db *gorm.DB
+}
+
+// ErrInvalidGoalSort is returned when sort_by / sort_order are not in the
+// whitelist. Callers should map it to HTTP 400.
+var ErrInvalidGoalSort = errors.New("invalid_sort_parameters")
+
+// goalSortColumns maps the API sort_by names to real, fixed column names.
+// sort_by is NEVER interpolated into SQL directly.
+var goalSortColumns = map[string]string{
+	"title":       "goals.title",
+	"priority":    "goals.priority",
+	"status":      "goals.status",
+	"progress":    "goals.progress",
+	"start_date":  "goals.start_date",
+	"target_date": "goals.target_date",
+	"review_date": "goals.review_date",
+	"created_at":  "goals.created_at",
+	"updated_at":  "goals.updated_at",
+	"level":       "goals.level",
+	"category":    "goals.category",
+}
+
+// ResolveGoalSort validates sort_by / sort_order against the whitelist and
+// returns a safe ORDER BY clause. Empty sort_by yields the default order.
+func ResolveGoalSort(sortBy, sortOrder string) (string, error) {
+	dir := "ASC"
+	switch strings.ToLower(strings.TrimSpace(sortOrder)) {
+	case "", "asc":
+	case "desc":
+		dir = "DESC"
+	default:
+		return "", ErrInvalidGoalSort
+	}
+	sortBy = strings.ToLower(strings.TrimSpace(sortBy))
+	if sortBy == "" {
+		return "goals.created_at DESC", nil
+	}
+	col, ok := goalSortColumns[sortBy]
+	if !ok {
+		return "", ErrInvalidGoalSort
+	}
+	// Tie-break on id so pagination is stable.
+	return col + " " + dir + ", goals.id ASC", nil
+}
+
+// GoalVisibilitySQL is the single source of truth for "which goals can a
+// non-super-admin see": owner, collaborator, or goal in the user's department.
+// The returned condition takes the user ID three times. alias is the goals
+// table alias ("goals" or "g").
+func GoalVisibilitySQL(alias string) string {
+	return "(" + alias + ".owner_id = ? OR " + alias + ".id IN (SELECT goal_id FROM goal_collaborators WHERE user_id = ?) OR " +
+		alias + ".department_id IN (SELECT department_id FROM users WHERE id = ? AND department_id IS NOT NULL))"
+}
+
+// GoalReference describes rows that still point at a goal.
+type GoalReference struct {
+	Kind  string `json:"kind"`
+	Count int64  `json:"count"`
+}
+
+// goalReferenceTables lists (label, table, column) for references that block
+// deleting a goal. All tables are soft-delete aware (deleted_at).
+var goalReferenceTables = []struct{ label, table, column string }{
+	{"child goals", "goals", "parent_goal_id"},
+	{"operational objectives", "operational_objectives", "goal_id"},
+	{"processes", "processes", "goal_id"},
+	{"initiatives", "initiatives", "goal_id"},
+	{"strategic KPIs", "strategic_kpis", "goal_id"},
+	{"operational KPIs", "operational_kpis", "goal_id"},
+	{"award KPIs", "award_kpis", "goal_id"},
+	{"strategic indicators", "strategic_indicators", "goal_id"},
+	{"KPI definitions", "kp_idefinitions", "strategic_goal_id"},
+	{"EPM hierarchy entities", "epm_hierarchy_entities", "goal_id"},
+}
+
+func (r *goalRepository) FindGoalReferences(ctx context.Context, goalID uuid.UUID) ([]GoalReference, error) {
+	var refs []GoalReference
+	for _, t := range goalReferenceTables {
+		var exists bool
+		if err := r.db.WithContext(ctx).Raw("SELECT to_regclass(?) IS NOT NULL", "public."+t.table).Scan(&exists).Error; err != nil {
+			return nil, err
+		}
+		if !exists {
+			continue
+		}
+		var n int64
+		// Table/column names come from the fixed list above, never from input.
+		q := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s = ? AND deleted_at IS NULL", t.table, t.column)
+		if err := r.db.WithContext(ctx).Raw(q, goalID).Scan(&n).Error; err != nil {
+			return nil, err
+		}
+		if n > 0 {
+			refs = append(refs, GoalReference{Kind: t.label, Count: n})
+		}
+	}
+	return refs, nil
+}
+
+func (r *goalRepository) DeleteGoalWithOwnedRecords(ctx context.Context, goalID uuid.UUID) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("goal_id = ?", goalID).Delete(&models.GoalMetric{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("goal_id = ?", goalID).Delete(&models.Evidence{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("goal_id = ?", goalID).Delete(&models.GoalCheckIn{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("goal_id = ?", goalID).Delete(&models.GoalComment{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&models.Goal{}, "id = ?", goalID).Error
+	})
+}
+
+func (r *goalRepository) IsGoalVisibleToUser(ctx context.Context, goalID uuid.UUID, userID uuid.UUID) (bool, error) {
+	var n int64
+	err := r.db.WithContext(ctx).Model(&models.Goal{}).
+		Where("goals.id = ?", goalID).
+		Where(GoalVisibilitySQL("goals"), userID, userID, userID).
+		Count(&n).Error
+	return n > 0, err
 }
 
 func NewGoalRepository(db *gorm.DB) GoalRepository {
@@ -196,10 +329,7 @@ func applyGoalFilters(query *gorm.DB, filter *models.GoalFilter) *gorm.DB {
 	}
 	if filter.UserID != nil {
 		// User can see goals they own, collaborate on, or belong to their department
-		query = query.Where(
-			"owner_id = ? OR id IN (SELECT goal_id FROM goal_collaborators WHERE user_id = ?) OR department_id IN (SELECT department_id FROM users WHERE id = ? AND department_id IS NOT NULL)",
-			*filter.UserID, *filter.UserID, *filter.UserID,
-		)
+		query = query.Where(GoalVisibilitySQL("goals"), *filter.UserID, *filter.UserID, *filter.UserID)
 	}
 	// scope=mine narrows the listing to owner-or-collaborator, ignoring
 	// department-wide visibility. Used by the "My Goals" view.
@@ -234,17 +364,13 @@ func (r *goalRepository) List(ctx context.Context, filter *models.GoalFilter) ([
 	}
 	offset := (filter.Page - 1) * filter.Limit
 
-	// Apply sorting
-	orderClause := "created_at DESC"
-	if filter.SortBy != "" {
-		direction := "ASC"
-		if filter.SortOrder == "desc" {
-			direction = "DESC"
-		}
-		orderClause = fmt.Sprintf("%s %s", filter.SortBy, direction)
+	// Apply sorting (whitelisted — never interpolate user input into ORDER BY)
+	orderClause, err := ResolveGoalSort(filter.SortBy, filter.SortOrder)
+	if err != nil {
+		return nil, 0, err
 	}
 
-	err := query.
+	err = query.
 		Preload("Owner").
 		Preload("Department").
 		Order(orderClause).
@@ -287,6 +413,12 @@ func (r *goalRepository) Update(ctx context.Context, goal *models.Goal) error {
 
 func (r *goalRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return r.db.WithContext(ctx).Delete(&models.Goal{}, "id = ?", id).Error
+}
+
+func (r *goalRepository) UpdateProgress(ctx context.Context, goalID uuid.UUID, progress float64) error {
+	return r.db.WithContext(ctx).Model(&models.Goal{}).
+		Where("id = ?", goalID).
+		Update("progress", progress).Error
 }
 
 func (r *goalRepository) UpdateDocumentaFolderID(ctx context.Context, goalID uuid.UUID, folderID string) error {
@@ -962,10 +1094,19 @@ func (r *goalRepository) ListMetricImportBatches(ctx context.Context, filter *mo
 		Preload("AssignedTo")
 
 	if filter.Status != "" {
-		query = query.Where("status = ?", filter.Status)
+		query = query.Where("metric_import_batches.status = ?", filter.Status)
+	}
+	if filter.UserID != nil {
+		uid := *filter.UserID
+		query = query.Where(
+			"(metric_import_batches.imported_by_id = ? OR metric_import_batches.assigned_to_id = ? OR metric_import_batches.primary_goal_id IN (SELECT goals.id FROM goals WHERE goals.deleted_at IS NULL AND "+GoalVisibilitySQL("goals")+"))",
+			uid, uid, uid, uid, uid,
+		)
 	}
 
-	query.Model(&models.MetricImportBatch{}).Count(&total)
+	if err := query.Model(&models.MetricImportBatch{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 
 	page := filter.Page
 	if page < 1 {

@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/automax/backend/internal/models"
+	"github.com/automax/backend/internal/services/metricformula"
 	"github.com/automax/backend/internal/utils"
 	"github.com/google/uuid"
 	"github.com/xuri/excelize/v2"
@@ -110,6 +111,14 @@ type kpiMetricsImporter struct {
 	usersByLogin map[string]uuid.UUID
 	usersByID    map[uuid.UUID]bool
 	kpiLocked    map[string]bool // type|kpiID
+	access       *KpiAccessChecker
+
+	// onlySheet limits the import to one worksheet (the combined KPI
+	// workbook's Metrics sheet); "" finds the metrics sheet.
+	onlySheet string
+	// createdKpis (type|kpiID) are KPIs created by the same workbook import:
+	// their metrics need no collaborator access, the importer is creating them.
+	createdKpis map[string]bool
 }
 
 // ─── Entry points ───────────────────────────────────────────────────────────
@@ -149,10 +158,16 @@ func CommitKpiMetricsImport(ctx context.Context, db *gorm.DB, data []byte, fileN
 }
 
 func buildKpiMetricsPlan(ctx context.Context, db *gorm.DB, data []byte, fileName string, userID uuid.UUID, opts KpiImportOptions) (*kpiMetricsImporter, error) {
+	return buildKpiMetricsPlanSheet(ctx, db, data, fileName, userID, opts, "", nil)
+}
+
+func buildKpiMetricsPlanSheet(ctx context.Context, db *gorm.DB, data []byte, fileName string, userID uuid.UUID, opts KpiImportOptions, onlySheet string, createdKpis map[string]bool) (*kpiMetricsImporter, error) {
 	imp := &kpiMetricsImporter{
-		db:     db,
-		ctx:    ctx,
-		userID: userID,
+		db:          db,
+		ctx:         ctx,
+		userID:      userID,
+		onlySheet:   onlySheet,
+		createdKpis: createdKpis,
 		res: &KpiImportResult{
 			FileName: fileName,
 			Errors:   []KpiImportIssue{},
@@ -374,6 +389,7 @@ func (imp *kpiMetricsImporter) parseWorkbook(data []byte) error {
 	if imp.structuralError {
 		return nil
 	}
+	imp.applyPercentFormats(xf, sheet, rows, headerRow, table)
 	for i := headerRow + 1; i < len(rows); i++ {
 		if metricRowEmpty(rows[i]) {
 			continue
@@ -390,6 +406,60 @@ func (imp *kpiMetricsImporter) parseWorkbook(data []byte) error {
 	return nil
 }
 
+// applyPercentFormats rewrites the raw value of percent-formatted Weight and
+// Baseline Value cells to the percent number shown in Excel: rows are read
+// with RawCellValue, so a cell displaying "25%" arrives as 0.25 while the
+// same value typed as text "25%" parses as 25. Both now mean 25.
+func (imp *kpiMetricsImporter) applyPercentFormats(xf *excelize.File, sheet string, rows [][]string, headerRow int, table *kpiMetricTable) {
+	for _, key := range []string{"weight", "baseline_value"} {
+		j, ok := table.cols[key]
+		if !ok {
+			continue
+		}
+		for i := headerRow + 1; i < len(rows); i++ {
+			if j >= len(rows[i]) {
+				continue
+			}
+			raw := strings.TrimSpace(rows[i][j])
+			if raw == "" || strings.HasSuffix(raw, "%") {
+				continue
+			}
+			v, err := strconv.ParseFloat(raw, 64)
+			if err != nil {
+				continue
+			}
+			cellName, err := excelize.CoordinatesToCellName(j+1, i+1)
+			if err != nil {
+				continue
+			}
+			if !excelCellIsPercent(xf, sheet, cellName) {
+				continue
+			}
+			rows[i][j] = strconv.FormatFloat(v*100, 'f', -1, 64)
+		}
+	}
+}
+
+// excelCellIsPercent reports whether the cell's number format is a
+// percentage (built-in formats 9/10 or a custom format containing %).
+func excelCellIsPercent(xf *excelize.File, sheet, cellName string) bool {
+	styleID, err := xf.GetCellStyle(sheet, cellName)
+	if err != nil || styleID == 0 {
+		return false
+	}
+	style, err := xf.GetStyle(styleID)
+	if err != nil || style == nil {
+		return false
+	}
+	if style.NumFmt == 9 || style.NumFmt == 10 {
+		return true
+	}
+	if style.CustomNumFmt != nil && strings.Contains(strings.ReplaceAll(*style.CustomNumFmt, `\%`, ""), "%") {
+		return true
+	}
+	return false
+}
+
 func (imp *kpiMetricsImporter) locateSheet(xf *excelize.File) (string, [][]string, int) {
 	type candidate struct {
 		sheet     string
@@ -400,6 +470,9 @@ func (imp *kpiMetricsImporter) locateSheet(xf *excelize.File) (string, [][]strin
 	for _, name := range xf.GetSheetList() {
 		normalized := normHeader(name)
 		if normalized == normHeader(kpiMetricsInstructionsSheet) || normalized == "تعليمات" {
+			continue
+		}
+		if imp.onlySheet != "" && name != imp.onlySheet {
 			continue
 		}
 		rows, err := xf.GetRows(name, excelize.Options{RawCellValue: true})
@@ -662,6 +735,11 @@ func (imp *kpiMetricsImporter) loadExisting() error {
 	imp.usersByLogin = map[string]uuid.UUID{}
 	imp.usersByID = map[uuid.UUID]bool{}
 	imp.kpiLocked = map[string]bool{}
+	access, err := NewKpiAccessChecker(imp.ctx, imp.db, imp.userID)
+	if err != nil {
+		return err
+	}
+	imp.access = access
 
 	for _, t := range []struct {
 		kpiType string
@@ -754,6 +832,14 @@ func (imp *kpiMetricsImporter) validateRows() {
 		}
 		r.KpiID = ek.ID
 		r.KpiName = ek.NameEn
+		// The role permission only admits the import; each row's KPI also
+		// needs the user's collaborator access to edit its metrics.
+		if imp.createdKpis[r.KpiType+"|"+r.KpiID.String()] {
+			// created by this workbook import
+		} else if allowed, err := imp.access.Can(r.KpiType, r.KpiID, KpiActionEditKpi); err != nil || !allowed {
+			r.reject("KPI Code", fmt.Sprintf("You do not have access to edit the metrics of KPI %s.", r.KpiCode))
+			continue
+		}
 
 		if r.OwnerRaw != "" {
 			if id, ok := imp.resolveUser(r.OwnerRaw); ok {
@@ -840,7 +926,36 @@ func (imp *kpiMetricsImporter) validateRows() {
 			}
 		}
 	}
+	imp.validateFormulas()
 	imp.applyWeightLimit()
+}
+
+// validateFormulas checks every Formula metric's expression against the
+// names of its KPI's other metrics — stored ones and the ones this file adds.
+func (imp *kpiMetricsImporter) validateFormulas() {
+	fileNames := map[string][]string{}
+	for _, r := range imp.recs {
+		if !r.Rejected {
+			group := r.KpiType + "|" + r.KpiID.String()
+			fileNames[group] = append(fileNames[group], r.Metric.Name)
+		}
+	}
+	for _, r := range imp.recs {
+		if r.Rejected || r.Metric.CalculationType != "Formula" {
+			continue
+		}
+		group := r.KpiType + "|" + r.KpiID.String()
+		var names []string
+		for _, m := range imp.metricsByKpi[group] {
+			if r.ExistingID == nil || m.ID != *r.ExistingID {
+				names = append(names, m.Name)
+			}
+		}
+		names = append(names, fileNames[group]...)
+		if msg := ValidateKpiMetricFormula(r.Metric.Formula, r.Metric.Name, names); msg != "" {
+			r.reject("Formula", msg)
+		}
+	}
 }
 
 func (imp *kpiMetricsImporter) matchExistingMetric(group, codeKey, nameKey string) *models.KpiMetric {
@@ -1204,4 +1319,130 @@ func parseMetricDate(raw string) (*time.Time, bool) {
 		}
 	}
 	return nil, false
+}
+
+// ─── Shared metric validation (metric API + import) ─────────────────────────
+
+// KpiMetricIssue is one problem with a metric definition.
+type KpiMetricIssue struct {
+	Field   string `json:"field"`
+	Message string `json:"message"`
+}
+
+// NormalizeKpiMetricDefinition applies the metrics import's rules to a metric
+// built from the API: each enum field (status, metric type, calculation type,
+// direction, aggregation, reporting frequency, divide-by-zero handling,
+// rounding rule) must be one of the import's values or aliases and is stored
+// in its canonical spelling; decimal precision is 0-4; weight is 0-100; due
+// date is not before start date; text fields fit their columns. Empty enum
+// fields are left for the caller's defaults (an empty reporting frequency
+// means "inherit from KPI").
+func NormalizeKpiMetricDefinition(m *models.KpiMetric) []KpiMetricIssue {
+	var issues []KpiMetricIssue
+	add := func(field, format string, args ...interface{}) {
+		issues = append(issues, KpiMetricIssue{Field: field, Message: fmt.Sprintf(format, args...)})
+	}
+	choice := func(field, label string, choices []metricChoice, target *string) {
+		raw := strings.TrimSpace(*target)
+		if raw == "" {
+			*target = ""
+			return
+		}
+		v, ok := normalizeMetricChoice(raw, choices)
+		if !ok {
+			allowed := make([]string, 0, len(choices))
+			for _, c := range choices {
+				if c.value != "" {
+					allowed = append(allowed, c.value)
+				}
+			}
+			add(field, "%s %q is not valid. Allowed: %s.", label, raw, strings.Join(allowed, ", "))
+			return
+		}
+		*target = v
+	}
+	choice("metric_status", "Status", metricStatusChoices, &m.MetricStatus)
+	choice("metric_type", "Metric Type", metricTypeChoices, &m.MetricType)
+	choice("calculation_type", "Calculation Type", metricCalculationChoices, &m.CalculationType)
+	choice("direction", "Direction", metricDirectionChoices, &m.Direction)
+	choice("aggregation_method", "Aggregation Method", metricAggregationChoices, &m.AggregationMethod)
+	choice("reporting_frequency", "Reporting Frequency", metricFrequencyChoices, &m.ReportingFrequency)
+	choice("divide_by_zero_handling", "Divide by Zero Handling", metricDivideChoices, &m.DivideByZeroHandling)
+	choice("rounding_rule", "Rounding Rule", metricRoundingChoices, &m.RoundingRule)
+
+	if m.DecimalPrecision < 0 || m.DecimalPrecision > 4 {
+		add("decimal_precision", "Decimal Precision must be a whole number between 0 and 4.")
+	}
+	if m.DisplayOrder < 0 {
+		add("display_order", "Display Order must be 0 or more.")
+	}
+	if math.IsNaN(m.Weight) || m.Weight < 0 || m.Weight > 100 {
+		add("weight", "Weight must be a number between 0 and 100.")
+	}
+	if math.IsNaN(m.BaselineValue) || math.IsInf(m.BaselineValue, 0) {
+		add("baseline_value", "Baseline Value must be a number.")
+	}
+	if m.BaselinePeriod != "" && !kpiMetricBaselinePeriodRe.MatchString(m.BaselinePeriod) {
+		add("baseline_period", "Baseline Period must be in YYYY-MM format.")
+	}
+	if m.StartDate != nil && m.DueDate != nil && m.DueDate.Before(*m.StartDate) {
+		add("due_date", "Due Date cannot be earlier than Start Date.")
+	}
+	for _, f := range []struct {
+		field, label, value string
+		max                 int
+	}{
+		{"name", "Metric Name", m.Name, 255},
+		{"metric_code", "Metric Code", m.MetricCode, 50},
+		{"unit", "Unit", m.Unit, 50},
+		{"custom_unit_label", "Custom Unit Label", m.CustomUnitLabel, 255},
+		{"numerator_label", "Numerator Label", m.NumeratorLabel, 255},
+		{"numerator_variable_code", "Numerator Variable Code", m.NumeratorVariableCode, 100},
+		{"denominator_label", "Denominator Label", m.DenominatorLabel, 255},
+		{"denominator_variable_code", "Denominator Variable Code", m.DenominatorVariableCode, 100},
+		{"direct_actual_label", "Direct Actual Label", m.DirectActualLabel, 255},
+		{"formula_code", "Formula Code", m.FormulaCode, 100},
+		{"data_source", "Data Source", m.DataSource, 100},
+	} {
+		if n := utf8.RuneCountInString(f.value); n > f.max {
+			add(f.field, "%s must be at most %d characters (got %d).", f.label, f.max, n)
+		}
+	}
+	return issues
+}
+
+var kpiMetricFormulaRefRe = regexp.MustCompile(`\$\{([^}]*)\}`)
+
+// ValidateKpiMetricFormula checks a Formula metric's expression: it must not
+// be empty, every ${Metric Name} must name another metric of the same KPI
+// (trimmed, case-insensitive; not the metric itself), and the expression must
+// compile (no syntax errors, no unknown bare identifiers). siblings are the
+// names of the KPI's other metrics. Returns "" when valid, else the reason.
+func ValidateKpiMetricFormula(formula, selfName string, siblings []string) string {
+	if strings.TrimSpace(formula) == "" {
+		return "Formula is required when the Calculation Type is Formula."
+	}
+	known := make(map[string]bool, len(siblings))
+	for _, n := range siblings {
+		if key := strings.ToLower(strings.TrimSpace(n)); key != "" && key != strings.ToLower(strings.TrimSpace(selfName)) {
+			known[key] = true
+		}
+	}
+	env := map[string]float64{}
+	for _, m := range kpiMetricFormulaRefRe.FindAllStringSubmatch(formula, -1) {
+		ref := strings.TrimSpace(m[1])
+		switch key := strings.ToLower(ref); {
+		case ref == "":
+			return "Formula contains an empty metric reference ${}."
+		case key == strings.ToLower(strings.TrimSpace(selfName)):
+			return fmt.Sprintf("Formula cannot reference the metric itself (${%s}).", ref)
+		case !known[key]:
+			return fmt.Sprintf("Formula references unknown metric ${%s}; use the name of another metric of this KPI.", ref)
+		}
+		env[ref] = 1
+	}
+	if _, err := metricformula.Evaluate(formula, env); err != nil && !strings.Contains(err.Error(), "non-finite") {
+		return fmt.Sprintf("Formula is not a valid expression (%v). Reference metrics as ${Metric Name}.", err)
+	}
+	return ""
 }

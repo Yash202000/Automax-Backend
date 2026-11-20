@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type KpiPerformanceHandler struct {
@@ -43,25 +45,52 @@ func (h *KpiPerformanceHandler) ListTargets(c *fiber.Ctx) error {
 	scope := kpiScope(c)
 	q = scope.Apply(q, scope.CodeCondition("kpi_type", "kpi_code"))
 
+	bad := func(param string) error {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, fmt.Sprintf("Invalid %s filter", param))
+	}
 	if kpiCode := c.Query("kpi_code"); kpiCode != "" {
 		q = q.Where("kpi_code = ?", kpiCode)
 	}
-	if yearStr := c.Query("year"); yearStr != "" {
-		year, err := strconv.Atoi(yearStr)
-		if err == nil {
-			q = q.Where("year = ?", year)
+	if kpiType := c.Query("kpi_type"); kpiType != "" {
+		if !isValidKpiType(kpiType) {
+			return bad("kpi_type")
+		}
+		q = q.Where("kpi_type = ?", kpiType)
+	}
+	// year (legacy mirror column) and target_year filter the same value.
+	for _, param := range []string{"year", "target_year"} {
+		if yearStr := c.Query(param); yearStr != "" {
+			year, err := strconv.Atoi(yearStr)
+			if err != nil {
+				return bad(param)
+			}
+			q = q.Where("target_year = ?", year)
 		}
 	}
 	if metricID := c.Query("metric_id"); metricID != "" {
-		q = q.Where("metric_id = ?", metricID)
+		id, err := uuid.Parse(metricID)
+		if err != nil {
+			return bad("metric_id")
+		}
+		q = q.Where("metric_id = ?", id)
+	}
+	if orgID := c.Query("organization_id"); orgID != "" {
+		id, err := uuid.Parse(orgID)
+		if err != nil {
+			return bad("organization_id")
+		}
+		q = q.Where("organization_id = ?", id)
 	}
 	if periodCode := c.Query("period_code"); periodCode != "" {
-		q = q.Where("period_code = ?", periodCode)
+		code, _, err := services.CanonicalTargetPeriodCode(periodCode, 0)
+		if err != nil {
+			return bad("period_code")
+		}
+		q = q.Where("period_code = ?", code)
 	}
 	if targetStatus := c.Query("target_status"); targetStatus != "" {
 		q = q.Where("target_status = ?", targetStatus)
 	}
-	// Also accept the old `kpi_code` filter (already handled above)
 
 	var items []models.KpiAnnualTarget
 	if err := q.Order("target_year DESC, kpi_code ASC").Find(&items).Error; err != nil {
@@ -76,64 +105,138 @@ func (h *KpiPerformanceHandler) ListTargets(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "", resp)
 }
 
-// validateTargetPeriod checks a target's metric and period. With a metric,
-// REL-01 (the metric belongs to this KPI) and REL-05 (the period follows the
-// metric's own reporting frequency and falls within its start/due dates).
-// Without one, the period follows the KPI's reporting frequency.
-func validateTargetPeriod(db *gorm.DB, req *models.KpiAnnualTargetRequest) error {
-	// Milestone / Ad Hoc targets cover the date range the user picked; the
-	// period code and year are derived from it here so they can't disagree.
-	// Every other target type uses a whole reporting period.
+// buildTarget validates a create/update request and turns it into a target.
+// It canonicalises the period ("Q3", "2026-Q3" → "q3"; a Milestone's code and
+// year come from its dates), then applies the rules shared with the import
+// (services.ValidateKpiTargetPeriod, NormalizeKpiTargetThresholds, …):
+// REL-01 (the metric belongs to this KPI), REL-05 (the period follows the
+// metric's — else the KPI's — reporting frequency and validity window), the
+// Target Type ⇒ period rule, and the 2020–2040 year range. Status, version
+// and approval stamps are left to the caller.
+func buildTarget(db *gorm.DB, req *models.KpiAnnualTargetRequest) (*models.KpiAnnualTarget, error) {
+	if req.TargetType == "" {
+		req.TargetType = models.KpiTargetTypePeriod
+	}
+	if n := len([]rune(req.TargetRationale)); n > models.KpiTargetRationaleMaxLen {
+		return nil, fmt.Errorf("Target Rationale must be at most %d characters (got %d)", models.KpiTargetRationaleMaxLen, n)
+	}
+
 	if req.TargetType == models.KpiTargetTypeMilestone {
-		// Accept a full timestamp too (the list's quick Submit resends the
-		// saved period_start/period_end as returned, e.g. "2026-02-15T00:00:00Z").
-		if len(req.PeriodStart) > 10 {
-			req.PeriodStart = req.PeriodStart[:10]
+		// Milestone / Ad Hoc targets cover the date range the user picked;
+		// the period code and year are derived from it so they can't disagree.
+		start, errStart := models.ParseTargetDate("Period Start", req.PeriodStart)
+		end, errEnd := models.ParseTargetDate("Period End", req.PeriodEnd)
+		if errStart != nil {
+			return nil, errStart
 		}
-		if len(req.PeriodEnd) > 10 {
-			req.PeriodEnd = req.PeriodEnd[:10]
+		if errEnd != nil {
+			return nil, errEnd
 		}
-		start, errStart := time.Parse("2006-01-02", req.PeriodStart)
-		end, errEnd := time.Parse("2006-01-02", req.PeriodEnd)
-		if errStart != nil || errEnd != nil {
-			return fmt.Errorf("Period Start and Period End are required for a Milestone / Ad Hoc target")
+		if start == nil || end == nil {
+			return nil, fmt.Errorf("Period Start and Period End are required for a Milestone / Ad Hoc target")
 		}
-		if end.Before(start) {
-			return fmt.Errorf("Period End cannot be before Period Start")
+		if end.Before(*start) {
+			return nil, fmt.Errorf("Period End cannot be before Period Start")
 		}
-		req.PeriodCode = services.CustomPeriodCode(start, end)
+		if err := services.ValidateMilestoneYears(*start, *end); err != nil {
+			return nil, err
+		}
+		req.PeriodCode = services.CustomPeriodCode(*start, *end)
 		req.TargetYear = start.Year()
-	} else if services.IsCustomPeriodCode(req.PeriodCode) {
-		return fmt.Errorf("Custom date ranges are only allowed for Milestone / Ad Hoc targets")
+		req.PeriodStart, req.PeriodEnd = start.Format("2006-01-02"), end.Format("2006-01-02")
+	} else {
+		if services.IsCustomPeriodCode(req.PeriodCode) {
+			return nil, fmt.Errorf("Custom date ranges are only allowed for Milestone / Ad Hoc targets")
+		}
+		code, year, err := services.CanonicalTargetPeriodCode(req.PeriodCode, req.TargetYear)
+		if err != nil {
+			return nil, err
+		}
+		if err := services.ValidateKpiTargetYear(year); err != nil {
+			return nil, err
+		}
+		req.PeriodCode, req.TargetYear = code, year
+		// Period dates always follow the period itself.
+		req.PeriodStart, req.PeriodEnd = "", ""
+		if start, end, ok := services.PeriodDateRange(year, code); ok {
+			req.PeriodStart, req.PeriodEnd = start.Format("2006-01-02"), end.Format("2006-01-02")
+		}
+	}
+
+	item, err := req.ToModel(db)
+	if err != nil {
+		return nil, err
+	}
+
+	var metric *models.KpiMetric
+	if item.MetricID != nil {
+		var m models.KpiMetric
+		if err := db.Where("id = ?", *item.MetricID).First(&m).Error; err != nil {
+			return nil, fmt.Errorf("Metric not found")
+		}
+		if m.KpiType != req.KpiType || m.KpiID != kpiIDByCode(db, req.KpiCode, req.KpiType) {
+			return nil, fmt.Errorf("Metric %q does not belong to KPI %s", m.Name, req.KpiCode)
+		}
+		metric = &m
+	}
+	if item.OrganizationID != nil {
+		var count int64
+		if err := db.Model(&models.KpiOrganization{}).Where("id = ?", *item.OrganizationID).Count(&count).Error; err != nil || count == 0 {
+			return nil, fmt.Errorf("Organization not found")
+		}
 	}
 
 	freq := services.GetKPIReportingFrequency(db, req.KpiCode, req.KpiType)
-	if req.MetricID == nil || *req.MetricID == "" {
-		periodType := "annual"
-		if freq == models.KPIFrequencyMonthly {
-			periodType = "month"
-		} else if freq == models.KPIFrequencyQuarterly {
-			periodType = "quarter"
-		} else if freq == models.KPIFrequencySemiAnnual {
-			periodType = "semi_annual"
-		}
-		return services.ValidatePeriod(freq, periodType, req.PeriodCode)
+	if err := services.ValidateKpiTargetPeriod(metric, freq, item.TargetType, item.TargetYear, item.PeriodCode); err != nil {
+		return nil, err
 	}
 
-	var metric models.KpiMetric
-	if err := db.Where("id = ?", *req.MetricID).First(&metric).Error; err != nil {
-		return fmt.Errorf("Metric not found")
+	direction := services.KpiTargetDirection(db, req.KpiCode, req.KpiType, metric)
+	if req.TargetValue == nil && services.KpiTargetValueRequired(direction) {
+		return nil, fmt.Errorf("Target Value is required")
 	}
-	if metric.KpiType != req.KpiType || metric.KpiID != kpiIDByCode(db, req.KpiCode, req.KpiType) {
-		return fmt.Errorf("Metric %q does not belong to KPI %s", metric.Name, req.KpiCode)
+	if err := services.NormalizeKpiTargetThresholds(item, direction); err != nil {
+		return nil, err
 	}
-	return services.ValidateTargetPeriodForMetric(&metric, freq, req.TargetYear, req.PeriodCode)
+	if item.SegmentationValues, err = services.CanonicalKpiTargetSegmentation(req.SegmentationValues); err != nil {
+		return nil, err
+	}
+	return item, nil
+}
+
+// requestedTargetStatus is the status a create/update may produce: draft
+// (default) or submitted. approved/returned/rejected are only reachable
+// through TransitionTarget and superseded through a revision's approval;
+// the validate tag already rejects them, this is the belt to those braces.
+func requestedTargetStatus(req *models.KpiAnnualTargetRequest, fallback string) (string, error) {
+	if req.TargetStatus == nil || *req.TargetStatus == "" {
+		return fallback, nil
+	}
+	switch *req.TargetStatus {
+	case models.KpiTargetStatusDraft, models.KpiTargetStatusSubmitted:
+		return *req.TargetStatus, nil
+	}
+	return "", fmt.Errorf("Target status %q cannot be set directly — save as draft or submit, then use approve / return / reject", *req.TargetStatus)
+}
+
+// requestKeys lists the top-level JSON keys of the request body, to tell an
+// omitted field from one sent empty.
+func requestKeys(c *fiber.Ctx) map[string]bool {
+	var raw map[string]json.RawMessage
+	keys := map[string]bool{}
+	if err := json.Unmarshal(c.Body(), &raw); err == nil {
+		for k := range raw {
+			keys[k] = true
+		}
+	}
+	return keys
 }
 
 // customTargetOverlap returns an existing Milestone / Ad Hoc target of the
-// same KPI, metric and organization whose date range overlaps item's, if any.
-// Rejected and superseded targets don't count. Regular period targets aren't
-// compared: a custom range is matched by its own period code, not by month.
+// same KPI, metric, organization and segment whose date range overlaps
+// item's, if any. Rejected and superseded targets don't count. Regular period
+// targets aren't compared: a custom range is matched by its own period code,
+// not by month.
 func customTargetOverlap(db *gorm.DB, item *models.KpiAnnualTarget, excludeIDs ...uuid.UUID) (*models.KpiAnnualTarget, error) {
 	if !services.IsCustomPeriodCode(item.PeriodCode) || item.PeriodStart == nil || item.PeriodEnd == nil {
 		return nil, nil
@@ -152,6 +255,11 @@ func customTargetOverlap(db *gorm.DB, item *models.KpiAnnualTarget, excludeIDs .
 	} else {
 		q = q.Where("organization_id IS NULL")
 	}
+	if len(item.SegmentationValues) > 0 {
+		q = q.Where("segmentation_values = ?::jsonb", string(item.SegmentationValues))
+	} else {
+		q = q.Where("(segmentation_values IS NULL OR segmentation_values = 'null'::jsonb OR segmentation_values = '[]'::jsonb)")
+	}
 	var other models.KpiAnnualTarget
 	if err := q.First(&other).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -166,11 +274,8 @@ func customTargetOverlap(db *gorm.DB, item *models.KpiAnnualTarget, excludeIDs .
 // progress; an approved target can have at most one at a time.
 var openTargetRevisionStatuses = []string{"draft", "submitted", "returned"}
 
-// loadSupersededTarget validates a revision of an approved target and returns
-// the original. The revision must cover the same KPI, metric, period and
-// organization; only its values may change. selfID is the revision's own ID
-// when it is being edited (uuid.Nil on create).
-func loadSupersededTarget(db *gorm.DB, req *models.KpiAnnualTargetRequest, originalID, selfID uuid.UUID) (*models.KpiAnnualTarget, error) {
+// loadSupersededTarget loads the approved original a revision supersedes.
+func loadSupersededTarget(db *gorm.DB, originalID uuid.UUID) (*models.KpiAnnualTarget, error) {
 	var original models.KpiAnnualTarget
 	if err := db.First(&original, originalID).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -178,60 +283,77 @@ func loadSupersededTarget(db *gorm.DB, req *models.KpiAnnualTargetRequest, origi
 		}
 		return nil, err
 	}
-	if original.TargetStatus != "approved" {
+	if original.TargetStatus != models.KpiTargetStatusApproved {
 		return nil, fmt.Errorf("Only an approved target can be superseded — this target is %s", original.TargetStatus)
-	}
-
-	// The form doesn't send an organization; a revision inherits the original's.
-	if (req.OrganizationID == nil || *req.OrganizationID == "") && original.OrganizationID != nil {
-		org := original.OrganizationID.String()
-		req.OrganizationID = &org
-	}
-	sameMetric := (req.MetricID == nil || *req.MetricID == "") == (original.MetricID == nil)
-	if sameMetric && original.MetricID != nil {
-		sameMetric = *req.MetricID == original.MetricID.String()
-	}
-	sameOrg := (req.OrganizationID == nil || *req.OrganizationID == "") == (original.OrganizationID == nil)
-	if sameOrg && original.OrganizationID != nil {
-		sameOrg = *req.OrganizationID == original.OrganizationID.String()
-	}
-	if req.KpiCode != original.KpiCode || req.KpiType != original.KpiType || !sameMetric || !sameOrg ||
-		req.TargetYear != original.TargetYear || !strings.EqualFold(req.PeriodCode, original.PeriodCode) {
-		return nil, fmt.Errorf("A revision must keep the KPI, Metric, Organization and Period of the target it supersedes")
-	}
-
-	var open models.KpiAnnualTarget
-	err := db.Where("supersedes_entry_id = ? AND id <> ? AND target_status IN ?", original.ID, selfID, openTargetRevisionStatuses).
-		First(&open).Error
-	if err == nil {
-		return nil, fmt.Errorf("This target already has a revision in progress (version %d, status '%s') — edit or submit that one instead", open.Version, open.TargetStatus)
-	} else if err != gorm.ErrRecordNotFound {
-		return nil, err
 	}
 	return &original, nil
 }
 
+// inheritRevisionScope fills a revision request's omitted organization and
+// segment from the original (the form has no inputs for them).
+func inheritRevisionScope(req *models.KpiAnnualTargetRequest, present map[string]bool, original *models.KpiAnnualTarget) {
+	if !present["organization_id"] && original.OrganizationID != nil {
+		org := original.OrganizationID.String()
+		req.OrganizationID = &org
+	}
+	if !present["segmentation_values"] {
+		req.SegmentationValues = original.Segmentation()
+	}
+}
+
+// checkRevision validates a revision against the original it supersedes: it
+// must cover the same KPI, metric, period, organization and segment (only its
+// values may change), and the original may have only one open revision.
+// selfID is the revision's own ID when it is being edited (uuid.Nil on create).
+func checkRevision(db *gorm.DB, item, original *models.KpiAnnualTarget, selfID uuid.UUID) error {
+	sameID := func(a, b *uuid.UUID) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }
+	if item.KpiCode != original.KpiCode || item.KpiType != original.KpiType || !sameID(item.MetricID, original.MetricID) ||
+		!sameID(item.OrganizationID, original.OrganizationID) || item.TargetYear != original.TargetYear ||
+		!strings.EqualFold(item.PeriodCode, original.PeriodCode) ||
+		services.KpiTargetSegmentationKey(item.SegmentationValues) != services.KpiTargetSegmentationKey(original.SegmentationValues) {
+		return fmt.Errorf("A revision must keep the KPI, Metric, Organization, Segment and Period of the target it supersedes")
+	}
+	var open models.KpiAnnualTarget
+	err := db.Where("supersedes_entry_id = ? AND id <> ? AND target_status IN ?", original.ID, selfID, openTargetRevisionStatuses).
+		First(&open).Error
+	if err == nil {
+		return fmt.Errorf("This target already has a revision in progress (version %d, status '%s') — edit or submit that one instead", open.Version, open.TargetStatus)
+	} else if err != gorm.ErrRecordNotFound {
+		return err
+	}
+	return nil
+}
+
 // nextTargetVersion returns the next free Version for the target's
-// Metric+Year+Period+Org key, so a revision never collides with the original
-// (or an earlier, rejected revision) under idx_kpi_target_unique_v3.
+// Metric+Year+Period+Org+Segment key, so a revision never collides with the
+// original (or an earlier, rejected revision) under the unique index.
 func nextTargetVersion(db *gorm.DB, t *models.KpiAnnualTarget) (int, error) {
-	q := db.Model(&models.KpiAnnualTarget{}).Where("kpi_code = ? AND kpi_type = ? AND target_year = ? AND period_code = ?",
-		t.KpiCode, t.KpiType, t.TargetYear, t.PeriodCode)
-	if t.MetricID != nil {
-		q = q.Where("metric_id = ?", *t.MetricID)
-	} else {
-		q = q.Where("metric_id IS NULL")
-	}
-	if t.OrganizationID != nil {
-		q = q.Where("organization_id = ?", *t.OrganizationID)
-	} else {
-		q = q.Where("organization_id IS NULL")
-	}
 	var maxVersion int
+	q := services.KpiTargetScope(db.Model(&models.KpiAnnualTarget{}), t)
 	if err := q.Select("COALESCE(MAX(version), 0)").Scan(&maxVersion).Error; err != nil {
 		return 0, err
 	}
 	return maxVersion + 1, nil
+}
+
+// existingTargetConflict returns another target with the same identity and
+// version (BR-01), excluding excludeID.
+func existingTargetConflict(db *gorm.DB, t *models.KpiAnnualTarget, excludeID uuid.UUID) (*models.KpiAnnualTarget, error) {
+	var other models.KpiAnnualTarget
+	err := services.KpiTargetScope(db.Model(&models.KpiAnnualTarget{}), t).
+		Where("version = ? AND id <> ?", t.Version, excludeID).First(&other).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &other, nil
+}
+
+func targetDuplicateMessage(existing *models.KpiAnnualTarget) string {
+	return fmt.Sprintf("A target with status '%s' already exists for %s in period %s — edit or supersede it instead of creating a new one",
+		existing.TargetStatus, existing.KpiCode, services.FormatPeriodLabel(existing.PeriodCode, existing.TargetYear))
 }
 
 func customOverlapMessage(other *models.KpiAnnualTarget) string {
@@ -261,16 +383,16 @@ func (h *KpiPerformanceHandler) SetTarget(c *fiber.Ctx) error {
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
+	status, err := requestedTargetStatus(&req, models.KpiTargetStatusDraft)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
 
 	db := h.db.WithContext(c.UserContext())
 
 	// REL-03: Verify the KPI dictionary row exists
 	if !kpiExistsByCode(db, req.KpiCode, req.KpiType) {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "KPI not found in dictionary")
-	}
-
-	if err := validateTargetPeriod(db, &req); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
 	// Supersede: a new version of an approved target, linked back to it.
@@ -280,17 +402,23 @@ func (h *KpiPerformanceHandler) SetTarget(c *fiber.Ctx) error {
 		if err != nil {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 		}
-		superseded, err = loadSupersededTarget(db, &req, originalID, uuid.Nil)
-		if err != nil {
+		if superseded, err = loadSupersededTarget(db, originalID); err != nil {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 		}
+		inheritRevisionScope(&req, requestKeys(c), superseded)
 	}
 
-	item := req.ToModel(db)
+	item, err := buildTarget(db, &req)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+	item.TargetStatus = status
+	// The server assigns the version; a client-sent one is ignored.
+	item.Version = 1
 	excludeIDs := []uuid.UUID{}
 	if superseded != nil {
-		if item.TargetStatus != "draft" && item.TargetStatus != "submitted" {
-			item.TargetStatus = "draft"
+		if err := checkRevision(db, item, superseded, uuid.Nil); err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 		}
 		version, err := nextTargetVersion(db, item)
 		if err != nil {
@@ -306,35 +434,20 @@ func (h *KpiPerformanceHandler) SetTarget(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, customOverlapMessage(other))
 	}
 
-	// Check for duplicate: same KPI + metric + period + Organization + Version
-	// (BR-01). The comment always said "+ metric" but the query never
-	// actually filtered on metric_id, so creating a second metric's target
-	// for a KPI+period that already had one for a DIFFERENT metric was
-	// incorrectly rejected as a duplicate. Organization/Version are compared
-	// NULL-safely / exactly, mirroring idx_kpi_target_unique_v3.
-	dupQuery := db.Where("kpi_code = ? AND kpi_type = ? AND target_year = ? AND period_code = ? AND version = ?",
-		req.KpiCode, req.KpiType, req.TargetYear, req.PeriodCode, item.Version)
-	if req.MetricID != nil && *req.MetricID != "" {
-		dupQuery = dupQuery.Where("metric_id = ?", *req.MetricID)
-	} else {
-		dupQuery = dupQuery.Where("metric_id IS NULL")
-	}
-	if item.OrganizationID != nil {
-		dupQuery = dupQuery.Where("organization_id = ?", *item.OrganizationID)
-	} else {
-		dupQuery = dupQuery.Where("organization_id IS NULL")
-	}
-	var existing models.KpiAnnualTarget
-	dupErr := dupQuery.First(&existing).Error
-	if dupErr == nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest,
-			fmt.Sprintf("A target with status '%s' already exists for %s in period %s/%d — edit or supersede it instead of creating a new one",
-				existing.TargetStatus, req.KpiCode, req.PeriodCode, req.TargetYear))
-	} else if dupErr != gorm.ErrRecordNotFound {
+	// Duplicate: same KPI + metric + year + period + organization + segment
+	// + version (BR-01). The unique index is the final guard for requests
+	// racing past this check (mapped to 409 below).
+	if existing, err := existingTargetConflict(db, item, uuid.Nil); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to check for an existing target")
+	} else if existing != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, targetDuplicateMessage(existing))
 	}
 
 	if err := db.Create(item).Error; err != nil {
+		if services.IsUniqueViolation(err) {
+			return utils.ErrorResponse(c, fiber.StatusConflict,
+				"A target for this KPI, metric, period, organization and segment was just created by another request — reload and edit it instead")
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to create target")
 	}
 
@@ -358,10 +471,13 @@ func (h *KpiPerformanceHandler) SetTarget(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusCreated, "", reloaded.ToResponse())
 }
 
-// UpdateTarget edits an existing target in place. There was previously no
-// update endpoint at all — the frontend's "Edit" action called the same
-// create endpoint as "Add Target", which always inserted a brand new row
-// instead of changing the one being edited.
+// UpdateTarget edits an existing target in place. Fields the body omits keep
+// their stored values (so a partial payload such as the list's quick Submit
+// never wipes the organization, segment or effective dates). Only draft,
+// returned and rejected targets are editable; a submitted target only through
+// the admin override (perf:override_lock / Super Admin), which keeps its
+// status and is audited. Approved, locked and superseded targets are
+// immutable for everyone (BR-08) — a correction is a revision.
 func (h *KpiPerformanceHandler) UpdateTarget(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
@@ -372,9 +488,6 @@ func (h *KpiPerformanceHandler) UpdateTarget(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
-	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
-	}
 
 	db := h.db.WithContext(c.UserContext())
 
@@ -383,30 +496,57 @@ func (h *KpiPerformanceHandler) UpdateTarget(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 
-	// Only draft/returned/rejected targets can be edited — matches the
-	// frontend's Actions column, which only ever offers "Edit" for those
-	// statuses (approved/submitted/superseded/locked targets are locked).
-	if existing.TargetStatus != "draft" && existing.TargetStatus != "returned" && existing.TargetStatus != "rejected" && !isAdminOverride(c) {
-		return utils.ErrorResponse(c, fiber.StatusForbidden, "Only draft targets can be edited.")
+	adminOverride := false
+	switch {
+	case models.IsKpiTargetImmutableStatus(existing.TargetStatus):
+		return utils.ErrorResponse(c, fiber.StatusForbidden,
+			fmt.Sprintf("This target is %s and cannot be changed — create a revision (Supersede) to correct it.", existing.TargetStatus))
+	case models.IsKpiTargetEditableStatus(existing.TargetStatus):
+	case isAdminOverride(c):
+		adminOverride = true
+	default:
+		return utils.ErrorResponse(c, fiber.StatusForbidden,
+			fmt.Sprintf("This target is %s and waiting for approval — it can't be edited until it is returned or rejected.", existing.TargetStatus))
 	}
 
-	if !kpiExistsByCode(db, req.KpiCode, req.KpiType) {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, "KPI not found in dictionary")
+	present := requestKeys(c)
+	req.FillOmitted(&existing, present)
+	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
 	}
-
-	if err := validateTargetPeriod(db, &req); err != nil {
+	// The route's access check was made against this target's KPI; moving
+	// the target to another KPI would bypass it.
+	if req.KpiCode != existing.KpiCode || req.KpiType != existing.KpiType {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "A target's KPI cannot be changed — create a target for the other KPI instead")
+	}
+	// An omitted status keeps a draft/submitted target's status; a returned
+	// or rejected one goes back to draft once edited.
+	fallback := models.KpiTargetStatusDraft
+	if existing.TargetStatus == models.KpiTargetStatusSubmitted {
+		fallback = existing.TargetStatus
+	}
+	status, err := requestedTargetStatus(&req, fallback)
+	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	updated := req.ToModel(db)
+	updated, err := buildTarget(db, &req)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+	updated.TargetStatus = status
+	// The version and revision link never change on edit.
+	updated.Version = existing.Version
+	updated.SupersedesEntryID = existing.SupersedesEntryID
 	excludeIDs := []uuid.UUID{existing.ID}
 	if existing.SupersedesEntryID != nil {
-		// A revision keeps its version and link; only its values change.
-		if _, err := loadSupersededTarget(db, &req, *existing.SupersedesEntryID, existing.ID); err != nil {
+		original, err := loadSupersededTarget(db, *existing.SupersedesEntryID)
+		if err == nil {
+			err = checkRevision(db, updated, original, existing.ID)
+		}
+		if err != nil {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 		}
-		updated.Version = existing.Version
-		updated.SupersedesEntryID = existing.SupersedesEntryID
 		excludeIDs = append(excludeIDs, *existing.SupersedesEntryID)
 	}
 	if other, err := customTargetOverlap(db, updated, excludeIDs...); err != nil {
@@ -414,50 +554,38 @@ func (h *KpiPerformanceHandler) UpdateTarget(c *fiber.Ctx) error {
 	} else if other != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, customOverlapMessage(other))
 	}
-
-	// Duplicate check, excluding this record itself — editing a target's own
-	// unchanged period/metric must not trip over its own existing row. Also
-	// scoped to metric_id + organization_id + version (previously omitted
-	// metric_id, same bug as SetTarget above; org/version mirror
-	// idx_kpi_target_unique_v3 / BR-01).
-	dupQuery := db.Model(&models.KpiAnnualTarget{}).Where(
-		"kpi_code = ? AND kpi_type = ? AND target_year = ? AND period_code = ? AND version = ? AND id != ?",
-		req.KpiCode, req.KpiType, req.TargetYear, req.PeriodCode, updated.Version, id,
-	)
-	if req.MetricID != nil && *req.MetricID != "" {
-		dupQuery = dupQuery.Where("metric_id = ?", *req.MetricID)
-	} else {
-		dupQuery = dupQuery.Where("metric_id IS NULL")
-	}
-	if updated.OrganizationID != nil {
-		dupQuery = dupQuery.Where("organization_id = ?", *updated.OrganizationID)
-	} else {
-		dupQuery = dupQuery.Where("organization_id IS NULL")
-	}
-	var conflicting models.KpiAnnualTarget
-	if dupErr := dupQuery.First(&conflicting).Error; dupErr == nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest,
-			fmt.Sprintf("A target with status '%s' already exists for %s in period %s/%d — edit or supersede it instead of creating a new one",
-				conflicting.TargetStatus, req.KpiCode, req.PeriodCode, req.TargetYear))
-	} else if dupErr != gorm.ErrRecordNotFound {
+	if conflicting, err := existingTargetConflict(db, updated, id); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to check for an existing target")
+	} else if conflicting != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, targetDuplicateMessage(conflicting))
 	}
+
 	updated.ID = existing.ID
 	updated.CreatedAt = existing.CreatedAt
-	updated.ApprovedByID = existing.ApprovedByID
-	updated.ApprovedAt = existing.ApprovedAt
+	// Only an approved target carries approval stamps, and an edit never
+	// produces one.
+	updated.ApprovedByID = nil
+	updated.ApprovedAt = nil
 	if err := db.Save(updated).Error; err != nil {
+		if services.IsUniqueViolation(err) {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "Another target already exists for this KPI, metric, period, organization and segment")
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
 	}
 
 	var reloaded models.KpiAnnualTarget
 	db.Preload("Metric").Preload("ApprovedBy").First(&reloaded, id)
 
+	description := fmt.Sprintf("Updated target for %s period %s/%d", reloaded.KpiCode, reloaded.PeriodCode, reloaded.TargetYear)
+	if adminOverride {
+		description = fmt.Sprintf("Admin override: updated %s target for %s period %s/%d (status kept %s)",
+			existing.TargetStatus, reloaded.KpiCode, reloaded.PeriodCode, reloaded.TargetYear, reloaded.TargetStatus)
+	}
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
 		Action:      "update",
 		Module:      "kpi",
 		ResourceID:  reloaded.ID.String(),
-		Description: fmt.Sprintf("Updated target for %s period %s/%d", reloaded.KpiCode, reloaded.PeriodCode, reloaded.TargetYear),
+		Description: description,
 		Status:      "success",
 	})
 
@@ -465,15 +593,22 @@ func (h *KpiPerformanceHandler) UpdateTarget(c *fiber.Ctx) error {
 }
 
 type targetTransitionRequest struct {
-	Action string `json:"action" validate:"required,oneof=approve reject return"`
+	Action string `json:"action"`
 }
 
-// TransitionTarget moves a target between submitted/approved/rejected/draft.
-// There was previously no way at all to approve a target — target_status
-// could only ever be set to whatever the create/update form sent directly
-// (draft/submitted), with no gated approval step, even though the
-// "targets:approve" permission already existed and the Targets page's own
-// mockup assumes an Approved state is reachable.
+// targetTransitions maps each review action to the status it produces and
+// its past-tense label for messages.
+var targetTransitions = map[string]struct{ status, past string }{
+	"approve": {models.KpiTargetStatusApproved, "approved"},
+	"reject":  {models.KpiTargetStatusRejected, "rejected"},
+	"return":  {models.KpiTargetStatusReturned, "returned"},
+}
+
+// TransitionTarget moves a submitted target to approved, returned or
+// rejected — the only way to reach those statuses. Approving a revision
+// supersedes the original in the same transaction; approving is refused
+// while another approved target exists for the same KPI, metric, period,
+// organization and segment (exactly one approved target per key).
 func (h *KpiPerformanceHandler) TransitionTarget(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
@@ -484,8 +619,10 @@ func (h *KpiPerformanceHandler) TransitionTarget(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
-	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	transition, ok := targetTransitions[req.Action]
+	if !ok {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest,
+			fmt.Sprintf("Unknown action %q — use approve, return or reject (submit by saving the target with status submitted)", req.Action))
 	}
 
 	// The route only requires targets:approve OR targets:reject (either
@@ -508,50 +645,61 @@ func (h *KpiPerformanceHandler) TransitionTarget(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 
-	if target.TargetStatus != "submitted" {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest,
-			fmt.Sprintf("Only submitted targets can be %sd — this target is %s", req.Action, target.TargetStatus))
-	}
-
-	var newStatus string
-	switch req.Action {
-	case "approve":
-		newStatus = "approved"
-	case "reject":
-		newStatus = "rejected"
-	case "return":
-		newStatus = "returned"
-	}
-
-	updates := map[string]interface{}{"target_status": newStatus}
-	if req.Action == "approve" {
-		userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-		now := time.Now()
-		updates["approved_by_id"] = userID
-		updates["approved_at"] = now
-	}
-	// Approving a revision retires the version it supersedes in the same
-	// transaction, so exactly one approved target exists for the period. The
-	// original row is only re-labelled Superseded; its values stay for audit.
+	errNotSubmitted := fmt.Errorf("not submitted")
 	errOriginalNotApproved := fmt.Errorf("the superseded target is no longer approved")
+	var conflict *models.KpiAnnualTarget
 	err = db.Transaction(func(tx *gorm.DB) error {
-		if req.Action == "approve" && target.SupersedesEntryID != nil {
-			res := tx.Model(&models.KpiAnnualTarget{}).
-				Where("id = ? AND target_status = ?", *target.SupersedesEntryID, "approved").
-				Update("target_status", "superseded")
-			if res.Error != nil {
-				return res.Error
+		// Lock the row so two approvers can't act on it at once.
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&target, id).Error; err != nil {
+			return err
+		}
+		if target.TargetStatus != models.KpiTargetStatusSubmitted {
+			return errNotSubmitted
+		}
+		updates := map[string]interface{}{"target_status": transition.status}
+		if req.Action == "approve" {
+			// Approving a revision retires the version it supersedes, so
+			// exactly one approved target exists for the period. The
+			// original row is only re-labelled Superseded; its values stay
+			// for audit.
+			if target.SupersedesEntryID != nil {
+				res := tx.Model(&models.KpiAnnualTarget{}).
+					Where("id = ? AND target_status = ?", *target.SupersedesEntryID, models.KpiTargetStatusApproved).
+					Update("target_status", models.KpiTargetStatusSuperseded)
+				if res.Error != nil {
+					return res.Error
+				}
+				if res.RowsAffected == 0 {
+					return errOriginalNotApproved
+				}
 			}
-			if res.RowsAffected == 0 {
+			var other models.KpiAnnualTarget
+			err := services.KpiTargetScope(tx.Model(&models.KpiAnnualTarget{}), &target).
+				Where("target_status = ? AND id <> ?", models.KpiTargetStatusApproved, target.ID).First(&other).Error
+			if err == nil {
+				conflict = &other
 				return errOriginalNotApproved
+			} else if err != gorm.ErrRecordNotFound {
+				return err
 			}
+			updates["approved_by_id"] = c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+			updates["approved_at"] = time.Now()
 		}
 		return tx.Model(&target).Updates(updates).Error
 	})
-	if err == errOriginalNotApproved {
+	switch {
+	case err == errNotSubmitted:
+		return utils.ErrorResponse(c, fiber.StatusBadRequest,
+			fmt.Sprintf("Only submitted targets can be %s — this target is %s", transition.past, target.TargetStatus))
+	case conflict != nil:
+		return utils.ErrorResponse(c, fiber.StatusConflict,
+			fmt.Sprintf("Another approved target (version %d) already exists for this KPI, metric and period — submit a revision of it (Supersede) instead", conflict.Version))
+	case err == errOriginalNotApproved:
 		return utils.ErrorResponse(c, fiber.StatusConflict,
 			"The target this revision supersedes is no longer approved, so the revision can't be approved")
-	} else if err != nil {
+	case services.IsUniqueViolation(err):
+		return utils.ErrorResponse(c, fiber.StatusConflict, "Another approved target already exists for this KPI, metric and period")
+	case err != nil:
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
 	}
 
@@ -562,29 +710,64 @@ func (h *KpiPerformanceHandler) TransitionTarget(c *fiber.Ctx) error {
 		Action:      "transition",
 		Module:      "kpi",
 		ResourceID:  id.String(),
-		Description: fmt.Sprintf("%s target %s (status -> %s)", req.Action, reloaded.KpiCode, newStatus),
+		Description: fmt.Sprintf("%s target %s (status -> %s)", req.Action, reloaded.KpiCode, transition.status),
 		Status:      "success",
 	})
 
 	return utils.SuccessResponse(c, fiber.StatusOK, "", reloaded.ToResponse())
 }
 
+// DeleteTarget removes a draft, returned or rejected target (a submitted one
+// only through the admin override). Approved, locked and superseded targets
+// are the audit trail of what was in force and are never deleted — deleting
+// one would also orphan its revisions.
 func (h *KpiPerformanceHandler) DeleteTarget(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
-	result := h.db.WithContext(c.UserContext()).Delete(&models.KpiAnnualTarget{}, id)
-	if result.RowsAffected == 0 {
+	db := h.db.WithContext(c.UserContext())
+	var target models.KpiAnnualTarget
+	if err := db.First(&target, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
+	adminOverride := false
+	switch {
+	case models.IsKpiTargetImmutableStatus(target.TargetStatus):
+		return utils.ErrorResponse(c, fiber.StatusForbidden,
+			fmt.Sprintf("This target is %s and cannot be deleted — only draft, returned or rejected targets can be.", target.TargetStatus))
+	case models.IsKpiTargetEditableStatus(target.TargetStatus):
+	case isAdminOverride(c):
+		adminOverride = true
+	default:
+		return utils.ErrorResponse(c, fiber.StatusForbidden,
+			fmt.Sprintf("This target is %s and waiting for approval — it can't be deleted until it is returned or rejected.", target.TargetStatus))
+	}
 
+	// Guard the status in the predicate so a target approved in the
+	// meantime is never deleted.
+	allowed := []string{models.KpiTargetStatusDraft, models.KpiTargetStatusReturned, models.KpiTargetStatusRejected}
+	if adminOverride {
+		allowed = append(allowed, models.KpiTargetStatusSubmitted)
+	}
+	result := db.Where("target_status IN ?", allowed).Delete(&models.KpiAnnualTarget{}, id)
+	if result.Error != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to delete target")
+	}
+	if result.RowsAffected == 0 {
+		return utils.ErrorResponse(c, fiber.StatusConflict, "The target changed status meanwhile and can no longer be deleted — reload it")
+	}
+
+	description := fmt.Sprintf("Deleted %s target %s", target.TargetStatus, id)
+	if adminOverride {
+		description = "Admin override: " + description
+	}
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
 		Action:      "delete",
 		Module:      "kpi",
 		ResourceID:  id.String(),
-		Description: fmt.Sprintf("Deleted annual target %s", id),
+		Description: description,
 		Status:      "success",
 	})
 
@@ -677,15 +860,6 @@ func (h *KpiPerformanceHandler) SubmitPerformance(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "KPI not found in dictionary")
 	}
 
-	// REL-18: Verify an approved target exists for this KPI + period
-	var target models.KpiAnnualTarget
-	if err := db.Where("kpi_code = ? AND kpi_type = ? AND target_year = ? AND period_code = ? AND target_status = 'approved'",
-		req.KpiCode, req.KpiType, req.Year, req.PeriodKey,
-	).First(&target).Error; err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest,
-			fmt.Sprintf("No approved target found for %s in period %s/%d", req.KpiCode, req.PeriodKey, req.Year))
-	}
-
 	periodType := req.PeriodType
 	if periodType == "" {
 		periodType = "quarter"
@@ -698,6 +872,31 @@ func (h *KpiPerformanceHandler) SubmitPerformance(c *fiber.Ctx) error {
 	if err := services.ValidatePeriod(freq, periodType, periodKey); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
+	// "2026-Q2" and "q2" are the same period; its year must be the record's.
+	periodCode, _, err := services.CanonicalTargetPeriodCode(periodKey, req.Year)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+	if !periodWithinQuarter(periodCode, req.Quarter) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest,
+			fmt.Sprintf("Period %s does not fall in quarter Q%d", services.FormatPeriodLabel(periodCode, req.Year), req.Quarter))
+	}
+
+	// REL-18: the record is measured against the approved target for this
+	// KPI + period — its value, not one supplied by the client.
+	target, err := approvedLegacyTarget(db, req.KpiCode, req.KpiType, req.Year, periodCode)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	// One live record per KPI + period (a rejected one can be re-entered).
+	if dup, err := legacyPerformanceExists(db, req.KpiCode, req.KpiType, req.Year, periodCode); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
+	} else if dup != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest,
+			fmt.Sprintf("A performance record (status %s) already exists for %s in %s — edit it instead",
+				dup.Status, req.KpiCode, services.FormatPeriodLabel(periodCode, req.Year)))
+	}
 
 	item := &models.KpiPerformance{
 		KpiCode:          req.KpiCode,
@@ -707,9 +906,9 @@ func (h *KpiPerformanceHandler) SubmitPerformance(c *fiber.Ctx) error {
 		PeriodType:       periodType,
 		PeriodKey:        periodKey,
 		TargetID:         &target.ID,
-		Target:           req.Target,
+		Target:           target.TargetValue,
 		Actual:           req.Actual,
-		AchievementPct:   services.CalculateAchievement(req.Actual, req.Target, polarity),
+		AchievementPct:   services.CalculateAchievement(req.Actual, target.TargetValue, polarity),
 		TrendDescription: req.TrendDescription,
 		Justification:    req.Justification,
 		CorrectiveAction: req.CorrectiveAction,
@@ -1189,6 +1388,84 @@ func hasTargetPermission(c *fiber.Ctx, permission string) bool {
 
 // ─── Update / Delete (approval-lock enforced) ──────────────────────────────────
 
+// legacyPerformanceEditable reports whether a legacy performance record may
+// still be changed by its submitter: only while it is a draft or after it
+// was sent back (returned / rejected). Submitted, under review, approved and
+// published records are locked (the admin override still applies).
+func legacyPerformanceEditable(status string) bool {
+	switch status {
+	case models.KPIPerfStatusDraft, models.KPIPerfStatusRejected, "returned":
+		return true
+	}
+	return false
+}
+
+func legacyPerformanceLockedMessage(status, verb string) string {
+	return fmt.Sprintf("This KPI Entry is %s and cannot be %s.", strings.ReplaceAll(status, "_", " "), verb)
+}
+
+// periodWithinQuarter reports whether a canonical period code and a quarter
+// (1–4) agree: the period lies inside the quarter (a month or the quarter
+// itself) or contains it (a half-year or the year). Custom ranges pass.
+func periodWithinQuarter(periodCode string, quarter int) bool {
+	start, end, ok := services.PeriodDateRange(2000, periodCode)
+	if !ok || services.IsCustomPeriodCode(periodCode) {
+		return true
+	}
+	qs, qe := (quarter-1)*3+1, quarter*3
+	sm, em := int(start.Month()), int(end.Month())
+	return (sm >= qs && em <= qe) || (sm <= qs && em >= qe)
+}
+
+// approvedLegacyTarget finds the approved target a legacy (KPI-level)
+// performance record is measured against: the KPI-level target for the
+// period (no metric, organization or segment), else the period's only
+// approved target. Several metric-level targets and no KPI-level one is
+// ambiguous.
+func approvedLegacyTarget(db *gorm.DB, kpiCode, kpiType string, year int, periodCode string) (*models.KpiAnnualTarget, error) {
+	var targets []models.KpiAnnualTarget
+	if err := db.Where("kpi_code = ? AND kpi_type = ? AND target_year = ? AND period_code = ? AND target_status = ?",
+		kpiCode, kpiType, year, periodCode, models.KpiTargetStatusApproved).
+		Order("version DESC").Find(&targets).Error; err != nil {
+		return nil, err
+	}
+	label := services.FormatPeriodLabel(periodCode, year)
+	for i := range targets {
+		t := &targets[i]
+		if t.MetricID == nil && t.OrganizationID == nil && services.KpiTargetSegmentationKey(t.SegmentationValues) == "" {
+			return t, nil
+		}
+	}
+	switch len(targets) {
+	case 0:
+		return nil, fmt.Errorf("No approved target found for %s in %s", kpiCode, label)
+	case 1:
+		return &targets[0], nil
+	}
+	return nil, fmt.Errorf("%s has %d approved targets in %s (per metric, organization or segment) and no KPI-level one — set an approved KPI-level target for the period",
+		kpiCode, len(targets), label)
+}
+
+// legacyPerformanceExists returns a non-rejected legacy performance record
+// for the same KPI and period, matching "2026-Q2" and "q2" as one period.
+func legacyPerformanceExists(db *gorm.DB, kpiCode, kpiType string, year int, periodCode string) (*models.KpiPerformance, error) {
+	var rows []models.KpiPerformance
+	if err := db.Where("kpi_code = ? AND kpi_type = ? AND year = ? AND status <> ?",
+		kpiCode, kpiType, year, models.KPIPerfStatusRejected).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		key := rows[i].PeriodKey
+		if key == "" {
+			key = fmt.Sprintf("%d-Q%d", rows[i].Year, rows[i].Quarter)
+		}
+		if code, _, err := services.CanonicalTargetPeriodCode(key, 0); err == nil && code == periodCode {
+			return &rows[i], nil
+		}
+	}
+	return nil, nil
+}
+
 func (h *KpiPerformanceHandler) UpdatePerformance(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
@@ -1209,18 +1486,26 @@ func (h *KpiPerformanceHandler) UpdatePerformance(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 
-	if perf.Status == models.KPIPerfStatusApproved && !isAdminOverride(c) {
-		if req.Actual != perf.Actual {
+	if !legacyPerformanceEditable(perf.Status) && !isAdminOverride(c) {
+		if perf.Status == models.KPIPerfStatusApproved && req.Actual != perf.Actual {
 			return utils.ErrorResponse(c, fiber.StatusForbidden, "Actual Value cannot be modified after approval.")
 		}
-		return utils.ErrorResponse(c, fiber.StatusForbidden, "Editing is not allowed. Approved KPI Entries cannot be modified.")
+		return utils.ErrorResponse(c, fiber.StatusForbidden, legacyPerformanceLockedMessage(perf.Status, "modified"))
 	}
 
+	// The target is the linked approved target's value, never the client's.
+	targetValue := perf.Target
+	if perf.TargetID != nil {
+		var target models.KpiAnnualTarget
+		if err := db.Select("target_value").First(&target, *perf.TargetID).Error; err == nil {
+			targetValue = target.TargetValue
+		}
+	}
 	polarity := services.GetKPIPolarity(db, perf.KpiCode, perf.KpiType)
 	updates := map[string]interface{}{
-		"target":            req.Target,
+		"target":            targetValue,
 		"actual":            req.Actual,
-		"achievement_pct":   services.CalculateAchievement(req.Actual, req.Target, polarity),
+		"achievement_pct":   services.CalculateAchievement(req.Actual, targetValue, polarity),
 		"trend_description": req.TrendDescription,
 		"justification":     req.Justification,
 		"corrective_action": req.CorrectiveAction,
@@ -1255,8 +1540,8 @@ func (h *KpiPerformanceHandler) DeletePerformance(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 
-	if perf.Status == models.KPIPerfStatusApproved && !isAdminOverride(c) {
-		return utils.ErrorResponse(c, fiber.StatusForbidden, "This KPI Entry has already been approved and cannot be deleted.")
+	if !legacyPerformanceEditable(perf.Status) && !isAdminOverride(c) {
+		return utils.ErrorResponse(c, fiber.StatusForbidden, legacyPerformanceLockedMessage(perf.Status, "deleted"))
 	}
 
 	result := db.Delete(&models.KpiPerformance{}, id)
@@ -1347,8 +1632,9 @@ func (h *KpiPerformanceHandler) DeletePerformanceEvidence(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 
-	if perf.Status == models.KPIPerfStatusApproved && !isAdminOverride(c) {
-		return utils.ErrorResponse(c, fiber.StatusForbidden, "Evidence cannot be removed from an approved KPI Entry.")
+	if !legacyPerformanceEditable(perf.Status) && !isAdminOverride(c) {
+		return utils.ErrorResponse(c, fiber.StatusForbidden,
+			fmt.Sprintf("Evidence cannot be removed from a KPI Entry that is %s.", strings.ReplaceAll(perf.Status, "_", " ")))
 	}
 
 	result := h.db.WithContext(c.UserContext()).Where("kpi_performance_id = ?", id).Delete(&models.KpiPerformanceEvidence{}, evidenceID)

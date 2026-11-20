@@ -46,6 +46,21 @@ func (imp *kpiImporter) commit(tx *gorm.DB) error {
 			return err
 		}
 	}
+	for _, n := range imp.md[mdOrganization] {
+		if create(n) {
+			if err := insert("organization "+n.NameEn, &models.KpiOrganization{ID: n.ID, NameEn: n.NameEn, NameAr: n.NameAr, IsActive: true}); err != nil {
+				return err
+			}
+		}
+	}
+	for _, n := range imp.md[mdAwardMeasure] {
+		if create(n) {
+			// Code is left empty so Postgres assigns it from award_kpi_measure_code_seq.
+			if err := insert("award KPI measure "+n.NameEn, &models.AwardKpiMeasure{ID: n.ID, NameEn: n.NameEn, NameAr: n.NameAr, Version: 1}); err != nil {
+				return err
+			}
+		}
+	}
 	for _, n := range imp.md[mdPillar] {
 		if create(n) {
 			if err := insert("pillar "+n.NameEn, &models.Pillar{ID: n.ID, NameEn: n.NameEn, NameAr: n.NameAr, OwnerID: idOf(n.Owner), IsActive: true}); err != nil {
@@ -80,7 +95,15 @@ func (imp *kpiImporter) commit(tx *gorm.DB) error {
 	for _, n := range imp.md[mdProcess] {
 		if create(n) {
 			p := &models.Process{ID: n.ID, NameEn: n.NameEn, NameAr: n.NameAr, OperationalObjectiveID: n.Objective.ID, IsActive: true}
+			// Goal always comes from the parent objective; pillar and enabler
+			// too unless the Operational Objectives sheet gives its own.
 			p.GoalID, p.PillarID, p.EnablerID = idOf(n.Objective.Goal), idOf(n.Objective.Pillar), idOf(n.Objective.Enabler)
+			if n.Pillar != nil {
+				p.PillarID = idOf(n.Pillar)
+			}
+			if n.Enabler != nil {
+				p.EnablerID = idOf(n.Enabler)
+			}
 			if err := insert("process "+n.NameEn, p); err != nil {
 				return err
 			}
@@ -110,7 +133,7 @@ func (imp *kpiImporter) commit(tx *gorm.DB) error {
 	}
 	for _, n := range imp.md[mdInitiative] {
 		if create(n) {
-			i := &models.Initiative{ID: n.ID, NameEn: n.NameEn, NameAr: n.NameAr, GoalID: idOf(n.Goal), PillarID: idOf(n.Pillar), EnablerID: idOf(n.Enabler), OwnerID: idOf(n.Owner), Status: "draft"}
+			i := &models.Initiative{ID: n.ID, NameEn: n.NameEn, NameAr: n.NameAr, GoalID: idOf(n.Goal), ObjectiveID: idOf(n.Objective), PillarID: idOf(n.Pillar), EnablerID: idOf(n.Enabler), OwnerID: idOf(n.Owner), Status: "draft"}
 			if err := insert("initiative "+n.NameEn, i); err != nil {
 				return err
 			}
@@ -133,6 +156,11 @@ func (imp *kpiImporter) commit(tx *gorm.DB) error {
 				return fmt.Errorf("updating KPI %s: record no longer exists", k.Code)
 			}
 		}
+		if (k.action == kpiImportActionCreate && len(k.RelatedDepts) > 0) || (k.action == kpiImportActionUpdate && k.present["related_depts"]) {
+			if err := replaceKpiRelatedDepartments(tx, k, idOf); err != nil {
+				return err
+			}
+		}
 	}
 
 	// Metrics
@@ -144,7 +172,7 @@ func (imp *kpiImporter) commit(tx *gorm.DB) error {
 			ID: uuid.New(), KpiID: k.ID, KpiType: k.Type, Name: k.NameEn, MetricCode: cutRunes(k.Code+"-M1", 50),
 			MetricStatus: "Active", MetricType: "Numeric", BaselineValue: k.Baseline, Weight: 1,
 			CalculationType: "Direct Value", Direction: directionFor(k.Polarity), DecimalPrecision: 2,
-			AggregationMethod: "Average", ReportingFrequency: "Quarterly", DataSource: cutRunes(k.DataSource, 100),
+			AggregationMethod: "Average", ReportingFrequency: metricFrequencyFor(k.Frequency), DataSource: cutRunes(k.DataSource, 100),
 			CalculationTraceRequired: true, CreatedByID: imp.userID,
 		}
 		if err := insert("metric for "+k.Code, m); err != nil {
@@ -186,17 +214,22 @@ func (imp *kpiImporter) commit(tx *gorm.DB) error {
 		}
 	}
 
-	// Historical quarterly performance → approved KPI entries.
+	// Historical performance (any period) → approved KPI entries.
 	for _, p := range imp.perfs {
 		if p.action != kpiImportActionCreate && p.action != kpiImportActionUpdate {
 			continue
 		}
 		k := p.Kpi
-		if k.MetricID == nil {
+		metricID := k.MetricID
+		if p.Metric != nil {
+			metricID = &p.Metric.ID
+		}
+		label := perfRecordID(p)
+		if metricID == nil {
 			return fmt.Errorf("KPI %s has no metric to attach performance to", k.Code)
 		}
 		e := models.KpiEntry{
-			KpiID: k.ID, KpiType: k.Type, MetricID: *k.MetricID, ReportingYear: p.Year, PeriodCode: fmt.Sprintf("q%d", p.Quarter),
+			KpiID: k.ID, KpiType: k.Type, MetricID: *metricID, ReportingYear: p.Year, PeriodCode: p.PeriodCode,
 			CalculationTypeSnapshot: "Direct Value", DirectionSnapshot: directionFor(k.Polarity), DecimalPrecisionSnapshot: 2,
 			AggregationMethodSnapshot: "Average", TargetValueSnapshot: p.Target, ActualValue: p.Actual,
 			DataSourceType: "Import", SourceReference: cutRunes(fmt.Sprintf("%s — %s row %d", imp.res.FileName, p.Sheet, p.Row), 500),
@@ -204,7 +237,10 @@ func (imp *kpiImporter) commit(tx *gorm.DB) error {
 		}
 		actual := p.Actual
 		e.DirectActualValue = &actual
-		start, end := quarterStart(p.Year, p.Quarter), quarterEnd(p.Year, p.Quarter)
+		start, end, ok := PeriodDateRange(p.Year, p.PeriodCode)
+		if !ok {
+			return fmt.Errorf("performance %s: invalid period", label)
+		}
 		e.PeriodStart, e.PeriodEnd = &start, &end
 		e.ComputeAchievement()
 
@@ -215,16 +251,16 @@ func (imp *kpiImporter) commit(tx *gorm.DB) error {
 				"source_reference": e.SourceReference, "updated_at": now,
 			})
 			if res.Error != nil {
-				return fmt.Errorf("updating performance %s %d Q%d: %w", k.Code, p.Year, p.Quarter, res.Error)
+				return fmt.Errorf("updating performance %s: %w", label, res.Error)
 			}
 			if res.RowsAffected == 0 {
-				return fmt.Errorf("updating performance %s %d Q%d: record no longer exists", k.Code, p.Year, p.Quarter)
+				return fmt.Errorf("updating performance %s: record no longer exists", label)
 			}
 			continue
 		}
 		e.ID = uuid.New()
 		e.SubmittedByID, e.ApprovedByID = &imp.userID, &imp.userID
-		if err := insert(fmt.Sprintf("performance %s %d Q%d", k.Code, p.Year, p.Quarter), &e); err != nil {
+		if err := insert("performance "+label, &e); err != nil {
 			return err
 		}
 	}
@@ -254,25 +290,30 @@ func (imp *kpiImporter) newKpiModel(k *kpiRec, idOf func(*mdNode) *uuid.UUID) in
 			OwnerType: k.OwnerType, OwnerDeptID: idOf(k.OwnerDept), OwningAgencyID: idOf(k.Agency),
 			Polarity: k.Polarity, ActivationStatus: models.KPIStatusDraft, DescriptionEn: k.DescriptionEn, DescriptionAr: k.DescriptionAr,
 			Formula: k.Formula, Baseline: k.Baseline, ReportingFrequency: k.Frequency, Lifecycle: k.Lifecycle, DataSource: k.DataSource,
-			Notes: k.Notes,
+			Notes: k.Notes, Classification: k.Classification, TargetRequirement: k.TargetRequirement, UnitOfMeasure: k.UnitOfMeasure,
+			OwnerOrgID: idOf(k.OwnerOrg), AwardKpiMeasureID: idOf(k.AwardMeasure),
 		}
 	case models.KPITypeAward:
 		return &models.AwardKPI{
 			ID: k.ID, Code: k.Code, NameEn: k.NameEn, NameAr: k.NameAr,
-			GoalID: idOf(k.Goal), AwardSubCriterionID: idOf(k.SubCriterion), PillarID: idOf(k.Pillar), DomainID: idOf(k.Domain),
+			GoalID: idOf(k.Goal), OperationalObjectiveID: idOf(k.Objective), ProcessID: idOf(k.Process),
+			AwardSubCriterionID: idOf(k.SubCriterion), PillarID: idOf(k.Pillar), DomainID: idOf(k.Domain),
 			OwnerType: k.OwnerType, OwnerDeptID: idOf(k.OwnerDept), OwningAgencyID: idOf(k.Agency),
 			Polarity: k.Polarity, ActivationStatus: models.KPIStatusDraft, DescriptionEn: k.DescriptionEn, DescriptionAr: k.DescriptionAr,
 			Formula: k.Formula, Baseline: k.Baseline, ReportingFrequency: k.Frequency, Lifecycle: k.Lifecycle, DataSource: k.DataSource,
-			Notes: k.Notes,
+			Notes: k.Notes, Classification: k.Classification, TargetRequirement: k.TargetRequirement, UnitOfMeasure: k.UnitOfMeasure,
+			OwnerOrgID: idOf(k.OwnerOrg), AwardKpiMeasureID: idOf(k.AwardMeasure),
 		}
 	}
 	return &models.StrategicKPI{
 		ID: k.ID, Code: k.Code, NameEn: k.NameEn, NameAr: k.NameAr,
 		PillarID: idOf(k.Pillar), GoalID: idOf(k.Goal), DomainID: idOf(k.Domain),
+		OperationalObjectiveID: idOf(k.Objective), ProcessID: idOf(k.Process),
 		OwnerType: k.OwnerType, OwnerDeptID: idOf(k.OwnerDept), OwningAgencyID: idOf(k.Agency),
 		Polarity: k.Polarity, ActivationStatus: models.KPIStatusDraft, DescriptionEn: k.DescriptionEn, DescriptionAr: k.DescriptionAr,
 		Formula: k.Formula, Baseline: k.Baseline, ReportingFrequency: k.Frequency, Lifecycle: k.Lifecycle, DataSource: k.DataSource,
-		SegmentationAxes: k.SegAxes, Notes: k.Notes,
+		SegmentationAxes: k.SegAxes, Notes: k.Notes, Classification: k.Classification, TargetRequirement: k.TargetRequirement,
+		UnitOfMeasure: k.UnitOfMeasure, OwnerOrgID: idOf(k.OwnerOrg), AwardKpiMeasureID: idOf(k.AwardMeasure),
 	}
 }
 
@@ -287,15 +328,70 @@ func (imp *kpiImporter) kpiUpdates(k *kpiRec, idOf func(*mdNode) *uuid.UUID) map
 		"reporting_frequency": k.Frequency, "lifecycle": k.Lifecycle, "data_source": k.DataSource,
 		"notes": k.Notes, "updated_at": time.Now(),
 	}
+	// Newer columns are written only when the sheet has them (see kpiRec.present).
+	if k.present["classification"] {
+		u["classification"] = k.Classification
+	}
+	if k.present["target_requirement"] {
+		u["target_requirement"] = k.TargetRequirement
+	}
+	if k.present["unit"] {
+		u["unit_of_measure"] = k.UnitOfMeasure
+	}
+	if k.present["award_measure"] {
+		u["award_kpi_measure_id"] = idOf(k.AwardMeasure)
+	}
+	// The organization only applies to external owners, as on the form.
+	if k.OwnerType != models.KPIOwnerTypeExternal {
+		u["owner_org_id"] = nil
+	} else if k.present["owner_org"] {
+		u["owner_org_id"] = idOf(k.OwnerOrg)
+	}
+	if k.Process != nil {
+		u["operational_objective_id"], u["process_id"] = idOf(k.Objective), idOf(k.Process)
+	}
 	switch k.Type {
 	case models.KPITypeStrategic:
 		u["segmentation_axes"] = k.SegAxes
-	case models.KPITypeOperational:
-		u["operational_objective_id"], u["process_id"] = idOf(k.Objective), idOf(k.Process)
 	case models.KPITypeAward:
 		u["award_sub_criterion_id"] = idOf(k.SubCriterion)
 	}
 	return u
+}
+
+// replaceKpiRelatedDepartments sets the KPI's Related Departments to the
+// workbook's list (an empty cell clears them on update).
+func replaceKpiRelatedDepartments(tx *gorm.DB, k *kpiRec, idOf func(*mdNode) *uuid.UUID) error {
+	var ids []uuid.UUID
+	for _, d := range k.RelatedDepts {
+		if id := idOf(d); id != nil {
+			ids = append(ids, *id)
+		}
+	}
+	model := kpiModelFor(k.Type)
+	switch m := model.(type) {
+	case *models.StrategicKPI:
+		m.ID = k.ID
+	case *models.OperationalKPI:
+		m.ID = k.ID
+	case *models.AwardKPI:
+		m.ID = k.ID
+	}
+	assoc := tx.Model(model).Association("RelatedDepartments")
+	if len(ids) == 0 {
+		if err := assoc.Clear(); err != nil {
+			return fmt.Errorf("clearing related departments of KPI %s: %w", k.Code, err)
+		}
+		return nil
+	}
+	var depts []models.Department
+	if err := tx.Where("id IN ?", ids).Find(&depts).Error; err != nil {
+		return fmt.Errorf("loading related departments of KPI %s: %w", k.Code, err)
+	}
+	if err := assoc.Replace(depts); err != nil {
+		return fmt.Errorf("setting related departments of KPI %s: %w", k.Code, err)
+	}
+	return nil
 }
 
 // newDeptCode derives a unique department code from the name's initials
@@ -321,6 +417,22 @@ func (imp *kpiImporter) newDeptCode(name string) string {
 	}
 	imp.deptCodes[code] = true
 	return code
+}
+
+// metricFrequencyFor maps a KPI's reporting frequency to the Metric form's
+// spelling for the default metric; Quarterly when the KPI has none.
+func metricFrequencyFor(kpiFrequency string) string {
+	switch NormalizeFrequency(kpiFrequency) {
+	case models.KPIFrequencyMonthly:
+		return "Monthly"
+	case models.KPIFrequencySemiAnnual:
+		return "Semiannual"
+	case models.KPIFrequencyAnnually:
+		return "Annual"
+	case models.KPIFrequencyCustom:
+		return "Ad Hoc"
+	}
+	return "Quarterly"
 }
 
 func directionFor(polarity string) string {
