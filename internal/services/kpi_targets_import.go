@@ -45,6 +45,7 @@ type kpiTargetImportRec struct {
 	MetricID   *uuid.UUID
 	MetricCode string
 	MetricName string
+	Metric     string // current template: a metric name (or code)
 
 	Target *models.KpiAnnualTarget
 	Set    map[string]bool
@@ -211,8 +212,9 @@ func KpiTargetsTemplateFileNameFor(lang string) string {
 	return KpiTargetsTemplateFileName
 }
 
-// KPI Code, Metric Code and Period Code are dropdowns (KPIs and metrics
-// that exist in the system); KPI Type fills in automatically from the KPI Code.
+// The columns follow the Set Target form: KPI ("CODE - Name"), Metric and
+// Period are dropdowns (what exists in the system); Target Type fills in
+// from the Period.
 func BuildKpiTargetsImportTemplate(ctx context.Context, db *gorm.DB, lang string) ([]byte, error) {
 	language := utils.LanguageEnglish
 	if lang == KpiTemplateLangAR {
@@ -222,8 +224,7 @@ func BuildKpiTargetsImportTemplate(ctx context.Context, db *gorm.DB, lang string
 	if err != nil {
 		return nil, fmt.Errorf("loading dropdown lists: %w", err)
 	}
-	cols := withKpiTypeFormula(withLists(markKpiTargetTemplateRequired(kpiTargetTemplateColumns()),
-		map[string]string{"kpi_code": listKpiCodes, "metric_code": listMetricCodes, "period_code": listPeriodCodes}))
+	cols := kpiTargetSheetColumns(lang)
 	cfg := utils.WorkbookConfig{
 		Language:     language,
 		Title:        "KPI Targets Import Template",
@@ -245,24 +246,28 @@ func BuildKpiTargetsImportTemplate(ctx context.Context, db *gorm.DB, lang string
 
 func kpiTargetColumns() []colSpec {
 	return []colSpec{
-		{"kpi_code", hdrAny("kpi code", "كود المؤشر"), true},
-		{"kpi_type", hdrAny("kpi type", "نوع المؤشر"), true},
+		// "KPI" holds "CODE - Name" (the current template); "KPI Code" the code.
+		{"kpi_code", hdrAny("kpi", "kpi code", "المؤشر", "كود المؤشر"), true},
+		// Optional: taken from the KPI when its code is used by one KPI type.
+		{"kpi_type", hdrAny("kpi type", "نوع المؤشر"), false},
+		{"metric", hdrAny("metric", "المقياس"), false},
 		{"metric_code", hdrAny("metric code", "كود المقياس"), false},
 		{"metric_name", hdrAny("metric name", "اسم المقياس"), false},
 		{"target_year", hdrPrefixAny("target year", "السنة المستهدفة"), false},
-		{"period_code", hdrAny("period code", "رمز الفترة"), false},
+		{"period_code", hdrAny("period", "period code", "الفترة", "رمز الفترة"), false},
 		{"period_start", hdrPrefixAny("period start", "بداية الفترة"), false},
 		{"period_end", hdrPrefixAny("period end", "نهاية الفترة"), false},
 		{"target_value", hdrAny("target value", "قيمة المستهدف"), true},
-		{"target_type", hdrAny("target type", "نوع المستهدف"), true},
+		// Optional: follows the Period (see defaultTargetType).
+		{"target_type", hdrAny("target type", "نوع المستهدف"), false},
 		{"target_basis", hdrAny("target basis", "أساس المستهدف"), false},
 		{"target_rationale", hdrAny("target rationale", "مبررات المستهدف"), false},
 		{"threshold_mode", hdrAny("threshold mode", "نمط الحدود"), false},
 		{"excellent_threshold", hdrPrefixAny("excellent threshold", "حد التميز"), false},
 		{"achieved_threshold", hdrPrefixAny("achieved threshold", "حد التحقق"), false},
 		{"warning_threshold", hdrPrefixAny("warning threshold", "حد التحذير"), false},
-		{"target_range_min", hdrAny("target range min", "أدنى قيمة للنطاق"), false},
-		{"target_range_max", hdrAny("target range max", "أعلى قيمة للنطاق"), false},
+		{"target_range_min", hdrAny("target range min", "range min", "أدنى قيمة للنطاق"), false},
+		{"target_range_max", hdrAny("target range max", "range max", "أعلى قيمة للنطاق"), false},
 		{"target_status", hdrAny("target status", "حالة المستهدف"), false},
 		{"effective_from", hdrPrefixAny("effective from", "ساري من"), false},
 		{"effective_to", hdrPrefixAny("effective to", "ساري حتى"), false},
@@ -334,15 +339,14 @@ func buildKpiTargetsInstructions() *utils.InstructionConfig {
 			item("2. Save and upload", "2. الحفظ والرفع", "Save as .xlsx, upload it, click Validate to review the report and preview, then Commit.", "احفظ الملف بصيغة .xlsx، وارفعه، ثم اضغط تحقق لمراجعة التقرير والمعاينة، ثم تنفيذ."),
 		}, BlankAfter: true},
 		{Title: text("Rules", "القواعد"), Items: []utils.InstructionItem{
-			item("Mandatory columns", "الأعمدة المطلوبة", "Columns marked with a red * are mandatory: KPI Code, KPI Type, Target Value and Target Type. Target Year and Period Code are also required for every target that is not a Milestone / Ad Hoc target.", "الأعمدة المميزة بعلامة * الحمراء مطلوبة: كود المؤشر ونوع المؤشر وقيمة المستهدف ونوع المستهدف. كما تكون السنة المستهدفة ورمز الفترة مطلوبتين لكل مستهدف ليس من نوع مرحلة / حسب الحاجة."),
-			item("KPI resolution", "مطابقة المؤشر", "KPI Code must match an existing strategic, operational or award KPI (case-insensitive). KPI Type must match that KPI's type.", "يجب أن يطابق كود المؤشر مؤشراً استراتيجياً أو تشغيلياً أو خاصاً بالجائزة موجوداً (دون حساسية لحالة الأحرف). ويجب أن يطابق نوع المؤشر نوع ذلك المؤشر."),
-			item("Metric", "المقياس", "Metric Code and Metric Name are optional. If both are given they must identify the same metric under the KPI. Leave both blank for a KPI-level target.", "كود المقياس واسم المقياس اختياريان. وإذا ذُكرا معاً فيجب أن يشيرا إلى المقياس نفسه ضمن المؤشر. اتركهما فارغين لمستهدف على مستوى المؤشر."),
-			item("Period", "الفترة", "Period Code must match the KPI's or metric's reporting frequency (monthly: jan..dec; quarterly: q1..q4; semi-annual: h1/h2; annual: annual or the year). For a Milestone / Ad Hoc target leave Period Code and Target Year blank and fill Period Start and Period End; the period code is derived from those dates.", "يجب أن يطابق رمز الفترة تكرار الإبلاغ للمؤشر أو المقياس (شهري: jan..dec؛ ربع سنوي: q1..q4؛ نصف سنوي: h1/h2؛ سنوي: annual أو السنة). ولمستهدف مرحلة / حسب الحاجة اترك رمز الفترة والسنة المستهدفة فارغين واملأ بداية الفترة ونهايتها؛ يُشتق رمز الفترة من هذين التاريخين."),
-			item("Milestone dates", "تواريخ المرحلة", "Period Start and Period End are YYYY-MM-DD and only apply to Milestone / Ad Hoc targets.", "بداية الفترة ونهايتها بصيغة YYYY-MM-DD وتخصان مستهدفات مرحلة / حسب الحاجة فقط."),
-			item("Status", "الحالة", "Target Status accepts draft or submitted (default draft). Approval, rejection and locking stay on the Targets page.", "تقبل حالة المستهدف مسودة أو مقدم (الافتراضي مسودة). ويبقى الاعتماد والرفض والقفل في صفحة المستهدفات."),
+			item("Mandatory columns", "الأعمدة المطلوبة", "Columns marked with a red * are mandatory: KPI, Metric, Period, Target Value and Target Type. Target Year is also required unless the Period is a custom date range. The columns follow the Set Target form.", "الأعمدة المميزة بعلامة * الحمراء مطلوبة: المؤشر والمقياس والفترة وقيمة المستهدف ونوع المستهدف. وتكون السنة المستهدفة مطلوبة أيضاً ما لم تكن الفترة نطاق تاريخ مخصص. الأعمدة بنفس ترتيب نموذج تحديد المستهدف."),
+			item("KPI resolution", "مطابقة المؤشر", "Pick the KPI from the dropdown (code - name). Only the code is used, so typing just the code also works.", "اختر المؤشر من القائمة (الكود - الاسم). يُستخدم الكود فقط، لذا تكفي كتابة الكود أيضاً."),
+			item("Metric", "المقياس", "Pick the metric name of the KPI. It can be left empty when the KPI has only one metric.", "اختر اسم مقياس المؤشر. يمكن تركه فارغاً إذا كان للمؤشر مقياس واحد فقط."),
+			item("Period", "الفترة", "The Period must match the metric's (or KPI's) reporting frequency: jan..dec for monthly, q1..q4 for quarterly, h1/h2 for semi-annual, annual for an Annual Target. Choose \"Custom date range\" for a Milestone / Ad Hoc target and fill Period Start and Period End.", "يجب أن تطابق الفترة تكرار الإبلاغ للمقياس (أو المؤشر): jan..dec للشهري، q1..q4 للربع سنوي، h1/h2 للنصف سنوي، annual للمستهدف السنوي. اختر \"نطاق تاريخ مخصص\" لمستهدف المرحلة / حسب الحاجة واملأ بداية الفترة ونهايتها."),
+			item("Milestone dates", "تواريخ المرحلة", "Period Start and Period End (YYYY-MM-DD) are only used for a custom date range. Target Type fills in from the Period (Milestone / Ad Hoc, Annual Target or Period Target) and can be changed.", "تُستخدم بداية الفترة ونهايتها (YYYY-MM-DD) لنطاق التاريخ المخصص فقط. ويُعبأ نوع المستهدف من الفترة (مرحلة / حسب الحاجة أو مستهدف سنوي أو مستهدف فترة) ويمكن تغييره."),
+			item("Status", "الحالة", "New targets are saved as draft. Submission, approval and locking stay on the Targets page.", "تُحفظ المستهدفات الجديدة كمسودة. ويبقى التقديم والاعتماد والقفل في صفحة المستهدفات."),
 			item("Existing targets", "المستهدفات الحالية", "With \\\"skip\\\", an existing target with the same KPI, metric, year and period is left untouched. With \\\"update\\\", it is updated in place; only draft, returned or rejected targets can be updated — approved, submitted, locked and superseded targets are rejected.", "مع \\\"تخطي\\\" يُترك المستهدف الحالي ذو المؤشر والمقياس والسنة والفترة نفسها دون تغيير. ومع \\\"تحديث\\\" يُحدّث في مكانه؛ ولا يمكن تحديث إلا المستهدفات المسودة أو المعادة أو المرفوضة — أما المعتمدة والمقدمة والمقفلة والمستبدلة فتُرفض."),
 			item("Formats", "التنسيقات", "Blank optional cells keep the existing value on update and use the form defaults on create (Target Basis: Management Decision; Threshold Mode: Use Global KPI Rules).", "تحافظ الخلايا الاختيارية الفارغة على القيمة الحالية عند التحديث وتستخدم القيم الافتراضية عند الإنشاء (أساس المستهدف: قرار إداري؛ نمط الحدود: استخدام قواعد المؤشر العامة)."),
-			item("Every column is used", "كل الأعمدة مستخدمة", "Every template column is imported. Extra columns are reported as ignored; they never stop the import.", "يتم استيراد كل عمود في القالب. تُبلّغ الأعمدة الإضافية كمتجاهلة ولا توقف الاستيراد."),
 			item("Validation report", "تقرير التحقق", "Every rejected row is listed with its Excel row number and reason. \\\"skip_invalid\\\" commits valid rows; \\\"abort\\\" commits nothing while any error remains.", "يُدرج كل صف مرفوض مع رقم صفه في Excel وسبب الرفض. \\\"تخطي غير الصالح\\\" ينفذ الصفوف الصالحة؛ و\\\"إلغاء\\\" لا ينفذ أي شيء ما دام هناك خطأ."),
 		}, BlankAfter: true},
 	}}
@@ -486,9 +490,10 @@ func (imp *kpiTargetsImporter) parseTargetRow(row int, raw func(string) string) 
 	}
 	r := &kpiTargetImportRec{
 		Row:        row,
-		KpiCode:    read("kpi_code"),
+		KpiCode:    kpiCodeFromLabel(read("kpi_code")),
 		MetricCode: read("metric_code"),
 		MetricName: read("metric_name"),
+		Metric:     read("metric"),
 		Target: &models.KpiAnnualTarget{
 			TargetType:     "Period Target",
 			TargetBasis:    "Management Decision",
@@ -502,10 +507,10 @@ func (imp *kpiTargetsImporter) parseTargetRow(row int, raw func(string) string) 
 	}
 
 	if r.KpiCode == "" {
-		r.reject("KPI Code", "KPI Code is required.")
+		r.reject("KPI", "KPI is required.")
 	}
 	if typ := read("kpi_type"); typ == "" {
-		r.reject("KPI Type", "KPI Type is required (strategic, operational or award).")
+		// Resolved from the KPI code in validateRows.
 	} else if v, ok := normalizeMetricChoice(typ, kpiTargetKpiTypeChoices); !ok {
 		r.reject("KPI Type", fmt.Sprintf("KPI Type %q is not valid. Allowed: strategic, operational, award.", typ))
 	} else {
@@ -526,8 +531,15 @@ func (imp *kpiTargetsImporter) parseTargetRow(row int, raw func(string) string) 
 		}
 		*target = v
 	}
+	// "Custom date range" in the Period column = a Milestone / Ad Hoc target
+	// over Period Start – Period End (as on the Set Target form).
+	periodRaw := read("period_code")
+	customRange := isCustomRangeChoice(periodRaw)
+	if customRange {
+		periodRaw = ""
+	}
 	if typ := read("target_type"); typ == "" {
-		r.reject("Target Type", "Target Type is required (Period Target, Annual Target or Milestone / Ad Hoc).")
+		r.Target.TargetType = defaultTargetType(customRange, periodRaw)
 	} else if v, ok := normalizeMetricChoice(typ, kpiTargetTypeChoices); !ok {
 		r.reject("Target Type", fmt.Sprintf("Target Type %q is not valid. Allowed: Period Target, Annual Target, Milestone / Ad Hoc.", typ))
 	} else {
@@ -545,6 +557,9 @@ func (imp *kpiTargetsImporter) parseTargetRow(row int, raw func(string) string) 
 	}
 
 	isMilestone := r.Target.TargetType == "Milestone / Ad Hoc"
+	if customRange && !isMilestone {
+		r.reject("Target Type", fmt.Sprintf("A custom date range is a Milestone / Ad Hoc target, not %s.", r.Target.TargetType))
+	}
 	yearRaw := read("target_year")
 	if yearRaw != "" {
 		if v, ok := parseMetricInt(yearRaw); !ok {
@@ -556,7 +571,6 @@ func (imp *kpiTargetsImporter) parseTargetRow(row int, raw func(string) string) 
 		}
 	}
 
-	periodRaw := read("period_code")
 	if periodRaw != "" && isMilestone {
 		r.reject("Period Code", "Period Code must be blank for a Milestone / Ad Hoc target — it is derived from Period Start and Period End.")
 	} else if periodRaw != "" {
@@ -610,8 +624,8 @@ func (imp *kpiTargetsImporter) parseTargetRow(row int, raw func(string) string) 
 	} else {
 		r.Target.PeriodStart = start
 		r.Target.PeriodEnd = end
-		if r.Target.PeriodCode == "" {
-			r.reject("Period Code", "Period Code is required for Period and Annual targets.")
+		if r.Target.PeriodCode == "" && !customRange {
+			r.reject("Period Code", "Period is required for Period and Annual targets.")
 		}
 		if r.Target.TargetYear == 0 {
 			r.reject("Target Year", "Target Year is required for Period and Annual targets.")
@@ -824,6 +838,24 @@ func (imp *kpiTargetsImporter) validateRows() {
 			continue
 		}
 		code := strings.ToUpper(strings.TrimSpace(r.KpiCode))
+		if r.KpiType == "" {
+			var types []string
+			for _, typ := range []string{models.KPITypeStrategic, models.KPITypeOperational, models.KPITypeAward} {
+				if imp.existingKpis[typ+"|"+code] != nil {
+					types = append(types, typ)
+				}
+			}
+			switch len(types) {
+			case 0:
+				r.reject("KPI", fmt.Sprintf("KPI %s was not found. Import the KPI Dictionary first or pick a KPI from the list.", r.KpiCode))
+				continue
+			case 1:
+				r.KpiType = types[0]
+			default:
+				r.reject("KPI", fmt.Sprintf("KPI code %s is used by %s KPIs — add a KPI Type column to choose one.", r.KpiCode, strings.Join(types, " and ")))
+				continue
+			}
+		}
 		kpiKey := r.KpiType + "|" + code
 		ek := imp.existingKpis[kpiKey]
 		if ek == nil {
@@ -1018,6 +1050,30 @@ func (imp *kpiTargetsImporter) resolveMetric(r *kpiTargetImportRec, group string
 		byName = imp.metricByName[group+"|"+nameKey]
 		if byName == nil {
 			return nil, fmt.Sprintf("Metric name %q was not found under KPI %s.", nameRaw, r.KpiCode)
+		}
+	}
+	if v := strings.TrimSpace(r.Metric); v != "" {
+		m := imp.metricByName[group+"|"+strings.ToLower(v)]
+		if m == nil {
+			m = imp.metricByCode[group+"|"+strings.ToLower(v)]
+		}
+		if m == nil {
+			return nil, fmt.Sprintf("Metric %q was not found under KPI %s.", v, r.KpiCode)
+		}
+		if (byCode != nil && byCode.ID != m.ID) || (byName != nil && byName.ID != m.ID) {
+			return nil, fmt.Sprintf("Metric %q does not match the Metric Code / Metric Name columns.", v)
+		}
+		return m, ""
+	}
+	if byCode == nil && byName == nil {
+		// No metric given: the KPI's only metric, as the form would preselect.
+		switch metrics := imp.metricsByKpi[group]; len(metrics) {
+		case 1:
+			return metrics[0], ""
+		case 0:
+			return nil, ""
+		default:
+			return nil, fmt.Sprintf("KPI %s has %d metrics — choose the Metric.", r.KpiCode, len(metrics))
 		}
 	}
 	if byCode != nil && byName != nil && byCode.ID != byName.ID {
@@ -1596,4 +1652,37 @@ func IsUniqueViolation(err error) bool {
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "SQLSTATE 23505") || strings.Contains(msg, "duplicate key value")
+}
+
+// kpiCodeFromLabel returns the KPI code of a KPI column value: "CODE - Name"
+// (the dropdown) or just the code. Codes contain no spaces.
+func kpiCodeFromLabel(v string) string {
+	v = strings.TrimSpace(v)
+	if i := strings.IndexAny(v, " \t"); i > 0 {
+		v = v[:i]
+	}
+	return strings.TrimRight(v, "-–—:")
+}
+
+// isCustomRangeChoice reports whether a Period value is the
+// "Custom date range" option.
+func isCustomRangeChoice(v string) bool {
+	switch normName(strings.TrimRight(strings.TrimSpace(v), "…")) {
+	case "custom date range", "custom", "custom range", "نطاق تاريخ مخصص", "مخصص":
+		return true
+	}
+	return false
+}
+
+// defaultTargetType is the Target Type of a row that leaves it empty, as the
+// template's formula fills it: a custom range is a Milestone / Ad Hoc target,
+// the annual period an Annual Target, any other period a Period Target.
+func defaultTargetType(customRange bool, period string) string {
+	switch {
+	case customRange:
+		return models.KpiTargetTypeMilestone
+	case normName(period) == "annual" || normName(period) == "سنوي":
+		return models.KpiTargetTypeAnnual
+	}
+	return "Period Target"
 }

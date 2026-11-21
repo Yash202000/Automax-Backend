@@ -290,6 +290,7 @@ type existingKpi struct {
 	Type          string
 	Code          string
 	NameEn        string
+	NameAr        string
 	Polarity      string
 	Frequency     string
 	Baseline      float64
@@ -617,6 +618,7 @@ func (imp *kpiImporter) loadExisting() error {
 		ID                 uuid.UUID
 		Code               string
 		NameEn             string
+		NameAr             string
 		Polarity           string
 		ReportingFrequency string
 		Baseline           float64
@@ -631,7 +633,7 @@ func (imp *kpiImporter) loadExisting() error {
 		{models.KPITypeAward, &models.AwardKPI{}},
 	} {
 		var rows []kpiRow
-		if err := db.Model(t.model).Select("id, code, name_en, polarity, reporting_frequency, baseline, owner_dept_id").Scan(&rows).Error; err != nil {
+		if err := db.Model(t.model).Select("id, code, name_en, name_ar, polarity, reporting_frequency, baseline, owner_dept_id").Scan(&rows).Error; err != nil {
 			return err
 		}
 		for _, r := range rows {
@@ -642,7 +644,7 @@ func (imp *kpiImporter) loadExisting() error {
 					ownerName = d.NameEn
 				}
 			}
-			imp.existingKpis[t.kpiType+"|"+code] = &existingKpi{ID: r.ID, Type: t.kpiType, Code: r.Code, NameEn: r.NameEn, Polarity: r.Polarity, Frequency: r.ReportingFrequency, Baseline: r.Baseline, OwnerDeptName: ownerName}
+			imp.existingKpis[t.kpiType+"|"+code] = &existingKpi{ID: r.ID, Type: t.kpiType, Code: r.Code, NameEn: r.NameEn, NameAr: r.NameAr, Polarity: r.Polarity, Frequency: r.ReportingFrequency, Baseline: r.Baseline, OwnerDeptName: ownerName}
 			imp.existingCodeTyp[code] = t.kpiType
 		}
 	}
@@ -791,7 +793,8 @@ var kpiImportColumnLabels = map[string]string{
 	"classification": "KPI Classification", "target_requirement": "Target Requirement", "unit": "Unit of Measure",
 	"owner_org": "Owner Organization", "award_measure": "Award KPIs and Measures",
 	"lifecycle": "KPI Lifecycle", "data_source": "Data Source", "formula": "Calculation Formula", "baseline": "Baseline",
-	"notes": "Notes", "criterion": "Criterion", "sub_no": "Sub-Criterion #", "sub_name": "Sub-Criterion",
+	"notes": "Notes", "criterion": "Criteria", "sub_no": "Sub-Criterion #", "sub_name": "Sub-Criterion", "sub_criterion": "Sub-Criteria",
+	"name_en": "EPM KPI (EN)", "name_ar": "EPM KPI (AR)", "description_en": "Description (EN)", "description_ar": "Description (AR)",
 	"parent_objective": "Parent Objective", "md_parent": "Parent Objective",
 	"md_name": "Name", "md_owner": "Owner Department", "md_pillar": "Pillar", "md_enabler": "Enabler", "md_goal": "Strategic Goal",
 	"year": "Year", "quarter": "Quarter", "target": "Target", "actual": "Actual Result", "achievement": "Achievement",
@@ -846,16 +849,31 @@ func dictColumns(kpiType string) []colSpec {
 		{"goal", hdrAny("strategic goal", "الهدف الاستراتيجي"), false},
 		// Checked per row rather than as a mandatory column, so that rows of
 		// older workbooks without it are each rejected with a reason.
-		{"objective", hdrAny("operational objective", "الهدف التشغيلي"), false},
+		{"objective", hdrAny("objective", "operational objective", "الهدف التشغيلي"), false},
 		{"parent_objective", hdrAny("parent objective", "الهدف الرئيسي"), false},
 		// Older operational sheets: "Operational Objective" was the parent
 		// objective and this column the operational objective (process).
 		{"process", hdrPrefixAny("related process", "اسم العملية"), false},
-		{"domain", hdrPrefixAny("related domain", "المجال المرتبط"), false},
+		{"domain", func(h string) bool {
+			return hdrAny("domains", "domain", "المجالات", "المجال")(h) || hdrPrefixAny("related domain", "المجال المرتبط")(h)
+		}, false},
 		{"seg", hdrPrefixAny("segmentation axes", "محاور التجزئة"), false},
 		{"polarity", hdrPrefixAny("polarity", "الاتجاه"), true},
-		{"activation", hdrPrefixAny("activation status", "حالة التفعيل"), true},
+		// Not applied on import (workflow-managed); optional so the current
+		// template can leave it out.
+		{"activation", hdrPrefixAny("activation status", "حالة التفعيل"), false},
 		{"description", hdrAny("description", "الوصف"), false},
+		// Current template: the KPI form's labels.
+		{"name_en", hdrAny("epm kpi (en)", "مؤشر الأمانة (إنجليزي)", "name (en)"), false},
+		{"name_ar", hdrAny("epm kpi (ar)", "مؤشر الأمانة (عربي)", "name (ar)"), false},
+		{"description_en", hdrAny("description (en)", "الوصف (إنجليزي)"), false},
+		{"description_ar", hdrAny("description (ar)", "الوصف (عربي)"), false},
+		// Criteria / Sub-Criteria apply to every KPI type, as on the forms.
+		// "Sub-Criterion" (an older award column holding the name of a new
+		// sub-criterion) is listed first so it keeps its meaning.
+		{"criterion", hdrAny("criteria", "criterion", "المعيار"), false},
+		{"sub_name", hdrAny("sub-criterion"), false},
+		{"sub_criterion", hdrAny("sub-criteria", "sub criteria", "المعيار الفرعي"), false},
 		{"owner_type", hdrAny("owner type", "نوع المالك"), false},
 		{"owner_dept", hdrPrefixAny("owner department", "الإدارة المالكة", "المالك"), true},
 		{"agency", hdrContainsAny("owning agency", "الوكالة / الإدارة المالكة"), false},
@@ -875,16 +893,17 @@ func dictColumns(kpiType string) []colSpec {
 		{"notes", hdrAny("notes", "ملاحظات"), false},
 	}
 	switch kpiType {
+	// Older templates: one name column per KPI type, and for awards the
+	// sub-criterion number in its own column. Checked per row (the current
+	// template has EPM KPI (EN) / (AR) instead).
 	case models.KPITypeStrategic:
-		cols = append(cols, colSpec{"name", hdrAny("strategic indicator", "المؤشر الاستراتيجي"), true})
+		cols = append(cols, colSpec{"name", hdrAny("strategic indicator", "المؤشر الاستراتيجي"), false})
 	case models.KPITypeOperational:
-		cols = append(cols, colSpec{"name", hdrAny("operational indicator", "المؤشر التشغيلي"), true})
+		cols = append(cols, colSpec{"name", hdrAny("operational indicator", "المؤشر التشغيلي"), false})
 	case models.KPITypeAward:
 		cols = append(cols,
-			colSpec{"name", hdrAny("indicator / measure", "مؤشر / مقياس"), true},
-			colSpec{"criterion", hdrAny("criterion", "المعيار"), true},
-			colSpec{"sub_no", hdrAny("sub-criterion #", "رقم المعيار الفرعي"), true},
-			colSpec{"sub_name", hdrAny("sub-criterion", "المعيار الفرعي"), false},
+			colSpec{"name", hdrAny("indicator / measure", "مؤشر / مقياس"), false},
+			colSpec{"sub_no", hdrAny("sub-criterion #", "رقم المعيار الفرعي"), false},
 		)
 	}
 	return cols
@@ -1015,9 +1034,8 @@ func (imp *kpiImporter) readTable(sheet string, rows [][]string, specs []colSpec
 			imp.structural(sheet, fmt.Sprintf("Mandatory column %q is missing or its header was changed.", kpiImportColumnLabels[s.key]))
 		}
 	}
-	if mode == tableDictionary && len(t.years) == 0 {
-		imp.structural(sheet, "No annual target columns (\"Targets YYYY\") were found.")
-	}
+	// "Targets YYYY" columns are optional: the current template sets targets
+	// on the Targets sheet; older workbooks still carry them.
 	if mode == tableQuarterColumns {
 		hasActual := false
 		for _, idx := range t.quarters {
@@ -1544,6 +1562,12 @@ func (imp *kpiImporter) parseDictionary(kpiType string, t *sheetTable) {
 	if t == nil || t.headerRow < 0 {
 		return
 	}
+	_, a := t.cols["name_en"]
+	_, b := t.cols["name_ar"]
+	if _, c := t.cols["name"]; !a && !b && !c {
+		imp.structural(t.sheet, fmt.Sprintf("Mandatory column %q is missing or its header was changed.", kpiImportColumnLabels["name_en"]))
+		return
+	}
 	for i := t.headerRow + 1; i < len(t.rows); i++ {
 		r := t.rows[i]
 		if t.blank(r) {
@@ -1553,6 +1577,9 @@ func (imp *kpiImporter) parseDictionary(kpiType string, t *sheetTable) {
 		code := strings.ToUpper(t.get(r, "code"))
 		rec := &kpiRec{Type: kpiType, Code: code, Sheet: t.sheet, Row: excelRow, ID: uuid.New()}
 		id := code
+		if id == "" {
+			id = t.get(r, "name_en")
+		}
 		if id == "" {
 			id = t.get(r, "name")
 		}
@@ -1595,17 +1622,38 @@ func (imp *kpiImporter) parseDictionary(kpiType string, t *sheetTable) {
 		}
 
 		// Name / descriptive fields
-		name := t.get(r, "name")
-		if name == "" {
-			fail("name", "KPI name is required.")
-		} else if len([]rune(name)) > 255 {
-			fail("name", "KPI name must be at most 255 characters.")
+		_, hasNameEn := t.cols["name_en"]
+		_, hasNameAr := t.cols["name_ar"]
+		if hasNameEn || hasNameAr {
+			// Current template: EPM KPI (EN) is required, as on the form.
+			rec.NameEn, rec.NameAr = t.get(r, "name_en"), t.get(r, "name_ar")
+			if rec.NameEn == "" {
+				fail("name_en", "EPM KPI (EN) is required.")
+			} else if len([]rune(rec.NameEn)) > 255 {
+				fail("name_en", "EPM KPI (EN) must be at most 255 characters.")
+			}
+			if len([]rune(rec.NameAr)) > 255 {
+				fail("name_ar", "EPM KPI (AR) must be at most 255 characters.")
+			}
+		} else {
+			name := t.get(r, "name")
+			if name == "" {
+				fail("name", "KPI name is required.")
+			} else if len([]rune(name)) > 255 {
+				fail("name", "KPI name must be at most 255 characters.")
+			}
+			rec.NameEn, rec.NameAr = splitName(name)
 		}
-		rec.NameEn, rec.NameAr = splitName(name)
 		if desc := t.get(r, "description"); hasArabic(desc) {
 			rec.DescriptionAr = desc
 		} else {
 			rec.DescriptionEn = desc
+		}
+		if v := t.get(r, "description_en"); v != "" {
+			rec.DescriptionEn = v
+		}
+		if v := t.get(r, "description_ar"); v != "" {
+			rec.DescriptionAr = v
 		}
 		rec.Formula = t.get(r, "formula")
 		if seg := t.get(r, "seg"); seg != "" {
@@ -1619,7 +1667,7 @@ func (imp *kpiImporter) parseDictionary(kpiType string, t *sheetTable) {
 			}
 		}
 		rec.present = map[string]bool{}
-		for _, key := range []string{"classification", "target_requirement", "unit", "owner_org", "award_measure", "related_depts"} {
+		for _, key := range []string{"classification", "target_requirement", "unit", "owner_org", "award_measure", "related_depts", "criterion", "sub_criterion", "sub_no", "seg", "lifecycle", "notes", "description", "description_en", "description_ar"} {
 			if _, ok := t.cols[key]; ok {
 				rec.present[key] = true
 			}
@@ -1662,7 +1710,7 @@ func (imp *kpiImporter) parseDictionary(kpiType string, t *sheetTable) {
 			fail("polarity", fmt.Sprintf("Invalid polarity %q — expected Ascending or Descending.", v))
 		}
 		if v := t.get(r, "activation"); v == "" {
-			fail("activation", "Activation Status is required.")
+			// Not applied anyway: new KPIs start as Draft.
 		} else if status, ok := mapActivation(v); !ok {
 			fail("activation", fmt.Sprintf("Invalid activation status %q — expected Active, Inactive, Draft, Reviewed, Approved or Closed.", v))
 		} else if status != models.KPIStatusDraft {
@@ -1819,9 +1867,7 @@ func (imp *kpiImporter) parseDictionary(kpiType string, t *sheetTable) {
 			}
 		}
 
-		if kpiType == models.KPITypeAward {
-			imp.resolveAwardCriteria(t, r, excelRow, id, rec, domainName, fail)
-		}
+		imp.resolveAwardCriteria(t, r, excelRow, id, rec, domainName, fail)
 
 		if ownerName := t.get(r, "owner_dept"); ownerName == "" {
 			fail("owner_dept", "Owner Department is required.")
@@ -1923,17 +1969,37 @@ func (imp *kpiImporter) parseDictionary(kpiType string, t *sheetTable) {
 	}
 }
 
+// resolveAwardCriteria links the KPI to an award sub-criterion. As on the KPI
+// forms both columns are optional and apply to every KPI type: Criteria
+// ("Criterion 5 - Name") narrows the choice, Sub-Criteria ("5.1 - Name")
+// is what is stored. Older award sheets give the number and, for a new
+// sub-criterion, its name in separate columns.
 func (imp *kpiImporter) resolveAwardCriteria(t *sheetTable, r []string, excelRow int, id string, rec *kpiRec, domainName string, fail func(key, msg string)) {
 	critRaw := t.get(r, "criterion")
-	subNo := strings.TrimSuffix(t.get(r, "sub_no"), ".0")
-	subName := t.get(r, "sub_name")
-	critNo, ok := parseCriterionNo(critRaw)
-	if critRaw == "" {
-		fail("criterion", "Criterion is required.")
+	subKey, subNo, subName := "sub_criterion", "", ""
+	if v := t.get(r, "sub_criterion"); v != "" {
+		m := subCriterionLabelRe.FindStringSubmatch(v)
+		if m == nil {
+			fail("sub_criterion", fmt.Sprintf("Sub-Criteria %q is not valid — pick one from the list, e.g. \"5.1 - Name\".", v))
+			return
+		}
+		subNo, subName = m[1], strings.TrimSpace(m[2])
+	} else if v := strings.TrimSuffix(t.get(r, "sub_no"), ".0"); v != "" {
+		subKey, subNo, subName = "sub_no", v, t.get(r, "sub_name")
+		if !regexp.MustCompile(`^\d+(\.\d+)*$`).MatchString(subNo) {
+			fail("sub_no", fmt.Sprintf("Sub-Criterion # %q is not valid — expected e.g. \"5.1\".", subNo))
+			return
+		}
+	}
+	if critRaw == "" && subNo == "" {
 		return
 	}
+	critNo, ok := parseCriterionNo(critRaw)
+	if critRaw == "" {
+		critNo, ok = parseCriterionNo(subNo) // "5.1" belongs to criterion 5
+	}
 	if !ok {
-		fail("criterion", fmt.Sprintf("Criterion %q is not valid — expected e.g. \"Criterion 5\".", critRaw))
+		fail("criterion", fmt.Sprintf("Criteria %q is not valid — pick one from the list, e.g. \"Criterion 5 - Name\".", critRaw))
 		return
 	}
 	var crit *mdNode
@@ -1943,25 +2009,24 @@ func (imp *kpiImporter) resolveAwardCriteria(t *sheetTable, r []string, excelRow
 			break
 		}
 	}
+	if subNo == "" {
+		imp.warn(t.sheet, excelRow, id, t.label("criterion"),
+			"Only a sub-criterion is linked to a KPI — pick Sub-Criteria too; the criterion alone is not stored.")
+		return
+	}
+	if !strings.HasPrefix(subNo, strconv.Itoa(critNo)+".") {
+		fail(subKey, fmt.Sprintf("Sub-Criteria %s does not belong to Criterion %d.", subNo, critNo))
+		return
+	}
 	if crit == nil {
 		name := fmt.Sprintf("Criterion %d", critNo)
-		if d := normName(domainName); strings.HasPrefix(d, normName(name)+":") {
+		if _, label, found := strings.Cut(critRaw, " - "); found && strings.TrimSpace(label) != "" {
+			name = strings.TrimSpace(label)
+		} else if d := normName(domainName); strings.HasPrefix(d, normName(name)+":") {
 			name = strings.TrimSpace(domainName[strings.Index(domainName, ":")+1:])
 		}
 		crit = imp.newNode(mdCriterion, name, t.sheet, excelRow)
 		crit.CriterionNo = critNo
-	}
-	if subNo == "" {
-		fail("sub_no", "Sub-Criterion # is required.")
-		return
-	}
-	if !regexp.MustCompile(`^\d+(\.\d+)*$`).MatchString(subNo) {
-		fail("sub_no", fmt.Sprintf("Sub-Criterion # %q is not valid — expected e.g. \"5.1\".", subNo))
-		return
-	}
-	if !strings.HasPrefix(subNo, strconv.Itoa(critNo)+".") {
-		fail("sub_no", fmt.Sprintf("Sub-Criterion %s does not belong to Criterion %d.", subNo, critNo))
-		return
 	}
 	for _, n := range imp.md[mdSubCriterion] {
 		if n.Criterion == crit && n.SubNo == subNo {
@@ -1970,7 +2035,7 @@ func (imp *kpiImporter) resolveAwardCriteria(t *sheetTable, r []string, excelRow
 		}
 	}
 	if subName == "" {
-		fail("sub_name", fmt.Sprintf("Sub-Criterion %s does not exist yet, so its name is required.", subNo))
+		fail(subKey, fmt.Sprintf("Sub-Criterion %s does not exist yet, so its name is required.", subNo))
 		return
 	}
 	sub := imp.newNode(mdSubCriterion, subName, t.sheet, excelRow)
@@ -1978,6 +2043,10 @@ func (imp *kpiImporter) resolveAwardCriteria(t *sheetTable, r []string, excelRow
 	sub.Criterion = crit
 	rec.SubCriterion = sub
 }
+
+// subCriterionLabelRe splits a Sub-Criteria value "5.1 - Name" (the name is
+// optional) into number and name.
+var subCriterionLabelRe = regexp.MustCompile(`^\s*(\d+(?:\.\d+)+)\s*(?:[-–—:]\s*(.*))?$`)
 
 // ─── Performance sheets ─────────────────────────────────────────────────────
 

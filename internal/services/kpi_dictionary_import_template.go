@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/utils"
@@ -40,6 +39,8 @@ const (
 	listKpiCodes        = "List_KpiCodes"
 	listMetricCodes     = "List_MetricCodes"
 	listPeriodCodes     = "List_PeriodCodes"
+	listKpiLabels       = "List_KpiLabels"   // "CODE - Name", for the Targets KPI column
+	listMetricNames     = "List_MetricNames" // for the Targets Metric column
 
 	// Lookup tables for auto-filled cells (parallel columns, row for row).
 	lookupOpObjName    = "Lookup_OpObjName"
@@ -50,6 +51,7 @@ const (
 	lookupParentPillar = "Lookup_ParentPillar"
 	lookupKpiCode      = "Lookup_KpiCode"
 	lookupKpiType      = "Lookup_KpiType"
+	lookupOpObjGoal    = "Lookup_OpObjGoal"
 )
 
 // kpiTemplateFormulaRows is how many data rows get the auto-fill formulas.
@@ -122,12 +124,9 @@ func KpiDictionaryTemplateFileNameFor(lang string) string {
 }
 
 // BuildKpiDictionaryImportTemplate returns a ready-to-fill Excel workbook for
-// the KPI Dictionary bulk import. The target year columns cover the current
-// year plus the next four. lang selects a single header language (en or ar)
-// — the workbook is not bilingual. The Lists sheet is filled from db.
+// the KPI Dictionary bulk import. lang selects a single header language (en
+// or ar) — the workbook is not bilingual. The Lists sheet is filled from db.
 func BuildKpiDictionaryImportTemplate(ctx context.Context, db *gorm.DB, lang string) ([]byte, error) {
-	fromYear := time.Now().Year()
-	toYear := fromYear + kpiTemplateYearSpan - 1
 	language := utils.LanguageEnglish
 	if lang == KpiTemplateLangAR {
 		language = utils.LanguageArabic
@@ -154,12 +153,11 @@ func BuildKpiDictionaryImportTemplate(ctx context.Context, db *gorm.DB, lang str
 	}
 	metricCols := withKpiTypeFormula(withLists(markKpiMetricTemplateRequired(kpiMetricTemplateColumns()),
 		map[string]string{"kpi_code": listKpiCodes, "data_source": listDataSources}))
-	targetCols := withKpiTypeFormula(withLists(markKpiTargetTemplateRequired(kpiTargetTemplateColumns()),
-		map[string]string{"kpi_code": listKpiCodes, "metric_code": listMetricCodes, "period_code": listPeriodCodes}))
+	targetCols := kpiTargetSheetColumns(lang)
 	sheets = append(sheets,
-		buildKpiDictionarySheet(kpiTemplateStrategicDictSheet, models.KPITypeStrategic, fromYear, toYear),
-		buildKpiDictionarySheet(kpiTemplateOperationalDict, models.KPITypeOperational, fromYear, toYear),
-		buildKpiDictionarySheet(kpiTemplateAwardDictSheet, models.KPITypeAward, fromYear, toYear),
+		buildKpiDictionarySheet(kpiTemplateStrategicDictSheet, models.KPITypeStrategic),
+		buildKpiDictionarySheet(kpiTemplateOperationalDict, models.KPITypeOperational),
+		buildKpiDictionarySheet(kpiTemplateAwardDictSheet, models.KPITypeAward),
 		// Same columns as the Metrics import.
 		utils.SheetConfig{Name: kpiTemplateMetricsSheet, Columns: toExcelColumns(metricCols),
 			DataRows: kpiMetricsTemplateDataRows, FreezeHeader: true},
@@ -175,7 +173,7 @@ func BuildKpiDictionaryImportTemplate(ctx context.Context, db *gorm.DB, lang str
 		Subject:      "Bulk import of the KPI Dictionary workbook",
 		Creator:      "Automax",
 		ActiveSheet:  kpiTemplateInstructionsSheet,
-		Instructions: buildKpiDictionaryInstructions(fromYear, toYear),
+		Instructions: buildKpiDictionaryInstructions(),
 		Sheets:       sheets,
 		ListsSheet:   kpiTemplateListsSheet,
 		Lists:        lists,
@@ -253,27 +251,37 @@ func kpiTemplateLists(ctx context.Context, db *gorm.DB, lang string) ([]utils.Li
 	for _, c := range crit {
 		critNames = append(critNames, display(c.NameEn, c.NameAr))
 	}
-	var subNos []string
-	for _, n := range imp.md[mdSubCriterion] {
-		if n.SubNo != "" {
-			subNos = append(subNos, n.SubNo)
-		}
-	}
-	sort.Strings(subNos)
 
-	var kpiCodes, metricCodes []string
-	seenMetric := map[string]bool{}
+	var kpiCodes, kpiLabels, metricCodes, metricNames []string
+	seenMetric, seenMetricName := map[string]bool{}, map[string]bool{}
 	for _, ek := range imp.existingKpis {
 		kpiCodes = append(kpiCodes, ek.Code)
+		kpiLabels = append(kpiLabels, kpiLabel(ek.Code, display(ek.NameEn, ek.NameAr)))
 		for _, m := range ek.Metrics {
 			if c := strings.TrimSpace(m.MetricCode); c != "" && !seenMetric[strings.ToUpper(c)] {
 				seenMetric[strings.ToUpper(c)] = true
 				metricCodes = append(metricCodes, c)
 			}
+			if n := strings.TrimSpace(m.Name); n != "" && !seenMetricName[normName(n)] {
+				seenMetricName[normName(n)] = true
+				metricNames = append(metricNames, n)
+			}
 		}
 	}
 	sort.Strings(kpiCodes)
+	sort.Strings(kpiLabels)
 	sort.Strings(metricCodes)
+	sort.Strings(metricNames)
+
+	// Sub-criteria as on the KPI forms: "5.1 - Name".
+	var subLabels []string
+	subs := append([]*mdNode(nil), imp.md[mdSubCriterion]...)
+	sort.Slice(subs, func(i, j int) bool { return subs[i].SubNo < subs[j].SubNo })
+	for _, n := range subs {
+		if n.SubNo != "" {
+			subLabels = append(subLabels, n.SubNo+" - "+display(n.NameEn, n.NameAr))
+		}
+	}
 
 	// Lookup tables: operational objective → parent objective, pillar (its
 	// own, else the parent's; KPIs link to a pillar only); parent objective
@@ -292,14 +300,15 @@ func kpiTemplateLists(ctx context.Context, db *gorm.DB, lang string) ([]utils.Li
 		}
 		return ""
 	}
-	var opName, opParent, opPillar []string
+	var opName, opParent, opPillar, opGoal []string
 	for _, n := range imp.md[mdProcess] {
-		var pp *mdNode
+		var pp, goal *mdNode
 		if n.Objective != nil {
-			pp = n.Objective.Pillar
+			pp, goal = n.Objective.Pillar, n.Objective.Goal
 		}
 		opName = append(opName, nodeName(n))
 		opParent = append(opParent, nodeName(n.Objective))
+		opGoal = append(opGoal, nodeName(goal))
 		opPillar = append(opPillar, firstName(n.Pillar, pp)) // KPIs link to a pillar only
 	}
 	var parName, parGoal, parPillar []string
@@ -324,6 +333,9 @@ func kpiTemplateLists(ctx context.Context, db *gorm.DB, lang string) ([]utils.Li
 		c, b := idxCell(opSheet, "C", i), idxCell(opSheet, "B", i)
 		return fmt.Sprintf(`IF(%[1]s<>"",%[1]s&"",IFERROR(INDEX(%[3]s,MATCH(%[2]s,%[4]s,0))&"",""))`, c, b, lookupParentPillar, lookupParentName)
 	})
+	opSheetGoal := sheetRowFormulas(kpiTemplateMasterRows, opSheet, "A", func(i string) string {
+		return fmt.Sprintf(`IFERROR(INDEX(%s,MATCH(%s,%s,0))&"","")`, lookupParentGoal, idxCell(opSheet, "B", i), lookupParentName)
+	})
 	parSheetName := sheetRowFormulas(kpiTemplateMasterRows, parSheet, "A", func(i string) string { return idxCell(parSheet, "A", i) + `&""` })
 	parSheetGoal := sheetRowFormulas(kpiTemplateMasterRows, parSheet, "A", func(i string) string { return idxCell(parSheet, "B", i) + `&""` })
 	parSheetPillar := sheetRowFormulas(kpiTemplateMasterRows, parSheet, "A", func(i string) string {
@@ -344,6 +356,16 @@ func kpiTemplateLists(ctx context.Context, db *gorm.DB, lang string) ([]utils.Li
 	if lang == KpiTemplateLangAR {
 		critLabel = "المعيار"
 	}
+	// "CODE - Name" of the KPIs on the three Dictionary sheets (the Arabic
+	// name in an Arabic template when given).
+	kpiSheetLabels := sheetLabelFormulas(kpiTemplateCodeRows, "A", func(sheet, idx string) string {
+		code := fmt.Sprintf(`INDEX('%s'!$A:$A,%s)`, sheet, idx)
+		name := fmt.Sprintf(`INDEX('%s'!$B:$B,%s)`, sheet, idx)
+		if lang == KpiTemplateLangAR {
+			name = fmt.Sprintf(`IF(INDEX('%[1]s'!$C:$C,%[2]s)<>"",INDEX('%[1]s'!$C:$C,%[2]s),%[3]s)`, sheet, idx, name)
+		}
+		return code + `&" - "&` + name
+	}, kpiTemplateStrategicDictSheet, kpiTemplateOperationalDict, kpiTemplateAwardDictSheet)
 	critSpec, _ := masterSpecFor(KpiMasterAwardCriterion)
 	subSpec, _ := masterSpecFor(KpiMasterAwardSubCriterion)
 	metricTplCols := kpiMetricTemplateColumns()
@@ -367,14 +389,18 @@ func kpiTemplateLists(ctx context.Context, db *gorm.DB, lang string) ([]utils.Li
 					critLabel, critSpec.sheet, templateColLetter(critSpec.cols, "criterion_no"), templateColLetter(critSpec.cols, "name_en"), idx)
 			})},
 		{Name: listCriteriaNames, Title: text("Award Criterion Names", "أسماء معايير الجائزة"), Values: critNames, Formulas: masterNamesFormulas(rows, KpiMasterAwardCriterion)},
-		{Name: listSubCriteria, Title: text("Award Sub-criterion Numbers", "أرقام المعايير الفرعية"), Values: subNos,
-			Formulas: sheetNamesFormulasIn(rows, templateColLetter(subSpec.cols, "sub_no"), subSpec.sheet)},
+		{Name: listSubCriteria, Title: text("Award Sub-criteria", "المعايير الفرعية"), Values: subLabels,
+			Formulas: sheetRowFormulas(rows, subSpec.sheet, templateColLetter(subSpec.cols, "sub_no"), func(idx string) string {
+				return fmt.Sprintf(`INDEX('%[1]s'!$%[2]s:$%[2]s,%[4]s)&" - "&INDEX('%[1]s'!$%[3]s:$%[3]s,%[4]s)`,
+					subSpec.sheet, templateColLetter(subSpec.cols, "sub_no"), templateColLetter(subSpec.cols, "name_en"), idx)
+			})},
 		{Name: listSegDimensions, Title: text("Segmentation Dimensions", "أبعاد التجزئة"), Values: segDims, Formulas: masterNamesFormulas(rows, KpiMasterSegmentationDimension)},
 		{Name: listKpiCodes, Title: text("KPI Codes", "أكواد المؤشرات"), Values: kpiCodes,
 			Formulas: sheetNamesFormulas(kpiTemplateCodeRows, kpiTemplateStrategicDictSheet, kpiTemplateOperationalDict, kpiTemplateAwardDictSheet)},
 		{Name: listMetricCodes, Title: text("Metric Codes", "أكواد المقاييس"), Values: metricCodes,
 			Formulas: sheetNamesFormulasIn(kpiTemplateCodeRows, templateColLetter(metricTplCols, "metric_code"), kpiTemplateMetricsSheet)},
 		{Name: lookupOpObjName, Title: text("Lookup: Operational Objective", "بحث: الهدف التشغيلي"), Values: opName, Formulas: opSheetName, Lookup: true},
+		{Name: lookupOpObjGoal, Title: text("Lookup: its Strategic Goal", "بحث: الهدف الاستراتيجي"), Values: opGoal, Formulas: opSheetGoal, Lookup: true},
 		{Name: lookupOpObjParent, Title: text("Lookup: its Parent Objective", "بحث: الهدف الرئيسي"), Values: opParent, Formulas: opSheetParent, Lookup: true},
 		{Name: lookupOpObjPillar, Title: text("Lookup: its Pillar / Enabler", "بحث: الركيزة / الممكن"), Values: opPillar, Formulas: opSheetPillar, Lookup: true},
 		{Name: lookupParentName, Title: text("Lookup: Parent Objective", "بحث: الهدف الرئيسي"), Values: parName, Formulas: parSheetName, Lookup: true},
@@ -382,8 +408,11 @@ func kpiTemplateLists(ctx context.Context, db *gorm.DB, lang string) ([]utils.Li
 		{Name: lookupParentPillar, Title: text("Lookup: its Pillar / Enabler", "بحث: الركيزة / الممكن"), Values: parPillar, Formulas: parSheetPillar, Lookup: true},
 		{Name: lookupKpiCode, Title: text("Lookup: KPI Code", "بحث: كود المؤشر"), Values: kCode, Formulas: kSheetCode, Lookup: true},
 		{Name: lookupKpiType, Title: text("Lookup: its KPI Type", "بحث: نوع المؤشر"), Values: kType, Formulas: kSheetType, Lookup: true},
-		{Name: listPeriodCodes, Title: text("Period Codes", "رموز الفترات"),
-			Values: []string{"jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec", "q1", "q2", "q3", "q4", "h1", "h2", "annual"}},
+		{Name: listPeriodCodes, Title: text("Periods", "الفترات"),
+			Values: []string{"jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec", "q1", "q2", "q3", "q4", "h1", "h2", "annual", customRangeChoice(lang)}},
+		{Name: listKpiLabels, Title: text("KPIs", "المؤشرات"), Values: kpiLabels, Formulas: kpiSheetLabels},
+		{Name: listMetricNames, Title: text("Metrics", "المقاييس"), Values: metricNames,
+			Formulas: sheetNamesFormulasIn(kpiTemplateCodeRows, templateColLetter(metricTplCols, "metric_name"), kpiTemplateMetricsSheet)},
 		{Name: listAwardMeasures, Title: text("Award KPIs and Measures", "مؤشرات ومقاييس الجائزة"), Values: names(mdAwardMeasure), Formulas: masterNamesFormulas(rows, KpiMasterAwardKpiMeasure)},
 		{Name: listDataSources, Title: text("Data Sources", "مصادر البيانات"), Values: dataSources, Formulas: masterNamesFormulas(rows, KpiMasterDataSource)},
 	}, nil
@@ -440,12 +469,20 @@ func sheetRowFormulas(rows int, sheet, keyCol string, render func(idx string) st
 
 // sheetNamesFormulasIn is sheetNamesFormulas for name column col.
 func sheetNamesFormulasIn(rows int, col string, sheets ...string) []string {
+	return sheetLabelFormulas(rows, col, func(sheet, idx string) string {
+		return fmt.Sprintf(`INDEX('%[1]s'!$%[2]s:$%[2]s,%[3]s)`, sheet, col, idx)
+	}, sheets...)
+}
+
+// sheetLabelFormulas is sheetNamesFormulasIn with the value built by render
+// from the sheet and the row number of each non-empty cell of col.
+func sheetLabelFormulas(rows int, col string, render func(sheet, idx string) string, sheets ...string) []string {
 	last := rows + 1
 	count := func(s string) string {
 		return fmt.Sprintf(`SUMPRODUCT(--('%[1]s'!$%[3]s$2:$%[3]s$%[2]d<>""))`, s, last, col)
 	}
 	nth := func(s, k string) string {
-		return fmt.Sprintf(`INDEX('%[1]s'!$%[4]s:$%[4]s,_xlfn.AGGREGATE(15,6,ROW('%[1]s'!$%[4]s$2:$%[4]s$%[2]d)/('%[1]s'!$%[4]s$2:$%[4]s$%[2]d<>""),%[3]s))`, s, last, k, col)
+		return render(s, fmt.Sprintf(`_xlfn.AGGREGATE(15,6,ROW('%[1]s'!$%[3]s$2:$%[3]s$%[2]d)/('%[1]s'!$%[3]s$2:$%[3]s$%[2]d<>""),%[4]s)`, s, last, col, k))
 	}
 	var out []string
 	for k := 1; k <= rows*len(sheets); k++ {
@@ -520,9 +557,8 @@ func markTemplateRequired(specs []colSpec, cols []kpiTemplateColumn) []kpiTempla
 	return cols
 }
 
-func buildKpiDictionarySheet(name, kpiType string, fromYear, toYear int) utils.SheetConfig {
-	cols := markTemplateRequired(dictColumns(kpiType),
-		append(kpiTemplateDictionaryColumns(kpiType), kpiTemplateAnnualTargetColumns(fromYear, toYear)...))
+func buildKpiDictionarySheet(name, kpiType string) utils.SheetConfig {
+	cols := markTemplateRequired(dictColumns(kpiType), kpiTemplateDictionaryColumns(kpiType))
 	return utils.SheetConfig{Name: name, Columns: toExcelColumns(cols), DataRows: 4999, FreezeHeader: true}
 }
 
@@ -590,9 +626,9 @@ func toExcelColumns(columns []kpiTemplateColumn) []utils.ColumnConfig {
 	return result
 }
 
-// kpiTemplateDictionaryColumns lists a Dictionary sheet's columns in groups,
-// each with its own header colour: basic details, strategic alignment,
-// ownership, measurement, then the annual targets.
+// kpiTemplateDictionaryColumns lists a Dictionary sheet's columns in the
+// order of the KPI create form (the same for every KPI type), grouped by
+// header colour: basic details, strategic alignment, ownership, measurement.
 func kpiTemplateDictionaryColumns(kpiType string) []kpiTemplateColumn {
 	group := func(color string, cols ...kpiTemplateColumn) []kpiTemplateColumn {
 		for i := range cols {
@@ -603,108 +639,154 @@ func kpiTemplateDictionaryColumns(kpiType string) []kpiTemplateColumn {
 	pick := func(key, en, ar, list string, width float64) kpiTemplateColumn {
 		return kpiTemplateColumn{key: key, en: en, ar: ar, width: width, list: list}
 	}
+	codeHint := map[string][2]string{
+		models.KPITypeStrategic:   {"e.g. KPI-P1-01-01", "مثال KPI-P1-01-01"},
+		models.KPITypeOperational: {"e.g. OP-P1-01-01", "مثال OP-P1-01-01"},
+		models.KPITypeAward:       {"e.g. KPI-AW-05-01", "مثال KPI-AW-05-01"},
+	}[kpiType]
 
-	nameCol := kpiTemplateColumn{key: "name", ar: "المؤشر الاستراتيجي", en: "Strategic Indicator", width: 40}
-	switch kpiType {
-	case models.KPITypeOperational:
-		nameCol.en, nameCol.ar = "Operational Indicator", "المؤشر التشغيلي"
-	case models.KPITypeAward:
-		nameCol.en, nameCol.ar = "Indicator / Measure", "مؤشر / مقياس"
-	}
 	cols := group(colorBasic,
 		kpiTemplateColumn{key: "code", ar: "الكود", en: "Code", width: 18,
-			hintEn: "Unique code, e.g. KPI-P1-01-01 (strategic), OP-P1-01-01 (operational), KPI-AW-05-01 (award).",
-			hintAr: "كود فريد، مثال KPI-P1-01-01 (استراتيجي)، OP-P1-01-01 (تشغيلي)، KPI-AW-05-01 (جائزة)."},
-		nameCol,
-		kpiTemplateColumn{key: "description", ar: "الوصف", en: "Description", width: 40},
+			hintEn: "Unique code: uppercase letters and digits separated by hyphens, " + codeHint[0] + ".",
+			hintAr: "كود فريد: أحرف كبيرة وأرقام مفصولة بشرطات، " + codeHint[1] + "."},
+		kpiTemplateColumn{key: "name_en", ar: "مؤشر الأمانة (إنجليزي)", en: "EPM KPI (EN)", width: 40, required: true},
+		kpiTemplateColumn{key: "name_ar", ar: "مؤشر الأمانة (عربي)", en: "EPM KPI (AR)", width: 40},
 	)
 
-	// As on the KPI forms: pick the operational objective; its parent
-	// objective and strategic goal follow from it.
-	objective := pick("objective", "Operational Objective", "الهدف التشغيلي", listProcesses, 34)
+	goal := pick("goal", "Strategic Goal", "الهدف الاستراتيجي", listGoals, 32)
+	goal.hintEn, goal.hintAr = "Filled automatically from the Objective (as on the KPI form).", "يُعبأ تلقائياً من الهدف (كما في نموذج المؤشر)."
+	objective := pick("objective", "Objective", "الهدف التشغيلي", listProcesses, 36)
 	objective.required = true // checked per row by the importer
-	parent := pick("parent_objective", "Parent Objective", "الهدف الرئيسي", listObjectives, 30)
-	parent.hintEn = "Leave empty — it is taken from the operational objective. Fill it only to create a new operational objective here, or when the same name exists under several parent objectives."
-	parent.hintAr = "اتركه فارغاً — يُؤخذ من الهدف التشغيلي. املأه فقط لإنشاء هدف تشغيلي جديد هنا، أو إذا كان الاسم نفسه موجوداً تحت أكثر من هدف رئيسي."
-	pillar := pick("pillar", "Pillar / Enabler", "الركيزة / الممكن", listPillarsEnablers, 30)
-	pillar.hintEn, pillar.hintAr = "Optional — taken from the operational objective when empty.", "اختياري — يُؤخذ من الهدف التشغيلي عند تركه فارغاً."
-	// Filled automatically from the operational objective (columns D, E, F:
-	// code, name and description come first).
-	parent.formula = lookupFormula("D", lookupOpObjName, lookupOpObjParent)
-	pillar.formula = lookupFormula("D", lookupOpObjName, lookupOpObjPillar)
-	parent.hintEn = "Filled automatically from the Operational Objective. Type a parent only to create a new operational objective here, or when the name exists under several parent objectives (the cell then stays empty)."
-	parent.hintAr = "يُعبأ تلقائياً من الهدف التشغيلي. اكتب الهدف الرئيسي فقط لإنشاء هدف تشغيلي جديد هنا، أو عندما يكون الاسم موجوداً تحت أكثر من هدف رئيسي (تبقى الخلية فارغة عندها)."
-	pillar.hintEn, pillar.hintAr = "Filled automatically from the Operational Objective; you can change it.", "يُعبأ تلقائياً من الهدف التشغيلي؛ ويمكنك تغييره."
-	alignment := []kpiTemplateColumn{objective, parent, pillar}
-	switch kpiType {
-	case models.KPITypeAward:
-		alignment = append(alignment,
-			pick("criterion", "Criterion", "المعيار", listCriteria, 26),
-			kpiTemplateColumn{key: "sub_no", ar: "رقم المعيار الفرعي", en: "Sub-Criterion #", width: 18, list: listSubCriteria,
-				hintEn: "e.g. 5.1 — must belong to the chosen criterion.", hintAr: "مثال 5.1 — يجب أن يتبع المعيار المختار."},
-			kpiTemplateColumn{key: "sub_name", ar: "المعيار الفرعي", en: "Sub-Criterion", width: 30,
-				hintEn: "Needed only when the sub-criterion does not exist yet.", hintAr: "مطلوب فقط إذا لم يكن المعيار الفرعي موجوداً."},
-		)
-	}
-	alignment = append(alignment, pick("domain", "Related Domain / Award Criterion", "المجال المرتبط / معيار الجائزة", listDomains, 32))
-	if kpiType == models.KPITypeStrategic {
-		alignment = append(alignment, kpiTemplateColumn{key: "seg", ar: "محاور التجزئة", en: "Segmentation Axes", width: 26, list: listSegDimensions,
-			hintEn: "Pick a dimension, or type several separated by ; (semicolon).", hintAr: "اختر بُعداً، أو اكتب عدة أبعاد مفصولة بـ ; (فاصلة منقوطة)."})
-	}
-	alignment = append(alignment, pick("award_measure", "Award KPIs and Measures", "مؤشرات ومقاييس الجائزة", listAwardMeasures, 30))
-	cols = append(cols, group(colorAlignment, alignment...)...)
+	objective.hintEn, objective.hintAr = "An operational objective (Lists sheet or Operational Objectives sheet).", "هدف تشغيلي (من ورقة القوائم أو ورقة الأهداف التشغيلية)."
+	criteria := pick("criterion", "Criteria", "المعيار", listCriteria, 30)
+	criteria.hintEn, criteria.hintAr = "Optional. Narrows the Sub-Criteria; only the sub-criterion is stored.", "اختياري. يحدد المعايير الفرعية؛ ويُحفظ المعيار الفرعي فقط."
+	sub := pick("sub_criterion", "Sub-Criteria", "المعيار الفرعي", listSubCriteria, 34)
+	sub.hintEn, sub.hintAr = "Optional, e.g. \"5.1 - Name\". Must belong to the Criteria when both are given.", "اختياري، مثال \"5.1 - الاسم\". يجب أن يتبع المعيار عند تعبئة الاثنين."
+	pillar := pick("pillar", "Pillar", "الركيزة", listPillars, 30)
+	pillar.hintEn, pillar.hintAr = "Filled automatically from the Objective; you can change it.", "يُعبأ تلقائياً من الهدف؛ ويمكنك تغييره."
+	cols = append(cols, group(colorAlignment,
+		goal, objective, criteria, sub, pillar,
+		pick("award_measure", "Award KPIs and Measures", "مؤشرات ومقاييس الجائزة", listAwardMeasures, 30),
+		pick("domain", "Domains", "المجالات", listDomains, 30),
+	)...)
 
+	ownerOrg := pick("owner_org", "Owner Organization", "المنظمة المالكة", listOrganizations, 30)
+	ownerOrg.hintEn, ownerOrg.hintAr = "External owners only.", "للمالك الخارجي فقط."
 	cols = append(cols, group(colorOwnership,
-		pick("owner_dept", "Owner Department", "الإدارة المالكة", listDepartments, 30),
 		kpiTemplateColumn{key: "owner_type", ar: "نوع المالك", en: "Owner Type", width: 16,
 			values: []string{"Internal", "External"}, valuesAr: []string{"داخلي", "خارجي"}},
+		pick("owner_dept", "Owner Department", "الإدارة المالكة", listDepartments, 30),
 		pick("agency", "Owning Agency", "الوكالة / الإدارة المالكة", listDepartments, 30),
-		pick("owner_org", "Owner Organization", "المنظمة المالكة", listOrganizations, 30),
+		ownerOrg,
 		kpiTemplateColumn{key: "related_depts", ar: "الإدارات ذات الصلة", en: "Related Departments", width: 34,
 			hintEn: "One or more names from the Departments column of the Lists sheet, separated by ; (semicolon).",
 			hintAr: "اسم أو أكثر من عمود الإدارات في ورقة القوائم، مفصولة بـ ; (فاصلة منقوطة)."},
 	)...)
 
 	cols = append(cols, group(colorMeasurement,
-		kpiTemplateColumn{key: "polarity", ar: "الاتجاه", en: "Polarity / Direction", width: 20,
+		kpiTemplateColumn{key: "classification", ar: "تصنيف المؤشر", en: "KPI Classification", width: 20,
+			values: []string{"KPI", "Measurement", "Output"}, valuesAr: []string{"مؤشر", "مقياس", "مخرج"}},
+		kpiTemplateColumn{key: "polarity", ar: "الاتجاه", en: "Polarity", width: 16,
 			values: []string{"Ascending", "Descending"}, valuesAr: []string{"تصاعدي", "تنازلي"}},
+		kpiTemplateColumn{key: "target_requirement", ar: "متطلب المستهدف", en: "Target Requirement", width: 20,
+			values: []string{"Mandatory", "Optional"}, valuesAr: []string{"إلزامي", "اختياري"}},
 		kpiTemplateColumn{key: "frequency", ar: "تكرار الإبلاغ", en: "Reporting Frequency", width: 18,
 			values:   []string{"Monthly", "Quarterly", "Semi-Annual", "Annual", "Custom"},
 			valuesAr: []string{"شهري", "ربع سنوي", "نصف سنوي", "سنوي", "مخصص"}},
-		kpiTemplateColumn{key: "activation", ar: "حالة التفعيل", en: "Activation Status", width: 20,
-			values:   []string{"Active", "Inactive", "Draft", "Reviewed", "Approved", "Closed"},
-			valuesAr: []string{"نشط", "غير نشط", "مسودة", "مراجَع", "معتمد", "مغلق"}},
-		kpiTemplateColumn{key: "classification", ar: "تصنيف المؤشر", en: "KPI Classification", width: 20,
-			values: []string{"KPI", "Measurement", "Output"}, valuesAr: []string{"مؤشر", "مقياس", "مخرج"}},
-		kpiTemplateColumn{key: "unit", ar: "وحدة القياس", en: "Unit of Measure", width: 16},
 		kpiTemplateColumn{key: "baseline", ar: "خط الأساس", en: "Baseline", width: 14},
+		kpiTemplateColumn{key: "unit", ar: "وحدة القياس", en: "Unit of Measure", width: 16},
+		kpiTemplateColumn{key: "description_en", ar: "الوصف (إنجليزي)", en: "Description (EN)", width: 40},
+		kpiTemplateColumn{key: "description_ar", ar: "الوصف (عربي)", en: "Description (AR)", width: 40},
 		kpiTemplateColumn{key: "formula", ar: "معادلة الحساب", en: "Calculation Formula", width: 30},
 		pick("data_source", "Data Source", "مصدر البيانات", listDataSources, 26),
-		kpiTemplateColumn{key: "target_requirement", ar: "متطلب المستهدف", en: "Target Requirement", width: 20,
-			values: []string{"Mandatory", "Optional"}, valuesAr: []string{"إلزامي", "اختياري"}},
-		kpiTemplateColumn{key: "lifecycle", ar: "دورة حياة المؤشر", en: "KPI Lifecycle", width: 22},
-		kpiTemplateColumn{key: "notes", ar: "ملاحظات", en: "Notes", width: 32},
 	)...)
+
+	// Strategic Goal and Pillar follow the Objective picked on the row.
+	obj := templateColLetter(cols, "objective")
+	for i := range cols {
+		switch cols[i].key {
+		case "goal":
+			cols[i].formula = lookupFormula(obj, lookupOpObjName, lookupOpObjGoal)
+		case "pillar":
+			cols[i].formula = lookupFormula(obj, lookupOpObjName, lookupOpObjPillar)
+		}
+	}
 	return cols
 }
 
-func kpiTemplateAnnualTargetColumns(fromYear, toYear int) []kpiTemplateColumn {
-	var cols []kpiTemplateColumn
-	for year := fromYear; year <= toYear; year++ {
-		cols = append(cols, kpiTemplateColumn{
-			key:   fmt.Sprintf("target_%d", year),
-			ar:    fmt.Sprintf("مستهدفات %d", year),
-			en:    fmt.Sprintf("Targets %d", year),
-			width: 14,
-			color: colorTargets,
-		})
+// kpiLabel is how a KPI is shown in the Targets KPI dropdown: "CODE - Name".
+func kpiLabel(code, name string) string {
+	if strings.TrimSpace(name) == "" {
+		return code
+	}
+	return code + " - " + strings.TrimSpace(name)
+}
+
+// customRangeChoice is the Period option for a custom date range.
+func customRangeChoice(lang string) string {
+	if lang == KpiTemplateLangAR {
+		return "نطاق تاريخ مخصص"
+	}
+	return "Custom date range"
+}
+
+// kpiTargetSheetColumns are the Targets sheet columns, in the order of the
+// target form: KPI ("CODE - Name"), Metric (name), Target Year, Period (or a
+// custom date range with its start and end), value, type, basis, rationale
+// and thresholds.
+func kpiTargetSheetColumns(lang string) []kpiTemplateColumn {
+	ar := lang == KpiTemplateLangAR
+	custom := customRangeChoice(lang)
+	col := func(key, en, ar string, width float64) kpiTemplateColumn {
+		return kpiTemplateColumn{key: key, en: en, ar: ar, width: width}
+	}
+	byKey := map[string]kpiTemplateColumn{}
+	for _, c := range kpiTargetTemplateColumns() {
+		byKey[c.key] = c
+	}
+	kpi := col("kpi_code", "KPI", "المؤشر", 44)
+	kpi.required, kpi.list = true, listKpiLabels
+	kpi.hintEn, kpi.hintAr = "Pick the KPI (code - name).", "اختر المؤشر (الكود - الاسم)."
+	metric := col("metric", "Metric", "المقياس", 32)
+	metric.required, metric.list = true, listMetricNames
+	metric.hintEn, metric.hintAr = "Metric name of the KPI. Can be left empty when the KPI has only one metric.", "اسم مقياس المؤشر. يمكن تركه فارغاً إذا كان للمؤشر مقياس واحد."
+	year := byKey["target_year"]
+	year.hintEn, year.hintAr = "Not needed for a custom date range.", "غير مطلوبة لنطاق التاريخ المخصص."
+	period := col("period_code", "Period", "الفترة", 20)
+	period.required, period.list = true, listPeriodCodes
+	period.hintEn = "jan–dec, q1–q4, h1/h2 or annual (must match the metric's reporting frequency), or \"" + custom + "\" and fill Period Start and Period End."
+	period.hintAr = "jan–dec أو q1–q4 أو h1/h2 أو annual (حسب تكرار الإبلاغ للمقياس)، أو \"" + custom + "\" واملأ بداية الفترة ونهايتها."
+	start, end := byKey["period_start"], byKey["period_end"]
+	start.hintEn, start.hintAr = "Only for \""+custom+"\". Format YYYY-MM-DD.", "فقط عند اختيار \""+custom+"\". بصيغة YYYY-MM-DD."
+	end.hintEn, end.hintAr = start.hintEn, start.hintAr
+	value := byKey["target_value"]
+	value.required = true
+	typ := byKey["target_type"]
+	typ.required = true
+	typ.hintEn, typ.hintAr = "Filled from the Period: Milestone / Ad Hoc for a custom date range, Annual Target for annual, otherwise Period Target. You can change it.", "يُعبأ من الفترة: مرحلة / حسب الحاجة لنطاق التاريخ المخصص، ومستهدف سنوي للفترة السنوية، وإلا مستهدف فترة. ويمكنك تغييره."
+	cols := []kpiTemplateColumn{kpi, metric, year, period, start, end, value, typ,
+		byKey["target_basis"], byKey["target_rationale"], byKey["threshold_mode"],
+		byKey["excellent_threshold"], byKey["achieved_threshold"],
+		col("target_range_min", "Range Min", "أدنى قيمة للنطاق", 14), col("target_range_max", "Range Max", "أعلى قيمة للنطاق", 14),
+		byKey["warning_threshold"]}
+
+	milestone, annual, periodTarget := "Milestone / Ad Hoc", "Annual Target", "Period Target"
+	if ar {
+		milestone, annual, periodTarget = "مرحلة / حسب الحاجة", "مستهدف سنوي", "مستهدف فترة"
+	}
+	k, p := templateColLetter(cols, "kpi_code"), templateColLetter(cols, "period_code")
+	for i := range cols {
+		if cols[i].key == "target_type" {
+			cols[i].formula = fmt.Sprintf(`IF($%[1]s{row}="","",IF($%[2]s{row}="%[3]s","%[4]s",IF(OR(LOWER($%[2]s{row})="annual",$%[2]s{row}="سنوي"),"%[5]s","%[6]s")))`,
+				k, p, custom, milestone, annual, periodTarget)
+		}
 	}
 	return cols
 }
 
 // ─── Instructions ───────────────────────────────────────────────────────────
 
-func buildKpiDictionaryInstructions(fromYear, toYear int) *utils.InstructionConfig {
+func buildKpiDictionaryInstructions() *utils.InstructionConfig {
 	text := func(en, ar string) utils.LocalizedText { return utils.LocalizedText{EN: en, AR: ar} }
 	item := func(labelEN, labelAR, bodyEN, bodyAR string) utils.InstructionItem {
 		return utils.InstructionItem{Label: text(labelEN, labelAR), Text: text(bodyEN, bodyAR)}
@@ -721,14 +803,14 @@ func buildKpiDictionaryInstructions(fromYear, toYear int) *utils.InstructionConf
 				"Only if something is missing from the Lists sheet, one sheet per Master Data tab: Pillars and Enablers → Strategic Goals → Parent Objectives (choose the goal) → Operational Objectives (choose the parent objective; the goal follows) → Initiatives (choose the goal); and Domains, Organizations, Data Sources, Segmentation Dimensions, Award Criteria → Award Sub-criteria (choose the criterion), Award KPI Measures (same columns as each tab's own import). One per row without blank rows. Anything added appears in the dropdowns of the later sheets.",
 				"فقط إذا كان هناك عنصر غير موجود في ورقة القوائم، ورقة لكل تبويب من البيانات الرئيسية: الركائز والممكنات ← الأهداف الاستراتيجية ← الأهداف الرئيسية (اختر الهدف) ← الأهداف التشغيلية (اختر الهدف الرئيسي؛ ويُؤخذ الهدف منه) ← المبادرات (اختر الهدف)؛ والمجالات والمنظمات ومصادر البيانات وأبعاد التجزئة ومعايير الجائزة ← المعايير الفرعية (اختر المعيار) ومقاييس مؤشرات الجائزة (بنفس أعمدة استيراد كل تبويب). عنصر في كل صف دون صفوف فارغة. أي عنصر يُضاف يظهر في القوائم المنسدلة للأوراق التالية."),
 			item("3. KPIs", "3. المؤشرات",
-				"Fill the Strategic, Operational or Award Dictionary sheet, one KPI per row. Pick references from the dropdowns. Put annual targets in the \"Targets YYYY\" columns.",
-				"املأ ورقة الدليل الاستراتيجي أو التشغيلي أو الجائزة، مؤشر واحد في كل صف. اختر المراجع من القوائم المنسدلة. ضع المستهدفات السنوية في أعمدة \"مستهدفات YYYY\"."),
+				"Fill the Strategic, Operational or Award Dictionary sheet, one KPI per row. The columns follow the New KPI form. Pick the Objective: the Strategic Goal and Pillar fill in from it.",
+				"املأ ورقة الدليل الاستراتيجي أو التشغيلي أو الجائزة، مؤشر واحد في كل صف. الأعمدة بنفس ترتيب نموذج إنشاء المؤشر. اختر الهدف: يُعبأ الهدف الاستراتيجي والركيزة منه تلقائياً."),
 			item("4. Metrics (optional)", "4. المقاييس (اختياري)",
 				"The metrics of each KPI, same columns as the Metrics import. KPI Code can be a KPI from the Dictionary sheets of this file. A KPI with no metric here gets one default metric (with the KPI's reporting frequency) when it has targets or results.",
 				"مقاييس كل مؤشر، بنفس أعمدة استيراد المقاييس. يمكن أن يكون كود المؤشر لمؤشر من أوراق الدليل في هذا الملف. المؤشر الذي ليس له مقياس هنا يحصل على مقياس افتراضي واحد (بتكرار إبلاغ المؤشر) عند وجود مستهدفات أو نتائج له."),
 			item("4b. Targets (optional)", "4ب. المستهدفات (اختياري)",
-				"Any target type, same columns as the Targets import: Period Target (one period, e.g. Q1 or Jan), Annual Target, Milestone / Ad Hoc (a date range), with threshold mode and thresholds. A simple yearly target can also go in the \"Targets YYYY\" columns of the Dictionary sheets.",
-				"أي نوع من المستهدفات، بنفس أعمدة استيراد المستهدفات: مستهدف فترة (فترة واحدة مثل الربع 1 أو يناير)، مستهدف سنوي، مرحلي / مخصص (نطاق تاريخ)، مع نمط الحدود وقيمها. ويمكن وضع المستهدف السنوي البسيط أيضاً في أعمدة \"مستهدفات YYYY\" في أوراق الدليل."),
+				"Same columns as the Set Target form: pick the KPI (code - name) and the Metric (name), then the Target Year and Period — a month, quarter, half or annual, or \"Custom date range\" with Period Start and Period End. Target Type fills in from the Period.",
+				"بنفس أعمدة نموذج تحديد المستهدف: اختر المؤشر (الكود - الاسم) والمقياس (الاسم)، ثم السنة المستهدفة والفترة — شهر أو ربع أو نصف أو سنوي، أو \"نطاق تاريخ مخصص\" مع بداية الفترة ونهايتها. يُعبأ نوع المستهدف من الفترة."),
 			item("5. Performance (optional)", "5. الأداء (اختياري)",
 				"One row per KPI (and metric) per period: Code, Metric Code (only if the KPI has several metrics), Year, Period, Target and Actual Result. The period must match the reporting frequency — a month for Monthly, Q1–Q4 for Quarterly, H1/H2 for Semi-Annual, Annual for Annual — and must have ended.",
 				"صف واحد لكل مؤشر (ومقياس) لكل فترة: الكود وكود المقياس (فقط إذا كان للمؤشر عدة مقاييس) والسنة والفترة والمستهدف والنتيجة الفعلية. يجب أن تطابق الفترة تكرار الإبلاغ — شهر للشهري، الربع 1–4 للربع سنوي، النصف 1/2 للنصف سنوي، سنوي للسنوي — وأن تكون منتهية."),
@@ -737,20 +819,18 @@ func buildKpiDictionaryInstructions(fromYear, toYear int) *utils.InstructionConf
 				"احفظ الملف بصيغة .xlsx وارفعه في استيراد دليل المؤشرات. اضغط تحقق وراجع التقرير (كل صف مرفوض يظهر مع الورقة ورقم الصف والسبب)، ثم تنفيذ."),
 		}, BlankAfter: true},
 		{Title: text("Column colours on the Dictionary sheets", "ألوان الأعمدة في أوراق الدليل"), Items: []utils.InstructionItem{
-			item("Dark blue", "أزرق داكن", "Basic details: code, name, description.", "البيانات الأساسية: الكود والاسم والوصف."),
-			item("Teal", "أزرق مخضر", "Strategic alignment: operational objective (required; its parent objective, strategic goal and pillar are filled from it), award criterion, domain.", "المواءمة الاستراتيجية: الهدف التشغيلي (إلزامي؛ يُؤخذ منه الهدف الرئيسي والهدف الاستراتيجي والركيزة) ومعيار الجائزة والمجال."),
-			item("Purple", "بنفسجي", "Ownership: owner department and type, agency, organization, related departments.", "الملكية: الإدارة المالكة ونوع المالك والوكالة والمنظمة والإدارات ذات الصلة."),
-			item("Green", "أخضر", "Measurement: direction, frequency, status, classification, unit, baseline, formula, data source.", "القياس: الاتجاه والتكرار والحالة والتصنيف والوحدة وخط الأساس والمعادلة ومصدر البيانات."),
-			item("Orange", "برتقالي", fmt.Sprintf("Annual targets %d–%d. Add or remove year columns if needed.", fromYear, toYear), fmt.Sprintf("المستهدفات السنوية %d–%d. أضف أو أزل أعمدة السنوات حسب الحاجة.", fromYear, toYear)),
+			item("Dark blue", "أزرق داكن", "Basic details: code, EPM KPI (EN) and (AR).", "البيانات الأساسية: الكود ومؤشر الأمانة (إنجليزي) و(عربي)."),
+			item("Teal", "أزرق مخضر", "Strategic alignment: Strategic Goal (filled from the Objective), Objective (required), Criteria, Sub-Criteria, Pillar (filled from the Objective), Award KPIs and Measures, Domains.", "المواءمة الاستراتيجية: الهدف الاستراتيجي (يُعبأ من الهدف) والهدف (إلزامي) والمعيار والمعيار الفرعي والركيزة (تُعبأ من الهدف) ومؤشرات ومقاييس الجائزة والمجالات."),
+			item("Purple", "بنفسجي", "Ownership: owner type, owner department, owning agency, owner organization, related departments.", "الملكية: نوع المالك والإدارة المالكة والوكالة المالكة والمنظمة المالكة والإدارات ذات الصلة."),
+			item("Green", "أخضر", "Measurement: classification, polarity, target requirement, reporting frequency, baseline, unit, descriptions (EN/AR), formula, data source.", "القياس: التصنيف والاتجاه ومتطلب المستهدف وتكرار الإبلاغ وخط الأساس والوحدة والوصف (إنجليزي/عربي) والمعادلة ومصدر البيانات."),
 			item("Red *", "علامة * حمراء", "Mandatory column.", "عمود إلزامي."),
 		}, BlankAfter: true},
 		{Title: text("Rules", "القواعد"), Items: []utils.InstructionItem{
-			item("Dropdowns", "القوائم المنسدلة", "A value that is not in a dropdown shows a warning. Pillars, enablers, goals and parent objectives must exist in the system or on their sheet. An operational objective must exist too, unless Parent Objective is filled (it is then created). Departments, organizations, domains, award criteria and measures that do not exist are created and reported as warnings.", "القيمة غير الموجودة في القائمة تُظهر تحذيراً. يجب أن تكون الركائز والممكنات والأهداف الاستراتيجية والأهداف الرئيسية موجودة في النظام أو في ورقتها. ويجب أن يكون الهدف التشغيلي موجوداً أيضاً ما لم يُملأ الهدف الرئيسي (فيُنشأ عندها). أما الإدارات والمنظمات والمجالات ومعايير ومقاييس الجائزة غير الموجودة فتُنشأ ويُبلّغ عنها كتحذير."),
+			item("Dropdowns", "القوائم المنسدلة", "A value that is not in a dropdown shows a warning. Pillars, goals and objectives must exist in the system or on their sheet (add a new objective on the Operational Objectives sheet). Departments, organizations, domains, award criteria and measures that do not exist are created and reported as warnings.", "القيمة غير الموجودة في القائمة تُظهر تحذيراً. يجب أن تكون الركائز والأهداف موجودة في النظام أو في ورقتها (أضف الهدف الجديد في ورقة الأهداف التشغيلية). أما الإدارات والمنظمات والمجالات ومعايير ومقاييس الجائزة غير الموجودة فتُنشأ ويُبلّغ عنها كتحذير."),
 			item("KPI code", "كود المؤشر", "Required and unique. Uppercase letters and digits separated by hyphens.", "مطلوب وفريد. أحرف كبيرة وأرقام مفصولة بشرطات."),
 			item("Owner Type", "نوع المالك", "Defaults to External when an Owner Organization is given, otherwise Internal. Owner Organization is used for external owners only.", "يكون خارجياً عند تعبئة المنظمة المالكة، وإلا داخلياً. تُستخدم المنظمة المالكة للمالك الخارجي فقط."),
 			item("Related Departments", "الإدارات ذات الصلة", "Existing departments only, separated by ;. A name that is not found is reported and not linked.", "إدارات موجودة فقط مفصولة بـ ;. الاسم غير الموجود يُبلّغ عنه ولا يُربط."),
-			item("Activation Status", "حالة التفعيل", "Checked but not applied: new KPIs start as Draft and existing KPIs keep their workflow status.", "يتم التحقق منها دون تطبيقها: المؤشرات الجديدة تبدأ كمسودة والحالية تحتفظ بحالة سير العمل."),
-			item("Segmentation Axes", "محاور التجزئة", "Strategic Dictionary only.", "للدليل الاستراتيجي فقط."),
+			item("Status", "الحالة", "New KPIs start as Draft and go through the KPI workflow; existing KPIs keep their workflow status.", "تبدأ المؤشرات الجديدة كمسودة وتمر بسير عمل المؤشر؛ وتحتفظ المؤشرات الحالية بحالتها."),
 			item("Numbers", "الأرقام", "Baseline, targets and actual results are numbers; commas and a trailing % are accepted. Negative values are rejected.", "خط الأساس والمستهدفات والنتائج أرقام؛ تُقبل الفواصل والعلامة % في النهاية. تُرفض القيم السالبة."),
 			item("Existing records", "السجلات الحالية", "The import options decide whether existing KPIs, targets and results are skipped or updated. On update, only the columns present in the file are changed.", "تحدد خيارات الاستيراد ما إذا كانت المؤشرات والمستهدفات والنتائج الحالية تُتخطى أو تُحدّث. عند التحديث تتغير الأعمدة الموجودة في الملف فقط."),
 			item("Sheets and headers", "الأوراق والرؤوس", "Do not rename the sheets or change row 1. Sheets you do not need can stay empty.", "لا تغيّر أسماء الأوراق أو الصف الأول. الأوراق غير المطلوبة يمكن تركها فارغة."),

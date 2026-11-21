@@ -308,7 +308,7 @@ func (imp *kpiImporter) newKpiModel(k *kpiRec, idOf func(*mdNode) *uuid.UUID) in
 	return &models.StrategicKPI{
 		ID: k.ID, Code: k.Code, NameEn: k.NameEn, NameAr: k.NameAr,
 		PillarID: idOf(k.Pillar), GoalID: idOf(k.Goal), DomainID: idOf(k.Domain),
-		OperationalObjectiveID: idOf(k.Objective), ProcessID: idOf(k.Process),
+		OperationalObjectiveID: idOf(k.Objective), ProcessID: idOf(k.Process), AwardSubCriterionID: idOf(k.SubCriterion),
 		OwnerType: k.OwnerType, OwnerDeptID: idOf(k.OwnerDept), OwningAgencyID: idOf(k.Agency),
 		Polarity: k.Polarity, ActivationStatus: models.KPIStatusDraft, DescriptionEn: k.DescriptionEn, DescriptionAr: k.DescriptionAr,
 		Formula: k.Formula, Baseline: k.Baseline, ReportingFrequency: k.Frequency, Lifecycle: k.Lifecycle, DataSource: k.DataSource,
@@ -325,8 +325,15 @@ func (imp *kpiImporter) kpiUpdates(k *kpiRec, idOf func(*mdNode) *uuid.UUID) map
 		"name_en": k.NameEn, "name_ar": k.NameAr, "pillar_id": idOf(k.Pillar), "goal_id": idOf(k.Goal), "domain_id": idOf(k.Domain),
 		"owner_type": k.OwnerType, "owner_dept_id": idOf(k.OwnerDept), "owning_agency_id": idOf(k.Agency), "polarity": k.Polarity,
 		"description_en": k.DescriptionEn, "description_ar": k.DescriptionAr, "formula": k.Formula, "baseline": k.Baseline,
-		"reporting_frequency": k.Frequency, "lifecycle": k.Lifecycle, "data_source": k.DataSource,
-		"notes": k.Notes, "updated_at": time.Now(),
+		"reporting_frequency": k.Frequency, "data_source": k.DataSource, "updated_at": time.Now(),
+	}
+	// Columns the current template no longer has are kept unless the
+	// workbook (an older template) still carries them.
+	if k.present["lifecycle"] {
+		u["lifecycle"] = k.Lifecycle
+	}
+	if k.present["notes"] {
+		u["notes"] = k.Notes
 	}
 	// Newer columns are written only when the sheet has them (see kpiRec.present).
 	if k.present["classification"] {
@@ -350,10 +357,11 @@ func (imp *kpiImporter) kpiUpdates(k *kpiRec, idOf func(*mdNode) *uuid.UUID) map
 	if k.Process != nil {
 		u["operational_objective_id"], u["process_id"] = idOf(k.Objective), idOf(k.Process)
 	}
-	switch k.Type {
-	case models.KPITypeStrategic:
+	if k.present["seg"] && k.Type == models.KPITypeStrategic {
 		u["segmentation_axes"] = k.SegAxes
-	case models.KPITypeAward:
+	}
+	// Criteria / Sub-Criteria apply to every KPI type (as on the forms).
+	if k.present["sub_criterion"] || k.present["sub_no"] || k.present["criterion"] {
 		u["award_sub_criterion_id"] = idOf(k.SubCriterion)
 	}
 	return u
