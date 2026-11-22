@@ -112,3 +112,70 @@ func ToEscalationSLAResponse(e *EscalationSLA) EscalationSLAResponse {
 
 	return resp
 }
+
+// EscalationLogFilter contains escalation-log search and pagination options.
+type EscalationLogFilter struct {
+	IncidentID       *uuid.UUID `query:"incident_id" json:"incident_id,omitempty"`
+	IncidentNumber   string     `query:"incident_number" json:"incident_number,omitempty"`
+	Level            *int       `query:"level" json:"level,omitempty"`
+	ClassificationID *uuid.UUID `query:"classification_id" json:"classification_id,omitempty"`
+	DateFrom         *time.Time `query:"date_from" json:"date_from,omitempty"`
+	DateTo           *time.Time `query:"date_to" json:"date_to,omitempty"`
+	Person           string     `query:"person" json:"person,omitempty"`
+	EscalationType   string     `query:"escalation_type" json:"escalation_type,omitempty"`
+	Page             int        `query:"page" json:"page,omitempty"`
+	Limit            int        `query:"limit" json:"limit,omitempty"`
+}
+
+// EscalationNoticeResultResponse records one recipient's delivery result.
+type EscalationNoticeResultResponse struct {
+	Channel           string     `json:"channel"`
+	Recipient         string     `json:"recipient"`
+	Status            string     `json:"status"` // sent | failed | skipped | unknown
+	FailureCode       string     `json:"failure_code,omitempty"`
+	Error             string     `json:"error,omitempty"`
+	NotificationLogID *uuid.UUID `json:"notification_log_id,omitempty"`
+	SentAt            *time.Time `json:"sent_at,omitempty"`
+}
+
+// EscalationRecipientResponse describes one escalation recipient.
+type EscalationRecipientResponse struct {
+	UserID  *uuid.UUID                       `json:"user_id,omitempty"`
+	Name    string                           `json:"name"`
+	Email   string                           `json:"email"`
+	Phone   string                           `json:"phone"`
+	Status  string                           `json:"status"`
+	Notices []EscalationNoticeResultResponse `json:"notices"`
+}
+
+// EscalationLogEntryResponse represents one recipient's escalation record.
+type EscalationLogEntryResponse struct {
+	ID                     uuid.UUID                   `json:"id"`
+	IncidentID             *uuid.UUID                  `json:"incident_id,omitempty"`
+	IncidentNumber         string                      `json:"incident_number"`
+	ClassificationID       *uuid.UUID                  `json:"classification_id,omitempty"`
+	ClassificationName     string                      `json:"classification_name,omitempty"`
+	StateID                *uuid.UUID                  `json:"state_id,omitempty"`
+	StateName              string                      `json:"state_name,omitempty"`
+	EscalationType         string                      `json:"escalation_type"`
+	EscalatedAt            time.Time                   `json:"escalated_at"`
+	Reason                 string                      `json:"reason"`
+	FromLevel              *int                        `json:"from_level,omitempty"`
+	ToLevel                *int                        `json:"to_level,omitempty"`
+	EscalationPolicyID     *uuid.UUID                  `json:"escalation_policy_id,omitempty"`
+	EscalationPolicyStepID *uuid.UUID                  `json:"escalation_policy_step_id,omitempty"`
+	Status                 string                      `json:"status"`
+	Recipient              EscalationRecipientResponse `json:"recipient"`
+	Actions                []string                    `json:"actions,omitempty"`
+	SLAHoursAllowed        int                         `json:"sla_hours_allowed"`
+	HoursInState           float64                     `json:"hours_in_state"`
+	CreatedAt              time.Time                   `json:"created_at"`
+}
+
+// EscalationLogListResponse contains a page of escalation entries.
+type EscalationLogListResponse struct {
+	Entries []EscalationLogEntryResponse `json:"entries"`
+	Total   int                          `json:"total"`
+	Page    int                          `json:"page"`
+	Limit   int                          `json:"limit"`
+}

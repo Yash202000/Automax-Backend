@@ -80,6 +80,7 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		&models.CallLog{},
 		&models.CallParticipant{},
 		&models.CallLogAttachment{},
+		&models.CallRecordingAudit{},
 		&models.SystemAttachment{},
 		&models.NotificationTemplate{},
 		&models.NotificationLog{},
@@ -395,6 +396,11 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		log.Printf("Warning: closed incident edit tracking migration failed: %v", err)
 	}
 
+	// Migrate caller identity text and cooperation status incident fields
+	if err := migrations.MigrateIncidentCallerCooperationFields(db); err != nil {
+		log.Printf("Warning: incident caller/cooperation fields migration failed: %v", err)
+	}
+
 	// Migrate user mobile verified
 	if err := migrations.MigrateUserMobileVerified(db); err != nil {
 		log.Printf("Warning: user mobile verified migration failed: %v", err)
@@ -429,6 +435,11 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	// Drop recording_url from call_logs — URLs are now generated from call_log_attachments
 	if err := migrations.MigrateCallLogRecordingURL(db); err != nil {
 		log.Printf("Warning: call_log recording_url migration failed: %v", err)
+	}
+
+	// Call Recording History is append-only: block UPDATE/DELETE/TRUNCATE at the DB level
+	if err := migrations.MigrateCallRecordingAudit(db); err != nil {
+		log.Printf("Warning: call recording audit immutability migration failed: %v", err)
 	}
 
 	// Drop user_id from call_participants — participants are identified by phone_number only
@@ -753,6 +764,9 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Delete Call Logs", Code: "call-logs:delete", Module: "call-logs", Action: "delete", ActionAr: "حذف", Description: "Delete call logs"},
 		{Name: "View All Call Logs", Code: "call-logs:view_all", Module: "call-logs", Action: "view_all", ActionAr: "عرض الكل", Description: "View call logs of other agents regardless of participation"},
 
+		// Call Recording History (audit of recording listens/downloads)
+		{Name: "View Call Recording History", Code: "call-recordings:history", Module: "call-recordings", Action: "history", ActionAr: "عرض السجل", Description: "View who listened to or downloaded call recordings"},
+
 		// Lookup permissions
 		{Name: "View Lookups", Code: "lookups:view", Module: "lookups", Action: "view", ActionAr: "عرض", Description: "View lookup categories and values"},
 		{Name: "Create Lookups", Code: "lookups:create", Module: "lookups", Action: "create", ActionAr: "إنشاء", Description: "Create lookup categories and values"},
@@ -796,6 +810,10 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Delete Escalation Group", Code: "escalation-groups:delete", Module: "escalation-groups", Action: "delete", ActionAr: "حذف", Description: "Delete escalation groups"},
 		{Name: "Assign Users to Escalation Group", Code: "escalation-groups:assign_users", Module: "escalation-groups", Action: "assign_users", ActionAr: "تعيين المستخدمين", Description: "Add or remove users from escalation groups"},
 		{Name: "Manage Escalation Rules", Code: "escalation-groups:manage_rules", Module: "escalation-groups", Action: "manage_rules", ActionAr: "إدارة القواعد", Description: "Configure escalation frequency, channel, and classification rules"},
+
+		// Escalation log permissions
+		{Name: "View Escalation Log", Code: "escalation-logs:view", Module: "escalation-logs", Action: "view", ActionAr: "عرض", Description: "View the escalation log and per-report escalation history"},
+		{Name: "Export Escalation Log", Code: "escalation-logs:export", Module: "escalation-logs", Action: "export", ActionAr: "تصدير", Description: "Export the filtered escalation log to Excel"},
 
 		// Error Log permissions
 		{Name: "View Error Logs", Code: "error-logs:view", Module: "error-logs", Action: "view", ActionAr: "عرض", Description: "View the error log list and details"},
@@ -915,6 +933,13 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 	db.Where("module = ?", "error-logs").Find(&errorLogPerms)
 	if len(errorLogPerms) > 0 {
 		db.Model(&adminRole).Association("Permissions").Append(errorLogPerms)
+	}
+
+	// Ensure the admin role has the Escalation Log permissions on existing databases.
+	var escalationLogPerms []models.Permission
+	db.Where("module = ?", "escalation-logs").Find(&escalationLogPerms)
+	if len(escalationLogPerms) > 0 {
+		db.Model(&adminRole).Association("Permissions").Append(escalationLogPerms)
 	}
 
 	// Remove department-scoping permissions from admin role on existing databases.

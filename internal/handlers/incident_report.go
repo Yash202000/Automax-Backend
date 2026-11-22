@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,9 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/automax/backend/internal/middleware"
+	"github.com/automax/backend/internal/services"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/pkg/constants"
@@ -82,6 +86,10 @@ type reportLabels struct {
 	CallerName        string
 	CallerMobile      string
 	CallerEmail       string
+	CallerIdentity    string
+	CooperationStatus string
+	Cooperative       string
+	Uncooperative     string
 	AttName           string
 	AttType           string
 	AttSize           string
@@ -166,6 +174,10 @@ var labelsAR = reportLabels{
 	CallerName:        "اسم المتصل",
 	CallerMobile:      "رقم المتصل",
 	CallerEmail:       "بريد المتصل",
+	CallerIdentity:    "هوية المتصل",
+	CooperationStatus: "حالة التعاون",
+	Cooperative:       "متعاون",
+	Uncooperative:     "غير متعاون",
 	AttName:           "اسم الملف",
 	AttType:           "النوع",
 	AttSize:           "الحجم",
@@ -250,6 +262,10 @@ var labelsEN = reportLabels{
 	CallerName:        "Caller Name",
 	CallerMobile:      "Caller Mobile",
 	CallerEmail:       "Caller Email",
+	CallerIdentity:    "Caller Identity",
+	CooperationStatus: "Cooperation Status",
+	Cooperative:       "Cooperative",
+	Uncooperative:     "Uncooperative",
 	AttName:           "File Name",
 	AttType:           "Type",
 	AttSize:           "Size",
@@ -371,8 +387,8 @@ func (h *IncidentHandler) GenerateCitizenReport(c *fiber.Ctx) error {
 		lbl = labelsEN
 	}
 
-	leftLogoB64 := fetchLogoBase64(h.cfg.Report.LogoLeftURL)
-	rightLogoB64 := fetchLogoBase64(h.cfg.Report.LogoRightURL)
+	leftLogoB64 := h.reportLogo(c.UserContext(), "inc_logo_left")
+	rightLogoB64 := h.reportLogo(c.UserContext(), "inc_logo_right")
 
 	htmlBytes := buildCitizenReportHTML(c, h, reportData, leftLogoB64, rightLogoB64, lbl, reportAttachments)
 
@@ -389,92 +405,102 @@ func (h *IncidentHandler) GenerateCitizenReport(c *fiber.Ctx) error {
 
 // ── handler ───────────────────────────────────────────────────────────────────
 
-func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
-	idStr := c.Params("id")
-	id, err := uuid.Parse(idStr)
-	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
-	}
+// reportBundle is everything the incident report needs for one incident.
+type reportBundle struct {
+	Data         *models.IncidentReportData
+	Lookup       []models.IncidentReportLookupValue
+	Transitions  []models.IncidentReportTransition
+	Attachments  []models.IncidentReportAttachment
+	Revisions    []models.IncidentReportRevision
+	CustomFields []reportCustomField
+}
 
-	// "Include Logs" exists only for the EPM940 client: opt-in (default off) and
-	// requires log-view access. Every other client always gets the full report.
+// reportLoadError is a failure while collecting report data: an HTTP status and an i18n key.
+type reportLoadError struct {
+	Status int
+	Key    string
+}
+
+func (e *reportLoadError) Error() string { return e.Key }
+
+// reportIncludeLogs reports whether history logs belong in the report. "Include Logs" exists only
+// for the EPM940 client: opt-in (default off) and requires log-view access. Every other client
+// always gets the full report.
+func (h *IncidentHandler) reportIncludeLogs(c *fiber.Ctx) (bool, error) {
 	includeLogs := true
 	if strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940) {
 		includeLogs = c.QueryBool("include_logs", false)
 		if includeLogs {
 			user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
 			if user == nil || !(user.IsSuperAdmin || user.HasPermission("action-logs:view")) {
-				return utils.ErrorResponse(c, fiber.StatusForbidden, "Insufficient permissions")
+				return false, &reportLoadError{fiber.StatusForbidden, ""}
 			}
 		}
 	}
+	return includeLogs, nil
+}
 
-	reportData, err := h.incidentRepo.GetReportIncidentData(c.UserContext(), id)
+// loadReportBundle collects the data of one incident report.
+func (h *IncidentHandler) loadReportBundle(ctx context.Context, id uuid.UUID, isArabic bool, lbl reportLabels, includeLogs bool) (*reportBundle, *reportLoadError) {
+	reportData, err := h.incidentRepo.GetReportIncidentData(ctx, id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "incident_not_found"))
+		return nil, &reportLoadError{fiber.StatusNotFound, "incident_not_found"}
 	}
 
-	isArabic := c.Query("lang", "ar") != "en"
-
 	if reportData.LocationID != nil {
-		reportData.LocationName, err = h.locationRepo.FetchLocationFullPathByID(c.UserContext(), *reportData.LocationID)
+		reportData.LocationName, err = h.locationRepo.FetchLocationFullPathByID(ctx, *reportData.LocationID)
 		if err != nil {
 			log.Printf("Location err: %v", err)
 		}
 		if isArabic {
 			// The full path is built from English names only; rebuild it in Arabic so
 			// every level (including the last one) is localized.
-			if p, perr := h.incidentRepo.GetReportHierarchyPathAr(c.UserContext(), "locations", *reportData.LocationID); perr == nil && p != "" {
+			if p, perr := h.incidentRepo.GetReportHierarchyPathAr(ctx, "locations", *reportData.LocationID); perr == nil && p != "" {
 				reportData.LocationNameAr = p
 			}
 		}
 	}
 
 	if reportData.ClassificationID != nil {
-		reportData.ClassificationName, err = h.classificationRepo.FetchClassificationFullPathByID(c.UserContext(), *reportData.ClassificationID)
+		reportData.ClassificationName, err = h.classificationRepo.FetchClassificationFullPathByID(ctx, *reportData.ClassificationID)
 		if err != nil {
 			log.Printf("Classification err: %v", err)
 		}
 		if isArabic {
-			if p, perr := h.incidentRepo.GetReportHierarchyPathAr(c.UserContext(), "classifications", *reportData.ClassificationID); perr == nil && p != "" {
+			if p, perr := h.incidentRepo.GetReportHierarchyPathAr(ctx, "classifications", *reportData.ClassificationID); perr == nil && p != "" {
 				reportData.ClassificationNameAr = p
 			}
 		}
 	}
 
-	reportLookupValues, err := h.incidentRepo.GetReportLookupValues(c.UserContext(), id)
+	reportLookupValues, err := h.incidentRepo.GetReportLookupValues(ctx, id)
 	if err != nil {
 		reportLookupValues = nil
 	}
 
 	var reportTransitions []models.IncidentReportTransition
 	if includeLogs {
-		reportTransitions, err = h.incidentRepo.GetReportTransitions(c.UserContext(), id)
+		reportTransitions, err = h.incidentRepo.GetReportTransitions(ctx, id)
 		if err != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_transitions"))
+			return nil, &reportLoadError{fiber.StatusInternalServerError, "failed_to_fetch_transitions"}
 		}
 	}
 
-	reportAttachments, err := h.incidentRepo.GetReportAttachments(c.UserContext(), id)
+	reportAttachments, err := h.incidentRepo.GetReportAttachments(ctx, id)
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_fetch_attachments"))
+		return nil, &reportLoadError{fiber.StatusInternalServerError, "failed_to_fetch_attachments"}
 	}
 
 	var reportRevisions []models.IncidentReportRevision
 	if includeLogs {
-		reportRevisions, err = h.incidentRepo.GetReportRevisions(c.UserContext(), id)
+		reportRevisions, err = h.incidentRepo.GetReportRevisions(ctx, id)
 		if err != nil {
 			reportRevisions = nil
 		}
 	}
 
-	lbl := labelsAR
-	if !isArabic {
-		lbl = labelsEN
-	}
-
 	if isArabic && includeLogs {
-		nameMap, _ := h.incidentRepo.GetReportStateNameMap(c.UserContext())
+		nameMap, _ := h.incidentRepo.GetReportStateNameMap(ctx)
 		localizeReportLogsAr(nameMap, reportRevisions, reportTransitions)
 	}
 
@@ -491,7 +517,7 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 				if parseErr != nil {
 					continue
 				}
-				cat, fetchErr := h.lookupRepo.FindCategoryByID(c.UserContext(), catID)
+				cat, fetchErr := h.lookupRepo.FindCategoryByID(ctx, catID)
 				if fetchErr != nil {
 					continue
 				}
@@ -513,11 +539,40 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 		}
 	}
 
-	leftLogoB64 := fetchLogoBase64(h.cfg.Report.LogoLeftURL)
-	rightLogoB64 := fetchLogoBase64(h.cfg.Report.LogoRightURL)
+	return &reportBundle{
+		Data: reportData, Lookup: reportLookupValues, Transitions: reportTransitions,
+		Attachments: reportAttachments, Revisions: reportRevisions, CustomFields: reportCustomFields,
+	}, nil
+}
+
+func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
+	idStr := c.Params("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+
+	includeLogs, err := h.reportIncludeLogs(c)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusForbidden, "Insufficient permissions")
+	}
+
+	isArabic := c.Query("lang", "ar") != "en"
+	lbl := labelsAR
+	if !isArabic {
+		lbl = labelsEN
+	}
+	bundle, lerr := h.loadReportBundle(c.UserContext(), id, isArabic, lbl, includeLogs)
+	if lerr != nil {
+		return utils.ErrorResponse(c, lerr.Status, i18n.T(c.UserContext(), lerr.Key))
+	}
+	reportData := bundle.Data
+
+	leftLogoB64 := h.reportLogo(c.UserContext(), "inc_logo_left")
+	rightLogoB64 := h.reportLogo(c.UserContext(), "inc_logo_right")
 
 	format := c.Query("format", "pdf")
-	htmlBytes := buildReportHTML(c, h, reportData, reportLookupValues, leftLogoB64, rightLogoB64, lbl, reportTransitions, reportAttachments, reportRevisions, reportCustomFields, includeLogs)
+	htmlBytes := buildReportHTML(c, h, []*reportBundle{bundle}, leftLogoB64, rightLogoB64, lbl, includeLogs, false)
 
 	switch format {
 	case "html":
@@ -525,46 +580,10 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 		return c.Send(htmlBytes)
 
 	case "pdf":
-		tmpHTML, terr := os.CreateTemp("", "report-*.html")
-		if terr != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create_temp"))
+		pdfData, msg := h.renderPDF(c.UserContext(), htmlBytes)
+		if msg != "" {
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, msg)
 		}
-		defer os.Remove(tmpHTML.Name())
-		if _, terr = tmpHTML.Write(htmlBytes); terr != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_write_html"))
-		}
-		tmpHTML.Close()
-
-		tmpPDF, terr := os.CreateTemp("", "report-*.pdf")
-		if terr != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create_pdf_temp"))
-		}
-		pdfPath := tmpPDF.Name()
-		tmpPDF.Close()
-		defer os.Remove(pdfPath)
-
-		chromeBin := h.cfg.Report.ChromeBin
-
-		var stderr bytes.Buffer
-		cmd := exec.CommandContext(c.UserContext(),
-			chromeBin,
-			"--headless", "--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage",
-			"--no-margins", "--print-to-pdf-no-header",
-			fmt.Sprintf("--print-to-pdf=%s", pdfPath),
-			fmt.Sprintf("file://%s", tmpHTML.Name()),
-		)
-		cmd.Stderr = &stderr
-		if terr = cmd.Run(); terr != nil {
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError,
-				fmt.Sprintf("PDF generation failed: exec_error=%s stderr=%s", terr.Error(), stderr.String()))
-		}
-
-		pdfData, terr := os.ReadFile(pdfPath)
-		if terr != nil || len(pdfData) == 0 {
-			log.Printf("report pdf data err: %v (bytes read: %d)", terr, len(pdfData))
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_read_pdf"))
-		}
-
 		c.Set("Content-Type", "application/pdf")
 		c.Set("Content-Disposition", fmt.Sprintf(
 			`attachment; filename="incident_%s_%s.pdf"`,
@@ -581,6 +600,136 @@ func (h *IncidentHandler) GenerateReport(c *fiber.Ctx) error {
 	default:
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "use_format_pdf_html_json"))
 	}
+}
+
+// renderPDF prints htmlBytes to PDF with headless Chrome. On failure it returns a client-facing message.
+func (h *IncidentHandler) renderPDF(ctx context.Context, htmlBytes []byte) ([]byte, string) {
+	tmpHTML, err := os.CreateTemp("", "report-*.html")
+	if err != nil {
+		return nil, i18n.T(ctx, "failed_to_create_temp")
+	}
+	defer os.Remove(tmpHTML.Name())
+	if _, err = tmpHTML.Write(htmlBytes); err != nil {
+		return nil, i18n.T(ctx, "failed_to_write_html")
+	}
+	tmpHTML.Close()
+
+	tmpPDF, err := os.CreateTemp("", "report-*.pdf")
+	if err != nil {
+		return nil, i18n.T(ctx, "failed_to_create_pdf_temp")
+	}
+	pdfPath := tmpPDF.Name()
+	tmpPDF.Close()
+	defer os.Remove(pdfPath)
+
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx,
+		h.cfg.Report.ChromeBin,
+		"--headless", "--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage",
+		"--no-margins", "--print-to-pdf-no-header",
+		fmt.Sprintf("--print-to-pdf=%s", pdfPath),
+		fmt.Sprintf("file://%s", tmpHTML.Name()),
+	)
+	cmd.Stderr = &stderr
+	if err = cmd.Run(); err != nil {
+		return nil, fmt.Sprintf("PDF generation failed: exec_error=%s stderr=%s", err.Error(), stderr.String())
+	}
+
+	pdfData, err := os.ReadFile(pdfPath)
+	if err != nil || len(pdfData) == 0 {
+		log.Printf("report pdf data err: %v (bytes read: %d)", err, len(pdfData))
+		return nil, i18n.T(ctx, "failed_to_read_pdf")
+	}
+	return pdfData, ""
+}
+
+// maxCombinedReportIncidents caps how many incidents one combined report may contain.
+const maxCombinedReportIncidents = 50
+
+// GenerateCombinedReport POST /incidents/report  body {"ids": [...]}  ?lang=&format=pdf|html&include_logs=
+// One document: logos and title once, then every incident (in the order given) on its own page
+// under its incident number.
+func (h *IncidentHandler) GenerateCombinedReport(c *fiber.Ctx) error {
+	ctx := c.UserContext()
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := c.BodyParser(&req); err != nil || len(req.IDs) == 0 || len(req.IDs) > maxCombinedReportIncidents {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(ctx, "report_ids_invalid"))
+	}
+	ids := make([]uuid.UUID, 0, len(req.IDs))
+	seen := make(map[uuid.UUID]struct{}, len(req.IDs))
+	for _, raw := range req.IDs {
+		id, err := uuid.Parse(strings.TrimSpace(raw))
+		if err != nil {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(ctx, "invalid_id"))
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+
+	format := c.Query("format", "pdf")
+	if format != "pdf" && format != "html" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(ctx, "report_format_pdf_html"))
+	}
+	includeLogs, err := h.reportIncludeLogs(c)
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusForbidden, "Insufficient permissions")
+	}
+	isArabic := c.Query("lang", "ar") != "en"
+	lbl := labelsAR
+	if !isArabic {
+		lbl = labelsEN
+	}
+
+	bundles := make([]*reportBundle, 0, len(ids))
+	for _, id := range ids {
+		bundle, lerr := h.loadReportBundle(ctx, id, isArabic, lbl, includeLogs)
+		if lerr != nil {
+			return utils.ErrorResponse(c, lerr.Status, i18n.T(ctx, lerr.Key))
+		}
+		bundles = append(bundles, bundle)
+	}
+
+	type reportedIncident struct {
+		ID             uuid.UUID `json:"id"`
+		IncidentNumber string    `json:"incident_number"`
+	}
+	reported := make([]reportedIncident, len(bundles))
+	numbers := make([]string, len(bundles))
+	for i, bd := range bundles {
+		reported[i] = reportedIncident{ID: ids[i], IncidentNumber: bd.Data.IncidentNumber}
+		numbers[i] = bd.Data.IncidentNumber
+	}
+	desc := fmt.Sprintf("Combined incident report (%s) generated for %d incidents: %s", format, len(bundles), strings.Join(numbers, ", "))
+	if len(desc) > 500 { // action_logs.description is varchar(500); the full list is in new_value
+		desc = desc[:497] + "..."
+	}
+	if h.actionLogSvc != nil {
+		middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+			Action:      "generate_combined_report",
+			Module:      "incidents",
+			Description: desc,
+			NewValue:    map[string]any{"count": len(reported), "incidents": reported},
+		})
+	}
+
+	htmlBytes := buildReportHTML(c, h, bundles, h.reportLogo(ctx, "inc_logo_left"), h.reportLogo(ctx, "inc_logo_right"), lbl, includeLogs, true)
+	if format == "html" {
+		c.Set("Content-Type", "text/html; charset=utf-8")
+		return c.Send(htmlBytes)
+	}
+	pdfData, msg := h.renderPDF(ctx, htmlBytes)
+	if msg != "" {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, msg)
+	}
+	c.Set("Content-Type", "application/pdf")
+	c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="incidents_%d_%s.pdf"`,
+		len(bundles), time.Now().In(appTimezone(h.cfg.Report.AppRegion)).Format("20060102")))
+	return c.Send(pdfData)
 }
 
 // appTimezone returns the report timezone based on the configured app region.
@@ -644,16 +793,12 @@ func formatReportCustomFieldValue(raw json.RawMessage) string {
 func buildReportHTML(
 	c *fiber.Ctx,
 	h *IncidentHandler,
-	data *models.IncidentReportData,
-	lookupValues []models.IncidentReportLookupValue,
+	bundles []*reportBundle,
 	leftLogoB64 string,
 	rightLogoB64 string,
 	l reportLabels,
-	reportTransitions []models.IncidentReportTransition,
-	reportAttachments []models.IncidentReportAttachment,
-	reportRevisions []models.IncidentReportRevision,
-	customFields []reportCustomField,
 	includeLogs bool,
+	combined bool,
 ) []byte {
 	var b bytes.Buffer
 
@@ -796,350 +941,379 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 
 	// Title heading below logos
 	fmt.Fprintf(&b, `<div class="main-header">%s</div>`, html.EscapeString(l.Title)) //  ── Section: Incident Details ─────────────────────────────────────────────
-	statusName := localName(data.StatusName, data.StatusNameAr)
-	classDisplay := localName(data.ClassificationName, data.ClassificationNameAr)
-	locationDisplay := localName(data.LocationName, data.LocationNameAr)
 
-	slaStatus := l.No
-	slaClass := "badge-ok"
-	if data.SLABreached {
-		slaStatus = l.Yes
-		slaClass = "badge-breached"
-	}
-
-	secHeader(&b, l.SectionIncident)
-	b.WriteString(`<table class="grid">`)
-	row2(&b, l.IncidentNo, html.EscapeString(data.IncidentNumber), l.Date, html.EscapeString(ts(data.CreatedAt)))
-	row2(&b, l.Source, html.EscapeString(localizeEnum(l.Dir == "rtl", sourceLabelsAr, data.Source)), l.RecordTypeLbl, html.EscapeString(localizeEnum(l.Dir == "rtl", recordTypeLabelsAr, data.RecordType)))
-	row1(&b, l.Status, na(statusName))
-	row1(&b, l.Title2, na(data.Title))
-
-	// lookup values — group by category, one row per category
-	if len(lookupValues) > 0 {
-		type catGroup struct {
-			label  string
-			values []string
-		}
-		seen := make(map[uuid.UUID]int)
-		var groups []catGroup
-		for _, lv := range lookupValues {
-			catLabel := localName(lv.CategoryName, lv.CategoryNameAr)
-			if catLabel == "" {
-				catLabel = lv.Code
+	for bi, bd := range bundles {
+		data, lookupValues, reportTransitions := bd.Data, bd.Lookup, bd.Transitions
+		reportAttachments, reportRevisions, customFields := bd.Attachments, bd.Revisions, bd.CustomFields
+		if combined {
+			pageBreak := ""
+			if bi > 0 {
+				pageBreak = ` style="page-break-before:always"`
 			}
-			valName := localName(lv.Name, lv.NameAr)
-			if idx, ok := seen[lv.CategoryID]; ok {
-				groups[idx].values = append(groups[idx].values, valName)
-			} else {
-				seen[lv.CategoryID] = len(groups)
-				groups = append(groups, catGroup{label: catLabel, values: []string{valName}})
-			}
+			fmt.Fprintf(&b, `<div class="incident-block"%s>`, pageBreak)
+			secHeader(&b, l.IncidentNo+": "+html.EscapeString(data.IncidentNumber))
 		}
-		for i := 0; i < len(groups); i += 2 {
-			g1 := groups[i]
-			if i+1 < len(groups) {
-				g2 := groups[i+1]
-				row2(&b,
-					html.EscapeString(g1.label), html.EscapeString(strings.Join(g1.values, ", ")),
-					html.EscapeString(g2.label), html.EscapeString(strings.Join(g2.values, ", ")),
-				)
-			} else {
-				row1(&b, html.EscapeString(g1.label), html.EscapeString(strings.Join(g1.values, ", ")))
-			}
-		}
-	}
+		statusName := localName(data.StatusName, data.StatusNameAr)
+		classDisplay := localName(data.ClassificationName, data.ClassificationNameAr)
+		locationDisplay := localName(data.LocationName, data.LocationNameAr)
 
-	row1(&b, l.Classification, na(classDisplay))
-	row1(&b, l.LocationLbl, na(locationDisplay))
-	row1(&b, l.Description, na(data.Description))
-	if data.SLADeadline != nil {
-		row2(&b, l.SLABreached, fmt.Sprintf(`<span class="%s">%s</span>`, slaClass, html.EscapeString(slaStatus)),
-			l.SLADeadline, html.EscapeString(tsp(data.SLADeadline)))
-	} else {
-		row1(&b, l.SLABreached, fmt.Sprintf(`<span class="%s">%s</span>`, slaClass, html.EscapeString(slaStatus)))
-	}
-	row2(&b, l.ApprovedBy, na(data.ApprovedByName), l.ApprovedAt, naT(data.ApprovedAt))
-	row2(&b, l.ReadyToCloseBy, na(data.ReadyToCloseByName), l.ReadyToCloseAt, naT(data.ReadyToCloseAt))
-	row2(&b, l.ClosedBy, na(data.ClosedByName), l.ClosedAt, naT(data.ClosedAt))
-	if data.DueDate != nil || data.ResolvedAt != nil {
-		row2(&b, l.DueDate, naT(data.DueDate), l.ResolvedAt, naT(data.ResolvedAt))
-	}
-	b.WriteString(`</table>`)
-
-	// ── Section: Custom Fields ────────────────────────────────────────────────
-	if len(customFields) > 0 {
-		cfHeader := "Custom Fields"
-		if l.Dir == "rtl" {
-			cfHeader = "الحقول المخصصة"
+		slaStatus := l.No
+		slaClass := "badge-ok"
+		if data.SLABreached {
+			slaStatus = l.Yes
+			slaClass = "badge-breached"
 		}
-		secHeader(&b, cfHeader)
+
+		secHeader(&b, l.SectionIncident)
 		b.WriteString(`<table class="grid">`)
-		for i := 0; i < len(customFields); i += 2 {
-			cf1 := customFields[i]
-			val1 := html.EscapeString(cf1.Value)
-			if cf1.URL != "" {
-				val1 = fmt.Sprintf(`<a href="%s" target="_blank">%s</a>`, html.EscapeString(cf1.URL), html.EscapeString(cf1.Value))
+		row2(&b, l.IncidentNo, html.EscapeString(data.IncidentNumber), l.Date, html.EscapeString(ts(data.CreatedAt)))
+		row2(&b, l.Source, html.EscapeString(localizeEnum(l.Dir == "rtl", sourceLabelsAr, data.Source)), l.RecordTypeLbl, html.EscapeString(localizeEnum(l.Dir == "rtl", recordTypeLabelsAr, data.RecordType)))
+		row1(&b, l.Status, na(statusName))
+		row1(&b, l.Title2, na(data.Title))
+
+		// lookup values — group by category, one row per category
+		if len(lookupValues) > 0 {
+			type catGroup struct {
+				label  string
+				values []string
 			}
-			if i+1 < len(customFields) {
-				cf2 := customFields[i+1]
-				val2 := html.EscapeString(cf2.Value)
-				if cf2.URL != "" {
-					val2 = fmt.Sprintf(`<a href="%s" target="_blank">%s</a>`, html.EscapeString(cf2.URL), html.EscapeString(cf2.Value))
+			seen := make(map[uuid.UUID]int)
+			var groups []catGroup
+			for _, lv := range lookupValues {
+				catLabel := localName(lv.CategoryName, lv.CategoryNameAr)
+				if catLabel == "" {
+					catLabel = lv.Code
 				}
-				row2(&b, html.EscapeString(cf1.Label), val1, html.EscapeString(cf2.Label), val2)
-			} else {
-				row1(&b, html.EscapeString(cf1.Label), val1)
-			}
-		}
-		b.WriteString(`</table>`)
-	}
-
-	// ── Section: Submitter ────────────────────────────────────────────────────
-
-	assigneeName := data.AssigneesName
-	if assigneeName == "" {
-		assigneeName = strings.TrimSpace(data.AssigneeFirstName + " " + data.AssigneeLastName)
-	}
-
-	// Client / source specific report tweaks.
-	//   VD2 client: the "Caller Details" section is hidden.
-	//   'visional' source: the incident's own reporter (name/phone/email) replaces
-	//   the internal creator's details inside the Reporter section.
-	clientCode := strings.TrimSpace(h.cfg.ClientCode)
-	isVD2 := strings.EqualFold(clientCode, constants.CLIENT_CODE.VD2)
-	isVisionalSource := strings.EqualFold(strings.TrimSpace(data.Source), constants.INCIDENT_SOURCE.VIUSIONAL)
-
-	secHeader(&b, l.SectionReporter)
-	b.WriteString(`<table class="grid">`)
-	if isVisionalSource {
-		// data.CallerName / data.CallerPhone are the incident's reporter_name /
-		// reporter_phone (aliased in the report query); data.ReporterEmail is the
-		// incident's reporter_email.
-		row2(&b, l.ReporterName, html.EscapeString(data.CallerName), l.Assignee, html.EscapeString(assigneeName))
-		row2(&b, l.ReporterEmail, html.EscapeString(data.ReporterEmail), l.ReporterMobile, html.EscapeString(data.CallerPhone))
-	} else {
-		row2(&b, l.Reporter, na(data.CreatorFullName), l.Assignee, na(assigneeName))
-		row2(&b, l.ReporterEmail, na(data.CreatorEmail), l.ReporterMobile, na(data.CreatorPhone))
-	}
-	row1(&b, l.Department, na(localName(data.DepartmentName, data.DepartmentNameAr)))
-	b.WriteString(`</table>`)
-
-	// ── Section: Caller Details ─────────────────────────
-	if !isVD2 && !isVisionalSource {
-		secHeader(&b, l.SectionCaller)
-		b.WriteString(`<table class="grid">`)
-		row2(&b, l.CallerName, na(data.CallerName), l.CallerMobile, na(data.CallerPhone))
-		b.WriteString(`</table>`)
-	}
-
-	// ── Section: Location ─────────────────────────────────────────────────────
-	{
-		secHeader(&b, l.SectionLocation)
-		b.WriteString(`<table class="grid">`)
-		lat, lon := "", ""
-		if data.Latitude != nil {
-			lat = fmt.Sprintf("%.8f", *data.Latitude)
-		}
-		if data.Longitude != nil {
-			lon = fmt.Sprintf("%.8f", *data.Longitude)
-		}
-		row2(&b, l.Latitude, na(lat), l.Longitude, na(lon))
-		row1(&b, l.Address, na(data.Address))
-		if data.City != "" || data.State != "" {
-			row2(&b, l.City, na(data.City), l.State, na(data.State))
-		}
-		if data.Country != "" || data.PostalCode != "" {
-			row2(&b, l.Country, na(data.Country), l.PostalCode, na(data.PostalCode))
-		}
-		b.WriteString(`</table>`)
-	}
-
-	// ── Section: Attachments ──────────────────────────────────────────────────
-	// renderAttCard renders one attachment's card body (name/image/meta); prefixHTML,
-	// when non-empty, is written before the file name (used for the per-card
-	// transition context line on the default, non-grouped layout).
-	renderAttCard := func(att models.IncidentReportAttachment, prefixHTML string) {
-		b.WriteString(`<div class="att-card">`)
-		if prefixHTML != "" {
-			b.WriteString(prefixHTML)
-		}
-		fmt.Fprintf(&b, `<div class="att-name">%s</div>`, html.EscapeString(att.FileName))
-
-		if att.DeletedAt != nil {
-			fmt.Fprintf(&b, `<div class="att-deleted">&#x1F5D1; %s</div>`, html.EscapeString(l.AttDeleted))
-		} else if strings.HasPrefix(att.MimeType, "image/") && att.FilePath != "" {
-			if fr, ferr := h.storage.GetFile(c.UserContext(), att.FilePath); ferr == nil {
-				if imgData, rerr := io.ReadAll(fr); rerr == nil && len(imgData) > 0 {
-					encoded := base64.StdEncoding.EncodeToString(imgData)
-					fmt.Fprintf(&b, `<img class="att-img" src="data:%s;base64,%s" alt="%s">`,
-						att.MimeType, encoded, html.EscapeString(att.FileName))
+				valName := localName(lv.Name, lv.NameAr)
+				if idx, ok := seen[lv.CategoryID]; ok {
+					groups[idx].values = append(groups[idx].values, valName)
+				} else {
+					seen[lv.CategoryID] = len(groups)
+					groups = append(groups, catGroup{label: catLabel, values: []string{valName}})
 				}
-				fr.Close()
 			}
-		}
-
-		uploadedBy := strings.TrimSpace(att.UploadedByFirstName + " " + att.UploadedByLastName)
-		kbUnit, byteUnit := "KB", "bytes"
-		if l.Dir == "rtl" {
-			kbUnit, byteUnit = "ك.ب", "بايت"
-		}
-		sizeStr := fmt.Sprintf("%.1f %s", float64(att.FileSize)/1024, kbUnit)
-		if att.FileSize < 1024 {
-			sizeStr = fmt.Sprintf("%d %s", att.FileSize, byteUnit)
-		}
-		fmt.Fprintf(&b,
-			`<div class="att-meta"><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span>`,
-			html.EscapeString(l.AttType), html.EscapeString(att.MimeType),
-			html.EscapeString(l.AttSize), sizeStr,
-			html.EscapeString(l.AttUploadedBy), html.EscapeString(uploadedBy),
-			html.EscapeString(l.AttUploadedByRole), html.EscapeString(localName(att.UploadedByRole, att.UploadedByRoleAr)),
-			html.EscapeString(l.AttUploadedAt), html.EscapeString(ts(att.CreatedAt)),
-		)
-		if att.DeletedAt != nil {
-			fmt.Fprintf(&b, `<span style="color:#c0392b">%s: <b>%s</b></span>`,
-				html.EscapeString(l.AttDeletedAt), html.EscapeString(ts(*att.DeletedAt)))
-		}
-		b.WriteString(`</div>`)
-		b.WriteString(`</div>`)
-	}
-
-	// Attachments are always shown, split into creation / closure (and any
-	// other transition uploads) with an empty-state message per group.
-	secHeader(&b, l.SectionAttach)
-	b.WriteString(`<div>`)
-	var creationAtts, closureAtts, otherAtts []models.IncidentReportAttachment
-	for _, att := range reportAttachments {
-		switch {
-		case att.TransitionHistoryID == nil:
-			creationAtts = append(creationAtts, att)
-		case att.IsClosure:
-			closureAtts = append(closureAtts, att)
-		default:
-			otherAtts = append(otherAtts, att)
-		}
-	}
-	renderAttGroup := func(label string, atts []models.IncidentReportAttachment, always bool) {
-		if len(atts) == 0 && !always {
-			return
-		}
-		fmt.Fprintf(&b, `<div class="att-group-header">%s</div>`, html.EscapeString(label))
-		if len(atts) == 0 {
-			fmt.Fprintf(&b, `<div class="comment-block">%s</div>`, html.EscapeString(l.NoAttachments))
-			return
-		}
-		for _, att := range atts {
-			renderAttCard(att, "")
-		}
-	}
-	renderAttGroup(l.AttCreation, creationAtts, true)
-	renderAttGroup(l.AttClosure, closureAtts, true)
-	renderAttGroup(l.AttOther, otherAtts, false)
-	b.WriteString(`</div>`)
-
-	// ── Section: Revision History ─────────────────────────────────────────────
-	if len(reportRevisions) > 0 {
-		textAlign := "left"
-		if l.Dir == "rtl" {
-			textAlign = "right"
-		}
-		secHeader(&b, l.SectionRevisions)
-		b.WriteString(`<table class="tbl"><thead><tr>`)
-		fmt.Fprintf(&b, `<td style="width:18%%">%s</td><td style="width:20%%">%s</td><td style="width:18%%">%s</td><td style="width:22%%">%s</td><td style="width:22%%">%s</td>`,
-			html.EscapeString(l.ColDate),
-			html.EscapeString(l.ColName),
-			html.EscapeString(l.ColAction),
-			html.EscapeString(l.ColOldValue),
-			html.EscapeString(l.ColNewValue),
-		)
-		b.WriteString(`</tr></thead><tbody>`)
-		for _, rev := range reportRevisions {
-			byName := strings.TrimSpace(rev.PerformedByFirstName + " " + rev.PerformedByLastName)
-			var changes []models.IncidentRevisionChange
-			if rev.Changes != "" {
-				_ = json.Unmarshal([]byte(rev.Changes), &changes)
-			}
-			if len(changes) == 0 {
-				fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td>%s</td><td class="cmt" colspan="2" style="text-align:%s">%s</td></tr>`,
-					html.EscapeString(ts(rev.CreatedAt)),
-					html.EscapeString(byName),
-					html.EscapeString(rev.ActionType),
-					textAlign,
-					html.EscapeString(rev.ActionDescription),
-				)
-			} else {
-				for i, ch := range changes {
-					oldVal, newVal := "", ""
-					if ch.OldValue != nil {
-						oldVal = *ch.OldValue
-					}
-					if ch.NewValue != nil {
-						newVal = *ch.NewValue
-					}
-					if i == 0 {
-						fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td>%s</td><td class="cmt" style="text-align:%s">%s</td><td class="cmt" style="text-align:%s">%s</td></tr>`,
-							html.EscapeString(ts(rev.CreatedAt)),
-							html.EscapeString(byName),
-							html.EscapeString(ch.FieldLabel),
-							textAlign, html.EscapeString(oldVal),
-							textAlign, html.EscapeString(newVal),
-						)
-					} else {
-						fmt.Fprintf(&b, `<tr><td></td><td></td><td>%s</td><td class="cmt" style="text-align:%s">%s</td><td class="cmt" style="text-align:%s">%s</td></tr>`,
-							html.EscapeString(ch.FieldLabel),
-							textAlign, html.EscapeString(oldVal),
-							textAlign, html.EscapeString(newVal),
-						)
-					}
+			for i := 0; i < len(groups); i += 2 {
+				g1 := groups[i]
+				if i+1 < len(groups) {
+					g2 := groups[i+1]
+					row2(&b,
+						html.EscapeString(g1.label), html.EscapeString(strings.Join(g1.values, ", ")),
+						html.EscapeString(g2.label), html.EscapeString(strings.Join(g2.values, ", ")),
+					)
+				} else {
+					row1(&b, html.EscapeString(g1.label), html.EscapeString(strings.Join(g1.values, ", ")))
 				}
 			}
 		}
-		b.WriteString(`</tbody></table>`)
-	}
 
-	// ── Section: Transition History ───────────────────────────────────────────
-	if len(reportTransitions) > 0 {
-		secHeader(&b, l.SectionHistory)
-		b.WriteString(`<table class="tbl"><thead><tr>`)
-		txtAlign := "left"
-		if l.Dir == "rtl" {
-			txtAlign = "right"
+		row1(&b, l.Classification, na(classDisplay))
+		row1(&b, l.LocationLbl, na(locationDisplay))
+		row1(&b, l.Description, na(data.Description))
+		if data.SLADeadline != nil {
+			row2(&b, l.SLABreached, fmt.Sprintf(`<span class="%s">%s</span>`, slaClass, html.EscapeString(slaStatus)),
+				l.SLADeadline, html.EscapeString(tsp(data.SLADeadline)))
+		} else {
+			row1(&b, l.SLABreached, fmt.Sprintf(`<span class="%s">%s</span>`, slaClass, html.EscapeString(slaStatus)))
 		}
-		fmt.Fprintf(&b, `<td style="width:15%%">%s</td><td style="width:17%%">%s</td><td style="width:16%%">%s</td><td style="width:14%%">%s</td><td style="width:19%%;text-align:%s">%s</td><td style="width:19%%;text-align:%s">%s</td>`,
-			html.EscapeString(l.ColDate), html.EscapeString(l.ColName),
-			html.EscapeString(l.ColTransition), html.EscapeString(l.Status),
-			txtAlign, html.EscapeString(l.ColComment),
-			txtAlign, html.EscapeString(l.ColFeedback),
-		)
-		b.WriteString(`</tr></thead><tbody>`)
-		for _, tr := range reportTransitions {
-			byName := strings.TrimSpace(tr.PerformedByFirstName + " " + tr.PerformedByLastName)
-			transitionName := localName(tr.TransitionName, tr.TransitionNameAr)
-			status := localName(tr.ToStateName, tr.ToStateNameAr)
-			fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td class="cmt">%s</td><td class="cmt">%s</td></tr>`,
-				html.EscapeString(ts(tr.TransitionedAt)),
-				html.EscapeString(byName),
-				html.EscapeString(transitionName),
-				html.EscapeString(status),
-				html.EscapeString(tr.Comment),
-				html.EscapeString(tr.FeedbackComment),
+		row2(&b, l.ApprovedBy, na(data.ApprovedByName), l.ApprovedAt, naT(data.ApprovedAt))
+		row2(&b, l.ReadyToCloseBy, na(data.ReadyToCloseByName), l.ReadyToCloseAt, naT(data.ReadyToCloseAt))
+		row2(&b, l.ClosedBy, na(data.ClosedByName), l.ClosedAt, naT(data.ClosedAt))
+		if data.DueDate != nil || data.ResolvedAt != nil {
+			row2(&b, l.DueDate, naT(data.DueDate), l.ResolvedAt, naT(data.ResolvedAt))
+		}
+		if strings.TrimSpace(data.CallerIdentityText) != "" {
+			row1(&b, l.CallerIdentity, html.EscapeString(data.CallerIdentityText))
+		}
+		if data.CooperationStatus != "" {
+			coopLabel := data.CooperationStatus
+			switch data.CooperationStatus {
+			case models.CooperationStatusCooperative:
+				coopLabel = l.Cooperative
+			case models.CooperationStatusUncooperative:
+				coopLabel = l.Uncooperative
+			}
+			row1(&b, l.CooperationStatus, html.EscapeString(coopLabel))
+		}
+		b.WriteString(`</table>`)
+
+		// ── Section: Custom Fields ────────────────────────────────────────────────
+		if len(customFields) > 0 {
+			cfHeader := "Custom Fields"
+			if l.Dir == "rtl" {
+				cfHeader = "الحقول المخصصة"
+			}
+			secHeader(&b, cfHeader)
+			b.WriteString(`<table class="grid">`)
+			for i := 0; i < len(customFields); i += 2 {
+				cf1 := customFields[i]
+				val1 := html.EscapeString(cf1.Value)
+				if cf1.URL != "" {
+					val1 = fmt.Sprintf(`<a href="%s" target="_blank">%s</a>`, html.EscapeString(cf1.URL), html.EscapeString(cf1.Value))
+				}
+				if i+1 < len(customFields) {
+					cf2 := customFields[i+1]
+					val2 := html.EscapeString(cf2.Value)
+					if cf2.URL != "" {
+						val2 = fmt.Sprintf(`<a href="%s" target="_blank">%s</a>`, html.EscapeString(cf2.URL), html.EscapeString(cf2.Value))
+					}
+					row2(&b, html.EscapeString(cf1.Label), val1, html.EscapeString(cf2.Label), val2)
+				} else {
+					row1(&b, html.EscapeString(cf1.Label), val1)
+				}
+			}
+			b.WriteString(`</table>`)
+		}
+
+		// ── Section: Submitter ────────────────────────────────────────────────────
+
+		assigneeName := data.AssigneesName
+		if assigneeName == "" {
+			assigneeName = strings.TrimSpace(data.AssigneeFirstName + " " + data.AssigneeLastName)
+		}
+
+		// Client / source specific report tweaks.
+		//   VD2 client: the "Caller Details" section is hidden.
+		//   'visional' source: the incident's own reporter (name/phone/email) replaces
+		//   the internal creator's details inside the Reporter section.
+		clientCode := strings.TrimSpace(h.cfg.ClientCode)
+		isVD2 := strings.EqualFold(clientCode, constants.CLIENT_CODE.VD2)
+		isVisionalSource := strings.EqualFold(strings.TrimSpace(data.Source), constants.INCIDENT_SOURCE.VIUSIONAL)
+
+		secHeader(&b, l.SectionReporter)
+		b.WriteString(`<table class="grid">`)
+		if isVisionalSource {
+			// data.CallerName / data.CallerPhone are the incident's reporter_name /
+			// reporter_phone (aliased in the report query); data.ReporterEmail is the
+			// incident's reporter_email.
+			row2(&b, l.ReporterName, html.EscapeString(data.CallerName), l.Assignee, html.EscapeString(assigneeName))
+			row2(&b, l.ReporterEmail, html.EscapeString(data.ReporterEmail), l.ReporterMobile, html.EscapeString(data.CallerPhone))
+		} else {
+			row2(&b, l.Reporter, na(data.CreatorFullName), l.Assignee, na(assigneeName))
+			row2(&b, l.ReporterEmail, na(data.CreatorEmail), l.ReporterMobile, na(data.CreatorPhone))
+		}
+		row1(&b, l.Department, na(localName(data.DepartmentName, data.DepartmentNameAr)))
+		b.WriteString(`</table>`)
+
+		// ── Section: Caller Details ─────────────────────────
+		if !isVD2 && !isVisionalSource {
+			secHeader(&b, l.SectionCaller)
+			b.WriteString(`<table class="grid">`)
+			row2(&b, l.CallerName, na(data.CallerName), l.CallerMobile, na(data.CallerPhone))
+			b.WriteString(`</table>`)
+		}
+
+		// ── Section: Location ─────────────────────────────────────────────────────
+		{
+			secHeader(&b, l.SectionLocation)
+			b.WriteString(`<table class="grid">`)
+			lat, lon := "", ""
+			if data.Latitude != nil {
+				lat = fmt.Sprintf("%.8f", *data.Latitude)
+			}
+			if data.Longitude != nil {
+				lon = fmt.Sprintf("%.8f", *data.Longitude)
+			}
+			row2(&b, l.Latitude, na(lat), l.Longitude, na(lon))
+			row1(&b, l.Address, na(data.Address))
+			if data.City != "" || data.State != "" {
+				row2(&b, l.City, na(data.City), l.State, na(data.State))
+			}
+			if data.Country != "" || data.PostalCode != "" {
+				row2(&b, l.Country, na(data.Country), l.PostalCode, na(data.PostalCode))
+			}
+			b.WriteString(`</table>`)
+		}
+
+		// ── Section: Attachments ──────────────────────────────────────────────────
+		// renderAttCard renders one attachment's card body (name/image/meta); prefixHTML,
+		// when non-empty, is written before the file name (used for the per-card
+		// transition context line on the default, non-grouped layout).
+		renderAttCard := func(att models.IncidentReportAttachment, prefixHTML string) {
+			b.WriteString(`<div class="att-card">`)
+			if prefixHTML != "" {
+				b.WriteString(prefixHTML)
+			}
+			fmt.Fprintf(&b, `<div class="att-name">%s</div>`, html.EscapeString(att.FileName))
+
+			if att.DeletedAt != nil {
+				fmt.Fprintf(&b, `<div class="att-deleted">&#x1F5D1; %s</div>`, html.EscapeString(l.AttDeleted))
+			} else if strings.HasPrefix(att.MimeType, "image/") && att.FilePath != "" {
+				if fr, ferr := h.storage.GetFile(c.UserContext(), att.FilePath); ferr == nil {
+					if imgData, rerr := io.ReadAll(fr); rerr == nil && len(imgData) > 0 {
+						encoded := base64.StdEncoding.EncodeToString(imgData)
+						fmt.Fprintf(&b, `<img class="att-img" src="data:%s;base64,%s" alt="%s">`,
+							att.MimeType, encoded, html.EscapeString(att.FileName))
+					}
+					fr.Close()
+				}
+			}
+
+			uploadedBy := strings.TrimSpace(att.UploadedByFirstName + " " + att.UploadedByLastName)
+			kbUnit, byteUnit := "KB", "bytes"
+			if l.Dir == "rtl" {
+				kbUnit, byteUnit = "ك.ب", "بايت"
+			}
+			sizeStr := fmt.Sprintf("%.1f %s", float64(att.FileSize)/1024, kbUnit)
+			if att.FileSize < 1024 {
+				sizeStr = fmt.Sprintf("%d %s", att.FileSize, byteUnit)
+			}
+			fmt.Fprintf(&b,
+				`<div class="att-meta"><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span><span>%s: <b>%s</b></span>`,
+				html.EscapeString(l.AttType), html.EscapeString(att.MimeType),
+				html.EscapeString(l.AttSize), sizeStr,
+				html.EscapeString(l.AttUploadedBy), html.EscapeString(uploadedBy),
+				html.EscapeString(l.AttUploadedByRole), html.EscapeString(localName(att.UploadedByRole, att.UploadedByRoleAr)),
+				html.EscapeString(l.AttUploadedAt), html.EscapeString(ts(att.CreatedAt)),
 			)
+			if att.DeletedAt != nil {
+				fmt.Fprintf(&b, `<span style="color:#c0392b">%s: <b>%s</b></span>`,
+					html.EscapeString(l.AttDeletedAt), html.EscapeString(ts(*att.DeletedAt)))
+			}
+			b.WriteString(`</div>`)
+			b.WriteString(`</div>`)
 		}
-		b.WriteString(`</tbody></table>`)
-	}
 
-	// ── Logs empty state ──────────────────────────────────────────────────────
-	if includeLogs && len(reportRevisions) == 0 && len(reportTransitions) == 0 {
-		secHeader(&b, l.SectionHistory)
-		fmt.Fprintf(&b, `<div class="comment-block">%s</div>`, html.EscapeString(l.NoLogs))
-	}
+		// Attachments are always shown, split into creation / closure (and any
+		// other transition uploads) with an empty-state message per group.
+		secHeader(&b, l.SectionAttach)
+		b.WriteString(`<div>`)
+		var creationAtts, closureAtts, otherAtts []models.IncidentReportAttachment
+		for _, att := range reportAttachments {
+			switch {
+			case att.TransitionHistoryID == nil:
+				creationAtts = append(creationAtts, att)
+			case att.IsClosure:
+				closureAtts = append(closureAtts, att)
+			default:
+				otherAtts = append(otherAtts, att)
+			}
+		}
+		renderAttGroup := func(label string, atts []models.IncidentReportAttachment, always bool) {
+			if len(atts) == 0 && !always {
+				return
+			}
+			fmt.Fprintf(&b, `<div class="att-group-header">%s</div>`, html.EscapeString(label))
+			if len(atts) == 0 {
+				fmt.Fprintf(&b, `<div class="comment-block">%s</div>`, html.EscapeString(l.NoAttachments))
+				return
+			}
+			for _, att := range atts {
+				renderAttCard(att, "")
+			}
+		}
+		renderAttGroup(l.AttCreation, creationAtts, true)
+		renderAttGroup(l.AttClosure, closureAtts, true)
+		renderAttGroup(l.AttOther, otherAtts, false)
+		b.WriteString(`</div>`)
 
-	// ── Footer ────────────────────────────────────────────────────────────────
-	fmt.Fprintf(&b,
-		`<div class="footer"><span>%s</span><span>%s: %s</span></div>`,
-		html.EscapeString(data.IncidentNumber),
-		html.EscapeString(l.PrintDate),
-		html.EscapeString(ts(time.Now())),
-	)
+		// ── Section: Revision History ─────────────────────────────────────────────
+		if len(reportRevisions) > 0 {
+			textAlign := "left"
+			if l.Dir == "rtl" {
+				textAlign = "right"
+			}
+			secHeader(&b, l.SectionRevisions)
+			b.WriteString(`<table class="tbl"><thead><tr>`)
+			fmt.Fprintf(&b, `<td style="width:18%%">%s</td><td style="width:20%%">%s</td><td style="width:18%%">%s</td><td style="width:22%%">%s</td><td style="width:22%%">%s</td>`,
+				html.EscapeString(l.ColDate),
+				html.EscapeString(l.ColName),
+				html.EscapeString(l.ColAction),
+				html.EscapeString(l.ColOldValue),
+				html.EscapeString(l.ColNewValue),
+			)
+			b.WriteString(`</tr></thead><tbody>`)
+			for _, rev := range reportRevisions {
+				byName := strings.TrimSpace(rev.PerformedByFirstName + " " + rev.PerformedByLastName)
+				var changes []models.IncidentRevisionChange
+				if rev.Changes != "" {
+					_ = json.Unmarshal([]byte(rev.Changes), &changes)
+				}
+				if len(changes) == 0 {
+					fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td>%s</td><td class="cmt" colspan="2" style="text-align:%s">%s</td></tr>`,
+						html.EscapeString(ts(rev.CreatedAt)),
+						html.EscapeString(byName),
+						html.EscapeString(rev.ActionType),
+						textAlign,
+						html.EscapeString(rev.ActionDescription),
+					)
+				} else {
+					for i, ch := range changes {
+						oldVal, newVal := "", ""
+						if ch.OldValue != nil {
+							oldVal = *ch.OldValue
+						}
+						if ch.NewValue != nil {
+							newVal = *ch.NewValue
+						}
+						if i == 0 {
+							fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td>%s</td><td class="cmt" style="text-align:%s">%s</td><td class="cmt" style="text-align:%s">%s</td></tr>`,
+								html.EscapeString(ts(rev.CreatedAt)),
+								html.EscapeString(byName),
+								html.EscapeString(ch.FieldLabel),
+								textAlign, html.EscapeString(oldVal),
+								textAlign, html.EscapeString(newVal),
+							)
+						} else {
+							fmt.Fprintf(&b, `<tr><td></td><td></td><td>%s</td><td class="cmt" style="text-align:%s">%s</td><td class="cmt" style="text-align:%s">%s</td></tr>`,
+								html.EscapeString(ch.FieldLabel),
+								textAlign, html.EscapeString(oldVal),
+								textAlign, html.EscapeString(newVal),
+							)
+						}
+					}
+				}
+			}
+			b.WriteString(`</tbody></table>`)
+		}
+
+		// ── Section: Transition History ───────────────────────────────────────────
+		if len(reportTransitions) > 0 {
+			secHeader(&b, l.SectionHistory)
+			b.WriteString(`<table class="tbl"><thead><tr>`)
+			txtAlign := "left"
+			if l.Dir == "rtl" {
+				txtAlign = "right"
+			}
+			fmt.Fprintf(&b, `<td style="width:15%%">%s</td><td style="width:17%%">%s</td><td style="width:16%%">%s</td><td style="width:14%%">%s</td><td style="width:19%%;text-align:%s">%s</td><td style="width:19%%;text-align:%s">%s</td>`,
+				html.EscapeString(l.ColDate), html.EscapeString(l.ColName),
+				html.EscapeString(l.ColTransition), html.EscapeString(l.Status),
+				txtAlign, html.EscapeString(l.ColComment),
+				txtAlign, html.EscapeString(l.ColFeedback),
+			)
+			b.WriteString(`</tr></thead><tbody>`)
+			for _, tr := range reportTransitions {
+				byName := strings.TrimSpace(tr.PerformedByFirstName + " " + tr.PerformedByLastName)
+				transitionName := localName(tr.TransitionName, tr.TransitionNameAr)
+				status := localName(tr.ToStateName, tr.ToStateNameAr)
+				fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td class="cmt">%s</td><td class="cmt">%s</td></tr>`,
+					html.EscapeString(ts(tr.TransitionedAt)),
+					html.EscapeString(byName),
+					html.EscapeString(transitionName),
+					html.EscapeString(status),
+					html.EscapeString(tr.Comment),
+					html.EscapeString(tr.FeedbackComment),
+				)
+			}
+			b.WriteString(`</tbody></table>`)
+		}
+
+		// ── Logs empty state ──────────────────────────────────────────────────────
+		if includeLogs && len(reportRevisions) == 0 && len(reportTransitions) == 0 {
+			secHeader(&b, l.SectionHistory)
+			fmt.Fprintf(&b, `<div class="comment-block">%s</div>`, html.EscapeString(l.NoLogs))
+		}
+
+		// ── Footer ────────────────────────────────────────────────────────────────
+		fmt.Fprintf(&b,
+			`<div class="footer"><span>%s</span><span>%s: %s</span></div>`,
+			html.EscapeString(data.IncidentNumber),
+			html.EscapeString(l.PrintDate),
+			html.EscapeString(ts(time.Now())),
+		)
+		if combined {
+			b.WriteString(`</div>`)
+		}
+	}
 
 	b.WriteString(`</div></body></html>`)
 	return b.Bytes()
@@ -1252,6 +1426,19 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 	}
 	if data.ClosedAt != nil {
 		row1(&b, l.ClosedAt, html.EscapeString(tsp(data.ClosedAt)))
+	}
+	if strings.TrimSpace(data.CallerIdentityText) != "" {
+		row1(&b, l.CallerIdentity, html.EscapeString(data.CallerIdentityText))
+	}
+	if data.CooperationStatus != "" {
+		coopLabel := data.CooperationStatus
+		switch data.CooperationStatus {
+		case models.CooperationStatusCooperative:
+			coopLabel = l.Cooperative
+		case models.CooperationStatusUncooperative:
+			coopLabel = l.Uncooperative
+		}
+		row1(&b, l.CooperationStatus, html.EscapeString(coopLabel))
 	}
 	b.WriteString(`</table>`)
 

@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"fmt"
-	"io"
 	"log"
 	"strconv"
 	"time"
@@ -454,42 +453,6 @@ func (h *CallLogHandler) UploadAttachment(c *fiber.Ctx) error {
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusCreated, i18n.T(c.UserContext(), "attachment_uploaded"), map[string]interface{}{"success": true})
-}
-
-func (h *CallLogHandler) PreviewAttachment(c *fiber.Ctx) error {
-	attachmentIDStr := c.Params("attachment_id")
-	attachmentID, err := uuid.Parse(attachmentIDStr)
-	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_attachment_id"))
-	}
-
-	attachment, err := h.service.GetAttachment(c.UserContext(), attachmentID)
-	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "attachment_not_found"))
-	}
-
-	log.Printf("[PreviewAttachment] id=%s file_path=%s mime=%s db_size=%d",
-		attachmentID, attachment.FilePath, attachment.MimeType, attachment.FileSize)
-
-	file, err := h.storage.GetFile(c.UserContext(), attachment.FilePath)
-	if err != nil {
-		log.Printf("[PreviewAttachment] GetFile error: %v", err)
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_retrieve_file"))
-	}
-	defer file.Close()
-
-	fileData, err := io.ReadAll(file)
-	if err != nil {
-		log.Printf("[PreviewAttachment] ReadAll error: %v", err)
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_read_file"))
-	}
-
-	log.Printf("[PreviewAttachment] serving %d bytes mime=%s filename=%s", len(fileData), attachment.MimeType, attachment.FileName)
-
-	c.Set("Content-Type", attachment.MimeType)
-	c.Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", attachment.FileName))
-	c.Set("Content-Length", fmt.Sprintf("%d", len(fileData)))
-	return c.Send(fileData)
 }
 
 func (h *CallLogHandler) GetSipInfo(c *fiber.Ctx) error {

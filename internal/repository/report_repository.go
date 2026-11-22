@@ -1169,10 +1169,9 @@ func (r *reportRepository) ExecuteIncidentQuery(ctx context.Context, filters []m
 		for i, colName := range cols {
 			val := columns[i]
 			if b, ok := val.([]byte); ok {
-				rawRow[colName] = string(b)
-			} else {
-				rawRow[colName] = val
+				val = string(b)
 			}
+			rawRow[colName] = val
 		}
 		// log.Printf("rawRow keys: %v", func() []string {
 		// 	keys := make([]string, 0, len(rawRow))

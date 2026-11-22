@@ -107,6 +107,25 @@ func (u *User) HasRole(roleCode string) bool {
 	return false
 }
 
+// IsCitizenOnly is true when every active role the user holds is the citizen role.
+// A user who also holds any other role (admin, agent, ...) is not citizen-only.
+func (u *User) IsCitizenOnly(citizenCode string) bool {
+	if u.IsSuperAdmin {
+		return false
+	}
+	citizen := false
+	for _, role := range u.Roles {
+		if !role.IsActive {
+			continue
+		}
+		if role.Code != citizenCode {
+			return false
+		}
+		citizen = true
+	}
+	return citizen
+}
+
 // IsDepartmentManager checks if the user has any role with is_department_manager = true
 func (u *User) IsDepartmentManager() bool {
 	if u.IsSuperAdmin {

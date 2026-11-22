@@ -361,13 +361,13 @@ func existingMomraTicketNumber(candidates []models.Incident, momraIncidentNo str
 }
 
 type EPMIncidentStatusItems struct {
-	RequestID          string      `json:"requestID"`
+	CRMID              string      `json:"CRMID"`
 	Status             interface{} `json:"status"`
 	Comments           string      `json:"comments"`
 	IsNotified         bool        `json:"isNotified"`
 	CreatedDatetime    string      `json:"createdDatetime"`
 	SynchedDatetime    string      `json:"synchedDatetime"`
-	AmanaIncidentNo    string      `json:"amanaIncidentNo"`
+	TicketNumber       string      `json:"ticketNumber"`
 	EvaluationFlag     int         `json:"evaluationFlag"`
 	IncidentImageAlert interface{} `json:"incidentImageAlert"`
 }
@@ -378,7 +378,6 @@ type EPMIncidentStatusItems struct {
 // outbound UpdateStatusV2 calls, downloaded with MOMRA's EPM Bearer token.
 type EPMIncidentAttachmentItem struct {
 	AttachmentID    int    `json:"attachmentID"`
-	TicketNumber    string `json:"ticketNumber"`
 	AttachmentsName string `json:"attachmentsName"`
 	AttachmentURL   string `json:"attachmentURL"`
 }
@@ -892,13 +891,13 @@ func (h *EPMIncidentHandler) GetMomraIncidentStatusDetails(c *fiber.Ctx) error {
 	}
 
 	items := &EPMIncidentStatusItems{
-		RequestID:          incident.IncidentNumber,
+		CRMID:              incident.IncidentNumber,
 		Status:             status,
 		Comments:           latestComment,
 		IsNotified:         false,
 		CreatedDatetime:    incident.CreatedAt.Format("2006-01-02T15:04:05.00"),
 		SynchedDatetime:    incident.UpdatedAt.Format("2006-01-02T15:04:05.00"),
-		AmanaIncidentNo:    incident.IncidentNumber,
+		TicketNumber:       incident.IncidentNumber,
 		EvaluationFlag:     incident.EvaluationCount,
 		IncidentImageAlert: nil,
 	}
@@ -909,7 +908,6 @@ func (h *EPMIncidentHandler) GetMomraIncidentStatusDetails(c *fiber.Ctx) error {
 		for i, att := range attachments {
 			attachmentItems = append(attachmentItems, EPMIncidentAttachmentItem{
 				AttachmentID:    i + 1,
-				TicketNumber:    incident.IncidentNumber,
 				AttachmentsName: att.FileName,
 				AttachmentURL:   momraAttachmentPath(att.ID),
 			})

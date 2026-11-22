@@ -319,6 +319,8 @@ func main() {
 	}
 	configAttachmentService := services.NewConfigAttachmentService(configService, systemAttachmentService)
 	configHandler := handlers.NewConfigHandler(configService, actionLogService, configAttachmentService)
+	incidentHandler.SetConfigAttachmentService(configAttachmentService)
+	incidentHandler.SetActionLogService(actionLogService)
 	settingsService.SetConfigService(configService)
 	settingsHandler := handlers.NewSettingsHandler(settingsService)
 	jwksHandler := handlers.NewJWKSHandler(ssoJWTManager)
@@ -332,9 +334,9 @@ func main() {
 	imageValidationHandler := handlers.NewImageValidationHandler(services.NewImageValidationService(), cfg.ImageValidation)
 	otpHandler := handlers.NewOTPHandler(otpService, userService)
 	escalationHandler := handlers.NewEscalationHandler(escalationService)
-	escalationGroupHandler := handlers.NewEscalationGroupHandler(escalationGroupService)
+	escalationGroupHandler := handlers.NewEscalationGroupHandler(escalationGroupService, actionLogService)
 	errorLogHandler := handlers.NewErrorLogHandler(errorLogService)
-	escalationPolicyHandler := handlers.NewEscalationPolicyHandler(escalationPolicyService, userRepo, departmentRepo)
+	escalationPolicyHandler := handlers.NewEscalationPolicyHandler(escalationPolicyService, userRepo, departmentRepo, actionLogService)
 	feedbackTemplateHandler := handlers.NewFeedbackTemplateHandler(feedbackTemplateService)
 	commentTemplateHandler := handlers.NewCommentTemplateHandler(commentTemplateService)
 	rejectionLogHandler := handlers.NewRejectionLogHandler(rejectionLogRepo)
@@ -345,6 +347,9 @@ func main() {
 	aiQualityFeedbackHandler := handlers.NewAIQualityFeedbackHandler(aiQualityFeedbackRepo)
 	fcmHandler := handlers.NewFCMHandler(fcmService)
 	ctiHandler := handlers.NewCTIHandler(cfg.Cintrix.URL, cfg.Cintrix.APIKeyID, cfg.Cintrix.APIKeySecret, callLogRepo, userRepo, extensionAssignmentRepo, db)
+	callRecordingAuditRepo := repository.NewCallRecordingAuditRepository(db)
+	callRecordingAuditService := services.NewCallRecordingAuditService(callRecordingAuditRepo, callLogRepo, cfg.JWT.Secret)
+	callRecordingAuditHandler := handlers.NewCallRecordingAuditHandler(callRecordingAuditService, callLogRepo, minioStorage, ctiHandler)
 	integrationUserHandler := handlers.NewIntegrationUserHandler(userService, roleRepo, departmentRepo, locationRepo, classificationRepo)
 	sentimentHandler := handlers.NewCallerSentimentHandler(callerSentimentService)
 	goalHandler := handlers.NewGoalHandler(goalService, actionLogService)
@@ -602,6 +607,7 @@ func main() {
 	incidents.Get("/sla-breached", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetSLABreached)
 	incidents.Get("/ready-to-close/duration-options", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetReadyToCloseDurationOptions)
 	incidents.Post("/bulk/convert-to-request", authMiddleware.RequirePermission("incidents:update"), incidentHandler.BulkConvertToRequest)
+	incidents.Post("/report", authMiddleware.RequirePermission("reports:view"), incidentHandler.GenerateCombinedReport)
 	incidents.Get("/:id", authMiddleware.RequirePermission("incidents:view"), incidentHandler.GetIncident)
 	incidents.Get("/:id/report", authMiddleware.RequirePermission("reports:view"), incidentHandler.GenerateReport)
 	incidents.Put("/:id", authMiddleware.RequirePermission("incidents:update"), incidentHandler.UpdateIncident)
@@ -853,6 +859,14 @@ func main() {
 	callLogs.Put("/:id", authMiddleware.RequirePermission("call-logs:update"), callLogHandler.UpdateCallLog)
 	callLogs.Delete("/:id", authMiddleware.RequirePermission("call-logs:delete"), callLogHandler.DeleteCallLog)
 
+	// Call Recording History (who listened to / downloaded recordings). Read-only:
+	// entries cannot be edited or deleted by anyone, so mutating verbs get 405.
+	callRecordingHistory := admin.Group("/call-recordings/history", licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureCallCentre)), authMiddleware.RequirePermission("call-recordings:history"))
+	callRecordingHistory.Get("/", callRecordingAuditHandler.ListHistory)
+	callRecordingHistory.Put("/:id", callRecordingAuditHandler.RejectModification)
+	callRecordingHistory.Patch("/:id", callRecordingAuditHandler.RejectModification)
+	callRecordingHistory.Delete("/:id", callRecordingAuditHandler.RejectModification)
+
 	// Workflow routes (with action logging)
 	workflows := admin.Group("/workflows", licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureWorkflows)), middleware.ActionLogger(middleware.ActionLoggerConfig{
 		Enabled:     true,
@@ -1100,17 +1114,23 @@ func main() {
 	calls.Post("/:call_uuid/end", callLogHandler.EndCall)
 	calls.Post("/:call_uuid/join", callLogHandler.JoinCall)
 	calls.Post("/:call_uuid/attachments", callLogHandler.UploadAttachment)
-	calls.Get("/:attachment_id/preview", callLogHandler.PreviewAttachment)
 
 	// Call logs routes
 	callLogsPublic := v1.Group("/call-logs", authMiddleware.Authenticate())
 	callLogsPublic.Get("/sip-info", callLogHandler.GetSipInfo)
 	callLogsPublic.Get("/extension/:extension", callLogHandler.GetCallLogsByExtension)
 
+	// Call recording playback/download. Every play or download first writes a
+	// Call Recording History entry (POST .../access), which returns a short-lived
+	// signed grant URL; /stream serves audio only for a valid grant, so the grant
+	// (not a bearer token) is the credential and works in <audio src>/<a href>.
+	callRecordings := v1.Group("/call-recordings", licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureCallCentre)))
+	callRecordings.Get("/stream", callRecordingAuditHandler.Stream)
+	callRecordings.Post("/:call_log_id/access", authMiddleware.Authenticate(), authMiddleware.RequirePermission("call-logs:view"), callRecordingAuditHandler.RequestAccess)
+
 	// Cintrix CTI routes (contact-center softphone widget)
 	cti := v1.Group("/cti", authMiddleware.Authenticate())
 	cti.Get("/widget-token", ctiHandler.GetWidgetToken)
-	cti.Get("/recording", ctiHandler.GetRecording)
 
 	// ---- TEMPLATE ROUTES (legacy path, no feature-license gate) ----
 	templates := v1.Group("/templates", authMiddleware.Authenticate())
@@ -1183,6 +1203,10 @@ func main() {
 	otp.Post("/verify", authMiddleware.RequirePermission("otp:verify"), otpHandler.VerifyOTP)
 
 	escalation := v1.Group("/escalation", authMiddleware.Authenticate())
+
+	// Escalation log routes.
+	escalation.Get("/logs", authMiddleware.RequirePermission("escalation-logs:view"), escalationHandler.ListLogs)
+	escalation.Get("/logs/export", authMiddleware.RequirePermission("escalation-logs:export"), escalationHandler.ExportLogs)
 
 	// GET /api/v1/escalation— list all SLA breach notification records
 	escalation.Get("/", escalationHandler.List)

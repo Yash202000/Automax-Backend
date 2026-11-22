@@ -67,6 +67,16 @@ func (s *OTPService) GenerateOTP() (string, error) {
 	return fmt.Sprintf("%06d", n.Int64()), nil
 }
 
+// OTPDeliveryError means the OTP could not be delivered (template/provider/SMTP failure).
+// It is a server-side failure, so handlers should map it to a 5xx rather than 400.
+type OTPDeliveryError struct {
+	Msg string
+	Err error
+}
+
+func (e *OTPDeliveryError) Error() string { return fmt.Sprintf("%s: %v", e.Msg, e.Err) }
+func (e *OTPDeliveryError) Unwrap() error { return e.Err }
+
 func HashOTP(otp string) string {
 	hash := sha256.Sum256([]byte(otp))
 	return hex.EncodeToString(hash[:])
@@ -175,7 +185,7 @@ func (s *OTPService) SendOTP(ctx context.Context, phone string, senderMode strin
 	err = s.sendOTPNotification(ctx, senderMode, phone, otp, &otpSessionID)
 	if err != nil {
 		s.redis.Del(ctx, key)
-		return "", nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_send_otp_notification"), err)
+		return "", nil, &OTPDeliveryError{Msg: i18n.T(ctx, "failed_to_send_otp_notification"), Err: err}
 	}
 
 	// [Citizen Auto-Register] Store citizen name in OTP data for auto-registration on verify
@@ -227,9 +237,7 @@ func (s *OTPService) sendOTPNotification(ctx context.Context, channel, phone, ot
 	} else {
 		_, err = s.notificationService.SendNotification(ctx, channel, nil, "en", []string{phone}, nil, nil, "", otp, nil, nil, nil, sessionID)
 	}
-	if err != nil {
-		return fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_send_otp_notification"), err)
-	}
+	// Caller (SendOTP) adds the "failed to send OTP notification" prefix; don't wrap twice.
 	return err
 }
 

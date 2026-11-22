@@ -11,7 +11,6 @@ import (
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/storage"
-	pkgUtils "github.com/automax/backend/pkg/utils"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -202,20 +201,12 @@ func (s *callLogService) ListCallLogsSummary(ctx context.Context, filter *models
 
 	items := make([]models.CallLogListItem, len(callLogs))
 	for i, cl := range callLogs {
-		var recordingURL string
-		if len(cl.Attachments) > 0 {
-			recordingURL = pkgUtils.GenerateAttachmentAppURL(ctx, cl.Attachments[0].ID)
-		} else if cl.CallUuid != "" && models.RecordingURLFromMeta(cl.Meta) != "" {
-			// Cintrix-originated call with a recording — proxy through the CTI
-			// endpoint rather than exposing the raw (HMAC-gated) Cintrix URL.
-			recordingURL = pkgUtils.GenerateCTIRecordingAppURL(ctx, cl.CallUuid)
-		}
 		item := models.CallLogListItem{
 			ID:           cl.ID,
 			CallUuid:     cl.CallUuid,
 			CallType:     cl.CallType,
 			Status:       cl.Status,
-			RecordingUrl: recordingURL,
+			HasRecording: HasRecording(&cl),
 			CreatedAt:    cl.CreatedAt,
 		}
 
@@ -570,12 +561,6 @@ func (s *callLogService) getCallLogResponse(ctx context.Context, id uuid.UUID) (
 // toCallLogResponse converts a CallLog (with preloaded Participants) to the API response,
 // bulk-fetching user names for participants by phone/extension.
 func (s *callLogService) toCallLogResponse(ctx context.Context, callLog *models.CallLog) (models.CallLogResponse, error) {
-	var recordingURL string
-	if len(callLog.Attachments) > 0 {
-		recordingURL = pkgUtils.GenerateAttachmentAppURL(ctx, callLog.Attachments[0].ID)
-	} else if callLog.CallUuid != "" && models.RecordingURLFromMeta(callLog.Meta) != "" {
-		recordingURL = pkgUtils.GenerateCTIRecordingAppURL(ctx, callLog.CallUuid)
-	}
 	resp := models.CallLogResponse{
 		ID:           callLog.ID,
 		CallUuid:     callLog.CallUuid,
@@ -583,7 +568,7 @@ func (s *callLogService) toCallLogResponse(ctx context.Context, callLog *models.
 		Status:       callLog.Status,
 		StartAt:      callLog.StartAt,
 		EndAt:        callLog.EndAt,
-		RecordingUrl: recordingURL,
+		HasRecording: HasRecording(callLog),
 		Meta:         callLog.Meta,
 		CreatedAt:    callLog.CreatedAt,
 		UpdatedAt:    callLog.UpdatedAt,

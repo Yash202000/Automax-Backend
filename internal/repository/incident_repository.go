@@ -345,7 +345,7 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 	}
 	if len(filter.DepartmentID) != 0 {
 		if filter.IncludeUnassignedDepartment {
-			query = query.Where("incidents.department_id IN ? OR (incidents.department_id IS NULL AND incidents.current_state_id IN (SELECT id FROM workflow_states WHERE state_type = 'initial') AND (incidents.assignee_id = ? OR incidents.reporter_id = ? OR incidents.created_by_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
+			query = query.Where("incidents.department_id IN ? OR (incidents.department_id IS NULL AND incidents.current_state_id IN (SELECT id FROM workflow_states WHERE state_type IN ('initial','terminal')) AND (incidents.assignee_id = ? OR incidents.reporter_id = ? OR incidents.created_by_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
 				filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID, filter.UserID)
 		} else {
 			query = query.Where("incidents.department_id IN ?", filter.DepartmentID)
@@ -403,6 +403,9 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 
 	if filter.CallerIdentity != "" {
 		query = query.Where("caller_identity = ?", filter.CallerIdentity)
+	}
+	if filter.CooperationStatus != "" {
+		query = query.Where("cooperation_status = ?", filter.CooperationStatus)
 	}
 	if filter.SLABreached != nil {
 		query = query.Where("sla_breached = ?", *filter.SLABreached)
@@ -492,8 +495,9 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	log.Printf("[List] total=%d classification_id=%v location_id=%v my_record=%v record_type=%v user_role_ids=%v",
-		total, filter.ClassificationID, filter.LocationID, filter.MyRecord, filter.RecordType, filter.UserRoleIDs)
+	// log.Printf("[List] total=%d classification_id=%v location_id=%v my_record=%v record_type=%v user_role_ids=%v",
+	// total, filter.ClassificationID, filter.LocationID, filter.MyRecord, filter.RecordType, filter.UserRoleIDs)
+
 	// Apply pagination
 	if filter.Page < 1 {
 		filter.Page = 1
@@ -1063,8 +1067,8 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 
 		if len(filter.DepartmentID) != 0 {
 			if filter.IncludeUnassignedDepartment {
-				baseQuery = baseQuery.Where("incidents.department_id IN ? OR (incidents.department_id IS NULL AND incidents.current_state_id IN (SELECT id FROM workflow_states WHERE state_type = 'initial') AND (incidents.assignee_id = ? OR incidents.reporter_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
-					filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID)
+				baseQuery = baseQuery.Where("incidents.department_id IN ? OR (incidents.department_id IS NULL AND incidents.current_state_id IN (SELECT id FROM workflow_states WHERE state_type IN ('initial','terminal')) AND (incidents.assignee_id = ? OR incidents.reporter_id = ? OR incidents.created_by_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
+					filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID, filter.UserID)
 			} else {
 				baseQuery = baseQuery.Where("incidents.department_id IN ?", filter.DepartmentID)
 			}
@@ -1281,7 +1285,7 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 		}
 		if len(filter.DepartmentID) > 0 {
 			if filter.IncludeUnassignedDepartment {
-				q = q.Where("incidents.department_id IN ? OR (incidents.department_id IS NULL AND incidents.current_state_id IN (SELECT id FROM workflow_states WHERE state_type = 'initial') AND (incidents.assignee_id = ? OR incidents.reporter_id = ? OR incidents.created_by_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
+				q = q.Where("incidents.department_id IN ? OR (incidents.department_id IS NULL AND incidents.current_state_id IN (SELECT id FROM workflow_states WHERE state_type IN ('initial','terminal')) AND (incidents.assignee_id = ? OR incidents.reporter_id = ? OR incidents.created_by_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
 					filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID, filter.UserID)
 			} else {
 				q = q.Where("incidents.department_id IN ?", filter.DepartmentID)
@@ -1639,8 +1643,8 @@ func (r *incidentRepository) GetPriorityCounts(ctx context.Context, filter *mode
 
 		if len(filter.DepartmentID) != 0 {
 			if filter.IncludeUnassignedDepartment {
-				query = query.Where("incidents.department_id IN ? OR (incidents.department_id IS NULL AND incidents.current_state_id IN (SELECT id FROM workflow_states WHERE state_type = 'initial') AND (incidents.assignee_id = ? OR incidents.reporter_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
-					filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID)
+				query = query.Where("incidents.department_id IN ? OR (incidents.department_id IS NULL AND incidents.current_state_id IN (SELECT id FROM workflow_states WHERE state_type IN ('initial','terminal')) AND (incidents.assignee_id = ? OR incidents.reporter_id = ? OR incidents.created_by_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
+					filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID, filter.UserID)
 			} else {
 				query = query.Where("incidents.department_id IN ?", filter.DepartmentID)
 			}
@@ -2446,6 +2450,8 @@ SELECT
     COALESCE(i.country, '')     AS country,
     COALESCE(i.postal_code, '') AS postal_code,
     COALESCE(i.custom_fields, '') AS custom_fields,
+    COALESCE(i.caller_identity_text, '') AS caller_identity_text,
+    COALESCE(i.cooperation_status, '') AS cooperation_status,
     COALESCE(ws.name, '')       AS status_name,
     COALESCE(ws.name_ar, '')    AS status_name_ar,
     COALESCE(cl.name, '')       AS classification_name,

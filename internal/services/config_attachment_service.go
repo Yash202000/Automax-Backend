@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"mime/multipart"
 	"slices"
@@ -65,7 +66,8 @@ func (s *ConfigAttachmentService) load(ctx context.Context, module, name string,
 	return cfg, ids, nil
 }
 
-// Add uploads images and appends them to the config (created on first use).
+// Add uploads images into the config (created on first use). It never appends: if the module/name
+// already has attachments it fails with ErrConfigAttachmentExists (use Replace).
 func (s *ConfigAttachmentService) Add(ctx context.Context, base, name string, files []*multipart.FileHeader, userID uuid.UUID) (*models.ConfigResponse, []models.ConfigChange, error) {
 	return s.save(ctx, base, name, files, userID, false)
 }
@@ -84,6 +86,10 @@ func (s *ConfigAttachmentService) save(ctx context.Context, base, name string, f
 	cfg, current, err := s.load(ctx, module, key, true)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	if !replace && len(current) > 0 {
+		return nil, nil, models.ErrConfigAttachmentExists // POST never appends; PUT replaces
 	}
 
 	_, records, err := s.store.UploadImages(ctx, strings.TrimSuffix(module, models.ConfigAttachmentsSuffix), files, userID) // the normalised base module
@@ -110,6 +116,25 @@ func (s *ConfigAttachmentService) save(ctx context.Context, base, name string, f
 		_ = s.store.DeleteByIDs(ctx, current) // best effort, after the config no longer points at them
 	}
 	return resp, changes, nil
+}
+
+// FirstImageBase64 returns the base64 content of the first image of the attachment config
+// <base>-attachments/<name>. It returns "" when the config is missing, is not an attachments
+// config, is empty, or its first file cannot be read as an image.
+func (s *ConfigAttachmentService) FirstImageBase64(ctx context.Context, base, name string) string {
+	module, key, err := attachmentsKey(base, name)
+	if err != nil {
+		return ""
+	}
+	_, ids, err := s.load(ctx, module, key, false)
+	if err != nil || len(ids) == 0 {
+		return ""
+	}
+	data, _, err := s.store.ReadFile(ctx, ids[0])
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(data)
 }
 
 // Remove drops one attachment from the config and deletes its file.

@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"path/filepath"
+	"strings"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/storage"
@@ -137,6 +138,28 @@ func (s *SystemAttachmentService) UploadImages(ctx context.Context, module strin
 		return uuid.Nil, nil, paErr(http.StatusInternalServerError, "pubatt_save_failed")
 	}
 	return batchID, records, nil
+}
+
+// ReadFile returns the bytes and mime type of one public image attachment. It fails for unknown ids,
+// files outside the public folder and non-image types.
+func (s *SystemAttachmentService) ReadFile(ctx context.Context, id uuid.UUID) ([]byte, string, error) {
+	var a models.SystemAttachment
+	if err := s.db.WithContext(ctx).First(&a, "id = ?", id).Error; err != nil {
+		return nil, "", err
+	}
+	if !strings.HasPrefix(a.FilePath, SystemAttachmentFolder+"/") {
+		return nil, "", fmt.Errorf("attachment %s is outside the public folder", id)
+	}
+	if _, ok := systemAttachmentAllowedTypes[a.MimeType]; !ok {
+		return nil, "", fmt.Errorf("attachment %s is not an image", id)
+	}
+	rc, err := s.storage.GetFile(ctx, a.FilePath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rc.Close()
+	data, err := io.ReadAll(rc)
+	return data, a.MimeType, err
 }
 
 // SystemAttachmentView builds the view of one attachment with relative URLs generated from its id.

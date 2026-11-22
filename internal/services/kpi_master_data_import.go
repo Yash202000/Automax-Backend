@@ -79,7 +79,7 @@ func masterSpecFor(entityType string) (masterEntitySpec, bool) {
 		return masterEntitySpec{key: entityType, sheet: "Parent Objectives", cols: []kpiTemplateColumn{
 			masterRequired("name_en", "Name (English)", "الاسم (بالإنجليزية)", 38),
 			masterColumn("name_ar", "Name (Arabic)", "الاسم (بالعربية)", 38),
-			masterRequired("goal", "Strategic Goal", "الهدف الاستراتيجي", 34),
+			masterRequired("goal", "Goal", "الهدف", 34),
 			masterColumn("pillar", "Pillar", "الركيزة", 26),
 			masterColumn("enabler", "Enabler", "الممكّن", 26),
 			masterChoiceColumn("is_active", "Active", "نشط", 14, []string{"Yes", "No"}, []string{"نعم", "لا"}),
@@ -89,20 +89,18 @@ func masterSpecFor(entityType string) (masterEntitySpec, bool) {
 			masterRequired("name_en", "Name (English)", "الاسم (بالإنجليزية)", 38),
 			masterColumn("name_ar", "Name (Arabic)", "الاسم (بالعربية)", 38),
 			masterRequired("operational_objective", "Parent Objective", "الهدف الرئيسي", 34),
-			// The strategic goal is inherited from the parent objective; a
-			// value here is only checked against the parent's goal.
-			masterColumn("goal", "Strategic Goal", "الهدف الاستراتيجي", 34),
+			// The goal is inherited from the parent objective; a value here
+			// is only checked against the parent's goal.
+			masterColumn("goal", "Goal", "الهدف", 34),
 			masterColumn("pillar", "Pillar", "الركيزة", 26),
 			masterColumn("enabler", "Enabler", "الممكّن", 26),
-			masterColumn("department", "Department", "الإدارة", 28),
-			masterColumn("unit", "Unit", "الوحدة", 24),
 			masterChoiceColumn("is_active", "Active", "نشط", 14, []string{"Yes", "No"}, []string{"نعم", "لا"}),
 		}}, true
 	case KpiMasterInitiative:
 		return masterEntitySpec{key: entityType, sheet: "Initiatives", cols: []kpiTemplateColumn{
 			masterRequired("name_en", "Name (English)", "الاسم (بالإنجليزية)", 38),
 			masterColumn("name_ar", "Name (Arabic)", "الاسم (بالعربية)", 38),
-			masterRequired("goal", "Strategic Goal", "الهدف الاستراتيجي", 34),
+			masterRequired("goal", "Goal", "الهدف", 34),
 			masterColumn("objective", "Parent Objective", "الهدف الرئيسي", 34),
 			masterColumn("pillar", "Pillar", "الركيزة", 26),
 			masterColumn("enabler", "Enabler", "الممكّن", 26),
@@ -113,7 +111,6 @@ func masterSpecFor(entityType string) (masterEntitySpec, bool) {
 		}}, true
 	case KpiMasterDomain:
 		return masterEntitySpec{key: entityType, sheet: "Domains", cols: []kpiTemplateColumn{
-			masterColumn("code", "Code", "الرمز", 16),
 			masterRequired("name_en", "Name (English)", "الاسم (بالإنجليزية)", 38),
 			masterColumn("name_ar", "Name (Arabic)", "الاسم (بالعربية)", 38),
 			masterRequiredChoiceColumn("type", "Domain Type", "نوع النطاق", 22,
@@ -130,15 +127,14 @@ func masterSpecFor(entityType string) (masterEntitySpec, bool) {
 		}}, true
 	case KpiMasterAwardSubCriterion:
 		return masterEntitySpec{key: entityType, sheet: "Award Sub-criteria", cols: []kpiTemplateColumn{
-			masterRequired("award_criterion", "Award Criterion", "معيار الجائزة", 30),
-			masterRequired("sub_no", "Sub No.", "الرقم الفرعي", 14),
 			masterRequired("name_en", "Name (English)", "الاسم (بالإنجليزية)", 38),
 			masterColumn("name_ar", "Name (Arabic)", "الاسم (بالعربية)", 38),
+			masterRequired("award_criterion", "Award Criterion", "معيار الجائزة", 30),
+			masterRequired("sub_no", "Sub-Criterion No.", "رقم المعيار الفرعي", 30),
 			masterChoiceColumn("is_active", "Active", "نشط", 14, []string{"Yes", "No"}, []string{"نعم", "لا"}),
 		}}, true
 	case KpiMasterAwardKpiMeasure:
 		return masterEntitySpec{key: entityType, sheet: "Award KPI Measures", cols: []kpiTemplateColumn{
-			masterColumn("code", "Code", "الرمز", 16),
 			masterRequired("name_en", "Name (English)", "الاسم (بالإنجليزية)", 38),
 			masterColumn("name_ar", "Name (Arabic)", "الاسم (بالعربية)", 38),
 		}}, true
@@ -287,9 +283,6 @@ func buildKpiMasterDataInstructions(spec masterEntitySpec) *utils.InstructionCon
 			item("Existing records", "السجلات الحالية",
 				"With \"skip\", a record that already exists is left untouched. With \"update\", it is updated in place; blank optional cells keep their existing values.",
 				"مع \"تخطي\" يُترك السجل الموجود دون تغيير. ومع \"تحديث\" يُحدّث في مكانه؛ وتحافظ الخلايا الاختيارية الفارغة على قيمها الحالية."),
-			item("Codes", "الرموز",
-				"Domain and Award KPI Measure codes are assigned automatically. A Code cell is used to match an existing record; it is ignored when a new record is created.",
-				"رموز النطاقات ومقاييس الجوائز تُعيّن تلقائياً. تُستخدم خلية الرمز لمطابقة سجل موجود، وتُتجاهل عند إنشاء سجل جديد."),
 			item("Validation report", "تقرير التحقق",
 				"Every rejected row is listed with its Excel row number and reason. \"skip_invalid\" commits valid rows; \"abort\" commits nothing while any error remains.",
 				"يُدرج كل صف مرفوض مع رقم صفه في Excel وسبب الرفض. \"تخطي غير الصالح\" ينفذ الصفوف الصالحة؛ و\"إلغاء\" لا ينفذ أي شيء ما دام هناك خطأ."),
@@ -330,6 +323,7 @@ type masterExisting struct {
 	NameAr  string
 	Code    string
 	Version int
+	Deleted bool
 }
 
 type masterImportRec struct {
@@ -886,12 +880,14 @@ func (imp *masterDataImporter) loadExisting(db *gorm.DB) error {
 			addExisting(me, "domain|name|"+masterRefKey(item.NameEn), "domain|code|"+masterRefKey(item.Code))
 		}
 	case KpiMasterAwardCriterion:
+		// criterion_no is unique across soft-deleted rows too, so load them
+		// to report a clear conflict instead of a duplicate-key failure.
 		var items []models.AwardCriterion
-		if err := db.Select("id, criterion_no, name_en, name_ar, is_active").Find(&items).Error; err != nil {
+		if err := db.Unscoped().Select("id, criterion_no, name_en, name_ar, is_active, deleted_at").Find(&items).Error; err != nil {
 			return err
 		}
 		for _, item := range items {
-			addExisting(&masterExisting{ID: item.ID, NameEn: item.NameEn, NameAr: item.NameAr, Code: strconv.Itoa(item.CriterionNo)},
+			addExisting(&masterExisting{ID: item.ID, NameEn: item.NameEn, NameAr: item.NameAr, Code: strconv.Itoa(item.CriterionNo), Deleted: item.DeletedAt.Valid},
 				"award-criterion|"+strconv.Itoa(item.CriterionNo))
 		}
 		// criterion_no has a plain unique index, so a soft-deleted criterion
@@ -931,12 +927,14 @@ func (imp *masterDataImporter) loadExisting(db *gorm.DB) error {
 				"data-source|"+masterRefKey(item.NameEn))
 		}
 	case KpiMasterSegmentationDimension:
+		// name_en is unique across soft-deleted rows too, so load them to
+		// report a clear conflict instead of a duplicate-key failure.
 		var items []models.KpiSegmentationDimension
-		if err := db.Select("id, name_en, name_ar, is_active").Find(&items).Error; err != nil {
+		if err := db.Unscoped().Select("id, name_en, name_ar, is_active, deleted_at").Find(&items).Error; err != nil {
 			return err
 		}
 		for _, item := range items {
-			addExisting(&masterExisting{ID: item.ID, NameEn: item.NameEn, NameAr: item.NameAr},
+			addExisting(&masterExisting{ID: item.ID, NameEn: item.NameEn, NameAr: item.NameAr, Deleted: item.DeletedAt.Valid},
 				"segmentation-dimension|"+masterRefKey(item.NameEn))
 		}
 		// name_en has a plain unique index; a soft-deleted dimension with the
@@ -1042,9 +1040,9 @@ func (imp *masterDataImporter) validateRec(r *masterImportRec) {
 	if r.EntityType == KpiMasterAwardSubCriterion {
 		v.SubNo = strings.TrimSpace(read("sub_no"))
 		if v.SubNo == "" {
-			reject("Sub No.", "Sub No. is required.")
+			reject("Sub-Criterion No.", "Sub-Criterion No. is required.")
 		} else if utf8.RuneCountInString(v.SubNo) > 20 {
-			reject("Sub No.", "Sub No. must be at most 20 characters.")
+			reject("Sub-Criterion No.", "Sub-Criterion No. must be at most 20 characters.")
 		}
 	}
 
@@ -1080,7 +1078,7 @@ func (imp *masterDataImporter) validateRec(r *masterImportRec) {
 	case KpiMasterPillar, KpiMasterEnabler:
 		v.OwnerID = resolve("department", read("owner"), "Owner", false)
 	case KpiMasterOperationalObjective:
-		v.GoalID = resolve("goal", read("goal"), "Strategic Goal", true)
+		v.GoalID = resolve("goal", read("goal"), "Goal", true)
 		v.PillarID = resolve("pillar", read("pillar"), "Pillar", false)
 		v.EnablerID = resolve("enabler", read("enabler"), "Enabler", false)
 	case KpiMasterProcess:
@@ -1088,7 +1086,7 @@ func (imp *masterDataImporter) validateRec(r *masterImportRec) {
 			reject("Unit", "Unit must be at most 255 characters.")
 		}
 		v.OperationalObjectiveID = resolve("objective", read("operational_objective"), "Parent Objective", true)
-		v.GoalID = resolve("goal", read("goal"), "Strategic Goal", false)
+		v.GoalID = resolve("goal", read("goal"), "Goal", false)
 		v.PillarID = resolve("pillar", read("pillar"), "Pillar", false)
 		v.EnablerID = resolve("enabler", read("enabler"), "Enabler", false)
 		v.DepartmentID = resolve("department", read("department"), "Department", false)
@@ -1097,7 +1095,7 @@ func (imp *masterDataImporter) validateRec(r *masterImportRec) {
 				// The strategic goal always comes from the parent objective.
 				if ref.GoalID != nil {
 					if v.GoalID != nil && *v.GoalID != *ref.GoalID {
-						reject("Strategic Goal", "Strategic Goal must match the parent objective's strategic goal (leave it blank to inherit it).")
+						reject("Goal", "Goal must match the parent objective's goal (leave it blank to inherit it).")
 					}
 					v.GoalID = ref.GoalID
 				}
@@ -1109,11 +1107,11 @@ func (imp *masterDataImporter) validateRec(r *masterImportRec) {
 				}
 			}
 			if v.GoalID == nil && read("goal") == "" {
-				reject("Strategic Goal", "The parent objective has no strategic goal; enter the Strategic Goal.")
+				reject("Goal", "The parent objective has no goal; enter the Goal.")
 			}
 		}
 	case KpiMasterInitiative:
-		v.GoalID = resolve("goal", read("goal"), "Strategic Goal", true)
+		v.GoalID = resolve("goal", read("goal"), "Goal", true)
 		v.ObjectiveID = resolve("objective", read("objective"), "Parent Objective", false)
 		v.PillarID = resolve("pillar", read("pillar"), "Pillar", false)
 		v.EnablerID = resolve("enabler", read("enabler"), "Enabler", false)
@@ -1128,7 +1126,7 @@ func (imp *masterDataImporter) validateRec(r *masterImportRec) {
 		if v.AwardCriterionID != nil && v.SubNo != "" {
 			if no, ok := imp.criterionNos[*v.AwardCriterionID]; ok {
 				if msg := KpiSubNoPrefixError(no, v.SubNo); msg != "" {
-					reject("Sub No.", msg)
+					reject("Sub-Criterion No.", msg)
 				}
 			}
 		}
@@ -1143,6 +1141,14 @@ func (imp *masterDataImporter) validateRec(r *masterImportRec) {
 	r.Existing, conflict = imp.lookupExisting(r)
 	if conflict {
 		r.reject("Name (English)", "Name and Code identify different existing records. Correct one of them.")
+		return
+	}
+	if r.Existing != nil && r.Existing.Deleted {
+		if r.EntityType == KpiMasterAwardCriterion {
+			r.reject("Criterion No.", fmt.Sprintf("Criterion %d was previously deleted. Please choose another number.", r.Payload.CriterionNo))
+		} else {
+			r.reject("Name (English)", fmt.Sprintf("%q was previously deleted. Please choose another name.", r.Existing.NameEn))
+		}
 		return
 	}
 	if n := imp.ambiguousCount(r); n > 1 && imp.opts.ExistingMode == KpiImportExistingUpdate {
@@ -1277,7 +1283,7 @@ func (imp *masterDataImporter) finalize() {
 			r.action = existingAction
 			item.Action = existingAction
 			if existingAction == kpiImportActionSkip {
-				item.Reason = "record already exists (existing_mode=skip)"
+				item.Reason = "record already exists"
 			} else {
 				item.Reason = "existing record will be updated"
 			}

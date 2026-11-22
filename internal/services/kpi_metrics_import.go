@@ -276,24 +276,30 @@ func kpiMetricColumns() []colSpec {
 }
 
 func kpiMetricTemplateColumns() []kpiTemplateColumn {
+	// Ordered to follow the metric create form in the KPI detail frontend.
 	return []kpiTemplateColumn{
+		// Link to existing KPI (import-only context)
 		{key: "kpi_code", ar: "كود المؤشر", en: "KPI Code", width: 16},
 		{key: "kpi_type", ar: "نوع المؤشر", en: "KPI Type", width: 14,
 			values: []string{"strategic", "operational", "award"}, valuesAr: []string{"استراتيجي", "تشغيلي", "جائزة"}},
-		{key: "metric_code", ar: "كود المقياس", en: "Metric Code", width: 18},
+		// Basic details
 		{key: "metric_name", ar: "اسم المقياس", en: "Metric Name", width: 32},
-		{key: "metric_description", ar: "وصف المقياس", en: "Metric Description", width: 36},
+		{key: "metric_code", ar: "كود المقياس", en: "Metric Code", width: 18},
+		{key: "metric_type", ar: "نوع المقياس", en: "Metric Type", width: 14,
+			values: []string{"Numeric", "Percentage", "Currency", "Text"}, valuesAr: []string{"رقمي", "نسبة مئوية", "عملة", "نص"}},
 		{key: "metric_status", ar: "الحالة", en: "Status", width: 14,
 			values: []string{"Draft", "Active", "Inactive", "Archived"}, valuesAr: []string{"مسودة", "نشط", "غير نشط", "مؤرشف"}},
 		{key: "display_order", ar: "ترتيب العرض", en: "Display Order", width: 12},
-		{key: "metric_type", ar: "نوع المقياس", en: "Metric Type", width: 14,
-			values: []string{"Numeric", "Percentage", "Currency", "Text"}, valuesAr: []string{"رقمي", "نسبة مئوية", "عملة", "نص"}},
 		{key: "unit", ar: "الوحدة", en: "Unit", width: 16,
 			values: []string{"%", "Number", "Seconds", "Minutes", "Hours", "Days", "SAR", "Employees", "Requests", "Complaints", "Tasks", "Kilometers", "Square Meters", "Score", "Custom"}},
 		{key: "custom_unit_label", ar: "تسمية الوحدة المخصصة", en: "Custom Unit Label", width: 20},
 		{key: "baseline_value", ar: "قيمة خط الأساس", en: "Baseline Value", width: 14},
 		{key: "baseline_period", ar: "فترة خط الأساس (YYYY-MM)", en: "Baseline Period (YYYY-MM)", width: 20},
 		{key: "weight", ar: "الوزن (%)", en: "Weight (%)", width: 12},
+		{key: "start_date", ar: "تاريخ البدء (YYYY-MM-DD)", en: "Start Date (YYYY-MM-DD)", width: 18},
+		{key: "due_date", ar: "تاريخ الاستحقاق (YYYY-MM-DD)", en: "Due Date (YYYY-MM-DD)", width: 18},
+		{key: "metric_description", ar: "وصف المقياس", en: "Metric Description", width: 36},
+		// Measurement configuration
 		{key: "calculation_type", ar: "نوع الحساب", en: "Calculation Type", width: 22,
 			values:   []string{"Direct Value", "Percentage - Ratio", "Ratio", "Average", "Sum", "Difference", "Weighted Average", "Formula"},
 			valuesAr: []string{"قيمة مباشرة", "نسبة مئوية - نسبة", "نسبة", "متوسط", "مجموع", "فرق", "متوسط مرجح", "معادلة"}},
@@ -307,14 +313,18 @@ func kpiMetricTemplateColumns() []kpiTemplateColumn {
 		{key: "reporting_frequency", ar: "تكرار الإبلاغ", en: "Reporting Frequency", width: 20,
 			values:   []string{"Monthly", "Quarterly", "Semiannual", "Annual", "Ad Hoc", "Inherit from KPI"},
 			valuesAr: []string{"شهري", "ربع سنوي", "نصف سنوي", "سنوي", "حسب الحاجة", "وراثة من المؤشر"}},
+		// Input definition (ratio / direct)
 		{key: "numerator_label", ar: "تسمية البسط", en: "Numerator Label", width: 22},
 		{key: "numerator_variable_code", ar: "رمز متغير البسط", en: "Numerator Variable Code", width: 22},
 		{key: "denominator_label", ar: "تسمية المقام", en: "Denominator Label", width: 22},
 		{key: "denominator_variable_code", ar: "رمز متغير المقام", en: "Denominator Variable Code", width: 22},
 		{key: "direct_actual_label", ar: "تسمية القيمة الفعلية المباشرة", en: "Direct Actual Label", width: 24},
-		{key: "allow_manual_actual_override", ar: "السماح بالتجاوز اليدوي", en: "Allow Manual Override", width: 16,
-			values: []string{"Yes", "No"}, valuesAr: []string{"نعم", "لا"}},
+		// Formula readiness
 		{key: "advanced_formula_enabled", ar: "تفعيل المعادلة المتقدمة", en: "Advanced Formula Enabled", width: 18,
+			values: []string{"Yes", "No"}, valuesAr: []string{"نعم", "لا"}},
+		{key: "calculation_trace_required", ar: "مطلوب أثر الحساب", en: "Calculation Trace Required", width: 18,
+			values: []string{"Yes", "No"}, valuesAr: []string{"نعم", "لا"}},
+		{key: "allow_manual_actual_override", ar: "السماح بالتجاوز اليدوي", en: "Allow Manual Override", width: 16,
 			values: []string{"Yes", "No"}, valuesAr: []string{"نعم", "لا"}},
 		{key: "formula_code", ar: "رمز المعادلة", en: "Formula Code", width: 18},
 		{key: "divide_by_zero_handling", ar: "معالجة القسمة على صفر", en: "Divide by Zero Handling", width: 24,
@@ -323,15 +333,12 @@ func kpiMetricTemplateColumns() []kpiTemplateColumn {
 		{key: "rounding_rule", ar: "قاعدة التقريب", en: "Rounding Rule", width: 18,
 			values:   []string{"Standard Round", "Round Up", "Round Down", "No Rounding"},
 			valuesAr: []string{"تقريب قياسي", "تقريب لأعلى", "تقريب لأسفل", "بدون تقريب"}},
-		{key: "calculation_trace_required", ar: "مطلوب أثر الحساب", en: "Calculation Trace Required", width: 18,
-			values: []string{"Yes", "No"}, valuesAr: []string{"نعم", "لا"}},
+		{key: "formula", ar: "المعادلة", en: "Formula", width: 30},
+		// Governance
 		{key: "metric_owner", ar: "مالك المقياس (البريد الإلكتروني أو معرف المستخدم)", en: "Metric Owner (email or user ID)", width: 32},
 		{key: "data_source", ar: "مصدر البيانات", en: "Data Source", width: 22},
 		{key: "evidence_required", ar: "مطلوب دليل", en: "Evidence Required", width: 14,
 			values: []string{"Yes", "No"}, valuesAr: []string{"نعم", "لا"}},
-		{key: "start_date", ar: "تاريخ البدء (YYYY-MM-DD)", en: "Start Date (YYYY-MM-DD)", width: 18},
-		{key: "due_date", ar: "تاريخ الاستحقاق (YYYY-MM-DD)", en: "Due Date (YYYY-MM-DD)", width: 18},
-		{key: "formula", ar: "المعادلة", en: "Formula", width: 30},
 	}
 }
 
@@ -1085,7 +1092,7 @@ func (imp *kpiMetricsImporter) finalize() {
 			r.action = existingAction
 			item.Action = existingAction
 			if existingAction == kpiImportActionSkip {
-				item.Reason = "metric already exists (existing_mode=skip)"
+				item.Reason = "metric already exists"
 			} else {
 				item.Reason = "existing metric will be updated"
 			}

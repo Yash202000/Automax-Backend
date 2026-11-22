@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,6 +44,8 @@ type IncidentHandler struct {
 	lookupRepo          repository.LookupRepository
 	validator           *validator.Validate
 	cfg                 *config.Config
+	configAttachments   *services.ConfigAttachmentService
+	actionLogSvc        services.ActionLogService
 	notificationService *services.NotificationService
 }
 
@@ -90,6 +93,22 @@ func (h *IncidentHandler) SetReadyToCloseService(svc services.ReadyToCloseServic
 	h.readyToCloseService = svc
 }
 
+// SetActionLogService wires in the action log used to audit combined report generation.
+func (h *IncidentHandler) SetActionLogService(svc services.ActionLogService) { h.actionLogSvc = svc }
+
+// SetConfigAttachmentService wires in the attachment-config reader used for report logos.
+func (h *IncidentHandler) SetConfigAttachmentService(svc *services.ConfigAttachmentService) {
+	h.configAttachments = svc
+}
+
+// reportLogo returns the base64 logo stored in attachment config report-attachments/<name>, or "".
+func (h *IncidentHandler) reportLogo(ctx context.Context, name string) string {
+	if h.configAttachments == nil {
+		return ""
+	}
+	return h.configAttachments.FirstImageBase64(ctx, "report", name)
+}
+
 // SetLookupRepo wires in the LookupRepository for custom field category resolution.
 func (h *IncidentHandler) SetLookupRepo(repo repository.LookupRepository) {
 	h.lookupRepo = repo
@@ -105,7 +124,12 @@ func (h *IncidentHandler) GetReadyToCloseDurationOptions(c *fiber.Ctx) error {
 			"error":   i18n.T(c.UserContext(), "ready_to_close_service_unavailable"),
 		})
 	}
-	options := h.readyToCloseService.GetDurationOptionsForState(nil)
+	options := append([]string(nil), h.readyToCloseService.GetDurationOptionsForState(nil)...)
+	if lang, _ := c.Locals(constants.ContextKeys.ACCEPT_LANGUAGE).(string); lang == "ar" {
+		for i, o := range options {
+			options[i] = models.LocalizeDurationLabelAr(o)
+		}
+	}
 	return c.JSON(fiber.Map{
 		"success": true,
 		"data":    options,
@@ -140,6 +164,8 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 	}
 
 	// Parse query parameters
+	req.CallerIdentityText = strings.TrimSpace(req.CallerIdentityText)
+	req.CooperationStatus = strings.ToLower(strings.TrimSpace(req.CooperationStatus))
 	validationErrors := validation.ValidateStruct(c.UserContext(), &req)
 
 	if req.AlternateMobile != "" && utils.SameMobile(req.AlternateMobile, req.ReporterPhone) {
@@ -199,7 +225,28 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 			errors.Is(err, services.ErrClassificationNotSelectable):
 			return ErrorResponseWithKey(c, fiber.StatusBadRequest, err.Error(), req.Source)
 
+		// Per-workflow required-field failures discovered after the workflow
+		// was resolved. Return the same {"errors": {...}} shape as struct
+		// validation so the create form can highlight the field.
 		default:
+			var fieldErrors services.IncidentFieldErrors
+			if errors.As(err, &fieldErrors) {
+				if h.isEpmPortalSource(req.Source) {
+					parts := make([]string, 0, len(fieldErrors))
+					for field, msg := range fieldErrors {
+						parts = append(parts, fmt.Sprintf("%s: %v", field, msg))
+					}
+					return c.Status(fiber.StatusBadRequest).JSON(utils.ErrorCodeResponse{
+						Success:   false,
+						ErrorCode: "VALIDATION_ERROR",
+						Error:     strings.Join(parts, "; "),
+					})
+				}
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+					"success": false,
+					"errors":  fieldErrors,
+				})
+			}
 			return ErrorResponseWithKey(c, fiber.StatusInternalServerError, "internal_server_error", req.Source)
 		}
 	}
@@ -287,6 +334,8 @@ func parseIncidentSearchBodyExtras(c *fiber.Ctx, filter *models.IncidentFilter) 
 	if len(body.CustomFieldFilters) > 0 {
 		filter.CustomFieldFilters = body.CustomFieldFilters
 	}
+
+	filter.CooperationStatus = strings.ToLower(strings.TrimSpace(filter.CooperationStatus))
 
 	loc := utils.ResolveTimezone(body.Timezone)
 	if body.StartDateStr != "" && filter.StartDate == nil {
@@ -519,7 +568,7 @@ func (h *IncidentHandler) applyUserAccessScope(filter *models.IncidentFilter, us
 	// No explicit department filter requested -> the resulting DepartmentID
 	// comes purely from the user's scope, so this user's own incidents still
 	// in their workflow's initial state (not yet triaged to a department)
-	// should still be visible. Gated on state_type='initial' in the repo query.
+	// should still be visible (reporter/creator/assignee only, see repo query).
 	noExplicitDeptFilter := len(filter.DepartmentID) == 0
 	filter.DepartmentID = intersectScope(userDeptStrs, filter.DepartmentID)
 	if noExplicitDeptFilter && len(userDeptStrs) > 0 {
@@ -570,12 +619,12 @@ func (h *IncidentHandler) checkUserAccessToIncident(c *fiber.Ctx, incident *mode
 		}
 	}
 
-	// Incidents still in their workflow's initial state haven't been triaged
-	// to a department yet, so department scope can't be evaluated against
-	// them. Let the reporter/assignee through in that window; once the
-	// incident leaves its initial state, department scoping applies as usual
-	// (including denying access if department_id is still nil by then).
-	isInitialState := incident.CurrentState != nil && incident.CurrentState.StateType == "initial"
+	// Incidents with no department can't be evaluated against department scope.
+	// That is expected while still in the initial state, or once closed without
+	// ever being triaged (initial -> terminal). Let the reporter/creator/assignee
+	// through in those states; in a normal mid-workflow state it is still denied.
+	isInitialOrTerminal := incident.CurrentState != nil &&
+		(incident.CurrentState.StateType == "initial" || incident.CurrentState.StateType == "terminal")
 
 	if len(userDeptIDs) > 0 {
 		if incident.DepartmentID != nil {
@@ -589,7 +638,7 @@ func (h *IncidentHandler) checkUserAccessToIncident(c *fiber.Ctx, incident *mode
 			if !found {
 				return false
 			}
-		} else if !isInitialState {
+		} else if !isInitialOrTerminal {
 			return false
 		} else {
 			isReporter := (incident.ReporterID != nil && *incident.ReporterID == userID) ||
@@ -657,7 +706,7 @@ func (h *IncidentHandler) scopeIncidentFilterToUser(c *fiber.Ctx, filter *models
 	// Skip department/classification/location scoping entirely for Citizen role — those scopes
 	// are designed for internal staff and would incorrectly exclude incidents that were triaged
 	// to departments/classifications the citizen is not assigned to.
-	if findErr == nil && user != nil && !user.IsSuperAdmin && user.HasRole(constants.USER_ROLE.CITIZEN) {
+	if findErr == nil && user != nil && user.IsCitizenOnly(constants.USER_ROLE.CITIZEN) {
 		filter.ReporterID = []string{userID.String()}
 		roleIDs := make([]uuid.UUID, 0, len(user.Roles))
 		for _, r := range user.Roles {
@@ -776,6 +825,8 @@ func (h *IncidentHandler) scopeIncidentFilterToUser(c *fiber.Ctx, filter *models
 
 // listIncidentsCore contains the shared logic for both ListIncidents (GET) and SearchIncidents (POST).
 func (h *IncidentHandler) listIncidentsCore(c *fiber.Ctx, filter *models.IncidentFilter) error {
+	filter.CooperationStatus = strings.ToLower(strings.TrimSpace(filter.CooperationStatus))
+
 	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
@@ -1029,7 +1080,27 @@ func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
-	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+	if req.CallerIdentityText != nil {
+		v := strings.TrimSpace(*req.CallerIdentityText)
+		req.CallerIdentityText = &v
+	}
+	if req.CooperationStatus != nil {
+		v := strings.ToLower(strings.TrimSpace(*req.CooperationStatus))
+		req.CooperationStatus = &v
+	}
+
+	validationErrors := validation.ValidateStruct(c.UserContext(), &req)
+	if req.CooperationStatus != nil {
+		switch *req.CooperationStatus {
+		case "", "cooperative", "uncooperative":
+		default:
+			if validationErrors == nil {
+				validationErrors = map[string]string{}
+			}
+			validationErrors["cooperation_status"] = i18n.T(c.UserContext(), "invalid_cooperation_status")
+		}
+	}
+	if len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
 			"errors":  validationErrors,
@@ -1676,7 +1747,7 @@ func (h *IncidentHandler) GetStatsV2(c *fiber.Ctx) error {
 			// AMAX-4262: Citizens should only see stats for incidents they created.
 			// Skip department/classification/location scoping — same rationale as
 			// scopeIncidentFilterToUser above.
-			if u.HasRole(constants.USER_ROLE.CITIZEN) {
+			if u.IsCitizenOnly(constants.USER_ROLE.CITIZEN) {
 				filter.ReporterID = []string{statsUserID.String()}
 				for _, r := range u.Roles {
 					filter.UserRoleIDs = append(filter.UserRoleIDs, r.ID)
