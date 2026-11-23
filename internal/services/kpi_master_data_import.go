@@ -519,7 +519,7 @@ func masterColumnAliases(key string) []string {
 	case "owner":
 		return []string{"owner", "owner_id", "owner name", "owner (department)", "المالك", "المالك (الإدارة)"}
 	case "goal":
-		return []string{"goal", "goal_id", "strategic_goal", "strategic goal", "الهدف الاستراتيجي"}
+		return []string{"goal", "goal_id", "strategic_goal", "strategic goal", "الهدف", "الهدف الاستراتيجي"}
 	case "pillar":
 		return []string{"pillar", "pillar_id", "الركيزة"}
 	case "enabler":
@@ -539,7 +539,7 @@ func masterColumnAliases(key string) []string {
 	case "award_criterion":
 		return []string{"award_criterion", "award_criterion_id", "award criterion", "criterion", "معيار الجائزة"}
 	case "sub_no":
-		return []string{"sub_no", "subno", "sub no.", "sub number", "الرقم الفرعي"}
+		return []string{"sub_no", "subno", "sub no.", "sub number", "sub-criterion no.", "sub criterion no.", "الرقم الفرعي", "رقم المعيار الفرعي"}
 	case "contact_info":
 		return []string{"contact_info", "contactinfo", "contact info", "معلومات الاتصال"}
 	case "status":
@@ -552,7 +552,12 @@ func masterColSpecs(spec masterEntitySpec) []colSpec {
 	specs := make([]colSpec, 0, len(spec.cols))
 	for _, c := range spec.cols {
 		// Accept generated headers plus legacy aliases from older exports.
-		aliases := append([]string{c.en, c.ar}, masterColumnAliases(c.key)...)
+		// Headers are compared after normHeader (lowercase, no "*"), so the
+		// labels and aliases are normalised the same way.
+		var aliases []string
+		for _, a := range append([]string{c.en, c.ar}, masterColumnAliases(c.key)...) {
+			aliases = append(aliases, normHeader(a))
+		}
 		specs = append(specs, colSpec{key: c.key, match: hdrAny(aliases...), required: c.required})
 	}
 	return specs
