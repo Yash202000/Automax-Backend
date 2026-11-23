@@ -17,6 +17,7 @@ import (
 	"github.com/automax/backend/internal/licensing"
 	"github.com/automax/backend/internal/licensing/devseed"
 	"github.com/automax/backend/internal/middleware"
+	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
@@ -36,6 +37,8 @@ func main() {
 	godotenv.Load() // must be before config.Load() so .env values are in the environment
 	cfg := config.Load()
 	handlers.SetClientCode(cfg.ClientCode)
+	// Nazaha: hide an uncooperative reporter's details in incident responses.
+	models.SetHideUncooperativeReporter(cfg.IsNazaha())
 
 	log.Printf("GOAL_MANAGEMENT enabled: %v", cfg.GoalManagement.Enabled)
 	validation.InitValidatorRegistry()
@@ -595,6 +598,12 @@ func main() {
 	// Incident routes (authenticated users)
 	incidents := v1.Group("/incidents", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureIncidents)))
 	incidents.Post("/", authMiddleware.RequirePermission("incidents:create"), incidentHandler.CreateIncident)
+	// Nazaha create/edit-incident screen; create and edit use the routes above/below
+	// (registered before "/:id" so "previous-reports" isn't read as an ID)
+	if cfg.IsNazaha() {
+		incidents.Get("/previous-reports", authMiddleware.RequirePermission("incidents:create"), incidentHandler.ListCallerPreviousReports)
+		incidents.Get("/:id/reporter", authMiddleware.RequirePermission(models.PermissionRevealReporter), incidentHandler.RevealReporter)
+	}
 	incidents.Get("/", authMiddleware.RequirePermission("incidents:view"), incidentHandler.ListIncidents)
 	incidents.Post("/search", authMiddleware.RequirePermission("incidents:view"), incidentHandler.SearchIncidents)
 	incidents.Post("/search/markers", authMiddleware.RequirePermission("incidents:view"), incidentHandler.SearchIncidentMarkers)

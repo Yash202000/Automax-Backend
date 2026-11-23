@@ -4,6 +4,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/automax/backend/pkg/constants"
 )
 
 type Config struct {
@@ -48,6 +50,11 @@ type Config struct {
 	ChatbotURL                  string // env: CHATBOT_URL — URL of the chatbot (EPM940 ENV_CONFIGURATION lookup value). Default: placeholder — override in .env.
 	KpiDictionaryWorkflowCode   string // env: KPI_DICTIONARY_WORKFLOW_CODE — Workflow.Code the KPI Workflow (Draft->Reviewed->Approved->Active->Closed) is looked up by. Default: "kpi_dictionary_workflow" — must match the Code seeded in seed_kpi_dictionary_workflow.go, or nothing will resolve.
 	Geo                         GeoConfig
+}
+
+// IsNazaha reports whether this deployment is the Nazaha client.
+func (c *Config) IsNazaha() bool {
+	return strings.EqualFold(strings.TrimSpace(c.ClientCode), constants.CLIENT_CODE.NAZAHA)
 }
 
 // GeoConfig holds settings for geolocation-based queries (e.g. radius search

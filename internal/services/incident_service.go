@@ -511,8 +511,20 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 	clientCode := strings.TrimSpace(s.cfg.ClientCode)
 	// For EPM940, all sources is an unauthenticated channel where the citizen has no account yet,
 	// so fetch or auto-register a user based on their mobile number.
-	if req.Source != "" && req.ReporterName != "" && req.ReporterPhone != "" && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
-		user, err := s.userRepo.FindByMobile(ctx, req.ReporterPhone)
+	// Nazaha does the same, and also matches the reporter by national ID (see findReporterUser).
+	isEPM940 := strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940)
+	isNazaha := s.cfg.IsNazaha()
+	// Nazaha keeps every reporter (cooperative or not) as a contact: the contact is
+	// the only place the reporter's details are stored. Which reporter fields exist
+	// depends on the workflow, so any reporter detail creates or links a contact.
+	epmContact := isEPM940 && req.Source != "" && req.ReporterName != "" && req.ReporterPhone != ""
+	nazahaContact := isNazaha && hasNazahaReporterDetails(req)
+	if epmContact || nazahaContact {
+		user, err := s.findReporterUser(ctx, req, isNazaha)
+		var contactConflict IncidentFieldErrors
+		if errors.As(err, &contactConflict) {
+			return nil, err // Nazaha: mobile belongs to a different contact
+		}
 		if err != nil && err != gorm.ErrRecordNotFound {
 			fmt.Printf("CreateIncident: Error fetching user by mobile: %v\n", err)
 			LogContactFailure("Find contact from incident", "", req.ReporterPhone, err)
@@ -529,16 +541,32 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 			sourceSlug := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(req.Source)), " ", "")
 			epoch := time.Now().Unix()
 			normalizedPhone := pkgutils.NormalizeMobile(req.ReporterPhone, pkgutils.SystemCountryCode())
+			// Generated login identifiers use the mobile (always set for EPM940), or the
+			// national ID when a Nazaha reporter has no mobile.
+			idPart := strings.TrimPrefix(normalizedPhone, "+")
+			if idPart == "" {
+				idPart = req.ReporterNationalID
+			}
+			if idPart == "" {
+				idPart = strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+			}
 			registerReq := &models.UserRegisterRequest{
 				Phone:    normalizedPhone,
-				Email:    fmt.Sprintf("%s_%s_%d@%s", sourceSlug, strings.TrimPrefix(normalizedPhone, "+"), epoch, constants.APP.DOMAIN),
-				Username: fmt.Sprintf("%s_%s_%d", constants.ROLES.CITIZEN, strings.TrimPrefix(normalizedPhone, "+"), epoch),
+				Email:    fmt.Sprintf("%s_%s_%d@%s", sourceSlug, idPart, epoch, constants.APP.DOMAIN),
+				Username: fmt.Sprintf("%s_%s_%d", constants.ROLES.CITIZEN, idPart, epoch),
 				Password: pkgutils.GenerateRandomPassword(12),
 			}
 			if req.AlternateMobile != "" {
 				registerReq.AlternateMobile = pkgutils.NormalizeMobile(req.AlternateMobile, pkgutils.SystemCountryCode())
 			}
 			registerReq.FirstName, registerReq.MiddleName, registerReq.LastName = splitReporterName(req.ReporterName)
+			if isNazaha {
+				// No user has this national ID or email (findReporterUser checked), so they can be saved.
+				registerReq.NationalID = req.ReporterNationalID
+				if req.ReporterEmail != "" {
+					registerReq.Email = strings.ToLower(req.ReporterEmail)
+				}
+			}
 
 			if role != nil && role.ID != uuid.Nil {
 				registerReq.RoleIDs = []uuid.UUID{role.ID}
@@ -552,11 +580,16 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 			}
 
 			reporterID = authResp.User.ID
+			if isNazaha {
+				pendingUserUpdates = nazahaReporterUserUpdates(nil, req)
+				pendingUserUpdates["id"] = authResp.User.ID
+			}
 		} else {
 			reporterID = user.ID
 			first, middle, last := splitReporterName(req.ReporterName)
 			updates := make(map[string]interface{})
-			if first != user.FirstName || middle != user.MiddleName || last != user.LastName {
+			// An empty name (Nazaha workflow without the name field) never clears the contact's.
+			if req.ReporterName != "" && (first != user.FirstName || middle != user.MiddleName || last != user.LastName) {
 				updates["first_name"] = first
 				updates["middle_name"] = middle
 				updates["last_name"] = last
@@ -568,15 +601,24 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 					updates["alternate_mobile"] = alt
 				}
 			}
+			if isNazaha {
+				for k, v := range nazahaReporterUserUpdates(user, req) {
+					updates[k] = v
+				}
+			}
 			if len(updates) != 0 {
 				updates["id"] = user.ID
 				pendingUserUpdates = updates
 			}
 		}
-		if err := s.incidentRepo.UpdateReporterNameByPhone(ctx, req.ReporterPhone, req.ReporterName); err != nil {
-			fmt.Printf("CreateIncident: Error backfilling reporter name for phone %s: %v\n", req.ReporterPhone, err)
-			LogContactFailure("Update contact from incident", reporterID.String(), req.ReporterPhone, err)
-			return nil, err
+		// EPM940 only: rename the reporter on every earlier incident with this phone.
+		// Nazaha keeps each incident's reporter details as they were given.
+		if isEPM940 {
+			if err := s.incidentRepo.UpdateReporterNameByPhone(ctx, req.ReporterPhone, req.ReporterName); err != nil {
+				fmt.Printf("CreateIncident: Error backfilling reporter name for phone %s: %v\n", req.ReporterPhone, err)
+				LogContactFailure("Update contact from incident", reporterID.String(), req.ReporterPhone, err)
+				return nil, err
+			}
 		}
 	}
 	// Sources that bypass the 500m duplicate check, configurable via SKIP_DUPLICATE_CHECK_SOURCES (comma-separated)
@@ -812,9 +854,17 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		PostalCode:         req.PostalCode,
 		RecordType:         recordType,
 		Source:             req.Source,
+		// Nazaha fields (always empty for other clients: the create handler clears them).
+		CallerNumber:         req.CallerNumber,
+		LinkedIncidentID:     req.LinkedIncidentID,
+		ConcernedAuthorityID: parseUUIDPtr(derefTrim(req.ConcernedAuthorityID)),
+		Content:              req.Content,
+		Notes:                req.Notes,
+		Street:               req.Street,
 	}
 
-	if !strings.EqualFold(s.cfg.ClientCode, constants.CLIENT_CODE.EPM940) {
+	// EPM940 and Nazaha keep the reporter on the linked contact only.
+	if !isEPM940 && !isNazaha {
 		incident.ReporterName = req.ReporterName
 		incident.ReporterEmail = req.ReporterEmail
 		incident.ReporterPhone = req.ReporterPhone
@@ -892,6 +942,11 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 			return nil, err
 		}
 		break // Success, exit retry loop
+	}
+
+	// Nazaha: link the previous reports selected on the create screen.
+	if err := s.incidentRepo.CreatePreviousReportLinks(ctx, incident.ID, validUUIDs(req.PreviousReportIDs)); err != nil {
+		log.Printf("[IncidentService] failed to link previous reports to incident %s: %v", incident.ID, err)
 	}
 
 	// Save creation comment
@@ -1140,7 +1195,21 @@ func (s *incidentService) GetIncident(ctx context.Context, id uuid.UUID) (*model
 		return nil, err
 	}
 
+	if s.cfg.IsNazaha() {
+		if err := s.incidentRepo.LoadNazahaRelations(ctx, incident); err != nil {
+			return nil, err
+		}
+	}
+
 	resp := models.ToIncidentDetailResponse(incident)
+
+	if s.cfg.IsNazaha() {
+		previous, err := s.incidentRepo.ListPreviousReports(ctx, incident.ID)
+		if err != nil {
+			return nil, err
+		}
+		resp.PreviousReports = previous
+	}
 
 	// For requests created from bulk conversion, fetch all source incidents
 	if incident.RecordType == "request" && len(incident.SourceIncidentIDs) > 0 {
@@ -1451,6 +1520,19 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	// Track changes for revision
 	var changes []models.IncidentFieldChange
 	var descriptions []string
+
+	// Nazaha: its own fields on the incident, and reporter details on the contact
+	// (contact changes and previous-report links are saved after the commit).
+	var nazahaEdit *nazahaEditPlan
+	if s.cfg.IsNazaha() {
+		plan, nazahaChanges, err := s.prepareNazahaEdit(ctx, incident, req)
+		if err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+		nazahaEdit = plan
+		changes = append(changes, nazahaChanges...)
+	}
 
 	if req.Title != "" && req.Title != incident.Title {
 		oldVal := incident.Title
@@ -1954,6 +2036,11 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		updates["sla_deadline"] = *incident.SLADeadline
 		updates["sla_breached"] = incident.SLABreached
 	}
+	if nazahaEdit != nil {
+		for k, v := range nazahaEdit.incidentUpdates {
+			updates[k] = v
+		}
+	}
 	log.Println(len(updates), len(changes))
 	if len(updates) == 0 || len(changes) == 0 {
 		tx.Rollback()
@@ -1985,6 +2072,9 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	// Commit transaction
 	if err := tx.Commit().Error; err != nil {
 		return nil, err
+	}
+	if nazahaEdit != nil {
+		s.applyNazahaEdit(ctx, incident, nazahaEdit)
 	}
 
 	// Save optional comment attached to the update.
