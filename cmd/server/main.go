@@ -379,7 +379,7 @@ func main() {
 	kpiPerformanceHandler := handlers.NewKpiPerformanceHandler(db, kpiWorkflowService, actionLogService)
 
 	// KPI Engagement handler (metrics, evidence, collaborators, check-ins, comments, activity)
-	kpiEngagementHandler := handlers.NewKpiEngagementHandler(db, actionLogService, minioStorage, kpiDocumentaClient, cfg.KpiDocumenta)
+	kpiEngagementHandler := handlers.NewKpiEngagementHandler(db, actionLogService, minioStorage, kpiDocumentaClient, cfg.KpiDocumenta, kpiWorkflowService, cfg.JWT.Secret)
 
 	// KPI Evidence Folder Configuration handler (resolve/browse/create Documenta folders by taxonomy)
 	kpiDocumentaHandler := handlers.NewKpiDocumentaHandler(kpiDocumentaClient, cfg.KpiDocumenta)

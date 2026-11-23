@@ -89,7 +89,9 @@ func masterSpecFor(entityType string) (masterEntitySpec, bool) {
 			masterRequired("name_en", "Name (English)", "الاسم (بالإنجليزية)", 38),
 			masterColumn("name_ar", "Name (Arabic)", "الاسم (بالعربية)", 38),
 			masterRequired("operational_objective", "Parent Objective", "الهدف الرئيسي", 34),
-			masterRequired("goal", "Goal", "الهدف", 34),
+			// The goal is inherited from the parent objective; a value here
+			// is only checked against the parent's goal.
+			masterColumn("goal", "Goal", "الهدف", 34),
 			masterColumn("pillar", "Pillar", "الركيزة", 26),
 			masterColumn("enabler", "Enabler", "الممكّن", 26),
 			masterChoiceColumn("is_active", "Active", "نشط", 14, []string{"Yes", "No"}, []string{"نعم", "لا"}),
@@ -191,7 +193,10 @@ func kpiMasterDataFileSlug(entityType string) string {
 	}
 }
 
-func BuildKpiMasterDataImportTemplate(entityType, lang string) ([]byte, error) {
+// Reference columns are dropdowns of what exists in the system (Lists
+// sheet, filled from db at download time); a Strategic Goal fills in
+// automatically from the Parent Objective picked on the row.
+func BuildKpiMasterDataImportTemplate(ctx context.Context, db *gorm.DB, entityType, lang string) ([]byte, error) {
 	spec, ok := masterSpecFor(entityType)
 	if !ok {
 		return nil, fmt.Errorf("unknown master-data entity type %q", entityType)
@@ -199,6 +204,29 @@ func BuildKpiMasterDataImportTemplate(entityType, lang string) ([]byte, error) {
 	language := utils.LanguageEnglish
 	if lang == KpiTemplateLangAR {
 		language = utils.LanguageArabic
+	}
+	lists, err := kpiSystemLists(ctx, db, lang)
+	if err != nil {
+		return nil, fmt.Errorf("loading dropdown lists: %w", err)
+	}
+	cols := withLists(spec.cols, map[string]string{
+		"owner": listDepartments, "department": listDepartments, "goal": listGoals, "pillar": listPillars, "enabler": listEnablers,
+		"operational_objective": listObjectives, "objective": listObjectives, "award_criterion": listCriteriaNames,
+	})
+	// The strategic goal follows from the parent objective (Operational
+	// Objectives: "operational_objective"; Initiatives: "objective").
+	for _, parentKey := range []string{"operational_objective", "objective"} {
+		for _, c := range cols {
+			if c.key != parentKey {
+				continue
+			}
+			for i := range cols {
+				if cols[i].key == "goal" {
+					cols[i].formula = lookupFormula(templateColLetter(cols, parentKey), lookupParentName, lookupParentGoal)
+					cols[i].hintEn, cols[i].hintAr = "Filled automatically from the Parent Objective.", "يُعبأ تلقائياً من الهدف الرئيسي."
+				}
+			}
+		}
 	}
 	cfg := utils.WorkbookConfig{
 		Language:     language,
@@ -209,10 +237,12 @@ func BuildKpiMasterDataImportTemplate(entityType, lang string) ([]byte, error) {
 		Instructions: buildKpiMasterDataInstructions(spec),
 		Sheets: []utils.SheetConfig{{
 			Name:         spec.sheet,
-			Columns:      toExcelColumns(spec.cols),
+			Columns:      toExcelColumns(cols),
 			DataRows:     kpiMasterTemplateDataRows,
 			FreezeHeader: true,
 		}},
+		ListsSheet: kpiTemplateListsSheet,
+		Lists:      lists,
 	}
 	return utils.GenerateExcelTemplate(cfg)
 }
@@ -360,11 +390,16 @@ type masterDataImporter struct {
 	spec            masterEntitySpec
 	structuralError bool
 	sheet           string
+	onlySheet       string // read only this worksheet ("" = find it)
 	recs            []*masterImportRec
 
 	existing         map[string]*masterExisting
+	ambiguous        map[string]int // identity key → number of existing records sharing it (>1 only)
+	deletedCriteria  map[int]uuid.UUID
+	deletedDims      map[string]uuid.UUID
 	refs             map[string]*masterRefIndex
 	objectives       map[uuid.UUID]masterObjectiveRef
+	criterionNos     map[uuid.UUID]int
 	accepted         map[string]int    // identity key → Excel row already accepted
 	acceptedExisting map[uuid.UUID]int // resolved existing record → Excel row already accepted
 }
@@ -397,10 +432,18 @@ func CommitKpiMasterDataImport(ctx context.Context, db *gorm.DB, entityType stri
 }
 
 func buildKpiMasterDataPlan(ctx context.Context, db *gorm.DB, entityType string, data []byte, fileName string, userID uuid.UUID, opts KpiImportOptions) (*masterDataImporter, error) {
+	return buildKpiMasterDataPlanSheet(ctx, db, entityType, data, fileName, userID, opts, "")
+}
+
+// buildKpiMasterDataPlanSheet is buildKpiMasterDataPlan reading only the
+// named worksheet (the combined KPI workbook has one sheet per entity);
+// onlySheet "" finds the entity's sheet among all worksheets.
+func buildKpiMasterDataPlanSheet(ctx context.Context, db *gorm.DB, entityType string, data []byte, fileName string, userID uuid.UUID, opts KpiImportOptions, onlySheet string) (*masterDataImporter, error) {
 	spec, ok := masterSpecFor(entityType)
 	if !ok {
 		return nil, fmt.Errorf("unknown master-data entity type %q", entityType)
 	}
+	optErr := ValidateKpiMasterDataImportOptions(opts)
 	opts.normalize()
 	imp := &masterDataImporter{
 		db:         db,
@@ -408,6 +451,7 @@ func buildKpiMasterDataPlan(ctx context.Context, db *gorm.DB, entityType string,
 		entityType: entityType,
 		spec:       spec,
 		opts:       opts,
+		onlySheet:  onlySheet,
 		res: &KpiImportResult{
 			FileName: fileName,
 			Options:  opts,
@@ -415,6 +459,11 @@ func buildKpiMasterDataPlan(ctx context.Context, db *gorm.DB, entityType string,
 			Warnings: []KpiImportIssue{},
 			Items:    []KpiImportItem{},
 		},
+	}
+	if optErr != nil {
+		imp.structural("", optErr.Error())
+		imp.finalize()
+		return imp, nil
 	}
 	if err := imp.parseWorkbook(data); err != nil {
 		return nil, err
@@ -427,6 +476,34 @@ func buildKpiMasterDataPlan(ctx context.Context, db *gorm.DB, entityType string,
 	}
 	imp.finalize()
 	return imp, nil
+}
+
+// ValidateKpiMasterDataImportOptions rejects unknown existing_mode /
+// error_mode values instead of silently falling back to the defaults. Empty
+// values are allowed (defaults apply).
+func ValidateKpiMasterDataImportOptions(opts KpiImportOptions) error {
+	switch opts.ExistingMode {
+	case "", KpiImportExistingSkip, KpiImportExistingUpdate:
+	default:
+		return fmt.Errorf("existing_mode %q is not valid (allowed: %s, %s)", opts.ExistingMode, KpiImportExistingSkip, KpiImportExistingUpdate)
+	}
+	switch opts.ErrorMode {
+	case "", KpiImportErrorsSkipInvalid, KpiImportErrorsAbort:
+	default:
+		return fmt.Errorf("error_mode %q is not valid (allowed: %s, %s)", opts.ErrorMode, KpiImportErrorsSkipInvalid, KpiImportErrorsAbort)
+	}
+	return nil
+}
+
+// KpiSubNoPrefixError returns a message when subNo is not
+// "<criterionNo>.<something>" — sub-criteria are numbered under their
+// criterion (e.g. 3.1, 3.2 under criterion 3).
+func KpiSubNoPrefixError(criterionNo int, subNo string) string {
+	prefix := strconv.Itoa(criterionNo) + "."
+	if !strings.HasPrefix(subNo, prefix) || len(subNo) == len(prefix) {
+		return fmt.Sprintf("Sub No. %q must start with %q (the criterion number followed by a dot).", subNo, prefix)
+	}
+	return ""
 }
 
 // ─── Parser ─────────────────────────────────────────────────────────────────
@@ -535,7 +612,10 @@ func (imp *masterDataImporter) locateSheet(xf *excelize.File) (string, [][]strin
 	var found []candidate
 	for _, name := range xf.GetSheetList() {
 		normalized := normHeader(name)
-		if normalized == normHeader("Instructions") || normalized == "تعليمات" {
+		if normalized == normHeader("Instructions") || normalized == "تعليمات" || normalized == normHeader(kpiTemplateListsSheet) || normalized == "القوائم" {
+			continue
+		}
+		if imp.onlySheet != "" && name != imp.onlySheet {
 			continue
 		}
 		rows, err := xf.GetRows(name, excelize.Options{RawCellValue: true})
@@ -633,8 +713,12 @@ func masterRowEmpty(row []string) bool {
 
 func (imp *masterDataImporter) loadExisting(db *gorm.DB) error {
 	imp.existing = map[string]*masterExisting{}
+	imp.ambiguous = map[string]int{}
+	imp.deletedCriteria = map[int]uuid.UUID{}
+	imp.deletedDims = map[string]uuid.UUID{}
 	imp.refs = map[string]*masterRefIndex{}
 	imp.objectives = map[uuid.UUID]masterObjectiveRef{}
+	imp.criterionNos = map[uuid.UUID]int{}
 	imp.accepted = map[string]int{}
 	imp.acceptedExisting = map[uuid.UUID]int{}
 
@@ -712,13 +796,25 @@ func (imp *masterDataImporter) loadExisting(db *gorm.DB) error {
 	}
 	for _, c := range criteria {
 		addRef("criterion", c.ID, c.NameEn, c.NameAr, strconv.Itoa(c.CriterionNo))
+		imp.criterionNos[c.ID] = c.CriterionNo
 	}
 
 	addExisting := func(me *masterExisting, keys ...string) {
 		for _, key := range keys {
-			if key != "" {
-				imp.existing[key] = me
+			if key == "" {
+				continue
 			}
+			// Several live records can share an identity (e.g. duplicate
+			// names created before duplicates were blocked). Remember the
+			// ambiguity so an update never picks an arbitrary one.
+			if prev := imp.existing[key]; prev != nil && prev.ID != me.ID {
+				if imp.ambiguous[key] == 0 {
+					imp.ambiguous[key] = 1
+				}
+				imp.ambiguous[key]++
+				continue
+			}
+			imp.existing[key] = me
 		}
 	}
 
@@ -794,6 +890,15 @@ func (imp *masterDataImporter) loadExisting(db *gorm.DB) error {
 			addExisting(&masterExisting{ID: item.ID, NameEn: item.NameEn, NameAr: item.NameAr, Code: strconv.Itoa(item.CriterionNo), Deleted: item.DeletedAt.Valid},
 				"award-criterion|"+strconv.Itoa(item.CriterionNo))
 		}
+		// criterion_no has a plain unique index, so a soft-deleted criterion
+		// still holds its number; such rows are restored instead of inserted.
+		var deleted []models.AwardCriterion
+		if err := db.Unscoped().Select("id, criterion_no").Where("deleted_at IS NOT NULL").Find(&deleted).Error; err != nil {
+			return err
+		}
+		for _, item := range deleted {
+			imp.deletedCriteria[item.CriterionNo] = item.ID
+		}
 	case KpiMasterAwardSubCriterion:
 		var items []models.AwardSubCriterion
 		if err := db.Select("id, name_en, name_ar, award_criterion_id, sub_no, is_active").Find(&items).Error; err != nil {
@@ -831,6 +936,15 @@ func (imp *masterDataImporter) loadExisting(db *gorm.DB) error {
 		for _, item := range items {
 			addExisting(&masterExisting{ID: item.ID, NameEn: item.NameEn, NameAr: item.NameAr, Deleted: item.DeletedAt.Valid},
 				"segmentation-dimension|"+masterRefKey(item.NameEn))
+		}
+		// name_en has a plain unique index; a soft-deleted dimension with the
+		// exact same name is restored instead of inserted.
+		var deleted []models.KpiSegmentationDimension
+		if err := db.Unscoped().Select("id, name_en").Where("deleted_at IS NOT NULL").Find(&deleted).Error; err != nil {
+			return err
+		}
+		for _, item := range deleted {
+			imp.deletedDims[item.NameEn] = item.ID
 		}
 	case KpiMasterOrganization:
 		var items []models.KpiOrganization
@@ -968,6 +1082,9 @@ func (imp *masterDataImporter) validateRec(r *masterImportRec) {
 		v.PillarID = resolve("pillar", read("pillar"), "Pillar", false)
 		v.EnablerID = resolve("enabler", read("enabler"), "Enabler", false)
 	case KpiMasterProcess:
+		if utf8.RuneCountInString(read("unit")) > 255 {
+			reject("Unit", "Unit must be at most 255 characters.")
+		}
 		v.OperationalObjectiveID = resolve("objective", read("operational_objective"), "Parent Objective", true)
 		v.GoalID = resolve("goal", read("goal"), "Goal", false)
 		v.PillarID = resolve("pillar", read("pillar"), "Pillar", false)
@@ -975,7 +1092,11 @@ func (imp *masterDataImporter) validateRec(r *masterImportRec) {
 		v.DepartmentID = resolve("department", read("department"), "Department", false)
 		if v.OperationalObjectiveID != nil {
 			if ref, ok := imp.objectives[*v.OperationalObjectiveID]; ok {
-				if v.GoalID == nil && read("goal") == "" {
+				// The strategic goal always comes from the parent objective.
+				if ref.GoalID != nil {
+					if v.GoalID != nil && *v.GoalID != *ref.GoalID {
+						reject("Goal", "Goal must match the parent objective's goal (leave it blank to inherit it).")
+					}
 					v.GoalID = ref.GoalID
 				}
 				if v.PillarID == nil && read("pillar") == "" {
@@ -985,9 +1106,9 @@ func (imp *masterDataImporter) validateRec(r *masterImportRec) {
 					v.EnablerID = ref.EnablerID
 				}
 			}
-		}
-		if v.GoalID == nil && read("goal") == "" {
-			reject("Goal", "Goal is required.")
+			if v.GoalID == nil && read("goal") == "" {
+				reject("Goal", "The parent objective has no goal; enter the Goal.")
+			}
 		}
 	case KpiMasterInitiative:
 		v.GoalID = resolve("goal", read("goal"), "Goal", true)
@@ -995,8 +1116,20 @@ func (imp *masterDataImporter) validateRec(r *masterImportRec) {
 		v.PillarID = resolve("pillar", read("pillar"), "Pillar", false)
 		v.EnablerID = resolve("enabler", read("enabler"), "Enabler", false)
 		v.OwnerID = resolve("department", read("owner"), "Owner", false)
+		if v.ObjectiveID != nil && v.GoalID != nil {
+			if ref, ok := imp.objectives[*v.ObjectiveID]; ok && (ref.GoalID == nil || *ref.GoalID != *v.GoalID) {
+				reject("Parent Objective", "Parent Objective must belong to the initiative's Strategic Goal.")
+			}
+		}
 	case KpiMasterAwardSubCriterion:
 		v.AwardCriterionID = resolve("criterion", read("award_criterion"), "Award Criterion", true)
+		if v.AwardCriterionID != nil && v.SubNo != "" {
+			if no, ok := imp.criterionNos[*v.AwardCriterionID]; ok {
+				if msg := KpiSubNoPrefixError(no, v.SubNo); msg != "" {
+					reject("Sub-Criterion No.", msg)
+				}
+			}
+		}
 	}
 
 	if r.Rejected {
@@ -1016,6 +1149,10 @@ func (imp *masterDataImporter) validateRec(r *masterImportRec) {
 		} else {
 			r.reject("Name (English)", fmt.Sprintf("%q was previously deleted. Please choose another name.", r.Existing.NameEn))
 		}
+		return
+	}
+	if n := imp.ambiguousCount(r); n > 1 && imp.opts.ExistingMode == KpiImportExistingUpdate {
+		r.reject("Name (English)", fmt.Sprintf("%d existing records match this row; it cannot be updated unambiguously. Remove the duplicates in Master Data first.", n))
 		return
 	}
 	for _, key := range keys {
@@ -1091,6 +1228,32 @@ func (imp *masterDataImporter) lookupExisting(r *masterImportRec) (*masterExisti
 	return found, false
 }
 
+// ambiguousCount returns how many existing records share any of the row's
+// identity keys (0 when the match is unique or absent).
+func (imp *masterDataImporter) ambiguousCount(r *masterImportRec) int {
+	max := 0
+	for _, key := range imp.identityKeys(r) {
+		if n := imp.ambiguous[key]; n > max {
+			max = n
+		}
+	}
+	return max
+}
+
+// restoresDeleted reports whether creating r will un-delete a soft-deleted
+// record that still holds its unique key.
+func (imp *masterDataImporter) restoresDeleted(r *masterImportRec) bool {
+	switch r.EntityType {
+	case KpiMasterAwardCriterion:
+		_, ok := imp.deletedCriteria[r.Payload.CriterionNo]
+		return ok
+	case KpiMasterSegmentationDimension:
+		_, ok := imp.deletedDims[r.Payload.NameEn]
+		return ok
+	}
+	return false
+}
+
 // ─── Finalize ───────────────────────────────────────────────────────────────
 
 func (imp *masterDataImporter) finalize() {
@@ -1130,6 +1293,9 @@ func (imp *masterDataImporter) finalize() {
 		default:
 			r.action = kpiImportActionCreate
 			item.Action = kpiImportActionCreate
+			if imp.restoresDeleted(r) {
+				item.Reason = "restores a previously deleted record with the same identity"
+			}
 			if (r.EntityType == KpiMasterDomain || r.EntityType == KpiMasterAwardKpiMeasure) && r.Payload.Code != "" {
 				imp.warn(imp.sheet, r.Row, r.recordID(), "Code", "Code is assigned automatically; the Code cell is ignored when creating a record.")
 			}

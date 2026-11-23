@@ -251,6 +251,11 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		if err := migrations.MigrateKpiEntryMultiOrgScope(migrationDB); err != nil {
 			log.Printf("Warning: KPI entry multi-org-scope migration failed: %v", err)
 		}
+		// Must run after the v3 index above: case-insensitive period codes,
+		// uniqueness for KPI-level targets, one approved version per key.
+		if err := migrations.MigrateKpiTargetUniqueIndexV4(migrationDB); err != nil {
+			log.Printf("Warning: KPI target unique index v4 migration failed: %v", err)
+		}
 
 		// Strategic/Operational/Award KPIs now share one create form: Objective
 		// is the one universal required taxonomy field, and Award Criteria/
@@ -854,9 +859,12 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			// KPI / Goal Management permissions
 			models.Permission{Name: "Manage Goal Hierarchy", Code: "goals:manage", Module: "goals", Action: "manage", ActionAr: "إدارة", Description: "Create/update/delete goal hierarchy master data"},
 			models.Permission{Name: "View KPI Dictionary", Code: "kpi:view", Module: "kpi", Action: "view", ActionAr: "عرض", Description: "View KPI definitions"},
-			models.Permission{Name: "Create KPI Definitions", Code: "kpi:create", Module: "kpi", Action: "create", ActionAr: "إنشاء", Description: "Create new KPI definitions"},
-			models.Permission{Name: "Update KPI Definitions", Code: "kpi:update", Module: "kpi", Action: "update", ActionAr: "تحديث", Description: "Edit KPI metadata, formula, targets"},
-			models.Permission{Name: "Delete KPI Definitions", Code: "kpi:delete", Module: "kpi", Action: "delete", ActionAr: "حذف", Description: "Soft-delete KPI records"},
+			// Names must be unique (idx_permissions_name): "Create/Update/Delete
+			// KPI Definitions" already belong to the legacy kpi:definitions:*
+			// permissions, which made these three silently fail to seed.
+			models.Permission{Name: "Create KPIs", NameAr: "إنشاء مؤشرات الأداء", Code: "kpi:create", Module: "kpi", Action: "create", ActionAr: "إنشاء", Description: "Create KPIs, their metrics and bulk imports", DescriptionAr: "إنشاء مؤشرات الأداء ومقاييسها والاستيراد المجمع"},
+			models.Permission{Name: "Update KPIs", NameAr: "تحديث مؤشرات الأداء", Code: "kpi:update", Module: "kpi", Action: "update", ActionAr: "تحديث", Description: "Edit KPIs, metrics, entries, evidence and comments", DescriptionAr: "تعديل مؤشرات الأداء والمقاييس والمدخلات والأدلة والتعليقات"},
+			models.Permission{Name: "Delete KPIs", NameAr: "حذف مؤشرات الأداء", Code: "kpi:delete", Module: "kpi", Action: "delete", ActionAr: "حذف", Description: "Soft-delete KPI records", DescriptionAr: "حذف سجلات مؤشرات الأداء حذفًا مبدئيًا"},
 			models.Permission{Name: "Approve KPI Performance", Code: "kpi:approve", Module: "kpi", Action: "approve", ActionAr: "موافقة", Description: "Approve/reject KPI performance submissions from the approvals inbox"},
 			models.Permission{Name: "Assign KPI Collaborators", Code: "kpi:assign", Module: "kpi", Action: "assign", ActionAr: "تعيين", Description: "Add/remove collaborators on a KPI definition"},
 			models.Permission{Name: "View Performance Data", Code: "perf:view", Module: "perf", Action: "view", ActionAr: "عرض", Description: "View KPI performance data"},
@@ -1119,6 +1127,10 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		db.Model(&l1ReviewerRole).Association("Permissions").Append(l1ReviewerPerms)
 	}
 
+	if cfg.GoalManagement.Enabled {
+		grantKpiCrudPermissions(db)
+	}
+
 	// Grant extension-management permissions to the agent role (if it exists).
 	// Admin already receives all permissions above; super admins bypass permission
 	// checks entirely. We append (not replace) so any other agent permissions stay intact.
@@ -1196,6 +1208,47 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 	}
 	log.Println("Database seeding completed")
 	return nil
+}
+
+// kpiCrudGrants lists, per role code, which of kpi:create/update/delete the
+// role receives on every startup. Admin gets everything; the KPI Owner
+// creates, edits and deletes the KPIs it owns (per-KPI collaborator access
+// still applies on top); the L1 Reviewer needs kpi:update for the KPI
+// Workflow transition route.
+var kpiCrudGrants = map[string][]string{
+	"admin":       {"kpi:create", "kpi:update", "kpi:delete"},
+	"kpi_owner":   {"kpi:create", "kpi:update", "kpi:delete"},
+	"l1_reviewer": {"kpi:update"},
+}
+
+// grantKpiCrudPermissions makes kpi:create/update/delete usable on databases
+// seeded before they could be created (their names collided with the legacy
+// kpi:definitions:* permissions, so they never existed and no role held
+// them). Idempotent: only missing role_permissions rows are inserted. Besides
+// the fixed grants above, any role that holds a legacy
+// kpi:definitions:create/update/delete permission receives the matching new
+// one, so roles an administrator already configured keep working.
+func grantKpiCrudPermissions(db *gorm.DB) {
+	for roleCode, permCodes := range kpiCrudGrants {
+		if err := db.Exec(`
+			INSERT INTO role_permissions (role_id, permission_id)
+			SELECT r.id, p.id FROM roles r, permissions p
+			WHERE r.code = ? AND r.deleted_at IS NULL AND p.code IN ? AND p.deleted_at IS NULL
+			ON CONFLICT DO NOTHING`, roleCode, permCodes).Error; err != nil {
+			log.Printf("Failed to grant %v to role %s: %v", permCodes, roleCode, err)
+		}
+	}
+	for _, action := range []string{"create", "update", "delete"} {
+		if err := db.Exec(`
+			INSERT INTO role_permissions (role_id, permission_id)
+			SELECT DISTINCT rp.role_id, p.id
+			FROM role_permissions rp
+			JOIN permissions legacy ON legacy.id = rp.permission_id AND legacy.code = ? AND legacy.deleted_at IS NULL
+			JOIN permissions p ON p.code = ? AND p.deleted_at IS NULL
+			ON CONFLICT DO NOTHING`, "kpi:definitions:"+action, "kpi:"+action).Error; err != nil {
+			log.Printf("Failed to mirror kpi:definitions:%s onto kpi:%s: %v", action, action, err)
+		}
+	}
 }
 
 // unseedGoalManagement hard-deletes all goal-related rows from the DB.

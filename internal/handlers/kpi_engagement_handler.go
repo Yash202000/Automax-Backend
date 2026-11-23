@@ -2,11 +2,19 @@ package handlers
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"math"
+	"mime"
+	"net/http"
+	"net/url"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -44,9 +52,16 @@ type KpiEngagementHandler struct {
 	storage         *storage.MinIOStorage
 	documentaClient storage.DocumentaClient
 	documentaCfg    config.DocumentaConfig
+	workflowSvc     *services.KpiWorkflowService
+	// uploadKey signs the file references UploadAttachment hands out, so
+	// CreateEvidence only accepts files this module uploaded for that KPI.
+	uploadKey []byte
 }
 
-func NewKpiEngagementHandler(db *gorm.DB, actionLogSvc services.ActionLogService, storage *storage.MinIOStorage, documentaClient storage.DocumentaClient, documentaCfg config.DocumentaConfig) *KpiEngagementHandler {
+// NewKpiEngagementHandler builds the handler. uploadSecret (the server's JWT
+// secret) keys the signature on uploaded evidence references.
+func NewKpiEngagementHandler(db *gorm.DB, actionLogSvc services.ActionLogService, storage *storage.MinIOStorage, documentaClient storage.DocumentaClient, documentaCfg config.DocumentaConfig, workflowSvc *services.KpiWorkflowService, uploadSecret string) *KpiEngagementHandler {
+	key := sha256.Sum256([]byte("kpi-evidence-upload|" + uploadSecret))
 	return &KpiEngagementHandler{
 		db:              db,
 		validator:       validator.New(),
@@ -54,6 +69,8 @@ func NewKpiEngagementHandler(db *gorm.DB, actionLogSvc services.ActionLogService
 		storage:         storage,
 		documentaClient: documentaClient,
 		documentaCfg:    documentaCfg,
+		workflowSvc:     workflowSvc,
+		uploadKey:       key[:],
 	}
 }
 
@@ -167,32 +184,39 @@ func (h *KpiEngagementHandler) ListMetrics(c *fiber.Ctx) error {
 // matching (kpi_id, kpi_type) pair.
 // GET /kpi/metrics-by-code/:code
 func (h *KpiEngagementHandler) ListMetricsByCode(c *fiber.Ctx) error {
-	kpiCode := c.Params("code")
+	kpiCode := strings.TrimSpace(c.Params("code"))
+	if decoded, err := url.PathUnescape(kpiCode); err == nil {
+		kpiCode = strings.TrimSpace(decoded)
+	}
 	if kpiCode == "" {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
+	kpiType := c.Query("type")
+	if kpiType != "" && !isValidKpiType(kpiType) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "type must be strategic, operational or award")
+	}
 
-	// Search across all three KPI dictionary tables
+	// Codes are matched case-insensitively; ?type= narrows the lookup to one
+	// KPI type, otherwise strategic, operational and award are tried in turn.
 	type kpiLookup struct {
 		ID   uuid.UUID
+		Code string
 		Type string
 	}
 	var found *kpiLookup
-
-	var skpi models.StrategicKPI
-	if err := h.db.WithContext(c.UserContext()).Where("code = ?", kpiCode).First(&skpi).Error; err == nil {
-		found = &kpiLookup{ID: skpi.ID, Type: models.KPITypeStrategic}
-	}
-	if found == nil {
-		var okpi models.OperationalKPI
-		if err := h.db.WithContext(c.UserContext()).Where("code = ?", kpiCode).First(&okpi).Error; err == nil {
-			found = &kpiLookup{ID: okpi.ID, Type: models.KPITypeOperational}
+	for _, t := range []string{models.KPITypeStrategic, models.KPITypeOperational, models.KPITypeAward} {
+		if kpiType != "" && t != kpiType {
+			continue
 		}
-	}
-	if found == nil {
-		var akpi models.AwardKPI
-		if err := h.db.WithContext(c.UserContext()).Where("code = ?", kpiCode).First(&akpi).Error; err == nil {
-			found = &kpiLookup{ID: akpi.ID, Type: models.KPITypeAward}
+		var row struct {
+			ID   uuid.UUID
+			Code string
+		}
+		h.db.WithContext(c.UserContext()).Table(kpiDictTable(t)).Select("id, code").
+			Where("upper(trim(code)) = upper(?) AND deleted_at IS NULL", kpiCode).Limit(1).Scan(&row)
+		if row.ID != uuid.Nil {
+			found = &kpiLookup{ID: row.ID, Code: row.Code, Type: t}
+			break
 		}
 	}
 
@@ -212,7 +236,7 @@ func (h *KpiEngagementHandler) ListMetricsByCode(c *fiber.Ctx) error {
 	}
 	for i := range items {
 		items[i].EffectiveTargetValue, items[i].EffectiveTargetPeriod =
-			services.GetEffectiveTarget(db, kpiCode, found.Type, items[i].ID)
+			services.GetEffectiveTarget(db, found.Code, found.Type, items[i].ID)
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, "", items)
 }
@@ -223,9 +247,9 @@ const duplicateMetricNameMsg = "Metric name already exists under this KPI. Pleas
 // KPI already uses name — compared trimmed and case-insensitively, so
 // "Roads Resurfaced" and " roads resurfaced" count as the same name. The
 // same name under a different KPI is allowed.
-func (h *KpiEngagementHandler) metricNameTaken(c *fiber.Ctx, kpiType string, kpiID uuid.UUID, name string, excludeID uuid.UUID) bool {
+func (h *KpiEngagementHandler) metricNameTaken(db *gorm.DB, kpiType string, kpiID uuid.UUID, name string, excludeID uuid.UUID) bool {
 	var count int64
-	h.db.WithContext(c.UserContext()).Model(&models.KpiMetric{}).
+	db.Model(&models.KpiMetric{}).
 		Where("kpi_type = ? AND kpi_id = ? AND id <> ? AND lower(trim(name)) = lower(trim(?))", kpiType, kpiID, excludeID, name).
 		Count(&count)
 	return count > 0
@@ -252,12 +276,12 @@ func (h *KpiEngagementHandler) metricConfigLocked(c *fiber.Ctx, kpiType string, 
 // would push the KPI's Active metric weights past 100% (BR-07). Inactive
 // metrics don't count, matching the activation gate. Returns the weight
 // already used by the KPI's other Active metrics, for the error message.
-func (h *KpiEngagementHandler) metricWeightExceeds(c *fiber.Ctx, kpiType string, kpiID, excludeID uuid.UUID, status string, weight float64) (float64, bool, error) {
+func (h *KpiEngagementHandler) metricWeightExceeds(db *gorm.DB, kpiType string, kpiID, excludeID uuid.UUID, status string, weight float64) (float64, bool, error) {
 	if status != "Active" {
 		return 0, false, nil
 	}
 	var used float64
-	err := h.db.WithContext(c.UserContext()).Model(&models.KpiMetric{}).
+	err := db.Model(&models.KpiMetric{}).
 		Where("kpi_type = ? AND kpi_id = ? AND id <> ? AND metric_status = ?", kpiType, kpiID, excludeID, "Active").
 		Select("COALESCE(SUM(weight), 0)").Scan(&used).Error
 	if err != nil {
@@ -265,6 +289,127 @@ func (h *KpiEngagementHandler) metricWeightExceeds(c *fiber.Ctx, kpiType string,
 	}
 	used = math.Round(used*100) / 100
 	return used, used+weight > 100.005, nil
+}
+
+// errMetricRejected carries a 4xx answer out of a metric transaction.
+type errMetricRejected struct {
+	status int
+	msg    string
+}
+
+func (e *errMetricRejected) Error() string { return e.msg }
+
+// lockKpiForMetrics takes the KPI row lock that serializes metric writes on
+// one KPI, so concurrent creates/updates cannot each pass the 100% weight
+// check against the same stale total, or both take the same name.
+func lockKpiForMetrics(tx *gorm.DB, kpiType string, kpiID uuid.UUID) error {
+	var row struct{ ID uuid.UUID }
+	if err := tx.Table(kpiDictTable(kpiType)).Select("id").
+		Where("id = ? AND deleted_at IS NULL", kpiID).
+		Clauses(clause.Locking{Strength: "UPDATE"}).Limit(1).Scan(&row).Error; err != nil {
+		return err
+	}
+	if row.ID == uuid.Nil {
+		return &errMetricRejected{status: fiber.StatusNotFound, msg: "KPI not found"}
+	}
+	return nil
+}
+
+// metricBodyKeys returns the top-level JSON keys present in the request body,
+// so an update can tell an omitted field (keep) from an explicit zero/false
+// (write). ok=false when the body is not a JSON object.
+func metricBodyKeys(c *fiber.Ctx) (map[string]bool, bool) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(c.Body(), &raw); err != nil {
+		return nil, false
+	}
+	keys := make(map[string]bool, len(raw))
+	for k := range raw {
+		keys[k] = true
+	}
+	return keys, true
+}
+
+// parseMetricOwner validates metric_owner_id: empty clears it, a malformed
+// UUID or a user that does not exist is a 400.
+func (h *KpiEngagementHandler) parseMetricOwner(db *gorm.DB, raw *string) (*uuid.UUID, string) {
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		return nil, ""
+	}
+	id, err := uuid.Parse(strings.TrimSpace(*raw))
+	if err != nil {
+		return nil, fmt.Sprintf("metric_owner_id %q is not a valid user ID", *raw)
+	}
+	var n int64
+	db.Model(&models.User{}).Where("id = ?", id).Count(&n)
+	if n == 0 {
+		return nil, fmt.Sprintf("Metric owner %s was not found", id)
+	}
+	return &id, ""
+}
+
+// metricIssuesMessage joins validation issues into one error message.
+func metricIssuesMessage(issues []services.KpiMetricIssue) string {
+	msgs := make([]string, len(issues))
+	for i, is := range issues {
+		msgs[i] = is.Message
+	}
+	return strings.Join(msgs, " ")
+}
+
+// checkMetricFormula validates a Formula metric against the names of the
+// KPI's other metrics.
+func (h *KpiEngagementHandler) checkMetricFormula(db *gorm.DB, m *models.KpiMetric, excludeID uuid.UUID) string {
+	if m.CalculationType != "Formula" {
+		return ""
+	}
+	var names []string
+	db.Model(&models.KpiMetric{}).Where("kpi_type = ? AND kpi_id = ? AND id <> ?", m.KpiType, m.KpiID, excludeID).Pluck("name", &names)
+	return services.ValidateKpiMetricFormula(m.Formula, m.Name, names)
+}
+
+// checkKpiDefinitionEditable answers 403 unless the user may change the
+// KPI's definition (its metrics included) in the KPI's current workflow
+// state. ok=false means the response is already written.
+func (h *KpiEngagementHandler) checkKpiDefinitionEditable(c *fiber.Ctx, kpiType string, kpiID uuid.UUID) (bool, error) {
+	if h.workflowSvc == nil {
+		return true, nil
+	}
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	ok, state, err := h.workflowSvc.CanEditKpiDefinition(c.UserContext(), kpiType, kpiID, userID)
+	if errors.Is(err, services.ErrKpiDictionaryNotFound) {
+		return false, utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	if err != nil {
+		return false, utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "internal_server_error"))
+	}
+	if !ok {
+		return false, utils.ErrorResponse(c, fiber.StatusForbidden,
+			fmt.Sprintf("This KPI is %s; your role cannot change its metrics in this workflow state", state))
+	}
+	return true, nil
+}
+
+// metricEntryCount counts the KPI entries of a metric in the given statuses
+// (all statuses when none are given).
+func metricEntryCount(db *gorm.DB, metricID uuid.UUID, statuses ...string) int64 {
+	q := db.Model(&models.KpiEntry{}).Where("metric_id = ?", metricID)
+	if len(statuses) > 0 {
+		q = q.Where("status IN ?", statuses)
+	}
+	var n int64
+	q.Count(&n)
+	return n
+}
+
+// metricTxError answers for an error returned from a metric transaction.
+func metricTxError(c *fiber.Ctx, err error, fallbackKey string) error {
+	var rej *errMetricRejected
+	if errors.As(err, &rej) {
+		return utils.ErrorResponse(c, rej.status, rej.msg)
+	}
+	log.Printf("[kpi_engagement] metric write failed: %v", err)
+	return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), fallbackKey))
 }
 
 func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
@@ -276,6 +421,7 @@ func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
+	present, _ := metricBodyKeys(c)
 	req.Name = strings.TrimSpace(req.Name)
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
@@ -284,50 +430,30 @@ func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
 	if !validBaselinePeriod(req.BaselinePeriod) {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "kpi_baseline_period_invalid"))
 	}
+	if ok, resp := h.checkKpiDefinitionEditable(c, kpiType, id); !ok {
+		return resp
+	}
+	db := h.db.WithContext(c.UserContext())
+	metricOwnerID, ownerErr := h.parseMetricOwner(db, req.MetricOwnerID)
+	if ownerErr != "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, ownerErr)
+	}
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-	metricType := req.MetricType
-	if metricType == "" {
-		metricType = "Numeric"
-	}
-	calcType := req.CalculationType
-	if calcType == "" {
-		calcType = "Direct Value"
-	}
-	direction := req.Direction
-	if direction == "" {
-		direction = "Higher is Better"
-	}
-	aggMethod := req.AggregationMethod
-	if aggMethod == "" {
-		aggMethod = "Sum"
-	}
-	metricStatus := req.MetricStatus
-	if metricStatus == "" {
-		metricStatus = "Active"
-	}
-	divideByZero := req.DivideByZeroHandling
-	if divideByZero == "" {
-		divideByZero = "Block Submission"
-	}
-	roundingRule := req.RoundingRule
-	if roundingRule == "" {
-		roundingRule = "Standard Round"
-	}
-	var metricOwnerID *uuid.UUID
-	if req.MetricOwnerID != nil && *req.MetricOwnerID != "" {
-		if mid, err := uuid.Parse(*req.MetricOwnerID); err == nil {
-			metricOwnerID = &mid
+	or := func(v, def string) string {
+		if strings.TrimSpace(v) == "" {
+			return def
 		}
+		return v
 	}
 	item := &models.KpiMetric{
 		KpiID:                     id,
 		KpiType:                   kpiType,
 		Name:                      req.Name,
-		MetricCode:                req.MetricCode,
+		MetricCode:                strings.TrimSpace(req.MetricCode),
 		MetricDescription:         req.MetricDescription,
-		MetricStatus:              metricStatus,
+		MetricStatus:              or(req.MetricStatus, "Active"),
 		DisplayOrder:              req.DisplayOrder,
-		MetricType:                metricType,
+		MetricType:                or(req.MetricType, "Numeric"),
 		Unit:                      req.Unit,
 		CustomUnitLabel:           req.CustomUnitLabel,
 		BaselineValue:             req.BaselineValue,
@@ -335,10 +461,10 @@ func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
 		CurrentValue:              req.BaselineValue,
 		Weight:                    req.Weight,
 		Formula:                   req.Formula,
-		CalculationType:           calcType,
-		Direction:                 direction,
+		CalculationType:           or(req.CalculationType, "Direct Value"),
+		Direction:                 or(req.Direction, "Higher is Better"),
 		DecimalPrecision:          req.DecimalPrecision,
-		AggregationMethod:         aggMethod,
+		AggregationMethod:         or(req.AggregationMethod, "Sum"),
 		ReportingFrequency:        req.ReportingFrequency,
 		NumeratorLabel:            req.NumeratorLabel,
 		NumeratorVariableCode:     req.NumeratorVariableCode,
@@ -348,8 +474,8 @@ func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
 		AllowManualActualOverride: req.AllowManualActualOverride,
 		AdvancedFormulaEnabled:    req.AdvancedFormulaEnabled,
 		FormulaCode:               req.FormulaCode,
-		DivideByZeroHandling:      divideByZero,
-		RoundingRule:              roundingRule,
+		DivideByZeroHandling:      or(req.DivideByZeroHandling, "Block Submission"),
+		RoundingRule:              or(req.RoundingRule, "Standard Round"),
 		CalculationTraceRequired:  req.CalculationTraceRequired,
 		MetricOwnerID:             metricOwnerID,
 		DataSource:                req.DataSource,
@@ -358,19 +484,38 @@ func (h *KpiEngagementHandler) CreateMetric(c *fiber.Ctx) error {
 		DueDate:                   req.DueDate,
 		CreatedByID:               userID,
 	}
-	if item.Weight == 0 {
+	// Omitted fields take the form's defaults; an explicit weight of 0 or
+	// calculation_trace_required=false is kept (and stored, see
+	// models.CreateKpiMetric).
+	if !present["weight"] {
 		item.Weight = 1
 	}
-	if h.metricNameTaken(c, kpiType, id, req.Name, uuid.Nil) {
-		return utils.ErrorResponse(c, fiber.StatusConflict, duplicateMetricNameMsg)
+	if !present["calculation_trace_required"] {
+		item.CalculationTraceRequired = true
 	}
-	if used, over, err := h.metricWeightExceeds(c, kpiType, id, uuid.Nil, item.MetricStatus, item.Weight); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
-	} else if over {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "kpi_metric_weight_exceeds", used, 100-used))
+	if issues := services.NormalizeKpiMetricDefinition(item); len(issues) > 0 {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, metricIssuesMessage(issues))
 	}
-	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
+
+	err = db.Transaction(func(tx *gorm.DB) error {
+		if err := lockKpiForMetrics(tx, kpiType, id); err != nil {
+			return err
+		}
+		if h.metricNameTaken(tx, kpiType, id, item.Name, uuid.Nil) {
+			return &errMetricRejected{fiber.StatusConflict, duplicateMetricNameMsg}
+		}
+		if msg := h.checkMetricFormula(tx, item, uuid.Nil); msg != "" {
+			return &errMetricRejected{fiber.StatusBadRequest, msg}
+		}
+		if used, over, err := h.metricWeightExceeds(tx, kpiType, id, uuid.Nil, item.MetricStatus, item.Weight); err != nil {
+			return err
+		} else if over {
+			return &errMetricRejected{fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "kpi_metric_weight_exceeds", used, 100-used)}
+		}
+		return models.CreateKpiMetric(tx, item)
+	})
+	if err != nil {
+		return metricTxError(c, err, "failed_to_create")
 	}
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
@@ -485,8 +630,11 @@ func (h *KpiEngagementHandler) UploadAttachment(c *fiber.Ctx) error {
 		log.Printf("[kpi_engagement] UploadAttachment: SetTags failed for file %s: %v", documentaFileID, tagErr)
 	}
 
+	// The reference handed back is signed for this KPI; CreateEvidence only
+	// accepts references signed here, so evidence can never point at a file
+	// another module (or another KPI) owns.
 	return utils.SuccessResponse(c, fiber.StatusCreated, "", fiber.Map{
-		"documenta_file_id": documentaFileID,
+		"documenta_file_id": h.signUploadRef(kpiType, id, documentaFileID),
 		"file_name":         file.Filename,
 		"file_size":         file.Size,
 		"mime_type":         file.Header.Get("Content-Type"),
@@ -584,24 +732,97 @@ func (h *KpiEngagementHandler) UpdateMetric(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
-	req.Name = strings.TrimSpace(req.Name)
-	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	// Partial update: only the fields present in the body change; omitted
+	// fields keep their stored value (an explicit 0/false/"" is written).
+	present, ok := metricBodyKeys(c)
+	if !ok {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
-	req.BaselinePeriod = strings.TrimSpace(req.BaselinePeriod)
-	if !validBaselinePeriod(req.BaselinePeriod) {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "kpi_baseline_period_invalid"))
-	}
+	db := h.db.WithContext(c.UserContext())
 	var current models.KpiMetric
-	if err := h.db.WithContext(c.UserContext()).Select("id, kpi_id, kpi_type, weight, baseline_value, baseline_period").First(&current, id).Error; err != nil {
+	if err := db.First(&current, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
+	if ok, resp := h.checkKpiDefinitionEditable(c, current.KpiType, current.KpiID); !ok {
+		return resp
+	}
+
+	m := current
+	set := func(key string, apply func()) {
+		if present[key] {
+			apply()
+		}
+	}
+	set("name", func() { m.Name = strings.TrimSpace(req.Name) })
+	set("metric_code", func() { m.MetricCode = strings.TrimSpace(req.MetricCode) })
+	set("metric_description", func() { m.MetricDescription = req.MetricDescription })
+	set("metric_status", func() { m.MetricStatus = req.MetricStatus })
+	set("display_order", func() { m.DisplayOrder = req.DisplayOrder })
+	set("metric_type", func() { m.MetricType = req.MetricType })
+	set("unit", func() { m.Unit = req.Unit })
+	set("custom_unit_label", func() { m.CustomUnitLabel = req.CustomUnitLabel })
+	set("baseline_value", func() { m.BaselineValue = req.BaselineValue })
+	set("baseline_period", func() { m.BaselinePeriod = strings.TrimSpace(req.BaselinePeriod) })
+	set("weight", func() { m.Weight = req.Weight })
+	set("formula", func() { m.Formula = req.Formula })
+	set("calculation_type", func() { m.CalculationType = req.CalculationType })
+	set("direction", func() { m.Direction = req.Direction })
+	set("decimal_precision", func() { m.DecimalPrecision = req.DecimalPrecision })
+	set("aggregation_method", func() { m.AggregationMethod = req.AggregationMethod })
+	set("reporting_frequency", func() { m.ReportingFrequency = req.ReportingFrequency })
+	set("numerator_label", func() { m.NumeratorLabel = req.NumeratorLabel })
+	set("numerator_variable_code", func() { m.NumeratorVariableCode = req.NumeratorVariableCode })
+	set("denominator_label", func() { m.DenominatorLabel = req.DenominatorLabel })
+	set("denominator_variable_code", func() { m.DenominatorVariableCode = req.DenominatorVariableCode })
+	set("direct_actual_label", func() { m.DirectActualLabel = req.DirectActualLabel })
+	set("allow_manual_actual_override", func() { m.AllowManualActualOverride = req.AllowManualActualOverride })
+	set("advanced_formula_enabled", func() { m.AdvancedFormulaEnabled = req.AdvancedFormulaEnabled })
+	set("formula_code", func() { m.FormulaCode = req.FormulaCode })
+	set("divide_by_zero_handling", func() { m.DivideByZeroHandling = req.DivideByZeroHandling })
+	set("rounding_rule", func() { m.RoundingRule = req.RoundingRule })
+	set("calculation_trace_required", func() { m.CalculationTraceRequired = req.CalculationTraceRequired })
+	set("data_source", func() { m.DataSource = req.DataSource })
+	set("evidence_required", func() { m.EvidenceRequired = req.EvidenceRequired })
+	set("start_date", func() { m.StartDate = req.StartDate })
+	set("due_date", func() { m.DueDate = req.DueDate })
+	if present["metric_owner_id"] {
+		ownerID, ownerErr := h.parseMetricOwner(db, req.MetricOwnerID)
+		if ownerErr != "" {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, ownerErr)
+		}
+		m.MetricOwnerID = ownerID
+	}
+
+	if m.Name == "" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Metric name is required")
+	}
+	if !validBaselinePeriod(m.BaselinePeriod) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "kpi_baseline_period_invalid"))
+	}
+	// Blank enum fields fall back to the same defaults as on create.
+	defaults := []struct {
+		field *string
+		def   string
+	}{
+		{&m.MetricStatus, "Active"}, {&m.MetricType, "Numeric"}, {&m.CalculationType, "Direct Value"},
+		{&m.Direction, "Higher is Better"}, {&m.AggregationMethod, "Sum"},
+		{&m.DivideByZeroHandling, "Block Submission"}, {&m.RoundingRule, "Standard Round"},
+	}
+	for _, d := range defaults {
+		if strings.TrimSpace(*d.field) == "" {
+			*d.field = d.def
+		}
+	}
+	if issues := services.NormalizeKpiMetricDefinition(&m); len(issues) > 0 {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, metricIssuesMessage(issues))
+	}
+
 	// Weight and Baseline are only editable before approval; once the KPI is
 	// Approved, Active or Closed they are what was signed off. Baseline then
 	// changes only through an approved baseline revision.
-	weightChanged := math.Abs(req.Weight-current.Weight) >= 0.005
-	baselineChanged := math.Abs(req.BaselineValue-current.BaselineValue) >= 0.00005 ||
-		req.BaselinePeriod != current.BaselinePeriod
+	weightChanged := math.Abs(m.Weight-current.Weight) >= 0.005
+	baselineChanged := math.Abs(m.BaselineValue-current.BaselineValue) >= 0.00005 ||
+		m.BaselinePeriod != current.BaselinePeriod
 	if weightChanged || baselineChanged {
 		locked, err := h.metricConfigLocked(c, current.KpiType, current.KpiID)
 		if err != nil {
@@ -614,84 +835,70 @@ func (h *KpiEngagementHandler) UpdateMetric(c *fiber.Ctx) error {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "kpi_metric_baseline_locked"))
 		}
 	}
-	if h.metricNameTaken(c, current.KpiType, current.KpiID, req.Name, id) {
-		return utils.ErrorResponse(c, fiber.StatusConflict, duplicateMetricNameMsg)
-	}
-	metricStatus := req.MetricStatus
-	if metricStatus == "" {
-		metricStatus = "Active"
-	}
-	if used, over, err := h.metricWeightExceeds(c, current.KpiType, current.KpiID, id, metricStatus, req.Weight); err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
-	} else if over {
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "kpi_metric_weight_exceeds", used, 100-used))
-	}
-	calcType := req.CalculationType
-	if calcType == "" {
-		calcType = "Direct Value"
-	}
-	direction := req.Direction
-	if direction == "" {
-		direction = "Higher is Better"
-	}
-	aggMethod := req.AggregationMethod
-	if aggMethod == "" {
-		aggMethod = "Sum"
-	}
-	divideByZero := req.DivideByZeroHandling
-	if divideByZero == "" {
-		divideByZero = "Block Submission"
-	}
-	roundingRule := req.RoundingRule
-	if roundingRule == "" {
-		roundingRule = "Standard Round"
-	}
-	var metricOwnerID *uuid.UUID
-	if req.MetricOwnerID != nil && *req.MetricOwnerID != "" {
-		if mid, err := uuid.Parse(*req.MetricOwnerID); err == nil {
-			metricOwnerID = &mid
+
+	err = db.Transaction(func(tx *gorm.DB) error {
+		if err := lockKpiForMetrics(tx, current.KpiType, current.KpiID); err != nil {
+			return err
 		}
-	}
-	result := h.db.WithContext(c.UserContext()).Model(&models.KpiMetric{ID: id}).Updates(map[string]interface{}{
-		"name":                         req.Name,
-		"metric_code":                  req.MetricCode,
-		"metric_description":           req.MetricDescription,
-		"metric_status":                metricStatus,
-		"display_order":                req.DisplayOrder,
-		"metric_type":                  req.MetricType,
-		"unit":                         req.Unit,
-		"custom_unit_label":            req.CustomUnitLabel,
-		"baseline_value":               req.BaselineValue,
-		"baseline_period":              req.BaselinePeriod,
-		"weight":                       req.Weight,
-		"formula":                      req.Formula,
-		"calculation_type":             calcType,
-		"direction":                    direction,
-		"decimal_precision":            req.DecimalPrecision,
-		"aggregation_method":           aggMethod,
-		"reporting_frequency":          req.ReportingFrequency,
-		"numerator_label":              req.NumeratorLabel,
-		"numerator_variable_code":      req.NumeratorVariableCode,
-		"denominator_label":            req.DenominatorLabel,
-		"denominator_variable_code":    req.DenominatorVariableCode,
-		"direct_actual_label":          req.DirectActualLabel,
-		"allow_manual_actual_override": req.AllowManualActualOverride,
-		"advanced_formula_enabled":     req.AdvancedFormulaEnabled,
-		"formula_code":                 req.FormulaCode,
-		"divide_by_zero_handling":      divideByZero,
-		"rounding_rule":                roundingRule,
-		"calculation_trace_required":   req.CalculationTraceRequired,
-		"metric_owner_id":              metricOwnerID,
-		"data_source":                  req.DataSource,
-		"evidence_required":            req.EvidenceRequired,
-		"start_date":                   req.StartDate,
-		"due_date":                     req.DueDate,
+		if h.metricNameTaken(tx, current.KpiType, current.KpiID, m.Name, id) {
+			return &errMetricRejected{fiber.StatusConflict, duplicateMetricNameMsg}
+		}
+		if msg := h.checkMetricFormula(tx, &m, id); msg != "" {
+			return &errMetricRejected{fiber.StatusBadRequest, msg}
+		}
+		if used, over, err := h.metricWeightExceeds(tx, current.KpiType, current.KpiID, id, m.MetricStatus, m.Weight); err != nil {
+			return err
+		} else if over {
+			return &errMetricRejected{fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "kpi_metric_weight_exceeds", used, 100-used)}
+		}
+		result := tx.Model(&models.KpiMetric{ID: id}).Updates(map[string]interface{}{
+			"name":                         m.Name,
+			"metric_code":                  m.MetricCode,
+			"metric_description":           m.MetricDescription,
+			"metric_status":                m.MetricStatus,
+			"display_order":                m.DisplayOrder,
+			"metric_type":                  m.MetricType,
+			"unit":                         m.Unit,
+			"custom_unit_label":            m.CustomUnitLabel,
+			"baseline_value":               m.BaselineValue,
+			"baseline_period":              m.BaselinePeriod,
+			"weight":                       m.Weight,
+			"formula":                      m.Formula,
+			"calculation_type":             m.CalculationType,
+			"direction":                    m.Direction,
+			"decimal_precision":            m.DecimalPrecision,
+			"aggregation_method":           m.AggregationMethod,
+			"reporting_frequency":          m.ReportingFrequency,
+			"numerator_label":              m.NumeratorLabel,
+			"numerator_variable_code":      m.NumeratorVariableCode,
+			"denominator_label":            m.DenominatorLabel,
+			"denominator_variable_code":    m.DenominatorVariableCode,
+			"direct_actual_label":          m.DirectActualLabel,
+			"allow_manual_actual_override": m.AllowManualActualOverride,
+			"advanced_formula_enabled":     m.AdvancedFormulaEnabled,
+			"formula_code":                 m.FormulaCode,
+			"divide_by_zero_handling":      m.DivideByZeroHandling,
+			"rounding_rule":                m.RoundingRule,
+			"calculation_trace_required":   m.CalculationTraceRequired,
+			"metric_owner_id":              m.MetricOwnerID,
+			"data_source":                  m.DataSource,
+			"evidence_required":            m.EvidenceRequired,
+			"start_date":                   m.StartDate,
+			"due_date":                     m.DueDate,
+		})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return &errMetricRejected{fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found")}
+		}
+		return nil
 	})
-	if result.RowsAffected == 0 {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	if err != nil {
+		return metricTxError(c, err, "failed_to_update")
 	}
 	var item models.KpiMetric
-	h.db.WithContext(c.UserContext()).First(&item, id)
+	db.First(&item, id)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
 		Action:      "update",
@@ -877,14 +1084,26 @@ func (h *KpiEngagementHandler) UpdateMetricValue(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
+	if req.Value == nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "value is required")
+	}
+	if math.IsNaN(*req.Value) || math.IsInf(*req.Value, 0) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "value must be a finite number")
+	}
 
 	db := h.db.WithContext(c.UserContext())
 
-	// REL-11: Check if there are approved performance entries for any metric
-	// that would make direct current_value updates inconsistent.
+	// REL-11: once approved data exists — approved KPI entries for this
+	// metric, or approved legacy performance records for its KPI — the
+	// metric's actual comes from that workflow, not a direct overwrite.
 	var metric models.KpiMetric
 	if err := db.First(&metric, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	if metricEntryCount(db, id, models.KpiEntryStatusApproved, models.KpiEntryStatusSuperseded,
+		models.KpiEntryStatusReversed, models.KpiEntryStatusReversal) > 0 {
+		return utils.ErrorResponse(c, fiber.StatusForbidden,
+			"Cannot update metric current_value directly when approved KPI entries exist. Use the entry workflow instead.")
 	}
 	var approvedCount int64
 	db.Model(&models.KpiPerformance{}).
@@ -898,17 +1117,20 @@ func (h *KpiEngagementHandler) UpdateMetricValue(c *fiber.Ctx) error {
 	}
 
 	result := db.Model(&models.KpiMetric{ID: id}).
-		Update("current_value", req.Value)
+		Update("current_value", *req.Value)
+	if result.Error != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
+	}
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
-	h.db.WithContext(c.UserContext()).First(&metric, id)
+	db.First(&metric, id)
 
 	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
 		Action:      "update",
 		Module:      "kpi",
 		ResourceID:  metric.KpiID.String(),
-		Description: fmt.Sprintf("Updated actual value for metric %q to %v", metric.Name, req.Value),
+		Description: fmt.Sprintf("Updated actual value for metric %q to %v", metric.Name, *req.Value),
 		Status:      "success",
 	})
 
@@ -920,9 +1142,25 @@ func (h *KpiEngagementHandler) DeleteMetric(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
+	db := h.db.WithContext(c.UserContext())
 	var item models.KpiMetric
-	h.db.WithContext(c.UserContext()).First(&item, id)
-	result := h.db.WithContext(c.UserContext()).Delete(&models.KpiMetric{}, id)
+	if err := db.First(&item, id).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	if ok, resp := h.checkKpiDefinitionEditable(c, item.KpiType, item.KpiID); !ok {
+		return resp
+	}
+	// Entries (and their approvals) point at the metric; deleting it would
+	// orphan them. Such a metric is retired by setting its status to
+	// Inactive or Archived instead.
+	if n := metricEntryCount(db, id); n > 0 {
+		return utils.ErrorResponse(c, fiber.StatusConflict,
+			fmt.Sprintf("Metric %q has %d KPI entr(ies) and cannot be deleted; set its status to Inactive or Archived instead.", item.Name, n))
+	}
+	result := db.Delete(&models.KpiMetric{}, id)
+	if result.Error != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "internal_server_error"))
+	}
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
@@ -956,6 +1194,43 @@ func (h *KpiEngagementHandler) ListEvidence(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "", items)
 }
 
+// uploadRefSep separates a file ID from its signature in the reference
+// UploadAttachment returns.
+const uploadRefSep = "~"
+
+func (h *KpiEngagementHandler) uploadRefMAC(kpiType string, kpiID uuid.UUID, fileID string) string {
+	mac := hmac.New(sha256.New, h.uploadKey)
+	mac.Write([]byte(kpiType + "|" + kpiID.String() + "|" + fileID))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// signUploadRef returns "fileID~signature" for a file uploaded to this KPI.
+func (h *KpiEngagementHandler) signUploadRef(kpiType string, kpiID uuid.UUID, fileID string) string {
+	return fileID + uploadRefSep + h.uploadRefMAC(kpiType, kpiID, fileID)
+}
+
+// verifyUploadRef returns the file ID of a reference signed by
+// signUploadRef for this same KPI, or ok=false.
+func (h *KpiEngagementHandler) verifyUploadRef(kpiType string, kpiID uuid.UUID, ref string) (string, bool) {
+	i := strings.LastIndex(ref, uploadRefSep)
+	if i <= 0 {
+		return "", false
+	}
+	fileID, sig := ref[:i], ref[i+len(uploadRefSep):]
+	if !hmac.Equal([]byte(sig), []byte(h.uploadRefMAC(kpiType, kpiID, fileID))) {
+		return "", false
+	}
+	return fileID, true
+}
+
+// isExternalLink reports whether s is an absolute http(s) URL — the only
+// kind of file_url evidence may carry. It is shown as a link and never
+// fetched or streamed by the server.
+func isExternalLink(s string) bool {
+	u, err := url.Parse(strings.TrimSpace(s))
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
+
 func (h *KpiEngagementHandler) CreateEvidence(c *fiber.Ctx) error {
 	kpiType, id, err := h.parseTypeAndID(c)
 	if err != nil || !h.kpiExists(kpiType, id) {
@@ -965,8 +1240,39 @@ func (h *KpiEngagementHandler) CreateEvidence(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
+	req.Title = strings.TrimSpace(req.Title)
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+
+	// A file must come from this module's own upload for this KPI (signed
+	// reference); file_url may only be an external http(s) link. Anything
+	// else — e.g. an object-storage key of another module's attachment —
+	// is rejected, since DownloadEvidence would otherwise stream it.
+	documentaFileID := ""
+	if strings.TrimSpace(req.DocumentaFileID) != "" {
+		fileID, ok := h.verifyUploadRef(kpiType, id, strings.TrimSpace(req.DocumentaFileID))
+		if !ok {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, "documenta_file_id must be the reference returned by this KPI's attachment upload")
+		}
+		documentaFileID = fileID
+	}
+	fileURL := strings.TrimSpace(req.FileURL)
+	if fileURL != "" && !isExternalLink(fileURL) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "file_url must be an http(s) link; upload files through the KPI attachment upload")
+	}
+	fileName, fileSize, mimeType := req.FileName, req.FileSize, req.MimeType
+	if documentaFileID == "" {
+		// Nothing was uploaded: there is no file to describe or download.
+		fileName, fileSize, mimeType = "", 0, ""
+	}
+	if req.MetricID != nil {
+		var n int64
+		h.db.WithContext(c.UserContext()).Model(&models.KpiMetric{}).
+			Where("id = ? AND kpi_id = ? AND kpi_type = ?", *req.MetricID, id, kpiType).Count(&n)
+		if n == 0 {
+			return utils.ErrorResponse(c, fiber.StatusBadRequest, "metric_id is not a metric of this KPI")
+		}
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
@@ -981,12 +1287,15 @@ func (h *KpiEngagementHandler) CreateEvidence(c *fiber.Ctx) error {
 		EvidenceType:    evidenceType,
 		Description:     req.Description,
 		MetricID:        req.MetricID,
-		FileURL:         req.FileURL,
-		DocumentaFileID: req.DocumentaFileID,
-		FileName:        req.FileName,
-		FileSize:        req.FileSize,
-		MimeType:        req.MimeType,
+		FileURL:         fileURL,
+		DocumentaFileID: documentaFileID,
+		FileName:        filepath.Base(strings.ReplaceAll(fileName, "\\", "/")),
+		FileSize:        fileSize,
+		MimeType:        mimeType,
 		UploadedByID:    userID,
+	}
+	if fileName == "" {
+		item.FileName = ""
 	}
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
@@ -1004,13 +1313,52 @@ func (h *KpiEngagementHandler) CreateEvidence(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusCreated, "", item)
 }
 
+// canRemoveContribution reports whether the current user may delete a
+// check-in/evidence/comment authored by authorID on the KPI: its author, the
+// KPI's Owner (collaborator type), an Administrator or the Super Admin.
+func (h *KpiEngagementHandler) canRemoveContribution(c *fiber.Ctx, kpiType string, kpiID, authorID uuid.UUID) (bool, error) {
+	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+	if userID == authorID {
+		return true, nil
+	}
+	var user models.User
+	if err := h.db.WithContext(c.UserContext()).Preload("Roles", "is_active = ?", true).First(&user, "id = ?", userID).Error; err != nil {
+		return false, err
+	}
+	if user.IsSuperAdmin || user.HasRole("admin") {
+		return true, nil
+	}
+	collaboratorType, err := services.NewKpiAccessService(h.db).CollaboratorType(c.UserContext(), userID, kpiType, kpiID)
+	if err != nil {
+		return false, err
+	}
+	return collaboratorType == models.CollaboratorTypeOwner, nil
+}
+
+// requireRemovalRight writes 403 (or 500) unless canRemoveContribution.
+func (h *KpiEngagementHandler) requireRemovalRight(c *fiber.Ctx, kpiType string, kpiID, authorID uuid.UUID) (bool, error) {
+	ok, err := h.canRemoveContribution(c, kpiType, kpiID, authorID)
+	if err != nil {
+		return false, utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "internal_server_error"))
+	}
+	if !ok {
+		return false, utils.ErrorResponse(c, fiber.StatusForbidden, "Only the author, the KPI Owner or an administrator can delete this")
+	}
+	return true, nil
+}
+
 func (h *KpiEngagementHandler) DeleteEvidence(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 	var item models.KpiEvidence
-	h.db.WithContext(c.UserContext()).First(&item, id)
+	if err := h.db.WithContext(c.UserContext()).First(&item, id).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	if ok, resp := h.requireRemovalRight(c, item.KpiType, item.KpiID, item.UploadedByID); !ok {
+		return resp
+	}
 
 	// Best-effort cleanup in Documenta — mirrors Goal evidence deletion: a
 	// failed remote delete never blocks removing the local record, it's just
@@ -1045,6 +1393,52 @@ func (h *KpiEngagementHandler) DeleteEvidence(c *fiber.Ctx) error {
 // integration (DocumentaFileID set) stream from there; older rows (FileURL
 // only, from before the integration) keep streaming from MinIO — no
 // historical files were migrated, per product decision.
+// evidenceSafeMimeTypes are the content types DownloadEvidence serves as-is;
+// anything else (e.g. text/html, image/svg+xml) goes out as
+// application/octet-stream so a stored file can never render as active
+// content in the app's origin.
+var evidenceSafeMimeTypes = map[string]bool{
+	"application/pdf": true, "image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true,
+	"text/plain": true, "text/csv": true, "application/zip": true,
+	"application/msword": true, "application/vnd.ms-excel": true, "application/vnd.ms-powerpoint": true,
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document":   true,
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         true,
+	"application/vnd.openxmlformats-officedocument.presentationml.presentation": true,
+}
+
+// evidenceContentType picks the response Content-Type from the stored type,
+// falling back to sniffing the bytes, limited to evidenceSafeMimeTypes.
+func evidenceContentType(declared string, data []byte) string {
+	for _, candidate := range []string{declared, http.DetectContentType(data)} {
+		base, _, err := mime.ParseMediaType(candidate)
+		if err == nil && evidenceSafeMimeTypes[strings.ToLower(base)] {
+			return strings.ToLower(base)
+		}
+	}
+	return "application/octet-stream"
+}
+
+// setEvidenceDownloadHeaders sets a safe Content-Type and a properly quoted
+// (RFC 6266 / 2231) attachment filename.
+func setEvidenceDownloadHeaders(c *fiber.Ctx, contentType, fileName string) {
+	name := filepath.Base(strings.ReplaceAll(fileName, "\\", "/"))
+	if name == "." || name == "/" || name == "" {
+		name = "evidence"
+	}
+	disposition := mime.FormatMediaType("attachment", map[string]string{"filename": name})
+	if disposition == "" {
+		disposition = "attachment"
+	}
+	c.Set(fiber.HeaderContentType, contentType)
+	c.Set(fiber.HeaderContentDisposition, disposition)
+	c.Set(fiber.HeaderXContentTypeOptions, "nosniff")
+}
+
+// DownloadEvidence streams an uploaded evidence file. Only files this module
+// stored for the evidence's own KPI are served: Documenta files (referenced
+// by a signed upload, see CreateEvidence) and legacy MinIO objects whose key
+// lies under a KPI evidence folder of this KPI. Evidence that is only an
+// external link has nothing to stream (400).
 func (h *KpiEngagementHandler) DownloadEvidence(c *fiber.Ctx) error {
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
@@ -1087,18 +1481,44 @@ func (h *KpiEngagementHandler) DownloadEvidence(c *fiber.Ctx) error {
 		if mimeType == "" && info != nil {
 			mimeType = info.MimeType
 		}
-		c.Set("Content-Type", mimeType)
-		c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", item.FileName))
+		setEvidenceDownloadHeaders(c, evidenceContentType(mimeType, data), item.FileName)
 		return c.Send(data)
 	}
 
+	if !legacyEvidenceKeyOwned(item.FileURL, item.KpiID) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "This evidence has no uploaded file to download")
+	}
 	file, err := h.storage.GetFile(c.UserContext(), item.FileURL)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_retrieve_file"))
 	}
-	c.Set("Content-Type", item.MimeType)
-	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", item.FileName))
-	return c.SendStream(file)
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, 100<<20))
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_retrieve_file"))
+	}
+	setEvidenceDownloadHeaders(c, evidenceContentType(item.MimeType, data), item.FileName)
+	return c.Send(data)
+}
+
+// legacyEvidenceKeyOwned accepts only pre-Documenta MinIO keys this module
+// wrote for the evidence's own KPI: a relative "kpi…/" key containing the
+// KPI's ID as a path segment. URLs, absolute or traversing paths, and keys
+// of other modules (incident attachments, ...) are refused.
+func legacyEvidenceKeyOwned(key string, kpiID uuid.UUID) bool {
+	key = strings.TrimSpace(key)
+	if key == "" || strings.Contains(key, "://") || strings.HasPrefix(key, "/") || strings.Contains(key, "..") {
+		return false
+	}
+	if !strings.HasPrefix(strings.ToLower(key), "kpi") {
+		return false
+	}
+	for _, seg := range strings.Split(key, "/") {
+		if seg == kpiID.String() {
+			return true
+		}
+	}
+	return false
 }
 
 // ─── Collaborators ──────────────────────────────────────────────────────────
@@ -1134,13 +1554,26 @@ func (h *KpiEngagementHandler) AddCollaborator(c *fiber.Ctx) error {
 	if role == "" {
 		role = models.KpiCollaboratorRoleCollaborator
 	}
+	db := h.db.WithContext(c.UserContext())
+	var userCount, dupCount int64
+	db.Model(&models.User{}).Where("id = ?", req.UserID).Count(&userCount)
+	if userCount == 0 {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, fmt.Sprintf("User %s was not found", req.UserID))
+	}
+	db.Model(&models.KpiCollaborator{}).Where("kpi_id = ? AND user_id = ?", id, req.UserID).Count(&dupCount)
+	if dupCount > 0 {
+		return utils.ErrorResponse(c, fiber.StatusConflict, "This user is already a collaborator on this KPI")
+	}
 	item := &models.KpiCollaborator{
 		KpiID:   id,
 		KpiType: kpiType,
 		UserID:  req.UserID,
 		Role:    role,
 	}
-	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
+	if err := db.Create(item).Error; err != nil {
+		if strings.Contains(err.Error(), "23505") || strings.Contains(err.Error(), "duplicate key") {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "This user is already a collaborator on this KPI")
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
 	}
 	h.db.WithContext(c.UserContext()).Preload("User").First(item, item.ID)
@@ -1238,10 +1671,25 @@ func (h *KpiEngagementHandler) DeleteCheckIn(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
+	var item models.KpiCheckIn
+	if err := h.db.WithContext(c.UserContext()).First(&item, id).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
+	}
+	if ok, resp := h.requireRemovalRight(c, item.KpiType, item.KpiID, item.AuthorID); !ok {
+		return resp
+	}
 	result := h.db.WithContext(c.UserContext()).Delete(&models.KpiCheckIn{}, id)
 	if result.RowsAffected == 0 {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
+
+	middleware.LogAction(c, h.actionLogSvc, &services.LogActionParams{
+		Action:      "delete",
+		Module:      "kpi",
+		ResourceID:  item.KpiID.String(),
+		Description: "Deleted a check-in",
+		Status:      "success",
+	})
 	return utils.SuccessResponse(c, fiber.StatusOK, "", nil)
 }
 
@@ -1318,11 +1766,8 @@ func (h *KpiEngagementHandler) DeleteComment(c *fiber.Ctx) error {
 	if err := h.db.WithContext(c.UserContext()).First(&comment, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
-	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
-	isSuperAdmin := user != nil && user.IsSuperAdmin
-	if comment.AuthorID != userID && !isSuperAdmin {
-		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "access_denied"))
+	if ok, resp := h.requireRemovalRight(c, comment.KpiType, comment.KpiID, comment.AuthorID); !ok {
+		return resp
 	}
 	if err := h.db.WithContext(c.UserContext()).Delete(&models.KpiComment{}, id).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_delete_comment"))

@@ -9,7 +9,8 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// kpiTargetEditableStatuses mirrors UpdateTarget's editable-status rule.
+// kpiTargetEditableStatuses mirrors UpdateTarget's editable-status rule
+// (models.IsKpiTargetEditableStatus).
 var kpiTargetEditableStatuses = []string{"draft", "returned", "rejected"}
 
 // commit writes the validated plan; updates keep the target ID so linked
@@ -21,15 +22,10 @@ func (imp *kpiTargetsImporter) commit(tx *gorm.DB) error {
 	for _, r := range imp.recs {
 		switch r.action {
 		case kpiImportActionCreate:
+			// r.Target carries the dictionary's canonical KPI code/type
+			// (set in validateRows); the cell text may differ in case, and a
+			// target stored under it would be invisible to every lookup.
 			t := *r.Target
-			t.KpiCode = r.KpiCode
-			if t.KpiCode == "" {
-				t.KpiCode = r.Target.KpiCode
-			}
-			t.KpiType = r.KpiType
-			if t.KpiType == "" {
-				t.KpiType = r.Target.KpiType
-			}
 			t.Version = 1
 			// Legacy columns mirror target_year/period_code, matching
 			// KpiAnnualTargetRequest.ToModel.
@@ -81,7 +77,7 @@ func (imp *kpiTargetsImporter) revalidateCommit(tx *gorm.DB) error {
 		if r.Rejected || (r.action != kpiImportActionCreate && r.action != kpiImportActionUpdate) {
 			continue
 		}
-		keys["identity|"+kpiTargetIdentity(r.KpiType, r.KpiCode, r.Target.TargetYear, r.Target.PeriodCode, r.MetricID, nil)] = true
+		keys["identity|"+kpiTargetIdentity(r.Target.KpiType, r.Target.KpiCode, r.Target.TargetYear, r.Target.PeriodCode, r.MetricID, nil, "")] = true
 		if r.Target.TargetType == models.KpiTargetTypeMilestone {
 			// Overlap can cross identities, so serialize the whole KPI/metric scope.
 			metric := ""
@@ -115,7 +111,7 @@ func (imp *kpiTargetsImporter) revalidateCommit(tx *gorm.DB) error {
 		if r.Rejected || (r.action != kpiImportActionCreate && r.action != kpiImportActionUpdate) {
 			continue
 		}
-		identity := kpiTargetIdentity(r.KpiType, r.KpiCode, r.Target.TargetYear, r.Target.PeriodCode, r.MetricID, nil)
+		identity := kpiTargetIdentity(r.Target.KpiType, r.Target.KpiCode, r.Target.TargetYear, r.Target.PeriodCode, r.MetricID, nil, "")
 		existing := imp.existingTarget[identity]
 		if existing == nil && r.action == kpiImportActionUpdate {
 			r.reject("Target", "The target no longer exists; it may have been deleted after validation.")
@@ -130,6 +126,9 @@ func (imp *kpiTargetsImporter) revalidateCommit(tx *gorm.DB) error {
 			switch existing.TargetStatus {
 			case "draft", "returned", "rejected":
 				imp.preserveExisting(r, existing)
+				if !r.Rejected {
+					imp.normalizeThresholds(r, KpiTargetDirection(tx, r.Target.KpiCode, r.Target.KpiType, imp.metricOf(r)))
+				}
 			default:
 				r.reject("Target Status", fmt.Sprintf("The existing target is %s and cannot be updated through import. Only draft, returned or rejected targets are editable.", existing.TargetStatus))
 				continue
@@ -157,37 +156,27 @@ func (imp *kpiTargetsImporter) revalidateCommit(tx *gorm.DB) error {
 // kpiTargetUpdateMap includes only fields present in the row; identity,
 // approval and runtime fields are untouched.
 func kpiTargetUpdateMap(t *models.KpiAnnualTarget, set map[string]bool) map[string]interface{} {
+	// The row has already been merged with the existing target
+	// (preserveExisting) and its thresholds normalised, so the threshold
+	// fields are always written: a mode change must clear values it no
+	// longer uses.
 	updates := map[string]interface{}{
-		"target_value": t.TargetValue,
-		"target_type":  t.TargetType,
+		"target_value":        t.TargetValue,
+		"target_type":         t.TargetType,
+		"target_basis":        t.TargetBasis,
+		"threshold_mode":      t.ThresholdMode,
+		"excellent_threshold": t.ExcellentThreshold,
+		"achieved_threshold":  t.AchievedThreshold,
+		"warning_threshold":   t.WarningThreshold,
+		"target_range_min":    t.TargetRangeMin,
+		"target_range_max":    t.TargetRangeMax,
 		// Legacy mirrors stay in sync with target_year/period_code.
 		"year":        t.TargetYear,
 		"period_type": "annual",
 		"period_key":  t.PeriodCode,
 	}
-	if set["target_basis"] {
-		updates["target_basis"] = t.TargetBasis
-	}
 	if set["target_rationale"] {
 		updates["target_rationale"] = t.TargetRationale
-	}
-	if set["threshold_mode"] {
-		updates["threshold_mode"] = t.ThresholdMode
-	}
-	if set["excellent_threshold"] {
-		updates["excellent_threshold"] = t.ExcellentThreshold
-	}
-	if set["achieved_threshold"] {
-		updates["achieved_threshold"] = t.AchievedThreshold
-	}
-	if set["warning_threshold"] {
-		updates["warning_threshold"] = t.WarningThreshold
-	}
-	if set["target_range_min"] {
-		updates["target_range_min"] = t.TargetRangeMin
-	}
-	if set["target_range_max"] {
-		updates["target_range_max"] = t.TargetRangeMax
 	}
 	if set["target_status"] {
 		updates["target_status"] = t.TargetStatus
@@ -198,12 +187,9 @@ func kpiTargetUpdateMap(t *models.KpiAnnualTarget, set map[string]bool) map[stri
 	if set["effective_to"] {
 		updates["effective_to"] = t.EffectiveTo
 	}
-	if t.TargetType == models.KpiTargetTypeMilestone || set["period_start"] {
-		updates["period_start"] = t.PeriodStart
-	}
-	if t.TargetType == models.KpiTargetTypeMilestone || set["period_end"] {
-		updates["period_end"] = t.PeriodEnd
-	}
+	// Period dates follow the period (derived in validateRows).
+	updates["period_start"] = t.PeriodStart
+	updates["period_end"] = t.PeriodEnd
 	if set["metric_code"] || set["metric_name"] {
 		updates["metric_id"] = t.MetricID
 		updates["calculation_type_snapshot"] = t.CalculationTypeSnapshot
@@ -214,4 +200,19 @@ func kpiTargetUpdateMap(t *models.KpiAnnualTarget, set map[string]bool) map[stri
 		updates["reporting_frequency_snapshot"] = t.ReportingFrequencySnapshot
 	}
 	return updates
+}
+
+// metricOf returns the resolved metric of a row, or nil for a KPI-level target.
+func (imp *kpiTargetsImporter) metricOf(r *kpiTargetImportRec) *models.KpiMetric {
+	if r.MetricID == nil {
+		return nil
+	}
+	for _, list := range imp.metricsByKpi {
+		for _, m := range list {
+			if m.ID == *r.MetricID {
+				return m
+			}
+		}
+	}
+	return nil
 }

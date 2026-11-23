@@ -1,10 +1,13 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"log"
+	"path/filepath"
+	"strings"
 
 	"github.com/automax/backend/internal/middleware"
 	"github.com/automax/backend/internal/services"
@@ -53,6 +56,12 @@ func (h *KpiImportHandler) readRequest(c *fiber.Ctx) ([]byte, string, services.K
 	if len(data) > kpiImportMaxUploadSize {
 		return nil, "", opts, fmt.Errorf("the uploaded Excel file exceeds the %d MB limit", kpiImportMaxUploadSize>>20)
 	}
+	// An .xlsx workbook is a ZIP archive; anything else (CSV, legacy .xls,
+	// text, images) is a client error, not a server failure.
+	ext := strings.ToLower(filepath.Ext(file.Filename))
+	if (ext != "" && ext != ".xlsx" && ext != ".xlsm") || !bytes.HasPrefix(data, []byte("PK\x03\x04")) {
+		return nil, "", opts, fmt.Errorf("the uploaded file is not an Excel .xlsx workbook")
+	}
 	return data, file.Filename, opts, nil
 }
 
@@ -64,7 +73,7 @@ func (h *KpiImportHandler) Template(c *fiber.Ctx) error {
 	if lang != services.KpiTemplateLangEN && lang != services.KpiTemplateLangAR {
 		lang = services.KpiTemplateLangEN
 	}
-	data, err := services.BuildKpiDictionaryImportTemplate(lang)
+	data, err := services.BuildKpiDictionaryImportTemplate(c.UserContext(), h.db, lang)
 	if err != nil {
 		log.Printf("[kpi_import] Template: BuildKpiDictionaryImportTemplate failed: %v", err)
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to build the KPI Dictionary import template")
@@ -132,7 +141,7 @@ func (h *KpiImportHandler) MetricsTemplate(c *fiber.Ctx) error {
 	if lang != services.KpiTemplateLangEN && lang != services.KpiTemplateLangAR {
 		lang = services.KpiTemplateLangEN
 	}
-	data, err := services.BuildKpiMetricsImportTemplate(lang)
+	data, err := services.BuildKpiMetricsImportTemplate(c.UserContext(), h.db, lang)
 	if err != nil {
 		log.Printf("[kpi_import] MetricsTemplate: BuildKpiMetricsImportTemplate failed: %v", err)
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to build the KPI Metrics import template")
@@ -194,7 +203,7 @@ func (h *KpiImportHandler) TargetsTemplate(c *fiber.Ctx) error {
 	if lang != services.KpiTemplateLangEN && lang != services.KpiTemplateLangAR {
 		lang = services.KpiTemplateLangEN
 	}
-	data, err := services.BuildKpiTargetsImportTemplate(lang)
+	data, err := services.BuildKpiTargetsImportTemplate(c.UserContext(), h.db, lang)
 	if err != nil {
 		log.Printf("[kpi_import] TargetsTemplate: BuildKpiTargetsImportTemplate failed: %v", err)
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to build the KPI Targets import template")
@@ -261,7 +270,7 @@ func (h *KpiImportHandler) MasterDataTemplate(c *fiber.Ctx) error {
 	if lang != services.KpiTemplateLangEN && lang != services.KpiTemplateLangAR {
 		lang = services.KpiTemplateLangEN
 	}
-	data, err := services.BuildKpiMasterDataImportTemplate(entityType, lang)
+	data, err := services.BuildKpiMasterDataImportTemplate(c.UserContext(), h.db, entityType, lang)
 	if err != nil {
 		log.Printf("[kpi_import] MasterDataTemplate: BuildKpiMasterDataImportTemplate(%q) failed: %v", entityType, err)
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to build the master-data import template")

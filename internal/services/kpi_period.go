@@ -25,12 +25,14 @@ var periodKeyPatterns = map[string]*regexp.Regexp{
 	"annual":      regexp.MustCompile(`(?i)^(\d{4}|annual)$`),
 }
 
-// frequencyPeriodType maps a KPI's configured reporting frequency to the
-// period type its targets/actuals are expected to use.
+// frequencyPeriodType maps a KPI's configured reporting frequency (after
+// NormalizeFrequency) to the period type its targets/actuals are expected
+// to use.
 var frequencyPeriodType = map[string]string{
-	models.KPIFrequencyMonthly:   "month",
-	models.KPIFrequencyQuarterly: "quarter",
-	models.KPIFrequencyAnnually:  "annual",
+	models.KPIFrequencyMonthly:    "month",
+	models.KPIFrequencyQuarterly:  "quarter",
+	models.KPIFrequencySemiAnnual: "semi_annual",
+	models.KPIFrequencyAnnually:   "annual",
 }
 
 // ValidatePeriod checks that periodType/periodKey are well-formed and, when
@@ -46,7 +48,7 @@ func ValidatePeriod(reportingFrequency, periodType, periodKey string) error {
 	if periodType == "custom" || reportingFrequency == "" {
 		return nil
 	}
-	if expected, ok := frequencyPeriodType[reportingFrequency]; ok && expected != periodType {
+	if expected, ok := frequencyPeriodType[NormalizeFrequency(reportingFrequency)]; ok && expected != periodType {
 		return fmt.Errorf("period type %q does not match this KPI's reporting frequency (%q expects %q periods)", periodType, reportingFrequency, expected)
 	}
 	return nil
@@ -81,9 +83,11 @@ var monthLabels = []string{"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug
 // CurrentPeriodCode derives the bare period-code label ("jan".."dec",
 // "q1".."q4", "h1"/"h2", "annual") that `now` falls into for a given KPI
 // reporting frequency — the same bare-label convention the frontend's period
-// pickers already use (see getPeriodOptionsByFrequency on the client).
+// pickers already use (see getPeriodOptionsByFrequency on the client). Both
+// frequency spellings are accepted (see NormalizeFrequency) — a metric's
+// "Monthly" must not silently fall back to "annual".
 func CurrentPeriodCode(reportingFrequency string, now time.Time) string {
-	switch reportingFrequency {
+	switch NormalizeFrequency(reportingFrequency) {
 	case models.KPIFrequencyMonthly:
 		return monthPeriodCodes[int(now.Month())-1]
 	case models.KPIFrequencyQuarterly:
@@ -108,12 +112,12 @@ func CurrentPeriodCode(reportingFrequency string, now time.Time) string {
 // casing/spelling, so this normalizes rather than silently defaulting to
 // "annual" for a metric that's actually monthly.
 func PeriodCodesForFrequency(frequency string) []string {
-	switch strings.ToLower(strings.ReplaceAll(frequency, " ", "")) {
+	switch NormalizeFrequency(frequency) {
 	case models.KPIFrequencyMonthly:
 		return append([]string{}, monthPeriodCodes...)
 	case models.KPIFrequencyQuarterly:
 		return []string{"q1", "q2", "q3", "q4"}
-	case models.KPIFrequencySemiAnnual, "semiannual":
+	case models.KPIFrequencySemiAnnual:
 		return []string{"h1", "h2"}
 	default:
 		return []string{"annual"}
@@ -160,30 +164,66 @@ func PeriodSortKey(year int, periodCode string) int {
 	return year*100 + periodOrdinals[strings.ToLower(periodCode)]
 }
 
-// GetEffectiveTarget finds the approved KpiAnnualTarget for a metric's KPI in
-// the current reporting period — the same period-matching lookup CreateEntry
-// already uses to snapshot a target onto a new entry — so a display (like the
-// Metric Card's Target tile) can show exactly the number a new entry
-// submitted right now would actually be measured against, instead of a
-// static metric-config value that can silently disagree with it. Returns
-// (nil, "") if no approved target exists for the current period, letting the
+// GetEffectiveTarget finds the approved (or locked) unscoped KpiAnnualTarget
+// for a metric in its current reporting period — the period derived from the
+// metric's own reporting frequency (falling back to the KPI's when the metric
+// inherits it), latest version first — so a display (like the Metric Card's
+// Target tile) can show exactly the number a new entry for right now would be
+// measured against. Organization-scoped targets are not "the" target of a
+// metric and are ignored. Returns (nil, "") if there is none, letting the
 // caller fall back to the metric's own configured target_value.
 func GetEffectiveTarget(db *gorm.DB, kpiCode, kpiType string, metricID uuid.UUID) (*float64, string) {
-	freq := GetKPIReportingFrequency(db, kpiCode, kpiType)
+	var metric models.KpiMetric
+	freq := ""
+	if err := db.Select("reporting_frequency").Where("id = ?", metricID).First(&metric).Error; err == nil {
+		freq = metric.ReportingFrequency
+	}
+	if NormalizeFrequency(freq) == "" {
+		freq = GetKPIReportingFrequency(db, kpiCode, kpiType)
+	}
 	now := time.Now()
 	year := now.Year()
 	periodCode := CurrentPeriodCode(freq, now)
 
-	var target models.KpiAnnualTarget
-	err := db.Where(
-		"kpi_code = ? AND kpi_type = ? AND metric_id = ? AND target_year = ? AND period_code = ? AND target_status = 'approved'",
-		kpiCode, kpiType, metricID, year, periodCode,
-	).First(&target).Error
+	target, err := FindUsableTarget(db, kpiCode, kpiType, metricID, year, periodCode, nil)
 	if err != nil {
 		return nil, ""
 	}
 	value := target.TargetValue
 	return &value, FormatPeriodLabel(periodCode, year)
+}
+
+// MetricFrequency is the reporting frequency a metric's periods follow: its
+// own, or the KPI's when the metric inherits it (blank/unknown).
+func MetricFrequency(db *gorm.DB, metric *models.KpiMetric, kpiCode, kpiType string) string {
+	if NormalizeFrequency(metric.ReportingFrequency) != "" {
+		return metric.ReportingFrequency
+	}
+	return GetKPIReportingFrequency(db, kpiCode, kpiType)
+}
+
+// ValidateEntryPeriod checks the reporting period of a new KPI Entry: it must
+// be a real period code (a bare label of the metric's reporting frequency, or
+// a Milestone / Ad Hoc date range), inside the metric's validity window
+// (ValidateTargetPeriodForMetric) and already ended — results can only be
+// reported for a period that is over. today is the caller's current date.
+func ValidateEntryPeriod(metric *models.KpiMetric, kpiFrequency string, year int, periodCode string, today time.Time) error {
+	if err := ValidateTargetPeriodForMetric(metric, kpiFrequency, year, periodCode); err != nil {
+		return err
+	}
+	start, end, ok := PeriodDateRange(year, periodCode)
+	if !ok {
+		return fmt.Errorf("Period %q is not a valid reporting period", periodCode)
+	}
+	if !IsCustomPeriodCode(periodCode) && start.Year() != year {
+		return fmt.Errorf("Period %q does not belong to reporting year %d", periodCode, year)
+	}
+	todayDate := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, time.UTC)
+	if !end.Before(todayDate) {
+		return fmt.Errorf("Period %s has not ended yet (ends %s) — results can only be entered for a completed period",
+			FormatPeriodLabel(periodCode, year), end.Format("02 Jan 2006"))
+	}
+	return nil
 }
 
 // NormalizeFrequency maps both reporting-frequency spellings onto the KPI

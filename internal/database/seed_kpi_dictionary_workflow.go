@@ -64,7 +64,10 @@ func seedKpiDictionaryWorkflow(db *gorm.DB, workflowCode string) {
 			{"Reviewed", "reviewed", "normal", "#3b82f6", 2, 300, 200, []models.Role{adminRole, l1ReviewerRole}, allRoles},
 			{"Approved", "approved", "normal", "#f59e0b", 3, 500, 200, []models.Role{adminRole, kpiOwnerRole}, allRoles},
 			{"Active", "active", "normal", "#22c55e", 4, 700, 200, []models.Role{adminRole, kpiOwnerRole}, []models.Role{adminRole}},
-			{"Closed", "closed", "terminal", "#64748b", 5, 900, 200, []models.Role{adminRole, kpiOwnerRole}, allRoles},
+			// Closed is read-only except for the Administrator (the service
+			// also treats every terminal state that way, for databases
+			// seeded before this changed).
+			{"Closed", "closed", "terminal", "#64748b", 5, 900, 200, []models.Role{adminRole, kpiOwnerRole}, []models.Role{adminRole}},
 		}
 
 		for _, sp := range stateSpecs {
@@ -120,6 +123,11 @@ func seedKpiDictionaryWorkflow(db *gorm.DB, workflowCode string) {
 			{"Reviewed", "reviewed", "reviewed", "approved", 2, []models.Role{adminRole, l1ReviewerRole}},
 			{"Activate", "activate", "approved", "active", 3, []models.Role{adminRole, kpiOwnerRole}},
 			{"Close", "close", "active", "closed", 4, []models.Role{adminRole, kpiOwnerRole}},
+			// Send a KPI back for rework instead of approving/activating it.
+			// Ensured on existing databases too (the loop below only adds
+			// transitions that are missing).
+			{"Return to Draft", "return", "reviewed", "draft", 5, []models.Role{adminRole, l1ReviewerRole}},
+			{"Return to Draft", "return", "approved", "draft", 6, []models.Role{adminRole, l1ReviewerRole, kpiOwnerRole}},
 		}
 
 		for _, sp := range transSpecs {

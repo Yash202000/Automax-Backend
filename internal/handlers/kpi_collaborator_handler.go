@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/middleware"
@@ -94,10 +95,31 @@ func (h *KpiCollaboratorHandler) GetAssignment(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, "", toAssignmentResponse(&item))
 }
 
+// kpiExists reports whether a live KPI of kpiType has this ID.
+func (h *KpiCollaboratorHandler) kpiExists(c *fiber.Ctx, kpiType string, id uuid.UUID) bool {
+	var n int64
+	h.db.WithContext(c.UserContext()).Table(kpiDictTable(kpiType)).Where("id = ? AND deleted_at IS NULL", id).Count(&n)
+	return n > 0
+}
+
+// userExists reports whether a (non-deleted) user has this ID.
+func (h *KpiCollaboratorHandler) userExists(c *fiber.Ctx, id uuid.UUID) bool {
+	var n int64
+	h.db.WithContext(c.UserContext()).Model(&models.User{}).Where("id = ?", id).Count(&n)
+	return n > 0
+}
+
+func collaboratorUniqueViolation(err error) bool {
+	return err != nil && (strings.Contains(err.Error(), "23505") || strings.Contains(err.Error(), "duplicate key"))
+}
+
 func (h *KpiCollaboratorHandler) CreateAssignment(c *fiber.Ctx) error {
 	kpiType, id, err := h.parseTypeAndID(c)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
+	}
+	if !h.kpiExists(c, kpiType, id) {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 
 	var req models.KpiCollaboratorAssignmentRequest
@@ -106,6 +128,19 @@ func (h *KpiCollaboratorHandler) CreateAssignment(c *fiber.Ctx) error {
 	}
 	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	}
+
+	if !h.userExists(c, req.UserID) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, fmt.Sprintf("User %s was not found", req.UserID))
+	}
+	if req.DelegateForUserID != nil && *req.DelegateForUserID != uuid.Nil && !h.userExists(c, *req.DelegateForUserID) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, fmt.Sprintf("Delegate-for user %s was not found", *req.DelegateForUserID))
+	}
+	var existing int64
+	h.db.WithContext(c.UserContext()).Model(&models.KpiCollaboratorAssignment{}).
+		Where("kpi_id = ? AND user_id = ?", id, req.UserID).Count(&existing)
+	if existing > 0 {
+		return utils.ErrorResponse(c, fiber.StatusConflict, "This user already has an assignment on this KPI; edit it instead")
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
@@ -172,6 +207,9 @@ func (h *KpiCollaboratorHandler) CreateAssignment(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
 	}
 	if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
+		if collaboratorUniqueViolation(err) {
+			return utils.ErrorResponse(c, fiber.StatusConflict, "This user already has an assignment on this KPI; edit it instead")
+		}
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
 	}
 

@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/xuri/excelize/v2"
@@ -34,6 +35,26 @@ type WorkbookConfig struct {
 	ActiveSheet  string
 	Instructions *InstructionConfig
 	Sheets       []SheetConfig
+	// Lists, when set, adds a read-only sheet (ListsSheet, default "Lists")
+	// as the last sheet, with one column per list. Each list becomes a
+	// workbook name that a DropdownConfig.Source can point to.
+	ListsSheet string
+	Lists      []ListConfig
+}
+
+// ListConfig is one dropdown source on the Lists sheet: the fixed Values
+// first, then Formulas (each returns a value or ""; non-empty results must
+// come first, e.g. a compacted copy of a column the user fills in). The
+// workbook name Name covers only the non-empty cells.
+type ListConfig struct {
+	Name     string
+	Title    LocalizedText
+	Values   []string
+	Formulas []string
+	// Lookup lists are columns of a lookup table read with INDEX/MATCH
+	// (several lists side by side, row for row). Their name covers every
+	// written row, blanks included, so the columns stay aligned.
+	Lookup bool
 }
 
 type SheetConfig struct {
@@ -51,11 +72,29 @@ type ColumnConfig struct {
 	Width    float64
 	Required bool // required: header gets a red (*) marker
 	Dropdown *DropdownConfig
+	// HeaderColor is the header fill (hex RGB, e.g. "1F6F78"); empty uses
+	// the default dark blue.
+	HeaderColor string
+	// Hint is shown as an input message when a cell in the column is
+	// selected (columns without a dropdown).
+	Hint LocalizedText
+	// Formula, when set, is written into the column's data cells (rows 2 to
+	// FormulaRows+1, default all data rows); "{row}" is replaced by the row
+	// number. Used to fill a cell automatically from another one on the
+	// row; the user can still type over it.
+	Formula     string
+	FormulaRows int
 }
 
 type DropdownConfig struct {
-	Values      []string
-	ValuesAR    []string
+	Values   []string
+	ValuesAR []string
+	// Source is a workbook name from WorkbookConfig.Lists; it replaces
+	// Values/ValuesAR.
+	Source string
+	// AllowOther shows a warning instead of refusing a value that is not
+	// in the list.
+	AllowOther  bool
 	PromptTitle LocalizedText
 	Prompt      LocalizedText
 	ErrorTitle  LocalizedText
@@ -146,6 +185,12 @@ func GenerateExcelTemplate(cfg WorkbookConfig) ([]byte, error) {
 		}
 		if err := writeSheet(f, styles, cfg.Language, sheet); err != nil {
 			return nil, fmt.Errorf("writing sheet %q: %w", sheet.Name, err)
+		}
+	}
+
+	if len(cfg.Lists) > 0 {
+		if err := writeLists(f, styles, cfg); err != nil {
+			return nil, err
 		}
 	}
 
@@ -253,7 +298,13 @@ func writeSheet(f *excelize.File, styles excelStyles, lang Language, cfg SheetCo
 		if err := f.SetCellValue(cfg.Name, cell, label); err != nil {
 			return err
 		}
-		if err := f.SetCellStyle(cfg.Name, cell, cell, styles.header); err != nil {
+		headerStyle := styles.header
+		if col.HeaderColor != "" {
+			if headerStyle, err = headerStyleWithColor(f, col.HeaderColor); err != nil {
+				return err
+			}
+		}
+		if err := f.SetCellStyle(cfg.Name, cell, cell, headerStyle); err != nil {
 			return err
 		}
 		if col.Required && label != "" {
@@ -302,23 +353,51 @@ func writeSheet(f *excelize.File, styles excelStyles, lang Language, cfg SheetCo
 		rows = 4999
 	}
 	for i, col := range cfg.Columns {
-		if col.Dropdown == nil {
-			continue
-		}
-		values := col.Dropdown.Values
-		if lang == LanguageArabic && len(col.Dropdown.ValuesAR) > 0 {
-			values = col.Dropdown.ValuesAR
-		}
-		if len(values) == 0 {
+		if col.Formula == "" {
 			continue
 		}
 		name, err := excelize.ColumnNumberToName(i + 1)
 		if err != nil {
 			return err
 		}
+		n := col.FormulaRows
+		if n <= 0 || n > rows {
+			n = rows
+		}
+		for r := 2; r <= n+1; r++ {
+			if err := f.SetCellFormula(cfg.Name, fmt.Sprintf("%s%d", name, r), strings.ReplaceAll(col.Formula, "{row}", strconv.Itoa(r))); err != nil {
+				return err
+			}
+		}
+	}
+	for i, col := range cfg.Columns {
+		name, err := excelize.ColumnNumberToName(i + 1)
+		if err != nil {
+			return err
+		}
+		if col.Dropdown == nil {
+			if hint := col.Hint.For(lang); hint != "" {
+				dv := excelize.NewDataValidation(true)
+				dv.Sqref = fmt.Sprintf("%s2:%s%d", name, name, rows+1)
+				dv.SetInput(col.Name.For(lang), hint)
+				if err := f.AddDataValidation(cfg.Name, dv); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		values := col.Dropdown.Values
+		if lang == LanguageArabic && len(col.Dropdown.ValuesAR) > 0 {
+			values = col.Dropdown.ValuesAR
+		}
+		if len(values) == 0 && col.Dropdown.Source == "" {
+			continue
+		}
 		dv := excelize.NewDataValidation(true)
 		dv.Sqref = fmt.Sprintf("%s2:%s%d", name, name, rows+1)
-		if err := dv.SetDropList(values); err != nil {
+		if col.Dropdown.Source != "" {
+			dv.SetSqrefDropList(col.Dropdown.Source)
+		} else if err := dv.SetDropList(values); err != nil {
 			return fmt.Errorf("dropdown for %s: %w", col.Key, err)
 		}
 		promptTitle := col.Dropdown.PromptTitle.For(lang)
@@ -347,7 +426,11 @@ func writeSheet(f *excelize.File, styles excelStyles, lang Language, cfg SheetCo
 				errorText = "اختر أحد الخيارات: " + strings.Join(values, ", ")
 			}
 		}
-		dv.SetError(excelize.DataValidationErrorStyleStop, errorTitle, errorText)
+		errorStyle := excelize.DataValidationErrorStyleStop
+		if col.Dropdown.AllowOther {
+			errorStyle = excelize.DataValidationErrorStyleWarning
+		}
+		dv.SetError(errorStyle, errorTitle, errorText)
 		if err := f.AddDataValidation(cfg.Name, dv); err != nil {
 			return err
 		}
@@ -486,4 +569,79 @@ func setCell(f *excelize.File, sheet string, col, row int, value interface{}, st
 		return err
 	}
 	return f.SetCellStyle(sheet, cell, cell, style)
+}
+
+func headerStyleWithColor(f *excelize.File, color string) (int, error) {
+	return f.NewStyle(&excelize.Style{
+		Font:      &excelize.Font{Bold: true, Color: "FFFFFF"},
+		Fill:      excelize.Fill{Type: "pattern", Color: []string{color}, Pattern: 1},
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center", WrapText: true},
+		Border: []excelize.Border{
+			{Type: "left", Color: "B4C6E7", Style: 1},
+			{Type: "right", Color: "B4C6E7", Style: 1},
+			{Type: "top", Color: "B4C6E7", Style: 1},
+			{Type: "bottom", Color: "B4C6E7", Style: 1},
+		},
+	})
+}
+
+// writeLists adds the read-only Lists sheet: one column per list, fixed
+// values then formulas, and a workbook name per list that covers only its
+// non-empty cells (so dropdowns show no trailing blanks).
+func writeLists(f *excelize.File, styles excelStyles, cfg WorkbookConfig) error {
+	sheet := cfg.ListsSheet
+	if sheet == "" {
+		sheet = "Lists"
+	}
+	if _, err := f.NewSheet(sheet); err != nil {
+		return fmt.Errorf("creating sheet %q: %w", sheet, err)
+	}
+	for i, list := range cfg.Lists {
+		col, err := excelize.ColumnNumberToName(i + 1)
+		if err != nil {
+			return err
+		}
+		if err := setCell(f, sheet, i+1, 1, list.Title.For(cfg.Language), styles.header); err != nil {
+			return err
+		}
+		if err := f.SetColWidth(sheet, col, col, 34); err != nil {
+			return err
+		}
+		row := 2
+		for _, v := range list.Values {
+			if err := f.SetCellStr(sheet, fmt.Sprintf("%s%d", col, row), v); err != nil {
+				return err
+			}
+			row++
+		}
+		for _, formula := range list.Formulas {
+			if err := f.SetCellFormula(sheet, fmt.Sprintf("%s%d", col, row), formula); err != nil {
+				return err
+			}
+			row++
+		}
+		last := row - 1
+		if last < 2 {
+			last = 2
+		}
+		// COUNTIF "?*" counts text of at least one character, so formula
+		// results of "" are left out.
+		ref := fmt.Sprintf("OFFSET('%[1]s'!$%[2]s$2,0,0,MAX(1,COUNTIF('%[1]s'!$%[2]s$2:$%[2]s$%[3]d,\"?*\")),1)", sheet, col, last)
+		if list.Lookup {
+			ref = fmt.Sprintf("'%[1]s'!$%[2]s$2:$%[2]s$%[3]d", sheet, col, last)
+		}
+		if err := f.SetDefinedName(&excelize.DefinedName{Name: list.Name, RefersTo: ref}); err != nil {
+			return fmt.Errorf("defining list %q: %w", list.Name, err)
+		}
+	}
+	if err := f.SetPanes(sheet, &excelize.Panes{Freeze: true, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"}); err != nil {
+		return err
+	}
+	if err := f.ProtectSheet(sheet, &excelize.SheetProtectionOptions{SelectLockedCells: true, SelectUnlockedCells: true}); err != nil {
+		return err
+	}
+	// Formulas are written without cached results; have Excel compute them
+	// when the file is opened.
+	full := true
+	return f.SetCalcProps(&excelize.CalcPropsOptions{FullCalcOnLoad: &full})
 }

@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"strings"
+
 	"github.com/automax/backend/internal/models"
+	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
-	"github.com/automax/backend/pkg/validation"
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -33,24 +35,16 @@ func (h *KpiPerformanceBandHandler) ListBands(c *fiber.Ctx) error {
 }
 
 // GetEffectiveBand resolves the band that actually applies to a KPI: its own
-// override if one exists, else the global default, else a hardcoded fallback.
+// override if one exists, else the global default, else a hardcoded fallback
+// — the same resolution performance status calculation uses
+// (services.EffectiveBand).
 func (h *KpiPerformanceBandHandler) GetEffectiveBand(c *fiber.Ctx) error {
-	kpiCode := c.Query("kpi_code")
-
-	if kpiCode != "" {
-		var override models.KpiPerformanceBand
-		if err := h.db.WithContext(c.UserContext()).Where("kpi_code = ?", kpiCode).First(&override).Error; err == nil {
-			return utils.SuccessResponse(c, fiber.StatusOK, "", override.ToResponse())
-		}
-	}
-
-	var global models.KpiPerformanceBand
-	if err := h.db.WithContext(c.UserContext()).Where("kpi_code IS NULL").Order("created_at ASC").First(&global).Error; err == nil {
-		return utils.SuccessResponse(c, fiber.StatusOK, "", global.ToResponse())
-	}
-
-	return utils.SuccessResponse(c, fiber.StatusOK, "", models.DefaultKpiPerformanceBand)
+	return utils.SuccessResponse(c, fiber.StatusOK, "", services.EffectiveBand(h.db.WithContext(c.UserContext()), c.Query("kpi_code")))
 }
+
+// maxBandThreshold is the highest green/amber minimum a band may use: band
+// thresholds are compared to achievement %, which is displayed capped at 100.
+const maxBandThreshold = 100
 
 // UpsertBand creates or updates the band for the given kpi_code (nil = global default).
 func (h *KpiPerformanceBandHandler) UpsertBand(c *fiber.Ctx) error {
@@ -58,24 +52,45 @@ func (h *KpiPerformanceBandHandler) UpsertBand(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
-	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": validationErrors})
+	if req.GreenMin == nil || req.AmberMin == nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "green_min and amber_min are required")
 	}
-	if req.GreenMin <= req.AmberMin {
+	green, amber := *req.GreenMin, *req.AmberMin
+	if amber < 0 || green > maxBandThreshold {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Band thresholds must be between 0 and 100")
+	}
+	if green <= amber {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "green threshold must be greater than amber threshold")
 	}
 
-	q := h.db.WithContext(c.UserContext())
-	var existing models.KpiPerformanceBand
-	lookup := q.Where("kpi_code IS NULL")
-	if req.KpiCode != nil && *req.KpiCode != "" {
-		lookup = q.Where("kpi_code = ?", *req.KpiCode)
+	db := h.db.WithContext(c.UserContext())
+	if req.KpiCode != nil {
+		code := strings.TrimSpace(*req.KpiCode)
+		if code == "" {
+			req.KpiCode = nil
+		} else {
+			// Bands are keyed by KPI code only (no kpi_type column), so the
+			// code must exist in at least one of the three dictionaries.
+			if !kpiExistsByCode(db, code, models.KPITypeStrategic) && !kpiExistsByCode(db, code, models.KPITypeOperational) &&
+				!kpiExistsByCode(db, code, models.KPITypeAward) {
+				return utils.ErrorResponse(c, fiber.StatusBadRequest, "KPI not found in dictionary")
+			}
+			req.KpiCode = &code
+		}
 	}
 
-	err := lookup.First(&existing).Error
+	// Unscoped: a previously deleted band for the same code still holds the
+	// unique kpi_code, so it is restored and updated instead of re-created.
+	var existing models.KpiPerformanceBand
+	lookup := db.Unscoped().Where("kpi_code IS NULL")
+	if req.KpiCode != nil {
+		lookup = db.Unscoped().Where("kpi_code = ?", *req.KpiCode)
+	}
+
+	err := lookup.Order("deleted_at DESC NULLS FIRST").First(&existing).Error
 	if err == gorm.ErrRecordNotFound {
-		item := &models.KpiPerformanceBand{KpiCode: req.KpiCode, GreenMin: req.GreenMin, AmberMin: req.AmberMin}
-		if err := h.db.WithContext(c.UserContext()).Create(item).Error; err != nil {
+		item := &models.KpiPerformanceBand{KpiCode: req.KpiCode, GreenMin: green, AmberMin: amber}
+		if err := db.Create(item).Error; err != nil {
 			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
 		}
 		return utils.SuccessResponse(c, fiber.StatusCreated, "", item.ToResponse())
@@ -84,9 +99,10 @@ func (h *KpiPerformanceBandHandler) UpsertBand(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_load_data"))
 	}
 
-	existing.GreenMin = req.GreenMin
-	existing.AmberMin = req.AmberMin
-	if err := h.db.WithContext(c.UserContext()).Save(&existing).Error; err != nil {
+	existing.GreenMin = green
+	existing.AmberMin = amber
+	existing.DeletedAt = gorm.DeletedAt{}
+	if err := db.Unscoped().Save(&existing).Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_update"))
 	}
 	return utils.SuccessResponse(c, fiber.StatusOK, "", existing.ToResponse())
