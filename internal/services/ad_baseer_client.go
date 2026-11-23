@@ -211,13 +211,18 @@ func (c *adBaseerClient) post(ctx context.Context, path, bearer string, payload 
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
+	c.logAPIRequest(path, bearer != "", raw)
+	started := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		// url.Error includes the URL only — the body is never part of it.
-		return 0, nil, fmt.Errorf("%w: %s request failed: %v", ErrADBaseerUnavailable, path, err)
+		err = fmt.Errorf("%w: %s request failed: %v", ErrADBaseerUnavailable, path, err)
+		c.logAPITransportError(path, time.Since(started), err)
+		return 0, nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	c.logAPIResponse(path, resp.StatusCode, time.Since(started), resp.Header.Get("Content-Type"), body, readErr)
 
 	if resp.Header.Get(adBaseerMockHeader) != "" && !c.cfg.IsMock() {
 		return 0, nil, fmt.Errorf("%w: %s answered by ad-baseer-simulator but AD_BASEER_MODE=real — check AD_BASEER_BASE_URL", ErrADBaseerUnavailable, path)
@@ -232,7 +237,11 @@ func (c *adBaseerClient) post(ctx context.Context, path, bearer string, payload 
 	return resp.StatusCode, body, nil
 }
 
-func (c *adBaseerClient) StartLogin(ctx context.Context, username, password string) (*ADBaseerChallenge, error) {
+func (c *adBaseerClient) StartLogin(ctx context.Context, username, password string) (_ *ADBaseerChallenge, err error) {
+	started := time.Now()
+	defer func() {
+		c.logAPIOutcome("StartLogin (GetToken + ValidateCredentialsOTP)", username, time.Since(started), err)
+	}()
 	// 1. GetToken. The contract sends the employee's username as "Email".
 	status, body, err := c.post(ctx, adBaseerTokenPath, "", map[string]string{
 		"Service": c.cfg.Service,
@@ -299,7 +308,9 @@ func (c *adBaseerClient) StartLogin(ctx context.Context, username, password stri
 	return &ADBaseerChallenge{AccessToken: token, RequestID: strings.TrimSpace(validateResp.RequestID)}, nil
 }
 
-func (c *adBaseerClient) VerifyOTP(ctx context.Context, challenge *ADBaseerChallenge, otp string) (*ADBaseerEmployee, error) {
+func (c *adBaseerClient) VerifyOTP(ctx context.Context, challenge *ADBaseerChallenge, otp string) (_ *ADBaseerEmployee, err error) {
+	started := time.Now()
+	defer func() { c.logAPIOutcome("VerifyOTP (IsValidOTP)", "", time.Since(started), err) }()
 	status, body, err := c.post(ctx, adBaseerIsValidPath, challenge.AccessToken, map[string]string{
 		"otp":       otp,
 		"requestID": challenge.RequestID,
