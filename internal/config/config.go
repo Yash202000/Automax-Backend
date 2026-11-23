@@ -343,6 +343,9 @@ type ADBaseerConfig struct {
 	ActiveStatuses []string
 	// InsecureSkipVerify disables TLS verification; refused in production.
 	InsecureSkipVerify bool
+	// LogAPI logs every AD-Baseer request and response (credentials, tokens,
+	// OTPs and personal data masked) for troubleshooting.
+	LogAPI bool
 }
 
 func (c ADBaseerConfig) IsMock() bool {
@@ -457,6 +460,7 @@ func Load() *Config {
 			OTPMaxAttempts:     getEnvAsInt("AD_BASEER_OTP_MAX_ATTEMPTS", 3),
 			ActiveStatuses:     getEnvAsStringSlice("AD_BASEER_ACTIVE_STATUSES", []string{"1"}),
 			InsecureSkipVerify: getEnvAsBool("AD_BASEER_INSECURE_SKIP_VERIFY", false),
+			LogAPI:             getEnvAsBool("AD_BASEER_LOG_API", true),
 		},
 		Nafath: NafathConfig{
 			Enabled:            getEnvAsBool("NAFATH_ENABLED", false),
