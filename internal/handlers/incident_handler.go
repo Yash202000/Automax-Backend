@@ -1163,6 +1163,10 @@ func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 		if errors.Is(err, services.ErrAssigneeLocked) {
 			return assigneeLockedResponse(c, err)
 		}
+		var fieldErrors services.IncidentFieldErrors
+		if errors.As(err, &fieldErrors) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": fieldErrors})
+		}
 		// Hierarchy rejections are the caller's mistake, not a server fault. Each
 		// sentinel's message is its i18n key.
 		switch {

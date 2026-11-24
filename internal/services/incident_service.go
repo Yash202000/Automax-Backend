@@ -1516,7 +1516,7 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	var changes []models.IncidentFieldChange
 	var descriptions []string
 
-	// Nazaha: apply its fields; contact and previous-report changes are saved after commit.
+	// Nazaha: apply its fields; contact and previous-report changes are saved before commit.
 	var nazahaEdit *nazahaEditPlan
 	if s.cfg.IsNazaha() {
 		plan, nazahaChanges, err := s.prepareNazahaEdit(ctx, incident, req)
@@ -2048,6 +2048,12 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		}
 		return nil, err
 	}
+	if nazahaEdit != nil {
+		if err := s.applyNazahaEdit(ctx, txRepo, incident, nazahaEdit); err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+	}
 
 	// Create revision if there were changes
 	if len(changes) > 0 {
@@ -2066,9 +2072,6 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	// Commit transaction
 	if err := tx.Commit().Error; err != nil {
 		return nil, err
-	}
-	if nazahaEdit != nil {
-		s.applyNazahaEdit(ctx, incident, nazahaEdit)
 	}
 
 	// Save optional comment attached to the update.

@@ -3,11 +3,11 @@ package services
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/models"
+	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/i18n"
 	pkgutils "github.com/automax/backend/pkg/utils"
@@ -49,8 +49,8 @@ func (s *incidentService) findReporterUser(ctx context.Context, req *models.Inci
 		}
 	}
 	if contact == nil && byMobile != nil {
-		// Users without a national ID have a placeholder, which never matches.
-		if IsNationalID(byMobile.NationalID) && byMobile.NationalID != req.ReporterNationalID {
+		// Conflict only when a different national ID was given; mobile alone is the same contact.
+		if IsNationalID(byMobile.NationalID) && req.ReporterNationalID != "" && byMobile.NationalID != req.ReporterNationalID {
 			return nil, contactConflict(ctx, "reporter_phone", "mobile_belongs_to_other_contact")
 		}
 		contact = byMobile
@@ -254,26 +254,26 @@ func (s *incidentService) checkContactEdit(ctx context.Context, contact *models.
 	return nil
 }
 
-// applyNazahaEdit saves the previous-report links and contact changes after the
-// incident update. Failures are only logged.
-func (s *incidentService) applyNazahaEdit(ctx context.Context, incident *models.Incident, plan *nazahaEditPlan) {
+// applyNazahaEdit saves the previous-report links and contact changes of an
+// edit. It runs inside the update transaction (txRepo); any error must roll
+// the edit back. Contact writes are not part of the transaction.
+func (s *incidentService) applyNazahaEdit(ctx context.Context, txRepo repository.IncidentRepository, incident *models.Incident, plan *nazahaEditPlan) error {
 	if plan.replacePrevious {
-		if err := s.incidentRepo.ReplacePreviousReportLinks(ctx, incident.ID, plan.previousIDs); err != nil {
-			log.Printf("[IncidentService] failed to update previous reports of incident %s: %v", incident.ID, err)
+		if err := txRepo.ReplacePreviousReportLinks(ctx, incident.ID, plan.previousIDs); err != nil {
+			return err
 		}
 	}
 	r := plan.reporter
 	if r == nil {
-		return
+		return nil
 	}
 
 	contact := plan.contact
 	if contact == nil {
 		created, err := s.registerNazahaContact(ctx, r)
 		if err != nil {
-			log.Printf("[IncidentService] failed to create reporter contact for incident %s: %v", incident.ID, err)
 			LogContactFailure("Create contact from incident edit", "", r.ReporterPhone, err)
-			return
+			return contactSaveError(ctx, err)
 		}
 		contact = created
 	}
@@ -292,15 +292,31 @@ func (s *incidentService) applyNazahaEdit(ctx context.Context, incident *models.
 	if len(updates) > 0 {
 		updates["id"] = contact.ID
 		if err := s.userRepo.UpdateProfile(ctx, updates); err != nil {
-			log.Printf("[IncidentService] failed to update reporter contact %s: %v", contact.ID, err)
 			LogContactFailure("Update contact from incident edit", contact.ID.String(), r.ReporterPhone, err)
+			return contactSaveError(ctx, err)
 		}
 	}
 	if plan.linkContact {
-		if err := s.incidentRepo.UpdateFields(ctx, incident.ID, map[string]interface{}{"reporter_id": contact.ID}); err != nil {
-			log.Printf("[IncidentService] failed to link contact %s to incident %s: %v", contact.ID, incident.ID, err)
+		if err := txRepo.UpdateFields(ctx, incident.ID, map[string]interface{}{"reporter_id": contact.ID}); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+// contactSaveError turns a duplicate mobile, email or national ID (another
+// contact saved it in the meantime) into a field error; other errors pass through.
+func contactSaveError(ctx context.Context, err error) error {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "idx_users_phone"), msg == i18n.T(ctx, "phone_number_in_use"):
+		return contactConflict(ctx, "reporter_phone", "mobile_belongs_to_other_contact")
+	case strings.Contains(msg, "idx_users_email"), msg == i18n.T(ctx, "email_already_exists"):
+		return contactConflict(ctx, "reporter_email", "email_belongs_to_other_contact")
+	case strings.Contains(msg, "idx_users_national_id"):
+		return contactConflict(ctx, "reporter_national_id", "national_id_belongs_to_other_contact")
+	}
+	return err
 }
 
 // registerNazahaContact creates a contact from the reporter details.
