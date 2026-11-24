@@ -360,6 +360,16 @@ func existingMomraTicketNumber(candidates []models.Incident, momraIncidentNo str
 	return ""
 }
 
+// momraIncidentNoOf returns custom_fields.momra_incident_no (MOMRA's own incident
+// number), or "" when the incident has none (not MOMRA-sourced) or the JSON is invalid.
+func momraIncidentNoOf(incident *models.Incident) string {
+	var fields struct {
+		MomraIncidentNo string `json:"momra_incident_no"`
+	}
+	_ = json.Unmarshal([]byte(incident.CustomFields), &fields)
+	return fields.MomraIncidentNo
+}
+
 type EPMIncidentStatusItems struct {
 	CRMID              string      `json:"CRMID"`
 	Status             interface{} `json:"status"`
@@ -891,7 +901,7 @@ func (h *EPMIncidentHandler) GetMomraIncidentStatusDetails(c *fiber.Ctx) error {
 	}
 
 	items := &EPMIncidentStatusItems{
-		CRMID:              incident.IncidentNumber,
+		CRMID:              momraIncidentNoOf(incident), // MOMRA's number; TicketNumber is ours
 		Status:             status,
 		Comments:           latestComment,
 		IsNotified:         false,

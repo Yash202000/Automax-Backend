@@ -94,7 +94,7 @@ func (c *momraClient) SendSMSByTemplateIDDetailed(ctx context.Context, mobile st
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+token)
-		log.Printf("[SMS] provider=amana stage=request %s POST %s to=%s template_id=%d variables=%d attempt=%d", tag, amanaSMSSendPath, maskedMobile, templateID, len(variables), attempt+1)
+		log.Printf("[SMS] provider=amana stage=request %s POST %s to=%s template_id=%d variables=%d attempt=%d body=%s", tag, req.URL.String(), maskedMobile, templateID, len(variables), attempt+1, logPayload)
 		start := time.Now()
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
@@ -104,7 +104,7 @@ func (c *momraClient) SendSMSByTemplateIDDetailed(ctx context.Context, mobile st
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
 		res := &AmanaSMSResult{StatusCode: resp.StatusCode, Response: c.safeExcerpt(body)}
-		log.Printf("[SMS] provider=amana stage=response %s status=%d in %s to=%s template_id=%d", tag, resp.StatusCode, time.Since(start), maskedMobile, templateID)
+		log.Printf("[SMS] provider=amana stage=response %s status=%d in %s to=%s template_id=%d body=%s", tag, resp.StatusCode, time.Since(start), maskedMobile, templateID, c.redact(strings.Join(strings.Fields(string(body)), " ")))
 
 		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
 			log.Printf("[SMS] provider=amana stage=response %s 401 unauthorized — dropping cached token and retrying once", tag)
