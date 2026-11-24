@@ -18,17 +18,22 @@ const (
 )
 
 type User struct {
-	ID                          uuid.UUID        `gorm:"type:uuid;primary_key" json:"id"`
-	NationalID                  string           `gorm:"not null;default:''" json:"national_id"`
-	Email                       string           `gorm:"uniqueIndex;not null" json:"email"`
-	Username                    string           `gorm:"uniqueIndex;not null" json:"username"`
-	Password                    string           `gorm:"not null" json:"-"`
-	FirstName                   string           `gorm:"size:100" json:"first_name"`
-	MiddleName                  string           `gorm:"size:100" json:"middle_name"`
-	LastName                    string           `gorm:"size:100" json:"last_name"`
-	Phone                       string           `gorm:"size:20" json:"phone"`
-	AlternateMobile             string           `gorm:"size:50;index" json:"alternate_mobile"`
-	MobileVerified              bool             `gorm:"default:false" json:"mobile_verified"`
+	ID              uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
+	NationalID      string    `gorm:"not null;default:''" json:"national_id"`
+	Email           string    `gorm:"uniqueIndex;not null" json:"email"`
+	Username        string    `gorm:"uniqueIndex;not null" json:"username"`
+	Password        string    `gorm:"not null" json:"-"`
+	FirstName       string    `gorm:"size:100" json:"first_name"`
+	MiddleName      string    `gorm:"size:100" json:"middle_name"`
+	LastName        string    `gorm:"size:100" json:"last_name"`
+	Phone           string    `gorm:"size:20" json:"phone"`
+	AlternateMobile string    `gorm:"size:50;index" json:"alternate_mobile"`
+	MobileVerified  bool      `gorm:"default:false" json:"mobile_verified"`
+	// Reporter details filled by Nazaha; empty for other clients.
+	NationalityID               *uuid.UUID       `gorm:"type:uuid;index" json:"nationality_id"`
+	Nationality                 *LookupValue     `gorm:"foreignKey:NationalityID" json:"nationality,omitempty"`
+	Gender                      string           `gorm:"size:10;not null;default:''" json:"gender"`
+	Address                     string           `gorm:"size:500;not null;default:''" json:"address"`
 	Avatar                      string           `gorm:"size:500" json:"avatar"`
 	DepartmentID                *uuid.UUID       `gorm:"type:uuid;index" json:"department_id"`
 	Department                  *Department      `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
@@ -374,6 +379,10 @@ type UserUpdateRequest struct {
 type UserResponse struct {
 	ID                          uuid.UUID                `json:"id"`
 	NationalID                  string                   `json:"national_id"`
+	NationalityID               *uuid.UUID               `json:"nationality_id,omitempty"`
+	Nationality                 *LookupValueResponse     `json:"nationality,omitempty"`
+	Gender                      string                   `json:"gender,omitempty"`
+	Address                     string                   `json:"address,omitempty"`
 	Email                       string                   `json:"email"`
 	Username                    string                   `json:"username"`
 	FirstName                   string                   `json:"first_name"`
@@ -536,6 +545,9 @@ func ToUserResponse(user *User) UserResponse {
 	resp := UserResponse{
 		ID:              user.ID,
 		NationalID:      user.NationalID,
+		NationalityID:   user.NationalityID,
+		Gender:          user.Gender,
+		Address:         user.Address,
 		Email:           user.Email,
 		Username:        user.Username,
 		FirstName:       user.FirstName,
@@ -610,6 +622,11 @@ func ToUserResponse(user *User) UserResponse {
 		for i, role := range user.Roles {
 			resp.Roles[i] = ToRoleResponse(&role)
 		}
+	}
+
+	if user.Nationality != nil {
+		nationality := ToLookupValueResponse(user.Nationality)
+		resp.Nationality = &nationality
 	}
 
 	return resp

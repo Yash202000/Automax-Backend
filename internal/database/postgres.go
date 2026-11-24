@@ -101,6 +101,7 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		&models.FeedbackTemplate{},
 		// Incident models
 		&models.Incident{},
+		&models.IncidentPreviousReport{},
 		&models.IncidentComment{},
 		&models.IncidentAttachment{},
 		&models.IncidentFeedback{},
@@ -886,6 +887,11 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		)
 	}
 
+	// Nazaha only: reveal the details of an uncooperative reporter.
+	if cfg.IsNazaha() {
+		permissions = append(permissions, models.Permission{Name: "Reveal Reporter Details", Code: models.PermissionRevealReporter, Module: "incidents", Action: "reveal_reporter", ActionAr: "إظهار بيانات المبلغ", Description: "View the hidden details of an uncooperative reporter (every view is logged)"})
+	}
+
 	for _, perm := range permissions {
 		var existing models.Permission
 		result := db.Where("code = ?", perm.Code).First(&existing)
@@ -933,6 +939,14 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 	db.Where("module = ?", "error-logs").Find(&errorLogPerms)
 	if len(errorLogPerms) > 0 {
 		db.Model(&adminRole).Association("Permissions").Append(errorLogPerms)
+	}
+
+	// Nazaha: give the admin role the reveal-reporter permission.
+	if cfg.IsNazaha() {
+		var revealPerm models.Permission
+		if db.Where("code = ?", models.PermissionRevealReporter).First(&revealPerm).Error == nil {
+			db.Model(&adminRole).Association("Permissions").Append(&revealPerm)
+		}
 	}
 
 	// Ensure the admin role has the Escalation Log permissions on existing databases.
@@ -1175,6 +1189,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 
 	// Seed default lookup categories
 	seedLookupCategories(db, cfg)
+	seedNazahaLookups(db, cfg)
 
 	if cfg.GoalManagement.Enabled {
 		// Seed default evidence approval workflow
@@ -1449,6 +1464,76 @@ func seedLookupCategories(db *gorm.DB, cfg *config.Config) {
 				}
 			}
 		}
+	}
+}
+
+// nazahaNationalities are the starting values of the Nationality list.
+var nazahaNationalities = []struct{ Code, Name, NameAr string }{
+	{"SA", "Saudi Arabia", "السعودية"}, {"AE", "United Arab Emirates", "الإمارات"},
+	{"KW", "Kuwait", "الكويت"}, {"QA", "Qatar", "قطر"}, {"BH", "Bahrain", "البحرين"},
+	{"OM", "Oman", "عُمان"}, {"EG", "Egypt", "مصر"}, {"JO", "Jordan", "الأردن"},
+	{"LB", "Lebanon", "لبنان"}, {"SY", "Syria", "سوريا"}, {"IQ", "Iraq", "العراق"},
+	{"YE", "Yemen", "اليمن"}, {"PS", "Palestine", "فلسطين"}, {"SD", "Sudan", "السودان"},
+	{"TR", "Turkey", "تركيا"}, {"IN", "India", "الهند"}, {"PK", "Pakistan", "باكستان"},
+	{"BD", "Bangladesh", "بنغلاديش"}, {"PH", "Philippines", "الفلبين"}, {"ID", "Indonesia", "إندونيسيا"},
+}
+
+// seedNazahaLookups creates the Authority (empty) and Nationality lists when missing.
+func seedNazahaLookups(db *gorm.DB, cfg *config.Config) {
+	if !cfg.IsNazaha() {
+		return
+	}
+	seedNazahaNationalities(db)
+	seedNazahaAuthorities(db)
+}
+
+// seedNazahaAuthorities creates the empty Authority list when missing.
+func seedNazahaAuthorities(db *gorm.DB) {
+	var category models.LookupCategory
+	if err := db.Where("code = ?", models.AuthorityCategoryCode).First(&category).Error; err != gorm.ErrRecordNotFound {
+		return
+	}
+	category = models.LookupCategory{
+		Code:        models.AuthorityCategoryCode,
+		Name:        "Authority",
+		NameAr:      "الجهة",
+		Description: "Authorities an incident can be referred to",
+		IsSystem:    true,
+		IsActive:    true,
+	}
+	if err := db.Create(&category).Error; err != nil {
+		log.Printf("Failed to create the authority lookup category: %v", err)
+	}
+}
+
+func seedNazahaNationalities(db *gorm.DB) {
+	var category models.LookupCategory
+	if err := db.Where("code = ?", models.NationalityCategoryCode).First(&category).Error; err != gorm.ErrRecordNotFound {
+		return
+	}
+	err := db.Transaction(func(tx *gorm.DB) error {
+		category = models.LookupCategory{
+			Code:        models.NationalityCategoryCode,
+			Name:        "Nationality",
+			NameAr:      "الجنسية",
+			Description: "Reporter nationalities",
+			IsSystem:    true,
+			IsActive:    true,
+		}
+		if err := tx.Create(&category).Error; err != nil {
+			return err
+		}
+		values := make([]models.LookupValue, 0, len(nazahaNationalities))
+		for i, n := range nazahaNationalities {
+			values = append(values, models.LookupValue{
+				CategoryID: category.ID, Code: n.Code, Name: n.Name, NameAr: n.NameAr,
+				SortOrder: i + 1, IsActive: true,
+			})
+		}
+		return tx.Create(&values).Error
+	})
+	if err != nil {
+		log.Printf("Failed to create nationality lookup category: %v", err)
 	}
 }
 

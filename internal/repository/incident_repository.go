@@ -26,6 +26,13 @@ type IncidentRepository interface {
 	FindByID(ctx context.Context, id uuid.UUID) (*models.Incident, error)
 	FindByIDWithRelations(ctx context.Context, id uuid.UUID) (*models.Incident, error)
 	FindByIncidentNumber(ctx context.Context, number string) (*models.Incident, error)
+
+	// Nazaha (see incident_nazaha_repository.go)
+	ListByCallerNumber(ctx context.Context, callerNumber string) ([]models.CallerPreviousReport, error)
+	CreatePreviousReportLinks(ctx context.Context, incidentID uuid.UUID, previousIDs []uuid.UUID) error
+	LoadNazahaRelations(ctx context.Context, incident *models.Incident) error
+	ListPreviousReports(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentRef, error)
+	ReplacePreviousReportLinks(ctx context.Context, incidentID uuid.UUID, previousIDs []uuid.UUID) error
 	FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.Incident, error)
 	// FindRecurrences returns, per incident ID, the latest earlier incident with the same
 	// classification and record type within radiusMeters; Count is the total number of such earlier incidents.

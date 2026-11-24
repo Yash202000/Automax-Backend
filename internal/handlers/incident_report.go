@@ -355,6 +355,7 @@ func (h *IncidentHandler) GenerateCitizenReport(c *fiber.Ctx) error {
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "incident_not_found"))
 	}
+	h.applyReportReporter(c.UserContext(), id, reportData)
 	citizenLangAr := req.Lang == "ar" || (req.Lang == "" && c.Query("lang", "ar") != "en")
 	if reportData.LocationID != nil {
 		reportData.LocationName, _ = h.locationRepo.FetchLocationFullPathByID(c.UserContext(), *reportData.LocationID)
@@ -446,6 +447,7 @@ func (h *IncidentHandler) loadReportBundle(ctx context.Context, id uuid.UUID, is
 	if err != nil {
 		return nil, &reportLoadError{fiber.StatusNotFound, "incident_not_found"}
 	}
+	h.applyReportReporter(ctx, id, reportData)
 
 	if reportData.LocationID != nil {
 		reportData.LocationName, err = h.locationRepo.FetchLocationFullPathByID(ctx, *reportData.LocationID)
@@ -1509,6 +1511,35 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 
 	b.WriteString(`</div></body></html>`)
 	return b.Bytes()
+}
+
+// applyReportReporter sets the reporter shown in the PDF: blank when hidden, else
+// (Nazaha) taken from the reporter's contact.
+func (h *IncidentHandler) applyReportReporter(ctx context.Context, id uuid.UUID, d *models.IncidentReportData) {
+	if models.IsReporterHidden(d.CooperationStatus) {
+		d.CallerName, d.CallerPhone, d.ReporterEmail = "", "", ""
+		d.CreatorFullName, d.CreatorEmail, d.CreatorPhone = "", "", ""
+		return
+	}
+	if !h.cfg.IsNazaha() {
+		return
+	}
+	incident, err := h.incidentRepo.FindByID(ctx, id)
+	if err != nil || !models.HasReporterContact(incident) {
+		return
+	}
+	reporter, err := h.userRepo.FindByID(ctx, *incident.ReporterID)
+	if err != nil {
+		return
+	}
+	details := models.ToReporterDetailsResponse(&models.Incident{Reporter: reporter})
+	d.CallerName = details.ReporterName
+	d.CallerPhone = details.ReporterPhone
+	d.ReporterEmail = details.ReporterEmail
+	// The Reporter section shows the same contact.
+	d.CreatorFullName = details.ReporterName
+	d.CreatorEmail = details.ReporterEmail
+	d.CreatorPhone = details.ReporterPhone
 }
 
 func secHeader(b *bytes.Buffer, title string) {

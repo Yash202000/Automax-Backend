@@ -175,6 +175,18 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 		validationErrors["alternate_mobile"] = i18n.T(c.UserContext(), "alternate_mobile_same_as_primary")
 	}
 
+	// Nazaha fields are checked for Nazaha and dropped for other clients.
+	if h.cfg.IsNazaha() {
+		if validationErrors == nil {
+			validationErrors = map[string]string{}
+		}
+		if err := h.prepareNazahaCreate(c.UserContext(), &req, validationErrors); err != nil {
+			return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
+		}
+	} else {
+		req.ClearNazahaFields()
+	}
+
 	if strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940) {
 		if utf8.RuneCountInString(req.Description) > h.cfg.MaxDescriptionLength {
 			if validationErrors == nil {
@@ -223,6 +235,10 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 			errors.Is(err, services.ErrClassificationNotFound),
 			errors.Is(err, services.ErrLocationNotSelectable),
 			errors.Is(err, services.ErrClassificationNotSelectable):
+			return ErrorResponseWithKey(c, fiber.StatusBadRequest, err.Error(), req.Source)
+
+		// Nazaha: report a workflow without states as a bad request.
+		case h.cfg.IsNazaha() && errors.Is(err, services.ErrEmptyWorkflow):
 			return ErrorResponseWithKey(c, fiber.StatusBadRequest, err.Error(), req.Source)
 
 		// Per-workflow required-field failures discovered after the workflow
@@ -1106,6 +1122,19 @@ func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 			"errors":  validationErrors,
 		})
 	}
+	// Nazaha: check the Nazaha fields of the edit.
+	if h.cfg.IsNazaha() {
+		status, fieldErrors, err := h.checkNazahaEdit(c, id, &req)
+		if err != nil {
+			return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
+		}
+		if status == fiber.StatusForbidden {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "insufficient_permissions"))
+		}
+		if len(fieldErrors) != 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": fieldErrors})
+		}
+	}
 	clientCode := strings.TrimSpace(h.cfg.ClientCode)
 	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.IVR) && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
 		if req.Source == "" || req.Source != constants.INCIDENT_SOURCE.IVR {
@@ -1133,6 +1162,10 @@ func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 		}
 		if errors.Is(err, services.ErrAssigneeLocked) {
 			return assigneeLockedResponse(c, err)
+		}
+		var fieldErrors services.IncidentFieldErrors
+		if errors.As(err, &fieldErrors) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": fieldErrors})
 		}
 		// Hierarchy rejections are the caller's mistake, not a server fault. Each
 		// sentinel's message is its i18n key.

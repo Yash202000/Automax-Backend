@@ -136,6 +136,17 @@ type Incident struct {
 	// CooperationStatus: dropdown value (empty = not selected). DB flexible; app validates allowed values.
 	CooperationStatus string `gorm:"size:50;not null;default:'';column:cooperation_status" json:"cooperation_status"`
 
+	// Nazaha fields (empty for other clients).
+	CallerNumber         string       `gorm:"size:20;index" json:"caller_number"`
+	LinkedIncidentID     *uuid.UUID   `gorm:"type:uuid;index" json:"linked_incident_id"`
+	LinkedIncident       *Incident    `gorm:"foreignKey:LinkedIncidentID" json:"linked_incident,omitempty"`
+	ConcernedAuthorityID *uuid.UUID   `gorm:"type:uuid;index" json:"concerned_authority_id"`
+	ConcernedAuthority   *LookupValue `gorm:"foreignKey:ConcernedAuthorityID" json:"concerned_authority,omitempty"`
+	Content              string       `gorm:"type:text" json:"content"`
+	Notes                string       `gorm:"type:text" json:"notes"`
+	Street               string       `gorm:"size:255" json:"street"`
+	// Nazaha keeps reporter details on the contact (Reporter), not here.
+
 	// CreatedByID is the ID of the authenticated user who created the record
 	// (differs from ReporterID when an agent creates it on behalf of a citizen).
 	CreatedByID *uuid.UUID `gorm:"type:uuid;index;column:created_by_id" json:"created_by_id"`
@@ -437,6 +448,23 @@ type IncidentCreateRequest struct {
 	RecordType         string                 `json:"record_type" validate:"omitempty,oneof=incident request complaint query"`
 	// CallUuid is the call this incident was raised from (CTI prefill), if any.
 	CallUuid string `json:"call_uuid" validate:"omitempty,max=36"`
+
+	// Nazaha fields, cleared for other clients. The lookup IDs have no uuid tag so
+	// "" is allowed; the Nazaha checks validate them.
+	CallerNumber         string   `json:"caller_number" validate:"omitempty,max=20"`
+	LinkedIncidentNumber string   `json:"linked_incident_number" validate:"omitempty,max=50"`
+	ConcernedAuthorityID *string  `json:"concerned_authority_id"`
+	PreviousReportIDs    []string `json:"previous_report_ids" validate:"omitempty,dive,uuid"`
+	Content              string   `json:"content"`
+	Notes                string   `json:"notes" validate:"omitempty,max=2000"`
+	Street               string   `json:"street" validate:"omitempty,max=255"`
+	// Saved on the reporter's contact.
+	ReporterNationalID    string  `json:"reporter_national_id"`
+	ReporterNationalityID *string `json:"reporter_nationality_id"`
+	ReporterGender        string  `json:"reporter_gender" validate:"omitempty,oneof=male female"`
+	ReporterAddress       string  `json:"reporter_address" validate:"omitempty,max=500"`
+	// LinkedIncidentID is set by the handler from LinkedIncidentNumber.
+	LinkedIncidentID *uuid.UUID `json:"-"`
 }
 
 type IncidentUpdateRequest struct {
@@ -469,6 +497,19 @@ type IncidentUpdateRequest struct {
 	// IvrLinkToken is the raw signed token from the SMS URL. When present, the update is
 	// attributed to the citizen's IVR SMS link submission (exact link lookup by token hash).
 	IvrLinkToken string `json:"ivr_link_token"`
+
+	// Nazaha fields (nil = unchanged, "" = clear). Reporter fields update the contact.
+	CallerNumber          *string   `json:"caller_number,omitempty" validate:"omitempty,max=20"`
+	LinkedIncidentNumber  *string   `json:"linked_incident_number,omitempty" validate:"omitempty,max=50"`
+	ConcernedAuthorityID  *string   `json:"concerned_authority_id,omitempty"`
+	PreviousReportIDs     *[]string `json:"previous_report_ids,omitempty" validate:"omitempty,dive,uuid"`
+	Content               *string   `json:"content,omitempty"`
+	Notes                 *string   `json:"notes,omitempty" validate:"omitempty,max=2000"`
+	Street                *string   `json:"street,omitempty" validate:"omitempty,max=255"`
+	ReporterNationalID    *string   `json:"reporter_national_id,omitempty"`
+	ReporterNationalityID *string   `json:"reporter_nationality_id,omitempty"`
+	ReporterGender        *string   `json:"reporter_gender,omitempty" validate:"omitempty,oneof=male female"`
+	ReporterAddress       *string   `json:"reporter_address,omitempty" validate:"omitempty,max=500"`
 }
 
 type IncidentTransitionRequest struct {
@@ -887,65 +928,76 @@ func ToEpmPortalLocationTree(l *LocationResponse) EpmPortalTreeNode {
 }
 
 type IncidentResponse struct {
-	ID                    uuid.UUID                   `json:"id"`
-	IncidentNumber        string                      `json:"incident_number"`
-	Title                 string                      `json:"title"`
-	Description           string                      `json:"description"`
-	RecordType            string                      `json:"record_type"`
-	SourceIncidentID      *uuid.UUID                  `json:"source_incident_id,omitempty"`
-	SourceIncident        *IncidentResponse           `json:"source_incident,omitempty"`
-	ConvertedRequestID    *uuid.UUID                  `json:"converted_request_id,omitempty"`
-	ConvertedRequest      *IncidentResponse           `json:"converted_request,omitempty"`
-	Classification        *ClassificationResponse     `json:"classification,omitempty"`
-	Workflow              *WorkflowResponse           `json:"workflow,omitempty"`
-	CurrentState          *WorkflowStateResponse      `json:"current_state,omitempty"`
-	Assignee              *UserResponse               `json:"assignee,omitempty"`
-	Assignees             []UserResponse              `json:"assignees,omitempty"`
-	Department            *DepartmentResponse         `json:"department,omitempty"`
-	Location              *LocationResponse           `json:"location,omitempty"`
-	Latitude              *float64                    `json:"latitude,omitempty"`
-	Longitude             *float64                    `json:"longitude,omitempty"`
-	Address               string                      `json:"address,omitempty"`
-	City                  string                      `json:"city,omitempty"`
-	State                 string                      `json:"state,omitempty"`
-	Country               string                      `json:"country,omitempty"`
-	PostalCode            string                      `json:"postal_code,omitempty"`
-	CallUuid              *string                     `json:"call_uuid,omitempty"`
-	DueDate               *time.Time                  `json:"due_date"`
-	ResolvedAt            *time.Time                  `json:"resolved_at"`
-	ClosedAt              *time.Time                  `json:"closed_at"`
-	SLABreached           bool                        `json:"sla_breached"`
-	SLADeadline           *time.Time                  `json:"sla_deadline"`
-	ReadyToCloseExpiresAt *time.Time                  `json:"ready_to_close_expires_at,omitempty"`
-	ReadyToCloseDuration  string                      `json:"ready_to_close_duration,omitempty"`
-	PartialCloseExpiresAt *time.Time                  `json:"partial_close_expires_at,omitempty"`
-	PartialCloseDuration  string                      `json:"partial_close_duration,omitempty"`
-	PartialCloseNotified  bool                        `json:"partial_close_notified,omitempty"`
-	Source                string                      `json:"source,omitempty"`
-	Reporter              *UserResponse               `json:"reporter,omitempty"`
-	ReporterID            uuid.UUID                   `json:"reporter_id"`
-	ReporterEmail         string                      `json:"reporter_email"`
-	ReporterName          string                      `json:"reporter_name"`
-	ReporterPhone         string                      `json:"reporter_phone"`
-	CallerIdentity        string                      `json:"caller_identity,omitempty"`
-	CallerIdentityText    string                      `json:"caller_identity_text,omitempty"`
-	CooperationStatus     string                      `json:"cooperation_status,omitempty"`
-	Channel               string                      `json:"channel,omitempty"`
-	TransitionHistory     []TransitionHistoryResponse `json:"transition_history,omitempty"`
-	CreatedByID           *uuid.UUID                  `json:"created_by_id,omitempty"`
-	CreatedByName         string                      `json:"created_by_name,omitempty"`
-	CreatedByMobile       string                      `json:"created_by_mobile,omitempty"`
-	EvaluationCount       int                         `json:"evaluation_count,omitempty"`
-	GisLocation           json.RawMessage             `json:"gis_location,omitempty"`
-	CustomFields          string                      `json:"custom_fields,omitempty"`
-	AvailableEEList       json.RawMessage             `json:"available_ee_list,omitempty"`
-	CommentsCount         int                         `json:"comments_count"`
-	AttachmentsCount      int                         `json:"attachments_count"`
-	CreatedAt             time.Time                   `json:"created_at"`
-	UpdatedAt             time.Time                   `json:"updated_at"`
-	LookupValues          []LookupValueResponse       `json:"lookup_values,omitempty"`
-	Version               int                         `json:"version"`
-	ActiveViewers         int                         `json:"active_viewers,omitempty"` // Number of users currently viewing this incident
+	ID                    uuid.UUID               `json:"id"`
+	IncidentNumber        string                  `json:"incident_number"`
+	Title                 string                  `json:"title"`
+	Description           string                  `json:"description"`
+	RecordType            string                  `json:"record_type"`
+	SourceIncidentID      *uuid.UUID              `json:"source_incident_id,omitempty"`
+	SourceIncident        *IncidentResponse       `json:"source_incident,omitempty"`
+	ConvertedRequestID    *uuid.UUID              `json:"converted_request_id,omitempty"`
+	ConvertedRequest      *IncidentResponse       `json:"converted_request,omitempty"`
+	Classification        *ClassificationResponse `json:"classification,omitempty"`
+	Workflow              *WorkflowResponse       `json:"workflow,omitempty"`
+	CurrentState          *WorkflowStateResponse  `json:"current_state,omitempty"`
+	Assignee              *UserResponse           `json:"assignee,omitempty"`
+	Assignees             []UserResponse          `json:"assignees,omitempty"`
+	Department            *DepartmentResponse     `json:"department,omitempty"`
+	Location              *LocationResponse       `json:"location,omitempty"`
+	Latitude              *float64                `json:"latitude,omitempty"`
+	Longitude             *float64                `json:"longitude,omitempty"`
+	Address               string                  `json:"address,omitempty"`
+	City                  string                  `json:"city,omitempty"`
+	State                 string                  `json:"state,omitempty"`
+	Country               string                  `json:"country,omitempty"`
+	PostalCode            string                  `json:"postal_code,omitempty"`
+	CallUuid              *string                 `json:"call_uuid,omitempty"`
+	DueDate               *time.Time              `json:"due_date"`
+	ResolvedAt            *time.Time              `json:"resolved_at"`
+	ClosedAt              *time.Time              `json:"closed_at"`
+	SLABreached           bool                    `json:"sla_breached"`
+	SLADeadline           *time.Time              `json:"sla_deadline"`
+	ReadyToCloseExpiresAt *time.Time              `json:"ready_to_close_expires_at,omitempty"`
+	ReadyToCloseDuration  string                  `json:"ready_to_close_duration,omitempty"`
+	PartialCloseExpiresAt *time.Time              `json:"partial_close_expires_at,omitempty"`
+	PartialCloseDuration  string                  `json:"partial_close_duration,omitempty"`
+	PartialCloseNotified  bool                    `json:"partial_close_notified,omitempty"`
+	Source                string                  `json:"source,omitempty"`
+	Reporter              *UserResponse           `json:"reporter,omitempty"`
+	ReporterID            uuid.UUID               `json:"reporter_id"`
+	ReporterEmail         string                  `json:"reporter_email"`
+	ReporterName          string                  `json:"reporter_name"`
+	ReporterPhone         string                  `json:"reporter_phone"`
+	CallerIdentity        string                  `json:"caller_identity,omitempty"`
+	CallerIdentityText    string                  `json:"caller_identity_text,omitempty"`
+	CooperationStatus     string                  `json:"cooperation_status,omitempty"`
+	Channel               string                  `json:"channel,omitempty"`
+
+	// Nazaha fields (empty/omitted for other clients).
+	CallerNumber       string               `json:"caller_number,omitempty"`
+	Content            string               `json:"content,omitempty"`
+	Notes              string               `json:"notes,omitempty"`
+	Street             string               `json:"street,omitempty"`
+	ConcernedAuthority *LookupValueResponse `json:"concerned_authority,omitempty"`
+	LinkedIncident     *IncidentRef         `json:"linked_incident,omitempty"`
+	PreviousReports    []IncidentRef        `json:"previous_reports,omitempty"`
+	// ReporterHidden is true when the reporter's details were removed (uncooperative).
+	ReporterHidden    bool                        `json:"reporter_hidden,omitempty"`
+	TransitionHistory []TransitionHistoryResponse `json:"transition_history,omitempty"`
+	CreatedByID       *uuid.UUID                  `json:"created_by_id,omitempty"`
+	CreatedByName     string                      `json:"created_by_name,omitempty"`
+	CreatedByMobile   string                      `json:"created_by_mobile,omitempty"`
+	EvaluationCount   int                         `json:"evaluation_count,omitempty"`
+	GisLocation       json.RawMessage             `json:"gis_location,omitempty"`
+	CustomFields      string                      `json:"custom_fields,omitempty"`
+	AvailableEEList   json.RawMessage             `json:"available_ee_list,omitempty"`
+	CommentsCount     int                         `json:"comments_count"`
+	AttachmentsCount  int                         `json:"attachments_count"`
+	CreatedAt         time.Time                   `json:"created_at"`
+	UpdatedAt         time.Time                   `json:"updated_at"`
+	LookupValues      []LookupValueResponse       `json:"lookup_values,omitempty"`
+	Version           int                         `json:"version"`
+	ActiveViewers     int                         `json:"active_viewers,omitempty"` // Number of users currently viewing this incident
 
 	// Recurrence: latest earlier incident with the same classification near this one.
 	RecurrenceIncidentNumber *string `json:"recurrence_incident_number"`
@@ -1098,6 +1150,10 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 		CallerIdentityText:    i.CallerIdentityText,
 		CooperationStatus:     i.CooperationStatus,
 		Channel:               i.Channel,
+		CallerNumber:          i.CallerNumber,
+		Content:               i.Content,
+		Notes:                 i.Notes,
+		Street:                i.Street,
 		CreatedByID:           i.CreatedByID,
 		CreatedByName:         i.CreatedByName,
 		CreatedByMobile:       i.CreatedByMobile,
@@ -1192,6 +1248,16 @@ func ToIncidentResponse(i *Incident) IncidentResponse {
 		masterResp := ToIncidentResponse(i.MasterIncident)
 		resp.MasterIncident = &masterResp
 	}
+
+	if i.ConcernedAuthority != nil {
+		authority := ToLookupValueResponse(i.ConcernedAuthority)
+		resp.ConcernedAuthority = &authority
+	}
+	if i.LinkedIncident != nil {
+		resp.LinkedIncident = &IncidentRef{ID: i.LinkedIncident.ID, IncidentNumber: i.LinkedIncident.IncidentNumber}
+	}
+
+	hideUncooperativeReporter(&resp)
 
 	return resp
 }

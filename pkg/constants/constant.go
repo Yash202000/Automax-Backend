@@ -31,11 +31,13 @@ var CLIENT_CODE = struct {
 	EPM940       string
 	IVR_INST_SMS string
 	VD2          string
+	NAZAHA       string
 }{
 	VIUSIONAL:    "Viusional",
 	EPM940:       "EPM940",
 	IVR_INST_SMS: "IVRINSTSMS",
 	VD2:          "VD2",
+	NAZAHA:       "NAZAHA",
 }
 
 var INCIDENT_SOURCE = struct {

@@ -62,6 +62,7 @@ type UserRepository interface {
 	IsUserOnline(ctx context.Context, userID uuid.UUID) (bool, error)
 	ExistsByPhone(ctx context.Context, phone string, excludeUserID uuid.UUID) (bool, error)
 	ExistsByNationalID(ctx context.Context, nationalID string) (bool, error)
+	FindByNationalID(ctx context.Context, nationalID string) (*models.User, error)
 	FindByNationalIDForLogin(ctx context.Context, nationalID string) (*models.User, error)
 	ExistsByPhoneAndName(ctx context.Context, phone string, name ...string) (bool, error)
 	CountAssignedIncidents(ctx context.Context, userID uuid.UUID) (int64, error)
@@ -987,6 +988,15 @@ func (r *userRepository) ExistsByNationalID(ctx context.Context, nationalID stri
 	var count int64
 	err := r.db.WithContext(ctx).Model(&models.User{}).Where("national_id = ?", nationalID).Count(&count).Error
 	return count > 0, err
+}
+
+// FindByNationalID returns the user with this national ID, or gorm.ErrRecordNotFound.
+func (r *userRepository) FindByNationalID(ctx context.Context, nationalID string) (*models.User, error) {
+	var user models.User
+	if err := r.db.WithContext(ctx).First(&user, "national_id = ?", nationalID).Error; err != nil {
+		return nil, err
+	}
+	return &user, nil
 }
 
 // CountAssignedIncidents returns how many live (non-deleted) incidents the user is
