@@ -466,7 +466,7 @@ func nazahaUUIDString(id *uuid.UUID) string {
 
 // stampReporterNameMatches marks the incidents found by reporter name.
 func (s *incidentService) stampReporterNameMatches(ctx context.Context, filter *models.IncidentFilter, incidents []models.Incident, responses []models.IncidentResponse) {
-	if !s.cfg.IsNazaha() || filter == nil || strings.TrimSpace(filter.Search) == "" || len(incidents) == 0 {
+	if s.cfg == nil || !s.cfg.IsNazaha() || filter == nil || strings.TrimSpace(filter.Search) == "" || len(incidents) == 0 {
 		return
 	}
 	ids := make([]uuid.UUID, len(incidents))

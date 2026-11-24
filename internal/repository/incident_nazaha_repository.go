@@ -116,8 +116,9 @@ func findLookupValue(db *gorm.DB, id uuid.UUID) (*models.LookupValue, error) {
 	return &value, nil
 }
 
-// maxNameSearchWords is the most search words matched on the name.
-const maxNameSearchWords = 5
+// maxNameSearchWords is the most search words matched on the name; longer
+// searches don't match by name.
+const maxNameSearchWords = 10
 
 // reporterFullName is the contact's full name with أ, إ and آ written as ا.
 const reporterFullName = "translate(concat_ws(' ', u.first_name, u.middle_name, u.last_name), 'أإآ', 'ااا')"
@@ -129,11 +130,8 @@ var alefReplacer = strings.NewReplacer("أ", "ا", "إ", "ا", "آ", "ا")
 // word. Uncooperative reporters never match.
 func reporterNameCondition(search string) clause.Expr {
 	words := strings.Fields(alefReplacer.Replace(search))
-	if len(words) == 0 {
+	if len(words) == 0 || len(words) > maxNameSearchWords {
 		return clause.Expr{SQL: "FALSE"}
-	}
-	if len(words) > maxNameSearchWords {
-		words = words[:maxNameSearchWords]
 	}
 	args := []interface{}{models.CooperationStatusUncooperative}
 	likes := make([]string, len(words))
