@@ -339,7 +339,8 @@ type ADBaseerConfig struct {
 	OTPTTLSeconds int
 	// OTPMaxAttempts is how many OTP submissions one challenge allows.
 	OTPMaxAttempts int
-	// ActiveStatuses are the employeeInfo.status values allowed to log in.
+	// ActiveStatuses is no longer used: after the OTP, AD-Baseer's isValid is
+	// the only check (employeeInfo.status is not validated by Automax).
 	ActiveStatuses []string
 	// InsecureSkipVerify disables TLS verification; refused in production.
 	InsecureSkipVerify bool

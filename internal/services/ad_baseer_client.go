@@ -331,8 +331,9 @@ func (c *adBaseerClient) VerifyOTP(ctx context.Context, challenge *ADBaseerChall
 		}
 		return nil, fmt.Errorf("%w: IsValidOTP returned %d, %s", ErrADBaseerUnavailable, status, resp.describe())
 	}
-	if status != http.StatusOK || resp.EmployeeInfo == nil {
-		return nil, fmt.Errorf("%w: IsValidOTP returned %d with isValid=true but no employeeInfo", ErrADBaseerUnavailable, status)
+	// isValid=true is AD-Baseer's decision; employeeInfo is not checked.
+	if resp.EmployeeInfo == nil {
+		resp.EmployeeInfo = &ADBaseerEmployee{}
 	}
 	return resp.EmployeeInfo, nil
 }

@@ -7,9 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/mail"
 	"regexp"
-	"slices"
 	"strings"
 	"time"
 
@@ -19,6 +17,7 @@ import (
 	"github.com/automax/backend/pkg/utils"
 	"github.com/automax/backend/pkg/validation"
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -27,14 +26,16 @@ import (
 //	POST /api/v1/ldap/login             username+password -> registered-user check
 //	                                    -> GetToken + ValidateCredentialsOTP
 //	                                    -> {otp_required, challenge_id}
-//	POST /api/v1/ldap/login/verify-otp  challenge_id+otp -> IsValidOTP -> verified email
-//	                                    -> find the admin-registered AD user -> normal Automax tokens
+//	POST /api/v1/ldap/login/verify-otp  challenge_id+otp -> IsValidOTP
+//	                                    -> isValid=true signs in the user found in step 1
 //
 // The AD-Baseer access token and requestID stay server-side in Redis under the
 // random challenge_id. Login never creates a local user: AD users are
 // registered by an admin. An unregistered username is refused with 403
-// ad_user_not_registered before AD-Baseer is called, so no OTP is sent; the
-// verified AD email is checked again after the OTP. Passwords, OTPs and tokens are never logged.
+// ad_user_not_registered before AD-Baseer is called, so no OTP is sent.
+// After the OTP, AD-Baseer's isValid is the only check: employeeInfo (its
+// "email" is the AD username, status, ...) is not validated by Automax.
+// Passwords, OTPs and tokens are never logged.
 
 // Error codes returned in error_code so the client can react without parsing
 // translated messages.
@@ -55,11 +56,11 @@ const (
 
 var adChallengeIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
-// adOTPPattern accepts 4-8 digits: the contract does not state the OTP length.
-var adOTPPattern = regexp.MustCompile(`^[0-9]{4,8}$`)
-
 type adBaseerChallengeState struct {
-	Username    string `json:"username"`
+	Username string `json:"username"`
+	// UserID is the admin-registered Automax user found in step 1; step 2
+	// signs this user in once AD-Baseer accepts the OTP.
+	UserID      string `json:"user_id"`
 	AccessToken string `json:"access_token"`
 	RequestID   string `json:"request_id"`
 }
@@ -125,7 +126,7 @@ func (h *LDAPHandler) startADBaseerLogin(c *fiber.Ctx, req LDAPLoginRequest) err
 		return utils.InternalErrorResponse(c, err, i18n.T(ctx, "internal_server_error"))
 	}
 	ttl := time.Duration(h.config.ADBaseer.OTPTTLSeconds) * time.Second
-	state := adBaseerChallengeState{Username: username, AccessToken: challenge.AccessToken, RequestID: challenge.RequestID}
+	state := adBaseerChallengeState{Username: username, UserID: registered.ID.String(), AccessToken: challenge.AccessToken, RequestID: challenge.RequestID}
 	if err := h.sessionStore.Set(ctx, adChallengeKeyPrefix+challengeID, state, ttl); err != nil {
 		return utils.InternalErrorResponse(c, fmt.Errorf("store AD-Baseer challenge: %w", err), i18n.T(ctx, "internal_server_error"))
 	}
@@ -166,9 +167,6 @@ func (h *LDAPHandler) VerifyADOTP(c *fiber.Ctx) error {
 	if !adChallengeIDPattern.MatchString(req.ChallengeID) {
 		return adErrorResponse(c, fiber.StatusUnauthorized, adErrRestartLogin, i18n.T(ctx, "ad_otp_session_expired"))
 	}
-	if !adOTPPattern.MatchString(req.OTP) {
-		return adErrorResponse(c, fiber.StatusBadRequest, adErrInvalidOTP, i18n.T(ctx, "invalid_or_expired_otp"))
-	}
 
 	ipKey := adIPLimitKey(c.IP())
 	if h.adLimitBlocked(ctx, ipKey) {
@@ -194,7 +192,7 @@ func (h *LDAPHandler) VerifyADOTP(c *fiber.Ctx) error {
 		return adErrorResponse(c, fiber.StatusUnauthorized, adErrRestartLogin, i18n.T(ctx, "ad_otp_attempts_exceeded"))
 	}
 
-	employee, err := h.adBaseer.VerifyOTP(ctx, &services.ADBaseerChallenge{AccessToken: state.AccessToken, RequestID: state.RequestID}, req.OTP)
+	_, err = h.adBaseer.VerifyOTP(ctx, &services.ADBaseerChallenge{AccessToken: state.AccessToken, RequestID: state.RequestID}, req.OTP)
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrADBaseerInvalidOTP):
@@ -225,55 +223,32 @@ func (h *LDAPHandler) VerifyADOTP(c *fiber.Ctx) error {
 		return adErrorResponse(c, fiber.StatusUnauthorized, adErrRestartLogin, i18n.T(ctx, "ad_otp_session_expired"))
 	}
 
-	email, ok := normalizeADEmail(string(employee.Email))
-	if !ok {
-		log.Printf("[AD-BASEER] verified user=%q has no usable email (%q) — login refused", state.Username, employee.Email)
-		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(ctx, "ad_account_no_email"))
+	// AD-Baseer accepted the OTP (isValid=true): no further checks on
+	// employeeInfo. Sign in the registered user found in step 1.
+	user, err := h.adChallengeUser(ctx, state)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		log.Printf("[AD-BASEER] OTP valid but user=%q is no longer registered in Automax", state.Username)
+		return adErrorResponse(c, fiber.StatusForbidden, adErrNotRegistered, i18n.T(ctx, "ad_login_not_registered"))
 	}
-	if !h.adStatusAllowed(string(employee.Status)) {
-		log.Printf("[AD-BASEER] verified user=%q status %q (%s) not in AD_BASEER_ACTIVE_STATUSES — login refused", state.Username, employee.Status, employee.StatusDesc)
-		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(ctx, "account_disabled_ad"))
-	}
-
-	user, status, msgKey, err := h.resolveADBaseerUser(ctx, email, employee)
 	if err != nil {
-		if status >= 500 {
-			return utils.InternalErrorResponse(c, err, i18n.T(ctx, msgKey))
-		}
-		log.Printf("[AD-BASEER] user resolution refused user=%q email=%q: %v", state.Username, email, err)
-		if msgKey == adErrNotRegistered {
-			return adErrorResponse(c, status, adErrNotRegistered, i18n.T(ctx, msgKey))
-		}
-		return utils.ErrorResponse(c, status, i18n.T(ctx, msgKey))
+		return utils.InternalErrorResponse(c, err, i18n.T(ctx, "failed_to_look_up_user"))
 	}
 	if !user.IsActive {
 		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(ctx, "account_deactivated"))
 	}
 
 	h.adLimitReset(ctx, adUserLimitKey(state.Username))
-	log.Printf("[AD-BASEER] login success user=%q email=%q id=%s", state.Username, email, user.ID)
+	log.Printf("[AD-BASEER] login success user=%q id=%s", state.Username, user.ID)
 	return h.issueADLoginTokens(c, user)
 }
 
-// resolveADBaseerUser finds the local user for a verified AD-Baseer email.
-// Users are never created here: AD users must be registered beforehand by an
-// admin from the admin area. An unregistered person (whose AD credentials and
-// OTP are already verified) is told so explicitly. It never converts a local (non-AD) account. On
-// error it returns the HTTP status and i18n message key to answer with.
-func (h *LDAPHandler) resolveADBaseerUser(ctx context.Context, email string, employee *services.ADBaseerEmployee) (*models.User, int, string, error) {
-	user, err := h.findADUserByEmail(ctx, email, string(employee.Email))
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, fiber.StatusForbidden, adErrNotRegistered,
-			fmt.Errorf("no registered Automax user for this email; not creating one")
+// adChallengeUser returns the Automax user step 1 found for this login.
+// Challenges stored before UserID existed fall back to the username lookup.
+func (h *LDAPHandler) adChallengeUser(ctx context.Context, state adBaseerChallengeState) (*models.User, error) {
+	if id, err := uuid.Parse(state.UserID); err == nil {
+		return h.userRepo.FindByID(ctx, id)
 	}
-	if err != nil {
-		return nil, fiber.StatusInternalServerError, "failed_to_look_up_user", err
-	}
-	if !user.IsADUser {
-		return nil, fiber.StatusForbidden, "ad_account_conflict",
-			fmt.Errorf("email belongs to local (non-AD) account %s; not converting it", user.ID)
-	}
-	return user, 0, "", nil
+	return h.findRegisteredADLogin(ctx, state.Username)
 }
 
 // findRegisteredADLogin finds the admin-registered AD user for the name typed
@@ -312,25 +287,6 @@ func (h *LDAPHandler) findADUserByEmail(ctx context.Context, normalized, origina
 		}
 	}
 	return user, err
-}
-
-func (h *LDAPHandler) adStatusAllowed(status string) bool {
-	allowed := h.config.ADBaseer.ActiveStatuses
-	return slices.Contains(allowed, "*") || (status != "" && slices.Contains(allowed, strings.TrimSpace(status)))
-}
-
-// normalizeADEmail lowercases and validates an email returned by AD-Baseer.
-// Display-name forms ("Name <a@b>") are rejected.
-func normalizeADEmail(raw string) (string, bool) {
-	email := strings.ToLower(strings.TrimSpace(raw))
-	if email == "" || len(email) > 254 {
-		return "", false
-	}
-	addr, err := mail.ParseAddress(email)
-	if err != nil || addr.Address != email || addr.Name != "" {
-		return "", false
-	}
-	return email, true
 }
 
 func randomHex(n int) (string, error) {
