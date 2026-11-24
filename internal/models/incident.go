@@ -1013,6 +1013,9 @@ type IncidentResponse struct {
 	IsMerged             bool              `json:"is_merged"`
 	MergedAt             *time.Time        `json:"merged_at,omitempty"`
 	MergedIncidentsCount int               `json:"merged_incidents_count,omitempty"` // Number of incidents merged into this one
+
+	// MatchedReporterName is true when the search matched the reporter name (Nazaha).
+	MatchedReporterName bool `json:"matched_reporter_name,omitempty"`
 }
 
 type IncidentDetailResponse struct {

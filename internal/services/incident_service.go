@@ -1296,6 +1296,7 @@ func (s *incidentService) ListIncidents(ctx context.Context, filter *models.Inci
 	}
 
 	s.stampCommentAndAttachmentCounts(ctx, incidents, responses)
+	s.stampReporterNameMatches(ctx, filter, incidents, responses)
 
 	clientCode := strings.TrimSpace(s.cfg.ClientCode)
 	if strings.EqualFold(clientCode, constants.CLIENT_CODE.VD2) {

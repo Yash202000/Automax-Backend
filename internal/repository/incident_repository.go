@@ -33,6 +33,7 @@ type IncidentRepository interface {
 	LoadNazahaRelations(ctx context.Context, incident *models.Incident) error
 	ListPreviousReports(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentRef, error)
 	ReplacePreviousReportLinks(ctx context.Context, incidentID uuid.UUID, previousIDs []uuid.UUID) error
+	MatchReporterName(ctx context.Context, ids []uuid.UUID, search string) (map[uuid.UUID]bool, error)
 	FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.Incident, error)
 	// FindRecurrences returns, per incident ID, the latest earlier incident with the same
 	// classification and record type within radiusMeters; Count is the total number of such earlier incidents.
@@ -453,7 +454,14 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 	}
 	if filter.Search != "" {
 		searchPattern := "%" + filter.Search + "%"
-		query = query.Where("incidents.incident_number ILIKE ? OR incidents.title ILIKE ? OR incidents.description ILIKE ?", searchPattern, searchPattern, searchPattern)
+		if r.cfg != nil && r.cfg.IsNazaha() {
+			// Nazaha: also find incidents by the reporter's name.
+			query = query.Where(r.db.
+				Where("incidents.incident_number ILIKE ? OR incidents.title ILIKE ? OR incidents.description ILIKE ?", searchPattern, searchPattern, searchPattern).
+				Or(reporterNameCondition(filter.Search)))
+		} else {
+			query = query.Where("incidents.incident_number ILIKE ? OR incidents.title ILIKE ? OR incidents.description ILIKE ?", searchPattern, searchPattern, searchPattern)
+		}
 	}
 	if filter.TaskID != "" {
 		query = query.Where("NULLIF(custom_fields, '')::jsonb -> 'lookup:TASK ID' ->> 'value' ILIKE ?", "%"+filter.TaskID+"%")
@@ -1388,7 +1396,14 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 		}
 		if filter.Search != "" {
 			searchPattern := "%" + filter.Search + "%"
-			q = q.Where("incidents.incident_number ILIKE ? OR incidents.title ILIKE ? OR incidents.description ILIKE ?", searchPattern, searchPattern, searchPattern)
+			if r.cfg != nil && r.cfg.IsNazaha() {
+				// Nazaha: also find incidents by the reporter's name.
+				q = q.Where(r.db.
+					Where("incidents.incident_number ILIKE ? OR incidents.title ILIKE ? OR incidents.description ILIKE ?", searchPattern, searchPattern, searchPattern).
+					Or(reporterNameCondition(filter.Search)))
+			} else {
+				q = q.Where("incidents.incident_number ILIKE ? OR incidents.title ILIKE ? OR incidents.description ILIKE ?", searchPattern, searchPattern, searchPattern)
+			}
 		}
 		if filter.TransitionID != nil || filter.FromStateID != nil || filter.ToStateID != nil {
 			subQuery := r.db.WithContext(ctx).

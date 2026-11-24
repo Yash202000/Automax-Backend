@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -461,4 +462,23 @@ func nazahaUUIDString(id *uuid.UUID) string {
 		return ""
 	}
 	return id.String()
+}
+
+// stampReporterNameMatches marks the incidents found by reporter name.
+func (s *incidentService) stampReporterNameMatches(ctx context.Context, filter *models.IncidentFilter, incidents []models.Incident, responses []models.IncidentResponse) {
+	if !s.cfg.IsNazaha() || filter == nil || strings.TrimSpace(filter.Search) == "" || len(incidents) == 0 {
+		return
+	}
+	ids := make([]uuid.UUID, len(incidents))
+	for i := range incidents {
+		ids[i] = incidents[i].ID
+	}
+	matched, err := s.incidentRepo.MatchReporterName(ctx, ids, filter.Search)
+	if err != nil {
+		log.Printf("[IncidentService] failed to mark reporter name matches: %v", err)
+		return
+	}
+	for i := range responses {
+		responses[i].MatchedReporterName = matched[responses[i].ID]
+	}
 }

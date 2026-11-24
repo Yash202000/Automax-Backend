@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"strings"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/pkg/utils"
@@ -113,4 +114,51 @@ func findLookupValue(db *gorm.DB, id uuid.UUID) (*models.LookupValue, error) {
 		return nil, err
 	}
 	return &value, nil
+}
+
+// maxNameSearchWords is the most search words matched on the name.
+const maxNameSearchWords = 5
+
+// reporterFullName is the contact's full name.
+const reporterFullName = "concat_ws(' ', u.first_name, u.middle_name, u.last_name)"
+
+// reporterNameCondition matches incidents whose reporter name has every search
+// word. Uncooperative reporters never match.
+func reporterNameCondition(search string) clause.Expr {
+	words := strings.Fields(search)
+	if len(words) == 0 {
+		return clause.Expr{SQL: "FALSE"}
+	}
+	if len(words) > maxNameSearchWords {
+		words = words[:maxNameSearchWords]
+	}
+	args := []interface{}{models.CooperationStatusUncooperative}
+	likes := make([]string, len(words))
+	for i, w := range words {
+		likes[i] = reporterFullName + " ILIKE ?"
+		args = append(args, "%"+escapeLike(w)+"%")
+	}
+	cond := "incidents.cooperation_status <> ? AND incidents.reporter_id IS NOT NULL" +
+		" AND (incidents.created_by_id IS NULL OR incidents.created_by_id <> incidents.reporter_id)" +
+		" AND EXISTS (SELECT 1 FROM users u WHERE u.id = incidents.reporter_id AND " + strings.Join(likes, " AND ") + ")"
+	return clause.Expr{SQL: cond, Vars: args}
+}
+
+// MatchReporterName returns the incidents whose reporter name matches the search.
+func (r *incidentRepository) MatchReporterName(ctx context.Context, ids []uuid.UUID, search string) (map[uuid.UUID]bool, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var matched []uuid.UUID
+	if err := r.db.WithContext(ctx).Model(&models.Incident{}).
+		Where("incidents.id IN ?", ids).
+		Where(reporterNameCondition(search)).
+		Pluck("incidents.id", &matched).Error; err != nil {
+		return nil, err
+	}
+	result := make(map[uuid.UUID]bool, len(matched))
+	for _, id := range matched {
+		result[id] = true
+	}
+	return result, nil
 }
