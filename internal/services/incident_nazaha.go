@@ -32,6 +32,9 @@ func (s *incidentService) findReporterUser(ctx context.Context, req *models.Inci
 		if err != nil && err != gorm.ErrRecordNotFound {
 			return nil, err
 		}
+		if err := s.requireContactAccount(ctx, u, "reporter_phone"); err != nil {
+			return nil, err
+		}
 		byMobile = u
 	}
 
@@ -39,6 +42,9 @@ func (s *incidentService) findReporterUser(ctx context.Context, req *models.Inci
 	if IsNationalID(req.ReporterNationalID) {
 		byID, err := s.userRepo.FindByNationalID(ctx, req.ReporterNationalID)
 		if err != nil && err != gorm.ErrRecordNotFound {
+			return nil, err
+		}
+		if err := s.requireContactAccount(ctx, byID, "reporter_national_id"); err != nil {
 			return nil, err
 		}
 		if byID != nil {
@@ -59,6 +65,9 @@ func (s *incidentService) findReporterUser(ctx context.Context, req *models.Inci
 	if req.ReporterEmail != "" {
 		byEmail, err := s.userRepo.FindByEmail(ctx, strings.ToLower(req.ReporterEmail))
 		if err != nil && err != gorm.ErrRecordNotFound {
+			return nil, err
+		}
+		if err := s.requireContactAccount(ctx, byEmail, "reporter_email"); err != nil {
 			return nil, err
 		}
 		switch {
@@ -82,6 +91,37 @@ func (s *incidentService) findReporterUser(ctx context.Context, req *models.Inci
 
 func contactConflict(ctx context.Context, field, key string) IncidentFieldErrors {
 	return IncidentFieldErrors{field: i18n.T(ctx, key)}
+}
+
+// isContactAccount reports whether u is a reporter contact (citizen role only).
+// Staff accounts share the users table and must never be changed from a report.
+func (s *incidentService) isContactAccount(ctx context.Context, u *models.User) (bool, error) {
+	if u.IsSuperAdmin {
+		return false, nil
+	}
+	roles, err := s.userRepo.GetUserRoles(ctx, u.ID)
+	if err != nil {
+		return false, err
+	}
+	withRoles := *u
+	withRoles.Roles = roles
+	return withRoles.IsCitizenOnly(constants.ROLES.CITIZEN), nil
+}
+
+// requireContactAccount refuses a matched user that is not a contact, with a
+// field error on the field that matched. A nil user passes.
+func (s *incidentService) requireContactAccount(ctx context.Context, u *models.User, field string) error {
+	if u == nil {
+		return nil
+	}
+	ok, err := s.isContactAccount(ctx, u)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return contactConflict(ctx, field, "reporter_is_system_user")
+	}
+	return nil
 }
 
 // nazahaReporterUserUpdates returns the contact fields to update from this report.
@@ -134,6 +174,12 @@ type nazahaEditPlan struct {
 	linkContact     bool         // set the incident's reporter to contact
 	previousIDs     []uuid.UUID
 	replacePrevious bool
+}
+
+// hasOutsideChanges reports whether the edit changes data outside the incident
+// row (previous-report links or the reporter contact). Safe on a nil plan.
+func (p *nazahaEditPlan) hasOutsideChanges() bool {
+	return p != nil && (p.replacePrevious || p.reporter != nil)
 }
 
 // prepareNazahaEdit applies the Nazaha fields to the incident in memory and checks
@@ -216,6 +262,19 @@ func (s *incidentService) prepareNazahaEdit(ctx context.Context, incident *model
 	}
 	plan.reporter = reporter
 	if contact := linkedContact(incident); contact != nil {
+		// A staff account linked as reporter is never changed from here;
+		// unchanged details are ignored, real changes are refused.
+		isContact, err := s.isContactAccount(ctx, contact)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !isContact {
+			if len(nazahaContactEditUpdates(contact, reporter)) > 0 {
+				return nil, nil, contactConflict(ctx, "reporter_name", "reporter_system_user_locked")
+			}
+			plan.reporter = nil
+			return plan, changes, nil
+		}
 		if err := s.checkContactEdit(ctx, contact, reporter); err != nil {
 			return nil, nil, err
 		}
@@ -278,18 +337,7 @@ func (s *incidentService) applyNazahaEdit(ctx context.Context, txRepo repository
 		contact = created
 	}
 
-	updates := nazahaReporterUserUpdates(contact, r)
-	if r.ReporterName != "" {
-		first, middle, last := splitReporterName(r.ReporterName)
-		if first != contact.FirstName || middle != contact.MiddleName || last != contact.LastName {
-			updates["first_name"], updates["middle_name"], updates["last_name"] = first, middle, last
-		}
-	}
-	// A corrected national ID replaces the old one.
-	if IsNationalID(r.ReporterNationalID) && contact.NationalID != r.ReporterNationalID {
-		updates["national_id"] = r.ReporterNationalID
-	}
-	if len(updates) > 0 {
+	if updates := nazahaContactEditUpdates(contact, r); len(updates) > 0 {
 		updates["id"] = contact.ID
 		if err := s.userRepo.UpdateProfile(ctx, updates); err != nil {
 			LogContactFailure("Update contact from incident edit", contact.ID.String(), r.ReporterPhone, err)
@@ -302,6 +350,22 @@ func (s *incidentService) applyNazahaEdit(ctx context.Context, txRepo repository
 		}
 	}
 	return nil
+}
+
+// nazahaContactEditUpdates returns the contact fields an edit changes: the
+// report fields plus the name and a corrected national ID.
+func nazahaContactEditUpdates(contact *models.User, r *models.IncidentCreateRequest) map[string]interface{} {
+	updates := nazahaReporterUserUpdates(contact, r)
+	if r.ReporterName != "" {
+		first, middle, last := splitReporterName(r.ReporterName)
+		if first != contact.FirstName || middle != contact.MiddleName || last != contact.LastName {
+			updates["first_name"], updates["middle_name"], updates["last_name"] = first, middle, last
+		}
+	}
+	if IsNationalID(r.ReporterNationalID) && contact.NationalID != r.ReporterNationalID {
+		updates["national_id"] = r.ReporterNationalID
+	}
+	return updates
 }
 
 // contactSaveError turns a duplicate mobile, email or national ID (another

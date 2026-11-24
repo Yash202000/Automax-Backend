@@ -171,6 +171,8 @@ var messages = map[string][2]string{
 	"email_belongs_to_other_contact":       {"This email belongs to another contact", "هذا البريد الإلكتروني مسجل لجهة اتصال أخرى"},
 	"field_required":                       {"This field is required", "هذا الحقل مطلوب"},
 	"national_id_belongs_to_other_contact": {"This ID number belongs to another contact", "رقم الهوية هذا مسجل لجهة اتصال أخرى"},
+	"reporter_is_system_user":              {"This belongs to a system user and can't be used for a reporter", "هذه البيانات تخص مستخدماً في النظام ولا يمكن استخدامها للمبلغ"},
+	"reporter_system_user_locked":          {"The reporter is a system user; their details can't be changed from an incident", "المبلغ مستخدم في النظام ولا يمكن تعديل بياناته من البلاغ"},
 	"linked_incident_self":                 {"A report cannot be linked to itself", "لا يمكن ربط البلاغ بنفسه"},
 	"caller_number_required":               {"Caller number is required", "رقم المتصل مطلوب"},
 	"previous_reports_retrieved":           {"Previous reports retrieved", "تم جلب البلاغات السابقة"},

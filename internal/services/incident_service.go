@@ -2036,7 +2036,9 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		}
 	}
 	log.Println(len(updates), len(changes))
-	if len(updates) == 0 || len(changes) == 0 {
+	// Nazaha previous reports and reporter details live outside the incident
+	// row, so an edit of only those still goes ahead (the version is still bumped).
+	if len(changes) == 0 || (len(updates) == 0 && !nazahaEdit.hasOutsideChanges()) {
 		tx.Rollback()
 		return nil, errors.New(i18n.T(ctx, "no_changes_detected"))
 	}
