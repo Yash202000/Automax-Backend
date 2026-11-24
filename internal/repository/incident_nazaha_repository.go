@@ -10,10 +10,9 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// Queries used only by the Nazaha create-incident screen.
+// Queries used only by Nazaha.
 
-// ListByCallerNumber returns the caller's earlier incidents, newest first, for the
-// "Previous Reports" (1.3) dropdown. The number matches in any saved format.
+// ListByCallerNumber returns a caller's earlier incidents, newest first.
 func (r *incidentRepository) ListByCallerNumber(ctx context.Context, callerNumber string) ([]models.CallerPreviousReport, error) {
 	var reports []models.CallerPreviousReport
 	err := r.db.WithContext(ctx).
@@ -30,8 +29,7 @@ func (r *incidentRepository) ListByCallerNumber(ctx context.Context, callerNumbe
 	return reports, err
 }
 
-// CreatePreviousReportLinks links an incident to the previous reports selected on
-// the create screen. Links that already exist are skipped.
+// CreatePreviousReportLinks links an incident to its previous reports.
 func (r *incidentRepository) CreatePreviousReportLinks(ctx context.Context, incidentID uuid.UUID, previousIDs []uuid.UUID) error {
 	if len(previousIDs) == 0 {
 		return nil
@@ -43,8 +41,7 @@ func (r *incidentRepository) CreatePreviousReportLinks(ctx context.Context, inci
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&links).Error
 }
 
-// LoadNazahaRelations loads the concerned authority, the linked incident and the
-// reporter's nationality onto an incident that was already loaded.
+// LoadNazahaRelations loads the authority, linked incident and reporter nationality.
 func (r *incidentRepository) LoadNazahaRelations(ctx context.Context, incident *models.Incident) error {
 	db := r.db.WithContext(ctx)
 
@@ -88,8 +85,7 @@ func (r *incidentRepository) ListPreviousReports(ctx context.Context, incidentID
 	return refs, err
 }
 
-// ReplacePreviousReportLinks sets the previous reports linked to an incident to
-// exactly previousIDs (used when the incident is edited).
+// ReplacePreviousReportLinks replaces the previous reports linked to an incident.
 func (r *incidentRepository) ReplacePreviousReportLinks(ctx context.Context, incidentID uuid.UUID, previousIDs []uuid.UUID) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("incident_id = ?", incidentID).Delete(&models.IncidentPreviousReport{}).Error; err != nil {
@@ -106,8 +102,7 @@ func (r *incidentRepository) ReplacePreviousReportLinks(ctx context.Context, inc
 	})
 }
 
-// findLookupValue loads a master-data value; nil (no error) when it no longer exists.
-// Soft-deleted values are still loaded so saved records keep showing their name.
+// findLookupValue loads a lookup value, including deleted ones; nil when missing.
 func findLookupValue(db *gorm.DB, id uuid.UUID) (*models.LookupValue, error) {
 	var value models.LookupValue
 	err := db.Unscoped().First(&value, "id = ?", id).Error

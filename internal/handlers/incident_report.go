@@ -1513,11 +1513,8 @@ body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;font-size:10.5pt;color:#222;
 	return b.Bytes()
 }
 
-// applyReportReporter sets the reporter shown in a PDF report (Nazaha only; a
-// no-op for other clients). An uncooperative reporter is left out of every
-// reporter field, including the Reporter section, which reads the contact linked
-// as reporter (creator_* in the report query). Otherwise the reporter comes from
-// their contact, since Nazaha keeps no copy on the incident.
+// applyReportReporter sets the reporter shown in the PDF: blank when hidden, else
+// (Nazaha) taken from the reporter's contact.
 func (h *IncidentHandler) applyReportReporter(ctx context.Context, id uuid.UUID, d *models.IncidentReportData) {
 	if models.IsReporterHidden(d.CooperationStatus) {
 		d.CallerName, d.CallerPhone, d.ReporterEmail = "", "", ""
@@ -1539,7 +1536,7 @@ func (h *IncidentHandler) applyReportReporter(ctx context.Context, id uuid.UUID,
 	d.CallerName = details.ReporterName
 	d.CallerPhone = details.ReporterPhone
 	d.ReporterEmail = details.ReporterEmail
-	// The Reporter section shows the same contact; leave out its generated login email.
+	// The Reporter section shows the same contact.
 	d.CreatorFullName = details.ReporterName
 	d.CreatorEmail = details.ReporterEmail
 	d.CreatorPhone = details.ReporterPhone

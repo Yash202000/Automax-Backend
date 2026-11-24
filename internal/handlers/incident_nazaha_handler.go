@@ -19,14 +19,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// Nazaha (CLIENT_CODE=NAZAHA) create/edit-incident screen. Create and edit use the
-// generic incident endpoints, which call the checks here for Nazaha only. The
-// previous-reports and reveal routes are registered only for Nazaha (cmd/server/main.go).
+// Nazaha incident checks and endpoints. Create and edit use the generic incident
+// endpoints, which call these checks for Nazaha only.
 
-// Caller number (1.2): digits only, with an optional leading "+".
+// Caller number: digits only, with an optional leading "+".
 var nazahaCallerNumberPattern = regexp.MustCompile(`^\+?[0-9]{3,20}$`)
 
-// ListCallerPreviousReports returns the caller's earlier incidents (1.3).
+// ListCallerPreviousReports returns the earlier incidents of a caller number.
 func (h *IncidentHandler) ListCallerPreviousReports(c *fiber.Ctx) error {
 	ctx := c.UserContext()
 	callerNumber := strings.TrimSpace(c.Query("caller_number"))
@@ -45,13 +44,11 @@ func (h *IncidentHandler) ListCallerPreviousReports(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(ctx, "previous_reports_retrieved"), reports)
 }
 
-// prepareNazahaCreate checks the Nazaha fields of a create request (POST /incidents)
-// and adds problems to fieldErrors, which already holds the struct-validation errors.
-// It also normalizes the caller number, fills LinkedIncidentID and defaults the
-// source. The returned error is for database failures only.
+// prepareNazahaCreate checks the Nazaha fields of a create request and adds any
+// problems to fieldErrors. The returned error is for database failures only.
 func (h *IncidentHandler) prepareNazahaCreate(ctx context.Context, req *models.IncidentCreateRequest, fieldErrors map[string]string) error {
 	req.TrimNazahaFields()
-	// Caller numbers are stored as +<country code><number> so lookups match.
+	// Store caller numbers in one format so lookups match.
 	if req.CallerNumber != "" {
 		req.CallerNumber = utils.NormalizeMobile(req.CallerNumber, utils.SystemCountryCode())
 	}
@@ -71,9 +68,8 @@ func (h *IncidentHandler) prepareNazahaCreate(ctx context.Context, req *models.I
 	return h.checkNazahaReferences(ctx, req, fieldErrors)
 }
 
-// RevealReporter returns the reporter details of an incident, including an
-// uncooperative reporter's. Every call is written to the action log under its own
-// module so the reveal history can be filtered.
+// RevealReporter returns the reporter details of an incident, even when hidden.
+// Every call is written to the action log.
 func (h *IncidentHandler) RevealReporter(c *fiber.Ctx) error {
 	ctx := c.UserContext()
 	id, err := uuid.Parse(c.Params("id"))
@@ -88,8 +84,7 @@ func (h *IncidentHandler) RevealReporter(c *fiber.Ctx) error {
 	if !h.checkUserAccessToIncident(c, incident) {
 		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(ctx, "forbidden_no_access"))
 	}
-	// All reporter details live on the reporter's contact. Older reports link the
-	// creating operator instead of a contact; their details are never shown as the reporter's.
+	// Reporter details live on the contact. Older reports link the operator instead.
 	if models.HasReporterContact(incident) {
 		if reporter, err := h.userRepo.FindByID(ctx, *incident.ReporterID); err == nil {
 			if reporter.NationalityID != nil {
@@ -114,8 +109,7 @@ func (h *IncidentHandler) RevealReporter(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(ctx, "reporter_details_retrieved"), models.ToReporterDetailsResponse(incident))
 }
 
-// validateNazahaFields runs the format checks the struct tags can't express.
-// Keys are the Go field names, the same keys validation.ValidateStruct returns.
+// validateNazahaFields checks formats that struct tags can't express.
 func validateNazahaFields(ctx context.Context, req *models.IncidentCreateRequest) map[string]string {
 	errs := map[string]string{}
 
@@ -131,10 +125,8 @@ func validateNazahaFields(ctx context.Context, req *models.IncidentCreateRequest
 	return errs
 }
 
-// checkNazahaRequiredFields adds an error for each Nazaha-only field the selected
-// workflow marks required but that was left empty. (The workflow's other fields
-// follow the generic create rules.) No or unknown workflow: nothing to check here,
-// the service reports it.
+// checkNazahaRequiredFields adds an error for each Nazaha field the workflow
+// requires but that is empty.
 func (h *IncidentHandler) checkNazahaRequiredFields(ctx context.Context, req *models.IncidentCreateRequest, fieldErrors map[string]string) {
 	workflowID, err := uuid.Parse(req.WorkflowID)
 	if err != nil {
@@ -157,10 +149,8 @@ func (h *IncidentHandler) checkNazahaRequiredFields(ctx context.Context, req *mo
 	}
 }
 
-// checkNazahaReferences checks the fields that point at other records (concerned
-// authority, nationality, linked report, previous reports), sets LinkedIncidentID
-// and removes duplicate previous reports. Problems are added to fieldErrors; the
-// returned error is for database failures only.
+// checkNazahaReferences checks the authority, nationality, linked report and
+// previous reports. The returned error is for database failures only.
 func (h *IncidentHandler) checkNazahaReferences(ctx context.Context, req *models.IncidentCreateRequest, fieldErrors map[string]string) error {
 	if req.ConcernedAuthorityID != nil && !h.isActiveLookupValue(ctx, *req.ConcernedAuthorityID, models.AuthorityCategoryCode) {
 		fieldErrors["ConcernedAuthorityID"] = i18n.T(ctx, "invalid_concerned_authority")
@@ -204,8 +194,7 @@ func (h *IncidentHandler) checkNazahaReferences(ctx context.Context, req *models
 	return nil
 }
 
-// isActiveLookupValue reports whether id is an active value of the master-data
-// list (lookup category) with this code.
+// isActiveLookupValue reports whether id is an active value of the given lookup list.
 func (h *IncidentHandler) isActiveLookupValue(ctx context.Context, id string, categoryCode string) bool {
 	valueID, err := uuid.Parse(id)
 	if err != nil {
@@ -215,9 +204,8 @@ func (h *IncidentHandler) isActiveLookupValue(ctx context.Context, id string, ca
 	return err == nil && value.IsActive && value.Category != nil && value.Category.Code == categoryCode
 }
 
-// checkNazahaEdit checks the Nazaha fields of an edit (PUT /incidents/:id).
-// It returns 403 when reporter details of a hidden (uncooperative) reporter are
-// sent by a user without the reveal permission, and field errors otherwise.
+// checkNazahaEdit checks the Nazaha fields of an edit. It returns 403 when a user
+// without the reveal permission sends details of a hidden reporter.
 func (h *IncidentHandler) checkNazahaEdit(c *fiber.Ctx, id uuid.UUID, req *models.IncidentUpdateRequest) (int, map[string]string, error) {
 	ctx := c.UserContext()
 	incident, err := h.incidentRepo.FindByID(ctx, id)
@@ -257,7 +245,7 @@ func (h *IncidentHandler) checkNazahaEdit(c *fiber.Ctx, id uuid.UUID, req *model
 	if workflow, err := h.workflowRepo.FindByID(ctx, incident.WorkflowID); err == nil {
 		var required []string
 		_ = json.Unmarshal([]byte(workflow.RequiredFields), &required)
-		// Workflow field name → the value sent ("reporter_phone" is the Caller Number).
+		// Workflow field → value sent ("reporter_phone" is the caller number).
 		sent := map[string]*string{
 			"reporter_phone": req.CallerNumber, "linked_incident_number": req.LinkedIncidentNumber,
 			"concerned_authority_id": req.ConcernedAuthorityID, "reporter_nationality": req.ReporterNationalityID,

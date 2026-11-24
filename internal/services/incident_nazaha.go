@@ -15,15 +15,12 @@ import (
 	"gorm.io/gorm"
 )
 
-// Reporter-contact helpers for the Nazaha create-incident screen. The reporter's
-// details (national ID, nationality, gender, address) live on the reporter user,
-// which is the contact record; the incident only links to it.
+// Nazaha reporter-contact helpers. Reporter details live on the contact (user);
+// the incident only links to it.
 
-// findReporterUser finds the contact (citizen user) an incident's reporter belongs to.
-// Other clients match by mobile only. Nazaha matches by national ID, then mobile,
-// then email, and refuses a mobile number or email that belongs to a different person (both
-// are unique per contact, so a second contact can't be created with them).
-// Returns gorm.ErrRecordNotFound when there is no match.
+// findReporterUser finds the reporter's contact. Other clients match by mobile;
+// Nazaha matches by national ID, then mobile, then email, and refuses a mobile or
+// email that belongs to someone else. Returns gorm.ErrRecordNotFound when none.
 func (s *incidentService) findReporterUser(ctx context.Context, req *models.IncidentCreateRequest, isNazaha bool) (*models.User, error) {
 	if !isNazaha {
 		return s.userRepo.FindByMobile(ctx, req.ReporterPhone)
@@ -52,8 +49,7 @@ func (s *incidentService) findReporterUser(ctx context.Context, req *models.Inci
 		}
 	}
 	if contact == nil && byMobile != nil {
-		// Users without a national ID carry an empty or generated placeholder value
-		// (see migrations.MigrateUserNationalID), which is never a valid national ID.
+		// Users without a national ID have a placeholder, which never matches.
 		if IsNationalID(byMobile.NationalID) && byMobile.NationalID != req.ReporterNationalID {
 			return nil, contactConflict(ctx, "reporter_phone", "mobile_belongs_to_other_contact")
 		}
@@ -68,7 +64,7 @@ func (s *incidentService) findReporterUser(ctx context.Context, req *models.Inci
 		switch {
 		case byEmail == nil:
 		case contact == nil:
-			// Matched by email only: refuse if it is someone else (different real ID).
+			// Matched by email only: refuse if the ID belongs to someone else.
 			if IsNationalID(byEmail.NationalID) && req.ReporterNationalID != "" && byEmail.NationalID != req.ReporterNationalID {
 				return nil, contactConflict(ctx, "reporter_email", "email_belongs_to_other_contact")
 			}
@@ -88,14 +84,11 @@ func contactConflict(ctx context.Context, field, key string) IncidentFieldErrors
 	return IncidentFieldErrors{field: i18n.T(ctx, key)}
 }
 
-// nazahaReporterUserUpdates returns the contact changes to save from this report:
-// nationality, gender, address, the real email, the national ID when the contact has none yet, and
-// the mobile when the contact was matched by national ID with a new number.
-// user is nil for a contact that was just created (national ID and mobile already set).
+// nazahaReporterUserUpdates returns the contact fields to update from this report.
+// user is nil for a contact that was just created.
 func nazahaReporterUserUpdates(user *models.User, req *models.IncidentCreateRequest) map[string]interface{} {
 	updates := map[string]interface{}{}
-	// A field the report left empty (hidden by the workflow, or not edited) never
-	// clears what the contact already has.
+	// Empty values never clear what the contact already has.
 	if nationality := parseUUIDPtr(derefTrim(req.ReporterNationalityID)); nationality != nil && (user == nil || !sameUUID(user.NationalityID, nationality)) {
 		updates["nationality_id"] = *nationality
 	}
@@ -118,8 +111,7 @@ func nazahaReporterUserUpdates(user *models.User, req *models.IncidentCreateRequ
 	return updates
 }
 
-// hasNazahaReporterDetails reports whether the report carries any reporter detail
-// (the workflow decides which reporter fields the screen shows).
+// hasNazahaReporterDetails reports whether any reporter detail was given.
 func hasNazahaReporterDetails(req *models.IncidentCreateRequest) bool {
 	for _, v := range []string{
 		req.ReporterName, req.ReporterPhone, req.ReporterEmail, req.ReporterNationalID,
@@ -132,7 +124,7 @@ func hasNazahaReporterDetails(req *models.IncidentCreateRequest) bool {
 	return parseUUIDPtr(derefTrim(req.ReporterNationalityID)) != nil
 }
 
-// ── Editing (Nazaha) ─────────────────────────────────────────────────────────
+// ── Editing ──
 
 // nazahaEditPlan is what an edit changes beyond the generic incident fields.
 type nazahaEditPlan struct {
@@ -144,9 +136,9 @@ type nazahaEditPlan struct {
 	replacePrevious bool
 }
 
-// prepareNazahaEdit applies the Nazaha fields of an edit to the incident (in
-// memory) and checks the reporter's contact changes. Reporter name/phone/email
-// are removed from req so the generic code never stores them on the incident.
+// prepareNazahaEdit applies the Nazaha fields to the incident in memory and checks
+// the contact changes. Reporter fields are removed from req so they never reach
+// the incident.
 func (s *incidentService) prepareNazahaEdit(ctx context.Context, incident *models.Incident, req *models.IncidentUpdateRequest) (*nazahaEditPlan, []models.IncidentFieldChange, error) {
 	plan := &nazahaEditPlan{incidentUpdates: map[string]interface{}{}}
 	var changes []models.IncidentFieldChange
@@ -229,7 +221,7 @@ func (s *incidentService) prepareNazahaEdit(ctx context.Context, incident *model
 		}
 		plan.contact = contact
 	} else {
-		// No contact yet (report saved before contacts were kept): find or create one.
+		// Older report without a contact: find or create one.
 		found, err := s.findReporterUser(ctx, reporter, true)
 		if err != nil && err != gorm.ErrRecordNotFound {
 			return nil, nil, err
@@ -237,7 +229,7 @@ func (s *incidentService) prepareNazahaEdit(ctx context.Context, incident *model
 		plan.contact = found
 		plan.linkContact = true
 	}
-	// The values are not written to the history: they may be hidden (uncooperative).
+	// Values aren't written to the history, since they may be hidden.
 	changes = append(changes, models.IncidentFieldChange{FieldName: "reporter", FieldLabel: "Reporter Details"})
 	return plan, changes, nil
 }
@@ -262,9 +254,8 @@ func (s *incidentService) checkContactEdit(ctx context.Context, contact *models.
 	return nil
 }
 
-// applyNazahaEdit saves what prepareNazahaEdit planned, after the incident update
-// committed: previous-report links and the reporter's contact. Failures are
-// logged; the incident itself is already saved.
+// applyNazahaEdit saves the previous-report links and contact changes after the
+// incident update. Failures are only logged.
 func (s *incidentService) applyNazahaEdit(ctx context.Context, incident *models.Incident, plan *nazahaEditPlan) {
 	if plan.replacePrevious {
 		if err := s.incidentRepo.ReplacePreviousReportLinks(ctx, incident.ID, plan.previousIDs); err != nil {
@@ -294,8 +285,7 @@ func (s *incidentService) applyNazahaEdit(ctx context.Context, incident *models.
 			updates["first_name"], updates["middle_name"], updates["last_name"] = first, middle, last
 		}
 	}
-	// Editing the contact itself: a corrected national ID replaces the old one
-	// (checkContactEdit made sure no other contact has it).
+	// A corrected national ID replaces the old one.
 	if IsNationalID(r.ReporterNationalID) && contact.NationalID != r.ReporterNationalID {
 		updates["national_id"] = r.ReporterNationalID
 	}
@@ -313,8 +303,7 @@ func (s *incidentService) applyNazahaEdit(ctx context.Context, incident *models.
 	}
 }
 
-// registerNazahaContact creates a citizen contact from reporter details
-// (same identifiers as the create flow).
+// registerNazahaContact creates a contact from the reporter details.
 func (s *incidentService) registerNazahaContact(ctx context.Context, r *models.IncidentCreateRequest) (*models.User, error) {
 	phone := pkgutils.NormalizeMobile(r.ReporterPhone, pkgutils.SystemCountryCode())
 	idPart := strings.TrimPrefix(phone, "+")
@@ -346,8 +335,8 @@ func (s *incidentService) registerNazahaContact(ctx context.Context, r *models.I
 	return s.userRepo.FindByID(ctx, resp.User.ID)
 }
 
-// linkedContact returns the incident's reporter contact, or nil when the reporter
-// link is just the operator who created the incident (older reports).
+// linkedContact returns the reporter contact, or nil when the reporter is the
+// operator who created the incident (older reports).
 func linkedContact(incident *models.Incident) *models.User {
 	if incident.Reporter == nil || !models.HasReporterContact(incident) {
 		return nil

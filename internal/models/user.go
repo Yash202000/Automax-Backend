@@ -29,8 +29,7 @@ type User struct {
 	Phone           string    `gorm:"size:20" json:"phone"`
 	AlternateMobile string    `gorm:"size:50;index" json:"alternate_mobile"`
 	MobileVerified  bool      `gorm:"default:false" json:"mobile_verified"`
-	// Nationality (a NATIONALITY master-data value), Gender (male/female) and Address of a
-	// citizen reporter. Filled by the Nazaha create-incident screen; empty for other clients.
+	// Reporter details filled by Nazaha; empty for other clients.
 	NationalityID               *uuid.UUID       `gorm:"type:uuid;index" json:"nationality_id"`
 	Nationality                 *LookupValue     `gorm:"foreignKey:NationalityID" json:"nationality,omitempty"`
 	Gender                      string           `gorm:"size:10;not null;default:''" json:"gender"`

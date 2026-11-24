@@ -268,7 +268,7 @@ func extractField(m map[string]interface{}, path string) string {
 // Non-string values (float64, []interface{}) are stored with their native types
 // so that JS scripts and the typed HTTP body resolver can use proper JSON types.
 func (e *integrationExecutor) buildIncidentContext(incident *models.Incident, fieldMappingsJSON string) map[string]interface{} {
-	// Nazaha: an uncooperative reporter's details never leave the system.
+	// Nazaha: don't send an uncooperative reporter's details.
 	if models.IsReporterHidden(incident.CooperationStatus) {
 		hidden := *incident
 		models.HideReporter(&hidden)

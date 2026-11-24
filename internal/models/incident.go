@@ -136,7 +136,7 @@ type Incident struct {
 	// CooperationStatus: dropdown value (empty = not selected). DB flexible; app validates allowed values.
 	CooperationStatus string `gorm:"size:50;not null;default:'';column:cooperation_status" json:"cooperation_status"`
 
-	// Nazaha create-incident screen fields (CLIENT_CODE=NAZAHA). Empty for other clients.
+	// Nazaha fields (empty for other clients).
 	CallerNumber         string       `gorm:"size:20;index" json:"caller_number"`
 	LinkedIncidentID     *uuid.UUID   `gorm:"type:uuid;index" json:"linked_incident_id"`
 	LinkedIncident       *Incident    `gorm:"foreignKey:LinkedIncidentID" json:"linked_incident,omitempty"`
@@ -145,8 +145,7 @@ type Incident struct {
 	Content              string       `gorm:"type:text" json:"content"`
 	Notes                string       `gorm:"type:text" json:"notes"`
 	Street               string       `gorm:"size:255" json:"street"`
-	// Nazaha keeps all reporter details (name, mobile, email, national ID,
-	// nationality, gender, address) on the reporter's contact (Reporter) only.
+	// Nazaha keeps reporter details on the contact (Reporter), not here.
 
 	// CreatedByID is the ID of the authenticated user who created the record
 	// (differs from ReporterID when an agent creates it on behalf of a citizen).
@@ -450,10 +449,8 @@ type IncidentCreateRequest struct {
 	// CallUuid is the call this incident was raised from (CTI prefill), if any.
 	CallUuid string `json:"call_uuid" validate:"omitempty,max=36"`
 
-	// Nazaha-only fields (CLIENT_CODE=NAZAHA). The create handler checks them for
-	// Nazaha and clears them for every other client, so they are never saved elsewhere.
-	// The master-data IDs have no uuid tag: "" means none, and the Nazaha checks
-	// reject any other value that is not an active value of the list.
+	// Nazaha fields, cleared for other clients. The lookup IDs have no uuid tag so
+	// "" is allowed; the Nazaha checks validate them.
 	CallerNumber         string   `json:"caller_number" validate:"omitempty,max=20"`
 	LinkedIncidentNumber string   `json:"linked_incident_number" validate:"omitempty,max=50"`
 	ConcernedAuthorityID *string  `json:"concerned_authority_id"`
@@ -461,7 +458,7 @@ type IncidentCreateRequest struct {
 	Content              string   `json:"content"`
 	Notes                string   `json:"notes" validate:"omitempty,max=2000"`
 	Street               string   `json:"street" validate:"omitempty,max=255"`
-	// Saved on the reporter's contact (user), never on the incident.
+	// Saved on the reporter's contact.
 	ReporterNationalID    string  `json:"reporter_national_id"`
 	ReporterNationalityID *string `json:"reporter_nationality_id"`
 	ReporterGender        string  `json:"reporter_gender" validate:"omitempty,oneof=male female"`
@@ -501,9 +498,7 @@ type IncidentUpdateRequest struct {
 	// attributed to the citizen's IVR SMS link submission (exact link lookup by token hash).
 	IvrLinkToken string `json:"ivr_link_token"`
 
-	// Nazaha fields, applied only when CLIENT_CODE=NAZAHA (nil = not changed, "" = clear).
-	// The reporter fields (and ReporterName/Phone/Email above) update the reporter's
-	// contact, never the incident.
+	// Nazaha fields (nil = unchanged, "" = clear). Reporter fields update the contact.
 	CallerNumber          *string   `json:"caller_number,omitempty" validate:"omitempty,max=20"`
 	LinkedIncidentNumber  *string   `json:"linked_incident_number,omitempty" validate:"omitempty,max=50"`
 	ConcernedAuthorityID  *string   `json:"concerned_authority_id,omitempty"`
@@ -986,8 +981,7 @@ type IncidentResponse struct {
 	ConcernedAuthority *LookupValueResponse `json:"concerned_authority,omitempty"`
 	LinkedIncident     *IncidentRef         `json:"linked_incident,omitempty"`
 	PreviousReports    []IncidentRef        `json:"previous_reports,omitempty"`
-	// ReporterHidden is true when the reporter's details were removed from this
-	// response because the reporter is uncooperative (Nazaha).
+	// ReporterHidden is true when the reporter's details were removed (uncooperative).
 	ReporterHidden    bool                        `json:"reporter_hidden,omitempty"`
 	TransitionHistory []TransitionHistoryResponse `json:"transition_history,omitempty"`
 	CreatedByID       *uuid.UUID                  `json:"created_by_id,omitempty"`

@@ -598,8 +598,7 @@ func main() {
 	// Incident routes (authenticated users)
 	incidents := v1.Group("/incidents", authMiddleware.Authenticate(), licenseMiddleware.RequireLicensedFeature(string(licensing.FeatureIncidents)))
 	incidents.Post("/", authMiddleware.RequirePermission("incidents:create"), incidentHandler.CreateIncident)
-	// Nazaha create/edit-incident screen; create and edit use the routes above/below
-	// (registered before "/:id" so "previous-reports" isn't read as an ID)
+	// Nazaha-only routes (before "/:id" so "previous-reports" isn't read as an ID)
 	if cfg.IsNazaha() {
 		incidents.Get("/previous-reports", authMiddleware.RequirePermission("incidents:create"), incidentHandler.ListCallerPreviousReports)
 		incidents.Get("/:id/reporter", authMiddleware.RequirePermission(models.PermissionRevealReporter), incidentHandler.RevealReporter)

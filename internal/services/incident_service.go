@@ -511,12 +511,9 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 	clientCode := strings.TrimSpace(s.cfg.ClientCode)
 	// For EPM940, all sources is an unauthenticated channel where the citizen has no account yet,
 	// so fetch or auto-register a user based on their mobile number.
-	// Nazaha does the same, and also matches the reporter by national ID (see findReporterUser).
+	// Nazaha does the same for any reporter detail, and also matches by national ID.
 	isEPM940 := strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940)
 	isNazaha := s.cfg.IsNazaha()
-	// Nazaha keeps every reporter (cooperative or not) as a contact: the contact is
-	// the only place the reporter's details are stored. Which reporter fields exist
-	// depends on the workflow, so any reporter detail creates or links a contact.
 	epmContact := isEPM940 && req.Source != "" && req.ReporterName != "" && req.ReporterPhone != ""
 	nazahaContact := isNazaha && hasNazahaReporterDetails(req)
 	if epmContact || nazahaContact {
@@ -541,8 +538,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 			sourceSlug := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(req.Source)), " ", "")
 			epoch := time.Now().Unix()
 			normalizedPhone := pkgutils.NormalizeMobile(req.ReporterPhone, pkgutils.SystemCountryCode())
-			// Generated login identifiers use the mobile (always set for EPM940), or the
-			// national ID when a Nazaha reporter has no mobile.
+			// Generated login IDs use the mobile, else the national ID.
 			idPart := strings.TrimPrefix(normalizedPhone, "+")
 			if idPart == "" {
 				idPart = req.ReporterNationalID
@@ -561,7 +557,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 			}
 			registerReq.FirstName, registerReq.MiddleName, registerReq.LastName = splitReporterName(req.ReporterName)
 			if isNazaha {
-				// No user has this national ID or email (findReporterUser checked), so they can be saved.
+				// findReporterUser made sure no one else has this ID or email.
 				registerReq.NationalID = req.ReporterNationalID
 				if req.ReporterEmail != "" {
 					registerReq.Email = strings.ToLower(req.ReporterEmail)
@@ -588,7 +584,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 			reporterID = user.ID
 			first, middle, last := splitReporterName(req.ReporterName)
 			updates := make(map[string]interface{})
-			// An empty name (Nazaha workflow without the name field) never clears the contact's.
+			// An empty name never clears the contact's name.
 			if req.ReporterName != "" && (first != user.FirstName || middle != user.MiddleName || last != user.LastName) {
 				updates["first_name"] = first
 				updates["middle_name"] = middle
@@ -611,8 +607,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 				pendingUserUpdates = updates
 			}
 		}
-		// EPM940 only: rename the reporter on every earlier incident with this phone.
-		// Nazaha keeps each incident's reporter details as they were given.
+		// EPM940 only: rename the reporter on earlier incidents with this phone.
 		if isEPM940 {
 			if err := s.incidentRepo.UpdateReporterNameByPhone(ctx, req.ReporterPhone, req.ReporterName); err != nil {
 				fmt.Printf("CreateIncident: Error backfilling reporter name for phone %s: %v\n", req.ReporterPhone, err)
@@ -854,7 +849,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		PostalCode:         req.PostalCode,
 		RecordType:         recordType,
 		Source:             req.Source,
-		// Nazaha fields (always empty for other clients: the create handler clears them).
+		// Nazaha fields (empty for other clients).
 		CallerNumber:         req.CallerNumber,
 		LinkedIncidentID:     req.LinkedIncidentID,
 		ConcernedAuthorityID: parseUUIDPtr(derefTrim(req.ConcernedAuthorityID)),
@@ -944,7 +939,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		break // Success, exit retry loop
 	}
 
-	// Nazaha: link the previous reports selected on the create screen.
+	// Nazaha: link the selected previous reports.
 	if err := s.incidentRepo.CreatePreviousReportLinks(ctx, incident.ID, validUUIDs(req.PreviousReportIDs)); err != nil {
 		log.Printf("[IncidentService] failed to link previous reports to incident %s: %v", incident.ID, err)
 	}
@@ -1521,8 +1516,7 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	var changes []models.IncidentFieldChange
 	var descriptions []string
 
-	// Nazaha: its own fields on the incident, and reporter details on the contact
-	// (contact changes and previous-report links are saved after the commit).
+	// Nazaha: apply its fields; contact and previous-report changes are saved after commit.
 	var nazahaEdit *nazahaEditPlan
 	if s.cfg.IsNazaha() {
 		plan, nazahaChanges, err := s.prepareNazahaEdit(ctx, incident, req)

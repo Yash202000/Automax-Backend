@@ -175,7 +175,7 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 		validationErrors["alternate_mobile"] = i18n.T(c.UserContext(), "alternate_mobile_same_as_primary")
 	}
 
-	// Nazaha-only fields: checked for Nazaha, never accepted from other clients.
+	// Nazaha fields are checked for Nazaha and dropped for other clients.
 	if h.cfg.IsNazaha() {
 		if validationErrors == nil {
 			validationErrors = map[string]string{}
@@ -237,7 +237,7 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 			errors.Is(err, services.ErrClassificationNotSelectable):
 			return ErrorResponseWithKey(c, fiber.StatusBadRequest, err.Error(), req.Source)
 
-		// Nazaha: say the workflow has no states instead of a server error.
+		// Nazaha: report a workflow without states as a bad request.
 		case h.cfg.IsNazaha() && errors.Is(err, services.ErrEmptyWorkflow):
 			return ErrorResponseWithKey(c, fiber.StatusBadRequest, err.Error(), req.Source)
 
@@ -1122,7 +1122,7 @@ func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 			"errors":  validationErrors,
 		})
 	}
-	// Nazaha fields on an edit (formats, references, reveal permission).
+	// Nazaha: check the Nazaha fields of the edit.
 	if h.cfg.IsNazaha() {
 		status, fieldErrors, err := h.checkNazahaEdit(c, id, &req)
 		if err != nil {

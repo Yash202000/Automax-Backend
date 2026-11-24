@@ -941,7 +941,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		db.Model(&adminRole).Association("Permissions").Append(errorLogPerms)
 	}
 
-	// Nazaha: ensure the admin role has the reveal-reporter permission on existing databases.
+	// Nazaha: give the admin role the reveal-reporter permission.
 	if cfg.IsNazaha() {
 		var revealPerm models.Permission
 		if db.Where("code = ?", models.PermissionRevealReporter).First(&revealPerm).Error == nil {
@@ -1467,7 +1467,7 @@ func seedLookupCategories(db *gorm.DB, cfg *config.Config) {
 	}
 }
 
-// nazahaNationalities are the first values of the Nationality master-data list.
+// nazahaNationalities are the starting values of the Nationality list.
 var nazahaNationalities = []struct{ Code, Name, NameAr string }{
 	{"SA", "Saudi Arabia", "السعودية"}, {"AE", "United Arab Emirates", "الإمارات"},
 	{"KW", "Kuwait", "الكويت"}, {"QA", "Qatar", "قطر"}, {"BH", "Bahrain", "البحرين"},
@@ -1478,9 +1478,7 @@ var nazahaNationalities = []struct{ Code, Name, NameAr string }{
 	{"BD", "Bangladesh", "بنغلاديش"}, {"PH", "Philippines", "الفلبين"}, {"ID", "Indonesia", "إندونيسيا"},
 }
 
-// seedNazahaLookups creates the Nazaha master-data lists when missing: Authority
-// (2.4, "Concerned Authority" on the screen), which starts empty, and Nationality
-// (4.2), which starts with nazahaNationalities. Admins manage both from the lookups screen.
+// seedNazahaLookups creates the Authority (empty) and Nationality lists when missing.
 func seedNazahaLookups(db *gorm.DB, cfg *config.Config) {
 	if !cfg.IsNazaha() {
 		return
@@ -1489,7 +1487,7 @@ func seedNazahaLookups(db *gorm.DB, cfg *config.Config) {
 	seedNazahaAuthorities(db)
 }
 
-// seedNazahaAuthorities creates the Authority list (code AUTHORITY), empty, when missing.
+// seedNazahaAuthorities creates the empty Authority list when missing.
 func seedNazahaAuthorities(db *gorm.DB) {
 	var category models.LookupCategory
 	if err := db.Where("code = ?", models.AuthorityCategoryCode).First(&category).Error; err != gorm.ErrRecordNotFound {

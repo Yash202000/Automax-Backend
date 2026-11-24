@@ -11,41 +11,34 @@ import (
 	"gorm.io/gorm"
 )
 
-// Nazaha create-incident screen (CLIENT_CODE=NAZAHA).
-// Everything in this file is used only when the deployment is Nazaha.
+// Nazaha-only models and helpers.
 
 const (
 	GenderMale   = "male"
 	GenderFemale = "female"
 
-	// AuthorityCategoryCode is the lookup category (master data) that holds the
-	// Concerned Authority (2.4) values. Seeded empty for Nazaha; admins add values.
+	// AuthorityCategoryCode is the lookup list of concerned authorities.
 	AuthorityCategoryCode = "AUTHORITY"
 
-	// NationalityCategoryCode is the lookup category (master data) that holds the
-	// reporter Nationality (4.2) values. Seeded for Nazaha; admins can change it.
+	// NationalityCategoryCode is the lookup list of nationalities.
 	NationalityCategoryCode = "NATIONALITY"
 
 	// PermissionRevealReporter lets a user see the details of an uncooperative reporter.
 	PermissionRevealReporter = "incidents:reveal-reporter"
 
-	// ActionLogModuleReporterReveal is the action-log module every reveal is logged
-	// under, so the reveal history can be filtered on its own.
+	// ActionLogModuleReporterReveal is the action-log module for reveals.
 	ActionLogModuleReporterReveal = "reporter_reveal"
 )
 
-// NazahaWorkflowFields are the workflow form-config names the Nazaha screen
-// checks here (same names in the frontend workflow designer). The existing
-// "reporter_phone" field is the Caller Number on the Nazaha screen; the
-// reporter's mobile is the Nazaha field "reporter_mobile".
+// NazahaWorkflowFields are the workflow fields checked for Nazaha. "reporter_phone"
+// is the caller number; the reporter's mobile is "reporter_mobile".
 var NazahaWorkflowFields = []string{
 	"reporter_phone", "previous_report_ids", "linked_incident_number", "concerned_authority_id",
 	"reporter_mobile", "reporter_nationality", "reporter_national_id", "reporter_address",
 	"reporter_gender", "content", "notes", "street",
 }
 
-// NazahaFieldErrorKey is the request field an error for a workflow field is
-// reported on (the form shows it under that input).
+// NazahaFieldErrorKey returns the request field an error for a workflow field goes on.
 func NazahaFieldErrorKey(field string) string {
 	switch field {
 	case "reporter_phone":
@@ -56,8 +49,7 @@ func NazahaFieldErrorKey(field string) string {
 	return field
 }
 
-// NazahaFieldValue returns the value of a workflow field by its workflow name
-// ("" when empty), for the workflow required-field check.
+// NazahaFieldValue returns the value of a workflow field ("" when empty).
 func (r *IncidentCreateRequest) NazahaFieldValue(field string) string {
 	switch field {
 	case "reporter_phone":
@@ -88,8 +80,7 @@ func (r *IncidentCreateRequest) NazahaFieldValue(field string) string {
 	return ""
 }
 
-// TrimNazahaFields removes surrounding spaces from the Nazaha and reporter text
-// fields (and lower-cases the gender) before they are checked.
+// TrimNazahaFields trims the Nazaha and reporter text fields.
 func (r *IncidentCreateRequest) TrimNazahaFields() {
 	for _, f := range []*string{
 		&r.CallerNumber, &r.LinkedIncidentNumber, &r.ReporterName, &r.ReporterNationalID,
@@ -110,8 +101,7 @@ func (r *IncidentCreateRequest) TrimNazahaFields() {
 	r.ReporterGender = strings.ToLower(r.ReporterGender)
 }
 
-// ClearNazahaFields empties the Nazaha-only fields. The create handler calls it for
-// every client except Nazaha.
+// ClearNazahaFields empties the Nazaha fields (used for other clients).
 func (r *IncidentCreateRequest) ClearNazahaFields() {
 	r.CallerNumber, r.LinkedIncidentNumber, r.Content, r.Notes, r.Street = "", "", "", "", ""
 	r.ConcernedAuthorityID, r.ReporterNationalityID, r.LinkedIncidentID = nil, nil, nil
@@ -126,8 +116,7 @@ func derefString(s *string) string {
 	return *s
 }
 
-// IncidentPreviousReport links an incident to one of the caller's earlier incidents
-// selected in "Previous Reports" (1.3). An incident can have several.
+// IncidentPreviousReport links an incident to one of the caller's earlier incidents.
 type IncidentPreviousReport struct {
 	ID                 uuid.UUID `gorm:"type:uuid;primary_key" json:"id"`
 	IncidentID         uuid.UUID `gorm:"type:uuid;not null;uniqueIndex:idx_incident_previous_report" json:"incident_id"`
@@ -148,7 +137,7 @@ type IncidentRef struct {
 	IncidentNumber string    `json:"incident_number"`
 }
 
-// CallerPreviousReport is one value of the "Previous Reports" (1.3) dropdown.
+// CallerPreviousReport is one option of the previous reports dropdown.
 type CallerPreviousReport struct {
 	ID                   uuid.UUID `json:"id"`
 	IncidentNumber       string    `json:"incident_number"`
@@ -170,9 +159,8 @@ type ReporterDetailsResponse struct {
 	ReporterAddress     string               `json:"reporter_address"`
 }
 
-// ToReporterDetailsResponse returns the reporter details of an incident, all taken
-// from the reporter's contact (the incident keeps no copy). A generated login email
-// and a generated placeholder national ID are left out: they are not real details.
+// ToReporterDetailsResponse returns the reporter details from the contact,
+// leaving out generated emails and placeholder national IDs.
 func ToReporterDetailsResponse(i *Incident) ReporterDetailsResponse {
 	u := i.Reporter
 	if u == nil {
@@ -200,24 +188,20 @@ func ToReporterDetailsResponse(i *Incident) ReporterDetailsResponse {
 // nationalIDPattern matches a real national ID (10 digits, 1 = citizen, 2 = resident).
 var nationalIDPattern = regexp.MustCompile(`^[12][0-9]{9}$`)
 
-// hideReporterOfUncooperative is turned on at startup for Nazaha only
-// (see SetHideUncooperativeReporter). Other clients never hide reporter details.
+// hideReporterOfUncooperative is turned on at startup for Nazaha only.
 var hideReporterOfUncooperative bool
 
 // SetHideUncooperativeReporter turns hiding of uncooperative reporters on or off.
-// Called once from main after the config is loaded.
 func SetHideUncooperativeReporter(on bool) {
 	hideReporterOfUncooperative = on
 }
 
-// IsReporterHidden reports whether the reporter details of an incident with this
-// cooperation status must be hidden.
+// IsReporterHidden reports whether reporter details must be hidden for this status.
 func IsReporterHidden(cooperationStatus string) bool {
 	return hideReporterOfUncooperative && cooperationStatus == CooperationStatusUncooperative
 }
 
-// HideReporter removes the reporter details from an incident in place. Used before
-// the incident leaves the system (integrations, reports).
+// HideReporter removes the reporter details from an incident.
 func HideReporter(i *Incident) {
 	i.ReporterName = ""
 	i.ReporterPhone = ""
@@ -237,8 +221,8 @@ func hideUncooperativeReporter(resp *IncidentResponse) {
 	resp.ReporterHidden = true
 }
 
-// HasReporterContact reports whether the incident's reporter link is a reporter
-// contact. Reports created before contacts were kept link the creating operator.
+// HasReporterContact reports whether the reporter is a contact and not the
+// operator who created the incident (older reports).
 func HasReporterContact(i *Incident) bool {
 	return i.ReporterID != nil && (i.CreatedByID == nil || *i.CreatedByID != *i.ReporterID)
 }

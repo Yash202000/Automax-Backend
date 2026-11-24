@@ -27,7 +27,7 @@ type IncidentRepository interface {
 	FindByIDWithRelations(ctx context.Context, id uuid.UUID) (*models.Incident, error)
 	FindByIncidentNumber(ctx context.Context, number string) (*models.Incident, error)
 
-	// Nazaha create-incident screen (see incident_nazaha_repository.go)
+	// Nazaha (see incident_nazaha_repository.go)
 	ListByCallerNumber(ctx context.Context, callerNumber string) ([]models.CallerPreviousReport, error)
 	CreatePreviousReportLinks(ctx context.Context, incidentID uuid.UUID, previousIDs []uuid.UUID) error
 	LoadNazahaRelations(ctx context.Context, incident *models.Incident) error
