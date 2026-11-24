@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/automax/backend/pkg/utils"
 )
 
 type GISService interface {
@@ -79,8 +81,11 @@ func (s *gisService) fetchToken(ctx context.Context) (string, error) {
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
+	log.Printf("[GIS-API] token request POST %s body=%s", s.tokenURL, utils.SanitizeErrorText(form.Encode()))
+	start := time.Now()
 	resp, err := s.client.Do(req)
 	if err != nil {
+		log.Printf("[GIS-API] token request FAILED POST %s after %s: %v", s.tokenURL, time.Since(start), utils.SanitizeErrorText(err.Error()))
 		return "", fmt.Errorf("token request failed: %w", err)
 	}
 	defer resp.Body.Close()
@@ -89,6 +94,7 @@ func (s *gisService) fetchToken(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	log.Printf("[GIS-API] token response POST %s status=%d in %s body=%s", s.tokenURL, resp.StatusCode, time.Since(start), utils.SanitizeErrorText(string(body)))
 
 	var tr gisTokenResponse
 	if err := json.Unmarshal(body, &tr); err != nil {
@@ -167,8 +173,11 @@ func (s *gisService) Identify(ctx context.Context, x, y float64) (json.RawMessag
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
+	log.Printf("[GIS-API] identify request POST %s body=%s", s.identifyURL, utils.SanitizeErrorText(form.Encode()))
+	start := time.Now()
 	resp, err := s.client.Do(req)
 	if err != nil {
+		log.Printf("[GIS-API] identify request FAILED POST %s after %s: %v", s.identifyURL, time.Since(start), utils.SanitizeErrorText(err.Error()))
 		return nil, fmt.Errorf("GIS identify failed: %w", err)
 	}
 	defer resp.Body.Close()
@@ -177,6 +186,7 @@ func (s *gisService) Identify(ctx context.Context, x, y float64) (json.RawMessag
 	if err != nil {
 		return nil, err
 	}
+	log.Printf("[GIS-API] identify response POST %s status=%d in %s body=%s", s.identifyURL, resp.StatusCode, time.Since(start), utils.SanitizeErrorText(string(body)))
 
 	return json.RawMessage(body), nil
 }

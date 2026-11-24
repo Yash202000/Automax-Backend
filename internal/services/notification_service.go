@@ -364,6 +364,8 @@ func (s *NotificationService) SendNotification(ctx context.Context, channel stri
 		sendLogID = uuid.New()
 		ctx = withSMSLogID(ctx, sendLogID)
 		log.Printf("[SMS] stage=start log_id=%s template=%q recipients=%d lang=%s", sendLogID, tplCodeForLog, len(to), language)
+		// Full SMS text as rendered from our template (Amana builds the delivered text from its own copy of the template).
+		log.Printf("[SMS] stage=message log_id=%s template=%q lang=%s provider_template_id=%s text=%q", sendLogID, tplCodeForLog, language, smsProviderTplID, body)
 		for _, phone := range to {
 			sid, audit, err := s.sendAmanaSMS(ctx, phone, smsProviderTplID, smsVarNames, variables)
 			info := models.RecipientInfo{

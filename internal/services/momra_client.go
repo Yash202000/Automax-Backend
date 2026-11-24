@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/automax/backend/internal/config"
+	"github.com/automax/backend/pkg/utils"
 )
 
 // MOMRAClassificationItem is the shared shape returned by 3.21/3.22/3.23 — the parent
@@ -288,13 +290,18 @@ func (c *momraClient) getToken(ctx context.Context) (string, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
+	// Service/Key are credentials: the logged body shows them masked.
+	log.Printf("[AMANA-TOKEN] request POST %s body={\"Service\":\"***\",\"Key\":\"***\"}", tokenURL)
+	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		log.Printf("[AMANA-TOKEN] request FAILED POST %s after %s: %s", tokenURL, time.Since(start), c.redact(err.Error()))
 		return "", fmt.Errorf("momra token request to %s failed: %w", tokenURL, err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+	log.Printf("[AMANA-TOKEN] response POST %s status=%d in %s body=%s", tokenURL, resp.StatusCode, time.Since(start), utils.SanitizeErrorText(c.redact(strings.Join(strings.Fields(string(body)), " "))))
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return "", fmt.Errorf("momra token request to %s returned %d: %s",
 			tokenURL, resp.StatusCode, c.safeExcerpt(body))
