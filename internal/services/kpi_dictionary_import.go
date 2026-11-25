@@ -68,7 +68,7 @@ const (
 	kpiTemplateInstructionsSheet  = "Instructions"
 	kpiTemplatePillarsSheet       = "Pillars"
 	kpiTemplateEnablersSheet      = "Enablers"
-	kpiTemplateGoalsSheet         = "Strategic Goals"
+	kpiTemplateGoalsSheet         = "Goals"
 	kpiTemplateObjectivesSheet    = "Parent Objectives"      // operational_objectives
 	kpiTemplateProcessesSheet     = "Operational Objectives" // processes (the screens' name)
 	kpiTemplateInitiativesSheet   = "Initiatives"
@@ -99,6 +99,14 @@ type kpiTemplateColumn struct {
 	// formula fills the column automatically from another cell of the row
 	// ("{row}" = row number); the user can type over it.
 	formula string
+	// allowIf refuses a typed value on rows where it is false (see
+	// utils.ColumnConfig.AllowIf); allowErrEn/Ar is the message shown.
+	allowIf                string
+	allowErrEn, allowErrAr string
+	// listFormula is a dropdown source formula (see utils.DropdownConfig
+	// Source) used instead of list, e.g. a list filtered by another cell.
+	listFormula string
+	hidden      bool // helper column, hidden in the template
 }
 
 // Record categories reported in the preview/summary, in display order.
@@ -334,6 +342,33 @@ type kpiImporter struct {
 	existingTargets map[string]uuid.UUID    // type|CODE|year
 	existingEntries map[string]uuid.UUID    // kpiID|type|metricID|year|period_code
 	deptCodes       map[string]bool
+
+	dataSourceEN map[string]string // data source EN/AR name (normalised) → EN name; loaded on first use
+}
+
+// dataSourceName returns the English name of the data source whose English
+// or Arabic name matches, as the KPI form stores it; other text is kept as
+// written (Data Source is free text).
+func (imp *kpiImporter) dataSourceName(v string) string {
+	if imp.dataSourceEN == nil {
+		imp.dataSourceEN = map[string]string{}
+		var sources []models.KpiDataSource
+		if err := imp.db.WithContext(imp.ctx).Find(&sources).Error; err == nil {
+			for _, s := range sources {
+				if s.NameEn == "" {
+					continue
+				}
+				imp.dataSourceEN[normName(s.NameEn)] = s.NameEn
+				if s.NameAr != "" {
+					imp.dataSourceEN[normName(s.NameAr)] = s.NameEn
+				}
+			}
+		}
+	}
+	if en, ok := imp.dataSourceEN[normName(v)]; ok {
+		return en
+	}
+	return v
 }
 
 // ─── Entry points ───────────────────────────────────────────────────────────
@@ -710,7 +745,7 @@ var kpiImportSheetRules = []struct {
 }{
 	{"pillars", kpiTemplatePillarsSheet, hdrAny("pillars", "الركائز")},
 	{"enablers", kpiTemplateEnablersSheet, hdrAny("enablers", "الممكنات")},
-	{"goals", kpiTemplateGoalsSheet, hdrAny("strategic goals", "الأهداف الاستراتيجية")},
+	{"goals", kpiTemplateGoalsSheet, hdrAny("goals", "strategic goals", "الأهداف", "الأهداف الاستراتيجية")},
 	{"objectives", kpiTemplateObjectivesSheet, hdrAny("parent objectives", "الأهداف الرئيسية")},
 	{"processes", kpiTemplateProcessesSheet, hdrAny("operational objectives", "الأهداف التشغيلية")},
 	{"initiatives", kpiTemplateInitiativesSheet, hdrAny("initiatives", "المبادرات")},
@@ -785,18 +820,18 @@ type sheetTable struct {
 // kpiImportColumnLabels are the template's English header names, used in
 // structural error messages.
 var kpiImportColumnLabels = map[string]string{
-	"code": "Code", "name": "Indicator name", "pillar": "Pillar / Enabler", "goal": "Strategic Goal",
+	"code": "Code", "name": "Indicator name", "pillar": "Pillar / Enabler", "goal": "Goal",
 	"objective": "Operational Objective", "process": "Related Process Name", "domain": "Related Domain / Award Criterion",
 	"seg": "Segmentation Axes", "polarity": "Polarity / Direction", "activation": "Activation Status",
 	"description": "Description", "owner_type": "Owner Type", "owner_dept": "Owner Department",
 	"agency": "الوكالة / الإدارة المالكة", "related_depts": "Related Departments", "frequency": "Reporting Frequency",
 	"classification": "KPI Classification", "target_requirement": "Target Requirement", "unit": "Unit of Measure",
 	"owner_org": "Owner Organization", "award_measure": "Award KPIs and Measures",
-	"lifecycle": "KPI Lifecycle", "data_source": "Data Source", "formula": "Calculation Formula", "baseline": "Baseline",
+	"lifecycle": "KPI Lifecycle", "data_source": "Data Source", "formula": "Formula", "baseline": "Baseline",
 	"notes": "Notes", "criterion": "Criteria", "sub_no": "Sub-Criterion #", "sub_name": "Sub-Criterion", "sub_criterion": "Sub-Criteria",
 	"name_en": "EPM KPI (EN)", "name_ar": "EPM KPI (AR)", "description_en": "Description (EN)", "description_ar": "Description (AR)",
 	"parent_objective": "Parent Objective", "md_parent": "Parent Objective",
-	"md_name": "Name", "md_owner": "Owner Department", "md_pillar": "Pillar", "md_enabler": "Enabler", "md_goal": "Strategic Goal",
+	"md_name": "Name", "md_owner": "Owner Department", "md_pillar": "Pillar", "md_enabler": "Enabler", "md_goal": "Goal",
 	"year": "Year", "quarter": "Quarter", "target": "Target", "actual": "Actual Result", "achievement": "Achievement",
 }
 
@@ -846,7 +881,7 @@ func dictColumns(kpiType string) []colSpec {
 		// The KPI forms require an operational objective for every KPI type;
 		// its parent objective, goal and (when not given) pillar follow from it.
 		{"pillar", hdrPrefixAny("pillar", "الركيزة"), false},
-		{"goal", hdrAny("strategic goal", "الهدف الاستراتيجي"), false},
+		{"goal", hdrAny("goal", "strategic goal", "الهدف", "الهدف الاستراتيجي"), false},
 		// Checked per row rather than as a mandatory column, so that rows of
 		// older workbooks without it are each rejected with a reason.
 		{"objective", hdrAny("objective", "operational objective", "الهدف التشغيلي"), false},
@@ -888,7 +923,10 @@ func dictColumns(kpiType string) []colSpec {
 		{"frequency", hdrPrefixAny("reporting frequency", "تكرار الإبلاغ"), true},
 		{"lifecycle", hdrPrefixAny("kpi lifecycle", "دورة حياة المؤشر"), false},
 		{"data_source", hdrAny("data source", "مصدر البيانات"), false},
-		{"formula", hdrPrefixAny("calculation formula", "معادلة الحساب"), false},
+		// "Formula" / "الصيغة" as on the KPI form; older templates: "Calculation Formula".
+		{"formula", func(h string) bool {
+			return hdrAny("formula", "الصيغة")(h) || hdrPrefixAny("calculation formula", "معادلة الحساب")(h)
+		}, false},
 		{"baseline", hdrAny("baseline", "خط الأساس"), false},
 		{"notes", hdrAny("notes", "ملاحظات"), false},
 	}
@@ -1266,7 +1304,7 @@ func masterSheetColumns(kind string) []colSpec {
 		cols = append(cols, colSpec{"md_owner", hdrPrefixAny("owner department", "الإدارة المالكة"), false})
 	case mdObjective:
 		cols = append(cols,
-			colSpec{"md_goal", hdrAny("strategic goal", "الهدف الاستراتيجي"), true},
+			colSpec{"md_goal", hdrAny("goal", "strategic goal", "الهدف", "الهدف الاستراتيجي"), true},
 			colSpec{"md_pillar", hdrAny("pillar", "الركيزة"), false},
 			colSpec{"md_enabler", hdrAny("enabler", "الممكن"), false})
 	case mdProcess:
@@ -1276,7 +1314,7 @@ func masterSheetColumns(kind string) []colSpec {
 			colSpec{"md_enabler", hdrAny("enabler", "الممكن"), false})
 	case mdInitiative:
 		cols = append(cols,
-			colSpec{"md_goal", hdrAny("strategic goal", "الهدف الاستراتيجي"), true},
+			colSpec{"md_goal", hdrAny("goal", "strategic goal", "الهدف", "الهدف الاستراتيجي"), true},
 			colSpec{"md_parent", hdrAny("parent objective", "الهدف الرئيسي"), false},
 			colSpec{"md_pillar", hdrAny("pillar", "الركيزة"), false},
 			colSpec{"md_enabler", hdrAny("enabler", "الممكن"), false},
@@ -1359,7 +1397,7 @@ func (imp *kpiImporter) parseMasterSheet(kind string, t *sheetTable) {
 			}
 		case mdObjective:
 			if t.get(r, "md_goal") == "" {
-				imp.errorf(t.sheet, excelRow, name, t.label("md_goal"), "Parent objective must reference a strategic goal.")
+				imp.errorf(t.sheet, excelRow, name, t.label("md_goal"), "Parent objective must reference a goal.")
 				imp.rejectNode(n, "missing strategic goal")
 				continue
 			}
@@ -1373,7 +1411,7 @@ func (imp *kpiImporter) parseMasterSheet(kind string, t *sheetTable) {
 			n.Enabler = ref(mdEnabler, "md_enabler")
 		case mdInitiative:
 			if t.get(r, "md_goal") == "" {
-				imp.errorf(t.sheet, excelRow, name, t.label("md_goal"), "Initiative must reference a strategic goal.")
+				imp.errorf(t.sheet, excelRow, name, t.label("md_goal"), "Initiative must reference a goal.")
 				imp.rejectNode(n, "missing strategic goal")
 				continue
 			}
@@ -1697,6 +1735,9 @@ func (imp *kpiImporter) parseDictionary(kpiType string, t *sheetTable) {
 			fail("lifecycle", "KPI Lifecycle must be at most 100 characters.")
 		}
 		rec.DataSource = t.get(r, "data_source")
+		if rec.DataSource != "" {
+			rec.DataSource = imp.dataSourceName(rec.DataSource)
+		}
 		if len([]rune(rec.DataSource)) > 255 {
 			fail("data_source", "Data Source must be at most 255 characters.")
 		}
@@ -1775,7 +1816,7 @@ func (imp *kpiImporter) parseDictionary(kpiType string, t *sheetTable) {
 			var fuzzy bool
 			goalNode, fuzzy = imp.find(mdGoal, goalName, nil)
 			if goalNode != nil && fuzzy {
-				imp.warn(t.sheet, excelRow, id, t.label("goal"), fmt.Sprintf("%q matched to strategic goal %q.", goalName, goalNode.NameEn))
+				imp.warn(t.sheet, excelRow, id, t.label("goal"), fmt.Sprintf("%q matched to goal %q.", goalName, goalNode.NameEn))
 			}
 		}
 
@@ -1843,9 +1884,9 @@ func (imp *kpiImporter) parseDictionary(kpiType string, t *sheetTable) {
 			}
 			switch {
 			case goalName != "" && goalNode == nil:
-				imp.warn(t.sheet, excelRow, id, t.label("goal"), fmt.Sprintf("Strategic goal %q was not found; the goal of the operational objective is used.", goalName))
+				imp.warn(t.sheet, excelRow, id, t.label("goal"), fmt.Sprintf("Goal %q was not found; the goal of the operational objective is used.", goalName))
 			case goalNode != nil && rec.Goal != nil && goalNode != rec.Goal:
-				imp.warn(t.sheet, excelRow, id, t.label("goal"), fmt.Sprintf("Strategic goal %q does not match the operational objective's goal %q; the objective's goal is used.", goalName, rec.Goal.NameEn))
+				imp.warn(t.sheet, excelRow, id, t.label("goal"), fmt.Sprintf("Goal %q does not match the operational objective's goal %q; the objective's goal is used.", goalName, rec.Goal.NameEn))
 			case goalNode != nil && rec.Goal == nil:
 				rec.Goal = goalNode
 			}
@@ -1883,11 +1924,18 @@ func (imp *kpiImporter) parseDictionary(kpiType string, t *sheetTable) {
 			rec.Agency = imp.department(agency, t.sheet, excelRow, id, t.label("agency"))
 		}
 		orgName := t.get(r, "owner_org")
+		// As on the KPI form: Internal unless External is chosen. A blank
+		// Owner Type with an Owner Organization means External. (The
+		// department's own type does not decide it: most departments are
+		// marked external, and an External KPI needs an organization.)
 		if rec.OwnerType == "" {
 			rec.OwnerType = models.KPIOwnerTypeInternal
-			if orgName != "" || (rec.OwnerDept != nil && rec.OwnerDept.DeptType == "external") {
+			if orgName != "" {
 				rec.OwnerType = models.KPIOwnerTypeExternal
 			}
+		}
+		if orgName == "" && rec.OwnerType == models.KPIOwnerTypeExternal {
+			fail("owner_org", "Owner Organization is required when the Owner Type is External.")
 		}
 		if orgName != "" {
 			switch {
@@ -1948,8 +1996,8 @@ func (imp *kpiImporter) parseDictionary(kpiType string, t *sheetTable) {
 			tr := &kpiTargetRec{Year: y, Row: excelRow, Field: strings.TrimSpace(cell(t.rows[t.headerRow], t.years[y]))}
 			v, ok := parseImportNumber(raw)
 			switch {
-			case y < 2000 || y > 2100:
-				imp.errorf(t.sheet, excelRow, id, tr.Field, fmt.Sprintf("Target year %d is outside the permitted range (2000–2100).", y))
+			case y < 2020 || y > 2040:
+				imp.errorf(t.sheet, excelRow, id, tr.Field, fmt.Sprintf("Target year %d is outside the permitted range (2020–2040).", y))
 				tr.Rejected, tr.RejectWhy = true, "invalid target"
 			case !ok:
 				imp.errorf(t.sheet, excelRow, id, tr.Field, fmt.Sprintf("Target %q is not a valid number.", raw))
@@ -1978,6 +2026,24 @@ func (imp *kpiImporter) resolveAwardCriteria(t *sheetTable, r []string, excelRow
 	critRaw := t.get(r, "criterion")
 	subKey, subNo, subName := "sub_criterion", "", ""
 	if v := t.get(r, "sub_criterion"); v != "" {
+		// A value picked from the template's list ("<number> - <name>") is
+		// an existing sub-criterion, whatever its number looks like (older
+		// records may have a plain "1" instead of "1.1").
+		if n := imp.subCriterionByLabel(v); n != nil {
+			if critRaw != "" {
+				critNo, ok := parseCriterionNo(critRaw)
+				if !ok {
+					fail("criterion", fmt.Sprintf("Criteria %q is not valid — pick one from the list, e.g. \"Criterion 5 - Name\".", critRaw))
+					return
+				}
+				if n.Criterion != nil && critNo != n.Criterion.CriterionNo {
+					fail("sub_criterion", fmt.Sprintf("Sub-Criteria %q does not belong to Criterion %d.", v, critNo))
+					return
+				}
+			}
+			rec.SubCriterion = n
+			return
+		}
 		m := subCriterionLabelRe.FindStringSubmatch(v)
 		if m == nil {
 			fail("sub_criterion", fmt.Sprintf("Sub-Criteria %q is not valid — pick one from the list, e.g. \"5.1 - Name\".", v))
@@ -2044,6 +2110,23 @@ func (imp *kpiImporter) resolveAwardCriteria(t *sheetTable, r []string, excelRow
 	rec.SubCriterion = sub
 }
 
+// subCriterionByLabel finds the existing sub-criterion whose dropdown label
+// ("<sub no> - <English or Arabic name>", as the template lists it) matches.
+func (imp *kpiImporter) subCriterionByLabel(v string) *mdNode {
+	want := normName(v)
+	for _, n := range imp.md[mdSubCriterion] {
+		if n.SubNo == "" {
+			continue
+		}
+		for _, name := range []string{n.NameEn, n.NameAr} {
+			if name != "" && normName(n.SubNo+" - "+name) == want {
+				return n
+			}
+		}
+	}
+	return nil
+}
+
 // subCriterionLabelRe splits a Sub-Criteria value "5.1 - Name" (the name is
 // optional) into number and name.
 var subCriterionLabelRe = regexp.MustCompile(`^\s*(\d+(?:\.\d+)+)\s*(?:[-–—:]\s*(.*))?$`)
@@ -2095,8 +2178,8 @@ func (imp *kpiImporter) addPerf(kpi *kpiRec, metric *models.KpiMetric, metricGiv
 		imp.errorf(sheet, excelRow, rid, field, msg)
 		rec.Rejected, rec.RejectWhy = true, "invalid performance value"
 	}
-	if year < 2000 || year > 2100 {
-		reject(labels[1], fmt.Sprintf("Year %d is outside the permitted range (2000–2100).", year))
+	if year < 2020 || year > 2040 {
+		reject(labels[1], fmt.Sprintf("Year %d is outside the permitted range (2020–2040).", year))
 	}
 	if v, ok := parseImportNumber(actualRaw); !ok {
 		reject(labels[1], fmt.Sprintf("Actual result %q is not a valid number.", actualRaw))

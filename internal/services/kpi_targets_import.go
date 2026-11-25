@@ -233,10 +233,11 @@ func BuildKpiTargetsImportTemplate(ctx context.Context, db *gorm.DB, lang string
 		ActiveSheet:  kpiTargetsTemplateSheet,
 		Instructions: buildKpiTargetsInstructions(),
 		Sheets: []utils.SheetConfig{{
-			Name:         kpiTargetsTemplateSheet,
-			Columns:      toExcelColumns(cols),
-			DataRows:     kpiTargetsTemplateDataRows,
-			FreezeHeader: true,
+			Name:             kpiTargetsTemplateSheet,
+			Columns:          toExcelColumns(cols),
+			DataRows:         kpiTargetsTemplateDataRows,
+			FreezeHeader:     true,
+			ConditionalFills: targetSheetFills(),
 		}},
 		ListsSheet: kpiTemplateListsSheet,
 		Lists:      lists,
@@ -268,7 +269,7 @@ func kpiTargetColumns() []colSpec {
 		{"warning_threshold", hdrPrefixAny("warning threshold", "حد التحذير"), false},
 		{"target_range_min", hdrAny("target range min", "range min", "أدنى قيمة للنطاق"), false},
 		{"target_range_max", hdrAny("target range max", "range max", "أعلى قيمة للنطاق"), false},
-		{"target_status", hdrAny("target status", "حالة المستهدف"), false},
+		{"target_status", hdrAny("target status", "status", "حالة المستهدف", "الحالة"), false},
 		{"effective_from", hdrPrefixAny("effective from", "ساري من"), false},
 		{"effective_to", hdrPrefixAny("effective to", "ساري حتى"), false},
 	}
@@ -339,13 +340,13 @@ func buildKpiTargetsInstructions() *utils.InstructionConfig {
 			item("2. Save and upload", "2. الحفظ والرفع", "Save as .xlsx, upload it, click Validate to review the report and preview, then Commit.", "احفظ الملف بصيغة .xlsx، وارفعه، ثم اضغط تحقق لمراجعة التقرير والمعاينة، ثم تنفيذ."),
 		}, BlankAfter: true},
 		{Title: text("Rules", "القواعد"), Items: []utils.InstructionItem{
-			item("Mandatory columns", "الأعمدة المطلوبة", "Columns marked with a red * are mandatory: KPI, Metric, Period, Target Value and Target Type. Target Year is also required unless the Period is a custom date range. The columns follow the Set Target form.", "الأعمدة المميزة بعلامة * الحمراء مطلوبة: المؤشر والمقياس والفترة وقيمة المستهدف ونوع المستهدف. وتكون السنة المستهدفة مطلوبة أيضاً ما لم تكن الفترة نطاق تاريخ مخصص. الأعمدة بنفس ترتيب نموذج تحديد المستهدف."),
+			item("Mandatory columns", "الأعمدة المطلوبة", "Columns marked with a red * are mandatory: KPI, Metric, Period, Target Value, Target Type and Target Rationale. Target Year is also required unless the Period is a custom date range. The columns follow the Set Target form.", "الأعمدة المميزة بعلامة * الحمراء مطلوبة: المؤشر والمقياس والفترة وقيمة المستهدف ونوع المستهدف ومبررات المستهدف. وتكون السنة المستهدفة مطلوبة أيضاً ما لم تكن الفترة نطاق تاريخ مخصص. الأعمدة بنفس ترتيب نموذج تحديد المستهدف."),
 			item("KPI resolution", "مطابقة المؤشر", "Pick the KPI from the dropdown (code - name). Only the code is used, so typing just the code also works.", "اختر المؤشر من القائمة (الكود - الاسم). يُستخدم الكود فقط، لذا تكفي كتابة الكود أيضاً."),
-			item("Metric", "المقياس", "Pick the metric name of the KPI. It can be left empty when the KPI has only one metric.", "اختر اسم مقياس المؤشر. يمكن تركه فارغاً إذا كان للمؤشر مقياس واحد فقط."),
+			item("Metric", "المقياس", "Required. Pick the metric name of the KPI the target is for.", "إلزامي. اختر اسم مقياس المؤشر الذي يخص المستهدف."),
 			item("Period", "الفترة", "The Period must match the metric's (or KPI's) reporting frequency: jan..dec for monthly, q1..q4 for quarterly, h1/h2 for semi-annual, annual for an Annual Target. Choose \"Custom date range\" for a Milestone / Ad Hoc target and fill Period Start and Period End.", "يجب أن تطابق الفترة تكرار الإبلاغ للمقياس (أو المؤشر): jan..dec للشهري، q1..q4 للربع سنوي، h1/h2 للنصف سنوي، annual للمستهدف السنوي. اختر \"نطاق تاريخ مخصص\" لمستهدف المرحلة / حسب الحاجة واملأ بداية الفترة ونهايتها."),
 			item("Milestone dates", "تواريخ المرحلة", "Period Start and Period End (YYYY-MM-DD) are only used for a custom date range. Target Type fills in from the Period (Milestone / Ad Hoc, Annual Target or Period Target) and can be changed.", "تُستخدم بداية الفترة ونهايتها (YYYY-MM-DD) لنطاق التاريخ المخصص فقط. ويُعبأ نوع المستهدف من الفترة (مرحلة / حسب الحاجة أو مستهدف سنوي أو مستهدف فترة) ويمكن تغييره."),
-			item("Status", "الحالة", "New targets are saved as draft. Submission, approval and locking stay on the Targets page.", "تُحفظ المستهدفات الجديدة كمسودة. ويبقى التقديم والاعتماد والقفل في صفحة المستهدفات."),
 			item("Existing targets", "المستهدفات الحالية", "With \\\"skip\\\", an existing target with the same KPI, metric, year and period is left untouched. With \\\"update\\\", it is updated in place; only draft, returned or rejected targets can be updated — approved, submitted, locked and superseded targets are rejected.", "مع \\\"تخطي\\\" يُترك المستهدف الحالي ذو المؤشر والمقياس والسنة والفترة نفسها دون تغيير. ومع \\\"تحديث\\\" يُحدّث في مكانه؛ ولا يمكن تحديث إلا المستهدفات المسودة أو المعادة أو المرفوضة — أما المعتمدة والمقدمة والمقفلة والمستبدلة فتُرفض."),
+			item("Status", "الحالة", "Draft (or empty) saves the target as a draft, like Save as Draft. Submitted sends it for approval, like Submit. Approving, returning or rejecting stays on the Targets page.", "مسودة (أو فارغ) يحفظ المستهدف كمسودة مثل زر حفظ كمسودة. مقدم يرسله للاعتماد مثل زر إرسال. يبقى الاعتماد أو الإرجاع أو الرفض في صفحة المستهدفات."),
 			item("Formats", "التنسيقات", "Blank optional cells keep the existing value on update and use the form defaults on create (Target Basis: Management Decision; Threshold Mode: Use Global KPI Rules).", "تحافظ الخلايا الاختيارية الفارغة على القيمة الحالية عند التحديث وتستخدم القيم الافتراضية عند الإنشاء (أساس المستهدف: قرار إداري؛ نمط الحدود: استخدام قواعد المؤشر العامة)."),
 			item("Validation report", "تقرير التحقق", "Every rejected row is listed with its Excel row number and reason. \\\"skip_invalid\\\" commits valid rows; \\\"abort\\\" commits nothing while any error remains.", "يُدرج كل صف مرفوض مع رقم صفه في Excel وسبب الرفض. \\\"تخطي غير الصالح\\\" ينفذ الصفوف الصالحة؛ و\\\"إلغاء\\\" لا ينفذ أي شيء ما دام هناك خطأ."),
 		}, BlankAfter: true},
@@ -509,6 +510,11 @@ func (imp *kpiTargetsImporter) parseTargetRow(row int, raw func(string) string) 
 	if r.KpiCode == "" {
 		r.reject("KPI", "KPI is required.")
 	}
+	// Mandatory as on the Set Target form (older files may name the metric
+	// by Metric Code or Metric Name instead).
+	if strings.TrimSpace(r.Metric+r.MetricCode+r.MetricName) == "" {
+		r.reject("Metric", "Metric is required — pick the KPI's metric from the list.")
+	}
 	if typ := read("kpi_type"); typ == "" {
 		// Resolved from the KPI code in validateRows.
 	} else if v, ok := normalizeMetricChoice(typ, kpiTargetKpiTypeChoices); !ok {
@@ -550,7 +556,7 @@ func (imp *kpiTargetsImporter) parseTargetRow(row int, raw func(string) string) 
 
 	if status := read("target_status"); status != "" {
 		if v, ok := normalizeMetricChoice(status, kpiTargetStatusChoices); !ok {
-			r.reject("Target Status", fmt.Sprintf("Target Status %q is not valid. Import accepts draft or submitted only; approvals stay on the Targets page.", status))
+			r.reject("Status", fmt.Sprintf("Status %q is not valid. Use Draft or Submitted (empty = Draft); approving stays on the Targets page.", status))
 		} else {
 			r.Target.TargetStatus = v
 		}
@@ -937,11 +943,18 @@ func (imp *kpiTargetsImporter) validateRows() {
 				case "draft", "returned", "rejected":
 					// Editable, matching UpdateTarget's rule.
 				default:
-					r.reject("Target Status", fmt.Sprintf("The existing target is %s and cannot be updated through import. Only draft, returned or rejected targets are editable.", existing.TargetStatus))
+					r.reject("Status", fmt.Sprintf("The existing target is %s and cannot be updated through import. Only draft, returned or rejected targets are editable.", existing.TargetStatus))
 					continue
 				}
 				imp.preserveExisting(r, existing)
 			}
+		}
+		// Target Rationale is mandatory, as on the Set Target form: a new
+		// target needs one; an update keeps the stored rationale when the cell
+		// is blank. (An existing target in "skip" mode is not imported.)
+		if (existing == nil || imp.opts.ExistingMode == KpiImportExistingUpdate) && strings.TrimSpace(r.Target.TargetRationale) == "" {
+			r.reject("Target Rationale", "Target Rationale is required.")
+			continue
 		}
 		if !r.Rejected {
 			imp.normalizeThresholds(r, direction)
@@ -1390,6 +1403,11 @@ func CanonicalTargetPeriodCode(code string, year int) (string, int, error) {
 	}
 	if _, ok := targetBarePeriodCodes[c]; ok {
 		return c, year, nil
+	}
+	// Period names as the Arabic template and the forms show them
+	// (يناير, الربع 1, سنوي, January…).
+	if alias, ok := perfPeriodAliases[multiSpaceRe.ReplaceAllString(c, " ")]; ok {
+		return alias, year, nil
 	}
 	m := yearEmbeddedPeriod.FindStringSubmatch(c)
 	if m == nil {

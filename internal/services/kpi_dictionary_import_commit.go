@@ -232,7 +232,7 @@ func (imp *kpiImporter) commit(tx *gorm.DB) error {
 			KpiID: k.ID, KpiType: k.Type, MetricID: *metricID, ReportingYear: p.Year, PeriodCode: p.PeriodCode,
 			CalculationTypeSnapshot: "Direct Value", DirectionSnapshot: directionFor(k.Polarity), DecimalPrecisionSnapshot: 2,
 			AggregationMethodSnapshot: "Average", TargetValueSnapshot: p.Target, ActualValue: p.Actual,
-			DataSourceType: "Import", SourceReference: cutRunes(fmt.Sprintf("%s — %s row %d", imp.res.FileName, p.Sheet, p.Row), 500),
+			DataSourceType: "File Import", SourceReference: cutRunes(fmt.Sprintf("%s — %s row %d", imp.res.FileName, p.Sheet, p.Row), 500),
 			DataQualityStatus: "Not Verified", Status: models.KpiEntryStatusApproved, EntryVersion: 1,
 		}
 		actual := p.Actual

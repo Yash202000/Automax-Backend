@@ -2,6 +2,7 @@ package utils
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -64,6 +65,20 @@ type SheetConfig struct {
 	DataRows         int // number of data rows; validations cover rows 2 through DataRows+1
 	FreezeHeader     bool
 	AutoFilter       bool
+	// ConditionalFills colour data cells by a per-row rule, e.g. grey out
+	// the cells a row does not use.
+	ConditionalFills []ConditionalFill
+}
+
+// ConditionalFill colours the data cells of the columns Keys when Formula is
+// true. Formula is an Excel formula without the leading "=", written for row
+// 2 with relative row references (e.g. `$K2="Target Range"`); "{col:key}" is
+// replaced by the letter of the column with that key.
+type ConditionalFill struct {
+	Keys      []string
+	Formula   string
+	Fill      string // background, hex RGB
+	FontColor string // optional, hex RGB
 }
 
 type ColumnConfig struct {
@@ -84,13 +99,24 @@ type ColumnConfig struct {
 	// row; the user can still type over it.
 	Formula     string
 	FormulaRows int
+	// AllowIf, for a column without a dropdown, refuses a typed value on
+	// rows where this formula is false (same form as ConditionalFill.Formula:
+	// row 2, relative row references, "{col:key}" for column letters).
+	// AllowIfError is the message shown. Excel checks typed values only,
+	// not pasted ones, so the importer must still enforce the rule.
+	AllowIf      string
+	AllowIfError LocalizedText
+	// Hidden hides the column (e.g. a helper column of formulas that other
+	// columns' dropdowns read).
+	Hidden bool
 }
 
 type DropdownConfig struct {
 	Values   []string
 	ValuesAR []string
-	// Source is a workbook name from WorkbookConfig.Lists; it replaces
-	// Values/ValuesAR.
+	// Source is a workbook name from WorkbookConfig.Lists, or a formula
+	// returning a range (row 2, relative row references, "{col:key}" for
+	// column letters; at most 255 characters); it replaces Values/ValuesAR.
 	Source string
 	// AllowOther shows a warning instead of refusing a value that is not
 	// in the list.
@@ -328,6 +354,11 @@ func writeSheet(f *excelize.File, styles excelStyles, lang Language, cfg SheetCo
 		if err := f.SetColWidth(cfg.Name, name, name, width); err != nil {
 			return err
 		}
+		if col.Hidden {
+			if err := f.SetColVisible(cfg.Name, name, false); err != nil {
+				return err
+			}
+		}
 	}
 	if len(cfg.Columns) > 0 {
 		if err := f.SetRowHeight(cfg.Name, 1, 32); err != nil {
@@ -376,6 +407,28 @@ func writeSheet(f *excelize.File, styles excelStyles, lang Language, cfg SheetCo
 			return err
 		}
 		if col.Dropdown == nil {
+			if col.AllowIf != "" {
+				// One validation per cell: the rule plus the column's hint.
+				formula, err := resolveColumnRefs(cfg, col.AllowIf)
+				if err != nil {
+					return err
+				}
+				if len([]rune(formula)) > 255 { // Excel's limit for a validation formula
+					return fmt.Errorf("typing rule for %s: formula is %d characters, Excel allows 255", col.Key, len([]rune(formula)))
+				}
+				dv := excelize.NewDataValidation(true)
+				dv.Sqref = fmt.Sprintf("%s2:%s%d", name, name, rows+1)
+				dv.Type = "custom"
+				dv.Formula1 = xmlTextEscaper.Replace(formula) // written into the XML as-is
+				if hint := col.Hint.For(lang); hint != "" {
+					dv.SetInput(col.Name.For(lang), hint)
+				}
+				dv.SetError(excelize.DataValidationErrorStyleStop, col.Name.For(lang), col.AllowIfError.For(lang))
+				if err := f.AddDataValidation(cfg.Name, dv); err != nil {
+					return err
+				}
+				continue
+			}
 			if hint := col.Hint.For(lang); hint != "" {
 				dv := excelize.NewDataValidation(true)
 				dv.Sqref = fmt.Sprintf("%s2:%s%d", name, name, rows+1)
@@ -396,7 +449,14 @@ func writeSheet(f *excelize.File, styles excelStyles, lang Language, cfg SheetCo
 		dv := excelize.NewDataValidation(true)
 		dv.Sqref = fmt.Sprintf("%s2:%s%d", name, name, rows+1)
 		if col.Dropdown.Source != "" {
-			dv.SetSqrefDropList(col.Dropdown.Source)
+			source, err := resolveColumnRefs(cfg, col.Dropdown.Source)
+			if err != nil {
+				return err
+			}
+			if len([]rune(source)) > 255 { // Excel's limit for a validation formula
+				return fmt.Errorf("dropdown for %s: source formula is %d characters, Excel allows 255", col.Key, len([]rune(source)))
+			}
+			dv.SetSqrefDropList(xmlTextEscaper.Replace(source)) // written into the XML as-is
 		} else if err := dv.SetDropList(values); err != nil {
 			return fmt.Errorf("dropdown for %s: %w", col.Key, err)
 		}
@@ -435,8 +495,84 @@ func writeSheet(f *excelize.File, styles excelStyles, lang Language, cfg SheetCo
 			return err
 		}
 	}
+	return writeConditionalFills(f, cfg, rows)
+}
+
+// writeConditionalFills adds the sheet's ConditionalFills as formula-based
+// conditional formatting over rows 2 to rows+1.
+func writeConditionalFills(f *excelize.File, cfg SheetConfig, rows int) error {
+	if len(cfg.ConditionalFills) == 0 {
+		return nil
+	}
+	letter, err := columnLetters(cfg)
+	if err != nil {
+		return err
+	}
+	for _, cf := range cfg.ConditionalFills {
+		formula, err := resolveColumnRefs(cfg, cf.Formula)
+		if err != nil {
+			return err
+		}
+		style := &excelize.Style{Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{cf.Fill}}}
+		if cf.FontColor != "" {
+			style.Font = &excelize.Font{Color: cf.FontColor}
+		}
+		id, err := f.NewConditionalStyle(style)
+		if err != nil {
+			return err
+		}
+		for _, key := range cf.Keys {
+			l, ok := letter[key]
+			if !ok {
+				return fmt.Errorf("conditional fill on sheet %s: unknown column %q", cfg.Name, key)
+			}
+			if err := f.SetConditionalFormat(cfg.Name, fmt.Sprintf("%s2:%s%d", l, l, rows+1),
+				[]excelize.ConditionalFormatOptions{{Type: "formula", Criteria: formula, Format: &id}}); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
+
+// columnLetters maps the sheet's column keys to their letters.
+func columnLetters(cfg SheetConfig) (map[string]string, error) {
+	letter := make(map[string]string, len(cfg.Columns))
+	for i, col := range cfg.Columns {
+		name, err := excelize.ColumnNumberToName(i + 1)
+		if err != nil {
+			return nil, err
+		}
+		letter[col.Key] = name
+	}
+	return letter, nil
+}
+
+var columnRefRe = regexp.MustCompile(`\{col:([A-Za-z0-9_]+)\}`)
+
+// resolveColumnRefs replaces "{col:key}" in a formula with the column letter.
+func resolveColumnRefs(cfg SheetConfig, formula string) (string, error) {
+	letter, err := columnLetters(cfg)
+	if err != nil {
+		return "", err
+	}
+	var missing string
+	out := columnRefRe.ReplaceAllStringFunc(formula, func(m string) string {
+		key := columnRefRe.FindStringSubmatch(m)[1]
+		if l, ok := letter[key]; ok {
+			return l
+		}
+		missing = key
+		return m
+	})
+	if missing != "" {
+		return "", fmt.Errorf("sheet %s: formula refers to unknown column %q", cfg.Name, missing)
+	}
+	return out, nil
+}
+
+// xmlTextEscaper escapes a formula that excelize writes into the XML as-is.
+var xmlTextEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
 
 func writeNumberedSections(f *excelize.File, styles excelStyles, lang Language, cfg SheetConfig) error {
 	if err := f.SetColWidth(cfg.Name, "A", "A", 6); err != nil {
