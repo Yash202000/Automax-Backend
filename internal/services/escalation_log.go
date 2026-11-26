@@ -450,30 +450,98 @@ func normalizedEscalationType(row *models.EscalationSLA) string {
 	return row.EscalationType
 }
 
+// allowedDurationForLog returns the allowed SLA for a row. SLAHoursAllowed is
+// whole hours (1 minute is stored as 0), so it is only a fallback after the
+// state's SLA (state rows) or the incident's deadline (global rows).
+func allowedDurationForLog(row *models.EscalationSLA) time.Duration {
+	if normalizedEscalationType(row) == "global_sla" {
+		if row.Incident != nil && row.Incident.SLADeadline != nil && !row.Incident.SLADeadline.IsZero() {
+			if d := row.Incident.SLADeadline.Sub(row.Incident.CreatedAt); d > 0 {
+				return d
+			}
+		}
+		return time.Duration(row.SLAHoursAllowed) * time.Hour
+	}
+
+	if row.State != nil && row.State.SLAHours != nil && *row.State.SLAHours > 0 {
+		return row.State.SLADuration()
+	}
+	return time.Duration(row.SLAHoursAllowed) * time.Hour
+}
+
+// formatSLAspan formats a duration as its largest unit plus the next one,
+// e.g. "1 minute", "1 hour 1 minute", "2 days 23 hours".
+func formatSLAspan(d time.Duration) string {
+	minutes := int64(d.Round(time.Minute) / time.Minute)
+	if minutes <= 0 {
+		return "0 minutes"
+	}
+
+	days := minutes / (24 * 60)
+	hours := (minutes % (24 * 60)) / 60
+	mins := minutes % 60
+
+	parts := make([]string, 0, 2)
+	for _, p := range []struct {
+		n    int64
+		unit string
+	}{{days, "day"}, {hours, "hour"}, {mins, "minute"}} {
+		if p.n == 0 {
+			if len(parts) > 0 {
+				break // don't skip a unit: 24h05m is "1 day"
+			}
+			continue
+		}
+		parts = append(parts, pluralize(p.n, p.unit))
+		if len(parts) == 2 {
+			break
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// pluralize returns "1 unit" or "n units".
+func pluralize(n int64, unit string) string {
+	if n == 1 {
+		return "1 " + unit
+	}
+	return fmt.Sprintf("%d %ss", n, unit)
+}
+
 func buildEscalationReason(row *models.EscalationSLA, stateName string) string {
-	breach := row.HoursInState - float64(row.SLAHoursAllowed)
+	allowed := allowedDurationForLog(row)
+	inState := time.Duration(row.HoursInState * float64(time.Hour))
+	breach := inState - allowed
+	if breach < 0 {
+		breach = 0
+	}
+
+	allowedLabel := formatSLAspan(allowed)
+	inStateLabel := formatSLAspan(inState)
+	breachLabel := formatSLAspan(breach)
+
 	if normalizedEscalationType(row) == "global_sla" {
 		if stateName != "" {
 			return fmt.Sprintf(
-				"Global SLA time limit passed: %.1f hours open, allowed %d hours (current state: %s, breach +%.1f hours).",
-				row.HoursInState, row.SLAHoursAllowed, stateName, breach,
+				"Global SLA time limit passed: %s open, allowed %s (current state: %s, breach +%s).",
+				inStateLabel, allowedLabel, stateName, breachLabel,
 			)
 		}
 		return fmt.Sprintf(
-			"Global SLA time limit passed: %.1f hours open, allowed %d hours (breach +%.1f hours).",
-			row.HoursInState, row.SLAHoursAllowed, breach,
+			"Global SLA time limit passed: %s open, allowed %s (breach +%s).",
+			inStateLabel, allowedLabel, breachLabel,
 		)
 	}
 
 	if stateName != "" {
 		return fmt.Sprintf(
-			"SLA time limit passed in state %q: %.1f hours in state, allowed %d hours (breach +%.1f hours).",
-			stateName, row.HoursInState, row.SLAHoursAllowed, breach,
+			"SLA time limit passed in state %q: %s in state, allowed %s (breach +%s).",
+			stateName, inStateLabel, allowedLabel, breachLabel,
 		)
 	}
 	return fmt.Sprintf(
-		"SLA time limit passed: %.1f hours in state, allowed %d hours (breach +%.1f hours).",
-		row.HoursInState, row.SLAHoursAllowed, breach,
+		"SLA time limit passed: %s in state, allowed %s (breach +%s).",
+		inStateLabel, allowedLabel, breachLabel,
 	)
 }
 
