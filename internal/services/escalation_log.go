@@ -131,6 +131,7 @@ func buildEscalationLogEntry(
 		EscalationPolicyID:     row.EscalationPolicyID,
 		EscalationPolicyStepID: row.EscalationPolicyStepID,
 		SLAHoursAllowed:        row.SLAHoursAllowed,
+		SLAMinutesAllowed:      row.SLAMinutesAllowed,
 		HoursInState:           row.HoursInState,
 		CreatedAt:              row.CreatedAt,
 	}
@@ -450,10 +451,15 @@ func normalizedEscalationType(row *models.EscalationSLA) string {
 	return row.EscalationType
 }
 
-// allowedDurationForLog returns the allowed SLA for a row. SLAHoursAllowed is
-// whole hours (1 minute is stored as 0), so it is only a fallback after the
-// state's SLA (state rows) or the incident's deadline (global rows).
+// allowedDurationForLog returns the allowed SLA for a row. SLAMinutesAllowed is
+// the exact value saved at escalation time; older rows only have whole-hour
+// SLAHoursAllowed (1 minute is stored as 0), so they use the state's SLA
+// (state rows) or the incident's deadline (global rows) instead.
 func allowedDurationForLog(row *models.EscalationSLA) time.Duration {
+	if row.SLAMinutesAllowed != nil {
+		return time.Duration(*row.SLAMinutesAllowed) * time.Minute
+	}
+
 	if normalizedEscalationType(row) == "global_sla" {
 		if row.Incident != nil && row.Incident.SLADeadline != nil && !row.Incident.SLADeadline.IsZero() {
 			if d := row.Incident.SLADeadline.Sub(row.Incident.CreatedAt); d > 0 {

@@ -145,6 +145,7 @@ func (s *EscalationService) processPolicySteps(
 
 	slaAsHours := state.SLAAsHours()
 	hoursInBreach := hoursInState - slaAsHours
+	slaMinutes := durationMinutes(state.SLADuration())
 
 	for _, step := range policy.Steps {
 		// Not yet time for this step
@@ -189,6 +190,7 @@ func (s *EscalationService) processPolicySteps(
 				Phone:                  user.Phone,
 				Actions:                models.TextArray{},
 				SLAHoursAllowed:        int(slaAsHours),
+				SLAMinutesAllowed:      &slaMinutes,
 				HoursInState:           hoursInState,
 				EscalationPolicyID:     &policy.ID,
 				EscalationPolicyStepID: &stepID,
@@ -405,8 +407,11 @@ func (s *EscalationService) ProcessGlobalSLABreaches(ctx context.Context) error 
 		// Calculate SLA context values for the breach record
 		totalHoursOpen := time.Since(incident.CreatedAt).Hours()
 		slaHoursAllowed := 0
+		slaMinutesAllowed := 0
 		if incident.SLADeadline != nil && !incident.SLADeadline.IsZero() {
-			slaHoursAllowed = int(incident.SLADeadline.Sub(incident.CreatedAt).Hours())
+			slaAllowed := incident.SLADeadline.Sub(incident.CreatedAt)
+			slaHoursAllowed = int(slaAllowed.Hours())
+			slaMinutesAllowed = durationMinutes(slaAllowed)
 		}
 
 		for _, user := range uniqueUsers {
@@ -429,16 +434,17 @@ func (s *EscalationService) ProcessGlobalSLABreaches(ctx context.Context) error 
 			}
 			now := time.Now()
 			breach := &models.EscalationSLA{
-				IncidentID:      &incident.ID,
-				StateID:         nil,
-				TransitionID:    nil,
-				NotifiedUserID:  &user.ID,
-				Email:           user.Email,
-				Phone:           user.Phone,
-				Actions:         actions,
-				SLAHoursAllowed: slaHoursAllowed,
-				HoursInState:    totalHoursOpen,
-				NotifiedAt:      &now,
+				IncidentID:        &incident.ID,
+				StateID:           nil,
+				TransitionID:      nil,
+				NotifiedUserID:    &user.ID,
+				Email:             user.Email,
+				Phone:             user.Phone,
+				Actions:           actions,
+				SLAHoursAllowed:   slaHoursAllowed,
+				SLAMinutesAllowed: &slaMinutesAllowed,
+				HoursInState:      totalHoursOpen,
+				NotifiedAt:        &now,
 			}
 			if err := s.repo.Create(ctx, breach); err != nil {
 				log.Printf("[EscalationService] Failed to store global breach log for user %s / incident %s: %v",
@@ -574,4 +580,9 @@ func (s *EscalationService) hoursInCurrentState(ctx context.Context, incident mo
 	}
 
 	return time.Since(*latestEntry).Hours()
+}
+
+// durationMinutes returns d rounded to whole minutes.
+func durationMinutes(d time.Duration) int {
+	return int(d.Round(time.Minute) / time.Minute)
 }

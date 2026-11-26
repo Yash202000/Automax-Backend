@@ -44,6 +44,8 @@ type EscalationSLA struct {
 	// SLA context
 	SLAHoursAllowed int     `gorm:"default:0" json:"sla_hours_allowed"` // configured SLA hours for the state
 	HoursInState    float64 `gorm:"default:0" json:"hours_in_state"`    // actual hours incident spent in the state
+	// SLAMinutesAllowed is the exact SLA at escalation time; nil on rows created before it existed.
+	SLAMinutesAllowed *int `json:"sla_minutes_allowed,omitempty"`
 
 	NotifiedAt *time.Time `gorm:"index" json:"notified_at,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
@@ -168,6 +170,7 @@ type EscalationLogEntryResponse struct {
 	Recipient              EscalationRecipientResponse `json:"recipient"`
 	Actions                []string                    `json:"actions,omitempty"`
 	SLAHoursAllowed        int                         `json:"sla_hours_allowed"`
+	SLAMinutesAllowed      *int                        `json:"sla_minutes_allowed,omitempty"`
 	HoursInState           float64                     `json:"hours_in_state"`
 	CreatedAt              time.Time                   `json:"created_at"`
 }
