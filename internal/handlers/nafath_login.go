@@ -361,12 +361,13 @@ func (h *NafathLoginHandler) gatewayError(c *fiber.Ctx, nationalID, step string,
 	var refusal *services.NafathRefusal
 	if errors.As(err, &refusal) {
 		log.Printf("[NAFATH] %s refused id=%s: %v", step, maskNationalID(nationalID), err)
-		return nafathError(c, fiber.StatusForbidden, nafathErrRefused, gatewayMessageOr(refusal.Message, i18n.T(ctx, "nafath_unavailable")))
+		// Nafath's own answer (its message, or its HTTP status), as it is.
+		return nafathError(c, fiber.StatusBadGateway, nafathErrRefused, cleanGatewayMessage(refusal.Message))
 	}
-	// No message from the gateway (no answer, timeout, unreadable reply):
-	// the only case where Automax's own text is shown.
-	log.Printf("[NAFATH] %s unavailable id=%s: %v", step, maskNationalID(nationalID), err)
-	return nafathError(c, fiber.StatusServiceUnavailable, nafathErrUnavailable, i18n.T(ctx, "nafath_unavailable"))
+	// Nafath gave no answer at all (timeout, connection failure): there is
+	// nothing from Nafath to show, so the screen says just that.
+	log.Printf("[NAFATH] %s no answer id=%s: %v", step, maskNationalID(nationalID), err)
+	return nafathError(c, fiber.StatusGatewayTimeout, nafathErrUnavailable, i18n.T(ctx, "nafath_no_answer"))
 }
 
 // gatewayMessageOr shows the gateway's own message when it sent one, else

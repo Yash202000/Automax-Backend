@@ -50,7 +50,7 @@ func newTestNafathClient(t *testing.T, g *fakeGateway, mode string) NafathClient
 	t.Cleanup(srv.Close)
 	c, err := NewNafathClient(config.NafathConfig{
 		Mode: mode, BaseURL: srv.URL, Service: "svc", Key: "secret-key", AppID: "13", CheckAppID: "17",
-		TimeoutSeconds: 5, RotateSeconds: 10, LoginTimeoutSeconds: 180,
+		TimeoutSeconds: 5, PollSeconds: 10,
 	}, "development")
 	if err != nil {
 		t.Fatal(err)
@@ -82,8 +82,9 @@ func TestNafathGetTokenErrors(t *testing.T) {
 	g.status[nafathTokenPath] = http.StatusUnauthorized
 	g.body[nafathTokenPath] = `{"accessToken":null,"expiryDate":"0001-01-01T00:00:00","errorMessage":null}`
 	c := newTestNafathClient(t, g, "mock")
-	if _, err := c.GetToken(context.Background(), "1111111111"); !errors.Is(err, ErrNafathUnavailable) {
-		t.Fatalf("401 (bad Service/Key) must be a configuration error, got %v", err)
+	var refusal401 *NafathRefusal
+	if _, err := c.GetToken(context.Background(), "1111111111"); !errors.As(err, &refusal401) || refusal401.Message != "401 Unauthorized" {
+		t.Fatalf("401 without a message: want Nafath's status \"401 Unauthorized\", got %v", err)
 	}
 	g.status[nafathTokenPath] = http.StatusBadRequest
 	g.body[nafathTokenPath] = `{"accessToken":null,"errorMessage":"Invalid IdNumber"}`
@@ -121,8 +122,9 @@ func TestNafathSendRequestFailures(t *testing.T) {
 	c := newTestNafathClient(t, g, "mock")
 
 	g.body[nafathSendPath] = `{"errorMessage":null,"checkStatus":null}`
-	if _, err := c.SendRequest(context.Background(), "tok", "1111111111"); !errors.Is(err, ErrNafathUnavailable) {
-		t.Errorf("no transID: want unavailable, got %v", err)
+	var noTrans *NafathRefusal
+	if _, err := c.SendRequest(context.Background(), "tok", "1111111111"); !errors.As(err, &noTrans) || errors.Is(err, ErrNafathUnavailable) {
+		t.Errorf("no transID: want Nafath's answer, got %v", err)
 	}
 	g.status[nafathSendPath] = http.StatusBadRequest
 	g.body[nafathSendPath] = `{"errorMessage":null,"detailedCodeID":1011,"businessErrorMessage":"The ID number is not registered in Nafath."}`
@@ -133,12 +135,18 @@ func TestNafathSendRequestFailures(t *testing.T) {
 	}
 	g.status[nafathSendPath] = http.StatusUnauthorized
 	g.body[nafathSendPath] = `{"statusCode":401,"message":"Invalid Token."}`
-	if _, err := c.SendRequest(context.Background(), "tok", "1111111111"); !errors.Is(err, ErrNafathTokenRejected) {
-		t.Errorf("401: want token rejected, got %v", err)
+	if _, err := c.SendRequest(context.Background(), "tok", "1111111111"); !errors.Is(err, ErrNafathTokenRejected) || !errors.As(err, &refusal) || refusal.Message != "Invalid Token." {
+		t.Errorf("401: want token rejected with Nafath's \"Invalid Token.\", got %v", err)
 	}
 	g.status[nafathSendPath] = http.StatusBadGateway
-	if _, err := c.SendRequest(context.Background(), "tok", "1111111111"); !errors.Is(err, ErrNafathUnavailable) {
-		t.Errorf("502: want unavailable, got %v", err)
+	g.body[nafathSendPath] = ``
+	if _, err := c.SendRequest(context.Background(), "tok", "1111111111"); !errors.As(err, &refusal) || refusal.Message != "502 Bad Gateway" {
+		t.Errorf("502 with no body: want Nafath's status \"502 Bad Gateway\", got %v", err)
+	}
+	g.status[nafathSendPath] = http.StatusServiceUnavailable
+	g.body[nafathSendPath] = `{"errorMessage":"Nafath is under maintenance"}`
+	if _, err := c.SendRequest(context.Background(), "tok", "1111111111"); !errors.As(err, &refusal) || refusal.Message != "Nafath is under maintenance" {
+		t.Errorf("503 with a message: want Nafath's message, got %v", err)
 	}
 }
 
@@ -171,10 +179,29 @@ func TestNafathCheckRequest(t *testing.T) {
 		t.Errorf("COMPLETED without userInfo must have no Person: %+v, %v", res, err)
 	}
 
+	// The UAT gateway answers HTTP 400 while waiting (2026-11-25 log): the
+	// checkStatus decides, not the HTTP status.
 	g.status[nafathCheckPath] = http.StatusBadRequest
+	for raw, want := range map[string]string{"WAITING": NafathStatusWaiting, "REJECTED": NafathStatusRejected, "EXPIRED": NafathStatusExpired} {
+		g.body[nafathCheckPath] = `{"accessToken":null,"businessErrorMessage":null,"checkStatus":"` + raw + `","detailedCode":null,"detailedCodeID":0,` +
+			`"employeeList":null,"errorMessage":null,"exceptionMessage":null,"itemsCount":0,"person":null,"responseJSON":null,"userDelegations":null,"userInfo":null}`
+		res, err := c.CheckRequest(context.Background(), "tok", "1111111111", req)
+		if err != nil || res.Status != want {
+			t.Errorf("400 with %s: got %+v, %v", raw, res, err)
+		}
+	}
+
 	g.body[nafathCheckPath] = `{"errorMessage":null,"detailedCodeID":1013,"businessErrorMessage":"Request not found."}`
-	if _, err := c.CheckRequest(context.Background(), "tok", "1111111111", req); !errors.Is(err, ErrNafathUnknownRequest) {
-		t.Errorf("unknown transID: want ErrNafathUnknownRequest, got %v", err)
+	// No checkStatus: Nafath's own message is returned as its refusal.
+	var refusal *NafathRefusal
+	if _, err := c.CheckRequest(context.Background(), "tok", "1111111111", req); !errors.As(err, &refusal) || refusal.Message != "Request not found." {
+		t.Errorf("unknown transID: want Nafath's refusal \"Request not found.\", got %v", err)
+	}
+
+	// 400 with no checkStatus and no message: nothing from Nafath to show.
+	g.body[nafathCheckPath] = `{"errorMessage":null,"checkStatus":null,"userInfo":null}`
+	if _, err := c.CheckRequest(context.Background(), "tok", "1111111111", req); !errors.As(err, &refusal) || refusal.Message != "400 Bad Request" {
+		t.Errorf("400 without status or message: want Nafath's status \"400 Bad Request\", got %v", err)
 	}
 }
 
@@ -186,7 +213,7 @@ func TestNafathRealModeRefusesSimulator(t *testing.T) {
 	t.Cleanup(srv.Close)
 	c, err := NewNafathClient(config.NafathConfig{
 		Mode: "real", BaseURL: srv.URL, Service: "svc", Key: "k", AppID: "13", CheckAppID: "13",
-		TimeoutSeconds: 5, RotateSeconds: 10, LoginTimeoutSeconds: 180, InsecureSkipVerify: true,
+		TimeoutSeconds: 5, PollSeconds: 10, InsecureSkipVerify: true,
 	}, "development")
 	if err != nil {
 		t.Fatal(err)
@@ -198,7 +225,7 @@ func TestNafathRealModeRefusesSimulator(t *testing.T) {
 
 func TestNewNafathClientValidation(t *testing.T) {
 	base := config.NafathConfig{Mode: "real", BaseURL: "https://gw.example", Service: "s", Key: "k", AppID: "13", CheckAppID: "17",
-		TimeoutSeconds: 15, RotateSeconds: 10, LoginTimeoutSeconds: 180}
+		TimeoutSeconds: 15, PollSeconds: 10}
 	cases := map[string]func(*config.NafathConfig, *string){
 		"mock in production": func(c *config.NafathConfig, env *string) {
 			c.Mode, c.BaseURL, *env = "mock", "http://localhost:8098", "production"
@@ -218,5 +245,19 @@ func TestNewNafathClientValidation(t *testing.T) {
 	}
 	if _, err := NewNafathClient(base, "production"); err != nil {
 		t.Errorf("valid real config: %v", err)
+	}
+}
+
+// Only a missing answer (no response at all) is ErrNafathUnavailable.
+func TestNafathNoAnswerIsUnavailable(t *testing.T) {
+	c, err := NewNafathClient(config.NafathConfig{
+		Mode: "mock", BaseURL: "http://127.0.0.1:1", Service: "svc", Key: "k", AppID: "13", CheckAppID: "17",
+		TimeoutSeconds: 1, PollSeconds: 10,
+	}, "development")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.SendRequest(context.Background(), "tok", "1111111111"); !errors.Is(err, ErrNafathUnavailable) {
+		t.Errorf("connection refused: want ErrNafathUnavailable, got %v", err)
 	}
 }

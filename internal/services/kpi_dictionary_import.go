@@ -107,6 +107,10 @@ type kpiTemplateColumn struct {
 	// Source) used instead of list, e.g. a list filtered by another cell.
 	listFormula string
 	hidden      bool // helper column, hidden in the template
+	text        bool // data cells formatted as Text (Excel keeps "2026-01" as typed)
+	// blankDefault is the value (one of values) a blank cell is imported
+	// as — the form's default; the dropdown's prompt says so.
+	blankDefault string
 }
 
 // Record categories reported in the preview/summary, in display order.
@@ -220,7 +224,11 @@ type mdNode struct {
 	Code        string // award KPI measure code (KPI-AWRD-MSR-NN), existing records only
 	DeptType    string
 	DomainType  string
-	action      string // set by finalize
+	// Inactive / Status: a new record's Active and (initiatives) Status
+	// columns on the workbook's master data sheets.
+	Inactive bool
+	Status   string
+	action   string // set by finalize
 }
 
 type kpiTargetRec struct {
@@ -258,10 +266,9 @@ type kpiRec struct {
 	DescriptionEn, DescriptionAr, SegAxes, Notes                   string
 	Classification, TargetRequirement, UnitOfMeasure               string
 	Baseline                                                       float64
-	// present lists the optional newer columns (classification, target
-	// requirement, unit, owner organization, award measure, related
-	// departments) found on the sheet. On update only these are written, so
-	// a workbook made from an older template does not clear those fields.
+	// present lists the optional columns whose cell holds a value on this
+	// row. On update only these are written, so a blank cell (or a column
+	// an older template does not have) keeps the stored value.
 	present map[string]bool
 	// ownerDeptName is the KPI's owner department as text, used to
 	// cross-check the Owner Department column on Performance sheets
@@ -831,7 +838,7 @@ var kpiImportColumnLabels = map[string]string{
 	"notes": "Notes", "criterion": "Criteria", "sub_no": "Sub-Criterion #", "sub_name": "Sub-Criterion", "sub_criterion": "Sub-Criteria",
 	"name_en": "EPM KPI (EN)", "name_ar": "EPM KPI (AR)", "description_en": "Description (EN)", "description_ar": "Description (AR)",
 	"parent_objective": "Parent Objective", "md_parent": "Parent Objective",
-	"md_name": "Name", "md_owner": "Owner Department", "md_pillar": "Pillar", "md_enabler": "Enabler", "md_goal": "Goal",
+	"md_name": "Name (English)", "md_name_ar": "Name (Arabic)", "md_active": "Active", "md_status": "Status", "md_owner": "Owner (Department)", "md_pillar": "Pillar", "md_enabler": "Enabler", "md_goal": "Goal",
 	"year": "Year", "quarter": "Quarter", "target": "Target", "actual": "Actual Result", "achievement": "Achievement",
 }
 
@@ -1298,27 +1305,37 @@ var kpiMasterSheets = []struct{ key, kind string }{
 }
 
 func masterSheetColumns(kind string) []colSpec {
-	cols := []colSpec{{"md_name", hdrAny("name", "الاسم"), true}}
+	// The same headers as the Master Data import templates; "Name" and
+	// "Owner Department" / "Initiative Owner" from older workbooks too.
+	cols := []colSpec{{"md_name", hdrAny("name", "الاسم", "name (english)", "الاسم (بالإنجليزية)"), true}}
+	nameAr := colSpec{"md_name_ar", hdrAny("name (arabic)", "الاسم (بالعربية)"), false}
+	active := colSpec{"md_active", hdrAny("active", "نشط"), false}
+	owner := func(older ...string) colSpec {
+		return colSpec{"md_owner", func(h string) bool {
+			return hdrAny("owner (department)", "المالك (الإدارة)")(h) || hdrPrefixAny(older...)(h)
+		}, false}
+	}
+	goal := hdrAny("goal", "strategic goal", "الهدف", "الهدف الاستراتيجي")
+	pillar := colSpec{"md_pillar", hdrAny("pillar", "الركيزة"), false}
+	enabler := colSpec{"md_enabler", hdrAny("enabler", "الممكن", "الممكّن"), false}
 	switch kind {
 	case mdPillar, mdEnabler:
-		cols = append(cols, colSpec{"md_owner", hdrPrefixAny("owner department", "الإدارة المالكة"), false})
+		cols = append(cols, nameAr, owner("owner department", "الإدارة المالكة"), active)
 	case mdObjective:
-		cols = append(cols,
-			colSpec{"md_goal", hdrAny("goal", "strategic goal", "الهدف", "الهدف الاستراتيجي"), true},
-			colSpec{"md_pillar", hdrAny("pillar", "الركيزة"), false},
-			colSpec{"md_enabler", hdrAny("enabler", "الممكن"), false})
+		cols = append(cols, nameAr, colSpec{"md_goal", goal, true}, pillar, enabler, active)
 	case mdProcess:
-		cols = append(cols,
+		cols = append(cols, nameAr,
 			colSpec{"md_parent", hdrAny("parent objective", "الهدف الرئيسي"), true},
-			colSpec{"md_pillar", hdrAny("pillar", "الركيزة"), false},
-			colSpec{"md_enabler", hdrAny("enabler", "الممكن"), false})
+			// The goal follows the parent objective; a value is only checked.
+			colSpec{"md_goal", goal, false},
+			pillar, enabler, active)
 	case mdInitiative:
-		cols = append(cols,
-			colSpec{"md_goal", hdrAny("goal", "strategic goal", "الهدف", "الهدف الاستراتيجي"), true},
+		cols = append(cols, nameAr,
+			colSpec{"md_goal", goal, true},
 			colSpec{"md_parent", hdrAny("parent objective", "الهدف الرئيسي"), false},
-			colSpec{"md_pillar", hdrAny("pillar", "الركيزة"), false},
-			colSpec{"md_enabler", hdrAny("enabler", "الممكن"), false},
-			colSpec{"md_owner", hdrPrefixAny("initiative owner", "مالك المبادرة"), false})
+			pillar, enabler,
+			owner("initiative owner", "مالك المبادرة"),
+			colSpec{"md_status", hdrAny("status", "الحالة"), false})
 	}
 	return cols
 }
@@ -1331,12 +1348,21 @@ func (imp *kpiImporter) parseMasterSheet(kind string, t *sheetTable) {
 		return
 	}
 	seen := map[string]int{}
+	pastTemplateRows := false
 	for i := t.headerRow + 1; i < len(t.rows); i++ {
 		r := t.rows[i]
 		if t.blank(r) {
 			continue
 		}
 		excelRow := i + 1
+		// The workbook's dropdowns and auto-fills list the first
+		// kpiTemplateMasterRows rows of a master data sheet only.
+		if excelRow > kpiTemplateMasterRows+1 && !pastTemplateRows {
+			pastTemplateRows = true
+			imp.warn(t.sheet, excelRow, "", "", fmt.Sprintf(
+				"This sheet takes %d rows; rows from %d on are imported, but the workbook's dropdowns do not list them. For more records, use the Master Data import.",
+				kpiTemplateMasterRows, kpiTemplateMasterRows+2))
+		}
 		name := t.get(r, "md_name")
 		if name == "" {
 			imp.errorf(t.sheet, excelRow, "", t.label("md_name"), "Name is required.")
@@ -1350,6 +1376,12 @@ func (imp *kpiImporter) parseMasterSheet(kind string, t *sheetTable) {
 		ref := func(refKind, key string) *mdNode {
 			v := t.get(r, key)
 			if v == "" {
+				return nil
+			}
+			if c := imp.sameNameCount(refKind, v); c > 1 {
+				imp.errorf(t.sheet, excelRow, name, t.label(key),
+					fmt.Sprintf("%q matches %d %s records — rename the duplicates in Master Data so the name is unique.", v, c, kindLabel(refKind)))
+				imp.rejectNode(n, "ambiguous reference")
 				return nil
 			}
 			found, fuzzy := imp.find(refKind, v, nil)
@@ -1385,6 +1417,33 @@ func (imp *kpiImporter) parseMasterSheet(kind string, t *sheetTable) {
 		}
 		seen[dupKey] = excelRow
 		n = imp.sheetNode(kind, name, parent, t.sheet, excelRow)
+		// Arabic name, Active and Status apply to a record this sheet
+		// creates (an existing one is linked, not changed).
+		if !n.Exists {
+			if ar := t.get(r, "md_name_ar"); ar != "" {
+				if len([]rune(ar)) > 255 {
+					imp.errorf(t.sheet, excelRow, name, t.label("md_name_ar"), "Name (Arabic) must be at most 255 characters.")
+					imp.rejectNode(n, "invalid Arabic name")
+				}
+				n.NameAr = ar
+			}
+			if raw := t.get(r, "md_active"); raw != "" {
+				if active, ok := parseMetricBool(raw, true); ok {
+					n.Inactive = !active
+				} else {
+					imp.errorf(t.sheet, excelRow, name, t.label("md_active"), fmt.Sprintf("Active %q must be Yes or No.", raw))
+					imp.rejectNode(n, "invalid Active value")
+				}
+			}
+			if raw := t.get(r, "md_status"); raw != "" {
+				if status, ok := normalizeMetricChoice(raw, masterInitiativeStatusChoices); ok {
+					n.Status = status
+				} else {
+					imp.errorf(t.sheet, excelRow, name, t.label("md_status"), fmt.Sprintf("Status %q is not valid. Allowed: Draft, Active, On Hold, Complete, Cancelled.", raw))
+					imp.rejectNode(n, "invalid status")
+				}
+			}
+		}
 		if parent != nil && parent.Rejected {
 			imp.errorf(t.sheet, excelRow, name, t.label("md_parent"), fmt.Sprintf("Parent objective %q was rejected (%s).", parent.NameEn, parent.RejectWhy))
 			imp.rejectNode(n, "parent objective rejected")
@@ -1405,7 +1464,16 @@ func (imp *kpiImporter) parseMasterSheet(kind string, t *sheetTable) {
 			n.Pillar = ref(mdPillar, "md_pillar")
 			n.Enabler = ref(mdEnabler, "md_enabler")
 		case mdProcess:
-			// The goal comes from the parent objective, as on the form.
+			// The goal comes from the parent objective, as on the form; a
+			// Goal cell that names another goal is refused (as in the
+			// Operational Objectives import).
+			if g := t.get(r, "md_goal"); g != "" && parent.Goal != nil &&
+				normName(g) != normName(parent.Goal.NameEn) && (parent.Goal.NameAr == "" || normName(g) != normName(parent.Goal.NameAr)) {
+				imp.errorf(t.sheet, excelRow, name, t.label("md_goal"),
+					fmt.Sprintf("Goal %q is not the goal of parent objective %q (%q). The goal follows the parent objective.", g, parent.NameEn, parent.Goal.NameEn))
+				imp.rejectNode(n, "goal does not match the parent objective")
+				continue
+			}
 			n.Objective = parent
 			n.Pillar = ref(mdPillar, "md_pillar")
 			n.Enabler = ref(mdEnabler, "md_enabler")
@@ -1502,6 +1570,12 @@ func (imp *kpiImporter) findAll(kind, name string) []*mdNode {
 		}
 	}
 	return out
+}
+
+// sameNameCount is how many records of kind are called name (EN or AR):
+// above 1 the name does not say which record is meant.
+func (imp *kpiImporter) sameNameCount(kind, name string) int {
+	return len(imp.findAll(kind, name))
 }
 
 func (imp *kpiImporter) findExact(kind, name string, scope *mdNode) *mdNode {
@@ -1704,9 +1778,11 @@ func (imp *kpiImporter) parseDictionary(kpiType string, t *sheetTable) {
 					fmt.Sprintf("Segmentation Axes is not supported for %s KPIs; the value is ignored.", kpiType))
 			}
 		}
+		// On update only the optional cells that hold a value are written;
+		// a blank cell keeps what is stored (see kpiRec.present).
 		rec.present = map[string]bool{}
-		for _, key := range []string{"classification", "target_requirement", "unit", "owner_org", "award_measure", "related_depts", "criterion", "sub_criterion", "sub_no", "seg", "lifecycle", "notes", "description", "description_en", "description_ar"} {
-			if _, ok := t.cols[key]; ok {
+		for _, key := range []string{"classification", "target_requirement", "unit", "owner_type", "owner_org", "award_measure", "related_depts", "criterion", "sub_criterion", "sub_no", "sub_name", "seg", "lifecycle", "notes", "description", "description_en", "description_ar", "name_ar", "domain", "agency", "data_source", "formula", "baseline"} {
+			if t.get(r, key) != "" {
 				rec.present[key] = true
 			}
 		}
@@ -1790,6 +1866,9 @@ func (imp *kpiImporter) parseDictionary(kpiType string, t *sheetTable) {
 		// objective is required for every KPI type; its parent objective and
 		// goal follow from it, and so does the pillar when none is given.
 		if pillarName := t.get(r, "pillar"); pillarName != "" {
+			if c := imp.sameNameCount(mdPillar, pillarName) + imp.sameNameCount(mdEnabler, pillarName); c > 1 {
+				fail("pillar", fmt.Sprintf("Pillar / Enabler %q matches %d records — rename the duplicates in Master Data so the name is unique.", pillarName, c))
+			}
 			n, fuzzy := imp.find(mdPillar, pillarName, nil)
 			if n == nil {
 				n, fuzzy = imp.find(mdEnabler, pillarName, nil)
@@ -1830,7 +1909,9 @@ func (imp *kpiImporter) parseDictionary(kpiType string, t *sheetTable) {
 		var parent *mdNode
 		if parentName != "" {
 			var fuzzy bool
-			if parent, fuzzy = imp.find(mdObjective, parentName, nil); parent == nil {
+			if c := imp.sameNameCount(mdObjective, parentName); c > 1 {
+				fail(parentKey, fmt.Sprintf("Parent objective %q matches %d records — rename the duplicates in Master Data so the name is unique.", parentName, c))
+			} else if parent, fuzzy = imp.find(mdObjective, parentName, nil); parent == nil {
 				fail(parentKey, fmt.Sprintf("Parent objective %q does not exist in the system or on the %s sheet.", parentName, kpiTemplateObjectivesSheet))
 			} else {
 				if fuzzy {
@@ -1857,7 +1938,13 @@ func (imp *kpiImporter) parseDictionary(kpiType string, t *sheetTable) {
 				case 1:
 					proc = matches[0]
 				default:
-					fail(procKey, fmt.Sprintf("Operational objective %q exists under %d parent objectives — fill Parent Objective to choose one.", procName, len(matches)))
+					parents := make([]string, 0, len(matches))
+					for _, m := range matches {
+						if m.Objective != nil {
+							parents = append(parents, fmt.Sprintf("%q", m.Objective.NameEn))
+						}
+					}
+					fail(procKey, fmt.Sprintf("Operational objective %q exists under %d parent objectives (%s), so its Goal cannot be filled in. Add a \"Parent Objective\" column with the right parent, or rename the duplicates in Master Data.", procName, len(matches), strings.Join(parents, ", ")))
 				}
 			}
 			if proc == nil && parent != nil {
