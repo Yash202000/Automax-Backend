@@ -281,6 +281,22 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 
 		// Enforce unique data source names (excluding soft-deleted records).
 		db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_kpi_data_sources_name_en ON kpi_data_sources(name_en) WHERE deleted_at IS NULL`)
+
+		// Award criteria are unique by number (idx_award_criterions_criterion_no)
+		// and by name; sub-criteria by Sub No. and by name within their
+		// criterion (excluding soft-deleted records). The indexes also stop
+		// two simultaneous requests (a double-click) from both inserting.
+		// Existing duplicates are not changed: the index is then not created
+		// and a warning is logged (the form and imports still refuse new ones).
+		for _, ix := range []struct{ name, sql string }{
+			{"uq_award_criterions_name_en", `CREATE UNIQUE INDEX IF NOT EXISTS uq_award_criterions_name_en ON award_criterions (LOWER(TRIM(name_en))) WHERE deleted_at IS NULL`},
+			{"uq_award_sub_criterions_sub_no", `CREATE UNIQUE INDEX IF NOT EXISTS uq_award_sub_criterions_sub_no ON award_sub_criterions (award_criterion_id, LOWER(TRIM(sub_no))) WHERE deleted_at IS NULL`},
+			{"uq_award_sub_criterions_name_en", `CREATE UNIQUE INDEX IF NOT EXISTS uq_award_sub_criterions_name_en ON award_sub_criterions (award_criterion_id, LOWER(TRIM(name_en))) WHERE deleted_at IS NULL`},
+		} {
+			if err := db.Exec(ix.sql).Error; err != nil {
+				log.Printf("Warning: %s not created (duplicate award criteria / sub-criteria exist — clean them up, then restart): %v", ix.name, err)
+			}
+		}
 	}
 
 	// Drop problematic foreign key constraints on incidents table

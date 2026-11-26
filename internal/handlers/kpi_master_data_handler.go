@@ -872,6 +872,9 @@ func (h *KpiMasterDataHandler) CreateAwardCriterion(c *fiber.Ctx) error {
 	if req.CriterionNo <= 0 {
 		return mdBadRequest(c, "Criterion No. must be a positive whole number.")
 	}
+	if msg := h.awardNameConflict(c, mdTableAwardCriteria, req.NameEn, req.NameAr, uuid.Nil, "", nil); msg != "" {
+		return utils.ErrorResponse(c, fiber.StatusConflict, msg)
+	}
 	held, err := h.awardCriterionByNo(c, req.CriterionNo, uuid.Nil)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_create"))
@@ -919,6 +922,9 @@ func (h *KpiMasterDataHandler) UpdateAwardCriterion(c *fiber.Ctx) error {
 		return mdBadRequest(c, "Criterion No. must be a positive whole number.")
 	}
 	if msg := h.awardCriterionNoConflict(c, req.CriterionNo, id); msg != "" {
+		return utils.ErrorResponse(c, fiber.StatusConflict, msg)
+	}
+	if msg := h.awardNameConflict(c, mdTableAwardCriteria, req.NameEn, req.NameAr, id, "", nil); msg != "" {
 		return utils.ErrorResponse(c, fiber.StatusConflict, msg)
 	}
 	if req.CriterionNo != current.CriterionNo {
@@ -1032,7 +1038,42 @@ func (h *KpiMasterDataHandler) validateSubCriterion(c *fiber.Ctx, req *models.Aw
 	if h.mdNameTaken(c, mdTableAwardSubCriteria, "sub_no", req.SubNo, self, "award_criterion_id", &criterionID) {
 		return fmt.Sprintf("Sub No. %q already exists under criterion %d.", req.SubNo, crit.CriterionNo), fiber.StatusConflict
 	}
+	if msg := h.awardNameConflict(c, mdTableAwardSubCriteria, req.NameEn, req.NameAr, self, "award_criterion_id", &criterionID); msg != "" {
+		return fmt.Sprintf("%s (criterion %d)", msg, crit.CriterionNo), fiber.StatusConflict
+	}
 	return "", 0
+}
+
+// awardNameConflict reports an award criterion (table mdTableAwardCriteria)
+// or a sub-criterion of the same criterion (scope) already using the
+// English name, or the Arabic name when one is given. Award criteria and
+// sub-criteria are unique by number and by name.
+func (h *KpiMasterDataHandler) awardNameConflict(c *fiber.Ctx, table, nameEn, nameAr string, self uuid.UUID, scopeCol string, scope *uuid.UUID) string {
+	what := "An award criterion"
+	if table == mdTableAwardSubCriteria {
+		what = "A sub-criterion"
+	}
+	numberCol := "criterion_no::text"
+	if table == mdTableAwardSubCriteria {
+		numberCol = "sub_no"
+	}
+	for _, n := range []struct{ col, value string }{{"name_en", nameEn}, {"name_ar", nameAr}} {
+		value := strings.TrimSpace(n.value)
+		if value == "" {
+			continue
+		}
+		q := h.db.WithContext(c.UserContext()).Table(table).
+			Where("deleted_at IS NULL AND id <> ?", self).
+			Where(fmt.Sprintf("LOWER(TRIM(%s)) = LOWER(?)", n.col), value)
+		if scopeCol != "" {
+			q = q.Where(scopeCol+" = ?", *scope)
+		}
+		var nos []string
+		if q.Limit(1).Pluck(numberCol, &nos); len(nos) > 0 {
+			return fmt.Sprintf("%s named %q already exists (No. %s).", what, value, nos[0])
+		}
+	}
+	return ""
 }
 
 func (h *KpiMasterDataHandler) CreateAwardSubCriterion(c *fiber.Ctx) error {
