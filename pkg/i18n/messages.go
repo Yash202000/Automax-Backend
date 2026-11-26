@@ -972,7 +972,7 @@ var messages = map[string][2]string{
 	"nafath_rejected":                   {"The request was rejected in the Nafath app", "تم رفض الطلب في تطبيق نفاذ"},
 	"nafath_refused":                    {"Nafath could not process the request: %s", "تعذّر على نفاذ معالجة الطلب: %s"},
 	"nafath_identity_mismatch":          {"Nafath could not confirm your identity. Please try again", "تعذّر على نفاذ التحقق من هويتك. يرجى المحاولة مجدداً"},
-	"nafath_unavailable":                {"The Nafath service is temporarily unavailable. Please try again later", "خدمة نفاذ غير متاحة مؤقتاً. يرجى المحاولة لاحقاً"},
+	"nafath_no_answer":                  {"No answer from Nafath", "لم يصل رد من نفاذ"},
 	"sso_login_use_nafath":              {"National ID login now requires Nafath approval. Please use the Nafath login", "يتطلب تسجيل الدخول برقم الهوية الآن موافقة نفاذ. يرجى استخدام الدخول عبر نفاذ"},
 	"ad_users_disabled":                 {"Active Directory users are not enabled in this environment", "مستخدمو الدليل النشط غير مفعّلين في هذه البيئة"},
 	"ad_user_not_registered":            {"Your Active Directory credentials are valid, but you are not registered in Automax. Please contact your administrator", "بيانات اعتماد Active Directory الخاصة بك صحيحة، لكنك غير مسجل في Automax. يرجى التواصل مع مسؤول النظام"},

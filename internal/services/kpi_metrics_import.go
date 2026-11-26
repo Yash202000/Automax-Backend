@@ -286,15 +286,15 @@ func kpiMetricTemplateColumns() []kpiTemplateColumn {
 		{key: "metric_name", ar: "اسم المقياس", en: "Metric Name", width: 32},
 		{key: "metric_code", ar: "كود المقياس", en: "Metric Code", width: 18},
 		{key: "metric_type", ar: "نوع المقياس", en: "Metric Type", width: 14,
-			values: []string{"Numeric", "Percentage", "Currency", "Text"}, valuesAr: []string{"رقمي", "نسبة مئوية", "عملة", "نص"}},
+			values: []string{"Numeric", "Percentage", "Currency", "Text"}, valuesAr: []string{"رقمي", "نسبة مئوية", "عملة", "نص"}, blankDefault: "Numeric"},
 		{key: "metric_status", ar: "الحالة", en: "Status", width: 14,
-			values: []string{"Draft", "Active", "Inactive", "Archived"}, valuesAr: []string{"مسودة", "نشط", "غير نشط", "مؤرشف"}},
+			values: []string{"Draft", "Active", "Inactive", "Archived"}, valuesAr: []string{"مسودة", "نشط", "غير نشط", "مؤرشف"}, blankDefault: "Active"},
 		{key: "display_order", ar: "ترتيب العرض", en: "Display Order", width: 12},
 		{key: "unit", ar: "الوحدة", en: "Unit", width: 16,
 			values: []string{"%", "Number", "Seconds", "Minutes", "Hours", "Days", "SAR", "Employees", "Requests", "Complaints", "Tasks", "Kilometers", "Square Meters", "Score", "Custom"}},
 		{key: "custom_unit_label", ar: "تسمية الوحدة المخصصة", en: "Custom Unit Label", width: 20},
 		{key: "baseline_value", ar: "قيمة خط الأساس", en: "Baseline Value", width: 14},
-		{key: "baseline_period", ar: "فترة خط الأساس (YYYY-MM)", en: "Baseline Period (YYYY-MM)", width: 20},
+		{key: "baseline_period", ar: "فترة خط الأساس (YYYY-MM)", en: "Baseline Period (YYYY-MM)", width: 20, text: true},
 		{key: "weight", ar: "الوزن (%)", en: "Weight (%)", width: 12},
 		{key: "start_date", ar: "تاريخ البدء (YYYY-MM-DD)", en: "Start Date (YYYY-MM-DD)", width: 18},
 		{key: "due_date", ar: "تاريخ الاستحقاق (YYYY-MM-DD)", en: "Due Date (YYYY-MM-DD)", width: 18},
@@ -302,14 +302,14 @@ func kpiMetricTemplateColumns() []kpiTemplateColumn {
 		// Measurement configuration
 		{key: "calculation_type", ar: "نوع الحساب", en: "Calculation Type", width: 22,
 			values:   []string{"Direct Value", "Percentage - Ratio", "Ratio", "Average", "Sum", "Difference", "Weighted Average", "Formula"},
-			valuesAr: []string{"قيمة مباشرة", "نسبة مئوية - نسبة", "نسبة", "متوسط", "مجموع", "فرق", "متوسط مرجح", "معادلة"}},
+			valuesAr: []string{"قيمة مباشرة", "نسبة مئوية - نسبة", "نسبة", "متوسط", "مجموع", "فرق", "متوسط مرجح", "معادلة"}, blankDefault: "Direct Value"},
 		{key: "direction", ar: "الاتجاه", en: "Direction", width: 18,
 			values:   []string{"Higher is Better", "Lower is Better", "Target Range", "Exact Target", "Informational"},
-			valuesAr: []string{"الأعلى أفضل", "الأقل أفضل", "نطاق مستهدف", "هدف محدد", "معلوماتي"}},
+			valuesAr: []string{"الأعلى أفضل", "الأقل أفضل", "نطاق مستهدف", "هدف محدد", "معلوماتي"}, blankDefault: "Higher is Better"},
 		{key: "decimal_precision", ar: "الدقة العشرية", en: "Decimal Precision", width: 12},
 		{key: "aggregation_method", ar: "طريقة التجميع", en: "Aggregation Method", width: 24,
 			values:   []string{"Sum", "Average", "Latest Approved Value", "Recalculate Ratio from Approved Inputs", "Minimum", "Maximum", "Weighted Average", "No Aggregation"},
-			valuesAr: []string{"مجموع", "متوسط", "أحدث قيمة معتمدة", "إعادة حساب النسبة من المدخلات المعتمدة", "الحد الأدنى", "الحد الأعلى", "متوسط مرجح", "بدون تجميع"}},
+			valuesAr: []string{"مجموع", "متوسط", "أحدث قيمة معتمدة", "إعادة حساب النسبة من المدخلات المعتمدة", "الحد الأدنى", "الحد الأعلى", "متوسط مرجح", "بدون تجميع"}, blankDefault: "Sum"},
 		{key: "reporting_frequency", ar: "تكرار الإبلاغ", en: "Reporting Frequency", width: 20,
 			values:   []string{"Monthly", "Quarterly", "Semiannual", "Annual", "Ad Hoc", "Inherit from KPI"},
 			valuesAr: []string{"شهري", "ربع سنوي", "نصف سنوي", "سنوي", "حسب الحاجة", "وراثة من المؤشر"}},
@@ -329,10 +329,10 @@ func kpiMetricTemplateColumns() []kpiTemplateColumn {
 		{key: "formula_code", ar: "رمز المعادلة", en: "Formula Code", width: 18},
 		{key: "divide_by_zero_handling", ar: "معالجة القسمة على صفر", en: "Divide by Zero Handling", width: 24,
 			values:   []string{"Block Submission", "Return Null", "Return Zero", "Require Exception Approval"},
-			valuesAr: []string{"حظر الإرسال", "إرجاع فارغ", "إرجاع صفر", "يتطلب موافقة استثناء"}},
+			valuesAr: []string{"حظر الإرسال", "إرجاع فارغ", "إرجاع صفر", "يتطلب موافقة استثناء"}, blankDefault: "Block Submission"},
 		{key: "rounding_rule", ar: "قاعدة التقريب", en: "Rounding Rule", width: 18,
 			values:   []string{"Standard Round", "Round Up", "Round Down", "No Rounding"},
-			valuesAr: []string{"تقريب قياسي", "تقريب لأعلى", "تقريب لأسفل", "بدون تقريب"}},
+			valuesAr: []string{"تقريب قياسي", "تقريب لأعلى", "تقريب لأسفل", "بدون تقريب"}, blankDefault: "Standard Round"},
 		{key: "formula", ar: "المعادلة", en: "Formula", width: 30},
 		// Governance
 		{key: "metric_owner", ar: "مالك المقياس (البريد الإلكتروني أو معرف المستخدم)", en: "Metric Owner (email or user ID)", width: 32},
@@ -685,7 +685,7 @@ func (imp *kpiMetricsImporter) parseMetricRow(row int, raw func(string) string) 
 			r.Metric.Weight = v
 		}
 	}
-	if rawValue := read("baseline_period"); rawValue != "" {
+	if rawValue := normalizeBaselinePeriod(read("baseline_period")); rawValue != "" {
 		if !kpiMetricBaselinePeriodRe.MatchString(rawValue) {
 			r.reject("Baseline Period", fmt.Sprintf("Baseline Period %q must be in YYYY-MM format.", rawValue))
 		} else {
@@ -1256,6 +1256,7 @@ var (
 	}
 
 	kpiMetricBaselinePeriodRe = regexp.MustCompile(`^\d{4}-(0[1-9]|1[0-2])$`)
+	kpiMetricBaselineDayRe    = regexp.MustCompile(`^(\d{4}-(0[1-9]|1[0-2]))-\d{2}([ T].*)?$`)
 )
 
 var arabicChoiceReplacer = strings.NewReplacer(
@@ -1462,4 +1463,21 @@ func ValidateKpiMetricFormula(formula, selfName string, siblings []string) strin
 		return fmt.Sprintf("Formula is not a valid expression (%v). Reference metrics as ${Metric Name}.", err)
 	}
 	return ""
+}
+
+// normalizeBaselinePeriod accepts a Baseline Period that Excel turned into a
+// date (typed as 2026-01 in a cell not formatted as Text): the raw cell is
+// then a date serial number, or a YYYY-MM-DD text. Both become YYYY-MM.
+func normalizeBaselinePeriod(v string) string {
+	v = strings.TrimSpace(v)
+	if m := kpiMetricBaselineDayRe.FindStringSubmatch(v); m != nil {
+		return m[1]
+	}
+	// Excel date serials for the years 1950–2100.
+	if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 18264 && f < 73416 {
+		if t, err := excelize.ExcelDateToTime(f, false); err == nil {
+			return t.Format("2006-01")
+		}
+	}
+	return v
 }

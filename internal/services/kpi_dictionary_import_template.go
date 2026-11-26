@@ -88,7 +88,7 @@ const (
 )
 
 // kpiTemplateFormulaRows is how many data rows get the auto-fill formulas.
-const kpiTemplateFormulaRows = 1000
+const kpiTemplateFormulaRows = 4999
 
 // lookupFormula fills a cell from a lookup table: when cell {col}{row} has a
 // value found exactly once in keys, the matching entry of values ("" when
@@ -492,19 +492,21 @@ func kpiTemplateLists(ctx context.Context, db *gorm.DB, lang string) ([]utils.Li
 		return fmt.Sprintf(`INDEX('%s'!$%s:$%s,%s)`, sheet, col, col, idx)
 	}
 	opSheet, parSheet := kpiTemplateProcessesSheet, kpiTemplateObjectivesSheet
-	opSheetName := sheetRowFormulas(kpiTemplateMasterRows, opSheet, "A", func(i string) string { return idxCell(opSheet, "A", i) + `&""` })
-	opSheetParent := sheetRowFormulas(kpiTemplateMasterRows, opSheet, "A", func(i string) string { return idxCell(opSheet, "B", i) + `&""` })
-	opSheetPillar := sheetRowFormulas(kpiTemplateMasterRows, opSheet, "A", func(i string) string {
-		c, b := idxCell(opSheet, "C", i), idxCell(opSheet, "B", i)
+	opNameCol, opParCol, opPilCol := kpiWorkbookMasterCol(mdProcess, "name_en"), kpiWorkbookMasterCol(mdProcess, "operational_objective"), kpiWorkbookMasterCol(mdProcess, "pillar")
+	parNameCol, parGoalCol, parPilCol := kpiWorkbookMasterCol(mdObjective, "name_en"), kpiWorkbookMasterCol(mdObjective, "goal"), kpiWorkbookMasterCol(mdObjective, "pillar")
+	opSheetName := sheetRowFormulas(kpiTemplateMasterRows, opSheet, opNameCol, func(i string) string { return idxCell(opSheet, opNameCol, i) + `&""` })
+	opSheetParent := sheetRowFormulas(kpiTemplateMasterRows, opSheet, opNameCol, func(i string) string { return idxCell(opSheet, opParCol, i) + `&""` })
+	opSheetPillar := sheetRowFormulas(kpiTemplateMasterRows, opSheet, opNameCol, func(i string) string {
+		c, b := idxCell(opSheet, opPilCol, i), idxCell(opSheet, opParCol, i)
 		return fmt.Sprintf(`IF(%[1]s<>"",%[1]s&"",IFERROR(INDEX(%[3]s,MATCH(%[2]s,%[4]s,0))&"",""))`, c, b, lookupParentPillar, lookupParentName)
 	})
-	opSheetGoal := sheetRowFormulas(kpiTemplateMasterRows, opSheet, "A", func(i string) string {
-		return fmt.Sprintf(`IFERROR(INDEX(%s,MATCH(%s,%s,0))&"","")`, lookupParentGoal, idxCell(opSheet, "B", i), lookupParentName)
+	opSheetGoal := sheetRowFormulas(kpiTemplateMasterRows, opSheet, opNameCol, func(i string) string {
+		return fmt.Sprintf(`IFERROR(INDEX(%s,MATCH(%s,%s,0))&"","")`, lookupParentGoal, idxCell(opSheet, opParCol, i), lookupParentName)
 	})
-	parSheetName := sheetRowFormulas(kpiTemplateMasterRows, parSheet, "A", func(i string) string { return idxCell(parSheet, "A", i) + `&""` })
-	parSheetGoal := sheetRowFormulas(kpiTemplateMasterRows, parSheet, "A", func(i string) string { return idxCell(parSheet, "B", i) + `&""` })
-	parSheetPillar := sheetRowFormulas(kpiTemplateMasterRows, parSheet, "A", func(i string) string {
-		return idxCell(parSheet, "C", i) + `&""` // pillar only
+	parSheetName := sheetRowFormulas(kpiTemplateMasterRows, parSheet, parNameCol, func(i string) string { return idxCell(parSheet, parNameCol, i) + `&""` })
+	parSheetGoal := sheetRowFormulas(kpiTemplateMasterRows, parSheet, parNameCol, func(i string) string { return idxCell(parSheet, parGoalCol, i) + `&""` })
+	parSheetPillar := sheetRowFormulas(kpiTemplateMasterRows, parSheet, parNameCol, func(i string) string {
+		return idxCell(parSheet, parPilCol, i) + `&""` // pillar only
 	})
 	var kSheetCode, kSheetType []string
 	for _, d := range []struct{ sheet, kpiType string }{
@@ -689,45 +691,51 @@ func sheetLabelFormulas(rows int, col string, render func(sheet, idx string) str
 
 // ─── Sheets ─────────────────────────────────────────────────────────────────
 
-func buildKpiMasterSheet(name, kind string) utils.SheetConfig {
-	nameCol := kpiTemplateColumn{key: "md_name", en: "Name", ar: "الاسم", width: 46, required: true,
-		hintEn: "English or Arabic name. One record per row, no blank rows in between.",
-		hintAr: "الاسم بالإنجليزية أو بالعربية. سجل واحد في كل صف دون صفوف فارغة بينها."}
-	ref := func(key, en, ar, list string, required bool) kpiTemplateColumn {
-		return kpiTemplateColumn{key: key, en: en, ar: ar, width: 40, required: required, list: list}
-	}
-	// The columns and their dependencies follow the Master Data forms.
-	cols := markTemplateRequired(masterSheetColumns(kind), []kpiTemplateColumn{nameCol})
+// kpiWorkbookMasterEntity is the Master Data import a master data sheet of
+// the KPI workbook mirrors ("" for Goals, which have no such import).
+func kpiWorkbookMasterEntity(kind string) string {
 	switch kind {
-	case mdPillar, mdEnabler:
-		cols = append(cols, ref("md_owner", "Owner Department", "الإدارة المالكة", listDepartments, false))
+	case mdPillar:
+		return KpiMasterPillar
+	case mdEnabler:
+		return KpiMasterEnabler
 	case mdObjective:
-		cols = append(cols,
-			ref("md_goal", "Goal", "الهدف", listGoals, true),
-			ref("md_pillar", "Pillar", "الركيزة", listPillars, false),
-			ref("md_enabler", "Enabler", "الممكن", listEnablers, false))
+		return KpiMasterOperationalObjective // Parent Objectives
 	case mdProcess:
-		parentCol := ref("md_parent", "Parent Objective", "الهدف الرئيسي", listObjectives, true)
-		parentCol.hintEn, parentCol.hintAr = "The goal is taken from the parent objective.", "يُؤخذ الهدف من الهدف الرئيسي."
-		cols = append(cols, parentCol,
-			ref("md_pillar", "Pillar", "الركيزة", listPillars, false),
-			ref("md_enabler", "Enabler", "الممكن", listEnablers, false))
+		return KpiMasterProcess // Operational Objectives
 	case mdInitiative:
-		goal := ref("md_goal", "Goal", "الهدف", listGoals, true)
-		goal.hintEn, goal.hintAr = "Filled automatically when a Parent Objective is picked.", "يُعبأ تلقائياً عند اختيار الهدف الرئيسي."
-		goal.formula = lookupFormula("C", lookupParentName, lookupParentGoal) // C = Parent Objective
-		cols = append(cols,
-			goal,
-			ref("md_parent", "Parent Objective", "الهدف الرئيسي", listObjectives, false),
-			ref("md_pillar", "Pillar", "الركيزة", listPillars, false),
-			ref("md_enabler", "Enabler", "الممكن", listEnablers, false),
-			ref("md_owner", "Initiative Owner", "مالك المبادرة", listDepartments, false))
+		return KpiMasterInitiative
 	}
-	var fills []utils.ConditionalFill
-	if kind == mdInitiative {
-		fills = append(fills, parentGoalMismatchFill("md_goal", "md_parent", "md_parent"))
+	return ""
+}
+
+// kpiWorkbookMasterColumns are the columns of a master data sheet of the KPI
+// workbook: the same as its Master Data import template.
+func kpiWorkbookMasterColumns(kind string) []kpiTemplateColumn {
+	spec, ok := masterSpecFor(kpiWorkbookMasterEntity(kind))
+	if !ok { // Goals
+		return []kpiTemplateColumn{{key: "name_en", en: "Name", ar: "الاسم", width: 46, required: true,
+			hintEn: "English or Arabic name. One record per row, no blank rows in between.",
+			hintAr: "الاسم بالإنجليزية أو بالعربية. سجل واحد في كل صف دون صفوف فارغة بينها."}}
 	}
-	return utils.SheetConfig{Name: name, Columns: toExcelColumns(cols), DataRows: kpiTemplateMasterRows, FreezeHeader: true, ConditionalFills: fills}
+	cols := masterTemplateColumns(spec)
+	for i := range cols {
+		if cols[i].key == "name_en" {
+			cols[i].hintEn = "One record per row, no blank rows in between. A record that already exists is linked, not changed."
+			cols[i].hintAr = "سجل واحد في كل صف دون صفوف فارغة بينها. السجل الموجود يُربط ولا يُغيَّر."
+		}
+	}
+	return cols
+}
+
+// kpiWorkbookMasterCol is the column letter of key on a workbook master data sheet.
+func kpiWorkbookMasterCol(kind, key string) string {
+	return templateColLetter(kpiWorkbookMasterColumns(kind), key)
+}
+
+func buildKpiMasterSheet(name, kind string) utils.SheetConfig {
+	return utils.SheetConfig{Name: name, Columns: toExcelColumns(kpiWorkbookMasterColumns(kind)), DataRows: kpiTemplateMasterRows,
+		FreezeHeader: true, ConditionalFills: masterTemplateFills(kpiWorkbookMasterEntity(kind))}
 }
 
 // markTemplateRequired adds the importer's required flags to template columns.
@@ -753,7 +761,8 @@ func buildKpiDictionarySheet(name, kpiType string) utils.SheetConfig {
 		}
 	}
 	fills := append(followedGoalFills("goal", "objective", lookupOpObjName, lookupOpObjGoal),
-		mismatchFill("sub_criterion", "criterion_no_key", lookupSubCritNo, lookupSubCrit, lookupCritNo))
+		mismatchFill("sub_criterion", "criterion_no_key", lookupSubCritNo, lookupSubCrit, lookupCritNo),
+		ambiguousNameFill("objective", lookupOpObjName))
 	return utils.SheetConfig{Name: name, Columns: toExcelColumns(cols), DataRows: 4999, FreezeHeader: true, ConditionalFills: fills}
 }
 
@@ -811,6 +820,7 @@ func toExcelColumns(columns []kpiTemplateColumn) []utils.ColumnConfig {
 			AllowIf:      col.allowIf,
 			AllowIfError: utils.LocalizedText{EN: col.allowErrEn, AR: col.allowErrAr},
 			Hidden:       col.hidden,
+			Text:         col.text,
 		}
 		source := col.list
 		if col.listFormula != "" {
@@ -831,10 +841,21 @@ func toExcelColumns(columns []kpiTemplateColumn) []utils.ColumnConfig {
 					AR: "هذه القيمة غير موجودة في القائمة. احتفظ بها فقط إذا كان يجب إنشاؤها عند الاستيراد."},
 			}
 		case len(col.values) > 0 || len(col.valuesAr) > 0:
+			promptEn, promptAr := strings.Join(col.values, ", "), strings.Join(col.valuesAr, ", ")
+			if col.blankDefault != "" {
+				defAr := col.blankDefault
+				for i, v := range col.values {
+					if v == col.blankDefault && i < len(col.valuesAr) {
+						defAr = col.valuesAr[i]
+					}
+				}
+				promptEn += ". Blank on a new record: " + col.blankDefault + " (the form's default); on update, blank keeps the stored value."
+				promptAr += ". الخلية الفارغة في سجل جديد: " + defAr + " (القيمة الافتراضية في النموذج)؛ وعند التحديث تبقى القيمة المحفوظة."
+			}
 			converted.Dropdown = &utils.DropdownConfig{
 				Values: col.values, ValuesAR: col.valuesAr,
 				PromptTitle: utils.LocalizedText{EN: "Allowed values", AR: "القيم المسموحة"},
-				Prompt:      utils.LocalizedText{EN: strings.Join(col.values, ", "), AR: strings.Join(col.valuesAr, ", ")},
+				Prompt:      utils.LocalizedText{EN: promptEn, AR: promptAr},
 				ErrorTitle:  utils.LocalizedText{EN: "Invalid value", AR: "قيمة غير صالحة"},
 				Error:       utils.LocalizedText{EN: "Choose one of: " + strings.Join(col.values, ", "), AR: "اختر أحد الخيارات: " + strings.Join(col.valuesAr, ", ")},
 			}
@@ -907,7 +928,7 @@ func kpiTemplateDictionaryColumns(kpiType string) []kpiTemplateColumn {
 		kpiTemplateColumn{key: "polarity", ar: "الاتجاه", en: "Polarity", width: 16,
 			values: []string{"Ascending", "Descending"}, valuesAr: []string{"تصاعدي", "تنازلي"}},
 		kpiTemplateColumn{key: "target_requirement", ar: "متطلب المستهدف", en: "Target Requirement", width: 20,
-			values: []string{"Mandatory", "Optional"}, valuesAr: []string{"إلزامي", "اختياري"}},
+			values: []string{"Mandatory", "Optional"}, valuesAr: []string{"إلزامي", "اختياري"}, blankDefault: "Mandatory"},
 		kpiTemplateColumn{key: "frequency", ar: "تكرار الإبلاغ", en: "Reporting Frequency", width: 18,
 			values:   []string{"Monthly", "Quarterly", "Semi-Annual", "Annual", "Custom"},
 			valuesAr: []string{"شهري", "ربع سنوي", "نصف سنوي", "سنوي", "مخصص"}},
@@ -1101,7 +1122,8 @@ func parentGoalMismatchFill(goalKey, parentKey, redKey string) utils.Conditional
 	g, p := "${col:"+goalKey+"}2", "${col:"+parentKey+"}2"
 	return utils.ConditionalFill{
 		Keys: []string{redKey},
-		Formula: fmt.Sprintf(`AND(%[2]s<>"",%[1]s<>"",ISNUMBER(MATCH(%[2]s,%[3]s,0)),INDEX(%[4]s,MATCH(%[2]s,%[3]s,0))<>%[1]s)`,
+		// Not checked when the parent's name is ambiguous (ambiguousNameFill).
+		Formula: fmt.Sprintf(`AND(%[2]s<>"",%[1]s<>"",COUNTIF(%[3]s,%[2]s)=1,INDEX(%[4]s,MATCH(%[2]s,%[3]s,0))<>%[1]s)`,
 			g, p, lookupParentName, lookupParentGoal),
 		Fill: badFill, FontColor: badFont,
 	}
@@ -1122,14 +1144,29 @@ func subNoMismatchFill(critKey, noKey string) utils.ConditionalFill {
 	}
 }
 
+// ambiguousFill, ambiguousFont colour a name that matches several records.
+const ambiguousFill, ambiguousFont = "FFEB9C", "9C5700"
+
+// ambiguousNameFill turns a cell amber when its name matches more than one
+// record of lookupName: the auto-fill that reads it (Goal, Pillar) is then
+// left blank, and the import rejects the row until the duplicates are renamed.
+func ambiguousNameFill(key, lookupName string) utils.ConditionalFill {
+	return utils.ConditionalFill{
+		Keys:    []string{key},
+		Formula: fmt.Sprintf(`AND(${col:%[1]s}2<>"",COUNTIF(%[2]s,${col:%[1]s}2)>1)`, key, lookupName),
+		Fill:    ambiguousFill, FontColor: ambiguousFont,
+	}
+}
+
 // masterTemplateFills are the colour rules of a Master Data import sheet
 // (its own template, or its tab in the KPI workbook).
 func masterTemplateFills(entity string) []utils.ConditionalFill {
 	switch entity {
 	case KpiMasterInitiative: // Goal fills from the Parent Objective; red when they disagree
-		return []utils.ConditionalFill{parentGoalMismatchFill("goal", "objective", "objective")}
+		return []utils.ConditionalFill{parentGoalMismatchFill("goal", "objective", "objective"), ambiguousNameFill("objective", lookupParentName)}
 	case KpiMasterProcess: // Goal follows the Parent Objective (read-only on the form)
-		return followedGoalFills("goal", "operational_objective", lookupParentName, lookupParentGoal)
+		return append(followedGoalFills("goal", "operational_objective", lookupParentName, lookupParentGoal),
+			ambiguousNameFill("operational_objective", lookupParentName))
 	case KpiMasterAwardSubCriterion:
 		return []utils.ConditionalFill{subNoMismatchFill("award_criterion", "sub_no")}
 	}
@@ -1365,8 +1402,8 @@ func buildKpiDictionaryInstructions() *utils.InstructionConfig {
 				"Shows what already exists in Automax when this template was downloaded: pillars, enablers, goals, objectives, processes, departments, organizations, domains, award criteria and measures, data sources. Download a new template to refresh it.",
 				"تعرض ما هو موجود في النظام عند تنزيل هذا القالب: الركائز والممكنات والأهداف والعمليات والإدارات والمنظمات والمجالات ومعايير ومقاييس الجائزة ومصادر البيانات. نزّل قالباً جديداً لتحديثها."),
 			item("2. New master data (optional)", "2. بيانات رئيسية جديدة (اختياري)",
-				"Only if something is missing from the Lists sheet, one sheet per Master Data tab: Pillars and Enablers → Goals → Parent Objectives (choose the goal) → Operational Objectives (choose the parent objective; the goal follows) → Initiatives (choose the goal); and Domains, Data Sources, Segmentation Dimensions, Award Criteria → Award Sub-criteria (choose the criterion), Award KPI Measures (same columns as each tab's own import). One per row without blank rows. Anything added appears in the dropdowns of the later sheets.",
-				"فقط إذا كان هناك عنصر غير موجود في ورقة القوائم، ورقة لكل تبويب من البيانات الرئيسية: الركائز والممكنات ← الأهداف ← الأهداف الرئيسية (اختر الهدف) ← الأهداف التشغيلية (اختر الهدف الرئيسي؛ ويُؤخذ الهدف منه) ← المبادرات (اختر الهدف)؛ والمجالات ومصادر البيانات وأبعاد التجزئة ومعايير الجائزة ← المعايير الفرعية (اختر المعيار) ومقاييس مؤشرات الجائزة (بنفس أعمدة استيراد كل تبويب). عنصر في كل صف دون صفوف فارغة. أي عنصر يُضاف يظهر في القوائم المنسدلة للأوراق التالية."),
+				"Only if something is missing from the Lists sheet, one sheet per Master Data tab: Pillars and Enablers → Goals → Parent Objectives (choose the goal) → Operational Objectives (choose the parent objective; the goal follows) → Initiatives (choose the goal); and Domains, Data Sources, Segmentation Dimensions, Award Criteria → Award Sub-criteria (choose the criterion), Award KPI Measures (same columns as each tab's own import). One per row without blank rows, up to 200 rows per sheet (for more, use the Master Data import). Anything added appears in the dropdowns of the later sheets.",
+				"فقط إذا كان هناك عنصر غير موجود في ورقة القوائم، ورقة لكل تبويب من البيانات الرئيسية: الركائز والممكنات ← الأهداف ← الأهداف الرئيسية (اختر الهدف) ← الأهداف التشغيلية (اختر الهدف الرئيسي؛ ويُؤخذ الهدف منه) ← المبادرات (اختر الهدف)؛ والمجالات ومصادر البيانات وأبعاد التجزئة ومعايير الجائزة ← المعايير الفرعية (اختر المعيار) ومقاييس مؤشرات الجائزة (بنفس أعمدة استيراد كل تبويب). عنصر في كل صف دون صفوف فارغة، وحتى 200 صف في كل ورقة (للمزيد استخدم استيراد البيانات الرئيسية). أي عنصر يُضاف يظهر في القوائم المنسدلة للأوراق التالية."),
 			item("3. KPIs", "3. المؤشرات",
 				"Fill the Strategic, Operational or Award Dictionary sheet, one KPI per row. The columns follow the New KPI form. Pick the Objective: the Goal and Pillar fill in from it.",
 				"املأ ورقة الدليل الاستراتيجي أو التشغيلي أو الجائزة، مؤشر واحد في كل صف. الأعمدة بنفس ترتيب نموذج إنشاء المؤشر. اختر الهدف التشغيلي: يُعبأ الهدف والركيزة منه تلقائياً."),
@@ -1389,15 +1426,16 @@ func buildKpiDictionaryInstructions() *utils.InstructionConfig {
 			item("Purple", "بنفسجي", "Ownership: owner department, owning agency, related departments.", "الملكية: الإدارة المالكة والوكالة المالكة والإدارات ذات الصلة."),
 			item("Green", "أخضر", "Measurement: classification, polarity, target requirement, reporting frequency, baseline, unit, descriptions (EN/AR), formula, data source.", "القياس: التصنيف والاتجاه ومتطلب المستهدف وتكرار الإبلاغ وخط الأساس والوحدة والوصف (إنجليزي/عربي) والمعادلة ومصدر البيانات."),
 			item("Red *", "علامة * حمراء", "Mandatory column.", "عمود إلزامي."),
+			item("Amber cell", "خلية كهرمانية", "The name matches more than one record (for example two objectives with the same name), so Goal and Pillar cannot be filled in from it and the import rejects the row. Rename the duplicates in Master Data.", "الاسم يطابق أكثر من سجل (مثل هدفين بنفس الاسم)، لذلك لا يمكن تعبئة الهدف والركيزة منه ويرفض الاستيراد الصف. أعد تسمية السجلات المكررة في البيانات الرئيسية."),
 		}, BlankAfter: true},
 		{Title: text("Rules", "القواعد"), Items: []utils.InstructionItem{
 			item("Dropdowns", "القوائم المنسدلة", "A value that is not in a dropdown shows a warning. Pillars, goals and objectives must exist in the system or on their sheet (add a new objective on the Operational Objectives sheet). Departments, organizations, domains, award criteria and measures that do not exist are created and reported as warnings.", "القيمة غير الموجودة في القائمة تُظهر تحذيراً. يجب أن تكون الركائز والأهداف موجودة في النظام أو في ورقتها (أضف الهدف الجديد في ورقة الأهداف التشغيلية). أما الإدارات والمنظمات والمجالات ومعايير ومقاييس الجائزة غير الموجودة فتُنشأ ويُبلّغ عنها كتحذير."),
 			item("KPI code", "كود المؤشر", "Required and unique. Uppercase letters and digits separated by hyphens.", "مطلوب وفريد. أحرف كبيرة وأرقام مفصولة بشرطات."),
-			item("Owner", "المالك", "KPIs imported from this workbook are Internal. For an external owner, set Owner Type and Owner Organization on the KPI form after the import.", "المؤشرات المستوردة من هذا المصنف داخلية. للمالك الخارجي، حدّد نوع المالك والمنظمة المالكة في نموذج المؤشر بعد الاستيراد."),
+			item("Owner", "المالك", "New KPIs imported from this workbook are Internal; existing KPIs keep their owner type and organization on update. For an external owner, set Owner Type and Owner Organization on the KPI form after the import.", "المؤشرات الجديدة المستوردة من هذا المصنف داخلية؛ وتحتفظ المؤشرات الحالية بنوع المالك والمنظمة المالكة عند التحديث. للمالك الخارجي، حدّد نوع المالك والمنظمة المالكة في نموذج المؤشر بعد الاستيراد."),
 			item("Related Departments", "الإدارات ذات الصلة", "Existing departments only, separated by ;. A name that is not found is reported and not linked.", "إدارات موجودة فقط مفصولة بـ ;. الاسم غير الموجود يُبلّغ عنه ولا يُربط."),
 			item("Status", "الحالة", "New KPIs start as Draft and go through the KPI workflow; existing KPIs keep their workflow status.", "تبدأ المؤشرات الجديدة كمسودة وتمر بسير عمل المؤشر؛ وتحتفظ المؤشرات الحالية بحالتها."),
 			item("Numbers", "الأرقام", "Baseline, targets and actual results are numbers; commas and a trailing % are accepted. Negative values are rejected.", "خط الأساس والمستهدفات والنتائج أرقام؛ تُقبل الفواصل والعلامة % في النهاية. تُرفض القيم السالبة."),
-			item("Existing records", "السجلات الحالية", "The import options decide whether existing KPIs, targets and results are skipped or updated. On update, only the columns present in the file are changed.", "تحدد خيارات الاستيراد ما إذا كانت المؤشرات والمستهدفات والنتائج الحالية تُتخطى أو تُحدّث. عند التحديث تتغير الأعمدة الموجودة في الملف فقط."),
+			item("Existing records", "السجلات الحالية", "The import options decide whether existing KPIs, targets and results are skipped or updated. On update, a blank optional cell keeps the stored value: only cells that hold a value are changed (to clear a field, use the KPI form).", "تحدد خيارات الاستيراد ما إذا كانت المؤشرات والمستهدفات والنتائج الحالية تُتخطى أو تُحدّث. عند التحديث تحتفظ الخلية الاختيارية الفارغة بالقيمة المحفوظة: تتغير الخلايا التي تحتوي على قيمة فقط (لمسح حقل استخدم نموذج المؤشر)."),
 			item("Sheets and headers", "الأوراق والرؤوس", "Do not rename the sheets or change row 1. Sheets you do not need can stay empty.", "لا تغيّر أسماء الأوراق أو الصف الأول. الأوراق غير المطلوبة يمكن تركها فارغة."),
 		}},
 	}}

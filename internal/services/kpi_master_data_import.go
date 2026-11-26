@@ -196,19 +196,10 @@ func kpiMasterDataFileSlug(entityType string) string {
 // Reference columns are dropdowns of what exists in the system (Lists
 // sheet, filled from db at download time); a Strategic Goal fills in
 // automatically from the Parent Objective picked on the row.
-func BuildKpiMasterDataImportTemplate(ctx context.Context, db *gorm.DB, entityType, lang string) ([]byte, error) {
-	spec, ok := masterSpecFor(entityType)
-	if !ok {
-		return nil, fmt.Errorf("unknown master-data entity type %q", entityType)
-	}
-	language := utils.LanguageEnglish
-	if lang == KpiTemplateLangAR {
-		language = utils.LanguageArabic
-	}
-	lists, err := kpiSystemLists(ctx, db, lang)
-	if err != nil {
-		return nil, fmt.Errorf("loading dropdown lists: %w", err)
-	}
+// masterTemplateColumns are the columns of a Master Data import sheet: its
+// own template, and the same tab in the KPI Dictionary workbook.
+func masterTemplateColumns(spec masterEntitySpec) []kpiTemplateColumn {
+	entityType := spec.key
 	cols := withLists(spec.cols, map[string]string{
 		"owner": listDepartments, "department": listDepartments, "goal": listGoals, "pillar": listPillars, "enabler": listEnablers,
 		"operational_objective": listObjectives, "objective": listObjectives, "award_criterion": listCriteriaNames,
@@ -240,6 +231,23 @@ func BuildKpiMasterDataImportTemplate(ctx context.Context, db *gorm.DB, entityTy
 			}
 		}
 	}
+	return cols
+}
+
+func BuildKpiMasterDataImportTemplate(ctx context.Context, db *gorm.DB, entityType, lang string) ([]byte, error) {
+	spec, ok := masterSpecFor(entityType)
+	if !ok {
+		return nil, fmt.Errorf("unknown master-data entity type %q", entityType)
+	}
+	language := utils.LanguageEnglish
+	if lang == KpiTemplateLangAR {
+		language = utils.LanguageArabic
+	}
+	lists, err := kpiSystemLists(ctx, db, lang)
+	if err != nil {
+		return nil, fmt.Errorf("loading dropdown lists: %w", err)
+	}
+	cols := masterTemplateColumns(spec)
 	cfg := utils.WorkbookConfig{
 		Language:     language,
 		Title:        fmt.Sprintf("KPI Master Data Import Template — %s", spec.sheet),
@@ -1307,6 +1315,18 @@ func (imp *masterDataImporter) finalize() {
 			}
 			if (r.EntityType == KpiMasterDomain || r.EntityType == KpiMasterAwardKpiMeasure) && r.Payload.Code != "" {
 				imp.warn(imp.sheet, r.Row, r.recordID(), "Code", "Code is used to match existing records; it is not changed by the update.")
+			}
+			// Criteria and sub-criteria are matched by number, so an update
+			// with another name renames the stored record: say so.
+			if existingAction == kpiImportActionUpdate && (r.EntityType == KpiMasterAwardCriterion || r.EntityType == KpiMasterAwardSubCriterion) {
+				if r.Payload.NameEn != "" && !strings.EqualFold(strings.TrimSpace(r.Existing.NameEn), r.Payload.NameEn) {
+					imp.warn(imp.sheet, r.Row, r.recordID(), "Name (English)",
+						fmt.Sprintf("Number %s already exists as %q; the update renames it to %q.", r.recordID(), r.Existing.NameEn, r.Payload.NameEn))
+				}
+				if r.Set["name_ar"] && strings.TrimSpace(r.Existing.NameAr) != "" && strings.TrimSpace(r.Existing.NameAr) != r.Payload.NameAr {
+					imp.warn(imp.sheet, r.Row, r.recordID(), "Name (Arabic)",
+						fmt.Sprintf("Number %s already exists as %q; the update renames it to %q.", r.recordID(), r.Existing.NameAr, r.Payload.NameAr))
+				}
 			}
 		default:
 			r.action = kpiImportActionCreate

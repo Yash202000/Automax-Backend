@@ -66,11 +66,17 @@ func (imp *kpiImporter) commit(tx *gorm.DB) error {
 			if err := insert("pillar "+n.NameEn, &models.Pillar{ID: n.ID, NameEn: n.NameEn, NameAr: n.NameAr, OwnerID: idOf(n.Owner), IsActive: true}); err != nil {
 				return err
 			}
+			if err := setInactive(tx, &models.Pillar{}, n); err != nil {
+				return err
+			}
 		}
 	}
 	for _, n := range imp.md[mdEnabler] {
 		if create(n) {
 			if err := insert("enabler "+n.NameEn, &models.Enabler{ID: n.ID, NameEn: n.NameEn, NameAr: n.NameAr, OwnerID: idOf(n.Owner), IsActive: true}); err != nil {
+				return err
+			}
+			if err := setInactive(tx, &models.Enabler{}, n); err != nil {
 				return err
 			}
 		}
@@ -90,6 +96,9 @@ func (imp *kpiImporter) commit(tx *gorm.DB) error {
 			if err := insert("operational objective "+n.NameEn, o); err != nil {
 				return err
 			}
+			if err := setInactive(tx, &models.OperationalObjective{}, n); err != nil {
+				return err
+			}
 		}
 	}
 	for _, n := range imp.md[mdProcess] {
@@ -105,6 +114,9 @@ func (imp *kpiImporter) commit(tx *gorm.DB) error {
 				p.EnablerID = idOf(n.Enabler)
 			}
 			if err := insert("process "+n.NameEn, p); err != nil {
+				return err
+			}
+			if err := setInactive(tx, &models.Process{}, n); err != nil {
 				return err
 			}
 		}
@@ -134,6 +146,9 @@ func (imp *kpiImporter) commit(tx *gorm.DB) error {
 	for _, n := range imp.md[mdInitiative] {
 		if create(n) {
 			i := &models.Initiative{ID: n.ID, NameEn: n.NameEn, NameAr: n.NameAr, GoalID: idOf(n.Goal), ObjectiveID: idOf(n.Objective), PillarID: idOf(n.Pillar), EnablerID: idOf(n.Enabler), OwnerID: idOf(n.Owner), Status: "draft"}
+			if n.Status != "" {
+				i.Status = n.Status
+			}
 			if err := insert("initiative "+n.NameEn, i); err != nil {
 				return err
 			}
@@ -321,21 +336,50 @@ func (imp *kpiImporter) newKpiModel(k *kpiRec, idOf func(*mdNode) *uuid.UUID) in
 // given in the workbook. Activation status and workflow are deliberately
 // left alone — they are managed by the KPI workflow, not the import.
 func (imp *kpiImporter) kpiUpdates(k *kpiRec, idOf func(*mdNode) *uuid.UUID) map[string]interface{} {
+	// Required columns are always written. An optional column is written
+	// only when its cell holds a value (kpiRec.present): a blank cell keeps
+	// the stored value instead of clearing it.
 	u := map[string]interface{}{
-		"name_en": k.NameEn, "name_ar": k.NameAr, "pillar_id": idOf(k.Pillar), "goal_id": idOf(k.Goal), "domain_id": idOf(k.Domain),
-		"owner_type": k.OwnerType, "owner_dept_id": idOf(k.OwnerDept), "owning_agency_id": idOf(k.Agency), "polarity": k.Polarity,
-		"description_en": k.DescriptionEn, "description_ar": k.DescriptionAr, "formula": k.Formula, "baseline": k.Baseline,
-		"reporting_frequency": k.Frequency, "data_source": k.DataSource, "updated_at": time.Now(),
+		"name_en": k.NameEn, "owner_dept_id": idOf(k.OwnerDept), "polarity": k.Polarity,
+		"reporting_frequency": k.Frequency, "updated_at": time.Now(),
 	}
-	// Columns the current template no longer has are kept unless the
-	// workbook (an older template) still carries them.
+	if k.NameAr != "" {
+		u["name_ar"] = k.NameAr
+	}
+	// Pillar and Goal follow the objective when their cells are blank.
+	if k.Pillar != nil {
+		u["pillar_id"] = idOf(k.Pillar)
+	}
+	if k.Goal != nil {
+		u["goal_id"] = idOf(k.Goal)
+	}
+	if k.present["domain"] {
+		u["domain_id"] = idOf(k.Domain)
+	}
+	if k.present["agency"] {
+		u["owning_agency_id"] = idOf(k.Agency)
+	}
+	if k.DescriptionEn != "" {
+		u["description_en"] = k.DescriptionEn
+	}
+	if k.DescriptionAr != "" {
+		u["description_ar"] = k.DescriptionAr
+	}
+	if k.present["formula"] {
+		u["formula"] = k.Formula
+	}
+	if k.present["baseline"] {
+		u["baseline"] = k.Baseline
+	}
+	if k.present["data_source"] {
+		u["data_source"] = k.DataSource
+	}
 	if k.present["lifecycle"] {
 		u["lifecycle"] = k.Lifecycle
 	}
 	if k.present["notes"] {
 		u["notes"] = k.Notes
 	}
-	// Newer columns are written only when the sheet has them (see kpiRec.present).
 	if k.present["classification"] {
 		u["classification"] = k.Classification
 	}
@@ -348,11 +392,17 @@ func (imp *kpiImporter) kpiUpdates(k *kpiRec, idOf func(*mdNode) *uuid.UUID) map
 	if k.present["award_measure"] {
 		u["award_kpi_measure_id"] = idOf(k.AwardMeasure)
 	}
-	// The organization only applies to external owners, as on the form.
-	if k.OwnerType != models.KPIOwnerTypeExternal {
-		u["owner_org_id"] = nil
-	} else if k.present["owner_org"] {
-		u["owner_org_id"] = idOf(k.OwnerOrg)
+	// Owner Type / Organization: the current template has neither column,
+	// so the stored owner (an External KPI and its organization) is kept.
+	// When an older workbook fills them, the organization only applies to
+	// external owners, as on the form.
+	if k.present["owner_type"] || k.present["owner_org"] {
+		u["owner_type"] = k.OwnerType
+		if k.OwnerType != models.KPIOwnerTypeExternal {
+			u["owner_org_id"] = nil
+		} else {
+			u["owner_org_id"] = idOf(k.OwnerOrg)
+		}
 	}
 	if k.Process != nil {
 		u["operational_objective_id"], u["process_id"] = idOf(k.Objective), idOf(k.Process)
@@ -361,14 +411,14 @@ func (imp *kpiImporter) kpiUpdates(k *kpiRec, idOf func(*mdNode) *uuid.UUID) map
 		u["segmentation_axes"] = k.SegAxes
 	}
 	// Criteria / Sub-Criteria apply to every KPI type (as on the forms).
-	if k.present["sub_criterion"] || k.present["sub_no"] || k.present["criterion"] {
+	if k.present["sub_criterion"] || k.present["sub_no"] || k.present["criterion"] || k.present["sub_name"] {
 		u["award_sub_criterion_id"] = idOf(k.SubCriterion)
 	}
 	return u
 }
 
 // replaceKpiRelatedDepartments sets the KPI's Related Departments to the
-// workbook's list (an empty cell clears them on update).
+// workbook's list (on update only when the cell holds a value).
 func replaceKpiRelatedDepartments(tx *gorm.DB, k *kpiRec, idOf func(*mdNode) *uuid.UUID) error {
 	var ids []uuid.UUID
 	for _, d := range k.RelatedDepts {
@@ -456,4 +506,17 @@ func cutRunes(s string, n int) string {
 		return s
 	}
 	return string(r[:n])
+}
+
+// setInactive stores Active = No for a master data record the workbook
+// created (written separately: GORM skips a false value on a column with a
+// default of true).
+func setInactive(tx *gorm.DB, model interface{}, n *mdNode) error {
+	if !n.Inactive {
+		return nil
+	}
+	if err := tx.Model(model).Where("id = ?", n.ID).Update("is_active", false).Error; err != nil {
+		return fmt.Errorf("setting %s %q inactive: %w", kindLabel(n.Kind), n.NameEn, err)
+	}
+	return nil
 }

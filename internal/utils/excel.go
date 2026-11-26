@@ -109,6 +109,9 @@ type ColumnConfig struct {
 	// Hidden hides the column (e.g. a helper column of formulas that other
 	// columns' dropdowns read).
 	Hidden bool
+	// Text formats the column's data cells as Text, so Excel keeps a typed
+	// value such as "2026-01" instead of turning it into a date.
+	Text bool
 }
 
 type DropdownConfig struct {
@@ -382,6 +385,22 @@ func writeSheet(f *excelize.File, styles excelStyles, lang Language, cfg SheetCo
 	rows := cfg.DataRows
 	if rows <= 0 {
 		rows = 4999
+	}
+	for i, col := range cfg.Columns {
+		if !col.Text {
+			continue
+		}
+		name, err := excelize.ColumnNumberToName(i + 1)
+		if err != nil {
+			return err
+		}
+		textStyle, err := f.NewStyle(&excelize.Style{NumFmt: 49}) // "@"
+		if err != nil {
+			return err
+		}
+		if err := f.SetCellStyle(cfg.Name, name+"2", fmt.Sprintf("%s%d", name, rows+1), textStyle); err != nil {
+			return err
+		}
 	}
 	for i, col := range cfg.Columns {
 		if col.Formula == "" {
