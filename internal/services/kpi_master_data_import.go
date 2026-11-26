@@ -106,7 +106,7 @@ func masterSpecFor(entityType string) (masterEntitySpec, bool) {
 			masterColumn("enabler", "Enabler", "الممكّن", 26),
 			masterColumn("owner", "Owner (Department)", "المالك (الإدارة)", 28),
 			masterChoiceColumn("status", "Status", "الحالة", 16,
-				[]string{"draft", "active", "on_hold", "complete", "cancelled"},
+				[]string{"Draft", "Active", "On Hold", "Complete", "Cancelled"}, // the master data form's labels
 				[]string{"مسودة", "نشط", "معلق", "مكتمل", "ملغى"}),
 		}}, true
 	case KpiMasterDomain:
@@ -114,7 +114,7 @@ func masterSpecFor(entityType string) (masterEntitySpec, bool) {
 			masterRequired("name_en", "Name (English)", "الاسم (بالإنجليزية)", 38),
 			masterColumn("name_ar", "Name (Arabic)", "الاسم (بالعربية)", 38),
 			masterRequiredChoiceColumn("type", "Domain Type", "نوع النطاق", 22,
-				[]string{"strategy", "award", "strategy_and_award"},
+				[]string{"Strategy", "Award", "Strategy & Award"}, // the master data form's labels
 				[]string{"استراتيجي", "جائزة", "استراتيجي وجائزة"}),
 			masterChoiceColumn("is_active", "Active", "نشط", 14, []string{"Yes", "No"}, []string{"نعم", "لا"}),
 		}}, true
@@ -228,6 +228,18 @@ func BuildKpiMasterDataImportTemplate(ctx context.Context, db *gorm.DB, entityTy
 			}
 		}
 	}
+	// Operational Objectives: Goal is read-only on the form (it follows the
+	// Parent Objective). Initiatives keep their Goal dropdown: the
+	// initiative form lets you choose it.
+	if entityType == KpiMasterProcess {
+		cols = withFollowedGoal(cols, "operational_objective", lookupParentName, lookupParentGoal, "Parent Objective", "الهدف الرئيسي")
+		for i := range cols {
+			if cols[i].key == "goal" {
+				cols[i].hintEn = "Filled automatically from the Parent Objective (read-only, as on the form). To change it, change the Parent Objective."
+				cols[i].hintAr = "يُعبأ تلقائياً من الهدف الرئيسي (للقراءة فقط كما في النموذج). لتغييره غيّر الهدف الرئيسي."
+			}
+		}
+	}
 	cfg := utils.WorkbookConfig{
 		Language:     language,
 		Title:        fmt.Sprintf("KPI Master Data Import Template — %s", spec.sheet),
@@ -236,10 +248,11 @@ func BuildKpiMasterDataImportTemplate(ctx context.Context, db *gorm.DB, entityTy
 		ActiveSheet:  spec.sheet,
 		Instructions: buildKpiMasterDataInstructions(spec),
 		Sheets: []utils.SheetConfig{{
-			Name:         spec.sheet,
-			Columns:      toExcelColumns(cols),
-			DataRows:     kpiMasterTemplateDataRows,
-			FreezeHeader: true,
+			Name:             spec.sheet,
+			Columns:          toExcelColumns(cols),
+			DataRows:         kpiMasterTemplateDataRows,
+			FreezeHeader:     true,
+			ConditionalFills: masterTemplateFills(entityType),
 		}},
 		ListsSheet: kpiTemplateListsSheet,
 		Lists:      lists,
@@ -1013,10 +1026,10 @@ func (imp *masterDataImporter) validateRec(r *masterImportRec) {
 			if domainType, ok := normalizeMetricChoice(raw, masterDomainTypeChoices); ok {
 				v.Type = domainType
 			} else {
-				reject("Domain Type", fmt.Sprintf("Domain Type %q is not valid. Allowed: strategy, award, strategy_and_award.", raw))
+				reject("Domain Type", fmt.Sprintf("Domain Type %q is not valid. Allowed: Strategy, Award, Strategy & Award.", raw))
 			}
 		} else {
-			reject("Domain Type", "Domain Type is required (strategy, award or strategy_and_award).")
+			reject("Domain Type", "Domain Type is required (Strategy, Award or Strategy & Award).")
 		}
 		v.Code = strings.TrimSpace(read("code"))
 	}
@@ -1123,7 +1136,7 @@ func (imp *masterDataImporter) validateRec(r *masterImportRec) {
 		v.OwnerID = resolve("department", read("owner"), "Owner", false)
 		if v.ObjectiveID != nil && v.GoalID != nil {
 			if ref, ok := imp.objectives[*v.ObjectiveID]; ok && (ref.GoalID == nil || *ref.GoalID != *v.GoalID) {
-				reject("Parent Objective", "Parent Objective must belong to the initiative's Strategic Goal.")
+				reject("Parent Objective", "Parent Objective must belong to the initiative's Goal.")
 			}
 		}
 	case KpiMasterAwardSubCriterion:
@@ -1383,7 +1396,7 @@ var (
 	masterDomainTypeChoices = []metricChoice{
 		mc("strategy", "strategic", "استراتيجي", "استراتيجية"),
 		mc("award", "جائزة"),
-		mc("strategy_and_award", "strategy and award", "استراتيجي وجائزة"),
+		mc("strategy_and_award", "strategy and award", "strategy & award", "استراتيجي وجائزة", "استراتيجي و جائزة"),
 	}
 	masterInitiativeStatusChoices = []metricChoice{
 		mc("draft", "مسودة"),
