@@ -50,8 +50,8 @@ func (r *errorLogRepository) Create(ctx context.Context, e *models.ErrorLog) err
 			return err
 		}
 
-		q := tx.Where("fingerprint = ? AND related_id = ? AND status IN ? AND occurred_at > ?",
-			e.Fingerprint, e.RelatedID, []string{models.ErrorStatusNew, models.ErrorStatusInReview}, e.OccurredAt.Add(-retryWindow))
+		q := tx.Where("fingerprint = ? AND related_id = ? AND status IN ? AND occurred_at > ? AND occurred_at <= ?",
+			e.Fingerprint, e.RelatedID, []string{models.ErrorStatusNew, models.ErrorStatusInReview}, e.OccurredAt.Add(-retryWindow), e.OccurredAt.Add(retryWindow))
 		if e.UserID != nil {
 			q = q.Where("user_id = ?", *e.UserID)
 		} else {
@@ -63,8 +63,10 @@ func (r *errorLogRepository) Create(ctx context.Context, e *models.ErrorLog) err
 		switch {
 		case err == nil:
 			existing.RetryCount++
-			existing.OccurredAt = e.OccurredAt
-			if err := tx.Model(&existing).Updates(map[string]any{"retry_count": gorm.Expr("retry_count + 1"), "occurred_at": e.OccurredAt}).Error; err != nil {
+			if e.OccurredAt.After(existing.OccurredAt) { // never move the time backward
+				existing.OccurredAt = e.OccurredAt
+			}
+			if err := tx.Model(&existing).Updates(map[string]any{"retry_count": gorm.Expr("retry_count + 1"), "occurred_at": gorm.Expr("GREATEST(occurred_at, ?)", e.OccurredAt)}).Error; err != nil {
 				return err
 			}
 			*e = existing
