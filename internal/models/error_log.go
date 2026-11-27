@@ -184,23 +184,23 @@ type ReportErrorLogRequest struct {
 
 // ErrorLogResponse is the masked, permission-aware view of an ErrorLog.
 type ErrorLogResponse struct {
-	ID               uuid.UUID                  `json:"id"`
-	ErrorCode        string                     `json:"error_code"`
-	OccurredAt       time.Time                  `json:"occurred_at"`
-	Module           string                     `json:"module"`
-	Action           string                     `json:"action"`
-	ErrorType        string                     `json:"error_type"`
-	Severity         string                     `json:"severity"`
-	Message          string                     `json:"message"`
-	TechnicalDetails *string                    `json:"technical_details,omitempty"`
-	UserID           *uuid.UUID                 `json:"user_id,omitempty"`
-	User             string                     `json:"user"`
-	RelatedType      string                     `json:"related_type,omitempty"`
-	RelatedID        string                     `json:"related_id,omitempty"`
-	RelatedLabel     string                     `json:"related_label,omitempty"`
-	Status           string                     `json:"status"`
-	RetryCount       int                        `json:"retry_count"`
-	History          []ErrorLogHistoryResponse  `json:"history,omitempty"`
+	ID               uuid.UUID                 `json:"id"`
+	ErrorCode        string                    `json:"error_code"`
+	OccurredAt       time.Time                 `json:"occurred_at"`
+	Module           string                    `json:"module"`
+	Action           string                    `json:"action"`
+	ErrorType        string                    `json:"error_type"`
+	Severity         string                    `json:"severity"`
+	Message          string                    `json:"message"`
+	TechnicalDetails *string                   `json:"technical_details,omitempty"`
+	UserID           *uuid.UUID                `json:"user_id,omitempty"`
+	User             string                    `json:"user"`
+	RelatedType      string                    `json:"related_type,omitempty"`
+	RelatedID        string                    `json:"related_id,omitempty"`
+	RelatedLabel     string                    `json:"related_label,omitempty"`
+	Status           string                    `json:"status"`
+	RetryCount       int                       `json:"retry_count"`
+	History          []ErrorLogHistoryResponse `json:"history,omitempty"`
 }
 
 type ErrorLogHistoryResponse struct {

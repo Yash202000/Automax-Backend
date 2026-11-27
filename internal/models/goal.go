@@ -614,7 +614,7 @@ type GoalMetricUpdateRequest struct {
 type MetricValueUpdateRequest struct {
 	// Value is a pointer so 0 is a valid reading while a missing value is rejected.
 	Value   *float64 `json:"value" validate:"required"`
-	Comment string  `json:"comment"`
+	Comment string   `json:"comment"`
 }
 
 type CollaboratorAddRequest struct {

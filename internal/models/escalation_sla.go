@@ -27,9 +27,9 @@ type EscalationSLA struct {
 	NotifiedUser   *User      `gorm:"foreignKey:NotifiedUserID" json:"notified_user,omitempty"`
 
 	// Policy step that triggered this notification (nil = legacy hardcoded logic)
-	EscalationPolicyID     *uuid.UUID             `gorm:"type:uuid;index" json:"escalation_policy_id,omitempty"`
-	EscalationPolicyStepID *uuid.UUID             `gorm:"type:uuid;index" json:"escalation_policy_step_id,omitempty"`
-	EscalationPolicyStep   *EscalationPolicyStep  `gorm:"foreignKey:EscalationPolicyStepID" json:"escalation_policy_step,omitempty"`
+	EscalationPolicyID     *uuid.UUID            `gorm:"type:uuid;index" json:"escalation_policy_id,omitempty"`
+	EscalationPolicyStepID *uuid.UUID            `gorm:"type:uuid;index" json:"escalation_policy_step_id,omitempty"`
+	EscalationPolicyStep   *EscalationPolicyStep `gorm:"foreignKey:EscalationPolicyStepID" json:"escalation_policy_step,omitempty"`
 
 	// EscalationType classifies the trigger: "state_sla" | "global_sla"
 	EscalationType string `gorm:"size:20;default:'state_sla'" json:"escalation_type"`
@@ -60,24 +60,24 @@ func (e *EscalationSLA) BeforeCreate(_ *gorm.DB) error {
 
 // EscalationSLAResponse is the API response for a breach notification record.
 type EscalationSLAResponse struct {
-	ID                     uuid.UUID                      `json:"id"`
-	IncidentID             *uuid.UUID                     `json:"incident_id,omitempty"`
-	Incident               *IncidentResponse              `json:"incident,omitempty"`
-	StateID                *uuid.UUID                     `json:"state_id,omitempty"`
-	State                  *WorkflowStateResponse         `json:"state,omitempty"`
-	TransitionID           *uuid.UUID                     `json:"transition_id,omitempty"`
-	NotifiedUserID         *uuid.UUID                     `json:"notified_user_id,omitempty"`
-	NotifiedUser           *UserResponse                  `json:"notified_user,omitempty"`
-	Email                  string                         `json:"email"`
-	Phone                  string                         `json:"phone"`
-	Actions                []string                       `json:"actions"`
-	SLAHoursAllowed        int                            `json:"sla_hours_allowed"`
-	HoursInState           float64                        `json:"hours_in_state"`
-	EscalationPolicyID     *uuid.UUID                     `json:"escalation_policy_id,omitempty"`
-	EscalationPolicyStepID *uuid.UUID                     `json:"escalation_policy_step_id,omitempty"`
-	EscalationType         string                         `json:"escalation_type"`
-	NotifiedAt             *time.Time                     `json:"notified_at,omitempty"`
-	CreatedAt              time.Time                      `json:"created_at"`
+	ID                     uuid.UUID              `json:"id"`
+	IncidentID             *uuid.UUID             `json:"incident_id,omitempty"`
+	Incident               *IncidentResponse      `json:"incident,omitempty"`
+	StateID                *uuid.UUID             `json:"state_id,omitempty"`
+	State                  *WorkflowStateResponse `json:"state,omitempty"`
+	TransitionID           *uuid.UUID             `json:"transition_id,omitempty"`
+	NotifiedUserID         *uuid.UUID             `json:"notified_user_id,omitempty"`
+	NotifiedUser           *UserResponse          `json:"notified_user,omitempty"`
+	Email                  string                 `json:"email"`
+	Phone                  string                 `json:"phone"`
+	Actions                []string               `json:"actions"`
+	SLAHoursAllowed        int                    `json:"sla_hours_allowed"`
+	HoursInState           float64                `json:"hours_in_state"`
+	EscalationPolicyID     *uuid.UUID             `json:"escalation_policy_id,omitempty"`
+	EscalationPolicyStepID *uuid.UUID             `json:"escalation_policy_step_id,omitempty"`
+	EscalationType         string                 `json:"escalation_type"`
+	NotifiedAt             *time.Time             `json:"notified_at,omitempty"`
+	CreatedAt              time.Time              `json:"created_at"`
 }
 
 func ToEscalationSLAResponse(e *EscalationSLA) EscalationSLAResponse {

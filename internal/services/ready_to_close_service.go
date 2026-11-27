@@ -366,15 +366,15 @@ func (s *readyToCloseService) sendPreExpiryNotification(ctx context.Context, ent
 	).Scan(&revNum)
 
 	revision := &models.IncidentRevision{
-		IncidentID:        entry.IncidentID,
-		RevisionNumber:    revNum,
-		ActionType:        models.RevisionActionStatusChanged,
-		ActionDescription: fmt.Sprintf("Pre-expiry notification sent: Partial Close expires in %s (at %s)", timeStr, entry.ExpiresAt.Format("2006-01-02 15:04:05")),
+		IncidentID:          entry.IncidentID,
+		RevisionNumber:      revNum,
+		ActionType:          models.RevisionActionStatusChanged,
+		ActionDescription:   fmt.Sprintf("Pre-expiry notification sent: Partial Close expires in %s (at %s)", timeStr, entry.ExpiresAt.Format("2006-01-02 15:04:05")),
 		ActionDescriptionAr: fmt.Sprintf("إشعار قبل انتهاء الصلاحية: ينتهي الإغلاق الجزئي في %s (في %s)", timeStr, entry.ExpiresAt.Format("2006-01-02 15:04:05")),
-		Changes:           `[]`,
-		PerformedByID:     uuid.Nil,
-		PerformedByRoles:  `["system"]`,
-		CreatedAt:         now,
+		Changes:             `[]`,
+		PerformedByID:       uuid.Nil,
+		PerformedByRoles:    `["system"]`,
+		CreatedAt:           now,
 	}
 	s.db.WithContext(ctx).Create(revision)
 
