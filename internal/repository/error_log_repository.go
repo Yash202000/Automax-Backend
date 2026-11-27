@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -34,27 +35,46 @@ func NewErrorLogRepository(db *gorm.DB) ErrorLogRepository {
 const retryWindow = 10 * time.Minute
 
 func (r *errorLogRepository) Create(ctx context.Context, e *models.ErrorLog) error {
-	db := r.db.WithContext(ctx)
-
-	q := db.Where("fingerprint = ? AND related_id = ? AND status IN ? AND occurred_at > ?",
-		e.Fingerprint, e.RelatedID, []string{models.ErrorStatusNew, models.ErrorStatusInReview}, e.OccurredAt.Add(-retryWindow))
+	if e.OccurredAt.IsZero() {
+		e.OccurredAt = time.Now() // never match or write a zero (year 0001) time
+	}
+	user := "system"
 	if e.UserID != nil {
-		q = q.Where("user_id = ?", *e.UserID)
-	} else {
-		q = q.Where("user_id IS NULL")
+		user = e.UserID.String()
 	}
 
-	var existing models.ErrorLog
-	if q.Order("occurred_at DESC").First(&existing).Error == nil {
-		existing.RetryCount++
-		existing.OccurredAt = e.OccurredAt
-		if err := db.Model(&existing).Updates(map[string]any{"retry_count": existing.RetryCount, "occurred_at": e.OccurredAt}).Error; err != nil {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// One request at a time per error: concurrent repeats cannot lose an increment
+		// or each insert their own row.
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", e.Fingerprint+"|"+user+"|"+e.RelatedID).Error; err != nil {
 			return err
 		}
-		*e = existing
-		return nil
-	}
-	return db.Create(e).Error
+
+		q := tx.Where("fingerprint = ? AND related_id = ? AND status IN ? AND occurred_at > ?",
+			e.Fingerprint, e.RelatedID, []string{models.ErrorStatusNew, models.ErrorStatusInReview}, e.OccurredAt.Add(-retryWindow))
+		if e.UserID != nil {
+			q = q.Where("user_id = ?", *e.UserID)
+		} else {
+			q = q.Where("user_id IS NULL")
+		}
+
+		var existing models.ErrorLog
+		err := q.Order("occurred_at DESC").First(&existing).Error
+		switch {
+		case err == nil:
+			existing.RetryCount++
+			existing.OccurredAt = e.OccurredAt
+			if err := tx.Model(&existing).Updates(map[string]any{"retry_count": gorm.Expr("retry_count + 1"), "occurred_at": e.OccurredAt}).Error; err != nil {
+				return err
+			}
+			*e = existing
+			return nil
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			return tx.Create(e).Error
+		default:
+			return err // a real lookup failure: report it, do not insert a duplicate
+		}
+	})
 }
 
 func (r *errorLogRepository) ApplyFilter(q *gorm.DB, f models.ErrorLogFilter) *gorm.DB {
