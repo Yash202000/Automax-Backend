@@ -33,6 +33,50 @@ var ErrInvalidLocation = errors.New("invalid_location")
 var ErrEmptyWorkflow = errors.New("empty_workflow")
 var ErrEditNotAllowed = errors.New("edit_not_allowed_in_current_state")
 
+// IncidentFieldErrors holds post-binding field validation errors (e.g. workflow-required fields)
+// returned as {"errors": {...}} by handlers.
+type IncidentFieldErrors map[string]string
+
+func (e IncidentFieldErrors) Error() string { return "incident field validation failed" }
+
+// ErrAssigneeLocked is returned when a manual assignee change is attempted while the
+// incident's current workflow state has lock_assignee=true. Its message is its i18n key.
+var ErrAssigneeLocked = errors.New("assignee_locked_in_current_state")
+
+// AssigneeLockedError carries the locked state's name; errors.Is(err, ErrAssigneeLocked) matches it.
+type AssigneeLockedError struct {
+	StateName string
+}
+
+func (e *AssigneeLockedError) Error() string {
+	return fmt.Sprintf("assignee cannot be changed while the incident is in state %s", e.StateName)
+}
+
+func (e *AssigneeLockedError) Is(target error) bool { return target == ErrAssigneeLocked }
+
+// ensureAssigneeNotLocked rejects a manual assignee change when the state locks the
+// assignee and the incident already has one. A nil request (field omitted) or the
+// current assignee re-sent is allowed; anything else, including "" (unassign), is not.
+// Only manual edit/assign paths call this; workflow transitions are intentionally exempt.
+func ensureAssigneeNotLocked(incident *models.Incident, state *models.WorkflowState, requestedAssigneeID *string) error {
+	if state == nil || !state.LockAssignee || requestedAssigneeID == nil || !hasAssignee(incident) {
+		return nil
+	}
+	if requested, err := uuid.Parse(strings.TrimSpace(*requestedAssigneeID)); err == nil && requested == *incident.AssigneeID {
+		return nil
+	}
+	return &AssigneeLockedError{StateName: state.Name}
+}
+
+// isAssigneeLocked reports whether the incident's assignee is currently read-only.
+func isAssigneeLocked(incident *models.Incident, state *models.WorkflowState) bool {
+	return state != nil && state.LockAssignee && hasAssignee(incident)
+}
+
+func hasAssignee(incident *models.Incident) bool {
+	return incident != nil && incident.AssigneeID != nil && *incident.AssigneeID != uuid.Nil
+}
+
 // An incident must be filed against a specific place and category, not an umbrella
 // one, so its location and classification have to be leaves of their hierarchies.
 // Following the convention above, each sentinel's message is its i18n key, which is
@@ -105,7 +149,7 @@ type IncidentService interface {
 
 	// Revisions
 	ListRevisions(ctx context.Context, incidentID uuid.UUID, filter *models.IncidentRevisionFilter) ([]models.IncidentRevisionResponse, int64, error)
-	CreateRevision(ctx context.Context, incidentID uuid.UUID, actionType models.IncidentRevisionActionType, description string, changes []models.IncidentFieldChange, userID uuid.UUID) error
+	CreateRevision(ctx context.Context, incidentID uuid.UUID, actionType models.IncidentRevisionActionType, description string, descriptionAr string, changes []models.IncidentFieldChange, userID uuid.UUID) error
 	// SetUserService wires in the UserService (called post-construction to avoid circular deps).
 	SetUserService(us UserService)
 	// SetFCMService wires in the FCMService (called post-construction).
@@ -420,6 +464,38 @@ func splitReporterName(name string) (first, middle, last string) {
 	}
 }
 
+// workflowRequiredFieldSet parses a workflow's required_fields JSON into a set.
+// Invalid/empty JSON yields an empty set, matching MatchWorkflow's tolerance.
+func workflowRequiredFieldSet(workflow *models.Workflow) map[string]bool {
+	required := make(map[string]bool)
+	if workflow == nil || strings.TrimSpace(workflow.RequiredFields) == "" {
+		return required
+	}
+	var fields []string
+	if err := json.Unmarshal([]byte(workflow.RequiredFields), &fields); err != nil {
+		return required
+	}
+	for _, field := range fields {
+		if trimmed := strings.TrimSpace(field); trimmed != "" {
+			required[trimmed] = true
+		}
+	}
+	return required
+}
+
+// validateIncidentFormRequiredFields enforces workflow-required rules for caller/cooperation fields only.
+func validateIncidentFormRequiredFields(ctx context.Context, workflow *models.Workflow, callerIdentity, cooperationStatus string) IncidentFieldErrors {
+	required := workflowRequiredFieldSet(workflow)
+	fieldErrors := make(IncidentFieldErrors)
+	if required["caller_identity_text"] && strings.TrimSpace(callerIdentity) == "" {
+		fieldErrors["caller_identity_text"] = i18n.T(ctx, "caller_identity_required")
+	}
+	if required["cooperation_status"] && strings.TrimSpace(cooperationStatus) == "" {
+		fieldErrors["cooperation_status"] = i18n.T(ctx, "cooperation_status_required")
+	}
+	return fieldErrors
+}
+
 func (s *incidentService) CreateIncident(ctx context.Context, req *models.IncidentCreateRequest, reporterID uuid.UUID) (*models.IncidentResponse, error) {
 	// Validated first, before anything with a side effect: the IVR branch below can
 	// register a brand-new citizen user, and a request we are going to reject must not
@@ -435,32 +511,58 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 	clientCode := strings.TrimSpace(s.cfg.ClientCode)
 	// For EPM940, all sources is an unauthenticated channel where the citizen has no account yet,
 	// so fetch or auto-register a user based on their mobile number.
-	if req.Source != "" && req.ReporterName != "" && req.ReporterPhone != "" && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
-		user, err := s.userRepo.FindByMobile(ctx, req.ReporterPhone)
+	// Nazaha does the same for any reporter detail, and also matches by national ID.
+	isEPM940 := strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940)
+	isNazaha := s.cfg.IsNazaha()
+	epmContact := isEPM940 && req.Source != "" && req.ReporterName != "" && req.ReporterPhone != ""
+	nazahaContact := isNazaha && hasNazahaReporterDetails(req)
+	if epmContact || nazahaContact {
+		user, err := s.findReporterUser(ctx, req, isNazaha)
+		var contactConflict IncidentFieldErrors
+		if errors.As(err, &contactConflict) {
+			return nil, err // Nazaha: mobile belongs to a different contact
+		}
 		if err != nil && err != gorm.ErrRecordNotFound {
 			fmt.Printf("CreateIncident: Error fetching user by mobile: %v\n", err)
+			LogContactFailure("Find contact from incident", "", req.ReporterPhone, err)
 			return nil, err
 		}
 
 		if user == nil || user.ID == uuid.Nil {
 			role, err := s.roleRepo.FindByCode(ctx, constants.ROLES.CITIZEN)
 			if err != nil {
+				LogContactFailure("Create contact from incident", "", req.ReporterPhone, err)
 				return nil, err
 			}
 
 			sourceSlug := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(req.Source)), " ", "")
 			epoch := time.Now().Unix()
 			normalizedPhone := pkgutils.NormalizeMobile(req.ReporterPhone, pkgutils.SystemCountryCode())
+			// Generated login IDs use the mobile, else the national ID.
+			idPart := strings.TrimPrefix(normalizedPhone, "+")
+			if idPart == "" {
+				idPart = req.ReporterNationalID
+			}
+			if idPart == "" {
+				idPart = strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+			}
 			registerReq := &models.UserRegisterRequest{
 				Phone:    normalizedPhone,
-				Email:    fmt.Sprintf("%s_%s_%d@%s", sourceSlug, strings.TrimPrefix(normalizedPhone, "+"), epoch, constants.APP.DOMAIN),
-				Username: fmt.Sprintf("%s_%s_%d", constants.ROLES.CITIZEN, strings.TrimPrefix(normalizedPhone, "+"), epoch),
+				Email:    fmt.Sprintf("%s_%s_%d@%s", sourceSlug, idPart, epoch, constants.APP.DOMAIN),
+				Username: fmt.Sprintf("%s_%s_%d", constants.ROLES.CITIZEN, idPart, epoch),
 				Password: pkgutils.GenerateRandomPassword(12),
 			}
 			if req.AlternateMobile != "" {
 				registerReq.AlternateMobile = pkgutils.NormalizeMobile(req.AlternateMobile, pkgutils.SystemCountryCode())
 			}
 			registerReq.FirstName, registerReq.MiddleName, registerReq.LastName = splitReporterName(req.ReporterName)
+			if isNazaha {
+				// findReporterUser made sure no one else has this ID or email.
+				registerReq.NationalID = req.ReporterNationalID
+				if req.ReporterEmail != "" {
+					registerReq.Email = strings.ToLower(req.ReporterEmail)
+				}
+			}
 
 			if role != nil && role.ID != uuid.Nil {
 				registerReq.RoleIDs = []uuid.UUID{role.ID}
@@ -469,15 +571,21 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 			authResp, err := s.userService.Register(ctx, registerReq)
 			if err != nil {
 				fmt.Printf("CreateIncident: Error registering %s citizen user: %v\n", sourceSlug, err)
+				LogContactFailure("Create contact from incident", "", req.ReporterPhone, err)
 				return nil, err
 			}
 
 			reporterID = authResp.User.ID
+			if isNazaha {
+				pendingUserUpdates = nazahaReporterUserUpdates(nil, req)
+				pendingUserUpdates["id"] = authResp.User.ID
+			}
 		} else {
 			reporterID = user.ID
 			first, middle, last := splitReporterName(req.ReporterName)
 			updates := make(map[string]interface{})
-			if first != user.FirstName || middle != user.MiddleName || last != user.LastName {
+			// An empty name never clears the contact's name.
+			if req.ReporterName != "" && (first != user.FirstName || middle != user.MiddleName || last != user.LastName) {
 				updates["first_name"] = first
 				updates["middle_name"] = middle
 				updates["last_name"] = last
@@ -489,14 +597,23 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 					updates["alternate_mobile"] = alt
 				}
 			}
+			if isNazaha {
+				for k, v := range nazahaReporterUserUpdates(user, req) {
+					updates[k] = v
+				}
+			}
 			if len(updates) != 0 {
 				updates["id"] = user.ID
 				pendingUserUpdates = updates
 			}
 		}
-		if err := s.incidentRepo.UpdateReporterNameByPhone(ctx, req.ReporterPhone, req.ReporterName); err != nil {
-			fmt.Printf("CreateIncident: Error backfilling reporter name for phone %s: %v\n", req.ReporterPhone, err)
-			return nil, err
+		// EPM940 only: rename the reporter on earlier incidents with this phone.
+		if isEPM940 {
+			if err := s.incidentRepo.UpdateReporterNameByPhone(ctx, req.ReporterPhone, req.ReporterName); err != nil {
+				fmt.Printf("CreateIncident: Error backfilling reporter name for phone %s: %v\n", req.ReporterPhone, err)
+				LogContactFailure("Update contact from incident", reporterID.String(), req.ReporterPhone, err)
+				return nil, err
+			}
 		}
 	}
 	// Sources that bypass the 500m duplicate check, configurable via SKIP_DUPLICATE_CHECK_SOURCES (comma-separated)
@@ -649,6 +766,15 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		return nil, errors.New(i18n.T(ctx, "invalid_workflow_id_lower"))
 	}
 
+	// Enforce workflow-required caller/cooperation fields.
+	workflow, wfErr := s.workflowRepo.FindByID(ctx, workflowID)
+	if wfErr != nil {
+		return nil, wfErr
+	}
+	if fieldErrors := validateIncidentFormRequiredFields(ctx, workflow, req.CallerIdentityText, req.CooperationStatus); len(fieldErrors) > 0 {
+		return nil, fieldErrors
+	}
+
 	// Get the initial state of the workflow
 	initialState, err := s.workflowRepo.GetInitialState(ctx, workflowID)
 	if err != nil {
@@ -701,27 +827,39 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 	}
 
 	incident := &models.Incident{
-		IncidentNumber: incidentNumber,
-		Title:          req.Title,
-		Description:    req.Description,
-		WorkflowID:     workflowID,
-		CurrentStateID: initialState.ID,
-		ReporterID:     &reporterID,
-		CallerIdentity: req.CallerIdentity,
-		CustomFields:   customFieldsJSON,
-		GisLocation:    datatypes.JSON(req.GisLocation),
-		Latitude:       req.Latitude,
-		Longitude:      req.Longitude,
-		Address:        req.Address,
-		City:           req.City,
-		State:          req.State,
-		Country:        req.Country,
-		PostalCode:     req.PostalCode,
-		RecordType:     recordType,
-		Source:         req.Source,
+		IncidentNumber:     incidentNumber,
+		Title:              req.Title,
+		Description:        req.Description,
+		WorkflowID:         workflowID,
+		CurrentStateID:     initialState.ID,
+		ReporterID:         &reporterID,
+		CreatedByID:        &creatorID,
+		CallerIdentity:     req.CallerIdentity,
+		CallerIdentityText: strings.TrimSpace(req.CallerIdentityText),
+		CooperationStatus:  req.CooperationStatus,
+		CustomFields:       customFieldsJSON,
+		CallUuid:           nilIfBlank(req.CallUuid),
+		GisLocation:        datatypes.JSON(req.GisLocation),
+		Latitude:           req.Latitude,
+		Longitude:          req.Longitude,
+		Address:            req.Address,
+		City:               req.City,
+		State:              req.State,
+		Country:            req.Country,
+		PostalCode:         req.PostalCode,
+		RecordType:         recordType,
+		Source:             req.Source,
+		// Nazaha fields (empty for other clients).
+		CallerNumber:         req.CallerNumber,
+		LinkedIncidentID:     req.LinkedIncidentID,
+		ConcernedAuthorityID: parseUUIDPtr(derefTrim(req.ConcernedAuthorityID)),
+		Content:              req.Content,
+		Notes:                req.Notes,
+		Street:               req.Street,
 	}
 
-	if !strings.EqualFold(s.cfg.ClientCode, constants.CLIENT_CODE.EPM940) {
+	// EPM940 and Nazaha keep the reporter on the linked contact only.
+	if !isEPM940 && !isNazaha {
 		incident.ReporterName = req.ReporterName
 		incident.ReporterEmail = req.ReporterEmail
 		incident.ReporterPhone = req.ReporterPhone
@@ -801,6 +939,11 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 		break // Success, exit retry loop
 	}
 
+	// Nazaha: link the selected previous reports.
+	if err := s.incidentRepo.CreatePreviousReportLinks(ctx, incident.ID, validUUIDs(req.PreviousReportIDs)); err != nil {
+		log.Printf("[IncidentService] failed to link previous reports to incident %s: %v", incident.ID, err)
+	}
+
 	// Save creation comment
 	if strings.TrimSpace(req.Comment) != "" {
 		comment := &models.IncidentComment{
@@ -839,10 +982,21 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 
 	// Create initial revision to log incident creation
 	description := fmt.Sprintf("%s %s created", recordType, incidentNumber)
-	_ = s.CreateRevision(ctx, incident.ID, models.RevisionActionCreated, description, nil, reporterID)
+	recordTypeAr := map[string]string{
+		"incident":  "حادث",
+		"request":   "طلب",
+		"complaint": "شكوى",
+		"query":     "استعلام",
+	}[recordType]
+	if recordTypeAr == "" {
+		recordTypeAr = recordType
+	}
+	descriptionAr := fmt.Sprintf("تم إنشاء %s %s", recordTypeAr, incidentNumber)
+	_ = s.CreateRevision(ctx, incident.ID, models.RevisionActionCreated, description, descriptionAr, nil, reporterID)
 	if pendingUserUpdates != nil {
 		if err := s.userRepo.UpdateProfile(ctx, pendingUserUpdates); err != nil {
 			log.Printf("[IncidentService] failed to update reporter user %v after incident create: %v", pendingUserUpdates["id"], err)
+			LogContactFailure("Update contact from incident", fmt.Sprint(pendingUserUpdates["id"]), req.ReporterPhone, err)
 		}
 	}
 	s.notifySimilarPreviousIncident(ctx, incident, creatorID)
@@ -911,27 +1065,13 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 			log.Printf("[IncidentService] No reporter phone for IVR incident %s, skipping SMS", incident.ID)
 		}
 		if req.ReporterPhone != "" {
-			smsBody := fmt.Sprintf("Thank you for contacting Eastern Province Municipality. Your incident %s has been created.", incident.IncidentNumber)
-			result, err := s.notificationService.SendNotification(
-				ctx,
-				"sms",
-				nil,
-				"en",
-				[]string{req.ReporterPhone},
-				nil,
-				nil,
-				"",
-				smsBody,
-				nil,
-				nil,
-				&reporterID,
-				nil,
+			err := s.notificationService.SendSMSTemplate(
+				ctx, "IVR_INCIDENT_CREATED_SMS", SMSLanguageFromContext(ctx), req.ReporterPhone,
+				BuildIncidentVariables(incident, nil, nil),
+				&reporterID, &incident.ID,
 			)
-			if result != nil && result.SentLog != nil {
-				_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
-			}
 			if err != nil {
-				log.Printf("[IncidentService] SMS failed for %s: %v", req.ReporterPhone, err)
+				log.Printf("[IncidentService] IVR SMS failed for incident %s to %s: %v", incident.IncidentNumber, maskMobile(req.ReporterPhone), err)
 			} else {
 				sent = append(sent, "SMS")
 			}
@@ -941,7 +1081,7 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 
 		// Log revision so agents can see when the initial SMS was sent.
 		_ = s.CreateRevision(ctx, incident.ID, models.RevisionActionIVRSmsSent,
-			"IVR SMS sent to citizen on incident creation", nil, reporterID)
+			"IVR SMS sent to citizen on incident creation", "تم إرسال رسالة SMS صوتية إلى المواطن عند إنشاء الحادث", nil, reporterID)
 	}
 
 	// Send template-based email/SMS notifications for the initial state (if configured)
@@ -1005,9 +1145,9 @@ func (s *incidentService) CreateIncident(ctx context.Context, req *models.Incide
 						_ = s.notificationService.SetIncidentIDOnLogs(bgCtx, []uuid.UUID{result.SentLog.ID}, capturedCreated.ID)
 					}
 					if err != nil {
-						log.Printf("NEW-INCIDENT-SMS: Failed for incident %s: %v", capturedCreated.IncidentNumber, err)
+						log.Printf("[SMS] flow=new_incident: Failed for incident %s: %v", capturedCreated.IncidentNumber, err)
 					} else {
-						log.Printf("NEW-INCIDENT-SMS: Sent to %v for incident %s", phones, capturedCreated.IncidentNumber)
+						log.Printf("[SMS] flow=new_incident: Sent to %v for incident %s", maskPhones(phones), capturedCreated.IncidentNumber)
 					}
 				}
 			}
@@ -1050,7 +1190,21 @@ func (s *incidentService) GetIncident(ctx context.Context, id uuid.UUID) (*model
 		return nil, err
 	}
 
+	if s.cfg.IsNazaha() {
+		if err := s.incidentRepo.LoadNazahaRelations(ctx, incident); err != nil {
+			return nil, err
+		}
+	}
+
 	resp := models.ToIncidentDetailResponse(incident)
+
+	if s.cfg.IsNazaha() {
+		previous, err := s.incidentRepo.ListPreviousReports(ctx, incident.ID)
+		if err != nil {
+			return nil, err
+		}
+		resp.PreviousReports = previous
+	}
 
 	// For requests created from bulk conversion, fetch all source incidents
 	if incident.RecordType == "request" && len(incident.SourceIncidentIDs) > 0 {
@@ -1140,6 +1294,9 @@ func (s *incidentService) ListIncidents(ctx context.Context, filter *models.Inci
 			responses[i].MergedIncidentsCount = len(mergedIncidents)
 		}
 	}
+
+	s.stampCommentAndAttachmentCounts(ctx, incidents, responses)
+	s.stampReporterNameMatches(ctx, filter, incidents, responses)
 
 	clientCode := strings.TrimSpace(s.cfg.ClientCode)
 	if strings.EqualFold(clientCode, constants.CLIENT_CODE.VD2) {
@@ -1305,6 +1462,21 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		}
 	}
 
+	// Enforce lock_assignee: once assigned, the assignee is read-only in this state.
+	lockState := incident.CurrentState
+	if err == nil && currentState != nil {
+		lockState = currentState
+	}
+	if lockErr := ensureAssigneeNotLocked(incident, lockState, req.AssigneeID); lockErr != nil {
+		tx.Rollback()
+		return nil, lockErr
+	}
+	if isAssigneeLocked(incident, lockState) {
+		// Current assignee re-sent: drop it so the assignee and the
+		// incident_assignees junction table are left untouched.
+		req.AssigneeID = nil
+	}
+
 	// BLOCK: Prevent editing child incidents (merged into another)
 	if incident.IsMerged && incident.MasterIncidentID != nil {
 		tx.Rollback()
@@ -1320,9 +1492,42 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		}
 	}
 
+	// Enforce workflow-required caller/cooperation fields when explicitly updated.
+	if req.CallerIdentityText != nil || req.CooperationStatus != nil {
+		effectiveCallerIdentity := incident.CallerIdentityText
+		effectiveCooperationStatus := incident.CooperationStatus
+		if req.CallerIdentityText != nil {
+			effectiveCallerIdentity = strings.TrimSpace(*req.CallerIdentityText)
+		}
+		if req.CooperationStatus != nil {
+			effectiveCooperationStatus = strings.TrimSpace(*req.CooperationStatus)
+		}
+		workflow, wfErr := s.workflowRepo.FindByID(ctx, incident.WorkflowID)
+		if wfErr != nil {
+			tx.Rollback()
+			return nil, wfErr
+		}
+		if fieldErrors := validateIncidentFormRequiredFields(ctx, workflow, effectiveCallerIdentity, effectiveCooperationStatus); len(fieldErrors) > 0 {
+			tx.Rollback()
+			return nil, fieldErrors
+		}
+	}
+
 	// Track changes for revision
 	var changes []models.IncidentFieldChange
 	var descriptions []string
+
+	// Nazaha: apply its fields; contact and previous-report changes are saved before commit.
+	var nazahaEdit *nazahaEditPlan
+	if s.cfg.IsNazaha() {
+		plan, nazahaChanges, err := s.prepareNazahaEdit(ctx, incident, req)
+		if err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+		nazahaEdit = plan
+		changes = append(changes, nazahaChanges...)
+	}
 
 	if req.Title != "" && req.Title != incident.Title {
 		oldVal := incident.Title
@@ -1463,6 +1668,46 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 			FieldName:  "reporter_name",
 			FieldLabel: "Reporter Name",
 		})
+	}
+
+	// Apply provided caller/cooperation updates (including clears).
+	if req.CallerIdentityText != nil {
+		newCallerIdentity := strings.TrimSpace(*req.CallerIdentityText)
+		if newCallerIdentity != incident.CallerIdentityText {
+			oldValue := incident.CallerIdentityText
+			newValue := newCallerIdentity
+			changes = append(changes, models.IncidentFieldChange{
+				FieldName:  "caller_identity_text",
+				FieldLabel: "Caller Identity",
+				OldValue:   &oldValue,
+				NewValue:   &newValue,
+			})
+			// Omit value from description; old/new are recorded in Changes.
+			descriptions = append(descriptions, "Caller Identity changed")
+			incident.CallerIdentityText = newValue
+		}
+	}
+
+	if req.CooperationStatus != nil {
+		newCooperationStatus := strings.TrimSpace(*req.CooperationStatus)
+		if newCooperationStatus != incident.CooperationStatus {
+			oldValue := incident.CooperationStatus
+			newValue := newCooperationStatus
+			changes = append(changes, models.IncidentFieldChange{
+				FieldName:  "cooperation_status",
+				FieldLabel: "Cooperation Status",
+				OldValue:   &oldValue,
+				NewValue:   &newValue,
+			})
+			if oldValue == "" {
+				descriptions = append(descriptions, fmt.Sprintf("Cooperation Status set to %s", newValue))
+			} else if newValue == "" {
+				descriptions = append(descriptions, fmt.Sprintf("Cooperation Status cleared (was %s)", oldValue))
+			} else {
+				descriptions = append(descriptions, fmt.Sprintf("Cooperation Status changed from %s to %s", oldValue, newValue))
+			}
+			incident.CooperationStatus = newValue
+		}
 	}
 
 	// Parse optional UUIDs
@@ -1742,6 +1987,12 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 	if req.ReporterName != "" {
 		updates["reporter_name"] = incident.ReporterName
 	}
+	if req.CallerIdentityText != nil {
+		updates["caller_identity_text"] = incident.CallerIdentityText
+	}
+	if req.CooperationStatus != nil {
+		updates["cooperation_status"] = incident.CooperationStatus
+	}
 
 	if req.Latitude != nil {
 		updates["latitude"] = *req.Latitude
@@ -1780,8 +2031,15 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		updates["sla_deadline"] = *incident.SLADeadline
 		updates["sla_breached"] = incident.SLABreached
 	}
+	if nazahaEdit != nil {
+		for k, v := range nazahaEdit.incidentUpdates {
+			updates[k] = v
+		}
+	}
 	log.Println(len(updates), len(changes))
-	if len(updates) == 0 || len(changes) == 0 {
+	// Nazaha previous reports and reporter details live outside the incident
+	// row, so an edit of only those still goes ahead (the version is still bumped).
+	if len(changes) == 0 || (len(updates) == 0 && !nazahaEdit.hasOutsideChanges()) {
 		tx.Rollback()
 		return nil, errors.New(i18n.T(ctx, "no_changes_detected"))
 	}
@@ -1793,17 +2051,25 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 		}
 		return nil, err
 	}
+	if nazahaEdit != nil {
+		if err := s.applyNazahaEdit(ctx, txRepo, incident, nazahaEdit); err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+	}
 
 	// Create revision if there were changes
 	if len(changes) > 0 {
 		description := "Fields updated"
+		descriptionAr := "تم تحديث الحقول"
 		if len(descriptions) > 0 {
 			description = descriptions[0]
 			if len(descriptions) > 1 {
 				description = fmt.Sprintf("%s and %d more changes", description, len(descriptions)-1)
+				descriptionAr = fmt.Sprintf("تم تحديث الحقول و %d تغييرات أخرى", len(descriptions)-1)
 			}
 		}
-		_ = s.CreateRevision(ctx, id, models.RevisionActionFieldChange, description, changes, userID)
+		_ = s.CreateRevision(ctx, id, models.RevisionActionFieldChange, description, descriptionAr, changes, userID)
 	}
 
 	// Commit transaction
@@ -1891,7 +2157,7 @@ func (s *incidentService) UpdateIncident(ctx context.Context, id uuid.UUID, req 
 			log.Printf("[IVR] no active link found to mark as submitted for incident %s", id)
 		}
 		_ = s.CreateRevision(ctx, id, models.RevisionActionIVRSmsSubmitted,
-			"Citizen submitted additional information via IVR SMS link", changes, userID)
+			"Citizen submitted additional information via IVR SMS link", "قدم المواطن معلومات إضافية عبر رابط الرسائل القصيرة الصوتية", changes, userID)
 	}
 
 	// Send in-app notification and revision for IVR updates from EPM940.
@@ -2041,6 +2307,13 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 			return nil, errors.New(i18n.T(ctx, "id_not_a_request"))
 		}
 
+		// Close the source incident through the workflow engine (same as Execute Transition)
+		// before linking, so validation failures leave nothing half-written.
+		sourceIncident, err = s.closeIncidentForConversion(ctx, sourceIncident, req.Version, req.TransitionComment, userID)
+		if err != nil {
+			return nil, err
+		}
+
 		// Append this incident to the existing request's source incidents
 		existingSourceIDs := existingRequest.SourceIncidentIDs
 		// If the array is empty but the singular field is set (request created before array was populated),
@@ -2075,41 +2348,11 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 			}
 		}
 
-		// Link incident to existing request
-		updateFields := map[string]interface{}{
+		// Link incident to existing request (state/assignee/history were handled by the transition)
+		if err := s.incidentRepo.UpdateFields(ctx, incidentID, map[string]interface{}{
 			"converted_request_id": existingRequest.ID,
-		}
-
-		// Find a terminal state to close the incident
-		terminalState, err := s.getTerminalStateForWorkflow(ctx, sourceIncident.WorkflowID)
-		if err != nil {
-			fmt.Printf("Warning: failed to find terminal state for workflow: %v\n", err)
-		}
-
-		if terminalState != nil {
-			updateFields["current_state_id"] = terminalState.ID
-			updateFields["closed_at"] = time.Now()
-		}
-
-		if err := s.incidentRepo.UpdateFields(ctx, incidentID, updateFields); err != nil {
+		}); err != nil {
 			return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_update_source_incident"), err)
-		}
-
-		// Create transition history
-		now := time.Now()
-		convertHistory := &models.IncidentTransitionHistory{
-			IncidentID:     incidentID,
-			TransitionID:   nil,
-			FromStateID:    sourceIncident.CurrentStateID,
-			ToStateID:      terminalState.ID,
-			PerformedByID:  userID,
-			Comment:        fmt.Sprintf("Linked to existing request %s", existingRequest.IncidentNumber),
-			TransitionedAt: now,
-			OldValues:      fmt.Sprintf(`{"record_type": "incident", "incident_number": "%s"}`, sourceIncident.IncidentNumber),
-			NewValues:      fmt.Sprintf(`{"record_type": "request", "request_number": "%s"}`, existingRequest.IncidentNumber),
-		}
-		if histErr := s.incidentRepo.CreateTransitionHistory(ctx, convertHistory); histErr != nil {
-			fmt.Printf("Warning: failed to create transition history: %v\n", histErr)
 		}
 
 		// Create revision for source incident
@@ -2123,7 +2366,8 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 			},
 		}
 		description := fmt.Sprintf("Incident linked to existing request %s", existingRequest.IncidentNumber)
-		_ = s.CreateRevision(ctx, incidentID, models.RevisionActionFieldChange, description, changes, userID)
+		descriptionAr := fmt.Sprintf("تم ربط الحادث بالطلب الحالي %s", existingRequest.IncidentNumber)
+		_ = s.CreateRevision(ctx, incidentID, models.RevisionActionFieldChange, description, descriptionAr, changes, userID)
 
 		// Create revision for existing request
 		changes = []models.IncidentFieldChange{
@@ -2135,7 +2379,8 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 			},
 		}
 		description = fmt.Sprintf("Incident %s converted and linked to this request", sourceIncidentNumber)
-		_ = s.CreateRevision(ctx, existingRequest.ID, models.RevisionActionFieldChange, description, changes, userID)
+		descriptionAr = fmt.Sprintf("تم تحويل الحادث %s وربطه بهذا الطلب", sourceIncidentNumber)
+		_ = s.CreateRevision(ctx, existingRequest.ID, models.RevisionActionFieldChange, description, descriptionAr, changes, userID)
 
 		// Create comment on existing request with feedback
 		if req.Feedback != nil && req.Feedback.Comment != "" {
@@ -2165,7 +2410,7 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		go func(inc *models.Incident) {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("CONVERT-TO-REQUEST-SMS: Panic recovered for incident %s: %v", inc.IncidentNumber, r)
+					log.Printf("[SMS] flow=convert_to_request: Panic recovered for incident %s: %v", inc.IncidentNumber, r)
 				}
 			}()
 			s.sendConvertToRequestSMS(bgCtxExist, inc, existReqNum, userID)
@@ -2205,30 +2450,17 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		}
 	}
 
-	// Execute transition if provided
-	if req.TransitionID != nil && *req.TransitionID != "" {
-		transitionReq := &models.IncidentTransitionRequest{
-			TransitionID: *req.TransitionID,
-			Comment:      req.TransitionComment,
-			Feedback:     req.Feedback,
-		}
-
-		_, err := s.ExecuteTransition(ctx, incidentID, transitionReq, userID, userRoleIDs)
-		if err != nil {
-			return nil, fmt.Errorf("failed to execute transition: %w", err)
-		}
-
-		// Reload the incident after transition
-		sourceIncident, err = s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
-		if err != nil {
-			return nil, errors.New(i18n.T(ctx, "failed_reload_after_transition"))
-		}
-	}
-
-	// Parse workflow ID
+	// Validate request inputs up-front so we never close the incident for a request we cannot create.
 	workflowID, err := uuid.Parse(req.WorkflowID)
 	if err != nil {
-		return nil, errors.New(i18n.T(ctx, "invalid_workflow_id_lower"))
+		if rw, rwErr := s.resolveRequestWorkflowID(ctx, sourceIncident, req); rwErr == nil {
+			workflowID = rw
+		} else {
+			return nil, errors.New(i18n.T(ctx, "invalid_workflow_id_lower"))
+		}
+	}
+	if _, err := s.workflowRepo.GetInitialState(ctx, workflowID); err != nil {
+		return nil, errors.New(i18n.T(ctx, "workflow_no_initial_state"))
 	}
 
 	// Get the initial state of the request workflow
@@ -2279,14 +2511,14 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		CustomFields:      sourceIncident.CustomFields,
 	}
 
-	// Handle optional assignee override
+	// Optional explicit assignee override; otherwise the request workflow's initial-state
+	// assignment rules are applied after creation (same as CreateIncident).
+	var explicitAssigneeID *uuid.UUID
 	if req.AssigneeID != nil && *req.AssigneeID != "" {
-		assigneeID, err := uuid.Parse(*req.AssigneeID)
-		if err == nil {
-			newRequest.AssigneeID = &assigneeID
+		if assigneeID, err := uuid.Parse(*req.AssigneeID); err == nil {
+			explicitAssigneeID = &assigneeID
+			newRequest.AssigneeID = explicitAssigneeID
 		}
-	} else {
-		newRequest.AssigneeID = sourceIncident.AssigneeID
 	}
 
 	// Handle optional department override
@@ -2329,6 +2561,17 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
+	// Apply the request workflow's assignment rules (round-robin / static / manual / auto-match)
+	if explicitAssigneeID != nil {
+		if err := s.incidentRepo.SetAssignees(ctx, newRequest.ID, []uuid.UUID{*explicitAssigneeID}); err != nil {
+			fmt.Printf("Warning: SetAssignees (convert explicit assignee) failed: %v\n", err)
+		}
+	} else {
+		s.applyCreationTimeAssignment(ctx, newRequest, initialState, userID, "")
+		// Nothing assigned it: fall back to the env role
+		s.applyEnvAssigneeFallbackToRequest(ctx, newRequest)
+	}
+
 	// Copy lookup values from source incident
 	if len(sourceIncident.LookupValues) > 0 {
 		if err := s.incidentRepo.SetLookupValues(ctx, newRequest.ID, sourceIncident.LookupValues); err != nil {
@@ -2354,21 +2597,23 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		}
 	}
 
-	// Find a terminal state from the source incident's workflow to close it
-	terminalState, err := s.getTerminalStateForWorkflow(ctx, sourceIncident.WorkflowID)
-	if err != nil {
-		fmt.Printf("Warning: failed to find terminal state for workflow: %v\n", err)
+	// Close the source incident through the workflow engine (same as Execute Transition):
+	// assignee/department resolution, requirements, history, notifications, integrations.
+	// The request is created first, so if the transition is rejected (permissions, missing
+	// comment, version conflict, ...) we remove it and leave the incident untouched.
+	closedIncident, closeErr := s.closeIncidentForConversion(ctx, sourceIncident, req.Version, req.TransitionComment, userID)
+	if closeErr != nil {
+		if delErr := s.incidentRepo.Delete(ctx, newRequest.ID); delErr != nil {
+			log.Printf("[CONVERT] failed to roll back request %s after close failure: %v", newRequest.IncidentNumber, delErr)
+		}
+		return nil, closeErr
 	}
+	sourceIncident = closedIncident
 
-	// Update source incident with reference to the converted request and close it
-	updateFields := map[string]interface{}{
+	// Link the closed source incident to the converted request
+	if err := s.incidentRepo.UpdateFields(ctx, incidentID, map[string]interface{}{
 		"converted_request_id": newRequest.ID,
-	}
-	if terminalState != nil {
-		updateFields["current_state_id"] = terminalState.ID
-		updateFields["closed_at"] = time.Now()
-	}
-	if err := s.incidentRepo.UpdateFields(ctx, incidentID, updateFields); err != nil {
+	}); err != nil {
 		fmt.Printf("Warning: failed to update source incident after conversion: %v\n", err)
 	}
 
@@ -2376,23 +2621,6 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 	createdRequest, err := s.incidentRepo.FindByIDWithRelations(ctx, newRequest.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch created request: %w", err)
-	}
-
-	// Create transition history entry for convert-to-request action
-	now := time.Now()
-	convertHistory := &models.IncidentTransitionHistory{
-		IncidentID:     incidentID,
-		TransitionID:   nil, // No specific transition for convert action
-		FromStateID:    sourceIncident.CurrentStateID,
-		ToStateID:      terminalState.ID,
-		PerformedByID:  userID,
-		Comment:        fmt.Sprintf("Converted to request %s", requestNumber),
-		TransitionedAt: now,
-		OldValues:      fmt.Sprintf(`{"record_type": "incident", "incident_number": "%s"}`, sourceIncident.IncidentNumber),
-		NewValues:      fmt.Sprintf(`{"record_type": "request", "request_number": "%s"}`, requestNumber),
-	}
-	if histErr := s.incidentRepo.CreateTransitionHistory(ctx, convertHistory); histErr != nil {
-		fmt.Printf("Warning: failed to create transition history for convert-to-request: %v\n", histErr)
 	}
 
 	// Create revision for source incident
@@ -2406,7 +2634,8 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		},
 	}
 	description = fmt.Sprintf("Incident converted to request %s", requestNumber)
-	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionFieldChange, description, changes, userID)
+	descriptionAr := fmt.Sprintf("تم تحويل الحادث إلى طلب %s", requestNumber)
+	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionFieldChange, description, descriptionAr, changes, userID)
 
 	// Create revision for new request
 	changes = []models.IncidentFieldChange{
@@ -2418,7 +2647,11 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		},
 	}
 	description = fmt.Sprintf("Request created from incident %s", sourceIncidentNumber)
-	_ = s.CreateRevision(ctx, newRequest.ID, models.RevisionActionCreated, description, changes, userID)
+	descriptionAr = fmt.Sprintf("تم إنشاء طلب من الحادث %s", sourceIncidentNumber)
+	_ = s.CreateRevision(ctx, newRequest.ID, models.RevisionActionCreated, description, descriptionAr, changes, userID)
+
+	// Creation parity with CreateIncident: WS broadcast, initial-state templates, assignee push
+	s.notifyRequestCreatedFromConversion(ctx, createdRequest, initialState, userID)
 
 	// Create comment on new request with feedback
 	if req.Feedback != nil && req.Feedback.Comment != "" {
@@ -2447,7 +2680,7 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 	go func(inc *models.Incident) {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("CONVERT-TO-REQUEST-SMS: Panic recovered for incident %s: %v", inc.IncidentNumber, r)
+				log.Printf("[SMS] flow=convert_to_request: Panic recovered for incident %s: %v", inc.IncidentNumber, r)
 			}
 		}()
 		s.sendConvertToRequestSMS(bgCtxNew, inc, requestNumber, userID)
@@ -2461,6 +2694,271 @@ func (s *incidentService) ConvertToRequest(ctx context.Context, incidentID uuid.
 		OriginalIncident: &originalResp,
 		NewRequest:       &newResp,
 	}, nil
+}
+
+// closeIncidentForConversion closes the source incident by moving it directly to the workflow's
+// "closed" terminal state (no transition is involved). It uses optimistic locking on the
+// incident version, then records a history row and a revision, like a status change.
+func (s *incidentService) closeIncidentForConversion(ctx context.Context, incident *models.Incident, version int, comment string, userID uuid.UUID) (*models.Incident, error) {
+	closedState, err := s.getClosedStateForWorkflow(ctx, incident.WorkflowID)
+	if err != nil {
+		return nil, errors.New("this workflow has no closed (terminal) state to move the incident to")
+	}
+
+	if version <= 0 {
+		version = incident.Version
+	}
+	now := time.Now()
+	if err := s.incidentRepo.UpdateFieldsWithVersion(ctx, incident.ID, map[string]interface{}{
+		"current_state_id": closedState.ID,
+		"closed_at":        now,
+	}, version); err != nil {
+		if errors.Is(err, repository.ErrVersionMismatch) {
+			return nil, errors.New(i18n.T(ctx, "incident_conflict"))
+		}
+		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "failed_to_update_source_incident"), err)
+	}
+
+	// Assignee for the closed incident comes from env (role code); otherwise the current
+	// assignee is kept.
+	newAssigneeID := s.resolveConversionAssignee(ctx, convertIncidentAssigneeRoleEnv, incident.IncidentNumber, incident.ClassificationID, incident.LocationID, incident.DepartmentID)
+	if newAssigneeID != nil {
+		if err := s.incidentRepo.AssignIncident(ctx, incident.ID, *newAssigneeID); err != nil {
+			fmt.Printf("Warning: convert-to-request assignment failed for %s: %v\n", incident.IncidentNumber, err)
+			LogAssignmentFailure(incident.ID, incident.IncidentNumber, err)
+			newAssigneeID = nil
+		} else if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{*newAssigneeID}); err != nil {
+			fmt.Printf("Warning: convert-to-request SetAssignees failed for %s: %v\n", incident.IncidentNumber, err)
+		}
+	}
+
+	comment = strings.TrimSpace(comment)
+	if comment == "" {
+		comment = "Converted to request"
+	}
+	history := &models.IncidentTransitionHistory{
+		IncidentID:     incident.ID,
+		FromStateID:    incident.CurrentStateID,
+		ToStateID:      closedState.ID,
+		PerformedByID:  userID,
+		Comment:        comment,
+		TransitionedAt: now,
+	}
+	if err := s.incidentRepo.CreateTransitionHistory(ctx, history); err != nil {
+		fmt.Printf("Warning: failed to create transition history for conversion: %v\n", err)
+	}
+
+	oldName, newName := "", closedState.Name
+	if incident.CurrentState != nil {
+		oldName = incident.CurrentState.Name
+	}
+	changes := []models.IncidentFieldChange{{
+		FieldName:  "status",
+		FieldLabel: "Status",
+		OldValue:   &oldName,
+		NewValue:   &newName,
+	}}
+	if newAssigneeID != nil {
+		var oldAssignee *string
+		if incident.AssigneeID != nil {
+			v := incident.AssigneeID.String()
+			oldAssignee = &v
+		}
+		newAssignee := newAssigneeID.String()
+		changes = append(changes, models.IncidentFieldChange{
+			FieldName:  "assignee_id",
+			FieldLabel: "Assignee",
+			OldValue:   oldAssignee,
+			NewValue:   &newAssignee,
+		})
+	}
+	_ = s.CreateRevision(ctx, incident.ID, models.RevisionActionStatusChanged,
+		fmt.Sprintf("Status changed from %s to %s (converted to request)", oldName, newName),
+		fmt.Sprintf("تم تغيير الحالة من %s إلى %s (تحويل إلى طلب)", oldName, newName),
+		changes, userID)
+
+	reloaded, err := s.incidentRepo.FindByIDWithRelations(ctx, incident.ID)
+	if err != nil {
+		return nil, errors.New(i18n.T(ctx, "failed_reload_after_transition"))
+	}
+	return reloaded, nil
+}
+
+// Env vars holding a role code used to pick the assignee on conversion.
+const (
+	// assignee of the incident being closed (fallback: its current assignee)
+	convertIncidentAssigneeRoleEnv = "CONVERT_TO_REQUEST_INCIDENT_ASSIGNEE_ROLE"
+	// assignee of the new request when nothing else assigns it
+	convertRequestAssigneeRoleEnv = "CONVERT_TO_REQUEST_REQUEST_ASSIGNEE_ROLE"
+)
+
+// resolveConversionAssignee picks one user (round-robin) holding the role code stored in the
+// given env var. It returns nil, meaning "no override", when the env is unset, the role is
+// unknown, or no user matches.
+func (s *incidentService) resolveConversionAssignee(ctx context.Context, envName, recordNumber string, classID, locID, deptID *uuid.UUID) *uuid.UUID {
+	roleCode := strings.TrimSpace(os.Getenv(envName))
+	if roleCode == "" && envName == convertIncidentAssigneeRoleEnv {
+		// legacy name, kept so an older .env keeps working
+		roleCode = strings.TrimSpace(os.Getenv("CONVERT_TO_REQUEST_ASSIGNEE_ROLE"))
+	}
+	if roleCode == "" {
+		return nil
+	}
+	role, err := s.roleRepo.FindByCode(ctx, roleCode)
+	if err != nil || role == nil {
+		log.Printf("[CONVERT] %s role %q not found, no override: %v", envName, roleCode, err)
+		return nil
+	}
+	userID, err := s.getNextRoundRobinAssignee(ctx, []uuid.UUID{role.ID}, classID, locID, deptID)
+	if err != nil || userID == nil {
+		log.Printf("[CONVERT] %s: no user for role %q on %s, no override: %v", envName, roleCode, recordNumber, err)
+		return nil
+	}
+	return userID
+}
+
+// applyEnvAssigneeFallbackToRequest assigns a newly created request to a user holding the
+// CONVERT_TO_REQUEST_REQUEST_ASSIGNEE_ROLE role when nothing else (explicit assignee, initial-state
+// rules) assigned it. No-op if the request already has an assignee or the env is unset.
+func (s *incidentService) applyEnvAssigneeFallbackToRequest(ctx context.Context, request *models.Incident) {
+	current, err := s.incidentRepo.FindByID(ctx, request.ID)
+	if err != nil || current.AssigneeID != nil {
+		return
+	}
+	userID := s.resolveConversionAssignee(ctx, convertRequestAssigneeRoleEnv, request.IncidentNumber, request.ClassificationID, request.LocationID, request.DepartmentID)
+	if userID == nil {
+		return
+	}
+	if err := s.incidentRepo.AssignIncident(ctx, request.ID, *userID); err != nil {
+		fmt.Printf("Warning: convert-to-request fallback assignment failed for %s: %v\n", request.IncidentNumber, err)
+		LogAssignmentFailure(request.ID, request.IncidentNumber, err)
+		return
+	}
+	if err := s.incidentRepo.SetAssignees(ctx, request.ID, []uuid.UUID{*userID}); err != nil {
+		fmt.Printf("Warning: convert-to-request fallback SetAssignees failed for %s: %v\n", request.IncidentNumber, err)
+	}
+}
+
+// getClosedStateForWorkflow returns the workflow's terminal state with code "closed",
+// falling back to the first active terminal state.
+func (s *incidentService) getClosedStateForWorkflow(ctx context.Context, workflowID uuid.UUID) (*models.WorkflowState, error) {
+	var state models.WorkflowState
+	err := s.db.WithContext(ctx).
+		Where("workflow_id = ? AND state_type = ? AND is_active = ?", workflowID, "terminal", true).
+		Order("CASE WHEN code = 'closed' THEN 0 ELSE 1 END, sort_order, id").
+		First(&state).Error
+	if err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+// resolveRequestWorkflowID picks the request workflow via the workflow matcher when the client
+// did not supply one.
+func (s *incidentService) resolveRequestWorkflowID(ctx context.Context, source *models.Incident, req *models.ConvertToRequestRequest) (uuid.UUID, error) {
+	if s.workflowService == nil {
+		return uuid.Nil, errors.New("workflow service unavailable")
+	}
+	classID, err := uuid.Parse(req.ClassificationID)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	wfID, err := s.workflowService.ResolveWorkflow(ctx, source.LocationID, &classID, "request")
+	if err != nil || wfID == uuid.Nil {
+		return uuid.Nil, errors.New("no workflow matched")
+	}
+	return wfID, nil
+}
+
+// notifyRequestCreatedFromConversion mirrors the post-creation notifications of CreateIncident
+// for a request created by conversion.
+func (s *incidentService) notifyRequestCreatedFromConversion(ctx context.Context, created *models.Incident, initialState *models.WorkflowState, actorID uuid.UUID) {
+	if s.wsHub != nil {
+		resp := models.ToIncidentResponse(created)
+		var transitionRoleIDs []string
+		if created.Workflow != nil {
+			seen := make(map[uuid.UUID]bool)
+			for _, t := range created.Workflow.Transitions {
+				if t.FromStateID != initialState.ID {
+					continue
+				}
+				for _, role := range t.AllowedRoles {
+					if !seen[role.ID] {
+						transitionRoleIDs = append(transitionRoleIDs, role.ID.String())
+						seen[role.ID] = true
+					}
+				}
+			}
+		}
+		s.wsHub.BroadcastToAll("incident_created", map[string]interface{}{
+			"incident":            resp,
+			"transition_role_ids": transitionRoleIDs,
+		})
+	}
+
+	if s.notificationService != nil && (initialState.NewIncidentEmailTemplateCode != "" || initialState.NewIncidentSMSTemplateCode != "") {
+		bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[CONVERT] notify panic recovered for %s: %v", created.IncidentNumber, r)
+				}
+			}()
+			vars := BuildIncidentVariables(created, nil, nil)
+			if created.Assignee != nil {
+				vars["first_name"] = created.Assignee.FirstName
+				vars["last_name"] = created.Assignee.LastName
+			}
+			send := func(channel, code string, to []string) {
+				if code == "" || len(to) == 0 {
+					return
+				}
+				result, err := s.notificationService.SendNotification(bgCtx, channel, &code, "en", to, nil, nil, "", "", vars, nil, &actorID, nil)
+				if result != nil && result.SentLog != nil {
+					_ = s.notificationService.SetIncidentIDOnLogs(bgCtx, []uuid.UUID{result.SentLog.ID}, created.ID)
+				}
+				if err != nil {
+					log.Printf("[CONVERT] %s notification failed for %s: %v", channel, created.IncidentNumber, err)
+				}
+			}
+			var emails, phones []string
+			if created.Assignee != nil {
+				if created.Assignee.Email != "" {
+					emails = append(emails, created.Assignee.Email)
+				}
+				if created.Assignee.Phone != "" {
+					phones = append(phones, created.Assignee.Phone)
+				}
+			}
+			if created.Reporter != nil && created.Reporter.Email != "" {
+				emails = append(emails, created.Reporter.Email)
+			} else if created.ReporterEmail != "" {
+				emails = append(emails, created.ReporterEmail)
+			}
+			if created.Reporter != nil && created.Reporter.Phone != "" {
+				phones = append(phones, created.Reporter.Phone)
+			}
+			send("email", initialState.NewIncidentEmailTemplateCode, emails)
+			send("sms", initialState.NewIncidentSMSTemplateCode, phones)
+		}()
+	}
+
+	if s.fcmService != nil && created.AssigneeID != nil {
+		bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
+		assignee, id, number := *created.AssigneeID, created.ID, created.IncidentNumber
+		title, desc := created.Title, created.Description
+		go func() {
+			pushReq := &models.PushRequest{
+				UserID: assignee,
+				Title:  fmt.Sprintf("New REQUEST Assigned: %s", number),
+				Body:   fmt.Sprintf("Request \"%s\" has been assigned to you. %s", title, desc),
+				Data:   map[string]string{"id": id.String(), "type": "REQUEST"},
+			}
+			if err := s.fcmService.Push(bgCtx, pushReq); err != nil {
+				log.Printf("FCM-CONVERT-REQUEST: failed for assignee %s: %v", assignee, err)
+			}
+		}()
+	}
 }
 
 // CanConvertToRequest checks if the user can convert the incident to a request
@@ -2695,36 +3193,14 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 			}
 		}
 
-		// Execute transition if provided for this specific incident
-		if item, ok := transitionMap[incidentIDStr]; ok && item.TransitionID != "" {
-			_, err := uuid.Parse(item.TransitionID)
-			if err == nil {
-				transitionReq := &models.IncidentTransitionRequest{
-					TransitionID: item.TransitionID,
-					Comment:      item.TransitionComment,
-				}
-
-				_, err := s.ExecuteTransition(ctx, incidentID, transitionReq, userID, userRoleIDs)
-				if err != nil {
-					result.Success = false
-					errMsg := fmt.Sprintf("failed to execute transition: %v", err)
-					result.Error = &errMsg
-					response.Results = append(response.Results, result)
-					response.Failed++
-					continue
-				}
-
-				// Reload the incident after transition
-				sourceIncident, err = s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
-				if err != nil {
-					result.Success = false
-					errMsg := "failed to reload incident after transition"
-					result.Error = &errMsg
-					response.Results = append(response.Results, result)
-					response.Failed++
-					continue
-				}
-			}
+		// Only incidents in the configured convertible state can be converted (same as single convert)
+		if !s.isInConvertibleState(sourceIncident) {
+			result.Success = false
+			errMsg := i18n.T(ctx, "convert_requires_resolution_state")
+			result.Error = &errMsg
+			response.Results = append(response.Results, result)
+			response.Failed++
+			continue
 		}
 
 		// Validate classification and location match across incidents
@@ -2896,11 +3372,9 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 			CustomFields:      firstIncident.CustomFields,
 		}
 
-		// Handle assignee
+		// Handle assignee (explicit override; otherwise initial-state rules apply after creation)
 		if assigneeID != nil {
 			newRequest.AssigneeID = assigneeID
-		} else {
-			newRequest.AssigneeID = firstIncident.AssigneeID
 		}
 
 		// Handle department
@@ -2915,10 +3389,9 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 			newRequest.DueDate = dueDate
 		}
 
-		// Calculate SLA deadline
-		if slaDur := initialState.SLADuration(); slaDur > 0 {
-			deadline := time.Now().Add(slaDur)
-			newRequest.SLADeadline = &deadline
+		// Calculate SLA deadline (classification criticality, falling back to the state SLA)
+		if deadline, slaErr := s.calculateSLADeadline(ctx, &classificationID, []string{}, initialState.SLADuration()); slaErr == nil && deadline != nil {
+			newRequest.SLADeadline = deadline
 		}
 
 		// Create the single request
@@ -2935,6 +3408,77 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 			}
 			return response, nil
 		}
+
+		// Apply the request workflow's assignment rules / record explicit assignee
+		if assigneeID != nil {
+			if err := s.incidentRepo.SetAssignees(ctx, newRequest.ID, []uuid.UUID{*assigneeID}); err != nil {
+				fmt.Printf("Warning: SetAssignees (bulk convert) failed: %v\n", err)
+			}
+		} else {
+			s.applyCreationTimeAssignment(ctx, newRequest, initialState, userID, "")
+			s.applyEnvAssigneeFallbackToRequest(ctx, newRequest)
+		}
+	}
+
+	// Close every source incident (direct status change to "closed", env-role assignee with
+	// fallback to the current one). Incidents that cannot be closed (e.g. version conflict)
+	// are reported as failed and excluded from the request.
+	failedIDs := make(map[string]bool)
+	closedIncidents := make([]*models.Incident, 0, len(validIncidents))
+	for _, src := range validIncidents {
+		comment := fmt.Sprintf("Converted to request %s (bulk)", requestNumber)
+		if item, ok := transitionMap[src.ID.String()]; ok && strings.TrimSpace(item.TransitionComment) != "" {
+			comment = item.TransitionComment
+		}
+		closed, closeErr := s.closeIncidentForConversion(ctx, src, 0, comment, userID)
+		if closeErr != nil {
+			failedIDs[src.ID.String()] = true
+			response.Results = append(response.Results, models.BulkConvertToRequestResult{
+				IncidentID: src.ID,
+				Success:    false,
+				Error:      stringPtr(closeErr.Error()),
+			})
+			response.Failed++
+			continue
+		}
+		closedIncidents = append(closedIncidents, closed)
+	}
+
+	if len(failedIDs) > 0 {
+		// Keep only closed incidents in the request's source list
+		finalSourceIDs := make([]string, 0, len(sourceIncidentIDStrs))
+		for _, id := range sourceIncidentIDStrs {
+			if !failedIDs[id] {
+				finalSourceIDs = append(finalSourceIDs, id)
+			}
+		}
+		if existingRequestID != nil || len(closedIncidents) > 0 {
+			finalJSON, marshalErr := json.Marshal(finalSourceIDs)
+			if marshalErr == nil {
+				fields := map[string]interface{}{"source_incident_ids": finalJSON}
+				if len(closedIncidents) > 0 && (existingRequestID == nil || existingRequest.SourceIncidentID == nil) {
+					fields["source_incident_id"] = closedIncidents[0].ID
+				} else if len(closedIncidents) == 0 && existingRequest != nil && existingRequest.SourceIncidentID == nil {
+					fields["source_incident_id"] = nil
+				}
+				if err := s.incidentRepo.UpdateFields(ctx, newRequest.ID, fields); err != nil {
+					fmt.Printf("Warning: failed to trim request source incidents: %v\n", err)
+				}
+			}
+		}
+	}
+	if len(closedIncidents) == 0 {
+		if existingRequestID == nil {
+			if delErr := s.incidentRepo.Delete(ctx, newRequest.ID); delErr != nil {
+				log.Printf("[CONVERT] failed to roll back bulk request %s: %v", newRequest.IncidentNumber, delErr)
+			}
+		}
+		return response, nil
+	}
+	validIncidents = closedIncidents
+	validIncidentIDs = validIncidentIDs[:0]
+	for _, inc := range validIncidents {
+		validIncidentIDs = append(validIncidentIDs, inc.ID)
 	}
 
 	// Copy lookup values from all valid incidents
@@ -2983,40 +3527,12 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 		}
 	}
 
-	// Find a terminal state to close source incidents
-	terminalState, err := s.getTerminalStateForWorkflow(ctx, firstIncident.WorkflowID)
-	if err != nil {
-		fmt.Printf("Warning: failed to find terminal state for workflow: %v\n", err)
-	}
-
-	// Update ALL source incidents to reference the same request and close them
+	// Link ALL closed source incidents to the same request
 	for _, sourceIncident := range validIncidents {
-		updateFields := map[string]interface{}{
+		if err := s.incidentRepo.UpdateFields(ctx, sourceIncident.ID, map[string]interface{}{
 			"converted_request_id": newRequest.ID,
-		}
-		if terminalState != nil {
-			updateFields["current_state_id"] = terminalState.ID
-			updateFields["closed_at"] = time.Now()
-		}
-		if err := s.incidentRepo.UpdateFields(ctx, sourceIncident.ID, updateFields); err != nil {
+		}); err != nil {
 			fmt.Printf("Warning: failed to update source incident %s after conversion: %v\n", sourceIncident.IncidentNumber, err)
-		}
-
-		// Create transition history entry for convert-to-request action (bulk)
-		now := time.Now()
-		convertHistory := &models.IncidentTransitionHistory{
-			IncidentID:     sourceIncident.ID,
-			TransitionID:   nil,
-			FromStateID:    sourceIncident.CurrentStateID,
-			ToStateID:      terminalState.ID,
-			PerformedByID:  userID,
-			Comment:        fmt.Sprintf("Converted to request %s (bulk)", requestNumber),
-			TransitionedAt: now,
-			OldValues:      fmt.Sprintf(`{"record_type": "incident", "incident_number": "%s"}`, sourceIncident.IncidentNumber),
-			NewValues:      fmt.Sprintf(`{"record_type": "request", "request_number": "%s"}`, requestNumber),
-		}
-		if histErr := s.incidentRepo.CreateTransitionHistory(ctx, convertHistory); histErr != nil {
-			fmt.Printf("Warning: failed to create transition history for bulk convert-to-request: %v\n", histErr)
 		}
 
 		// Create revision for source incident
@@ -3029,7 +3545,8 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 			},
 		}
 		desc := fmt.Sprintf("Incident converted to request %s (bulk conversion)", requestNumber)
-		_ = s.CreateRevision(ctx, sourceIncident.ID, models.RevisionActionFieldChange, desc, changes, userID)
+		descAr := fmt.Sprintf("تم تحويل الحادث إلى طلب %s (تحويل جماعي)", requestNumber)
+		_ = s.CreateRevision(ctx, sourceIncident.ID, models.RevisionActionFieldChange, desc, descAr, changes, userID)
 
 		// Apply feedback if provided for this incident
 		feedback, hasFeedback := feedbackMap[sourceIncident.ID.String()]
@@ -3065,7 +3582,8 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 				}
 			}
 			feedbackDesc := fmt.Sprintf("Feedback provided during conversion to request %s", requestNumber)
-			_ = s.CreateRevision(ctx, sourceIncident.ID, models.RevisionActionFieldChange, feedbackDesc, feedbackChanges, userID)
+			feedbackDescAr := fmt.Sprintf("تم تقديم ملاحظات أثناء التحويل إلى طلب %s", requestNumber)
+			_ = s.CreateRevision(ctx, sourceIncident.ID, models.RevisionActionFieldChange, feedbackDesc, feedbackDescAr, feedbackChanges, userID)
 		}
 
 		// Send SMS to citizen for each converted incident
@@ -3074,7 +3592,7 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 		go func(inc *models.Incident) {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("CONVERT-TO-REQUEST-SMS: Panic recovered for incident %s: %v", inc.IncidentNumber, r)
+					log.Printf("[SMS] flow=convert_to_request: Panic recovered for incident %s: %v", inc.IncidentNumber, r)
 				}
 			}()
 			s.sendConvertToRequestSMS(bgCtxBulk, inc, bulkReqNum, userID)
@@ -3096,12 +3614,15 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 		},
 	}
 	var desc string
+	var descAr string
 	if existingRequestID != nil {
 		desc = fmt.Sprintf("%d incidents added to existing request via bulk conversion", len(validIncidents))
+		descAr = fmt.Sprintf("تمت إضافة %d حوادث إلى الطلب الحالي عبر التحويل الجماعي", len(validIncidents))
 	} else {
 		desc = fmt.Sprintf("Request created from %d incidents via bulk conversion", len(validIncidents))
+		descAr = fmt.Sprintf("تم إنشاء طلب من %d حوادث عبر التحويل الجماعي", len(validIncidents))
 	}
-	_ = s.CreateRevision(ctx, newRequest.ID, models.RevisionActionCreated, desc, changes, userID)
+	_ = s.CreateRevision(ctx, newRequest.ID, models.RevisionActionCreated, desc, descAr, changes, userID)
 
 	// Create comment on request with feedback if provided
 	if req.Feedback != nil && req.Feedback.Comment != "" {
@@ -3120,6 +3641,11 @@ func (s *incidentService) BulkConvertToRequest(ctx context.Context, req *models.
 	if err != nil {
 		// Still return success but note the fetch error
 		fmt.Printf("Warning: failed to fetch created request: %v\n", err)
+	}
+
+	// Creation parity with CreateIncident for a newly created request
+	if existingRequestID == nil && createdRequest != nil && initialState != nil {
+		s.notifyRequestCreatedFromConversion(ctx, createdRequest, initialState, userID)
 	}
 
 	// Build successful results for all valid incidents
@@ -3147,6 +3673,28 @@ func stringPtr(s string) *string {
 }
 
 // State transitions
+
+// momraTransitionAttachments resolves the attachments added on a transition
+// into UpdateStatusV2 Attachments. AttachmentURL is the backend-relative path
+// /Momra/API/EPM/Attachments/{id} — MOMRA prefixes Automax's backend host and
+// downloads it with its EPM Bearer token (MinIO isn't reachable from outside).
+// The path is keyed on the permanent attachment ID, so it never expires.
+// Attachments that can't be resolved are skipped rather than failing the sync.
+func (s *incidentService) momraTransitionAttachments(ctx context.Context, attachmentIDs []string) []MOMRAStatusAttachment {
+	var out []MOMRAStatusAttachment
+	for _, idStr := range attachmentIDs {
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			continue
+		}
+		attachment, err := s.incidentRepo.FindAttachmentByID(ctx, id)
+		if err != nil || attachment == nil {
+			continue
+		}
+		out = append(out, toMOMRAStatusAttachment(attachment))
+	}
+	return out
+}
 
 func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid.UUID, req *models.IncidentTransitionRequest, userID uuid.UUID, userRoleIDs []uuid.UUID) (*models.IncidentResponse, error) {
 	// Begin transaction
@@ -3206,6 +3754,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 	// Get the transition with relations
 	transition, err := s.workflowRepo.FindTransitionByIDWithRelations(ctx, transitionID)
 	if err != nil {
+		tx.Rollback()
 		return nil, errors.New(i18n.T(ctx, "transition_not_found"))
 	}
 
@@ -3372,6 +3921,8 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 
 	// Validate duration when transitioning INTO a partial_close state
 	if newState.IsPartialClose {
+		// Persist the canonical English label even if the client sent an Arabic one.
+		req.ReadyToCloseDuration = models.NormalizeDurationLabel(req.ReadyToCloseDuration)
 		if req.ReadyToCloseDuration == "" {
 			tx.Rollback()
 			return nil, errors.New(i18n.T(ctx, "partial_close_duration_required"))
@@ -3822,6 +4373,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		RevisionNumber:        revNum,
 		ActionType:            models.RevisionActionStatusChanged,
 		ActionDescription:     revDescription,
+		ActionDescriptionAr:   fmt.Sprintf("تم تغيير الحالة من %s إلى %s", transition.FromState.Name, newState.Name),
 		Changes:               string(changesBytes),
 		PerformedByID:         userID,
 		TransitionHistoryID:   &history.ID,
@@ -3847,6 +4399,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			RevisionNumber:        pcRevNum,
 			ActionType:            models.RevisionActionStatusChanged,
 			ActionDescription:     pcDescription,
+			ActionDescriptionAr:   fmt.Sprintf("تم تغيير الحالة من %s إلى %s — مدة الإغلاق الجزئي: %s", transition.FromState.Name, newState.Name, req.ReadyToCloseDuration),
 			Changes:               string(pcChangesBytes),
 			PerformedByID:         userID,
 			SyncedIncidentNumbers: syncedNumbersJSON,
@@ -3877,16 +4430,16 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 			// synchronously here — before the goroutine, which uses context.Background()
 			// and so can't read the request-scoped ctx/req itself — then closed over.
 			if s.momraStatusSyncService != nil {
-				var operatorName, operatorID string
+				input := MOMRAStatusSyncInput{Comment: strings.TrimSpace(req.Comment)}
 				if actor, actorErr := s.userRepo.FindByID(ctx, userID); actorErr == nil && actor != nil {
-					operatorName = strings.TrimSpace(actor.FirstName + " " + actor.LastName)
-					if operatorName == "" {
-						operatorName = actor.Username
+					input.OperatorName = strings.TrimSpace(actor.FirstName + " " + actor.LastName)
+					if input.OperatorName == "" {
+						input.OperatorName = actor.Username
 					}
-					operatorID = actor.Username
+					input.OperatorID = actor.Username
 				}
-				eeNotesFromMUN := req.Comment
-				go s.momraStatusSyncService.SyncIncidentStatus(context.Background(), updatedForExec, transition.ToStateID, operatorName, operatorID, eeNotesFromMUN)
+				input.Attachments = s.momraTransitionAttachments(ctx, req.Attachments)
+				go s.momraStatusSyncService.SyncIncidentStatus(context.Background(), updatedForExec, transition.ToStateID, input)
 			}
 		}
 	}
@@ -4125,7 +4678,7 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 
 	// Send SMS to citizen when Not Belong transition closes the incident.
 	if transition.IsNotBelong {
-		log.Printf("NOT-BELONG-SMS: Triggered for incident %s and transition.IsNotBelong: %v", incident.IncidentNumber, transition.IsNotBelong)
+		log.Printf("[SMS] flow=not_belong: Triggered for incident %s and transition.IsNotBelong: %v", incident.IncidentNumber, transition.IsNotBelong)
 		var assignedDeptID *uuid.UUID
 		if deptIDVal, ok := updates["department_id"]; ok {
 			if deptID, ok := deptIDVal.(uuid.UUID); ok {
@@ -4136,32 +4689,32 @@ func (s *incidentService) ExecuteTransition(ctx context.Context, incidentID uuid
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("NOT-BELONG-SMS: Panic recovered for incident %s: %v", incident.IncidentNumber, r)
+					log.Printf("[SMS] flow=not_belong: Panic recovered for incident %s: %v", incident.IncidentNumber, r)
 				}
 			}()
 
-			log.Printf("NOT-BELONG-SMS: Sending SMS for incident %s", incident.IncidentNumber)
+			log.Printf("[SMS] flow=not_belong: Sending SMS for incident %s", incident.IncidentNumber)
 			s.SendNotBelongClosureSMS(bgCtx, incident, incident.CreatedByMobile, incident.ReporterID, transition, assignedDeptID, userID)
-			log.Printf("NOT-BELONG-SMS: SMS process completed for incident %s", incident.IncidentNumber)
+			log.Printf("[SMS] flow=not_belong: SMS process completed for incident %s", incident.IncidentNumber)
 		}()
 	}
 
 	// Send SMS to citizen when Missing Incident Information transition closes the incident.
 
 	if transition.IsMissingInfo {
-		log.Printf("MISSING-INFO-SMS: Triggered for incident %s and transition.IsMissingInfo: %v", incident.IncidentNumber, transition.IsMissingInfo)
+		log.Printf("[SMS] flow=missing_info: Triggered for incident %s and transition.IsMissingInfo: %v", incident.IncidentNumber, transition.IsMissingInfo)
 		bgCtx := context.WithValue(context.Background(), constants.ContextKeys.ACCEPT_LANGUAGE, ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE))
 		//go s.SendMissingInfoClosureSMS(bgCtx, incident.IncidentNumber, incident.CreatedByMobile, incident.ReporterID, userID)
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("MISSING-INFO-SMS: Panic recovered for incident %s: %v", incident.IncidentNumber, r)
+					log.Printf("[SMS] flow=missing_info: Panic recovered for incident %s: %v", incident.IncidentNumber, r)
 				}
 			}()
 
-			log.Printf("MISSING-INFO-SMS: Sending SMS for incident %s", incident.IncidentNumber)
+			log.Printf("[SMS] flow=missing_info: Sending SMS for incident %s", incident.IncidentNumber)
 			s.SendMissingInfoClosureSMS(bgCtx, incident, incident.CreatedByMobile, incident.ReporterID, userID)
-			log.Printf("MISSING-INFO-SMS: SMS process completed for incident %s", incident.IncidentNumber)
+			log.Printf("[SMS] flow=missing_info: SMS process completed for incident %s", incident.IncidentNumber)
 		}()
 	}
 
@@ -4449,7 +5002,8 @@ func (s *incidentService) AddComment(ctx context.Context, incidentID uuid.UUID, 
 		authorName = created.Author.Email
 	}
 	description := fmt.Sprintf("Comment added by %s - %s", authorName, truncateString(req.Content, 50))
-	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionCommentAdded, description, nil, authorID)
+	descriptionAr := fmt.Sprintf("تم إضافة تعليق بواسطة %s - %s", authorName, truncateString(req.Content, 50))
+	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionCommentAdded, description, descriptionAr, nil, authorID)
 
 	resp := models.ToIncidentCommentResponse(created)
 	return &resp, nil
@@ -4600,7 +5154,8 @@ func (s *incidentService) UpdateComment(ctx context.Context, commentID uuid.UUID
 		},
 	}
 	description := fmt.Sprintf("Comment modified - %s", truncateString(req.Content, 50))
-	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionCommentModified, description, changes, userID)
+	descriptionAr := fmt.Sprintf("تم تعديل التعليق - %s", truncateString(req.Content, 50))
+	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionCommentModified, description, descriptionAr, changes, userID)
 
 	resp := models.ToIncidentCommentResponse(comment)
 	return &resp, nil
@@ -4626,7 +5181,8 @@ func (s *incidentService) DeleteComment(ctx context.Context, commentID uuid.UUID
 
 	// Create revision for comment deleted
 	description := fmt.Sprintf("Comment deleted - %s", truncateString(oldContent, 50))
-	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionCommentDeleted, description, nil, userID)
+	descriptionAr := fmt.Sprintf("تم حذف التعليق - %s", truncateString(oldContent, 50))
+	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionCommentDeleted, description, descriptionAr, nil, userID)
 
 	return nil
 }
@@ -4663,7 +5219,8 @@ func (s *incidentService) AddAttachment(ctx context.Context, incidentID uuid.UUI
 
 	// Create revision for attachment added
 	description := fmt.Sprintf("Attachment added - %s", attachment.FileName)
-	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionAttachmentAdded, description, nil, attachment.UploadedByID)
+	descriptionAr := fmt.Sprintf("تم إضافة مرفق - %s", attachment.FileName)
+	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionAttachmentAdded, description, descriptionAr, nil, attachment.UploadedByID)
 
 	// Sync attachment to merged child incidents if this is a master incident
 	if s.incidentMergeRepo != nil {
@@ -4724,8 +5281,13 @@ func (s *incidentService) syncAttachmentToMergedIncidents(ctx context.Context, m
 			masterIncident.IncidentNumber,
 			masterAttachment.FileName,
 		)
+		descriptionAr := fmt.Sprintf(
+			"تم إضافة مرفق إلى الحادث الرئيسي %s - %s",
+			masterIncident.IncidentNumber,
+			masterAttachment.FileName,
+		)
 
-		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionAttachmentAdded, description, nil, uploadedBy); revErr != nil {
+		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionAttachmentAdded, description, descriptionAr, nil, uploadedBy); revErr != nil {
 			fmt.Printf("[DEBUG] Failed to create revision for child %s: %v\n", merged.IncidentNumber, revErr)
 		}
 	}
@@ -4848,7 +5410,8 @@ func (s *incidentService) DeleteAttachment(ctx context.Context, attachmentID uui
 
 	// Create revision for attachment removed
 	description := fmt.Sprintf("Attachment removed - %s", fileName)
-	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionAttachmentRemoved, description, nil, userID)
+	descriptionAr := fmt.Sprintf("تم حذف المرفق - %s", fileName)
+	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionAttachmentRemoved, description, descriptionAr, nil, userID)
 
 	return nil
 }
@@ -4864,6 +5427,16 @@ func (s *incidentService) AssignIncident(ctx context.Context, incidentID, assign
 	incident, err := s.incidentRepo.FindByIDWithRelations(ctx, incidentID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Enforce lock_assignee: reject reassignment; re-assigning the same user is a no-op.
+	requested := assigneeID.String()
+	if err := ensureAssigneeNotLocked(incident, incident.CurrentState, &requested); err != nil {
+		return nil, err
+	}
+	if isAssigneeLocked(incident, incident.CurrentState) {
+		resp := models.ToIncidentResponse(incident)
+		return &resp, nil
 	}
 
 	oldAssigneeName := "Unassigned"
@@ -4902,7 +5475,8 @@ func (s *incidentService) AssignIncident(ctx context.Context, incidentID, assign
 		},
 	}
 	description := fmt.Sprintf("AssignedTo changed from %s to %s", oldAssigneeName, newAssigneeName)
-	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionAssigneeChanged, description, changes, userID)
+	descriptionAr := fmt.Sprintf("تم تغيير المسند إليه من %s إلى %s", oldAssigneeName, newAssigneeName)
+	_ = s.CreateRevision(ctx, incidentID, models.RevisionActionAssigneeChanged, description, descriptionAr, changes, userID)
 
 	// Sync assignee change to merged child incidents
 	if s.incidentMergeRepo != nil {
@@ -5015,8 +5589,13 @@ func (s *incidentService) syncAssigneeToMergedIncidents(ctx context.Context, mas
 			masterIncident.IncidentNumber,
 			newAssigneeName,
 		)
+		descriptionAr := fmt.Sprintf(
+			"تم تغيير مسند الحادث الرئيسي %s إلى %s",
+			masterIncident.IncidentNumber,
+			newAssigneeName,
+		)
 
-		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionAssigneeChanged, description, changes, userID); revErr != nil {
+		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionAssigneeChanged, description, descriptionAr, changes, userID); revErr != nil {
 			fmt.Printf("[DEBUG] Failed to create revision for child %s: %v\n", merged.IncidentNumber, revErr)
 		}
 	}
@@ -5067,7 +5646,11 @@ func (s *incidentService) SyncLocationToMergedIncidents(ctx context.Context, mas
 			"Location changed to '%s' (synced from master incident %s)",
 			newLocationName, masterIncident.IncidentNumber,
 		)
-		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionFieldChange, description, changes, userID); revErr != nil {
+		descriptionAr := fmt.Sprintf(
+			"تم تغيير الموقع إلى '%s' (مزامنة من الحادث الرئيسي %s)",
+			newLocationName, masterIncident.IncidentNumber,
+		)
+		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionFieldChange, description, descriptionAr, changes, userID); revErr != nil {
 			log.Printf("[SyncLocation] Failed to create revision for child %s: %v", merged.IncidentNumber, revErr)
 		}
 	}
@@ -5228,8 +5811,6 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 	// Get current user who performed the closure (for audit purposes)
 	_, _ = s.userRepo.FindByID(ctx, userID)
 
-	now := time.Now()
-
 	// Process each merged incident
 	for i, merged := range mergedIncidents {
 		fmt.Printf("\n[DEBUG] === Processing merged incident %d/%d: %s ===\n", i+1, len(mergedIncidents), merged.IncidentNumber)
@@ -5255,53 +5836,19 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 		// when uploaded via syncAttachmentToMergedIncidents(). Copying them again would cause duplicates.
 
 		// Send SMS notification to incident owner (reporter)
-		fmt.Printf("[DEBUG] Checking reporter for SMS - Reporter: %+v\n", merged.Reporter)
 		if merged.Reporter != nil && merged.Reporter.Phone != "" {
-			fmt.Printf("[DEBUG] Sending SMS to: %s\n", merged.Reporter.Phone)
-
-			smsMessage := fmt.Sprintf(
-				"Your incident %s has been automatically closed as it was merged with master incident %s. The master incident has been resolved.",
-				merged.IncidentNumber,
-				masterIncident.IncidentNumber,
+			smsErr := s.notificationService.SendSMSTemplate(
+				ctx, "INCIDENT_MERGE_CLOSED_SMS", SMSLanguageFromContext(ctx), merged.Reporter.Phone,
+				map[string]string{
+					"incident_number":        merged.IncidentNumber,
+					"master_incident_number": masterIncident.IncidentNumber,
+				},
+				&userID, &merged.ID,
 			)
-			fmt.Printf("[DEBUG] SMS Message: %s\n", smsMessage)
-
-			// Send actual SMS via Twilio
-			fmt.Println("[DEBUG] Calling utils.SendSMS...")
-			_, smsErr := utils.SendSMS(ctx, merged.Reporter.Phone, smsMessage)
 			if smsErr != nil {
-				fmt.Printf("[DEBUG] SMS send failed: %v\n", smsErr)
+				log.Printf("MERGE-CLOSE-SMS: failed for incident %s: %v", merged.IncidentNumber, smsErr)
 			} else {
-				fmt.Println("[DEBUG] SMS sent successfully!")
-			}
-
-			// Log notification regardless of SMS success
-			notification := &models.NotificationLog{
-				Channel:    "sms",
-				Direction:  "outbound",
-				Category:   "sent",
-				Language:   "en",
-				Recipients: models.RecipientArray{{Email: merged.Reporter.Phone, Type: "to", Status: "sent"}},
-				IncidentID: &merged.ID,
-				Subject:    "Incident Closed",
-				Body:       smsMessage,
-				Status:     "sent",
-				Provider:   "twilio",
-				IsRead:     false,
-				SentBy:     &userID,
-				SentAt:     &now,
-			}
-			if smsErr != nil {
-				notification.Status = "failed"
-				notification.ErrorMessage = smsErr.Error()
-				notification.FailureCode = ClassifyFailureCode(smsErr)
-			}
-
-			fmt.Println("[DEBUG] Creating notification log...")
-			if notifErr := s.incidentRepo.CreateNotification(ctx, notification); notifErr != nil {
-				fmt.Printf("[DEBUG] Failed to create notification log: %v\n", notifErr)
-			} else {
-				fmt.Printf("[DEBUG] Notification logged (status: %s)\n", notification.Status)
+				log.Printf("MERGE-CLOSE-SMS: sent via template for incident %s", merged.IncidentNumber)
 			}
 		} else {
 			fmt.Println("[DEBUG] SKIP SMS: No reporter or phone number")
@@ -5327,8 +5874,12 @@ func (s *incidentService) autoCloseMergedIncidents(ctx context.Context, masterIn
 			"Automatically closed due to master incident %s being closed",
 			masterIncident.IncidentNumber,
 		)
+		descriptionAr := fmt.Sprintf(
+			"تم الإغلاق تلقائيًا نظرًا لأن الحادث الرئيسي %s مغلق",
+			masterIncident.IncidentNumber,
+		)
 
-		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionStatusChanged, description, changes, userID); revErr != nil {
+		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionStatusChanged, description, descriptionAr, changes, userID); revErr != nil {
 			fmt.Printf("[DEBUG] Failed to create revision: %v\n", revErr)
 		}
 	}
@@ -5369,62 +5920,24 @@ func (s *incidentService) notifyStatusChangeToMergedIncidents(ctx context.Contex
 	}
 	fmt.Printf("[DEBUG] Master incident: %s, New state: %s\n", masterIncident.IncidentNumber, newStateName)
 
-	now := time.Now()
-
 	// Process each merged incident
 	for i, merged := range mergedIncidents {
 		fmt.Printf("\n[DEBUG] === Processing incident %d/%d: %s ===\n", i+1, len(mergedIncidents), merged.IncidentNumber)
-		fmt.Printf("[DEBUG] Reporter: %+v\n", merged.Reporter)
-		fmt.Println("under in loop")
-
 		if merged.Reporter != nil && merged.Reporter.Phone != "" {
-			fmt.Printf("[DEBUG] Sending SMS to: %s\n", merged.Reporter.Phone)
-
-			smsMessage := fmt.Sprintf(
-				"Your incident %s status has been updated to '%s' (master incident: %s). Comment: %s",
-				merged.IncidentNumber,
-				newStateName,
-				masterIncident.IncidentNumber,
-				comment,
+			smsErr := s.notificationService.SendSMSTemplate(
+				ctx, "INCIDENT_MERGE_STATUS_SMS", SMSLanguageFromContext(ctx), merged.Reporter.Phone,
+				map[string]string{
+					"incident_number":        merged.IncidentNumber,
+					"to_state":               newStateName,
+					"master_incident_number": masterIncident.IncidentNumber,
+					"comment":                comment,
+				},
+				&userID, &merged.ID,
 			)
-			fmt.Printf("[DEBUG] SMS Message: %s\n", smsMessage)
-
-			// Send actual SMS via Twilio
-			fmt.Println("[DEBUG] Calling utils.SendSMS...")
-			_, smsErr := utils.SendSMS(ctx, merged.Reporter.Phone, smsMessage)
 			if smsErr != nil {
-				fmt.Printf("[DEBUG] SMS send failed: %v\n", smsErr)
+				log.Printf("MERGE-STATUS-SMS: failed for incident %s: %v", merged.IncidentNumber, smsErr)
 			} else {
-				fmt.Println("[DEBUG] SMS sent successfully!")
-			}
-
-			// Log notification regardless of SMS success
-			notification := &models.NotificationLog{
-				Channel:    "sms",
-				Direction:  "outbound",
-				Category:   "sent",
-				Language:   "en",
-				Recipients: models.RecipientArray{{Email: merged.Reporter.Phone, Type: "to", Status: "sent"}},
-				IncidentID: &merged.ID,
-				Subject:    "Incident Status Updated",
-				Body:       smsMessage,
-				Status:     "sent",
-				Provider:   "twilio",
-				IsRead:     false,
-				SentBy:     &userID,
-				SentAt:     &now,
-			}
-			if smsErr != nil {
-				notification.Status = "failed"
-				notification.ErrorMessage = smsErr.Error()
-				notification.FailureCode = ClassifyFailureCode(smsErr)
-			}
-
-			fmt.Println("[DEBUG] Creating notification log...")
-			if notifErr := s.incidentRepo.CreateNotification(ctx, notification); notifErr != nil {
-				fmt.Printf("[DEBUG] Failed to create notification log: %v\n", notifErr)
-			} else {
-				fmt.Printf("[DEBUG] Notification logged (status: %s)\n", notification.Status)
+				log.Printf("MERGE-STATUS-SMS: sent via template for incident %s", merged.IncidentNumber)
 			}
 		} else {
 			fmt.Println("[DEBUG] SKIP SMS: No reporter or phone number")
@@ -5486,8 +5999,14 @@ func (s *incidentService) syncTransitionToMergedIncidents(ctx context.Context, m
 			oldStateName,
 			newStateName,
 		)
+		descriptionAr := fmt.Sprintf(
+			"انتقل الحادث الرئيسي %s من %s إلى %s",
+			masterIncident.IncidentNumber,
+			oldStateName,
+			newStateName,
+		)
 
-		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionStatusChanged, description, changes, userID); revErr != nil {
+		if revErr := s.CreateRevision(ctx, merged.ID, models.RevisionActionStatusChanged, description, descriptionAr, changes, userID); revErr != nil {
 			fmt.Printf("[DEBUG] Failed to create revision for child %s: %v\n", merged.IncidentNumber, revErr)
 		}
 
@@ -5509,7 +6028,7 @@ func (s *incidentService) syncTransitionToMergedIncidents(ctx context.Context, m
 	return nil
 }
 
-func (s *incidentService) CreateRevision(ctx context.Context, incidentID uuid.UUID, actionType models.IncidentRevisionActionType, description string, changes []models.IncidentFieldChange, userID uuid.UUID) error {
+func (s *incidentService) CreateRevision(ctx context.Context, incidentID uuid.UUID, actionType models.IncidentRevisionActionType, description string, descriptionAr string, changes []models.IncidentFieldChange, userID uuid.UUID) error {
 	// Get the next revision number
 	revNum, err := s.incidentRepo.GetNextRevisionNumber(ctx, incidentID)
 	if err != nil {
@@ -5527,13 +6046,14 @@ func (s *incidentService) CreateRevision(ctx context.Context, incidentID uuid.UU
 	}
 
 	revision := &models.IncidentRevision{
-		IncidentID:        incidentID,
-		RevisionNumber:    revNum,
-		ActionType:        actionType,
-		ActionDescription: description,
-		Changes:           changesJSON,
-		PerformedByID:     userID,
-		CreatedAt:         time.Now(),
+		IncidentID:          incidentID,
+		RevisionNumber:      revNum,
+		ActionType:          actionType,
+		ActionDescription:   description,
+		ActionDescriptionAr: descriptionAr,
+		Changes:             changesJSON,
+		PerformedByID:       userID,
+		CreatedAt:           time.Now(),
 	}
 
 	return s.incidentRepo.CreateRevision(ctx, revision)
@@ -5556,6 +6076,7 @@ func (s *incidentService) applyCreationTimeAssignment(ctx context.Context, incid
 			s.UserHasAssignmentRole(ctx, creatorID, initialState.AssignmentRoles) {
 			if err := s.incidentRepo.AssignIncident(ctx, incident.ID, creatorID); err != nil {
 				fmt.Printf("Warning: creation assignment (self-assign for web) failed: %v\n", err)
+				LogAssignmentFailure(incident.ID, incident.IncidentNumber, err)
 			} else {
 				if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{creatorID}); err != nil {
 					fmt.Printf("Warning: SetAssignees (self-assign for web) failed: %v\n", err)
@@ -5585,6 +6106,7 @@ func (s *incidentService) applyCreationTimeAssignment(ctx context.Context, incid
 			if err == nil && nextAssigneeID != nil {
 				if err := s.incidentRepo.AssignIncident(ctx, incident.ID, *nextAssigneeID); err != nil {
 					fmt.Printf("Warning: creation assignment (round-robin) failed: %v\n", err)
+					LogAssignmentFailure(incident.ID, incident.IncidentNumber, err)
 				} else {
 					if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{*nextAssigneeID}); err != nil {
 						fmt.Printf("Warning: SetAssignees (round-robin) failed: %v\n", err)
@@ -5598,6 +6120,7 @@ func (s *incidentService) applyCreationTimeAssignment(ctx context.Context, incid
 		if initialState.AssignUserID != nil {
 			if err := s.incidentRepo.AssignIncident(ctx, incident.ID, *initialState.AssignUserID); err != nil {
 				fmt.Printf("Warning: creation assignment (assign_user_id) failed: %v\n", err)
+				LogAssignmentFailure(incident.ID, incident.IncidentNumber, err)
 			} else {
 				if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{*initialState.AssignUserID}); err != nil {
 					fmt.Printf("Warning: SetAssignees (assign_user_id) failed: %v\n", err)
@@ -5700,6 +6223,7 @@ func (s *incidentService) CreateComplaint(ctx context.Context, req *models.Creat
 		ReporterName:     req.ReporterName,
 		ReporterEmail:    req.ReporterEmail,
 		ReporterPhone:    req.ReporterPhone,
+		CreatedByID:      &creatorID,
 	}
 
 	// Set reporter - use provided reporter_id or fall back to creator
@@ -5791,7 +6315,8 @@ func (s *incidentService) CreateComplaint(ctx context.Context, req *models.Creat
 
 	// Create initial revision
 	description := fmt.Sprintf("Complaint %s created", complaintNumber)
-	_ = s.CreateRevision(ctx, complaint.ID, models.RevisionActionCreated, description, nil, creatorID)
+	descriptionAr := fmt.Sprintf("تم إنشاء الشكوى %s", complaintNumber)
+	_ = s.CreateRevision(ctx, complaint.ID, models.RevisionActionCreated, description, descriptionAr, nil, creatorID)
 
 	resp := models.ToIncidentResponse(created)
 	return &resp, nil
@@ -5908,6 +6433,7 @@ func (s *incidentService) CreateQuery(ctx context.Context, req *models.CreateQue
 		CurrentStateID:   initialState.ID,
 		Channel:          req.Channel,
 		ReporterID:       &creatorID,
+		CreatedByID:      &creatorID,
 		// Geolocation fields
 		Latitude:   req.Latitude,
 		Longitude:  req.Longitude,
@@ -6005,7 +6531,8 @@ func (s *incidentService) CreateQuery(ctx context.Context, req *models.CreateQue
 
 	// Create initial revision
 	description := fmt.Sprintf("Query %s created", queryNumber)
-	_ = s.CreateRevision(ctx, query.ID, models.RevisionActionCreated, description, nil, creatorID)
+	descriptionAr := fmt.Sprintf("تم إنشاء الاستعلام %s", queryNumber)
+	_ = s.CreateRevision(ctx, query.ID, models.RevisionActionCreated, description, descriptionAr, nil, creatorID)
 
 	resp := models.ToIncidentResponse(created)
 	return &resp, nil
@@ -6105,7 +6632,7 @@ func (s *incidentService) UpdateClosedIncidentSummary(
 }
 
 // SendNotBelongClosureSMS sends an SMS to the citizen when an incident is closed via a "Not Belong" transition.
-// It renders the DB template INCIDENT_CLOSURE_NOT_BELONG_SMS (AR language) when available,
+// It renders the DB template INCIDENT_CLOSURE_NOT_BELONG_SMS (language of the logged-in user) when available,
 // falling back to a hardcoded English message if the notification service is not wired in.
 func (s *incidentService) SendNotBelongClosureSMS(
 	ctx context.Context,
@@ -6136,7 +6663,7 @@ func (s *incidentService) SendNotBelongClosureSMS(
 		}
 	}
 	if mobile == "" {
-		log.Printf("NOT-BELONG-SMS: No citizen mobile for incident %s, skipping", incident.IncidentNumber)
+		log.Printf("[SMS] flow=not_belong: No citizen mobile for incident %s, skipping", incident.IncidentNumber)
 		return
 	}
 
@@ -6157,7 +6684,7 @@ func (s *incidentService) SendNotBelongClosureSMS(
 
 		templateCode := "INCIDENT_CLOSURE_NOT_BELONG_SMS"
 		result, err := s.notificationService.SendNotification(
-			ctx, "sms", &templateCode, "ar",
+			ctx, "sms", &templateCode, SMSLanguageFromContext(ctx),
 			[]string{mobile}, nil, nil,
 			"", "", vars, nil, &userID, nil,
 		)
@@ -6165,56 +6692,18 @@ func (s *incidentService) SendNotBelongClosureSMS(
 			_ = s.notificationService.SetIncidentIDOnLogs(ctx, []uuid.UUID{result.SentLog.ID}, incident.ID)
 		}
 		if err != nil {
-			log.Printf("NOT-BELONG-SMS: Template send failed for incident %s: %v", incident.IncidentNumber, err)
+			log.Printf("[SMS] flow=not_belong: Template send failed for incident %s: %v", incident.IncidentNumber, err)
 		} else {
-			log.Printf("NOT-BELONG-SMS: Sent via template to %s for incident %s", mobile, incident.IncidentNumber)
+			log.Printf("[SMS] flow=not_belong: Sent via template to %s for incident %s", maskMobile(mobile), incident.IncidentNumber)
 		}
 		return
 	}
 
-	// Fallback: hardcoded message when notification service is not available.
-	smsMessage := fmt.Sprintf(
-		"Dear Citizen, your incident (ID: %s) has been reviewed. The issue belongs to the %s department and does not fall under our department's scope for processing. Kindly contact the concerned department for further assistance. We appreciate your understanding.",
-		incident.IncidentNumber,
-		deptName,
-	)
-
-	now := time.Now()
-	_, smsErr := utils.SendSMS(ctx, mobile, smsMessage)
-	status := "sent"
-	if smsErr != nil {
-		status = "failed"
-		log.Printf("NOT-BELONG-SMS: Failed for incident %s to %s: %v", incident.IncidentNumber, mobile, smsErr)
-	} else {
-		log.Printf("NOT-BELONG-SMS: Sent successfully to %s for incident %s", mobile, incident.IncidentNumber)
-	}
-
-	notification := &models.NotificationLog{
-		Channel:    "sms",
-		Direction:  "outbound",
-		Category:   "sent",
-		Language:   "en",
-		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
-		IncidentID: &incident.ID,
-		Subject:    "Incident Not Belong Closure",
-		Body:       smsMessage,
-		Status:     status,
-		Provider:   "twilio",
-		IsRead:     false,
-		SentBy:     &userID,
-		SentAt:     &now,
-	}
-	if smsErr != nil {
-		notification.ErrorMessage = smsErr.Error()
-		notification.FailureCode = ClassifyFailureCode(smsErr)
-	}
-	if err := s.incidentRepo.CreateNotification(ctx, notification); err != nil {
-		log.Printf("NOT-BELONG-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
-	}
+	log.Printf("[SMS] flow=not_belong: notification service unavailable — SMS not sent for incident %s", incident.IncidentNumber)
 }
 
 // sendConvertToRequestSMS sends an SMS to the citizen when an incident is converted to a request.
-// It uses template INC_TO_REQ_SMS when available; falls back to a hardcoded Arabic message otherwise.
+// It sends via the active convert_to_request SMS template (seeded default: INC_TO_REQ_SMS).
 func (s *incidentService) sendConvertToRequestSMS(ctx context.Context, incident *models.Incident, requestNumber string, userID uuid.UUID) {
 	mobile := incident.CreatedByMobile
 	if mobile == "" && incident.ReporterID != nil {
@@ -6235,7 +6724,7 @@ func (s *incidentService) sendConvertToRequestSMS(ctx context.Context, incident 
 		}
 	}
 	if mobile == "" {
-		log.Printf("CONVERT-TO-REQUEST-SMS: No citizen mobile for incident %s, skipping", incident.IncidentNumber)
+		log.Printf("[SMS] flow=convert_to_request: No citizen mobile for incident %s, skipping", incident.IncidentNumber)
 		return
 	}
 
@@ -6244,55 +6733,21 @@ func (s *incidentService) sendConvertToRequestSMS(ctx context.Context, incident 
 
 	if s.notificationService != nil {
 		err := s.notificationService.SendByActionTypeForIncident(
-			ctx, models.TemplateActionConvertToRequest, "sms", "ar",
+			ctx, models.TemplateActionConvertToRequest, "sms", SMSLanguageFromContext(ctx),
 			[]string{mobile}, vars, &userID, incident.ID,
 		)
 		if err != nil {
-			log.Printf("CONVERT-TO-REQUEST-SMS: No active templates found for incident %s, falling back to hardcoded: %v", incident.IncidentNumber, err)
+			log.Printf("[SMS] flow=convert_to_request: No active templates found for incident %s, falling back to hardcoded: %v", incident.IncidentNumber, err)
 		} else {
-			log.Printf("CONVERT-TO-REQUEST-SMS: Sent via template(s) to %s for incident %s", mobile, incident.IncidentNumber)
+			log.Printf("[SMS] flow=convert_to_request: Sent via template(s) to %s for incident %s", maskMobile(mobile), incident.IncidentNumber)
 			return
 		}
 	}
-
-	// Hardcoded Arabic fallback
-	smsMessage := fmt.Sprintf("تم تحويل بلاغك رقم %s إلى طلب رقم %s", incident.IncidentNumber, requestNumber)
-	now := time.Now()
-	_, smsErr := utils.SendSMS(ctx, mobile, smsMessage)
-	status := "sent"
-	if smsErr != nil {
-		status = "failed"
-		log.Printf("CONVERT-TO-REQUEST-SMS: Fallback failed for incident %s to %s: %v", incident.IncidentNumber, mobile, smsErr)
-	} else {
-		log.Printf("CONVERT-TO-REQUEST-SMS: Fallback sent to %s for incident %s", mobile, incident.IncidentNumber)
-	}
-
-	notification := &models.NotificationLog{
-		Channel:    "sms",
-		Direction:  "outbound",
-		Category:   "sent",
-		Language:   "ar",
-		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
-		IncidentID: &incident.ID,
-		Subject:    "Incident Converted to Request",
-		Body:       smsMessage,
-		Status:     status,
-		Provider:   "twilio",
-		IsRead:     false,
-		SentBy:     &userID,
-		SentAt:     &now,
-	}
-	if smsErr != nil {
-		notification.ErrorMessage = smsErr.Error()
-		notification.FailureCode = ClassifyFailureCode(smsErr)
-	}
-	if err := s.incidentRepo.CreateNotification(ctx, notification); err != nil {
-		log.Printf("CONVERT-TO-REQUEST-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
-	}
+	log.Printf("[SMS] flow=convert_to_request: SMS not sent for incident %s (check that an active convert_to_request SMS template exists)", incident.IncidentNumber)
 }
 
 // SendMissingInfoClosureSMS sends an SMS to the citizen when an incident is closed via a "Missing Incident Information" transition.
-// Uses active templates with action_type=missing_info first; falls back to hardcoded Arabic message.
+// Sends via active templates with action_type=missing_info (seeded default: INCIDENT_MISSING_INFO_SMS).
 func (s *incidentService) SendMissingInfoClosureSMS(
 	ctx context.Context,
 	incident *models.Incident,
@@ -6301,7 +6756,7 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 	userID uuid.UUID,
 ) {
 	mobile := citizenMobile
-	log.Printf("MISSING-INFO-SMS: citizenMobile=%q reporterID=%v for incident %s", citizenMobile, reporterID, incident.IncidentNumber)
+	log.Printf("[SMS] flow=missing_info: citizenMobile=%s reporterID=%v for incident %s", maskMobile(citizenMobile), reporterID, incident.IncidentNumber)
 	if mobile == "" && reporterID != nil {
 		roles, err := s.userRepo.GetUserRoles(ctx, *reporterID)
 		if err == nil {
@@ -6315,71 +6770,34 @@ func (s *incidentService) SendMissingInfoClosureSMS(
 			if isCitizen {
 				if reporter, err := s.userRepo.FindByID(ctx, *reporterID); err == nil {
 					mobile = reporter.Phone
-					log.Printf("MISSING-INFO-SMS: resolved citizen mobile from reporter: %q", mobile)
+					log.Printf("[SMS] flow=missing_info: resolved citizen mobile from reporter: %s", maskMobile(mobile))
 				}
 			} else {
-				log.Printf("MISSING-INFO-SMS: reporter is not a citizen, skipping phone lookup")
+				log.Printf("[SMS] flow=missing_info: reporter is not a citizen, skipping phone lookup")
 			}
 		}
 	}
 	if mobile == "" {
-		log.Printf("MISSING-INFO-SMS: No citizen mobile for incident %s, skipping", incident.IncidentNumber)
+		log.Printf("[SMS] flow=missing_info: No citizen mobile for incident %s, skipping", incident.IncidentNumber)
 		return
 	}
 
-	log.Printf("MISSING-INFO-SMS: targeting mobile=%q for incident %s", mobile, incident.IncidentNumber)
+	log.Printf("[SMS] flow=missing_info: targeting mobile=%s for incident %s", maskMobile(mobile), incident.IncidentNumber)
 	vars := BuildIncidentVariables(incident, nil, nil)
 
 	if s.notificationService != nil {
 		err := s.notificationService.SendByActionTypeForIncident(
-			ctx, models.TemplateActionMissingInfo, "sms", "ar",
+			ctx, models.TemplateActionMissingInfo, "sms", SMSLanguageFromContext(ctx),
 			[]string{mobile}, vars, &userID, incident.ID,
 		)
 		if err != nil {
-			log.Printf("MISSING-INFO-SMS: No active templates for incident %s, falling back to hardcoded: %v", incident.IncidentNumber, err)
+			log.Printf("[SMS] flow=missing_info: SMS not sent for incident %s (check that an active missing_info SMS template exists): %v", incident.IncidentNumber, err)
 		} else {
-			log.Printf("MISSING-INFO-SMS: Sent via template to %s for incident %s", mobile, incident.IncidentNumber)
-			return
+			log.Printf("[SMS] flow=missing_info: Sent via template to %s for incident %s", maskMobile(mobile), incident.IncidentNumber)
 		}
+		return
 	}
-
-	// Hardcoded fallback
-	smsMessage := fmt.Sprintf(
-		"Dear Citizen, your incident (ID: %s) has been closed due to insufficient information. We kindly request that you raise it again with all the required details so we can assist you better. Thank you!",
-		incident.IncidentNumber,
-	)
-	now := time.Now()
-	_, smsErr := utils.SendSMS(ctx, mobile, smsMessage)
-	status := "sent"
-	if smsErr != nil {
-		status = "failed"
-		log.Printf("MISSING-INFO-SMS: Fallback failed for incident %s to %s: %v", incident.IncidentNumber, mobile, smsErr)
-	} else {
-		log.Printf("MISSING-INFO-SMS: Fallback sent to %s for incident %s", mobile, incident.IncidentNumber)
-	}
-
-	notification := &models.NotificationLog{
-		Channel:    "sms",
-		Direction:  "outbound",
-		Category:   "sent",
-		Language:   "en",
-		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
-		IncidentID: &incident.ID,
-		Subject:    "Incident Closed - Missing Information",
-		Body:       smsMessage,
-		Status:     status,
-		Provider:   "twilio",
-		IsRead:     false,
-		SentBy:     &userID,
-		SentAt:     &now,
-	}
-	if smsErr != nil {
-		notification.ErrorMessage = smsErr.Error()
-		notification.FailureCode = ClassifyFailureCode(smsErr)
-	}
-	if err := s.incidentRepo.CreateNotification(ctx, notification); err != nil {
-		log.Printf("MISSING-INFO-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
-	}
+	log.Printf("[SMS] flow=missing_info: notification service unavailable — SMS not sent for incident %s", incident.IncidentNumber)
 }
 
 // AutoAssignUnassigned finds incidents in the state configured by AUTO_ASSIGN_STATE_CODE that
@@ -6462,6 +6880,7 @@ func (s *incidentService) AutoAssignUnassigned(ctx context.Context) error {
 				}
 				if err := s.incidentRepo.AssignIncident(ctx, incident.ID, *assigneeID); err != nil {
 					log.Printf("[AutoAssign] %s: AssignIncident failed: %v", incident.IncidentNumber, err)
+					LogAssignmentFailure(incident.ID, incident.IncidentNumber, err)
 					continue
 				}
 				if err := s.incidentRepo.SetAssignees(ctx, incident.ID, allIDs); err != nil {
@@ -6478,6 +6897,7 @@ func (s *incidentService) AutoAssignUnassigned(ctx context.Context) error {
 
 		if err := s.incidentRepo.AssignIncident(ctx, incident.ID, *assigneeID); err != nil {
 			log.Printf("[AutoAssign] %s: AssignIncident failed: %v", incident.IncidentNumber, err)
+			LogAssignmentFailure(incident.ID, incident.IncidentNumber, err)
 			continue
 		}
 		if err := s.incidentRepo.SetAssignees(ctx, incident.ID, []uuid.UUID{*assigneeID}); err != nil {
@@ -6488,6 +6908,38 @@ func (s *incidentService) AutoAssignUnassigned(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (s *incidentService) stampCommentAndAttachmentCounts(ctx context.Context, incidents []models.Incident, responses []models.IncidentResponse) {
+	if len(incidents) == 0 {
+		return
+	}
+	ids := make([]uuid.UUID, len(incidents))
+	for i := range incidents {
+		ids[i] = incidents[i].ID
+	}
+	commentCounts, commentErr := s.incidentRepo.GetCommentCounts(ctx, ids)
+	if commentErr != nil {
+		log.Printf("ListIncidents: comment count lookup failed: %v", commentErr)
+	}
+	feedbackCounts, feedbackErr := s.incidentRepo.GetFeedbackCounts(ctx, ids)
+	if feedbackErr != nil {
+		log.Printf("ListIncidents: feedback count lookup failed: %v", feedbackErr)
+	}
+	if commentErr == nil || feedbackErr == nil {
+		for i := range incidents {
+			responses[i].CommentsCount = commentCounts[incidents[i].ID] + feedbackCounts[incidents[i].ID]
+		}
+	}
+	if attachmentCounts, err := s.incidentRepo.GetAttachmentCounts(ctx, ids); err == nil {
+		for i := range incidents {
+			if c, ok := attachmentCounts[incidents[i].ID]; ok {
+				responses[i].AttachmentsCount = c
+			}
+		}
+	} else {
+		log.Printf("ListIncidents: attachment count lookup failed: %v", err)
+	}
 }
 
 // stampRecurrences flags listed incidents that have an earlier same-classification

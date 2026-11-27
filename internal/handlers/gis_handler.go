@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"log"
+
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
@@ -21,6 +23,7 @@ type gisIdentifyRequest struct {
 }
 
 func (h *GISHandler) Identify(c *fiber.Ctx) error {
+	log.Printf("[GIS-WRAPPER] request %s %s body=%s", c.Method(), c.OriginalURL(), utils.SanitizeErrorText(string(c.Body())))
 	var req gisIdentifyRequest
 	if err := c.BodyParser(&req); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
@@ -31,9 +34,11 @@ func (h *GISHandler) Identify(c *fiber.Ctx) error {
 
 	result, err := h.svc.Identify(c.UserContext(), req.X, req.Y)
 	if err != nil {
+		log.Printf("[GIS-WRAPPER] response %s %s status=500 error=%s", c.Method(), c.OriginalURL(), utils.SanitizeErrorText(err.Error()))
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, err.Error())
 	}
 
+	log.Printf("[GIS-WRAPPER] response %s %s status=200 body=%s", c.Method(), c.OriginalURL(), utils.SanitizeErrorText(string(result)))
 	c.Set("Content-Type", "application/json")
 	return c.Send(result)
 }

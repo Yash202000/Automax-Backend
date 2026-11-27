@@ -10,6 +10,9 @@ import (
 	"io"
 	"log"
 	"math"
+	"net/http"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -50,7 +53,7 @@ type GoalService interface {
 	UpdateMetric(ctx context.Context, id uuid.UUID, req *models.GoalMetricUpdateRequest, userID uuid.UUID) (*models.GoalMetricResponse, error)
 	DeleteMetric(ctx context.Context, id uuid.UUID, userID uuid.UUID) error
 	UpdateMetricValue(ctx context.Context, id uuid.UUID, req *models.MetricValueUpdateRequest, userID uuid.UUID) (*models.GoalMetricValueChangeResponse, error)
-	GetMetricHistory(ctx context.Context, metricID uuid.UUID, page int, limit int) ([]models.MetricHistoryResponse, int64, error)
+	GetMetricHistory(ctx context.Context, metricID uuid.UUID, page int, limit int, userID uuid.UUID) ([]models.MetricHistoryResponse, int64, error)
 	ListMetricValueChanges(ctx context.Context, metricID uuid.UUID, userID uuid.UUID) ([]models.GoalMetricValueChangeResponse, error)
 
 	// Metric Workflow Transitions
@@ -65,16 +68,16 @@ type GoalService interface {
 	CreateEvidence(ctx context.Context, goalID uuid.UUID, title string, evidenceType string, comment string, metricID *uuid.UUID, fileName string, fileSize int64, mimeType string, fileData []byte, userID uuid.UUID) (*models.EvidenceResponse, error)
 	DeleteEvidence(ctx context.Context, id uuid.UUID, userID uuid.UUID) error
 	ListEvidences(ctx context.Context, goalID uuid.UUID, filter *models.EvidenceFilter, userID uuid.UUID) ([]models.EvidenceResponse, int64, error)
-	GetEvidence(ctx context.Context, id uuid.UUID) (*models.EvidenceResponse, error)
-	GetEvidencePreview(ctx context.Context, evidenceID uuid.UUID) (string, error)
-	GetEvidenceDownloadURL(ctx context.Context, evidenceID uuid.UUID) (string, error)
-	DownloadEvidenceFile(ctx context.Context, evidenceID uuid.UUID) (io.ReadCloser, *storage.DmsFile, string, string, error)
+	GetEvidence(ctx context.Context, id uuid.UUID, userID uuid.UUID) (*models.EvidenceResponse, error)
+	GetEvidencePreview(ctx context.Context, evidenceID uuid.UUID, userID uuid.UUID) (string, error)
+	GetEvidenceDownloadURL(ctx context.Context, evidenceID uuid.UUID, userID uuid.UUID) (string, error)
+	DownloadEvidenceFile(ctx context.Context, evidenceID uuid.UUID, userID uuid.UUID) (io.ReadCloser, *storage.DmsFile, string, string, error)
 	ReplaceEvidenceFile(ctx context.Context, evidenceID uuid.UUID, fileName string, fileSize int64, mimeType string, fileData []byte, userID uuid.UUID) (*models.EvidenceResponse, error)
 
 	// Evidence Workflow Transitions
 	GetAvailableEvidenceTransitions(ctx context.Context, evidenceID uuid.UUID, userID uuid.UUID) ([]models.AvailableTransitionResponse, error)
 	ExecuteEvidenceTransition(ctx context.Context, evidenceID uuid.UUID, req *models.EvidenceTransitionRequest, userID uuid.UUID) (*models.EvidenceResponse, error)
-	GetEvidenceTransitionHistory(ctx context.Context, evidenceID uuid.UUID) ([]models.EvidenceTransitionHistoryResponse, error)
+	GetEvidenceTransitionHistory(ctx context.Context, evidenceID uuid.UUID, userID uuid.UUID) ([]models.EvidenceTransitionHistoryResponse, error)
 	ListPendingApprovals(ctx context.Context, userID uuid.UUID, page int, limit int) ([]models.ApprovalListResponse, int64, error)
 	ListCompletedApprovals(ctx context.Context, userID uuid.UUID, page int, limit int) ([]models.ApprovalListResponse, int64, error)
 
@@ -93,31 +96,34 @@ type GoalService interface {
 
 	// Comments
 	AddComment(ctx context.Context, goalID uuid.UUID, content string, userID uuid.UUID) (*models.GoalCommentResponse, error)
-	ListComments(ctx context.Context, goalID uuid.UUID, page, limit int) ([]models.GoalCommentResponse, int64, error)
+	ListComments(ctx context.Context, goalID uuid.UUID, page, limit int, userID uuid.UUID) ([]models.GoalCommentResponse, int64, error)
 	DeleteComment(ctx context.Context, commentID uuid.UUID, userID uuid.UUID) error
 
 	// Hierarchy
-	GetGoalTree(ctx context.Context, rootID uuid.UUID) (*models.GoalResponse, error)
-	ListChildGoals(ctx context.Context, parentID uuid.UUID) ([]models.GoalResponse, error)
+	GetGoalTree(ctx context.Context, rootID uuid.UUID, userID uuid.UUID) (*models.GoalResponse, error)
+	ListChildGoals(ctx context.Context, parentID uuid.UUID, userID uuid.UUID) ([]models.GoalResponse, error)
 
 	// Check-ins
 	CreateCheckIn(ctx context.Context, goalID uuid.UUID, req *models.CheckInCreateRequest, userID uuid.UUID) (*models.CheckInResponse, error)
-	ListCheckIns(ctx context.Context, goalID uuid.UUID, page int, limit int) ([]models.CheckInResponse, int64, error)
+	ListCheckIns(ctx context.Context, goalID uuid.UUID, page int, limit int, userID uuid.UUID) ([]models.CheckInResponse, int64, error)
 	DeleteCheckIn(ctx context.Context, id uuid.UUID, userID uuid.UUID) error
 
 	// Progress
 	RecalculateProgress(ctx context.Context, goalID uuid.UUID) error
 
+	// Access
+	CheckGoalAccess(ctx context.Context, goalID uuid.UUID, userID uuid.UUID) error
+
 	// Metric Import/Export
 	ExportMetricsTemplate(ctx context.Context, filter *models.GoalFilter, format string) ([]byte, error)
 	ImportMetricsDryRun(ctx context.Context, fileData []byte, fileName string, userID uuid.UUID) (*models.MetricImportDryRunResponse, error)
 	ImportMetricsCommit(ctx context.Context, fileData []byte, fileName string, title string, comment string, primaryGoalID uuid.UUID, userID uuid.UUID) (*models.MetricImportBatchResponse, error)
-	GetMetricImportBatch(ctx context.Context, id uuid.UUID) (*models.MetricImportBatchResponse, error)
-	ListMetricImportBatches(ctx context.Context, filter *models.MetricImportBatchFilter) ([]models.MetricImportBatchResponse, int64, error)
+	GetMetricImportBatch(ctx context.Context, id uuid.UUID, userID uuid.UUID) (*models.MetricImportBatchResponse, error)
+	ListMetricImportBatches(ctx context.Context, filter *models.MetricImportBatchFilter, userID uuid.UUID) ([]models.MetricImportBatchResponse, int64, error)
 	DeleteMetricImportBatch(ctx context.Context, id uuid.UUID, userID uuid.UUID) error
 	GetAvailableMetricBatchTransitions(ctx context.Context, batchID uuid.UUID, userID uuid.UUID) ([]models.AvailableTransitionResponse, error)
 	ExecuteMetricBatchTransition(ctx context.Context, batchID uuid.UUID, req *models.MetricImportBatchTransitionRequest, userID uuid.UUID) (*models.MetricImportBatchResponse, error)
-	GetMetricBatchTransitionHistory(ctx context.Context, batchID uuid.UUID) ([]models.MetricImportBatchTransitionHistoryResponse, error)
+	GetMetricBatchTransitionHistory(ctx context.Context, batchID uuid.UUID, userID uuid.UUID) ([]models.MetricImportBatchTransitionHistoryResponse, error)
 }
 
 // Sentinel errors used by handlers to pick an HTTP status without relying on
@@ -128,6 +134,117 @@ var (
 	ErrParentGoalNotFound         = errors.New("parent_goal_not_found")
 	ErrGoalHierarchyDepthExceeded = errors.New("max_goal_hierarchy_depth_exceeded")
 )
+
+// ──────────────────────────────────────────────────
+// Typed errors (HTTP status carried to the handler)
+// ──────────────────────────────────────────────────
+
+// GoalError is a client-facing error carrying the HTTP status the handler
+// should return and an already-translated message. Anything that is not a
+// GoalError is treated as an internal (500) error by the goal handlers.
+type GoalError struct {
+	Status int
+	Key    string
+	Msg    string
+	Err    error
+}
+
+func (e *GoalError) Error() string { return e.Msg }
+func (e *GoalError) Unwrap() error { return e.Err }
+
+// goalLocalMessages holds translations for goal-module keys that are not (yet)
+// present in pkg/i18n/messages.go. gT prefers the shared catalogue and falls
+// back to this table so users never see a raw key.
+var goalLocalMessages = map[string][2]string{
+	"goal_closed_read_only":            {"Closed goals cannot be modified", "لا يمكن تعديل الأهداف المغلقة"},
+	"goal_title_required":              {"Title is required", "العنوان مطلوب"},
+	"goal_description_required":        {"Description is required", "الوصف مطلوب"},
+	"goal_title_too_long":              {"Title must be at most 255 characters", "يجب ألا يتجاوز العنوان 255 حرفًا"},
+	"goal_invalid_priority":            {"Invalid priority (must be Critical, High, Medium or Low)", "أولوية غير صالحة (حرجة، عالية، متوسطة، منخفضة)"},
+	"goal_start_after_target":          {"Start date must be on or before the target date", "يجب أن يكون تاريخ البدء في أو قبل التاريخ المستهدف"},
+	"goal_invalid_metadata":            {"Metadata must be a valid JSON object", "يجب أن تكون البيانات الوصفية كائن JSON صالحًا"},
+	"goal_owner_not_found":             {"Owner user not found", "المستخدم المالك غير موجود"},
+	"goal_department_not_found":        {"Department not found", "القسم غير موجود"},
+	"goal_parent_change_unsupported":   {"Changing the parent goal is not supported; clone the goal under the new parent instead", "تغيير الهدف الأب غير مدعوم؛ انسخ الهدف تحت الهدف الأب الجديد بدلاً من ذلك"},
+	"goal_title_exists":                {"A goal with this title already exists for this owner", "يوجد هدف بنفس العنوان لهذا المالك"},
+	"goal_delete_blocked":              {"Goal cannot be deleted while it is referenced by: %s", "لا يمكن حذف الهدف لأنه مرتبط بـ: %s"},
+	"goal_documenta_folder_failed":     {"Could not create the document folder for this goal. Please try again or contact support.", "تعذر إنشاء مجلد المستندات لهذا الهدف. حاول مرة أخرى أو تواصل مع الدعم."},
+	"goal_invalid_sort":                {"Invalid sort_by or sort_order", "قيمة الترتيب غير صالحة"},
+	"metric_weight_positive":           {"Weight must be greater than 0", "يجب أن يكون الوزن أكبر من 0"},
+	"metric_name_required":             {"Metric name is required", "اسم المقياس مطلوب"},
+	"metric_name_exists":               {"A metric with this name already exists on this goal", "يوجد مقياس بنفس الاسم في هذا الهدف"},
+	"metric_invalid_formula":           {"Invalid formula: %s", "صيغة غير صالحة: %s"},
+	"evidence_invalid_type":            {"Invalid evidence type (must be Report, Photo, Certificate, Invoice or Other)", "نوع الدليل غير صالح"},
+	"evidence_title_required":          {"Evidence title is required", "عنوان الدليل مطلوب"},
+	"evidence_metric_not_in_goal":      {"The selected metric does not belong to this goal", "المقياس المحدد لا ينتمي إلى هذا الهدف"},
+	"evidence_invalid_metric_id":       {"Invalid metric_id", "معرّف المقياس غير صالح"},
+	"evidence_empty_file":              {"The uploaded file is empty", "الملف المرفوع فارغ"},
+	"evidence_file_type_not_allowed":   {"This file type is not allowed", "نوع الملف غير مسموح"},
+	"collaborator_already_exists":      {"User is already a collaborator on this goal", "المستخدم متعاون بالفعل في هذا الهدف"},
+	"check_in_metric_not_found":        {"Metric %s not found", "المقياس %s غير موجود"},
+	"check_in_metric_not_in_goal":      {"Metric %s does not belong to this goal", "المقياس %s لا ينتمي إلى هذا الهدف"},
+	"metric_batch_access_denied_goals": {"You do not have edit access to goal(s): %s", "ليست لديك صلاحية تعديل الأهداف: %s"},
+	"failed_to_create":                 {"Failed to create", "فشل الإنشاء"},
+	"failed_to_update":                 {"Failed to update", "فشل التحديث"},
+	"failed_to_load_data":              {"Failed to load data", "فشل تحميل البيانات"},
+	"value_required":                   {"Value is required", "القيمة مطلوبة"},
+	"failed_to_parse_file_detail":      {"Failed to parse file: %s", "فشل تحليل الملف: %s"},
+	"target_value_required":            {"Target value is required", "القيمة المستهدفة مطلوبة"},
+}
+
+// gT translates key using the shared catalogue, falling back to goalLocalMessages.
+func gT(ctx context.Context, key string) string {
+	if msg := i18n.T(ctx, key); msg != key {
+		return msg
+	}
+	if pair, ok := goalLocalMessages[key]; ok {
+		lang, _ := ctx.Value(constants.ContextKeys.ACCEPT_LANGUAGE).(string)
+		if lang == "ar" && pair[1] != "" {
+			return pair[1]
+		}
+		return pair[0]
+	}
+	return key
+}
+
+func gTf(ctx context.Context, key string, args ...interface{}) string {
+	return fmt.Sprintf(gT(ctx, key), args...)
+}
+
+func newGoalErr(ctx context.Context, status int, key string, args ...interface{}) *GoalError {
+	msg := gT(ctx, key)
+	if len(args) > 0 {
+		msg = fmt.Sprintf(msg, args...)
+	}
+	return &GoalError{Status: status, Key: key, Msg: msg}
+}
+
+func errBadRequest(ctx context.Context, key string, args ...interface{}) error {
+	return newGoalErr(ctx, http.StatusBadRequest, key, args...)
+}
+
+func errForbidden(ctx context.Context) error {
+	return newGoalErr(ctx, http.StatusForbidden, "access_denied")
+}
+
+func errNotFound(ctx context.Context, key string) error {
+	return newGoalErr(ctx, http.StatusNotFound, key)
+}
+
+func errConflict(ctx context.Context, key string, args ...interface{}) error {
+	return newGoalErr(ctx, http.StatusConflict, key, args...)
+}
+
+// notFoundOr maps gorm.ErrRecordNotFound to a 404 GoalError (key), and wraps
+// anything else as an internal error.
+func notFoundOr(ctx context.Context, err error, key string) error {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		ge := newGoalErr(ctx, http.StatusNotFound, key)
+		ge.Err = err
+		return ge
+	}
+	return fmt.Errorf("%s: %w", i18n.T(ctx, key), err)
+}
 
 // ════════════════════════════════════════════════════
 // Private Implementation
@@ -173,47 +290,82 @@ func NewGoalService(
 // Access Control Helpers
 // ──────────────────────────────────────────────────
 
-// canAccessGoal checks if the user can access the given goal.
+// canAccessGoal checks if the user can access (view) the given goal.
 // Access is granted if the user is:
 //   - Super admin
 //   - Goal owner
 //   - A collaborator on the goal
 //   - In the same department as the goal
+//
+// This is the same rule the goal list applies (repository.GoalVisibilitySQL).
 func (s *goalService) canAccessGoal(ctx context.Context, goalID uuid.UUID, userID uuid.UUID) (bool, error) {
-	// Check if super admin via context
-	if s.isSuperAdmin(ctx) {
-		return true, nil
-	}
-
 	goal, err := s.goalRepo.FindByID(ctx, goalID)
 	if err != nil {
 		return false, err
 	}
+	return s.canAccessGoalObj(ctx, goal, userID), nil
+}
 
-	// Owner check
-	if goal.OwnerID == userID {
-		return true, nil
+func (s *goalService) canAccessGoalObj(ctx context.Context, goal *models.Goal, userID uuid.UUID) bool {
+	if s.isSuperAdmin(ctx) {
+		return true
 	}
-
-	// Collaborator check
-	collaborators, _ := s.goalRepo.ListCollaborators(ctx, goalID)
+	if goal.OwnerID == userID {
+		return true
+	}
+	collaborators, _ := s.goalRepo.ListCollaborators(ctx, goal.ID)
 	for _, c := range collaborators {
 		if c.UserID == userID {
-			return true, nil
+			return true
 		}
 	}
-
-	// Department check
 	if goal.DepartmentID != nil {
 		user, err := s.userRepo.FindByID(ctx, userID)
-		if err == nil && user != nil {
-			if user.DepartmentID != nil && *user.DepartmentID == *goal.DepartmentID {
-				return true, nil
-			}
+		if err == nil && user != nil && user.DepartmentID != nil && *user.DepartmentID == *goal.DepartmentID {
+			return true
 		}
 	}
+	return false
+}
 
-	return false, nil
+// requireView loads the goal (404 if missing) and checks view access (403).
+func (s *goalService) requireView(ctx context.Context, goalID uuid.UUID, userID uuid.UUID) (*models.Goal, error) {
+	goal, err := s.goalRepo.FindByID(ctx, goalID)
+	if err != nil {
+		return nil, notFoundOr(ctx, err, "goal_not_found")
+	}
+	if !s.canAccessGoalObj(ctx, goal, userID) {
+		return nil, errForbidden(ctx)
+	}
+	return goal, nil
+}
+
+// requireModify loads the goal (404 if missing) and checks modify access (403):
+// super admin, owner, or reviewer collaborator.
+func (s *goalService) requireModify(ctx context.Context, goalID uuid.UUID, userID uuid.UUID) (*models.Goal, error) {
+	goal, err := s.goalRepo.FindByID(ctx, goalID)
+	if err != nil {
+		return nil, notFoundOr(ctx, err, "goal_not_found")
+	}
+	if !s.canModifyGoalObj(ctx, goal, userID) {
+		return nil, errForbidden(ctx)
+	}
+	return goal, nil
+}
+
+// ensureGoalOpen rejects modifications to Closed goals.
+func ensureGoalOpen(ctx context.Context, goal *models.Goal) error {
+	if goal.Status == models.GoalStatusClosed {
+		return errConflict(ctx, "goal_closed_read_only")
+	}
+	return nil
+}
+
+// CheckGoalAccess is exported for handlers that read goal-scoped data through
+// other services (e.g. the activity log).
+func (s *goalService) CheckGoalAccess(ctx context.Context, goalID uuid.UUID, userID uuid.UUID) error {
+	_, err := s.requireView(ctx, goalID, userID)
+	return err
 }
 
 // canSeeUnapprovedItems returns true if the caller should see metrics/evidence
@@ -260,29 +412,29 @@ func (s *goalService) userHasPermission(ctx context.Context, code string) bool {
 
 // canModifyGoal checks if the user can modify the goal (owner, reviewer, or super admin)
 func (s *goalService) canModifyGoal(ctx context.Context, goalID uuid.UUID, userID uuid.UUID) (bool, error) {
-	if s.isSuperAdmin(ctx) {
-		return true, nil
-	}
-
 	goal, err := s.goalRepo.FindByID(ctx, goalID)
 	if err != nil {
 		return false, err
 	}
+	return s.canModifyGoalObj(ctx, goal, userID), nil
+}
 
+func (s *goalService) canModifyGoalObj(ctx context.Context, goal *models.Goal, userID uuid.UUID) bool {
+	if s.isSuperAdmin(ctx) {
+		return true
+	}
 	// Owner can always modify
 	if goal.OwnerID == userID {
-		return true, nil
+		return true
 	}
-
 	// Collaborators with reviewer_l1 or reviewer_l2 role can modify
-	collaborators, _ := s.goalRepo.ListCollaborators(ctx, goalID)
+	collaborators, _ := s.goalRepo.ListCollaborators(ctx, goal.ID)
 	for _, c := range collaborators {
 		if c.UserID == userID && (c.Role == models.CollaboratorRoleReviewerL1 || c.Role == models.CollaboratorRoleReviewerL2) {
-			return true, nil
+			return true
 		}
 	}
-
-	return false, nil
+	return false
 }
 
 // metricSiblingsMap builds the name -> current value map consumed by the formula
@@ -375,9 +527,30 @@ func (s *goalService) getUserDepartmentIDs(ctx context.Context, userID uuid.UUID
 // ──────────────────────────────────────────────────
 
 func (s *goalService) CreateGoal(ctx context.Context, req *models.GoalCreateRequest, userID uuid.UUID) (*models.GoalResponse, error) {
-	// Validate dates
+	// Validate everything BEFORE any side effect (Documenta folder creation).
+	req.Title = strings.TrimSpace(req.Title)
+	if req.Title == "" {
+		return nil, errBadRequest(ctx, "goal_title_required")
+	}
+	if strings.TrimSpace(req.Description) == "" {
+		return nil, errBadRequest(ctx, "goal_description_required")
+	}
+	if !models.IsValidGoalPriority(req.Priority) {
+		return nil, errBadRequest(ctx, "goal_invalid_priority")
+	}
 	if err := req.Validate(); err != nil {
-		return nil, err
+		return nil, errBadRequest(ctx, "goal_start_after_target")
+	}
+	if !validMetadataJSON(req.Metadata) {
+		return nil, errBadRequest(ctx, "goal_invalid_metadata")
+	}
+	if u, uErr := s.userRepo.FindByID(ctx, req.OwnerID); uErr != nil || u == nil {
+		return nil, errBadRequest(ctx, "goal_owner_not_found")
+	}
+	if req.DepartmentID != nil {
+		if d, dErr := s.departmentRepo.FindByID(ctx, *req.DepartmentID); dErr != nil || d == nil {
+			return nil, errBadRequest(ctx, "goal_department_not_found")
+		}
 	}
 
 	// Check duplicate goal (title &  owner)
@@ -407,16 +580,11 @@ func (s *goalService) CreateGoal(ctx context.Context, req *models.GoalCreateRequ
 		parentLevel = parent.Level
 	}
 
-	// Ensure "Goal Management" folder at workspace root (idempotent)
-	goalMgmtFolderID, err := s.documentaClient.EnsureFolder(ctx, s.cfg.Documenta.WorkspaceName, "", "Goal Management")
+	// Create this goal's Documenta folder (unique name: title + short id).
+	goalID := uuid.New()
+	folderID, err := s.createGoalFolder(ctx, req.Title, goalID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to ensure Goal Management folder: %w", err)
-	}
-
-	// Create this goal's folder under Goal Management
-	folderID, err := s.documentaClient.CreateFolder(ctx, s.cfg.Documenta.WorkspaceName, goalMgmtFolderID, req.Title)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create goal folder: %w", err)
+		return nil, err
 	}
 
 	// Default metadata to empty JSON object
@@ -431,6 +599,7 @@ func (s *goalService) CreateGoal(ctx context.Context, req *models.GoalCreateRequ
 	}
 
 	goal := &models.Goal{
+		ID:                goalID,
 		Title:             req.Title,
 		Description:       req.Description,
 		Category:          req.Category,
@@ -450,7 +619,7 @@ func (s *goalService) CreateGoal(ctx context.Context, req *models.GoalCreateRequ
 	}
 
 	if err := s.goalRepo.Create(ctx, goal); err != nil {
-		fmt.Println("goal creation", err)
+		log.Printf("[goal_service] CreateGoal: insert failed: %v", err)
 		return nil, fmt.Errorf("failed to create goal: %w", err)
 	}
 
@@ -462,6 +631,9 @@ func (s *goalService) CreateGoal(ctx context.Context, req *models.GoalCreateRequ
 	}
 	if err := s.goalRepo.Update(ctx, goal); err != nil {
 		return nil, fmt.Errorf("failed to set goal path: %w", err)
+	}
+	if goal.ParentGoalID != nil {
+		_ = s.RecalculateProgress(ctx, *goal.ParentGoalID)
 	}
 
 	// Add the creator as a collaborator when they are not the owner. If
@@ -506,12 +678,8 @@ func (s *goalService) CreateGoal(ctx context.Context, req *models.GoalCreateRequ
 
 func (s *goalService) GetGoal(ctx context.Context, id uuid.UUID, userID uuid.UUID) (*models.GoalResponse, error) {
 	// Access check
-	canAccess, err := s.canAccessGoal(ctx, id, userID)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "goal_not_found"), err)
-	}
-	if !canAccess {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "access_denied"))
+	if _, err := s.requireView(ctx, id, userID); err != nil {
+		return nil, err
 	}
 
 	goal, err := s.goalRepo.FindByIDWithRelations(ctx, id)
@@ -564,6 +732,9 @@ func (s *goalService) ListGoals(ctx context.Context, filter *models.GoalFilter) 
 	if filter.Limit < 1 {
 		filter.Limit = 10
 	}
+	if _, err := repository.ResolveGoalSort(filter.SortBy, filter.SortOrder); err != nil {
+		return nil, 0, errBadRequest(ctx, "goal_invalid_sort")
+	}
 
 	goals, total, err := s.goalRepo.List(ctx, filter)
 	if err != nil {
@@ -583,22 +754,30 @@ func (s *goalService) ListGoals(ctx context.Context, filter *models.GoalFilter) 
 // ──────────────────────────────────────────────────
 
 func (s *goalService) UpdateGoal(ctx context.Context, id uuid.UUID, req *models.GoalUpdateRequest, userID uuid.UUID) (*models.GoalResponse, error) {
-	// Access check
-	canModify, _ := s.canModifyGoal(ctx, id, userID)
-	if !canModify {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "access_denied"))
-	}
-
-	goal, err := s.goalRepo.FindByID(ctx, id)
+	// Existence (404) + access (403)
+	goal, err := s.requireModify(ctx, id, userID)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "goal_not_found"), err)
+		return nil, err
+	}
+	if err := ensureGoalOpen(ctx, goal); err != nil {
+		return nil, err
 	}
 
-	// Apply non-nil fields
+	// Validate + apply non-nil fields
 	if req.Title != nil {
-		goal.Title = *req.Title
+		t := strings.TrimSpace(*req.Title)
+		if t == "" {
+			return nil, errBadRequest(ctx, "goal_title_required")
+		}
+		if len([]rune(t)) > 255 {
+			return nil, errBadRequest(ctx, "goal_title_too_long")
+		}
+		goal.Title = t
 	}
 	if req.Description != nil {
+		if strings.TrimSpace(*req.Description) == "" {
+			return nil, errBadRequest(ctx, "goal_description_required")
+		}
 		goal.Description = *req.Description
 	}
 	if req.Category != nil {
@@ -608,13 +787,30 @@ func (s *goalService) UpdateGoal(ctx context.Context, id uuid.UUID, req *models.
 		goal.CategoryID = req.CategoryID
 	}
 	if req.Priority != nil {
+		if !models.IsValidGoalPriority(*req.Priority) {
+			return nil, errBadRequest(ctx, "goal_invalid_priority")
+		}
 		goal.Priority = *req.Priority
 	}
 	if req.DepartmentID != nil {
+		if d, dErr := s.departmentRepo.FindByID(ctx, *req.DepartmentID); dErr != nil || d == nil {
+			return nil, errBadRequest(ctx, "goal_department_not_found")
+		}
 		goal.DepartmentID = req.DepartmentID
 	}
 	if req.OwnerID != nil {
+		if u, uErr := s.userRepo.FindByID(ctx, *req.OwnerID); uErr != nil || u == nil {
+			return nil, errBadRequest(ctx, "goal_owner_not_found")
+		}
 		goal.OwnerID = *req.OwnerID
+	}
+	// Re-parenting would require re-computing level/path for the whole
+	// subtree plus cycle checks; it is not supported. Sending the current
+	// parent (as edit forms do) is accepted.
+	if req.ParentGoalID != nil {
+		if goal.ParentGoalID == nil || *goal.ParentGoalID != *req.ParentGoalID {
+			return nil, errBadRequest(ctx, "goal_parent_change_unsupported")
+		}
 	}
 	if req.StartDate != nil {
 		goal.StartDate = req.StartDate
@@ -625,9 +821,25 @@ func (s *goalService) UpdateGoal(ctx context.Context, id uuid.UUID, req *models.
 	if req.ReviewDate != nil {
 		goal.ReviewDate = req.ReviewDate
 	}
-	if req.Metadata != nil {
-		goal.Metadata = *req.Metadata
+	if goal.StartDate != nil && goal.TargetDate != nil && goal.StartDate.After(*goal.TargetDate) {
+		return nil, errBadRequest(ctx, "goal_start_after_target")
 	}
+	if req.Metadata != nil {
+		if !validMetadataJSON(*req.Metadata) {
+			return nil, errBadRequest(ctx, "goal_invalid_metadata")
+		}
+		goal.Metadata = *req.Metadata
+		if strings.TrimSpace(goal.Metadata) == "" {
+			goal.Metadata = "{}"
+		}
+	}
+	if req.Title != nil || req.OwnerID != nil {
+		if existing, exErr := s.goalRepo.FindGoalByTitleAndOwner(ctx, goal.Title, goal.OwnerID); exErr == nil && existing != nil && existing.ID != goal.ID {
+			return nil, errConflict(ctx, "goal_title_exists")
+		}
+	}
+	// Don't let GORM's Save re-associate preloaded relations.
+	goal.Owner, goal.Department, goal.CategoryRef, goal.ParentGoal, goal.CreatedBy = nil, nil, nil, nil, nil
 
 	if err := s.goalRepo.Update(ctx, goal); err != nil {
 		return nil, fmt.Errorf("failed to update goal: %w", err)
@@ -673,24 +885,42 @@ func (s *goalService) DeleteGoal(ctx context.Context, id uuid.UUID, userID uuid.
 
 	goal, err := s.goalRepo.FindByID(ctx, id)
 	if err != nil {
-		return fmt.Errorf("%s: %w", i18n.T(ctx, "goal_not_found"), err)
+		return notFoundOr(ctx, err, "goal_not_found")
 	}
 	isSuperAdmin := s.isSuperAdmin(ctx)
 
 	if goal.Status == models.GoalStatusDraft {
 		// Draft goals: only the owner or a super admin may delete
 		if goal.OwnerID != userID && !isSuperAdmin {
-			return fmt.Errorf("%s", i18n.T(ctx, "access_denied"))
+			return errForbidden(ctx)
 		}
 	} else {
 		// Non-draft goals: only a super admin can  delete
 		if !isSuperAdmin {
-			return fmt.Errorf("%s", i18n.T(ctx, "access_denied"))
+			return errForbidden(ctx)
 		}
 	}
 
-	if err := s.goalRepo.Delete(ctx, id); err != nil {
+	// Block deletion while child goals or KPI-module records still point at
+	// this goal (they would be left dangling). The goal's own metrics,
+	// evidences, check-ins and comments are soft-deleted with it.
+	refs, err := s.goalRepo.FindGoalReferences(ctx, id)
+	if err != nil {
+		return fmt.Errorf("failed to check goal references: %w", err)
+	}
+	if len(refs) > 0 {
+		parts := make([]string, 0, len(refs))
+		for _, r := range refs {
+			parts = append(parts, fmt.Sprintf("%d %s", r.Count, r.Kind))
+		}
+		return errConflict(ctx, "goal_delete_blocked", strings.Join(parts, ", "))
+	}
+
+	if err := s.goalRepo.DeleteGoalWithOwnedRecords(ctx, id); err != nil {
 		return fmt.Errorf("failed to delete goal: %w", err)
+	}
+	if goal.ParentGoalID != nil {
+		_ = s.RecalculateProgress(ctx, *goal.ParentGoalID)
 	}
 
 	// Audit log
@@ -711,13 +941,14 @@ func (s *goalService) DeleteGoal(ctx context.Context, id uuid.UUID, userID uuid.
 // ──────────────────────────────────────────────────
 
 func (s *goalService) TransitionGoalStatus(ctx context.Context, id uuid.UUID, newStatus string, userID uuid.UUID) (*models.GoalResponse, error) {
-	goal, err := s.goalRepo.FindByID(ctx, id)
+	// Same rule as editing the goal: owner, reviewer collaborator or super admin.
+	goal, err := s.requireModify(ctx, id, userID)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "goal_not_found"), err)
+		return nil, err
 	}
 
 	if !models.IsValidGoalTransition(goal.Status, newStatus) {
-		return nil, fmt.Errorf("%s", i18n.Tf(ctx, "invalid_goal_status_transition", goal.Status, newStatus))
+		return nil, errBadRequest(ctx, "invalid_goal_status_transition", goal.Status, newStatus)
 	}
 
 	oldStatus := goal.Status
@@ -755,18 +986,26 @@ func (s *goalService) AddCollaborator(ctx context.Context, goalID uuid.UUID, req
 	// Verify goal exists
 	goal, err := s.goalRepo.FindByID(ctx, goalID)
 	if err != nil {
-		return fmt.Errorf("%s: %w", i18n.T(ctx, "goal_not_found"), err)
+		return notFoundOr(ctx, err, "goal_not_found")
 	}
 
 	// Only goal owner or super admin can manage collaborators
 	if goal.OwnerID != userID && !s.isSuperAdmin(ctx) {
-		return fmt.Errorf("%s", i18n.T(ctx, "access_denied"))
+		return errForbidden(ctx)
 	}
 
 	// Verify user exists
 	user, err := s.userRepo.FindByID(ctx, req.UserID)
-	if err != nil {
-		return fmt.Errorf("%s: %w", i18n.T(ctx, "user_not_found"), err)
+	if err != nil || user == nil {
+		return errBadRequest(ctx, "user_not_found")
+	}
+
+	// Reject duplicates (one collaborator row per user per goal)
+	existing, _ := s.goalRepo.ListCollaborators(ctx, goalID)
+	for _, c := range existing {
+		if c.UserID == req.UserID {
+			return errConflict(ctx, "collaborator_already_exists")
+		}
 	}
 
 	collaborator := &models.GoalCollaborator{
@@ -824,10 +1063,10 @@ func (s *goalService) RemoveCollaborator(ctx context.Context, goalID uuid.UUID, 
 	// Only goal owner or super admin can manage collaborators
 	goal, err := s.goalRepo.FindByID(ctx, goalID)
 	if err != nil {
-		return fmt.Errorf("%s: %w", i18n.T(ctx, "goal_not_found"), err)
+		return notFoundOr(ctx, err, "goal_not_found")
 	}
 	if goal.OwnerID != userID && !s.isSuperAdmin(ctx) {
-		return fmt.Errorf("%s", i18n.T(ctx, "access_denied"))
+		return errForbidden(ctx)
 	}
 
 	if err := s.goalRepo.RemoveCollaborator(ctx, goalID, collaboratorUserID); err != nil {
@@ -859,36 +1098,48 @@ func (s *goalService) RemoveCollaborator(ctx context.Context, goalID uuid.UUID, 
 // ──────────────────────────────────────────────────
 
 func (s *goalService) CreateMetric(ctx context.Context, goalID uuid.UUID, req *models.GoalMetricCreateRequest, userID uuid.UUID) (*models.GoalMetricResponse, error) {
-	// Access check
-	canModify, _ := s.canModifyGoal(ctx, goalID, userID)
-	if !canModify {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "access_denied"))
-	}
-
-	// Verify goal exists
-	goal, err := s.goalRepo.FindByID(ctx, goalID)
+	// Existence (404) + access (403)
+	goal, err := s.requireModify(ctx, goalID, userID)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "goal_not_found"), err)
+		return nil, err
+	}
+	if err := ensureGoalOpen(ctx, goal); err != nil {
+		return nil, err
 	}
 
-	// Validate metric type
+	// Validate
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		return nil, errBadRequest(ctx, "metric_name_required")
+	}
 	if !models.IsValidMetricType(req.MetricType) {
-		return nil, fmt.Errorf("%s", i18n.Tf(ctx, "invalid_metric_type", req.MetricType))
+		return nil, errBadRequest(ctx, "invalid_metric_type", req.MetricType)
 	}
-
-	weight := req.Weight
-	if weight == 0 {
-		weight = 1.0
+	if req.TargetValue == nil {
+		return nil, errBadRequest(ctx, "target_value_required")
+	}
+	weight := 1.0
+	if req.Weight != nil {
+		if *req.Weight <= 0 {
+			return nil, errBadRequest(ctx, "metric_weight_positive")
+		}
+		weight = *req.Weight
+	}
+	siblings, _ := s.goalRepo.ListMetricsByGoalID(ctx, goalID)
+	for _, sib := range siblings {
+		if strings.EqualFold(strings.TrimSpace(sib.Name), name) {
+			return nil, errConflict(ctx, "metric_name_exists")
+		}
 	}
 
 	metric := &models.GoalMetric{
 		GoalID:        goalID,
-		Name:          req.Name,
+		Name:          name,
 		MetricType:    req.MetricType,
 		Unit:          req.Unit,
 		BaselineValue: req.BaselineValue,
 		CurrentValue:  req.CurrentValue,
-		TargetValue:   req.TargetValue,
+		TargetValue:   *req.TargetValue,
 		Weight:        weight,
 		Formula:       strings.TrimSpace(req.Formula),
 		Version:       1,
@@ -897,23 +1148,19 @@ func (s *goalService) CreateMetric(ctx context.Context, goalID uuid.UUID, req *m
 	// If a formula was provided, validate it compiles and pre-compute CurrentValue
 	// from siblings so the metric isn't stuck at 0 until the next value update.
 	if metric.Formula != "" {
-		siblings, _ := s.goalRepo.ListMetricsByGoalID(ctx, goalID)
-		if computed, ferr := metricformula.Evaluate(metric.Formula, metricSiblingsMap(siblings)); ferr != nil {
-			return nil, fmt.Errorf("invalid formula: %w", ferr)
-		} else {
-			metric.CurrentValue = computed
+		computed, ferr := metricformula.Evaluate(metric.Formula, metricSiblingsMap(siblings))
+		if ferr != nil {
+			return nil, errBadRequest(ctx, "metric_invalid_formula", ferr.Error())
 		}
+		metric.CurrentValue = computed
 	}
 
 	// Assign the metric workflow's initial state. Owners can see drafts but
 	// view-only callers will be filtered out by ListMetrics until a transition
 	// reaches the terminal-approved state.
-	if wfs, wfErr := s.workflowRepo.ListByRecordType(ctx, "metric", true); wfErr == nil && len(wfs) > 0 {
-		wf := wfs[0]
-		if initial, ierr := s.workflowRepo.GetInitialState(ctx, wf.ID); ierr == nil && initial != nil {
-			metric.WorkflowID = &wf.ID
-			metric.CurrentStateID = &initial.ID
-		}
+	if wf, initial, wfErr := s.resolveGoalWorkflow(ctx, goalWfMetric); wfErr == nil && wf != nil && initial != nil {
+		metric.WorkflowID = &wf.ID
+		metric.CurrentStateID = &initial.ID
 	}
 
 	if err := s.goalRepo.CreateMetric(ctx, metric); err != nil {
@@ -946,20 +1193,38 @@ func (s *goalService) CreateMetric(ctx context.Context, goalID uuid.UUID, req *m
 func (s *goalService) UpdateMetric(ctx context.Context, id uuid.UUID, req *models.GoalMetricUpdateRequest, userID uuid.UUID) (*models.GoalMetricResponse, error) {
 	metric, err := s.goalRepo.FindMetricByID(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "metric_not_found"), err)
+		return nil, notFoundOr(ctx, err, "metric_not_found")
 	}
 
 	// Access check via parent goal
-	canModify, _ := s.canModifyGoal(ctx, metric.GoalID, userID)
-	if !canModify {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "access_denied"))
+	goal, err := s.requireModify(ctx, metric.GoalID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureGoalOpen(ctx, goal); err != nil {
+		return nil, err
 	}
 
-	// Apply non-nil fields
+	// Validate + apply non-nil fields
 	if req.Name != nil {
-		metric.Name = *req.Name
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			return nil, errBadRequest(ctx, "metric_name_required")
+		}
+		if !strings.EqualFold(name, metric.Name) {
+			siblings, _ := s.goalRepo.ListMetricsByGoalID(ctx, metric.GoalID)
+			for _, sib := range siblings {
+				if sib.ID != metric.ID && strings.EqualFold(strings.TrimSpace(sib.Name), name) {
+					return nil, errConflict(ctx, "metric_name_exists")
+				}
+			}
+		}
+		metric.Name = name
 	}
 	if req.MetricType != nil {
+		if !models.IsValidMetricType(*req.MetricType) {
+			return nil, errBadRequest(ctx, "invalid_metric_type", *req.MetricType)
+		}
 		metric.MetricType = *req.MetricType
 	}
 	if req.Unit != nil {
@@ -972,6 +1237,9 @@ func (s *goalService) UpdateMetric(ctx context.Context, id uuid.UUID, req *model
 		metric.TargetValue = *req.TargetValue
 	}
 	if req.Weight != nil {
+		if *req.Weight <= 0 {
+			return nil, errBadRequest(ctx, "metric_weight_positive")
+		}
 		metric.Weight = *req.Weight
 	}
 	if req.Formula != nil {
@@ -990,7 +1258,7 @@ func (s *goalService) UpdateMetric(ctx context.Context, id uuid.UUID, req *model
 		}
 		computed, ferr := metricformula.Evaluate(metric.Formula, metricSiblingsMap(filtered))
 		if ferr != nil {
-			return nil, fmt.Errorf("invalid formula: %w", ferr)
+			return nil, errBadRequest(ctx, "metric_invalid_formula", ferr.Error())
 		}
 		metric.CurrentValue = computed
 	}
@@ -1026,13 +1294,16 @@ func (s *goalService) DeleteMetric(ctx context.Context, id uuid.UUID, userID uui
 	// Find metric to get goal ID
 	metric, err := s.goalRepo.FindMetricByID(ctx, id)
 	if err != nil {
-		return fmt.Errorf("%s: %w", i18n.T(ctx, "metric_not_found"), err)
+		return notFoundOr(ctx, err, "metric_not_found")
 	}
 
 	// Access check via parent goal
-	canModify, _ := s.canModifyGoal(ctx, metric.GoalID, userID)
-	if !canModify {
-		return fmt.Errorf("%s", i18n.T(ctx, "access_denied"))
+	goal, err := s.requireModify(ctx, metric.GoalID, userID)
+	if err != nil {
+		return err
+	}
+	if err := ensureGoalOpen(ctx, goal); err != nil {
+		return err
 	}
 
 	goalID := metric.GoalID
@@ -1068,20 +1339,57 @@ func (s *goalService) DeleteMetric(ctx context.Context, id uuid.UUID, userID uui
 // approval workflow. The metric's CurrentValue is only updated when the
 // value change reaches a terminal-approved state via TransitionMetricValueChange.
 func (s *goalService) UpdateMetricValue(ctx context.Context, id uuid.UUID, req *models.MetricValueUpdateRequest, userID uuid.UUID) (*models.GoalMetricValueChangeResponse, error) {
+	if req.Value == nil {
+		return nil, errBadRequest(ctx, "value_required")
+	}
 	metric, err := s.goalRepo.FindMetricByID(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "metric_not_found"), err)
+		return nil, notFoundOr(ctx, err, "metric_not_found")
 	}
 
 	// Access check via parent goal
-	canModify, _ := s.canModifyGoal(ctx, metric.GoalID, userID)
-	if !canModify {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "access_denied"))
+	goal, err := s.requireModify(ctx, metric.GoalID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureGoalOpen(ctx, goal); err != nil {
+		return nil, err
 	}
 
-	// If the metric has a formula, compute the proposed value from siblings —
-	// the submitted raw value is ignored. Reviewers approve the computed value.
-	newValue := req.Value
+	change, err := s.buildMetricValueChange(ctx, metric, *req.Value, req.Comment, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.goalRepo.CreateMetricValueChange(ctx, change); err != nil {
+		return nil, fmt.Errorf("failed to create metric value change: %w", err)
+	}
+
+	// Audit log
+	s.actionLogService.LogAction(ctx, &LogActionParams{
+		UserID:      userID,
+		Action:      "create",
+		Module:      "goals",
+		ResourceID:  change.ID.String(),
+		Description: fmt.Sprintf("Proposed metric value change for '%s': %.2f -> %.2f (pending approval)", metric.Name, metric.CurrentValue, change.ProposedValue),
+		Status:      "success",
+	})
+
+	// Reload with relations
+	reloaded, rerr := s.goalRepo.FindMetricValueChangeByIDWithRelations(ctx, change.ID)
+	if rerr == nil {
+		resp := reloaded.ToResponse()
+		return &resp, nil
+	}
+	resp := change.ToResponse()
+	return &resp, nil
+}
+
+// buildMetricValueChange computes the proposed value (formula metrics ignore
+// the submitted value) and attaches the metric_value_change workflow's initial
+// state. It does not persist anything.
+func (s *goalService) buildMetricValueChange(ctx context.Context, metric *models.GoalMetric, value float64, comment string, userID uuid.UUID) (*models.GoalMetricValueChange, error) {
+	newValue := value
 	if strings.TrimSpace(metric.Formula) != "" {
 		siblings, _ := s.goalRepo.ListMetricsByGoalID(ctx, metric.GoalID)
 		filtered := make([]models.GoalMetric, 0, len(siblings))
@@ -1098,62 +1406,44 @@ func (s *goalService) UpdateMetricValue(ctx context.Context, id uuid.UUID, req *
 		}
 	}
 
-	// Resolve the metric_value_change workflow + initial state
-	wfs, wfErr := s.workflowRepo.ListByRecordType(ctx, "metric_value_change", true)
-	if wfErr != nil || len(wfs) == 0 {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "no_active_metric_value_change_workflow"))
-	}
-	wf := wfs[0]
-	initial, ierr := s.workflowRepo.GetInitialState(ctx, wf.ID)
-	if ierr != nil || initial == nil {
+	wf, initial, wfErr := s.resolveGoalWorkflow(ctx, goalWfMetricValueChange)
+	if wfErr != nil && wf != nil {
 		return nil, fmt.Errorf("%s", i18n.T(ctx, "metric_value_change_workflow_no_initial_state"))
 	}
+	if wfErr != nil || wf == nil || initial == nil {
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "no_active_metric_value_change_workflow"))
+	}
 
-	change := &models.GoalMetricValueChange{
+	return &models.GoalMetricValueChange{
 		MetricID:       metric.ID,
 		ProposedValue:  newValue,
 		PreviousValue:  metric.CurrentValue,
-		Comment:        req.Comment,
+		Comment:        comment,
 		SubmittedByID:  userID,
 		WorkflowID:     wf.ID,
 		CurrentStateID: initial.ID,
 		Version:        1,
-	}
-
-	if err := s.goalRepo.CreateMetricValueChange(ctx, change); err != nil {
-		return nil, fmt.Errorf("failed to create metric value change: %w", err)
-	}
-
-	// Audit log
-	s.actionLogService.LogAction(ctx, &LogActionParams{
-		UserID:      userID,
-		Action:      "create",
-		Module:      "goals",
-		ResourceID:  change.ID.String(),
-		Description: fmt.Sprintf("Proposed metric value change for '%s': %.2f -> %.2f (pending approval)", metric.Name, metric.CurrentValue, newValue),
-		Status:      "success",
-	})
-
-	// Reload with relations
-	reloaded, rerr := s.goalRepo.FindMetricValueChangeByIDWithRelations(ctx, change.ID)
-	if rerr == nil {
-		resp := reloaded.ToResponse()
-		return &resp, nil
-	}
-	resp := change.ToResponse()
-	return &resp, nil
+	}, nil
 }
 
 // ──────────────────────────────────────────────────
 // 13. GetMetricHistory
 // ──────────────────────────────────────────────────
 
-func (s *goalService) GetMetricHistory(ctx context.Context, metricID uuid.UUID, page int, limit int) ([]models.MetricHistoryResponse, int64, error) {
+func (s *goalService) GetMetricHistory(ctx context.Context, metricID uuid.UUID, page int, limit int, userID uuid.UUID) ([]models.MetricHistoryResponse, int64, error) {
 	if page < 1 {
 		page = 1
 	}
 	if limit < 1 {
 		limit = 20
+	}
+
+	metric, err := s.goalRepo.FindMetricByID(ctx, metricID)
+	if err != nil {
+		return nil, 0, notFoundOr(ctx, err, "metric_not_found")
+	}
+	if _, err := s.requireView(ctx, metric.GoalID, userID); err != nil {
+		return nil, 0, err
 	}
 
 	histories, total, err := s.goalRepo.ListMetricHistory(ctx, metricID, page, limit)
@@ -1174,20 +1464,43 @@ func (s *goalService) GetMetricHistory(ctx context.Context, metricID uuid.UUID, 
 // ──────────────────────────────────────────────────
 
 func (s *goalService) CreateEvidence(ctx context.Context, goalID uuid.UUID, title string, evidenceType string, comment string, metricID *uuid.UUID, fileName string, fileSize int64, mimeType string, fileData []byte, userID uuid.UUID) (*models.EvidenceResponse, error) {
-	// Access check
-	canAccess, _ := s.canAccessGoal(ctx, goalID, userID)
-	if !canAccess {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "access_denied"))
-	}
-
-	if strings.TrimSpace(comment) == "" {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "comment_is_mandatory"))
-	}
-
-	// Find goal to get DocumentaFolderID
-	goal, err := s.goalRepo.FindByID(ctx, goalID)
+	// Existence (404) + access (403)
+	goal, err := s.requireView(ctx, goalID, userID)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "goal_not_found"), err)
+		return nil, err
+	}
+	if err := ensureGoalOpen(ctx, goal); err != nil {
+		return nil, err
+	}
+
+	// Validate input before touching Documenta
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return nil, errBadRequest(ctx, "evidence_title_required")
+	}
+	if len([]rune(title)) > 255 {
+		return nil, errBadRequest(ctx, "goal_title_too_long")
+	}
+	if !isValidEvidenceType(evidenceType) {
+		return nil, errBadRequest(ctx, "evidence_invalid_type")
+	}
+	if strings.TrimSpace(comment) == "" {
+		return nil, errBadRequest(ctx, "comment_is_mandatory")
+	}
+	if err := validateEvidenceFile(ctx, fileName, fileData); err != nil {
+		return nil, err
+	}
+	var evidenceMetric *models.GoalMetric
+	if metricID != nil {
+		m, mErr := s.goalRepo.FindMetricByID(ctx, *metricID)
+		if mErr != nil || m == nil || m.GoalID != goalID {
+			return nil, errBadRequest(ctx, "evidence_metric_not_in_goal")
+		}
+		evidenceMetric = m
+	}
+	wf, initialState, wfErr := s.resolveGoalWorkflow(ctx, goalWfEvidence)
+	if wfErr != nil || wf == nil || initialState == nil {
+		return nil, fmt.Errorf("%s", i18n.T(ctx, "no_active_evidence_approval_workflow"))
 	}
 
 	// Determine upload folder (metric subfolder if metricID provided). If the goal's folder ID is missing (e.g. created before Documenta was enabled), lazily provision the hierarchy now so the upload can proceed.
@@ -1197,7 +1510,7 @@ func (s *goalService) CreateEvidence(ctx context.Context, goalID uuid.UUID, titl
 		if ensureErr != nil {
 			return nil, fmt.Errorf("failed to ensure Goal Management folder: %w", ensureErr)
 		}
-		newFolderID, createErr := s.documentaClient.CreateFolder(ctx, s.cfg.Documenta.WorkspaceName, goalMgmtID, goal.Title)
+		newFolderID, createErr := s.documentaClient.CreateFolder(ctx, s.cfg.Documenta.WorkspaceName, goalMgmtID, goalFolderName(goal.Title, goal.ID))
 		if createErr != nil {
 			return nil, fmt.Errorf("failed to create goal folder for evidence upload: %w", createErr)
 		}
@@ -1208,17 +1521,14 @@ func (s *goalService) CreateEvidence(ctx context.Context, goalID uuid.UUID, titl
 		}
 	}
 	var metricName string
-	if metricID != nil {
-		metric, metricErr := s.goalRepo.FindMetricByID(ctx, *metricID)
-		if metricErr == nil && metric != nil {
-			metricName = metric.Name
-			// Lazy-create metric subfolder under goal folder
-			metricFolderID, ensureErr := s.documentaClient.EnsureFolder(
-				ctx, s.cfg.Documenta.WorkspaceName, uploadFolderID, metric.Name,
-			)
-			if ensureErr == nil {
-				uploadFolderID = metricFolderID
-			}
+	if evidenceMetric != nil {
+		metricName = evidenceMetric.Name
+		// Lazy-create metric subfolder under goal folder
+		metricFolderID, ensureErr := s.documentaClient.EnsureFolder(
+			ctx, s.cfg.Documenta.WorkspaceName, uploadFolderID, evidenceMetric.Name,
+		)
+		if ensureErr == nil {
+			uploadFolderID = metricFolderID
 		}
 	}
 
@@ -1266,17 +1576,6 @@ func (s *goalService) CreateEvidence(ctx context.Context, goalID uuid.UUID, titl
 	// Persist metadata as searchable tags (upload-time metadata may not index)
 	if tagErr := s.documentaClient.SetTags(ctx, documentaFileID, metadata); tagErr != nil {
 		log.Printf("[goal_service] CreateEvidence: SetTags failed for file %s: %v", documentaFileID, tagErr)
-	}
-
-	// Resolve the evidence approval workflow and its initial state
-	workflows, wfErr := s.workflowRepo.ListByRecordType(ctx, "evidence", true)
-	if wfErr != nil || len(workflows) == 0 {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "no_active_evidence_approval_workflow"))
-	}
-	wf := workflows[0]
-	initialState, stateErr := s.workflowRepo.GetInitialState(ctx, wf.ID)
-	if stateErr != nil || initialState == nil {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "evidence_workflow_no_initial_state"))
 	}
 
 	evidence := &models.Evidence{
@@ -1369,14 +1668,33 @@ func (s *goalService) ListEvidences(ctx context.Context, goalID uuid.UUID, filte
 // 16. GetEvidence
 // ──────────────────────────────────────────────────
 
-func (s *goalService) GetEvidence(ctx context.Context, id uuid.UUID) (*models.EvidenceResponse, error) {
-	evidence, err := s.goalRepo.FindEvidenceByIDWithRelations(ctx, id)
+func (s *goalService) GetEvidence(ctx context.Context, id uuid.UUID, userID uuid.UUID) (*models.EvidenceResponse, error) {
+	evidence, err := s.loadEvidenceForView(ctx, id, userID)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "evidence_not_found"), err)
+		return nil, err
 	}
 
 	resp := evidence.ToResponse()
 	return &resp, nil
+}
+
+// loadEvidenceForView loads an evidence (404) and checks view access to its
+// goal (403). View-only callers cannot see unapproved evidence (404, same as
+// the list endpoint hiding it).
+func (s *goalService) loadEvidenceForView(ctx context.Context, id uuid.UUID, userID uuid.UUID) (*models.Evidence, error) {
+	evidence, err := s.goalRepo.FindEvidenceByIDWithRelations(ctx, id)
+	if err != nil {
+		return nil, notFoundOr(ctx, err, "evidence_not_found")
+	}
+	if _, err := s.requireView(ctx, evidence.GoalID, userID); err != nil {
+		return nil, err
+	}
+	if !s.canSeeUnapprovedItems(ctx, evidence.GoalID, userID) {
+		if evidence.CurrentStateID != nil && (evidence.CurrentState == nil || evidence.CurrentState.StateType != "terminal") {
+			return nil, errNotFound(ctx, "evidence_not_found")
+		}
+	}
+	return evidence, nil
 }
 
 // ──────────────────────────────────────────────────
@@ -1386,12 +1704,18 @@ func (s *goalService) GetEvidence(ctx context.Context, id uuid.UUID) (*models.Ev
 func (s *goalService) DeleteEvidence(ctx context.Context, id uuid.UUID, userID uuid.UUID) error {
 	evidence, err := s.goalRepo.FindEvidenceByIDWithRelations(ctx, id)
 	if err != nil {
-		return fmt.Errorf("%s: %w", i18n.T(ctx, "evidence_not_found"), err)
+		return notFoundOr(ctx, err, "evidence_not_found")
+	}
+
+	// Only the uploader (who can still see the goal) or someone who can
+	// modify the goal may delete evidence.
+	if err := s.requireEvidenceEdit(ctx, evidence, userID); err != nil {
+		return err
 	}
 
 	// Block deletion only for Approved evidence
 	if evidence.Status == models.EvidenceStatusApproved {
-		return fmt.Errorf("%s", i18n.Tf(ctx, "approved_evidence_cannot_be_deleted", evidence.Status))
+		return errConflict(ctx, "approved_evidence_cannot_be_deleted", evidence.Status)
 	}
 
 	// Delete file from Documenta
@@ -1417,6 +1741,22 @@ func (s *goalService) DeleteEvidence(ctx context.Context, id uuid.UUID, userID u
 	return nil
 }
 
+// requireEvidenceEdit: uploader with view access to the goal, or anyone who
+// can modify the goal (owner / reviewer collaborator / super admin).
+func (s *goalService) requireEvidenceEdit(ctx context.Context, evidence *models.Evidence, userID uuid.UUID) error {
+	goal, err := s.goalRepo.FindByID(ctx, evidence.GoalID)
+	if err != nil {
+		return notFoundOr(ctx, err, "goal_not_found")
+	}
+	if s.canModifyGoalObj(ctx, goal, userID) {
+		return nil
+	}
+	if evidence.UploadedByID == userID && s.canAccessGoalObj(ctx, goal, userID) {
+		return nil
+	}
+	return errForbidden(ctx)
+}
+
 // ──────────────────────────────────────────────────
 // 17b. ReplaceEvidenceFile
 // ──────────────────────────────────────────────────
@@ -1424,27 +1764,27 @@ func (s *goalService) DeleteEvidence(ctx context.Context, id uuid.UUID, userID u
 func (s *goalService) ReplaceEvidenceFile(ctx context.Context, evidenceID uuid.UUID, fileName string, fileSize int64, mimeType string, fileData []byte, userID uuid.UUID) (*models.EvidenceResponse, error) {
 	evidence, err := s.goalRepo.FindEvidenceByIDWithRelations(ctx, evidenceID)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "evidence_not_found"), err)
+		return nil, notFoundOr(ctx, err, "evidence_not_found")
+	}
+	if err := s.requireEvidenceEdit(ctx, evidence, userID); err != nil {
+		return nil, err
 	}
 
-	// Only allow replacement in Draft or Changes_Requested state
-	allowedCodes := map[string]bool{"draft": true, "changes_requested": true}
-	if evidence.CurrentState == nil || !allowedCodes[evidence.CurrentState.Code] {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "evidence_file_replace_invalid_state"))
+	// Only allow replacement in the workflow's initial (draft) state or
+	// changes_requested.
+	if evidence.CurrentState == nil || !(evidence.CurrentState.StateType == "initial" || evidence.CurrentState.Code == "draft" || evidence.CurrentState.Code == "changes_requested") {
+		return nil, errConflict(ctx, "evidence_file_replace_invalid_state")
 	}
-
-	// Delete old file from Documenta
-	if evidence.DocumentaFileID != "" {
-		if delErr := s.documentaClient.DeleteFile(ctx, evidence.DocumentaFileID); delErr != nil {
-			log.Printf("Warning: failed to delete old file from Documenta: %v", delErr)
-		}
+	if err := validateEvidenceFile(ctx, fileName, fileData); err != nil {
+		return nil, err
 	}
 
 	// Get goal for folder ID
 	goal, err := s.goalRepo.FindByID(ctx, evidence.GoalID)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "goal_not_found"), err)
+		return nil, notFoundOr(ctx, err, "goal_not_found")
 	}
+	oldFileID := evidence.DocumentaFileID
 
 	// Determine upload folder (metric subfolder if evidence has metricID)
 	uploadFolderID := goal.DocumentaFolderID
@@ -1514,9 +1854,22 @@ func (s *goalService) ReplaceEvidenceFile(ctx context.Context, evidenceID uuid.U
 	evidence.FileSize = fileSize
 	evidence.MimeType = mimeType
 	evidence.Version++
+	// Avoid GORM re-saving preloaded associations.
+	evidence.Goal, evidence.Metric, evidence.UploadedBy, evidence.CurrentState, evidence.AssignedTo = nil, nil, nil, nil, nil
 
 	if err := s.goalRepo.UpdateEvidence(ctx, evidence); err != nil {
+		// Keep the old file; remove the orphaned new upload.
+		if delErr := s.documentaClient.DeleteFile(ctx, newFileID); delErr != nil {
+			log.Printf("Warning: failed to delete orphaned replacement file %s: %v", newFileID, delErr)
+		}
 		return nil, fmt.Errorf("failed to update evidence: %w", err)
+	}
+
+	// Only now that the new file is stored and referenced, delete the old one.
+	if oldFileID != "" && oldFileID != newFileID {
+		if delErr := s.documentaClient.DeleteFile(ctx, oldFileID); delErr != nil {
+			log.Printf("Warning: failed to delete old file from Documenta: %v", delErr)
+		}
 	}
 
 	s.actionLogService.LogAction(ctx, &LogActionParams{
@@ -1543,13 +1896,13 @@ func (s *goalService) ReplaceEvidenceFile(ctx context.Context, evidenceID uuid.U
 // ──────────────────────────────────────────────────
 
 func (s *goalService) GetAvailableEvidenceTransitions(ctx context.Context, evidenceID uuid.UUID, userID uuid.UUID) ([]models.AvailableTransitionResponse, error) {
-	evidence, err := s.goalRepo.FindEvidenceByIDWithRelations(ctx, evidenceID)
+	evidence, err := s.loadEvidenceForView(ctx, evidenceID, userID)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "evidence_not_found"), err)
+		return nil, err
 	}
 
 	if evidence.CurrentStateID == nil || evidence.WorkflowID == nil {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "evidence_no_workflow_assigned"))
+		return nil, errBadRequest(ctx, "evidence_no_workflow_assigned")
 	}
 
 	// Get all transitions from current state
@@ -1620,6 +1973,12 @@ func (s *goalService) GetAvailableEvidenceTransitions(ctx context.Context, evide
 		case "assign_l1":
 			// System transition — not available to users
 			continue
+		default:
+			// Unknown transition codes (non-goal workflow): goal editors only.
+			if !s.canModifyGoalObj(ctx, evidence.Goal, userID) {
+				canExecute = false
+				reason = "Only the goal owner or a reviewer can perform this action"
+			}
 		}
 
 		// Build requirements response
@@ -1646,7 +2005,17 @@ func (s *goalService) GetAvailableEvidenceTransitions(ctx context.Context, evide
 func (s *goalService) ExecuteEvidenceTransition(ctx context.Context, evidenceID uuid.UUID, req *models.EvidenceTransitionRequest, userID uuid.UUID) (*models.EvidenceResponse, error) {
 	transitionID, err := uuid.Parse(req.TransitionID)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "invalid_transition_id_svc"), err)
+		return nil, errBadRequest(ctx, "invalid_transition_id_svc")
+	}
+
+	// Existence (404) + view access to the goal (403) before anything else.
+	pre, err := s.goalRepo.FindEvidenceByID(ctx, evidenceID)
+	if err != nil {
+		return nil, notFoundOr(ctx, err, "evidence_not_found")
+	}
+	evGoal, err := s.requireView(ctx, pre.GoalID, userID)
+	if err != nil {
+		return nil, err
 	}
 
 	// Begin transaction
@@ -1661,7 +2030,7 @@ func (s *goalService) ExecuteEvidenceTransition(ctx context.Context, evidenceID 
 	evidence, err := s.goalRepo.FindEvidenceByIDForUpdate(ctx, tx, evidenceID)
 	if err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "evidence_not_found"), err)
+		return nil, notFoundOr(ctx, err, "evidence_not_found")
 	}
 
 	// Optimistic concurrency check
@@ -1679,7 +2048,7 @@ func (s *goalService) ExecuteEvidenceTransition(ctx context.Context, evidenceID 
 	transition, err := s.workflowRepo.FindTransitionByIDWithRelations(ctx, transitionID)
 	if err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "transition_not_found"), err)
+		return nil, errBadRequest(ctx, "transition_not_found")
 	}
 
 	// Validate transition belongs to evidence's workflow
@@ -1700,12 +2069,18 @@ func (s *goalService) ExecuteEvidenceTransition(ctx context.Context, evidenceID 
 		goal, _ := s.goalRepo.FindByID(ctx, evidence.GoalID)
 		if evidence.UploadedByID != userID && (goal == nil || goal.OwnerID != userID) {
 			tx.Rollback()
-			return nil, fmt.Errorf("%s", i18n.T(ctx, "only_uploader_or_owner_submit"))
+			return nil, newGoalErr(ctx, http.StatusForbidden, "only_uploader_or_owner_submit")
 		}
 	case "approve_l1", "approve_l1_final", "request_changes_l1", "reject_l1", "approve_l2", "request_changes_l2", "reject_l2":
 		if evidence.AssignedToID == nil || *evidence.AssignedToID != userID {
 			tx.Rollback()
-			return nil, fmt.Errorf("%s", i18n.T(ctx, "only_reviewer_action"))
+			return nil, newGoalErr(ctx, http.StatusForbidden, "only_reviewer_action")
+		}
+	default:
+		// Unknown transition codes (e.g. a non-goal workflow): goal editors only.
+		if !s.canModifyGoalObj(ctx, evGoal, userID) {
+			tx.Rollback()
+			return nil, errForbidden(ctx)
 		}
 	}
 
@@ -1763,6 +2138,14 @@ func (s *goalService) ExecuteEvidenceTransition(ctx context.Context, evidenceID 
 			evidence.Status = models.EvidenceStatusRejected
 		case "changes_requested":
 			evidence.Status = models.EvidenceStatusChangesRequested
+		default:
+			if targetState.StateType == "terminal" {
+				if isGoalApprovalTransition(transition) {
+					evidence.Status = models.EvidenceStatusApproved
+				} else {
+					evidence.Status = models.EvidenceStatusRejected
+				}
+			}
 		}
 	}
 
@@ -1874,7 +2257,7 @@ func (s *goalService) ExecuteEvidenceTransition(ctx context.Context, evidenceID 
 
 	case "approve_l1_final", "approve_l2":
 		// Recalculate goal progress
-		s.RecalculateProgress(ctx, evidence.GoalID)
+		_ = s.RecalculateProgress(ctx, evidence.GoalID)
 		// Notify submitter
 		submitter, sErr := s.userRepo.FindByID(ctx, evidence.UploadedByID)
 		if sErr == nil && submitter != nil {
@@ -1945,7 +2328,10 @@ func (s *goalService) ExecuteEvidenceTransition(ctx context.Context, evidenceID 
 // 20. GetEvidenceTransitionHistory
 // ──────────────────────────────────────────────────
 
-func (s *goalService) GetEvidenceTransitionHistory(ctx context.Context, evidenceID uuid.UUID) ([]models.EvidenceTransitionHistoryResponse, error) {
+func (s *goalService) GetEvidenceTransitionHistory(ctx context.Context, evidenceID uuid.UUID, userID uuid.UUID) ([]models.EvidenceTransitionHistoryResponse, error) {
+	if _, err := s.loadEvidenceForView(ctx, evidenceID, userID); err != nil {
+		return nil, err
+	}
 	histories, err := s.goalRepo.ListTransitionHistory(ctx, evidenceID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get transition history: %w", err)
@@ -2068,11 +2454,14 @@ func (s *goalService) ListCompletedApprovals(ctx context.Context, userID uuid.UU
 func (s *goalService) GetAvailableMetricTransitions(ctx context.Context, metricID uuid.UUID, userID uuid.UUID) ([]models.AvailableTransitionResponse, error) {
 	metric, err := s.goalRepo.FindMetricByIDWithRelations(ctx, metricID)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "metric_not_found"), err)
+		return nil, notFoundOr(ctx, err, "metric_not_found")
+	}
+	if _, err := s.requireView(ctx, metric.GoalID, userID); err != nil {
+		return nil, err
 	}
 
 	if metric.CurrentStateID == nil || metric.WorkflowID == nil {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "metric_no_workflow_assigned"))
+		return nil, errBadRequest(ctx, "metric_no_workflow_assigned")
 	}
 
 	transitions, err := s.workflowRepo.ListTransitionsFromState(ctx, *metric.CurrentStateID)
@@ -2101,10 +2490,13 @@ func (s *goalService) GetAvailableMetricTransitions(ctx context.Context, metricI
 func (s *goalService) GetAvailableMetricValueChangeTransitions(ctx context.Context, changeID uuid.UUID, userID uuid.UUID) ([]models.AvailableTransitionResponse, error) {
 	change, err := s.goalRepo.FindMetricValueChangeByIDWithRelations(ctx, changeID)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "metric_value_change_not_found"), err)
+		return nil, notFoundOr(ctx, err, "metric_value_change_not_found")
 	}
 	if change.Metric == nil {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "orphaned_metric_value_change"))
+		return nil, errNotFound(ctx, "orphaned_metric_value_change")
+	}
+	if _, err := s.requireView(ctx, change.Metric.GoalID, userID); err != nil {
+		return nil, err
 	}
 
 	transitions, err := s.workflowRepo.ListTransitionsFromState(ctx, change.CurrentStateID)
@@ -2175,6 +2567,11 @@ func (s *goalService) buildAvailableTransitions(ctx context.Context, transitions
 			}
 		case "assign_l1":
 			continue
+		default:
+			if ok, _ := s.canModifyGoal(ctx, goalID, userID); !ok {
+				canExecute = false
+				reason = "Only the goal owner or a reviewer can perform this action"
+			}
 		}
 
 		reqResponses := make([]models.TransitionRequirementResponse, len(requirements))
@@ -2196,7 +2593,16 @@ func (s *goalService) buildAvailableTransitions(ctx context.Context, transitions
 func (s *goalService) TransitionMetric(ctx context.Context, metricID uuid.UUID, req *models.MetricTransitionRequest, userID uuid.UUID) (*models.GoalMetricResponse, error) {
 	transitionID, err := uuid.Parse(req.TransitionID)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "invalid_transition_id_svc"), err)
+		return nil, errBadRequest(ctx, "invalid_transition_id_svc")
+	}
+
+	pre, err := s.goalRepo.FindMetricByID(ctx, metricID)
+	if err != nil {
+		return nil, notFoundOr(ctx, err, "metric_not_found")
+	}
+	mGoal, err := s.requireView(ctx, pre.GoalID, userID)
+	if err != nil {
+		return nil, err
 	}
 
 	tx := s.goalRepo.BeginTx(ctx)
@@ -2209,7 +2615,7 @@ func (s *goalService) TransitionMetric(ctx context.Context, metricID uuid.UUID, 
 	metric, err := s.goalRepo.FindMetricByIDForUpdate(ctx, tx, metricID)
 	if err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "metric_not_found"), err)
+		return nil, notFoundOr(ctx, err, "metric_not_found")
 	}
 
 	if req.Version > 0 && metric.Version != req.Version {
@@ -2225,7 +2631,7 @@ func (s *goalService) TransitionMetric(ctx context.Context, metricID uuid.UUID, 
 	transition, err := s.workflowRepo.FindTransitionByIDWithRelations(ctx, transitionID)
 	if err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "transition_not_found"), err)
+		return nil, errBadRequest(ctx, "transition_not_found")
 	}
 
 	if transition.WorkflowID != *metric.WorkflowID {
@@ -2243,12 +2649,17 @@ func (s *goalService) TransitionMetric(ctx context.Context, metricID uuid.UUID, 
 		goal, _ := s.goalRepo.FindByID(ctx, metric.GoalID)
 		if !s.isSuperAdmin(ctx) && (goal == nil || goal.OwnerID != userID) {
 			tx.Rollback()
-			return nil, fmt.Errorf("%s", i18n.T(ctx, "only_owner_can_submit"))
+			return nil, newGoalErr(ctx, http.StatusForbidden, "only_owner_can_submit")
 		}
 	case "approve_l1", "approve_l1_final", "request_changes_l1", "reject_l1", "approve_l2", "request_changes_l2", "reject_l2":
 		if metric.AssignedToID == nil || *metric.AssignedToID != userID {
 			tx.Rollback()
-			return nil, fmt.Errorf("%s", i18n.T(ctx, "only_reviewer_action"))
+			return nil, newGoalErr(ctx, http.StatusForbidden, "only_reviewer_action")
+		}
+	default:
+		if !s.canModifyGoalObj(ctx, mGoal, userID) {
+			tx.Rollback()
+			return nil, errForbidden(ctx)
 		}
 	}
 
@@ -2343,6 +2754,13 @@ func (s *goalService) TransitionMetric(ctx context.Context, metricID uuid.UUID, 
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
+	// Approved/rejected metric definitions change what counts towards progress.
+	if transition.ToState != nil && transition.ToState.StateType == "terminal" {
+		if err := s.RecalculateProgress(ctx, metric.GoalID); err != nil {
+			log.Printf("[goal_service] TransitionMetric: progress recalc failed: %v", err)
+		}
+	}
+
 	// Audit log
 	s.actionLogService.LogAction(ctx, &LogActionParams{
 		UserID:      userID,
@@ -2376,7 +2794,19 @@ func (s *goalService) TransitionMetric(ctx context.Context, metricID uuid.UUID, 
 func (s *goalService) TransitionMetricValueChange(ctx context.Context, changeID uuid.UUID, req *models.MetricTransitionRequest, userID uuid.UUID) (*models.GoalMetricValueChangeResponse, error) {
 	transitionID, err := uuid.Parse(req.TransitionID)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "invalid_transition_id_svc"), err)
+		return nil, errBadRequest(ctx, "invalid_transition_id_svc")
+	}
+
+	pre, err := s.goalRepo.FindMetricValueChangeByIDWithRelations(ctx, changeID)
+	if err != nil {
+		return nil, notFoundOr(ctx, err, "metric_value_change_not_found")
+	}
+	if pre.Metric == nil {
+		return nil, errNotFound(ctx, "orphaned_metric_value_change")
+	}
+	vcGoal, err := s.requireView(ctx, pre.Metric.GoalID, userID)
+	if err != nil {
+		return nil, err
 	}
 
 	tx := s.goalRepo.BeginTx(ctx)
@@ -2389,7 +2819,7 @@ func (s *goalService) TransitionMetricValueChange(ctx context.Context, changeID 
 	change, err := s.goalRepo.FindMetricValueChangeByIDForUpdate(ctx, tx, changeID)
 	if err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "metric_value_change_not_found"), err)
+		return nil, notFoundOr(ctx, err, "metric_value_change_not_found")
 	}
 
 	if req.Version > 0 && change.Version != req.Version {
@@ -2400,7 +2830,7 @@ func (s *goalService) TransitionMetricValueChange(ctx context.Context, changeID 
 	transition, err := s.workflowRepo.FindTransitionByIDWithRelations(ctx, transitionID)
 	if err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "transition_not_found"), err)
+		return nil, errBadRequest(ctx, "transition_not_found")
 	}
 	if transition.WorkflowID != change.WorkflowID {
 		tx.Rollback()
@@ -2424,12 +2854,17 @@ func (s *goalService) TransitionMetricValueChange(ctx context.Context, changeID 
 		goal, _ := s.goalRepo.FindByID(ctx, metric.GoalID)
 		if change.SubmittedByID != userID && !s.isSuperAdmin(ctx) && (goal == nil || goal.OwnerID != userID) {
 			tx.Rollback()
-			return nil, fmt.Errorf("%s", i18n.T(ctx, "only_submitter_or_owner_submit"))
+			return nil, newGoalErr(ctx, http.StatusForbidden, "only_submitter_or_owner_submit")
 		}
 	case "approve_l1", "approve_l1_final", "request_changes_l1", "reject_l1", "approve_l2", "request_changes_l2", "reject_l2":
 		if change.AssignedToID == nil || *change.AssignedToID != userID {
 			tx.Rollback()
-			return nil, fmt.Errorf("%s", i18n.T(ctx, "only_reviewer_action"))
+			return nil, newGoalErr(ctx, http.StatusForbidden, "only_reviewer_action")
+		}
+	default:
+		if !s.canModifyGoalObj(ctx, vcGoal, userID) {
+			tx.Rollback()
+			return nil, errForbidden(ctx)
 		}
 	}
 
@@ -2510,7 +2945,14 @@ func (s *goalService) TransitionMetricValueChange(ctx context.Context, changeID 
 		if reviewerL2 != nil {
 			change.AssignedToID = &reviewerL2.UserID
 		}
-	case "approve_l1_final", "approve_l2":
+	case "request_changes_l1", "request_changes_l2", "reject_l1", "reject_l2":
+		change.AssignedToID = nil
+	}
+
+	// Any approval into a terminal state applies the proposed value (once):
+	// the dedicated approve_l1_final/approve_l2 codes, or a non-rejection
+	// transition into a terminal state of another goal workflow.
+	if isGoalApprovalTransition(transition) && change.AppliedAt == nil {
 		// Apply the proposed value to the parent metric.
 		change.AssignedToID = nil
 		change.AppliedAt = &now
@@ -2536,9 +2978,6 @@ func (s *goalService) TransitionMetricValueChange(ctx context.Context, changeID 
 			log.Printf("[goal_service] TransitionMetricValueChange: history insert failed: %v", err)
 		}
 		applied = true
-
-	case "request_changes_l1", "request_changes_l2", "reject_l1", "reject_l2":
-		change.AssignedToID = nil
 	}
 
 	if err := s.goalRepo.UpdateMetricValueChangeInTx(ctx, tx, change); err != nil {
@@ -2704,6 +3143,15 @@ func (s *goalService) ListPendingMetricValueChangeApprovals(ctx context.Context,
 // ──────────────────────────────────────────────────
 
 func (s *goalService) RecalculateProgress(ctx context.Context, goalID uuid.UUID) error {
+	return s.recalculateProgress(ctx, goalID, 0)
+}
+
+// recalculateProgress recomputes a goal's progress from its approved metrics
+// and its child goals (see computeGoalProgress), then walks up to the parent.
+func (s *goalService) recalculateProgress(ctx context.Context, goalID uuid.UUID, depth int) error {
+	if depth > 10 {
+		return nil // corrupt hierarchy safety net
+	}
 	metrics, err := s.goalRepo.ListMetricsByGoalID(ctx, goalID)
 	if err != nil {
 		return fmt.Errorf("failed to list metrics: %w", err)
@@ -2711,104 +3159,40 @@ func (s *goalService) RecalculateProgress(ctx context.Context, goalID uuid.UUID)
 
 	goal, err := s.goalRepo.FindByID(ctx, goalID)
 	if err != nil {
-		return fmt.Errorf("%s: %w", i18n.T(ctx, "goal_not_found"), err)
+		return notFoundOr(ctx, err, "goal_not_found")
 	}
 
-	if len(metrics) == 0 {
-		goal.Progress = 0
-		return s.goalRepo.Update(ctx, goal)
+	children, err := s.goalRepo.FindChildren(ctx, goalID)
+	if err != nil {
+		return fmt.Errorf("failed to find children for progress: %w", err)
+	}
+	childProgress := make([]float64, len(children))
+	for i, c := range children {
+		childProgress[i] = c.Progress
 	}
 
-	var weighted float64
-	var totalWeight float64
-
-	for _, m := range metrics {
-		var metricProgress float64
-
-		if m.MetricType == models.MetricTypeBoolean {
-			// Boolean: if current >= 1 then 1.0 else 0.0
-			if m.CurrentValue >= 1 {
-				metricProgress = 1.0
-			} else {
-				metricProgress = 0.0
-			}
-		} else {
-			// Non-boolean: min(current/target, 1.0)
-			if m.TargetValue != 0 {
-				metricProgress = math.Min(m.CurrentValue/m.TargetValue, 1.0)
-			} else {
-				metricProgress = 0.0
-			}
-		}
-
-		weighted += metricProgress * m.Weight
-		totalWeight += m.Weight
-	}
-
-	// Handle division by zero
-	var progress float64
-	if totalWeight > 0 {
-		progress = (weighted / totalWeight) * 100
-	} else {
-		progress = 0
-	}
-
-	goal.Progress = progress
-	if err := s.goalRepo.Update(ctx, goal); err != nil {
+	progress := computeGoalProgress(metrics, childProgress)
+	if err := s.goalRepo.UpdateProgress(ctx, goalID, progress); err != nil {
 		return err
 	}
 
-	// Cascade progress to parent goal if this goal has a parent
-	return s.cascadeProgressToParent(ctx, goalID)
-}
-
-// cascadeProgressToParent recalculates the parent's progress as the average of its children's progress
-func (s *goalService) cascadeProgressToParent(ctx context.Context, goalID uuid.UUID) error {
-	goal, err := s.goalRepo.FindByID(ctx, goalID)
-	if err != nil {
-		return nil // Goal deleted or not found, skip
+	// Cascade to the parent goal
+	if goal.ParentGoalID != nil {
+		if _, pErr := s.goalRepo.FindByID(ctx, *goal.ParentGoalID); pErr == nil {
+			return s.recalculateProgress(ctx, *goal.ParentGoalID, depth+1)
+		}
 	}
-
-	if goal.ParentGoalID == nil {
-		return nil // No parent, nothing to cascade
-	}
-
-	parent, err := s.goalRepo.FindByID(ctx, *goal.ParentGoalID)
-	if err != nil {
-		return nil // Parent not found, skip
-	}
-
-	children, err := s.goalRepo.FindChildren(ctx, parent.ID)
-	if err != nil {
-		return fmt.Errorf("failed to find children for progress cascade: %w", err)
-	}
-
-	if len(children) == 0 {
-		return nil
-	}
-
-	var totalProgress float64
-	for _, child := range children {
-		totalProgress += child.Progress
-	}
-	parent.Progress = totalProgress / float64(len(children))
-
-	if err := s.goalRepo.Update(ctx, parent); err != nil {
-		return fmt.Errorf("failed to update parent progress: %w", err)
-	}
-
-	// Recursively cascade to grandparent
-	return s.cascadeProgressToParent(ctx, parent.ID)
+	return nil
 }
 
 // ──────────────────────────────────────────────────
 // 22. GetEvidencePreview
 // ──────────────────────────────────────────────────
 
-func (s *goalService) GetEvidencePreview(ctx context.Context, evidenceID uuid.UUID) (string, error) {
-	evidence, err := s.goalRepo.FindEvidenceByID(ctx, evidenceID)
+func (s *goalService) GetEvidencePreview(ctx context.Context, evidenceID uuid.UUID, userID uuid.UUID) (string, error) {
+	evidence, err := s.loadEvidenceForView(ctx, evidenceID, userID)
 	if err != nil {
-		return "", fmt.Errorf("%s: %w", i18n.T(ctx, "evidence_not_found"), err)
+		return "", err
 	}
 
 	previewURL, err := s.documentaClient.GetPreviewURL(ctx, evidence.DocumentaFileID)
@@ -2823,10 +3207,10 @@ func (s *goalService) GetEvidencePreview(ctx context.Context, evidenceID uuid.UU
 // 23. GetEvidenceDownloadURL
 // ──────────────────────────────────────────────────
 
-func (s *goalService) GetEvidenceDownloadURL(ctx context.Context, evidenceID uuid.UUID) (string, error) {
-	evidence, err := s.goalRepo.FindEvidenceByID(ctx, evidenceID)
+func (s *goalService) GetEvidenceDownloadURL(ctx context.Context, evidenceID uuid.UUID, userID uuid.UUID) (string, error) {
+	evidence, err := s.loadEvidenceForView(ctx, evidenceID, userID)
 	if err != nil {
-		return "", fmt.Errorf("%s: %w", i18n.T(ctx, "evidence_not_found"), err)
+		return "", err
 	}
 
 	downloadURL, err := s.documentaClient.GetDownloadURL(ctx, evidence.DocumentaFileID)
@@ -2846,10 +3230,10 @@ func (s *goalService) GetEvidenceDownloadURL(ctx context.Context, evidenceID uui
 // handler can stream bytes back to the client directly — this keeps downloads
 // working under deployments that use a path prefix (VITE_BASE_PATH) where a
 // root-relative 307 Location header would resolve to the wrong URL.
-func (s *goalService) DownloadEvidenceFile(ctx context.Context, evidenceID uuid.UUID) (io.ReadCloser, *storage.DmsFile, string, string, error) {
-	evidence, err := s.goalRepo.FindEvidenceByID(ctx, evidenceID)
+func (s *goalService) DownloadEvidenceFile(ctx context.Context, evidenceID uuid.UUID, userID uuid.UUID) (io.ReadCloser, *storage.DmsFile, string, string, error) {
+	evidence, err := s.loadEvidenceForView(ctx, evidenceID, userID)
 	if err != nil {
-		return nil, nil, "", "", fmt.Errorf("%s: %w", i18n.T(ctx, "evidence_not_found"), err)
+		return nil, nil, "", "", err
 	}
 
 	reader, info, err := s.documentaClient.DownloadFile(ctx, evidence.DocumentaFileID)
@@ -2982,21 +3366,38 @@ func (s *goalService) ExportGoalsJSON(ctx context.Context, filter *models.GoalFi
 // ──────────────────────────────────────────────────
 
 func (s *goalService) CloneGoal(ctx context.Context, id uuid.UUID, req *models.GoalCloneRequest, userID uuid.UUID) (*models.GoalResponse, error) {
+	// Must be able to view the source goal.
+	if _, err := s.requireView(ctx, id, userID); err != nil {
+		var ge *GoalError
+		if errors.As(err, &ge) && ge.Status == http.StatusNotFound {
+			return nil, errNotFound(ctx, "source_goal_not_found")
+		}
+		return nil, err
+	}
 	source, err := s.goalRepo.FindByIDWithRelations(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "source_goal_not_found"), err)
+		return nil, notFoundOr(ctx, err, "source_goal_not_found")
 	}
 
 	// Determine title
 	title := "Copy of " + source.Title
-	if req.Title != "" {
-		title = req.Title
+	if strings.TrimSpace(req.Title) != "" {
+		title = strings.TrimSpace(req.Title)
+	}
+	if len([]rune(title)) > 255 {
+		return nil, errBadRequest(ctx, "goal_title_too_long")
 	}
 
 	// Determine owner
 	ownerID := source.OwnerID
 	if req.OwnerID != nil {
+		if u, uErr := s.userRepo.FindByID(ctx, *req.OwnerID); uErr != nil || u == nil {
+			return nil, errBadRequest(ctx, "goal_owner_not_found")
+		}
 		ownerID = *req.OwnerID
+	}
+	if existing, exErr := s.goalRepo.FindGoalByTitleAndOwner(ctx, title, ownerID); exErr == nil && existing != nil {
+		return nil, ErrGoalAlreadyExists
 	}
 
 	// Determine dates
@@ -3013,15 +3414,20 @@ func (s *goalService) CloneGoal(ctx context.Context, id uuid.UUID, req *models.G
 		reviewDate = req.ReviewDate
 	}
 
-	// Ensure Goal Management folder + create goal folder
-	goalMgmtFolderID, _ := s.documentaClient.EnsureFolder(ctx, s.cfg.Documenta.WorkspaceName, "", "Goal Management")
-	folderID, err := s.documentaClient.CreateFolder(ctx, s.cfg.Documenta.WorkspaceName, goalMgmtFolderID, title)
+	if startDate != nil && targetDate != nil && startDate.After(*targetDate) {
+		return nil, errBadRequest(ctx, "goal_start_after_target")
+	}
+
+	// Create the clone's Documenta folder (unique name); fail clearly instead
+	// of creating a goal that can never receive evidence.
+	cloneID := uuid.New()
+	folderID, err := s.createGoalFolder(ctx, title, cloneID)
 	if err != nil {
-		log.Printf("[GoalService] CloneGoal: failed to create Documenta folder, continuing without it: %v", err)
-		folderID = ""
+		return nil, err
 	}
 
 	clone := &models.Goal{
+		ID:                cloneID,
 		Title:             title,
 		Description:       source.Description,
 		Category:          source.Category,
@@ -3036,13 +3442,28 @@ func (s *goalService) CloneGoal(ctx context.Context, id uuid.UUID, req *models.G
 		DocumentaFolderID: folderID,
 		Metadata:          source.Metadata,
 		CreatedByID:       userID,
+		CategoryID:        source.CategoryID,
+		ParentGoalID:      source.ParentGoalID,
+		Level:             source.Level,
 	}
 
 	if err := s.goalRepo.Create(ctx, clone); err != nil {
 		return nil, fmt.Errorf("failed to create cloned goal: %w", err)
 	}
+	// Materialized path (sibling of the source)
+	if source.ParentGoalID != nil && source.Path != "" && strings.Contains(source.Path, ".") {
+		clone.Path = source.Path[:strings.LastIndex(source.Path, ".")] + "." + clone.ID.String()
+	} else {
+		clone.Path = clone.ID.String()
+	}
+	if err := s.goalRepo.Update(ctx, clone); err != nil {
+		return nil, fmt.Errorf("failed to set cloned goal path: %w", err)
+	}
 
-	// Clone metrics (reset current value to baseline)
+	// Clone metrics (reset current value to baseline). Cloned metric
+	// definitions start in the metric workflow's initial state, like any
+	// newly created metric.
+	mwf, minitial, _ := s.resolveGoalWorkflow(ctx, goalWfMetric)
 	for _, m := range source.Metrics {
 		clonedMetric := &models.GoalMetric{
 			GoalID:        clone.ID,
@@ -3053,6 +3474,12 @@ func (s *goalService) CloneGoal(ctx context.Context, id uuid.UUID, req *models.G
 			CurrentValue:  m.BaselineValue,
 			TargetValue:   m.TargetValue,
 			Weight:        m.Weight,
+			Formula:       m.Formula,
+			Version:       1,
+		}
+		if mwf != nil && minitial != nil {
+			clonedMetric.WorkflowID = &mwf.ID
+			clonedMetric.CurrentStateID = &minitial.ID
 		}
 		if err := s.goalRepo.CreateMetric(ctx, clonedMetric); err != nil {
 			log.Printf("[GoalService] CloneGoal: failed to clone metric %s: %v", m.Name, err)
@@ -3095,7 +3522,11 @@ func (s *goalService) CloneGoal(ctx context.Context, id uuid.UUID, req *models.G
 // ──────────────────────────────────────────────────
 
 func (s *goalService) ImportGoals(ctx context.Context, fileData []byte, fileName string, dryRun bool, userID uuid.UUID) (*models.GoalImportResponse, error) {
-	ext := strings.ToLower(fileName[strings.LastIndex(fileName, "."):])
+	dot := strings.LastIndex(fileName, ".")
+	if dot < 0 {
+		return nil, errBadRequest(ctx, "unsupported_file_type", fileName)
+	}
+	ext := strings.ToLower(fileName[dot:])
 
 	var rows [][]string
 	var err error
@@ -3105,53 +3536,91 @@ func (s *goalService) ImportGoals(ctx context.Context, fileData []byte, fileName
 	case ".xlsx":
 		rows, err = s.parseXLSX(ctx, fileData)
 	default:
-		return nil, fmt.Errorf("%s", i18n.Tf(ctx, "unsupported_file_type", ext))
+		return nil, errBadRequest(ctx, "unsupported_file_type", ext)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse file: %w", err)
+		return nil, newGoalErr(ctx, http.StatusBadRequest, "failed_to_parse_file_detail", err.Error())
 	}
 
 	if len(rows) < 2 {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "file_missing_header_or_data"))
+		return nil, errBadRequest(ctx, "file_missing_header_or_data")
 	}
 
 	// Skip header row
 	dataRows := rows[1:]
 
-	// Group rows by title for multi-metric goals
 	type parsedMetric struct {
 		name      string
 		mtype     string
 		unit      string
-		baseline  string
-		current   string
-		target    string
-		weight    string
+		baseline  float64
+		current   float64
+		target    float64
+		weight    float64
 		rowNumber int
 	}
 	type parsedGoal struct {
+		existing    *models.Goal // non-nil → update via ID column
 		title       string
 		description string
 		category    string
 		priority    string
-		ownerStr    string
-		deptStr     string
-		startDate   string
-		targetDate  string
-		reviewDate  string
+		ownerID     uuid.UUID
+		deptID      *uuid.UUID
+		startDate   *time.Time
+		targetDate  *time.Time
+		reviewDate  *time.Time
 		metrics     []parsedMetric
-		firstRow    int
+		metricNames map[string]bool
+		rows        []int // indexes into rowResults
+	}
+
+	parseNum := func(raw string, def float64) (float64, bool) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return def, true
+		}
+		v, perr := strconv.ParseFloat(raw, 64)
+		if perr != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0, false
+		}
+		return v, true
+	}
+	parseDate := func(raw string) (*time.Time, bool) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return nil, true
+		}
+		t, perr := time.Parse("2006-01-02", raw)
+		if perr != nil {
+			return nil, false
+		}
+		return &t, true
 	}
 
 	goalMap := make(map[string]*parsedGoal)
 	var goalOrder []string
 	rowResults := make([]models.ImportRowResult, 0, len(dataRows))
+	ownerCache := map[string]*uuid.UUID{}
 
 	for i, row := range dataRows {
 		rowNum := i + 2 // 1-indexed, skip header
-		result := models.ImportRowResult{
-			RowNumber: rowNum,
-			Status:    "valid",
+		result := models.ImportRowResult{RowNumber: rowNum, Status: "valid"}
+		addErr := func(msg string) {
+			result.Status = "error"
+			result.Errors = append(result.Errors, msg)
+		}
+
+		// Skip completely blank lines
+		blank := true
+		for _, c := range row {
+			if strings.TrimSpace(c) != "" {
+				blank = false
+				break
+			}
+		}
+		if blank {
+			continue
 		}
 
 		// Pad row to expected column count (19 columns matching export format)
@@ -3165,13 +3634,37 @@ func (s *goalService) ImportGoals(ctx context.Context, fileData []byte, fileName
 		// 16=Current Value, 17=Target Value, 18=Weight
 		title := strings.TrimSpace(row[1])
 		if title == "" {
-			result.Status = "error"
-			result.Errors = append(result.Errors, "Title is required")
 			result.GoalTitle = "(empty)"
+			addErr("Title is required")
 			rowResults = append(rowResults, result)
 			continue
 		}
 		result.GoalTitle = title
+		if len([]rune(title)) > 255 {
+			addErr("Title must be at most 255 characters")
+		}
+
+		// Existing goal via ID column → update
+		var existing *models.Goal
+		if idStr := strings.TrimSpace(row[0]); idStr != "" {
+			gid, perr := uuid.Parse(idStr)
+			if perr != nil {
+				addErr(fmt.Sprintf("Invalid ID: %s", idStr))
+			} else if g, gErr := s.goalRepo.FindByID(ctx, gid); gErr != nil {
+				addErr(fmt.Sprintf("Goal ID not found: %s", idStr))
+			} else if !s.canModifyGoalObj(ctx, g, userID) {
+				addErr("You do not have permission to update this goal")
+			} else if g.Status == models.GoalStatusClosed {
+				addErr("Closed goals cannot be modified")
+			} else {
+				existing = g
+			}
+		}
+
+		description := strings.TrimSpace(row[2])
+		if description == "" {
+			addErr("Description is required")
+		}
 
 		// Validate priority
 		priority := strings.TrimSpace(row[4])
@@ -3179,80 +3672,72 @@ func (s *goalService) ImportGoals(ctx context.Context, fileData []byte, fileName
 			priority = models.GoalPriorityMedium
 			result.Warnings = append(result.Warnings, "Priority defaulted to Medium")
 		} else if !models.IsValidGoalPriority(priority) {
-			result.Status = "error"
-			result.Errors = append(result.Errors, fmt.Sprintf("Invalid priority: %s (must be Critical, High, Medium, or Low)", priority))
+			addErr(fmt.Sprintf("Invalid priority: %s (must be Critical, High, Medium, or Low)", priority))
 		}
 
-		// Validate owner
+		// Validate + resolve owner
+		var ownerID uuid.UUID
 		ownerStr := strings.TrimSpace(row[6])
-		if ownerStr != "" {
-			if _, uErr := uuid.Parse(ownerStr); uErr != nil {
-				// Try as email
-				if !strings.Contains(ownerStr, "@") {
-					result.Status = "error"
-					result.Errors = append(result.Errors, fmt.Sprintf("Owner must be a valid UUID or email address: %s", ownerStr))
-				} else {
-					user, uErr := s.userRepo.FindByEmail(ctx, ownerStr)
-					if uErr != nil || user == nil {
-						result.Status = "error"
-						result.Errors = append(result.Errors, fmt.Sprintf("Owner not found: %s", ownerStr))
-					}
-				}
-			} else {
-				uid, _ := uuid.Parse(ownerStr)
-				user, uErr := s.userRepo.FindByID(ctx, uid)
-				if uErr != nil || user == nil {
-					result.Status = "error"
-					result.Errors = append(result.Errors, fmt.Sprintf("Owner not found: %s", ownerStr))
-				}
-			}
+		if ownerStr == "" {
+			addErr("Owner is required")
 		} else {
-			result.Status = "error"
-			result.Errors = append(result.Errors, "Owner is required")
+			key := strings.ToLower(ownerStr)
+			cached, ok := ownerCache[key]
+			if !ok {
+				var u *models.User
+				if oid, uErr := uuid.Parse(ownerStr); uErr == nil {
+					u, _ = s.userRepo.FindByID(ctx, oid)
+				} else if strings.Contains(ownerStr, "@") {
+					u, _ = s.userRepo.FindByEmail(ctx, ownerStr)
+				}
+				if u != nil {
+					id := u.ID
+					cached = &id
+				}
+				ownerCache[key] = cached
+			}
+			if cached == nil {
+				addErr(fmt.Sprintf("Owner not found (must be an existing user's UUID or email): %s", ownerStr))
+			} else {
+				ownerID = *cached
+			}
 		}
 
-		// Validate department
+		// Validate department (warning only, as before)
+		var deptID *uuid.UUID
 		deptStr := strings.TrimSpace(row[7])
 		if deptStr != "" {
-			if _, dErr := uuid.Parse(deptStr); dErr != nil {
-				// Try as department name
-				dept, dErr := s.departmentRepo.FindByNameAndParent(ctx, deptStr, nil)
-				if dErr != nil || dept == nil {
-					result.Warnings = append(result.Warnings, fmt.Sprintf("Department not found: %s", deptStr))
+			if did, dErr := uuid.Parse(deptStr); dErr == nil {
+				if dept, fErr := s.departmentRepo.FindByID(ctx, did); fErr == nil && dept != nil {
+					deptID = &dept.ID
 				}
-			} else {
-				did, _ := uuid.Parse(deptStr)
-				dept, dErr := s.departmentRepo.FindByID(ctx, did)
-				if dErr != nil || dept == nil {
-					result.Warnings = append(result.Warnings, fmt.Sprintf("Department not found: %s", deptStr))
-				}
+			} else if dept, fErr := s.departmentRepo.FindByNameAndParent(ctx, deptStr, nil); fErr == nil && dept != nil {
+				deptID = &dept.ID
+			}
+			if deptID == nil {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("Department not found: %s", deptStr))
 			}
 		}
 
 		// Validate dates
-		startDate := strings.TrimSpace(row[8])
-		targetDate := strings.TrimSpace(row[9])
-		if startDate != "" {
-			if _, dErr := time.Parse("2006-01-02", startDate); dErr != nil {
-				result.Status = "error"
-				result.Errors = append(result.Errors, fmt.Sprintf("Invalid start date format: %s (use YYYY-MM-DD)", startDate))
-			}
+		startDate, ok1 := parseDate(row[8])
+		if !ok1 {
+			addErr(fmt.Sprintf("Invalid start date format: %s (use YYYY-MM-DD)", row[8]))
 		}
-		if targetDate != "" {
-			if _, dErr := time.Parse("2006-01-02", targetDate); dErr != nil {
-				result.Status = "error"
-				result.Errors = append(result.Errors, fmt.Sprintf("Invalid target date format: %s (use YYYY-MM-DD)", targetDate))
-			}
+		targetDate, ok2 := parseDate(row[9])
+		if !ok2 {
+			addErr(fmt.Sprintf("Invalid target date format: %s (use YYYY-MM-DD)", row[9]))
 		}
-		reviewDate := strings.TrimSpace(row[10])
-		if reviewDate != "" {
-			if _, dErr := time.Parse("2006-01-02", reviewDate); dErr != nil {
-				result.Status = "error"
-				result.Errors = append(result.Errors, fmt.Sprintf("Invalid review date format: %s (use YYYY-MM-DD)", reviewDate))
-			}
+		reviewDate, ok3 := parseDate(row[10])
+		if !ok3 {
+			addErr(fmt.Sprintf("Invalid review date format: %s (use YYYY-MM-DD)", row[10]))
+		}
+		if startDate != nil && targetDate != nil && startDate.After(*targetDate) {
+			addErr("Start date must be on or before the target date")
 		}
 
 		// Validate metric fields (if present)
+		var pm *parsedMetric
 		metricName := strings.TrimSpace(row[12])
 		metricType := strings.TrimSpace(row[13])
 		if metricName != "" {
@@ -3260,60 +3745,87 @@ func (s *goalService) ImportGoals(ctx context.Context, fileData []byte, fileName
 				metricType = models.MetricTypeNumeric
 				result.Warnings = append(result.Warnings, "Metric type defaulted to Numeric")
 			} else if !models.IsValidMetricType(metricType) {
-				result.Status = "error"
-				result.Errors = append(result.Errors, fmt.Sprintf("Invalid metric type: %s (must be Numeric, Percentage, Currency, or Boolean)", metricType))
+				addErr(fmt.Sprintf("Invalid metric type: %s (must be Numeric, Percentage, Currency, or Boolean)", metricType))
 			}
-			targetVal := strings.TrimSpace(row[17])
-			if targetVal != "" {
-				if _, pErr := strconv.ParseFloat(targetVal, 64); pErr != nil {
-					result.Status = "error"
-					result.Errors = append(result.Errors, fmt.Sprintf("Invalid target value: %s", targetVal))
+			baseline, okB := parseNum(row[15], 0)
+			if !okB {
+				addErr(fmt.Sprintf("Invalid baseline value: %s", row[15]))
+			}
+			current, okC := parseNum(row[16], baseline)
+			if !okC {
+				addErr(fmt.Sprintf("Invalid current value: %s", row[16]))
+			}
+			var target float64
+			if strings.TrimSpace(row[17]) == "" {
+				addErr("Metric target value is required")
+			} else if t, okT := parseNum(row[17], 0); !okT {
+				addErr(fmt.Sprintf("Invalid target value: %s", row[17]))
+			} else {
+				target = t
+			}
+			weight, okW := parseNum(row[18], 1)
+			if !okW {
+				addErr(fmt.Sprintf("Invalid weight: %s", row[18]))
+			} else if weight <= 0 {
+				addErr(fmt.Sprintf("Weight must be greater than 0: %s", row[18]))
+			}
+			pm = &parsedMetric{
+				name: metricName, mtype: metricType, unit: strings.TrimSpace(row[14]),
+				baseline: baseline, current: current, target: target, weight: weight, rowNumber: rowNum,
+			}
+		}
+
+		// Group key: existing goal ID, else title+owner
+		key := strings.ToLower(title) + "\x00" + ownerID.String()
+		if existing != nil {
+			key = "id:" + existing.ID.String()
+		}
+		pg, exists := goalMap[key]
+		if !exists && result.Status != "error" {
+			// New goal (no ID) duplicating an existing title+owner → reject
+			if existing == nil {
+				if dup, dErr := s.goalRepo.FindGoalByTitleAndOwner(ctx, title, ownerID); dErr == nil && dup != nil {
+					addErr(fmt.Sprintf("A goal titled %q already exists for this owner (ID %s); fill the ID column to update it", title, dup.ID))
 				}
 			}
+		}
+		if pg != nil && pm != nil && pg.metricNames[strings.ToLower(pm.name)] {
+			addErr(fmt.Sprintf("Duplicate metric name %q for this goal", pm.name))
 		}
 
 		if len(result.Warnings) > 0 && result.Status == "valid" {
 			result.Status = "warning"
 		}
-
 		rowResults = append(rowResults, result)
 
-		// Group into goals
-		if _, exists := goalMap[title]; !exists {
-			goalMap[title] = &parsedGoal{
+		if result.Status == "error" {
+			continue
+		}
+		if pg == nil {
+			pg = &parsedGoal{
+				existing:    existing,
 				title:       title,
-				description: strings.TrimSpace(row[2]),
+				description: description,
 				category:    strings.TrimSpace(row[3]),
 				priority:    priority,
-				ownerStr:    ownerStr,
-				deptStr:     deptStr,
+				ownerID:     ownerID,
+				deptID:      deptID,
 				startDate:   startDate,
 				targetDate:  targetDate,
 				reviewDate:  reviewDate,
-				firstRow:    rowNum,
+				metricNames: map[string]bool{},
 			}
-			goalOrder = append(goalOrder, title)
+			goalMap[key] = pg
+			goalOrder = append(goalOrder, key)
 		}
-
-		if metricName != "" {
-			goalMap[title].metrics = append(goalMap[title].metrics, parsedMetric{
-				name:      metricName,
-				mtype:     metricType,
-				unit:      strings.TrimSpace(row[14]),
-				baseline:  strings.TrimSpace(row[15]),
-				current:   strings.TrimSpace(row[16]),
-				target:    strings.TrimSpace(row[17]),
-				weight:    strings.TrimSpace(row[18]),
-				rowNumber: rowNum,
-			})
+		if pm != nil {
+			pg.metrics = append(pg.metrics, *pm)
+			pg.metricNames[strings.ToLower(pm.name)] = true
 		}
 	}
 
 	// Count results
-	errorCount := 0
-	warningCount := 0
-	validCount := 0
-	metricsCount := 0
+	errorCount, warningCount, validCount, metricsCount := 0, 0, 0, 0
 	for _, r := range rowResults {
 		switch r.Status {
 		case "error":
@@ -3329,122 +3841,137 @@ func (s *goalService) ImportGoals(ctx context.Context, fileData []byte, fileName
 	}
 
 	mode := "dry_run"
-	var createdGoalIDs []string
+	var createdGoalIDs, updatedGoalIDs []string
 
 	if !dryRun && errorCount == 0 {
 		mode = "committed"
-		tx := s.goalRepo.BeginTx(ctx)
-
-		for _, title := range goalOrder {
-			pg := goalMap[title]
-
-			// Resolve owner
-			var ownerID uuid.UUID
-			if _, uErr := uuid.Parse(pg.ownerStr); uErr == nil {
-				ownerID, _ = uuid.Parse(pg.ownerStr)
-			} else {
-				user, _ := s.userRepo.FindByEmail(ctx, pg.ownerStr)
-				if user != nil {
-					ownerID = user.ID
-				}
+		mwf, minitial, _ := s.resolveGoalWorkflow(ctx, goalWfMetric)
+		newMetric := func(goalID uuid.UUID, pm parsedMetric) *models.GoalMetric {
+			m := &models.GoalMetric{
+				ID: uuid.New(), GoalID: goalID, Name: pm.name, MetricType: pm.mtype, Unit: pm.unit,
+				BaselineValue: pm.baseline, CurrentValue: pm.current, TargetValue: pm.target,
+				Weight: pm.weight, Version: 1,
 			}
+			// Same initial workflow state as manually created metrics.
+			if mwf != nil && minitial != nil {
+				m.WorkflowID = &mwf.ID
+				m.CurrentStateID = &minitial.ID
+			}
+			return m
+		}
 
-			// Resolve department
-			var departmentID *uuid.UUID
-			if pg.deptStr != "" {
-				if did, dErr := uuid.Parse(pg.deptStr); dErr == nil {
-					departmentID = &did
-				} else {
-					dept, _ := s.departmentRepo.FindByNameAndParent(ctx, pg.deptStr, nil)
-					if dept != nil {
-						departmentID = &dept.ID
+		// Provision Documenta folders for new goals first (outside the DB tx);
+		// abort with a clear error if any fails.
+		newIDs := map[string]uuid.UUID{}
+		folderIDs := map[string]string{}
+		for _, key := range goalOrder {
+			pg := goalMap[key]
+			if pg.existing != nil {
+				continue
+			}
+			id := uuid.New()
+			folderID, fErr := s.createGoalFolder(ctx, pg.title, id)
+			if fErr != nil {
+				return nil, fErr
+			}
+			newIDs[key] = id
+			folderIDs[key] = folderID
+		}
+
+		tx := s.goalRepo.BeginTx(ctx)
+		defer func() {
+			if r := recover(); r != nil {
+				tx.Rollback()
+			}
+		}()
+
+		for _, key := range goalOrder {
+			pg := goalMap[key]
+
+			if pg.existing != nil {
+				g := pg.existing
+				updates := map[string]interface{}{
+					"title": pg.title, "description": pg.description, "category": pg.category,
+					"priority": pg.priority, "owner_id": pg.ownerID, "start_date": pg.startDate,
+					"target_date": pg.targetDate, "review_date": pg.reviewDate,
+				}
+				if pg.deptID != nil {
+					updates["department_id"] = *pg.deptID
+				}
+				if err := tx.Model(&models.Goal{}).Where("id = ?", g.ID).Updates(updates).Error; err != nil {
+					tx.Rollback()
+					return nil, fmt.Errorf("failed to update goal %q: %w", pg.title, err)
+				}
+				// Upsert metric definitions by name. Current values are NOT
+				// overwritten — value changes go through the approval workflow.
+				existingMetrics, _ := s.goalRepo.ListMetricsByGoalID(ctx, g.ID)
+				byName := map[string]models.GoalMetric{}
+				for _, em := range existingMetrics {
+					byName[strings.ToLower(strings.TrimSpace(em.Name))] = em
+				}
+				for _, pm := range pg.metrics {
+					if em, ok := byName[strings.ToLower(pm.name)]; ok {
+						if err := tx.Model(&models.GoalMetric{}).Where("id = ?", em.ID).Updates(map[string]interface{}{
+							"metric_type": pm.mtype, "unit": pm.unit, "baseline_value": pm.baseline,
+							"target_value": pm.target, "weight": pm.weight,
+						}).Error; err != nil {
+							tx.Rollback()
+							return nil, fmt.Errorf("failed to update metric %q for goal %q: %w", pm.name, pg.title, err)
+						}
+						continue
+					}
+					if err := tx.Create(newMetric(g.ID, pm)).Error; err != nil {
+						tx.Rollback()
+						return nil, fmt.Errorf("failed to create metric %q for goal %q: %w", pm.name, pg.title, err)
 					}
 				}
+				updatedGoalIDs = append(updatedGoalIDs, g.ID.String())
+				continue
 			}
 
-			// Parse dates
-			var startDate, targetDate, reviewDate *time.Time
-			if pg.startDate != "" {
-				t, _ := time.Parse("2006-01-02", pg.startDate)
-				startDate = &t
-			}
-			if pg.targetDate != "" {
-				t, _ := time.Parse("2006-01-02", pg.targetDate)
-				targetDate = &t
-			}
-			if pg.reviewDate != "" {
-				t, _ := time.Parse("2006-01-02", pg.reviewDate)
-				reviewDate = &t
-			}
-
-			// Ensure Goal Management folder + create goal folder
-			importGoalMgmtID, _ := s.documentaClient.EnsureFolder(ctx, s.cfg.Documenta.WorkspaceName, "", "Goal Management")
-			folderID, fErr := s.documentaClient.CreateFolder(ctx, s.cfg.Documenta.WorkspaceName, importGoalMgmtID, pg.title)
-			if fErr != nil {
-				log.Printf("[GoalService] ImportGoals: failed to create Documenta folder for %q: %v", pg.title, fErr)
-				folderID = ""
-			}
-
+			id := newIDs[key]
 			goal := &models.Goal{
-				ID:                uuid.New(),
+				ID:                id,
 				Title:             pg.title,
 				Description:       pg.description,
 				Category:          pg.category,
 				Priority:          pg.priority,
 				Status:            models.GoalStatusDraft,
-				OwnerID:           ownerID,
-				DepartmentID:      departmentID,
-				StartDate:         startDate,
-				TargetDate:        targetDate,
-				ReviewDate:        reviewDate,
+				OwnerID:           pg.ownerID,
+				DepartmentID:      pg.deptID,
+				StartDate:         pg.startDate,
+				TargetDate:        pg.targetDate,
+				ReviewDate:        pg.reviewDate,
 				Progress:          0,
-				DocumentaFolderID: folderID,
+				Path:              id.String(),
+				DocumentaFolderID: folderIDs[key],
 				Metadata:          "{}",
 				CreatedByID:       userID,
 			}
-
 			if err := tx.WithContext(ctx).Create(goal).Error; err != nil {
 				tx.Rollback()
 				return nil, fmt.Errorf("failed to create goal %q: %w", pg.title, err)
 			}
-
-			// Create metrics
+			if userID != pg.ownerID {
+				if err := tx.Create(&models.GoalCollaborator{GoalID: id, UserID: userID, Role: models.CollaboratorRoleCollaborator}).Error; err != nil {
+					log.Printf("[GoalService] ImportGoals: add importer as collaborator: %v", err)
+				}
+			}
 			for _, pm := range pg.metrics {
-				baseline, _ := strconv.ParseFloat(pm.baseline, 64)
-				current, _ := strconv.ParseFloat(pm.current, 64)
-				target, _ := strconv.ParseFloat(pm.target, 64)
-				weight, _ := strconv.ParseFloat(pm.weight, 64)
-				if weight == 0 {
-					weight = 1
-				}
-
-				metric := &models.GoalMetric{
-					ID:            uuid.New(),
-					GoalID:        goal.ID,
-					Name:          pm.name,
-					MetricType:    pm.mtype,
-					Unit:          pm.unit,
-					BaselineValue: baseline,
-					CurrentValue:  current,
-					TargetValue:   target,
-					Weight:        weight,
-				}
-
-				if err := tx.WithContext(ctx).Create(metric).Error; err != nil {
+				if err := tx.WithContext(ctx).Create(newMetric(id, pm)).Error; err != nil {
 					tx.Rollback()
 					return nil, fmt.Errorf("failed to create metric %q for goal %q: %w", pm.name, pg.title, err)
 				}
 			}
-
-			createdGoalIDs = append(createdGoalIDs, goal.ID.String())
+			createdGoalIDs = append(createdGoalIDs, id.String())
 		}
 
 		if err := tx.Commit().Error; err != nil {
 			return nil, fmt.Errorf("failed to commit import transaction: %w", err)
 		}
 
-		// Recalculate progress for all created goals
-		for _, idStr := range createdGoalIDs {
+		// Recalculate progress for all touched goals (same rule as create/update)
+		for _, idStr := range append(append([]string{}, createdGoalIDs...), updatedGoalIDs...) {
 			gid, _ := uuid.Parse(idStr)
 			_ = s.RecalculateProgress(ctx, gid)
 		}
@@ -3454,15 +3981,15 @@ func (s *goalService) ImportGoals(ctx context.Context, fileData []byte, fileName
 			UserID:      userID,
 			Action:      "import",
 			Module:      "goals",
-			ResourceID:  fmt.Sprintf("%d goals", len(createdGoalIDs)),
-			Description: fmt.Sprintf("Imported %d goals with %d metrics from %s", len(createdGoalIDs), metricsCount, fileName),
+			ResourceID:  fmt.Sprintf("%d goals", len(createdGoalIDs)+len(updatedGoalIDs)),
+			Description: fmt.Sprintf("Imported %d new / %d updated goals with %d metrics from %s", len(createdGoalIDs), len(updatedGoalIDs), metricsCount, fileName),
 			Status:      "success",
 		})
 	}
 
 	return &models.GoalImportResponse{
 		Mode:           mode,
-		TotalRows:      len(dataRows),
+		TotalRows:      len(rowResults),
 		GoalsCount:     len(goalOrder),
 		MetricsCount:   metricsCount,
 		ValidCount:     validCount,
@@ -3470,6 +3997,7 @@ func (s *goalService) ImportGoals(ctx context.Context, fileData []byte, fileName
 		WarningCount:   warningCount,
 		Rows:           rowResults,
 		CreatedGoalIDs: createdGoalIDs,
+		UpdatedGoalIDs: updatedGoalIDs,
 	}, nil
 }
 
@@ -3571,14 +4099,17 @@ func (s *goalService) BulkAction(ctx context.Context, req *models.BulkActionRequ
 // Hierarchy: GetGoalTree
 // ──────────────────────────────────────────────────
 
-func (s *goalService) GetGoalTree(ctx context.Context, rootID uuid.UUID) (*models.GoalResponse, error) {
+func (s *goalService) GetGoalTree(ctx context.Context, rootID uuid.UUID, userID uuid.UUID) (*models.GoalResponse, error) {
+	if _, err := s.requireView(ctx, rootID, userID); err != nil {
+		return nil, err
+	}
 	goal, err := s.goalRepo.FindByIDWithRelations(ctx, rootID)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "goal_not_found"), err)
+		return nil, notFoundOr(ctx, err, "goal_not_found")
 	}
 
 	// Recursively load children for each child (depth-first)
-	if err := s.loadChildrenRecursive(ctx, goal, 0); err != nil {
+	if err := s.loadChildrenRecursive(ctx, goal, 0, userID); err != nil {
 		return nil, err
 	}
 
@@ -3586,19 +4117,37 @@ func (s *goalService) GetGoalTree(ctx context.Context, rootID uuid.UUID) (*model
 	return &resp, nil
 }
 
-func (s *goalService) loadChildrenRecursive(ctx context.Context, goal *models.Goal, depth int) error {
+// visibleChildren returns the children the caller can view (all for super admins).
+func (s *goalService) visibleChildren(ctx context.Context, parentID uuid.UUID, userID uuid.UUID) ([]models.Goal, error) {
+	children, err := s.goalRepo.FindChildren(ctx, parentID)
+	if err != nil {
+		return nil, err
+	}
+	if s.isSuperAdmin(ctx) {
+		return children, nil
+	}
+	out := make([]models.Goal, 0, len(children))
+	for i := range children {
+		if s.canAccessGoalObj(ctx, &children[i], userID) {
+			out = append(out, children[i])
+		}
+	}
+	return out, nil
+}
+
+func (s *goalService) loadChildrenRecursive(ctx context.Context, goal *models.Goal, depth int, userID uuid.UUID) error {
 	if depth > 3 {
 		return nil // Safety limit
 	}
 
-	children, err := s.goalRepo.FindChildren(ctx, goal.ID)
+	children, err := s.visibleChildren(ctx, goal.ID, userID)
 	if err != nil {
 		return err
 	}
 
 	goal.Children = children
 	for i := range goal.Children {
-		if err := s.loadChildrenRecursive(ctx, &goal.Children[i], depth+1); err != nil {
+		if err := s.loadChildrenRecursive(ctx, &goal.Children[i], depth+1, userID); err != nil {
 			return err
 		}
 	}
@@ -3609,8 +4158,11 @@ func (s *goalService) loadChildrenRecursive(ctx context.Context, goal *models.Go
 // Hierarchy: ListChildGoals
 // ──────────────────────────────────────────────────
 
-func (s *goalService) ListChildGoals(ctx context.Context, parentID uuid.UUID) ([]models.GoalResponse, error) {
-	children, err := s.goalRepo.FindChildren(ctx, parentID)
+func (s *goalService) ListChildGoals(ctx context.Context, parentID uuid.UUID, userID uuid.UUID) ([]models.GoalResponse, error) {
+	if _, err := s.requireView(ctx, parentID, userID); err != nil {
+		return nil, err
+	}
+	children, err := s.visibleChildren(ctx, parentID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list child goals: %w", err)
 	}
@@ -3627,24 +4179,27 @@ func (s *goalService) ListChildGoals(ctx context.Context, parentID uuid.UUID) ([
 // ──────────────────────────────────────────────────
 
 func (s *goalService) CreateCheckIn(ctx context.Context, goalID uuid.UUID, req *models.CheckInCreateRequest, userID uuid.UUID) (*models.CheckInResponse, error) {
-	// Access check
-	canAccess, _ := s.canAccessGoal(ctx, goalID, userID)
-	if !canAccess {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "access_denied"))
-	}
-
-	// Verify goal exists
-	goal, err := s.goalRepo.FindByID(ctx, goalID)
+	// Existence (404) + access (403)
+	goal, err := s.requireView(ctx, goalID, userID)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "goal_not_found"), err)
+		return nil, err
+	}
+	if err := ensureGoalOpen(ctx, goal); err != nil {
+		return nil, err
 	}
 
 	// Validate check-in status
 	if !models.IsValidCheckInStatus(req.Status) {
-		return nil, fmt.Errorf("%s", i18n.Tf(ctx, "invalid_check_in_status", req.Status))
+		return nil, errBadRequest(ctx, "invalid_check_in_status", req.Status)
 	}
 
-	// Process metric updates if any
+	// Proposing metric values requires edit rights on the goal (same rule as
+	// PUT /goals/metrics/:id/value).
+	if len(req.MetricUpdates) > 0 && !s.canModifyGoalObj(ctx, goal, userID) {
+		return nil, errForbidden(ctx)
+	}
+
+	// Validate ALL metric updates before writing anything.
 	type metricChange struct {
 		MetricID string  `json:"metric_id"`
 		Name     string  `json:"name"`
@@ -3652,38 +4207,34 @@ func (s *goalService) CreateCheckIn(ctx context.Context, goalID uuid.UUID, req *
 		NewValue float64 `json:"new_value"`
 	}
 	var changes []metricChange
-
+	var valueChanges []*models.GoalMetricValueChange
+	seen := map[uuid.UUID]bool{}
 	for _, mu := range req.MetricUpdates {
-		metric, err := s.goalRepo.FindMetricByID(ctx, mu.MetricID)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", i18n.Tf(ctx, "metric_id_not_found", mu.MetricID.String()), err)
+		if mu.Value == nil {
+			return nil, errBadRequest(ctx, "value_required")
+		}
+		if seen[mu.MetricID] {
+			return nil, errBadRequest(ctx, "check_in_metric_not_in_goal", mu.MetricID.String())
+		}
+		seen[mu.MetricID] = true
+		metric, mErr := s.goalRepo.FindMetricByID(ctx, mu.MetricID)
+		if mErr != nil {
+			return nil, errBadRequest(ctx, "check_in_metric_not_found", mu.MetricID.String())
 		}
 		if metric.GoalID != goalID {
-			return nil, fmt.Errorf("%s", i18n.Tf(ctx, "metric_not_in_goal", mu.MetricID.String()))
+			return nil, errBadRequest(ctx, "check_in_metric_not_in_goal", mu.MetricID.String())
 		}
-
-		oldValue := metric.CurrentValue
+		vc, vErr := s.buildMetricValueChange(ctx, metric, *mu.Value, mu.Comment, userID)
+		if vErr != nil {
+			return nil, vErr
+		}
+		valueChanges = append(valueChanges, vc)
 		changes = append(changes, metricChange{
 			MetricID: mu.MetricID.String(),
 			Name:     metric.Name,
-			OldValue: oldValue,
-			NewValue: mu.Value,
+			OldValue: metric.CurrentValue,
+			NewValue: vc.ProposedValue,
 		})
-
-		// Use UpdateMetricValue to update + create history + recalculate progress
-		_, err = s.UpdateMetricValue(ctx, mu.MetricID, &models.MetricValueUpdateRequest{
-			Value:   mu.Value,
-			Comment: mu.Comment,
-		}, userID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to update metric %s: %w", metric.Name, err)
-		}
-	}
-
-	// Refresh goal to get updated progress
-	goal, err = s.goalRepo.FindByID(ctx, goalID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to refresh goal: %w", err)
 	}
 
 	// Serialize metric changes to JSON
@@ -3705,8 +4256,25 @@ func (s *goalService) CreateCheckIn(ctx context.Context, goalID uuid.UUID, req *
 		MetricUpdates: metricUpdatesJSON,
 	}
 
-	if err := s.goalRepo.CreateCheckIn(ctx, checkIn); err != nil {
+	// Value-change proposals + the check-in are written atomically.
+	tx := s.goalRepo.BeginTx(ctx)
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+	for _, vc := range valueChanges {
+		if err := tx.Create(vc).Error; err != nil {
+			tx.Rollback()
+			return nil, fmt.Errorf("failed to create metric value change: %w", err)
+		}
+	}
+	if err := tx.Create(checkIn).Error; err != nil {
+		tx.Rollback()
 		return nil, fmt.Errorf("failed to create check-in: %w", err)
+	}
+	if err := tx.Commit().Error; err != nil {
+		return nil, fmt.Errorf("failed to commit check-in: %w", err)
 	}
 
 	// Audit log
@@ -3741,12 +4309,15 @@ func (s *goalService) CreateCheckIn(ctx context.Context, goalID uuid.UUID, req *
 // Check-in: ListCheckIns
 // ──────────────────────────────────────────────────
 
-func (s *goalService) ListCheckIns(ctx context.Context, goalID uuid.UUID, page int, limit int) ([]models.CheckInResponse, int64, error) {
+func (s *goalService) ListCheckIns(ctx context.Context, goalID uuid.UUID, page int, limit int, userID uuid.UUID) ([]models.CheckInResponse, int64, error) {
 	if page < 1 {
 		page = 1
 	}
 	if limit < 1 {
 		limit = 10
+	}
+	if _, err := s.requireView(ctx, goalID, userID); err != nil {
+		return nil, 0, err
 	}
 
 	checkIns, total, err := s.goalRepo.ListCheckIns(ctx, goalID, page, limit)
@@ -3769,13 +4340,16 @@ func (s *goalService) ListCheckIns(ctx context.Context, goalID uuid.UUID, page i
 func (s *goalService) DeleteCheckIn(ctx context.Context, id uuid.UUID, userID uuid.UUID) error {
 	checkIn, err := s.goalRepo.FindCheckInByID(ctx, id)
 	if err != nil {
-		return fmt.Errorf("%s: %w", i18n.T(ctx, "check_in_not_found"), err)
+		return notFoundOr(ctx, err, "check_in_not_found")
 	}
 
-	// Access check via parent goal
-	canModify, _ := s.canModifyGoal(ctx, checkIn.GoalID, userID)
-	if !canModify {
-		return fmt.Errorf("%s", i18n.T(ctx, "access_denied"))
+	// The author (still able to see the goal) or a goal editor may delete.
+	goal, err := s.goalRepo.FindByID(ctx, checkIn.GoalID)
+	if err != nil {
+		return notFoundOr(ctx, err, "goal_not_found")
+	}
+	if !s.canModifyGoalObj(ctx, goal, userID) && !(checkIn.AuthorID == userID && s.canAccessGoalObj(ctx, goal, userID)) {
+		return errForbidden(ctx)
 	}
 
 	if err := s.goalRepo.DeleteCheckIn(ctx, id); err != nil {
@@ -3928,7 +4502,7 @@ func cellName(col, row int) string {
 // ──────────────────────────────────────────────────
 
 func (s *goalService) ImportMetricsDryRun(ctx context.Context, fileData []byte, fileName string, userID uuid.UUID) (*models.MetricImportDryRunResponse, error) {
-	items, totalRows, err := s.parseMetricImportFile(ctx, fileData, fileName)
+	items, totalRows, err := s.parseMetricImportFile(ctx, fileData, fileName, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -3968,13 +4542,17 @@ func (s *goalService) ImportMetricsDryRun(ctx context.Context, fileData []byte, 
 // ──────────────────────────────────────────────────
 
 func (s *goalService) ImportMetricsCommit(ctx context.Context, fileData []byte, fileName string, title string, comment string, primaryGoalID uuid.UUID, userID uuid.UUID) (*models.MetricImportBatchResponse, error) {
-	// Validate primary goal exists
-	if _, err := s.goalRepo.FindByID(ctx, primaryGoalID); err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "primary_goal_not_found"), err)
+	// Validate primary goal exists and the caller can edit it
+	if _, err := s.requireModify(ctx, primaryGoalID, userID); err != nil {
+		var ge *GoalError
+		if errors.As(err, &ge) && ge.Status == http.StatusNotFound {
+			return nil, errBadRequest(ctx, "primary_goal_not_found")
+		}
+		return nil, err
 	}
 
 	// Parse and validate
-	items, _, err := s.parseMetricImportFile(ctx, fileData, fileName)
+	items, _, err := s.parseMetricImportFile(ctx, fileData, fileName, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -3988,18 +4566,13 @@ func (s *goalService) ImportMetricsCommit(ctx context.Context, fileData []byte, 
 	}
 
 	if len(validItems) == 0 {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "no_valid_metric_values_to_import"))
+		return nil, errBadRequest(ctx, "no_valid_metric_values_to_import")
 	}
 
-	// Resolve workflow
-	workflows, wfErr := s.workflowRepo.ListByRecordType(ctx, "evidence", true)
-	if wfErr != nil || len(workflows) == 0 {
+	// Resolve workflow (batches use the evidence approval workflow)
+	wf, initialState, wfErr := s.resolveGoalWorkflow(ctx, goalWfEvidence)
+	if wfErr != nil || wf == nil || initialState == nil {
 		return nil, fmt.Errorf("%s", i18n.T(ctx, "no_active_evidence_approval_workflow"))
-	}
-	wf := workflows[0]
-	initialState, stateErr := s.workflowRepo.GetInitialState(ctx, wf.ID)
-	if stateErr != nil || initialState == nil {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "evidence_workflow_no_initial_state"))
 	}
 
 	// Count distinct goals
@@ -4081,7 +4654,7 @@ func (s *goalService) ImportMetricsCommit(ctx context.Context, fileData []byte, 
 }
 
 // parseMetricImportFile parses CSV/XLSX and validates each row
-func (s *goalService) parseMetricImportFile(ctx context.Context, fileData []byte, fileName string) ([]models.MetricImportValidationItem, int, error) {
+func (s *goalService) parseMetricImportFile(ctx context.Context, fileData []byte, fileName string, userID uuid.UUID) ([]models.MetricImportValidationItem, int, error) {
 	var rows [][]string
 	var parseErr error
 
@@ -4091,16 +4664,17 @@ func (s *goalService) parseMetricImportFile(ctx context.Context, fileData []byte
 	} else if strings.HasSuffix(lowerName, ".csv") {
 		rows, parseErr = s.parseCSV(fileData)
 	} else {
-		return nil, 0, fmt.Errorf("%s", i18n.T(ctx, "unsupported_file_format_csv_xlsx"))
+		return nil, 0, errBadRequest(ctx, "unsupported_file_format_csv_xlsx")
 	}
 
 	if parseErr != nil {
-		return nil, 0, fmt.Errorf("failed to parse file: %w", parseErr)
+		return nil, 0, errBadRequest(ctx, "failed_to_parse_file_detail", parseErr.Error())
 	}
 
 	if len(rows) < 2 {
-		return nil, 0, fmt.Errorf("%s", i18n.T(ctx, "file_missing_header_or_data"))
+		return nil, 0, errBadRequest(ctx, "file_missing_header_or_data")
 	}
+	goalAccess := map[uuid.UUID]bool{}
 
 	// Skip header row
 	dataRows := rows[1:]
@@ -4177,6 +4751,19 @@ func (s *goalService) parseMetricImportFile(ctx context.Context, fileData []byte
 		}
 		item.GoalTitle = goal.Title
 
+		// Caller must be able to edit the goal (same rule as single value updates)
+		allowed, cached := goalAccess[goalID]
+		if !cached {
+			allowed = s.canModifyGoalObj(ctx, goal, userID) && goal.Status != models.GoalStatusClosed
+			goalAccess[goalID] = allowed
+		}
+		if !allowed {
+			item.Errors = append(item.Errors, "access denied: you cannot update metrics of this goal")
+			item.Status = "error"
+			results = append(results, item)
+			continue
+		}
+
 		// Verify metric exists and belongs to goal
 		metric, err := s.goalRepo.FindMetricByID(ctx, metricID)
 		if err != nil {
@@ -4208,6 +4795,28 @@ func (s *goalService) parseMetricImportFile(ctx context.Context, fileData []byte
 		results = append(results, item)
 	}
 
+	// The same metric may appear only once per batch; otherwise the last row
+	// would silently win. Mark every occurrence as an error.
+	byMetric := map[string][]int{}
+	for i := range results {
+		if results[i].Status == "valid" || results[i].Status == "warning" {
+			byMetric[results[i].MetricID] = append(byMetric[results[i].MetricID], i)
+		}
+	}
+	for _, idxs := range byMetric {
+		if len(idxs) < 2 {
+			continue
+		}
+		rowNums := make([]string, len(idxs))
+		for k, i := range idxs {
+			rowNums[k] = strconv.Itoa(results[i].RowNumber)
+		}
+		for _, i := range idxs {
+			results[i].Status = "error"
+			results[i].Errors = append(results[i].Errors, "metric appears in multiple rows ("+strings.Join(rowNums, ", ")+"); keep only one value per metric")
+		}
+	}
+
 	return results, totalRows, nil
 }
 
@@ -4215,26 +4824,46 @@ func (s *goalService) parseMetricImportFile(ctx context.Context, fileData []byte
 // GetMetricImportBatch
 // ──────────────────────────────────────────────────
 
-func (s *goalService) GetMetricImportBatch(ctx context.Context, id uuid.UUID) (*models.MetricImportBatchResponse, error) {
+func (s *goalService) GetMetricImportBatch(ctx context.Context, id uuid.UUID, userID uuid.UUID) (*models.MetricImportBatchResponse, error) {
 	batch, err := s.goalRepo.FindMetricImportBatchByIDWithRelations(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "metric_import_batch_not_found"), err)
+		return nil, notFoundOr(ctx, err, "metric_import_batch_not_found")
+	}
+	if err := s.requireBatchView(ctx, batch, userID); err != nil {
+		return nil, err
 	}
 
 	resp := batch.ToResponse()
 	return &resp, nil
 }
 
+// requireBatchView: importer, assigned reviewer, or anyone who can view the
+// batch's primary goal.
+func (s *goalService) requireBatchView(ctx context.Context, batch *models.MetricImportBatch, userID uuid.UUID) error {
+	if s.isSuperAdmin(ctx) || batch.ImportedByID == userID || (batch.AssignedToID != nil && *batch.AssignedToID == userID) {
+		return nil
+	}
+	goal, err := s.goalRepo.FindByID(ctx, batch.PrimaryGoalID)
+	if err != nil || !s.canAccessGoalObj(ctx, goal, userID) {
+		return errForbidden(ctx)
+	}
+	return nil
+}
+
 // ──────────────────────────────────────────────────
 // ListMetricImportBatches
 // ──────────────────────────────────────────────────
 
-func (s *goalService) ListMetricImportBatches(ctx context.Context, filter *models.MetricImportBatchFilter) ([]models.MetricImportBatchResponse, int64, error) {
+func (s *goalService) ListMetricImportBatches(ctx context.Context, filter *models.MetricImportBatchFilter, userID uuid.UUID) ([]models.MetricImportBatchResponse, int64, error) {
 	if filter.Page < 1 {
 		filter.Page = 1
 	}
 	if filter.Limit < 1 {
 		filter.Limit = 10
+	}
+	filter.UserID = nil
+	if !s.isSuperAdmin(ctx) {
+		filter.UserID = &userID
 	}
 
 	batches, total, err := s.goalRepo.ListMetricImportBatches(ctx, filter)
@@ -4257,11 +4886,18 @@ func (s *goalService) ListMetricImportBatches(ctx context.Context, filter *model
 func (s *goalService) DeleteMetricImportBatch(ctx context.Context, id uuid.UUID, userID uuid.UUID) error {
 	batch, err := s.goalRepo.FindMetricImportBatchByID(ctx, id)
 	if err != nil {
-		return fmt.Errorf("%s: %w", i18n.T(ctx, "metric_import_batch_not_found"), err)
+		return notFoundOr(ctx, err, "metric_import_batch_not_found")
+	}
+
+	// Importer, super admin, or an editor of the primary goal.
+	if !s.isSuperAdmin(ctx) && batch.ImportedByID != userID {
+		if ok, _ := s.canModifyGoal(ctx, batch.PrimaryGoalID, userID); !ok {
+			return errForbidden(ctx)
+		}
 	}
 
 	if batch.Status == "Approved" {
-		return fmt.Errorf("%s", i18n.T(ctx, "approved_batches_cannot_be_deleted"))
+		return errConflict(ctx, "approved_batches_cannot_be_deleted")
 	}
 
 	if err := s.goalRepo.DeleteMetricImportBatch(ctx, id); err != nil {
@@ -4287,11 +4923,14 @@ func (s *goalService) DeleteMetricImportBatch(ctx context.Context, id uuid.UUID,
 func (s *goalService) GetAvailableMetricBatchTransitions(ctx context.Context, batchID uuid.UUID, userID uuid.UUID) ([]models.AvailableTransitionResponse, error) {
 	batch, err := s.goalRepo.FindMetricImportBatchByIDWithRelations(ctx, batchID)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "metric_import_batch_not_found"), err)
+		return nil, notFoundOr(ctx, err, "metric_import_batch_not_found")
+	}
+	if err := s.requireBatchView(ctx, batch, userID); err != nil {
+		return nil, err
 	}
 
 	if batch.CurrentStateID == nil || batch.WorkflowID == nil {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "batch_no_workflow"))
+		return nil, errBadRequest(ctx, "batch_no_workflow")
 	}
 
 	// Get all transitions from current state
@@ -4356,6 +4995,11 @@ func (s *goalService) GetAvailableMetricBatchTransitions(ctx context.Context, ba
 			}
 		case "assign_l1":
 			continue
+		default:
+			if ok, _ := s.canModifyGoal(ctx, batch.PrimaryGoalID, userID); !ok {
+				canExecute = false
+				reason = "Only the goal owner or a reviewer can perform this action"
+			}
 		}
 
 		reqResponses := make([]models.TransitionRequirementResponse, len(requirements))
@@ -4381,7 +5025,15 @@ func (s *goalService) GetAvailableMetricBatchTransitions(ctx context.Context, ba
 func (s *goalService) ExecuteMetricBatchTransition(ctx context.Context, batchID uuid.UUID, req *models.MetricImportBatchTransitionRequest, userID uuid.UUID) (*models.MetricImportBatchResponse, error) {
 	transitionID, err := uuid.Parse(req.TransitionID)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "invalid_transition_id_svc"), err)
+		return nil, errBadRequest(ctx, "invalid_transition_id_svc")
+	}
+
+	pre, err := s.goalRepo.FindMetricImportBatchByID(ctx, batchID)
+	if err != nil {
+		return nil, notFoundOr(ctx, err, "metric_import_batch_not_found")
+	}
+	if err := s.requireBatchView(ctx, pre, userID); err != nil {
+		return nil, err
 	}
 
 	tx := s.goalRepo.BeginTx(ctx)
@@ -4395,7 +5047,7 @@ func (s *goalService) ExecuteMetricBatchTransition(ctx context.Context, batchID 
 	batch, err := s.goalRepo.FindMetricImportBatchByIDForUpdate(ctx, tx, batchID)
 	if err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "metric_import_batch_not_found"), err)
+		return nil, notFoundOr(ctx, err, "metric_import_batch_not_found")
 	}
 
 	// Optimistic concurrency check
@@ -4413,7 +5065,7 @@ func (s *goalService) ExecuteMetricBatchTransition(ctx context.Context, batchID 
 	transition, err := s.workflowRepo.FindTransitionByIDWithRelations(ctx, transitionID)
 	if err != nil {
 		tx.Rollback()
-		return nil, fmt.Errorf("%s: %w", i18n.T(ctx, "transition_not_found"), err)
+		return nil, errBadRequest(ctx, "transition_not_found")
 	}
 
 	if transition.WorkflowID != *batch.WorkflowID {
@@ -4432,12 +5084,17 @@ func (s *goalService) ExecuteMetricBatchTransition(ctx context.Context, batchID 
 		goal, _ := s.goalRepo.FindByID(ctx, batch.PrimaryGoalID)
 		if batch.ImportedByID != userID && (goal == nil || goal.OwnerID != userID) {
 			tx.Rollback()
-			return nil, fmt.Errorf("%s", i18n.T(ctx, "only_importer_or_owner"))
+			return nil, newGoalErr(ctx, http.StatusForbidden, "only_importer_or_owner")
 		}
 	case "approve_l1", "approve_l1_final", "request_changes_l1", "reject_l1", "approve_l2", "request_changes_l2", "reject_l2":
 		if batch.AssignedToID == nil || *batch.AssignedToID != userID {
 			tx.Rollback()
-			return nil, fmt.Errorf("%s", i18n.T(ctx, "only_reviewer_action"))
+			return nil, newGoalErr(ctx, http.StatusForbidden, "only_reviewer_action")
+		}
+	default:
+		if ok, _ := s.canModifyGoal(ctx, batch.PrimaryGoalID, userID); !ok {
+			tx.Rollback()
+			return nil, errForbidden(ctx)
 		}
 	}
 
@@ -4546,18 +5203,21 @@ func (s *goalService) ExecuteMetricBatchTransition(ctx context.Context, batchID 
 			batch.AssignedToID = &reviewerL2.UserID
 		}
 
-	case "approve_l1_final", "approve_l2":
-		// Final approval — apply metric values
+	case "request_changes_l1", "request_changes_l2", "reject_l1", "reject_l2":
 		batch.AssignedToID = nil
+	}
+
+	// Final approval (dedicated codes or any approval into a terminal state)
+	// applies the batch values.
+	if isGoalApprovalTransition(transition) {
+		batch.AssignedToID = nil
+		batch.Status = "Approved"
 		goalIDs, applyErr := s.applyMetricBatchValues(ctx, tx, batch, userID)
 		if applyErr != nil {
 			tx.Rollback()
 			return nil, fmt.Errorf("failed to apply metric values: %w", applyErr)
 		}
 		affectedGoalIDs = goalIDs
-
-	case "request_changes_l1", "request_changes_l2", "reject_l1", "reject_l2":
-		batch.AssignedToID = nil
 	}
 
 	// Save batch
@@ -4572,7 +5232,7 @@ func (s *goalService) ExecuteMetricBatchTransition(ctx context.Context, batchID 
 
 	// Post-commit: recalculate progress for affected goals
 	for _, goalID := range affectedGoalIDs {
-		s.RecalculateProgress(ctx, goalID)
+		_ = s.RecalculateProgress(ctx, goalID)
 	}
 
 	// Post-commit notifications
@@ -4719,7 +5379,14 @@ func (s *goalService) applyMetricBatchValues(ctx context.Context, tx *gorm.DB, b
 // GetMetricBatchTransitionHistory
 // ──────────────────────────────────────────────────
 
-func (s *goalService) GetMetricBatchTransitionHistory(ctx context.Context, batchID uuid.UUID) ([]models.MetricImportBatchTransitionHistoryResponse, error) {
+func (s *goalService) GetMetricBatchTransitionHistory(ctx context.Context, batchID uuid.UUID, userID uuid.UUID) ([]models.MetricImportBatchTransitionHistoryResponse, error) {
+	batch, err := s.goalRepo.FindMetricImportBatchByID(ctx, batchID)
+	if err != nil {
+		return nil, notFoundOr(ctx, err, "metric_import_batch_not_found")
+	}
+	if err := s.requireBatchView(ctx, batch, userID); err != nil {
+		return nil, err
+	}
 	histories, err := s.goalRepo.ListMetricBatchTransitionHistory(ctx, batchID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get transition history: %w", err)
@@ -4738,12 +5405,9 @@ func (s *goalService) GetMetricBatchTransitionHistory(ctx context.Context, batch
 // ──────────────────────────────────────────────────
 
 func (s *goalService) AddComment(ctx context.Context, goalID uuid.UUID, content string, userID uuid.UUID) (*models.GoalCommentResponse, error) {
-	canAccess, err := s.canAccessGoal(ctx, goalID, userID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to check goal access: %w", err)
-	}
-	if !canAccess {
-		return nil, fmt.Errorf("%s", i18n.T(ctx, "access_denied"))
+	// 404 for a missing goal (also for super admins — no orphan comments)
+	if _, err := s.requireView(ctx, goalID, userID); err != nil {
+		return nil, err
 	}
 
 	comment := &models.GoalComment{
@@ -4766,7 +5430,10 @@ func (s *goalService) AddComment(ctx context.Context, goalID uuid.UUID, content 
 	return &resp, nil
 }
 
-func (s *goalService) ListComments(ctx context.Context, goalID uuid.UUID, page, limit int) ([]models.GoalCommentResponse, int64, error) {
+func (s *goalService) ListComments(ctx context.Context, goalID uuid.UUID, page, limit int, userID uuid.UUID) ([]models.GoalCommentResponse, int64, error) {
+	if _, err := s.requireView(ctx, goalID, userID); err != nil {
+		return nil, 0, err
+	}
 	comments, total, err := s.goalRepo.ListComments(ctx, goalID, page, limit)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to list comments: %w", err)
@@ -4783,12 +5450,12 @@ func (s *goalService) ListComments(ctx context.Context, goalID uuid.UUID, page, 
 func (s *goalService) DeleteComment(ctx context.Context, commentID uuid.UUID, userID uuid.UUID) error {
 	comment, err := s.goalRepo.FindCommentByID(ctx, commentID)
 	if err != nil {
-		return fmt.Errorf("%s: %w", i18n.T(ctx, "comment_not_found"), err)
+		return notFoundOr(ctx, err, "comment_not_found")
 	}
 
 	// Only the author or a super admin can delete
 	if comment.AuthorID != userID && !s.isSuperAdmin(ctx) {
-		return fmt.Errorf("%s", i18n.T(ctx, "only_comment_author_delete"))
+		return newGoalErr(ctx, http.StatusForbidden, "only_comment_author_delete")
 	}
 
 	if err := s.goalRepo.DeleteComment(ctx, commentID); err != nil {
@@ -4796,4 +5463,291 @@ func (s *goalService) DeleteComment(ctx context.Context, commentID uuid.UUID, us
 	}
 
 	return nil
+}
+
+// ════════════════════════════════════════════════════
+// Shared helpers (workflow selection, progress math, files, folders)
+// ════════════════════════════════════════════════════
+
+// Goal-side workflow record types and their seeded workflow codes.
+const (
+	goalWfMetric            = "metric"
+	goalWfMetricValueChange = "metric_value_change"
+	goalWfEvidence          = "evidence"
+)
+
+var goalWorkflowPreferredCodes = map[string][]string{
+	goalWfMetric:            {"metric_approval"},
+	goalWfMetricValueChange: {"metric_value_change_approval"},
+	goalWfEvidence:          {"evidence_approval"},
+}
+
+// pickGoalWorkflow chooses the workflow for a goal record type from the list
+// returned by WorkflowRepository.ListByRecordType (which also returns generic
+// 'all'/'both' workflows sorted by name). Order of preference:
+//  1. record_type matches exactly AND code is the dedicated goal workflow code
+//  2. record_type matches exactly (default first, then oldest)
+//  3. code is the dedicated goal workflow code (whatever its record_type)
+//  4. generic record_type 'all' (default first, then oldest)
+//
+// 'both' workflows are incident/request workflows and are never used. The
+// result never depends on workflow names.
+func pickGoalWorkflow(wfs []models.Workflow, recordType string, preferredCodes []string) *models.Workflow {
+	if len(wfs) == 0 {
+		return nil
+	}
+	sorted := make([]models.Workflow, len(wfs))
+	copy(sorted, wfs)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].IsDefault != sorted[j].IsDefault {
+			return sorted[i].IsDefault
+		}
+		if !sorted[i].CreatedAt.Equal(sorted[j].CreatedAt) {
+			return sorted[i].CreatedAt.Before(sorted[j].CreatedAt)
+		}
+		return sorted[i].ID.String() < sorted[j].ID.String()
+	})
+	isPreferred := func(code string) bool {
+		for _, c := range preferredCodes {
+			if c == code {
+				return true
+			}
+		}
+		return false
+	}
+	for _, code := range preferredCodes {
+		for i := range sorted {
+			if sorted[i].RecordType == recordType && sorted[i].Code == code {
+				return &sorted[i]
+			}
+		}
+	}
+	for i := range sorted {
+		if sorted[i].RecordType == recordType {
+			return &sorted[i]
+		}
+	}
+	for i := range sorted {
+		if isPreferred(sorted[i].Code) {
+			return &sorted[i]
+		}
+	}
+	for i := range sorted {
+		if sorted[i].RecordType == "all" {
+			return &sorted[i]
+		}
+	}
+	return nil
+}
+
+// resolveGoalWorkflow returns the active workflow + initial state for a goal
+// record type, or (nil, nil, nil) when no workflow applies.
+func (s *goalService) resolveGoalWorkflow(ctx context.Context, recordType string) (*models.Workflow, *models.WorkflowState, error) {
+	wfs, err := s.workflowRepo.ListByRecordType(ctx, recordType, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	wf := pickGoalWorkflow(wfs, recordType, goalWorkflowPreferredCodes[recordType])
+	if wf == nil {
+		return nil, nil, nil
+	}
+	initial, err := s.workflowRepo.GetInitialState(ctx, wf.ID)
+	if err != nil || initial == nil {
+		return wf, nil, fmt.Errorf("workflow %s has no initial state", wf.Code)
+	}
+	return wf, initial, nil
+}
+
+// isGoalApprovalTransition reports whether executing t finalises the record as
+// approved: the dedicated approve codes, or any non-rejection transition into
+// a terminal state that is not a "rejected"/"cancelled" state.
+func isGoalApprovalTransition(t *models.WorkflowTransition) bool {
+	switch t.Code {
+	case "approve_l1_final", "approve_l2":
+		return true
+	}
+	if t.IsRejection || t.ToState == nil || t.ToState.StateType != "terminal" {
+		return false
+	}
+	switch strings.ToLower(t.ToState.Code) {
+	case "rejected", "reject", "cancelled", "canceled":
+		return false
+	}
+	return true
+}
+
+// goalReviewerTransitionCodes are transitions only the assigned reviewer may run.
+var goalReviewerTransitionCodes = map[string]bool{
+	"approve_l1": true, "approve_l1_final": true, "request_changes_l1": true, "reject_l1": true,
+	"approve_l2": true, "request_changes_l2": true, "reject_l2": true,
+}
+
+// metricProgressFraction returns the 0..1 completion of one metric.
+//
+//   - Boolean: 1 when current >= 1, else 0.
+//   - Otherwise progress is measured from baseline towards target, so both
+//     increasing (baseline 0 → target 100) and decreasing (baseline 100 →
+//     target 20) metrics work: (current − baseline) / (target − baseline),
+//     clamped to [0, 1].
+//   - target == baseline ("maintain" metric): 1 when current equals the
+//     target, else 0.
+func metricProgressFraction(m models.GoalMetric) float64 {
+	if m.MetricType == models.MetricTypeBoolean {
+		if m.CurrentValue >= 1 {
+			return 1
+		}
+		return 0
+	}
+	span := m.TargetValue - m.BaselineValue
+	if span == 0 {
+		if m.CurrentValue == m.TargetValue {
+			return 1
+		}
+		return 0
+	}
+	f := (m.CurrentValue - m.BaselineValue) / span
+	if math.IsNaN(f) || f < 0 {
+		return 0
+	}
+	if f > 1 {
+		return 1
+	}
+	return f
+}
+
+// metricCountsTowardsProgress: draft / in-review / rejected metric definitions
+// do not count. Legacy metrics without a workflow state count.
+func metricCountsTowardsProgress(m models.GoalMetric) bool {
+	if m.Weight <= 0 {
+		return false
+	}
+	if m.CurrentStateID == nil {
+		return true
+	}
+	if m.CurrentState == nil {
+		return false
+	}
+	if m.CurrentState.StateType != "terminal" {
+		return false
+	}
+	switch strings.ToLower(m.CurrentState.Code) {
+	case "rejected", "reject", "cancelled", "canceled":
+		return false
+	}
+	return true
+}
+
+// computeGoalProgress combines a goal's own (approved) metrics with its child
+// goals' progress, returning a percentage 0..100.
+//
+// Rule: the goal's own metrics form ONE component (their weighted average) and
+// every child goal is one further component; progress is the plain average of
+// all components. So:
+//   - only own metrics → weighted average of own metrics
+//   - only children    → average of children
+//   - both             → (ownAvg + Σ child) / (1 + #children)
+//   - neither          → 0
+func computeGoalProgress(metrics []models.GoalMetric, childProgress []float64) float64 {
+	var weighted, totalWeight float64
+	for _, m := range metrics {
+		if !metricCountsTowardsProgress(m) {
+			continue
+		}
+		weighted += metricProgressFraction(m) * m.Weight
+		totalWeight += m.Weight
+	}
+	var sum float64
+	var n int
+	if totalWeight > 0 {
+		sum += weighted / totalWeight * 100
+		n++
+	}
+	for _, p := range childProgress {
+		sum += p
+		n++
+	}
+	if n == 0 {
+		return 0
+	}
+	p := sum / float64(n)
+	if p < 0 {
+		return 0
+	}
+	if p > 100 {
+		return 100
+	}
+	return p
+}
+
+// goalFolderName makes the Documenta folder name unique per goal: Documenta
+// enforces unique names per parent folder, so two goals with the same title
+// (different owners, or a re-created title after delete) would otherwise
+// collide.
+func goalFolderName(title string, id uuid.UUID) string {
+	return fmt.Sprintf("%s [%s]", strings.TrimSpace(title), id.String()[:8])
+}
+
+// createGoalFolder provisions the goal's Documenta folder; failures surface as
+// a clear 502 instead of leaving the goal without a folder.
+func (s *goalService) createGoalFolder(ctx context.Context, title string, goalID uuid.UUID) (string, error) {
+	rootID, err := s.documentaClient.EnsureFolder(ctx, s.cfg.Documenta.WorkspaceName, "", "Goal Management")
+	if err != nil {
+		log.Printf("[goal_service] ensure Goal Management folder failed: %v", err)
+		ge := newGoalErr(ctx, http.StatusBadGateway, "goal_documenta_folder_failed")
+		ge.Err = err
+		return "", ge
+	}
+	folderID, err := s.documentaClient.CreateFolder(ctx, s.cfg.Documenta.WorkspaceName, rootID, goalFolderName(title, goalID))
+	if err != nil || folderID == "" {
+		log.Printf("[goal_service] create goal folder for %s failed: %v", goalID, err)
+		ge := newGoalErr(ctx, http.StatusBadGateway, "goal_documenta_folder_failed")
+		ge.Err = err
+		return "", ge
+	}
+	return folderID, nil
+}
+
+// blockedEvidenceExtensions are executable / script types never accepted as
+// evidence. (No shared upload allowlist exists elsewhere in the codebase.)
+var blockedEvidenceExtensions = map[string]bool{
+	".exe": true, ".dll": true, ".com": true, ".bat": true, ".cmd": true, ".msi": true, ".msp": true,
+	".scr": true, ".pif": true, ".cpl": true, ".ps1": true, ".psm1": true, ".vbs": true, ".vbe": true,
+	".js": true, ".jse": true, ".wsf": true, ".wsh": true, ".hta": true, ".jar": true, ".sh": true,
+	".app": true, ".apk": true, ".lnk": true, ".reg": true, ".gadget": true, ".sys": true, ".drv": true,
+	".php": true, ".asp": true, ".aspx": true, ".jsp": true, ".py": true, ".pl": true, ".rb": true,
+	".elf": true, ".bin": true, ".run": true, ".dmg": true, ".deb": true, ".rpm": true,
+}
+
+// validateEvidenceFile rejects empty files and executable/script uploads
+// (by extension and by Windows/ELF magic bytes).
+func validateEvidenceFile(ctx context.Context, fileName string, fileData []byte) error {
+	if len(fileData) == 0 {
+		return errBadRequest(ctx, "evidence_empty_file")
+	}
+	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(fileName)))
+	if blockedEvidenceExtensions[ext] {
+		return errBadRequest(ctx, "evidence_file_type_not_allowed")
+	}
+	if bytes.HasPrefix(fileData, []byte("MZ")) || bytes.HasPrefix(fileData, []byte{0x7f, 'E', 'L', 'F'}) {
+		return errBadRequest(ctx, "evidence_file_type_not_allowed")
+	}
+	return nil
+}
+
+func isValidEvidenceType(t string) bool {
+	switch t {
+	case models.EvidenceTypeReport, models.EvidenceTypePhoto, models.EvidenceTypeCertificate,
+		models.EvidenceTypeInvoice, models.EvidenceTypeOther:
+		return true
+	}
+	return false
+}
+
+// validMetadataJSON accepts an empty string or a JSON object.
+func validMetadataJSON(meta string) bool {
+	if strings.TrimSpace(meta) == "" {
+		return true
+	}
+	var obj map[string]interface{}
+	return json.Unmarshal([]byte(meta), &obj) == nil
 }

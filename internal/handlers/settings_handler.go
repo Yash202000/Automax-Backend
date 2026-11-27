@@ -5,6 +5,7 @@ import (
 	"github.com/automax/backend/internal/services"
 
 	"github.com/automax/backend/pkg/i18n"
+	"github.com/automax/backend/pkg/utils"
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -60,6 +61,13 @@ func (h *SettingsHandler) UpdateSettings(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": i18n.T(c.UserContext(), "invalid_request_body"),
 		})
+	}
+
+	if req.ErrorLogRetentionUnit != nil && *req.ErrorLogRetentionUnit != "days" && *req.ErrorLogRetentionUnit != "months" {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "error_log_retention_unit must be 'days' or 'months'")
+	}
+	if req.ErrorLogRetentionValue != nil && (*req.ErrorLogRetentionValue < 1 || *req.ErrorLogRetentionValue > 3650) {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "error_log_retention_value must be between 1 and 3650")
 	}
 
 	settings, err := h.settingsService.UpdateSettings(c.UserContext(), &req)

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/automax/backend/internal/models"
+	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/i18n"
@@ -25,6 +26,50 @@ func userContext(c *fiber.Ctx) context.Context {
 	return context.WithValue(c.UserContext(), constants.ContextKeys.User, user)
 }
 
+// goalFail maps a service error to an HTTP response:
+//   - *services.GoalError → its status + translated message
+//   - invalid sort → 400
+//   - legacy "access denied" text → 403
+//   - otherwise fallbackStatus: 400 keeps the error text (workflow
+//     validation messages), anything else is logged as an internal error.
+func goalFail(c *fiber.Ctx, err error, fallbackStatus int, fallbackKey string) error {
+	var ge *services.GoalError
+	if errors.As(err, &ge) {
+		if ge.Status >= 500 {
+			log.Printf("[GoalHandler] %s %s: %v (cause: %v)", c.Method(), c.Path(), ge.Msg, ge.Err)
+		}
+		return utils.ErrorResponse(c, ge.Status, ge.Msg)
+	}
+	switch {
+	case errors.Is(err, services.ErrParentGoalNotFound):
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "parent_goal_not_found"))
+	case errors.Is(err, services.ErrGoalHierarchyDepthExceeded):
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "max_goal_hierarchy_depth_exceeded"))
+	case errors.Is(err, services.ErrGoalAlreadyExists):
+		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(c.UserContext(), "goal_already_exists"))
+	case errors.Is(err, repository.ErrInvalidGoalSort):
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_query_parameters"))
+	}
+	if strings.Contains(err.Error(), i18n.T(c.UserContext(), "access_denied")) {
+		return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "access_denied"))
+	}
+	if fallbackStatus == fiber.StatusBadRequest {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
+	}
+	return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), fallbackKey))
+}
+
+// validationFail returns the standard 400 validation payload, or nil.
+func validationFail(c *fiber.Ctx, req interface{}) error {
+	if validationErrors := validation.ValidateStruct(c.UserContext(), req); len(validationErrors) != 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"success": false,
+			"errors":  validationErrors,
+		})
+	}
+	return nil
+}
+
 type GoalHandler struct {
 	service          services.GoalService
 	actionLogService services.ActionLogService
@@ -38,17 +83,33 @@ func NewGoalHandler(service services.GoalService, actionLogService services.Acti
 // Export & Clone
 // ──────────────────────────────────────────────────
 
+// applyGoalUserScope sets filter.UserID so non-super-admins only see goals
+// they own, collaborate on, or that belong to their department.
+// scope=mine is a UX-level narrowing for the "My Goals" view; it must
+// apply to every caller including super admins, so set UserID unconditionally
+// when scope=mine is requested.
+func applyGoalUserScope(c *fiber.Ctx, filter *models.GoalFilter) {
+	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
+	if filter.Scope == "mine" || user == nil || !user.IsSuperAdmin {
+		userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
+		filter.UserID = &userID
+	}
+}
+
 func (h *GoalHandler) ExportGoals(c *fiber.Ctx) error {
 	var filter models.GoalFilter
 	if err := c.QueryParser(&filter); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_query_parameters"))
 	}
 
+	// Export must return exactly what the list shows for the same filters.
+	applyGoalUserScope(c, &filter)
+
 	format := c.Query("format", "csv")
 
 	switch format {
 	case "csv":
-		data, err := h.service.ExportGoalsCSV(c.UserContext(), &filter)
+		data, err := h.service.ExportGoalsCSV(userContext(c), &filter)
 		if err != nil {
 			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_export_goals"))
 		}
@@ -57,7 +118,7 @@ func (h *GoalHandler) ExportGoals(c *fiber.Ctx) error {
 		return c.Send(data)
 
 	case "json":
-		goals, err := h.service.ExportGoalsJSON(c.UserContext(), &filter)
+		goals, err := h.service.ExportGoalsJSON(userContext(c), &filter)
 		if err != nil {
 			return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_export_goals"))
 		}
@@ -85,7 +146,7 @@ func (h *GoalHandler) CloneGoal(c *fiber.Ctx) error {
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	goal, err := h.service.CloneGoal(c.UserContext(), id, &req, userID)
+	goal, err := h.service.CloneGoal(userContext(c), id, &req, userID)
 	if err != nil {
 		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_clone_goal"))
 	}
@@ -122,7 +183,7 @@ func (h *GoalHandler) ImportGoals(c *fiber.Ctx) error {
 	dryRun := c.FormValue("dry_run", "true") == "true"
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	result, err := h.service.ImportGoals(c.UserContext(), fileData, file.Filename, dryRun, userID)
+	result, err := h.service.ImportGoals(userContext(c), fileData, file.Filename, dryRun, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "import_failed_detail", err.Error()))
 	}
@@ -142,7 +203,7 @@ func (h *GoalHandler) BulkAction(c *fiber.Ctx) error {
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	result, err := h.service.BulkAction(c.UserContext(), &req, userID)
+	result, err := h.service.BulkAction(userContext(c), &req, userID)
 	if err != nil {
 		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "bulk_operation_failed"))
 	}
@@ -168,7 +229,7 @@ func (h *GoalHandler) CreateGoal(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-	goal, err := h.service.CreateGoal(c.UserContext(), &req, userID)
+	goal, err := h.service.CreateGoal(userContext(c), &req, userID)
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrParentGoalNotFound):
@@ -221,17 +282,9 @@ func (h *GoalHandler) ListGoals(c *fiber.Ctx) error {
 		filter.Limit = 20
 	}
 
-	// Apply user-scoped filtering (super admins see all by default).
-	// scope=mine is a UX-level narrowing for the "My Goals" view; it must
-	// apply to every caller including super admins, so set UserID unconditionally
-	// when scope=mine is requested.
-	user, _ := c.Locals(constants.ContextKeys.User).(*models.User)
-	if filter.Scope == "mine" || user == nil || !user.IsSuperAdmin {
-		userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-		filter.UserID = &userID
-	}
+	applyGoalUserScope(c, &filter)
 
-	goals, total, err := h.service.ListGoals(c.UserContext(), &filter)
+	goals, total, err := h.service.ListGoals(userContext(c), &filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_list_goals"))
 	}
@@ -495,9 +548,9 @@ func (h *GoalHandler) GetMetricHistory(c *fiber.Ctx) error {
 	page := c.QueryInt("page", 1)
 	limit := c.QueryInt("limit", 20)
 
-	history, total, err := h.service.GetMetricHistory(c.UserContext(), id, page, limit)
+	history, total, err := h.service.GetMetricHistory(userContext(c), id, page, limit, c.Locals(constants.ContextKeys.UserID).(uuid.UUID))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_get_metric_history"))
+		return goalFail(c, err, fiber.StatusInternalServerError, "failed_to_get_metric_history")
 	}
 
 	return c.JSON(fiber.Map{
@@ -616,8 +669,11 @@ func (h *GoalHandler) GetEvidence(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
-	evidence, err := h.service.GetEvidence(c.UserContext(), id)
+	evidence, err := h.service.GetEvidence(userContext(c), id, c.Locals(constants.ContextKeys.UserID).(uuid.UUID))
 	if err != nil {
+		if ge := (*services.GoalError)(nil); errors.As(err, &ge) {
+			return goalFail(c, err, fiber.StatusInternalServerError, "evidence_not_found")
+		}
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "evidence_not_found"))
 	}
 
@@ -630,8 +686,11 @@ func (h *GoalHandler) GetEvidencePreview(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
-	url, err := h.service.GetEvidencePreview(c.UserContext(), id)
+	url, err := h.service.GetEvidencePreview(userContext(c), id, c.Locals(constants.ContextKeys.UserID).(uuid.UUID))
 	if err != nil {
+		if ge := (*services.GoalError)(nil); errors.As(err, &ge) {
+			return goalFail(c, err, fiber.StatusInternalServerError, "evidence_preview_unavail")
+		}
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "evidence_preview_unavail"))
 	}
 
@@ -658,8 +717,11 @@ func (h *GoalHandler) DownloadEvidence(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
-	reader, info, contentType, filename, err := h.service.DownloadEvidenceFile(c.UserContext(), id)
+	reader, info, contentType, filename, err := h.service.DownloadEvidenceFile(userContext(c), id, c.Locals(constants.ContextKeys.UserID).(uuid.UUID))
 	if err != nil {
+		if ge := (*services.GoalError)(nil); errors.As(err, &ge) {
+			return goalFail(c, err, fiber.StatusInternalServerError, "evidence_download_unavail")
+		}
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "evidence_download_unavail"))
 	}
 
@@ -768,7 +830,7 @@ func (h *GoalHandler) GetAvailableEvidenceTransitions(c *fiber.Ctx) error {
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	transitions, err := h.service.GetAvailableEvidenceTransitions(c.UserContext(), id, userID)
+	transitions, err := h.service.GetAvailableEvidenceTransitions(userContext(c), id, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -796,7 +858,7 @@ func (h *GoalHandler) ExecuteEvidenceTransition(c *fiber.Ctx) error {
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	result, err := h.service.ExecuteEvidenceTransition(c.UserContext(), id, &req, userID)
+	result, err := h.service.ExecuteEvidenceTransition(userContext(c), id, &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -810,9 +872,9 @@ func (h *GoalHandler) GetEvidenceTransitionHistory(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
-	history, err := h.service.GetEvidenceTransitionHistory(c.UserContext(), id)
+	history, err := h.service.GetEvidenceTransitionHistory(userContext(c), id, c.Locals(constants.ContextKeys.UserID).(uuid.UUID))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_get_transition_history"))
+		return goalFail(c, err, fiber.StatusInternalServerError, "failed_to_get_transition_history")
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "transition_history"), history)
@@ -829,7 +891,7 @@ func (h *GoalHandler) GetAvailableMetricTransitions(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-	transitions, err := h.service.GetAvailableMetricTransitions(c.UserContext(), id, userID)
+	transitions, err := h.service.GetAvailableMetricTransitions(userContext(c), id, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -854,7 +916,7 @@ func (h *GoalHandler) TransitionMetric(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-	result, err := h.service.TransitionMetric(c.UserContext(), id, &req, userID)
+	result, err := h.service.TransitionMetric(userContext(c), id, &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -868,7 +930,7 @@ func (h *GoalHandler) GetAvailableMetricValueChangeTransitions(c *fiber.Ctx) err
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-	transitions, err := h.service.GetAvailableMetricValueChangeTransitions(c.UserContext(), id, userID)
+	transitions, err := h.service.GetAvailableMetricValueChangeTransitions(userContext(c), id, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -893,7 +955,7 @@ func (h *GoalHandler) TransitionMetricValueChange(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-	result, err := h.service.TransitionMetricValueChange(c.UserContext(), id, &req, userID)
+	result, err := h.service.TransitionMetricValueChange(userContext(c), id, &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -909,7 +971,7 @@ func (h *GoalHandler) ListMetricValueChanges(c *fiber.Ctx) error {
 	}
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
-	changes, err := h.service.ListMetricValueChanges(c.UserContext(), metricID, userID)
+	changes, err := h.service.ListMetricValueChanges(userContext(c), metricID, userID)
 	if err != nil {
 		if strings.Contains(err.Error(), i18n.T(c.UserContext(), "access_denied")) {
 			return utils.ErrorResponse(c, fiber.StatusForbidden, err.Error())
@@ -929,7 +991,7 @@ func (h *GoalHandler) ListPendingMetricApprovals(c *fiber.Ctx) error {
 	page := c.QueryInt("page", 1)
 	limit := c.QueryInt("limit", 10)
 
-	approvals, total, err := h.service.ListPendingMetricApprovals(c.UserContext(), userID, page, limit)
+	approvals, total, err := h.service.ListPendingMetricApprovals(userContext(c), userID, page, limit)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_list_pending_metric_approvals"))
 	}
@@ -948,7 +1010,7 @@ func (h *GoalHandler) ListPendingMetricValueChangeApprovals(c *fiber.Ctx) error 
 	page := c.QueryInt("page", 1)
 	limit := c.QueryInt("limit", 10)
 
-	approvals, total, err := h.service.ListPendingMetricValueChangeApprovals(c.UserContext(), userID, page, limit)
+	approvals, total, err := h.service.ListPendingMetricValueChangeApprovals(userContext(c), userID, page, limit)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_list_pending_metric_value_approvals"))
 	}
@@ -972,7 +1034,7 @@ func (h *GoalHandler) ListPendingApprovals(c *fiber.Ctx) error {
 	page := c.QueryInt("page", 1)
 	limit := c.QueryInt("limit", 10)
 
-	approvals, total, err := h.service.ListPendingApprovals(c.UserContext(), userID, page, limit)
+	approvals, total, err := h.service.ListPendingApprovals(userContext(c), userID, page, limit)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_list_pending_approvals"))
 	}
@@ -992,7 +1054,7 @@ func (h *GoalHandler) ListCompletedApprovals(c *fiber.Ctx) error {
 	page := c.QueryInt("page", 1)
 	limit := c.QueryInt("limit", 10)
 
-	approvals, total, err := h.service.ListCompletedApprovals(c.UserContext(), userID, page, limit)
+	approvals, total, err := h.service.ListCompletedApprovals(userContext(c), userID, page, limit)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_list_completed_approvals"))
 	}
@@ -1016,9 +1078,9 @@ func (h *GoalHandler) ListChildGoals(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_goal_id"))
 	}
 
-	children, err := h.service.ListChildGoals(c.UserContext(), id)
+	children, err := h.service.ListChildGoals(userContext(c), id, c.Locals(constants.ContextKeys.UserID).(uuid.UUID))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_list_child_goals"))
+		return goalFail(c, err, fiber.StatusInternalServerError, "failed_to_list_child_goals")
 	}
 
 	return c.JSON(fiber.Map{
@@ -1033,9 +1095,9 @@ func (h *GoalHandler) GetGoalTree(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_goal_id"))
 	}
 
-	tree, err := h.service.GetGoalTree(c.UserContext(), id)
+	tree, err := h.service.GetGoalTree(userContext(c), id, c.Locals(constants.ContextKeys.UserID).(uuid.UUID))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_get_goal_tree"))
+		return goalFail(c, err, fiber.StatusInternalServerError, "failed_to_get_goal_tree")
 	}
 
 	return c.JSON(fiber.Map{
@@ -1089,9 +1151,9 @@ func (h *GoalHandler) ListCheckIns(c *fiber.Ctx) error {
 	page := c.QueryInt("page", 1)
 	limit := c.QueryInt("limit", 10)
 
-	checkIns, total, err := h.service.ListCheckIns(c.UserContext(), goalID, page, limit)
+	checkIns, total, err := h.service.ListCheckIns(userContext(c), goalID, page, limit, c.Locals(constants.ContextKeys.UserID).(uuid.UUID))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_list_check_ins"))
+		return goalFail(c, err, fiber.StatusInternalServerError, "failed_to_list_check_ins")
 	}
 
 	return c.JSON(fiber.Map{
@@ -1134,7 +1196,7 @@ func (h *GoalHandler) ExportMetricsTemplate(c *fiber.Ctx) error {
 
 	format := c.Query("format", "csv")
 
-	data, err := h.service.ExportMetricsTemplate(c.UserContext(), &filter, format)
+	data, err := h.service.ExportMetricsTemplate(userContext(c), &filter, format)
 	if err != nil {
 		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "failed_to_export_metrics_template"))
 	}
@@ -1177,7 +1239,7 @@ func (h *GoalHandler) ImportMetrics(c *fiber.Ctx) error {
 	dryRun := c.FormValue("dry_run", "true") == "true"
 
 	if dryRun {
-		result, err := h.service.ImportMetricsDryRun(c.UserContext(), fileData, file.Filename, userID)
+		result, err := h.service.ImportMetricsDryRun(userContext(c), fileData, file.Filename, userID)
 		if err != nil {
 			return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "validation_failed_detail", err.Error()))
 		}
@@ -1199,7 +1261,7 @@ func (h *GoalHandler) ImportMetrics(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_primary_goal_id"))
 	}
 
-	result, err := h.service.ImportMetricsCommit(c.UserContext(), fileData, file.Filename, title, comment, primaryGoalID, userID)
+	result, err := h.service.ImportMetricsCommit(userContext(c), fileData, file.Filename, title, comment, primaryGoalID, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.Tf(c.UserContext(), "import_failed_detail", err.Error()))
 	}
@@ -1213,9 +1275,9 @@ func (h *GoalHandler) ListMetricImportBatches(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_query_parameters"))
 	}
 
-	batches, total, err := h.service.ListMetricImportBatches(c.UserContext(), &filter)
+	batches, total, err := h.service.ListMetricImportBatches(userContext(c), &filter, c.Locals(constants.ContextKeys.UserID).(uuid.UUID))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_list_metric_batches"))
+		return goalFail(c, err, fiber.StatusInternalServerError, "failed_to_list_metric_batches")
 	}
 
 	return c.JSON(fiber.Map{
@@ -1233,9 +1295,12 @@ func (h *GoalHandler) GetMetricImportBatch(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
-	batch, err := h.service.GetMetricImportBatch(c.UserContext(), id)
+	batch, err := h.service.GetMetricImportBatch(userContext(c), id, c.Locals(constants.ContextKeys.UserID).(uuid.UUID))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusNotFound, err.Error())
+		if ge := (*services.GoalError)(nil); errors.As(err, &ge) {
+			return goalFail(c, err, fiber.StatusInternalServerError, "metric_import_batch_not_found")
+		}
+		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "metric_import_batch_not_found"))
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "metric_import_batch"), batch)
@@ -1249,7 +1314,7 @@ func (h *GoalHandler) DeleteMetricImportBatch(c *fiber.Ctx) error {
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	if err := h.service.DeleteMetricImportBatch(c.UserContext(), id, userID); err != nil {
+	if err := h.service.DeleteMetricImportBatch(userContext(c), id, userID); err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
 
@@ -1267,7 +1332,7 @@ func (h *GoalHandler) GetAvailableMetricBatchTransitions(c *fiber.Ctx) error {
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	transitions, err := h.service.GetAvailableMetricBatchTransitions(c.UserContext(), id, userID)
+	transitions, err := h.service.GetAvailableMetricBatchTransitions(userContext(c), id, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -1295,7 +1360,7 @@ func (h *GoalHandler) ExecuteMetricBatchTransition(c *fiber.Ctx) error {
 
 	userID := c.Locals(constants.ContextKeys.UserID).(uuid.UUID)
 
-	result, err := h.service.ExecuteMetricBatchTransition(c.UserContext(), id, &req, userID)
+	result, err := h.service.ExecuteMetricBatchTransition(userContext(c), id, &req, userID)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, err.Error())
 	}
@@ -1309,9 +1374,9 @@ func (h *GoalHandler) GetMetricBatchTransitionHistory(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_id"))
 	}
 
-	history, err := h.service.GetMetricBatchTransitionHistory(c.UserContext(), id)
+	history, err := h.service.GetMetricBatchTransitionHistory(userContext(c), id, c.Locals(constants.ContextKeys.UserID).(uuid.UUID))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_get_transition_history"))
+		return goalFail(c, err, fiber.StatusInternalServerError, "failed_to_get_transition_history")
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "transition_history"), history)
@@ -1335,7 +1400,7 @@ func (h *GoalHandler) GetGoalActivity(c *fiber.Ctx) error {
 		Page:       page,
 		Limit:      limit,
 	}
-	logs, total, err := h.actionLogService.ListActionLogs(c.UserContext(), filter)
+	logs, total, err := h.actionLogService.ListActionLogs(userContext(c), filter)
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_get_goal_activity"))
 	}
@@ -1390,9 +1455,9 @@ func (h *GoalHandler) ListGoalComments(c *fiber.Ctx) error {
 	page := c.QueryInt("page", 1)
 	limit := c.QueryInt("limit", 20)
 
-	comments, total, err := h.service.ListComments(c.UserContext(), goalID, page, limit)
+	comments, total, err := h.service.ListComments(userContext(c), goalID, page, limit, c.Locals(constants.ContextKeys.UserID).(uuid.UUID))
 	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, i18n.T(c.UserContext(), "failed_to_list_comments"))
+		return goalFail(c, err, fiber.StatusInternalServerError, "failed_to_list_comments")
 	}
 
 	return c.JSON(fiber.Map{

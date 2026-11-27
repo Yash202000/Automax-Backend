@@ -28,10 +28,13 @@ func (b *KpiPerformanceBand) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
+// KpiPerformanceBandRequest: pointers so an explicit 0 (a valid amber
+// minimum) is distinguishable from a missing value; the handler checks
+// presence and 0 <= amber_min < green_min <= 100.
 type KpiPerformanceBandRequest struct {
-	KpiCode  *string `json:"kpi_code"`
-	GreenMin float64 `json:"green_min" validate:"required"`
-	AmberMin float64 `json:"amber_min" validate:"required"`
+	KpiCode  *string  `json:"kpi_code"`
+	GreenMin *float64 `json:"green_min"`
+	AmberMin *float64 `json:"amber_min"`
 }
 
 type KpiPerformanceBandResponse struct {
@@ -55,5 +58,6 @@ func (b *KpiPerformanceBand) ToResponse() KpiPerformanceBandResponse {
 }
 
 // DefaultKpiPerformanceBand is the hardcoded fallback used only if no global
-// default row exists in the database yet (should not happen after seeding).
-var DefaultKpiPerformanceBand = KpiPerformanceBandResponse{GreenMin: 80, AmberMin: 60}
+// default row exists in the database yet. It matches the global status
+// defaults (DefaultAchievedMin/DefaultWarningMin) used by EvaluatePerformance.
+var DefaultKpiPerformanceBand = KpiPerformanceBandResponse{GreenMin: DefaultAchievedMin, AmberMin: DefaultWarningMin}

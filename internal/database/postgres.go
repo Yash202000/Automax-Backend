@@ -5,7 +5,6 @@ import (
 	"log"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/automax/backend/internal/config"
 	"github.com/automax/backend/internal/database/migrations"
@@ -81,6 +80,8 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		&models.CallLog{},
 		&models.CallParticipant{},
 		&models.CallLogAttachment{},
+		&models.CallRecordingAudit{},
+		&models.SystemAttachment{},
 		&models.NotificationTemplate{},
 		&models.NotificationLog{},
 		&models.EscalationSLA{},
@@ -102,6 +103,7 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		&models.FeedbackTemplate{},
 		// Incident models
 		&models.Incident{},
+		&models.IncidentPreviousReport{},
 		&models.IncidentComment{},
 		&models.IncidentAttachment{},
 		&models.IncidentFeedback{},
@@ -118,6 +120,7 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		&models.ReportTemplate{},
 		// Application Links
 		&models.ApplicationLink{},
+		&models.Config{},
 		// Settings
 		&models.Settings{},
 		// Escalation Policies
@@ -127,6 +130,9 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		// Custom Escalation Groups
 		&models.EscalationGroup{},
 		&models.EscalationGroupTarget{},
+		// Error Log
+		&models.ErrorLog{},
+		&models.ErrorLogHistory{},
 		// Ready-to-Close expiry tracking
 		&models.IncidentReadyToCloseEntry{},
 		&models.DeviceToken{},
@@ -178,6 +184,7 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			&models.Process{},
 			&models.Initiative{},
 			&models.Domain{},
+			&models.AwardKpiMeasure{},
 			&models.AwardCriterion{},
 			&models.AwardSubCriterion{},
 			&models.StrategicKPI{},
@@ -195,6 +202,7 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			&models.KpiSegmentationDimension{},
 			&models.KpiPerformanceEvidence{},
 			&models.KpiMetric{},
+			&models.KpiBaselineRevision{},
 			&models.KpiEvidence{},
 			&models.KpiCollaborator{},
 			&models.KpiCheckIn{},
@@ -246,6 +254,11 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		if err := migrations.MigrateKpiEntryMultiOrgScope(migrationDB); err != nil {
 			log.Printf("Warning: KPI entry multi-org-scope migration failed: %v", err)
 		}
+		// Must run after the v3 index above: case-insensitive period codes,
+		// uniqueness for KPI-level targets, one approved version per key.
+		if err := migrations.MigrateKpiTargetUniqueIndexV4(migrationDB); err != nil {
+			log.Printf("Warning: KPI target unique index v4 migration failed: %v", err)
+		}
 
 		// Strategic/Operational/Award KPIs now share one create form: Objective
 		// is the one universal required taxonomy field, and Award Criteria/
@@ -255,11 +268,37 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 			log.Printf("Warning: KPI dictionary taxonomy unification migration failed: %v", err)
 		}
 
+		// award_kpi_measures.code (KPI-AWRD-MSR-NN) is assigned by a Postgres sequence.
+		if err := migrations.MigrateAwardKpiMeasureCodeSequence(migrationDB); err != nil {
+			log.Printf("Warning: award KPI measure code sequence migration failed: %v", err)
+		}
+
+		// domains.code (KPI-DOM-NN) is assigned by a Postgres sequence.
+		if err := migrations.MigrateDomainCodeSequence(migrationDB); err != nil {
+			log.Printf("Warning: domain code sequence migration failed: %v", err)
+		}
+
 		// Enforce unique domain names (excluding soft-deleted records).
 		db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_domains_name_en ON domains(name_en) WHERE deleted_at IS NULL`)
 
 		// Enforce unique data source names (excluding soft-deleted records).
 		db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_kpi_data_sources_name_en ON kpi_data_sources(name_en) WHERE deleted_at IS NULL`)
+
+		// Award criteria are unique by number (idx_award_criterions_criterion_no)
+		// and by name; sub-criteria by Sub No. and by name within their
+		// criterion (excluding soft-deleted records). The indexes also stop
+		// two simultaneous requests (a double-click) from both inserting.
+		// Existing duplicates are not changed: the index is then not created
+		// and a warning is logged (the form and imports still refuse new ones).
+		for _, ix := range []struct{ name, sql string }{
+			{"uq_award_criterions_name_en", `CREATE UNIQUE INDEX IF NOT EXISTS uq_award_criterions_name_en ON award_criterions (LOWER(TRIM(name_en))) WHERE deleted_at IS NULL`},
+			{"uq_award_sub_criterions_sub_no", `CREATE UNIQUE INDEX IF NOT EXISTS uq_award_sub_criterions_sub_no ON award_sub_criterions (award_criterion_id, LOWER(TRIM(sub_no))) WHERE deleted_at IS NULL`},
+			{"uq_award_sub_criterions_name_en", `CREATE UNIQUE INDEX IF NOT EXISTS uq_award_sub_criterions_name_en ON award_sub_criterions (award_criterion_id, LOWER(TRIM(name_en))) WHERE deleted_at IS NULL`},
+		} {
+			if err := db.Exec(ix.sql).Error; err != nil {
+				log.Printf("Warning: %s not created (duplicate award criteria / sub-criteria exist — clean them up, then restart): %v", ix.name, err)
+			}
+		}
 	}
 
 	// Drop problematic foreign key constraints on incidents table
@@ -271,20 +310,27 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 
 	// Drop FK constraints on performed_by_id so system-triggered actions (uuid.Nil) are allowed.
 	// System actions (e.g. Ready-to-Close auto-revert) do not have a real user performer.
-	db.Exec("ALTER TABLE incident_transition_histories DROP CONSTRAINT IF EXISTS fk_incident_transition_histories_performed_by")
-	db.Exec("ALTER TABLE incident_transition_histories DROP CONSTRAINT IF EXISTS incident_transition_histories_performed_by_id_fkey")
-	db.Exec("ALTER TABLE incident_revisions DROP CONSTRAINT IF EXISTS fk_incident_revisions_performed_by")
-	db.Exec("ALTER TABLE incident_revisions DROP CONSTRAINT IF EXISTS incident_revisions_performed_by_id_fkey")
-	db.Exec("ALTER TABLE evidence_transition_histories DROP CONSTRAINT IF EXISTS fk_evidence_transition_histories_performed_by")
-	db.Exec("ALTER TABLE evidence_transition_histories DROP CONSTRAINT IF EXISTS evidence_transition_histories_performed_by_id_fkey")
-	db.Exec("ALTER TABLE metric_import_batch_transition_histories DROP CONSTRAINT IF EXISTS fk_metric_import_batch_transition_histories_performed_by")
-	db.Exec("ALTER TABLE metric_import_batch_transition_histories DROP CONSTRAINT IF EXISTS metric_import_batch_transition_histories_performed_by_id_fkey")
-	db.Exec("ALTER TABLE metric_transition_histories DROP CONSTRAINT IF EXISTS fk_metric_transition_histories_performed_by")
-	db.Exec("ALTER TABLE metric_transition_histories DROP CONSTRAINT IF EXISTS metric_transition_histories_performed_by_id_fkey")
-	db.Exec("ALTER TABLE metric_value_change_transition_histories DROP CONSTRAINT IF EXISTS fk_metric_value_change_transition_histories_performed_by")
-	db.Exec("ALTER TABLE metric_value_change_transition_histories DROP CONSTRAINT IF EXISTS metric_value_change_transition_histories_performed_by_id_fkey")
-	db.Exec("ALTER TABLE kpi_workflow_actions DROP CONSTRAINT IF EXISTS fk_kpi_workflow_actions_performed_by")
-	db.Exec("ALTER TABLE kpi_workflow_actions DROP CONSTRAINT IF EXISTS kpi_workflow_actions_performed_by_id_fkey")
+	// Tables created later in this run (or only in some deployments) don't exist yet on a fresh DB.
+	for _, c := range [][2]string{
+		{"incident_transition_histories", "fk_incident_transition_histories_performed_by"},
+		{"incident_transition_histories", "incident_transition_histories_performed_by_id_fkey"},
+		{"incident_revisions", "fk_incident_revisions_performed_by"},
+		{"incident_revisions", "incident_revisions_performed_by_id_fkey"},
+		{"evidence_transition_histories", "fk_evidence_transition_histories_performed_by"},
+		{"evidence_transition_histories", "evidence_transition_histories_performed_by_id_fkey"},
+		{"metric_import_batch_transition_histories", "fk_metric_import_batch_transition_histories_performed_by"},
+		{"metric_import_batch_transition_histories", "metric_import_batch_transition_histories_performed_by_id_fkey"},
+		{"metric_transition_histories", "fk_metric_transition_histories_performed_by"},
+		{"metric_transition_histories", "metric_transition_histories_performed_by_id_fkey"},
+		{"metric_value_change_transition_histories", "fk_metric_value_change_transition_histories_performed_by"},
+		{"metric_value_change_transition_histories", "metric_value_change_transition_histories_performed_by_id_fkey"},
+		{"kpi_workflow_actions", "fk_kpi_workflow_actions_performed_by"},
+		{"kpi_workflow_actions", "kpi_workflow_actions_performed_by_id_fkey"},
+	} {
+		if db.Migrator().HasTable(c[0]) {
+			db.Exec("ALTER TABLE " + c[0] + " DROP CONSTRAINT IF EXISTS " + c[1])
+		}
+	}
 
 	// Legacy strategic_goal_id columns predate the StrategicGoal→Goal model rename.
 	// AutoMigrate never drops old columns, so on databases created before that
@@ -297,11 +343,18 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 
 	db.Exec("ALTER TABLE lookup_categories ADD COLUMN IF NOT EXISTS redirect_url VARCHAR(500)")
 
+	// Auth settings: show_forgot_password toggle (default true). AutoMigrate adds
+	// the column, but ensure the default/backfill explicitly for existing DBs.
+	db.Exec("ALTER TABLE settings ADD COLUMN IF NOT EXISTS show_forgot_password BOOLEAN DEFAULT TRUE")
+	db.Exec("ALTER TABLE settings ALTER COLUMN show_forgot_password SET DEFAULT TRUE")
+	db.Exec("UPDATE settings SET show_forgot_password = TRUE WHERE show_forgot_password IS NULL")
+
 	// Notification template enhancements: add categorisation and bilingual-linking columns.
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS name VARCHAR(200)")
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS module_type VARCHAR(50)")
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS action_type VARCHAR(50)")
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS variables TEXT")
+	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS provider_template_id VARCHAR(100)")
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS transition_id UUID REFERENCES workflow_transitions(id) ON DELETE SET NULL")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_notification_templates_module_type ON notification_templates(module_type)")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_notification_templates_action_type ON notification_templates(action_type)")
@@ -317,9 +370,12 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS body_en    TEXT")
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS subject_ar TEXT")
 	db.Exec("ALTER TABLE notification_templates ADD COLUMN IF NOT EXISTS body_ar    TEXT")
-	db.Exec("UPDATE notification_templates SET subject_en = subject, body_en = body WHERE language = 'en' AND body_en IS NULL")
-	db.Exec(`UPDATE notification_templates t SET subject_ar = ar.subject, body_ar = ar.body FROM notification_templates ar WHERE ar.language = 'ar' AND ar.code = t.code AND ar.channel = t.channel AND t.language = 'en'`)
-	db.Exec("DELETE FROM notification_templates WHERE language = 'ar'")
+	// The legacy single-language column only exists until this migration has run once.
+	if db.Migrator().HasColumn("notification_templates", "language") {
+		db.Exec("UPDATE notification_templates SET subject_en = subject, body_en = body WHERE language = 'en' AND body_en IS NULL")
+		db.Exec(`UPDATE notification_templates t SET subject_ar = ar.subject, body_ar = ar.body FROM notification_templates ar WHERE ar.language = 'ar' AND ar.code = t.code AND ar.channel = t.channel AND t.language = 'en'`)
+		db.Exec("DELETE FROM notification_templates WHERE language = 'ar'")
+	}
 	db.Exec("ALTER TABLE notification_templates DROP COLUMN IF EXISTS language")
 	db.Exec("ALTER TABLE notification_templates DROP COLUMN IF EXISTS subject")
 	db.Exec("ALTER TABLE notification_templates DROP COLUMN IF EXISTS body")
@@ -332,7 +388,19 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 
 	// Workflow code column was previously VARCHAR(50) which is too short for some existing workflows. Increase to 100 chars. Note: MySQL syntax is ALTER TABLE workflows MODIFY code VARCHAR(100) NOT NULL but Postgres is ALTER TABLE workflows ALTER COLUMN code TYPE VARCHAR(100). GORM's AutoMigrate doesn't handle this edge case, so we run raw SQL. Idempotent: safe to run repeatedly.
 	db.Exec("ALTER TABLE workflows ALTER COLUMN code TYPE VARCHAR(100)")
-	db.Exec("ALTER TABLE reports ALTER COLUMN timestamp_key TYPE VARCHAR(100) Default 'created_at'")
+	db.Exec("ALTER TABLE reports ALTER COLUMN timestamp_key TYPE VARCHAR(100)")
+
+	// Master data name/name_ar widened from 100 to 500 chars (classifications, locations, departments).
+	for _, t := range []string{"classifications", "locations", "departments"} {
+		db.Exec("ALTER TABLE " + t + " ALTER COLUMN name TYPE VARCHAR(500)")
+		db.Exec("ALTER TABLE " + t + " ALTER COLUMN name_ar TYPE VARCHAR(500)")
+	}
+	db.Exec("ALTER TABLE reports ALTER COLUMN timestamp_key SET DEFAULT 'created_at'")
+
+	// Error Log: sequence for ERR-000123 style codes
+	if err := migrations.MigrateErrorLogSequence(db); err != nil {
+		return fmt.Errorf("failed to create error_log_seq: %w", err)
+	}
 
 	// Migrate transition assignment roles (single → many-to-many)
 	if err := migrations.MigrateTransitionAssignmentRoles(db); err != nil {
@@ -349,6 +417,11 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 		log.Printf("Warning: closed incident edit tracking migration failed: %v", err)
 	}
 
+	// Migrate caller identity text and cooperation status incident fields
+	if err := migrations.MigrateIncidentCallerCooperationFields(db); err != nil {
+		log.Printf("Warning: incident caller/cooperation fields migration failed: %v", err)
+	}
+
 	// Migrate user mobile verified
 	if err := migrations.MigrateUserMobileVerified(db); err != nil {
 		log.Printf("Warning: user mobile verified migration failed: %v", err)
@@ -357,6 +430,11 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	// Migrate AI quality columns
 	if err := migrations.MigrateAIQuality(db); err != nil {
 		log.Printf("Warning: AI quality migration failed: %v", err)
+	}
+
+	// Migrate workflow state lock_assignee column
+	if err := migrations.MigrateLockAssignee(db); err != nil {
+		log.Printf("Warning: lock assignee migration failed: %v", err)
 	}
 
 	// Migrate classification single-type column → classification_types join table
@@ -378,6 +456,11 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	// Drop recording_url from call_logs — URLs are now generated from call_log_attachments
 	if err := migrations.MigrateCallLogRecordingURL(db); err != nil {
 		log.Printf("Warning: call_log recording_url migration failed: %v", err)
+	}
+
+	// Call Recording History is append-only: block UPDATE/DELETE/TRUNCATE at the DB level
+	if err := migrations.MigrateCallRecordingAudit(db); err != nil {
+		log.Printf("Warning: call recording audit immutability migration failed: %v", err)
 	}
 
 	// Drop user_id from call_participants — participants are identified by phone_number only
@@ -404,6 +487,12 @@ func Migrate(db *gorm.DB, cfg *config.Config) error {
 	// Composite index for the incident communication history query (filter by incident_id, sort by created_at)
 	if err := migrations.MigrateNotificationLogIncidentIndex(db); err != nil {
 		log.Printf("Warning: notification_log incident index migration failed: %v", err)
+	}
+
+	// Default SMS templates replacing formerly hardcoded SMS text (idempotent, never overwrites edits).
+	// can remove after successfull templates migartion.
+	if err := migrations.SeedDefaultSMSTemplates(db); err != nil {
+		log.Printf("Warning: default SMS template seed failed: %v", err)
 	}
 
 	// Assign a unique Organization Code (ORG-######) to any department missing one.
@@ -696,6 +785,9 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Delete Call Logs", Code: "call-logs:delete", Module: "call-logs", Action: "delete", ActionAr: "حذف", Description: "Delete call logs"},
 		{Name: "View All Call Logs", Code: "call-logs:view_all", Module: "call-logs", Action: "view_all", ActionAr: "عرض الكل", Description: "View call logs of other agents regardless of participation"},
 
+		// Call Recording History (audit of recording listens/downloads)
+		{Name: "View Call Recording History", Code: "call-recordings:history", Module: "call-recordings", Action: "history", ActionAr: "عرض السجل", Description: "View who listened to or downloaded call recordings"},
+
 		// Lookup permissions
 		{Name: "View Lookups", Code: "lookups:view", Module: "lookups", Action: "view", ActionAr: "عرض", Description: "View lookup categories and values"},
 		{Name: "Create Lookups", Code: "lookups:create", Module: "lookups", Action: "create", ActionAr: "إنشاء", Description: "Create lookup categories and values"},
@@ -708,6 +800,12 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Update Application Links", Code: "application-links:update", Module: "application-links", Action: "update", ActionAr: "تحديث", Description: "Update application links"},
 		{Name: "Delete Application Links", Code: "application-links:delete", Module: "application-links", Action: "delete", ActionAr: "حذف", Description: "Delete application links"},
 		{Name: "Access Application Links on Dashboard", Code: "application-links:dashboard", Module: "application-links", Action: "dashboard", ActionAr: "لوحة التحكم", Description: "See and launch application links from the dashboard"},
+
+		// Config permissions
+		{Name: "View Configs", Code: "configs:view", Module: "configs", Action: "view", ActionAr: "عرض", Description: "View environment configs"},
+		{Name: "Create Configs", Code: "configs:create", Module: "configs", Action: "create", ActionAr: "إنشاء", Description: "Create environment configs"},
+		{Name: "Update Configs", Code: "configs:update", Module: "configs", Action: "update", ActionAr: "تحديث", Description: "Update environment configs"},
+		{Name: "Delete Configs", Code: "configs:delete", Module: "configs", Action: "delete", ActionAr: "حذف", Description: "Delete environment configs"},
 
 		// Notification permissions
 		{Name: "View Notifications", Code: "notifications:read", Module: "notifications", Action: "read", ActionAr: "قراءة", Description: "View notification logs"},
@@ -733,6 +831,16 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		{Name: "Delete Escalation Group", Code: "escalation-groups:delete", Module: "escalation-groups", Action: "delete", ActionAr: "حذف", Description: "Delete escalation groups"},
 		{Name: "Assign Users to Escalation Group", Code: "escalation-groups:assign_users", Module: "escalation-groups", Action: "assign_users", ActionAr: "تعيين المستخدمين", Description: "Add or remove users from escalation groups"},
 		{Name: "Manage Escalation Rules", Code: "escalation-groups:manage_rules", Module: "escalation-groups", Action: "manage_rules", ActionAr: "إدارة القواعد", Description: "Configure escalation frequency, channel, and classification rules"},
+
+		// Escalation log permissions
+		{Name: "View Escalation Log", Code: "escalation-logs:view", Module: "escalation-logs", Action: "view", ActionAr: "عرض", Description: "View the escalation log and per-report escalation history"},
+		{Name: "Export Escalation Log", Code: "escalation-logs:export", Module: "escalation-logs", Action: "export", ActionAr: "تصدير", Description: "Export the filtered escalation log to Excel"},
+
+		// Error Log permissions
+		{Name: "View Error Logs", Code: "error-logs:view", Module: "error-logs", Action: "view", ActionAr: "عرض", Description: "View the error log list and details"},
+		{Name: "Update Error Log Status", Code: "error-logs:update", Module: "error-logs", Action: "update", ActionAr: "تحديث", Description: "Change error status and add notes"},
+		{Name: "Export Error Logs", Code: "error-logs:export", Module: "error-logs", Action: "export", ActionAr: "تصدير", Description: "Export the filtered error log list"},
+		{Name: "View Error Technical Details", Code: "error-logs:view_technical", Module: "error-logs", Action: "view_technical", ActionAr: "عرض التفاصيل الفنية", Description: "View technical details of error log entries"},
 
 		// Escalation Policy permissions
 		{Name: "Create Escalation Policy", Code: "escalation-policies:create", Module: "escalation-policies", Action: "create", ActionAr: "إنشاء", Description: "Create new escalation policies"},
@@ -772,9 +880,12 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			// KPI / Goal Management permissions
 			models.Permission{Name: "Manage Goal Hierarchy", Code: "goals:manage", Module: "goals", Action: "manage", ActionAr: "إدارة", Description: "Create/update/delete goal hierarchy master data"},
 			models.Permission{Name: "View KPI Dictionary", Code: "kpi:view", Module: "kpi", Action: "view", ActionAr: "عرض", Description: "View KPI definitions"},
-			models.Permission{Name: "Create KPI Definitions", Code: "kpi:create", Module: "kpi", Action: "create", ActionAr: "إنشاء", Description: "Create new KPI definitions"},
-			models.Permission{Name: "Update KPI Definitions", Code: "kpi:update", Module: "kpi", Action: "update", ActionAr: "تحديث", Description: "Edit KPI metadata, formula, targets"},
-			models.Permission{Name: "Delete KPI Definitions", Code: "kpi:delete", Module: "kpi", Action: "delete", ActionAr: "حذف", Description: "Soft-delete KPI records"},
+			// Names must be unique (idx_permissions_name): "Create/Update/Delete
+			// KPI Definitions" already belong to the legacy kpi:definitions:*
+			// permissions, which made these three silently fail to seed.
+			models.Permission{Name: "Create KPIs", NameAr: "إنشاء مؤشرات الأداء", Code: "kpi:create", Module: "kpi", Action: "create", ActionAr: "إنشاء", Description: "Create KPIs, their metrics and bulk imports", DescriptionAr: "إنشاء مؤشرات الأداء ومقاييسها والاستيراد المجمع"},
+			models.Permission{Name: "Update KPIs", NameAr: "تحديث مؤشرات الأداء", Code: "kpi:update", Module: "kpi", Action: "update", ActionAr: "تحديث", Description: "Edit KPIs, metrics, entries, evidence and comments", DescriptionAr: "تعديل مؤشرات الأداء والمقاييس والمدخلات والأدلة والتعليقات"},
+			models.Permission{Name: "Delete KPIs", NameAr: "حذف مؤشرات الأداء", Code: "kpi:delete", Module: "kpi", Action: "delete", ActionAr: "حذف", Description: "Soft-delete KPI records", DescriptionAr: "حذف سجلات مؤشرات الأداء حذفًا مبدئيًا"},
 			models.Permission{Name: "Approve KPI Performance", Code: "kpi:approve", Module: "kpi", Action: "approve", ActionAr: "موافقة", Description: "Approve/reject KPI performance submissions from the approvals inbox"},
 			models.Permission{Name: "Assign KPI Collaborators", Code: "kpi:assign", Module: "kpi", Action: "assign", ActionAr: "تعيين", Description: "Add/remove collaborators on a KPI definition"},
 			models.Permission{Name: "View Performance Data", Code: "perf:view", Module: "perf", Action: "view", ActionAr: "عرض", Description: "View KPI performance data"},
@@ -794,6 +905,11 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			models.Permission{Name: "Manage Segment Data", Code: "segment:manage", Module: "segment", Action: "manage", ActionAr: "إدارة", Description: "Create/update KPI segmentation data"},
 			models.Permission{Name: "Manage Corrective Actions", Code: "corrective_action:manage", Module: "corrective_action", Action: "manage", ActionAr: "إدارة", Description: "Create and close KPI corrective actions"},
 		)
+	}
+
+	// Nazaha only: reveal the details of an uncooperative reporter.
+	if cfg.IsNazaha() {
+		permissions = append(permissions, models.Permission{Name: "Reveal Reporter Details", Code: models.PermissionRevealReporter, Module: "incidents", Action: "reveal_reporter", ActionAr: "إظهار بيانات المبلغ", Description: "View the hidden details of an uncooperative reporter (every view is logged)"})
 	}
 
 	for _, perm := range permissions {
@@ -838,6 +954,28 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		db.Model(&adminRole).Association("Permissions").Append(adminPerms)
 	}
 
+	// Ensure the admin role has the Error Log permissions on existing databases.
+	var errorLogPerms []models.Permission
+	db.Where("module = ?", "error-logs").Find(&errorLogPerms)
+	if len(errorLogPerms) > 0 {
+		db.Model(&adminRole).Association("Permissions").Append(errorLogPerms)
+	}
+
+	// Nazaha: give the admin role the reveal-reporter permission.
+	if cfg.IsNazaha() {
+		var revealPerm models.Permission
+		if db.Where("code = ?", models.PermissionRevealReporter).First(&revealPerm).Error == nil {
+			db.Model(&adminRole).Association("Permissions").Append(&revealPerm)
+		}
+	}
+
+	// Ensure the admin role has the Escalation Log permissions on existing databases.
+	var escalationLogPerms []models.Permission
+	db.Where("module = ?", "escalation-logs").Find(&escalationLogPerms)
+	if len(escalationLogPerms) > 0 {
+		db.Model(&adminRole).Association("Permissions").Append(escalationLogPerms)
+	}
+
 	// Remove department-scoping permissions from admin role on existing databases.
 	// These are restrictive and should never be on the Administrator role.
 	var deptScopePerms []models.Permission
@@ -851,7 +989,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 	result = db.Where("code = ?", "user").First(&userRole)
 	if result.Error == gorm.ErrRecordNotFound {
 		var viewPerms []models.Permission
-		db.Where("action = ?", "view").Find(&viewPerms)
+		db.Where("action = ? AND module <> ?", "view", "error-logs").Find(&viewPerms) // Error Log is admin/support only
 		userRole = models.Role{
 			Name:        "User",
 			Code:        "user",
@@ -863,7 +1001,7 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		db.Create(&userRole)
 	} else if db.Model(&userRole).Association("Permissions").Count() == 0 {
 		var viewPerms []models.Permission
-		db.Where("action = ?", "view").Find(&viewPerms)
+		db.Where("action = ? AND module <> ?", "view", "error-logs").Find(&viewPerms) // Error Log is admin/support only
 		db.Model(&userRole).Association("Permissions").Append(viewPerms)
 	}
 
@@ -1023,6 +1161,10 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		db.Model(&l1ReviewerRole).Association("Permissions").Append(l1ReviewerPerms)
 	}
 
+	if cfg.GoalManagement.Enabled {
+		grantKpiCrudPermissions(db)
+	}
+
 	// Grant extension-management permissions to the agent role (if it exists).
 	// Admin already receives all permissions above; super admins bypass permission
 	// checks entirely. We append (not replace) so any other agent permissions stay intact.
@@ -1065,63 +1207,9 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 		db.Model(&adminUser).Association("Roles").Append(&adminRole)
 	}
 
-	// Create default departments for supervisor seeding
-	var defaultDept models.Department
-	if err := db.Where("name = ?", "General").First(&defaultDept).Error; err == gorm.ErrRecordNotFound {
-		defaultDept = models.Department{
-			Name:     "General",
-			Code:     "GEN",
-			IsActive: true,
-		}
-		db.Create(&defaultDept)
-	}
-
-	var supportDept models.Department
-	if err := db.Where("name = ?", "Support").First(&supportDept).Error; err == gorm.ErrRecordNotFound {
-		supportDept = models.Department{
-			Name:     "Support",
-			Code:     "SUP",
-			IsActive: true,
-		}
-		db.Create(&supportDept)
-	}
-
-	// Create supervisor users with department assignments
-	type supervisorSeed struct {
-		Email        string
-		Username     string
-		FirstName    string
-		LastName     string
-		DepartmentID *uuid.UUID
-	}
-	supervisors := []supervisorSeed{
-		{"supervisor1@automax.com", "supervisor1", "Ahmed", "Ali", &defaultDept.ID},
-		{"supervisor2@automax.com", "supervisor2", "Sara", "Mohammed", &supportDept.ID},
-	}
-	for _, su := range supervisors {
-		var existing models.User
-		if db.Where("email = ?", su.Email).First(&existing).Error == gorm.ErrRecordNotFound {
-			hashedPwd, _ := utils.HashPassword("supervisor123")
-			user := models.User{
-				Email:        su.Email,
-				Username:     su.Username,
-				Password:     hashedPwd,
-				FirstName:    su.FirstName,
-				LastName:     su.LastName,
-				IsActive:     true,
-				DepartmentID: su.DepartmentID,
-			}
-			db.Create(&user)
-			db.Model(&user).Association("Roles").Append(&supervisorRole)
-			db.Model(&models.Department{}).Where("id = ?", su.DepartmentID).Update("supervisor_id", user.ID)
-		}
-	}
-
-	// Seed a default incident workflow for demo/test incidents
-	seedDefaultIncidentWorkflow(db, defaultDept.ID, supportDept.ID, adminUser.ID)
-
 	// Seed default lookup categories
 	seedLookupCategories(db, cfg)
+	seedNazahaLookups(db, cfg)
 
 	if cfg.GoalManagement.Enabled {
 		// Seed default evidence approval workflow
@@ -1157,118 +1245,43 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 	return nil
 }
 
-// seedDefaultIncidentWorkflow creates a minimal incident workflow and demo tickets
-// for the seeded departments so supervisors have data to view.
-func seedDefaultIncidentWorkflow(db *gorm.DB, defaultDeptID, supportDeptID, adminUserID uuid.UUID) {
-	var workflow models.Workflow
-	if err := db.Where("code = ?", "incident_default").First(&workflow).Error; err == gorm.ErrRecordNotFound {
-		workflow = models.Workflow{
-			Name:       "Default Incident Workflow",
-			Code:       "incident_default",
-			RecordType: "incident",
-			IsDefault:  true,
-			IsActive:   true,
+// kpiCrudGrants lists, per role code, which of kpi:create/update/delete the
+// role receives on every startup. Admin gets everything; the KPI Owner
+// creates, edits and deletes the KPIs it owns (per-KPI collaborator access
+// still applies on top); the L1 Reviewer needs kpi:update for the KPI
+// Workflow transition route.
+var kpiCrudGrants = map[string][]string{
+	"admin":       {"kpi:create", "kpi:update", "kpi:delete"},
+	"kpi_owner":   {"kpi:create", "kpi:update", "kpi:delete"},
+	"l1_reviewer": {"kpi:update"},
+}
+
+// grantKpiCrudPermissions makes kpi:create/update/delete usable on databases
+// seeded before they could be created (their names collided with the legacy
+// kpi:definitions:* permissions, so they never existed and no role held
+// them). Idempotent: only missing role_permissions rows are inserted. Besides
+// the fixed grants above, any role that holds a legacy
+// kpi:definitions:create/update/delete permission receives the matching new
+// one, so roles an administrator already configured keep working.
+func grantKpiCrudPermissions(db *gorm.DB) {
+	for roleCode, permCodes := range kpiCrudGrants {
+		if err := db.Exec(`
+			INSERT INTO role_permissions (role_id, permission_id)
+			SELECT r.id, p.id FROM roles r, permissions p
+			WHERE r.code = ? AND r.deleted_at IS NULL AND p.code IN ? AND p.deleted_at IS NULL
+			ON CONFLICT DO NOTHING`, roleCode, permCodes).Error; err != nil {
+			log.Printf("Failed to grant %v to role %s: %v", permCodes, roleCode, err)
 		}
-		db.Create(&workflow)
-
-		states := []models.WorkflowState{
-			{WorkflowID: workflow.ID, Name: "New", Code: "new", StateType: "initial", Color: "#6366f1"},
-			{WorkflowID: workflow.ID, Name: "In Progress", Code: "in_progress", StateType: "normal", Color: "#f59e0b"},
-			{WorkflowID: workflow.ID, Name: "Resolved", Code: "resolved", StateType: "normal", Color: "#10b981"},
-			{WorkflowID: workflow.ID, Name: "Closed", Code: "closed", StateType: "terminal", Color: "#6b7280"},
-			{WorkflowID: workflow.ID, Name: "Rejected", Code: "rejected", StateType: "terminal", Color: "#ef4444"},
-		}
-		for i := range states {
-			states[i].ID = uuid.New()
-			db.Create(&states[i])
-		}
-
-		newState := states[0]
-		inProgressState := states[1]
-		resolvedState := states[2]
-		closedState := states[3]
-
-		now := time.Now()
-
-		// Create demo incidents for each department
-		demoIncidents := []models.Incident{
-			{
-				IncidentNumber: "INC-2026-0001",
-				Title:          "Network outage in building A",
-				Description:    "Users in building A cannot access the network",
-				RecordType:     "incident",
-				WorkflowID:     workflow.ID,
-				CurrentStateID: newState.ID,
-				DepartmentID:   &defaultDeptID,
-				Source:         "phone",
-				CreatedAt:      now,
-				UpdatedAt:      now,
-			},
-			{
-				IncidentNumber: "INC-2026-0002",
-				Title:          "Email server slow response",
-				Description:    "Email server taking more than 30 seconds to respond",
-				RecordType:     "incident",
-				WorkflowID:     workflow.ID,
-				CurrentStateID: inProgressState.ID,
-				DepartmentID:   &supportDeptID,
-				Source:         "email",
-				CreatedAt:      now,
-				UpdatedAt:      now,
-			},
-			{
-				IncidentNumber: "REQ-2026-0001",
-				Title:          "New laptop request for onboarding",
-				Description:    "New employee needs a laptop for onboarding",
-				RecordType:     "request",
-				WorkflowID:     workflow.ID,
-				CurrentStateID: newState.ID,
-				DepartmentID:   &defaultDeptID,
-				Source:         "portal",
-				CreatedAt:      now,
-				UpdatedAt:      now,
-			},
-			{
-				IncidentNumber: "REQ-2026-0002",
-				Title:          "Software license renewal",
-				Description:    "Renew Adobe Creative Cloud license for design team",
-				RecordType:     "request",
-				WorkflowID:     workflow.ID,
-				CurrentStateID: resolvedState.ID,
-				DepartmentID:   &supportDeptID,
-				Source:         "email",
-				CreatedAt:      now,
-				UpdatedAt:      now,
-			},
-			{
-				IncidentNumber: "CMP-2026-0001",
-				Title:          "Rude behavior from support agent",
-				Description:    "Customer complained about rude behavior from support agent",
-				RecordType:     "complaint",
-				WorkflowID:     workflow.ID,
-				CurrentStateID: closedState.ID,
-				DepartmentID:   &supportDeptID,
-				Source:         "phone",
-				CreatedAt:      now,
-				UpdatedAt:      now,
-			},
-			{
-				IncidentNumber: "QRY-2026-0001",
-				Title:          "Inquiry about service hours",
-				Description:    "Customer asking about weekend service hours",
-				RecordType:     "query",
-				WorkflowID:     workflow.ID,
-				CurrentStateID: newState.ID,
-				DepartmentID:   &defaultDeptID,
-				Source:         "portal",
-				CreatedAt:      now,
-				UpdatedAt:      now,
-			},
-		}
-
-		for _, inc := range demoIncidents {
-			inc.ID = uuid.New()
-			db.Create(&inc)
+	}
+	for _, action := range []string{"create", "update", "delete"} {
+		if err := db.Exec(`
+			INSERT INTO role_permissions (role_id, permission_id)
+			SELECT DISTINCT rp.role_id, p.id
+			FROM role_permissions rp
+			JOIN permissions legacy ON legacy.id = rp.permission_id AND legacy.code = ? AND legacy.deleted_at IS NULL
+			JOIN permissions p ON p.code = ? AND p.deleted_at IS NULL
+			ON CONFLICT DO NOTHING`, "kpi:definitions:"+action, "kpi:"+action).Error; err != nil {
+			log.Printf("Failed to mirror kpi:definitions:%s onto kpi:%s: %v", action, action, err)
 		}
 	}
 }
@@ -1370,6 +1383,7 @@ func unseedGoalManagement(db *gorm.DB) {
 		"strategic_kpis",
 		"award_sub_criteria",
 		"award_criteria",
+		"award_kpi_measures",
 		"domains",
 		"initiatives",
 		"processes",
@@ -1470,6 +1484,76 @@ func seedLookupCategories(db *gorm.DB, cfg *config.Config) {
 				}
 			}
 		}
+	}
+}
+
+// nazahaNationalities are the starting values of the Nationality list.
+var nazahaNationalities = []struct{ Code, Name, NameAr string }{
+	{"SA", "Saudi Arabia", "السعودية"}, {"AE", "United Arab Emirates", "الإمارات"},
+	{"KW", "Kuwait", "الكويت"}, {"QA", "Qatar", "قطر"}, {"BH", "Bahrain", "البحرين"},
+	{"OM", "Oman", "عُمان"}, {"EG", "Egypt", "مصر"}, {"JO", "Jordan", "الأردن"},
+	{"LB", "Lebanon", "لبنان"}, {"SY", "Syria", "سوريا"}, {"IQ", "Iraq", "العراق"},
+	{"YE", "Yemen", "اليمن"}, {"PS", "Palestine", "فلسطين"}, {"SD", "Sudan", "السودان"},
+	{"TR", "Turkey", "تركيا"}, {"IN", "India", "الهند"}, {"PK", "Pakistan", "باكستان"},
+	{"BD", "Bangladesh", "بنغلاديش"}, {"PH", "Philippines", "الفلبين"}, {"ID", "Indonesia", "إندونيسيا"},
+}
+
+// seedNazahaLookups creates the Authority (empty) and Nationality lists when missing.
+func seedNazahaLookups(db *gorm.DB, cfg *config.Config) {
+	if !cfg.IsNazaha() {
+		return
+	}
+	seedNazahaNationalities(db)
+	seedNazahaAuthorities(db)
+}
+
+// seedNazahaAuthorities creates the empty Authority list when missing.
+func seedNazahaAuthorities(db *gorm.DB) {
+	var category models.LookupCategory
+	if err := db.Where("code = ?", models.AuthorityCategoryCode).First(&category).Error; err != gorm.ErrRecordNotFound {
+		return
+	}
+	category = models.LookupCategory{
+		Code:        models.AuthorityCategoryCode,
+		Name:        "Authority",
+		NameAr:      "الجهة",
+		Description: "Authorities an incident can be referred to",
+		IsSystem:    true,
+		IsActive:    true,
+	}
+	if err := db.Create(&category).Error; err != nil {
+		log.Printf("Failed to create the authority lookup category: %v", err)
+	}
+}
+
+func seedNazahaNationalities(db *gorm.DB) {
+	var category models.LookupCategory
+	if err := db.Where("code = ?", models.NationalityCategoryCode).First(&category).Error; err != gorm.ErrRecordNotFound {
+		return
+	}
+	err := db.Transaction(func(tx *gorm.DB) error {
+		category = models.LookupCategory{
+			Code:        models.NationalityCategoryCode,
+			Name:        "Nationality",
+			NameAr:      "الجنسية",
+			Description: "Reporter nationalities",
+			IsSystem:    true,
+			IsActive:    true,
+		}
+		if err := tx.Create(&category).Error; err != nil {
+			return err
+		}
+		values := make([]models.LookupValue, 0, len(nazahaNationalities))
+		for i, n := range nazahaNationalities {
+			values = append(values, models.LookupValue{
+				CategoryID: category.ID, Code: n.Code, Name: n.Name, NameAr: n.NameAr,
+				SortOrder: i + 1, IsActive: true,
+			})
+		}
+		return tx.Create(&values).Error
+	})
+	if err != nil {
+		log.Printf("Failed to create nationality lookup category: %v", err)
 	}
 }
 

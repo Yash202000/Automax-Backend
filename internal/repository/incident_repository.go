@@ -26,6 +26,14 @@ type IncidentRepository interface {
 	FindByID(ctx context.Context, id uuid.UUID) (*models.Incident, error)
 	FindByIDWithRelations(ctx context.Context, id uuid.UUID) (*models.Incident, error)
 	FindByIncidentNumber(ctx context.Context, number string) (*models.Incident, error)
+
+	// Nazaha (see incident_nazaha_repository.go)
+	ListByCallerNumber(ctx context.Context, callerNumber string) ([]models.CallerPreviousReport, error)
+	CreatePreviousReportLinks(ctx context.Context, incidentID uuid.UUID, previousIDs []uuid.UUID) error
+	LoadNazahaRelations(ctx context.Context, incident *models.Incident) error
+	ListPreviousReports(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentRef, error)
+	ReplacePreviousReportLinks(ctx context.Context, incidentID uuid.UUID, previousIDs []uuid.UUID) error
+	MatchReporterName(ctx context.Context, ids []uuid.UUID, search string) (map[uuid.UUID]bool, error)
 	FindByIDs(ctx context.Context, ids []uuid.UUID) ([]models.Incident, error)
 	// FindRecurrences returns, per incident ID, the latest earlier incident with the same
 	// classification and record type within radiusMeters; Count is the total number of such earlier incidents.
@@ -60,6 +68,7 @@ type IncidentRepository interface {
 	ListComments(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentComment, error)
 	UpdateComment(ctx context.Context, comment *models.IncidentComment) error
 	DeleteComment(ctx context.Context, id uuid.UUID) error
+	GetCommentCounts(ctx context.Context, incidentIDs []uuid.UUID) (map[uuid.UUID]int, error)
 
 	// Attachments
 	CreateAttachment(ctx context.Context, attachment *models.IncidentAttachment) error
@@ -67,6 +76,10 @@ type IncidentRepository interface {
 	ListAttachments(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentAttachment, error)
 	DeleteAttachment(ctx context.Context, id uuid.UUID) error
 	LinkAttachmentsToTransition(ctx context.Context, attachmentIDs []uuid.UUID, transitionHistoryID uuid.UUID) error
+	// FindLatestTransitionAttachments returns the attachments uploaded on the most
+	// recent transition of the incident that had any, or none if no transition did.
+	FindLatestTransitionAttachments(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentAttachment, error)
+	GetAttachmentCounts(ctx context.Context, incidentIDs []uuid.UUID) (map[uuid.UUID]int, error)
 
 	// Assignment
 	AssignIncident(ctx context.Context, incidentID, assigneeID uuid.UUID) error
@@ -103,6 +116,7 @@ type IncidentRepository interface {
 	ListAllFeedback(ctx context.Context) ([]models.IncidentFeedback, error)
 	LinkFeedbackToTransition(ctx context.Context, feedbackID uuid.UUID, transitionHistoryID uuid.UUID) error
 	HasWhatsAppFeedback(ctx context.Context, incidentID uuid.UUID) (bool, error)
+	GetFeedbackCounts(ctx context.Context, incidentIDs []uuid.UUID) (map[uuid.UUID]int, error)
 
 	// Notifications
 	CreateNotification(ctx context.Context, notification *models.NotificationLog) error
@@ -237,6 +251,44 @@ func normalizeStateCodes(in []string) []string {
 	return out
 }
 
+// mergedPriorities combines the singular Priority filter with the multi-value Priorities
+// filter (deduplicated), so a request using either shape matches the same way.
+func mergedPriorities(f *models.IncidentFilter) []int {
+	out := make([]int, 0, len(f.Priorities)+1)
+	seen := map[int]bool{}
+	if f.Priority != nil {
+		out = append(out, *f.Priority)
+		seen[*f.Priority] = true
+	}
+	for _, p := range f.Priorities {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// mergedSources combines the singular Source filter with the multi-value Sources filter,
+// trimmed, lower-cased and deduplicated, dropping blanks.
+func mergedSources(f *models.IncidentFilter) []string {
+	in := make([]string, 0, len(f.Sources)+1)
+	if f.Source != nil {
+		in = append(in, *f.Source)
+	}
+	in = append(in, f.Sources...)
+	out := normalizeStateCodes(in)
+	seen := map[string]bool{}
+	uniq := out[:0]
+	for _, v := range out {
+		if !seen[v] {
+			seen[v] = true
+			uniq = append(uniq, v)
+		}
+	}
+	return uniq
+}
+
 // reporterPhoneVariants returns every shape a phone number may have been stored
 // in, so a caller-supplied value matches regardless of the channel that captured
 // it: bare, with a country code, with the national trunk zero, and the historic
@@ -276,16 +328,19 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 	if codes := normalizeStateCodes(filter.CurrentStateCode); len(codes) != 0 {
 		query = query.Where(stateCodeSubquery, codes)
 	}
+	if filter.ExcludeClosed != nil && *filter.ExcludeClosed {
+		query = query.Where("incidents.current_state_id NOT IN (SELECT id FROM workflow_states WHERE state_type = 'terminal')")
+	}
 	if len(filter.ClassificationID) != 0 {
 		query = query.Where("classification_id IN ?", filter.ClassificationID)
 	}
-	if filter.Priority != nil {
+	if priorities := mergedPriorities(filter); len(priorities) != 0 {
 		query = query.Where(`incidents.id IN (
 			SELECT ilv.incident_id FROM incident_lookup_values ilv
 			INNER JOIN lookup_values lv ON lv.id = ilv.lookup_value_id
 			INNER JOIN lookup_categories lc ON lc.id = lv.category_id
-			WHERE lc.code = 'PRIORITY' AND lv.sort_order = ?
-		)`, *filter.Priority)
+			WHERE lc.code = 'PRIORITY' AND lv.sort_order IN ?
+		)`, priorities)
 	}
 	if len(filter.AssigneeID) != 0 {
 		if len(filter.AssigneeID) == 1 {
@@ -293,15 +348,15 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 			query = query.Where("incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", filter.AssigneeID[0], filter.AssigneeID[0])
 		} else {
 			// Multiple assignees
-			query = query.Where("assignee_id IN ? ", filter.AssigneeID)
+			query = query.Where("incidents.assignee_id IN ? ", filter.AssigneeID)
 		}
 	}
 	if len(filter.DepartmentID) != 0 {
 		if filter.IncludeUnassignedDepartment {
-			query = query.Where("department_id IN ? OR (department_id IS NULL AND current_state_id IN (SELECT id FROM workflow_states WHERE state_type = 'initial') AND (assignee_id = ? OR reporter_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
-				filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID)
+			query = query.Where("incidents.department_id IN ? OR (incidents.department_id IS NULL AND incidents.current_state_id IN (SELECT id FROM workflow_states WHERE state_type IN ('initial','terminal')) AND (incidents.assignee_id = ? OR incidents.reporter_id = ? OR incidents.created_by_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
+				filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID, filter.UserID)
 		} else {
-			query = query.Where("department_id IN ?", filter.DepartmentID)
+			query = query.Where("incidents.department_id IN ?", filter.DepartmentID)
 		}
 	}
 	// fix bleow filter for location and reporter to handle multiple values
@@ -313,19 +368,19 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 		query = query.Where("incidents.id != ?", *filter.ExcludeIncidentID)
 	}
 	if len(filter.ReporterID) != 0 {
-		query = query.Where("reporter_id IN ?", filter.ReporterID)
+		query = query.Where("incidents.reporter_id IN ? OR incidents.created_by_id IN ?", filter.ReporterID, filter.ReporterID)
 	}
 	if filter.MyRecord != nil {
 		if len(filter.UserRoleIDs) > 0 {
 			// Expand to include incidents in states where the user's role has viewable access
 			query = query.Where(
-				`incidents.reporter_id = ? OR incidents.assignee_id = ?
+				`incidents.reporter_id = ? OR incidents.created_by_id = ? OR incidents.assignee_id = ?
 				OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)
 				OR incidents.current_state_id IN (SELECT workflow_state_id FROM state_viewable_roles WHERE role_id IN ?)`,
-				filter.MyRecord, filter.MyRecord, filter.MyRecord, filter.UserRoleIDs,
+				filter.MyRecord, filter.MyRecord, filter.MyRecord, filter.MyRecord, filter.UserRoleIDs,
 			)
 		} else {
-			query = query.Where("incidents.reporter_id = ? OR incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", filter.MyRecord, filter.MyRecord, filter.MyRecord)
+			query = query.Where("incidents.reporter_id = ? OR incidents.created_by_id = ? OR incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", filter.MyRecord, filter.MyRecord, filter.MyRecord, filter.MyRecord)
 		}
 	}
 
@@ -357,6 +412,9 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 	if filter.CallerIdentity != "" {
 		query = query.Where("caller_identity = ?", filter.CallerIdentity)
 	}
+	if filter.CooperationStatus != "" {
+		query = query.Where("cooperation_status = ?", filter.CooperationStatus)
+	}
 	if filter.SLABreached != nil {
 		query = query.Where("sla_breached = ?", *filter.SLABreached)
 	}
@@ -369,8 +427,8 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 	if filter.Channel != nil && *filter.Channel != "" {
 		query = query.Where("channel = ?", *filter.Channel)
 	}
-	if filter.Source != nil && *filter.Source != "" {
-		query = query.Where("LOWER(source) = LOWER(?)", *filter.Source)
+	if sources := mergedSources(filter); len(sources) != 0 {
+		query = query.Where("LOWER(source) IN ?", sources)
 	}
 	if filter.SourceIncidentID != nil && *filter.SourceIncidentID != "" {
 		query = query.Where("source_incident_id = ?", *filter.SourceIncidentID)
@@ -396,7 +454,14 @@ func (r *incidentRepository) applyIncidentFilters(ctx context.Context, query *go
 	}
 	if filter.Search != "" {
 		searchPattern := "%" + filter.Search + "%"
-		query = query.Where("incidents.incident_number ILIKE ? OR incidents.title ILIKE ? OR incidents.description ILIKE ?", searchPattern, searchPattern, searchPattern)
+		if r.cfg != nil && r.cfg.IsNazaha() {
+			// Nazaha: also find incidents by the reporter's name.
+			query = query.Where(r.db.
+				Where("incidents.incident_number ILIKE ? OR incidents.title ILIKE ? OR incidents.description ILIKE ?", searchPattern, searchPattern, searchPattern).
+				Or(reporterNameCondition(filter.Search)))
+		} else {
+			query = query.Where("incidents.incident_number ILIKE ? OR incidents.title ILIKE ? OR incidents.description ILIKE ?", searchPattern, searchPattern, searchPattern)
+		}
 	}
 	if filter.TaskID != "" {
 		query = query.Where("NULLIF(custom_fields, '')::jsonb -> 'lookup:TASK ID' ->> 'value' ILIKE ?", "%"+filter.TaskID+"%")
@@ -445,8 +510,9 @@ func (r *incidentRepository) List(ctx context.Context, filter *models.IncidentFi
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	log.Printf("[List] total=%d classification_id=%v location_id=%v my_record=%v record_type=%v user_role_ids=%v",
-		total, filter.ClassificationID, filter.LocationID, filter.MyRecord, filter.RecordType, filter.UserRoleIDs)
+	// log.Printf("[List] total=%d classification_id=%v location_id=%v my_record=%v record_type=%v user_role_ids=%v",
+	// total, filter.ClassificationID, filter.LocationID, filter.MyRecord, filter.RecordType, filter.UserRoleIDs)
+
 	// Apply pagination
 	if filter.Page < 1 {
 		filter.Page = 1
@@ -663,8 +729,11 @@ func (r *incidentRepository) GenerateRequestNumber(ctx context.Context) (string,
 	prefix := fmt.Sprintf("REQ-%d-", year)
 	var maxNumber *string
 	// Unscoped() to include soft-deleted rows in the MAX calculation
+	// Order by length first so legacy short numbers (REQ-2026-0002) don't outrank wider ones
+	// (REQ-2026-000118) in a plain text MAX.
 	err := r.db.WithContext(ctx).Unscoped().Model(&models.Incident{}).
-		Select("MAX(incident_number)").Where("incident_number LIKE ?", prefix+"%").
+		Select("incident_number").Where("incident_number LIKE ?", prefix+"%").
+		Order("length(incident_number) DESC, incident_number DESC").Limit(1).
 		Scan(&maxNumber).Error
 	if err != nil {
 		return "", err
@@ -774,6 +843,31 @@ func (r *incidentRepository) ListComments(ctx context.Context, incidentID uuid.U
 	return comments, err
 }
 
+func (r *incidentRepository) GetCommentCounts(ctx context.Context, incidentIDs []uuid.UUID) (map[uuid.UUID]int, error) {
+	counts := make(map[uuid.UUID]int, len(incidentIDs))
+	if len(incidentIDs) == 0 {
+		return counts, nil
+	}
+	type row struct {
+		IncidentID uuid.UUID `gorm:"column:incident_id"`
+		Count      int       `gorm:"column:count"`
+	}
+	var rows []row
+	if err := r.db.WithContext(ctx).
+		Model(&models.IncidentComment{}).
+		Select("incident_id, COUNT(*) AS count").
+		Where("incident_id IN ?", incidentIDs).
+		Where("NULLIF(BTRIM(content), '') IS NOT NULL").
+		Group("incident_id").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		counts[row.IncidentID] = row.Count
+	}
+	return counts, nil
+}
+
 func (r *incidentRepository) UpdateComment(ctx context.Context, comment *models.IncidentComment) error {
 	return r.db.WithContext(ctx).Save(comment).Error
 }
@@ -820,6 +914,51 @@ func (r *incidentRepository) LinkAttachmentsToTransition(ctx context.Context, at
 		Model(&models.IncidentAttachment{}).
 		Where("id IN ?", attachmentIDs).
 		Update("transition_history_id", transitionHistoryID).Error
+}
+
+func (r *incidentRepository) FindLatestTransitionAttachments(ctx context.Context, incidentID uuid.UUID) ([]models.IncidentAttachment, error) {
+	var historyIDs []uuid.UUID
+	err := r.db.WithContext(ctx).
+		Table("incident_attachments AS a").
+		Joins("JOIN incident_transition_histories AS h ON h.id = a.transition_history_id").
+		Where("a.incident_id = ? AND a.deleted_at IS NULL", incidentID).
+		Order("h.transitioned_at DESC").
+		Limit(1).
+		Pluck("a.transition_history_id", &historyIDs).Error
+	if err != nil || len(historyIDs) == 0 {
+		return nil, err
+	}
+
+	var attachments []models.IncidentAttachment
+	err = r.db.WithContext(ctx).
+		Where("incident_id = ? AND transition_history_id = ?", incidentID, historyIDs[0]).
+		Order("created_at ASC").
+		Find(&attachments).Error
+	return attachments, err
+}
+
+func (r *incidentRepository) GetAttachmentCounts(ctx context.Context, incidentIDs []uuid.UUID) (map[uuid.UUID]int, error) {
+	counts := make(map[uuid.UUID]int, len(incidentIDs))
+	if len(incidentIDs) == 0 {
+		return counts, nil
+	}
+	type row struct {
+		IncidentID uuid.UUID `gorm:"column:incident_id"`
+		Count      int       `gorm:"column:count"`
+	}
+	var rows []row
+	if err := r.db.WithContext(ctx).
+		Model(&models.IncidentAttachment{}).
+		Select("incident_id, COUNT(*) AS count").
+		Where("incident_id IN ?", incidentIDs).
+		Group("incident_id").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		counts[row.IncidentID] = row.Count
+	}
+	return counts, nil
 }
 
 // Assignment
@@ -941,21 +1080,21 @@ func (r *incidentRepository) GetStats(ctx context.Context, filter *models.Incide
 		}
 
 		if len(filter.WorkflowID) != 0 {
-			baseQuery = baseQuery.Where("workflow_id IN ?", filter.WorkflowID)
+			baseQuery = baseQuery.Where("incidents.workflow_id IN ?", filter.WorkflowID)
 		}
 
 		if len(filter.DepartmentID) != 0 {
 			if filter.IncludeUnassignedDepartment {
-				baseQuery = baseQuery.Where("department_id IN ? OR (department_id IS NULL AND current_state_id IN (SELECT id FROM workflow_states WHERE state_type = 'initial') AND (assignee_id = ? OR reporter_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
-					filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID)
+				baseQuery = baseQuery.Where("incidents.department_id IN ? OR (incidents.department_id IS NULL AND incidents.current_state_id IN (SELECT id FROM workflow_states WHERE state_type IN ('initial','terminal')) AND (incidents.assignee_id = ? OR incidents.reporter_id = ? OR incidents.created_by_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
+					filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID, filter.UserID)
 			} else {
-				baseQuery = baseQuery.Where("department_id IN ?", filter.DepartmentID)
+				baseQuery = baseQuery.Where("incidents.department_id IN ?", filter.DepartmentID)
 			}
 		}
 
 		if len(filter.AssigneeID) != 0 {
 			baseQuery = baseQuery.Where(
-				"assignee_id IN ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id IN ?)",
+				"incidents.assignee_id IN ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id IN ?)",
 				filter.AssigneeID,
 				filter.AssigneeID,
 			)
@@ -1164,8 +1303,8 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 		}
 		if len(filter.DepartmentID) > 0 {
 			if filter.IncludeUnassignedDepartment {
-				q = q.Where("incidents.department_id IN ? OR (incidents.department_id IS NULL AND incidents.current_state_id IN (SELECT id FROM workflow_states WHERE state_type = 'initial') AND (incidents.assignee_id = ? OR incidents.reporter_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
-					filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID)
+				q = q.Where("incidents.department_id IN ? OR (incidents.department_id IS NULL AND incidents.current_state_id IN (SELECT id FROM workflow_states WHERE state_type IN ('initial','terminal')) AND (incidents.assignee_id = ? OR incidents.reporter_id = ? OR incidents.created_by_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
+					filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID, filter.UserID)
 			} else {
 				q = q.Where("incidents.department_id IN ?", filter.DepartmentID)
 			}
@@ -1177,13 +1316,13 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 		if filter.MyRecord != nil {
 			if len(filter.UserRoleIDs) > 0 {
 				q = q.Where(
-					`incidents.reporter_id = ? OR incidents.assignee_id = ?
+					`incidents.reporter_id = ? OR incidents.created_by_id = ? OR incidents.assignee_id = ?
 					OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)
 					OR incidents.current_state_id IN (SELECT workflow_state_id FROM state_viewable_roles WHERE role_id IN ?)`,
-					filter.MyRecord, filter.MyRecord, filter.MyRecord, filter.UserRoleIDs,
+					filter.MyRecord, filter.MyRecord, filter.MyRecord, filter.MyRecord, filter.UserRoleIDs,
 				)
 			} else {
-				q = q.Where("incidents.reporter_id = ? OR incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", filter.MyRecord, filter.MyRecord, filter.MyRecord)
+				q = q.Where("incidents.reporter_id = ? OR incidents.created_by_id = ? OR incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)", filter.MyRecord, filter.MyRecord, filter.MyRecord, filter.MyRecord)
 			}
 		}
 		if len(filter.ClassificationID) > 0 {
@@ -1204,16 +1343,16 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 		if codes := normalizeStateCodes(filter.CurrentStateCode); len(codes) != 0 {
 			q = q.Where("incidents."+stateCodeSubquery, codes)
 		}
-		if filter.Priority != nil {
+		if priorities := mergedPriorities(filter); len(priorities) != 0 {
 			q = q.Where(`incidents.id IN (
 				SELECT ilv.incident_id FROM incident_lookup_values ilv
 				INNER JOIN lookup_values lv ON lv.id = ilv.lookup_value_id
 				INNER JOIN lookup_categories lc ON lc.id = lv.category_id
-				WHERE lc.code = 'PRIORITY' AND lv.sort_order = ?
-			)`, *filter.Priority)
+				WHERE lc.code = 'PRIORITY' AND lv.sort_order IN ?
+			)`, priorities)
 		}
 		if len(filter.ReporterID) > 0 {
-			q = q.Where("incidents.reporter_id IN ?", filter.ReporterID)
+			q = q.Where("incidents.reporter_id IN ? OR incidents.created_by_id IN ?", filter.ReporterID, filter.ReporterID)
 		}
 		if filter.ReporterPhone != "" {
 			phone := strings.TrimPrefix(strings.TrimSpace(filter.ReporterPhone), "+")
@@ -1242,8 +1381,8 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 		if filter.SLABreached != nil {
 			q = q.Where("incidents.sla_breached = ?", *filter.SLABreached)
 		}
-		if filter.Source != nil && *filter.Source != "" {
-			q = q.Where("LOWER(incidents.source) = LOWER(?)", *filter.Source)
+		if sources := mergedSources(filter); len(sources) != 0 {
+			q = q.Where("LOWER(incidents.source) IN ?", sources)
 		}
 		if filter.ConvertedToRequest != nil {
 			if *filter.ConvertedToRequest {
@@ -1260,7 +1399,14 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 		}
 		if filter.Search != "" {
 			searchPattern := "%" + filter.Search + "%"
-			q = q.Where("incidents.incident_number ILIKE ? OR incidents.title ILIKE ? OR incidents.description ILIKE ?", searchPattern, searchPattern, searchPattern)
+			if r.cfg != nil && r.cfg.IsNazaha() {
+				// Nazaha: also find incidents by the reporter's name.
+				q = q.Where(r.db.
+					Where("incidents.incident_number ILIKE ? OR incidents.title ILIKE ? OR incidents.description ILIKE ?", searchPattern, searchPattern, searchPattern).
+					Or(reporterNameCondition(filter.Search)))
+			} else {
+				q = q.Where("incidents.incident_number ILIKE ? OR incidents.title ILIKE ? OR incidents.description ILIKE ?", searchPattern, searchPattern, searchPattern)
+			}
 		}
 		if filter.TransitionID != nil || filter.FromStateID != nil || filter.ToStateID != nil {
 			subQuery := r.db.WithContext(ctx).
@@ -1291,7 +1437,7 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 			return q
 		}
 		if filter.FilterType == "created" {
-			q = q.Where("incidents.reporter_id = ?", filter.UserID)
+			q = q.Where("incidents.reporter_id = ? OR incidents.created_by_id = ?", filter.UserID, filter.UserID)
 		}
 		if filter.FilterType == "assigned" {
 			q = q.Where(`incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)`,
@@ -1309,7 +1455,7 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 		}
 		if !isAdmin {
 			if filter.FilterType == "created" {
-				q = q.Where("incidents.reporter_id = ?", filter.UserID)
+				q = q.Where("incidents.reporter_id = ? OR incidents.created_by_id = ?", filter.UserID, filter.UserID)
 			}
 			if filter.FilterType == "assigned" {
 				q = q.Where(`incidents.assignee_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)`,
@@ -1320,9 +1466,9 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 				q = q.Where(`
 					NOT EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = incidents.current_state_id)
 					OR EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = incidents.current_state_id AND role_id IN ?)
-					OR incidents.reporter_id = ? OR incidents.assignee_id = ?
+					OR incidents.reporter_id = ? OR incidents.created_by_id = ? OR incidents.assignee_id = ?
 					OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)
-				`, filter.UserRoleIDs, filter.UserID, filter.UserID, filter.UserID)
+				`, filter.UserRoleIDs, filter.UserID, filter.UserID, filter.UserID, filter.UserID)
 			}
 		}
 		return q
@@ -1336,8 +1482,8 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 	if err := baseQuery.Count(&stats.Total).Error; err != nil {
 		return nil, err
 	}
-	log.Printf("[GetStatsV2] total=%d is_admin=%v classification_id=%v location_id=%v my_record=%v record_type=%v user_role_ids=%v",
-		stats.Total, isAdmin, filter.ClassificationID, filter.LocationID, filter.MyRecord, filter.RecordType, filter.UserRoleIDs)
+	// log.Printf("[GetStatsV2] total=%d is_admin=%v classification_id=%v location_id=%v my_record=%v record_type=%v user_role_ids=%v",
+	// 	stats.Total, isAdmin, filter.ClassificationID, filter.LocationID, filter.MyRecord, filter.RecordType, filter.UserRoleIDs)
 
 	// SLA Breached
 	slaQuery := applyBaseFilters(
@@ -1410,8 +1556,8 @@ func (r *incidentRepository) GetStatsV2(ctx context.Context, filter *models.Inci
 					NOT EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = ws.id)
 					OR EXISTS (SELECT 1 FROM state_viewable_roles WHERE workflow_state_id = ws.id AND role_id IN ?)
 					OR EXISTS (SELECT 1 FROM incidents WHERE current_state_id = ws.id AND deleted_at IS NULL
-						AND (reporter_id = ? OR assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))
-				`, filter.UserRoleIDs, filter.UserID, filter.UserID, filter.UserID)
+						AND (reporter_id = ? OR created_by_id = ? OR assignee_id = ? OR id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))
+				`, filter.UserRoleIDs, filter.UserID, filter.UserID, filter.UserID, filter.UserID)
 			}
 		}
 	}
@@ -1522,8 +1668,8 @@ func (r *incidentRepository) GetPriorityCounts(ctx context.Context, filter *mode
 
 		if len(filter.DepartmentID) != 0 {
 			if filter.IncludeUnassignedDepartment {
-				query = query.Where("incidents.department_id IN ? OR (incidents.department_id IS NULL AND incidents.current_state_id IN (SELECT id FROM workflow_states WHERE state_type = 'initial') AND (incidents.assignee_id = ? OR incidents.reporter_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
-					filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID)
+				query = query.Where("incidents.department_id IN ? OR (incidents.department_id IS NULL AND incidents.current_state_id IN (SELECT id FROM workflow_states WHERE state_type IN ('initial','terminal')) AND (incidents.assignee_id = ? OR incidents.reporter_id = ? OR incidents.created_by_id = ? OR incidents.id IN (SELECT incident_id FROM incident_assignees WHERE user_id = ?)))",
+					filter.DepartmentID, filter.UserID, filter.UserID, filter.UserID, filter.UserID)
 			} else {
 				query = query.Where("incidents.department_id IN ?", filter.DepartmentID)
 			}
@@ -1875,6 +2021,31 @@ func (r *incidentRepository) ListAllFeedback(ctx context.Context) ([]models.Inci
 		Order("created_at DESC").
 		Find(&feedback).Error
 	return feedback, err
+}
+
+func (r *incidentRepository) GetFeedbackCounts(ctx context.Context, incidentIDs []uuid.UUID) (map[uuid.UUID]int, error) {
+	counts := make(map[uuid.UUID]int, len(incidentIDs))
+	if len(incidentIDs) == 0 {
+		return counts, nil
+	}
+	type row struct {
+		IncidentID uuid.UUID `gorm:"column:incident_id"`
+		Count      int       `gorm:"column:count"`
+	}
+	var rows []row
+	if err := r.db.WithContext(ctx).
+		Model(&models.IncidentFeedback{}).
+		Select("incident_id, COUNT(*) AS count").
+		Where("incident_id IN ?", incidentIDs).
+		Where("NULLIF(BTRIM(comment), '') IS NOT NULL").
+		Group("incident_id").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		counts[row.IncidentID] = row.Count
+	}
+	return counts, nil
 }
 
 func (r *incidentRepository) LinkFeedbackToTransition(ctx context.Context, feedbackID uuid.UUID, transitionHistoryID uuid.UUID) error {
@@ -2304,6 +2475,8 @@ SELECT
     COALESCE(i.country, '')     AS country,
     COALESCE(i.postal_code, '') AS postal_code,
     COALESCE(i.custom_fields, '') AS custom_fields,
+    COALESCE(i.caller_identity_text, '') AS caller_identity_text,
+    COALESCE(i.cooperation_status, '') AS cooperation_status,
     COALESCE(ws.name, '')       AS status_name,
     COALESCE(ws.name_ar, '')    AS status_name_ar,
     COALESCE(cl.name, '')       AS classification_name,

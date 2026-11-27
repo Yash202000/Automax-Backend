@@ -65,11 +65,21 @@ type Settings struct {
 	DefaultLanguage    string `gorm:"size:10;default:'en'" json:"default_language"`
 	SupportedLanguages string `gorm:"size:500;default:'[\"en\",\"ar\"]'" json:"supported_languages"`
 
+	// Benchmark Municipality Names (configurable labels for the 3 comparison slots)
+	Municipality1Name string `gorm:"size:100;default:'Municipality 1'" json:"municipality1_name"`
+	Municipality2Name string `gorm:"size:100;default:'Municipality 2'" json:"municipality2_name"`
+	Municipality3Name string `gorm:"size:100;default:'Municipality 3'" json:"municipality3_name"`
+
 	// Feature Toggles
 	ShowEvaluateButton bool `gorm:"default:false" json:"show_evaluate_button"` // Manual feedback trigger button on complaint/query detail pages
 
+	// Error Log retention: logs older than value+unit are deleted by the retention job
+	ErrorLogRetentionValue int    `gorm:"default:12" json:"-"`
+	ErrorLogRetentionUnit  string `gorm:"size:10;default:'months'" json:"-"` // days | months
+
 	// Auth Settings
-	TotpEnabled bool `gorm:"column:totp_enabled;default:false" json:"-"` // Whether TOTP/OTP-based 2FA login is enforced; exposed nested as auth_setting.totp_enabled
+	TotpEnabled        bool `gorm:"column:totp_enabled;default:false" json:"-"`        // Whether TOTP/OTP-based 2FA login is enforced; exposed nested as auth_setting.totp_enabled
+	ShowForgotPassword bool `gorm:"column:show_forgot_password;default:true" json:"-"` // Whether to show the forgot-password link on login; exposed nested as auth_setting.show_forgot_password
 
 	// Field Settings (per-entity, per-field configuration such as attachment limits),
 	// stored as a JSON string and exposed nested as field_settings.*
@@ -92,7 +102,16 @@ func (s *Settings) BeforeCreate(tx *gorm.DB) error {
 // AuthSetting represents authentication-related feature toggles, nested under
 // the "auth_setting" key in settings update/response payloads.
 type AuthSetting struct {
-	TotpEnabled bool `json:"totp_enabled"`
+	TotpEnabled        bool `json:"totp_enabled"`
+	ShowForgotPassword bool `json:"show_forgot_password"`
+}
+
+// AuthSettingUpdateRequest represents a partial update to auth settings.
+// Pointer fields distinguish omitted vs explicit false, so updating one
+// toggle (e.g. totp_enabled) doesn't reset the other.
+type AuthSettingUpdateRequest struct {
+	TotpEnabled        *bool `json:"totp_enabled"`
+	ShowForgotPassword *bool `json:"show_forgot_password"`
 }
 
 // AttachmentFieldSetting configures attachment limits for one user type on an
@@ -151,11 +170,20 @@ type SettingsUpdateRequest struct {
 	DefaultLanguage    *string `json:"default_language" validate:"omitempty,min=2,max=10"`
 	SupportedLanguages *string `json:"supported_languages" validate:"omitempty,max=500"`
 
+	// Benchmark Municipality Names
+	Municipality1Name *string `json:"municipality1_name" validate:"omitempty,max=100"`
+	Municipality2Name *string `json:"municipality2_name" validate:"omitempty,max=100"`
+	Municipality3Name *string `json:"municipality3_name" validate:"omitempty,max=100"`
+
 	// Feature Toggles
 	ShowEvaluateButton *bool `json:"show_evaluate_button"`
 
+	// Error Log retention
+	ErrorLogRetentionValue *int    `json:"error_log_retention_value" validate:"omitempty,min=1,max=3650"`
+	ErrorLogRetentionUnit  *string `json:"error_log_retention_unit" validate:"omitempty,oneof=days months"`
+
 	// Auth Settings
-	AuthSetting *AuthSetting `json:"auth_setting"`
+	AuthSetting *AuthSettingUpdateRequest `json:"auth_setting"`
 
 	// Field Settings
 	FieldSettings *FieldSettings `json:"field_settings" validate:"omitempty"`
@@ -200,8 +228,17 @@ type SettingsResponse struct {
 	DefaultLanguage    string `json:"default_language"`
 	SupportedLanguages string `json:"supported_languages"`
 
+	// Benchmark Municipality Names
+	Municipality1Name string `json:"municipality1_name"`
+	Municipality2Name string `json:"municipality2_name"`
+	Municipality3Name string `json:"municipality3_name"`
+
 	// Feature Toggles
 	ShowEvaluateButton bool `json:"show_evaluate_button"`
+
+	// Error Log retention
+	ErrorLogRetentionValue int    `json:"error_log_retention_value"`
+	ErrorLogRetentionUnit  string `json:"error_log_retention_unit"`
 
 	// Auth Settings
 	AuthSetting AuthSetting `json:"auth_setting"`
@@ -214,6 +251,36 @@ type SettingsResponse struct {
 
 	// Timestamps
 	UpdatedAt string `json:"updated_at"`
+
+	// SettingsAttachments maps the name of each public config in the "settings-attachments" module
+	// (current environment) to the preview URL of its image: a string for one image, an array of
+	// strings for several, e.g. {"logo": "https://host/.../preview", "gallery": ["...", "..."]}.
+	// Configs without images are left out. See SettingsAttachmentsMap.
+	SettingsAttachments map[string]any `json:"settings_attachments"`
+}
+
+// SettingsAttachmentsMap builds the settings_attachments value from the public attachment configs of
+// a module (expanded views, URLs already prefixed with the request host): config name -> preview URL
+// for one image, -> list of preview URLs for several. Configs with no images, or whose value isn't
+// an attachment list, are skipped. The result is never nil, so it encodes as {}.
+func SettingsAttachmentsMap(configs []ConfigBriefResponse) map[string]any {
+	out := make(map[string]any, len(configs))
+	for _, c := range configs {
+		var views []ConfigAttachmentView
+		if json.Unmarshal(c.Value, &views) != nil || len(views) == 0 {
+			continue
+		}
+		if len(views) == 1 {
+			out[c.Name] = views[0].PreviewURL
+			continue
+		}
+		urls := make([]string, len(views))
+		for i, v := range views {
+			urls[i] = v.PreviewURL
+		}
+		out[c.Name] = urls
+	}
+	return out
 }
 
 // ToSettingsResponse converts Settings model to response DTO
@@ -226,34 +293,39 @@ func (s *Settings) ToSettingsResponse() *SettingsResponse {
 	}
 
 	return &SettingsResponse{
-		ID:                  s.ID.String(),
-		AppName:             s.AppName,
-		AppTagline:          s.AppTagline,
-		AppDescription:      s.AppDescription,
-		LogoURL:             s.LogoURL,
-		LogoSmallURL:        s.LogoSmallURL,
-		FaviconURL:          s.FaviconURL,
-		LogoAltText:         s.LogoAltText,
-		PrimaryColor:        s.PrimaryColor,
-		SecondaryColor:      s.SecondaryColor,
-		AccentColor:         s.AccentColor,
-		CopyrightText:       s.CopyrightText,
-		ContactEmail:        s.ContactEmail,
-		ContactPhone:        s.ContactPhone,
-		Feature1Title:       s.Feature1Title,
-		Feature1Description: s.Feature1Description,
-		Feature2Title:       s.Feature2Title,
-		Feature2Description: s.Feature2Description,
-		Feature3Title:       s.Feature3Title,
-		Feature3Description: s.Feature3Description,
-		DateFormat:          s.DateFormat,
-		TimeFormat:          s.TimeFormat,
-		DefaultLanguage:     s.DefaultLanguage,
-		SupportedLanguages:  s.SupportedLanguages,
-		ShowEvaluateButton:  s.ShowEvaluateButton,
-		AuthSetting:         AuthSetting{TotpEnabled: s.TotpEnabled},
-		FieldSettings:       fieldSettings,
-		SmsMaxLength:        func() int { n, _ := GetSMSMaxLength(); return n }(),
-		UpdatedAt:           s.UpdatedAt.Format(time.RFC3339),
+		ID:                     s.ID.String(),
+		AppName:                s.AppName,
+		AppTagline:             s.AppTagline,
+		AppDescription:         s.AppDescription,
+		LogoURL:                s.LogoURL,
+		LogoSmallURL:           s.LogoSmallURL,
+		FaviconURL:             s.FaviconURL,
+		LogoAltText:            s.LogoAltText,
+		PrimaryColor:           s.PrimaryColor,
+		SecondaryColor:         s.SecondaryColor,
+		AccentColor:            s.AccentColor,
+		CopyrightText:          s.CopyrightText,
+		ContactEmail:           s.ContactEmail,
+		ContactPhone:           s.ContactPhone,
+		Feature1Title:          s.Feature1Title,
+		Feature1Description:    s.Feature1Description,
+		Feature2Title:          s.Feature2Title,
+		Feature2Description:    s.Feature2Description,
+		Feature3Title:          s.Feature3Title,
+		Feature3Description:    s.Feature3Description,
+		DateFormat:             s.DateFormat,
+		TimeFormat:             s.TimeFormat,
+		DefaultLanguage:        s.DefaultLanguage,
+		SupportedLanguages:     s.SupportedLanguages,
+		Municipality1Name:      s.Municipality1Name,
+		Municipality2Name:      s.Municipality2Name,
+		Municipality3Name:      s.Municipality3Name,
+		ShowEvaluateButton:     s.ShowEvaluateButton,
+		ErrorLogRetentionValue: s.ErrorLogRetentionValue,
+		ErrorLogRetentionUnit:  s.ErrorLogRetentionUnit,
+		AuthSetting:            AuthSetting{TotpEnabled: s.TotpEnabled, ShowForgotPassword: s.ShowForgotPassword},
+		FieldSettings:          fieldSettings,
+		SmsMaxLength:           func() int { n, _ := GetSMSMaxLength(); return n }(),
+		UpdatedAt:              s.UpdatedAt.Format(time.RFC3339),
 	}
 }

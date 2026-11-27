@@ -51,47 +51,54 @@ const (
 // ──────────────────────────────────────────────────────────
 
 type StrategicKPI struct {
-	ID                     uuid.UUID             `gorm:"type:uuid;primary_key" json:"id"`
-	Code                   string                `gorm:"size:50;index;not null" json:"code"`
-	NameEn                 string                `gorm:"size:255;not null" json:"name_en"`
-	NameAr                 string                `gorm:"size:255;not null;default:''" json:"name_ar"`
-	PillarID               *uuid.UUID            `gorm:"type:uuid;index" json:"pillar_id"`
-	Pillar                 *Pillar               `gorm:"foreignKey:PillarID" json:"pillar,omitempty"`
-	DomainID               *uuid.UUID            `gorm:"type:uuid;index" json:"domain_id"`
-	Domain                 *Domain               `gorm:"foreignKey:DomainID" json:"domain,omitempty"`
-	OwnerType              string                `gorm:"size:20;not null;default:'internal'" json:"owner_type"`
-	OwnerDeptID            *uuid.UUID            `gorm:"type:uuid;index" json:"owner_dept_id"`
-	OwnerDept              *Department           `gorm:"foreignKey:OwnerDeptID" json:"owner_dept,omitempty"`
-	OwnerOrgID             *uuid.UUID            `gorm:"type:uuid;index" json:"owner_org_id"`
-	OwnerOrg               *KpiOrganization      `gorm:"foreignKey:OwnerOrgID" json:"owner_org,omitempty"`
-	OwningAgencyID         *uuid.UUID            `gorm:"type:uuid;index" json:"owning_agency_id"`
-	OwningAgency           *Department           `gorm:"foreignKey:OwningAgencyID" json:"owning_agency,omitempty"`
-	GoalID                 *uuid.UUID            `gorm:"type:uuid;index" json:"goal_id"`
-	Goal                   *Goal                 `gorm:"foreignKey:GoalID" json:"goal,omitempty"`
-	OperationalObjectiveID *uuid.UUID            `gorm:"type:uuid;index" json:"operational_objective_id"`
-	OperationalObjective   *OperationalObjective `gorm:"foreignKey:OperationalObjectiveID" json:"operational_objective,omitempty"`
-	ProcessID              *uuid.UUID            `gorm:"type:uuid;index" json:"process_id"`
-	Process                *Process              `gorm:"foreignKey:ProcessID" json:"process,omitempty"`
-	AwardSubCriterionID    *uuid.UUID            `gorm:"type:uuid;index" json:"award_sub_criterion_id"`
-	AwardSubCriterion      *AwardSubCriterion    `gorm:"foreignKey:AwardSubCriterionID" json:"award_sub_criterion,omitempty"`
-	Polarity               string                `gorm:"size:20;not null;default:'ascending'" json:"polarity"`
-	ActivationStatus       string                `gorm:"size:20;not null;default:'draft'" json:"activation_status"`
-	DescriptionEn          string                `gorm:"type:text" json:"description_en"`
-	DescriptionAr          string                `gorm:"type:text" json:"description_ar"`
-	Formula                string                `gorm:"type:text" json:"formula"`
-	Baseline               float64               `gorm:"default:0" json:"baseline"`
-	UnitOfMeasure          string                `gorm:"size:50" json:"unit_of_measure"`
-	ReportingFrequency     string                `gorm:"size:50" json:"reporting_frequency"`
-	Lifecycle              string                `gorm:"size:100" json:"lifecycle"`
-	DataSource             string                `gorm:"size:255" json:"data_source"`
-	SegmentationAxes       string                `gorm:"type:text" json:"segmentation_axes"`
-	RelatedUnits           string                `gorm:"type:text" json:"related_units"`
-	Notes                  string                `gorm:"type:text" json:"notes"`
-	DocumentaFolderID      string                `gorm:"size:255" json:"documenta_folder_id"`
-	WorkflowInstanceID     *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
-	CreatedAt              time.Time             `json:"created_at"`
-	UpdatedAt              time.Time             `json:"updated_at"`
-	DeletedAt              gorm.DeletedAt        `gorm:"index" json:"-"`
+	ID                      uuid.UUID             `gorm:"type:uuid;primary_key" json:"id"`
+	Code                    string                `gorm:"size:50;index;not null" json:"code"`
+	NameEn                  string                `gorm:"size:255;not null" json:"name_en"`
+	NameAr                  string                `gorm:"size:255;not null;default:''" json:"name_ar"`
+	PillarID                *uuid.UUID            `gorm:"type:uuid;index" json:"pillar_id"`
+	Pillar                  *Pillar               `gorm:"foreignKey:PillarID" json:"pillar,omitempty"`
+	DomainID                *uuid.UUID            `gorm:"type:uuid;index" json:"domain_id"`
+	Domain                  *Domain               `gorm:"foreignKey:DomainID" json:"domain,omitempty"`
+	AwardKpiMeasureID       *uuid.UUID            `gorm:"type:uuid;index" json:"award_kpi_measure_id"`
+	AwardKpiMeasure         *AwardKpiMeasure      `gorm:"foreignKey:AwardKpiMeasureID" json:"award_kpi_measure,omitempty"`
+	OwnerType               string                `gorm:"size:20;not null;default:'internal'" json:"owner_type"`
+	OwnerDeptID             *uuid.UUID            `gorm:"type:uuid;index" json:"owner_dept_id"`
+	OwnerDept               *Department           `gorm:"foreignKey:OwnerDeptID" json:"owner_dept,omitempty"`
+	OwnerOrgID              *uuid.UUID            `gorm:"type:uuid;index" json:"owner_org_id"`
+	OwnerOrg                *KpiOrganization      `gorm:"foreignKey:OwnerOrgID" json:"owner_org,omitempty"`
+	OwningAgencyID          *uuid.UUID            `gorm:"type:uuid;index" json:"owning_agency_id"`
+	OwningAgency            *Department           `gorm:"foreignKey:OwningAgencyID" json:"owning_agency,omitempty"`
+	GoalID                  *uuid.UUID            `gorm:"type:uuid;index" json:"goal_id"`
+	Goal                    *Goal                 `gorm:"foreignKey:GoalID" json:"goal,omitempty"`
+	OperationalObjectiveID  *uuid.UUID            `gorm:"type:uuid;index" json:"operational_objective_id"`
+	OperationalObjective    *OperationalObjective `gorm:"foreignKey:OperationalObjectiveID" json:"operational_objective,omitempty"`
+	ProcessID               *uuid.UUID            `gorm:"type:uuid;index" json:"process_id"`
+	Process                 *Process              `gorm:"foreignKey:ProcessID" json:"process,omitempty"`
+	AwardSubCriterionID     *uuid.UUID            `gorm:"type:uuid;index" json:"award_sub_criterion_id"`
+	AwardSubCriterion       *AwardSubCriterion    `gorm:"foreignKey:AwardSubCriterionID" json:"award_sub_criterion,omitempty"`
+	Classification          string                `gorm:"size:20" json:"classification"`
+	Polarity                string                `gorm:"size:20;not null;default:'ascending'" json:"polarity"`
+	TargetRequirement       string                `gorm:"size:20;not null;default:'mandatory'" json:"target_requirement"`
+	ActivationStatus        string                `gorm:"size:20;not null;default:'draft'" json:"activation_status"`
+	DescriptionEn           string                `gorm:"type:text" json:"description_en"`
+	DescriptionAr           string                `gorm:"type:text" json:"description_ar"`
+	Formula                 string                `gorm:"type:text" json:"formula"`
+	Baseline                float64               `gorm:"default:0" json:"baseline"`
+	UnitOfMeasure           string                `gorm:"size:50" json:"unit_of_measure"`
+	ReportingFrequency      string                `gorm:"size:50" json:"reporting_frequency"`
+	Lifecycle               string                `gorm:"size:100" json:"lifecycle"`
+	DataSource              string                `gorm:"size:255" json:"data_source"`
+	SegmentationAxes        string                `gorm:"type:text" json:"segmentation_axes"`
+	RelatedDepartments      []Department          `gorm:"many2many:strategic_kpi_related_departments" json:"related_departments,omitempty"`
+	Notes                   string                `gorm:"type:text" json:"notes"`
+	DocumentaFolderID       string                `gorm:"size:255" json:"documenta_folder_id"`
+	CurveDescription        string                `gorm:"type:text" json:"curve_description"`
+	ShortcomingsDescription string                `gorm:"type:text" json:"shortcomings_description"`
+	ProposedImprovement     string                `gorm:"type:text" json:"proposed_improvement"`
+	WorkflowInstanceID      *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
+	CreatedAt               time.Time             `json:"created_at"`
+	UpdatedAt               time.Time             `json:"updated_at"`
+	DeletedAt               gorm.DeletedAt        `gorm:"index" json:"-"`
 }
 
 func (k *StrategicKPI) BeforeCreate(tx *gorm.DB) error {
@@ -102,109 +109,128 @@ func (k *StrategicKPI) BeforeCreate(tx *gorm.DB) error {
 }
 
 type StrategicKPIRequest struct {
-	Code                   string     `json:"code" validate:"required,max=50"`
-	NameEn                 string     `json:"name_en" validate:"required,max=255"`
-	NameAr                 string     `json:"name_ar" validate:"max=255"`
-	PillarID               *uuid.UUID `json:"pillar_id"`
-	DomainID               *uuid.UUID `json:"domain_id"`
-	OwnerType              string     `json:"owner_type" validate:"omitempty,oneof=internal external"`
-	OwnerDeptID            *uuid.UUID `json:"owner_dept_id"`
-	OwnerOrgID             *uuid.UUID `json:"owner_org_id"`
-	OwningAgencyID         *uuid.UUID `json:"owning_agency_id"`
-	OperationalObjectiveID uuid.UUID  `json:"operational_objective_id" validate:"required"`
-	ProcessID              uuid.UUID  `json:"process_id" validate:"required"`
-	AwardSubCriterionID    *uuid.UUID `json:"award_sub_criterion_id"`
-	Polarity               string     `json:"polarity" validate:"omitempty,oneof=ascending descending"`
-	DescriptionEn          string     `json:"description_en"`
-	DescriptionAr          string     `json:"description_ar"`
-	Formula                string     `json:"formula"`
-	Baseline               float64    `json:"baseline"`
-	UnitOfMeasure          string     `json:"unit_of_measure" validate:"max=50"`
-	ReportingFrequency     string     `json:"reporting_frequency" validate:"omitempty,oneof=monthly quarterly semi_annual annually custom"`
-	Lifecycle              string     `json:"lifecycle" validate:"max=100"`
-	DataSource             string     `json:"data_source" validate:"max=255"`
-	SegmentationAxes       string     `json:"segmentation_axes"`
-	RelatedUnits           string     `json:"related_units"`
-	Notes                  string     `json:"notes"`
-	DocumentaFolderID      string     `json:"documenta_folder_id"`
+	Code                   string      `json:"code" validate:"required,max=50"`
+	NameEn                 string      `json:"name_en" validate:"required,max=255"`
+	NameAr                 string      `json:"name_ar" validate:"max=255"`
+	PillarID               *uuid.UUID  `json:"pillar_id"`
+	DomainID               *uuid.UUID  `json:"domain_id"`
+	AwardKpiMeasureID      *uuid.UUID  `json:"award_kpi_measure_id"`
+	OwnerType              string      `json:"owner_type" validate:"omitempty,oneof=internal external"`
+	OwnerDeptID            *uuid.UUID  `json:"owner_dept_id"`
+	OwnerOrgID             *uuid.UUID  `json:"owner_org_id"`
+	OwningAgencyID         *uuid.UUID  `json:"owning_agency_id"`
+	OperationalObjectiveID uuid.UUID   `json:"operational_objective_id" validate:"required"`
+	ProcessID              uuid.UUID   `json:"process_id" validate:"required"`
+	AwardSubCriterionID    *uuid.UUID  `json:"award_sub_criterion_id"`
+	Classification         string      `json:"classification" validate:"omitempty,oneof=kpi measurement output"`
+	Polarity               string      `json:"polarity" validate:"omitempty,oneof=ascending descending"`
+	TargetRequirement      string      `json:"target_requirement" validate:"omitempty,oneof=mandatory optional"`
+	DescriptionEn          string      `json:"description_en"`
+	DescriptionAr          string      `json:"description_ar"`
+	Formula                string      `json:"formula"`
+	Baseline               float64     `json:"baseline"`
+	UnitOfMeasure          string      `json:"unit_of_measure" validate:"max=50"`
+	ReportingFrequency     string      `json:"reporting_frequency" validate:"omitempty,oneof=monthly quarterly semi_annual annually custom"`
+	Lifecycle              string      `json:"lifecycle" validate:"max=100"`
+	DataSource             string      `json:"data_source" validate:"max=255"`
+	SegmentationAxes       string      `json:"segmentation_axes"`
+	RelatedDepartmentIDs   []uuid.UUID `json:"related_department_ids"`
+	Notes                  string      `json:"notes"`
+	DocumentaFolderID      string      `json:"documenta_folder_id"`
 }
 
 type StrategicKPIResponse struct {
-	ID                     uuid.UUID                     `json:"id"`
-	Code                   string                        `json:"code"`
-	NameEn                 string                        `json:"name_en"`
-	NameAr                 string                        `json:"name_ar"`
-	PillarID               *uuid.UUID                    `json:"pillar_id"`
-	Pillar                 *PillarResponse               `json:"pillar,omitempty"`
-	DomainID               *uuid.UUID                    `json:"domain_id"`
-	Domain                 *DomainResponse               `json:"domain,omitempty"`
-	OwnerType              string                        `json:"owner_type"`
-	OwnerDeptID            *uuid.UUID                    `json:"owner_dept_id"`
-	OwnerDept              *DepartmentBriefResponse      `json:"owner_dept,omitempty"`
-	OwnerOrgID             *uuid.UUID                    `json:"owner_org_id"`
-	OwnerOrg               *KpiOrganizationResponse      `json:"owner_org,omitempty"`
-	OwningAgencyID         *uuid.UUID                    `json:"owning_agency_id"`
-	OwningAgency           *DepartmentBriefResponse      `json:"owning_agency,omitempty"`
-	GoalID                 *uuid.UUID                    `json:"goal_id"`
-	Goal                   *GoalBriefResponse            `json:"goal,omitempty"`
-	OperationalObjectiveID *uuid.UUID                    `json:"operational_objective_id"`
-	OperationalObjective   *OperationalObjectiveResponse `json:"operational_objective,omitempty"`
-	ProcessID              *uuid.UUID                    `json:"process_id"`
-	Process                *ProcessResponse              `json:"process,omitempty"`
-	AwardSubCriterionID    *uuid.UUID                    `json:"award_sub_criterion_id"`
-	AwardSubCriterion      *AwardSubCriterionResponse    `json:"award_sub_criterion,omitempty"`
-	Polarity               string                        `json:"polarity"`
-	ActivationStatus       string                        `json:"activation_status"`
-	DescriptionEn          string                        `json:"description_en"`
-	DescriptionAr          string                        `json:"description_ar"`
-	Formula                string                        `json:"formula"`
-	Baseline               float64                       `json:"baseline"`
-	UnitOfMeasure          string                        `json:"unit_of_measure"`
-	ReportingFrequency     string                        `json:"reporting_frequency"`
-	Lifecycle              string                        `json:"lifecycle"`
-	DataSource             string                        `json:"data_source"`
-	SegmentationAxes       string                        `json:"segmentation_axes"`
-	RelatedUnits           string                        `json:"related_units"`
-	Notes                  string                        `json:"notes"`
-	DocumentaFolderID      string                        `json:"documenta_folder_id"`
-	WorkflowInstanceID     *uuid.UUID                    `json:"workflow_instance_id"`
-	CreatedAt              time.Time                     `json:"created_at"`
-	UpdatedAt              time.Time                     `json:"updated_at"`
+	ID                      uuid.UUID                     `json:"id"`
+	Code                    string                        `json:"code"`
+	NameEn                  string                        `json:"name_en"`
+	NameAr                  string                        `json:"name_ar"`
+	PillarID                *uuid.UUID                    `json:"pillar_id"`
+	Pillar                  *PillarResponse               `json:"pillar,omitempty"`
+	DomainID                *uuid.UUID                    `json:"domain_id"`
+	Domain                  *DomainResponse               `json:"domain,omitempty"`
+	AwardKpiMeasureID       *uuid.UUID                    `json:"award_kpi_measure_id"`
+	AwardKpiMeasure         *AwardKpiMeasureResponse      `json:"award_kpi_measure,omitempty"`
+	OwnerType               string                        `json:"owner_type"`
+	OwnerDeptID             *uuid.UUID                    `json:"owner_dept_id"`
+	OwnerDept               *DepartmentBriefResponse      `json:"owner_dept,omitempty"`
+	OwnerOrgID              *uuid.UUID                    `json:"owner_org_id"`
+	OwnerOrg                *KpiOrganizationResponse      `json:"owner_org,omitempty"`
+	OwningAgencyID          *uuid.UUID                    `json:"owning_agency_id"`
+	OwningAgency            *DepartmentBriefResponse      `json:"owning_agency,omitempty"`
+	GoalID                  *uuid.UUID                    `json:"goal_id"`
+	Goal                    *GoalBriefResponse            `json:"goal,omitempty"`
+	OperationalObjectiveID  *uuid.UUID                    `json:"operational_objective_id"`
+	OperationalObjective    *OperationalObjectiveResponse `json:"operational_objective,omitempty"`
+	ProcessID               *uuid.UUID                    `json:"process_id"`
+	Process                 *ProcessResponse              `json:"process,omitempty"`
+	AwardSubCriterionID     *uuid.UUID                    `json:"award_sub_criterion_id"`
+	AwardSubCriterion       *AwardSubCriterionResponse    `json:"award_sub_criterion,omitempty"`
+	Classification          string                        `json:"classification"`
+	Polarity                string                        `json:"polarity"`
+	TargetRequirement       string                        `json:"target_requirement"`
+	ActivationStatus        string                        `json:"activation_status"`
+	DescriptionEn           string                        `json:"description_en"`
+	DescriptionAr           string                        `json:"description_ar"`
+	Formula                 string                        `json:"formula"`
+	Baseline                float64                       `json:"baseline"`
+	UnitOfMeasure           string                        `json:"unit_of_measure"`
+	ReportingFrequency      string                        `json:"reporting_frequency"`
+	Lifecycle               string                        `json:"lifecycle"`
+	DataSource              string                        `json:"data_source"`
+	SegmentationAxes        string                        `json:"segmentation_axes"`
+	RelatedDepartments      []DepartmentBriefResponse     `json:"related_departments"`
+	Notes                   string                        `json:"notes"`
+	DocumentaFolderID       string                        `json:"documenta_folder_id"`
+	CurveDescription        string                        `json:"curve_description"`
+	ShortcomingsDescription string                        `json:"shortcomings_description"`
+	ProposedImprovement     string                        `json:"proposed_improvement"`
+	WorkflowInstanceID      *uuid.UUID                    `json:"workflow_instance_id"`
+	CreatedAt               time.Time                     `json:"created_at"`
+	UpdatedAt               time.Time                     `json:"updated_at"`
 }
 
 func (k *StrategicKPI) ToResponse() StrategicKPIResponse {
 	resp := StrategicKPIResponse{
-		ID:                     k.ID,
-		Code:                   k.Code,
-		NameEn:                 k.NameEn,
-		NameAr:                 k.NameAr,
-		PillarID:               k.PillarID,
-		DomainID:               k.DomainID,
-		OwnerType:              k.OwnerType,
-		OwnerDeptID:            k.OwnerDeptID,
-		OwnerOrgID:             k.OwnerOrgID,
-		OwningAgencyID:         k.OwningAgencyID,
-		GoalID:                 k.GoalID,
-		OperationalObjectiveID: k.OperationalObjectiveID,
-		ProcessID:              k.ProcessID,
-		AwardSubCriterionID:    k.AwardSubCriterionID,
-		Polarity:               k.Polarity,
-		ActivationStatus:       k.ActivationStatus,
-		DescriptionEn:          k.DescriptionEn,
-		DescriptionAr:          k.DescriptionAr,
-		Formula:                k.Formula,
-		Baseline:               k.Baseline,
-		UnitOfMeasure:          k.UnitOfMeasure,
-		ReportingFrequency:     k.ReportingFrequency,
-		Lifecycle:              k.Lifecycle,
-		DataSource:             k.DataSource,
-		SegmentationAxes:       k.SegmentationAxes,
-		RelatedUnits:           k.RelatedUnits,
-		Notes:                  k.Notes,
-		DocumentaFolderID:      k.DocumentaFolderID,
-		WorkflowInstanceID:     k.WorkflowInstanceID,
-		CreatedAt:              k.CreatedAt,
-		UpdatedAt:              k.UpdatedAt,
+		ID:                      k.ID,
+		Code:                    k.Code,
+		NameEn:                  k.NameEn,
+		NameAr:                  k.NameAr,
+		PillarID:                k.PillarID,
+		DomainID:                k.DomainID,
+		AwardKpiMeasureID:       k.AwardKpiMeasureID,
+		OwnerType:               k.OwnerType,
+		OwnerDeptID:             k.OwnerDeptID,
+		OwnerOrgID:              k.OwnerOrgID,
+		OwningAgencyID:          k.OwningAgencyID,
+		GoalID:                  k.GoalID,
+		OperationalObjectiveID:  k.OperationalObjectiveID,
+		ProcessID:               k.ProcessID,
+		AwardSubCriterionID:     k.AwardSubCriterionID,
+		Classification:          k.Classification,
+		Polarity:                k.Polarity,
+		TargetRequirement:       k.TargetRequirement,
+		ActivationStatus:        k.ActivationStatus,
+		DescriptionEn:           k.DescriptionEn,
+		DescriptionAr:           k.DescriptionAr,
+		Formula:                 k.Formula,
+		Baseline:                k.Baseline,
+		UnitOfMeasure:           k.UnitOfMeasure,
+		ReportingFrequency:      k.ReportingFrequency,
+		Lifecycle:               k.Lifecycle,
+		DataSource:              k.DataSource,
+		SegmentationAxes:        k.SegmentationAxes,
+		Notes:                   k.Notes,
+		DocumentaFolderID:       k.DocumentaFolderID,
+		CurveDescription:        k.CurveDescription,
+		ShortcomingsDescription: k.ShortcomingsDescription,
+		ProposedImprovement:     k.ProposedImprovement,
+		WorkflowInstanceID:      k.WorkflowInstanceID,
+		CreatedAt:               k.CreatedAt,
+		UpdatedAt:               k.UpdatedAt,
+	}
+	resp.RelatedDepartments = make([]DepartmentBriefResponse, 0, len(k.RelatedDepartments))
+	for _, d := range k.RelatedDepartments {
+		resp.RelatedDepartments = append(resp.RelatedDepartments, DepartmentBriefResponse{ID: d.ID, Name: d.Name, Code: d.Code})
 	}
 	if k.Pillar != nil {
 		r := k.Pillar.ToResponse()
@@ -213,6 +239,10 @@ func (k *StrategicKPI) ToResponse() StrategicKPIResponse {
 	if k.Domain != nil {
 		r := k.Domain.ToResponse()
 		resp.Domain = &r
+	}
+	if k.AwardKpiMeasure != nil {
+		r := k.AwardKpiMeasure.ToResponse()
+		resp.AwardKpiMeasure = &r
 	}
 	if k.OwnerDept != nil {
 		resp.OwnerDept = ToDepartmentBriefResponse(k.OwnerDept)
@@ -249,47 +279,54 @@ func (k *StrategicKPI) ToResponse() StrategicKPIResponse {
 // ──────────────────────────────────────────────────────────
 
 type OperationalKPI struct {
-	ID                     uuid.UUID             `gorm:"type:uuid;primary_key" json:"id"`
-	Code                   string                `gorm:"size:50;index;not null" json:"code"`
-	NameEn                 string                `gorm:"size:255;not null" json:"name_en"`
-	NameAr                 string                `gorm:"size:255;not null;default:''" json:"name_ar"`
-	GoalID                 *uuid.UUID            `gorm:"type:uuid;index" json:"goal_id"`
-	Goal                   *Goal                 `gorm:"foreignKey:GoalID" json:"goal,omitempty"`
-	OperationalObjectiveID uuid.UUID             `gorm:"type:uuid;not null;index" json:"operational_objective_id"`
-	OperationalObjective   *OperationalObjective `gorm:"foreignKey:OperationalObjectiveID" json:"operational_objective,omitempty"`
-	ProcessID              uuid.UUID             `gorm:"type:uuid;not null;index" json:"process_id"`
-	Process                *Process              `gorm:"foreignKey:ProcessID" json:"process,omitempty"`
-	PillarID               *uuid.UUID            `gorm:"type:uuid;index" json:"pillar_id"`
-	Pillar                 *Pillar               `gorm:"foreignKey:PillarID" json:"pillar,omitempty"`
-	AwardSubCriterionID    *uuid.UUID            `gorm:"type:uuid;index" json:"award_sub_criterion_id"`
-	AwardSubCriterion      *AwardSubCriterion    `gorm:"foreignKey:AwardSubCriterionID" json:"award_sub_criterion,omitempty"`
-	DomainID               *uuid.UUID            `gorm:"type:uuid;index" json:"domain_id"`
-	Domain                 *Domain               `gorm:"foreignKey:DomainID" json:"domain,omitempty"`
-	OwnerType              string                `gorm:"size:20;not null;default:'internal'" json:"owner_type"`
-	OwnerDeptID            *uuid.UUID            `gorm:"type:uuid;index" json:"owner_dept_id"`
-	OwnerDept              *Department           `gorm:"foreignKey:OwnerDeptID" json:"owner_dept,omitempty"`
-	OwnerOrgID             *uuid.UUID            `gorm:"type:uuid;index" json:"owner_org_id"`
-	OwnerOrg               *KpiOrganization      `gorm:"foreignKey:OwnerOrgID" json:"owner_org,omitempty"`
-	OwningAgencyID         *uuid.UUID            `gorm:"type:uuid;index" json:"owning_agency_id"`
-	OwningAgency           *Department           `gorm:"foreignKey:OwningAgencyID" json:"owning_agency,omitempty"`
-	Polarity               string                `gorm:"size:20;not null;default:'ascending'" json:"polarity"`
-	ActivationStatus       string                `gorm:"size:20;not null;default:'draft'" json:"activation_status"`
-	DescriptionEn          string                `gorm:"type:text" json:"description_en"`
-	DescriptionAr          string                `gorm:"type:text" json:"description_ar"`
-	Formula                string                `gorm:"type:text" json:"formula"`
-	Baseline               float64               `gorm:"default:0" json:"baseline"`
-	UnitOfMeasure          string                `gorm:"size:50" json:"unit_of_measure"`
-	ReportingFrequency     string                `gorm:"size:50" json:"reporting_frequency"`
-	Lifecycle              string                `gorm:"size:100" json:"lifecycle"`
-	DataSource             string                `gorm:"size:255" json:"data_source"`
-	RelatedUnits           string                `gorm:"type:text" json:"related_units"`
-	Notes                  string                `gorm:"type:text" json:"notes"`
-	DocumentaFolderID      string                `gorm:"size:255" json:"documenta_folder_id"`
-	WorkflowInstanceID     *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
-	WorkflowInstance       *KpiWorkflowInstance  `gorm:"foreignKey:WorkflowInstanceID" json:"-"`
-	CreatedAt              time.Time             `json:"created_at"`
-	UpdatedAt              time.Time             `json:"updated_at"`
-	DeletedAt              gorm.DeletedAt        `gorm:"index" json:"-"`
+	ID                      uuid.UUID             `gorm:"type:uuid;primary_key" json:"id"`
+	Code                    string                `gorm:"size:50;index;not null" json:"code"`
+	NameEn                  string                `gorm:"size:255;not null" json:"name_en"`
+	NameAr                  string                `gorm:"size:255;not null;default:''" json:"name_ar"`
+	GoalID                  *uuid.UUID            `gorm:"type:uuid;index" json:"goal_id"`
+	Goal                    *Goal                 `gorm:"foreignKey:GoalID" json:"goal,omitempty"`
+	OperationalObjectiveID  uuid.UUID             `gorm:"type:uuid;not null;index" json:"operational_objective_id"`
+	OperationalObjective    *OperationalObjective `gorm:"foreignKey:OperationalObjectiveID" json:"operational_objective,omitempty"`
+	ProcessID               uuid.UUID             `gorm:"type:uuid;not null;index" json:"process_id"`
+	Process                 *Process              `gorm:"foreignKey:ProcessID" json:"process,omitempty"`
+	PillarID                *uuid.UUID            `gorm:"type:uuid;index" json:"pillar_id"`
+	Pillar                  *Pillar               `gorm:"foreignKey:PillarID" json:"pillar,omitempty"`
+	AwardSubCriterionID     *uuid.UUID            `gorm:"type:uuid;index" json:"award_sub_criterion_id"`
+	AwardSubCriterion       *AwardSubCriterion    `gorm:"foreignKey:AwardSubCriterionID" json:"award_sub_criterion,omitempty"`
+	Classification          string                `gorm:"size:20" json:"classification"`
+	DomainID                *uuid.UUID            `gorm:"type:uuid;index" json:"domain_id"`
+	Domain                  *Domain               `gorm:"foreignKey:DomainID" json:"domain,omitempty"`
+	AwardKpiMeasureID       *uuid.UUID            `gorm:"type:uuid;index" json:"award_kpi_measure_id"`
+	AwardKpiMeasure         *AwardKpiMeasure      `gorm:"foreignKey:AwardKpiMeasureID" json:"award_kpi_measure,omitempty"`
+	OwnerType               string                `gorm:"size:20;not null;default:'internal'" json:"owner_type"`
+	OwnerDeptID             *uuid.UUID            `gorm:"type:uuid;index" json:"owner_dept_id"`
+	OwnerDept               *Department           `gorm:"foreignKey:OwnerDeptID" json:"owner_dept,omitempty"`
+	OwnerOrgID              *uuid.UUID            `gorm:"type:uuid;index" json:"owner_org_id"`
+	OwnerOrg                *KpiOrganization      `gorm:"foreignKey:OwnerOrgID" json:"owner_org,omitempty"`
+	OwningAgencyID          *uuid.UUID            `gorm:"type:uuid;index" json:"owning_agency_id"`
+	OwningAgency            *Department           `gorm:"foreignKey:OwningAgencyID" json:"owning_agency,omitempty"`
+	Polarity                string                `gorm:"size:20;not null;default:'ascending'" json:"polarity"`
+	TargetRequirement       string                `gorm:"size:20;not null;default:'mandatory'" json:"target_requirement"`
+	ActivationStatus        string                `gorm:"size:20;not null;default:'draft'" json:"activation_status"`
+	DescriptionEn           string                `gorm:"type:text" json:"description_en"`
+	DescriptionAr           string                `gorm:"type:text" json:"description_ar"`
+	Formula                 string                `gorm:"type:text" json:"formula"`
+	Baseline                float64               `gorm:"default:0" json:"baseline"`
+	UnitOfMeasure           string                `gorm:"size:50" json:"unit_of_measure"`
+	ReportingFrequency      string                `gorm:"size:50" json:"reporting_frequency"`
+	Lifecycle               string                `gorm:"size:100" json:"lifecycle"`
+	DataSource              string                `gorm:"size:255" json:"data_source"`
+	RelatedDepartments      []Department          `gorm:"many2many:operational_kpi_related_departments" json:"related_departments,omitempty"`
+	Notes                   string                `gorm:"type:text" json:"notes"`
+	DocumentaFolderID       string                `gorm:"size:255" json:"documenta_folder_id"`
+	CurveDescription        string                `gorm:"type:text" json:"curve_description"`
+	ShortcomingsDescription string                `gorm:"type:text" json:"shortcomings_description"`
+	ProposedImprovement     string                `gorm:"type:text" json:"proposed_improvement"`
+	WorkflowInstanceID      *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
+	WorkflowInstance        *KpiWorkflowInstance  `gorm:"foreignKey:WorkflowInstanceID" json:"-"`
+	CreatedAt               time.Time             `json:"created_at"`
+	UpdatedAt               time.Time             `json:"updated_at"`
+	DeletedAt               gorm.DeletedAt        `gorm:"index" json:"-"`
 }
 
 func (k *OperationalKPI) BeforeCreate(tx *gorm.DB) error {
@@ -300,107 +337,126 @@ func (k *OperationalKPI) BeforeCreate(tx *gorm.DB) error {
 }
 
 type OperationalKPIRequest struct {
-	Code                   string     `json:"code" validate:"required,max=50"`
-	NameEn                 string     `json:"name_en" validate:"required,max=255"`
-	NameAr                 string     `json:"name_ar" validate:"max=255"`
-	OperationalObjectiveID uuid.UUID  `json:"operational_objective_id" validate:"required"`
-	ProcessID              uuid.UUID  `json:"process_id" validate:"required"`
-	PillarID               *uuid.UUID `json:"pillar_id"`
-	AwardSubCriterionID    *uuid.UUID `json:"award_sub_criterion_id"`
-	DomainID               *uuid.UUID `json:"domain_id"`
-	OwnerType              string     `json:"owner_type" validate:"omitempty,oneof=internal external"`
-	OwnerDeptID            *uuid.UUID `json:"owner_dept_id"`
-	OwnerOrgID             *uuid.UUID `json:"owner_org_id"`
-	OwningAgencyID         *uuid.UUID `json:"owning_agency_id"`
-	Polarity               string     `json:"polarity" validate:"omitempty,oneof=ascending descending"`
-	DescriptionEn          string     `json:"description_en"`
-	DescriptionAr          string     `json:"description_ar"`
-	Formula                string     `json:"formula"`
-	Baseline               float64    `json:"baseline"`
-	UnitOfMeasure          string     `json:"unit_of_measure" validate:"max=50"`
-	ReportingFrequency     string     `json:"reporting_frequency" validate:"omitempty,oneof=monthly quarterly semi_annual annually custom"`
-	Lifecycle              string     `json:"lifecycle" validate:"max=100"`
-	DataSource             string     `json:"data_source" validate:"max=255"`
-	RelatedUnits           string     `json:"related_units"`
-	Notes                  string     `json:"notes"`
-	DocumentaFolderID      string     `json:"documenta_folder_id"`
+	Code                   string      `json:"code" validate:"required,max=50"`
+	NameEn                 string      `json:"name_en" validate:"required,max=255"`
+	NameAr                 string      `json:"name_ar" validate:"max=255"`
+	OperationalObjectiveID uuid.UUID   `json:"operational_objective_id" validate:"required"`
+	ProcessID              uuid.UUID   `json:"process_id" validate:"required"`
+	PillarID               *uuid.UUID  `json:"pillar_id"`
+	AwardSubCriterionID    *uuid.UUID  `json:"award_sub_criterion_id"`
+	Classification         string      `json:"classification" validate:"omitempty,oneof=kpi measurement output"`
+	DomainID               *uuid.UUID  `json:"domain_id"`
+	AwardKpiMeasureID      *uuid.UUID  `json:"award_kpi_measure_id"`
+	OwnerType              string      `json:"owner_type" validate:"omitempty,oneof=internal external"`
+	OwnerDeptID            *uuid.UUID  `json:"owner_dept_id"`
+	OwnerOrgID             *uuid.UUID  `json:"owner_org_id"`
+	OwningAgencyID         *uuid.UUID  `json:"owning_agency_id"`
+	Polarity               string      `json:"polarity" validate:"omitempty,oneof=ascending descending"`
+	TargetRequirement      string      `json:"target_requirement" validate:"omitempty,oneof=mandatory optional"`
+	DescriptionEn          string      `json:"description_en"`
+	DescriptionAr          string      `json:"description_ar"`
+	Formula                string      `json:"formula"`
+	Baseline               float64     `json:"baseline"`
+	UnitOfMeasure          string      `json:"unit_of_measure" validate:"max=50"`
+	ReportingFrequency     string      `json:"reporting_frequency" validate:"omitempty,oneof=monthly quarterly semi_annual annually custom"`
+	Lifecycle              string      `json:"lifecycle" validate:"max=100"`
+	DataSource             string      `json:"data_source" validate:"max=255"`
+	RelatedDepartmentIDs   []uuid.UUID `json:"related_department_ids"`
+	Notes                  string      `json:"notes"`
+	DocumentaFolderID      string      `json:"documenta_folder_id"`
 }
 
 type OperationalKPIResponse struct {
-	ID                     uuid.UUID                     `json:"id"`
-	Code                   string                        `json:"code"`
-	NameEn                 string                        `json:"name_en"`
-	NameAr                 string                        `json:"name_ar"`
-	GoalID                 *uuid.UUID                    `json:"goal_id"`
-	Goal                   *GoalBriefResponse            `json:"goal,omitempty"`
-	OperationalObjectiveID uuid.UUID                     `json:"operational_objective_id"`
-	OperationalObjective   *OperationalObjectiveResponse `json:"operational_objective,omitempty"`
-	ProcessID              uuid.UUID                     `json:"process_id"`
-	Process                *ProcessResponse              `json:"process,omitempty"`
-	PillarID               *uuid.UUID                    `json:"pillar_id"`
-	Pillar                 *PillarResponse               `json:"pillar,omitempty"`
-	AwardSubCriterionID    *uuid.UUID                    `json:"award_sub_criterion_id"`
-	AwardSubCriterion      *AwardSubCriterionResponse    `json:"award_sub_criterion,omitempty"`
-	DomainID               *uuid.UUID                    `json:"domain_id"`
-	Domain                 *DomainResponse               `json:"domain,omitempty"`
-	OwnerType              string                        `json:"owner_type"`
-	OwnerDeptID            *uuid.UUID                    `json:"owner_dept_id"`
-	OwnerDept              *DepartmentBriefResponse      `json:"owner_dept,omitempty"`
-	OwnerOrgID             *uuid.UUID                    `json:"owner_org_id"`
-	OwnerOrg               *KpiOrganizationResponse      `json:"owner_org,omitempty"`
-	OwningAgencyID         *uuid.UUID                    `json:"owning_agency_id"`
-	OwningAgency           *DepartmentBriefResponse      `json:"owning_agency,omitempty"`
-	Polarity               string                        `json:"polarity"`
-	ActivationStatus       string                        `json:"activation_status"`
-	DescriptionEn          string                        `json:"description_en"`
-	DescriptionAr          string                        `json:"description_ar"`
-	Formula                string                        `json:"formula"`
-	Baseline               float64                       `json:"baseline"`
-	UnitOfMeasure          string                        `json:"unit_of_measure"`
-	ReportingFrequency     string                        `json:"reporting_frequency"`
-	Lifecycle              string                        `json:"lifecycle"`
-	DataSource             string                        `json:"data_source"`
-	RelatedUnits           string                        `json:"related_units"`
-	Notes                  string                        `json:"notes"`
-	DocumentaFolderID      string                        `json:"documenta_folder_id"`
-	WorkflowInstanceID     *uuid.UUID                    `json:"workflow_instance_id"`
-	CreatedBy              *UserBrief                    `json:"created_by,omitempty"`
-	CreatedAt              time.Time                     `json:"created_at"`
-	UpdatedAt              time.Time                     `json:"updated_at"`
+	ID                      uuid.UUID                     `json:"id"`
+	Code                    string                        `json:"code"`
+	NameEn                  string                        `json:"name_en"`
+	NameAr                  string                        `json:"name_ar"`
+	GoalID                  *uuid.UUID                    `json:"goal_id"`
+	Goal                    *GoalBriefResponse            `json:"goal,omitempty"`
+	OperationalObjectiveID  uuid.UUID                     `json:"operational_objective_id"`
+	OperationalObjective    *OperationalObjectiveResponse `json:"operational_objective,omitempty"`
+	ProcessID               uuid.UUID                     `json:"process_id"`
+	Process                 *ProcessResponse              `json:"process,omitempty"`
+	PillarID                *uuid.UUID                    `json:"pillar_id"`
+	Pillar                  *PillarResponse               `json:"pillar,omitempty"`
+	AwardSubCriterionID     *uuid.UUID                    `json:"award_sub_criterion_id"`
+	AwardSubCriterion       *AwardSubCriterionResponse    `json:"award_sub_criterion,omitempty"`
+	Classification          string                        `json:"classification"`
+	DomainID                *uuid.UUID                    `json:"domain_id"`
+	Domain                  *DomainResponse               `json:"domain,omitempty"`
+	AwardKpiMeasureID       *uuid.UUID                    `json:"award_kpi_measure_id"`
+	AwardKpiMeasure         *AwardKpiMeasureResponse      `json:"award_kpi_measure,omitempty"`
+	OwnerType               string                        `json:"owner_type"`
+	OwnerDeptID             *uuid.UUID                    `json:"owner_dept_id"`
+	OwnerDept               *DepartmentBriefResponse      `json:"owner_dept,omitempty"`
+	OwnerOrgID              *uuid.UUID                    `json:"owner_org_id"`
+	OwnerOrg                *KpiOrganizationResponse      `json:"owner_org,omitempty"`
+	OwningAgencyID          *uuid.UUID                    `json:"owning_agency_id"`
+	OwningAgency            *DepartmentBriefResponse      `json:"owning_agency,omitempty"`
+	Polarity                string                        `json:"polarity"`
+	TargetRequirement       string                        `json:"target_requirement"`
+	ActivationStatus        string                        `json:"activation_status"`
+	DescriptionEn           string                        `json:"description_en"`
+	DescriptionAr           string                        `json:"description_ar"`
+	Formula                 string                        `json:"formula"`
+	Baseline                float64                       `json:"baseline"`
+	UnitOfMeasure           string                        `json:"unit_of_measure"`
+	ReportingFrequency      string                        `json:"reporting_frequency"`
+	Lifecycle               string                        `json:"lifecycle"`
+	DataSource              string                        `json:"data_source"`
+	RelatedDepartments      []DepartmentBriefResponse     `json:"related_departments"`
+	Notes                   string                        `json:"notes"`
+	DocumentaFolderID       string                        `json:"documenta_folder_id"`
+	CurveDescription        string                        `json:"curve_description"`
+	ShortcomingsDescription string                        `json:"shortcomings_description"`
+	ProposedImprovement     string                        `json:"proposed_improvement"`
+	WorkflowInstanceID      *uuid.UUID                    `json:"workflow_instance_id"`
+	CreatedBy               *UserBrief                    `json:"created_by,omitempty"`
+	CreatedAt               time.Time                     `json:"created_at"`
+	UpdatedAt               time.Time                     `json:"updated_at"`
 }
 
 func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 	resp := OperationalKPIResponse{
-		ID:                     k.ID,
-		Code:                   k.Code,
-		NameEn:                 k.NameEn,
-		NameAr:                 k.NameAr,
-		GoalID:                 k.GoalID,
-		OperationalObjectiveID: k.OperationalObjectiveID,
-		ProcessID:              k.ProcessID,
-		PillarID:               k.PillarID,
-		AwardSubCriterionID:    k.AwardSubCriterionID,
-		DomainID:               k.DomainID,
-		OwnerType:              k.OwnerType,
-		OwnerDeptID:            k.OwnerDeptID,
-		OwnerOrgID:             k.OwnerOrgID,
-		OwningAgencyID:         k.OwningAgencyID,
-		Polarity:               k.Polarity,
-		ActivationStatus:       k.ActivationStatus,
-		DescriptionEn:          k.DescriptionEn,
-		DescriptionAr:          k.DescriptionAr,
-		Formula:                k.Formula,
-		Baseline:               k.Baseline,
-		UnitOfMeasure:          k.UnitOfMeasure,
-		ReportingFrequency:     k.ReportingFrequency,
-		Lifecycle:              k.Lifecycle,
-		DataSource:             k.DataSource,
-		RelatedUnits:           k.RelatedUnits,
-		Notes:                  k.Notes,
-		DocumentaFolderID:      k.DocumentaFolderID,
-		WorkflowInstanceID:     k.WorkflowInstanceID,
-		CreatedAt:              k.CreatedAt,
-		UpdatedAt:              k.UpdatedAt,
+		ID:                      k.ID,
+		Code:                    k.Code,
+		NameEn:                  k.NameEn,
+		NameAr:                  k.NameAr,
+		GoalID:                  k.GoalID,
+		OperationalObjectiveID:  k.OperationalObjectiveID,
+		ProcessID:               k.ProcessID,
+		PillarID:                k.PillarID,
+		AwardSubCriterionID:     k.AwardSubCriterionID,
+		Classification:          k.Classification,
+		DomainID:                k.DomainID,
+		AwardKpiMeasureID:       k.AwardKpiMeasureID,
+		OwnerType:               k.OwnerType,
+		OwnerDeptID:             k.OwnerDeptID,
+		OwnerOrgID:              k.OwnerOrgID,
+		OwningAgencyID:          k.OwningAgencyID,
+		Polarity:                k.Polarity,
+		TargetRequirement:       k.TargetRequirement,
+		ActivationStatus:        k.ActivationStatus,
+		DescriptionEn:           k.DescriptionEn,
+		DescriptionAr:           k.DescriptionAr,
+		Formula:                 k.Formula,
+		Baseline:                k.Baseline,
+		UnitOfMeasure:           k.UnitOfMeasure,
+		ReportingFrequency:      k.ReportingFrequency,
+		Lifecycle:               k.Lifecycle,
+		DataSource:              k.DataSource,
+		Notes:                   k.Notes,
+		DocumentaFolderID:       k.DocumentaFolderID,
+		CurveDescription:        k.CurveDescription,
+		ShortcomingsDescription: k.ShortcomingsDescription,
+		ProposedImprovement:     k.ProposedImprovement,
+		WorkflowInstanceID:      k.WorkflowInstanceID,
+		CreatedAt:               k.CreatedAt,
+		UpdatedAt:               k.UpdatedAt,
+	}
+	resp.RelatedDepartments = make([]DepartmentBriefResponse, 0, len(k.RelatedDepartments))
+	for _, d := range k.RelatedDepartments {
+		resp.RelatedDepartments = append(resp.RelatedDepartments, DepartmentBriefResponse{ID: d.ID, Name: d.Name, Code: d.Code})
 	}
 	if k.OperationalObjective != nil {
 		r := k.OperationalObjective.ToResponse()
@@ -421,6 +477,10 @@ func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 	if k.Domain != nil {
 		r := k.Domain.ToResponse()
 		resp.Domain = &r
+	}
+	if k.AwardKpiMeasure != nil {
+		r := k.AwardKpiMeasure.ToResponse()
+		resp.AwardKpiMeasure = &r
 	}
 	if k.Goal != nil {
 		resp.Goal = ToGoalBriefResponse(k.Goal)
@@ -454,47 +514,54 @@ func (k *OperationalKPI) ToResponse() OperationalKPIResponse {
 // ──────────────────────────────────────────────────────────
 
 type AwardKPI struct {
-	ID                     uuid.UUID             `gorm:"type:uuid;primary_key" json:"id"`
-	Code                   string                `gorm:"size:50;index;not null" json:"code"`
-	NameEn                 string                `gorm:"size:255;not null" json:"name_en"`
-	NameAr                 string                `gorm:"size:255;not null;default:''" json:"name_ar"`
-	GoalID                 *uuid.UUID            `gorm:"type:uuid;index" json:"goal_id"`
-	Goal                   *Goal                 `gorm:"foreignKey:GoalID" json:"goal,omitempty"`
-	OperationalObjectiveID *uuid.UUID            `gorm:"type:uuid;index" json:"operational_objective_id"`
-	OperationalObjective   *OperationalObjective `gorm:"foreignKey:OperationalObjectiveID" json:"operational_objective,omitempty"`
-	ProcessID              *uuid.UUID            `gorm:"type:uuid;index" json:"process_id"`
-	Process                *Process              `gorm:"foreignKey:ProcessID" json:"process,omitempty"`
-	AwardSubCriterionID    *uuid.UUID            `gorm:"type:uuid;index" json:"award_sub_criterion_id"`
-	AwardSubCriterion      *AwardSubCriterion    `gorm:"foreignKey:AwardSubCriterionID" json:"award_sub_criterion,omitempty"`
-	PillarID               *uuid.UUID            `gorm:"type:uuid;index" json:"pillar_id"`
-	Pillar                 *Pillar               `gorm:"foreignKey:PillarID" json:"pillar,omitempty"`
-	DomainID               *uuid.UUID            `gorm:"type:uuid;index" json:"domain_id"`
-	Domain                 *Domain               `gorm:"foreignKey:DomainID" json:"domain,omitempty"`
-	OwnerType              string                `gorm:"size:20;not null;default:'internal'" json:"owner_type"`
-	OwnerDeptID            *uuid.UUID            `gorm:"type:uuid;index" json:"owner_dept_id"`
-	OwnerDept              *Department           `gorm:"foreignKey:OwnerDeptID" json:"owner_dept,omitempty"`
-	OwnerOrgID             *uuid.UUID            `gorm:"type:uuid;index" json:"owner_org_id"`
-	OwnerOrg               *KpiOrganization      `gorm:"foreignKey:OwnerOrgID" json:"owner_org,omitempty"`
-	OwningAgencyID         *uuid.UUID            `gorm:"type:uuid;index" json:"owning_agency_id"`
-	OwningAgency           *Department           `gorm:"foreignKey:OwningAgencyID" json:"owning_agency,omitempty"`
-	Polarity               string                `gorm:"size:20;not null;default:'ascending'" json:"polarity"`
-	ActivationStatus       string                `gorm:"size:20;not null;default:'draft'" json:"activation_status"`
-	DescriptionEn          string                `gorm:"type:text" json:"description_en"`
-	DescriptionAr          string                `gorm:"type:text" json:"description_ar"`
-	Formula                string                `gorm:"type:text" json:"formula"`
-	Baseline               float64               `gorm:"default:0" json:"baseline"`
-	UnitOfMeasure          string                `gorm:"size:50" json:"unit_of_measure"`
-	ReportingFrequency     string                `gorm:"size:50" json:"reporting_frequency"`
-	Lifecycle              string                `gorm:"size:100" json:"lifecycle"`
-	DataSource             string                `gorm:"size:255" json:"data_source"`
-	RelatedUnits           string                `gorm:"type:text" json:"related_units"`
-	Notes                  string                `gorm:"type:text" json:"notes"`
-	DocumentaFolderID      string                `gorm:"size:255" json:"documenta_folder_id"`
-	WorkflowInstanceID     *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
-	WorkflowInstance       *KpiWorkflowInstance  `gorm:"foreignKey:WorkflowInstanceID" json:"-"`
-	CreatedAt              time.Time             `json:"created_at"`
-	UpdatedAt              time.Time             `json:"updated_at"`
-	DeletedAt              gorm.DeletedAt        `gorm:"index" json:"-"`
+	ID                      uuid.UUID             `gorm:"type:uuid;primary_key" json:"id"`
+	Code                    string                `gorm:"size:50;index;not null" json:"code"`
+	NameEn                  string                `gorm:"size:255;not null" json:"name_en"`
+	NameAr                  string                `gorm:"size:255;not null;default:''" json:"name_ar"`
+	GoalID                  *uuid.UUID            `gorm:"type:uuid;index" json:"goal_id"`
+	Goal                    *Goal                 `gorm:"foreignKey:GoalID" json:"goal,omitempty"`
+	OperationalObjectiveID  *uuid.UUID            `gorm:"type:uuid;index" json:"operational_objective_id"`
+	OperationalObjective    *OperationalObjective `gorm:"foreignKey:OperationalObjectiveID" json:"operational_objective,omitempty"`
+	ProcessID               *uuid.UUID            `gorm:"type:uuid;index" json:"process_id"`
+	Process                 *Process              `gorm:"foreignKey:ProcessID" json:"process,omitempty"`
+	AwardSubCriterionID     *uuid.UUID            `gorm:"type:uuid;index" json:"award_sub_criterion_id"`
+	AwardSubCriterion       *AwardSubCriterion    `gorm:"foreignKey:AwardSubCriterionID" json:"award_sub_criterion,omitempty"`
+	Classification          string                `gorm:"size:20" json:"classification"`
+	PillarID                *uuid.UUID            `gorm:"type:uuid;index" json:"pillar_id"`
+	Pillar                  *Pillar               `gorm:"foreignKey:PillarID" json:"pillar,omitempty"`
+	DomainID                *uuid.UUID            `gorm:"type:uuid;index" json:"domain_id"`
+	Domain                  *Domain               `gorm:"foreignKey:DomainID" json:"domain,omitempty"`
+	AwardKpiMeasureID       *uuid.UUID            `gorm:"type:uuid;index" json:"award_kpi_measure_id"`
+	AwardKpiMeasure         *AwardKpiMeasure      `gorm:"foreignKey:AwardKpiMeasureID" json:"award_kpi_measure,omitempty"`
+	OwnerType               string                `gorm:"size:20;not null;default:'internal'" json:"owner_type"`
+	OwnerDeptID             *uuid.UUID            `gorm:"type:uuid;index" json:"owner_dept_id"`
+	OwnerDept               *Department           `gorm:"foreignKey:OwnerDeptID" json:"owner_dept,omitempty"`
+	OwnerOrgID              *uuid.UUID            `gorm:"type:uuid;index" json:"owner_org_id"`
+	OwnerOrg                *KpiOrganization      `gorm:"foreignKey:OwnerOrgID" json:"owner_org,omitempty"`
+	OwningAgencyID          *uuid.UUID            `gorm:"type:uuid;index" json:"owning_agency_id"`
+	OwningAgency            *Department           `gorm:"foreignKey:OwningAgencyID" json:"owning_agency,omitempty"`
+	Polarity                string                `gorm:"size:20;not null;default:'ascending'" json:"polarity"`
+	TargetRequirement       string                `gorm:"size:20;not null;default:'mandatory'" json:"target_requirement"`
+	ActivationStatus        string                `gorm:"size:20;not null;default:'draft'" json:"activation_status"`
+	DescriptionEn           string                `gorm:"type:text" json:"description_en"`
+	DescriptionAr           string                `gorm:"type:text" json:"description_ar"`
+	Formula                 string                `gorm:"type:text" json:"formula"`
+	Baseline                float64               `gorm:"default:0" json:"baseline"`
+	UnitOfMeasure           string                `gorm:"size:50" json:"unit_of_measure"`
+	ReportingFrequency      string                `gorm:"size:50" json:"reporting_frequency"`
+	Lifecycle               string                `gorm:"size:100" json:"lifecycle"`
+	DataSource              string                `gorm:"size:255" json:"data_source"`
+	RelatedDepartments      []Department          `gorm:"many2many:award_kpi_related_departments" json:"related_departments,omitempty"`
+	Notes                   string                `gorm:"type:text" json:"notes"`
+	DocumentaFolderID       string                `gorm:"size:255" json:"documenta_folder_id"`
+	CurveDescription        string                `gorm:"type:text" json:"curve_description"`
+	ShortcomingsDescription string                `gorm:"type:text" json:"shortcomings_description"`
+	ProposedImprovement     string                `gorm:"type:text" json:"proposed_improvement"`
+	WorkflowInstanceID      *uuid.UUID            `gorm:"type:uuid;index" json:"workflow_instance_id"`
+	WorkflowInstance        *KpiWorkflowInstance  `gorm:"foreignKey:WorkflowInstanceID" json:"-"`
+	CreatedAt               time.Time             `json:"created_at"`
+	UpdatedAt               time.Time             `json:"updated_at"`
+	DeletedAt               gorm.DeletedAt        `gorm:"index" json:"-"`
 }
 
 func (k *AwardKPI) BeforeCreate(tx *gorm.DB) error {
@@ -505,107 +572,126 @@ func (k *AwardKPI) BeforeCreate(tx *gorm.DB) error {
 }
 
 type AwardKPIRequest struct {
-	Code                   string     `json:"code" validate:"required,max=50"`
-	NameEn                 string     `json:"name_en" validate:"required,max=255"`
-	NameAr                 string     `json:"name_ar" validate:"max=255"`
-	OperationalObjectiveID uuid.UUID  `json:"operational_objective_id" validate:"required"`
-	ProcessID              uuid.UUID  `json:"process_id" validate:"required"`
-	AwardSubCriterionID    *uuid.UUID `json:"award_sub_criterion_id"`
-	PillarID               *uuid.UUID `json:"pillar_id"`
-	DomainID               *uuid.UUID `json:"domain_id"`
-	OwnerType              string     `json:"owner_type" validate:"omitempty,oneof=internal external"`
-	OwnerDeptID            *uuid.UUID `json:"owner_dept_id"`
-	OwnerOrgID             *uuid.UUID `json:"owner_org_id"`
-	OwningAgencyID         *uuid.UUID `json:"owning_agency_id"`
-	Polarity               string     `json:"polarity" validate:"omitempty,oneof=ascending descending"`
-	DescriptionEn          string     `json:"description_en"`
-	DescriptionAr          string     `json:"description_ar"`
-	Formula                string     `json:"formula"`
-	Baseline               float64    `json:"baseline"`
-	UnitOfMeasure          string     `json:"unit_of_measure" validate:"max=50"`
-	ReportingFrequency     string     `json:"reporting_frequency" validate:"omitempty,oneof=monthly quarterly semi_annual annually custom"`
-	Lifecycle              string     `json:"lifecycle" validate:"max=100"`
-	DataSource             string     `json:"data_source" validate:"max=255"`
-	RelatedUnits           string     `json:"related_units"`
-	Notes                  string     `json:"notes"`
-	DocumentaFolderID      string     `json:"documenta_folder_id"`
+	Code                   string      `json:"code" validate:"required,max=50"`
+	NameEn                 string      `json:"name_en" validate:"required,max=255"`
+	NameAr                 string      `json:"name_ar" validate:"max=255"`
+	OperationalObjectiveID uuid.UUID   `json:"operational_objective_id" validate:"required"`
+	ProcessID              uuid.UUID   `json:"process_id" validate:"required"`
+	AwardSubCriterionID    *uuid.UUID  `json:"award_sub_criterion_id"`
+	Classification         string      `json:"classification" validate:"omitempty,oneof=kpi measurement output"`
+	PillarID               *uuid.UUID  `json:"pillar_id"`
+	DomainID               *uuid.UUID  `json:"domain_id"`
+	AwardKpiMeasureID      *uuid.UUID  `json:"award_kpi_measure_id"`
+	OwnerType              string      `json:"owner_type" validate:"omitempty,oneof=internal external"`
+	OwnerDeptID            *uuid.UUID  `json:"owner_dept_id"`
+	OwnerOrgID             *uuid.UUID  `json:"owner_org_id"`
+	OwningAgencyID         *uuid.UUID  `json:"owning_agency_id"`
+	Polarity               string      `json:"polarity" validate:"omitempty,oneof=ascending descending"`
+	TargetRequirement      string      `json:"target_requirement" validate:"omitempty,oneof=mandatory optional"`
+	DescriptionEn          string      `json:"description_en"`
+	DescriptionAr          string      `json:"description_ar"`
+	Formula                string      `json:"formula"`
+	Baseline               float64     `json:"baseline"`
+	UnitOfMeasure          string      `json:"unit_of_measure" validate:"max=50"`
+	ReportingFrequency     string      `json:"reporting_frequency" validate:"omitempty,oneof=monthly quarterly semi_annual annually custom"`
+	Lifecycle              string      `json:"lifecycle" validate:"max=100"`
+	DataSource             string      `json:"data_source" validate:"max=255"`
+	RelatedDepartmentIDs   []uuid.UUID `json:"related_department_ids"`
+	Notes                  string      `json:"notes"`
+	DocumentaFolderID      string      `json:"documenta_folder_id"`
 }
 
 type AwardKPIResponse struct {
-	ID                     uuid.UUID                     `json:"id"`
-	Code                   string                        `json:"code"`
-	NameEn                 string                        `json:"name_en"`
-	NameAr                 string                        `json:"name_ar"`
-	GoalID                 *uuid.UUID                    `json:"goal_id"`
-	Goal                   *GoalBriefResponse            `json:"goal,omitempty"`
-	OperationalObjectiveID *uuid.UUID                    `json:"operational_objective_id"`
-	OperationalObjective   *OperationalObjectiveResponse `json:"operational_objective,omitempty"`
-	ProcessID              *uuid.UUID                    `json:"process_id"`
-	Process                *ProcessResponse              `json:"process,omitempty"`
-	AwardSubCriterionID    *uuid.UUID                    `json:"award_sub_criterion_id"`
-	AwardSubCriterion      *AwardSubCriterionResponse    `json:"award_sub_criterion,omitempty"`
-	PillarID               *uuid.UUID                    `json:"pillar_id"`
-	Pillar                 *PillarResponse               `json:"pillar,omitempty"`
-	DomainID               *uuid.UUID                    `json:"domain_id"`
-	Domain                 *DomainResponse               `json:"domain,omitempty"`
-	OwnerType              string                        `json:"owner_type"`
-	OwnerDeptID            *uuid.UUID                    `json:"owner_dept_id"`
-	OwnerDept              *DepartmentBriefResponse      `json:"owner_dept,omitempty"`
-	OwnerOrgID             *uuid.UUID                    `json:"owner_org_id"`
-	OwnerOrg               *KpiOrganizationResponse      `json:"owner_org,omitempty"`
-	OwningAgencyID         *uuid.UUID                    `json:"owning_agency_id"`
-	OwningAgency           *DepartmentBriefResponse      `json:"owning_agency,omitempty"`
-	Polarity               string                        `json:"polarity"`
-	ActivationStatus       string                        `json:"activation_status"`
-	DescriptionEn          string                        `json:"description_en"`
-	DescriptionAr          string                        `json:"description_ar"`
-	Formula                string                        `json:"formula"`
-	Baseline               float64                       `json:"baseline"`
-	UnitOfMeasure          string                        `json:"unit_of_measure"`
-	ReportingFrequency     string                        `json:"reporting_frequency"`
-	Lifecycle              string                        `json:"lifecycle"`
-	DataSource             string                        `json:"data_source"`
-	RelatedUnits           string                        `json:"related_units"`
-	Notes                  string                        `json:"notes"`
-	DocumentaFolderID      string                        `json:"documenta_folder_id"`
-	WorkflowInstanceID     *uuid.UUID                    `json:"workflow_instance_id"`
-	CreatedBy              *UserBrief                    `json:"created_by,omitempty"`
-	CreatedAt              time.Time                     `json:"created_at"`
-	UpdatedAt              time.Time                     `json:"updated_at"`
+	ID                      uuid.UUID                     `json:"id"`
+	Code                    string                        `json:"code"`
+	NameEn                  string                        `json:"name_en"`
+	NameAr                  string                        `json:"name_ar"`
+	GoalID                  *uuid.UUID                    `json:"goal_id"`
+	Goal                    *GoalBriefResponse            `json:"goal,omitempty"`
+	OperationalObjectiveID  *uuid.UUID                    `json:"operational_objective_id"`
+	OperationalObjective    *OperationalObjectiveResponse `json:"operational_objective,omitempty"`
+	ProcessID               *uuid.UUID                    `json:"process_id"`
+	Process                 *ProcessResponse              `json:"process,omitempty"`
+	AwardSubCriterionID     *uuid.UUID                    `json:"award_sub_criterion_id"`
+	AwardSubCriterion       *AwardSubCriterionResponse    `json:"award_sub_criterion,omitempty"`
+	Classification          string                        `json:"classification"`
+	PillarID                *uuid.UUID                    `json:"pillar_id"`
+	Pillar                  *PillarResponse               `json:"pillar,omitempty"`
+	DomainID                *uuid.UUID                    `json:"domain_id"`
+	Domain                  *DomainResponse               `json:"domain,omitempty"`
+	AwardKpiMeasureID       *uuid.UUID                    `json:"award_kpi_measure_id"`
+	AwardKpiMeasure         *AwardKpiMeasureResponse      `json:"award_kpi_measure,omitempty"`
+	OwnerType               string                        `json:"owner_type"`
+	OwnerDeptID             *uuid.UUID                    `json:"owner_dept_id"`
+	OwnerDept               *DepartmentBriefResponse      `json:"owner_dept,omitempty"`
+	OwnerOrgID              *uuid.UUID                    `json:"owner_org_id"`
+	OwnerOrg                *KpiOrganizationResponse      `json:"owner_org,omitempty"`
+	OwningAgencyID          *uuid.UUID                    `json:"owning_agency_id"`
+	OwningAgency            *DepartmentBriefResponse      `json:"owning_agency,omitempty"`
+	Polarity                string                        `json:"polarity"`
+	TargetRequirement       string                        `json:"target_requirement"`
+	ActivationStatus        string                        `json:"activation_status"`
+	DescriptionEn           string                        `json:"description_en"`
+	DescriptionAr           string                        `json:"description_ar"`
+	Formula                 string                        `json:"formula"`
+	Baseline                float64                       `json:"baseline"`
+	UnitOfMeasure           string                        `json:"unit_of_measure"`
+	ReportingFrequency      string                        `json:"reporting_frequency"`
+	Lifecycle               string                        `json:"lifecycle"`
+	DataSource              string                        `json:"data_source"`
+	RelatedDepartments      []DepartmentBriefResponse     `json:"related_departments"`
+	Notes                   string                        `json:"notes"`
+	DocumentaFolderID       string                        `json:"documenta_folder_id"`
+	CurveDescription        string                        `json:"curve_description"`
+	ShortcomingsDescription string                        `json:"shortcomings_description"`
+	ProposedImprovement     string                        `json:"proposed_improvement"`
+	WorkflowInstanceID      *uuid.UUID                    `json:"workflow_instance_id"`
+	CreatedBy               *UserBrief                    `json:"created_by,omitempty"`
+	CreatedAt               time.Time                     `json:"created_at"`
+	UpdatedAt               time.Time                     `json:"updated_at"`
 }
 
 func (k *AwardKPI) ToResponse() AwardKPIResponse {
 	resp := AwardKPIResponse{
-		ID:                     k.ID,
-		Code:                   k.Code,
-		NameEn:                 k.NameEn,
-		NameAr:                 k.NameAr,
-		GoalID:                 k.GoalID,
-		OperationalObjectiveID: k.OperationalObjectiveID,
-		ProcessID:              k.ProcessID,
-		AwardSubCriterionID:    k.AwardSubCriterionID,
-		PillarID:               k.PillarID,
-		DomainID:               k.DomainID,
-		OwnerType:              k.OwnerType,
-		OwnerDeptID:            k.OwnerDeptID,
-		OwnerOrgID:             k.OwnerOrgID,
-		OwningAgencyID:         k.OwningAgencyID,
-		Polarity:               k.Polarity,
-		ActivationStatus:       k.ActivationStatus,
-		DescriptionEn:          k.DescriptionEn,
-		DescriptionAr:          k.DescriptionAr,
-		Formula:                k.Formula,
-		Baseline:               k.Baseline,
-		UnitOfMeasure:          k.UnitOfMeasure,
-		ReportingFrequency:     k.ReportingFrequency,
-		Lifecycle:              k.Lifecycle,
-		DataSource:             k.DataSource,
-		RelatedUnits:           k.RelatedUnits,
-		Notes:                  k.Notes,
-		DocumentaFolderID:      k.DocumentaFolderID,
-		WorkflowInstanceID:     k.WorkflowInstanceID,
-		CreatedAt:              k.CreatedAt,
-		UpdatedAt:              k.UpdatedAt,
+		ID:                      k.ID,
+		Code:                    k.Code,
+		NameEn:                  k.NameEn,
+		NameAr:                  k.NameAr,
+		GoalID:                  k.GoalID,
+		OperationalObjectiveID:  k.OperationalObjectiveID,
+		ProcessID:               k.ProcessID,
+		AwardSubCriterionID:     k.AwardSubCriterionID,
+		Classification:          k.Classification,
+		PillarID:                k.PillarID,
+		DomainID:                k.DomainID,
+		AwardKpiMeasureID:       k.AwardKpiMeasureID,
+		OwnerType:               k.OwnerType,
+		OwnerDeptID:             k.OwnerDeptID,
+		OwnerOrgID:              k.OwnerOrgID,
+		OwningAgencyID:          k.OwningAgencyID,
+		Polarity:                k.Polarity,
+		TargetRequirement:       k.TargetRequirement,
+		ActivationStatus:        k.ActivationStatus,
+		DescriptionEn:           k.DescriptionEn,
+		DescriptionAr:           k.DescriptionAr,
+		Formula:                 k.Formula,
+		Baseline:                k.Baseline,
+		UnitOfMeasure:           k.UnitOfMeasure,
+		ReportingFrequency:      k.ReportingFrequency,
+		Lifecycle:               k.Lifecycle,
+		DataSource:              k.DataSource,
+		Notes:                   k.Notes,
+		DocumentaFolderID:       k.DocumentaFolderID,
+		CurveDescription:        k.CurveDescription,
+		ShortcomingsDescription: k.ShortcomingsDescription,
+		ProposedImprovement:     k.ProposedImprovement,
+		WorkflowInstanceID:      k.WorkflowInstanceID,
+		CreatedAt:               k.CreatedAt,
+		UpdatedAt:               k.UpdatedAt,
+	}
+	resp.RelatedDepartments = make([]DepartmentBriefResponse, 0, len(k.RelatedDepartments))
+	for _, d := range k.RelatedDepartments {
+		resp.RelatedDepartments = append(resp.RelatedDepartments, DepartmentBriefResponse{ID: d.ID, Name: d.Name, Code: d.Code})
 	}
 	if k.Goal != nil {
 		resp.Goal = ToGoalBriefResponse(k.Goal)
@@ -629,6 +715,10 @@ func (k *AwardKPI) ToResponse() AwardKPIResponse {
 	if k.Domain != nil {
 		r := k.Domain.ToResponse()
 		resp.Domain = &r
+	}
+	if k.AwardKpiMeasure != nil {
+		r := k.AwardKpiMeasure.ToResponse()
+		resp.AwardKpiMeasure = &r
 	}
 	if k.OwnerDept != nil {
 		resp.OwnerDept = ToDepartmentBriefResponse(k.OwnerDept)

@@ -68,6 +68,7 @@ func NewReadyToCloseService(
 
 // CreateEntry records a Ready-to-Close entry and updates the incident's expiry fields.
 func (s *readyToCloseService) CreateEntry(ctx context.Context, incidentID uuid.UUID, duration, comment string, enteredBy uuid.UUID) error {
+	duration = models.NormalizeDurationLabel(duration) // store canonical English label
 	dur, err := s.ParseDuration(duration)
 	if err != nil {
 		return fmt.Errorf("invalid ready_to_close duration %q: %w", duration, err)
@@ -229,6 +230,7 @@ func (s *readyToCloseService) revertIncident(ctx context.Context, entry *models.
 			RevisionNumber:      revNum,
 			ActionType:          models.RevisionActionStatusChanged,
 			ActionDescription:   fmt.Sprintf("Automatic reversion: status changed from %s to %s (Partial Close expired)", oldStateName, newStateName),
+			ActionDescriptionAr: fmt.Sprintf("الرجوع التلقائي: تم تغيير الحالة من %s إلى %s (انتهاء صلاحية الإغلاق الجزئي)", oldStateName, newStateName),
 			Changes:             string(changesBytes),
 			PerformedByID:       systemUserID,
 			PerformedByRoles:    `["system"]`,
@@ -364,14 +366,15 @@ func (s *readyToCloseService) sendPreExpiryNotification(ctx context.Context, ent
 	).Scan(&revNum)
 
 	revision := &models.IncidentRevision{
-		IncidentID:        entry.IncidentID,
-		RevisionNumber:    revNum,
-		ActionType:        models.RevisionActionStatusChanged,
-		ActionDescription: fmt.Sprintf("Pre-expiry notification sent: Partial Close expires in %s (at %s)", timeStr, entry.ExpiresAt.Format("2006-01-02 15:04:05")),
-		Changes:           `[]`,
-		PerformedByID:     uuid.Nil,
-		PerformedByRoles:  `["system"]`,
-		CreatedAt:         now,
+		IncidentID:          entry.IncidentID,
+		RevisionNumber:      revNum,
+		ActionType:          models.RevisionActionStatusChanged,
+		ActionDescription:   fmt.Sprintf("Pre-expiry notification sent: Partial Close expires in %s (at %s)", timeStr, entry.ExpiresAt.Format("2006-01-02 15:04:05")),
+		ActionDescriptionAr: fmt.Sprintf("إشعار قبل انتهاء الصلاحية: ينتهي الإغلاق الجزئي في %s (في %s)", timeStr, entry.ExpiresAt.Format("2006-01-02 15:04:05")),
+		Changes:             `[]`,
+		PerformedByID:       uuid.Nil,
+		PerformedByRoles:    `["system"]`,
+		CreatedAt:           now,
 	}
 	s.db.WithContext(ctx).Create(revision)
 
@@ -391,7 +394,7 @@ func (s *readyToCloseService) GetDurationOptionsForState(state *models.WorkflowS
 // ParseDuration converts a human-readable duration label into a time.Duration.
 // Supported formats: "N Day(s)", "N Week(s)", "N Month(s)", "N Hour(s)".
 func (s *readyToCloseService) ParseDuration(label string) (time.Duration, error) {
-	label = strings.TrimSpace(label)
+	label = models.NormalizeDurationLabel(label) // accept Arabic labels too
 	lower := strings.ToLower(label)
 
 	var n int
@@ -411,6 +414,8 @@ func (s *readyToCloseService) ParseDuration(label string) (time.Duration, error)
 		return time.Duration(n) * 24 * time.Hour, nil
 	case "week":
 		return time.Duration(n) * 7 * 24 * time.Hour, nil
+	case "year":
+		return time.Duration(n) * 365 * 24 * time.Hour, nil
 	case "month":
 		// Approximate month as 30 days
 		return time.Duration(n) * 30 * 24 * time.Hour, nil

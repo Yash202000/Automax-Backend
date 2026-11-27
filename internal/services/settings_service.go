@@ -12,10 +12,26 @@ import (
 type SettingsService interface {
 	GetSettings(ctx context.Context) (*models.SettingsResponse, error)
 	UpdateSettings(ctx context.Context, req *models.SettingsUpdateRequest) (*models.SettingsResponse, error)
+	// SetConfigService lets settings responses include the public "settings-attachments" configs.
+	SetConfigService(cs ConfigService)
 }
 
 type settingsService struct {
 	settingsRepo repository.SettingsRepository
+	configs      ConfigService // optional; see SetConfigService
+}
+
+func (s *settingsService) SetConfigService(cs ConfigService) { s.configs = cs }
+
+// toResponse converts the settings row and adds settings_attachments: the preview URL(s) of each
+// public config in the "settings-attachments" module, keyed by config name.
+func (s *settingsService) toResponse(ctx context.Context, settings *models.Settings) *models.SettingsResponse {
+	resp := settings.ToSettingsResponse()
+	resp.SettingsAttachments = map[string]any{}
+	if s.configs != nil {
+		resp.SettingsAttachments = models.SettingsAttachmentsMap(s.configs.ListPublicByModule(ctx, models.ConfigSettingsAttachmentsModule))
+	}
+	return resp
 }
 
 func NewSettingsService(settingsRepo repository.SettingsRepository) SettingsService {
@@ -31,7 +47,7 @@ func (s *settingsService) GetSettings(ctx context.Context) (*models.SettingsResp
 		return nil, err
 	}
 
-	return settings.ToSettingsResponse(), nil
+	return s.toResponse(ctx, settings), nil
 }
 
 // UpdateSettings updates the application settings
@@ -109,11 +125,31 @@ func (s *settingsService) UpdateSettings(ctx context.Context, req *models.Settin
 	if req.DefaultLanguage != nil {
 		settings.DefaultLanguage = *req.DefaultLanguage
 	}
+	if req.Municipality1Name != nil {
+		settings.Municipality1Name = *req.Municipality1Name
+	}
+	if req.Municipality2Name != nil {
+		settings.Municipality2Name = *req.Municipality2Name
+	}
+	if req.Municipality3Name != nil {
+		settings.Municipality3Name = *req.Municipality3Name
+	}
 	if req.ShowEvaluateButton != nil {
 		settings.ShowEvaluateButton = *req.ShowEvaluateButton
 	}
+	if req.ErrorLogRetentionValue != nil {
+		settings.ErrorLogRetentionValue = *req.ErrorLogRetentionValue
+	}
+	if req.ErrorLogRetentionUnit != nil {
+		settings.ErrorLogRetentionUnit = *req.ErrorLogRetentionUnit
+	}
 	if req.AuthSetting != nil {
-		settings.TotpEnabled = req.AuthSetting.TotpEnabled
+		if req.AuthSetting.TotpEnabled != nil {
+			settings.TotpEnabled = *req.AuthSetting.TotpEnabled
+		}
+		if req.AuthSetting.ShowForgotPassword != nil {
+			settings.ShowForgotPassword = *req.AuthSetting.ShowForgotPassword
+		}
 	}
 	if req.FieldSettings != nil {
 		fieldSettingsJSON, err := json.Marshal(req.FieldSettings)
@@ -128,5 +164,5 @@ func (s *settingsService) UpdateSettings(ctx context.Context, req *models.Settin
 		return nil, err
 	}
 
-	return settings.ToSettingsResponse(), nil
+	return s.toResponse(ctx, settings), nil
 }

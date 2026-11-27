@@ -197,15 +197,6 @@ type IncidentDraftListItem struct {
 	DaysToExpiry   *int `json:"days_to_expiry,omitempty"`
 }
 
-// MaskPhone hides all but the last three digits, e.g. "0501234567" -> "*******567".
-func MaskPhone(phone string) string {
-	phone = strings.TrimSpace(phone)
-	if len(phone) <= 3 {
-		return phone
-	}
-	return strings.Repeat("*", len(phone)-3) + phone[len(phone)-3:]
-}
-
 // IncidentDraftAttachment is a file uploaded to a draft. It is separate from
 // IncidentAttachment, which needs an incident. On publish the rows move to
 // incident_attachments pointing at the same stored object; on delete or expiry both

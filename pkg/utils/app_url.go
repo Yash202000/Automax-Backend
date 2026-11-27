@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/automax/backend/pkg/constants"
-	"github.com/google/uuid"
 )
 
 // Generate App URL from context and id
@@ -17,6 +16,18 @@ func GenerateAppURL(ctx context.Context) string {
 
 	url := protocol + "://" + hostname
 	return url
+}
+
+// RequestBaseURL returns "protocol://hostname" of the current request, taken from the context
+// the RequestContext middleware fills. It returns "" when the context has no request (background
+// jobs, tests), so callers fall back to relative paths instead of building "://".
+func RequestBaseURL(ctx context.Context) string {
+	hostname, _ := ctx.Value(constants.ContextKeys.HOSTNAME).(string)
+	protocol, _ := ctx.Value(constants.ContextKeys.PROTOCOL).(string)
+	if hostname == "" || protocol == "" {
+		return ""
+	}
+	return protocol + "://" + hostname
 }
 
 // When building the SMS link, encode the token
@@ -45,27 +56,4 @@ func BuildFeedbackLink(ctx context.Context, incidentID, feedbackID string, durat
 		incidentID,
 		url.QueryEscape(token),
 	)
-}
-
-// Generate App URL from context and id
-func GenerateAttachmentAppURL(ctx context.Context, attachmentID uuid.UUID) string {
-	hostname, _ := ctx.Value(constants.ContextKeys.HOSTNAME).(string)
-	protocol, _ := ctx.Value(constants.ContextKeys.PROTOCOL).(string)
-	token, _ := ctx.Value(constants.ContextKeys.Token).(string)
-
-	url := protocol + "://" + hostname + "/api/v1/calls/" + fmt.Sprint(attachmentID) + "/preview?token=" + token
-	return url
-}
-
-// GenerateCTIRecordingAppURL builds the token-bearing URL the frontend uses to
-// play/download a Cintrix-recorded call's audio, proxied via
-// GET /api/v1/cti/recording. Same "?token=" query-param auth pattern as
-// GenerateAttachmentAppURL, so it works directly in <audio src> / <a href>.
-func GenerateCTIRecordingAppURL(ctx context.Context, callUuid string) string {
-	hostname, _ := ctx.Value(constants.ContextKeys.HOSTNAME).(string)
-	protocol, _ := ctx.Value(constants.ContextKeys.PROTOCOL).(string)
-	token, _ := ctx.Value(constants.ContextKeys.Token).(string)
-
-	return protocol + "://" + hostname + "/api/v1/cti/recording?call_uuid=" +
-		url.QueryEscape(callUuid) + "&token=" + url.QueryEscape(token)
 }

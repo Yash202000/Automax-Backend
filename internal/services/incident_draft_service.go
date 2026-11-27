@@ -328,6 +328,7 @@ func (s *incidentDraftService) Publish(ctx context.Context, id, ownerID uuid.UUI
 			if rerr := s.incidentService.CreateRevision(ctx, incident.ID, models.RevisionActionCreated,
 				fmt.Sprintf("Created from draft %s (version %d, last updated %s)",
 					draft.DraftNumber, draft.Version, draft.UpdatedAt.UTC().Format("2006-01-02 15:04:05 UTC")),
+				fmt.Sprintf("تم الإنشاء من المسودة %s (الإصدار %d)", draft.DraftNumber, draft.Version),
 				draftRevisionChanges(draft), ownerID); rerr != nil {
 				log.Printf("[IncidentDraft] revision for draft %s failed: %v", draft.DraftNumber, rerr)
 			}

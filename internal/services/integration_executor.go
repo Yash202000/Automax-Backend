@@ -198,6 +198,9 @@ func (e *integrationExecutor) execute(
 		logEntry.Status = "failed"
 		logEntry.ErrorMessage = execErr.Error()
 		log.Printf("[integration] script %s (%s) failed for incident %s: %v", script.Name, script.ID, incident.IncidentNumber, execErr)
+		if triggerType != "test" {
+			LogIntegrationFailure(script.Name, script.ID.String(), incident.ID, incident.IncidentNumber, statusCode, execErr)
+		}
 	} else {
 		logEntry.Status = "success"
 		// Auto-create bridge record if the script has bridge_config set (http_request only).
@@ -265,6 +268,12 @@ func extractField(m map[string]interface{}, path string) string {
 // Non-string values (float64, []interface{}) are stored with their native types
 // so that JS scripts and the typed HTTP body resolver can use proper JSON types.
 func (e *integrationExecutor) buildIncidentContext(incident *models.Incident, fieldMappingsJSON string) map[string]interface{} {
+	// Nazaha: don't send an uncooperative reporter's details.
+	if models.IsReporterHidden(incident.CooperationStatus) {
+		hidden := *incident
+		models.HideReporter(&hidden)
+		incident = &hidden
+	}
 	ctx := map[string]interface{}{
 		"id":              incident.ID.String(),
 		"incident_number": incident.IncidentNumber,

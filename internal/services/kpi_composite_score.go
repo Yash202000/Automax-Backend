@@ -23,14 +23,19 @@ type MetricScoreBreakdown struct {
 	AchievementRaw *float64  `json:"achievement_raw"`
 	AchievementCap *float64  `json:"achievement_capped"`
 	WeightedResult *float64  `json:"weighted_result"`
+	// PerformanceStatus is the metric's status for the period (target
+	// thresholds / KPI band, see models.EvaluatePerformance).
+	PerformanceStatus string `json:"performance_status,omitempty"`
+	// Informational metrics are listed but never scored or weighted.
+	Informational bool `json:"informational,omitempty"`
 	// PeriodCode/Year/IsFallbackPeriod are only populated by
 	// ComputeCompositeScoreLatest, where each metric contributes its OWN
 	// most-recent-with-data period rather than one shared period — so the
 	// breakdown list stays legible about which period each row is actually
 	// showing when they don't all line up.
-	PeriodCode      string `json:"period_code,omitempty"`
-	Year            int    `json:"year,omitempty"`
-	IsFallbackPeriod bool  `json:"is_fallback_period,omitempty"`
+	PeriodCode       string `json:"period_code,omitempty"`
+	Year             int    `json:"year,omitempty"`
+	IsFallbackPeriod bool   `json:"is_fallback_period,omitempty"`
 }
 
 // CompositeScoreResult is the overall weighted KPI score for one period
@@ -40,10 +45,44 @@ type MetricScoreBreakdown struct {
 // computed from a subset of metrics would understate the score exactly the
 // way BR-09 says a missing period must not be treated as zero.
 type CompositeScoreResult struct {
-	HasData    bool                   `json:"has_data"`
-	RawScore   *float64               `json:"raw_score"`
-	CappedScore *float64              `json:"capped_score"`
-	Metrics    []MetricScoreBreakdown `json:"metrics"`
+	HasData     bool     `json:"has_data"`
+	RawScore    *float64 `json:"raw_score"`
+	CappedScore *float64 `json:"capped_score"`
+	// PerformanceStatus buckets RawScore with the KPI's band.
+	PerformanceStatus string                 `json:"performance_status,omitempty"`
+	Metrics           []MetricScoreBreakdown `json:"metrics"`
+}
+
+// scoreMetric fills row's target/achievement/status for one metric's period
+// Actual and reports whether it produced a weighted result. Informational
+// metrics are marked and never scored.
+func scoreMetric(db *gorm.DB, row *MetricScoreBreakdown, metric *models.KpiMetric, kpiCode string, actual float64, target *models.KpiAnnualTarget, capPercent float64) bool {
+	row.Target = &target.TargetValue
+	res := EvaluateMetricActual(db, kpiCode, metric.Direction, actual, target, capPercent)
+	row.PerformanceStatus = res.Status
+	if !res.Calculable {
+		return false
+	}
+	raw, capped := res.Raw, res.Capped
+	row.AchievementRaw = &raw
+	row.AchievementCap = &capped
+	// Weighted results and the overall raw score are built from each
+	// metric's RAW (uncapped) achievement, matching the doc's own worked
+	// table (section 8) exactly — e.g. 101.09% x 30% = 30.33%, not a
+	// pre-capped 100% x 30%. The cap (BR-11/AC-06) is applied once, to
+	// the FINAL composite score only, not to each metric before summing.
+	weightedRaw := math.Round(raw*(metric.Weight/100)*100) / 100
+	row.WeightedResult = &weightedRaw
+	return true
+}
+
+// compositeStatus buckets a composite raw score (already an achievement %)
+// with the KPI's band: judged as an actual against a target of 100.
+func compositeStatus(db *gorm.DB, kpiCode string, rawScore float64) string {
+	rules := PerformanceRulesFor(db, kpiCode, models.DirectionHigherIsBetter, nil)
+	hundred := 100.0
+	rules.Target = &hundred
+	return models.EvaluatePerformance(rawScore, rules, 0).Status
 }
 
 // ComputeCompositeScore combines every Active metric's Achievement (weighted)
@@ -59,6 +98,7 @@ func ComputeCompositeScore(db *gorm.DB, kpiID uuid.UUID, kpiCode, kpiType string
 
 	result := &CompositeScoreResult{HasData: true}
 	var rawSum, cappedSum float64
+	scored := 0
 
 	for _, metric := range metrics {
 		row := MetricScoreBreakdown{
@@ -67,6 +107,13 @@ func ComputeCompositeScore(db *gorm.DB, kpiID uuid.UUID, kpiCode, kpiType string
 			Baseline:   metric.BaselineValue,
 			Weight:     metric.Weight,
 		}
+
+		if models.NormalizeDirection(metric.Direction) == models.DirectionInformational {
+			row.Informational = true
+			result.Metrics = append(result.Metrics, row)
+			continue
+		}
+		scored++
 
 		rollup := AggregateMetricPeriod(db, &metric, kpiID, kpiType, year, periodCode, organizationID)
 		row.HasData = rollup.HasData
@@ -79,46 +126,23 @@ func ComputeCompositeScore(db *gorm.DB, kpiID uuid.UUID, kpiCode, kpiType string
 			continue
 		}
 
-		targetQuery := db.Where(
-			"kpi_code = ? AND kpi_type = ? AND metric_id = ? AND target_year = ? AND period_code = ? AND target_status = 'approved'",
-			kpiCode, kpiType, metric.ID, year, periodCode,
-		)
-		if organizationID != nil {
-			targetQuery = targetQuery.Where("organization_id = ?", *organizationID)
-		} else {
-			targetQuery = targetQuery.Where("organization_id IS NULL")
-		}
-		var target models.KpiAnnualTarget
-		if err := targetQuery.Order("version DESC").First(&target).Error; err != nil {
+		target, err := FindUsableTarget(db, kpiCode, kpiType, metric.ID, year, periodCode, organizationID)
+		if err != nil {
 			result.HasData = false
 			result.Metrics = append(result.Metrics, row)
 			continue
 		}
-		row.Target = &target.TargetValue
-
-		achievement := ComputeAchievementRawCapped(*rollup.Actual, target.TargetValue, metric.Direction, capPercent)
-		if achievement == nil {
+		if !scoreMetric(db, &row, &metric, kpiCode, *rollup.Actual, target, capPercent) {
 			result.HasData = false
 			result.Metrics = append(result.Metrics, row)
 			continue
 		}
-		row.AchievementRaw = &achievement.Raw
-		row.AchievementCap = &achievement.Capped
-
-		// Weighted results and the overall raw score are built from each
-		// metric's RAW (uncapped) achievement, matching the doc's own worked
-		// table (section 8) exactly — e.g. 101.09% x 30% = 30.33%, not a
-		// pre-capped 100% x 30%. The cap (BR-11/AC-06) is applied once, to
-		// the FINAL composite score only, not to each metric before summing.
-		weightedRaw := math.Round(achievement.Raw*(metric.Weight/100)*100) / 100
-		row.WeightedResult = &weightedRaw
-
-		rawSum += weightedRaw
+		rawSum += *row.WeightedResult
 
 		result.Metrics = append(result.Metrics, row)
 	}
 
-	if result.HasData && len(metrics) > 0 {
+	if result.HasData && scored > 0 {
 		rawSum = math.Round(rawSum*100) / 100
 		cappedSum = rawSum
 		if capPercent > 0 && cappedSum > capPercent {
@@ -126,7 +150,8 @@ func ComputeCompositeScore(db *gorm.DB, kpiID uuid.UUID, kpiCode, kpiType string
 		}
 		result.RawScore = &rawSum
 		result.CappedScore = &cappedSum
-	} else if len(metrics) == 0 {
+		result.PerformanceStatus = compositeStatus(db, kpiCode, rawSum)
+	} else if scored == 0 {
 		result.HasData = false
 	}
 
@@ -168,6 +193,12 @@ func ComputeCompositeScoreLatest(db *gorm.DB, kpiID uuid.UUID, kpiCode, kpiType 
 			IsFallbackPeriod: isFallback,
 		}
 
+		if models.NormalizeDirection(metric.Direction) == models.DirectionInformational {
+			row.Informational = true
+			result.Metrics = append(result.Metrics, row)
+			continue
+		}
+
 		rollup := AggregateMetricPeriod(db, &metric, kpiID, kpiType, year, periodCode, nil)
 		row.HasData = rollup.HasData
 		row.EntryCount = rollup.EntryCount
@@ -178,27 +209,12 @@ func ComputeCompositeScoreLatest(db *gorm.DB, kpiID uuid.UUID, kpiCode, kpiType 
 			continue
 		}
 
-		var target models.KpiAnnualTarget
-		if err := db.Where(
-			"kpi_code = ? AND kpi_type = ? AND metric_id = ? AND target_year = ? AND period_code = ? AND target_status = 'approved' AND organization_id IS NULL",
-			kpiCode, kpiType, metric.ID, year, periodCode,
-		).Order("version DESC").First(&target).Error; err != nil {
+		target, err := FindUsableTarget(db, kpiCode, kpiType, metric.ID, year, periodCode, nil)
+		if err != nil || !scoreMetric(db, &row, &metric, kpiCode, *rollup.Actual, target, capPercent) {
 			result.Metrics = append(result.Metrics, row)
 			continue
 		}
-		row.Target = &target.TargetValue
-
-		achievement := ComputeAchievementRawCapped(*rollup.Actual, target.TargetValue, metric.Direction, capPercent)
-		if achievement == nil {
-			result.Metrics = append(result.Metrics, row)
-			continue
-		}
-		row.AchievementRaw = &achievement.Raw
-		row.AchievementCap = &achievement.Capped
-
-		weightedRaw := math.Round(achievement.Raw*(metric.Weight/100)*100) / 100
-		row.WeightedResult = &weightedRaw
-		rawSum += weightedRaw
+		rawSum += *row.WeightedResult
 		anyData = true
 
 		result.Metrics = append(result.Metrics, row)
@@ -212,28 +228,25 @@ func ComputeCompositeScoreLatest(db *gorm.DB, kpiID uuid.UUID, kpiCode, kpiType 
 		}
 		result.RawScore = &rawSum
 		result.CappedScore = &cappedSum
+		result.PerformanceStatus = compositeStatus(db, kpiCode, rawSum)
 	}
 	result.HasData = anyData
 
 	return result, nil
 }
 
-// MetricWeightSumValid checks BR-07: the sum of an Active composite KPI's
-// metric weights must equal 100% before it can be activated. A KPI with no
-// metrics yet is not blocked here — that's a separate "can't activate an
-// empty KPI" concern, not a weight-sum one.
-func MetricWeightSumValid(db *gorm.DB, kpiID uuid.UUID, kpiType string) (bool, float64, error) {
+// ActiveMetricWeightSum returns how many Active metrics a KPI has and the sum
+// of their weights (rounded to 2 decimals), for the BR-07 activation gate:
+// a KPI needs at least one Active metric and weights summing to 100%.
+// Inactive metrics are excluded because they never contribute to the score.
+func ActiveMetricWeightSum(db *gorm.DB, kpiID uuid.UUID, kpiType string) (int, float64, error) {
 	var metrics []models.KpiMetric
 	if err := db.Where("kpi_id = ? AND kpi_type = ? AND metric_status = ?", kpiID, kpiType, "Active").Find(&metrics).Error; err != nil {
-		return false, 0, err
-	}
-	if len(metrics) == 0 {
-		return true, 0, nil
+		return 0, 0, err
 	}
 	var sum float64
 	for _, m := range metrics {
 		sum += m.Weight
 	}
-	sum = math.Round(sum*100) / 100
-	return math.Abs(sum-100) < 0.01, sum, nil
+	return len(metrics), math.Round(sum*100) / 100, nil
 }

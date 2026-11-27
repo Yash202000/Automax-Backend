@@ -84,6 +84,9 @@ const (
 	FailureCodeNetworkError     = "network_error"
 	FailureCodeAuthError        = "auth_error"
 	FailureCodeUnknown          = "unknown_error"
+
+	// SMS refused before reaching Amana: no template, template missing, or no provider_template_id.
+	FailureCodeTemplateNotConfigured = "template_not_configured"
 )
 
 // RecipientInfo stores individual recipient delivery status
@@ -96,6 +99,13 @@ type RecipientInfo struct {
 	ErrorMessage      string `json:"error_message,omitempty"`
 	FailureCode       string `json:"failure_code,omitempty"`        // normalized reason, see FailureCode* constants
 	ProviderMessageID string `json:"provider_message_id,omitempty"` // Twilio SID / Meta message id — used to match delivery status webhook callbacks back to this recipient
+
+	// Amana template-SMS audit trail: exactly what was handed to SendSMSByTemplateID and what came back.
+	ProviderTemplateID    string   `json:"provider_template_id,omitempty"`    // Amana TemplateID sent
+	ProviderVariables     []string `json:"provider_variables,omitempty"`      // ordered Variables[] sent
+	ProviderVariableNames []string `json:"provider_variable_names,omitempty"` // variable names, same order as ProviderVariables (keeps key→value mapping for resends)
+	ProviderStatusCode    int      `json:"provider_status_code,omitempty"`    // HTTP status returned by Amana
+	ProviderResponse      string   `json:"provider_response,omitempty"`       // trimmed response body
 }
 
 type MetaErrorResponse struct {
@@ -341,6 +351,42 @@ type NotificationMonitoringFilter struct {
 }
 
 // ToNotificationLogResponse converts NotificationLog to response
+// MaskPhone keeps only the last 3 digits of a phone number (anything shorter is fully masked).
+func MaskPhone(p string) string {
+	r := []rune(p)
+	if len(r) <= 3 {
+		return "***"
+	}
+	out := make([]rune, len(r))
+	for i := range r {
+		if i < len(r)-3 {
+			out[i] = '*'
+		} else {
+			out[i] = r[i]
+		}
+	}
+	return string(out)
+}
+
+// maskedRecipients returns a copy of the recipients with phone numbers masked, for SMS/WhatsApp logs.
+// The stored row keeps the full number (resend and webhook matching need it); only API output is masked.
+func maskedRecipients(channel string, in RecipientArray) RecipientArray {
+	if channel != "sms" && channel != "whatsapp" {
+		return in
+	}
+	out := make(RecipientArray, len(in))
+	for i, r := range in {
+		if r.Email != "" {
+			r.Email = MaskPhone(r.Email)
+		}
+		if r.Channel != "" {
+			r.Channel = MaskPhone(r.Channel)
+		}
+		out[i] = r
+	}
+	return out
+}
+
 func ToNotificationLogResponse(log *NotificationLog) NotificationLogResponse {
 	// Transform attachments to include API URLs
 	responseAttachments := make([]AttachmentInfo, len(log.Attachments))
@@ -380,6 +426,11 @@ func ToNotificationLogResponse(log *NotificationLog) NotificationLogResponse {
 		}
 	}
 
+	from := log.From
+	if (log.Channel == "sms" || log.Channel == "whatsapp") && from != "" {
+		from = MaskPhone(from)
+	}
+
 	return NotificationLogResponse{
 		ID:             log.ID,
 		Channel:        log.Channel,
@@ -387,10 +438,10 @@ func ToNotificationLogResponse(log *NotificationLog) NotificationLogResponse {
 		Category:       log.Category,
 		TemplateCode:   log.TemplateCode,
 		Language:       log.Language,
-		Recipients:     log.Recipients,
+		Recipients:     maskedRecipients(log.Channel, log.Recipients),
 		CC:             log.CC,
 		BCC:            log.BCC,
-		From:           log.From,
+		From:           from,
 		Subject:        log.Subject,
 		SubjectAr:      log.SubjectAr,
 		Body:           log.Body,

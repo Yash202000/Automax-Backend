@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,7 +18,6 @@ import (
 	"github.com/automax/backend/internal/repository"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
-	internalUtils "github.com/automax/backend/internal/utils"
 	"github.com/automax/backend/pkg/constants"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/automax/backend/pkg/utils"
@@ -44,6 +44,9 @@ type IncidentHandler struct {
 	lookupRepo          repository.LookupRepository
 	validator           *validator.Validate
 	cfg                 *config.Config
+	configAttachments   *services.ConfigAttachmentService
+	actionLogSvc        services.ActionLogService
+	notificationService *services.NotificationService
 }
 
 func NewIncidentHandler(service services.IncidentService, userService services.UserService, userRepo repository.UserRepository, incidentRepo repository.IncidentRepository, workflowRepo repository.WorkflowRepository, locationRepo repository.LocationRepository, classificationRepo repository.ClassificationRepository, storage *storage.MinIOStorage, presenceService services.PresenceService, cfg *config.Config) *IncidentHandler {
@@ -62,6 +65,19 @@ func NewIncidentHandler(service services.IncidentService, userService services.U
 	}
 }
 
+// SetNotificationService wires in the notification service used for template-based SMS.
+func (h *IncidentHandler) SetNotificationService(svc *services.NotificationService) {
+	h.notificationService = svc
+}
+
+// maskMobileForLog keeps only the last 3 digits so logs never carry a full phone number.
+func maskMobileForLog(m string) string {
+	if len(m) <= 3 {
+		return "***"
+	}
+	return strings.Repeat("*", len(m)-3) + m[len(m)-3:]
+}
+
 // SetIvrSmsLinkRepo wires in the IvrSmsLinkRepository for SMS link lifecycle management.
 func (h *IncidentHandler) SetIvrSmsLinkRepo(repo repository.IvrSmsLinkRepository) {
 	h.ivrSmsLinkRepo = repo
@@ -75,6 +91,22 @@ func (h *IncidentHandler) SetPublicFeedbackRepo(repo repository.IncidentPublicFe
 // SetReadyToCloseService wires in the ReadyToCloseService for duration-options endpoint.
 func (h *IncidentHandler) SetReadyToCloseService(svc services.ReadyToCloseService) {
 	h.readyToCloseService = svc
+}
+
+// SetActionLogService wires in the action log used to audit combined report generation.
+func (h *IncidentHandler) SetActionLogService(svc services.ActionLogService) { h.actionLogSvc = svc }
+
+// SetConfigAttachmentService wires in the attachment-config reader used for report logos.
+func (h *IncidentHandler) SetConfigAttachmentService(svc *services.ConfigAttachmentService) {
+	h.configAttachments = svc
+}
+
+// reportLogo returns the base64 logo stored in attachment config report-attachments/<name>, or "".
+func (h *IncidentHandler) reportLogo(ctx context.Context, name string) string {
+	if h.configAttachments == nil {
+		return ""
+	}
+	return h.configAttachments.FirstImageBase64(ctx, "report", name)
 }
 
 // SetLookupRepo wires in the LookupRepository for custom field category resolution.
@@ -92,7 +124,12 @@ func (h *IncidentHandler) GetReadyToCloseDurationOptions(c *fiber.Ctx) error {
 			"error":   i18n.T(c.UserContext(), "ready_to_close_service_unavailable"),
 		})
 	}
-	options := h.readyToCloseService.GetDurationOptionsForState(nil)
+	options := append([]string(nil), h.readyToCloseService.GetDurationOptionsForState(nil)...)
+	if lang, _ := c.Locals(constants.ContextKeys.ACCEPT_LANGUAGE).(string); lang == "ar" {
+		for i, o := range options {
+			options[i] = models.LocalizeDurationLabelAr(o)
+		}
+	}
 	return c.JSON(fiber.Map{
 		"success": true,
 		"data":    options,
@@ -127,6 +164,8 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 	}
 
 	// Parse query parameters
+	req.CallerIdentityText = strings.TrimSpace(req.CallerIdentityText)
+	req.CooperationStatus = strings.ToLower(strings.TrimSpace(req.CooperationStatus))
 	validationErrors := validation.ValidateStruct(c.UserContext(), &req)
 
 	if req.AlternateMobile != "" && utils.SameMobile(req.AlternateMobile, req.ReporterPhone) {
@@ -134,6 +173,18 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 			validationErrors = map[string]string{}
 		}
 		validationErrors["alternate_mobile"] = i18n.T(c.UserContext(), "alternate_mobile_same_as_primary")
+	}
+
+	// Nazaha fields are checked for Nazaha and dropped for other clients.
+	if h.cfg.IsNazaha() {
+		if validationErrors == nil {
+			validationErrors = map[string]string{}
+		}
+		if err := h.prepareNazahaCreate(c.UserContext(), &req, validationErrors); err != nil {
+			return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
+		}
+	} else {
+		req.ClearNazahaFields()
 	}
 
 	if strings.EqualFold(strings.TrimSpace(h.cfg.ClientCode), constants.CLIENT_CODE.EPM940) {
@@ -186,7 +237,32 @@ func (h *IncidentHandler) CreateIncident(c *fiber.Ctx) error {
 			errors.Is(err, services.ErrClassificationNotSelectable):
 			return ErrorResponseWithKey(c, fiber.StatusBadRequest, err.Error(), req.Source)
 
+		// Nazaha: report a workflow without states as a bad request.
+		case h.cfg.IsNazaha() && errors.Is(err, services.ErrEmptyWorkflow):
+			return ErrorResponseWithKey(c, fiber.StatusBadRequest, err.Error(), req.Source)
+
+		// Per-workflow required-field failures discovered after the workflow
+		// was resolved. Return the same {"errors": {...}} shape as struct
+		// validation so the create form can highlight the field.
 		default:
+			var fieldErrors services.IncidentFieldErrors
+			if errors.As(err, &fieldErrors) {
+				if h.isEpmPortalSource(req.Source) {
+					parts := make([]string, 0, len(fieldErrors))
+					for field, msg := range fieldErrors {
+						parts = append(parts, fmt.Sprintf("%s: %v", field, msg))
+					}
+					return c.Status(fiber.StatusBadRequest).JSON(utils.ErrorCodeResponse{
+						Success:   false,
+						ErrorCode: "VALIDATION_ERROR",
+						Error:     strings.Join(parts, "; "),
+					})
+				}
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+					"success": false,
+					"errors":  fieldErrors,
+				})
+			}
 			return ErrorResponseWithKey(c, fiber.StatusInternalServerError, "internal_server_error", req.Source)
 		}
 	}
@@ -274,6 +350,8 @@ func parseIncidentSearchBodyExtras(c *fiber.Ctx, filter *models.IncidentFilter) 
 	if len(body.CustomFieldFilters) > 0 {
 		filter.CustomFieldFilters = body.CustomFieldFilters
 	}
+
+	filter.CooperationStatus = strings.ToLower(strings.TrimSpace(filter.CooperationStatus))
 
 	loc := utils.ResolveTimezone(body.Timezone)
 	if body.StartDateStr != "" && filter.StartDate == nil {
@@ -506,7 +584,7 @@ func (h *IncidentHandler) applyUserAccessScope(filter *models.IncidentFilter, us
 	// No explicit department filter requested -> the resulting DepartmentID
 	// comes purely from the user's scope, so this user's own incidents still
 	// in their workflow's initial state (not yet triaged to a department)
-	// should still be visible. Gated on state_type='initial' in the repo query.
+	// should still be visible (reporter/creator/assignee only, see repo query).
 	noExplicitDeptFilter := len(filter.DepartmentID) == 0
 	filter.DepartmentID = intersectScope(userDeptStrs, filter.DepartmentID)
 	if noExplicitDeptFilter && len(userDeptStrs) > 0 {
@@ -557,12 +635,12 @@ func (h *IncidentHandler) checkUserAccessToIncident(c *fiber.Ctx, incident *mode
 		}
 	}
 
-	// Incidents still in their workflow's initial state haven't been triaged
-	// to a department yet, so department scope can't be evaluated against
-	// them. Let the reporter/assignee through in that window; once the
-	// incident leaves its initial state, department scoping applies as usual
-	// (including denying access if department_id is still nil by then).
-	isInitialState := incident.CurrentState != nil && incident.CurrentState.StateType == "initial"
+	// Incidents with no department can't be evaluated against department scope.
+	// That is expected while still in the initial state, or once closed without
+	// ever being triaged (initial -> terminal). Let the reporter/creator/assignee
+	// through in those states; in a normal mid-workflow state it is still denied.
+	isInitialOrTerminal := incident.CurrentState != nil &&
+		(incident.CurrentState.StateType == "initial" || incident.CurrentState.StateType == "terminal")
 
 	if len(userDeptIDs) > 0 {
 		if incident.DepartmentID != nil {
@@ -576,10 +654,11 @@ func (h *IncidentHandler) checkUserAccessToIncident(c *fiber.Ctx, incident *mode
 			if !found {
 				return false
 			}
-		} else if !isInitialState {
+		} else if !isInitialOrTerminal {
 			return false
 		} else {
-			isReporter := incident.ReporterID != nil && *incident.ReporterID == userID
+			isReporter := (incident.ReporterID != nil && *incident.ReporterID == userID) ||
+				(incident.CreatedByID != nil && *incident.CreatedByID == userID)
 			isPrimaryAssignee := incident.AssigneeID != nil && *incident.AssigneeID == userID
 			isAssignee, _ := h.incidentRepo.IsUserAssignee(c.UserContext(), incident.ID, userID)
 			if !isReporter && !isPrimaryAssignee && !isAssignee {
@@ -643,7 +722,7 @@ func (h *IncidentHandler) scopeIncidentFilterToUser(c *fiber.Ctx, filter *models
 	// Skip department/classification/location scoping entirely for Citizen role — those scopes
 	// are designed for internal staff and would incorrectly exclude incidents that were triaged
 	// to departments/classifications the citizen is not assigned to.
-	if findErr == nil && user != nil && user.HasRole(constants.USER_ROLE.CITIZEN) {
+	if findErr == nil && user != nil && user.IsCitizenOnly(constants.USER_ROLE.CITIZEN) {
 		filter.ReporterID = []string{userID.String()}
 		roleIDs := make([]uuid.UUID, 0, len(user.Roles))
 		for _, r := range user.Roles {
@@ -762,6 +841,8 @@ func (h *IncidentHandler) scopeIncidentFilterToUser(c *fiber.Ctx, filter *models
 
 // listIncidentsCore contains the shared logic for both ListIncidents (GET) and SearchIncidents (POST).
 func (h *IncidentHandler) listIncidentsCore(c *fiber.Ctx, filter *models.IncidentFilter) error {
+	filter.CooperationStatus = strings.ToLower(strings.TrimSpace(filter.CooperationStatus))
+
 	if validationErrors := validation.ValidateStruct(c.UserContext(), filter); len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
@@ -1015,11 +1096,44 @@ func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(c.UserContext(), "invalid_request_body"))
 	}
 
-	if validationErrors := validation.ValidateStruct(c.UserContext(), &req); len(validationErrors) != 0 {
+	if req.CallerIdentityText != nil {
+		v := strings.TrimSpace(*req.CallerIdentityText)
+		req.CallerIdentityText = &v
+	}
+	if req.CooperationStatus != nil {
+		v := strings.ToLower(strings.TrimSpace(*req.CooperationStatus))
+		req.CooperationStatus = &v
+	}
+
+	validationErrors := validation.ValidateStruct(c.UserContext(), &req)
+	if req.CooperationStatus != nil {
+		switch *req.CooperationStatus {
+		case "", "cooperative", "uncooperative":
+		default:
+			if validationErrors == nil {
+				validationErrors = map[string]string{}
+			}
+			validationErrors["cooperation_status"] = i18n.T(c.UserContext(), "invalid_cooperation_status")
+		}
+	}
+	if len(validationErrors) != 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"success": false,
 			"errors":  validationErrors,
 		})
+	}
+	// Nazaha: check the Nazaha fields of the edit.
+	if h.cfg.IsNazaha() {
+		status, fieldErrors, err := h.checkNazahaEdit(c, id, &req)
+		if err != nil {
+			return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
+		}
+		if status == fiber.StatusForbidden {
+			return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "insufficient_permissions"))
+		}
+		if len(fieldErrors) != 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": fieldErrors})
+		}
 	}
 	clientCode := strings.TrimSpace(h.cfg.ClientCode)
 	if strings.EqualFold(req.Source, constants.INCIDENT_SOURCE.IVR) && strings.EqualFold(clientCode, constants.CLIENT_CODE.EPM940) {
@@ -1045,6 +1159,13 @@ func (h *IncidentHandler) UpdateIncident(c *fiber.Ctx) error {
 	if err != nil {
 		if errors.Is(err, services.ErrEditNotAllowed) {
 			return utils.ErrorResponse(c, fiber.StatusForbidden, i18n.T(c.UserContext(), "forbidden_no_edit"))
+		}
+		if errors.Is(err, services.ErrAssigneeLocked) {
+			return assigneeLockedResponse(c, err)
+		}
+		var fieldErrors services.IncidentFieldErrors
+		if errors.As(err, &fieldErrors) {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"success": false, "errors": fieldErrors})
 		}
 		// Hierarchy rejections are the caller's mistake, not a server fault. Each
 		// sentinel's message is its i18n key.
@@ -1507,6 +1628,16 @@ func (h *IncidentHandler) DownloadAttachment(c *fiber.Ctx) error {
 
 // Assignment
 
+// assigneeLockedResponse maps a lock_assignee rejection to 409 Conflict.
+func assigneeLockedResponse(c *fiber.Ctx, err error) error {
+	stateName := ""
+	var lockErr *services.AssigneeLockedError
+	if errors.As(err, &lockErr) {
+		stateName = lockErr.StateName
+	}
+	return utils.ErrorResponse(c, fiber.StatusConflict, i18n.Tf(c.UserContext(), services.ErrAssigneeLocked.Error(), stateName))
+}
+
 func (h *IncidentHandler) AssignIncident(c *fiber.Ctx) error {
 	incidentIDStr := c.Params("id")
 	incidentID, err := uuid.Parse(incidentIDStr)
@@ -1530,6 +1661,9 @@ func (h *IncidentHandler) AssignIncident(c *fiber.Ctx) error {
 
 	incident, err := h.service.AssignIncident(c.UserContext(), incidentID, assigneeID, userID)
 	if err != nil {
+		if errors.Is(err, services.ErrAssigneeLocked) {
+			return assigneeLockedResponse(c, err)
+		}
 		return utils.InternalErrorResponse(c, err, i18n.T(c.UserContext(), "internal_server_error"))
 	}
 
@@ -1646,7 +1780,7 @@ func (h *IncidentHandler) GetStatsV2(c *fiber.Ctx) error {
 			// AMAX-4262: Citizens should only see stats for incidents they created.
 			// Skip department/classification/location scoping — same rationale as
 			// scopeIncidentFilterToUser above.
-			if u.HasRole(constants.USER_ROLE.CITIZEN) {
+			if u.IsCitizenOnly(constants.USER_ROLE.CITIZEN) {
 				filter.ReporterID = []string{statsUserID.String()}
 				for _, r := range u.Roles {
 					filter.UserRoleIDs = append(filter.UserRoleIDs, r.ID)
@@ -2415,34 +2549,26 @@ func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
 	rawToken := utils.GenerateIncidentToken(incidentID.String(), ivrSmsDuration)
 	smsLink := utils.BuildSMSLinkFromToken(c.UserContext(), incidentID.String(), rawToken)
 
-	subject := i18n.T(c.UserContext(), "request_additional_info")
-	smsMessage := fmt.Sprintf(
-		"Dear Beneficiary,\nPlease complete your incident details through the link below and fill in the required information to proceed with your request:\n%s\nThank you for your cooperation.",
-		smsLink,
-	)
-
 	lang, ok := c.Locals(constants.ContextKeys.ACCEPT_LANGUAGE).(string)
 	if !ok || lang == "" {
 		lang = "en" // Default language
 	}
 
-	if lang == "ar" {
-		// subject = i18n.T(c.UserContext(), "request_additional_info_ar")
-		smsMessage = fmt.Sprintf(
-			"عزيزي المستفيد،\nنأمل استكمال بيانات البلاغ عبر الرابط أدناه وتعبئة الحقول المطلوبة، وذلك لاستكمال معالجة البلاغ:\n%s\nشكرًا لتعاونكم.",
-			smsLink,
-		)
-	}
-	fmt.Printf("REQUEST-INFO-SMS: lang %s, subject: %s, message: %s", lang, subject, smsMessage)
-
 	now := time.Now()
-	_, smsErr := internalUtils.SendSMS(c.UserContext(), mobile, smsMessage)
+	smsErr := h.notificationService.SendSMSTemplate(
+		c.UserContext(), "INCIDENT_REQUEST_INFO_SMS", lang, mobile,
+		map[string]string{
+			"sms_link":        smsLink,
+			"incident_number": incident.IncidentNumber,
+		},
+		&userID, &incidentID,
+	)
 	status := "sent"
 	if smsErr != nil {
 		status = "failed"
-		log.Printf("REQUEST-INFO-SMS: Failed for incident %s to %s: %v", incident.IncidentNumber, mobile, smsErr)
+		log.Printf("REQUEST-INFO-SMS: Failed for incident %s to %s: %v", incident.IncidentNumber, maskMobileForLog(mobile), smsErr)
 	} else {
-		log.Printf("REQUEST-INFO-SMS: Sent successfully to %s for incident %s", mobile, incident.IncidentNumber)
+		log.Printf("REQUEST-INFO-SMS: Sent via template to %s for incident %s", maskMobileForLog(mobile), incident.IncidentNumber)
 	}
 
 	// Track IVR SMS link: deactivate old links, create new record.
@@ -2460,30 +2586,8 @@ func (h *IncidentHandler) RequestCitizenInfo(c *fiber.Ctx) error {
 		_ = h.service.CreateRevision(c.UserContext(), incidentID,
 			models.RevisionActionIVRSmsSent,
 			fmt.Sprintf("Agent requested additional information from citizen via SMS to %s", mobile),
+			fmt.Sprintf("طلب الوكيل معلومات إضافية من المواطن عبر الرسائل القصيرة إلى %s", mobile),
 			nil, userID)
-	}
-
-	// Log notification
-	notification := &models.NotificationLog{
-		Channel:    "sms",
-		Direction:  "outbound",
-		Category:   "sent",
-		Language:   lang,
-		Recipients: models.RecipientArray{{Email: mobile, Type: "to", Status: status}},
-		Subject:    subject,
-		Body:       smsMessage,
-		Status:     status,
-		Provider:   "twilio",
-		IsRead:     false,
-		SentBy:     &userID,
-		SentAt:     &now,
-	}
-	if smsErr != nil {
-		notification.ErrorMessage = smsErr.Error()
-		notification.FailureCode = services.ClassifyFailureCode(smsErr)
-	}
-	if err := h.incidentRepo.CreateNotification(c.UserContext(), notification); err != nil {
-		log.Printf("REQUEST-INFO-SMS: Failed to log notification for incident %s: %v", incident.IncidentNumber, err)
 	}
 
 	if smsErr != nil {

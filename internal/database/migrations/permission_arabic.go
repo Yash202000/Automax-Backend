@@ -12,6 +12,7 @@ var permissionModuleArabic = map[string]string{
 	"application-links":      "روابط التطبيقات",
 	"benchmark":              "المعايير المرجعية",
 	"call-logs":              "سجلات المكالمات",
+	"call-recordings":        "تسجيلات المكالمات",
 	"caller-sentiment":       "مشاعر المتصلين",
 	"categories":             "الفئات",
 	"classifications":        "التصنيفات",
@@ -20,7 +21,9 @@ var permissionModuleArabic = map[string]string{
 	"corrective_action":      "الإجراءات التصحيحية",
 	"dashboard":              "لوحة المعلومات",
 	"departments":            "الإدارات",
+	"error-logs":             "سجل الأخطاء",
 	"escalation-groups":      "مجموعات التصعيد",
+	"escalation-logs":        "سجل التصعيد",
 	"escalation-policies":    "سياسات التصعيد",
 	"extensions":             "التحويلات الهاتفية",
 	"goals":                  "الأهداف",
@@ -74,6 +77,9 @@ var permissionNameArabic = map[string]struct{ Name, Description string }{
 	"call-logs:update":   {"تحديث سجلات المكالمات", "تحديث سجلات المكالمات"},
 	"call-logs:delete":   {"حذف سجلات المكالمات", "حذف سجلات المكالمات"},
 
+	// Call recording history
+	"call-recordings:history": {"عرض سجل تسجيلات المكالمات", "عرض من استمع إلى تسجيلات المكالمات أو قام بتنزيلها"},
+
 	// Categories
 	"categories:view":   {"عرض الفئات", "عرض الفئات"},
 	"categories:create": {"إنشاء الفئات", "إنشاء الفئات"},
@@ -120,6 +126,10 @@ var permissionNameArabic = map[string]struct{ Name, Description string }{
 	"departments:delete": {"حذف الإدارات", "حذف الإدارات"},
 
 	// Escalation
+	"error-logs:view":                {"عرض سجل الأخطاء", "عرض قائمة سجل الأخطاء وتفاصيلها"},
+	"error-logs:update":              {"تحديث حالة الخطأ", "تغيير حالة الخطأ وإضافة ملاحظات"},
+	"error-logs:export":              {"تصدير سجل الأخطاء", "تصدير قائمة سجل الأخطاء المصفاة"},
+	"error-logs:view_technical":      {"عرض التفاصيل الفنية للأخطاء", "عرض التفاصيل الفنية لسجلات الأخطاء"},
 	"escalation-groups:view":         {"عرض مجموعات التصعيد", "عرض قائمة مجموعات التصعيد وتفاصيلها"},
 	"escalation-groups:create":       {"إنشاء مجموعة تصعيد", "إنشاء مجموعات تصعيد جديدة"},
 	"escalation-groups:update":       {"تحديث مجموعة التصعيد", "تحديث إعدادات مجموعة التصعيد"},
@@ -127,6 +137,8 @@ var permissionNameArabic = map[string]struct{ Name, Description string }{
 	"escalation-groups:assign_users": {"إسناد المستخدمين إلى مجموعة التصعيد", "إضافة المستخدمين إلى مجموعات التصعيد أو إزالتهم منها"},
 	"escalation-groups:manage_rules": {"إدارة قواعد التصعيد", "إعداد قواعد تكرار التصعيد والقناة والتصنيف"},
 	"escalation-policies:create":     {"إنشاء سياسة تصعيد", "إنشاء سياسات تصعيد جديدة"},
+	"escalation-logs:view":           {"عرض سجل التصعيد", "عرض سجل التصعيد وسجل التصعيد الخاص بكل بلاغ"},
+	"escalation-logs:export":         {"تصدير سجل التصعيد", "تصدير سجل التصعيد المصفى إلى ملف Excel"},
 
 	// Extensions
 	"extensions:view":    {"عرض التحويلات الهاتفية", "عرض التحويلات الهاتفية وحالة الإسناد"},

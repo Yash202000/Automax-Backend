@@ -638,6 +638,7 @@ func (h *RoleHandler) Import(c *fiber.Ctx) error {
 		imported++
 	}
 
+	utils.ReportImportErrors(c, errors)
 	return utils.SuccessResponse(c, fiber.StatusOK, i18n.T(c.UserContext(), "import_completed"), map[string]interface{}{
 		"imported": imported,
 		"skipped":  skipped,

@@ -2,14 +2,70 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math"
+	"strings"
 	"time"
 
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/pkg/i18n"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
+
+// Errors returned by the KPI Workflow service so handlers can answer with
+// the right status: ErrKpiDictionaryNotFound -> 404,
+// ErrKpiTransitionForbidden -> 403, ErrKpiTransitionInvalid -> 400 (unknown
+// transition, transition from another state/workflow, BR-07 gate).
+var (
+	ErrKpiDictionaryNotFound  = errors.New("kpi not found")
+	ErrKpiTransitionForbidden = errors.New("kpi transition not allowed for this user")
+	ErrKpiTransitionInvalid   = errors.New("invalid kpi transition")
+)
+
+// kpiWorkflowError wraps a sentinel with the user-facing message.
+type kpiWorkflowError struct {
+	kind error
+	msg  string
+}
+
+func (e *kpiWorkflowError) Error() string { return e.msg }
+func (e *kpiWorkflowError) Unwrap() error { return e.kind }
+
+func kpiWFErr(kind error, format string, args ...interface{}) error {
+	return &kpiWorkflowError{kind: kind, msg: fmt.Sprintf(format, args...)}
+}
+
+// kpiTableFor returns the dictionary table of a KPI type.
+func kpiTableFor(kpiType string) string {
+	switch kpiType {
+	case models.KPITypeOperational:
+		return "operational_kpis"
+	case models.KPITypeAward:
+		return "award_kpis"
+	default:
+		return "strategic_kpis"
+	}
+}
+
+// lockDictionaryKpi takes a row lock on the (non-deleted) KPI so concurrent
+// workflow operations on the same KPI serialize. Returns
+// ErrKpiDictionaryNotFound when the KPI does not exist.
+func lockDictionaryKpi(tx *gorm.DB, kpiType string, kpiID uuid.UUID) error {
+	var row struct{ ID uuid.UUID }
+	if err := tx.Table(kpiTableFor(kpiType)).Select("id").
+		Where("id = ? AND deleted_at IS NULL", kpiID).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Limit(1).Scan(&row).Error; err != nil {
+		return err
+	}
+	if row.ID == uuid.Nil {
+		return kpiWFErr(ErrKpiDictionaryNotFound, "KPI not found")
+	}
+	return nil
+}
 
 // The KPI Workflow ("Draft->Reviewed->Approved->Active->Closed") is looked
 // up by KpiWorkflowService.kpiDictionaryWorkflowCode (a Workflow.Code,
@@ -102,14 +158,21 @@ func (s *KpiWorkflowService) InitiateKpiDictionaryWorkflow(ctx context.Context, 
 // whichever of the 5 KPI Workflow states the KPI's existing activation_status
 // already names (all pre-existing demo rows say "active", a valid state-4
 // code), rather than always resetting to Draft.
+//
+// The caller must hold the KPI's row lock (lockDictionaryKpi) in tx, so two
+// concurrent first calls cannot both create an instance; use
+// getOrCreateDictionaryWorkflowInstance outside a transaction.
 func (s *KpiWorkflowService) ensureDictionaryWorkflowInstance(ctx context.Context, tx *gorm.DB, kpiType string, kpiID uuid.UUID, userID uuid.UUID) (*models.KpiWorkflowInstance, error) {
 	activationStatus, workflowInstanceID, err := loadDictionaryKpiState(tx.WithContext(ctx), kpiType, kpiID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, kpiWFErr(ErrKpiDictionaryNotFound, "KPI not found")
+	}
 	if err != nil {
-		return nil, fmt.Errorf("kpi not found: %w", err)
+		return nil, fmt.Errorf("loading kpi: %w", err)
 	}
 	if workflowInstanceID != nil {
 		var instance models.KpiWorkflowInstance
-		if err := tx.WithContext(ctx).First(&instance, *workflowInstanceID).Error; err != nil {
+		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).First(&instance, *workflowInstanceID).Error; err != nil {
 			return nil, fmt.Errorf("workflow instance not found: %w", err)
 		}
 		return &instance, nil
@@ -146,6 +209,37 @@ func (s *KpiWorkflowService) ensureDictionaryWorkflowInstance(ctx context.Contex
 		return nil, fmt.Errorf("failed to link workflow instance to kpi: %w", err)
 	}
 	return instance, nil
+}
+
+// getOrCreateDictionaryWorkflowInstance returns the KPI's workflow
+// instance, creating it (self-heal for KPIs that predate the KPI Workflow)
+// under the KPI's row lock so concurrent readers never create duplicates.
+// The common case — the instance already exists — takes no lock and writes
+// nothing.
+func (s *KpiWorkflowService) getOrCreateDictionaryWorkflowInstance(ctx context.Context, kpiType string, kpiID uuid.UUID, userID uuid.UUID) (*models.KpiWorkflowInstance, error) {
+	_, workflowInstanceID, err := loadDictionaryKpiState(s.db.WithContext(ctx), kpiType, kpiID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, kpiWFErr(ErrKpiDictionaryNotFound, "KPI not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if workflowInstanceID != nil {
+		var instance models.KpiWorkflowInstance
+		if err := s.db.WithContext(ctx).First(&instance, *workflowInstanceID).Error; err == nil {
+			return &instance, nil
+		}
+	}
+	var instance *models.KpiWorkflowInstance
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockDictionaryKpi(tx, kpiType, kpiID); err != nil {
+			return err
+		}
+		var err error
+		instance, err = s.ensureDictionaryWorkflowInstance(ctx, tx, kpiType, kpiID, userID)
+		return err
+	})
+	return instance, err
 }
 
 // userDictionaryRoleCodes loads the calling user's active role codes (plus
@@ -186,7 +280,7 @@ func userHasAnyAllowedRole(user *models.User, allowedRoles []models.Role) bool {
 // requirement is explicit that the available button depends on the user's
 // role, not just the KPI's state.
 func (s *KpiWorkflowService) GetAvailableKpiDictionaryTransitions(ctx context.Context, kpiType string, kpiID uuid.UUID, userID uuid.UUID) ([]models.WorkflowTransition, error) {
-	instance, err := s.ensureDictionaryWorkflowInstance(ctx, s.db, kpiType, kpiID, userID)
+	instance, err := s.getOrCreateDictionaryWorkflowInstance(ctx, kpiType, kpiID, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -219,85 +313,168 @@ func (s *KpiWorkflowService) GetAvailableKpiDictionaryTransitions(ctx context.Co
 // TransitionKpiDictionary executes a KPI Workflow transition on a KPI
 // dictionary row (Strategic/Operational/Award), enforcing: no skipping
 // states, and role authorization via the transition's configured
-// AllowedRoles. Returns the new activation_status (= the target state's
-// code) on success.
-//
-// Deliberately does NOT gate on metric-weight-sum (BR-07) — the old
-// activation_status-based TransitionKpiStatus mechanism did, but that check
-// was removed by product decision so a KPI can move Approved→Active
-// regardless of what its metrics' weights currently sum to.
+// AllowedRoles, and the BR-07 gate on entering Active (at least one Active
+// metric, weights summing to 100%). Returns the new activation_status
+// (= the target state's code) on success.
 func (s *KpiWorkflowService) TransitionKpiDictionary(ctx context.Context, kpiType string, kpiID uuid.UUID, req *models.MetricTransitionRequest, userID uuid.UUID) (string, error) {
 	transitionID, err := uuid.Parse(req.TransitionID)
 	if err != nil {
-		return "", fmt.Errorf("%s: %w", i18n.T(ctx, "invalid_transition_id_svc"), err)
+		return "", kpiWFErr(ErrKpiTransitionInvalid, "%s", i18n.T(ctx, "invalid_transition_id_svc"))
 	}
 
-	tx := s.db.Begin()
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
+	var newStatus string
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Lock the KPI row first: concurrent transitions (or a transition
+		// racing the lazy instance creation) on the same KPI serialize here,
+		// and each re-reads the instance's current state after the lock, so
+		// N identical requests produce exactly one state change.
+		if err := lockDictionaryKpi(tx, kpiType, kpiID); err != nil {
+			return err
 		}
-	}()
+		instance, err := s.ensureDictionaryWorkflowInstance(ctx, tx, kpiType, kpiID, userID)
+		if err != nil {
+			return err
+		}
 
-	instance, err := s.ensureDictionaryWorkflowInstance(ctx, tx, kpiType, kpiID, userID)
+		transition, err := s.workflowRepo.FindTransitionByIDWithRelations(ctx, transitionID)
+		if err != nil {
+			return kpiWFErr(ErrKpiTransitionInvalid, "%s", i18n.T(ctx, "transition_not_found"))
+		}
+		if transition.WorkflowID != instance.WorkflowID {
+			return kpiWFErr(ErrKpiTransitionInvalid, "transition does not belong to this KPI's workflow")
+		}
+		if transition.FromStateID != instance.CurrentStateID {
+			return kpiWFErr(ErrKpiTransitionInvalid, "%s", i18n.T(ctx, "transition_invalid_from_state"))
+		}
+		if !transition.IsActive {
+			return kpiWFErr(ErrKpiTransitionInvalid, "%s", i18n.T(ctx, "transition_not_found"))
+		}
+
+		user, err := s.loadUserForRoleCheck(ctx, userID)
+		if err != nil {
+			return fmt.Errorf("failed to load user: %w", err)
+		}
+		if !userHasAnyAllowedRole(user, transition.AllowedRoles) {
+			return kpiWFErr(ErrKpiTransitionForbidden, "you do not have a role authorized to perform the '%s' transition", transition.Name)
+		}
+
+		// BR-07: matched by the resolved TO state's code, not a hardcoded
+		// transition code, so it stays correct if "Activate" is ever renamed.
+		if transition.ToState != nil && transition.ToState.Code == models.KPIStatusActive {
+			count, sum, err := ActiveMetricWeightSum(tx, kpiID, kpiType)
+			if err != nil {
+				return fmt.Errorf("failed to validate metric weights: %w", err)
+			}
+			if count == 0 {
+				return kpiWFErr(ErrKpiTransitionInvalid, "%s", i18n.T(ctx, "kpi_activate_no_metrics"))
+			}
+			if math.Abs(sum-100) >= 0.01 {
+				return kpiWFErr(ErrKpiTransitionInvalid, "%s", i18n.Tf(ctx, "kpi_activate_weight_not_100", sum))
+			}
+		}
+
+		action := &models.KpiWorkflowAction{
+			WorkflowInstanceID: instance.ID,
+			TransitionID:       transitionID,
+			FromStateID:        instance.CurrentStateID,
+			ToStateID:          transition.ToStateID,
+			PerformedByID:      userID,
+			Comment:            req.Comment,
+			PerformedAt:        time.Now(),
+		}
+		if err := tx.Create(action).Error; err != nil {
+			return fmt.Errorf("failed to create workflow action: %w", err)
+		}
+
+		updates := map[string]interface{}{"current_state_id": transition.ToStateID}
+		if transition.ToState != nil && transition.ToState.StateType == "terminal" {
+			updates["status"] = models.KpiWFStatusCompleted
+		}
+		if err := tx.Model(&models.KpiWorkflowInstance{}).Where("id = ?", instance.ID).Updates(updates).Error; err != nil {
+			return fmt.Errorf("failed to update workflow instance state: %w", err)
+		}
+
+		newStatus = transition.ToState.Code
+		if err := updateDictionaryKpiWorkflow(tx, kpiType, kpiID, instance.ID, newStatus); err != nil {
+			return fmt.Errorf("failed to update kpi status: %w", err)
+		}
+		return nil
+	})
 	if err != nil {
-		tx.Rollback()
 		return "", err
 	}
+	return newStatus, nil
+}
 
-	transition, err := s.workflowRepo.FindTransitionByIDWithRelations(ctx, transitionID)
+// CancelKpiDictionaryWorkflow marks a deleted KPI's workflow instance
+// cancelled so it no longer shows as an active lifecycle. Pass the
+// transaction the KPI is deleted in.
+func CancelKpiDictionaryWorkflow(tx *gorm.DB, kpiID uuid.UUID) error {
+	return tx.Model(&models.KpiWorkflowInstance{}).
+		Where("entity_type = ? AND entity_id = ? AND status = ?", models.KpiWFEntityDictionary, kpiID.String(), models.KpiWFStatusActive).
+		Update("status", models.KpiWFStatusCancelled).Error
+}
+
+// CanEditKpiDefinition reports whether the user may edit (or delete) a KPI's
+// definition — its fields and metric configuration — in the KPI's current
+// KPI Workflow state, per that state's configured Editable Roles:
+//   - the Super Admin always may;
+//   - a terminal state (Closed) is read-only for everyone but the Administrator role;
+//   - otherwise the user needs one of the state's Editable Roles (seeded: every
+//     role in Draft/Reviewed/Approved, Administrator only in Active);
+//   - a state with no Editable Roles configured does not restrict editing.
+//
+// KPIs without a matching workflow state (legacy activation_status values)
+// are editable while draft/reviewed and admin-only otherwise. Returns the
+// state code for the error message.
+func (s *KpiWorkflowService) CanEditKpiDefinition(ctx context.Context, kpiType string, kpiID uuid.UUID, userID uuid.UUID) (bool, string, error) {
+	db := s.db.WithContext(ctx)
+	activationStatus, workflowInstanceID, err := loadDictionaryKpiState(db, kpiType, kpiID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, "", kpiWFErr(ErrKpiDictionaryNotFound, "KPI not found")
+	}
 	if err != nil {
-		tx.Rollback()
-		return "", fmt.Errorf("%s: %w", i18n.T(ctx, "transition_not_found"), err)
+		return false, "", err
 	}
-
-	if transition.WorkflowID != instance.WorkflowID {
-		tx.Rollback()
-		return "", fmt.Errorf("transition does not belong to this KPI's workflow")
-	}
-	if transition.FromStateID != instance.CurrentStateID {
-		tx.Rollback()
-		return "", fmt.Errorf("%s", i18n.T(ctx, "transition_invalid_from_state"))
-	}
-
 	user, err := s.loadUserForRoleCheck(ctx, userID)
 	if err != nil {
-		tx.Rollback()
-		return "", fmt.Errorf("failed to load user: %w", err)
+		return false, activationStatus, err
 	}
-	if !userHasAnyAllowedRole(user, transition.AllowedRoles) {
-		tx.Rollback()
-		return "", fmt.Errorf("you do not have a role authorized to perform the '%s' transition", transition.Name)
+	if user.IsSuperAdmin {
+		return true, activationStatus, nil
 	}
 
-	action := &models.KpiWorkflowAction{
-		WorkflowInstanceID: instance.ID,
-		TransitionID:       transitionID,
-		FromStateID:        instance.CurrentStateID,
-		ToStateID:          transition.ToStateID,
-		PerformedByID:      userID,
-		Comment:            req.Comment,
-		PerformedAt:        time.Now(),
+	var state models.WorkflowState
+	found := false
+	if workflowInstanceID != nil {
+		var instance models.KpiWorkflowInstance
+		if db.Select("current_state_id").First(&instance, *workflowInstanceID).Error == nil &&
+			db.Preload("EditableRoles").First(&state, instance.CurrentStateID).Error == nil {
+			found = true
+		}
 	}
-	if err := tx.WithContext(ctx).Create(action).Error; err != nil {
-		tx.Rollback()
-		return "", fmt.Errorf("failed to create workflow action: %w", err)
+	if !found && activationStatus != "" {
+		var wf models.Workflow
+		if db.Where("code = ? AND is_active = ?", s.kpiDictionaryWorkflowCode, true).First(&wf).Error == nil &&
+			db.Preload("EditableRoles").Where("workflow_id = ? AND code = ?", wf.ID, activationStatus).First(&state).Error == nil {
+			found = true
+		}
 	}
-
-	instance.CurrentStateID = transition.ToStateID
-	if err := tx.WithContext(ctx).Save(instance).Error; err != nil {
-		tx.Rollback()
-		return "", fmt.Errorf("failed to update workflow instance state: %w", err)
+	isAdmin := user.HasRole("admin")
+	if !found {
+		st := strings.ToLower(activationStatus)
+		return st == "" || st == models.KPIStatusDraft || st == models.KPIStatusReviewed || isAdmin, activationStatus, nil
 	}
-
-	newStatus := transition.ToState.Code
-	if err := updateDictionaryKpiWorkflow(tx.WithContext(ctx), kpiType, kpiID, instance.ID, newStatus); err != nil {
-		tx.Rollback()
-		return "", fmt.Errorf("failed to update kpi status: %w", err)
+	if state.StateType == "terminal" || state.Code == models.KPIStatusClosed {
+		return isAdmin, state.Code, nil
 	}
-
-	if err := tx.Commit().Error; err != nil {
-		return "", fmt.Errorf("failed to commit transaction: %w", err)
+	if len(state.EditableRoles) == 0 {
+		return true, state.Code, nil
 	}
-	return newStatus, nil
+	for _, r := range state.EditableRoles {
+		if user.HasRole(r.Code) {
+			return true, state.Code, nil
+		}
+	}
+	return false, state.Code, nil
 }

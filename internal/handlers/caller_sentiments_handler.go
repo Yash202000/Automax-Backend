@@ -41,12 +41,13 @@ func (h *CallerSentimentHandler) Create(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusUnauthorized, i18n.T(c.UserContext(), "user_not_authenticated"))
 	}
 	sentiment := &models.CallerSentiment{
-		ID:        uuid.New(),
-		CallerID:  CallerID.String(), // caller
-		CalleeID:  req.CalleeID,
-		CallUUID:  req.CallUUID,
-		Sentiment: req.Sentiment,
-		Feedback:  req.Feedback,
+		ID:         uuid.New(),
+		CallerID:   CallerID.String(), // caller
+		CalleeID:   req.CalleeID,
+		CallUUID:   req.CallUUID,
+		Sentiment:  req.Sentiment,
+		Feedback:   req.Feedback,
+		Evaluation: req.Evaluation,
 	}
 
 	if err := h.service.Create(c.UserContext(), sentiment); err != nil {

@@ -4,6 +4,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/automax/backend/pkg/constants"
 )
 
 type Config struct {
@@ -14,6 +16,8 @@ type Config struct {
 	MinIO                       MinIOConfig
 	JWT                         JWTConfig
 	LDAP                        LDAPConfig
+	ADBaseer                    ADBaseerConfig
+	Nafath                      NafathConfig
 	LoginRateLimit              LoginRateLimitConfig
 	FrontendURL                 string // env: FRONTEND_URL — base URL of the frontend app, used in notification links
 	SSOPrivateKey               string // env: SSO_RSA_PRIVATE_KEY (PEM, optional — auto-gen if empty)
@@ -47,6 +51,11 @@ type Config struct {
 	ChatbotURL                  string // env: CHATBOT_URL — URL of the chatbot (EPM940 ENV_CONFIGURATION lookup value). Default: placeholder — override in .env.
 	KpiDictionaryWorkflowCode   string // env: KPI_DICTIONARY_WORKFLOW_CODE — Workflow.Code the KPI Workflow (Draft->Reviewed->Approved->Active->Closed) is looked up by. Default: "kpi_dictionary_workflow" — must match the Code seeded in seed_kpi_dictionary_workflow.go, or nothing will resolve.
 	Geo                         GeoConfig
+}
+
+// IsNazaha reports whether this deployment is the Nazaha client.
+func (c *Config) IsNazaha() bool {
+	return strings.EqualFold(strings.TrimSpace(c.ClientCode), constants.CLIENT_CODE.NAZAHA)
 }
 
 // GeoConfig holds settings for geolocation-based queries (e.g. radius search
@@ -238,20 +247,19 @@ type CintrixConfig struct {
 // a client of MOMRA's CRM services — status sync, classification/EE master sync).
 // This is the reverse direction from the existing inbound EPM routes in
 // epm_incident_handler.go, which is MOMRA/EPM pushing incidents into Automax.
-// env: MOMRA_BASE_URL, MOMRA_CONSUMER_KEY, MOMRA_CONSUMER_SECRET, MOMRA_MUNICIPALITY_ID.
+// env: MOMRA_BASE_URL, MOMRA_AUTH_SERVICE, MOMRA_AUTH_KEY, MOMRA_AMANA_ID.
 // Leaving BaseURL unset disables outbound MOMRA sync/status calls.
 type MOMRAConfig struct {
-	BaseURL        string
-	ConsumerKey    string
-	ConsumerSecret string
-	// MunicipalityID is the default municipality scope for classification and
-	// EE-classification sync (3.21's municipalityID, 3.36's mandatory MunicipalityID).
-	MunicipalityID string
-	// ClassificationType is 3.21's mandatory "type" query parameter. The integration
-	// guide's own sample is the only documented value ("CRM") — see OD-N3 in
-	// docs/MOMRA_Outbound_Integration_Spec_v1.0.md; confirm with MOMRA before relying
-	// on this being the only valid value.
-	ClassificationType string
+	// BaseURL is the MOMRA host (scheme + host + port), shared by the token API
+	// (BaseURL + /API/Authentication/GetToken) and the CRM services
+	// (BaseURL + /api/crm940/...), e.g. https://eservicestest.eamana.gov.sa:450
+	BaseURL string
+	// AuthService and AuthKey are the GetToken request's "Service" and "Key"
+	// credentials issued by the client. Secrets — set via env, never commit.
+	AuthService string
+	AuthKey     string
+	// AmanaID is UpdateStatusV2's "AmanaID" (this Amana's code in MOMRA, e.g. "003").
+	AmanaID string
 }
 
 type EscalationConfig struct {
@@ -330,6 +338,83 @@ type LDAPConfig struct {
 	InsecureSkipVerify bool
 }
 
+// ADBaseerConfig holds settings for AD login through the client's AD-Baseer
+// HTTPS APIs (GetToken -> ValidateCredentialsOTP -> IsValidOTP). When Enabled,
+// POST /api/v1/ldap/login validates credentials through AD-Baseer instead of an
+// LDAP bind and requires an OTP step; the LDAP admin endpoints are unaffected.
+// env: AD_BASEER_*. Mode "mock" (BaseURL pointing at the ad-baseer-simulator)
+// is refused when APP_ENV is production.
+type ADBaseerConfig struct {
+	Enabled bool
+	// Mode is "real" (BaseURL must be https) or "mock" (BaseURL is the
+	// ad-baseer-simulator; http allowed, refused in production).
+	Mode    string
+	BaseURL string
+	// Service / Key are GetToken's credentials; ModuleID is
+	// ValidateCredentialsOTP's ModuleID. Secrets — set via env, never commit.
+	Service  string
+	Key      string
+	ModuleID string
+	// TimeoutSeconds bounds each AD-Baseer HTTP call.
+	TimeoutSeconds int
+	// OTPTTLSeconds is how long a pending OTP challenge is kept by Automax.
+	OTPTTLSeconds int
+	// OTPMaxAttempts is how many OTP submissions one challenge allows.
+	OTPMaxAttempts int
+	// ActiveStatuses is no longer used: after the OTP, AD-Baseer's isValid is
+	// the only check (employeeInfo.status is not validated by Automax).
+	ActiveStatuses []string
+	// InsecureSkipVerify disables TLS verification; refused in production.
+	InsecureSkipVerify bool
+	// LogAPI logs every AD-Baseer request and response (credentials, tokens,
+	// OTPs and personal data masked) for troubleshooting.
+	LogAPI bool
+}
+
+func (c ADBaseerConfig) IsMock() bool {
+	return strings.EqualFold(strings.TrimSpace(c.Mode), "mock")
+}
+
+// NafathConfig holds settings for National ID login through Nafath, called
+// via the client's Amana gateway (GetAccessTokenByIdNumber ->
+// NafathSendRequest -> NafathCheckRequest). When Enabled, POST
+// /api/v1/auth/nafath/start and /status sign users in only after the person
+// approves the request in the Nafath app, and the old National-ID-only
+// POST /auth/sso/login is refused. env: NAFATH_* (NAFATH_API_BASE_URL is the
+// unrelated old validation-app URL). Mode "mock" (BaseURL pointing at the
+// nafath-simulator) is refused when APP_ENV is production.
+type NafathConfig struct {
+	Enabled bool
+	// Mode is "real" (BaseURL must be https) or "mock" (BaseURL is the
+	// nafath-simulator; http allowed, refused in production).
+	Mode    string
+	BaseURL string
+	// Service / Key are GetAccessTokenByIdNumber's credentials (the same
+	// fixed platform values as AD-Baseer's; defaults to AD_BASEER_SERVICE /
+	// AD_BASEER_KEY). Secrets — set via env, never commit.
+	Service string
+	Key     string
+	// AppID is NafathSendRequest's appID; CheckAppID is NafathCheckRequest's
+	// (the client's document shows 13 and 17; defaults to AppID).
+	AppID      string
+	CheckAppID string
+	// TimeoutSeconds bounds each gateway HTTP call.
+	TimeoutSeconds int
+	// PollSeconds is how often NafathCheckRequest runs while the request is
+	// waiting (default 10 s). Automax adds no timer of its own: the login
+	// lasts until Nafath reports the request COMPLETED, REJECTED or EXPIRED.
+	PollSeconds int
+	// LogAPI logs every gateway request and response (secrets and personal
+	// data masked) as [NAFATH-API] lines, as evidence. Default on.
+	LogAPI bool
+	// InsecureSkipVerify disables TLS verification; refused in production.
+	InsecureSkipVerify bool
+}
+
+func (c NafathConfig) IsMock() bool {
+	return strings.EqualFold(strings.TrimSpace(c.Mode), "mock")
+}
+
 type LoginRateLimitConfig struct {
 	Enabled         bool
 	MaxAttempts     int
@@ -385,6 +470,33 @@ func Load() *Config {
 			GroupSearchBase:    getEnv("LDAP_GROUP_SEARCH_BASE", "ou=groups,dc=example,dc=com"),
 			GroupSearchFilter:  getEnv("LDAP_GROUP_SEARCH_FILTER", "(member={{userDN}})"),
 			InsecureSkipVerify: getEnvAsBool("LDAP_INSECURE_SKIP_VERIFY", true),
+		},
+		ADBaseer: ADBaseerConfig{
+			Enabled:            getEnvAsBool("AD_BASEER_ENABLED", false),
+			Mode:               getEnv("AD_BASEER_MODE", "real"),
+			BaseURL:            getEnv("AD_BASEER_BASE_URL", ""),
+			Service:            getEnv("AD_BASEER_SERVICE", ""),
+			Key:                getEnv("AD_BASEER_KEY", ""),
+			ModuleID:           getEnv("AD_BASEER_MODULE_ID", ""),
+			TimeoutSeconds:     getEnvAsInt("AD_BASEER_TIMEOUT_SECONDS", 15),
+			OTPTTLSeconds:      getEnvAsInt("AD_BASEER_OTP_TTL_SECONDS", 300),
+			OTPMaxAttempts:     getEnvAsInt("AD_BASEER_OTP_MAX_ATTEMPTS", 3),
+			ActiveStatuses:     getEnvAsStringSlice("AD_BASEER_ACTIVE_STATUSES", []string{"1"}),
+			InsecureSkipVerify: getEnvAsBool("AD_BASEER_INSECURE_SKIP_VERIFY", false),
+			LogAPI:             getEnvAsBool("AD_BASEER_LOG_API", true),
+		},
+		Nafath: NafathConfig{
+			Enabled:            getEnvAsBool("NAFATH_ENABLED", false),
+			Mode:               getEnv("NAFATH_MODE", "real"),
+			BaseURL:            getEnv("NAFATH_BASE_URL", ""),
+			Service:            getEnv("NAFATH_SERVICE", getEnv("AD_BASEER_SERVICE", "")),
+			Key:                getEnv("NAFATH_KEY", getEnv("AD_BASEER_KEY", "")),
+			AppID:              getEnv("NAFATH_APP_ID", "13"),
+			CheckAppID:         getEnv("NAFATH_CHECK_APP_ID", getEnv("NAFATH_APP_ID", "13")),
+			TimeoutSeconds:     getEnvAsInt("NAFATH_TIMEOUT_SECONDS", 15),
+			PollSeconds:        getEnvAsInt("NAFATH_POLL_SECONDS", 10),
+			LogAPI:             getEnvAsBool("NAFATH_LOG_API", true),
+			InsecureSkipVerify: getEnvAsBool("NAFATH_INSECURE_SKIP_VERIFY", false),
 		},
 		LoginRateLimit: LoginRateLimitConfig{
 			Enabled:         getEnvAsBool("LOGIN_RATE_LIMIT_ENABLED", true),
@@ -483,11 +595,10 @@ func Load() *Config {
 			InsecureSkipVerify: getEnvAsBool("PBX_INSECURE_SKIP_VERIFY", false),
 		},
 		MOMRA: MOMRAConfig{
-			BaseURL:            getEnv("MOMRA_BASE_URL", ""),
-			ConsumerKey:        getEnv("MOMRA_CONSUMER_KEY", ""),
-			ConsumerSecret:     getEnv("MOMRA_CONSUMER_SECRET", ""),
-			MunicipalityID:     getEnv("MOMRA_MUNICIPALITY_ID", "003"),
-			ClassificationType: getEnv("MOMRA_CLASSIFICATION_TYPE", "CRM"),
+			BaseURL:     getEnv("MOMRA_BASE_URL", ""),
+			AuthService: getEnv("MOMRA_AUTH_SERVICE", ""),
+			AuthKey:     getEnv("MOMRA_AUTH_KEY", ""),
+			AmanaID:     getEnv("MOMRA_AMANA_ID", "003"),
 		},
 		SyncDeptAttributesToUser:    getEnvAsBool("SYNC_DEPT_ATTRIBUTES_TO_USER", false),
 		MaxDescriptionLength:        getEnvAsInt("MAX_DESCRIPTION_LENGTH", 500),

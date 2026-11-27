@@ -24,8 +24,8 @@ func (ct *ClassificationType) BeforeCreate(tx *gorm.DB) error {
 // Classification represents a hierarchical classification (e.g., Incident > Hardware > Laptop)
 type Classification struct {
 	ID            uuid.UUID                   `gorm:"type:uuid;primary_key" json:"id"`
-	Name          string                      `gorm:"not null;size:100" json:"name"`
-	NameAr        string                      `gorm:"size:100" json:"name_ar"`
+	Name          string                      `gorm:"not null;size:500" json:"name"`
+	NameAr        string                      `gorm:"size:500" json:"name_ar"`
 	Code          string                      `gorm:"size:50;uniqueIndex" json:"code"`
 	Description   string                      `gorm:"size:500" json:"description"`
 	DescriptionAr string                      `gorm:"size:500" json:"description_ar"`
@@ -79,8 +79,8 @@ func (cc *ClassificationCriticality) BeforeCreate(tx *gorm.DB) error {
 
 // ClassificationCreateRequest for creating a new classification
 type ClassificationCreateRequest struct {
-	Name          string     `json:"name" validate:"required,notblank,name,min=1,max=100"`
-	NameAr        string     `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
+	Name          string     `json:"name" validate:"required,notblank,name,min=1,max=500"`
+	NameAr        string     `json:"name_ar" validate:"omitempty,notblank,name,max=500"`
 	Description   string     `json:"description" validate:"max=500"`
 	DescriptionAr string     `json:"description_ar" validate:"max=500"`
 	Types         []string   `json:"types" validate:"omitempty,dive,oneof=incident request complaint query mobile ivr"`
@@ -90,8 +90,8 @@ type ClassificationCreateRequest struct {
 
 // ClassificationUpdateRequest for updating a classification
 type ClassificationUpdateRequest struct {
-	Name          string   `json:"name" validate:"omitempty,notblank,name,min=1,max=100"`
-	NameAr        string   `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
+	Name          string   `json:"name" validate:"omitempty,notblank,name,min=1,max=500"`
+	NameAr        string   `json:"name_ar" validate:"omitempty,notblank,name,max=500"`
 	Description   string   `json:"description" validate:"max=500"`
 	DescriptionAr string   `json:"description_ar" validate:"max=500"`
 	Types         []string `json:"types" validate:"omitempty,dive,oneof=incident request complaint query mobile ivr"`
@@ -254,8 +254,8 @@ func ToClassificationCriticalityResponse(cc *ClassificationCriticality) Classifi
 
 // ClassificationCreateRequestWithCriticalities extends ClassificationCreateRequest with criticalities
 type ClassificationCreateRequestWithCriticalities struct {
-	Name          string                                   `json:"name" validate:"required,notblank,name,min=1,max=100"`
-	NameAr        string                                   `json:"name_ar" validate:"omitempty,notblank,name,max=100"`
+	Name          string                                   `json:"name" validate:"required,notblank,name,min=1,max=500"`
+	NameAr        string                                   `json:"name_ar" validate:"omitempty,notblank,name,max=500"`
 	Description   string                                   `json:"description" validate:"max=500"`
 	DescriptionAr string                                   `json:"description_ar" validate:"max=500"`
 	Types         []string                                 `json:"types" validate:"omitempty,dive,oneof=incident request complaint query mobile ivr"`

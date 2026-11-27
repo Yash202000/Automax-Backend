@@ -70,7 +70,7 @@ func (h *IncidentDraftHandler) draftError(c *fiber.Ctx, err error) error {
 
 	// Publish runs CreateIncident, so its sentinels apply here too.
 	case errors.Is(err, services.ErrEmptyWorkflow):
-		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(ctx, "empty_workflow"))
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, i18n.T(ctx, "draft_empty_workflow"))
 	case errors.Is(err, services.ErrDuplicateIncident):
 		return utils.ErrorResponse(c, fiber.StatusConflict, i18n.T(ctx, "duplicate_incident"))
 	case errors.Is(err, services.ErrInvalidLocation):

@@ -841,6 +841,7 @@ func (s *workflowService) DuplicateWorkflow(ctx context.Context, id uuid.UUID, c
 			SLAUnit:       state.SLAUnit,
 			SortOrder:     state.SortOrder,
 			IsActive:      state.IsActive,
+			LockAssignee:  state.LockAssignee,
 		}
 		if err := s.repo.CreateState(ctx, newState); err != nil {
 			return nil, err
@@ -1077,7 +1078,7 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 	// Serialise DurationOptions to JSON if provided
 	var durationOptionsJSON string
 	if len(req.DurationOptions) > 0 {
-		if b, err := json.Marshal(req.DurationOptions); err == nil {
+		if b, err := json.Marshal(models.NormalizeDurationLabels(req.DurationOptions)); err == nil {
 			durationOptionsJSON = string(b)
 		}
 	}
@@ -1104,6 +1105,7 @@ func (s *workflowService) CreateState(ctx context.Context, workflowID uuid.UUID,
 		SLAUnit:                      req.SLAUnit,
 		IsMergable:                   req.IsMergable,
 		IsAIQA:                       req.IsAIQA,
+		LockAssignee:                 req.LockAssignee,
 		IsReadyToClose:               req.IsReadyToClose,
 		IsPartialClose:               req.IsPartialClose,
 		DurationOptions:              durationOptionsJSON,
@@ -1273,6 +1275,9 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 	if req.IsAIQA != nil {
 		state.IsAIQA = *req.IsAIQA
 	}
+	if req.LockAssignee != nil {
+		state.LockAssignee = *req.LockAssignee
+	}
 	if req.IsReadyToClose != nil {
 		state.IsReadyToClose = *req.IsReadyToClose
 	}
@@ -1281,7 +1286,7 @@ func (s *workflowService) UpdateState(ctx context.Context, stateID uuid.UUID, re
 	}
 	if req.DurationOptions != nil {
 		if len(req.DurationOptions) > 0 {
-			if b, err := json.Marshal(req.DurationOptions); err == nil {
+			if b, err := json.Marshal(models.NormalizeDurationLabels(req.DurationOptions)); err == nil {
 				state.DurationOptions = string(b)
 			}
 		} else {
@@ -1805,6 +1810,8 @@ func (s *workflowService) MatchWorkflow(ctx context.Context, req *models.Workflo
 		{Field: "due_date", Label: "Due Date", Description: "Resolution deadline", IsRequired: false},
 		{Field: "reporter_name", Label: "Reporter Name", Description: "Name of person reporting", IsRequired: false},
 		{Field: "reporter_email", Label: "Reporter Email", Description: "Email of person reporting", IsRequired: false},
+		{Field: "caller_identity_text", Label: "Caller Identity", Description: "Who the caller is", IsRequired: false},
+		{Field: "cooperation_status", Label: "Cooperation Status", Description: "Cooperative or Uncooperative", IsRequired: false},
 	}
 
 	// Default response when no workflow matches
@@ -2077,6 +2084,7 @@ func (s *workflowService) ExportWorkflow(ctx context.Context, id uuid.UUID) ([]b
 			SLAHours:      state.SLAHours,
 			SLAUnit:       state.SLAUnit,
 			SortOrder:     state.SortOrder,
+			LockAssignee:  state.LockAssignee,
 			ViewableRoles: viewableRoles,
 			EditableRoles: editableRoles,
 		}
@@ -2377,19 +2385,20 @@ func (s *workflowService) ImportWorkflow(ctx context.Context, data *models.Workf
 	stateCodeToID := make(map[string]uuid.UUID)
 	for _, stateData := range data.Workflow.States {
 		state := &models.WorkflowState{
-			ID:          uuid.New(),
-			WorkflowID:  workflow.ID,
-			Name:        stateData.Name,
-			Code:        stateData.Code,
-			Description: stateData.Description,
-			StateType:   stateData.StateType,
-			Color:       stateData.Color,
-			PositionX:   stateData.PositionX,
-			PositionY:   stateData.PositionY,
-			SLAHours:    stateData.SLAHours,
-			SLAUnit:     stateData.SLAUnit,
-			SortOrder:   stateData.SortOrder,
-			IsActive:    true,
+			ID:           uuid.New(),
+			WorkflowID:   workflow.ID,
+			Name:         stateData.Name,
+			Code:         stateData.Code,
+			Description:  stateData.Description,
+			StateType:    stateData.StateType,
+			Color:        stateData.Color,
+			PositionX:    stateData.PositionX,
+			PositionY:    stateData.PositionY,
+			SLAHours:     stateData.SLAHours,
+			SLAUnit:      stateData.SLAUnit,
+			SortOrder:    stateData.SortOrder,
+			IsActive:     true,
+			LockAssignee: stateData.LockAssignee,
 		}
 
 		if err := tx.Create(state).Error; err != nil {

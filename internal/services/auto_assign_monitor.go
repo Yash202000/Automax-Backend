@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/automax/backend/internal/config"
+	"github.com/automax/backend/internal/models"
 )
 
 // AutoAssignMonitor periodically assigns unassigned incidents to online agents.
@@ -47,6 +48,7 @@ func (m *autoAssignMonitor) Start(ctx context.Context) {
 	go func() {
 		if err := m.incidentService.AutoAssignUnassigned(ctx); err != nil {
 			log.Printf("[AutoAssignMonitor] Initial check failed: %v", err)
+			logAutoAssignRunFailure(err)
 		}
 
 		ticker := time.NewTicker(interval)
@@ -57,6 +59,7 @@ func (m *autoAssignMonitor) Start(ctx context.Context) {
 			case <-ticker.C:
 				if err := m.incidentService.AutoAssignUnassigned(ctx); err != nil {
 					log.Printf("[AutoAssignMonitor] Check failed: %v", err)
+					logAutoAssignRunFailure(err)
 				}
 			case <-m.stopChan:
 				log.Println("Auto-Assign Monitor stopped")
@@ -75,4 +78,16 @@ func (m *autoAssignMonitor) Stop() {
 	}
 	m.running = false
 	close(m.stopChan)
+}
+
+// logAutoAssignRunFailure records a failed auto-assign run (background job, no user).
+func logAutoAssignRunFailure(err error) {
+	LogError(models.ErrorLogEntry{
+		Module:           models.ErrorModuleIncident,
+		Action:           "Auto-assign incidents",
+		ErrorType:        models.ErrorTypeAssignmentFailed,
+		Severity:         models.ErrorSeverityHigh,
+		Message:          "Automatic assignment run failed",
+		TechnicalDetails: err.Error(),
+	})
 }

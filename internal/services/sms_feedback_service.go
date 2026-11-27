@@ -153,7 +153,7 @@ func (s *SmsFeedbackService) processOne(ctx context.Context, p *models.SmsFeedba
 	}
 	templateCode := p.TemplateCode
 
-	log.Printf("[SmsFeedback] incident=%s — WhatsApp feedback session still pending after delay, sending SMS to %s (template=%s)", p.IncidentID, p.MobileNo, templateCode)
+	log.Printf("[SmsFeedback] incident=%s — WhatsApp feedback session still pending after delay, sending SMS to %s (template=%s)", p.IncidentID, maskMobile(p.MobileNo), templateCode)
 
 	sendResult, sendErr := s.notification.SendNotification(
 		ctx, "sms", &templateCode, lang,
@@ -179,7 +179,7 @@ func (s *SmsFeedbackService) processOne(ctx context.Context, p *models.SmsFeedba
 
 	p.Sent = true
 	p.Log = "SMS sent — WhatsApp feedback session still pending within delay window"
-	log.Printf("[SmsFeedback] incident=%s — SMS sent successfully to %s", p.IncidentID, p.MobileNo)
+	log.Printf("[SmsFeedback] incident=%s — SMS sent successfully to %s", p.IncidentID, maskMobile(p.MobileNo))
 	s.save(ctx, p)
 }
 
