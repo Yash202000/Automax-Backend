@@ -272,6 +272,92 @@ func ResolveDisplayPeriod(db *gorm.DB, metric *models.KpiMetric, kpiID uuid.UUID
 	return currentYear, currentPeriod, false
 }
 
+// PendingTargetStatuses are target statuses still on their way to approval
+// (shown on the Metric Card as "waiting for approval", never used as the
+// target in force).
+var PendingTargetStatuses = []string{models.KpiTargetStatusDraft, models.KpiTargetStatusSubmitted, models.KpiTargetStatusReturned}
+
+// FindPendingTarget returns the latest-version draft / submitted / returned
+// unscoped target of one metric+year+period, or gorm.ErrRecordNotFound.
+func FindPendingTarget(db *gorm.DB, kpiCode, kpiType string, metricID uuid.UUID, year int, periodCode string) (*models.KpiAnnualTarget, error) {
+	var target models.KpiAnnualTarget
+	err := db.Where("kpi_code = ? AND kpi_type = ? AND metric_id = ? AND target_year = ? AND period_code = ? AND target_status IN ? AND organization_id IS NULL",
+		kpiCode, kpiType, metricID, year, periodCode, PendingTargetStatuses).
+		Order("version DESC").First(&target).Error
+	if err != nil {
+		return nil, err
+	}
+	return &target, nil
+}
+
+// ResolveCardPeriod is the period the Metric Card shows:
+//  1. the current period, when it has approved data or an approved target;
+//  2. else the most recent period (the one ending last) that has approved
+//     data or an approved target (periods that have not started yet are
+//     skipped, so a target set for next year does not replace this year's);
+//  3. else the most recent started period with a target waiting for
+//     approval (the card shows it as such);
+//  4. else the current period.
+//
+// The KPI's composite score keeps ResolveDisplayPeriod (a score needs data).
+func ResolveCardPeriod(db *gorm.DB, metric *models.KpiMetric, kpiID uuid.UUID, kpiCode, kpiType string) (year int, periodCode string, isFallback bool) {
+	frequency := MetricFrequency(db, metric, kpiCode, kpiType)
+	now := time.Now()
+	currentYear := now.Year()
+	currentPeriod := CurrentPeriodCode(frequency, now)
+
+	if AggregateMetricPeriod(db, metric, kpiID, kpiType, currentYear, currentPeriod, nil).HasData {
+		return currentYear, currentPeriod, false
+	}
+	if _, err := FindUsableTarget(db, kpiCode, kpiType, metric.ID, currentYear, currentPeriod, nil); err == nil {
+		return currentYear, currentPeriod, false
+	}
+
+	// "Most recent" is the started period that ends last, so periods of
+	// different lengths compare correctly (H1 2026, ending 30 June, is more
+	// recent than a custom 15 Feb – 15 Mar 2026 period).
+	bestKey, bestYear, bestCode := int64(-1), 0, ""
+	consider := func(y int, code string) {
+		start, end, ok := PeriodDateRange(y, code)
+		if ok && start.After(now) {
+			return // not started yet
+		}
+		key := int64(PeriodSortKey(y, code)) * 100 // unknown code: approximate by its sort key
+		if ok {
+			key = end.Unix()
+		}
+		if key > bestKey {
+			bestKey, bestYear, bestCode = key, y, code
+		}
+	}
+
+	var approvedEntries []models.KpiEntry
+	db.Select("reporting_year", "period_code").
+		Where("kpi_id = ? AND kpi_type = ? AND metric_id = ? AND status = ? AND organization_id IS NULL", kpiID, kpiType, metric.ID, models.KpiEntryStatusApproved).
+		Find(&approvedEntries)
+	for _, e := range approvedEntries {
+		consider(e.ReportingYear, e.PeriodCode)
+	}
+	targetPeriods := func(statuses []string) {
+		var targets []models.KpiAnnualTarget
+		db.Select("target_year", "period_code").
+			Where("kpi_code = ? AND kpi_type = ? AND metric_id = ? AND target_status IN ? AND organization_id IS NULL", kpiCode, kpiType, metric.ID, statuses).
+			Find(&targets)
+		for _, t := range targets {
+			consider(t.TargetYear, t.PeriodCode)
+		}
+	}
+	targetPeriods(UsableTargetStatuses)
+	if bestKey >= 0 {
+		return bestYear, bestCode, true
+	}
+	targetPeriods(PendingTargetStatuses)
+	if bestKey >= 0 {
+		return bestYear, bestCode, true
+	}
+	return currentYear, currentPeriod, false
+}
+
 // AnnualRollupRow is one year's KPI-level Target/Actual/Achievement.
 // Target/Actual are only set when exactly one metric contributes (a
 // KPI-level sum of unrelated metrics' values would be meaningless).
