@@ -539,7 +539,7 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 				}()
 				return nil, errors.New(i18n.T(ctx, "invalid_credentials"))
 			}
-			return nil, err
+			return nil, LoginSystemError{err}
 		}
 
 		// Redirect AD users to LDAP login
@@ -568,7 +568,7 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 	case "mobile_otp":
 		// Mobile/OTP login
 		if s.otpService == nil {
-			return nil, errors.New(i18n.T(ctx, "otp_service_unavailable"))
+			return nil, LoginSystemError{errors.New(i18n.T(ctx, "otp_service_unavailable"))}
 		}
 
 		// First check if user exists with this phone number
@@ -591,7 +591,7 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 				}()
 				return nil, errors.New(i18n.T(ctx, "no_user_for_mobile"))
 			}
-			return nil, err
+			return nil, LoginSystemError{err}
 		}
 
 		// Check if mobile number is verified
@@ -671,12 +671,12 @@ func (s *userService) Login(ctx context.Context, req *models.UserLoginRequest) (
 	}, s.jwtManager.GetTokenExpiration())
 	log.Println("Login: User session created:", sessionID, "and User ID:", user.ID.String())
 	if err != nil {
-		return nil, err
+		return nil, LoginSystemError{err}
 	}
 
 	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, user.Email, role, sessionID, req.RememberMe)
 	if err != nil {
-		return nil, err
+		return nil, LoginSystemError{err}
 	}
 
 	go func(ctx context.Context, userID uuid.UUID) {
@@ -2590,3 +2590,8 @@ func (s *userService) checkNationalIDAvailable(ctx context.Context, id, current 
 	}
 	return nil
 }
+
+// LoginSystemError marks a login failure caused by the system (database, session,
+// token), not by the user's input. The message is unchanged; the handler uses the
+// type to write an Error Log entry.
+type LoginSystemError struct{ error }

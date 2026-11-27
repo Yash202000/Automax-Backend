@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/automax/backend/internal/config"
+	"github.com/automax/backend/internal/middleware"
 	"github.com/automax/backend/internal/models"
 	"github.com/automax/backend/internal/services"
 	"github.com/automax/backend/internal/storage"
@@ -112,6 +113,10 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 	if err != nil {
 		if id, ok := identifier.(string); ok && id != "" {
 			h.HandleLoginFailure(ctx, id)
+		}
+		var sysErr services.LoginSystemError
+		if errors.As(err, &sysErr) {
+			middleware.RecordRequestError(c, fiber.StatusInternalServerError, "Login failed: system error", err.Error())
 		}
 		return utils.ErrorResponse(c, fiber.StatusUnauthorized, err.Error())
 	}

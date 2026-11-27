@@ -43,6 +43,15 @@ var errorLogRules = []errorLogRule{
 		action:  IncidentActionName,
 		related: IncidentRelated,
 	},
+	// Refresh session: an invalid or expired token / session (401) is an error here.
+	{
+		method:      fiber.MethodPost,
+		path:        regexp.MustCompile(`^/api/v1/auth/refresh/?$`),
+		module:      models.ErrorModuleAuth,
+		action:      AuthActionName,
+		critical5xx: true,
+		log4xx:      []int{401},
+	},
 	// Login / access: unexpected system errors only (wrong password is a 401 and is not logged).
 	{
 		method:      fiber.MethodPost,
@@ -330,6 +339,8 @@ func MatchErrorLogRule(c *fiber.Ctx) *errorLogRule {
 func ErrorTypeFromStatus(status int, message, cause string) string {
 	text := strings.ToLower(message + " " + cause)
 	switch {
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return models.ErrorTypeAuth
 	case status == http.StatusRequestEntityTooLarge || strings.Contains(text, "too large"):
 		return models.ErrorTypeFileTooLarge
 	case status == http.StatusUnsupportedMediaType || strings.Contains(text, "file type") || strings.Contains(text, "format") || strings.Contains(text, "column"):

@@ -47,6 +47,7 @@ const (
 	ErrorTypeAssignmentFailed = "assignment_failed"
 	ErrorTypeRowFailed        = "row_failed"
 	ErrorTypeUnexpected       = "unexpected_error"
+	ErrorTypeAuth             = "auth_failed"
 )
 
 // ErrorLog is a single recorded system error. SMS/email failures are NOT
