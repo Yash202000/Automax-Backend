@@ -401,7 +401,18 @@ type masterObjectiveRef struct {
 	EnablerID *uuid.UUID
 }
 
+// masterAwardName is an award criterion / sub-criterion holding a name.
+type masterAwardName struct {
+	ID uuid.UUID
+	No string
+}
+
 type masterDataImporter struct {
+	// awardNames: names of the live award criteria / sub-criteria (keys
+	// from awardNameKeys); acceptedAwardNames: the same for this file's rows.
+	awardNames         map[string]masterAwardName
+	acceptedAwardNames map[string]int
+
 	db   *gorm.DB
 	ctx  context.Context
 	opts KpiImportOptions
@@ -739,6 +750,8 @@ func masterRowEmpty(row []string) bool {
 
 func (imp *masterDataImporter) loadExisting(db *gorm.DB) error {
 	imp.existing = map[string]*masterExisting{}
+	imp.awardNames = map[string]masterAwardName{}
+	imp.acceptedAwardNames = map[string]int{}
 	imp.ambiguous = map[string]int{}
 	imp.deletedCriteria = map[int]uuid.UUID{}
 	imp.deletedDims = map[string]uuid.UUID{}
@@ -915,6 +928,11 @@ func (imp *masterDataImporter) loadExisting(db *gorm.DB) error {
 		for _, item := range items {
 			addExisting(&masterExisting{ID: item.ID, NameEn: item.NameEn, NameAr: item.NameAr, Code: strconv.Itoa(item.CriterionNo), Deleted: item.DeletedAt.Valid},
 				"award-criterion|"+strconv.Itoa(item.CriterionNo))
+			if !item.DeletedAt.Valid {
+				for _, k := range awardNameKeys("", item.NameEn, item.NameAr) {
+					imp.awardNames[k] = masterAwardName{ID: item.ID, No: strconv.Itoa(item.CriterionNo)}
+				}
+			}
 		}
 		// criterion_no has a plain unique index, so a soft-deleted criterion
 		// still holds its number; such rows are restored instead of inserted.
@@ -933,6 +951,9 @@ func (imp *masterDataImporter) loadExisting(db *gorm.DB) error {
 		for _, item := range items {
 			addExisting(&masterExisting{ID: item.ID, NameEn: item.NameEn, NameAr: item.NameAr, Code: item.SubNo},
 				"award-sub-criterion|"+item.AwardCriterionID.String()+"|"+masterRefKey(item.SubNo))
+			for _, k := range awardNameKeys(item.AwardCriterionID.String(), item.NameEn, item.NameAr) {
+				imp.awardNames[k] = masterAwardName{ID: item.ID, No: item.SubNo}
+			}
 		}
 	case KpiMasterAwardKpiMeasure:
 		var items []models.AwardKpiMeasure
@@ -1187,6 +1208,9 @@ func (imp *masterDataImporter) validateRec(r *masterImportRec) {
 			return
 		}
 	}
+	if imp.awardNameTaken(r) {
+		return
+	}
 	if r.Existing != nil {
 		if row, dup := imp.acceptedExisting[r.Existing.ID]; dup {
 			r.reject("Name (English)", fmt.Sprintf("Duplicate record in this file — row %d updates the same existing record.", row))
@@ -1227,6 +1251,58 @@ func (imp *masterDataImporter) identityKeys(r *masterImportRec) []string {
 	default:
 		return []string{r.EntityType + "|" + masterRefKey(r.Payload.NameEn)}
 	}
+}
+
+// awardNameKeys are the name keys of an award criterion (scope "") or of a
+// sub-criterion (scope = its criterion's ID): the English name, and the
+// Arabic name when given.
+func awardNameKeys(scope, nameEn, nameAr string) []string {
+	var keys []string
+	if k := masterRefKey(nameEn); k != "" {
+		keys = append(keys, scope+"|en|"+k)
+	}
+	if k := masterRefKey(nameAr); k != "" {
+		keys = append(keys, scope+"|ar|"+k)
+	}
+	return keys
+}
+
+// awardNameTaken rejects an award criterion / sub-criterion row whose name
+// is already used by another record (in the system, or on an earlier row
+// of this file): they are unique by number and by name — a sub-criterion's
+// name within its criterion.
+func (imp *masterDataImporter) awardNameTaken(r *masterImportRec) bool {
+	scope := ""
+	switch r.EntityType {
+	case KpiMasterAwardCriterion:
+	case KpiMasterAwardSubCriterion:
+		scope = uuidString(r.Payload.AwardCriterionID)
+	default:
+		return false
+	}
+	what := "An award criterion"
+	if scope != "" {
+		what = "A sub-criterion of this criterion"
+	}
+	keys := awardNameKeys(scope, r.Payload.NameEn, r.Payload.NameAr)
+	for _, k := range keys {
+		field, name := "Name (English)", r.Payload.NameEn
+		if strings.Contains(k, "|ar|") {
+			field, name = "Name (Arabic)", r.Payload.NameAr
+		}
+		if held, ok := imp.awardNames[k]; ok && (r.Existing == nil || held.ID != r.Existing.ID) {
+			r.reject(field, fmt.Sprintf("%s named %q already exists (No. %s).", what, strings.TrimSpace(name), held.No))
+			return true
+		}
+		if row, ok := imp.acceptedAwardNames[k]; ok {
+			r.reject(field, fmt.Sprintf("Duplicate name in this file — row %d has the same name.", row))
+			return true
+		}
+	}
+	for _, k := range keys {
+		imp.acceptedAwardNames[k] = r.Row
+	}
+	return false
 }
 
 func uuidString(id *uuid.UUID) string {

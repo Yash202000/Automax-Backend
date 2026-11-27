@@ -2178,6 +2178,13 @@ func (imp *kpiImporter) resolveAwardCriteria(t *sheetTable, r []string, excelRow
 		} else if d := normName(domainName); strings.HasPrefix(d, normName(name)+":") {
 			name = strings.TrimSpace(domainName[strings.Index(domainName, ":")+1:])
 		}
+		// Award criteria are unique by number and by name.
+		for _, n := range imp.md[mdCriterion] {
+			if normName(n.NameEn) == normName(name) || (n.NameAr != "" && normName(n.NameAr) == normName(name)) {
+				fail("criterion", fmt.Sprintf("An award criterion named %q already exists (Criterion %d). Pick that criterion, or give Criterion %d another name.", name, n.CriterionNo, critNo))
+				return
+			}
+		}
 		crit = imp.newNode(mdCriterion, name, t.sheet, excelRow)
 		crit.CriterionNo = critNo
 	}
@@ -2190,6 +2197,13 @@ func (imp *kpiImporter) resolveAwardCriteria(t *sheetTable, r []string, excelRow
 	if subName == "" {
 		fail(subKey, fmt.Sprintf("Sub-Criterion %s does not exist yet, so its name is required.", subNo))
 		return
+	}
+	// Sub-criteria are unique by number and by name within their criterion.
+	for _, n := range imp.md[mdSubCriterion] {
+		if n.Criterion == crit && (normName(n.NameEn) == normName(subName) || (n.NameAr != "" && normName(n.NameAr) == normName(subName))) {
+			fail(subKey, fmt.Sprintf("A sub-criterion named %q already exists under Criterion %d (No. %s).", subName, critNo, n.SubNo))
+			return
+		}
 	}
 	sub := imp.newNode(mdSubCriterion, subName, t.sheet, excelRow)
 	sub.SubNo = subNo
