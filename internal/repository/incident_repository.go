@@ -729,8 +729,11 @@ func (r *incidentRepository) GenerateRequestNumber(ctx context.Context) (string,
 	prefix := fmt.Sprintf("REQ-%d-", year)
 	var maxNumber *string
 	// Unscoped() to include soft-deleted rows in the MAX calculation
+	// Order by length first so legacy short numbers (REQ-2026-0002) don't outrank wider ones
+	// (REQ-2026-000118) in a plain text MAX.
 	err := r.db.WithContext(ctx).Unscoped().Model(&models.Incident{}).
-		Select("MAX(incident_number)").Where("incident_number LIKE ?", prefix+"%").
+		Select("incident_number").Where("incident_number LIKE ?", prefix+"%").
+		Order("length(incident_number) DESC, incident_number DESC").Limit(1).
 		Scan(&maxNumber).Error
 	if err != nil {
 		return "", err
