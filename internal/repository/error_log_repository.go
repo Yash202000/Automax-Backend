@@ -29,8 +29,32 @@ func NewErrorLogRepository(db *gorm.DB) ErrorLogRepository {
 	return &errorLogRepository{db: db}
 }
 
+// retryWindow: the same error repeated by the same user within this time updates the
+// existing open entry (Retry Count + 1) instead of creating a new one.
+const retryWindow = 10 * time.Minute
+
 func (r *errorLogRepository) Create(ctx context.Context, e *models.ErrorLog) error {
-	return r.db.WithContext(ctx).Create(e).Error
+	db := r.db.WithContext(ctx)
+
+	q := db.Where("fingerprint = ? AND related_id = ? AND status IN ? AND occurred_at > ?",
+		e.Fingerprint, e.RelatedID, []string{models.ErrorStatusNew, models.ErrorStatusInReview}, e.OccurredAt.Add(-retryWindow))
+	if e.UserID != nil {
+		q = q.Where("user_id = ?", *e.UserID)
+	} else {
+		q = q.Where("user_id IS NULL")
+	}
+
+	var existing models.ErrorLog
+	if q.Order("occurred_at DESC").First(&existing).Error == nil {
+		existing.RetryCount++
+		existing.OccurredAt = e.OccurredAt
+		if err := db.Model(&existing).Updates(map[string]any{"retry_count": existing.RetryCount, "occurred_at": e.OccurredAt}).Error; err != nil {
+			return err
+		}
+		*e = existing
+		return nil
+	}
+	return db.Create(e).Error
 }
 
 func (r *errorLogRepository) ApplyFilter(q *gorm.DB, f models.ErrorLogFilter) *gorm.DB {
