@@ -78,6 +78,7 @@ func (h *OTPHandler) SendOTP(c *fiber.Ctx) error {
 	if err != nil {
 		var deliveryErr *services.OTPDeliveryError
 		if errors.As(err, &deliveryErr) {
+			c.Locals(utils.LocalSkipErrorLog, true) // logged in Communication, not the Error Log
 			return utils.ErrorResponse(c, fiber.StatusServiceUnavailable, err.Error())
 		}
 		return utils.ErrorResponse(c, 400, err.Error())

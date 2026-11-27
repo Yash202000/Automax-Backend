@@ -42,6 +42,9 @@ const (
 	// LocalErrorRecorded is set once the Error Log middleware has handled the request,
 	// so the global error handler does not record the same error twice.
 	LocalErrorRecorded = "errlog_recorded"
+	// LocalSkipErrorLog is set for failures that are recorded elsewhere (for example
+	// SMS/email delivery failures live in the Communication module), so they are not duplicated.
+	LocalSkipErrorLog = "errlog_skip"
 )
 
 // LocalImportErrors holds the per-row failures of an import that still returned HTTP 200.

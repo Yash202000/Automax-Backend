@@ -275,6 +275,9 @@ func RecordRequestError(c *fiber.Ctx, status int, message, cause string) {
 	if rule == nil {
 		return
 	}
+	if skip, _ := c.Locals(utils.LocalSkipErrorLog).(bool); skip {
+		return
+	}
 	if status < 500 && !ContainsInt(rule.log4xx, status) {
 		return
 	}
