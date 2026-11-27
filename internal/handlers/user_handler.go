@@ -1128,6 +1128,7 @@ func (h *UserHandler) ForgotPassword(c *fiber.Ctx) error {
 		log.Println("ForgotPassword ERROR:", err)
 		var deliveryErr *services.OTPDeliveryError
 		if errors.As(err, &deliveryErr) {
+			c.Locals(utils.LocalSkipErrorLog, true) // logged in Communication, not the Error Log
 			return utils.ErrorResponse(c, fiber.StatusServiceUnavailable, err.Error())
 		}
 		return utils.ErrorResponse(c, 400, err.Error())
