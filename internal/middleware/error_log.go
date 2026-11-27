@@ -339,6 +339,8 @@ func MatchErrorLogRule(c *fiber.Ctx) *errorLogRule {
 func ErrorTypeFromStatus(status int, message, cause string) string {
 	text := strings.ToLower(message + " " + cause)
 	switch {
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return models.ErrorTypeAuth
 	case status == http.StatusRequestEntityTooLarge || strings.Contains(text, "too large"):
 		return models.ErrorTypeFileTooLarge
 	case status == http.StatusUnsupportedMediaType || strings.Contains(text, "file type") || strings.Contains(text, "format") || strings.Contains(text, "column"):
