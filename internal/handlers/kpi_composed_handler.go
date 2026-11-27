@@ -510,7 +510,15 @@ func buildMetricPeriodRollupMap(db *gorm.DB, metric *models.KpiMetric, kpiID uui
 		"sum_denominator": rollup.SumDenominator,
 	}
 
-	if target, err := services.FindUsableTarget(db, kpiCode, kpiType, metric.ID, year, periodCode, organizationID); err == nil {
+	target, err := services.FindUsableTarget(db, kpiCode, kpiType, metric.ID, year, periodCode, organizationID)
+	if err != nil && organizationID == nil {
+		// No approved target: say when one is waiting for approval.
+		if pending, perr := services.FindPendingTarget(db, kpiCode, kpiType, metric.ID, year, periodCode); perr == nil {
+			resp["pending_target"] = pending.TargetValue
+			resp["pending_target_status"] = pending.TargetStatus
+		}
+	}
+	if err == nil {
 		resp["target"] = target.TargetValue
 		if rollup.HasData {
 			res := services.EvaluateMetricActual(db, kpiCode, metric.Direction, *rollup.Actual, target, 100)
@@ -557,7 +565,7 @@ func (h *KpiComposedHandler) GetMetricDisplayRollup(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, i18n.T(c.UserContext(), "not_found"))
 	}
 
-	year, periodCode, isFallback := services.ResolveDisplayPeriod(db, &metric, kpiID, kpiCode, kpiType)
+	year, periodCode, isFallback := services.ResolveCardPeriod(db, &metric, kpiID, kpiCode, kpiType)
 
 	resp := buildMetricPeriodRollupMap(db, &metric, kpiID, kpiCode, kpiType, year, periodCode, nil)
 	resp["is_fallback_period"] = isFallback
